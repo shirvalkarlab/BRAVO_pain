@@ -88,25 +88,61 @@ def _direction(slope, p):
             else "band power falls as current rises")
 
 
+def _raw_pairs(currents, column):
+    """(x, yy, ok): currents and one band's power values restricted to indices where both are
+    finite and the power is positive -- the exact filter every per-band row already applies, and
+    the mask so a caller can restrict any other same-length array (such as piece counts) the same
+    way."""
+    ok = np.isfinite(currents) & np.isfinite(column) & (column > 0)
+    return currents[ok], column[ok], ok
+
+
+def _panel_grid(comparison):
+    """(panel, centres, currents, P) for one comparison's voltage-trace panel, or (None, ...)
+    when the panel is absent or its shapes disagree. Shared by `rows_for_comparison` and
+    `_raw_pairs_for_band` so the two never read the panel two different ways."""
+    panel = next((p for p in comparison.panels if p.source == ROUTE), None)
+    if panel is None or panel.absent_reason or not panel.spectrum_power:
+        return None, None, None, None
+    centres = np.asarray(panel.spectrum_centres_hz, dtype=float)
+    currents = np.asarray(panel.current_mA, dtype=float)
+    P = np.asarray([[_f(v) for v in row] for row in panel.spectrum_power], dtype=float)
+    if P.ndim != 2 or P.shape[0] != currents.size or P.shape[1] != centres.size:
+        return None, None, None, None
+    return panel, centres, currents, P
+
+
+def _raw_pairs_for_band(comparison, band_center_hz):
+    """(x, yy): the current and settled band-power values `rows_for_comparison` computes for one
+    band centre in one comparison's voltage-trace panel, via the identical `_raw_pairs` filter.
+    Empty arrays when the panel is absent or the centre is not on its grid -- built for
+    `pooled_shape_for_band`, which needs the raw pairs for one band across every comparison in a
+    build rather than the full per-band row `rows_for_comparison` returns.
+    """
+    panel, centres, currents, P = _panel_grid(comparison)
+    if panel is None:
+        return np.empty(0), np.empty(0)
+    matches = np.where(np.isclose(centres, float(band_center_hz), atol=1e-6))[0]
+    if matches.size == 0:
+        return np.empty(0), np.empty(0)
+    x, yy, _ = _raw_pairs(currents, P[:, int(matches[0])])
+    return x, yy
+
+
 def rows_for_comparison(comparison, *, checked_lo_hz, checked_hi_hz, band_half_hz,
                         min_points_curvature=MIN_POINTS_CURVATURE):
     """One row per band centre for one run. Empty when the voltage-trace panel has nothing."""
     from StimOptimizer.routines import within_visit
-    panel = next((p for p in comparison.panels if p.source == ROUTE), None)
-    if panel is None or panel.absent_reason or not panel.spectrum_power:
+    panel, centres, currents, P = _panel_grid(comparison)
+    if panel is None:
         return []
-    centres = np.asarray(panel.spectrum_centres_hz, dtype=float)
-    currents = np.asarray(panel.current_mA, dtype=float)
     pieces = np.asarray(panel.n_pieces, dtype=float)
-    P = np.asarray([[_f(v) for v in row] for row in panel.spectrum_power], dtype=float)
-    if P.ndim != 2 or P.shape[0] != currents.size or P.shape[1] != centres.size:
-        return []
     on_stim = list(panel.spectrum_band_is_measuring_the_stimulator or [])
     rows = []
     for j, centre in enumerate(centres):
         y = P[:, j]
-        ok = np.isfinite(currents) & np.isfinite(y) & (y > 0)
-        x, yy, pc = currents[ok], y[ok], pieces[ok]
+        x, yy, ok = _raw_pairs(currents, y)
+        pc = pieces[ok]
         n = int(x.size)
         levels = np.unique(x)
         row = {
@@ -156,6 +192,46 @@ def rows_for_comparison(comparison, *, checked_lo_hz, checked_hi_hz, band_half_h
         row["curvature_verdict"] = str(shape.get("verdict", "not assessed"))
         rows.append(row)
     return rows
+
+
+def pooled_shape_for_band(build, band_center_hz, sensing_contact, *, min_points=8):
+    """The pooled, cluster-robust within-visit dose-response direction for one band centre **on
+    one sensing contact**, across every run on that contact in what `build_for_participant`
+    returned -- built for the closed-loop consistency check (`direction_consistency.py`), which
+    needs a single answer to "does this band's power rise or fall as current rises, on this
+    electrode" rather than one run's own slope (this project's own rule against calling a result
+    established on one visit day).
+
+    ``sensing_contact`` is required, not optional: different sensing contacts are different
+    physical electrodes, and pooling their runs together would average dose-response curves from
+    channels with no reason to share one, exactly the kind of silent conflation this project's own
+    rules exist to catch. Only comparisons whose own `comparison.sensing_contact` matches are
+    pooled.
+
+    Pools the raw (current, settled power) pairs `_raw_pairs_for_band` reads from every matching
+    comparison's panel, labels each run's points with the run's own label so
+    `within_visit.amplitude_response_shape_pooled` gives each run its own baseline intercept --
+    two runs on the same calendar day but a different side or rate are different ladders and must
+    not share one intercept, so the grouping key is the run label, not the visit date. Returns the
+    same dict shape as `amplitude_response_shape_pooled`, with a "not assessed" verdict and NaN
+    fields when no matching comparison has a usable panel for this centre.
+    """
+    from StimOptimizer.routines import within_visit
+    contact = str(sensing_contact)
+    xs, ys, vs = [], [], []
+    for comp in (build or {}).get("comparisons", []) or []:
+        if str(getattr(comp, "sensing_contact", None)) != contact:
+            continue
+        x, y = _raw_pairs_for_band(comp, band_center_hz)
+        if x.size:
+            xs.append(x)
+            ys.append(y)
+            vs.append(np.full(x.size, str(comp.label)))
+    if not xs:
+        return within_visit.amplitude_response_shape_pooled(
+            np.empty(0), np.empty(0), np.empty(0), min_points=min_points)
+    return within_visit.amplitude_response_shape_pooled(
+        np.concatenate(xs), np.concatenate(ys), np.concatenate(vs), min_points=min_points)
 
 
 def table_from_build(build, *, checked_lo_hz, checked_hi_hz, band_half_hz,

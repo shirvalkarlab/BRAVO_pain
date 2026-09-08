@@ -623,6 +623,59 @@ def test_pooled_too_few_points_says_not_assessed():
     assert out["curves"] is False
     assert out["verdict"].startswith("not assessed")
     assert np.isnan(out["p_curvature"])
+    assert out["pooled_direction"] == "not assessed"
+    assert np.isnan(out["pooled_slope_per_mA"])
+
+
+def test_pooled_direction_reads_a_clear_rising_slope_with_visit_baselines_removed():
+    """The pooled straight-line slope (added for the closed-loop consistency check, PI request
+    2026-09-08) must read a real rising relationship correctly even when three visits sit at very
+    different baseline power levels -- the same per-visit-intercept design the curvature test
+    above already uses, so a baseline difference alone must not be read as a rising slope.
+    """
+    amp = np.array([1.0, 1.5, 2.0, 2.5, 3.0])
+    rng = np.random.RandomState(5)
+    xs, ys, vs = [], [], []
+    for i, baseline in enumerate([0.0, 300.0, -150.0]):
+        xs.append(amp)
+        ys.append(baseline + 40.0 * amp + rng.normal(0, 3.0, amp.size))
+        vs.append([f"visit{i}"] * amp.size)
+    x, y, v = np.concatenate(xs), np.concatenate(ys), np.concatenate(vs)
+
+    out = WV.amplitude_response_shape_pooled(x, y, v)
+    assert out["pooled_slope_per_mA"] > 0
+    assert out["pooled_slope_p"] < 0.05
+    assert out["pooled_direction"] == "band power rises as current rises"
+
+
+def test_pooled_direction_reads_a_clear_falling_slope():
+    amp = np.array([1.0, 1.5, 2.0, 2.5, 3.0])
+    rng = np.random.RandomState(6)
+    xs, ys, vs = [], [], []
+    for i, baseline in enumerate([0.0, 300.0, -150.0]):
+        xs.append(amp)
+        ys.append(baseline - 40.0 * amp + rng.normal(0, 3.0, amp.size))
+        vs.append([f"visit{i}"] * amp.size)
+    x, y, v = np.concatenate(xs), np.concatenate(ys), np.concatenate(vs)
+
+    out = WV.amplitude_response_shape_pooled(x, y, v)
+    assert out["pooled_slope_per_mA"] < 0
+    assert out["pooled_slope_p"] < 0.05
+    assert out["pooled_direction"] == "band power falls as current rises"
+
+
+def test_pooled_direction_says_no_movement_when_flat():
+    amp = np.array([1.0, 1.5, 2.0, 2.5, 3.0])
+    rng = np.random.RandomState(7)
+    xs, ys, vs = [], [], []
+    for i, baseline in enumerate([0.0, 300.0, -150.0]):
+        xs.append(amp)
+        ys.append(baseline + rng.normal(0, 3.0, amp.size))
+        vs.append([f"visit{i}"] * amp.size)
+    x, y, v = np.concatenate(xs), np.concatenate(ys), np.concatenate(vs)
+
+    out = WV.amplitude_response_shape_pooled(x, y, v)
+    assert out["pooled_direction"] == "no straight-line movement detected across the currents tested"
 
 
 def test_pooling_across_visits_clears_the_single_visit_floor():

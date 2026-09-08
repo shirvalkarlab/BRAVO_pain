@@ -346,6 +346,20 @@ def amplitude_response_shape_pooled(amp_mA, power, visit, *, min_points=8):
     only the pooled points at or above the peak current -- the request was specifically for a
     straight line on that one-sided stretch, not for every fit in this function to carry the same
     visit-adjustment machinery, so this one is a plain unclustered `scipy.stats.linregress`.
+
+    ALSO RETURNS THE POOLED STRAIGHT-LINE SLOPE ITSELF (``pooled_slope_per_mA``,
+    ``pooled_slope_stderr``, ``pooled_slope_p``, ``pooled_direction``), added for the closed-loop
+    direction-consistency check (`ClosedLoopDeployment/direction_consistency.py`), which needs a
+    single, visit-adjusted answer to "does this band's power rise or fall as current rises" --
+    the same question `amplitude_effect.py`'s own per-run `direction` field answers, but pooled
+    with the same cluster-robust discipline the curvature test above already applies, rather than
+    read off one run alone (this project's own rule against calling a result established on one
+    visit day). Nothing new is computed for this: the linear design's own cluster-robust
+    covariance (``V1``) was already being fitted to get ``r2_linear`` above and was previously
+    discarded; this only stops discarding it. ``pooled_direction`` uses the same three-word
+    vocabulary as `amplitude_effect._direction`: "band power rises as current rises" / "band
+    power falls as current rises" / "no straight-line movement detected across the currents
+    tested" / "not assessed".
     """
     x = np.asarray(amp_mA, dtype=float)
     y = np.asarray(power, dtype=float)
@@ -357,7 +371,9 @@ def amplitude_response_shape_pooled(amp_mA, power, visit, *, min_points=8):
     n_visits = int(pd.unique(v).size) if x.size else 0
     out = dict(curves=False, peaks_inside=False, peak_mA=float("nan"),
                p_curvature=float("nan"), r2_linear=float("nan"), r2_quadratic=float("nan"),
-               n=int(x.size), n_visits=n_visits, verdict="not assessed", post_peak=None)
+               n=int(x.size), n_visits=n_visits, verdict="not assessed", post_peak=None,
+               pooled_slope_per_mA=float("nan"), pooled_slope_stderr=float("nan"),
+               pooled_slope_p=float("nan"), pooled_direction="not assessed")
     if x.size < max(4, min_points) or np.unique(x).size < 3:
         out["verdict"] = (f"not assessed: {x.size} usable points at {np.unique(x).size} distinct "
                           f"currents pooled across {n_visits} visits")
@@ -383,12 +399,33 @@ def amplitude_response_shape_pooled(amp_mA, power, visit, *, min_points=8):
                           "baseline from the curve")
         return out
 
-    beta1, _ = _cluster_robust_ols(X1, y, v)
+    beta1, V1 = _cluster_robust_ols(X1, y, v)
     beta2, V2 = _cluster_robust_ols(X2, y, v)
     rss1 = float(np.sum((y - X1 @ beta1) ** 2))
     rss2 = float(np.sum((y - X2 @ beta2) ** 2))
     out["r2_linear"] = 1.0 - rss1 / ss
     out["r2_quadratic"] = 1.0 - rss2 / ss
+
+    # The pooled straight-line slope and its cluster-robust significance -- computed here (not in
+    # a second pass) because X1/beta1/V1 already exist for r2_linear above; this only reads what
+    # was already fitted. Column 1 of X1 is the current itself (column 0 is the intercept, per
+    # `_design` above), so beta1[1] is the pooled slope in the same "log power per mA" units
+    # `amplitude_effect.py`'s own per-run slope uses.
+    from scipy import stats as _st
+    slope1 = float(beta1[1])
+    se1 = float(np.sqrt(V1[1, 1])) if V1[1, 1] > 0 else float("nan")
+    dof1 = max(x.size - X1.shape[1], 1)
+    if np.isfinite(se1) and se1 > 0:
+        t1 = slope1 / se1
+        p1 = float(2.0 * _st.t.sf(abs(t1), dof1))
+        out["pooled_slope_per_mA"] = slope1
+        out["pooled_slope_stderr"] = se1
+        out["pooled_slope_p"] = p1
+        if p1 > 0.05:
+            out["pooled_direction"] = "no straight-line movement detected across the currents tested"
+        else:
+            out["pooled_direction"] = ("band power rises as current rises" if slope1 > 0
+                                       else "band power falls as current rises")
 
     quad_coef = float(beta2[2])
     se_quad = float(np.sqrt(V2[2, 2])) if V2[2, 2] > 0 else float("nan")
@@ -398,7 +435,6 @@ def amplitude_response_shape_pooled(amp_mA, power, visit, *, min_points=8):
         return out
     t_quad = quad_coef / se_quad
     dof = max(x.size - X2.shape[1], 1)
-    from scipy import stats as _st
     out["p_curvature"] = float(2.0 * _st.t.sf(abs(t_quad), dof))
     out["curves"] = bool(out["p_curvature"] < 0.05)
 

@@ -46,8 +46,8 @@ def _panel(currents=CURRENTS, *, absent=None):
 
 def _comparison(label="2026-08-18 14:00, left stimulator turned up", **kw):
     c = TSR.ThreeSourceComparison(
-        label=label, ramped_side="LEFT", sensing_contact="ONE_THREE_LEFT",
-        programmed_centre_hz=26.5, stimulation_rate_hz=55.0, visit_date="2026-08-18",
+        label=label, ramped_side="LEFT", sensing_contact=kw.get("sensing_contact", "ONE_THREE_LEFT"),
+        programmed_centre_hz=26.5, stimulation_rate_hz=55.0, visit_date=kw.get("visit_date", "2026-08-18"),
         window_start_local="2026-08-18 14:00:00", window_end_local="2026-08-18 14:15:00",
         current_from_mA=0.5, current_to_mA=5.0, n_settings=11, settled_window_s=30.0)
     c.panels.append(kw.get("panel") or _panel())
@@ -186,3 +186,81 @@ def test_nothing_stored_means_no_summary(sandbox):
 def test_no_run_is_reported_not_written():
     out = AD.write_amplitude_effect("PARTICIPANT", {"comparisons": [], "absent_reason": "none"})
     assert out == {"written": False, "n_rows": 0, "n_runs": 0, "reason": "none"}
+
+
+def test_pooled_shape_for_band_pools_raw_pairs_across_runs():
+    """Two runs of the same log-linear rising 10.5 Hz band, same contact: the pooled function
+    must see both runs' points together (more than either run alone) and read the same rising
+    direction."""
+    band = CENTRES[0]
+    out = AE.pooled_shape_for_band(
+        _build(_comparison(label="run A"), _comparison(label="run B")), band, "ONE_THREE_LEFT")
+    assert out["n"] == 2 * len(CURRENTS)
+    assert out["n_visits"] == 2
+    assert out["pooled_direction"] == "band power rises as current rises"
+    assert out["pooled_slope_per_mA"] > 0
+    assert out["pooled_slope_p"] < 0.05
+
+
+def test_pooled_shape_for_band_groups_by_run_label_even_when_visit_date_is_shared():
+    """Two runs sharing one calendar visit_date, with different labels, must still be treated as
+    two separate ladders for the per-run-intercept design -- confirms the grouping key passed to
+    `within_visit.amplitude_response_shape_pooled` is the run's own label, not the visit date, per
+    `pooled_shape_for_band`'s own contract (a different side, contact or rate is a different
+    ladder even on the same calendar day)."""
+    band = CENTRES[0]
+    comp_a = _comparison(label="run A", visit_date="2026-08-18")
+    comp_b = _comparison(label="run B", visit_date="2026-08-18")
+    out = AE.pooled_shape_for_band(_build(comp_a, comp_b), band, "ONE_THREE_LEFT")
+    assert out["n_visits"] == 2
+
+
+def test_pooled_shape_for_band_never_pools_a_different_sensing_contact():
+    """A run on a different electrode must be excluded entirely, even though it shares the same
+    band centre and an overlapping current range -- pooling across contacts would average two
+    physically different channels' dose-response curves together, which decision 55/56's own
+    per-visit design was never meant to paper over."""
+    band = CENTRES[0]
+    same_contact = _comparison(label="run A", sensing_contact="ONE_THREE_LEFT")
+    other_contact = _comparison(label="run B", sensing_contact="ZERO_TWO_LEFT")
+    build = _build(same_contact, other_contact)
+
+    out = AE.pooled_shape_for_band(build, band, "ONE_THREE_LEFT")
+    assert out["n"] == len(CURRENTS), "only the matching contact's points should be pooled"
+    assert out["n_visits"] == 1
+
+    out_other = AE.pooled_shape_for_band(build, band, "ZERO_TWO_LEFT")
+    assert out_other["n"] == len(CURRENTS)
+    assert out_other["n_visits"] == 1
+
+    out_absent = AE.pooled_shape_for_band(build, band, "ONE_THREE_RIGHT")
+    assert out_absent["pooled_direction"] == "not assessed"
+    assert out_absent["n"] == 0
+
+
+def test_pooled_shape_for_band_with_nothing_usable_is_not_assessed():
+    empty_build = AE.pooled_shape_for_band(_build(), CENTRES[0], "ONE_THREE_LEFT")
+    assert empty_build["pooled_direction"] == "not assessed"
+    assert empty_build["verdict"].startswith("not assessed")
+
+    absent = _comparison(label="other", panel=_panel(absent="no voltage trace"))
+    out = AE.pooled_shape_for_band(_build(absent), CENTRES[0], "ONE_THREE_LEFT")
+    assert out["pooled_direction"] == "not assessed"
+
+    off_grid = AE.pooled_shape_for_band(_build(_comparison()), 999.0, "ONE_THREE_LEFT")
+    assert off_grid["pooled_direction"] == "not assessed"
+
+
+def test_raw_pairs_for_band_matches_the_table_rows_powers_exactly():
+    """`_raw_pairs_for_band`, the helper `pooled_shape_for_band` is built on, must read exactly
+    the same (current, power) pairs `rows_for_comparison` puts in the table for that band --
+    proof that extracting the shared `_raw_pairs`/`_panel_grid` helpers changed nothing about
+    what one run's own row already reported (the pure-refactor half of this change)."""
+    comp = _comparison()
+    table = AE.table_from_build(_build(comp), checked_lo_hz=7.8, checked_hi_hz=28.3,
+                                band_half_hz=2.5).set_index("band_center_hz")
+    for centre in CENTRES:
+        x, yy = AE._raw_pairs_for_band(comp, centre)
+        assert x.tolist() == CURRENTS
+        assert float(yy[np.argmin(x)]) == pytest.approx(table.loc[centre, "power_at_min_current"])
+        assert float(yy[np.argmax(x)]) == pytest.approx(table.loc[centre, "power_at_max_current"])
