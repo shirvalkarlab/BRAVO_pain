@@ -1539,7 +1539,7 @@ def _pad_owned_windows(owners, nP):
     return idx_pad, counts
 
 
-def _pad_windows_in_extent(win_t, valid_mask, pro, tol, nP):
+def _pad_windows_in_extent(win_t, valid_mask, pro, tol, nP, direction="nearest"):
     """REUSE match: every eligible window within +/-tol of each rating -> ONE padded index matrix.
 
     Identical searchsorted-bounds logic to the per-rating list-of-arrays version it replaces
@@ -1547,6 +1547,11 @@ def _pad_windows_in_extent(win_t, valid_mask, pro, tol, nP):
     contiguous slice straight into a padded matrix instead of into its own array. Row p lists the
     ORIGINAL window indices in ASCENDING WINDOW TIME, which is the order the slice `vi_sorted[a:b]`
     carried, so the stable tie-breaking in the nearest-N cap below sees the same ordering.
+
+    `direction="prior"` restricts eligibility to windows AT OR BEFORE the rating (the
+    forecasting-safe direction: every window used to answer a rating already existed when that
+    rating was filed) by narrowing the upper bound from `pro + tol` to `pro`. Everything else about
+    the eligibility test (the lower bound, the +/-tol radius itself) is unchanged.
     """
     counts = np.zeros(nP, dtype=np.int64)
     empty = np.empty((nP, 0), dtype=np.int64)
@@ -1559,8 +1564,9 @@ def _pad_windows_in_extent(win_t, valid_mask, pro, tol, nP):
     wo = np.argsort(wt, kind="stable")
     wt_sorted = wt[wo]
     vi_sorted = vi[wo]
+    hi_bound = pro if direction == "prior" else pro + tol
     lo_idx = np.searchsorted(wt_sorted, pro - tol, side="left")
-    hi_idx = np.searchsorted(wt_sorted, pro + tol, side="right")
+    hi_idx = np.searchsorted(wt_sorted, hi_bound, side="right")
     counts = np.maximum(hi_idx - lo_idx, 0).astype(np.int64)
     total = int(counts.sum())
     if total == 0:
@@ -1628,7 +1634,8 @@ def _lsb_none_lists(med):
 
 
 def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=None,
-                            allow_window_reuse=False, extent_s=None, psd_tol_s=None):
+                            allow_window_reuse=False, extent_s=None, psd_tol_s=None,
+                            match_direction="nearest"):
     """LIVE per-PRO LSB spectrum by matching PROs against the match-AGNOSTIC raw cache.
 
     Consumes one channel's `raw_lsb_spectrum_cache(...)` output and produces the SAME per-PRO
@@ -1714,11 +1721,28 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
              "used_s": 0.0, "saturated": False, "reason": "", "n_td_used": 0, "n_psd_used": 0}
             for tp in pro]
 
-    def _nearest_pro(win_t, tol):
-        """Vectorized nearest-PRO index (orig order) per window time, -1 if beyond tol."""
+    # Only "prior" changes behaviour here: this matcher is window-first (it asks "which PRO owns
+    # this window"), so the older routine's PRO-first FRAMING has no equivalent to switch to — every
+    # other UI value ("nearest", "pro_first") matches symmetrically, in either time direction.
+    _prior = str(match_direction or "nearest").lower() == "prior"
+
+    def _nearest_pro(win_t, tol, prior=False):
+        """Vectorized nearest-PRO index (orig order) per window time, -1 if beyond tol.
+
+        `prior=True` restricts a window to a PRO at or AFTER it (the window must precede the
+        rating, dt = pro_time - win_time >= 0) instead of whichever PRO is symmetrically closest —
+        the same forecasting-safe restriction `streaming_psd._match_to_pro`'s "prior" mode applies,
+        adapted to this function's window-first (rather than PRO-first) search.
+        """
         if win_t.size == 0 or nP == 0:
             return np.full(win_t.size, -1, dtype=int)
         pos = np.searchsorted(pro_sorted, win_t)
+        if prior:
+            right = np.clip(pos, 0, nP - 1)
+            dr = pro_sorted[right] - win_t
+            nn = order[right]
+            nn[(dr < 0) | (dr > tol) | (pos >= nP)] = -1
+            return nn
         left = np.clip(pos - 1, 0, nP - 1)
         right = np.clip(pos, 0, nP - 1)
         dl = np.abs(win_t - pro_sorted[left])
@@ -1744,11 +1768,12 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
     # once. Both branches now hand back ONE padded (nP x max_tiles) index matrix plus a per-PRO real
     # count, so the collapse below is a single reduction rather than nP small ones.
     if allow_window_reuse:
-        td_idx, td_cnt = _pad_windows_in_extent(td_t, td_valid, pro, tol_s, nP)
+        td_idx, td_cnt = _pad_windows_in_extent(td_t, td_valid, pro, tol_s, nP,
+                                                direction=match_direction)
     else:
         nn_td = np.full(td_t.size, -1, dtype=int)
         if td_valid.any():
-            nn_td[td_valid] = _nearest_pro(td_t[td_valid], tol_s)
+            nn_td[td_valid] = _nearest_pro(td_t[td_valid], tol_s, prior=_prior)
         td_idx, td_cnt = _pad_owned_windows(nn_td, nP)
     n_td_assigned = int(td_cnt.sum())
 
@@ -1790,11 +1815,12 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
     # PSD ELIGIBILITY also uses tol_s (the main slider) — the ONLY PSD control. No quantity cap: a
     # PRO's PSD-bridge LSB is the nan-median over EVERY eligible PSD event within +/-tol_s.
     if allow_window_reuse:
-        psd_idx, psd_cnt = _pad_windows_in_extent(psd_t, psd_valid, pro, tol_s, nP)
+        psd_idx, psd_cnt = _pad_windows_in_extent(psd_t, psd_valid, pro, tol_s, nP,
+                                                  direction=match_direction)
     else:
         nn_psd = np.full(psd_t.size, -1, dtype=int)
         if psd_valid.any():
-            nn_psd[psd_valid] = _nearest_pro(psd_t[psd_valid], tol_s)
+            nn_psd[psd_valid] = _nearest_pro(psd_t[psd_valid], tol_s, prior=_prior)
         psd_idx, psd_cnt = _pad_owned_windows(nn_psd, nP)
     n_psd_assigned = int(psd_cnt.sum())
 
@@ -1830,7 +1856,8 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
              "tol_s": tol_s, "td_quantity_s": td_quantity_s, "td_n_epochs_cap": int(td_n_epochs_cap),
              # legacy aliases kept so existing UI/echo readers don't KeyError:
              "extent_s": td_quantity_s, "psd_tol_s": tol_s,
-             "allow_window_reuse": bool(allow_window_reuse)}
+             "allow_window_reuse": bool(allow_window_reuse),
+             "match_direction": "prior" if _prior else "prospective"}
     return recs, stats
 
 

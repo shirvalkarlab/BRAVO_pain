@@ -6314,7 +6314,8 @@ def _wants_band_time_sweep(request_data):
 
 
 def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
-                                      allow_window_reuse, seconds=None):
+                                      allow_window_reuse, seconds=None,
+                                      match_direction="pro_first"):
     """One band-power matrix per length of signal, each with one row per pain report and one column
     per band centre.
 
@@ -6346,7 +6347,7 @@ def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
     for s in secs:
         recs, st = availability.live_lsb_spectrum_match(
             pt, raw_cache, tol_s=tol_s, td_quantity_s=float(s),
-            allow_window_reuse=allow_window_reuse)
+            allow_window_reuse=allow_window_reuse, match_direction=match_direction)
         mat = np.full((pt.size, centers.size), np.nan, dtype=float)
         for i, rec in enumerate(recs or []):
             if i >= pt.size:
@@ -6365,7 +6366,7 @@ def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
 def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_reuse,
                               pain_values, label_strategy, low_pct, high_pct,
                               outlier_n_mad, outlier_scale, metric_key, metric_label,
-                              n_perm=None, n_boot=None, seed=0):
+                              n_perm=None, n_boot=None, seed=0, match_direction="pro_first"):
     """Run the sweep for every sensing contact pair that has a cache, one entry per pair.
 
     ONE CONTACT PAIR IS ONE ANSWER, never pooled. A contact pair fixes which side of the brain and
@@ -6382,7 +6383,7 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
         try:
             power, stats, centers, _ = _band_time_sweep_power_by_seconds(
                 pro_times, raw_cache, None, tol_s=tol_s,
-                allow_window_reuse=allow_window_reuse)
+                allow_window_reuse=allow_window_reuse, match_direction=match_direction)
             match_s = _time.perf_counter() - t0
             sweep = analytics.band_time_sweep_from_power(
                 power, pain_values, center_freqs_hz=centers,
@@ -6395,6 +6396,15 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
                                "reached from the 250 samples-per-second voltage trace by the "
                                "validated transform, or from the device's own spectrum where no "
                                "voltage trace was in range"))
+            # Reported once per contact pair since one setting governs the whole request: "prior"
+            # means every matched recording preceded the rating it was matched to (the
+            # forecasting-safe direction); "prospective" means matching looked either direction in
+            # time. Read back from the matcher's own stats rather than re-deriving the label here,
+            # so the two can never disagree.
+            _first_stats = next(iter((stats or {}).values()), {})
+            sweep["match_direction"] = _first_stats.get(
+                "match_direction", "prior" if str(match_direction).lower() == "prior"
+                else "prospective")
             sweep["matched_seconds"] = float(match_s)
             sweep["total_seconds"] = float(_time.perf_counter() - t0)
             sweep["match_stats_by_seconds"] = {
@@ -6466,6 +6476,11 @@ def band_time_sweep_for_participant(request_data):
     # against nearby recording rather than against the whole record.
     tol_s = (float(match_tol_min) * 60.0 if match_tol_min
              else float(max(analytics.BAND_TIME_SWEEP_SECONDS)))
+    # Same three-way control the page's full-spectrum scan already reads (MatchDirection); this
+    # section did not read it at all before this change, so every request behaved as "prospective"
+    # (matched in either time direction) regardless of what the toggle showed on screen.
+    _md = str(request_data.get("MatchDirection", "pro_first")).lower()
+    match_direction = "prior" if _md == "prior" else ("nearest" if _md == "nearest" else "pro_first")
 
     pro_match = _pro_match_arrays(pro_df, label_metric)
     if pro_match is None or pro_match[0] is None or np.asarray(pro_match[0]).size == 0:
@@ -6487,7 +6502,7 @@ def band_time_sweep_for_participant(request_data):
         "eligibility_radius_seconds": float(tol_s), "allow_window_reuse": bool(allow_window_reuse),
         "label_strategy": label_strategy, "percentile_low": float(low_pct),
         "percentile_high": float(high_pct), "outlier_n_mad": float(outlier_n_mad),
-        "outlier_scale": outlier_scale}
+        "outlier_scale": outlier_scale, "match_direction": match_direction}
     sweep_sig, sweep_prov, tiles_sig = _band_sweep_signature(participant_uid, pro_df,
                                                              label_metric, sweep_settings)
     if sweep_sig is not None:
@@ -6514,7 +6529,7 @@ def band_time_sweep_for_participant(request_data):
         raw_by_ch, pro_times, tol_s=tol_s, allow_window_reuse=allow_window_reuse,
         pain_values=pain_values, label_strategy=label_strategy, low_pct=low_pct,
         high_pct=high_pct, outlier_n_mad=outlier_n_mad, outlier_scale=outlier_scale,
-        metric_key=label_metric, metric_label=metric_label)
+        metric_key=label_metric, metric_label=metric_label, match_direction=match_direction)
     wall = float(_time.perf_counter() - t0)
 
     out = {
