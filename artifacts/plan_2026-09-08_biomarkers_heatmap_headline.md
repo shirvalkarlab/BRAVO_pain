@@ -28,18 +28,21 @@ not as a stack.
 
 ## Track A — page layout and interaction
 
-**Blocked on:** the PI choosing which of the three PRD options to build (PRD §8, item 1).
+**Resolved 2026-09-08: building Option 2 (search-first, minimal chrome).** No PI-decision blocker
+remains for this track.
 
 | Task | What it does | Acceptance criteria | Depends on |
 |---|---|---|---|
 | A1 | Reorder the page to the fixed order (PRD §2): timeline, binarization controls, calibrated grids, drill-down, calibration panels — with the grid section running on page load rather than gated behind the older routine. | The calibrated grid's request fires without the older routine having run first; the older routine's section renders below the drill-down, not above the grids. | none |
-| A2 | Make grid cells interactive: hover preview, click to pin, matching the chosen option's exact behaviour from the PRD. | Clicking any cell fills a detail panel with that cell's scatter, fitted line, and both violin plots; the same cell is outlined in both the correlation and AUC grids at once. | A1 |
-| A3 | One shared page-level selection (contact pair + frequency point + length of signal) driving every plot that depends on it, replacing the scan's and the sweep's separate selections. | Changing contact pair or cell in any one place updates every other plot that shows a selection-dependent value; no two plots on the page disagree about which selection is active. | A2 |
-| A4 | Show the correlation/binarization asymmetry (PRD §3) as a visible, not merely captioned, behaviour. | Editing the binarization cuts visibly changes only the AUC grid (a redraw or highlight); the correlation grid's own frame or note stays static across that edit. | A1 |
-| A5 | Reduce the page's explanatory text to the PRD's "how to read this" pattern for the chosen option. | The printed word count of always-visible captions on the page (excluding numeric results) is measured before and after and materially reduced; nothing the reader needs to interpret a number is removed, only moved into an on-demand panel. | A2 |
-| A6 (Option 1 only) | Build the guided-walk stepper and the "best cell" auto-selection. | On load, the page shows a specific, named cell in the drill-down with no click required; next/previous steps through the server's ranked list; clicking any grid cell directly exits the walk. | A2, PI's tie-break rule (PRD §8 item 2) |
+| A2 | Make grid cells interactive: hover preview, click to pin. No auto-selection on load — the grids start empty of any pinned cell. | Clicking any cell fills a detail panel with that cell's scatter, fitted line, and both violin plots; the same cell is outlined in both the correlation and AUC grids at once; on load, no cell is pre-selected. | A1 |
+| A3 | One shared page-level selection (contact pair + frequency point + length of signal) driving every plot that depends on it, replacing the scan's and the sweep's separate selections, chosen via the small-multiples contact strip rather than a dropdown. | Changing contact pair or cell in any one place updates every other plot that shows a selection-dependent value; no two plots on the page disagree about which selection is active; the contact strip, not a dropdown, drives contact choice. | A2 |
+| A4 | Show the correlation/binarization asymmetry (PRD §3) as a visible, not merely captioned, behaviour: the correlation grid's frame stays static on a binarization edit, the AUC grid's frame flashes and redraws. | Editing the binarization cuts visibly changes only the AUC grid (a redraw or highlight); the correlation grid's own frame or note stays static across that edit. | A1 |
+| A5 | Collapse nearly all of today's captions into a single closed-by-default "how to read this" panel. | The printed word count of always-visible captions on the page (excluding numeric results) is measured before and after and materially reduced; nothing the reader needs to interpret a number is removed, only moved into the on-demand panel. | A2 |
 | A7 | Add the match-direction badge and the family-wise-correction label to the grid section once Tracks B and C expose the fields. | The badge names "prior" or "prospective" and matches what the request actually used; a cell's label visibly changes when the family-wise field is present versus absent. | A1, B2, C2 |
 | A8 | Add the "export full grid to Closed-Loop" action once Track D exposes the field. | Triggering the action and opening Closed-Loop Deployment for the same participant shows the same grid, not a recomputed one, confirmed by matching a few point values by hand. | A2, D3 |
+
+**Task A6 (Option 1's guided-walk stepper) is out of scope** — dropped, not deferred, since Option 2
+has no guided walk.
 
 ## Track B — match-direction wiring
 
@@ -81,7 +84,6 @@ verdict, cross-setting stability) can be built and proven independently of Track
 A1 -> A2 -> A3
 A1 -> A4
 A2 -> A5
-A2 -> A6 (Option 1 only, needs PI's tie-break rule)
 B1 -> B2 -> B3
 C1 -> C2 -> C3      (needs PI's ADR sign-off before C1 starts)
 D1 -> D2 -> D3 -> D4

@@ -189,19 +189,23 @@ remains fully browsable and exportable to Closed-Loop Deployment.
 Per CLAUDE.md §10 rule 8, approving this plan is not the same as authorizing implementation, and
 several specific method questions below still need his direct answer, not an assumed one.
 
-1. **Which of the three options to build first** (§4) — a lean toward Option 1 is offered, not a
-   decision.
-2. **The tie-break rule inside Option 1's guided walk**, if Option 1 is chosen — when two cells are
-   both "established," which one the page shows first (larger correlation, or larger distance from
-   a coin-flip AUC, or something else).
+1. ~~**Which of the three options to build first** (§4).~~ **RESOLVED 2026-09-08: Option 2,
+   search-first with minimal chrome.** No auto-selected cell, no guided-walk stepper; hover to
+   preview, click to pin, contact chosen from the small-multiples strip.
+2. ~~**The tie-break rule inside Option 1's guided walk.**~~ **MOOT.** Option 2 has no guided walk,
+   so Track A1's task A6 (PRD §4, plan Track A) drops out of scope entirely rather than waiting on
+   an answer.
 3. **Confirmation of the exact correction method for §7** — Benjamini-Hochberg is what this project
    already uses elsewhere and is proposed here for that reason, but every prior correction choice in
-   this project has its own explicit sign-off, and this one should too.
+   this project has its own explicit sign-off, and this one should too. **Still open.**
 4. **Whether the family-wise correction in §7 also needs the same autocorrelation adjustment** the
    older routine applies before its own correction (a separate fix for pain ratings being related to
    each other over time, not the same thing as correcting for testing many bands) — the explorer
    investigation found no such adjustment exists yet for the calibrated grid at all, corrected or
    not, which is a separate, currently-open question about the calibrated grid's honesty that this
-   plan surfaces but does not resolve.
-5. **Confirmation that Option 3 (§4) should wait** for the timeline's label conventions to be
-   written down, rather than being attempted with invented geometry.
+   plan surfaces but does not resolve. **Still open.**
+5. ~~**Confirmation that Option 3 (§4) should wait.**~~ **MOOT.** With Option 2 chosen, Option 3
+   is automatically deferred to a later phase; nothing about it needs deciding now.
+
+**Net effect: only items 3 and 4 remain open, and both block Track C alone** (plan §"Track C").
+Tracks A (built for Option 2), B, and D have no PI-decision blocker left and can start on request.
