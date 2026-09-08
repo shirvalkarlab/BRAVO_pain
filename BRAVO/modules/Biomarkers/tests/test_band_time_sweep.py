@@ -508,16 +508,42 @@ def test_family_wise_correction_matches_bh_fdr_applied_directly():
           "same p-values, and a missing p-value comes back as 'not assessed' rather than a number")
 
 
-def test_family_wise_correction_does_not_pool_the_correlation_and_auc_grids_together():
-    """`band_time_sweep_from_power` calls `_apply_family_wise_correction` once for the correlation
-    rows and once for the AUC rows -- two separate 22-centre families, never one 44-test family.
-    (Note: within ONE family, Benjamini-Hochberg's q-value for a given p-value genuinely does
-    depend on how many other tests are in that same family -- that is the entire reason decision 63
-    restricts the family to 22 centres instead of pooling in the older routine's ~101 bins, so this
-    test does not, and should not, assert that q-values are independent of family size. It asserts
-    the narrower, correct claim: correcting the correlation rows on their own gives exactly the same
-    answer as correcting that same list of p-values with `bh_fdr` directly -- i.e. the AUC rows
-    passed in the SAME call to `band_time_sweep_from_power` never leak into the correlation family.)
+def test_a_family_with_no_measured_p_values_is_not_assessed_and_does_not_raise():
+    """Every row in the family can carry `p_selection_aware: None` -- a contact pair where every
+    length of signal was undeliverable, say. `bh_fdr`'s own m == 0 branch returns an all-NaN array
+    in that case; this checks `_apply_family_wise_correction` passes that through as 'not assessed'
+    on every row, in place, with no exception -- rather than dividing by a family size of zero or
+    reporting a spurious pass. Nothing before this test exercised that path.
+    """
+    rows = [{"p_selection_aware": None} for _ in range(22)]
+    A._apply_family_wise_correction(rows)                 # must not raise
+    assert len(rows) == 22
+    for row in rows:
+        assert row["family_wise_q_8_to_30hz"] is None
+        assert row["family_wise_significant_8_to_30hz"] is None
+    # The same for an empty family -- no rows at all, e.g. no sensing contact pair identified.
+    empty = []
+    A._apply_family_wise_correction(empty)                # must not raise
+    assert empty == []
+    print("OK a family with no measured p-values is reported as not assessed on every row, "
+          "and an empty family raises nothing")
+
+
+def test_family_wise_correction_is_isolated_per_grid_and_is_family_size_sensitive():
+    """Renamed from `test_family_wise_correction_does_not_pool_the_correlation_and_auc_grids_
+    together` -- a review found the old name undersold what the test actually checks. It proves
+    TWO separate things, both load-bearing, and the name now says both:
+
+    1. `band_time_sweep_from_power` calls `_apply_family_wise_correction` once for the correlation
+       rows and once for the AUC rows -- two separate 22-centre families, never one 44-test family.
+       Correcting the correlation rows on their own gives exactly the same answer as correcting that
+       same list of p-values with `bh_fdr` directly, i.e. the AUC rows passed in the SAME call to
+       `band_time_sweep_from_power` never leak into the correlation family.
+    2. Within ONE family, Benjamini-Hochberg's q-value for a given p-value genuinely does depend on
+       how many other tests are in that same family -- that is the entire reason decision 63
+       restricts the family to 22 centres instead of pooling in the older routine's ~101 bins. This
+       test does NOT assert that q-values are independent of family size (they are not); it asserts
+       the correct, opposite claim below.
     """
     rows_a = [{"p_selection_aware": p} for p in (0.001, 0.02, 0.03)]
     rows_b = [{"p_selection_aware": p} for p in (0.001, 0.02, 0.03, 0.9, 0.95, 0.99)]

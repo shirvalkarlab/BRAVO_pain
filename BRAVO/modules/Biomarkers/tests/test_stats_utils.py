@@ -25,6 +25,40 @@ def test_bh_fdr():
     assert np.isnan(q2[1]) and np.isfinite(q2[0]) and np.isfinite(q2[2])
 
 
+def test_bh_fdr_matches_statsmodels_independent_implementation():
+    """`bh_fdr` is hand-rolled (rank, adjust, enforce monotonicity by reverse cummin). Nothing
+    before this test checked it against an independent, published implementation of the same
+    procedure -- a review found this gap: two mistakes in a hand-rolled BH pass the same way (a
+    self-consistency test wouldn't catch either), an off-the-shelf one would not.
+    """
+    from statsmodels.stats.multitest import multipletests
+
+    rng = np.random.default_rng(11)
+    for trial, p in enumerate([
+        np.array([0.001, 0.04, 0.30, 0.50, 0.90]),                 # the docstring's own example
+        rng.uniform(0.0, 1.0, size=1),                              # a single test
+        rng.uniform(0.0, 1.0, size=22),                             # this project's own family size
+        np.full(30, 0.5),                                           # every p-value tied
+        rng.uniform(0.0, 1e-6, size=15),                            # every p-value near zero
+    ]):
+        q_ours = su.bh_fdr(p)
+        _, q_ref, _, _ = multipletests(p, method="fdr_bh")
+        assert np.allclose(q_ours, q_ref, atol=1e-10), (
+            f"trial {trial}: bh_fdr disagrees with statsmodels' fdr_bh -- "
+            f"ours={q_ours} ref={q_ref}")
+
+    # NaNs: statsmodels has no NaN handling of its own, so compare only on the finite subset,
+    # which is exactly what bh_fdr's own docstring promises (NaNs preserved, not dropped).
+    p_with_nan = np.array([0.01, np.nan, 0.02, 0.5, np.nan, 0.001])
+    finite = np.isfinite(p_with_nan)
+    q_ours = su.bh_fdr(p_with_nan)
+    _, q_ref, _, _ = multipletests(p_with_nan[finite], method="fdr_bh")
+    assert np.all(np.isnan(q_ours[~finite]))
+    assert np.allclose(q_ours[finite], q_ref, atol=1e-10)
+    print("OK bh_fdr agrees with statsmodels.stats.multitest.multipletests(method='fdr_bh') "
+          "across 5 constructed families and a family carrying NaNs")
+
+
 def test_partial_corr_removes_confound():
     rng = np.random.default_rng(0)
     c = rng.normal(size=400)                              # confound (e.g. stim amplitude)
