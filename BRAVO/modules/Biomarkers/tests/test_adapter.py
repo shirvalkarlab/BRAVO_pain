@@ -92,6 +92,65 @@ def test_compute_psd_pain_correlation_runs():
     assert out["pval"].shape == (C, F)
 
 
+def test_adapter_carries_missing_forward():
+    """The stream-data dict must carry a per-sample Missing flag, not silently drop it
+    (decision 57 / open item 9: this is the field compute_psd_pain_correlation needs and,
+    before this fix, never received)."""
+    rec = _make_recording(n_seconds=2)
+    n = rec["Data"].shape[0]
+    # Mark the first 30% of samples missing on channel 0 only -- the any-channel rule
+    # (decision 4's own convention, mirrored by DecodeCommon.missing_per_sample) must still
+    # flag those samples missing even though channel 1 is clean there.
+    rec["Missing"] = np.zeros_like(rec["Data"])
+    rec["Missing"][: int(0.3 * n), 0] = 1.0
+    epoch = adapter.bravo_timedomain_to_streamdata(rec)
+    assert epoch["missing"] is not None
+    assert epoch["missing"].shape == (n,)
+    assert epoch["missing"][: int(0.3 * n)].astype(bool).all()
+    assert not epoch["missing"][int(0.3 * n):].astype(bool).any()
+
+
+def test_adapter_missing_absent_gives_none():
+    """A recording with no Missing field at all (legacy shape) must not raise, and must give
+    the routine no mask -- i.e. the pre-fix, no-rejection behavior for such a caller."""
+    rec = _make_recording()
+    del rec["Missing"]
+    epoch = adapter.bravo_timedomain_to_streamdata(rec)
+    assert epoch["missing"] is None
+
+
+def test_compute_psd_pain_correlation_rejects_a_mostly_missing_epoch():
+    """The decision-57 fix itself: a window that's mostly zero-fill must come back NaN, not a
+    real-looking but artificially deflated power value. Before this fix, `adapter` never carried
+    the Missing field into the epoch dict and `compute_psd_pain_correlation` never read one, so
+    a heavily zero-filled recording was pooled as if it were a genuine, quiet measurement."""
+    recs = [_make_recording(seed=k) for k in range(5)]
+    n = recs[2]["Data"].shape[0]
+    # Zero-fill 60% of the third recording, on every channel -- well over the 10% cutoff
+    # (streaming_psd.WELCH_MAX_MISSING_FRAC) this project applies everywhere else (decision 4).
+    recs[2]["Data"][: int(0.6 * n), :] = 0.0
+    recs[2]["Missing"][: int(0.6 * n), :] = 1.0
+    streams = adapter.bravo_timedomain_recordings_to_streams(recs)
+    labels = np.array([2.0, 4.0, 6.0, 8.0, 9.0])
+    out = streaming_psd.compute_psd_pain_correlation(streams, labels, CHAN_ORDER, transform="log")
+    assert np.isnan(out["psd"][2]).all(), "a >10%-zero-filled epoch must be rejected, not pooled"
+    for k in (0, 1, 3, 4):
+        assert np.isfinite(out["psd"][k]).all()
+
+
+def test_missing_rejection_is_not_a_false_positive_from_zero_signal():
+    """Guard against the trivial explanation that zero-filling the data alone (independent of
+    whether `missing=` is threaded through) already yields a degenerate PSD for some unrelated
+    reason. Confirms the NaN in the test above comes specifically from the missing-fraction gate,
+    not incidentally from Welch on a partly-zero signal with no mask supplied."""
+    rec = _make_recording(seed=99)
+    n = rec["Data"].shape[0]
+    rec["Data"][: int(0.6 * n), :] = 0.0
+    group = rec["Data"].T
+    psd_without_mask = streaming_psd.welch_psd_for_instance(group, CHAN_ORDER, FS, CHAN_ORDER)
+    assert np.isfinite(psd_without_mask).all()
+
+
 def _make_pro_df():
     return pd.DataFrame({
         "date_time_s1_daily": ["2023-11-14 09:00", "2023-11-14 21:00", "2023-11-15 09:00"],

@@ -30,11 +30,12 @@ Two goals, in this order, and the second is subordinate to the first.
 
 ## Next Step
 
-**Waiting on the PI's answer to open item 9 (decision 57): fix the entangled pass's missing
-zero-fill rejection now, as its own change with a field-count/difference-count proof, or defer.**
-Decisions 54-56 (cache byte budget, peaked-band curvature rule, its live pooled-data check) are
-built, tested and pushed. Open item 21 (double-fetch) needs a live browser confirmation once
-signed in; nothing else is queued.
+**Nothing queued that is not the PI's or a live-browser check.** He chose to fix the zero-fill
+gap now (decisions 58-59): fixed, tested on both runners, and proven on live RCS08 data (31 of
+386 recordings excluded, 29,704 already-computed values changed, none of them NaN either way).
+Open item 22 (folding this routine into the newer sweep) is deliberately deferred, needing a
+channel-set check first. Open item 21 (double-fetch) still needs a live browser confirmation
+once signed in.
 
 ## Current Phase
 

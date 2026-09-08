@@ -17,7 +17,8 @@ ChronicBrainSense.py):
 Routine input contract (what streaming_psd expects per epoch; identical to dbs_io.Stream):
   {"stream_data": [<per-group (n_ch, n_samples) array>, ...],
    "channel_names": [[name, ...], ...],
-   "sample_rate": float}
+   "sample_rate": float,
+   "missing": <(n_samples,) 0/1 dropped-packet flag, or None>}
 """
 
 import datetime
@@ -25,6 +26,13 @@ import datetime
 import numpy as np
 import pandas as pd
 from scipy.signal import savgol_filter
+
+# Both spellings on purpose: the container's path root makes the package `modules.DecodeCommon`,
+# the host suite's root makes it `DecodeCommon` (same convention as routines/availability.py).
+try:
+    from modules.DecodeCommon.representation import missing_per_sample as _missing_per_sample
+except ImportError:
+    from DecodeCommon.representation import missing_per_sample as _missing_per_sample
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +48,8 @@ def bravo_timedomain_to_streamdata(recording):
       {"stream_data": [ (n_ch, n_samples) ],     # single group per recording
        "channel_names": [ [ch0, ch1, ...] ],
        "sample_rate": float,
-       "start_time": float or None}
+       "start_time": float or None,
+       "missing": (n_samples,) 0/1 dropped-packet flag, or None if the recording carries none}
     """
     data = np.asarray(recording["Data"], dtype=float)
     if data.ndim == 1:
@@ -51,6 +60,7 @@ def bravo_timedomain_to_streamdata(recording):
         "channel_names": [list(recording["ChannelNames"])],
         "sample_rate": float(recording["SamplingRate"]),
         "start_time": recording.get("StartTime"),
+        "missing": _missing_per_sample(recording.get("Missing"), data.shape[0]),
     }
 
 

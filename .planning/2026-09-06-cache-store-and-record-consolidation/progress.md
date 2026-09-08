@@ -847,3 +847,49 @@ this machine (pyenv 3.12.9) has no pytest.
 - `DECISIONS_and_open_items.md` updated: item 6 marked resolved-with-findings, new decision 57,
   new open items 9 and 21, and two new "Resolved by this consolidation" entries. `task_plan.md`
   Next Step rewritten to point at open item 9 as the one thing waiting on the PI.
+
+## Session 2026-09-08, fourth entry -- the zero-fill gap explained, then fixed and proven live
+
+- Asked open item 9 as a question first; his reply ("You fail to provide adequate context...
+  What is this rule?") was a correction, not an answer -- rewrote the explanation in plain
+  language (what a dropped-packet zero-fill placeholder is, why it deflates a power average, the
+  10% rule stated as a concrete sample count) with no jargon, per HOUSE_RULES_writing_and_claims.md
+  §1. He then chose "fix now, measure first."
+- Investigated with a read-only Explore agent first (ground truth before any edit): the rule's
+  reference implementation is `streaming_psd.WELCH_MAX_MISSING_FRAC=0.10` inside
+  `welch_psd_for_instance`/`welch_rating_centered`, already correct; the break is exactly two
+  dropped connections -- `adapter.bravo_timedomain_to_streamdata` never copied `recording["Missing"]`
+  into its output dict, and `compute_psd_pain_correlation` never had a place to receive it or a
+  call that passed it to `welch_psd_for_instance`.
+- Fixed both, minimally, reusing existing code rather than reimplementing: adapter.py now calls
+  `DecodeCommon.representation.missing_per_sample` (the same collapse rule
+  `bravo_service._missing_time_vector` already uses for the one caller that gets this right) and
+  carries the result as `epoch["missing"]`; `compute_psd_pain_correlation`'s epoch loop reads
+  `ep.get("missing")` and passes it into `welch_psd_for_instance`. No new public parameter on
+  either function; a caller with no "missing" key is unaffected (None, same as before).
+- 4 new tests in `test_adapter.py`: the adapter carries Missing forward (any-channel rule,
+  matching decision 4's own convention) and gives None when absent; the load-bearing one
+  constructs a 5-epoch batch with the third recording 60% zero-filled and confirms
+  `compute_psd_pain_correlation` returns that epoch's PSD as all-NaN while the other four stay
+  finite; a control confirms the NaN is specifically from the missing-fraction gate and not an
+  artifact of Welch on partly-zeroed data with no mask supplied (same zero-filled data, no
+  `missing=` passed, PSD comes back finite).
+- Container suite PASS=544 FAIL=0 (was 540 before this session's two test batches); host suite
+  940 passed / 41 skipped, unaffected (Biomarkers isn't in the host's test list). Directly
+  invoked all 4 new tests plus 2 pre-existing ones via the bridge to confirm real execution, not
+  just an aggregate count.
+- Equality/difference proof (decision 59), both directions, live on RCS08 through the real
+  `bravo_service.run_for_participant` call: git-stashed the two source files to capture the
+  pre-fix response (8,097,776 fields), popped the stash to capture the post-fix response
+  (8,097,533 fields), then diffed by dotted field path. 29,704 of the 8,097,533 common fields
+  changed value; 243 dropped out (shorter derived scatter-overlay lists, not missing data); zero
+  changed to or from NaN. A separate direct count: of 386 recordings this routine analyses, 31
+  (8%) are more than 10% zero-filled in their first 30 s and are now excluded; 87 carry any
+  zero-fill at all, 0.16% to 61.6%. For at least one channel the routine's own "best band" choice
+  moved, 3.9215 Hz to 0.95 Hz -- reported plainly rather than folded into an aggregate percentage.
+- `DECISIONS_and_open_items.md`: item 9 marked resolved, decisions 58 and 59 added with the fix
+  and its proof numbers, new open item 22 for the still-deferred folding question (part 2 of the
+  review's recommendation). `task_plan.md` Next Step rewritten: nothing queued but the two
+  already-known PI/live-browser items.
+- Cleaned up the two 594 MB before/after scratch pickles from the container's scratch area after
+  the diff was computed; the two small analysis scripts stay (disposable, gitignored).

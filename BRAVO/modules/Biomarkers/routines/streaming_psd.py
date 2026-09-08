@@ -1079,6 +1079,11 @@ def compute_psd_pain_correlation(streams, labels, chan_order, f_set=F_SET,
             "stream_data"    : list of per-group channel arrays (or 2-D (n_ch, n_samples))
             "channel_names"  : list aligned to stream_data groups (list of lists)
             "sample_rate"    : float
+            "missing"        : optional (n_samples,) 0/1 dropped-packet flag; when present,
+                               a group whose window is more than WELCH_MAX_MISSING_FRAC
+                               zero-filled is rejected (returned as NaN) rather than pooled
+                               deflated, mirroring `bravo_service._welch_rows_into`. Absent
+                               (the legacy shape) means no rejection, same as before.
         This is exactly the shape `adapter.bravo_timedomain_to_streamdata` emits, and is
         also what `dbs_io.Stream.Stream` exposes (`.stream_data`, `.channel_names`,
         `.sample_rate`).
@@ -1107,12 +1112,17 @@ def compute_psd_pain_correlation(streams, labels, chan_order, f_set=F_SET,
         sd = ep["stream_data"]
         cn = ep["channel_names"]
         fs = ep["sample_rate"]
+        # Reject rather than pool a window that's mostly zero-fill (decision 4); absent for a
+        # legacy caller with no "missing" key, this is None and welch_psd_for_instance keeps its
+        # old no-rejection behavior.
+        missing_vec = ep.get("missing")
         # A "stream" may hold several groups; average their per-group PSDs into one epoch.
         group_psds = []
         for g_idx, group in enumerate(sd):
             names = cn[g_idx] if isinstance(cn[g_idx], (list, tuple)) else [cn[g_idx]]
             group_psds.append(
-                welch_psd_for_instance(group, names, fs, chan_order, f_set=f_set)
+                welch_psd_for_instance(group, names, fs, chan_order, f_set=f_set,
+                                       missing=missing_vec)
             )
         psd_epochs.append(np.nanmean(np.concatenate(group_psds, axis=0), axis=0, keepdims=True))
 
