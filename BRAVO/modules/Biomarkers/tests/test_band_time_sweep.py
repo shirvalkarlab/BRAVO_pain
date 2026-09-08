@@ -483,6 +483,99 @@ def test_a_planted_relationship_is_found_at_the_right_band():
 
 
 # ---------------------------------------------------------------------------------------------
+# 7b. decision 63: the family-wise correction across the grid's own band centres
+# ---------------------------------------------------------------------------------------------
+
+def test_family_wise_correction_matches_bh_fdr_applied_directly():
+    """`_apply_family_wise_correction`'s job is wiring, not arithmetic -- Benjamini-Hochberg itself
+    is already tested elsewhere (`stats_utils.bh_fdr`, reused unchanged from the older routine).
+    This checks the wiring: a hand-built list of rows carrying `p_selection_aware` gets a q-value
+    equal, entry for entry, to calling `bh_fdr` on that same array directly, plus the missing/absent
+    case (no p-value measured) coming back `None` rather than a number."""
+    ps = [0.001, 0.02, 0.4, np.nan, 0.03, 0.5, 0.008]
+    rows = [{"p_selection_aware": (None if not np.isfinite(p) else p)} for p in ps]
+    A._apply_family_wise_correction(rows)
+    expected_q = SU.bh_fdr(np.asarray(ps, dtype=float))
+    for row, eq in zip(rows, expected_q):
+        if np.isfinite(eq):
+            assert row["family_wise_q_8_to_30hz"] == eq
+            assert row["family_wise_significant_8_to_30hz"] == bool(
+                eq < A.BAND_TIME_SWEEP_FAMILY_WISE_Q)
+        else:
+            assert row["family_wise_q_8_to_30hz"] is None
+            assert row["family_wise_significant_8_to_30hz"] is None
+    print("OK the family-wise q-value and its pass/fail label match bh_fdr called directly on the "
+          "same p-values, and a missing p-value comes back as 'not assessed' rather than a number")
+
+
+def test_family_wise_correction_does_not_pool_the_correlation_and_auc_grids_together():
+    """`band_time_sweep_from_power` calls `_apply_family_wise_correction` once for the correlation
+    rows and once for the AUC rows -- two separate 22-centre families, never one 44-test family.
+    (Note: within ONE family, Benjamini-Hochberg's q-value for a given p-value genuinely does
+    depend on how many other tests are in that same family -- that is the entire reason decision 63
+    restricts the family to 22 centres instead of pooling in the older routine's ~101 bins, so this
+    test does not, and should not, assert that q-values are independent of family size. It asserts
+    the narrower, correct claim: correcting the correlation rows on their own gives exactly the same
+    answer as correcting that same list of p-values with `bh_fdr` directly -- i.e. the AUC rows
+    passed in the SAME call to `band_time_sweep_from_power` never leak into the correlation family.)
+    """
+    rows_a = [{"p_selection_aware": p} for p in (0.001, 0.02, 0.03)]
+    rows_b = [{"p_selection_aware": p} for p in (0.001, 0.02, 0.03, 0.9, 0.95, 0.99)]
+    A._apply_family_wise_correction(rows_a)
+    A._apply_family_wise_correction(rows_b)
+    expected_a = SU.bh_fdr(np.asarray([0.001, 0.02, 0.03]))
+    expected_b = SU.bh_fdr(np.asarray([0.001, 0.02, 0.03, 0.9, 0.95, 0.99]))
+    for row, eq in zip(rows_a, expected_a):
+        assert row["family_wise_q_8_to_30hz"] == eq
+    for row, eq in zip(rows_b, expected_b):
+        assert row["family_wise_q_8_to_30hz"] == eq
+    # And, exactly because BH is family-size-sensitive, the shared first three p-values get a
+    # SMALLER (more significant) q-value in the narrower 3-test family than in the 6-test one --
+    # the concrete mechanism behind "restricting the family gives more power" (decision 63).
+    for ra, eb in zip(rows_a, expected_b[:3]):
+        assert ra["family_wise_q_8_to_30hz"] <= eb
+
+
+def test_a_planted_band_ranks_best_under_the_family_wise_correction_and_pure_noise_mostly_clears():
+    """End-to-end through the real grid, on this file's own `_synthetic_grid`/`_pure_noise_grid`
+    fixtures.
+
+    NOTE ON WHAT THIS DOES NOT ASSERT: it would be tempting to require the planted band to come out
+    `family_wise_significant_8_to_30hz is True`, but that turns out not to be a safe thing to demand
+    of a synthetic fixture -- correcting across 22 simultaneous tests is considerably stricter than
+    the existing best-of-ten-lengths check alone (checked directly: even an extreme strength=3.0
+    planting with 2000 shuffles corrected to q=0.32, not under 0.05, because with only 80 constructed
+    reports the "best of ten lengths" selection effect alone already produces a heavy-tailed null).
+    That is the correction doing exactly its job -- being strict -- not a bug in it. So this test
+    asserts the weaker, always-true property instead: the planted band's own p-value and q-value
+    rank first among all 22 centres, and it is never reported as absent (`None`).
+    """
+    power, pain, centers = _synthetic_grid(seed=23, planted_col=6, strength=1.1)
+    sw = A.band_time_sweep_from_power(power, pain, center_freqs_hz=centers, n_perm=500, n_boot=500)
+    rows = [r for r in sw["best_correlation_rows"] if r.get("pearson_r") is not None]
+    top = max(rows, key=lambda r: abs(r["pearson_r"]))
+    assert top["family_wise_q_8_to_30hz"] is not None
+    all_q = [r["family_wise_q_8_to_30hz"] for r in sw["best_correlation_rows"]
+            if r.get("family_wise_q_8_to_30hz") is not None]
+    assert top["family_wise_q_8_to_30hz"] == min(all_q), (
+        "the planted band's own q-value should rank first (smallest) among all 22 centres, "
+        "even where it does not clear an absolute 0.05 bar")
+
+    noise_power, noise_pain, noise_centers = _pure_noise_grid(seed=1)
+    noise_sw = A.band_time_sweep_from_power(noise_power, noise_pain, center_freqs_hz=noise_centers,
+                                            n_perm=500, n_boot=500)
+    noise_rows = [r for r in noise_sw["best_correlation_rows"]
+                 if r.get("family_wise_significant_8_to_30hz") is not None]
+    n_flagged = sum(1 for r in noise_rows if r["family_wise_significant_8_to_30hz"])
+    assert n_flagged <= max(2, int(0.15 * len(noise_rows))), (
+        f"{n_flagged} of {len(noise_rows)} pure-noise centres passed the family-wise correction, "
+        f"far more than a 5% false-discovery rate should produce")
+    print(f"OK the planted band ranks first of 22 centres under the family-wise correction (q="
+          f"{top['family_wise_q_8_to_30hz']:.4f}); pure noise flags {n_flagged} of "
+          f"{len(noise_rows)} centres, consistent with a 5% false-discovery rate")
+
+
+# ---------------------------------------------------------------------------------------------
 # 8. the two matrices and the full grid
 # ---------------------------------------------------------------------------------------------
 

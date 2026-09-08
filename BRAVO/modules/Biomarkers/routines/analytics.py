@@ -6338,6 +6338,12 @@ CORRELATION_NO_RELATIONSHIP = 0.0
 BAND_TIME_SWEEP_N_PERM = 1000
 BAND_TIME_SWEEP_N_BOOT = 1000
 
+#: Decision 63: the target false-discovery rate for correcting across the grid's own 22 band
+#: centres (never pooled with the older full-spectrum routine's much wider range, which is why the
+#: field name below says "8_to_30hz" rather than reusing the older routine's own field). Matches
+#: BIOMARKER_FDR_Q, this project's one other precedent for this choice of rate.
+BAND_TIME_SWEEP_FAMILY_WISE_Q = 0.05
+
 
 def sweep_tile_seconds():
     """The width of one cache tile, in seconds. One place reads it so a change cannot land in half
@@ -6779,6 +6785,19 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         power_feature=power_feature, channel=channel, split_why=split_why,
         low_cut=low_cut, high_cut=high_cut)
 
+    # DECISION 63: a second, independent correction across the grid's own 22 band centres, on top
+    # of (never instead of) each row's existing best-of-ten-lengths answer. `p_selection_aware`
+    # already corrects for picking the best of ten lengths at one centre; feeding those 22
+    # per-centre p-values into the SAME Benjamini-Hochberg function the older full-spectrum routine
+    # already uses (`stats_utils.bh_fdr`) corrects for having tested 22 centres at once too. The
+    # family is exactly this grid's own 22 points, restricted to 8-30 Hz by the device's own limits
+    # -- never pooled with the older routine's much wider range, which is why this has its own
+    # field name rather than reusing that routine's. This is a LABEL, never a gate (the PI's own
+    # words): a row that fails it is unchanged in every other respect and remains fully readable,
+    # selectable and exportable.
+    _apply_family_wise_correction(best_corr_rows)
+    _apply_family_wise_correction(best_auc_rows)
+
     crosscheck = logistic_fit_crosscheck(
         {float(kept_req[t]): X[t] for t in range(T)}, y_bin, best_auc_rows)
     # The two keys naming which grid cell a row came from existed only so the cross-check could
@@ -7113,6 +7132,28 @@ def _verdict_against(lo, hi, null_value, *, observed=None, shuffled_p95=None):
         except (TypeError, ValueError):
             pass
     return BAND_PAIN_ESTABLISHED
+
+
+def _apply_family_wise_correction(rows):
+    """Decision 63: Benjamini-Hochberg across one grid's own band centres, in place.
+
+    `rows` is `best_correlation_rows` or `best_auc_rows`, one entry per band centre, each already
+    carrying `p_selection_aware` (the permutation-based p-value that corrects for choosing the best
+    of ten lengths of signal at that one centre). This adds two fields per row: the corrected
+    q-value, and whether it clears `BAND_TIME_SWEEP_FAMILY_WISE_Q` -- both computed ONLY from this
+    grid's own rows, never pooled with any other grid or any other channel's rows. A row with no
+    `p_selection_aware` (nothing was measured for that centre) gets both fields as `None`, matching
+    how every other "not assessed" case on this page is represented -- absence of evidence, not a
+    negative finding.
+    """
+    from .stats_utils import bh_fdr
+    p = np.array([r.get("p_selection_aware") for r in rows], dtype=float)
+    q = bh_fdr(p)
+    for row, qi in zip(rows, q):
+        finite = np.isfinite(qi)
+        row["family_wise_q_8_to_30hz"] = (float(qi) if finite else None)
+        row["family_wise_significant_8_to_30hz"] = (
+            bool(qi < BAND_TIME_SWEEP_FAMILY_WISE_Q) if finite else None)
 
 
 def _best_rows_correlation(corr, corr_n, X, pain, centers, requested, delivered, tiles, null,

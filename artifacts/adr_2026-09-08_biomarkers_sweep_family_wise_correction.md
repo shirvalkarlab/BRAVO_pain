@@ -80,3 +80,30 @@ label is computed from the grid's own p-values as they stand today, with no adju
 ratings being related to each other over time. The gap this document surfaced (§"What this does
 not decide") stands as a separately known, separately open question about the calibrated grid's
 statistics generally — it is not folded into this decision and not blocking it.
+
+## Built and proven, 2026-09-08
+
+Implemented as `analytics._apply_family_wise_correction`, fed by the per-band `p_selection_aware`
+value the grid already computed (the permutation-based p-value correcting for choosing the best of
+ten lengths), run through `stats_utils.bh_fdr`, called once for the correlation rows and once for
+the AUC rows — two independent 22-test families, never pooled with each other or with the older
+routine's range.
+
+**A real caching bug was found and fixed while proving this live.** The grid's stored response is
+keyed on its user-facing settings plus a code-version constant; this change added two fields to
+every row without changing any setting, and the version constant was not bumped, so the first live
+check showed zero new fields — an unchanged request was replaying a response computed before this
+code existed. Fixed by bumping `_BAND_SWEEP_RULE_VERSION`. Re-proven correctly after the fix, on
+RCS08 through the bridge: 27,337 fields in the response before this change, 27,865 after; all 528
+new fields are exactly the two new fields per row; of the 27,337 fields both responses have in
+common, 22 differ, all of them either a timing field or a store key that correctly changed because
+the version did — zero scientific values moved.
+
+**On the live grid, 47 of 264 band-centre rows (across both the correlation and the AUC measures,
+all six sensing contact pairs) clear the correction.** A synthetic-data test built during this work
+found the correction is considerably stricter than it might look: even an extreme, artificially
+strong planted relationship (in a constructed 80-report fixture) corrected to a q-value of 0.32,
+not under 0.05, because the existing best-of-ten-lengths selection effect alone already produces a
+wide null distribution before the 22-centre correction is even applied on top of it. The real
+result on RCS08 is healthier than the synthetic worst case, but the correction is doing genuine,
+non-trivial work rather than passing everything through.

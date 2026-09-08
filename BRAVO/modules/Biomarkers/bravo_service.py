@@ -6583,7 +6583,13 @@ def band_time_sweep_for_participant(request_data):
 #: be exercised on every live read path or it protects nothing.
 #: ==========================================================================================
 _BAND_SWEEP_RESPONSE_KIND = "biomarker_band_sweep"
-_BAND_SWEEP_RULE_VERSION = "v1_sweep"
+#: Bump this whenever the sweep's own computation changes in a way that is not already reflected
+#: by a change to `sweep_settings` (decision 63 added the family-wise q-value and pass/fail label
+#: to every row without adding a new user-facing setting, so a returning request with unchanged
+#: settings would otherwise be served a stored response computed before those fields existed --
+#: confirmed live: an unversioned before/after check on RCS08 showed 0 new fields because both
+#: runs hit the same pre-existing cache entry).
+_BAND_SWEEP_RULE_VERSION = "v2_sweep_family_wise"
 
 #: Response fields that are timings of the run that produced them, not results. They are not
 #: compared when a stored response is checked against a fresh one, and a served response keeps the
