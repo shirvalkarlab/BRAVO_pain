@@ -6566,6 +6566,21 @@ def _attach_grid_export_columns(participant_uid, sweeps, *, band_width_hz):
                 row["device_rules_status"] = DEVICE_RULES_STATUS_NOTE
 
 
+def _sweep_match_direction(request_data):
+    """The band-by-length sweep's own MatchDirection parsing, shared by the full grid
+    (`band_time_sweep_for_participant`) and the per-cell drill-down
+    (`band_time_sweep_cell_for_participant`) so the two always read the request the same way.
+
+    Deliberately NOT the same helper as the older three-way parse near line 3915: that one falls
+    back to "prior" for an unrecognised value, because it is the threshold-deployment view's
+    causal-forecasting reading. This one falls back to "pro_first", because it is the discovery
+    sweep's own reading, unchanged from before MatchDirection was wired into it. Collapsing the two
+    would silently change one of their fallback behaviours.
+    """
+    _md = str(request_data.get("MatchDirection", "pro_first")).lower()
+    return "prior" if _md == "prior" else ("nearest" if _md == "nearest" else "pro_first")
+
+
 def band_time_sweep_for_participant(request_data):
     """The payload for the band-by-length-of-signal section at the bottom of the exploration page.
 
@@ -6622,8 +6637,7 @@ def band_time_sweep_for_participant(request_data):
     # Same three-way control the page's full-spectrum scan already reads (MatchDirection); this
     # section did not read it at all before this change, so every request behaved as "prospective"
     # (matched in either time direction) regardless of what the toggle showed on screen.
-    _md = str(request_data.get("MatchDirection", "pro_first")).lower()
-    match_direction = "prior" if _md == "prior" else ("nearest" if _md == "nearest" else "pro_first")
+    match_direction = _sweep_match_direction(request_data)
     # TRACK D, TASK D2(b): off by default. The Biomarkers exploration page has never needed this
     # column and must not pay for it on every Recompute click; Closed-Loop Deployment's own reader
     # is the caller that sets this, once, for the entry it exports. Folded into `sweep_settings`
@@ -6790,8 +6804,7 @@ def band_time_sweep_cell_for_participant(request_data):
         outlier_scale = analytics.OUTLIER_SCALE
     tol_s = (float(match_tol_min) * 60.0 if match_tol_min
              else float(max(analytics.BAND_TIME_SWEEP_SECONDS)))
-    _md = str(request_data.get("MatchDirection", "pro_first")).lower()
-    match_direction = "prior" if _md == "prior" else ("nearest" if _md == "nearest" else "pro_first")
+    match_direction = _sweep_match_direction(request_data)
 
     pro_match = _pro_match_arrays(pro_df, label_metric)
     if pro_match is None or pro_match[0] is None or np.asarray(pro_match[0]).size == 0:
