@@ -30,12 +30,10 @@ Two goals, in this order, and the second is subordinate to the first.
 
 ## Next Step
 
-**Nothing queued that is not the PI's or a live-browser check.** He chose to fix the zero-fill
-gap now (decisions 58-59): fixed, tested on both runners, and proven on live RCS08 data (31 of
-386 recordings excluded, 29,704 already-computed values changed, none of them NaN either way).
-Open item 22 (folding this routine into the newer sweep) is deliberately deferred, needing a
-channel-set check first. Open item 21 (double-fetch) still needs a live browser confirmation
-once signed in.
+**Nothing queued.** All items raised in this session's review are closed: the zero-fill fix
+(decisions 58-59), the double-fetch question (decision 60, watched live: exactly one request per
+Recompute press), and the fold-or-not question (decision 61: do not fold, the two routines answer
+different questions on different scales). Waiting for further direction.
 
 ## Current Phase
 

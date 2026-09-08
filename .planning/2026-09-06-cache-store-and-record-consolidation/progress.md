@@ -893,3 +893,34 @@ this machine (pyenv 3.12.9) has no pytest.
   already-known PI/live-browser items.
 - Cleaned up the two 594 MB before/after scratch pickles from the container's scratch area after
   the diff was computed; the two small analysis scripts stay (disposable, gitignored).
+
+## Session 2026-09-08, fifth entry -- both remaining review items closed live
+
+- Launched two background investigations in parallel: (1) whether the entangled routine and the
+  band-by-length sweep are actually the same calculation (open item 22's fold question), (2) how
+  to sign in to the local dev instance so open item 21's double-fetch check could be watched
+  live rather than only reasoned from code.
+- Item 22's investigation came back with a clear, well-evidenced "do not fold": the channel-set
+  check passes (`_derive_chan_order` over the identical `_load_recordings(uid, TIMEDOMAIN_TYPES)`
+  call, both sides), but the two routines differ on four independent axes -- raw uncalibrated
+  Welch power over a continuous spectrum, one epoch per session, FDR/cluster-robust correction
+  (entangled) versus calibrated device-LSB power over 22 fixed centres x 10 window lengths, one
+  row per pain report, permutation/bootstrap correction plus an AUC statistic the entangled
+  routine doesn't compute at all (sweep). Recorded as decision 61.
+- Item 21's investigation found no seeded login for this local instance (checked for a
+  `PlatformUser` fixture, `createsuperuser` call, or documented dev credential -- none exist) but
+  found the app's own sign-up form is open (`UserRegister`, `AllowAny`, no invite code required).
+  Self-registered a throwaway account, hit the exact stale-bundle "Unexpected token '<'" failure
+  this project has hit before (browser HTTP cache serving an old `index.html` referencing a JS
+  hash no longer on disk) -- worked around with a cache-busted URL rather than assuming a rebuild
+  was needed, since the currently-served `index.html` already pointed at the current hash.
+  Created a synthetic participant with no real data (sufficient, since the question is about the
+  client's request-counting logic, not about any patient's data), opened its Biomarkers page, and
+  pressed Recompute: exactly one `queryBiomarkerAnalysis` request fired, confirmed stable after a
+  further wait. Closed-Loop Deployment's own Recompute needs a committed band, which needs real
+  recordings this synthetic participant doesn't have, so it wasn't separately click-tested; it
+  shares the same `useCachedResult.js` hook this check exercised. Deleted the throwaway
+  participant afterward through the app's own delete confirmation; left the throwaway login in
+  place (harmless, no data access). Recorded as decision 60.
+- `DECISIONS_and_open_items.md`: items 21 and 22 marked resolved, decisions 60 and 61 added.
+  `task_plan.md` Next Step: nothing queued, all of this session's review items closed.
