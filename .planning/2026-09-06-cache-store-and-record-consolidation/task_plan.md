@@ -30,20 +30,18 @@ Two goals, in this order, and the second is subordinate to the first.
 
 ## Next Step
 
-**Nothing queued in this plan's own scope.** Phase 6 (the Biomarkers heat-map headline redesign,
-built entirely under a separate `/swarm-plan` brief between the last update to this file and
-2026-09-08) is complete, reviewed, and every finding from that review is closed — see Phase 6
-below and `DECISIONS_and_open_items.md` decisions 62-70. What remains open, genuinely, in THIS
-plan's original scope: Track D steps 1-2 (§Phase 3), unblocked since Track E resolved
-(decisions 51-53) but never picked up — whether to build them is the PI's call, not yet asked.
-Waiting for further direction.
+**Nothing queued. All six phases report complete.** Track D steps 1-2 (§Phase 3) were built
+2026-09-08 (decision 71): `lsb_series` and `modeled_lsb_at_center` now read from `channel_index`,
+proven byte-identical on RCS08. The one deliberately-not-done piece is merging the two live,
+statistics-entangled spectrum builders, which needs its own second sign-off before it can be
+picked up (`findings.md` §6j) -- that sign-off has not been asked for and nothing here assumes
+it will be. Waiting for further direction.
 
 ## Current Phase
 
-**Phases 1, 2, 4, 5 and 6 are complete. Phase 3 is the one still in_progress**, and only because
-Track D steps 1-2 within it are unbuilt — unblocked since 2026-09-08 (Track E resolved,
-decisions 51-53) but never picked up; whether they are still worth building is the PI's call.
-Phase 2 is complete and pushed (`9a6e0926`; Track A steps 1 to 3 in
+**All six phases report complete.** Phase 3 closed 2026-09-08 once Track D steps 1-2 landed —
+until then it was the one phase still in_progress; decision 71 has the detail. Phase 2 is
+complete and pushed (`9a6e0926`; Track A steps 1 to 3 in
 `fa14edd`, 4 in `d47b9a7`, 5 in `7278f15c`, 6 in `4e29af7b`, 7 in `0d619ca`, 8 in `9a6e0926`).
 Track B is complete (`7e57ce03`, `a86e9c09`, `b6a8d1a4`); Track D steps 3 and 4, Track G step 1
 and Track F step 2 in `f01a0320`; Track F steps 3 and 4 assessed and Track G step 2 built in the
@@ -150,7 +148,7 @@ policy becomes self-confirming and the record looks like converging evidence whe
 
 ### Phase 3: Canonical form, readers, Redis, and the closed-loop fixes — Tracks B, D, F, G
 
-**Status:** in_progress
+**Status:** complete
 
 Independent tracks: the canonical decoded form and its readers, the three remaining Redis wins,
 and the two closed-loop fixes. Track D needs Track B's form.
@@ -185,11 +183,23 @@ and the two closed-loop fixes. Track D needs Track B's form.
 
 **Track D — "Readers"**
 
-- [ ] 1. Point the Biomarker reading sites at the form — **unblocked 2026-09-08**: this step's
-  own note said it stayed open "behind Track E's gate"; Track E is now resolved (decisions
-  51-53), so the gate is lifted. Not picked up. Whether it is still worth building, now that
-  the sites in question have not caused a measured problem since, is the PI's call
-- [ ] 2. Reduce the three spectrum builders — same gate, same state: unblocked, not built
+- [x] 1. Point the Biomarker reading sites at the form — **done 2026-09-08 (decision 71).** The
+  two remaining sites, `lsb_series` and `modeled_lsb_at_center`, now read from `channel_index`.
+  A new grouping, `native_lsb_by_channel`, was added to `DecodeCommon.representation` for the
+  device's own sensed band power (Power-Domain + Chronic Timeline) -- passed through with no
+  calibration constant, per the PI's own direction that this tier is already in the units the
+  platform cares about. `modeled_lsb_at_center`'s TD tier reads the same `td_by_channel`
+  grouping `per_pro_lsb` already reads. Proven on RCS08: `run_for_participant`'s full response
+  is byte-identical before/after (8,106,972 fields, 0 differences); `modeled_lsb_at_center`
+  matches on 3,054 real values across all 6 sensing contact pairs at 3 band centers each
+- [x] 2. Reduce the three spectrum builders — **partially done 2026-09-08 (decision 71), the
+  rest deliberately left alone.** The confirmed-dead third builder (`_assemble_psd_rows`,
+  the uncached variant, zero production callers) is left in place -- a separate, low-risk
+  cleanup with no PI question attached, not done here only because it wasn't asked. Merging the
+  two genuinely live builders stays NOT done: `findings.md` §6j records this needs its own
+  second sign-off before anything connects them, because it touches the statistics (the one
+  entangled site in the codebase), and Track E's own resolution (decisions 51-53) already
+  answered the adjacent question by choosing not to connect them
 - [x] 3. Point the Stim Optimizer and closed-loop reads at the form — resolved by measurement on
   2026-09-07, no code change: the 65.71 s settings-stream consumer this step names was removed
   by Track A step 5 (the stream is read from the store); the closed-loop report costs 4.77 s
@@ -413,6 +423,7 @@ Full detail: `DECISIONS_and_open_items.md` decisions 62 through 70.
 | 19 | **Track G step 2: the device route in the three-source comparison excludes and counts samples above a saturation ceiling, a fold of the settled window's own median (`DEVICE_SPIKE_FOLD = 10`, provisional, open item 20); the ground-truth verdict of decision 33 is applied to every run, band and setting, pairing the device's band with the single nearest stored centre the comparison itself uses, and written as `ground_truth_verdict` by the closed-loop request with the tile entry in its provenance; Stim Optimizer reads the newest verdict as `stim_optimizer`, reports it, keys its response on it and cites it.** | The rule was decided and not written back; the ceiling it requires did not exist in the code, and the number is a scientific choice the PI has not made, so it is one named constant with a fold against the window's own median rather than an absolute level. On RCS08 the ceiling changed 3 of 12,068 comparison values (two pieces counts, one reason), excluded 12 spikes, and no settled power moved. The verdict's first version keyed the device's band on the programmed centre and so never met the converted routes: 0 rows with both; pairing at the comparison's own nearest centre gives 29, fold 0.807 to 1.785, median 0.987. | 2026-09-07 |
 | 20 | **Track C step 4: every module response carries `cache_status` — whether a stored entry exists under the request's current key, its build date read from the entry's own sidecar, the trigger, and a plain sentence saying what the date means on that page — and one shared line component under each page's recompute control shows it, including "no stored results yet".** The biomarker page names its tile entry, the closed-loop page its assembled inputs, the optimizer page its stored response. | The plan asks for the date on all three pages including the no-cache case, worded so a stale page is distinguishable from a current one at a glance; three pages mean three different dates, so the sentence beside each says which. The date comes from the sidecar (Track F step 3), never a file timestamp. On RCS08 all three answer, the biomarker status costs 0.48 s (the key from database rows) and the closed-loop one 0.40 s. | 2026-09-07 |
 | 21 | **This file is reconciled against `DECISIONS_and_open_items.md`, which had continued to be the record of everything landed since decision 61 while this file and `progress.md` stopped there.** Phase 6 is added to hold the Biomarkers heat-map headline redesign (Tracks A-D, decisions 62-70) rather than opening a second plan directory for it. Track C step 1 and Track D steps 1-2 are corrected against decisions 51-53 (Track E's resolution settled Track C step 1 and lifted the gate on Track D steps 1-2, neither of which had been carried back into this file). Phase 5's commit-identity checkbox is corrected — it read "still open" though the answer (decision 49) had been on record since 2026-09-07. | Asked directly: check what's open here. `DECISIONS_and_open_items.md` had been kept current throughout; this file and `progress.md` had not, so a reader of only these files would have missed nine decisions' worth of real, tested, pushed work and would have acted on two stale open questions that were already answered. One genuine, still-open documentation conflict was found in the course of this and left unresolved rather than picked one way: `DECISIONS_and_open_items.md`'s own open item 7 still reads as unsettled while `ARCHITECTURE_cache_store.md` §3 states plainly that decisions 51-53 settled it — that reconciliation needs the PI's read, not an agent's guess at which document is right. | 2026-09-08 |
+| 22 | **Track D steps 1-2 built and Phase 3 closed (decision 71 in `DECISIONS_and_open_items.md`).** `lsb_series` and `modeled_lsb_at_center` now read from `channel_index`; a new `native_lsb_by_channel` grouping was added to `DecodeCommon.representation` for the device's own sensed band power, passed through unconverted. The merge of the two live, statistics-entangled spectrum builders (the rest of step 2) was explicitly NOT done -- it needs its own second sign-off (`findings.md` §6j), which was not asked for here. | Requested directly, with explicit technical direction: "there should only be one decoding step, and all streams should go through it, handled differently based on what stream they come from," and that native chronic LSB needs no conversion since it is already in device units. Both functions kept a full scan fallback behind `USE_CHANNEL_INDEX`, the same contract Track B established. Proven on RCS08: `run_for_participant`'s full response byte-identical before/after (8,106,972 fields, 0 differences); `modeled_lsb_at_center` matched on 3,054 real values across all 6 sensing contact pairs. Container suite 583 passed (was 578), 0 failed. | 2026-09-08 |
 
 ## Errors Encountered
 

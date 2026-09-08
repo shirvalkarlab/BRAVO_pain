@@ -70,7 +70,10 @@ import numpy as np
 # code is a miss rather than a wrong answer. This is not the canonicalisation rule's own
 # version -- that is `_CHANNEL_CANON_VERSION` in bravo_service, and a change there must also
 # bump this.
-CHANNEL_INDEX_VERSION = 2      # 2: traces carry `seq` (recording order) and `product`
+CHANNEL_INDEX_VERSION = 3      # 2: traces carry `seq` (recording order) and `product`
+                                # 3: native_lsb_by_channel added (Power-Domain + Chronic Timeline,
+                                #    values unconverted -- the "one decoding step" for every
+                                #    stream `availability.lsb_series` reads, per its own tiers)
 
 
 def canon_channel(name):
@@ -119,6 +122,214 @@ def to_epoch(value):
     return None
 
 
+#: The device's own FFT bin centers, byte-for-byte `availability._FFT_BINS`. Duplicated here for
+#: the same reason `canon_channel` is duplicated above -- this package must be exercisable with no
+#: import of the Biomarkers routines, and a test asserts the two arrays agree.
+_FFT_BINS = np.array([3.9, 4.9, 5.9, 6.8, 7.8, 8.8, 9.8, 10.7, 11.7, 12.7, 13.7, 14.6,
+                      15.6, 16.6, 17.6, 18.6, 19.5, 20.5, 21.5, 22.5, 23.4, 24.4, 25.4, 26.4])
+
+#: The device's missing-sample sentinel for LFP power columns, byte-for-byte
+#: `availability._POWER_SENTINEL`.
+_POWER_SENTINEL = 2.0 ** 31 - 1
+
+
+def snap_freq(hz):
+    """Snap a center frequency to the nearest Percept FFT bin (None-safe).
+
+    Byte-for-byte `availability.snap_freq`, duplicated for the same reason as `canon_channel`.
+    """
+    if hz is None:
+        return None
+    try:
+        hz = float(hz)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(hz):
+        return None
+    return float(_FFT_BINS[int(np.argmin(np.abs(_FFT_BINS - hz)))])
+
+
+def sensing_center_hz(therapy_hemi):
+    """Pull the BrainSense sensing-band CENTER FREQUENCY (Hz) from one hemisphere's Therapy
+    snapshot. Byte-for-byte `analytics.sensing_center_hz`, duplicated for the same reason as
+    `canon_channel` -- this reads frequency METADATA, not a calibration constant, so it does not
+    violate this file's own "no calibration constant" rule (see the module docstring), but it
+    still must not import from Biomarkers/analytics, so it is copied rather than imported.
+    """
+    if not isinstance(therapy_hemi, dict):
+        return None
+    setups = []
+    setups.append(therapy_hemi)
+    ss = therapy_hemi.get("SensingSetup")
+    if isinstance(ss, dict):
+        setups.append(ss)
+    sensing = therapy_hemi.get("sensing")
+    if isinstance(sensing, dict) and isinstance(sensing.get("SensingSetup"), dict):
+        setups.append(sensing["SensingSetup"])
+    rc = therapy_hemi.get("RecordingConfiguration")
+    if isinstance(rc, dict):
+        cfg = rc.get("Config")
+        if isinstance(cfg, dict) and isinstance(cfg.get("SensingSetup"), dict):
+            setups.append(cfg["SensingSetup"])
+    for ss in setups:
+        for key in ("FrequencyInHertz", "Frequency", "CenterFrequency", "CenterFrequencyInHertz"):
+            v = ss.get(key)
+            try:
+                fv = float(v)
+                if np.isfinite(fv) and fv > 0:
+                    return round(fv, 2)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def power_center_freqs(powerdomain_list):
+    """Map each power CONTACT to its sensing-band center frequency (Hz). Byte-for-byte
+    `analytics.power_center_freqs`."""
+    freqs = {}
+    for r in powerdomain_list or []:
+        if not isinstance(r, dict):
+            continue
+        desc = r.get("Descriptor")
+        therapy = desc.get("Therapy") if isinstance(desc, dict) else None
+        if not isinstance(therapy, dict):
+            continue
+        hemi_hz = {"LEFT": sensing_center_hz(therapy.get("Left")),
+                   "RIGHT": sensing_center_hz(therapy.get("Right"))}
+        for nm in r.get("ChannelNames", []) or []:
+            s = str(nm)
+            if "POWER" not in s.upper():
+                continue
+            contact = s.rsplit(" ", 1)[0] if " " in s else s
+            cu = contact.upper()
+            hz = hemi_hz["LEFT"] if "LEFT" in cu else (hemi_hz["RIGHT"] if "RIGHT" in cu else None)
+            if hz is not None:
+                freqs[contact] = hz
+    return freqs
+
+
+def native_lsb_by_channel(chronic_recordings, powerdomain_recordings):
+    """The device's OWN sensed band-power series (Power-Domain streaming + Chronic Timeline),
+    grouped by canonical channel, values UNCONVERTED.
+
+    THIS IS THE "ADDED AS-IS" TIER. Unlike the montage/event-PSD modeled tiers in
+    `availability.lsb_series` (which need a calibrated conversion -- `analytics.td_to_lsb` or
+    `analytics.device_psd_to_lsb` -- to turn a voltage trace or device spectrum into an LSB
+    value), the device's own Power-Domain and Chronic Timeline products already ARE the LSB
+    quantity: the device sensed the band and reported its power directly, in its own units.
+    Nothing here converts anything -- this function only resolves WHICH canonical channel each
+    sample belongs to and WHAT sensing frequency was active when it was taken, which is exactly
+    the kind of repeated small derivation this form exists to do once. The values themselves pass
+    through unchanged, matching this file's own rule that no calibration constant appears here.
+
+    Byte-for-byte the algorithm in `availability.lsb_series`'s Power-Domain and Chronic Timeline
+    tiers (the montage-TD and event-PSD MODELED tiers are NOT here -- they need a calibration
+    constant and stay in `lsb_series` itself, reader-side, per this file's stated design).
+
+    Returns dict keyed by RAW channel name (not yet canonicalized -- `lsb_series` canonicalizes
+    on push, same as before; kept this way so the output shape matches `lsb_series`'s existing
+    `_push`-built dict exactly, field for field):
+        { channel: { "t":[epoch_s], "y":[lsb, unconverted], "center_hz":[hz|None],
+                     "source":["streaming"|"chronic"] } }
+    Samples are NOT time-sorted here -- `lsb_series` sorts the pooled result (native + modeled
+    tiers together) once, at the end, exactly as it does today.
+    """
+    out = {}
+
+    def _push(ch, t, y, hz, src):
+        d = out.setdefault(ch, {"t": [], "y": [], "center_hz": [], "source": []})
+        d["t"].append(float(t)); d["y"].append(float(y))
+        d["center_hz"].append(snap_freq(hz)); d["source"].append(src)
+
+    # --- Power-Domain (~2 Hz): per-contact Power columns ---
+    pd_center = power_center_freqs(powerdomain_recordings)
+    for r in powerdomain_recordings or []:
+        if not isinstance(r, dict) or "Data" not in r:
+            continue
+        names = list(r.get("ChannelNames", []) or [])
+        data = np.asarray(r.get("Data"), dtype=float)
+        if data.ndim != 2 or data.shape[0] == 0:
+            continue
+        n, ncols = data.shape
+        fs = float(r.get("SamplingRate") or 2.0) or 2.0
+        start = to_epoch(r.get("StartTime"))
+        if start is None:
+            continue
+        times = start + np.arange(n) / fs
+        missing = np.asarray(r.get("Missing", np.zeros_like(data)), dtype=float)
+        if missing.shape != data.shape:
+            missing = np.zeros_like(data)
+        for pi, nm in enumerate(names):
+            if pi >= ncols or "POWER" not in str(nm).upper():
+                continue
+            contact = str(nm).rsplit(" ", 1)[0] if " " in str(nm) else str(nm)
+            hz = pd_center.get(contact)
+            col = data[:, pi]
+            bad = (missing[:, pi] > 0) | (col >= _POWER_SENTINEL) | (col < 0) | ~np.isfinite(col)
+            for i in np.where(~bad)[0]:
+                _push(contact, times[i], col[i], hz, "streaming")
+
+    # --- Chronic Timeline (~10-min): per-hemisphere LFP power ---
+    hemi_contact = {}
+    for contact in pd_center.keys():
+        cu = str(contact).upper()
+        side = "LEFT" if "LEFT" in cu else ("RIGHT" if "RIGHT" in cu else "")
+        if side and side not in hemi_contact:
+            hemi_contact[side] = contact
+    for r in chronic_recordings or []:
+        if not isinstance(r, dict) or "Data" not in r:
+            continue
+        names = list(r.get("ChannelNames", []) or [])
+        data = np.asarray(r.get("Data"), dtype=float)
+        tarr = np.asarray(r.get("Time", []), dtype=float)
+        if data.ndim != 2 or data.shape[0] == 0 or len(tarr) != data.shape[0]:
+            continue
+        desc = r.get("Descriptor")
+        therapy = desc.get("Therapy") if isinstance(desc, dict) else None
+        hemi_hz = {}
+        if isinstance(therapy, dict):
+            hemi_hz = {"LEFT": sensing_center_hz(therapy.get("Left")),
+                       "RIGHT": sensing_center_hz(therapy.get("Right"))}
+        chan = names[0] if names else "LFP"
+        cu = str(chan).upper()
+        hemi = "LEFT" if "LEFT" in cu else ("RIGHT" if "RIGHT" in cu else "")
+        key = hemi_contact.get(hemi, chan)
+
+        sched_raw = r.get("FreqScheduleHz")
+        sched = []
+        if isinstance(sched_raw, (list, tuple)):
+            for item in sched_raw:
+                try:
+                    ts, shz = float(item[0]), snap_freq(item[1])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if shz is not None:
+                    sched.append((ts, shz))
+            sched.sort(key=lambda p: p[0])
+        scalar_hz = snap_freq(r.get("CenterFrequencyHz"))
+        fallback_hz = scalar_hz if scalar_hz is not None else (hemi_hz.get(hemi) if hemi else None)
+
+        def _hz_at(ts, _sched=sched, _fallback_hz=fallback_hz):
+            cur = None
+            for cms, chz in _sched:
+                if cms <= ts:
+                    cur = chz
+                else:
+                    break
+            if cur is not None:
+                return cur
+            if _sched:
+                return _sched[0][1]
+            return _fallback_hz
+
+        col = data[:, 0]
+        bad = (col >= _POWER_SENTINEL) | (col < 0) | ~np.isfinite(col)
+        for i in np.where(~bad)[0]:
+            _push(key, float(tarr[i]), col[i], _hz_at(float(tarr[i])), "chronic")
+
+    return out
+
+
 def missing_per_sample(missing, nsamp):
     """A recording's dropped-packet field as one flag per sample, or None.
 
@@ -146,18 +357,22 @@ class ChannelIndex(object):
     it here is the only change.
     """
 
-    __slots__ = ("td_by_channel", "psd_by_channel", "version", "step_seconds",
-                 "n_td_recordings", "n_psd_records", "channels")
+    __slots__ = ("td_by_channel", "psd_by_channel", "native_lsb_by_channel", "version",
+                 "step_seconds", "n_td_recordings", "n_psd_records", "n_native_lsb_recordings",
+                 "channels")
 
-    def __init__(self, td_by_channel, psd_by_channel, step_seconds,
-                 n_td_recordings, n_psd_records):
+    def __init__(self, td_by_channel, psd_by_channel, native_lsb_by_channel, step_seconds,
+                 n_td_recordings, n_psd_records, n_native_lsb_recordings):
         self.td_by_channel = td_by_channel
         self.psd_by_channel = psd_by_channel
+        self.native_lsb_by_channel = native_lsb_by_channel
         self.step_seconds = float(step_seconds)
         self.n_td_recordings = int(n_td_recordings)
         self.n_psd_records = int(n_psd_records)
+        self.n_native_lsb_recordings = int(n_native_lsb_recordings)
         self.version = CHANNEL_INDEX_VERSION
-        self.channels = sorted(set(td_by_channel) | set(psd_by_channel))
+        self.channels = sorted(set(td_by_channel) | set(psd_by_channel)
+                               | set(native_lsb_by_channel))
 
     def td(self, channel):
         """Prepared voltage traces carrying this channel, earliest first. Never None."""
@@ -167,6 +382,12 @@ class ChannelIndex(object):
         """The device-spectrum records for this channel, in their original order."""
         return self.psd_by_channel.get(canon_channel(channel), _EMPTY_PSD)
 
+    # No `.native_lsb(channel)` per-channel accessor, unlike `.td()`/`.psd()` above.
+    # `native_lsb_by_channel` is kept in whatever key spelling the recordings arrived in (see
+    # `build_channel_index`'s own note on this), so a canonical-key lookup here would silently
+    # miss entries a canonicalizing caller expects to find. The one reader of this grouping,
+    # `availability.lsb_series`, reads the whole dict directly for exactly this reason.
+
     def summary(self):
         return {
             "version": self.version,
@@ -175,6 +396,9 @@ class ChannelIndex(object):
             "n_td_traces_kept": sum(len(v["traces"]) for v in self.td_by_channel.values()),
             "n_psd_records_offered": self.n_psd_records,
             "n_psd_records_kept": sum(int(v["t"].size) for v in self.psd_by_channel.values()),
+            "n_native_lsb_recordings_offered": self.n_native_lsb_recordings,
+            "n_native_lsb_samples_kept": sum(len(v["t"])
+                                             for v in self.native_lsb_by_channel.values()),
             "channels": list(self.channels),
         }
 
@@ -183,7 +407,8 @@ _EMPTY_TD = {"traces": [], "t0": np.empty(0, dtype=float)}
 _EMPTY_PSD = {"t": np.empty(0, dtype=float), "records": []}
 
 
-def build_channel_index(td_recordings=None, psd_records=None, *, step_seconds):
+def build_channel_index(td_recordings=None, psd_records=None, *, step_seconds,
+                        chronic_recordings=None, powerdomain_recordings=None):
     """Group decoded recordings by canonical channel, once.
 
     `td_recordings` are decoded recording dictionaries carrying a 250-samples-per-second
@@ -277,4 +502,14 @@ def build_channel_index(td_recordings=None, psd_records=None, *, step_seconds):
         # -than comparison. Sorting here would change which of two equidistant records wins.
         bucket["t"] = np.asarray(bucket["t"], dtype=float)
 
-    return ChannelIndex(td_by_channel, psd_by_channel, step_seconds, n_td, n_psd)
+    # NOT re-keyed to the canonical form here. `lsb_series`'s own `_push` never canonicalized its
+    # output keys either (a power-domain contact string and a chronic hemisphere-resolved key are
+    # used exactly as they arrive), so this dict is kept in that same, already-established key
+    # space -- re-keying here would silently MERGE two entries that `lsb_series` has always kept
+    # separate whenever two recordings spell the same physical contact two different ways.
+    # `.native_lsb(channel)` below canonicalizes for lookup; the raw dict itself does not.
+    native_lsb = native_lsb_by_channel(chronic_recordings, powerdomain_recordings)
+    n_native = len(chronic_recordings or []) + len(powerdomain_recordings or [])
+
+    return ChannelIndex(td_by_channel, psd_by_channel, native_lsb, step_seconds,
+                        n_td, n_psd, n_native)

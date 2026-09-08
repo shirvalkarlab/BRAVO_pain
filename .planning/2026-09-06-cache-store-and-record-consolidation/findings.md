@@ -501,3 +501,42 @@ directory is that cache. Track D must not connect it without the second sign-off
   architecture document's account matches the code. Left for the PI to close item 7 formally
   rather than resolved here, since deciding which of two authoritative documents is right about
   an open item is exactly the kind of call this project reserves for him.
+
+## 8. Track D steps 1-2, code map from a read-only Explore agent, 2026-09-08
+
+- `_load_recordings` (`bravo_service.py:342-409`) is not a raw fetch -- it already decodes and
+  stamps `CenterFrequencyHz`/`FreqScheduleHz`/`ContactSchedule` (from `Recording.metadata`, lines
+  360-380) and the authoritative DB `RecordingType` (lines 381-390) inside its own threaded
+  `_decode` closure. This is a DIFFERENT stamping step from `_stamp_td_product`, which only
+  derives a `product` label from the `RecordingType` `_load_recordings` already set.
+- Of `_load_recordings`'s many call sites, most already route into `channel_index` transitively
+  (`warm_shared_raw_cache`, `availability_for_participant`, `run_for_participant`,
+  `band_time_sweep_for_participant`, `band_time_sweep_cell_for_participant`, all via
+  `_raw_lsb_cache_cached`/`_pro_lsb_by_channel`/`_pro_lsb_spectrum_cached`). The two genuine gaps
+  were `availability.lsb_series` and `availability.modeled_lsb_at_center`, both still doing their
+  own inline scans. `_validate_band_core`'s chronic-only load (for `stim_series`), `band_psd_lsb_
+  conversion`'s and `deployment_summary`'s own loads feeding `lsb_series`/`modeled_lsb_at_center`
+  (now fixed by this change), `_load_montage_psd_events` and `_build_availability`'s own psd_list
+  load are all separate, narrower concerns (stim-state series, timeline marker events, per-
+  recording metadata) that do not touch LSB/spectrum value computation and were left alone.
+- "The three spectrum builders" are documented in `ARCHITECTURE_modules_and_store.md:357-374`
+  (its own line-number citations had drifted -- re-verified live): (1)
+  `bravo_service._assemble_psd_rows_cached` (now `:2106`), the disk-cached per-recording spectrum
+  assembler, called from `band_psd_lsb_conversion` and one other site; (2)
+  `bravo_service._assemble_psd_rows` (now `:1629`), the UNCACHED variant -- confirmed still dead,
+  zero production callers found by grep across `bravo_service.py`/`pipeline.py`/`routines/*.py`;
+  (3) `pipeline.run_timedomain_branch` -> `streaming_psd.compute_psd_pain_correlation` ->
+  `welch_psd_for_instance`, the live path the main Biomarkers page actually uses (reached via
+  `run_biomarker` <- `run_for_participant`), which computes spectra AND correlates them against
+  pain in one pass -- the doc's own "genuinely entangled" site. A fourth, structurally different
+  DSP route also exists (`analytics.td_transform_band_power`, the transform ×352.62 path
+  `per_pro_lsb`/the tile cache use) but returns band power at requested centers rather than a
+  full spectrum object, which is presumably why the doc's enumeration of "three" didn't count it.
+- `findings.md` §6j (this file, 2026-09-07) already recorded the governance rule that matters
+  here: connecting builder #3's live path to builder #1's disk cache needs a second sign-off
+  because it touches the statistics, and "Track D must not connect it without" that sign-off.
+  Track E's own resolution (decisions 51-53, 2026-09-08) answered the adjacent question --
+  whether to move `biomarker_psd_rows` into the one store -- by choosing NOT to, for a different,
+  purely architectural reason (it would force a full rewrite on every new recording). Neither
+  decision authorizes merging builders #1 and #3; that remains explicitly open, gated on a
+  sign-off nobody has asked for yet.

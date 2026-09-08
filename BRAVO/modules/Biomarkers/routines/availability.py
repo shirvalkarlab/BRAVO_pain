@@ -464,8 +464,125 @@ _POWER_SENTINEL = 2.0 ** 31 - 1   # device missing-sample sentinel for LFP power
 
 def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
                montage_td_recordings=None, sensing_hz_by_channel=None,
-               event_psd_recordings=None):
+               event_psd_recordings=None, index=None):
     """REAL band-power (LSB) time series per channel, for inline display on the timeline.
+
+    Same contract, same four sources, same output shape as `_lsb_series_scan`, whose docstring
+    is the specification. Pass `index=` (from `channel_index`, built with `chronic_recordings=`
+    and `powerdomain_recordings=`) when the caller already has one; without it, an index is built
+    here from the two native-tier arguments. With `USE_CHANNEL_INDEX` False and no `index`, the
+    reference scan runs instead -- same rule as `per_pro_lsb`.
+    """
+    if index is None and not USE_CHANNEL_INDEX:
+        return _lsb_series_scan(chronic_recordings, powerdomain_recordings, region_map=region_map,
+                                montage_td_recordings=montage_td_recordings,
+                                sensing_hz_by_channel=sensing_hz_by_channel,
+                                event_psd_recordings=event_psd_recordings)
+    if index is None:
+        index = channel_index(chronic_recordings=chronic_recordings,
+                              powerdomain_recordings=powerdomain_recordings)
+    region_map = region_map or {}
+    sensing_hz_by_channel = sensing_hz_by_channel or {}
+    # The native tier: the device's own sensed band power, read from the index exactly as
+    # `native_lsb_by_channel` built it -- unconverted, per `DecodeCommon`'s own docstring on why
+    # this tier needs no calibration constant. Copied per channel (never the index's own lists,
+    # which a reader must not mutate) so this function's own time-sort below can reorder freely.
+    out = {}
+    for ch, d in index.native_lsb_by_channel.items():
+        out[ch] = {"t": list(d["t"]), "y": list(d["y"]), "center_hz": list(d["center_hz"]),
+                  "source": list(d["source"]), "modeled": [False] * len(d["t"]),
+                  "method": [None] * len(d["t"])}
+    _lsb_series_modeled_tiers(out, montage_td_recordings, event_psd_recordings,
+                              sensing_hz_by_channel)
+    for ch, d in out.items():
+        order = np.argsort(d["t"])
+        for k_ in ("t", "y", "center_hz", "source", "modeled", "method"):
+            d[k_] = [d[k_][i] for i in order]
+    return out
+
+
+def _lsb_series_modeled_tiers(out, montage_td_recordings, event_psd_recordings,
+                              sensing_hz_by_channel):
+    """The two MODELED tiers of `lsb_series` -- montage survey TD (transform DSP) and PSD-only
+    event snapshots (the bridge) -- shared, byte-for-byte, between `lsb_series`'s indexed path
+    and `_lsb_series_scan`'s own inline copy of the same logic. Mutates `out` in place, the same
+    dict shape `_push` builds in `_lsb_series_scan`. These two tiers stay OUT of the canonical
+    decoded form on purpose: each needs a calibrated conversion (`analytics.td_to_lsb` or
+    `analytics.device_psd_to_lsb`), and `DecodeCommon`'s own docstring is explicit that a shared
+    decode layer must never become a second place a unit conversion can drift.
+    """
+    def _push(ch, t, y, hz, src, *, modeled=False, method=None):
+        d = out.setdefault(ch, {"t": [], "y": [], "center_hz": [], "source": [],
+                                "modeled": [], "method": []})
+        d["t"].append(float(t)); d["y"].append(float(y))
+        d["center_hz"].append(snap_freq(hz)); d["source"].append(src)
+        d["modeled"].append(bool(modeled)); d["method"].append(method)
+
+    for r in (montage_td_recordings or []):
+        if not isinstance(r, dict):
+            continue
+        names = list(r.get("ChannelNames", []) or [])
+        data = np.asarray(r.get("Data"), dtype=float)
+        if data.ndim != 2 or data.shape[0] == 0:
+            continue
+        fs = float(r.get("SamplingRate") or 250.0) or 250.0
+        t0 = _to_epoch(r.get("StartTime"))
+        if t0 is None:
+            continue
+        if data.shape[0] == len(names) and data.shape[1] != len(names):
+            data = data.T
+        desc = r.get("Descriptor") if isinstance(r.get("Descriptor"), dict) else {}
+        med_psd = desc.get("MedtronicPSD") if isinstance(desc.get("MedtronicPSD"), list) else []
+        rec_peak = snap_freq(r.get("PeakFrequencyInHertz"))
+        for ci, nm in enumerate(names):
+            if ci >= data.shape[1]:
+                continue
+            col = data[:, ci]
+            col = col[np.isfinite(col)]
+            if col.size < int(round(fs * analytics.TRANSFORM_WIN_SECONDS)):
+                continue
+            key = _canon_channel(nm)
+            contact_peak = None
+            if ci < len(med_psd) and isinstance(med_psd[ci], dict):
+                contact_peak = snap_freq(med_psd[ci].get("PeakFrequencyInHertz"))
+            center = (sensing_hz_by_channel.get(key) or sensing_hz_by_channel.get(nm)
+                      or sensing_hz_by_channel.get(str(nm)) or contact_peak or rec_peak)
+            if center is None or not np.isfinite(center) or float(center) <= 0:
+                continue
+            lsb = analytics.td_to_lsb(col, fs, float(center))
+            if lsb is None or not np.isfinite(lsb) or lsb <= 0:
+                continue
+            _push(key, t0, lsb, center, "psd_modeled",
+                  modeled=True, method=f"td_transform_x_k={analytics.LSB_PER_UV2_TRANSFORM:.2f}")
+
+    for ev in (event_psd_recordings or []):
+        if not isinstance(ev, dict):
+            continue
+        key = ev.get("channel")
+        t0 = _to_epoch(ev.get("t"))
+        freq = ev.get("freq"); power = ev.get("power")
+        if key is None or t0 is None or freq is None or power is None:
+            continue
+        center = ev.get("center_hz") or sensing_hz_by_channel.get(key) \
+            or sensing_hz_by_channel.get(str(key))
+        if center is None or not np.isfinite(center) or float(center) <= 0:
+            continue
+        if not (analytics.LSB_VALIDATED_HZ_LO <= float(center) <= analytics.LSB_DEPLOYABLE_HZ_HI):
+            continue
+        lsb = analytics.device_psd_to_lsb(freq, power, float(center))
+        if not np.isfinite(lsb) or lsb <= 0:
+            continue
+        _push(key, t0, lsb, center, "psd_modeled",
+              modeled=True, method=f"event_psd_bridge_x_k={analytics.LSB_PER_DEVICE_PSD:.2f}")
+
+
+def _lsb_series_scan(chronic_recordings, powerdomain_recordings, region_map=None,
+                     montage_td_recordings=None, sensing_hz_by_channel=None,
+                     event_psd_recordings=None):
+    """REAL band-power (LSB) time series per channel, for inline display on the timeline.
+
+    THE REFERENCE IMPLEMENTATION -- `lsb_series` above is proven equal to this on the live
+    record; this docstring is the specification either path must match.
 
     Unlike `extract_availability` (which emits one metadata RECORD per recording), this returns the
     ACTUAL per-sample LFP-power values vs absolute time, so the frontend draws the true trace — not
@@ -723,10 +840,83 @@ def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
 
 
 def modeled_lsb_at_center(channel, center_hz, *, td_recordings=None, psd_recordings=None,
-                          half_hz=2.5):
+                          half_hz=2.5, index=None):
+    """DEPLOYMENT-ONLY: modeled device-LSB samples for ONE (channel, band center). Same contract
+    as `_modeled_lsb_at_center_scan`, whose docstring is the specification.
+
+    The TD tier (Track D step 1) reads from `channel_index` when `index=` is given or
+    `USE_CHANNEL_INDEX` is True -- `td_recordings` is exactly the superset `channel_index` already
+    groups by channel for `per_pro_lsb`, so this tier reuses that grouping instead of its own
+    column scan. The PSD-only tier stays a direct scan of `psd_recordings` on BOTH paths: its
+    record shape (`PSD`/`Frequencies` arrays keyed by `ChannelNames` row) does not match
+    `channel_index.psd_by_channel`'s shape (flat per-event blocks the service assembles
+    elsewhere), and both live call sites pass `psd_recordings=None` today, so there is no live
+    data to prove a translation correct against -- left unchanged rather than guessed at.
+    """
+    if index is None and not USE_CHANNEL_INDEX:
+        return _modeled_lsb_at_center_scan(channel, center_hz, td_recordings=td_recordings,
+                                           psd_recordings=psd_recordings, half_hz=half_hz)
+    try:
+        cz = float(center_hz)
+    except (TypeError, ValueError):
+        return np.asarray([], dtype=float)
+    if not np.isfinite(cz) or cz <= 0:
+        return np.asarray([], dtype=float)
+    if index is None:
+        index = channel_index(td_recordings=td_recordings)
+    vals = []
+    for trace in index.td(channel)["traces"]:
+        fs = trace["fs"]
+        if not np.isfinite(fs) or fs <= 0:
+            continue
+        col = np.asarray(trace["col"], dtype=float)
+        col = col[np.isfinite(col)]
+        min_n = int(round(fs * analytics.TRANSFORM_WIN_SECONDS))
+        if col.size < min_n:
+            continue
+        lsb = analytics.td_to_lsb(col, fs, cz, half_hz=half_hz)
+        if lsb is not None and np.isfinite(lsb) and lsb > 0:
+            vals.append(float(lsb))
+    if analytics.LSB_VALIDATED_HZ_LO <= cz <= analytics.LSB_DEPLOYABLE_HZ_HI:
+        target = _canon_channel(channel)
+        for r in (psd_recordings or []):
+            if not isinstance(r, dict):
+                continue
+            names = list(r.get("ChannelNames", []) or [])
+            if not names:
+                continue
+            psd = r.get("PSD") if r.get("PSD") is not None else r.get("Data")
+            freqs = r.get("Frequencies")
+            if freqs is None:
+                freqs = r.get("FrequenciesInHertz")
+            if psd is None or freqs is None:
+                continue
+            psd = np.asarray(psd, dtype=float)
+            freqs = np.asarray(freqs, dtype=float)
+            if psd.ndim == 1:
+                psd = psd[None, :]
+            for ci, nm in enumerate(names):
+                if ci >= psd.shape[0]:
+                    continue
+                if _canon_channel(nm) != target:
+                    continue
+                row = np.asarray(psd[ci], dtype=float)
+                if row.shape != freqs.shape:
+                    continue
+                lsb = analytics.device_psd_to_lsb(freqs, row, cz, half_hz=half_hz)
+                if lsb is not None and np.isfinite(lsb) and lsb > 0:
+                    vals.append(float(lsb))
+    return np.asarray(vals, dtype=float)
+
+
+def _modeled_lsb_at_center_scan(channel, center_hz, *, td_recordings=None, psd_recordings=None,
+                                half_hz=2.5):
     """DEPLOYMENT-ONLY: modeled device-LSB samples for ONE (channel, band center), via the SAME
     primary routes the exploration timeline uses — applied at an ARBITRARY center the deployment ROC
     chose, not only the montage's configured sensing bands.
+
+    THE REFERENCE IMPLEMENTATION -- `modeled_lsb_at_center` above is proven equal to this on the
+    live record; this docstring is the specification either path must match.
 
     Units-consistent replacement for the retired µV²-cut-point fallback (the old TIER-2
     estimate_lsb(cutpoint) path, removed 2026-06-28): instead of pushing a z-scored ROC cut-point
@@ -1169,7 +1359,8 @@ def _per_pro_lsb_spectrum_scan(pro_times, channel, centers_hz, *, band_half_hz=2
     return out
 
 
-def channel_index(td_recordings=None, event_psd_recordings=None):
+def channel_index(td_recordings=None, event_psd_recordings=None, *,
+                  chronic_recordings=None, powerdomain_recordings=None):
     """The canonical decoded form for one request's recordings, built once and read many times.
 
     Group every voltage trace and every device-spectrum record by canonical channel name ONCE,
@@ -1177,9 +1368,19 @@ def channel_index(td_recordings=None, event_psd_recordings=None):
     time again. On the live record the per-report scan this replaces made 72,332,380 channel-name
     canonicalisations in one page request (99.87 percent of all of them); through the index the
     same work is one per (recording, channel).
+
+    `chronic_recordings`/`powerdomain_recordings` are optional (Track D step 1): when given, the
+    same one call also groups the device's own sensed band-power products (Power-Domain streaming
+    + Chronic Timeline), unconverted, for `lsb_series` to read instead of its own inline scan --
+    every stream now goes through this one decode step, each handled per its own kind, with the
+    native tier passed through as-is because it is already in the device units the platform cares
+    about (no calibration constant applies to it the way one does to the montage-TD and
+    event-PSD MODELED tiers, which stay reader-side; see `native_lsb_by_channel`'s own docstring).
     """
     return _build_channel_index(td_recordings, event_psd_recordings,
-                                step_seconds=analytics.TRANSFORM_STEP_SECONDS)
+                                step_seconds=analytics.TRANSFORM_STEP_SECONDS,
+                                chronic_recordings=chronic_recordings,
+                                powerdomain_recordings=powerdomain_recordings)
 
 
 def per_pro_lsb(pro_times, native_lsb_series, channel, center_hz, *, band_half_hz=2.5,

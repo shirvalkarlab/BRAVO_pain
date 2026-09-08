@@ -962,3 +962,79 @@ this machine (pyenv 3.12.9) has no pytest.
   real state exactly (Track D steps 1-2 the only unbuilt items anywhere in the plan).
 - This entry in `progress.md` is the corresponding write for that same reconciliation, per this
   skill's own rule that a phase-status change gets logged here too, not only in `task_plan.md`.
+
+## Session 2026-09-08, seventh entry -- Track D steps 1-2 built, Phase 3 closed
+
+- Asked to build Track D steps 1-2 (the two boxes just found unblocked-but-unbuilt in the sixth
+  entry above). Investigated with a read-only Explore agent first: `_load_recordings` itself
+  already decodes and stamps `RecordingType`/`CenterFrequencyHz`/`FreqScheduleHz`/`ContactSchedule`
+  at decode time (its own `_decode` closure, `bravo_service.py:342-409`); the genuine remaining
+  gap was `availability.lsb_series` and `availability.modeled_lsb_at_center`, both still doing
+  their own inline scans over chronic/power-domain/montage-TD recordings rather than the canonical
+  form. "The three spectrum builders" (`_assemble_psd_rows_cached`, the dead `_assemble_psd_rows`,
+  and `compute_psd_pain_correlation`) are documented in `ARCHITECTURE_modules_and_store.md:357-374`;
+  the agent confirmed the dead one is still dead (zero production callers) and that connecting the
+  two live ones is explicitly gated on a second sign-off (`findings.md` §6j: "Track D must not
+  connect it without the second sign-off," because it touches the one genuinely entangled
+  statistics site in the codebase).
+- Surfaced this gate before writing anything: asked whether to proceed with the safe part
+  (lsb_series/modeled_lsb_at_center, no gate found) while leaving the statistics-entangled merge
+  alone. Confirmed via a direct instruction: "there should only be one decoding step, and all
+  streams should go through it, handled differently based on what stream they come from," plus
+  the specific technical clarification that chronic/power-domain NATIVE LSB is already in device
+  units and needs no conversion, unlike the montage-TD/event-PSD MODELED tiers.
+- Read `lsb_series` in full (`availability.py`, then at lines 465-722) and `modeled_lsb_at_center`
+  (842-955) before touching anything. Found both consume chronic/power-domain data
+  `channel_index`/`DecodeCommon` never modeled (its signature only ever took `td_recordings` and
+  `event_psd_recordings`) -- a real scope finding, not assumed from the plan text alone.
+- Built `DecodeCommon.representation.native_lsb_by_channel(chronic_recordings,
+  powerdomain_recordings)`: byte-for-byte the algorithm already in `lsb_series`'s Power-Domain and
+  Chronic Timeline tiers, moved rather than reimplemented. Five small metadata helpers
+  (`sensing_center_hz`, `power_center_freqs`, `snap_freq`, `_FFT_BINS`, `_POWER_SENTINEL`)
+  duplicated into `representation.py` rather than imported from `analytics.py`/`availability.py` --
+  matching this file's own existing precedent (`canon_channel`, `to_epoch`) for keeping
+  `DecodeCommon` importable with no upward dependency. `ChannelIndex` gained the
+  `native_lsb_by_channel` grouping and `n_native_lsb_recordings`; `CHANNEL_INDEX_VERSION` bumped
+  2 -> 3. Deliberately NOT canonicalized at the grouping level -- `lsb_series`'s own `_push` never
+  canonicalized its output keys either, and re-keying here would silently merge two contacts the
+  original code has always kept as separate entries whenever two recordings spell a physical
+  contact two different ways.
+- Refactored `availability.lsb_series` into a wrapper (reads the native tier from `channel_index`,
+  runs the SAME montage-TD/event-PSD modeled-tier code as before -- kept OUT of the canonical form
+  on purpose, since those tiers need `analytics.td_to_lsb`/`device_psd_to_lsb`, real calibration
+  constants) plus `_lsb_series_scan`, the full original function kept byte-for-byte as the
+  reference and fallback. Same pattern for `modeled_lsb_at_center` / `_modeled_lsb_at_center_scan`
+  -- its TD tier now reads `channel_index.td(channel)`'s prepared traces (the SAME grouping
+  `per_pro_lsb` already reads); its PSD-only tier is left as its own scan, since its record shape
+  doesn't match `channel_index.psd_by_channel`'s and both live call sites pass
+  `psd_recordings=None` today -- no live data exists to prove a translation correct against.
+  Both new wrappers take `index=`/honor `USE_CHANNEL_INDEX`, the identical fallback contract
+  Track B established for `per_pro_lsb`/`per_pro_lsb_spectrum`.
+- Existing tests in `test_availability.py` already called both public function names directly, so
+  running them first (before writing anything new) was itself a regression check on the new
+  indexed default: all 43 (lsb_series) + 10 (modeled_lsb_at_center) passed unchanged.
+- Added 3 new tests for `lsb_series` (a rich fixture exercising every native-tier branch at once --
+  two contacts, a sentinel, a negative value, a missing-sample flag, a chronic frequency SCHEDULE
+  change mid-run, plus a montage-TD and an event-PSD point layered on top; the same check against
+  the two simpler existing fixtures; the `USE_CHANNEL_INDEX=False` fallback) and 2 for
+  `modeled_lsb_at_center` (indexed vs scan equality on pooled streaming+montage+malformed-column
+  TD; the fallback). All pass. Container suite 578 -> 583 (+5), 0 failed; DecodeCommon's own 41
+  tests and the full host suite (949/41) both re-run and unaffected.
+- Live equality proof on RCS08 (this project's own non-negotiable rule, since this changes how a
+  served number is produced): `git stash push -- availability.py representation.py`, dumped
+  `bravo_service.run_for_participant`'s full response (which carries `lsb_series`'s output) for
+  RCS08, `git stash pop`, dumped again. BYTE-IDENTICAL: 8,106,972 fields, 0 dropped, 0 new, 0
+  differing -- the cleanest equality result of any proof this session (no timing field embedded in
+  this particular response to differ). `modeled_lsb_at_center` compared directly (no full request
+  needed, since only the internal column-resolution mechanism changed): scan vs indexed on 386 real
+  RCS08 TD recordings, all 6 real sensing contact pairs, 3 band centers each -- 18 combinations,
+  3,054 real values, every one equal to 1e-12.
+- `DECISIONS_and_open_items.md` decision 71 added with the full detail and proof numbers.
+  `task_plan.md`: Track D steps 1-2 ticked with the proof summary; step 2's note is explicit that
+  only the confirmed-dead builder's removal and the readers are covered here, and that merging the
+  two live builders stays undone pending its own sign-off; Phase 3's status flipped to complete
+  (all four tracks now fully checked); Next Step and Current Phase rewritten to "all six phases
+  complete"; decision 22 added in this file's own numbering. `check-complete.sh` confirms
+  ALL PHASES COMPLETE (6/6).
+- Cleaned up the two scratch pickles (`_trackd1_before.pkl`, `_trackd1_after.pkl`) from the
+  container's scratch area after the diff was computed.
