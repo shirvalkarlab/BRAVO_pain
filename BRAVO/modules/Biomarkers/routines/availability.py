@@ -1724,7 +1724,7 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
     # Only "prior" changes behaviour here: this matcher is window-first (it asks "which PRO owns
     # this window"), so the older routine's PRO-first FRAMING has no equivalent to switch to — every
     # other UI value ("nearest", "pro_first") matches symmetrically, in either time direction.
-    _prior = str(match_direction or "nearest").lower() == "prior"
+    _prior_mode = str(match_direction or "nearest").lower() == "prior"
 
     def _nearest_pro(win_t, tol, prior=False):
         """Vectorized nearest-PRO index (orig order) per window time, -1 if beyond tol.
@@ -1773,7 +1773,7 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
     else:
         nn_td = np.full(td_t.size, -1, dtype=int)
         if td_valid.any():
-            nn_td[td_valid] = _nearest_pro(td_t[td_valid], tol_s, prior=_prior)
+            nn_td[td_valid] = _nearest_pro(td_t[td_valid], tol_s, prior=_prior_mode)
         td_idx, td_cnt = _pad_owned_windows(nn_td, nP)
     n_td_assigned = int(td_cnt.sum())
 
@@ -1820,7 +1820,7 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
     else:
         nn_psd = np.full(psd_t.size, -1, dtype=int)
         if psd_valid.any():
-            nn_psd[psd_valid] = _nearest_pro(psd_t[psd_valid], tol_s, prior=_prior)
+            nn_psd[psd_valid] = _nearest_pro(psd_t[psd_valid], tol_s, prior=_prior_mode)
         psd_idx, psd_cnt = _pad_owned_windows(nn_psd, nP)
     n_psd_assigned = int(psd_cnt.sum())
 
@@ -1857,7 +1857,7 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
              # legacy aliases kept so existing UI/echo readers don't KeyError:
              "extent_s": td_quantity_s, "psd_tol_s": tol_s,
              "allow_window_reuse": bool(allow_window_reuse),
-             "match_direction": "prior" if _prior else "prospective"}
+             "match_direction": "prior" if _prior_mode else "prospective"}
     return recs, stats
 
 

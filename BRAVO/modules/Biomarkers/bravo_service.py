@@ -3905,20 +3905,10 @@ def run_for_participant(request_data):
     outlier_scale = str(request_data.get("OutlierScale") or analytics.OUTLIER_SCALE).lower()
     if outlier_scale not in ("log", "raw"):
         outlier_scale = analytics.OUTLIER_SCALE
-    # Three-way match direction (PSD<->PRO):
-    #   pro_first (default for discovery): walk PROs, claim up to max_per_rating PSDs/channel each
-    #     within tolerance. Maximizes PRO coverage -- the right framing for discovery, where each
-    #     PRO is the unit of independence.
-    #   nearest: PSD-first symmetric, each PSD matched to the closest PRO either direction.
-    #   prior:   PSD-first FORECASTING semantics (PSD must precede the PRO). Kept for the
-    #     threshold-deployment view where causal prediction is the right semantics.
-    _md = str(request_data.get("MatchDirection", "pro_first")).lower()
-    if _md in ("pro_first", "pro-first", "pro"):
-        match_direction = "pro_first"
-    elif _md == "nearest":
-        match_direction = "nearest"
-    else:
-        match_direction = "prior"
+    # Three-way match direction (PSD<->PRO). See `_forecast_match_direction`'s own docstring for
+    # the meaning of each value and why this reader defaults to "prior" where the sweep's own
+    # `_sweep_match_direction` defaults to "pro_first".
+    match_direction = _forecast_match_direction(request_data)
     # `aggregate` retained for back-compat with the detail builder, but the cap subsumes it: a cap of
     # 1 IS one-per-rating, so callers no longer send the old Aggregate toggle. Keep "all" here so the
     # cap (not a pre-aggregation collapse) governs sample independence, with rating-grouped AUC on top.
@@ -4550,20 +4540,8 @@ def _validate_band_core(request_data):
     match_tol_min = _match_tolerance_param(request_data)
     max_per_rating = _int_param(request_data, "MaxPerRating", default=3, lo=1, hi=50)
     refractory_min = _float_param(request_data, "RefractoryMin", default=2.0, lo=0.0, hi=720.0)
-    # Three-way match direction (PSD<->PRO):
-    #   pro_first (default for discovery): walk PROs, claim up to max_per_rating PSDs/channel each
-    #     within tolerance. Maximizes PRO coverage -- the right framing for discovery, where each
-    #     PRO is the unit of independence.
-    #   nearest: PSD-first symmetric, each PSD matched to the closest PRO either direction.
-    #   prior:   PSD-first FORECASTING semantics (PSD must precede the PRO). Kept for the
-    #     threshold-deployment view where causal prediction is the right semantics.
-    _md = str(request_data.get("MatchDirection", "pro_first")).lower()
-    if _md in ("pro_first", "pro-first", "pro"):
-        match_direction = "pro_first"
-    elif _md == "nearest":
-        match_direction = "nearest"
-    else:
-        match_direction = "prior"
+    # Three-way match direction (PSD<->PRO); see `_forecast_match_direction`'s own docstring.
+    match_direction = _forecast_match_direction(request_data)
     from .routines import streaming_psd as sp
     pooled = sp.build_pooled_detail_from_matrix(
         mat, pm[0], pm[1],
@@ -6566,13 +6544,38 @@ def _attach_grid_export_columns(participant_uid, sweeps, *, band_width_hz):
                 row["device_rules_status"] = DEVICE_RULES_STATUS_NOTE
 
 
+def _forecast_match_direction(request_data):
+    """The PSD<->PRO match-direction parsing used by `run_for_participant` and
+    `_validate_band_core`, extracted from two byte-identical inline copies (a review found the
+    duplication and that neither copy had a request-level test).
+
+      pro_first (default for discovery): walk PROs, claim up to max_per_rating PSDs/channel each
+        within tolerance. Maximizes PRO coverage -- the right framing for discovery, where each
+        PRO is the unit of independence.
+      nearest: PSD-first symmetric, each PSD matched to the closest PRO either direction.
+      prior:   PSD-first FORECASTING semantics (PSD must precede the PRO). Kept for the
+        threshold-deployment view where causal prediction is the right semantics.
+
+    Falls back to "prior" for an unrecognised value -- deliberately different from
+    `_sweep_match_direction`'s "pro_first" fallback, because this reader is the causal-forecasting
+    view and that one is the discovery sweep; collapsing the two into one helper would silently
+    change one of their fallback behaviours.
+    """
+    _md = str(request_data.get("MatchDirection", "pro_first")).lower()
+    if _md in ("pro_first", "pro-first", "pro"):
+        return "pro_first"
+    if _md == "nearest":
+        return "nearest"
+    return "prior"
+
+
 def _sweep_match_direction(request_data):
     """The band-by-length sweep's own MatchDirection parsing, shared by the full grid
     (`band_time_sweep_for_participant`) and the per-cell drill-down
     (`band_time_sweep_cell_for_participant`) so the two always read the request the same way.
 
-    Deliberately NOT the same helper as the older three-way parse near line 3915: that one falls
-    back to "prior" for an unrecognised value, because it is the threshold-deployment view's
+    Deliberately NOT the same helper as `_forecast_match_direction` above: that one falls back to
+    "prior" for an unrecognised value, because it is the threshold-deployment view's
     causal-forecasting reading. This one falls back to "pro_first", because it is the discovery
     sweep's own reading, unchanged from before MatchDirection was wired into it. Collapsing the two
     would silently change one of their fallback behaviours.
