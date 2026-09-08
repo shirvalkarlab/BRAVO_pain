@@ -71,7 +71,7 @@ test("memory guard bounds retention without localStorage or exposing cache ident
   const write = jest.spyOn(Storage.prototype, "setItem");
   expect(memoryInfo()).toBeNull(); expect(underMemoryPressure()).toBe(false);
   for (let i = 0; i < 25; i += 1) putResult("m", `p${i}`, "k", { value: i });
-  expect(cacheStats().count).toBe(24);
+  expect(cacheStats().count).toBe(8);
   expect(cacheStats().entries).toBeUndefined();
   Object.defineProperty(performance, "memory", { configurable: true,
     value: { usedJSHeapSize: 90, jsHeapSizeLimit: 100 } });
@@ -104,4 +104,173 @@ test("default token and undefined participant cache scopes remain explicit", () 
 test("pending data status is rejected even without an outer HTTP status", () => {
   expect(isCompletedResult({ data: { status: 202 } })).toBe(false);
   expect(isCompletedResult({ data: { status: "complete", value: 0 } })).toBe(true);
+});
+
+
+// Exercise large budget boundaries without allocating hundred-megabyte fixtures. Only the
+// entry-size serialization is intercepted; scope/key JSON serialization stays real. Small
+// real-string tests below separately check the UTF-16 measurement and lossy-value rejection.
+function mockEntryBytes() {
+  const stringify = JSON.stringify;
+  return jest.spyOn(JSON, "stringify").mockImplementation((value, replacer, ...rest) => {
+    if (typeof replacer === "function" && value?.bundle?.testBytes !== undefined) {
+      return { length: value.bundle.testBytes / 2 };
+    }
+    return stringify(value, replacer, ...rest);
+  });
+}
+afterEach(() => jest.restoreAllMocks());
+
+test("one participant can keep multiple modules; the separate entry ceiling still applies", () => {
+  for (let i = 0; i < 25; i += 1) expect(putResult(`module-${i}`, "p", "k", { answer: i }).stored).toBe(true);
+  expect(cacheStats()).toMatchObject({ count: 24, maxEntries: 24, participantCount: 1, maxParticipants: 8 });
+  expect(getResult("module-0", "p", "k")).toBeNull();
+  expect(getResult("module-24", "p", "k")).not.toBeNull();
+});
+
+test("participant bound evicts all slots of the least recently used other participant", () => {
+  const time = jest.spyOn(Date, "now").mockReturnValue(1);
+  putResult("old-panel", "active", "k", {});
+  time.mockReturnValue(2); putResult("one", "abandoned", "k", {});
+  time.mockReturnValue(3); putResult("two", "abandoned", "k", {});
+  for (let i = 0; i < 6; i += 1) {
+    time.mockReturnValue(4 + i); putResult("m", `other-${i}`, "k", {});
+  }
+  time.mockReturnValue(20); putResult("fresh-panel", "active", "k", {});
+  time.mockReturnValue(21); getResult("old-panel", "active", "k");
+  time.mockReturnValue(22); putResult("m", "ninth", "k", {});
+  expect(cacheStats().participantCount).toBe(8);
+  expect(getResult("one", "abandoned", "k")).toBeNull();
+  expect(getResult("two", "abandoned", "k")).toBeNull();
+  expect(getResult("old-panel", "active", "k")).not.toBeNull();
+  expect(getResult("fresh-panel", "active", "k")).not.toBeNull();
+});
+
+test("participant LRU uses reads rather than save time or only its oldest module", () => {
+  const time = jest.spyOn(Date, "now").mockReturnValue(1);
+  putResult("m", "first", "k", {});
+  for (let i = 0; i < 7; i += 1) {
+    time.mockReturnValue(2 + i); putResult("m", `p${i}`, "k", {});
+  }
+  time.mockReturnValue(20); getResult("m", "first", "k");
+  time.mockReturnValue(21); putResult("m", "new", "k", {});
+  expect(getResult("m", "first", "k")).not.toBeNull();
+  expect(getResult("m", "p0", "k")).toBeNull();
+});
+
+test("byte limit evicts another participant before older current-participant modules", () => {
+  mockEntryBytes();
+  const time = jest.spyOn(Date, "now").mockReturnValue(1);
+  const mb = 1024 * 1024;
+  putResult("one", "p", "k", { testBytes: 60 * mb });
+  time.mockReturnValue(2); putResult("m", "other", "k", { testBytes: 60 * mb });
+  time.mockReturnValue(3); putResult("two", "p", "k", { testBytes: 60 * mb });
+  expect(getResult("one", "p", "k")).not.toBeNull();
+  expect(getResult("m", "other", "k")).toBeNull();
+  expect(cacheStats()).toMatchObject({ totalBytes: 120 * mb, count: 2, participantCount: 1 });
+});
+
+test("byte eviction falls back to current participant LRU and permits exact budget", () => {
+  mockEntryBytes();
+  const time = jest.spyOn(Date, "now").mockReturnValue(1);
+  const max = cacheStats().maxTotalBytes;
+  expect(max).toBe(150 * 1024 * 1024);
+  putResult("one", "p", "k", { testBytes: max / 2 });
+  time.mockReturnValue(2); putResult("two", "p", "k", { testBytes: max / 2 });
+  expect(cacheStats().totalBytes).toBe(max);
+  time.mockReturnValue(3); getResult("one", "p", "k");
+  time.mockReturnValue(4); putResult("three", "p", "k", { testBytes: max / 2 });
+  expect(getResult("two", "p", "k")).toBeNull();
+  expect(getResult("one", "p", "k")).not.toBeNull();
+  expect(cacheStats().totalBytes).toBe(max);
+  putResult("all", "p", "k", { testBytes: max });
+  expect(cacheStats()).toMatchObject({ count: 1, totalBytes: max });
+});
+
+test("oversized new or replacement entry is declined without displacing valid results", () => {
+  mockEntryBytes();
+  const max = cacheStats().maxTotalBytes;
+  putResult("m", "p", "old", { testBytes: 20 });
+  markUpstreamChanged("m", "p", "source changed");
+  const listener = jest.fn(); const stop = subscribe(listener);
+  expect(putResult("m", "p", "new", { testBytes: max + 2 })).toEqual({ stored: false, reason: "result exceeds the cache byte budget" });
+  expect(putResult("new", "q", "k", { testBytes: max + 2 }).stored).toBe(false);
+  expect(getResult("m", "p", "new")).toMatchObject({ key: "old", stale: true });
+  expect(cacheStats()).toMatchObject({ count: 1, totalBytes: 20 });
+  expect(listener).not.toHaveBeenCalled(); stop();
+});
+
+test("replacement and every invalidation path release their recorded byte accounting", () => {
+  mockEntryBytes();
+  putResult("m", "p", "k", { testBytes: 80 });
+  putResult("m", "p", "k", { testBytes: 20 });
+  putResult("other", "q", "k", { testBytes: 40 });
+  expect(cacheStats().totalBytes).toBe(60);
+  invalidate("m", "p"); expect(cacheStats().totalBytes).toBe(40);
+  setServerToken("old", "q"); setServerToken("new", "q");
+  expect(cacheStats()).toMatchObject({ totalBytes: 0, participantCount: 0 });
+  putResult("m", "p", "k", { testBytes: 80 }); invalidateAll();
+  expect(cacheStats().totalBytes).toBe(0);
+  putResult("m", "p", "k", { testBytes: 80 });
+  SessionController.getUser.mockReturnValue({ ...user });
+  expect(cacheStats()).toMatchObject({ totalBytes: 0, participantCount: 0 });
+  putResult("m", "p", "k", { testBytes: 80 });
+  SessionController.getUser.mockReturnValue(null);
+  expect(cacheStats().totalBytes).toBe(0);
+});
+
+test("actual JSON UTF-16 accounting includes Unicode payloads and metadata", () => {
+  putResult("m", "p", "k", { value: "a" }, { note: "a" });
+  const baseline = cacheStats().totalBytes;
+  putResult("m", "p", "k", { value: "é😀" }, { note: "a" });
+  expect(cacheStats().totalBytes - baseline).toBe(4); // 3 UTF-16 units replacing one.
+  putResult("m", "p", "k", { value: "é😀" }, { note: "abcdef" });
+  expect(cacheStats().totalBytes - baseline).toBe(14);
+  expect(cacheStats().byteMeasurement).toBe("serialized UTF-16 at insertion; not heap usage");
+});
+
+test.each([undefined, () => {}, Symbol("private"), 1n, NaN, Infinity, -Infinity, new Map([["private", "data"]]), new Set([1]), new Date(0)])(
+  "non-JSON nested payloads cannot receive a nominal fallback size: %s", (value) => {
+    expect(putResult("m", "p", "k", { value }).stored).toBe(false);
+    expect(cacheStats().count).toBe(0);
+  }
+);
+
+test("cycles, hidden toJSON conversion and serialization failure preserve prior result", () => {
+  putResult("m", "p", "k", { valid: [null, 0, false] });
+  const cycle = {}; cycle.self = cycle;
+  for (const invalid of [cycle, { toJSON: () => ({ small: true }) }, { toJSON: () => { throw new Error("private"); } }]) {
+    expect(putResult("m", "p", "k", invalid).stored).toBe(false);
+  }
+  expect(putResult("m", "p", "k", {}, cycle).stored).toBe(false);
+  expect(getResult("m", "p", "k").bundle).toEqual({ valid: [null, 0, false] });
+});
+
+test("heap pressure introduced during serialization declines retention", () => {
+  const stringify = JSON.stringify;
+  jest.spyOn(JSON, "stringify").mockImplementation((value, replacer, ...rest) => {
+    if (typeof replacer === "function") Object.defineProperty(performance, "memory", {
+      configurable: true, value: { usedJSHeapSize: 90, jsHeapSizeLimit: 100 }
+    });
+    return stringify(value, replacer, ...rest);
+  });
+  expect(putResult("m", "p", "k", {}).stored).toBe(false);
+  expect(cacheStats().totalBytes).toBe(0);
+});
+
+test("new aggregate statistics expose neither identifiers nor request/payload content", () => {
+  putResult("module-private", "participant-private", "settings-private", { secret: "payload-private" }, { note: "meta-private" });
+  const stats = cacheStats();
+  expect(stats).toMatchObject({ count: 1, participantCount: 1, memoryMeasurable: false });
+  expect(Object.keys(stats).sort()).toEqual(["byteMeasurement", "count", "maxEntries", "maxParticipants", "maxTotalBytes", "memory", "memoryMeasurable", "participantCount", "totalBytes"].sort());
+  expect(JSON.stringify(stats)).not.toMatch(/private|viewer|token|study/);
+});
+
+test("first participant token learned after caching is a hard miss, never merely stale", () => {
+  setServerToken(null, "p");
+  putResult("m", "p", "k", { value: 1 });
+  putResult("m", "q", "k", { value: 2 });
+  expect(setServerToken("first-identity", "p")).toBe(false);
+  expect(getResult("m", "p", "k")).toBeNull();
+  expect(getResult("m", "q", "k").bundle).toEqual({ value: 2 });
 });
