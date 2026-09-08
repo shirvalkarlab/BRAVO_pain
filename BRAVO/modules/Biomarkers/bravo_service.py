@@ -6516,7 +6516,7 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
 #: asserting something untrue is worse than no label at all. See the D2(a) discussion in this
 #: track's report for the concrete PI-level question this leaves open.
 DEVICE_RULES_STATUS_NOTE = (
-    "not assessable from a band alone: the device's 51-rule screen needs a specific stimulation "
+    "more stimulation settings needed: the device's 51-rule screen needs a specific stimulation "
     "current, pulse width, rate and impedance reading, none of which a (contact, band centre) grid "
     "point carries; every one of this grid's 22 centres already sits inside the device's own "
     "8.0-30.0 Hz adaptive-sensing range (decision 32), so a band-only version of the screen would "

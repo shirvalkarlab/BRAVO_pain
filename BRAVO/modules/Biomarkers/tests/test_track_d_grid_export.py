@@ -177,7 +177,7 @@ def test_attach_grid_export_columns_keeps_channels_independent():
 
 def test_device_rules_status_states_the_limitation_rather_than_a_verdict():
     note = _bsvc.DEVICE_RULES_STATUS_NOTE
-    assert "not assessable" in note
+    assert "more stimulation settings needed" in note
     for word in ("blocked", "forbidden", "eligible", "pass", "fail"):
         assert word not in note.lower(), (
             f"DEVICE_RULES_STATUS_NOTE must not read as a verdict; found {word!r} in it")
