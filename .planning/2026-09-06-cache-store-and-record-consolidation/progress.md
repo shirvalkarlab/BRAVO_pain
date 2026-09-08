@@ -765,3 +765,29 @@ this machine (pyenv 3.12.9) has no pytest.
   matched exactly.
 - Host suite 936 passed, both orders. Container suite 540, unaffected (no new container tests).
 - **Track E, and everything not gated on the PI, is now complete.**
+
+### PI decisions received, 2026-09-08 — four remaining open items resolved
+
+- Decision 54: the shared result-cache's flat entry-count cap replaced with a byte budget
+  (~150 MB) and a cap on distinct resident participants (8), with the do-not-edit restriction on
+  Client/src/database/resultCache.js, useCachedResult.js and views/Reports/RecomputeBar.js lifted
+  for this one change. Implemented in resultCache.js (estimateBytes, distinctUids,
+  evictOldestParticipant, totalBytes; putResult and cacheStats updated); moduleCacheKeys.js's stale
+  "bounds itself at six entries" comment corrected in passing. Full frontend suite: 53 passed
+  (added 3 new tests for the byte-budget and participant-cap behavior). Bundle rebuilt and the new
+  constant confirmed present in a served chunk.
+- The double-fetch defect in useCachedResult.js was read closely rather than assumed still open:
+  the `fetchInFlight` ref guard already in the code appears to fully prevent it by inspection: not
+  yet confirmed live in a running browser (an agent is checking this empirically in the
+  background).
+- Decision 55: a switching value may sit on a peaked band only on the one-sided, unambiguous
+  stretch past the peak. Curvature is tested first, pooled across every stimulation-current ladder
+  across every visit (not one visit at a time), with the grouping between visits accounted for.
+  When a real bend fits well, a second straight-line fit uses only the post-peak data. This also
+  answers open item 18: pooling across visits should clear the 8-point floor a single visit's
+  ladder cannot. Not yet implemented — next step.
+- Open item 5 resolved: the band-by-length sweep is the project's headline result; a UX cleanup is
+  queued as its own open item (item 7) rather than done now, since no design spec exists yet.
+- Open item 6 resolved: reviewing the entangled spectrum-and-correlation pass in
+  Biomarkers/pipeline.py for consolidation into the separated pipeline is authorized; a review
+  workflow is running in the background, nothing changed yet.

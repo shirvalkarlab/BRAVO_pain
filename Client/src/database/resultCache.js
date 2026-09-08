@@ -35,10 +35,11 @@
  * either.
  *
  * MEMORY. The heavy results are large: the biomarker bundle is around nineteen megabytes and the
- * deployment payload around one hundred and forty kilobytes. The cache is bounded by entry count
- * AND by live heap pressure where the browser reports it, and under pressure it declines to store
- * a new result rather than risking the tab. Declining is safe because the caller's fallback is to
- * recompute, which is slow but correct. This mirrors the guard already proven in
+ * deployment payload around one hundred and forty kilobytes. The cache is bounded by a combined
+ * byte budget, by how many distinct participants are kept resident, AND by live heap pressure
+ * where the browser reports it, and under pressure it declines to store a new result rather than
+ * risking the tab. Declining is safe because the caller's fallback is to recompute, which is slow
+ * but correct. This mirrors the guard already proven in
  * `views/Reports/Biomarkers/biomarkerStateStore.js`, which this module generalises; that file's
  * per-view behaviour is unchanged and it remains the owner of the biomarker CONTROLS layer.
  */
@@ -55,19 +56,88 @@ export const MODULES = {
 // not per component. A hard reload clears it, which is correct — a reload is the user asking for a
 // clean slate, and it is also when a new server build would arrive.
 const STORE = new Map();          // `${module}::${uid}` -> entry
-// RAISED FROM 6 TO 24 after the views were wired, because the original figure was set against an
-// assumption that did not survive contact with the closed-loop page: it has SEVEN separate
-// requests, not one, so a single participant occupies nine slots across the three modules rather
-// than three. At six the store silently evicted entries that were still being displayed.
+
+// REPLACED THE FLAT ENTRY COUNT (PI, 2026-09-08). A count was always the wrong unit: entries differ
+// by three orders of magnitude — the biomarker bundle is around nineteen megabytes and a panel
+// payload around twenty kilobytes — so twenty-four small entries and twenty-four large ones are not
+// comparable amounts of memory, and a count cap either evicts a fine tab far too early or lets a
+// tab full of large entries run far past what it should. Two bounds now do this instead, matching
+// what the count was actually trying to approximate:
 //
-// The count is also the wrong unit on its own, and this cap is not what keeps the tab safe. The
-// entries differ by three orders of magnitude — the biomarker bundle is around nineteen megabytes
-// and a panel payload around twenty kilobytes — so twenty-four small entries and twenty-four large
-// ones are not comparable amounts of memory. The real bound is the heap-pressure guard in
-// `putResult`, which reclaims other participants first and then declines to store at all. This cap
-// exists only to stop unbounded growth across many participants in one session.
-const MAX_ENTRIES = 24;
+//   1. A BYTE BUDGET across every stored entry, evicted oldest-other-participant-first exactly as
+//      before, so the store holds "about this many megabytes" rather than "about this many slots".
+//   2. A PARTICIPANT COUNT — not a slot count — so one participant's own module fan-out (today,
+//      up to nine slots across the three modules) is never limited on its own; only the number of
+//      DIFFERENT participants kept resident is bounded, which is what the count was originally
+//      trying to protect against ("unbounded growth across many participants in one session").
+//
+// Neither of these is what keeps the tab safe. That is still the heap-pressure guard in
+// `putResult`, which reclaims other participants first and then declines to store at all; these two
+// bounds exist to evict gracefully well before that guard would ever need to act.
+const MAX_TOTAL_BYTES = 150 * 1024 * 1024;   // ~150 MB combined, well under a typical tab's heap
+const MAX_PARTICIPANTS = 8;                  // distinct participants kept resident at once
 const PRESSURE_RATIO = 0.85;
+
+/**
+ * Best-effort byte size of a bundle about to be stored.
+ *
+ * `JSON.stringify` is what these bundles already went through to arrive over the wire as an API
+ * response, so it essentially never fails on one. When it does (a value that cannot be
+ * serialised), the entry is assumed to be a full megabyte rather than zero bytes — undercounting
+ * is what let a count-based cap hide how much memory was actually resident, and the same mistake
+ * must not be repeated here just because the unit changed.
+ */
+function estimateBytes(bundle) {
+  try {
+    return JSON.stringify(bundle).length;
+  } catch (e) {
+    return 1048576;
+  }
+}
+
+function uidOf(k) { return String(k).split("::")[1] || null; }
+
+/** Every distinct participant currently resident, optionally excluding one. */
+function distinctUids(exceptUid) {
+  const uids = new Set();
+  STORE.forEach((v, k) => {
+    const u = uidOf(k);
+    if (u !== null && u !== exceptUid) uids.add(u);
+  });
+  return uids;
+}
+
+/** Sum of every stored entry's recorded size. */
+function totalBytes() {
+  let sum = 0;
+  STORE.forEach((v) => { sum += v.bytes || 0; });
+  return sum;
+}
+
+/**
+ * Drop every slot belonging to whichever OTHER participant was least recently touched, and say
+ * whether one was found.
+ *
+ * "Least recently touched" is judged by that participant's MOST RECENT entry, not their oldest —
+ * a participant with one stale panel and eight fresh ones must not be evicted ahead of a
+ * participant nobody has looked at in an hour, which is exactly the mistake a plain oldest-entry
+ * search would make once eviction works in whole participants rather than single slots.
+ */
+function evictOldestParticipant(exceptUid) {
+  const newestByUid = new Map();
+  STORE.forEach((v, k) => {
+    const u = uidOf(k);
+    if (u === null || u === exceptUid) return;
+    const prev = newestByUid.get(u) || 0;
+    if (v.savedAt > prev) newestByUid.set(u, v.savedAt);
+  });
+  let victim = null;
+  let victimAt = Infinity;
+  newestByUid.forEach((at, u) => { if (at < victimAt) { victimAt = at; victim = u; } });
+  if (victim === null) return false;
+  Array.from(STORE.keys()).forEach((k) => { if (uidOf(k) === victim) STORE.delete(k); });
+  return true;
+}
 
 let SERVER_TOKEN = null;          // last token seen from /api/queryServerIdentity
 const UPSTREAM = new Map();       // `${module}::${uid}` -> { at, reason }
@@ -229,12 +299,23 @@ export function putResult(moduleKey, uid, key, bundle, meta) {
 
   STORE.set(s, {
     bundle,
+    bytes: estimateBytes(bundle),
     key: key == null ? null : String(key),
     savedAt: Date.now(),
     serverToken: SERVER_TOKEN,
     meta: meta || null,
   });
-  while (STORE.size > MAX_ENTRIES) evictOldest(s);
+
+  // Bound by participant first (whole participants dropped at once), then by the byte budget
+  // (single entries dropped, other-participants-first, same as before). Neither loop can spin
+  // forever: each iteration either removes something or the loop's own guard stops it.
+  while (distinctUids(uid).size >= MAX_PARTICIPANTS && evictOldestParticipant(uid)) { /* continue */ }
+  while (totalBytes() > MAX_TOTAL_BYTES) {
+    const before = STORE.size;
+    evictOldest(s);
+    if (STORE.size === before) break;   // nothing left that eviction is willing to remove
+  }
+
   UPSTREAM.delete(s);
   notify({ type: "stored", module: moduleKey, uid });
   return { stored: true, reason: null };
@@ -295,12 +376,15 @@ export function invalidateAll(reason) {
 export function cacheStats() {
   const rows = [];
   STORE.forEach((v, k) => {
-    rows.push({ slot: k, savedAt: v.savedAt, key: v.key, serverToken: v.serverToken });
+    rows.push({ slot: k, savedAt: v.savedAt, key: v.key, serverToken: v.serverToken, bytes: v.bytes || 0 });
   });
   return {
     entries: rows,
     count: STORE.size,
-    maxEntries: MAX_ENTRIES,
+    totalBytes: totalBytes(),
+    maxTotalBytes: MAX_TOTAL_BYTES,
+    participantCount: distinctUids(null).size,
+    maxParticipants: MAX_PARTICIPANTS,
     serverToken: SERVER_TOKEN,
     memory: memoryInfo(),
     memoryMeasurable: memoryInfo() !== null,

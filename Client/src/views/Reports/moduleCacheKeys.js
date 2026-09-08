@@ -16,16 +16,15 @@
  * slash separates the two parts rather than the store's own double colon, so that a slot string
  * read in a debugger still shows unambiguously where the module name ends.
  *
- * THIS IS A WORKAROUND, AND IT HAS A LIMIT THAT IS WORTH STATING RATHER THAN REDISCOVERING.
- * `resultCache` bounds itself at six entries, and the three views between them now want nine slots
- * for one participant: five on the deployment route, three on the biomarker route, one for the
- * optimizer. Visiting all three therefore evicts. Eviction takes the least recently read entry and
- * the store touches an entry on every read, so what falls out in practice is the small panel
- * payload of whichever page was left first rather than the nineteen-megabyte biomarker bundle —
- * but that is a property of the access pattern rather than a guarantee, and a count is the wrong
- * unit for a cap when one entry is nineteen megabytes and another is twenty kilobytes. The report
- * accompanying this change asks for a larger bound, or for the store to gain a sub-key of its own
- * so that a module can hold several results and be invalidated as a unit.
+ * THIS IS A WORKAROUND. It used to also carry a limit worth stating here — a flat entry-count cap
+ * was the wrong unit when one entry is nineteen megabytes and another is twenty kilobytes, so
+ * visiting all three views (nine slots total: five on the deployment route, three on the
+ * biomarker route, one for the optimizer) could evict a fresh result to make room for a small one.
+ * `resultCache` now bounds itself by a byte budget and by how many different participants are
+ * resident, not by a slot count (PI, 2026-09-08), so one participant's own nine slots are never
+ * limited on their own — see that file for the current bounds. This file's own reason for
+ * existing, giving the deployment page's five endpoints and two lent panels each their own slot
+ * rather than fighting over one, is unrelated to that and still stands.
  */
 import { MODULES, invalidate, markUpstreamChanged } from "database/resultCache";
 import { refreshServerIdentity } from "database/useCachedResult";

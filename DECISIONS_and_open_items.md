@@ -85,6 +85,8 @@ superseding decision describes the code as it stands.
 | 51 | **Track E, revised: the assembled matrix still moves into the one store as a raw kind (not yet built). The per-recording directory stays exactly where it is, sped up in front rather than replaced**, with a stamp over the whole recording set that skips the per-recording loop entirely when nothing has moved, and a small saved list that replaces asking the file system about every recording individually when something has.** | Measured with alternating rounds: removing the directory would cost about 2.5-3.1 s on every future upload and every band-conversion panel view, not once but every time, forever. Moving it into the one store instead would force a full rewrite on every new recording (the store keeps one current snapshot per participant per kind) or a database row and a small file for each of about 6,300 recordings — neither is the store's job. Proven on RCS08: 1,149,923 fields compared between the per-recording loop and the new stamp-served rows, 0 differences; a cache hit against a full recompute, twice each in alternating order, 0.355 s / 0.351 s against 3.138 s / 2.909 s. A first draft would have redecoded a participant's whole history the first time it ran; caught and fixed before shipping. | 2026-09-07 |
 | 52 | **The device route's ceiling (open item 20) is a table of precomputed 99.5th-percentile thresholds, one per (electrode, band centre), built once from RCS08's full recorded history rather than from the window being checked — and, separately, the same treatment computed but not yet wired in for the two offline tile families (time-domain-derived and PSD-derived).** His decision on 2026-09-08, after seeing that a same-window fold rule cannot tell a genuinely bad window from a clean one (the "masking" problem) and after a literature review found real precedent for a history-derived reference in the project's own prior work (Prosky et al. 2021) and in Percept-specific literature (Cascino et al. 2026). | The 99.5th percentile discards the top 0.5% of all historical readings per group; a group whose entire history is exactly zero is left out of the table rather than given a ceiling of zero. `CEILING_RULE_VERSION` replaces `DEVICE_SPIKE_FOLD` in the ground-truth signature, so old cache entries built under the fold rule are never served as if built under this one. Proven live on RCS08: all 19 live lookups in the current comparison hit the table correctly; on constructed data, a window that is 60% spikes — which the old rule could not detect at all, because its own median was itself a spike — is now correctly found and excluded. Both suites green: host 936 passed (2 new tests), container 540 unaffected. | 2026-09-08 |
 | 53 | **Track E completed: the assembled spectrum matrix (`biomarker_psd`) moves into the one store as a raw kind, `biomarker_psd_matrix`.** Both writers (the request-thread build and the eager warm from already-decoded recordings) and both readers now go through `store.load`/`store.store` under the same key, replacing the ad hoc `biomarker_psd` directory and its own atomic writer. | This is the half of decision 51 that was left to build once the per-recording directory's own decision landed. `test_one_store.py`'s exemption for the ad hoc directory-construction is removed; only the per-recording cache's own exemptions remain (decision 51). Proven on RCS08: a store round trip (write, then read) is byte-identical, 0 of 654,146 fields differ. A separate check comparing a build made mostly from the per-recording cache against a fully fresh rebuild found 206,107 apparent differences out of 654,146 — traced to a pre-existing property of the row-assembly step this change does not touch, that its row order follows collection order rather than a sorted one; after sorting both to the same order by time, electrode and source, all 629,129 power values and every row's identity matched exactly. Host suite 936 passed, both orders; container suite 540, unaffected. | 2026-09-08 |
+| 54 | **The shared result-cache's flat entry-count cap is replaced with a byte budget and a cap on how many distinct participants are kept resident, and the do-not-edit restriction on the three files that hold it is lifted for this one change.** | A count was always the wrong unit for entries three orders of magnitude apart in size (twenty kilobytes to nineteen megabytes), and the count also conflated two different problems: one participant's own module fan-out (up to nine slots) and unbounded growth across many participants in one session. The two new bounds separate them; the heap-pressure guard remains the actual safety net either way. | 2026-09-08 |
+| 55 | **A switching value may be placed on a band whose power rises then falls with current, but only on the side of the peak where one power value maps to one current. The current-to-power relationship is tested for curvature first, pooled across every stimulation-current ladder this participant has across every visit rather than one visit at a time, with the grouping between visits accounted for rather than pooled points treated as independent. When a real bend is confirmed and fits well, a second straight-line fit is added using only the data from the peak current onward.** | The device places its switching value between two power readings; a peaked band satisfies the same value going up and coming down, so the device cannot tell the two situations apart from the power reading alone unless the switching value sits on the one-sided, unambiguous stretch. Pooling across visits also answers open item 18: a single visit's ladder has too few settled points for the curvature test, but combined ladders across visits should clear it. | 2026-09-08 |
 | 47 | **Track G step 2: the device route in the three-source comparison excludes and counts samples above a saturation ceiling (`DEVICE_SPIKE_FOLD = 10` times the settled window's own median, provisional, open item 20); the ground-truth verdict of decision 33 is applied to every run, band and setting, pairing the device's band with the single nearest stored centre the comparison uses, and written as `ground_truth_verdict` by the closed-loop request with the tile entry in its provenance; Stim Optimizer reads it as `stim_optimizer`, reports it, keys its response on it and cites it.** | The rule was decided and not written back; the ceiling it requires did not exist in the code, and the number is a scientific choice, so it is one named constant relative to the window's own median. On RCS08 the ceiling changed 3 of 12,068 comparison values, excluded 12 spikes and moved no settled power; the verdict has 2,958 rows over 11 runs, 29 with both routes, fold 0.807 to 1.785, median 0.987; 2,912 copied values, 0 differences. | 2026-09-07 |
 | 46 | **Track F step 2: a short-lived Redis lock (`CacheStore/locks.py`) keyed on the tile file's own key is held while the tiles are built; it expires on its own (300 s against a 36 to 39 s build), a waiter reads the file when its sidecar appears and builds anyway after 150 s, and Redis unreachable, the client absent or the lock switched off all mean building as before.** | Proven on RCS08 with four concurrent cold requests: one build, three served, every request in about 41 s; the control with the lock off ran four builds contending for the machine and every request took about 368 s. Seven tests on a stand-in pin the requirements. | 2026-09-07 |
 | 45 | **Track G step 1: the deployment report's joined table and its fingerprint accept the calibrated frame, reading each band's linear power from its own `band_lsb_<centre>` column, its decibel expression from that, and leaving the mean-of-log scale empty; tiles marked unusable or railed are left out; the pipeline adds the candidate's own centre to the join's grid.** | The report had raised on every candidate since 2026-09-05, when `90eb109` switched its input to the calibrated frame and `8e31342` made the fingerprint strict, and the page showed the empty state. Reading the device's own scale follows decision 33. On RCS08 every candidate now returns three edges; the amplitude-to-pain edge resolves at −0.159 pain points per mA (90 clusters). | 2026-09-07 |
@@ -107,26 +109,39 @@ hygiene as a work item — the latter is an operational note in `OPERATIONS_runb
    own name and his UCSF address: Prasad Shirvalkar, `prasad.shirvalkar@ucsf.edu`. Applied to
    every commit from that date on; the commits made before it keep the machine identity they were
    made with, and nothing already pushed has been rewritten.
-2. **The go-ahead to begin the store implementation.** He requires an explicit manual go-ahead
-   before implementation, and plan approval is not that. **Nothing in the second phase has been
-   started.**
-3. **Whether a switching value can sit on a band whose response is peaked**, and whether to fit one
-   straight line across 1 to 4.8 mA or something admitting curvature. The device places its
-   switching value between two power readings, and a band that rises to about 2.1 mA and then falls
-   satisfies the same value on both sides of its peak. **The earlier linear retraction does not
-   settle this** — a linear test has almost no power against a rise-then-fall, and a curvature test
-   on the one clean day gives p = 0.125. Neither is significant; both rest on 8 steps from a single
-   visit day.
-4. **Two defects in the shared result-cache contract, which are his files.** The three views work
-   around both and say so in their comments. A deliberate recompute issues **two** fetches per
-   press. The entry limit is six against nine slots for one participant, **and a count is the wrong
-   unit when one entry is nineteen megabytes and another twenty kilobytes** — either raise the bound
-   or give the store a sub-key. Smaller: a failed request is stringified, so the exploration view can
-   no longer hand the response object to the error display and its wording is lost.
-5. **Whether the band-by-length sweep becomes the headline statistic.**
-6. **A second sign-off before touching the entangled spectrum-and-correlation pass**, which is the
-   one site where computing the spectra and correlating them against pain happen together, ported
-   verbatim from the source notebook.
+~~2. **The go-ahead to begin the store implementation.**~~ **RESOLVED 2026-09-07.** He gave it, and
+   every phase of the store work is now built, tested and pushed.
+~~3. **Whether a switching value can sit on a band whose response is peaked**, and whether to fit
+   one straight line or something admitting curvature.~~ **RESOLVED 2026-09-08, decision 55.** A
+   switching value may sit on a peaked band only on one side of the peak, where one power value
+   maps to one current. Every band is tested for curvature first, pooling every stimulation-current
+   ladder this participant has, across every visit (in-clinic and at home) rather than one visit
+   at a time — accounting for the grouping between visits, not treating pooled points as
+   independent, the same discipline decision 17 already applies. When curvature is confirmed and
+   fits well, a second straight-line fit is added using only the data from the peak current onward,
+   dropping every point before the peak, so a switching value on that stretch has no ambiguity left
+   to resolve.
+~~4. **Two defects in the shared result-cache contract, which are his files.**~~ **RESOLVED
+   2026-09-08, decision 54.** He authorized the fix directly and lifted the do-not-edit
+   restriction for it. The double-fetch is very likely already fixed by an existing guard, not
+   yet independently confirmed live; the cache is now bounded by a byte budget and by how many
+   participants are resident, not by a flat count.
+~~5. **Whether the band-by-length sweep becomes the headline statistic.**~~ **RESOLVED
+   2026-09-08.** Yes, this is the headline result; the controls on the exploration page (the median
+   split and the rest) exist to sanity-check it, not to replace it. **Left open, its own item
+   below:** the display needs cleanup — too much text, and the selected contact is not shown
+   clearly across every plot — and a separate decision, for whenever that cleanup happens, on
+   whether the sweep should run across every patient-reported outcome or only the one currently
+   selected.
+~~6. **A second sign-off before touching the entangled spectrum-and-correlation pass.**~~
+   **RESOLVED 2026-09-08.** Authorized: open it up for the same review the rest of the pipeline
+   received, and look for a chance to fold it into the pipeline that already exists separately.
+   Review in progress; nothing has been changed yet.
+7. **Clean up and simplify the band-by-length sweep's display** on the Biomarkers exploration page:
+   less text, and the selected contact shown clearly on every plot rather than only some. When this
+   happens, decide at the same time whether the sweep should run across every patient-reported
+   outcome or only the one selected at the top of the page, and how to make the result more
+   immediately readable as the project's headline finding.
 
 ### Open engineering, not blocked on anyone
 

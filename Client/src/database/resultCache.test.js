@@ -215,6 +215,49 @@ test("recompute() refetches and clears the stale flag", async () => {
   expect(sink.current.staleReasons).toEqual([]);
 });
 
+// ------------------------------------------------------------------------------------------------
+// 6. A count is the wrong unit (PI, 2026-09-08): eviction is by byte budget and participant count.
+// ------------------------------------------------------------------------------------------------
+test("one participant's own many slots are never limited by the participant count", () => {
+  // Nine is the real, current fan-out across the three modules for one participant (five on the
+  // deployment route, three on the biomarker route, one for the optimizer). None of them may be
+  // evicted just because there are more than the distinct-participant cap of one participant.
+  for (let i = 0; i < 9; i += 1) {
+    putResult(`slot-${i}`, UID, settingsKey({ i }), { i });
+  }
+  expect(cacheStats().count).toBe(9);
+  expect(cacheStats().participantCount).toBe(1);
+});
+
+test("storing more distinct participants than the cap evicts the whole oldest participant", () => {
+  // The exact cap is an internal tuning constant, not exported; nine participants is comfortably
+  // past any reasonable cap without depending on its precise value.
+  for (let i = 0; i < 9; i += 1) {
+    putResult(MODULES.biomarkers, `P${i}`, settingsKey({ i }), { i });
+  }
+  const { participantCount, maxParticipants } = cacheStats();
+  expect(participantCount).toBeLessThanOrEqual(maxParticipants);
+  // The first participant stored is the one that has gone longest untouched, so it is the one
+  // dropped -- not some arbitrary one, and not the most recently stored.
+  expect(getResult(MODULES.biomarkers, "P0", settingsKey({ i: 0 }))).toBeNull();
+  expect(getResult(MODULES.biomarkers, `P${8}`, settingsKey({ i: 8 }))).not.toBeNull();
+});
+
+test("a byte budget, not a count, is what evicts an oversized set of entries", () => {
+  // A count-based cap would have let this many small entries sit forever; only a real byte budget
+  // catches it. Two different participants so eviction (other-participant-first) can select one.
+  const big = "x".repeat(50 * 1024 * 1024);   // ~50 MB per entry
+  putResult(MODULES.biomarkers, "BIGA", settingsKey({ a: 1 }), { big });
+  putResult(MODULES.biomarkers, "BIGB", settingsKey({ b: 1 }), { big });
+  putResult(MODULES.biomarkers, "BIGC", settingsKey({ c: 1 }), { big });
+  putResult(MODULES.biomarkers, "BIGD", settingsKey({ d: 1 }), { big });
+
+  const { totalBytes, maxTotalBytes, count } = cacheStats();
+  expect(totalBytes).toBeLessThanOrEqual(maxTotalBytes);
+  // Four ~50 MB entries (~200 MB) cannot all fit under the budget, so at least one was evicted.
+  expect(count).toBeLessThan(4);
+});
+
 test("discarding an entry is enough on its own to make a mounted hook refetch exactly once", async () => {
   // This is the property the views rely on instead of calling `recompute()` directly, so it is
   // asserted rather than assumed. See views/Reports/moduleCacheKeys for why they do that.
