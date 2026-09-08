@@ -296,6 +296,137 @@ def amplitude_response_shape(amp_mA, power, *, min_points=8):
     return out
 
 
+def _cluster_robust_ols(X, y, cluster):
+    """OLS coefficients and their CR0 sandwich covariance, clustered on ``cluster``, with
+    statsmodels' finite-sample correction applied.
+
+    Shares its derivation with `_band_t_cluster_robust` above -- the same sandwich, the same
+    correction, checked there against ``smf.ols(...).fit(cov_type="cluster")`` to six decimals --
+    kept as a separate small function rather than merged into that one, since that one is written
+    for speed inside a permutation loop run thousands of times and is deliberately left alone.
+    """
+    XtX_inv = np.linalg.pinv(X.T @ X)
+    beta = XtX_inv @ (X.T @ y)
+    resid = y - X @ beta
+    meat = np.zeros((X.shape[1], X.shape[1]))
+    for g in pd.unique(cluster):
+        m = cluster == g
+        Xu = X[m].T @ resid[m]
+        meat += np.outer(Xu, Xu)
+    V = XtX_inv @ meat @ XtX_inv
+    G = int(pd.unique(cluster).size)
+    N, K = X.shape[0], X.shape[1]
+    if G > 1 and N > K:
+        V = V * (G / (G - 1.0)) * ((N - 1.0) / (N - K))
+    return beta, V
+
+
+def amplitude_response_shape_pooled(amp_mA, power, visit, *, min_points=8):
+    """The same question as `amplitude_response_shape`, pooled across every stimulation-current
+    ladder this participant has, across every visit, rather than one visit at a time (PI decision
+    55, 2026-09-08).
+
+    WHY POOLING NEEDS A GROUPING-AWARE TEST RATHER THAN JUST CONCATENATING THE POINTS. Different
+    visits are not identical repeats of the same measurement -- impedance drift, time of day and
+    electrode condition can shift a visit's baseline power. Treating pooled points as independent
+    risks exactly the mistake decision 17 already caught elsewhere in this project: 2,985
+    measurements sharing 230 underlying values produced a significant result under a naive fit and
+    p = 0.26 once the grouping was accounted for. Here, each visit gets its own intercept (a fixed
+    effect absorbing that visit's baseline), and the quadratic coefficient's significance is judged
+    with a cluster-robust standard error, clustering by visit -- the same sandwich
+    `_band_t_cluster_robust` already uses.
+
+    ``visit`` is any array the same length as ``amp_mA`` naming which visit each point came from;
+    it need not be a date, only a label two points share exactly when they came from the same
+    stimulation-current ladder.
+
+    Returns the same dict shape as `amplitude_response_shape`, plus ``n_visits`` and ``post_peak``.
+    ``post_peak`` is ``None`` unless a peak is confirmed inside the pooled currents tested, in
+    which case it is a plain straight-line fit (slope, intercept, r-squared, point count) using
+    only the pooled points at or above the peak current -- the request was specifically for a
+    straight line on that one-sided stretch, not for every fit in this function to carry the same
+    visit-adjustment machinery, so this one is a plain unclustered `scipy.stats.linregress`.
+    """
+    x = np.asarray(amp_mA, dtype=float)
+    y = np.asarray(power, dtype=float)
+    v = np.asarray(visit)
+    if x.shape != y.shape or x.shape != v.shape:
+        raise ValueError(f"amp_mA {x.shape}, power {y.shape} and visit {v.shape} must match")
+    ok = np.isfinite(x) & np.isfinite(y)
+    x, y, v = x[ok], y[ok], v[ok]
+    n_visits = int(pd.unique(v).size) if x.size else 0
+    out = dict(curves=False, peaks_inside=False, peak_mA=float("nan"),
+               p_curvature=float("nan"), r2_linear=float("nan"), r2_quadratic=float("nan"),
+               n=int(x.size), n_visits=n_visits, verdict="not assessed", post_peak=None)
+    if x.size < max(4, min_points) or np.unique(x).size < 3:
+        out["verdict"] = (f"not assessed: {x.size} usable points at {np.unique(x).size} distinct "
+                          f"currents pooled across {n_visits} visits")
+        return out
+    ss = float(np.sum((y - y.mean()) ** 2))
+    if ss <= 0:
+        out["verdict"] = "not assessed: band power does not vary at all"
+        return out
+
+    levels = [u for u in pd.unique(v)][1:]      # drop one visit as the reference intercept
+
+    def _design(quadratic):
+        cols = [np.ones_like(x), x]
+        if quadratic:
+            cols.append(x ** 2)
+        for u in levels:
+            cols.append((v == u).astype(float))
+        return np.column_stack(cols)
+
+    X1, X2 = _design(False), _design(True)
+    if np.linalg.matrix_rank(X2) < X2.shape[1]:
+        out["verdict"] = ("not assessed: not enough independent visits to separate a per-visit "
+                          "baseline from the curve")
+        return out
+
+    beta1, _ = _cluster_robust_ols(X1, y, v)
+    beta2, V2 = _cluster_robust_ols(X2, y, v)
+    rss1 = float(np.sum((y - X1 @ beta1) ** 2))
+    rss2 = float(np.sum((y - X2 @ beta2) ** 2))
+    out["r2_linear"] = 1.0 - rss1 / ss
+    out["r2_quadratic"] = 1.0 - rss2 / ss
+
+    quad_coef = float(beta2[2])
+    se_quad = float(np.sqrt(V2[2, 2])) if V2[2, 2] > 0 else float("nan")
+    if not np.isfinite(se_quad) or se_quad == 0:
+        out["verdict"] = ("not assessed: the quadratic coefficient's cluster-robust standard "
+                          "error could not be computed")
+        return out
+    t_quad = quad_coef / se_quad
+    dof = max(x.size - X2.shape[1], 1)
+    from scipy import stats as _st
+    out["p_curvature"] = float(2.0 * _st.t.sf(abs(t_quad), dof))
+    out["curves"] = bool(out["p_curvature"] < 0.05)
+
+    lin_coef = float(beta2[1])
+    peak = -lin_coef / (2.0 * quad_coef) if quad_coef != 0 else float("nan")
+    out["peaks_inside"] = bool(out["curves"] and quad_coef < 0
+                               and np.isfinite(peak) and x.min() <= peak <= x.max())
+    out["peak_mA"] = float(peak) if out["peaks_inside"] else float("nan")
+
+    if out["peaks_inside"]:
+        post = x >= out["peak_mA"]
+        if int(np.sum(post)) >= 2 and np.unique(x[post]).size >= 2:
+            r = _st.linregress(x[post], y[post])
+            out["post_peak"] = dict(slope_per_mA=float(r.slope), intercept=float(r.intercept),
+                                    r2=float(r.rvalue ** 2), n_points=int(np.sum(post)))
+        out["verdict"] = (f"rises then falls, peaking at {out['peak_mA']:.2f} mA inside the "
+                          f"{x.min():.2f}-{x.max():.2f} mA pooled across {n_visits} visits, with "
+                          f"each visit's own baseline accounted for; a straight line explains "
+                          f"{100 * out['r2_linear']:.0f}% of the pooled variation and a curve "
+                          f"{100 * out['r2_quadratic']:.0f}%")
+    elif out["curves"]:
+        out["verdict"] = f"curved but without a peak inside the currents pooled across {n_visits} visits"
+    else:
+        out["verdict"] = (f"no curvature detected across {n_visits} pooled visits; a straight "
+                          "line is an adequate summary")
+    return out
+
+
 #: How a step's settled values are combined into one number. PI decision 2026-09-06: "generate
 #: those new plots not using the middle value of the whole settled plateau but using the average of
 #: the settled values. We've already decided that the averaging is better."

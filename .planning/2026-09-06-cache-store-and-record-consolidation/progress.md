@@ -791,3 +791,31 @@ this machine (pyenv 3.12.9) has no pytest.
 - Open item 6 resolved: reviewing the entangled spectrum-and-correlation pass in
   Biomarkers/pipeline.py for consolidation into the separated pipeline is authorized; a review
   workflow is running in the background, nothing changed yet.
+
+### Decision 55/56 — pooled, cluster-robust curvature test built and checked on live data
+
+- `within_visit.amplitude_response_shape_pooled(amp_mA, power, visit, min_points=8)` added
+  alongside the existing single-visit `amplitude_response_shape` (kept unchanged). Each visit gets
+  its own intercept (fixed effect); the quadratic coefficient's significance is judged with a
+  cluster-robust standard error clustered by visit, reusing the same CR0 sandwich with the
+  finite-sample correction `_band_t_cluster_robust` already uses and was checked against
+  statsmodels to six decimals. When a peak is confirmed inside the pooled range, a plain
+  (unclustered) straight-line fit is added using only the pooled points at or above the peak
+  current, per the PI's exact request.
+- 4 new tests in `test_within_visit.py`, including the load-bearing one: a fixture built so three
+  visits are each perfectly FLAT (no real relationship) at three different baseline levels, with
+  each visit sampling a different slice of the current range, so naive pooling traces a fake
+  rise-then-fall. Confirmed the naive single-array test IS fooled by it (curves=True), and the
+  new pooled/clustered test is NOT (curves=False) -- the direct analogue of decision 17's own
+  proof. A second test confirms a genuine peak riding on different per-visit baselines is still
+  correctly found, with the post-peak line excluding every pre-peak point.
+- Checked live on RCS08 across all 11 runs the record holds (not just the newest 4): 12
+  (contact, band) combinations exist at 25.5-28.5 Hz. Pooling clears the 8-point floor for
+  ONE_THREE_LEFT (13 points, 4 visits) and ZERO_THREE_RIGHT (12 points, 6 visits); ZERO_TWO_LEFT
+  still has only 1 visit (5 points) regardless. Result: ONE_THREE_LEFT shows significant curvature
+  at 26.5 and 27.5 Hz but without a clean interior peak, none at 25.5 or 28.5 Hz; ZERO_THREE_RIGHT
+  shows no curvature at any of the four bands. This is more mixed than the single-day clinic-sheet
+  finding and is reported as such, not smoothed over.
+- Host suite 940 passed (was 936, +4 new), both orders. Not yet wired into the stored
+  `amplitude_effect_by_band` table (decision 40) -- that is a separate integration step (extending
+  the stored schema, the key, the provenance chain) not built in this pass.

@@ -559,6 +559,94 @@ def test_too_few_points_says_not_assessed_rather_than_guessing():
     assert flat["verdict"].startswith("not assessed")
 
 
+def test_pooling_without_visit_adjustment_would_manufacture_a_fake_peak():
+    """THE FAILURE THIS FUNCTION EXISTS TO AVOID -- decision 17's lesson, applied to pooling
+    amplitude ladders across visits (PI decision 55). Three visits, each perfectly FLAT within
+    itself (no real amplitude relationship at all), but at three different baseline power levels,
+    and each visit happens to have tested a different slice of the current range. Pooled naively
+    this traces a rise-then-fall shape purely from between-visit baseline differences lining up
+    with which currents each visit tested -- exactly the shape a real physiological peak would
+    leave. The cluster-robust, per-visit-intercept test must not be fooled by it.
+    """
+    rng = np.random.RandomState(2)
+    amp_a = np.array([0.5, 1.0, 1.5] * 4)
+    amp_b = np.array([1.5, 2.0, 2.5] * 4)
+    amp_c = np.array([2.5, 3.0, 3.5] * 4)
+    amp = np.concatenate([amp_a, amp_b, amp_c])
+    power = np.concatenate([
+        100.0 + rng.normal(0, 3.0, amp_a.size),
+        200.0 + rng.normal(0, 3.0, amp_b.size),
+        100.0 + rng.normal(0, 3.0, amp_c.size),
+    ])
+    visit = np.array(["A"] * amp_a.size + ["B"] * amp_b.size + ["C"] * amp_c.size)
+
+    # Confirm the fixture actually does what it claims: naively pooled (no visit adjustment,
+    # today's single-visit function applied to the concatenated points) it looks curved.
+    naive = WV.amplitude_response_shape(amp, power)
+    assert naive["curves"] is True, "fixture is wrong: the naive pooled fit should look curved"
+
+    out = WV.amplitude_response_shape_pooled(amp, power, visit)
+    assert out["curves"] is False, "a per-visit baseline shift must not be reported as curvature"
+    assert out["n_visits"] == 3
+    assert out["post_peak"] is None
+
+
+def test_a_genuine_pooled_peak_is_detected_with_visit_baselines_removed():
+    """A real rise-then-fall shape, the SAME shape in every visit, riding on different per-visit
+    baselines -- what a genuine response pooled across real visits should look like. Must be
+    detected as curved, with the baseline correctly absorbed rather than distorting the peak, and
+    the post-peak line must use only the pooled points at or above the peak.
+    """
+    amp = np.array([0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5])
+    shape = 400.0 - 90.0 * (amp - 1.75) ** 2
+    rng = np.random.RandomState(3)
+    xs, ys, vs = [], [], []
+    for i, baseline in enumerate([0.0, 150.0, -80.0]):
+        xs.append(amp)
+        ys.append(shape + baseline + rng.normal(0, 4.0, amp.size))
+        vs.append([f"visit{i}"] * amp.size)
+    x, y, v = np.concatenate(xs), np.concatenate(ys), np.concatenate(vs)
+
+    out = WV.amplitude_response_shape_pooled(x, y, v)
+    assert out["curves"] is True
+    assert out["peaks_inside"] is True
+    assert 1.5 < out["peak_mA"] < 2.0
+    assert out["n_visits"] == 3
+    assert out["post_peak"] is not None
+    expected_post = 3 * int(np.sum(amp >= out["peak_mA"]))
+    assert out["post_peak"]["n_points"] == expected_post
+    assert out["post_peak"]["slope_per_mA"] < 0, "past the peak the pooled relationship must fall"
+
+
+def test_pooled_too_few_points_says_not_assessed():
+    out = WV.amplitude_response_shape_pooled([0.0, 1.0, 2.0], [10.0, 20.0, 15.0], ["a", "a", "a"])
+    assert out["curves"] is False
+    assert out["verdict"].startswith("not assessed")
+    assert np.isnan(out["p_curvature"])
+
+
+def test_pooling_across_visits_clears_the_single_visit_floor():
+    """Three visits with three points each -- each one alone is far below the single-visit
+    function's own eight-point floor -- combine to nine pooled points, enough to be assessed
+    (PI decision 55, and the reason open item 18 is resolved by this design)."""
+    one_visit_amp = np.array([1.0, 2.0, 3.0])
+    one_visit_power = np.array([50.0, 80.0, 60.0])
+    single = WV.amplitude_response_shape(one_visit_amp, one_visit_power)
+    assert single["verdict"].startswith("not assessed"), "fixture is wrong: one visit alone must fail"
+
+    rng = np.random.RandomState(4)
+    xs, ys, vs = [], [], []
+    for i in range(3):
+        xs.append(one_visit_amp)
+        ys.append(one_visit_power + rng.normal(0, 2.0, 3))
+        vs.append([f"v{i}"] * 3)
+    out = WV.amplitude_response_shape_pooled(np.concatenate(xs), np.concatenate(ys),
+                                             np.concatenate(vs))
+    assert out["n"] == 9
+    assert out["n_visits"] == 3
+    assert np.isfinite(out["p_curvature"]), "pooling should have let this be assessed at all"
+
+
 def test_the_step_summary_is_the_average_and_the_middle_value_stays_available():
     """PI decision 2026-09-06: average the settled values rather than take the middle one.
 
