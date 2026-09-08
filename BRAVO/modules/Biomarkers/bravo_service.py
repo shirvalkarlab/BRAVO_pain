@@ -1846,27 +1846,29 @@ def _psd_sample_index(td_list, psd_list, pro_times=None):
     return out
 
 
-def _psd_cache_dir():
+def _biomarker_cache_base_dir():
+    """The 'cache' directory itself -- parent of every ad hoc Biomarkers cache subdirectory that
+    is not the one store (the per-recording spectrum cache and its small index files, decision
+    51). The assembled matrix moved into the one store, decision 52, and no longer needs this."""
     try:
         from django.conf import settings
         base = getattr(settings, "DATASERVER_PATH", None) or os.environ.get("DATASERVER_PATH") or "/tmp/"
     except Exception:
         base = os.environ.get("DATASERVER_PATH") or "/tmp/"
-    d = os.path.join(base, "cache", "biomarker_psd")
-    os.makedirs(d, exist_ok=True)
-    return d
+    return os.path.join(base, "cache")
 
 
 def _psd_rows_cache_dir():
     """Directory for the PER-RECORDING PSD-row cache (one .npz per recording instance).
 
-    Distinct from `_psd_cache_dir` (the whole-participant assembled matrix). The per-recording cache
-    is keyed by the recording's DB identity (uid + hashed), BOTH of which are columns on the
+    Distinct from the assembled matrix, which lives in the one store (`PSD_MATRIX_KIND`, decision
+    52). The per-recording cache is keyed by the recording's DB identity (uid + hashed), BOTH of
+    which are columns on the
     Recording row — so we can tell whether a recording's spectra are already cached WITHOUT opening
     its .bdat file. That is what lets the compute path skip the ~190 s cold decode of recordings it
     has already Welch'd: only the genuinely-new files are loaded.
     """
-    base_dir = os.path.dirname(_psd_cache_dir())   # .../cache
+    base_dir = _biomarker_cache_base_dir()
     d = os.path.join(base_dir, "biomarker_psd_rows")
     os.makedirs(d, exist_ok=True)
     return d
@@ -1878,11 +1880,12 @@ def _psd_rows_index_dir():
     per-recording file for) and the rows cache (the fully assembled row list for one exact
     recording set, so a request whose set has not moved skips the per-recording loop entirely).
 
-    Distinct from `_psd_rows_cache_dir` (the per-recording files themselves) and `_psd_cache_dir`
-    (the assembled matrix). Neither of these two files replaces the per-recording cache; they only
-    avoid re-deriving what it already tells us on every call.
+    Distinct from `_psd_rows_cache_dir` (the per-recording files themselves) and the assembled
+    matrix (which lives in the one store, `PSD_MATRIX_KIND`, decision 52). Neither of these two
+    files replaces the per-recording cache; they only avoid re-deriving what it already tells us
+    on every call.
     """
-    base_dir = os.path.dirname(_psd_cache_dir())   # .../cache
+    base_dir = _biomarker_cache_base_dir()
     d = os.path.join(base_dir, "biomarker_psd_rows_index")
     os.makedirs(d, exist_ok=True)
     return d
@@ -2332,6 +2335,24 @@ def _normalize_force_refresh(value):
     return None
 
 
+#: The assembled matrix's kind name in the one store (decision 52, Track E revised). Raw: it is a
+#: deterministic decode-and-Welch of the device's own recordings, with no other module's choices
+#: baked in, the same reasoning that makes the tile cache raw.
+PSD_MATRIX_KIND = "biomarker_psd_matrix"
+
+
+def _psd_matrix_payload(mat):
+    """`psd_rows_to_matrix`'s dict, as the plain array bundle the store writes -- same fields, same
+    dtypes, as the on-disk npz this replaces, so an entry already on disk in the old ad hoc
+    directory and one written through the store are byte-for-byte the same shape."""
+    out = dict(logX=mat["logX"], t=mat["t"],
+              channel=np.asarray(mat["channel"], dtype=str),
+              source=np.asarray(mat["source"], dtype=str), f_set=mat["f_set"])
+    if mat.get("dur") is not None:
+        out["dur"] = np.asarray(mat["dur"], dtype=float)
+    return out
+
+
 def _cached_psd_matrix(participant_uid, td_list=None, psd_list=None, pro_times=None,
                        force_refresh=None):
     """Load the per-channel PSD matrix for this participant from disk, or build it and persist it.
@@ -2367,18 +2388,10 @@ def _cached_psd_matrix(participant_uid, td_list=None, psd_list=None, pro_times=N
         _log.info("Biomarkers: force_refresh=%r — bypassing %s cache for %s", _fr,
                   "matrix + per-recording" if _fr == "all" else "matrix", participant_uid)
     sig, _entries = _psd_matrix_signature_orm(participant_uid, pro_times=pro_times)
-    path = os.path.join(_psd_cache_dir(), f"{participant_uid}_{sig}.npz")
-    if os.path.exists(path) and not _fr:
-        try:
-            z = np.load(path, allow_pickle=True)
-            out = {"logX": z["logX"], "t": z["t"],
-                   "channel": z["channel"].astype(object), "source": z["source"].astype(object),
-                   "f_set": z["f_set"]}
-            if "dur" in z.files:
-                out["dur"] = z["dur"]
-            return out
-        except Exception as e:
-            _log.warning("Biomarkers: PSD matrix cache read failed (%s); recomputing", e)
+    if not _fr:
+        cached = _cache_store.load(PSD_MATRIX_KIND, participant_uid, sig)
+        if cached is not None:
+            return cached
 
     rows, n_cached, n_computed = _assemble_psd_rows_cached(
         participant_uid, pro_times=pro_times, force_recompute=(_fr == "all"))
@@ -2388,16 +2401,12 @@ def _cached_psd_matrix(participant_uid, td_list=None, psd_list=None, pro_times=N
     mat = _sp.psd_rows_to_matrix(rows)
     if mat is None:
         return None
-    try:
-        _save = dict(logX=mat["logX"], t=mat["t"],
-                     channel=np.asarray(mat["channel"], dtype=str),
-                     source=np.asarray(mat["source"], dtype=str), f_set=mat["f_set"])
-        if mat.get("dur") is not None:
-            _save["dur"] = np.asarray(mat["dur"], dtype=float)
-        np.savez(path, **_save)
-    except Exception as e:
-        _log.warning("Biomarkers: PSD matrix cache write failed (%s)", e)
-    return mat
+    payload = _psd_matrix_payload(mat)
+    if not _cache_store.store(PSD_MATRIX_KIND, participant_uid, sig, payload,
+                              writer="biomarkers", trigger="biomarker_page",
+                              n_recordings=len(_entries)):
+        _log.warning("Biomarkers: PSD matrix cache write did not land for %s", participant_uid)
+    return payload
 
 
 def warm_psd_cache(participant_uid, pro_times=None, decoded_td=None, decoded_psd=None):
@@ -2457,18 +2466,9 @@ def _warm_centered_matrix_from_decoded(participant_uid, td_list, psd_list, pro_t
     """
     from .routines import streaming_psd as _sp
     sig, _entries = _psd_matrix_signature_orm(participant_uid, pro_times=pro_times)
-    path = os.path.join(_psd_cache_dir(), f"{participant_uid}_{sig}.npz")
-    if os.path.exists(path):
-        try:
-            z = np.load(path, allow_pickle=True)
-            out = {"logX": z["logX"], "t": z["t"],
-                   "channel": z["channel"].astype(object), "source": z["source"].astype(object),
-                   "f_set": z["f_set"]}
-            if "dur" in z.files:
-                out["dur"] = z["dur"]
-            return out
-        except Exception as e:
-            _log.warning("Biomarkers: PSD matrix cache read failed (%s); rebuilding from decoded", e)
+    cached = _cache_store.load(PSD_MATRIX_KIND, participant_uid, sig)
+    if cached is not None:
+        return cached
 
     rows = []
     # TD streaming -> rating-centered rows; montage/survey -> first-window rows (PRO-agnostic).
@@ -2482,16 +2482,13 @@ def _warm_centered_matrix_from_decoded(participant_uid, td_list, psd_list, pro_t
     mat = _sp.psd_rows_to_matrix(rows)
     if mat is None:
         return None
-    try:
-        _save = dict(logX=mat["logX"], t=mat["t"],
-                     channel=np.asarray(mat["channel"], dtype=str),
-                     source=np.asarray(mat["source"], dtype=str), f_set=mat["f_set"])
-        if mat.get("dur") is not None:
-            _save["dur"] = np.asarray(mat["dur"], dtype=float)
-        np.savez(path, **_save)
-    except Exception as e:
-        _log.warning("Biomarkers: PSD matrix cache write (from decoded) failed (%s)", e)
-    return mat
+    payload = _psd_matrix_payload(mat)
+    if not _cache_store.store(PSD_MATRIX_KIND, participant_uid, sig, payload,
+                              writer="biomarkers", trigger="timeline_render",
+                              n_recordings=len(_entries)):
+        _log.warning("Biomarkers: PSD matrix cache write (from decoded) did not land for %s",
+                     participant_uid)
+    return payload
 
 
 def _derive_chan_order(td_recordings):

@@ -36,19 +36,19 @@ def _source(name):
     return p.read_text(encoding="utf8") if p.exists() else ""
 
 
-#: STILL ALLOWED, AND ONLY UNTIL THE PER-RECORDING SPECTRUM DIRECTORIES ARE FOLDED IN.
+#: STILL ALLOWED, AND ONLY FOR THE ONE CACHE DECIDED TO STAY OUTSIDE THE STORE (decision 51).
 #:
-#: `biomarker_psd` (97 files, 500.32 MB) and `biomarker_psd_rows` (6,309 files, 30.47 MB) are a
-#: SEPARATE cache from the shared tile store, with its own directory resolver and its own atomic
-#: writer in the biomarker module. Folding them into the one store is its own step in the approved
-#: plan — "Move every cache to the single approved location" — and doing it here would mix a
-#: 500 MB migration into the deduplication.
+#: `biomarker_psd` (the assembled matrix) moved into the one store, decision 52, so its own
+#: directory-construction exemption is gone. `biomarker_psd_rows` (one small file per recording,
+#: 6,309 files, 30.47 MB) stays as its own lightweight cache on purpose: the store keeps one
+#: current snapshot per participant per kind, replaced whole on every write, which would force a
+#: full rewrite on every new recording, exactly the cost the per-recording cache exists to avoid.
+#: `ARCHITECTURE_cache_store.md` §2 and decision 51 have the measurement. Its base directory and
+#: its own atomic writer are what remain exempt.
 #:
 #: Each entry is matched on its text rather than its line number, because line numbers drift.
-#: **When that step lands, these two exemptions must be deleted**, and the count assertion below
-#: is what will fail and say so.
 _ALLOWED_PENDING_MIGRATION = (
-    'os.path.join(base, "cache", "biomarker_psd")',
+    'os.path.join(base, "cache")',
     "os.replace(tmp, path)",
 )
 

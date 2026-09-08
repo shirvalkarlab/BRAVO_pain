@@ -741,3 +741,27 @@ this machine (pyenv 3.12.9) has no pytest.
   found in the broader distribution work this decision followed).
 - Host suite: 936 passed (was 934, +2 net), both orders. Container suite unaffected: 540 (this
   module isn't part of it).
+
+### Decision 53 — the assembled matrix moved into the one store; Track E complete
+
+- Both writers (`_cached_psd_matrix`, the request-thread path; `_warm_centered_matrix_from_decoded`,
+  the eager-warm path from already-decoded recordings) and their shared reader now go through
+  `store.load`/`store.store` under `biomarker_psd_matrix`, replacing the ad hoc `_psd_cache_dir()`
+  directory and its own `np.savez` writer. Added to `provenance.RAW_KINDS` (deterministic
+  decode-and-Welch, no other module's choices baked in, same reasoning as the tile cache).
+- `_psd_cache_dir()` deleted; a small `_biomarker_cache_base_dir()` replaces the one legitimate
+  thing it was still needed for (the per-recording cache's own base path, decision 51, kept
+  outside the store on purpose). `test_one_store.py`'s exemption list drops the assembled-matrix
+  directory-construction string; only the per-recording cache's own base-directory and
+  atomic-writer exemptions remain.
+- Proven on RCS08, live store root untouched (a throwaway root override for this kind only): a
+  store round trip (write, then read back) is byte-identical, 654,146 fields compared, 0
+  differences. A second check, comparing a build made mostly from the per-recording cache against
+  a fully fresh rebuild, first showed 206,107 apparent differences out of 654,146 — investigated
+  rather than dismissed: traced to a pre-existing property of the row-assembly step (unrelated to
+  this migration) that never sorts its rows, so a build's row order depends on which recordings
+  happened to be cache hits. After sorting both builds to the same order by time, electrode and
+  source, every one of 629,129 power values and every row's identity (time, electrode, source)
+  matched exactly.
+- Host suite 936 passed, both orders. Container suite 540, unaffected (no new container tests).
+- **Track E, and everything not gated on the PI, is now complete.**

@@ -59,7 +59,11 @@ MODULES = ("biomarkers", "closed_loop", "stim_optimizer")
 #: `exploration_ladder` kind, which stays derived and is what the constructed-cycle test refuses.
 #: (It was called `settings_stream` until 2026-09-07; that name collided with the function that
 #: reads the device's programmed history, a different and raw thing.)
-RAW_KINDS = ("raw_lsb_tiles", "redcap_reports", "therapy_settings", "therapy_pain_matched")
+#: `biomarker_psd_matrix` (Track E, decision 52) is the assembled per-channel spectrum matrix, a
+#: deterministic decode-and-Welch of the device's own recordings with no other module's choices
+#: baked in, the same reasoning that makes the tile cache raw.
+RAW_KINDS = ("raw_lsb_tiles", "redcap_reports", "therapy_settings", "therapy_pain_matched",
+            "biomarker_psd_matrix")
 
 
 def module_of(key):

@@ -30,13 +30,10 @@ Two goals, in this order, and the second is subordinate to the first.
 
 ## Next Step
 
-**Open item 20 is resolved (decision 52): the device ceiling is now a precomputed table, the
-99.5th percentile of RCS08's full recorded history per electrode and band centre, replacing the
-same-window median-and-fold rule that could not tell a bad window from a clean one. Built, tested
-(host 936 passed, container 540 unaffected), and proven live: all 19 lookups in the current
-comparison hit the table, and a constructed window that is 60% spikes — undetectable under the old
-rule — is now correctly caught. Left: the assembled matrix still needs to move into the one store
-as a raw kind (unrelated, queued next).**
+**Track E is now complete (decision 53): the assembled matrix moved into the one store as
+`biomarker_psd_matrix`, alongside decision 52's device-ceiling replacement. Nothing outstanding
+remains that is not the PI's: the spectrum-directory decision, the ceiling rule, and this
+migration are all built, tested and pushed. Nothing is queued.**
 
 ## Current Phase
 
@@ -274,9 +271,10 @@ store.
   files by no page request), the stored spectra against a fresh computation (547,118 values,
   0 differences), what connecting would save (about 2.5 s of a 52 s page, measured, smaller
   than the 4.05 s projected), and three options with a recommendation. Nothing changed
-- [ ] 2. Connect the live path to the spectrum cache that already exists — **decided 2026-09-07
-  (decision 50): both directories become raw kinds in the one store; the per-recording directory
-  is deleted, not migrated.** In progress.
+- [x] 2. Connect the live path to the spectrum cache that already exists — **done 2026-09-08
+  (decisions 51, 52, 53).** The assembled matrix moved into the one store as `biomarker_psd_matrix`
+  (both writers, both readers, decision 53); the per-recording directory stays in place, sped up
+  by the stamp-and-manifest shortcut instead (decision 51).
 
 ### Phase 5: Verify, rebuild, and close the record
 

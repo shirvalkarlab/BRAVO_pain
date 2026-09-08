@@ -175,15 +175,21 @@ host test suite runs from `BRAVO/modules` with that directory as the root, which
 `CacheStore`. **A single spelling breaks one of the two runners at import time**, which is how this
 was found.
 
-### What did NOT move, and why
+### What moved later, and what did not
 
-`biomarker_psd` (97 files, 500.32 MB) and `biomarker_psd_rows` (6,309 files, 30.47 MB) are a
-separate cache with its own resolver at `bravo_service._psd_cache_dir` and its own atomic writer.
-**Folding them in is its own step in the plan** — "Move every cache to the single approved
-location" — and doing it during the deduplication would have mixed a 500 MB migration into it.
-`test_one_store.py` grandfathers exactly those two constructs in `_ALLOWED_PENDING_MIGRATION` and
-**asserts the count is exactly one, so when that step lands the test fails and says to delete the
-exemption.**
+`biomarker_psd` (the assembled matrix, 97 files, 500.32 MB) and `biomarker_psd_rows` (the
+per-recording spectra, 6,309 files, 30.47 MB) were originally a separate cache with its own
+resolver at `bravo_service._psd_cache_dir` and its own atomic writer, kept out of the
+deduplication on purpose so a 500 MB migration would not be mixed into it. **Decisions 51-53
+(2026-09-08) settled both, and settled them differently.** The assembled matrix moved into the one
+store as the raw kind `biomarker_psd_matrix`; both its writers and its reader go through
+`store.load`/`store.store` now, and `_psd_cache_dir` is gone. The per-recording spectra stay
+exactly where they are: the store keeps one current snapshot per participant per kind, replaced
+whole on every write, which would force a full rewrite of the per-recording cache on every single
+new recording — the same cost the per-recording cache exists to avoid, measured at about a
+six-fold slowdown on every future upload (decision 51). `test_one_store.py`'s exemption for the
+assembled matrix's own directory-construction is gone; the per-recording cache's own base
+directory and atomic writer remain the only grandfathered constructs.
 
 The tile kind also keeps its historical directory **and its historical file name**, because
 245.90 MB of tiles are already on disk and cost 37 seconds to rebuild. The two closed-loop entries
