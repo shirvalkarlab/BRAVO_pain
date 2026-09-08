@@ -710,3 +710,34 @@ this machine (pyenv 3.12.9) has no pytest.
 - Container suite after the change: PASS=540 FAIL=0 (537 before, +3 new tests). Host suite
   unaffected (Biomarkers is not part of it) — re-run in both orders as a whole-platform check:
   934 passed, 41 skipped, both orders.
+
+### Decision 52 — the device ceiling replaced with a precomputed historical-percentile table
+
+- The PI chose, after a five-angle literature review of Percept-adjacent outlier methods: discard
+  the top 0.5% per group, computed once from RCS08's full history, separately for three sources
+  (time-domain-derived tiles, PSD-derived tiles, the device's own power-domain telemetry), by band
+  centre and by electrode; hard-coded, and wired in to replace `DEVICE_SPIKE_FOLD` immediately for
+  the power-domain route (the other two sources' tables are built but not yet wired anywhere).
+- Built: `BRAVO/modules/ClosedLoopDeployment/ceiling_thresholds.py` (auto-generated, provenance in
+  its own docstring), `device_power_ceiling()` and `CEILING_RULE_VERSION` in
+  `three_source_response.py`, `settled_device_band_power` now takes `sensing_contact`/`centre_hz`
+  instead of `spike_fold`. `adapter.py`'s ground-truth signature and reported summary updated to
+  match. A group whose entire history is exactly zero is left out of its table rather than given a
+  ceiling of zero (would flag every future nonzero reading); 4 of 32 power-domain groups were this
+  way. A group with no historical entry is not a reason to refuse a window — the check just does
+  not run for it.
+- Tests rewritten in `test_ground_truth.py` rather than left asserting the old fold behaviour (5
+  tests, 2 net new): a spike above a monkeypatched historical ceiling excluded and counted; no
+  historical entry means the check does not run and nothing is refused over it; a window that is
+  60% spikes is now correctly caught and its count is exact, where the old rule found 0 — the
+  specific failure this replacement exists for; a smaller share of spikes still lets the setting
+  succeed.
+- Proven live on RCS08 via the bridge: all 19 `device_power_ceiling` calls in the current
+  comparison hit the table with the correct rounded key; on the 4 runs currently compared, the new
+  rule excludes 0 samples against 12 under the old rule, which is expected and not a regression —
+  a population-wide 99.5th percentile is generally a higher, less aggressive ceiling on an ordinary
+  clean settled window than 10x that window's own tight median, while still existing to catch the
+  genuine rare extremes (a value of 2,008,604 and the device's error code 4294967295 were both
+  found in the broader distribution work this decision followed).
+- Host suite: 936 passed (was 934, +2 net), both orders. Container suite unaffected: 540 (this
+  module isn't part of it).

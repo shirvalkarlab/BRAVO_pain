@@ -30,12 +30,13 @@ Two goals, in this order, and the second is subordinate to the first.
 
 ## Next Step
 
-**Decision 50 was revised after measurement (decision 51): the per-recording directory stays in
-place rather than moving into the store, and instead gets a stamp-and-manifest speed-up in front of
-its per-recording loop, now built, regression-tested and proven on RCS08 with zero differences.
-Left from decision 50: the assembled matrix still needs to move into the one store as a raw kind —
-built nowhere yet. The device ceiling constant (open item 20) is still his: he asked for more
-explanation of the current rule and has not yet chosen the multiplier or the rule's shape.**
+**Open item 20 is resolved (decision 52): the device ceiling is now a precomputed table, the
+99.5th percentile of RCS08's full recorded history per electrode and band centre, replacing the
+same-window median-and-fold rule that could not tell a bad window from a clean one. Built, tested
+(host 936 passed, container 540 unaffected), and proven live: all 19 lookups in the current
+comparison hit the table, and a constructed window that is 60% spikes — undetectable under the old
+rule — is now correctly caught. Left: the assembled matrix still needs to move into the one store
+as a raw kind (unrelated, queued next).**
 
 ## Current Phase
 

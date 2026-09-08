@@ -1255,7 +1255,7 @@ def ground_truth_signature(participant, *, tiles_key, min_settings=3):
     return (_gt.KIND, _gt.RULE_VERSION, str(getattr(participant, "uid", participant)),
             tiles_key, recording_set_signature(participant), "all_runs", int(min_settings),
             float(_wv.PRE_CHANGE_WINDOW_S), int(_wv.MIN_CHUNKS_PRE_CHANGE),
-            float(_3src.DEVICE_SPIKE_FOLD), float(_3src.DEVICE_MIN_SAMPLE_FRACTION))
+            _3src.CEILING_RULE_VERSION, float(_3src.DEVICE_MIN_SAMPLE_FRACTION))
 
 
 def ground_truth_if_stored(participant, *, min_settings=3):
@@ -1299,7 +1299,7 @@ def write_ground_truth(participant, build, *, min_settings=3):
                "routes": routes, "store_key": None,
                "device_spikes_excluded": int(table["device_spikes_excluded"].sum()) if len(table) else 0}
     from . import three_source_response as _3src
-    summary["device_spike_fold"] = float(_3src.DEVICE_SPIKE_FOLD)
+    summary["device_spike_ceiling_rule"] = _3src.CEILING_RULE_VERSION
     if not len(table):
         summary["reason"] = "no route had a settled value in any run"
         return summary
@@ -1316,7 +1316,7 @@ def write_ground_truth(participant, build, *, min_settings=3):
                                  extra={"min_settings": int(min_settings),
                                         "n_rows": summary["n_rows"], "n_runs": summary["n_runs"],
                                         "routes": routes,
-                                        "device_spike_fold": float(_3src.DEVICE_SPIKE_FOLD)},
+                                        "device_spike_ceiling_rule": _3src.CEILING_RULE_VERSION},
                                  root=_SHARED_CACHE_DIR_OVERRIDE)
     summary["served_from_store"] = False
     summary["store_key"] = _cache_store.product_key(_gt.KIND, uid, sig)

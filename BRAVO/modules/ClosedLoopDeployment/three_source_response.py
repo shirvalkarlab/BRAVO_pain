@@ -158,15 +158,33 @@ DEVICE_SETTLE_AFTER_CURRENT_STOPS_S = 5.0
 #: out-of-ten rule the other two routes use, written for a stream that samples fifteen times faster.
 DEVICE_MIN_SAMPLE_FRACTION = 2.0 / 3.0
 
-#: THE DEVICE ROUTE'S SATURATION CEILING (decision 33, condition 1). About 1 percent of the
-#: device's own band-power samples that sit alongside a voltage trace are spikes: the reading
-#: jumps to ten thousand or a hundred thousand while the simultaneous trace stays flat. A sample
-#: more than this many times the median of its own settled window is excluded from the average
-#: AND COUNTED, and a setting left with too few samples falls through to the voltage-trace route
-#: with that reason recorded. THE VALUE IS PROVISIONAL: the decision fixes the rule, not the
-#: number, and the number is here for the PI to confirm or change (open item 20). It is a fold
-#: against the window's own median so that no absolute level is written into the code.
-DEVICE_SPIKE_FOLD = 10.0
+#: THE DEVICE ROUTE'S SATURATION CEILING (decision 33, condition 1; decision 52 for this version).
+#: About 1 percent of the device's own band-power samples that sit alongside a voltage trace are
+#: spikes: the reading jumps to ten thousand or a hundred thousand while the simultaneous trace
+#: stays flat. A sample above the ceiling for its own (electrode, band centre) is excluded from
+#: the average AND COUNTED, and a setting left with too few samples falls through to the
+#: voltage-trace route with that reason recorded.
+#:
+#: THE CEILING NO LONGER COMES FROM THE WINDOW IT CHECKS (open item 20's second concern, resolved
+#: 2026-09-08). The first version multiplied the same 30-second window's own median by a fixed
+#: fold, which fails exactly when it matters most: a window that is mostly spikes has an inflated
+#: median, so the check can miss the very case it exists for. The ceiling is now looked up from
+#: `ceiling_thresholds.POWER_DOMAIN_CEILINGS`, the 99.5th percentile of every historical reading
+#: this participant has ever produced for that exact electrode and band centre -- a period of data
+#: that can never include the window being judged. See that module's docstring for how the table
+#: was built and what it deliberately leaves out.
+CEILING_RULE_VERSION = "v2_historical_99p5_pctl_2026_09_08"
+
+
+def device_power_ceiling(sensing_contact, centre_hz):
+    """The precomputed ceiling for this electrode and band centre, or None with no historical
+    basis to judge it -- which means the ceiling check simply does not run, never that the window
+    is refused. Matches on the band centre rounded to one decimal place, the same rounding the
+    table was built with; the device's own centre_hz values are already this coarse."""
+    from . import ceiling_thresholds as _ceil
+    if sensing_contact is None or centre_hz is None or not np.isfinite(centre_hz):
+        return None
+    return _ceil.POWER_DOMAIN_CEILINGS.get((str(sensing_contact), round(float(centre_hz), 1)))
 
 
 # -------------------------------------------------------------------------------------------------
@@ -300,7 +318,7 @@ def settled_device_band_power(step_t0, step_end_t, current_mA, sample_t, sample_
                               settle_s=DEVICE_SETTLE_AFTER_CURRENT_STOPS_S,
                               min_fraction=DEVICE_MIN_SAMPLE_FRACTION,
                               block=None, require_rise_into_setting=True,
-                              spike_fold=DEVICE_SPIKE_FOLD):
+                              sensing_contact=None, centre_hz=None):
     """The settled level of the device's own band power, one number per stimulation setting.
 
     This is the same rule the other two routes follow -- average the last ``window_s`` seconds before
@@ -318,11 +336,13 @@ def settled_device_band_power(step_t0, step_end_t, current_mA, sample_t, sample_
     refused. ``table`` carries the current, the window used, the sample count, whether the setting
     was accepted and, when it was not, why not.
 
-    THE CEILING CHECK (decision 33). Inside each settled window, a sample above ``spike_fold``
-    times the window's own median is a device-side spike: excluded from the average, counted in
-    ``n_spikes_excluded``, and the ceiling itself is written in ``ceiling_device_units``. A window
-    left with fewer samples than the rule requires is refused with the spike count in its reason,
-    so the setting falls through to the voltage-trace route rather than resting on a spike.
+    THE CEILING CHECK (decision 33, decision 52). Inside each settled window, a sample above the
+    precomputed historical ceiling for this ``sensing_contact`` and ``centre_hz`` is a device-side
+    spike: excluded from the average, counted in ``n_spikes_excluded``, and the ceiling itself is
+    written in ``ceiling_device_units``. A window left with fewer samples than the rule requires is
+    refused with the spike count in its reason, so the setting falls through to the voltage-trace
+    route rather than resting on a spike. With no ``sensing_contact``/``centre_hz`` given, or no
+    historical ceiling on record for that pair, the check simply does not run for that window.
     """
     t0 = np.asarray(step_t0, dtype=float)
     amp = np.asarray(current_mA, dtype=float)
@@ -366,15 +386,12 @@ def settled_device_band_power(step_t0, step_end_t, current_mA, sample_t, sample_
 
         reason = ""
         n_spikes = 0
-        ceiling = None
-        if n_found:
-            med = float(np.nanmedian(sp[sel]))
-            if np.isfinite(med) and med > 0 and spike_fold is not None:
-                ceiling = float(spike_fold) * med
-                spike = sel & (sp > ceiling)
-                n_spikes = int(spike.sum())
-                sel = sel & ~spike
-                n_found = int(sel.sum())
+        ceiling = device_power_ceiling(sensing_contact, centre_hz)
+        if n_found and ceiling is not None:
+            spike = sel & (sp > ceiling)
+            n_spikes = int(spike.sum())
+            sel = sel & ~spike
+            n_found = int(sel.sum())
         if require_rise_into_setting and not up_from_previous[i]:
             reason = ("the current did not go up to reach this setting, so the thirty seconds "
                       "would mix this setting with the higher or equal current before it")
@@ -384,8 +401,8 @@ def settled_device_band_power(step_t0, step_end_t, current_mA, sample_t, sample_
         elif n_found < need:
             reason = (f"the device reported only {n_found} samples of its own band power in the "
                       f"{want:g} seconds before the next current change, and {need} are required"
-                      + (f" ({n_spikes} excluded as spikes above the ceiling of {ceiling:.6g} "
-                         f"device units, {float(spike_fold):g} times the window's median)"
+                      + (f" ({n_spikes} excluded as spikes above the historical ceiling of "
+                         f"{ceiling:.6g} device units for this electrode and band centre)"
                          if n_spikes else ""))
         else:
             held = sa[sel]
@@ -1011,7 +1028,8 @@ def build_comparison(*, label, ramped_side, sensing_contact, steps, visit_date,
             steps["t0"].to_numpy(dtype=float), steps["t_end"].to_numpy(dtype=float),
             steps["current_mA"].to_numpy(dtype=float),
             device_band_power["t"], device_band_power["power"], device_band_power["mA"],
-            block=steps["block"].to_numpy(), window_s=window_s)
+            block=steps["block"].to_numpy(), window_s=window_s,
+            sensing_contact=sensing_contact, centre_hz=programmed)
         used = np.isfinite(power)
         panel.n_settings_used = int(used.sum())
         if panel.n_settings_used == 0:

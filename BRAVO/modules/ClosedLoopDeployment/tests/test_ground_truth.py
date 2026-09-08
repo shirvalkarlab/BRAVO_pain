@@ -26,30 +26,62 @@ def _device_stream(n_steps=3, hz=2.0, hold_s=90.0, level=200.0, spikes_at=()):
     return np.asarray(step_t0), np.asarray(step_end), np.asarray([1.0 + 0.5 * k for k in range(n_steps)]), t, p, a
 
 
-def test_a_spike_above_the_ceiling_is_excluded_and_counted_and_the_setting_is_kept():
+def test_a_spike_above_the_historical_ceiling_is_excluded_and_counted_and_the_setting_is_kept(monkeypatch):
+    from ClosedLoopDeployment import ceiling_thresholds as CT
+    monkeypatch.setitem(CT.POWER_DOMAIN_CEILINGS, ("TEST_CONTACT", 12.5), 1000.0)
     st0, se, amps, t, p, a = _device_stream(spikes_at=(T0 + 90 + 70.0,))    # one spike in setting 2's window
-    power, table = T3.settled_device_band_power(st0, se, amps, t, p, a, block=None)
+    power, table = T3.settled_device_band_power(st0, se, amps, t, p, a, block=None,
+                                                sensing_contact="TEST_CONTACT", centre_hz=12.5)
     assert table.loc[1, "n_spikes_excluded"] == 1 and table.loc[0, "n_spikes_excluded"] == 0
     assert np.isfinite(power[1]) and abs(power[1] - 400.0) < 1e-9, "the spike did not enter the average"
-    assert table.loc[1, "ceiling_device_units"] == 10.0 * 400.0
+    assert table.loc[1, "ceiling_device_units"] == 1000.0
 
 
-def test_a_window_left_with_too_few_samples_after_spikes_falls_through_with_the_count_in_its_reason():
+def test_with_no_historical_ceiling_the_check_does_not_run_and_nothing_is_refused_over_it(monkeypatch):
+    """A contact/centre this participant has no history for is not a reason to refuse the window --
+    the ceiling check simply does not fire, exactly as when the ceiling used to be turned off."""
+    from ClosedLoopDeployment import ceiling_thresholds as CT
+    monkeypatch.setattr(CT, "POWER_DOMAIN_CEILINGS", {})
+    st0, se, amps, t, p, a = _device_stream(spikes_at=(T0 + 90 + 70.0,))
+    power, table = T3.settled_device_band_power(st0, se, amps, t, p, a, block=None,
+                                                sensing_contact="NEVER_SEEN_BEFORE", centre_hz=12.5)
+    assert table.loc[1, "n_spikes_excluded"] == 0
+    assert table.loc[1, "ceiling_device_units"] is None
+    assert np.isfinite(power[1]), "with no basis to judge it, the spike is left in the average"
+
+
+def test_a_window_that_is_mostly_spikes_is_correctly_caught_where_the_old_rule_could_not(monkeypatch):
+    """THE FAILURE THIS REPLACEMENT FIXES. The previous rule computed its ceiling from the same
+    window it then checked, so a window whose own median was itself a spike hid every spike in it
+    (a window 60 percent spikes had a spike-level median, so ten times it excluded nothing). The
+    historical ceiling comes from outside the window, so it correctly finds all of them regardless
+    of how much of the window they make up -- and the window still correctly falls through
+    afterward, for the right reason, because too few clean samples are left to trust."""
+    from ClosedLoopDeployment import ceiling_thresholds as CT
+    monkeypatch.setitem(CT.POWER_DOMAIN_CEILINGS, ("TEST_CONTACT", 12.5), 1000.0)
     st0, se, amps, t, p, a = _device_stream(hz=2.0)
-    # make most of setting 2's last 30 s spikes: the window then has too few clean samples
     win = (t >= se[1] - 30.0) & (t < se[1]) & (a == 1.5)
     idx = np.flatnonzero(win)
     p[idx[: int(0.6 * idx.size)]] = 50_000.0
-    power, table = T3.settled_device_band_power(st0, se, amps, t, p, a, block=None)
-    # the median of a window that is 60 percent spikes IS a spike, so the ceiling sits above the
-    # spikes and nothing is excluded; the rule keeps the setting and its value is the spike level.
-    # That is the honest limit of a median ceiling and the reason the constant is provisional.
-    assert table.loc[1, "n_spikes_excluded"] == 0
-    p2 = p.copy(); p2[idx[: int(0.4 * idx.size)]] = 50_000.0; p2[idx[int(0.4 * idx.size):]] = 400.0
-    power2, table2 = T3.settled_device_band_power(st0, se, amps, t, p2, a, block=None,
-                                                  min_fraction=0.9)
-    assert table2.loc[1, "n_spikes_excluded"] == int(0.4 * idx.size)
-    assert not np.isfinite(power2[1]) and "excluded as spikes" in table2.loc[1, "why_not_used"]
+    power, table = T3.settled_device_band_power(st0, se, amps, t, p, a, block=None,
+                                                sensing_contact="TEST_CONTACT", centre_hz=12.5)
+    assert table.loc[1, "n_spikes_excluded"] == int(0.6 * idx.size), \
+        "the old rule found 0 spikes here; the historical ceiling must find all of them"
+    assert not np.isfinite(power[1]) and "excluded as spikes" in table.loc[1, "why_not_used"], \
+        "too few clean samples remain (40%, below the 2/3 required), so the setting still falls through"
+
+
+def test_a_smaller_share_of_spikes_is_excluded_and_the_setting_still_succeeds(monkeypatch):
+    from ClosedLoopDeployment import ceiling_thresholds as CT
+    monkeypatch.setitem(CT.POWER_DOMAIN_CEILINGS, ("TEST_CONTACT", 12.5), 1000.0)
+    st0, se, amps, t, p, a = _device_stream(hz=2.0)
+    win = (t >= se[1] - 30.0) & (t < se[1]) & (a == 1.5)
+    idx = np.flatnonzero(win)
+    p[idx[: int(0.2 * idx.size)]] = 50_000.0    # 20% spikes: 80% clean, comfortably above 2/3
+    power, table = T3.settled_device_band_power(st0, se, amps, t, p, a, block=None,
+                                                sensing_contact="TEST_CONTACT", centre_hz=12.5)
+    assert table.loc[1, "n_spikes_excluded"] == int(0.2 * idx.size)
+    assert np.isfinite(power[1]) and abs(power[1] - 400.0) < 1e-9
 
 
 def _rows(run="r1"):
@@ -171,7 +203,7 @@ def test_the_verdict_is_written_once_with_the_tile_entry_in_its_provenance_and_r
     assert first["routes"]["device"] == 2 and first["routes"]["voltage_trace_calibrated"] >= 2
     assert first["device_spikes_excluded"] == 5
     assert first["written"] is True and first["n_rows"] > 0 and first["routes"]
-    assert first["device_spike_fold"] == T3.DEVICE_SPIKE_FOLD
+    assert first["device_spike_ceiling_rule"] == T3.CEILING_RULE_VERSION
     stamp = st.read_stamp(GT.KIND, "PARTICIPANT",
                           AD.ground_truth_signature("PARTICIPANT", tiles_key="raw_lsb_tiles/PARTICIPANT/tiles1"),
                           root=sandbox)
