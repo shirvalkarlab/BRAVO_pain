@@ -69,11 +69,18 @@ a user actually opens, the same way they do now for the one candidate that arriv
 - No existing stored value changes; this adds fields to what is already stored and computed, and
   adds a new authorized reader to an existing provenance chain.
 
-## Open questions requiring the PI's explicit sign-off before implementation
+## Resolved 2026-09-08
 
-Whether Closed-Loop Deployment's compact grid should show the family-wise-corrected label from the
-companion ADR (`adr_2026-09-08_biomarkers_sweep_family_wise_correction.md`) alongside the two new
-fast columns, and whether a point that fails the device's own rules should still be selectable for
-inspection (informational) or should be visually suppressed on that page specifically, since that
-page's whole purpose is deployability rather than exploration. Per CLAUDE.md §10 rule 8, this ADR
-being written is not authorization to build it.
+**Both open questions answered directly by the PI.** The compact grid on Closed-Loop Deployment
+**does** show the family-wise-corrected label from the companion ADR
+(`adr_2026-09-08_biomarkers_sweep_family_wise_correction.md`) alongside the two new fast columns,
+labelled the same informational way it is on the Biomarkers exploration page. A band the device's
+own rules already forbid **stays selectable, shown greyed out or marked "blocked by device
+rules,"** rather than being removed from the grid — matching this project's standing rule that an
+absent or negative finding is always shown and labelled, never silently hidden (§2 principle 2's
+own reasoning, and the three-state established/not-settled/not-assessed discipline used throughout
+this feature).
+
+This is now authorization to build Track D as specified. Per CLAUDE.md §10 rule 8, implementation
+of the rest of this project's tracks still needs its own separate go-ahead where any further open
+question surfaces — this ADR's two questions are the only ones that were outstanding for Track D.
