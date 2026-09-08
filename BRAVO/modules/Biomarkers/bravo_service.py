@@ -4614,6 +4614,58 @@ def _validate_band_core(request_data):
     }
 
 
+#: ==========================================================================================
+#: TRACK D, TASK D2(b) — the cross-setting-stability column on the calibrated grid.
+#:
+#: "Does this band mean the same thing about pain at every stimulation setting" is already answered
+#: for ONE chosen candidate, on the Closed-Loop Deployment page, by
+#: `ClosedLoopDeployment.adapter.report_for_participant` (see
+#: `ClosedLoopDeployment/WIRING_stability_into_the_report.md`, Route A): it calls
+#: `_validate_band_core` here, reads the `"stim"` result back out, and hands THAT RAW RESULT to
+#: `ClosedLoopDeployment.stability.finding_from_stability_result` for the honest four-answer
+#: translation.
+#:
+#: THIS FUNCTION DOES ONLY THE FIRST HALF, ON PURPOSE. `stability.py`'s own module docstring states
+#: the dependency direction as a hard rule: "it imports from Biomarkers, and Biomarkers must never
+#: import it back, because that would be a loop neither module could load out of." An earlier draft
+#: of this function violated that rule by importing `ClosedLoopDeployment.stability` from inside
+#: Biomarkers -- caught immediately when the container (which loads `Biomarkers.bravo_service` but
+#: never `ClosedLoopDeployment`) tried to import it and failed. So the honest-four-value TRANSLATION
+#: stays on the Closed-Loop Deployment side, where the one-way arrow already points, and this
+#: function returns only the untranslated `_validate_band_core(...)["stim"]` result -- exactly the
+#: same dict `adapter.py`'s own inline call reads before it hands the same thing to
+#: `stability.finding_from_stability_result`. `Biomarkers/tests` proves this raw result is identical
+#: to what `_validate_band_core` itself returns; `ClosedLoopDeployment/tests` proves the translation
+#: of a grid row is identical to `adapter.py`'s own inline translation of the same raw result.
+#:
+#: A READER OF THE TRANSLATED FIELD MUST STILL NEVER USE A BARE `stim_stable`/`stable` BOOLEAN.
+#: The warning already in `adapter.py` applies without a word changed: on this participant's own
+#: data, ONE_THREE_LEFT at 12.5 Hz has the old two-valued flag reading True (the interaction test
+#: did not reject, p = 0.290) while the honest answer is "cannot tell" (the interval on the largest
+#: between-era difference runs from -1.23 to +0.22, wider than the declared margin of 0.69).
+#: ==========================================================================================
+def raw_stability_result_for_point(participant_uid, channel, center_hz, band_width_hz=5.0):
+    """The untranslated `stim` result `_validate_band_core` computes for one (channel, band centre)
+    point -- the same call the single-candidate page already makes, run once per grid point instead
+    of once per click. Never raises: any failure comes back as `{"available": False, "reason": ...}`,
+    the same shape `_validate_band_core` itself already uses for a failure.
+
+    Read `answer` on the TRANSLATED form (`ClosedLoopDeployment.stability.finding_from_stability_
+    result` applied to this dict), never a bare boolean read off this raw form directly -- see the
+    module note above.
+    """
+    width = float(band_width_hz)
+    try:
+        core = _validate_band_core({
+            "ParticipantId": participant_uid, "Channel": channel,
+            "CenterHz": float(center_hz), "BandWidthHz": width})
+        return (core.get("stim") or {}) if core.get("available") else {
+            "available": False,
+            "reason": core.get("reason") or "the band validation path returned nothing usable"}
+    except Exception as exc:                                     # noqa: BLE001
+        return {"available": False, "reason": f"band validation raised {exc!r}"}
+
+
 def validate_band_for_participant(request_data):
     """Run the click-triggered VALIDATION bundle for one band on one participant.
 
@@ -6439,6 +6491,81 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
     return out
 
 
+#: TRACK D, TASK D2(a) -- checked directly against `ClosedLoopDeployment.constraints.RULES`
+#: (D01-D51) before writing any code, per that task's own instruction to confirm the 51-rule
+#: eligibility screen can be meaningfully evaluated on a (contact, band centre) pair alone before
+#: adding a column for it. IT CANNOT, for two independent reasons, both read out of that file
+#: rather than assumed:
+#:   1. Of the 51 rules, only D08/D10/D12/D13 read solely the fields a grid point carries (centre
+#:      frequency, band width); every other rule needs `amp_mA`, `impedance_ohms`, `rate_hz`,
+#:      `pulse_width_us`, `artifact_flags` or similar -- fields that exist only for a SPECIFIC
+#:      programmed candidate, never for a (contact, band centre) point on its own. Calling
+#:      `constraints.check_eligibility` with only a band's fields set would report all ~47 of those
+#:      as `unknowns`, and `constraints.py`'s own docstring is explicit that an unknown BLOCKS
+#:      ("treating absence of evidence as permission is the specific error this module exists to
+#:      prevent") -- so the full screen would mark essentially every grid point "blocked", which
+#:      is not a finding about the band, only about what a grid point is missing.
+#:   2. Restricting to the genuinely band-only rules does not rescue this: D08's adaptive range is
+#:      8.0-30.0 Hz, and the sweep's own 22 centres are already restricted to 8.5-29.5 Hz (decision
+#:      32) -- a strict subset. So the band-only subset of the screen would read PASS on literally
+#:      every point in every grid this project has ever built, which is a column that can never
+#:      fire and therefore carries no information either.
+#: Forcing either version would be a label that looks like a device-rule verdict and is not one, so
+#: no `device_rules_blocked` field is added. `device_rules_status` instead states this limitation
+#: plainly, matching the project's own rule (CLAUDE.md's principle 2b) that a test or a label
+#: asserting something untrue is worse than no label at all. See the D2(a) discussion in this
+#: track's report for the concrete PI-level question this leaves open.
+DEVICE_RULES_STATUS_NOTE = (
+    "not assessable from a band alone: the device's 51-rule screen needs a specific stimulation "
+    "current, pulse width, rate and impedance reading, none of which a (contact, band centre) grid "
+    "point carries; every one of this grid's 22 centres already sits inside the device's own "
+    "8.0-30.0 Hz adaptive-sensing range (decision 32), so a band-only version of the screen would "
+    "never flag anything either")
+
+
+def _attach_grid_export_columns(participant_uid, sweeps, *, band_width_hz):
+    """TRACK D, TASK D2(b). Attach the RAW (untranslated) cross-setting-stability result to every
+    row of every channel's `best_correlation_rows` and `best_auc_rows`, computed once per unique
+    (channel, centre) pair rather than once per row (the correlation and AUC grids share the same
+    22 centres, so this halves the number of calls). Also attaches `device_rules_status`, see
+    `DEVICE_RULES_STATUS_NOTE` above for why no device-rule pass/fail verdict is attached instead.
+
+    STAYS RAW ON PURPOSE. The honest four-valued translation
+    (`ClosedLoopDeployment.stability.finding_from_stability_result`) is Closed-Loop Deployment's own
+    module and Biomarkers must never import it back (see the note on
+    `raw_stability_result_for_point` above) -- so the reader on the other side does the translation,
+    the same as `adapter.py` already does for one candidate today.
+
+    Never raises. A failure for one point is confined to that point's own field
+    (`available: False`), the same never-crash contract every other function in this module keeps
+    for a page that has to render something even when one channel's data is unusable.
+    """
+    # TRACK D LIVE-PROOF FINDING (2026-09-08): each row's band centre is named `band_center_hz`,
+    # not `center_hz` -- confirmed by reading a real row live on RCS08 after this function's first
+    # draft used the wrong key and, because a missing key is treated as "skip this row" rather than
+    # an error, silently attached nothing to any row while still returning a normal-looking, fast
+    # response. Caught only by measuring the response's own field count, not by a shape check --
+    # exactly the reason this project's rules require reading a real row before trusting a field
+    # name, and reporting a live count rather than assuming a code path ran.
+    for channel, sweep in (sweeps or {}).items():
+        cache = {}
+        for key in ("best_correlation_rows", "best_auc_rows"):
+            rows = sweep.get(key) or []
+            for row in rows:
+                center_hz = row.get("band_center_hz")
+                if center_hz is None:
+                    continue
+                if center_hz not in cache:
+                    try:
+                        cache[center_hz] = raw_stability_result_for_point(
+                            participant_uid, channel, center_hz, band_width_hz=band_width_hz)
+                    except Exception as exc:                        # noqa: BLE001
+                        cache[center_hz] = {"available": False,
+                                            "reason": f"stability lookup raised {exc!r}"}
+                row["cross_setting_stability_raw"] = cache[center_hz]
+                row["device_rules_status"] = DEVICE_RULES_STATUS_NOTE
+
+
 def band_time_sweep_for_participant(request_data):
     """The payload for the band-by-length-of-signal section at the bottom of the exploration page.
 
@@ -6497,6 +6624,14 @@ def band_time_sweep_for_participant(request_data):
     # (matched in either time direction) regardless of what the toggle showed on screen.
     _md = str(request_data.get("MatchDirection", "pro_first")).lower()
     match_direction = "prior" if _md == "prior" else ("nearest" if _md == "nearest" else "pro_first")
+    # TRACK D, TASK D2(b): off by default. The Biomarkers exploration page has never needed this
+    # column and must not pay for it on every Recompute click; Closed-Loop Deployment's own reader
+    # is the caller that sets this, once, for the entry it exports. Folded into `sweep_settings`
+    # below (not a separate signature input) so a flagged and an unflagged request for the same
+    # participant and settings are, correctly, two different cache entries -- never one serving a
+    # stale answer for the other.
+    include_stability = str(request_data.get("IncludeCrossSettingStability", "")).lower() in (
+        "1", "true", "yes", "on")
 
     pro_match = _pro_match_arrays(pro_df, label_metric)
     if pro_match is None or pro_match[0] is None or np.asarray(pro_match[0]).size == 0:
@@ -6518,7 +6653,8 @@ def band_time_sweep_for_participant(request_data):
         "eligibility_radius_seconds": float(tol_s), "allow_window_reuse": bool(allow_window_reuse),
         "label_strategy": label_strategy, "percentile_low": float(low_pct),
         "percentile_high": float(high_pct), "outlier_n_mad": float(outlier_n_mad),
-        "outlier_scale": outlier_scale, "match_direction": match_direction}
+        "outlier_scale": outlier_scale, "match_direction": match_direction,
+        "include_cross_setting_stability": bool(include_stability)}
     sweep_sig, sweep_prov, tiles_sig = _band_sweep_signature(participant_uid, pro_df,
                                                              label_metric, sweep_settings)
     if sweep_sig is not None:
@@ -6547,6 +6683,9 @@ def band_time_sweep_for_participant(request_data):
         high_pct=high_pct, outlier_n_mad=outlier_n_mad, outlier_scale=outlier_scale,
         metric_key=label_metric, metric_label=metric_label, match_direction=match_direction)
     wall = float(_time.perf_counter() - t0)
+    if include_stability:
+        _attach_grid_export_columns(participant_uid, sweeps,
+                                    band_width_hz=float(analytics.BAND_TIME_SWEEP_WIDTH_HZ))
 
     out = {
         "band_time_sweep": sweeps,
@@ -6747,7 +6886,12 @@ _BAND_SWEEP_RESPONSE_KIND = "biomarker_band_sweep"
 #: settings would otherwise be served a stored response computed before those fields existed --
 #: confirmed live: an unversioned before/after check on RCS08 showed 0 new fields because both
 #: runs hit the same pre-existing cache entry).
-_BAND_SWEEP_RULE_VERSION = "v2_sweep_family_wise"
+#: Track D added `include_cross_setting_stability` to `sweep_settings` (folded into the signature
+#: already, so a flagged and an unflagged request are already two different keys) and, when set,
+#: the `cross_setting_stability` / `device_rules_status` fields on every best-row. Bumped anyway,
+#: belt and suspenders, after this exact class of bug (an unversioned response shape change served
+#: stale) was found and fixed twice already in this feature's own Tracks B and C.
+_BAND_SWEEP_RULE_VERSION = "v3_sweep_closed_loop_export"
 
 #: Response fields that are timings of the run that produced them, not results. They are not
 #: compared when a stored response is checked against a fresh one, and a served response keeps the

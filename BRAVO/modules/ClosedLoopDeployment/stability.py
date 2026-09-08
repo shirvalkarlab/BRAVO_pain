@@ -54,11 +54,32 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from Biomarkers.routines.analytics import (
-    STABILITY_EQUIVALENCE_MARGIN_LOG_OR,
-    band_stim_stability,
-    stability_equivalence,
-)
+#: TRACK D FINDING (2026-09-08): this import was spelled only one way (bare `Biomarkers...`), which
+#: resolves on the host pytest command (`BRAVO/modules` as root) but NOT inside the production
+#: container (`/usr/src/BRAVO` as root, where every sibling module spells this `modules.Biomarkers`)
+#: -- every other cross-module import in this project's Biomarkers/ClosedLoopDeployment/StimOptimizer
+#: tree uses the double-try pattern for exactly this reason (`ARCHITECTURE_cache_store.md` §3). Found
+#: while wiring Track D's grid export, which is the first code to import this module the way the
+#: production container actually loads it. Until this fix, `adapter.py`'s own already-live
+#: `out["band_stability"]` computation (`report_for_participant`, the Route A snippet from
+#: `WIRING_stability_into_the_report.md`) would have raised `ModuleNotFoundError` at this line the
+#: first time it ran inside the real gunicorn container -- caught by that function's own broad
+#: `except Exception`, so every deployed report would have silently shown "not tested" for
+#: band_stability with an import-failure reason, never the real four-valued answer. Not yet checked
+#: against the live server to confirm this is really what has been shipping; flagged in this
+#: session's report as something to verify.
+try:
+    from Biomarkers.routines.analytics import (
+        STABILITY_EQUIVALENCE_MARGIN_LOG_OR,
+        band_stim_stability,
+        stability_equivalence,
+    )
+except ImportError:                                              # pragma: no cover
+    from modules.Biomarkers.routines.analytics import (
+        STABILITY_EQUIVALENCE_MARGIN_LOG_OR,
+        band_stim_stability,
+        stability_equivalence,
+    )
 
 #: The four things this file is allowed to say. Anything else is a bug, and __post_init__ raises
 #: rather than letting an unrecognised word travel to a page a clinician reads.

@@ -69,9 +69,11 @@ import EvidenceTrianglePanel from "./EvidenceTrianglePanel";
 import PrescriptionPanel from "./PrescriptionPanel";
 import DutyCyclePanel from "./DutyCyclePanel";
 import BandStabilityPanel from "./BandStabilityPanel";
+import BandSweepGridPanel from "./BandSweepGridPanel";
 import ThreeSourceResponsePanel from "./ThreeSourceResponsePanel";
 import useDeploymentSummary from "./useDeploymentSummary";
 import useDeploymentReport from "./useDeploymentReport";
+import useBandSweepGrid from "./useBandSweepGrid";
 import PAL from "./palette";
 import { fmtHz } from "./deployFormat";
 import "./deployPrint.css";
@@ -401,6 +403,11 @@ function ClosedLoopSim() {
     },
   });
 
+  // TRACK D: fetched independently of any committed candidate -- see useBandSweepGrid.js for why
+  // gating this on useDeploymentReport's own enabled condition would make it unreachable from the
+  // one screen that needs it (choosing a first candidate).
+  const bandSweepGrid = useBandSweepGrid({ participantUid: participant_uid });
+
   /**
    * THE ONE RECOMPUTE CONTROL FOR THIS PAGE, REPORTING ON BOTH PAGE-LEVEL REQUESTS AT ONCE.
    *
@@ -472,6 +479,23 @@ function ClosedLoopSim() {
                 </MDBox>
               </MDBox>
             </Card>
+          </Grid>
+
+          {/* TRACK D — browse the calibrated grid Biomarkers already built, and pick any point
+              from it. Rendered UNCONDITIONALLY, before the "no band committed" gate below, on
+              purpose: the whole point of this panel is to be the way a first candidate gets
+              chosen, so it must be reachable exactly when no candidate exists yet, not only after
+              one already does. Picking a row here commits a BandCandidate through the same
+              mechanism the file-upload path already uses (bandCandidateStore), so every panel
+              below (once bc exists) recomputes for the newly chosen point exactly as it would for
+              an uploaded candidate — no new selection machinery. */}
+          <Grid item xs={12} id="cl-grid">
+            <BandSweepGridPanel
+              grid={bandSweepGrid.grid}
+              participantUid={participant_uid}
+              hemisphere={bc && bc.hemisphere}
+              onCandidateChosen={() => setEnvelope(loadBandCandidate(participant_uid))}
+            />
           </Grid>
 
           {!bc ? (

@@ -472,6 +472,92 @@ def _shared_store(kind, signature, payload, *, provenance=None, trigger=None):
                               max_bytes=_SHARED_CACHE_MAX_BYTES)
 
 
+#: ===========================================================================================
+#: TRACK D: reading the calibrated grid's stored entry as `consumer="closed_loop"`.
+#:
+#: D1: the grid (every band centre crossed with every length of signal, for every sensing contact
+#: pair) is ALREADY the whole content of `Biomarkers.bravo_service`'s stored `biomarker_band_sweep`
+#: entry -- confirmed by reading `analytics.band_time_sweep_from_power`'s own return value, which
+#: is one row per band centre times one column per length of signal, per channel, before this track
+#: touched anything. No new field was needed for the grid itself; this reader is the only new code
+#: D1 needed.
+#:
+#: `load_newest` (not `load`) is used because this module cannot know the exact settings key
+#: Biomarkers built the entry under -- the same reason `StimOptimizer.bravo_service` reads Closed-
+#: Loop Deployment's own `amplitude_effect_by_band` table the same way (decision 41,
+#: `ARCHITECTURE_cache_store.md` §2 "Reading without the writer's key").
+#:
+#: D2(b): the two fast columns Biomarkers attaches are `cross_setting_stability_raw` (the
+#: untranslated `_validate_band_core` "stim" result) and `device_rules_status` (see
+#: `Biomarkers.bravo_service.DEVICE_RULES_STATUS_NOTE` for why no device-rule verdict is attached
+#: at all). The honest four-valued TRANSLATION of the raw stability result belongs here, on the
+#: Closed-Loop Deployment side, because `stability.py`'s own docstring makes the import direction a
+#: hard rule (Biomarkers must never import ClosedLoopDeployment back) -- so Biomarkers stores the
+#: raw form and this reader is where `stability.finding_from_stability_result` is actually called,
+#: exactly the same call `report_for_participant`'s own inline snippet already makes for one
+#: candidate. `ClosedLoopDeployment/tests/test_track_d_grid_stability_translation.py` proves the
+#: two are identical.
+def band_sweep_grid_for_closed_loop(participant_uid):
+    """The calibrated grid, as `consumer="closed_loop"`, with every row's stability result
+    translated to the honest four-valued answer. Never raises.
+
+    Returns `{"available": False, "reason": ...}` when nothing is stored yet -- Track D's export
+    reads a grid Biomarkers already built and cached; it does not trigger a fresh, expensive build
+    on Closed-Loop Deployment's own request, the same "browse a pre-computed grid" design the ADR
+    calls for (`adr_2026-09-08_biomarkers_closedloop_matrix_export.md`).
+    """
+    try:
+        from . import stability as _stab
+    except ImportError:                                          # pragma: no cover
+        from modules.ClosedLoopDeployment import stability as _stab
+    try:
+        payload, stamp = _cache_store.load_newest(
+            "biomarker_band_sweep", participant_uid, consumer="closed_loop",
+            root=_SHARED_CACHE_DIR_OVERRIDE)
+    except Exception as exc:                                     # noqa: BLE001
+        return {"available": False, "reason": f"reading the calibrated grid raised {exc!r}"}
+    if payload is None:
+        return {"available": False,
+                "reason": ("no calibrated grid is stored yet for this participant; visit the "
+                           "Biomarkers exploration page first"),
+                "stamp": stamp}
+
+    sweeps = payload.get("band_time_sweep") or {}
+    out_sweeps = {}
+    any_stability = False
+    for channel, sweep in sweeps.items():
+        band_width_hz = float(sweep.get("band_width_hz", 5.0) or 5.0)
+        new_sweep = dict(sweep)
+        for key in ("best_correlation_rows", "best_auc_rows"):
+            rows = sweep.get(key) or []
+            new_rows = []
+            for row in rows:
+                new_row = dict(row)
+                raw = row.get("cross_setting_stability_raw")
+                if raw is not None:
+                    any_stability = True
+                    # `band_center_hz`, not `center_hz` -- see the note in
+                    # `Biomarkers.bravo_service._attach_grid_export_columns` on this same field
+                    # name, confirmed by reading a real row live on RCS08.
+                    center_hz = row.get("band_center_hz")
+                    try:
+                        finding = _stab.finding_from_stability_result(
+                            raw, channel, float(center_hz) if center_hz is not None else 0.0,
+                            band_width_hz=band_width_hz)
+                        new_row["cross_setting_stability"] = finding.as_payload()
+                    except Exception as exc:                     # noqa: BLE001
+                        new_row["cross_setting_stability"] = {
+                            "answer": "not tested", "test_ran": False,
+                            "reason": f"translation raised {exc!r}"}
+                    new_row.pop("cross_setting_stability_raw", None)
+                new_rows.append(new_row)
+            new_sweep[key] = new_rows
+        out_sweeps[channel] = new_sweep
+
+    return {"available": True, "band_time_sweep": out_sweeps, "stamp": stamp,
+            "cross_setting_stability_included": any_stability}
+
+
 def shared_cache_stats():
     """What the shared files have done, for the interface and for tests."""
     d = shared_cache_dir()
@@ -1438,6 +1524,19 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     from . import pipeline as _pl
 
     rd = request_data or {}
+
+    # TRACK D: computed FIRST and unconditionally, before either early return below, because
+    # browsing the grid to CHOOSE a point is exactly the situation where no candidate has been
+    # picked yet -- the case the two early returns below both cover. A grid read gated behind "a
+    # candidate already exists" would never be reachable from the one screen that needs it: picking
+    # a first candidate. Cheap even when it finds nothing: one store read, no model fit, no ORM
+    # query beyond the participant already resolved by the caller.
+    try:
+        _grid_export = band_sweep_grid_for_closed_loop(getattr(participant, "uid", participant))
+    except Exception as _grid_exc:                     # noqa: BLE001
+        _grid_export = {"available": False,
+                        "reason": f"the calibrated grid could not be read: {_grid_exc!r}"}
+
     # Both fetches go through the memo: measured at 32.96 s and 33.99 s respectively on RCS08, i.e.
     # 67 of the 70 s this endpoint used to take. build_design_matrix ACCEPTS request_data and never
     # references it, so it is a pure function of the participant and safe to key on the recording
@@ -1447,14 +1546,16 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     if psd is None:
         return {"available": False,
                 "reason": "this participant has no assembled spectra, so no control signal can be "
-                          "evaluated. Sensing recordings must be ingested first."}
+                          "evaluated. Sensing recordings must be ingested first.",
+                "band_sweep_grid": _grid_export}
 
     cands = candidates or rd.get("Candidates") or []
     if not cands:
         return {"available": False,
                 "reason": "no candidate configuration was supplied. Choose a channel and centre "
                           "frequency on the Biomarker Exploration page first; deployability is "
-                          "evaluated for a specific configuration, not for a participant."}
+                          "evaluated for a specific configuration, not for a participant.",
+                "band_sweep_grid": _grid_export}
     # Device facts the rules need but the analysis tables cannot supply. Fetched here rather than
     # inside pipeline.run so the pipeline stays free of ORM imports and remains testable on frames.
     dev = {}
@@ -1534,6 +1635,10 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
             "blocking_status": _stab_err.BLOCKING_STATUS,
             "answers_possible": list(_stab_err.ANSWERS),
         }
+
+    # TRACK D: the grid computed once, at the top of this function -- see the note there on why it
+    # runs before either early return, and `band_sweep_grid_for_closed_loop` above for the design.
+    out["band_sweep_grid"] = _grid_export
 
     # ---------------------------------------------------------------------------------------------
     # HOW STIMULATION CURRENT MOVED BAND POWER, MEASURED THREE SEPARATE WAYS AND PUT SIDE BY SIDE.
