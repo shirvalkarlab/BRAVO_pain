@@ -3824,6 +3824,22 @@ def run_for_participant(request_data):
                          exc_info=True)
             return {"band_time_sweep": {}, "available_metrics": BIOMARKER_METRICS,
                     "message": f"The sweep could not be computed: {e}"}
+    # TRACK A, TASK A2's DRILL-DOWN. The grid's own stored response never carried the per-report
+    # (band power, pain score) pairs behind one cell -- only the aggregate row and matrix values --
+    # so a reader who clicks a cell has nowhere to get a scatter or a violin from. This is the
+    # smallest thing that can answer that: one contact pair, one band centre, one length of signal,
+    # matched exactly the way that cell's own grid value was, and handed back as raw pairs. It does
+    # no permutation test and no bootstrap -- the r, the AUC and every other statistic for the cell
+    # are already sitting in the grid response the browser is holding, so nothing here recomputes
+    # them; this only supplies what a picture of that one cell needs.
+    if _wants_band_time_sweep_cell(request_data):
+        try:
+            return band_time_sweep_cell_for_participant(request_data)
+        except Exception as e:
+            _log.warning("Biomarkers: band/length-of-signal cell drill-down failed (%s)", e,
+                         exc_info=True)
+            return {"band_time_sweep_cell": None,
+                    "message": f"The cell's underlying data could not be computed: {e}"}
     source = request_data.get("source", "both")
     # "powerdomain" is the canonical name for the band-power-over-time source (complementary to
     # "timedomain"). It merges the ~10-min Chronic timeline with the per-session Power-Domain band
@@ -6568,6 +6584,148 @@ def band_time_sweep_for_participant(request_data):
         _store_sweep_results(participant_uid, sweep_sig, sweep_prov, out,
                              n_recordings=len(td or []))
     return out
+
+
+#: The request key that asks for one cell's underlying (band power, pain score) pairs alone,
+#: added for the heat-map redesign's click-through drill-down (Track A, task A2).
+BAND_TIME_SWEEP_CELL_KEY = "BandTimeSweepCell"
+
+
+def _wants_band_time_sweep_cell(request_data):
+    """Whether this request is asking for one grid cell's underlying pairs alone."""
+    return str(request_data.get(BAND_TIME_SWEEP_CELL_KEY, "")).lower() in ("1", "true", "yes", "on")
+
+
+def band_time_sweep_cell_for_participant(request_data):
+    """The (band power, pain score) pairs behind one cell of the band-by-length grid.
+
+    Reuses every matching and labelling helper `band_time_sweep_for_participant` uses, on the same
+    request fields, so the pairs returned here are matched exactly the way that cell's own grid
+    value was computed -- but for one contact pair (`Channel`), one band centre (`BandCenterHz`)
+    and one length of signal (`IntegrationSeconds`) rather than all of them. No permutation test and
+    no bootstrap are run: the r, the AUC, the interval and the verdict for the cell are already in
+    the grid response the browser holds from its own sweep request, and this endpoint exists only
+    to supply the raw pairs a scatter and a pair of violin plots need, which the stored grid
+    response never carried.
+    """
+    participant_uid = request_data["ParticipantId"]
+    Participant = models.Participant.find(uid=participant_uid)
+    blank = {"band_time_sweep_cell": None}
+    channel = request_data.get("Channel")
+    center_raw = request_data.get("BandCenterHz")
+    seconds_raw = request_data.get("IntegrationSeconds")
+    if not channel or center_raw is None or seconds_raw is None:
+        return dict(blank, message=("Channel, BandCenterHz and IntegrationSeconds are all required "
+                                    "to look up one cell."))
+    try:
+        center_hz = float(center_raw)
+        seconds = float(seconds_raw)
+    except (TypeError, ValueError):
+        return dict(blank, message="BandCenterHz and IntegrationSeconds must both be numbers.")
+
+    td = _load_recordings(participant_uid, TIMEDOMAIN_TYPES)
+    pro_df = _load_pros(request_data, Participant)
+    if pro_df is None or len(pro_df) == 0:
+        return dict(blank, message="No patient-reported pain scores are available for this "
+                                   "participant.")
+    if not td:
+        return dict(blank, message="No time-domain Percept recordings have been ingested for this "
+                                   "participant.")
+
+    sweep_request = dict(request_data)
+    chosen = request_data.get("SweepMetric")
+    if chosen:
+        sweep_request["LabelMetric"] = chosen
+    pro_df, label_metric, _ = _resolve_biomarker_metric(sweep_request, pro_df)
+    metric_label = next((m["label"] for m in BIOMARKER_METRICS if m["key"] == label_metric),
+                        label_metric)
+
+    label_strategy, low_pct, high_pct = _label_strategy_params(request_data)
+    match_tol_min = _match_tolerance_param(request_data)
+    allow_window_reuse = str(request_data.get("AllowWindowReuse", "")).lower() in (
+        "1", "true", "yes", "on")
+    outlier_n_mad = _float_param(request_data, "OutlierNMad",
+                                 default=float(analytics.OUTLIER_N_MAD), lo=0.0, hi=50.0)
+    outlier_scale = str(request_data.get("OutlierScale") or analytics.OUTLIER_SCALE).lower()
+    if outlier_scale not in ("log", "raw"):
+        outlier_scale = analytics.OUTLIER_SCALE
+    tol_s = (float(match_tol_min) * 60.0 if match_tol_min
+             else float(max(analytics.BAND_TIME_SWEEP_SECONDS)))
+    _md = str(request_data.get("MatchDirection", "pro_first")).lower()
+    match_direction = "prior" if _md == "prior" else ("nearest" if _md == "nearest" else "pro_first")
+
+    pro_match = _pro_match_arrays(pro_df, label_metric)
+    if pro_match is None or pro_match[0] is None or np.asarray(pro_match[0]).size == 0:
+        return dict(blank, message=(f"No pain report carries a finite {metric_label} score."))
+    pro_times = np.asarray(pro_match[0], dtype=float)
+    pain_values = np.asarray(pro_match[1], dtype=float)
+
+    psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
+    sensing_idx = _build_sensing_config_index(list(td or []))
+    event_blocks = _event_psd_lsb_blocks(participant_uid, sensing_index=sensing_idx)
+    montage_blocks = _montage_psd_lsb_blocks(participant_uid, montage_recordings=psd_list)
+    chan_order = _derive_chan_order(td)
+    channels = list(dict.fromkeys(availability._canon_channel(c) for c in (chan_order or [])))
+    canon_channel = availability._canon_channel(channel)
+    if canon_channel not in channels:
+        return dict(blank, message=(f"Sensing contact pair {channel} was not found in this "
+                                    f"participant's recordings."))
+    _stamp_td_product(list(td or []))
+    raw_by_ch = _raw_lsb_cache_cached(participant_uid, channels, list(td or []) + list(psd_list or []),
+                                      event_blocks, montage_psd_blocks=montage_blocks)
+    raw_cache = raw_by_ch.get(canon_channel)
+    if not raw_cache:
+        return dict(blank, message=f"No cached spectra for sensing contact pair {channel}.")
+
+    power, _stats, centers, _col = _band_time_sweep_power_by_seconds(
+        pro_times, raw_cache, center_hz, tol_s=tol_s, allow_window_reuse=allow_window_reuse,
+        seconds=[seconds], match_direction=match_direction)
+    mat = power.get(float(seconds))
+    if mat is None or mat.size == 0 or not centers.size:
+        return dict(blank, message="No band-power measurements could be produced for this cell.")
+    col_power = mat[:, 0].astype(float)
+    # THE SAME OUTLIER RULE THE GRID APPLIED, so a point drawn here is a point the grid's own r and
+    # AUC for this cell were computed from -- without it, this endpoint would answer a question
+    # close to but not the same as "what is behind that cell", and the two numbers would silently
+    # disagree the way they did before this rule was added here (found live on RCS08: the raw
+    # Pearson r recomputed from the un-excluded pairs was -0.022 against the grid's own -0.085 for
+    # the same cell).
+    if outlier_n_mad > 0:
+        mask = analytics.mad_outlier_columns(col_power.reshape(-1, 1), n_mad=outlier_n_mad,
+                                             scale=outlier_scale).reshape(-1)
+        col_power = np.where(mask, np.nan, col_power)
+
+    y_bin, split_why, low_cut, high_cut = analytics._pain_split(
+        pain_values, strategy=label_strategy, low_pct=low_pct, high_pct=high_pct)
+    y_bin = np.asarray(y_bin, dtype=float)
+
+    points = []
+    n = min(pain_values.size, col_power.size, y_bin.size)
+    for i in range(n):
+        p, v = pain_values[i], col_power[i]
+        if not (np.isfinite(p) and np.isfinite(v)):
+            continue
+        yb = y_bin[i]
+        label = "high" if yb == 1 else ("low" if yb == 0 else "excluded")
+        points.append({"pain": float(p), "power": float(v), "label": label})
+
+    return {
+        "band_time_sweep_cell": {
+            "channel": canon_channel,
+            "band_center_hz": float(centers[0]),
+            "integration_seconds": float(seconds),
+            "metric_key": label_metric,
+            "metric_label": metric_label,
+            "points": points,
+            "n_points": len(points),
+            "n_high": sum(1 for pt in points if pt["label"] == "high"),
+            "n_low": sum(1 for pt in points if pt["label"] == "low"),
+            "low_cut": low_cut,
+            "high_cut": high_cut,
+            "split_why": split_why,
+        },
+        "message": None,
+    }
 
 
 #: ==========================================================================================

@@ -21,7 +21,11 @@ import BiomarkerTimeline from "./BiomarkerTimeline";
 import BiomarkerDataTimeline from "./BiomarkerDataTimeline";
 import BiomarkerAnalytics from "./BiomarkerAnalytics";
 import BinarizationPreview from "./BinarizationPreview";
-import BandTimeSweepPanel from "./BandTimeSweepPanel";
+// BandTimeSweepPanel (the older, non-interactive tables-and-server-figures rendering of this
+// same grid) is superseded on this page by BiomarkerHeatmapGrids below -- kept as a file rather
+// than deleted (CLAUDE.md §2 principle 4 warns against deleting something that still works), but
+// no longer imported here now that the interactive version carries its job plus the drill-down.
+import BiomarkerHeatmapGrids from "./BiomarkerHeatmapGrids";
 import { computeMatchedScanModel } from "./binarizationModel";
 import { saveControls, loadControls } from "./biomarkerStateStore";
 
@@ -459,6 +463,31 @@ function Biomarkers() {
     });
   }, [scanIndex, painSeriesLive, matchToleranceD, strategy, percentileLowD, percentileHighD,
       maxPerRatingD, refractoryMinD, matchDirection, allowWindowReuse]);
+
+  // TRACK A, TASK A1: THE CALIBRATED GRID'S OWN REQUEST, BUILT FROM THE LIVE CONTROLS.
+  //
+  // `requestParams` above is a SNAPSHOT that only exists once the older routine's "Start
+  // exploratory analysis" button has been pressed -- that is exactly the gating the PRD asked to
+  // remove. The calibrated heat-map section (BiomarkerHeatmapGrids) is instead handed this object,
+  // built straight from the controls as they currently stand, so it has something to compute from
+  // on the very first render and fires without any button press. It uses the same DEBOUNCED slider
+  // copies the live scan model already uses (matchToleranceD, percentileLowD/HighD,
+  // maxPerRatingD, refractoryMinD) so that dragging a slider fires one request when the drag
+  // settles rather than one per pixel -- the same discipline, applied to a real backend call
+  // instead of a client-side recompute.
+  const heatmapRequestParams = useMemo(() => ({
+    source, LabelMetric: metric, LabelStrategy: strategy,
+    PercentileLow: percentileLowD, PercentileHigh: percentileHighD,
+    MatchToleranceMin: matchToleranceD,
+    MaxPerRating: maxPerRatingD,
+    RefractoryMin: refractoryMinD,
+    MatchDirection: matchDirection,
+    UseLiveMatching: useLiveMatching,
+    MatchExtentSec: matchExtentSec,
+    AllowWindowReuse: allowWindowReuse,
+    SlidingWindow: slidingWindow,
+  }), [source, metric, strategy, percentileLowD, percentileHighD, matchToleranceD, maxPerRatingD,
+      refractoryMinD, matchDirection, useLiveMatching, matchExtentSec, allowWindowReuse]);
 
   // Render an honest, multi-line summary for a branch: the headline estimate plus the rigor
   // statistics (FDR q, permutation p, autocorrelation-adjusted effective n, Fisher-z CI for the
@@ -1033,6 +1062,37 @@ function Biomarkers() {
               </Card>
             </Grid>
 
+            {/* ── THE CALIBRATED HEAT MAPS, NOW THE HEADLINE (PRD decision 62, Track A of the
+                heat-map redesign) ─────────────────────────────────────────────────────────────
+                Runs on page load rather than waiting for the older full-spectrum scan below to
+                have been pressed first: `heatmapRequestParams` is built straight from the live
+                controls above (debounced the same way the live scan model already is), not from
+                the older routine's click-triggered `requestParams` snapshot. This is why it sits
+                directly under the binarization controls and above the older routine's own
+                trigger and results -- the fixed order the PRD asks for. */}
+            <Grid item xs={12}>
+              <BiomarkerHeatmapGrids participantUid={participant_uid}
+                requestParams={heatmapRequestParams}
+                availableMetrics={DEFAULT_METRIC_OPTIONS}
+                pageMetric={metric}
+                metricLabel={(DEFAULT_METRIC_OPTIONS.find((m) => m.key === metric) || {}).label}
+                onCommitBand={() => {
+                  // Track D (the Closed-Loop matrix export) had not landed when this track was
+                  // built; the button that reaches here is disabled until that field exists (see
+                  // BiomarkerHeatmapGrids's own note), so this is a placeholder wired for when it
+                  // does rather than a reachable path today.
+                  markClosedLoopFamilyStale(participant_uid,
+                    "the calibrated grid on the Biomarker Exploration page changed since this "
+                    + "result was computed");
+                }} />
+            </Grid>
+
+            {/* ── THE OLDER, UNCALIBRATED FULL-SPECTRUM SCAN AND ITS SCATTER/VIOLIN DRILL-DOWN ──
+                Moved BELOW the calibrated grids and their own drill-down. Decision 61 settled that
+                these two calculations must stay separate rather than folded together (different
+                scale, different frequency coverage, different correction method), so this section
+                keeps its own uncalibrated scatter-and-violin drill-down rather than sharing the
+                calibrated grid's per-cell one above. */}
             {data && data.analytics ? (
               <BiomarkerAnalytics analytics={data.analytics} summary={data.summary}
                 recordedPowers={data.recorded_powers}
@@ -1057,28 +1117,6 @@ function Biomarkers() {
                 metricLabel={(((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
                   .find((m) => m.key === data.label_metric) || {}).label || data.label_metric} />
             ) : null}
-
-            {/* ── HOW WELL EACH BAND TRACKS PAIN, AT EVERY LENGTH OF SIGNAL AVERAGED INTO ONE
-                MEASUREMENT ────────────────────────────────────────────────────────────────────────
-                Placed here, as the last section of the exploration and immediately BEFORE the
-                device-scale calibration panels, because it is still an exploration question: which
-                band and how many seconds of it. The calibration panels below it answer a different
-                question, how to express a chosen band in the numbers the device is programmed with,
-                and that only arises once this one has been settled.
-
-                It reads the top-of-page settings through `requestParams`, the same object the main
-                analysis was computed from, so the grid cannot be built against a different matching
-                policy from the panels above. Its pain-score list is the page's own, so the two
-                selectors cannot offer different scores. It fetches on its own press because the
-                sweep is the most expensive thing on the page. */}
-            <Grid item xs={12}>
-              <BandTimeSweepPanel participantUid={participant_uid}
-                requestParams={requestParams}
-                availableMetrics={(data && data.available_metrics) || DEFAULT_METRIC_OPTIONS}
-                pageMetric={(data && data.label_metric) || metric}
-                metricLabel={(((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
-                  .find((m) => m.key === (data && data.label_metric)) || {}).label} />
-            </Grid>
 
             {/* ── DEVICE-SCALE CALIBRATION ──────────────────────────────────────────────────────
                 Two panels relocated here from the Closed-Loop Deployment page. They belong on this
