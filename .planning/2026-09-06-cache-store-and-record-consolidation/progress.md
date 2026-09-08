@@ -924,3 +924,41 @@ this machine (pyenv 3.12.9) has no pytest.
   place (harmless, no data access). Recorded as decision 60.
 - `DECISIONS_and_open_items.md`: items 21 and 22 marked resolved, decisions 60 and 61 added.
   `task_plan.md` Next Step: nothing queued, all of this session's review items closed.
+
+## Session 2026-09-08, sixth entry -- the Biomarkers heat-map headline redesign, run entirely outside these three files
+
+- A `/swarm-plan` was requested and run for a separate, PI-scoped feature: making the calibrated
+  correlation/AUC heat maps the headline visualization on the Biomarkers page. Produced its own
+  artifact set (PR-FAQ, a PRD with three page-layout options, two ADRs, a four-track plan) under
+  `artifacts/`, not under this plan's directory, and none of the four tracks' work was logged
+  here as it happened -- `DECISIONS_and_open_items.md` was updated throughout (decisions 62-70)
+  but this file and `task_plan.md` were not touched again until this entry.
+- Track A (page layout, decision 62's chosen Option 2), Track B (match-direction wiring, decision
+  64), Track C (the 8-30 Hz family-wise correction, decisions 63-64), and Track D (the
+  Closed-Loop grid export, decisions 65-68) were each built, tested and proven live on RCS08 in
+  turn. A full `/swarm-review` of the branch (six parallel perspectives against `10b9e8bb^..HEAD`)
+  found one HIGH, three Medium and three Low finding; two further requested follow-ups (the
+  device-rules note's wording, and open item 24's populated-grid screenshot) came after. All
+  closed -- decisions 68, 69, 70.
+- Container suite moved 537 -> 578 across this whole window; host suite 934 -> 949, both orders,
+  each re-measured fresh at every step per this project's own rule against carrying a count
+  forward.
+- Asked directly to check `task_plan.md`/`progress.md` for what phases are open. Found: (a) both
+  files stopped at decision 61, so neither reflected any of the above; (b) two of the four boxes
+  still unchecked in `task_plan.md` were stale, not genuinely open -- Phase 5's commit-identity
+  line said "still open" though decision 49 (2026-09-07) had already answered it, and Track C
+  step 1 / Track D steps 1-2 were still marked blocked behind "Track E's gate" though Track E
+  resolved on 2026-09-08 (decisions 51-53); (c) one genuine documentation conflict was found and
+  left for the PI rather than resolved unilaterally: `DECISIONS_and_open_items.md` open item 7
+  still reads as unsettled while `ARCHITECTURE_cache_store.md` §3 says decisions 51-53 settled
+  it.
+- Reconciled `task_plan.md`: added Phase 6 (complete) holding the whole heat-map redesign
+  summarized above; corrected Phase 5's commit-identity checkbox to checked; resolved Track C
+  step 1 against decisions 51/53 (the two directories were settled differently, not both moved);
+  marked Track D steps 1-2 as unblocked-but-unbuilt rather than blocked, and left them as the
+  plan's one genuinely open item; ticked Phases 4 and 5 to complete now that every item under
+  each is checked; added decision 21 recording this reconciliation itself and naming the one
+  conflict left for the PI. Ran `check-complete.sh` after: 5/6 phases complete, matching Track 3's
+  real state exactly (Track D steps 1-2 the only unbuilt items anywhere in the plan).
+- This entry in `progress.md` is the corresponding write for that same reconciliation, per this
+  skill's own rule that a phase-status change gets logged here too, not only in `task_plan.md`.

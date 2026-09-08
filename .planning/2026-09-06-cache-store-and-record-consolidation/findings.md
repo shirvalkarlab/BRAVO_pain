@@ -481,3 +481,23 @@ directory is that cache. Track D must not connect it without the second sign-off
   the comparison meets them at the nearest stored centre and the verdict has to do the same, or
   the fold is never written. Found on the live record, not by the constructed tests, which used
   one centre for both.
+
+## 7. Reconciliation, 2026-09-08 -- this file, `task_plan.md` and `progress.md` had stopped at
+   decision 61 while `DECISIONS_and_open_items.md` kept going
+
+- `DECISIONS_and_open_items.md` is the one document in this project that was kept current through
+  the entire Biomarkers heat-map headline redesign (decisions 62-70, a separate `/swarm-plan`
+  scoped feature run after this plan's own Phase 5 closed). The three planning-with-files
+  documents were not touched again until this session, which is a real risk this skill's own
+  rules exist to prevent: a reader of only `task_plan.md` after decision 61 would not know four
+  tracks of new work, a full swarm-review, and two follow-up fix rounds had landed and been
+  pushed.
+- `ARCHITECTURE_cache_store.md` §3 and `DECISIONS_and_open_items.md` open item 7 disagree with
+  each other about whether the `biomarker_psd`/`biomarker_psd_rows` question (Track C step 1,
+  Track E) is settled. The architecture document says decisions 51-53 settled it; the decision
+  log's own open-items list still carries item 7 as unresolved, worded as "one plan deletes what
+  the other connects -- decide together." Reading the actual decisions (51 and 53) confirms a
+  real choice was made and both directories now have a stated, different fate -- so the
+  architecture document's account matches the code. Left for the PI to close item 7 formally
+  rather than resolved here, since deciding which of two authoritative documents is right about
+  an open item is exactly the kind of call this project reserves for him.

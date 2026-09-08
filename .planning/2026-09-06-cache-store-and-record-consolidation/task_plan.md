@@ -30,20 +30,29 @@ Two goals, in this order, and the second is subordinate to the first.
 
 ## Next Step
 
-**Nothing queued.** All items raised in this session's review are closed: the zero-fill fix
-(decisions 58-59), the double-fetch question (decision 60, watched live: exactly one request per
-Recompute press), and the fold-or-not question (decision 61: do not fold, the two routines answer
-different questions on different scales). Waiting for further direction.
+**Nothing queued in this plan's own scope.** Phase 6 (the Biomarkers heat-map headline redesign,
+built entirely under a separate `/swarm-plan` brief between the last update to this file and
+2026-09-08) is complete, reviewed, and every finding from that review is closed — see Phase 6
+below and `DECISIONS_and_open_items.md` decisions 62-70. What remains open, genuinely, in THIS
+plan's original scope: Track D steps 1-2 (§Phase 3), unblocked since Track E resolved
+(decisions 51-53) but never picked up — whether to build them is the PI's call, not yet asked.
+Waiting for further direction.
 
 ## Current Phase
 
-Phases 3 and 4 are done except for the steps that are the PI's; Phase 5's checks are done except
-the commit-identity answer. Phase 2 is complete and pushed (`9a6e0926`; Track A steps 1 to 3 in
+**Phases 1, 2, 4, 5 and 6 are complete. Phase 3 is the one still in_progress**, and only because
+Track D steps 1-2 within it are unbuilt — unblocked since 2026-09-08 (Track E resolved,
+decisions 51-53) but never picked up; whether they are still worth building is the PI's call.
+Phase 2 is complete and pushed (`9a6e0926`; Track A steps 1 to 3 in
 `fa14edd`, 4 in `d47b9a7`, 5 in `7278f15c`, 6 in `4e29af7b`, 7 in `0d619ca`, 8 in `9a6e0926`).
 Track B is complete (`7e57ce03`, `a86e9c09`, `b6a8d1a4`); Track D steps 3 and 4, Track G step 1
 and Track F step 2 in `f01a0320`; Track F steps 3 and 4 assessed and Track G step 2 built in the
-commit carrying this edit; Track F step 1 was `b7036bf`. Track D steps 1 and 2 stay open behind
-Track E's gate.
+commit carrying this edit; Track F step 1 was `b7036bf`; Track C step 1 and Track E step 2
+resolved together 2026-09-08 (decisions 51-53). **Phase 6, a separate plan's worth of work
+(the Biomarkers heat-map headline redesign, four tracks, a full swarm-review, and two follow-up
+fix rounds) landed in this same window and is recorded below rather than in a second plan
+directory, since it continues the identical branch and the identical "prove the numbers didn't
+move" discipline.**
 The PI authorised the phase and the push on 2026-09-07.
 
 ## Phases
@@ -176,8 +185,11 @@ and the two closed-loop fixes. Track D needs Track B's form.
 
 **Track D — "Readers"**
 
-- [ ] 1. Point the Biomarker reading sites at the form
-- [ ] 2. Reduce the three spectrum builders
+- [ ] 1. Point the Biomarker reading sites at the form — **unblocked 2026-09-08**: this step's
+  own note said it stayed open "behind Track E's gate"; Track E is now resolved (decisions
+  51-53), so the gate is lifted. Not picked up. Whether it is still worth building, now that
+  the sites in question have not caused a measured problem since, is the PI's call
+- [ ] 2. Reduce the three spectrum builders — same gate, same state: unblocked, not built
 - [x] 3. Point the Stim Optimizer and closed-loop reads at the form — resolved by measurement on
   2026-09-07, no code change: the 65.71 s settings-stream consumer this step names was removed
   by Track A step 5 (the stream is read from the store); the closed-loop report costs 4.77 s
@@ -228,7 +240,7 @@ and the two closed-loop fixes. Track D needs Track B's form.
 
 ### Phase 4: The store as the single location, and the gated statistics site — Tracks C, E
 
-**Status:** in_progress
+**Status:** complete
 
 The statistics site needs a second sign-off from the PI before anything changes there, and its
 two steps concern the same 6,309 files as the deletion step in Track A step 1, so the two must be
@@ -237,11 +249,17 @@ store.
 
 **Track C — "Cache and dates"**
 
-- [ ] 1. Move every cache to the single approved location — **the PI's decision, jointly with
-  Track E** (open item 7): the two directories still outside the store are `biomarker_psd`
-  (97 files, 500 MB) and `biomarker_psd_rows` (6,309 files, zero live reads), and one plan
-  deletes what the other would connect. `test_one_store.py` grandfathers exactly those two
-  constructs and fails when they go
+- [x] 1. Move every cache to the single approved location — **resolved 2026-09-08, decisions
+  51 and 53, jointly with Track E step 2 below.** The two directories were not settled the same
+  way: `biomarker_psd` (97 files, 500 MB) moved into the one store as raw kind
+  `biomarker_psd_matrix` (decision 53) — both writers and both readers go through it now, proven
+  by a byte-identical round trip, 0 of 654,146 fields differing. `biomarker_psd_rows` (6,309
+  files) did NOT move in — decision 51 found that moving it would force a full rewrite on every
+  new recording (the store keeps one current snapshot per kind, while this cache wants one file
+  per recording), so it stays exactly where it is, sped up in front instead with a stamp that
+  skips the per-recording loop when nothing moved. `test_one_store.py`'s exemption for
+  `biomarker_psd`'s own directory-construction is removed; only `biomarker_psd_rows`'s
+  exemption remains, and it is a decision, not an oversight
 - [x] 2. Implement the approved writing policy — delivered by Track A step 1 (`fa14edd`): the
   key decides (`store_if_absent`), reads are read-only by construction, and
   `test_a_matching_key_leaves_the_directory_byte_identical` proves a page whose key matches
@@ -278,17 +296,95 @@ store.
 
 ### Phase 5: Verify, rebuild, and close the record
 
-**Status:** in_progress
+**Status:** complete
 
 - [x] Both suites green on their own runners, counts read from the runs — after the last code
-  change (Track C step 4): container PASS=537 FAIL=0; host 934 passed, 41 skipped, both orders
+  change (Track C step 4): container PASS=537 FAIL=0; host 934 passed, 41 skipped, both orders.
+  **Superseded by later runs, never carried forward as a claim** — see Phase 6 for the counts
+  after that phase's own last change (container 578, host 949)
 - [x] Frontend bundle rebuilt after any change under `Client/src`, and the chunks committed —
   `f70b270d`, the status line's literal found in one served chunk
 - [x] `DECISIONS_and_open_items.md` and the reference documents updated for everything landed —
   decisions 35 to 48, open items 16 to 20, the handoff, the architecture note, the methods note
-- [ ] The PI's two open questions answered and recorded: commit identity, and whether to push —
-  **push: answered 2026-09-07 ("Push everything"), every commit since is pushed; commit
-  identity: still open (open item 1), commits carry the machine identity**
+- [x] The PI's two open questions answered and recorded: commit identity, and whether to push —
+  **both answered 2026-09-07. Push: "Push everything," every commit since is pushed. Commit
+  identity: Prasad Shirvalkar, `prasad.shirvalkar@ucsf.edu` (decision 49); every commit from
+  that date carries it, passed inline since the git config file is not writable in this
+  sandbox. This checkbox itself was stale — the answer had already landed in
+  `DECISIONS_and_open_items.md` Part 2 item 1 and was never carried back into this file until
+  now.**
+
+### Phase 6: Biomarkers heat-map headline redesign — a separate `/swarm-plan`, folded in here
+
+**Status:** complete
+
+Not part of the original 30-step plan above. Requested directly by the PI after Phase 5 closed:
+make the calibrated correlation/AUC heat maps the headline visualization on the Biomarkers page,
+wire the page's match-direction control into the calibrated sweep, add a family-wise correction
+across the grid's own 22 band centres, and export the full grid to Closed-Loop Deployment. Scoped
+and executed under its own `/swarm-plan` brief (PR-FAQ, PRD with three page-layout options, two
+ADRs, a four-track task breakdown — `artifacts/prd_2026-09-08_biomarkers_heatmap_headline.md` and
+siblings), then followed by a full `/swarm-review` and two rounds of fixing what it found. Kept in
+this plan's own files rather than a second `.planning/` directory because it continues the
+identical branch and the identical proof discipline this plan already established, not because it
+shares this plan's own goal statement above.
+
+- [x] **Track A — page layout and interaction (Option 2, "search-first, minimal chrome",
+  decision 62).** New component `BiomarkerHeatmapGrids.js`: hover-preview, click-to-pin,
+  small-multiples contact-pair strip, no auto-selected cell on load. The correlation/binarization
+  asymmetry (PRD §3) enforced structurally, not just visually. New endpoint
+  `band_time_sweep_cell_for_participant` for the click-through drill-down. A real bug caught live:
+  the drill-down's raw correlation didn't match the grid's own stored value because it skipped the
+  grid's own outlier rule; fixed and reproduced to 11 significant figures. Decision 66
+- [x] **Track B — match-direction wiring.** `availability.live_lsb_spectrum_match` gained a
+  `match_direction` argument threaded through both search paths; the sweep's own request-layer
+  parsing (`_sweep_match_direction`, later extracted) reads the page's control. Proven live on
+  RCS08: default vs "nearest" differ only in timing/label fields (0 scientific values moved),
+  default vs "prior" differs in 20,229 real fields. Decision 64
+- [x] **Track C — the 8-30 Hz family-wise correction (decision 63: Benjamini-Hochberg, no
+  autocorrelation adjustment).** `analytics._apply_family_wise_correction`, corrected
+  independently per grid (correlation, AUC), never pooled with the older full-spectrum routine's
+  own correction (decision 61: the two routines answer different questions and were not folded).
+  A real caching bug found and fixed along the way: the sweep's version constant wasn't bumped, so
+  the first live check silently replayed a stale pre-change response. Decision 64
+- [x] **Track D — export the full grid to Closed-Loop Deployment (decision 65's go-ahead).**
+  `band_sweep_grid_for_closed_loop` reads the stored grid via the existing no-writer's-key
+  pattern; the cross-setting stability column is off by default, folded into the cache key when
+  on. D2(a) (a device-rule pass/fail column) deliberately NOT built — checked against the real
+  51-rule table first and found only 4 of 51 rules are evaluable from a band centre alone.
+  A real, pre-existing production bug found and fixed: `stability.py`'s import was spelled only
+  the host-only way, so the already-shipped single-candidate stability field had likely never
+  returned its real answer inside the production container — confirmed directly through Django's
+  own `manage.py shell` (the exact process gunicorn's workers use) before and after the fix, then
+  proven end to end with a real four-valued answer on live RCS08 data. Decisions 67-68
+- [x] **The full-grid live proof (D4), left incomplete when the container's bridge stalled, was
+  finished after a restart.** Field-count/difference-count proof for `IncludeCrossSettingStability`
+  off vs on: 27,865 fields common, 0 dropped, 10,560 new fields, and of the common fields only 22
+  differ — all timing fields or the store key, which correctly changes because the flag is folded
+  into the cache key. Decision 68
+- [x] **A full `/swarm-review` of the branch (scoped to this session's 10 commits, `10b9e8bb^..HEAD`)
+  found one HIGH, three Medium and three Low findings. All eight are closed:** the HIGH (zero
+  test coverage for the sweep's own request-level MatchDirection parsing) and one Low (the
+  same class of gap in the OLDER, pre-existing MatchDirection parse used by
+  `run_for_participant`) were both fixed by extracting the parsing into named, directly-testable
+  helpers (`_sweep_match_direction`, `_forecast_match_direction`) with tests pinning both their
+  defaults and that the two deliberately disagree on what an unrecognised value falls back to.
+  The three Mediums: an all-NaN-family test for the family-wise correction, a test rename
+  reflecting what it actually proves, and a cross-check of `bh_fdr` against
+  `statsmodels.stats.multitest.multipletests`. The other two Lows: a terse local variable renamed
+  (`_prior` to `_prior_mode`), and a past commit's message wording left alone on purpose — it is
+  already-pushed history, and this project's own rule is to never rewrite that
+- [x] **Two PI-requested follow-ups, resolved after the review.** The device-rules status note's
+  wording ("not assessable from a band alone" to "more stimulation settings needed", the PI's own
+  direction). And the missing populated-grid screenshot (open item 24): the real cause was that
+  RCS08 carried zero `StudyDataRel` rows in this database, so no browser session — not a login
+  problem — could see it; fixed via the app's own Join Study flow plus one `StudyDataRel` row,
+  confirmed the calibrated grid renders live and populated on RCS08's real page, then the grant
+  was revoked so no standing access to a real participant remains on the throwaway account
+
+Container suite after this phase's last change: **578 passed, 0 failed** (was 537 at the end of
+Phase 5). Host suite: **949 passed, 41 skipped**, both orders (was 934 at the end of Phase 5).
+Full detail: `DECISIONS_and_open_items.md` decisions 62 through 70.
 
 ---
 
@@ -316,6 +412,7 @@ store.
 | 18 | **Track F step 2: a short-lived Redis lock (`CacheStore/locks.py`) keyed on the tile file's own key is held while the tiles are built; it expires on its own (300 s against a 36 to 39 s build), a waiter reads the file when its sidecar appears and builds anyway after 150 s, and Redis being unreachable, the client absent or the lock switched off all mean building as before with no error.** Redis is reached with protocol version 2. | Four workers missing the same file used to start four builds. Proven on RCS08 through the bridge with four concurrent cold requests in one process: one build, three served, every request answered in 40.4 to 40.8 s; the control with the lock off ran four builds contending for the machine and every request took 367 to 368 s. Seven tests on a stand-in for Redis pin the three requirements and that eight concurrent callers yield exactly one builder. | 2026-09-07 |
 | 19 | **Track G step 2: the device route in the three-source comparison excludes and counts samples above a saturation ceiling, a fold of the settled window's own median (`DEVICE_SPIKE_FOLD = 10`, provisional, open item 20); the ground-truth verdict of decision 33 is applied to every run, band and setting, pairing the device's band with the single nearest stored centre the comparison itself uses, and written as `ground_truth_verdict` by the closed-loop request with the tile entry in its provenance; Stim Optimizer reads the newest verdict as `stim_optimizer`, reports it, keys its response on it and cites it.** | The rule was decided and not written back; the ceiling it requires did not exist in the code, and the number is a scientific choice the PI has not made, so it is one named constant with a fold against the window's own median rather than an absolute level. On RCS08 the ceiling changed 3 of 12,068 comparison values (two pieces counts, one reason), excluded 12 spikes, and no settled power moved. The verdict's first version keyed the device's band on the programmed centre and so never met the converted routes: 0 rows with both; pairing at the comparison's own nearest centre gives 29, fold 0.807 to 1.785, median 0.987. | 2026-09-07 |
 | 20 | **Track C step 4: every module response carries `cache_status` — whether a stored entry exists under the request's current key, its build date read from the entry's own sidecar, the trigger, and a plain sentence saying what the date means on that page — and one shared line component under each page's recompute control shows it, including "no stored results yet".** The biomarker page names its tile entry, the closed-loop page its assembled inputs, the optimizer page its stored response. | The plan asks for the date on all three pages including the no-cache case, worded so a stale page is distinguishable from a current one at a glance; three pages mean three different dates, so the sentence beside each says which. The date comes from the sidecar (Track F step 3), never a file timestamp. On RCS08 all three answer, the biomarker status costs 0.48 s (the key from database rows) and the closed-loop one 0.40 s. | 2026-09-07 |
+| 21 | **This file is reconciled against `DECISIONS_and_open_items.md`, which had continued to be the record of everything landed since decision 61 while this file and `progress.md` stopped there.** Phase 6 is added to hold the Biomarkers heat-map headline redesign (Tracks A-D, decisions 62-70) rather than opening a second plan directory for it. Track C step 1 and Track D steps 1-2 are corrected against decisions 51-53 (Track E's resolution settled Track C step 1 and lifted the gate on Track D steps 1-2, neither of which had been carried back into this file). Phase 5's commit-identity checkbox is corrected — it read "still open" though the answer (decision 49) had been on record since 2026-09-07. | Asked directly: check what's open here. `DECISIONS_and_open_items.md` had been kept current throughout; this file and `progress.md` had not, so a reader of only these files would have missed nine decisions' worth of real, tested, pushed work and would have acted on two stale open questions that were already answered. One genuine, still-open documentation conflict was found in the course of this and left unresolved rather than picked one way: `DECISIONS_and_open_items.md`'s own open item 7 still reads as unsettled while `ARCHITECTURE_cache_store.md` §3 states plainly that decisions 51-53 settled it — that reconciliation needs the PI's read, not an agent's guess at which document is right. | 2026-09-08 |
 
 ## Errors Encountered
 
