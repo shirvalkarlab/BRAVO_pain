@@ -195,17 +195,16 @@ several specific method questions below still need his direct answer, not an ass
 2. ~~**The tie-break rule inside Option 1's guided walk.**~~ **MOOT.** Option 2 has no guided walk,
    so Track A1's task A6 (PRD §4, plan Track A) drops out of scope entirely rather than waiting on
    an answer.
-3. **Confirmation of the exact correction method for §7** — Benjamini-Hochberg is what this project
-   already uses elsewhere and is proposed here for that reason, but every prior correction choice in
-   this project has its own explicit sign-off, and this one should too. **Still open.**
-4. **Whether the family-wise correction in §7 also needs the same autocorrelation adjustment** the
-   older routine applies before its own correction (a separate fix for pain ratings being related to
-   each other over time, not the same thing as correcting for testing many bands) — the explorer
-   investigation found no such adjustment exists yet for the calibrated grid at all, corrected or
-   not, which is a separate, currently-open question about the calibrated grid's honesty that this
-   plan surfaces but does not resolve. **Still open.**
+3. ~~**Confirmation of the exact correction method for §7.**~~ **RESOLVED 2026-09-08:
+   Benjamini-Hochberg**, matching this project's own precedent.
+4. ~~**Whether the family-wise correction in §7 also needs the same autocorrelation adjustment.**~~
+   **RESOLVED 2026-09-08: no.** The new correction is computed from the calibrated grid's p-values
+   as they stand, with no autocorrelation adjustment folded in. The gap this surfaced — that the
+   calibrated grid has no such adjustment today, corrected or not — stands as its own, separately
+   open question about the grid's statistics generally, not part of this decision.
 5. ~~**Confirmation that Option 3 (§4) should wait.**~~ **MOOT.** With Option 2 chosen, Option 3
    is automatically deferred to a later phase; nothing about it needs deciding now.
 
-**Net effect: only items 3 and 4 remain open, and both block Track C alone** (plan §"Track C").
-Tracks A (built for Option 2), B, and D have no PI-decision blocker left and can start on request.
+**Net effect: every method question in this PRD is now resolved.** All four tracks in the
+accompanying plan have no remaining PI-decision blocker. Implementation itself still needs its own
+explicit go-ahead per CLAUDE.md §10 rule 8 — a resolved plan is not that go-ahead by itself.

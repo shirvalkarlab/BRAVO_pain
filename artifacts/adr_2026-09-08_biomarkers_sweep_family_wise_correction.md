@@ -72,9 +72,11 @@ in use would need its own justification this document does not have grounds to m
 - No stored number that already exists changes; this adds a new field, it does not alter the grid's
   existing correlation or AUC values.
 
-## Open question requiring the PI's explicit sign-off before implementation
+## Resolved 2026-09-08
 
-Confirm the method (Benjamini-Hochberg, matching this project's own precedent) and confirm whether
-the autocorrelation adjustment question above should be resolved in the same implementation pass or
-tracked as its own, later decision. Per CLAUDE.md §10 rule 8, this ADR being written is not
-authorization to build it.
+**Method confirmed: Benjamini-Hochberg**, exactly as proposed above. **The autocorrelation
+adjustment is explicitly NOT part of this correction** — the calibrated grid's new family-wise
+label is computed from the grid's own p-values as they stand today, with no adjustment for pain
+ratings being related to each other over time. The gap this document surfaced (§"What this does
+not decide") stands as a separately known, separately open question about the calibrated grid's
+statistics generally — it is not folded into this decision and not blocking it.

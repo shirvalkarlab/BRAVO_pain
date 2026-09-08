@@ -57,12 +57,12 @@ this track's own request field and response field do not depend on which page la
 
 ## Track C — the family-wise correction
 
-**Blocked on:** the PI's sign-off on the ADR's open question (method confirmation, and whether the
-autocorrelation adjustment ships in the same pass or is tracked separately).
+**Resolved 2026-09-08: Benjamini-Hochberg, with no autocorrelation adjustment folded in.** No
+PI-decision blocker remains for this track.
 
 | Task | What it does | Acceptance criteria | Depends on |
 |---|---|---|---|
-| C1 | Apply the project's existing Benjamini-Hochberg function across the calibrated grid's 22 frequency points, per sensing contact pair, on top of its existing best-of-ten-lengths answer. | A new field reports pass/fail (or a corrected value) for the 22-point family, computed only from that grid's own 22 points, never pooled with the older routine's range; a constructed test with a known number of true and false signals recovers the expected corrected count. | ADR sign-off |
+| C1 | Apply the project's existing Benjamini-Hochberg function across the calibrated grid's 22 frequency points, per sensing contact pair, on top of its existing best-of-ten-lengths answer, computed from the grid's p-values as they stand today (no autocorrelation adjustment). | A new field reports pass/fail (or a corrected value) for the 22-point family, computed only from that grid's own 22 points, never pooled with the older routine's range; a constructed test with a known number of true and false signals recovers the expected corrected count. | none |
 | C2 | Surface the new field in the grid's stored response and confirm it is a label, never a gate — nothing about export or selection changes when a point fails it. | A point that fails the correction remains selectable in Track A's UI and exportable in Track D; a test asserts this explicitly (a failing point can still be read back through the same paths a passing one can). | C1 |
 | C3 | Prove it live on RCS08: field count and difference count on the grid's response before and after this field is added, confirming no existing value moved. | Reported per `ARCHITECTURE_cache_store.md` §7's discipline, on the live participant, through the bridge. | C1, C2 |
 
