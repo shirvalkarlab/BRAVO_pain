@@ -270,17 +270,22 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
         amp = cdata[:, 1] if cdata.shape[1] > 1 else np.full(len(time), np.nan)
         chronic_ts = [_to_datetime(t) for t in time]
 
-        # Nearest-date PRO join (PROs are daily; chronic samples are ~10 min).
-        pro_by_date = {d: g for d, g in df.groupby("_date")}
-        out_rows = []
-        for k, ts in enumerate(chronic_ts):
-            d = ts.date() if not pd.isna(ts) else None
-            g = pro_by_date.get(d)
-            row = {"time": ts, "lfp": lfp[k], "stim_amplitude": amp[k]}
-            for m in metrics:
-                row[m] = (g[m].mean() if (g is not None and m in g.columns) else np.nan)
-            out_rows.append(row)
-        return pd.DataFrame(out_rows)
+        # Nearest-date PRO join (PROs are daily; chronic samples are ~10 min). One vectorized
+        # per-date mean instead of a per-sample `.mean()` call per metric per row: `m in g.columns`
+        # was really checking df's own columns (identical for every group), so it's hoisted out of
+        # the loop; `df.groupby("_date")` drops NaT dates by default, matching the old
+        # `pro_by_date.get(d)` returning None (-> NaN) for any date that never appears.
+        present_metrics = [m for m in metrics if m in df.columns]
+        chronic_dates = pd.Index([ts.date() if not pd.isna(ts) else None for ts in chronic_ts])
+        out = pd.DataFrame({"time": chronic_ts, "lfp": lfp, "stim_amplitude": amp})
+        if present_metrics:
+            joined = df.groupby("_date")[present_metrics].mean().reindex(chronic_dates)
+            for m in present_metrics:
+                out[m] = joined[m].to_numpy()
+        for m in metrics:
+            if m not in present_metrics:
+                out[m] = np.nan
+        return out
 
     else:
         raise ValueError('target must be "session" or "chronic"')
