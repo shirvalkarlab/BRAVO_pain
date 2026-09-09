@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import Plotly from "plotly.js-dist";
 
 import MDBox from "components/MDBox";
+import { BIN_HI } from "./binarizationModel";
 
 // Okabe-Ito colorblind-safe palette, aligned with BiomarkerAnalytics.js. Pain uses vermillion
 // (the HI color) so a viewer reading the histogram and the timeline together gets the same
@@ -17,7 +18,7 @@ const C = {
   td: "#0072B2",        // time-domain biomarker (blue)
   lfp: "#009E73",       // power-domain band power (green) -- legacy fallback only
   threshold: "#7E8794", // learned threshold
-  pain: "#D55E00",      // NRS / pain (vermillion = HI)
+  pain: BIN_HI,         // NRS / pain (vermillion = HI, shared with binarizationModel/BiomarkerAnalytics)
   stim: "#E69F00",      // stim amplitude (orange)
   programmed: "#1A1A1A",// device's currently-programmed adaptive trigger (near-black solid, neutral
                         // so it doesn't collide with the violet/green hemisphere signal families)
@@ -150,6 +151,12 @@ function BiomarkerTimeline({ data, height }) {
   // pans/zooms them all together (and the vertical gridlines re-tick in lockstep). When false each
   // row zooms independently. Implemented with Plotly per-row x-axes + `matches`.
   const [linked, setLinked] = useState(true);
+
+  // Purge ONLY on true unmount, mirroring BiomarkerAnalytics.js's Fig component. The main effect
+  // below used to call Plotly.purge in ITS OWN cleanup, which ran on every [data, height, linked]
+  // change -- destroying and rebuilding the whole plot from scratch on every update instead of
+  // letting Plotly.react patch it in place, resetting the user's zoom/pan every time.
+  useEffect(() => () => { if (ref.current) Plotly.purge(ref.current); }, []);
 
   useEffect(() => {
     if (!ref.current || !data || !data.timeline || data.timeline.length === 0) return;
@@ -367,6 +374,10 @@ function BiomarkerTimeline({ data, height }) {
     const layout = {
       height: height || totalFoot * unit * 0 + ROW_PX * n + (nStarts * 34) + 70,
       margin: { l: 82, r: usedFreqs.length ? 172 : 104, t: 20, b: 42 },
+      // Stable across data updates (mirrors BiomarkerAnalytics.js's Fig component) so a re-render
+      // triggered by an unrelated parent state change doesn't reset the user's zoom/pan the way an
+      // unstable/absent uirevision would.
+      uirevision: "biomarker-timeline",
       hovermode: "x unified",
       showlegend: false,                          // hemisphere color + direct edge labels replace the legend
       font: { family: "Roboto, Helvetica, Arial, sans-serif", size: 13, color: "#344767" },
@@ -667,9 +678,11 @@ function BiomarkerTimeline({ data, height }) {
     gd.on("plotly_relayout", onRelayout);
 
     return () => {
+      // Only detach the listener this run attached -- NOT Plotly.purge, which now lives in the
+      // dedicated unmount-only effect above. Purging here on every [data, height, linked] change
+      // is exactly what defeated Plotly.react's in-place patching and reset the user's zoom/pan.
       if (ref.current) {
         try { ref.current.removeAllListeners && ref.current.removeAllListeners("plotly_relayout"); } catch (e) { /* noop */ }
-        Plotly.purge(ref.current);
       }
     };
   }, [data, height, linked]);

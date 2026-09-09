@@ -40,6 +40,7 @@ import MDButton from "components/MDButton";
 
 import { SessionController } from "database/session-control";
 import PAL from "views/Reports/ClosedLoopSim/palette";
+import { BIN_HI, BIN_LO, BIN_HI_RGB, BIN_LO_RGB } from "./binarizationModel";
 
 const num = (v, d = 3) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 
@@ -51,8 +52,8 @@ const num = (v, d = 3) => (v == null || !Number.isFinite(Number(v)) ? "—" : Nu
 function diverging(v, center, halfRange) {
   if (v == null || !Number.isFinite(Number(v))) return "#e9e9e9";
   const t = Math.max(-1, Math.min(1, (Number(v) - center) / halfRange));
-  const neg = [0, 114, 178];      // blue
-  const pos = [213, 94, 0];       // vermillion
+  const neg = BIN_LO_RGB;         // blue
+  const pos = BIN_HI_RGB;         // vermillion
   const mid = [255, 255, 255];
   const lerp = (a, b, k) => a + (b - a) * k;
   const c = t < 0
@@ -84,8 +85,12 @@ function bestCellIndexByColumn(sw, rows) {
  * with new numbers is what keeps the correlation grid's frame looking untouched.
  */
 function Heatmap({ sw, kind, hovered, pinned, onHover, onClick, flashKey, width = 900 }) {
-  const centers = sw.center_freqs_hz || [];
-  const seconds = sw.integration_seconds_requested || sw.integration_seconds_delivered || [];
+  // Memoized (not `sw.x || []` inline) so a falsy sw.center_freqs_hz/integration_seconds_* doesn't
+  // hand xLabels/yLabels' own useMemo calls below a brand-new [] reference on every render, which
+  // would silently defeat their memoization (caught by the eslint exhaustive-deps rule).
+  const centers = useMemo(() => sw.center_freqs_hz || [], [sw]);
+  const seconds = useMemo(
+    () => sw.integration_seconds_requested || sw.integration_seconds_delivered || [], [sw]);
   const grid = kind === "auc" ? sw.auc_grid : sw.correlation_grid;
   const rows = (grid || []).length;
   const cols = centers.length;
@@ -102,6 +107,30 @@ function Heatmap({ sw, kind, hovered, pinned, onHover, onClick, flashKey, width 
     return () => clearTimeout(t);
   }, [flashKey]);
 
+  // Padding enlarged (was 46/22/4/4) to leave room for the axis TITLES added below, not just the
+  // sparse tick labels that were already there -- the grids only had tick numbers before, with no
+  // "what am I looking at" label on either axis. Computed unconditionally (guarding cols/rows === 0
+  // with || 1) so the useMemo calls below it stay above the empty-grid early return -- rules of
+  // hooks forbid a hook after a conditional return, and these values are never rendered from when
+  // rows/cols are actually 0 since that path returns before the SVG using them is built.
+  const padL = 78, padB = 46, padT = 8, padR = 12;
+  const height = Math.max(260, rows * 30 + padT + padB);
+  const cw = (width - padL - padR) / (cols || 1);
+  const ch = (height - padT - padB) / (rows || 1);
+
+  // Sparse tick labels so text does not overlap: every 3rd band centre, every row's seconds.
+  // Memoized: these depend only on the axis geometry (sw/kind/width), never on hover/pinned/flash
+  // state, so an unrelated re-render of this component (e.g. a sibling panel's own state change)
+  // shouldn't force rebuilding these two label arrays every time.
+  const xLabels = useMemo(() => centers.map((c, i) => (i % 3 === 0 ? (
+    <text key={i} x={padL + i * cw + cw / 2} y={height - padB + 16} fontSize={11} textAnchor="middle"
+      fill="#444">{Number(c).toFixed(0)}</text>
+  ) : null)), [centers, padL, cw, height, padB]);
+  const yLabels = useMemo(() => seconds.map((s, i) => (
+    <text key={i} x={padL - 8} y={padT + i * ch + ch / 2 + 4} fontSize={11} textAnchor="end"
+      fill="#444">{Number(s) >= 60 ? `${Math.round(s / 60)}m` : `${Number(s).toFixed(0)}s`}</text>
+  )), [seconds, padL, padT, ch]);
+
   if (!rows || !cols) {
     return (
       <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11.5 }}>
@@ -109,13 +138,6 @@ function Heatmap({ sw, kind, hovered, pinned, onHover, onClick, flashKey, width 
       </MDTypography>
     );
   }
-  // Padding enlarged (was 46/22/4/4) to leave room for the axis TITLES added below, not just the
-  // sparse tick labels that were already there -- the grids only had tick numbers before, with no
-  // "what am I looking at" label on either axis.
-  const padL = 78, padB = 46, padT = 8, padR = 12;
-  const height = Math.max(260, rows * 30 + padT + padB);
-  const cw = (width - padL - padR) / cols;
-  const ch = (height - padT - padB) / rows;
 
   const cells = [];
   for (let r = 0; r < rows; r += 1) {
@@ -145,15 +167,6 @@ function Heatmap({ sw, kind, hovered, pinned, onHover, onClick, flashKey, width 
       );
     }
   }
-  // Sparse tick labels so text does not overlap: every 3rd band centre, every row's seconds.
-  const xLabels = centers.map((c, i) => (i % 3 === 0 ? (
-    <text key={i} x={padL + i * cw + cw / 2} y={height - padB + 16} fontSize={11} textAnchor="middle"
-      fill="#444">{Number(c).toFixed(0)}</text>
-  ) : null));
-  const yLabels = seconds.map((s, i) => (
-    <text key={i} x={padL - 8} y={padT + i * ch + ch / 2 + 4} fontSize={11} textAnchor="end"
-      fill="#444">{Number(s) >= 60 ? `${Math.round(s / 60)}m` : `${Number(s).toFixed(0)}s`}</text>
-  ));
   // Axis TITLES (new) -- the grid previously carried only tick numbers, with no label saying what
   // those numbers are. The x axis is centred under the whole plot area; the y axis title is
   // rotated 90 degrees and centred alongside the plot area's own vertical span.
@@ -289,8 +302,8 @@ function CellFigure({ cell, small }) {
   const lineX1 = xlo, lineX2 = xhi;
   const lineY1 = intercept + slope * lineX1, lineY2 = intercept + slope * lineX2;
 
-  const colorFor = (label) => (label === "high" ? (PAL.fail || "#D55E00")
-    : (label === "low" ? (PAL.accent || "#0072B2") : "#aaaaaa"));
+  const colorFor = (label) => (label === "high" ? (PAL.fail || BIN_HI)
+    : (label === "low" ? (PAL.accent || BIN_LO) : "#aaaaaa"));
 
   const violinW = small ? 0 : 90;
   const totalW = w + (small ? 0 : violinW + 16);

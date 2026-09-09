@@ -21,6 +21,10 @@
 export const BIN_HI = "#D55E00";   // high pain
 export const BIN_LO = "#0072B2";   // low pain
 export const BIN_MID = "#7E8794";  // excluded middle
+// RGB triplets for consumers that interpolate a gradient (e.g. a diverging colormap) rather than
+// setting a flat fill -- same two colors as BIN_HI/BIN_LO, just pre-split for math.
+export const BIN_HI_RGB = [213, 94, 0];
+export const BIN_LO_RGB = [0, 114, 178];
 
 // numpy-percentile (linear interpolation, q in 0..100) over a finite-value array.
 function percentile(values, q) {
@@ -68,7 +72,7 @@ function matchNearest(tSec, proSorted, tolSec, direction = "prior") {
 //   * "percentile" -> low/high slider percentiles
 //   * "median"   -> single median cut (>= median => high)
 //   * "kmeans"   -> 1-D 2-means (Lloyd from p25/p75), split at the cluster midpoint
-function computeCuts(vals, strategy, lowPct, highPct) {
+export function computeCuts(vals, strategy, lowPct, highPct) {
   if (!vals || vals.length === 0) return { kind: "none" };
   if (strategy === "tertile" || strategy === "percentile") {
     const loQ = strategy === "tertile" ? 33.3333 : Number(lowPct);

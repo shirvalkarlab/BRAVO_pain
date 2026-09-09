@@ -1168,7 +1168,6 @@ function Biomarkers() {
                 binPercentileLow={percentileLow} binPercentileHigh={percentileHigh}
                 participantUid={participant_uid}
                 requestParams={requestParams}
-                matchDirty={dirty}
                 onBandCommitted={(bc) => {
                   setCommittedBand(bc || null);
                   // A committed band is WHAT THE DEPLOYMENT VIEW IS ABOUT, so committing a

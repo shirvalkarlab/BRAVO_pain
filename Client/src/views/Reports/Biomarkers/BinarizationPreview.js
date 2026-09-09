@@ -30,47 +30,23 @@ import TextField from "@mui/material/TextField";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
-import { BIN_LO as LO, BIN_HI as HI, BIN_MID as MID } from "./binarizationModel";
+import { BIN_LO as LO, BIN_HI as HI, BIN_MID as MID, computeCuts as computeCutsShared }
+  from "./binarizationModel";
 
-// Lightweight percentile (linear interpolation, q in 0..100) over a finite-value array.
-function percentile(values, q) {
-  if (!values || values.length === 0) return null;
-  const a = [...values].sort((x, y) => x - y);
-  const idx = (q / 100) * (a.length - 1);
-  const lo = Math.floor(idx), hi = Math.ceil(idx);
-  if (lo === hi) return a[lo];
-  return a[lo] + (a[hi] - a[lo]) * (idx - lo);
-}
-
-// Compute cuts given strategy + percentile state (legacy daily-mode fallback only; matched mode
-// takes its cuts straight from the scanModel so they are byte-identical to the backend labeler).
+// Daily-mode (legacy fallback) cuts: the shared, backend-faithful computeCuts for the numeric
+// values, with the same UI percentile/strategy labels matchedCuts (below) attaches to the
+// matched-mode cuts -- one cut-computation implementation for both modes instead of two.
 function computeCuts(vals, strategy, lowPct, highPct) {
-  if (!vals || vals.length === 0) return { kind: "none" };
-  if (strategy === "tertile" || strategy === "percentile") {
-    return {
-      kind: "two-cut",
-      lowCut: percentile(vals, strategy === "tertile" ? 33.3333 : lowPct),
-      highCut: percentile(vals, strategy === "tertile" ? 66.6667 : highPct),
+  const c = computeCutsShared(vals, strategy, lowPct, highPct);
+  if (c.kind === "two-cut") {
+    return { ...c,
       lowLabel: `${(strategy === "tertile" ? 33.3 : lowPct).toFixed(0)}th pct`,
-      highLabel: `${(strategy === "tertile" ? 66.7 : highPct).toFixed(0)}th pct`,
-    };
+      highLabel: `${(strategy === "tertile" ? 66.7 : highPct).toFixed(0)}th pct` };
   }
-  if (strategy === "median") {
-    const m = percentile(vals, 50);
-    return { kind: "one-cut", cut: m, label: "median (50th pct)" };
+  if (c.kind === "one-cut") {
+    return { ...c, label: strategy === "median" ? "median (50th pct)" : "KMeans midpoint (1-D preview)" };
   }
-  let c0 = percentile(vals, 25), c1 = percentile(vals, 75);
-  for (let it = 0; it < 30; it++) {
-    const mid = (c0 + c1) / 2;
-    let s0 = 0, n0 = 0, s1 = 0, n1 = 0;
-    for (const v of vals) {
-      if (v <= mid) { s0 += v; n0 += 1; } else { s1 += v; n1 += 1; }
-    }
-    const nc0 = n0 ? s0 / n0 : c0, nc1 = n1 ? s1 / n1 : c1;
-    if (Math.abs(nc0 - c0) < 1e-9 && Math.abs(nc1 - c1) < 1e-9) { c0 = nc0; c1 = nc1; break; }
-    c0 = nc0; c1 = nc1;
-  }
-  return { kind: "one-cut", cut: (c0 + c1) / 2, label: "KMeans midpoint (1-D preview)" };
+  return c;
 }
 
 // Integer-valued pain metrics: NRS and the count-like sums are reported on an integer scale, so the
