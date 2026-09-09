@@ -107,3 +107,74 @@
 | `pip install pytest` refused by PEP 668 (externally-managed environment); `python3 -m venv` failed (`ensurepip` unavailable, needs `python3.12-venv` via apt). | Used `pip install --break-system-packages pytest`, the user's own explicitly-authorized path ("install pytest ... on the OrbStack server"), since no venv tooling was available as the safer alternative. |
 | `test_no_directory_means_memory_only_and_not_a_failure` failed inside the container. | Root-caused (not assumed) to `store.root_dir()` falling through to the real, Django-configured cache root when the container has a live `DATASERVER_PATH` -- a mismatch between the test's bare-host assumption and the live container it actually ran in, not a regression from this session's edits. |
 | The failing test's own write triggered a real cache eviction (`_sweep_superseded`) against the live production cache directory. | Confirmed self-healing (next real request rebuilds and re-caches); the underlying participant-scoping gap that made this possible is recorded as open item 25 for the PI, not fixed in this pass. |
+
+## Session: 2026-09-09 (continued) — fixing open item 25
+
+### Current Status
+- **Phase:** 5 - complete
+
+### Actions Taken
+- User asked directly to fix the cross-participant cache-eviction bug just identified (open item 25).
+- Read `CacheStore/store.py`'s `_stem`/`kind_dir`/`root_dir`/`_sweep_superseded` in full before
+  editing anything: confirmed the signature already makes each participant's file name unique (via
+  `recording_set_signature`'s own embedded participant field), but `_sweep_superseded`'s CLEANUP
+  step groups only by the `participant_uid` argument, which every `ClosedLoopDeployment.adapter`
+  call site passed as `None` regardless of which participant it was for.
+- Added an optional `participant_uid=None` keyword to `_shared_store`/`_shared_load`/`_shared_path`
+  in `ClosedLoopDeployment/adapter.py`, forwarded to the store instead of a hardcoded `None`.
+  `evidence_inputs_cached` (the only live production caller of the "inputs" kind) now passes the
+  real participant identity on both its load and store calls, derived the same way
+  `recording_set_signature` already does. `cache_status_for_page` (the cache-status line shown on
+  the page, decision 48) was also hardcoding `None` and would have looked in the wrong place once
+  the storage side was fixed -- corrected to match.
+- Investigated `amplitude_response_cached` ("response" kind) before deciding what to do with it:
+  grepped the whole module tree and found zero production callers anywhere, only its own test file;
+  neither of its two inputs (`steps`, `tiles_by_channel`) carries a participant identity to derive
+  one from. Left it passing `participant_uid=None` deliberately, with a comment explaining why and
+  pointing a future real caller at the fix `evidence_inputs_cached` got, rather than inventing a
+  participant identity that doesn't exist at that call site.
+- Ran the full host suite before writing any test of my own, to see the actual state: found a SECOND
+  failure beyond decision 84's already-known one -- `test_ground_truth.py::test_the_report_page_
+  status_names_the_inputs_entry_or_its_absence`. Investigated rather than assumed: its own setup
+  line hardcoded the OLD, buggy convention (`st.store("inputs", None, ...)`) to simulate an existing
+  cache entry, so once `cache_status_for_page` started looking under the real participant_uid, the
+  test's own simulated entry (written under the old `None`/"shared" convention) no longer matched.
+  Fixed the test's setup to write under the real participant_uid, matching what the real writer now
+  does, without touching the test's own assertion about what the status page should report.
+- Grepped the whole test directory for any OTHER test hardcoding the same old convention for the
+  "inputs" kind -- confirmed this was the only one.
+- Added two new regression tests to `test_adapter_caching.py`: one proves, directly at the
+  `_shared_store`/`_shared_load` level, that two participants' entries survive each other's writes
+  and rebuilds; one proves `evidence_inputs_cached` itself now stores under the real participant id,
+  not "shared".
+- Re-ran the full host suite: 992 passed (990 -> 992, +2 new), 42 skipped, 1 failed -- confirmed by
+  name that the one remaining failure is exactly decision 84's own already-explained, unrelated
+  environment mismatch, not a new regression from this fix.
+- Ran the container suite as a sanity check (this fix touches no Biomarkers or CacheStore/store.py
+  code): 584/0, unchanged.
+- Live-proven on RCS08: cleared the shared cache for this module's two kinds (a controlled version
+  of the same benign, self-healing eviction already observed once today), rebuilt
+  `evidence_inputs_cached` fresh, and confirmed (a) the resulting file name carries the real
+  participant uid (`2e3c75c00d7f4f37b53a048d195f11da`), not "shared", (b) `cache_status_for_page`
+  finds the entry, and (c) the rebuilt values -- 123 exposure epochs, 92 design-matrix rows --
+  exactly match this same function's own comment, which already documents those row counts from the
+  2026-09-06 measurement, confirming the fix changed only the cache's own bookkeeping, not any
+  computed number.
+- Cleaned up the scratch verification script (gitignored, `_agent_bridge/_*`).
+- `DECISIONS_and_open_items.md` decision 85 added; open item 25 marked resolved. Committed and
+  pushed.
+
+### Test Results
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| `test_writing_one_participants_entry_does_not_evict_another_participants` (new) | participant A's entry, and A's own rebuild, never delete participant B's entry | Pass | Pass |
+| `test_evidence_inputs_cached_stores_under_the_real_participant_not_shared` (new) | the stored file name carries the real participant id, never ".shared." | Pass | Pass |
+| Host suite, full re-run | Only decision 84's known, unrelated failure remains | 992 passed, 42 skipped, 1 failed (the known one, confirmed by name) | Pass |
+| Container suite, sanity re-run | Unaffected (no Biomarkers/CacheStore/store.py code touched) | 584/0, unchanged | Pass |
+| Live RCS08: rebuilt "inputs" cache file name | Carries the real participant uid | `inputs.v1.2e3c75c00d7f4f37b53a048d195f11da.<hash>.pkl` | Pass |
+| Live RCS08: rebuilt row counts | Match the 2026-09-06-documented values (123 epochs, 92 design-matrix rows) | Exact match | Pass -- confirms no computed number moved |
+
+### Errors
+| Error | Resolution |
+|-------|------------|
+| After the `cache_status_for_page` fix, a second, previously-passing test failed: `test_the_report_page_status_names_the_inputs_entry_or_its_absence`. | Traced to the test's own setup hardcoding the old `participant_uid=None` convention to simulate an entry; updated the setup to the real writer's real behavior (the fix, not a workaround), leaving the test's actual assertion unchanged. |

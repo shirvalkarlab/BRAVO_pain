@@ -7,20 +7,18 @@ the stim-stability equivalence test, etc.), report any gap between what should g
 and what the code actually enforces, and — if the PI approves — fix confirmed defects.
 
 ## Next Step
-Complete. Both confirmed defects found in the audit (decision 82) are fixed (decision 83), tested
-(2 new pure-function unit tests, container suite 582->584/0), live-proven on RCS08 for the exact
-documented disagreement case (ONE_THREE_LEFT at 12.5 Hz), and two confirmed-dead frontend files
-deleted. Committed and pushed. **The host suite WAS subsequently run** (decision 84), at the user's
-follow-up request, by installing pytest inside the live container (`--break-system-packages`, no
-venv tooling available): 990 passed, 42 skipped, 1 failed. The one failure is a pre-existing
-environment-assumption mismatch in the test itself (it assumes no `DATASERVER_PATH` is configured,
-true only in the bare host env this suite was designed for, not inside the live container), not a
-regression from anything this session changed — confirmed by reading `store.py`'s `root_dir()`
-directly. Running it also surfaced a real, self-healing cache-eviction side effect and a genuine,
-separate, flagged-not-fixed scoping gap in `_sweep_superseded` (open item 25). Nothing left queued.
+Complete. All four items from this task are done: the two confirmed gate defects (decision 82/83),
+actually running the host suite (decision 84), and the cross-participant cache-eviction bug that
+run surfaced (open item 25, fixed as decision 85). Host suite: 992 passed, 42 skipped, 1 failed --
+the one failure is decision 84's own pre-existing, already-explained environment mismatch, confirmed
+still unrelated after this fix. Container suite unaffected, 584/0. Live-proven on RCS08: the
+"inputs" cache file now carries the real participant uid, not "shared", and the rebuilt values (123
+epochs, 92 design-matrix rows) exactly match this function's own already-documented 2026-09-06
+measurement, confirming the fix touches only cache bookkeeping, not any computed number. Nothing
+left queued.
 
 ## Current Phase
-Phase 4 (final)
+Phase 5 (final)
 
 ## Phases
 
@@ -110,6 +108,42 @@ Phase 4 (final)
       timings) and recorded the underlying scoping gap as new open item 25, flagged not fixed.
 - [x] `DECISIONS_and_open_items.md` decision 84 added with the real suite numbers, the root-cause
       analysis, and open item 25.
+- **Status:** complete
+
+### Phase 5: Fix the cross-participant cache-eviction bug (open item 25)
+- [x] Read `_stem`/`kind_dir`/`root_dir`/`_sweep_superseded` in `CacheStore/store.py` in full before
+      touching anything, to confirm the exact mechanism: the signature already makes each
+      participant's file uniquely named (via `recording_set_signature`'s embedded participant
+      field), but `_sweep_superseded`'s eviction GROUPING is keyed only on the `participant_uid`
+      argument, which every `ClosedLoopDeployment.adapter` call site passed as `None`.
+  - [x] Added an optional `participant_uid=None` keyword to `_shared_store`/`_shared_load`/
+      `_shared_path`, forwarded to the store instead of a hardcoded `None`.
+  - [x] `evidence_inputs_cached` (the "inputs" kind's only live production caller) now passes the
+      real participant identity on both its load and store calls.
+  - [x] `cache_status_for_page` (decision 48's cache-status line) fixed to match — it was also
+      hardcoding `None`, which after the storage fix would have looked in the wrong place.
+  - [x] `amplitude_response_cached` ("response" kind) deliberately left passing `None` — confirmed
+      by grep it has zero production callers anywhere and neither of its inputs carries a
+      participant identity; a comment explains why and points a future caller at the fix.
+- [x] Found and fixed one test whose own setup hardcoded the old, buggy convention
+      (`test_ground_truth.py::test_the_report_page_status_names_the_inputs_entry_or_its_absence`
+      wrote its simulated entry with `participant_uid=None`) — updated the setup to match the real
+      writer's real behavior, without weakening the test's own assertion.
+  - [x] Confirmed by grep this was the only such test across the whole test directory.
+- [x] Two new regression tests added to `test_adapter_caching.py`: one proves two participants'
+      `_shared_store`/`_shared_load` entries survive each other's writes and rebuilds directly; one
+      proves `evidence_inputs_cached` itself stores under the real participant id.
+- [x] Host suite re-run: 992 passed (990 -> 992, +2 new), 42 skipped, 1 failed — confirmed the 1
+      failure is exactly decision 84's own already-explained, unrelated environment mismatch (same
+      test name, re-verified this fix touches nothing near it).
+- [x] Container suite re-run as a sanity check (this fix touches no Biomarkers/CacheStore code):
+      584/0, unchanged.
+- [x] Live-proven on RCS08: cleared the shared cache, rebuilt `evidence_inputs_cached` fresh, and
+      confirmed (a) the resulting file name carries the real participant uid, not "shared", (b)
+      `cache_status_for_page` finds it, and (c) the rebuilt values (123 epochs, 92 design-matrix
+      rows) exactly match this same function's own already-documented 2026-09-06 measurement,
+      confirming the fix changes only cache bookkeeping, never a computed number.
+- [x] `DECISIONS_and_open_items.md` decision 85 added; open item 25 marked resolved.
 - **Status:** complete
 
 ## Decisions Made

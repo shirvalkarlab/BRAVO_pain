@@ -487,6 +487,55 @@ def test_the_stored_format_version_is_part_of_the_file_name():
     assert f".v{AD._SHARED_CACHE_FORMAT}." in p1
 
 
+def test_writing_one_participants_entry_does_not_evict_another_participants(monkeypatch):
+    """The bug found while running the host suite inside the live container (decision 84/85): every
+    call into `_shared_store`/`_shared_load` used to pass `participant_uid=None` regardless of which
+    participant it was actually for, so the store's own cleanup step (`_sweep_superseded`, which
+    groups by `participant_uid`, not by the signature it never sees) treated every participant's
+    entry of a kind as interchangeable "shared" clutter -- a fresh build for one participant deleted
+    every OTHER participant's still-current cached entry of the same kind.
+
+    `evidence_inputs_cached`'s real call sites now pass the real participant_uid; this test pins the
+    property directly on the lower-level `_shared_store`/`_shared_load` functions those calls go
+    through, with two participants whose SIGNATURES differ (as real signatures always do, via
+    `recording_set_signature`'s own embedded participant field) but who previously shared one
+    eviction group regardless.
+    """
+    assert AD._shared_store("inputs", ("participant-A-sig",), "payload for A",
+                            participant_uid="participant-A") is True
+    assert AD._shared_store("inputs", ("participant-B-sig",), "payload for B",
+                            participant_uid="participant-B") is True
+    # Before the fix, writing B's entry would have swept A's away too -- both used the same
+    # ".shared." marker regardless of the real participant. Confirm A survives B's write.
+    assert AD._shared_load("inputs", ("participant-A-sig",), participant_uid="participant-A") \
+        == "payload for A"
+    assert AD._shared_load("inputs", ("participant-B-sig",), participant_uid="participant-B") \
+        == "payload for B"
+    # And a SECOND write for A (a real rebuild, e.g. after a new upload) still only sweeps A's own
+    # stale entries, never touching B's.
+    assert AD._shared_store("inputs", ("participant-A-sig-v2",), "payload for A, rebuilt",
+                            participant_uid="participant-A") is True
+    assert AD._shared_load("inputs", ("participant-B-sig",), participant_uid="participant-B") \
+        == "payload for B", "participant A's rebuild must not evict participant B's entry"
+    assert AD._shared_load("inputs", ("participant-A-sig",), participant_uid="participant-A") \
+        is None, "participant A's OWN superseded entry should still be swept"
+
+
+def test_evidence_inputs_cached_stores_under_the_real_participant_not_shared(monkeypatch, live_inputs):
+    """`evidence_inputs_cached` itself, not just the lower-level helpers, must pass the real
+    participant through -- this is the actual call site the live container's cache-eviction side
+    effect (decision 84) traced back to."""
+    AD.evidence_inputs_cached("PARTICIPANT")
+    d = AD.shared_cache_dir()
+    import os
+    files = [f for f in os.listdir(d) if f.endswith(".pkl")]
+    assert files, "expected a stored inputs entry"
+    assert any(".PARTICIPANT." in f for f in files), (
+        f"expected the real participant id in the stored file name, got {files!r} -- "
+        "a bare '.shared.' name here means the eviction bug is back")
+    assert not any(".shared." in f for f in files)
+
+
 def test_clearing_this_process_does_not_by_default_clear_the_shared_files():
     """A script or test emptying its own memory must not make every worker process rebuild."""
     AD._shared_store("inputs", ("k",), "v")

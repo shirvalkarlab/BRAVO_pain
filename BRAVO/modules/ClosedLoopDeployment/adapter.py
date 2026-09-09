@@ -447,25 +447,31 @@ def shared_cache_dir():
     return _cache_store.kind_dir("inputs", root=_SHARED_CACHE_DIR_OVERRIDE)
 
 
-def _shared_path(kind, signature):
+def _shared_path(kind, signature, *, participant_uid=None):
     """The file this signature would be stored at, or None.
 
-    Two arguments rather than three because this module has always keyed on the signature alone —
-    the participant is already folded into the signature by `recording_set_signature`.
+    `participant_uid` is optional and defaults to `None` (the store's own "shared" naming) for
+    callers with no single participant in scope. When a real value is passed, `CacheStore._stem`
+    folds it into the file name too — the signature already made the key unique per participant
+    (via `recording_set_signature`), but the STORE's own eviction step, `_sweep_superseded`, only
+    ever grouped by this `participant_uid` argument, never by the signature it can't see inside.
+    Every caller here used to pass `None`, so every participant's entry of a given kind shared the
+    same "shared" eviction group — a write for one participant would remove every OTHER
+    participant's resident entry of that kind too, not just its own stale ones. See decision 85.
     """
-    stem = _cache_store._stem(kind, None, signature, root=_SHARED_CACHE_DIR_OVERRIDE)
+    stem = _cache_store._stem(kind, participant_uid, signature, root=_SHARED_CACHE_DIR_OVERRIDE)
     return None if stem is None else stem + ".pkl"
 
 
-def _shared_load(kind, signature, *, consumer=None):
+def _shared_load(kind, signature, *, participant_uid=None, consumer=None):
     """The stored product for this signature, or None. Every failure is a miss, never an error."""
-    return _cache_store.load(kind, None, signature, consumer=consumer,
+    return _cache_store.load(kind, participant_uid, signature, consumer=consumer,
                              root=_SHARED_CACHE_DIR_OVERRIDE)
 
 
-def _shared_store(kind, signature, payload, *, provenance=None, trigger=None):
+def _shared_store(kind, signature, payload, *, participant_uid=None, provenance=None, trigger=None):
     """Write the product where the other worker processes can find it. True if it landed."""
-    return _cache_store.store(kind, None, signature, payload,
+    return _cache_store.store(kind, participant_uid, signature, payload,
                               writer="closed_loop", trigger=trigger or f"{kind}_build",
                               provenance=provenance,
                               root=_SHARED_CACHE_DIR_OVERRIDE,
@@ -627,6 +633,14 @@ def evidence_inputs_cached(participant, *, force_refresh=False):
     """
     from StimOptimizer import adapter as _sa
     sig = recording_set_signature(participant)
+    # The real participant identity, passed to the store (decision 85) so its own eviction step
+    # (`_sweep_superseded`) can tell this participant's stale "inputs" entries apart from every
+    # OTHER participant's -- passing `None` here, as every call site used to, put every
+    # participant's entry into the store's one undifferentiated "shared" eviction group, so a
+    # fresh build for participant A would delete participant B's still-current cached entry too.
+    # `str(getattr(participant, "uid", participant))` mirrors `recording_set_signature`'s own
+    # derivation immediately above, so both agree on the same identity for the same participant.
+    pid = str(getattr(participant, "uid", participant))
     if not force_refresh:
         with _INPUTS_MEMO_LOCK:
             hit = _INPUTS_MEMO.get(sig)
@@ -635,7 +649,7 @@ def evidence_inputs_cached(participant, *, force_refresh=False):
         # Nothing in this process's memory, so ask whether another worker process already built
         # it. This is the step that makes the build happen once per participant rather than once
         # per worker per restart.
-        shared = _shared_load("inputs", sig, consumer="closed_loop")
+        shared = _shared_load("inputs", sig, participant_uid=pid, consumer="closed_loop")
         if shared is not None:
             _remember_inputs(sig, shared)
             return shared
@@ -669,7 +683,8 @@ def evidence_inputs_cached(participant, *, force_refresh=False):
     dm = _sa.build_design_matrix(participant, stream=stream)
     out = (psd, eps, dm)
     _remember_inputs(sig, out)
-    _shared_store("inputs", sig, out, provenance=_inputs_provenance(participant, stream, dm))
+    _shared_store("inputs", sig, out, participant_uid=pid,
+                  provenance=_inputs_provenance(participant, stream, dm))
     return out
 
 
@@ -850,6 +865,13 @@ def amplitude_response_cached(steps, tiles_by_channel, *, centers_hz,
            f"{getattr(response_fn, '__module__', '?')}.{getattr(response_fn, '__qualname__', '?')}",
            tuple(sorted((str(k), repr(v)) for k, v in kw.items())))
 
+    # No `participant_uid` is passed on the two `_shared_*` calls below (decision 85 fixed
+    # `evidence_inputs_cached`'s "inputs" kind, which has a live caller and a real participant in
+    # scope; this "response" kind has neither today -- `steps`/`tiles_by_channel` carry no
+    # participant identity of their own, and grepping the whole module tree finds this function
+    # called only from its own test file). Left as `participant_uid=None` (the store's "shared"
+    # group) rather than inventing one; if this is ever wired to a real caller, that caller should
+    # pass the real participant through here too, the same way `evidence_inputs_cached` now does.
     if not force_refresh:
         with _RESPONSE_MEMO_LOCK:
             hit = _RESPONSE_MEMO.get(sig)
@@ -1507,7 +1529,10 @@ def cache_status_for_page(participant):
     except Exception as exc:                          # noqa: BLE001
         return {"kind": "inputs", "exists": False, "last_built_utc": None,
                 "what_it_means": meaning, "note": f"the recording-set key could not be built: {exc!r}"}
-    return _cache_store.status_for_page("inputs", None, sig, what_it_means=meaning,
+    # Same participant_uid `evidence_inputs_cached` now stores under (decision 85) -- passing
+    # `None` here after that fix would look up the wrong file and always report "no stored entry".
+    pid = str(getattr(participant, "uid", participant))
+    return _cache_store.status_for_page("inputs", pid, sig, what_it_means=meaning,
                                         root=_SHARED_CACHE_DIR_OVERRIDE)
 
 

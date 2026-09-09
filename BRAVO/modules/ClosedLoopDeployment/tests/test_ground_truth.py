@@ -219,7 +219,11 @@ def test_the_verdict_is_written_once_with_the_tile_entry_in_its_provenance_and_r
 def test_the_report_page_status_names_the_inputs_entry_or_its_absence(sandbox):
     none = AD.cache_status_for_page("PARTICIPANT")
     assert none["exists"] is False and none["kind"] == "inputs" and "no stored entry" in none["note"]
-    st.store("inputs", None, ("PARTICIPANT", 1, 2, "rs1"), {"x": 1}, writer="closed_loop",
+    # Written under the real participant_uid, matching what evidence_inputs_cached itself now does
+    # (decision 85) -- writing under `None` here, the module's own old (buggy) convention, would
+    # simulate a bug this test is not about and cache_status_for_page would correctly report it as
+    # not found, since it also now looks under the real participant_uid.
+    st.store("inputs", "PARTICIPANT", ("PARTICIPANT", 1, 2, "rs1"), {"x": 1}, writer="closed_loop",
              provenance=[], trigger="inputs_build", root=sandbox)
     got = AD.cache_status_for_page("PARTICIPANT")
     assert got["exists"] is True and got["trigger"] == "inputs_build" and got["last_built_utc"]
