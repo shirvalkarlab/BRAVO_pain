@@ -3615,7 +3615,8 @@ def _window_params_body(request_data, sliding):
 
 
 def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_list,
-                        pro_df, label_metric, region_map, warm=False, native_lsb_tolerance_s=120.0):
+                        pro_df, label_metric, region_map, warm=False, native_lsb_tolerance_s=120.0,
+                        psd_list=None):
     """Assemble the data-availability-timeline payload for the new BiomarkerDataTimeline component.
 
     Reuses recordings already loaded for the decoder (td/chronic/powerdomain) and additionally loads
@@ -3624,6 +3625,15 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
     where `records` are per-channel availability records, `pain`/`stim` are the shared-axis series,
     `freq_bands` are the categorical legend bands actually present, and `span` is [min_t, max_t].
     Guarded so any failure yields an empty payload rather than breaking the main timeline response.
+
+    `psd_list`, when the caller already loaded `AVAILABILITY_PSD_TYPES` for this exact
+    participant this request (run_for_participant does, for its own live-matching scan), is used
+    as-is instead of reloading -- one fewer disk-read/decompress/unpickle pass over the same files.
+    Left `None` (the default), this loads it itself exactly as before. Only this one load is reused
+    across the two call sites: the sensing-config index built a few lines below intentionally
+    differs between callers (this function always includes `powerdomain_list`;
+    run_for_participant's own scan index does not), so it is NOT threaded through here -- doing so
+    would change this function's own output instead of merely reusing already-equal work.
     """
     try:
         # td_list is a flat decoded list mixing BrainSenseTimeDomain + IndefiniteStream; the loader
@@ -3635,7 +3645,8 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
             if not isinstance(r, dict):
                 continue
             (ind if (r.get("RecordingType") == "MedtronicIndefiniteStream" or r.get("Source") == "indefinite" or r.get("IndefiniteStream")) else bs).append(r)
-        psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
+        if psd_list is None:
+            psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
         recs_by_type = {
             "MedtronicBrainSenseTimeDomain": bs,
             "MedtronicIndefiniteStream": ind,
@@ -4149,7 +4160,9 @@ def run_for_participant(request_data):
         participant_uid, chronic_list=chronic_list if source in ("powerdomain", "both") else [],
         powerdomain_list=powerdomain_list, td_list=td, pro_df=pro_df,
         label_metric=label_metric, region_map=region_map,
-        native_lsb_tolerance_s=native_lsb_tolerance_s)
+        native_lsb_tolerance_s=native_lsb_tolerance_s,
+        psd_list=_scan_psd_list)  # already loaded above for the live-matching scan; same
+                                  # participant, same AVAILABILITY_PSD_TYPES -- reuse, don't reload
     # Honesty flag (rigor fix #5): the power-domain detector currently pools all recorded power
     # channels into ONE threshold. If they span >1 anatomical target/hemisphere (e.g. Left GPi +
     # Right medial thalamus) and/or the raw 10-min Chronic vs per-session Power-Domain scales,
