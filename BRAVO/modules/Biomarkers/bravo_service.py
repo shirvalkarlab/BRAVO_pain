@@ -2775,7 +2775,7 @@ def _window_params_body(request_data, sliding):
 
 
 def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_list,
-                        pro_df, label_metric, region_map, warm=False):
+                        pro_df, label_metric, region_map, warm=False, psd_list=None):
     """Assemble the data-availability-timeline payload for the new BiomarkerDataTimeline component.
 
     Reuses recordings already loaded for the decoder (td/chronic/powerdomain) and additionally loads
@@ -2795,7 +2795,10 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
             if not isinstance(r, dict):
                 continue
             (ind if (r.get("RecordingType") == "MedtronicIndefiniteStream" or r.get("Source") == "indefinite" or r.get("IndefiniteStream")) else bs).append(r)
-        psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
+        # Reuse only recordings loaded for this participant in the current request.
+        # An explicitly empty list is already loaded; None retains the standalone path.
+        if psd_list is None:
+            psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
         recs_by_type = {
             "MedtronicBrainSenseTimeDomain": bs,
             "MedtronicIndefiniteStream": ind,
@@ -3296,7 +3299,7 @@ def run_for_participant(request_data):
     out["availability"] = _build_availability(
         participant_uid, chronic_list=chronic_list if source in ("powerdomain", "both") else [],
         powerdomain_list=powerdomain_list, td_list=td, pro_df=pro_df,
-        label_metric=label_metric, region_map=region_map)
+        label_metric=label_metric, region_map=region_map, psd_list=_scan_psd_list)
     # Honesty flag (rigor fix #5): the power-domain detector currently pools all recorded power
     # channels into ONE threshold. If they span >1 anatomical target/hemisphere (e.g. Left GPi +
     # Right medial thalamus) and/or the raw 10-min Chronic vs per-session Power-Domain scales,
@@ -3945,7 +3948,7 @@ def _ramp_guidance(polarity, adaptive_valid, suggested_mode, *, stim_stable=None
                        "deployable as stock Percept adaptive; resolve the control mapping first "
                        "(custom/negated feature or in-range re-anchor) before setting a ramp rate"),
         }
-    # Anything not CONFIRMED stable (False = stim-dependent, None = LRT did not converge) takes the
+    # Anything not CONFIRMED stable (False = stim-dependent, None = equivalence not demonstrated) takes the
     # conservative posture — the same abstain philosophy as the C8 stim-stability gate: absence of a
     # stability result is not evidence of stability, so do not start with a fast ramp.
     conservative = (stim_stable is not True)
@@ -3953,7 +3956,7 @@ def _ramp_guidance(polarity, adaptive_valid, suggested_mode, *, stim_stable=None
     if conservative:
         why = ("Biomarker is stim-dependent (the band->pain relationship shifts across stim eras)"
                if stim_stable is False else
-               "stim-stability is UNCONFIRMED (the band×era LRT did not converge)")
+               "stim-stability is UNCONFIRMED (equivalence not demonstrated)")
         transition_note = (f"{why} — start SLOW so a fast transition does not chase a moving target; "
                            "re-evaluate stability before speeding the ramp up.")
         ramp_up_hint = "start at the slow end of the clinic range, titrate up only if symptom control lags"
@@ -4937,6 +4940,29 @@ def band_deployment_roc_by_era(request_data):
     }
 
 
+
+def _deployment_stim_gate(st):
+    """Present existing equivalence evidence without treating a nonsignificant LRT as proof.
+
+    The third value feeds the existing advisory ramp posture. Unknown or conflicting
+    evidence stays unconfirmed; this helper neither fits a model nor changes device values.
+    """
+    if not isinstance(st, dict) or not st.get("available"):
+        return "indeterminate", "Stim-stability unconfirmed: assessment unavailable.", None
+    verdict = st.get("stability_verdict")
+    if verdict == "stim-dependent":
+        return "fail", "Stim-dependent: the band-by-era interaction test detected a difference.", False
+    if verdict == "stable":
+        if st.get("stim_stable") is True:
+            return "pass", "Stim-stable within the declared equivalence margin.", True
+        return ("indeterminate",
+                "Stim-stability unconfirmed: equivalence and LRT evidence conflict or are incomplete.",
+                None)
+    return ("indeterminate",
+            "Stim-stability unconfirmed: equivalence has not been demonstrated; a nonsignificant LRT alone is insufficient.",
+            None)
+
+
 def deployment_summary(request_data):
     """Phase E: one authoritative Deploy-to-Percept review payload for a committed band.
 
@@ -5121,20 +5147,10 @@ def deployment_summary(request_data):
     gates.append(_gate("credible_ci", "Credible effect-size CI",
                        "pass" if credible else "fail",
                        f"OR CI [{g.get('or_lo')}, {g.get('or_hi')}]"))
-    # Stim-stability gate (audit C8): FAIL-CLOSED / ABSTAIN, never fail-open. The LRT explicitly
-    # decides stable vs stim-dependent only when it RAN; an unavailable LRT (e.g. a singular fit on a
-    # tiny OFF stratum under the prior match-direction) is absence of evidence, NOT evidence of
-    # stability — it is rendered "indeterminate" (neutral, non-pass) so a non-converged stability
-    # test can never count toward "all gates passed → ready to program".
-    if st.get("available"):
-        stim_state = "pass" if st.get("stim_stable") else "fail"
-        stim_detail = (f"band×era LRT p={st.get('lrt_p')} "
-                       f"({'stable' if stim_state == 'pass' else 'stim-dependent'})")
-    else:
-        stim_state = "indeterminate"
-        stim_detail = ("band×era LRT did not converge on this match-direction — stim-stability "
-                       "UNCONFIRMED (absence of evidence, not evidence of stability).")
-    gates.append(_gate("stim_stable", "Stim-stable (band×era LRT n.s.)", stim_state, stim_detail))
+    # Use the existing three-state equivalence result for both the supportive gate and
+    # advisory posture. A nonsignificant LRT alone does not demonstrate stability.
+    stim_state, stim_detail, confirmed_stable = _deployment_stim_gate(st)
+    gates.append(_gate("stim_stable", "Stim-stability (equivalence)", stim_state, stim_detail))
     # audit C4: the gate passes only when the CONSERVATIVE (CI-lower-bound) power clears target, so a
     # band that looks powered on its optimistic point AUC cannot pass. Detail shows the power band.
     if power.get("available"):
@@ -5337,11 +5353,11 @@ def deployment_summary(request_data):
             "adaptive_valid": adaptive_valid, "polarity": polarity,
             "suggested_mode": suggested_mode, "suggested_mode_reason": mode_reason,
             # Advisory ramp-parameter guidance (audit C10): the closed-loop tuning surface is band +
-            # threshold + RAMP. stim_stable is the tri-state value (True/False/None) the C8 gate keys
-            # on — None (LRT did not converge) is treated as "not confirmed stable", i.e. conservative.
+            # threshold + RAMP. Reuse the gate's confirmed equivalence state; unknown
+            # or conflicting evidence keeps the existing conservative advisory posture.
             "ramp": _ramp_guidance(
                 polarity, adaptive_valid, suggested_mode,
-                stim_stable=(bool(st.get("stim_stable")) if st.get("available") else None),
+                stim_stable=confirmed_stable,
                 power_available=bool(power.get("available"))),
         },
         "threshold": {

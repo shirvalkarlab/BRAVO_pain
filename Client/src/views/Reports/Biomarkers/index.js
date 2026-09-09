@@ -512,7 +512,7 @@ function Biomarkers() {
                     </Grid>
                   ) : (timelineData && timelineData.timeline && timelineData.timeline.length > 0 ? (
                     <Grid item xs={12}>
-                      <BiomarkerTimeline data={timelineData} figureTitle={"BiomarkerTimeline"} />
+                      <BiomarkerTimeline key={participant_uid} data={timelineData} figureTitle={"BiomarkerTimeline"} />
                     </Grid>
                   ) : (
                     <Grid item xs={12}>
