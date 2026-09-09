@@ -99,6 +99,67 @@ def test_decide_verdict_branches():
     ) == "VALIDATED (stim-stable)"
 
 
+def test_deployment_summary_stim_stable_gate_reads_three_way_verdict():
+    """Decision 82 fix: deployment_summary's sign-off card must key its stim-stability GATE off
+    `stability_verdict`, never the retired `stim_stable` boolean (`p_lrt >= 0.05`, a failure to
+    reject rather than evidence of stability). The bug this pins: a band whose interaction test ran
+    but was too underpowered to tell stable from unstable ("inconclusive") used to render as a
+    green "pass" on the clinician-facing card, because the retired flag is True whenever the LRT
+    simply fails to reject -- exactly the "inconclusive" case too."""
+    # Genuinely shown stable -> pass. stim_stable also True here, but that's not why it passes.
+    state, detail = bs._deployment_summary_stim_stable_gate(
+        {"available": True, "lrt_p": 0.6, "stim_stable": True, "stability_verdict": "stable"})
+    assert state == "pass" and "stable" in detail
+
+    # Interaction test rejects -> fail, regardless of the retired flag.
+    state, _ = bs._deployment_summary_stim_stable_gate(
+        {"available": True, "lrt_p": 0.01, "stim_stable": False, "stability_verdict": "stim-dependent"})
+    assert state == "fail"
+
+    # THE BUG: the LRT did not reject (stim_stable=True under the retired rule) but the interval on
+    # the largest between-era difference is wider than the declared margin -- inconclusive, not
+    # stable. Must render as indeterminate, never pass.
+    state, detail = bs._deployment_summary_stim_stable_gate(
+        {"available": True, "lrt_p": 0.29, "stim_stable": True, "stability_verdict": "inconclusive"})
+    assert state == "indeterminate", (
+        f"stim_stable=True with an inconclusive equivalence verdict must render indeterminate, "
+        f"not {state!r} -- this is the exact false-reassurance decision 82 found")
+    assert "cannot tell" in detail
+
+    # LRT never converged at all (no stability_verdict key exists on the payload) -> indeterminate.
+    state, _ = bs._deployment_summary_stim_stable_gate({"available": False})
+    assert state == "indeterminate"
+
+    # A payload predating the equivalence test (stability_verdict absent, available True) must also
+    # abstain rather than trust the bare boolean.
+    state, _ = bs._deployment_summary_stim_stable_gate({"available": True, "lrt_p": 0.6, "stim_stable": True})
+    assert state == "indeterminate"
+
+
+def test_deployment_summary_adaptive_band_gate_checks_edges_not_centre():
+    """Decision 82 fix: the sign-off card's adaptive-range gate must check the band EDGES against
+    8-30 Hz, matching ClosedLoopDeployment/constraints.py's D08 rule -- not merely the centre. Cases
+    mirror D08's own docstring examples so the two rules agree."""
+    # D08's own documented disqualifying case: a 5 Hz band centred at 3.92 Hz runs 1.42-6.42 Hz,
+    # entirely below the 8 Hz floor.
+    state, detail, lo, hi = bs._deployment_summary_adaptive_band_gate(3.92, 5.0)
+    assert state == "fail" and abs(lo - 1.42) < 1e-9 and abs(hi - 6.42) < 1e-9
+
+    # D08's own second documented case: centre 10 Hz is inside 8-30, but a 5 Hz band's lower edge
+    # (7.5 Hz) is not. The OLD centre-only gate would have shown "pass" here.
+    state, detail, lo, hi = bs._deployment_summary_adaptive_band_gate(10.0, 5.0)
+    assert state == "fail", "band edge (7.5 Hz) sits below the adaptive floor even though the centre is inside it"
+    assert abs(lo - 7.5) < 1e-9
+
+    # Comfortably inside on both edges -> pass.
+    state, _, lo, hi = bs._deployment_summary_adaptive_band_gate(20.0, 5.0)
+    assert state == "pass" and lo == 17.5 and hi == 22.5
+
+    # Exactly at the boundary on both ends -> pass (D08 uses >= / <=, not strict inequality).
+    state, _, lo, hi = bs._deployment_summary_adaptive_band_gate(19.0, 22.0)  # edges 8.0, 30.0
+    assert state == "pass" and lo == 8.0 and hi == 30.0
+
+
 if __name__ == "__main__":
     import traceback
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

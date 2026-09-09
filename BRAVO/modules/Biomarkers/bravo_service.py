@@ -4598,6 +4598,49 @@ def _band_decide_verdict(g, h):
     return "VALIDATED (stim-stable)"
 
 
+def _deployment_summary_stim_stable_gate(st):
+    """Pure gate-state logic for deployment_summary's "stim_stable" gate (decision 82 fix).
+
+    Extracted so this can be pinned by a direct test without a live participant, the same reason
+    `_band_decide_verdict` above is its own function. Reads `stability_verdict` (the three-way
+    "stable"/"stim-dependent"/"inconclusive" answer from `analytics.stability_equivalence`), never
+    the retired `stim_stable` boolean (`p_lrt >= 0.05`, a failure to reject rather than evidence of
+    stability -- see this same file's `_band_decide_verdict` comment for why that flag alone is
+    unsafe). Returns (state, detail) where state is one of "pass"/"fail"/"indeterminate".
+    """
+    _v = st.get("stability_verdict") if st.get("available") else None
+    if _v == "stable":
+        return "pass", f"band×era LRT p={st.get('lrt_p')} (equivalence verdict: stable)"
+    if _v == "stim-dependent":
+        return "fail", f"band×era LRT p={st.get('lrt_p')} (equivalence verdict: stim-dependent)"
+    if st.get("available"):
+        return "indeterminate", (
+            f"band×era LRT p={st.get('lrt_p')} did not reject, but the interval on the largest "
+            "between-era difference is wider than the declared margin -- these data cannot tell a "
+            "stable band from a materially unstable one (absence of evidence, not evidence of "
+            "stability).")
+    return "indeterminate", ("band×era LRT did not converge on this match-direction — "
+                             "stim-stability UNCONFIRMED (absence of evidence, not evidence of "
+                             "stability).")
+
+
+def _deployment_summary_adaptive_band_gate(center_hz, band_width_hz):
+    """Pure gate-state logic for deployment_summary's "adaptive_band" gate (decision 82 fix).
+
+    Checks the band EDGES against the Percept adaptive range, matching
+    `ClosedLoopDeployment/constraints.py`'s D08 rule (`band_edges`/`permitted_band_hz`) rather than
+    the band's bare centre -- a 5 Hz band centred at 10 Hz has its centre inside 8-30 Hz but its
+    lower edge at 7.5 Hz, outside it, and D08 (the rule that actually decides whether the device
+    will accept the band) correctly refuses it. Returns (state, detail, lo_edge, hi_edge).
+    """
+    half = float(band_width_hz) / 2.0
+    lo_edge, hi_edge = center_hz - half, center_hz + half
+    ok = bool(lo_edge >= ADAPTIVE_LO_HZ and hi_edge <= ADAPTIVE_HI_HZ)
+    detail = (f"band {round(lo_edge,1)}–{round(hi_edge,1)} Hz (center {round(center_hz,1)} Hz) "
+             f"must fit inside {ADAPTIVE_LO_HZ:.1f}–{ADAPTIVE_HI_HZ:.1f} Hz")
+    return ("pass" if ok else "fail"), detail, lo_edge, hi_edge
+
+
 @_pro_scoped
 def _validate_band_core(request_data):
     """Shared heavy-lifting core for the per-band validation + BandCandidate emission.
@@ -6024,10 +6067,19 @@ def deployment_summary(request_data):
     gates.append(_gate("validated", "Band validated (mixed-effects)",
                        "pass" if (verdict and "VALIDATED" in str(verdict)) else "fail",
                        verdict, necessary=True))
+    # The gate checks the band EDGES against the device's adaptive range, not merely the centre --
+    # matching ClosedLoopDeployment/constraints.py's D08 rule (band_edges/permitted_band_hz). A 5 Hz
+    # band centred at 10 Hz has its centre inside 8-30 Hz but its lower edge at 7.5 Hz, outside it;
+    # this used to read `adaptive_valid` (centre-only), which would have shown "pass" for that band
+    # even though D08 -- the rule that actually decides whether the device will accept it -- refuses
+    # it. `adaptive_valid` (centre-only) is left untouched for `_suggested_percept_mode` above, which
+    # answers a different question (which Percept mode to recommend, matching
+    # `_threshold_mode_block`'s own centre-based per-mode check) -- only this gate's pass/fail is
+    # changed to the edge rule. See `_deployment_summary_adaptive_band_gate` for the pure logic,
+    # pinned by its own test.
+    _ab_state, _ab_detail, *_ = _deployment_summary_adaptive_band_gate(center_hz, band_width_hz)
     gates.append(_gate("adaptive_band", "In Percept adaptive range (8–30 Hz)",
-                       "pass" if adaptive_valid else "fail",
-                       f"center {round(center_hz,1)} Hz (band {round(center_hz-half,1)}–{round(center_hz+half,1)} Hz)",
-                       necessary=True))
+                       _ab_state, _ab_detail, necessary=True))
     # A MEASURED threshold passes. A MODELED estimate (device never sensed this band) is
     # "indeterminate" -- usable for planning but NOT a measured prerequisite, so it can never count
     # toward "ready to program" on its own (audit C8 fail-closed discipline). Neither -> fail.
@@ -6054,20 +6106,25 @@ def deployment_summary(request_data):
     gates.append(_gate("credible_ci", "Credible effect-size CI",
                        "pass" if credible else "fail",
                        f"OR CI [{g.get('or_lo')}, {g.get('or_hi')}]"))
-    # Stim-stability gate (audit C8): FAIL-CLOSED / ABSTAIN, never fail-open. The LRT explicitly
-    # decides stable vs stim-dependent only when it RAN; an unavailable LRT (e.g. a singular fit on a
-    # tiny OFF stratum under the prior match-direction) is absence of evidence, NOT evidence of
-    # stability — it is rendered "indeterminate" (neutral, non-pass) so a non-converged stability
-    # test can never count toward "all gates passed → ready to program".
-    if st.get("available"):
-        stim_state = "pass" if st.get("stim_stable") else "fail"
-        stim_detail = (f"band×era LRT p={st.get('lrt_p')} "
-                       f"({'stable' if stim_state == 'pass' else 'stim-dependent'})")
-    else:
-        stim_state = "indeterminate"
-        stim_detail = ("band×era LRT did not converge on this match-direction — stim-stability "
-                       "UNCONFIRMED (absence of evidence, not evidence of stability).")
-    gates.append(_gate("stim_stable", "Stim-stable (band×era LRT n.s.)", stim_state, stim_detail))
+    # Stim-stability gate (audit C8, corrected per decision 82): FAIL-CLOSED / ABSTAIN, never
+    # fail-open. This USED TO read the retired `stim_stable` boolean (`p_lrt >= 0.05`), which is a
+    # failure to reject rather than evidence of stability -- with three eras and modest counts it
+    # reads "stable" precisely when the test has no power, which is the situation in which a false
+    # reassurance is most costly on a page that gates programming a device. `stability_verdict`
+    # (from `analytics.stability_equivalence`, computed on the SAME `st` dict, no extra call) is the
+    # three-way answer that exists specifically to fix this: "stable" only when the largest
+    # between-era difference is demonstrably smaller than the declared equivalence margin,
+    # "stim-dependent" when the interaction LRT rejects, "inconclusive" when the LRT does not reject
+    # but the interval is too wide to tell a stable band from a materially unstable one -- and
+    # "inconclusive" must render as indeterminate, not pass, or this gate reintroduces the exact
+    # failure mode it exists to prevent. `ClosedLoopDeployment/stability.py`'s own
+    # `finding_from_stability_result` already encodes this identical three-way mapping for the
+    # ClosedLoopDeployment side of this same page; it is not imported here because
+    # ClosedLoopDeployment may import Biomarkers but not the reverse (see `edges.py`'s own note on
+    # this one-way rule) -- so the mapping is inlined against the same source field instead. See
+    # `_deployment_summary_stim_stable_gate` for the pure logic, pinned by its own test.
+    stim_state, stim_detail = _deployment_summary_stim_stable_gate(st)
+    gates.append(_gate("stim_stable", "Stim-stable (band×era equivalence test)", stim_state, stim_detail))
     # audit C4: the gate passes only when the CONSERVATIVE (CI-lower-bound) power clears target, so a
     # band that looks powered on its optimistic point AUC cannot pass. Detail shows the power band.
     if power.get("available"):
