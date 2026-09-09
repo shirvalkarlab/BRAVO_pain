@@ -116,7 +116,9 @@ Layer 1 is proven. Of the four call sites it was meant to absorb:
   both stalled. The demo credential the PI supplied (`demo@bravo.local`) arrived after those
   attempts and was never exercised end to end. **So: the grids are proven correct by data and by
   the served-chunk check, but nobody has looked at them.** That is the first thing the next session
-  should do, and it is cheap now that a credential exists.
+  should do, and it is cheap now that a credential exists. **`OPERATIONS_runbook.md` §4 now ends
+  with how to sign in** — ask the PI for the demo password rather than registering a new account,
+  and read the paragraph there about why a fresh account cannot see RCS08 at all.
 - **The "one big pre-joined matrix"** the PI floated — one table joining TD, PSD, LSB, timestamps
   and the matched pain report for direct lookup — was **not built**, on the recommendation that with
   hovers at ~30 ms the join it would eliminate is no longer measurable, so it would add a new cache

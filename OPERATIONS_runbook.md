@@ -133,6 +133,18 @@ restyling a specific trace index. **Never rebuild a figure on interaction.** Fol
 figure-rebuild pattern verbatim reintroduces a bug in which every figure flashed back to its
 loading state on any interaction.
 
+**Then look at the page, and sign in with the demo account rather than registering a new one.**
+The principal investigator keeps a standing login on this local instance for exactly this —
+**ask him for it; the address is `demo@bravo.local` and the password is deliberately not written
+into this repository**, because this file is committed and pushed and `CLAUDE.md` §2 principle 3
+forbids credentials in the tree. It is also recorded in the agent's own local memory store, which
+is gitignored.
+
+**Registering a fresh account instead has cost three sessions a day's work each, and the reason is
+not the login.** A newly registered account carries no `StudyDataRel` row for the live
+participant, so RCS08 is invisible to it however correctly it signs in — that was decision 70's
+finding after decisions 60, 66 and 67 each blamed the login screen.
+
 ---
 
 ## 5. Editing source — two files that need care

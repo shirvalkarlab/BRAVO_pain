@@ -66,3 +66,17 @@
 - Recommended AGAINST building the "one big pre-joined matrix" for now: with hovers at ~30 ms the
   join it would eliminate is no longer measurable, so it would add a new cache shape and its own
   invalidation surface for no observable gain. Left as the PI's call.
+
+## Session 2026-09-08 (close-out) — handoff, and the demo login
+
+- Committed everything as `38371d6b` (20 files, staged by name) and pushed;
+  `origin/PS_closedloop_deployment` == local HEAD, 0 ahead. `HANDOFF_2026-09-08_biomarkers_grids_and_pro_cache.md`
+  was blocked by `.gitignore:361 HANDOFF_*.md` and needed a per-file negation at line 386;
+  confirmed tracked with `git status` before committing.
+- Acted on the PI's earlier instruction to record the demo login. The password went into the
+  agent's own gitignored memory store, NOT into the repository: `OPERATIONS_runbook.md` and the
+  handoff are both committed and pushed, and `CLAUDE.md` §2 principle 3 forbids credentials in the
+  tree. `OPERATIONS_runbook.md` §4 now ends with a sign-in paragraph naming the account and saying
+  to ask him for the password, plus the reason a fresh self-registered account cannot see RCS08 at
+  all (no `StudyDataRel` row — decision 70's finding, after three sessions blamed the login screen).
+  Flagged the split to him rather than silently doing half of what he asked.
