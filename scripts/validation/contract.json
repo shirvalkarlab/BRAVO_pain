@@ -78,7 +78,8 @@
         "_raw_lsb_shared_store",
         "_raw_lsb_cache_cached",
         "_raw_lsb_signature.DigestWriter.write",
-        "_raw_lsb_shared_store.BoundedWriter.write"
+        "_raw_lsb_shared_store.BoundedWriter.write",
+        "_deployment_stim_gate"
       ],
       "BRAVO/modules/StimOptimizer/adapter.py": [
         "_unambiguous_group_settings",
@@ -419,6 +420,15 @@
       "alternative_evidence": "Full streaming and matching regressions; strict changed-orchestrator gate; private canonical PSD equivalence; matched TD and mixed-source plus all-unmatched aggregation regressions with absent obsolete density outputs; independent diff review.",
       "owner": "Aditya BRAVO maintainer; independent nightly technical reviewer",
       "revisit": "Expand strict scope and numerical acceptance before substantive matcher, aggregation or other inherited algorithm changes."
+    },
+    {
+      "path": "Client/src/views/Reports/Biomarkers/BiomarkerTimeline.js",
+      "source_revision": "43d33692e128a68d967b5fdcd06f8b1371767f1c",
+      "reason": "The inherited scientific trace construction retains its measured whole-file baseline. This change only owns plot lifecycle, invalid-result clearing and participant remounting.",
+      "risk": "Legacy scientific rendering branches remain below 95 percent coverage; synthetic lifecycle coverage is not a whole-file or real-participant scientific validation claim.",
+      "alternative_evidence": "React 18 lifecycle regressions cover all 11 changed branch outcomes, unchanged raw values, epoch units, missing gaps and event-handler ownership. Full-file targeted branch baseline: 267/426 (62.68 percent). Full frontend regression gate remains required.",
+      "owner": "Aditya BRAVO maintainer",
+      "revisit": "Expand strict coverage before changing scientific trace construction; rerun lifecycle and participant-boundary regressions on further lifecycle changes."
     }
   ]
 }

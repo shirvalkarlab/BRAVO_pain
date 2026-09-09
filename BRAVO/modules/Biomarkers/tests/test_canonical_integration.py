@@ -35,8 +35,10 @@ class CanonicalInputTests(unittest.TestCase):
         pool = types.SimpleNamespace(submit=Mock())
         record = {"channel": "Left01", "t_start": 100., "dur_s": 5.}
         pro = pd.DataFrame({"nrs": [0]})
+        load = Mock(return_value=[])
+        extract = Mock(side_effect=lambda *a, **kw: [dict(record)])
         availability = types.SimpleNamespace(
-            extract_availability=lambda *a, **kw: [dict(record)],
+            extract_availability=extract, _to_epoch=float,
             pain_series=lambda *a: {"metric": "nrs", "t": [100.], "y": [0.]},
             stim_series=lambda *a: {"t": [], "y": []},
             analytics=types.SimpleNamespace(power_center_freqs=lambda r: {}),
@@ -44,7 +46,7 @@ class CanonicalInputTests(unittest.TestCase):
             present_freq_bands=lambda records: [], event_markers=lambda events: {"events": [], "n": 0},
             inspector_samples=lambda *a, **kw: {})
         ns = helpers("_build_availability", "availability_for_participant", availability=availability,
-                     _load_recordings=lambda *a: [], _build_sensing_config_index=lambda r: {},
+                     _load_recordings=load, _build_sensing_config_index=lambda r: {},
                      _event_psd_index=lambda *a, **kw: [], _event_psd_lsb_blocks=lambda *a, **kw: [],
                      _pro_lsb_by_channel=lambda *a: {}, _load_patient_events=lambda p: [],
                      _load_montage_psd_events=lambda *a, **kw: [], _psd_sample_index=lambda *a, **kw: [],
@@ -67,6 +69,30 @@ class CanonicalInputTests(unittest.TestCase):
         self.assertEqual(actual["availability"]["records"], [record])
         self.assertEqual(actual["availability"]["pain"]["y"], [0.])
         self.assertIsNone(actual["message"])
+        # Recompute may supply its already loaded PSD list, including a valid empty result.
+        # Both paths preserve the availability response; only standalone calls load again.
+        for supplied in ([], [None, {"StartTime": 100.}]):
+            load.reset_mock()
+            reused = ns["_build_availability"]("p", chronic_list=[], powerdomain_list=[],
+                td_list=[], pro_df=pro, label_metric="nrs", region_map={}, psd_list=supplied)
+            load.assert_not_called()
+            self.assertEqual(reused, previous)
+            self.assertEqual(extract.call_args.args[0]["MedtronicBaselineMontages"],
+                             [r for r in supplied if isinstance(r, dict)])
+        load.reset_mock()
+        ns["_build_availability"]("p", chronic_list=[], powerdomain_list=[], td_list=[],
+            pro_df=pro, label_metric="nrs", region_map={}, psd_list=None)
+        load.assert_called_once_with("p", ["psd"])
+        # The real Recompute caller reuses its own request-local pool, without reusing
+        # the distinct sensing-config index (availability includes power-domain input).
+        tree = ast.parse(SERVICE.read_text())
+        run = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                   and n.name == "run_for_participant")
+        calls = [n for n in ast.walk(run) if isinstance(n, ast.Call)
+                 and isinstance(n.func, ast.Name) and n.func.id == "_build_availability"]
+        self.assertEqual(len(calls), 1)
+        keyword = next(k for k in calls[0].keywords if k.arg == "psd_list")
+        self.assertEqual(ast.dump(keyword.value), ast.dump(ast.Name(id="_scan_psd_list", ctx=ast.Load())))
 
     def test_source_delegation_and_nonpolicy_participant_bounds(self):
         analysis = types.ModuleType("modules.AnalysisData")

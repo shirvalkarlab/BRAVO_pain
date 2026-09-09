@@ -153,7 +153,13 @@ function BiomarkerTimeline({ data, height }) {
   const [linked, setLinked] = useState(true);
 
   useEffect(() => {
-    if (!ref.current || !data || !data.timeline || data.timeline.length === 0) return;
+    const gd = ref.current;
+    // An absent/malformed result must not leave the preceding result visible.
+    if (!data || !Array.isArray(data.timeline) || data.timeline.length === 0 ||
+        data.timeline.some((row) => !row || typeof row !== "object" || Array.isArray(row))) {
+      Plotly.purge(gd);
+      return;
+    }
 
     const recs = data.timeline;
     const cols = new Set(data.channels || Object.keys(recs[0]));
@@ -325,6 +331,10 @@ function BiomarkerTimeline({ data, height }) {
     if (stimCol) rows.push({ title: "Stimulation", unit: "mA", hemi: null,
       traces: [{ name: "Amplitude", y: col(stimCol), color: C.stim }] });
 
+    if (rows.length === 0) {
+      Plotly.purge(gd);
+      return;
+    }
     const n = Math.max(rows.length, 1);
     // Pixel-based row heights with a VARIABLE inter-row gap: each row is a fixed pixel band, and the
     // first row of a hemisphere block gets a larger gap above it to seat its big "LEFT/RIGHT
@@ -368,6 +378,8 @@ function BiomarkerTimeline({ data, height }) {
     const layout = {
       height: height || totalFoot * unit * 0 + ROW_PX * n + (nStarts * 34) + 70,
       margin: { l: 82, r: usedFreqs.length ? 172 : 104, t: 20, b: 42 },
+      // Stable for this participant's mounted plot; ordinary updates preserve zoom/pan.
+      uirevision: "biomarker-timeline",
       hovermode: "x unified",
       showlegend: false,                          // hemisphere color + direct edge labels replace the legend
       font: { family: "Roboto, Helvetica, Arial, sans-serif", size: 13, color: "#344767" },
@@ -618,7 +630,7 @@ function BiomarkerTimeline({ data, height }) {
         font: { size: 13, color: "#344767" } });
     }
 
-    Plotly.react(ref.current, traces, layout, {
+    Plotly.react(gd, traces, layout, {
       responsive: true, displaylogo: false,
       modeBarButtonsToRemove: ["select2d", "lasso2d", "toggleSpikelines"],
       toImageButtonOptions: { format: "png", scale: 2 },
@@ -631,7 +643,6 @@ function BiomarkerTimeline({ data, height }) {
     // on every row shares the x-window so all rescale together; off, only the zoomed row's x changes
     // (its own range keys appear in the event) and just that row rescales. Double-click autoranges x,
     // which we map back to the full-extent y-window.
-    const gd = ref.current;
     const robustWindow = (pts, refYs, lo, hi) => {
       const vis = (lo == null || hi == null) ? pts : pts.filter((p) => p.t >= lo && p.t <= hi);
       const vals = vis.map((p) => p.v);
@@ -668,12 +679,16 @@ function BiomarkerTimeline({ data, height }) {
     gd.on("plotly_relayout", onRelayout);
 
     return () => {
-      if (ref.current) {
-        try { ref.current.removeAllListeners && ref.current.removeAllListeners("plotly_relayout"); } catch (e) { /* noop */ }
-        Plotly.purge(ref.current);
-      }
+      // Keep other consumers' listeners and Plotly's state across ordinary updates.
+      gd.removeListener("plotly_relayout", onRelayout);
     };
   }, [data, height, linked]);
+
+  useEffect(() => {
+    // React clears ref.current before passive unmount cleanup: retain the actual node.
+    const gd = ref.current;
+    return () => { Plotly.purge(gd); };
+  }, []);
 
   return (
     <MDBox p={1}>
