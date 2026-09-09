@@ -26,7 +26,9 @@
  * existing, giving the deployment page's five endpoints and two lent panels each their own slot
  * rather than fighting over one, is unrelated to that and still stands.
  */
-import { MODULES, invalidate, markUpstreamChanged } from "database/resultCache";
+import {
+  MODULES, invalidate, markUpstreamChanged, getResult, putResult, settingsKey,
+} from "database/resultCache";
 import { refreshServerIdentity } from "database/useCachedResult";
 
 /**
@@ -91,4 +93,45 @@ export function recomputeClosedLoop(uid) {
  */
 export function markClosedLoopFamilyStale(uid, reason) {
   CLOSED_LOOP_SLOTS.forEach((k) => markUpstreamChanged(k, uid, reason));
+}
+
+/**
+ * The Biomarkers calibrated heat-map grid's cache slots, one PER PAIN-SCORE METRIC.
+ *
+ * WHY A SLOT PER METRIC, NOT ONE SLOT FOR THE WHOLE GRID. `resultCache` holds exactly one entry
+ * per slot; a settings change does not add a second entry, it marks the existing one stale. A
+ * single shared slot could therefore only ever hold the MOST RECENTLY viewed metric's grid — the
+ * exact problem this exists to fix, since switching to any other metric would find the slot
+ * "stale" (its key no longer matches) and have to recompute, even a metric already viewed once in
+ * this same session. Giving each metric its own slot means each one keeps its own independent
+ * cached-or-stale status, and switching between metrics already computed is a plain cache read.
+ */
+export function biomarkerHeatmapSlot(metricKey) {
+  return `${MODULES.biomarkers}/heatmapGrid/${String(metricKey)}`;
+}
+
+/**
+ * Warm one metric's grid in the background if it is not already fresh, without touching any
+ * component's React state.
+ *
+ * This is deliberately NOT `useCachedResult` a second time: that hook is built to drive one
+ * visible fetch with its own loading/error UI, and mounting one instance per background metric
+ * would show loading/error state nobody asked to see for a metric the reader has not selected. A
+ * failed background prefetch resolves to `null` rather than rejecting, for the same reason a
+ * prefetch has no visible loading state — the reader never asked for this metric, so a transport
+ * failure here must stay invisible; the ordinary on-demand fetch (via `useCachedResult`, when the
+ * reader actually switches to this metric) is the real fallback and will report its own error if
+ * the same request fails again.
+ */
+export function prefetchBiomarkerHeatmapMetric(uid, metricKey, settingsForMetric, fetchFn) {
+  const key = settingsKey(settingsForMetric);
+  const existing = getResult(biomarkerHeatmapSlot(metricKey), uid, key);
+  if (existing && !existing.stale) return Promise.resolve(existing.bundle);
+  return Promise.resolve()
+    .then(fetchFn)
+    .then((bundle) => {
+      putResult(biomarkerHeatmapSlot(metricKey), uid, key, bundle, { why: "background prefetch" });
+      return bundle;
+    })
+    .catch(() => null);
 }

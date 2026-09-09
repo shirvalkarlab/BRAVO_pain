@@ -39,6 +39,8 @@ import MDTypography from "components/MDTypography";
 import MDButton from "components/MDButton";
 
 import { SessionController } from "database/session-control";
+import { useCachedResult } from "database/useCachedResult";
+import { biomarkerHeatmapSlot, prefetchBiomarkerHeatmapMetric } from "views/Reports/moduleCacheKeys";
 import PAL from "views/Reports/ClosedLoopSim/palette";
 import { BIN_HI, BIN_LO, BIN_HI_RGB, BIN_LO_RGB } from "./binarizationModel";
 
@@ -378,8 +380,6 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   const [corrResult, setCorrResult] = useState(null);   // what the correlation grid is drawn from
   const [aucResult, setAucResult] = useState(null);      // what the AUC grid is drawn from
   const [aucFlashKey, setAucFlashKey] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState(null);
   const [howToReadOpen, setHowToReadOpen] = useState(false);
   const prevSettingsRef = useRef(null);
 
@@ -393,48 +393,98 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
 
   const reqKey = requestParams ? JSON.stringify(requestParams) : null;
 
-  useEffect(() => {
-    if (!participantUid || !requestParams) return undefined;
-    let cancelled = false;
-    const body = { ParticipantId: participantUid, ...requestParams, BandTimeSweep: "1", SweepMetric: metric };
-    setLoading(true); setErr(null);
-    SessionController.query("/api/queryBiomarkerAnalysis", body)
-      .then((response) => {
-        if (cancelled) return;
-        const d = (response && response.data) || null;
-        const prev = prevSettingsRef.current;
-        const cur = { ...requestParams, SweepMetric: metric };
-        const matchChanged = !prev || MATCH_SETTING_KEYS.some(
-          (k) => settingsSubset(prev, [k])[k] !== settingsSubset(cur, [k])[k]);
-        const binChanged = BIN_SETTING_KEYS.some(
-          (k) => prev && settingsSubset(prev, [k])[k] !== settingsSubset(cur, [k])[k]);
-        prevSettingsRef.current = cur;
-
-        if (matchChanged || !corrResult) {
-          setCorrResult(d);
-          setAucResult(d);
-        } else if (binChanged) {
-          // Correlation depends only on matching (PRD §3): keep the previous correlation grid's
-          // object identity so its frame does not redraw, and replace the AUC grid with a flash.
-          setAucResult(d);
-          setAucFlashKey((k) => k + 1);
-        } else {
-          // Nothing that changes either grid moved (e.g. only the contact-pair strip was
-          // clicked) -- still take the freshest response so a served-from-store flag is current.
-          setCorrResult(d);
-          setAucResult(d);
-        }
-        const sweeps = (d && d.band_time_sweep) || {};
-        const keys = Object.keys(sweeps);
-        if (keys.length && (!channel || !sweeps[channel])) setChannel(keys[0]);
-        cellCacheRef.current = new Map();
-        setPinned(null); setPinnedCellData(null); setPreviewCell(null);
-      })
-      .catch((e) => { if (!cancelled) setErr((e && e.message) || String(e)); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+  // THE FETCH ITSELF, SHARED ACROSS NAVIGATION, ONE SLOT PER PAIN-SCORE METRIC.
+  //
+  // This used to be a plain component-local useEffect/useState, so React Router unmounting this
+  // component on every navigation away from the page threw the fetched grid away and refetched it
+  // on return even when nothing had changed -- the rest of the page already survives navigation
+  // through `useCachedResult`/`database/resultCache`; this component simply never used it. Routed
+  // through the same shared cache now, keyed by `biomarkerHeatmapSlot(metric)` rather than one
+  // shared slot, because `resultCache` holds exactly one entry per slot and marks it stale (not a
+  // second entry) on a settings change -- one slot per metric is what lets six pain scores stay
+  // simultaneously cached instead of each switch evicting the last one.
+  const cur = useMemo(() => ({ ...requestParams, SweepMetric: metric }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [participantUid, reqKey, metric]);
+    [reqKey, metric]);
+  const cachedGrid = useCachedResult({
+    moduleKey: biomarkerHeatmapSlot(metric),
+    uid: participantUid,
+    settings: cur,
+    enabled: !!participantUid && !!requestParams,
+    fetcher: () => SessionController.query("/api/queryBiomarkerAnalysis",
+      { ParticipantId: participantUid, ...requestParams, BandTimeSweep: "1", SweepMetric: metric })
+      .then((response) => (response && response.data) || null),
+  });
+  const loading = cachedGrid.loading;
+  const err = cachedGrid.err;
+
+  // THE ASYMMETRIC CORRELATION/AUC UPDATE RULE (PRD §3), UNCHANGED, now keyed off the cached
+  // bundle's own identity rather than a raw network response -- it fires exactly when the bundle
+  // for the CURRENTLY SELECTED metric changes, whether that is a genuine fetch or a switch onto a
+  // metric that was already warm from the background prefetch below.
+  useEffect(() => {
+    const d = cachedGrid.data;
+    if (!d) return;
+    const prev = prevSettingsRef.current;
+    const matchChanged = !prev || MATCH_SETTING_KEYS.some(
+      (k) => settingsSubset(prev, [k])[k] !== settingsSubset(cur, [k])[k]);
+    const binChanged = BIN_SETTING_KEYS.some(
+      (k) => prev && settingsSubset(prev, [k])[k] !== settingsSubset(cur, [k])[k]);
+    prevSettingsRef.current = cur;
+
+    if (matchChanged || !corrResult) {
+      setCorrResult(d);
+      setAucResult(d);
+    } else if (binChanged) {
+      // Correlation depends only on matching (PRD §3): keep the previous correlation grid's
+      // object identity so its frame does not redraw, and replace the AUC grid with a flash.
+      setAucResult(d);
+      setAucFlashKey((k) => k + 1);
+    } else {
+      // Nothing that changes either grid moved (e.g. only the contact-pair strip was
+      // clicked) -- still take the freshest response so a served-from-store flag is current.
+      setCorrResult(d);
+      setAucResult(d);
+    }
+    const sweeps = (d && d.band_time_sweep) || {};
+    const keys = Object.keys(sweeps);
+    if (keys.length && (!channel || !sweeps[channel])) setChannel(keys[0]);
+    cellCacheRef.current = new Map();
+    setPinned(null); setPinnedCellData(null); setPreviewCell(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cachedGrid.data]);
+
+  // BACKGROUND PREFETCH OF THE OTHER PAIN-SCORE METRICS, so switching the dropdown to a metric
+  // already warmed this way is a plain cache read instead of a fresh recompute. Runs only once the
+  // SELECTED metric's own fetch/cache-check has settled (never competes with the request the reader
+  // is actually waiting on), one metric at a time rather than all at once (a burst of concurrent
+  // permutation/bootstrap computations is real load on the backend for grids nobody has asked to
+  // see yet), and is cancelled by a generation token whenever the participant, the live controls or
+  // the selected metric change again before it finishes -- a fast slider drag or a quick run of
+  // dropdown switches must not pile up an ever-growing queue of superseded background requests.
+  const prefetchGenRef = useRef(0);
+  useEffect(() => {
+    if (!participantUid || !requestParams || loading) return undefined;
+    const gen = (prefetchGenRef.current += 1);
+    const others = options.filter((o) => o.key !== metric);
+    let cancelled = false;
+    (async () => {
+      // eslint-disable-next-line no-restricted-syntax
+      for (const o of others) {
+        if (cancelled || prefetchGenRef.current !== gen) return;
+        const otherCur = { ...requestParams, SweepMetric: o.key };
+        // eslint-disable-next-line no-await-in-loop
+        await prefetchBiomarkerHeatmapMetric(participantUid, o.key, otherCur, () =>
+          SessionController.query("/api/queryBiomarkerAnalysis",
+            { ParticipantId: participantUid, ...requestParams, BandTimeSweep: "1", SweepMetric: o.key })
+            .then((response) => (response && response.data) || null));
+      }
+    })();
+    return () => { cancelled = true; };
+    // `reqKey` is the stable proxy for `requestParams` here, same as the fetch above -- including
+    // the object itself would fire on every render (a new reference each time).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [participantUid, reqKey, metric, loading, options]);
 
   const corrSweeps = (corrResult && corrResult.band_time_sweep) || {};
   const aucSweeps = (aucResult && aucResult.band_time_sweep) || {};

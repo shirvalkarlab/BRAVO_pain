@@ -10,12 +10,11 @@ import { useEffect, useMemo, useState, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { Card, Grid, Select, MenuItem, FormControl,
-  Slider, LinearProgress, CircularProgress,
+  Slider, LinearProgress,
   ToggleButton, ToggleButtonGroup } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
-import MDButton from "components/MDButton";
 
 import BiomarkerTimeline from "./BiomarkerTimeline";
 import BiomarkerDataTimeline from "./BiomarkerDataTimeline";
@@ -52,7 +51,7 @@ import { usePlatformContext, setContextState } from "context.js";
 
 import RecomputeBar from "views/Reports/RecomputeBar";
 import CacheStatusLine from "views/Reports/CacheStatusLine";
-import { markClosedLoopFamilyStale, recomputeSlots } from "views/Reports/moduleCacheKeys";
+import { markClosedLoopFamilyStale, recomputeSlots, biomarkerHeatmapSlot } from "views/Reports/moduleCacheKeys";
 
 // Pain metric the LFP biomarker is computed against (sent as LabelMetric). Used until the server
 // echoes its own `available_metrics` list. The composite blends MPQ sum + left-leg VAS.
@@ -243,6 +242,14 @@ function Biomarkers() {
   const compute = () => {
     setRequestParams(snapshot());
     setComputeRequests((n) => n + 1);
+    // The calibrated heat-map grid (BiomarkerHeatmapGrids) is a SEPARATE cache family from the
+    // older scan above -- one slot per pain-score metric, so that a metric already viewed stays
+    // cached instead of evicting the last one (see moduleCacheKeys.js). This was the page's SECOND
+    // Recompute-shaped control (the other was a page-specific button, now removed) -- both used to
+    // call this same function but neither actually touched the calibrated grid's own fetch, which
+    // ran independently. Now the one remaining control covers both.
+    recomputeSlots(participant_uid,
+      DEFAULT_METRIC_OPTIONS.map((m) => biomarkerHeatmapSlot(m.key)));
   };
   // "Dirty" = the live options differ from what's currently displayed (or nothing computed yet),
   // so the shown results are stale and a (re)compute is needed.
@@ -881,30 +888,16 @@ function Biomarkers() {
                     </MDBox>
                   </Grid>
 
-                  {/* ── Exploratory analysis trigger, DIRECTLY BENEATH the Pain Biomarkers box ──
+                  {/* ── Full-spectrum exploration status, DIRECTLY BENEATH the Pain Biomarkers box ──
                       The timeline + preview above are live (no compute). The full-spectrum
                       exploration (5 Hz sliding-band r + AUC over the matched PSDs) is EXPENSIVE
-                      and runs ONLY on click, using the metric / binarization / match-window chosen
-                      in the box above. */}
+                      and used to run behind its own page-specific button here; that button was
+                      removed (it called the exact same `compute()` the RecomputeBar above already
+                      does, and the two disagreeing about what "recompute" meant was its own source
+                      of confusion) -- the sample-count and memory-retention notes below are about
+                      the RESULT once it exists, not about the button, so they stay. */}
                   <Grid item xs={12}>
                     <MDBox px={2} pt={0.5} pb={1.5} display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
-                      <MDButton
-                        variant="contained" color="error" size="large"
-                        onClick={compute} disabled={computing}
-                        sx={{ fontWeight: "bold", fontSize: 16, px: 3, py: 1.25,
-                              backgroundColor: "#d32f2f", color: "#ffffff",
-                              "&:hover": { backgroundColor: "#b71c1c" },
-                              "&.Mui-disabled": { backgroundColor: "#e57373", color: "#ffffff" } }}
-                      >
-                        {computing ? (
-                          <><CircularProgress size={18} sx={{ color: "#fff", mr: 1 }} />{"Computing…"}</>
-                        ) : (data ? "↻ Recompute full-spectrum exploration" : "▶ Start exploratory analysis")}
-                      </MDButton>
-                      {!computing && dirty && data ? (
-                        <MDTypography variant="button" color="error" fontWeight="medium">
-                          {"Settings changed — click to recompute."}
-                        </MDTypography>
-                      ) : null}
                       {data && data.timeline_points_full ? (
                         <MDTypography variant="caption" color="dark">
                           {`(computed on ${Number(data.timeline_points_full).toLocaleString()} full-resolution samples)`}
@@ -955,7 +948,7 @@ function Biomarkers() {
                       <MDBox p={2}>
                         <MDTypography variant="button" color="dark">
                           {"Pick a pain metric and binarization above — the timeline and binarization preview are already live. Click "}
-                          <strong>▶ Start exploratory analysis</strong>{" to run the full-spectrum scan."}
+                          <strong>Recompute</strong>{" above to run the full-spectrum scan."}
                         </MDTypography>
                       </MDBox>
                     </Grid>
