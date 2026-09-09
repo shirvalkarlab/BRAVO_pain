@@ -383,4 +383,5 @@ handoff_*.png
 # survives only until someone runs `git clean`, and it is absent from every clone.
 # Later patterns win, so these negations restore them.
 !HANDOFF_2026-09-07_cache_store_to_claude_code.md
+!HANDOFF_2026-09-08_biomarkers_grids_and_pro_cache.md
 !docs/archive/**/*.md

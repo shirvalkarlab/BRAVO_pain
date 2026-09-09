@@ -703,7 +703,7 @@ def _montage_psd_lsb_blocks(participant_uid, montage_recordings=None):
 
 
 def _pro_lsb_by_channel(pro_times, lsb, td_recordings, event_psd_blocks,
-                        sensing_hz_by_channel):
+                        sensing_hz_by_channel, *, native_tol_s=120.0):
     """One per-PRO LSB selection series per channel for the timeline (CS-4 consumer of per_pro_lsb).
 
     For each channel that has a resolvable sensing center, run availability.per_pro_lsb over the PRO
@@ -747,7 +747,7 @@ def _pro_lsb_by_channel(pro_times, lsb, td_recordings, event_psd_blocks,
             continue
         try:
             out[raw_ch] = availability.per_pro_lsb(
-                pt, series, key, float(center),
+                pt, series, key, float(center), native_tol_s=native_tol_s,
                 td_recordings=td_recordings, event_psd_recordings=event_psd_blocks, index=index)
         except Exception as e:
             _log.warning("Biomarkers: per-PRO LSB failed for %s (%s)", raw_ch, e)
@@ -779,6 +779,127 @@ _LSB_SPECTRUM_MEMO_LOCK = threading.Lock()
 _RAW_LSB_CACHE_MEMO = {}
 _RAW_LSB_CACHE_MEMO_MAX = 8
 _RAW_LSB_CACHE_MEMO_LOCK = threading.Lock()
+
+# Per-participant recording/PSD-block setup memo, for the hover-cell endpoint
+# (band_time_sweep_cell_for_participant) alone. Timed live on RCS08: that endpoint was redoing
+# ~2s of this exact setup (recordings load + event/montage PSD block building) from scratch on
+# EVERY hover, though none of it depends on which cell was hovered -- the parent grid request
+# already builds it once. Recordings may be cached with no expiry (decision 22), so a plain
+# unbounded-lifetime memo is the right shape here, matching `_RAW_LSB_CACHE_MEMO` above. This memo
+# holds NO pain-report data at all -- decision 22 forbids caching those, and `_load_pros` is
+# deliberately left OUTSIDE this memo, called fresh on every request as before.
+_RECORDINGS_SETUP_MEMO = {}
+_RECORDINGS_SETUP_MEMO_MAX = 8
+_RECORDINGS_SETUP_MEMO_LOCK = threading.Lock()
+
+#: ==========================================================================================
+#: A NARROW, DELIBERATE OVERRIDE OF DECISION 22, authorised by the PI directly on 2026-09-08.
+#:
+#: WHAT DECISION 22 SAID, AND WHY IT IS NOT BEING CONTRADICTED. Its finding was that no check can
+#: prove a remembered pain-report table still current more cheaply than fetching it again. That
+#: finding stands and is not worked around: the only content check this module has
+#: (`_pro_table_digest`) hashes the table AFTER it has been fetched, so it can dedup a write but
+#: can never save the fetch, and there is no metadata-only "has anything changed" call to REDCap
+#: here to consult instead. Nothing below pretends otherwise.
+#:
+#: THE RULE THE PI ASKED FOR INSTEAD, in his own framing: once the Biomarkers module has loaded and
+#: everything is on screen, the report table is held; it is fetched again only when someone presses
+#: Recompute on the module, or when the page's data is being computed from a new load.
+#:
+#: HOW THAT RULE IS IMPLEMENTED, with no clock anywhere in it. Every endpoint that BUILDS something
+#: -- the module compute (`run_for_participant`, which is what Recompute triggers), the
+#: band-by-length grid (`band_time_sweep_for_participant`), the availability timeline, the
+#: pain-score preview -- still calls `_load_pros` and therefore still fetches fresh, exactly as
+#: before. `_load_pros` hands each such fetch to `_remember_pain_reports`, so THIS cache is always
+#: "whatever the most recent real fetch produced". The read-only drill-downs (the hover preview and
+#: the pinned cell panel) read it back through `_pain_reports_for_drilldown` instead of fetching.
+#: The invalidation rule is therefore the whole of the mechanism: a build replaces the entry, and
+#: nothing else has to expire it.
+#:
+#: WHAT A READER GIVES UP. A rating filed while a grid is already on screen does not reach a hover
+#: preview until the next build -- pressing Recompute, changing a matching or binarization setting,
+#: or reloading the page. Every number that is stored, exported or reported still comes from a
+#: fresh fetch, because every path that produces one is a build.
+#:
+#: FOUR WORKERS, FOUR CACHES. gunicorn runs four worker processes and this dict is per-process, so
+#: a hover that lands on a worker which has not built anything for this participant simply fetches
+#: once and seeds itself. That is self-healing and needs no cross-worker invalidation.
+#: ==========================================================================================
+_PRO_BUILD_CACHE = {}
+_PRO_BUILD_CACHE_MAX = 4
+_PRO_BUILD_CACHE_LOCK = threading.Lock()
+
+#: Distinguishes "this worker has never fetched for this participant" from "the fetch produced no
+#: reports at all", which is a real answer and must not trigger a refetch on every hover.
+_PRO_BUILD_CACHE_MISS = object()
+
+
+def _pro_build_cache_key(request_data, participant):
+    """Participant identity alone -- the report table does not depend on any matching setting.
+
+    Returns None for the two asks this cache must never answer: a request carrying its own report
+    rows (`ProcessedPRO`) and one carrying an inline field-map override (`RedcapFieldMap`), since
+    a table keyed on the participant alone could otherwise answer a differently-mapped question.
+    """
+    if request_data.get("ProcessedPRO") or request_data.get("RedcapFieldMap"):
+        return None
+    return _pro_participant_uid(request_data, participant)
+
+
+def _remember_pain_reports(request_data, participant, df):
+    """Hold the table a real fetch just produced, replacing whatever the previous build left."""
+    uid = _pro_build_cache_key(request_data, participant)
+    if uid is None:
+        return
+    with _PRO_BUILD_CACHE_LOCK:
+        if uid not in _PRO_BUILD_CACHE and len(_PRO_BUILD_CACHE) >= _PRO_BUILD_CACHE_MAX:
+            _PRO_BUILD_CACHE.pop(next(iter(_PRO_BUILD_CACHE)))
+        _PRO_BUILD_CACHE[uid] = df.copy() if df is not None else None
+
+
+def _pain_reports_for_drilldown(request_data, participant):
+    """The report table the most recent build fetched; a fresh fetch when this worker has none.
+
+    For the read-only drill-downs ONLY (hover preview, pinned cell panel). See the override note
+    above for the rule this implements and what it costs.
+    """
+    uid = _pro_build_cache_key(request_data, participant)
+    if uid is not None:
+        with _PRO_BUILD_CACHE_LOCK:
+            held = _PRO_BUILD_CACHE.get(uid, _PRO_BUILD_CACHE_MISS)
+        if held is not _PRO_BUILD_CACHE_MISS:
+            return held.copy() if held is not None else None
+    return _load_pros(request_data, participant)
+
+
+def _recordings_setup_cached(participant_uid, td=None):
+    """(td, psd_list, event_blocks, montage_blocks, chan_order, channels) for one participant.
+
+    Memoized in-process, and holding no pain-report data of any kind -- the report table has its
+    own, separately-ruled cache (`_PRO_BUILD_CACHE`), and mixing the two here would hide which of
+    them a given reader is actually relying on.
+
+    `td` lets a caller that has ALREADY loaded the time-domain recordings hand them in rather than
+    have them read a second time; the grid build does exactly that. It is only consulted when this
+    participant is not in the memo yet.
+    """
+    with _RECORDINGS_SETUP_MEMO_LOCK:
+        cached = _RECORDINGS_SETUP_MEMO.get(participant_uid)
+    if cached is not None:
+        return cached
+    td = td if td is not None else _load_recordings(participant_uid, TIMEDOMAIN_TYPES)
+    psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
+    sensing_idx = _build_sensing_config_index(list(td or []))
+    event_blocks = _event_psd_lsb_blocks(participant_uid, sensing_index=sensing_idx)
+    montage_blocks = _montage_psd_lsb_blocks(participant_uid, montage_recordings=psd_list)
+    chan_order = _derive_chan_order(td)
+    channels = list(dict.fromkeys(availability._canon_channel(c) for c in (chan_order or [])))
+    result = (td, psd_list, event_blocks, montage_blocks, chan_order, channels)
+    with _RECORDINGS_SETUP_MEMO_LOCK:
+        if len(_RECORDINGS_SETUP_MEMO) >= _RECORDINGS_SETUP_MEMO_MAX:
+            _RECORDINGS_SETUP_MEMO.pop(next(iter(_RECORDINGS_SETUP_MEMO)))
+        _RECORDINGS_SETUP_MEMO[participant_uid] = result
+    return result
 
 
 def _lsb_spectrum_signature(participant_uid, pro_times, td_recordings, event_psd_blocks, centers,
@@ -2831,6 +2952,11 @@ def _load_pros(request_data, participant=None):
     df = _normalize_pro_times(_load_pros_raw(request_data, participant))
     if df is not None and not request_data.get("ProcessedPRO"):
         _snapshot_pain_reports(df, request_data, participant)
+    # A REAL fetch just happened, so it becomes the table the read-only drill-downs ride on until
+    # the next real fetch replaces it. See `_PRO_BUILD_CACHE`'s own note: this is the whole of the
+    # invalidation rule -- every endpoint that BUILDS something still fetches fresh right here, and
+    # by doing so re-seeds what the drill-downs see.
+    _remember_pain_reports(request_data, participant, df)
     if key is not None:
         cache[key] = df.copy() if df is not None else None
     return df
@@ -3095,7 +3221,7 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
                        train_days=None, step_days=None, sliding=True, region_map=None,
                        match_tolerance_min=None, psd_matrix=None, pro_match=None,
                        aggregate="all", max_per_rating=3, refractory_min=2.0,
-                       match_direction="prior", pro_lsb_spectrum_by_channel=None,
+                       match_direction="prior",
                        outlier_n_mad=None, outlier_scale=None):
     """Build the notebook-style analytics (sliding-window AUC/R, ROC, LFP/Otsu histogram, KMeans
     cluster scatter, and the streaming correlation spectrum). The independent pieces run
@@ -3145,15 +3271,13 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
             td_tasks = {
                 "corr_spectrum": lambda: analytics.corr_spectrum(det, region_map=region_map),
                 "psd_spectra": lambda: analytics.psd_spectra(det, region_map=region_map),
-                "spectral_feature_importance": lambda: analytics.spectral_feature_importance(
-                    scan_src, strategy=label_strategy, low_pct=low_pct, high_pct=high_pct,
-                    region_map=region_map,
-                    pro_lsb_spectrum_by_channel=pro_lsb_spectrum_by_channel,
-                    # Outlier exclusion (PI, 2026-08-30). None => the module default in
-                    # analytics.OUTLIER_N_MAD / OUTLIER_SCALE, so the rule is on by default rather
-                    # than something a caller has to remember to switch on.
-                    **({} if outlier_n_mad is None else {"outlier_n_mad": float(outlier_n_mad)}),
-                    **({} if outlier_scale is None else {"outlier_scale": str(outlier_scale)})),
+                # `spectral_feature_importance` (the exploratory 5 Hz sliding-band scan) is no longer
+                # computed: its only frontend consumer, BiomarkerAnalytics.js's scatter+violin
+                # drill-down, was removed as an unnecessary duplicated analysis -- the calibrated
+                # band-by-length grid (band_time_sweep_for_participant) is the headline result and
+                # already covers the same question with a stronger correction. `pro_lsb_spectrum` (via
+                # `_live_pro_lsb_spectrum` above) is still computed for `live_match_stats`, which the
+                # matching-controls caption still reads; only the downstream scan on top of it is cut.
                 "matched_sample_counts": count_task,
                 "pool_meta": lambda: (pooled or {}).get("pool_meta"),
                 # PSD spectrogram removed from the UI (added little over the spectrum + mean-PSD
@@ -3527,6 +3651,19 @@ def _match_tolerance_param(request_data):
     return v if v > 0 else None
 
 
+def _native_lsb_tolerance_param(request_data):
+    """Resolve the timeline's per-PRO native-LSB match window (seconds) from the request.
+
+    This is `availability.per_pro_lsb`'s own tolerance -- how far from a pain report's timestamp a
+    device-sensed reading may sit and still set that rating's timeline circle. Was a Python default
+    with no request path at all (hardcoded 120 s, decision 73/76's shared-matching-layer work);
+    reading it here, with the same default, is what makes it reachable from a knob rather than
+    fixed. `NativeLsbToleranceSec` absent or non-numeric keeps the historical default so nothing
+    already computed changes unless a caller deliberately sets it.
+    """
+    return _float_param(request_data, "NativeLsbToleranceSec", default=120.0, lo=1.0, hi=3600.0)
+
+
 def _window_params_body(request_data, sliding):
 
     train_days, window_months = _months_to_days(request_data.get("WindowMonths"))
@@ -3535,7 +3672,7 @@ def _window_params_body(request_data, sliding):
 
 
 def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_list,
-                        pro_df, label_metric, region_map, warm=False):
+                        pro_df, label_metric, region_map, warm=False, native_lsb_tolerance_s=120.0):
     """Assemble the data-availability-timeline payload for the new BiomarkerDataTimeline component.
 
     Reuses recordings already loaded for the decoder (td/chronic/powerdomain) and additionally loads
@@ -3631,7 +3768,8 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         _pro_t_lsb = np.asarray(pain.get("t") or [], dtype=float) if isinstance(pain, dict) else None
         pro_lsb = _pro_lsb_by_channel(
             _pro_t_lsb, lsb, list(td_list or []) + list(psd_list or []),
-            event_psd_blocks, sensing_hz) if (_pro_t_lsb is not None and _pro_t_lsb.size) else {}
+            event_psd_blocks, sensing_hz, native_tol_s=native_lsb_tolerance_s
+        ) if (_pro_t_lsb is not None and _pro_t_lsb.size) else {}
         # SHARED per-pair full-spectrum LSB cache (0–100 Hz). Both this timeline payload AND the
         # spectral feature-importance scan read from it (same computation, same source of truth).
         # td_recordings = ALL TD-bearing recordings (streaming + montage/survey, every product at 250 Hz
@@ -3752,6 +3890,7 @@ def availability_for_participant(request_data):
     """
     participant_uid = request_data["ParticipantId"]
     Participant = models.Participant.find(uid=participant_uid)
+    native_lsb_tolerance_s = _native_lsb_tolerance_param(request_data)
 
     # Demo participant -> synthetic availability (so the card renders before real data exists).
     if Participant is not None and getattr(Participant, "mrn", "") == DEMO_MRN:
@@ -3764,7 +3903,8 @@ def availability_for_participant(request_data):
         av = _build_availability(
             participant_uid, chronic_list=([chronic] if isinstance(chronic, dict) else (chronic or [])),
             powerdomain_list=[], td_list=recordings, pro_df=pro,
-            label_metric=label_metric, region_map=region_map)
+            label_metric=label_metric, region_map=region_map,
+            native_lsb_tolerance_s=native_lsb_tolerance_s)
         return {"availability": av, "available_metrics": BIOMARKER_METRICS,
                 "label_metric": label_metric,
                 "message": "DEMO DATA — synthetic availability timeline."}
@@ -3790,7 +3930,8 @@ def availability_for_participant(request_data):
     # would race the scan writing the same matrix npz).
     av = _build_availability(
         participant_uid, chronic_list=chronic_list, powerdomain_list=powerdomain_list,
-        td_list=td, pro_df=pro_df, label_metric=label_metric, region_map=region_map, warm=True)
+        td_list=td, pro_df=pro_df, label_metric=label_metric, region_map=region_map, warm=True,
+        native_lsb_tolerance_s=native_lsb_tolerance_s)
 
     msg = None
     if not av.get("records"):
@@ -3890,6 +4031,7 @@ def run_for_participant(request_data):
     pro_df, label_metric, kmeans_features = _resolve_biomarker_metric(request_data, pro_df)
     label_strategy, low_pct, high_pct = _label_strategy_params(request_data)
     match_tol_min = _match_tolerance_param(request_data)
+    native_lsb_tolerance_s = _native_lsb_tolerance_param(request_data)
     # Per-rating CAP for the exploratory scan: how many PSDs one pain rating may absorb per channel,
     # and the refractory gap (min) enforced among the kept set, so a streaming BURST around one survey
     # can't double-count. `MaxPerRating` (>=1) and `RefractoryMin` (>=0) come from the frontend.
@@ -3913,12 +4055,12 @@ def run_for_participant(request_data):
     # 1 IS one-per-rating, so callers no longer send the old Aggregate toggle. Keep "all" here so the
     # cap (not a pre-aggregation collapse) governs sample independence, with rating-grouped AUC on top.
     aggregate = "all"
-    # Live-matching toggle (default OFF): when on, the spectral scan's per-PRO LSB spectrum is built
-    # by matching PROs LIVE against the match-agnostic raw 3 s-window cache (median over a configurable
-    # rating-centered extent, TD preferred in-window, NO LSB vector reused across >1 PRO) instead of
-    # the legacy per-PRO _pro_lsb_spectrum_cached path. Off until the before/after r/AUC A/B is signed
-    # off, since live matching reduces pseudoreplication and shifts r/AUC.
-    use_live_matching = str(request_data.get("UseLiveMatching", "")).lower() in ("1", "true", "yes", "on")
+    # The spectral scan's per-PRO LSB spectrum is built by matching PROs against the match-agnostic
+    # raw 3 s-window cache (median over a configurable rating-centered extent, TD preferred
+    # in-window, NO LSB vector reused across >1 PRO) -- the ONLY path since 2026-06-28 (decision
+    # log). `UseLiveMatching` used to gate this; removed (decision 76 UI-wiring sweep) after
+    # confirming it had become a request field with no computational effect anywhere in this
+    # function -- read once, only ever echoed back, never branched on.
     match_extent_s = _float_param(request_data, "MatchExtentSec", default=float(
         analytics.TRANSFORM_CENTERED_EXTENT_SECONDS), lo=3.0, hi=300.0)
     # When ON, a raw window may match EVERY PRO whose extent covers it (not just its nearest), trading
@@ -4013,7 +4155,6 @@ def run_for_participant(request_data):
                                                  aggregate=aggregate, max_per_rating=max_per_rating,
                                                  refractory_min=refractory_min,
                                                  match_direction=match_direction,
-                                                 pro_lsb_spectrum_by_channel=pro_lsb_spectrum,
                                                  outlier_n_mad=outlier_n_mad,
                                                  outlier_scale=outlier_scale),
                          label_metric=label_metric)
@@ -4043,8 +4184,8 @@ def run_for_participant(request_data):
     out["max_per_rating"] = max_per_rating
     out["refractory_min"] = refractory_min
     out["match_direction"] = match_direction
-    out["use_live_matching"] = bool(use_live_matching)
     out["match_extent_s"] = float(match_extent_s)
+    out["native_lsb_tolerance_s"] = float(native_lsb_tolerance_s)
     out["allow_window_reuse"] = bool(allow_window_reuse)
     if live_match_stats is not None:
         # Pooled independence stats across channels: with live matching every PRO contributes ONE LSB
@@ -4081,7 +4222,8 @@ def run_for_participant(request_data):
     out["availability"] = _build_availability(
         participant_uid, chronic_list=chronic_list if source in ("powerdomain", "both") else [],
         powerdomain_list=powerdomain_list, td_list=td, pro_df=pro_df,
-        label_metric=label_metric, region_map=region_map)
+        label_metric=label_metric, region_map=region_map,
+        native_lsb_tolerance_s=native_lsb_tolerance_s)
     # Honesty flag (rigor fix #5): the power-domain detector currently pools all recorded power
     # channels into ONE threshold. If they span >1 anatomical target/hemisphere (e.g. Left GPi +
     # Right medial thalamus) and/or the raw 10-min Chronic vs per-session Power-Domain scales,
@@ -6679,12 +6821,13 @@ def band_time_sweep_for_participant(request_data):
         if stored is not None:
             return stored
 
-    psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
-    sensing_idx = _build_sensing_config_index(list(td or []))
-    event_blocks = _event_psd_lsb_blocks(participant_uid, sensing_index=sensing_idx)
-    montage_blocks = _montage_psd_lsb_blocks(participant_uid, montage_recordings=psd_list)
-    chan_order = _derive_chan_order(td)
-    channels = list(dict.fromkeys(availability._canon_channel(c) for c in (chan_order or [])))
+    # Through the SAME memo the cell drill-down reads, so a grid that actually builds also leaves
+    # this worker ready for the first hover on it. Deliberately placed AFTER the stored-response
+    # return above, not before it: a request served from the store must keep paying nothing for the
+    # spectra and event blocks, which is the whole point of asking the store first (decision 38).
+    # A store-served grid therefore leaves the memo cold and its first hover fills it once.
+    _td_seed, psd_list, event_blocks, montage_blocks, chan_order, channels = (
+        _recordings_setup_cached(participant_uid, td=td))
     if not channels:
         return dict(blank, label_metric=label_metric, metric_label=metric_label,
                     message="No sensing contact pair could be identified in the recordings.")
@@ -6779,8 +6922,16 @@ def band_time_sweep_cell_for_participant(request_data):
     except (TypeError, ValueError):
         return dict(blank, message="BandCenterHz and IntegrationSeconds must both be numbers.")
 
-    td = _load_recordings(participant_uid, TIMEDOMAIN_TYPES)
-    pro_df = _load_pros(request_data, Participant)
+    # Memoized setup (recordings + PSD blocks): this used to be rebuilt from scratch on every
+    # single hover (~2s of the ~2.9s this endpoint cost, timed live on RCS08), even though none of
+    # it depends on which cell was hovered.
+    td, psd_list, event_blocks, montage_blocks, chan_order, channels = (
+        _recordings_setup_cached(participant_uid))
+    # The pain-report table held from the most recent build, rather than a fresh REDCap fetch on
+    # every hover -- the narrow, deliberate override of decision 22 authorised for the read-only
+    # drill-downs. See `_PRO_BUILD_CACHE`'s own note for the rule and what it costs; every endpoint
+    # that builds something still fetches fresh and re-seeds what this reads.
+    pro_df = _pain_reports_for_drilldown(request_data, Participant)
     if pro_df is None or len(pro_df) == 0:
         return dict(blank, message="No patient-reported pain scores are available for this "
                                    "participant.")
@@ -6815,12 +6966,6 @@ def band_time_sweep_cell_for_participant(request_data):
     pro_times = np.asarray(pro_match[0], dtype=float)
     pain_values = np.asarray(pro_match[1], dtype=float)
 
-    psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
-    sensing_idx = _build_sensing_config_index(list(td or []))
-    event_blocks = _event_psd_lsb_blocks(participant_uid, sensing_index=sensing_idx)
-    montage_blocks = _montage_psd_lsb_blocks(participant_uid, montage_recordings=psd_list)
-    chan_order = _derive_chan_order(td)
-    channels = list(dict.fromkeys(availability._canon_channel(c) for c in (chan_order or [])))
     canon_channel = availability._canon_channel(channel)
     if canon_channel not in channels:
         return dict(blank, message=(f"Sensing contact pair {channel} was not found in this "

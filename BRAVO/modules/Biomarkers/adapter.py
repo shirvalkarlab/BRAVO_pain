@@ -31,8 +31,10 @@ from scipy.signal import savgol_filter
 # the host suite's root makes it `DecodeCommon` (same convention as routines/availability.py).
 try:
     from modules.DecodeCommon.representation import missing_per_sample as _missing_per_sample
+    from modules.DecodeCommon import matching as _matching
 except ImportError:
     from DecodeCommon.representation import missing_per_sample as _missing_per_sample
+    from DecodeCommon import matching as _matching
 
 
 # ---------------------------------------------------------------------------
@@ -158,44 +160,64 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
         if recordings is None:
             raise ValueError('target="session" requires `recordings`.')
 
-        # Time-window matching path: pre-sort PRO reports by timestamp once, then for each session
-        # take the nearest report within tolerance. Vectorized via searchsorted on the sorted times.
+        # Time-window matching path: nearest report within tolerance, via the shared Layer 1
+        # matcher (`DecodeCommon.matching.matched_samples`) rather than a private reimplementation
+        # of the same nearest-neighbour search -- Track B of the shared matching layer plan.
+        # `max_per_rating=None` reproduces this call site's own, pre-existing behavior exactly: no
+        # independence rule, so one PRO report may still match any number of sessions.
         tol = None if match_tolerance_min is None else float(match_tolerance_min)
         if tol is not None and tol > 0:
             valid = df[pd.notna(df[timestamp_col])].sort_values(timestamp_col).reset_index(drop=True)
-            pro_times = valid[timestamp_col].to_numpy("datetime64[ns]")
-            tol_ns = np.timedelta64(int(round(tol * 60.0 * 1e9)), "ns")
+            pro_times_ns = valid[timestamp_col].to_numpy("datetime64[ns]")
+            pro_ns_i64 = pro_times_ns.astype(np.int64)
+            session_ts = [_to_datetime(rec.get("StartTime")) for rec in recordings]
+            # `.to_datetime64()` on a pandas Timestamp does NOT always give nanosecond resolution
+            # -- a Timestamp built from a plain `datetime.datetime` (as `_to_datetime` does, via
+            # `datetime.datetime.utcfromtimestamp`) carries only microsecond resolution in pandas
+            # 2.x, so casting it to int64 directly would read microseconds as if they were
+            # nanoseconds, a 1000x error. Forcing "datetime64[ns]" first, exactly as already done
+            # for `pro_times_ns` above, makes both sides' units agree.
+            session_ns_i64 = np.array([
+                (t.to_datetime64().astype("datetime64[ns]").astype(np.int64) if not pd.isna(t)
+                else np.iinfo(np.int64).min)
+                for t in session_ts
+            ])
+            # A shared reference epoch, subtracted in exact integer nanoseconds before converting
+            # to the float64 seconds `matched_samples` takes. Epoch nanoseconds since 1970 are
+            # ~1.7e18, so a raw float64 conversion keeps only ~7 significant digits after the
+            # decimal at that magnitude (float64 has ~15-17 total) -- a few hundred nanoseconds of
+            # noise, negligible for a minutes-wide tolerance window but still a real, avoidable
+            # loss of precision this project's own equality-proof discipline does not accept
+            # without checking. Shifting first keeps the matched magnitude near zero, so the
+            # float64 conversion below is exact to well under a nanosecond.
+            finite_session_ns = session_ns_i64[session_ns_i64 != np.iinfo(np.int64).min]
+            ref_ns = int(min(pro_ns_i64.min() if pro_ns_i64.size else 0,
+                             finite_session_ns.min() if finite_session_ns.size else 0))
+            pro_times_s = (pro_ns_i64 - ref_ns) / 1e9
+            session_times_s = np.where(session_ns_i64 == np.iinfo(np.int64).min, np.nan,
+                                       (session_ns_i64 - ref_ns) / 1e9)
+            match = _matching.matched_samples(
+                session_times_s, session_times_s, pro_times_s, np.zeros(len(valid)),
+                tolerance_min=tol, direction="nearest", max_per_rating=None)
             rows = []
             for i, rec in enumerate(recordings):
-                ts = _to_datetime(rec.get("StartTime"))
+                ts = session_ts[i]
                 row = {"session_index": i, "session_start": ts,
                        "session_date": (ts.date() if not pd.isna(ts) else None),
                        "matched": False, "match_dt_min": np.nan,
                        "matched_pro_time": pd.NaT}
-                j = -1
-                if not pd.isna(ts) and len(pro_times):
-                    ts64 = np.datetime64(ts.to_datetime64())
-                    pos = int(np.searchsorted(pro_times, ts64))
-                    # Nearest of the two neighbours straddling ts (searchsorted gives the right one).
-                    best, best_d = -1, None
-                    for k in (pos - 1, pos):
-                        if 0 <= k < len(pro_times):
-                            d = abs(pro_times[k] - ts64)
-                            if d <= tol_ns and (best_d is None or d < best_d):
-                                best, best_d = k, d
-                    j = best
+                j = int(match["rating_cluster_id"][i])
                 if j >= 0:
                     rr = valid.iloc[j]
-                    dt_min = (pro_times[j] - np.datetime64(ts.to_datetime64())) / np.timedelta64(1, "m")
                     row["matched"] = True
-                    row["match_dt_min"] = float(dt_min)
+                    row["match_dt_min"] = float(match["dt_min"][i])
                     # IDENTITY of the matched report, not its value. Callers need to know WHICH
                     # rating a session was matched to in order to cluster/group correctly. Without
                     # it, pipeline.run_timedomain_branch reconstructed the grouping by searching for
                     # a PRO whose VALUE equalled the label, which on an integer pain scale collapses
                     # every session sharing a score into one "rating" — and worse, makes the grouping
                     # a function of the outcome being predicted.
-                    row["matched_pro_time"] = pd.Timestamp(pro_times[j])
+                    row["matched_pro_time"] = pd.Timestamp(pro_times_ns[j])
                     for m in metrics:
                         v = float(rr[m]) if (m in valid.columns and pd.notna(rr[m])) else np.nan
                         row[f"{m}_mean"] = v

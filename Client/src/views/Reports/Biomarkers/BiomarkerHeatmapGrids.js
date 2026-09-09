@@ -83,7 +83,7 @@ function bestCellIndexByColumn(sw, rows) {
  * visually redraw (see the component-level note above); passing the same key across a re-render
  * with new numbers is what keeps the correlation grid's frame looking untouched.
  */
-function Heatmap({ sw, kind, hovered, pinned, onHover, onClick, flashKey, width = 460 }) {
+function Heatmap({ sw, kind, hovered, pinned, onHover, onClick, flashKey, width = 900 }) {
   const centers = sw.center_freqs_hz || [];
   const seconds = sw.integration_seconds_requested || sw.integration_seconds_delivered || [];
   const grid = kind === "auc" ? sw.auc_grid : sw.correlation_grid;
@@ -109,8 +109,11 @@ function Heatmap({ sw, kind, hovered, pinned, onHover, onClick, flashKey, width 
       </MDTypography>
     );
   }
-  const padL = 46, padB = 22, padT = 4, padR = 4;
-  const height = Math.max(160, rows * 20 + padT + padB);
+  // Padding enlarged (was 46/22/4/4) to leave room for the axis TITLES added below, not just the
+  // sparse tick labels that were already there -- the grids only had tick numbers before, with no
+  // "what am I looking at" label on either axis.
+  const padL = 78, padB = 46, padT = 8, padR = 12;
+  const height = Math.max(260, rows * 30 + padT + padB);
   const cw = (width - padL - padR) / cols;
   const ch = (height - padT - padB) / rows;
 
@@ -142,15 +145,20 @@ function Heatmap({ sw, kind, hovered, pinned, onHover, onClick, flashKey, width 
       );
     }
   }
-  // Sparse axis labels so text does not overlap: every 3rd band centre, every row's seconds.
+  // Sparse tick labels so text does not overlap: every 3rd band centre, every row's seconds.
   const xLabels = centers.map((c, i) => (i % 3 === 0 ? (
-    <text key={i} x={padL + i * cw + cw / 2} y={height - padB + 12} fontSize={9} textAnchor="middle"
+    <text key={i} x={padL + i * cw + cw / 2} y={height - padB + 16} fontSize={11} textAnchor="middle"
       fill="#444">{Number(c).toFixed(0)}</text>
   ) : null));
   const yLabels = seconds.map((s, i) => (
-    <text key={i} x={padL - 4} y={padT + i * ch + ch / 2 + 3} fontSize={9} textAnchor="end"
+    <text key={i} x={padL - 8} y={padT + i * ch + ch / 2 + 4} fontSize={11} textAnchor="end"
       fill="#444">{Number(s) >= 60 ? `${Math.round(s / 60)}m` : `${Number(s).toFixed(0)}s`}</text>
   ));
+  // Axis TITLES (new) -- the grid previously carried only tick numbers, with no label saying what
+  // those numbers are. The x axis is centred under the whole plot area; the y axis title is
+  // rotated 90 degrees and centred alongside the plot area's own vertical span.
+  const plotMidX = padL + (width - padL - padR) / 2;
+  const plotMidY = padT + (height - padT - padB) / 2;
   return (
     <MDBox
       onMouseLeave={() => onHover(null, null)}
@@ -160,10 +168,18 @@ function Heatmap({ sw, kind, hovered, pinned, onHover, onClick, flashKey, width 
         transition: "outline-color 0.15s",
       } : { outline: "2px solid transparent", borderRadius: 1 }}
     >
-      <svg width={width} height={height} style={{ display: "block" }}>
+      {/* viewBox + width="100%" scales the SVG down on a narrow viewport instead of overflowing the
+          card horizontally, while every cell/label coordinate above is still computed against the
+          full logical `width` -- so nothing has to be recomputed for different screen sizes. */}
+      <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height}
+        style={{ display: "block", maxWidth: width }} preserveAspectRatio="xMinYMin meet">
         {cells}
         {xLabels}
         {yLabels}
+        <text x={plotMidX} y={height - 8} fontSize={12} fontWeight="bold" textAnchor="middle"
+          fill="#1a1a1a">{"Band centre (Hz)"}</text>
+        <text x={16} y={plotMidY} fontSize={12} fontWeight="bold" textAnchor="middle"
+          fill="#1a1a1a" transform={`rotate(-90 16 ${plotMidY})`}>{"Length of signal"}</text>
       </svg>
     </MDBox>
   );
@@ -517,10 +533,13 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
 
         {corrSw && aucSw ? (
           <>
+            {/* Stacked full-width rather than side by side (was xs=12 md=6 each): the grids are
+                the headline result of the page, so they get the full card width to render bigger,
+                with room for the axis titles added to Heatmap above. */}
             <Grid container spacing={2}>
-              <Grid item xs={12} md={6}>
+              <Grid item xs={12}>
                 <MDTypography variant="button" fontWeight="bold" color="dark"
-                  sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
+                  sx={{ fontSize: 15, display: "block", mb: 0.5 }}>
                   {"Correlation with pain — depends only on matching"}
                 </MDTypography>
                 <Heatmap sw={corrSw} kind="correlation" hovered={hoveredCorr}
@@ -528,9 +547,9 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
                   onHover={(r, c) => handleHover("correlation", corrSw, r, c)}
                   onClick={(r, c) => handleClick("correlation", corrSw, r, c)} />
               </Grid>
-              <Grid item xs={12} md={6}>
+              <Grid item xs={12}>
                 <MDTypography variant="button" fontWeight="bold" color="dark"
-                  sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
+                  sx={{ fontSize: 15, display: "block", mb: 0.5 }}>
                   {"High vs low pain (AUC) — also depends on the binarization cuts above"}
                 </MDTypography>
                 <Heatmap sw={aucSw} kind="auc" hovered={hoveredAuc}
