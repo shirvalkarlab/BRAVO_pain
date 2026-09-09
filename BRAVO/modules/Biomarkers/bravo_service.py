@@ -889,6 +889,42 @@ def _recordings_setup_cached(participant_uid, td=None):
     return result
 
 
+# Same shape and same decision-22 justification as _RECORDINGS_SETUP_MEMO above (recordings are
+# immutable once exported, so a no-expiry, participant-keyed memo is safe): the chronic/power-domain
+# branch had no cache at all, unlike the time-domain branch's _cached_psd_matrix. Holds ONLY
+# recording-derived data (chronic_list, powerdomain_list, and their already-concatenated
+# power_list), never any pain-report data.
+_POWER_LIST_MEMO = {}
+_POWER_LIST_MEMO_MAX = 8
+_POWER_LIST_MEMO_LOCK = threading.Lock()
+
+
+def _power_list_cached(participant_uid):
+    """(chronic_list, powerdomain_list, power_list) for one participant, memoized in-process.
+
+    `power_list` is `chronic_list` concatenated with `powerdomain_list` converted to chronic-shaped
+    entries (adapter.bravo_powerdomain_to_chronic_like) -- exactly the value run_for_participant's
+    powerdomain/both branch already built inline before this memo existed, moved here unchanged so
+    a second request for the same participant does not reload and re-concatenate it.
+    """
+    with _POWER_LIST_MEMO_LOCK:
+        cached = _POWER_LIST_MEMO.get(participant_uid)
+    if cached is not None:
+        return cached
+    chronic_list = _load_recordings(participant_uid, CHRONIC_TYPES)
+    powerdomain_list = _load_recordings(participant_uid, POWERDOMAIN_TYPES)
+    for c in chronic_list:
+        if isinstance(c, dict):
+            c.setdefault("Source", "chronic")
+    power_list = list(chronic_list) + adapter.bravo_powerdomain_to_chronic_like(powerdomain_list)
+    result = (chronic_list, powerdomain_list, power_list)
+    with _POWER_LIST_MEMO_LOCK:
+        if len(_POWER_LIST_MEMO) >= _POWER_LIST_MEMO_MAX:
+            _POWER_LIST_MEMO.pop(next(iter(_POWER_LIST_MEMO)))
+        _POWER_LIST_MEMO[participant_uid] = result
+    return result
+
+
 def _lsb_spectrum_signature(participant_uid, pro_times, td_recordings, event_psd_blocks, centers,
                             montage_psd_blocks=None):
     """Content signature for the per-pair LSB spectrum: participant + PRO set + the TD/event/montage
@@ -3942,14 +3978,11 @@ def run_for_participant(request_data):
     powerdomain_list = []
     chronic_list = []
     if source in ("powerdomain", "both"):
-        chronic_list = _load_recordings(participant_uid, CHRONIC_TYPES)
-        powerdomain_list = _load_recordings(participant_uid, POWERDOMAIN_TYPES)
-        # Tag each Chronic recording with its sensing modality so the merged-series two-source
-        # batch/scale confound can be diagnosed downstream (the power-domain dicts self-tag).
-        for c in chronic_list:
-            if isinstance(c, dict):
-                c.setdefault("Source", "chronic")
-        power_list = list(chronic_list) + adapter.bravo_powerdomain_to_chronic_like(powerdomain_list)
+        # Recordings are immutable once exported (decision 22), so this no-expiry, participant-keyed
+        # memo is safe -- same shape as _recordings_setup_cached above. The "Source" self-tag (for
+        # the merged-series two-source batch/scale confound diagnostic downstream) and the
+        # chronic+powerdomain concatenation both happen once, inside the memo, not on every request.
+        chronic_list, powerdomain_list, power_list = _power_list_cached(participant_uid)
 
     pro_df = _load_pros(request_data, Participant)
 
