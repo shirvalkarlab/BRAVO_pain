@@ -34,13 +34,15 @@ this review must not contradict or re-derive:
   `_RECORDINGS_SETUP_MEMO` (`_hover_cell_recordings_setup`), `_PRO_BUILD_CACHE`.
 
 ## Next Step
-All six backend fixes are implemented, proven on RCS08, and committed (5cc0d832, 03b45c3e,
-0316abad, fca229c9, 4d480e8a, 8f8c0fad), plus DECISIONS_and_open_items.md decision 79. Not yet
-pushed. Next: push, then report the completed work to the user. The frontend and Plotly findings
-from the same review remain open for a future session if the user wants them tackled too.
+All nine frontend dead-code/duplication findings (Agent B) are implemented across six files,
+`npm run build` is clean, bundle-verified, and committed (57c65d1b) with DECISIONS_and_open_items.md
+decision 80. Not yet pushed. Next: push to origin/PS_closedloop_deployment, then report to the user
+— including the one deliberately-deferred half of finding #7 (React.memo on Heatmap) and that no
+live browser check was performed for this UI-facing work. The Plotly render-manager findings
+(Agent C) from the same original review remain open for a future session if wanted.
 
 ## Current Phase
-Phase 6
+Phase 7
 
 ## Phases
 
@@ -109,6 +111,53 @@ Phase 6
 - [x] `DECISIONS_and_open_items.md` decision 79 added, summarizing all six with their proof numbers
 - **Status:** complete
 
+### Phase 7: Implement the frontend dead-code/duplication findings (Agent B, via /swarm-execute)
+- [x] Deleted the dead `STABILITY_CELLS`/`resolveStability`/`stabilityNumbers`/`StabilityTrack`/
+      `ValidationReadout` cluster from `BiomarkerAnalytics.js` (~395 lines), confirmed via grep that
+      `<ValidationReadout>` was never rendered; removed its now-orphaned imports and the `matchDirty`
+      prop (only that dead cluster read it) from both `BiomarkerAnalytics.js` and its `index.js` call
+      site, leaving `BinarizationPreview.js`'s own genuine use of `matchDirty` untouched.
+- [x] Investigated finding #1 (`BandTimeSweepPanel.js`): already documented in `index.js` as
+      deliberately kept (CLAUDE.md §2 principle 4); never imported anywhere so zero bundle cost.
+      No code change made or needed.
+- [x] Deduplicated colors: `binarizationModel.js` exports `BIN_HI_RGB`/`BIN_LO_RGB`;
+      `BiomarkerHeatmapGrids.js`, `BiomarkerTimeline.js`, `BiomarkerAnalytics.js` import the shared
+      HI/LO constants instead of redeclaring matching hex literals. Deliberately did NOT alias
+      `BiomarkerTimeline.js`'s `td`/`threshold` colors or `BiomarkerHeatmapGrids.js`'s
+      `PAL.accentBorder` chip — different semantic concepts that only coincidentally share hex values.
+- [x] Deduplicated `computeCuts`: exported `binarizationModel.js`'s version;
+      `BinarizationPreview.js`'s locally-duplicated implementation (verified mathematically
+      equivalent — nearest-centroid assignment and midpoint-threshold splitting are identical for
+      1-D two-centroid k-means) replaced with a thin wrapper, mirroring the file's own existing
+      `matchedCuts` pattern.
+- [x] Fixed the Plotly zoom-reset bug in `BiomarkerTimeline.js` (Plotly.purge was running in the
+      main effect's cleanup on every `[data, height, linked]` change instead of unmount-only) —
+      moved to a dedicated unmount-only effect, added `uirevision`, mirroring `BiomarkerAnalytics.js`'s
+      already-correct `Fig` component.
+- [x] Memoized `xLabels`/`yLabels` in `BiomarkerHeatmapGrids.js`'s `Heatmap` (moved before the early
+      return to satisfy rules-of-hooks) and `centers`/`seconds` (an eslint exhaustive-deps warning
+      caught that `sw.x || []` allocated a fresh array every render, defeating the memoization just
+      added).
+- [x] Assessed and deliberately deferred the other half of finding #7: did NOT wrap `Heatmap` in
+      `React.memo`, since the parent passes `onHover`/`onClick` as fresh inline closures every
+      render (would need `useCallback` too, risking the hardened hover/click interaction logic) for
+      near-zero benefit (cell rendering already sub-millisecond per decision 66).
+- [x] Fixed a false code comment on `PROG_COLOR` in `BiomarkerAnalytics.js` that incorrectly claimed
+      it matched `BiomarkerTimeline.js`'s legacy-view color (it doesn't — left as two colors
+      deliberately, not a drive-by fix).
+- [x] `npm run build` clean; cross-checked every remaining warning against `git show HEAD` to
+      confirm all are pre-existing, none introduced by this session's edits.
+- [x] Bundle-verified: grepped `build/static/js/*.chunk.js` for distinctive new strings
+      (`uirevision: "biomarker-timeline"`, "KMeans midpoint", `[213, 94, 0]`) — all reached chunk
+      806; confirmed the deleted cluster's strings ("Not determinable", "declared equivalence
+      margin") appear nowhere in the bundle.
+- [x] Committed 57c65d1b (source + rebuilt `Client/build/`); `DECISIONS_and_open_items.md` decision
+      80 added.
+- [ ] Push to origin/PS_closedloop_deployment.
+- [ ] Report to user: findings fixed, findings requiring no change, the one deliberately deferred
+      item, and that no live browser check was performed.
+- **Status:** in progress
+
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
@@ -119,3 +168,5 @@ Phase 6
 ## Errors Encountered
 | Error | Resolution |
 |-------|------------|
+| Rules-of-hooks violation: `BiomarkerHeatmapGrids.js`'s `Heatmap` called two new `useMemo` hooks after the component's conditional early return (`if (!rows \|\| !cols) return ...`), which `npm run build` refused to compile (`react-hooks/rules-of-hooks`). | Moved the padding/geometry computation and both `useMemo` calls to before the early return, guarding potential division-by-zero with `(cols \|\| 1)`/`(rows \|\| 1)` — safe because those values are never rendered on the early-return path. Also found and removed a leftover duplicate copy of the old post-early-return `xLabels`/`yLabels` block the edit had left behind. |
+| Memo-defeating bug (self-introduced): after fixing the rules-of-hooks violation, `centers`/`seconds` were still computed inline as `sw.x \|\| []`, which allocates a fresh array reference every render — used as a `useMemo` dependency, this silently defeated the memoization just added. Caught by a NEW `react-hooks/exhaustive-deps` warning in the next build, not by manual review. | Wrapped both in their own `useMemo(() => sw.x \|\| [], [sw])`. |
