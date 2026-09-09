@@ -589,41 +589,6 @@ function Biomarkers() {
                     </Grid>
                   ))}
 
-                  {/* Pain-metric picker DIRECTLY BELOW the timeline — drives the pain row live. */}
-                  {timelineData && timelineData.availability && timelineData.availability.records
-                        && timelineData.availability.records.length > 0 ? (
-                    <Grid item xs={12}>
-                      <MDBox px={2} pb={1.5} display="flex" flexDirection="row" alignItems="center"
-                             gap={2} flexWrap="wrap" justifyContent="center">
-                        <MDTypography variant="button" fontWeight="bold"
-                                      sx={{ fontSize: 18, color: "#1a1a1a !important" }}>
-                          {"Pain metric (drives live timeline + exploratory analysis):"}
-                        </MDTypography>
-                        <FormControl size="small" sx={{ minWidth: 420 }}>
-                          <Select value={metric} onChange={(e) => setMetric(e.target.value)}
-                                  sx={{
-                                    // Enlarge ONLY the closed / displayed selected value. A plain
-                                    // fontSize on <Select> lands on .MuiInputBase-root and does NOT
-                                    // resize the rendered value — that text is the inner
-                                    // .MuiSelect-select slot, so target it directly. !important beats
-                                    // MUI's own .MuiInputBase-input rule (equal specificity otherwise).
-                                    "& .MuiSelect-select": {
-                                      fontSize: "18px !important",  // matches the open-menu items
-                                      fontWeight: 700,
-                                      lineHeight: 1.2,
-                                      color: "#1a1a1a !important",  // ink (red is reserved for errors/warnings)
-                                    },
-                                  }}>
-                            {((timelineData && timelineData.available_metrics)
-                               || (data && data.available_metrics) || DEFAULT_METRIC_OPTIONS).map((m) => (
-                              <MenuItem key={m.key} value={m.key} sx={{ fontSize: 18 }}>{m.label}</MenuItem>
-                            ))}
-                          </Select>
-                        </FormControl>
-                      </MDBox>
-                    </Grid>
-                  ) : null}
-
                   {computing ? (
                     <Grid item xs={12}>
                       <MDBox px={2} pb={1}>
@@ -885,6 +850,54 @@ function Biomarkers() {
 
                         </Grid>
                       </Card>
+                    </MDBox>
+                  </Grid>
+
+                  {/* ── THE ONE CONSOLIDATED PAIN-SCORE DROPDOWN (open item 7, part 1) ───────────
+                      This used to be two dropdowns: this one directly below the timeline, and a
+                      second, independent one inside BiomarkerHeatmapGrids's own header (with only a
+                      one-way sync from this one, so the two could disagree). The second is now gone
+                      — BiomarkerHeatmapGrids reads `metric` straight from this component's own prop
+                      (`pageMetric`) — so this is the ONLY place a reader picks the pain score, and
+                      it drives all three consumers at once: the timeline's pain row, the
+                      binarization preview/matched-scan model, and the calibrated grid. Moved here,
+                      below the binarization box, and given a red outline for visibility, per the
+                      requested redesign; the label text, the options list and the Select component
+                      itself are unchanged. */}
+                  <Grid item xs={12}>
+                    <MDBox px={2} pb={1.5}>
+                      <MDBox display="flex" flexDirection="row" alignItems="center" gap={2}
+                        flexWrap="wrap" justifyContent="center"
+                        sx={{
+                          border: "2.5px solid #D32F2F", borderRadius: 2, px: 2, py: 1.5,
+                          background: "#D32F2F08",
+                        }}>
+                        <MDTypography variant="button" fontWeight="bold"
+                                      sx={{ fontSize: 18, color: "#1a1a1a !important" }}>
+                          {"Pain metric (drives live timeline + exploratory analysis):"}
+                        </MDTypography>
+                        <FormControl size="small" sx={{ minWidth: 420 }}>
+                          <Select value={metric} onChange={(e) => setMetric(e.target.value)}
+                                  sx={{
+                                    // Enlarge ONLY the closed / displayed selected value. A plain
+                                    // fontSize on <Select> lands on .MuiInputBase-root and does NOT
+                                    // resize the rendered value — that text is the inner
+                                    // .MuiSelect-select slot, so target it directly. !important beats
+                                    // MUI's own .MuiInputBase-input rule (equal specificity otherwise).
+                                    "& .MuiSelect-select": {
+                                      fontSize: "18px !important",  // matches the open-menu items
+                                      fontWeight: 700,
+                                      lineHeight: 1.2,
+                                      color: "#1a1a1a !important",  // ink (red is reserved for errors/warnings)
+                                    },
+                                  }}>
+                            {((timelineData && timelineData.available_metrics)
+                               || (data && data.available_metrics) || DEFAULT_METRIC_OPTIONS).map((m) => (
+                              <MenuItem key={m.key} value={m.key} sx={{ fontSize: 18 }}>{m.label}</MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                      </MDBox>
                     </MDBox>
                   </Grid>
 

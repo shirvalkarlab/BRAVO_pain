@@ -91,8 +91,13 @@ function Heatmap({ sw, kind, hovered, pinned, onHover, onClick, flashKey, width 
   // hand xLabels/yLabels' own useMemo calls below a brand-new [] reference on every render, which
   // would silently defeat their memoization (caught by the eslint exhaustive-deps rule).
   const centers = useMemo(() => sw.center_freqs_hz || [], [sw]);
+  // DELIVERED, not requested. The 3-second tile cache rounds every requested length to the
+  // nearest tile (analytics.integration_time_tile_count) -- a request for 10 s is actually built
+  // from 9 s of signal, 5 s from 6 s, and so on. Showing the REQUESTED number on this axis
+  // mislabeled every row with the length of signal that was asked for, not the length that was
+  // actually averaged into the row's own numbers.
   const seconds = useMemo(
-    () => sw.integration_seconds_requested || sw.integration_seconds_delivered || [], [sw]);
+    () => sw.integration_seconds_delivered || sw.integration_seconds_requested || [], [sw]);
   const grid = kind === "auc" ? sw.auc_grid : sw.correlation_grid;
   const rows = (grid || []).length;
   const cols = centers.length;
@@ -214,6 +219,13 @@ function ContactStrip({ sweeps, channel, setChannel }) {
         const grid = sw && sw.correlation_grid;
         const rows = (grid || []).length;
         const cols = (sw && sw.center_freqs_hz && sw.center_freqs_hz.length) || 0;
+        // Medtronic-style label ("L 0⁻2⁺ (Left GPi)"), matching the "Recorded power channels"
+        // convention elsewhere on this page -- built server-side (bravo_service._band_time_sweep_
+        // channels via analytics.format_channel), never re-derived from the raw key here. Falls
+        // back to the raw key only if an older, unlabeled cached response is served.
+        const label = (sw && sw.display_short)
+          ? (sw.display_region ? `${sw.display_short} (${sw.display_region})` : sw.display_short)
+          : ch.replace(/_/g, " ");
         return (
           <MDBox key={ch} onClick={() => setChannel(ch)}
             sx={{
@@ -223,7 +235,7 @@ function ContactStrip({ sweeps, channel, setChannel }) {
             }}>
             <MDTypography variant="caption" fontWeight={active ? "bold" : "medium"} color="dark"
               sx={{ fontSize: 10.5, display: "block", textAlign: "center" }}>
-              {ch.replace(/_/g, " ")}
+              {label}
             </MDTypography>
             {rows && cols ? (
               <svg width={92} height={46}>
@@ -373,8 +385,11 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   const options = useMemo(() => (
     (availableMetrics && availableMetrics.length ? availableMetrics : [])
   ), [availableMetrics]);
-  const [metric, setMetric] = useState(pageMetric || "nrs");
-  useEffect(() => { if (pageMetric) setMetric(pageMetric); }, [pageMetric]);
+  // The pain-score metric is now chosen by the ONE consolidated dropdown at the page level
+  // (index.js) rather than by a second dropdown here -- this component just reads it. No local
+  // state and no sync effect are needed, which also removes the one-way-sync gap that let this
+  // component's own selection drift from the page's.
+  const metric = pageMetric || "nrs";
 
   const [channel, setChannel] = useState(null);
   const [corrResult, setCorrResult] = useState(null);   // what the correlation grid is drawn from
@@ -491,6 +506,15 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   const corrSw = channel && corrSweeps[channel];
   const aucSw = channel && aucSweeps[channel];
   const matchDirectionLabel = (aucSw && aucSw.match_direction) || (corrSw && corrSw.match_direction);
+  // Medtronic-style display name for a raw channel key, matching "Recorded power channels" —
+  // reused everywhere this section names a contact pair (the pinned-cell header, panel titles).
+  const channelLabel = (ch) => {
+    const sw = corrSweeps[ch] || aucSweeps[ch];
+    if (sw && sw.display_short) {
+      return sw.display_region ? `${sw.display_short} (${sw.display_region})` : sw.display_short;
+    }
+    return ch ? ch.replace(/_/g, " ") : ch;
+  };
 
   const fetchCell = (ch, center, seconds) => {
     const key = `${ch}|${center}|${seconds}`;
@@ -550,14 +574,14 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
           {loading ? <CircularProgress size={20} /> : null}
         </MDBox>
         <MDBox display="flex" flexDirection="row" alignItems="center" flexWrap="wrap" gap={1.5} mt={1}>
-          <MDBox>
-            <MDTypography variant="caption" fontWeight="bold" color="dark"
-              sx={{ fontSize: 11, display: "block" }}>{"Patient-reported pain score"}</MDTypography>
-            <select value={metric} onChange={(e) => setMetric(e.target.value)}
-              style={{ fontSize: 13, padding: "3px 6px" }}>
-              {options.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}
-            </select>
-          </MDBox>
+          {/* The pain-score dropdown that used to live here is gone -- one consolidated dropdown
+              now lives at the top of the page (index.js, below the binarization box) and drives
+              this section through the `pageMetric` prop. */}
+          {metricLabel ? (
+            <MDTypography variant="caption" color="dark" sx={{ fontSize: 12 }}>
+              {`Pain score: ${metricLabel}`}
+            </MDTypography>
+          ) : null}
           {matchDirectionLabel ? (
             <MDBox sx={{ border: `1.5px solid ${PAL.accentBorder || "#0072B2"}`, borderRadius: 1.5,
               px: 1, py: 0.4, background: "#0072B208" }}>
@@ -642,7 +666,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
               <MDBox mt={2} sx={{ border: `2px solid ${PAL.accentBorder || "#0072B2"}`, borderRadius: 2, p: 1.5 }}>
                 <MDTypography variant="button" fontWeight="bold" color="dark"
                   sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
-                  {`${pinned.channel} · ${pinned.center} Hz · ${pinned.seconds} s of signal`}
+                  {`${channelLabel(pinned.channel)} · ${pinned.center} Hz · ${pinned.seconds} s of signal`}
                 </MDTypography>
                 <CellFigure cell={pinnedCellData} />
               </MDBox>

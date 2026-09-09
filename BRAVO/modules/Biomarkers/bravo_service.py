@@ -6583,7 +6583,8 @@ def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
 def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_reuse,
                               pain_values, label_strategy, low_pct, high_pct,
                               outlier_n_mad, outlier_scale, metric_key, metric_label,
-                              n_perm=None, n_boot=None, seed=0, match_direction="pro_first"):
+                              n_perm=None, n_boot=None, seed=0, match_direction="pro_first",
+                              region_map=None):
     """Run the sweep for every sensing contact pair that has a cache, one entry per pair.
 
     ONE CONTACT PAIR IS ONE ANSWER, never pooled. A contact pair fixes which side of the brain and
@@ -6591,6 +6592,13 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
     measurements of two different places; averaging their grids would invite a reader to read a
     number that belongs to neither. Each pair therefore gets its own grid, its own two summary
     tables and its own pair of figures, and the pair is named on every one of them.
+
+    `region_map` (raw channel name -> region string, e.g. from `_region_map`) is used to attach a
+    display label to each entry (`label`/`short`/`region`/`hemisphere`/`contacts`, via
+    `analytics.format_channel` -- the SAME formatter `_recorded_powers` already uses for the
+    "Recorded power channels" card, reused here rather than re-derived) so the frontend never has
+    to turn a raw key like "ZERO_TWO_LEFT" into a display string itself. The raw key stays the
+    dict key and the value every request field still sends -- only a label is added.
     """
     out = {}
     for raw_ch, raw_cache in (raw_by_channel or {}).items():
@@ -6613,6 +6621,11 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
                                "reached from the 250 samples-per-second voltage trace by the "
                                "validated transform, or from the device's own spectrum where no "
                                "voltage trace was in range"))
+            _fmt = analytics.format_channel(raw_ch, region=(region_map or {}).get(raw_ch))
+            sweep["display_short"] = _fmt["short"]        # e.g. "L 0⁻2⁺"
+            sweep["display_region"] = _fmt["region"]       # e.g. "Left GPi", "" if unknown
+            sweep["display_hemisphere"] = _fmt["hemisphere"]
+            sweep["display_contacts"] = _fmt["contacts"]
             # Reported once per contact pair since one setting governs the whole request: "prior"
             # means every matched recording preceded the rating it was matched to (the
             # forecasting-safe direction); "prospective" means matching looked either direction in
@@ -6870,7 +6883,8 @@ def band_time_sweep_for_participant(request_data):
         raw_by_ch, pro_times, tol_s=tol_s, allow_window_reuse=allow_window_reuse,
         pain_values=pain_values, label_strategy=label_strategy, low_pct=low_pct,
         high_pct=high_pct, outlier_n_mad=outlier_n_mad, outlier_scale=outlier_scale,
-        metric_key=label_metric, metric_label=metric_label, match_direction=match_direction)
+        metric_key=label_metric, metric_label=metric_label, match_direction=match_direction,
+        region_map=_region_map(Participant, chan_order))
     wall = float(_time.perf_counter() - t0)
     if include_stability:
         _attach_grid_export_columns(participant_uid, sweeps,
@@ -7081,7 +7095,7 @@ _BAND_SWEEP_RESPONSE_KIND = "biomarker_band_sweep"
 #: the `cross_setting_stability` / `device_rules_status` fields on every best-row. Bumped anyway,
 #: belt and suspenders, after this exact class of bug (an unversioned response shape change served
 #: stale) was found and fixed twice already in this feature's own Tracks B and C.
-_BAND_SWEEP_RULE_VERSION = "v3_sweep_closed_loop_export"
+_BAND_SWEEP_RULE_VERSION = "v4_sweep_display_labels"
 
 #: Response fields that are timings of the run that produced them, not results. They are not
 #: compared when a stored response is checked against a fresh one, and a served response keeps the
