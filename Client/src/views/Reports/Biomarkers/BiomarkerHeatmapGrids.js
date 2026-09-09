@@ -384,8 +384,33 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
 /** A small strip of thumbnail correlation grids, one per sensing contact pair, all drawn from the
  * one response already held -- clicking a thumbnail is what chooses the contact pair for the two
  * big grids below (Option 2's replacement for a dropdown, task A3). */
+const _WORD2DIGIT_STRIP = { ZERO: "0", ONE: "1", TWO: "2", THREE: "3", FOUR: "4",
+  FIVE: "5", SIX: "6", SEVEN: "7", EIGHT: "8", NINE: "9" };
+
+/** Left contacts before right, and within each side ascending by contact number (0-2 before
+ * 0-3 before 1-3), reading the server's own display fields first and only falling back to the
+ * raw channel key (e.g. "ZERO_TWO_LEFT") for an older, unlabeled cached response. */
+function contactSortKey(ch, sw) {
+  const hemi = (sw && sw.display_hemisphere)
+    || (/LEFT/i.test(ch) ? "Left" : (/RIGHT/i.test(ch) ? "Right" : ""));
+  const hemiRank = hemi === "Left" ? 0 : (hemi === "Right" ? 1 : 2);
+  const contactsStr = (sw && sw.display_contacts) || "";
+  let digits = (contactsStr.match(/\d/g) || []).map(Number);
+  if (!digits.length) {
+    const toks = ch.toUpperCase().replace(/-/g, "_").split("_")
+      .filter((t) => _WORD2DIGIT_STRIP[t] !== undefined || /^\d+$/.test(t));
+    digits = toks.map((t) => Number(_WORD2DIGIT_STRIP[t] !== undefined ? _WORD2DIGIT_STRIP[t] : t));
+  }
+  const contactsRank = digits.length ? digits[0] * 10 + (digits[1] || 0) : 0;
+  return [hemiRank, contactsRank];
+}
+
 function ContactStrip({ sweeps, channel, setChannel }) {
-  const names = Object.keys(sweeps || {});
+  const names = Object.keys(sweeps || {}).sort((a, b) => {
+    const ka = contactSortKey(a, sweeps[a]);
+    const kb = contactSortKey(b, sweeps[b]);
+    return (ka[0] - kb[0]) || (ka[1] - kb[1]);
+  });
   if (names.length <= 1) return null;
   return (
     <MDBox display="flex" flexDirection="row" flexWrap="wrap" gap={1.25} mb={1.5}>
@@ -495,6 +520,28 @@ function niceTicks(lo, hi, count = 4) {
   return { ticks, decimals };
 }
 
+/** Tracks an element's own rendered width via ResizeObserver, so a plot can genuinely fill its
+ * Grid column's width (which the flex/grid layout only knows at render time) rather than being
+ * capped at a square whose side is the panel's HEIGHT -- the bug behind "the scatter and violin
+ * plots aren't filling the panel": both used to hard-code width = height, leaving the column's
+ * real, usually-wider width unused. `fallback` is used for the one render before the observer
+ * reports a real number, so nothing measures zero. */
+function useMeasuredWidth(fallback) {
+  const ref = useRef(null);
+  const [width, setWidth] = useState(fallback);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0] && entries[0].contentRect.width;
+      if (w) setWidth(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, width];
+}
+
 /** A plain left+bottom axis (line, tick marks, numeric labels) for one Cartesian panel. Pass
  * `xTicks: null` to draw only the y-axis (the violin panel's x is categorical and already labels
  * its two groups with text under each violin). */
@@ -525,9 +572,19 @@ function PanelAxes({ w, h, pad, xlo, xhi, sx, ylo, yhi, sy, xTicks = true }) {
   );
 }
 
-/** Persistent panel next to the correlation grid: scatter + fitted line, Pearson r and its own
- * (uncorrected, single-cell) p-value. */
-function ScatterFitPanel({ cell, pinnedCell, channelLabel, height, metricLabel }) {
+/**
+ * The scatter panel is split into two pieces that render in DIFFERENT places on the page now
+ * (open item 7 feedback: the big pinned-cell title and the statistics line were "forcing the top
+ * plot to look janky" by sitting inside the same box as the plot, which is what was carving space
+ * out of it):
+ *   - `ScatterStatsLine` renders next to the correlation heat map's own heading, at the SAME row.
+ *   - `ScatterPlotSvg` renders next to the correlation heat map itself, at the SAME height --
+ *     nothing is reserved above it any more, so it is a true full-size square matching the heat
+ *     map exactly.
+ * The big pinned-cell title (`PanelTitle`) moves out further still, up to sit beside the contact
+ * strip (see the main render below) so its own bottom edge lines up with the strip's.
+ */
+function ScatterStatsLine({ cell, pinnedCell }) {
   if (!pinnedCell) {
     return (
       <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
@@ -537,35 +594,43 @@ function ScatterFitPanel({ cell, pinnedCell, channelLabel, height, metricLabel }
   }
   if (!cell || cell.loading || !cell.points || !cell.points.length) {
     return (
-      <MDBox sx={{ height }}>
-        <PanelTitle pinnedCell={pinnedCell} channelLabel={channelLabel} />
-        <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
-          {cell && cell.loading ? "Loading…" : "No underlying pairs could be loaded for this cell."}
-        </MDTypography>
-      </MDBox>
+      <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
+        {cell && cell.loading ? "Loading…" : "No underlying pairs could be loaded for this cell."}
+      </MDTypography>
     );
   }
-  const pts = cell.points;
-  const xs = pts.map((p) => p.power);
-  const ys = pts.map((p) => p.pain);
+  const xs = cell.points.map((p) => p.power);
+  const ys = cell.points.map((p) => p.pain);
   const { r, n } = pearsonR(xs, ys);
   const t = (r != null && n > 2) ? r * Math.sqrt((n - 2) / (1 - r * r)) : null;
   const p = t != null ? tTestPValue(t, n - 2) : null;
+  return (
+    <MDTypography variant="caption" color="dark" sx={{ fontSize: 15, display: "block", mb: 0.5 }}>
+      {`Pearson r = ${num(r, 3)}, p = ${p == null ? "—" : num(p, 4)} (n = ${n})`}
+    </MDTypography>
+  );
+}
+
+/** Just the scatter + fitted line + axes -- no title, no statistics text (see the note above). */
+function ScatterPlotSvg({ cell, pinnedCell, height, metricLabel }) {
+  // Measured first, unconditionally, so the hook order never changes across renders even though
+  // the component can return null just below (Rules of Hooks).
+  const [measureRef, measuredWidth] = useMeasuredWidth(height);
+  if (!pinnedCell || !cell || cell.loading || !cell.points || !cell.points.length) return null;
+  const pts = cell.points;
+  const xs = pts.map((p) => p.power);
+  const ys = pts.map((p) => p.pain);
+  const n = xs.length;
 
   const xlo = Math.min(...xs), xhi = Math.max(...xs);
   const ylo = Math.min(...ys), yhi = Math.max(...ys);
-  // The plot is a full-size square EQUAL to the heat map's own height, exactly like the heat map's
-  // own "Correlation with pain..." heading sits ABOVE its plot rather than eating into it -- the
-  // title and statistics line here do the same, as ordinary content above this square, rather than
-  // being carved out of a fixed total height (which was shrinking the plot well below the heat
-  // map's actual size and this is what "look terrible... do NOT match heat map height" was about).
-  // `pad` sized to the actual room the (now larger, 16px) tick numbers and the rotated axis
-  // title need on the left side without the two colliding -- not a fixed fraction of `w`, since
-  // legibility is a text-size constraint, not a proportional one. At this panel's real size this
-  // still gives the axes close to 75% of the square, without squishing the text.
+  // The height matches the heat map's own height exactly, as before; the width now fills the
+  // panel's real, measured column width instead of being forced to equal the height.
   const h = height;
-  const w = h;
-  const pad = 50;
+  const w = measuredWidth || h;
+  // Wider than the old 50 -- at the old value, a 3-digit tick label ("150") right-aligned against
+  // the axis line ran into the rotated axis title sitting at x=12. Both are pushed further apart.
+  const pad = 60;
   const sx = (x) => pad + ((x - xlo) / ((xhi - xlo) || 1)) * (w - 2 * pad);
   const sy = (y) => (h - pad) - ((y - ylo) / ((yhi - ylo) || 1)) * (h - 2 * pad);
   const mx = xs.reduce((s, v) => s + v, 0) / n, my = ys.reduce((s, v) => s + v, 0) / n;
@@ -577,13 +642,7 @@ function ScatterFitPanel({ cell, pinnedCell, channelLabel, height, metricLabel }
     : (label === "low" ? (PAL.accent || BIN_LO) : "#aaaaaa"));
 
   return (
-    // No fixed height here (unlike the loading placeholder above) -- the title and statistics
-    // line are ordinary content sitting above a full-size plot now, not squeezed inside one.
-    <MDBox>
-      <PanelTitle pinnedCell={pinnedCell} channelLabel={channelLabel} />
-      <MDTypography variant="caption" color="dark" sx={{ fontSize: 15, display: "block", mb: 0.5 }}>
-        {`Pearson r = ${num(r, 3)}, p = ${p == null ? "—" : num(p, 4)} (n = ${n})`}
-      </MDTypography>
+    <div ref={measureRef} style={{ width: "100%" }}>
       <svg width={w} height={h}>
         <PanelAxes w={w} h={h} pad={pad} xlo={xlo} xhi={xhi} sx={sx} ylo={ylo} yhi={yhi} sy={sy} />
         {pts.map((pt, i) => (
@@ -592,26 +651,27 @@ function ScatterFitPanel({ cell, pinnedCell, channelLabel, height, metricLabel }
         ))}
         <line x1={sx(xlo)} y1={sy(intercept + slope * xlo)} x2={sx(xhi)} y2={sy(intercept + slope * xhi)}
           stroke="#1a1a1a" strokeWidth={1.5} />
-        {/* Axis titles, same convention as the heat maps' own: the x title centred below its
-            axis, the y title rotated -90 and run alongside the tick labels rather than sitting
-            sideways-on as a horizontal string. Units named explicitly: band power is always in
-            the device's own least-significant-bit units on this page (LSB); the pain axis names
-            whichever score is currently selected, since the same axis serves NRS, VAS, MPQ, etc. */}
+        {/* Axis titles, same convention as the heat maps' own: the x title centred below its axis,
+            the y title rotated -90 and run alongside the tick labels rather than sitting sideways-on
+            as a horizontal string. Units named explicitly: band power is always in the device's own
+            least-significant-bit units on this page (LSB); the pain axis names whichever score is
+            currently selected, since the same axis serves NRS, VAS, MPQ, etc. */}
         <text x={pad + (w - 2 * pad) / 2} y={h - 8} fontSize={13} textAnchor="middle" fill="#555">
           Band power (LSB)
         </text>
-        <text x={12} y={pad + (h - 2 * pad) / 2} fontSize={13} textAnchor="middle" fill="#555"
+        <text x={16} y={pad + (h - 2 * pad) / 2} fontSize={13} textAnchor="middle" fill="#555"
           transform={`rotate(-90 16 ${pad + (h - 2 * pad) / 2})`}>
           {`Pain${metricLabel ? ` (${metricLabel})` : ""}`}
         </text>
       </svg>
-    </MDBox>
+    </div>
   );
 }
 
 /** Persistent panel next to the AUC grid: two violins (high/low pain) and a Welch two-sample
  * t-test between them, reported because no other per-cell comparison statistic is stored. */
 function ViolinPanel({ cell, pinnedCell, channelLabel, height }) {
+  const [measureRef, measuredWidth] = useMeasuredWidth(height);
   if (!pinnedCell) {
     return (
       <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
@@ -635,11 +695,11 @@ function ViolinPanel({ cell, pinnedCell, channelLabel, height }) {
 
   const all = highVals.concat(lowVals);
   const lo = Math.min(...all), hi = Math.max(...all);
-  // Same convention as ScatterFitPanel: a full-size square equal to the heat map's own height,
-  // with the statistics line as ordinary content above it rather than carved out of it.
+  // Same convention as ScatterPlotSvg: the height matches the heat map's own height, and the
+  // width fills the panel's real, measured column width rather than being forced to equal height.
   const h = height;
-  const w = h;
-  const pad = 50;
+  const w = measuredWidth || h;
+  const pad = 60;
   const vyScale = (v) => (h - pad) - ((v - lo) / ((hi - lo) || 1)) * (h - 2 * pad);
   const colorFor = (label) => (label === "high" ? (PAL.fail || BIN_HI)
     : (label === "low" ? (PAL.accent || BIN_LO) : "#aaaaaa"));
@@ -652,38 +712,40 @@ function ViolinPanel({ cell, pinnedCell, channelLabel, height }) {
         {`Welch t(${num(df, 1)}) = ${num(t, 2)}, p = ${p == null ? "—" : num(p, 4)} `}
         {`(high n=${n1}, low n=${n2})`}
       </MDTypography>
-      <svg width={w} height={h}>
-        {/* Only the y-axis (band power) is drawn -- x is the two categorical groups, already
-            labelled by the "High pain"/"Low pain" text under each violin. */}
-        <PanelAxes w={w} h={h} pad={pad} xlo={0} xhi={1} sx={() => 0} ylo={lo} yhi={hi}
-          sy={vyScale} xTicks={false} />
-        {/* Centres pulled in from the panel's own earlier 0.28/0.72 (a width-260 layout) to
-            0.3/0.7 with a slightly narrower half-width, so neither violin's tails run past the
-            panel edge now that this canvas is square and much larger than before. */}
-        {[["high", highVals, w * 0.3], ["low", lowVals, w * 0.7]].map(([label, vals, cx]) => {
-          const path = violinPath(vals, cx, vyScale, w * 0.17);
-          return (
-            <g key={label}>
-              {path ? <polygon points={path} fill={colorFor(label)} opacity={0.35}
-                stroke={colorFor(label)} strokeWidth={1} /> : null}
-              {vals.map((v, i) => (
-                <circle key={i} cx={cx + (((i * 37) % 11) - 5) * 0.6} cy={vyScale(v)} r={1.6}
-                  fill={colorFor(label)} opacity={0.6} />
-              ))}
-              {/* Font matches the tick-label size used on every other axis on this panel and the
-                  scatter panel's own axes (16px) -- this is this plot's own x-axis category
-                  labelling, so it should read at the same size as everyone else's tick labels. */}
-              <text x={cx} y={h - 6} fontSize={16} textAnchor="middle" fill="#555">
-                {label === "high" ? "High pain" : "Low pain"}
-              </text>
-            </g>
-          );
-        })}
-        <text x={12} y={pad + (h - 2 * pad) / 2} fontSize={13} textAnchor="middle" fill="#555"
-          transform={`rotate(-90 16 ${pad + (h - 2 * pad) / 2})`}>
-          Band power (LSB)
-        </text>
-      </svg>
+      <div ref={measureRef} style={{ width: "100%" }}>
+        <svg width={w} height={h}>
+          {/* Only the y-axis (band power) is drawn -- x is the two categorical groups, already
+              labelled by the "High pain"/"Low pain" text under each violin. */}
+          <PanelAxes w={w} h={h} pad={pad} xlo={0} xhi={1} sx={() => 0} ylo={lo} yhi={hi}
+            sy={vyScale} xTicks={false} />
+          {/* Centres pulled in from the panel's own earlier 0.28/0.72 (a width-260 layout) to
+              0.3/0.7 with a slightly narrower half-width, so neither violin's tails run past the
+              panel edge now that this canvas's width is the panel's own real, measured width. */}
+          {[["high", highVals, w * 0.3], ["low", lowVals, w * 0.7]].map(([label, vals, cx]) => {
+            const path = violinPath(vals, cx, vyScale, w * 0.17);
+            return (
+              <g key={label}>
+                {path ? <polygon points={path} fill={colorFor(label)} opacity={0.35}
+                  stroke={colorFor(label)} strokeWidth={1} /> : null}
+                {vals.map((v, i) => (
+                  <circle key={i} cx={cx + (((i * 37) % 11) - 5) * 0.6} cy={vyScale(v)} r={1.6}
+                    fill={colorFor(label)} opacity={0.6} />
+                ))}
+                {/* Font matches the tick-label size used on every other axis on this panel and the
+                    scatter panel's own axes (16px) -- this is this plot's own x-axis category
+                    labelling, so it should read at the same size as everyone else's tick labels. */}
+                <text x={cx} y={h - 6} fontSize={16} textAnchor="middle" fill="#555">
+                  {label === "high" ? "High pain" : "Low pain"}
+                </text>
+              </g>
+            );
+          })}
+          <text x={16} y={pad + (h - 2 * pad) / 2} fontSize={13} textAnchor="middle" fill="#555"
+            transform={`rotate(-90 16 ${pad + (h - 2 * pad) / 2})`}>
+            Band power (LSB)
+          </text>
+        </svg>
+      </div>
     </MDBox>
   );
 }
@@ -938,28 +1000,56 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
             sx={{ fontSize: 11.5, display: "block", mt: 1 }}>{corrResult.message}</MDTypography>
         ) : null}
 
-        <ContactStrip sweeps={corrSweeps} channel={channel} setChannel={setChannel} />
-
         {corrSw && aucSw ? (
           <>
+            {/* THE PINNED-CELL TITLE, moved out of the scatter panel entirely and up to sit beside
+                the contact strip -- its own row, with `alignItems="flex-end"` so the title's
+                BOTTOM edge lines up with the strip's bottom edge, per direct feedback ("should be
+                higher up, so that the floor is aligned with the small clickable heat map
+                sub-panels"). A separate, small Grid container rather than folding into the main
+                one below: this is the only row that wants bottom-alignment, and the main grid's
+                other rows want top-alignment (a heading beside a same-height plot, etc). */}
+            <Grid container spacing={2} alignItems="flex-end">
+              <Grid item xs={12} md={7}>
+                <ContactStrip sweeps={corrSweeps} channel={channel} setChannel={setChannel} />
+              </Grid>
+              <Grid item xs={12} md={5}>
+                <PanelTitle pinnedCell={pinnedCell} channelLabel={channelLabel} />
+              </Grid>
+            </Grid>
+
             {/* Each grid sits at ~2/3 of its previous footprint, with a persistent panel to its
                 right at matching height (open item 7, parts 4b-4d): the scatter+fit panel next to
                 the correlation grid, the violin panel next to the AUC grid. A click on EITHER grid
                 populates BOTH panels (they describe the same cell) and highlights that cell on
-                BOTH grids; hovering either grid highlights the cell on both without fetching. */}
+                BOTH grids; hovering either grid highlights the cell on both without fetching.
+                The correlation section's heading and the scatter panel's statistics line share a
+                row (both now sit OUTSIDE their own plot, at the same level) -- per direct
+                feedback, moving the title out of the scatter panel was "forcing the top plot to
+                look janky"; splitting its statistics line out the same way is what lets the actual
+                plot below be a full, undiminished square matching the heat map's own height. The
+                AUC section is unchanged: the violin panel already keeps its statistics line inside
+                its own box, above its own plot, and reads fine there already ("the bottom violin
+                plot looks better aligned... leave it as is"). */}
             <Grid container spacing={2} alignItems="flex-start">
               <Grid item xs={12} md={7}>
                 <MDTypography variant="button" fontWeight="bold" color="dark"
                   sx={{ fontSize: 15, display: "block", mb: 0.5 }}>
                   {"Correlation with pain — depends only on matching"}
                 </MDTypography>
+              </Grid>
+              <Grid item xs={12} md={5}>
+                <ScatterStatsLine cell={pinnedCellData} pinnedCell={pinnedCell} />
+              </Grid>
+
+              <Grid item xs={12} md={7}>
                 <PlotlyHeatmap divId="biomarker-heatmap-correlation" sw={corrSw} kind="correlation"
                   hoveredCell={hoveredCell} pinnedCell={pinnedCell}
                   onHover={handleHover} onClick={(r, c) => handleClick(corrSw, r, c)} />
               </Grid>
               <Grid item xs={12} md={5}>
-                <ScatterFitPanel cell={pinnedCellData} pinnedCell={pinnedCell}
-                  channelLabel={channelLabel} height={panelHeight} metricLabel={metricLabel} />
+                <ScatterPlotSvg cell={pinnedCellData} pinnedCell={pinnedCell}
+                  height={panelHeight} metricLabel={metricLabel} />
               </Grid>
 
               <Grid item xs={12} md={7}>

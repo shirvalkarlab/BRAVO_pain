@@ -14,12 +14,11 @@ Six-part display cleanup on the Biomarkers exploration page, per the user's own 
    "how to read this" text.
 
 ## Next Step
-Phases A, B and C are done and verified live, including a post-review refinement round (Phase C.1)
-addressing four pieces of direct user feedback on the shipped Plotly redesign. Only Phase D
-remains: condense the "how to read this" drawer text (confirmed, live, to be exactly as verbose as
-the spec described — a full screen of bullet points) by roughly half, reorder by priority, and
-enlarge the font, following this project's `HOUSE_RULES_writing_and_claims.md` and the
-`ps-scientific-writing` skill's §6a conciseness conventions loaded this session.
+Phases A, B, C, C.1, C.2, C.3 and C.4 are all done and verified live. Only Phase D remains:
+condense the "how to read this" drawer text (confirmed, live, to be exactly as verbose as the spec
+described — a full screen of bullet points) by roughly half, reorder by priority, and enlarge the
+font, following this project's `HOUSE_RULES_writing_and_claims.md` and the `ps-scientific-writing`
+skill's §6a conciseness conventions loaded this session.
 
 ## Current Phase
 Phase D — pending
@@ -235,6 +234,47 @@ and "badly positioned" directly, correctly.
       clearly larger; violins show no clipping. No console errors. A stray blue "highlighted text"
       appearance on some tick labels in one screenshot was confirmed to be an ordinary text-
       selection artifact from a prior click, not a rendering bug -- gone on the next click.
+  - **Status:** complete
+
+### Phase C.4: Move the pinned-cell title and stats out of the panel boxes; fix panel fill and axis-label collision; order the thumbnail strip; remove the irrelevant binarization warning — COMPLETE
+Four rounds of direct live feedback on the C.3 layout, addressed in sequence.
+- [x] The big pinned-cell title (`PanelTitle`) moved out of the scatter panel entirely into its own
+      Grid row shared with `ContactStrip`, bottom-aligned (`alignItems="flex-end"`) so the title's
+      floor lines up with the thumbnail strip's floor. The scatter panel's stats line
+      (`ScatterStatsLine`, split out of the old combined `ScatterFitPanel`) moved into a second,
+      separate, top-aligned Grid row alongside the "Correlation with pain — depends only on
+      matching" heading. `ScatterPlotSvg` (also split out) now renders alone, sized to literally
+      equal `heatmapHeight(rows)`, with nothing subtracted for title or stats since both moved
+      elsewhere. The AUC/violin section (`ViolinPanel`) is unchanged, per explicit instruction
+      ("the bottom violin plot looks better aligned, so you can leave it as is").
+- [x] Fixed with live measurement, not guesswork: the scatter/violin SVGs were hard-coded
+      `width = height` (a literal square), so on a wide `md=5` Grid column (measured live at 570px
+      while the square was only 325px) roughly 245px of the panel's own width went unused — this
+      was the "not filling the panel" complaint. New `useMeasuredWidth()` hook (`ResizeObserver` on
+      a wrapping div) reports the column's real rendered width; both panels now use that as their
+      SVG width, with height still pinned to `heatmapHeight(rows)`. Measured live: the y-axis
+      title/tick-label collision was real too — ticks sit at `pad - 6` right-aligned, and a 3-digit
+      value ("150") right-aligned against that point ran left past the title's old `x=12`; `pad`
+      widened 50→60 and the title's `x` moved 12→16 (violin's mismatched `x=12`/rotate-anchor `x=16`
+      also unified to 16) on both panels.
+- [x] `ContactStrip`'s thumbnail order was raw JSON key-insertion order (whatever the backend
+      response happened to return); added `contactSortKey()` (hemisphere first — Left before Right,
+      falling back to the raw channel key's own LEFT/RIGHT token when `display_hemisphere` is
+      absent — then ascending by the two contact digits, read from `display_contacts` with a
+      fallback to parsing `ZERO`/`ONE`/`TWO`/`THREE` tokens out of the raw key) so the strip always
+      reads left-side contacts in numeric order followed by right-side contacts in numeric order.
+- [x] Removed the "⚠ Power-domain biomarker pools ... interpret per target rather than as a single
+      combined biomarker" warning from the binarization panel (`index.js`) — a pure display removal,
+      the backend field (`data.powerdomain_pooled_warning`) is untouched and still computed, just
+      never rendered.
+- [x] Built clean both times (title/stats/fill/order in one build, the warning removal in a second).
+      Verified live on RCS08 after each build: the title/ContactStrip row and the heading/stats row
+      both align correctly; the AUC/violin section renders unchanged; the thumbnail strip reads L
+      0⁻2⁺, L 0⁻3⁺, L 1⁻3⁺, R 0⁻2⁺, R 0⁻3⁺, R 1⁻3⁺ in that order; a pinned cell's scatter and violin
+      panels now visibly fill their full column width with no wasted margin and no tick/title
+      overlap (zoomed screenshot confirmed clear whitespace between the rotated title and the tick
+      numbers); the warning text is absent from the served bundle's rendered page
+      (`document.body.innerText` checked directly). No console errors at any step.
   - **Status:** complete
 
 ### Phase D: Condense the "how to read this" text

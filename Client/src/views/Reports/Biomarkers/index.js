@@ -1066,11 +1066,6 @@ function Biomarkers() {
                             </MDBox>
                           );
                         })()}
-                        {data.powerdomain_pooled_warning ? (
-                          <MDTypography variant="button" fontWeight="medium" color="warning" display="block">
-                            {`⚠ ${data.powerdomain_pooled_warning}`}
-                          </MDTypography>
-                        ) : null}
                         {data.recorded_powers && data.recorded_powers.length ? (() => {
                           const left  = data.recorded_powers.filter((p) => /\bL\b|Left/i.test(p.label));
                           const right = data.recorded_powers.filter((p) => /\bR\b|Right/i.test(p.label));
