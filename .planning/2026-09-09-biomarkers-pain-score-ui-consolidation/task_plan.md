@@ -150,6 +150,58 @@ font size.
       time. No console errors.
   - **Status:** complete
 
+### Phase C.2: Second round of live-feedback refinements — COMPLETE
+Requested directly, in three follow-up messages while C.1 was still building: (1) remove the
+heatmap's axis LINES and TICK MARKS too (not just gridlines), and label the x-axis with the actual
+band-centre value every 3rd cell instead of Plotly's own auto-picked round numbers; (2) the
+scatter/violin panels didn't actually end up matching the heat maps' new, larger height (a real
+miss — `panelHeight` in the main component still used the OLD pre-25%-increase formula), make them
+square with more margin so the violins don't run close to the edges, and double the tick-label
+font; (3) also scale up the axis TITLE captions (not just tick labels), make the y-axis title
+vertical (it had stayed horizontal, unlike every other axis title on this page), and name the
+actual units (band power is always device LSB on this page; pain names whichever score is
+selected, since the same axis serves NRS/VAS/MPQ/etc.); (4) remove the modebar (zoom/pan/download
+toolbar) that Plotly shows on hover over the heat maps.
+- [x] Heatmap axes: added `showline: false, ticks: ""` to both `xaxis` and `yaxis` (removes the
+      axis line and tick marks; tick labels, controlled separately, are untouched). X-axis now
+      uses `tickmode: "array"` with explicit `tickvals`/`ticktext` built from `centers.filter((c,i)
+      => i % 3 === 0)` — exactly the "every 3rd band centre" rule the original SVG grid used —
+      instead of Plotly's own automatic tick choice.
+  - **Status:** complete
+- [x] Extracted one shared `heatmapHeight(rows)` function, called by both `PlotlyHeatmap` (for its
+      own `height`) and the main component (for `panelHeight`, passed to both side panels) — the
+      two cannot drift out of sync again the way they just did.
+  - **Status:** complete
+- [x] `ScatterFitPanel`/`ViolinPanel`: canvas is now square (`w = h`, both derived from the shared
+      `panelHeight` minus each panel's own header reservation), `pad` widened 34→62 to fit the
+      larger tick labels and the rotated axis title, violin centre fractions tightened
+      (0.28/0.72→0.3/0.7, half-width 0.2→0.17×w) so neither violin's tails approach the edge at the
+      new, much larger size. `PanelAxes` tick-label font doubled, 8px→16px.
+  - **Status:** complete
+- [x] Axis title captions enlarged 9px→13px; the y-axis title on both panels is now rotated -90°
+      (matching the heat maps' own "Length of signal" convention) instead of sitting horizontally
+      at the top-left; both now name real units — "Band power (LSB)" (this page's own established
+      abbreviation for the device's least-significant-bit units, used throughout, e.g. "Recorded
+      power channels") and "Pain (`${metricLabel}`)" (the actual selected score — NRS/VAS/MPQ/etc.
+      — threaded down from the main component's own `metricLabel` prop, since the same axis serves
+      whichever pain metric is currently selected).
+  - **Status:** complete
+- [x] Modebar removed from both heat maps specifically (not from `PlotlyRenderManager` itself,
+      which is shared by 10+ other pages and has no config-override mechanism to change safely):
+      imported `Plotly` directly (same `plotly.js-dist` package the render manager itself imports)
+      and called `Plotly.react(divId, fig.traces, fig.layout, { displayModeBar: false, responsive:
+      true })` immediately after `fig.render()`, re-applying the identical data/layout with the
+      modebar switched off, scoped only to these two divs.
+  - **Status:** complete
+- [x] Built clean; verified live on RCS08: heatmap cells show floating tick labels with no axis
+      line, no tick marks, and the x-axis reads real band centres (9,12,15,18,21,24,27,30) every
+      3rd column; the scatter and violin panels are visibly close in height to the heat maps now
+      (both driven by the one shared formula); violins render with clear margin on both sides; both
+      panels show a vertical, unit-labelled axis title ("Pain (Overall VAS)", "Band power (LSB)")
+      at a larger font; hovering a heat map shows its cross-highlight tooltip with no modebar
+      appearing anywhere on the chart. No console errors.
+  - **Status:** complete
+
 ### Phase D: Condense the "how to read this" text
 - [ ] Rewrite the four bullet notes plus the two dynamic `notes` arrays' presentation: reorder by
       priority (correlation/AUC interpretation, the circle marker, the multiple-comparison

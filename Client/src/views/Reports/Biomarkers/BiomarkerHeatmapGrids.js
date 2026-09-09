@@ -48,6 +48,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDButton from "components/MDButton";
 
+import Plotly from "plotly.js-dist";
 import { PlotlyRenderManager } from "graphing-utility/Plotly";
 import { SessionController } from "database/session-control";
 import { useCachedResult } from "database/useCachedResult";
@@ -109,6 +110,14 @@ function bestCellIndexByColumn(sw, rows) {
  * below for why this is delivered, not requested). */
 function secondsLabel(s) {
   return Number(s) >= 60 ? `${Math.round(Number(s) / 60)}m` : `${Number(s).toFixed(0)}s`;
+}
+
+/** The one formula for a heat map's pixel height, given its row count -- used by `PlotlyHeatmap`
+ * itself AND by the side panels (which must match it exactly, since they sit in the same Grid row)
+ * so the two can never drift out of sync the way they did once already when the heat maps were
+ * enlarged 25% but the panel height formula was a separate, duplicated literal. */
+function heatmapHeight(rows) {
+  return Math.max(225, rows * 25 + 75);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -241,7 +250,7 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
   const yLabels = useMemo(() => seconds.map((s) => secondsLabel(s)), [seconds]);
   // Sized 25% larger than the first Plotly pass, per the PI's own comparison against the size
   // before this redesign.
-  const height = Math.max(225, rows * 25 + 75);
+  const height = heatmapHeight(rows);
 
   const figRef = useRef(null);
   const [flash, setFlash] = useState(false);
@@ -296,18 +305,32 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
         hoverinfo: "skip",
       });
     }
+    // Every 3rd band centre, exactly the sparse labelling the original SVG grid used (too many of
+    // the 22 centres to label all of them without the text overlapping).
+    const xTickVals = centers.filter((c, i) => i % 3 === 0);
+    const xTickText = xTickVals.map((c) => Number(c).toFixed(0));
     fig.setLayoutProps({
       height, width, margin: { l: 46, r: 8, t: 8, b: 40 },
-      // Tick labels stay; the axis GRIDLINES (the faint reference lines Plotly draws through every
-      // tick) are turned off on both axes -- the cell borders (xgap/ygap above) already separate
-      // the cells, and the grid lines on top of them just added visual noise.
-      xaxis: { showgrid: false, zeroline: false },
-      yaxis: { type: "category", autorange: "reversed", showgrid: false, zeroline: false },
+      // No gridlines (the cell borders via xgap/ygap already separate the cells), no axis line,
+      // no tick marks (`ticks: ""`) on either axis -- floating labels only. The x-axis also
+      // replaces Plotly's own automatic tick choice with an explicit array so it labels a real
+      // band centre every 3rd column, matching the y-axis's one-label-per-row convention instead
+      // of whatever round numbers Plotly would have picked on its own.
+      xaxis: { showgrid: false, zeroline: false, showline: false, ticks: "",
+        tickmode: "array", tickvals: xTickVals, ticktext: xTickText },
+      yaxis: { type: "category", autorange: "reversed", showgrid: false, zeroline: false,
+        showline: false, ticks: "" },
       hovermode: "closest",
     });
     fig.setXlabel("Band centre (Hz)", { fontSize: 12 });
     fig.setYlabel("Length of signal", { fontSize: 12 });
     fig.render();
+    // `fig.render()` always shows the hover-activated modebar (zoom/pan/download icons) with its
+    // own hardcoded config -- `PlotlyRenderManager` has no override for that, and it is a shared
+    // class used by many other pages, so it is not changed here. Instead this one call re-applies
+    // the SAME data/layout the render manager just drew, but with the modebar switched off, scoped
+    // only to these two heat maps.
+    Plotly.react(divId, fig.traces, fig.layout, { displayModeBar: false, responsive: true });
 
     const el = document.getElementById(divId);
     if (el) {
@@ -485,7 +508,7 @@ function PanelAxes({ w, h, pad, xlo, xhi, sx, ylo, yhi, sy, xTicks = true }) {
       {yT.ticks.map((v) => (
         <g key={`y${v}`}>
           <line x1={pad - 3} y1={sy(v)} x2={pad} y2={sy(v)} stroke="#888" strokeWidth={1} />
-          <text x={pad - 6} y={sy(v) + 3} fontSize={8} textAnchor="end" fill="#666">
+          <text x={pad - 6} y={sy(v) + 5} fontSize={16} textAnchor="end" fill="#666">
             {v.toFixed(yT.decimals)}
           </text>
         </g>
@@ -493,7 +516,7 @@ function PanelAxes({ w, h, pad, xlo, xhi, sx, ylo, yhi, sy, xTicks = true }) {
       {xT ? xT.ticks.map((v) => (
         <g key={`x${v}`}>
           <line x1={sx(v)} y1={h - pad} x2={sx(v)} y2={h - pad + 3} stroke="#888" strokeWidth={1} />
-          <text x={sx(v)} y={h - pad + 13} fontSize={8} textAnchor="middle" fill="#666">
+          <text x={sx(v)} y={h - pad + 20} fontSize={16} textAnchor="middle" fill="#666">
             {v.toFixed(xT.decimals)}
           </text>
         </g>
@@ -504,7 +527,7 @@ function PanelAxes({ w, h, pad, xlo, xhi, sx, ylo, yhi, sy, xTicks = true }) {
 
 /** Persistent panel next to the correlation grid: scatter + fitted line, Pearson r and its own
  * (uncorrected, single-cell) p-value. */
-function ScatterFitPanel({ cell, pinnedCell, channelLabel, height }) {
+function ScatterFitPanel({ cell, pinnedCell, channelLabel, height, metricLabel }) {
   if (!pinnedCell) {
     return (
       <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
@@ -531,9 +554,12 @@ function ScatterFitPanel({ cell, pinnedCell, channelLabel, height }) {
 
   const xlo = Math.min(...xs), xhi = Math.max(...xs);
   const ylo = Math.min(...ys), yhi = Math.max(...ys);
-  // 64 px reserved above the plot for the (now 23px) title plus the statistics line.
-  const w = 260, h = Math.max(140, height - 64);
-  const pad = 34;
+  // Square, and sized to fill the same height as the heat map next to it (64 px reserved above
+  // the plot for the title plus the statistics line). `pad` widened to fit the larger tick labels
+  // plus the rotated axis title running alongside them on the left.
+  const h = Math.max(160, height - 64);
+  const w = h;
+  const pad = 62;
   const sx = (x) => pad + ((x - xlo) / ((xhi - xlo) || 1)) * (w - 2 * pad);
   const sy = (y) => (h - pad) - ((y - ylo) / ((yhi - ylo) || 1)) * (h - 2 * pad);
   const mx = xs.reduce((s, v) => s + v, 0) / n, my = ys.reduce((s, v) => s + v, 0) / n;
@@ -558,10 +584,18 @@ function ScatterFitPanel({ cell, pinnedCell, channelLabel, height }) {
         ))}
         <line x1={sx(xlo)} y1={sy(intercept + slope * xlo)} x2={sx(xhi)} y2={sy(intercept + slope * xhi)}
           stroke="#1a1a1a" strokeWidth={1.5} />
-        <text x={pad + (w - 2 * pad) / 2} y={h - 4} fontSize={9} textAnchor="middle" fill="#555">
-          Band power
+        {/* Axis titles, same convention as the heat maps' own: the x title centred below its
+            axis, the y title rotated -90 and run alongside the tick labels rather than sitting
+            sideways-on as a horizontal string. Units named explicitly: band power is always in
+            the device's own least-significant-bit units on this page (LSB); the pain axis names
+            whichever score is currently selected, since the same axis serves NRS, VAS, MPQ, etc. */}
+        <text x={pad + (w - 2 * pad) / 2} y={h - 8} fontSize={13} textAnchor="middle" fill="#555">
+          Band power (LSB)
         </text>
-        <text x={10} y={pad - 6} fontSize={9} fill="#555">Pain</text>
+        <text x={16} y={pad + (h - 2 * pad) / 2} fontSize={13} textAnchor="middle" fill="#555"
+          transform={`rotate(-90 16 ${pad + (h - 2 * pad) / 2})`}>
+          {`Pain${metricLabel ? ` (${metricLabel})` : ""}`}
+        </text>
       </svg>
     </MDBox>
   );
@@ -593,8 +627,12 @@ function ViolinPanel({ cell, pinnedCell, channelLabel, height }) {
 
   const all = highVals.concat(lowVals);
   const lo = Math.min(...all), hi = Math.max(...all);
-  const w = 200, h = Math.max(140, height - 46);
-  const pad = 34;
+  // Square, and sized to fill the same height as the heat map next to it (30 px reserved above
+  // for the statistics line -- there is no title here any more). `pad` widened to fit the larger
+  // tick labels plus the rotated axis title running alongside them on the left.
+  const h = Math.max(160, height - 30);
+  const w = h;
+  const pad = 62;
   const vyScale = (v) => (h - pad) - ((v - lo) / ((hi - lo) || 1)) * (h - 2 * pad);
   const colorFor = (label) => (label === "high" ? (PAL.fail || BIN_HI)
     : (label === "low" ? (PAL.accent || BIN_LO) : "#aaaaaa"));
@@ -612,8 +650,11 @@ function ViolinPanel({ cell, pinnedCell, channelLabel, height }) {
             labelled by the "High pain"/"Low pain" text under each violin. */}
         <PanelAxes w={w} h={h} pad={pad} xlo={0} xhi={1} sx={() => 0} ylo={lo} yhi={hi}
           sy={vyScale} xTicks={false} />
-        {[["high", highVals, w * 0.32], ["low", lowVals, w * 0.72]].map(([label, vals, cx]) => {
-          const path = violinPath(vals, cx, vyScale, w * 0.18);
+        {/* Centres pulled in from the panel's own earlier 0.28/0.72 (a width-260 layout) to
+            0.3/0.7 with a slightly narrower half-width, so neither violin's tails run past the
+            panel edge now that this canvas is square and much larger than before. */}
+        {[["high", highVals, w * 0.3], ["low", lowVals, w * 0.7]].map(([label, vals, cx]) => {
+          const path = violinPath(vals, cx, vyScale, w * 0.17);
           return (
             <g key={label}>
               {path ? <polygon points={path} fill={colorFor(label)} opacity={0.35}
@@ -628,7 +669,10 @@ function ViolinPanel({ cell, pinnedCell, channelLabel, height }) {
             </g>
           );
         })}
-        <text x={10} y={pad - 6} fontSize={9} fill="#555">Band power</text>
+        <text x={16} y={pad + (h - 2 * pad) / 2} fontSize={13} textAnchor="middle" fill="#555"
+          transform={`rotate(-90 16 ${pad + (h - 2 * pad) / 2})`}>
+          Band power (LSB)
+        </text>
       </svg>
     </MDBox>
   );
@@ -827,7 +871,9 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   const exportReady = !!(corrResult && (corrResult.closed_loop_export_key
     || corrResult.exported_to_closed_loop || (corrSw && corrSw.closed_loop_export_ready)));
 
-  const panelHeight = Math.max(180, ((corrSw && (corrSw.correlation_grid || []).length) || 0) * 20 + 60);
+  // `heatmapHeight` is the SAME function `PlotlyHeatmap` calls for its own `height` -- the panels
+  // must match the heat maps' height exactly, since they sit in the same Grid row.
+  const panelHeight = heatmapHeight((corrSw && (corrSw.correlation_grid || []).length) || 0);
 
   return (
     <Card sx={{ width: "100%" }}>
@@ -903,7 +949,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
               </Grid>
               <Grid item xs={12} md={5}>
                 <ScatterFitPanel cell={pinnedCellData} pinnedCell={pinnedCell}
-                  channelLabel={channelLabel} height={panelHeight} />
+                  channelLabel={channelLabel} height={panelHeight} metricLabel={metricLabel} />
               </Grid>
 
               <Grid item xs={12} md={7}>
