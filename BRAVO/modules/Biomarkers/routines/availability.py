@@ -1836,8 +1836,14 @@ def _lsb_none_lists(med):
 
 def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=None,
                             allow_window_reuse=False, extent_s=None, psd_tol_s=None,
-                            match_direction="nearest"):
+                            match_direction="nearest", want_records=True):
     """LIVE per-PRO LSB spectrum by matching PROs against the match-AGNOSTIC raw cache.
+
+    `want_records=False` skips building the per-PRO record list entirely (the `recs` return is
+    `None`) and returns only `stats`. Every stats field is already computed from counts/booleans
+    that exist before the per-tier median-and-record-building blocks below run, so this changes
+    no number in `stats` — it only skips work whose sole purpose is populating `recs`. Default
+    True preserves the return contract for every existing caller.
 
     Consumes one channel's `raw_lsb_spectrum_cache(...)` output and produces the SAME per-PRO
     record list `per_pro_lsb_spectrum` returns (drop-in for the spectral scan), but with the
@@ -1915,12 +1921,15 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
     order = np.argsort(pro, kind="stable")
     pro_sorted = pro[order]
 
-    none_vec = [None] * nC
-    center_vec = [float(c) for c in centers]
-    recs = [{"t": float(tp), "tier": None, "lsb": list(none_vec),
-             "calibrated": [False] * nC, "center_hz": list(center_vec),
-             "used_s": 0.0, "saturated": False, "reason": "", "n_td_used": 0, "n_psd_used": 0}
-            for tp in pro]
+    if want_records:
+        none_vec = [None] * nC
+        center_vec = [float(c) for c in centers]
+        recs = [{"t": float(tp), "tier": None, "lsb": list(none_vec),
+                 "calibrated": [False] * nC, "center_hz": list(center_vec),
+                 "used_s": 0.0, "saturated": False, "reason": "", "n_td_used": 0, "n_psd_used": 0}
+                for tp in pro]
+    else:
+        recs = None
 
     # Only "prior" changes behaviour here: this matcher is window-first (it asks "which PRO owns
     # this window"), so the older routine's PRO-first FRAMING has no equivalent to switch to — every
@@ -1987,7 +1996,7 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
     td_tier_pro = td_cnt > 0
     n_td_used = int(td_use[td_tier_pro].sum())
 
-    if td_tier_pro.any():
+    if want_records and td_tier_pro.any():
         td_rows = np.where(td_tier_pro)[0]
         td_med = _padded_nanmedian(td_mat, td_idx[td_rows])
         td_lsb, td_fin = _lsb_none_lists(td_med)
@@ -2029,7 +2038,7 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
     psd_take = (~td_tier_pro) & (psd_cnt > 0)
     n_psd_used = int(psd_cnt[psd_take].sum())
 
-    if psd_take.any():
+    if want_records and psd_take.any():
         psd_rows = np.where(psd_take)[0]
         keep_cols = int(psd_cnt[psd_rows].max())
         psd_med = _padded_nanmedian(psd_mat, psd_idx[psd_rows][:, :keep_cols])

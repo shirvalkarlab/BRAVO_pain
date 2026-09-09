@@ -1508,7 +1508,8 @@ def warm_shared_raw_cache(participant_uid, *, centers=_LSB_SPECTRUM_CENTERS):
 
 def _live_pro_lsb_spectrum(participant_uid, pro_times, channels, td_recordings, event_psd_blocks,
                            *, montage_psd_blocks=None, centers=_LSB_SPECTRUM_CENTERS,
-                           tol_s=None, td_quantity_s=None, allow_window_reuse=False):
+                           tol_s=None, td_quantity_s=None, allow_window_reuse=False,
+                           return_spectra=True):
     """LIVE per-(channel, PRO) LSB spectrum: build the match-agnostic raw cache once, then match PROs
     against it per channel with availability.live_lsb_spectrum_match. Drop-in for the spectral scan:
     returns { raw_channel: [ per-PRO spectrum dict, ... ] } in the SAME contract it consumes.
@@ -1516,7 +1517,12 @@ def _live_pro_lsb_spectrum(participant_uid, pro_times, channels, td_recordings, 
     TWO-WINDOW MATCHING (PI 2026-06-28): `tol_s` (the main MatchToleranceMin slider, in SECONDS) is
     the eligibility radius for BOTH TD and PSD; `td_quantity_s` (the MatchExtentSec slider) caps how
     many of the nearest 3 s TD tiles to median per PRO (PSD has no quantity cap). Matching runs on the
-    pre-computed raw 3 s-tile cache, so there is no real-time TD recompute. Returns (spectra, stats)."""
+    pre-computed raw 3 s-tile cache, so there is no real-time TD recompute. Returns (spectra, stats).
+
+    `return_spectra=False` (the caller that only needs `stats`, e.g. run_for_participant's live
+    matching-controls caption) skips building the per-PRO record list in
+    availability.live_lsb_spectrum_match entirely; `spectra` comes back `{}` and every `stats` value
+    is unchanged, since stats never depended on the records in the first place."""
     pt = np.asarray([] if pro_times is None else pro_times, dtype=float)
     if pt.size == 0 or not channels:
         return {}, {}
@@ -1531,8 +1537,9 @@ def _live_pro_lsb_spectrum(participant_uid, pro_times, channels, td_recordings, 
         try:
             recs, st = availability.live_lsb_spectrum_match(
                 pt, raw_cache, tol_s=tol_s, td_quantity_s=td_quantity_s,
-                allow_window_reuse=allow_window_reuse)
-            spectra[raw_ch] = recs
+                allow_window_reuse=allow_window_reuse, want_records=return_spectra)
+            if return_spectra:
+                spectra[raw_ch] = recs
             stats[raw_ch] = st
         except Exception as e:
             _log.warning("Biomarkers: live LSB match failed for %s (%s)", raw_ch, e)
@@ -3211,9 +3218,10 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
                 # computed: its only frontend consumer, BiomarkerAnalytics.js's scatter+violin
                 # drill-down, was removed as an unnecessary duplicated analysis -- the calibrated
                 # band-by-length grid (band_time_sweep_for_participant) is the headline result and
-                # already covers the same question with a stronger correction. `pro_lsb_spectrum` (via
-                # `_live_pro_lsb_spectrum` above) is still computed for `live_match_stats`, which the
-                # matching-controls caption still reads; only the downstream scan on top of it is cut.
+                # already covers the same question with a stronger correction. `_live_pro_lsb_spectrum`
+                # above is still called, but with `return_spectra=False` -- only `live_match_stats`,
+                # which the matching-controls caption still reads, is built; the per-PRO spectrum
+                # records nothing here ever consumed are no longer computed at all.
                 "matched_sample_counts": count_task,
                 "pool_meta": lambda: (pooled or {}).get("pool_meta"),
                 # PSD spectrogram removed from the UI (added little over the spectrum + mean-PSD
@@ -4057,13 +4065,12 @@ def run_for_participant(request_data):
         # finite eligibility window rather than matching the whole record. AllowWindowReuse governs
         # reuse of the same window+modality across PROs (per-modality, both passes).
         _tol_s = (float(match_tol_min) * 60.0 if match_tol_min else float(match_extent_s))
-        pro_lsb_spectrum, live_match_stats = _live_pro_lsb_spectrum(
+        _, live_match_stats = _live_pro_lsb_spectrum(
             participant_uid, _scan_pro_times, _scan_channels,
             list(td or []) + list(_scan_psd_list or []),
             _scan_event_blocks, montage_psd_blocks=_scan_montage_blocks,
-            tol_s=_tol_s, td_quantity_s=match_extent_s, allow_window_reuse=allow_window_reuse)
-    else:
-        pro_lsb_spectrum = {}
+            tol_s=_tol_s, td_quantity_s=match_extent_s, allow_window_reuse=allow_window_reuse,
+            return_spectra=False)  # only live_match_stats (the matching-controls caption) is used
 
     out = _serialize_run(run, _compute_analytics(run, chronic, pro_df, label_metric=label_metric,
                                                  kmeans_features=kmeans_features,
