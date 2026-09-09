@@ -14,13 +14,15 @@ Six-part display cleanup on the Biomarkers exploration page, per the user's own 
    "how to read this" text.
 
 ## Next Step
-Phase A done and verified live. Continue to Phase B (backend electrode-label enrichment for the
-calibrated grid's channel display), then Phase C (the Plotly rewrite of the two heat maps with side
-panels and cross-highlighting), then Phase D (condensed "how to read this" text). Paused here to
-give the user a progress checkpoint before the much larger Phase C rewrite.
+Phases A, B and C are done and verified live, including a post-review refinement round (Phase C.1)
+addressing four pieces of direct user feedback on the shipped Plotly redesign. Only Phase D
+remains: condense the "how to read this" drawer text (confirmed, live, to be exactly as verbose as
+the spec described — a full screen of bullet points) by roughly half, reorder by priority, and
+enlarge the font, following this project's `HOUSE_RULES_writing_and_claims.md` and the
+`ps-scientific-writing` skill's §6a conciseness conventions loaded this session.
 
 ## Current Phase
-Phase B — pending
+Phase D — pending
 
 ## Phases
 
@@ -73,24 +75,80 @@ Phase B — pending
       operational notes; flagged here rather than assumed away.
   - **Status:** complete
 
-### Phase C: Redesign "How well each band tracks pain" with Plotly
+### Phase C: Redesign "How well each band tracks pain" with Plotly — COMPLETE
 - [x] Fix the Y-axis: `Heatmap`'s `seconds` reads `integration_seconds_delivered` first. Verified
       live: rows now read 3s/6s/9s/15s/21s/24s/30s/45s/1m/5m (was 1s/5s/10s/15s/20s/25s/30s/45s/
       1m/5m), matching `analytics.integration_time_tile_count`'s documented rounding exactly.
-- [ ] Replace the hand-rolled SVG `Heatmap` with a Plotly heatmap trace (via this project's own
-      Plotly render manager), sized to ~2/3 of the current footprint.
-- [ ] Add persistent right-side panels: a scatter+fitted-line panel (Pearson r + p, computed from
-      the cell's own fetched points) next to the correlation grid; a violin panel (two-sample t-test
-      + p, from the same points' `high`/`low` labels) next to the AUC grid — both showing channel,
-      centre frequency and signal length in their titles, and both driven by click (persistent),
-      not just hover.
-- [ ] Cross-highlight: hovering/clicking a cell in one grid highlights the same (row, column) in the
-      other.
-- [ ] Reformat every electrode/channel label on this section (`ContactStrip`, the pinned-cell
-      header) using Phase B's new backend fields, matching the "Recorded power channels" convention
-      exactly.
-- [ ] Build; verify live: labels, resize, Y-axis values, both panels' statistics, cross-highlight.
-  - **Status:** pending
+- [x] Replaced the hand-rolled SVG `Heatmap` with a Plotly heatmap trace via this project's own
+      `PlotlyRenderManager` (`graphing-utility/Plotly`), sized to 600×(rows*20+60) — roughly 2/3 of
+      the previous 900-wide, rows*30+80 footprint. Y-axis is categorical (string labels) so every
+      row keeps equal visual height regardless of how irregular the underlying seconds values are,
+      matching the original SVG's layout exactly. One real bug found and fixed before this worked
+      at all: `setXlabel`/`setYlabel` need `fig.subplots(1, 1)` called first to populate
+      `this.layout.xaxis`/`yaxis` (every other consumer of this class in the codebase does this;
+      skipping it crashed the whole page with "Cannot set properties of undefined").
+- [x] Added persistent right-side panels, hand-rolled SVG (kept, not Plotly — these are single,
+      non-gridded plots with no per-cell hit-testing problem, so the reason for choosing Plotly
+      over SVG for the heatmaps does not apply here): `ScatterFitPanel` (Pearson r + its own
+      parametric two-tailed p-value, computed from the cell's own fetched points — implemented via
+      a standard regularized-incomplete-beta Student's-t p-value, verified against known reference
+      values before use: t=2.228,df=10→p=0.0500; r=0.5,n=30→p=0.0049, both matched) next to the
+      correlation grid; `ViolinPanel` (Welch's two-sample t-test between the high/low groups, same
+      p-value machinery) next to the AUC grid. Both titled with channel, band centre and length of
+      signal (using the DELIVERED seconds label, matching the axis — the REQUESTED value is still
+      what's sent to the cell drill-down endpoint, which keys its own lookup on it; these were kept
+      as two separate fields, `seconds`/`secondsDisplay`, after finding they'd shown different
+      numbers for the same row in an early live check). Both statistics are explicitly labelled in
+      the UI and in the "how to read this" drawer as plain, single-cell, uncorrected numbers —
+      never conflated with the grid's own permutation- and bootstrap-corrected headline statistics.
+      Driven by CLICK only (persistent) — hover no longer fetches or shows a preview, per a
+      deliberate reading of the spec ("persist when clicked"); it only moves the cross-highlight.
+- [x] Cross-highlighting: hover and pinned state are now ONE shared `{row, col}` per interaction
+      (not two separate per-grid states as before), read by both `PlotlyHeatmap` instances — a
+      click on EITHER grid populates BOTH panels and highlights that cell on BOTH grids at once
+      (drawn as a small square-outline marker at the cell's own data coordinates, not a raw
+      shape indexed by row/col, which is unreliable on a categorical axis).
+- [x] Every electrode/channel label on this section (`ContactStrip`, the panel titles) now uses
+      Phase B's backend `display_short`/`display_region` fields, matching "Recorded power
+      channels" exactly.
+- [x] Built clean (zero warnings for this file, including the pre-existing `totalW` one, gone now
+      that the old `CellFigure` it lived in was replaced). Verified live on RCS08: hovering shows
+      the cross-highlight and a native Plotly tooltip with no fetch; clicking either grid populates
+      both panels with real numbers and titles (e.g. "R 0⁻3⁺ (Right VIM) · 20.5 Hz · 30s of signal",
+      "Pearson r = -0.120, p = 0.0470 (n = 276)", "Welch t(200.7) = -0.17, p = 0.8672 (high n=100,
+      low n=176)") and highlights the same cell on the other grid; no console errors across
+      multiple hover/click cycles on both grids.
+  - **Status:** complete
+
+### Phase C.1: Live-feedback refinements to the Plotly redesign — COMPLETE
+Requested directly after Phase C shipped, from watching it live: (1) remove the heatmap's axis
+GRIDLINES specifically (the faint reference lines through every tick), keeping the tick labels
+themselves; (2) the heatmap size "was a little better before" — increase by 25% from the first
+Plotly pass; (3) the axes originally asked for belonged on the side panels (scatter, violin), not
+the heatmaps — those panels had only a bare text label, no real axis; (4) the panel title is
+identical on both panels (pure duplication) — keep it once, above the scatter panel, at double the
+font size.
+- [x] Heatmap: `xaxis`/`yaxis` layout now sets `showgrid: false, zeroline: false` on both axes
+      (cell borders via `xgap`/`ygap` already separate the cells; the added gridlines were on top
+      of those and just added noise). Tick labels are untouched.
+- [x] Heatmap size: default `width` 600 → 750; `height` formula `rows*20+60` (min 180) →
+      `rows*25+75` (min 225) — a 25% increase on both dimensions.
+- [x] Added `niceTicks()` (the standard 1/2/5×10^n round-number tick algorithm) and a shared
+      `PanelAxes` component (axis lines + tick marks + numeric labels) to both `ScatterFitPanel`
+      (x = band power, y = pain) and `ViolinPanel` (y = band power only — x is the two categorical
+      groups, already labelled "High pain"/"Low pain" under each violin, so no numeric x-axis
+      applies there).
+- [x] `PanelTitle` now renders ONLY inside `ScatterFitPanel`; removed from both of `ViolinPanel`'s
+      branches. Font size doubled, 11.5px → 23px, now that it is the one copy carrying this
+      information for both panels. Height budgets adjusted (`ScatterFitPanel`'s reserved space
+      64px, up from 46px, to fit the larger title without crowding the plot).
+- [x] Built clean; verified live on RCS08: heatmap cells read as clean solid blocks with tick
+      labels but no grid lines, are visibly larger, and clicking a cell shows one large title only
+      above the scatter panel ("R 0⁻3⁺ (Right VIM) · 17.5 Hz · 15s of signal") with both the
+      scatter panel (Band power 100–500, Pain 20–80, both with axis lines and tick marks) and the
+      violin panel (Band power axis only, ticked and labelled) rendering real axes for the first
+      time. No console errors.
+  - **Status:** complete
 
 ### Phase D: Condense the "how to read this" text
 - [ ] Rewrite the four bullet notes plus the two dynamic `notes` arrays' presentation: reorder by
@@ -110,8 +168,12 @@ Phase B — pending
 | "Should also all be precomputed/prefetched and cached" (for the panel statistics) is read as: compute the stats once when a cell's points are fetched and store them in the SAME per-cell cache (`cellCacheRef`) already used for the raw points, not as a new instruction to eagerly fetch all ~220 cells × 6 channels before any interaction. | The existing hover/click design (decision 62, "search-first, minimal chrome") deliberately fetches a cell's data only on demand; mass-prefetching every cell would be a ~1,300-request burst against a single-threaded backend resource, contradicting this project's own established performance discipline. Flagged here as an interpretation, not a certainty, so it can be corrected if wrong. |
 | Electrode labels everywhere on this page are reformatted to match the ALREADY-EXISTING, backend-built "Recorded power channels" convention (`index.js` line ~1068's `fmt()`: `"{label} ({region}) @ {center_hz} Hz"`, where `label` and `region` come from `analytics.format_channel` + `_region_map`, real per-participant device metadata — not a static demo map). | This is the one place on the page that already produces the exact Medtronic-style string the user quoted verbatim as their reference example (confirmed the quoted frequencies — 22.5/7.8/9.8 Hz left, 8.8/23.4/8.8 Hz right — match RCS08's real recorded values). Reusing it rather than inventing a second formatter keeps one source of truth, per this project's own DRY principle and its prior history of exactly this kind of drift (the cache-store consolidation, decision 30). |
 | Plotly replaces the hand-rolled SVG for the two big heat maps, reversing decision 66's explicit choice, on the user's own direct instruction. | Decision 66 chose SVG specifically because "the existing figures were never built to carry per-cell hover and click" at the time — but this project's own Plotly render-manager (`Client/src/graphing-utility/Plotly/index.js`) already wires `plotly_click`/`plotly_relayout` handlers elsewhere, so the original constraint no longer rules Plotly out. Recorded here as a reversal, not silently overwritten, per CLAUDE.md's own rule that a superseding decision must say so. |
-| No "/ps-scientific-writing" skill exists in this repository's `.claude/skills/` or anywhere else searched on this machine. | The condensed "how to read this" text will instead follow this project's own, already-available `HOUSE_RULES_writing_and_claims.md` (plain language, defined terms, no banned jargon/constructions) — the applicable written standard for this repository. |
+| ~~No "/ps-scientific-writing" skill exists...~~ **SUPERSEDED**: the user subsequently loaded `ps-plotly`, `ps-scientific-writing` and `ps-scientific-visualization` mid-session. | Phase D's condensing work will follow §6a of the now-loaded `ps-scientific-writing` skill (compress tokens not sentences, one idea per clause, count the actual word-reduction) together with this project's own `HOUSE_RULES_writing_and_claims.md`, not `HOUSE_RULES` alone as first planned. |
+| Plain JavaScript object notation throughout for Plotly, never the Python API the `ps-plotly` skill documents — confirmed directly with the user before writing any Plotly code. | This codebase uses `plotly.js` (`package.json` pins `^2.14.0`) directly in the browser via this project's own `PlotlyRenderManager` wrapper (`graphing-utility/Plotly`) — plain `{type, x, y, z, ...}` trace/layout objects passed to `Plotly.newPlot`/`.react`, not `plotly.express`/`plotly.graph_objects`. |
 
 ## Errors Encountered
 | Error | Resolution |
 |-------|------------|
+| Live gunicorn workers did not pick up the Phase B backend edit on their own (`--reload --reload-engine poll`), serving a stale, unlabeled response ~5 min after the edit and after a page Recompute | Sent `SIGHUP` to the gunicorn master (its own documented graceful-reload signal); new worker PIDs appeared and the new fields were present afterward |
+| `PlotlyHeatmap` crashed the whole page on first use: `TypeError: Cannot set properties of undefined (setting 'title')` inside `setXlabel` | `fig.subplots(1, 1)` was never called, so `this.layout.xaxis`/`yaxis` did not exist yet — every other consumer of `PlotlyRenderManager` in this codebase calls `subplots()` before `setXlabel`/`setYlabel`; added the same call |
+| Panel title showed "20 s of signal" (the REQUESTED value sent to the cell drill-down endpoint) while the axis/tooltip for the same row showed "21s" (DELIVERED) — same cell, two different numbers | Added a separate `secondsDisplay` (delivered) field on `pinnedCell` used only for display; `seconds` (requested) is still what's sent to the server, since `band_time_sweep_cell_for_participant` keys its own lookup on that exact value |

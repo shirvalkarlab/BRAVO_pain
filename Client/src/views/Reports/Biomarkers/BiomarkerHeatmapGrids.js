@@ -1,10 +1,11 @@
 /**
- * THE TWO CALIBRATED HEAT MAPS, AS THE HEADLINE OF THE PAGE (Track A of the heat-map redesign).
+ * THE TWO CALIBRATED HEAT MAPS, AS THE HEADLINE OF THE PAGE (Track A of the heat-map redesign,
+ * redrawn in Plotly for open item 7's display cleanup).
  *
  * Builds Option 2, "search-first, minimal chrome" (decision 62 in DECISIONS_and_open_items.md):
- * no cell is pre-selected on load, hovering a cell shows a small preview, clicking pins the full
- * drill-down below the grids, and the sensing contact pair is chosen from a strip of small
- * thumbnail grids rather than a dropdown.
+ * no cell is pre-selected on load, hovering a cell highlights it on both grids at once, clicking
+ * pins a persistent scatter/violin panel beside each grid, and the sensing contact pair is chosen
+ * from a strip of small thumbnail grids rather than a dropdown.
  *
  * WHY THIS COMPONENT FETCHES ON ITS OWN, ON MOUNT, RATHER THAN WAITING FOR A BUTTON. The PRD's
  * complaint was that the calibrated grid used to be gated behind the older full-spectrum scan
@@ -28,6 +29,15 @@
  * (`bravo_service._band_time_sweep_channels` loops over every channel in one call), so the
  * small-multiples strip costs nothing extra: it is drawn straight from the one response already
  * held, never a separate request per thumbnail.
+ *
+ * PLOTLY, NOT HAND-ROLLED SVG, FOR THE TWO BIG GRIDS -- a deliberate reversal of decision 66's
+ * choice, on the PI's own direct instruction. Decision 66 chose SVG specifically because "the
+ * existing figures were never built to carry per-cell hover and click" at the time; this
+ * project's own Plotly render manager (`graphing-utility/Plotly`) has since grown native
+ * `plotly_click`/`plotly_hover` event support elsewhere, so that original constraint no longer
+ * rules Plotly out. The two per-cell side panels (scatter+fit line, violin) stay hand-rolled SVG:
+ * they are single, non-gridded plots with no per-cell hit-testing problem to solve, and the
+ * existing SVG code for them already worked well.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -38,6 +48,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDButton from "components/MDButton";
 
+import { PlotlyRenderManager } from "graphing-utility/Plotly";
 import { SessionController } from "database/session-control";
 import { useCachedResult } from "database/useCachedResult";
 import { biomarkerHeatmapSlot, prefetchBiomarkerHeatmapMetric } from "views/Reports/moduleCacheKeys";
@@ -49,19 +60,33 @@ const num = (v, d = 3) => (v == null || !Number.isFinite(Number(v)) ? "—" : Nu
 // ---------------------------------------------------------------------------------------------
 // COLOUR. A diverging scale around the value that means "no relationship" for each quantity --
 // 0 for a correlation, 0.5 (never 0) for an area under the curve. House rule: an AUC is never
-// read against zero.
+// read against zero. Used both for the Plotly heatmap colorscale and the ContactStrip thumbnails.
 // ---------------------------------------------------------------------------------------------
-function diverging(v, center, halfRange) {
-  if (v == null || !Number.isFinite(Number(v))) return "#e9e9e9";
+function divergingRgb(v, center, halfRange) {
   const t = Math.max(-1, Math.min(1, (Number(v) - center) / halfRange));
   const neg = BIN_LO_RGB;         // blue
   const pos = BIN_HI_RGB;         // vermillion
   const mid = [255, 255, 255];
   const lerp = (a, b, k) => a + (b - a) * k;
-  const c = t < 0
+  return t < 0
     ? [lerp(neg[0], mid[0], 1 + t), lerp(neg[1], mid[1], 1 + t), lerp(neg[2], mid[2], 1 + t)]
     : [lerp(mid[0], pos[0], t), lerp(mid[1], pos[1], t), lerp(mid[2], pos[2], t)];
+}
+function diverging(v, center, halfRange) {
+  if (v == null || !Number.isFinite(Number(v))) return "#e9e9e9";
+  const c = divergingRgb(v, center, halfRange);
   return `rgb(${c.map((x) => Math.round(x)).join(",")})`;
+}
+// A fixed-stop colorscale Plotly can interpolate continuously between, built from the same two
+// Okabe-Ito colours as every other diverging scale on this page (BIN_LO/BIN_HI) so this grid does
+// not introduce a third, uncoordinated colour convention.
+function divergingColorscale(center, halfRange) {
+  const stops = [-1, -0.5, 0, 0.5, 1];
+  return stops.map((t) => {
+    const v = center + t * halfRange;
+    const c = divergingRgb(v, center, halfRange);
+    return [(t + 1) / 2, `rgb(${c.map((x) => Math.round(x)).join(",")})`];
+  });
 }
 
 /** Which grid cell (row = length of signal, column = band centre) is the "best" one the server
@@ -80,22 +105,129 @@ function bestCellIndexByColumn(sw, rows) {
   return out;
 }
 
+/** "9s", "1m" -- the DELIVERED length of signal a row actually holds (see the note on `seconds`
+ * below for why this is delivered, not requested). */
+function secondsLabel(s) {
+  return Number(s) >= 60 ? `${Math.round(Number(s) / 60)}m` : `${Number(s).toFixed(0)}s`;
+}
+
+// ---------------------------------------------------------------------------------------------
+// STANDARD, UNCORRECTED PER-CELL STATISTICS for the two persistent side panels -- Pearson's r's
+// own parametric p-value, and a Welch two-sample t-test between the high/low groups. These are
+// NOT the grid's own permutation- and bootstrap-corrected, family-wise-adjusted statistics
+// (`best_correlation_rows`/`best_auc_rows`, computed only for each column's single best-of-ten-
+// lengths row) -- there is no such rigorous answer stored for an arbitrary cell, and computing one
+// would mean adding new backend permutation machinery. A plain, standard statistic computed from
+// the cell's own already-fetched (power, pain) pairs is what was asked for ("t-test if no other
+// exists"), and is labelled in the UI as exactly that rather than conflated with the grid's own
+// headline numbers.
+// ---------------------------------------------------------------------------------------------
+function pearsonR(xs, ys) {
+  const n = xs.length;
+  if (n < 3) return { r: null, n };
+  const mx = xs.reduce((s, v) => s + v, 0) / n;
+  const my = ys.reduce((s, v) => s + v, 0) / n;
+  let sxy = 0, sxx = 0, syy = 0;
+  for (let i = 0; i < n; i += 1) {
+    const dx = xs[i] - mx, dy = ys[i] - my;
+    sxy += dx * dy; sxx += dx * dx; syy += dy * dy;
+  }
+  const denom = Math.sqrt(sxx * syy);
+  return { r: denom > 0 ? sxy / denom : null, n };
+}
+// Log of the complete Gamma function (Lanczos approximation), used only through
+// `regularizedIncompleteBeta` below to get an EXACT two-tailed Student's-t p-value -- not a
+// normal-distribution approximation, which would be wrong at the small sample sizes a single
+// cell can have.
+function logGamma(x) {
+  const g = 7;
+  const c = [0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+    771.32342877765313, -176.61502916214059, 12.507343278686905,
+    -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
+  if (x < 0.5) return Math.log(Math.PI / Math.sin(Math.PI * x)) - logGamma(1 - x);
+  const xx = x - 1;
+  let a = c[0];
+  const t = xx + g + 0.5;
+  for (let i = 1; i < g + 2; i += 1) a += c[i] / (xx + i);
+  return 0.5 * Math.log(2 * Math.PI) + (xx + 0.5) * Math.log(t) - t + Math.log(a);
+}
+// Continued-fraction evaluation for the regularized incomplete beta function (the standard
+// textbook algorithm), used only through `regularizedIncompleteBeta` immediately below.
+function betacf(x, a, b) {
+  const MAXIT = 200, EPS = 3e-14, FPMIN = 1e-300;
+  const qab = a + b, qap = a + 1, qam = a - 1;
+  let c = 1, d = 1 - (qab * x) / qap;
+  if (Math.abs(d) < FPMIN) d = FPMIN;
+  d = 1 / d;
+  let h = d;
+  for (let m = 1; m <= MAXIT; m += 1) {
+    const m2 = 2 * m;
+    let aa = (m * (b - m) * x) / ((qam + m2) * (a + m2));
+    d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN;
+    c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN;
+    d = 1 / d; h *= d * c;
+    aa = (-(a + m) * (qab + m) * x) / ((a + m2) * (qap + m2));
+    d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN;
+    c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN;
+    d = 1 / d;
+    const del = d * c; h *= del;
+    if (Math.abs(del - 1) < EPS) break;
+  }
+  return h;
+}
+// The regularized incomplete beta function I_x(a, b). Verified against known reference values
+// before use (t=2.228, df=10 -> p=0.0500; r=0.5, n=30 -> p=0.0049).
+function regularizedIncompleteBeta(x, a, b) {
+  if (x <= 0) return 0;
+  if (x >= 1) return 1;
+  const bt = Math.exp(logGamma(a + b) - logGamma(a) - logGamma(b)
+    + a * Math.log(x) + b * Math.log(1 - x));
+  return x < (a + 1) / (a + b + 2)
+    ? (bt * betacf(x, a, b)) / a
+    : 1 - (bt * betacf(1 - x, b, a)) / b;
+}
+// Two-tailed p-value for a Student's t statistic with `df` degrees of freedom (real-valued df is
+// fine -- Welch's t-test below produces a fractional one): p = I_{df/(df+t^2)}(df/2, 1/2).
+function tTestPValue(t, df) {
+  if (!Number.isFinite(t) || !Number.isFinite(df) || df <= 0) return null;
+  const x = df / (df + t * t);
+  return regularizedIncompleteBeta(x, df / 2, 0.5);
+}
+function meanOf(xs) { return xs.reduce((s, v) => s + v, 0) / xs.length; }
+function sampleVariance(xs, m) {
+  return xs.length > 1 ? xs.reduce((s, v) => s + (v - m) ** 2, 0) / (xs.length - 1) : 0;
+}
+// Welch's two-sample t-test (does not assume the two groups have equal variance -- the standard
+// general-purpose default) between the high- and low-pain groups' band-power values for one cell.
+function welchTTest(a, b) {
+  if (a.length < 2 || b.length < 2) return { t: null, df: null, p: null, n1: a.length, n2: b.length };
+  const ma = meanOf(a), mb = meanOf(b);
+  const va = sampleVariance(a, ma), vb = sampleVariance(b, mb);
+  const se2 = va / a.length + vb / b.length;
+  const t = se2 > 0 ? (ma - mb) / Math.sqrt(se2) : null;
+  const df = se2 > 0
+    ? (se2 * se2) / ((va * va) / (a.length * a.length * (a.length - 1))
+      + (vb * vb) / (b.length * b.length * (b.length - 1)))
+    : null;
+  const p = (t != null && df != null) ? tTestPValue(t, df) : null;
+  return { t, df, p, n1: a.length, n2: b.length, mean1: ma, mean2: mb };
+}
+
 /**
- * One heat map, drawn as plain SVG rather than a server-rendered figure so a cell can carry a
- * hover and a click handler directly. `frameKey` changes only when this grid's own data should
- * visually redraw (see the component-level note above); passing the same key across a re-render
- * with new numbers is what keeps the correlation grid's frame looking untouched.
+ * ONE HEAT MAP, IN PLOTLY. Row 0 is the shortest length of signal (top of the grid, matching the
+ * previous SVG's layout); the y-axis is CATEGORICAL (string labels), not numeric, so every row
+ * gets equal visual height regardless of how far apart the underlying seconds values actually are
+ * -- exactly the same "equal cell size, irregular tick labels" layout the SVG version drew, now
+ * built the way Plotly expects it. Highlighting (hover/pinned) is drawn as a second, tiny
+ * scatter trace holding one square-outline marker at the highlighted cell's own data coordinates,
+ * rather than a raw shape indexed by row/col -- data coordinates are unambiguous regardless of
+ * axis type, where a shape positioned by category index is not.
  */
-function Heatmap({ sw, kind, hovered, pinned, onHover, onClick, flashKey, width = 900 }) {
-  // Memoized (not `sw.x || []` inline) so a falsy sw.center_freqs_hz/integration_seconds_* doesn't
-  // hand xLabels/yLabels' own useMemo calls below a brand-new [] reference on every render, which
-  // would silently defeat their memoization (caught by the eslint exhaustive-deps rule).
+function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onClick, flashKey,
+  width = 750 }) {
   const centers = useMemo(() => sw.center_freqs_hz || [], [sw]);
-  // DELIVERED, not requested. The 3-second tile cache rounds every requested length to the
-  // nearest tile (analytics.integration_time_tile_count) -- a request for 10 s is actually built
-  // from 9 s of signal, 5 s from 6 s, and so on. Showing the REQUESTED number on this axis
-  // mislabeled every row with the length of signal that was asked for, not the length that was
-  // actually averaged into the row's own numbers.
+  // DELIVERED, not requested, for the axis LABEL -- see the module-level note. (The cell
+  // drill-down request must still send the REQUESTED value; that happens in the parent, not here.)
   const seconds = useMemo(
     () => sw.integration_seconds_delivered || sw.integration_seconds_requested || [], [sw]);
   const grid = kind === "auc" ? sw.auc_grid : sw.correlation_grid;
@@ -106,37 +238,104 @@ function Heatmap({ sw, kind, hovered, pinned, onHover, onClick, flashKey, width 
   const bestRows = kind === "auc" ? sw.best_auc_rows : sw.best_correlation_rows;
   const bestByCol = useMemo(() => bestCellIndexByColumn(sw, bestRows), [sw, bestRows]);
 
+  const yLabels = useMemo(() => seconds.map((s) => secondsLabel(s)), [seconds]);
+  // Sized 25% larger than the first Plotly pass, per the PI's own comparison against the size
+  // before this redesign.
+  const height = Math.max(225, rows * 25 + 75);
+
+  const figRef = useRef(null);
   const [flash, setFlash] = useState(false);
   useEffect(() => {
-    if (!flashKey) return;
+    if (!flashKey) return undefined;
     setFlash(true);
     const t = setTimeout(() => setFlash(false), 900);
     return () => clearTimeout(t);
   }, [flashKey]);
 
-  // Padding enlarged (was 46/22/4/4) to leave room for the axis TITLES added below, not just the
-  // sparse tick labels that were already there -- the grids only had tick numbers before, with no
-  // "what am I looking at" label on either axis. Computed unconditionally (guarding cols/rows === 0
-  // with || 1) so the useMemo calls below it stay above the empty-grid early return -- rules of
-  // hooks forbid a hook after a conditional return, and these values are never rendered from when
-  // rows/cols are actually 0 since that path returns before the SVG using them is built.
-  const padL = 78, padB = 46, padT = 8, padR = 12;
-  const height = Math.max(260, rows * 30 + padT + padB);
-  const cw = (width - padL - padR) / (cols || 1);
-  const ch = (height - padT - padB) / (rows || 1);
+  useEffect(() => {
+    if (!rows || !cols) return undefined;
+    if (!figRef.current) figRef.current = new PlotlyRenderManager(divId, "en");
+    const fig = figRef.current;
+    fig.clearData();
+    // Populates this.layout.xaxis/yaxis from the manager's own defaults -- required before
+    // setXlabel/setYlabel below can touch them (they assume subplots() has already run, the same
+    // as every other consumer of this class in the codebase).
+    fig.subplots(1, 1, { sharex: false, sharey: false });
+    fig.traces.push({
+      type: "heatmap", z: grid, x: centers, y: yLabels,
+      colorscale: divergingColorscale(center, halfRange), zmin: center - halfRange,
+      zmax: center + halfRange, zmid: center, showscale: false,
+      xgap: 1.5, ygap: 1.5,
+      hovertemplate: `${kind === "auc" ? "AUC" : "r"} = %{z:.3f}<br>%{x} Hz, %{y}<extra></extra>`,
+    });
+    // Family-wise-significant "best of ten lengths" cells -- an open circle, exactly the marker
+    // the SVG version drew.
+    const bestX = [], bestY = [];
+    Object.keys(bestByCol).forEach((c) => {
+      const b = bestByCol[c];
+      if (b && b.row_data && b.row_data.family_wise_significant_8_to_30hz === true) {
+        bestX.push(centers[Number(c)]); bestY.push(yLabels[b.row]);
+      }
+    });
+    if (bestX.length) {
+      fig.traces.push({
+        type: "scatter", mode: "markers", x: bestX, y: bestY, showlegend: false,
+        marker: { symbol: "circle-open", size: 14, color: "#1a1a1a", line: { width: 1.4 } },
+        hoverinfo: "skip",
+      });
+    }
+    // The shared cross-highlight -- one square-outline marker at the hovered or pinned cell,
+    // drawn on BOTH grids from the same (row, col) so the two stay in visual sync.
+    const activeCell = pinnedCell || hoveredCell;
+    if (activeCell && activeCell.row < rows && activeCell.col < cols) {
+      fig.traces.push({
+        type: "scatter", mode: "markers",
+        x: [centers[activeCell.col]], y: [yLabels[activeCell.row]], showlegend: false,
+        marker: { symbol: "square-open", size: 22, color: "#1a1a1a",
+          line: { width: pinnedCell ? 3 : 2 } },
+        hoverinfo: "skip",
+      });
+    }
+    fig.setLayoutProps({
+      height, width, margin: { l: 46, r: 8, t: 8, b: 40 },
+      // Tick labels stay; the axis GRIDLINES (the faint reference lines Plotly draws through every
+      // tick) are turned off on both axes -- the cell borders (xgap/ygap above) already separate
+      // the cells, and the grid lines on top of them just added visual noise.
+      xaxis: { showgrid: false, zeroline: false },
+      yaxis: { type: "category", autorange: "reversed", showgrid: false, zeroline: false },
+      hovermode: "closest",
+    });
+    fig.setXlabel("Band centre (Hz)", { fontSize: 12 });
+    fig.setYlabel("Length of signal", { fontSize: 12 });
+    fig.render();
 
-  // Sparse tick labels so text does not overlap: every 3rd band centre, every row's seconds.
-  // Memoized: these depend only on the axis geometry (sw/kind/width), never on hover/pinned/flash
-  // state, so an unrelated re-render of this component (e.g. a sibling panel's own state change)
-  // shouldn't force rebuilding these two label arrays every time.
-  const xLabels = useMemo(() => centers.map((c, i) => (i % 3 === 0 ? (
-    <text key={i} x={padL + i * cw + cw / 2} y={height - padB + 16} fontSize={11} textAnchor="middle"
-      fill="#444">{Number(c).toFixed(0)}</text>
-  ) : null)), [centers, padL, cw, height, padB]);
-  const yLabels = useMemo(() => seconds.map((s, i) => (
-    <text key={i} x={padL - 8} y={padT + i * ch + ch / 2 + 4} fontSize={11} textAnchor="end"
-      fill="#444">{Number(s) >= 60 ? `${Math.round(s / 60)}m` : `${Number(s).toFixed(0)}s`}</text>
-  )), [seconds, padL, padT, ch]);
+    const el = document.getElementById(divId);
+    if (el) {
+      el.on("plotly_hover", (evt) => {
+        const p = evt.points && evt.points[0];
+        if (p && p.curveNumber === 0 && Array.isArray(p.pointNumber)) {
+          onHover(p.pointNumber[0], p.pointNumber[1]);
+        }
+      });
+      el.on("plotly_unhover", () => onHover(null, null));
+      el.on("plotly_click", (evt) => {
+        const p = evt.points && evt.points[0];
+        if (p && p.curveNumber === 0 && Array.isArray(p.pointNumber)) {
+          onClick(p.pointNumber[0], p.pointNumber[1]);
+        }
+      });
+    }
+    return () => {
+      if (el) { el.removeAllListeners("plotly_hover"); el.removeAllListeners("plotly_unhover");
+        el.removeAllListeners("plotly_click"); }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [divId, grid, centers, yLabels, kind, center, halfRange, bestByCol, hoveredCell, pinnedCell,
+    height, width]);
+
+  useEffect(() => () => {
+    if (figRef.current) figRef.current.purge();
+  }, []);
 
   if (!rows || !cols) {
     return (
@@ -146,61 +345,15 @@ function Heatmap({ sw, kind, hovered, pinned, onHover, onClick, flashKey, width 
     );
   }
 
-  const cells = [];
-  for (let r = 0; r < rows; r += 1) {
-    for (let c = 0; c < cols; c += 1) {
-      const v = (grid[r] || [])[c];
-      const isHover = hovered && hovered.row === r && hovered.col === c;
-      const isPinned = pinned && pinned.row === r && pinned.col === c;
-      const isBest = bestByCol[c] && bestByCol[c].row === r;
-      const passesFamily = isBest && bestByCol[c].row_data
-        && bestByCol[c].row_data.family_wise_significant_8_to_30hz === true;
-      cells.push(
-        <g key={`${r}-${c}`}>
-          <rect
-            x={padL + c * cw} y={padT + r * ch} width={cw} height={ch}
-            fill={diverging(v, center, halfRange)}
-            stroke={isPinned ? "#1a1a1a" : (isHover ? "#333" : "#ffffff")}
-            strokeWidth={isPinned ? 2.5 : (isHover ? 1.5 : 0.6)}
-            style={{ cursor: "pointer" }}
-            onMouseEnter={() => onHover(r, c)}
-            onClick={() => onClick(r, c)}
-          />
-          {passesFamily ? (
-            <circle cx={padL + c * cw + cw / 2} cy={padT + r * ch + ch / 2} r={Math.min(cw, ch) * 0.14}
-              fill="none" stroke="#1a1a1a" strokeWidth={1.4} />
-          ) : null}
-        </g>
-      );
-    }
-  }
-  // Axis TITLES (new) -- the grid previously carried only tick numbers, with no label saying what
-  // those numbers are. The x axis is centred under the whole plot area; the y axis title is
-  // rotated 90 degrees and centred alongside the plot area's own vertical span.
-  const plotMidX = padL + (width - padL - padR) / 2;
-  const plotMidY = padT + (height - padT - padB) / 2;
   return (
     <MDBox
-      onMouseLeave={() => onHover(null, null)}
       sx={flash ? {
         outline: `2px solid ${PAL.accentBorder || "#0072B2"}`,
         borderRadius: 1,
         transition: "outline-color 0.15s",
       } : { outline: "2px solid transparent", borderRadius: 1 }}
     >
-      {/* viewBox + width="100%" scales the SVG down on a narrow viewport instead of overflowing the
-          card horizontally, while every cell/label coordinate above is still computed against the
-          full logical `width` -- so nothing has to be recomputed for different screen sizes. */}
-      <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height}
-        style={{ display: "block", maxWidth: width }} preserveAspectRatio="xMinYMin meet">
-        {cells}
-        {xLabels}
-        {yLabels}
-        <text x={plotMidX} y={height - 8} fontSize={12} fontWeight="bold" textAnchor="middle"
-          fill="#1a1a1a">{"Band centre (Hz)"}</text>
-        <text x={16} y={plotMidY} fontSize={12} fontWeight="bold" textAnchor="middle"
-          fill="#1a1a1a" transform={`rotate(-90 16 ${plotMidY})`}>{"Length of signal"}</text>
-      </svg>
+      <div id={divId} style={{ width: "100%", maxWidth: width }} />
     </MDBox>
   );
 }
@@ -286,81 +439,197 @@ function violinPath(values, cx, yScale, halfWidth) {
   return pts.map((p) => p.join(",")).join(" ");
 }
 
-/** The scatter + fitted line + two violins for one pinned cell. Shared between the hover preview
- * (small, no violins) and the pinned drill-down (full size, with violins). */
-function CellFigure({ cell, small }) {
-  if (!cell || !cell.points || !cell.points.length) {
+/** The shared title line for both persistent side panels: channel, band centre, length of signal. */
+function PanelTitle({ pinnedCell, channelLabel }) {
+  if (!pinnedCell) return null;
+  // Shown ONLY above the scatter panel now -- the violin panel repeated the identical title
+  // immediately below it, which was pure duplication (the two panels always describe the same
+  // pinned cell). Font size doubled from the original 11.5 now that it is the one copy carrying
+  // this information for both panels.
+  return (
+    <MDTypography variant="caption" fontWeight="bold" color="dark"
+      sx={{ fontSize: 23, display: "block", mb: 0.5 }}>
+      {`${channelLabel(pinnedCell.channel)} · ${pinnedCell.center} Hz · `}
+      {`${secondsLabel(pinnedCell.secondsDisplay != null ? pinnedCell.secondsDisplay : pinnedCell.seconds)} of signal`}
+    </MDTypography>
+  );
+}
+
+/** "Nice" round-number axis ticks (1/2/5 × 10^n steps) spanning [lo, hi], the standard algorithm
+ * behind most charting libraries' default axes -- used to draw real tick marks and labels on the
+ * scatter and violin panels below, which previously had a bare text label and no scale at all. */
+function niceTicks(lo, hi, count = 4) {
+  if (!(hi > lo)) return [lo];
+  const span = hi - lo;
+  const rawStep = span / count;
+  const mag = 10 ** Math.floor(Math.log10(rawStep));
+  const norm = rawStep / mag;
+  const step = (norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10) * mag;
+  const decimals = Math.max(0, -Math.floor(Math.log10(step)));
+  const start = Math.ceil(lo / step) * step;
+  const ticks = [];
+  for (let v = start; v <= hi + step * 1e-6; v += step) ticks.push(Number(v.toFixed(10)));
+  return { ticks, decimals };
+}
+
+/** A plain left+bottom axis (line, tick marks, numeric labels) for one Cartesian panel. Pass
+ * `xTicks: null` to draw only the y-axis (the violin panel's x is categorical and already labels
+ * its two groups with text under each violin). */
+function PanelAxes({ w, h, pad, xlo, xhi, sx, ylo, yhi, sy, xTicks = true }) {
+  const yT = niceTicks(ylo, yhi, 4);
+  const xT = xTicks ? niceTicks(xlo, xhi, 4) : null;
+  return (
+    <g>
+      <line x1={pad} y1={pad} x2={pad} y2={h - pad} stroke="#888" strokeWidth={1} />
+      <line x1={pad} y1={h - pad} x2={w - pad} y2={h - pad} stroke="#888" strokeWidth={1} />
+      {yT.ticks.map((v) => (
+        <g key={`y${v}`}>
+          <line x1={pad - 3} y1={sy(v)} x2={pad} y2={sy(v)} stroke="#888" strokeWidth={1} />
+          <text x={pad - 6} y={sy(v) + 3} fontSize={8} textAnchor="end" fill="#666">
+            {v.toFixed(yT.decimals)}
+          </text>
+        </g>
+      ))}
+      {xT ? xT.ticks.map((v) => (
+        <g key={`x${v}`}>
+          <line x1={sx(v)} y1={h - pad} x2={sx(v)} y2={h - pad + 3} stroke="#888" strokeWidth={1} />
+          <text x={sx(v)} y={h - pad + 13} fontSize={8} textAnchor="middle" fill="#666">
+            {v.toFixed(xT.decimals)}
+          </text>
+        </g>
+      )) : null}
+    </g>
+  );
+}
+
+/** Persistent panel next to the correlation grid: scatter + fitted line, Pearson r and its own
+ * (uncorrected, single-cell) p-value. */
+function ScatterFitPanel({ cell, pinnedCell, channelLabel, height }) {
+  if (!pinnedCell) {
     return (
       <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
-        {cell && cell.loading ? "Loading…" : "No underlying pairs could be loaded for this cell."}
+        {"Click a cell to see the underlying scatter and its fit."}
       </MDTypography>
+    );
+  }
+  if (!cell || cell.loading || !cell.points || !cell.points.length) {
+    return (
+      <MDBox sx={{ height }}>
+        <PanelTitle pinnedCell={pinnedCell} channelLabel={channelLabel} />
+        <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
+          {cell && cell.loading ? "Loading…" : "No underlying pairs could be loaded for this cell."}
+        </MDTypography>
+      </MDBox>
     );
   }
   const pts = cell.points;
   const xs = pts.map((p) => p.power);
   const ys = pts.map((p) => p.pain);
+  const { r, n } = pearsonR(xs, ys);
+  const t = (r != null && n > 2) ? r * Math.sqrt((n - 2) / (1 - r * r)) : null;
+  const p = t != null ? tTestPValue(t, n - 2) : null;
+
   const xlo = Math.min(...xs), xhi = Math.max(...xs);
   const ylo = Math.min(...ys), yhi = Math.max(...ys);
-  const w = small ? 140 : 260, h = small ? 90 : 220;
-  const pad = small ? 10 : 28;
+  // 64 px reserved above the plot for the (now 23px) title plus the statistics line.
+  const w = 260, h = Math.max(140, height - 64);
+  const pad = 34;
   const sx = (x) => pad + ((x - xlo) / ((xhi - xlo) || 1)) * (w - 2 * pad);
   const sy = (y) => (h - pad) - ((y - ylo) / ((yhi - ylo) || 1)) * (h - 2 * pad);
-  // Least-squares fitted line, drawn only to guide the eye -- the r/AUC values on screen are the
-  // grid's own, not recomputed here.
-  const n = xs.length;
   const mx = xs.reduce((s, v) => s + v, 0) / n, my = ys.reduce((s, v) => s + v, 0) / n;
   let sxy = 0, sxx = 0;
   xs.forEach((x, i) => { sxy += (x - mx) * (ys[i] - my); sxx += (x - mx) ** 2; });
   const slope = sxx > 0 ? sxy / sxx : 0;
   const intercept = my - slope * mx;
-  const lineX1 = xlo, lineX2 = xhi;
-  const lineY1 = intercept + slope * lineX1, lineY2 = intercept + slope * lineX2;
-
   const colorFor = (label) => (label === "high" ? (PAL.fail || BIN_HI)
     : (label === "low" ? (PAL.accent || BIN_LO) : "#aaaaaa"));
 
-  const violinW = small ? 0 : 90;
-  const totalW = w + (small ? 0 : violinW + 16);
+  return (
+    <MDBox sx={{ height }}>
+      <PanelTitle pinnedCell={pinnedCell} channelLabel={channelLabel} />
+      <MDTypography variant="caption" color="dark" sx={{ fontSize: 11, display: "block", mb: 0.5 }}>
+        {`Pearson r = ${num(r, 3)}, p = ${p == null ? "—" : num(p, 4)} (n = ${n})`}
+      </MDTypography>
+      <svg width={w} height={h}>
+        <PanelAxes w={w} h={h} pad={pad} xlo={xlo} xhi={xhi} sx={sx} ylo={ylo} yhi={yhi} sy={sy} />
+        {pts.map((pt, i) => (
+          <circle key={i} cx={sx(pt.power)} cy={sy(pt.pain)} r={2.6}
+            fill={colorFor(pt.label)} opacity={0.75} />
+        ))}
+        <line x1={sx(xlo)} y1={sy(intercept + slope * xlo)} x2={sx(xhi)} y2={sy(intercept + slope * xhi)}
+          stroke="#1a1a1a" strokeWidth={1.5} />
+        <text x={pad + (w - 2 * pad) / 2} y={h - 4} fontSize={9} textAnchor="middle" fill="#555">
+          Band power
+        </text>
+        <text x={10} y={pad - 6} fontSize={9} fill="#555">Pain</text>
+      </svg>
+    </MDBox>
+  );
+}
+
+/** Persistent panel next to the AUC grid: two violins (high/low pain) and a Welch two-sample
+ * t-test between them, reported because no other per-cell comparison statistic is stored. */
+function ViolinPanel({ cell, pinnedCell, channelLabel, height }) {
+  if (!pinnedCell) {
+    return (
+      <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
+        {"Click a cell to see the high/low pain comparison."}
+      </MDTypography>
+    );
+  }
+  if (!cell || cell.loading || !cell.points || !cell.points.length) {
+    return (
+      <MDBox sx={{ height }}>
+        <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
+          {cell && cell.loading ? "Loading…" : "No underlying pairs could be loaded for this cell."}
+        </MDTypography>
+      </MDBox>
+    );
+  }
+  const pts = cell.points;
   const highVals = pts.filter((p) => p.label === "high").map((p) => p.power);
   const lowVals = pts.filter((p) => p.label === "low").map((p) => p.power);
-  const vyScale = (v) => (h - pad) - ((v - xlo) / ((xhi - xlo) || 1)) * (h - 2 * pad);
+  const { t, df, p, n1, n2 } = welchTTest(highVals, lowVals);
+
+  const all = highVals.concat(lowVals);
+  const lo = Math.min(...all), hi = Math.max(...all);
+  const w = 200, h = Math.max(140, height - 46);
+  const pad = 34;
+  const vyScale = (v) => (h - pad) - ((v - lo) / ((hi - lo) || 1)) * (h - 2 * pad);
+  const colorFor = (label) => (label === "high" ? (PAL.fail || BIN_HI)
+    : (label === "low" ? (PAL.accent || BIN_LO) : "#aaaaaa"));
 
   return (
-    <MDBox display="flex" flexDirection="row" gap={2} alignItems="flex-start">
+    <MDBox sx={{ height }}>
+      {/* No title here -- it duplicated the scatter panel's own title exactly (both describe the
+          same pinned cell); that one copy, above the scatter panel, is now the only one. */}
+      <MDTypography variant="caption" color="dark" sx={{ fontSize: 11, display: "block", mb: 0.5 }}>
+        {`Welch t(${num(df, 1)}) = ${num(t, 2)}, p = ${p == null ? "—" : num(p, 4)} `}
+        {`(high n=${n1}, low n=${n2})`}
+      </MDTypography>
       <svg width={w} height={h}>
-        {pts.map((p, i) => (
-          <circle key={i} cx={sx(p.power)} cy={sy(p.pain)} r={small ? 1.6 : 2.6}
-            fill={colorFor(p.label)} opacity={0.75} />
-        ))}
-        <line x1={sx(lineX1)} y1={sy(lineY1)} x2={sx(lineX2)} y2={sy(lineY2)}
-          stroke="#1a1a1a" strokeWidth={small ? 1 : 1.5} />
-        {!small ? (
-          <>
-            <text x={w / 2} y={h - 6} fontSize={9} textAnchor="middle" fill="#555">Band power</text>
-            <text x={10} y={12} fontSize={9} fill="#555">Pain</text>
-          </>
-        ) : null}
+        {/* Only the y-axis (band power) is drawn -- x is the two categorical groups, already
+            labelled by the "High pain"/"Low pain" text under each violin. */}
+        <PanelAxes w={w} h={h} pad={pad} xlo={0} xhi={1} sx={() => 0} ylo={lo} yhi={hi}
+          sy={vyScale} xTicks={false} />
+        {[["high", highVals, w * 0.32], ["low", lowVals, w * 0.72]].map(([label, vals, cx]) => {
+          const path = violinPath(vals, cx, vyScale, w * 0.18);
+          return (
+            <g key={label}>
+              {path ? <polygon points={path} fill={colorFor(label)} opacity={0.35}
+                stroke={colorFor(label)} strokeWidth={1} /> : null}
+              {vals.map((v, i) => (
+                <circle key={i} cx={cx + (((i * 37) % 11) - 5) * 0.6} cy={vyScale(v)} r={1.6}
+                  fill={colorFor(label)} opacity={0.6} />
+              ))}
+              <text x={cx} y={h - 6} fontSize={9} textAnchor="middle" fill="#555">
+                {label === "high" ? "High pain" : "Low pain"}
+              </text>
+            </g>
+          );
+        })}
+        <text x={10} y={pad - 6} fontSize={9} fill="#555">Band power</text>
       </svg>
-      {!small ? (
-        <svg width={violinW} height={h}>
-          {[["high", highVals, violinW * 0.28], ["low", lowVals, violinW * 0.72]].map(([label, vals, cx]) => {
-            const path = violinPath(vals, cx, vyScale, violinW * 0.2);
-            return (
-              <g key={label}>
-                {path ? <polygon points={path} fill={colorFor(label)} opacity={0.35}
-                  stroke={colorFor(label)} strokeWidth={1} /> : null}
-                {vals.map((v, i) => (
-                  <circle key={i} cx={cx + (((i * 37) % 11) - 5) * 0.6} cy={vyScale(v)} r={1.6}
-                    fill={colorFor(label)} opacity={0.6} />
-                ))}
-                <text x={cx} y={h - 6} fontSize={9} textAnchor="middle" fill="#555">
-                  {label === "high" ? "High pain" : "Low pain"}
-                </text>
-              </g>
-            );
-          })}
-        </svg>
-      ) : null}
     </MDBox>
   );
 }
@@ -398,13 +667,13 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   const [howToReadOpen, setHowToReadOpen] = useState(false);
   const prevSettingsRef = useRef(null);
 
-  const [hoveredCorr, setHoveredCorr] = useState(null);
-  const [hoveredAuc, setHoveredAuc] = useState(null);
-  const [pinned, setPinned] = useState(null);      // { grid: 'correlation'|'auc', row, col, channel }
-  const [previewCell, setPreviewCell] = useState(null);
+  // ONE shared hover state and ONE shared pinned state, read by BOTH grids -- this is what makes
+  // hovering or clicking a cell in either grid highlight the SAME cell on the other one, and what
+  // lets one click populate both persistent side panels at once (open item 7, part 4d).
+  const [hoveredCell, setHoveredCell] = useState(null);       // { row, col } | null
+  const [pinnedCell, setPinnedCell] = useState(null);         // { row, col, channel, center, seconds }
   const [pinnedCellData, setPinnedCellData] = useState(null);
   const cellCacheRef = useRef(new Map());
-  const hoverTimerRef = useRef(null);
 
   const reqKey = requestParams ? JSON.stringify(requestParams) : null;
 
@@ -465,7 +734,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
     const keys = Object.keys(sweeps);
     if (keys.length && (!channel || !sweeps[channel])) setChannel(keys[0]);
     cellCacheRef.current = new Map();
-    setPinned(null); setPinnedCellData(null); setPreviewCell(null);
+    setPinnedCell(null); setPinnedCellData(null); setHoveredCell(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cachedGrid.data]);
 
@@ -507,7 +776,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   const aucSw = channel && aucSweeps[channel];
   const matchDirectionLabel = (aucSw && aucSw.match_direction) || (corrSw && corrSw.match_direction);
   // Medtronic-style display name for a raw channel key, matching "Recorded power channels" —
-  // reused everywhere this section names a contact pair (the pinned-cell header, panel titles).
+  // reused everywhere this section names a contact pair (the panel titles).
   const channelLabel = (ch) => {
     const sw = corrSweeps[ch] || aucSweeps[ch];
     if (sw && sw.display_short) {
@@ -531,27 +800,22 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
     });
   };
 
-  const handleHover = (gridKind, sw, row, col) => {
-    const setHovered = gridKind === "auc" ? setHoveredAuc : setHoveredCorr;
-    if (row == null || col == null) { setHovered(null); setPreviewCell(null); return; }
-    setHovered({ row, col });
-    const center = sw.center_freqs_hz[col];
-    const seconds = (sw.integration_seconds_requested || sw.integration_seconds_delivered)[row];
-    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
-    hoverTimerRef.current = setTimeout(() => {
-      setPreviewCell({ channel, center, seconds, grid: gridKind, row, col, loading: true,
-        r: (sw.correlation_grid[row] || [])[col], auc: (sw.auc_grid[row] || [])[col] });
-      fetchCell(channel, center, seconds).then((cell) => {
-        setPreviewCell((p) => (p && p.row === row && p.col === col && p.grid === gridKind
-          ? { ...p, ...cell, loading: false } : p));
-      });
-    }, 220);
+  // Hover is now cheap: it only moves the shared cross-highlight, no fetch. The persistent panels
+  // (part 4c) are driven by CLICK alone, per the redesign -- a click fetches once and both panels
+  // stay populated (and cross-linked to both grids) until the next click.
+  const handleHover = (row, col) => {
+    setHoveredCell(row == null || col == null ? null : { row, col });
   };
 
-  const handleClick = (gridKind, sw, row, col) => {
+  const handleClick = (sw, row, col) => {
     const center = sw.center_freqs_hz[col];
+    // The REQUESTED length of signal is what `band_time_sweep_cell_for_participant` keys its own
+    // internal lookup on (see bravo_service.py) -- it must be sent to the server exactly as is or
+    // the lookup misses. `secondsDisplay` (delivered) is what the axis and the panel titles show,
+    // so a reader never sees two different numbers for the one row they clicked.
     const seconds = (sw.integration_seconds_requested || sw.integration_seconds_delivered)[row];
-    setPinned({ grid: gridKind, row, col, channel, center, seconds });
+    const secondsDisplay = (sw.integration_seconds_delivered || sw.integration_seconds_requested)[row];
+    setPinnedCell({ row, col, channel, center, seconds, secondsDisplay });
     setPinnedCellData({ loading: true });
     fetchCell(channel, center, seconds).then((cell) => setPinnedCellData(cell));
   };
@@ -562,6 +826,8 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   // with an explanation until it does -- a follow-up wires the button live once Track D ships.
   const exportReady = !!(corrResult && (corrResult.closed_loop_export_key
     || corrResult.exported_to_closed_loop || (corrSw && corrSw.closed_loop_export_ready)));
+
+  const panelHeight = Math.max(180, ((corrSw && (corrSw.correlation_grid || []).length) || 0) * 20 + 60);
 
   return (
     <Card sx={{ width: "100%" }}>
@@ -620,57 +886,40 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
 
         {corrSw && aucSw ? (
           <>
-            {/* Stacked full-width rather than side by side (was xs=12 md=6 each): the grids are
-                the headline result of the page, so they get the full card width to render bigger,
-                with room for the axis titles added to Heatmap above. */}
-            <Grid container spacing={2}>
-              <Grid item xs={12}>
+            {/* Each grid sits at ~2/3 of its previous footprint, with a persistent panel to its
+                right at matching height (open item 7, parts 4b-4d): the scatter+fit panel next to
+                the correlation grid, the violin panel next to the AUC grid. A click on EITHER grid
+                populates BOTH panels (they describe the same cell) and highlights that cell on
+                BOTH grids; hovering either grid highlights the cell on both without fetching. */}
+            <Grid container spacing={2} alignItems="flex-start">
+              <Grid item xs={12} md={7}>
                 <MDTypography variant="button" fontWeight="bold" color="dark"
                   sx={{ fontSize: 15, display: "block", mb: 0.5 }}>
                   {"Correlation with pain — depends only on matching"}
                 </MDTypography>
-                <Heatmap sw={corrSw} kind="correlation" hovered={hoveredCorr}
-                  pinned={pinned && pinned.grid === "correlation" ? pinned : null}
-                  onHover={(r, c) => handleHover("correlation", corrSw, r, c)}
-                  onClick={(r, c) => handleClick("correlation", corrSw, r, c)} />
+                <PlotlyHeatmap divId="biomarker-heatmap-correlation" sw={corrSw} kind="correlation"
+                  hoveredCell={hoveredCell} pinnedCell={pinnedCell}
+                  onHover={handleHover} onClick={(r, c) => handleClick(corrSw, r, c)} />
               </Grid>
-              <Grid item xs={12}>
+              <Grid item xs={12} md={5}>
+                <ScatterFitPanel cell={pinnedCellData} pinnedCell={pinnedCell}
+                  channelLabel={channelLabel} height={panelHeight} />
+              </Grid>
+
+              <Grid item xs={12} md={7}>
                 <MDTypography variant="button" fontWeight="bold" color="dark"
                   sx={{ fontSize: 15, display: "block", mb: 0.5 }}>
                   {"High vs low pain (AUC) — also depends on the binarization cuts above"}
                 </MDTypography>
-                <Heatmap sw={aucSw} kind="auc" hovered={hoveredAuc}
-                  pinned={pinned && pinned.grid === "auc" ? pinned : null}
-                  flashKey={aucFlashKey}
-                  onHover={(r, c) => handleHover("auc", aucSw, r, c)}
-                  onClick={(r, c) => handleClick("auc", aucSw, r, c)} />
+                <PlotlyHeatmap divId="biomarker-heatmap-auc" sw={aucSw} kind="auc"
+                  hoveredCell={hoveredCell} pinnedCell={pinnedCell} flashKey={aucFlashKey}
+                  onHover={handleHover} onClick={(r, c) => handleClick(aucSw, r, c)} />
+              </Grid>
+              <Grid item xs={12} md={5}>
+                <ViolinPanel cell={pinnedCellData} pinnedCell={pinnedCell}
+                  channelLabel={channelLabel} height={panelHeight} />
               </Grid>
             </Grid>
-
-            {previewCell ? (
-              <MDBox mt={1.5} sx={{ border: "1px solid #ddd", borderRadius: 1.5, p: 1, background: "#fafafa" }}>
-                <MDTypography variant="caption" fontWeight="bold" color="dark" sx={{ fontSize: 11 }}>
-                  {`Preview: ${previewCell.center} Hz, ${previewCell.seconds} s of signal — `}
-                  {`r = ${num(previewCell.r, 3)}, AUC = ${num(previewCell.auc, 3)}`}
-                </MDTypography>
-                <CellFigure cell={previewCell} small />
-              </MDBox>
-            ) : (
-              <MDTypography variant="caption" color="dark" fontStyle="italic"
-                sx={{ fontSize: 11, display: "block", mt: 1 }}>
-                {"Hover a cell for a quick preview; click one to pin the full detail below."}
-              </MDTypography>
-            )}
-
-            {pinned ? (
-              <MDBox mt={2} sx={{ border: `2px solid ${PAL.accentBorder || "#0072B2"}`, borderRadius: 2, p: 1.5 }}>
-                <MDTypography variant="button" fontWeight="bold" color="dark"
-                  sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
-                  {`${channelLabel(pinned.channel)} · ${pinned.center} Hz · ${pinned.seconds} s of signal`}
-                </MDTypography>
-                <CellFigure cell={pinnedCellData} />
-              </MDBox>
-            ) : null}
 
             <MDBox mt={1.5}>
               <MDBox display="flex" alignItems="center" sx={{ cursor: "pointer" }}
@@ -705,9 +954,16 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
                      + "that a configuration is ready for the device."}
                   </MDTypography>
                   <MDTypography variant="caption" color="dark"
-                    sx={{ fontSize: 11.5, display: "block", lineHeight: 1.45 }}>
+                    sx={{ fontSize: 11.5, display: "block", mb: 0.4, lineHeight: 1.45 }}>
                     {"• For the right grid, 0.5 means no ability to tell high pain from low "
                      + "pain apart — not 0. The colour scale is centred on 0.5."}
+                  </MDTypography>
+                  <MDTypography variant="caption" color="dark"
+                    sx={{ fontSize: 11.5, display: "block", lineHeight: 1.45 }}>
+                    {"• The Pearson r/p and Welch t-test shown when you click a cell are plain, "
+                     + "single-cell statistics computed on the spot from that cell's own points — "
+                     + "not the grid's own permutation- and bootstrap-corrected numbers, which "
+                     + "exist only for each column's single best-of-ten-lengths row."}
                   </MDTypography>
                 </MDBox>
               </Collapse>
