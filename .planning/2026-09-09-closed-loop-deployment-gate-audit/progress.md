@@ -57,3 +57,53 @@
 | Error | Resolution |
 |-------|------------|
 | Host suite (ClosedLoopDeployment/tests, StimOptimizer/tests) could not be run: no `pytest` module on any of this sandbox's Python interpreters, nor inside the live container. | Ran a substitute cross-module import check instead; disclosed the gap explicitly to the user rather than claiming the suite ran. |
+
+## Session: 2026-09-09 (continued) — actually running the host suite
+
+### Current Status
+- **Phase:** 4 - complete
+
+### Actions Taken
+- User asked to install pytest on their local machine or the OrbStack server and actually run the
+  host suite, rather than leaving it as an acknowledged gap.
+- `python3-venv` is not installed in the container, so an isolated virtual environment (the safer
+  route, avoiding any system-Python change) was not available; installed pytest directly with
+  `pip install --break-system-packages pytest` instead, as the user's own instruction authorized
+  installing it on the server.
+- Ran `PYTHONPATH=. python3 -B -m pytest ClosedLoopDeployment/tests StimOptimizer/tests
+  CacheStore/tests DecodeCommon/tests -q -W ignore` inside the container against the live-mounted
+  source (the same source tree `git status` shows, not a copy). Result: 990 passed, 42 skipped,
+  1 failed.
+- Investigated the failure rather than reporting the raw number: re-ran the single failing test in
+  isolation (still failed, ruling out test-order pollution), then read `CacheStore/store.py`'s
+  `root_dir()` directly and found it falls through to the real, Django-configured production cache
+  root whenever the test's monkeypatched override is `None` -- the test's own premise ("no directory
+  configured means nowhere to write") only holds in the bare host environment this suite was
+  designed for, which has no `DATASERVER_PATH` set; the live container does have one. Confirmed
+  neither `CacheStore/store.py` nor `ClosedLoopDeployment/adapter.py` was touched by this session's
+  own edits (decision 83 only touched `Biomarkers/bravo_service.py` and two frontend files).
+- Investigated whether the test's own write (which this discovery showed lands in the REAL cache
+  root) had a real side effect: read `_sweep_superseded` and found its eviction marker never
+  actually varies by participant for the `_shared_store` call path (`participant_uid` is always
+  passed as `None`), even though the participant identity is already inside the signature. Confirmed
+  the `"inputs"`-kind cache directory was empty immediately after the test run, consistent with the
+  throwaway test write evicting whatever real entry was resident. Assessed this as self-healing (a
+  cache miss the store's own design already treats as routine, not a correctness issue) and recorded
+  the underlying scoping gap as a new, separate, flagged-not-fixed finding (open item 25) rather than
+  silently fixing infrastructure outside what was asked.
+- Cleaned up the three scratch probe scripts used for this investigation (gitignored, `_agent_bridge/_*`).
+- `DECISIONS_and_open_items.md` decision 84 and open item 25 added. Committed and pushed (docs only;
+  no source files changed by this phase).
+
+### Test Results
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| Host suite (real `pytest`, run inside the container against the live-mounted source) | Reflects any real regression from decision 83's edits | 990 passed, 42 skipped, 1 failed -- the 1 failure traced to a pre-existing environment mismatch unrelated to decision 83's edited files | Pass (no regression found) |
+| Failing test re-run in isolation | Rules out test-order pollution | Failed the same way standalone | Confirms genuine, reproducible mismatch, not flakiness |
+
+### Errors
+| Error | Resolution |
+|-------|------------|
+| `pip install pytest` refused by PEP 668 (externally-managed environment); `python3 -m venv` failed (`ensurepip` unavailable, needs `python3.12-venv` via apt). | Used `pip install --break-system-packages pytest`, the user's own explicitly-authorized path ("install pytest ... on the OrbStack server"), since no venv tooling was available as the safer alternative. |
+| `test_no_directory_means_memory_only_and_not_a_failure` failed inside the container. | Root-caused (not assumed) to `store.root_dir()` falling through to the real, Django-configured cache root when the container has a live `DATASERVER_PATH` -- a mismatch between the test's bare-host assumption and the live container it actually ran in, not a regression from this session's edits. |
+| The failing test's own write triggered a real cache eviction (`_sweep_superseded`) against the live production cache directory. | Confirmed self-healing (next real request rebuilds and re-caches); the underlying participant-scoping gap that made this possible is recorded as open item 25 for the PI, not fixed in this pass. |

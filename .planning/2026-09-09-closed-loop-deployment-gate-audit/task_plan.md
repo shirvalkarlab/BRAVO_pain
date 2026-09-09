@@ -10,12 +10,17 @@ and what the code actually enforces, and — if the PI approves — fix confirme
 Complete. Both confirmed defects found in the audit (decision 82) are fixed (decision 83), tested
 (2 new pure-function unit tests, container suite 582->584/0), live-proven on RCS08 for the exact
 documented disagreement case (ONE_THREE_LEFT at 12.5 Hz), and two confirmed-dead frontend files
-deleted. Committed and pushed. The host suite (ClosedLoopDeployment/StimOptimizer, pytest-based)
-could NOT be run this session — pytest is unavailable both on this sandbox and inside the live
-container — disclosed to the user rather than claimed. Nothing left queued.
+deleted. Committed and pushed. **The host suite WAS subsequently run** (decision 84), at the user's
+follow-up request, by installing pytest inside the live container (`--break-system-packages`, no
+venv tooling available): 990 passed, 42 skipped, 1 failed. The one failure is a pre-existing
+environment-assumption mismatch in the test itself (it assumes no `DATASERVER_PATH` is configured,
+true only in the bare host env this suite was designed for, not inside the live container), not a
+regression from anything this session changed — confirmed by reading `store.py`'s `root_dir()`
+directly. Running it also surfaced a real, self-healing cache-eviction side effect and a genuine,
+separate, flagged-not-fixed scoping gap in `_sweep_superseded` (open item 25). Nothing left queued.
 
 ## Current Phase
-Phase 3 (final)
+Phase 4 (final)
 
 ## Phases
 
@@ -80,6 +85,31 @@ Phase 3 (final)
       the one-way-import edge this fix depends on not inverting) and disclosed the gap honestly
       rather than claiming a suite run that didn't happen.
 - [x] `DECISIONS_and_open_items.md` decision 83 added, with both live proof numbers.
+- **Status:** complete
+
+### Phase 4: Actually run the host suite, at the user's follow-up request
+- [x] Installed pytest inside the live container (`pip install --break-system-packages pytest`) —
+      `python3-venv` is not installed, so a proper isolated virtual environment (the safer route)
+      was not available; installed directly into the container's system Python instead, as the user
+      explicitly authorized ("install pytest ... on the OrbStack server").
+- [x] Ran `PYTHONPATH=. python3 -B -m pytest ClosedLoopDeployment/tests StimOptimizer/tests
+      CacheStore/tests DecodeCommon/tests -q -W ignore` against the live-mounted source. Result:
+      990 passed, 42 skipped, 1 failed.
+- [x] Investigated the one failure by reading the code, not assuming: confirmed it reproduces in
+      isolation (not test-order pollution), then traced it to `CacheStore/store.py`'s `root_dir()`
+      falling through to the real `DATASERVER_PATH`-derived production root when the test's
+      monkeypatched override is `None` — a mismatch between the test's assumption (no directory
+      configured means "nowhere to write") and the live container's actual, fully-configured Django
+      settings. None of decision 83's edited files are involved.
+- [x] Investigated the real side effect of the test's own write inside the live container: read
+      `_sweep_superseded` directly and found it keys eviction on `participant_uid is None`, which
+      `ClosedLoopDeployment.adapter._shared_store` always passes regardless of the real participant
+      — confirmed the `"inputs"`-kind cache directory was empty immediately after, consistent with
+      the test's throwaway write evicting whatever real entry was resident. Confirmed this is
+      self-healing (next real request rebuilds and re-caches, per the already-documented cold/warm
+      timings) and recorded the underlying scoping gap as new open item 25, flagged not fixed.
+- [x] `DECISIONS_and_open_items.md` decision 84 added with the real suite numbers, the root-cause
+      analysis, and open item 25.
 - **Status:** complete
 
 ## Decisions Made
