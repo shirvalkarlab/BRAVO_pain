@@ -727,8 +727,8 @@ def build_pooled_psd_detail(psd_rows, pro_times_s, pro_values, *, tolerance_min=
 
     Returns
     -------
-    dict shaped like compute_psd_pain_correlation's output (so spectral_feature_importance consumes
-    it unchanged) with `prelog=True`, channel axis = the bipolar channels found, plus `pool_meta`.
+    dict shaped like compute_psd_pain_correlation's output, with `prelog=True`, channel axis = the
+    bipolar channels found, plus `pool_meta`.
     """
     mat = psd_rows_to_matrix(psd_rows, f_set=f_set)
     if mat is None:
@@ -816,10 +816,9 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
     # Per-row source tag (unchanged z-score machinery uses src_arr directly; the short
     # _lsb_tier tag is kept so callers can label rows as td/survey/patient_event in the UI).
     # NOTE: the old Welch-density × k=269 / device-FFT rescale path was REMOVED 2026-06-27 (PI).
-    # Per-band LSB for the spectral scan now comes from the shared per-pair cache (CS-1…CS-4 routes,
-    # k=352.62 transform / k≈73.63 bridge) via bravo_service._pro_lsb_spectrum_cached, threaded in
-    # as `pro_lsb_spectrum_by_channel` to spectral_feature_importance. psd_abs_uv2_per_hz and
-    # device_psd_scale_by_channel are no longer emitted from this function.
+    # Per-band LSB now comes from the shared per-pair cache (CS-1…CS-4 routes, k=352.62 transform /
+    # k≈73.63 bridge) via availability.live_lsb_spectrum_match, not from this routine.
+    # psd_abs_uv2_per_hz and device_psd_scale_by_channel are no longer emitted from this function.
     src_str = np.array([str(s) for s in src_arr]) if src_arr.size else np.zeros(0, dtype=object)
     _is_td = np.isin(src_str, ("TD streaming", "Montage/survey")) if src_str.size else np.zeros(0, bool)
     _lsb_tier = np.full(src_str.shape, "patient_event", dtype=object)
@@ -1026,8 +1025,7 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
         # "aggregated") and the row's channel.
         # NOTE: psd_abs_uv2_per_hz and device_psd_scale_by_channel were REMOVED 2026-06-27 (PI).
         # The old Welch × k=269 / device-FFT rescale path is superseded by the CS-1…CS-4
-        # transform/bridge cache (bravo_service._pro_lsb_spectrum_cached), threaded into
-        # spectral_feature_importance as `pro_lsb_spectrum_by_channel`.
+        # transform/bridge cache, read via availability.live_lsb_spectrum_match.
         "row_source": np.asarray(src_arr, dtype=object),
         "row_channel": np.asarray(ch_arr, dtype=object),
         # Per-row source tier: "td" | "survey" | "patient_event". Used for UI fidelity display.
@@ -1038,7 +1036,7 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
         "aggregate": aggregate,
         "chan_order": chan_order,
         "times": [_dt.datetime.utcfromtimestamp(float(t)).isoformat(sep=" ") for t in t_arr],
-        "prelog": True,                      # spectral_feature_importance: do NOT re-log
+        "prelog": True,                      # already log-scaled above: do NOT re-log
         "transform": "log_zscore_within_channel_source",
         "pool_meta": {
             "n_psds": int(N),

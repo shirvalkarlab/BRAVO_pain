@@ -754,10 +754,9 @@ def _pro_lsb_by_channel(pro_times, lsb, td_recordings, event_psd_blocks,
     return out
 
 
-# Default band-center grid for the shared per-pair LSB spectrum: full 0–100 Hz, the same span the
-# spectral feature-importance scan covers. Centers on the half-integer grid at 1 Hz step (matching the
-# scan's default w/2 start); callers can request a different grid (e.g. the timeline's exact sensing
-# center) from the SAME builder, so a timeline marker and a spectral point at one center are identical.
+# Default band-center grid for the shared per-pair LSB spectrum: full 0-100 Hz on the half-integer
+# grid at 1 Hz step; callers can request a different grid (e.g. the timeline's exact sensing center)
+# from the SAME builder, so a timeline marker and a spectral point at one center are identical.
 _LSB_SPECTRUM_CENTERS = tuple(float(c) for c in np.arange(2.5, 100.0, 1.0))
 
 
@@ -4029,13 +4028,12 @@ def run_for_participant(request_data):
     psd_matrix = _cached_psd_matrix(participant_uid, pro_times=_all_pro_times(pro_df),
                force_refresh=_force_refresh)
 
-    # Per-pair LSB spectrum cache for the SPECTRAL SCAN. The per-band LSB the scan reads is indexed by
-    # `rating_group`, which is the position of each matched PSD's PRO in `pro_match[0]` (the
+    # Per-pair LSB spectrum cache for the live matching-controls caption (live_match_stats, read via
+    # _live_pro_lsb_spectrum below). Its per-PRO indexing is by position in `pro_match[0]` (the
     # metric-FILTERED PRO set — only ratings with a finite label_metric). So the cache MUST be built
-    # from that exact array: _scan_pro_times = pro_match[0]. analytics.spectral_feature_importance does
-    # `ch_spectra[int(rating_group[i])]`, so len(ch_spectra) == len(pro_match[0]) is the bounds
-    # invariant — do not substitute pain["t"] (the metric-AGNOSTIC set the timeline uses) here, or the
-    # index would point at the wrong PRO. The timeline's modeled markers build their OWN cache entry
+    # from that exact array: _scan_pro_times = pro_match[0] — do not substitute pain["t"] (the
+    # metric-AGNOSTIC set the timeline uses) here, or the index would point at the wrong PRO. The
+    # timeline's modeled markers build their OWN cache entry
     # from pain["t"] in _build_availability under a DIFFERENT signature; the two entries agree on any
     # shared PRO because per_pro_lsb_spectrum is deterministic in (pro_time, channel, recordings) — the
     # numbers match by construction, NOT by sharing one memo slot. td_recordings = ALL TD-bearing

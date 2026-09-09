@@ -465,244 +465,6 @@ def test_cv_logistic_auc_oriented_and_guards_small_n():
     assert np.isnan(analytics._cv_logistic_auc(x, np.ones_like(y))[0])  # single class -> NaN
 
 
-def test_spectral_feature_importance_finds_planted_band():
-    det = _planted_detail(center=17.5, beta=0.5)
-    sc = analytics.spectral_feature_importance(det, strategy="tertile")
-    assert len(sc["centers"]) == 96 and sc["adaptive_band"] == [8.0, 30.0]
-    ch0 = sc["channels"][0]
-    absr = [abs(x) if x is not None else 0 for x in ch0["r"]]
-    bi = int(np.argmax(absr))
-    # planted band 15-20 Hz; the peak 5 Hz scan-band center sits within +/- one band-half of 17.5
-    assert abs(sc["centers"][bi] - 17.5) <= 2.5, sc["centers"][bi]
-    assert ch0["auc"][bi] is not None and ch0["scatter"][bi] is not None
-    # adaptive_valid now flags by CENTER (not full-band-inside), so the green tint spans
-    # [8, 30] Hz center-wise. On the 1.0 Hz-step, half-integer grid the first adaptive center is 8.5 Hz
-    # and the last is 29.5 Hz (== largest center ≤ 30.0).
-    cen = np.array(sc["centers"]); av = np.array([b["adaptive_valid"] for b in sc["bands"]])
-    assert cen[av].min() == 8.5 and cen[av].max() == 29.5
-
-
-def test_auc_signed_reflects_correlation_direction():
-    """R1/audit A1: the folded `auc` is always >= 0.5, so it cannot show direction. `auc_signed`
-    must reflect the band's correlation sign — a band whose feature RISES with pain reads > 0.5, one
-    that FALLS with pain reads < 0.5 — and must satisfy signed == auc or 1-auc band-by-band."""
-    # Positive-correlation planted band (feature rises with pain).
-    sc_pos = analytics.spectral_feature_importance(_planted_detail(center=17.5, beta=0.6, seed=1),
-                                                   strategy="tertile")
-    ch = sc_pos["channels"][0]
-    assert "auc_signed" in ch and len(ch["auc_signed"]) == len(ch["auc"])
-    bi = int(np.argmax([abs(x) if x is not None else 0 for x in ch["r"]]))
-    assert ch["r"][bi] is not None and ch["r"][bi] > 0, ch["r"][bi]
-    assert ch["auc"][bi] >= 0.5                       # folded is always >= chance
-    assert ch["auc_signed"][bi] >= 0.5                # rises with pain -> signed >= chance
-    # Negative-correlation planted band (feature falls with pain): folded still >= 0.5, signed < 0.5.
-    sc_neg = analytics.spectral_feature_importance(_planted_detail(center=17.5, beta=-0.6, seed=1),
-                                                   strategy="tertile")
-    chn = sc_neg["channels"][0]
-    bn = int(np.argmax([abs(x) if x is not None else 0 for x in chn["r"]]))
-    assert chn["r"][bn] is not None and chn["r"][bn] < 0, chn["r"][bn]
-    assert chn["auc"][bn] >= 0.5                       # folded hides the sign
-    assert chn["auc_signed"][bn] <= 0.5               # falls with pain -> signed below chance
-    # Band-by-band relationship: signed is either the folded value or its reflection.
-    for a, s in zip(chn["auc"], chn["auc_signed"]):
-        if a is None:
-            assert s is None
-        else:
-            assert (abs(s - a) < 1e-9) or (abs(s - (1.0 - a)) < 1e-9), (a, s)
-
-
-def test_selected_band_is_per_contact_and_signed():
-    """R2/audit A2: each channel carries a `selected_band` naming its own best band + sign. The
-    planted band must be selected, with the correct direction, and never a single global band."""
-    sc = analytics.spectral_feature_importance(_planted_detail(center=17.5, beta=0.6, seed=2),
-                                               strategy="tertile")
-    # Every channel has a selected_band entry (channel 1 has no planted signal but still gets a pick).
-    assert all("selected_band" in ch for ch in sc["channels"])
-    sb0 = sc["channels"][0]["selected_band"]
-    assert sb0 is not None
-    assert abs(sb0["center_hz"] - 17.5) <= 2.5, sb0          # picked the planted band
-    assert sb0["sign"] == "positive" and sb0["direction"] == "elevation", sb0
-    assert sb0["rho"] is not None and sb0["rho"] > 0
-    # Negative planted band -> suppression direction on its selected band.
-    scn = analytics.spectral_feature_importance(_planted_detail(center=17.5, beta=-0.6, seed=2),
-                                                strategy="tertile")
-    sbn = scn["channels"][0]["selected_band"]
-    assert sbn["sign"] == "negative" and sbn["direction"] == "suppression", sbn
-    assert sbn["auc_signed"] is not None and sbn["auc_signed"] <= 0.5, sbn
-
-
-def test_spectral_scan_lsb_feature_cs14_td_and_full_spectrum():
-    """LSB feature mode (CS-1…CS-4 cache, PI 2026-06-27): when pro_lsb_spectrum_by_channel is
-    provided, the band feature is log10(CS-14 LSB) from the cache, covering the full 0–100 Hz scan.
-    Validates: (1) feature == 'lsb_cs14'; (2) full scan centers 2.5–97.5 Hz;
-    (3) adaptive_valid True only for centers in [8, 30] Hz;
-    (4) the planted band is recovered from the cache values;
-    (5) logpsd fallback when no cache is provided."""
-    det = _planted_detail(center=17.5, beta=0.5, seed=3)
-    cen_grid = np.arange(2.5, 100.0, 1.0)
-    E = det["psd"].shape[0]
-    labels = det["labels"]
-    rgroup = np.arange(E)
-    det["rating_group"] = rgroup
-
-    # Build a synthetic cache: one spectrum per PRO for channel ZERO_TWO_LEFT.
-    # Plant strong LSB at ~17.5 Hz for matched rows; unmatched rows get None.
-    ch = "ZERO_TWO_LEFT"
-    planted_center = 17.5
-    spectra = []
-    for i in range(E):
-        if not np.isfinite(labels[i]):
-            spectra.append({"t": 0.0, "tier": None, "lsb": [None] * len(cen_grid),
-                            "calibrated": [False] * len(cen_grid),
-                            "center_hz": list(cen_grid)})
-            continue
-        lsb_vec = []
-        for c in cen_grid:
-            if abs(c - planted_center) <= 2.5:
-                lsb_vec.append(500.0 + float(labels[i]) * 20.0)  # correlated with pain
-            else:
-                lsb_vec.append(100.0)
-        # TD-transform: calibrated=True for any finite band (k=352.62 is band-agnostic).
-        # Only the CS-3 bridge gates calibrated by [7.8,30] Hz.
-        cal = [True] * len(cen_grid)
-        spectra.append({"t": 0.0, "tier": "td_transform", "lsb": lsb_vec,
-                        "calibrated": cal, "center_hz": list(cen_grid)})
-
-    cache = {ch: spectra}
-    sc = analytics.spectral_feature_importance(det, strategy="tertile", feature="lsb",
-                                               pro_lsb_spectrum_by_channel=cache)
-    assert sc["feature"] == "lsb_cs14", sc["feature"]
-    assert "352.62" in sc["feature_note"] or "CS-1" in sc["feature_note"]
-    cen = np.array(sc["centers"])
-    # Full 0–100 Hz scan
-    assert abs(cen.min() - 2.5) < 1e-9 and abs(cen.max() - 97.5) < 1e-9, (cen.min(), cen.max())
-    # adaptive_valid flagged by center in [8, 30]
-    av = np.array([b["adaptive_valid"] for b in sc["bands"]])
-    assert av.any() and not av.all()
-    assert cen[av].min() >= 8.0 - 1e-9 and cen[av].max() <= 30.0 + 1e-9
-    # Planted band (~17.5 Hz) should have strongest |r|
-    ch0 = sc["channels"][0]
-    bi = int(np.nanargmax([abs(x) if x is not None else 0 for x in ch0["r"]]))
-    assert abs(cen[bi] - planted_center) <= 3.0, cen[bi]
-    # Fallback: no cache -> logpsd_db
-    sc2 = analytics.spectral_feature_importance(det, strategy="tertile", feature="lsb")
-    assert sc2["feature"] == "logpsd_db", sc2["feature"]
-
-
-def test_spectral_scan_lsb_cs14_cache_lookup_per_pro():
-    """Cache lookup correctness: per matched row, the scan looks up the PRO index in the cache
-    and assigns log10(cache_lsb) for that band. Rows with no cache entry (tier=None) get NaN.
-    Verifies: (1) matched rows with TD LSB produce finite bp_log; (2) unmatched rows produce NaN;
-    (3) source priority is already enforced by the cache (TD > survey > bridge), not by the scan."""
-    f = np.linspace(0.95, 100, 60)
-    E = 4
-    cen_grid = np.arange(2.5, 100.0, 1.0)
-    ci17 = int(np.argmin(np.abs(cen_grid - 17.5)))
-    labels = np.array([8.0, 5.0, np.nan, 2.0])
-    rgroup = np.array([0, 1, -1, 2])
-    psd = np.random.default_rng(42).normal(0, 1, (E, 1, 60))
-    det = {
-        "f_set": f, "psd": psd, "labels": labels,
-        "row_source": np.array(["TD streaming"] * E, dtype=object),
-        "row_lsb_tier": np.array(["td"] * E, dtype=object),
-        "row_channel": np.array(["ZERO_TWO_LEFT"] * E, dtype=object),
-        "rating_group": rgroup,
-        "chan_order": ["ZERO_TWO_LEFT"],
-        "times": [f"2025-07-{1+i:02d} 10:00:00" for i in range(E)],
-        "prelog": True,
-    }
-    # PRO 0: LSB=400 at band 17.5; PRO 1: LSB=600; PRO 2: all None (no source)
-    def _spec(lsb_at_17):
-        lsb = [lsb_at_17 if i == ci17 else 100.0 for i in range(len(cen_grid))]
-        # TD-transform: calibrated=True everywhere (k=352.62 is band-agnostic)
-        cal = [True] * len(cen_grid)
-        return {"t": 0.0, "tier": "td_transform", "lsb": lsb,
-                "calibrated": cal, "center_hz": list(cen_grid)}
-    none_spec = {"t": 0.0, "tier": None, "lsb": [None]*len(cen_grid),
-                 "calibrated": [False]*len(cen_grid), "center_hz": list(cen_grid)}
-    cache = {"ZERO_TWO_LEFT": [_spec(400), _spec(600), none_spec]}
-    sc = analytics.spectral_feature_importance(det, strategy="tertile", feature="lsb",
-                                               low_pct=50.0, high_pct=50.0,
-                                               pro_lsb_spectrum_by_channel=cache)
-    assert sc["feature"] == "lsb_cs14"
-    # Find band at ~17.5 Hz
-    cen = np.array(sc["centers"])
-    bi = int(np.argmin(np.abs(cen - 17.5)))
-    ch0 = sc["channels"][0]
-    scat = ch0["scatter"][bi]
-    if scat is not None:
-        xs = [v for v in scat["x"] if v is not None]
-        assert len(xs) >= 2          # at least PRO 0 and PRO 1 contribute
-        expect0 = float(np.log10(400.0)); expect1 = float(np.log10(600.0))
-        assert any(abs(x - expect0) < 1e-6 for x in xs), (xs, expect0)
-        assert any(abs(x - expect1) < 1e-6 for x in xs), (xs, expect1)
-
-
-def test_spectral_scan_lsb_cs14_vectorized_scatter_assigns_correct_pro_per_band():
-    """The vectorized (E, n_cache_centers) LSB matrix must assign each epoch row the LSB of ITS
-    PRO at the right band — distinct PROs and distinct bands. Guards the Finding-2 rewrite (per-band
-    column gather replacing the per-row Python loop): a transposed scatter or a wrong
-    rating_group→row mapping would surface here.
-
-    De-dup contract (2026-06-28): the scatter collapses to ONE observation per distinct rating
-    (rating_group), because plotting one marker per matched PSD overplots all rows that share a
-    rating onto the same (x, y) pixel and inflates the headline n. With two PSDs per PRO below, the
-    scatter must therefore emit ONE point per PRO (3), each carrying that PRO's per-band LSB — NOT
-    one point per matched row (6). Both rows of a PRO carry the identical per-band LSB (the cache is
-    keyed by rating_group), so first-wins de-dup yields the same value either row wins."""
-    f = np.linspace(0.95, 100, 60)
-    cen_grid = np.arange(2.5, 100.0, 1.0)
-    ci10 = int(np.argmin(np.abs(cen_grid - 10.5)))
-    ci40 = int(np.argmin(np.abs(cen_grid - 40.5)))
-    # 6 epoch rows: rows {0,1}->PRO0, {2,3}->PRO1, {4,5}->PRO2 (two PSDs per PRO, pro_first style)
-    E = 6
-    labels = np.array([8.0, 8.0, 4.0, 4.0, 1.0, 1.0])
-    rgroup = np.array([0, 0, 1, 1, 2, 2])
-    psd = np.random.default_rng(7).normal(0, 1, (E, 1, 60))
-    det = {
-        "f_set": f, "psd": psd, "labels": labels,
-        "row_source": np.array(["TD streaming"] * E, dtype=object),
-        "row_lsb_tier": np.array(["td"] * E, dtype=object),
-        "row_channel": np.array(["ZERO_TWO_LEFT"] * E, dtype=object),
-        "rating_group": rgroup,
-        "chan_order": ["ZERO_TWO_LEFT"],
-        "times": [f"2025-07-{1+i:02d} 10:00:00" for i in range(E)],
-        "prelog": True,
-    }
-    # Each PRO has DISTINCT LSB at the 10.5 and 40.5 Hz bands.
-    def _spec(lsb10, lsb40):
-        lsb = [100.0] * len(cen_grid)
-        lsb[ci10] = lsb10; lsb[ci40] = lsb40
-        return {"t": 0.0, "tier": "td_transform", "lsb": lsb,
-                "calibrated": [True] * len(cen_grid), "center_hz": list(cen_grid)}
-    cache = {"ZERO_TWO_LEFT": [_spec(200.0, 700.0), _spec(300.0, 800.0), _spec(500.0, 900.0)]}
-    sc = analytics.spectral_feature_importance(det, strategy="tertile", feature="lsb",
-                                               low_pct=50.0, high_pct=50.0,
-                                               pro_lsb_spectrum_by_channel=cache)
-    assert sc["feature"] == "lsb_cs14"
-    cen = np.array(sc["centers"])
-    ch0 = sc["channels"][0]
-    # De-dup must have fired (3 distinct ratings from 6 matched rows), and the headline count must
-    # equal the rendered point count — the integrity invariant the de-dup exists to guarantee.
-    bi10 = int(np.argmin(np.abs(cen - 10.5)))
-    scat10 = ch0["scatter"][bi10]
-    assert scat10 and scat10.get("dedup_by_rating") is True, scat10
-    assert scat10["n_obs"] == 3 and scat10["n_rows"] == 6, (scat10["n_obs"], scat10["n_rows"])
-    ng = scat10["n_grp"]; assert ng["high"] + ng["low"] + ng["mid"] == 3, ng
-    # At the 10.5 Hz band: PRO0 -> 200.0; PRO1 -> 300.0; PRO2 -> 500.0 (raw LSB, one each).
-    xs10 = sorted(v for v in (scat10["x"] if scat10 else []) if v is not None)
-    exp10 = sorted([200.0, 300.0, 500.0])
-    assert len(xs10) == 3, xs10
-    assert all(abs(a - b) < 1e-6 for a, b in zip(xs10, exp10)), (xs10, exp10)
-    # At the 40.5 Hz band: the SAME PROs map to the 40-band LSBs (distinct from 10-band), de-duped.
-    bi40 = int(np.argmin(np.abs(cen - 40.5)))
-    scat40 = ch0["scatter"][bi40]
-    xs40 = sorted(v for v in (scat40["x"] if scat40 else []) if v is not None)
-    exp40 = sorted([700.0, 800.0, 900.0])
-    assert len(xs40) == 3, xs40
-    assert all(abs(a - b) < 1e-6 for a, b in zip(xs40, exp40)), (xs40, exp40)
-
-
 def test_builder_no_device_psd_scale_in_detail():
     """device_psd_scale_by_channel and psd_abs_uv2_per_hz were REMOVED from build_pooled_detail
     (PI 2026-06-27). Validates: (1) neither key is present in the returned detail;
@@ -735,65 +497,6 @@ def test_builder_no_device_psd_scale_in_detail():
     assert tiers[4:7] == ["patient_event"] * 3, tiers[4:7]
     valid_tiers = {"td", "survey", "patient_event"}
     assert all(t in valid_tiers for t in tiers), tiers
-
-
-def test_spectral_scan_lsb_falls_back_without_abs_density():
-    """No pro_lsb_spectrum_by_channel cache passed (e.g. back-compat caller) -> feature="lsb" degrades
-    to the legacy dB feature ("logpsd_db") rather than failing, and the full range is scanned."""
-    det = _planted_detail(center=20.0, beta=0.4, seed=11)
-    sc = analytics.spectral_feature_importance(det, strategy="tertile", feature="lsb")
-    assert sc["feature"] == "logpsd_db", sc["feature"]
-    assert len(sc["centers"]) == 96    # unrestricted range when not LSB-calibrated
-
-
-def test_spectral_scan_prelog_matches_linear():
-    """prelog=True (mean over already-log bins) must match log10(mean linear) closely in r."""
-    lin = _planted_detail(center=20.0, beta=0.4, seed=7, prelog=False)
-    pre = dict(lin); pre["psd"] = 10.0 * np.log10(lin["psd"]); pre["prelog"] = True
-    r_lin = analytics.spectral_feature_importance(lin, strategy="tertile")["channels"][0]["r"]
-    r_pre = analytics.spectral_feature_importance(pre, strategy="tertile")["channels"][0]["r"]
-    # Spearman-free: signs and rough magnitude of the strongest band agree.
-    bi = int(np.argmax([abs(x) if x is not None else 0 for x in r_lin]))
-    assert r_pre[bi] is not None and np.sign(r_pre[bi]) == np.sign(r_lin[bi])
-
-
-def test_spectral_scan_emits_fdr_qs_and_summary():
-    """Rigor pass: scan output exposes per-band q (rating-clustered logit + naive Pearson) and a
-    family-level fdr_summary. Validates: keys exist; q is None exactly where p is None; q >= p for
-    every finite pair (BH never makes a p smaller); summary counts agree with the per-band q masks."""
-    # Strong, isolated planted band — needs enough power that rating-clustered logit (not just
-    # naive Pearson) clears BH on a modest fixture. Real RCS08 data has hundreds of bands; this
-    # fixture has 96. The clustered-logit FDR threshold is therefore steeper here than on real
-    # data; the point of the test is to verify wiring, not detection sensitivity.
-    det = _planted_detail(center=17.5, beta=1.2, E=200)
-    sc = analytics.spectral_feature_importance(det, strategy="tertile")
-    # Per-channel arrays present and aligned
-    for ch in sc["channels"]:
-        assert "q" in ch and "q_pearson" in ch and "is_fdr_sig" in ch, list(ch.keys())
-        assert len(ch["q"]) == len(ch["p"]) == len(ch["centers"]) if "centers" in ch else True
-        assert len(ch["q"]) == len(ch["p"])
-        # None alignment: q is None iff p is None (we never invent significance for missing p)
-        for q, p in zip(ch["q"], ch["p"]):
-            assert (q is None) == (p is None)
-        # BH monotonicity: q >= p for every finite pair (BH never deflates)
-        for q, p in zip(ch["q"], ch["p"]):
-            if q is not None and p is not None:
-                assert q + 1e-12 >= p, f"q={q} < p={p} violates BH"
-    # Family summary present, counts agree with the per-band masks
-    fs = sc["fdr_summary"]
-    assert fs is not None and fs["method"] == "BH-FDR" and fs["alpha"] == 0.05
-    n_sig_from_channels = sum(
-        1 for ch in sc["channels"] for q in (ch.get("q") or []) if q is not None and q < 0.05
-    )
-    assert fs["n_rigorous_fdr"] == n_sig_from_channels
-    # Pseudoreplication-contrast invariant: under a real planted band-power<->label coupling, the
-    # naive Pearson pass (uses every sample as independent) MUST surface at least one FDR-significant
-    # band, and the rigorous rating-clustered logit pass MUST be no looser than the naive pass —
-    # i.e. it never claims more significance than the naive view. This is the headline rigor
-    # invariant the UI annotation rests on (naive >= rigorous, "naive over-reports vs rigorous").
-    assert fs["n_naive_fdr"] >= 1, f"planted-band fixture produced 0 naive-FDR bands: {fs}"
-    assert fs["n_rigorous_fdr"] <= fs["n_naive_fdr"], \
-        f"rigorous FDR > naive FDR violates the pseudoreplication-contrast direction: {fs}"
 
 
 def test_band_mixedmodel_inference_emits_or_ci():
@@ -846,31 +549,6 @@ def test_band_stim_stability_shape_and_no_stim_degrades():
         assert k in out, list(out)
     assert set(out["or_by_era"].keys()) == {"OFF", "LOW", "HIGH"}, out["or_by_era"]
     assert set(out["era_counts"].keys()) == {"OFF", "LOW", "HIGH"}, out["era_counts"]
-
-
-def test_spectral_scan_fdr_zero_signal_returns_no_significant_bands():
-    """Null fixture: no planted coupling. The rigor pass MUST return zero (or vanishingly few)
-    FDR-significant bands — a real false-positive control on the BH pipeline."""
-    rng = np.random.default_rng(42)
-    F = 60
-    E = 100
-    det = {
-        "f_set": np.linspace(0.95, 100, F),
-        "psd": np.abs(rng.normal(1, 0.2, (E, 2, F))),       # pure noise, no label coupling
-        "labels": rng.normal(5, 2, E),
-        "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"],
-        "times": [f"2025-07-{1 + (i % 28):02d} 10:00:00" for i in range(E)],
-        "prelog": False,
-    }
-    sc = analytics.spectral_feature_importance(det, strategy="tertile")
-    fs = sc["fdr_summary"]
-    assert fs is not None
-    # Under the null, FDR should reject at most a handful of bands by chance (well under 5% of
-    # the family). Allowing a small budget rather than 0 because BH is stochastic with the
-    # synthetic seed; the test fails loudly if the FDR cap is broken.
-    n_total = fs["n_bands_total"]
-    assert fs["n_rigorous_fdr"] <= max(2, int(0.10 * n_total)), \
-        f"null fixture exceeded BH budget: {fs['n_rigorous_fdr']}/{n_total}"
 
 
 def test_pooled_psd_detail_is_per_channel_and_matches_pro():
@@ -1241,15 +919,7 @@ if __name__ == "__main__":
     test_binarize_labels_tertile_excludes_middle()
     test_matched_sample_counts_reports_high_low_and_offset()
     test_cv_logistic_auc_oriented_and_guards_small_n()
-    test_spectral_feature_importance_finds_planted_band()
-    test_spectral_scan_lsb_feature_cs14_td_and_full_spectrum()
-    test_spectral_scan_lsb_cs14_cache_lookup_per_pro()
-    test_spectral_scan_lsb_cs14_vectorized_scatter_assigns_correct_pro_per_band()
     test_builder_no_device_psd_scale_in_detail()
-    test_spectral_scan_lsb_falls_back_without_abs_density()
-    test_spectral_scan_prelog_matches_linear()
-    test_spectral_scan_emits_fdr_qs_and_summary()
-    test_spectral_scan_fdr_zero_signal_returns_no_significant_bands()
     test_band_stim_stability_shape_and_no_stim_degrades()
     test_band_mixedmodel_inference_emits_or_ci()
     test_pooled_psd_detail_is_per_channel_and_matches_pro()
@@ -2672,22 +2342,6 @@ def test_one_exclusion_set_blanks_every_array_identically():
     assert d2.shape == disp.shape and l2.shape == log.shape     # alignment preserved
 
 
-def test_scan_reports_removals_and_can_be_disabled():
-    """The count must be reported, and n_mad=0 must reproduce the pre-change behaviour exactly."""
-    from modules.Biomarkers.routines import analytics as an
-    det = _planted_detail(center=17.5, beta=0.6, seed=1)
-    off = an.spectral_feature_importance(det, strategy="tertile", outlier_n_mad=0.0)
-    on = an.spectral_feature_importance(det, strategy="tertile", outlier_n_mad=5.0)
-    assert off["outliers"]["enabled"] is False and off["outliers"]["n_removed"] == 0
-    assert off["outliers"]["rule"] == "disabled"
-    assert on["outliers"]["enabled"] is True
-    assert on["outliers"]["n_mad"] == 5.0 and on["outliers"]["scale"] == "log"
-    # the report must name every statistic the exclusion governs, so nobody has to guess
-    for k in ("correlation", "cv_logistic_auc", "cluster_robust_logit_p", "cohens_d"):
-        assert k in on["outliers"]["applies_to"]
-    assert on["outliers"]["n_bands_evaluated"] > 0
-
-
 def test_the_two_mad_helpers_have_opposite_polarity_and_must_not_be_confused():
     """Guard against a latent trap: three MAD helpers now exist with DIFFERENT conventions.
 
@@ -2901,7 +2555,7 @@ def test_all_deployment_binarizations_pass_rating_group():
     }, f"a new place splits pain without the report grouping: {sorted(omits)}"
     # every estimate that reports a number per band must be in the passing list
     for must in ("deployment_roc", "threshold_drift_by_week", "deployment_forward_chaining",
-                 "spectral_feature_importance", "_pain_split"):
+                 "_pain_split"):
         assert must in passes, f"{must} must draw the pain line on one score per pain report"
 
 
