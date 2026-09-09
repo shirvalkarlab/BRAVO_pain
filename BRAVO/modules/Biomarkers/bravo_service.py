@@ -760,18 +760,6 @@ def _pro_lsb_by_channel(pro_times, lsb, td_recordings, event_psd_blocks,
 # center) from the SAME builder, so a timeline marker and a spectral point at one center are identical.
 _LSB_SPECTRUM_CENTERS = tuple(float(c) for c in np.arange(2.5, 100.0, 1.0))
 
-# In-process memo for the per-pair LSB spectrum, keyed on a content signature. The timeline
-# (_build_availability) and the spectral scan both build the SAME spectrum from the SAME decoded
-# recordings within a request; this avoids the second consumer recomputing it. Bounded so a long-lived
-# worker doesn't grow unboundedly across participants/PRO-sets.
-_LSB_SPECTRUM_MEMO = {}
-_LSB_SPECTRUM_MEMO_MAX = 8
-# Guards the memo check/evict/insert sequence. Under gunicorn thread workers the read-check-write
-# around the dict is not atomic (two threads can both pass the size test, or both evict), so the
-# "bounded at MAX" guarantee is only soft without it. The per-channel compute stays OUTSIDE the lock
-# — a duplicated compute under contention is harmless (last writer wins, same content), and holding
-# the lock across the heavy DSP would serialize all participants behind one slow request.
-_LSB_SPECTRUM_MEMO_LOCK = threading.Lock()
 
 # Match-AGNOSTIC raw LSB cache memo (availability.raw_lsb_spectrum_cache). Keyed WITHOUT any PRO set —
 # the cache tiles the whole recording independent of ratings, so one entry serves every metric /
@@ -931,58 +919,6 @@ def _lsb_spectrum_signature(participant_uid, pro_times, td_recordings, event_psd
             h.update(f"{st}|{names}|{n};".encode())
     h.update(np.asarray(centers, dtype=float).tobytes())
     return h.hexdigest()[:16]
-
-
-def _pro_lsb_spectrum_cached(participant_uid, pro_times, channels, td_recordings,
-                             event_psd_blocks, *, centers=_LSB_SPECTRUM_CENTERS):
-    """The per-(channel, PRO) full-spectrum modeled LSB, computed and memoized. Consumed by the
-    timeline modeled markers (via _build_availability) and the spectral feature-importance panel
-    (via run_for_participant).
-
-    For each channel, runs availability.per_pro_lsb_spectrum (TD-transform k=352.62 where TD covers the
-    rating, CS-3 bridge k≈73.63 from a coincident PSD-only event otherwise) over the band-center grid.
-    Returns { raw_channel: [ per-PRO spectrum dict, ... ] } where each dict carries
-    {t, tier, lsb:[per-center], calibrated:[per-center], center_hz:[centers], used_s, saturated, reason}.
-
-    The two consumers pass DIFFERENT pro_times (the timeline uses pain["t"], the metric-agnostic PRO
-    set; the scan uses pro_match[0], the metric-filtered set whose indices populate `rating_group`), so
-    they land in SEPARATE memo entries under different signatures — this is NOT one shared slot. The
-    numbers nevertheless agree on any PRO they have in common, because per_pro_lsb_spectrum is a pure
-    function of (pro_time, channel, recordings, centers): same PRO time + same recordings → identical
-    LSB regardless of which consumer asked. The memo bounds per-worker memory; it is not the thing that
-    makes the two views consistent. The scan's bounds invariant len(value) == len(pro_match[0]) is
-    documented at the run_for_participant call site.
-    """
-    pt = np.asarray([] if pro_times is None else pro_times, dtype=float)
-    if pt.size == 0 or not channels:
-        return {}
-    sig = _lsb_spectrum_signature(participant_uid, pt, td_recordings, event_psd_blocks, centers)
-    with _LSB_SPECTRUM_MEMO_LOCK:
-        cached = _LSB_SPECTRUM_MEMO.get(sig)
-    if cached is not None:
-        return cached
-    out = {}
-    cen = np.asarray(centers, dtype=float)
-    index = (availability.channel_index(td_recordings, event_psd_blocks)   # once, Track B step 3
-             if availability.USE_CHANNEL_INDEX else None)
-    for raw_ch in channels:
-        key = availability._canon_channel(raw_ch)
-        try:
-            out[raw_ch] = availability.per_pro_lsb_spectrum(
-                pt, key, cen, td_recordings=td_recordings, event_psd_recordings=event_psd_blocks,
-                index=index)
-        except Exception as e:
-            _log.warning("Biomarkers: per-PRO LSB spectrum failed for %s (%s)", raw_ch, e)
-    # bound the memo (FIFO-ish): drop the oldest entry when full. Check/evict/insert under the lock so
-    # the size guarantee is hard even when two threads finish computing the same/different sigs at once.
-    with _LSB_SPECTRUM_MEMO_LOCK:
-        existing = _LSB_SPECTRUM_MEMO.get(sig)
-        if existing is not None:
-            return existing                       # another thread won the race; reuse its result
-        if len(_LSB_SPECTRUM_MEMO) >= _LSB_SPECTRUM_MEMO_MAX:
-            _LSB_SPECTRUM_MEMO.pop(next(iter(_LSB_SPECTRUM_MEMO)), None)
-        _LSB_SPECTRUM_MEMO[sig] = out
-    return out
 
 
 def _stamp_td_product(td_recordings):
@@ -3770,21 +3706,6 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
             _pro_t_lsb, lsb, list(td_list or []) + list(psd_list or []),
             event_psd_blocks, sensing_hz, native_tol_s=native_lsb_tolerance_s
         ) if (_pro_t_lsb is not None and _pro_t_lsb.size) else {}
-        # SHARED per-pair full-spectrum LSB cache (0–100 Hz). Both this timeline payload AND the
-        # spectral feature-importance scan read from it (same computation, same source of truth).
-        # td_recordings = ALL TD-bearing recordings (streaming + montage/survey, every product at 250 Hz
-        # TD) → TD-transform route (k=352.62). Per PI 2026-06-27: montage/survey PSDs are NEVER passed
-        # to event_psd_recordings here — they carry TD and always go through the transform route;
-        # the bridge is ONLY for patient-event FFT blocks (PatientControllerEvent, PSD-only, no TD).
-        _pro_all_channels = sorted({availability._canon_channel(r) for r in (lsb or {}).keys()})
-        pro_lsb_spectrum = (
-            _pro_lsb_spectrum_cached(
-                participant_uid, _pro_t_lsb,
-                _pro_all_channels,
-                list(td_list or []) + list(psd_list or []),  # ALL TD-bearing: streaming + montage/survey
-                event_psd_blocks)                             # PSD-only patient events (bridge only)
-            if (_pro_t_lsb is not None and _pro_t_lsb.size and _pro_all_channels) else {}
-        )
         bands = availability.present_freq_bands(records)
         # Patient-triggered events. _load_patient_events returns BOTH the labeled button presses
         # (category=DISPLAY_PATIENT_EVENT) AND the auto 'Streaming' LFP snapshots
@@ -3862,14 +3783,14 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
 
         return {"records": records, "pain": pain, "stim": stim, "freq_bands": bands,
                 "span": span, "samples": samples, "lsb_overview": lsb_overview,
-                "pro_lsb": pro_lsb, "pro_lsb_spectrum": pro_lsb_spectrum,
+                "pro_lsb": pro_lsb,
                 "events": events, "montage_events": montage_events,
                 "psd_scan_index": psd_scan_index}
     except Exception as e:
         _log.warning("Biomarkers: availability payload failed: %s", e, exc_info=True)
         return {"records": [], "pain": {"metric": label_metric, "t": [], "y": []},
                 "stim": {"t": [], "y": []}, "freq_bands": [], "span": [], "lsb_overview": {},
-                "pro_lsb": {}, "pro_lsb_spectrum": {},
+                "pro_lsb": {},
                 "events": {"events": [], "n": 0},
                 "montage_events": {"events": [], "n": 0}, "psd_scan_index": []}
 
