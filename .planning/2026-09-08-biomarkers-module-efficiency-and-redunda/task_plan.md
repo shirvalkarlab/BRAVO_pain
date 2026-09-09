@@ -34,15 +34,16 @@ this review must not contradict or re-derive:
   `_RECORDINGS_SETUP_MEMO` (`_hover_cell_recordings_setup`), `_PRO_BUILD_CACHE`.
 
 ## Next Step
-All nine frontend dead-code/duplication findings (Agent B) are implemented across six files,
-`npm run build` is clean, bundle-verified, and committed (57c65d1b) with DECISIONS_and_open_items.md
-decision 80. Not yet pushed. Next: push to origin/PS_closedloop_deployment, then report to the user
-— including the one deliberately-deferred half of finding #7 (React.memo on Heatmap) and that no
-live browser check was performed for this UI-facing work. The Plotly render-manager findings
-(Agent C) from the same original review remain open for a future session if wanted.
+All three legs of the original review (backend, frontend, Plotly) are now closed out. Backend:
+6 fixes, decision 79, pushed. Frontend: 9 findings implemented, decision 80, pushed (57c65d1b,
+cc73a5fa). Plotly: all 4 findings evaluated by dedicated research agents at the user's request and
+found not worth fixing (small mechanical-looking changes with a blast radius of up to 58 files
+outside this module, for benefits that direct verification found speculative or already
+nonexistent) — decision 81, no code changed. Nothing left queued from this review; a new task would
+need a fresh trigger (a specific reported problem, or a new review).
 
 ## Current Phase
-Phase 7
+Phase 8 (final)
 
 ## Phases
 
@@ -153,10 +154,27 @@ Phase 7
       margin") appear nowhere in the bundle.
 - [x] Committed 57c65d1b (source + rebuilt `Client/build/`); `DECISIONS_and_open_items.md` decision
       80 added.
-- [ ] Push to origin/PS_closedloop_deployment.
-- [ ] Report to user: findings fixed, findings requiring no change, the one deliberately deferred
+- [x] Pushed to origin/PS_closedloop_deployment (57c65d1b, cc73a5fa).
+- [x] Reported to user: findings fixed, findings requiring no change, the one deliberately deferred
       item, and that no live browser check was performed.
-- **Status:** in progress
+- **Status:** complete
+
+### Phase 8: Evaluate Agent C's Plotly render-manager findings (via 4 parallel research agents)
+- [x] Dispatched 4 independent, read-only research agents, one per Agent C ranked finding, each
+      told to verify the finding directly against current code (not trust the prior summary) and
+      weigh cost vs. benefit against the user's bar ("only proceed if the pro is more than 30%
+      better").
+- [x] All four returned SKIP, each after directly disproving or substantially narrowing the
+      original finding's premise: the `hovermode:"xy"` typo is in 10 files not 5, and `"closest"`
+      (its accidental fallback) is a value this codebase deliberately picks elsewhere; the
+      `customdata` gap causes no actual lost hover info in a 14-file sample; "6/59 customize
+      layout" was undercounted — a full-method grep found 57/58 do; the `useRef` persistence gap is
+      real (55/58) but its DOM-mutating call is effect-gated on real data props everywhere sampled,
+      so the practical harm is wasted allocation, not the visible flash bug decision 5 fixed.
+- [x] `DECISIONS_and_open_items.md` decision 81 added, recording all four findings and why none
+      qualified. No code changed — this phase was evaluation only, at the user's explicit
+      instruction not to implement without first weighing pros/cons.
+- **Status:** complete
 
 ## Decisions Made
 | Decision | Rationale |
