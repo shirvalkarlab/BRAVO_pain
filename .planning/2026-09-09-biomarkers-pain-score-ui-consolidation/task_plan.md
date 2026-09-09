@@ -202,6 +202,41 @@ toolbar) that Plotly shows on hover over the heat maps.
       appearing anywhere on the chart. No console errors.
   - **Status:** complete
 
+### Phase C.3: Fix the panel-sizing regression from C.2 — COMPLETE
+C.2's "match the heat map height" fix was structurally wrong: it treated the panel's own title and
+statistics text as space to CARVE OUT of a fixed total height shared with the heat map, so the
+actual plot inside kept shrinking every time the title got bigger — the opposite of matching. The
+heat map's own section heading ("Correlation with pain...") sits ABOVE its box, outside the height
+budget entirely; the panels' title was incorrectly being counted INSIDE theirs. Called "terrible"
+and "badly positioned" directly, correctly.
+- [x] `ScatterFitPanel`/`ViolinPanel`: the plot is now a full-size square literally equal to
+      `heatmapHeight(rows)` (`h = height; w = h;`, no subtraction), with the title/statistics text
+      rendered as ordinary content ABOVE it — exactly parallel to how the heat map's own heading
+      sits above its own box. The outer `MDBox`'s fixed `sx={{height}}` constraint is removed on
+      the rendered branch (kept only on the loading placeholder, for visual stability while
+      waiting) so the natural content flow no longer needs to fit inside a budget smaller than the
+      plot itself.
+- [x] `pad` reworked from a height-fraction formula to a fixed value (50px) sized to the actual
+      room the enlarged tick numbers and the rotated axis title need without colliding, since the
+      panel's true size is effectively constant (10 length-of-signal rows, always) rather than
+      genuinely variable — a fraction was solving a problem that doesn't exist and made the true
+      constraint (legibility) harder to reason about.
+- [x] Stats-line text enlarged 11px→15px on both panels (direct feedback: "all the stats text is
+      too small").
+- [x] Violin panel's "High pain"/"Low pain" category labels enlarged 9px→16px, matching the
+      tick-label size used everywhere else on both panels (direct feedback: should "match the
+      other plots' size").
+- [x] Rotated y-axis title's `x` position tightened 16→12 on both panels to keep clear of the
+      tick-label text now that `pad` shrank from C.2's 62 to 50.
+  - **Status:** complete
+- [x] Built clean; verified live on RCS08: the scatter and violin plots are now visibly close in
+      size to their heat maps (previously dramatically smaller and oddly offset); axes fill most of
+      each panel with comfortable margins; "High pain"/"Low pain" and the statistics line are
+      clearly larger; violins show no clipping. No console errors. A stray blue "highlighted text"
+      appearance on some tick labels in one screenshot was confirmed to be an ordinary text-
+      selection artifact from a prior click, not a rendering bug -- gone on the next click.
+  - **Status:** complete
+
 ### Phase D: Condense the "how to read this" text
 - [ ] Rewrite the four bullet notes plus the two dynamic `notes` arrays' presentation: reorder by
       priority (correlation/AUC interpretation, the circle marker, the multiple-comparison

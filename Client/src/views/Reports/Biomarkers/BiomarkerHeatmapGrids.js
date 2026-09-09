@@ -554,12 +554,18 @@ function ScatterFitPanel({ cell, pinnedCell, channelLabel, height, metricLabel }
 
   const xlo = Math.min(...xs), xhi = Math.max(...xs);
   const ylo = Math.min(...ys), yhi = Math.max(...ys);
-  // Square, and sized to fill the same height as the heat map next to it (64 px reserved above
-  // the plot for the title plus the statistics line). `pad` widened to fit the larger tick labels
-  // plus the rotated axis title running alongside them on the left.
-  const h = Math.max(160, height - 64);
+  // The plot is a full-size square EQUAL to the heat map's own height, exactly like the heat map's
+  // own "Correlation with pain..." heading sits ABOVE its plot rather than eating into it -- the
+  // title and statistics line here do the same, as ordinary content above this square, rather than
+  // being carved out of a fixed total height (which was shrinking the plot well below the heat
+  // map's actual size and this is what "look terrible... do NOT match heat map height" was about).
+  // `pad` sized to the actual room the (now larger, 16px) tick numbers and the rotated axis
+  // title need on the left side without the two colliding -- not a fixed fraction of `w`, since
+  // legibility is a text-size constraint, not a proportional one. At this panel's real size this
+  // still gives the axes close to 75% of the square, without squishing the text.
+  const h = height;
   const w = h;
-  const pad = 62;
+  const pad = 50;
   const sx = (x) => pad + ((x - xlo) / ((xhi - xlo) || 1)) * (w - 2 * pad);
   const sy = (y) => (h - pad) - ((y - ylo) / ((yhi - ylo) || 1)) * (h - 2 * pad);
   const mx = xs.reduce((s, v) => s + v, 0) / n, my = ys.reduce((s, v) => s + v, 0) / n;
@@ -571,9 +577,11 @@ function ScatterFitPanel({ cell, pinnedCell, channelLabel, height, metricLabel }
     : (label === "low" ? (PAL.accent || BIN_LO) : "#aaaaaa"));
 
   return (
-    <MDBox sx={{ height }}>
+    // No fixed height here (unlike the loading placeholder above) -- the title and statistics
+    // line are ordinary content sitting above a full-size plot now, not squeezed inside one.
+    <MDBox>
       <PanelTitle pinnedCell={pinnedCell} channelLabel={channelLabel} />
-      <MDTypography variant="caption" color="dark" sx={{ fontSize: 11, display: "block", mb: 0.5 }}>
+      <MDTypography variant="caption" color="dark" sx={{ fontSize: 15, display: "block", mb: 0.5 }}>
         {`Pearson r = ${num(r, 3)}, p = ${p == null ? "—" : num(p, 4)} (n = ${n})`}
       </MDTypography>
       <svg width={w} height={h}>
@@ -592,7 +600,7 @@ function ScatterFitPanel({ cell, pinnedCell, channelLabel, height, metricLabel }
         <text x={pad + (w - 2 * pad) / 2} y={h - 8} fontSize={13} textAnchor="middle" fill="#555">
           Band power (LSB)
         </text>
-        <text x={16} y={pad + (h - 2 * pad) / 2} fontSize={13} textAnchor="middle" fill="#555"
+        <text x={12} y={pad + (h - 2 * pad) / 2} fontSize={13} textAnchor="middle" fill="#555"
           transform={`rotate(-90 16 ${pad + (h - 2 * pad) / 2})`}>
           {`Pain${metricLabel ? ` (${metricLabel})` : ""}`}
         </text>
@@ -627,21 +635,20 @@ function ViolinPanel({ cell, pinnedCell, channelLabel, height }) {
 
   const all = highVals.concat(lowVals);
   const lo = Math.min(...all), hi = Math.max(...all);
-  // Square, and sized to fill the same height as the heat map next to it (30 px reserved above
-  // for the statistics line -- there is no title here any more). `pad` widened to fit the larger
-  // tick labels plus the rotated axis title running alongside them on the left.
-  const h = Math.max(160, height - 30);
+  // Same convention as ScatterFitPanel: a full-size square equal to the heat map's own height,
+  // with the statistics line as ordinary content above it rather than carved out of it.
+  const h = height;
   const w = h;
-  const pad = 62;
+  const pad = 50;
   const vyScale = (v) => (h - pad) - ((v - lo) / ((hi - lo) || 1)) * (h - 2 * pad);
   const colorFor = (label) => (label === "high" ? (PAL.fail || BIN_HI)
     : (label === "low" ? (PAL.accent || BIN_LO) : "#aaaaaa"));
 
   return (
-    <MDBox sx={{ height }}>
+    <MDBox>
       {/* No title here -- it duplicated the scatter panel's own title exactly (both describe the
           same pinned cell); that one copy, above the scatter panel, is now the only one. */}
-      <MDTypography variant="caption" color="dark" sx={{ fontSize: 11, display: "block", mb: 0.5 }}>
+      <MDTypography variant="caption" color="dark" sx={{ fontSize: 15, display: "block", mb: 0.5 }}>
         {`Welch t(${num(df, 1)}) = ${num(t, 2)}, p = ${p == null ? "—" : num(p, 4)} `}
         {`(high n=${n1}, low n=${n2})`}
       </MDTypography>
@@ -663,13 +670,16 @@ function ViolinPanel({ cell, pinnedCell, channelLabel, height }) {
                 <circle key={i} cx={cx + (((i * 37) % 11) - 5) * 0.6} cy={vyScale(v)} r={1.6}
                   fill={colorFor(label)} opacity={0.6} />
               ))}
-              <text x={cx} y={h - 6} fontSize={9} textAnchor="middle" fill="#555">
+              {/* Font matches the tick-label size used on every other axis on this panel and the
+                  scatter panel's own axes (16px) -- this is this plot's own x-axis category
+                  labelling, so it should read at the same size as everyone else's tick labels. */}
+              <text x={cx} y={h - 6} fontSize={16} textAnchor="middle" fill="#555">
                 {label === "high" ? "High pain" : "Low pain"}
               </text>
             </g>
           );
         })}
-        <text x={16} y={pad + (h - 2 * pad) / 2} fontSize={13} textAnchor="middle" fill="#555"
+        <text x={12} y={pad + (h - 2 * pad) / 2} fontSize={13} textAnchor="middle" fill="#555"
           transform={`rotate(-90 16 ${pad + (h - 2 * pad) / 2})`}>
           Band power (LSB)
         </text>
