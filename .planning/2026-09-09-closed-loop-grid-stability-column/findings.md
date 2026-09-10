@@ -511,3 +511,58 @@ five days.
 
 This is a production module and a real behaviour change either way, so it is put to the PI rather
 than chosen here (CLAUDE.md §10 rule 8).
+
+## 15. BLOCKER CLEARED, and a discrepancy that needs the PI's attention
+
+### 15a. The import fix, and the page path proven end to end
+
+Chosen by the PI: one `sys.path` entry rather than eight double-imports. Added in
+`BRAVO/BRAVO/settings.py`, **appended not inserted** -- `modules/` holds names like `utility`,
+`Resources`, `Database.py` and `Event.py` that could shadow a standard-library or site-packages
+module if that directory won the search; appending means it is consulted last.
+
+Proven through `manage.py shell`, the process shape gunicorn uses, the same check that found the
+break:
+
+| | |
+|---|---|
+| `from modules.ClosedLoopDeployment import adapter` | **OK** (was `ModuleNotFoundError`) |
+| `band_sweep_grid_for_closed_loop` available | **True** |
+| Rows served from the stored grid | **264** (132 correlation + 132 AUC) |
+| Answers across 132 correlation rows | "cannot tell" 102, "behaves differently" 25, "behaves the same" 5 |
+
+That distribution is the honest four-valued answer working: 102 of 132 points genuinely cannot be
+resolved, which a bare `stim_stable` boolean would have reported as "stable".
+
+### 15b. THE DOCUMENTED DISAGREEMENT CASE NO LONGER DISAGREES
+
+`adapter.py`'s own comment, decision 67 and decision 68 all cite ONE_THREE_LEFT at 12.5 Hz as the
+worked example of the honest answer: the retired two-valued flag reads "stable" because the
+interaction test does not reject at **p = 0.290**, while the honest answer is **"cannot tell"**
+because the interval on the largest between-era difference runs from -1.23 to +0.22, wider than the
+declared margin of 0.69.
+
+**Measured today, that point's interaction test gives p = 0.0323, and the translated answer is
+"behaves differently".** Not "cannot tell", and not "stable" either.
+
+**This is not caused by anything in this task.** The direct-`glmer` change was proven identical to
+the pymer4 reference across 5,148 fields with 0 differences (§13a), so today's pymer4 path returns
+the same 0.0323. The very first probe of this session, taken before any code was edited, already
+measured `lrt_p` 0.032285156521398184 for that point.
+
+The likeliest cause is commit `46670ce7`, landed earlier the same day by the prior session: "Exclude
+contaminated 3 s pieces before averaging, and backfill behind them". That changes which 3-second
+pieces feed a band's power, which is exactly the input this test reads. A pain-report set that has
+grown since 2026-09-08 would do it too. **Neither has been confirmed — this is a hypothesis, and
+the discrepancy is reported rather than explained away.**
+
+Why it matters beyond one number: that case is the anchor for this feature's whole argument that a
+bare boolean is unsafe. `adapter.py` and `bravo_service.py` both carry code comments stating the
+p = 0.290 / "cannot tell" values as current fact, and `ClosedLoopDeployment/tests/
+test_track_d_grid_stability_translation.py` has a test named
+`test_d2b_the_documented_disagreement_case_translates_to_cannot_tell` -- which still passes, because
+it builds the case from a fixed synthetic raw result rather than from live data. So the test is not
+wrong, but the comments now describe a live value that has moved.
+
+Wanted from the PI: whether to re-anchor the example on a point that is "cannot tell" today, or to
+keep the old numbers as a historical illustration and label them with their date.

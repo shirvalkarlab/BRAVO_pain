@@ -16,6 +16,32 @@ import json
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# ---------------------------------------------------------------------------------------------
+# `modules/` ON THE IMPORT PATH, WHICH THE ANALYSIS PACKAGES ALREADY ASSUME.
+#
+# Eight module-level imports across seven files in `modules/ClosedLoopDeployment` are written in
+# the BARE spelling -- `from ClosedLoopDeployment import edges`, `from Biomarkers.routines import
+# analytics`, `from StimOptimizer.routines import percept_adaptive` -- which resolves only when
+# `modules/` is itself an import root. Nothing put it there: not this file, not `manage.py`, and
+# `PYTHONPATH` is unset in the container. The host test suite works only because it runs from
+# `BRAVO/modules` with `PYTHONPATH=.`.
+#
+# The consequence was silent rather than loud. `Server/APIs/DataAnalysis.py` wraps the adapter
+# import and the whole report in one `try/except Exception` and answers HTTP 200 with
+# `{"available": False, "reason": "deployment report error: " + str(e)}`, so the Closed-Loop
+# Deployment endpoint returned a plausible-looking refusal instead of failing. Confirmed through
+# `manage.py shell` -- the process shape gunicorn's workers use -- which raised
+# `ModuleNotFoundError: No module named 'ClosedLoopDeployment'`. `git log -L` dates the first such
+# import to `293a1c98`, 2026-09-04.
+#
+# APPENDED, NOT INSERTED AT THE FRONT. `modules/` holds names like `utility`, `Resources`,
+# `Database.py` and `Event.py` that could shadow a standard-library or site-packages module if this
+# directory won the search. Appending means it is consulted only after everything else, so it can
+# add these packages without displacing anything.
+_MODULES_ROOT = str(BASE_DIR / "modules")
+if _MODULES_ROOT not in sys.path:
+    sys.path.append(_MODULES_ROOT)
 if os.path.exists(os.path.join(BASE_DIR, '.env')):
     with open(os.path.join(BASE_DIR, '.env'), "r") as file:
         config = json.load(file)
