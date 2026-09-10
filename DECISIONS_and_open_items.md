@@ -216,6 +216,32 @@ hygiene as a work item — the latter is an operational note in `OPERATIONS_runb
 
 ### Open engineering, not blocked on anyone
 
+26. **The length-of-signal axis of the calibrated grid means nothing for a cell served by the
+    device's own spectrum, and the page does not say so.** Found 2026-09-09 by reading
+    `availability.live_lsb_spectrum_match` directly: the length-of-signal value (`td_quantity_s`)
+    is read ONLY in the voltage-trace block (lines ~1911-2017) and never anywhere in the
+    device-spectrum block (lines ~2019-2057), which uses the match-tolerance setting alone. So for
+    a pain report with no voltage trace in range, the "5 m" row and the "3 s" row hold the
+    identical number computed from the identical events. The voltage trace is preferred whenever
+    any is eligible, so this only affects reports that have none — but nothing on the grid marks
+    which cells those are, and a reader comparing rows down such a column is reading a constant as
+    if it were a trend. Options: mark those cells, report the count per contact, or state the
+    limitation in the drawer. **A display and reporting decision, his call, not a defect to fix
+    silently.**
+
+27. **`.gitignore`'s scratch rule does not match what `CLAUDE.md` §5 says it does, and about 85 MB
+    of untracked-but-not-ignored files sit in the tree.** The rule is `BRAVO/_agent_bridge/*.py`
+    (line 342), which matches only the top level: 27 `.py` files in `_agent_bridge/_*_sync/`
+    SUBDIRECTORIES are untracked and unignored, as are the `.pkl`/`.npy`/`.txt`/`.svg` data
+    artifacts and all of `cl_docs/`. `CLAUDE.md` §5 states the scratch area is gitignored, which is
+    true only of its top-level Python files. The exposure is that those subdirectories hold the
+    stale duplicates of real module source §5 itself warns about — committing them would put a
+    second, stale copy of `bravo_service.py` into the repository where a future grep would find it
+    as tracked code. Nothing has been committed by accident (this session staged explicit
+    pathspecs), and no `git add -A` has been run. Fix is one line — `BRAVO/_agent_bridge/_*` — plus
+    a correction to §5's wording. Raised 2026-09-09 during a landing preflight; not done because it
+    was outside what was asked.
+
 ~~7. **The 6,309-file spectrum directory must be settled in one decision, not two.**~~ **RESOLVED
    2026-09-08, decisions 51 and 53.** The two directories were settled differently, not both the
    same way: `biomarker_psd` (97 files, 500 MB) moved into the one store as raw kind
