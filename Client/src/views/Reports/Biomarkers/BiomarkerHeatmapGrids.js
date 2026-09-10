@@ -261,6 +261,11 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
     return () => clearTimeout(t);
   }, [flashKey]);
 
+  // Trace 2 (the cross-highlight) is ALWAYS present, even with empty x/y when nothing is active,
+  // so its index never shifts -- the second effect below can restyle it directly by index without
+  // touching trace 0 (the heatmap) or trace 1 (the best-cell markers).
+  const HIGHLIGHT_TRACE = 2;
+
   useEffect(() => {
     if (!rows || !cols) return undefined;
     if (!figRef.current) figRef.current = new PlotlyRenderManager(divId, "en");
@@ -286,25 +291,19 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
         bestX.push(centers[Number(c)]); bestY.push(yLabels[b.row]);
       }
     });
-    if (bestX.length) {
-      fig.traces.push({
-        type: "scatter", mode: "markers", x: bestX, y: bestY, showlegend: false,
-        marker: { symbol: "circle-open", size: 14, color: "#1a1a1a", line: { width: 1.4 } },
-        hoverinfo: "skip",
-      });
-    }
-    // The shared cross-highlight -- one square-outline marker at the hovered or pinned cell,
-    // drawn on BOTH grids from the same (row, col) so the two stay in visual sync.
-    const activeCell = pinnedCell || hoveredCell;
-    if (activeCell && activeCell.row < rows && activeCell.col < cols) {
-      fig.traces.push({
-        type: "scatter", mode: "markers",
-        x: [centers[activeCell.col]], y: [yLabels[activeCell.row]], showlegend: false,
-        marker: { symbol: "square-open", size: 22, color: "#1a1a1a",
-          line: { width: pinnedCell ? 3 : 2 } },
-        hoverinfo: "skip",
-      });
-    }
+    fig.traces.push({
+      type: "scatter", mode: "markers", x: bestX, y: bestY, showlegend: false,
+      marker: { symbol: "circle-open", size: 14, color: "#1a1a1a", line: { width: 1.4 } },
+      hoverinfo: "skip",
+    });
+    // The shared cross-highlight, trace index HIGHLIGHT_TRACE -- always pushed, empty until the
+    // second effect below fills it in via restyle. Keeping it here (rather than only when active)
+    // is what fixes the highlight trace's index in place across every redraw this effect causes.
+    fig.traces.push({
+      type: "scatter", mode: "markers", x: [], y: [], showlegend: false,
+      marker: { symbol: "square-open", size: 22, color: "#1a1a1a", line: { width: 2 } },
+      hoverinfo: "skip",
+    });
     // Every 3rd band centre, exactly the sparse labelling the original SVG grid used (too many of
     // the 22 centres to label all of them without the text overlapping).
     const xTickVals = centers.filter((c, i) => i % 3 === 0);
@@ -330,7 +329,8 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
     // class used by many other pages, so it is not changed here. Instead this one call re-applies
     // the SAME data/layout the render manager just drew, but with the modebar switched off, scoped
     // only to these two heat maps.
-    Plotly.react(divId, fig.traces, fig.layout, { displayModeBar: false, responsive: true });
+    Plotly.react(divId, fig.traces, fig.layout,
+      { displayModeBar: false, responsive: true, doubleClick: false });
 
     const el = document.getElementById(divId);
     if (el) {
@@ -352,13 +352,51 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
       if (el) { el.removeAllListeners("plotly_hover"); el.removeAllListeners("plotly_unhover");
         el.removeAllListeners("plotly_click"); }
     };
+    // Deliberately NOT keyed on hoveredCell/pinnedCell -- see the effect below and the comment on
+    // `HIGHLIGHT_TRACE` above for why (this used to rebuild the whole figure, tear down and
+    // reattach the click listener, on every single hover movement across the grid).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [divId, grid, centers, yLabels, kind, center, halfRange, bestByCol, hoveredCell, pinnedCell,
-    height, width]);
+  }, [divId, grid, centers, yLabels, kind, center, halfRange, bestByCol, height, width]);
+
+  // The cross-highlight alone, kept in its own effect and updated with `Plotly.restyle` (which
+  // touches only the one named trace, not the whole figure) so that moving the mouse across the
+  // grid never tears down and reattaches the plotly_click listener the effect above sets up.
+  // That teardown-on-hover was the actual cause of the click-sometimes-needs-two-tries bug: a real
+  // mouse glides across several cells before landing on the one to click, firing several hover
+  // events -- each of which, under the old single-effect version, rebuilt the whole plot (and its
+  // listeners) via `Plotly.react`; if that rebuild landed between the click's mousedown and
+  // mouseup, Plotly had nothing listening for the click's mouseup and the click was dropped.
+  useEffect(() => {
+    if (!rows || !cols) return undefined;
+    const el = document.getElementById(divId);
+    if (!el || !el.data || el.data.length <= HIGHLIGHT_TRACE) return undefined;
+    const activeCell = pinnedCell || hoveredCell;
+    const active = activeCell && activeCell.row < rows && activeCell.col < cols;
+    try {
+      Plotly.restyle(divId, {
+        x: [active ? [centers[activeCell.col]] : []],
+        y: [active ? [yLabels[activeCell.row]] : []],
+        "marker.line.width": [pinnedCell ? 3 : 2],
+      }, [HIGHLIGHT_TRACE]);
+    } catch (e) {
+      // Swallowed: the div passed the existence/trace-count check just above, but Plotly's own
+      // click/double-click pipeline can still tear it down between that check and this call (the
+      // same underlying issue the purge-cleanup guard above documents) -- a missed highlight
+      // redraw is a cosmetic no-op, not worth crashing the page over.
+    }
+    return undefined;
+  }, [divId, hoveredCell, pinnedCell, rows, cols, centers, yLabels]);
 
   useEffect(() => () => {
-    if (figRef.current) figRef.current.purge();
-  }, []);
+    // Guarded: Plotly'''s own .purge() throws (uncaught, since this runs in an effect cleanup with
+    // no React error boundary anywhere in this app) if the div it manages is already gone from the
+    // DOM -- observed live on a native double-click, which Plotly'''s own internal click pipeline
+    // can apparently unmount/rebuild around even with the built-in reset-on-dblclick action turned
+    // off (doubleClick: false, set on the Plotly.react calls below). Checking first makes this
+    // cleanup robust to that regardless of why the div is already gone, rather than chasing the
+    // exact internal Plotly sequence that removes it.
+    if (figRef.current && document.getElementById(divId)) figRef.current.purge();
+  }, [divId]);
 
   if (!rows || !cols) {
     return (
@@ -456,35 +494,78 @@ function ContactStrip({ sweeps, channel, setChannel }) {
   );
 }
 
-/** A lightweight kernel-density violin for one group of values, mirrored around a vertical axis. */
-function violinPath(values, cx, yScale, halfWidth) {
-  const vs = (values || []).filter((v) => Number.isFinite(v));
-  if (vs.length < 2) return null;
-  const mean = vs.reduce((s, v) => s + v, 0) / vs.length;
-  const sd = Math.sqrt(vs.reduce((s, v) => s + (v - mean) ** 2, 0) / vs.length) || 1;
-  const iqr = (() => {
-    const sorted = [...vs].sort((a, b) => a - b);
-    const q = (p) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor(p * (sorted.length - 1))))];
-    return q(0.75) - q(0.25);
-  })();
-  const bw = 0.9 * Math.min(sd, iqr / 1.34 || sd) * Math.pow(vs.length, -0.2) || sd * 0.3 || 1;
-  const lo = Math.min(...vs), hi = Math.max(...vs);
-  const N = 32;
-  const dens = [];
-  let maxD = 0;
-  for (let i = 0; i <= N; i += 1) {
-    const x = lo + ((hi - lo) * i) / N;
-    let d = 0;
-    vs.forEach((v) => { const u = (x - v) / bw; d += Math.exp(-0.5 * u * u); });
-    d /= (vs.length * bw * Math.sqrt(2 * Math.PI));
-    dens.push({ x, d });
-    if (d > maxD) maxD = d;
-  }
-  if (maxD <= 0) return null;
-  const left = dens.map((p) => [cx - (p.d / maxD) * halfWidth, yScale(p.x)]);
-  const right = dens.map((p) => [cx + (p.d / maxD) * halfWidth, yScale(p.x)]).reverse();
-  const pts = [...left, ...right];
-  return pts.map((p) => p.join(",")).join(" ");
+/** The high/low violin comparison as a native Plotly `violin` trace, rendered through this
+ * project's own `PlotlyRenderManager` -- the same wrapper `PlotlyHeatmap` above already uses.
+ * Passing `responsive: true` to `Plotly.react` (exactly as `PlotlyHeatmap` does) hands the resize
+ * job to Plotly itself: it measures the actual rendered size of the `<div>` below and redraws to
+ * fill it, on mount and on every window/layout resize, which is the genuine "auto-resize to fill
+ * the panel" behaviour a hand-measured SVG (the previous approach) could only approximate. */
+function PlotlyViolin({ divId, highVals, lowVals, side }) {
+  const figRef = useRef(null);
+  useEffect(() => {
+    if (!highVals.length && !lowVals.length) return undefined;
+    if (!figRef.current) figRef.current = new PlotlyRenderManager(divId, "en");
+    const fig = figRef.current;
+    fig.clearData();
+    fig.subplots(1, 1, { sharex: false, sharey: false });
+    const hiColor = PAL.fail || BIN_HI;
+    const loColor = PAL.accent || BIN_LO;
+    // Same hue for the violin body and its jittered points, in each group's own colour -- the
+    // fill is given a LOW alpha (rgba at 0.4) while the marker stays solid/near-opaque, so the
+    // markers read as visibly darker than the pale fill they sit on without needing a second,
+    // different colour or an outline (a white ring looked "super weird" against this palette).
+    const fillRgba = (rgb, a = 0.4) => `rgba(${rgb.join(",")},${a})`;
+    const hiFill = fillRgba(BIN_HI_RGB);
+    const loFill = fillRgba(BIN_LO_RGB);
+    const hiPoint = { size: 4, color: hiColor, opacity: 0.9, line: { width: 0 } };
+    const loPoint = { size: 4, color: loColor, opacity: 0.9, line: { width: 0 } };
+    fig.traces.push({
+      type: "violin", x: highVals.map(() => "High pain"), y: highVals,
+      name: "High pain", legendgroup: "high", showlegend: false,
+      points: "all", pointpos: 0, jitter: 0.4, marker: hiPoint,
+      line: { color: hiColor }, fillcolor: hiFill,
+      box: { visible: false }, meanline: { visible: true },
+      hovertemplate: "%{y:.1f} LSB<extra>High pain</extra>",
+    });
+    fig.traces.push({
+      type: "violin", x: lowVals.map(() => "Low pain"), y: lowVals,
+      name: "Low pain", legendgroup: "low", showlegend: false,
+      points: "all", pointpos: 0, jitter: 0.4, marker: loPoint,
+      line: { color: loColor }, fillcolor: loFill,
+      box: { visible: false }, meanline: { visible: true },
+      hovertemplate: "%{y:.1f} LSB<extra>Low pain</extra>",
+    });
+    fig.setLayoutProps({
+      height: side, width: side, margin: { l: 56, r: 8, t: 8, b: 34 },
+      xaxis: { showgrid: false, zeroline: false, tickfont: { size: 14 } },
+      yaxis: { showgrid: false, zeroline: false },
+      violinmode: "group", showlegend: false,
+    });
+    fig.setYlabel("Band power (LSB)", { fontSize: 13 });
+    fig.render();
+    // Same reasoning as PlotlyHeatmap's own identical call: fig.render() always shows the
+    // hover-activated modebar with no override in the shared render-manager class; re-apply the
+    // same data/layout with it switched off, and with the responsive resize this component exists
+    // for, scoped to just this one div.
+    Plotly.react(divId, fig.traces, fig.layout,
+      { displayModeBar: false, responsive: true, doubleClick: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [divId, highVals, lowVals, side]);
+
+  useEffect(() => () => {
+    // Guarded: Plotly'''s own .purge() throws (uncaught, since this runs in an effect cleanup with
+    // no React error boundary anywhere in this app) if the div it manages is already gone from the
+    // DOM -- observed live on a native double-click, which Plotly'''s own internal click pipeline
+    // can apparently unmount/rebuild around even with the built-in reset-on-dblclick action turned
+    // off (doubleClick: false, set on the Plotly.react calls below). Checking first makes this
+    // cleanup robust to that regardless of why the div is already gone, rather than chasing the
+    // exact internal Plotly sequence that removes it.
+    if (figRef.current && document.getElementById(divId)) figRef.current.purge();
+  }, [divId]);
+
+  // A true square: width 100% up to `side`, height locked to match via aspect-ratio, so the panel
+  // itself is square and Plotly's own responsive resize fills exactly that square.
+  return <div id={divId} style={{ width: "100%", maxWidth: side, aspectRatio: "1 / 1" }} />;
 }
 
 /** The shared title line for both persistent side panels: channel, band centre, length of signal. */
@@ -503,84 +584,15 @@ function PanelTitle({ pinnedCell, channelLabel }) {
   );
 }
 
-/** "Nice" round-number axis ticks (1/2/5 × 10^n steps) spanning [lo, hi], the standard algorithm
- * behind most charting libraries' default axes -- used to draw real tick marks and labels on the
- * scatter and violin panels below, which previously had a bare text label and no scale at all. */
-function niceTicks(lo, hi, count = 4) {
-  if (!(hi > lo)) return [lo];
-  const span = hi - lo;
-  const rawStep = span / count;
-  const mag = 10 ** Math.floor(Math.log10(rawStep));
-  const norm = rawStep / mag;
-  const step = (norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10) * mag;
-  const decimals = Math.max(0, -Math.floor(Math.log10(step)));
-  const start = Math.ceil(lo / step) * step;
-  const ticks = [];
-  for (let v = start; v <= hi + step * 1e-6; v += step) ticks.push(Number(v.toFixed(10)));
-  return { ticks, decimals };
-}
-
-/** Tracks an element's own rendered width via ResizeObserver, so a plot can genuinely fill its
- * Grid column's width (which the flex/grid layout only knows at render time) rather than being
- * capped at a square whose side is the panel's HEIGHT -- the bug behind "the scatter and violin
- * plots aren't filling the panel": both used to hard-code width = height, leaving the column's
- * real, usually-wider width unused. `fallback` is used for the one render before the observer
- * reports a real number, so nothing measures zero. */
-function useMeasuredWidth(fallback) {
-  const ref = useRef(null);
-  const [width, setWidth] = useState(fallback);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return undefined;
-    const ro = new ResizeObserver((entries) => {
-      const w = entries[0] && entries[0].contentRect.width;
-      if (w) setWidth(w);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  return [ref, width];
-}
-
-/** A plain left+bottom axis (line, tick marks, numeric labels) for one Cartesian panel. Pass
- * `xTicks: null` to draw only the y-axis (the violin panel's x is categorical and already labels
- * its two groups with text under each violin). */
-function PanelAxes({ w, h, pad, xlo, xhi, sx, ylo, yhi, sy, xTicks = true }) {
-  const yT = niceTicks(ylo, yhi, 4);
-  const xT = xTicks ? niceTicks(xlo, xhi, 4) : null;
-  return (
-    <g>
-      <line x1={pad} y1={pad} x2={pad} y2={h - pad} stroke="#888" strokeWidth={1} />
-      <line x1={pad} y1={h - pad} x2={w - pad} y2={h - pad} stroke="#888" strokeWidth={1} />
-      {yT.ticks.map((v) => (
-        <g key={`y${v}`}>
-          <line x1={pad - 3} y1={sy(v)} x2={pad} y2={sy(v)} stroke="#888" strokeWidth={1} />
-          <text x={pad - 6} y={sy(v) + 5} fontSize={16} textAnchor="end" fill="#666">
-            {v.toFixed(yT.decimals)}
-          </text>
-        </g>
-      ))}
-      {xT ? xT.ticks.map((v) => (
-        <g key={`x${v}`}>
-          <line x1={sx(v)} y1={h - pad} x2={sx(v)} y2={h - pad + 3} stroke="#888" strokeWidth={1} />
-          <text x={sx(v)} y={h - pad + 20} fontSize={16} textAnchor="middle" fill="#666">
-            {v.toFixed(xT.decimals)}
-          </text>
-        </g>
-      )) : null}
-    </g>
-  );
-}
-
 /**
  * The scatter panel is split into two pieces that render in DIFFERENT places on the page now
  * (open item 7 feedback: the big pinned-cell title and the statistics line were "forcing the top
  * plot to look janky" by sitting inside the same box as the plot, which is what was carving space
  * out of it):
  *   - `ScatterStatsLine` renders next to the correlation heat map's own heading, at the SAME row.
- *   - `ScatterPlotSvg` renders next to the correlation heat map itself, at the SAME height --
- *     nothing is reserved above it any more, so it is a true full-size square matching the heat
- *     map exactly.
+ *   - `PlotlyScatter` renders next to the correlation heat map itself, as a native Plotly figure
+ *     sized to a genuine square (not merely the heat map's height) -- nothing is reserved above it
+ *     any more, since the title and stats line moved elsewhere.
  * The big pinned-cell title (`PanelTitle`) moves out further still, up to sit beside the contact
  * strip (see the main render below) so its own bottom edge lines up with the strip's.
  */
@@ -611,67 +623,91 @@ function ScatterStatsLine({ cell, pinnedCell }) {
   );
 }
 
-/** Just the scatter + fitted line + axes -- no title, no statistics text (see the note above). */
-function ScatterPlotSvg({ cell, pinnedCell, height, metricLabel }) {
-  // Measured first, unconditionally, so the hook order never changes across renders even though
-  // the component can return null just below (Rules of Hooks).
-  const [measureRef, measuredWidth] = useMeasuredWidth(height);
-  if (!pinnedCell || !cell || cell.loading || !cell.points || !cell.points.length) return null;
-  const pts = cell.points;
-  const xs = pts.map((p) => p.power);
-  const ys = pts.map((p) => p.pain);
-  const n = xs.length;
+/** The scatter + fitted line as a native Plotly figure (via `PlotlyRenderManager`, the same
+ * wrapper `PlotlyHeatmap` and `PlotlyViolin` above use), for the same reason as the violin:
+ * `responsive: true` hands the fill-the-panel job to Plotly's own resize handling instead of a
+ * hand-measured SVG. No title, no statistics text -- those render elsewhere (see the note above).
+ * Returns `null` if there's nothing pinned or loaded yet, same contract as the old SVG version. */
+function PlotlyScatter({ divId, cell, pinnedCell, side, metricLabel }) {
+  // Memoized so this array's identity is stable across renders that don't actually change the
+  // underlying points -- otherwise it is a fresh reference every render, which would defeat the
+  // effect's own dependency array (the exact bug decision 80 already fixed once on this page).
+  const points = useMemo(
+    () => ((pinnedCell && cell && !cell.loading && cell.points) ? cell.points : []),
+    [pinnedCell, cell]);
+  const figRef = useRef(null);
+  useEffect(() => {
+    if (!points.length) return undefined;
+    if (!figRef.current) figRef.current = new PlotlyRenderManager(divId, "en");
+    const fig = figRef.current;
+    fig.clearData();
+    fig.subplots(1, 1, { sharex: false, sharey: false });
 
-  const xlo = Math.min(...xs), xhi = Math.max(...xs);
-  const ylo = Math.min(...ys), yhi = Math.max(...ys);
-  // The height matches the heat map's own height exactly, as before; the width now fills the
-  // panel's real, measured column width instead of being forced to equal the height.
-  const h = height;
-  const w = measuredWidth || h;
-  // Wider than the old 50 -- at the old value, a 3-digit tick label ("150") right-aligned against
-  // the axis line ran into the rotated axis title sitting at x=12. Both are pushed further apart.
-  const pad = 60;
-  const sx = (x) => pad + ((x - xlo) / ((xhi - xlo) || 1)) * (w - 2 * pad);
-  const sy = (y) => (h - pad) - ((y - ylo) / ((yhi - ylo) || 1)) * (h - 2 * pad);
-  const mx = xs.reduce((s, v) => s + v, 0) / n, my = ys.reduce((s, v) => s + v, 0) / n;
-  let sxy = 0, sxx = 0;
-  xs.forEach((x, i) => { sxy += (x - mx) * (ys[i] - my); sxx += (x - mx) ** 2; });
-  const slope = sxx > 0 ? sxy / sxx : 0;
-  const intercept = my - slope * mx;
-  const colorFor = (label) => (label === "high" ? (PAL.fail || BIN_HI)
-    : (label === "low" ? (PAL.accent || BIN_LO) : "#aaaaaa"));
+    const xs = points.map((p) => p.power);
+    const ys = points.map((p) => p.pain);
+    const n = xs.length;
+    const mx = xs.reduce((s, v) => s + v, 0) / n, my = ys.reduce((s, v) => s + v, 0) / n;
+    let sxy = 0, sxx = 0;
+    xs.forEach((x, i) => { sxy += (x - mx) * (ys[i] - my); sxx += (x - mx) ** 2; });
+    const slope = sxx > 0 ? sxy / sxx : 0;
+    const intercept = my - slope * mx;
+    const xlo = Math.min(...xs), xhi = Math.max(...xs);
 
-  return (
-    <div ref={measureRef} style={{ width: "100%" }}>
-      <svg width={w} height={h}>
-        <PanelAxes w={w} h={h} pad={pad} xlo={xlo} xhi={xhi} sx={sx} ylo={ylo} yhi={yhi} sy={sy} />
-        {pts.map((pt, i) => (
-          <circle key={i} cx={sx(pt.power)} cy={sy(pt.pain)} r={2.6}
-            fill={colorFor(pt.label)} opacity={0.75} />
-        ))}
-        <line x1={sx(xlo)} y1={sy(intercept + slope * xlo)} x2={sx(xhi)} y2={sy(intercept + slope * xhi)}
-          stroke="#1a1a1a" strokeWidth={1.5} />
-        {/* Axis titles, same convention as the heat maps' own: the x title centred below its axis,
-            the y title rotated -90 and run alongside the tick labels rather than sitting sideways-on
-            as a horizontal string. Units named explicitly: band power is always in the device's own
-            least-significant-bit units on this page (LSB); the pain axis names whichever score is
-            currently selected, since the same axis serves NRS, VAS, MPQ, etc. */}
-        <text x={pad + (w - 2 * pad) / 2} y={h - 8} fontSize={13} textAnchor="middle" fill="#555">
-          Band power (LSB)
-        </text>
-        <text x={16} y={pad + (h - 2 * pad) / 2} fontSize={13} textAnchor="middle" fill="#555"
-          transform={`rotate(-90 16 ${pad + (h - 2 * pad) / 2})`}>
-          {`Pain${metricLabel ? ` (${metricLabel})` : ""}`}
-        </text>
-      </svg>
-    </div>
-  );
+    const colorFor = (label) => (label === "high" ? (PAL.fail || BIN_HI)
+      : (label === "low" ? (PAL.accent || BIN_LO) : "#aaaaaa"));
+    const groups = { high: [], low: [], other: [] };
+    points.forEach((pt) => { (groups[pt.label] || groups.other).push(pt); });
+    ["high", "low", "other"].forEach((label) => {
+      const pts = groups[label];
+      if (!pts.length) return;
+      fig.traces.push({
+        type: "scatter", mode: "markers", name: label === "high" ? "High pain" : "Low pain",
+        x: pts.map((pt) => pt.power), y: pts.map((pt) => pt.pain), showlegend: false,
+        marker: { size: 5, color: colorFor(label), opacity: 0.75 },
+        hovertemplate: "%{x:.0f} LSB, %{y:.1f}<extra></extra>",
+      });
+    });
+    fig.traces.push({
+      type: "scatter", mode: "lines", showlegend: false, hoverinfo: "skip",
+      x: [xlo, xhi], y: [intercept + slope * xlo, intercept + slope * xhi],
+      line: { color: "#1a1a1a", width: 1.5 },
+    });
+
+    fig.setLayoutProps({
+      height: side, width: side, margin: { l: 56, r: 8, t: 8, b: 40 },
+      xaxis: { showgrid: false, zeroline: false },
+      yaxis: { showgrid: false, zeroline: false },
+      showlegend: false,
+    });
+    fig.setXlabel("Band power (LSB)", { fontSize: 13 });
+    fig.setYlabel(`Pain${metricLabel ? ` (${metricLabel})` : ""}`, { fontSize: 13 });
+    fig.render();
+    Plotly.react(divId, fig.traces, fig.layout,
+      { displayModeBar: false, responsive: true, doubleClick: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [divId, points, side, metricLabel]);
+
+  useEffect(() => () => {
+    // Guarded: Plotly'''s own .purge() throws (uncaught, since this runs in an effect cleanup with
+    // no React error boundary anywhere in this app) if the div it manages is already gone from the
+    // DOM -- observed live on a native double-click, which Plotly'''s own internal click pipeline
+    // can apparently unmount/rebuild around even with the built-in reset-on-dblclick action turned
+    // off (doubleClick: false, set on the Plotly.react calls below). Checking first makes this
+    // cleanup robust to that regardless of why the div is already gone, rather than chasing the
+    // exact internal Plotly sequence that removes it.
+    if (figRef.current && document.getElementById(divId)) figRef.current.purge();
+  }, [divId]);
+
+  if (!points.length) return null;
+  // A true square: width 100% up to `side`, height locked to match via aspect-ratio, so the panel
+  // itself is square and Plotly's own responsive resize fills exactly that square -- rather than
+  // filling a rectangular column at a fixed height (the previous, non-square "fill the panel" fix).
+  return <div id={divId} style={{ width: "100%", maxWidth: side, aspectRatio: "1 / 1" }} />;
 }
 
 /** Persistent panel next to the AUC grid: two violins (high/low pain) and a Welch two-sample
  * t-test between them, reported because no other per-cell comparison statistic is stored. */
-function ViolinPanel({ cell, pinnedCell, channelLabel, height }) {
-  const [measureRef, measuredWidth] = useMeasuredWidth(height);
+function ViolinPanel({ cell, pinnedCell, channelLabel, height, aucValue }) {
   if (!pinnedCell) {
     return (
       <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
@@ -693,59 +729,17 @@ function ViolinPanel({ cell, pinnedCell, channelLabel, height }) {
   const lowVals = pts.filter((p) => p.label === "low").map((p) => p.power);
   const { t, df, p, n1, n2 } = welchTTest(highVals, lowVals);
 
-  const all = highVals.concat(lowVals);
-  const lo = Math.min(...all), hi = Math.max(...all);
-  // Same convention as ScatterPlotSvg: the height matches the heat map's own height, and the
-  // width fills the panel's real, measured column width rather than being forced to equal height.
-  const h = height;
-  const w = measuredWidth || h;
-  const pad = 60;
-  const vyScale = (v) => (h - pad) - ((v - lo) / ((hi - lo) || 1)) * (h - 2 * pad);
-  const colorFor = (label) => (label === "high" ? (PAL.fail || BIN_HI)
-    : (label === "low" ? (PAL.accent || BIN_LO) : "#aaaaaa"));
-
   return (
     <MDBox>
       {/* No title here -- it duplicated the scatter panel's own title exactly (both describe the
           same pinned cell); that one copy, above the scatter panel, is now the only one. */}
       <MDTypography variant="caption" color="dark" sx={{ fontSize: 15, display: "block", mb: 0.5 }}>
+        {`AUC = ${num(aucValue, 3)}, `}
         {`Welch t(${num(df, 1)}) = ${num(t, 2)}, p = ${p == null ? "—" : num(p, 4)} `}
         {`(high n=${n1}, low n=${n2})`}
       </MDTypography>
-      <div ref={measureRef} style={{ width: "100%" }}>
-        <svg width={w} height={h}>
-          {/* Only the y-axis (band power) is drawn -- x is the two categorical groups, already
-              labelled by the "High pain"/"Low pain" text under each violin. */}
-          <PanelAxes w={w} h={h} pad={pad} xlo={0} xhi={1} sx={() => 0} ylo={lo} yhi={hi}
-            sy={vyScale} xTicks={false} />
-          {/* Centres pulled in from the panel's own earlier 0.28/0.72 (a width-260 layout) to
-              0.3/0.7 with a slightly narrower half-width, so neither violin's tails run past the
-              panel edge now that this canvas's width is the panel's own real, measured width. */}
-          {[["high", highVals, w * 0.3], ["low", lowVals, w * 0.7]].map(([label, vals, cx]) => {
-            const path = violinPath(vals, cx, vyScale, w * 0.17);
-            return (
-              <g key={label}>
-                {path ? <polygon points={path} fill={colorFor(label)} opacity={0.35}
-                  stroke={colorFor(label)} strokeWidth={1} /> : null}
-                {vals.map((v, i) => (
-                  <circle key={i} cx={cx + (((i * 37) % 11) - 5) * 0.6} cy={vyScale(v)} r={1.6}
-                    fill={colorFor(label)} opacity={0.6} />
-                ))}
-                {/* Font matches the tick-label size used on every other axis on this panel and the
-                    scatter panel's own axes (16px) -- this is this plot's own x-axis category
-                    labelling, so it should read at the same size as everyone else's tick labels. */}
-                <text x={cx} y={h - 6} fontSize={16} textAnchor="middle" fill="#555">
-                  {label === "high" ? "High pain" : "Low pain"}
-                </text>
-              </g>
-            );
-          })}
-          <text x={16} y={pad + (h - 2 * pad) / 2} fontSize={13} textAnchor="middle" fill="#555"
-            transform={`rotate(-90 16 ${pad + (h - 2 * pad) / 2})`}>
-            Band power (LSB)
-          </text>
-        </svg>
-      </div>
+      <PlotlyViolin divId="biomarker-violin-panel" highVals={highVals} lowVals={lowVals}
+        side={height} />
     </MDBox>
   );
 }
@@ -1048,8 +1042,8 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
                   onHover={handleHover} onClick={(r, c) => handleClick(corrSw, r, c)} />
               </Grid>
               <Grid item xs={12} md={5}>
-                <ScatterPlotSvg cell={pinnedCellData} pinnedCell={pinnedCell}
-                  height={panelHeight} metricLabel={metricLabel} />
+                <PlotlyScatter divId="biomarker-scatter-panel" cell={pinnedCellData}
+                  pinnedCell={pinnedCell} side={panelHeight} metricLabel={metricLabel} />
               </Grid>
 
               <Grid item xs={12} md={7}>
@@ -1063,7 +1057,10 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
               </Grid>
               <Grid item xs={12} md={5}>
                 <ViolinPanel cell={pinnedCellData} pinnedCell={pinnedCell}
-                  channelLabel={channelLabel} height={panelHeight} />
+                  channelLabel={channelLabel} height={panelHeight}
+                  aucValue={(pinnedCell && aucSw && aucSw.auc_grid
+                    && aucSw.auc_grid[pinnedCell.row] && aucSw.auc_grid[pinnedCell.row][pinnedCell.col])}
+                />
               </Grid>
             </Grid>
 

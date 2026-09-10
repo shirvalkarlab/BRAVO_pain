@@ -30,6 +30,7 @@ import pandas as pd
 
 from Server import models
 from modules import Database
+from modules.HelperFunctions import json_compliant_handler
 
 from . import pipeline
 from . import adapter
@@ -922,6 +923,65 @@ def _power_list_cached(participant_uid):
         if len(_POWER_LIST_MEMO) >= _POWER_LIST_MEMO_MAX:
             _POWER_LIST_MEMO.pop(next(iter(_POWER_LIST_MEMO)))
         _POWER_LIST_MEMO[participant_uid] = result
+    return result
+
+
+# Same decision-22 justification as _RECORDINGS_SETUP_MEMO/_POWER_LIST_MEMO above (recordings are
+# immutable once exported): availability_for_participant's own three raw loads (td, chronic_list,
+# powerdomain_list), memoized in-process. Deliberately a THIRD, narrower memo rather than a reuse
+# of the two above: _recordings_setup_cached also builds psd_list/event/montage PSD blocks this
+# lightweight endpoint never reads, and _power_list_cached does not carry td. Holds no pain-report
+# data of any kind.
+_AVAILABILITY_RECORDINGS_MEMO = {}
+_AVAILABILITY_RECORDINGS_MEMO_MAX = 8
+_AVAILABILITY_RECORDINGS_MEMO_LOCK = threading.Lock()
+
+
+def _availability_recordings_cached(participant_uid):
+    """(td, chronic_list, powerdomain_list) for one participant, memoized in-process."""
+    with _AVAILABILITY_RECORDINGS_MEMO_LOCK:
+        cached = _AVAILABILITY_RECORDINGS_MEMO.get(participant_uid)
+    if cached is not None:
+        return cached
+    td = _load_recordings(participant_uid, TIMEDOMAIN_TYPES)
+    chronic_list = _load_recordings(participant_uid, CHRONIC_TYPES)
+    powerdomain_list = _load_recordings(participant_uid, POWERDOMAIN_TYPES)
+    for c in chronic_list:
+        if isinstance(c, dict):
+            c.setdefault("Source", "chronic")
+    result = (td, chronic_list, powerdomain_list)
+    with _AVAILABILITY_RECORDINGS_MEMO_LOCK:
+        if len(_AVAILABILITY_RECORDINGS_MEMO) >= _AVAILABILITY_RECORDINGS_MEMO_MAX:
+            _AVAILABILITY_RECORDINGS_MEMO.pop(next(iter(_AVAILABILITY_RECORDINGS_MEMO)))
+        _AVAILABILITY_RECORDINGS_MEMO[participant_uid] = result
+    return result
+
+
+# Caches _build_availability's own OUTPUT for availability_for_participant, keyed on every input
+# that could change it -- participant, the native-LSB-tolerance knob (the one live-updating control
+# this lightweight endpoint reads), the resolved label metric, and a CONTENT DIGEST of the
+# pain-report table (never the participant alone) -- so a newly-filed rating is a cache MISS, never
+# a stale HIT, honouring decision 22's rule that no pain-derived product may serve stale. No expiry
+# beyond that: recordings are immutable once exported and everything else that could change the
+# answer is already in the key. `_load_pros` itself is NOT memoized here or anywhere in this
+# function -- decision 22 requires it fetched fresh every time, which is also what makes the digest
+# in this key trustworthy rather than itself stale.
+_AVAILABILITY_RESULT_MEMO = {}
+_AVAILABILITY_RESULT_MEMO_MAX = 8
+_AVAILABILITY_RESULT_MEMO_LOCK = threading.Lock()
+
+
+def _availability_result_cached(key, build_fn):
+    """Return the cached availability result for `key`, else call `build_fn()`, store it, return it."""
+    with _AVAILABILITY_RESULT_MEMO_LOCK:
+        cached = _AVAILABILITY_RESULT_MEMO.get(key)
+    if cached is not None:
+        return cached
+    result = build_fn()
+    with _AVAILABILITY_RESULT_MEMO_LOCK:
+        if key not in _AVAILABILITY_RESULT_MEMO and len(_AVAILABILITY_RESULT_MEMO) >= _AVAILABILITY_RESULT_MEMO_MAX:
+            _AVAILABILITY_RESULT_MEMO.pop(next(iter(_AVAILABILITY_RESULT_MEMO)))
+        _AVAILABILITY_RESULT_MEMO[key] = result
     return result
 
 
@@ -3884,29 +3944,45 @@ def availability_for_participant(request_data):
                 "label_metric": label_metric,
                 "message": "DEMO DATA — synthetic availability timeline."}
 
-    # Real participant: load only the recordings the availability extractor consumes.
-    td = _load_recordings(participant_uid, TIMEDOMAIN_TYPES)
-    chronic_list = _load_recordings(participant_uid, CHRONIC_TYPES)
-    powerdomain_list = _load_recordings(participant_uid, POWERDOMAIN_TYPES)
-    for c in chronic_list:
-        if isinstance(c, dict):
-            c.setdefault("Source", "chronic")
+    # Real participant. The pain-report table is fetched fresh every time regardless (decision 22
+    # -- never memoized), which is cheap on its own (well under a second) and is what makes the
+    # cache key below trustworthy: its content digest is the ONE thing that can tell a genuinely
+    # new pain rating apart from an unchanged one, so a stale entry can never be served.
     pro_df = _load_pros(request_data, Participant)
     pro_df, label_metric, _ = _resolve_biomarker_metric(request_data, pro_df)
+    pro_digest = _pro_table_digest(pro_df) if pro_df is not None and len(pro_df) else "empty"
+    cache_key = ("availability_v1", participant_uid, native_lsb_tolerance_s, label_metric, pro_digest)
 
-    chan_order = _derive_chan_order(td)
-    recorded_powers = _recorded_powers(powerdomain_list)
-    region_map = _region_map(Participant, list(chan_order) + [p["raw"] for p in recorded_powers])
+    def _build():
+        # Only reached on a genuine cache miss -- the recording loads and _build_availability
+        # itself (measured live on RCS08 at ~2.9s and ~5.0s respectively) are skipped entirely on
+        # a hit. Recordings are loaded through the participant-scoped memo above so that even a
+        # miss (a newly-filed rating, say) does not re-pay the recording-decode cost if some other
+        # request already warmed it for this participant.
+        td, chronic_list, powerdomain_list = _availability_recordings_cached(participant_uid)
+        chan_order = _derive_chan_order(td)
+        recorded_powers = _recorded_powers(powerdomain_list)
+        region_map = _region_map(Participant, list(chan_order) + [p["raw"] for p in recorded_powers])
+        # warm=True: _build_availability dispatches the eager rating-centered matrix warm from the
+        # recordings IT already decoded (td_all/psd_all carry "Data"), on the background pool, so
+        # the expensive Welch is on disk by the time the user clicks "Start exploratory analysis"
+        # and the request thread never re-decodes. Only the timeline path warms; the full-run path
+        # does not (it would race the scan writing the same matrix npz).
+        built = _build_availability(
+            participant_uid, chronic_list=chronic_list, powerdomain_list=powerdomain_list,
+            td_list=td, pro_df=pro_df, label_metric=label_metric, region_map=region_map, warm=True,
+            native_lsb_tolerance_s=native_lsb_tolerance_s)
+        # Normalized to JSON-safe values (numpy arrays -> lists, NaN/Inf -> None) BEFORE this
+        # entry is stored, not left for the view layer's own json_compliant_handler(Analysis) call
+        # to do later. That call mutates whatever it is given IN PLACE -- harmless the first time,
+        # but this same object is now handed back verbatim on every later cache hit too, so without
+        # this, a second concurrent request could be mutating the one shared cached dict while a
+        # third was reading it. Normalizing once here, before the object is ever shared, avoids
+        # that regardless of request timing; the view's later call becomes a cheap, idempotent
+        # no-op pass over data that is already in its final form.
+        return json_compliant_handler(built)
 
-    # warm=True: _build_availability dispatches the eager rating-centered matrix warm from the
-    # recordings IT already decoded (td_all/psd_all carry "Data"), on the background pool, so the
-    # expensive Welch is on disk by the time the user clicks "Start exploratory analysis" and the
-    # request thread never re-decodes. Only the timeline path warms; the full-run path does not (it
-    # would race the scan writing the same matrix npz).
-    av = _build_availability(
-        participant_uid, chronic_list=chronic_list, powerdomain_list=powerdomain_list,
-        td_list=td, pro_df=pro_df, label_metric=label_metric, region_map=region_map, warm=True,
-        native_lsb_tolerance_s=native_lsb_tolerance_s)
+    av = _availability_result_cached(cache_key, _build)
 
     msg = None
     if not av.get("records"):

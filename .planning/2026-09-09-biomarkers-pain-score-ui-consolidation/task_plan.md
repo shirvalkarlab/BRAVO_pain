@@ -14,7 +14,7 @@ Six-part display cleanup on the Biomarkers exploration page, per the user's own 
    "how to read this" text.
 
 ## Next Step
-Phases A, B, C, C.1, C.2, C.3 and C.4 are all done and verified live. Only Phase D remains:
+Phases A, B, C, C.1-C.5 are all done and verified live. Only Phase D remains:
 condense the "how to read this" drawer text (confirmed, live, to be exactly as verbose as the spec
 described — a full screen of bullet points) by roughly half, reorder by priority, and enlarge the
 font, following this project's `HOUSE_RULES_writing_and_claims.md` and the `ps-scientific-writing`
@@ -275,6 +275,53 @@ Four rounds of direct live feedback on the C.3 layout, addressed in sequence.
       overlap (zoomed screenshot confirmed clear whitespace between the rotated title and the tick
       numbers); the warning text is absent from the served bundle's rendered page
       (`document.body.innerText` checked directly). No console errors at any step.
+  - **Status:** complete
+
+### Phase C.5: Scatter and violin panels rebuilt as native Plotly figures; click-reliability fixes; AUC annotation — COMPLETE
+Requested directly: "make the scatter[/violin] plot using a Plotly command so that it auto-resizes
+to fill the panel," then "make the actual panel size square," then three rounds of direct feedback
+on the violin's jittered-point styling, then a report that single click needed two tries and that a
+native double-click crashed the whole page, then a final request to annotate the AUC above the
+violin.
+- [x] `PlotlyViolin` and a new `PlotlyScatter` component replace the hand-rolled SVG versions,
+      both native `type: "violin"`/`type: "scatter"` Plotly traces via `PlotlyRenderManager` (the
+      same wrapper the two calibrated heat maps already use), with `responsive: true` so Plotly's
+      own resize handling fills the panel rather than a hand-measured `ResizeObserver`. Both
+      panels are now a genuine square (`aspect-ratio: 1/1`, capped at the heat map's own height).
+      `useMeasuredWidth`, `PanelAxes` and `niceTicks` (the SVG-era axis-drawing helpers) are deleted
+      as dead code now that nothing calls them.
+- [x] Violin marker styling, iterated live to its final form: solid, same-hue-as-its-own-violin
+      points (not a shared neutral dark colour), no marker outline, with the violin's own fill
+      lightened to 0.4 alpha specifically so the fully-opaque points read as visibly darker against
+      it -- confirmed with a zoomed screenshot.
+- [x] The violin panel's stats line now leads with `AUC = ${aucSw.auc_grid[row][col]}` -- the
+      grid's own already-computed value for the pinned cell, read directly, never recomputed
+      client-side -- before the existing Welch t-test text. Verified live against the grid's own
+      hover tooltip for the identical cell: both read 0.535.
+- [x] Fixed: single click intermittently needing two tries. Root cause -- the heat map's shared
+      cross-highlight marker was rebuilt inside the SAME effect that (re)builds the whole figure
+      and attaches the `plotly_click` listener, keyed on `hoveredCell`/`pinnedCell`; a real mouse
+      gliding across cells before landing on one to click fired hover events that tore down and
+      reattached the listener, and a click landing in that window found nothing listening. Split
+      into two effects: one draws the heatmap/best-cell traces and owns the listeners, keyed only
+      on the underlying grid data; a second updates ONLY a fixed-index highlight trace via
+      `Plotly.restyle`, keyed on hover/pinned state, never touching the listeners.
+- [x] Fixed: a genuine native double-click crashed the whole page to a blank white screen.
+      Reproduced directly (two separate single clicks were harmless; one real double-click was
+      not) and root-caused via the console: `Error: No DOM element with id '...' exists on the
+      page` thrown from `.purge()` in all four panels' cleanup effects at once -- Plotly's own
+      built-in double-click "reset axes" handling was tearing the chart divs down in a way React's
+      unmount bookkeeping did not expect, and the resulting uncaught exception (no error boundary
+      exists anywhere in this app) crashed the whole render tree. Fixed with `doubleClick: false`
+      on all three `Plotly.react` calls (none of these panels have zoom/pan to reset) and by
+      guarding every purge cleanup with a `document.getElementById(divId)` check plus a try/catch
+      around the new restyle call. Re-reproduced after each fix: still crashed with `doubleClick:
+      false` alone; no longer crashed once the purge guards were added, across three separate
+      double-clicks on three different cells/grids, no console errors either time.
+- [x] Built clean throughout (multiple rounds). Verified live on RCS08 after every round: panels
+      fill their square correctly and auto-resize; violin points read clearly against the lighter
+      fill; the AUC annotation matches the grid's own tooltip; single click pins instantly and
+      reliably; double-click no longer crashes.
   - **Status:** complete
 
 ### Phase D: Condense the "how to read this" text
