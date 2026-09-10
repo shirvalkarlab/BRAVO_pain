@@ -276,80 +276,21 @@ MIN_VISITS_FOR_CLUSTER_ROBUST = 8
 #: described above used 4 and should not have; it is recorded here so the next run does not repeat
 #: it. Cells whose interval is narrower than this are degenerate rather than precise:
 DEGENERATE_CI_WIDTH_LOG10 = 0.005
-
-
-# =================================================================================================
-# THE WITHIN-VISIT AMPLITUDE-RESPONSE SCREEN
-# =================================================================================================
-# Promoted out of a scratch script on 2026-09-05, because it is the best-identified design in the
-# project and it existed only as a bridge file that the workspace sweep would have removed.
+# `within_visit_band_scores` WAS HERE AND WAS DELETED ON 2026-09-10, BY THE PI'S DECISION AFTER
+# SEEING WHAT IT ACTUALLY SAID. It scored every band across within-visit amplitude steps using the
+# visit as both era and cluster -- a third grouping of the same raw pairs the per-run amplitude table
+# and the pooled-across-visits table already treat two other ways. Everything it computed existed in
+# wired code: the harmonic-landing flag through `three_source_response` and `analytics`, the slope
+# and separation through `lfp_response`. Only its grouping was its own.
 #
-# WHY IT IS A DIFFERENT DESIGN RATHER THAN A RE-RUN. The chronic screen reads exposure epochs whose
-# amplitude is entangled with calendar time, so era blocking is the only defence against the
-# confound, and on RCS08 that defence fails in both directions: the full-record window fails on
-# capture DIRECTION in all 18 bands (the arms straddle two programming regimes, so power rises
-# across them) and the five-era window fails on capture SEPARATION in 14 of 18 (the amplitude range
-# collapses to 1.0 mA). Inside one clinic visit the rate, pulse width and contacts are fixed and the
-# whole ladder happens within hours, so there is no time confound to adjust for -- and the measured
-# within-visit amplitude span reaches 3.5 mA.
+# Run live on RCS08 before deciding, all 22 band centres aligned on all three sensing contacts:
+# ONE_THREE_LEFT (13 steps, 4 visits), ZERO_THREE_RIGHT (12 steps, 6 visits) and ZERO_TWO_LEFT
+# (5 steps, 1 visit) each returned 22 scored bands and **zero responders**. The stated caveat: the
+# response function defaults to requiring SUPPRESSION, power falling as current rises, so the zero
+# means "no band this participant can be turned down into", which is the mode that matters for
+# closed-loop control. On that evidence the grouping added nothing this record does not already
+# carry, and it had no caller and no decision protecting it.
 #
-# Measured on RCS08 at 55 Hz: 229 steps with a settled window over 19 visits, of which 120 carried
-# streaming tiles, giving arms at 1.0 and 3.5 mA and median separation 0.53 to 0.89 per cell. So
-# separation stops being the binding constraint, which is what the design was for.
+# The lesson kept rather than the code: a third statistical grouping is only worth its maintenance
+# if somebody reads it. This one was written, tested, proven, and reached by nothing for months.
 
-# THE STEP/ARM PRIMITIVES LIVE IN StimOptimizer, NOT HERE, and are re-exported for callers that
-# already import this module. They were written here first and moved on 2026-09-05 once the
-# evidence BUILDER was added to StimOptimizer, because the dependency between the two packages runs
-# one way only — ClosedLoopDeployment imports StimOptimizer, never the reverse — and a builder in
-# StimOptimizer cannot reach back into this file. Re-exporting rather than copying, for the same
-# reason MIN_CAPTURE_SEPARATION_D is now imported rather than restated: two literals encoding one
-# rule is how that constant drifted to a factor of two apart.
-#
-# What stays HERE is `within_visit_band_scores`, because its harmonic-landing flag needs
-# `harmonic_landings_hz` from Biomarkers. Keeping that in this file is precisely what lets the
-# StimOptimizer side stay free of a Biomarkers import, which a test asserts.
-from StimOptimizer.routines.within_visit import (        # noqa: E402  (re-export, not a cycle)
-    AMP_ARM_BIN_MA,
-    MIN_SETTLED_TILES,
-    amplitude_arm_bins,
-    step_settled_medians,
-)
-
-
-def within_visit_band_scores(power_by_center, amp_mA, visits, *, response_fn,
-                             rate_hz=None, bin_mA=AMP_ARM_BIN_MA):
-    """Score every band's amplitude response on within-visit steps.
-
-    ``power_by_center`` maps a band centre in Hz to one power value per step, ``visits`` supplies
-    the era AND the cluster — the visit is the repeat unit here, because amplitude varies WITHIN a
-    visit, which is precisely what the chronic epochs could not offer and what makes era blocking
-    informative rather than absorptive.
-
-    ``rate_hz``, when given, flags each band that contains a folded stimulation harmonic. The flag
-    is REPORTED AND NOT ACTED ON. Co-location with a landing is a coincidence until tested: on
-    RCS08 the two channels carrying responses at the 25 Hz landing move in OPPOSITE directions with
-    p below 1e-3, which an aliased harmonic cannot produce, since the landing is a property of the
-    stimulation and the sampling rate and is therefore identical on every sensing channel.
-    """
-    amp = amplitude_arm_bins(amp_mA, bin_mA)
-    vis = np.asarray(visits)
-    landings = ([float(d["lands_at_hz"]) for d in harmonic_landings_hz(float(rate_hz), 5.0, 32.5)]
-                if rate_hz is not None else [])
-    rows = []
-    for c in sorted(power_by_center):
-        p = np.asarray(power_by_center[c], dtype=float)
-        if p.shape != amp.shape:
-            raise ValueError(f"band {c}: power {p.shape} does not match amplitude {amp.shape}")
-        r = response_fn(p, amp, era=vis, cluster=vis)
-        rows.append({
-            "center_hz": float(c),
-            "on_harmonic_landing": bool([x for x in landings if abs(x - float(c)) <= BAND_HALF_HZ]),
-            "responds": r.responds, "direction_ok": r.direction_ok,
-            "separation_d": r.separation_d,
-            "slope_log_per_mA": r.slope_log_per_mA, "slope_p": r.slope_p,
-            "slope_unadjusted": r.slope_unadjusted,
-            "amp_low_mA": r.amp_low_mA, "amp_high_mA": r.amp_high_mA,
-            "n_low": r.n_low, "n_high": r.n_high, "n_eras": r.n_eras,
-            "n_steps": int(amp.size),
-        })
-    return rows

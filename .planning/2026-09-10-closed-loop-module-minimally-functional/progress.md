@@ -59,3 +59,11 @@ these functions as deliberately built ahead of their wiring.
 | Blocks nothing | All other analyses present, verdict unmoved | 29 keys, all 8 others present, `blocked`/`licensed` false unchanged | Pass |
 | First draft passed the wrong frame | — | `eps` has no rating columns; every item said "no ratings matched" and would have forever | Fixed |
 | Container / host | 608 / 1019 | **608 passed 0 failed / 1019 passed**, 1 known | Pass |
+
+### Phase 4 — within_visit_band_scores deleted
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| What the third grouping says | Live numbers | 22 bands x 3 contacts, **0 responders everywhere** (pooled table: 194 of 294 assessed) | Ran |
+| Caveat stated | Not buried | `assess_response` defaults to requiring suppression; the zero is "no band that suppresses" | Stated |
+| Deletion breaks nothing | Suites green | **Broke 3 tests** — the import block was a re-export; repointed them at `within_visit` | Fixed |
+| Host / container | 1016 / 608 | **1016 passed** (1019 − 3 removed), **608 passed 0 failed** | Pass |

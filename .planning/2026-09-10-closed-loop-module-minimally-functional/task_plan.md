@@ -15,7 +15,11 @@ The line I do not cross alone: anything that changes what a clinician reads as a
 PI's call. Adding a reported caveat is not that; changing `verdict` or `licensed` is.
 
 ## Next Step
-Phase 4 needs the PI's call: `clinic_steps.within_visit_band_scores` is a thin orchestrator whose
+The PI's three other decisions — open items 26 (mark the device-spectrum cells), 10 (cross the
+device-rules screen with a candidate setting) and 7 (sweep every pain score, precomputed). All three
+are in the Biomarkers module and the frontend, and each is its own piece of work.
+
+Superseded next step, kept for the trail: Phase 4 needed the PI's call: `clinic_steps.within_visit_band_scores` is a thin orchestrator whose
 ingredients all exist in wired code, but whose grouping (visit as both era and cluster, across
 within-visit amplitude steps) is reproduced by neither wired path. Wire, delete, or leave. Then the
 PI's three other decisions — open items 26, 10 and 7.
@@ -117,10 +121,26 @@ Phase 2 — the consistency check chain
       present and the verdict unmoved at `blocked`/`licensed` false.
 
 ### Phase 4: clinic_steps.within_visit_band_scores — 1 function
-**Status:** pending
+**Status:** complete
 
-- [ ] Read it and find what it computes that nothing else does.
-- [ ] Wire or delete. This one is named in no decision, so it has no built-ahead defence.
+- [x] Established what it uniquely computes: nothing. The harmonic-landing flag is already applied
+      in wired code (`three_source_response`, `analytics`), and the slope and separation come from
+      `lfp_response` through a caller-supplied function. Only its GROUPING was its own — visit as
+      both era and cluster across within-visit amplitude steps.
+- [x] **Run live before deciding, at the PI's request.** All 22 band centres aligned on all three
+      sensing contacts: ONE_THREE_LEFT (13 steps, 4 visits), ZERO_THREE_RIGHT (12 steps, 6 visits),
+      ZERO_TWO_LEFT (5 steps, 1 visit) — 22 scored bands each and **zero responders everywhere**,
+      against the pooled table's 194 of 294 assessed. Caveat stated rather than buried: the response
+      function defaults to requiring SUPPRESSION, so the zero means "no band that can be turned down
+      into", the mode that matters for closed-loop control.
+- [x] **Deleted on that evidence**, with the numbers and the caveat written into the file where the
+      function was, so the next reader sees why rather than an unexplained gap.
+- [x] Removed its three tests and the `within_visit` re-export it alone needed.
+- [x] **A real mistake in the deletion, caught by the suite.** Removing the re-export broke three
+      tests that read `step_settled_medians` and `amplitude_arm_bins` through `clinic_steps`. Checked
+      by grep that NO production code ever did, so the fix is to point those tests at
+      `within_visit`, which defines them, rather than restore a re-export nothing uses. The
+      behaviour under test is unchanged; only the module they ask by.
 
 ### Phase 5: Prove and land
 **Status:** pending
