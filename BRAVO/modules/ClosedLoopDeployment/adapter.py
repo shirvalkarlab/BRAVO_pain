@@ -1585,6 +1585,100 @@ def write_amplitude_effect(participant, build, *, min_settings=3):
     return summary
 
 
+def pooled_shape_signature(participant, *, tiles_key, min_points=None):
+    """The key for the pooled within-visit table. Same inputs as the per-run amplitude table --
+    the tile entry, the recording set the ladders are read from, and the settled-window rule --
+    plus the pooling floor, because a pool that needs eight points is not the same answer as one
+    that needs five. Nothing decoded enters it (decision 24)."""
+    from StimOptimizer.routines import within_visit as _wv
+    from . import amplitude_effect as _amp
+    floor = int(_amp.MIN_POINTS_CURVATURE if min_points is None else min_points)
+    return (_amp.POOLED_KIND, _amp.POOLED_RULE_VERSION,
+            str(getattr(participant, "uid", participant)), tiles_key,
+            recording_set_signature(participant), "all_runs", floor,
+            float(_wv.PRE_CHANGE_WINDOW_S), int(_wv.MIN_CHUNKS_PRE_CHANGE))
+
+
+def write_pooled_shape(participant, build, *, is_every_run, min_points=None):
+    """Derive the pooled within-visit table from a FULL-run comparison and write it to the store.
+
+    `is_every_run` is not a courtesy flag -- **this function refuses to write when it is False.**
+    Pooling the dose-response over the page's truncated build produces a table that looks complete
+    and answers from a fraction of the visits, and a stored wrong answer is worse than no stored
+    answer because everything downstream then trusts it. Measured on RCS08, ONE_THREE_LEFT at
+    17.5 Hz: a full build pools 13 points across 4 visits, the 4-run page slice pools 6 across 1.
+    """
+    from . import amplitude_effect as _amp
+    from . import three_source_response as _3src
+    try:
+        from modules.CacheStore import provenance as _prov
+    except ImportError:                                # pragma: no cover - depends on the runner
+        from CacheStore import provenance as _prov
+
+    summary = {"written": False, "n_rows": 0, "n_contacts": 0, "n_bands": 0, "store_key": None}
+    if not is_every_run:
+        summary["reason"] = ("the comparison was built from only the runs the page draws, and a "
+                             "pooled answer from a fraction of the visits must not be stored")
+        return summary
+    if not build or not build.get("comparisons"):
+        summary["reason"] = ((build or {}).get("absent_reason")
+                             or "no run of rising current to pool")
+        return summary
+
+    table = _amp.pooled_table_from_build(build, checked_lo_hz=_3src.CHECKED_LO_HZ,
+                                         checked_hi_hz=_3src.CHECKED_HI_HZ,
+                                         band_half_hz=_3src.BAND_HALF_HZ,
+                                         min_points=(_amp.MIN_POINTS_CURVATURE
+                                                     if min_points is None else min_points))
+    summary["n_rows"] = int(len(table))
+    if not len(table):
+        summary["reason"] = "the voltage-trace route had nothing to pool in any run"
+        return summary
+    summary["n_contacts"] = int(table["sensing_contact"].nunique())
+    summary["n_bands"] = int(table["band_center_hz"].nunique())
+    summary["n_assessed"] = int((table["pooled_direction"].astype(str) != "not assessed").sum())
+
+    tiles_key = _tiles_key_for(participant)
+    if tiles_key is None:
+        summary["reason"] = "no tile entry key, so the table was derived but not stored"
+        return summary
+    uid = str(getattr(participant, "uid", participant))
+    sig = pooled_shape_signature(participant, tiles_key=tiles_key, min_points=min_points)
+    prov = _prov.flatten([_prov.entry(tiles_key, kind="raw_lsb_tiles", writer="biomarkers")])
+    _cache_store.store_if_absent(_amp.POOLED_KIND, uid, sig, lambda: table,
+                                 writer="closed_loop", trigger="deployment_report",
+                                 provenance=prov, n_recordings=None,
+                                 extra={"n_rows": summary["n_rows"],
+                                        "n_contacts": summary["n_contacts"],
+                                        "n_bands": summary["n_bands"]},
+                                 root=_SHARED_CACHE_DIR_OVERRIDE)
+    summary["store_key"] = _cache_store.product_key(_amp.POOLED_KIND, uid, sig)
+    summary["written"] = _cache_store.read_stamp(_amp.POOLED_KIND, uid, sig,
+                                                 root=_SHARED_CACHE_DIR_OVERRIDE) is not None
+    return summary
+
+
+def pooled_shape_if_stored(participant):
+    """The newest stored pooled within-visit table for this participant, or None.
+
+    `load_newest` rather than a keyed lookup, for the same reason decision 41 established: the page
+    reading this cannot know the key the writer built it under. It is read on EVERY request,
+    including the ones whose own build was truncated -- that is the whole point, since the stored
+    table was pooled from every run and so gives the same answer either way.
+    """
+    from . import amplitude_effect as _amp
+    try:
+        payload, _stamp = _cache_store.load_newest(_amp.POOLED_KIND,
+                                                   str(getattr(participant, "uid", participant)),
+                                                   consumer="closed_loop",
+                                                   root=_SHARED_CACHE_DIR_OVERRIDE)
+        return payload
+    except Exception:                                  # noqa: BLE001 - a miss is not an error
+        _log.warning("closed-loop: the stored pooled within-visit table could not be read for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
+        return None
+
+
 def cache_status_for_page(participant):
     """When the decoded recordings and settings this report reads were last assembled."""
     meaning = ("the date the decoded recordings, the therapy settings and the matched pain reports "
@@ -1844,6 +1938,19 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                               f"be assembled: {_exc!r}"),
         }
 
+    # THE POOLED WITHIN-VISIT TABLE, written only from a build that holds every run. This is what
+    # lets the consistency check below answer the same way on every request instead of depending on
+    # whether this particular one happened to rebuild the comparison in full.
+    try:
+        out["within_visit_pooled_shape"] = write_pooled_shape(
+            participant, _3build, is_every_run=_3_is_every_run)
+    except Exception as _exc:                          # noqa: BLE001
+        _log.warning("closed-loop report: the pooled within-visit table could not be written "
+                     "for %s", getattr(participant, "uid", participant), exc_info=True)
+        out["within_visit_pooled_shape"] = {
+            "written": False, "n_rows": 0, "n_contacts": 0, "n_bands": 0, "store_key": None,
+            "reason": f"the pooled within-visit table could not be written: {_exc!r}"}
+
     # ---------------------------------------------------------------------------------------------
     # THE CONSISTENCY CHECK (decision 74): does raising current on this contact move pain the way
     # the correlation implies, THROUGH this band?
@@ -1866,44 +1973,33 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     # it is for `band_stability` above.
     try:
         from . import direction_consistency as _dc
+        from . import amplitude_effect as _amp_pool
         _dc_first = (cands[0] or {}) if cands else {}
         _dc_ch, _dc_fc = _dc_first.get("channel"), _dc_first.get("center_hz")
-        if _3build is None:
-            out["implied_control_direction"] = {
-                "implied_control_direction": "not assessed", "gates_nothing": True,
-                "reason": ("the three-way comparison of how current moves band power could not be "
-                           "assembled, so the current-to-power link is unavailable")}
-        elif not _3_is_every_run:
-            # NEVER POOL OVER A TRUNCATED BUILD. The comparison above is built with `max_runs` cut
-            # to what the page displays whenever the amplitude-effect and ground-truth entries are
-            # already stored -- which is the steady state after the first request. Pooling the
-            # within-visit dose-response over that slice defeats the entire point of decision 55/56,
-            # which is to pool across EVERY visit.
-            #
-            # Measured on RCS08, ONE_THREE_LEFT at 17.5 Hz, the same band on the same day:
-            #   cold cache, every run  -> 13 points across 4 visits, "no straight-line movement"
-            #   warm cache, 4 runs     ->  6 points across 1 visit,  "not assessed"
-            # The 13 points across 4 visits is exactly what decision 56 measured for this contact.
-            #
-            # An answer that depends on whether a cache entry happens to exist is not a finding, and
-            # the wrong half of that pair is the one a reader would almost always see. So this says
-            # so plainly instead. Making the check genuinely answer needs its own full-run build or
-            # a stored pooled table -- a real piece of work, recorded rather than faked.
-            out["implied_control_direction"] = {
-                "implied_control_direction": "not assessed", "gates_nothing": True,
-                "reason": (f"the comparison behind this check was built from at most "
-                           f"{THREE_SOURCE_RUNS_ON_PAGE} stimulation-current runs for display, and "
-                           f"pooling the within-visit dose-response needs every run this "
-                           f"participant has; a partial pool would answer differently depending on "
-                           f"what happened to be cached")}
-        elif _dc_ch is None or _dc_fc is None:
+        if _dc_ch is None or _dc_fc is None:
             out["implied_control_direction"] = {
                 "implied_control_direction": "not assessed", "gates_nothing": True,
                 "reason": "the candidate carries no sensing contact or band centre"}
         else:
-            _dc_out = _dc.for_band(_3build, _grid_export, _dc_ch, float(_dc_fc))
-            _dc_out["gates_nothing"] = True
-            out["implied_control_direction"] = _dc_out
+            # THE POOLED HALF COMES FROM THE STORED TABLE, NEVER FROM `_3build`. That build is
+            # truncated to the runs the page draws whenever the write-back entries already exist --
+            # the steady state -- and pooling over it answers from a fraction of the visits. The
+            # stored table was pooled from every run, so this reads the same on a cold request and a
+            # warm one, which is the property that makes it a finding rather than an artefact.
+            _dc_pooled = _amp_pool.pooled_row(pooled_shape_if_stored(participant),
+                                              _dc_ch, float(_dc_fc))
+            if _dc_pooled is None:
+                out["implied_control_direction"] = {
+                    "implied_control_direction": "not assessed", "gates_nothing": True,
+                    "reason": ("the pooled within-visit table has no row for this contact and band "
+                               "yet; it is written the next time the comparison is built from every "
+                               "run, and this check reads it rather than pooling a partial one")}
+            else:
+                _dc_out = _dc.for_band(_3build, _grid_export, _dc_ch, float(_dc_fc),
+                                       pooled=_dc_pooled)
+                _dc_out["gates_nothing"] = True
+                _dc_out["pooled_from"] = "stored table, pooled across every run"
+                out["implied_control_direction"] = _dc_out
     except Exception as _exc:                          # never let this take down the whole report
         _log.warning("closed-loop report: the consistency check could not be assembled for %s",
                      getattr(participant, "uid", participant), exc_info=True)

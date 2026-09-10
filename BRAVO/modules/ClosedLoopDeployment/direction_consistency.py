@@ -144,7 +144,8 @@ def correlation_row_for_band(band_sweep_grid, sensing_contact, band_center_hz, *
     return None
 
 
-def for_band(build, band_sweep_grid, sensing_contact, band_center_hz, *, min_points=8):
+def for_band(build, band_sweep_grid, sensing_contact, band_center_hz, *, min_points=8,
+             pooled=None):
     """The full consistency check for one (sensing contact, band centre): pools the within-visit
     dose-response from ``build`` (`three_source_response.build_for_participant`'s output) and
     looks up the cross-visit correlation row from ``band_sweep_grid``
@@ -152,8 +153,15 @@ def for_band(build, band_sweep_grid, sensing_contact, band_center_hz, *, min_poi
     """
     from . import amplitude_effect as _amp
 
-    within_visit_pooled = _amp.pooled_shape_for_band(build, band_center_hz, sensing_contact,
-                                                      min_points=min_points)
+    # `pooled` is the row from the STORED table, pooled from every run this participant has. Prefer
+    # it whenever the caller has one: `build` on a page request is truncated to the runs the page
+    # draws, and pooling over that slice answers from a fraction of the visits (measured on RCS08:
+    # 13 points across 4 visits from a full build, 6 across 1 from the page's). Pooling from `build`
+    # stays as the path for a caller that genuinely holds every run, and for the tests.
+    within_visit_pooled = (
+        pooled if pooled is not None
+        else _amp.pooled_shape_for_band(build, band_center_hz, sensing_contact,
+                                        min_points=min_points))
     correlation_row = correlation_row_for_band(band_sweep_grid, sensing_contact, band_center_hz)
     out = implied_control_direction(within_visit_pooled, correlation_row)
     out["sensing_contact"] = str(sensing_contact)

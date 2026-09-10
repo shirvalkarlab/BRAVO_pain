@@ -41,3 +41,13 @@ these functions as deliberately built ahead of their wiring.
 | The check is reachable and returns a payload | A real answer | Yes, on 4 points across 2 contacts | Pass |
 | It gates nothing | `gates_nothing: true`, verdict unmoved | True; verdict `blocked`/`licensed` false on every point, unchanged | Pass |
 | The answer does not depend on cache state | Same answer either way | **FAILED** — cold: 13 points / 4 visits; warm: 6 points / 1 visit, same band, same day | Fixed |
+
+### Phase 2b — the stored pooled table
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| Cold and warm give the SAME answer | Identical | **13 points / 4 visits on all three runs** (cold, warm, warm again) | Pass |
+| The table is a real result | Rows with answers | 294 rows, 3 contacts, 98 centres, **194 assessed** | Pass |
+| A truncated build is refused | Not written, not even derived | Refused with a reason; the derivation is never called | Pass |
+| The page does not regress | ~8 s warm | 11.2 s and 8.8 s warm; 32.5 s on the cold build-and-store | Pass |
+| Container suite | 608 | **608 passed, 0 failed** | Pass |
+| Host suite | 1010 + 9 new | **1019 passed**, 42 skipped, 1 failed (known) | Pass |

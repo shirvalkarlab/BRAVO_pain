@@ -245,6 +245,78 @@ def table_from_build(build, *, checked_lo_hz, checked_hi_hz, band_half_hz,
     return pd.DataFrame(rows).reset_index(drop=True)
 
 
+#: The pooled within-visit table: ONE row per (sensing contact, band centre), holding the
+#: dose-response direction pooled across every stimulation-current ladder this participant has.
+#: A DERIVED kind — it must be written with `writer=` and `provenance=` (CLAUDE.md §10 rule 6).
+#:
+#: WHY IT IS STORED RATHER THAN COMPUTED ON THE PAGE. `pooled_shape_for_band` needs EVERY run, and
+#: `adapter.report_for_participant` builds only the runs the page draws once the amplitude-effect
+#: and ground-truth entries exist — which is the steady state. Pooling over that slice defeats
+#: decision 55/56, whose whole point is pooling across visits. Measured on RCS08, ONE_THREE_LEFT at
+#: 17.5 Hz, same band on the same day: a full build gives 13 points across 4 visits, the page's
+#: 4-run slice gives 6 across 1. Storing the table computed from the full build means the answer is
+#: the same on every request instead of depending on what happened to be cached.
+POOLED_KIND = "within_visit_pooled_shape"
+POOLED_RULE_VERSION = "v1_pooled_shape"
+
+#: The fields carried per row. `post_peak` is deliberately absent: it is a nested structure rather
+#: than a scalar, no consumer reads it, and a table is the wrong shape to carry it in.
+POOLED_FIELDS = ("pooled_direction", "pooled_slope_per_mA", "pooled_slope_stderr",
+                 "pooled_slope_p", "n", "n_visits", "verdict", "curves", "peaks_inside",
+                 "peak_mA", "p_curvature", "r2_linear", "r2_quadratic")
+
+
+def pooled_table_from_build(build, *, checked_lo_hz, checked_hi_hz, band_half_hz,
+                            min_points=MIN_POINTS_CURVATURE):
+    """One pooled within-visit answer per (sensing contact, band centre) in `build`.
+
+    `build` MUST hold every run the record supports. Passing the page's truncated build produces a
+    table that looks complete and answers from a fraction of the visits — the exact failure this
+    table exists to prevent — so the caller is responsible for building with `max_runs=_ALL_RUNS`
+    and `adapter.write_pooled_shape` refuses to store one built any other way.
+
+    The contacts and centres are taken from `table_from_build`'s own output rather than from a
+    separate list, so this table covers exactly the (contact, band) pairs the per-run amplitude
+    table already covers and the two cannot disagree about which points exist.
+    """
+    per_run = table_from_build(build, checked_lo_hz=checked_lo_hz, checked_hi_hz=checked_hi_hz,
+                               band_half_hz=band_half_hz)
+    if not len(per_run):
+        return pd.DataFrame(columns=("sensing_contact", "band_center_hz") + POOLED_FIELDS)
+
+    rows = []
+    for contact in sorted(per_run["sensing_contact"].dropna().astype(str).unique()):
+        centres = per_run.loc[per_run["sensing_contact"].astype(str) == contact, "band_center_hz"]
+        for centre in sorted(float(c) for c in centres.dropna().unique()):
+            pooled = pooled_shape_for_band(build, centre, contact, min_points=min_points) or {}
+            row = {"sensing_contact": contact, "band_center_hz": float(centre)}
+            row.update({k: pooled.get(k) for k in POOLED_FIELDS})
+            rows.append(row)
+    return pd.DataFrame(rows).reset_index(drop=True)
+
+
+def pooled_row(table, sensing_contact, band_center_hz, *, atol=1e-6):
+    """The stored pooled row for one point, as the dict `direction_consistency` expects, or None.
+
+    Returns a plain dict rather than a pandas row so the consistency check never has to know the
+    table was stored — it takes the same shape whether it came from a live pool or from disk.
+    """
+    if table is None or not len(table):
+        return None
+    want = str(sensing_contact)
+    target = float(band_center_hz)
+    for _i, r in table.iterrows():
+        if str(r.get("sensing_contact")) != want:
+            continue
+        centre = r.get("band_center_hz")
+        try:
+            if abs(float(centre) - target) <= atol:
+                return {k: r.get(k) for k in POOLED_FIELDS}
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def count_matches(table, build):
     """(fields compared, fields differing) between the table's copied power values and the panels
     they came from. Exact equality, NaN equal to NaN; never a tolerance."""

@@ -15,8 +15,10 @@ The line I do not cross alone: anything that changes what a clinician reads as a
 PI's call. Adding a reported caveat is not that; changing `verdict` or `licensed` is.
 
 ## Next Step
-Phase 2: build the stored pooled within-visit table the PI chose, so the consistency check can
-answer instead of reporting "not assessed" on every warm request.
+Phase 3: `reliable_change`. Decision 75 measured that RCS08 has no epoch with two or more ratings
+under one unchanged setting, so both functions answer "not assessed" today — decide whether to wire
+them as a caveat that populates when the data arrive, or say plainly in the module that they wait
+on data rather than on code.
 
 ## Current Phase
 Phase 2 — the consistency check chain
@@ -66,13 +68,26 @@ Phase 2 — the consistency check chain
 - [ ] Guard test: the check is reachable, gates nothing, and never pools a truncated build.
 
 ### Phase 2b: The stored pooled table (the PI's choice)
-**Status:** pending
+**Status:** complete
 
-- [ ] Compute the pooled within-visit dose-response per (sensing contact, band centre) off the
-      request path and store it, the same shape as the stability grid, so the check reads a table
-      built from EVERY run while the page keeps its ~8 s warm cost.
-- [ ] Prove: the stored answer equals the cold-build answer field for field, and the page's own
-      timing does not regress.
+- [x] `amplitude_effect.pooled_table_from_build` derives one row per (sensing contact, band centre)
+      from a full-run comparison; `adapter.write_pooled_shape` stores it as the derived kind
+      `within_visit_pooled_shape` with `writer=` and the tile entry in its provenance;
+      `pooled_shape_if_stored` reads it back by `load_newest`, the no-writer's-key pattern decision
+      41 established.
+- [x] **The writer REFUSES a truncated build** rather than trusting its caller: a stored wrong
+      answer is worse than no stored answer, because everything downstream then trusts it. A test
+      proves the table is not even derived in that case.
+- [x] The check reads the stored row on EVERY request and never re-pools, so cold and warm give the
+      same answer. `for_band` gained a `pooled=` argument; the build path is kept for a caller that
+      genuinely holds every run.
+- [x] **Proven live on RCS08 — the property that matters:** cold, warm, and warm again all give
+      **13 points across 4 visits**, where before the fix cold gave 13/4 and warm gave 6/1. The
+      table itself holds **294 rows across 3 contacts and 98 band centres, 194 of them assessed.**
+- [x] Page cost: 32.5 s on the cold request that builds and stores the table, **11.2 s and 8.8 s
+      warm** against about 8.3 s before — the warm page pays one store read.
+- [x] Nine guard tests. Suites: container **608 passed, 0 failed**; host **1019 passed**, 42
+      skipped, 1 failed (the known environment mismatch).
 
 ### Phase 3: reliable_change — 2 functions
 **Status:** pending
