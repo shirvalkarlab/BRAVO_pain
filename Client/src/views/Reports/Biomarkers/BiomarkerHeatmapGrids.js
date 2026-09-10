@@ -120,6 +120,30 @@ function heatmapHeight(rows) {
   return Math.max(225, rows * 25 + 75);
 }
 
+/** The "how to read this" drawer's bullet text, in priority order (open item 7, decision
+ * 2026-09-09): the backend's own first three notes (best-of-ten selection bias, what 0.5 means,
+ * direction/folding -- the two the PI made non-negotiable plus the direction note, which the
+ * backend now emits already grouped together), then the two display-only notes readers need most
+ * (the circled-cell correction, why the left grid doesn't redraw), then the single-cell-statistic
+ * caveat, then the backend's remaining mechanical notes (tile rounding, cell independence,
+ * outliers, the shuffled reference, the split rule). Only `corrSw.notes` is read -- `aucSw.notes`
+ * is never different (both grids share one per-channel sweep response), so reading both and
+ * concatenating them, as this drawer used to, only doubled every bullet for no reason. */
+function bulletsFor(sw) {
+  const notes = sw.notes || [];
+  return [
+    ...notes.slice(0, 3),
+    "A circled cell also clears a stricter correction across all 22 band centres in this grid — "
+      + "a research finding, not a sign a setting is ready for the device.",
+    "The left grid never redraws when you change the binarization cuts above, since correlation "
+      + "with a continuous pain score ignores the high/low split; the right grid does, and "
+      + "flashes when it recomputes.",
+    "Clicking a cell shows a plain Pearson r/p and Welch t-test computed on the spot — not the "
+      + "grid's own corrected, best-of-ten numbers.",
+    ...notes.slice(3),
+  ];
+}
+
 // ---------------------------------------------------------------------------------------------
 // STANDARD, UNCORRECTED PER-CELL STATISTICS for the two persistent side panels -- Pearson's r's
 // own parametric p-value, and a Welch two-sample t-test between the high/low groups. These are
@@ -1077,37 +1101,25 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
               <Collapse in={howToReadOpen}>
                 <MDBox sx={{ border: `1.5px solid ${PAL.accentBorder || "#0072B255"}`, borderRadius: 2,
                   p: 1.25, background: "#0072B208", mt: 0.5 }}>
-                  {(corrSw.notes || []).concat(aucSw.notes || []).map((n, i) => (
+                  {/* `aucSw.notes` is dropped -- both grids come from the same per-channel sweep
+                      response and its `notes` never differs between them, so concatenating the two
+                      only ever rendered every note twice (open item 7, decision 2026-09-09).
+                      Order, reduced from 13 bullets to 8 and reordered by priority: the three
+                      "how to read the statistics" notes the backend already puts first (best-of-ten
+                      selection bias, what 0.5 means, direction/folding) -- the two the PI required
+                      plus the direction note moved up beside them -- then the two remaining
+                      display-only notes that matter most for reading the page at a glance (the
+                      circled-cell correction, why the left grid doesn't redraw), then the
+                      single-cell-statistic caveat, then the sweep's own mechanical bookkeeping
+                      (tile rounding, cell independence, outliers, the shuffled reference, the split
+                      rule) last. The old fourth static bullet ("0.5 means... not 0") is deleted
+                      outright -- it restated the backend's own second note nearly verbatim. */}
+                  {bulletsFor(corrSw).map((n, i) => (
                     <MDTypography key={i} variant="caption" color="dark"
-                      sx={{ fontSize: 11.5, display: "block", mb: 0.4, lineHeight: 1.45 }}>
+                      sx={{ fontSize: 17, display: "block", mb: 0.5, lineHeight: 1.4 }}>
                       {`• ${n}`}
                     </MDTypography>
                   ))}
-                  <MDTypography variant="caption" color="dark"
-                    sx={{ fontSize: 11.5, display: "block", mb: 0.4, lineHeight: 1.45 }}>
-                    {"• The left grid never redraws when you move the binarization cuts above, "
-                     + "because a correlation between band power and a continuous pain score does "
-                     + "not use the high/low split at all. The right grid does, and briefly flashes "
-                     + "when it recomputes."}
-                  </MDTypography>
-                  <MDTypography variant="caption" color="dark"
-                    sx={{ fontSize: 11.5, display: "block", mb: 0.4, lineHeight: 1.45 }}>
-                    {"• A circled cell clears an additional multiple-comparison correction across "
-                     + "all 22 band centres in this grid — a research finding, not a statement "
-                     + "that a configuration is ready for the device."}
-                  </MDTypography>
-                  <MDTypography variant="caption" color="dark"
-                    sx={{ fontSize: 11.5, display: "block", mb: 0.4, lineHeight: 1.45 }}>
-                    {"• For the right grid, 0.5 means no ability to tell high pain from low "
-                     + "pain apart — not 0. The colour scale is centred on 0.5."}
-                  </MDTypography>
-                  <MDTypography variant="caption" color="dark"
-                    sx={{ fontSize: 11.5, display: "block", lineHeight: 1.45 }}>
-                    {"• The Pearson r/p and Welch t-test shown when you click a cell are plain, "
-                     + "single-cell statistics computed on the spot from that cell's own points — "
-                     + "not the grid's own permutation- and bootstrap-corrected numbers, which "
-                     + "exist only for each column's single best-of-ten-lengths row."}
-                  </MDTypography>
                 </MDBox>
               </Collapse>
             </MDBox>

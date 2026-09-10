@@ -7171,7 +7171,7 @@ _BAND_SWEEP_RESPONSE_KIND = "biomarker_band_sweep"
 #: the `cross_setting_stability` / `device_rules_status` fields on every best-row. Bumped anyway,
 #: belt and suspenders, after this exact class of bug (an unversioned response shape change served
 #: stale) was found and fixed twice already in this feature's own Tracks B and C.
-_BAND_SWEEP_RULE_VERSION = "v4_sweep_display_labels"
+_BAND_SWEEP_RULE_VERSION = "v5_sweep_condensed_notes"
 
 #: Response fields that are timings of the run that produced them, not results. They are not
 #: compared when a stored response is checked against a fresh one, and a served response keeps the

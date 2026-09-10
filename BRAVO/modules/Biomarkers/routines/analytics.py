@@ -6258,20 +6258,28 @@ def _best_of_windows_null_auc(X, y_binary, *, n_perm, rng):
 
 #: The sentence that goes in the panel itself, not only in a caption. The PI's requirement: a reader
 #: must not be able to see the best cell without being told that it was chosen as the best of ten.
+#: Condensed for open item 7's display cleanup (decision, 2026-09-09) -- same claim, fewer words.
 BEST_OF_WINDOWS_OPTIMISM_NOTE = (
-    "The value in each row below is the LARGEST of the ten lengths of signal tried for that band, "
-    "so it is chosen after seeing the answers and is larger than the same band and the same length "
-    "of signal would give on a fresh set of pain reports. Its ordinary p-value is not the "
-    "probability of what was actually done. Read it against the shuffled best-of-ten value in the "
-    "same row, which is what the same choice produces when the pain scores carry no relationship to "
-    "the band power."
+    "The value in each row is the LARGEST of the ten lengths of signal tried for that band -- "
+    "chosen after seeing the results, so it runs larger than a fresh set of ratings would give. "
+    "Its own p-value isn't a real probability; compare it to the shuffled best-of-ten value "
+    "beside it, the level chance alone reaches under the same selection."
 )
 
 #: The sentence about what 0.5 means, carried with every area-under-the-curve row and figure.
+#: Condensed for open item 7's display cleanup (decision, 2026-09-09) -- same claim, fewer words.
 AUC_REFERENCE_NOTE = (
-    "For how well a band tells high-pain reports from low-pain ones, the value that means no "
-    "discrimination is 0.5, not 0. An interval that spans 0.5 means the question was not settled "
-    "for that band; it is not a finding that the band carries nothing."
+    "0.5, not 0, is what no discrimination between high and low pain looks like. An interval "
+    "spanning 0.5 means the question is unsettled for that band, not that it carries nothing."
+)
+
+#: The direction-and-folding note, moved up next to AUC_REFERENCE_NOTE (open item 7, decision
+#: 2026-09-09): both explain how to read the AUC quantity itself, so both belong with the other
+#: non-negotiable interpretation notes rather than after the sweep's own mechanical bookkeeping.
+AUC_DIRECTION_NOTE = (
+    "The AUC heat map keeps direction: above 0.5 means higher power in high-pain reports, below "
+    "means lower. The table's own number instead comes from a fitted logistic regression, which "
+    "folds direction away and can't go below 0.5."
 )
 
 
@@ -6280,52 +6288,41 @@ def _sweep_notes(requested, delivered, tiles, tile_s, n_times, n_centers, n_mad,
     """The sentences the panel prints beside the grid, every one of them computed from what actually
     ran rather than written in advance.
 
-    The first two are the two statistical requirements the PI made non-negotiable. The rest state
-    what the sweep did, in the numbers it did it with, so that a screenshot of the panel carries its
-    own provenance.
+    The first three are how to read the grid's own statistics -- the two the PI made non-negotiable,
+    plus the direction/folding note, ordered together (open item 7, decision 2026-09-09) since a
+    reader needs all three before the rest, which is mechanical bookkeeping about how the sweep ran.
     """
-    notes = [BEST_OF_WINDOWS_OPTIMISM_NOTE, AUC_REFERENCE_NOTE]
+    notes = [BEST_OF_WINDOWS_OPTIMISM_NOTE, AUC_REFERENCE_NOTE, AUC_DIRECTION_NOTE]
     short = [(float(r), float(d)) for r, d in zip(requested, delivered) if abs(d - r) > 1e-9]
     if short:
         pairs = ", ".join(f"{r:g} s asked for, {d:g} s delivered" for r, d in short)
         notes.append(
-            f"The length of signal is not freely choosable: one measurement is built from whole "
-            f"{tile_s:g} s pieces of recording, so {len(short)} of the {len(requested)} lengths "
-            f"asked for could not be delivered exactly ({pairs}). Every table and both figures "
-            f"below are labelled with the length DELIVERED.")
+            f"Length of signal is delivered in whole {tile_s:g} s pieces: {len(short)} of "
+            f"{len(requested)} requested lengths could not be delivered exactly ({pairs}). "
+            f"Every label shows the length delivered.")
     else:
-        notes.append(f"Every length of signal asked for is a whole number of the {tile_s:g} s "
-                     f"pieces a measurement is built from, so each was delivered exactly.")
-    notes.append(f"The grid is {n_times} lengths of signal by {n_centers} band centres, "
-                 f"{n_times * n_centers} cells, each {BAND_TIME_SWEEP_WIDTH_HZ:g} Hz wide and "
-                 f"spaced 1 Hz apart, so neighbouring band centres share most of their frequencies "
-                 f"and the cells are nowhere near independent of one another.")
+        notes.append(f"Every requested length of signal is a whole number of {tile_s:g} s pieces, "
+                     f"so each was delivered exactly.")
+    notes.append(f"The grid's {n_times * n_centers} cells ({n_times} lengths x {n_centers} band "
+                 f"centres, each {BAND_TIME_SWEEP_WIDTH_HZ:g} Hz wide, 1 Hz apart) overlap heavily "
+                 f"and are not independent of each other.")
     if n_mad > 0:
-        notes.append(f"{n_excluded} single band-power measurements were set aside as outliers, by "
-                     f"the same rule the rest of this page uses ({n_mad:g} median absolute "
-                     f"deviations on the {o_scale} scale), applied separately for each band centre "
-                     f"and each length of signal.")
+        notes.append(f"{n_excluded} measurements were excluded as outliers ({n_mad:g} median "
+                     f"absolute deviations on the {o_scale} scale), per band and length.")
     else:
-        notes.append("Outlier exclusion was switched off for this sweep, so every band-power "
-                     "measurement is included.")
-    notes.append(f"The shuffled reference is {n_perm} circular block shuffles of the pain scores, "
-                 f"which keeps the tendency of scores on nearby days to resemble each other. It "
-                 f"makes the same best-of-ten choice on each shuffle, and it also allows either "
-                 f"direction, so it is the level a value chosen the way these were has to beat.")
-    notes.append("The heat map for high pain against low pain keeps the direction: above 0.5 the "
-                 "band power is higher on the high-pain reports, below 0.5 it is lower. The table "
-                 "also carries the direction folded away, which is the number a fitted "
-                 "one-predictor logistic regression returns; that number cannot fall below 0.5, so "
-                 "0.5 is a floor for it rather than a neutral middle.")
-    notes.append(f"High pain and low pain were separated as follows: {split_why}.")
+        notes.append("Outlier exclusion was switched off for this sweep; every measurement is "
+                     "included.")
+    notes.append(f"The shuffled reference is {n_perm} circular block shuffles of the pain scores "
+                 f"(preserving day-to-day similarity), making the same best-of-ten choice each "
+                 f"time, in either direction.")
+    notes.append(f"High vs low pain: {split_why}.")
     if crosscheck and int(crosscheck.get("n_cells") or 0):
         n_ag = int(crosscheck.get("n_agree") or 0)
         n_all = int(crosscheck.get("n_cells") or 0)
         notes.append(
-            f"A real one-predictor logistic regression was fitted at each of the {n_all} cells that "
-            f"appear in the table, and its own value matched the folded ordering in {n_ag} of them; "
-            f"where it does not, the fitted straight line points against the order of that band's "
-            f"own power values, which happens where the band carries little.")
+            f"A logistic regression fit at each of the {n_all} cells matched the folded ordering "
+            f"in {n_ag} of them; a mismatch means that band's own fit runs against its power "
+            f"values, which happens where the band carries little.")
     return notes
 
 

@@ -14,14 +14,10 @@ Six-part display cleanup on the Biomarkers exploration page, per the user's own 
    "how to read this" text.
 
 ## Next Step
-Phases A, B, C, C.1-C.5 are all done and verified live. Only Phase D remains:
-condense the "how to read this" drawer text (confirmed, live, to be exactly as verbose as the spec
-described — a full screen of bullet points) by roughly half, reorder by priority, and enlarge the
-font, following this project's `HOUSE_RULES_writing_and_claims.md` and the `ps-scientific-writing`
-skill's §6a conciseness conventions loaded this session.
+All phases (A, B, C, C.1-C.5, D) are done and verified live. Open item 7 is complete.
 
 ## Current Phase
-Phase D — pending
+Phase D — complete (final phase)
 
 ## Phases
 
@@ -324,15 +320,31 @@ violin.
       reliably; double-click no longer crashes.
   - **Status:** complete
 
-### Phase D: Condense the "how to read this" text
-- [ ] Rewrite the four bullet notes plus the two dynamic `notes` arrays' presentation: reorder by
-      priority (correlation/AUC interpretation, the circle marker, the multiple-comparison
-      correction, then everything else), cut total length by roughly half, and increase the font
-      size by roughly 1.5x. Follow `HOUSE_RULES_writing_and_claims.md` (this project's own
-      available writing standard) and the `ps-scientific-writing` skill's §6a conciseness
-      conventions loaded this session (compress tokens not sentences, one idea per clause, count
-      the actual word-count reduction rather than assume it).
-  - **Status:** pending
+### Phase D: Condense the "how to read this" text — COMPLETE
+- [x] Found and fixed a real duplication bug first: the drawer concatenated `corrSw.notes` and
+      `aucSw.notes`, but the two are never different (one shared per-channel sweep response feeds
+      both grids), so every one of the backend's 7 dynamic notes was rendered TWICE -- 13 unique
+      bullets shown as 17, 669 unique words shown as 1338. Fixed by reading only `corrSw.notes`.
+- [x] Reordered by priority: the backend's own three "how to read the statistics" notes first (the
+      two the PI made non-negotiable, plus a third split out and moved up -- `AUC_DIRECTION_NOTE`,
+      previously buried after the sweep's own mechanical bookkeeping even though it also explains
+      how to read the AUC quantity), then the circled-cell correction and left-grid-redraw notes,
+      then the single-cell-statistic caveat, then the sweep's mechanical bookkeeping (tile
+      rounding, cell independence, outliers, the shuffled reference, the split rule) last. A fourth
+      old static bullet restating the AUC note almost verbatim is deleted outright.
+- [x] Condensed per the `ps-scientific-writing` skill's §6a conventions (compress tokens, not
+      sentences), with every phrase four existing container tests check for kept intact -- found
+      only by running the suite after the first pass and reading its four failures, then restoring
+      those exact phrases inside otherwise-shorter sentences. Font size raised 11.5px -> 17px.
+      `_BAND_SWEEP_RULE_VERSION` bumped so an old cache entry is never served as if it already
+      carried the new wording.
+- [x] Measured, not assumed: unique-content wording shrank 669 -> 436 words (34.8%, short of the
+      "roughly half" target for the reason above); what a reader actually saw on screen shrank
+      1338 -> 436 words (67.4%). Container suite 584 passed, 0 failed. Verified live on RCS08 after
+      a gunicorn graceful reload: 11 unique bullets in the new order, no console errors, live
+      numbers (1392 outliers, split at 59, 20-of-22 logistic cells agreeing) render correctly
+      inside the condensed text.
+  - **Status:** complete
 
 ## Decisions Made
 | Decision | Rationale |
