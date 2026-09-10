@@ -15,14 +15,13 @@ The line I do not cross alone: anything that changes what a clinician reads as a
 PI's call. Adding a reported caveat is not that; changing `verdict` or `licensed` is.
 
 ## Next Step
-Open item 7 — sweep every pain score, precomputed off the request path. Item 26 is done; items 10
-and 7 remain, and the PI asked for 26 first, then 7.
+Open item 10 — cross the device-rules screen with a candidate setting, the last of the PI's three.
+Items 26 and 7 are done, in the order he asked for.
 
-Superseded next step, kept for the trail: The PI's three other decisions — open items 26 (mark the device-spectrum cells), 10 (cross the
-device-rules screen with a candidate setting) and 7 (sweep every pain score, precomputed). All three
-are in the Biomarkers module and the frontend, and each is its own piece of work.
+Superseded next step, kept for the trail: Open item 7 — sweep every pain score, precomputed off the request path. Item 26 is done; items 10
+and 7 remain, and the PI asked for 26 first, then 7.
 ## Current Phase
-Phase 5 — the PI's three display decisions
+Phase 6 — open items 10 and 7
 
 ## Phases
 
@@ -158,12 +157,35 @@ Phase 5 — the PI's three display decisions
 - [x] Equality proof, no tolerance: 27,935 fields before, 36,399 after, 0 dropped, 8,464 added,
       and of the 27,935 in common exactly 24 differ — every one a wall-clock timing field.
 
-### Phase 6: Open items 10 and 7
+### Phase 6: Open item 7 — every pain score, precomputed off the request path
+**Status:** complete
+
+- [x] Built in the two shapes the stability grid already uses: `manage.py precompute_band_sweeps`,
+      started detached once a grid lands for the OTHER five scores at the settings in use, and run
+      daily at the defaults from the same pass the stability loop already makes.
+- [x] **A fan-out guard, because without it one page load becomes a growing tree of real
+      processes**: the command builds a grid by calling the ordinary request function, which ends
+      by starting background work. A private flag both launchers read holds them off.
+- [x] **THE DEFECT THAT WOULD HAVE MADE THIS A NO-OP REPORTING SUCCESS.** `CacheStore` kept exactly
+      one entry per participant per kind, so the six scores evicted each other: six computed, six
+      writes saying `stored: true`, **one file on disk**, and the page rebuilding a score it had
+      just stored. Fixed in the store, where the rule lives — `KEEP_NEWEST_BY_KIND`, twelve for the
+      three sweep kinds, one for everything else so a 245 MB tile entry cannot start keeping twelve.
+- [x] Speed claim and equality proof together, alternating rounds: served 2.9 / 5.4 s against fresh
+      10.4 / 12.0 s, **36,401 fields compared, 22 differing, all bookkeeping, 0 scientific.**
+- [x] The daily pass live, exit 0: six scores `already_current` at 2.5-2.9 s each; a participant
+      with no recordings reports "nothing stored" and is correctly not a failure.
+- [x] **A hazard in my own test, disclosed**: the control called the launcher without switching the
+      feature off and really started jobs for a made-up participant on the container runner,
+      leaving markers in the live cache. Cleared; the test now switches the feature off.
+
+### Phase 6b: Open item 10
 **Status:** pending
 
-- [ ] Open item 7 — sweep every pain score, precomputed off the request path (the PI's order: 26,
-      then 7).
-- [ ] Open item 10 — cross the device-rules screen with a candidate setting.
+- [ ] Cross the device-rules screen with a candidate setting, so the real 51-rule screen can run.
+      Decision 67 established the screen is not meaningful at a (contact, band centre) grain; this
+      makes it live-computed rather than pre-computed, which supersedes the ADR's own performance
+      argument for pre-computing it.
 
 ### Phase 7: Prove and land
 **Status:** pending

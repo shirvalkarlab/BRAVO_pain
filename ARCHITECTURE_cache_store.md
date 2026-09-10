@@ -108,6 +108,27 @@ carries a timezone-aware timestamp and neither round-trips it, and that timestam
 therapy settings to neural signal — which is exactly where timezone errors have entered this
 project before.
 
+### How many current entries a kind may keep, added 2026-09-10
+
+The store kept exactly ONE entry per participant per kind: a new one lands under a new name and
+every older one of that kind for that participant is removed, so a month of daily uploads cannot
+leave seven gigabytes of tiles nothing can read. That is still the default and still what every
+kind not named in `store.KEEP_NEWEST_BY_KIND` does.
+
+**One is the wrong answer for a kind whose key carries a choice the reader makes.** The
+band-by-length grid is keyed on the pain score among other things (decision 38), so the six scores
+are six entries of one kind for one participant — and writing the sixth deleted the other five.
+Measured on RCS08 while building the every-score precompute (open item 7): six grids were computed
+and stored, **each write reporting success, and one file was left on disk.** The page then rebuilt a
+score that had just been "stored", and nothing on any page or in any log said why. Every test passed
+throughout, because no test asked what happened to the entry written before last.
+
+`KEEP_NEWEST_BY_KIND` names the three sweep kinds and keeps twelve: one full set of scores at the
+settings a reader is using, and one at the defaults the daily pass builds. At 0.67 MB an entry that
+is about 8 MB a participant. Keeping history without a limit was rejected for the reason decision 28
+gives for Redis — a store that only grows is not a cache. `CacheStore/tests/test_keep_newest.py`
+pins both halves: the six scores survive, and a kind that is not named still keeps exactly one.
+
 ### The stamp
 
 Every entry has a `<name>.meta.json` sidecar holding when it was written, what triggered it, which

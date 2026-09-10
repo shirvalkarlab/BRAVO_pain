@@ -1,5 +1,14 @@
 #!/bin/bash
-# The daily precompute of the Closed-Loop grid's stability column (DEV ONLY, started by boot.sh).
+# The daily precompute pass (DEV ONLY, started by boot.sh).
+#
+# THE FILE'S NAME IS NARROWER THAN WHAT IT DOES, and that is deliberate rather than an oversight.
+# It began as the stability column's pass (decision 97) and now runs the band-by-length grid for
+# EVERY pain score first (open item 7), then the stability column. It is not renamed because
+# boot.sh, decision 97 and the environment-variable names all say "stability", and renaming a
+# dev-only loop to tidy a name is a chance to break the one line that starts it for no gain.
+#
+# THE ORDER MATTERS: the sweeps run first, because the stability column is computed for the points
+# of a grid that has to exist before it can be asked about.
 #
 # WHY THIS EXISTS ALONGSIDE THE AFTER-THE-PAGE-LANDS RUN. The PI asked for both: computed in the
 # background so whoever opens the page is not held up, AND precomputed off the request path on a
@@ -24,6 +33,8 @@
 #   STABILITY_PRECOMPUTE_FIRST_DELAY_SECONDS=600  wait before the first pass, so container start,
 #                                               migrations and the first page loads are not competing
 #                                               with a whole-machine job
+#   BAND_SWEEP_PRECOMPUTE=0                     skip the every-pain-score half only, and still run
+#                                               the stability half
 set -u
 
 BRAVO_DIR=/usr/src/BRAVO
@@ -64,6 +75,24 @@ sleep "$FIRST_DELAY"
 while true; do
   say "pass starting"
   cd "$BRAVO_DIR" || { say "cannot enter $BRAVO_DIR; sleeping"; sleep "$INTERVAL"; continue; }
+
+  # EVERY PAIN SCORE, FIRST (open item 7). The pain score is part of the grid's key, so each score
+  # is a separate answer and reading a second one has always cost a whole rebuild on the request
+  # path. This pass pays for all of them off it. Cheap when nothing has moved, for the same reason
+  # the stability half is: the key decides whether any work happens.
+  #
+  # ITS FAILURE IS REPORTED BUT DOES NOT SKIP THE STABILITY HALF, because the two are independent
+  # and a reader denied one of them is worse off than a reader denied neither.
+  if [ "${BAND_SWEEP_PRECOMPUTE:-1}" = "0" ]; then
+    say "the every-pain-score half is switched off by BAND_SWEEP_PRECOMPUTE=0"
+  elif python3 manage.py precompute_band_sweeps --all --json >> "$LOG" 2>&1; then
+    say "pain-score pass finished, every participant and score either stored an answer or had nothing to store"
+  else
+    # Exit status 1 here means at least one grid was COMPUTED and could not be kept -- invisible on
+    # the page, which simply rebuilds it on every single request and looks entirely fine.
+    say "PAIN-SCORE PASS FINISHED WITH FAILURES — see the lines above for which participant and score"
+  fi
+
   if python3 manage.py compute_stability_grid --all --json >> "$LOG" 2>&1; then
     say "pass finished, every participant either stored an answer or had nothing to store"
   else

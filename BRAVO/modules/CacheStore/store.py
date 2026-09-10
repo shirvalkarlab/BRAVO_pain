@@ -516,13 +516,59 @@ def load(kind, participant_uid, signature, *, consumer=None, root=None):
 # writing
 # --------------------------------------------------------------------------------------------
 
-def _sweep_superseded(kind, participant_uid, keep_stem, root=None):
+#: HOW MANY CURRENT ENTRIES A KIND MAY KEEP PER PARTICIPANT. The default is one, which is what
+#: every kind did before this table existed and what every kind not named here still does: a new
+#: entry lands under a new name and the old one is removed, so a month of daily uploads cannot
+#: leave seven gigabytes of tiles nothing can read.
+#:
+#: ONE IS WRONG FOR A KIND WHOSE KEY CARRIES A CHOICE THE READER MAKES. The band-by-length grid is
+#: keyed on the pain score among other things (decision 38), so the six scores are six entries of
+#: one kind for one participant -- and under a limit of one, writing the sixth deleted the other
+#: five. Measured on RCS08 on 2026-09-10 while building the every-score precompute (open item 7):
+#: six scores were computed and stored, each reporting success, and ONE file was left on disk. The
+#: page then rebuilt a score that had just been "stored", in 8.9 s, and nothing anywhere said why.
+#:
+#: TWELVE, NOT SIX, AND NOT UNBOUNDED. Six covers one full set of scores; twelve covers two, which
+#: is what actually happens -- the daily pass builds every score at the default settings, and a
+#: page-triggered pass builds every score at whatever settings the reader is using. At 0.67 MB an
+#: entry that is about 8 MB a participant. Keeping history without a limit was rejected for the
+#: reason decision 28 gives for Redis: a store that only grows is not a cache.
+KEEP_NEWEST_BY_KIND = {
+    "biomarker_band_sweep": 12,
+    "biomarker_band_correlation": 12,
+    "biomarker_band_discrimination": 12,
+}
+
+
+def _entry_stems(names, prefix, marker):
+    """The distinct entry stems among these file names, each with its newest file's timestamp.
+
+    An entry is a payload plus a `.meta.json` sidecar, so the two must be kept or removed together;
+    grouping by stem is what makes that true by construction rather than by remembering to pair
+    them up. The payload's extension varies by format, so the stem is taken as everything before
+    the final dot, with the sidecar's two-part suffix handled first.
+    """
+    stems = {}
+    for name in names:
+        if not name.startswith(prefix) or marker not in name:
+            continue
+        stem = name[:-len(".meta.json")] if name.endswith(".meta.json") else name.rsplit(".", 1)[0]
+        stems.setdefault(stem, []).append(name)
+    return stems
+
+
+def _sweep_superseded(kind, participant_uid, keep_stem, root=None, keep_newest=None):
     """Remove this participant's older entries of the same kind once the new one has landed.
 
     A new ingest changes the signature, so the new entry lands under a new name and the old one
     would otherwise sit there forever. One tile entry is 245 MB, so a month of daily uploads would
     leave seven gigabytes of files that can never be read again. Only this participant's files of
     this kind are touched, and ONLY AFTER the replacement is safely in place.
+
+    The entry just written is always kept. Beyond it, `KEEP_NEWEST_BY_KIND` says how many of the
+    next-newest entries of this kind survive; the default of one keeps none of them, which is the
+    behaviour every kind had before that table existed. See its own note for why one is the wrong
+    answer for a kind whose key carries a choice the reader makes.
     """
     d = kind_dir(kind, create=False, root=root)
     if d is None:
@@ -530,21 +576,37 @@ def _sweep_superseded(kind, participant_uid, keep_stem, root=None):
     prefix = f"{kind}.v"
     marker = f".{participant_uid}." if participant_uid is not None else ".shared."
     keep = os.path.basename(keep_stem)
+    limit = int(KEEP_NEWEST_BY_KIND.get(kind, 1) if keep_newest is None else keep_newest)
     removed = 0
     try:
         names = os.listdir(d)
     except OSError:
         return 0
-    for name in names:
-        if not name.startswith(prefix) or marker not in name:
-            continue
-        if name.startswith(keep):
-            continue
-        try:
-            os.remove(os.path.join(d, name))
-            removed += 1
-        except OSError:
-            pass
+
+    stems = _entry_stems(names, prefix, marker)
+    others = [s for s in stems if not s.startswith(keep) and not keep.startswith(s)]
+    if limit > 1 and others:
+        # Newest first by the most recent file in the entry, so an entry read or rewritten recently
+        # outlives one nothing has touched. `limit - 1` because the entry just written holds the
+        # first place and is never a candidate for removal.
+        def _newest(stem):
+            best = 0.0
+            for n in stems[stem]:
+                try:
+                    best = max(best, os.path.getmtime(os.path.join(d, n)))
+                except OSError:
+                    pass
+            return best
+        others.sort(key=_newest, reverse=True)
+        others = others[limit - 1:]
+
+    for stem in others:
+        for name in stems[stem]:
+            try:
+                os.remove(os.path.join(d, name))
+                removed += 1
+            except OSError:
+                pass
     if removed:
         _bump("swept", removed)
     return removed

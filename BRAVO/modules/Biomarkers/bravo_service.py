@@ -5468,6 +5468,12 @@ def launch_stability_grid_in_background(participant_uid, request_data, *, sweep_
     inside the cooldown, or when the switch is off.
     """
     out = {"launched": False, "reason": None, "store_key": None}
+    if _IN_BAND_SWEEP_PRECOMPUTE:
+        # A precompute run builds one grid per pain score, and the stability key carries the pain
+        # score -- so without this, one page load would start five more whole-machine stability
+        # jobs. The daily stability pass (decision 97) covers that ground on its own schedule.
+        out["reason"] = "this is a precompute run, which does not start stability jobs"
+        return out
     if not STABILITY_GRID_BACKGROUND:
         out["reason"] = "background stability computation is switched off"
         return out
@@ -5530,6 +5536,192 @@ def launch_stability_grid_in_background(participant_uid, request_data, *, sweep_
         out["reason"] = f"the background run could not be started ({exc!r})"
         return out
     out["launched"] = True
+    return out
+
+
+# -------------------------------------------------------------------------------------------------
+# SWEEPING EVERY PAIN SCORE, OFF THE REQUEST PATH (open item 7, the PI's choice: "every score,
+# precomputed"). The grid answers ONE pain score per request, because the score is in the key
+# (decision 38) -- a different score is a different answer, not a cache miss to be avoided. So
+# reading a second score has always meant paying for a whole rebuild, and the page's own background
+# prefetch (decision 82) paid for it six times over on the request path, on a gunicorn worker, while
+# a reader waited.
+#
+# This moves that work off the request path in the same two shapes the stability grid already uses
+# (decisions 96 and 97): started detached once a grid lands, so the scores a reader is likely to
+# switch to are already built under the settings actually in use; and a daily pass at the default
+# settings, so a first look at a participant is usually served rather than computed.
+# -------------------------------------------------------------------------------------------------
+
+#: The same off switch shape as the stability grid's: set False on a running server and no page
+#: starts a precompute, changing no stored value and deleting nothing.
+BAND_SWEEP_PRECOMPUTE_BACKGROUND = True
+
+#: Longer than the stability grid's, because this run builds up to five grids in sequence rather
+#: than one. Measured cold on RCS08 at roughly 11 s a grid, so five is about a minute; the cooldown
+#: is well clear of that.
+BAND_SWEEP_PRECOMPUTE_COOLDOWN_SECONDS = 1800.0
+
+#: PRODUCTION-ROOT SAFETY, default safe, for the reason `STABILITY_GRID_LAUNCH_UNDER_OVERRIDE_ROOT`
+#: records: the unit suite was once found starting real whole-machine jobs for a bench's made-up
+#: participant, and the same trap is open here.
+BAND_SWEEP_PRECOMPUTE_UNDER_OVERRIDE_ROOT = False
+
+#: SET BY THE PRECOMPUTE COMMAND ITSELF, and the reason it exists is a fan-out that would not have
+#: announced itself. The command computes a grid by calling the ordinary request function, which
+#: ends by starting background work -- so without this, each of the five runs would start five more,
+#: and each would also start a whole-machine stability job of its own, since the stability key
+#: carries the pain score and so differs per score. One page load would become a growing tree of
+#: processes, all of them doing real work, with nothing on any page to show it was happening.
+#:
+#: Both launchers read this flag directly rather than having their own operator switches
+#: flipped underneath them: those switches are somebody's deliberate setting, and restoring
+#: a value read before a run would quietly undo a change made during it.
+#:
+#: A MODULE FLAG RATHER THAN A REQUEST FIELD, so it cannot arrive over HTTP: it is set in the
+#: command's own process, and a request body can neither set it nor clear it.
+_IN_BAND_SWEEP_PRECOMPUTE = False
+
+
+def _band_sweep_precompute_marker(sweep_key):
+    """The file whose age says when a precompute pass was last started for this exact grid key."""
+    d = _cache_store.kind_dir(_BAND_SWEEP_RESPONSE_KIND, root=_SHARED_CACHE_DIR_OVERRIDE)
+    if not d or not sweep_key:
+        return None
+    return os.path.join(d, f".metrics_launched.{sweep_key}")
+
+
+def _band_sweep_precompute_argv(participant_uid, request_data, metrics):
+    """The command line for the precompute run, or None when `manage.py` cannot be found.
+
+    The settings travel by the SAME whitelist the stability run uses, and for the same two reasons:
+    they are in the key, so a run started without them stores an answer the page never looks up;
+    and a command line is visible in the process list, where pain-report rows and a REDCap field
+    map have no business. `SweepMetric` and `LabelMetric` are deliberately dropped -- the whole
+    point of this run is to compute the OTHER scores, which arrive as `--metrics`.
+    """
+    manage = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "manage.py")
+    if not os.path.isfile(manage):
+        return None
+    argv = [sys.executable, manage, "precompute_band_sweeps",
+            "--participant", str(participant_uid), "--metrics", ",".join(metrics)]
+    settings = {k: (request_data or {}).get(k) for k in STABILITY_GRID_SETTING_KEYS
+                if (request_data or {}).get(k) is not None
+                and k not in ("SweepMetric", "LabelMetric")}
+    if settings:
+        argv += ["--request-json", json.dumps(settings, default=str)]
+    return argv
+
+
+def launch_other_metrics_in_background(participant_uid, request_data, *, sweep_key, done_metric):
+    """Start the OTHER pain scores' grids in their own process, unless there is no point.
+
+    Never raises and never waits, for the same reason the stability launcher does not: this runs at
+    the very end of a page request, and a page that could not start background work must still
+    return the grid it already has. Every outcome comes back in the returned dict, so a live check
+    reads the response rather than a log file.
+    """
+    out = {"launched": False, "reason": None, "metrics": []}
+    if _IN_BAND_SWEEP_PRECOMPUTE:
+        out["reason"] = "this IS a precompute run, which must not start another"
+        return out
+    if not BAND_SWEEP_PRECOMPUTE_BACKGROUND:
+        out["reason"] = "background precomputing of the other pain scores is switched off"
+        return out
+    if _SHARED_CACHE_DIR_OVERRIDE is not None and not BAND_SWEEP_PRECOMPUTE_UNDER_OVERRIDE_ROOT:
+        out["reason"] = ("the store is pointed at a caller's own root rather than the production "
+                         "one, so a run started here would write where nothing reads it")
+        return out
+    if not sweep_key:
+        out["reason"] = "this grid has no key, so a run could not be keyed to it"
+        return out
+    # THE SAME REFUSAL THE STABILITY LAUNCHER MAKES, for the same reason: a request carrying its own
+    # pain reports or field map cannot be reproduced by a separate process, which would fetch from
+    # REDCap instead and store its answers under keys this page never looks up.
+    if (request_data or {}).get("ProcessedPRO") or (request_data or {}).get("RedcapFieldMap"):
+        out["reason"] = ("this request carries its own pain reports, which a separate process "
+                         "cannot reproduce, so its answers could not be keyed to them")
+        return out
+    metrics = [m["key"] for m in BIOMARKER_METRICS if m["key"] != str(done_metric)]
+    if not metrics:
+        out["reason"] = "there is no other pain score to compute"
+        return out
+    try:
+        marker = _band_sweep_precompute_marker(sweep_key)
+        if marker and os.path.exists(marker):
+            age = _time.time() - os.path.getmtime(marker)
+            if age < BAND_SWEEP_PRECOMPUTE_COOLDOWN_SECONDS:
+                out["reason"] = (f"a pass for this key started {age:.0f} s ago and the cooldown is "
+                                 f"{BAND_SWEEP_PRECOMPUTE_COOLDOWN_SECONDS:.0f} s")
+                return out
+        argv = _band_sweep_precompute_argv(participant_uid, request_data, metrics)
+        if argv is None:
+            out["reason"] = "manage.py could not be found, so no command could be started"
+            return out
+        if marker:
+            # Written BEFORE the launch, so a launch that then fails still holds the storm back.
+            with open(marker, "w") as fh:
+                fh.write(str(_time.time()))
+        d = _cache_store.kind_dir(_BAND_SWEEP_RESPONSE_KIND, root=_SHARED_CACHE_DIR_OVERRIDE)
+        _spawn_detached(argv, os.path.join(d, "metric_precompute_runs.log") if d else os.devnull)
+    except Exception as exc:                                     # noqa: BLE001
+        out["reason"] = f"the background run could not be started ({exc!r})"
+        return out
+    out["launched"] = True
+    out["metrics"] = metrics
+    return out
+
+
+def compute_and_store_band_sweep(participant_uid, metric, request_data=None):
+    """Build and store one participant's grid for ONE pain score. Never raises.
+
+    THE KEY DECIDES WHETHER ANY WORK HAPPENS (decision 26), so this is cheap to run daily for every
+    participant and every score: a pass whose inputs have not moved loads the stored entry and
+    stops. `already_current` says which of the two happened, so a scheduler can tell a real build
+    from a no-op without timing it.
+
+    Both background launchers are held off for the duration -- see `_IN_BAND_SWEEP_PRECOMPUTE`.
+    """
+    global _IN_BAND_SWEEP_PRECOMPUTE
+    out = {"participant_uid": str(participant_uid), "metric": str(metric),
+           "stored": False, "already_current": False, "n_channels": 0, "reason": None}
+    t0 = _time.perf_counter()
+    was_in_precompute = _IN_BAND_SWEEP_PRECOMPUTE
+    try:
+        _IN_BAND_SWEEP_PRECOMPUTE = True
+        req = dict(request_data or {})
+        req["ParticipantId"] = str(participant_uid)
+        req["SweepMetric"] = str(metric)
+        got = band_time_sweep_for_participant(req)
+    except Exception as exc:                                     # noqa: BLE001
+        _log.exception("Biomarkers: precomputing the %s grid for %s failed", metric,
+                       participant_uid)
+        out["reason"] = f"raised {exc!r}"
+        out["wall_seconds"] = round(_time.perf_counter() - t0, 3)
+        return out
+    finally:
+        _IN_BAND_SWEEP_PRECOMPUTE = was_in_precompute
+
+    out["wall_seconds"] = round(_time.perf_counter() - t0, 3)
+    sweeps = got.get("band_time_sweep") or {}
+    out["n_channels"] = len(sweeps)
+    out["already_current"] = bool(got.get("served_from_store"))
+    out["store_key"] = ((got.get("sweep_key") or {}).get("signature_key")
+                        if isinstance(got.get("sweep_key"), dict) else None)
+    if not sweeps:
+        # A participant with no recordings or no pain reports is a normal outcome, not a failure --
+        # the message the page would have shown says which.
+        out["reason"] = got.get("message") or "the grid came back empty"
+        return out
+    if out["already_current"]:
+        return out
+    out["stored"] = bool((got.get("store_written") or {}).get("response"))
+    if not out["stored"]:
+        # Computed and NOT stored is the one outcome a scheduler must be able to alert on: nothing
+        # on any page will show it, because the page simply rebuilds on every load and looks fine.
+        out["reason"] = ("the grid was computed but not stored, so it will be rebuilt on every "
+                         "request; its inputs could not both be named")
     return out
 
 
@@ -7651,6 +7843,13 @@ def band_time_sweep_for_participant(request_data):
                 points=stability_grid_points(stored.get("band_time_sweep")),
                 band_width_hz=float(stored.get("band_width_hz")
                                     or analytics.BAND_TIME_SWEEP_WIDTH_HZ))
+            # The other pain scores, started from the same two moments and for the same reason: a
+            # reader with a grid on screen is one dropdown away from asking for another score, and
+            # that ask has always cost a whole rebuild on the request path (open item 7).
+            stored["metric_precompute"] = launch_other_metrics_in_background(
+                participant_uid, request_data,
+                sweep_key=(stored["sweep_key"] or {}).get("signature_key"),
+                done_metric=label_metric)
             return stored
 
     # Through the SAME memo the cell drill-down reads, so a grid that actually builds also leaves
@@ -7735,6 +7934,10 @@ def band_time_sweep_for_participant(request_data):
             sweep_key=(out["sweep_key"] or {}).get("signature_key"),
             points=stability_grid_points(sweeps),
             band_width_hz=float(analytics.BAND_TIME_SWEEP_WIDTH_HZ)))
+    out["metric_precompute"] = launch_other_metrics_in_background(
+        participant_uid, request_data,
+        sweep_key=(out["sweep_key"] or {}).get("signature_key"),
+        done_metric=label_metric)
     return out
 
 

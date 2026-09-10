@@ -92,3 +92,26 @@ fields fell from 13,048 to 8,464; a regression test pins it.
 exactly 3/9. One cell's is 0.375, because the outlier rule dropped a report from that cell alone.
 The expectation was wrong, not the code — and the test now pins that difference deliberately, since
 it is the clearest evidence that a per-contact share pasted onto every cell would be wrong.
+
+### Phase 6 — open item 7, every pain score precomputed
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| Every score is built and stored | Six stored | Six, six distinct keys, 6.8-11.0 s each | Pass |
+| **Do they survive each other?** | Six on disk | **ONE of six** — the store keeps one entry per participant per kind | **Defect** |
+| After the store fix | Six on disk | **6 of 6, 4.05 MB total** | Pass |
+| A page request for a stored score | Served, not rebuilt | Served in 2.4 s where it had rebuilt in 8.9 s | Pass |
+| Speed + equality, alternating rounds | No scientific value moves | served 2.9 / 5.4 s against fresh 10.4 / 12.0 s; **36,401 compared, 22 differing, all bookkeeping, 0 scientific** | Pass |
+| The daily pass | Cheap when nothing moved | Six `already_current` at 2.5-2.9 s each; no-recordings participant not a failure; exit 0 | Pass |
+| Fan-out guard | Neither launcher starts anything inside a precompute run | Both refuse, with a control proving the refusal is the flag's doing | Pass |
+| Container / host | 620 / 1016 + new | **635 passed 0 failed** (+15) / **1021 passed** (+5), 1 known | Pass |
+
+**The defect is the finding.** Six writes each reported success and five of the six answers were
+gone. Nothing on any page or in any log said so, and every test passed throughout — because no test
+had ever asked what happened to the entry written *before last*. Fixed in the store rather than
+worked around in the caller, because the one-entry-per-kind rule is the store's own.
+
+**A hazard in my own test, disclosed rather than quietly fixed.** The control called the launcher
+without switching the feature off; on the container runner, whose store points at the production
+root, it went all the way through and really started background jobs for a participant called "u",
+leaving two marker files in the live cache directory. That is decision 96's own finding reproduced
+one launcher later. Markers cleared, test fixed, re-run leaves none.
