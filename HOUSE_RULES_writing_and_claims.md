@@ -64,6 +64,45 @@ response**, not once per project.
 | deployable | allowed to drive closed-loop stimulation |
 | frozen configuration | the stimulation rate and pulse width locked in before closed loop starts |
 
+## 2a. The words that failed on 2026-09-10, and what to say instead
+
+He read a reply about two finished pieces of work and could not understand half of it. These are
+the words that did the damage, taken from that reply. **The pattern is the same one §1 already
+names: the name of a thing inside the code, used as if it were an English word.**
+
+| Do not write | Write |
+|---|---|
+| shape (of a variable, of a payload) | what kind of thing it is — a list, a table, a number — as opposed to what is actually in it |
+| fan-out, fan-out guard | one job starting more jobs, which start more again; the check that stops that |
+| no-op | it did nothing |
+| a no-op reporting success | it did nothing and said it had worked |
+| launcher | the code that starts the background job |
+| detached | the job keeps running after the page has finished |
+| the daily pass | the job that runs once a day |
+| already_current, `already_current` | the answer was already saved and did not need building again |
+| served (a served response) | the answer came from the saved copy instead of being worked out again |
+| fresh (a fresh build) | worked out from scratch |
+| bookkeeping fields | values that only record when and how long something ran |
+| the store, the cache store | the saved answers on disk |
+| kind (a store kind) | the type of saved answer, e.g. the grid, the tiles |
+| entry | one saved answer |
+| key | the label a saved answer is filed under, built from everything that could change it |
+| marker file | a small file recording that a job was started, so two do not start at once |
+| the request path / off the request path | while somebody is waiting for the page / before anybody asks |
+| prefetch | fetching it before it is asked for |
+| container suite, host suite | the two sets of tests, and say which machine each runs on |
+| equality proof | a check that every number came out the same as before |
+| cell | one square of the grid: one frequency band at one length of signal |
+| contact, R 0⁻3⁺ | the pair of electrode contacts the signal was recorded from, named in full |
+| the correlation travels 0.037 | the strength of the relationship changes by only 0.037 from the shortest length of signal to the longest |
+| compute (as a noun) | work, or computing time |
+
+**Two habits, not just a word list.** Say the number and what it means in the same breath: not
+"served 2.9 s against fresh 10.4 s" but "reading the saved answer took 2.9 seconds; working it out
+again took 10.4". And when a sentence needs the name of a function, a file or a setting, say what it
+does first and put the name in brackets afterwards — he needs the name only when he intends to go
+and look at the code.
+
 ## 3. Two words with hard rules of their own
 
 1. **"Threshold" is reserved for a device setting in a closed-loop configuration** — the value

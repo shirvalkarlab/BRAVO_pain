@@ -77,6 +77,11 @@ Tests before code, the gates before every commit, a regression test for every fi
   calculation, split the test rather than relabelling its assertion. One test in this repository
   had been creating its condition by breaking a helper the code no longer called, so it passed
   while checking nothing.
+- **Check the values, never the shape.** A right-shaped answer is the most dangerous wrong answer:
+  it passes every test and looks normal on every page. Count the files, print the numbers, read the
+  value back out of the thing that stored it. "It returned a table", "the keys are all there" and
+  "nothing raised" are not verification. **§10 rule 11 is the full rule, with the three times this
+  project has been caught by it.**
 - **Software tests are only half of "it works" here. The other half is proving the numbers did not
   move.** Any change to how a value is produced or stored must report a field count and a
   difference count on live data — **never a tolerance**, because "within 1e-9" hides a real change
@@ -370,6 +375,45 @@ framework disagree, these win.**
     reply contains the result.** The full rules, the replacement table, and the eight things that
     must never be claimed are in `HOUSE_RULES_writing_and_claims.md`. **Read it before writing any
     reply, report, commit message or document.**
+
+11. **NEVER CHECK THAT SOMETHING WORKED BY LOOKING AT THE SHAPE OF THE ANSWER. OPEN IT AND READ THE
+    ACTUAL VALUES.** Given by the principal investigator on 2026-09-10, in his words: *"never verify
+    results or changes based on the shape of a variable but always measure the actual variable
+    values bit for bit or byte for byte."*
+
+    A right-shaped answer is the most dangerous kind of wrong answer, because it passes every test
+    and looks normal on every page. **These are not hypothetical — each one happened in this
+    project and each one reported success while being wrong:**
+
+    - The reliable-change check was handed a table with no pain ratings in it. Every item came back
+      "no ratings were matched", **which is exactly what a correct answer looks like when the data
+      have not arrived yet.** It would have said that forever, including after the ratings arrived.
+      Caught only by reading the six values and noticing all six were identical when one was known
+      to be different (decision 104).
+    - Six grids were computed and stored, six writes each reported success, and **one file was on
+      disk.** Caught only by counting the files (decision 107).
+    - A background job asked for one key and the run it started wrote a different one. Nothing
+      raised, the run succeeded, and the page would have started a whole-machine job on every load
+      forever. **Every test passed, because each built its key by hand** (decision 96).
+
+    **So: count the files. Print the values. Compare field by field and report how many were
+    compared and how many differed, never a tolerance and never a percentage on its own. Read the
+    number back out of the thing that stored it, not out of the variable you just set.** "The
+    payload has the right keys", "it returned a dict", "the length is 6", "no exception was raised"
+    and "the tests pass" are **not** verification. This rule sits alongside rule 4's equality proof
+    and is the general form of it.
+
+12. **HE HAS TO BE ABLE TO READ IT WITHOUT HAVING READ THE CODE.** Said again on 2026-09-10, of a
+    reply that was mostly unreadable to him: *"you're starting to use weird jargon again and I can't
+    understand half of what you just previously said."* Rule 10 already says this and it keeps
+    slipping, so the test is now written down: **before sending, take each sentence and ask whether
+    somebody who has never opened this repository would know what it means. If the answer is no,
+    the sentence is wrong, however accurate it is.**
+
+    The words that failed on 2026-09-10 are listed with their plain replacements in
+    `HOUSE_RULES_writing_and_claims.md` §2a. **Function names, file names, field names and internal
+    switch names are the worst offenders** — say what the thing does, and put the name in brackets
+    afterwards only if he would need it to find the code himself.
 
 ---
 
