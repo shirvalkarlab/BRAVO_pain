@@ -348,6 +348,27 @@ BRAVO/_agent_bridge/transform_3s_hybrid.py
 BRAVO/_agent_bridge/extract_offsets.py
 BRAVO/_agent_bridge/vec_auc_check.py
 
+# THE RULES ABOVE ONLY REACH THE TOP LEVEL, WHICH IS NOT WHAT CLAUDE.md SAID THEY DID.
+# `BRAVO/_agent_bridge/*.py` matches a file sitting directly in that folder and does NOT reach into
+# a folder below it -- so a stale `_bm_sync/Biomarkers/bravo_service.py`, which is the exact hazard
+# CLAUDE.md §5 warning 1 names, was untracked but NOT ignored: it showed in `git status`, and a
+# `git add -A` would have committed a second, stale copy of real module source into the repository
+# where a later grep would find it as live code. Every non-.py scratch file leaked the same way, and
+# `cl_docs/` -- scratch copies of files already committed as artifacts elsewhere -- was covered by
+# nothing at all.
+#
+# Measured 2026-09-10, untracked and unignored under these two trees: 265 files on this macOS
+# checkout, 273 when matched case-sensitively the way the Linux container does. 240 of them are .py.
+#
+# `_*` matches at every depth once it matches a directory name. Adding these rules untracks nothing
+# -- an ignore rule never removes a file already in the index, and the 23 files tracked here (the
+# `*_sync` design notes, `_paintracking_audit_report.md`, both `cl_docs/*.md`) stay tracked and keep
+# showing their diffs. The one real side effect: staging one of THOSE by its own explicit path now
+# needs `git add -f`, exactly as it already does for `bridge_client.py` and the other infrastructure
+# files negated above. `git add -u`, `git add -A`, `git add .` and `git commit -a` are unaffected.
+BRAVO/_agent_bridge/_*
+/cl_docs/
+
 # Session output artifacts at repo root (generated data, not source)
 handoff/
 *.patch

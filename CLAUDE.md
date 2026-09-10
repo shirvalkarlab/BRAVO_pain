@@ -243,9 +243,9 @@ second, independent task gets its own plan directory through `/pwf "<name>"` and
 | `docs/archive/2026-09-07/` | 51 superseded documents plus `INDEX.md` naming what replaced each. **Everything in there is superseded and every line number in it has moved** | committed, read-only in practice |
 | `docs/exported_artifacts/` | 11 files pulled out of a cloud store so they are on disk: both cache inventory drawings, the architecture drawing in three formats, the four-lens audit of record, the port gap list | committed |
 | `./scratchpad/` | ephemeral notes | gitignored; **does not exist**, and `BRAVO/_agent_bridge/_*` is the scratch area in use |
-| `BRAVO/_agent_bridge/_*` | **the existing scratch area**, and the only path the container can see. Probe scripts written here are gitignored and disposable | gitignored |
+| `BRAVO/_agent_bridge/_*` | **the existing scratch area**, and the only path the container can see. Probe scripts written here are gitignored and disposable | gitignored — see warning 3, which is what that word did not cover until 2026-09-10 |
 
-**Two warnings about this tree.**
+**Three warnings about this tree.**
 
 1. **`BRAVO/_agent_bridge/_*` holds stale copies of real module files**, including old
    `bravo_service.py`. A search for a function name returns most of its hits there. **Do not edit
@@ -256,6 +256,19 @@ second, independent task gets its own plan directory through `/pwf "<name>"` and
    to restore them. **If you add a file whose name matches those patterns, check `git status`
    actually sees it.** A file that exists locally but is untracked survives only until someone runs
    `git clean`.
+3. **The row above called this whole folder gitignored, and until 2026-09-10 that was true only of
+   the `.py` files sitting directly inside it.** The rule was `BRAVO/_agent_bridge/*.py`, and that
+   wildcard does not reach into a folder below it — so a stale
+   `_bm_sync/Biomarkers/bravo_service.py`, **the exact hazard warning 1 names**, was untracked but
+   not ignored. It showed in `git status`, and one `git add -A` would have put a second, stale copy
+   of real module source into the repository where a later grep finds it as live code. Every
+   non-`.py` scratch file leaked the same way, and `cl_docs/` was covered by nothing at all.
+   Measured that day: **265 files on this macOS checkout, 273 matched case-sensitively the way the
+   Linux container does**, 240 of them `.py`. Fixed with `BRAVO/_agent_bridge/_*` and `/cl_docs/`,
+   which match at every depth. **Nothing was untracked by it** — an ignore rule never removes a file
+   already in the index, proven before and after: 23 tracked files, identical list. One side effect:
+   staging one of those 23 by its own explicit path now needs `git add -f`, as it already did for
+   `bridge_client.py`; `git add -u`, `git add -A`, `git add .` and `git commit -a` are unaffected.
 
 ---
 

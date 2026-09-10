@@ -98,12 +98,16 @@ def to_epoch(value):
     (which rejects a session-relative offset that would otherwise read as 1970); a string is
     parsed as ISO 8601 with a trailing Z accepted; a datetime is taken as-is.
 
-    ONE RULE IS MIRRORED KNOWINGLY RATHER THAN CORRECTED. A string with no timezone is read in
-    the process's LOCAL zone, because that is what the platform does. The first version of this
-    function read it as universal time instead; the two agreed in the container, which runs in
-    universal time, and disagreed by eight hours on the analysis host. The form exists to give
-    the same answer as the platform, so it follows the platform here and the disagreement is
-    recorded as a finding rather than fixed in one place only.
+    A value with NO timezone attached -- a naive string or a naive `datetime` -- names a moment
+    in Universal Time (UTC), on every machine this code runs on. THIS RULE WAS ONCE MIRRORED
+    KNOWINGLY RATHER THAN CORRECTED: an earlier version of this function read a naive value as
+    universal time while the platform read the identical string in the process's own local zone,
+    and the two agreed only because the container happens to run in universal time -- they would
+    have disagreed by eight hours on an analysis host that does not. Both functions were changed
+    together, in the same step, so they cannot drift back apart (open item 19,
+    `DECISIONS_and_open_items.md`). No naive start time has ever been seen in the live record, so
+    this changes no number the platform has produced; it only fixes what a future naive value
+    would mean.
     """
     import datetime
     if value is None:
@@ -114,11 +118,16 @@ def to_epoch(value):
     if isinstance(value, str):
         try:
             dt = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
-            return dt.timestamp()
         except ValueError:
             return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return dt.timestamp()
     if isinstance(value, datetime.datetime):
-        return value.timestamp()
+        dt = value
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return dt.timestamp()
     return None
 
 

@@ -9,6 +9,8 @@ The band-power recipes themselves are NOT re-implemented or re-tested here. They
 through the Biomarkers analytics module in both paths, and the two calibrated constants stay
 there.
 """
+import datetime
+
 import numpy as np
 
 # Both spellings on purpose: the container's path root makes these packages `modules.X`, the
@@ -74,7 +76,10 @@ def test_ring_and_short_spellings_land_on_one_key():
 def test_start_time_matches_the_platform_rule():
     for value in (None, "", "   ", "not a time", 0, 1.0, 999_999_999.0, T0,
                   "2023-11-14T22:13:20Z", "2023-11-14T22:13:20+00:00",
-                  "2023-11-14T22:13:20", 1_700_000_000):
+                  "2023-11-14T22:13:20", 1_700_000_000,
+                  "2023-11-14T14:13:20-08:00",
+                  datetime.datetime(2023, 11, 14, 22, 13, 20),
+                  datetime.datetime(2023, 11, 14, 22, 13, 20, tzinfo=datetime.timezone.utc)):
         assert to_epoch(value) == availability._to_epoch(value), (
             "the canonical form disagrees with the platform on start time %r" % (value,))
 
@@ -84,6 +89,36 @@ def test_a_session_relative_start_time_is_refused_not_read_as_1970():
     # it as an epoch would place the recording in 1970 and match it to no pain report at all,
     # silently. Both paths refuse it.
     assert to_epoch(12.5) is None
+
+
+def test_a_naive_start_time_is_read_as_utc_on_every_host():
+    """Open item 19, DECISIONS_and_open_items.md: a start time with no timezone attached names a
+    moment in Universal Time (UTC), never the process's own local zone. `expected` is built with
+    an explicit UTC offset rather than borrowed from either function under test, so this would
+    have failed under the old rule on any host that does not itself run in Universal Time --
+    unlike `test_start_time_matches_the_platform_rule`, which only proves the two functions agree
+    with EACH OTHER and would have passed even under the old, host-dependent rule.
+    """
+    expected = datetime.datetime(2023, 11, 14, 22, 13, 20, tzinfo=datetime.timezone.utc).timestamp()
+    naive_string = "2023-11-14T22:13:20"
+    naive_datetime = datetime.datetime(2023, 11, 14, 22, 13, 20)
+    for value in (naive_string, naive_datetime):
+        assert to_epoch(value) == expected, "the canonical form read %r as local time" % (value,)
+        assert availability._to_epoch(value) == expected, (
+            "the platform read %r as local time" % (value,))
+
+
+def test_a_timezone_aware_start_time_is_unchanged_by_the_naive_utc_rule():
+    """An explicit offset is already unambiguous; naive-means-UTC must not touch it. The Z suffix,
+    an explicit +00:00, and a genuinely non-UTC offset (-08:00, the same instant restated) must
+    all still resolve to the same moment as their naive counterpart above."""
+    expected = datetime.datetime(2023, 11, 14, 22, 13, 20, tzinfo=datetime.timezone.utc).timestamp()
+    for value in ("2023-11-14T22:13:20Z", "2023-11-14T22:13:20+00:00",
+                  "2023-11-14T14:13:20-08:00",
+                  datetime.datetime(2023, 11, 14, 22, 13, 20, tzinfo=datetime.timezone.utc)):
+        assert to_epoch(value) == expected, "the canonical form mis-read an explicit offset %r" % (value,)
+        assert availability._to_epoch(value) == expected, (
+            "the platform mis-read an explicit offset %r" % (value,))
 
 
 def test_dropped_packet_flag_matches_the_platform_rule():

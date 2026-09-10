@@ -91,7 +91,16 @@ def snap_freq(hz):
 
 
 def _to_epoch(value):
-    """BRAVO StartTime -> Unix epoch seconds (float), or None. Accepts epoch float/int or ISO str."""
+    """BRAVO StartTime -> Unix epoch seconds (float), or None. Accepts epoch float/int or ISO str.
+
+    A value with no timezone attached -- a naive string or a naive `datetime` -- names a moment
+    in Universal Time (UTC), on every machine this code runs on, never the process's own local
+    zone. This mirrors `DecodeCommon.representation.to_epoch` exactly; the two were changed
+    together (open item 19, `DECISIONS_and_open_items.md`) because a naive value used to be read
+    in the server's local zone here and in Universal Time there, which agreed only because the
+    container happens to run in Universal Time. No naive start time has ever been seen in the
+    live record, so this changes no number the platform has produced.
+    """
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -100,11 +109,16 @@ def _to_epoch(value):
     if isinstance(value, str):
         try:
             dt = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
-            return dt.timestamp()
         except ValueError:
             return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return dt.timestamp()
     if isinstance(value, datetime.datetime):
-        return value.timestamp()
+        dt = value
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return dt.timestamp()
     return None
 
 

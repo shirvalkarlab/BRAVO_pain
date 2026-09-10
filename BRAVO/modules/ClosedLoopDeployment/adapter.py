@@ -1812,6 +1812,7 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     # place. Agreement across the three says the conversion is behaving. The payload carries that
     # sentence in `notes` and in the figure footer, so a panel cannot show the numbers without it.
     _3build, _amp_stored = None, None
+    _3_is_every_run = False
     try:
         from . import three_source_response as _3src
         from . import three_source_plots as _3plot
@@ -1825,9 +1826,10 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                          getattr(participant, "uid", participant), exc_info=True)
             _amp_stored = None
             _gt_stored = None
+        _3_max_runs = (THREE_SOURCE_RUNS_ON_PAGE if (_amp_stored and _gt_stored) else _ALL_RUNS)
+        _3_is_every_run = _3_max_runs == _ALL_RUNS
         _3build = _3src.build_for_participant(
-            getattr(participant, "uid", participant),
-            max_runs=(THREE_SOURCE_RUNS_ON_PAGE if (_amp_stored and _gt_stored) else _ALL_RUNS))
+            getattr(participant, "uid", participant), max_runs=_3_max_runs)
         _page = dict(_3build, comparisons=list(_3build.get("comparisons", []))
                      [:THREE_SOURCE_RUNS_ON_PAGE])
         out["three_source_response"] = _3plot.report_payload(_page)
@@ -1841,6 +1843,73 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
             "absent_reason": ("the three-way comparison of how current moves band power could not "
                               f"be assembled: {_exc!r}"),
         }
+
+    # ---------------------------------------------------------------------------------------------
+    # THE CONSISTENCY CHECK (decision 74): does raising current on this contact move pain the way
+    # the correlation implies, THROUGH this band?
+    #
+    # Closing the loop means moving CURRENT to move POWER in the hope of moving PAIN. This project
+    # computes both links separately and, until now, nothing combined them. Multiplying the two
+    # signs answers the only question that matters for actuation: whether turning this contact up is
+    # expected to relieve or worsen pain through this band.
+    #
+    # WIRED HERE BECAUSE BOTH INPUTS ARE ALREADY IN HAND at this exact point and neither costs
+    # anything new: `_3build` is the three-source comparison built a few lines above, and
+    # `_grid_export` is the calibrated grid read once at the top of this function. The check fits no
+    # new model -- it reads two results that already exist and reports the sign combination.
+    # Decision 74 shipped it deliberately unwired ("built and proven as a standalone, callable check
+    # first") and named this as where it belongs: as a CAVEAT.
+    #
+    # IT GATES NOTHING, and `gates_nothing` says so in the payload. On missing or non-significant
+    # evidence the answer is "not assessed", never a manufactured pass -- decision 9's three-state
+    # discipline. Whether a contradiction here should stop a deployment is the PI's call, exactly as
+    # it is for `band_stability` above.
+    try:
+        from . import direction_consistency as _dc
+        _dc_first = (cands[0] or {}) if cands else {}
+        _dc_ch, _dc_fc = _dc_first.get("channel"), _dc_first.get("center_hz")
+        if _3build is None:
+            out["implied_control_direction"] = {
+                "implied_control_direction": "not assessed", "gates_nothing": True,
+                "reason": ("the three-way comparison of how current moves band power could not be "
+                           "assembled, so the current-to-power link is unavailable")}
+        elif not _3_is_every_run:
+            # NEVER POOL OVER A TRUNCATED BUILD. The comparison above is built with `max_runs` cut
+            # to what the page displays whenever the amplitude-effect and ground-truth entries are
+            # already stored -- which is the steady state after the first request. Pooling the
+            # within-visit dose-response over that slice defeats the entire point of decision 55/56,
+            # which is to pool across EVERY visit.
+            #
+            # Measured on RCS08, ONE_THREE_LEFT at 17.5 Hz, the same band on the same day:
+            #   cold cache, every run  -> 13 points across 4 visits, "no straight-line movement"
+            #   warm cache, 4 runs     ->  6 points across 1 visit,  "not assessed"
+            # The 13 points across 4 visits is exactly what decision 56 measured for this contact.
+            #
+            # An answer that depends on whether a cache entry happens to exist is not a finding, and
+            # the wrong half of that pair is the one a reader would almost always see. So this says
+            # so plainly instead. Making the check genuinely answer needs its own full-run build or
+            # a stored pooled table -- a real piece of work, recorded rather than faked.
+            out["implied_control_direction"] = {
+                "implied_control_direction": "not assessed", "gates_nothing": True,
+                "reason": (f"the comparison behind this check was built from at most "
+                           f"{THREE_SOURCE_RUNS_ON_PAGE} stimulation-current runs for display, and "
+                           f"pooling the within-visit dose-response needs every run this "
+                           f"participant has; a partial pool would answer differently depending on "
+                           f"what happened to be cached")}
+        elif _dc_ch is None or _dc_fc is None:
+            out["implied_control_direction"] = {
+                "implied_control_direction": "not assessed", "gates_nothing": True,
+                "reason": "the candidate carries no sensing contact or band centre"}
+        else:
+            _dc_out = _dc.for_band(_3build, _grid_export, _dc_ch, float(_dc_fc))
+            _dc_out["gates_nothing"] = True
+            out["implied_control_direction"] = _dc_out
+    except Exception as _exc:                          # never let this take down the whole report
+        _log.warning("closed-loop report: the consistency check could not be assembled for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
+        out["implied_control_direction"] = {
+            "implied_control_direction": "not assessed", "gates_nothing": True,
+            "reason": f"the consistency check could not be assembled: {_exc!r}"}
 
     # TRACK A STEP 7: THE AMPLITUDE EFFECT ON EVERY BAND, WRITTEN WHERE STIM OPTIMIZER CAN READ IT.
     # Derived from the comparison just built, so it costs no second pass over the recordings, and
