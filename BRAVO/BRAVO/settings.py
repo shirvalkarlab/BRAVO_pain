@@ -20,10 +20,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # ---------------------------------------------------------------------------------------------
 # `modules/` ON THE IMPORT PATH, WHICH THE ANALYSIS PACKAGES ALREADY ASSUME.
 #
-# Eight module-level imports across seven files in `modules/ClosedLoopDeployment` are written in
+# NINE module-level imports across seven files in `modules/ClosedLoopDeployment` are written in
 # the BARE spelling -- `from ClosedLoopDeployment import edges`, `from Biomarkers.routines import
 # analytics`, `from StimOptimizer.routines import percept_adaptive` -- which resolves only when
-# `modules/` is itself an import root. Nothing put it there: not this file, not `manage.py`, and
+# `modules/` is itself an import root. (Eight reach a SIBLING module; the ninth, `adapter.py`'s
+# `from ClosedLoopDeployment import edges`, is the package importing itself by bare name, which
+# needs the same path root. This comment said "eight" when it was written on 2026-09-09 and that
+# was wrong -- corrected 2026-09-10 after counting them from the syntax tree rather than by eye.) Nothing put it there: not this file, not `manage.py`, and
 # `PYTHONPATH` is unset in the container. The host test suite works only because it runs from
 # `BRAVO/modules` with `PYTHONPATH=.`.
 #

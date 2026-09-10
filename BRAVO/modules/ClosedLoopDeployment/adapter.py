@@ -1593,6 +1593,23 @@ def cache_status_for_page(participant):
                                         root=_SHARED_CACHE_DIR_OVERRIDE)
 
 
+def _cache_status_or_reason(participant):
+    """`cache_status_for_page`, but it can never be the thing that breaks a report.
+
+    Every return path of `report_for_participant` carries this, including the two empty states, so
+    it runs even when the participant has no spectra at all. It is one sidecar read and no
+    computation, but "cheap" is not "cannot fail" -- an unreadable sidecar or a store pointed
+    nowhere must degrade to a stated reason rather than take down a page that otherwise had
+    something to show.
+    """
+    try:
+        return cache_status_for_page(participant)
+    except Exception as exc:                           # noqa: BLE001
+        return {"exists": False,
+                "reason": f"the cache status could not be read: {exc!r}",
+                "what_it_means": "the report itself is unaffected; only its freshness line is."}
+
+
 def report_for_participant(participant, request_data=None, *, candidates=None, hemisphere="Left",
                            power_scale="power_linear", force_refresh=None):
     """Fetch this participant's data from the platform and build the report.
@@ -1616,6 +1633,8 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     try:
         _grid_export = band_sweep_grid_for_closed_loop(getattr(participant, "uid", participant))
     except Exception as _grid_exc:                     # noqa: BLE001
+        _log.warning("closed-loop report: the calibrated grid could not be read for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
         _grid_export = {"available": False,
                         "reason": f"the calibrated grid could not be read: {_grid_exc!r}"}
 
@@ -1624,12 +1643,21 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     # references it, so it is a pure function of the participant and safe to key on the recording
     # set; it is called with default washin_min and items, and a caller varying those would need
     # them in the key.
+    # DECISION 48 APPLIES TO THE EMPTY STATES TOO, and until 2026-09-10 it did not reach them: the
+    # only `cache_status` in this function sat on the final return, so the two early returns below
+    # -- which are what a reader sees BEFORE choosing a candidate, i.e. most of the time -- came
+    # back without it, and the page's shared "last built" line had nothing to show. That is
+    # precisely the "no stored results yet" case decision 48 names. Measured live on RCS08 before
+    # the fix: this endpoint returned exactly three keys, `available`, `band_sweep_grid`, `reason`.
+    _status = _cache_status_or_reason(participant)
+
     psd, eps, dm = evidence_inputs_cached(participant, force_refresh=bool(force_refresh))
     if psd is None:
         return {"available": False,
                 "reason": "this participant has no assembled spectra, so no control signal can be "
                           "evaluated. Sensing recordings must be ingested first.",
-                "band_sweep_grid": _grid_export}
+                "band_sweep_grid": _grid_export,
+                "cache_status": _status}
 
     cands = candidates or rd.get("Candidates") or []
     if not cands:
@@ -1637,7 +1665,8 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                 "reason": "no candidate configuration was supplied. Choose a channel and centre "
                           "frequency on the Biomarker Exploration page first; deployability is "
                           "evaluated for a specific configuration, not for a participant.",
-                "band_sweep_grid": _grid_export}
+                "band_sweep_grid": _grid_export,
+                "cache_status": _status}
     # Device facts the rules need but the analysis tables cannot supply. Fetched here rather than
     # inside pipeline.run so the pipeline stays free of ORM imports and remains testable on frames.
     dev = {}
@@ -1653,6 +1682,8 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                                         hemisphere=_hemi,
                                         channel=(cands[0] or {}).get("channel"))
     except Exception as exc:                      # never let a fact lookup take down the report
+        _log.warning("closed-loop report: device facts unavailable for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
         dev = {"_provenance": {}, "_error": f"device facts unavailable: {exc!r}"}
 
     rep = _pl.run(getattr(participant, "uid", participant), psd_frame=psd, epochs=eps,
@@ -1727,6 +1758,8 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     except Exception as _exc:                      # never let this take down the whole report
         # Say WHY it is missing. A key that is simply absent reads on the page as "does not apply",
         # and this check being unavailable is not the same as it not applying.
+        _log.warning("closed-loop report: the stability answer could not be assembled for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
         from . import stability as _stab_err
         out["band_stability"] = {
             "answer": "not tested", "test_ran": False,
@@ -1771,6 +1804,8 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
             _amp_stored = amplitude_effect_if_stored(participant)
             _gt_stored = ground_truth_if_stored(participant)
         except Exception:                               # noqa: BLE001 — the page comes first
+            _log.warning("closed-loop report: could not read the stored amplitude-effect or ground-truth entries for %s; both will be rebuilt",
+                         getattr(participant, "uid", participant), exc_info=True)
             _amp_stored = None
             _gt_stored = None
         _3build = _3src.build_for_participant(
@@ -1782,6 +1817,8 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     except Exception as _exc:                          # never let this take down the whole report
         # Say WHY it is missing, for the same reason as the stability block above: an absent key
         # reads on the page as "does not apply", and this having failed is not that.
+        _log.warning("closed-loop report: the three-source comparison could not be assembled for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
         out["three_source_response"] = {
             "comparisons": [], "gates_nothing": True,
             "absent_reason": ("the three-way comparison of how current moves band power could not "
@@ -1796,6 +1833,8 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
         out["amplitude_effect_by_band"] = (_amp_stored if _amp_stored is not None
                                            else write_amplitude_effect(participant, _3build))
     except Exception as _exc:                          # noqa: BLE001
+        _log.warning("closed-loop report: the amplitude-effect table could not be derived or written for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
         out["amplitude_effect_by_band"] = {"written": False,
                                            "reason": f"could not be derived: {_exc!r}"}
     # TRACK G STEP 2: THE GROUND-TRUTH VERDICT (decision 33), written where Stim Optimizer reads it.
@@ -1803,9 +1842,18 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
         out["ground_truth_verdict"] = (_gt_stored if _gt_stored is not None
                                        else write_ground_truth(participant, _3build))
     except Exception as _exc:                          # noqa: BLE001
-        out["amplitude_effect_by_band"] = {"written": False,
-                                           "reason": f"the amplitude-effect table could not be "
-                                                     f"written: {_exc!r}"}
+        # REPORTED UNDER ITS OWN KEY. This handler used to write `amplitude_effect_by_band`, which
+        # did two wrong things at once: the ground-truth failure was left with no explanation at
+        # all (an absent key reads on the page as "does not apply", which is exactly what the
+        # three-source block above says not to do), and the amplitude-effect result set two blocks
+        # earlier -- which had succeeded -- was overwritten with a report of a failure that never
+        # happened. Found 2026-09-10 by an audit comparing what each try-block assigns against what
+        # its own handler reports.
+        _log.warning("closed-loop report: the ground-truth verdict could not be written for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
+        out["ground_truth_verdict"] = {"written": False,
+                                       "reason": f"the ground-truth verdict could not be "
+                                                 f"written: {_exc!r}"}
 
-    out["cache_status"] = cache_status_for_page(participant)   # Track C step 4
+    out["cache_status"] = _status                              # Track C step 4
     return out
