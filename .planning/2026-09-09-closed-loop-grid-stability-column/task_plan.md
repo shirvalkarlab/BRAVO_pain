@@ -21,14 +21,13 @@ Constraint that shapes every option: `stability.py` may import from Biomarkers, 
 (its own docstring makes that a hard rule and an earlier Track D draft broke it).
 
 ## Next Step
-Phase 5: run the same management command on a schedule, at least daily, so the answer is usually
-already stored before anyone opens a page. This needs the PI's call first, because it changes how
-his server runs: the daily pass has to be started by something, and the candidates are a cron entry
-inside the container, a service in the dev compose override, or a documented entry the PI installs
-himself. Nothing in the shared `docker-compose.yml` has been touched.
+Phase 6: the field-count and difference-count proof on RCS08 that turning the column on ADDS fields
+and moves no existing scientific value, with timings in alternating rounds in the same report, then
+both suites re-run fresh. Most of the live evidence already exists in findings §16c and §17c; what is
+missing is the formal before-and-after field comparison.
 
 ## Current Phase
-Phase 5 — scheduled precompute
+Phase 6 — the equality proof
 
 ## Phases
 
@@ -130,13 +129,33 @@ Phase 5 — scheduled precompute
       skipped, 1 failed** — the known environment mismatch of decisions 84/85, unchanged.
 
 ### Phase 5: Scheduled precompute, off the request path
-**Status:** pending
+**Status:** complete
 
-- [ ] Run it at least daily per participant, independent of whether anyone opened a page.
-- [ ] Key it so a run whose inputs have not changed does no work: the store's own rule is that the
-      key decides whether to write, not the caller (decision 26).
-- [ ] Make a failed or half-finished run leave the previous answer in place rather than a partial
-      grid, and make the failure visible somewhere a person will actually look.
+- [x] `BRAVO/_agent_bridge/stability_precompute_loop.sh` runs `compute_stability_grid --all --json`
+      every 86,400 s, started by `boot.sh` the same best-effort way the agent bridge itself is, so a
+      failure there never blocks the app starting. **The PI chose the dev compose override**, so the
+      shared `docker-compose.yml` and the production image are untouched.
+- [x] Every knob is an environment variable, so nothing needs editing to change it:
+      `STABILITY_PRECOMPUTE=0` turns it off, `STABILITY_PRECOMPUTE_INTERVAL_SECONDS` sets the gap,
+      `STABILITY_PRECOMPUTE_FIRST_DELAY_SECONDS` (default 600) keeps the first pass out of the way of
+      container start, migrations and the first page loads.
+- [x] One loop, not several: a pid lock that is ignored when that process is gone, so a hard
+      container kill cannot wedge it. Proven — a second loop refused with "another loop is already
+      running (pid 2050348)".
+- [x] The key decides whether any work happens, so a daily pass over every participant is cheap:
+      measured 2.9-3.4 s for RCS08 when nothing had moved, against 10.8-12.7 s for a real rebuild.
+- [x] **A half-finished run leaves the previous answer in place.** The batch policy stops after three
+      points in a row raise, and the store keeps ONE current entry per participant per kind replaced
+      whole — so writing a stopped-early grid would have destroyed the previous answer, not narrowed
+      it, and rows that had a real answer an hour ago would read "not yet computed". Now refused and
+      reported, with a test that also proves a COMPLETE run still replaces it (a guard that froze the
+      answer forever would be worse than the bug).
+- [x] The failure is visible where a person looks: the command writes it to standard error and exits
+      non-zero, the loop logs "PASS FINISHED WITH FAILURES", and a participant with no recordings is
+      correctly NOT counted as a failure.
+- [x] Proven live: a full pass over both participants — one correctly "the calibrated grid has no
+      points for this participant", RCS08 `already_current` in 3.425 s — exit status 0.
+- [x] Suites: container **606 passed, 0 failed**; host **993 passed, 42 skipped, 1 failed** (known).
 
 ### Phase 6: Prove it on live data before claiming anything
 **Status:** pending
@@ -169,6 +188,8 @@ Phase 5 — scheduled precompute
 | 2 | Background after the grid lands, AND a scheduled precompute at least daily. Both. | The PI's direct answer to Phase 2. Background keeps the page usable for whoever opens it; the schedule means the answer is usually already there before anyone opens anything. | 2026-09-09 |
 | 3 | The setup is hoisted out of the per-point loop and the discarded glmer fit is skipped, before any concurrency is considered. | Measured: 63% of a point is point-invariant setup and 8% is a fit whose result is thrown away. Both are deterministic wins with no concurrency risk, and together they predict ~297 s to ~86 s. Parallelism across rpy2's single embedded R process is the risky lever and is not taken first. | 2026-09-09 |
 | 4 | "Vectorize the stability analysis" is answered honestly rather than claimed: the fit cannot be vectorized. | `band_stim_stability` fits two R mixed models per point through pymer4/rpy2 and takes the likelihood-ratio test between them. There is no numpy formulation and no way to batch it through rpy2. The band-power extraction feeding it is vectorizable and is worth about 0.02 s against a 0.645 s fit. Recorded in findings §8d so this is not re-litigated. | 2026-09-09 |
+| 9 | The daily pass is started from `boot.sh` in the dev compose override, not from the shared compose file or a cron entry in the image. | The PI's own choice. It touches nothing in `docker-compose.yml` or the production image, mirrors the best-effort pattern the agent bridge already uses in the same file, and is one block to remove. It takes effect on the next container start. | 2026-09-09 |
+| 10 | A run that stopped early never replaces a stored answer, and that is a failure a scheduler can alert on. | The store keeps one current entry per participant per kind, replaced whole, so a partial write destroys the previous answer rather than narrowing it — and nothing on any page would show it, because the page would simply go back to "not yet computed". | 2026-09-09 |
 | 6 | The background run is started by `subprocess.Popen` on the management command, detached, rather than by a thread. | A thread inside a gunicorn worker cannot fork safely once that worker has answered a single-candidate request, so it would silently take the serial path — the same answers, several times slower. A separate process is what makes the fast path reachable at all. | 2026-09-09 |
 | 7 | Anything derived from the calibrated grid takes the sweep's OWN key out of the response and never re-derives one. | The re-derivation was wrong in a way nothing could see: the echoed settings block is not the settings block the sweep keys itself on, so the page and the background run named different keys for one grid, every page load started a fresh whole-machine job, and none of them ever satisfied the page. Proven live before the fix (`dc6cec1b` asked for, `c02e9aca` written) and after (`a2954bda` both). | 2026-09-09 |
 | 8 | A background run is refused while the store is pointed at a caller's own root, and the default is the refusing one. | The container suite really was starting `manage.py compute_stability_grid --participant u` for the test bench's made-up participant. A unit suite must not start whole-machine jobs, and an answer written into a temporary directory is read by nothing. Mirrors the ledger's own production-root rule. | 2026-09-09 |

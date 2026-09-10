@@ -5284,6 +5284,30 @@ def compute_and_store_stability_grid(participant_uid, *, request_data=None, work
         out["reason"] = "the stability grid came back empty"
         return out
 
+    # A HALF-FINISHED RUN MUST NOT REPLACE A COMPLETE ANSWER. The batch policy carries on past a
+    # point that raises but stops after three in a row, so a grid can come back holding points it
+    # never attempted. The store keeps ONE current entry per participant per kind, replaced whole --
+    # so writing a stopped-early grid over a good one would not narrow the column, it would destroy
+    # the previous answer outright, and the page would show "not yet computed" on rows that had a
+    # real answer an hour ago. The next scheduled run tries again from scratch.
+    out["attempted"] = len(grid)
+    out["stopped_early"] = bool(len(grid) < len(points))
+    if out["stopped_early"]:
+        try:
+            previous, _prev_stamp = _cache_store.load_newest(
+                STABILITY_GRID_KIND, participant_uid, consumer="biomarkers",
+                root=_SHARED_CACHE_DIR_OVERRIDE)
+        except Exception:                                        # noqa: BLE001
+            previous = None
+        if isinstance(previous, dict) and previous.get("points"):
+            out["reason"] = (
+                f"the run stopped early after repeated failures, answering {len(grid)} of "
+                f"{len(points)} points; the previous stored answer "
+                f"({len(previous['points'])} points) is kept rather than replaced with a partial "
+                f"one. A scheduler should treat this as a FAILURE and say so.")
+            out["wall_seconds"] = round(_time.perf_counter() - t0, 3)
+            return out
+
     # Stored with STRING keys: a tuple key does not survive a JSON or Parquet round trip, and the
     # reader on the Closed-Loop side matches on (channel, centre) anyway.
     payload = {

@@ -341,6 +341,64 @@ def test_by_default_nothing_is_started_while_the_store_is_pointed_at_a_test_root
         bs._SHARED_CACHE_DIR_OVERRIDE = was_override
 
 
+def test_a_run_that_stopped_early_keeps_the_previous_answer_instead_of_replacing_it():
+    """The store keeps ONE current entry per participant per kind, replaced whole. So writing a
+    stopped-early grid over a good one would not narrow the stability column -- it would destroy the
+    previous answer, and rows that had a real answer an hour ago would read "not yet computed".
+
+    The batch policy carries on past a point that raises but stops after three in a row, so this is
+    a state the code can genuinely reach, not a hypothetical.
+    """
+    from CacheStore import store as cs
+    was_override = bs._SHARED_CACHE_DIR_OVERRIDE
+    tmp = tempfile.mkdtemp(prefix="stability_partial_")
+    real_sweep = bs.band_time_sweep_for_participant
+    real_grid = bs.stability_grid_for_participant
+    try:
+        bs._SHARED_CACHE_DIR_OVERRIDE = tmp
+        points = [("L", 8.5), ("L", 9.5), ("L", 10.5), ("L", 11.5)]
+        bs.band_time_sweep_for_participant = lambda req: {
+            "band_time_sweep": {"L": {"center_freqs_hz": [f for _, f in points]}},
+            "band_width_hz": 5.0, "label_metric": "nrs",
+            "sweep_key": {"signature_key": "sweepkeyone", "provenance": []}}
+
+        # A complete previous answer, written the way the real computation writes one.
+        good = {"kind": bs.STABILITY_GRID_KIND, "rule_version": bs.STABILITY_GRID_RULE_VERSION,
+                "participant_uid": "abc", "band_width_hz": 5.0, "label_metric": "nrs",
+                "n_points_requested": 4,
+                "points": {f"L|{f:g}": {"available": True, "lrt_p": 0.1} for _, f in points}}
+        sig = bs._stability_grid_sig_tuple("sweepkeyone", band_width_hz=5.0, points=points)
+        assert cs.store(bs.STABILITY_GRID_KIND, "abc", sig, good, writer="biomarkers",
+                        trigger="test", provenance=[], root=tmp)
+
+        # Now a run that stopped after two of the four points.
+        bs.stability_grid_for_participant = lambda uid, pts, **kw: {
+            ("L", 8.5): {"available": True, "lrt_p": 0.2},
+            ("L", 9.5): {"available": False, "reason": "raised"}}
+        out = bs.compute_and_store_stability_grid("abc", force=True)
+
+        assert out["stopped_early"] is True and out["attempted"] == 2
+        assert out["stored"] is False, "a partial grid replaced a complete stored answer"
+        assert "previous stored answer" in out["reason"], out["reason"]
+
+        # The complete answer is still there, untouched.
+        back, _ = cs.load_newest(bs.STABILITY_GRID_KIND, "abc", consumer="biomarkers", root=tmp)
+        assert len(back["points"]) == 4
+        assert back["points"]["L|8.5"]["lrt_p"] == 0.1, "the partial run's value overwrote it"
+
+        # A COMPLETE run still replaces it -- the guard must not freeze the answer forever.
+        bs.stability_grid_for_participant = lambda uid, pts, **kw: {
+            p: {"available": True, "lrt_p": 0.3} for p in points}
+        out2 = bs.compute_and_store_stability_grid("abc", force=True)
+        assert out2["stopped_early"] is False and out2["stored"] is True, out2["reason"]
+        back2, _ = cs.load_newest(bs.STABILITY_GRID_KIND, "abc", consumer="biomarkers", root=tmp)
+        assert back2["points"]["L|8.5"]["lrt_p"] == 0.3
+    finally:
+        bs.band_time_sweep_for_participant = real_sweep
+        bs.stability_grid_for_participant = real_grid
+        bs._SHARED_CACHE_DIR_OVERRIDE = was_override
+
+
 if __name__ == "__main__":
     _fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     _passed = _failed = 0

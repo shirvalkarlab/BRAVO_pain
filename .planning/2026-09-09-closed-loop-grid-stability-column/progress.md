@@ -120,3 +120,23 @@ his server runs. The command is built, tested and safe to run repeatedly (a run 
 moved does no fitting). What is undecided is what starts it daily: a cron entry inside the container,
 a service in the dev compose override, or an entry the PI installs himself. The shared
 `docker-compose.yml` has deliberately not been touched.
+
+### Session 3, Phase 5 — the daily pass
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| A full pass over every participant | Runs, exit 0 | 2 participants; one "no points" (not a failure), RCS08 already current 3.425 s | Pass |
+| The loop runs a pass on its own | Logs a finished pass | `pass finished, every participant either stored an answer or had nothing to store` | Pass |
+| A second loop refuses | Refuses | `another loop is already running (pid 2050348)` | Pass |
+| The off switch | Does not start | `switched off by STABILITY_PRECOMPUTE=0; not starting` | Pass |
+| A stopped-early run keeps the previous answer | Keeps it | Refused to store, previous 4-point answer intact; a complete run still replaces it | Pass |
+| Container suite | 605 + 1 | **606 passed, 0 failed** | Pass |
+| Host suite | 993 + known 1 | 993 passed, 42 skipped, 1 failed (known) | Pass |
+
+### Next session starts here
+Phase 6: the field-count and difference-count proof on RCS08 that turning the stability column on
+ADDS fields and moves no existing scientific value, with timings in alternating rounds in the same
+report. Most of the live evidence is already in findings §16c and §17c; the formal before-and-after
+field comparison is what is missing.
+
+**The daily loop takes effect on the next container start** — `boot.sh` runs once when the container
+boots, so it is not running yet in the currently-running container.

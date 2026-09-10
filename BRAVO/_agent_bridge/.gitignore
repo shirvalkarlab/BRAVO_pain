@@ -29,6 +29,7 @@ check_*.py
 # Keep the bridge infrastructure tracked regardless of the patterns above.
 !agent_runner.py
 !boot.sh
+!stability_precompute_loop.sh
 !bridge_client.py
 !run_tests.py
 !HANDOFF_agent_bridge.md

@@ -88,8 +88,12 @@ class Command(BaseCommand):
                 continue
 
             # "Nothing to store" is a normal outcome (no recordings, inputs not nameable) and is
-            # NOT a failure. Only a computed-but-unstored answer is.
-            if not result.get("stored") and "not stored" in str(result.get("reason") or ""):
+            # NOT a failure. A computed-but-unstored answer is, and so is a run that stopped early
+            # and therefore kept the previous answer instead of replacing it -- that one is exactly
+            # the case a scheduler must be able to alert on, because nothing on any page will show
+            # it: the page keeps serving the older answer, correctly, and looks fine.
+            if not result.get("stored") and (
+                    "not stored" in str(result.get("reason") or "") or result.get("stopped_early")):
                 failures += 1
             self._emit(opts, result)
 
@@ -150,6 +154,8 @@ class Command(BaseCommand):
             self.stdout.write(
                 f"{payload['participant_uid']}: stored {payload.get('n_available')} of "
                 f"{payload.get('n_points')} points in {payload.get('wall_seconds')} s")
+        elif payload.get("stopped_early"):
+            self.stderr.write(f"{payload['participant_uid']}: FAILED — {payload.get('reason')}")
         else:
             self.stdout.write(f"{payload['participant_uid']}: nothing stored — "
                               f"{payload.get('reason')}")

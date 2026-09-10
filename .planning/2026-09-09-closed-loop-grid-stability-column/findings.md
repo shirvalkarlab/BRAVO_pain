@@ -630,3 +630,45 @@ production root, for the same reason: work aimed at a temporary directory is rea
 | Known case ONE_THREE_LEFT at 12.5 Hz | `lrt_p` 0.032285156521398184, the same value measured before it was ever stored |
 | Second page request | "the answer for this key is already stored", nothing started |
 | Closed-Loop reader | 264 rows, all from the store: 50 "behaves differently", 204 "cannot tell", 10 "behaves the same" |
+
+## §17 — The daily pass, and the failure mode it exposed
+
+**Started from `boot.sh`**, the dev-only container entry point the compose override already names,
+the same best-effort way the agent bridge itself is started there: if it fails, the app still starts.
+The PI chose this over a cron entry in the image and over a documented-but-uninstalled command. The
+shared `docker-compose.yml` and the production image are untouched. **It takes effect on the next
+container start.**
+
+**It is cheap to run daily because the key decides whether any work happens.** Measured live: a pass
+over RCS08 whose inputs had not moved cost 2.9-3.4 s against 10.8-12.7 s for a real rebuild. A
+participant with no calibrated grid reports "the calibrated grid has no points for this participant"
+and is correctly NOT counted as a failure.
+
+### §17a — A half-finished run would have destroyed the previous answer
+
+The batch policy carries on past a point whose fit raises but stops after three in a row, so a grid
+can come back holding points it never attempted. **The store keeps ONE current entry per participant
+per kind, replaced whole.** Writing a stopped-early grid over a good one would therefore not narrow
+the stability column — it would delete the previous answer, and rows that had a real answer an hour
+ago would go back to reading "not yet computed", with nothing anywhere saying why.
+
+Now refused and reported. The test proves both halves: a partial run leaves the complete answer
+untouched, AND a complete run still replaces it — a guard that froze the answer forever would be
+worse than the bug it fixed.
+
+### §17b — Where the failure is visible
+
+Phase 5 asked for the failure to be visible "somewhere a person will actually look". A stopped-early
+run is the hardest case, because the page keeps serving the older answer and looks completely fine.
+So it is surfaced three ways: the command writes it to standard error, the command exits non-zero,
+and the loop logs `PASS FINISHED WITH FAILURES`. A participant who simply has no recordings is not a
+failure and does not trip any of them.
+
+### §17c — What was proven live
+
+| | |
+|---|---|
+| A full daily pass, both participants | exit 0; one "no points", RCS08 `already_current` in 3.425 s |
+| The loop runs its pass | `pass finished, every participant either stored an answer or had nothing to store` |
+| A second loop | refused: `another loop is already running (pid 2050348)` |
+| `STABILITY_PRECOMPUTE=0` | `switched off by STABILITY_PRECOMPUTE=0; not starting` |
