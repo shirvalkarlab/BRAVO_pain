@@ -5904,6 +5904,93 @@ def _sweep_blank(reason, *, n_reports=0):
     }
 
 
+#: ==========================================================================================
+#: THE BAND-BY-LENGTH SWEEP'S OWN OUTLIER RULE, replacing the 5-MAD/log-scale rule for this one
+#: quantity only (PI decision, 2026-09-09) -- the "plate-wide" 5 MAD rule two sections above is
+#: UNCHANGED and still governs every other outlier exclusion on this page (the correlation
+#: spectrum, the chronic LFP-power column, etc.); this table applies to the calibrated
+#: band-by-length grid alone.
+#:
+#: THE RULE: discard a measurement above the historical 99.5th-percentile ceiling for that EXACT
+#: (contact, band centre) pair, precomputed ONCE from this participant's ENTIRE recorded history --
+#: never recomputed from the window being checked -- the same reasoning decision 52 already used
+#: for the device's own saturation ceiling in `ClosedLoopDeployment.ceiling_thresholds`. His own
+#: framing: "discard the top 0.5% of data using a list of precalculated thresholds... hard coded
+#: now and applied to individual windows in future analysis."
+#:
+#: POOLED, NOT SPLIT, BY SOURCE. He explicitly asked to "forget applying [the rule] by source":
+#: a channel's ceiling is one number per band centre, computed from every LSB value this
+#: participant's history holds for that (contact, centre) regardless of whether it derived from
+#: the time-domain-transform tier or the PSD-bridge tier -- unlike the (separate, still-unwired)
+#: `ClosedLoopDeployment.ceiling_thresholds.TIME_DOMAIN_CEILINGS`/`RAW_LSB_CEILINGS`, which keep
+#: those two tiers apart. Confirmed before building this that the sweep's own `X` matrix is
+#: genuinely in device LSB units already ("BUT MAKE SURE" was the direct instruction) --
+#: `availability.live_lsb_spectrum_match`'s own return-value docstring says so explicitly
+#: ("LINEAR LSB (NOT logged) per band center"), and it draws from the identical
+#: `_raw_lsb_cache_cached` tile cache this table was computed from, so the units and the source
+#: data are the same population, not merely the same convention.
+#:
+#: COMPUTED, NOT DERIVED AT RUNTIME. Built once by `_agent_bridge/_sweep_ceiling_export.py`
+#: (disposable, gitignored) against RCS08 (`2e3c75c00d7f4f37b53a048d195f11da`), at exactly the
+#: sweep's own 22 band centres (8.5-29.5 Hz), pooling every `td`/`psd` LSB value the tile cache
+#: holds per (channel, centre): 582 (channel, centre) groups, 145,894 of 29,103,915 values
+#: excluded (0.5013%, matching "top 0.5%" by construction), no group under the 20-sample floor.
+#: Recomputing this table for a new participant or after a large new upload means re-running that
+#: script and replacing this dict -- there is no runtime recomputation path, matching
+#: `ceiling_thresholds.py`'s own committed-constant convention.
+#:
+#: APPLIED TO SINGLE 3 s PIECES, NOT TO THE AVERAGED CELL (PI, 2026-09-09, revising the first
+#: build of this rule). These numbers are percentiles of INDIVIDUAL 3 s chunk values, so the only
+#: place they can honestly be compared is against individual 3 s chunk values -- before any
+#: averaging. `availability.live_lsb_band_medians_by_length` is where that happens, and its own
+#: docstring carries the measurements behind the change: applying them to the averaged cell instead
+#: discarded 0.708% of the 1 s row but only 0.300% from the 20 s row up, because an average of 100
+#: chunks sits far closer to the middle than any single chunk does.
+#:
+#: FALLS BACK TO THE OLD MAD RULE FOR ANY CHANNEL THIS TABLE DOES NOT COVER -- a synthetic test
+#: channel, the demo participant, or a real contact this table has not yet been rebuilt for --
+#: so outlier exclusion is never silently skipped rather than merely using a different method.
+#: This is also why every existing test of `band_time_sweep_from_power`'s outlier behaviour still
+#: passes unchanged: none of them pass one of these six real channel names, so they all still
+#: exercise the MAD path exactly as before.
+BAND_SWEEP_LSB_CEILINGS = {
+    "ZERO_THREE_RIGHT": {8.5: 5229.9, 9.5: 4623.2, 10.5: 3875.9, 11.5: 3210.1, 12.5: 2397.3,
+        13.5: 1596.9, 14.5: 1012.0, 15.5: 750.7, 16.5: 639.6, 17.5: 615.4, 18.5: 622.7,
+        19.5: 660.7, 20.5: 661.7, 21.5: 628.9, 22.5: 566.0, 23.5: 499.5, 24.5: 498.6,
+        25.5: 2061.0, 26.5: 3438.3, 27.5: 3459.9, 28.5: 3460.9, 29.5: 3394.6},
+    "ONE_THREE_LEFT": {8.5: 2157.9, 9.5: 1773.0, 10.5: 1438.9, 11.5: 1254.8, 12.5: 1120.7,
+        13.5: 978.0, 14.5: 910.7, 15.5: 844.5, 16.5: 816.8, 17.5: 784.4, 18.5: 787.5,
+        19.5: 814.3, 20.5: 898.3, 21.5: 1002.0, 22.5: 1106.9, 23.5: 1149.7, 24.5: 1124.9,
+        25.5: 1025.8, 26.5: 882.0, 27.5: 724.8, 28.5: 599.5, 29.5: 486.1},
+    "ZERO_THREE_LEFT": {8.5: 2989.7, 9.5: 2591.7, 10.5: 2251.4, 11.5: 1948.8, 12.5: 1679.0,
+        13.5: 1448.3, 14.5: 1267.4, 15.5: 1188.2, 16.5: 1118.7, 17.5: 1042.0, 18.5: 973.1,
+        19.5: 928.3, 20.5: 887.9, 21.5: 912.0, 22.5: 929.8, 23.5: 924.8, 24.5: 906.6,
+        25.5: 847.5, 26.5: 757.4, 27.5: 630.4, 28.5: 522.9, 29.5: 435.3},
+    "ZERO_TWO_LEFT": {8.5: 1957.4, 9.5: 1763.8, 10.5: 1586.1, 11.5: 1424.6, 12.5: 1284.2,
+        13.5: 1108.8, 14.5: 987.9, 15.5: 920.9, 16.5: 849.7, 17.5: 787.6, 18.5: 730.7,
+        19.5: 679.2, 20.5: 643.5, 21.5: 631.4, 22.5: 629.8, 23.5: 632.2, 24.5: 608.6,
+        25.5: 564.6, 26.5: 517.4, 27.5: 456.9, 28.5: 392.1, 29.5: 352.5},
+    "ONE_THREE_RIGHT": {8.5: 4747.9, 9.5: 4115.1, 10.5: 3298.7, 11.5: 2414.9, 12.5: 1819.9,
+        13.5: 1201.0, 14.5: 815.6, 15.5: 572.4, 16.5: 434.6, 17.5: 389.3, 18.5: 380.7,
+        19.5: 369.6, 20.5: 357.9, 21.5: 335.7, 22.5: 298.8, 23.5: 267.0, 24.5: 245.5,
+        25.5: 222.8, 26.5: 201.5, 27.5: 180.0, 28.5: 157.1, 29.5: 137.0},
+    "ZERO_TWO_RIGHT": {8.5: 4526.1, 9.5: 4840.0, 10.5: 4724.2, 11.5: 4250.1, 12.5: 3400.6,
+        13.5: 2025.0, 14.5: 1026.9, 15.5: 645.9, 16.5: 509.4, 17.5: 510.0, 18.5: 571.2,
+        19.5: 602.7, 20.5: 618.2, 21.5: 582.7, 22.5: 521.0, 23.5: 455.0, 24.5: 400.6,
+        25.5: 353.1, 26.5: 318.6, 27.5: 274.1, 28.5: 236.7, 29.5: 198.9},
+}
+
+
+def band_sweep_lsb_ceiling(channel, centre_hz):
+    """The historical 99.5th-percentile ceiling for one (contact, band centre), or `None` if this
+    channel has no table entry at all (falls back to the MAD rule) or this exact centre is
+    missing from an otherwise-covered channel (that one column gets no ceiling exclusion)."""
+    table = BAND_SWEEP_LSB_CEILINGS.get(channel)
+    if not table:
+        return None
+    return table.get(round(float(centre_hz), 1))
+
+
 def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz,
                                band_width_hz=BAND_TIME_SWEEP_WIDTH_HZ,
                                strategy="tertile", low_pct=33.3333, high_pct=66.6667,
@@ -5911,7 +5998,7 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
                                n_perm=BAND_TIME_SWEEP_N_PERM, n_boot=BAND_TIME_SWEEP_N_BOOT,
                                seed=0, power_feature="band power", channel=None,
                                metric_key=None, metric_label=None,
-                               tile_seconds=None, requested_seconds=None):
+                               tile_seconds=None, requested_seconds=None, chunk_exclusion=None):
     """The whole grid: for every band centre and every length of signal averaged into one
     measurement, how well that band's power tracks the chosen pain score.
 
@@ -5967,11 +6054,20 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
     X = np.stack(stacks, axis=0)                      # (T, P, C)
     T, P, C = X.shape
 
-    # ---- outlier exclusion, the same rule the rest of the page applies -------------------------
+    # ---- outlier exclusion --------------------------------------------------------------------
+    # `chunk_exclusion` means the contaminated 3 s chunks were ALREADY left out, one at a time,
+    # before any of them were averaged into these cells (PI decision, 2026-09-09;
+    # `availability.live_lsb_band_medians_by_length` carries the full reasoning). There is nothing
+    # left to exclude here, and re-running a cell-level rule on top would be a second, different
+    # exclusion applied to values that have already been cleaned.
     n_mad = float(OUTLIER_N_MAD if outlier_n_mad is None else outlier_n_mad)
     o_scale = str(OUTLIER_SCALE if outlier_scale is None else outlier_scale)
     n_excluded = 0
-    if n_mad > 0:
+    outlier_rule = "none"
+    if chunk_exclusion:
+        n_excluded = int(chunk_exclusion.get("n_chunk_band_values_excluded") or 0)
+        outlier_rule = "historical_99p5_ceiling_per_chunk"
+    elif n_mad > 0:
         # Applied separately for each band centre and each length of signal, because band powers
         # differ by orders of magnitude between bands and a threshold pooled across bands would be
         # set by whichever band carries the largest numbers. Same rule and same reasoning as the
@@ -5981,6 +6077,7 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
                                    scale=o_scale)
         n_excluded = int(drop.sum())
         X[drop] = np.nan
+        outlier_rule = f"{n_mad:g}_mad_{o_scale}"
 
     # ---- the continuous half: Pearson correlation, all bands at once per length of signal ------
     corr = np.full((T, C), np.nan)
@@ -6046,7 +6143,7 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         _r.pop("_grid_time_index", None)
         _r.pop("_grid_center_index", None)
     notes = _sweep_notes(kept_req, delivered, tiles, tile_s, T, C, n_mad, o_scale, n_excluded,
-                         int(n_perm), split_why, crosscheck)
+                         int(n_perm), split_why, crosscheck, outlier_rule=outlier_rule)
     n_used = int(np.nanmax(corr_n)) if corr_n.size and np.isfinite(corr).any() else 0
     return {
         "answer": (BAND_PAIN_ESTABLISHED
@@ -6093,6 +6190,12 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         "n_pain_reports": n_used,
         "n_pain_reports_handed_in": n_reports_in,
         "n_measurements_excluded_as_outliers": int(n_excluded),
+        "outlier_rule": outlier_rule,
+        # The exclusion's own counts, so a reader can check the note against them rather than
+        # taking the sentence on trust: how many pieces were eligible, how many single band values
+        # were left out, and how many cells could not be refilled to the count their row asked for
+        # because the rating simply had no more clean recording nearby.
+        "chunk_exclusion": (dict(chunk_exclusion) if chunk_exclusion else None),
         "outlier_n_mad": float(n_mad),
         "outlier_scale": o_scale,
         "n_shuffles": int(n_perm),
@@ -6284,7 +6387,7 @@ AUC_DIRECTION_NOTE = (
 
 
 def _sweep_notes(requested, delivered, tiles, tile_s, n_times, n_centers, n_mad, o_scale,
-                 n_excluded, n_perm, split_why, crosscheck=None):
+                 n_excluded, n_perm, split_why, crosscheck=None, outlier_rule="none"):
     """The sentences the panel prints beside the grid, every one of them computed from what actually
     ran rather than written in advance.
 
@@ -6306,7 +6409,14 @@ def _sweep_notes(requested, delivered, tiles, tile_s, n_times, n_centers, n_mad,
     notes.append(f"The grid's {n_times * n_centers} cells ({n_times} lengths x {n_centers} band "
                  f"centres, each {BAND_TIME_SWEEP_WIDTH_HZ:g} Hz wide, 1 Hz apart) overlap heavily "
                  f"and are not independent of each other.")
-    if n_mad > 0:
+    if outlier_rule == "historical_99p5_ceiling_per_chunk":
+        notes.append(f"{n_excluded} single {tile_s:g} s pieces were left out before anything was "
+                     f"averaged, each one above this contact's own historical ceiling for that "
+                     f"band -- the top 0.5% of everything this contact has ever recorded there, "
+                     f"fixed in advance rather than judged from the data on screen. Each piece "
+                     f"left out was replaced by the next closest clean one, so every cell still "
+                     f"averages the number of pieces its row asks for.")
+    elif n_mad > 0:
         notes.append(f"{n_excluded} measurements were excluded as outliers ({n_mad:g} median "
                      f"absolute deviations on the {o_scale} scale), per band and length.")
     else:

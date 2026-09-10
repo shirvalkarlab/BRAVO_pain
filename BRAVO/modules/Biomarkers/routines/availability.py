@@ -1834,6 +1834,212 @@ def _lsb_none_lists(med):
     return obj.tolist(), finite
 
 
+def _nearest_pro_idx(win_t, pro_sorted, order, nP, tol, prior=False):
+    """Vectorized nearest-PRO index (orig order) per window time, -1 if beyond tol.
+
+    `prior=True` restricts a window to a PRO at or AFTER it (the window must precede the rating,
+    dt = pro_time - win_time >= 0) instead of whichever PRO is symmetrically closest -- the same
+    forecasting-safe restriction `streaming_psd._match_to_pro`'s "prior" mode applies, adapted to
+    this module's window-first (rather than PRO-first) search.
+
+    Lifted out of `live_lsb_spectrum_match` unchanged so the per-band exclusion path below decides
+    which rating owns a chunk by the identical rule rather than a second copy of it.
+    """
+    if win_t.size == 0 or nP == 0:
+        return np.full(win_t.size, -1, dtype=int)
+    pos = np.searchsorted(pro_sorted, win_t)
+    if prior:
+        right = np.clip(pos, 0, nP - 1)
+        dr = pro_sorted[right] - win_t
+        nn = order[right]
+        nn[(dr < 0) | (dr > tol) | (pos >= nP)] = -1
+        return nn
+    left = np.clip(pos - 1, 0, nP - 1)
+    right = np.clip(pos, 0, nP - 1)
+    dl = np.abs(win_t - pro_sorted[left])
+    dr = np.abs(win_t - pro_sorted[right])
+    take_left = dl <= dr                       # tie -> earlier PRO (deterministic)
+    nn_sorted = np.where(take_left, left, right)
+    dist = np.where(take_left, dl, dr)
+    nn = order[nn_sorted]
+    nn[dist > tol] = -1
+    return nn
+
+
+def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, centers_hz,
+                                    band_ceilings, allow_window_reuse=False,
+                                    match_direction="nearest"):
+    """Band power per pain report and per length of signal, excluding contaminated 3 s chunks
+    BEFORE they are averaged, and taking the next-nearest clean chunk in place of each one dropped.
+
+    WHY THIS EXISTS, AND WHY IT IS NOT THE SAME AS EXCLUDING AFTERWARDS (PI, 2026-09-09).
+    The ceilings in `analytics.BAND_SWEEP_LSB_CEILINGS` are the 99.5th percentile of this
+    participant's INDIVIDUAL 3 s chunk values. Comparing them against a cell that already averaged
+    up to 100 chunks compares a threshold against a different, much narrower distribution: measured
+    on RCS08, that discarded 0.708 percent of the 1 s row but only 0.300 percent from the 20 s row
+    up, so "the top 0.5 percent" meant ten different things down one column. Excluding here, before
+    any averaging, compares each value against the population the ceiling was actually built from,
+    so one chunk gets one verdict at a given band in every row of the grid.
+
+    IT EXCLUDES PER BAND, NOT PER WHOLE CHUNK, and that was measured rather than assumed. Of
+    296,157 chunks on RCS08, 11,208 (3.78 percent) sit above the ceiling in at least one band but
+    only 4 (0.001 percent) do in all 22, and a third of them are over in exactly one band -- so
+    dropping a whole chunk for one bad band would discard 3.78 percent of the record, almost all of
+    it good data. A chunk therefore drops out at 8.5 Hz and stays in at 20 Hz.
+
+    BACKFILL, the PI's own choice over simply dropping. Each rating's eligible chunks are put in
+    one fixed order, nearest in time first; the value for length N at band c is the median of the
+    first N chunks of that order that are CLEAN AT BAND c. So a cell keeps the sample count its row
+    asks for and the length-of-signal axis stays comparable across the grid, instead of a cell
+    quietly averaging 97 chunks where its neighbour averaged 100.
+
+    Which chunks are eligible, and which rating owns each one, are decided by the SAME two helpers
+    `live_lsb_spectrum_match` uses (`_pad_windows_in_extent` / `_pad_owned_windows` over
+    `_nearest_pro_idx`), so only the surviving-chunk step differs between the two paths.
+
+    `band_ceilings` is one ceiling per entry of `centers_hz`, `np.inf` where that centre has none
+    (that band then keeps every chunk). Nothing is written back into `raw_cache`.
+
+    Returns `(power_by_length, info, stats_by_length)`. `power_by_length` maps each requested length
+    in seconds to an (n_ratings x n_centres) array of linear device-LSB band power, NaN where a
+    rating has no surviving measurement. `info` carries the exclusion counts for the page's own
+    notes. `stats_by_length` is the same per-length matching summary `live_lsb_spectrum_match`
+    reports, and carries the same numbers: eligibility, ownership and the quantity cap are what
+    those fields describe, and this function changes none of them. `n_td_used` counts the pieces a
+    rating's cell averages, which backfill holds at the requested count except where a rating's own
+    eligible pieces run out -- `info["n_cells_short_of_requested"]` counts exactly those cells.
+    """
+    centers_cache = np.atleast_1d(np.asarray(raw_cache.get("centers_hz") or [], dtype=float))
+    sweep_c = np.atleast_1d(np.asarray(centers_hz, dtype=float))
+    nCc, nCs = centers_cache.size, sweep_c.size
+    window_s = float(raw_cache.get("window_s") or analytics.RAW_LSB_WINDOW_SECONDS)
+    pro = np.atleast_1d(np.asarray(pro_times, dtype=float))
+    nP = pro.size
+    lengths = [float(s) for s in lengths_s]
+    out = {s: np.full((nP, nCs), np.nan, dtype=float) for s in lengths}
+    info = {"n_chunk_band_values_excluded": 0, "n_chunks_eligible": 0,
+            "n_cells_short_of_requested": 0, "tol_s": float(tol_s),
+            "allow_window_reuse": bool(allow_window_reuse)}
+    stats_by_length = {}
+    if nP == 0 or nCs == 0 or nCc == 0 or window_s <= 0:
+        return out, info, stats_by_length
+
+    col = np.asarray([int(np.argmin(np.abs(centers_cache - c))) for c in sweep_c], dtype=int)
+    ceil = np.asarray(band_ceilings, dtype=float)
+    caps = [max(1, int(round(s / window_s))) for s in lengths]
+    cap_max = max(caps) if caps else 1
+
+    prior = str(match_direction or "nearest").lower() == "prior"
+    order = np.argsort(pro, kind="stable")
+    pro_sorted = pro[order]
+
+    td = raw_cache.get("td") or {}
+    td_t = np.atleast_1d(np.asarray(td.get("t") or [], dtype=float))
+    td_ok = np.atleast_1d(np.asarray(td.get("ok") or [], dtype=bool))
+    td_mat = _lsb_family_mat(td, nCc)
+    td_valid = (td_ok if td_ok.size == td_t.size else np.zeros(td_t.size, bool)) & np.isfinite(td_t)
+
+    if allow_window_reuse:
+        idx, cnt = _pad_windows_in_extent(td_t, td_valid, pro, tol_s, nP, direction=match_direction)
+    else:
+        nn = np.full(td_t.size, -1, dtype=int)
+        if td_valid.any():
+            nn[td_valid] = _nearest_pro_idx(td_t[td_valid], pro_sorted, order, nP, tol_s,
+                                            prior=prior)
+        idx, cnt = _pad_owned_windows(nn, nP)
+    td_tier = cnt > 0
+    info["n_chunks_eligible"] = int(cnt.sum())
+
+    if idx.shape[1] > 0:
+        # One fixed order per rating, closest in time first, so "the nearest N that survive at this
+        # band" is a prefix of it. Padding sorts last on an infinite distance.
+        safe = np.maximum(idx, 0)
+        dist = np.where(idx >= 0, np.abs(td_t[safe] - pro[:, None]), np.inf)
+        S = np.take_along_axis(idx, np.argsort(dist, axis=1, kind="stable"), axis=1)
+        real = S >= 0
+        Ssafe = np.maximum(S, 0)
+
+        for j in range(nCs):
+            vals = np.where(real, td_mat[Ssafe, col[j]], np.nan)
+            bad = real & np.isfinite(vals) & (vals > ceil[j])
+            good = real & ~bad
+            info["n_chunk_band_values_excluded"] += int(bad.sum())
+            rank = np.cumsum(good, axis=1)
+            # Columns past the point where every rating already has cap_max clean chunks can never
+            # change any length's answer, so the per-length reduction below runs on a narrow slice
+            # rather than the full eligible width.
+            over = rank > cap_max
+            any_over = over.any(axis=1)
+            last = np.where(any_over, np.argmax(over, axis=1), rank.shape[1] - 1)
+            width = int(last.max()) + 1
+            g, r, v = good[:, :width], rank[:, :width], vals[:, :width]
+            for s, cap in zip(lengths, caps):
+                keep = g & (r <= cap)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)
+                    out[s][:, j] = np.where(td_tier, np.nanmedian(np.where(keep, v, np.nan), axis=1),
+                                            np.nan)
+                # Only cells the EXCLUSION left short, never cells that were always going to be
+                # short because the rating has little recording near it -- that is pre-existing and
+                # counting it here would blame this rule for it. The comparison is therefore
+                # against what this rating would have averaged with nothing excluded at all.
+                would_have = np.minimum(cap, cnt)
+                info["n_cells_short_of_requested"] += int(
+                    (td_tier & (keep.sum(axis=1) < would_have)).sum())
+
+    # ---- PSD bridge, for ratings with no eligible chunk of voltage trace at all -------------------
+    # Same rule as `live_lsb_spectrum_match`: the voltage trace is preferred, and a rating only falls
+    # here when it owns none. There is no quantity cap on this tier and therefore nothing to backfill
+    # -- a contaminated event is simply left out of the median for the band it is contaminated in.
+    psd = raw_cache.get("psd") or {}
+    psd_t = np.atleast_1d(np.asarray(psd.get("t") or [], dtype=float))
+    psd_mat = _lsb_family_mat(psd, nCc)
+    psd_valid = np.isfinite(psd_t)
+    pcnt = np.zeros(nP, dtype=np.int64)
+    take = np.zeros(nP, dtype=bool)
+    if psd_t.size and (~td_tier).any():
+        if allow_window_reuse:
+            pidx, pcnt = _pad_windows_in_extent(psd_t, psd_valid, pro, tol_s, nP,
+                                                direction=match_direction)
+        else:
+            pnn = np.full(psd_t.size, -1, dtype=int)
+            if psd_valid.any():
+                pnn[psd_valid] = _nearest_pro_idx(psd_t[psd_valid], pro_sorted, order, nP, tol_s,
+                                                  prior=prior)
+            pidx, pcnt = _pad_owned_windows(pnn, nP)
+        take = (~td_tier) & (pcnt > 0)
+        if take.any() and pidx.shape[1] > 0:
+            preal = pidx >= 0
+            psafe = np.maximum(pidx, 0)
+            for j in range(nCs):
+                pv = np.where(preal, psd_mat[psafe, col[j]], np.nan)
+                pbad = preal & np.isfinite(pv) & (pv > ceil[j])
+                info["n_chunk_band_values_excluded"] += int(pbad.sum())
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)
+                    pmed = np.nanmedian(np.where(pbad, np.nan, pv), axis=1)
+                for s in lengths:
+                    out[s][take, j] = pmed[take]
+
+    # The same per-length matching summary the established matcher reports, built from the same
+    # quantities: which pieces were eligible, which rating owns each, and the quantity cap. Those
+    # are the three things this path does NOT change, so these fields keep their meaning exactly.
+    n_pro_td, n_pro_psd = int(td_tier.sum()), int(take.sum())
+    for s, cap in zip(lengths, caps):
+        stats_by_length[s] = {
+            "n_pro": int(nP), "n_pro_td": n_pro_td, "n_pro_psd": n_pro_psd,
+            "n_pro_unmatched": int(nP - n_pro_td - n_pro_psd),
+            "n_td_windows": int(td_t.size), "n_psd_windows": int(psd_t.size),
+            "n_td_assigned": int(cnt.sum()),
+            "n_td_used": int(np.minimum(cnt, cap)[td_tier].sum()),
+            "n_psd_assigned": int(pcnt.sum()), "n_psd_used": int(pcnt[take].sum()),
+            "tol_s": float(tol_s), "td_quantity_s": float(s), "td_n_epochs_cap": int(cap),
+            "extent_s": float(s), "psd_tol_s": float(tol_s),
+            "allow_window_reuse": bool(allow_window_reuse),
+            "match_direction": "prior" if prior else "prospective"}
+    return out, info, stats_by_length
+
+
 def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=None,
                             allow_window_reuse=False, extent_s=None, psd_tol_s=None,
                             match_direction="nearest", want_records=True):
@@ -1937,32 +2143,10 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
     _prior_mode = str(match_direction or "nearest").lower() == "prior"
 
     def _nearest_pro(win_t, tol, prior=False):
-        """Vectorized nearest-PRO index (orig order) per window time, -1 if beyond tol.
-
-        `prior=True` restricts a window to a PRO at or AFTER it (the window must precede the
-        rating, dt = pro_time - win_time >= 0) instead of whichever PRO is symmetrically closest —
-        the same forecasting-safe restriction `streaming_psd._match_to_pro`'s "prior" mode applies,
-        adapted to this function's window-first (rather than PRO-first) search.
-        """
-        if win_t.size == 0 or nP == 0:
-            return np.full(win_t.size, -1, dtype=int)
-        pos = np.searchsorted(pro_sorted, win_t)
-        if prior:
-            right = np.clip(pos, 0, nP - 1)
-            dr = pro_sorted[right] - win_t
-            nn = order[right]
-            nn[(dr < 0) | (dr > tol) | (pos >= nP)] = -1
-            return nn
-        left = np.clip(pos - 1, 0, nP - 1)
-        right = np.clip(pos, 0, nP - 1)
-        dl = np.abs(win_t - pro_sorted[left])
-        dr = np.abs(win_t - pro_sorted[right])
-        take_left = dl <= dr                       # tie -> earlier PRO (deterministic)
-        nn_sorted = np.where(take_left, left, right)
-        dist = np.where(take_left, dl, dr)
-        nn = order[nn_sorted]
-        nn[dist > tol] = -1
-        return nn
+        """This function's own bindings applied to the module-level search (`_nearest_pro_idx`),
+        which was lifted out of here so `live_lsb_band_medians_by_length` decides ownership by the
+        identical rule rather than a second copy of it."""
+        return _nearest_pro_idx(win_t, pro_sorted, order, nP, tol, prior=prior)
 
     # ---- TD assignment ---------------------------------------------------------------------------
     td = raw_cache.get("td") or {}

@@ -6608,7 +6608,7 @@ def _wants_band_time_sweep(request_data):
 
 def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
                                       allow_window_reuse, seconds=None,
-                                      match_direction="pro_first"):
+                                      match_direction="pro_first", channel=None):
     """One band-power matrix per length of signal, each with one row per pain report and one column
     per band centre.
 
@@ -6624,18 +6624,36 @@ def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
     pain report, so the band axis arrives as columns of a matrix and every statistic downstream is a
     matrix operation across all bands at once.
 
-    Returns `(power_by_seconds, stats_by_seconds, centers_used_hz, column_index)`.
+    A `channel` that `analytics.BAND_SWEEP_LSB_CEILINGS` covers takes a different route entirely:
+    `availability.live_lsb_band_medians_by_length` drops each contaminated 3 s piece BEFORE any of
+    them are averaged and backfills with the next closest clean one, so no outlier rule is left to
+    apply to the finished cell (PI, 2026-09-09). Every other channel keeps the original path
+    unchanged, which is what gates this to the sweep's own real contacts and leaves every other
+    panel that calls `live_lsb_spectrum_match` reading exactly what it read before.
+
+    Returns `(power_by_seconds, stats_by_seconds, centers_used_hz, column_index, chunk_exclusion)`.
+    `chunk_exclusion` is `None` on the original path.
     """
     secs = list(analytics.BAND_TIME_SWEEP_SECONDS if seconds is None else seconds)
     cache_centers = np.asarray(raw_cache.get("centers_hz") or [], dtype=float)
     centers = (analytics.sweep_center_freqs(cache_centers) if center_hz is None
                else np.atleast_1d(np.asarray(center_hz, dtype=float)))
     if centers.size == 0 or cache_centers.size == 0:
-        return {}, {}, centers, np.asarray([], dtype=int)
+        return {}, {}, centers, np.asarray([], dtype=int), None
     # Column positions of the swept centres inside the cache's own centre list, so the matrix
     # columns and the reported centres cannot drift apart.
     col = np.asarray([int(np.argmin(np.abs(cache_centers - c))) for c in centers], dtype=int)
     pt = np.asarray(pro_times, dtype=float)
+
+    ceiling_table = analytics.BAND_SWEEP_LSB_CEILINGS.get(channel) if channel else None
+    if ceiling_table:
+        ceilings = [ceiling_table.get(round(float(c), 1), np.inf) for c in centers]
+        power, excl, stats = availability.live_lsb_band_medians_by_length(
+            pt, raw_cache, tol_s=tol_s, lengths_s=secs, centers_hz=centers,
+            band_ceilings=ceilings, allow_window_reuse=allow_window_reuse,
+            match_direction=match_direction)
+        return power, stats, centers, col, excl
+
     power, stats = {}, {}
     for s in secs:
         recs, st = availability.live_lsb_spectrum_match(
@@ -6653,7 +6671,7 @@ def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
             mat[i, : take.size] = v[take]
         power[float(s)] = mat
         stats[float(s)] = st
-    return power, stats, centers, col
+    return power, stats, centers, col, None
 
 
 def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_reuse,
@@ -6682,9 +6700,10 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
             continue
         t0 = _time.perf_counter()
         try:
-            power, stats, centers, _ = _band_time_sweep_power_by_seconds(
+            power, stats, centers, _, chunk_excl = _band_time_sweep_power_by_seconds(
                 pro_times, raw_cache, None, tol_s=tol_s,
-                allow_window_reuse=allow_window_reuse, match_direction=match_direction)
+                allow_window_reuse=allow_window_reuse, match_direction=match_direction,
+                channel=raw_ch)
             match_s = _time.perf_counter() - t0
             sweep = analytics.band_time_sweep_from_power(
                 power, pain_values, center_freqs_hz=centers,
@@ -6693,6 +6712,7 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
                 n_perm=(analytics.BAND_TIME_SWEEP_N_PERM if n_perm is None else n_perm),
                 n_boot=(analytics.BAND_TIME_SWEEP_N_BOOT if n_boot is None else n_boot),
                 seed=seed, channel=raw_ch, metric_key=metric_key, metric_label=metric_label,
+                chunk_exclusion=chunk_excl,
                 power_feature=("band power in the device's own least-significant-bit units, "
                                "reached from the 250 samples-per-second voltage trace by the "
                                "validated transform, or from the device's own spectrum where no "
@@ -7096,9 +7116,9 @@ def band_time_sweep_cell_for_participant(request_data):
     if not raw_cache:
         return dict(blank, message=f"No cached spectra for sensing contact pair {channel}.")
 
-    power, _stats, centers, _col = _band_time_sweep_power_by_seconds(
+    power, _stats, centers, _col, chunk_excl = _band_time_sweep_power_by_seconds(
         pro_times, raw_cache, center_hz, tol_s=tol_s, allow_window_reuse=allow_window_reuse,
-        seconds=[seconds], match_direction=match_direction)
+        seconds=[seconds], match_direction=match_direction, channel=canon_channel)
     mat = power.get(float(seconds))
     if mat is None or mat.size == 0 or not centers.size:
         return dict(blank, message="No band-power measurements could be produced for this cell.")
@@ -7109,7 +7129,10 @@ def band_time_sweep_cell_for_participant(request_data):
     # disagree the way they did before this rule was added here (found live on RCS08: the raw
     # Pearson r recomputed from the un-excluded pairs was -0.022 against the grid's own -0.085 for
     # the same cell).
-    if outlier_n_mad > 0:
+    # `chunk_excl` set means the contaminated 3 s pieces were already dropped one at a time before
+    # these values were averaged, exactly as the grid's own cell was built, so there is nothing left
+    # to exclude here and running the median-deviation rule on top would clean the same cell twice.
+    if chunk_excl is None and outlier_n_mad > 0:
         mask = analytics.mad_outlier_columns(col_power.reshape(-1, 1), n_mad=outlier_n_mad,
                                              scale=outlier_scale).reshape(-1)
         col_power = np.where(mask, np.nan, col_power)
@@ -7171,7 +7194,13 @@ _BAND_SWEEP_RESPONSE_KIND = "biomarker_band_sweep"
 #: the `cross_setting_stability` / `device_rules_status` fields on every best-row. Bumped anyway,
 #: belt and suspenders, after this exact class of bug (an unversioned response shape change served
 #: stale) was found and fixed twice already in this feature's own Tracks B and C.
-_BAND_SWEEP_RULE_VERSION = "v5_sweep_condensed_notes"
+#: v6 replaces the sweep's own outlier rule for a contact that has a historical ceiling table
+#: entry: instead of 5 median absolute deviations computed from the window being looked at, each
+#: contaminated 3 s piece is left out BEFORE anything is averaged, and the next closest clean piece
+#: is taken in its place. This changes which measurements are excluded, so it changes numbers -- a
+#: stored response built under any earlier rule must never be served as if it were built under this
+#: one.
+_BAND_SWEEP_RULE_VERSION = "v6_sweep_per_chunk_ceiling_backfill"
 
 #: Response fields that are timings of the run that produced them, not results. They are not
 #: compared when a stored response is checked against a fresh one, and a served response keeps the
