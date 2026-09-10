@@ -2281,74 +2281,20 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
     return recs, stats
 
 
-def per_pro_lsb_overlay(samples_uv, fs, center_offset_s, center_hz, *, band_half_hz=2.5,
-                        extent_s=None, missing=None, max_missing_frac=0.10,
-                        saturation_uv=PRO_LSB_SATURATION_UV):
-    """The 50%-overlap sliding-window LSB trace WITHIN one PRO's rating-centered TD extent (CS-4).
-
-    Where per_pro_lsb returns the single median LSB the device would act on, this returns the full
-    per-window series so the timeline can OVERLAY how the band power moved across the ~30 s around the
-    rating (and show the spread the median collapses). Same window geometry as the deployed sweep:
-    1 s rcs-Hann window, 50 % overlap (step = TRANSFORM_STEP_SECONDS), median is `np.nanmedian` of the
-    returned `lsb`. Per-window QC: a window touching the ADC rail is flagged saturated; the >max_missing
-    rejection is applied to the whole extent up front (same as per_pro_lsb's tier 2).
-
-    Returns dict:
-        {"t_offset_s": [win-start offsets within the extent],
-         "lsb": [per-window LSB], "median_lsb": float|None, "used_s": float,
-         "n_windows": int, "n_saturated": int, "saturated": bool, "ok": bool, "reason": str}
-    `ok=False` (with reason) when the extent is below one window or >max_missing Missing.
-
-    NOTE on `t_offset_s`: these are FINITE-SAMPLE-ELAPSED offsets (s/fs over the non-finite-filtered
-    vector), NOT wall-clock offsets from the extent start. t_offset_s, lsb, and the saturation flags
-    share this one window axis (the alignment guarantee), so the trace is internally consistent. But on
-    a gappy recording (NaN samples dropped before windowing) the axis COMPRESSES relative to wall clock:
-    a 2 s gap near the start shifts every later window's wall-clock time ahead of its t_offset_s. A
-    frontend overlaying this trace against a wall-clock PRO marker must map `starts` back through the
-    finite mask to true sample indices first; for showing the within-window spread the median collapses,
-    elapsed-finite time is fine as-is.
-    """
-    if extent_s is None:
-        extent_s = analytics.TRANSFORM_CENTERED_EXTENT_SECONDS
-    fs = float(fs)
-    half = float(band_half_hz)
-    slice_uv, used_s = analytics.transform_centered_window(
-        samples_uv, fs, center_offset_s, extent_s=extent_s, missing=missing,
-        max_missing_frac=max_missing_frac)
-    if slice_uv is None:
-        return {"t_offset_s": [], "lsb": [], "median_lsb": None, "used_s": 0.0,
-                "n_windows": 0, "n_saturated": 0, "saturated": False, "ok": False,
-                "reason": "extent below one window or >max_missing Missing"}
-    win = int(round(fs * analytics.TRANSFORM_WIN_SECONDS))
-    step = int(round(fs * analytics.TRANSFORM_STEP_SECONDS))
-    # td_transform_band_power(agg='none') drops non-finite samples FIRST and strides over the
-    # COMPACTED array, so the window axis (and hence the trace x and the saturation flags) MUST be
-    # derived from that same finite-filtered vector — otherwise a gappy recording decouples t_offset_s,
-    # lsb, and sat. Finite-filter once here and build everything (band power, starts, saturation) from it.
-    sl = np.asarray(slice_uv, dtype=float)
-    vf = sl[np.isfinite(sl)]
-    if vf.size < win:
-        return {"t_offset_s": [], "lsb": [], "median_lsb": None, "used_s": float(used_s),
-                "n_windows": 0, "n_saturated": 0, "saturated": False, "ok": False,
-                "reason": "fewer than one finite window after dropping non-finite samples"}
-    pw = analytics.td_transform_band_power(vf, fs, float(center_hz), half_hz=half,
-                                           step_samples=step, agg="none")
-    pw = np.asarray(pw, dtype=float).ravel()
-    lsb = np.where(np.isfinite(pw) & (pw > 0), analytics.LSB_PER_UV2_TRANSFORM * pw, np.nan)
-    starts = np.arange(0, vf.size - win + 1, step)        # SAME axis the band power strided over
-    # per-window saturation, vectorized: one strided window matrix -> per-window max|.| -> rail test.
-    # No Python loop; shares the window axis with pw/lsb so the QC flags align to the trace.
-    M = vf[starts[:, None] + np.arange(win)[None, :]]      # (W, win)
-    sat = (np.nanmax(np.abs(M), axis=1) >= saturation_uv) if starts.size else np.zeros(0, dtype=bool)
-    med = float(np.nanmedian(lsb)) if np.isfinite(lsb).any() else None
-    return {"t_offset_s": [float(s / fs) for s in starts],
-            "lsb": [float(x) for x in lsb],
-            "median_lsb": med, "used_s": float(used_s),
-            "n_windows": int(starts.size), "n_saturated": int(sat.sum()),
-            "saturated": bool(sat.any()), "ok": True,
-            "reason": ("ok" if not sat.any() else "%d/%d windows saturated"
-                       % (int(sat.sum()), int(starts.size)))}
-
+# THE PER-RATING SLIDING-WINDOW TRACE WAS HERE, AND IS DELETED (PI, 2026-09-10).
+#
+# It returned all ~60 of the 1 s half-overlapping windows inside one pain rating's 30 s of voltage
+# trace, plus a per-window saturation flag, so a page could have drawn how the band power moved
+# across that half minute instead of the single median `per_pro_lsb` returns. It was built, tested
+# and correct, and NO PAGE EVER DREW IT -- its only callers were its own tests.
+#
+# His decision, in his words: "for the data availability timeline, we don't need those 60 slices.
+# You can discard them after they're calculated. The median is just for visualization to get an
+# idea." That is exactly what the wired path already does, so the trace had no destination.
+#
+# Nothing else used it: the only production call of `td_transform_band_power(agg="none")` -- the
+# per-window mode -- was inside this function, and that mode itself stays, since it is a general
+# capability of the transform rather than part of this display.
 
 def lsb_overview(lsb, *, session_gap_s=1800.0, chronic_max_points=1500):
     """Compact the per-sample LSB series into RENDER-CHEAP geometry for the calendar-scale timeline.

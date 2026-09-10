@@ -121,48 +121,6 @@ def test_agg_none_returns_per_window_and_median_matches():
                                              agg="none").shape == (0, 2)
 
 
-def test_overlay_sliding_window_trace_and_saturation_qc():
-    """per_pro_lsb_overlay returns the 50%-overlap per-window LSB trace; its median equals the deployed
-    single-value path, and per-window saturation QC flags railed windows with a surfaced reason."""
-    n = int(30 * _FS); tt = np.arange(n) / _FS
-    sig = 2.0 * np.sin(2 * np.pi * 20 * tt) + 0.1 * np.random.default_rng(0).standard_normal(n)
-    ov = av.per_pro_lsb_overlay(sig, _FS, 15.0, 20.0)
-    assert ov["ok"] and ov["n_windows"] in (59, 60)
-    assert ov["median_lsb"] is not None and ov["median_lsb"] > 0
-    assert len(ov["t_offset_s"]) == ov["n_windows"] == len(ov["lsb"])
-    # the overlay median equals the deployed per-PRO single value (same DSP/window geometry)
-    step = int(round(_FS * analytics.TRANSFORM_STEP_SECONDS))
-    single = analytics.td_to_lsb(sig, _FS, 20.0, step_samples=step)
-    assert abs(ov["median_lsb"] - single) / single < 1e-9
-    # saturation QC
-    sigsat = sig.copy(); sigsat[3000:3050] = 5000.0
-    ovs = av.per_pro_lsb_overlay(sigsat, _FS, 15.0, 20.0)
-    assert ovs["n_saturated"] > 0 and ovs["saturated"] and "saturated" in ovs["reason"]
-
-
-def test_overlay_short_extent_not_ok():
-    """An extent below one transform window returns ok=False (no windows), not a spurious LSB."""
-    sig = np.random.default_rng(0).standard_normal(50)    # 0.2 s @ 250 Hz < 1 s window
-    ov = av.per_pro_lsb_overlay(sig, _FS, 0.1, 20.0)
-    assert ov["ok"] is False and ov["n_windows"] == 0 and ov["median_lsb"] is None
-
-
-# ---- CS-4 review fixes (request_changes -> resolved) ----
-
-def test_overlay_trace_axes_stay_aligned_under_nonfinite_samples():
-    """BLOCKING fix: a gappy TD slice (some NaN samples, still <10% so the window passes) must keep
-    t_offset_s, lsb, and the saturation flags on ONE window axis. The band power is computed over the
-    finite-filtered slice, so the trace x and QC must be derived from that same vector — not the
-    NaN-inclusive length (which used to give 59 vs 58)."""
-    n = int(30 * _FS); tt = np.arange(n) / _FS
-    sig = 2.0 * np.sin(2 * np.pi * 20 * tt) + 0.1 * np.random.default_rng(1).standard_normal(n)
-    sig[1000:1010] = np.nan                                # 10 NaN of 7500 (<<10%, passes missing gate)
-    ov = av.per_pro_lsb_overlay(sig, _FS, 15.0, 20.0)
-    assert ov["ok"]
-    assert len(ov["t_offset_s"]) == len(ov["lsb"]) == ov["n_windows"]   # the alignment guarantee
-    assert ov["median_lsb"] is not None and ov["median_lsb"] > 0
-
-
 def test_native_tier_fails_closed_on_misaligned_modeled_mask():
     """IMPORTANT fix: if the native series' `modeled` array is missing or length-misaligned, the native
     tier must NOT promote a modeled estimate to tier='native'. It fails CLOSED (every point treated as

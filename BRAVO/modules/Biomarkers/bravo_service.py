@@ -3148,95 +3148,6 @@ def _load_pros_raw(request_data, participant=None):
     return None
 
 
-# Participants seeded with this MRN return a synthetic timeline (no real Percept/REDCap needed),
-# so the card can be demonstrated end-to-end before real data is loaded.
-DEMO_MRN = "DEMO_BIOMARKER"
-
-
-def _demo_inputs():
-    """Synthetic recordings + chronic trend + PRO mirroring the package's test fixtures.
-
-    Deterministic (fixed epoch base, seeded RNG). Even days = high pain (high LFP power, high
-    [left_leg_vas, mpq_sum]); the chronic threshold detector and KMeans labeler both light up.
-    """
-    fs = 250.0
-    midnight = 1_699_920_000.0  # 2023-11-14 00:00:00 UTC
-    chan_order = ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"]
-    rng = np.random.default_rng(0)
-
-    days = 14
-
-    # Streaming time-domain recordings, ONE PER DAY, with 30 Hz power scaling with that day's
-    # pain (even days = high). So the streaming PSD<->pain correlation is real: the spectrum
-    # peaks near 30 Hz and the selected-band biomarker series tracks pain across sessions.
-    recordings = []
-    for d in range(days):
-        pain = 8.0 if d % 2 == 0 else 2.0
-        n = int(8 * fs)
-        t = np.arange(n) / fs
-        amp30 = 1.0 + 0.15 * pain  # 30 Hz amplitude grows with pain
-        ch0 = np.sin(2 * np.pi * 20 * t) + 0.3 * rng.standard_normal(n)          # 20 Hz, pain-independent
-        ch1 = amp30 * np.sin(2 * np.pi * 30 * t) + 0.3 * rng.standard_normal(n)  # 30 Hz, ∝ pain
-        recordings.append({
-            "SamplingRate": fs, "ChannelNames": list(chan_order),
-            "Data": np.column_stack([ch0, ch1]),
-            "StartTime": midnight + d * 86_400 + 12 * 3_600, "Duration": n / fs,
-        })
-
-    # Chronic ~10-min trend over the same days (sampled every 2 h here).
-    times, lfp, amp = [], [], []
-    for d in range(days):
-        high = (d % 2 == 0)
-        for h in range(0, 24, 2):
-            times.append(midnight + d * 86_400 + h * 3_600)
-            lfp.append(150.0 if high else 110.0)
-            amp.append(2.0)
-    chronic = {"SamplingRate": -1, "Time": np.array(times, dtype=float),
-               "Data": np.column_stack([np.array(lfp), np.array(amp)]),
-               "ChannelNames": ["L LFP", "L Amplitude"]}
-
-    pro = pd.DataFrame({
-        "date_time_s1_daily": [pd.Timestamp(midnight + d * 86_400 + 12 * 3_600, unit="s").isoformat()
-                               for d in range(days)],
-        "nrs": [8 if d % 2 == 0 else 2 for d in range(days)],
-        "left_leg_vas": [70 if d % 2 == 0 else 10 for d in range(days)],
-        "mpq_sum": [40 if d % 2 == 0 else 5 for d in range(days)],
-    })
-    return recordings, chronic, pro, chan_order
-
-
-def _demo_run(source, request_data=None):
-    request_data = request_data or {}
-    recordings, chronic, pro, chan_order = _demo_inputs()
-    td = recordings if source in ("timedomain", "both") else []
-    ch = chronic if source in ("powerdomain", "both") else None
-    pro, label_metric, kmeans_features = _resolve_biomarker_metric(request_data, pro)
-    train_days, step_days, sliding, window_months, window_step_months = _window_params(request_data)
-    demo_train_days = train_days if train_days is not None else 3   # demo spans ~14 days
-    demo_test_days = step_days if step_days is not None else 2
-    run = pipeline.run_biomarker(td, pro, chan_order, source=source, chronic=ch,
-                                 train_days=demo_train_days, gap_days=1, test_days=demo_test_days,
-                                 sliding=sliding,
-                                 label_metric=label_metric, kmeans_features=kmeans_features)
-    out = _serialize_run(run, _compute_analytics(run, ch, pro, label_metric=label_metric,
-                                                 kmeans_features=kmeans_features,
-                                                 train_days=train_days, step_days=step_days,
-                                                 sliding=sliding), label_metric=label_metric)
-    out["message"] = "DEMO DATA — synthetic timeline (no real Percept/REDCap loaded)."
-    out["label_metric"] = label_metric
-    out["available_metrics"] = BIOMARKER_METRICS
-    out["sliding_window"] = sliding
-    out["window_months"] = window_months
-    out["window_step_months"] = window_step_months
-    # Demo: a synthetic ACTIVE closed-loop program on the Left hemisphere, so the programmed-threshold
-    # overlay is visible in demo mode. The Right hemisphere has no active program (line not drawn).
-    out["programmed_thresholds"] = {
-        "Left": {"lower": 1900.0, "upper": 2600.0, "measured_lower": 1850.0,
-                 "measured_upper": 2650.0, "status": "ADBS_RUNNING", "date": None},
-    }
-    return out
-
-
 def _run_parallel(tasks):
     """Run a dict of {key: zero-arg callable} concurrently (threads) and return {key: result}.
     Each task is guarded independently so one failing analytic stores {'error': ...} under its key
@@ -3929,23 +3840,6 @@ def availability_for_participant(request_data):
     Participant = models.Participant.find(uid=participant_uid)
     native_lsb_tolerance_s = _native_lsb_tolerance_param(request_data)
 
-    # Demo participant -> synthetic availability (so the card renders before real data exists).
-    if Participant is not None and getattr(Participant, "mrn", "") == DEMO_MRN:
-        recordings, chronic, pro, chan_order = _demo_inputs()
-        pro, label_metric, _ = _resolve_biomarker_metric(request_data, pro)
-        region_map = {c: ("GPi" if "LEFT" in c.upper() else "VIM") for c in chan_order}
-        for c in ([chronic] if isinstance(chronic, dict) else (chronic or [])):
-            if isinstance(c, dict):
-                c.setdefault("Source", "chronic")
-        av = _build_availability(
-            participant_uid, chronic_list=([chronic] if isinstance(chronic, dict) else (chronic or [])),
-            powerdomain_list=[], td_list=recordings, pro_df=pro,
-            label_metric=label_metric, region_map=region_map,
-            native_lsb_tolerance_s=native_lsb_tolerance_s)
-        return {"availability": av, "available_metrics": BIOMARKER_METRICS,
-                "label_metric": label_metric,
-                "message": "DEMO DATA — synthetic availability timeline."}
-
     # Real participant. The pain-report table is fetched fresh every time regardless (decision 22
     # -- never memoized), which is cheap on its own (well under a second) and is what makes the
     # cache key below trustworthy: its content digest is the ONE thing that can tell a genuinely
@@ -4043,10 +3937,7 @@ def run_for_participant(request_data):
     if source not in ("timedomain", "powerdomain", "both"):
         source = "both"
 
-    # Demo participant -> synthetic timeline (lets the card render before real data exists).
     Participant = models.Participant.find(uid=participant_uid)
-    if Participant is not None and getattr(Participant, "mrn", "") == DEMO_MRN:
-        return _demo_run(source, request_data)
 
     td = _load_recordings(participant_uid, TIMEDOMAIN_TYPES) if source in ("timedomain", "both") else []
 
@@ -4595,49 +4486,6 @@ PAIN_METRICS = [
 ]
 
 
-def _demo_pain_scores():
-    """Synthetic daily pain-score reports over ~30 days (gradual improvement + daily variation,
-    with a few missing days to show gaps). Deterministic."""
-    midnight = 1_699_920_000.0
-    days = 30
-    rng = np.random.default_rng(1)
-    rows = []
-    for d in range(days):
-        if rng.random() < 0.15:  # missed report
-            continue
-        frac = d / (days - 1)
-        nrs = float(np.clip(8 - 4.5 * frac + rng.normal(0, 0.9), 0, 10))
-        relief = float(np.clip(10 + 55 * frac + rng.normal(0, 8), 0, 100))
-        rows.append({
-            "date_time_s1_daily": pd.Timestamp(midnight + d * 86_400 + 12 * 3_600, unit="s").isoformat(),
-            "nrs": round(nrs, 1),
-            "vas": float(np.clip(nrs * 10 + rng.normal(0, 6), 0, 100)),
-            "left_leg_vas": float(np.clip(nrs * 9 + rng.normal(0, 8), 0, 100)),
-            "back_vas": float(np.clip(nrs * 7 + rng.normal(0, 10), 0, 100)),
-            "relief": round(relief, 0),
-            "mpq_sum": float(np.clip(42 - 22 * frac + rng.normal(0, 4), 0, 72)),
-            "mpq_aff": float(np.clip(11 - 6 * frac + rng.normal(0, 1.5), 0, 16)),
-            "mpq_sen": float(np.clip(31 - 16 * frac + rng.normal(0, 3), 0, 56)),
-        })
-    return pd.DataFrame(rows)
-
-
-def _demo_stages():
-    """Trial stages over the demo window (pre-op / Stage 0 / 1 / 2), colored like the
-    full_trend_pain_score notebook. Real patients supply stage boundaries via pt_config."""
-    midnight = 1_699_920_000.0
-
-    def iso(day):
-        return pd.Timestamp(midnight + day * 86_400, unit="s").isoformat()
-
-    return [
-        {"key": "preop", "name": "Pre-op (baseline)", "color": "#9E9E9E", "start": iso(0), "end": iso(7)},
-        {"key": "stage0", "name": "Stage 0", "color": "#FA8072", "start": iso(7), "end": iso(14)},
-        {"key": "stage1", "name": "Stage 1", "color": "#FFCA28", "start": iso(14), "end": iso(22)},
-        {"key": "stage2", "name": "Stage 2", "color": "#26C6DA", "start": iso(22), "end": iso(31)},
-    ]
-
-
 def _band_decide_verdict(g, h):
     """Badge text from the glmer + stim-stability results.
 
@@ -4754,9 +4602,6 @@ def _band_validation_setup(request_data):
     Participant = models.Participant.find(uid=participant_uid)
     if Participant is None:
         return {"available": False, "reason": f"participant {participant_uid} not found"}
-    # Demo participant: no real glmer to run; tell the UI to skip the click-validate panel.
-    if getattr(Participant, "mrn", "") == DEMO_MRN:
-        return {"available": False, "reason": "demo participant (no real data for validation)"}
 
     pro_df = _load_pros(request_data, Participant)
     if pro_df is None or len(pro_df) == 0:
@@ -7365,9 +7210,7 @@ def pain_scores_for_participant(request_data):
 
     participant_uid = request_data["ParticipantId"]
     Participant = models.Participant.find(uid=participant_uid)
-    demo = Participant is not None and getattr(Participant, "mrn", "") == DEMO_MRN
-
-    pro = _demo_pain_scores() if demo else _load_pros(request_data, Participant)
+    pro = _load_pros(request_data, Participant)
     if pro is None or len(pro) == 0:
         return {"metrics": [], "n_reports": 0,
                 "message": "No pain-score reports found. Set REDCAP_API_URL / REDCAP_API_TOKEN "
@@ -7410,11 +7253,11 @@ def pain_scores_for_participant(request_data):
             "matrix": [[_f(cmat.loc[a, b]) for b in present] for a in present],
         }
 
-    stages = _demo_stages() if demo else (request_data.get("Stages") or [])
+    stages = request_data.get("Stages") or []
 
     return {"metrics": metrics, "n_reports": int(t.notna().sum()), "correlation": correlation,
             "stages": stages,
-            "message": "DEMO DATA — synthetic pain-score reports." if demo else ""}
+            "message": ""}
 
 
 # =================================================================================================
