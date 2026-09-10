@@ -67,3 +67,28 @@ these functions as deliberately built ahead of their wiring.
 | Caveat stated | Not buried | `assess_response` defaults to requiring suppression; the zero is "no band that suppresses" | Stated |
 | Deletion breaks nothing | Suites green | **Broke 3 tests** — the import block was a re-export; repointed them at `within_visit` | Fixed |
 | Host / container | 1016 / 608 | **1016 passed** (1019 − 3 removed), **608 passed 0 failed** | Pass |
+
+### Phase 5 — open item 26, the device-spectrum mark
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| How much of the record is affected | Unknown before measuring | **R 0-3+ 358 of 451 (79.4%)**, L 1-3+ 83 of 174 (47.7%), then 3, 5, 0, 0 | Measured |
+| Does the axis actually stand still there | The structural claim, observed | Correlation travels **0.037** across all ten lengths on R 0-3+ against 0.160 / 0.253 on the two contacts with none | Measured |
+| The mark agrees with the matcher | Same counts | 358 / 83 / 3 / 5 / 0 / 0 on both, all six contacts | Pass |
+| The denominator is the cell's own | Equals `n_grid` | True on every contact; the curve grid's equals its own high+low | Pass |
+| The two grids can disagree | Constructed, since RCS08 cannot show it | Curve denominator 6 against 9; correlation share 1/3, curve share 0 | Pass |
+| Per-cell really differs from per-contact | Not just theory | The outlier rule left ONE cell with 8 reports where its neighbours had 9 — share 0.375 against 0.333 | Pass |
+| Equality proof, no tolerance | No scientific value moves | 27,935 before, 36,399 after, **0 dropped, 8,464 added, 24 of 27,935 differ — all wall-clock timing** | Pass |
+| Frontend reached the served bundle | Strings, not component names | All four strings in `806.168b8286.chunk.js`; build clean, no warning in the touched file | Pass |
+| Container suite | 608 + new | **620 passed, 0 failed** (+12) | Pass |
+
+**A defect of my own, caught by the equality proof rather than by review.** The per-report flag was
+built inside `chunk_exclusion`, which is copied into the served response whole — so the first proof
+showed **4,584 added fields named `from_device_spectrum`**, one boolean per pain report per contact
+pair, growing with every report filed, for a fact the grids already carry summarised per cell. It is
+also not an exclusion, and a field is easiest to misread under the wrong name. Lifted out; added
+fields fell from 13,048 to 8,464; a regression test pins it.
+
+**A second one, caught by my own new test.** The first version asserted every cell's share was
+exactly 3/9. One cell's is 0.375, because the outlier rule dropped a report from that cell alone.
+The expectation was wrong, not the code — and the test now pins that difference deliberately, since
+it is the clearest evidence that a per-contact share pasted onto every cell would be wrong.

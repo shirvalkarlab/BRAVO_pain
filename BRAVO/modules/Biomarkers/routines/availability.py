@@ -1933,7 +1933,14 @@ def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, c
     out = {s: np.full((nP, nCs), np.nan, dtype=float) for s in lengths}
     info = {"n_chunk_band_values_excluded": 0, "n_chunks_eligible": 0,
             "n_cells_short_of_requested": 0, "tol_s": float(tol_s),
-            "allow_window_reuse": bool(allow_window_reuse)}
+            "allow_window_reuse": bool(allow_window_reuse),
+            # WHICH RATINGS THE LENGTH-OF-SIGNAL AXIS DOES NOT APPLY TO (open item 26). One entry
+            # per rating, True where its value came from the device's own spectrum. That branch
+            # never reads a length of signal -- it has no quantity cap, so it writes the SAME
+            # number into every row of the grid -- and nothing downstream could tell, because the
+            # number is perfectly ordinary. Carried out of here rather than re-derived later so
+            # the flag and the value it describes are produced by one pass over one rule.
+            "from_device_spectrum": []}
     stats_by_length = {}
     if nP == 0 or nCs == 0 or nCc == 0 or window_s <= 0:
         return out, info, stats_by_length
@@ -2034,6 +2041,11 @@ def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, c
                     pmed = np.nanmedian(np.where(pbad, np.nan, pv), axis=1)
                 for s in lengths:
                     out[s][take, j] = pmed[take]
+
+    # `take` is exactly the ratings whose value came from the device's own spectrum, and it is what
+    # the loop above wrote into EVERY length. Reported per rating so a cell can later count only
+    # the ratings it actually used, rather than a whole contact's average pasted onto every cell.
+    info["from_device_spectrum"] = [bool(v) for v in take.tolist()]
 
     # The same per-length matching summary the established matcher reports, built from the same
     # quantities: which pieces were eligible, which rating owns each, and the quantity cap. Those

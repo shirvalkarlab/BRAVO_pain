@@ -140,6 +140,13 @@ function bulletsFor(sw) {
       + "flashes when it recomputes.",
     "Clicking a cell shows a plain Pearson r/p and Welch t-test computed on the spot — not the "
       + "grid's own corrected, best-of-ten numbers.",
+    // The legend for the dash, next to the legend for the circle, and only when a dash is actually
+    // on the grid -- a contact with none gets no bullet rather than a reassuring one.
+    ...(sw.n_pain_reports_from_device_spectrum
+      ? ["A dash on a cell marks pain reports answered from the device's own spectrum, which "
+        + "carries no length of signal: those reports give that cell the same value in every row. "
+        + "The longer the dash, the more of the cell came that way — hover for the exact share."]
+      : []),
     ...notes.slice(3),
   ];
 }
@@ -299,12 +306,24 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
     // setXlabel/setYlabel below can touch them (they assume subplots() has already run, the same
     // as every other consumer of this class in the codebase).
     fig.subplots(1, 1, { sharex: false, sharey: false });
+    // The dash on a cell says THAT the length axis is weak there; the hover says by how much. Read
+    // from the grid that matches this heat map -- the two are computed from different pain reports
+    // once the scores are split, so the curve grid has its own share and must not borrow this one's.
+    const devShare = (kind === "auc" ? sw.device_spectrum_share_grid_auc
+      : sw.device_spectrum_share_grid) || [];
+    const devText = (grid || []).map((row, r) => (row || []).map((_v, c) => {
+      const s = (devShare[r] || [])[c];
+      return (s == null || !(s > 0)) ? ""
+        : `<br>${Math.round(100 * s)}% of this cell's pain reports came from the device's own `
+          + "spectrum, which carries no length of signal";
+    }));
     fig.traces.push({
-      type: "heatmap", z: grid, x: centers, y: yLabels,
+      type: "heatmap", z: grid, x: centers, y: yLabels, customdata: devText,
       colorscale: divergingColorscale(center, halfRange), zmin: center - halfRange,
       zmax: center + halfRange, zmid: center, showscale: false,
       xgap: 1.5, ygap: 1.5,
-      hovertemplate: `${kind === "auc" ? "AUC" : "r"} = %{z:.3f}<br>%{x} Hz, %{y}<extra></extra>`,
+      hovertemplate: `${kind === "auc" ? "AUC" : "r"} = %{z:.3f}<br>%{x} Hz, %{y}`
+        + "%{customdata}<extra></extra>",
     });
     // Family-wise-significant "best of ten lengths" cells -- an open circle, exactly the marker
     // the SVG version drew.
@@ -326,6 +345,25 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
     fig.traces.push({
       type: "scatter", mode: "markers", x: [], y: [], showlegend: false,
       marker: { symbol: "square-open", size: 22, color: "#1a1a1a", line: { width: 2 } },
+      hoverinfo: "skip",
+    });
+    // OPEN ITEM 26 -- the cells the length-of-signal axis does not apply to. PUSHED AFTER THE
+    // HIGHLIGHT TRACE ON PURPOSE: the highlight is restyled BY INDEX in a second effect below, so
+    // a trace inserted before it would silently retarget that restyle at this one instead.
+    //
+    // A horizontal dash, because that is what the cell is: a value free to vary ACROSS band
+    // centres and frozen DOWN the lengths. Every affected cell is marked, with the dash growing
+    // with the share rather than appearing at some cut-off, so a contact where a few reports came
+    // that way reads faintly and one where most of them did reads unmistakably -- and no reader
+    // has to know what threshold somebody picked.
+    const devX = [], devY = [], devSize = [];
+    devShare.forEach((row, r) => (row || []).forEach((v, c) => {
+      if (v == null || !(v > 0) || r >= yLabels.length || c >= centers.length) return;
+      devX.push(centers[c]); devY.push(yLabels[r]); devSize.push(7 + 11 * Math.min(1, v));
+    }));
+    fig.traces.push({
+      type: "scatter", mode: "markers", x: devX, y: devY, showlegend: false,
+      marker: { symbol: "line-ew-open", size: devSize, color: "#1a1a1a", line: { width: 1.6 } },
       hoverinfo: "skip",
     });
     // Every 3rd band centre, exactly the sparse labelling the original SVG grid used (too many of
@@ -593,6 +631,32 @@ function PlotlyViolin({ divId, highVals, lowVals, side }) {
 }
 
 /** The shared title line for both persistent side panels: channel, band centre, length of signal. */
+/**
+ * OPEN ITEM 26, the always-visible half. The dashes on the grid say WHICH cells; this says how much
+ * of this contact pair is affected, without opening the drawer -- because on this record the answer
+ * can be most of it (measured on RCS08, 2026-09-10: 358 of 451 matched reports on R 0-3+, and that
+ * contact's correlation then travels only 0.037 across the whole length axis against 0.160-0.253 on
+ * the two contacts with none). A contact with none renders nothing at all rather than a reassuring
+ * line: there is nothing to reassure about, and a caveat that appears everywhere stops being read.
+ */
+function DeviceSpectrumCaption({ sw }) {
+  const n = sw && sw.n_pain_reports_from_device_spectrum;
+  if (!n) return null;
+  const tot = (sw.device_spectrum_total_grid || [])
+    .reduce((m, row) => Math.max(m, ...(row || [0])), 0);
+  const pct = tot > 0 ? Math.round((100 * n) / tot) : null;
+  return (
+    <MDTypography variant="caption" color="dark"
+      sx={{ fontSize: 13, display: "block", mb: 0.5, color: "#8a5a00" }}>
+      {`${n} of this contact pair's matched pain reports`}
+      {pct != null ? ` (about ${pct}%)` : ""}
+      {" came from the device's own spectrum, which carries no length of signal — those reports "}
+      {"give the same value in every row, so the dashed cells below say less about length than "}
+      {"they appear to."}
+    </MDTypography>
+  );
+}
+
 function PanelTitle({ pinnedCell, channelLabel }) {
   if (!pinnedCell) return null;
   // Shown ONLY above the scatter panel now -- the violin panel repeated the identical title
@@ -1069,6 +1133,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
                   sx={{ fontSize: 15, display: "block", mb: 0.5 }}>
                   {"Correlation with pain — depends only on matching"}
                 </MDTypography>
+                <DeviceSpectrumCaption sw={corrSw} />
               </Grid>
               <Grid item xs={12} md={5}>
                 <ScatterStatsLine cell={pinnedCellData} pinnedCell={pinnedCell} />

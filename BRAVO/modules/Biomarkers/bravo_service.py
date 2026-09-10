@@ -7287,15 +7287,23 @@ def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
     unchanged, which is what gates this to the sweep's own real contacts and leaves every other
     panel that calls `live_lsb_spectrum_match` reading exactly what it read before.
 
-    Returns `(power_by_seconds, stats_by_seconds, centers_used_hz, column_index, chunk_exclusion)`.
-    `chunk_exclusion` is `None` on the original path.
+    Returns `(power_by_seconds, stats_by_seconds, centers_used_hz, column_index, chunk_exclusion,
+    from_device_spectrum)`. `chunk_exclusion` is `None` on the original path.
+
+    `from_device_spectrum` is one flag per pain report, True where that report's band power came
+    from the device's OWN spectrum rather than from the voltage trace. It is returned as its own
+    value rather than folded into `chunk_exclusion` because that argument is a switch as well as a
+    payload -- `analytics.band_time_sweep_from_power` reads its mere presence as "the per-piece
+    ceiling rule already ran, do not apply the median-absolute-deviation rule on top" -- so putting
+    this flag there would silently turn that second rule off for every contact the ceiling table
+    does not cover.
     """
     secs = list(analytics.BAND_TIME_SWEEP_SECONDS if seconds is None else seconds)
     cache_centers = np.asarray(raw_cache.get("centers_hz") or [], dtype=float)
     centers = (analytics.sweep_center_freqs(cache_centers) if center_hz is None
                else np.atleast_1d(np.asarray(center_hz, dtype=float)))
     if centers.size == 0 or cache_centers.size == 0:
-        return {}, {}, centers, np.asarray([], dtype=int), None
+        return {}, {}, centers, np.asarray([], dtype=int), None, []
     # Column positions of the swept centres inside the cache's own centre list, so the matrix
     # columns and the reported centres cannot drift apart.
     col = np.asarray([int(np.argmin(np.abs(cache_centers - c))) for c in centers], dtype=int)
@@ -7308,13 +7316,28 @@ def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
             pt, raw_cache, tol_s=tol_s, lengths_s=secs, centers_hz=centers,
             band_ceilings=ceilings, allow_window_reuse=allow_window_reuse,
             match_direction=match_direction)
-        return power, stats, centers, col, excl
+        # LIFTED OUT of the exclusion block rather than left in it. `chunk_exclusion` is copied
+        # into the served response whole, so leaving the per-report list there would ship one
+        # boolean per pain report per contact pair -- 4,584 of them on RCS08 today, growing with
+        # every report filed -- for a fact the grids already carry summarised per cell. It is also
+        # not an exclusion, and a field is easiest to misread when it sits under the wrong name.
+        return (power, stats, centers, col,
+                {k: v for k, v in excl.items() if k != "from_device_spectrum"},
+                list(excl.get("from_device_spectrum") or []))
 
     power, stats = {}, {}
+    from_device = []
     for s in secs:
         recs, st = availability.live_lsb_spectrum_match(
             pt, raw_cache, tol_s=tol_s, td_quantity_s=float(s),
             allow_window_reuse=allow_window_reuse, match_direction=match_direction)
+        # WHICH TIER A RATING LANDS ON DOES NOT DEPEND ON THE LENGTH OF SIGNAL, on either path: the
+        # voltage trace wins whenever any of it is eligible, and eligibility is decided by the
+        # match-tolerance setting alone. The length only ever caps how many already-eligible pieces
+        # are averaged. So this is read once and is the same on every pass of this loop.
+        if not from_device:
+            from_device = [bool(r.get("tier") == availability.PRO_LSB_TIER_BRIDGE)
+                           for r in (recs or [])]
         mat = np.full((pt.size, centers.size), np.nan, dtype=float)
         for i, rec in enumerate(recs or []):
             if i >= pt.size:
@@ -7327,7 +7350,7 @@ def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
             mat[i, : take.size] = v[take]
         power[float(s)] = mat
         stats[float(s)] = st
-    return power, stats, centers, col, None
+    return power, stats, centers, col, None, from_device
 
 
 def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_reuse,
@@ -7356,7 +7379,7 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
             continue
         t0 = _time.perf_counter()
         try:
-            power, stats, centers, _, chunk_excl = _band_time_sweep_power_by_seconds(
+            power, stats, centers, _, chunk_excl, from_device = _band_time_sweep_power_by_seconds(
                 pro_times, raw_cache, None, tol_s=tol_s,
                 allow_window_reuse=allow_window_reuse, match_direction=match_direction,
                 channel=raw_ch)
@@ -7368,7 +7391,7 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
                 n_perm=(analytics.BAND_TIME_SWEEP_N_PERM if n_perm is None else n_perm),
                 n_boot=(analytics.BAND_TIME_SWEEP_N_BOOT if n_boot is None else n_boot),
                 seed=seed, channel=raw_ch, metric_key=metric_key, metric_label=metric_label,
-                chunk_exclusion=chunk_excl,
+                chunk_exclusion=chunk_excl, from_device_spectrum=from_device,
                 power_feature=("band power in the device's own least-significant-bit units, "
                                "reached from the 250 samples-per-second voltage trace by the "
                                "validated transform, or from the device's own spectrum where no "
@@ -7807,7 +7830,7 @@ def band_time_sweep_cell_for_participant(request_data):
     if not raw_cache:
         return dict(blank, message=f"No cached spectra for sensing contact pair {channel}.")
 
-    power, _stats, centers, _col, chunk_excl = _band_time_sweep_power_by_seconds(
+    power, _stats, centers, _col, chunk_excl, _from_device = _band_time_sweep_power_by_seconds(
         pro_times, raw_cache, center_hz, tol_s=tol_s, allow_window_reuse=allow_window_reuse,
         seconds=[seconds], match_direction=match_direction, channel=canon_channel)
     mat = power.get(float(seconds))
@@ -7891,7 +7914,7 @@ _BAND_SWEEP_RESPONSE_KIND = "biomarker_band_sweep"
 #: is taken in its place. This changes which measurements are excluded, so it changes numbers -- a
 #: stored response built under any earlier rule must never be served as if it were built under this
 #: one.
-_BAND_SWEEP_RULE_VERSION = "v6_sweep_per_chunk_ceiling_backfill"
+_BAND_SWEEP_RULE_VERSION = "v7_sweep_device_spectrum_mark"
 
 #: Response fields that are timings of the run that produced them, not results. They are not
 #: compared when a stored response is checked against a fresh one, and a served response keeps the

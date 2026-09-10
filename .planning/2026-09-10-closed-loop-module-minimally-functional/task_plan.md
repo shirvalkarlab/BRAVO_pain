@@ -15,22 +15,14 @@ The line I do not cross alone: anything that changes what a clinician reads as a
 PI's call. Adding a reported caveat is not that; changing `verdict` or `licensed` is.
 
 ## Next Step
-The PI's three other decisions — open items 26 (mark the device-spectrum cells), 10 (cross the
+Open item 7 — sweep every pain score, precomputed off the request path. Item 26 is done; items 10
+and 7 remain, and the PI asked for 26 first, then 7.
+
+Superseded next step, kept for the trail: The PI's three other decisions — open items 26 (mark the device-spectrum cells), 10 (cross the
 device-rules screen with a candidate setting) and 7 (sweep every pain score, precomputed). All three
 are in the Biomarkers module and the frontend, and each is its own piece of work.
-
-Superseded next step, kept for the trail: Phase 4 needed the PI's call: `clinic_steps.within_visit_band_scores` is a thin orchestrator whose
-ingredients all exist in wired code, but whose grouping (visit as both era and cluster, across
-within-visit amplitude steps) is reproduced by neither wired path. Wire, delete, or leave. Then the
-PI's three other decisions — open items 26, 10 and 7.
-
-Superseded next step, kept for the trail: Phase 3, `reliable_change`. Decision 75 measured that RCS08 has no epoch with two or more ratings
-under one unchanged setting, so both functions answer "not assessed" today — decide whether to wire
-them as a caveat that populates when the data arrive, or say plainly in the module that they wait
-on data rather than on code.
-
 ## Current Phase
-Phase 2 — the consistency check chain
+Phase 5 — the PI's three display decisions
 
 ## Phases
 
@@ -50,7 +42,7 @@ Phase 2 — the consistency check chain
       `blocked`, both write-backs written.
 
 ### Phase 2: The consistency check chain — 4 of the 7 functions
-**Status:** in_progress
+**Status:** complete
 
 - [x] Read the chain. `direction_consistency.for_band` is the entry; it calls
       `correlation_row_for_band`, `implied_control_direction`, and
@@ -74,7 +66,10 @@ Phase 2 — the consistency check chain
       visit.** The 13 across 4 is exactly what decision 56 measured for this contact. An answer that
       depends on what happened to be cached is not a finding, so the check now refuses to pool a
       truncated build and says why.
-- [ ] Guard test: the check is reachable, gates nothing, and never pools a truncated build.
+- [x] Guard test: the check is reachable, gates nothing, and never pools a truncated build.
+      Landed with Phase 2b's nine tests (decision 103), including that a truncated build is
+      refused before the table is derived and that a row is matched on contact AND centre
+      together — two contacts share a band centre.
 
 ### Phase 2b: The stored pooled table (the PI's choice)
 **Status:** complete
@@ -142,7 +137,35 @@ Phase 2 — the consistency check chain
       `within_visit`, which defines them, rather than restore a re-export nothing uses. The
       behaviour under test is unchanged; only the module they ask by.
 
-### Phase 5: Prove and land
+### Phase 5: Open item 26 — mark the cells the length axis does not apply to
+**Status:** complete
+
+- [x] Read both matchers rather than trusting the item's line numbers. Confirmed: the device's own
+      spectrum branch has no quantity cap and writes the SAME value into every length row.
+- [x] Measured the size of it before building anything. **It is not a rare edge case on this
+      record**: 358 of 451 matched reports on R 0-3+ (79.4%), 83 of 174 on L 1-3+ (47.7%), 3, 5, 0
+      and 0 on the rest.
+- [x] Measured the consequence, not only the structure: the correlation travels 0.037 across the
+      whole length axis on R 0-3+ against 0.160 and 0.253 on the two contacts with none — the
+      contact with the most data has the most frozen axis.
+- [x] Carried a per-report flag from the matcher to where the cell is computed, so the mark counts
+      exactly the reports that cell used. Both matching paths report it.
+- [x] Marked BOTH grids from their OWN denominators — the split can drop reports from the curve
+      grid that the correlation grid keeps.
+- [x] Frontend: a dash on each affected cell sized by share, the exact share on hover, an
+      always-visible line naming the count, and a drawer bullet — shown only where there is
+      something to show.
+- [x] Equality proof, no tolerance: 27,935 fields before, 36,399 after, 0 dropped, 8,464 added,
+      and of the 27,935 in common exactly 24 differ — every one a wall-clock timing field.
+
+### Phase 6: Open items 10 and 7
+**Status:** pending
+
+- [ ] Open item 7 — sweep every pain score, precomputed off the request path (the PI's order: 26,
+      then 7).
+- [ ] Open item 10 — cross the device-rules screen with a candidate setting.
+
+### Phase 7: Prove and land
 **Status:** pending
 
 - [ ] Field count and difference count on RCS08: wiring a caveat must ADD fields and move no

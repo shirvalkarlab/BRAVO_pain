@@ -5949,6 +5949,15 @@ def _sweep_blank(reason, *, n_reports=0):
         "correlation_grid": [],
         "auc_grid": [],
         "n_grid": [],
+        # Present and empty rather than absent, for the same reason every other grid here is: the
+        # page reads a missing key as "this does not apply to me" and would draw an unmarked grid.
+        "device_spectrum_n_grid": [],
+        "device_spectrum_total_grid": [],
+        "device_spectrum_share_grid": [],
+        "device_spectrum_n_grid_auc": [],
+        "device_spectrum_total_grid_auc": [],
+        "device_spectrum_share_grid_auc": [],
+        "n_pain_reports_from_device_spectrum": None,
         "best_correlation_rows": [],
         "best_auc_rows": [],
         "notes": [],
@@ -6042,6 +6051,68 @@ def band_sweep_lsb_ceiling(channel, centre_hz):
     return table.get(round(float(centre_hz), 1))
 
 
+#: The sentence that travels with the device-spectrum mark wherever it is reported. Written once so
+#: the page, the notes and any exported copy cannot drift into three different explanations.
+DEVICE_SPECTRUM_AXIS_NOTE = (
+    "A pain report with no voltage trace in range is answered from the device's own spectrum "
+    "instead, and that route has no length-of-signal setting at all -- it uses the match tolerance "
+    "alone. Such a report therefore contributes the SAME band power to every row of this grid. "
+    "Where the marked share is high, reading down the length-of-signal axis is reading a constant, "
+    "not a trend.")
+
+
+def _device_spectrum_cell_counts(X, pain, from_device_spectrum):
+    """Per cell: how many of the pain reports behind it came from the device's own spectrum.
+
+    Counted HERE, where the cell is, rather than once per sensing contact, because a contact-wide
+    share pasted onto every cell would be wrong in both directions: a report drops out of one cell
+    and not its neighbour when its own band value is missing or was excluded, and the number of
+    reports behind a cell changes down the length-of-signal axis as short lengths run out of clean
+    recording. The denominator is exactly the rows the correlation used -- a finite band power AND
+    a finite pain score -- so share and value describe the same set of reports.
+
+    Returns `(n_device, n_total)`, both (T, C) integer arrays. `from_device_spectrum` of the wrong
+    length, or missing, gives all-zero device counts rather than raising: the mark is a caveat, and
+    a caveat that could break a page is worse than one that is absent.
+    """
+    T, P, C = X.shape
+    ok = np.isfinite(X) & np.isfinite(np.asarray(pain, dtype=float))[None, :, None]
+    n_total = ok.sum(axis=1).astype(int)
+    dev = np.zeros(P, dtype=bool)
+    flags = list(from_device_spectrum or [])
+    if len(flags) == P:
+        dev = np.asarray([bool(v) for v in flags], dtype=bool)
+    n_device = (ok & dev[None, :, None]).sum(axis=1).astype(int)
+    return n_device, n_total
+
+
+def _attach_device_spectrum_to_rows(rows, n_device, n_total, requested_seconds):
+    """Copy the winning cell's device-spectrum counts onto each band centre's headline row.
+
+    Rows come back one per band centre in centre order, so the row's position IS its column in the
+    grid; the length of signal is looked up by the row's OWN reported requested seconds rather than
+    assumed, so a row that names a length is never handed another length's count. A row that never
+    found a usable length carries the fields as "not assessed" rather than absent -- an absent key
+    reads on the page as "does not apply", which here would be the opposite of the truth.
+    """
+    req = [float(s) for s in (requested_seconds or [])]
+    for c, row in enumerate(rows or []):
+        row["n_pain_reports_from_device_spectrum"] = None
+        row["device_spectrum_share"] = None
+        if c >= n_total.shape[1]:
+            continue
+        s = row.get("integration_seconds_requested")
+        if s is None:
+            continue
+        try:
+            t = req.index(float(s))
+        except ValueError:
+            continue
+        tot = int(n_total[t, c])
+        row["n_pain_reports_from_device_spectrum"] = int(n_device[t, c])
+        row["device_spectrum_share"] = (float(n_device[t, c]) / tot) if tot > 0 else None
+
+
 def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz,
                                band_width_hz=BAND_TIME_SWEEP_WIDTH_HZ,
                                strategy="tertile", low_pct=33.3333, high_pct=66.6667,
@@ -6049,7 +6120,8 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
                                n_perm=BAND_TIME_SWEEP_N_PERM, n_boot=BAND_TIME_SWEEP_N_BOOT,
                                seed=0, power_feature="band power", channel=None,
                                metric_key=None, metric_label=None,
-                               tile_seconds=None, requested_seconds=None, chunk_exclusion=None):
+                               tile_seconds=None, requested_seconds=None, chunk_exclusion=None,
+                               from_device_spectrum=None):
     """The whole grid: for every band centre and every length of signal averaged into one
     measurement, how well that band's power tracks the chosen pain score.
 
@@ -6157,6 +6229,24 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
     with np.errstate(invalid="ignore"):
         auc_folded = np.maximum(auc, 1.0 - auc)
 
+    # ---- which cells the length-of-signal axis does not apply to (open item 26) ----------------
+    # Computed on the SAME X the two grids above were computed from, after the outlier step, so the
+    # mark counts the reports those cells actually used.
+    dev_n, dev_tot = _device_spectrum_cell_counts(X, pain, from_device_spectrum)
+    # THE TWO GRIDS DO NOT USE THE SAME PAIN REPORTS, so they do not get the same mark. Splitting
+    # the pain scores into thirds throws the middle third away, so an area-under-the-curve cell is
+    # computed from FEWER reports than the correlation cell directly above it, and the share of
+    # those that came from the device's own spectrum need not be the same. Marking both from one
+    # count would put a number on the screen that belongs to the other grid.
+    dev_n_auc, dev_tot_auc = _device_spectrum_cell_counts(X, y_bin, from_device_spectrum)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        dev_share = np.where(dev_tot > 0, dev_n / np.maximum(dev_tot, 1), np.nan)
+        dev_share_auc = np.where(dev_tot_auc > 0, dev_n_auc / np.maximum(dev_tot_auc, 1), np.nan)
+    _dev_flags = [bool(v) for v in (from_device_spectrum or [])]
+    # Reported as None, not 0, when the flag did not arrive: "none of them" and "nobody checked"
+    # are different answers, and a page that shows a confident zero for the second is lying quietly.
+    n_dev_reports = int(sum(_dev_flags)) if len(_dev_flags) == P else None
+
     # ---- the selection-aware reference: the distribution of the BEST OF TEN under no relationship
     corr_null = _best_of_windows_null_correlation(X, pain, n_perm=int(n_perm), rng=rng)
     auc_null = _best_of_windows_null_auc(X, y_bin, n_perm=int(n_perm), rng=rng)
@@ -6185,6 +6275,12 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
     _apply_family_wise_correction(best_corr_rows)
     _apply_family_wise_correction(best_auc_rows)
 
+    # The headline row for each band centre names ONE cell -- the length of signal that won. The
+    # mark has to travel with it, or a reader who never looks at the grid itself would see a
+    # winning length chosen partly from reports for which no length was ever read.
+    _attach_device_spectrum_to_rows(best_corr_rows, dev_n, dev_tot, kept_req)
+    _attach_device_spectrum_to_rows(best_auc_rows, dev_n_auc, dev_tot_auc, kept_req)
+
     crosscheck = logistic_fit_crosscheck(
         {float(kept_req[t]): X[t] for t in range(T)}, y_bin, best_auc_rows)
     # The two keys naming which grid cell a row came from existed only so the cross-check could
@@ -6195,6 +6291,15 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         _r.pop("_grid_center_index", None)
     notes = _sweep_notes(kept_req, delivered, tiles, tile_s, T, C, n_mad, o_scale, n_excluded,
                          int(n_perm), split_why, crosscheck, outlier_rule=outlier_rule)
+    # Added only when this contact actually has such reports, and it carries the count, so a reader
+    # can check the sentence against a number instead of taking it on trust. A contact with none
+    # gets no note at all rather than a reassuring one -- there is nothing to reassure about.
+    if n_dev_reports:
+        _worst = float(np.nanmax(dev_share)) if np.isfinite(dev_share).any() else 0.0
+        notes.append(
+            "%d of this contact pair's matched pain reports were answered from the device's own "
+            "spectrum rather than the voltage trace, and the most affected cell drew %.0f%% of its "
+            "reports that way. %s" % (n_dev_reports, 100.0 * _worst, DEVICE_SPECTRUM_AXIS_NOTE))
     n_used = int(np.nanmax(corr_n)) if corr_n.size and np.isfinite(corr).any() else 0
     return {
         "answer": (BAND_PAIN_ESTABLISHED
@@ -6222,6 +6327,20 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         "n_grid": [[int(v) for v in row] for row in corr_n],
         "auc_n_high_grid": [[int(v) for v in row] for row in auc_pos],
         "auc_n_low_grid": [[int(v) for v in row] for row in auc_neg],
+        # OPEN ITEM 26. Same shape as the two grids above, one entry per cell: how many of the pain
+        # reports behind that cell were answered from the device's OWN spectrum, how many reports
+        # the cell used in total, and the share. Those reports carry no length of signal, so the
+        # higher the share, the less of that cell's column is a trend at all.
+        "device_spectrum_n_grid": [[int(v) for v in row] for row in dev_n],
+        "device_spectrum_total_grid": [[int(v) for v in row] for row in dev_tot],
+        "device_spectrum_share_grid": [[_f(v) for v in row] for row in dev_share],
+        # The same three for the area-under-the-curve grid, which is computed from fewer reports
+        # because the split throws the middle third of the pain scores away.
+        "device_spectrum_n_grid_auc": [[int(v) for v in row] for row in dev_n_auc],
+        "device_spectrum_total_grid_auc": [[int(v) for v in row] for row in dev_tot_auc],
+        "device_spectrum_share_grid_auc": [[_f(v) for v in row] for row in dev_share_auc],
+        "n_pain_reports_from_device_spectrum": n_dev_reports,
+        "device_spectrum_axis_note": DEVICE_SPECTRUM_AXIS_NOTE,
         "best_correlation_rows": best_corr_rows,
         "best_auc_rows": best_auc_rows,
         "logistic_fit_crosscheck": crosscheck,
