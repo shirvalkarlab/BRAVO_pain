@@ -42,6 +42,20 @@ def _function(name):
     raise AssertionError(f"{name} is gone from adapter.py")
 
 
+#: Every function that participates in the report's failure contract -- not just the entry point.
+#: The first version of the logging guards below walked `report_for_participant` alone, and
+#: `ast.walk` does not descend into a function it merely CALLS. So `_cache_status_or_reason`, a
+#: sibling top-level function, sat there with an unlogged failure handler and both guards passed.
+#: A review caught it; the fix is to name the surface rather than assume one function covers it.
+REPORT_FAILURE_SURFACE = (
+    "report_for_participant",
+    "_cache_status_or_reason",
+    "band_sweep_grid_for_closed_loop",
+    "write_ground_truth",
+    "write_amplitude_effect",
+)
+
+
 def _returns_in(fn):
     """Every `return` in this function, excluding any nested function's own returns."""
     nested = {n for f in ast.walk(fn)
@@ -103,8 +117,17 @@ def test_a_cache_status_that_cannot_be_read_does_not_take_down_the_report(monkey
 
     assert isinstance(got, dict)
     assert got["exists"] is False
-    assert "could not be read" in got["reason"]
-    assert "not there" in got["reason"], "the real cause was swallowed"
+    # `note`, NOT `reason`. The page's own CacheStatusLine.js renders `status.note` and declares it
+    # in propTypes; it has no `reason` field. A first draft of this test asserted `reason` and so
+    # gave false confidence: it proved the text was retrievable in Python while the page could not
+    # display it. Asserting the field the page actually reads is the whole point.
+    assert "could not be read" in got["note"]
+    assert "not there" in got["note"], "the real cause was swallowed"
+    assert "reason" not in got, (
+        "the explanation is back under a key the page does not render")
+    # the same fields a successful read carries, so a reader is not handed two different shapes
+    for k in ("kind", "exists", "last_built_utc", "note", "what_it_means"):
+        assert k in got, f"the failure shape is missing {k!r}, which the success shape carries"
 
 
 # --------------------------------------------------------------------------------------------
@@ -138,10 +161,18 @@ def _handler_key_mismatches(fn):
             if not tk:
                 continue
             for h in node.handlers:
-                for hk in keys(h.body, var):
+                handler_keys = keys(h.body, var)
+                for hk in handler_keys:
                     ok = hk in tk or any(hk in (f"{k}_error", f"{k}_reason") for k in tk)
                     if not ok:
                         bad.append((h.lineno, hk, sorted(tk)))
+                # A SIBLING KEY IS NOT ENOUGH ON ITS OWN. Filing the explanation under
+                # `<key>_reason` while never assigning `<key>` itself leaves the primary key
+                # absent -- and an absent key reads on the page as "does not apply", which is
+                # the exact failure this file exists to prevent. The first version of this guard
+                # checked key NAMES only and would have passed that.
+                if handler_keys and not (handler_keys & tk):
+                    bad.append((h.lineno, f"only sibling key(s) {sorted(handler_keys)}", sorted(tk)))
     return bad
 
 
@@ -222,32 +253,32 @@ def test_every_failure_handler_in_the_report_also_logs():
     the log line is for whoever is asking why the server is slow, and they are rarely the same
     person at the same time.
     """
-    fn = _function("report_for_participant")
     unlogged = []
-    for node in ast.walk(fn):
-        if not isinstance(node, ast.Try):
-            continue
-        for h in node.handlers:
-            body = list(ast.walk(ast.Module(body=h.body, type_ignores=[])))
-            # An ImportError fallback is the double-import pattern, not a failure. Skip it.
-            names = {n.id for n in body if isinstance(n, ast.Name)}
-            handled = getattr(h.type, "id", None) or getattr(getattr(h.type, "attr", None), "id", None)
-            if handled == "ImportError":
-                continue
-            says_something = any(
-                isinstance(n, ast.Constant) and isinstance(n.value, str)
-                and any(w in n.value.lower() for w in
-                        ("reason", "error", "absent", "could not", "unavailable"))
-                for n in body)
-            logs = any(
-                isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
-                and n.value.id == "_log"
-                for n in body)
-            if says_something and not logs:
-                unlogged.append(h.lineno)
-            # the silent store-read handler is the one that used to vanish entirely
-            if not says_something and not logs and "_amp_stored" in names:
-                unlogged.append(h.lineno)
+    for fn in (_function(n) for n in REPORT_FAILURE_SURFACE):
+      for node in ast.walk(fn):
+          if not isinstance(node, ast.Try):
+              continue
+          for h in node.handlers:
+              body = list(ast.walk(ast.Module(body=h.body, type_ignores=[])))
+              # An ImportError fallback is the double-import pattern, not a failure. Skip it.
+              names = {n.id for n in body if isinstance(n, ast.Name)}
+              handled = getattr(h.type, "id", None) or getattr(getattr(h.type, "attr", None), "id", None)
+              if handled == "ImportError":
+                  continue
+              says_something = any(
+                  isinstance(n, ast.Constant) and isinstance(n.value, str)
+                  and any(w in n.value.lower() for w in
+                          ("reason", "error", "absent", "could not", "unavailable"))
+                  for n in body)
+              logs = any(
+                  isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+                  and n.value.id == "_log"
+                  for n in body)
+              if says_something and not logs:
+                  unlogged.append(h.lineno)
+              # the silent store-read handler is the one that used to vanish entirely
+              if not says_something and not logs and "_amp_stored" in names:
+                  unlogged.append(h.lineno)
 
     assert not unlogged, (
         f"handler(s) at line(s) {unlogged} report a failure to the page but not to the log. "

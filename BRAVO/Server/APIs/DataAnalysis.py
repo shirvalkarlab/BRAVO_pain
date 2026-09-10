@@ -20,6 +20,7 @@ Data Upload Handler Module
 
 import os
 import json
+import logging
 import traceback
 from copy import deepcopy
 from pathlib import Path
@@ -38,6 +39,8 @@ from Server import models
 from modules.HelperFunctions import sanitize_input, get_or_none, json_compliant_handler
 from modules import Database, DataCurator, DataAnalysis
 from modules.AsyncJobScheduler import ProcessingScheduler
+
+_log = logging.getLogger(__name__)
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
@@ -913,18 +916,22 @@ class QueryClosedLoopDeployment(RestViews.APIView):
         if not Permissions:
             return Response(status=403)
 
-        participant = models.Participant.find(uid=request.data["ParticipantId"])
-        if participant is None:
-            return Response(status=200, data={"available": False,
-                                              "reason": "participant not found"})
         try:
-            from modules.ClosedLoopDeployment import adapter as cld_adapter
-            Analysis = cld_adapter.report_for_participant(
-                participant, request.data,
-                candidates=request.data.get("Candidates"),
-                hemisphere=request.data.get("Hemisphere", "Left"),
-                power_scale=request.data.get("PowerScale", "power_linear"))
+            # THROUGH THE MODULE'S OWN SERVICE ENTRY POINT, like the other two analysis modules.
+            # `run_for_participant` resolves the participant, applies the endpoint's documented
+            # defaults, and never raises -- so reaching the handler below now means the module could
+            # not even be IMPORTED, which is a different and much louder kind of problem.
+            from modules.ClosedLoopDeployment import bravo_service as cld_service
+            Analysis = cld_service.run_for_participant(request.data)
         except Exception as e:
+            # LOGGED, WITH THE TRACEBACK. This handler answering HTTP 200 with a readable sentence
+            # is right for the page and was catastrophic as the ONLY record: on 2026-09-04 a
+            # module-level import broke the whole package, every request came back through here, and
+            # nothing wrote it down. It stayed broken for five days and was found by reading code.
+            # `exception` rather than `error`, because the name of the module that would not import
+            # exists only in the traceback.
+            _log.exception("closed-loop deployment report failed for participant %s",
+                           request.data.get("ParticipantId"))
             return Response(status=200, data={"available": False,
                                               "reason": "deployment report error: " + str(e)})
 

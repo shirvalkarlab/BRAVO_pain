@@ -533,6 +533,8 @@ def band_sweep_grid_for_closed_loop(participant_uid):
             "biomarker_band_sweep", participant_uid, consumer="closed_loop",
             root=_SHARED_CACHE_DIR_OVERRIDE)
     except Exception as exc:                                     # noqa: BLE001
+        _log.warning("closed-loop: reading the stored calibrated grid raised for %s",
+                     participant_uid, exc_info=True)
         return {"available": False, "reason": f"reading the calibrated grid raised {exc!r}"}
     if payload is None:
         return {"available": False,
@@ -605,6 +607,13 @@ def band_sweep_grid_for_closed_loop(participant_uid):
                             band_width_hz=band_width_hz)
                         new_row["cross_setting_stability"] = finding.as_payload()
                     except Exception as exc:                     # noqa: BLE001
+                        # Per ROW, so this can repeat. That is the point: if the translation is
+                        # raising, it is almost certainly raising for every row, and a log with one
+                        # line per row is how someone finds out at all -- the page just shows "not
+                        # tested", which is indistinguishable from a band that was never tested.
+                        _log.warning("closed-loop: translating the stability answer raised for "
+                                     "%s %s at %s Hz", participant_uid, channel, center_hz,
+                                     exc_info=True)
                         new_row["cross_setting_stability"] = {
                             "answer": "not tested", "test_ran": False,
                             "reason": f"translation raised {exc!r}"}
@@ -1605,8 +1614,16 @@ def _cache_status_or_reason(participant):
     try:
         return cache_status_for_page(participant)
     except Exception as exc:                           # noqa: BLE001
-        return {"exists": False,
-                "reason": f"the cache status could not be read: {exc!r}",
+        _log.warning("closed-loop report: the cache status could not be read for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
+        # `note`, NOT `reason`. The page's own `CacheStatusLine.js` renders `status.note` and lists
+        # it in its propTypes; it has no `reason` field at all, so a first draft of this handler put
+        # the explanation somewhere the page cannot display it -- the very failure this function
+        # exists to avoid, reproduced one level down. Caught in review before it shipped anywhere a
+        # reader would look. The rest of the shape matches `store.status_for_page`'s own, so the
+        # same fields are present whether the status was read or could not be.
+        return {"kind": "inputs", "exists": False, "last_built_utc": None,
+                "note": f"the cache status could not be read: {exc!r}",
                 "what_it_means": "the report itself is unaffected; only its freshness line is."}
 
 
@@ -1835,7 +1852,11 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     except Exception as _exc:                          # noqa: BLE001
         _log.warning("closed-loop report: the amplitude-effect table could not be derived or written for %s",
                      getattr(participant, "uid", participant), exc_info=True)
-        out["amplitude_effect_by_band"] = {"written": False,
+        # The success path's own field names, so a consumer reading `n_rows` off this block does not
+        # have to branch on whether it succeeded. No live consumer reads them today; matching the
+        # shape now is what keeps that cheap to rely on later.
+        out["amplitude_effect_by_band"] = {"written": False, "n_rows": 0, "n_runs": 0, "n_bands": 0,
+                                           "store_key": None,
                                            "reason": f"could not be derived: {_exc!r}"}
     # TRACK G STEP 2: THE GROUND-TRUTH VERDICT (decision 33), written where Stim Optimizer reads it.
     try:
@@ -1851,7 +1872,8 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
         # its own handler reports.
         _log.warning("closed-loop report: the ground-truth verdict could not be written for %s",
                      getattr(participant, "uid", participant), exc_info=True)
-        out["ground_truth_verdict"] = {"written": False,
+        out["ground_truth_verdict"] = {"written": False, "n_rows": 0, "n_runs": 0,
+                                       "routes": {}, "store_key": None,
                                        "reason": f"the ground-truth verdict could not be "
                                                  f"written: {_exc!r}"}
 
