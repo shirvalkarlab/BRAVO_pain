@@ -21,13 +21,11 @@ Constraint that shapes every option: `stability.py` may import from Biomarkers, 
 (its own docstring makes that a hard rule and an earlier Track D draft broke it).
 
 ## Next Step
-Phase 6: the field-count and difference-count proof on RCS08 that turning the column on ADDS fields
-and moves no existing scientific value, with timings in alternating rounds in the same report, then
-both suites re-run fresh. Most of the live evidence already exists in findings §16c and §17c; what is
-missing is the formal before-and-after field comparison.
+Phase 7: land it. Nothing under `Client/src` changed in any phase, so no frontend rebuild applies;
+what is left is the decision rows and the push.
 
 ## Current Phase
-Phase 6 — the equality proof
+Phase 7 — landing
 
 ## Phases
 
@@ -158,19 +156,28 @@ Phase 6 — the equality proof
 - [x] Suites: container **606 passed, 0 failed**; host **993 passed, 42 skipped, 1 failed** (known).
 
 ### Phase 6: Prove it on live data before claiming anything
-**Status:** pending
+**Status:** complete
 
-- [ ] Field count and difference count on RCS08, never a tolerance. The specific claim to prove:
-      turning the column on ADDS fields and moves no existing scientific value.
-- [ ] Timings in alternating rounds (old path, new path, old, new), reported in the same message as
-      the equality proof. The hypothesis from findings §8c is ~297 s to ~86 s; the real pair
-      replaces it.
-- [ ] Spot-check ONE_THREE_LEFT at 12.5 Hz against the single-candidate path the deployment page
-      already runs: the known disagreement case, where the retired flag reads "stable" and the
-      honest answer reads "cannot tell". The probe already returned `lrt_p` = 0.0323 for that point,
-      which is the number to reproduce through the new path.
-- [ ] Both suites re-run fresh, not carried forward: container via the bridge, host via pytest.
-      The host suite carries one known environment failure (decisions 84, 85).
+- [x] **The two routes give the same answers.** The inline column (the only route before this work)
+      against the background-computed stored grid, on RCS08: 132 points each, **5,148 fields
+      compared, 0 differing**, 0 present in only one. Never a tolerance — values compared exactly.
+- [x] **Turning the column on ADDS fields and moves no existing scientific value.** The Closed-Loop
+      response with the stored grid absent against present: 27,889 fields to 34,225. **6,336 fields
+      added, every one under `cross_setting_stability`; 0 dropped; of the 27,889 in common, 2
+      moved** — `cross_setting_stability_from_store` (0 to 264) and `cross_setting_stability_
+      included`, which are the column's own bookkeeping. **Zero scientific values moved.**
+- [x] **Timings in alternating rounds**, old, new, old, new: the inline route 292.70 s and 289.87 s;
+      the new route's page request 10.60 s and 10.64 s, its background run 15.93 s and 13.56 s.
+      **The page went from about 291 s to about 10.6 s (~27x), and the complete answer from about
+      291 s to about 25 s (~11.6x).** The Phase 1 hypothesis of ~297 s to ~86 s is superseded by
+      this measured pair; the real gain is larger, because Phase 3 also dropped pymer4 and forked
+      across cores. The page's own background launch was switched off for these measurements so a
+      run it started could not overlap the run being timed — stated rather than hidden.
+- [x] The ONE_THREE_LEFT 12.5 Hz spot-check reproduces `lrt_p` 0.032285156521398184 through the new
+      path — but it is NOT the "cannot tell" case the code comments claimed, and that is resolved
+      separately in findings §19 rather than noted and left.
+- [x] Suites re-run fresh: container **606 passed, 0 failed**; host **993 passed, 42 skipped, 1
+      failed** (the known environment mismatch of decisions 84, 85).
 
 ### Phase 7: Land it
 **Status:** pending
@@ -188,6 +195,8 @@ Phase 6 — the equality proof
 | 2 | Background after the grid lands, AND a scheduled precompute at least daily. Both. | The PI's direct answer to Phase 2. Background keeps the page usable for whoever opens it; the schedule means the answer is usually already there before anyone opens anything. | 2026-09-09 |
 | 3 | The setup is hoisted out of the per-point loop and the discarded glmer fit is skipped, before any concurrency is considered. | Measured: 63% of a point is point-invariant setup and 8% is a fit whose result is thrown away. Both are deterministic wins with no concurrency risk, and together they predict ~297 s to ~86 s. Parallelism across rpy2's single embedded R process is the risky lever and is not taken first. | 2026-09-09 |
 | 4 | "Vectorize the stability analysis" is answered honestly rather than claimed: the fit cannot be vectorized. | `band_stim_stability` fits two R mixed models per point through pymer4/rpy2 and takes the likelihood-ratio test between them. There is no numpy formulation and no way to batch it through rpy2. The band-power extraction feeding it is vectorizable and is worth about 0.02 s against a 0.645 s fit. Recorded in findings §8d so this is not re-litigated. | 2026-09-09 |
+| 11 | The documented disagreement example is re-anchored on ONE_THREE_LEFT at 17.5 Hz, with the old 12.5 Hz numbers kept as dated history rather than deleted. | The comment presented p = 0.290 and "cannot tell" as current fact and neither is true today. Deleting the old pair would hide that a documented scientific example moved; keeping it undated would keep the falsehood. The superseded-row convention this project already uses for decisions applies to examples too. | 2026-09-09 |
+| 12 | Every quoted p-value for one of these points now carries its band width and binarisation. | Measured: the same electrode and centre gives p = 0.286 at a 1 Hz band and 0.032 at 5 Hz. A p-value quoted without its band width is not a reproducible claim, which is what made the old example impossible to check. | 2026-09-09 |
 | 9 | The daily pass is started from `boot.sh` in the dev compose override, not from the shared compose file or a cron entry in the image. | The PI's own choice. It touches nothing in `docker-compose.yml` or the production image, mirrors the best-effort pattern the agent bridge already uses in the same file, and is one block to remove. It takes effect on the next container start. | 2026-09-09 |
 | 10 | A run that stopped early never replaces a stored answer, and that is a failure a scheduler can alert on. | The store keeps one current entry per participant per kind, replaced whole, so a partial write destroys the previous answer rather than narrowing it — and nothing on any page would show it, because the page would simply go back to "not yet computed". | 2026-09-09 |
 | 6 | The background run is started by `subprocess.Popen` on the management command, detached, rather than by a thread. | A thread inside a gunicorn worker cannot fork safely once that worker has answered a single-candidate request, so it would silently take the serial path — the same answers, several times slower. A separate process is what makes the fast path reachable at all. | 2026-09-09 |

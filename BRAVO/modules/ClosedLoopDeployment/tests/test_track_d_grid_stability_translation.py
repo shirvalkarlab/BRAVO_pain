@@ -52,7 +52,7 @@ def sandbox():
     shutil.rmtree(d, ignore_errors=True)
 
 
-def _write_real_band_sweep_entry(*, stability_raw=None, sig=("sweep", 1)):
+def _write_real_band_sweep_entry(*, stability_raw=None, sig=("sweep", 1), center_hz=12.5):
     """Mirrors `Biomarkers.bravo_service._band_sweep_signature`'s real chain shape: flattened from
     the raw tile entry and the raw pain-report snapshot, nothing else."""
     tiles_key = st.product_key("raw_lsb_tiles", UID, ("tiles", 1))
@@ -64,7 +64,7 @@ def _write_real_band_sweep_entry(*, stability_raw=None, sig=("sweep", 1)):
         prov.entry(tiles_key, kind="raw_lsb_tiles", writer="biomarkers"),
         prov.entry(report_key, kind="redcap_reports", writer="biomarkers")])
 
-    row = {"band_center_hz": 12.5, "r": 0.31}
+    row = {"band_center_hz": float(center_hz), "r": 0.31}
     if stability_raw is not None:
         row["cross_setting_stability_raw"] = stability_raw
         row["device_rules_status"] = "not assessable from a band alone"
@@ -131,19 +131,39 @@ def test_d2b_translated_answer_is_identical_to_calling_finding_from_stability_re
 
 
 def test_d2b_the_documented_disagreement_case_translates_to_cannot_tell(sandbox):
-    """ONE_THREE_LEFT at 12.5 Hz is the exact case `adapter.py`'s own comment names: the old
-    two-valued flag would read True/"stable" while the honest answer is "cannot tell"."""
-    raw = {"available": True, "lrt_p": 0.290,
+    """ONE_THREE_LEFT at 17.5 Hz is the case `adapter.py`'s own comment names: the old two-valued
+    flag would read True/"stable" while the honest answer is "cannot tell".
+
+    THE NUMBERS BELOW ARE MEASURED, NOT INVENTED. They were read off RCS08 on 2026-09-09 at the
+    calibrated grid's own settings (5 Hz band, pain split into thirds): the interaction test does
+    not reject at p = 0.372, and the interval on the largest between-era difference runs from -0.52
+    to +0.89 -- straddling zero and wider than the declared margin of 0.69.
+
+    WHY THE CASE MOVED, which is the reason this docstring says the settings out loud. The example
+    was 12.5 Hz until 2026-09-09, when re-measuring found that point reads "behaves differently"
+    (p = 0.0323) -- a third value, not the "cannot tell" the comment claimed. This test kept passing
+    throughout, because it builds its raw result by hand rather than from live data, so it proved
+    the translation rule and never the example. That is the right division of labour for a test that
+    must run with no database, but it does mean the name is only true while somebody keeps the
+    fixture matched to a real point, which is what this change does.
+    """
+    raw = {"available": True, "lrt_p": 0.3722536926038036,
            "equivalence": {"verdict": "inconclusive", "margin_log_or": _MARGIN,
-                           "max_abs_diff_log_or": 1.23, "ci": [-1.23, 0.22],
-                           "n_eras_compared": 3, "reason": "wider than the declared margin"},
-           "n": 180, "n_clusters": 7, "era_counts": {"OFF": 30, "LOW": 80, "HIGH": 70}}
-    _write_real_band_sweep_entry(stability_raw=raw)
+                           "max_abs_diff_log_or": 0.8945, "ci": [-0.5194, 0.8945],
+                           "n_eras_compared": 3, "pair": "LOW vs OFF",
+                           "reason": "wider than the declared margin"},
+           "n": 421, "n_clusters": 37, "era_counts": {"OFF": 92, "LOW": 75, "HIGH": 254}}
+    _write_real_band_sweep_entry(stability_raw=raw, center_hz=17.5)
     got = adapter.band_sweep_grid_for_closed_loop(UID)
     row = got["band_time_sweep"]["ONE_THREE_LEFT"]["best_correlation_rows"][0]
+    assert row["band_center_hz"] == 17.5, "the fixture no longer writes the point this test names"
     assert row["cross_setting_stability"]["answer"] == "cannot tell", (
         "collapsing this into \"behaves the same\" is the exact error stability.py exists to "
         "prevent")
+    # The half that makes the example worth documenting: the retired flag would have said "stable".
+    assert raw["lrt_p"] >= 0.05, (
+        "the example only illustrates the disagreement while the interaction test does NOT reject "
+        "-- if this fires, the anchor point has moved again and the comments naming it are stale")
 
 
 def test_d2b_grid_row_never_carries_a_bare_stim_stable_boolean(sandbox):

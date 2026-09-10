@@ -130,14 +130,28 @@ disagrees with the honest answer:
 | electrode | band centre | old two-valued `stim_stable` | honest four-valued answer |
 |---|---|---|---|
 | `ZERO_THREE_RIGHT` | 26.0 Hz | `False` | behaves differently |
-| `ONE_THREE_LEFT`   | 12.5 Hz | `True`  | **cannot tell** |
+| `ONE_THREE_LEFT`   | 17.5 Hz | `True`  | **cannot tell** |
 
-The second row is the whole point. The interaction test did not reject (p = 0.290), so the old flag
+The second row is the whole point. The interaction test did not reject (p = 0.372), so the old flag
 reads `True`, which downstream means "stim-stable" and looks like a pass. But the interval on the
-largest difference between stimulation states runs from -1.23 to +0.22, which is far wider than the
-declared margin of 0.69, so the data cannot tell a steady band from a materially unsteady one. Do
-not read `stim_stable` on the deployment page. Read `band_stability["answer"]` and handle all four
-values.
+largest difference between stimulation states runs from -0.52 to +0.89, which straddles zero and is
+wider than the declared margin of 0.69, so the data cannot tell a steady band from a materially
+unsteady one. Do not read `stim_stable` on the deployment page. Read `band_stability["answer"]` and
+handle all four values.
+
+**Measured on RCS08 on 2026-09-09, at the calibrated grid's own settings: a 5 Hz band, with pain
+split into thirds.** The settings are stated because the answer depends on them: the same electrode
+and centre gives p = 0.286 with a 1 Hz band and p = 0.032 with a 5 Hz one, so a p-value quoted for
+one of these points without its band width beside it is not a reproducible claim.
+
+**This row used to name 12.5 Hz, with p = 0.290 and an interval of -1.23 to +0.22.** That point now
+reads "behaves differently" (p = 0.0323, interval -1.238 to -0.104) -- a third value, not the
+"cannot tell" this table claimed. The old numbers are kept here as dated history because the reason
+they had to be replaced is worth knowing: it is not a code change (Track D's own module, checked out
+byte-for-byte and run on today's data, returns 0.0323 to twelve significant figures, both from the
+cached spectrum matrix and with that matrix rebuilt), not the pain reports (truncating them back to
+2026-09-07 leaves the same 421 rows in 37 groups and the same p), and not new recordings (386
+time-domain recordings then and now). What it IS sensitive to is the band width, above.
 
 ## Whether this should block a deployment is not decided here
 

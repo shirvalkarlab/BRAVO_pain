@@ -672,3 +672,105 @@ failure and does not trip any of them.
 | The loop runs its pass | `pass finished, every participant either stored an answer or had nothing to store` |
 | A second loop | refused: `another loop is already running (pid 2050348)` |
 | `STABILITY_PRECOMPUTE=0` | `switched off by STABILITY_PRECOMPUTE=0; not starting` |
+
+## §18 — Phase 6: the equality proof and the real timings
+
+**Do the two routes give the same answers?** The inline column — the only route that existed before
+this work — against the background-computed stored grid, on RCS08:
+
+| | |
+|---|---|
+| Points answered, each route | 132 |
+| Fields compared | **5,148** |
+| Fields differing | **0** |
+| Fields present in only one | **0** |
+
+Compared exactly, never within a tolerance.
+
+**Does turning the column on move anything that was already there?** The Closed-Loop response with
+the stored grid absent against present:
+
+| | |
+|---|---|
+| Fields with the column off | 27,889 |
+| Fields with the column on | 34,225 |
+| **Added** | **6,336 — every one under `cross_setting_stability`** |
+| **Dropped** | **0** |
+| **Moved, among the 27,889 in common** | **2** |
+
+Both of the two are the column's own bookkeeping: `cross_setting_stability_from_store` (0 to 264)
+and `cross_setting_stability_included`. **No scientific value moved.**
+
+**Timings, alternating rounds, old, new, old, new:**
+
+| | round 1 | round 2 |
+|---|---|---|
+| Inline column (the old route) | 292.70 s | 289.87 s |
+| New route — the page request | 10.60 s | 10.64 s |
+| New route — the background run | 15.93 s | 13.56 s |
+| New route — both together | 26.53 s | 24.20 s |
+
+**The page went from about 291 s to about 10.6 s, roughly 27 times faster, and the complete answer
+from about 291 s to about 25 s, roughly 11.6 times.** Findings §8c's hypothesis of ~297 s to ~86 s
+is superseded by this measured pair — the real gain is larger, because Phase 3 also replaced pymer4
+with a direct `glmer` call and forked across cores. The page's own background launch was switched
+off for these measurements so a run it started could not overlap the run being timed.
+
+## §19 — Why ONE_THREE_LEFT at 12.5 Hz moved, and what was done about it
+
+The comment in `adapter.py`, the matching note in `bravo_service.py`, and a table in
+`WIRING_stability_into_the_report.md` all cite this point as the worked example of why a two-valued
+"stable" flag is unsafe: interaction test p = 0.290, interval -1.23 to +0.22, honest answer "cannot
+tell". **It reads p = 0.0323, interval -1.238 to -0.104, answer "behaves differently" today — a
+third value, not the one the comment claims.**
+
+### §19a — What it is NOT, each ruled out by measurement
+
+| Hypothesis | Test | Result |
+|---|---|---|
+| A code change in the analysis | Checked out Track D's own Biomarkers module (`03158490`) byte-for-byte and ran the same point | **0.032285156521398184** — identical to twelve significant figures |
+| ...even with a rebuilt spectrum matrix | Same, after deleting the stored matrix so it re-assembled | **Identical again** |
+| The pain reports having grown | Re-ran with reports truncated to 2026-09-07, -08 and -09 | **No change**: same 421 rows, 37 groups, same p. Only 3 reports separate 2026-09-07 from today |
+| New recordings | Counted | **386 time-domain recordings**, the same number decision 59 cites |
+
+**My earlier hypothesis in §15 — commit `46670ce7`'s chunk-level outlier rule — was wrong, and is
+withdrawn.** That rule applies to `availability.live_lsb_band_medians_by_length`, which feeds the
+band-by-length sweep. The stability fit does not go through it at all: it reads the assembled
+spectrum matrix through `build_pooled_detail_from_matrix`.
+
+### §19b — What the number IS sensitive to
+
+Band width, strongly. Same electrode, same centre, same day, pain split into thirds:
+
+| band width | 1 Hz | 2 Hz | 3 Hz | 4 Hz | 5 Hz | 6 Hz | 8 Hz | 10 Hz |
+|---|---|---|---|---|---|---|---|---|
+| interaction test p | 0.286 | 0.094 | 0.060 | 0.049 | **0.032** | 0.051 | 0.047 | 0.073 |
+
+And on how pain is split: at 5 Hz, thirds give 0.032 while a median split gives 0.199.
+
+**So a p-value quoted for one of these points without its band width beside it is not a reproducible
+claim.** That is the practical lesson, and it is why the old pair could not be checked: the comment
+never said which band width it used. The closest reproduction of 0.290 is a 1 Hz band (0.286), but
+its interval, -1.06 to +0.05, does not match the documented -1.23 to +0.22 either, so the exact
+historical state is NOT identified and is not claimed to be.
+
+### §19c — What was done
+
+The example is re-anchored on **ONE_THREE_LEFT at 17.5 Hz**, measured live at the calibrated grid's
+own settings (5 Hz band, pain split into thirds): the interaction test does not reject, p = 0.372,
+so the retired flag would read "stable" — while the interval on the largest between-era difference
+runs from -0.52 to +0.89, straddling zero and wider than the declared margin of 0.69, so the honest
+answer is "cannot tell". Structurally the same illustration, and true today.
+
+Changed in all four places that carried the old claim: `adapter.py`, `bravo_service.py`,
+`WIRING_stability_into_the_report.md`, and the test
+`test_d2b_the_documented_disagreement_case_translates_to_cannot_tell`. **The old numbers are kept as
+dated history rather than deleted**, with what was ruled out, because a documented example that
+moved is itself worth knowing about.
+
+**The test kept passing throughout all of this**, because it builds its raw result by hand rather
+than from live data — so it proved the translation rule and never the example its name refers to.
+That is the right division of labour for a test that must run with no database, but it means the
+name is only true while somebody keeps the fixture matched to a real point. Its fixture now carries
+17.5 Hz's measured values, and a new assertion fails if the anchor point stops being one where the
+interaction test does not reject — which is the condition the whole illustration depends on.

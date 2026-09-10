@@ -4916,10 +4916,17 @@ def _validate_band_core(request_data):
 #: of a grid row is identical to `adapter.py`'s own inline translation of the same raw result.
 #:
 #: A READER OF THE TRANSLATED FIELD MUST STILL NEVER USE A BARE `stim_stable`/`stable` BOOLEAN.
-#: The warning already in `adapter.py` applies without a word changed: on this participant's own
-#: data, ONE_THREE_LEFT at 12.5 Hz has the old two-valued flag reading True (the interaction test
-#: did not reject, p = 0.290) while the honest answer is "cannot tell" (the interval on the largest
-#: between-era difference runs from -1.23 to +0.22, wider than the declared margin of 0.69).
+#: The warning already in `adapter.py` applies here in full: on this participant's own data,
+#: measured 2026-09-09 at the calibrated grid's own settings (5 Hz band, pain split into thirds),
+#: ONE_THREE_LEFT at 17.5 Hz has the old two-valued flag reading True (the interaction test did not
+#: reject, p = 0.372) while the honest answer is "cannot tell" -- the interval on the largest
+#: between-era difference runs from -0.52 to +0.89, straddling zero and wider than the declared
+#: margin of 0.69.
+#:
+#: The example was ONE_THREE_LEFT at 12.5 Hz until 2026-09-09, when re-measuring found that point
+#: now reads "behaves differently" (p = 0.0323). `adapter.py`'s note carries what was ruled out and
+#: what the number turns out to be sensitive to; the short version is that a p-value for one of
+#: these points is only reproducible if the band width is quoted with it.
 #: ==========================================================================================
 def raw_stability_result_for_point(participant_uid, channel, center_hz, band_width_hz=5.0):
     """The untranslated `stim` result `_validate_band_core` computes for one (channel, band centre)

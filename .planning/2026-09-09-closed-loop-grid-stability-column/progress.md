@@ -140,3 +140,28 @@ field comparison is what is missing.
 
 **The daily loop takes effect on the next container start** — `boot.sh` runs once when the container
 boots, so it is not running yet in the currently-running container.
+
+### Session 3, Phase 6 — the equality proof and the 12.5 Hz resolution
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| Inline answers vs background-stored answers | Identical | 5,148 fields compared, **0 differing**, 0 one-sided | Pass |
+| Column off vs on: nothing existing moves | Only additions | 6,336 added (all `cross_setting_stability`), 0 dropped, 2 moved (both the column's own bookkeeping) | Pass |
+| Timings, alternating rounds | Old slower | inline 292.70 / 289.87 s; page 10.60 / 10.64 s; background 15.93 / 13.56 s | Pass |
+| 12.5 Hz: is it a code change? | — | Track D's own code gives 0.032285156521398184, identical to 12 s.f., matrix cached AND rebuilt | Ruled out |
+| 12.5 Hz: is it the pain reports? | — | Truncating to 2026-09-07/08/09 changes nothing; same 421 rows, 37 groups | Ruled out |
+| 12.5 Hz: is it new recordings? | — | 386 time-domain recordings, the same number decision 59 cites | Ruled out |
+| 12.5 Hz: what IS it sensitive to? | — | Band width: p = 0.286 at 1 Hz, 0.032 at 5 Hz. Binarisation: 0.199 under a median split | Found |
+| Re-anchored example passes | Passes | `test_track_d_grid_stability_translation.py` 7 passed | Pass |
+| Container suite | 606 | **606 passed, 0 failed** | Pass |
+| Host suite | 993 + known 1 | 993 passed, 42 skipped, 1 failed (known) | Pass |
+
+### Errors (session 3, Phase 6)
+| Error | Attempt | Resolution |
+|-------|---------|------------|
+| My §15 hypothesis (commit `46670ce7`'s chunk rule) was wrong. | 1 | That rule feeds the band-by-length sweep, not the stability fit, which reads the assembled spectrum matrix instead. Withdrawn in findings §19a rather than quietly dropped. |
+| Filtered probe output through `grep`/`json.tool` three more times and lost the result entirely. | 3 | The same repeated mistake logged in session 1. Fixed the same way: write the whole output to a file, then read the file. Logged again because the repetition is the lesson. |
+| Probe called `band_sweep_grid_for_closed_loop` with a request dict; it takes the participant uid. | 1 | My probe's fault, not the code's. Called correctly it returns 264 rows. |
+| Probe called `finding_from_stability_result` with one argument and then treated its return as a dict. | 2 | It takes (raw, electrode, centre) and returns a `BandStabilityFinding` dataclass. |
+
+### Next session starts here
+Phase 7: land it. Nothing under `Client/src` changed, so no frontend rebuild applies.

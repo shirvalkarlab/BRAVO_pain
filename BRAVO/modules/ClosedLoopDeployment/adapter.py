@@ -1677,12 +1677,29 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     #
     # READ `band_stability["answer"]`, WHICH HAS FOUR VALUES, AND NEVER THE UPSTREAM `stim_stable`
     # FLAG. That flag has two values and on this participant's own data it disagrees with the honest
-    # answer: on ONE_THREE_LEFT at 12.5 Hz the test did not reject (p = 0.290) so the flag reads
-    # True, which downstream looks like a pass -- but the interval on the largest difference between
-    # stimulation states runs from -1.23 to +0.22, far wider than the declared margin of 0.69, so
-    # the data cannot tell a steady band from a materially unsteady one. "We could not tell" and
-    # "it behaved the same" are different conclusions and collapsing them has already cost this
-    # project real errors in three other places.
+    # answer. THE LIVE EXAMPLE, re-measured on RCS08 on 2026-09-09 at the calibrated grid's own
+    # settings (5 Hz band, pain split into thirds): ONE_THREE_LEFT at 17.5 Hz. The interaction test
+    # does not reject (p = 0.372), so the flag reads True and downstream looks like a pass -- but
+    # the interval on the largest difference between stimulation states runs from -0.52 to +0.89,
+    # which both straddles zero and is wider than the declared margin of 0.69, so the data cannot
+    # tell a steady band from a materially unsteady one. "We could not tell" and "it behaved the
+    # same" are different conclusions and collapsing them has already cost this project real errors
+    # in three other places.
+    #
+    # THE EXAMPLE USED TO BE ONE_THREE_LEFT AT 12.5 Hz (p = 0.290, interval -1.23 to +0.22), and
+    # that pair is kept here as dated history rather than quietly deleted, because the reason it
+    # had to be replaced is itself worth knowing. That point reads p = 0.0323 today, interval
+    # -1.238 to -0.104, answer "behaves differently" -- a THIRD value, not the "cannot tell" the
+    # comment claimed. It was chased down on 2026-09-09 and the cause is none of the obvious ones:
+    # Track D's own code, checked out byte-for-byte and run on today's data, returns 0.0323 to
+    # twelve significant figures, both from the cached spectrum matrix and with that matrix
+    # rebuilt; truncating the pain reports back to 2026-09-07 changes nothing (the model has the
+    # same 421 rows in 37 groups either way, and only three reports separate the two dates); and
+    # the time-domain recording count is the same 386 it was then. What the same point IS very
+    # sensitive to is the band width: 0.286 at 1 Hz, 0.094 at 2 Hz, 0.049 at 4 Hz, 0.032 at 5 Hz,
+    # 0.073 at 10 Hz. So a number quoted for this point without its band width beside it is not a
+    # reproducible claim, which is the practical lesson and the reason the replacement above states
+    # its settings.
     #
     # THIS BLOCKS NOTHING. The payload says so in `blocking_status`. Whether "behaves differently"
     # should stop a deployment is the PI's call, not this module's: every other blocking rule here
