@@ -503,6 +503,18 @@ def _shared_store(kind, signature, payload, *, participant_uid=None, provenance=
 #: exactly the same call `report_for_participant`'s own inline snippet already makes for one
 #: candidate. `ClosedLoopDeployment/tests/test_track_d_grid_stability_translation.py` proves the
 #: two are identical.
+#: The kind name of the stored cross-setting-stability grid, written by
+#: `Biomarkers.bravo_service.compute_and_store_stability_grid`.
+#:
+#: DUPLICATED ON PURPOSE, AND PINNED BY A TEST. Importing the constant would mean importing
+#: `bravo_service`, which imports `Server.models` and therefore needs Django's app registry — it
+#: raises `AppRegistryNotReady` in the host suite, which does not configure Django. Reading one
+#: extra column must never decide whether this whole function can run.
+#: `tests/test_track_d_grid_stability_translation.py` asserts this string still equals
+#: `bravo_service.STABILITY_GRID_KIND`, so a rename on that side fails loudly here.
+STABILITY_GRID_KIND = "biomarker_band_stability_grid"
+
+
 def band_sweep_grid_for_closed_loop(participant_uid):
     """The calibrated grid, as `consumer="closed_loop"`, with every row's stability result
     translated to the honest four-valued answer. Never raises.
@@ -528,9 +540,44 @@ def band_sweep_grid_for_closed_loop(participant_uid):
                            "Biomarkers exploration page first"),
                 "stamp": stamp}
 
+    # THE SECOND SOURCE OF THE STABILITY ANSWER, and in practice the only one that ever fires.
+    # `cross_setting_stability_raw` is attached to a row only when the grid was built with
+    # `IncludeCrossSettingStability`, which no client has ever set because it made the request pay
+    # for every fit inline. The answer is now computed off the request path instead -- after the
+    # page's own grid lands, and on a daily schedule -- and stored under its own kind, so this
+    # reads that entry and matches it to rows by (channel, band centre).
+    #
+    # The row's own field still WINS when present: a caller that deliberately asked for the inline
+    # computation gets exactly what it asked for, not a stored answer that may have been built
+    # under different settings.
+    # Read the entry DIRECTLY through the store rather than importing
+    # `Biomarkers.bravo_service.load_stored_stability_grid`. That module imports `Server.models`,
+    # which needs Django's app registry to be ready -- fine inside a request, but it raises
+    # `AppRegistryNotReady` in the host test suite, which does not configure Django. An enhancement
+    # to one column must not decide whether this function works at all.
+    #
+    # The kind name is duplicated here rather than imported for the same reason.
+    # `test_track_d_grid_stability_translation.py` asserts it still equals
+    # `bravo_service.STABILITY_GRID_KIND`, so the two are pinned by a test instead of by an import
+    # this module cannot afford to make.
+    stored_stability = {}
+    try:
+        _payload, _ = _cache_store.load_newest(
+            STABILITY_GRID_KIND, participant_uid, consumer="closed_loop",
+            root=_SHARED_CACHE_DIR_OVERRIDE)
+        for _flat, _value in ((_payload or {}).get("points") or {}).items():
+            _ch, _, _centre = str(_flat).rpartition("|")
+            try:
+                stored_stability[(_ch, float(_centre))] = _value
+            except (TypeError, ValueError):
+                continue
+    except Exception:                                            # noqa: BLE001
+        stored_stability = {}                                    # never fatal; rows say "not tested"
+
     sweeps = payload.get("band_time_sweep") or {}
     out_sweeps = {}
     any_stability = False
+    stability_from_store = 0
     for channel, sweep in sweeps.items():
         band_width_hz = float(sweep.get("band_width_hz", 5.0) or 5.0)
         new_sweep = dict(sweep)
@@ -540,6 +587,12 @@ def band_sweep_grid_for_closed_loop(participant_uid):
             for row in rows:
                 new_row = dict(row)
                 raw = row.get("cross_setting_stability_raw")
+                if raw is None and stored_stability:
+                    _c = row.get("band_center_hz")
+                    if _c is not None:
+                        raw = stored_stability.get((str(channel), float(_c)))
+                        if raw is not None:
+                            stability_from_store += 1
                 if raw is not None:
                     any_stability = True
                     # `band_center_hz`, not `center_hz` -- see the note in
@@ -561,7 +614,11 @@ def band_sweep_grid_for_closed_loop(participant_uid):
         out_sweeps[channel] = new_sweep
 
     return {"available": True, "band_time_sweep": out_sweeps, "stamp": stamp,
-            "cross_setting_stability_included": any_stability}
+            "cross_setting_stability_included": any_stability,
+            # How many rows got their answer from the stored grid rather than from the row itself.
+            # Reported so a reader can tell "the background job has run" from "the request computed
+            # it inline", which are different things with different freshness.
+            "cross_setting_stability_from_store": stability_from_store}
 
 
 def shared_cache_stats():

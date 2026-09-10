@@ -170,3 +170,29 @@ def test_d2b_a_row_with_no_raw_result_at_all_is_left_alone_not_faked(sandbox):
     assert "cross_setting_stability" not in row
     assert "cross_setting_stability_raw" not in row
     assert got["cross_setting_stability_included"] is False
+
+
+def test_the_stability_grid_kind_matches_the_name_biomarkers_actually_writes():
+    """`adapter.STABILITY_GRID_KIND` duplicates the kind name
+    `Biomarkers.bravo_service.STABILITY_GRID_KIND` writes, instead of importing it -- importing
+    `bravo_service` pulls in `Server.models`, which raises `AppRegistryNotReady` in this suite
+    because it does not configure Django, and reading one extra column must not decide whether
+    `band_sweep_grid_for_closed_loop` can run at all.
+
+    A duplicated constant drifts unless something checks it, so this is that check: it reads the
+    name out of the Biomarkers SOURCE rather than importing the module, so it needs no Django.
+    A rename on either side fails here.
+    """
+    import pathlib
+    import re
+
+    here = pathlib.Path(__file__).resolve()
+    bravo_service = here.parents[2] / "Biomarkers" / "bravo_service.py"
+    assert bravo_service.is_file(), f"expected Biomarkers/bravo_service.py beside this module: {bravo_service}"
+
+    found = re.search(r'^STABILITY_GRID_KIND\s*=\s*"([^"]+)"',
+                      bravo_service.read_text(), re.MULTILINE)
+    assert found, "bravo_service no longer defines STABILITY_GRID_KIND at module level"
+    assert found.group(1) == adapter.STABILITY_GRID_KIND, (
+        f"the writer's kind is {found.group(1)!r} but this module reads "
+        f"{adapter.STABILITY_GRID_KIND!r} -- the stored stability grid would never be found")

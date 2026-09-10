@@ -5153,6 +5153,165 @@ def _stability_batch_worker_serial(point, ctx):
         return point, None, f"band validation raised {exc!r}"
 
 
+#: The stored cross-setting-stability grid: one entry per participant per (settings, inputs) key,
+#: holding the raw stability result for every (sensing contact, band centre) point of the calibrated
+#: grid. A DERIVED kind — it must be written with `writer=` and `provenance=` or the self-derived
+#: refusal cannot fire (CLAUDE.md §10 rule 6).
+STABILITY_GRID_KIND = "biomarker_band_stability_grid"
+
+#: Bump when anything about how a point's answer is computed changes, so an entry built under the
+#: old rule is never served as if it carried the new one.
+STABILITY_GRID_RULE_VERSION = "v1_stability_grid"
+
+
+def _stability_grid_signature(participant_uid, pro_df, label_metric, settings, *,
+                              band_width_hz, points):
+    """`(signature, provenance)` for the stability grid, or `(None, None)` when an input cannot be
+    named.
+
+    Built ON TOP of `_band_sweep_signature` rather than beside it: the stability grid derives from
+    exactly the same two raw inputs the sweep does (the tile entry and the pain-report snapshot),
+    under the same settings, so reusing that function's own key as a component means the two cannot
+    drift apart about what counts as a change. Its provenance is reused for the same reason — the
+    chain names the tile entry and the report snapshot, which is what this is really derived from.
+
+    The points and the band width are in the key because a grid computed for 22 centres is not an
+    answer for 30, and a 5 Hz band is not a 10 Hz band.
+    """
+    sweep_sig, sweep_prov, _tiles_sig = _band_sweep_signature(
+        participant_uid, pro_df, label_metric, settings)
+    if sweep_sig is None:
+        return None, None
+    sig = (STABILITY_GRID_KIND, STABILITY_GRID_RULE_VERSION, sweep_sig,
+           float(band_width_hz), tuple(sorted((str(c), float(f)) for c, f in points)))
+    return sig, sweep_prov
+
+
+def compute_and_store_stability_grid(participant_uid, *, request_data=None, workers=None,
+                                     force=False, on_point=None):
+    """Compute the cross-setting stability answer for every point of this participant's calibrated
+    grid and write it to the shared store. This is the ONE implementation behind both the
+    after-the-page-lands background run and the scheduled precompute; they differ only in what
+    starts it.
+
+    RUN THIS IN ITS OWN PROCESS. `stability_grid_for_participant` parallelises by forking, which is
+    only safe before rpy2 has started this process's embedded R. A caller that has already fitted
+    anything gets a silent fall back to the serial path — correct, but several times slower. The
+    management command `compute_stability_grid` exists to give both callers a fresh process.
+
+    Returns a status dict; never raises. `stored` False with a `reason` is a normal outcome, not an
+    error: a participant with no recordings, or whose inputs cannot be named, has nothing to store.
+    """
+    t0 = _time.perf_counter()
+    req = dict(request_data or {})
+    req["ParticipantId"] = participant_uid
+    out = {"participant_uid": participant_uid, "stored": False, "reason": None,
+           "n_points": 0, "n_available": 0, "wall_seconds": None, "store_key": None,
+           "already_current": False}
+
+    # The grid itself, so the stability answer covers exactly the points the page shows rather than
+    # a separately-derived guess at them. Served from the store when the key matches, so this is
+    # cheap on the scheduled path; it fits no models, so it leaves R unstarted and forking usable.
+    try:
+        sweep = band_time_sweep_for_participant(dict(req))
+    except Exception as exc:                                     # noqa: BLE001
+        out["reason"] = f"the calibrated grid could not be built ({exc!r})"
+        return out
+    sweeps = (sweep or {}).get("band_time_sweep") or {}
+    points = []
+    for channel, sw in sweeps.items():
+        for f in (sw or {}).get("center_freqs_hz") or []:
+            points.append((str(channel), float(f)))
+    if not points:
+        out["reason"] = "the calibrated grid has no points for this participant"
+        return out
+    out["n_points"] = len(points)
+
+    band_width_hz = float((sweep or {}).get("band_width_hz")
+                          or analytics.BAND_TIME_SWEEP_WIDTH_HZ)
+
+    # The same settings dict the sweep keys itself on, read back off the response it just produced
+    # so the two cannot disagree about what the request asked for.
+    pro_df = _load_pros(req, models.Participant.find(uid=participant_uid))
+    pro_df, label_metric, _parts = _resolve_biomarker_metric(req, pro_df) \
+        if pro_df is not None else (None, None, None)
+    settings = dict((sweep or {}).get("settings_applied") or {})
+    sig, prov = _stability_grid_signature(participant_uid, pro_df, label_metric, settings,
+                                          band_width_hz=band_width_hz, points=points)
+    if sig is None:
+        out["reason"] = ("an input could not be named (no tile entry key or no pain-report "
+                         "snapshot key), so a stored answer could not be keyed to its inputs")
+        return out
+    out["store_key"] = _cache_store.product_key(STABILITY_GRID_KIND, participant_uid, sig)
+
+    # THE KEY DECIDES WHETHER TO WORK, NOT THE CALLER (decision 26). A scheduled run whose inputs
+    # have not moved does no fitting at all, which is what makes a daily schedule cheap.
+    if not force:
+        try:
+            existing = _cache_store.load(STABILITY_GRID_KIND, participant_uid, sig,
+                                         consumer="biomarkers", root=_SHARED_CACHE_DIR_OVERRIDE)
+        except Exception:                                        # noqa: BLE001
+            existing = None
+        if isinstance(existing, dict) and existing.get("points"):
+            out.update(stored=True, already_current=True, n_available=int(
+                sum(1 for v in existing["points"].values() if v.get("available"))),
+                wall_seconds=round(_time.perf_counter() - t0, 3))
+            return out
+
+    grid = stability_grid_for_participant(participant_uid, points, band_width_hz=band_width_hz,
+                                          request_data=req, workers=workers, on_point=on_point)
+    if not grid:
+        out["reason"] = "the stability grid came back empty"
+        return out
+
+    # Stored with STRING keys: a tuple key does not survive a JSON or Parquet round trip, and the
+    # reader on the Closed-Loop side matches on (channel, centre) anyway.
+    payload = {
+        "kind": STABILITY_GRID_KIND,
+        "rule_version": STABILITY_GRID_RULE_VERSION,
+        "participant_uid": str(participant_uid),
+        "band_width_hz": band_width_hz,
+        "label_metric": label_metric,
+        "n_points_requested": len(points),
+        "points": {f"{ch}|{f:g}": v for (ch, f), v in grid.items()},
+    }
+    out["n_available"] = int(sum(1 for v in grid.values() if (v or {}).get("available")))
+    try:
+        _cache_store.store(STABILITY_GRID_KIND, participant_uid, sig, payload,
+                           writer="biomarkers", trigger="stability_grid", provenance=prov,
+                           root=_SHARED_CACHE_DIR_OVERRIDE)
+        out["stored"] = True
+    except Exception as exc:                                     # noqa: BLE001
+        # A failed write is reported, never swallowed into a success: a caller that believes the
+        # answer landed would stop recomputing it.
+        out["reason"] = f"the stability grid was computed but not stored ({exc!r})"
+    out["wall_seconds"] = round(_time.perf_counter() - t0, 3)
+    return out
+
+
+def load_stored_stability_grid(participant_uid, *, consumer="biomarkers"):
+    """The newest stored stability grid for this participant, as
+    `{(channel, centre_hz): raw_stim_result}`, or None. Returns the newest rather than a keyed
+    lookup because a reader on another page cannot know the settings the grid was built under —
+    the same no-writer's-key pattern decision 41 established for `amplitude_effect_by_band`."""
+    try:
+        payload, _stamp = _cache_store.load_newest(
+            STABILITY_GRID_KIND, participant_uid, consumer=consumer,
+            root=_SHARED_CACHE_DIR_OVERRIDE)
+    except Exception:                                            # noqa: BLE001
+        return None
+    if not isinstance(payload, dict) or not payload.get("points"):
+        return None
+    out = {}
+    for flat_key, value in payload["points"].items():
+        channel, _, centre = str(flat_key).rpartition("|")
+        try:
+            out[(channel, float(centre))] = value
+        except (TypeError, ValueError):
+            continue
+    return out or None
+
+
 def validate_band_for_participant(request_data):
     """Run the click-triggered VALIDATION bundle for one band on one participant.
 

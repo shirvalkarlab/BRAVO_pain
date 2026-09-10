@@ -441,3 +441,73 @@ two differently, because "not computed" is not the same claim as "computed, and 
 | + 16 cores | **8.2 s** |
 
 About **40x**, with every step proven to change no value.
+
+## 14. BLOCKER FOUND: the whole ClosedLoopDeployment module cannot be imported by the Django app
+
+Found 2026-09-09 while verifying that Phase 4's stored grid reaches the Closed-Loop page. **This is
+pre-existing, is not caused by any change in this task, and blocks the feature from ever being
+visible.**
+
+### 14a. The evidence, from Django's own process shape
+
+Run through `manage.py shell` -- the exact process gunicorn's workers use, the technique decision 68
+already established for this class of question:
+
+```
+PATHHAS_MODULES  False
+IMPORT_FAIL      ModuleNotFoundError("No module named 'ClosedLoopDeployment'")
+PYTHONPATH_ENV   None
+```
+
+`modules/ClosedLoopDeployment/adapter.py` line 35 is `from ClosedLoopDeployment import edges as
+_edges` -- the bare, host-only spelling. Nothing anywhere puts `modules/` on `sys.path`: not
+`settings.py`, not `manage.py`, not `modules/__init__.py`, and `PYTHONPATH` is unset. The host test
+suite resolves it only because it runs from `BRAVO/modules` with `PYTHONPATH=.`.
+
+It is not one import. Eight module-level bare imports across seven files:
+
+| File | Line | Import |
+|---|---|---|
+| `adapter.py` | 35 | `from ClosedLoopDeployment import edges` |
+| `authority.py` | 40 | `from StimOptimizer.routines.lfp_response import ...` |
+| `clinic_steps.py` | 71, 311 | `from Biomarkers.routines.analytics ...`, `from StimOptimizer.routines.within_visit ...` |
+| `edges.py` | 55 | `from Biomarkers.routines.analytics import ...` |
+| `protocol.py` | 42 | `from StimOptimizer.routines import percept_adaptive` |
+| `replay.py` | 89 | `from StimOptimizer.routines import percept_adaptive` |
+| `three_source_response.py` | 98, 100 | `from Biomarkers.routines import analytics`, `from StimOptimizer.routines import within_visit` |
+
+### 14b. Why it has been invisible
+
+`Server/APIs/DataAnalysis.py` line 919-927 wraps the adapter import and the whole report in one
+`try/except Exception` and returns **HTTP 200** with
+`{"available": False, "reason": "deployment report error: " + str(e)}`.
+
+So the endpoint answers 200 with a plausible-looking refusal instead of failing. This is exactly the
+failure mode decision 67 already recorded once for `stability.py`: a swallowed import error produces
+a normal-looking, fast, answerless response.
+
+**It also means decision 67's live browser check may have been reading this, not a genuine empty
+state.** That check screenshotted "no calibrated grid is available for this participant yet", which
+is the PANEL's own empty message -- and the panel shows that same message whenever
+`band_sweep_grid` is absent from the response, which is what an import failure produces. The
+screenshot cannot distinguish the two. Recorded as a caveat on that decision, not as a claim that it
+was wrong.
+
+### 14c. When it started
+
+`git log -L 35,35` puts the bare import at commit `293a1c98`, **2026-09-04**, "Interface rebuild
+with the mode toggle, and seven backend defects the UI lanes found". So the Closed-Loop Deployment
+endpoint has been answering `deployment report error: No module named 'ClosedLoopDeployment'` for
+five days.
+
+### 14d. Two possible fixes, materially different
+
+1. **Eight double-import spellings**, the pattern CLAUDE.md and `CacheStore/__init__.py` already
+   establish and that decision 67 used for `stability.py`. Explicit and local, but edits seven files
+   in a module this task was not asked to touch, and every future sibling import must remember it.
+2. **One `sys.path` entry for `modules/`**, making true the assumption all eight imports already
+   make. One line, no module edits, but it is action-at-a-distance and changes import resolution for
+   the whole app.
+
+This is a production module and a real behaviour change either way, so it is put to the PI rather
+than chosen here (CLAUDE.md §10 rule 8).

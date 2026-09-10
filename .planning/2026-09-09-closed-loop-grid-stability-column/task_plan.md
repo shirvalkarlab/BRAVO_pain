@@ -78,18 +78,30 @@ Phase 4 — background computation
       environment mismatch of decisions 84/85, unrelated and unchanged).
 
 ### Phase 4: Background computation after the grid lands
-**Status:** pending
+**Status:** in_progress
 
-- [ ] Return the grid immediately, then fill the stability column behind it. Find how this project
-      already runs work off the response path — `AsyncJobScheduler` exists as a module and is the
-      first place to look — rather than inventing a threading approach next to rpy2, which holds a
-      single embedded R process.
-- [ ] Write the finished column into the shared store as its own kind, with `writer=` and
-      `provenance=` naming the tile entry and the pain-report snapshot, or the self-derived refusal
-      cannot fire (CLAUDE.md §10 rule 6).
-- [ ] The Closed-Loop panel reads the stored column when it exists and keeps showing the honest
-      "not yet computed" chip when it does not. A reader must never see a blank cell that could be
-      read as "stable".
+- [x] `AsyncJobScheduler` checked and ruled out: it is a Slurm cluster scheduler for recording
+      processing, not a general off-request-path runner. Built a Django management command,
+      `compute_stability_grid`, instead — which is also what gives Phase 5 its scheduled entry point,
+      so there is one implementation rather than two.
+- [x] `compute_and_store_stability_grid` writes the finished grid as kind
+      `biomarker_band_stability_grid` with `writer="biomarkers"` and the sweep's own provenance
+      chain (the tile entry and the pain-report snapshot).
+- [x] Proven live on RCS08: 132 of 132 points stored in 23.6 s; a second run does no fitting at all
+      (`already_current`, 4.5 s), so the key decides the work as decision 26 requires; the stored
+      grid reads back with ONE_THREE_LEFT at 12.5 Hz carrying `lrt_p` 0.032285156521398184,
+      byte-identical to the value measured before it was ever stored.
+- [x] `adapter.band_sweep_grid_for_closed_loop` now falls back to the stored grid when a row carries
+      no inline result, and reports `cross_setting_stability_from_store` so a reader can tell a
+      background answer from an inline one. The row's own field still wins when present.
+- [ ] **BLOCKED, and not by this work: the whole `ClosedLoopDeployment` module cannot be imported by
+      the Django app** (findings §14). Eight module-level bare imports across seven files, unresolved
+      since 2026-09-04. The endpoint answers HTTP 200 with `deployment report error: No module named
+      'ClosedLoopDeployment'`. Until that is fixed the stored column cannot reach the page. Needs the
+      PI's call on which of two fix shapes to use.
+- [ ] Trigger the command from the sweep once the page's own grid lands (not yet wired — deliberately
+      left until the blocker above is settled, since there is no point launching work whose result
+      the page cannot read).
 
 ### Phase 5: Scheduled precompute, off the request path
 **Status:** pending

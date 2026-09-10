@@ -75,7 +75,22 @@ that computes it.
 | Broke `test_run_for_participant_and_validate_band_core_both_use_the_shared_forecast_helper` (590 -> 589/1). | 1 | Real regression caught by a guard test doing its job: extracting `_band_validation_setup` moved the MatchDirection parse out of `_validate_band_core`. Fixed by pointing the guard at the function that now owns the parse AND adding a third assertion that `_validate_band_core` really delegates to it — strengthened, not weakened. |
 | Filtered the suite output through `grep`/`tail` three separate times and discarded the very line I was running the command to get (PASS=/FAIL=, the failing test name, the pytest summary). | 3 | Stopped filtering at collection time: write the full output to a file, then grep the file. Logged as a repeated mistake rather than three separate ones — the pattern is the lesson. |
 
+### Session 2, Phase 4
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| Management command stores the grid | Stores | 132 of 132 points, 23.6 s, key recorded | Pass |
+| Second run does no fitting (key decides) | already_current | `already_current: true`, 4.5 s | Pass |
+| Stored grid reads back exactly | Same values | 132 points; ONE_THREE_LEFT@12.5 lrt_p 0.032285156521398184, identical to pre-storage | Pass |
+| Closed-Loop reader picks up the stored grid | Shows answers | **Cannot be verified — the module will not import in the Django app (findings §14)** | Blocked |
+| Container suite | 590/0 | 590 passed, 0 failed | Pass |
+| Host suite | 992 + known 1 | 993 passed (+1 new guard test), 42 skipped, 1 failed (known) | Pass |
+
+### Errors (session 2, Phase 4)
+| Error | Attempt | Resolution |
+|-------|---------|------------|
+| Importing `bravo_service` from `adapter.py` broke 5 host tests with `AppRegistryNotReady` — my `except ImportError` did not catch it. | 1 | `bravo_service` imports `Server.models`, which needs Django's app registry; the host suite does not configure Django. Rewrote to read the store directly in `adapter.py`, which is far lighter and needs no Django. The duplicated kind constant is pinned by a new test that reads the writer's SOURCE rather than importing it. |
+
 ### Next session starts here
-Phase 4: run the grid in the background after the page's own grid lands, and store the result with
-`writer=` and `provenance=`. **It must run in its own process** — a process that has already fitted
-anything cannot fork, and the guard will silently fall back to serial (findings §13c).
+**Settle findings §14 first** — the ClosedLoopDeployment module does not import in the Django app,
+so nothing built here can reach the page until it does. Then wire the sweep to launch
+`compute_stability_grid` after the page's grid lands, and add the daily schedule (Phase 5).
