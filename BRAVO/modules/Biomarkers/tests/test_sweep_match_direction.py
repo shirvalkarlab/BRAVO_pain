@@ -99,16 +99,40 @@ def test_forecast_and_sweep_helpers_disagree_only_on_the_documented_fallback():
 
 def test_run_for_participant_and_validate_band_core_both_use_the_shared_forecast_helper():
     """The two call sites this helper was extracted from -- `run_for_participant` and
-    `_validate_band_core` -- must each call `_forecast_match_direction` rather than
-    re-duplicating the parse inline. Checked by reading each function's own source, no database
-    needed."""
-    for fn in (bs.run_for_participant, bs._validate_band_core):
+    `_validate_band_core` -- must reach `_forecast_match_direction` rather than re-duplicating the
+    parse inline. Checked by reading each function's own source, no database needed.
+
+    WHY `_validate_band_core` IS CHECKED THROUGH `_band_validation_setup` NOW. The parse did not go
+    away and was not duplicated: the participant-level setup was extracted out of
+    `_validate_band_core` into `_band_validation_setup` so the calibrated-grid path could pay it
+    once for 132 points instead of once per point, and the MatchDirection parse moved with it.
+    `_validate_band_core` reaches the helper by calling that function.
+
+    The original assertion is kept rather than relabelled, and a third is ADDED: that
+    `_validate_band_core` really does delegate to the setup helper. Without that, this test could
+    pass while `_validate_band_core` quietly stopped resolving MatchDirection at all.
+    """
+    # The functions that must call the helper directly. `_band_validation_setup` now owns the parse
+    # that `_validate_band_core` used to make itself.
+    for fn in (bs.run_for_participant, bs._band_validation_setup):
         src = inspect.getsource(fn)
         assert "_forecast_match_direction(request_data)" in src, (
             f"{fn.__name__} no longer calls the shared MatchDirection helper -- "
             f"has its parsing been re-duplicated inline?")
+
+    # No call site may re-parse MatchDirection inline alongside the shared helper -- including
+    # `_validate_band_core`, which must get its answer from the setup helper and nowhere else.
+    for fn in (bs.run_for_participant, bs._band_validation_setup, bs._validate_band_core):
+        src = inspect.getsource(fn)
         assert 'request_data.get("MatchDirection"' not in src, (
             f"{fn.__name__} parses MatchDirection inline again, alongside the shared helper")
+
+    # And `_validate_band_core` must actually route through the setup helper, or it would resolve
+    # MatchDirection nowhere at all while still satisfying the checks above.
+    core_src = inspect.getsource(bs._validate_band_core)
+    assert "_band_validation_setup(request_data)" in core_src, (
+        "_validate_band_core no longer calls _band_validation_setup -- it now resolves "
+        "MatchDirection nowhere, or has re-inlined the setup it was extracted from")
 
 
 def test_the_grid_endpoint_and_the_cell_endpoint_call_the_one_shared_helper():

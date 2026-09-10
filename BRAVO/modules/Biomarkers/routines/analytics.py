@@ -5251,6 +5251,60 @@ def stability_equivalence(slope_table, lrt_p, *, margin=STABILITY_EQUIVALENCE_MA
                         "rather than shown stable"))}
 
 
+#: Fit the reduced/full binomial GLMM pair and return ONLY their log-likelihoods, which is all the
+#: band x stim-era LRT below actually consumes (`chisq = 2*(ll1 - ll0)`).
+#:
+#: WHY THIS BYPASSES pymer4. Measured on the live container, on the exact frame this function builds
+#: (421 rows, 37 clusters, 2026-09-09): one `Lmer(...).fit()` took 0.359 s, of which R's own
+#: `system.time` attributed 0.216 s to `glmer` itself. The other 0.143 s -- 40% -- was pymer4
+#: assembling coefficient tables, random-effect frames and design information into pandas, which it
+#: does even with `summarize=False`, and every byte of which this call path discards. Moving the
+#: frame into R is NOT the cost: that measured 0.002 s.
+#:
+#: THIS IS NOT A DIFFERENT ESTIMATOR. It is the same `lme4::glmer` call, on the same data frame,
+#: with the same formula and family. pymer4 itself is a wrapper around exactly this.
+#:
+#: The pymer4 path is kept as the REFERENCE IMPLEMENTATION behind `USE_DIRECT_GLMER`, the same
+#: contract `USE_CHANNEL_INDEX` already established for `per_pro_lsb` (decision 43): the switch is
+#: what makes an equality proof possible on live data, and gives an off switch that needs no
+#: deployment if the direct path is ever suspected.
+USE_DIRECT_GLMER = True
+
+
+def _binomial_glmer_loglik_pair(df, formula_red, formula_full):
+    """Returns (ll_reduced, ll_full) as plain floats. Raises on failure, like the code it replaces --
+    `band_stim_stability`'s own `except` turns that into {"available": False, "reason": "LRT failed"}.
+    """
+    if not USE_DIRECT_GLMER:
+        from pymer4.models import Lmer
+        with _rpy2_converter_ctx():
+            m0 = Lmer(formula_red, data=df, family="binomial"); m0.fit(summarize=False)
+            m1 = Lmer(formula_full, data=df, family="binomial"); m1.fit(summarize=False)
+        return float(m0.logLike), float(m1.logLike)
+
+    import rpy2.robjects as ro
+    from rpy2.robjects import pandas2ri
+    from rpy2.robjects.conversion import localconverter
+
+    # The conversion must run with rpy2's converter active in THIS thread, the same reason the
+    # pymer4 path is wrapped -- otherwise a worker thread raises the "conversion rules ... missing"
+    # ContextVar error.
+    with _rpy2_converter_ctx():
+        with localconverter(ro.default_converter + pandas2ri.converter):
+            r_df = ro.conversion.py2rpy(df)
+        ro.r('suppressMessages(library(lme4))')
+        # A distinctive name rather than `d`: this lands in R's global environment, which is shared
+        # by everything else in this process that talks to R.
+        ro.globalenv['.bravo_glmer_df'] = r_df
+        def _ll(formula):
+            return float(ro.r(
+                f'as.numeric(logLik(glmer({formula}, data = .bravo_glmer_df, '
+                f'family = binomial)))')[0])
+        ll0 = _ll(formula_red)
+        ll1 = _ll(formula_full)
+    return ll0, ll1
+
+
 def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
                         band_width_hz=5.0, strategy="tertile", low_pct=33.3333, high_pct=66.6667,
                         off_max=0.1, low_max=1.5,
@@ -5354,16 +5408,13 @@ def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
         # Both fits + their pandas<->R conversions must run with rpy2's converter active in THIS
         # thread (see _rpy2_converter_ctx) — otherwise the worker thread raises the "conversion rules
         # ... missing" ContextVar error. logLike is a cached float after fit, read outside the ctx.
-        with _rpy2_converter_ctx():
-            m0 = Lmer(formula_red, data=df, family="binomial"); m0.fit(summarize=False)
-            m1 = Lmer(formula_full, data=df, family="binomial"); m1.fit(summarize=False)
+        ll0, ll1 = _binomial_glmer_loglik_pair(df, formula_red, formula_full)
         # PARITY (audit §6): compute the LRT exactly as offline phase2b — chi2 = 2*(ll_full -
         # ll_reduced), p from chi2 with df = number of interaction terms added = (n_eras - 1). The
         # previous live path used R's anova(m0, m1), whose df accounting for the lme4 nested fit
         # differed (df=1 vs the 2 interaction terms a 3-era model adds), shifting borderline p's
         # across 0.05 (e.g. vas@61.5 ZERO_TWO_LEFT: anova p=0.048 -> dependent, but the validated
         # report's 2-df LRT p=0.127 -> stable).
-        ll0 = float(m0.logLike); ll1 = float(m1.logLike)
         chisq = 2.0 * (ll1 - ll0)
         from scipy.stats import chi2 as _chi2dist
         dof = max(n_eras_present - 1, 1)

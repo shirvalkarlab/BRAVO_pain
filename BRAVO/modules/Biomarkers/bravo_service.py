@@ -4718,27 +4718,36 @@ def _deployment_summary_adaptive_band_gate(center_hz, band_width_hz):
 
 
 @_pro_scoped
-def _validate_band_core(request_data):
-    """Shared heavy-lifting core for the per-band validation + BandCandidate emission.
+def _band_validation_setup(request_data):
+    """Everything `_validate_band_core` needs that does NOT depend on which band is being asked
+    about: the participant, the pain-report table, the assembled spectrum matrix, the pooled
+    matched detail, and the chronic stimulation series.
 
-    Resolves the participant, PRO metric, binarization, and PSD<->PRO match params from the
-    request; builds the same pooled td_detail the scan uses (so the band feature is defined
-    identically); then runs the mixed-effects logistic (glmer) and the band x stim-era LRT.
+    WHY THIS IS SPLIT OUT, AND WHAT IT IS WORTH. `_validate_band_core` was written for ONE
+    candidate band, and the calibrated-grid export then called it once per grid point. Measured
+    live on RCS08 (2026-09-09, three centres on ONE_THREE_LEFT), a steady-state point cost 2.25 s,
+    of which 1.451 s was this setup: `_load_pros` 0.74 s, `_cached_psd_matrix` 0.347 s,
+    `build_pooled_detail_from_matrix` 0.096 s, the chronic load 0.268 s. **None of those four takes
+    a channel or a band centre**, so every one of them returned the identical object every time and
+    was recomputed for all 132 points of a six-contact grid.
 
-    Returns a rich intermediate dict consumed by BOTH `validate_band_for_participant` (which
-    trims it to the click-panel shape) and `build_band_candidate` (which assembles the full
-    §6 BandCandidate). On any failure returns {available: False, reason: ...}.
+    Note it is participant-level, NOT channel-level: `build_pooled_detail_from_matrix` builds the
+    pooled detail for every channel at once, and the channel is resolved later, inside
+    `analytics.band_stim_stability`, by its own scan over `chan_order`. So one call to this function
+    serves every point of every channel.
+
+    ONE COPY, TWO CALLERS, ON PURPOSE. `_validate_band_core` (one candidate) and
+    `stability_grid_for_participant` (the whole grid) both call this rather than each carrying its
+    own setup. Two implementations of one thing drifting apart is the failure this repository
+    already paid for once with its two cache stores (decision 30), and a stability answer that
+    disagreed between the grid and the single-candidate panel would be worse than no answer at all.
+
+    Returns the setup bundle with `available: True`, or `{"available": False, "reason": ...}` —
+    the same failure shape, with the same reason strings, the caller already returned itself.
     """
     participant_uid = request_data.get("ParticipantId")
-    channel = request_data.get("Channel")
-    center_hz_raw = request_data.get("CenterHz")
-    if not (participant_uid and channel and center_hz_raw is not None):
-        return {"available": False, "reason": "ParticipantId, Channel, and CenterHz required"}
-    try:
-        center_hz = float(center_hz_raw)
-    except (TypeError, ValueError):
-        return {"available": False, "reason": "CenterHz must be numeric"}
-    band_width_hz = float(request_data.get("BandWidthHz", 5.0))
+    if not participant_uid:
+        return {"available": False, "reason": "ParticipantId required"}
 
     Participant = models.Participant.find(uid=participant_uid)
     if Participant is None:
@@ -4784,25 +4793,80 @@ def _validate_band_core(request_data):
     if not pooled or pooled.get("psd") is None:
         return {"available": False, "reason": "matched-detail builder returned nothing"}
 
-    # Mixed-effects logistic (definitive per-candidate inference).
-    glmer = analytics.band_mixedmodel_inference(
-        pooled, channel, center_hz, band_width_hz=band_width_hz,
-        strategy=label_strategy, low_pct=low_pct, high_pct=high_pct)
-    # Stim-state heterogeneity (band x stim-era LRT). Needs the chronic stim series.
+    # The chronic stim trajectory the band x stim-era test needs. Loaded here rather than after the
+    # per-band fit because it, too, is the same for every band; a failure to build it is not fatal
+    # (`band_stim_stability` reports "no stim series" and the caller shows that honestly).
     chronic_list = _load_recordings(participant_uid, CHRONIC_TYPES)
     try:
         from .routines import availability as _av
         stim = _av.stim_series(chronic_list) if chronic_list else None
     except Exception:
         stim = None
-    hetero = analytics.band_stim_stability(
-        pooled, channel, center_hz, stim_series=stim, band_width_hz=band_width_hz,
-        strategy=label_strategy, low_pct=low_pct, high_pct=high_pct)
 
     return {
         "available": True,
         "participant_uid": participant_uid,
         "Participant": Participant,
+        "label_metric": label_metric,
+        "composite_parts": composite_parts,
+        "label_strategy": label_strategy,
+        "low_pct": low_pct,
+        "high_pct": high_pct,
+        "match_tol_min": match_tol_min,
+        "max_per_rating": max_per_rating,
+        "refractory_min": refractory_min,
+        "match_direction": match_direction,
+        "pm": pm,
+        "pooled": pooled,
+        "stim_series": stim,
+    }
+
+
+def _validate_band_core(request_data):
+    """Shared heavy-lifting core for the per-band validation + BandCandidate emission.
+
+    Resolves the participant, PRO metric, binarization, and PSD<->PRO match params from the
+    request; builds the same pooled td_detail the scan uses (so the band feature is defined
+    identically); then runs the mixed-effects logistic (glmer) and the band x stim-era LRT.
+
+    Returns a rich intermediate dict consumed by BOTH `validate_band_for_participant` (which
+    trims it to the click-panel shape) and `build_band_candidate` (which assembles the full
+    §6 BandCandidate). On any failure returns {available: False, reason: ...}.
+    """
+    participant_uid = request_data.get("ParticipantId")
+    channel = request_data.get("Channel")
+    center_hz_raw = request_data.get("CenterHz")
+    if not (participant_uid and channel and center_hz_raw is not None):
+        return {"available": False, "reason": "ParticipantId, Channel, and CenterHz required"}
+    try:
+        center_hz = float(center_hz_raw)
+    except (TypeError, ValueError):
+        return {"available": False, "reason": "CenterHz must be numeric"}
+    band_width_hz = float(request_data.get("BandWidthHz", 5.0))
+
+    setup = _band_validation_setup(request_data)
+    if not setup.get("available"):
+        return setup
+
+    pooled = setup["pooled"]
+    stim = setup["stim_series"]
+    label_strategy, low_pct, high_pct = setup["label_strategy"], setup["low_pct"], setup["high_pct"]
+
+    # Mixed-effects logistic (definitive per-candidate inference).
+    glmer = analytics.band_mixedmodel_inference(
+        pooled, channel, center_hz, band_width_hz=band_width_hz,
+        strategy=label_strategy, low_pct=low_pct, high_pct=high_pct)
+    # Stim-state heterogeneity (band x stim-era LRT), on the stim series the setup already built.
+    hetero = analytics.band_stim_stability(
+        pooled, channel, center_hz, stim_series=stim, band_width_hz=band_width_hz,
+        strategy=label_strategy, low_pct=low_pct, high_pct=high_pct)
+
+    label_metric = setup["label_metric"]
+    composite_parts = setup["composite_parts"]
+    return {
+        "available": True,
+        "participant_uid": participant_uid,
+        "Participant": setup["Participant"],
         "channel": channel,
         "center_hz": center_hz,
         "band_width_hz": band_width_hz,
@@ -4812,11 +4876,11 @@ def _validate_band_core(request_data):
         "label_strategy": label_strategy,
         "low_pct": low_pct,
         "high_pct": high_pct,
-        "match_tol_min": match_tol_min,
-        "max_per_rating": max_per_rating,
-        "refractory_min": refractory_min,
-        "match_direction": match_direction,
-        "pm": pm,
+        "match_tol_min": setup["match_tol_min"],
+        "max_per_rating": setup["max_per_rating"],
+        "refractory_min": setup["refractory_min"],
+        "match_direction": setup["match_direction"],
+        "pm": setup["pm"],
         "pooled": pooled,
         "stim_series": stim,
         "glmer": glmer,
@@ -4875,6 +4939,218 @@ def raw_stability_result_for_point(participant_uid, channel, center_hz, band_wid
             "reason": core.get("reason") or "the band validation path returned nothing usable"}
     except Exception as exc:                                     # noqa: BLE001
         return {"available": False, "reason": f"band validation raised {exc!r}"}
+
+
+#: How many consecutive RAISED points end a batch. See the failure-policy note in
+#: `stability_grid_for_participant`. One bad band should cost only itself; a wedged embedded R
+#: process should not cost 131 slow failures in a row.
+STABILITY_BATCH_MAX_CONSECUTIVE_FAILURES = 3
+
+#: Set by `stability_grid_for_participant` immediately BEFORE it forks, and read by
+#: `_stability_batch_worker` in the children, which inherit it through the fork. It is a module
+#: global rather than a closure because `multiprocessing.Pool.map` pickles the function it is given,
+#: and a closure would not pickle.
+_STABILITY_BATCH_CTX = None
+
+
+def _stability_batch_worker(point):
+    """One grid point, run in a forked child. Returns (point, result, raised_reason)."""
+    ctx = _STABILITY_BATCH_CTX
+    channel, center_hz = point
+    try:
+        result = analytics.band_stim_stability(
+            ctx["pooled"], channel, center_hz, stim_series=ctx["stim_series"],
+            band_width_hz=ctx["band_width_hz"], strategy=ctx["label_strategy"],
+            low_pct=ctx["low_pct"], high_pct=ctx["high_pct"]) or {}
+        return point, result, None
+    except Exception as exc:                                     # noqa: BLE001
+        return point, None, f"band validation raised {exc!r}"
+
+
+def _stability_worker_count(n_points, requested=None):
+    """How many processes to use. Defaults to this machine's usable core count, never more than
+    there are points to compute.
+
+    `sched_getaffinity` rather than `cpu_count`: it reports the cores this process is actually
+    allowed to run on, which is what a container's CPU limit constrains. `cpu_count` would report
+    the host's cores and oversubscribe.
+    """
+    if requested is not None:
+        return max(1, min(int(requested), max(1, n_points)))
+    try:
+        n = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):                            # not Linux, or not permitted
+        n = os.cpu_count() or 1
+    return max(1, min(n, max(1, n_points)))
+
+
+def _r_is_already_initialised():
+    """True once rpy2 has started this process's embedded R. Forking after that point is unsafe."""
+    import sys as _sys
+    return any(m.startswith("rpy2.robjects") for m in _sys.modules)
+
+
+def stability_grid_for_participant(participant_uid, points, *, band_width_hz=5.0,
+                                   request_data=None, on_point=None, workers=None):
+    """The cross-setting stability answer for MANY (channel, band centre) points at once, paying
+    the participant-level setup ONCE instead of once per point, across as many processes as this
+    machine has cores.
+
+    `points` is any iterable of (channel, centre_hz) pairs; duplicates are collapsed. Returns
+    `{(channel, centre_hz): raw_stim_result}` — the SAME untranslated dict
+    `raw_stability_result_for_point` returns for one point, so a caller can hand any value here to
+    `ClosedLoopDeployment.stability.finding_from_stability_result` exactly as it does today. The
+    honest four-valued translation still happens on the Closed-Loop side and never here.
+
+    WHY THIS EXISTS, measured on RCS08 over the real 132-point grid (six sensing contact pairs by
+    22 centres): `raw_stability_result_for_point` calls `_validate_band_core`, which resolves the
+    participant, pain reports, spectrum matrix, pooled detail and chronic stim series before
+    fitting anything — 1.451 s that depends on neither the channel nor the centre, paid 132 times.
+    It also runs `analytics.band_mixedmodel_inference`, a further 0.189 s per point whose result
+    this path discards. Hoisting the first and skipping the second took the grid from a recorded
+    326.7 s to 78.3 s; running it across cores took it to 9.8 s.
+
+    `workers` defaults to this machine's usable core count. Pass 1 to force the serial path.
+
+    `on_point`, when given, is called as `on_point(key, result, done, total)` as results arrive, so
+    a background or scheduled caller can report progress or persist partial work. It is advisory: an
+    exception raised inside it never breaks the batch.
+
+    FORKING IS ONLY SAFE FROM A PROCESS THAT HAS NOT STARTED R. rpy2 holds a single embedded R,
+    which is not fork-safe once initialised. This works because `analytics.band_stim_stability`
+    imports pymer4/rpy2 INSIDE the function rather than at module scope, so a caller that has only
+    built the setup has no R yet and each child starts its own. `_r_is_already_initialised` checks
+    that at run time and falls back to the serial path rather than forking into undefined behaviour
+    — which is why the background and scheduled entry points must run in their own process rather
+    than inside a gunicorn worker that has already answered a single-candidate request.
+    """
+    req = dict(request_data or {})
+    req["ParticipantId"] = participant_uid
+
+    wanted, seen = [], set()
+    for ch, c in (points or []):
+        try:
+            key = (str(ch), float(c))
+        except (TypeError, ValueError):
+            continue
+        if key not in seen:
+            seen.add(key)
+            wanted.append(key)
+
+    setup = _band_validation_setup(req)
+    if not setup.get("available"):
+        # One setup failure is every point's failure, and each point says so in its own entry
+        # rather than the batch returning nothing — a caller must be able to tell "not computed"
+        # from "computed and came back empty" (decision 9's three-state discipline).
+        reason = setup.get("reason") or "the band validation setup returned nothing usable"
+        return {k: {"available": False, "reason": reason} for k in wanted}
+    if not wanted:
+        return {}
+
+    ctx = {"pooled": setup["pooled"], "stim_series": setup["stim_series"],
+           "band_width_hz": float(band_width_hz), "label_strategy": setup["label_strategy"],
+           "low_pct": setup["low_pct"], "high_pct": setup["high_pct"]}
+
+    n_workers = _stability_worker_count(len(wanted), workers)
+    parallel = n_workers > 1 and not _r_is_already_initialised()
+
+    out = {}
+    consecutive_failures = 0
+    stopped_early = None
+
+    def _record(point, result, raised):
+        """THE BATCH FAILURE POLICY, in one place for both the serial and the parallel path.
+
+        `band_stim_stability` already RETURNS {"available": False, "reason": ...} for its ordinary
+        "cannot answer" cases — no stim series, only one era, pymer4/rpy2 not importable. Those are
+        answers and are stored as answers. Reaching `raised` instead means something unexpected came
+        out of the embedded R process.
+
+        The policy is carry on, but stop after `STABILITY_BATCH_MAX_CONSECUTIVE_FAILURES` in a row.
+        One genuinely bad band then costs only itself, which matches the never-crash contract the
+        rest of this module keeps; but a wedged R process — where every remaining point would fail
+        slowly and answer nothing — costs three failures rather than 131. Consecutive is the right
+        test precisely because scattered failures look like bad bands and a run of them looks like a
+        broken process.
+
+        A point that is never reached simply has NO ENTRY, which stays distinguishable from an
+        entry saying `available: False`. The Closed-Loop panel renders those two differently on
+        purpose: "not computed" is not the same claim as "computed, and the answer is no".
+        """
+        nonlocal consecutive_failures, stopped_early
+        if raised is None:
+            out[point] = result
+            consecutive_failures = 0
+        else:
+            out[point] = {"available": False, "reason": raised}
+            consecutive_failures += 1
+            if consecutive_failures >= STABILITY_BATCH_MAX_CONSECUTIVE_FAILURES:
+                stopped_early = (f"stopped after {consecutive_failures} consecutive failures, "
+                                 f"which indicates the fitting process rather than these bands; "
+                                 f"{len(wanted) - len(out)} point(s) were not attempted")
+        if on_point is not None:
+            try:
+                on_point(point, out[point], len(out), len(wanted))
+            except Exception:                                    # noqa: BLE001
+                pass                                             # progress reporting is advisory
+        return stopped_early is None
+
+    if parallel:
+        import multiprocessing as _mp
+        global _STABILITY_BATCH_CTX
+        _STABILITY_BATCH_CTX = ctx
+        try:
+            try:                                                 # a forked child must not inherit
+                from django.db import connections as _conns      # a live database connection
+                _conns.close_all()
+            except Exception:                                    # noqa: BLE001
+                pass
+            pool = _mp.get_context("fork").Pool(n_workers)
+            terminated = False
+            try:
+                # imap_unordered so `on_point` sees results as they finish rather than in a batch
+                # at the end, and so the failure policy can stop the run mid-flight.
+                for point, result, raised in pool.imap_unordered(
+                        _stability_batch_worker, wanted, chunksize=1):
+                    if not _record(point, result, raised):
+                        pool.terminate()
+                        terminated = True
+                        break
+            except BaseException:
+                pool.terminate()
+                terminated = True
+                raise
+            finally:
+                if not terminated:
+                    pool.close()
+                pool.join()
+        finally:
+            _STABILITY_BATCH_CTX = None
+    else:
+        for point in wanted:
+            _, result, raised = _stability_batch_worker_serial(point, ctx)
+            if not _record(point, result, raised):
+                break
+
+    if stopped_early:
+        logging.getLogger(__name__).warning(
+            "stability grid for %s %s", participant_uid, stopped_early)
+    return out
+
+
+def _stability_batch_worker_serial(point, ctx):
+    """The serial twin of `_stability_batch_worker`, taking its context as an argument rather than
+    through a fork-inherited global. Same call, same failure shape — kept as one function body's
+    worth of duplication rather than a second implementation of the fit."""
+    channel, center_hz = point
+    try:
+        result = analytics.band_stim_stability(
+            ctx["pooled"], channel, center_hz, stim_series=ctx["stim_series"],
+            band_width_hz=ctx["band_width_hz"], strategy=ctx["label_strategy"],
+            low_pct=ctx["low_pct"], high_pct=ctx["high_pct"]) or {}
+        return point, result, None
+    except Exception as exc:                                     # noqa: BLE001
+        return point, None, f"band validation raised {exc!r}"
 
 
 def validate_band_for_participant(request_data):

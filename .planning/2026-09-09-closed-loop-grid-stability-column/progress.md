@@ -42,7 +42,12 @@ that computes it.
 | Old label and old note gone from the bundle | Absent everywhere | Both absent from every chunk | Pass |
 | `cl-grid` anchor reaches both chunks | Present in Biomarkers and Closed-Loop chunks | Present in both | Pass |
 | Button clicked in a real browser | Would confirm the navigation and the scroll | Not done — no signed-in session, credentials are a hard limit | Not confirmed |
-| Flag-off vs flag-on grid cost, re-measured | Phase 1's first task | Not started | Not started |
+| Flag-off vs flag-on grid cost, re-measured | Phase 1's first task | Superseded: measured the per-point split instead (findings §8-§9) | Pass |
+| pymer4 vs lme4 split, 5 rounds | Unknown share | 60.2% lme4 (0.216 s), 40% pymer4 (0.143 s), marshalling only 0.002 s | Pass |
+| 132-point grid, serial, 2 rounds | ~86 s predicted | 78.27 s / 78.25 s | Pass |
+| 132-point grid, 16 workers, 2 rounds | Faster | 9.75 s / 9.81 s (8.0x) | Pass |
+| Parallel answers equal serial answers | Identical | Same lrt_p checksum 52.212424853 across all 4 runs, 132/132 points | Pass |
+| R not initialised in parent before fork | Must be false | `r_loaded_in_parent_before_run: false` every run | Pass |
 
 ### Errors
 | Error | Attempt | Resolution |
@@ -51,6 +56,26 @@ that computes it.
 | Ran the container suite through `\| tail -5`, which discarded the `PASS=`/`FAIL=` line the run existed to produce. | 1 | Re-ran filtering for the count line instead of the tail. Lesson: filter for the line you need, do not trim to the end of the output. |
 | Wrote a code comment claiming a grid on screen is always a grid in the store. | 1 | Checked the store call site: it is conditional on `sweep_sig is not None`. Softened the comment to say the ordinary case rather than promising a guarantee the code does not make. |
 
+### Session 2 additions — the fast path is built
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| Direct glmer == pymer4, all 132 points | 0 differences | 5,148 fields compared, 0 differing, 0 dropped/added | Pass |
+| Direct glmer speed, alternating rounds | Faster | 77.80/77.03 s -> 36.97/34.85 s (2.15x) | Pass |
+| Auto worker count from cores, not hardcoded | Detected | `auto_workers: 16` via `sched_getaffinity` | Pass |
+| Parallel == serial through the public function | 0 differences | 5,148 fields compared, 0 differing, 0 missing | Pass |
+| `on_point` progress callback fires per point | 132 | 132 | Pass |
+| Failure policy stops after 3 consecutive raises | 3 attempted | 3 attempted, 129 never attempted, all reasons recorded | Pass |
+| Fork guard falls back when R already started | Falls back | 2nd parallel run 35.84 s vs 1st 8.23 s — guard fired | Pass |
+| Container suite | 590/0 | 590 passed, 0 failed (after fixing the guard test) | Pass |
+| Host suite | Baseline + known 1 | 992 passed, 42 skipped, 1 failed (known, decisions 84/85) | Pass |
+
+### Errors (session 2)
+| Error | Attempt | Resolution |
+|-------|---------|------------|
+| Broke `test_run_for_participant_and_validate_band_core_both_use_the_shared_forecast_helper` (590 -> 589/1). | 1 | Real regression caught by a guard test doing its job: extracting `_band_validation_setup` moved the MatchDirection parse out of `_validate_band_core`. Fixed by pointing the guard at the function that now owns the parse AND adding a third assertion that `_validate_band_core` really delegates to it — strengthened, not weakened. |
+| Filtered the suite output through `grep`/`tail` three separate times and discarded the very line I was running the command to get (PASS=/FAIL=, the failing test name, the pytest summary). | 3 | Stopped filtering at collection time: write the full output to a file, then grep the file. Logged as a repeated mistake rather than three separate ones — the pattern is the lesson. |
+
 ### Next session starts here
-Phase 1, first task: re-measure the flag-off and flag-on full grid build on RCS08 through the
-bridge, in alternating rounds. Do not carry decision 68's 5.85 s / 326.7 s pair forward as fact.
+Phase 4: run the grid in the background after the page's own grid lands, and store the result with
+`writer=` and `provenance=`. **It must run in its own process** — a process that has already fitted
+anything cannot fork, and the guard will silently fall back to serial (findings §13c).
