@@ -1144,14 +1144,18 @@ function Biomarkers() {
                 availableMetrics={DEFAULT_METRIC_OPTIONS}
                 pageMetric={metric}
                 metricLabel={(DEFAULT_METRIC_OPTIONS.find((m) => m.key === metric) || {}).label}
-                onCommitBand={() => {
-                  // Track D (the Closed-Loop matrix export) had not landed when this track was
-                  // built; the button that reaches here is disabled until that field exists (see
-                  // BiomarkerHeatmapGrids's own note), so this is a placeholder wired for when it
-                  // does rather than a reachable path today.
-                  markClosedLoopFamilyStale(participant_uid,
-                    "the calibrated grid on the Biomarker Exploration page changed since this "
-                    + "result was computed");
+                onOpenInClosedLoop={() => {
+                  // Take the reader to the grid on the page that can act on it. Nothing is
+                  // exported and nothing is marked out of date here: browsing changes no stored
+                  // value, and Closed-Loop Deployment reads the calibrated grid straight out of
+                  // the shared store on its own (decision 67). Marking the deployment results
+                  // stale is reserved for actually COMMITTING a band, which the older routine's
+                  // own `onBandCommitted` below still does.
+                  //
+                  // The `#cl-grid` fragment names the anchor that page already puts on the grid
+                  // panel's own Grid item, so the reader lands on the grid rather than at the top
+                  // of a long page.
+                  navigate(`/reports/closed-loop/${participant_uid}#cl-grid`);
                 }} />
             </Grid>
 

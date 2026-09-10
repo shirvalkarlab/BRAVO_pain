@@ -41,7 +41,7 @@
  * fold.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { Card, Chip, Grid } from "@mui/material";
 
@@ -407,6 +407,27 @@ function ClosedLoopSim() {
   // gating this on useDeploymentReport's own enabled condition would make it unreachable from the
   // one screen that needs it (choosing a first candidate).
   const bandSweepGrid = useBandSweepGrid({ participantUid: participant_uid });
+
+  // ARRIVING FROM THE BIOMARKERS PAGE'S "Open this grid in Closed-Loop" BUTTON. That button
+  // navigates here with the fragment `#cl-grid`, naming the anchor already on the grid panel's own
+  // Grid item below. React Router does not scroll to a fragment on its own, and this page is long
+  // enough that landing at the top would leave a reader hunting for the panel they asked for.
+  //
+  // WAITS FOR THE GRID'S OWN FETCH TO SETTLE rather than scrolling on mount: the panel renders
+  // immediately but is only a few lines tall while it is still loading, so a scroll fired on mount
+  // lands at a position that stops being the panel's position a moment later. `scrolledToHash`
+  // makes it fire once per arrival, so a later recompute (which flips `loading` again) does not
+  // yank a reader's scroll position back.
+  const location = useLocation();
+  const scrolledToHash = useRef(null);
+  useEffect(() => {
+    const hash = (location.hash || "").replace(/^#/, "");
+    if (!hash || bandSweepGrid.loading || scrolledToHash.current === hash) return;
+    const el = document.getElementById(hash);
+    if (!el) return;
+    scrolledToHash.current = hash;
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [location.hash, bandSweepGrid.loading]);
 
   /**
    * THE ONE RECOMPUTE CONTROL FOR THIS PAGE, REPORTING ON BOTH PAGE-LEVEL REQUESTS AT ONCE.

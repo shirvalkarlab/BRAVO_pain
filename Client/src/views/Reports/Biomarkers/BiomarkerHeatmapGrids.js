@@ -784,7 +784,7 @@ function settingsSubset(params, keys) {
 }
 
 function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics, pageMetric,
-  metricLabel, onCommitBand }) {
+  metricLabel, onOpenInClosedLoop }) {
   const options = useMemo(() => (
     (availableMetrics && availableMetrics.length ? availableMetrics : [])
   ), [availableMetrics]);
@@ -954,12 +954,26 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
     fetchCell(channel, center, seconds).then((cell) => setPinnedCellData(cell));
   };
 
-  // Track D (`adr_2026-09-08_biomarkers_closedloop_matrix_export.md`) is what will let the whole
-  // grid be exported to Closed-Loop Deployment; it had not landed as of this track's own work, so
-  // this checks for the field it will add rather than assuming it exists, and stays disabled
-  // with an explanation until it does -- a follow-up wires the button live once Track D ships.
-  const exportReady = !!(corrResult && (corrResult.closed_loop_export_key
-    || corrResult.exported_to_closed_loop || (corrSw && corrSw.closed_loop_export_ready)));
+  // THERE IS NO EXPORT STEP, AND THIS BUTTON NO LONGER WAITS FOR ONE. When this section was first
+  // built, Track D had not landed and this control was left disabled, watching for a
+  // "the grid has been exported" field that Track D was expected to add. Track D then landed and
+  // decided the opposite (decision 67): the calibrated grid was ALREADY the whole content of the
+  // stored `biomarker_band_sweep` entry, so no new field was needed and nothing pushes anything
+  // anywhere. Closed-Loop Deployment simply READS that stored entry as a registered consumer
+  // (`ClosedLoopDeployment.adapter.band_sweep_grid_for_closed_loop`) and browses it in its own
+  // `BandSweepGridPanel`. The three fields the old check watched for are written by nothing in
+  // this repository, so the button could never have lit up and the note under it told a reader to
+  // wait for something that had already shipped in a different shape.
+  //
+  // What replaces it is the only thing left that a reader on THIS page actually needs: a way to
+  // get to the grid on the page that can act on it. Enabled whenever there is a grid on screen,
+  // which in the ordinary case is also a grid in the store, since `band_time_sweep_for_participant`
+  // writes its own response back on the way out. It is NOT a guarantee -- that write is skipped
+  // when no signature could be built for the request -- and this button deliberately does not try
+  // to prove otherwise from here: the Closed-Loop panel already states its own empty case ("no
+  // calibrated grid is available for this participant yet") rather than showing a blank table, so
+  // the rare miss lands on an explanation instead of on nothing.
+  const gridReady = !!corrSw;
 
   // `heatmapHeight` is the SAME function `PlotlyHeatmap` calls for its own `height` -- the panels
   // must match the heat maps' height exactly, since they sit in the same Grid row.
@@ -995,17 +1009,17 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
             </MDBox>
           ) : null}
           <MDBox sx={{ ml: "auto" }}>
-            <MDButton variant="outlined" color="dark" size="small" disabled={!exportReady}
-              onClick={() => onCommitBand && onCommitBand({ channel, sweep: corrSw })}>
-              {"Export full grid to Closed-Loop…"}
+            <MDButton variant="outlined" color="dark" size="small" disabled={!gridReady}
+              onClick={() => onOpenInClosedLoop && onOpenInClosedLoop({ channel, sweep: corrSw })}>
+              {"Open this grid in Closed-Loop →"}
             </MDButton>
-            {!exportReady ? (
-              <MDTypography variant="caption" color="dark" fontStyle="italic"
-                sx={{ fontSize: 10, display: "block", mt: 0.25, maxWidth: 220 }}>
-                {"Waiting on the Closed-Loop export field from the other track building it; this "
-                 + "button will light up once that lands."}
-              </MDTypography>
-            ) : null}
+            <MDTypography variant="caption" color="dark" fontStyle="italic"
+              sx={{ fontSize: 10, display: "block", mt: 0.25, maxWidth: 240 }}>
+              {gridReady
+                ? "Closed-Loop Deployment reads this same grid. Opens it there, where any point "
+                  + "can be picked as a candidate band."
+                : "Available once the grid has been computed for a sensing contact pair."}
+            </MDTypography>
           </MDBox>
         </MDBox>
 
