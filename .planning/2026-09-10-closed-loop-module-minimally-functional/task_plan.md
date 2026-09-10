@@ -15,13 +15,14 @@ The line I do not cross alone: anything that changes what a clinician reads as a
 PI's call. Adding a reported caveat is not that; changing `verdict` or `licensed` is.
 
 ## Next Step
-Open item 10 — cross the device-rules screen with a candidate setting, the last of the PI's three.
-Items 26 and 7 are done, in the order he asked for.
+All three of the PI's decisions are answered: item 26 built, item 7 built, item 10 closed as
+unnecessary. Nothing is queued. The plan's own goal — every check either reachable from production
+or gone — was met at Phase 4.
 
-Superseded next step, kept for the trail: Open item 7 — sweep every pain score, precomputed off the request path. Item 26 is done; items 10
-and 7 remain, and the PI asked for 26 first, then 7.
+Superseded next step, kept for the trail: Open item 10 — cross the device-rules screen with a candidate setting, the last of the PI's three.
+Items 26 and 7 are done, in the order he asked for.
 ## Current Phase
-Phase 6 — open items 10 and 7
+Phase 6b — done; nothing queued
 
 ## Phases
 
@@ -179,13 +180,19 @@ Phase 6 — open items 10 and 7
       feature off and really started jobs for a made-up participant on the container runner,
       leaving markers in the live cache. Cleared; the test now switches the feature off.
 
-### Phase 6b: Open item 10
-**Status:** pending
+### Phase 6b: Open item 10 — closed as unnecessary, no code
+**Status:** complete
 
-- [ ] Cross the device-rules screen with a candidate setting, so the real 51-rule screen can run.
-      Decision 67 established the screen is not meaningful at a (contact, band centre) grain; this
-      makes it live-computed rather than pre-computed, which supersedes the ADR's own performance
-      argument for pre-computing it.
+- [x] **The PI closed it rather than choosing between the two options offered**, and gave a
+      boundary as the reason: the Biomarkers module does not deal in what stimulation does to a
+      biomarker. That page exists to find which frequency bands track pain; whether a band can be
+      programmed, and what the current does to it, belong to Closed-Loop Deployment and Stim
+      Optimizer, which already hold the 51 device rules and the dose-response work.
+- [x] The neutral sentence Track D shipped on every row is therefore the FINAL answer, not a
+      placeholder waiting on this decision.
+- [x] Checked before writing it down, rather than assumed: Biomarkers imports nothing from the
+      device-rule file, and its one mention of it is a comment about a frequency-range check, which
+      is a frequency question and not a stimulation one. Nothing had to be removed.
 
 ### Phase 7: Prove and land
 **Status:** pending

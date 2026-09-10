@@ -115,3 +115,19 @@ without switching the feature off; on the container runner, whose store points a
 root, it went all the way through and really started background jobs for a participant called "u",
 leaving two marker files in the live cache directory. That is decision 96's own finding reproduced
 one launcher later. Markers cleared, test fixed, re-run leaves none.
+
+### Phase 6b — open item 10, closed as unnecessary
+No code changed. The PI closed the item rather than choosing between the two options put to him,
+and the reason he gave is a boundary worth more than the item: **the Biomarkers module does not
+deal in what stimulation does to a biomarker.** That page finds which frequency bands track pain;
+whether a band can be programmed, and what happens to it as the current changes, belong to the two
+modules that already hold the device rules and the dose-response work. Putting either into
+Biomarkers would place one judgment in two places — the failure this project already paid for once
+with two copies of the cache.
+
+Verified before recording it, rather than assumed: Biomarkers imports nothing from the device-rule
+file, and its single mention of that file is a comment comparing a frequency-range check, which
+asks whether a band fits the device's sensing range. That is a frequency question, not a
+stimulation one, so no existing code conflicted with the boundary and nothing had to be removed.
+
+**All three of the PI's decisions are now answered.** Two built, one closed.
