@@ -179,6 +179,34 @@ established.
 currents correlate at 1.0 and the longest single-side stretch is zero steps. **That figure must be
 replaced rather than re-rendered**, because no version of it can support a claim about one side.
 
+> **CORRECTION, 2026-09-10.** The paragraph above stands as written history and **its numbers could
+> not be reproduced**, so nothing in it should be cited without re-measuring first.
+>
+> **There is no such figure in this platform.** Searched on 2026-09-10: no page renders a 110 Hz
+> heat map, and the only 110 Hz artifact that exists is the pre-registration itself, a file in the
+> Closed-Loop Deployment module (`PREREG_RCS08_110Hz.json`). No page reads that file and no code
+> imports the reader written for it, so it is a written commitment and nothing else. It may be that
+> the figure only ever existed in a document outside this repository.
+>
+> **What the device's own history says about 2025-08-21, on the left 1-3 sensing pair.** The left
+> stimulator was at **0.0 mA** — not "moving in lockstep with the right", but off. A figure from
+> that day cannot show a left-side stimulation effect because there was no left-side stimulation.
+> Cross-checked two ways that agree: matching each recording to the setting in force at its start,
+> and the project's own `exposure_epochs`.
+>
+> **The "two of three days" count could not be reproduced either.** Counting days with a recording
+> on the left 1-3 pair while the rate was 110 Hz gives **43 days**, of which 6 have the right
+> stimulator at exactly 0.0 mA, and one of those six is 2025-08-21 where the left was also at zero.
+> That leaves **five days with genuinely left-only stimulation — 6 Sep, 9 Sep, 14 Sep, 16 Sep and
+> 6 Oct 2025 — each with exactly one recording and one current** (2.5 mA once, 4.0 mA four times).
+> **There is no amplitude ladder on any of them**, so there is nothing to plot power against, and
+> the promised replacement built from "the same 15 steps" cannot be built from these data.
+>
+> **What is NOT established by this correction**: which definition of "day" and "step" the original
+> paragraph used, and whether the p = 0.064 result above rests on data this correction has not
+> found. Those are open. The claim being withdrawn is only that the paragraph's counts can be
+> reproduced as stated.
+
 ### Two windows that fail for opposite reasons
 
 Measured across all 18 bands of the best 55 Hz configuration. Over the full record of eight
