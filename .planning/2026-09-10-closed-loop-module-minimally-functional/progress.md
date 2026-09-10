@@ -51,3 +51,11 @@ these functions as deliberately built ahead of their wiring.
 | The page does not regress | ~8 s warm | 11.2 s and 8.8 s warm; 32.5 s on the cold build-and-store | Pass |
 | Container suite | 608 | **608 passed, 0 failed** | Pass |
 | Host suite | 1010 + 9 new | **1019 passed**, 42 skipped, 1 failed (known) | Pass |
+
+### Phase 3 — reliable_change wired as a warning
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| Reports a floor per pain score | Populates when data allow | **All six**: nrs 0.93 / 78 epochs, mpq_sum 4.84, vas 13.39, back_vas 13.42, left_leg_vas 14.38, relief 17.29 | Pass |
+| Blocks nothing | All other analyses present, verdict unmoved | 29 keys, all 8 others present, `blocked`/`licensed` false unchanged | Pass |
+| First draft passed the wrong frame | — | `eps` has no rating columns; every item said "no ratings matched" and would have forever | Fixed |
+| Container / host | 608 / 1019 | **608 passed 0 failed / 1019 passed**, 1 known | Pass |

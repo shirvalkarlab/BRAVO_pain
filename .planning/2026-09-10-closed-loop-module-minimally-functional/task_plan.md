@@ -15,7 +15,12 @@ The line I do not cross alone: anything that changes what a clinician reads as a
 PI's call. Adding a reported caveat is not that; changing `verdict` or `licensed` is.
 
 ## Next Step
-Phase 3: `reliable_change`. Decision 75 measured that RCS08 has no epoch with two or more ratings
+Phase 4 needs the PI's call: `clinic_steps.within_visit_band_scores` is a thin orchestrator whose
+ingredients all exist in wired code, but whose grouping (visit as both era and cluster, across
+within-visit amplitude steps) is reproduced by neither wired path. Wire, delete, or leave. Then the
+PI's three other decisions — open items 26, 10 and 7.
+
+Superseded next step, kept for the trail: Phase 3, `reliable_change`. Decision 75 measured that RCS08 has no epoch with two or more ratings
 under one unchanged setting, so both functions answer "not assessed" today — decide whether to wire
 them as a caveat that populates when the data arrive, or say plainly in the module that they wait
 on data rather than on code.
@@ -90,12 +95,26 @@ Phase 2 — the consistency check chain
       skipped, 1 failed (the known environment mismatch).
 
 ### Phase 3: reliable_change — 2 functions
-**Status:** pending
+**Status:** complete
 
-- [ ] `reliable_change_verdict` and `pooled_same_condition_sd`. Decision 75 built them and measured
-      that RCS08 has no epoch with two or more ratings, so every item returns "not assessed" today.
-- [ ] Decide on that evidence: wire it as a caveat that will populate when the data arrive, or
-      leave it unwired and say so in the module rather than in a decision row nobody reads.
+- [x] The PI's instruction: wire it as a WARNING, never a blocker; let it populate when the data
+      arrive; do not let it hold up any other analysis.
+- [x] Wired as `reliable_change` on the report, carrying `gates_nothing: True`, a per-item noise
+      floor, the Farrar population bar alongside it, and a plain sentence saying a change smaller
+      than the floor is not "no change".
+- [x] **A defect in the first draft, caught by reading the live result rather than the shape.** It
+      passed `eps`, the settings-epoch frame, which carries no pain ratings at all — so every item
+      reported "no ratings were matched to any epoch". That looks exactly like the expected "not
+      enough history yet" and **would have stayed that way forever, including after the ratings this
+      check waits for arrived**, defeating the whole instruction. Caught by noticing every item said
+      the same thing when decision 75 had measured that one of them did have ratings. The right
+      frame is `dm`, `attach_pros`'s output, one row per epoch with a mean, an SD and a count per
+      item.
+- [x] **It populated itself, and this supersedes decision 75's measurement.** All six pain scores
+      now have a floor where on 2026-09-08 none did: nrs 0.93 points over 78 epochs, mpq_sum 4.84,
+      vas 13.39, back_vas 13.42 over 62, left_leg_vas 14.38 over 62, relief 17.29. The data grew.
+- [x] Proven not to block: the report still returns `available: true` with all eight other analyses
+      present and the verdict unmoved at `blocked`/`licensed` false.
 
 ### Phase 4: clinic_steps.within_visit_band_scores — 1 function
 **Status:** pending

@@ -1938,6 +1938,83 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                               f"be assembled: {_exc!r}"),
         }
 
+    # ---------------------------------------------------------------------------------------------
+    # HOW BIG A PAIN CHANGE HAS TO BE, FOR THIS PARTICIPANT, BEFORE IT CAN BE TOLD FROM THEIR OWN
+    # NOISE (decision 75). A WARNING, NEVER A BLOCKER.
+    #
+    # Farrar's ~2 points on the 0-10 scale is a GROUP number: the smallest average change patients
+    # themselves called "much improved". It says nothing about how noisy one person's own ratings
+    # are day to day, and this participant's own floor could sit above OR below it. Only their own
+    # repeated ratings under an unchanged setting can say which, which is what this estimates.
+    #
+    # IT GATES NOTHING AND MUST NOT HOLD ANYTHING UP. `gates_nothing` says so in the payload, no
+    # verdict reads it, and when the floor cannot be estimated the block says why and every other
+    # analysis on this page carries on untouched. Decision 75 measured that RCS08 has no epoch with
+    # two or more ratings under one unchanged setting, so "not assessed" is the expected answer
+    # today -- **this waits on visits, not on code, and it fills itself in when the ratings arrive.**
+    #
+    # A change SMALLER than the floor is not "no change". It is a change this participant's own
+    # noise could produce with nothing therapeutic happening, so it must not on its own be read as
+    # evidence the therapy worked.
+    try:
+        from . import reliable_change as _rc
+        from StimOptimizer.adapter import PRO_ITEMS as _PRO_ITEMS
+        # `dm`, NOT `eps`. `evidence_inputs_cached` returns both, and only one of them carries pain
+        # ratings: `eps` is the settings-epoch frame (amp, cathode, rate, pulse width, t_start) with
+        # no rating columns at all, while `dm` is `attach_pros`'s output, one row per epoch with a
+        # mean, an SD and a count per pain item. A first draft of this block passed `eps`, which
+        # made every item report "no ratings were matched to any epoch" -- an answer that looks like
+        # the expected "not enough history yet" and would have stayed that way FOREVER, including
+        # after the ratings this check waits for arrived. Caught by noticing that every item said
+        # the same thing when decision 75 had measured that one of them did have ratings.
+        _rc_items, _rc_assessed = {}, 0
+        for _item in _PRO_ITEMS:
+            _sd = _rc.pooled_same_condition_sd(dm, _item)
+            _entry = {"pooled_sd": _sd.get("pooled_sd"), "df": _sd.get("df"),
+                      "n_epochs": _sd.get("n_epochs"), "reason": _sd.get("reason"),
+                      "verdict": None}
+            # The verdict function is applied to a REAL pair when one exists: the highest and lowest
+            # epoch means this participant has actually shown under unchanged settings. That asks
+            # whether the largest pain difference in their own record clears their own noise floor,
+            # which is the question the floor exists to answer.
+            if _sd.get("pooled_sd") == _sd.get("pooled_sd") and dm is not None and len(dm):
+                try:
+                    _col = dm[_item].astype(float).dropna() if _item in dm.columns else None
+                    if _col is not None and len(_col) >= 2:
+                        _entry["verdict"] = _rc.reliable_change_verdict(
+                            float(_col.max()), float(_col.min()), _sd)
+                        _entry["pair"] = ("the highest and lowest epoch means this participant has "
+                                          "shown under unchanged settings")
+                        _rc_assessed += 1
+                except Exception:                      # noqa: BLE001 - one item never breaks the rest
+                    _log.warning("closed-loop report: the reliable-change verdict raised for %s "
+                                 "on %s", getattr(participant, "uid", participant), _item,
+                                 exc_info=True)
+            _rc_items[_item] = _entry
+        out["reliable_change"] = {
+            "gates_nothing": True,
+            "items": _rc_items,
+            "n_items_assessed": _rc_assessed,
+            "population_bar": {"points": _rc.FARRAR_MCID_POINTS,
+                               "fraction": _rc.FARRAR_MCID_FRACTION,
+                               "source": "Farrar et al. 2001, a group-derived benchmark"},
+            "what_it_means": (
+                "how large a pain change has to be, for this participant, before it can be told "
+                "from their own day-to-day noise. Reported alongside the population benchmark, "
+                "never in place of it. A smaller change is not no change."),
+            "note": (None if _rc_assessed else
+                     "not assessed for any pain score yet: this participant has no run of repeated "
+                     "ratings under one unchanged stimulation setting long enough to estimate their "
+                     "own noise. This waits on visits rather than on code, and fills in on its own "
+                     "once those ratings exist. Nothing on this page is held up by it."),
+        }
+    except Exception as _exc:                          # never let this take down the whole report
+        _log.warning("closed-loop report: the reliable-change floor could not be estimated for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
+        out["reliable_change"] = {
+            "gates_nothing": True, "items": {}, "n_items_assessed": 0,
+            "note": f"the reliable-change floor could not be estimated: {_exc!r}"}
+
     # THE POOLED WITHIN-VISIT TABLE, written only from a build that holds every run. This is what
     # lets the consistency check below answer the same way on every request instead of depending on
     # whether this particular one happened to rebuild the comparison in full.
