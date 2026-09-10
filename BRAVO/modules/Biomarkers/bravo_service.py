@@ -14,11 +14,13 @@ so `Database.loadSourceFile(...)` output is fed straight into run_biomarker.
 
 import os
 import re
+import sys
 import json
 import math
 import pickle
 import logging
 import threading
+import subprocess
 import time as _time
 import contextlib as _contextlib
 import contextvars as _contextvars
@@ -5161,30 +5163,51 @@ STABILITY_GRID_KIND = "biomarker_band_stability_grid"
 
 #: Bump when anything about how a point's answer is computed changes, so an entry built under the
 #: old rule is never served as if it carried the new one.
-STABILITY_GRID_RULE_VERSION = "v1_stability_grid"
+STABILITY_GRID_RULE_VERSION = "v2_stability_grid_sweep_key"
 
 
-def _stability_grid_signature(participant_uid, pro_df, label_metric, settings, *,
-                              band_width_hz, points):
-    """`(signature, provenance)` for the stability grid, or `(None, None)` when an input cannot be
-    named.
+def _stability_grid_sig_tuple(sweep_key, *, band_width_hz, points):
+    """The stability grid's key, built on the band-by-length sweep's OWN key string.
 
-    Built ON TOP of `_band_sweep_signature` rather than beside it: the stability grid derives from
-    exactly the same two raw inputs the sweep does (the tile entry and the pain-report snapshot),
-    under the same settings, so reusing that function's own key as a component means the two cannot
-    drift apart about what counts as a change. Its provenance is reused for the same reason — the
-    chain names the tile entry and the report snapshot, which is what this is really derived from.
+    `sweep_key` is `CacheStore.store.signature_key` of the signature the sweep actually keyed itself
+    on -- not a signature re-derived from the response. THAT DISTINCTION IS THE WHOLE POINT, and it
+    is here because the first version of this got it wrong in a way that was invisible: the
+    computation rebuilt the sweep's key out of the response's echoed `settings_applied` block, which
+    carries a DIFFERENT set of fields (it has the match tolerance and the pain score; it lacks the
+    match direction and the inline-stability flag) and resolves the pain score without the sweep's
+    own `SweepMetric` override. So the page looked for one key and the computation wrote another,
+    every page load started a fresh whole-machine job, none of them ever satisfied the page, and
+    nothing raised. Measured on RCS08: the page asked for `dc6cec1b...` while the run it had just
+    started stored `c02e9aca...`.
 
-    The points and the band width are in the key because a grid computed for 22 centres is not an
-    answer for 30, and a 5 Hz band is not a 10 Hz band.
+    The points and the band width are in the key too, because a grid computed for 22 centres is not
+    an answer for 30 and a 5 Hz band is not a 10 Hz band.
     """
-    sweep_sig, sweep_prov, _tiles_sig = _band_sweep_signature(
-        participant_uid, pro_df, label_metric, settings)
+    return (STABILITY_GRID_KIND, STABILITY_GRID_RULE_VERSION, str(sweep_key),
+            float(band_width_hz), tuple(sorted((str(c), float(f)) for c, f in points)))
+
+
+def sweep_key_block(sweep_sig, sweep_prov):
+    """What the sweep response carries so that anything derived from that grid can name the exact
+    entry it came from, without re-deriving a key and getting a different one."""
     if sweep_sig is None:
-        return None, None
-    sig = (STABILITY_GRID_KIND, STABILITY_GRID_RULE_VERSION, sweep_sig,
-           float(band_width_hz), tuple(sorted((str(c), float(f)) for c, f in points)))
-    return sig, sweep_prov
+        return None
+    return {"signature_key": _cache_store.signature_key(sweep_sig),
+            "provenance": list(sweep_prov or [])}
+
+
+def stability_grid_points(sweeps):
+    """Every (sensing contact pair, band centre) point of a calibrated grid response.
+
+    Also one definition rather than three: the launcher, the stored-response path and the
+    computation all have to agree about what "the points of this grid" means, or a launch keys
+    itself to a grid it does not describe.
+    """
+    points = []
+    for channel, sw in (sweeps or {}).items():
+        for f in (sw or {}).get("center_freqs_hz") or []:
+            points.append((str(channel), float(f)))
+    return points
 
 
 def compute_and_store_stability_grid(participant_uid, *, request_data=None, workers=None,
@@ -5217,11 +5240,7 @@ def compute_and_store_stability_grid(participant_uid, *, request_data=None, work
     except Exception as exc:                                     # noqa: BLE001
         out["reason"] = f"the calibrated grid could not be built ({exc!r})"
         return out
-    sweeps = (sweep or {}).get("band_time_sweep") or {}
-    points = []
-    for channel, sw in sweeps.items():
-        for f in (sw or {}).get("center_freqs_hz") or []:
-            points.append((str(channel), float(f)))
+    points = stability_grid_points((sweep or {}).get("band_time_sweep") or {})
     if not points:
         out["reason"] = "the calibrated grid has no points for this participant"
         return out
@@ -5230,18 +5249,19 @@ def compute_and_store_stability_grid(participant_uid, *, request_data=None, work
     band_width_hz = float((sweep or {}).get("band_width_hz")
                           or analytics.BAND_TIME_SWEEP_WIDTH_HZ)
 
-    # The same settings dict the sweep keys itself on, read back off the response it just produced
-    # so the two cannot disagree about what the request asked for.
-    pro_df = _load_pros(req, models.Participant.find(uid=participant_uid))
-    pro_df, label_metric, _parts = _resolve_biomarker_metric(req, pro_df) \
-        if pro_df is not None else (None, None, None)
-    settings = dict((sweep or {}).get("settings_applied") or {})
-    sig, prov = _stability_grid_signature(participant_uid, pro_df, label_metric, settings,
-                                          band_width_hz=band_width_hz, points=points)
-    if sig is None:
+    # THE SWEEP'S OWN KEY, TAKEN FROM THE RESPONSE RATHER THAN REBUILT FROM IT. Rebuilding it is
+    # what went wrong before: the echoed settings block is not the settings block the sweep keyed
+    # itself on, so the page and this function named different keys for the same grid and the
+    # answer stored here could never satisfy the page that asked for it.
+    key_block = (sweep or {}).get("sweep_key") or {}
+    sweep_key = key_block.get("signature_key")
+    prov = list(key_block.get("provenance") or [])
+    label_metric = (sweep or {}).get("label_metric")
+    if not sweep_key:
         out["reason"] = ("an input could not be named (no tile entry key or no pain-report "
                          "snapshot key), so a stored answer could not be keyed to its inputs")
         return out
+    sig = _stability_grid_sig_tuple(sweep_key, band_width_hz=band_width_hz, points=points)
     out["store_key"] = _cache_store.product_key(STABILITY_GRID_KIND, participant_uid, sig)
 
     # THE KEY DECIDES WHETHER TO WORK, NOT THE CALLER (decision 26). A scheduled run whose inputs
@@ -5310,6 +5330,176 @@ def load_stored_stability_grid(participant_uid, *, consumer="biomarkers"):
         except (TypeError, ValueError):
             continue
     return out or None
+
+
+# -------------------------------------------------------------------------------------------------
+# THE BACKGROUND RUN, STARTED ONCE THE PAGE'S OWN GRID HAS LANDED.
+#
+# The PI's answer on how the stability column gets paid for is BOTH: computed in the background so
+# whoever opened the page is not held up, AND precomputed on a schedule so the answer is usually
+# already there before anyone opens anything. This is the first half; the scheduler runs the same
+# management command for the second.
+#
+# WHY A SEPARATE PROCESS AND NOT A THREAD. `stability_grid_for_participant` parallelises by forking,
+# and forking is only safe from a process that has not yet started rpy2's embedded R. A gunicorn
+# worker that has answered even one single-candidate band request HAS started it, so a thread inside
+# that worker would silently take the serial path -- the same answers, several times slower (8.2 s
+# against 78.3 s measured on RCS08). Starting the management command is what guarantees the fresh
+# process the fast path needs.
+# -------------------------------------------------------------------------------------------------
+
+#: Off switch that needs no deployment, the same escape hatch the store itself carries: set this
+#: False on a running server and every page stops starting background work, changing no stored value
+#: and deleting nothing.
+STABILITY_GRID_BACKGROUND = True
+
+#: How long one launch suppresses another for the SAME key. Comfortably longer than a run takes
+#: (23.6 s for 132 points on RCS08), because launching twice costs a second whole-machine job while
+#: waiting costs one page load's delay.
+STABILITY_GRID_LAUNCH_COOLDOWN_SECONDS = 600.0
+
+#: PRODUCTION-ROOT SAFETY, and the default is the safe one. A background run started while the
+#: store is pointed at a caller's own root would compute against the real database and write its
+#: answer into a temporary directory nothing reads -- and in the unit suite it would start real
+#: whole-machine jobs on every stored-response test. It DID: the container suite was found spawning
+#: `manage.py compute_stability_grid --participant u` for the bench's fake participant. This mirrors
+#: `ledger`'s own rule that it records only writes made under the production root.
+#: A test that means to exercise the launcher itself sets this True and replaces `_spawn_detached`.
+STABILITY_GRID_LAUNCH_UNDER_OVERRIDE_ROOT = False
+
+#: The ONLY request fields carried into the background run. A whitelist, never a copy of the
+#: request: these come from sliders and dropdowns and are numbers and short words, while the request
+#: as a whole can carry pain-report rows and a REDCap field map, which have no business on a command
+#: line that shows up in the process list. `ParticipantId` is passed as its own argument;
+#: `IncludeCrossSettingStability` is deliberately absent, because the background run must never take
+#: the slow inline path that flag turns on.
+#:
+#: The settings have to travel at all because they are IN the key: a run started with default
+#: settings, for a page sitting on moved sliders, would store an answer under a key the page never
+#: looks up -- so the page would find nothing, start another run, and do it again on every load.
+STABILITY_GRID_SETTING_KEYS = (
+    "SweepMetric", "LabelMetric", "LabelStrategy", "PercentileLow", "PercentileHigh",
+    "MatchToleranceMin", "AllowWindowReuse", "OutlierNMad", "OutlierScale", "MatchDirection",
+)
+
+
+def _stability_grid_launch_marker(sig):
+    """The file whose age says when a background run was last started for this exact key, or None
+    when there is nowhere to write it. It lives beside the stored entries and is named by the key,
+    so a settings change gets its own cooldown rather than inheriting another key's."""
+    d = _cache_store.kind_dir(STABILITY_GRID_KIND, root=_SHARED_CACHE_DIR_OVERRIDE)
+    if not d:
+        return None
+    return os.path.join(d, f".launched.{_cache_store.signature_key(sig)}")
+
+
+def _stability_grid_command_argv(participant_uid, request_data):
+    """The command line for the background run, or None when `manage.py` cannot be found."""
+    manage = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "manage.py")
+    if not os.path.isfile(manage):
+        return None
+    argv = [sys.executable, manage, "compute_stability_grid", "--participant", str(participant_uid)]
+    settings = {k: (request_data or {}).get(k) for k in STABILITY_GRID_SETTING_KEYS
+                if (request_data or {}).get(k) is not None}
+    if settings:
+        argv += ["--request-json", json.dumps(settings, default=str)]
+    return argv
+
+
+def _spawn_detached(argv, log_path):
+    """Start a command that outlives this request and this worker.
+
+    `start_new_session` puts it in its own process group, so a gunicorn worker being recycled or a
+    request being cancelled does not take a half-finished run down with it. Output goes to a file
+    rather than to the parent's pipes, because nothing reads those and a full pipe buffer would
+    block the child.
+    """
+    log = open(log_path, "a")
+    try:
+        subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                         start_new_session=True, close_fds=True)
+    finally:
+        log.close()                      # the child holds its own copy of the descriptor
+
+
+def launch_stability_grid_in_background(participant_uid, request_data, *, sweep_key, points,
+                                        band_width_hz):
+    """Start this participant's stability grid in its own process, unless there is no point.
+
+    NEVER RAISES AND NEVER WAITS. This runs at the very end of a page request, and a page that could
+    not start background work must still return the grid it already has. Every outcome comes back in
+    the returned dict rather than only reaching a log, so the response itself says what happened and
+    a live check needs no log file.
+
+    A launch is skipped when the answer under this exact key is already stored -- the ordinary case
+    once a participant has been looked at once -- when another launch for the same key is still
+    inside the cooldown, or when the switch is off.
+    """
+    out = {"launched": False, "reason": None, "store_key": None}
+    if not STABILITY_GRID_BACKGROUND:
+        out["reason"] = "background stability computation is switched off"
+        return out
+    if _SHARED_CACHE_DIR_OVERRIDE is not None and not STABILITY_GRID_LAUNCH_UNDER_OVERRIDE_ROOT:
+        # Checked FIRST, before the marker is written, so this answer is identical on every call --
+        # a test comparing a served response against a fresh one sees no difference here.
+        out["reason"] = ("the store is pointed at a caller's own root rather than the production "
+                         "one, so a run started here would write where nothing reads it")
+        return out
+    if not sweep_key or not points:
+        out["reason"] = "this grid has no key or no points, so a run could not be keyed to it"
+        return out
+    # A REQUEST CARRYING ITS OWN PAIN REPORTS CANNOT BE REPRODUCED BY A SEPARATE PROCESS. Those rows
+    # and that field-map override live in this request body and nowhere else, so a background run
+    # would fetch from REDCap instead, land on a different pain-report snapshot, and store its
+    # answer under a key this page never looks up -- which would then start another run on the next
+    # load, forever. The same two fields are what decision 78's held-table cache bypasses, for the
+    # same reason.
+    if (request_data or {}).get("ProcessedPRO") or (request_data or {}).get("RedcapFieldMap"):
+        out["reason"] = ("this request carries its own pain reports, which a separate process "
+                         "cannot reproduce, so its answer could not be keyed to them")
+        return out
+    try:
+        sig = _stability_grid_sig_tuple(sweep_key, band_width_hz=band_width_hz, points=points)
+        out["store_key"] = _cache_store.product_key(STABILITY_GRID_KIND, participant_uid, sig)
+
+        # THE KEY DECIDES WHETHER THERE IS ANY WORK (decision 26). Asked here, in the request,
+        # rather than left to the launched process: this is one file lookup, while letting the
+        # process work it out costs a whole fresh interpreter and its setup on every page load
+        # forever, only to conclude there was nothing to do.
+        existing = _cache_store.load(STABILITY_GRID_KIND, participant_uid, sig,
+                                     consumer="biomarkers", root=_SHARED_CACHE_DIR_OVERRIDE)
+        if isinstance(existing, dict) and existing.get("points"):
+            out["reason"] = "the answer for this key is already stored"
+            return out
+
+        # FOUR GUNICORN WORKERS MEAN FOUR INDEPENDENT MEMORIES, so the guard against a launch storm
+        # is a file rather than a set in this process. Repeated Recompute clicks, a second browser
+        # tab, and a request landing on a different worker all read the same marker.
+        marker = _stability_grid_launch_marker(sig)
+        if marker and os.path.exists(marker):
+            age = _time.time() - os.path.getmtime(marker)
+            if age < STABILITY_GRID_LAUNCH_COOLDOWN_SECONDS:
+                out["reason"] = (f"a run for this key started {age:.0f} s ago and the cooldown is "
+                                 f"{STABILITY_GRID_LAUNCH_COOLDOWN_SECONDS:.0f} s")
+                return out
+
+        argv = _stability_grid_command_argv(participant_uid, request_data)
+        if argv is None:
+            out["reason"] = "manage.py could not be found, so no command could be started"
+            return out
+        if marker:
+            # Written BEFORE the launch, so a launch that then fails still holds the storm back
+            # rather than letting every subsequent request try again immediately.
+            with open(marker, "w") as fh:
+                fh.write(str(_time.time()))
+        d = _cache_store.kind_dir(STABILITY_GRID_KIND, root=_SHARED_CACHE_DIR_OVERRIDE)
+        _spawn_detached(argv, os.path.join(d, "background_runs.log") if d else os.devnull)
+    except Exception as exc:                                     # noqa: BLE001
+        out["reason"] = f"the background run could not be started ({exc!r})"
+        return out
+    out["launched"] = True
+    return out
 
 
 def validate_band_for_participant(request_data):
@@ -7392,6 +7582,21 @@ def band_time_sweep_for_participant(request_data):
     if sweep_sig is not None:
         stored = _load_stored_sweep(participant_uid, sweep_sig)
         if stored is not None:
+            # THE GRID IS ON SCREEN, so this is one of the two moments the background stability run
+            # is started from. A served grid counts exactly as much as a freshly built one: the
+            # reader is looking at a grid either way, and the stability column is what is still
+            # missing from it.
+            stored = dict(stored)
+            # The key block is written from the LIVE signature rather than read out of the stored
+            # payload, so a response stored before this field existed still carries the right key.
+            # It is the same key either way: this response was found by that very signature.
+            stored["sweep_key"] = sweep_key_block(sweep_sig, sweep_prov)
+            stored["stability_background"] = launch_stability_grid_in_background(
+                participant_uid, request_data,
+                sweep_key=(stored["sweep_key"] or {}).get("signature_key"),
+                points=stability_grid_points(stored.get("band_time_sweep")),
+                band_width_hz=float(stored.get("band_width_hz")
+                                    or analytics.BAND_TIME_SWEEP_WIDTH_HZ))
             return stored
 
     # Through the SAME memo the cell drill-down reads, so a grid that actually builds also leaves
@@ -7453,9 +7658,29 @@ def band_time_sweep_for_participant(request_data):
         "served_from_store": False,
         "store_keys": None,
     }
+    # Carried BEFORE the write, so the stored copy holds it too: anything derived from this grid
+    # names the entry it came from by the sweep's own key, never by a key re-derived from the
+    # response. `stability_background` below is deliberately set AFTER the write, because it is this
+    # request's outcome and a stored copy of it would be served as if it had just happened.
+    out["sweep_key"] = sweep_key_block(sweep_sig, sweep_prov)
     if sweep_sig is not None:
         _store_sweep_results(participant_uid, sweep_sig, sweep_prov, out,
                              n_recordings=len(td or []))
+
+    # THE GRID HAS LANDED, so start the stability answer for it in the background -- after the
+    # response is fully assembled, so nothing on this path can delay what the page gets back.
+    # NOT when `include_stability` is set: that caller (the Closed-Loop reader) has just paid for
+    # every point inline and already holds the answers, and its flag puts it on a different key
+    # besides, so a run started here would store an answer under a key nothing looks up.
+    out["stability_background"] = (
+        {"launched": False, "reason": "this request computed the stability column inline",
+         "store_key": None}
+        if include_stability else
+        launch_stability_grid_in_background(
+            participant_uid, request_data,
+            sweep_key=(out["sweep_key"] or {}).get("signature_key"),
+            points=stability_grid_points(sweeps),
+            band_width_hz=float(analytics.BAND_TIME_SWEEP_WIDTH_HZ)))
     return out
 
 

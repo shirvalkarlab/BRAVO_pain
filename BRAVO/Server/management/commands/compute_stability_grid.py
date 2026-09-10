@@ -51,8 +51,17 @@ class Command(BaseCommand):
                             help="Report what would be computed; write nothing.")
         parser.add_argument("--json", dest="as_json", action="store_true",
                             help="Emit one JSON object per participant, for a scheduler's log.")
+        parser.add_argument("--request-json", dest="request_json", default=None,
+                            help=("The page's own sweep settings, as a JSON object -- the sliders "
+                                  "and dropdowns the grid was built under. THE SETTINGS ARE IN THE "
+                                  "KEY, so a run started without them for a page sitting on moved "
+                                  "sliders stores an answer under a key that page never looks up. "
+                                  "Only the fields in Biomarkers.bravo_service."
+                                  "STABILITY_GRID_SETTING_KEYS are accepted; anything else is "
+                                  "dropped, so nothing patient-identifying can arrive this way."))
 
     def handle(self, *args, **opts):
+        request_data = self._request_data(opts)
         uids = self._participants(opts)
         if not uids:
             self.stderr.write("no participants selected; pass --participant <uid> or --all")
@@ -67,7 +76,8 @@ class Command(BaseCommand):
                 continue
             try:
                 result = bravo_service.compute_and_store_stability_grid(
-                    uid, workers=opts["workers"], force=opts["force"])
+                    uid, request_data=dict(request_data), workers=opts["workers"],
+                    force=opts["force"])
             except Exception as exc:                             # noqa: BLE001
                 # compute_and_store_stability_grid does not raise, so reaching here means something
                 # outside it did. Counted as a failure rather than swallowed.
@@ -86,6 +96,33 @@ class Command(BaseCommand):
         if failures:
             self.stderr.write(f"{failures} participant(s) failed to store a computed grid")
             raise SystemExit(1)
+
+    def _request_data(self, opts):
+        """The sweep settings this run should use, filtered to the fields the sweep actually reads.
+
+        FILTERED RATHER THAN TRUSTED. This value arrives on a command line, so it is treated as
+        input: only the known setting keys survive, which is what keeps a pain-report table or a
+        REDCap field map from being carried in under some other name. A malformed value is reported
+        and the run continues on the sweep's own defaults rather than failing -- a scheduled run
+        that produced nothing because one argument was mistyped would be worse than one that
+        produced the default answer.
+        """
+        raw = opts.get("request_json")
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except Exception as exc:                                 # noqa: BLE001
+            self.stderr.write(f"--request-json could not be read ({exc!r}); using defaults")
+            return {}
+        if not isinstance(parsed, dict):
+            self.stderr.write("--request-json is not a JSON object; using defaults")
+            return {}
+        allowed = set(bravo_service.STABILITY_GRID_SETTING_KEYS)
+        dropped = sorted(k for k in parsed if k not in allowed)
+        if dropped:
+            self.stderr.write(f"--request-json: ignoring unknown field(s) {dropped}")
+        return {k: v for k, v in parsed.items() if k in allowed}
 
     def _participants(self, opts):
         if opts["participant"]:

@@ -94,3 +94,29 @@ that computes it.
 **Settle findings §14 first** — the ClosedLoopDeployment module does not import in the Django app,
 so nothing built here can reach the page until it does. Then wire the sweep to launch
 `compute_stability_grid` after the page's grid lands, and add the daily schedule (Phase 5).
+
+### Session 3 — the background trigger wired, and two defects found by proving it
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| The sweep starts a run once its grid lands | Starts | `launched: true` on both the fresh and the served path | Pass |
+| The run's answer lands under the key the page asked for | Same key | **Failed first** (`dc6cec1b` asked, `c02e9aca` written); after the fix `a2954bda` both | Pass after fix |
+| A second request starts nothing | already stored | "the answer for this key is already stored", 3.758 s | Pass |
+| Closed-Loop reader carries the answers | Rows answered | 264 rows, all from the store; 50 / 204 / 10 | Pass |
+| Known case reproduces | 0.032285156521398184 | 0.032285156521398184 | Pass |
+| Container suite | 590 + new | **605 passed, 0 failed** (+15) | Pass |
+| Host suite | 993 + known 1 | 993 passed, 42 skipped, 1 failed (known, decisions 84/85) | Pass |
+
+### Errors (session 3)
+| Error | Attempt | Resolution |
+|-------|---------|------------|
+| The page and the background run named two different keys for one grid. | 1 | The computation re-derived the sweep's key from the echoed settings block, which is a different set of fields. The response now carries the sweep's own key and the re-derivation is deleted. Findings §16a. |
+| Container suite 603/1: a served response stopped matching a fresh one. | 1 | The symptom. The cause was the launcher being reachable from the unit tests and starting real processes for a made-up participant. Guarded on the production store root. Findings §16b. |
+| My own new assertion was a false positive on the payload's `rule_version` field. | 1 | Tightened to the key tuple's actual opening rather than a mention of the constant. |
+| The Closed-Loop reader came back empty. | 1 | My probe passed a request dict where the function takes the participant uid. Not a code fault. |
+
+### Next session starts here
+**Phase 5, the daily schedule, needs the PI's call before anything is installed** — it changes how
+his server runs. The command is built, tested and safe to run repeatedly (a run whose inputs have not
+moved does no fitting). What is undecided is what starts it daily: a cron entry inside the container,
+a service in the dev compose override, or an entry the PI installs himself. The shared
+`docker-compose.yml` has deliberately not been touched.

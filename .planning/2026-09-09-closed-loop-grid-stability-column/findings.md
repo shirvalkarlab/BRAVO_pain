@@ -566,3 +566,67 @@ wrong, but the comments now describe a live value that has moved.
 
 Wanted from the PI: whether to re-anchor the example on a point that is "cannot tell" today, or to
 keep the old numbers as a historical illustration and label them with their date.
+
+## §16 — The background run is wired, and finding two real defects is what proving it looked like
+
+**The wiring.** `band_time_sweep_for_participant` now starts `manage.py compute_stability_grid` in
+its own process at the end of the request, on BOTH of its return paths — the freshly built grid and
+the one served from the store — because a reader is looking at a grid either way and the stability
+column is what is still missing from it. Detached with `start_new_session`, so a gunicorn worker
+being recycled does not take a half-finished run down with it. The response carries
+`stability_background`, which says what happened, so a live check needs no log file.
+
+It starts a run only when there is something to do. Skipped when the answer under this exact key is
+already stored (the ordinary case once a participant has been looked at once); when another run for
+the same key is inside a 600 s cooldown; when the request carries its own pain reports; when the
+caller asked for the inline column; and when `STABILITY_GRID_BACKGROUND` is False.
+
+**The cooldown is a FILE, not a set in this process.** Four gunicorn workers are four independent
+memories — the same reasoning decision 78 already applies to its own held table. Repeated Recompute
+clicks, a second browser tab, and a request landing on a different worker all read the same marker.
+
+### §16a — The key mismatch, which nothing but a live run could have shown
+
+`compute_and_store_stability_grid` rebuilt the sweep's key out of the response's echoed
+`settings_applied` block. **That is not the block the sweep keys itself on.** The real one carries
+`match_direction` and `include_cross_setting_stability`; the echoed one carries `match_tolerance_min`,
+`sweep_metric` and `match_extent_sec_ignored` instead. It also resolved the pain score without the
+sweep's own `SweepMetric` override.
+
+Measured on RCS08: the page asked for
+`biomarker_band_stability_grid/2e3c75c00d7f4f37b53a048d195f11da/dc6cec1b8bee68c50ed5ec958404e291f81d1165`
+and the run it had just started wrote `...c02e9aca9e6328765aa4b73ea431558bac2fa246`. Nothing raised.
+The run succeeded, 132 of 132 points in 12.717 s, and the page would have started another one on the
+next load, forever.
+
+**Every test passed through all of that**, because each built a key by hand. The fix is to carry the
+sweep's own key in the response (`sweep_key`) and delete the second derivation outright, so there is
+nothing left to drift. Re-proven live: asked for and written are now the same key, `a2954bda...`.
+
+**This is the same failure this repository already paid for with two cache stores (decision 30).**
+Two derivations of one thing, each correct-looking, disagreeing by a field nobody compared.
+
+### §16b — The unit suite was starting real background jobs
+
+The container suite came back 603 passed, 1 failed, on a test asserting a served response matches a
+freshly built one. **The failure was the symptom.** The cause: `test_band_sweep_store`'s bench points
+the store at a temporary directory and calls the sweep for a made-up participant `u`, and the
+launcher was reachable from there — so each such call really did start
+`manage.py compute_stability_grid --participant u`. Confirmed by finding the launch markers the runs
+had written under `/tmp`.
+
+A background run is now refused while the store is pointed at a caller's own root, and the default is
+the refusing one. This mirrors `ledger`'s existing rule that it records only writes made under the
+production root, for the same reason: work aimed at a temporary directory is read by nothing.
+
+### §16c — What is proven, live on RCS08
+
+| | |
+|---|---|
+| Page request, fresh grid | 11.348 s, launch started |
+| Page request, grid served from the store | 3.2-3.8 s, launch started |
+| Background run finishing after it | 10.8-12.7 s, 132 of 132 points |
+| Key asked for vs key written | identical (`a2954bda...`) |
+| Known case ONE_THREE_LEFT at 12.5 Hz | `lrt_p` 0.032285156521398184, the same value measured before it was ever stored |
+| Second page request | "the answer for this key is already stored", nothing started |
+| Closed-Loop reader | 264 rows, all from the store: 50 "behaves differently", 204 "cannot tell", 10 "behaves the same" |

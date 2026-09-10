@@ -21,13 +21,14 @@ Constraint that shapes every option: `stability.py` may import from Biomarkers, 
 (its own docstring makes that a hard rule and an earlier Track D draft broke it).
 
 ## Next Step
-Phase 4: run the finished grid in the background after the page's own grid lands, and write the
-result into the shared store with `writer=` and `provenance=`. The hard constraint discovered while
-proving Phase 3: it must run in its OWN process, because a process that has already fitted anything
-cannot fork (findings §13c).
+Phase 5: run the same management command on a schedule, at least daily, so the answer is usually
+already stored before anyone opens a page. This needs the PI's call first, because it changes how
+his server runs: the daily pass has to be started by something, and the candidates are a cron entry
+inside the container, a service in the dev compose override, or a documented entry the PI installs
+himself. Nothing in the shared `docker-compose.yml` has been touched.
 
 ## Current Phase
-Phase 4 — background computation
+Phase 5 — scheduled precompute
 
 ## Phases
 
@@ -78,7 +79,7 @@ Phase 4 — background computation
       environment mismatch of decisions 84/85, unrelated and unchanged).
 
 ### Phase 4: Background computation after the grid lands
-**Status:** in_progress
+**Status:** complete
 
 - [x] `AsyncJobScheduler` checked and ruled out: it is a Slurm cluster scheduler for recording
       processing, not a general off-request-path runner. Built a Django management command,
@@ -94,14 +95,39 @@ Phase 4 — background computation
 - [x] `adapter.band_sweep_grid_for_closed_loop` now falls back to the stored grid when a row carries
       no inline result, and reports `cross_setting_stability_from_store` so a reader can tell a
       background answer from an inline one. The row's own field still wins when present.
-- [ ] **BLOCKED, and not by this work: the whole `ClosedLoopDeployment` module cannot be imported by
-      the Django app** (findings §14). Eight module-level bare imports across seven files, unresolved
-      since 2026-09-04. The endpoint answers HTTP 200 with `deployment report error: No module named
-      'ClosedLoopDeployment'`. Until that is fixed the stored column cannot reach the page. Needs the
-      PI's call on which of two fix shapes to use.
-- [ ] Trigger the command from the sweep once the page's own grid lands (not yet wired — deliberately
-      left until the blocker above is settled, since there is no point launching work whose result
-      the page cannot read).
+- [x] **The blocker is cleared** (findings §14, §15): one appended `sys.path` entry for `modules/` in
+      `BRAVO/settings.py`, the PI's own choice between two fix shapes. Commit `c6b8690b`.
+- [x] The sweep starts the command once its own grid lands, on BOTH return paths — freshly built and
+      served from the store — because the reader is looking at a grid either way
+      (`launch_stability_grid_in_background`). Detached with `start_new_session`, so a worker being
+      recycled does not take a half-finished run down with it. The response carries
+      `stability_background`, saying what happened, so a live check needs no log file.
+- [x] Started only when there is something to do: skipped when the answer under this exact key is
+      already stored, when another run for the same key is inside the 600 s cooldown (a FILE, because
+      four gunicorn workers are four independent memories), when the request carries its own pain
+      reports (a separate process cannot reproduce them), when the caller asked for the inline
+      column, and when the switch `STABILITY_GRID_BACKGROUND` is off.
+- [x] Only the sweep's own settings travel, by whitelist (`STABILITY_GRID_SETTING_KEYS`), through a
+      new `--request-json` argument the command filters again on arrival. A command line is visible
+      in the process list, so pain-report rows and the REDCap field map must never reach it.
+- [x] **A real defect found by the live proof and fixed** (findings §16): the computation rebuilt the
+      sweep's key from the response's echoed `settings_applied` block, which is NOT the block the
+      sweep keys itself on. Measured on RCS08: the page asked for `dc6cec1b...`, the run it had just
+      started wrote `c02e9aca...`. Fixed by carrying the sweep's own key in the response; the
+      re-derivation is deleted outright. Re-proven: asked for and written are now the same key,
+      `a2954bda...`.
+- [x] **A second real defect, found by the container suite**: the launcher was reachable from the
+      unit tests, which really did start `manage.py compute_stability_grid` for a made-up
+      participant. A background run is now refused while the store is pointed at a caller's own root
+      (`STABILITY_GRID_LAUNCH_UNDER_OVERRIDE_ROOT`), the same rule the ledger already applies to its
+      own writes.
+- [x] Proven live on RCS08, twice, the whole loop: page request 11.3 s fresh / 3.2-3.8 s served, the
+      run finishing 10.8-12.7 s later with 132 of 132 points, the known case ONE_THREE_LEFT at
+      12.5 Hz reading `lrt_p` 0.032285156521398184 exactly as before it was ever stored, the second
+      request reporting "already stored" and starting nothing, and the Closed-Loop reader returning
+      264 rows all carrying a stored answer.
+- [x] Suites: container 590 -> **605 passed, 0 failed** (+15 new tests); host **993 passed, 42
+      skipped, 1 failed** — the known environment mismatch of decisions 84/85, unchanged.
 
 ### Phase 5: Scheduled precompute, off the request path
 **Status:** pending
@@ -143,9 +169,16 @@ Phase 4 — background computation
 | 2 | Background after the grid lands, AND a scheduled precompute at least daily. Both. | The PI's direct answer to Phase 2. Background keeps the page usable for whoever opens it; the schedule means the answer is usually already there before anyone opens anything. | 2026-09-09 |
 | 3 | The setup is hoisted out of the per-point loop and the discarded glmer fit is skipped, before any concurrency is considered. | Measured: 63% of a point is point-invariant setup and 8% is a fit whose result is thrown away. Both are deterministic wins with no concurrency risk, and together they predict ~297 s to ~86 s. Parallelism across rpy2's single embedded R process is the risky lever and is not taken first. | 2026-09-09 |
 | 4 | "Vectorize the stability analysis" is answered honestly rather than claimed: the fit cannot be vectorized. | `band_stim_stability` fits two R mixed models per point through pymer4/rpy2 and takes the likelihood-ratio test between them. There is no numpy formulation and no way to batch it through rpy2. The band-power extraction feeding it is vectorizable and is worth about 0.02 s against a 0.645 s fit. Recorded in findings §8d so this is not re-litigated. | 2026-09-09 |
+| 6 | The background run is started by `subprocess.Popen` on the management command, detached, rather than by a thread. | A thread inside a gunicorn worker cannot fork safely once that worker has answered a single-candidate request, so it would silently take the serial path — the same answers, several times slower. A separate process is what makes the fast path reachable at all. | 2026-09-09 |
+| 7 | Anything derived from the calibrated grid takes the sweep's OWN key out of the response and never re-derives one. | The re-derivation was wrong in a way nothing could see: the echoed settings block is not the settings block the sweep keys itself on, so the page and the background run named different keys for one grid, every page load started a fresh whole-machine job, and none of them ever satisfied the page. Proven live before the fix (`dc6cec1b` asked for, `c02e9aca` written) and after (`a2954bda` both). | 2026-09-09 |
+| 8 | A background run is refused while the store is pointed at a caller's own root, and the default is the refusing one. | The container suite really was starting `manage.py compute_stability_grid --participant u` for the test bench's made-up participant. A unit suite must not start whole-machine jobs, and an answer written into a temporary directory is read by nothing. Mirrors the ledger's own production-root rule. | 2026-09-09 |
 | 5 | The shared setup is extracted into one helper both paths call, never copied into a second implementation. | Two implementations of one thing drifting apart is the exact failure this repository already paid for with its two cache stores (decision 30), and a stability answer that differed between the grid and the single-candidate panel would be worse than no answer. | 2026-09-09 |
 
 ## Errors Encountered
 | Error | Attempt | Resolution |
 |-------|---------|------------|
+| The page asked for stability key `dc6cec1b...` while the run it had just started wrote `c02e9aca...`, so the answer could never satisfy the page and every load would start another job. | 1 | The computation rebuilt the sweep's key from the response's echoed `settings_applied` block, which carries three fields the real key does not and lacks two it does, and resolved the pain score without the sweep's own `SweepMetric` override. The response now carries the sweep's own key; the second derivation is deleted. |
+| Container suite 603 passed 1 failed: a served response no longer matched a freshly built one. | 1 | The symptom, not the cause. The cause was that the launcher was reachable from the unit tests and was starting real background processes for the bench's made-up participant. Guarded on the production store root rather than papering over the comparison. |
+| My own new assertion `"STABILITY_GRID_RULE_VERSION," not in src` was a false positive. | 1 | The computation's stored payload legitimately carries that constant as one of its fields. Tightened the check to the tuple's actual opening, `"(STABILITY_GRID_KIND, STABILITY_GRID_RULE_VERSION"`. |
+| The Closed-Loop reader came back empty. | 1 | My probe's error, not the code's: `band_sweep_grid_for_closed_loop` takes the participant uid, and I passed it a request dict. Called correctly it returns 264 rows. |
 | Probe raised `ImproperlyConfigured: settings are not configured`. | 1 | The bridge does not set `DJANGO_SETTINGS_MODULE`. Copied the bootstrap the existing `_3way_*.py` probes already use: `os.environ.setdefault("DJANGO_SETTINGS_MODULE", "BRAVO.settings")` before `django.setup()`. |
