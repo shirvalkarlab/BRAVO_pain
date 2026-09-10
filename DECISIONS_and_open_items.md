@@ -312,11 +312,14 @@ hygiene as a work item — the latter is an operational note in `OPERATIONS_runb
     snapshots of the four figures into the printed sheet, which needs the container because the
     sandbox export path is broken; and a batchable cluster of labelling and navigation niceties.
 
-16. **A code-level provenance chain cannot see through a clinician programming what Stim Optimizer
+~~16~~. **CLOSED 2026-09-10 by the principal investigator** — it is a limit of the method, it is
+    written down here and in `ARCHITECTURE_cache_store.md`, and there is nothing further to build.
+    Kept struck rather than deleted so the limit itself stays on the record.
+    ~~A code-level provenance chain cannot see through a clinician programming what Stim Optimizer
     recommended.** The matched table is raw-derived because the join that builds it embodies no
     choice; but the device history it joins is what a clinician chose to program, and a human sits
     in that loop. The chain proves what the code did, not what the clinic did. Raised by the
-    2026-09-07 review; a limit of the method to state in the written record, not a defect to fix.
+    2026-09-07 review; a limit of the method to state in the written record, not a defect to fix.~~
 17. **Two review items kept for the PI's call:** the sweep response served from the store goes
     beyond Track A step 6's written text (decision 38), as does the Stim Optimizer response
     served in step 8 (decision 41), and the store's path builder does not
