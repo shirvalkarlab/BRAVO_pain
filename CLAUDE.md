@@ -415,6 +415,22 @@ framework disagree, these win.**
     switch names are the worst offenders** — say what the thing does, and put the name in brackets
     afterwards only if he would need it to find the code himself.
 
+13. **EVERY EXPLANATION SAYS WHERE THE THING LIVES AND WHETHER HE CAN SEE IT.** Given on
+    2026-09-10: *"whenever you provide any explanation, you have to tell me what module it's in and
+    what part of the page it's on."* Three parts, all required, every time:
+
+    - **Which module** — Biomarkers, Closed-Loop Deployment, Stim Optimizer, or the shared store.
+    - **Where on the page** — which page, and which panel or section of it.
+    - **Whether it is on screen at all today**, said plainly. This project keeps a lot of code that
+      is built, correct, tested, and reached by nothing (the seven functions of decisions 100-105,
+      the per-rating detail trace, the whole 110 Hz pre-registration). "It exists" and "a reader
+      can see it" are different facts and he needs both.
+
+    **If it is on no page, say that first, not last.** The single most misleading thing this
+    project's writing does is describe a built thing in the present tense as though somebody were
+    looking at it. When the honest answer is "nowhere — it is a file nothing reads", that is the
+    answer, and it is more useful than the description that follows it.
+
 ---
 
 ## 11. Read these first
