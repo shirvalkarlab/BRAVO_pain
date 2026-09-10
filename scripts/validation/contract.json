@@ -79,7 +79,8 @@
         "_raw_lsb_cache_cached",
         "_raw_lsb_signature.DigestWriter.write",
         "_raw_lsb_shared_store.BoundedWriter.write",
-        "_deployment_stim_gate"
+        "_deployment_stim_gate",
+        "_deployment_adaptive_band_gate"
       ],
       "BRAVO/modules/StimOptimizer/adapter.py": [
         "_unambiguous_group_settings",

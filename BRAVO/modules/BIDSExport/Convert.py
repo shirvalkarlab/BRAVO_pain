@@ -221,7 +221,10 @@ def upsert_participant(bids_root, subject, age, sex, diagnosis):
             df = df.reindex(columns=_PARTICIPANTS_COLUMNS)
         else:
             df = pd.DataFrame(columns=_PARTICIPANTS_COLUMNS)
-        df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+        rows = df.to_dict(orient="records")
+        rows.append(row)
+        # Preserve scalar formatting when old rows contain only missing values.
+        df = pd.DataFrame(rows, columns=_PARTICIPANTS_COLUMNS, dtype=object)
         df.to_csv(path, sep="\t", index=False, na_rep="n/a")
 
     json_path = path.replace(".tsv", ".json")

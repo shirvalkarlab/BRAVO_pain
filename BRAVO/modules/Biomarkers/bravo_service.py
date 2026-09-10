@@ -4963,6 +4963,30 @@ def _deployment_stim_gate(st):
             None)
 
 
+def _deployment_adaptive_band_gate(center_hz, band_width_hz):
+    """Require the full band in the inclusive D08 adaptive window, in Hz.
+
+    ClosedLoopDeployment.constraints.band_edges/_p_d08 define the same edge rule.
+    Invalid or unavailable input cannot establish an in-range band. Keep this pure
+    helper here to preserve the one-way ClosedLoopDeployment -> Biomarkers dependency.
+    """
+    invalid = "Full adaptive band cannot be established from a finite center and positive width in Hz"
+    try:
+        center = float(center_hz)
+        width = float(band_width_hz)
+    except (TypeError, ValueError, OverflowError):
+        return "indeterminate", invalid
+    if not np.isfinite(center) or not np.isfinite(width) or width <= 0:
+        return "indeterminate", invalid
+    lo, hi = center - width / 2.0, center + width / 2.0
+    if not np.isfinite(lo) or not np.isfinite(hi):
+        return "indeterminate", invalid
+    inside = lo >= ADAPTIVE_LO_HZ and hi <= ADAPTIVE_HI_HZ
+    detail = (f"band {lo:g}–{hi:g} Hz (center {center:g} Hz) must fit inside "
+              f"{ADAPTIVE_LO_HZ:g}–{ADAPTIVE_HI_HZ:g} Hz")
+    return ("pass" if inside else "fail"), detail
+
+
 def deployment_summary(request_data):
     """Phase E: one authoritative Deploy-to-Percept review payload for a committed band.
 
@@ -5098,8 +5122,12 @@ def deployment_summary(request_data):
     else:
         polarity = "unknown"
     snapped = round(center_hz / (250.0 / 256.0)) * (250.0 / 256.0)   # Dual 256-pt FFT grid
-    adaptive_valid = bool(ADAPTIVE_LO_HZ <= center_hz <= ADAPTIVE_HI_HZ)
+    # Gate and advisory mapping use the same full-band D08 qualification.
+    adaptive_state, adaptive_detail = _deployment_adaptive_band_gate(center_hz, band_width_hz)
+    adaptive_valid = adaptive_state == "pass"
     suggested_mode, mode_reason = _suggested_percept_mode(polarity, adaptive_valid)
+    if not adaptive_valid:
+        mode_reason = adaptive_detail
     credible, _ci_width = _band_credible_ci(g.get("or_lo"), g.get("or_hi"))
 
     # ---- GATES (hard checks the clinician signs against) ----
@@ -5118,9 +5146,7 @@ def deployment_summary(request_data):
                        "pass" if (verdict and "VALIDATED" in str(verdict)) else "fail",
                        verdict, necessary=True))
     gates.append(_gate("adaptive_band", "In Percept adaptive range (8–30 Hz)",
-                       "pass" if adaptive_valid else "fail",
-                       f"center {round(center_hz,1)} Hz (band {round(center_hz-half,1)}–{round(center_hz+half,1)} Hz)",
-                       necessary=True))
+                       adaptive_state, adaptive_detail, necessary=True))
     # A MEASURED threshold passes. A MODELED estimate (device never sensed this band) is
     # "indeterminate" -- usable for planning but NOT a measured prerequisite, so it can never count
     # toward "ready to program" on its own (audit C8 fail-closed discipline). Neither -> fail.

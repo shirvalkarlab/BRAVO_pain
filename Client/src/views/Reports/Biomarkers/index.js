@@ -525,9 +525,7 @@ function Biomarkers() {
                     </Grid>
                   ))}
 
-                  {/* Pain-metric picker DIRECTLY BELOW the timeline — drives the pain row live. */}
-                  {timelineData && timelineData.availability && timelineData.availability.records
-                        && timelineData.availability.records.length > 0 ? (
+                  {/* Pain-metric selection also applies when availability records are absent. */}
                     <Grid item xs={12}>
                       <MDBox px={2} pb={1.5} display="flex" flexDirection="row" alignItems="center"
                              gap={2} flexWrap="wrap" justifyContent="center">
@@ -558,7 +556,6 @@ function Biomarkers() {
                         </FormControl>
                       </MDBox>
                     </Grid>
-                  ) : null}
 
                   {computing ? (
                     <Grid item xs={12}>
