@@ -122,6 +122,12 @@ class ClockBiomarkerTests(TestCase):
         conflict=deepcopy(data);conflict["AnalysisTimeProvenance"]["alignment_seconds"]=1
         with self.assertRaisesRegex(ValueError,"conflicting manual alignment"):
             service._deduplicate_clock_recordings([data,conflict])
+        native_conflict=deepcopy(data)
+        native_conflict["AnalysisTimeProvenance"]["clock"]["sample_start_offset_seconds"] = .25
+        with self.assertRaisesRegex(ValueError,"conflicting native sample starts"):
+            service._deduplicate_clock_recordings([data,native_conflict])
+        native_conflict["AnalysisTimeProvenance"]["clock"]["sample_start_offset_seconds"] = .000001
+        self.assertEqual(len(service._deduplicate_clock_recordings([data,native_conflict])),1)
 
     def test_matrix_assembler_uses_recovered_inputs_even_with_old_row_cache_present(self):
         self.event()

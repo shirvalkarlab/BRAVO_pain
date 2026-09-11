@@ -556,11 +556,15 @@ def _deduplicate_clock_recordings(recordings):
                                   default=lambda value: np.asarray(value).tolist()).encode())
         identity = digest.hexdigest()
         alignment = provenance.get("alignment_seconds", 0)
+        sample_offset = clock.get("sample_start_offset_seconds", 0)
         if identity in seen:
-            if seen[identity] != alignment:
+            previous_alignment, previous_offset = seen[identity]
+            if previous_alignment != alignment:
                 raise ValueError("Physical recording copies have conflicting manual alignment")
+            if abs(previous_offset - sample_offset) > 0.001:
+                raise ValueError("Physical recording copies have conflicting native sample starts")
             continue
-        seen[identity] = alignment
+        seen[identity] = (alignment, sample_offset)
         out.append(data)
     return out
 
