@@ -49,6 +49,7 @@ import json
 import logging
 import os
 import pickle
+import re
 import threading
 
 _log = logging.getLogger(__name__)
@@ -196,6 +197,24 @@ def signature_key(signature):
     return hashlib.blake2b(repr(signature).encode("utf8"), digest_size=20).hexdigest()
 
 
+_SAFE_UID = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def _safe_uid(participant_uid):
+    """The participant identifier as it may appear inside a file name.
+
+    THE IDENTIFIER ARRIVES FROM THE REQUEST. Every page reads `ParticipantId` out of the request
+    body and hands it here, and when the database lookup finds nobody by that name the raw string
+    still reached this function and became part of a path. Real identifiers are 32 hex characters,
+    so anything outside letters, digits, dash and underscore is replaced with an underscore: a
+    value like `../../x` cannot climb out of the cache directory, and a dot cannot collide with the
+    dots this file name uses as separators (the superseded-entry sweep matches on `.<uid>.`).
+    None keeps its existing spellings -- "shared" here, the literal "None" under legacy naming --
+    because entries already on disk carry them. Open item 17, closed 2026-09-10.
+    """
+    return _SAFE_UID.sub("_", str(participant_uid))
+
+
 def _stem(kind, participant_uid, signature, root=None):
     """The path without an extension, or None."""
     d = kind_dir(kind, root=root)
@@ -203,8 +222,9 @@ def _stem(kind, participant_uid, signature, root=None):
         return None
     key = signature_key(signature)
     if kind in _LEGACY_NAMING:
-        return os.path.join(d, f"{kind}.v{FORMAT_VERSION}.{participant_uid}.{key}")
-    uid = participant_uid if participant_uid is not None else "shared"
+        uid = "None" if participant_uid is None else _safe_uid(participant_uid)
+        return os.path.join(d, f"{kind}.v{FORMAT_VERSION}.{uid}.{key}")
+    uid = "shared" if participant_uid is None else _safe_uid(participant_uid)
     return os.path.join(d, f"{kind}.v{FORMAT_VERSION}.{uid}.{key}")
 
 
@@ -293,7 +313,7 @@ def newest_stamp(kind, participant_uid, root=None):
     d = kind_dir(kind, create=False, root=root)
     if d is None:
         return None
-    marker = f".{participant_uid}." if participant_uid is not None else "."
+    marker = f".{_safe_uid(participant_uid)}." if participant_uid is not None else "."
     best, best_written = None, ""
     try:
         names = os.listdir(d)
@@ -574,7 +594,7 @@ def _sweep_superseded(kind, participant_uid, keep_stem, root=None, keep_newest=N
     if d is None:
         return 0
     prefix = f"{kind}.v"
-    marker = f".{participant_uid}." if participant_uid is not None else ".shared."
+    marker = f".{_safe_uid(participant_uid)}." if participant_uid is not None else ".shared."
     keep = os.path.basename(keep_stem)
     limit = int(KEEP_NEWEST_BY_KIND.get(kind, 1) if keep_newest is None else keep_newest)
     removed = 0

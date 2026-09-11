@@ -544,3 +544,35 @@ def test_the_page_status_reads_the_sidecar_and_says_when_there_is_nothing_yet():
         assert got["exists"] is True and got["last_built_utc"] and got["trigger"] == "stim_optimizer_request"
         assert got["n_recordings"] == 7 and got["writer"] == "stim_optimizer" and got["what_it_means"] == "m"
         assert st.status_for_page("stim_optimizer_response", UID, None, what_it_means="m", root=root)["exists"] is False
+
+
+def test_a_request_supplied_identifier_cannot_climb_out_of_the_cache_directory():
+    """Open item 17, closed 2026-09-10. `ParticipantId` arrives from the request body, and when the
+    database finds nobody by that name the raw string still became part of a file path. A real
+    identifier is 32 hex characters; anything else is neutralised rather than trusted.
+
+    Checked on the VALUE -- the path that comes back stays inside the kind's own directory and
+    contains no separator -- rather than on the presence of a helper. And a real identifier must
+    come through untouched, or every existing entry on disk would stop being found.
+    """
+    with _Sandbox():
+        d = st.kind_dir("inputs")
+        for hostile in ("../../etc/passwd", "a/b/c", "x.y.z", "..", "u;rm -rf", " "):
+            stem = st._stem("inputs", hostile, ("sig",))
+            assert stem is not None
+            assert os.path.dirname(stem) == d, (hostile, stem)
+            tail = os.path.basename(stem)
+            assert "/" not in tail and ".." not in tail, (hostile, tail)
+        # A genuine identifier is left exactly as it is.
+        stem = st._stem("inputs", UID, ("sig",))
+        assert f".{UID}." in os.path.basename(stem)
+        # The legacy-named tiles keep their historical spelling for None, so nothing on disk is
+        # orphaned; a hostile value under that naming is still neutralised.
+        assert ".None." in os.path.basename(st._stem("raw_lsb_tiles", None, ("sig",)))
+        assert ".." not in os.path.basename(st._stem("raw_lsb_tiles", "../x", ("sig",)))
+        # And the sweep's own marker uses the SAME spelling, or a write would evict nothing.
+        st.store("inputs", "../evil", ("s1",), {"v": 1}, writer="t", provenance=[])
+        st.store("inputs", "../evil", ("s2",), {"v": 2}, writer="t", provenance=[])
+        names = [n for n in os.listdir(d) if n.startswith("inputs.") and not n.endswith(".meta.json")]
+        assert len(names) == 1, names
+        assert all(".___evil." in n for n in names), names     # ".", ".", "/" -> three underscores

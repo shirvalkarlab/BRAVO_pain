@@ -337,13 +337,6 @@ hygiene as a work item — the latter is an operational note in `OPERATIONS_runb
     side attribution is possible from it at all.** The honest replacement is the left 1-3 contact at
     110 Hz built from the two days with the right stimulator at exactly 0.0 mA — the same 15 steps
     behind the p = 0.064 result. Offered, not yet built.~~
-11. **55 Hz has almost no side-attributable coverage on the left electrode, and that is a protocol
-    gap.** Of six visit days with 55 Hz recordings there, exactly one has the right stimulator held
-    at zero. **There is no cross-day replication at 55 Hz at all.**
-12. **The device's own spectrum route is empty during every current ladder**, because the device
-    computes a spectrum only on a patient button press or a stimulation-off contact survey.
-    **Populating it needs a button press at each held setting — a visit-protocol change, not a code
-    change.**
 13. **No live end-to-end test asserts that the timeline circle equals the spectral point at the same
     band centre.** The identity holds by construction through one shared store but is not pinned
     across the two call sites.
@@ -386,17 +379,30 @@ hygiene as a work item — the latter is an operational note in `OPERATIONS_runb
     rather than recalculating. What the written plan asked for was the two summary tables; what
     was built also serves the complete response, and that is now sanctioned rather than tolerated.
 
-    **Still open:** the store's path builder does not sanitise a request-supplied participant
+    ~~**Still open:** the store's path builder does not sanitise a request-supplied participant
     identifier when the participant lookup returns nothing (set aside on 2026-09-07 because the
-    data are de-identified; it is an input-validation matter).
+    data are de-identified; it is an input-validation matter).~~ **FIXED 2026-09-10** at the PI's
+    direction ("just fix it, close it"): every place the identifier becomes part of a file name
+    now allows only letters, digits, dash and underscore, so a value like `../../x` cannot climb
+    out of the cache directory and a dot cannot collide with the file name's own separators. A real
+    identifier -- 32 hex characters -- passes through untouched, so nothing already on disk stops
+    being found. One test pins the path staying inside the directory for six hostile values and the
+    superseded-entry sweep still matching under the sanitised spelling. **Item 17 is now closed.**
 
-18. **The device's own current record holds fewer settled settings per ladder than the clinic
+~~18~~. **CLOSED 2026-09-10 by the principal investigator — the complaint was already answered by
+    decisions 55 and 56.** The item counted settled current steps on a SINGLE day and found six
+    against the curvature test's floor of eight. But the curvature test does not run on a single
+    day: decision 55 pools every current ladder across every visit, and decision 56 measured that
+    the pooling clears the floor — 13 points across 4 visits on one contact pair, 12 across 6 on
+    another. His words: *"we're not looking at only a single day to count the number of amplitude
+    steps. We're pulling across all days."* The paper-sheet question is moot for the same reason.
+    ~~The device's own current record holds fewer settled settings per ladder than the clinic
     sheet recorded, and the curvature finding of 2026-08-18 rests on the sheet.** The server has
     no copy of the sheets; the device record of that run gives six settled settings from 1.0 to
     3.5 mA against the sheet's fifteen, below the curvature routine's floor of eight. Either the
     sheets are loaded to the server as a raw kind, or future ladders hold at least eight settled
     settings inside one streaming session, before `amplitude_effect_by_band` can carry a curvature
-    verdict on this record. Raised 2026-09-07; a data and protocol item, not a code change.
+    verdict on this record. Raised 2026-09-07; a data and protocol item, not a code change.~~
 
 ~~19~~. **RESOLVED 2026-09-10, decision 102.** ~~A recording start time written without a timezone is read in the server's local zone~~
     (`availability._to_epoch`, mirrored by `DecodeCommon.representation.to_epoch`). The container
@@ -438,6 +444,20 @@ hygiene as a work item — the latter is an operational note in `OPERATIONS_runb
 
 ~~25. **The shared cache's eviction step cannot tell one participant's entry from another's for at
     least one kind, `"inputs"`.**~~ **RESOLVED 2026-09-09, decision 85.**
+
+### Notes for the clinic — NOT open items
+
+**Moved out of the open list on 2026-09-10 at the PI's direction: "only code changes should be
+open items."** These describe what a future visit would need to record. Nothing in the code is
+waiting on them and nothing in the code can fix them.
+
+- **55 Hz has almost no data that can be attributed to one side, on the left electrode.** Of six
+  visit days with 55 Hz recordings there, exactly one has the right stimulator held at zero. There
+  is no second day to confirm against, so nothing at 55 Hz can be called established until there is.
+- **The device never computes its own spectrum while the current is being stepped up.** It does
+  that only on a patient button press or during a contact survey with stimulation off. So that
+  source of data is empty for every current ladder. Populating it means a button press at each held
+  setting during the visit.
 
 ### Resolved by this consolidation — do not re-open
 
