@@ -139,3 +139,59 @@ Decisions 122–126 carry every change with its measurement. Probes for this ses
 `_agent_bridge/_probe_tl/probe_{amp_power_*,pooled_*,points_equal,e1_before_after,grid_fields}.py`
 (disposable). The stored kinds added: `three_source_run_points` (decision 125). The page's report
 now carries `edges_historical` beside `edges` (decision 126).
+
+## 2026-09-11, Phase 8 build (the PI answered the design's §7 and gave the go-ahead)
+- Steps 1-7 built: within_visit returns the quadratic's coefficients; POOLED_FIELDS + v2 rule
+  version (+ pooled_shape_stored_for_current_key in the full-build gate, else the v2 table would
+  never be written in the steady state); StimOptimizer/routines/amplitude_response.py
+  (ResponseCurve); pipeline keeps replay_input; ClosedLoopDeployment/simulation.py (M0/M1/M2 one
+  vectorised loop, M3 run-resampled, device-clock regridding of the 3 s pieces); adapter
+  simulation_inputs/write/read/serve; bravo_service ClosedLoopSimulation: 1; provenance kind.
+- tests/test_simulation.py: 13 passed (container run 13:17). Test 6 as FIRST written called
+  store.clear() after restoring the override -> wiped the production closed-loop store (the
+  decision-116 slip, mine); reordered; the report rebuilt the entries.
+- Live probe 1 (13:06): report 119.7 s cold; simulation 2.8 s over 49,267 pieces; read-back
+  0.53 s / 6.9 KB; M1 active; tau measured 3.0 s (4 of 11 runs; at the 3 s floor). Found: 103 of
+  119 stretches refused by the 5 % uniformity rule (tile jitter), nothing drawn -> regridding
+  added. M0 vs replay per stretch on uniform stretches: 5 of 5 fields equal.
+- Frontend: useClosedLoopSimulation.js, ClosedLoopSimulationPanel.js (figures A/B/C, derived
+  headline, folded method), CL.simulation slot, index.js (cl-duty removed, cl-simulation after
+  cl-signoff), header nav, snapshot section; DutyCyclePanel.js deleted and its jest block removed.
+- Regridding (regrid_stretches): pieces on the device's 3 s clock per stretch (cumulative
+  rounding of each gap, no drift). Live: 114 of 119 stretches run (was 16), 36,244 steps = 30.2 h
+  of streaming; 25 cells without a piece, 3 merging two; longest stretch (75 min, 2025-07-27)
+  drawn with the M3 band. RULE_VERSION bumped twice (v2 clock, v3 windows from the stored runs)
+  because the numbers changed and the key had not.
+- Probe 4 (13:24, ONE_THREE_LEFT 20.5 Hz): report 31.6 s; simulation 5.5 s; read-back 0.42 s,
+  87 KB; M0 vs replay.dual_threshold on the same 114 regridded stretches: 5 fields, 0 differing
+  (0.264651 / 0.278612 / 13,364 / 1359 s / 1143 s). M1: upper-limit time 26.5 % -> 23.8 %
+  (M3 18.9-65.5 %), transitions 442 -> 446 /h, mean amplitude 3.05 -> 2.98 mA; tau 3.0 s
+  measured on 4 of 4 runs, at the 3 s resolution floor (said so). v1-vs-v2 pooled comparison NOT
+  measured: the v1 entry was lost to my own wipe before it could be read (test 8 + unchanged
+  within_visit tests cover the additive change).
+- Host suite (b) 2 failed / 1050 passed: test_one_store (my load_newest line named the module
+  and DIR on one line -> split) and test_core (replay_input, the unused step-4 field -> removed).
+  test 5 was order-dependent (two within_visit module objects) -> patches S._wv.
+- Live in the PI's Chrome (13:31+): card present, cl-duty gone, 3 Plotly figures at 1348 px,
+  captions from the numbers; the page's committed band is L 0-2+ 24.5 Hz (1 run) -> "no response
+  curve" headline is the honest three-state answer; found the eviction/read-by-newest defect
+  (decision 24) -> KEEP 6 + candidate-tag match + the page sends its candidate; headline says the
+  fit's own reason.
+- Final gates on the settled code (13:44-13:46): host 1053 passed / 42 skipped / 0 failed
+  (/tmp/claude-502/host_phase8f.log); container PASS=626 FAIL=0 (container_phase8f.log).
+- Grids my wipe destroyed restored by hand: precompute_band_sweeps (6 scores stored, 8-11 s each)
+  and compute_stability_grid (132 of 132 points) for RCS08.
+- Live (13:48, main.8a55..): card renders on L 0-2+ 24.5 Hz with the fit's own reason in the
+  headline, 3 figures, 26.0 h in 83 stretches; the sim fetch now keys on the report's computedAt
+  so a recompute refetches it (it did not before: watched "no simulation stored yet" beside a
+  report that had just stored one).
+
+## HANDOFF — end of the 2026-09-11 Phase 8 session (read this first next time)
+**Every phase of the redesign is built, proven and pushed.** Phase 8 = the "CL-DBS simulations"
+card (decision 128) with the response-curve plant (decision 21 here), the device-clock regridding,
+the per-candidate stored entries (decision 24), and the wipe incident (decision 129). Gates after
+the last backend change: host 1053 / 42 skipped / 0 failed; container 626 / 0. **Open on the PI:**
+look at the card (both bands); open items 29 and 30. **Watch for**: any test touching the store
+must clear only while its own override is set (decision 129, third time); the simulation's key
+carries the candidate and the rule version -- bump RULE_VERSION whenever the stored numbers would
+change (v4 today). Probes: `_agent_bridge/_probe_tl/probe_simulation_{live,diag}.py`.

@@ -44,7 +44,7 @@ const JUMPS = [
   { id: "cl-rules", label: "Device rules" },
   { id: "cl-evidence", label: "Evidence triangle" },
   { id: "cl-prescription", label: "Parameters" },
-  { id: "cl-duty", label: "Predicted duty cycle" },
+  { id: "cl-simulation", label: "CL-DBS simulations" },
   { id: "cl-signoff", label: "Sign-off \u2193" },
 ];
 

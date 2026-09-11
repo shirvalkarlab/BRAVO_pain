@@ -257,13 +257,18 @@ def table_from_build(build, *, checked_lo_hz, checked_hi_hz, band_half_hz,
 #: 4-run slice gives 6 across 1. Storing the table computed from the full build means the answer is
 #: the same on every request instead of depending on what happened to be cached.
 POOLED_KIND = "within_visit_pooled_shape"
-POOLED_RULE_VERSION = "v1_pooled_shape"
+POOLED_RULE_VERSION = "v2_pooled_shape_curve_coefficients"
 
 #: The fields carried per row. `post_peak` is deliberately absent: it is a nested structure rather
 #: than a scalar, no consumer reads it, and a table is the wrong shape to carry it in.
 POOLED_FIELDS = ("pooled_direction", "pooled_slope_per_mA", "pooled_slope_stderr",
                  "pooled_slope_p", "n", "n_visits", "verdict", "curves", "peaks_inside",
-                 "peak_mA", "p_curvature", "r2_linear", "r2_quadratic")
+                 "peak_mA", "p_curvature", "r2_linear", "r2_quadratic",
+                 # Since v2 (2026-09-11): the quadratic's coefficients and the post-peak line, so
+                 # the closed-loop simulation can rebuild the fitted CURVE from the stored row
+                 # (redesign decision 21) rather than only read where its peak is.
+                 "quad_coef_per_mA2", "quad_lin_coef_per_mA", "quad_coef_stderr",
+                 "post_peak_slope_per_mA", "post_peak_intercept", "post_peak_n_points")
 
 
 def pooled_table_from_build(build, *, checked_lo_hz, checked_hi_hz, band_half_hz,
@@ -289,6 +294,10 @@ def pooled_table_from_build(build, *, checked_lo_hz, checked_hi_hz, band_half_hz
         centres = per_run.loc[per_run["sensing_contact"].astype(str) == contact, "band_center_hz"]
         for centre in sorted(float(c) for c in centres.dropna().unique()):
             pooled = pooled_shape_for_band(build, centre, contact, min_points=min_points) or {}
+            pp = pooled.get("post_peak") or {}
+            pooled = dict(pooled, post_peak_slope_per_mA=pp.get("slope_per_mA", float("nan")),
+                          post_peak_intercept=pp.get("intercept", float("nan")),
+                          post_peak_n_points=pp.get("n_points", 0))
             row = {"sensing_contact": contact, "band_center_hz": float(centre)}
             row.update({k: pooled.get(k) for k in POOLED_FIELDS})
             rows.append(row)

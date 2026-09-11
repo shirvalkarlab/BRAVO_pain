@@ -373,7 +373,13 @@ def amplitude_response_shape_pooled(amp_mA, power, visit, *, min_points=8):
                p_curvature=float("nan"), r2_linear=float("nan"), r2_quadratic=float("nan"),
                n=int(x.size), n_visits=n_visits, verdict="not assessed", post_peak=None,
                pooled_slope_per_mA=float("nan"), pooled_slope_stderr=float("nan"),
-               pooled_slope_p=float("nan"), pooled_direction="not assessed")
+               pooled_slope_p=float("nan"), pooled_direction="not assessed",
+               # The quadratic's own coefficients (power = a*mA^2 + b*mA + per-run baseline), so a
+               # reader that needs the CURVE and not only its peak -- the closed-loop simulation's
+               # response curve, decision 21 of the 2026-09-11 redesign plan -- can rebuild it from
+               # the stored row. NaN until the quadratic design has been fitted below.
+               quad_coef_per_mA2=float("nan"), quad_lin_coef_per_mA=float("nan"),
+               quad_coef_stderr=float("nan"))
     if x.size < max(4, min_points) or np.unique(x).size < 3:
         out["verdict"] = (f"not assessed: {x.size} usable points at {np.unique(x).size} distinct "
                           f"currents pooled across {n_visits} visits")
@@ -429,6 +435,9 @@ def amplitude_response_shape_pooled(amp_mA, power, visit, *, min_points=8):
 
     quad_coef = float(beta2[2])
     se_quad = float(np.sqrt(V2[2, 2])) if V2[2, 2] > 0 else float("nan")
+    out["quad_coef_per_mA2"] = quad_coef
+    out["quad_lin_coef_per_mA"] = float(beta2[1])
+    out["quad_coef_stderr"] = se_quad
     if not np.isfinite(se_quad) or se_quad == 0:
         out["verdict"] = ("not assessed: the quadratic coefficient's cluster-robust standard "
                           "error could not be computed")

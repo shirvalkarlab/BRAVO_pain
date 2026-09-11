@@ -95,6 +95,18 @@ def run_for_participant(request_data):
             return {"available": False,
                     "reason": f"the pooled three-source view could not be built: {exc!r}"}
 
+    # THE STORED SIMULATION ON ITS OWN (Phase 8): read back after the first figures, never built here.
+    if (request_data or {}).get("ClosedLoopSimulation"):
+        try:
+            _cands = (request_data or {}).get("Candidates") or []
+            return _adapter.closed_loop_simulation_for_participant(
+                participant, _cands[0] if _cands else None,
+                hemisphere=(request_data or {}).get("Hemisphere", DEFAULT_HEMISPHERE))
+        except Exception as exc:                       # noqa: BLE001
+            _log.exception("closed-loop: the stored simulation could not be read for %s", participant_uid)
+            return {"available": False,
+                    "reason": f"the stored simulation could not be read: {exc!r}"}
+
     try:
         return _adapter.report_for_participant(
             participant, request_data,

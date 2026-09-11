@@ -95,6 +95,7 @@ _WRITER_BY_KIND = {
     "amplitude_effect_by_band": "closed_loop",
     "within_visit_pooled_shape": "closed_loop",
     "three_source_run_points": "closed_loop",
+    "closed_loop_simulation": "closed_loop",
     "exploration_ladder": "stim_optimizer",
     "exploration_batch": "stim_optimizer",
     "stim_optimizer_summary": "stim_optimizer",

@@ -1673,6 +1673,20 @@ def write_pooled_shape(participant, build, *, is_every_run, min_points=None):
     return summary
 
 
+def pooled_shape_stored_for_current_key(participant, min_points=None):
+    """Whether the pooled table exists under the CURRENT key (rule version, recording set). Asked
+    before the comparison is built, like `run_points_stored_for_current_key`: a version bump of
+    the table (v2, 2026-09-11) would otherwise never be written in the steady state, because the
+    truncated build refuses to derive it and nothing forced a full build."""
+    from . import amplitude_effect as _amp
+    tiles_key = _tiles_key_for(participant)
+    if tiles_key is None:
+        return False
+    uid = str(getattr(participant, "uid", participant))
+    sig = pooled_shape_signature(participant, tiles_key=tiles_key, min_points=min_points)
+    return _cache_store.read_stamp(_amp.POOLED_KIND, uid, sig, root=_SHARED_CACHE_DIR_OVERRIDE) is not None
+
+
 def pooled_shape_if_stored(participant):
     """The newest stored pooled within-visit table for this participant, or None.
 
@@ -1798,6 +1812,291 @@ def three_source_pooled_for_participant(participant):
     view["available"] = True
     view["cache_status"] = _cache_status_or_reason(participant)
     return view
+
+
+# ---------------------------------------------------------------------------------------------
+# THE CLOSED-LOOP SIMULATION (Phase 8 of the 2026-09-11 redesign; simulation.py)
+# ---------------------------------------------------------------------------------------------
+def simulation_inputs_for_participant(uid, *, contact, centre_hz, hemisphere, epochs=None):
+    """The series the simulation runs over: every 3 s piece of voltage trace on `contact`, its
+    band power at the stored centre nearest `centre_hz`, and the amplitude the device was
+    delivering on `hemisphere` at that moment.
+
+    WHY THE TILES AND NOT THE REPORT'S OWN SERIES. The page's replay runs over the joined table --
+    one spectrum per recording, chronic snapshots minutes apart -- and on RCS08 correctly refuses
+    to run, because samples 230 s apart cannot resolve a 150 s ramp (the duty-cycle card's own
+    "not answerable at this sampling cadence"). The 3 s tiles the three-source comparison's
+    time-domain route already reads resolve it fifty times over, and they are the same calibrated
+    quantity (device-unit LSB) the thresholds were placed on (decision 45).
+
+    THE AMPLITUDE comes from the device's own per-sample current record where a piece falls inside
+    a streaming recording (the same clock as the power; `three_source_response.read_device_current`),
+    and from the settings epochs otherwise. A piece with neither is dropped and counted rather than
+    given an amplitude it did not have.
+    """
+    from Biomarkers import bravo_service as bs
+    from Biomarkers.routines import availability as _avail
+    from . import three_source_response as _3src
+
+    out = {"t": np.empty(0), "power": np.empty(0), "amp_obs": np.empty(0), "n_pieces": 0,
+           "n_unusable_pieces": 0, "n_dropped_no_amplitude": 0, "n_from_device_current": 0,
+           "n_from_epochs": 0, "centre_used_hz": None, "contact": str(contact)}
+    power = bs._load_recordings(uid, bs.POWERDOMAIN_TYPES)
+    td = bs._load_recordings(uid, bs.TIMEDOMAIN_TYPES)
+    psd = bs._load_recordings(uid, bs.AVAILABILITY_PSD_TYPES)
+    chans = list(dict.fromkeys(_avail._canon_channel(c) for c in bs._derive_chan_order(td)))
+    cache = bs._raw_lsb_cache_cached(
+        uid, chans, list(td) + list(psd),
+        bs._event_psd_lsb_blocks(uid, sensing_index=bs._build_sensing_config_index(list(td))),
+        montage_psd_blocks=bs._montage_psd_lsb_blocks(uid, montage_recordings=psd))
+    entry = cache.get(str(contact)) or {}
+    tiles = entry.get("td") or {}
+    t = np.asarray(tiles.get("t", []), dtype=float)
+    lsb = np.asarray(tiles.get("lsb", np.empty((0, 0))), dtype=float)
+    if t.size == 0 or lsb.ndim != 2 or lsb.shape[0] != t.size:
+        out["absent_reason"] = f"no 3 s voltage-trace pieces are stored for contact {contact}"
+        return out
+    centres = np.asarray(entry.get("centres_hz", entry.get("centers_hz", [])), dtype=float)
+    if centres.size != lsb.shape[1]:
+        out["absent_reason"] = "the tile entry's centre list does not match its band-power columns"
+        return out
+    j = int(np.argmin(np.abs(centres - float(centre_hz))))
+    out["centre_used_hz"] = float(centres[j])
+    p = lsb[:, j].astype(float)
+    ok = np.ones(t.size, dtype=bool)
+    if tiles.get("ok") is not None:
+        ok &= np.asarray(tiles["ok"], dtype=bool)
+    if tiles.get("saturated") is not None:
+        ok &= ~np.asarray(tiles["saturated"], dtype=bool)
+    out["n_pieces"] = int(t.size)
+    out["n_unusable_pieces"] = int((~ok).sum())
+    p = np.where(ok, p, np.nan)                     # unusable pieces are MISSING estimates, held
+
+    # the amplitude in force: the device's own current record first
+    side = str(hemisphere).upper()
+    amp = np.full(t.size, np.nan)
+    src = np.zeros(t.size, dtype=int)
+    current = _3src.read_device_current(power)
+    for block in current.get("blocks", []):
+        bt = np.asarray(block["t"], dtype=float)
+        names = [c for c in block["mA"] if str(c).upper().endswith(side)]
+        if bt.size < 2 or not names:
+            continue
+        ba = np.asarray(block["mA"][names[0]], dtype=float)
+        lo, hi = float(bt[0]), float(bt[-1])
+        m = (t >= lo) & (t <= hi) & ~np.isfinite(amp)
+        if not m.any():
+            continue
+        k = np.clip(np.searchsorted(bt, t[m]), 0, bt.size - 1)
+        amp[m] = ba[k]
+        src[m] = 1
+    # then the settings epochs
+    if epochs is not None and len(epochs):
+        col = canonical_amp_col(hemisphere)
+        if col not in epochs.columns:
+            col = resolve_setting_column(epochs.columns, "amp", hemisphere)
+        if col is not None and "t_start" in epochs.columns and "t_end" in epochs.columns:
+            es = pd.to_datetime(epochs["t_start"], utc=True).astype("int64").to_numpy(dtype=float) / 1e9
+            ee = pd.to_datetime(epochs["t_end"], utc=True).astype("int64").to_numpy(dtype=float) / 1e9
+            ea = pd.to_numeric(epochs[col], errors="coerce").to_numpy(dtype=float)
+            order = np.argsort(es)
+            es, ee, ea = es[order], ee[order], ea[order]
+            need = ~np.isfinite(amp)
+            k = np.clip(np.searchsorted(es, t[need], side="right") - 1, 0, es.size - 1)
+            inside = (t[need] >= es[k]) & (t[need] <= ee[k]) & np.isfinite(ea[k])
+            idx = np.flatnonzero(need)[inside]
+            amp[idx] = ea[k[inside]]
+            src[idx] = 2
+    keep = np.isfinite(amp)
+    out["n_dropped_no_amplitude"] = int((~keep).sum())
+    out["n_from_device_current"] = int((src == 1).sum())
+    out["n_from_epochs"] = int((src == 2).sum())
+    out["t"], out["power"], out["amp_obs"] = t[keep], p[keep], amp[keep]
+    return out
+
+
+def _run_windows_epoch_s(points, *, contact):
+    """(start, end) epoch seconds of every run of rising current on `contact`, from the STORED
+    per-run points table (which always holds every run; the page's own build is truncated to
+    four once the write-back entries exist, and an answer that depended on that would depend on
+    cache state -- decision 103's own complaint). Local timestamps are America/Los_Angeles."""
+    wins = []
+    if points is None or not len(points) or "window_end_local" not in points.columns:
+        return wins
+    sub = points[points["sensing_contact"].astype(str) == str(contact)]
+    for _, r in sub.drop_duplicates("run").iterrows():
+        try:
+            lo = pd.Timestamp(r["window_start_local"], tz="America/Los_Angeles").timestamp()
+            hi = pd.Timestamp(r["window_end_local"], tz="America/Los_Angeles").timestamp()
+            wins.append((float(lo), float(hi)))
+        except Exception:                               # noqa: BLE001
+            continue
+    return wins
+
+
+def _run_points_for(points, *, contact, centre_hz):
+    """(current, settled power, run label) of the time-domain route on one contact at the stored
+    centre nearest `centre_hz`, from the stored per-run points table -- what M3 resamples."""
+    from . import run_points as _rp
+    if points is None or not len(points):
+        return None
+    sub = points[(points["sensing_contact"].astype(str) == str(contact))
+                 & (points["source"].astype(str) == _rp.ROUTE_TIME_DOMAIN)
+                 & points["settled_band_power_device_units"].notna()]
+    if sub.empty:
+        return None
+    centres = sub["band_centre_hz"].astype(float)
+    c = float(centres.iloc[int(np.argmin(np.abs(centres.to_numpy() - float(centre_hz))))])
+    sub = sub[np.isclose(centres, c)]
+    return (sub["current_mA"].astype(float).to_numpy(),
+            sub["settled_band_power_device_units"].astype(float).to_numpy(),
+            sub["run"].astype(str).tolist())
+
+
+def simulation_signature(participant, *, tiles_key, contact, centre_hz, hemisphere, power_scale,
+                         plan, n_resample, seed):
+    """The key: the tile entry and recording set (the series), the candidate, the thresholds and
+    limits the controller runs with, the resampling settings, and this module's rule version."""
+    from . import simulation as _sim
+    return (_sim.KIND, _sim.RULE_VERSION, str(getattr(participant, "uid", participant)), tiles_key,
+            recording_set_signature(participant), str(contact), round(float(centre_hz), 3),
+            str(hemisphere), str(power_scale),
+            tuple(None if v is None else round(float(v), 6)
+                  for v in (plan.upper, plan.lower, plan.capture_amp_low, plan.capture_amp_high)),
+            int(n_resample), int(seed))
+
+
+def write_simulation(participant, *, rep, build, candidate, hemisphere, power_scale, epochs,
+                     n_resample=None, seed=0):
+    """Run the simulation for the report's first candidate and store it (kind
+    `closed_loop_simulation`), citing the raw roots its inputs cite. The summary says what was
+    written or why not; the payload itself is read back by `closed_loop_simulation_for_participant`
+    when the page asks for it after its first figures are up."""
+    from . import simulation as _sim
+    try:
+        from modules.CacheStore import provenance as _prov
+    except ImportError:                                # pragma: no cover - depends on the runner
+        from CacheStore import provenance as _prov
+
+    summary = {"written": False, "store_key": None, "n_pieces": 0, "seconds": None}
+    plan = getattr(rep, "threshold", None)
+    if plan is None or plan.upper is None or plan.lower is None:
+        summary["reason"] = "no thresholds were placed for this candidate, so there is no controller to run"
+        return summary
+    if plan.capture_amp_low is None or plan.capture_amp_high is None:
+        summary["reason"] = "the plan has no capture amplitude range, which the limits are held to"
+        return summary
+    contact = (candidate or {}).get("channel")
+    centre = (candidate or {}).get("center_hz")
+    if contact is None or centre is None:
+        summary["reason"] = "the candidate carries no sensing contact or band centre"
+        return summary
+    tiles_key = _tiles_key_for(participant)
+    if tiles_key is None:
+        summary["reason"] = "no tile entry key, so nothing could be run or stored"
+        return summary
+    n_resample = _sim.DEFAULT_N_RESAMPLE if n_resample is None else int(n_resample)
+    uid = str(getattr(participant, "uid", participant))
+    sig = simulation_signature(participant, tiles_key=tiles_key, contact=contact, centre_hz=centre,
+                               hemisphere=hemisphere, power_scale=power_scale, plan=plan,
+                               n_resample=n_resample, seed=seed)
+    summary["store_key"] = _cache_store.product_key(_sim.KIND, uid, sig)
+    if _cache_store.read_stamp(_sim.KIND, uid, sig, root=_SHARED_CACHE_DIR_OVERRIDE) is not None:
+        summary["written"] = True
+        summary["already_stored"] = True
+        return summary
+
+    import time as _time
+    t0 = _time.perf_counter()
+    inputs = simulation_inputs_for_participant(uid, contact=contact, centre_hz=float(centre),
+                                               hemisphere=hemisphere, epochs=epochs)
+    summary["n_pieces"] = int(inputs.get("n_pieces", 0))
+    if inputs.get("absent_reason") or not len(inputs["t"]):
+        summary["reason"] = inputs.get("absent_reason") or "no usable pieces with a known amplitude"
+        return summary
+    from . import amplitude_effect as _amp
+    pooled_table = pooled_shape_if_stored(participant)
+    pooled_row = _amp.pooled_row(pooled_table, contact, float(centre))
+    stored_points = run_points_if_stored(participant)
+    points = _run_points_for(stored_points, contact=contact, centre_hz=float(centre))
+    payload = _sim.run_models(inputs["t"], inputs["power"], inputs["amp_obs"], plan, pooled_row,
+                              run_points=points,
+                              run_windows=_run_windows_epoch_s(stored_points, contact=contact),
+                              n_resample=n_resample, seed=seed,
+                              min_points_resample=_amp.MIN_POINTS_CURVATURE)
+    payload["inputs"] = {k: inputs[k] for k in ("n_pieces", "n_unusable_pieces", "n_dropped_no_amplitude",
+                                                "n_from_device_current", "n_from_epochs",
+                                                "centre_used_hz", "contact")}
+    payload["candidate"] = {"channel": str(contact), "center_hz": float(centre), "hemisphere": str(hemisphere),
+                            "power_scale": str(power_scale)}
+    payload["pooled_row_found"] = pooled_row is not None
+    payload["seconds"] = _time.perf_counter() - t0
+    summary["seconds"] = payload["seconds"]
+
+    chain = [_prov.entry(tiles_key, kind="raw_lsb_tiles", writer="biomarkers")]
+    for kind in (_amp.POOLED_KIND,):
+        try:
+            _p, stamp = _cache_store.load_newest(kind, uid, consumer="closed_loop",
+                                                 root=_SHARED_CACHE_DIR_OVERRIDE)
+            chain += list((stamp or {}).get("provenance") or [])
+        except Exception:                               # noqa: BLE001 -- the tiles alone then
+            pass
+    _cache_store.store_if_absent(_sim.KIND, uid, sig, lambda: payload,
+                                 writer="closed_loop", trigger="deployment_report",
+                                 provenance=_prov.flatten(chain), n_recordings=None,
+                                 extra={"n_pieces": summary["n_pieces"], "active_model": payload.get("active_model"),
+                                        "refused": bool(payload.get("refused")),
+                                        "candidate": _simulation_candidate_tag(contact, centre, hemisphere)},
+                                 root=_SHARED_CACHE_DIR_OVERRIDE)
+    summary["written"] = _cache_store.read_stamp(_sim.KIND, uid, sig, root=_SHARED_CACHE_DIR_OVERRIDE) is not None
+    summary["active_model"] = payload.get("active_model")
+    summary["refused"] = bool(payload.get("refused"))
+    return summary
+
+
+def _simulation_candidate_tag(contact, centre_hz, hemisphere):
+    """What the sidecar records the simulation is FOR, so a read can pick the right entry: the
+    store keeps several per participant (one per candidate) and the newest is not necessarily the
+    one the page is showing."""
+    try:
+        c = round(float(centre_hz), 3)
+    except (TypeError, ValueError):
+        c = None
+    return {"channel": str(contact), "center_hz": c, "hemisphere": str(hemisphere)}
+
+
+def simulation_if_stored(participant, candidate=None, *, hemisphere="Left"):
+    """The newest stored simulation for this participant -- for THIS candidate when one is given
+    (matched on the sidecar's `candidate` tag), else the newest of any -- or None."""
+    from . import simulation as _sim
+    match = None
+    if candidate and candidate.get("channel") is not None and candidate.get("center_hz") is not None:
+        want = _simulation_candidate_tag(candidate["channel"], candidate["center_hz"],
+                                         candidate.get("actuated_hemisphere") or hemisphere)
+        match = lambda meta: (meta.get("extra") or {}).get("candidate") == want  # noqa: E731
+    try:
+        payload, _stamp = _cache_store.load_newest(_sim.KIND, str(getattr(participant, "uid", participant)),
+                                                   consumer="closed_loop",
+                                                   root=_SHARED_CACHE_DIR_OVERRIDE, match=match)
+        return payload
+    except Exception:                                  # noqa: BLE001 - a miss is not an error
+        _log.warning("closed-loop: the stored simulation could not be read for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
+        return None
+
+
+def closed_loop_simulation_for_participant(participant, candidate=None, *, hemisphere="Left"):
+    """The stored simulation for this candidate alone, for the page's background fetch after its
+    first figures. Builds nothing: the report writes it, this reads it back."""
+    payload = simulation_if_stored(participant, candidate, hemisphere=hemisphere)
+    if payload is None:
+        payload = {"gates_nothing": True, "refused": True, "models": {},
+                   "absent_reason": ("no simulation is stored for this configuration yet; the report "
+                                     "writes one the next time it runs with thresholds placed for it")}
+    payload = dict(payload)
+    payload["available"] = True
+    payload["cache_status"] = _cache_status_or_reason(participant)
+    return payload
 
 
 def cache_status_for_page(participant):
@@ -2059,12 +2358,13 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
         # points behind the pooled three-source view. Otherwise only the page's runs are built.
         try:
             _rp_stored = run_points_stored_for_current_key(participant)
+            _ps_stored = pooled_shape_stored_for_current_key(participant)
         except Exception:                               # noqa: BLE001 -- a miss means build
             _log.warning("closed-loop report: could not check the stored per-run points for %s",
                          getattr(participant, "uid", participant), exc_info=True)
-            _rp_stored = False
-        _3_max_runs = (THREE_SOURCE_RUNS_ON_PAGE if (_amp_stored and _gt_stored and _rp_stored)
-                       else _ALL_RUNS)
+            _rp_stored = _ps_stored = False
+        _3_max_runs = (THREE_SOURCE_RUNS_ON_PAGE
+                       if (_amp_stored and _gt_stored and _rp_stored and _ps_stored) else _ALL_RUNS)
         _3_is_every_run = _3_max_runs == _ALL_RUNS
         _3build = _3src.build_for_participant(
             getattr(participant, "uid", participant), max_runs=_3_max_runs)
@@ -2219,6 +2519,19 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                                           "reason": f"could not be stored: {_exc!r}"}
         out["three_source_pooled"] = {"gates_nothing": True, "sides": [],
                                       "absent_reason": f"could not be grouped: {_exc!r}"}
+
+    # THE CLOSED-LOOP SIMULATION, run for the first candidate and stored under its own key; the
+    # page fetches the payload after its first figures are up. Its inputs are the 3 s tiles, the
+    # stored pooled curve and the stored per-run points, so it runs after those are written.
+    try:
+        out["closed_loop_simulation"] = write_simulation(
+            participant, rep=rep, build=_3build, candidate=(cands[0] if cands else None),
+            hemisphere=hemisphere, power_scale=power_scale, epochs=eps)
+    except Exception as _exc:                          # noqa: BLE001
+        _log.warning("closed-loop report: the simulation could not be run or stored for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
+        out["closed_loop_simulation"] = {"written": False, "store_key": None,
+                                         "reason": f"could not be run or stored: {_exc!r}"}
 
     # ---------------------------------------------------------------------------------------------
     # THE CONSISTENCY CHECK (decision 74): does raising current on this contact move pain the way

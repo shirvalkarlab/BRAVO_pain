@@ -31,6 +31,7 @@ export const SNAPSHOT_SECTIONS = [
   { id: "cl-lsb", title: "Band power in the device's own units, and where the switching value sits" },
   { id: "cl-three-source", title: "Stimulation amplitude effects on band power, measured three ways" },
   { id: "cl-evidence", title: "The three links of evidence: current to power, power to pain, current to pain" },
+  { id: "cl-simulation", title: "CL-DBS simulations" },
 ];
 
 // Pixels per CSS pixel. 2 keeps axis text legible on paper without making the JSON export enormous.

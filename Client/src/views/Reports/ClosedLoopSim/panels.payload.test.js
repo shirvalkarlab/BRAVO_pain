@@ -27,7 +27,6 @@ import PAL from "./palette";
 import DeviceRuleLedger from "./DeviceRuleLedger";
 import EvidenceTrianglePanel from "./EvidenceTrianglePanel";
 import PrescriptionPanel from "./PrescriptionPanel";
-import DutyCyclePanel from "./DutyCyclePanel";
 import WhatWouldChangeThis from "./WhatWouldChangeThis";
 import payload from "./__fixtures__/rcs08_deployment_payload.json";
 
@@ -203,40 +202,6 @@ describe("the evidence panel separates the two coherence questions", () => {
   });
 });
 
-describe("the duty cycle panel never reports a fraction of the day", () => {
-  it("labels the fractions as fractions of the samples on record and shows the coverage", () => {
-    const { container } = render(<DutyCyclePanel report={report} mode="dual" />);
-
-    expect(container.textContent).toMatch(/fractions of the samples on record, not of the day/);
-    expect(container.textContent).toMatch(/coverage of 0\.0124%/);
-    // The one phrase that must never appear while fractions_are_of_observed_samples is true.
-    expect(container.textContent).not.toMatch(/% of the day/);
-    expect(container.textContent).not.toMatch(/percent of the day/);
-  });
-
-  it("says the amplitude question is unanswerable at this cadence rather than showing zeros", () => {
-    const { container } = render(<DutyCyclePanel report={report} mode="dual" />);
-
-    expect(screen.getByText(/Not answerable at this sampling cadence/)).toBeInTheDocument();
-    expect(container.textContent).toMatch(/samples arrive every 230 s/);
-    expect(container.textContent).toMatch(/transition up takes 150 s/);
-  });
-
-  it("carries every caveat the module attached, and the onset finding with its arithmetic", () => {
-    const { container } = render(<DutyCyclePanel report={report} mode="dual" />);
-
-    expect(screen.getByText(/ALL 5 CAVEATS THE MODULE ATTACHED/)).toBeInTheDocument();
-    expect(screen.getByText(/THE ONSET DURATION IS INOPERATIVE/)).toBeInTheDocument();
-    expect(container.textContent).toMatch(/upper onset spans 1 controller step/);
-  });
-
-  it("reports no duty cycle for the mode that cannot drive therapy", () => {
-    const { container } = render(<DutyCyclePanel report={report} mode="single_inverse" />);
-    expect(container.textContent)
-      .toMatch(/No duty cycle is computed for Single Threshold Inverse/);
-  });
-});
-
 describe("the rule ledger keeps the nine outcome kinds apart", () => {
   it("renders all four advisory kinds and pins the recorded values", () => {
     render(<DeviceRuleLedger report={report} />);
@@ -278,7 +243,7 @@ describe("the what-would-change band ranks the outstanding work and names its ow
 
 describe("every panel survives an absent report rather than throwing", () => {
   it("renders a withholding or not-evaluated state for each one", () => {
-    [DeviceRuleLedger, EvidenceTrianglePanel, DutyCyclePanel, WhatWouldChangeThis]
+    [DeviceRuleLedger, EvidenceTrianglePanel, WhatWouldChangeThis]
       .forEach((Panel) => {
         const { container, unmount } = render(<Panel report={empty} />);
         expect(container.textContent.length).toBeGreaterThan(0);

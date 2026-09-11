@@ -32,7 +32,7 @@ import numpy as np
 import pandas as pd
 
 KIND = "three_source_run_points"
-RULE_VERSION = "v1_run_points"
+RULE_VERSION = "v2_run_points_window_end"
 
 # The three routes, by the names the comparison uses (three_source_response.SOURCE_*). Spelled here
 # rather than imported so a reader of a stored table can match them without the module.
@@ -46,7 +46,9 @@ ROUTE_KEYS = {ROUTE_TIME_DOMAIN: "time_domain", ROUTE_DEVICE_SPECTRUM: "psd",
 #: `verdict` carried as `curvature_note` so the word never appears in a payload that gates nothing.
 POOLED_VIEW_FIELDS = ("pooled_direction", "pooled_slope_per_mA", "pooled_slope_stderr",
                       "pooled_slope_p", "n", "n_visits", "curves", "peaks_inside", "peak_mA",
-                      "p_curvature", "r2_linear", "r2_quadratic")
+                      "p_curvature", "r2_linear", "r2_quadratic",
+                      "quad_coef_per_mA2", "quad_lin_coef_per_mA", "quad_coef_stderr",
+                      "post_peak_slope_per_mA", "post_peak_intercept", "post_peak_n_points")
 
 
 def _f(v):
@@ -68,7 +70,10 @@ def run_points_table_from_build(build) -> pd.DataFrame:
     rows: List[Dict[str, Any]] = []
     for comp in (build or {}).get("comparisons", []) or []:
         extra = {"programmed_centre_hz": _f(getattr(comp, "programmed_centre_hz", None)),
-                 "window_start_local": str(getattr(comp, "window_start_local", "") or "")}
+                 "window_start_local": str(getattr(comp, "window_start_local", "") or ""),
+                 # since v2: the run's end too, so the simulation's settling-time measurement can
+                 # read every run's window from this table whatever the page's own build held
+                 "window_end_local": str(getattr(comp, "window_end_local", "") or "")}
         for r in TSR.comparison_rows(comp):
             rows.append({**r, **extra})
     if not rows:
@@ -77,7 +82,7 @@ def run_points_table_from_build(build) -> pd.DataFrame:
     # Parquet needs one type per column; the reasons and labels are strings, the rest numeric or
     # boolean, and a None in a numeric column becomes NaN on the way through.
     for c in ("why_not_used", "route_absent_reason", "run", "visit_date", "ramped_side",
-              "sensing_contact", "source", "window_start_local"):
+              "sensing_contact", "source", "window_start_local", "window_end_local"):
         if c in df:
             df[c] = df[c].astype(str)
     return df.reset_index(drop=True)

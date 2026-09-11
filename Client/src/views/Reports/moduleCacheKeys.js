@@ -57,6 +57,8 @@ export const CL = {
   // arrived so the first figures are never behind it (the PI, 2026-09-11: "prefetch the data
   // after the first figures load"). Its own slot for the same reason the grid has one.
   pooled: `${MODULES.closedLoop}/pooled`,
+  // the stored closed-loop simulation, fetched after the report the same way (Phase 8)
+  simulation: `${MODULES.closedLoop}/simulation`,
 };
 
 /** Every slot in the family, in no meaningful order. */

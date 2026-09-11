@@ -6,12 +6,13 @@ Make the Closed-Loop Deployment page much shorter and easier to read, following 
 is built, and every built change proven in the served bundle and on the live RCS08 page.
 
 ## Next Step
-WAITING ON THE PI: (1) the five questions in the simulation design's §7 and his go-ahead to build
-it; (2) a look at the pooled three-source panel and the triangle's new E1 on the live page. All
-code phases (3–7) are landed and pushed. Nothing else is queued.
+WAITING ON THE PI: a look at the "CL-DBS simulations" card at the foot of the live page -- on his
+committed band (L 0-2+ at 24.5 Hz, one run) it says honestly that no response curve can be fitted
+yet; on L 1-3+ at 20.5 Hz (4 runs) it draws the three figures with M1 and the M3 interval. Open
+items on him are unchanged (30: the titration protocol; 29: the default branch). Nothing is queued.
 
 ## Current Phase
-Phase 8 (design written; waiting on the PI)
+Phase 8 complete; all eight phases landed and pushed
 
 ## Phases
 
@@ -82,18 +83,33 @@ Phase 8 (design written; waiting on the PI)
 
 ### Phase 7: Prove, record, land
 
-**Status:** pending
-- [ ] Frontend rebuilt; owned strings found in the served chunks
-- [ ] Watched live on RCS08 with the PI; before/after screenshots in findings
-- [ ] Container and host suites run and logged (counts from the log, not carried forward)
-- [ ] Decisions and open items added to DECISIONS_and_open_items.md; handoff written; committed
-      and pushed on PS_closedloop_deployment
+**Status:** complete
+- [x] Frontend rebuilt; owned strings found in the served chunks (every phase, last: build e)
+- [x] Watched live on RCS08 in the PI's own Chrome (every phase)
+- [x] Container and host suites run and logged (counts from the log, not carried forward)
+- [x] Decisions 122-129 in DECISIONS_and_open_items.md; handoff in progress.md; committed and
+      pushed on PS_closedloop_deployment
 
 ### Phase 8: Closed-loop simulation module design (old item 9) — LAST, per the PI (decision 7)
-**Status:** in_progress
+**Status:** complete
 - [x] Design written: artifacts/design_2026-09-11_closed_loop_simulation_module.md (three plant
       models M0/M1/M2 + run-resampled intervals, outputs, placement, seven tests, five questions)
-- [ ] The PI's answers to its §7 questions and his go-ahead — nothing built until then
+- [x] The PI's answers to its §7 questions and his go-ahead (decisions 15-21 below)
+- [x] Step 1: pooled fit returns the quadratic's coefficients (within_visit), additive
+- [x] Step 2: stored pooled table carries them; POOLED_RULE_VERSION -> v2; view fields too
+- [x] Step 3: StimOptimizer/routines/amplitude_response.py -- ResponseCurve (linear, quadratic +
+      post-peak line), pure numpy, importable by every module
+- [x] Step 4: DROPPED -- the simulation reads the 3 s pieces, not the report's series (the chronic
+      series cannot resolve the ramp); the stash was removed again after the payload test caught it
+- [x] Step 5: ClosedLoopDeployment/simulation.py -- M0/M1/M2 one loop, M3 run-resampled
+- [x] Step 6: stored kind closed_loop_simulation; adapter write + read; bravo_service serves it
+      alone on ClosedLoopSimulation: 1 (fetched after the first figures)
+- [x] Step 7: tests/test_simulation.py (design §6's seven + coefficients + regridding + per-candidate read)
+- [x] Step 8: host 1053 passed / 42 skipped / 0 failed; container 626 / 0 (13:44-13:46, settled code);
+      M0 vs the replay on the same 114 stretches: 5 fields, 0 differing
+- [x] Step 9: load bravo-stimoptimizer-figures, tufte-viz, tufte-test, ps-plotly BEFORE drawing
+- [x] Step 10: card "CL-DBS simulations" after the sign-off card; cl-duty card removed; visual-first
+- [x] Step 11: bundle (main.8a55.. + chunk 761), HUP, watched live in the PI's Chrome, decisions 128-129, committed, pushed
 
 ## Decisions Made
 | # | Decision | Rationale |
@@ -113,6 +129,16 @@ Phase 8 (design written; waiting on the PI)
 | 5 | Pooled three-source view: store each run's points beside the pooled table once, read them back | PI chose option B over rebuilding every run per page load (32 s cold) |
 | 6 | Evidence-triangle input from the pooled view is NOT decided; needs a literature swarm + descriptive analysis of the amplitude-vs-power shape (inverted-U / M) first; the triangle keeps today's edge until then | PI: "needs deeper work ... focus on identifying the peak of the inverted-U" |
 | 7 | Closed-loop simulation design goes last, after everything else | PI: "do at the very end" |
+| 15 | M1's settling time: the measured response latency where a run supports it, else the 30 s settled window | PI 2026-09-11, §7 Q1: "Default measured when available; else 30s" |
+| 16 | Amplitude limits held to the capture range, as the replay does | PI, Q2: "agree hold, keep module capturing range like replay" |
+| 17 | Wrong-side-of-the-peak time is a number with a warning line; it blocks nothing | PI, Q3: "numeric value + a warning threshold/value (no blocker)" |
+| 18 | M3 (run-resampled intervals) runs on every page load | PI, Q4: "report if low-cost; show M3 on every page" (11 runs on RCS08 is cheap) |
+| 19 | A NEW card "CL-DBS simulations" at the bottom after the sign-off card; the duty-cycle ("replay analysis") card above is removed because M0 replicates it | PI: "add new card at bottom after deployment ... remove existing replay analysis outputs/card sections above since M0 will replicate it" |
+| 20 | The card is visual-first: plots and diagrams wherever possible, minimal caption text; the sign-off card's simulation section likewise | PI: "Critical: apply scientific visualization ... Replace text outputs with plots/images/diagrams wherever possible" |
+| 22 | The simulation's series is the 3 s voltage-trace pieces (every recording on the contact), put on the device's 3 s clock per stretch, NOT the report's chronic series | the chronic series (230 s apart) cannot resolve the 150 s ramp, which is why the old duty-cycle card said "not answerable"; the pieces resolve it 50x over and are the same calibrated quantity the thresholds sit on; jitter inside a recording refused 33 of 43 stretches until regridded |
+| 23 | The stored kind cites its RAW roots (tiles), like the pooled table, so it is released to every module including closed_loop; a chain naming the exploration ladder is the refused case | the refusal fires when the CONSUMER's own output is in the chain; citing the pooled entry itself would have refused it to closed_loop |
+| 24 | One stored simulation per candidate band (KEEP_NEWEST_BY_KIND = 6) and the read-back matches the sidecar's candidate tag; the page sends its candidate with the fetch | met live: the page's own report (L 0-2+ at 24.5 Hz) evicted the probe's entry and the newest-of-any read served the wrong band -- the decision-107 defect again |
+| 21 | The plant is a pluggable RESPONSE CURVE (power offset = g(amp_sim) - g(amp_obs)); linear today, quadratic + post-peak line when a bend is established; the pooled table stores the quadratic's coefficients so the switch needs no schema change; the curve lives in a pure-numpy StimOptimizer routine so Biomarkers can import it later | PI: "make this flexible so we can later incorporate the bend ... for Biomarkers"; the per-run baseline cancels in the difference, which is what makes M0 the exact zero-curve case |
 
 ## Errors Encountered
 | Error | Attempt | Resolution |

@@ -157,3 +157,34 @@ The build is roughly: one module (`simulation.py`, plant models + a wrapper arou
 `replay.dual_threshold` that feeds the moved power back), one store kind, one adapter block, one
 panel edit, seven tests, and the live proof on RCS08 with M0 = replay (0 differing fields) as the
 control.
+
+---
+
+## 8. What was built, where it departs from the design above, and why (added 2026-09-11)
+
+The PI answered the five questions of §7 the same day (redesign plan decisions 15-21) and the module
+was built. Four things differ from the text above; the text is kept and this section corrects it.
+
+1. **The plant is a response CURVE, not a slope** (`StimOptimizer/routines/amplitude_response.py`).
+   `p_sim = p_obs + delta`, with `delta` relaxing toward `g(a_sim) - g(a_obs)`; the per-run baseline
+   cancels in that difference, which is what makes M0 (the zero curve) reproduce the replay bit for
+   bit. M1 is the straight line, M2 the fitted quadratic with decision 55's post-peak line, one code
+   path. The stored pooled table now carries the quadratic's coefficients (v2) so M2 switches on
+   without a schema change when a bend is established -- the PI's instruction ("flexible so we can
+   later incorporate the bend").
+2. **The series is the 3 s voltage-trace pieces, not the joined table §2 names.** The joined table
+   holds one spectrum per recording -- chronic snapshots minutes apart -- and the replay refuses it
+   (samples 230 s apart cannot resolve a 150 s ramp: the old duty-cycle card's "not answerable at
+   this sampling cadence"). The pieces resolve the ramp fifty times over and are the same
+   calibrated quantity the thresholds were placed on. Inside a recording they jitter, so each
+   stretch is put on the device's own 3 s clock first (`simulation.regrid_stretches`); a cell with
+   no piece is a missing estimate the controller holds across.
+3. **The stored kind is released to Stim Optimizer, not refused** (§5 was wrong). The refusal fires
+   when a product's chain contains the CONSUMER's own output; the simulation, like the pooled table
+   it reads, cites its raw roots (the tiles), so nothing of Stim Optimizer's is in it. The control
+   test pins the case that IS refused: a chain naming the exploration ladder.
+4. **Placement: a new card, "CL-DBS simulations", after the sign-off card**, and the duty-cycle
+   card is gone (M0 replicates it) -- the PI's choice over extending that card. Visual-first:
+   three figures and one derived headline; the method is folded.
+
+Measured on RCS08 (ONE_THREE_LEFT, 20.5 Hz): see decision 128 in `DECISIONS_and_open_items.md`.

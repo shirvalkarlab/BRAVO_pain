@@ -304,11 +304,13 @@ def _read_meta_file(path):
         return None
 
 
-def newest_stamp(kind, participant_uid, root=None):
+def newest_stamp(kind, participant_uid, root=None, match=None):
     """The newest sidecar for this kind and participant, whatever its signature, or None.
 
     A page needs to say "last updated" before it knows whether today's key matches, so this looks
-    the participant up by name rather than by signature.
+    the participant up by name rather than by signature. ``match``, when given, is a predicate on
+    the sidecar: the newest sidecar it accepts is returned, so a kind that keeps several entries
+    per participant (KEEP_NEWEST_BY_KIND) can be read back by what its `extra` says it is for.
     """
     d = kind_dir(kind, create=False, root=root)
     if d is None:
@@ -327,6 +329,12 @@ def newest_stamp(kind, participant_uid, root=None):
         meta = _read_meta_file(os.path.join(d, name))
         if meta is None:
             continue
+        if match is not None:
+            try:
+                if not match(meta):
+                    continue
+            except Exception:                            # noqa: BLE001 -- a predicate that raises matches nothing
+                continue
         w = str(meta.get("written_utc") or "")
         if w >= best_written:
             best, best_written = meta, w
@@ -385,7 +393,7 @@ def status_for_page(kind, participant_uid, signature, *, what_it_means, root=Non
             "writer": stamp.get("writer"), "what_it_means": what_it_means, "note": None}
 
 
-def load_newest(kind, participant_uid, *, consumer=None, root=None):
+def load_newest(kind, participant_uid, *, consumer=None, root=None, match=None):
     """`(payload, stamp)` for the newest entry of this kind and participant, or `(None, None)`.
 
     FOR A READER THAT CANNOT REBUILD THE WRITER'S KEY. The amplitude-effect table is keyed by the
@@ -397,7 +405,7 @@ def load_newest(kind, participant_uid, *, consumer=None, root=None):
     returned as `(None, stamp)`, so the caller can say that an entry existed and could not be
     read, which is not the same as no entry having been written.
     """
-    stamp = newest_stamp(kind, participant_uid, root=root)
+    stamp = newest_stamp(kind, participant_uid, root=root, match=match)
     if not stamp:
         _bump("misses")
         return None, None
@@ -557,6 +565,10 @@ KEEP_NEWEST_BY_KIND = {
     "biomarker_band_sweep": 12,
     "biomarker_band_correlation": 12,
     "biomarker_band_discrimination": 12,
+    # One simulation per candidate band (closed_loop_simulation is keyed on the candidate), so
+    # switching the committed band must not evict the last one -- the decision-107 lesson again,
+    # met live on 2026-09-11 when the page's own report evicted the probe's entry.
+    "closed_loop_simulation": 6,
 }
 
 

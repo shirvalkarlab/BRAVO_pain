@@ -67,7 +67,7 @@ import WhatWouldChangeThis from "./WhatWouldChangeThis";
 import DeviceRuleLedger from "./DeviceRuleLedger";
 import EvidenceTrianglePanel from "./EvidenceTrianglePanel";
 import PrescriptionPanel from "./PrescriptionPanel";
-import DutyCyclePanel from "./DutyCyclePanel";
+import ClosedLoopSimulationPanel from "./ClosedLoopSimulationPanel";
 import BandStabilityPanel from "./BandStabilityPanel";
 import ReliableChangePanel from "./ReliableChangePanel";
 import BandSweepGridPanel from "./BandSweepGridPanel";
@@ -76,6 +76,7 @@ import useDeploymentSummary from "./useDeploymentSummary";
 import useDeploymentReport from "./useDeploymentReport";
 import useBandSweepGrid from "./useBandSweepGrid";
 import useThreeSourcePooled from "./useThreeSourcePooled";
+import useClosedLoopSimulation from "./useClosedLoopSimulation";
 import PAL from "./palette";
 import Fold from "./Fold";
 import "./deployPrint.css";
@@ -394,17 +395,20 @@ function ClosedLoopSim() {
   // the configuration at all, estimates the three edges of the amplitude, power and pain triangle at
   // their correct clustering units, and tests whether the three signs are coherent with the control
   // law. Both must clear, and they can disagree.
+  // One candidate object for the report AND the simulation fetch, so the two cannot name
+  // different bands (the simulation is read back BY candidate since 2026-09-11).
+  const reportCandidate = bc && {
+    channel: bc.contact,
+    centerHz: bc.center_freq_hz,
+    bandWidthHz: bc.bandwidth_hz || 5.0,
+    sensingHemisphere: bc.hemisphere,
+    rateHz: bc.rate_hz,
+    pulseWidthUs: bc.pulse_width_us,
+    thresholdMode: bc.threshold_mode || "dual",
+  };
   const deploymentReport = useDeploymentReport({
     participantUid: participant_uid,
-    bandCandidate: bc && {
-      channel: bc.contact,
-      centerHz: bc.center_freq_hz,
-      bandWidthHz: bc.bandwidth_hz || 5.0,
-      sensingHemisphere: bc.hemisphere,
-      rateHz: bc.rate_hz,
-      pulseWidthUs: bc.pulse_width_us,
-      thresholdMode: bc.threshold_mode || "dual",
-    },
+    bandCandidate: reportCandidate,
   });
 
   // TRACK D: fetched independently of any committed candidate -- see useBandSweepGrid.js for why
@@ -418,6 +422,9 @@ function ClosedLoopSim() {
   const threeSourcePooled = useThreeSourcePooled({
     participantUid: participant_uid, afterReport: deploymentReport.data,
   });
+  const closedLoopSim = useClosedLoopSimulation({ participantUid: participant_uid,
+    bandCandidate: reportCandidate, afterReport: deploymentReport.data,
+    reportStamp: deploymentReport.computedAt });
   // Medtronic labels for sensing contacts, from the grid's own sweeps (server-built, decision 86).
   const contactLabel = (ch) => {
     const sw = bandSweepGrid.grid && bandSweepGrid.grid.band_time_sweep
@@ -624,10 +631,9 @@ function ClosedLoopSim() {
                   onMode={setThresholdMode} />
               </Grid>
 
-              {/* BAND 5 — the predicted duty cycle, for the mode selected above. */}
-              <Grid item xs={12} id="cl-duty">
-                <DutyCyclePanel report={deploymentReport} mode={thresholdMode} />
-              </Grid>
+              {/* The predicted duty cycle card that stood here until 2026-09-11 is gone: the
+                  "CL-DBS simulations" card at the foot of the page replicates it as model M0 and
+                  adds the loop closed through the fitted response (the PI's instruction). */}
 
               <Grid item xs={12}>
                 <BandCandidateIdentity bc={bc} envelope={envelope} />
@@ -720,6 +726,18 @@ function ClosedLoopSim() {
                 <DeploySignoffCard participantUid={participant_uid} bandCandidate={bc}
                   requestParams={requestParams} cutpoint={cutpoint} summary={summary}
                   deploymentReport={deploymentReport} />
+              </Grid>
+
+              {/* CL-DBS SIMULATIONS, last, after the sign-off card (the PI, 2026-09-11: "add new
+                  card at bottom after deployment"). The controller run over this participant's
+                  own recorded band power three ways: replayed as recorded (M0), with the loop
+                  closed through the fitted response (M1, or M2 once a bend is established), and
+                  with runs resampled for an interval (M3). Fetched after the report, which is what
+                  writes it. Plotly figures, so it stays outside the analyst fold above. */}
+              <Grid item xs={12} id="cl-simulation">
+                <ClosedLoopSimulationPanel sim={closedLoopSim}
+                  hemisphere={deploymentReport?.data?.manifest?.hemisphere}
+                  contactLabel={contactLabel} bandCandidate={bc} />
               </Grid>
             </>
           )}
