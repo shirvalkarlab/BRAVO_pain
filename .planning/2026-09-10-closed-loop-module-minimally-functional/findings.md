@@ -99,3 +99,16 @@ show, and returns a worse estimate.
 
 **State of the code at this point: UNCOMMITTED.** `reliable_change.py` carries a parameterised
 `max_epoch_hours` (default 12) and `adapter.py` reports it. Nothing committed; the PI is choosing.
+
+### §8d. Are the one-hour pairs really under unchanged settings? Measured 2026-09-10, independently of the stretch labels
+Probe `_agent_bridge/_probe_rc/probe_verify_pairs.py` (disposable) looked up, for BOTH ratings of every
+pair the floor uses, the settings in force straight from the device's programmed history (carried forward
+from the last change) and compared rate, left/right current, left/right pulse width, left/right contact.
+Result on RCS08: **83 of 83 pairs across all six scores identical on every one of those at both ends, 0
+changed between** (NRS 15/15, VAS 15/15, MPQ 14/14, left-leg 12/12, back 12/12, relief 15/15).
+**Caveat found by the same probe:** "unchanged" is not "on". Of the 15 NRS pairs, **5 have both stimulators
+at 0 mA and 2 have one side at 0 mA**; only 8 have both sides delivering current. Those off-stim pairs
+(2025-07-23, 2025-07-29, 2026-04-27 both-off; 2025-10-07 right-off) are all 9->9 or 8->8. Whether a
+stim-off pair counts as "stable therapy" is the PI's call; the code today counts it, because the rule is
+"every setting unchanged", which stim-off satisfies. Not visible on the page: the panel prints the pair and
+stretch counts but nothing about whether stimulation was on during them.

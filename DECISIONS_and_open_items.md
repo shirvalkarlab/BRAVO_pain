@@ -245,6 +245,20 @@ hygiene as a work item — the latter is an operational note in `OPERATIONS_runb
     rules and the dose-response work, and not to the page whose job is finding which bands track
     pain.**
 
+28. **Should a pair of ratings taken with BOTH stimulators at 0 mA count toward the reliable-change
+    noise floor?** Raised 2026-09-10 when the PI asked whether the one-hour pairs (decision 111)
+    really reflect stable therapy. Measured against the device's programmed history, independently
+    of the stretch labels: all 83 pairs across the six scores have identical rate, both currents,
+    both pulse widths and both contacts at both ratings — 0 changed between. But "unchanged" is
+    not "on": of the 15 NRS pairs, 5 have both sides at 0 mA (2025-07-23 ×2, 2025-07-29,
+    2026-04-27 ×2, all 9→9 or 8→8) and 2 have the right side at 0 mA (2025-10-07). The 8 pairs with
+    current on both sides include every pair whose rating moved. The code counts stim-off pairs
+    today because the chosen rule is "every setting unchanged", which stim-off satisfies. Requiring
+    current on both sides would drop the NRS base from 15 to 8 pairs and change the threshold; that
+    is a rule change and is not made. **Not visible on the page**: the Closed-Loop Deployment
+    panel "How big a change in this patient's own rating means anything?" prints the pair and
+    stretch counts and nothing about whether stimulation was on. His call.
+
 ### Open engineering, not blocked on anyone
 
 ~~26~~. **RESOLVED 2026-09-10, decision 106.** ~~The length-of-signal axis of the calibrated grid means nothing for a cell served by the

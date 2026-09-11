@@ -149,3 +149,14 @@ panel. Live on RCS08: NRS 15 pairs / 8 stretches / 8 same-minute repeats set asi
 threshold 1.01; all six scores assessed; verdict unmoved. Host 1025 passed (1 known), container
 633/0. Frontend rebuilt; panel text in 476.21797a76.chunk.js. Decision 104's wrong sentence
 corrected in place. The 12-hour epoch-cutoff draft was discarded, never committed.
+
+### Reliable-change pairs verified against the device's programmed history (2026-09-10)
+PI asked whether every one-hour pair really sits under one unchanged stimulation setting. Checked
+independently of the stretch labels: for both ratings of every pair, the settings in force were read
+straight from the device's programmed history and compared on rate, both currents, both pulse widths,
+both contacts. **83 of 83 pairs identical at both ends, 0 changed between** (NRS 15, VAS 15, MPQ 14,
+left-leg 12, back 12, relief 15). Found in the same probe: 5 of the 15 NRS pairs have both stimulators
+at 0 mA and 2 have one side off; the 8 pairs with both sides on include every pair where the rating
+moved. Whether stim-off pairs count as stable therapy is now the PI's question (task_plan Next Step,
+findings §8d, open item 28). No code changed. Probes: `_agent_bridge/_probe_rc/probe_verify_pairs*.py`
+(disposable, gitignored).
