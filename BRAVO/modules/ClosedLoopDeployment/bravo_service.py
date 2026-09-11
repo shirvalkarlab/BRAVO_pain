@@ -82,6 +82,19 @@ def run_for_participant(request_data):
         # ordinary thing for a client to do, and it is already visible in the response.
         return {"available": False, "reason": "participant not found"}
 
+    # THE POOLED THREE-SOURCE VIEW ON ITS OWN. The page asks for this AFTER its first figures are
+    # up (the PI, 2026-09-11: "prefetch the data after the first figures load"), so it must not
+    # rebuild the report: it reads the two stored tables the last full report wrote and groups
+    # them. Cheap, and never something the verdict waits for.
+    if (request_data or {}).get("ThreeSourcePooled"):
+        try:
+            return _adapter.three_source_pooled_for_participant(participant)
+        except Exception as exc:                       # noqa: BLE001
+            _log.exception("closed-loop: the pooled three-source view failed for %s",
+                           participant_uid)
+            return {"available": False,
+                    "reason": f"the pooled three-source view could not be built: {exc!r}"}
+
     try:
         return _adapter.report_for_participant(
             participant, request_data,

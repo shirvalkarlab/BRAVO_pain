@@ -96,3 +96,46 @@ contacts with runs (L 1⁻3⁺, L 0⁻2⁺), the right side one (R 0⁻3⁺). Th
 pane cannot open local files and is not signed in; the PI's own Chrome (claude-in-chrome tools) is
 where the live page is watched. After a backend edit: `docker exec bravo_pain-bravo-server-1 kill
 -HUP 1`. Suite logs are in /tmp/claude-502/.
+- Landed: commit 590b9ffa pushed to origin/PS_closedloop_deployment (40 files, +1853/-402); tree clean.
+- Phase 5 backend: run_points.py (stored kind three_source_run_points, pooled_view_payload, the
+  anchor = mean of per-run centroids in LINEAR device units, decision 12), adapter write/read + a
+  pooled-only request path (`ThreeSourcePooled: 1`), the full-build rule extended so a missing
+  points table forces every run to be built (the first live run refused to write in the steady
+  state — found and fixed). Live on RCS08: table written, 3,017 rows / 11 runs; the pooled-only
+  request answers in 0.62 s, 241 KB; **stored points vs a fresh in-memory build: 63,357 fields
+  compared, 0 differing**; the pooled table's entry was NOT rewritten (sidecar still 2026-09-10
+  19:17). Two earlier non-zero counts (475/2,910 and 325/4,410) were my CSV round-trip losing
+  float digits, not the data — retracted. Logs /tmp/claude-502/pooled_view_probe*.log.
+- PI (asleep): implement everything myself; prefetch the pooled data after the first figures
+  load (done: the hook fires once the report's data arrives, own slot CL.pooled); keep going for
+  six hours on timers; hand anything stuck >30 s to agents.
+- Phase 5 frontend: ThreeSourceResponsePanel.js rewritten as the pooled view (side tabs, contact
+  chips within a side, drawn at the committed centre, one marker per run, pooled dashed line
+  through the anchor; fold = pooled slope at every band ±2 SE with striped bands); the hook
+  useThreeSourcePooled fires after the report's data arrives (slot CL.pooled); index.js wired.
+  Watched live on RCS08 in the PI's Chrome: both tabs, "L 1⁻3⁺ · 4 runs / L 0⁻2⁺ · 1 run" chips,
+  13 points across 4 visits, pooled slope −3.62 ± 9.97 (p = 0.7258); three requests to the
+  endpoint (grid, report, pooled); the fold figure draws at 910 px.
+- E1 = pooled slope (decision 9): edges.pooled_actuation_edge, pipeline.run(pooled_e1=…),
+  adapter reads the stored row for the first candidate and serialises edges_historical; six
+  tests in test_pooled_e1.py. Before/after measured: findings §7. Host suite before the E1
+  change: 1032 passed / 42 skipped / 1 failed (my own new test's monkeypatch target; fixed);
+  container suite 626/0 (/tmp/claude-502/{host,container}_phase5.log).
+- Full host suite after the E1 change: **1039 passed, 42 skipped, 0 failed** (host_phase5b.log).
+  Bundle main.505c09b9.js / 334.44a5aaa5.chunk.js; triangle caption follows the new unit; watched
+  live. Phase 8 design written (artifacts/design_2026-09-11_closed_loop_simulation_module.md): the
+  existing replay becomes model M0; M1 feeds the pooled slope back with a settling time; M2 is the
+  peaked case (decision 11's pivot, "not assessable" on RCS08 today); M3 resamples runs for
+  intervals; stored as its own kind refused to stim_optimizer; five questions for the PI.
+- Landing Phase 5 + the design as one commit.
+
+## HANDOFF — end of the 2026-09-11 overnight session (read this first next time)
+**Everything the PI asked for in the redesign brief is built, proven and pushed** (commits
+590b9ffa and the Phase 5 commit named in `git log -2`). Gates after the last change: host 1039
+passed / 42 skipped / 0 failed; container 626 passed / 0 failed; bundle rebuilt and watched live.
+**Open on the PI:** the simulation design's five questions (§7) and its go-ahead; open item 30 (the
+titration protocol); the 2025 UCSF preprint access. **Nothing is blocked and nothing is queued.**
+Decisions 122–126 carry every change with its measurement. Probes for this session are in
+`_agent_bridge/_probe_tl/probe_{amp_power_*,pooled_*,points_equal,e1_before_after,grid_fields}.py`
+(disposable). The stored kinds added: `three_source_run_points` (decision 125). The page's report
+now carries `edges_historical` beside `edges` (decision 126).

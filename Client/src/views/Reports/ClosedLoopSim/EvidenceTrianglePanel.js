@@ -273,8 +273,13 @@ function EdgeAxis({ k, e }) {
       </MDTypography>
       {e ? (
         <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, color: "#4A4A4A" }}>
-          {`${e.n} observations in ${e.n_clusters} ${e.cluster_unit}`}
-          {e.n_clusters === 1 ? "" : " clusters"}
+          {/* Since 2026-09-11 E1 is the pooled titration slope (decision 9), whose unit is a run of
+              rising current rather than a setting epoch; the sentence follows the unit. */}
+          {/^run of rising current/.test(e.cluster_unit || "")
+            ? `${e.n} settled points across ${e.n_clusters} run${e.n_clusters === 1 ? "" : "s"} of `
+              + "rising current, one baseline each"
+            : `${e.n} observations in ${e.n_clusters} ${e.cluster_unit}`
+              + (e.n_clusters === 1 ? "" : " clusters")}
           {e.sign != null
             ? ` \u00B7 ${Number(e.sign) > 0 ? meta.rising : meta.falling}`
             : ""}

@@ -184,6 +184,9 @@ class DeploymentReport:
     participant: str
     eligibility: EligibilityReport | None = None
     edges: dict = field(default_factory=dict)          # {"E1": EdgeEstimate, ...}
+    #: The estimate an edge REPLACED, kept for the record: since 2026-09-11 E1 is the pooled
+    #: titration slope when one is stored, and the historical setting-epoch slope lands here.
+    edges_historical: dict = field(default_factory=dict)
     coherence: CoherenceReport | None = None
     threshold: ThresholdPlan | None = None
     replay: ReplayResult | None = None

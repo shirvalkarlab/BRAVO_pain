@@ -91,7 +91,8 @@ def _facts_for(candidate, e1, e2, power_scale, device_facts=None):
 
 def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro_frame=None,
         candidates=(), washin_s=60.0, amp_limit_ma=5.0, power_scale="power_linear",
-        hemisphere="Left", strict=True, n_boot=500, seed=0, device_facts=None):
+        hemisphere="Left", strict=True, n_boot=500, seed=0, device_facts=None,
+        pooled_e1=None):
     """Build the deployment report for one participant.
 
     ``psd_frame`` and ``epochs`` are what ``StimOptimizer.adapter.evidence_inputs`` returns. They are
@@ -145,6 +146,15 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
     # as "not determinable" on every run, which is the least useful possible answer for the one rule
     # that decides whether the control loop is negative feedback or positive.
     e1 = E.actuation_edge(T, channel=ch, center_hz=fc, hemisphere=hemisphere, scale=power_scale)
+    # E1 FROM THE POOLED TITRATION SLOPE when the stored row exists (redesign decision 9, decision
+    # 124 in the log, the PI's choice on 2026-09-11): the same row the three-source panel draws, so
+    # the triangle and the panel cannot disagree. The historical setting-epoch estimate is kept
+    # on the report beside it rather than thrown away. A row with no assessed slope leaves the
+    # historical estimate in place -- absence of a pooled answer is not a reason to lose an edge.
+    if pooled_e1 and pooled_e1.get("pooled_slope_per_mA") is not None \
+            and np.isfinite(float(pooled_e1["pooled_slope_per_mA"])):
+        rep.edges_historical = {"E1": e1}
+        e1 = E.pooled_actuation_edge(pooled_e1, scale=power_scale)
     e2 = E.state_edge(T, channel=ch, center_hz=fc, scale=power_scale)
     e3 = E.therapy_edge(design_matrix)
     rep.edges = {"E1": e1, "E2": e2, "E3": e3}

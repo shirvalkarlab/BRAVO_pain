@@ -53,6 +53,10 @@ export const CL = {
   lsbPower: `${MODULES.closedLoop}/lsbPower`,
   psdLsb: `${MODULES.closedLoop}/psdLsb`,
   conversionModel: `${MODULES.closedLoop}/conversionModel`,
+  // The pooled three-source view (every visit's points, by side), fetched AFTER the report has
+  // arrived so the first figures are never behind it (the PI, 2026-09-11: "prefetch the data
+  // after the first figures load"). Its own slot for the same reason the grid has one.
+  pooled: `${MODULES.closedLoop}/pooled`,
 };
 
 /** Every slot in the family, in no meaningful order. */

@@ -75,6 +75,7 @@ import ThreeSourceResponsePanel from "./ThreeSourceResponsePanel";
 import useDeploymentSummary from "./useDeploymentSummary";
 import useDeploymentReport from "./useDeploymentReport";
 import useBandSweepGrid from "./useBandSweepGrid";
+import useThreeSourcePooled from "./useThreeSourcePooled";
 import PAL from "./palette";
 import Fold from "./Fold";
 import "./deployPrint.css";
@@ -411,6 +412,19 @@ function ClosedLoopSim() {
   // one screen that needs it (choosing a first candidate).
   const bandSweepGrid = useBandSweepGrid({ participantUid: participant_uid });
 
+  // THE POOLED THREE-SOURCE VIEW, fetched AFTER the report has answered (the PI, 2026-09-11:
+  // "prefetch the data after the first figures load"). It reads two stored tables and groups
+  // them, so it never holds the verdict up; its own slot, so a Recompute rebuilds it too.
+  const threeSourcePooled = useThreeSourcePooled({
+    participantUid: participant_uid, afterReport: deploymentReport.data,
+  });
+  // Medtronic labels for sensing contacts, from the grid's own sweeps (server-built, decision 86).
+  const contactLabel = (ch) => {
+    const sw = bandSweepGrid.grid && bandSweepGrid.grid.band_time_sweep
+      && bandSweepGrid.grid.band_time_sweep[ch];
+    return (sw && sw.display_short) || String(ch || "").replace(/_/g, " ");
+  };
+
   // ARRIVING FROM THE BIOMARKERS PAGE'S "Open this grid in Closed-Loop" BUTTON. That button
   // navigates here with the fragment `#cl-grid`, naming the anchor already on the grid panel's own
   // Grid item below. React Router does not scroll to a fragment on its own, and this page is long
@@ -695,7 +709,9 @@ function ClosedLoopSim() {
 
                   The signoff card stays last, because it is the printable record. */}
               <Grid item xs={12} id="cl-three-source">
-                <ThreeSourceResponsePanel report={deploymentReport} />
+                <ThreeSourceResponsePanel report={deploymentReport} pooled={threeSourcePooled}
+                  committed={{ contact: bc.contact, centerHz: bc.center_freq_hz }}
+                  contactLabel={contactLabel} />
               </Grid>
 
               {/* The printable record. It keeps the gate checklist and loses its own headline

@@ -6,14 +6,12 @@ Make the Closed-Loop Deployment page much shorter and easier to read, following 
 is built, and every built change proven in the served bundle and on the live RCS08 page.
 
 ## Next Step
-Phase 5, the pooled three-source view, under decisions 9–11: backend first (store each run's
-settled points beside the pooled table, option b; equality proof on the pooled table), then the
-two side tabs drawn at the committed band's centre on one sensing contact (the left side needs a
-contact choice — put the drawing to the PI before building the frontend). Phases 3, 4 and 6 are
-landed in commit <see progress.md handoff>.
+WAITING ON THE PI: (1) the five questions in the simulation design's §7 and his go-ahead to build
+it; (2) a look at the pooled three-source panel and the triangle's new E1 on the live page. All
+code phases (3–7) are landed and pushed. Nothing else is queued.
 
 ## Current Phase
-Phase 5
+Phase 8 (design written; waiting on the PI)
 
 ## Phases
 
@@ -63,14 +61,14 @@ Phase 5
 - [x] Captions under the three panels rewritten concisely (scientific-writing skill)
 
 ### Phase 5: Build — the three-source panel pooled across visits
-**Status:** in_progress
-- [ ] Backend: store each run's settled points (three routes) beside the pooled table once, read
+**Status:** complete
+- [x] Backend: store each run's settled points (three routes) beside the pooled table once, read
       them on every request (decision 5, option B); equality proof on the pooled table (0 diff)
-- [ ] Frontend: drop the per-visit tabs; two tabs by ramped side, every visit's points overlaid,
+- [x] Frontend: drop the per-visit tabs; two tabs by ramped side, every visit's points overlaid,
       pooled fit from the stored table on the time-domain route
-- [ ] Evidence triangle: current->power edge = pooled slope of the stored row + curvature caveat
+- [x] Evidence triangle: current->power edge = pooled slope of the stored row + curvature caveat
       (decisions 9, 11); a peak annotation only when established
-- [ ] Sign-off card and figure snapshots still find their sections after the layout change
+- [x] Sign-off card and figure snapshots still find their sections after the layout change
 
 ### Phase 6: Research — stimulation amplitude vs LFP band power (decision 6)
 **Status:** complete
@@ -92,8 +90,10 @@ Phase 5
       and pushed on PS_closedloop_deployment
 
 ### Phase 8: Closed-loop simulation module design (old item 9) — LAST, per the PI (decision 7)
-**Status:** pending
-- [ ] Design against the BandCandidate contract; put to the PI before any code
+**Status:** in_progress
+- [x] Design written: artifacts/design_2026-09-11_closed_loop_simulation_module.md (three plant
+      models M0/M1/M2 + run-resampled intervals, outputs, placement, seven tests, five questions)
+- [ ] The PI's answers to its §7 questions and his go-ahead — nothing built until then
 
 ## Decisions Made
 | # | Decision | Rationale |
@@ -106,6 +106,9 @@ Phase 5
 | 9 | Evidence triangle's current->power edge = the pooled straight-line slope per sensing contact (stored table), with the curvature answer as a caveat; a peak only as an annotation once established | PI 2026-09-11: "Accept the pooled slope recommendation" |
 | 10 | Pooled three-source points: option (b) stands (store per-run points beside the pooled table) even though a warm full build measured 3.7 s | PI: "keep option b" |
 | 11 | STANDING EXPECTATION: the analysis will very likely have to identify the response peak and model the post-peak descent (decision 55's second fit); build so that pivot is cheap | PI: "High likelihood we must model or identify the response peak ... model the post-peak descent ... be prepared to pivot" |
+| 12 | The pooled line's anchor = the mean of the per-run centroids in linear device units (each run counts once) | The pooled model has one baseline per run and no single intercept; per-run centroids match its grouping. Implemented by me at the PI's instruction ("you implement everything") |
+| 13 | The pooled view is a separate request (`ThreeSourcePooled: 1`) fired after the report's data arrives, cached under its own slot | PI: "prefetch the data after the first figures load" |
+| 14 | A missing points table for the current recording set forces a full build of every run | Without it the steady-state page refused to write the table forever (first live probe) |
 | 8 | The grid panel commits the SWEEP's own hemisphere (display_hemisphere), not the previously committed band's | Found while rebuilding: index.js passed `bc.hemisphere` down, so a right contact picked while a left band was committed would have been committed as "Left" |
 | 5 | Pooled three-source view: store each run's points beside the pooled table once, read them back | PI chose option B over rebuilding every run per page load (32 s cold) |
 | 6 | Evidence-triangle input from the pooled view is NOT decided; needs a literature swarm + descriptive analysis of the amplitude-vs-power shape (inverted-U / M) first; the triangle keeps today's edge until then | PI: "needs deeper work ... focus on identifying the peak of the inverted-U" |

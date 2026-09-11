@@ -242,3 +242,12 @@ contacts.
 - Reading: on this record no band in 8–30 Hz shows an established bend; the data are 12–13 points
   per contact across 3–4 visits, at most 6 currents per run, and the right side mixes three
   stimulation rates. A peak cannot be estimated from it; a pooled straight-line slope can.
+
+## §7 E1 from the pooled slope — before/after on RCS08 (probe_e1_before_after.py, 2026-09-11)
+Report at ONE_THREE_LEFT 20.5 Hz with the swap off, then on: 56,796 fields before, 56,808 after,
+55,696 in common, **12 changed** — 11 under `edges.E1` (estimate 4.58 → −3.62 device units per
+mA; interval −15.1…24.3 → −23.2…15.9; p 0.648 → 0.726; n 37,878 samples in 66 setting epochs →
+13 settled points in 4 runs; sign +1 → −1; both UNRESOLVED) and `coherence.observed_pattern.E1`.
+The 15 fields only-after are `edges_historical.E1`, which equals the old E1 exactly; the 3 fields
+only-before are the old edge's three named confounders. Verdict `blocked` both times; sign
+agreement NOT ESTABLISHED both times. Log /tmp/claude-502/e1_before_after.log.

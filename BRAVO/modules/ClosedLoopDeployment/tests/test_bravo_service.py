@@ -36,6 +36,12 @@ class _FakeAdapter:
             raise self.raises
         return self.result
 
+    def three_source_pooled_for_participant(self, participant):
+        self.calls.append({"participant": participant, "pooled_only": True})
+        if self.raises is not None:
+            raise self.raises
+        return self.result
+
 
 @pytest.fixture
 def fake(monkeypatch):
@@ -130,3 +136,26 @@ def test_the_view_calls_this_module_and_not_the_adapter_directly():
         "the view reaches past bravo_service into adapter again")
     assert "_log.exception(\"closed-loop deployment report failed" in src, (
         "the view's catch-all no longer logs, which is the 2026-09-04 outage's own root cause")
+
+
+# --------------------------------------------------------------------------------------------
+# The pooled three-source view on its own (redesign decisions 5 and 10, 2026-09-11): the page asks
+# for it AFTER the report has answered, and it must never rebuild the report.
+# --------------------------------------------------------------------------------------------
+
+def test_a_pooled_only_request_reads_the_stored_view_and_never_builds_the_report(fake):
+    payload = {"available": True, "gates_nothing": True, "sides": []}
+    a = fake(result=payload)
+    got = svc.run_for_participant({"ParticipantId": "p1", "ThreeSourcePooled": 1})
+    assert got is payload
+    assert a.calls == [{"participant": a.calls[0]["participant"], "pooled_only": True}], (
+        "the pooled-only request must not reach report_for_participant")
+
+
+def test_a_failing_pooled_view_never_raises_and_reaches_the_log(fake, caplog):
+    fake(raises=RuntimeError("the stored table is unreadable"))
+    with caplog.at_level(logging.ERROR, logger=svc._log.name):
+        got = svc.run_for_participant({"ParticipantId": "p1", "ThreeSourcePooled": 1})
+    assert got["available"] is False
+    assert "pooled three-source view" in got["reason"] and "unreadable" in got["reason"]
+    assert caplog.records and caplog.records[-1].exc_info is not None

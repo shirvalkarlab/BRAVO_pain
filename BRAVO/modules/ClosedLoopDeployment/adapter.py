@@ -1279,6 +1279,14 @@ def report_to_dict(rep):
             # and become a choice between two estimators.
             "inference": _edges.estimator_for(e.n_clusters),
         } for k, e in (rep.edges or {}).items()},
+        # The estimate E1 replaced (the historical setting-epoch slope), kept for the record.
+        "edges_historical": {k: {
+            "name": e.name, "estimate": _num(e.estimate),
+            "ci": None if e.ci is None else [_num(e.ci[0]), _num(e.ci[1])],
+            "p": _num(e.p), "n": int(e.n), "cluster_unit": e.cluster_unit,
+            "n_clusters": int(e.n_clusters), "scale": e.scale, "sign": e.sign,
+            "resolved": e.resolved, "note": e.note, "confounded_by": list(e.confounded_by),
+        } for k, e in (getattr(rep, "edges_historical", None) or {}).items()},
         "coherence": None if rep.coherence is None else {
             "coherent": rep.coherence.coherent, "p_coherent": _num(rep.coherence.p_coherent),
             "expected_pattern": rep.coherence.expected_pattern,
@@ -1686,6 +1694,112 @@ def pooled_shape_if_stored(participant):
         return None
 
 
+def run_points_signature(participant, *, tiles_key):
+    """The key for the stored per-run points: the same inputs as the pooled table (the tile entry,
+    the recording set) plus this table's own rule version. Nothing decoded enters it."""
+    from StimOptimizer.routines import within_visit as _wv
+    from . import run_points as _rp
+    return (_rp.KIND, _rp.RULE_VERSION, str(getattr(participant, "uid", participant)), tiles_key,
+            recording_set_signature(participant), "all_runs",
+            float(_wv.PRE_CHANGE_WINDOW_S), int(_wv.MIN_CHUNKS_PRE_CHANGE))
+
+
+def write_run_points(participant, build, *, is_every_run):
+    """Store every run's points from a FULL-run comparison (redesign decisions 5 and 10).
+
+    Refuses a truncated build for the reason `write_pooled_shape` gives: a stored table built from
+    the page's four newest runs would look complete and be missing every older visit.
+    """
+    from . import run_points as _rp
+    try:
+        from modules.CacheStore import provenance as _prov
+    except ImportError:                                # pragma: no cover - depends on the runner
+        from CacheStore import provenance as _prov
+
+    summary = {"written": False, "n_rows": 0, "n_runs": 0, "store_key": None}
+    if not is_every_run:
+        summary["reason"] = ("the comparison was built from only the runs the page draws, and a "
+                             "points table from a fraction of the visits must not be stored")
+        return summary
+    if not build or not build.get("comparisons"):
+        summary["reason"] = ((build or {}).get("absent_reason")
+                             or "no run of rising current to store")
+        return summary
+
+    table = _rp.run_points_table_from_build(build)
+    summary["n_rows"] = int(len(table))
+    if not len(table):
+        summary["reason"] = "the comparison produced no rows to store"
+        return summary
+    summary["n_runs"] = int(table["run"].nunique())
+
+    tiles_key = _tiles_key_for(participant)
+    if tiles_key is None:
+        summary["reason"] = "no tile entry key, so the table was derived but not stored"
+        return summary
+    uid = str(getattr(participant, "uid", participant))
+    sig = run_points_signature(participant, tiles_key=tiles_key)
+    prov = _prov.flatten([_prov.entry(tiles_key, kind="raw_lsb_tiles", writer="biomarkers")])
+    _cache_store.store_if_absent(_rp.KIND, uid, sig, lambda: table,
+                                 writer="closed_loop", trigger="deployment_report",
+                                 provenance=prov, n_recordings=None,
+                                 extra={"n_rows": summary["n_rows"], "n_runs": summary["n_runs"]},
+                                 root=_SHARED_CACHE_DIR_OVERRIDE)
+    summary["store_key"] = _cache_store.product_key(_rp.KIND, uid, sig)
+    summary["written"] = _cache_store.read_stamp(_rp.KIND, uid, sig,
+                                                 root=_SHARED_CACHE_DIR_OVERRIDE) is not None
+    return summary
+
+
+def run_points_stored_for_current_key(participant):
+    """Whether the per-run points table exists under the CURRENT recording set's key.
+
+    Asked before the comparison is built, the same way `amplitude_effect_if_stored` is: a request
+    whose table is already on disk builds only the runs the page draws; one whose table is missing
+    -- the first request after a new upload, or the first ever -- builds every run so the table
+    can be written from a full build. Without this the steady-state page would refuse to write
+    the table forever, which is what the first live run of this code did (2026-09-11).
+    """
+    from . import run_points as _rp
+    tiles_key = _tiles_key_for(participant)
+    if tiles_key is None:
+        return False
+    uid = str(getattr(participant, "uid", participant))
+    sig = run_points_signature(participant, tiles_key=tiles_key)
+    return _cache_store.read_stamp(_rp.KIND, uid, sig, root=_SHARED_CACHE_DIR_OVERRIDE) is not None
+
+
+def run_points_if_stored(participant):
+    """The newest stored per-run points table for this participant, or None (same reading rule
+    as `pooled_shape_if_stored`: the newest by name, since the page cannot rebuild the key)."""
+    from . import run_points as _rp
+    try:
+        payload, _stamp = _cache_store.load_newest(_rp.KIND,
+                                                   str(getattr(participant, "uid", participant)),
+                                                   consumer="closed_loop",
+                                                   root=_SHARED_CACHE_DIR_OVERRIDE)
+        return payload
+    except Exception:                                  # noqa: BLE001 - a miss is not an error
+        _log.warning("closed-loop: the stored per-run points table could not be read for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
+        return None
+
+
+def three_source_pooled_for_participant(participant):
+    """The pooled-by-side view alone, from the stored tables, for the page's background fetch.
+
+    Reads what the last FULL report wrote (`write_run_points`, `write_pooled_shape`) and groups
+    it; builds nothing. When nothing is stored yet the payload says so and the page shows that
+    sentence; the next full report writes both tables and the fetch after it finds them.
+    """
+    from . import run_points as _rp
+    view = _rp.pooled_view_payload(run_points_if_stored(participant),
+                                   pooled_shape_if_stored(participant))
+    view["available"] = True
+    view["cache_status"] = _cache_status_or_reason(participant)
+    return view
+
+
 def cache_status_for_page(participant):
     """When the decoded recordings and settings this report reads were last assembled."""
     meaning = ("the date the decoded recordings, the therapy settings and the matched pain reports "
@@ -1804,9 +1918,22 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                      getattr(participant, "uid", participant), exc_info=True)
         dev = {"_provenance": {}, "_error": f"device facts unavailable: {exc!r}"}
 
+    # The pooled titration slope for the first candidate, from the stored table (decision 103),
+    # handed to the pipeline as E1 (redesign decision 9). None when nothing is stored yet.
+    _pooled_e1 = None
+    try:
+        from . import amplitude_effect as _amp_e1
+        _c0 = (cands[0] or {}) if cands else {}
+        if _c0.get("channel") is not None and _c0.get("center_hz") is not None:
+            _pooled_e1 = _amp_e1.pooled_row(pooled_shape_if_stored(participant),
+                                            _c0["channel"], float(_c0["center_hz"]))
+    except Exception:                                  # noqa: BLE001 -- E1 falls back to the table
+        _log.warning("closed-loop report: the pooled slope for E1 could not be read for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
+        _pooled_e1 = None
     rep = _pl.run(getattr(participant, "uid", participant), psd_frame=psd, epochs=eps,
                   design_matrix=dm, candidates=cands, hemisphere=hemisphere,
-                  power_scale=power_scale, device_facts=dev)
+                  power_scale=power_scale, device_facts=dev, pooled_e1=_pooled_e1)
     out = report_to_dict(rep)
     out["device_facts"] = {k: v for k, v in dev.items() if not k.startswith("_")}
     out["device_facts_provenance"] = dev.get("_provenance", {})
@@ -1927,7 +2054,17 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                          getattr(participant, "uid", participant), exc_info=True)
             _amp_stored = None
             _gt_stored = None
-        _3_max_runs = (THREE_SOURCE_RUNS_ON_PAGE if (_amp_stored and _gt_stored) else _ALL_RUNS)
+        # Every run is built when ANY of the write-back tables is missing for this recording set:
+        # the amplitude-effect table, the ground-truth verdict, or (since 2026-09-11) the per-run
+        # points behind the pooled three-source view. Otherwise only the page's runs are built.
+        try:
+            _rp_stored = run_points_stored_for_current_key(participant)
+        except Exception:                               # noqa: BLE001 -- a miss means build
+            _log.warning("closed-loop report: could not check the stored per-run points for %s",
+                         getattr(participant, "uid", participant), exc_info=True)
+            _rp_stored = False
+        _3_max_runs = (THREE_SOURCE_RUNS_ON_PAGE if (_amp_stored and _gt_stored and _rp_stored)
+                       else _ALL_RUNS)
         _3_is_every_run = _3_max_runs == _ALL_RUNS
         _3build = _3src.build_for_participant(
             getattr(participant, "uid", participant), max_runs=_3_max_runs)
@@ -2062,6 +2199,26 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
         out["within_visit_pooled_shape"] = {
             "written": False, "n_rows": 0, "n_contacts": 0, "n_bands": 0, "store_key": None,
             "reason": f"the pooled within-visit table could not be written: {_exc!r}"}
+
+    # THE PER-RUN POINTS, stored beside the pooled table under the same refusal, and the pooled-by-
+    # side view the redesigned three-source panel draws (redesign plan decisions 5, 9, 10). Read
+    # back on EVERY request, including the truncated ones, for the same reason the pooled table is.
+    try:
+        from . import run_points as _rp
+        out["three_source_run_points"] = write_run_points(
+            participant, _3build, is_every_run=_3_is_every_run)
+        out["three_source_pooled"] = _rp.pooled_view_payload(
+            run_points_if_stored(participant), pooled_shape_if_stored(participant),
+            absent_reason=(out["three_source_run_points"].get("reason")
+                           if not out["three_source_run_points"].get("written") else None))
+    except Exception as _exc:                          # noqa: BLE001
+        _log.warning("closed-loop report: the per-run points could not be stored or grouped "
+                     "for %s", getattr(participant, "uid", participant), exc_info=True)
+        out["three_source_run_points"] = {"written": False, "n_rows": 0, "n_runs": 0,
+                                          "store_key": None,
+                                          "reason": f"could not be stored: {_exc!r}"}
+        out["three_source_pooled"] = {"gates_nothing": True, "sides": [],
+                                      "absent_reason": f"could not be grouped: {_exc!r}"}
 
     # ---------------------------------------------------------------------------------------------
     # THE CONSISTENCY CHECK (decision 74): does raising current on this contact move pain the way

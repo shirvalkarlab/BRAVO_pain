@@ -129,6 +129,64 @@ def actuation_edge(T, *, channel, center_hz, hemisphere="Left", scale="power_lin
                         note=note, confounded_by=conf)
 
 
+def pooled_actuation_edge(pooled_row, *, scale="power_linear"):
+    """E1 from the STORED POOLED SLOPE: band power on current across every run of rising current
+    on this sensing contact, one baseline per run and one shared slope (decision 55), read from
+    the row `amplitude_effect.pooled_row` returns.
+
+    Chosen by the PI on 2026-09-11 (redesign decision 9, decision 124 in the log) over the
+    historical setting-epoch slope `actuation_edge` computes from months of chronic recording:
+    the pooled titration slope is the quantity the redesigned three-source panel draws, so the
+    triangle and the panel now read one number. The historical estimate is kept beside it in
+    the report (`edges_historical`) rather than discarded.
+
+    The curvature answer travels in the note as a CAVEAT: a bend detected across the tested
+    currents means a single slope is a poor description, and the note says so; a peak is named
+    only when the pooled model placed one inside the tested range. Nothing here fits anything.
+    """
+    r = pooled_row or {}
+    b = r.get("pooled_slope_per_mA")
+    se = r.get("pooled_slope_stderr")
+    p = r.get("pooled_slope_p")
+    n = int(r.get("n") or 0)
+    n_visits = int(r.get("n_visits") or 0)
+    unit = "run of rising current (one baseline each)"
+    if b is None or not np.isfinite(float(b)):
+        return EdgeEstimate("E1", None, None, None, n, unit, n_visits, scale,
+                            note=("no pooled slope: " + str(r.get("verdict") or
+                                  "the pooled within-visit table has no assessed row for this "
+                                  "contact and band")))
+    b = float(b)
+    ci = ((b - 1.96 * float(se), b + 1.96 * float(se))
+          if se is not None and np.isfinite(float(se)) else None)
+    p = float(p) if p is not None and np.isfinite(float(p)) else None
+    note = (f"POOLED ACROSS {n_visits} RUNS OF RISING CURRENT on this contact, {n} settled "
+            "points, one baseline per run and one shared slope (decision 55), in the device's "
+            "own units per mA. This is the same row the three-source panel draws, chosen for the "
+            "triangle on 2026-09-11 in place of the historical setting-epoch slope, which is kept "
+            "in the report beside it.")
+    curves = bool(r.get("curves"))
+    pc = r.get("p_curvature")
+    conf = []
+    if curves:
+        note += (f" CURVATURE: a bend across the tested currents was detected (p = "
+                 f"{float(pc):.3f})" if pc is not None and np.isfinite(float(pc))
+                 else " CURVATURE: a bend across the tested currents was detected")
+        if r.get("peaks_inside") and r.get("peak_mA") is not None \
+                and np.isfinite(float(r.get("peak_mA"))):
+            note += f", with the peak near {float(r['peak_mA']):.1f} mA"
+        note += (", so one straight-line slope is a poor description of this band and the sign "
+                 "below is the average across the bend, not the direction past the peak.")
+        conf.append("curvature")
+    elif pc is not None and np.isfinite(float(pc)):
+        note += f" No bend was detected across the tested currents (curvature p = {float(pc):.3f})."
+    else:
+        note += " Curvature could not be assessed on this many points."
+    if n_visits and n_visits < 3:
+        conf.append("few runs")
+    return EdgeEstimate("E1", b, ci, p, n, unit, n_visits, scale, note=note, confounded_by=conf)
+
+
 #: What the E2 estimate is a number of, written on every E2 estimate this module produces.
 #:
 #: E2 no longer carries a slope. It carries how far this band's power gets above or below coin
