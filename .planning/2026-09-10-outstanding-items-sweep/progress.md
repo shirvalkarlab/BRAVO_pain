@@ -30,3 +30,7 @@
 - Item 5 / B4 done, decision 117: streaming_psd's builder now calls DecodeCommon.matching; 9 combos
   x 7,600,506 fields 0 diff, page 1,018,093 fields 0 diff. Container 626/0, host 1019/42/0 (logs in
   /tmp/claude-502/{container,host}_b4.log). Dead one_per_rating branch noted (findings §5).
+- Item 5 closed, decision 118: B1 found already migrated (38371d6b); B2/B3 are window selectors,
+  not matchers -- left on their own code with the reason recorded. Sharing measured: align_pros at
+  60 min has 39 reports claimed by >1 session (max 24); per_pro_lsb <=2 pairs per contact. Cap
+  question put to the PI. Probe: _agent_bridge/_probe_tl/probe_sharing.py.

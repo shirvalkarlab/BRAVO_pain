@@ -5,13 +5,13 @@ Work the outstanding-items list of 2026-09-10 in the PI's order ("start with num
 two, three, etc."), each item proven on live data or in the served bundle before the next starts.
 
 ## Next Step
-Item 5 (Phase 5): the shared matching step -- migrate the four call sites one at a time, each
-with its own field-count/difference-count proof on RCS08. Real risk to live numbers; each move
-its own commit. **The PI will open a NEW session for Phase 7, the
+Item 6 (Phase 6): housekeeping first (agent worktrees pinned to an old commit; .mcp.json), then
+the closed-loop simulation module design -- which overlaps the PI's Phase 7 brief and may belong
+in that session. Open question to the PI from Phase 5: cap sessions per report in align_pros? **The PI will open a NEW session for Phase 7, the
 Closed-Loop page redesign; his brief is in findings.md §3 and must be read first there.**
 
 ## Current Phase
-Phase 5
+Phase 6
 
 ## Phases
 
@@ -46,12 +46,15 @@ Phase 5
 - [x] Host 1019 passed / 42 skipped / 0 failed -- first fully green host run in the container
 
 ### Phase 5: Shared matching step — migrate the four call sites, one at a time
-**Status:** in_progress
+**Status:** complete
 - [x] B4 `build_pooled_detail_from_matrix` (streaming_psd): 9 combos x 7,600,506 fields, 0 diff;
       page 1,018,093 fields, 0 diff. Decision 117.
-- [ ] B1 `align_pros(target="session")` (Biomarkers/adapter.py) -- no independence rule today
-- [ ] B2 `per_pro_lsb` -- assess whether its tiered window selection fits the sample->report shape
-- [ ] B3 `live_lsb_spectrum_match` -- assess the same
+- [x] B1 `align_pros(target="session")`: found already migrated in 38371d6b (2026-09-08),
+      max_per_rating=None; proven through decisions 77/79 and today's page proof. Decision 118.
+- [x] B2/B3 assessed: per-rating WINDOW SELECTORS, not sample->report matchers; forcing them onto
+      the shared step would be a re-derivation. They stay. Decision 118.
+- [x] Independence gap measured: align_pros 60-min window -> 39 reports claimed by >1 session
+      (263 sessions, max 24); per_pro_lsb sharing at most 2 pairs per contact. Cap decision -> PI.
 
 ### Phase 6: Closed-loop simulation module design; housekeeping (worktrees, .mcp.json)
 **Status:** pending
