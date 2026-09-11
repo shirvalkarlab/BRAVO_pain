@@ -57,7 +57,10 @@
       "BRAVO/Server/APIs/HomeNeuralTimeline.py",
       "BRAVO/modules/ClosedLoopDeployment/clinic_steps.py",
       "BRAVO/modules/StimOptimizer/routines/within_visit.py",
-      "BRAVO/modules/Biomarkers/routines/live_match_scalar.py"
+      "BRAVO/modules/Biomarkers/routines/live_match_scalar.py",
+      "BRAVO/modules/PerceptClock.py",
+      "BRAVO/modules/PerceptClockData.py",
+      "BRAVO/Server/management/commands/index_percept_clock.py"
     ],
     "critical_functions": {
       "BRAVO/modules/Biomarkers/bravo_service.py": [
@@ -80,7 +83,17 @@
         "_raw_lsb_signature.DigestWriter.write",
         "_raw_lsb_shared_store.BoundedWriter.write",
         "_deployment_stim_gate",
-        "_deployment_adaptive_band_gate"
+        "_deployment_adaptive_band_gate",
+        "_clock_sources",
+        "_canonical_event_psds",
+        "_load_patient_events",
+        "_event_psd_rows",
+        "_event_psd_index",
+        "_deduplicate_clock_recordings",
+        "_load_recordings",
+        "_assemble_psd_rows_cached",
+        "_warm_centered_matrix_from_decoded",
+        "_load_recordings._decode"
       ],
       "BRAVO/modules/StimOptimizer/adapter.py": [
         "_unambiguous_group_settings",

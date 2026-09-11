@@ -174,11 +174,14 @@ class CanonicalInputTests(unittest.TestCase):
                 ns["_psd_matrix_signature_orm"]("p")
 
     def test_recording_read_failure_never_returns_partial_cohort(self):
-        recordings = [types.SimpleNamespace(pointer="valid", hashed="a"), types.SimpleNamespace(pointer="missing", hashed="b")]
+        recordings = [types.SimpleNamespace(pointer="valid", hashed="a", source_id="source", type="other"), types.SimpleNamespace(pointer="missing", hashed="b", source_id="source", type="other")]
         database = types.SimpleNamespace(loadSourceFile=Mock(side_effect=[{}, OSError("synthetic failure")]))
-        ns = helpers("_load_recordings", models=types.SimpleNamespace(Participant=types.SimpleNamespace(find=lambda **kw: object())),
-                     _eligible_sources=lambda p: [object()], _eligible_recordings=lambda *a, **kw: recordings,
-                     Database=database, _aligned_recording_payload=lambda data, rec: data,
+        ns = helpers("_load_recordings", models=types.SimpleNamespace(Participant=types.SimpleNamespace(find=lambda **kw: object()),
+                                                  Recording=types.SimpleNamespace(find_all=lambda **kw: recordings)),
+                     _clock_sources=lambda p: ([object()], []),
+                     TIMEDOMAIN_TYPES=[], AVAILABILITY_PSD_TYPES=[], POWERDOMAIN_TYPES=[],
+                     _eligible_time=lambda *a: True, _deduplicate_clock_recordings=lambda rows: rows,
+                     Database=database, _aligned_recording_payload=lambda data, rec, clock=None, audit=None: data,
                      _loader_threads=lambda: 1, ThreadPoolExecutor=ThreadPoolExecutor, _log=Mock())
         with self.assertRaisesRegex(RuntimeError, "could not be read completely"):
             ns["_load_recordings"]("p", ["neural"])
@@ -186,30 +189,24 @@ class CanonicalInputTests(unittest.TestCase):
         self.assertEqual(ns["_load_recordings"]("p", ["neural"]), [])
 
     def test_failed_decode_cannot_persist_empty_psd_and_can_retry(self):
-        database = types.SimpleNamespace(loadSourceFile=Mock(side_effect=OSError("synthetic failure")))
-        rec = types.SimpleNamespace(pointer="missing", hashed="a")
-        save, event_rows = Mock(), Mock(return_value=[])
+        load = Mock(side_effect=RuntimeError("source data could not be read completely"))
+        event_rows = Mock(return_value=[])
         ns = helpers("_assemble_psd_rows_cached", __package__="canonical_fixture",
-                     _recording_rows_for_psd=lambda p: [{"rec": rec, "uid": "r", "hash": "a", "source": "TD streaming"}],
-                     _recording_psd_cache_path=lambda *a: "/synthetic/absent.npz", Database=database,
-                     _aligned_recording_payload=lambda data, rec: data, _loader_threads=lambda: 1,
-                     ThreadPoolExecutor=ThreadPoolExecutor, _log=Mock(), _welch_rows_into=Mock(),
-                     _save_recording_psd_rows=save, _build_sensing_config_index_from_rows=lambda rows: {},
+                     _load_recordings=load, TIMEDOMAIN_TYPES=["td"], AVAILABILITY_PSD_TYPES=["psd"],
+                     _welch_rows_into=Mock(), _build_sensing_config_index=lambda rows: {},
                      _event_psd_rows=event_rows)
         routines = types.ModuleType("canonical_fixture.routines")
         routines.streaming_psd = Mock()
         with patch.dict(sys.modules, {"canonical_fixture.routines": routines}):
             with self.assertRaisesRegex(RuntimeError, "source data could not be read completely"):
                 ns["_assemble_psd_rows_cached"]("p", force_recompute=True)
-            save.assert_not_called()
             event_rows.assert_not_called()
-            database.loadSourceFile.side_effect = None
-            database.loadSourceFile.return_value = []
-            self.assertEqual(ns["_assemble_psd_rows_cached"]("p", force_recompute=True), ([], 0, 1))
-            save.assert_called_once_with("/synthetic/absent.npz", [])
-            event_rows.side_effect = RuntimeError("synthetic DB failure")
-            with self.assertRaisesRegex(RuntimeError, "event data could not be read completely"):
+            load.side_effect = None; load.return_value = []
+            self.assertEqual(ns["_assemble_psd_rows_cached"]("p", force_recompute=True), ([], 0, 0))
+            event_rows.side_effect = RuntimeError("event clock conflict")
+            with self.assertRaisesRegex(RuntimeError, "event clock conflict"):
                 ns["_assemble_psd_rows_cached"]("p", force_recompute=True)
+
 
     def test_production_ignores_injected_rows_and_preserves_exact_frame(self):
         frame = pd.DataFrame({"nrs": [0.0, np.nan, 8.0], "_pro_time_utc": pd.to_datetime(["2025-07-17", "2025-07-18", "2025-07-19"])})

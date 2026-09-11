@@ -70,14 +70,14 @@ def _recording_alignment(recording):
     return shift
 
 
-def _aligned_recording_payload(data, recording):
+def _aligned_recording_payload(data, recording, clock_context=None, clock_audit=None):
     """Copy the derived time coordinates once; never change stored data or sample rate.
 
     Native BRAVO plots add adjusted_alignment to StartTime. Chronic Time is absolute;
     TD/PSD Time, when present, is relative and must not receive a second offset.
     """
     if isinstance(data, list):
-        return [_aligned_recording_payload(item, recording) for item in data]
+        return [_aligned_recording_payload(item, recording, clock_context, clock_audit) for item in data]
     if not isinstance(data, dict):
         return data
     out = dict(data)
@@ -87,8 +87,21 @@ def _aligned_recording_payload(data, recording):
     shift = _recording_alignment(recording)
     previous = float((data.get("AnalysisTimeProvenance") or {}).get("alignment_seconds", 0))
     delta = shift - previous
+    clock_provenance = None
     if "StartTime" in data:
         out["StartTime"] = float(data["StartTime"]) + delta
+        if clock_context is not None:
+            from modules import PerceptClock
+            raw_start = (data.get("AnalysisTimeProvenance") or {}).get("raw_start_time", float(data["StartTime"]))
+            index, source = clock_context
+            clock_provenance = PerceptClock.recover_start(index, source, raw_start)
+            if clock_audit is not None:
+                clock_audit.append(clock_provenance)
+            if clock_provenance["t"] is None:
+                return None
+            out["StartTime"] = clock_provenance["t"] + shift
+            clock_provenance = {**clock_provenance, "raw_start_time": raw_start, "device": source.get("device")}
+
     if getattr(recording, "type", "") in CHRONIC_TYPES and "Time" in data:
         out["Time"] = np.asarray(data["Time"], dtype=float) + delta
     out["AnalysisTimeProvenance"] = {
@@ -96,6 +109,9 @@ def _aligned_recording_payload(data, recording):
         "alignment_seconds": shift,
         "method": "native additive recording alignment; sampling rate unchanged",
     }
+    if clock_provenance is not None:
+        out["AnalysisTimeProvenance"].update(clock=clock_provenance,
+                                             raw_start_time=clock_provenance["raw_start_time"])
     return out
 
 
@@ -433,24 +449,31 @@ def _resolve_biomarker_metric(request_data, pro_df):
     return pro_df, metric, (metric,)
 
 
-def _load_recordings(participant_uid, types):
+def _load_recordings(participant_uid, types, audit=None):
     """Return a list of loaded recording dicts for a participant, for the given DB types."""
     Participant = models.Participant.find(uid=participant_uid)
     if not Participant:
         return []
-    SourceFiles = _eligible_sources(Participant)
+    from modules import PerceptClock
+    SourceFiles, clock_sources = _clock_sources(Participant)
     if not SourceFiles:
         return []
-    Recordings = list(_eligible_recordings(Participant, source__in=SourceFiles, type__in=types))
+    clock_index = PerceptClock.build_index(clock_sources)
+    source_map = {source["uid"]: source for source in clock_sources}
+    Recordings = list(models.Recording.find_all(source__in=SourceFiles, type__in=types))
     if not Recordings:
         return []
 
     # Decode the .bdat files concurrently — independent reads, so this scales with cores. Only
     # the file pointer/hash (already-fetched attrs) are touched per task, so no ORM call runs in
     # a worker thread. Unexpected failures abort the analysis instead of returning a partial cohort.
+    clock_events = []
     def _decode(rec):
         try:
-            data = _aligned_recording_payload(Database.loadSourceFile(rec.pointer, rec.hashed), rec)
+            source = source_map.get(str(rec.source_id), {})
+            needs_clock = rec.type in TIMEDOMAIN_TYPES + AVAILABILITY_PSD_TYPES + POWERDOMAIN_TYPES + ["NeuralActivitySnapshot"]
+            clock_context = (clock_index, source) if needs_clock else None
+            data = _aligned_recording_payload(Database.loadSourceFile(rec.pointer, rec.hashed), rec, clock_context, clock_events)
             # Carry the chronic-trend sensing CENTER FREQUENCY forward. It is stored on the
             # Recording.metadata (stamped at decode time from the GROUP-level config) rather than in
             # the .bdat payload, so merge it onto the loaded dict(s) here so the report can label the
@@ -496,71 +519,89 @@ def _load_recordings(participant_uid, types):
                 loaded.extend([d for d in data if isinstance(d, dict)])
             elif isinstance(data, dict):
                 loaded.append(data)
-    return loaded
+    retained = [data for data in loaded if _eligible_time(Participant, data.get("StartTime"))]
+    unique = _deduplicate_clock_recordings(retained)
+    if audit is not None:
+        from collections import Counter
+        audit.update({"exported_recordings": len(Recordings), "decoded_retained_blocks": len(loaded),
+                      "outside_eligible_time": len(loaded) - len(retained),
+                      "duplicate_blocks_removed": len(retained) - len(unique),
+                      "physical_recordings": len(unique),
+                      "clock_status_counts": dict(Counter(event["status"] for event in clock_events))})
+    return unique
+
+
+def _deduplicate_clock_recordings(recordings):
+    """Collapse byte-identical samples at the same physical clock coordinate."""
+    import hashlib
+    out, seen = [], {}
+    for data in recordings:
+        provenance = data.get("AnalysisTimeProvenance") or {}
+        clock = provenance.get("clock")
+        if not clock:
+            out.append(data)
+            continue
+        digest = hashlib.sha256(json.dumps([clock.get("device"), clock["block"], clock["counter"],
+                 data.get("RecordingType"), data.get("SamplingRate"), data.get("ChannelNames")],
+                 default=str).encode())
+        for key in ("Data", "Missing"):
+            array = np.ascontiguousarray(data.get(key, []))
+            digest.update(str((array.shape, array.dtype)).encode())
+            digest.update(array.tobytes())
+        # Native frequency-domain PSD descriptors are part of the physical payload.
+        digest.update(json.dumps(data.get("Descriptor"), sort_keys=True,
+                                  default=lambda value: np.asarray(value).tolist()).encode())
+        digest.update(json.dumps(data.get("PSD"), sort_keys=True,
+                                  default=lambda value: np.asarray(value).tolist()).encode())
+        identity = digest.hexdigest()
+        alignment = provenance.get("alignment_seconds", 0)
+        if identity in seen:
+            if seen[identity] != alignment:
+                raise ValueError("Physical recording copies have conflicting manual alignment")
+            continue
+        seen[identity] = alignment
+        out.append(data)
+    return out
+
+
+def _clock_sources(participant):
+    from modules import PerceptClock
+    sources = list(_eligible_sources(participant))
+    rows = []
+    for source in sources:
+        metadata = getattr(source, "metadata", None) or {}
+        clock = metadata.get("PerceptClock")
+        if getattr(source, "type", "") == "MedtronicJSON" and not metadata.get("AnalysisExclusion"):
+            if not isinstance(clock, dict) or clock.get("version") != PerceptClock.VERSION:
+                raise RuntimeError("Percept clock index must be prepared before biomarker analysis")
+        rows.append({"uid": str(source.uid), "device": metadata.get("Device"), "index": clock})
+    return sources, rows
+
+
+def _canonical_event_psds(participant, with_counts=False):
+    from modules import PerceptClock
+    sources, clock_sources = _clock_sources(participant)
+    # Eligibility must be decided after recovery, not against the incorrect raw date.
+    records = [{"uid": str(r.uid), "source_uid": str(r.source_id), "name": r.name,
+                "date": r.date, "metadata": r.metadata, "alignment": _recording_alignment(r)}
+               for r in models.Recording.find_all(source__in=sources, type=PATIENT_EVENT_TYPE)]
+    rows, counts = PerceptClock.canonical_snapshots(records, clock_sources)
+    retained = [row for row in rows if _eligible_time(participant, row["t"])]
+    counts["outside_eligible_time"] = len(rows) - len(retained)
+    counts["eligible_physical_psds"] = len(retained)
+    return (retained, counts) if with_counts else retained
 
 
 def _load_patient_events(participant_uid):
-    """Load patient-annotated LFP snapshot events for the availability timeline.
-
-    These are PatientControllerEvent rows — both manually LABELED button presses ("Higher Pain",
-    "Tingly/Burning", "Feeling Good", "Medication", ...) AND the auto-fired "Streaming" LFP snapshots
-    the patient triggers around each survey. Unlike the .bdat recordings, the event's time and
-    per-hemisphere PSD live on the ROW's `metadata` (one subdict per hemisphere, each with `DateTime`,
-    `Frequency`, `FFTBinData`), so we read them off the ORM directly — no file decode.
-
-    Streaming events are NO LONGER dropped (2026-06-27, PI): on RCS08 they are the dominant
-    PSD-bearing modality (~2477 vs ~221 labeled) and the primary closed-loop signal, so they are
-    surfaced as their OWN display category (`category=DISPLAY_STREAMING_EVENT`) rather than being
-    discarded or folded into the montage-PSD markers. Each returned event carries a `category` tag
-    (DISPLAY_STREAMING_EVENT for Streaming, DISPLAY_PATIENT_EVENT for labeled presses) so the timeline
-    can render them as distinct rows/glyphs. The authoritative timestamp is the per-hemisphere
-    `DateTime` (ISO-Z); we fall back to the row's `date` if absent.
-
-    Returns [{"name": str, "category": str, "t": epoch_s, "psds": [(freq_list, power_list), ...]}, ...].
-    """
-    import datetime as _dt
-    Participant = models.Participant.find(uid=participant_uid)
-    if not Participant:
+    """Canonical per-hemisphere events share clock recovery and physical dedup."""
+    participant = models.Participant.find(uid=participant_uid)
+    if not participant:
         return []
-    SourceFiles = _eligible_sources(Participant)
-    if not SourceFiles:
-        return []
-    rows = list(_eligible_recordings(Participant, source__in=SourceFiles, type=PATIENT_EVENT_TYPE))
-    out = []
-    for r in rows:
-        name = getattr(r, "name", "") or ""
-        if not name:
-            continue
-        md = getattr(r, "metadata", None)
-        if not isinstance(md, dict):
-            continue
-        t = None
-        psds = []
-        for hemi_block in md.values():
-            if not isinstance(hemi_block, dict):
-                continue
-            if t is None and hemi_block.get("DateTime"):
-                try:
-                    t = _dt.datetime.fromisoformat(
-                        str(hemi_block["DateTime"]).replace("Z", "+00:00")).timestamp()
-                except (ValueError, TypeError):
-                    t = None
-            freq = hemi_block.get("Frequency")
-            power = hemi_block.get("FFTBinData")
-            if isinstance(freq, (list, tuple)) and isinstance(power, (list, tuple)) \
-                    and len(freq) == len(power) and len(freq) > 0:
-                psds.append((list(freq), list(power)))
-        if t is None:
-            t = getattr(r, "date", None)
-        if t is not None:
-            t = float(t) + _recording_alignment(r)
-        if not _eligible_time(Participant, t):
-            continue
-        # Streaming events are surfaced (no longer dropped) under their own display category; labeled
-        # presses keep their annotation as the patient-event category. Both share onboard-FFT units.
-        out.append({"name": name, "category": _event_display_category(name),
-                    "t": float(t), "psds": psds})
-    return out
+    return [{"name": row["name"], "category": _event_display_category(row["name"]),
+             "t": row["t"], "psds": [(list(row["spectrum"]["Frequency"]),
+                                         list(row["spectrum"]["FFTBinData"]))],
+             "time_provenance": row["provenance"]}
+            for row in _canonical_event_psds(participant)]
 
 
 def _event_block_channel(hemi_key, sense_id):
@@ -571,122 +612,30 @@ def _event_block_channel(hemi_key, sense_id):
 
 
 def _event_psd_rows(participant_uid, sensing_index=None):
-    """Harvest EVERY PatientControllerEvent PSD (incl. the auto 'Streaming' markers) as poolable
-    PSD rows for the per-channel biomarker scan.
-
-    Unlike `_load_patient_events` (timeline display, which pools hemispheres without channel
-    identity and tags each event a display `category`), this assigns each per-hemisphere FFT block
-    to its canonical bipolar channel so the spectra join the same per-channel pool as TD/Montage.
-    Channel resolution priority (see `_resolve_event_channel`):
-      1. SenseID when present — the device's authoritative contact-pair identifier.
-      2. Active-sensing config index (sensing_index from _build_sensing_config_index): the
-         most-recent single-channel sensing config for this hemisphere at event time.
-      3. Unresolvable → block skipped; no static hemisphere guess is ever applied.
-    The onboard-FFT vs Welch scale offset is absorbed by the within-(channel, source) z-score, since
-    every row here is tagged `source=EVENT_PSD_SOURCE`. No .bdat decode — the spectra live on the
-    ORM row `metadata`, one subdict per hemisphere with `DateTime` / `Frequency` / `FFTBinData`.
-
-    Args:
-        sensing_index : optional output of _build_sensing_config_index(decoded_td_recs).
-                        Pass it to activate per-timestamp channel resolution for no-SenseID blocks.
-    Returns a list of {"channel", "source", "t": epoch_s, "freq", "power"} rows — the SAME schema
-    `_welch_rows_into` emits, ready for `streaming_psd.psd_rows_to_matrix`.
-    """
-    import datetime as _dt
-    Participant = models.Participant.find(uid=participant_uid)
-    if not Participant:
-        return []
-    SourceFiles = _eligible_sources(Participant)
-    if not SourceFiles:
+    """One corrected physical event PSD per device/block/counter/hemisphere/spectrum."""
+    participant = models.Participant.find(uid=participant_uid)
+    if not participant:
         return []
     rows = []
-    for r in _eligible_recordings(Participant, source__in=SourceFiles, type=PATIENT_EVENT_TYPE):
-        md = getattr(r, "metadata", None)
-        if not isinstance(md, dict):
+    for event in _canonical_event_psds(participant):
+        channel = _resolve_event_channel(event["hemisphere"], event["sense_id"],
+                                         t_event=event["t"], sensing_index=sensing_index)
+        if channel is None:
             continue
-        for hemi_key, hb in md.items():
-            if not isinstance(hb, dict):
-                continue
-            freq = hb.get("Frequency")
-            power = hb.get("FFTBinData")
-            if not (isinstance(freq, (list, tuple)) and isinstance(power, (list, tuple))
-                    and len(freq) == len(power) and len(freq) > 0):
-                continue
-            # Parse event timestamp first so the resolver can do the temporal lookup.
-            t = None
-            if hb.get("DateTime"):
-                try:
-                    t = _dt.datetime.fromisoformat(
-                        str(hb["DateTime"]).replace("Z", "+00:00")).timestamp()
-                except (ValueError, TypeError):
-                    t = None
-            if t is None:
-                t = getattr(r, "date", None)
-            if t is not None:
-                t = float(t) + _recording_alignment(r)
-            if not _eligible_time(Participant, t):
-                continue
-            ch = _resolve_event_channel(hemi_key, hb.get("SenseID"),
-                                        t_event=float(t), sensing_index=sensing_index)
-            if ch is None:
-                continue
-            rows.append({"channel": ch, "source": EVENT_PSD_SOURCE, "t": float(t),
-                         "freq": np.asarray(freq, dtype=float),
-                         "power": np.asarray(power, dtype=float)})
+        spectrum = event["spectrum"]
+        rows.append({"channel": channel, "source": EVENT_PSD_SOURCE, "t": event["t"],
+                     "name": event["name"], "physical_id": event["identity"],
+                     "time_provenance": event["provenance"],
+                     "freq": np.asarray(spectrum["Frequency"], dtype=float),
+                     "power": np.asarray(spectrum["FFTBinData"], dtype=float)})
     return rows
 
 
 def _event_psd_index(participant_uid, sensing_index=None):
-    """Lightweight {t, channel, source} index of the patient-event PSDs (incl. 'Streaming'), one
-    entry per (event, hemisphere block) assigned to its canonical bipolar channel — the SAME set
-    `_event_psd_rows` pools into the matrix, minus the freq/power arrays. Feeds `psd_scan_index` so
-    the imported event PSDs render as tick marks on their contact lanes and the live binarization
-    preview counts them, mirroring the backend pool (TD + montage + Patient event).
+    """Availability and matching use exactly the same corrected physical PSD pool."""
+    return [{key: row[key] for key in ("t", "channel", "source", "name", "physical_id")}
+            for row in _event_psd_rows(participant_uid, sensing_index=sensing_index)]
 
-    Args:
-        sensing_index : optional output of _build_sensing_config_index; enables per-timestamp
-                        channel resolution for no-SenseID blocks (the 84% majority on RCS08).
-    """
-    import datetime as _dt
-    Participant = models.Participant.find(uid=participant_uid)
-    if not Participant:
-        return []
-    SourceFiles = _eligible_sources(Participant)
-    if not SourceFiles:
-        return []
-    out = []
-    for r in _eligible_recordings(Participant, source__in=SourceFiles, type=PATIENT_EVENT_TYPE):
-        md = getattr(r, "metadata", None)
-        if not isinstance(md, dict):
-            continue
-        ev_name = (getattr(r, "name", "") or "").strip() or "Event"
-        for hemi_key, hb in md.items():
-            if not isinstance(hb, dict):
-                continue
-            freq = hb.get("Frequency"); power = hb.get("FFTBinData")
-            if not (isinstance(freq, (list, tuple)) and isinstance(power, (list, tuple))
-                    and len(freq) == len(power) and len(freq) > 0):
-                continue
-            t = None
-            if hb.get("DateTime"):
-                try:
-                    t = _dt.datetime.fromisoformat(
-                        str(hb["DateTime"]).replace("Z", "+00:00")).timestamp()
-                except (ValueError, TypeError):
-                    t = None
-            if t is None:
-                t = getattr(r, "date", None)
-            if t is not None:
-                t = float(t) + _recording_alignment(r)
-            if not _eligible_time(Participant, t):
-                continue
-            ch = _resolve_event_channel(hemi_key, hb.get("SenseID"),
-                                        t_event=float(t), sensing_index=sensing_index)
-            if ch is None:
-                continue
-            out.append({"t": float(t), "channel": ch, "source": EVENT_PSD_SOURCE,
-                        "name": ev_name})
-    return out
 
 def _event_psd_lsb_blocks(participant_uid, sensing_hz_by_channel=None, sensing_index=None):
     """Build CS-3 PSD->LSB BRIDGE input blocks from the PSD-only patient-triggered snapshot events.
@@ -1610,106 +1559,27 @@ def _recording_rows_for_psd(participant_uid):
     out = []
     for types, source_label in ((TIMEDOMAIN_TYPES, "TD streaming"),
                                 (AVAILABILITY_PSD_TYPES, "Montage/survey")):
-        for rec in _eligible_recordings(Participant, source__in=SourceFiles, type__in=types):
+        for rec in models.Recording.find_all(source__in=SourceFiles, type__in=types):
             out.append({"rec": rec, "uid": rec.uid, "hash": _recording_analysis_hash(rec),
                         "source": source_label})
     return out
 
 
 def _assemble_psd_rows_cached(participant_uid, pro_times=None, force_recompute=False):
-    """Assemble the full PSD-row list for a participant using the per-recording cache, decoding +
-    Welch'ing ONLY the recordings whose spectra are not already on disk.
+    """Build from canonical recovered inputs; the outer matrix cache remains active.
 
-    This is the load-skipping fast path behind `_cached_psd_matrix`: a participant whose recordings
-    are all cached pays zero .bdat decodes (the ~190 s cold load disappears); a partially-warm
-    participant pays only for the new files. The resulting rows are identical to
-    `_assemble_psd_rows(td_list, psd_list)` because both go through `_welch_rows_into`.
-
-    `pro_times`: when provided, TD-streaming recordings emit RATING-CENTERED rows (one per
-    overlapping PRO, see `_welch_rows_into`); their cache entries are keyed by the PRO-set signature
-    so a PRO change recomputes only the TD spectra. Montage/survey/event rows are PRO-independent and
-    keep their stable cache entries.
-
-    Returns (rows, n_cached, n_computed) — the row counts let callers log/verify the cache hit rate.
+    Legacy per-recording row caches do not contain physical clock provenance and
+    cannot establish cross-export deduplication. They are deliberately bypassed.
     """
     from .routines import streaming_psd as _sp
-    entries = _recording_rows_for_psd(participant_uid)
-    if not entries:
-        return [], 0, 0
-
-    pro_sig = _pro_set_signature(pro_times) if pro_times is not None else ""
-
-    def _key_for(e):
-        # Only TD-streaming recordings carry the PRO signature in their key (their spectra are
-        # rating-centered); montage/survey stay PRO-independent so their cache is never invalidated
-        # by a PRO edit.
-        sig = pro_sig if (pro_sig and e["source"] == "TD streaming") else ""
-        return _recording_psd_cache_path(e["uid"], e["hash"], sig)
-
+    td = _load_recordings(participant_uid, TIMEDOMAIN_TYPES)
+    psd = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
     rows = []
-    n_cached = 0
-    missing = []   # entries needing a decode+Welch
-    for e in entries:
-        path = _key_for(e)
-        # force_recompute ignores the on-disk spectra so every recording is decoded and Welch'd
-        # again. The rebuilt rows are still written back, so this is a one-off cost.
-        cached = (None if force_recompute
-                  else (_load_recording_psd_rows(path) if os.path.exists(path) else None))
-        if cached is not None:
-            rows.extend(cached)
-            n_cached += 1
-        else:
-            missing.append(e)
-
-    n_computed = 0
-    if missing:
-        # Decode only the misses, concurrently (same threaded decode as _load_recordings), then
-        # Welch each recording's dict(s) in isolation and cache its rows keyed by that recording.
-        def _decode(e):
-            rec = e["rec"]
-            try:
-                data = _aligned_recording_payload(Database.loadSourceFile(rec.pointer, rec.hashed), rec)
-            except Exception as error:
-                _log.warning("Biomarkers: failed to decode recording %r for PSD cache",
-                             getattr(rec, "pointer", "?"), exc_info=True)
-                raise RuntimeError("Neural source data could not be read completely. Retry after restoring the eligible recordings.") from error
-            dicts = [d for d in (data if isinstance(data, list) else [data]) if isinstance(d, dict)]
-            return e, dicts
-
-        workers = max(1, min(len(missing), _loader_threads()))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            for e, dicts in pool.map(_decode, missing):
-                rec_rows = []
-                if dicts:
-                    # TD streaming gets rating-centered rows when pro_times is provided; other
-                    # sources ignore it (pass None so they keep the first-window behavior).
-                    _pt = pro_times if (pro_times is not None and e["source"] == "TD streaming") else None
-                    _welch_rows_into(rec_rows, dicts, e["source"], _sp, pro_times=_pt)
-                rows.extend(rec_rows)
-                n_computed += 1
-                # Persist this recording's rows (even if empty) so it is never re-decoded.
-                try:
-                    _save_recording_psd_rows(_key_for(e), rec_rows)
-                except Exception as ex:
-                    _log.warning("Biomarkers: per-recording PSD cache write failed (%s)", ex)
-
-    # Patient-event PSDs (incl. Streaming markers): read off ORM metadata, no decode/Welch, so they
-    # need no per-recording cache. Appended on every assembly — newly-ingested files with event
-    # markers therefore enter the pool automatically (the matrix signature below tracks them).
-    # Build the sensing index from the already-computed TD rows so event blocks with no SenseID
-    # get their contact pair from the actual per-timestamp sensing config.
-    try:
-        _ev_idx = _build_sensing_config_index_from_rows(rows)
-        ev_rows = _event_psd_rows(participant_uid, sensing_index=_ev_idx)
-        rows.extend(ev_rows)
-        if ev_rows:
-            _log.info("Biomarkers: appended %d patient-event PSD rows for %s", len(ev_rows),
-                      participant_uid)
-    except Exception as ex:
-        _log.warning("Biomarkers: patient-event PSD harvest failed", exc_info=True)
-        raise RuntimeError("Neural event data could not be read completely. Retry after restoring the eligible event records.") from ex
-
-    return rows, n_cached, n_computed
+    _welch_rows_into(rows, td, "TD streaming", _sp, pro_times=pro_times)
+    _welch_rows_into(rows, psd, "Montage/survey", _sp)
+    sensing_index = _build_sensing_config_index(td)
+    rows.extend(_event_psd_rows(participant_uid, sensing_index=sensing_index))
+    return rows, 0, len(td) + len(psd)
 
 
 def _psd_matrix_signature(td_list, psd_list):
@@ -1900,52 +1770,8 @@ def warm_psd_cache(participant_uid, pro_times=None, decoded_td=None, decoded_psd
 
 
 def _warm_centered_matrix_from_decoded(participant_uid, td_list, psd_list, pro_times):
-    """Build + persist the rating-centered PSD matrix from ALREADY-DECODED recordings — no ORM decode.
-
-    Mirrors `_cached_psd_matrix`'s matrix-cache contract (same signature key, same npz schema incl.
-    `dur`), but assembles rows from the in-memory `td_list`/`psd_list` the timeline request already
-    decoded, so the expensive .bdat decode is paid exactly once per page load instead of twice. If the
-    matrix is already cached (warm), it is loaded and returned without re-Welch'ing. The per-recording
-    row cache is intentionally NOT written here (that path serves incremental ingestion, keyed off the
-    DB); the matrix cache is what the scan/validation requests read.
-    """
-    from .routines import streaming_psd as _sp
-    sig, _entries = _psd_matrix_signature_orm(participant_uid, pro_times=pro_times)
-    path = os.path.join(_psd_cache_dir(), f"{participant_uid}_{sig}.npz")
-    if os.path.exists(path):
-        try:
-            z = np.load(path, allow_pickle=True)
-            out = {"logX": z["logX"], "t": z["t"],
-                   "channel": z["channel"].astype(object), "source": z["source"].astype(object),
-                   "f_set": z["f_set"]}
-            if "dur" in z.files:
-                out["dur"] = z["dur"]
-            return out
-        except Exception as e:
-            _log.warning("Biomarkers: PSD matrix cache read failed (%s); rebuilding from decoded", e)
-
-    rows = []
-    # TD streaming -> rating-centered rows; montage/survey -> first-window rows (PRO-agnostic).
-    _welch_rows_into(rows, td_list, "TD streaming", _sp, pro_times=pro_times)
-    _welch_rows_into(rows, psd_list, "Montage/survey", _sp)
-    try:
-        _ev_idx = _build_sensing_config_index(list(td_list or []))  # td only; psd_list = sweeps
-        rows.extend(_event_psd_rows(participant_uid, sensing_index=_ev_idx))
-    except Exception:
-        pass
-    mat = _sp.psd_rows_to_matrix(rows)
-    if mat is None:
-        return None
-    try:
-        _save = dict(logX=mat["logX"], t=mat["t"],
-                     channel=np.asarray(mat["channel"], dtype=str),
-                     source=np.asarray(mat["source"], dtype=str), f_set=mat["f_set"])
-        if mat.get("dur") is not None:
-            _save["dur"] = np.asarray(mat["dur"], dtype=float)
-        _atomic_savez(path, **_save)
-    except Exception as e:
-        _log.warning("Biomarkers: PSD matrix cache write (from decoded) failed (%s)", e)
-    return mat
+    """Use the canonical matrix path so supplied decoded data cannot bypass recovery."""
+    return _cached_psd_matrix(participant_uid, pro_times=pro_times)
 
 
 def _derive_chan_order(td_recordings):
@@ -3062,7 +2888,8 @@ def run_for_participant(request_data):
     if Participant is not None and getattr(Participant, "mrn", "") == DEMO_MRN:
         return _demo_run(source, request_data)
 
-    td = _load_recordings(participant_uid, TIMEDOMAIN_TYPES) if source in ("timedomain", "both") else []
+    clock_input_audit = {"timedomain": {}, "montage": {}}
+    td = _load_recordings(participant_uid, TIMEDOMAIN_TYPES, audit=clock_input_audit["timedomain"]) if source in ("timedomain", "both") else []
 
     # Power domain = Chronic ~10-min LFP power + per-session Power-Domain band power, concatenated
     # (raw units) into one chronic-shaped list so they're compared apples-to-apples.
@@ -3187,7 +3014,7 @@ def run_for_participant(request_data):
     # shared PRO because per_pro_lsb_spectrum is deterministic in (pro_time, channel, recordings) — the
     # numbers match by construction, NOT by sharing one memo slot. td_recordings = ALL TD-bearing
     # products (streaming + montage/survey, 250 Hz); event_psd_blocks = PatientControllerEvent FFT only.
-    _scan_psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
+    _scan_psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES, audit=clock_input_audit["montage"])
     # Index from streaming TD only — psd_list is montage sweeps (all pairs, excluded by guard).
     _scan_sensing_idx = _build_sensing_config_index(list(td or []))
     _scan_event_blocks = _event_psd_lsb_blocks(participant_uid,
@@ -3292,6 +3119,10 @@ def run_for_participant(request_data):
     # when closed-loop stimulation is active on that hemisphere (else {}). Lets the card overlay
     # "what's set on the device now" against the data-derived recommendation, in the same LFP-power
     # units. Empty dict => no closed-loop program => the frontend draws no programmed line.
+    out["clock_recovery"] = _canonical_event_psds(Participant, with_counts=True)[1]
+    out["clock_recovery"]["method"] = "percept-programmer-clock-v1"
+    out["clock_recovery"]["file_backed"] = clock_input_audit
+    out["clock_recovery"]["scope"] = "Event PSDs and time-domain/montage start times; chronic trend timestamps are not corrected"
     out["programmed_thresholds"] = _programmed_adaptive_thresholds(Participant)
     # Data-availability timeline payload (new BiomarkerDataTimeline component). Reuses the recordings
     # already loaded for the decoder + montage/survey PSD products; real pain (REDCap) + stim

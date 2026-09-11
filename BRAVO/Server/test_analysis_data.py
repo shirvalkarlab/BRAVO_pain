@@ -181,6 +181,8 @@ class CanonicalDataTests(unittest.TestCase):
         qc = Path(self.temp.name) / 'OURA/QualityControl.py'
         qc.parent.mkdir()
         qc.write_text('synthetic policy')
+        for name in ('PerceptClock.py', 'PerceptClockData.py'):
+            (Path(self.temp.name) / name).write_text('synthetic clock policy')
         self.api.input_manifest.__globals__['__file__'] = str(Path(self.temp.name) / 'AnalysisData.py')
         first = self.api.input_manifest(self.person)
         model.write_text('{"version":2}')
@@ -191,16 +193,17 @@ class CanonicalDataTests(unittest.TestCase):
     def test_unknown_recording_is_not_silently_loaded_as_neural(self):
         service_path = ROOT / 'modules/Biomarkers/bravo_service.py'
         tree = ast.parse(service_path.read_text())
-        functions = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ('_load_recordings', '_eligible_recordings', '_aligned_recording_payload', '_recording_alignment')]
-        source = NS(uid='source')
+        functions = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ('_load_recordings', '_eligible_recordings', '_aligned_recording_payload', '_recording_alignment', '_clock_sources', '_deduplicate_clock_recordings')]
+        source = NS(uid='source', metadata={})
         participant = NS(name='Example')
         recordings = Query([
-            NS(uid='known', source=source, pointer='known-file', type='MedtronicBrainSenseTimeDomain', hashed='known', metadata={}),
-            NS(uid='unknown', source=source, pointer='unknown-file', type='UnrecognizedSignal', hashed='unknown', metadata={}),
+            NS(uid='known', source=source, source_id='source', pointer='known-file', type='MedtronicBrainSenseTimeDomain', hashed='known', metadata={}),
+            NS(uid='unknown', source=source, source_id='source', pointer='unknown-file', type='UnrecognizedSignal', hashed='unknown', metadata={}),
         ])
         loader = Mock(side_effect=lambda pointer, hashed: {'StartTime': 100, 'Data': [[0]]})
         context = dict(models=NS(Participant=NS(find=lambda **kw: participant), Recording=NS(find_all=lambda **kw: recordings.filter(**kw))),
                        _eligible_sources=lambda person: Query([source]), Database=NS(loadSourceFile=loader),
+                       _eligible_time=lambda *args: True, TIMEDOMAIN_TYPES=[], AVAILABILITY_PSD_TYPES=[], POWERDOMAIN_TYPES=[], json=json,
                        ThreadPoolExecutor=ThreadPoolExecutor, _loader_threads=lambda: 1, _log=Mock(), np=__import__('numpy'), CHRONIC_TYPES=['MedtronicChronicBrainSense'])
         exec(compile(ast.Module(body=functions, type_ignores=[]), str(service_path), 'exec'), context)
         result = context['_load_recordings']('patient', ['MedtronicBrainSenseTimeDomain', 'MedtronicIndefiniteStream'])

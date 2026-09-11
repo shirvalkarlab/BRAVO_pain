@@ -8,9 +8,11 @@ from bisect import bisect_left
 from collections import defaultdict
 from copy import deepcopy
 from datetime import datetime
+from itertools import combinations
 import hashlib
 import json
 import math
+import struct
 
 VERSION = "percept-programmer-clock-v1"
 MAX_INTERCEPT_CHANGE_SECONDS = 120.0
@@ -83,24 +85,66 @@ def extract_source(payload):
 
 
 def valid_spectrum(block):
+    """Validate structure without replacing the downstream per-bin PSD quality filter."""
     if not isinstance(block, dict):
         return False
     freq, power = block.get("Frequency"), block.get("FFTBinData")
-    return (isinstance(freq, (list, tuple)) and isinstance(power, (list, tuple))
-            and len(freq) > 0 and len(freq) == len(power)
-            and all(number(value) is not None for value in (*freq, *power)))
+    if not (isinstance(freq, (list, tuple)) and isinstance(power, (list, tuple))
+            and len(freq) > 0 and len(freq) == len(power)):
+        return False
+    for value in (*freq, *power):
+        if isinstance(value, bool):
+            return False
+        try:
+            float(value)
+        except (ValueError, TypeError, OverflowError):
+            return False
+    return True
 
 
 def snapshot_identity(device, hemisphere, block):
-    """Identity deliberately excludes source/name/exported wall time/manual shift."""
+    """Physical coordinates; callers must verify spectra before merging copies.
+
+    Export/storage JSON round trips can change spectral values by a few binary64
+    steps. Payloads therefore do not define identity; spectra_equivalent is the
+    mandatory compatibility check for records with the same coordinates.
+    """
     if not device or not valid_spectrum(block):
         return None
     pos = coordinate(block.get("DateTimeBlockId"), block.get("DateTimeOffsetInSeconds"))
     if pos is None:
         return None
-    values = [str(device), str(hemisphere), *pos,
-              [float(x) for x in block["Frequency"]], [float(x) for x in block["FFTBinData"]]]
+    values = [str(device), str(hemisphere), *pos]
     return hashlib.sha256(json.dumps(values, separators=(",", ":")).encode()).hexdigest()
+
+
+def spectra_equivalent(left_block, right_block):
+    """Allow at most four representable binary64 steps per bin, without rounding.
+
+    This is storage-representation tolerance, not signal smoothing. NaNs match
+    NaNs, infinities match only the same sign, and signed zeros are equivalent.
+    Nonfinite bins remain intact for the existing downstream per-bin PSD QC.
+    """
+    if not valid_spectrum(left_block) or not valid_spectrum(right_block):
+        return False
+    sign = 1 << 63
+
+    def ordered(value):
+        bits = struct.unpack(">Q", struct.pack(">d", value))[0]
+        return sign - (bits & (sign - 1)) if bits & sign else sign + bits
+
+    for key in ("Frequency", "FFTBinData"):
+        if len(left_block[key]) != len(right_block[key]):
+            return False
+        for left, right in zip(left_block[key], right_block[key]):
+            left, right = float(left), float(right)
+            if left == right or (math.isnan(left) and math.isnan(right)):
+                continue
+            if not math.isfinite(left) or not math.isfinite(right):
+                return False
+            if abs(ordered(left) - ordered(right)) > 4:
+                return False
+    return True
 
 
 def extract_event_recordings(payload):
@@ -249,6 +293,10 @@ def canonical_snapshots(records, sources):
     counts["physical_psds"] = len(grouped)
     counts["duplicate_export_copies"] = sum(len(group) - 1 for group in grouped.values())
     for identity, group in sorted(grouped.items()):
+        # A tolerance relation is not transitive: checking only a representative
+        # could merge endpoints eight steps apart through a four-step midpoint.
+        if any(not spectra_equivalent(left[3], right[3]) for left, right in combinations(group, 2)):
+            raise ValueError("Physical PSD copies have conflicting spectral payloads")
         shifts = {number(item[0].get("alignment", 0)) for item in group}
         sense_ids = {str(item[3]["SenseID"]) for item in group if item[3].get("SenseID")}
         if None in shifts or len(shifts) != 1 or len(sense_ids) > 1:

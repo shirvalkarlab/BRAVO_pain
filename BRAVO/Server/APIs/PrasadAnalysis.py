@@ -184,7 +184,8 @@ def deidentified_result(value, participant):
 def analysis_code_fingerprint():
     root = Path(AnalysisData.__file__).parent
     digest = hashlib.sha256()
-    paths = [Path(__file__), Path(AnalysisData.__file__), root / "AnalysisJobs.py"]
+    paths = [Path(__file__), Path(AnalysisData.__file__), root / "AnalysisJobs.py",
+             root / "PerceptClock.py", root / "PerceptClockData.py"]
     for package in ("Biomarkers", "StimOptimizer", "ClosedLoopDeployment"):
         paths.extend(sorted((root / package).rglob("*.py")))
     for path in paths:

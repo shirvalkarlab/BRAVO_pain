@@ -1,6 +1,8 @@
 """Synthetic clock fixtures with hand-derived UTC expectations; no private data."""
 import copy
 import importlib.util
+import json
+import math
 from pathlib import Path
 import unittest
 
@@ -36,6 +38,12 @@ def record(uid="r1", source_uid="a", metadata=None, **extra):
 
 def two_sources():
     return [source("a", [anchor(100, 100)]), source("b", [anchor(300, 320)])]
+
+
+def advance_float(value, direction, steps):
+    for _ in range(steps):
+        value = math.nextafter(value, direction)
+    return value
 
 
 class ScalarClockTests(unittest.TestCase):
@@ -117,9 +125,33 @@ class SourceExtractionTests(unittest.TestCase):
                       {"Frequency": [1], "FFTBinData": [1, 2]},
                       {"Frequency": [1], "FFTBinData": "2"},
                       {"Frequency": [True], "FFTBinData": [1]},
-                      {"Frequency": [1], "FFTBinData": [float("nan")]}]:
+                      {"Frequency": [1], "FFTBinData": [False]},
+                      {"Frequency": [1], "FFTBinData": ["not-numeric"]},
+                      {"Frequency": [1], "FFTBinData": [None]}]:
             with self.subTest(value=value):
                 self.assertFalse(clock.valid_spectrum(value))
+
+    def test_nonfinite_and_nonpositive_bins_are_left_for_downstream_qc(self):
+        # Four ordinary positive bins remain usable after per-bin QC. A clock
+        # index must not discard this entire physical PSD or remove its bad bins.
+        block = spectrum(Frequency=[1, 2, 3, 4, 5, 6, float("inf")],
+                         FFTBinData=[1, 2, 3, 4, float("nan"), 0, -float("inf")])
+        self.assertTrue(clock.valid_spectrum(block))
+        self.assertTrue(clock.valid_spectrum({"Frequency": ["1", "nan"],
+                                             "FFTBinData": ["2.5", "-inf"]}))
+        self.assertIsNone(clock.number(float("nan")))  # Clock coordinates remain strict.
+        self.assertIsNone(clock.number(float("inf")))
+
+    def test_event_extraction_keeps_nonfinite_raw_bins(self):
+        block = spectrum(Frequency=[1, 2, 3, 4, 5], FFTBinData=[1, 2, 3, 4, float("nan")])
+        payload = {"DiagnosticData": {"LfpFrequencySnapshotEvents": [
+            {"DateTime": "2020-01-01T03:00:00Z", "LfpFrequencySnapshotEvents": {"Left": block}}]}}
+        before = json.dumps(payload, sort_keys=True)
+        got = clock.extract_event_recordings(payload)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(json.dumps(got[0]["metadata"]["Left"], sort_keys=True),
+                         json.dumps(block, sort_keys=True))
+        self.assertEqual(json.dumps(payload, sort_keys=True), before)
 
     def test_event_extraction_preserves_raw_spectrum_and_copies_metadata(self):
         raw_spectrum = spectrum()
@@ -241,18 +273,117 @@ class ClockMappingTests(unittest.TestCase):
                          "conflicting_start_coordinates")
 
 
+class SpectralEquivalenceTests(unittest.TestCase):
+    def test_reported_one_ulp_roundtrip_is_equivalent_without_mutation(self):
+        left = spectrum(FFTBinData=[3.6904201006916604, 2.5])
+        right = spectrum(FFTBinData=[3.690420100691661, 2.5])
+        before = copy.deepcopy((left, right))
+        self.assertTrue(clock.spectra_equivalent(left, right))
+        self.assertTrue(clock.spectra_equivalent(right, left))
+        self.assertEqual((left, right), before)
+
+    def test_four_steps_allowed_five_rejected_at_multiple_exponents(self):
+        for value in [1e-12, 1.0, 1e12, -1.0, -1e12]:
+            for direction in [-math.inf, math.inf]:
+                with self.subTest(value=value, direction=direction):
+                    left = spectrum(FFTBinData=[value, 2.5])
+                    four = spectrum(FFTBinData=[advance_float(value, direction, 4), 2.5])
+                    five = spectrum(FFTBinData=[advance_float(value, direction, 5), 2.5])
+                    self.assertTrue(clock.spectra_equivalent(left, four))
+                    self.assertFalse(clock.spectra_equivalent(left, five))
+
+    def test_zero_and_exponent_boundaries_count_exact_representable_steps(self):
+        # Three predecessors below 1 plus two successors above it are five
+        # steps, despite the change in ULP size at 1.0.
+        below = advance_float(1.0, -math.inf, 3)
+        above = advance_float(1.0, math.inf, 2)
+        self.assertFalse(clock.spectra_equivalent(spectrum(FFTBinData=[below, 2]),
+                                                spectrum(FFTBinData=[above, 2])))
+        tiny = math.ulp(0.0)
+        self.assertTrue(clock.spectra_equivalent(spectrum(FFTBinData=[-2 * tiny, 2]),
+                                               spectrum(FFTBinData=[2 * tiny, 2])))
+        self.assertFalse(clock.spectra_equivalent(spectrum(FFTBinData=[-2 * tiny, 2]),
+                                                spectrum(FFTBinData=[3 * tiny, 2])))
+        self.assertTrue(clock.spectra_equivalent(spectrum(FFTBinData=[-0.0, 2]),
+                                               spectrum(FFTBinData=[0.0, 2])))
+
+    def test_meaningful_relative_changes_are_not_equivalent(self):
+        for value in [1e-12, 3.6904201006916604, 1e12]:
+            self.assertFalse(clock.spectra_equivalent(spectrum(FFTBinData=[value, 2]),
+                                                    spectrum(FFTBinData=[value * (1 + 1e-9), 2])))
+        self.assertFalse(clock.spectra_equivalent(spectrum(Frequency=[10, 20]),
+                                                spectrum(Frequency=[10, 20.00000002])))
+
+    def test_nonfinite_matching_and_invalid_arrays(self):
+        for left, right, expected in [(float("nan"), float("nan"), True),
+                                      (math.inf, math.inf, True), (-math.inf, -math.inf, True),
+                                      (math.inf, -math.inf, False), (math.inf, 1, False),
+                                      (1, math.inf, False), (float("nan"), 1, False),
+                                      (1, float("nan"), False)]:
+            self.assertEqual(clock.spectra_equivalent(spectrum(FFTBinData=[left, 2]),
+                                                     spectrum(FFTBinData=[right, 2])), expected)
+        for left, right in [({}, spectrum()), (spectrum(), {}),
+                            (spectrum(), spectrum(Frequency=[10], FFTBinData=[1.5]))]:
+            self.assertFalse(clock.spectra_equivalent(left, right))
+
+
 class PhysicalSnapshotTests(unittest.TestCase):
-    def test_identity_ignores_export_wall_time_but_retains_device_side_and_content(self):
+    def test_nonfinite_snapshot_identity_and_dedup_are_deterministic(self):
+        block = spectrum(Frequency=[1, 2, 3, 4, float("inf")],
+                         FFTBinData=[1, 2, 3, 4, float("nan")])
+        other = json.loads(json.dumps(block))  # Independently parsed NaN objects.
+        other["DateTime"] = "2020-01-02T09:00:00Z"
+        identity = clock.snapshot_identity("device-a", "Left", block)
+        self.assertIsNotNone(identity)
+        self.assertEqual(identity, clock.snapshot_identity("device-a", "Left", other))
+        records = [record(metadata={"Left": block}), record("r2", "b", metadata={"Left": other})]
+        before = json.dumps(records, sort_keys=True)
+        rows, counts = clock.canonical_snapshots(records, two_sources())
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["t"], T + 210)
+        self.assertEqual(counts["duplicate_export_copies"], 1)
+        self.assertEqual(len(rows[0]["spectrum"]["FFTBinData"]), 5)
+        self.assertEqual(json.dumps(records, sort_keys=True), before)
+
+    def test_identity_uses_device_side_coordinates_not_payload_or_wall_time(self):
         original = spectrum()
         identity = clock.snapshot_identity("device-a", "Left", original)
         self.assertEqual(identity, clock.snapshot_identity("device-a", "Left",
                          {**original, "DateTime": "2020-01-02T00:00:00Z", "EventName": "renamed"}))
         for device, side, block in [("device-b", "Left", original), ("device-a", "Right", original),
-                                    ("device-a", "Left", spectrum(counter=201)),
-                                    ("device-a", "Left", spectrum(FFTBinData=[1.5, 2.6]))]:
+                                    ("device-a", "Left", spectrum(counter=201))]:
             self.assertNotEqual(identity, clock.snapshot_identity(device, side, block))
+        self.assertEqual(identity, clock.snapshot_identity("device-a", "Left", spectrum(FFTBinData=[1.5, 2.6])))
         for device, block in [(None, original), ("device-a", {}), ("device-a", spectrum(block=0))]:
             self.assertIsNone(clock.snapshot_identity(device, "Left", block))
+
+    def test_material_same_coordinate_payload_difference_is_explicit_conflict(self):
+        records = [record(), record("r2", metadata={"Left": spectrum(FFTBinData=[1.5, 2.6])})]
+        before = copy.deepcopy(records)
+        with self.assertRaisesRegex(ValueError, "conflicting spectral payloads"):
+            clock.canonical_snapshots(records, two_sources())
+        self.assertEqual(records, before)
+
+    def test_roundtrip_equivalent_copies_deduplicate_and_retain_original_values(self):
+        raw = spectrum(FFTBinData=[3.6904201006916604, 2.5])
+        stored = spectrum(FFTBinData=[3.690420100691661, 2.5])
+        records = [record("a", metadata={"Left": raw}), record("b", metadata={"Left": stored})]
+        before = copy.deepcopy(records)
+        rows, counts = clock.canonical_snapshots(records, two_sources())
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(counts["duplicate_export_copies"], 1)
+        self.assertEqual(rows[0]["spectrum"]["FFTBinData"][0], 3.6904201006916604)
+        self.assertEqual(records, before)
+
+    def test_every_pair_checked_not_a_nontransitive_representative(self):
+        # The lexically selected midpoint is within four steps of both ends;
+        # the ends are eight steps apart and must not silently become one PSD.
+        records = [record("a", metadata={"Left": spectrum(FFTBinData=[advance_float(1, math.inf, 4), 2])}),
+                   record("b", metadata={"Left": spectrum(FFTBinData=[1, 2])}),
+                   record("c", metadata={"Left": spectrum(FFTBinData=[advance_float(1, math.inf, 8), 2])})]
+        for order in [records, list(reversed(records)), records[1:] + records[:1]]:
+            with self.assertRaisesRegex(ValueError, "conflicting spectral payloads"):
+                clock.canonical_snapshots(order, two_sources())
 
     def test_dedup_maps_once_and_applies_manual_shift_once_raw_unchanged(self):
         sources = two_sources()

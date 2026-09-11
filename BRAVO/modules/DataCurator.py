@@ -151,6 +151,11 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
     else:
         JSON["AutomaticStreamingFix"] = False
     
+    # Keep the source clock coordinates before the decoder transforms DateTime.
+    # This only stamps derived metadata; retained source bytes/hashes are unchanged.
+    from modules import PerceptClock, PerceptClockData
+    PerceptClockData.stamp_source(source_file, JSON)
+    patient_event_psds = PerceptClock.extract_event_recordings(JSON)
     DatabaseEntries = decodeMedtronicJSON(JSON)
     if reviewed_policy:
         removed = RCS08DataPolicy.filter_decoded_entries(DatabaseEntries)
@@ -338,12 +343,21 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
         if full_recording:
             full_recording.delete()
 
+    # Annotation duplication must not suppress a novel physical PSD or hemisphere.
+    # Existing recording metadata, native times and manual alignment are retained.
+    source_file.metadata["PerceptClockReconciliation"] = PerceptClockData.save_patient_event_psds(
+        source_file, patient_event_psds, device.uid)
     for event in DatabaseEntries["EventRecordings"]:
         if models.DBSEvent.include(date=event["date"], type=event["type"], name=event["name"], source__owner=person):
             continue
         event_log = models.DBSEvent(**{key: event[key] for key in event.keys() if key in ["name", "type", "date"]}, source=source_file)
         event_log.save()
         if "data" in event.keys():
+            if event["type"] == "PatientControllerEvent" and any(
+                    PerceptClock.valid_spectrum(block) for block in event["data"].values()):
+                # Exact native PSD representations were reconciled above.
+                # Physical deduplication occurs in the canonical analysis view.
+                continue
             recording = models.Recording(**{key: event[key] for key in event.keys() if key in ["name", "type", "date", "metadata"]}, source=source_file)
             recording.metadata = {**recording.metadata, **event["data"]}
             recording.save()
