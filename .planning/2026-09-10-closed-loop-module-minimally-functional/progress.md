@@ -160,3 +160,7 @@ at 0 mA and 2 have one side off; the 8 pairs with both sides on include every pa
 moved. Whether stim-off pairs count as stable therapy is now the PI's question (task_plan Next Step,
 findings §8d, open item 28). No code changed. Probes: `_agent_bridge/_probe_rc/probe_verify_pairs*.py`
 (disposable, gitignored).
+
+### Open item 28 answered (2026-09-10)
+PI: "keep as is". Stim-off pairs stay in the noise floor; decision 112 records it with the numbers.
+No code changed, nothing queued.

@@ -15,14 +15,8 @@ The line I do not cross alone: anything that changes what a clinician reads as a
 PI's call. Adding a reported caveat is not that; changing `verdict` or `licensed` is.
 
 ## Next Step
-**One question is open on the PI (2026-09-10):** whether a pair of ratings taken while BOTH
-stimulators were at 0 mA counts as "stable therapy" for the reliable-change floor. Measured: all
-83 one-hour pairs across the six scores sit under identical settings at both ends (0 changed), but 5
-of the 15 NRS pairs have both sides off and 2 have one side off. Today the code counts them, because
-the rule he chose is "every setting unchanged". If he wants only pairs with current flowing on both
-sides, that is a rule change (NRS base 15 -> 8 pairs) and is not made. Findings §8d.
-
-Otherwise nothing is queued: item 26 built, item 7 built, item 10 closed as unnecessary; the plan's
+Nothing is queued. The stim-off question (open item 28) was answered by the PI on 2026-09-10:
+"keep as is" -- decision 112. Item 26 built, item 7 built, item 10 closed as unnecessary; the plan's
 own goal — every check either reachable from production or gone — was met at Phase 4.
 
 ## Current Phase
