@@ -38,7 +38,7 @@ Phase 2
 ### Phase 6: Closed-loop simulation module design; housekeeping (worktrees, .mcp.json)
 **Status:** pending
 
-### Phase 7: Closed-Loop Deployment page redesign — NEXT SESSION, the PI's brief of 2026-09-10
+### Phase 7: CL closed-loop page redesign — NEXT SESSION, the PI's brief of 2026-09-10
 **Status:** pending
 The page is far too long and must be distilled. Full brief with his words in findings.md §3. Load
 the scientific-visualization and UI/UX skills before designing. In his order:
@@ -56,6 +56,11 @@ the scientific-visualization and UI/UX skills before designing. In his order:
 - [ ] Rename "SIGN COHERENT" -> "sign agreement" / "sign concordance"
 - [ ] Rename "How stimulation current moved band power, measured three ways" ->
       "Stimulation amplitude effects on band power, measured three ways"
+- [ ] The three source titles inside that panel become exactly: "Time domain derived LSB",
+      "PSD derived LSB", "Direct LSB recording" (today: "from the voltage trace", "from the device's
+      own spectrum", "from the device's own band power")
+- [ ] The text under those three panels made much more concise, using the scientific-visualization
+      skill
 - [ ] Three-source panel: drop the per-visit tabs; two tabs only, right-side amplitude change and
       left-side amplitude change, each pooled across all visits (decision 55's pooling)
 - [ ] THEN decide what calculation feeds the evidence triangle from the pooled view — undetermined

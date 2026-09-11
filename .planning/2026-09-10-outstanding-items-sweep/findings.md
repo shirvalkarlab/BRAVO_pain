@@ -48,6 +48,11 @@ make it much slimmer."
 - "SIGN COHERENT should be called SIGN agreement, SIGN concordance, or something similar."
 - "This is really critical and important": rename "how stimulation current [moved] band power
   measured three ways" to "stimulation amplitude effects on band power measured three ways".
+- The three source titles inside that panel, his exact words: "instead of 'from the voltage trace',
+  'from the device's own spectrum', 'from the device's own band power', it should be rephrased to
+  'Time domain derived LSB', 'PSD derived LSB', and then finally 'Direct LSB recording'. Those should
+  be the three titles. In the text below, it should be significantly made much more concise with
+  the scientific visualization skill."
 - Three-source panel: "you basically don't want separate visits with separate tabs because you
   pool across all visits for right side and left side. Maybe it's just two tabs for right side
   amplitude change and left side amplitude change pooled across all visits. Then we'll have to
