@@ -14,9 +14,11 @@
  * uses, with an empty `Candidates` list -- `ClosedLoopDeployment.adapter.report_for_participant`
  * computes the grid unconditionally, before either of its own early returns, and returns it
  * alongside `{available: false, reason: "no candidate configuration was supplied..."}` for exactly
- * this request shape. So this is a second, independently-cached request under the same module slot
- * (the settings differ -- an empty Candidates list vs. a real one -- so `useCachedResult` gives it
- * its own cache entry, never colliding with the real single-candidate report).
+ * this request shape. It is cached under ITS OWN slot (`CL.grid`), not the report's. An earlier
+ * version of this comment claimed the two could share `CL.report` because their settings differ;
+ * that was wrong -- the cache keeps one answer per slot per participant and answers a different
+ * settings key with the held entry marked stale, so the grid's empty-candidate reply was being
+ * shown as the report for a chosen band (watched live on RCS08, 2026-09-10).
  */
 import { SessionController } from "database/session-control";
 import { useCachedResult } from "database/useCachedResult";
@@ -27,7 +29,7 @@ export default function useBandSweepGrid({ participantUid, enabled = true }) {
   const body = { ParticipantId: participantUid, Candidates: [] };
 
   const cached = useCachedResult({
-    moduleKey: CL.report,
+    moduleKey: CL.grid,
     uid: participantUid,
     settings: { Candidates: [] },
     enabled: enabled !== false && !!participantUid,

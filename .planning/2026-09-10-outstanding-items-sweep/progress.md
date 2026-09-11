@@ -8,3 +8,10 @@
   `cl-evidence` is hand-drawn SVG, so the helper serialises `svg[role="img"]` alongside Plotly.
   Field renamed `png_data_url` -> `image_data_url` since SVG ones are not PNG. Build clean, neither
   touched file in the warnings; five owned strings in `703.9c3946c8.chunk.js`. Not yet watched.
+- Item 1 watched live on RCS08 with the PI signed in. Two defects found on the way and fixed/handled:
+  the grid and report shared one cache slot (fixed, `CL.grid`); two stale gunicorn workers
+  (SIGHUP, four fresh workers). Print: 11 pictures, print called once after they were in the
+  document; Export JSON: 567 KB, 11 pictures, missing empty; fold closed: 6 pictures and two named
+  as NOT ON THIS RECORD. Display-size fix so a 2x PNG shows at the figure's own size. Reliable-change
+  panel seen rendered for the first time, numbers equal decision 111's.
+- PI's brief for the next session (CL page redesign) recorded as Phase 7 and findings §3.

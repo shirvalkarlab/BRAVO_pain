@@ -40,6 +40,13 @@ import { refreshServerIdentity } from "database/useCachedResult";
  */
 export const CL = {
   report: MODULES.closedLoop,
+  // The calibrated grid is fetched from the SAME endpoint as the report, with an empty candidate
+  // list. It needs its own slot: the cache keeps one answer per slot per participant and hands a
+  // request with different settings the held answer marked stale rather than fetching. Sharing
+  // `report` meant the grid's empty-candidate reply filled the slot first, and the report for a
+  // chosen band was then shown that reply -- "no candidate configuration was supplied" on the
+  // evidence panel with a band plainly chosen above it. Watched live on RCS08, 2026-09-10.
+  grid: `${MODULES.closedLoop}/grid`,
   summary: `${MODULES.closedLoop}/summary`,
   roc: `${MODULES.closedLoop}/roc`,
   era: `${MODULES.closedLoop}/era`,

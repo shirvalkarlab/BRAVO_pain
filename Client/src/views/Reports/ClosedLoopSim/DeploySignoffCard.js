@@ -488,8 +488,12 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                     <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, fontWeight: "bold" }}>
                       {f.n_in_section > 1 ? `${f.title} (${f.index} of ${f.n_in_section})` : f.title}
                     </MDTypography>
+                    {/* Shown at the figure's own on-screen size. The PNG carries two pixels per
+                        CSS pixel so it stays crisp on paper; without a width it would display at
+                        its pixel size, twice as large as the figure it copies. */}
                     <img src={f.image_data_url} alt={f.title}
-                      style={{ display: "block", maxWidth: "100%", height: "auto", border: "1px solid #eee" }} />
+                      style={{ display: "block", width: f.width_px, maxWidth: "100%", height: "auto",
+                        border: "1px solid #eee" }} />
                   </MDBox>
                 ))}
                 {snapshots.missing.length ? (
