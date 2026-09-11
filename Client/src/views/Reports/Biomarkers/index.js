@@ -759,6 +759,7 @@ function Biomarkers() {
                                 percentileHigh={percentileHigh}
                                 metricLabel={previewMetricLabel}
                                 metricKey={metric}
+                                totalReports={painScores?.n_reports}
                                 loading={painLoading}
                                 matchTolerance={matchTolerance}
                                 setMatchTolerance={setMatchTolerance}
