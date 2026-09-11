@@ -34,6 +34,13 @@ The transform functions operate on PSD arrays of shape (E, C, F):
 import datetime as _dt
 
 import numpy as np
+
+# The shared matching step. Both spellings on purpose: the container's path root makes the package
+# `modules.DecodeCommon`, the host suite's root makes it `DecodeCommon` (see `CacheStore/__init__.py`).
+try:
+    from modules.DecodeCommon import matching as _matching
+except ImportError:
+    from DecodeCommon import matching as _matching
 from scipy.signal import welch, butter, filtfilt
 from scipy.stats import t
 
@@ -591,7 +598,9 @@ def welch_rating_centered(channel_data, channel_names, fs, chan_order, centers_s
 
 def _match_to_pro(times_s, pro_times_s, pro_values, tolerance_min, direction="nearest",
                   channels=None, max_per_rating=None):
-    """Match each PSD timestamp to a PRO report within the window.
+    """REFERENCE IMPLEMENTATION, kept for the equality check in `DecodeCommon/tests/test_matching.py`;
+    the live path is `DecodeCommon.matching.matched_samples` (see `build_pooled_detail_from_matrix`).
+    Match each PSD timestamp to a PRO report within the window.
 
     `times_s` (N,) epoch seconds per PSD; `pro_times_s` / `pro_values` the PRO report timestamps +
     the chosen continuous metric value. Returns (labels (N,), dt_min (N,), pro_idx (N,)): the matched
@@ -837,46 +846,28 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
                 # too few to standardize -> center only (keeps it on a comparable additive scale)
                 Xz[m] = X[m] - np.nanmean(X[m], axis=0)
 
-    # PRO-first matching gets the channels array and max_per_rating up-front so the matcher can
-    # claim PSDs per channel per PRO; PSD-first ignores those args.
-    labels, dt_min, pro_idx = _match_to_pro(t_arr, pro_times_s, pro_values, tolerance_min,
-                                            direction=match_direction,
-                                            channels=ch_arr, max_per_rating=max_per_rating)
-
-    # --- Per-(channel, rating) CAP with refractory window ---------------------------------------
-    # A single pain rating can sit within tolerance of a whole BURST of PSDs (the patient triggered
-    # streaming many times around one survey), which double-counts that rating in every downstream
-    # stat. Cap how many PSDs any one rating absorbs PER CHANNEL: keep the `max_per_rating` matched
-    # PSDs closest in time to the rating, but never two closer together than `refractory_min` minutes
-    # (so the kept set is temporally spread, not a tight cluster). Dropped PSDs become unmatched
-    # (label NaN, pro_idx -1) — they stay in the pool as unmatched samples but feed no rating.
-    # When matching is PRO-first the matcher already enforced max_per_rating per channel, so this
-    # cap would be a no-op at best and a double-cap at worst — skip it cleanly.
-    n_capped_dropped = 0
-    if (match_direction != "pro_first") and max_per_rating is not None and max_per_rating >= 1:
-        ref_s = float(refractory_min or 0.0) * 60.0
-        matched_i = np.where(np.isfinite(labels) & (pro_idx >= 0))[0]
-        # group matched rows by (channel, matched-PRO index)
-        groups = {}
-        for i in matched_i:
-            groups.setdefault((ch_arr[i], int(pro_idx[i])), []).append(i)
-        for key, idxs in groups.items():
-            if len(idxs) <= 1:
-                continue
-            idxs = np.asarray(idxs)
-            # order candidates by closeness to the rating (|dt|), then greedily keep up to N that
-            # respect the refractory gap among the KEPT set.
-            order_close = idxs[np.argsort(np.abs(dt_min[idxs]))]
-            kept_t = []
-            for i in order_close:
-                if len(kept_t) >= int(max_per_rating):
-                    labels[i] = np.nan; dt_min[i] = np.nan; pro_idx[i] = -1; n_capped_dropped += 1
-                    continue
-                ti = float(t_arr[i])
-                if ref_s > 0 and any(abs(ti - tk) < ref_s for tk in kept_t):
-                    labels[i] = np.nan; dt_min[i] = np.nan; pro_idx[i] = -1; n_capped_dropped += 1
-                    continue
-                kept_t.append(ti)
+    # THE SHARED MATCHING STEP (Layer 1, `DecodeCommon.matching`, decision 76; wired here as the
+    # first of the four call sites, 2026-09-10). One call replaces what used to be two steps in this
+    # function: `_match_to_pro` (kept below as the REFERENCE implementation the shared one is proven
+    # equal to in `DecodeCommon/tests/test_matching.py`) followed by a per-(channel, rating) cap
+    # with a refractory window. Both steps live in the shared function now, value for value: the
+    # three directions, the pro_first claim-once rule, and the closeness-first, temporally-spread
+    # cap. Proven on RCS08 before this was committed (decision 117): every array this function
+    # returns identical for all three directions and three cap settings.
+    #
+    # WHY THE CAP MATTERS (unchanged reasoning): a single pain rating can sit within tolerance of a
+    # whole BURST of PSDs (the patient triggered streaming many times around one survey), which
+    # double-counts that rating in every downstream stat. Keep the `max_per_rating` matched PSDs
+    # closest in time to the rating, never two closer together than `refractory_min` minutes.
+    # Dropped PSDs become unmatched (label NaN, pro_idx -1) -- they stay in the pool as unmatched
+    # samples but feed no rating. For pro_first the matcher already claims each PSD at most once
+    # per rating, so no post-hoc cap applies there.
+    _m = _matching.matched_samples(t_arr, None, pro_times_s, pro_values,
+                                   tolerance_min=tolerance_min, direction=match_direction,
+                                   group_keys=ch_arr, max_per_rating=max_per_rating,
+                                   refractory_min=refractory_min)
+    labels, dt_min, pro_idx = _m["matched_value"], _m["dt_min"], _m["rating_cluster_id"]
+    n_capped_dropped = int(_m["n_dropped_by_cap"])
 
     # --- Optional one-per-rating aggregation ----------------------------------------------------
     # Collapse every (channel, matched-PRO) cluster of z-scored spectra to a single mean vector, so

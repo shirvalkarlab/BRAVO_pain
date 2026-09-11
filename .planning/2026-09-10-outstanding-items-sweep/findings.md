@@ -71,3 +71,10 @@ circles (25, 74, 6) are excluded because the spectrum has no native tier. Probe:
 **Candidate for the PI**: `per_pro_lsb_spectrum` is a zero-caller function, the same class
 decision 110 deleted (`per_pro_lsb_overlay`); if it goes, the live test goes with it and the
 constructed one becomes moot.
+
+## §5 Item 5 (B4) — found while capturing (2026-09-10)
+- `build_pooled_detail_from_matrix(aggregate="one_per_rating")` crashes: `Xabs` is read at line ~913
+  but was removed on 2026-06-27 with the Welch-density path. Unreachable: `_compute_analytics` and
+  `_band_validation_setup` both hard-code `aggregate="all"`. Dead and broken; left for the PI.
+- Capture and compare probes: `_agent_bridge/_probe_tl/probe_b4_capture.py` / `probe_b4_compare.py`
+  (pickles of before/after on the container, disposable).

@@ -46,7 +46,12 @@ Phase 5
 - [x] Host 1019 passed / 42 skipped / 0 failed -- first fully green host run in the container
 
 ### Phase 5: Shared matching step — migrate the four call sites, one at a time
-**Status:** pending
+**Status:** in_progress
+- [x] B4 `build_pooled_detail_from_matrix` (streaming_psd): 9 combos x 7,600,506 fields, 0 diff;
+      page 1,018,093 fields, 0 diff. Decision 117.
+- [ ] B1 `align_pros(target="session")` (Biomarkers/adapter.py) -- no independence rule today
+- [ ] B2 `per_pro_lsb` -- assess whether its tiered window selection fits the sample->report shape
+- [ ] B3 `live_lsb_spectrum_match` -- assess the same
 
 ### Phase 6: Closed-loop simulation module design; housekeeping (worktrees, .mcp.json)
 **Status:** pending
@@ -90,3 +95,13 @@ the scientific-visualization and UI/UX skills before designing. In his order:
 ## Errors
 | Error | Attempt | Resolution |
 |---|---|---|
+
+### Phase 8: QUEUED BY THE PI 2026-09-10 — the "data available to binarize" count does not update
+**Status:** pending
+His words: "check code for biomarkers module next to 'data available to binarize' - numbers read:
+599 PRO reports across 315 days (this needs to autoupdate, but doesnt look like it does....)".
+The availability payload on the same day carried 764 ratings, so the 599 is stale somewhere:
+either a held/cached count, a different filter (metric-filtered vs all), or a value built once.
+- [ ] Find which module/function produces that sentence and what it counts
+- [ ] Reproduce 599 vs 764 on RCS08 and name the cause
+- [ ] Fix so it follows the live report table; prove with the number on the page

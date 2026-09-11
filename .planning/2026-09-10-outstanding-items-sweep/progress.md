@@ -27,3 +27,6 @@
   closed_loop cache on every suite run (fixture teardown + override=None). Measured: old test 2->0
   files, new 2->2, full host suite 1019/42/0 with the directory intact. Host run logged to
   /tmp/claude-502/host_item4.log.
+- Item 5 / B4 done, decision 117: streaming_psd's builder now calls DecodeCommon.matching; 9 combos
+  x 7,600,506 fields 0 diff, page 1,018,093 fields 0 diff. Container 626/0, host 1019/42/0 (logs in
+  /tmp/claude-502/{container,host}_b4.log). Dead one_per_rating branch noted (findings §5).

@@ -67,19 +67,22 @@ def matched_samples(sample_times, sample_values, pro_times, pro_values, *, toler
     Returns a dict: ``matched_value`` (N,) -- the report's value, NaN where unmatched;
     ``dt_min`` (N,) -- signed minutes report-minus-sample, NaN where unmatched; ``rating_cluster_id``
     (N,) int -- the index of the matched report in the caller's own original ``pro_times``
-    ordering, ``-1`` where unmatched.
+    ordering, ``-1`` where unmatched; ``n_dropped_by_cap`` int -- how many samples the post-hoc
+    cap un-matched (always 0 for ``pro_first``, where the cap is enforced during matching).
     """
     n = len(sample_times)
     labels = np.full(n, np.nan)
     dt_min = np.full(n, np.nan)
     rating_cluster_id = np.full(n, -1, dtype=int)
+    n_dropped_by_cap = 0
 
     pt = np.asarray(pro_times, dtype=float)
     pv = np.asarray(pro_values, dtype=float)
     order = np.argsort(pt)              # order[k] = original index of the k-th sorted report
     pt, pv = pt[order], pv[order]
     if pt.size == 0 or tolerance_min is None or tolerance_min <= 0:
-        return dict(matched_value=labels, dt_min=dt_min, rating_cluster_id=rating_cluster_id)
+        return dict(matched_value=labels, dt_min=dt_min, rating_cluster_id=rating_cluster_id,
+                    n_dropped_by_cap=n_dropped_by_cap)
     tol_s = float(tolerance_min) * 60.0
     ts_arr = np.asarray(sample_times, dtype=float)
     groups = (np.asarray(group_keys, dtype=object) if group_keys is not None
@@ -108,7 +111,8 @@ def matched_samples(sample_times, sample_values, pro_times, pro_values, *, toler
                     dt_min[take] = (t_pro - ts_arr[take]) / 60.0
                     rating_cluster_id[take] = int(order[k])
                     claimed[take] = True
-            return dict(matched_value=labels, dt_min=dt_min, rating_cluster_id=rating_cluster_id)
+            return dict(matched_value=labels, dt_min=dt_min, rating_cluster_id=rating_cluster_id,
+                    n_dropped_by_cap=n_dropped_by_cap)
 
     if direction != "pro_first":
         for i, t in enumerate(sample_times):
@@ -148,11 +152,14 @@ def matched_samples(sample_times, sample_values, pro_times, pro_values, *, toler
             for i in order_close:
                 if len(kept_t) >= int(max_per_rating):
                     labels[i], dt_min[i], rating_cluster_id[i] = np.nan, np.nan, -1
+                    n_dropped_by_cap += 1
                     continue
                 ti = float(ts_arr[i])
                 if ref_s > 0 and any(abs(ti - tk) < ref_s for tk in kept_t):
                     labels[i], dt_min[i], rating_cluster_id[i] = np.nan, np.nan, -1
+                    n_dropped_by_cap += 1
                     continue
                 kept_t.append(ti)
 
-    return dict(matched_value=labels, dt_min=dt_min, rating_cluster_id=rating_cluster_id)
+    return dict(matched_value=labels, dt_min=dt_min, rating_cluster_id=rating_cluster_id,
+                    n_dropped_by_cap=n_dropped_by_cap)
