@@ -37,6 +37,7 @@ import MDTypography from "components/MDTypography";
 import MDButton from "components/MDButton";
 
 import PAL from "./palette";
+import Fold from "./Fold";
 import { MODE_LABEL, MODE_ORDER, fmtFieldValue } from "./deployFormat";
 
 /** What the reader is being asked to do with a row, keyed on the payload's `confirm` axis. */
@@ -443,7 +444,7 @@ export default function PrescriptionPanel({ report, mode, onMode }) {
   if (!data || !pres || !pres.modes) {
     return (
       <Card><MDBox p={2}>
-        <MDTypography variant="h6" sx={{ fontSize: 15 }}>Device parameters to transcribe</MDTypography>
+        <MDTypography variant="h6" sx={{ fontSize: 15 }}>Full parameter recommendation</MDTypography>
         <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
           color: PAL.neutral }}>
           {`No parameter table has been computed for this configuration${err ? ` (${err})` : ""}. `}
@@ -479,13 +480,18 @@ export default function PrescriptionPanel({ report, mode, onMode }) {
     <Card className={deviceOk ? "cl-prescription-authorised" : "cl-prescription-planning"}
       sx={{ width: "100%" }}>
       <MDBox p={2}>
-        <MDTypography variant="h6" sx={{ fontSize: 15 }}>Device parameters to transcribe</MDTypography>
+        {/* Title renamed from "Device parameters to transcribe" on 2026-09-11 (the PI asked for
+            plain language and offered "Full parameter recommendation" among three). */}
+        <MDTypography variant="h6" sx={{ fontSize: 15 }}>Full parameter recommendation</MDTypography>
         <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#4A4A4A" }}>
-          Read each value off this table, enter it on the A610, then read it back off the programmer
-          and tick the box on the left. The tick attests to what the device now displays, not to
-          what was typed, because a field that silently clamped or rounded a value is the failure
-          this step exists to catch.
+          Enter each value on the A610, read it back, tick the box.
         </MDTypography>
+        <Fold show="Why the tick is a read-back, not a typed value" hide="Hide" dense>
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11, color: "#4A4A4A" }}>
+            The tick attests to what the device now displays, not to what was typed, because a
+            field that silently clamped or rounded a value is the failure this step exists to catch.
+          </MDTypography>
+        </Fold>
 
         {/* The toggle sits at the top, above everything the mode governs. */}
         <MDBox mt={1.2}>
@@ -676,26 +682,27 @@ export default function PrescriptionPanel({ report, mode, onMode }) {
             the same note as its whole content, and a rendering test against the real payload caught
             it appearing twice on one card. A note repeated verbatim reads as two separate findings
             about the mode rather than one. */}
-        {m.note && !cannotDrive ? (
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mt: 1,
-            color: "#6A6A6A" }}>
-            {m.note}
-          </MDTypography>
-        ) : null}
-
-        {/* One statement about display precision, beneath the table rather than repeated per row.
+        {/* The mode note and the display-precision statement, folded together since 2026-09-11.
             The module states that it does not round these values, because no supplied document
             publishes a resolution grid for the threshold fields to round to. Four decimal places
             here is therefore a reading aid and not a claim about what the device accepts. */}
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mt: 0.5,
-          color: "#6A6A6A" }}>
-          Amplitudes are shown to two decimal places always, durations as whole milliseconds, and
-          band-power thresholds to four decimal places. The four-place display is a reading aid: the
-          module deliberately does not round these values, because no supplied document publishes a
-          resolution grid for them. The module labels the threshold quantity &ldquo;LFP power&rdquo;,
-          which is the same quantity the device Timeline reports as LSB; the payload&rsquo;s own
-          wording is used here rather than substituting one name for the other.
-        </MDTypography>
+        <Fold show="How the values were derived and are displayed" hide="Hide" mt={0.5} dense>
+          {m.note && !cannotDrive ? (
+            <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mb: 0.5,
+              color: "#6A6A6A" }}>
+              {m.note}
+            </MDTypography>
+          ) : null}
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, color: "#6A6A6A" }}>
+            Amplitudes are shown to two decimal places always, durations as whole milliseconds, and
+            band-power thresholds to four decimal places. The four-place display is a reading aid:
+            the module deliberately does not round these values, because no supplied document
+            publishes a resolution grid for them. The module labels the threshold quantity
+            &ldquo;LFP power&rdquo;, which is the same quantity the device Timeline reports as LSB;
+            the payload&rsquo;s own wording is used here rather than substituting one name for the
+            other.
+          </MDTypography>
+        </Fold>
 
         {/* A count of the read-back progress, so the checklist has a completion state rather than
             only a set of boxes. */}

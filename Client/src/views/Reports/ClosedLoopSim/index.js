@@ -76,7 +76,7 @@ import useDeploymentSummary from "./useDeploymentSummary";
 import useDeploymentReport from "./useDeploymentReport";
 import useBandSweepGrid from "./useBandSweepGrid";
 import PAL from "./palette";
-import { fmtHz } from "./deployFormat";
+import Fold from "./Fold";
 import "./deployPrint.css";
 
 // Reconstruct the discovery request knobs (metric + binarization + match tolerance) from a
@@ -214,12 +214,14 @@ function BandCandidateIdentity({ bc, envelope }) {
                 sx={{ height: 20, fontSize: 10.5, backgroundColor: PAL.warn,
                   color: PAL.onWarn }} />}
         </MDBox>
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, color: "#8A8A8A",
-          mb: 1 }}>
-          The badge above is the discovery-stage verdict this band was committed with. It is a
-          different quantity from the reconciled verdict at the top of the page, which is about
-          whether the device will accept the configuration and whether the evidence supports it.
-        </MDTypography>
+        <Fold show="What the badge means" hide="Hide" mt={0} dense>
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, color: "#8A8A8A",
+            mb: 1 }}>
+            The badge above is the discovery-stage verdict this band was committed with. It is a
+            different quantity from the reconciled verdict at the top of the page, which is about
+            whether the device will accept the configuration and whether the evidence supports it.
+          </MDTypography>
+        </Fold>
 
         <Grid container spacing={3}>
           <Grid item xs={12} md={6}>
@@ -515,7 +517,7 @@ function ClosedLoopSim() {
             <BandSweepGridPanel
               grid={bandSweepGrid.grid}
               participantUid={participant_uid}
-              hemisphere={bc && bc.hemisphere}
+              committed={bc ? { contact: bc.contact, centerHz: bc.center_freq_hz } : null}
               onCandidateChosen={() => setEnvelope(loadBandCandidate(participant_uid))}
             />
           </Grid>
@@ -629,11 +631,8 @@ function ClosedLoopSim() {
                       </MDTypography>
                       <MDTypography variant="caption" sx={{ display: "block", fontSize: 11,
                         color: "#7A7A7A" }}>
-                        {"Where the cut-point sits, how the band converts to device units, and "
-                          + "whether the discrimination holds up era by era. Folded away because "
-                          + `none of it is the first question at the programmer for `
-                          + `${bc.contact || "this band"} at ${fmtHz(bc.center_freq_hz)
-                            || "its centre"} Hz.`}
+                        {"Where the cut-point sits, the band in device units, and whether the "
+                          + "discrimination holds month by month."}
                       </MDTypography>
                     </MDBox>
                     <MDButton size="small" variant="outlined" color="info"

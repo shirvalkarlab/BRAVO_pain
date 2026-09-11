@@ -40,6 +40,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import PAL from "./palette";
+import Fold from "./Fold";
 import { fmtNum, fmtP } from "./deployFormat";
 
 /**
@@ -187,9 +188,7 @@ export default function BandStabilityPanel({ stability }) {
 
       {s && s.test_ran ? (
         <MDBox mb={1.25}>
-          <MDTypography variant="caption" fontWeight="bold" sx={{ color: "#1A1A1A" }}>
-            What the answer rests on
-          </MDTypography>
+          <Fold show="What the answer rests on" hide="Hide what the answer rests on" mt={0}>
           <MDBox mt={0.5}>
             {isNum(s.largest_difference) ? (
               <Fact
@@ -231,6 +230,7 @@ export default function BandStabilityPanel({ stability }) {
               <Fact label="measurements in each state" value={stateCounts} />
             ) : null}
           </MDBox>
+          </Fold>
         </MDBox>
       ) : null}
 

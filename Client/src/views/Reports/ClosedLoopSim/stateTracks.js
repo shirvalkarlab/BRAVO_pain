@@ -64,7 +64,7 @@ export const TRACKS = {
         blurb: "All three edges are resolved, and their signs do not match the pattern the "
              + "selected control law requires." },
       { key: "unestablished", label: "NOT ESTABLISHED", role: "neutral",
-        blurb: "At least one edge is unresolved, or the coherence test could not be run, so the "
+        blurb: "At least one edge is unresolved, or the sign-agreement test could not be run, so the "
              + "evidence has not answered the question either way." },
     ],
     lit: (d) => {
@@ -104,19 +104,22 @@ export const TRACKS = {
 
   /* The three-valued sign-coherence answer itself, rendered inside the evidence panel next to the
      three edges it is computed from. */
+  // Renamed from "Sign coherence" / COHERENT / NOT COHERENT on 2026-09-11 at the PI's request
+  // ("SIGN COHERENT should be called SIGN agreement"). The payload field is still
+  // `coherence.coherent`; only the words on screen changed.
   coherence: {
-    label: "Sign coherence",
+    label: "Sign agreement",
     cells: [
-      { key: "coherent", label: "COHERENT", role: "pass",
+      { key: "coherent", label: "SIGNS AGREE", role: "pass",
         blurb: "The three edge signs match the pattern the selected control law requires." },
-      { key: "incoherent", label: "NOT COHERENT", role: "fail",
+      { key: "incoherent", label: "SIGNS DISAGREE", role: "fail",
         blurb: "The three edge signs do not match the pattern the selected control law requires. "
              + "Read the two statements below: the edges can disagree with each other, or agree "
              + "with each other and disagree with the control law, and those are different "
              + "findings." },
       { key: "not_established", label: "NOT ESTABLISHED", role: "neutral",
-        blurb: "The coherence test did not return an answer, which is not the same as returning a "
-             + "negative one." },
+        blurb: "The sign-agreement test did not return an answer, which is not the same as "
+             + "returning a negative one." },
     ],
     lit: (d) => {
       const co = d && d.coherence;

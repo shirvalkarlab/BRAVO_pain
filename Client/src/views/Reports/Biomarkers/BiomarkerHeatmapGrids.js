@@ -54,30 +54,13 @@ import { SessionController } from "database/session-control";
 import { useCachedResult } from "database/useCachedResult";
 import { biomarkerHeatmapSlot, prefetchBiomarkerHeatmapMetric } from "views/Reports/moduleCacheKeys";
 import PAL from "views/Reports/ClosedLoopSim/palette";
-import { BIN_HI, BIN_LO, BIN_HI_RGB, BIN_LO_RGB } from "./binarizationModel";
+import { BIN_HI, BIN_LO, BIN_HI_RGB, BIN_LO_RGB, divergingRgb, diverging } from "./binarizationModel";
+import { contactSortKey } from "./contactOrder";
 
 const num = (v, d = 3) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 
-// ---------------------------------------------------------------------------------------------
-// COLOUR. A diverging scale around the value that means "no relationship" for each quantity --
-// 0 for a correlation, 0.5 (never 0) for an area under the curve. House rule: an AUC is never
-// read against zero. Used both for the Plotly heatmap colorscale and the ContactStrip thumbnails.
-// ---------------------------------------------------------------------------------------------
-function divergingRgb(v, center, halfRange) {
-  const t = Math.max(-1, Math.min(1, (Number(v) - center) / halfRange));
-  const neg = BIN_LO_RGB;         // blue
-  const pos = BIN_HI_RGB;         // vermillion
-  const mid = [255, 255, 255];
-  const lerp = (a, b, k) => a + (b - a) * k;
-  return t < 0
-    ? [lerp(neg[0], mid[0], 1 + t), lerp(neg[1], mid[1], 1 + t), lerp(neg[2], mid[2], 1 + t)]
-    : [lerp(mid[0], pos[0], t), lerp(mid[1], pos[1], t), lerp(mid[2], pos[2], t)];
-}
-function diverging(v, center, halfRange) {
-  if (v == null || !Number.isFinite(Number(v))) return "#e9e9e9";
-  const c = divergingRgb(v, center, halfRange);
-  return `rgb(${c.map((x) => Math.round(x)).join(",")})`;
-}
+// COLOUR: the diverging scale lives in binarizationModel.js (one definition, shared with the
+// Closed-Loop page's band heat map since 2026-09-11).
 // A fixed-stop colorscale Plotly can interpolate continuously between, built from the same two
 // Okabe-Ito colours as every other diverging scale on this page (BIN_LO/BIN_HI) so this grid does
 // not introduce a third, uncoordinated colour convention.
@@ -456,30 +439,11 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
   );
 }
 
+// Left-then-right contact ordering: contactOrder.js (shared with the Closed-Loop page's band
+// heat map since 2026-09-11).
 /** A small strip of thumbnail correlation grids, one per sensing contact pair, all drawn from the
  * one response already held -- clicking a thumbnail is what chooses the contact pair for the two
  * big grids below (Option 2's replacement for a dropdown, task A3). */
-const _WORD2DIGIT_STRIP = { ZERO: "0", ONE: "1", TWO: "2", THREE: "3", FOUR: "4",
-  FIVE: "5", SIX: "6", SEVEN: "7", EIGHT: "8", NINE: "9" };
-
-/** Left contacts before right, and within each side ascending by contact number (0-2 before
- * 0-3 before 1-3), reading the server's own display fields first and only falling back to the
- * raw channel key (e.g. "ZERO_TWO_LEFT") for an older, unlabeled cached response. */
-function contactSortKey(ch, sw) {
-  const hemi = (sw && sw.display_hemisphere)
-    || (/LEFT/i.test(ch) ? "Left" : (/RIGHT/i.test(ch) ? "Right" : ""));
-  const hemiRank = hemi === "Left" ? 0 : (hemi === "Right" ? 1 : 2);
-  const contactsStr = (sw && sw.display_contacts) || "";
-  let digits = (contactsStr.match(/\d/g) || []).map(Number);
-  if (!digits.length) {
-    const toks = ch.toUpperCase().replace(/-/g, "_").split("_")
-      .filter((t) => _WORD2DIGIT_STRIP[t] !== undefined || /^\d+$/.test(t));
-    digits = toks.map((t) => Number(_WORD2DIGIT_STRIP[t] !== undefined ? _WORD2DIGIT_STRIP[t] : t));
-  }
-  const contactsRank = digits.length ? digits[0] * 10 + (digits[1] || 0) : 0;
-  return [hemiRank, contactsRank];
-}
-
 function ContactStrip({ sweeps, channel, setChannel }) {
   const names = Object.keys(sweeps || {}).sort((a, b) => {
     const ka = contactSortKey(a, sweeps[a]);

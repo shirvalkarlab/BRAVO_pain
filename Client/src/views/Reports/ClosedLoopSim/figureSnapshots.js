@@ -29,7 +29,7 @@ import Plotly from "plotly.js-dist";
 export const SNAPSHOT_SECTIONS = [
   { id: "cl-roc", title: "How well band power separates high pain from low pain" },
   { id: "cl-lsb", title: "Band power in the device's own units, and where the switching value sits" },
-  { id: "cl-three-source", title: "How stimulation current moved band power, measured three ways" },
+  { id: "cl-three-source", title: "Stimulation amplitude effects on band power, measured three ways" },
   { id: "cl-evidence", title: "The three links of evidence: current to power, power to pain, current to pain" },
 ];
 

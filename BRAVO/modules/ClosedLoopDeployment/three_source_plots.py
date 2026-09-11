@@ -103,11 +103,17 @@ SIZE_TITLE, SIZE_NOTE, SIZE_TICK = 9.0, 7.5, 7.0
 
 
 def _short(source: str) -> str:
-    """A column heading short enough to sit above a panel and still say which recording it is."""
+    """A column heading short enough to sit above a panel and still say which recording it is.
+
+    The three names are the PI's own, given 2026-09-10 for the page redesign ("those should be the
+    three titles"): the band power derived from the streamed voltage trace, the band power derived
+    from the device's own power spectral density (PSD) snapshot, and the band power the device
+    records directly. LSB is the device's own unit (least significant bit).
+    """
     return {
-        TSR.SOURCE_TIME_DOMAIN: "From the voltage trace",
-        TSR.SOURCE_DEVICE_SPECTRUM: "From the device's own spectrum",
-        TSR.SOURCE_DEVICE_BAND_POWER: "The device's own band power",
+        TSR.SOURCE_TIME_DOMAIN: "Time domain derived LSB",
+        TSR.SOURCE_DEVICE_SPECTRUM: "PSD derived LSB",
+        TSR.SOURCE_DEVICE_BAND_POWER: "Direct LSB recording",
     }.get(source, source)
 
 
@@ -150,7 +156,7 @@ def _agreement_sentence(comparison) -> str:
         if not have:
             return "no route produced a settled value here"
         return (f"only one of the three routes produced a settled value here, "
-                f"{_short(have[0].source).lower()}, so nothing can be compared against it")
+                f"{_short(have[0].source)}, so nothing can be compared against it")
     worst, shared_total, pair = 0.0, 0, None
     for i in range(len(have)):
         for k in range(i + 1, len(have)):
@@ -200,7 +206,8 @@ def _direction_sentence(comparison) -> str:
 
 
 def _route_direction(panel) -> str:
-    """The one route's own change, for the caption under its own panel."""
+    """The one route's own change, for the caption under its own panel. Compressed 2026-09-11:
+    the same numbers (start, end, ratio, and the peak when it sits between them) in fewer words."""
     vals = [(c, v) for c, v in zip(panel.current_mA, panel.settled_power) if v is not None]
     if len(vals) < 2:
         return ""
@@ -210,9 +217,9 @@ def _route_direction(panel) -> str:
     peak_c, peak_v = max(vals, key=lambda z: z[1])
     ratio = (hi_v / lo_v) if lo_v else float("nan")
     turn = ("" if peak_c in (lo_c, hi_c) else
-            f", after rising to {peak_v:.0f} at {peak_c:g} mA")
-    return (f"{lo_v:.0f} at {lo_c:g} mA to {hi_v:.0f} at {hi_c:g} mA, {ratio:.2f} times its "
-            f"starting value{turn}. ")
+            f"; peak {peak_v:.0f} at {peak_c:g} mA")
+    return (f"{lo_v:.0f} \u2192 {hi_v:.0f} LSB from {lo_c:g} to {hi_c:g} mA "
+            f"(\u00d7{ratio:.2f}{turn}). ")
 
 
 def build_context(comparison: TSR.ThreeSourceComparison, *,
@@ -249,9 +256,10 @@ def build_context(comparison: TSR.ThreeSourceComparison, *,
         ctx.headline += (f", and the {band_phrase} band the device was sensing is one of the bands "
                          f"carrying a folded landing")
 
-    ctx.subtitle = (f"{c.visit_date}, sensing on {c.sensing_contact} at {band_phrase}, "
-                    f"stimulating at {c.stimulation_rate_hz:g} Hz. Each point is the average of the "
-                    f"{c.settled_window_s:g} seconds before the next increase in current.")
+    # Compressed 2026-09-11 (the PI: the text "should be significantly made much more concise").
+    ctx.subtitle = (f"{c.visit_date} \u00b7 sensing {c.sensing_contact} at {band_phrase} \u00b7 "
+                    f"{c.stimulation_rate_hz:g} Hz stimulation \u00b7 each point = mean of the last "
+                    f"{c.settled_window_s:g} s before the next step up")
 
     ctx.amp_axis_label = f"Current delivered by the {c.ramped_side.lower()} stimulator (mA)"
     ctx.power_axis_label = "Settled band power (device units)"
@@ -261,19 +269,18 @@ def build_context(comparison: TSR.ThreeSourceComparison, *,
                 if v is not None]
         if vals:
             ns = [n for _, _, n in vals]
-            piece = (f"each point averages {min(ns)} pieces" if min(ns) == max(ns)
-                     else f"each point averages {min(ns)} to {max(ns)} pieces")
+            piece = (f"{min(ns)} pieces per point" if min(ns) == max(ns)
+                     else f"{min(ns)}\u2013{max(ns)} pieces per point")
             band = (f"{p.band_centre_hz:g} Hz band" if p.band_centre_hz is not None else "no band")
             off = p.offset_from_programmed_centre_hz
             off_txt = ("" if off is None or abs(off) < 1e-9 else
-                       f", {abs(off):.2f} Hz from the band the device was sensing")
+                       f" ({abs(off):.2f} Hz off the sensed band)")
             outside = (p.band_inside_checked_conversion_range is False)
             caption = (f"{_route_direction(p)}"
-                       f"{len(vals)} of {p.n_settings_offered} settings produced a settled value; "
-                       f"{piece}. {band}{off_txt}."
-                       + (f" This band sits outside {TSR.CHECKED_LO_HZ:g} to "
-                          f"{TSR.CHECKED_HI_HZ:g} Hz, where the conversion into device units was "
-                          f"checked, so this column is extrapolating."
+                       f"{len(vals)} of {p.n_settings_offered} settings settled; {piece}. "
+                       f"{band}{off_txt}."
+                       + (f" Outside the checked {TSR.CHECKED_LO_HZ:g}\u2013{TSR.CHECKED_HI_HZ:g} Hz "
+                          f"conversion range: extrapolated."
                           if outside else ""))
         else:
             caption = p.absent_reason or "no settled value"
@@ -312,14 +319,13 @@ def build_context(comparison: TSR.ThreeSourceComparison, *,
     all_span = _full_spectrum_span(c)
     drawn_span = _drawn_span(ctx)
     ctx.footer = (
-        "The three columns are not independent: the device computes its own band power from the same "
-        "voltage trace the first column reads, so agreement here checks the conversion rather than "
-        "confirming an effect three times. "
-        f"Striped bands carry a folded multiple of the stimulation rate. "
-        f"Only {ctx.spectrum_lo_hz:g} to {ctx.spectrum_hi_hz:g} Hz is drawn below: the firmware "
-        f"cannot place a sensing band above {ctx.spectrum_hi_hz:g} Hz"
-        + (f", and across the whole spectrum these values span a factor of {all_span:.0f} against "
-           f"{drawn_span:.1f} inside the drawn range, so one linear axis cannot carry both."
+        "The three columns are not independent: the device computes its own band power from the "
+        "voltage trace the first column reads, so agreement checks the conversion, not the effect "
+        "three times. Striped bands carry a folded multiple of the stimulation rate. Only "
+        f"{ctx.spectrum_lo_hz:g}\u2013{ctx.spectrum_hi_hz:g} Hz is drawn: the firmware cannot sense "
+        f"above {ctx.spectrum_hi_hz:g} Hz"
+        + (f"; values span \u00d7{all_span:.0f} across all bands against \u00d7{drawn_span:.1f} "
+           f"in the drawn range."
            if np.isfinite(all_span) and np.isfinite(drawn_span) else "."))
     return ctx
 

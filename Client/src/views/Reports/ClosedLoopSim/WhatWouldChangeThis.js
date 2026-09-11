@@ -258,18 +258,12 @@ export default function WhatWouldChangeThis({ report }) {
         <MDTypography variant="h6" sx={{ fontSize: 15 }}>What would change this answer</MDTypography>
         <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#4A4A4A" }}>
           {items.length === 0
-            ? "Nothing on this page is unresolved. Every rule that could be evaluated is satisfied "
-              + "and the evidence has answered its question."
-            : `${items.length} outstanding `
-              + `${items.length === 1 ? "item" : "items"}, ordered by how much of the answer each `
-              + "one would settle. The label on the right of each row names who can resolve it."
-              + (atDevice > 0
-                ? ` ${atDevice} of them can be resolved at the programmer.`
-                : " None of them can be resolved at the programmer.")
-              + (notAtDevice > 0
-                ? ` ${notAtDevice} cannot be resolved there at all and need a change to the `
-                  + "analysis or to the rule table."
-                : "")}
+            ? "Nothing is unresolved: every rule that could be evaluated is satisfied and the "
+              + "evidence has answered its question."
+            : `${items.length} outstanding ${items.length === 1 ? "item" : "items"}, most `
+              + `decisive first · ${atDevice} resolvable at the programmer`
+              + (notAtDevice > 0 ? ` · ${notAtDevice} need a change to the analysis` : "")
+              + ". The label on the right names who can resolve each."}
         </MDTypography>
 
         <MDBox mt={0.8}>

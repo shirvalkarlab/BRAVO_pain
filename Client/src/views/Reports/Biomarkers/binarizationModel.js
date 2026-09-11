@@ -26,6 +26,26 @@ export const BIN_MID = "#7E8794";  // excluded middle
 export const BIN_HI_RGB = [213, 94, 0];
 export const BIN_LO_RGB = [0, 114, 178];
 
+// A diverging scale around the value that means "no relationship" for each quantity -- 0 for a
+// correlation, 0.5 (never 0) for an area under the curve. House rule: an AUC is never read against
+// zero. Moved here from BiomarkerHeatmapGrids on 2026-09-11 so the Closed-Loop page's band heat map
+// and the Biomarkers heat maps read ONE definition of the colour and cannot drift apart.
+export function divergingRgb(v, center, halfRange) {
+  const t = Math.max(-1, Math.min(1, (Number(v) - center) / halfRange));
+  const neg = BIN_LO_RGB;         // blue
+  const pos = BIN_HI_RGB;         // vermillion
+  const mid = [255, 255, 255];
+  const lerp = (a, b, k) => a + (b - a) * k;
+  return t < 0
+    ? [lerp(neg[0], mid[0], 1 + t), lerp(neg[1], mid[1], 1 + t), lerp(neg[2], mid[2], 1 + t)]
+    : [lerp(mid[0], pos[0], t), lerp(mid[1], pos[1], t), lerp(mid[2], pos[2], t)];
+}
+export function diverging(v, center, halfRange) {
+  if (v == null || !Number.isFinite(Number(v))) return "#e9e9e9";
+  const c = divergingRgb(v, center, halfRange);
+  return `rgb(${c.map((x) => Math.round(x)).join(",")})`;
+}
+
 // numpy-percentile (linear interpolation, q in 0..100) over a finite-value array.
 function percentile(values, q) {
   if (!values || values.length === 0) return null;

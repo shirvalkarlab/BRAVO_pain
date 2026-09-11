@@ -27,6 +27,7 @@ import { Card, Select, MenuItem, FormControl } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import PAL from "./palette";
+import Fold from "./Fold";
 import { fmtNum } from "./deployFormat";
 
 const isNum = (v) => v != null && Number.isFinite(Number(v));
@@ -68,8 +69,7 @@ export default function ReliableChangePanel({ reliableChange }) {
         How big a change in this patient&apos;s own rating means anything?
       </MDTypography>
       <MDTypography variant="caption" sx={{ color: "#4A4A4A", display: "block", mb: 1 }}>
-        {`Noise measured from pairs of ratings filed within ${gapText} of each other with every `}
-        {"stimulation setting unchanged. Warns; blocks nothing."}
+        Warns; blocks nothing.
       </MDTypography>
 
       {order.length > 0 ? (
@@ -111,10 +111,14 @@ export default function ReliableChangePanel({ reliableChange }) {
               </MDTypography>
             </MDBox>
           ) : null}
-          <MDTypography variant="caption" sx={{ color: "#6A6A6A", display: "block", mt: 1, fontSize: 10.5 }}>
-            {"A change smaller than the threshold is not \"no change\" — it is a change this "}
-            {"patient's own noise could produce with nothing therapeutic happening."}
-          </MDTypography>
+          <Fold show="How this is measured" hide="Hide" mt={1} dense>
+            <MDTypography variant="caption" sx={{ color: "#6A6A6A", display: "block", fontSize: 10.5 }}>
+              {`Noise is measured from pairs of ratings filed within ${gapText} of each other with `}
+              {"every stimulation setting unchanged. A change smaller than the threshold is not "}
+              {"\"no change\" \u2014 it is a change this patient's own noise could produce with "}
+              {"nothing therapeutic happening."}
+            </MDTypography>
+          </Fold>
         </MDBox>
       ) : (
         <MDBox px={1} py={0.75} borderRadius="4px" sx={{ backgroundColor: PAL.warnFill }}>

@@ -96,6 +96,13 @@ export default function ThreeSourceResponsePanel({ report }) {
   const payload = report?.data?.three_source_response;
   const comparisons = payload?.comparisons || [];
   const [which, setWhich] = useState(0);
+  const [showSpectrum, setShowSpectrum] = useState(false);
+  // Mounted on the first reveal and kept mounted afterwards: a Plotly figure first drawn inside a
+  // hidden container measures itself as zero pixels wide and stays that size.
+  const [spectrumRevealed, setSpectrumRevealed] = useState(false);
+  useEffect(() => {
+    if (showSpectrum && !spectrumRevealed) setSpectrumRevealed(true);
+  }, [showSpectrum, spectrumRevealed]);
   const topRef = useRef(null);
   const specRef = useRef(null);
 
@@ -228,7 +235,7 @@ export default function ThreeSourceResponsePanel({ report }) {
       }
     });
     Plotly.react(gd, traces, layout, PAL.MODEBAR);
-  }, [chosen, specRange]);
+  }, [chosen, specRange, spectrumRevealed]);
 
   useEffect(() => () => {
     if (topRef.current) Plotly.purge(topRef.current);
@@ -241,7 +248,7 @@ export default function ThreeSourceResponsePanel({ report }) {
       <Card>
         <CardContent>
           <Typography variant="h6" gutterBottom>
-            How stimulation current moved band power, measured three ways
+            Stimulation amplitude effects on band power, measured three ways
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
             {payload?.absent_reason
@@ -260,8 +267,9 @@ export default function ThreeSourceResponsePanel({ report }) {
   return (
     <Card>
       <CardContent>
+        {/* Title given by the PI on 2026-09-10 ("really critical and important"). */}
         <Typography variant="h6" gutterBottom>
-          How stimulation current moved band power, measured three ways
+          Stimulation amplitude effects on band power, measured three ways
         </Typography>
 
         {comparisons.length > 1 && (
@@ -298,22 +306,34 @@ export default function ThreeSourceResponsePanel({ report }) {
 
         <Divider sx={{ my: 1.5 }} />
 
-        <Typography variant="caption" color="text.secondary"
-          sx={{ display: "block", mb: 0.5 }}>
-          {`The rest of the spectrum over the same settings, ${fmtHz(chosen.spectrum_lo_hz)} to `}
-          {`${fmtHz(chosen.spectrum_hi_hz)}. Line shade runs from the lowest current to the highest.`}
+        {/* The whole-range row and the footer stay MOUNTED and are hidden by style, never
+            unmounted -- a Plotly figure first drawn inside a hidden container measures itself as
+            zero pixels wide and keeps that size, so the figure is drawn once at full width and
+            then shown or hidden (the same rule the analyst fold on this page follows). */}
+        <Typography variant="caption" component="button" type="button"
+          onClick={() => setShowSpectrum((s) => !s)} aria-expanded={showSpectrum}
+          sx={{ color: PAL.accent, cursor: "pointer", background: "none", border: 0, padding: 0,
+            fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 0.5,
+            "&:hover": { textDecoration: "underline" } }}>
+          <span aria-hidden="true" style={{ fontSize: 9, display: "inline-block",
+            transform: showSpectrum ? "rotate(90deg)" : "none" }}>▶</span>
+          {showSpectrum ? "Hide the other bands"
+            : `Show every band from ${fmtHz(chosen.spectrum_lo_hz)} to ${fmtHz(chosen.spectrum_hi_hz)} over the same settings`}
         </Typography>
-
-        <Box ref={specRef} sx={{ width: "100%" }} />
-
-        <Typography variant="caption" sx={{ display: "block", mt: 1.5, color: NEUTRAL_INK,
-          lineHeight: 1.55 }}>
-          {chosen.footer}
-        </Typography>
-        <Typography variant="caption" sx={{ display: "block", mt: 0.75, color: NEUTRAL_INK }}>
-          This panel is informative only. It does not gate anything, and no verdict on this page
-          depends on it.
-        </Typography>
+        {spectrumRevealed ? <Box sx={{ display: showSpectrum ? "block" : "none" }}>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5, mb: 0.5 }}>
+            Line shade runs from the lowest current to the highest.
+          </Typography>
+          <Box ref={specRef} sx={{ width: "100%" }} />
+          <Typography variant="caption" sx={{ display: "block", mt: 1.5, color: NEUTRAL_INK,
+            lineHeight: 1.55 }}>
+            {chosen.footer}
+          </Typography>
+          <Typography variant="caption" sx={{ display: "block", mt: 0.75, color: NEUTRAL_INK }}>
+            This panel is informative only. It does not gate anything, and no verdict on this page
+            depends on it.
+          </Typography>
+        </Box> : null}
       </CardContent>
     </Card>
   );

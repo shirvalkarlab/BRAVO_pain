@@ -40,6 +40,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import PAL from "./palette";
+import Fold from "./Fold";
 import { unevaluableFor } from "./deployFormat";
 
 /** The four state shapes, drawn small enough to sit on a text baseline. */
@@ -208,7 +209,7 @@ export default function DeviceRuleLedger({ report }) {
   if (!data || !data.eligibility) {
     return (
       <Card><MDBox p={2}>
-        <MDTypography variant="h6" sx={{ fontSize: 15 }}>Device rule ledger</MDTypography>
+        <MDTypography variant="h6" sx={{ fontSize: 15 }}>Device rules</MDTypography>
         <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
           color: PAL.neutral }}>
           {`The rule table has not been run for this configuration${err ? ` (${err})` : ""}. `}
@@ -254,13 +255,63 @@ export default function DeviceRuleLedger({ report }) {
     g.rows.push(u);
   });
 
+  // The counts strip: one glyph and a number per outcome, always visible, so the ledger can fold
+  // without hiding how the 51 rules came out (2026-09-11, the PI: the ledger "should also be a
+  // panel that can be expanded or contracted because it's too verbose"; and "keep R shown").
+  const countsStrip = [
+    ["violated", "violated", failures.length],
+    ["unevaluable", "could not be evaluated", unknowns.length],
+    ["deferred", "counted under another rule", deferred.length],
+    ["advisory", "advisory shortfalls", advFailed.length],
+    ["satisfied", "pinned values", recorded.length],
+    ["advisory", "advisory, informational", advNotDeterminable.length + advNoPredicate.length + advOther.length],
+    ["satisfied", "satisfied", satisfied == null ? "?" : satisfied],
+  ];
+
   return (
     <Card>
       <MDBox p={2}>
-        <MDTypography variant="h6" sx={{ fontSize: 15 }}>Device rule ledger</MDTypography>
+        <MDBox display="flex" alignItems="baseline" gap={1} flexWrap="wrap">
+          <MDTypography variant="h6" sx={{ fontSize: 15 }}>Device rules</MDTypography>
+          {el.checked != null ? (
+            <MDTypography variant="caption" sx={{ fontSize: 11, color: "#8A8A8A" }}>
+              {`${el.checked} checked`}
+            </MDTypography>
+          ) : null}
+        </MDBox>
         <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#4A4A4A" }}>
           {el.summary || "no summary reported"}
         </MDTypography>
+
+        <MDBox display="flex" gap={1.6} flexWrap="wrap" alignItems="center" mt={0.8}>
+          {countsStrip.map(([state, label, n]) => (
+            <MDBox key={label} display="inline-flex" alignItems="center" gap={0.5}>
+              <RuleGlyph state={state} size={13} />
+              <MDTypography variant="caption" sx={{ fontSize: 11.5, color: "#2A2A2A" }}>
+                <b>{n}</b>{` ${label}`}
+              </MDTypography>
+            </MDBox>
+          ))}
+        </MDBox>
+
+        {/* VIOLATED rows stay in the open even when the ledger is folded: a violated rule is the
+            only state that no further measurement or lookup can clear, and it is what a reader
+            must not miss. */}
+        {failures.length > 0 ? (
+          <MDBox mt={0.8}>
+            <BucketHead state="violated" title="Violated" count={failures.length} note={null} />
+            {failures.map((f) => {
+              const u = unevaluableFor(f.kind);
+              return (
+                <RuleRow key={`f-${f.rule_id}`} row={f} state="violated" ink={PAL.fail}
+                  copy={u.copy} actor={u.actor} />
+              );
+            })}
+          </MDBox>
+        ) : null}
+
+        <Fold show={`Show all ${el.checked != null ? el.checked : ""} rules by outcome`.replace("  ", " ")}
+          hide="Hide the rules" mt={1}>
         <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, color: "#8A8A8A",
           mt: 0.3 }}>
           Each row carries the rule identifier and the document page it was read from, so a finding
@@ -270,17 +321,9 @@ export default function DeviceRuleLedger({ report }) {
 
         <Divider sx={{ my: 1 }} />
 
-        {/* VIOLATED. Drawn first because a violated rule is the only state that no further
-            measurement or lookup can clear. */}
-        <BucketHead state="violated" title="Violated" count={failures.length}
-          note={failures.length === 0 ? "no rule is violated" : null} />
-        {failures.map((f) => {
-          const u = unevaluableFor(f.kind);
-          return (
-            <RuleRow key={`f-${f.rule_id}`} row={f} state="violated" ink={PAL.fail}
-              copy={u.copy} actor={u.actor} />
-          );
-        })}
+        {failures.length === 0 ? (
+          <BucketHead state="violated" title="Violated" count={0} note="no rule is violated" />
+        ) : null}
 
         {/* CANNOT BE EVALUATED, subdivided by kind so the actor is legible from position. */}
         <BucketHead state="unevaluable" title="Cannot be evaluated" count={unknowns.length}
@@ -363,6 +406,7 @@ export default function DeviceRuleLedger({ report }) {
             ? `derived by subtraction from the ${el.checked} rules checked, not enumerated in the `
               + "payload"
             : null} />
+        </Fold>
       </MDBox>
     </Card>
   );

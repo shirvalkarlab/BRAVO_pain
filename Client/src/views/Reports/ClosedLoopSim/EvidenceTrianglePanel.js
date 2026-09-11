@@ -50,6 +50,7 @@ import MDTypography from "components/MDTypography";
 
 import PAL from "./palette";
 import StateTrack from "./StateTrack";
+import Fold from "./Fold";
 import { TRACKS, coherenceReading } from "./stateTracks";
 import { ciBound, fmtNum, fmtP, parseSignPattern } from "./deployFormat";
 
@@ -151,7 +152,7 @@ function TriangleGraph({ edges }) {
             <text x={E.lx} y={E.ly + 11} textAnchor={E.anchor} fontSize="9" fill="#6A6A6A">
               {resolved
                 ? (sign > 0 ? "positive" : sign < 0 ? "negative" : "sign not reported")
-                : "direction not established"}
+                : "not established"}
             </text>
           </g>
         );
@@ -280,13 +281,13 @@ function EdgeAxis({ k, e }) {
         </MDTypography>
       ) : null}
       {/* The module's own sentence about how this estimate was made, printed rather than
-          reconstructed. It names the estimator and the cluster count, which is what the removed
-          asterisk was gesturing at. */}
+          reconstructed. It names the estimator and the cluster count. Folded since 2026-09-11. */}
       {e && e.note ? (
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, color: "#6A6A6A",
-          mt: 0.2 }}>
-          {e.note}
-        </MDTypography>
+        <Fold show="How this edge was estimated" hide="Hide" mt={0.2} dense>
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, color: "#6A6A6A" }}>
+            {e.note}
+          </MDTypography>
+        </Fold>
       ) : null}
       {e && e.confounded_by && e.confounded_by.length > 0 ? (
         <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5,
@@ -412,21 +413,23 @@ function CoherenceReading({ coherence, edges }) {
         ) : null}
       </MDBox>
 
-      {/* The module's own note, verbatim, because it names the control-law page citation. */}
-      {coherence.note ? (
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11, mt: 0.8,
-          color: "#4A4A4A" }}>
-          {coherence.note}
+      {/* The module's own note (it names the control-law page citation) and the bootstrap
+          probability, folded since 2026-09-11. */}
+      <Fold show="How the sign agreement was tested" hide="Hide" mt={0.8} dense>
+        {coherence.note ? (
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11, color: "#4A4A4A" }}>
+            {coherence.note}
+          </MDTypography>
+        ) : null}
+        <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mt: 0.4,
+          color: "#8A8A8A" }}>
+          {coherence.p_coherent != null
+            ? `Bootstrap probability that the sign pattern holds: ${fmtNum(coherence.p_coherent, 3)}`
+              + `${coherence.n_boot ? `, from ${coherence.n_boot} replications.` : "."}`
+            : "No bootstrap probability is reported for this sign pattern, so the answer above rests "
+              + "on the point signs rather than on a resampled distribution over them."}
         </MDTypography>
-      ) : null}
-      <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mt: 0.4,
-        color: "#8A8A8A" }}>
-        {coherence.p_coherent != null
-          ? `Bootstrap probability that the sign pattern holds: ${fmtNum(coherence.p_coherent, 3)}`
-            + `${coherence.n_boot ? `, from ${coherence.n_boot} replications.` : "."}`
-          : "No bootstrap probability is reported for this sign pattern, so the answer above rests "
-            + "on the point signs rather than on a resampled distribution over them."}
-      </MDTypography>
+      </Fold>
     </MDBox>
   );
 }
@@ -464,33 +467,29 @@ export default function EvidenceTrianglePanel({ report }) {
           The evidence triangle: amplitude, band power and pain
         </MDTypography>
         <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#4A4A4A" }}>
-          Three measured relationships and one question about them. The amplitude-to-power and
-          power-to-pain edges compose to predict the amplitude-to-pain edge, so their signs have to
-          agree with each other, and separately they have to be the signs the selected control law
-          assumes.
+          Current to band power, band power to pain, current to pain: three measured links, and
+          whether their signs agree with each other and with the control law.
         </MDTypography>
 
         <Grid container spacing={2} mt={0.5}>
           <Grid item xs={12} md={5}>
             <TriangleGraph edges={edges} />
-            <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5,
-              color: "#8A8A8A", mt: 0.5 }}>
-              A solid line with an arrowhead is an edge whose direction the data established. A
-              dotted line with a hollow diamond is an edge that was estimated and whose direction
-              the data did not establish; it is drawn at full weight because it is present and
-              undetermined, not absent and not zero.
-            </MDTypography>
           </Grid>
           <Grid item xs={12} md={7}>
             {["E1", "E2", "E3"].map((k) => <EdgeAxis key={k} k={k} e={edges[k]} />)}
-            <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5,
-              color: "#8A8A8A" }}>
-              Each edge has its own axis and its own units because the three quantities are not
-              comparable in magnitude. Only zero is aligned across the three, which is what makes
-              the sign comparison below readable.
-            </MDTypography>
           </Grid>
         </Grid>
+        {/* The two drawing conventions, folded since 2026-09-11. */}
+        <Fold show="How to read the picture" hide="Hide" dense>
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, color: "#8A8A8A" }}>
+            A solid line with an arrowhead is an edge whose direction the data established. A
+            dotted line with a hollow diamond is an edge that was estimated and whose direction
+            the data did not establish; it is drawn at full weight because it is present and
+            undetermined, not absent and not zero. Each edge has its own axis and its own units
+            because the three quantities are not comparable in magnitude; only zero is aligned
+            across the three, which is what makes the sign comparison readable.
+          </MDTypography>
+        </Fold>
 
         <Divider sx={{ my: 1.2 }} />
 

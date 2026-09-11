@@ -96,7 +96,7 @@ function reconcile(device, evidence, transcription) {
       headline: "The device permits this configuration; the evidence has not established that it "
               + "would work",
       body: "This is a measurement problem rather than a programming one. At least one edge of the "
-          + "amplitude-power-pain triangle is unresolved, or the coherence test could not be run, "
+          + "amplitude-power-pain triangle is unresolved, or the sign-agreement test could not be run, "
           + "so the evidence has not answered the question in either direction.",
     };
   }

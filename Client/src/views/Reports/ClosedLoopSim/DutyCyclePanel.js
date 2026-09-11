@@ -34,6 +34,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import PAL from "./palette";
+import Fold from "./Fold";
 import { MODE_LABEL, fmtNum, fmtPct } from "./deployFormat";
 
 const isNum = (v) => v != null && Number.isFinite(Number(v));
@@ -219,9 +220,8 @@ export default function DutyCyclePanel({ report, mode }) {
           If the same band power occurred under closed-loop control, how would the time divide?
         </MDTypography>
         <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#4A4A4A" }}>
-          {`Modelled for ${MODE_LABEL[activeMode] || activeMode}. The dashed frame around this card `
-            + "marks every number inside it as modelled rather than measured; every other card on "
-            + "this page has a solid frame."}
+          {`Modelled for ${MODE_LABEL[activeMode] || activeMode}. Dashed frame: every number here `
+            + "is modelled, not measured."}
         </MDTypography>
 
         {/* COVERAGE FIRST, before any fraction, because it is what tells a reader how much the
@@ -429,16 +429,16 @@ export default function DutyCyclePanel({ report, mode }) {
             a parameter visible in the table above is doing nothing. */}
         {(duty.caveats || []).length > 0 ? (
           <MDBox mt={1.2} pt={0.8} sx={{ borderTop: "1px solid rgba(0,0,0,0.12)" }}>
-            <MDTypography variant="caption" sx={{ display: "block", fontSize: 10,
-              fontWeight: "bold", letterSpacing: 0.4, color: "#8A8A8A" }}>
-              {`ALL ${duty.caveats.length} CAVEATS THE MODULE ATTACHED TO THESE NUMBERS`}
-            </MDTypography>
-            {duty.caveats.map((c, i) => (
-              <MDTypography key={`cv${i}`} variant="caption" sx={{ display: "block", fontSize: 11,
-                color: "#3A3A3A", mt: 0.35 }}>
-                {`${i + 1}. ${c}`}
-              </MDTypography>
-            ))}
+            {/* Folded since 2026-09-11; the count stays in the open so a reader knows they exist. */}
+            <Fold show={`The ${duty.caveats.length} caveats the module attached to these numbers`}
+              hide="Hide the caveats" mt={0} dense>
+              {duty.caveats.map((c, i) => (
+                <MDTypography key={`cv${i}`} variant="caption" sx={{ display: "block", fontSize: 11,
+                  color: "#3A3A3A", mt: 0.35 }}>
+                  {`${i + 1}. ${c}`}
+                </MDTypography>
+              ))}
+            </Fold>
           </MDBox>
         ) : null}
       </MDBox>
