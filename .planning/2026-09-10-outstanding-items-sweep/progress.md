@@ -19,3 +19,7 @@
   production caller since 2026-06-28); measured 240/240 equal on RCS08; wrote
   `test_timeline_circle_equals_spectrum_point.py` (3 tests, live one ~16 s, skips without RCS08).
   Container 636/0 (+3). Host suite untouched (Biomarkers is not in it).
+- Item 2 follow-up: PI had `per_pro_lsb_spectrum` (+ scan, + indexed twin, + my test, + 7 DecodeCommon
+  tests) deleted — decision 115. Trap met and caught: `CENTERS` lived in the removed test block and
+  the tile-cache test still needs it. Container 626/0; host 1018/42/1 known. House rule added: never
+  write "spectrum" bare. Item 3 folded into Phase 7. Suite logs now saved to /tmp/claude-502/.

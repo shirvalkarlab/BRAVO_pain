@@ -343,7 +343,7 @@ def test_lsb_series_indexed_path_matches_scan_on_the_four_existing_fixtures():
 
 def test_lsb_series_scan_path_when_switch_is_off():
     """`USE_CHANNEL_INDEX = False` with no `index=` must take the reference-scan branch, not the
-    indexed one -- the same fallback contract `per_pro_lsb`/`per_pro_lsb_spectrum` already have."""
+    indexed one -- the same fallback contract `per_pro_lsb` already has."""
     chronic, pd_recs, montage_td, event_psd = _rich_lsb_series_fixture()
     orig = av.USE_CHANNEL_INDEX
     av.USE_CHANNEL_INDEX = False

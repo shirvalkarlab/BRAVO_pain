@@ -4048,7 +4048,7 @@ def run_for_participant(request_data):
     # metric-AGNOSTIC set the timeline uses) here, or the index would point at the wrong PRO. The
     # timeline's modeled markers build their OWN cache entry
     # from pain["t"] in _build_availability under a DIFFERENT signature; the two entries agree on any
-    # shared PRO because per_pro_lsb_spectrum is deterministic in (pro_time, channel, recordings) — the
+    # shared PRO because the per-rating reader is deterministic in (pro_time, channel, recordings) — the
     # numbers match by construction, NOT by sharing one memo slot. td_recordings = ALL TD-bearing
     # products (streaming + montage/survey, 250 Hz); event_psd_blocks = PatientControllerEvent FFT only.
     _scan_psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)

@@ -18,10 +18,10 @@ from .representation import (                                    # noqa: F401
     ChannelIndex,
     build_channel_index,
 )
-from .per_pro_lsb_indexed import per_pro_lsb_indexed, per_pro_lsb_spectrum_indexed   # noqa: F401
+from .per_pro_lsb_indexed import per_pro_lsb_indexed   # noqa: F401
 
 __all__ = ["CHANNEL_INDEX_VERSION", "ChannelIndex", "build_channel_index",
-           "per_pro_lsb_indexed", "per_pro_lsb_spectrum_indexed", "representation"]
+           "per_pro_lsb_indexed", "representation"]
 
 # ONE MODULE OBJECT UNDER BOTH SPELLINGS, for the same reason as `CacheStore/__init__.py`: the
 # container imports this package as `modules.DecodeCommon` and the host suite as `DecodeCommon`.

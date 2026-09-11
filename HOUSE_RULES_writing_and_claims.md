@@ -96,6 +96,7 @@ names: the name of a thing inside the code, used as if it were an English word.*
 | contact, R 0⁻3⁺ | the pair of electrode contacts the signal was recorded from, named in full |
 | the correlation travels 0.037 | the strength of the relationship changes by only 0.037 from the shortest length of signal to the longest |
 | compute (as a noun) | work, or computing time |
+| spectrum, spectral (bare) — **added 2026-09-10, his words: "Don't ever use the word 'spectrum' out of context because it can mean many things"** | name the quantity: the device's own FFT snapshot; the PSD computed from the voltage trace; PSD-derived LSB; time-domain-derived LSB; a direct LSB recording; a per-rating list of LSB band-power values at several centre frequencies |
 
 **Two habits, not just a word list.** Say the number and what it means in the same breath: not
 "served 2.9 s against fresh 10.4 s" but "reading the saved answer took 2.9 seconds; working it out

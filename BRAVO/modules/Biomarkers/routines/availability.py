@@ -30,17 +30,14 @@ from . import analytics
 # the package `modules.DecodeCommon`, the host suite's root makes it `DecodeCommon`.
 try:
     from modules.DecodeCommon import (build_channel_index as _build_channel_index,
-                                      per_pro_lsb_indexed as _per_pro_lsb_indexed,
-                                      per_pro_lsb_spectrum_indexed as _per_pro_lsb_spectrum_indexed)
+                                      per_pro_lsb_indexed as _per_pro_lsb_indexed)
 except ImportError:
     from DecodeCommon import (build_channel_index as _build_channel_index,
-                              per_pro_lsb_indexed as _per_pro_lsb_indexed,
-                              per_pro_lsb_spectrum_indexed as _per_pro_lsb_spectrum_indexed)
+                              per_pro_lsb_indexed as _per_pro_lsb_indexed)
 
-#: THE SWITCH BETWEEN THE INDEXED READERS AND THE REFERENCE SCANS. `per_pro_lsb` and
-#: `per_pro_lsb_spectrum` read from a `ChannelIndex` prepared once per request when this is True,
-#: and run their original per-call scans (`_per_pro_lsb_scan`, `_per_pro_lsb_spectrum_scan`) when
-#: it is False. The scans are kept, not deleted: they are the reference the indexed readers are
+#: THE SWITCH BETWEEN THE INDEXED READER AND THE REFERENCE SCAN. `per_pro_lsb` reads from a
+#: `ChannelIndex` prepared once per request when this is True, and runs its original per-call
+#: scan (`_per_pro_lsb_scan`) when it is False. The scans are kept, not deleted: they are the reference the indexed readers are
 #: proven equal to (DecodeCommon/tests), and flipping this in one process is how the equality proof
 #: on the live record alternates rounds honestly. If a served number is ever suspected, set this
 #: False and the page recomputes the old way with no deployment.
@@ -1231,146 +1228,14 @@ def _per_pro_lsb_scan(pro_times, native_lsb_series, channel, center_hz, *, band_
     return out
 
 
-def _per_pro_lsb_spectrum_scan(pro_times, channel, centers_hz, *, band_half_hz=2.5,
-                         td_recordings=None, event_psd_recordings=None,
-                         native_tol_s=120.0, extent_s=None, max_missing_frac=0.10,
-                         saturation_uv=PRO_LSB_SATURATION_UV):
-    """REFERENCE IMPLEMENTATION, kept for the equality check; `per_pro_lsb_spectrum` is the entry point.
-
-    Per-matched-pair FULL-SPECTRUM modeled LSB — the SHARED source of truth for both the timeline
-    modeled markers and the spectral feature-importance panel. For each PRO and a vector of band
-    centers, return the 0–100 Hz LSB vector via the SAME CS-1…CS-4 routes per_pro_lsb uses, but
-    computed for EVERY center in one vectorized pass instead of a single sensing band.
-
-    Per (channel, PRO), source preference is decided ONCE for the whole spectrum (not per band):
-      * TD-TRANSFORM (tier td_transform, k=LSB_PER_UV2_TRANSFORM=352.62): if any TD-bearing recording
-        covers the rating, cut the rating-centered extent ONCE (transform_centered_window:
-        clip-don't-slide, 1 s-min, fail-closed >max_missing_frac Missing) and run
-        analytics.td_transform_band_power over ALL centers at 50 % overlap (median across windows),
-        then × 352.62. A saturated window is flagged + skipped (falls through to the bridge).
-      * PSD-BRIDGE (tier psd_bridge, k=LSB_PER_DEVICE_PSD≈73.63): else the nearest coincident PSD-only
-        patient event's onboard FFT through analytics.device_psd_band_power over ALL centers, × 73.63.
-
-    Unlike per_pro_lsb's single-band bridge (gated to [7.8,30]), the bridge spectrum is computed across
-    the FULL 0–100 Hz for exploration (PI 2026-06-27). Each band carries a per-band `calibrated` flag:
-    True only where the center is within [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI] (the bridge has no
-    validated meaning in the delta/gamma bands outside it). The TD-transform route is calibrated across
-    the whole spectrum (k=352.62 is band-agnostic), so its `calibrated` is True everywhere a band has
-    signal. The NATIVE tier is intentionally NOT used here — a native device reading is a single sensed
-    band, not a full spectrum; the full-spectrum modeled LSB is exactly the TD-transform / bridge view.
-
-    Returns a list (PRO order) of dicts:
-        {"t": pro_epoch_s, "tier": "td_transform"|"psd_bridge"|None,
-         "lsb": [float|None per center],            # LINEAR LSB (NOT logged) per band center
-         "calibrated": [bool per center],
-         "center_hz": [float per center],           # echoes centers_hz
-         "used_s": float, "saturated": bool, "reason": str}
-    A PRO with neither a covering TD recording nor a coincident PSD event → tier=None, lsb all None.
-    """
-    if extent_s is None:
-        extent_s = analytics.TRANSFORM_CENTERED_EXTENT_SECONDS
-    half = float(band_half_hz)
-    lo_hz = float(analytics.LSB_VALIDATED_HZ_LO)
-    hi_hz = float(analytics.LSB_DEPLOYABLE_HZ_HI)
-    channel = _canon_channel(channel)
-    centers = np.atleast_1d(np.asarray(centers_hz, dtype=float))
-    nC = centers.size
-    # per-band calibration validity: same gate as the single-band bridge tier, applied per center.
-    cal_band = (centers >= lo_hz - 1e-9) & (centers <= hi_hz + 1e-9)
-
-    # prep TD recordings ONCE (identical to per_pro_lsb): channel column, t0/t1, fs, missing, step.
-    td_prepped = []
-    for r in (td_recordings or []):
-        if not isinstance(r, dict):
-            continue
-        names = list(r.get("ChannelNames") or [])
-        ci = next((i for i, n in enumerate(names) if _canon_channel(n) == channel), None)
-        if ci is None:
-            continue
-        data = np.asarray(r.get("Data"), dtype=float)
-        if data.ndim != 2:
-            continue
-        if data.shape[0] == len(names) and data.shape[1] != len(names):
-            data = data.T
-        fs = float(r.get("SamplingRate") or 250.0) or 250.0
-        t0 = _to_epoch(r.get("StartTime"))
-        if t0 is None or ci >= data.shape[1]:
-            continue
-        nsamp = data.shape[0]
-        td_prepped.append({
-            "t0": t0, "t1": t0 + (nsamp / fs if fs > 0 else 0.0), "fs": fs,
-            "col": data[:, ci], "miss": _missing_per_sample(r.get("Missing"), nsamp),
-            "step": int(round(fs * analytics.TRANSFORM_STEP_SECONDS))})
-    td_prepped.sort(key=lambda d: d["t0"])
-    td_t0 = np.array([d["t0"] for d in td_prepped], dtype=float)
-
-    none_vec = [None] * nC
-    out = []
-    for tp in np.asarray(pro_times, dtype=float):
-        rec = {"t": float(tp), "tier": None, "lsb": list(none_vec),
-               "calibrated": [False] * nC, "center_hz": [float(c) for c in centers],
-               "used_s": 0.0, "saturated": False, "reason": ""}
-
-        # (1) TD-TRANSFORM spectrum — rating must fall inside a TD recording's real coverage.
-        matched_td = False
-        hi = int(np.searchsorted(td_t0, tp, side="right")) if td_t0.size else 0
-        for pr in td_prepped[:hi]:
-            if not (pr["t0"] <= tp <= pr["t1"]):
-                continue
-            fs = pr["fs"]
-            slice_uv, used_s = analytics.transform_centered_window(
-                pr["col"], fs, tp - pr["t0"], extent_s=extent_s, missing=pr["miss"],
-                max_missing_frac=max_missing_frac)
-            if slice_uv is None:
-                continue
-            if np.nanmax(np.abs(slice_uv)) >= saturation_uv:
-                rec["saturated"] = True
-                rec["reason"] = "TD window saturated (ADC rail)"
-                continue
-            # ONE strided rFFT over the whole centered window -> band power for ALL centers at once.
-            bp = np.atleast_1d(analytics.td_transform_band_power(
-                slice_uv, fs, centers, half_hz=half, step_samples=pr["step"]))
-            lsb = np.where(np.isfinite(bp) & (bp > 0),
-                           analytics.LSB_PER_UV2_TRANSFORM * bp, np.nan)
-            rec["tier"] = PRO_LSB_TIER_TD
-            rec["lsb"] = [float(v) if np.isfinite(v) else None for v in lsb]
-            # transform route is band-agnostic-calibrated: any band with signal is calibrated.
-            rec["calibrated"] = [bool(np.isfinite(v)) for v in lsb]
-            rec["used_s"] = float(used_s)
-            rec["saturated"] = False
-            rec["reason"] = "direct TD->LSB transform (k=%.2f)" % analytics.LSB_PER_UV2_TRANSFORM
-            matched_td = True
-            break
-        if matched_td:
-            out.append(rec); continue
-
-        # (2) PSD-BRIDGE spectrum — nearest coincident PSD-only patient event, FULL 0–100 Hz.
-        best = None
-        for ev in (event_psd_recordings or []):
-            if not isinstance(ev, dict) or _canon_channel(ev.get("channel")) != channel:
-                continue
-            te = _to_epoch(ev.get("t"))
-            if te is None or abs(te - tp) > native_tol_s:
-                continue
-            if best is None or abs(te - tp) < abs(best[0] - tp):
-                best = (te, ev)
-        if best is not None:
-            ev = best[1]
-            bp = np.atleast_1d(analytics.device_psd_band_power(
-                ev.get("freq"), ev.get("power"), centers, half_hz=half))
-            lsb = np.where(np.isfinite(bp) & (bp > 0),
-                           analytics.LSB_PER_DEVICE_PSD * bp, np.nan)
-            rec["tier"] = PRO_LSB_TIER_BRIDGE
-            rec["lsb"] = [float(v) if np.isfinite(v) else None for v in lsb]
-            # bridge is only VALIDATED inside [7.8,30]; outside is exploratory (computed, flagged).
-            rec["calibrated"] = [bool(np.isfinite(v) and cal_band[i]) for i, v in enumerate(lsb)]
-            rec["reason"] = "PSD-only event bridge (k=%.2f); calibrated only in [%.1f,%.1f] Hz" % (
-                analytics.LSB_PER_DEVICE_PSD, lo_hz, hi_hz)
-            out.append(rec); continue
-
-        rec["reason"] = "no TD coverage and no coincident PSD event"
-        out.append(rec)
-    return out
+# `_per_pro_lsb_spectrum_scan` and `per_pro_lsb_spectrum` -- the SAME rule as `_per_pro_lsb_scan` /
+# `per_pro_lsb` evaluated at MANY band centres for one pain rating, returning one list of LSB
+# band-power values per rating -- were DELETED on 2026-09-10 at the PI's direction (decision 115).
+# Nothing on any page had read them since 2026-06-28, when matching against the 3 s tile cache
+# (`live_lsb_spectrum_match`) replaced the live per-rating computation; their only callers were
+# tests. Measured before deletion on RCS08: for every rating served from the voltage trace or the
+# PSD bridge, the many-centre list's entry at the contact's own centre equalled the timeline
+# circle bit for bit, 240 of 240 -- so nothing that is drawn depended on them.
 
 
 def channel_index(td_recordings=None, event_psd_recordings=None, *,
@@ -1425,31 +1290,6 @@ def per_pro_lsb(pro_times, native_lsb_series, channel, center_hz, *, band_half_h
                                 tier_bridge=PRO_LSB_TIER_BRIDGE)
 
 
-def per_pro_lsb_spectrum(pro_times, channel, centers_hz, *, band_half_hz=2.5,
-                         td_recordings=None, event_psd_recordings=None,
-                         native_tol_s=120.0, extent_s=None, max_missing_frac=0.10,
-                         saturation_uv=PRO_LSB_SATURATION_UV, index=None):
-    """Per-matched-pair full-spectrum modeled LSB; `_per_pro_lsb_spectrum_scan` is the specification.
-
-    `index=` and `USE_CHANNEL_INDEX` behave exactly as in `per_pro_lsb`.
-    """
-    if index is None and not USE_CHANNEL_INDEX:
-        return _per_pro_lsb_spectrum_scan(pro_times, channel, centers_hz,
-                                          band_half_hz=band_half_hz, td_recordings=td_recordings,
-                                          event_psd_recordings=event_psd_recordings,
-                                          native_tol_s=native_tol_s, extent_s=extent_s,
-                                          max_missing_frac=max_missing_frac,
-                                          saturation_uv=saturation_uv)
-    if index is None:
-        index = channel_index(td_recordings, event_psd_recordings)
-    return _per_pro_lsb_spectrum_indexed(pro_times, channel, centers_hz, index=index,
-                                         analytics=analytics, band_half_hz=band_half_hz,
-                                         native_tol_s=native_tol_s, extent_s=extent_s,
-                                         max_missing_frac=max_missing_frac,
-                                         saturation_uv=saturation_uv,
-                                         tier_td=PRO_LSB_TIER_TD, tier_bridge=PRO_LSB_TIER_BRIDGE)
-
-
 # Map a TD recording's `product` key (TYPE_MAP, e.g. "streaming_td"/"indefinite"/"montage_td") to the
 # human source-subtype label the binarization-hover breakdown wants. PSD events carry their own
 # `source` string already. Kept here so the cache tags each window's provenance once, at build time.
@@ -1494,9 +1334,9 @@ def raw_lsb_spectrum_cache(channel, centers_hz, *, band_half_hz=2.5,
       * PSD-derived (tier psd_bridge, k=LSB_PER_DEVICE_PSD≈73.63): each PSD-only event is ONE window at
         its own onboard-FFT timestamp, device_psd_band_power over all centers × 73.63. Per-band
         `calibrated` is True only inside [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI]; outside is
-        exploratory (computed and flagged), matching per_pro_lsb_spectrum's bridge contract.
+        exploratory (computed and flagged), the bridge contract the per-rating readers use.
 
-    Parameters mirror per_pro_lsb_spectrum (same recording dict schema, same constants) MINUS pro_times
+    Parameters mirror per_pro_lsb (same recording dict schema, same constants) MINUS pro_times
     and extent_s — there is no rating and no extent at cache-build time.
 
     Returns a dict (zero-length axes, never None, when a family is empty so the [W × C] shape holds):
@@ -2078,7 +1918,8 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
     True preserves the return contract for every existing caller.
 
     Consumes one channel's `raw_lsb_spectrum_cache(...)` output and produces the SAME per-PRO
-    record list `per_pro_lsb_spectrum` returns (drop-in for the spectral scan), but with the
+    record list the retired per-rating many-centre reader returned (one list of LSB band-power values
+    per rating; deleted 2026-09-10, decision 115), but with the
     matching done at request time over the pre-computed 3 s LSB tiles.
 
     TWO-WINDOW MATCHING (PI 2026-06-28 — the modality split):

@@ -5,12 +5,12 @@ Work the outstanding-items list of 2026-09-10 in the PI's order ("start with num
 two, three, etc."), each item proven on live data or in the served bundle before the next starts.
 
 ## Next Step
-Item 3: the labelling and navigation tidy-ups on the Closed-Loop page — but Phase 7 (the PI's
-redesign brief) supersedes cosmetic work on that page, so item 3 is checked against Phase 7 first. **The PI will open a NEW session for Phase 7, the
+Item 4: the permanently failing host test made honest. Item 3 is folded into Phase 7 (the
+redesign of the same page) rather than polished now, per the PI ("go on to item 4"). **The PI will open a NEW session for Phase 7, the
 Closed-Loop page redesign; his brief is in findings.md §3 and must be read first there.**
 
 ## Current Phase
-Phase 3
+Phase 4
 
 ## Phases
 
@@ -23,16 +23,19 @@ Phase 3
       they were in the document; Export JSON -> 567 KB file with the 11 pictures; fold closed -> 6
       pictures and the two folded sections named as NOT ON THIS RECORD
 
-### Phase 2: Timeline circle equals spectrum point — a live test
+### Phase 2: Timeline circle equals the per-rating LSB value at its centre — a live test
 **Status:** complete
 - [x] Measured first: 240 of 240 circles (TD or bridge tier) equal the spectrum at the same centre,
       bit for bit, across all 12 sensing contacts on RCS08
 - [x] `test_timeline_circle_equals_spectrum_point.py`: constructed identity, the native-tier
       exclusion pinned as a rule, and a live RCS08 test that skips when the participant is absent
 - [x] Container 636 passed, 0 failed (+3)
+- [x] THEN, at the PI's direction, the many-centre function and the test deleted (decision 115):
+      container 626/0, host 1018 passed / 42 skipped / 1 known failure
 
 ### Phase 3: Labelling and navigation tidy-ups on the Closed-Loop page
-**Status:** pending
+**Status:** complete
+- [x] Folded into Phase 7, which redesigns the same page; polishing labels first would be thrown away
 
 ### Phase 4: The permanently failing host test made honest
 **Status:** pending

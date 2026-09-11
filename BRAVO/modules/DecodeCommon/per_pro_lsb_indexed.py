@@ -2,10 +2,10 @@
 
 WHAT THIS IS
 ------------
-The readers behind `availability.per_pro_lsb` and `availability.per_pro_lsb_spectrum` since
-Track B steps 2 and 3. The original per-call scans are kept in `availability` as
-`_per_pro_lsb_scan` and `_per_pro_lsb_spectrum_scan`: they are the specification these readers
-are proven equal to (`tests/test_decode_common.py`, on constructed recordings where the answer
+The reader behind `availability.per_pro_lsb` since Track B step 2. (Its many-centre twin,
+`per_pro_lsb_spectrum_indexed`, was deleted on 2026-09-10 with the platform function it served,
+decision 115 -- no page had read it since 2026-06-28.) The original per-call scan is kept in
+`availability` as `_per_pro_lsb_scan`: it is the specification this reader is proven equal to (`tests/test_decode_common.py`, on constructed recordings where the answer
 is known) and the path `availability.USE_CHANNEL_INDEX = False` falls back to.
 
 WHAT IS IDENTICAL, AND WHY THAT MATTERS
@@ -158,103 +158,5 @@ def per_pro_lsb_indexed(pro_times, native_lsb_series, channel, center_hz, *,
                     continue
 
         rec["reason"] = rec["reason"] or "no source in any tier"
-        out.append(rec)
-    return out
-
-
-def per_pro_lsb_spectrum_indexed(pro_times, channel, centers_hz, *,
-                                 index,
-                                 analytics,
-                                 band_half_hz=2.5,
-                                 native_tol_s=120.0,
-                                 extent_s=None,
-                                 max_missing_frac=0.10,
-                                 saturation_uv=4000.0,
-                                 tier_td="td_transform",
-                                 tier_bridge="psd_bridge"):
-    """One full-spectrum record per pain report, read out of the canonical form.
-
-    The indexed twin of `availability.per_pro_lsb_spectrum`, reproduced rule for rule: the
-    voltage-trace route first, over every centre at once, calibrated wherever the band has
-    signal; else the nearest device-spectrum record within the tolerance, over the full grid,
-    calibrated only inside the checked conversion range; the railed-window flag that stays set
-    when the bridge serves the report; the same `reason` strings. What changes is only where the
-    prepared traces and the grouped spectrum records come from.
-    """
-    from .representation import canon_channel
-
-    if extent_s is None:
-        extent_s = analytics.TRANSFORM_CENTERED_EXTENT_SECONDS
-    half = float(band_half_hz)
-    lo_hz = float(analytics.LSB_VALIDATED_HZ_LO)
-    hi_hz = float(analytics.LSB_DEPLOYABLE_HZ_HI)
-    channel = canon_channel(channel)
-    centers = np.atleast_1d(np.asarray(centers_hz, dtype=float))
-    nC = centers.size
-    cal_band = (centers >= lo_hz - 1e-9) & (centers <= hi_hz + 1e-9)
-
-    td_bucket = index.td(channel)
-    td_prepped = td_bucket["traces"]
-    td_t0 = td_bucket["t0"]
-    psd_bucket = index.psd(channel)
-    psd_t = psd_bucket["t"]
-    psd_records = psd_bucket["records"]
-
-    none_vec = [None] * nC
-    out = []
-    for tp in np.asarray(pro_times, dtype=float):
-        rec = {"t": float(tp), "tier": None, "lsb": list(none_vec),
-               "calibrated": [False] * nC, "center_hz": [float(c) for c in centers],
-               "used_s": 0.0, "saturated": False, "reason": ""}
-
-        matched_td = False
-        hi = int(np.searchsorted(td_t0, tp, side="right")) if td_t0.size else 0
-        for pr in td_prepped[:hi]:
-            if not (pr["t0"] <= tp <= pr["t1"]):
-                continue
-            fs = pr["fs"]
-            slice_uv, used_s = analytics.transform_centered_window(
-                pr["col"], fs, tp - pr["t0"], extent_s=extent_s, missing=pr["miss"],
-                max_missing_frac=max_missing_frac)
-            if slice_uv is None:
-                continue
-            if np.nanmax(np.abs(slice_uv)) >= saturation_uv:
-                rec["saturated"] = True
-                rec["reason"] = "TD window saturated (ADC rail)"
-                continue
-            bp = np.atleast_1d(analytics.td_transform_band_power(
-                slice_uv, fs, centers, half_hz=half, step_samples=pr["step"]))
-            lsb = np.where(np.isfinite(bp) & (bp > 0),
-                           analytics.LSB_PER_UV2_TRANSFORM * bp, np.nan)
-            rec["tier"] = tier_td
-            rec["lsb"] = [float(v) if np.isfinite(v) else None for v in lsb]
-            rec["calibrated"] = [bool(np.isfinite(v)) for v in lsb]
-            rec["used_s"] = float(used_s)
-            rec["saturated"] = False
-            rec["reason"] = "direct TD->LSB transform (k=%.2f)" % analytics.LSB_PER_UV2_TRANSFORM
-            matched_td = True
-            break
-        if matched_td:
-            out.append(rec)
-            continue
-
-        if psd_t.size:
-            d = np.abs(psd_t - tp)
-            j = int(np.argmin(d))            # FIRST smallest, as the linear scan's strict "<" keeps
-            if d[j] <= native_tol_s:
-                ev = psd_records[j]
-                bp = np.atleast_1d(analytics.device_psd_band_power(
-                    ev.get("freq"), ev.get("power"), centers, half_hz=half))
-                lsb = np.where(np.isfinite(bp) & (bp > 0),
-                               analytics.LSB_PER_DEVICE_PSD * bp, np.nan)
-                rec["tier"] = tier_bridge
-                rec["lsb"] = [float(v) if np.isfinite(v) else None for v in lsb]
-                rec["calibrated"] = [bool(np.isfinite(v) and cal_band[i]) for i, v in enumerate(lsb)]
-                rec["reason"] = ("PSD-only event bridge (k=%.2f); calibrated only in [%.1f,%.1f] Hz"
-                                 % (analytics.LSB_PER_DEVICE_PSD, lo_hz, hi_hz))
-                out.append(rec)
-                continue
-
-        rec["reason"] = "no TD coverage and no coincident PSD event"
         out.append(rec)
     return out
