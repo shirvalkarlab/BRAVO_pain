@@ -128,6 +128,8 @@ function Biomarkers() {
   // lifts PRO coverage to 290/682 (42.5%) of the matched discovery pool (measured on RCS08, vas,
   // pro_first, ±60 min — matching the offline validation pool; see FIXHANDOUT_pro_timezone_mismatch).
   const [matchTolerance, setMatchTolerance] = useState(P.matchTolerance != null ? P.matchTolerance : 60);
+  // Debounced copy, declared here because the availability fetch above the scan model reads it.
+  const matchToleranceD = useDebounced(matchTolerance);
   // Per-rating CAP for the exploratory scan (replaces the old all-vs-one-per-rating toggle, which
   // it subsumes): how many PSDs a single pain rating may absorb PER CHANNEL, and the refractory gap
   // (minutes) enforced among the kept set so a streaming burst around one survey can't double-count.
@@ -161,11 +163,8 @@ function Biomarkers() {
   // scan/compute below, not the timeline). This was a hardcoded 120 s with no request path at all
   // until the backend wiring above; default kept at the historical 120 s so nothing already drawn
   // moves until this slider is touched.
-  const [nativeLsbToleranceSec, setNativeLsbToleranceSec] = useState(
-    P.nativeLsbToleranceSec != null ? P.nativeLsbToleranceSec : 120);
   // Declared here (rather than beside the other debounced copies below) because the always-on
   // data-availability fetch effect, which needs it, runs earlier in this component than that block.
-  const nativeLsbToleranceSecD = useDebounced(nativeLsbToleranceSec);
   // Timeline color mode: "multimodal" colors the neural lanes by sensing center frequency (the data
   // view); "binarization" recolors every modality LIVE by its high/low/excluded pain label at the
   // current match window (matched-and-included = vermillion/blue, everything else dimmed light grey),
@@ -221,7 +220,6 @@ function Biomarkers() {
     MatchExtentSec: matchExtentSec,
     AllowWindowReuse: allowWindowReuse,
     SlidingWindow: slidingWindow,
-    NativeLsbToleranceSec: nativeLsbToleranceSec,
   });
   /**
    * ASKING FOR A REBUILD, WHICH TAKES MORE THAN SETTING THE REQUEST.
@@ -346,11 +344,11 @@ function Biomarkers() {
     saveControls(participant_uid, {
       metric, strategy, percentileLow, percentileHigh, matchTolerance,
       maxPerRating, refractoryMin, matchDirection, timelineColorMode, requestParams,
-      matchExtentSec, allowWindowReuse, nativeLsbToleranceSec,
+      matchExtentSec, allowWindowReuse,
     });
   }, [participant_uid, metric, strategy, percentileLow, percentileHigh, matchTolerance,
     maxPerRating, refractoryMin, matchDirection, timelineColorMode, requestParams,
-    matchExtentSec, allowWindowReuse, nativeLsbToleranceSec]);
+    matchExtentSec, allowWindowReuse]);
 
   // Fetch raw pain-score reports ONCE per participant (no LFP, just the PRO surveys) so the
   // binarization preview card can show a live histogram with cuts before any heavy compute.
@@ -366,23 +364,25 @@ function Biomarkers() {
   }, [participant_uid]);
 
   // Fetch the data-availability payload per participant (lightweight, no biomarker compute), so the
-  // timeline renders immediately on page load. Also refetches when the native-LSB-tolerance knob
-  // settles: that value is the ONLY matching control this lightweight endpoint reads, because it is
-  // the one that changes what the timeline itself draws (av.pro_lsb, the per-rating sensed-band-power
-  // circles) rather than only the exploratory scan/compute below — so it is the one knob on this page
-  // whose effect is live on the timeline rather than gated behind Compute.
+  // timeline renders immediately on page load. Also refetches when the main match-tolerance slider
+  // settles: the timeline's per-rating circles (av.pro_lsb) are paired with recordings under THAT
+  // window -- the one slider on the page, on the histogram card. Until 2026-09-10 the circles had a
+  // second slider of their own ("Timeline's own match window", seconds, default 120 s), so the
+  // circles and everything else paired under two different windows; the PI removed it (decision
+  // 120). The tolerance is the only matching control this lightweight endpoint reads, because it
+  // is the one that changes what the timeline itself draws; the rest take effect on Compute.
   useEffect(() => {
     if (!participant_uid) return;
     setAvailLoading(true);
     SessionController.query("/api/queryDataAvailability", {
-      ParticipantId: participant_uid, NativeLsbToleranceSec: nativeLsbToleranceSecD,
+      ParticipantId: participant_uid, MatchToleranceMin: matchToleranceD,
     })
       .then((response) => {
         setAvailData(response.data);
         setAvailLoading(false);
       })
       .catch(() => { setAvailLoading(false); /* timeline is optional — degrade silently */ });
-  }, [participant_uid, nativeLsbToleranceSecD]);
+  }, [participant_uid, matchToleranceD]);
 
   // The object handed to the timeline: prefer the live availability payload; fall back to the
   // availability embedded in a heavy compute result if the live fetch is unavailable.
@@ -475,7 +475,6 @@ function Biomarkers() {
   // states stay live everywhere else (slider thumbs, value labels, the binarization preview's
   // cut-lines and counts); only the expensive scanModel + timeline overlay wait for the drag to
   // settle, so all of these sliders now feel as snappy as the survey-match one.
-  const matchToleranceD = useDebounced(matchTolerance);
   const percentileLowD = useDebounced(percentileLow);
   const percentileHighD = useDebounced(percentileHigh);
   const maxPerRatingD = useDebounced(maxPerRating);
@@ -667,12 +666,11 @@ function Biomarkers() {
                                   them recolors anything live on screen the way the main match-
                                   tolerance slider does (that one stays in the histogram panel to the
                                   right, directly above the histogram it recolors — see its own note
-                                  below). Every knob here is either sent on every Compute press
+                                  below). Every knob here is sent on every Compute press
                                   (matchDirection, maxPerRating, refractoryMin, matchExtentSec,
-                                  allowWindowReuse) or fires its own live request when it settles
-                                  (nativeLsbToleranceSec, which updates the timeline's per-rating
-                                  circles directly, so it lives here rather than only taking effect
-                                  on Compute). */}
+                                  allowWindowReuse). The timeline's circles follow the main
+                                  match-tolerance slider as well, live, since 2026-09-10 (decision
+                                  120); they used to have a second slider of their own here. */}
                               <MDTypography variant="button" fontWeight="bold" color="dark"
                                 sx={{ fontSize: 15, display: "block", mt: 2 }}>
                                 {"Pain-report matching — which recording counts as evidence for a rating"}
@@ -796,32 +794,6 @@ function Biomarkers() {
                                 )}
                               </MDBox>
 
-                              {/* Timeline's own per-rating sensed-band-power match window (seconds).
-                                  Separate from the main match-tolerance slider above (minutes; governs
-                                  the exploratory scan/compute) — this one governs ONLY the timeline's
-                                  circles (av.pro_lsb) and fires its own request when it settles, so
-                                  moving it recolors the timeline directly instead of waiting for
-                                  Compute. Historical hardcoded default (120 s) kept as the default. */}
-                              <MDBox mt={1.5}>
-                                <MDTypography variant="caption" fontWeight="bold" color="dark"
-                                  sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
-                                  {`Timeline's own match window (${nativeLsbToleranceSec} s)`}
-                                </MDTypography>
-                                <MDBox px={0.5}>
-                                  <Slider
-                                    value={nativeLsbToleranceSec} min={1} max={600} step={1}
-                                    valueLabelDisplay="auto" size="small"
-                                    aria-label="timeline sensed-band-power match window (seconds)"
-                                    onChange={(e, v) => setNativeLsbToleranceSec(v)} />
-                                </MDBox>
-                                <MDTypography variant="caption" color="dark" fontStyle="italic"
-                                  sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
-                                  {"How far from a pain report's timestamp a device-sensed reading may sit and "
-                                   + "still set that rating's circle on the timeline above. Separate from the main "
-                                   + `match tolerance (±${matchTolerance} min, set on the histogram to the `
-                                   + "right — it governs the exploratory scan and Compute below, not the timeline)."}
-                                </MDTypography>
-                              </MDBox>
                             </MDBox>
                           </Grid>
 

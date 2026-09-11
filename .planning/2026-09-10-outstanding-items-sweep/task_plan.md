@@ -7,7 +7,7 @@ two, three, etc."), each item proven on live data or in the served bundle before
 ## Next Step
 Item 6 (Phase 6): housekeeping first (agent worktrees pinned to an old commit; .mcp.json), then
 the closed-loop simulation module design -- which overlaps the PI's Phase 7 brief and may belong
-in that session. Open question to the PI from Phase 5: cap sessions per report in align_pros? **The PI will open a NEW session for Phase 7, the
+in that session. The Phase 5 window question is settled by decision 120 (one window for the page); the cap question stays open. **The PI will open a NEW session for Phase 7, the
 Closed-Loop page redesign; his brief is in findings.md §3 and must be read first there.**
 
 ## Current Phase
@@ -109,3 +109,9 @@ either a held/cached count, a different filter (metric-filtered vs all), or a va
 - [x] 599/315 = Left Leg VAS (and Back VAS); 764/373 = NRS/VAS/Relief. Not stale -- unlabelled.
 - [x] Score named in both captions + "764 reports in the record"; watched switching NRS -> Left Leg
       VAS on the live page. Decision 119.
+
+### Phase 9: DECIDED BY THE PI 2026-09-10 — one match window for the whole Biomarkers page
+**Status:** complete
+- [x] "Timeline's own match window" slider removed; circles follow the main tolerance slider
+- [x] Measured before: 120 s -> 60 min gives 345 -> 790 circles; after: live page returns 790
+- [x] Container 626/0; bundle rebuilt; workers reloaded. Decision 120.

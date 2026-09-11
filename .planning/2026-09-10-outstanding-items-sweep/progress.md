@@ -37,3 +37,5 @@
 - Phase 8 done, decision 119: the 599/315 was Left Leg VAS's own count, unlabelled; both captions
   now name the score and show "764 reports in the record". Watched on the live page (NRS -> Left
   Leg VAS). Browser had cached index.html; forced reload to the new main chunk.
+- Phase 9 done, decision 120: second slider removed; circles follow the main tolerance. 345 -> 790
+  circles measured before; live page returns 790 after. Container 626/0. Workers HUP'd.

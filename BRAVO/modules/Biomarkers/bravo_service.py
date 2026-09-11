@@ -3604,16 +3604,21 @@ def _match_tolerance_param(request_data):
 
 
 def _native_lsb_tolerance_param(request_data):
-    """Resolve the timeline's per-PRO native-LSB match window (seconds) from the request.
+    """The timeline circles' match window, in seconds: THE MAIN MATCH TOLERANCE, converted.
 
-    This is `availability.per_pro_lsb`'s own tolerance -- how far from a pain report's timestamp a
-    device-sensed reading may sit and still set that rating's timeline circle. Was a Python default
-    with no request path at all (hardcoded 120 s, decision 73/76's shared-matching-layer work);
-    reading it here, with the same default, is what makes it reachable from a knob rather than
-    fixed. `NativeLsbToleranceSec` absent or non-numeric keeps the historical default so nothing
-    already computed changes unless a caller deliberately sets it.
+    `availability.per_pro_lsb`'s own tolerance -- how far from a pain report's timestamp a
+    device-sensed reading may sit and still set that rating's timeline circle. Until 2026-09-10 this
+    was its own request field (`NativeLsbToleranceSec`, default 120 s) behind its own slider on the
+    page, "Timeline's own match window", so the circles and everything else on the page paired
+    ratings with recordings under two different windows. The PI removed the second control
+    (decision 120): the circles now follow the one match-tolerance slider on the histogram card,
+    read here as `MatchToleranceMin` and turned into seconds. A request with matching disabled
+    (a zero or negative tolerance) or with no tolerance at all gets the slider's own default.
     """
-    return _float_param(request_data, "NativeLsbToleranceSec", default=120.0, lo=1.0, hi=3600.0)
+    tol_min = _match_tolerance_param(request_data)
+    if tol_min is None or tol_min <= 0:
+        tol_min = DEFAULT_MATCH_TOLERANCE_MIN
+    return float(tol_min) * 60.0
 
 
 def _window_params_body(request_data, sliding):
