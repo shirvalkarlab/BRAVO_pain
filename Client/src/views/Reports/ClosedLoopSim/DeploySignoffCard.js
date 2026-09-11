@@ -7,12 +7,14 @@
  * for the device-programming record. This is a SUMMARY, not a new analysis — every number here is
  * the same one the Phase B–D panels show, gathered in one place.
  */
+import { useEffect, useState } from "react";
 import { Card, Grid, Icon } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDButton from "components/MDButton";
 
 import useDeploymentSummary from "./useDeploymentSummary";
+import { captureFigureSnapshots } from "./figureSnapshots";
 import PAL from "./palette";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
@@ -137,8 +139,48 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
     degenerate: !!cutpoint.degenerate,
   } : null;
 
-  const exportJson = () => {
+  // PICTURES OF THE FIGURES ON THE RECORD (audit item [49]). Taken in the browser at the moment
+  // Print or Export is pressed, from the figures as drawn on this page, so the sheet shows the
+  // operating point the reader chose and not a server's idea of it. `snapshots` holds the last
+  // capture and is drawn inside this card, which is what lets the print stylesheet carry it: that
+  // stylesheet shows `.cl-signoff-card *` and hides everything else. `printPending` is the reason
+  // the capture and the print are two steps -- window.print() blocks, so the pictures must be in
+  // the document BEFORE it is called, and React commits them only after this render returns.
+  const [snapshots, setSnapshots] = useState(null);
+  const [capturing, setCapturing] = useState(false);
+  const [printPending, setPrintPending] = useState(false);
+
+  const takeSnapshots = async () => {
+    setCapturing(true);
+    try {
+      const snap = await captureFigureSnapshots();
+      setSnapshots(snap);
+      return snap;
+    } catch (e) {
+      const snap = { figures: [], missing: [], captured_at: new Date().toISOString(),
+        error: `figures could not be captured (${e && e.message ? e.message : e})` };
+      setSnapshots(snap);
+      return snap;
+    } finally {
+      setCapturing(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!printPending || capturing || !snapshots) return;
+    setPrintPending(false);
+    // The pictures are in the document now; print on the next frame so their <img> nodes have laid out.
+    window.requestAnimationFrame(() => window.print());
+  }, [printPending, capturing, snapshots]);
+
+  const printWithFigures = async () => {
+    setPrintPending(true);
+    await takeSnapshots();
+  };
+
+  const exportJson = async () => {
     if (!data) return;
+    const snap = await takeSnapshots();
     const blob = new Blob([JSON.stringify({ schema_version: "deploy_signoff_v1",
       generated_at: new Date().toISOString(), operating_point: opProvenance, summary: data,
       // Carried in the FILE, not only on the screen. An export is the most durable form this
@@ -148,7 +190,15 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
       // cannot be reconciled against anything later.
       inputs_stale: inputsStale,
       inputs_stale_reasons: inputsStale ? staleWhy : [],
-      summary_computed_at: computedAt ? new Date(computedAt).toISOString() : null }, null, 2)],
+      summary_computed_at: computedAt ? new Date(computedAt).toISOString() : null,
+      // The figures as drawn when the file was made, as PNG data URLs, plus the ones that were NOT
+      // on the page at that moment -- a record that is silent about a missing figure reads as if
+      // there had been none.
+      figures: snap.figures.map((f) => ({ section_id: f.section_id, title: f.title, index: f.index,
+        n_in_section: f.n_in_section, width_px: f.width_px, height_px: f.height_px,
+        image_data_url: f.image_data_url })),
+      figures_missing: snap.missing,
+      figures_captured_at: snap.captured_at }, null, 2)],
       { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -221,10 +271,10 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
           <MDTypography variant="h5" sx={{ fontSize: 18 }}>Deploy-to-Percept review</MDTypography>
           {data ? (
             <MDBox className="cl-signoff-actions">
-              <MDButton size="small" variant="outlined" color="dark" onClick={() => window.print()} sx={{ mr: 1 }}>
-                Print
+              <MDButton size="small" variant="outlined" color="dark" onClick={printWithFigures} disabled={capturing} sx={{ mr: 1 }}>
+                {capturing ? "Capturing figures…" : "Print"}
               </MDButton>
-              <MDButton size="small" variant="gradient" color="info" onClick={exportJson}>
+              <MDButton size="small" variant="gradient" color="info" onClick={exportJson} disabled={capturing}>
                 Export JSON
               </MDButton>
             </MDBox>
@@ -417,6 +467,46 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                 </MDBox>
               </Grid>
             </Grid>
+
+            {/* THE PICTURES. Present only after Print or Export has taken them, and drawn INSIDE this
+                card so the print stylesheet (which shows only this card and the verdict strip)
+                carries them onto paper. Each figure is captioned with the section it came from, and a
+                section whose figure was not on the page is named as missing rather than left out. */}
+            {snapshots ? (
+              <MDBox className="cl-signoff-figures" mt={2} pt={1.5} sx={{ borderTop: "1px solid #e0e0e0" }}>
+                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: "#999" }}>
+                  FIGURES AS DRAWN WHEN THIS RECORD WAS MADE
+                  {snapshots.captured_at ? ` — ${new Date(snapshots.captured_at).toLocaleString()}` : ""}
+                </MDTypography>
+                {snapshots.error ? (
+                  <MDTypography variant="caption" display="block" sx={{ fontSize: 10, color: PAL.fail }}>
+                    {snapshots.error}
+                  </MDTypography>
+                ) : null}
+                {snapshots.figures.map((f) => (
+                  <MDBox key={`${f.section_id}-${f.index}`} mt={1} sx={{ pageBreakInside: "avoid" }}>
+                    <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, fontWeight: "bold" }}>
+                      {f.n_in_section > 1 ? `${f.title} (${f.index} of ${f.n_in_section})` : f.title}
+                    </MDTypography>
+                    <img src={f.image_data_url} alt={f.title}
+                      style={{ display: "block", maxWidth: "100%", height: "auto", border: "1px solid #eee" }} />
+                  </MDBox>
+                ))}
+                {snapshots.missing.length ? (
+                  <MDBox mt={1}>
+                    <MDTypography variant="caption" display="block" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.warnText }}>
+                      NOT ON THIS RECORD
+                    </MDTypography>
+                    {snapshots.missing.map((m) => (
+                      <MDTypography key={m.section_id + m.reason} variant="caption" display="block"
+                        sx={{ fontSize: 10, color: PAL.warnText }}>
+                        {`${m.title}: ${m.reason}`}
+                      </MDTypography>
+                    ))}
+                  </MDBox>
+                ) : null}
+              </MDBox>
+            ) : null}
           </>
         ) : null}
       </MDBox>
