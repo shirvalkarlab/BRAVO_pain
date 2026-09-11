@@ -474,9 +474,34 @@ def test_an_oversized_entry_is_refused_rather_than_filling_the_disk(monkeypatch)
 
 def test_no_directory_means_memory_only_and_not_a_failure(monkeypatch):
     """The unit tests and any script running without the platform configured have nowhere to write,
-    and that must simply mean the files are not used."""
-    monkeypatch.setattr(AD, "_SHARED_CACHE_DIR_OVERRIDE", None)
-    monkeypatch.setattr(AD, "shared_cache_dir", lambda: None)
+    and that must simply mean the files are not used.
+
+    UPDATED 2026-09-10, the same correction the Biomarkers twin of this test received on
+    2026-09-07 (`test_shared_raw_lsb_cache.test_no_directory_means_memory_only_and_is_not_an_error`).
+    It used to create the condition by clearing this module's directory override and stubbing
+    `shared_cache_dir` -- which only removes the override; the store's own resolver then falls
+    through to Django's `DATASERVER_PATH`, so on a configured machine (the live container, where
+    the host suite has been run since decision 84) the write really LANDED in the production
+    cache and, worse, its cleanup step evicted a real participant's current entry (decision 84's
+    own finding). It failed on every such run for that reason and passed only where Django had no
+    path at all. The store carries an explicit off switch for exactly this condition; that is what
+    the test now expresses, so it means the same thing on every machine and writes nothing anywhere.
+
+    AND THE OVERRIDE IS DELIBERATELY LEFT ALONE. The old version also set this module's directory
+    override to None, and that was the destructive half: pytest undoes a monkeypatch only AFTER the
+    autouse fixture's teardown has run, and that teardown calls `clear_shared_cache()` -- so with
+    the override at None it cleared the PRODUCTION cache root, deleting every closed-loop entry the
+    page had stored, on every run of this suite inside the container. The ledger on 2026-09-10
+    showed the page writing its `inputs` entry five times in one day and the directory empty each
+    time the suite had run since. With the off switch alone, `shared_cache_dir()` is None for the
+    duration of the test and the teardown's clear reaches nothing.
+    """
+    try:
+        from modules.CacheStore import store as _cs
+    except ImportError:
+        from CacheStore import store as _cs
+    monkeypatch.setattr(_cs, "ENABLED", False)
+    assert AD.shared_cache_dir() is None
     assert AD._shared_store("inputs", ("k",), "v") is False
     assert AD._shared_load("inputs", ("k",)) is None
 

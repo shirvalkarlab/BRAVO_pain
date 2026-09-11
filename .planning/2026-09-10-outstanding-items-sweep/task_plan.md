@@ -5,12 +5,13 @@ Work the outstanding-items list of 2026-09-10 in the PI's order ("start with num
 two, three, etc."), each item proven on live data or in the served bundle before the next starts.
 
 ## Next Step
-Item 4: the permanently failing host test made honest. Item 3 is folded into Phase 7 (the
-redesign of the same page) rather than polished now, per the PI ("go on to item 4"). **The PI will open a NEW session for Phase 7, the
+Item 5 (Phase 5): the shared matching step -- migrate the four call sites one at a time, each
+with its own field-count/difference-count proof on RCS08. Real risk to live numbers; each move
+its own commit. **The PI will open a NEW session for Phase 7, the
 Closed-Loop page redesign; his brief is in findings.md §3 and must be read first there.**
 
 ## Current Phase
-Phase 4
+Phase 5
 
 ## Phases
 
@@ -38,7 +39,11 @@ Phase 4
 - [x] Folded into Phase 7, which redesigns the same page; polishing labels first would be thrown away
 
 ### Phase 4: The permanently failing host test made honest
-**Status:** pending
+**Status:** complete
+- [x] Root cause found by measuring: the old test's override=None survived into the fixture's
+      teardown, whose clear_shared_cache() then wiped the PRODUCTION closed_loop cache on every run
+- [x] Fixed through the store's off switch alone; old test 2->0 files, new test 2->2, full suite 2->2
+- [x] Host 1019 passed / 42 skipped / 0 failed -- first fully green host run in the container
 
 ### Phase 5: Shared matching step — migrate the four call sites, one at a time
 **Status:** pending

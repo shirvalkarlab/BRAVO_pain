@@ -23,3 +23,7 @@
   tests) deleted — decision 115. Trap met and caught: `CENTERS` lived in the removed test block and
   the tile-cache test still needs it. Container 626/0; host 1018/42/1 known. House rule added: never
   write "spectrum" bare. Item 3 folded into Phase 7. Suite logs now saved to /tmp/claude-502/.
+- Item 4 done, decision 116. The always-failing host test was also wiping the production
+  closed_loop cache on every suite run (fixture teardown + override=None). Measured: old test 2->0
+  files, new 2->2, full host suite 1019/42/0 with the directory intact. Host run logged to
+  /tmp/claude-502/host_item4.log.
