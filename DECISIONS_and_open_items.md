@@ -370,13 +370,11 @@ hygiene as a work item — the latter is an operational note in `OPERATIONS_runb
     by what they are called ON SCREEN (corrected 2026-09-10 — the earlier wording said "reports"
     and "the printed sheet", which are not the names of anything on the page):
 
-    - **Two panels on that page count "how many independent things do we have" differently, and
-      nobody has said which is right.** The evidence block near the top reads "N samples across M
-      *weekly eras*" — the mixed-effects model groups the data by week. The ROC panel lower down
-      reads "N samples · M *independent ratings*" — its bootstrap groups by individual pain rating.
-      Same data, two different counts of independence on one screen. **Needs the PI's call before
-      coding**: either relabel the ROC panel so the difference is explicit, or make both use one
-      unit.
+    - ~~Two panels on that page count "how many independent things do we have" differently.~~
+      **DONE 2026-09-10, his choice: relabel.** The block near the top now reads "Samples, grouped
+      by week: N" and the ROC panel reads "N samples · M independent PRO clusters in time occurring
+      >= XX mins apart", with XX the real gap. The two counts are different on purpose and the
+      labels now say why.
     - **The card titled "Deploy-to-Percept review"** — the sign-off card at the bottom of the page,
       whose code describes it as printable — needs pictures of the four figures embedded in it.
       Needs the container, because the figure-to-image export is broken in the sandbox.
