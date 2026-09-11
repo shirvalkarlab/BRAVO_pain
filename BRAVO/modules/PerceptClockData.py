@@ -8,6 +8,7 @@ import copy
 import hashlib
 import json
 import io
+import math
 from pathlib import Path
 from contextlib import nullcontext, redirect_stdout, redirect_stderr
 
@@ -20,6 +21,34 @@ EVENT_TYPE = "PatientControllerEvent"
 
 
 _NATIVE_ORIGINAL = "_BRAVO_CLOCK_ORIGINAL_START"
+
+
+def _same_source_index(stored, generated):
+    """Accept one binary64 storage step only in native alias time scalars.
+
+    MySQL JSON can round these derived values to an adjacent binary64 number.
+    Coordinates, anchors, versions, native hashes and all other fields remain
+    exact; neither the stored index nor the newly derived index is modified.
+    """
+    if stored == generated:
+        return True
+    if not isinstance(stored, dict) or not isinstance(generated, dict):
+        return False
+    left, right = stored.copy(), generated.copy()
+    a, b = left.pop("decoded_start_aliases", None), right.pop("decoded_start_aliases", None)
+    if left != right or not isinstance(a, list) or not isinstance(b, list) or len(a) != len(b):
+        return False
+    for old, new in zip(a, b):
+        if not isinstance(old, dict) or not isinstance(new, dict):
+            return False
+        old, new = old.copy(), new.copy()
+        for key in ("decoded_raw", "original_raw", "sample_start_offset_seconds"):
+            x, y = PerceptClock.number(old.pop(key, None)), PerceptClock.number(new.pop(key, None))
+            if x is None or y is None or (x != y and math.nextafter(x, y) != y):
+                return False
+        if old != new:
+            return False
+    return True
 
 
 def _start_alias(stream, decoded, recording_type, source_kind):
@@ -103,7 +132,7 @@ def extract_source_index(payload):
 def stamp_source(source, payload):
     """Set a derived index on the source object; its caller owns persistence."""
     index = extract_source_index(payload)
-    changed = (source.metadata or {}).get(KEY) != index
+    changed = not _same_source_index((source.metadata or {}).get(KEY), index)
     if changed:
         source.metadata = {**(source.metadata or {}), KEY: index}
     return changed
@@ -322,7 +351,7 @@ def index_participant(participant, *, apply=False):
                         or (source.metadata or {}).get("AnalysisExclusion")):
                     raise RuntimeError("Clock source changed during indexing; retry from current inputs")
             original_hash, original_pointer = source.hashed, source.pointer
-            if (source.metadata or {}).get(KEY) != index:
+            if not _same_source_index((source.metadata or {}).get(KEY), index):
                 result["source_indexes_changed"] += 1
                 if apply:
                     source.metadata = {**(source.metadata or {}), KEY: index}

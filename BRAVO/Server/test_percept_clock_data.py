@@ -130,6 +130,45 @@ class ClockDataTests(unittest.TestCase):
         self.assertEqual(payload, untouched)
         self.source.save.assert_not_called()
 
+    def test_native_alias_json_roundtrip_is_idempotent_without_changing_values(self):
+        index = self.clock.extract_source(self.payload())
+        index['decoded_start_aliases'] = [{
+            'decoded_raw':1773950280.8999999, 'original_raw':1773950280.,
+            'sample_start_offset_seconds':.40000009536743164,
+            'block':7, 'counter':200, 'recording_type':'MedtronicBrainSenseTimeDomain',
+            'source_kind':'BrainSenseTimeDomain'}]
+        stored = copy.deepcopy(index)
+        for key in ('decoded_raw','original_raw','sample_start_offset_seconds'):
+            stored['decoded_start_aliases'][0][key] = math.nextafter(index['decoded_start_aliases'][0][key], math.inf)
+        before = copy.deepcopy(stored)
+        self.assertTrue(self.adapter._same_source_index(stored,index))
+        self.assertEqual(stored,before)
+        self.source.metadata[self.adapter.KEY] = stored
+        with patch.object(self.adapter,'extract_source_index',return_value=index):
+            self.assertFalse(self.adapter.stamp_source(self.source,self.payload()))
+        self.assertEqual(self.source.metadata[self.adapter.KEY],before)
+        for field in ('decoded_raw','original_raw','sample_start_offset_seconds'):
+            bad=copy.deepcopy(stored)
+            bad['decoded_start_aliases'][0][field]=math.nextafter(bad['decoded_start_aliases'][0][field],math.inf)
+            self.assertFalse(self.adapter._same_source_index(bad,index))
+        for field,value in [('counter',201),('block',8),('source_kind','other')]:
+            bad=copy.deepcopy(stored);bad['decoded_start_aliases'][0][field]=value
+            self.assertFalse(self.adapter._same_source_index(bad,index))
+        for field,value in [('version','old'),('anchors',[])]:
+            bad=copy.deepcopy(stored);bad[field]=value
+            self.assertFalse(self.adapter._same_source_index(bad,index))
+        for value in (None,{},[],[None],stored['decoded_start_aliases']*2):
+            bad=copy.deepcopy(stored);bad['decoded_start_aliases']=value
+            self.assertFalse(self.adapter._same_source_index(bad,index))
+            self.assertFalse(self.adapter._same_source_index(index,bad))
+        for value in (None,[],1):
+            self.assertFalse(self.adapter._same_source_index(value,index))
+            self.assertFalse(self.adapter._same_source_index(index,value))
+        for value in (None,float('inf'),True):
+            bad=copy.deepcopy(stored);bad['decoded_start_aliases'][0]['decoded_raw']=value
+            self.assertFalse(self.adapter._same_source_index(bad,index))
+            self.assertFalse(self.adapter._same_source_index(index,bad))
+
     def test_default_dry_run_makes_no_changes_and_reports_missing_psd(self):
         result = self.adapter.index_participant(self.person)
         self.assertFalse(result["apply"])
