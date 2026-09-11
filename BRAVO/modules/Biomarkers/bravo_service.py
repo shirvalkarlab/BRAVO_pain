@@ -6060,6 +6060,11 @@ def band_deployment_roc(request_data):
         "band_width_hz": _ff(band_width_hz),
         "label_metric": core["label_metric"],
         "match_direction": core["match_direction"],
+        # The gap that defines an independent cluster of pain reports: two reports closer together
+        # than this are one cluster, not two. Reported so the ROC panel can say what its "N
+        # independent clusters" actually means instead of leaving the reader to guess (PI,
+        # 2026-09-10).
+        "refractory_min": _ff(core.get("refractory_min")),
         "roc": roc,
         "forward": forward,
     }

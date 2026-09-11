@@ -539,7 +539,8 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
                   Operating point chosen on these data — sensitivity/specificity are optimistic; expect lower accuracy on new ratings.
                 </MDTypography>
                 <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 10, mt: 0.3 }}>
-                  {`${roc.n_samples} samples, grouped by rating: ${roc.n_clusters} ratings · `
+                  {`${roc.n_samples} samples · ${roc.n_clusters} independent PRO clusters in time `
+                    + `occurring >= ${env.refractory_min != null ? fmt(env.refractory_min, 0) : "?"} mins apart · `
                     + `prevalence ${fmt(roc.prevalence)} · ${roc.n_boot_ok} bootstrap replicates · `
                     + `match: ${matchDir}`}
                 </MDTypography>
