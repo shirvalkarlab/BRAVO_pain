@@ -206,9 +206,11 @@ hygiene as a work item — the latter is an operational note in `OPERATIONS_runb
    that would have made the whole thing a no-op reporting success — six scores stored, one file
    left on disk.
 
-8. **The example data shown in the Biomarkers module is not informative.** Raised in passing
+~~8~~. **RESOLVED 2026-09-10, decision 110 — deleted.** It was a built-in fake patient with a
+   noiseless made-up signal; the PI judged it useless and it is gone.
+   ~~The example data shown in the Biomarkers module is not informative.** Raised in passing
    2026-09-08 while reviewing live output; not investigated further yet. Address during the same
-   feature-polishing pass as item 7, not before.
+   feature-polishing pass as item 7, not before.~~
 
 ~~9. **Whether to fix the entangled pass's missing zero-fill rejection now, as its own change, or
    defer it.**~~ **RESOLVED 2026-09-08.** He chose to fix now and measure first, and asked for the
