@@ -271,6 +271,14 @@ hygiene as a work item — the latter is an operational note in `OPERATIONS_runb
     panel "How big a change in this patient's own rating means anything?" prints the pair and
     stretch counts and nothing about whether stimulation was on. His call.
 
+29. **The Agent tool's worktrees start from the repository's default branch, `v3.1.0`, which is
+    months behind `PS_closedloop_deployment`** (decision 102 met this: two agents ran at `39dfb2f8`,
+    a checkout with no `DecodeCommon` and no `CLAUDE.md`). On 2026-09-10 three such stale worktrees
+    were found and removed. The cause is a repository setting, not code: `origin/HEAD` points at
+    `v3.1.0`. Two ways out, both his call: merge this branch into `v3.1.0` (a release decision), or
+    move the default branch to `PS_closedloop_deployment`. Until one happens, an agent worktree is
+    not a useful isolation here.
+
 ### Open engineering, not blocked on anyone
 
 ~~26~~. **RESOLVED 2026-09-10, decision 106.** ~~The length-of-signal axis of the calibrated grid means nothing for a cell served by the

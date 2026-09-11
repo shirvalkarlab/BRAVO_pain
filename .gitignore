@@ -406,3 +406,6 @@ handoff_*.png
 !HANDOFF_2026-09-07_cache_store_to_claude_code.md
 !HANDOFF_2026-09-08_biomarkers_grids_and_pro_cache.md
 !docs/archive/**/*.md
+
+# Local MCP tool configuration for this machine (npx servers); not project code.
+/.mcp.json

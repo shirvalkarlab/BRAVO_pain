@@ -5,13 +5,13 @@ Work the outstanding-items list of 2026-09-10 in the PI's order ("start with num
 two, three, etc."), each item proven on live data or in the served bundle before the next starts.
 
 ## Next Step
-Item 6 (Phase 6): housekeeping first (agent worktrees pinned to an old commit; .mcp.json), then
-the closed-loop simulation module design -- which overlaps the PI's Phase 7 brief and may belong
-in that session. The Phase 5 window question is settled by decision 120 (one window for the page); the cap question stays open. **The PI will open a NEW session for Phase 7, the
+Phase 10: the calibrated heat map grids -- remove the dash markers, and make a rating served from
+the device's FFT snapshots honour the length-of-signal axis (30 s per snapshot; a rating without
+enough snapshots for a row contributes nothing to that row). The Phase 5 window question is settled by decision 120 (one window for the page); the cap question stays open. **The PI will open a NEW session for Phase 7, the
 Closed-Loop page redesign; his brief is in findings.md §3 and must be read first there.**
 
 ## Current Phase
-Phase 6
+Phase 10
 
 ## Phases
 
@@ -57,7 +57,11 @@ Phase 6
       (263 sessions, max 24); per_pro_lsb sharing at most 2 pairs per contact. Cap decision -> PI.
 
 ### Phase 6: Closed-loop simulation module design; housekeeping (worktrees, .mcp.json)
-**Status:** pending
+**Status:** complete
+- [x] Three stale agent worktrees at 39dfb2f8 removed; root cause (default branch = v3.1.0) is the
+      PI's call, recorded as open item 29
+- [x] `.mcp.json` ignored (local tool configuration)
+- [x] Closed-loop simulation design deferred to the Phase 7 session, which redesigns that page
 
 ### Phase 7: CL closed-loop page redesign — NEXT SESSION, the PI's brief of 2026-09-10
 **Status:** pending
