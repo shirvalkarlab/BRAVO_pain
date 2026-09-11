@@ -7,7 +7,9 @@ Physical duplicate suppression belongs to the canonical analysis view.
 import copy
 import hashlib
 import json
-from contextlib import nullcontext
+import io
+from pathlib import Path
+from contextlib import nullcontext, redirect_stdout, redirect_stderr
 
 from django.db import transaction
 from Server import models
@@ -17,9 +19,90 @@ KEY = "PerceptClock"
 EVENT_TYPE = "PatientControllerEvent"
 
 
+_NATIVE_ORIGINAL = "_BRAVO_CLOCK_ORIGINAL_START"
+
+
+def _start_alias(stream, decoded, recording_type, source_kind):
+    original = PerceptClock.number(stream.get(_NATIVE_ORIGINAL))
+    decoded = PerceptClock.number(decoded)
+    position = PerceptClock.coordinate(stream.get("FirstPacketDateTimeBlockId"),
+                                       stream.get("FirstPacketDateTimeOffsetInSeconds"))
+    if original is None or decoded is None or position is None:
+        return None
+    return {"decoded_raw": decoded, "original_raw": original,
+            "block": position[0], "counter": position[1],
+            "sample_start_offset_seconds": decoded - original,
+            "recording_type": recording_type, "source_kind": source_kind}
+
+
+def extract_source_index(payload):
+    """Derive scalar aliases with accepted native rules, keeping raw inputs intact.
+
+    Native modality failures are explicit and isolated: no aliases from a failed
+    modality are accepted, while valid programmer anchors/event evidence survive.
+    Authentication and raw JSON parsing occur outside this helper and stay fatal.
+    """
+    index = PerceptClock.extract_source(payload)
+    index["decoded_start_aliases"] = []
+    index["decoded_start_diagnostics"] = []
+    native_root = Path(__file__).parent / "MedtronicPercept"
+    index["native_start_rule_hashes"] = {
+        name: hashlib.sha256((native_root / name).read_bytes()).hexdigest()
+        for name in ("Percept.py", "IndefiniteStream.py", "BrainSenseStream.py")}
+    for source_kind, output_key, extractor_name, recording_type in (
+        ("BrainSenseTimeDomain", "StreamingTD", "extractTimeDomainStreamingData", "MedtronicBrainSenseTimeDomain"),
+        ("BrainSenseLfp", "StreamingPower", "extractPowerDomainStreamingData", "MedtronicBrainSensePowerDomain"),
+        ("IndefiniteStreaming", "IndefiniteStream", "extractIndefiniteStreaming", "MedtronicIndefiniteStream"),
+    ):
+        if not isinstance(payload, dict) or source_kind not in payload:
+            continue
+        diagnostic = {"source_kind": source_kind, "recording_type": recording_type}
+        log = io.StringIO()
+        try:
+            # Mark before native extraction; markers survive deep copies, drops,
+            # tick reordering and timestamp alignment. Never pair by list index.
+            streams = copy.deepcopy(payload[source_kind])
+            for stream in streams:
+                stream[_NATIVE_ORIGINAL] = PerceptClock.utc(stream.get("FirstPacketDateTime"))
+            from modules.MedtronicPercept import Percept, IndefiniteStream
+            with redirect_stdout(log), redirect_stderr(log):
+                data = getattr(Percept, extractor_name)({source_kind: streams}, {})
+                decoded = data.get(output_key, [])
+                candidates = []
+                if source_kind == "IndefiniteStreaming":
+                    # The saver groups by exact native date and repeatedly sets
+                    # StartTime; the last member governs its normalized tick.
+                    groups = {}
+                    for stream in decoded:
+                        groups.setdefault(stream["FirstPacketDateTime"], []).append(stream)
+                    for group in groups.values():
+                        recordings = IndefiniteStream.saveIndefiniteStreams(group)
+                        if len(recordings) != 1:
+                            raise ValueError("Indefinite native group is not unique")
+                        candidates.append(_start_alias(group[-1], recordings[0]["StartTime"],
+                                                       recording_type, source_kind))
+                else:
+                    candidates = [_start_alias(stream, stream["FirstPacketDateTime"],
+                                               recording_type, source_kind) for stream in decoded]
+            aliases = [alias for alias in candidates if alias is not None]
+            index["decoded_start_aliases"].extend(aliases)
+            diagnostic.update(status="indexed", decoded_streams=len(decoded),
+                              aliases=len(aliases), unresolved_coordinates=len(candidates) - len(aliases))
+        except Exception as exc:
+            # Do not retain exception text, stream data, or printed native source
+            # fragments in the scalar index. No partial modality aliases survive.
+            diagnostic.update(status="native_decode_failed", exception_type=type(exc).__name__, aliases=0)
+        diagnostic["native_diagnostic_lines"] = len(log.getvalue().splitlines())
+        index["decoded_start_diagnostics"].append(diagnostic)
+    index["decoded_start_aliases"] = sorted(index["decoded_start_aliases"],
+        key=lambda alias: (alias["recording_type"], alias["decoded_raw"], alias["block"],
+                           alias["counter"], alias["sample_start_offset_seconds"]))
+    return index
+
+
 def stamp_source(source, payload):
     """Set a derived index on the source object; its caller owns persistence."""
-    index = PerceptClock.extract_source(payload)
+    index = extract_source_index(payload)
     changed = (source.metadata or {}).get(KEY) != index
     if changed:
         source.metadata = {**(source.metadata or {}), KEY: index}
@@ -215,7 +298,7 @@ def index_participant(participant, *, apply=False):
             raise ValueError("Clock source has no authorized device identity")
         payload = json.loads(DataCurator.loadCacheFile(source))
         prepared.append((source, device, source.hashed, source.pointer,
-                         PerceptClock.extract_source(payload),
+                         extract_source_index(payload),
                          PerceptClock.extract_event_recordings(payload)))
     result = {"apply": apply, "participant_uid": str(participant.uid),
               "sources_examined": len(sources), "source_indexes_changed": 0,

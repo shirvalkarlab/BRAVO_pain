@@ -185,7 +185,10 @@ def analysis_code_fingerprint():
     root = Path(AnalysisData.__file__).parent
     digest = hashlib.sha256()
     paths = [Path(__file__), Path(AnalysisData.__file__), root / "AnalysisJobs.py",
-             root / "PerceptClock.py", root / "PerceptClockData.py"]
+             root / "PerceptClock.py", root / "PerceptClockData.py",
+             root / "MedtronicPercept/Percept.py",
+             root / "MedtronicPercept/IndefiniteStream.py",
+             root / "MedtronicPercept/BrainSenseStream.py"]
     for package in ("Biomarkers", "StimOptimizer", "ClosedLoopDeployment"):
         paths.extend(sorted((root / package).rglob("*.py")))
     for path in paths:

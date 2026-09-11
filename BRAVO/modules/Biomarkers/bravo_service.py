@@ -94,7 +94,8 @@ def _aligned_recording_payload(data, recording, clock_context=None, clock_audit=
             from modules import PerceptClock
             raw_start = (data.get("AnalysisTimeProvenance") or {}).get("raw_start_time", float(data["StartTime"]))
             index, source = clock_context
-            clock_provenance = PerceptClock.recover_start(index, source, raw_start)
+            clock_provenance = PerceptClock.recover_start(index, source, raw_start,
+                                                        recording_type=recording_type)
             if clock_audit is not None:
                 clock_audit.append(clock_provenance)
             if clock_provenance["t"] is None:
@@ -3120,7 +3121,8 @@ def run_for_participant(request_data):
     # "what's set on the device now" against the data-derived recommendation, in the same LFP-power
     # units. Empty dict => no closed-loop program => the frontend draws no programmed line.
     out["clock_recovery"] = _canonical_event_psds(Participant, with_counts=True)[1]
-    out["clock_recovery"]["method"] = "percept-programmer-clock-v1"
+    from modules.PerceptClock import VERSION as CLOCK_VERSION
+    out["clock_recovery"]["method"] = CLOCK_VERSION
     out["clock_recovery"]["file_backed"] = clock_input_audit
     out["clock_recovery"]["scope"] = "Event PSDs and time-domain/montage start times; chronic trend timestamps are not corrected"
     out["programmed_thresholds"] = _programmed_adaptive_thresholds(Participant)

@@ -183,6 +183,10 @@ class CanonicalDataTests(unittest.TestCase):
         qc.write_text('synthetic policy')
         for name in ('PerceptClock.py', 'PerceptClockData.py'):
             (Path(self.temp.name) / name).write_text('synthetic clock policy')
+        native = Path(self.temp.name) / 'MedtronicPercept'
+        native.mkdir()
+        for name in ('Percept.py', 'IndefiniteStream.py', 'BrainSenseStream.py'):
+            (native / name).write_text('synthetic native start rule')
         self.api.input_manifest.__globals__['__file__'] = str(Path(self.temp.name) / 'AnalysisData.py')
         first = self.api.input_manifest(self.person)
         model.write_text('{"version":2}')

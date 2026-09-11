@@ -17,7 +17,13 @@ wall time is assumed correct; acquisition latency and unobserved clock changes
 limit precision. No offset is fitted to pain values or decoding performance.
 
 Time-domain, montage and power-stream start times are mapped through their
-FirstPacketDateTime coordinates. Relative samples and sampling rates are not
+FirstPacketDateTime coordinates. Streaming start times use exact typed mappings
+produced by the native decoder on copies of the retained input. This preserves
+packet-tick fractions and stream-alignment adjustments: recover the original
+counter time first, then add the known decoder start adjustment. Missing or
+conflicting mappings are unresolved; there is no nearest-time fallback. Native
+decoder hashes and modality failures are retained with this index. Version 2
+requires rebuilding older indexes. Relative samples and sampling rates are not
 warped. Chronic trend timestamps have no FirstPacketDateTime mapping and remain
 outside this correction's supported scope. A saved manual alignment is applied
 once after recovery. Conflicting manual shifts on physical duplicates fail the

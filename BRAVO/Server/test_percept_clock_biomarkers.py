@@ -20,7 +20,11 @@ class ClockBiomarkerTests(TestCase):
                 "version": PerceptClock.VERSION,
                 "anchors": [{"phase": "Final", "block": 43, "counter": 1000 + i * 1000,
                              "utc": BASE + i * 1000, "ins_utc": BASE + i * 1000 + 7200}],
-                "starts": [{"raw": BASE + 7500 - i * 200, "block": 43, "counter": 1500}]}}
+                "starts": [{"raw": BASE + 7500 - i * 200, "block": 43, "counter": 1500}],
+                "decoded_start_aliases": [{"decoded_raw": BASE + 7500 - i * 200,
+                    "original_raw": BASE + 7500 - i * 200, "block": 43, "counter": 1500,
+                    "sample_start_offset_seconds": 0, "source_kind": "BrainSenseTimeDomain",
+                    "recording_type": "MedtronicBrainSenseTimeDomain"}]}}
             self.sources.append(models.SourceFile.objects.create(owner=self.person, type="MedtronicJSON", metadata=metadata))
         self.spectrum = {"DateTimeBlockId": 43, "DateTimeOffsetInSeconds": 1500,
                          "DateTime": "2023-11-15T00:18:20Z", "Frequency": [1, 2], "FFTBinData": [3, 4]}

@@ -273,6 +273,73 @@ class ClockMappingTests(unittest.TestCase):
                          "conflicting_start_coordinates")
 
 
+class NativeStartAliasTests(unittest.TestCase):
+    kind = "MedtronicBrainSenseTimeDomain"
+
+    def fixture(self, offset=.375):
+        sources = two_sources()
+        entry = {"decoded_raw": T+10800+offset, "original_raw": T+10800,
+                 "block": 7, "counter": 200, "sample_start_offset_seconds": offset,
+                 "recording_type": self.kind, "source_kind": "BrainSenseTimeDomain"}
+        sources[0]["index"]["decoded_start_aliases"] = [entry]
+        return sources, entry
+
+    def test_sample_offset_is_added_after_counter_interpolation(self):
+        sources, entry = self.fixture()
+        got = clock.recover_start(clock.build_index(sources), sources[0], entry["decoded_raw"], self.kind)
+        self.assertEqual(got["base_utc"], T+210)
+        self.assertEqual(got["t"], T+210.375)
+        self.assertEqual(got["sample_start_offset_seconds"], .375)
+        self.assertEqual(got["source_kinds"], ["BrainSenseTimeDomain"])
+        self.assertEqual(clock.recover_start(clock.build_index(sources), sources[0], entry["decoded_raw"],
+                                            "NeuralActivitySnapshot")["t"], T+210.375)
+
+    def test_typed_stream_never_uses_raw_or_nearby_alias(self):
+        sources, entry = self.fixture()
+        sources[0]["index"]["starts"] = [{"raw": T+10800, "block":7, "counter":200}]
+        for stamp, kind in [(T+10800, self.kind), (entry["decoded_raw"]+.01, self.kind),
+                            (entry["decoded_raw"], "MedtronicBrainSensePowerDomain")]:
+            self.assertEqual(clock.recover_start(clock.build_index(sources), sources[0], stamp, kind)["status"],
+                             "missing_start_coordinates")
+        entry["counter"] = 1000
+        self.assertIsNone(clock.recover_start(clock.build_index(sources), sources[0], entry["decoded_raw"], self.kind)["t"])
+
+    def test_ambiguous_derived_snapshot_fails(self):
+        sources, entry = self.fixture()
+        sources[0]["index"]["starts"] = [{"raw":entry["decoded_raw"], "block":7, "counter":200}]
+        self.assertEqual(clock.recover_start(clock.build_index(sources), sources[0], entry["decoded_raw"],
+                                            "NeuralActivitySnapshot")["status"], "conflicting_start_coordinates")
+
+    def test_malformed_aliases_and_stale_indices_are_explicit(self):
+        for changes in [{"decoded_raw":None}, {"decoded_raw":1}, {"original_raw":None},
+                        {"original_raw":1}, {"sample_start_offset_seconds":float('nan')},
+                        {"block":0}, {"source_kind":None}, {"source_kind":""},
+                        {"sample_start_offset_seconds":8}]:
+            sources, entry = self.fixture(); stamp=entry["decoded_raw"]; entry.update(changes)
+            self.assertEqual(clock.recover_start(clock.build_index(sources), sources[0], stamp, self.kind)["status"],
+                             "invalid_start_alias", changes)
+        for data, expected in [([], "missing_start_coordinates"), ([1], "missing_start_coordinates"),
+                               ({"version":"old"}, "stale_clock_index"),
+                               ({"version":clock.VERSION,"decoded_start_aliases":{}}, "invalid_start_alias")]:
+            self.assertEqual(clock.recover_start({}, {"index":data}, T, self.kind)["status"], expected)
+        for stamp in [None,1,float('inf')]:
+            self.assertEqual(clock.recover_start({}, {}, stamp, self.kind)["status"], "invalid_start_time")
+        sources, entry = self.fixture()
+        sources[0]["index"]["decoded_start_aliases"][:0]=[None, {}, {"recording_type":"unknown"}]
+        self.assertEqual(clock.recover_start(clock.build_index(sources), sources[0], entry["decoded_raw"], self.kind)["t"], T+210.375)
+
+    def test_invalid_raw_coordinates_and_out_of_era_corrected_time(self):
+        sources=two_sources(); data=sources[0]["index"]
+        for starts in [{}, [{"raw":T,"block":0,"counter":200}]]:
+            data["starts"]=starts
+            self.assertEqual(clock.recover_start(clock.build_index(sources),sources[0],T)["status"], "invalid_start_coordinates")
+        data["starts"]=[None,{}, {"raw":T,"block":7,"counter":200}]
+        self.assertEqual(clock.recover_start(clock.build_index(sources),sources[0],T)["t"],T+210)
+        sources, entry=self.fixture(offset=-1e9)
+        entry["original_raw"]=T+2e9;entry["decoded_raw"]=T+1e9
+        self.assertEqual(clock.recover_start(clock.build_index(sources),sources[0],entry["decoded_raw"],self.kind)["status"],"invalid_start_alias")
+
+
 class SpectralEquivalenceTests(unittest.TestCase):
     def test_reported_one_ulp_roundtrip_is_equivalent_without_mutation(self):
         left = spectrum(FFTBinData=[3.6904201006916604, 2.5])

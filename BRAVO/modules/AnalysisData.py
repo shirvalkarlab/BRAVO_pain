@@ -108,7 +108,10 @@ def input_manifest(participant):
     for path in (Path(RCS08DataPolicy.__file__), Path(POLICY_PATH),
                  Path(__file__).parent / "OURA/QualityControl.py",
                  Path(__file__).parent / "PerceptClock.py",
-                 Path(__file__).parent / "PerceptClockData.py"):
+                 Path(__file__).parent / "PerceptClockData.py",
+                 Path(__file__).parent / "MedtronicPercept/Percept.py",
+                 Path(__file__).parent / "MedtronicPercept/IndefiniteStream.py",
+                 Path(__file__).parent / "MedtronicPercept/BrainSenseStream.py"):
         policy_hashes[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
     model_hashes = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
                     for path in sorted((Path(__file__).parent / "Biomarkers/data/psd_lsb_models").glob("*.json"))}

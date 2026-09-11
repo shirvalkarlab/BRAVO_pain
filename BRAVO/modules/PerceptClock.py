@@ -14,7 +14,7 @@ import json
 import math
 import struct
 
-VERSION = "percept-programmer-clock-v1"
+VERSION = "percept-programmer-clock-v2"
 MAX_INTERCEPT_CHANGE_SECONDS = 120.0
 MIN_UTC = 1420070400.0  # Same valid-era convention as programmer session extraction.
 
@@ -250,17 +250,82 @@ def recover(index, device, block, counter):
             "anchor_span_seconds": span, "intercept_change_seconds": change}
 
 
-def recover_start(index, source, raw_time):
-    """Locate decoded StartTime's source coordinate without guessing a wall offset."""
+def recover_start(index, source, raw_time, recording_type=None):
+    """Map original counters, then retain the exact native decoded sample offset.
+
+    Typed streams require aliases from their actual native decoder/saver. Survey
+    and legacy callers use original raw starts; derived snapshots may use either
+    only when all matching candidates agree on coordinate and sample offset.
+    """
+    base = {"method": VERSION, "t": None}
+    lookup = number(raw_time)
+    if lookup is None or lookup < MIN_UTC:
+        return {**base, "status": "invalid_start_time"}
     data = source.get("index") or {}
-    positions = {(entry["block"], entry["counter"]) for entry in data.get("starts", [])
-                 if abs(entry["raw"] - raw_time) < 0.001}
+    if not isinstance(data, dict):
+        return {**base, "status": "missing_start_coordinates"}
+    if data and data.get("version") != VERSION:
+        return {**base, "status": "stale_clock_index"}
+    typed = {"MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream"}
+    candidates = []
+    if recording_type in typed or recording_type == "NeuralActivitySnapshot":
+        aliases = data.get("decoded_start_aliases", [])
+        if not isinstance(aliases, list):
+            return {**base, "status": "invalid_start_alias"}
+        for entry in aliases:
+            if not isinstance(entry, dict) or entry.get("recording_type") not in typed:
+                continue
+            if recording_type in typed and entry["recording_type"] != recording_type:
+                continue
+            decoded = number(entry.get("decoded_raw"))
+            if decoded is None or decoded < MIN_UTC:
+                return {**base, "status": "invalid_start_alias"}
+            if abs(decoded - lookup) >= 0.001:
+                continue
+            original = number(entry.get("original_raw"))
+            offset = number(entry.get("sample_start_offset_seconds"))
+            pos = coordinate(entry.get("block"), entry.get("counter"))
+            kind = entry.get("source_kind")
+            if (original is None or original < MIN_UTC or offset is None or pos is None
+                    or not isinstance(kind, str) or not kind
+                    or abs((decoded - original) - offset) > 0.001):
+                return {**base, "status": "invalid_start_alias"}
+            candidates.append({"block": pos[0], "counter": pos[1], "offset": offset,
+                               "original_raw": original, "decoded_raw": decoded, "source_kind": kind})
+    if recording_type not in typed:
+        starts = data.get("starts", [])
+        if not isinstance(starts, list):
+            return {**base, "status": "invalid_start_coordinates"}
+        for entry in starts:
+            if not isinstance(entry, dict):
+                continue
+            raw = number(entry.get("raw"))
+            if raw is None or abs(raw - lookup) >= 0.001:
+                continue
+            pos = coordinate(entry.get("block"), entry.get("counter"))
+            if pos is None:
+                return {**base, "status": "invalid_start_coordinates"}
+            candidates.append({"block": pos[0], "counter": pos[1], "offset": 0.0,
+                               "original_raw": raw, "decoded_raw": raw, "source_kind": "raw"})
+    positions = {(entry["block"], entry["counter"], entry["offset"]) for entry in candidates}
     if not positions:
-        return {"method": VERSION, "status": "missing_start_coordinates", "t": None}
+        return {**base, "status": "missing_start_coordinates"}
     if len(positions) != 1:
-        return {"method": VERSION, "status": "conflicting_start_coordinates", "t": None}
-    block, counter = positions.pop()
-    return {**recover(index, source.get("device"), block, counter), "block": block, "counter": counter}
+        return {**base, "status": "conflicting_start_coordinates"}
+    block, counter, offset = positions.pop()
+    candidate = min(candidates, key=lambda item: (item["source_kind"], item["original_raw"], item["decoded_raw"]))
+    timing = recover(index, source.get("device"), block, counter)
+    recovered = timing["t"]
+    provenance = {"block": block, "counter": counter, "base_utc": recovered,
+                  "sample_start_offset_seconds": offset, "original_raw": candidate["original_raw"],
+                  "decoded_raw": candidate["decoded_raw"], "lookup_raw": lookup,
+                  "source_kinds": sorted({entry["source_kind"] for entry in candidates})}
+    if recovered is None:
+        return {**timing, **provenance}
+    corrected = recovered + offset
+    if not math.isfinite(corrected) or corrected < MIN_UTC:
+        return {**base, **provenance, "status": "invalid_start_alias"}
+    return {**timing, **provenance, "t": corrected}
 
 
 def canonical_snapshots(records, sources):
