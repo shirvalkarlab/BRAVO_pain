@@ -378,11 +378,17 @@ hygiene as a work item — the latter is an operational note in `OPERATIONS_runb
     choice; but the device history it joins is what a clinician chose to program, and a human sits
     in that loop. The chain proves what the code did, not what the clinic did. Raised by the
     2026-09-07 review; a limit of the method to state in the written record, not a defect to fix.~~
-17. **Two review items kept for the PI's call:** the sweep response served from the store goes
-    beyond Track A step 6's written text (decision 38), as does the Stim Optimizer response
-    served in step 8 (decision 41), and the store's path builder does not
-    sanitise a request-supplied participant identifier when the participant lookup returns nothing
-    (set aside on 2026-09-07 because the data are de-identified; it is an input-validation matter).
+17. **One review item still kept for the PI's call; the other is answered.**
+    ~~The sweep response served from the store goes beyond Track A step 6's written text (decision
+    38), as does the Stim Optimizer response served in step 8 (decision 41).~~ **APPROVED
+    2026-09-10 by the principal investigator** ("yes, that's fine"): both the Biomarkers page and the
+    Stim Optimizer page may hand back the whole previously saved answer when nothing has changed,
+    rather than recalculating. What the written plan asked for was the two summary tables; what
+    was built also serves the complete response, and that is now sanctioned rather than tolerated.
+
+    **Still open:** the store's path builder does not sanitise a request-supplied participant
+    identifier when the participant lookup returns nothing (set aside on 2026-09-07 because the
+    data are de-identified; it is an input-validation matter).
 
 18. **The device's own current record holds fewer settled settings per ladder than the clinic
     sheet recorded, and the curvature finding of 2026-08-18 rests on the sheet.** The server has
