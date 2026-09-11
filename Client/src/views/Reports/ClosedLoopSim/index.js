@@ -189,7 +189,6 @@ function KV({ label, children }) {
  * away.
  */
 function BandCandidateIdentity({ bc, envelope }) {
-  const [showStats, setShowStats] = useState(false);
   const ev = bc.evidence || {};
   const lbl = bc.label || {};
   const prov = bc.provenance || {};
@@ -241,14 +240,12 @@ function BandCandidateIdentity({ bc, envelope }) {
             </MDBox>
           </Grid>
           <Grid item xs={12} md={6}>
-            <MDTypography variant="caption" onClick={() => setShowStats((s) => !s)}
-              sx={{ fontSize: 10.5, fontWeight: "bold", letterSpacing: 0.4, color: PAL.accent,
-                cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>
-              {showStats
-                ? "HIDE THE DISCOVERY-STAGE STATISTICS"
-                : "SHOW THE DISCOVERY-STAGE STATISTICS (AUDIT TRAIL)"}
-            </MDTypography>
-            {showStats ? (
+            {/* ALWAYS SHOWN. This block used to sit behind a "show the discovery-stage
+                statistics" toggle, collapsed by default. The PI on 2026-09-10: "there's no point
+                in hiding it ever." A number a reader cannot see cannot be checked. */}
+            <MDTypography variant="caption" sx={{ fontSize: 10.5, fontWeight: "bold",
+              letterSpacing: 0.4, color: "#999" }}>DISCOVERY-STAGE STATISTICS</MDTypography>
+            {(
               <MDBox mt={0.6}>
                 <KV label="Odds ratio (per 1 SD)">
                   {`${fmt(ev.odds_ratio)} `}
@@ -261,9 +258,12 @@ function BandCandidateIdentity({ bc, envelope }) {
                       ? <span style={{ color: PAL.pass }}> · credible</span> : null}
                 </KV>
                 <KV label="Mixed-effects p">{fmtP(ev.p_glmer)}</KV>
-                <KV label="Samples and eras">
+                {/* "grouped by week" is stated because the ROC panel lower down groups the SAME
+                    data by individual pain rating, and a reader comparing the two counts must
+                    be able to see they are counting different things (open item 15). */}
+                <KV label="Samples, grouped by week">
                   {`${ev.n_matched_samples ?? "not reported"} samples across `
-                    + `${ev.n_clusters ?? "not reported"} weekly eras`}
+                    + `${ev.n_clusters ?? "not reported"} weeks`}
                 </KV>
                 <KV label="Stim stability">
                   {ev.stim_stable == null ? "not reported"
@@ -285,7 +285,7 @@ function BandCandidateIdentity({ bc, envelope }) {
                     + `${lbl.n_neg_days ?? "not reported"} negative`}
                 </KV>
               </MDBox>
-            ) : null}
+            )}
           </Grid>
         </Grid>
 
