@@ -42,3 +42,36 @@
 - Phase 10 done, decision 121: snapshot-served reports honour the length axis (ceil(N/30) snapshots
   or nothing); dashes and long hover removed. RCS08: 11,694 of 36,406 fields moved, 0 on the two
   control contacts; ZERO_THREE_RIGHT 5-min row 451 -> 140 reports. Container 626/0. Watched live.
+
+## HANDOFF — where things stand at the end of 2026-09-10 (landed; read this first next session)
+**Branch `PS_closedloop_deployment`, pushed; the tree is clean.** Final gates, run after the last
+code change: container 626 passed / 0 failed; host 1019 passed / 42 skipped / 0 failed; frontend
+built and its chunks committed. Decisions 113-121 in `DECISIONS_and_open_items.md` carry every
+change of this session with its measurement.
+
+**Done today, in the PI's order:** pictures in the sign-off card (113); timeline-circle test then
+the many-centre reader deleted (114, 115); the always-failing host test, which was wiping the
+production closed-loop cache on every run (116); the shared matching step -- one call site moved,
+one found already moved, two judged not matchers (117, 118); the histogram caption naming its
+score (119); one match window for the Biomarkers page (120); heat maps -- no dashes, snapshot
+route honours the length axis (121). Also: worktrees cleaned, .mcp.json ignored (item 29), the
+"never say spectrum bare" house rule.
+
+**Open on the PI, nothing blocked on them:**
+- decision 118: should the time-domain lane on the timeline obey the direction and
+  max-per-rating sliders like the pooled scan does (it reads only the tolerance today)?
+- open item 29: the repository's default branch is `v3.1.0`, months behind; agent worktrees start
+  there. Merge, or move the default.
+- decision 121's caption percent is against the largest per-cell count, not the matcher's total
+  (reads 86% where the matcher says 79%) -- pre-existing formula, flagged.
+- findings §5: `build_pooled_detail_from_matrix(aggregate="one_per_rating")` is dead and would
+  crash if revived.
+
+**NEXT SESSION IS PHASE 7**, the Closed-Loop page redesign: the PI's brief, in his words, is
+findings.md §3 and task_plan.md Phase 7. Load the scientific-visualization and UI/UX skills first.
+The closed-loop simulation design (old item 9) belongs in that session too.
+
+**Operational notes that cost time today:** after any backend commit the gunicorn workers keep old
+code until `docker exec bravo_pain-bravo-server-1 kill -HUP 1`; the in-app browser caches
+index.html, so verify the loaded `main.<hash>.js` before trusting what the page shows; save every
+suite run to a log file and read the summary from it rather than re-running.
