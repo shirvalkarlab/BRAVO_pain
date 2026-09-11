@@ -354,10 +354,21 @@ hygiene as a work item — the latter is an operational note in `OPERATIONS_runb
     ~~The within-rating sliding-window overlay with its saturation quality-control flag is built and
     not drawn.** The natural next step is a hover detail on a rating's 30-second trace.~~
 15. **Audit backlog.** All four high-severity items and one medium are resolved and the medium
-    bucket is cleared. Remaining: reconcile the clustering granularity between the per-rating and
-    the per-week reports, **which needs a judgment call from the PI before coding**; embed picture
-    snapshots of the four figures into the printed sheet, which needs the container because the
-    sandbox export path is broken; and a batchable cluster of labelling and navigation niceties.
+    bucket is cleared. Three things remain, all on the **Closed-Loop Deployment page**, named here
+    by what they are called ON SCREEN (corrected 2026-09-10 — the earlier wording said "reports"
+    and "the printed sheet", which are not the names of anything on the page):
+
+    - **Two panels on that page count "how many independent things do we have" differently, and
+      nobody has said which is right.** The evidence block near the top reads "N samples across M
+      *weekly eras*" — the mixed-effects model groups the data by week. The ROC panel lower down
+      reads "N samples · M *independent ratings*" — its bootstrap groups by individual pain rating.
+      Same data, two different counts of independence on one screen. **Needs the PI's call before
+      coding**: either relabel the ROC panel so the difference is explicit, or make both use one
+      unit.
+    - **The card titled "Deploy-to-Percept review"** — the sign-off card at the bottom of the page,
+      whose code describes it as printable — needs pictures of the four figures embedded in it.
+      Needs the container, because the figure-to-image export is broken in the sandbox.
+    - A batchable cluster of labelling and navigation niceties on the same page.
 
 ~~16~~. **CLOSED 2026-09-10 by the principal investigator** — it is a limit of the method, it is
     written down here and in `ARCHITECTURE_cache_store.md`, and there is nothing further to build.
