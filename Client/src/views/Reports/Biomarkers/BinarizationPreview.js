@@ -67,7 +67,7 @@ function binWidthForMetric(metricKey, vmin, vmax) {
 }
 
 function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percentileHigh,
-                               metricLabel, metricKey, loading,
+                               metricLabel, metricKey, loading, totalReports,
                                matchTolerance, setMatchTolerance, matchDirty,
                                scanModel, matchedLoading,
                                setPercentileLow, setPercentileHigh, setStrategy }) {
@@ -419,12 +419,23 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
 
   // Header caption — PRO-first by default (the discovery framing). For PSD-first modes (nearest /
   // prior) lead with the PSD-coverage number instead, so the headline matches the toggle.
+  //
+  // EVERY COUNT HERE IS FOR THE SELECTED SCORE, AND SAYS SO (PI, 2026-09-10). Not every report
+  // answers every score: on RCS08 there are 764 reports, 764 with an NRS value and 599 with a
+  // Left Leg VAS value. The caption used to read "599 PRO reports across 315 days" with no score
+  // named, so next to a record of 764 it looked like a stale number that had not updated -- and
+  // because several scores share a count (NRS = VAS = Relief = 764; Left Leg = Back = 599),
+  // switching between those visibly changed nothing. The score is now in the sentence and the
+  // record total sits beside it, so a smaller count reads as "reports carrying this score".
+  const scoreName = metricLabel || metricKey || "this score";
+  const totalTxt = Number.isFinite(totalReports) && totalReports > 0
+    ? ` · ${totalReports.toLocaleString()} reports in the record` : "";
   const headerCaption = matchedMode
     ? (dir === "pro_first" && su
-        ? `${(su.n_pro_used || 0).toLocaleString()} of ${(su.n_pro_total || 0).toLocaleString()} pain reports paired with neural data at ±${matchTolerance} min (${su.pct_pro_used}%)`
-        : `${(counts.n_matched || 0).toLocaleString()} of ${(counts.n_sessions || 0).toLocaleString()} neural samples paired with a pain report at ±${matchTolerance} min`)
+        ? `${(su.n_pro_used || 0).toLocaleString()} of ${(su.n_pro_total || 0).toLocaleString()} ${scoreName} reports paired with neural data at ±${matchTolerance} min (${su.pct_pro_used}%)${totalTxt}`
+        : `${(counts.n_matched || 0).toLocaleString()} of ${(counts.n_sessions || 0).toLocaleString()} neural samples paired with a ${scoreName} report at ±${matchTolerance} min${totalTxt}`)
     : (vals.length
-        ? `${dayAgg.reduce((s, d) => s + d.nSamples, 0).toLocaleString()} PRO reports across ${vals.length.toLocaleString()} days`
+        ? `${dayAgg.reduce((s, d) => s + d.nSamples, 0).toLocaleString()} ${scoreName} reports across ${vals.length.toLocaleString()} days${totalTxt}`
         : ((loading || matchedLoading) ? "loading…" : "no data yet"));
 
   // Footer caption.

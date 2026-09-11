@@ -34,3 +34,6 @@
   not matchers -- left on their own code with the reason recorded. Sharing measured: align_pros at
   60 min has 39 reports claimed by >1 session (max 24); per_pro_lsb <=2 pairs per contact. Cap
   question put to the PI. Probe: _agent_bridge/_probe_tl/probe_sharing.py.
+- Phase 8 done, decision 119: the 599/315 was Left Leg VAS's own count, unlabelled; both captions
+  now name the score and show "764 reports in the record". Watched on the live page (NRS -> Left
+  Leg VAS). Browser had cached index.html; forced reload to the new main chunk.

@@ -100,11 +100,12 @@ the scientific-visualization and UI/UX skills before designing. In his order:
 |---|---|---|
 
 ### Phase 8: QUEUED BY THE PI 2026-09-10 — the "data available to binarize" count does not update
-**Status:** pending
+**Status:** complete
 His words: "check code for biomarkers module next to 'data available to binarize' - numbers read:
 599 PRO reports across 315 days (this needs to autoupdate, but doesnt look like it does....)".
 The availability payload on the same day carried 764 ratings, so the 599 is stale somewhere:
 either a held/cached count, a different filter (metric-filtered vs all), or a value built once.
-- [ ] Find which module/function produces that sentence and what it counts
-- [ ] Reproduce 599 vs 764 on RCS08 and name the cause
-- [ ] Fix so it follows the live report table; prove with the number on the page
+- [x] `BinarizationPreview.js` header caption; counts reports carrying the SELECTED score
+- [x] 599/315 = Left Leg VAS (and Back VAS); 764/373 = NRS/VAS/Relief. Not stale -- unlabelled.
+- [x] Score named in both captions + "764 reports in the record"; watched switching NRS -> Left Leg
+      VAS on the live page. Decision 119.
