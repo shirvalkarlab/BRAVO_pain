@@ -7970,7 +7970,7 @@ _BAND_SWEEP_RESPONSE_KIND = "biomarker_band_sweep"
 #: is taken in its place. This changes which measurements are excluded, so it changes numbers -- a
 #: stored response built under any earlier rule must never be served as if it were built under this
 #: one.
-_BAND_SWEEP_RULE_VERSION = "v7_sweep_device_spectrum_mark"
+_BAND_SWEEP_RULE_VERSION = "v8_sweep_psd_snapshots_by_length"
 
 #: Response fields that are timings of the run that produced them, not results. They are not
 #: compared when a stored response is checked against a fresh one, and a served response keeps the

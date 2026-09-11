@@ -6054,11 +6054,10 @@ def band_sweep_lsb_ceiling(channel, centre_hz):
 #: The sentence that travels with the device-spectrum mark wherever it is reported. Written once so
 #: the page, the notes and any exported copy cannot drift into three different explanations.
 DEVICE_SPECTRUM_AXIS_NOTE = (
-    "A pain report with no voltage trace in range is answered from the device's own spectrum "
-    "instead, and that route has no length-of-signal setting at all -- it uses the match tolerance "
-    "alone. Such a report therefore contributes the SAME band power to every row of this grid. "
-    "Where the marked share is high, reading down the length-of-signal axis is reading a constant, "
-    "not a trend.")
+    "A pain report with no voltage trace within the match window is answered from the device's "
+    "own FFT snapshots instead. Each snapshot covers 30 s, so a row of N seconds takes the nearest "
+    "ceil(N / 30) snapshots within the window, and a report without that many contributes nothing "
+    "to that row -- which is why the taller rows can hold fewer reports than the short ones.")
 
 
 def _device_spectrum_cell_counts(X, pain, from_device_spectrum):
@@ -6298,8 +6297,8 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         _worst = float(np.nanmax(dev_share)) if np.isfinite(dev_share).any() else 0.0
         notes.append(
             "%d of this contact pair's matched pain reports were answered from the device's own "
-            "spectrum rather than the voltage trace, and the most affected cell drew %.0f%% of its "
-            "reports that way. %s" % (n_dev_reports, 100.0 * _worst, DEVICE_SPECTRUM_AXIS_NOTE))
+            "FFT snapshots rather than the voltage trace, and the most affected cell drew %.0f%% of "
+            "its reports that way. %s" % (n_dev_reports, 100.0 * _worst, DEVICE_SPECTRUM_AXIS_NOTE))
     n_used = int(np.nanmax(corr_n)) if corr_n.size and np.isfinite(corr).any() else 0
     return {
         "answer": (BAND_PAIN_ESTABLISHED

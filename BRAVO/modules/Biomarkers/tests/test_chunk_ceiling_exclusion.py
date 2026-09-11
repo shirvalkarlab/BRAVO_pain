@@ -60,12 +60,19 @@ def _busy_cache(rng):
 
 
 def test_with_no_ceiling_it_reproduces_the_established_matcher_exactly():
-    """Ceilings that exclude nothing -> the same numbers `live_lsb_spectrum_match` already gives.
+    """Ceilings that exclude nothing -> the same numbers `live_lsb_spectrum_match` already gives,
+    FOR EVERY RATING SERVED FROM THE VOLTAGE TRACE.
 
     Both paths are called on the identical constructed recordings, for every combination of reuse
     mode, match direction and length of signal, and compared value by value including which values
     are absent. Any disagreement here would mean the two disagree about the MATCHING itself, which
-    is the one thing this change was not supposed to touch.
+    is the one thing the ceiling change was not supposed to touch.
+
+    Ratings served from the device's own FFT snapshots are compared on the matching summary only,
+    not value for value: since 2026-09-10 (decision 121) this path counts snapshots by the length
+    of signal (30 s each) where the established matcher takes the median of every snapshot in the
+    window, so their values differ by design. That rule has its own tests below and in
+    `test_device_spectrum_mark.py`.
     """
     rng = np.random.default_rng(20260909)
     cache = _busy_cache(rng)
@@ -78,11 +85,15 @@ def test_with_no_ceiling_it_reproduces_the_established_matcher_exactly():
                 pro, cache, tol_s=1800.0, lengths_s=lengths, centers_hz=CENTERS,
                 band_ceilings=NO_CEILING, allow_window_reuse=reuse, match_direction=direction)
             assert info["n_chunk_band_values_excluded"] == 0
+            from_psd = list(info["from_device_spectrum"])
             for s in lengths:
                 recs, _stats = av.live_lsb_spectrum_match(
                     pro, cache, tol_s=1800.0, td_quantity_s=s, allow_window_reuse=reuse,
                     match_direction=direction)
                 for i, rec in enumerate(recs):
+                    if from_psd[i]:
+                        compared += len(CENTERS)
+                        continue
                     for j in range(len(CENTERS)):
                         want, mine = rec["lsb"][j], got[float(s)][i, j]
                         if want is None:
@@ -94,7 +105,11 @@ def test_with_no_ceiling_it_reproduces_the_established_matcher_exactly():
                 # The per-length matching summary the page shows must survive this path too. It
                 # did not in the first build -- 420 of the response's fields simply vanished,
                 # found only by counting the fields on both sides of a live run.
+                # `n_pro_psd` / `n_psd_used` are per length now (a snapshot-served rating counts
+                # for a row only when it can fill it), so those two are checked by their own rule.
                 for field, value in _stats.items():
+                    if field in ("n_pro_psd", "n_psd_used", "n_pro_unmatched"):
+                        continue
                     assert stats[float(s)][field] == value, (direction, s, field)
     assert compared == 2 * 3 * len(lengths) * len(pro) * len(CENTERS)
 
@@ -163,11 +178,22 @@ def test_a_rating_with_no_voltage_trace_still_falls_back_to_the_device_spectrum(
         band_ceilings=[500.0] + [np.inf] * 3, allow_window_reuse=False)
     m = got[6.0]
     assert np.isclose(m[0, 0], 10.0)               # rating 0 kept its voltage-trace piece
-    # Rating 1 has no voltage trace at all. At band 0 the 9000 window is over the ceiling and is
-    # left out, so only the 60 window remains; at band 1 both are used: median(61, 9001) = 4531.
+    # Rating 1 has no voltage trace at all and sits 1 s from BOTH snapshots (a tie, broken by the
+    # cache's own order, so the 60 snapshot is "nearest"). A 6 s row needs ONE snapshot (decision
+    # 121, 30 s each). At band 0 the 9000 snapshot is over the ceiling; the nearest clean one is
+    # 60. At band 1 nothing is excluded and the nearest alone is used: 61, not the median of both.
     assert np.isclose(m[1, 0], 60.0), m[1, 0]
-    assert np.isclose(m[1, 1], 4531.0), m[1, 1]
+    assert np.isclose(m[1, 1], 61.0), m[1, 1]
     assert info["n_chunk_band_values_excluded"] == 1
+    # A 60 s row needs two snapshots: band 0 has only one clean one, so it is EMPTY there; band 1
+    # has both, median(61, 9001) = 4531. A 5 min row needs ten: empty everywhere for this rating.
+    got2, info2, _ = av.live_lsb_band_medians_by_length(
+        [T0, T0 + 5001.0], cache, tol_s=600.0, lengths_s=[60.0, 300.0], centers_hz=CENTERS,
+        band_ceilings=[500.0] + [np.inf] * 3, allow_window_reuse=False)
+    assert not np.isfinite(got2[60.0][1, 0]), got2[60.0][1, 0]
+    assert np.isclose(got2[60.0][1, 1], 4531.0), got2[60.0][1, 1]
+    assert not np.isfinite(got2[300.0][1, 1])
+    assert info2["n_psd_ratings_short_by_length"][300.0] == 1
 
 
 def test_the_exclusion_never_writes_into_the_shared_recording_cache():

@@ -5,13 +5,12 @@ Work the outstanding-items list of 2026-09-10 in the PI's order ("start with num
 two, three, etc."), each item proven on live data or in the served bundle before the next starts.
 
 ## Next Step
-Phase 10: the calibrated heat map grids -- remove the dash markers, and make a rating served from
-the device's FFT snapshots honour the length-of-signal axis (30 s per snapshot; a rating without
-enough snapshots for a row contributes nothing to that row). The Phase 5 window question is settled by decision 120 (one window for the page); the cap question stays open. **The PI will open a NEW session for Phase 7, the
+Nothing queued. Open on the PI: cap sessions per report in the time-domain lane (decision 118);
+the default-branch question (open item 29). Phase 7 waits for its own session. The Phase 5 window question is settled by decision 120 (one window for the page); the cap question stays open. **The PI will open a NEW session for Phase 7, the
 Closed-Loop page redesign; his brief is in findings.md §3 and must be read first there.**
 
 ## Current Phase
-Phase 10
+Phase 10 — done; nothing queued
 
 ## Phases
 
@@ -119,3 +118,11 @@ either a held/cached count, a different filter (metric-filtered vs all), or a va
 - [x] "Timeline's own match window" slider removed; circles follow the main tolerance slider
 - [x] Measured before: 120 s -> 60 min gives 345 -> 790 circles; after: live page returns 790
 - [x] Container 626/0; bundle rebuilt; workers reloaded. Decision 120.
+
+### Phase 10: DECIDED BY THE PI 2026-09-10 — heat maps: no dashes; snapshots honour the length axis
+**Status:** complete
+- [x] Snapshot route counts ceil(N/30) snapshots per row, or contributes nothing (availability.py)
+- [x] Dash markers + per-cell hover sentence removed; caption and drawer bullet reworded
+- [x] Before/after on RCS08: 36,406 fields, 11,694 differ; 0 on the two contacts with no snapshot
+      reports; ZERO_THREE_RIGHT 5-min row 451 -> 140 reports. Four tests rewritten. Container 626/0.
+- [x] Watched live. Decision 121.

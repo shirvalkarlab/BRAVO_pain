@@ -46,38 +46,48 @@ def _cache(td_t, td_lsb, psd_t=(), psd_lsb=()):
             "n_td_windows": len(td_t), "n_psd_windows": len(psd_t)}
 
 
-def test_the_flag_names_exactly_the_reports_whose_value_never_moves_with_length():
-    """The property, on the real matcher: flagged reports are constant down the axis, others are not.
+def test_the_flag_names_the_snapshot_served_reports_and_those_now_honour_the_length_axis():
+    """The property, on the real matcher, under the rule of 2026-09-10 (decision 121).
 
     One rating sits on a long run of voltage trace, so lengthening the signal really does pull in
     more pieces and change its median. A second rating has no voltage trace anywhere near it and
-    only device-spectrum events, whose branch has no length setting at all. If the flag ever names
-    the wrong one, this fails on BOTH halves at once -- the constant one and the moving one.
+    only two of the device's own FFT snapshots. Each snapshot covers 30 s, so that rating can fill
+    every row up to 30 s from its nearest snapshot alone, fills the 45 s and 60 s rows from both
+    (their median), and cannot fill the 5 min row at all (ten needed, two present) -- that cell is
+    empty for it. Before this rule the flagged rating wrote one number into every row; the old
+    version of this test asserted exactly that, and is superseded.
     """
-    # Twenty pieces of voltage trace on a 3 s grid, values rising, so more pieces means a different
-    # median. Their times surround the first rating and are hours away from the second.
     td_t = [T0 + 1.5 + 3.0 * k for k in range(20)]
     td_lsb = [_row(10.0 * k) for k in range(20)]
-    psd_t = [T0 + 90000.0, T0 + 90002.0]
+    psd_t = [T0 + 90000.0, T0 + 90002.0]          # the second is nearer to the rating below
     psd_lsb = [_row(500), _row(520)]
     cache = _cache(td_t, td_lsb, psd_t, psd_lsb)
-    pro = [T0 + 30.0, T0 + 90001.0]
+    pro = [T0 + 30.0, T0 + 90001.5]
 
-    got, info, _stats = av.live_lsb_band_medians_by_length(
-        pro, cache, tol_s=600.0, lengths_s=LENGTHS, centers_hz=CENTERS,
+    lens = LENGTHS + [60.0]                        # 60 s needs two snapshots; the rest one or ten
+    got, info, stats = av.live_lsb_band_medians_by_length(
+        pro, cache, tol_s=600.0, lengths_s=lens, centers_hz=CENTERS,
         band_ceilings=NO_CEILING)
 
     flags = info["from_device_spectrum"]
     assert len(flags) == len(pro)
     assert flags == [False, True], flags
+    assert info["psd_snapshot_s"] == 30.0
 
-    by_len = [got[s] for s in LENGTHS]
-    # The flagged rating: identical at every length, which is exactly why its column carries no
-    # information about length of signal.
-    for j in range(len(CENTERS)):
-        vals = [m[1, j] for m in by_len]
-        assert all(v == vals[0] for v in vals), (j, vals)
+    for s in lens:
+        need = int(np.ceil(s / 30.0))
+        assert info["psd_snapshots_needed_by_length"][float(s)] == need
+        v = got[s][1, 0]
+        if need == 1:
+            assert v == 520.0, (s, v)                       # the nearest snapshot alone
+        elif need == 2:
+            assert v == 510.0, (s, v)                       # median of both snapshots
+        else:
+            assert not np.isfinite(v), (s, v)               # not enough snapshots: empty
+            assert info["n_psd_ratings_short_by_length"][float(s)] == 1
+            assert stats[float(s)]["n_pro_psd"] == 0
     # The unflagged rating: at least one band genuinely moves, so the axis means something there.
+    by_len = [got[s] for s in lens]
     moved = any(len({m[0, j] for m in by_len}) > 1 for j in range(len(CENTERS)))
     assert moved, "the voltage-trace rating should not be constant down the length axis"
 
@@ -206,11 +216,11 @@ def test_a_contact_with_no_device_served_reports_gets_no_note_and_a_zero_share()
     sw = _grid(pain, [False] * 12, strategy="median")
     assert sw["n_pain_reports_from_device_spectrum"] == 0
     assert np.asarray(sw["device_spectrum_n_grid"], dtype=float).sum() == 0
-    assert not any("device's own spectrum" in str(n) for n in sw["notes"])
+    assert not any("device's own FFT snapshots" in str(n) for n in sw["notes"])
 
     marked = _grid(pain, [True] * 6 + [False] * 6, strategy="median")
     assert marked["n_pain_reports_from_device_spectrum"] == 6
-    assert any("device's own spectrum" in str(n) for n in marked["notes"])
+    assert any("device's own FFT snapshots" in str(n) for n in marked["notes"])
 
 
 def test_the_flag_is_reported_as_unknown_rather_than_zero_when_it_never_arrived():

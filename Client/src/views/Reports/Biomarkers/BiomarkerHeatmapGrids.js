@@ -140,12 +140,14 @@ function bulletsFor(sw) {
       + "flashes when it recomputes.",
     "Clicking a cell shows a plain Pearson r/p and Welch t-test computed on the spot — not the "
       + "grid's own corrected, best-of-ten numbers.",
-    // The legend for the dash, next to the legend for the circle, and only when a dash is actually
-    // on the grid -- a contact with none gets no bullet rather than a reassuring one.
+    // Only when this contact has such reports -- a contact with none gets no bullet rather than a
+    // reassuring one. (The per-cell dash markers this bullet used to explain were removed on
+    // 2026-09-10 at the PI's direction; the orange caption above the grids carries the count.)
     ...(sw.n_pain_reports_from_device_spectrum
-      ? ["A dash on a cell marks pain reports answered from the device's own spectrum, which "
-        + "carries no length of signal: those reports give that cell the same value in every row. "
-        + "The longer the dash, the more of the cell came that way — hover for the exact share."]
+      ? ["Pain reports with no voltage trace within the match window are answered from the "
+        + "device's own FFT snapshots. Each snapshot covers 30 s, so a row of N seconds takes the "
+        + "nearest ceil(N / 30) snapshots, and a report without that many contributes nothing to "
+        + "that row."]
       : []),
     ...notes.slice(3),
   ];
@@ -306,24 +308,12 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
     // setXlabel/setYlabel below can touch them (they assume subplots() has already run, the same
     // as every other consumer of this class in the codebase).
     fig.subplots(1, 1, { sharex: false, sharey: false });
-    // The dash on a cell says THAT the length axis is weak there; the hover says by how much. Read
-    // from the grid that matches this heat map -- the two are computed from different pain reports
-    // once the scores are split, so the curve grid has its own share and must not borrow this one's.
-    const devShare = (kind === "auc" ? sw.device_spectrum_share_grid_auc
-      : sw.device_spectrum_share_grid) || [];
-    const devText = (grid || []).map((row, r) => (row || []).map((_v, c) => {
-      const s = (devShare[r] || [])[c];
-      return (s == null || !(s > 0)) ? ""
-        : `<br>${Math.round(100 * s)}% of this cell's pain reports came from the device's own `
-          + "spectrum, which carries no length of signal";
-    }));
     fig.traces.push({
-      type: "heatmap", z: grid, x: centers, y: yLabels, customdata: devText,
+      type: "heatmap", z: grid, x: centers, y: yLabels,
       colorscale: divergingColorscale(center, halfRange), zmin: center - halfRange,
       zmax: center + halfRange, zmid: center, showscale: false,
       xgap: 1.5, ygap: 1.5,
-      hovertemplate: `${kind === "auc" ? "AUC" : "r"} = %{z:.3f}<br>%{x} Hz, %{y}`
-        + "%{customdata}<extra></extra>",
+      hovertemplate: `${kind === "auc" ? "AUC" : "r"} = %{z:.3f}<br>%{x} Hz, %{y}<extra></extra>`,
     });
     // Family-wise-significant "best of ten lengths" cells -- an open circle, exactly the marker
     // the SVG version drew.
@@ -347,25 +337,10 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
       marker: { symbol: "square-open", size: 22, color: "#1a1a1a", line: { width: 2 } },
       hoverinfo: "skip",
     });
-    // OPEN ITEM 26 -- the cells the length-of-signal axis does not apply to. PUSHED AFTER THE
-    // HIGHLIGHT TRACE ON PURPOSE: the highlight is restyled BY INDEX in a second effect below, so
-    // a trace inserted before it would silently retarget that restyle at this one instead.
-    //
-    // A horizontal dash, because that is what the cell is: a value free to vary ACROSS band
-    // centres and frozen DOWN the lengths. Every affected cell is marked, with the dash growing
-    // with the share rather than appearing at some cut-off, so a contact where a few reports came
-    // that way reads faintly and one where most of them did reads unmistakably -- and no reader
-    // has to know what threshold somebody picked.
-    const devX = [], devY = [], devSize = [];
-    devShare.forEach((row, r) => (row || []).forEach((v, c) => {
-      if (v == null || !(v > 0) || r >= yLabels.length || c >= centers.length) return;
-      devX.push(centers[c]); devY.push(yLabels[r]); devSize.push(7 + 11 * Math.min(1, v));
-    }));
-    fig.traces.push({
-      type: "scatter", mode: "markers", x: devX, y: devY, showlegend: false,
-      marker: { symbol: "line-ew-open", size: devSize, color: "#1a1a1a", line: { width: 1.6 } },
-      hoverinfo: "skip",
-    });
+    // The per-cell dash markers for snapshot-served reports (decision 106) were REMOVED on
+    // 2026-09-10 at the PI's direction ("the caption in orange below the title is sufficient");
+    // the snapshot route now honours the length axis (decision 121), so there is no frozen column
+    // to mark. Nothing else is pushed after the highlight trace, whose index is restyled below.
     // Every 3rd band centre, exactly the sparse labelling the original SVG grid used (too many of
     // the 22 centres to label all of them without the text overlapping).
     const xTickVals = centers.filter((c, i) => i % 3 === 0);
@@ -650,9 +625,10 @@ function DeviceSpectrumCaption({ sw }) {
       sx={{ fontSize: 13, display: "block", mb: 0.5, color: "#8a5a00" }}>
       {`${n} of this contact pair's matched pain reports`}
       {pct != null ? ` (about ${pct}%)` : ""}
-      {" came from the device's own spectrum, which carries no length of signal — those reports "}
-      {"give the same value in every row, so the dashed cells below say less about length than "}
-      {"they appear to."}
+      {" had no voltage trace within the match window and were answered from the device's own "}
+      {"FFT snapshots. The heat maps do their own matching, under the match tolerance set on the "}
+      {"histogram card. Each snapshot covers 30 s, so a row of N seconds takes the nearest "}
+      {"ceil(N / 30) snapshots, and a report without that many contributes nothing to that row."}
     </MDTypography>
   );
 }

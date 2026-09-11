@@ -1065,6 +1065,12 @@ PRO_LSB_TIER_BRIDGE = "psd_bridge"    # PSD-only patient event coincided -> CS-3
 # real LFP rarely exceeds a few hundred µV, so touching this is a hardware-limit artifact, not signal.
 PRO_LSB_SATURATION_UV = 4000.0
 
+#: How much signal one of the device's own FFT snapshots covers. From `DEVICE_percept_rc.md`: the
+#: patient-event snapshot is "30 s, beginning 30 s after the button press". The calibrated grid's
+#: length-of-signal axis counts snapshots by this (decision 121): a row of N seconds needs
+#: ceil(N / 30) of them.
+PSD_SNAPSHOT_SECONDS = 30.0
+
 
 def _per_pro_lsb_scan(pro_times, native_lsb_series, channel, center_hz, *, band_half_hz=2.5,
                 td_recordings=None, event_psd_recordings=None,
@@ -1849,15 +1855,30 @@ def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, c
                     (td_tier & (keep.sum(axis=1) < would_have)).sum())
 
     # ---- PSD bridge, for ratings with no eligible chunk of voltage trace at all -------------------
-    # Same rule as `live_lsb_spectrum_match`: the voltage trace is preferred, and a rating only falls
-    # here when it owns none. There is no quantity cap on this tier and therefore nothing to backfill
-    # -- a contaminated event is simply left out of the median for the band it is contaminated in.
+    # Same eligibility rule as `live_lsb_spectrum_match`: the voltage trace is preferred, and a rating
+    # only falls here when it owns none.
+    #
+    # THE LENGTH-OF-SIGNAL AXIS APPLIES HERE TOO, since 2026-09-10 (the PI's rule, decision 121).
+    # Each of the device's own FFT snapshots covers 30 s of signal (DEVICE_percept_rc.md: "30 s,
+    # beginning 30 s after the button press"), so a row asking for N seconds takes the nearest
+    # ceil(N / 30) snapshots -- one for every row up to 30 s, two for 45 s and 60 s, ten for 5 min --
+    # and a rating that does not have that many clean snapshots within the match window contributes
+    # NOTHING to that row. Before this, the bridge had no quantity cap at all: it took the median of
+    # every snapshot in the window and wrote the same number into every row, so for a rating served
+    # this way the length axis was a constant dressed as a trend (open item 26, decision 106). The
+    # per-band clean-prefix rule is the same one the voltage-trace block above uses, so a snapshot
+    # contaminated at one band drops out at that band only.
     psd = raw_cache.get("psd") or {}
     psd_t = np.atleast_1d(np.asarray(psd.get("t") or [], dtype=float))
     psd_mat = _lsb_family_mat(psd, nCc)
     psd_valid = np.isfinite(psd_t)
     pcnt = np.zeros(nP, dtype=np.int64)
     take = np.zeros(nP, dtype=bool)
+    psd_caps = [max(1, int(np.ceil(s / PSD_SNAPSHOT_SECONDS))) for s in lengths]
+    info["psd_snapshot_s"] = float(PSD_SNAPSHOT_SECONDS)
+    info["psd_snapshots_needed_by_length"] = {float(s): int(k) for s, k in zip(lengths, psd_caps)}
+    info["n_psd_ratings_short_by_length"] = {float(s): 0 for s in lengths}
+    psd_filled = {s: np.zeros(nP, dtype=bool) for s in lengths}
     if psd_t.size and (~td_tier).any():
         if allow_window_reuse:
             pidx, pcnt = _pad_windows_in_extent(psd_t, psd_valid, pro, tol_s, nP,
@@ -1870,17 +1891,28 @@ def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, c
             pidx, pcnt = _pad_owned_windows(pnn, nP)
         take = (~td_tier) & (pcnt > 0)
         if take.any() and pidx.shape[1] > 0:
-            preal = pidx >= 0
             psafe = np.maximum(pidx, 0)
+            pdist = np.where(pidx >= 0, np.abs(psd_t[psafe] - pro[:, None]), np.inf)
+            PS = np.take_along_axis(pidx, np.argsort(pdist, axis=1, kind="stable"), axis=1)
+            preal = PS >= 0
+            PSsafe = np.maximum(PS, 0)
             for j in range(nCs):
-                pv = np.where(preal, psd_mat[psafe, col[j]], np.nan)
+                pv = np.where(preal, psd_mat[PSsafe, col[j]], np.nan)
                 pbad = preal & np.isfinite(pv) & (pv > ceil[j])
+                pgood = preal & ~pbad
                 info["n_chunk_band_values_excluded"] += int(pbad.sum())
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore", RuntimeWarning)
-                    pmed = np.nanmedian(np.where(pbad, np.nan, pv), axis=1)
-                for s in lengths:
-                    out[s][take, j] = pmed[take]
+                prank = np.cumsum(pgood, axis=1)
+                for s, need in zip(lengths, psd_caps):
+                    keep = pgood & (prank <= need)
+                    enough = keep.sum(axis=1) >= need
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", RuntimeWarning)
+                        pmed = np.nanmedian(np.where(keep, pv, np.nan), axis=1)
+                    row_take = take & enough
+                    out[s][row_take, j] = pmed[row_take]
+                    psd_filled[s] |= row_take
+            for s, need in zip(lengths, psd_caps):
+                info["n_psd_ratings_short_by_length"][float(s)] = int((take & (pcnt < need)).sum())
 
     # `take` is exactly the ratings whose value came from the device's own spectrum, and it is what
     # the loop above wrote into EVERY length. Reported per rating so a cell can later count only
@@ -1890,15 +1922,20 @@ def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, c
     # The same per-length matching summary the established matcher reports, built from the same
     # quantities: which pieces were eligible, which rating owns each, and the quantity cap. Those
     # are the three things this path does NOT change, so these fields keep their meaning exactly.
-    n_pro_td, n_pro_psd = int(td_tier.sum()), int(take.sum())
-    for s, cap in zip(lengths, caps):
+    n_pro_td = int(td_tier.sum())
+    for s, cap, need in zip(lengths, caps, psd_caps):
+        # A snapshot-served rating counts for a row only when it could fill it (decision 121), so
+        # `n_pro_psd` and `n_psd_used` are per length now, where they used to be one number.
+        n_pro_psd = int(psd_filled[s].sum())
         stats_by_length[s] = {
             "n_pro": int(nP), "n_pro_td": n_pro_td, "n_pro_psd": n_pro_psd,
             "n_pro_unmatched": int(nP - n_pro_td - n_pro_psd),
             "n_td_windows": int(td_t.size), "n_psd_windows": int(psd_t.size),
             "n_td_assigned": int(cnt.sum()),
             "n_td_used": int(np.minimum(cnt, cap)[td_tier].sum()),
-            "n_psd_assigned": int(pcnt.sum()), "n_psd_used": int(pcnt[take].sum()),
+            "n_psd_assigned": int(pcnt.sum()),
+            "n_psd_used": int(np.minimum(pcnt, need)[psd_filled[s]].sum()),
+            "psd_n_snapshots_cap": int(need), "psd_snapshot_s": float(PSD_SNAPSHOT_SECONDS),
             "tol_s": float(tol_s), "td_quantity_s": float(s), "td_n_epochs_cap": int(cap),
             "extent_s": float(s), "psd_tol_s": float(tol_s),
             "allow_window_reuse": bool(allow_window_reuse),
