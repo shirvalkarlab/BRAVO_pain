@@ -427,6 +427,13 @@ except ImportError:                                   # pragma: no cover - depen
 #: than resolved here, so there is still only one resolver.
 _SHARED_CACHE_DIR_OVERRIDE = None
 
+#: Plain names for the pain-score items the reliable-change block reports, so the page's selector
+#: can show words rather than keys. Kept beside the block that uses them.
+_RC_LABELS = {
+    "nrs": "NRS (0-10)", "vas": "Overall VAS", "left_leg_vas": "Left Leg VAS",
+    "back_vas": "Back VAS", "mpq_sum": "MPQ Sum", "relief": "Relief (%)",
+}
+
 #: Refuse to write an entry larger than this. Tests lower it to check the refusal.
 _SHARED_CACHE_MAX_BYTES = _cache_store.MAX_BYTES_DEFAULT
 
@@ -1967,11 +1974,33 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
         # the expected "not enough history yet" and would have stayed that way FOREVER, including
         # after the ratings this check waits for arrived. Caught by noticing that every item said
         # the same thing when decision 75 had measured that one of them did have ratings.
+        # THE RAW RATINGS, with their times, because the short-gap estimator (decision 111) needs
+        # consecutive individual ratings and not `dm`'s per-epoch summaries. Loaded the exact way
+        # `build_design_matrix` loads them, through the Biomarkers service, which this module may
+        # import (never the reverse). This is one extra pain-report fetch per report; the reports
+        # are fetched fresh on every request anyway (decision 22), and it costs well under a second.
+        try:
+            from modules.Biomarkers import bravo_service as _bs
+        except ImportError:                                # pragma: no cover - depends on the runner
+            from Biomarkers import bravo_service as _bs
+        _pro = _bs._load_pros(dict(request_data or {}), participant)
+        _pro_t = (pd.to_datetime(_bs._pro_times_utc_series(_pro), utc=True)
+                  .astype("int64").to_numpy(dtype=float) / 1e9) if _pro is not None else np.array([])
+        _ep_start = (pd.to_datetime(eps["t_start"], utc=True).astype("int64").to_numpy(dtype=float) / 1e9
+                     if eps is not None and "t_start" in eps.columns else np.array([]))
+        _ep_end = (pd.to_datetime(eps["t_end"], utc=True).astype("int64").to_numpy(dtype=float) / 1e9
+                   if eps is not None and "t_end" in eps.columns else np.array([]))
         _rc_items, _rc_assessed = {}, 0
         for _item in _PRO_ITEMS:
-            _sd = _rc.pooled_same_condition_sd(dm, _item)
+            _vals = (pd.to_numeric(_pro[_item], errors="coerce").to_numpy(dtype=float)
+                     if _pro is not None and _item in _pro.columns else np.array([]))
+            _sd = _rc.short_gap_pairwise_sd(_pro_t, _vals, _ep_start, _ep_end)
             _entry = {"pooled_sd": _sd.get("pooled_sd"), "df": _sd.get("df"),
-                      "n_epochs": _sd.get("n_epochs"), "reason": _sd.get("reason"),
+                      "n_pairs": _sd.get("n_pairs"), "n_epochs": _sd.get("n_epochs"),
+                      "n_dropped_same_minute": _sd.get("n_dropped_same_minute"),
+                      "max_gap_hours": _sd.get("max_gap_hours"),
+                      "label": _RC_LABELS.get(_item, _item),
+                      "reason": _sd.get("reason"),
                       "verdict": None}
             # The verdict function is applied to a REAL pair when one exists: the highest and lowest
             # epoch means this participant has actually shown under unchanged settings. That asks
@@ -1998,15 +2027,21 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
             "population_bar": {"points": _rc.FARRAR_MCID_POINTS,
                                "fraction": _rc.FARRAR_MCID_FRACTION,
                                "source": "Farrar et al. 2001, a group-derived benchmark"},
+            "max_gap_hours": _rc.MAX_PAIR_GAP_HOURS,
+            "items_order": list(_PRO_ITEMS),
             "what_it_means": (
                 "how large a pain change has to be, for this participant, before it can be told "
-                "from their own day-to-day noise. Reported alongside the population benchmark, "
-                "never in place of it. A smaller change is not no change."),
+                "from their own short-gap noise: the difference between two ratings of the same "
+                f"score filed within {_rc.MAX_PAIR_GAP_HOURS:g} hour(s) of each other with every "
+                "stimulation setting unchanged. Two entries within the same minute count once. "
+                "Reported alongside the population benchmark, never in place of it. A smaller "
+                "change is not no change."),
             "note": (None if _rc_assessed else
-                     "not assessed for any pain score yet: this participant has no run of repeated "
-                     "ratings under one unchanged stimulation setting long enough to estimate their "
-                     "own noise. This waits on visits rather than on code, and fills in on its own "
-                     "once those ratings exist. Nothing on this page is held up by it."),
+                     "not assessed for any pain score yet: this participant has too few pairs of "
+                     f"ratings filed within {_rc.MAX_PAIR_GAP_HOURS:g} hour(s) of each other under "
+                     "one unchanged stimulation setting to estimate their own noise. This waits on "
+                     "ratings rather than on code, and fills in on its own once they exist. "
+                     "Nothing on this page is held up by it."),
         }
     except Exception as _exc:                          # never let this take down the whole report
         _log.warning("closed-loop report: the reliable-change floor could not be estimated for %s",

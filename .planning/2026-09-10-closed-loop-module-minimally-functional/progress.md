@@ -131,3 +131,21 @@ asks whether a band fits the device's sensing range. That is a frequency questio
 stimulation one, so no existing code conflicted with the boundary and nothing had to be removed.
 
 **All three of the PI's decisions are now answered.** Two built, one closed.
+
+### Reliable-change floor — analysis before the 12-hour rule is committed (2026-09-10)
+Uncommitted working-tree changes: `ClosedLoopDeployment/reliable_change.py` (12-h epoch cutoff,
+parameterised as `MAX_EPOCH_HOURS`), `ClosedLoopDeployment/adapter.py` (reports the cutoff and the
+dropped count). Findings §8 has the full numbers. Awaiting the PI's choice between: epoch-length
+cutoff (his original ask; leaves 3 epochs), the pairwise consecutive-rating estimator (605 pairs,
+stable, ~2.1-point threshold), or no change. Decision 104's wrong sentence still needs correcting
+regardless — that is a documentation fix independent of the estimator choice.
+
+### Reliable-change floor — DECIDED and built (2026-09-10, decision 111)
+The PI chose the pairwise estimator with a ONE-hour gap and same-minute duplicates removed, per
+score, with a selector on the page. `reliable_change.short_gap_pairwise_sd` replaces the pooled
+within-epoch estimator (deleted, with its six tests; eight new). The report loads the raw ratings
+once more per request. New panel `ClosedLoopSim/ReliableChangePanel.js` under the band-stability
+panel. Live on RCS08: NRS 15 pairs / 8 stretches / 8 same-minute repeats set aside, SD 0.365,
+threshold 1.01; all six scores assessed; verdict unmoved. Host 1025 passed (1 known), container
+633/0. Frontend rebuilt; panel text in 476.21797a76.chunk.js. Decision 104's wrong sentence
+corrected in place. The 12-hour epoch-cutoff draft was discarded, never committed.

@@ -41,17 +41,41 @@ FARRAR_MCID_FRACTION = 0.30
 #: Two-sided 95% confidence, computed rather than hand-rounded to 1.96.
 RELIABLE_CHANGE_Z = float(_st.norm.ppf(0.975))
 
-#: Below this many usable ratings, one epoch's own standard deviation is too noisy an estimate of
-#: itself to pool -- the same floor `attach_pros`'s own per-epoch SD/mean/count columns imply are
-#: needed before an epoch's spread means anything.
-MIN_RATINGS_PER_EPOCH = 2
+#: THE SHORT-GAP ESTIMATOR, replacing the pooled within-epoch one (PI, 2026-09-10, decision 111).
+#:
+#: Jacobson & Truax's noise is meant to be the same state measured twice over a SHORT gap. The
+#: first version of this file pooled the spread of every rating inside a stretch of unchanged
+#: stimulation settings -- and on this record those stretches run for days (median 49 h, longest
+#: 43 days for RCS08), so the number carried weeks of real pain moving with sleep, weather and
+#: activity while the device sat still. Measured: within-stretch spread did not even grow with
+#: stretch length (Spearman rho = -0.01), because the patient rates several times a day and the
+#: ratings being compared were mostly hours apart whatever the stretch's length. The right unit
+#: is therefore the gap between two consecutive ratings, not the length of the stretch.
+#:
+#: WHAT COUNTS AS A PAIR: two consecutive ratings of the same item, filed inside the same stretch
+#: of unchanged settings (so the therapy is the same for both), no more than `MAX_PAIR_GAP_HOURS`
+#: apart. The PI chose ONE HOUR: on RCS08 this patient re-rates within the hour often enough for
+#: it to be a real measurement (23 pairs from 10 stretches), and when they do the answer is almost
+#: always identical and never off by more than one point. That is the tightest honest reading of
+#: "how much does this patient's rating move when nothing has changed".
+#:
+#: DUPLICATES ARE REMOVED FIRST. Eight of those 23 pairs were two entries at the same minute with
+#: the same value -- a second entry within a minute of the first is not a second reading, it is the
+#: same reading recorded twice, and leaving it in pulls the noise toward zero for free. The later
+#: entry of any same-minute pair is dropped and counted (`n_dropped_same_minute`) so the removal
+#: is visible.
+#:
+#: THE ESTIMATE. For n consecutive differences d, the pooled SD of a single rating is
+#: sqrt(mean(d^2) / 2), because a difference of two equally noisy readings has twice the variance
+#: of one. Each pair contributes one degree of freedom.
+MAX_PAIR_GAP_HOURS = 1.0
+SAME_MINUTE_SECONDS = 60.0
 
-#: Below this many pooled degrees of freedom, the participant's own same-condition noise estimate
-#: is not assessed rather than reported on flimsy grounds -- five is a low bar deliberately, since
-#: refusing entirely would make this check unusable early in a participant's own record; the pooled
-#: degrees of freedom are always reported alongside the estimate so a reader can judge for
-#: themselves how much history stands behind it.
-MIN_POOLED_DF = 5
+#: Below this many pairs the floor is reported as not assessed rather than on flimsy grounds. Five
+#: is a low bar deliberately, for the same reason the old pooled floor used five degrees of
+#: freedom: refusing entirely would make this check unusable early in a participant's own record,
+#: and the pair count is always reported beside the estimate so a reader can judge for themselves.
+MIN_PAIRS = 5
 
 
 def _f(v):
@@ -62,57 +86,84 @@ def _f(v):
     return x if np.isfinite(x) else np.nan
 
 
-def pooled_same_condition_sd(epochs, item, *, min_n_per_epoch=MIN_RATINGS_PER_EPOCH,
-                             min_total_df=MIN_POOLED_DF):
-    """RCS08's own pooled standard deviation of one pain-report item, estimated from repeated
-    ratings collected under an unchanged stimulation condition.
+def short_gap_pairwise_sd(rating_times_s, rating_values, epoch_starts_s, epoch_ends_s, *,
+                          max_gap_hours=MAX_PAIR_GAP_HOURS, washin_s=60.0,
+                          same_minute_s=SAME_MINUTE_SECONDS, min_pairs=MIN_PAIRS):
+    """The participant's own short-gap rating noise for ONE pain item, from consecutive ratings
+    filed within `max_gap_hours` of each other under unchanged stimulation settings.
 
-    ``epochs`` is `StimOptimizer.adapter.attach_pros`'s own return shape: one row per contiguous,
-    unchanged-settings epoch, columns ``{item}``, ``{item}_sd``, ``{item}_n`` among them. ``item``
-    is one of `StimOptimizer.adapter.PRO_ITEMS` (e.g. ``"nrs"``).
+    ``rating_times_s`` and ``rating_values`` are one entry per filed rating (seconds since the
+    epoch, and the score; non-finite entries are ignored). ``epoch_starts_s`` / ``epoch_ends_s``
+    are `StimOptimizer.adapter.exposure_epochs`'s own stretches of unchanged settings, in the
+    same units. A rating inside the first ``washin_s`` of a stretch is left out, as `attach_pros`
+    leaves it out, because the patient may still be feeling the change.
 
-    Returns a dict, never raising: ``pooled_sd``, ``df`` (pooled degrees of freedom), ``n_epochs``
-    (how many epochs contributed), and ``reason`` (only set when ``pooled_sd`` is NaN, naming why).
+    Returns a dict, never raising, in the shape `reliable_change_verdict` reads: ``pooled_sd``,
+    ``df`` (one per pair), ``n_pairs``, ``n_epochs`` (stretches that contributed a pair),
+    ``n_dropped_same_minute``, ``max_gap_hours``, and ``reason`` (set only when ``pooled_sd`` is
+    NaN, naming why).
     """
-    out = dict(pooled_sd=np.nan, df=0, n_epochs=0, reason=None)
-    if epochs is None or len(epochs) == 0:
-        out["reason"] = "no epochs of unchanged stimulation settings are available"
+    out = dict(pooled_sd=np.nan, df=0, n_pairs=0, n_epochs=0, n_dropped_same_minute=0,
+               max_gap_hours=float(max_gap_hours), reason=None)
+    t = np.asarray(rating_times_s, dtype=float)
+    v = np.asarray(rating_values, dtype=float)
+    if t.size == 0 or t.size != v.size:
+        out["reason"] = "no ratings were handed in for this item"
+        return out
+    ok = np.isfinite(t) & np.isfinite(v)
+    t, v = t[ok], v[ok]
+    if t.size < 2:
+        out["reason"] = "fewer than two ratings of this item exist"
+        return out
+    order = np.argsort(t, kind="stable")
+    t, v = t[order], v[order]
+
+    starts = np.asarray(epoch_starts_s, dtype=float)
+    ends = np.asarray(epoch_ends_s, dtype=float)
+    if starts.size == 0 or starts.size != ends.size:
+        out["reason"] = "no stretches of unchanged stimulation settings are available"
         return out
 
-    sd_col, n_col = f"{item}_sd", f"{item}_n"
-    if sd_col not in epochs.columns or n_col not in epochs.columns:
-        out["reason"] = f"no {item!r} ratings were matched to any epoch"
-        return out
+    diffs, epochs_hit = [], set()
+    for i in range(starts.size):
+        if not (np.isfinite(starts[i]) and np.isfinite(ends[i])):
+            continue
+        m = (t >= starts[i] + float(washin_s)) & (t < ends[i])
+        if m.sum() < 2:
+            continue
+        ti, vi = t[m], v[m]
+        # Drop the later entry of any two filed within the same minute: one reading recorded twice.
+        keep = np.ones(ti.size, dtype=bool)
+        for k in range(1, ti.size):
+            if ti[k] - ti[k - 1] < float(same_minute_s):
+                keep[k] = False
+        out["n_dropped_same_minute"] += int((~keep).sum())
+        ti, vi = ti[keep], vi[keep]
+        if ti.size < 2:
+            continue
+        gaps_h = (ti[1:] - ti[:-1]) / 3600.0
+        close = gaps_h <= float(max_gap_hours)
+        if close.any():
+            diffs.extend((vi[1:] - vi[:-1])[close].tolist())
+            epochs_hit.add(i)
 
-    ns = epochs[n_col].to_numpy(dtype=float)
-    sds = epochs[sd_col].to_numpy(dtype=float)
-    ok = np.isfinite(ns) & np.isfinite(sds) & (ns >= min_n_per_epoch)
-    if not ok.any():
-        out["reason"] = (f"no epoch has at least {min_n_per_epoch} {item!r} ratings to estimate "
-                         "its own spread")
+    n = len(diffs)
+    out["n_pairs"] = n
+    out["df"] = n
+    out["n_epochs"] = len(epochs_hit)
+    if n < int(min_pairs):
+        out["reason"] = (f"only {n} pair(s) of ratings filed within {max_gap_hours:g} h of each "
+                         f"other under unchanged settings, below the {min_pairs} required")
         return out
-
-    ns, sds = ns[ok], sds[ok]
-    dfs = ns - 1.0
-    df = float(np.sum(dfs))
-    if df < min_total_df:
-        out["df"] = int(round(df))
-        out["n_epochs"] = int(ok.sum())
-        out["reason"] = (f"only {df:.0f} pooled degrees of freedom of same-condition {item!r} "
-                         f"history are available, below the {min_total_df} required")
-        return out
-
-    pooled_variance = float(np.sum(dfs * sds ** 2) / df)
-    out["pooled_sd"] = float(np.sqrt(pooled_variance)) if pooled_variance >= 0 else np.nan
-    out["df"] = int(round(df))
-    out["n_epochs"] = int(ok.sum())
+    d = np.asarray(diffs, dtype=float)
+    out["pooled_sd"] = float(np.sqrt(np.mean(d ** 2) / 2.0))
     return out
 
 
 def reliable_change_verdict(pre_mean, post_mean, pooled_sd_result, *, n_pre=1, n_post=1,
                             item_label="pain rating", scale_max=10.0):
     """Combine two means (e.g. a baseline condition's average rating and a candidate condition's)
-    with `pooled_same_condition_sd`'s own result into a plain-language verdict, reporting the
+    with `short_gap_pairwise_sd`'s own result into a plain-language verdict, reporting the
     individual reliable-change index alongside the Farrar population MCID as a secondary,
     explicitly group-derived cross-check -- never the other way around.
 

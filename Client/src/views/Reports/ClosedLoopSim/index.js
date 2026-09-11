@@ -69,6 +69,7 @@ import EvidenceTrianglePanel from "./EvidenceTrianglePanel";
 import PrescriptionPanel from "./PrescriptionPanel";
 import DutyCyclePanel from "./DutyCyclePanel";
 import BandStabilityPanel from "./BandStabilityPanel";
+import ReliableChangePanel from "./ReliableChangePanel";
 import BandSweepGridPanel from "./BandSweepGridPanel";
 import ThreeSourceResponsePanel from "./ThreeSourceResponsePanel";
 import useDeploymentSummary from "./useDeploymentSummary";
@@ -590,6 +591,14 @@ function ClosedLoopSim() {
               <Grid item xs={12} id="cl-stability">
                 <BandStabilityPanel stability={deploymentReport?.data?.band_stability
                   || deploymentReport?.band_stability} />
+              </Grid>
+
+              {/* The patient's own rating noise, per pain score, with a selector (decision 111).
+                  Built from consecutive ratings within an hour under unchanged settings; warns and
+                  blocks nothing. It was in the report's data since decision 104 and on no page. */}
+              <Grid item xs={12} id="cl-reliable-change">
+                <ReliableChangePanel reliableChange={deploymentReport?.data?.reliable_change
+                  || deploymentReport?.reliable_change} />
               </Grid>
 
               {/* BAND 4 — the transcription surface. Withholds its values while the device verdict
