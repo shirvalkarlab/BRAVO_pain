@@ -5,12 +5,12 @@ Work the outstanding-items list of 2026-09-10 in the PI's order ("start with num
 two, three, etc."), each item proven on live data or in the served bundle before the next starts.
 
 ## Next Step
-Item 2: a live test that the timeline circle equals the spectrum point at the same band centre
-(Biomarkers page). Item 1 is done and watched. **The PI will open a NEW session for Phase 7, the
+Item 3: the labelling and navigation tidy-ups on the Closed-Loop page — but Phase 7 (the PI's
+redesign brief) supersedes cosmetic work on that page, so item 3 is checked against Phase 7 first. **The PI will open a NEW session for Phase 7, the
 Closed-Loop page redesign; his brief is in findings.md §3 and must be read first there.**
 
 ## Current Phase
-Phase 2
+Phase 3
 
 ## Phases
 
@@ -24,7 +24,12 @@ Phase 2
       pictures and the two folded sections named as NOT ON THIS RECORD
 
 ### Phase 2: Timeline circle equals spectrum point — a live test
-**Status:** pending
+**Status:** complete
+- [x] Measured first: 240 of 240 circles (TD or bridge tier) equal the spectrum at the same centre,
+      bit for bit, across all 12 sensing contacts on RCS08
+- [x] `test_timeline_circle_equals_spectrum_point.py`: constructed identity, the native-tier
+      exclusion pinned as a rule, and a live RCS08 test that skips when the participant is absent
+- [x] Container 636 passed, 0 failed (+3)
 
 ### Phase 3: Labelling and navigation tidy-ups on the Closed-Loop page
 **Status:** pending
@@ -59,7 +64,7 @@ the scientific-visualization and UI/UX skills before designing. In his order:
 - [ ] The three source titles inside that panel become exactly: "Time domain derived LSB",
       "PSD derived LSB", "Direct LSB recording" (today: "from the voltage trace", "from the device's
       own spectrum", "from the device's own band power")
-- [ ] The text under those three panels made much more concise, using the scientific-visualization
+- [ ] The text under those three panels made much more concise, using the ps-scientific-writing
       skill
 - [ ] Three-source panel: drop the per-visit tabs; two tabs only, right-side amplitude change and
       left-side amplitude change, each pooled across all visits (decision 55's pooling)

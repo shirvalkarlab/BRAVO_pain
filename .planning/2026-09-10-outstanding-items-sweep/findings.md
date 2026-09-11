@@ -58,3 +58,16 @@ make it much slimmer."
   amplitude change and left side amplitude change pooled across all visits. Then we'll have to
   adjust or massage exactly what calculation goes into the evidence triangle from there, which
   remains to be determined."
+
+## §4 Item 2 — the "spectral point" is on no page (2026-09-10)
+`availability.per_pro_lsb_spectrum` has zero production callers: the live per-rating spectrum was
+retired on 2026-06-28 when tile-cache matching replaced it (bravo_service.py's own comment near
+`_live_pro_lsb_spectrum`: "the legacy real-time per_pro_lsb_spectrum recompute is retired"). The
+timeline circle (`per_pro_lsb`, av.pro_lsb) IS on the Biomarkers page. So open item 13 pinned a
+live number against a function nothing reads. Measured anyway: 240/240 equal (TD 15-16 per
+contact, bridge 105 on ZERO_THREE_RIGHT, 29 on ONE_THREE_LEFT, 4 on ZERO_TWO_LEFT); native-tier
+circles (25, 74, 6) are excluded because the spectrum has no native tier. Probe:
+`_agent_bridge/_probe_tl/probe_circle_vs_spectrum.py` (disposable). The live test costs ~16 s.
+**Candidate for the PI**: `per_pro_lsb_spectrum` is a zero-caller function, the same class
+decision 110 deleted (`per_pro_lsb_overlay`); if it goes, the live test goes with it and the
+constructed one becomes moot.
