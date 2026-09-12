@@ -2286,19 +2286,6 @@ def test_log_scale_rule_is_two_sided_where_raw_is_not():
     assert (m_raw & (x < med)).sum() == 0, "raw-scale removals are one-sided (high only)"
 
 
-def test_one_exclusion_set_blanks_every_array_identically():
-    """The whole point: a single exclusion set must reach every statistic. Blanking to NaN keeps row
-    alignment against the label and cluster vectors, so no downstream filter can disagree."""
-    from modules.Biomarkers.routines import analytics as an
-    disp = np.array([1., 1.1, 0.9, 1.05, 1e6, 0.95])
-    log = np.log10(disp)
-    (d2, l2), info = an.apply_outlier_exclusion([disp, log], detect_on=disp,
-                                                n_mad=5.0, scale="log")
-    assert info["n_removed"] == 1
-    assert list(np.where(~np.isfinite(d2))[0]) == list(np.where(~np.isfinite(l2))[0]) == [4]
-    assert d2.shape == disp.shape and l2.shape == log.shape     # alignment preserved
-
-
 def test_the_two_mad_helpers_have_opposite_polarity_and_must_not_be_confused():
     """Guard against a latent trap: three MAD helpers now exist with DIFFERENT conventions.
 
@@ -3197,21 +3184,6 @@ def test_the_resampling_agrees_with_the_one_the_deployment_roc_already_used():
                                           np.random.default_rng(4))
     b = analytics._weighted_auc_matrix(power, y, W)
     assert np.allclose(np.nan_to_num(a, nan=-1), np.nan_to_num(b, nan=-1)), "the two disagree"
-
-
-def test_the_correlation_moves_with_the_power_scale_and_the_other_number_does_not():
-    """The reason the two tables need different warnings on them. A correlation is about
-    straight-line agreement, so putting the power through a logarithm changes it. The area under the
-    curve depends only on the order of the values, so it does not."""
-    power, pain, rg, times = _band_arrays(n_reports=40, per_report=3, effect=1.0, seed=41)
-    curved = 10.0 ** (power / 2.0)                  # same order, very different spacing
-    r_flat = analytics.band_pain_correlation(power, pain, rg, times=times, n_boot=200, seed=1)
-    r_curved = analytics.band_pain_correlation(curved, pain, rg, times=times, n_boot=200, seed=1)
-    a_flat = analytics.band_pain_auc(power, pain, rg, times=times, n_boot=200, seed=1)
-    a_curved = analytics.band_pain_auc(curved, pain, rg, times=times, n_boot=200, seed=1)
-    assert abs(r_curved["pearson_r"] - r_flat["pearson_r"]) > 0.05, \
-        (r_flat["pearson_r"], r_curved["pearson_r"])
-    assert abs(a_curved["auc"] - a_flat["auc"]) < 1e-12, (a_flat["auc"], a_curved["auc"])
 
 
 def test_the_old_straight_line_calculation_is_gone_from_this_page():

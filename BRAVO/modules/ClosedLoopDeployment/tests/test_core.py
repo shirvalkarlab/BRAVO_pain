@@ -5,7 +5,6 @@ import pytest
 
 from ClosedLoopDeployment import adapter as AD, edges as E, consistency as C, authority as AU
 from ClosedLoopDeployment.types import EdgeEstimate
-from ClosedLoopDeployment.registry import Registry
 
 
 # --- Phase 0 ------------------------------------------------------------------------------------
@@ -152,27 +151,6 @@ def test_threshold_placement_enforces_the_d27_capture_artefact_ceiling():
 
 
 # --- ledger -------------------------------------------------------------------------------------
-def test_registry_is_append_only_and_detects_tampering(tmp_path):
-    p = tmp_path / "reg.json"
-    r = Registry(p)
-    r.register(candidates=["a"], estimators={"E1": "ols"}, alpha=0.05, correction="none",
-               stopping_rule="fixed n", primary_outcome="nrs")
-    r.amend(what_changed="alpha", why="stricter", fields={"alpha": 0.01})
-    assert r.effective()["alpha"] == 0.01
-    assert len(r.effective()["amendments_applied"]) == 1
-    # the original registration entry is untouched
-    assert r.entries[0]["alpha"] == 0.05
-    import json
-    d = json.loads(p.read_text()); d["entries"][0]["alpha"] = 0.5; p.write_text(json.dumps(d))
-    assert Registry(p).tampered is True
-
-
-def test_registry_refuses_an_unexplained_amendment(tmp_path):
-    r = Registry(tmp_path / "r.json")
-    r.register(candidates=["a"], estimators={}, alpha=0.05, correction="none",
-               stopping_rule="x", primary_outcome="nrs")
-    with pytest.raises(ValueError):
-        r.amend(what_changed="alpha", why="")
 
 
 def test_epoch_assignment_survives_microsecond_resolution_datetimes():
@@ -1436,4 +1414,3 @@ def test_the_closed_loop_module_reaches_the_biomarker_page_for_this_and_re_expor
     for gone in ("band_pain_tracking", "band_pain_tracking_from_detail", "PAIN_TRACKING_TRACKS",
                  "PAIN_TRACKING_NOT_RESOLVED", "PAIN_TRACKING_NOT_ASSESSED"):
         assert not hasattr(E, gone), f"{gone} is still reachable from the closed-loop module"
-

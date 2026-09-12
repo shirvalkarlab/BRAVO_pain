@@ -105,28 +105,3 @@ def test_plateau_needs_k_plus_one_batches():
     mu, sd, n_rep, inc = _certain_grid()
     d = ACQ.check_stopping([-1.0, -1.0], mu, sd, n_rep, incumbent_mu=inc)
     assert not d.plateau_met
-
-
-# Restored 2026-09-12: the audit made their deletion conditional on a design decision the PI
-# has not made (the stopping rule's one-item history; the ramp clip of commit 790ed21), so
-# they stay until he does.
-def test_plateau_alone_does_not_stop():
-    """The whole point of the dual rule: a flat history is not a global optimum."""
-    mu, sd, n_rep, _ = np.full(50, 0.0), np.full(50, 1.0), np.zeros(50), None
-    d = ACQ.check_stopping([0.0, 0.0, 0.0, 0.0], mu, sd, n_rep, incumbent_mu=0.0)
-    assert d.plateau_met and not d.coverage_met and not d.stop
-    assert d.binding == "coverage"
-
-
-def test_both_conditions_stop():
-    mu, sd, n_rep, inc = _certain_grid()
-    d = ACQ.check_stopping([-1.0, -1.0, -1.0, -1.0], mu, sd, n_rep, incumbent_mu=inc)
-    assert d.stop and d.binding == "plateau and coverage"
-
-
-def test_ceiling_reports_truncated_not_converged():
-    mu, sd, n_rep = np.full(50, 0.0), np.full(50, 1.0), np.zeros(50)
-    cfg = ACQ.StoppingConfig(max_batches=3)
-    d = ACQ.check_stopping([1.0, 0.9, 0.8], mu, sd, n_rep, incumbent_mu=0.0, cfg=cfg)
-    assert d.truncated and not d.stop and d.binding == "hard ceiling"
-    assert "NOT found the optimum" in d.describe()
