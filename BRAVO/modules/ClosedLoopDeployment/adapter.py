@@ -2214,6 +2214,75 @@ def _cache_status_or_reason(participant):
                 "what_it_means": "the report itself is unaffected; only its freshness line is."}
 
 
+def programmed_settings_from_epochs(eps, hemisphere):
+    """The device's own programmed rate and pulse width on one side, read off the exposure-epoch
+    table (``StimOptimizer.adapter.exposure_epochs``) rather than asked of the caller.
+
+    WHY THIS EXISTS. A band picked from the calibrated grid (the "Choose a band" card) carries a
+    channel and a centre frequency and nothing about stimulation, because the grid is built from
+    recordings, not from a proposed setting. D27 and D31 both need a rate and a pulse width, so
+    every such candidate reached them as ``None`` and both rules blocked or went unknown for a
+    reason that has nothing to do with the band -- the device has a real, current rate and pulse
+    width on record, it was simply never read.
+
+    WHICH EPOCH. The one in force now: the open-ended epoch if the table has one (the current row
+    never closes because nothing has changed since), otherwise the epoch with the latest start
+    time.
+
+    WHICH SIDE. Pulse width is asymmetric between hemispheres on this participant, so the caller
+    must say which hemisphere's column to read (``"Left"`` or ``"Right"``); this function does not
+    guess or pool the two sides.
+
+    NEVER A FABRICATED VALUE. An absent table, an empty table, an unrecognised hemisphere, or a
+    hemisphere whose pulse-width column the table does not carry all return an empty dict, never a
+    guessed number. A ``None``-valued fact must stay ``None``.
+
+    Returns a dict with up to three keys: ``rate_hz``, ``pulse_width_us``, and ``_provenance`` (one
+    sentence naming the epoch and when it started, for the caller to attach to whichever of the two
+    facts it actually filled in).
+    """
+    out = {}
+    if hemisphere not in ("Left", "Right"):
+        return out
+    try:
+        if eps is None or len(eps) == 0 or "t_start" not in eps.columns:
+            return out
+    except (TypeError, AttributeError):
+        return out
+
+    if "open_ended" in eps.columns and bool(eps["open_ended"].fillna(False).any()):
+        rows = eps.loc[eps["open_ended"] == True]                       # noqa: E712
+    else:
+        rows = eps
+    row = rows.sort_values("t_start").iloc[-1]
+
+    rate = row.get("freq_hz")
+    if rate is not None and not pd.isna(rate):
+        out["rate_hz"] = float(rate)
+
+    pw_col = f"pw_us_{hemisphere}"
+    pw = row.get(pw_col) if pw_col in row.index else None
+    if pw is not None and not pd.isna(pw):
+        out["pulse_width_us"] = float(pw)
+
+    if out:
+        when = row.get("t_start")
+        try:
+            when_s = pd.Timestamp(when).strftime("%Y-%m-%d %H:%M UTC")
+        except (TypeError, ValueError):
+            when_s = str(when)
+        state = "open-ended" if bool(row.get("open_ended")) else "closed"
+        # The epoch number arrives as a numpy float; print it as the integer a reader expects.
+        try:
+            epoch_s = str(int(row.get("epoch")))
+        except (TypeError, ValueError):
+            epoch_s = str(row.get("epoch"))
+        out["_provenance"] = (
+            f"measured: the device's programmed setting on the {hemisphere} as of {when_s} "
+            f"(exposure epoch {epoch_s}, {state})")
+    return out
+
+
 def report_for_participant(participant, request_data=None, *, candidates=None, hemisphere="Left",
                            power_scale="power_linear", force_refresh=None):
     """Fetch this participant's data from the platform and build the report.
@@ -2289,6 +2358,42 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
         _log.warning("closed-loop report: device facts unavailable for %s",
                      getattr(participant, "uid", participant), exc_info=True)
         dev = {"_provenance": {}, "_error": f"device facts unavailable: {exc!r}"}
+
+    # RATE AND PULSE WIDTH THE DEVICE IS ACTUALLY PROGRAMMED AT, read from the exposure-epoch
+    # table `eps` already loaded above (`evidence_inputs_cached`) rather than asked of the caller.
+    # D27 and D31 both need a rate and a pulse width, and a band picked from the calibrated grid
+    # (the "Choose a band" card) carries neither -- the frontend never sends them, because the grid
+    # is built from recordings, not from a proposed setting. Without this every such candidate
+    # blocked or went unknown on D27/D31 for a reason that has nothing to do with the band.
+    #
+    # This is a DEVICE FACT, not a candidate default, so it is folded into `dev` the same way the
+    # facts above are: `pipeline._facts_for` only fills a candidate's key when the candidate itself
+    # left it `None`, so an explicit rate or pulse width the caller already supplied is never
+    # overridden here.
+    #
+    # THE HEMISPHERE IS RESOLVED SEPARATELY FROM `_hemi` ABOVE, and deliberately in a different
+    # order: `_hemi` (used for impedance and the session-report facts) prefers the ACTUATED side,
+    # while this prefers the SENSING side, because that is the side D31's own predicate keys its
+    # programmed-pair lookup on (`_p_d31` reads `sensing_hemisphere` first, then the legacy
+    # `hemisphere` key -- never `actuated_hemisphere`). Reading the wrong side here would inject a
+    # rate/pulse-width pair D31 then checks against the OTHER side's programmed history.
+    try:
+        _prog_hemi_raw = ((cands[0] or {}).get("sensing_hemisphere")
+                          or (cands[0] or {}).get("actuated_hemisphere") or hemisphere)
+        _prog_hemi = {"left": "Left", "right": "Right"}.get(
+            str(_prog_hemi_raw).strip().lower()) if _prog_hemi_raw else None
+        _prog = programmed_settings_from_epochs(eps, _prog_hemi) if _prog_hemi else {}
+        _prog_prov = _prog.pop("_provenance", None)
+        if _prog:
+            dev.setdefault("_provenance", {})
+            for _pk, _pv in _prog.items():
+                if dev.get(_pk) is None:
+                    dev[_pk] = _pv
+                    if _prog_prov:
+                        dev["_provenance"][_pk] = _prog_prov
+    except Exception as exc:                # never let this take down the report either
+        _log.warning("closed-loop report: programmed rate/pulse width unavailable for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
 
     # The pooled titration slope for the first candidate, from the stored table (decision 103),
     # handed to the pipeline as E1 (redesign decision 9). None when nothing is stored yet.

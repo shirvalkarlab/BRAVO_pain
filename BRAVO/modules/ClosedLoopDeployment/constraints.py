@@ -294,6 +294,19 @@ CANDIDATE_KEYS = {
                    "filter stopband.",
     "impedance_ohms": "D16.",
     "impedance_tested": "D16.",
+    "impedance_measurement_current": "D16. The impedance test's own measurement current: a float "
+                                     "number of mA, or 'automatic_increase' for the device's "
+                                     "default, automatically stepping low-current mode. Recorded "
+                                     "for the ledger; the predicate does not read it directly, "
+                                     "because it is device_facts.py that already chose which "
+                                     "recording 'impedance_ohms' came from.",
+    "impedance_measured_at": "D16. The date of the impedance test 'impedance_ohms' came from.",
+    "impedance_ohms_automatic_newest": "D16. Present only when the newest impedance test of all "
+                                       "ran in the device's automatic low-current mode and read "
+                                       "above the open limit while the fixed-current test this "
+                                       "rule trusts read inside it -- the PI's ruled spurious-fail "
+                                       "case, 2026-09-12.",
+    "impedance_automatic_measured_at": "D16. The date of that automatic-mode test.",
     "artifact_flags": "D17. A list; an empty list means the device flagged nothing.",
     "power_slope_vs_amplitude_sign": "D19. Must be -1: the LFP must be suppressed when stimulation "
                                      "is high.",
@@ -804,10 +817,22 @@ def _p_d27(candidate, participant):
     derivation. For this participant the recorded pulse width is asymmetric between hemispheres,
     most commonly 60 us on the left and 160 us on the right, so right-hemisphere captures are
     artefact-suspect by this rule.
+
+    THE PULSE WIDTH THIS RULE NEEDS IS THE ONE USED AT THE CAPTURE, not necessarily whatever pulse
+    width the candidate is otherwise carrying. ``capture_pulse_width_us`` (from
+    ``device_facts.session_report_facts_for``, the newest capture on record) is read first for
+    exactly the reason ``capture_amp_high_mA`` is already preferred over the general ``amp_mA``
+    two lines below: a candidate's general pulse width can now be filled in from the device's
+    CURRENTLY programmed setting (``adapter.programmed_settings_from_epochs``), which is a
+    deployment fact and not a statement about what was running when the threshold was captured.
+    The two usually agree, but this rule must answer the capture question even on the day they do
+    not. ``pulse_width_us`` is kept as the fallback for a caller that has no capture record at all.
     """
     if not _is_adaptive(candidate):
         return True
-    pw = _num(candidate, "pulse_width_us")
+    pw = _num(candidate, "capture_pulse_width_us")
+    if pw is None:
+        pw = _num(candidate, "pulse_width_us")
     hi = _num(candidate, "capture_amp_high_mA")
     if hi is None:
         hi = _num(candidate, "amp_mA")
@@ -1271,8 +1296,34 @@ def _o_d15(c, p):
 
 
 def _o_d16(c, p):
-    return (f"impedance {c.get('impedance_ohms')!r} ohms on a {p.get('lead_type')!r} lead, "
-            f"impedance test performed: {c.get('impedance_tested')!r}")
+    """The observed text for D16, naming which recording the reading came from and why.
+
+    A bare ohm figure does not say whether it came from the device's automatic low-current mode,
+    where a healthy lead can read as an apparent open circuit (the PI's finding, 2026-09-12), or a
+    fixed-current test that actually confirms it. This makes that visible on every ledger row,
+    passing or failing.
+    """
+    cur = c.get("impedance_measurement_current")
+    when = c.get("impedance_measured_at")
+    if isinstance(cur, (int, float)) and not isinstance(cur, bool):
+        current_txt = f"a fixed measurement current of {cur:g} mA, recorded {when!r}"
+    elif cur == "automatic_increase":
+        current_txt = (f"the device's automatic low-current mode, recorded {when!r}; no "
+                       f"fixed-current impedance test is on record, so a fixed-current test would "
+                       f"settle whether this reading is a spurious fail at low measurement current")
+    else:
+        current_txt = "a measurement current that was not recorded"
+    text = (f"impedance {c.get('impedance_ohms')!r} ohms on a {p.get('lead_type')!r} lead, "
+            f"impedance test performed: {c.get('impedance_tested')!r}, measured at "
+            f"{current_txt}")
+    auto_ohm = c.get("impedance_ohms_automatic_newest")
+    if auto_ohm is not None:
+        text += (f". The newest impedance test of all, recorded "
+                 f"{c.get('impedance_automatic_measured_at')!r}, used the device's automatic "
+                 f"low-current mode and read {auto_ohm!r} ohms -- ruled a spurious fail at that "
+                 f"measurement current by the principal investigator on 2026-09-12, not a real "
+                 f"open circuit")
+    return text
 
 
 def _o_d17(c, p):
@@ -1295,8 +1346,12 @@ def _o_d24(c, p):
 
 
 def _o_d27(c, p):
+    if c.get("capture_pulse_width_us") is not None:
+        pw_label, pw_val = "capture pulse width", c.get("capture_pulse_width_us")
+    else:
+        pw_label, pw_val = "pulse width", c.get("pulse_width_us")
     return (f"capture high amplitude {c.get('capture_amp_high_mA', c.get('amp_mA'))!r} mA against "
-            f"{CAPTURE_ARTEFACT_AMP_MA} mA and pulse width {c.get('pulse_width_us')!r} us against "
+            f"{CAPTURE_ARTEFACT_AMP_MA} mA and {pw_label} {pw_val!r} us against "
             f"{CAPTURE_ARTEFACT_PW_US} us")
 
 
@@ -1366,7 +1421,7 @@ _OBSERVED = {
 #: rules whose values are unread today, so when a value finally is supplied the report should say
 #: what it was rather than merely dropping the unknown. Recording every passing rule's value would
 #: bury these three among twenty routine lines.
-_RECORD_VALUE_ON_PASS = ("D03", "D04", "D31")
+_RECORD_VALUE_ON_PASS = ("D03", "D04", "D16", "D31")
 
 
 # ------------------------------------------------------------------------------------------------
@@ -1637,7 +1692,18 @@ RULES = (
             "microseconds and 100 Hz at 0.1, 0.4 or 1.0 mA, rising to 450 microseconds if impedance "
             "measures higher than normal. An untested channel fails this rule even when a stored "
             "impedance value happens to be in range, because the stored value may predate the "
-            "current lead state."
+            "current lead state.\n\n"
+            "PI DECISION, 2026-09-12: the device's DEFAULT impedance test steps a low measurement "
+            "current up automatically, and at that low current a healthy lead can read above the "
+            "10 kilohm open limit even though the same lead reads normal at a fixed, higher "
+            "measurement current. Measured on RCS08's own record: 351 of 544 recordings run in "
+            "the automatic mode read the Left lead's worst pair above 10,000 ohms, against 0 of "
+            "18 recordings run at a fixed current. A high reading produced only by the automatic "
+            "mode must not, by itself, fail this rule. This predicate is therefore evaluated "
+            "against the NEWEST recording run at a FIXED measurement current, when one exists on "
+            "record, and only falls back to the newest recording of any kind when no fixed-current "
+            "recording exists -- this is a deliberate reading of the data, not an oversight, and "
+            "should not be reverted without a further PI decision."
         ),
         predicate=_p_d16,
     ),

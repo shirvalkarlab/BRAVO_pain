@@ -29,6 +29,62 @@ def _lead_type(lead_model):
     return "sensight" if str(lead_model).upper() in _SENSIGHT_MODELS else "1x4"
 
 
+#: The open-circuit limit D16 uses, duplicated here (rather than imported from ``constraints``)
+#: because ``constraints.py`` already imports this module and a circular import would follow.
+_OPEN_LIMIT_OHM = 10_000.0
+
+
+def _measurement_current(metadata):
+    """The impedance test's own measurement current, from ``metadata["Amplitude"]``.
+
+    THE PI'S FINDING, 2026-09-12: the device's DEFAULT impedance test steps a low measurement
+    current automatically, and at that current a healthy lead can read above the open-circuit
+    limit while the same lead reads normal at a fixed, higher current. Measured on RCS08: 351 of
+    544 recordings run in the automatic mode read the Left lead's worst pair above 10,000 ohms,
+    against 0 of 18 recordings run at a fixed current. This function reads which mode a given
+    recording used, so ``impedance_facts`` can prefer a fixed-current reading for D16.
+
+    The raw strings on RCS08's own record are written with no space before the unit --
+    "Automatic increasemA", "0.4mA", "1.0mA" -- so this is parsed defensively rather than assuming
+    one fixed spelling. Returns ``"automatic_increase"``, a ``float`` number of mA, or ``None``
+    when the field is absent or cannot be read.
+    """
+    raw = (metadata or {}).get("Amplitude")
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if s.lower().startswith("automatic"):
+        return "automatic_increase"
+    if s.lower().endswith("ma"):
+        s = s[:-2]
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return None
+
+
+def _iso(d):
+    """A recording's date as something a report can print.
+
+    Real recordings carry a ``datetime``; the tests in this module use a plain integer, which is
+    passed through unchanged rather than forced into a shape it was never given.
+    """
+    if d is None:
+        return None
+    if hasattr(d, "isoformat"):
+        return d.isoformat()
+    # On the live platform ``Recording.date`` is a number of seconds since 1970 (UTC), e.g.
+    # 1789140600.0 for 2026-09-11 15:30 UTC; print it as a date rather than as that number.
+    try:
+        import datetime as _dt
+        v = float(d)
+        if v > 1e8:
+            return _dt.datetime.fromtimestamp(v, _dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    except (TypeError, ValueError, OverflowError, OSError):
+        pass
+    return d
+
+
 def impedance_facts(recordings):
     """Summarise impedance for D16 from ``MedtronicDeviceImpedance`` recording rows.
 
@@ -37,12 +93,29 @@ def impedance_facts(recordings):
     exactly the operation that would hide it. The device's own Status field is carried through
     verbatim, since the manufacturer's judgement of its own hardware outranks our threshold
     arithmetic.
+
+    WHICH RECORD THE PER-HEMISPHERE NUMBERS COME FROM, decided by the PI 2026-09-12 (see
+    ``_measurement_current``'s own note for the measurement). ``out["Left"]``, ``out["Right"]`` and
+    therefore ``candidate_impedance_ohm`` are read from the NEWEST recording run at a FIXED
+    measurement current, when one exists; only when no fixed-current recording is on record do
+    they fall back to the newest recording of any kind, which is exactly what this function did
+    before this change. ``measurement_current``, ``measured_at`` and ``status_chosen`` describe
+    whichever recording was actually used for that choice. ``status_newest``, ``lead_model`` and
+    ``lead_type`` still describe the single newest recording of any kind, because they are about
+    the device's current state rather than about which reading D16 trusts.
     """
     rows = [r for r in (recordings or []) if getattr(r, "metadata", None)]
     if not rows:
         return {"available": False, "reason": "no impedance recordings on record"}
     rows.sort(key=lambda r: getattr(r, "date", 0) or 0)
-    newest = rows[-1].metadata or {}
+    newest_row = rows[-1]
+    newest = newest_row.metadata or {}
+    newest_current = _measurement_current(newest)
+
+    fixed_rows = [r for r in rows if isinstance(_measurement_current(r.metadata), float)]
+    chosen_row = fixed_rows[-1] if fixed_rows else newest_row
+    chosen = chosen_row.metadata or {}
+    chosen_current = _measurement_current(chosen)
 
     statuses = {}
     for r in rows:
@@ -53,24 +126,37 @@ def impedance_facts(recordings):
            "status_newest": newest.get("Status"),
            "status_counts": statuses,
            "lead_model": (newest.get("Left") or {}).get("LeadModel"),
-           "lead_type": _lead_type((newest.get("Left") or {}).get("LeadModel"))}
+           "lead_type": _lead_type((newest.get("Left") or {}).get("LeadModel")),
+           "measurement_current": chosen_current,
+           "measured_at": _iso(getattr(chosen_row, "date", None)),
+           "status_chosen": chosen.get("Status")}
 
     # The historical worst is a DIFFERENT question from the current reading and both matter: a lead
     # whose newest measurement is inside the limits but which has exceeded them before is not the
     # same object as one that never has. Reporting only the newest hid this until the 2026-09-04
     # ingest brought in a newer, better measurement and D16 silently flipped from fail to pass.
+    # The "_fixed" figures restrict that same history to recordings run at a fixed measurement
+    # current, so a reader can tell whether the record's own worst-ever reading is itself a
+    # low-current artefact or a reading a fixed-current test actually confirmed.
     for hemi in ("Left", "Right"):
         hist = [float(x) for r in rows
                 for row in (((r.metadata or {}).get(hemi) or {}).get("Bipolar") or [])
                 for x in row if x]
+        hist_fixed = [float(x) for r in rows
+                      if isinstance(_measurement_current(r.metadata), float)
+                      for row in (((r.metadata or {}).get(hemi) or {}).get("Bipolar") or [])
+                      for x in row if x]
         out.setdefault("history", {})[hemi] = {
             "bipolar_max_ohm_ever": max(hist) if hist else None,
             "n_readings": len(hist),
             "n_above_open_limit": sum(1 for x in hist if x > 10000.0),
+            "bipolar_max_ohm_ever_fixed": max(hist_fixed) if hist_fixed else None,
+            "n_readings_fixed": len(hist_fixed),
+            "n_above_open_limit_fixed": sum(1 for x in hist_fixed if x > 10000.0),
         }
 
     for hemi in ("Left", "Right"):
-        h = newest.get(hemi) or {}
+        h = chosen.get(hemi) or {}
         bip = [float(x) for row in (h.get("Bipolar") or []) for x in row if x]
         mono = [float(x) for x in (h.get("Monopolar") or []) if x]
         out[hemi] = {
@@ -80,6 +166,19 @@ def impedance_facts(recordings):
             "monopolar_max_ohm": max(mono) if mono else None,
             "n_bipolar_pairs": len(bip),
         }
+        # THE SPURIOUS-FAIL CASE the PI named: the truly newest recording of all ran in the
+        # automatic mode and reads above the open-circuit limit, while the fixed-current recording
+        # this rule actually trusts reads inside it. Recorded here, per hemisphere, so the ledger
+        # can state both numbers rather than only the one D16 acts on.
+        if fixed_rows and newest_current == "automatic_increase":
+            hn = newest.get(hemi) or {}
+            bip_auto = [float(x) for row in (hn.get("Bipolar") or []) for x in row if x]
+            auto_worst = max(bip_auto) if bip_auto else None
+            chosen_worst = out[hemi]["bipolar_max_ohm"]
+            if (auto_worst is not None and auto_worst > _OPEN_LIMIT_OHM
+                    and chosen_worst is not None and chosen_worst <= _OPEN_LIMIT_OHM):
+                out[hemi]["automatic_newest_ohm"] = auto_worst
+                out[hemi]["automatic_newest_date"] = _iso(getattr(newest_row, "date", None))
     return out
 
 
@@ -267,19 +366,61 @@ def facts_for_participant(participant_uid, impedance_recordings=None, *,
         ohm = candidate_impedance_ohm(imp, hemisphere) if hemisphere else None
         if ohm is not None:
             out["impedance_ohms"] = ohm
-            # Be exact about what this number IS. It is the worst bipolar pair WITHIN the newest
-            # recording, not the worst across the record — and the difference is not academic: on
-            # 2026-09-04 an ingest brought in a newer, better measurement and D16 flipped from fail
-            # to pass with no code change, while 1265 of 15540 historical left-lead readings remain
-            # above the open-circuit limit. The old wording said "across N recordings", which would
-            # have let a reader take a currently-sound lead for a never-faulty one.
+            # Be exact about what this number IS. It is the worst bipolar pair WITHIN the record
+            # D16 actually trusts (the newest FIXED-current test when one exists, decision
+            # 2026-09-12; otherwise the newest test of any kind, which is the whole record here
+            # before that decision) — and the difference is not academic: on 2026-09-04 an ingest
+            # brought in a newer, better measurement and D16 flipped from fail to pass with no code
+            # change, while 1265 of 15540 historical left-lead readings remain above the
+            # open-circuit limit. The old wording said "across N recordings", which would have let
+            # a reader take a currently-sound lead for a never-faulty one.
             _hist = ((imp.get("history") or {}).get(hemisphere) or {})
-            prov["impedance_ohms"] = (
-                f"measured: worst bipolar pair in the NEWEST of {imp['n_records']} impedance "
-                f"recordings on the {hemisphere} lead (status {imp.get('status_newest')}); "
+            _worst_ever_txt = (
                 f"worst EVER {_hist.get('bipolar_max_ohm_ever')} ohm with "
                 f"{_hist.get('n_above_open_limit')} of {_hist.get('n_readings')} readings above "
                 f"the 10000 ohm open limit")
+            _cur = imp.get("measurement_current")
+            out["impedance_measurement_current"] = _cur
+            out["impedance_measured_at"] = imp.get("measured_at")
+            if isinstance(_cur, float):
+                prov["impedance_ohms"] = (
+                    f"measured: worst bipolar pair in the newest FIXED-current impedance test "
+                    f"({_cur:g} mA, {imp.get('measured_at')}, device status "
+                    f"{imp.get('status_chosen')}) on the {hemisphere} lead; {_worst_ever_txt}")
+                prov["impedance_measurement_current"] = (
+                    f"measured: {_cur:g} mA, the Amplitude field of the impedance test D16 uses "
+                    f"for the {hemisphere} lead")
+                _hemi_block = imp.get(hemisphere) or {}
+                _auto_ohm = _hemi_block.get("automatic_newest_ohm")
+                _auto_date = _hemi_block.get("automatic_newest_date")
+                if _auto_ohm is not None:
+                    out["impedance_ohms_automatic_newest"] = _auto_ohm
+                    out["impedance_automatic_measured_at"] = _auto_date
+                    prov["impedance_ohms"] += (
+                        f". The newest impedance test of all ({_auto_date}) used the automatic "
+                        f"low-current mode and read {_auto_ohm:g} ohm, which the PI has ruled a "
+                        f"spurious fail at that measurement current (2026-09-12), not a real open "
+                        f"circuit")
+            elif _cur == "automatic_increase":
+                prov["impedance_ohms"] = (
+                    f"measured: worst bipolar pair in the NEWEST impedance test on the "
+                    f"{hemisphere} lead ({imp.get('measured_at')}, device status "
+                    f"{imp.get('status_chosen')}), which used the device's automatic low-current "
+                    f"mode; no fixed-current impedance test is on record, and one would settle "
+                    f"whether this reading is a spurious fail at low measurement current "
+                    f"(PI decision 2026-09-12); {_worst_ever_txt}")
+                prov["impedance_measurement_current"] = (
+                    "measured: the device's automatic low-current mode, the only impedance test "
+                    f"on record for the {hemisphere} lead")
+            else:
+                prov["impedance_ohms"] = (
+                    f"measured: worst bipolar pair in the NEWEST of {imp['n_records']} impedance "
+                    f"recordings on the {hemisphere} lead (status {imp.get('status_newest')}); "
+                    f"{_worst_ever_txt}")
+                prov["impedance_measurement_current"] = (
+                    "measured: no measurement current was recorded on the impedance test used")
+            prov["impedance_measured_at"] = (
+                f"measured: date of the impedance test D16 uses for the {hemisphere} lead")
         out["impedance_tested"] = True
         prov["impedance_tested"] = f"measured: {imp['n_records']} impedance recordings on record"
         if imp.get("lead_type"):

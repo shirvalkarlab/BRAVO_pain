@@ -295,13 +295,19 @@ class _Rec:
         self.metadata, self.date, self.pointer, self.hashed = metadata, date, "", ""
 
 
-def _imp(worst_left, status="GOOD", date=1, model="LEAD_B33015"):
-    return _Rec({"Status": status,
-                 "Left": {"LeadModel": model, "Monopolar": [2605.0] * 8,
-                          "Bipolar": [[0.0, 5752.0, worst_left], [0.0, 0.0, 6641.0], [0.0, 0.0, 0.0]]},
-                 "Right": {"LeadModel": model, "Monopolar": [4044.0] * 8,
-                           "Bipolar": [[0.0, 4044.0, 4059.0], [0.0, 0.0, 3664.0], [0.0, 0.0, 0.0]]}},
-                date=date)
+def _imp(worst_left, status="GOOD", date=1, model="LEAD_B33015", amplitude=None):
+    """``amplitude`` mirrors the raw, no-space-before-the-unit strings on RCS08's own export:
+    "Automatic increasemA", "0.4mA", "1.0mA". ``None`` (the default) omits the field entirely, the
+    same shape every impedance test written before 2026-09-12 already used, so every existing test
+    that leaves it unset keeps exercising the pre-measurement-current fallback path."""
+    meta = {"Status": status,
+            "Left": {"LeadModel": model, "Monopolar": [2605.0] * 8,
+                     "Bipolar": [[0.0, 5752.0, worst_left], [0.0, 0.0, 6641.0], [0.0, 0.0, 0.0]]},
+            "Right": {"LeadModel": model, "Monopolar": [4044.0] * 8,
+                      "Bipolar": [[0.0, 4044.0, 4059.0], [0.0, 0.0, 3664.0], [0.0, 0.0, 0.0]]}}
+    if amplitude is not None:
+        meta["Amplitude"] = amplitude
+    return _Rec(meta, date=date)
 
 
 def test_impedance_is_read_from_metadata_because_these_rows_have_no_file():
@@ -345,6 +351,96 @@ def test_an_open_circuit_bipolar_pair_fails_d16():
     shorted = CN.check_eligibility({"impedance_ohms": 200.0, "impedance_tested": True},
                                    {"lead_type": "sensight"})
     assert "D16" in {x["rule_id"] for x in shorted.failures}
+
+
+# --- the measurement-current fix for D16, PI decision 2026-09-12 ---------------------------------
+# The device's DEFAULT impedance test steps a low measurement current up automatically, and at
+# that low current a healthy lead can read above the open-circuit limit even though the same lead
+# reads normal at a fixed, higher current. Measured on RCS08: 351 of 544 automatic-mode tests read
+# the Left lead's worst pair above 10,000 ohms, against 0 of 18 fixed-current tests. The PI ruled
+# that a high reading produced only by the automatic mode must not gate D16 by itself.
+
+def test_impedance_facts_prefers_the_newest_fixed_current_reading_over_a_newer_automatic_one():
+    from ClosedLoopDeployment import device_facts as DF
+    fixed = _imp(7000.0, date=1, amplitude="0.4mA")
+    automatic = _imp(10500.0, date=2, amplitude="Automatic increasemA")
+    f = DF.impedance_facts([fixed, automatic])
+    assert f["measurement_current"] == 0.4
+    assert f["Left"]["bipolar_max_ohm"] == 7000.0, ("D16 must trust the FIXED-current reading, "
+                                                     "not the newer automatic-mode one")
+    assert f["status_newest"] == "GOOD", "status_newest still names the truly newest record"
+
+
+def test_impedance_facts_falls_back_to_the_newest_automatic_reading_with_no_fixed_current_test():
+    from ClosedLoopDeployment import device_facts as DF
+    a1 = _imp(9000.0, date=1, amplitude="Automatic increasemA")
+    a2 = _imp(10261.0, date=2, amplitude="Automatic increasemA")
+    f = DF.impedance_facts([a1, a2])
+    assert f["measurement_current"] == "automatic_increase"
+    assert f["Left"]["bipolar_max_ohm"] == 10261.0, "no fixed test exists, so the fallback is the newest of any kind"
+    assert "automatic_newest_ohm" not in f["Left"], "there is no separate fixed reading to compare it against"
+
+
+def test_impedance_automatic_spurious_fail_fields_appear_only_when_the_case_holds():
+    from ClosedLoopDeployment import device_facts as DF
+    fixed_ok = _imp(7286.0, date=1, amplitude="0.4mA")
+    auto_bad = _imp(10261.0, date=2, amplitude="Automatic increasemA")
+    holds = DF.impedance_facts([fixed_ok, auto_bad])
+    assert holds["Left"]["automatic_newest_ohm"] == 10261.0
+    assert holds["Left"]["automatic_newest_date"] is not None
+
+    auto_ok = _imp(8000.0, date=2, amplitude="Automatic increasemA")
+    not_over_limit = DF.impedance_facts([fixed_ok, auto_ok])
+    assert "automatic_newest_ohm" not in not_over_limit["Left"], "the automatic reading is inside the limit too"
+
+    no_fixed_at_all = DF.impedance_facts([auto_bad])
+    assert "automatic_newest_ohm" not in no_fixed_at_all["Left"], "nothing to compare a fixed reading against"
+
+
+def test_impedance_history_reports_the_fixed_current_subset_alongside_the_full_history():
+    from ClosedLoopDeployment import device_facts as DF
+    fixed1 = _imp(7000.0, date=1, amplitude="0.4mA")
+    fixed2 = _imp(9500.0, date=2, amplitude="1.0mA")
+    auto_high = _imp(13000.0, date=3, amplitude="Automatic increasemA")
+    f = DF.impedance_facts([fixed1, fixed2, auto_high])
+    hist = f["history"]["Left"]
+    assert hist["n_readings_fixed"] == 6, "3 bipolar pairs per record, 2 fixed-current records"
+    assert hist["bipolar_max_ohm_ever_fixed"] == 9500.0, "the automatic-mode reading must not count here"
+    assert hist["n_above_open_limit_fixed"] == 0
+    assert hist["bipolar_max_ohm_ever"] == 13000.0, "the unrestricted history still sees every reading"
+    assert hist["n_above_open_limit"] == 1
+
+
+def test_o_d16_names_the_measurement_current_and_the_spurious_fail_case():
+    from ClosedLoopDeployment import constraints as CN
+    spurious = {"impedance_ohms": 7286.0, "impedance_tested": True,
+                "impedance_measurement_current": 0.4, "impedance_measured_at": "2026-09-02",
+                "impedance_ohms_automatic_newest": 10261.0,
+                "impedance_automatic_measured_at": "2026-09-11"}
+    text = CN._o_d16(spurious, {"lead_type": "sensight"})
+    assert "0.4 mA" in text and "2026-09-02" in text
+    assert "10261" in text and "2026-09-11" in text
+    assert "ruled a spurious fail" in text, "the PI's ruling, on a reading actually contradicted by a fixed-current test"
+
+    no_fixed_test = {"impedance_ohms": 10261.0, "impedance_tested": True,
+                     "impedance_measurement_current": "automatic_increase",
+                     "impedance_measured_at": "2026-09-11"}
+    text2 = CN._o_d16(no_fixed_test, {"lead_type": "sensight"})
+    assert "automatic low-current mode" in text2
+    assert "fixed-current" in text2 and "would settle" in text2
+    assert "ruled a spurious fail" not in text2, "there is no fixed-current test to have contradicted this reading"
+
+
+def test_d16_is_recorded_as_an_advisory_value_when_it_passes():
+    from ClosedLoopDeployment import constraints as CN
+    r = CN.check_eligibility({"impedance_ohms": 6322.0, "impedance_tested": True,
+                              "impedance_measurement_current": 0.4,
+                              "impedance_measured_at": "2026-09-02"},
+                             {"lead_type": "sensight"})
+    row = next(a for a in r.advisories if a["rule_id"] == "D16")
+    assert row["kind"] == "recorded_value"
+    assert "0.4 mA" in row["observed"]
+    assert "D16" not in {f["rule_id"] for f in r.failures}
 
 
 def test_participant_scoped_device_facts_reach_the_participant_dict():
