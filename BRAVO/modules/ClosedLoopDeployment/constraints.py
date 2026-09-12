@@ -63,6 +63,8 @@ rule is fully documented but the caller did not state the fact it needs.
 """
 from __future__ import annotations
 
+import math
+
 from . import types
 
 # ------------------------------------------------------------------------------------------------
@@ -261,7 +263,8 @@ CANDIDATE_KEYS = {
     "center_hz": "D08, D12, D13.",
     "band_width_hz": "D08, D10, D13.",
     "rate_hz": "D31, D44.",
-    "pulse_width_us": "D27, D31.",
+    "pulse_width_us": "D31; D27 fallback when capture pulse width is unavailable.",
+    "capture_pulse_width_us": "D27: pulse width used for the threshold capture.",
     "amp_mA": "D31.",
     "threshold_mode": "D08, D12, D18, D24, D25, D40.",
     "lfp_amplitude_uvp": "D09.",
@@ -779,11 +782,15 @@ def _p_d27(candidate, participant):
     """
     if not _is_adaptive(candidate):
         return True
-    pw = _num(candidate, "pulse_width_us")
+    # A supplied capture width belongs to the measurement being checked. Invalid
+    # capture values remain unknown; only absent values use the general width.
+    pw_key = ("capture_pulse_width_us"
+              if candidate.get("capture_pulse_width_us") is not None else "pulse_width_us")
+    pw = _num(candidate, pw_key)
     hi = _num(candidate, "capture_amp_high_mA")
     if hi is None:
         hi = _num(candidate, "amp_mA")
-    if pw is None or hi is None:
+    if pw is None or hi is None or not math.isfinite(pw) or not math.isfinite(hi):
         return None
     return hi <= CAPTURE_ARTEFACT_AMP_MA and pw <= CAPTURE_ARTEFACT_PW_US
 
@@ -1202,8 +1209,13 @@ def _o_d24(c, p):
 
 
 def _o_d27(c, p):
-    return (f"capture high amplitude {c.get('capture_amp_high_mA', c.get('amp_mA'))!r} mA against "
-            f"{CAPTURE_ARTEFACT_AMP_MA} mA and pulse width {c.get('pulse_width_us')!r} us against "
+    pw_key = ("capture_pulse_width_us"
+              if c.get("capture_pulse_width_us") is not None else "pulse_width_us")
+    pw_label = "capture pulse width" if pw_key == "capture_pulse_width_us" else "pulse width (fallback)"
+    amp_key = "capture_amp_high_mA" if _num(c, "capture_amp_high_mA") is not None else "amp_mA"
+    amp_label = "capture high amplitude" if amp_key == "capture_amp_high_mA" else "amplitude (fallback)"
+    return (f"{amp_label} {c.get(amp_key)!r} mA against "
+            f"{CAPTURE_ARTEFACT_AMP_MA} mA and {pw_label} {c.get(pw_key)!r} us against "
             f"{CAPTURE_ARTEFACT_PW_US} us")
 
 

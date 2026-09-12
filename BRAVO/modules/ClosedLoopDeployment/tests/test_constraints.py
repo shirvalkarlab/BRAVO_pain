@@ -803,3 +803,81 @@ def test_sensing_only_group_does_not_inherit_adaptive_only_exclusions():
     candidate = passing_candidate(intent='sensing_only')
     candidate.update(cycling_in_group=True, patient_limits_configured=True)
     assert constraints._p_d32(candidate, {}) is True
+
+
+@pytest.mark.parametrize("general_pw,capture_pw,failed", [(60.0, 160.0, True), (160.0, 60.0, False)])
+def test_d27_checks_capture_width_instead_of_general_programmed_width(general_pw, capture_pw, failed):
+    candidate = passing_candidate(pulse_width_us=general_pw, capture_pulse_width_us=capture_pw)
+    report = check(candidate, resolved_participant())
+    assert ("D27" in ids(report.failures)) is failed
+    assert "D27" not in ids(report.unknowns)
+    observed = constraints._o_d27(candidate, {})
+    assert f"capture pulse width {capture_pw!r} us" in observed
+    assert f"pulse width {general_pw!r} us" not in observed
+    if failed:
+        assert next(row for row in report.failures if row["rule_id"] == "D27")["observed"] == observed
+
+
+@pytest.mark.parametrize("capture_pw", ["invalid", True, float("nan"), float("inf"), float("-inf")])
+def test_d27_invalid_capture_width_is_unknown_despite_valid_general_width(capture_pw):
+    candidate = passing_candidate(capture_pulse_width_us=capture_pw)
+    report = check(candidate, resolved_participant())
+    row = next(row for row in report.unknowns if row["rule_id"] == "D27")
+    assert "D27" not in ids(report.failures)
+    assert f"capture pulse width {capture_pw!r} us" in row["observed"]
+    assert "fallback" not in row["observed"]
+
+
+@pytest.mark.parametrize("capture_fields", [{}, {"capture_pulse_width_us": None}])
+@pytest.mark.parametrize("general_pw,expected", [(60.0, True), (160.0, False), (None, None)])
+def test_d27_missing_capture_width_preserves_general_fallback(capture_fields, general_pw, expected):
+    candidate = passing_candidate(pulse_width_us=general_pw, **capture_fields)
+    assert constraints._p_d27(candidate, {}) is expected
+    assert f"pulse width (fallback) {general_pw!r} us" in constraints._o_d27(candidate, {})
+
+
+@pytest.mark.parametrize("width,amplitude,expected", [
+    (120.0, 5.0, True), (120.001, 5.0, False), (120.0, 5.001, False),
+    (None, 3.0, None), (120.0, None, None), (120.0, float("nan"), None),
+    (120.0, float("inf"), None), (float("-inf"), 3.0, None),
+])
+def test_d27_capture_boundaries_and_nonfinite_measurements(width, amplitude, expected):
+    candidate = passing_candidate(capture_pulse_width_us=width, pulse_width_us=None,
+                                  capture_amp_high_mA=amplitude, amp_mA=None)
+    assert constraints._p_d27(candidate, {}) is expected
+
+
+def test_d27_retains_amplitude_fallback_and_sensing_only_behavior():
+    candidate = passing_candidate(capture_pulse_width_us=120.0, capture_amp_high_mA=None, amp_mA=5.0)
+    assert constraints._p_d27(candidate, {}) is True
+    candidate["amp_mA"] = 5.001
+    assert constraints._p_d27(candidate, {}) is False
+    candidate.update(intent="sensing_only", capture_pulse_width_us="invalid")
+    assert constraints._p_d27(candidate, {}) is True
+
+
+@pytest.mark.parametrize("general_pw,capture_pw,failed", [(60.0, 160.0, True), (160.0, 60.0, False)])
+def test_session_report_capture_width_reaches_d27_with_provenance(general_pw, capture_pw, failed):
+    from ClosedLoopDeployment import device_facts
+
+    facts, provenance = device_facts.session_report_facts_for(
+        "SYNTHETIC", hemisphere="Right", summary={
+            "n_files": 1,
+            "capture_newest": {"Right": {"lower_mA": 2.0, "upper_mA": 3.5, "pw_us": capture_pw}},
+        })
+    assert facts["capture_pulse_width_us"] == capture_pw
+    assert "newest capture" in provenance["capture_pulse_width_us"]
+    candidate = passing_candidate(pulse_width_us=general_pw, **facts)
+    report = check(candidate, resolved_participant())
+    assert ("D27" in ids(report.failures)) is failed
+    assert "D27" not in ids(report.unknowns)
+
+
+@pytest.mark.parametrize("capture_amplitude", [None, "invalid", True])
+def test_d27_observation_reports_the_amplitude_fallback_used(capture_amplitude):
+    candidate = passing_candidate(capture_amp_high_mA=capture_amplitude, amp_mA=5.001,
+                                  capture_pulse_width_us=120.0)
+    report = check(candidate, resolved_participant())
+    row = next(row for row in report.failures if row["rule_id"] == "D27")
+    assert "amplitude (fallback) 5.001 mA" in row["observed"]
+    assert "capture pulse width 120.0 us" in row["observed"]

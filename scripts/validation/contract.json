@@ -126,6 +126,8 @@
       "BRAVO/modules/ClosedLoopDeployment/constraints.py": [
         "_p_d16",
         "_o_d16",
+        "_p_d27",
+        "_o_d27",
         "_p_d30",
         "_o_d30",
         "_p_d32"
