@@ -46,8 +46,11 @@ THE FOUR CONDITIONS
     with its reason, and it is reported as an override and never as a pass.
 
 ``adaptive_band_passes_lfp_response``
-    A sensed band must exist that lies entirely inside 8-30 Hz AND responds to stimulation
-    amplitude. Both halves are necessary and they are independent. The range is the device's:
+    ON EACH FROZEN SIDE, a sensed band must exist that lies entirely inside 8-30 Hz AND responds
+    to stimulation amplitude, by the readiness screen's own rule (a majority of the tested bands
+    respond and a majority carry a significant negative era-blocked slope). Evidence from one
+    side's sensing contact licenses only that side (2026-09-12, review S3 and S4). Both halves
+    are necessary and they are independent. The range is the device's:
     Adaptive Therapy can only be driven by a band inside 8-30 Hz, and the wider 1-96 Hz range is
     Sensing Only, meaning the signal can be recorded but a change in it will not change stimulation.
     The response requirement is also the device's (manual p. 35: "Adaptive Therapy relies on LFP
@@ -569,14 +572,74 @@ def verdict_row(center_hz, r) -> dict:
         "n_low": int(getattr(r, "n_low", 0) or 0),
         "n_high": int(getattr(r, "n_high", 0) or 0),
         "reason": str(getattr(r, "reason", "") or ""),
+        # The confound-adjusted half of "this band responds" (review S4, 2026-09-12): the
+        # era-blocked slope falls with current AND clears p < 0.05. The page draws both halves.
+        "era_negative_significant": _era_negative_significant(r),
     }
+
+
+def _era_negative_significant(r) -> bool:
+    """`lfp_evidence.band_era_negative_significant`, imported lazily: lfp_evidence imports this
+    module at its top, so a top-level import the other way would be a cycle."""
+    from . import lfp_evidence as _EV
+    return bool(_EV.band_era_negative_significant(r))
+
+
+def evidence_by_side(lfp, frozen_sides) -> tuple:
+    """``(mapping {side: LfpEvidence}, note)`` for the gate's per-side response check (review S3).
+
+    Closed loop is configured per side -- each side senses on its own contact and moves its own
+    current -- so evidence licenses only the side it came from. ``lfp`` may be:
+
+    * a mapping ``{hemisphere: LfpEvidence}`` -- used as given;
+    * one ``LfpEvidence`` whose ``hemisphere`` is set -- attributed to that side only;
+    * one ``LfpEvidence`` with no ``hemisphere`` -- attributed to the only frozen side when the
+      configuration freezes exactly one, and to NO side when it freezes several, because an
+      untagged measurement cannot honestly be given to both;
+    * ``None`` -- no side has evidence.
+    """
+    sides = [str(h) for h in frozen_sides]
+    if lfp is None:
+        return {}, "no LFP evidence was supplied"
+    if isinstance(lfp, dict):
+        out = {str(k): v for k, v in lfp.items() if v is not None}
+        return out, "evidence supplied per side"
+    tag = getattr(lfp, "hemisphere", None)
+    if tag is not None:
+        return {str(tag): lfp}, f"one evidence object, tagged {tag}"
+    if len(sides) == 1:
+        return {sides[0]: lfp}, (f"one evidence object with no side named, attributed to the "
+                                 f"only frozen side ({sides[0]})")
+    return {}, (f"one evidence object with no side named, and the configuration freezes "
+                f"{len(sides)} sides ({', '.join(sides)}); it is attributed to none of them "
+                "rather than to both")
+
+
+def evidence_for_side(lfp, hemisphere):
+    """The evidence for one side out of whatever ``lfp`` is, or ``None`` (see `evidence_by_side`)."""
+    if lfp is None:
+        return None
+    if isinstance(lfp, dict):
+        return lfp.get(str(hemisphere))
+    tag = getattr(lfp, "hemisphere", None)
+    if tag is None or str(tag) == str(hemisphere):
+        return lfp
+    return None
 
 
 def check_adaptive_band(frozen, *, lfp=None, band_centers=DEFAULT_BAND_CENTERS_HZ,
                         band_width_hz=DEFAULT_BAND_WIDTH_HZ,
                         min_sep_d=LFP.MIN_CAPTURE_SEPARATION_D,
                         response_summary=None) -> GateCondition:
-    """Does a sensed band exist inside 8-30 Hz that responds to stimulation amplitude?
+    """Does EACH frozen side have a sensed band inside 8-30 Hz that responds to stimulation
+    amplitude?
+
+    Per side since 2026-09-12 (review S3): ``lfp`` may be one ``LfpEvidence`` (attributed to the
+    side its ``hemisphere`` names, or to the only frozen side when it names none) or a mapping
+    ``{hemisphere: LfpEvidence}``; the condition passes only when every frozen side passes, a side
+    with no evidence is NOT ASSESSED and blocks, and ``evidence["per_hemisphere"]`` carries each
+    side's own numbers. The per-side rule is the readiness screen's
+    (``lfp_evidence.cell_response_verdict``, review S4), so the two cannot disagree.
 
     Two independent requirements, checked in order. The device range comes first because it is a
     hard fact about the hardware and costs nothing to check: ``percept_adaptive.
@@ -632,65 +695,117 @@ def check_adaptive_band(frozen, *, lfp=None, band_centers=DEFAULT_BAND_CENTERS_H
             f"{PA.SENSING_ONLY_LFP_BAND_HZ[0]:g}-{PA.SENSING_ONLY_LFP_BAND_HZ[1]:g} Hz) but a "
             "change in it cannot drive stimulation on this device.", evidence=ev)
 
-    if lfp is None:
+    sides = [str(s.hemisphere) for s in getattr(frozen, "settings", ()) or ()]
+    by_side, attribution = evidence_by_side(lfp, sides)
+    ev["evidence_attribution"] = attribution
+    if lfp is None or not by_side:
+        why = ("NO LFP EVIDENCE was supplied" if lfp is None
+               else f"the LFP evidence could not be attributed to any frozen side ({attribution})")
+        ev["per_hemisphere"] = {h: dict(passed=None, n_tested=0, n_passing=0,
+                                        reason="no evidence for this side") for h in sides}
         return GateCondition(
             "adaptive_band_passes_lfp_response", None,
-            f"{len(capable)} candidate bands lie inside the adaptive range, but NO LFP EVIDENCE "
-            "was supplied, so whether any of them responds to stimulation amplitude is NOT "
-            "ASSESSED. Adaptive Therapy relies on that response (A610 manual p. 35), and it is a "
-            "different question from whether the band tracks pain: a band can correlate with pain "
-            "perfectly and still be useless as a control signal, because the controller acts on "
-            "the band and its only actuator is amplitude. Supply an LfpEvidence carrying LFP "
-            "magnitude or band power against the amplitude it was recorded at.", evidence=ev)
+            f"{len(capable)} candidate bands lie inside the adaptive range, but {why}, so "
+            "whether any of them responds to stimulation amplitude is NOT ASSESSED. Adaptive "
+            "Therapy relies on that response (A610 manual p. 35), and it is a different question "
+            "from whether the band tracks pain: a band can correlate with pain perfectly and "
+            "still be useless as a control signal, because the controller acts on the band and "
+            "its only actuator is amplitude. Supply an LfpEvidence carrying LFP magnitude or band "
+            "power against the amplitude it was recorded at, for each frozen side.", evidence=ev)
 
-    results, passing, not_assessed = {}, [], []
-    for c, _ in capable:
-        power = lfp.power_for(c, band_width_hz)
-        if power is None:
-            not_assessed.append(c)
+    # ONE SIDE AT A TIME (review S3, 2026-09-12). Until then the check ran once on one evidence
+    # object for a configuration that freezes a setting per side, so one sensing contact's
+    # response licensed closed loop on both sides. Each frozen side is now judged on its own
+    # evidence, by the SAME rule the readiness screen applies (review S4): a majority of bands
+    # must respond AND a majority must carry a significant negative era-blocked slope.
+    from . import lfp_evidence as _EV        # lazy: lfp_evidence imports this module at its top
+    per = {}
+    for h in sides:
+        e = by_side.get(h)
+        if e is None:
+            per[h] = dict(passed=None, n_tested=0, n_passing=0, passing_centers=[],
+                          n_power_unavailable=0, verdict_rows=[], verdicts={},
+                          reason="no evidence for this side")
             continue
-        r = LFP.assess_response(power, lfp.amplitude_mA, era=lfp.era, cluster=lfp.cluster,
-                                mode_requires=lfp.mode_requires, min_sep_d=min_sep_d)
-        results[float(c)] = r
-        if r.responds is True:
-            passing.append(float(c))
-    ev.update(n_tested=len(results), n_passing=len(passing), passing_centers=sorted(passing),
-              n_power_unavailable=len(not_assessed),
-              verdicts={k: v.describe() for k, v in results.items()},
-              # The same verdicts as numbers (2026-09-12), for the page to draw; and the
-              # separation floor they were judged against, so the page can draw that line too.
-              verdict_rows=[verdict_row(k, v) for k, v in sorted(results.items())],
-              min_sep_d=float(min_sep_d))
+        results, passing, not_assessed = {}, [], []
+        for c, _ in capable:
+            power = e.power_for(c, band_width_hz)
+            if power is None:
+                not_assessed.append(c)
+                continue
+            r = LFP.assess_response(power, e.amplitude_mA, era=e.era, cluster=e.cluster,
+                                    mode_requires=e.mode_requires, min_sep_d=min_sep_d)
+            results[float(c)] = r
+            if r.responds is True:
+                passing.append(float(c))
+        rule = _EV.cell_response_verdict(list(results.values()))
+        block = dict(n_tested=len(results), n_passing=len(passing),
+                     passing_centers=sorted(passing), n_power_unavailable=len(not_assessed),
+                     n_era_negative_significant=int(rule["n_era_negative_significant"]),
+                     n_era_significant=int(rule["n_era_significant"]),
+                     min_responding_fraction=float(rule["min_responding_fraction"]),
+                     rule_blocking_reasons=list(rule["blocking_reasons"]),
+                     verdicts={k: v.describe() for k, v in results.items()},
+                     verdict_rows=[verdict_row(k, v) for k, v in sorted(results.items())],
+                     sensing_channel=getattr(e, "channel", None),
+                     laterality=getattr(e, "laterality", None))
+        if not results:
+            block.update(passed=None, reason=(
+                f"{len(capable)} candidate bands lie inside the adaptive range but band power "
+                "could be computed for none of them from this side's evidence"))
+        elif all(r.responds is None for r in results.values()):
+            one = next(iter(results.values()))
+            block.update(passed=None, reason=(
+                f"all {len(results)} tested bands returned NOT ASSESSED rather than a verdict: "
+                f"the data cannot answer the question. First reason given: {one.reason}"))
+        elif rule["responds"]:
+            best = min(passing, key=lambda c: -results[c].separation_d)
+            block.update(passed=True, best_center_hz=float(best), reason=(
+                f"{len(passing)} of {len(results)} tested bands respond and "
+                f"{rule['n_era_negative_significant']} of {len(results)} carry a significant "
+                f"negative era-blocked slope. Best separated: centre {best:g} Hz, width "
+                f"{float(band_width_hz):g} Hz — {results[best].describe()}"))
+        else:
+            block.update(passed=False, reason="; ".join(rule["blocking_reasons"]))
+            if passing:
+                block["best_center_hz"] = float(min(passing, key=lambda c: -results[c].separation_d))
+        per[h] = block
+    ev["per_hemisphere"] = per
+    ev["min_sep_d"] = float(min_sep_d)
 
-    if passing:
-        best = min(passing, key=lambda c: -results[c].separation_d)
-        r = results[best]
-        ev["best_center_hz"] = float(best)
+    # The top-level counts describe ONE side, named in `top_level_side`, so a reader of the
+    # old keys is never handed a blend: the first frozen side with evidence, in the order the
+    # configuration lists them. Every side is under `per_hemisphere`.
+    top = next((h for h in sides if by_side.get(h) is not None), None)
+    if top is not None:
+        for k in ("n_tested", "n_passing", "passing_centers", "n_power_unavailable", "verdicts",
+                  "verdict_rows", "n_era_negative_significant"):
+            ev[k] = per[top].get(k)
+        if per[top].get("best_center_hz") is not None:
+            ev["best_center_hz"] = per[top]["best_center_hz"]
+        ev["top_level_side"] = top
+
+    verdicts = {h: per[h].get("passed") for h in sides}
+    sentence = "; ".join(f"{h}: {'PASS' if v is True else ('FAIL' if v is False else 'NOT ASSESSED')}"
+                         f" — {per[h].get('reason')}" for h, v in verdicts.items())
+    if any(v is False for v in verdicts.values()):
         return GateCondition(
-            "adaptive_band_passes_lfp_response", True,
-            f"{len(passing)} of {len(results)} tested bands inside the adaptive range respond to "
-            f"stimulation amplitude. Best separated: centre {best:g} Hz, width "
-            f"{float(band_width_hz):g} Hz — {r.describe()}", evidence=ev)
-    if not results:
+            "adaptive_band_passes_lfp_response", False,
+            "the stimulation-response requirement FAILS on at least one frozen side, by the same "
+            "rule the readiness screen applies (a majority of bands must respond and a majority "
+            f"must carry a significant negative era-blocked slope): {sentence}. A band that does "
+            "not move with amplitude gives the loop no authority, however well it tracks pain.",
+            evidence=ev)
+    if any(v is None for v in verdicts.values()):
         return GateCondition(
             "adaptive_band_passes_lfp_response", None,
-            f"{len(capable)} candidate bands lie inside the adaptive range but band power could be "
-            f"computed for none of them from the supplied evidence, so the response requirement is "
-            "NOT ASSESSED.", evidence=ev)
-    if all(r.responds is None for r in results.values()):
-        one = next(iter(results.values()))
-        return GateCondition(
-            "adaptive_band_passes_lfp_response", None,
-            f"all {len(results)} tested bands returned NOT ASSESSED rather than a verdict: the "
-            f"data cannot answer the question. First reason given: {one.reason}", evidence=ev)
-    worst = min(results.values(), key=lambda r: (r.responds is not False, -r.separation_d
-                                                 if np.isfinite(r.separation_d) else 0.0))
+            "the stimulation-response requirement is NOT ASSESSED on at least one frozen side: "
+            f"{sentence}. One sensing contact's response licenses only its own side, so a side "
+            "with no evidence blocks.", evidence=ev)
     return GateCondition(
-        "adaptive_band_passes_lfp_response", False,
-        f"none of the {len(results)} tested bands inside the adaptive range passes the "
-        f"stimulation-response requirement. Representative verdict: {worst.describe()}. A band "
-        "that does not move with amplitude gives the loop no authority, however well it tracks "
-        "pain.", evidence=ev)
+        "adaptive_band_passes_lfp_response", True,
+        "every frozen side has a sensed band inside the adaptive range that responds to "
+        f"stimulation amplitude, by the readiness screen's own rule: {sentence}", evidence=ev)
 
 
 def check_amplitude_limits(frozen, *, amp_limits=None, ceiling_mA=AMP_CEILING_MA) -> GateCondition:

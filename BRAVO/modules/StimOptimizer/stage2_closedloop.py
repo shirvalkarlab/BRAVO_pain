@@ -283,24 +283,26 @@ def enumerate_candidates(frozen, *, lfp=None, hemispheres=None, modes=DEFAULT_MO
     """
     hemis = tuple(frozen.hemispheres) if hemispheres is None else tuple(hemispheres)
     accepted, rejected = [], []
-    # Response verdicts are cached per (band centre, width) because assess_response fits a
-    # regression and the same band is reused across every mode and amplitude window.
+    # Response verdicts are cached per (side, band centre, width) because assess_response fits a
+    # regression and the same band is reused across every mode and amplitude window. Per SIDE
+    # since 2026-09-12 (review S3): the evidence is each side's own, or none for a side without.
     resp_cache = {}
 
     for hemi in hemis:
         setting = frozen.setting(hemi)
         windows = _amp_windows(setting, half_widths=amp_window_half_widths, ceiling_mA=ceiling_mA)
+        lfp_h = GATE.evidence_for_side(lfp, hemi)
         for c in band_centers:
             for w in band_widths:
-                key = (round(float(c), 6), round(float(w), 6))
+                key = (str(hemi), round(float(c), 6), round(float(w), 6))
                 if key not in resp_cache:
                     r = None
-                    if lfp is not None:
-                        power = lfp.power_for(c, w)
+                    if lfp_h is not None:
+                        power = lfp_h.power_for(c, w)
                         if power is not None:
-                            r = LFP.assess_response(power, lfp.amplitude_mA, era=lfp.era,
-                                                    cluster=lfp.cluster,
-                                                    mode_requires=lfp.mode_requires,
+                            r = LFP.assess_response(power, lfp_h.amplitude_mA, era=lfp_h.era,
+                                                    cluster=lfp_h.cluster,
+                                                    mode_requires=lfp_h.mode_requires,
                                                     min_sep_d=min_sep_d)
                     resp_cache[key] = r
                 response = resp_cache[key]

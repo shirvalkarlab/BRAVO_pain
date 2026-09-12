@@ -11,6 +11,13 @@
  * Redrawn 2026-09-12 after the PI's review: 560 x 170 px, every tick and label at 11 px, the
  * required-minimum label in the right margin outside the plot, the best bar's value above its bar
  * and never on it, and the caption a 12 px line under the chart rather than text inside it.
+ *
+ * BOTH HALVES OF THE RULE (review S4, 2026-09-12). "This band responds" is the readiness screen's
+ * rule, and it has two halves: the two captured readings point the right way and are separated
+ * (`responds`), AND the band's power falls with current once time is removed -- the era-blocked
+ * slope is negative and significant (`era_negative_significant`). A bar takes the pass ink only
+ * when both hold; a band that responds by direction alone is drawn in the amber ink, because on
+ * this record a falling capture with a rising adjusted slope is a time artefact, not a response.
  */
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -69,7 +76,11 @@ export default function BandResponseStrip({ rows, minSep, best, width = 560 }) {
           if (d === null) {
             return <circle key={c} cx={x(c)} cy={y(0) - 5} r="3.5" fill="none" stroke={PAL.neutral} strokeDasharray="2 2" />;
           }
-          const ink = r.responds === true ? PAL.pass : (r.responds === false ? PAL.fail : PAL.neutral);
+          const both = r.responds === true && r.era_negative_significant === true;
+          const directionOnly = r.responds === true && r.era_negative_significant === false;
+          const ink = both ? PAL.pass
+            : (directionOnly ? PAL.warn
+              : (r.responds === false ? PAL.fail : PAL.neutral));
           return (
             <rect key={c} x={x(c) - bw / 2} y={y(Math.min(d, dMax))} width={bw} height={Math.max(0.5, y(0) - y(Math.min(d, dMax)))}
               fill={ink} rx="1" />
@@ -84,6 +95,12 @@ export default function BandResponseStrip({ rows, minSep, best, width = 560 }) {
       {caption && (
         <MDTypography variant="caption" component="div" sx={{ ...SMALL, color: "#1A1A1A", fontFamily: PAL.mono }}>
           {caption}
+        </MDTypography>
+      )}
+      {list.some((r) => r.era_negative_significant != null) && (
+        <MDTypography variant="caption" component="div" sx={{ ...SMALL, color: "#5E5E5E" }}>
+          a bar is green only when the band both responds by its two captured readings and falls
+          with current once time is removed; amber is direction alone
         </MDTypography>
       )}
     </MDBox>

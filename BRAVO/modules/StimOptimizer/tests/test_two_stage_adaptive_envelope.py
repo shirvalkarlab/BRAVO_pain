@@ -450,4 +450,6 @@ def test_the_override_is_in_the_response_key_absent_empty_and_stated_all_differ(
     assert (BS._products_signature(absent) == BS._products_signature(empty)
             == BS._products_signature(stated))
     assert "none" not in BS._products_signature(absent)
-    assert BS._RESPONSE_ONLY_KEY_TAIL == 4
+    # 9 since review S11 (2026-09-12): the band range, the ClosedLoop flag, the two-stage flag,
+    # the override reason and its name, the explore-outside override and its name, the backend.
+    assert BS._RESPONSE_ONLY_KEY_TAIL == 9

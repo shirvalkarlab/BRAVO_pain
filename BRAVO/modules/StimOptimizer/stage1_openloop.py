@@ -198,6 +198,10 @@ class FrozenConfiguration:
     primary_item: str
     incumbent_epoch: float
     incumbent_rate_hz: float
+    #: The pulse width in force read from the LEFT column (``pw_us_Left``), kept under this name
+    #: for the callers and stored responses that read it. It is NOT the right side's pulse width:
+    #: each side's own value is under ``incumbent_pw_us_by_side`` (2026-09-12, review S1). On
+    #: RCS08 the two differ on 67 of 92 epochs.
     incumbent_pw_us: float | None
     data_horizon: str
     washin_min: float
@@ -205,6 +209,10 @@ class FrozenConfiguration:
     override: dict | None = None
     audit: dict = field(default_factory=dict)
     adaptive_envelope: dict = field(default_factory=dict)
+    #: ``{hemisphere: pulse width in force on THAT side}``, read from each side's own column
+    #: (``pw_us_<side>``), or from the fallback column named in the audit when the side's own is
+    #: absent. ``None`` for a side whose pulse width is not recorded on the incumbent epoch.
+    incumbent_pw_us_by_side: dict = field(default_factory=dict)
 
     def setting(self, hemisphere: str) -> HemisphereSetting:
         for s in self.settings:
@@ -581,8 +589,11 @@ def _fit_slice(hemi, pw, sub, *, grid, sgp, safe, incumbent_xy, amp_col, fixed_l
         # A queue is "settings that must be tested before the question can be closed"; under
         # the constraint a cell adaptive cannot use is not a setting to be tested for closed loop.
         queue = queue[allowed[queue]]
-    stopping = ACQ.check_stopping([float(mu[i_star])], mu, sd, n_reports,
-                                  incumbent_mu=incumbent_mu)
+    # NO batch history (review S5, 2026-09-12): this platform proposes batches and never runs
+    # them in sequence, so there is nothing for the plateau condition to read. Handing it the
+    # current posterior best as a one-item history made `plateau_met` a constant False labelled
+    # "plateau", as though the condition had been assessed and failed.
+    stopping = ACQ.check_stopping([], mu, sd, n_reports, incumbent_mu=incumbent_mu)
     try:
         batch = ACQ.select_batch_within_visit(gp, grid, q=int(q), safe_mask=allowed,
                                               n_reports=n_reports, incumbent_mu=incumbent_mu,
@@ -640,8 +651,30 @@ class Stage1Result:
         return [s for (h, _pw), s in self.slices.items() if h == hemisphere]
 
 
+#: The column each side's pulse width is read from when ``run_stage1`` is not told otherwise.
+#: ``None`` means "each side's own column, ``pw_us_<side>``"; the fallback when a side's own column
+#: is absent from the matrix is the LEFT column, and the audit says so.
+PW_COL_FALLBACK = "pw_us_Left"
+
+
+def pw_col_for(hemisphere, columns, *, pw_col=None) -> tuple:
+    """``(column, fallback_used)``: which pulse-width column this side is read from.
+
+    An explicit ``pw_col`` is used for every side as given, absent or not (a caller naming a column
+    that is not there is asking about that column, and gets NOT OBSERVED). ``None`` resolves to the
+    side's own column when the matrix carries it, else to :data:`PW_COL_FALLBACK` with
+    ``fallback_used=True`` so the report can say the value is the other side's.
+    """
+    if pw_col is not None:
+        return str(pw_col), False
+    own = f"pw_us_{hemisphere}"
+    if own in set(columns):
+        return own, False
+    return PW_COL_FALLBACK, True
+
+
 def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_leg",
-               pw_col="pw_us_Left", freq_grid=PLT.FREQ_GRID, amp_grid=PLT.AMP_GRID,
+               pw_col=None, freq_grid=PLT.FREQ_GRID, amp_grid=PLT.AMP_GRID,
                fixed_length_scale=PLT.FIXED_LENGTH_SCALE, beta=PLT.BETA, kappa=PLT.KAPPA,
                limit_anchors=PLT.LIMIT_ANCHORS, min_tolerated_h=MIN_TOLERATED_H,
                min_stratum_epochs=PW_STRATUM_MIN_EPOCHS, q=4, eta=1.0,
@@ -649,7 +682,8 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
                resolution_k=RESOLUTION_K, era_scheme="quarter",
                explore_outside_reason=None, explore_outside_by=None,
                explore_outside_requested=None,
-               adaptive_min_rate_hz=ENV.MIN_RATE_HZ) -> Stage1Result:
+               adaptive_min_rate_hz=ENV.MIN_RATE_HZ,
+               limit_anchors_by_hemisphere=None) -> Stage1Result:
     """Run the open-loop search and freeze a configuration.
 
     Parameters
@@ -663,9 +697,15 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
         where one side is off or impose one shared length scale on two dimensions with different
         support.
     pw_col
-        Column holding pulse width. This record carries ``pw_us_Left`` only, so the right
-        hemisphere's pulse width is NOT OBSERVED and is reported as such rather than assumed equal
-        to the left.
+        Column holding pulse width. ``None`` (the default since 2026-09-12) means EACH SIDE'S OWN
+        column, ``pw_us_<side>``: the strata, the incumbent pulse width, the design audit, the
+        contrast and the BrainSense-pair note for the Right side are all built from
+        ``pw_us_Right``. Until then this defaulted to ``pw_us_Left`` for both sides, which on
+        RCS08 grouped the Right side's epochs by the Left side's pulse width and recommended a
+        Right pulse width the Right side had been at on 1 of 92 epochs (code review of
+        2026-09-12, finding S1). When a side's own column is absent, ``pw_us_Left`` is used for
+        it and ``audit["per_hemisphere"][side]["pw_col_fallback"]`` says so; an explicit column
+        name is used for every side as given.
     min_stratum_epochs
         A pulse-width level with fewer fitted epochs than this is SKIPPED, with its reason recorded
         in ``.skipped``, never silently pooled into a neighbouring level.
@@ -682,6 +722,11 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
         says an override was ASKED for; when it is asked for with no reason the constraint stays
         and the configuration says the override was ignored. Every exclusion the constraint made
         is on ``.frozen.adaptive_envelope`` with its reason; nothing is silently dropped.
+    limit_anchors_by_hemisphere
+        ``{hemisphere: (anchors, meta)}`` from ``routines/plots.limit_anchors_from_stream``
+        (review S8, 2026-09-12): each side's safety-model limit anchors built from the
+        participant's own settings stream, recorded in that side's audit under
+        ``limit_anchors``. Absent, ``limit_anchors`` is used for every side as before.
 
     Returns
     -------
@@ -705,7 +750,9 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
                             cfg={"primary_item": primary_item} if primary_item else None)
     inc_row = D.loc[D["epoch"].astype(float) == float(incumbent_epoch)].iloc[0]
     inc_rate = float(inc_row["freq_hz"])
-    inc_pw = float(inc_row[pw_col]) if pw_col in D.columns else None
+    # The LEFT column's value, kept under the historical name for the callers that read it; each
+    # side's own value is resolved inside the loop below (review S1, 2026-09-12).
+    inc_pw = float(inc_row[PW_COL_FALLBACK]) if PW_COL_FALLBACK in D.columns else None
     resolved_item = str(D["primary_item"].iloc[0]) if "primary_item" in D.columns else primary_item
 
     grid = SUR.ParameterGrid(freq_grid, amp_grid)
@@ -721,14 +768,27 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
     exclusions = {}
 
     slices, rows, skipped, settings = {}, [], {}, []
+    inc_pw_by_side = {}
     audit = dict(incumbent_epoch=float(incumbent_epoch), incumbent_rate_hz=inc_rate,
-                 incumbent_pw_us=inc_pw, pw_col=str(pw_col), per_hemisphere={})
+                 incumbent_pw_us=inc_pw,
+                 # `pw_col` is per side now (review S1): "own" means each side reads its own
+                 # `pw_us_<side>` column; the column actually used is in each side's audit.
+                 pw_col=("own" if pw_col is None else str(pw_col)),
+                 incumbent_pw_us_by_side=inc_pw_by_side, per_hemisphere={})
 
     for hemi in hemispheres:
         amp_col = f"amp_mA_{hemi}"
         if amp_col not in D.columns:
             raise KeyError(f"design matrix has no {amp_col!r} column; cannot search the "
                            f"{hemi} hemisphere")
+        # THIS SIDE'S OWN pulse-width column (review S1, 2026-09-12). Until then both sides were
+        # stratified and labelled by the Left column, so the Right side's strata mixed Right
+        # pulse widths of 60 through 180 us and its "incumbent pulse width" was the Left's.
+        pw_col_h, pw_fallback = pw_col_for(hemi, D.columns, pw_col=pw_col)
+        inc_pw_h = float(inc_row[pw_col_h]) if pw_col_h in D.columns else None
+        if inc_pw_h is not None and not np.isfinite(inc_pw_h):
+            inc_pw_h = None
+        inc_pw_by_side[hemi] = inc_pw_h
         # A hemisphere at 0 mA is a different therapeutic state, not the low end of its own dose
         # axis (OBJECTIVE_SPEC amendment 2026-08-29), so those epochs are excluded from this
         # hemisphere's surface rather than left to anchor its intercept.
@@ -736,14 +796,19 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
         inc_amp = float(inc_row[amp_col])
         incumbent_xy = (inc_rate, inc_amp)
 
-        # Shared safety model, fitted once on the whole record for this hemisphere.
+        # Shared safety model, fitted once on the whole record for this hemisphere. Its limit
+        # anchors are this side's own when the caller built them from the stream (review S8).
+        anchors_h, anchors_meta = np.asarray(limit_anchors, float), dict(source="caller-supplied")
+        if limit_anchors_by_hemisphere and hemi in limit_anchors_by_hemisphere:
+            a_, m_ = limit_anchors_by_hemisphere[hemi]
+            anchors_h, anchors_meta = np.asarray(a_, float), dict(m_ or {})
         deliv = D.loc[D["dur_h"].astype(float) >= float(min_tolerated_h),
                       ["freq_hz", amp_col]].to_numpy(float)
-        Xs, sev, sv = SUR.SafetyGP.seed_from_history(deliv, np.asarray(limit_anchors, float))
+        Xs, sev, sv = SUR.SafetyGP.seed_from_history(deliv, anchors_h)
         sgp = SUR.SafetyGP(grid, random_state=0).fit(Xs, sev, sv)
         safe = sgp.safe_mask(beta=beta)
 
-        pw_present = pw_col in fit.columns and fit[pw_col].notna().any()
+        pw_present = pw_col_h in fit.columns and fit[pw_col_h].notna().any()
         # `n_epochs_eligible` counts every epoch that survives the amplitude>0 and feasibility
         # filters. It is NOT the number of epochs that end up on a fitted surface, because a
         # pulse-width stratum below the 8-epoch floor is skipped after this point. The two differ by
@@ -752,18 +817,22 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
         h_audit = dict(n_epochs_eligible=int(len(fit)),
                        amp_delivered_min=float(fit[amp_col].min()) if len(fit) else float("nan"),
                        amp_delivered_max=float(fit[amp_col].max()) if len(fit) else float("nan"),
-                       pw_observed=bool(pw_present))
+                       pw_observed=bool(pw_present),
+                       pw_col=str(pw_col_h), pw_col_fallback=bool(pw_fallback),
+                       incumbent_pw_us=inc_pw_h,
+                       limit_anchors=dict(anchors_meta, n=int(len(anchors_h)),
+                                          anchors=[[float(a), float(b)] for a, b in anchors_h]))
         if pw_present:
-            h_audit["design"] = pulse_width_design_audit(fit, pw_col=pw_col,
+            h_audit["design"] = pulse_width_design_audit(fit, pw_col=pw_col_h,
                                                          min_epochs=min_stratum_epochs)
-            h_audit["contrast"] = pulse_width_contrast(fit, pw_col=pw_col, reference_pw=inc_pw,
+            h_audit["contrast"] = pulse_width_contrast(fit, pw_col=pw_col_h, reference_pw=inc_pw_h,
                                                        era_scheme=era_scheme,
                                                        min_epochs=min_stratum_epochs)
         audit["per_hemisphere"][hemi] = h_audit
 
         # --- fit one surface per adequately-sampled pulse-width level -------------------------
         if pw_present:
-            groups = [(float(pw), sub) for pw, sub in fit.groupby(fit[pw_col].astype(float))]
+            groups = [(float(pw), sub) for pw, sub in fit.groupby(fit[pw_col_h].astype(float))]
         else:
             groups = [(float("nan"), fit)]
         for pw, sub in groups:
@@ -811,9 +880,10 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
 
         # --- choose the configuration for this hemisphere -------------------------------------
         setting, h_excl = _freeze_hemisphere(
-            hemi, [s for (h, _p), s in slices.items() if h == hemi], inc_rate, inc_pw,
+            hemi, [s for (h, _p), s in slices.items() if h == hemi], inc_rate, inc_pw_h,
             fit=fit, amp_col=amp_col, h_audit=h_audit, grid=grid, gx=gx,
-            resolution_k=resolution_k, pw_observed=pw_present, constraint=constraint)
+            resolution_k=resolution_k, pw_observed=pw_present, constraint=constraint,
+            min_stratum_epochs=min_stratum_epochs)
         settings.append(setting)
         exclusions[hemi] = h_excl
 
@@ -839,13 +909,15 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
         settings=tuple(settings), primary_item=resolved_item,
         incumbent_epoch=float(incumbent_epoch), incumbent_rate_hz=inc_rate, incumbent_pw_us=inc_pw,
         data_horizon=str(data_horizon), washin_min=float(washin_min),
-        n_epochs_total=int(len(D)), audit=audit, adaptive_envelope=envelope)
+        n_epochs_total=int(len(D)), audit=audit, adaptive_envelope=envelope,
+        incumbent_pw_us_by_side=dict(inc_pw_by_side))
     return Stage1Result(frozen=frozen, slices=slices, summary=pd.DataFrame(rows), audit=audit,
                         D=D, skipped=skipped)
 
 
 def _freeze_hemisphere(hemi, hslices, inc_rate, inc_pw, *, fit, amp_col, h_audit, grid, gx,
-                       resolution_k, pw_observed, constraint=None):
+                       resolution_k, pw_observed, constraint=None,
+                       min_stratum_epochs=PW_STRATUM_MIN_EPOCHS):
     """Pick the rate and pulse width for one hemisphere and state whether either is resolved.
 
     The rate comes from the best slice's own optimum and is tested against the setting in force
@@ -853,6 +925,14 @@ def _freeze_hemisphere(hemi, hslices, inc_rate, inc_pw, *, fit, amp_col, h_audit
     across slices, comparing the best slice's optimum against the posterior at THE SAME (rate,
     amplitude) CELL in the incumbent pulse width's slice. Holding the cell fixed is what makes the
     comparison a pulse-width contrast rather than a mixture of a pulse-width move and a rate move.
+
+    ``inc_pw`` is THIS side's pulse width in force, read from its own column (review S1). When
+    no fitted stratum sits at that pulse width -- it has fewer epochs than ``min_stratum_epochs``,
+    or it is not recorded on the incumbent epoch -- the pulse-width choice is NOT ASSESSED
+    (``pw_resolved=None``), never "resolved" on a contrast between two other strata (review S2,
+    2026-09-12): a comparison that does not involve the setting in force is not a comparison
+    with the setting in force, whatever its size. The best-of-the-others contrast is still
+    reported as a number under ``detail``, never as the verdict.
 
     Returns ``(HemisphereSetting, exclusions)``. ``exclusions`` is a list of mappings, one per
     thing the adaptive envelope kept out of the recommendation on this side -- a stratum with no
@@ -989,14 +1069,21 @@ def _freeze_hemisphere(hemi, hslices, inc_rate, inc_pw, *, fit, amp_col, h_audit
 
     # --- pulse width --------------------------------------------------------------------------
     detail = dict(n_slices=len(hslices), best_pw_us=float(best.pw_us),
-                  pw_levels_fitted=[float(s.pw_us) for s in hslices])
+                  pw_levels_fitted=[float(s.pw_us) for s in hslices],
+                  pw_col=h_audit.get("pw_col"), pw_col_fallback=bool(h_audit.get("pw_col_fallback")),
+                  incumbent_pw_us=inc_pw)
+    if h_audit.get("pw_col_fallback") and pw_observed:
+        reasons.append(
+            f"PULSE-WIDTH COLUMN FALLBACK: this matrix carries no pw_us_{hemi} column, so the "
+            f"{hemi} side was stratified by {h_audit.get('pw_col')} and every pulse width reported "
+            f"for it is that column's value, not a measurement of the {hemi} side's own pulse width")
     if not pw_observed:
         pw_resolved = None
         pw_us = None
         reasons.append(
-            "pulse width is NOT OBSERVED for this hemisphere in this design matrix (the matrix "
-            "carries a left-hemisphere pulse-width column only), so it can be neither searched nor "
-            "resolved here. It is reported as unknown rather than assumed equal to the other side")
+            f"pulse width is NOT OBSERVED for this hemisphere in this design matrix (no usable "
+            f"{h_audit.get('pw_col')} column), so it can be neither searched nor resolved here. "
+            "It is reported as unknown rather than assumed equal to the other side")
     elif len(hslices) < 2:
         pw_resolved = False
         pw_us = float(best.pw_us)
@@ -1007,9 +1094,45 @@ def _freeze_hemisphere(hemi, hslices, inc_rate, inc_pw, *, fit, amp_col, h_audit
     else:
         pw_us = float(best.pw_us)
         ref = [s for s in hslices if inc_pw is not None and abs(s.pw_us - inc_pw) < 1e-9]
-        alt = ref[0] if ref else min((s for s in hslices if s is not best),
-                                     key=lambda s: s.mu_star)
-        if alt is best:
+        alt = ref[0] if ref else None
+        if alt is None:
+            # REVIEW S2 (2026-09-12): the pulse width in force has no fitted stratum, so there is
+            # no surface to compare the chosen pulse width against. The old code fell back to the
+            # best OTHER stratum and reported that contrast as the verdict, which on RCS08's Right
+            # side read "180 -> 160 us IS resolved" two lines above "reference pulse width 150 us
+            # is not among the fitted levels". Not assessed, with the number kept for the record.
+            pw_resolved = None
+            others = [s for s in hslices if s is not best]
+            second = min(others, key=lambda s: s.mu_star) if others else None
+            n_inc = 0
+            if inc_pw is not None:
+                n_inc = int((h_audit.get("design", {}).get("epochs_per_pw") or {})
+                            .get(float(inc_pw), 0))
+            detail.update(pw_reference_us=None, pw_in_force_n_epochs=int(n_inc))
+            if second is not None:
+                cell = np.atleast_2d(np.asarray(best.x_star, float))
+                o_mu, o_sd = second.gp.predict(cell, return_std=True)
+                o_gain = float(o_mu[0]) - float(best.mu_star)
+                o_sd_diff = float(np.sqrt(float(best.sd_star) ** 2 + float(o_sd[0]) ** 2))
+                detail["pw_contrast_between_other_strata"] = dict(
+                    from_pw_us=float(second.pw_us), to_pw_us=float(best.pw_us), gain=o_gain,
+                    sd_of_difference=o_sd_diff,
+                    note=("a contrast between two strata neither of which is the pulse width in "
+                          "force; reported for the record only and never the verdict"))
+            if inc_pw is None:
+                reasons.append(
+                    "the pulse-width choice is NOT ASSESSED, not refused: the pulse width in force "
+                    f"is not recorded on the incumbent epoch for the {hemi} side, so no surface "
+                    f"exists to compare the chosen {best.pw_us:g} us against; a contrast between "
+                    "two other strata would not be a comparison with the setting in force")
+            else:
+                reasons.append(
+                    "the pulse-width choice is NOT ASSESSED, not refused: the pulse width in force "
+                    f"({inc_pw:g} us) has {n_inc} epochs, below the {int(min_stratum_epochs)}-epoch "
+                    f"stratum floor, so no surface exists to compare the chosen {best.pw_us:g} us "
+                    "against; a contrast between two other strata would not be a comparison with "
+                    "the setting in force")
+        elif alt is best:
             pw_resolved = False
             reasons.append(
                 f"the best slice IS the pulse width in force ({best.pw_us:g} us); there is nothing "

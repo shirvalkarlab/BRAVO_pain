@@ -132,6 +132,58 @@ function Numbers({ c, lfp }) {
       // minimum, the best band labelled; a response from before those rows falls back to the
       // tick row built from the sentences' prefixes.
       const rows = Array.isArray(ev.verdict_rows) ? ev.verdict_rows : null;
+      // PER SIDE (review S3, 2026-09-12): the check is judged on each frozen side's own sensing
+      // evidence, by the readiness screen's rule (a majority of bands respond AND a majority carry
+      // a significant negative era-blocked slope, review S4). One block per side, each with its
+      // own count, strip and the contact it was read on; a side with no evidence says so.
+      const per = ev.per_hemisphere && typeof ev.per_hemisphere === "object" ? ev.per_hemisphere : null;
+      const bySide = (lfp && lfp.selected_by_side && typeof lfp.selected_by_side === "object") ? lfp.selected_by_side : {};
+      if (per) {
+        const sides = ["Left", "Right"].filter((h) => per[h]);
+        return (
+          <MDBox>
+            {sides.map((h) => {
+              const b = per[h] || {};
+              const sel = bySide[h] || null;
+              const k = sel && Array.isArray(sel.selected_key) ? sel.selected_key : null;
+              const state = b.passed === true ? "responds" : (b.passed === false ? "does not respond" : "not assessed");
+              return (
+                <MDBox key={h} mb={1.2}>
+                  <MDBox display="flex" alignItems="baseline" columnGap={1.5} flexWrap="wrap">
+                    <span style={{ ...MONO, fontWeight: 600 }}>{h[0]}</span>
+                    <span style={{ ...MONO, whiteSpace: "nowrap" }}>
+                      {b.n_tested ? `${fmtOf(b.n_passing, b.n_tested)} bands respond · ${fmtOf(b.n_era_negative_significant, b.n_tested)} fall once time is removed` : state}
+                    </span>
+                    {b.n_tested ? <span style={NOTE}>{state}</span> : null}
+                    {b.n_power_unavailable != null && num(b.n_power_unavailable) > 0 && (
+                      <span style={NOTE}>{`${Math.round(num(b.n_power_unavailable))} not measurable`}</span>
+                    )}
+                  </MDBox>
+                  {Array.isArray(b.verdict_rows) && b.verdict_rows.length > 0 && (
+                    <MDBox mt={0.6}>
+                      <BandResponseStrip rows={b.verdict_rows} minSep={ev.min_sep_d} best={b.best_center_hz} />
+                    </MDBox>
+                  )}
+                  <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.4 }}>
+                    {sel && sel.selected
+                      ? <>read on <span style={{ whiteSpace: "nowrap" }}>{contactLabel({ display_short: sel.selected_display_short }, k ? k[0] : null)}</span>
+                        {sel.pinned_rate_hz != null ? <> at <span style={{ whiteSpace: "nowrap" }}>{fmtHz(sel.pinned_rate_hz)}</span></> : null}
+                        {b.laterality === "contralateral" ? <span style={{ color: PAL.warnText }}> · a contact on the other side (none on this side passed)</span> : null}</>
+                      : (b.reason || (sel && sel.selection_note) || "no sensing contact could be used on this side")}
+                  </MDTypography>
+                </MDBox>
+              );
+            })}
+            {lfp && (
+              <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.2 }}>
+                {lfp.n_cells_screened != null ? `${lfp.n_cells_screened} contact-and-rate combinations screened` : ""}
+                {lfp.n_cells_unbuildable != null ? `, ${lfp.n_cells_unbuildable} could not be built` : ""}
+                {" · one side's sensing contact licenses only that side"}
+              </MDTypography>
+            )}
+          </MDBox>
+        );
+      }
       return (
         <MDBox>
           <MDBox display="flex" alignItems="baseline" columnGap={1.5} flexWrap="wrap">

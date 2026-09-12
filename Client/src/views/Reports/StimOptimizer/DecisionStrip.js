@@ -123,6 +123,14 @@ export default function DecisionStrip({ arms, plan, planLoading, planErr, inForc
                   {r.contacts ? <>contacts <span style={NW}>{r.contacts}</span></> : "contacts: not in the response"}
                   {r.nowPw === null ? " · pulse width: not in the response for this side" : ""}
                 </MDTypography>
+                {/* Review S7 (2026-09-12): the setting in force is the newest DEVICE setting, rated
+                    or not; when no rating has been filed under it yet the gains on this row are
+                    still measured against the newest RATED setting, and the row says so. */}
+                {r.inf && r.inf.has_ratings_yet === false && (
+                  <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.2, color: PAL.warnText }}>
+                    {`no pain rating filed under this setting yet · gains below are measured against the newest rated setting${num(r.inf.fitted_incumbent_epoch) !== null ? ` (epoch ${Math.round(num(r.inf.fitted_incumbent_epoch))})` : ""}`}
+                  </MDTypography>
+                )}
               </MDBox>,
               <span key={`${r.side}-c`} style={{ color: "#9A9A9A", fontSize: 20, textAlign: "center" }}>→</span>,
               <MDBox key={`${r.side}-d`}>

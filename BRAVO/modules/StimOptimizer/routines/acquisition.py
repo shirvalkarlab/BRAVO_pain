@@ -256,7 +256,7 @@ class StoppingConfig:
 class StoppingDecision:
     stop: bool
     binding: str
-    plateau_met: bool
+    plateau_met: bool | None          # None: no batch history to assess it on (review S5)
     coverage_met: bool
     truncated: bool
     n_batches: int
@@ -272,15 +272,30 @@ class StoppingDecision:
                     f"This run has NOT found the optimum.")
         if self.stop:
             return f"STOP — both conditions met (binding: {self.binding})."
+        if self.plateau_met is None:
+            return (f"CONTINUE — the plateau condition is {NO_HISTORY_BINDING} "
+                    f"(coverage={self.coverage_met}, {self.queue_size} cells outstanding).")
         return (f"CONTINUE — {self.binding} not met "
                 f"(plateau={self.plateau_met}, coverage={self.coverage_met}, "
                 f"{self.queue_size} cells outstanding).")
+
+
+#: The ``binding`` label when the stopping rule is handed NO batch history (review S5,
+#: 2026-09-12). This platform proposes batches and never runs them in sequence, so there is no
+#: history of posterior-best values for the plateau condition to read; the honest label is that
+#: the plateau condition could not be assessed, not that it was assessed and not met.
+NO_HISTORY_BINDING = "not assessable: no batch history"
 
 
 def check_stopping(best_history, mu, sd, n_reports, incumbent_mu, cfg=None):
     """Evaluate both stopping conditions and report which one binds.
 
     ``best_history`` is the sequence of posterior-best J values, one per completed batch.
+    With an EMPTY history the plateau condition cannot be assessed: ``plateau_met`` is ``None``,
+    ``stop`` is ``False``, and ``binding`` reads :data:`NO_HISTORY_BINDING` whatever the coverage
+    condition says (review S5). Until 2026-09-12 both callers in this module handed a one-item
+    history -- the current posterior best -- so ``plateau_met`` was always ``False`` and the
+    label read "plateau" as though the plateau condition had been assessed and failed.
     """
     cfg = cfg or StoppingConfig()
     h = [float(v) for v in best_history]
@@ -297,17 +312,24 @@ def check_stopping(best_history, mu, sd, n_reports, incumbent_mu, cfg=None):
     coverage = idx.size == 0
     truncated = (n >= cfg.max_batches) and not coverage
 
-    if truncated:
+    if n == 0:
+        binding = NO_HISTORY_BINDING
+        plateau_met = None
+    elif truncated:
         binding = "hard ceiling"
+        plateau_met = bool(plateau)
     elif plateau and coverage:
         binding = "plateau and coverage"
+        plateau_met = bool(plateau)
     elif not coverage:
         binding = "coverage"
+        plateau_met = bool(plateau)
     else:
         binding = "plateau"
+        plateau_met = bool(plateau)
 
     return StoppingDecision(
-        stop=bool(plateau and coverage), binding=binding, plateau_met=bool(plateau),
+        stop=bool(plateau and coverage), binding=binding, plateau_met=plateau_met,
         coverage_met=bool(coverage), truncated=bool(truncated), n_batches=n,
         best_history=h, queue_size=int(idx.size),
         best_optimistic_unexplored=float(meta.get("best_optimistic", float("nan"))),

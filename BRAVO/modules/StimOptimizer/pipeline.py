@@ -63,6 +63,7 @@ import numpy as np
 import pandas as pd
 
 from .routines import acquisition as ACQ
+from .routines import adaptive_envelope as ENV
 from .routines import objective as OBJ
 from .routines import plots as PLT
 
@@ -175,6 +176,12 @@ def _queue_frame(ctx, top=25, *, delivered=None, hemisphere=None,
         safe=ctx.safe[q],
     ))
     out["within_hard_limit"] = out["amp_mA"] <= float(amp_ceiling) + 1e-9
+    # Can the device's closed-loop mode use this cell at all? (review S6, 2026-09-12.) The
+    # flat search is not held to the adaptive envelope -- that is the PI's call and is not made
+    # here -- but a 10-40 Hz cell at rank 1 must say it is one closed loop cannot use, since two
+    # cards down the two-stage plan says the same rate was ruled out. ONE definition of the
+    # minimum: `routines/adaptive_envelope.MIN_RATE_HZ`.
+    out["adaptive_capable"] = out["freq_hz"] >= float(ENV.MIN_RATE_HZ)
     if delivered is None or hemisphere is None:
         return out
 
@@ -208,12 +215,14 @@ def _batch_frame(ctx) -> pd.DataFrame:
                              freq_hz=float(m.freq_hz), amp_mA=float(m.amp_mA),
                              posterior_mean=float(m.mu), posterior_sd=float(m.sd),
                              acquisition=float(m.acq), reason=str(m.reason),
-                             exploration_fraction=float(m.exploration_fraction)))
+                             exploration_fraction=float(m.exploration_fraction),
+                             # review S6: whether closed loop could use this cell; see _queue_frame
+                             adaptive_capable=bool(float(m.freq_hz) >= float(ENV.MIN_RATE_HZ))))
     return pd.DataFrame(rows)
 
 
 def run(design_csv, *, sites=DEFAULT_SITES, hemispheres=DEFAULT_HEMISPHERES,
-        delivered_census=None,
+        delivered_census=None, limit_anchors_by_hemisphere=None,
         outdir=".", data_horizon=PLT.DATA_HORIZON, washin_min=PLT.WASHIN_MIN,
         render_figures=True, figure_backend="mpl", dpi=200, top_queue=25,
         strict=False, **ctx_kwargs) -> RunReport:
@@ -231,6 +240,11 @@ def run(design_csv, *, sites=DEFAULT_SITES, hemispheres=DEFAULT_HEMISPHERES,
     render_figures, figure_backend
         ``"mpl"`` writes PNG via matplotlib; ``"plotly"`` writes interactive HTML. Static export
         never goes through kaleido in this environment.
+    limit_anchors_by_hemisphere
+        ``{hemisphere: (anchors, meta)}`` from ``plots.limit_anchors_from_stream`` (review S8,
+        2026-09-12): the safety model's limit anchors for each side, built from the participant's
+        own settings stream. Absent, every arm uses ``ctx_kwargs["limit_anchors"]`` or the
+        hard-coded default, as before.
 
     Returns
     -------
@@ -251,10 +265,14 @@ def run(design_csv, *, sites=DEFAULT_SITES, hemispheres=DEFAULT_HEMISPHERES,
     for site in sites:
         for hemi in hemispheres:
             label = f"{site}__{hemi}"
+            kw = dict(ctx_kwargs)
+            if limit_anchors_by_hemisphere and hemi in limit_anchors_by_hemisphere:
+                anchors, meta_la = limit_anchors_by_hemisphere[hemi]
+                kw.update(limit_anchors=anchors, limit_anchors_meta=meta_la)
             try:
                 ctx = PLT.build_context(es, hemisphere=hemi, primary_item=site,
                                         data_horizon=data_horizon, washin_min=washin_min,
-                                        **ctx_kwargs)
+                                        **kw)
             except (KeyError, ValueError) as exc:
                 skipped[label] = f"{type(exc).__name__}: {exc}"
                 if strict:
@@ -265,7 +283,12 @@ def run(design_csv, *, sites=DEFAULT_SITES, hemispheres=DEFAULT_HEMISPHERES,
             queue = _queue_frame(ctx, top=top_queue, delivered=delivered_census,
                                  hemisphere=hemi)
             batch = _batch_frame(ctx)
-            stop = ACQ.check_stopping([m["mu_star"]], ctx.mu, ctx.sd, ctx.n_reports,
+            # NO batch history (review S5, 2026-09-12): batches are proposed here, never run in
+            # sequence, so the plateau condition has no history to read. The one-item history
+            # this used to pass made `stop` a constant False and `stop_binding` read "plateau"
+            # as if that condition had been assessed and failed; it now reads that the plateau
+            # condition is not assessable, and `plateau_met` is None.
+            stop = ACQ.check_stopping([], ctx.mu, ctx.sd, ctx.n_reports,
                                       incumbent_mu=m["incumbent_mu"])
             arm = ArmResult(site=site, hemisphere=hemi, ctx=ctx, batch=batch, queue=queue,
                             stopping=stop, meta=m)
@@ -352,6 +375,9 @@ class LiveEvidence:
     selection_note: str = ""
     screen: object = None
     audit: object = None
+    #: Every cell that was built, keyed ``(channel, hemisphere, rate_hz)`` (2026-09-12, review
+    #: S3), so a caller can pick one cell PER SIDE from the same build rather than rebuild.
+    cells: dict | None = None
 
     def describe(self) -> str:
         n_ok = 0 if self.screen is None or self.screen.empty else int(self.screen.deployable.sum())
@@ -400,15 +426,55 @@ def live_evidence(participant, *, amp_ceiling=None,
             and (channel is None or k[0] == channel))
         return LiveEvidence(selected=sel, selected_key=key,
                             selection_note=f"explicitly requested: {note}",
-                            screen=screen, audit=audit)
+                            screen=screen, audit=audit, cells=ev)
     if best is None:
         why = ("no cell survived screening" if not screen.empty
                else "no cell could even be built — see the audit")
         return LiveEvidence(selected=None, selected_key=None, selection_note=why,
-                            screen=screen, audit=audit)
+                            screen=screen, audit=audit, cells=ev)
     return LiveEvidence(selected=ev[best], selected_key=best,
                         selection_note=f"screened best: {best[0]} {best[1]} @{best[2]:g} Hz",
-                        screen=screen, audit=audit)
+                        screen=screen, audit=audit, cells=ev)
+
+
+def select_for_side(ev_: LiveEvidence, hemisphere, rate_hz, *, channel=None) -> tuple:
+    """One side's cell out of a :class:`LiveEvidence`: ``(evidence or None, key or None, note)``.
+
+    Review S3 (2026-09-12): the gate judges each frozen side on its own evidence, so the cell
+    handed to it for the Right side must be a Right-side cell. The pick is the screen's own
+    ranking restricted to that side and rate (``lfp_evidence.best_deployable``). When the build
+    carried no cells at all (a stand-in evidence object without ``cells``), the one selected cell
+    is attributed to the side its key names and to no other.
+    """
+    h = str(hemisphere)
+    cells = getattr(ev_, "cells", None)
+    screen = getattr(ev_, "screen", None)
+    if cells is not None and screen is not None and len(screen) and "hemisphere" in screen.columns:
+        from .routines import lfp_evidence as EV
+        key = EV.best_deployable(screen, hemisphere=h, rate_hz=rate_hz, channel=channel)
+        if key is not None and key in cells:
+            lat = str(getattr(cells[key], "laterality", "") or "")
+            # A contralateral pairing (sensing on the other side's contact, driving THIS side's
+            # current) is one the screen ranks below every ipsilateral cell and selects only when
+            # no ipsilateral cell passes; it needs a contralateral sensing configuration on the
+            # device, so it is named rather than left to be read off the contact's name.
+            side_note = (" (a CONTRALATERAL sensing contact: no contact on this side passed the "
+                         "screen at this rate)" if lat == "contralateral" else "")
+            return cells[key], key, (f"screened best on the {h} side: {key[0]} {key[1]} "
+                                     f"@{float(key[2]):g} Hz{side_note}")
+        n_side = int((screen["hemisphere"].astype(str) == h).sum())
+        if n_side == 0:
+            return None, None, f"no cell could be built for the {h} side at {float(rate_hz):g} Hz"
+        return None, None, (f"no deployable cell on the {h} side at {float(rate_hz):g} Hz "
+                            f"({n_side} screened, none passed)")
+    key = getattr(ev_, "selected_key", None)
+    if getattr(ev_, "selected", None) is not None and key is not None and str(key[1]) == h:
+        return ev_.selected, tuple(key), str(getattr(ev_, "selection_note", ""))
+    if getattr(ev_, "selected", None) is not None and key is None:
+        return ev_.selected, None, (f"{getattr(ev_, 'selection_note', '')} (no side named on "
+                                    f"the cell; attributed to the {h} side)")
+    return None, None, (f"no cell selected for the {h} side: "
+                        f"{getattr(ev_, 'selection_note', '') or 'nothing selected'}")
 
 
 def run_two_stage(design_csv, *, hemispheres=DEFAULT_HEMISPHERES, primary_item="left_leg",
@@ -622,7 +688,7 @@ def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemispher
     box = {}
 
     def _select_after_freezing(frozen):
-        """Choose the evidence cell AT the rate Stage 1 froze, not the best cell at any rate.
+        """Choose ONE evidence cell PER FROZEN SIDE, at the rate that side froze.
 
         The first version of this function selected the evidence before running Stage 1, and on the
         live record that produced a real mismatch: the screen's best cell was ONE_THREE_LEFT/Left at
@@ -630,49 +696,71 @@ def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemispher
         40 Hz configuration would have let the gate's response condition pass on a measurement of
         something the device will not be doing.
 
-        When the two hemispheres freeze DIFFERENT rates there is no single rate to pin, and this
-        refuses rather than picking one. The refusal costs nothing that was available anyway -- the
-        gate blocks on an unassessed response either way -- and it avoids silently attributing one
-        hemisphere's evidence to the other's configuration.
+        PER SIDE since 2026-09-12 (review S3). Until then one cell -- the screened best across
+        BOTH sides at the pinned rate -- was handed to the gate for a configuration that freezes
+        a setting per side, so one sensing contact's response could license closed loop on both
+        sides. Now each frozen side gets the best deployable cell among ITS OWN side's cells at
+        ITS OWN frozen rate, and the gate receives ``{side: cell}``; a side with no deployable
+        cell is handed nothing and the gate marks it NOT ASSESSED. Two sides freezing different
+        rates no longer refuse: each is pinned to its own rate, since nothing is attributed
+        across sides any more.
         """
         # A NaN rate is Stage 1's "no adaptive-capable setting can be recommended" (2026-09-12);
         # there is no rate to pin evidence to on that side, so it is left out here and the gate's
         # rate condition refuses on it.
-        rates = sorted({float(hs.rate_hz) for hs in frozen.settings
+        rate_by_side = {str(hs.hemisphere): float(hs.rate_hz) for hs in frozen.settings
                         if getattr(hs, "rate_hz", None) is not None
-                        and np.isfinite(float(hs.rate_hz))})
-        pin = rate_hz
-        if pin is None:
-            if len(rates) == 1:
-                pin = rates[0]
-            elif not rates:
-                box["ev"] = LiveEvidence(
-                    selected=None, selected_key=None,
-                    selection_note=("Stage 1 recommended no adaptive-capable rate on any side, "
-                                    "so there is no rate to pin the LFP evidence to"))
-                box["frozen_rates"] = rates
-                return None
-            else:
-                box["ev"] = LiveEvidence(
-                    selected=None, selected_key=None,
-                    selection_note=("the two hemispheres froze different rates %s, so there is no "
-                                    "single rate to pin the evidence to; refusing to attribute one "
-                                    "hemisphere's measurement to the other's configuration"
-                                    % rates))
-                box["frozen_rates"] = rates
-                return None
-        # `evidence_inputs` is the (sensed frame, epochs) pair the service layer already built
-        # for the readiness screen, or None to build it here (2026-09-12).
-        ev_ = live_evidence(participant, amp_ceiling=amp_ceiling, channel=channel,
-                            hemisphere=hemisphere, rate_hz=pin, bands=bands,
-                            force_refresh=force_refresh, stream=stream, inputs=evidence_inputs)
-        box["ev"] = ev_
-        box["pinned_rate_hz"] = float(pin)
+                        and np.isfinite(float(hs.rate_hz))}
+        rates = sorted(set(rate_by_side.values()))
         box["frozen_rates"] = rates
-        return ev_.selected
+        box["frozen_rates_by_side"] = dict(rate_by_side)
+        if not rate_by_side:
+            box["ev"] = LiveEvidence(
+                selected=None, selected_key=None,
+                selection_note=("Stage 1 recommended no adaptive-capable rate on any side, "
+                                "so there is no rate to pin the LFP evidence to"))
+            return None
+        pins = {h: (float(rate_hz) if rate_hz is not None else r) for h, r in rate_by_side.items()}
+        sides = [h for h in pins if hemisphere is None or str(hemisphere) == h]
+        box["pinned_rate_hz_by_side"] = {h: pins[h] for h in sides}
+        box["pinned_rate_hz"] = (float(pins[sides[0]])
+                                 if sides and len({pins[h] for h in sides}) == 1 else None)
+        # One build per distinct pinned rate, both sides' cells at once; `evidence_inputs` is
+        # the (sensed frame, epochs) pair the service layer already built for the readiness
+        # screen, or None to build it here (2026-09-12).
+        by_rate = {}
+        for r in sorted({pins[h] for h in sides}):
+            by_rate[r] = live_evidence(participant, amp_ceiling=amp_ceiling, channel=channel,
+                                       hemisphere=None, rate_hz=r, bands=bands,
+                                       force_refresh=force_refresh, stream=stream,
+                                       inputs=evidence_inputs)
+        per, chosen = {}, {}
+        for h in sides:
+            sel, key, note = select_for_side(by_rate[pins[h]], h, pins[h], channel=channel)
+            per[h] = dict(selected=sel is not None, selected_key=(list(key) if key else None),
+                          selection_note=note, pinned_rate_hz=float(pins[h]))
+            if sel is not None:
+                chosen[h] = sel
+        box["by_side"] = per
+        # The screen and audit frames of every build, for the manifest's counts.
+        screens = [e.screen for e in by_rate.values() if e.screen is not None and len(e.screen)]
+        audits = [e.audit for e in by_rate.values() if e.audit is not None and len(e.audit)]
+        first = next((h for h in ("Left", "Right") if h in chosen), None)
+        box["ev"] = LiveEvidence(
+            selected=(chosen[first] if first else None),
+            selected_key=(tuple(per[first]["selected_key"]) if first else None),
+            selection_note="; ".join(f"{h}: {per[h]['selection_note']}" for h in sides),
+            screen=(pd.concat(screens, ignore_index=True) if screens else
+                    next(iter(by_rate.values())).screen),
+            audit=(pd.concat(audits, ignore_index=True) if audits else
+                   next(iter(by_rate.values())).audit))
+        return chosen if chosen else None
 
     rep = run_two_stage(design, lfp=_select_after_freezing, **two_stage_kwargs)
     ev = box.get("ev") or LiveEvidence()
+    by_side = dict(box.get("by_side") or {})
+    n_sides = len(by_side)
+    n_selected = sum(1 for v in by_side.values() if v.get("selected"))
 
     # The provenance of the evidence travels with the report. Without this a reader cannot tell
     # which of the two refusals above they are looking at, and the gate's own text cannot say,
@@ -680,9 +768,14 @@ def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemispher
     rep.manifest["lfp_evidence"] = {
         "source": "live",
         "pinned_rate_hz": box.get("pinned_rate_hz"),
+        "pinned_rate_hz_by_side": box.get("pinned_rate_hz_by_side"),
         "frozen_rates_hz": box.get("frozen_rates"),
+        "frozen_rates_hz_by_side": box.get("frozen_rates_by_side"),
         "selected": ev.selected is not None,
+        # The FIRST side's cell (Left before Right) under the historical keys; every side's own
+        # cell is under `selected_by_side` (review S3).
         "selected_key": (list(ev.selected_key) if ev.selected_key else None),
+        "selected_by_side": by_side,
         "selection_note": ev.selection_note,
         "n_cells_screened": (0 if ev.screen is None else int(len(ev.screen))),
         "n_cells_unbuildable": (0 if ev.audit is None else int(len(ev.audit))),
@@ -696,13 +789,16 @@ def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemispher
             if ev.audit is not None and len(ev.audit) and "reason_unusable" in ev.audit.columns
             else {}),
         "refusal_class": (
-            "evidence_selected" if ev.selected is not None
-            else ("frozen_rates_disagree" if box.get("pinned_rate_hz") is None
-                  else ("no_cell_deployable" if (ev.screen is not None and len(ev.screen))
-                        else "no_cell_buildable"))),
+            "evidence_selected" if (n_sides and n_selected == n_sides)
+            else ("evidence_missing_on_some_sides" if n_selected
+                  else ("no_adaptive_capable_rate" if not box.get("frozen_rates")
+                        else ("no_cell_deployable" if (ev.screen is not None and len(ev.screen))
+                              else "no_cell_buildable")))),
         "note": ("`no_cell_buildable` means no configuration had enough data to form the "
                  "measurement at all, and `no_cell_deployable` means cells were built and screened "
-                 "and none passed. A gate refusal reads identically in both cases, so this field "
-                 "is the only thing that distinguishes absent data from a measured negative."),
+                 "and none passed; `evidence_missing_on_some_sides` means at least one frozen side "
+                 "has a deployable cell and at least one has none, and the gate marks the side "
+                 "without one NOT ASSESSED. A gate refusal reads identically in these cases, so "
+                 "this field is what distinguishes absent data from a measured negative."),
     }
     return rep

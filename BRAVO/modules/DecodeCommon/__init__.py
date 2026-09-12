@@ -12,7 +12,7 @@ lands, the running server still uses `availability.per_pro_lsb` alone.
 """
 import sys as _sys
 
-from . import per_pro_lsb_indexed as _consumer, representation   # noqa: F401
+from . import import_alias, per_pro_lsb_indexed as _consumer, representation   # noqa: F401
 from .representation import (                                    # noqa: F401
     CHANNEL_INDEX_VERSION,
     ChannelIndex,
@@ -27,5 +27,5 @@ __all__ = ["CHANNEL_INDEX_VERSION", "ChannelIndex", "build_channel_index",
 # container imports this package as `modules.DecodeCommon` and the host suite as `DecodeCommon`.
 _OTHER = "DecodeCommon" if __name__ == "modules.DecodeCommon" else "modules.DecodeCommon"
 for _name, _mod in (("", _sys.modules[__name__]), (".representation", representation),
-                    (".per_pro_lsb_indexed", _consumer)):
+                    (".per_pro_lsb_indexed", _consumer), (".import_alias", import_alias)):
     _sys.modules.setdefault(_OTHER + _name, _mod)

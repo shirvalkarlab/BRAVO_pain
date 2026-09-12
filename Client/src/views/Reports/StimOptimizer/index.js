@@ -373,8 +373,10 @@ export default function StimOptimizer() {
         <MDBox pt={3} display="flex" alignItems="center" justifyContent="center" gap={2}>
           <CircularProgress size={22} />
           <MDTypography variant="body2">
-            Fitting one Gaussian-process surrogate per arm. Every stored session report is read to
-            rebuild the exposure history, so the first load after an ingest is the slow one.
+            Loading this participant&apos;s recordings and the stored settings history, and running the
+            closed-loop readiness screen over every sensing contact and rate; the four surface fits
+            themselves take about a second. About ten seconds in all; the first load after an ingest
+            also rebuilds the settings history from the stored session reports and is slower.
           </MDTypography>
         </MDBox>
       </DatabaseLayout>
@@ -623,9 +625,9 @@ export default function StimOptimizer() {
                       {/* The table takes the card's width: fixed-minimum columns that share the
                           remaining space, rows at 13 px under 11 px headers. */}
                       <MDBox mt={1} sx={{ display: "grid",
-                        gridTemplateColumns: "minmax(56px, 0.5fr) minmax(90px, 1fr) minmax(100px, 1fr) minmax(130px, 1.2fr) minmax(110px, 1fr) minmax(170px, 1.4fr) minmax(120px, 1fr) minmax(90px, 0.8fr)",
+                        gridTemplateColumns: "minmax(56px, 0.5fr) minmax(90px, 1fr) minmax(100px, 1fr) minmax(130px, 1.2fr) minmax(110px, 1fr) minmax(170px, 1.4fr) minmax(120px, 1fr) minmax(90px, 0.8fr) minmax(120px, 1fr)",
                         columnGap: "14px", rowGap: "8px", alignItems: "center" }}>
-                        {["rank", "rate", "current", "predicted (pts)", "±1 SD (pts)", "expected improvement", "prior records", "eligible"].map((h) => (
+                        {["rank", "rate", "current", "predicted (pts)", "±1 SD (pts)", "expected improvement", "prior records", "eligible", "closed loop"].map((h) => (
                           <MDTypography key={h} variant="caption" sx={{ ...HEAD, alignSelf: "end" }}>{h}</MDTypography>
                         ))}
                         {current.queue.slice(0, 10).map((r, i) => [
@@ -639,6 +641,13 @@ export default function StimOptimizer() {
                           <span key={`${i}-h`} style={{ display: "inline-flex" }}>
                             {r.schedulable_without_new_clinical_signoff == null ? <span style={{ color: "#9A9A9A", fontSize: TYPE.body }}>—</span>
                               : (r.schedulable_without_new_clinical_signoff ? <TickGlyph label="eligible without new sign-off" size={17} /> : <NotTestedGlyph label="needs sign-off: never delivered before" size={17} />)}
+                          </span>,
+                          /* Whether the device's closed-loop mode could use this cell at all (its rate
+                             at or above the adaptive minimum), read from the row's own
+                             `adaptive_capable` (review S6, 2026-09-12). The list is not held to the
+                             envelope -- that is the PI's call -- but a cell it cannot use says so. */
+                          <span key={`${i}-i`} style={{ ...QUEUE_CELL, color: r.adaptive_capable === false ? "#B03A2E" : QUEUE_CELL.color }}>
+                            {r.adaptive_capable == null ? "—" : (r.adaptive_capable ? "usable" : "adaptive cannot use")}
                           </span>,
                         ])}
                       </MDBox>
