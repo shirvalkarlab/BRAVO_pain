@@ -18,11 +18,30 @@ import { useCachedResult } from "database/useCachedResult";
 
 import { CL } from "views/Reports/moduleCacheKeys";
 
+/**
+ * The side the report is evaluated on. THE BAND'S OWN SIDE, unless the caller names one.
+ *
+ * Until 2026-09-12 this read `hemisphere || "Left"` in both places below, and the page never
+ * passes `hemisphere` -- so every request the page ever sent carried `Hemisphere: "Left"` and
+ * `actuated_hemisphere: "Left"`, whatever side the band was on. The server then read the
+ * impedance, the artefact flags, the LFP amplitude bins, the capture amplitudes, the paused
+ * amplitude, the current-to-power slope, the amplitude-to-pain slope, the two capture currents and
+ * the simulation's amplitude series from the LEFT for a band picked on a RIGHT contact, and the
+ * only sign on the page was a D39 "contralateral pairing" row that was wrong about why (review
+ * C1, artifacts/review_2026-09-12_ClosedLoopDeployment.md). The committed band is on the left, so
+ * nothing the PI has watched live was affected; the first right-side band would have been.
+ */
+export function reportSide({ bandCandidate, hemisphere }) {
+  const bc = bandCandidate || {};
+  return hemisphere || bc.sensingHemisphere || "Left";
+}
+
 export function deploymentReportBody({ participantUid, bandCandidate, hemisphere, powerScale }) {
   const bc = bandCandidate || {};
+  const side = reportSide({ bandCandidate, hemisphere });
   return {
     ParticipantId: participantUid,
-    Hemisphere: hemisphere || "Left",
+    Hemisphere: side,
     // The device thresholds a LINEAR sum of squared magnitude (rule D11), so the linear scale is
     // the one that describes what the device will actually do. The log scale remains a valid
     // statistical description and is not what should drive a threshold.
@@ -32,7 +51,9 @@ export function deploymentReportBody({ participantUid, bandCandidate, hemisphere
       center_hz: Number(bc.centerHz),
       band_width_hz: Number(bc.bandWidthHz || 5.0),
       sensing_hemisphere: bc.sensingHemisphere || null,
-      actuated_hemisphere: hemisphere || "Left",
+      // The stimulated side follows the band's side (same-side sensing and actuation, rule D39's
+      // ordinary case) unless the caller names another.
+      actuated_hemisphere: side,
       rate_hz: bc.rateHz == null ? null : Number(bc.rateHz),
       pulse_width_us: bc.pulseWidthUs == null ? null : Number(bc.pulseWidthUs),
       threshold_mode: bc.thresholdMode || "dual",

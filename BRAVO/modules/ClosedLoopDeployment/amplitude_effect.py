@@ -41,7 +41,7 @@ import pandas as pd
 #: The kind this table is stored under, and the rule version bumped when a column's meaning
 #: changes. The columns themselves are part of the table.
 KIND = "amplitude_effect_by_band"
-RULE_VERSION = "v1_per_run"
+RULE_VERSION = "v2_per_run_post_ramp_margin"   # v2: the 20 s post-ramp margin (2026-09-12)
 
 #: The source panel that feeds the table: the calibrated voltage-trace route, which covers every
 #: band. The device's own band power covers one band and its own spectrum is empty during ladders.
@@ -257,7 +257,7 @@ def table_from_build(build, *, checked_lo_hz, checked_hi_hz, band_half_hz,
 #: 4-run slice gives 6 across 1. Storing the table computed from the full build means the answer is
 #: the same on every request instead of depending on what happened to be cached.
 POOLED_KIND = "within_visit_pooled_shape"
-POOLED_RULE_VERSION = "v2_pooled_shape_curve_coefficients"
+POOLED_RULE_VERSION = "v3_pooled_shape_post_ramp_margin"   # v3: the 20 s post-ramp margin (2026-09-12)
 
 #: The fields carried per row. `post_peak` is deliberately absent: it is a nested structure rather
 #: than a scalar, no consumer reads it, and a table is the wrong shape to carry it in.

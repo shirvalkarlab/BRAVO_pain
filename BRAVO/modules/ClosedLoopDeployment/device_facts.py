@@ -28,6 +28,18 @@ try:
 except ImportError:                                   # pragma: no cover - depends on the runner
     from CacheStore import store as _cache_store
 
+# THE BRAINSENSE MINIMUM RATE, ONE NUMBER, imported rather than retyped (review C3, 2026-09-12).
+# ``StimOptimizer.routines.percept_adaptive.MIN_ADAPTIVE_RATE_HZ`` is the PI-stated 55 Hz the Stim
+# Optimizer page enforces (decision 138); D31 here reads ``brainsense_min_rate_hz`` and until this
+# import nobody supplied it, so the two pages carried two floors (this ledger's D44 at 30 Hz, that
+# page's 55 Hz) and a 40 Hz candidate got two different reasons on two pages. Spelled twice like
+# every cross-module import in this repository: the container makes the package
+# ``modules.StimOptimizer``, the host suite makes it ``StimOptimizer``.
+try:
+    from modules.StimOptimizer.routines.percept_adaptive import MIN_ADAPTIVE_RATE_HZ as _MIN_ADAPTIVE_RATE_HZ
+except ImportError:                                   # pragma: no cover - depends on the runner
+    from StimOptimizer.routines.percept_adaptive import MIN_ADAPTIVE_RATE_HZ as _MIN_ADAPTIVE_RATE_HZ
+
 #: Lead models whose short-circuit floor is the SenSight value rather than the 1x4 value. The
 #: constraint table keys its floor on the string "sensight", so the model number is mapped here
 #: rather than at the call site.
@@ -136,8 +148,16 @@ def impedance_facts(recordings):
     out = {"available": True, "n_records": len(rows),
            "status_newest": newest.get("Status"),
            "status_counts": statuses,
+           # ``lead_model`` / ``lead_type`` are the LEFT lead's, kept for callers that predate the
+           # per-side pair below; ``facts_for_participant`` reads the sensing side's own entry
+           # (review C11, 2026-09-12: D16's short-circuit limit depends on the lead family, and the
+           # left lead's family was being used to judge the right lead).
            "lead_model": (newest.get("Left") or {}).get("LeadModel"),
            "lead_type": _lead_type((newest.get("Left") or {}).get("LeadModel")),
+           "lead_model_by_hemisphere": {h: (newest.get(h) or {}).get("LeadModel")
+                                        for h in ("Left", "Right")},
+           "lead_type_by_hemisphere": {h: _lead_type((newest.get(h) or {}).get("LeadModel"))
+                                       for h in ("Left", "Right")},
            "measurement_current": chosen_current,
            "measured_at": _iso(getattr(chosen_row, "date", None)),
            "status_chosen": chosen.get("Status")}
@@ -267,6 +287,12 @@ PI_STATED_FACTS = {
         #: chosen rate rather than carrying forward the 165 Hz configuration that earlier screens
         #: were built around.
         "deployment_rate_hz": 55.0,
+        #: D31. The BrainSense minimum rate the ledger compares a candidate against when the
+        #: (rate, pulse width) pair has never been demonstrated on that side. NOT retyped: it is
+        #: ``StimOptimizer.routines.percept_adaptive.MIN_ADAPTIVE_RATE_HZ``, the PI-stated 55 Hz
+        #: the Stim Optimizer page already enforces (decision 138), so the two pages carry one
+        #: number (review C3, 2026-09-12).
+        "brainsense_min_rate_hz": float(_MIN_ADAPTIVE_RATE_HZ),
         #: D04. Stated 2026-09-04: a single implanted neurostimulator.
         "n_neurostimulators": 1,
         #: D13. Stated 2026-09-04: the user-configurable high-pass is set to 1 Hz, the lower of the
@@ -274,9 +300,13 @@ PI_STATED_FACTS = {
         #: attenuate the alpha peak that is the only part of this device's spectrum reaching the
         #: capture floor.
         "highpass_hz": 1.0,
-        #: D15. Stated 2026-09-04 and CONFIRMED against the record rather than taken on trust:
-        #: ONE_THREE_LEFT appears as a configured sensing channel in the session reports.
-        "channel_is_brainsense_setup_channel": True,
+        #: D15 is NO LONGER STATED HERE (review C5, 2026-09-12). It used to read
+        #: ``"channel_is_brainsense_setup_channel": True``, stated 2026-09-04 and confirmed for
+        #: ONE_THREE_LEFT -- and then copied onto EVERY contact the report was asked about, so a
+        #: contact never configured for sensing would have passed on a statement about a different
+        #: one. The record answers the question per contact (the summary's ``sensing_channels``
+        #: counts), so ``session_report_facts_for`` now derives it, with the count in its
+        #: provenance, and this block follows its own rule: anything derivable is derived.
         #: D34. Stated 2026-09-04, after an explicit correction: 2.5 mA on the LEFT and 2.0 mA on
         #: the RIGHT. The first statement had the sides the other way round, so the assignment is
         #: recorded per side rather than as a single number. These are INTENDED values: the device
@@ -355,25 +385,46 @@ def brainsense_pair_programmed(rate_hz, pulse_width_us, hemisphere):
 
 
 def facts_for_participant(participant_uid, impedance_recordings=None, *,
-                          hemisphere=None, channel=None):
+                          hemisphere=None, channel=None,
+                          sensing_hemisphere=None, actuated_hemisphere=None):
     """Assemble every device fact this module can establish for one participant.
 
     Measured values take precedence over stated ones wherever both exist, and the returned dict
     records which is which under ``_provenance`` so a reader can tell a reading from an assertion.
+
+    TWO SIDES, NOT ONE (review C1, 2026-09-12). A fact about the SENSING lead -- the impedance
+    (D16), the lead family that sets its short limit, the device's artefact verdict (D17), the
+    survey's LFP bins (D09), whether the contact has ever been a sensing channel (D15) -- is read
+    from ``sensing_hemisphere``. A fact about the STIMULATED side -- the capture amplitudes and
+    the adaptive limits they become (D24, D27, D28), the capture pulse width, the paused amplitude
+    (D34) -- is read from ``actuated_hemisphere``. Until this split one ``hemisphere`` served both,
+    and the adapter filled it with the ACTUATED side, which the page always sent as "Left": a band
+    on a right contact was judged on the left lead's impedance and the left survey's flags. The
+    plain ``hemisphere`` keyword is kept as the value for whichever of the two is not given, so a
+    caller that names one side still gets one-sided facts as before.
     """
+    sens = sensing_hemisphere or hemisphere
+    act = actuated_hemisphere or hemisphere
     stated = dict(PI_STATED_FACTS.get(str(participant_uid), {}))
     out, prov = {}, {}
 
     paused = stated.pop("paused_amplitude_mA_by_hemisphere", None)
-    if paused and hemisphere in (paused or {}):
-        out["paused_amplitude_mA"] = paused[hemisphere]
-        prov["paused_amplitude_mA"] = f"stated by PI 2026-09-04 for the {hemisphere} hemisphere"
+    if paused and act in (paused or {}):
+        out["paused_amplitude_mA"] = paused[act]
+        prov["paused_amplitude_mA"] = f"stated by PI 2026-09-04 for the {act} hemisphere"
     for k, v in stated.items():
         out[k] = v
         prov[k] = "stated by PI 2026-09-04"
+    if "brainsense_min_rate_hz" in out:
+        prov["brainsense_min_rate_hz"] = ("stated by PI (StimOptimizer.routines.percept_adaptive."
+                                          "MIN_ADAPTIVE_RATE_HZ, the same number the Stim "
+                                          "Optimizer page enforces)")
 
     imp = impedance_facts(impedance_recordings or [])
     if imp.get("available"):
+        # Every impedance fact below is about the SENSING lead: the sensing channel is a bipolar
+        # pair on that lead, and D16 asks whether that pair can be sensed from.
+        hemisphere = sens
         ohm = candidate_impedance_ohm(imp, hemisphere) if hemisphere else None
         if ohm is not None:
             out["impedance_ohms"] = ohm
@@ -434,7 +485,17 @@ def facts_for_participant(participant_uid, impedance_recordings=None, *,
                 f"measured: date of the impedance test D16 uses for the {hemisphere} lead")
         out["impedance_tested"] = True
         prov["impedance_tested"] = f"measured: {imp['n_records']} impedance recordings on record"
-        if imp.get("lead_type"):
+        # The SENSING lead's own family (review C11): the short-circuit limit D16 applies depends
+        # on it, and the two leads need not match. Falls back to the newest record's left-lead
+        # value only when no side is known, which is what every caller got before.
+        _lt_side = ((imp.get("lead_type_by_hemisphere") or {}).get(hemisphere)
+                    if hemisphere else None)
+        _lm_side = ((imp.get("lead_model_by_hemisphere") or {}).get(hemisphere)
+                    if hemisphere else None)
+        if _lt_side:
+            out["lead_type"] = _lt_side
+            prov["lead_type"] = f"measured: LeadModel {_lm_side} on the {hemisphere} lead"
+        elif imp.get("lead_type"):
             out["lead_type"] = imp["lead_type"]
             prov["lead_type"] = f"measured: LeadModel {imp.get('lead_model')}"
         out["_impedance_status"] = imp.get("status_newest")
@@ -442,7 +503,7 @@ def facts_for_participant(participant_uid, impedance_recordings=None, *,
     # Facts from the raw session reports: capture amplitudes, adaptive limits, the device's own
     # artefact verdict, cycling, and the per-bin LFP spectrum D09 consumes.
     srf, srf_prov = session_report_facts_for(participant_uid, channel=channel,
-                                             hemisphere=hemisphere)
+                                             sensing_hemisphere=sens, actuated_hemisphere=act)
     for k, v in srf.items():
         if v is not None and out.get(k) is None:
             out[k] = v
@@ -586,8 +647,14 @@ def _load_summary(participant_uid):
     return {}, res
 
 
-def session_report_facts_for(participant_uid, *, channel=None, hemisphere=None):
+def session_report_facts_for(participant_uid, *, channel=None, hemisphere=None,
+                             sensing_hemisphere=None, actuated_hemisphere=None):
     """Facts for the six rules the platform decoder does not keep in queryable form.
+
+    Two sides, as in ``facts_for_participant`` (review C1): the capture amplitudes, adaptive
+    limits and capture pulse width are read for the ACTUATED side; the artefact verdict, the LFP
+    bins and the sensing-channel count for the SENSING side. ``hemisphere`` stands in for either
+    that is not given.
 
     Every value here comes from the raw session reports rather than a person's recollection, and the
     DISTRIBUTION is carried alongside the newest value because for several of these rules the
@@ -600,6 +667,8 @@ def session_report_facts_for(participant_uid, *, channel=None, hemisphere=None):
     the value behind it is the device as it is today.
     """
     from . import session_report_facts as _srf
+    sens = sensing_hemisphere or hemisphere
+    act = actuated_hemisphere or hemisphere
     S, res = _load_summary(participant_uid)
     if not S:
         return {}, {}
@@ -617,8 +686,8 @@ def session_report_facts_for(participant_uid, *, channel=None, hemisphere=None):
             "; background rebuild started" if res["launch"].get("launched")
             else f"; background rebuild not started: {res['launch'].get('reason')}")
 
-    # D28 — adaptive limits and whether adaptive has ever run
-    cap = (S.get("capture_newest") or {}).get(hemisphere or "") or {}
+    # D28 — adaptive limits and whether adaptive has ever run. The STIMULATED side's capture.
+    cap = (S.get("capture_newest") or {}).get(act or "") or {}
     if cap.get("lower_mA") is not None:
         out["capture_amp_low_mA"] = float(cap["lower_mA"])
         prov["capture_amp_low_mA"] = tag + " (newest capture)"
@@ -650,7 +719,7 @@ def session_report_facts_for(participant_uid, *, channel=None, hemisphere=None):
     # qualitative ("using a configuration with an artefact detected may interfere"), so no published
     # rate exists to defer to.
     art = S.get("artifact_status") or {}
-    key = _match_survey_channel(art, channel, hemisphere)
+    key = _match_survey_channel(art, channel, sens)
     if key:
         counts = {k: v for k, v in (art.get(key) or {}).items() if k}
         total = sum(counts.values())
@@ -694,12 +763,47 @@ def session_report_facts_for(participant_uid, *, channel=None, hemisphere=None):
             f"{d32.get('n_programs')} program(s), rates {d32.get('rates_seen')}, "
             f"pulse widths {d32.get('pulse_widths_seen')}")
 
-    # D09 — the per-bin spectrum, which is the form the rule now consumes
-    bins = _srf.candidate_lfp_bins(S, channel, hemisphere) if channel else []
+    # D15 — has this exact contact ever been configured as a sensing channel on this side? MEASURED
+    # from the summary's per-contact counts (review C5, 2026-09-12) rather than stated once for
+    # ONE_THREE_LEFT and copied onto every contact. A key with no side in its name (the summary
+    # counts ``ZERO_AND_THREE`` as well as ``ZERO_THREE_LEFT``) cannot say which lead it was on and
+    # is not counted. No ``sensing_channels`` block at all means no key, so the rule reads "not
+    # determinable" rather than passing on nothing.
+    if channel and sens and isinstance(S.get("sensing_channels"), dict):
+        n_setup = setup_channel_count(S.get("sensing_channels") or {}, channel, sens)
+        out["channel_is_brainsense_setup_channel"] = n_setup > 0
+        prov["channel_is_brainsense_setup_channel"] = (
+            tag + f" (measured: {n_setup} groups carried {channel} as a SensingChannel on the "
+            f"{sens} side)")
+
+    # D09 — the per-bin spectrum, which is the form the rule now consumes. The SENSING lead's
+    # survey.
+    bins = _srf.candidate_lfp_bins(S, channel, sens) if channel else []
     if bins:
         out["lfp_bins_uvp"] = bins
         prov["lfp_bins_uvp"] = tag + f" ({len(bins)} survey bins, median per bin)"
     return out, prov
+
+
+def setup_channel_count(sensing_channels, channel, hemisphere):
+    """How many group records in the summary carried ``channel`` as a ``SensingChannel`` on
+    ``hemisphere``: the sided keys of ``sensing_channels`` (``ZERO_TWO_LEFT``) whose pair equals
+    the candidate's pair and whose side agrees. Sideless keys (``ZERO_AND_TWO``) are skipped: they
+    cannot be attributed to a lead. Pure, so the test hands it a dict."""
+    if not channel or not hemisphere:
+        return 0
+    want = str(channel).upper().replace("_LEFT", "").replace("_RIGHT", "").replace("_AND_", "").replace("_", "")
+    total = 0
+    for key, n in (sensing_channels or {}).items():
+        pair, _, hemi = str(key).rpartition("_")
+        if hemi.lower() not in ("left", "right") or hemi.lower() != str(hemisphere).lower():
+            continue
+        if pair.upper().replace("_AND_", "").replace("_", "") == want:
+            try:
+                total += int(n)
+            except (TypeError, ValueError):
+                continue
+    return total
 
 
 def _match_survey_channel(mapping, channel, hemisphere):
@@ -923,14 +1027,19 @@ def active_sensing_group_facts(participant):
     import json as _json
     from Server import models as _m
     from modules import DataCurator as _DC
+    from . import session_report_facts as _srf
 
     p = participant if hasattr(participant, "uid") else _m.Participant.find(uid=participant)
     if p is None:
         return {}
-    sfs = [s for s in _m.SourceFile.find_all(owner=p) if "Session" in (s.name or "")]
+    # ONE rule for which files are session reports and ONE for which is newest (review C10,
+    # 2026-09-12): `session_report_facts.session_report_files` and `newest_by_stamp`, the same
+    # two the summary resolver uses. This used to test `"Session" in name` inline and take the
+    # newest by `SourceFile.date`; the two rules agreed on RCS08 and nothing pinned that.
+    sfs = _srf.session_report_files(p)
     if not sfs:
         return {}
-    newest = max(sfs, key=lambda s: s.date or 0)
+    newest = _srf.newest_by_stamp(sfs)
     key = (str(p.uid), str(newest.uid), str(newest.hashed or ""))
 
     def _build():

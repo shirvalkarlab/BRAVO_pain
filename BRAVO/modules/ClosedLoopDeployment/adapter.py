@@ -128,8 +128,19 @@ def _assign_epoch(t_epoch_s, epochs):
               .astype("datetime64[ns]").astype("int64") / 1e9)
     ends = (pd.to_datetime(epochs["t_end"], utc=True).to_numpy()
             .astype("datetime64[ns]").astype("int64") / 1e9)
-    for i, (a, b) in enumerate(zip(starts, ends)):
-        m = (t >= a) & (t < b) if np.isfinite(b) else (t >= a)
+    # THE OPEN-ENDED LAST EPOCH EXTENDS TO +INF (review C9, 2026-09-12). The settings stream's
+    # last epoch ends at the newest export's own session time, not at the moment the setting
+    # stopped being in force (`StimOptimizer.adapter.exposure_epochs` marks it `open_ended`, and
+    # its own `attach_pros` already extends it for the pain reports for exactly this reason). A
+    # recording made after that export's session time is still under that setting; treating the
+    # end as a wall put it in no epoch, with no amplitude and no row in the joined table. Measured
+    # on RCS08 on 2026-09-12: 0 of 304,488 spectra fell there (the newest precedes the last
+    # export's session time by 49 s), so on this record the change moves nothing; the rule is
+    # kept right for the day a recording lands between two exports.
+    open_ended = (epochs["open_ended"].fillna(False).astype(bool).to_numpy()
+                  if "open_ended" in epochs.columns else np.zeros(len(epochs), dtype=bool))
+    for i, (a, b, oe) in enumerate(zip(starts, ends, open_ended)):
+        m = (t >= a) & (t < b) if (np.isfinite(b) and not oe) else (t >= a)
         out[m] = i
     return out
 
@@ -653,7 +664,13 @@ def band_sweep_grid_for_closed_loop(participant_uid, request_data=None):
             except (TypeError, ValueError):
                 continue
     except Exception:                                            # noqa: BLE001
-        stored_stability = {}                                    # never fatal; rows say "not tested"
+        # Never fatal: the rows say "not tested". But LOGGED (review C7, 2026-09-12): on this
+        # failure every row of the "Choose a band" card's stability column reads the dashed "not
+        # tested", indistinguishable from "the background job has not run yet", and nothing else
+        # would say which of the two it was.
+        _log.warning("closed-loop: the stored stability grid could not be read for %s; every row "
+                     "will show 'not tested'", participant_uid, exc_info=True)
+        stored_stability = {}
 
     sweeps = payload.get("band_time_sweep") or {}
     out_sweeps = {}
@@ -856,6 +873,10 @@ def _inputs_provenance(participant, stream, dm):
             stamp = _cache_store.newest_stamp(kind, uid, root=_SHARED_CACHE_DIR_OVERRIDE) or {}
             chain = stamp.get("provenance") or []
         except Exception:                                 # noqa: BLE001 — the chain is optional
+            # Logged (review C7): a shorter chain is what lets the self-derived refusal miss.
+            _log.warning("closed-loop: the matched table's provenance chain could not be read "
+                         "for %s; the inputs entry cites it without its chain",
+                         getattr(participant, "uid", participant), exc_info=True)
             chain = []
         entries.append(_prov.entry(dm_key, kind="therapy_pain_matched", writer="stim_optimizer",
                                    chain=chain))
@@ -868,7 +889,9 @@ def _inputs_provenance(participant, stream, dm):
                 _cache_store.product_key(_bsvc._RAW_LSB_SHARED_KIND, uid, tiles_sig),
                 kind=_bsvc._RAW_LSB_SHARED_KIND, writer="biomarkers"))
     except Exception:                                     # noqa: BLE001 — no server, no tile key
-        pass
+        _log.warning("closed-loop: the tile entry's key could not be built for %s; the inputs "
+                     "entry's provenance omits it", getattr(participant, "uid", participant),
+                     exc_info=True)
     return _prov.flatten(entries)
 
 
@@ -1915,7 +1938,8 @@ def three_source_pooled_for_participant(participant):
 # ---------------------------------------------------------------------------------------------
 # THE CLOSED-LOOP SIMULATION (Phase 8 of the 2026-09-11 redesign; simulation.py)
 # ---------------------------------------------------------------------------------------------
-def simulation_inputs_for_participant(uid, *, contact, centre_hz, hemisphere, epochs=None):
+def simulation_inputs_for_participant(uid, *, contact, centre_hz, hemisphere, epochs=None,
+                                      loaded=None):
     """The series the simulation runs over: every 3 s piece of voltage trace on `contact`, its
     band power at the stored centre nearest `centre_hz`, and the amplitude the device was
     delivering on `hemisphere` at that moment.
@@ -1939,14 +1963,24 @@ def simulation_inputs_for_participant(uid, *, contact, centre_hz, hemisphere, ep
     out = {"t": np.empty(0), "power": np.empty(0), "amp_obs": np.empty(0), "n_pieces": 0,
            "n_unusable_pieces": 0, "n_dropped_no_amplitude": 0, "n_from_device_current": 0,
            "n_from_epochs": 0, "centre_used_hz": None, "contact": str(contact)}
-    power = bs._load_recordings(uid, bs.POWERDOMAIN_TYPES)
-    td = bs._load_recordings(uid, bs.TIMEDOMAIN_TYPES)
-    psd = bs._load_recordings(uid, bs.AVAILABILITY_PSD_TYPES)
-    chans = list(dict.fromkeys(_avail._canon_channel(c) for c in bs._derive_chan_order(td)))
-    cache = bs._raw_lsb_cache_cached(
-        uid, chans, list(td) + list(psd),
-        bs._event_psd_lsb_blocks(uid, sensing_index=bs._build_sensing_config_index(list(td))),
-        montage_psd_blocks=bs._montage_psd_lsb_blocks(uid, montage_recordings=psd))
+    # THE RECORDINGS THE SAME REQUEST ALREADY DECODED are taken from ``loaded`` when the
+    # three-source build handed them over (review C8, 2026-09-12); anything it did not load is
+    # loaded here as before. ``_load_recordings`` decodes from disk on every call, so without this
+    # every report that wrote a simulation decoded the same files twice.
+    loaded = loaded if isinstance(loaded, dict) else {}
+    power = loaded.get("power") if loaded.get("power") is not None else \
+        bs._load_recordings(uid, bs.POWERDOMAIN_TYPES)
+    td = loaded.get("td") if loaded.get("td") is not None else \
+        bs._load_recordings(uid, bs.TIMEDOMAIN_TYPES)
+    psd = loaded.get("psd") if loaded.get("psd") is not None else \
+        bs._load_recordings(uid, bs.AVAILABILITY_PSD_TYPES)
+    cache = loaded.get("cache")
+    if cache is None:
+        chans = list(dict.fromkeys(_avail._canon_channel(c) for c in bs._derive_chan_order(td)))
+        cache = bs._raw_lsb_cache_cached(
+            uid, chans, list(td) + list(psd),
+            bs._event_psd_lsb_blocks(uid, sensing_index=bs._build_sensing_config_index(list(td))),
+            montage_psd_blocks=bs._montage_psd_lsb_blocks(uid, montage_recordings=psd))
     entry = cache.get(str(contact)) or {}
     tiles = entry.get("td") or {}
     t = np.asarray(tiles.get("t", []), dtype=float)
@@ -1988,20 +2022,21 @@ def simulation_inputs_for_participant(uid, *, contact, centre_hz, hemisphere, ep
         k = np.clip(np.searchsorted(bt, t[m]), 0, bt.size - 1)
         amp[m] = ba[k]
         src[m] = 1
-    # then the settings epochs
+    # then the settings epochs -- through the ONE epoch assignment the joined table uses
+    # (`_assign_epoch`; review C9, 2026-09-12). This used to be a private copy with a closed end
+    # (`t <= t_end` where `_assign_epoch` is half-open) and without the nanosecond cast that
+    # function documents, so the report and the simulation could have disagreed about which
+    # epoch a piece was in; measured on RCS08 the two agree on every piece today (0 differences,
+    # see the review's implementation report), and now they cannot drift.
     if epochs is not None and len(epochs):
         col = canonical_amp_col(hemisphere)
         if col not in epochs.columns:
             col = resolve_setting_column(epochs.columns, "amp", hemisphere)
         if col is not None and "t_start" in epochs.columns and "t_end" in epochs.columns:
-            es = pd.to_datetime(epochs["t_start"], utc=True).astype("int64").to_numpy(dtype=float) / 1e9
-            ee = pd.to_datetime(epochs["t_end"], utc=True).astype("int64").to_numpy(dtype=float) / 1e9
             ea = pd.to_numeric(epochs[col], errors="coerce").to_numpy(dtype=float)
-            order = np.argsort(es)
-            es, ee, ea = es[order], ee[order], ea[order]
             need = ~np.isfinite(amp)
-            k = np.clip(np.searchsorted(es, t[need], side="right") - 1, 0, es.size - 1)
-            inside = (t[need] >= es[k]) & (t[need] <= ee[k]) & np.isfinite(ea[k])
+            k = _assign_epoch(t[need], epochs)
+            inside = (k >= 0) & np.isfinite(np.where(k >= 0, ea[np.clip(k, 0, None)], np.nan))
             idx = np.flatnonzero(need)[inside]
             amp[idx] = ea[k[inside]]
             src[idx] = 2
@@ -2028,6 +2063,12 @@ def _run_windows_epoch_s(points, *, contact):
             hi = pd.Timestamp(r["window_end_local"], tz="America/Los_Angeles").timestamp()
             wins.append((float(lo), float(hi)))
         except Exception:                               # noqa: BLE001
+            # The ambiguous hour of a daylight-saving change is one way this raises; the run is
+            # dropped from the simulation's windows, and since review C7 that is logged.
+            _log.warning("closed-loop: run %r on %s has a window the simulation could not "
+                         "parse (%r to %r); it is left out of the simulation",
+                         r.get("run"), contact, r.get("window_start_local"),
+                         r.get("window_end_local"), exc_info=True)
             continue
     return wins
 
@@ -2056,7 +2097,12 @@ def simulation_signature(participant, *, tiles_key, contact, centre_hz, hemisphe
     """The key: the tile entry and recording set (the series), the candidate, the thresholds and
     limits the controller runs with, the resampling settings, and this module's rule version."""
     from . import simulation as _sim
-    return (_sim.KIND, _sim.RULE_VERSION, str(getattr(participant, "uid", participant)), tiles_key,
+    from . import amplitude_effect as _amp_sig
+    # The pooled table's rule version is IN the key (2026-09-12): the simulation closes its loop
+    # through that table's fitted curve, so a table rebuilt under a new rule must not be served
+    # a simulation built from the old one -- the decision-107 class of defect, one table over.
+    return (_sim.KIND, _sim.RULE_VERSION, _amp_sig.POOLED_RULE_VERSION,
+            str(getattr(participant, "uid", participant)), tiles_key,
             recording_set_signature(participant), str(contact), round(float(centre_hz), 3),
             str(hemisphere), str(power_scale),
             tuple(None if v is None else round(float(v), 6)
@@ -2065,7 +2111,7 @@ def simulation_signature(participant, *, tiles_key, contact, centre_hz, hemisphe
 
 
 def write_simulation(participant, *, rep, build, candidate, hemisphere, power_scale, epochs,
-                     n_resample=None, seed=0):
+                     n_resample=None, seed=0, loaded=None):
     """Run the simulation for the report's first candidate and store it (kind
     `closed_loop_simulation`), citing the raw roots its inputs cite. The summary says what was
     written or why not; the payload itself is read back by `closed_loop_simulation_for_participant`
@@ -2107,6 +2153,7 @@ def write_simulation(participant, *, rep, build, candidate, hemisphere, power_sc
     import time as _time
     t0 = _time.perf_counter()
     inputs = simulation_inputs_for_participant(uid, contact=contact, centre_hz=float(centre),
+                                               loaded=loaded,
                                                hemisphere=hemisphere, epochs=epochs)
     summary["n_pieces"] = int(inputs.get("n_pieces", 0))
     if inputs.get("absent_reason") or not len(inputs["t"]):
@@ -2138,7 +2185,8 @@ def write_simulation(participant, *, rep, build, candidate, hemisphere, power_sc
                                                  root=_SHARED_CACHE_DIR_OVERRIDE)
             chain += list((stamp or {}).get("provenance") or [])
         except Exception:                               # noqa: BLE001 -- the tiles alone then
-            pass
+            _log.warning("closed-loop: the %s chain could not be read for %s; the simulation's "
+                         "provenance cites the tiles alone", kind, uid, exc_info=True)
     _cache_store.store_if_absent(_sim.KIND, uid, sig, lambda: payload,
                                  writer="closed_loop", trigger="deployment_report",
                                  provenance=_prov.flatten(chain), n_recordings=None,
@@ -2170,7 +2218,8 @@ def simulation_if_stored(participant, candidate=None, *, hemisphere="Left"):
     match = None
     if candidate and candidate.get("channel") is not None and candidate.get("center_hz") is not None:
         want = _simulation_candidate_tag(candidate["channel"], candidate["center_hz"],
-                                         candidate.get("actuated_hemisphere") or hemisphere)
+                                         candidate.get("actuated_hemisphere")
+                                         or candidate.get("sensing_hemisphere") or hemisphere)
         match = lambda meta: (meta.get("extra") or {}).get("candidate") == want  # noqa: E731
     try:
         payload, _stamp = _cache_store.load_newest(_sim.KIND, str(getattr(participant, "uid", participant)),
@@ -2400,6 +2449,29 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                           "evaluated for a specific configuration, not for a participant.",
                 "band_sweep_grid": _grid_export,
                 "cache_status": _status}
+    # THE TWO SIDES OF THE FIRST CANDIDATE, resolved once here and used everywhere below (review
+    # C1, 2026-09-12). Until then one name, ``_hemi``, preferred the ACTUATED side and was used
+    # for the impedance and the survey facts too, and the page always sent
+    # ``actuated_hemisphere: "Left"`` -- so a band on a right contact was judged on the left
+    # lead's impedance, the left survey's artefact flags and LFP bins, the left capture, the left
+    # paused amplitude, and (through ``hemisphere`` handed to the pipeline as the raw request
+    # value) the left current for E1, E3, the capture currents and the simulation. Nothing on the
+    # page said so; the only symptom was a D39 "contralateral pairing" row that was wrong about
+    # why. Facts about the SENSING lead use ``_sens_hemi``; facts about the STIMULATED side and
+    # every current column use ``_act_hemi``. The request's own ``Hemisphere`` is the fallback for
+    # a candidate that names no side, never an override of one that does.
+    _c0_side = (cands[0] or {}) if cands else {}
+    _sens_hemi = (_c0_side.get("sensing_hemisphere") or _c0_side.get("actuated_hemisphere")
+                  or hemisphere)
+    _act_hemi = (_c0_side.get("actuated_hemisphere") or _c0_side.get("sensing_hemisphere")
+                 or hemisphere)
+    _norm_side = {"left": "Left", "right": "Right"}
+    _sens_hemi = _norm_side.get(str(_sens_hemi).strip().lower(), _sens_hemi) if _sens_hemi else _sens_hemi
+    _act_hemi = _norm_side.get(str(_act_hemi).strip().lower(), _act_hemi) if _act_hemi else _act_hemi
+    # From here on ``hemisphere`` IS the actuated side: the pipeline's manifest, its amplitude
+    # column, the prescription's validated side and the simulation's amplitude series all take it.
+    hemisphere = _act_hemi or hemisphere
+
     # Device facts the rules need but the analysis tables cannot supply. Fetched here rather than
     # inside pipeline.run so the pipeline stays free of ORM imports and remains testable on frames.
     dev = {}
@@ -2409,10 +2481,9 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
         _p = participant if hasattr(participant, "uid") else _m.Participant.find(uid=participant)
         _sfs = _m.SourceFile.find_all(owner=_p)
         _imp = list(_m.Recording.find_all(source__in=_sfs, type="MedtronicDeviceImpedance"))
-        _hemi = (cands[0] or {}).get("actuated_hemisphere") or (cands[0] or {}).get(
-            "sensing_hemisphere") or hemisphere
         dev = _df.facts_for_participant(getattr(_p, "uid", participant), _imp,
-                                        hemisphere=_hemi,
+                                        sensing_hemisphere=_sens_hemi,
+                                        actuated_hemisphere=_act_hemi,
                                         channel=(cands[0] or {}).get("channel"))
     except Exception as exc:                      # never let a fact lookup take down the report
         _log.warning("closed-loop report: device facts unavailable for %s",
@@ -2431,17 +2502,13 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     # left it `None`, so an explicit rate or pulse width the caller already supplied is never
     # overridden here.
     #
-    # THE HEMISPHERE IS RESOLVED SEPARATELY FROM `_hemi` ABOVE, and deliberately in a different
-    # order: `_hemi` (used for impedance and the session-report facts) prefers the ACTUATED side,
-    # while this prefers the SENSING side, because that is the side D31's own predicate keys its
-    # programmed-pair lookup on (`_p_d31` reads `sensing_hemisphere` first, then the legacy
-    # `hemisphere` key -- never `actuated_hemisphere`). Reading the wrong side here would inject a
-    # rate/pulse-width pair D31 then checks against the OTHER side's programmed history.
+    # THE SENSING SIDE, the same ``_sens_hemi`` the device facts above use: D31's own predicate
+    # keys its programmed-pair lookup on `sensing_hemisphere` (then the legacy `hemisphere` key,
+    # never `actuated_hemisphere`), so the rate/pulse-width pair filled in here must come from the
+    # side D31 then checks it against. (Before review C1 this was the one place that already read
+    # the sensing side; the split above made the rest of the function agree with it.)
     try:
-        _prog_hemi_raw = ((cands[0] or {}).get("sensing_hemisphere")
-                          or (cands[0] or {}).get("actuated_hemisphere") or hemisphere)
-        _prog_hemi = {"left": "Left", "right": "Right"}.get(
-            str(_prog_hemi_raw).strip().lower()) if _prog_hemi_raw else None
+        _prog_hemi = _sens_hemi if _sens_hemi in ("Left", "Right") else None
         _prog = programmed_settings_from_epochs(eps, _prog_hemi) if _prog_hemi else {}
         _prog_prov = _prog.pop("_provenance", None)
         if _prog:
@@ -2490,6 +2557,118 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
         _log.warning("closed-loop report: the device's active sensing group could not be read "
                      "for %s", getattr(participant, "uid", participant), exc_info=True)
 
+    # ---------------------------------------------------------------------------------------------
+    # THE THREE-SOURCE COMPARISON AND THE TWO TABLES IT WRITES COME BEFORE THE PIPELINE (review
+    # C6, 2026-09-12). The pipeline's E1 and the two D26 verdicts read the stored pooled table
+    # (``_pooled_e1`` below); until this move the request READ that table first and WROTE it
+    # afterwards, so on the first request after a new run of rising current landed (a clinic
+    # visit) the triangle and the D26 warnings came from the previous table while the simulation
+    # card, which reads the table after the write, used the new one -- two panels on one page
+    # disagreeing about which table they read, and the page caches the whole answer until
+    # Recompute. The payloads are gathered in ``_pre`` and copied onto ``out`` once it exists.
+    _pre = {}
+    # ---------------------------------------------------------------------------------------------
+    # HOW STIMULATION CURRENT MOVED BAND POWER, MEASURED THREE SEPARATE WAYS AND PUT SIDE BY SIDE.
+    #
+    # WHY THIS IS ON THIS PAGE. Closed loop watches the power in one band and moves the current when
+    # that power crosses a threshold typed into the stimulator. There are three different ways to get
+    # a band power out of this device -- from the streamed voltage trace, from the device's own
+    # onboard spectrum, and from the band power the device computes on board and reports directly --
+    # and they come from three different recordings. Whoever is about to program a threshold should be
+    # able to see all three next to each other over the same stimulation settings, in the device's own
+    # units, before they pick a number.
+    #
+    # THIS GATES NOTHING, and that is deliberate rather than an oversight. The payload says so in
+    # `gates_nothing`, no verdict on this page reads it, and no blocking rule depends on it. The PI
+    # asked for it as something informative for the person reading the page, and a comparison of
+    # three measurement routes is not a device rule traceable to a page of a Medtronic manual, which
+    # is what every blocking rule here is.
+    #
+    # AND IT MUST NOT BE READ AS THREE INDEPENDENT CONFIRMATIONS. The device computes its own band
+    # power on board from the very voltage trace the first route reads, and the contact surveys
+    # behind the second route are where the conversion into device units was fitted in the first
+    # place. Agreement across the three says the conversion is behaving. The payload carries that
+    # sentence in `notes` and in the figure footer, so a panel cannot show the numbers without it.
+    _3build, _amp_stored = None, None
+    _3_is_every_run = False
+    _3loaded = {}                    # the recordings the build decoded, for the simulation (C8)
+    try:
+        from . import three_source_response as _3src
+        from . import three_source_plots as _3plot
+        # The table (Track A step 7) needs every run; the page draws the newest few. When the
+        # table for this record is already stored, only the page's runs are built.
+        try:
+            _amp_stored = amplitude_effect_if_stored(participant)
+            _gt_stored = ground_truth_if_stored(participant)
+        except Exception:                               # noqa: BLE001 — the page comes first
+            _log.warning("closed-loop report: could not read the stored amplitude-effect or ground-truth entries for %s; both will be rebuilt",
+                         getattr(participant, "uid", participant), exc_info=True)
+            _amp_stored = None
+            _gt_stored = None
+        # Every run is built when ANY of the write-back tables is missing for this recording set:
+        # the amplitude-effect table, the ground-truth verdict, or (since 2026-09-11) the per-run
+        # points behind the pooled three-source view. Otherwise only the page's runs are built.
+        try:
+            _rp_stored = run_points_stored_for_current_key(participant)
+            _ps_stored = pooled_shape_stored_for_current_key(participant)
+        except Exception:                               # noqa: BLE001 -- a miss means build
+            _log.warning("closed-loop report: could not check the stored per-run points for %s",
+                         getattr(participant, "uid", participant), exc_info=True)
+            _rp_stored = _ps_stored = False
+        _3_max_runs = (THREE_SOURCE_RUNS_ON_PAGE
+                       if (_amp_stored and _gt_stored and _rp_stored and _ps_stored) else _ALL_RUNS)
+        _3_is_every_run = _3_max_runs == _ALL_RUNS
+        _3loaded = {}
+        _3build = _3src.build_for_participant(
+            getattr(participant, "uid", participant), max_runs=_3_max_runs,
+            loaded_sink=_3loaded)
+        _page = dict(_3build, comparisons=list(_3build.get("comparisons", []))
+                     [:THREE_SOURCE_RUNS_ON_PAGE])
+        _pre["three_source_response"] = _3plot.report_payload(_page)
+    except Exception as _exc:                          # never let this take down the whole report
+        # Say WHY it is missing, for the same reason as the stability block above: an absent key
+        # reads on the page as "does not apply", and this having failed is not that.
+        _log.warning("closed-loop report: the three-source comparison could not be assembled for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
+        _pre["three_source_response"] = {
+            "comparisons": [], "gates_nothing": True,
+            "absent_reason": ("the three-way comparison of how current moves band power could not "
+                              f"be assembled: {_exc!r}"),
+        }
+
+    # THE POOLED WITHIN-VISIT TABLE, written only from a build that holds every run. This is what
+    # lets the consistency check below answer the same way on every request instead of depending on
+    # whether this particular one happened to rebuild the comparison in full.
+    try:
+        _pre["within_visit_pooled_shape"] = write_pooled_shape(
+            participant, _3build, is_every_run=_3_is_every_run)
+    except Exception as _exc:                          # noqa: BLE001
+        _log.warning("closed-loop report: the pooled within-visit table could not be written "
+                     "for %s", getattr(participant, "uid", participant), exc_info=True)
+        _pre["within_visit_pooled_shape"] = {
+            "written": False, "n_rows": 0, "n_contacts": 0, "n_bands": 0, "store_key": None,
+            "reason": f"the pooled within-visit table could not be written: {_exc!r}"}
+
+    # THE PER-RUN POINTS, stored beside the pooled table under the same refusal, and the pooled-by-
+    # side view the redesigned three-source panel draws (redesign plan decisions 5, 9, 10). Read
+    # back on EVERY request, including the truncated ones, for the same reason the pooled table is.
+    try:
+        from . import run_points as _rp
+        _pre["three_source_run_points"] = write_run_points(
+            participant, _3build, is_every_run=_3_is_every_run)
+        _pre["three_source_pooled"] = _rp.pooled_view_payload(
+            run_points_if_stored(participant), pooled_shape_if_stored(participant),
+            absent_reason=(_pre["three_source_run_points"].get("reason")
+                           if not _pre["three_source_run_points"].get("written") else None))
+    except Exception as _exc:                          # noqa: BLE001
+        _log.warning("closed-loop report: the per-run points could not be stored or grouped "
+                     "for %s", getattr(participant, "uid", participant), exc_info=True)
+        _pre["three_source_run_points"] = {"written": False, "n_rows": 0, "n_runs": 0,
+                                          "store_key": None,
+                                          "reason": f"could not be stored: {_exc!r}"}
+        _pre["three_source_pooled"] = {"gates_nothing": True, "sides": [],
+                                      "absent_reason": f"could not be grouped: {_exc!r}"}
+
     # The pooled titration slope for the first candidate, from the stored table (decision 103),
     # handed to the pipeline as E1 (redesign decision 9). None when nothing is stored yet.
     _pooled_e1 = None
@@ -2507,6 +2686,7 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                   design_matrix=dm, candidates=cands, hemisphere=hemisphere,
                   power_scale=power_scale, device_facts=dev, pooled_e1=_pooled_e1)
     out = report_to_dict(rep)
+    out.update(_pre)                     # the three-source and table payloads built above
     out["device_facts"] = {k: v for k, v in dev.items() if not k.startswith("_")}
     out["device_facts_provenance"] = dev.get("_provenance", {})
     out["impedance_status"] = dev.get("_impedance_status")
@@ -2588,72 +2768,6 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     # TRACK D: the grid computed once, at the top of this function -- see the note there on why it
     # runs before either early return, and `band_sweep_grid_for_closed_loop` above for the design.
     out["band_sweep_grid"] = _grid_export
-
-    # ---------------------------------------------------------------------------------------------
-    # HOW STIMULATION CURRENT MOVED BAND POWER, MEASURED THREE SEPARATE WAYS AND PUT SIDE BY SIDE.
-    #
-    # WHY THIS IS ON THIS PAGE. Closed loop watches the power in one band and moves the current when
-    # that power crosses a threshold typed into the stimulator. There are three different ways to get
-    # a band power out of this device -- from the streamed voltage trace, from the device's own
-    # onboard spectrum, and from the band power the device computes on board and reports directly --
-    # and they come from three different recordings. Whoever is about to program a threshold should be
-    # able to see all three next to each other over the same stimulation settings, in the device's own
-    # units, before they pick a number.
-    #
-    # THIS GATES NOTHING, and that is deliberate rather than an oversight. The payload says so in
-    # `gates_nothing`, no verdict on this page reads it, and no blocking rule depends on it. The PI
-    # asked for it as something informative for the person reading the page, and a comparison of
-    # three measurement routes is not a device rule traceable to a page of a Medtronic manual, which
-    # is what every blocking rule here is.
-    #
-    # AND IT MUST NOT BE READ AS THREE INDEPENDENT CONFIRMATIONS. The device computes its own band
-    # power on board from the very voltage trace the first route reads, and the contact surveys
-    # behind the second route are where the conversion into device units was fitted in the first
-    # place. Agreement across the three says the conversion is behaving. The payload carries that
-    # sentence in `notes` and in the figure footer, so a panel cannot show the numbers without it.
-    _3build, _amp_stored = None, None
-    _3_is_every_run = False
-    try:
-        from . import three_source_response as _3src
-        from . import three_source_plots as _3plot
-        # The table (Track A step 7) needs every run; the page draws the newest few. When the
-        # table for this record is already stored, only the page's runs are built.
-        try:
-            _amp_stored = amplitude_effect_if_stored(participant)
-            _gt_stored = ground_truth_if_stored(participant)
-        except Exception:                               # noqa: BLE001 — the page comes first
-            _log.warning("closed-loop report: could not read the stored amplitude-effect or ground-truth entries for %s; both will be rebuilt",
-                         getattr(participant, "uid", participant), exc_info=True)
-            _amp_stored = None
-            _gt_stored = None
-        # Every run is built when ANY of the write-back tables is missing for this recording set:
-        # the amplitude-effect table, the ground-truth verdict, or (since 2026-09-11) the per-run
-        # points behind the pooled three-source view. Otherwise only the page's runs are built.
-        try:
-            _rp_stored = run_points_stored_for_current_key(participant)
-            _ps_stored = pooled_shape_stored_for_current_key(participant)
-        except Exception:                               # noqa: BLE001 -- a miss means build
-            _log.warning("closed-loop report: could not check the stored per-run points for %s",
-                         getattr(participant, "uid", participant), exc_info=True)
-            _rp_stored = _ps_stored = False
-        _3_max_runs = (THREE_SOURCE_RUNS_ON_PAGE
-                       if (_amp_stored and _gt_stored and _rp_stored and _ps_stored) else _ALL_RUNS)
-        _3_is_every_run = _3_max_runs == _ALL_RUNS
-        _3build = _3src.build_for_participant(
-            getattr(participant, "uid", participant), max_runs=_3_max_runs)
-        _page = dict(_3build, comparisons=list(_3build.get("comparisons", []))
-                     [:THREE_SOURCE_RUNS_ON_PAGE])
-        out["three_source_response"] = _3plot.report_payload(_page)
-    except Exception as _exc:                          # never let this take down the whole report
-        # Say WHY it is missing, for the same reason as the stability block above: an absent key
-        # reads on the page as "does not apply", and this having failed is not that.
-        _log.warning("closed-loop report: the three-source comparison could not be assembled for %s",
-                     getattr(participant, "uid", participant), exc_info=True)
-        out["three_source_response"] = {
-            "comparisons": [], "gates_nothing": True,
-            "absent_reason": ("the three-way comparison of how current moves band power could not "
-                              f"be assembled: {_exc!r}"),
-        }
 
     # ---------------------------------------------------------------------------------------------
     # HOW BIG A PAIN CHANGE HAS TO BE, FOR THIS PARTICIPANT, BEFORE IT CAN BE TOLD FROM THEIR OWN
@@ -2760,46 +2874,13 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
             "gates_nothing": True, "items": {}, "n_items_assessed": 0,
             "note": f"the reliable-change floor could not be estimated: {_exc!r}"}
 
-    # THE POOLED WITHIN-VISIT TABLE, written only from a build that holds every run. This is what
-    # lets the consistency check below answer the same way on every request instead of depending on
-    # whether this particular one happened to rebuild the comparison in full.
-    try:
-        out["within_visit_pooled_shape"] = write_pooled_shape(
-            participant, _3build, is_every_run=_3_is_every_run)
-    except Exception as _exc:                          # noqa: BLE001
-        _log.warning("closed-loop report: the pooled within-visit table could not be written "
-                     "for %s", getattr(participant, "uid", participant), exc_info=True)
-        out["within_visit_pooled_shape"] = {
-            "written": False, "n_rows": 0, "n_contacts": 0, "n_bands": 0, "store_key": None,
-            "reason": f"the pooled within-visit table could not be written: {_exc!r}"}
-
-    # THE PER-RUN POINTS, stored beside the pooled table under the same refusal, and the pooled-by-
-    # side view the redesigned three-source panel draws (redesign plan decisions 5, 9, 10). Read
-    # back on EVERY request, including the truncated ones, for the same reason the pooled table is.
-    try:
-        from . import run_points as _rp
-        out["three_source_run_points"] = write_run_points(
-            participant, _3build, is_every_run=_3_is_every_run)
-        out["three_source_pooled"] = _rp.pooled_view_payload(
-            run_points_if_stored(participant), pooled_shape_if_stored(participant),
-            absent_reason=(out["three_source_run_points"].get("reason")
-                           if not out["three_source_run_points"].get("written") else None))
-    except Exception as _exc:                          # noqa: BLE001
-        _log.warning("closed-loop report: the per-run points could not be stored or grouped "
-                     "for %s", getattr(participant, "uid", participant), exc_info=True)
-        out["three_source_run_points"] = {"written": False, "n_rows": 0, "n_runs": 0,
-                                          "store_key": None,
-                                          "reason": f"could not be stored: {_exc!r}"}
-        out["three_source_pooled"] = {"gates_nothing": True, "sides": [],
-                                      "absent_reason": f"could not be grouped: {_exc!r}"}
-
     # THE CLOSED-LOOP SIMULATION, run for the first candidate and stored under its own key; the
     # page fetches the payload after its first figures are up. Its inputs are the 3 s tiles, the
     # stored pooled curve and the stored per-run points, so it runs after those are written.
     try:
         out["closed_loop_simulation"] = write_simulation(
             participant, rep=rep, build=_3build, candidate=(cands[0] if cands else None),
-            hemisphere=hemisphere, power_scale=power_scale, epochs=eps)
+            hemisphere=hemisphere, power_scale=power_scale, epochs=eps, loaded=_3loaded)
     except Exception as _exc:                          # noqa: BLE001
         _log.warning("closed-loop report: the simulation could not be run or stored for %s",
                      getattr(participant, "uid", participant), exc_info=True)

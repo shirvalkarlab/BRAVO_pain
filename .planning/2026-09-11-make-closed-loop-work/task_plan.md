@@ -5,16 +5,16 @@ problem is that the module never handed the rule the value the device already re
 that still blocks does so for a reason the PI has read and agreed with.
 
 ## Next Step
-PI away 3-4 h, autonomous (2026-09-12 afternoon). Layout fix landed (f2bdb7a5). Phase 6 builder
-running on StimOptimizer/bravo_service.py and routines/lfp_evidence.py. Phase 7: the Biomarkers and
+PI away 3-4 h, autonomous (2026-09-12 afternoon). Layout fix landed (f2bdb7a5); Phase 6 landed
+(8882c92c, 51 s -> 10 s). Phase 7: the Biomarkers and
 Closed-Loop reviews are in (artifacts/review_2026-09-12_*.md) and their builders are running; the
 StimOptimizer reviewer starts when Phase 6 lands, then C4 (package double-import). Each landing:
 review the report, suites, commit, push, reload workers, decision rows.
 
 ## Current Phase
-Phase 6
+Phase 7
 
-phases: 5/7 complete
+phases: 6/7 complete
 
 ### Phase 1: Measure what the ledger says today
 - [x] Run the live report on RCS08 at the committed band (L 0-2+, 24.5 Hz) and list every non-pass row
@@ -45,17 +45,17 @@ phases: 5/7 complete
 - **Status:** complete
 
 ### Phase 6: Stim Optimizer load time (PI: "chunk work, vectorize, parallelize, GPU offload if viable")
-- [ ] Profile run_for_participant on RCS08 through the bridge; name the top costs
-- [ ] Implement the optimisations that keep every number identical; alternating-round timings; field-count / difference-count proof
-- [ ] GPU: state plainly whether one exists in the container (OrbStack Linux VM on a Mac: expected none)
-- [ ] Both suites; commit; push
-- **Status:** pending
+- [x] Profile run_for_participant on RCS08 through the bridge; name the top costs
+- [x] Implement the optimisations that keep every number identical; alternating-round timings; field-count / difference-count proof
+- [x] GPU: state plainly whether one exists in the container (OrbStack Linux VM on a Mac: expected none)
+- [x] Both suites; commit; push
+- **Status:** complete
 
 ### Phase 7: Code review of the three modules, findings implemented
 - [ ] Three reviewers in parallel (Biomarkers, Closed-Loop, Stim Optimizer), actionable findings with evidence
 - [ ] Findings implemented by builders, one module at a time, suites after each; equality proofs where a number could move
 - [ ] Decisions and the review report into the record; commit; push
-- **Status:** pending
+- **Status:** in_progress
 
 ### Phase 5: Prove it on the page and land
 - [x] Frontend: ledger shows the new verdict kinds and the measurement current; rebuild; strings found in the served chunk

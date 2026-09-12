@@ -54,8 +54,13 @@ def _participant_facts(participant_uid, device_facts=None, constraints_module=No
     return facts
 
 
-def _facts_for(candidate, e1, e2, power_scale, device_facts=None):
+def _facts_for(candidate, e1, e2, power_scale, device_facts=None, threshold=None):
     """The candidate dict augmented with the facts this module has actually established.
+
+    ``threshold`` is the ``ThresholdPlan`` placed for this candidate, when one was; its
+    ``predicted_recapture_alert`` is what rule D26 reads (review C2, 2026-09-12: the ledger's D26
+    row had never once been evaluated, because eligibility ran BEFORE the plan that computes the
+    alert existed, and nothing else sets the key).
 
     Two rules about what may be filled in here, both of which exist to stop a gate being satisfied
     by something that was never measured.
@@ -113,6 +118,22 @@ def _facts_for(candidate, e1, e2, power_scale, device_facts=None):
     for _k, _v in (device_facts or {}).items():
         if not _k.startswith("_") and f.get(_k) is None:
             f[_k] = _v
+    # D26, from the threshold plan this same run placed. Only a plan that actually carries the
+    # alert fills it in: a run with no plan (no thresholds could be placed) leaves the key absent,
+    # so D26 reads "not determinable" rather than passing on nothing.
+    if threshold is not None:
+        _alert = getattr(threshold, "predicted_recapture_alert", None)
+        if _alert is not None and f.get("predicted_recapture_alert") is None:
+            f["predicted_recapture_alert"] = bool(_alert)
+        # The plan's own sentences (each capture verdict that is adverse, not established or not
+        # assessed), so the D26 row can say WHY -- why an alert is predicted, or why none could
+        # be: on RCS08's committed band no pooled slope is stored, the alert is None by
+        # authority's own rule (a prediction from no number would be a fabrication, decision 139),
+        # and the row stays not determinable WITH that reason on it instead of a blank.
+        _why = [str(w) for w in (getattr(threshold, "warnings", None) or []) if w]
+        if _why and f.get("predicted_recapture_alert_reason") is None:
+            f["predicted_recapture_alert_reason"] = "; ".join(_why)
+        f.setdefault("_threshold_plan_placed", True)
     return f
 
 
@@ -135,6 +156,15 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
         if "epoch" in cols and len(cols) > 1:
             pro_frame = design_matrix[cols].copy()
             pro_frame["report_id"] = pro_frame["epoch"].astype(str)
+    # THE SIDE IS THE CANDIDATE'S OWN (review C1, 2026-09-12): its actuated side, else its sensing
+    # side, else what the caller passed. ``hemisphere`` decides which current column E1, E3, the
+    # capture currents and the prescription read, and which side the manifest names; the page used
+    # to send "Left" for every request, so a band on a right contact was read against the LEFT
+    # stimulator's current. The caller's value is a fallback for a candidate that names no side.
+    _first_side = (candidates[0] if candidates and isinstance(candidates[0], dict) else {}) or {}
+    _side = (_first_side.get("actuated_hemisphere") or _first_side.get("sensing_hemisphere")
+             or hemisphere)
+    hemisphere = {"left": "Left", "right": "Right"}.get(str(_side).strip().lower(), _side)
     # The candidate's own centre joins the default grid, so a committed band outside 10.5 to
     # 27.5 Hz (the sweep offers 8.5 to 29.5) is evaluated rather than silently matching no rows.
     cen = set(float(c) for c in adapter.DEFAULT_BAND_CENTERS_HZ)
@@ -188,25 +218,17 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
         e1 = E.pooled_actuation_edge(pooled_e1, scale=power_scale)
         pooled_edge = e1
     e2 = E.state_edge(T, channel=ch, center_hz=fc, scale=power_scale)
-    e3 = E.therapy_edge(design_matrix)
+    # E3 ON THE ACTUATED SIDE'S CURRENT (review C1). ``therapy_edge`` defaults to the left column;
+    # the design matrix carries one amplitude column per side, and the side the loop would drive
+    # is the one whose current is regressed on pain.
+    _e3_col = None
+    if design_matrix is not None and hasattr(design_matrix, "columns"):
+        _e3_col = (adapter.resolve_setting_column(design_matrix.columns, "amp", hemisphere)
+                   or adapter.canonical_amp_col(hemisphere))
+    e3 = (E.therapy_edge(design_matrix, amp_col=_e3_col) if _e3_col
+          else E.therapy_edge(design_matrix))
     rep.edges = {"E1": e1, "E2": e2, "E3": e3}
     rep.coherence = C.coherence_report(e1, e2, e3)
-
-    # --- Phase 1: device eligibility, with every fact this module can legitimately supply ---------
-    con = _optional("constraints")
-    if con is not None and hasattr(con, "check_eligibility"):
-        # Device facts must be routed to the dict the rule actually READS. Several rules take
-        # their input from the PARTICIPANT dict rather than the candidate — D04 reads
-        # n_neurostimulators, D16 reads lead_type, D31 reads the BrainSense envelope — so merging
-        # everything into the candidate left those rules unevaluable while the values sat one
-        # dictionary away. That failure is silent: the rule reports "input not supplied" and the
-        # verdict stays blocked, which looks identical to genuinely missing data.
-        rep.eligibility = con.check_eligibility(
-            _facts_for(first, e1, e2, power_scale, device_facts=device_facts),
-            _participant_facts(participant_uid, device_facts, con))
-    else:
-        rep.blockers.append("constraints.py not available: device eligibility was NOT checked, so "
-                            "no candidate may be licensed")
 
     # --- control authority and threshold placement ----------------------------------------------
     d = T[(T.channel == ch) & (np.isclose(T.center_hz, fc))].dropna(subset=[power_scale])
@@ -271,6 +293,41 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
                 amp_low=float(lo_a), amp_high=float(hi_a),
                 expected_sign=-1, observed_series=d[power_scale].to_numpy(),
                 pooled_slope=pooled_edge)
+        elif np.isfinite(lo_a) and np.isfinite(hi_a):
+            # ONE therapeutic current on record (review C12, 2026-09-12). The two capture
+            # amplitudes must differ (D24: the thresholds are read at a low and a high current),
+            # so no plan can be placed -- and until this line nothing said so: the block was
+            # skipped, ``rep.threshold`` stayed None, and ``is_licensed`` does not require a plan,
+            # so with a stored pooled slope such a report could have read "supported" with no
+            # prescription behind it.
+            rep.blockers.append(
+                f"only one therapeutic {hemisphere} amplitude on record for this cell "
+                f"({float(lo_a):g} mA), so no low and high capture amplitudes exist (D24) and no "
+                f"thresholds were placed")
+
+    # --- Phase 1: device eligibility, with every fact this module can legitimately supply ---------
+    # RUNS AFTER THRESHOLD PLACEMENT, NOT BEFORE (review C2, 2026-09-12). Rule D26 reads the
+    # predicted RECAPTURE THRESHOLDS alert, and the only place that value is computed is the
+    # threshold plan above; with eligibility checked first the D26 row read "could not be
+    # determined from the inputs given" on every report ever made, while the same request computed
+    # the alert a few lines later and serialised it where the page does not show it. Nothing in
+    # threshold placement reads the eligibility report, and D19 still sees the edges because they
+    # are estimated first, so the move changes only which facts D26 is handed.
+    con = _optional("constraints")
+    if con is not None and hasattr(con, "check_eligibility"):
+        # Device facts must be routed to the dict the rule actually READS. Several rules take
+        # their input from the PARTICIPANT dict rather than the candidate — D04 reads
+        # n_neurostimulators, D16 reads lead_type, D31 reads the BrainSense envelope — so merging
+        # everything into the candidate left those rules unevaluable while the values sat one
+        # dictionary away. That failure is silent: the rule reports "input not supplied" and the
+        # verdict stays blocked, which looks identical to genuinely missing data.
+        rep.eligibility = con.check_eligibility(
+            _facts_for(first, e1, e2, power_scale, device_facts=device_facts,
+                       threshold=rep.threshold),
+            _participant_facts(participant_uid, device_facts, con))
+    else:
+        rep.blockers.append("constraints.py not available: device eligibility was NOT checked, so "
+                            "no candidate may be licensed")
 
     # --- controller replay -----------------------------------------------------------------------
     # Run BEFORE the prescription because the prescription's amplitude-side duty figures come from

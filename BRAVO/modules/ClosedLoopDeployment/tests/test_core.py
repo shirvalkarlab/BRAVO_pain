@@ -177,13 +177,29 @@ def test_threshold_placement_judges_the_two_d26_verdicts_on_the_pooled_slope():
     assert r.problems == []
 
 
-def test_threshold_placement_enforces_the_d27_capture_artefact_ceiling():
+def test_threshold_placement_enforces_the_capture_artefact_ceiling_on_the_proposed_capture():
+    """The ceiling is rule D27's, the amplitude is NOT the ledger's D27 amplitude (review C10,
+    2026-09-12): the ledger row judges the device's own newest capture, this judges the capture
+    THIS MODULE proposes (the lowest and highest therapeutic currents on record). The sentence
+    names the proposed amplitude, and no longer begins "D27:" as if it were the ledger row -- at
+    5.5 mA delivered the two would otherwise contradict each other on one page."""
     rng = np.random.default_rng(1)
     lo, hi = rng.normal(10, 1, 30), rng.normal(4, 1, 30)
     r = AU.threshold_placement(lo, hi, amp_low=1.0, amp_high=6.0, expected_sign=-1,
                                pulse_width_us=200.0)
-    assert any("D27" in p and "6.00 mA" in p for p in r.problems)
-    assert any("D27" in p and "200" in p for p in r.problems)
+    amp_p = [p for p in r.problems if "6.00 mA" in p]
+    pw_p = [p for p in r.problems if "200 us" in p]
+    assert len(amp_p) == 1 and "proposed upper capture amplitude" in amp_p[0] \
+        and "5.0 mA artefact ceiling" in amp_p[0] and "highest therapeutic current" in amp_p[0]
+    assert "D27 row judges the device's own newest capture" in amp_p[0]
+    assert len(pw_p) == 1 and "proposed capture's pulse width" in pw_p[0] \
+        and "120 us artefact ceiling" in pw_p[0]
+    assert not any(p.startswith("D27") for p in r.problems), r.problems
+    # the numbers themselves come from ONE home (session_report_facts), via constraints
+    from ClosedLoopDeployment import constraints as CO, session_report_facts as SRF
+    assert AU.CAPTURE_ARTEFACT_AMP_MA is CO.CAPTURE_ARTEFACT_AMP_MA is SRF.CAPTURE_AMP_CEILING_MA
+    assert AU.CAPTURE_ARTEFACT_PW_US is CO.CAPTURE_ARTEFACT_PW_US is SRF.CAPTURE_PW_CEILING_US
+    assert (SRF.CAPTURE_AMP_CEILING_MA, SRF.CAPTURE_PW_CEILING_US) == (5.0, 120.0)
 
 
 # --- ledger -------------------------------------------------------------------------------------

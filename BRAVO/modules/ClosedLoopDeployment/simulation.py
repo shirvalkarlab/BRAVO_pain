@@ -50,7 +50,7 @@ from . import replay as _replay
 KIND = "closed_loop_simulation"
 #: Bumped whenever the numbers a stored entry holds would change: v2 put the pieces on the device
 #: clock before the loop (regrid_stretches), which admitted 114 stretches where v1 ran 16.
-RULE_VERSION = "v4_simulation_candidate_tag"   # v4: the sidecar names the candidate; untagged entries are unreadable
+RULE_VERSION = "v5_pooled_rule_in_key"   # v5: the pooled table's rule version is in the key (2026-09-12); v4: the sidecar names the candidate
 
 #: The settling time when no run supports a measured one (decision 15): the settled window the
 #: three-source comparison already trusts (`within_visit.PRE_CHANGE_WINDOW_S`, 30 s).

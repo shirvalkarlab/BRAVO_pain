@@ -117,8 +117,11 @@ IMPEDANCE_OPEN_OHMS = 10_000.0
 
 #: D27. Above either of these the stimulation artefact may inflate the LFP during capture. This is a
 #: measurement-validity ceiling, not a safety ceiling, and the two must not be conflated.
-CAPTURE_ARTEFACT_AMP_MA = 5.0
-CAPTURE_ARTEFACT_PW_US = 120.0
+#: ONE HOME FOR THE TWO NUMBERS (review C10, 2026-09-12): they live in ``session_report_facts``,
+#: which this module already imports through ``device_facts``, and ``authority`` imports them from
+#: here -- three literals for one rule had drifted once before (``authority.py``'s own note).
+from .session_report_facts import (CAPTURE_AMP_CEILING_MA as CAPTURE_ARTEFACT_AMP_MA,
+                                   CAPTURE_PW_CEILING_US as CAPTURE_ARTEFACT_PW_US)
 
 #: D44. The only published rate floor. It is written for movement disorders and its relevance to a
 #: pain participant is not established by the document, so it is a soft floor.
@@ -286,7 +289,10 @@ CANDIDATE_KEYS = {
     "pulse_width_us": "D27, D31.",
     "amp_mA": "D31.",
     "threshold_mode": "D08, D12, D18, D24, D25, D40.",
-    "lfp_amplitude_uvp": "D09.",
+    "lfp_amplitude_uvp": "D09. A single band amplitude; read only when 'lfp_bins_uvp' is absent.",
+    "lfp_bins_uvp": "D09. The survey's per-bin (Hz, uVp) list for the sensing channel, from "
+                    "device_facts.session_report_facts_for; read FIRST, and the rule passes when "
+                    "any bin inside the band clears the capture floor.",
     "power_scale": "D11. Must be 'linear'; the device thresholds a linear sum of squared magnitude.",
     "pooled_across_center_or_mode": "D12. Power values from different centre frequencies or "
                                     "different threshold modes are not comparable.",
@@ -327,6 +333,9 @@ CANDIDATE_KEYS = {
     "power_slope_vs_pain_p": "D19. The power-to-pain edge's p-value, printed likewise.",
     "capture_amp_low_mA": "D24, D28.",
     "capture_amp_high_mA": "D24, D27, D28.",
+    "capture_pulse_width_us": "D27. The pulse width in force at the newest capture on the "
+                              "actuated side (device_facts.session_report_facts_for); read "
+                              "before 'pulse_width_us', which is the fallback.",
     "adaptive_min_mA": "D07, D28.",
     "adaptive_max_mA": "D28.",
     "paused_amplitude_mA": "D34.",
@@ -356,7 +365,14 @@ CANDIDATE_KEYS = {
     "patient_limits_configured": "D32.",
     "group_threshold_modes": "D23. The threshold modes of the other adaptive programs in the group.",
     "onset_duration_ms": "D21.",
-    "predicted_recapture_alert": "D26.",
+    "predicted_recapture_alert": "D26. The RECAPTURE THRESHOLDS alert this module predicts from "
+                                 "the threshold plan it placed for the candidate "
+                                 "(authority.threshold_placement); since 2026-09-12 "
+                                 "pipeline._facts_for fills it in from that plan, which is why "
+                                 "eligibility now runs AFTER threshold placement.",
+    "predicted_recapture_alert_reason": "D26. The plan's own sentences behind the prediction "
+                                        "(each capture verdict that is adverse, not established "
+                                        "or not assessed), printed on the observed-values line.",
     "charge_density_state": "D41. The device's own charge-density state, taken rather than "
                             "recomputed.",
     "transitions_through_zero": "D48.",
@@ -1396,6 +1412,19 @@ def _o_d24(c, p):
             f"{c.get('capture_amp_high_mA')!r} mA in {c.get('threshold_mode')!r} mode")
 
 
+def _o_d26(c, p):
+    a = c.get("predicted_recapture_alert")
+    reason = c.get("predicted_recapture_alert_reason")
+    if a is None:
+        if c.get("_threshold_plan_placed"):
+            return ("a threshold plan was placed, but the alert could not be predicted from it"
+                    + (f": {reason}" if reason else ""))
+        return "no threshold plan was placed for this candidate, so no alert could be predicted"
+    head = ("a RECAPTURE THRESHOLDS alert IS predicted" if a
+            else "no RECAPTURE THRESHOLDS alert is predicted")
+    return f"{head} from the threshold plan placed for this candidate" + (f": {reason}" if reason else "")
+
+
 def _o_d27(c, p):
     if c.get("capture_pulse_width_us") is not None:
         pw_label, pw_val = "capture pulse width", c.get("capture_pulse_width_us")
@@ -1467,7 +1496,7 @@ def _o_d44(c, p):
 _OBSERVED = {
     "D01": _o_d01, "D02": _o_d02, "D03": _o_d03, "D04": _o_d04, "D08": _o_d08, "D09": _o_d09,
     "D10": _o_d10, "D11": _o_d11, "D12": _o_d12, "D13": _o_d13, "D15": _o_d15, "D16": _o_d16,
-    "D17": _o_d17, "D18": _o_d18, "D19": _o_d19, "D24": _o_d24, "D27": _o_d27, "D28": _o_d28,
+    "D17": _o_d17, "D18": _o_d18, "D19": _o_d19, "D24": _o_d24, "D26": _o_d26, "D27": _o_d27, "D28": _o_d28,
     "D30": _o_d30, "D31": _o_d31, "D32": _o_d32, "D34": _o_d34, "D38": _o_d38, "D39": _o_d39,
     "D40": _o_d40, "D44": _o_d44,
 }

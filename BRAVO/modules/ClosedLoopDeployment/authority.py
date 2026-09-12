@@ -51,8 +51,11 @@ from StimOptimizer.routines.lfp_response import (        # noqa: E402  (constant
 #: Rule D27 (A610 p. 73): above these values the stimulation artefact "may cause the LFP to appear
 #: elevated when capturing the Lower LFP Threshold". This is a measurement-validity ceiling on the
 #: CAPTURE procedure specifically, distinct from any therapeutic amplitude limit.
-CAPTURE_ARTEFACT_AMP_MA = 5.0
-CAPTURE_ARTEFACT_PW_US = 120.0
+#: IMPORTED, NOT RESTATED (review C10, 2026-09-12), for the same reason as the separation floor
+#: above: the two numbers were written here, in ``constraints`` and in ``session_report_facts``,
+#: three literals for one rule. Their one home is ``session_report_facts``; ``constraints``
+#: re-exports them under these names.
+from .constraints import CAPTURE_ARTEFACT_AMP_MA, CAPTURE_ARTEFACT_PW_US   # noqa: E402
 
 
 def control_authority(power_low, power_high):
@@ -253,17 +256,27 @@ def threshold_placement(power_low, power_high, *, amp_low, amp_high, expected_si
     lo_mean = float(np.mean(a)) if a.size else None
     hi_mean = float(np.mean(b)) if b.size else None
 
-    # D27: the capture itself is only valid below the artefact ceiling.
+    # The capture THIS MODULE PROPOSES is only valid below the artefact ceiling. This is the same
+    # ceiling rule D27 applies, but to a DIFFERENT amplitude: the ledger's D27 row judges the
+    # device's own newest capture (3.0 mA on RCS08, decision 136), while the amplitudes here are
+    # the lowest and highest therapeutic currents on record for the cell (1.0 and 4.8 mA, decision
+    # 139), which are where the thresholds below are read. The sentence therefore names the
+    # proposed amplitude and no longer cites "D27" as if it were the ledger row (review C10,
+    # 2026-09-12): at 5.5 mA delivered this would have blocked "on D27" while the ledger's D27 row
+    # passed on the device's 3.0 mA capture.
     for label, amp in (("lower", amp_low), ("upper", amp_high)):
         if amp is not None and amp > CAPTURE_ARTEFACT_AMP_MA:
+            _which = {"lower": "lowest", "upper": "highest"}[label]
             problems.append(
-                f"D27: the {label} capture amplitude of {amp:.2f} mA exceeds {CAPTURE_ARTEFACT_AMP_MA} mA, "
-                "above which stimulation artefact may make the LFP appear elevated during capture. "
-                "The captured threshold would partly measure the stimulator.")
+                f"the proposed {label} capture amplitude of {amp:.2f} mA (the {_which} therapeutic "
+                f"current on record for this cell) exceeds the {CAPTURE_ARTEFACT_AMP_MA} mA artefact "
+                "ceiling, above which stimulation artefact may make the LFP appear elevated during "
+                "capture; a threshold read there would partly measure the stimulator. The ledger's "
+                "D27 row judges the device's own newest capture, which is a different amplitude.")
     if pulse_width_us is not None and pulse_width_us > CAPTURE_ARTEFACT_PW_US:
         problems.append(
-            f"D27: pulse width {pulse_width_us:.0f} us exceeds {CAPTURE_ARTEFACT_PW_US:.0f} us, with "
-            "the same artefact consequence for the capture.")
+            f"the proposed capture's pulse width {pulse_width_us:.0f} us exceeds the "
+            f"{CAPTURE_ARTEFACT_PW_US:.0f} us artefact ceiling, with the same consequence for the capture.")
 
     # THE TWO D26 VERDICTS READ THE POOLED TITRATION SLOPE AND WARN, since 2026-09-12 (PI: "b and
     # c"). Until then they were judged here on `lo_mean` against `hi_mean` and on `d`, the

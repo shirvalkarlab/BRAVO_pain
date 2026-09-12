@@ -11,7 +11,7 @@ import { SessionController } from "database/session-control";
 import { useCachedResult } from "database/useCachedResult";
 
 import { CL } from "views/Reports/moduleCacheKeys";
-import { deploymentReportBody } from "./useDeploymentReport";
+import { deploymentReportBody, reportSide } from "./useDeploymentReport";
 
 export default function useClosedLoopSimulation({ participantUid, bandCandidate, afterReport,
   reportStamp, hemisphere, powerScale, enabled = true }) {
@@ -28,7 +28,9 @@ export default function useClosedLoopSimulation({ participantUid, bandCandidate,
     // report finished (watched live: "no simulation is stored yet" beside a report that had
     // just stored one).
     settings: { ClosedLoopSimulation: 1, channel: bc.channel || null, centerHz: bc.centerHz == null ? null : Number(bc.centerHz),
-      hemisphere: hemisphere || "Left", reportStamp: reportStamp || null },
+      // The band's own side, the same rule the report body follows (review C1, 2026-09-12), so
+      // a right-side band's simulation is keyed and read back under "Right".
+      hemisphere: reportSide({ bandCandidate, hemisphere }), reportStamp: reportStamp || null },
     enabled: enabled !== false && !!participantUid && !!afterReport,
     fetcher: () => SessionController.query("/api/queryClosedLoopDeployment", body)
       .then((response) => (response && response.data) || null),

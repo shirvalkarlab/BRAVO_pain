@@ -48,6 +48,26 @@ DEFAULT_HEMISPHERE = "Left"
 DEFAULT_POWER_SCALE = "power_linear"                   # the device-parity scale of rule D11
 
 
+def request_hemisphere(request_data):
+    """The side the report is evaluated on, in this order: the request's own ``Hemisphere``; the
+    first candidate's ``actuated_hemisphere``, then its ``sensing_hemisphere``; then the endpoint's
+    documented default.
+
+    WHY THE CANDIDATE COMES BEFORE THE DEFAULT (review C1, 2026-09-12). The page never sent
+    ``Hemisphere``; the old line ``request_data.get("Hemisphere", DEFAULT_HEMISPHERE)`` therefore
+    handed the adapter "Left" for every request, and the adapter used that side for the impedance,
+    the capture amplitudes, the current-to-power and amplitude-to-pain slopes, the capture currents
+    and the simulation -- for a band picked on a RIGHT contact too. A band's own side is a fact
+    about the band; the default is only for a request that names no side anywhere.
+    """
+    rd = request_data or {}
+    if rd.get("Hemisphere"):
+        return rd["Hemisphere"]
+    cands = rd.get("Candidates") or []
+    c0 = cands[0] if cands and isinstance(cands[0], dict) else {}
+    return c0.get("actuated_hemisphere") or c0.get("sensing_hemisphere") or DEFAULT_HEMISPHERE
+
+
 def _participant_or_none(participant_uid):
     """Resolve the participant. The ORM import is deferred to call time for the same reason
     `adapter.report_for_participant` defers its sibling-module imports: at module import time the
@@ -101,7 +121,7 @@ def run_for_participant(request_data):
             _cands = (request_data or {}).get("Candidates") or []
             return _adapter.closed_loop_simulation_for_participant(
                 participant, _cands[0] if _cands else None,
-                hemisphere=(request_data or {}).get("Hemisphere", DEFAULT_HEMISPHERE))
+                hemisphere=request_hemisphere(request_data))
         except Exception as exc:                       # noqa: BLE001
             _log.exception("closed-loop: the stored simulation could not be read for %s", participant_uid)
             return {"available": False,
@@ -111,7 +131,7 @@ def run_for_participant(request_data):
         return _adapter.report_for_participant(
             participant, request_data,
             candidates=(request_data or {}).get("Candidates"),
-            hemisphere=(request_data or {}).get("Hemisphere", DEFAULT_HEMISPHERE),
+            hemisphere=request_hemisphere(request_data),
             power_scale=(request_data or {}).get("PowerScale", DEFAULT_POWER_SCALE))
     except Exception as exc:                           # noqa: BLE001
         # THE LINE THAT WAS MISSING FOR FIVE DAYS. `exception` rather than `warning`, so the
