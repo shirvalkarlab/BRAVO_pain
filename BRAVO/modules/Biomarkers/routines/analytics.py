@@ -5877,11 +5877,35 @@ def logistic_auc_columns_fitted(X, y_binary, feature_scale="raw", n_jobs=None):
     only whether the fitted STRAIGHT LINE points the same way as that ordering, which is the one
     thing that decides whether the fitted number comes out folded or not.
 
-    ``n_jobs`` fits the columns on that many worker threads. Measured on the live record and
-    reported in the session notes: parallelising was NOT worth it here, because the fits are
-    milliseconds each and every one of them releases and reacquires the interpreter lock around a
-    very short amount of numerical work, so thread overhead swamps the gain. It is kept as an
-    argument, defaulting to serial, so the measurement can be repeated rather than re-litigated.
+    ``n_jobs`` fits the columns on that many worker threads, and it defaults to serial because
+    threading is SLOWER at every shape this record produces. Measured 2026-09-12 in the server
+    container, best of three rounds, 22 band centres against the matched-report counts the six
+    sensing contact pairs yield:
+
+    ======================  ========  ===========  ===========
+    shape (reports x bands)   serial    4 threads    8 threads
+    ======================  ========  ===========  ===========
+    39 x 22                  0.0124 s     0.0152 s     0.0184 s
+    120 x 22                 0.0119 s     0.0210 s     0.0199 s
+    260 x 22                 0.0134 s     0.0144 s     0.0196 s
+    765 x 22                 0.0156 s     0.0207 s     0.0225 s
+    ======================  ========  ===========  ===========
+
+    Serial wins every row, by 1.1x to 1.8x. The reason is that each fit takes about half a
+    millisecond and releases and reacquires the interpreter lock around a very short amount of
+    numerical work, so the thread handoff costs more than the fit. Serial and threaded return
+    identical areas under the curve, which is what makes the comparison meaningful rather than a
+    race between two different answers.
+
+    THE PROVENANCE OF THAT PARAGRAPH WAS WRONG UNTIL 2026-09-12 AND THE CORRECTION IS WORTH
+    RECORDING, because the conclusion survived while the stated basis did not. This docstring
+    previously said the result was "measured on the live record and reported in the session notes".
+    It was not, and it could not have been: ``ThreadPoolExecutor`` was never imported in this
+    module, so every call with ``n_jobs`` greater than 1 raised ``NameError`` before reaching a
+    single fit. Nothing in the package or the tests passes ``n_jobs``, so the branch was dead and
+    the breakage invisible. The import is now present and the table above is a real measurement. The
+    argument is kept so it can be re-run rather than re-litigated -- which is only true now that the
+    code it describes actually executes.
 
     Returns ``{"auc": (C,), "slope": (C,), "converged": (C,)}``, non-finite where no fit was made.
     """
@@ -5928,6 +5952,14 @@ def logistic_auc_columns_fitted(X, y_binary, feature_scale="raw", n_jobs=None):
             return np.nan, np.nan, False
 
     if n_jobs and int(n_jobs) > 1:
+        # IMPORTED HERE, AND IT WAS MISSING UNTIL 2026-09-12. `ThreadPoolExecutor` was never
+        # imported in this module, so every call passing n_jobs greater than 1 raised
+        # NameError. Nothing in the package or the tests passes n_jobs, so the branch was dead
+        # and the failure invisible -- and the docstring above asserted a measurement that this
+        # code could not have produced, since the threaded route could not run at all. Found by
+        # attempting to reproduce that measurement. The import is local to match the way
+        # statsmodels and scikit-learn are imported inside this function.
+        from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=int(n_jobs)) as pool:
             got = list(pool.map(_one, range(C)))
     else:

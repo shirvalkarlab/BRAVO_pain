@@ -2954,16 +2954,42 @@ def pro_request_scope():
 
     NO CROSS-REQUEST CACHE IS BUILT, ON PURPOSE. Patients and clinicians file pain reports
     continuously, so a cache that outlived a request would eventually hand a biomarker analysis a
-    report set that is one report short, with no error to show for it. Measured on the live record,
-    a cross-request cache could not pay for itself either. The cheapest check that could prove a
-    remembered report set still complete is REDCap's own record-edit log,
-    `export_logging(log_type="record", begin_time=...)`. On the live RCS08 record that check and
-    an outright fresh fetch of the reports, narrowed to the columns the field map consumes, cost
-    the same to within the run-to-run scatter of the network -- both a few tenths of a second. So a
-    cross-request cache would buy nothing and could hand back a pain-report table one report short.
-    That trade is not worth taking. `_agent_bridge/_sync_redcap/_rc_probe2.py` is the script that
-    times both; re-run it for current numbers rather than trusting a figure quoted here, since they
-    move with the network.
+    report set that is one report short, with no error to show for it. That is the whole argument,
+    and it does not rest on a timing.
+
+    THE TIMINGS, RE-MEASURED 2026-09-12 (3 rounds each, means, in the server container):
+
+    ==========================================================  =========
+    operation                                                     cost
+    ==========================================================  =========
+    export_records(fields=[record_id]) -- cheapest freshness      0.232 s
+    export_logging(record edits, last 90 days)                    0.245 s
+    fresh fetch, narrowed to the daily-survey instrument          0.313 s
+    fresh fetch, narrowed to the 24 columns the field map uses     0.347 s
+    full export as it once ran, 637 columns                       1.561 s
+    ==========================================================  =========
+
+    So the cheapest freshness check really is cheaper than a fresh fetch -- but only by about a
+    tenth of a second. A cross-request cache would therefore save roughly 0.1 s per request while
+    risking a pain-report table one report short. That trade is not worth taking.
+
+    A PREVIOUS VERSION OF THIS PARAGRAPH SAID THE TWO COST "the same to within the run-to-run
+    scatter". That was too generous: the check is consistently the cheaper of the two, and the
+    honest statement is that the saving is real but far too small to buy the staleness risk.
+
+    Evidence that reports genuinely arrive continuously, from the same run rather than asserted: the
+    edit log showed 2 edits in the preceding 24 hours and the newest pain report was timestamped
+    2026-09-11 18:37.
+
+    The script that times all of the above is `_agent_bridge/_sync_redcap/_rc_probe2.py`. Re-run it
+    for current numbers rather than trusting the figures above, since they move with the network.
+
+    DO NOT "CLEAN UP" THAT FILE. It sits under `_agent_bridge/_*`, which `.gitignore` excludes as
+    bridge scratch, and it is deliberately force-added so that it is tracked anyway. Until
+    2026-09-12 it was untracked, which meant this docstring instructed the reader to re-run a script
+    that no clone of the repository contained -- a claim of reproducibility that was not one. A file
+    cited by production code has to survive a clone, so the exception to the ignore rule is
+    intentional rather than an accident to be tidied away.
     """
     existing = _PRO_REQUEST_CACHE.get()
     if existing is not None:
