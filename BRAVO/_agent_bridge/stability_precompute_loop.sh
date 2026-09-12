@@ -35,6 +35,7 @@
 #                                               with a whole-machine job
 #   BAND_SWEEP_PRECOMPUTE=0                     skip the every-pain-score half only, and still run
 #                                               the stability half
+#   SESSION_REPORT_SUMMARY_PRECOMPUTE=0         skip the session-report summary rebuild only
 set -u
 
 BRAVO_DIR=/usr/src/BRAVO
@@ -99,6 +100,19 @@ while true; do
     # Exit status 1 means at least one participant computed an answer and could not keep it, or
     # stopped early and kept the previous one. Both are real and both are invisible on the page.
     say "PASS FINISHED WITH FAILURES — see the lines above for which participant"
+  fi
+
+  # THE SESSION-REPORT SUMMARY the Closed-Loop device rules read (2026-09-12). The summary is keyed
+  # on the participant's set of ingested session reports, so the daily noon ingest makes it a miss
+  # and this pass rebuilds it in the evening rather than leaving the next page request to start the
+  # minutes-long scan itself. Cheap when nothing was ingested: the key decides, and an unchanged
+  # file set reports already_current after one database query.
+  if [ "${SESSION_REPORT_SUMMARY_PRECOMPUTE:-1}" = "0" ]; then
+    say "the session-report summary rebuild is switched off by SESSION_REPORT_SUMMARY_PRECOMPUTE=0"
+  elif python3 manage.py rebuild_session_report_summary --all --json >> "$LOG" 2>&1; then
+    say "session-report summary pass finished, every participant either stored a summary, was current, or had no reports"
+  else
+    say "SESSION-REPORT SUMMARY PASS FINISHED WITH FAILURES — see the lines above for which participant"
   fi
   sleep "$INTERVAL"
 done

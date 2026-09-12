@@ -15,7 +15,18 @@ written down here: for this recording type, read ``recording.metadata`` and neve
 """
 from __future__ import annotations
 
+import os
 import statistics as _st
+import subprocess
+import sys
+import time as _time
+
+# Spelled twice on purpose: the container makes the package ``modules.CacheStore``, the test
+# suite run from BRAVO/modules makes it ``CacheStore``. ARCHITECTURE_cache_store.md §3.
+try:
+    from modules.CacheStore import store as _cache_store
+except ImportError:                                   # pragma: no cover - depends on the runner
+    from CacheStore import store as _cache_store
 
 #: Lead models whose short-circuit floor is the SenSight value rather than the 1x4 value. The
 #: constraint table keys its floor on the string "sensight", so the model number is mapped here
@@ -473,25 +484,106 @@ ARTIFACT_FLAG_RATE_LIMIT = 0.5
 D17_NON_ARTEFACT_STATUSES = ("ARTIFACT_NOT_PRESENT", "IMPEDANCE_FAILURE")
 
 
-#: Per-participant summary produced by ``session_report_facts.scan_folder``. Committed next to the
-#: module because the scan takes ~4 minutes over 8.5 GB of reports and its result is a 34 KB
-#: summary; re-scanning per request is not an option and re-scanning per session is wasteful. The
-#: file records ``n_files`` so a reader can tell which pass produced it.
+#: THE LAST FALLBACK: the per-participant summary ``session_report_facts.scan_folder`` produced
+#: ONCE, on 2026-09-05, over a plain-JSON folder on a shared drive, and committed next to the
+#: module. Until 2026-09-12 it was the only summary and nothing refreshed it, so it is stale today
+#: (110 Hz and adaptive NOT_CONFIGURED where the device says 55 Hz and RUNNING). ``_load_summary``
+#: now reads the summary built from the INGESTED reports out of the one store first, and reaches
+#: this file only when the store holds nothing for the participant; the provenance sentence on
+#: every fact says which was used.
 _SUMMARY_FILES = {"2e3c75c00d7f4f37b53a048d195f11da": "_facts_RCS08.json"}
+_COMMITTED_SCAN_DATE = "2026-09-05"
+_COMMITTED_SCAN_SOURCE = "shared-drive"
 
 
-def _load_summary(participant_uid):
+def _committed_summary(participant_uid):
+    """The committed ``_facts_<code>.json`` for this participant, or ``{}``."""
     import json as _json
-    import os as _os
     name = _SUMMARY_FILES.get(str(participant_uid))
     if not name:
         return {}
-    path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), name)
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
     try:
         with open(path) as fh:
             return _json.load(fh)
     except Exception:
         return {}
+
+
+def _ingested_file_set(participant_uid):
+    """``(rows, signature, error)`` for the participant's ingested session reports: one query over
+    ``SourceFile``, no file opened (decision 24). ``error`` names why the record could not be
+    queried -- no Django, no database -- so the caller can say so rather than guess."""
+    from . import session_report_facts as _srf
+    try:
+        rows = _srf.session_report_files(participant_uid)
+    except Exception as exc:                                     # noqa: BLE001
+        return None, None, f"{type(exc).__name__}: {exc}"
+    return rows, _srf.file_set_signature(rows), None
+
+
+def _load_summary(participant_uid):
+    """``(summary, resolution)``: the best session-report summary available and where it came from.
+
+    THE ORDER, each step cheap enough for a page request (nothing here opens a session report):
+
+    (a) the STORED summary whose key equals the participant's CURRENT session-report file set --
+        the answer is up to date and no rebuild is needed;
+    (b) else the NEWEST stored summary of that kind for the participant, whatever file set it was
+        built from -- used, marked STALE with how many newer reports it misses, and a rebuild is
+        started in the background;
+    (c) else the committed ``_facts_<code>.json`` -- used, marked as the 2026-09-05 shared-drive
+        scan, and a rebuild started in the background.
+
+    ``resolution`` carries ``source`` (``current`` / ``stale`` / ``committed`` / ``none``), the
+    ``sentence`` every fact's provenance is prefixed with, and ``launch`` (what the launcher did,
+    or None when nothing was started). A summary handed back from (b) or (c) is exactly as wrong as
+    it was before this resolver existed; what is new is that the report SAYS so, and that the next
+    request after the rebuild lands gets (a).
+    """
+    from . import session_report_facts as _srf
+    uid = str(participant_uid)
+    rows, sig, err = _ingested_file_set(uid)
+    n_ing = len(rows) if rows is not None else None
+    _newest_row = _srf.newest_by_stamp(rows) if rows else None
+    newest_ing = str(_newest_row.name or "") if _newest_row is not None else None
+    res = {"source": "none", "sentence": "no session-report summary is available",
+           "launch": None, "n_ingested": n_ing, "newest_ingested_stamp": newest_ing,
+           "ingested_query_error": err}
+
+    if sig is not None:
+        S = _cache_store.load(_srf.SUMMARY_KIND, uid, sig)
+        if isinstance(S, dict) and S:
+            res["source"] = "current"
+            res["sentence"] = (f"rebuilt from {S.get('n_files')} ingested session reports, newest "
+                               f"{S.get('newest_stamp')}, built {str(S.get('built_utc') or '')[:10]}")
+            return S, res
+
+        S, stamp = _cache_store.load_newest(_srf.SUMMARY_KIND, uid)
+        if isinstance(S, dict) and S:
+            old_key = str(S.get("newest_stamp_key") or _srf.report_stamp(S.get("newest_stamp")))
+            newer = sum(1 for r in rows if _srf.report_stamp(r.name) > old_key)
+            res["source"] = "stale"
+            res["sentence"] = (f"STALE: built from {S.get('n_files')} files on "
+                               f"{str(S.get('built_utc') or '')[:10]}; {newer} newer session "
+                               f"reports are not included")
+            res["launch"] = launch_summary_rebuild_in_background(uid, sig)
+            return S, res
+
+    S = _committed_summary(uid)
+    if S:
+        res["source"] = "committed"
+        if sig is not None:
+            rec = f"the ingested record has {n_ing} reports, newest {newest_ing}"
+            res["launch"] = launch_summary_rebuild_in_background(uid, sig)
+        elif rows is not None:
+            rec = "the ingested record has no session reports"
+        else:
+            rec = f"the ingested record could not be queried ({err})"
+        res["sentence"] = (f"committed scan of {_COMMITTED_SCAN_DATE} over {S.get('n_files'):,} "
+                           f"{_COMMITTED_SCAN_SOURCE} files; {rec}")
+        return S, res
+    return {}, res
 
 
 def session_report_facts_for(participant_uid, *, channel=None, hemisphere=None):
@@ -501,14 +593,29 @@ def session_report_facts_for(participant_uid, *, channel=None, hemisphere=None):
     DISTRIBUTION is carried alongside the newest value because for several of these rules the
     distribution is the finding — D27 is violated by 90% of the right-hemisphere capture records
     while the most recent capture is compliant, and reporting only one of those would mislead.
+
+    Which summary the facts were read from -- the stored one for the current file set, a stale
+    stored one, or the committed 2026-09-05 scan -- is written into every provenance sentence and
+    into ``session_report_summary_source``, so a ledger row can be read without wondering whether
+    the value behind it is the device as it is today.
     """
     from . import session_report_facts as _srf
-    S = _load_summary(participant_uid)
+    S, res = _load_summary(participant_uid)
     if not S:
         return {}, {}
     out, prov = {}, {}
     n = S.get("n_files")
-    tag = f"measured: session reports, {n} files"
+    tag = f"measured: session reports, {n} files ({res['sentence']})"
+    out["session_report_summary_source"] = res["source"]
+    # One sentence, carried as this key's provenance: which summary, and -- when it was not the
+    # current one -- whether the rebuild that would make it current was started. Kept in the
+    # provenance of a key that IS in ``out``, because ``facts_for_participant`` copies provenance
+    # only for keys it copies values for.
+    prov["session_report_summary_source"] = res["sentence"]
+    if res.get("launch") is not None:
+        prov["session_report_summary_source"] += (
+            "; background rebuild started" if res["launch"].get("launched")
+            else f"; background rebuild not started: {res['launch'].get('reason')}")
 
     # D28 — adaptive limits and whether adaptive has ever run
     cap = (S.get("capture_newest") or {}).get(hemisphere or "") or {}
@@ -612,6 +719,117 @@ def _match_survey_channel(mapping, channel, hemisphere):
         if pair.upper().replace("_AND_", "").replace("_", "") == want:
             return key
     return None
+
+
+# ---------------------------------------------------------------------------------------------
+# THE BACKGROUND REBUILD OF THE SESSION-REPORT SUMMARY, STARTED WHEN A REQUEST FINDS IT BEHIND
+# ---------------------------------------------------------------------------------------------
+# Mirrors the Biomarkers module's stability launcher (decision 96) rather than inventing a second
+# shape: a separate detached process, output to a file, a cooldown that is a FILE beside the stored
+# entries because four gunicorn workers are four memories, a refusal while the store is pointed at
+# a caller's own root, and an off switch. The scan it starts takes minutes over the whole record
+# (572 files, 4,079 MB on RCS08), which is exactly why it is never run while a page waits.
+
+#: Off switch that needs no deployment: set the environment variable
+#: ``SESSION_REPORT_SUMMARY_BACKGROUND=0`` on the server (or this flag False in a running process)
+#: and no page request starts a rebuild; nothing stored changes and nothing is deleted.
+SESSION_REPORT_SUMMARY_BACKGROUND = True
+SESSION_REPORT_SUMMARY_BACKGROUND_ENV = "SESSION_REPORT_SUMMARY_BACKGROUND"
+
+#: How long one launch suppresses another for the SAME file-set key. Longer than a whole-record
+#: rebuild takes, because a second scan started while the first is still decrypting 4 GB costs a
+#: second whole-machine job and buys nothing.
+SESSION_REPORT_SUMMARY_LAUNCH_COOLDOWN_SECONDS = 3600.0
+
+#: PRODUCTION-ROOT SAFETY, default the safe one (decision 96's own finding: the unit suite was
+#: found spawning real management commands for a fake participant). A run started while the store
+#: is pointed at a caller's own root would scan the real database and write where nothing reads.
+#: A test that means to exercise the launcher sets this True and replaces ``_spawn_detached``.
+SESSION_REPORT_SUMMARY_LAUNCH_UNDER_OVERRIDE_ROOT = False
+
+
+def _summary_launch_marker(sig):
+    """The file whose age says when a rebuild was last started for this exact file-set key, or
+    None when there is nowhere to write it. Beside the stored entries, named by the key, so a new
+    ingest (a new key) gets its own cooldown rather than inheriting the old one's."""
+    from . import session_report_facts as _srf
+    d = _cache_store.kind_dir(_srf.SUMMARY_KIND)
+    if not d:
+        return None
+    return os.path.join(d, f".launched.{_cache_store.signature_key(sig)}")
+
+
+def _summary_command_argv(participant_uid):
+    """The command line for the rebuild, or None when ``manage.py`` cannot be found."""
+    manage = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "manage.py")
+    if not os.path.isfile(manage):
+        return None
+    return [sys.executable, manage, "rebuild_session_report_summary",
+            "--participant", str(participant_uid)]
+
+
+def _spawn_detached(argv, log_path):
+    """Start a command that outlives this request and this worker: its own session, so a recycled
+    worker does not take it down; output to a file, because nothing reads a pipe and a full one
+    would block the child."""
+    log = open(log_path, "a")
+    try:
+        subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                         start_new_session=True, close_fds=True)
+    finally:
+        log.close()                      # the child holds its own copy of the descriptor
+
+
+def launch_summary_rebuild_in_background(participant_uid, sig):
+    """Start the session-report summary rebuild for this participant in its own process, unless
+    there is no point. NEVER RAISES AND NEVER WAITS: this runs inside a page request that must
+    return whatever summary it already has. Every outcome is in the returned dict, so a live check
+    needs no log file.
+
+    Skipped when the switch is off (flag or environment), when the store is on a caller's own
+    root, when there is no key to build under, and when a launch for this key is inside the
+    cooldown. THE KEY IS NOT RE-CHECKED HERE: the caller resolved (a) before reaching this, so a
+    launch is asked for only when the current key is absent.
+    """
+    out = {"launched": False, "reason": None, "store_key": None}
+    if not SESSION_REPORT_SUMMARY_BACKGROUND or \
+            os.environ.get(SESSION_REPORT_SUMMARY_BACKGROUND_ENV, "1").strip() == "0":
+        out["reason"] = "background rebuilding of the session-report summary is switched off"
+        return out
+    if _cache_store.DIR_OVERRIDE is not None and not SESSION_REPORT_SUMMARY_LAUNCH_UNDER_OVERRIDE_ROOT:
+        out["reason"] = ("the store is pointed at a caller's own root rather than the production "
+                         "one, so a run started here would write where nothing reads it")
+        return out
+    if sig is None:
+        out["reason"] = "the session-report file set has no key, so a rebuild could not be keyed to it"
+        return out
+    try:
+        from . import session_report_facts as _srf
+        out["store_key"] = _cache_store.product_key(_srf.SUMMARY_KIND, participant_uid, sig)
+        marker = _summary_launch_marker(sig)
+        if marker is None:
+            out["reason"] = "the store has nowhere to write, so a rebuild would have nowhere to land"
+            return out
+        if os.path.exists(marker):
+            age = _time.time() - os.path.getmtime(marker)
+            if age < SESSION_REPORT_SUMMARY_LAUNCH_COOLDOWN_SECONDS:
+                out["reason"] = (f"a rebuild for this key started {age:.0f} s ago and the cooldown "
+                                 f"is {SESSION_REPORT_SUMMARY_LAUNCH_COOLDOWN_SECONDS:.0f} s")
+                return out
+        argv = _summary_command_argv(participant_uid)
+        if argv is None:
+            out["reason"] = "manage.py could not be found, so no command could be started"
+            return out
+        # Written BEFORE the launch, so a launch that then fails still holds the storm back.
+        with open(marker, "w") as fh:
+            fh.write(str(_time.time()))
+        _spawn_detached(argv, os.path.join(os.path.dirname(marker), "background_runs.log"))
+    except Exception as exc:                                     # noqa: BLE001
+        out["reason"] = f"the background rebuild could not be started ({exc!r})"
+        return out
+    out["launched"] = True
+    return out
 
 
 # ---------------------------------------------------------------------------------------------
