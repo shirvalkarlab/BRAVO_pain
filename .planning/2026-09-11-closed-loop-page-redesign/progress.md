@@ -195,3 +195,25 @@ look at the card (both bands); open items 29 and 30. **Watch for**: any test tou
 must clear only while its own override is set (decision 129, third time); the simulation's key
 carries the candidate and the rule version -- bump RULE_VERSION whenever the stored numbers would
 change (v4 today). Probes: `_agent_bridge/_probe_tl/probe_simulation_{live,diag}.py`.
+
+## 2026-09-11, late evening — two follow-ups and the merge (read this first next time)
+- **The PI's question "she's clearly taking them; why aren't they landing?"**: the noon ingest is
+  healthy (7-11 Sep each "ingested 1 of 1 new files", rc 0; the timeline shows chronic power and
+  FFT snapshot ticks to 11 Sep). What looked missing: no LABELED event since 16 June (every event
+  since is the automatic "Streaming" snapshot, drawn as ticks, not diamonds) and no voltage trace
+  since the 2 Sep visit. Found on the way: four in-process recording memos keyed on the
+  participant alone, serving yesterday's list until a worker restarted -- fixed, decision 130,
+  commit `f445d1d8` (one process, live: 0 loads / 574 rows before, 5 loads / 575 after; 607,183
+  fields, 0 differing fresh against memo). Container 631 / 0; host 1053 / 42 / 0.
+- **His question "the correlation and AUCs look very different from the Biomarkers page"**: the
+  card read the newest stored grid of any score. Fixed, decision 131, commit `b38a744c`: sidecar
+  settings tag (rule v9), the page sends the Biomarkers page's persisted settings, the reader
+  matches and builds on demand; fine print top right of the card. Live in his browser: Biomarkers
+  grid vs the card, 924 fields, 0 differing (Left Leg VAS / ±29 min / PRO-first / median);
+  bridge NRS and VAS 924 / 0 each, control NRS vs VAS 660 differing. Container 631 / 0; host
+  1060 / 42 / 0. `Biomarkers/routines/sweep_settings.py` is new (Django-free parsers + tag).
+- **Merged**: PR #10 into `v3.1.0`, merge commit `8e18f4bd`, branch kept. Landed with
+  `/land-the-plane`; gates re-run on the merged code are in the row below this one.
+- Watch for: `manage.py precompute_band_sweeps --participant` takes the uid, not the name (the
+  name gives "no time-domain recordings" for every score); a guard test reads request keys off
+  the settings parsers' source by the spelling `request_data.get(...)`.

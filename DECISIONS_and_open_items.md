@@ -281,8 +281,14 @@ hygiene as a work item — the latter is an operational note in `OPERATIONS_runb
     panel "How big a change in this patient's own rating means anything?" prints the pair and
     stretch counts and nothing about whether stimulation was on. His call.
 
-29. **The Agent tool's worktrees start from the repository's default branch, `v3.1.0`, which is
-    months behind `PS_closedloop_deployment`** (decision 102 met this: two agents ran at `39dfb2f8`,
+29. **HALF-RESOLVED 2026-09-11.** The PI merged this branch into `v3.1.0` himself, as pull request
+    #10, merge commit `8e18f4bd` (243 commits since #9; a merge commit with the branch kept, as #9
+    was). So a worktree cut from `v3.1.0` today carries everything up to decision 131. **Still
+    open, and still his call**: `origin/HEAD` still points at `v3.1.0`, so the gap reopens with
+    the first commit made here after the merge, and only moving the default branch to
+    `PS_closedloop_deployment` (a one-line repository setting on GitHub) closes it for good.
+    ~~The Agent tool's worktrees start from the repository's default branch, `v3.1.0`, which is
+    months behind `PS_closedloop_deployment`~~ (decision 102 met this: two agents ran at `39dfb2f8`,
     a checkout with no `DecodeCommon` and no `CLAUDE.md`). On 2026-09-10 three such stale worktrees
     were found and removed. The cause is a repository setting, not code: `origin/HEAD` points at
     `v3.1.0`. Two ways out, both his call: merge this branch into `v3.1.0` (a release decision), or
