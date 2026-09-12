@@ -10,19 +10,23 @@
  *
  * The verdict wording is the page's own, computed from `gate.passed`, `gate.n_conditions` and the
  * failed list, so the strip never prints the server's "Stage 2 MUST NOT START" (a code name).
+ *
+ * Laid out again 2026-09-12 after the PI's review: a two-column grid (the check's name at 14 px
+ * bold with its folded sentence under it; the evidence at 13-14 px), comfortable row spacing, the
+ * per-side symbols labelled at 13 px with a legend line saying what each symbol means.
  */
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
-import Fold from "views/Reports/ClosedLoopSim/Fold";
 import PAL from "views/Reports/ClosedLoopSim/palette";
 import { TickGlyph, CrossGlyph, AmberGlyph, NotTestedGlyph } from "views/Reports/ClosedLoopSim/glyphs";
 
 import BandResponseStrip from "./BandResponseStrip";
 import { num, fmtHz, fmtMa, fmtOf, contactLabel } from "./stimFormat";
+import { TYPE, SMALL, SizedFold } from "./typeScale";
 
-const SMALL = { fontSize: 10.5, color: "#6A6A6A" };
-const MONO = { fontFamily: PAL.mono, fontSize: 12, color: "#1A1A1A" };
+const MONO = { fontFamily: PAL.mono, fontSize: TYPE.num, color: "#1A1A1A" };
+const NOTE = { ...SMALL, whiteSpace: "nowrap" };
 
 /** Plain-language names for the four conditions (their code names are in the tooltip). */
 export const CHECK_LABELS = {
@@ -39,18 +43,29 @@ function verdictState(c) {
   return null;
 }
 function Glyph({ state }) {
-  if (state === true) return <TickGlyph label="passes" />;
-  if (state === false) return <CrossGlyph label="fails" />;
-  return <NotTestedGlyph label="not assessed" />;
+  if (state === true) return <TickGlyph label="passes" size={18} />;
+  if (state === false) return <CrossGlyph label="fails" size={18} />;
+  return <NotTestedGlyph label="not assessed" size={18} />;
 }
 function Sub({ ok, text }) {
   // A per-side sub-answer inside a check: resolved = tick, not resolved = amber (measured and too
   // small to call, never the failure ink), unknown = dashed.
   return (
-    <MDBox display="inline-flex" alignItems="center" gap={0.4} mr={1}>
-      {ok === true ? <TickGlyph label="resolved" size={11} />
-        : (ok === false ? <AmberGlyph label="not resolved" size={11} /> : <NotTestedGlyph label="not assessed" size={11} />)}
-      <span style={{ ...MONO, fontSize: 11 }}>{text}</span>
+    <MDBox display="inline-flex" alignItems="center" gap={0.6} mr={2}>
+      {ok === true ? <TickGlyph label="resolved" size={14} />
+        : (ok === false ? <AmberGlyph label="not resolved" size={14} /> : <NotTestedGlyph label="not assessed" size={14} />)}
+      <span style={{ fontSize: TYPE.body, color: "#1A1A1A", whiteSpace: "nowrap" }}>{text}</span>
+    </MDBox>
+  );
+}
+/** What the three symbols in the per-side answers mean, printed once under them. */
+function SubLegend() {
+  const item = { display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" };
+  return (
+    <MDBox display="flex" flexWrap="wrap" columnGap={2} rowGap={0.4} mt={0.6} sx={SMALL}>
+      <span style={item}><TickGlyph label="" size={13} /> resolved: the gain exceeds its own uncertainty</span>
+      <span style={item}><AmberGlyph label="" size={13} /> not resolved: measured, too small to call</span>
+      <span style={item}><NotTestedGlyph label="" size={13} /> not assessed: the comparison could not be formed</span>
     </MDBox>
   );
 }
@@ -59,21 +74,21 @@ function Sub({ ok, text }) {
 function BandTicks({ verdicts, best }) {
   const keys = Object.keys(verdicts || {}).map(Number).filter((k) => Number.isFinite(k)).sort((a, b) => a - b);
   if (!keys.length) return null;
-  const W = 300, H = 30, PAD = 12;
+  const W = 560, H = 44, PAD = 18;
   const lo = 8, hi = 30;
   const x = (c) => PAD + ((c - lo) / (hi - lo)) * (W - 2 * PAD);
   return (
     <svg width={W} height={H} role="img" aria-label="which band centres respond">
-      <line x1={x(lo)} x2={x(hi)} y1={H - 9} y2={H - 9} stroke="#D8D8D8" />
-      {[8, 12, 16, 20, 24, 28].map((t) => (
-        <text key={t} x={x(t)} y={H - 1} fontSize="8" fill="#9A9A9A" textAnchor="middle">{t}</text>
+      <line x1={x(lo)} x2={x(hi)} y1={H - 18} y2={H - 18} stroke="#D8D8D8" />
+      {[8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30].map((t) => (
+        <text key={t} x={x(t)} y={H - 3} fontSize={TYPE.axis} fill="#7A7A7A" textAnchor="middle">{t}</text>
       ))}
       {keys.map((c) => {
         const responds = String(verdicts[c] || verdicts[String(c)] || "").toUpperCase().startsWith("RESPONDS");
         const isBest = best != null && Math.abs(Number(best) - c) < 1e-9;
         return responds
-          ? <circle key={c} cx={x(c)} cy={H - 19} r={isBest ? 5 : 3.2} fill={PAL.pass} stroke={isBest ? "#1A1A1A" : "none"} strokeWidth="1.2" />
-          : <rect key={c} x={x(c) - 3} y={H - 22} width={6} height={6} fill={PAL.fail} />;
+          ? <circle key={c} cx={x(c)} cy={H - 30} r={isBest ? 6 : 4} fill={PAL.pass} stroke={isBest ? "#1A1A1A" : "none"} strokeWidth="1.2" />
+          : <rect key={c} x={x(c) - 4} y={H - 34} width={8} height={8} fill={PAL.fail} />;
       })}
     </svg>
   );
@@ -86,23 +101,28 @@ function Numbers({ c, lfp }) {
     case "rate_at_or_above_adaptive_minimum": {
       const rates = ev.rates || {};
       return (
-        <span style={MONO}>
-          {["Left", "Right"].filter((h) => rates[h] != null).map((h) => `${h[0]} ${fmtHz(rates[h])}`).join(" · ")}
-          <span style={SMALL}>{ev.min_rate_hz != null ? `  (minimum ${fmtHz(ev.min_rate_hz)})` : ""}</span>
-        </span>
+        <MDBox display="flex" alignItems="baseline" columnGap={1.5} flexWrap="wrap">
+          <span style={{ ...MONO, whiteSpace: "nowrap" }}>
+            {["Left", "Right"].filter((h) => rates[h] != null).map((h) => `${h[0]} ${fmtHz(rates[h])}`).join(" · ")}
+          </span>
+          {ev.min_rate_hz != null && <span style={NOTE}>{`minimum ${fmtHz(ev.min_rate_hz)}`}</span>}
+        </MDBox>
       );
     }
     case "openloop_choice_resolved": {
       const per = ev.per_hemisphere || {};
       return (
-        <MDBox display="flex" flexWrap="wrap" alignItems="center">
-          {["Left", "Right"].filter((h) => per[h]).map((h) => (
-            <MDBox key={h} display="inline-flex" alignItems="center" mr={1.5}>
-              <span style={{ ...MONO, fontSize: 11, marginRight: 6 }}>{h[0]}</span>
-              <Sub ok={per[h].rate_resolved === true ? true : (per[h].rate_resolved === false ? false : null)} text="rate" />
-              <Sub ok={per[h].pw_resolved === true ? true : (per[h].pw_resolved === false ? false : null)} text="pulse width" />
-            </MDBox>
-          ))}
+        <MDBox>
+          <MDBox display="flex" flexWrap="wrap" alignItems="center" rowGap={0.6}>
+            {["Left", "Right"].filter((h) => per[h]).map((h) => (
+              <MDBox key={h} display="inline-flex" alignItems="center" mr={3}>
+                <span style={{ ...MONO, fontWeight: 600, marginRight: 10 }}>{h[0]}</span>
+                <Sub ok={per[h].rate_resolved === true ? true : (per[h].rate_resolved === false ? false : null)} text="rate" />
+                <Sub ok={per[h].pw_resolved === true ? true : (per[h].pw_resolved === false ? false : null)} text="pulse width" />
+              </MDBox>
+            ))}
+          </MDBox>
+          <SubLegend />
         </MDBox>
       );
     }
@@ -114,20 +134,22 @@ function Numbers({ c, lfp }) {
       const rows = Array.isArray(ev.verdict_rows) ? ev.verdict_rows : null;
       return (
         <MDBox>
-          <span style={MONO}>{`${fmtOf(ev.n_passing, ev.n_tested)} bands respond`}</span>
-          {ev.n_power_unavailable != null && num(ev.n_power_unavailable) > 0 && (
-            <span style={SMALL}>{`  · ${Math.round(num(ev.n_power_unavailable))} not measurable`}</span>
-          )}
-          <MDBox>
+          <MDBox display="flex" alignItems="baseline" columnGap={1.5} flexWrap="wrap">
+            <span style={{ ...MONO, whiteSpace: "nowrap" }}>{`${fmtOf(ev.n_passing, ev.n_tested)} bands respond`}</span>
+            {ev.n_power_unavailable != null && num(ev.n_power_unavailable) > 0 && (
+              <span style={NOTE}>{`${Math.round(num(ev.n_power_unavailable))} not measurable`}</span>
+            )}
+          </MDBox>
+          <MDBox mt={0.6}>
             {rows
               ? <BandResponseStrip rows={rows} minSep={ev.min_sep_d} best={ev.best_center_hz} />
               : <BandTicks verdicts={ev.verdicts} best={null} />}
           </MDBox>
           {lfp && (
-            <MDTypography variant="caption" component="div" sx={SMALL}>
+            <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.4 }}>
               {lfp.selected
-                ? `read on ${contactLabel({ display_short: lfp.selected_display_short }, Array.isArray(lfp.selected_key) ? lfp.selected_key[0] : null)}`
-                  + (lfp.pinned_rate_hz != null ? ` at ${fmtHz(lfp.pinned_rate_hz)}` : "")
+                ? <>read on <span style={{ whiteSpace: "nowrap" }}>{contactLabel({ display_short: lfp.selected_display_short }, Array.isArray(lfp.selected_key) ? lfp.selected_key[0] : null)}</span>
+                  {lfp.pinned_rate_hz != null ? <> at <span style={{ whiteSpace: "nowrap" }}>{fmtHz(lfp.pinned_rate_hz)}</span></> : null}</>
                 : "no sensing contact could be used"}
               {lfp.n_cells_screened != null ? ` · ${lfp.n_cells_screened} contact-and-rate combinations screened` : ""}
               {lfp.n_cells_unbuildable != null ? `, ${lfp.n_cells_unbuildable} could not be built` : ""}
@@ -145,10 +167,13 @@ function Numbers({ c, lfp }) {
         ? ev.defaulted.length > 0
         : /DEFAULTED/.test(String((c && c.detail) || ""));
       return (
-        <span style={MONO}>
-          {["Left", "Right"].filter((h) => checked[h]).map((h) => `${h[0]} ${fmtMa(checked[h].amp_min_mA)}–${fmtMa(checked[h].amp_max_mA)}`).join(" · ")}
-          <span style={SMALL}>{ev.ceiling_mA != null ? `  (ceiling ${fmtMa(ev.ceiling_mA)})` : ""}{defaulted ? " · limits defaulted to the delivered range" : ""}</span>
-        </span>
+        <MDBox display="flex" alignItems="baseline" columnGap={1.5} flexWrap="wrap">
+          <span style={{ ...MONO, whiteSpace: "nowrap" }}>
+            {["Left", "Right"].filter((h) => checked[h]).map((h) => `${h[0]} ${fmtMa(checked[h].amp_min_mA)}–${fmtMa(checked[h].amp_max_mA)}`).join(" · ")}
+          </span>
+          {ev.ceiling_mA != null && <span style={NOTE}>{`ceiling ${fmtMa(ev.ceiling_mA)}`}</span>}
+          {defaulted && <span style={NOTE}>limits defaulted to the delivered range</span>}
+        </MDBox>
       );
     }
     default:
@@ -173,27 +198,31 @@ export default function ClosedLoopChecks({ plan }) {
   return (
     <MDBox>
       <MDBox display="flex" alignItems="center" gap={1}>
-        {conditions.length ? (passed ? <TickGlyph label="may start" size={18} /> : <CrossGlyph label="may not start" size={18} />) : null}
-        <MDTypography variant="h6" sx={{ fontSize: 15, color }}>{headline}</MDTypography>
+        {conditions.length ? (passed ? <TickGlyph label="may start" size={20} /> : <CrossGlyph label="may not start" size={20} />) : null}
+        <MDTypography variant="h6" sx={{ fontSize: TYPE.section, color }}>{headline}</MDTypography>
       </MDBox>
-      <MDBox mt={1} sx={{ display: "grid", gridTemplateColumns: "20px 2fr 3fr", columnGap: "10px", rowGap: "6px", alignItems: "start" }}>
+      {/* Two columns: the check (symbol, name, folded sentence) and its evidence. */}
+      <MDBox mt={1.5} sx={{ display: "grid", gridTemplateColumns: "minmax(300px, 1fr) minmax(360px, 1.5fr)",
+        columnGap: "28px", rowGap: "22px", alignItems: "start" }}>
         {conditions.map((c, i) => {
           const st = verdictState(c);
           return [
-            <MDBox key={`${i}-g`} pt={0.2}><Glyph state={st} /></MDBox>,
-            <MDBox key={`${i}-l`}>
-              <MDTypography variant="caption" component="div" title={c.name}
-                sx={{ fontSize: 11.5, fontWeight: 600, color: "#2A2A2A" }}>
-                {CHECK_LABELS[c.name] || String(c.name || "").replace(/_/g, " ")}
-                {c.overridden ? <span style={{ color: PAL.warnText, marginLeft: 6 }}>[overridden]</span> : null}
-              </MDTypography>
-              <Fold show="Sentence" hide="Hide" dense>
-                <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: 10.5 }}>
-                  {c.detail || "no reason was returned"}
+            <MDBox key={`${i}-l`} display="flex" alignItems="flex-start" gap={1}>
+              <MDBox pt={0.2} sx={{ flex: "0 0 auto" }}><Glyph state={st} /></MDBox>
+              <MDBox>
+                <MDTypography variant="caption" component="div" title={c.name}
+                  sx={{ fontSize: TYPE.num, fontWeight: 700, color: "#2A2A2A", lineHeight: 1.35 }}>
+                  {CHECK_LABELS[c.name] || String(c.name || "").replace(/_/g, " ")}
+                  {c.overridden ? <span style={{ color: PAL.warnText, marginLeft: 6 }}>[overridden]</span> : null}
                 </MDTypography>
-              </Fold>
+                <SizedFold show="Sentence" hide="Hide" dense mt={0.3}>
+                  <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body }}>
+                    {c.detail || "no reason was returned"}
+                  </MDTypography>
+                </SizedFold>
+              </MDBox>
             </MDBox>,
-            <MDBox key={`${i}-n`}><Numbers c={c} lfp={c.name === "adaptive_band_passes_lfp_response" ? lfp : null} /></MDBox>,
+            <MDBox key={`${i}-n`} pt={0.2}><Numbers c={c} lfp={c.name === "adaptive_band_passes_lfp_response" ? lfp : null} /></MDBox>,
           ];
         })}
       </MDBox>

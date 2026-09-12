@@ -20,22 +20,18 @@
  *
  * NO OVERRIDE CONTROL YET. The endpoint accepts an override with a stated reason
  * (`TwoStageOverrideReason` / `TwoStageOverrideBy`); this card does not send one, and says so.
- *
- * Resized 2026-09-12 after the PI's review: the title at 17 px, prose at 13 px, table rows at
- * 13 px under 11 px headers, and the loading line says what the first request really costs
- * (the whole optimiser reruns with the flag, about a minute; a few seconds afterwards).
  */
 import { Card, CircularProgress, Table, TableBody, TableCell, TableHead, TableRow } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
+import Fold from "views/Reports/ClosedLoopSim/Fold";
 import PAL from "views/Reports/ClosedLoopSim/palette";
 
 import ClosedLoopChecks, { CHECK_LABELS } from "./ClosedLoopChecks";
 import ExcludedSettingsChart from "./ExcludedSettingsChart";
 import { num } from "./stimFormat";
-import { TYPE, HEAD, SizedFold as Fold } from "./typeScale";
 
 export const TWO_STAGE_CARD_TITLE = "Closed loop: may it start on the frozen setting?";
 
@@ -58,8 +54,8 @@ function RecordTable({ rows, columns, limit = 12 }) {
         <TableHead>
           <TableRow>
             {present.map(([k, label]) => (
-              <TableCell key={k} sx={{ py: 0.6 }}>
-                <MDTypography variant="caption" sx={HEAD}>{label}</MDTypography>
+              <TableCell key={k} sx={{ py: 0.4 }}>
+                <MDTypography variant="caption" fontWeight="medium" sx={{ fontSize: 10.5 }}>{label}</MDTypography>
               </TableCell>
             ))}
           </TableRow>
@@ -68,8 +64,8 @@ function RecordTable({ rows, columns, limit = 12 }) {
           {rows.slice(0, limit).map((r, i) => (
             <TableRow key={i}>
               {present.map(([k]) => (
-                <TableCell key={k} sx={{ py: 0.5 }}>
-                  <MDTypography variant="caption" sx={{ fontSize: TYPE.body, fontFamily: PAL.mono, whiteSpace: "nowrap" }}>{cell(r[k])}</MDTypography>
+                <TableCell key={k} sx={{ py: 0.3 }}>
+                  <MDTypography variant="caption" sx={{ fontSize: 10.5, fontFamily: PAL.mono }}>{cell(r[k])}</MDTypography>
                 </TableCell>
               ))}
             </TableRow>
@@ -77,7 +73,7 @@ function RecordTable({ rows, columns, limit = 12 }) {
         </TableBody>
       </Table>
       {rows.length > limit && (
-        <MDTypography variant="caption" color="text" sx={{ fontSize: TYPE.small }}>
+        <MDTypography variant="caption" color="text" sx={{ fontSize: 10 }}>
           {`${limit} of ${rows.length} rows shown.`}
         </MDTypography>
       )}
@@ -115,20 +111,18 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
   return (
     <Card>
       <MDBox p={2}>
-        <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>{TWO_STAGE_CARD_TITLE}</MDTypography>
+        <MDTypography variant="h6" sx={{ fontSize: 15 }}>{TWO_STAGE_CARD_TITLE}</MDTypography>
 
         {loading && (
           <MDBox mt={1.5} display="flex" alignItems="center" gap={1.5}>
-            <CircularProgress size={18} />
-            <MDTypography variant="caption" color="text" sx={{ fontSize: TYPE.body }}>
-              computing the two-stage plan (about a minute the first time; a few seconds afterwards)&hellip;
-            </MDTypography>
+            <CircularProgress size={16} />
+            <MDTypography variant="caption" color="text">computing the plan (about 10 s)&hellip;</MDTypography>
           </MDBox>
         )}
 
         {!loading && err && (
           <MDBox mt={1.5} p={1} sx={{ borderRadius: "6px", border: `1px solid ${PAL.warn}`, backgroundColor: "#fdf6e7" }}>
-            <MDTypography variant="caption" sx={{ color: PAL.warnText, fontSize: TYPE.body }} component="div">
+            <MDTypography variant="caption" sx={{ color: PAL.warnText }} component="div">
               {`The plan is not available: ${err}`}
             </MDTypography>
           </MDBox>
@@ -137,7 +131,7 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
         {!loading && !err && plan && (
           <>
             {frozen.overridden && (
-              <MDTypography variant="caption" sx={{ color: PAL.warnText, fontSize: TYPE.body }} component="div" mt={0.5}>
+              <MDTypography variant="caption" sx={{ color: PAL.warnText }} component="div" mt={0.5}>
                 {`A clinician override was recorded with the request`
                   + (frozen.override && frozen.override.reason ? `: ${frozen.override.reason}` : ".")
                   + (frozen.override && frozen.override.by ? ` (${frozen.override.by})` : "")}
@@ -145,19 +139,19 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
             )}
 
             {/* ---------- the 4 checks ---------- */}
-            <MDBox mt={1.5}>
+            <MDBox mt={1.2}>
               <ClosedLoopChecks plan={plan} />
             </MDBox>
 
             {/* ---------- what adaptive mode ruled out ---------- */}
             {(envelope.statement || envelope.n_exclusions != null) && (
-              <MDBox mt={3}>
-                <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>What adaptive mode ruled out</MDTypography>
-                <MDBox mt={0.6}>
+              <MDBox mt={2}>
+                <MDTypography variant="button" fontWeight="medium">What adaptive mode ruled out</MDTypography>
+                <MDBox mt={0.4}>
                   <ExcludedSettingsChart envelope={envelope} strata={strata} />
                 </MDBox>
                 {envelope.override_ignored && (
-                  <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.small, color: PAL.warnText }}>
+                  <MDTypography variant="caption" component="div" sx={{ fontSize: 10.5, color: PAL.warnText }}>
                     {String(envelope.override_ignored)}
                   </MDTypography>
                 )}
@@ -165,11 +159,11 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
             )}
 
             {/* ---------- what closed loop would do ---------- */}
-            <MDBox mt={3}>
-              <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>If closed loop could start</MDTypography>
+            <MDBox mt={2}>
+              <MDTypography variant="button" fontWeight="medium">If closed loop could start</MDTypography>
               {stage2.started ? (
                 <>
-                  <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body }}>
+                  <MDTypography variant="caption" color="text" component="div">
                     {`${stage2.n_valid_policies != null ? stage2.n_valid_policies : policies.length} closed-loop `
                       + `settings could be drawn up`
                       + (stage2.n_rejected != null ? `; ${stage2.n_rejected} were rejected` : "")
@@ -179,13 +173,13 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
                   </MDTypography>
                   <RecordTable rows={policies} columns={POLICY_COLUMNS} limit={10} />
                   {policies.length === 0 && (
-                    <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body }}>
+                    <MDTypography variant="caption" color="text" component="div">
                       Closed loop started but returned no settings.
                     </MDTypography>
                   )}
                 </>
               ) : (
-                <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body }}>
+                <MDTypography variant="caption" color="text" component="div">
                   {refusals.length
                     ? `Nothing was drawn up: ${refusals.length} check${refusals.length === 1 ? "" : "s"} above block${refusals.length === 1 ? "s" : ""} (${refusals.map((r) => conditionLabel(r.condition)).join("; ")}).`
                     : "Nothing was drawn up."}
@@ -193,14 +187,14 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
               )}
               {Array.isArray(stage2.notes) && stage2.notes.length > 0 && (
                 <Fold show="Notes" hide="Hide notes" dense>
-                  <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body }}>
+                  <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: 10.5 }}>
                     {stage2.notes.map((n) => String(n)).join(" ")}
                   </MDTypography>
                 </Fold>
               )}
             </MDBox>
 
-            <MDTypography variant="caption" color="text" component="div" sx={{ mt: 2, fontSize: TYPE.small }}>
+            <MDTypography variant="caption" color="text" component="div" sx={{ mt: 1.5, fontSize: 10.5 }}>
               An override with a stated reason can be sent with the request; there is no control
               for it here yet.
             </MDTypography>
@@ -209,19 +203,19 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
             <Fold show="How this was arrived at (what each step read, and the fit for each pulse width and side)"
               hide="Hide how this was arrived at">
               {["stage1", "gate", "stage2"].filter((k) => provenance[k]).map((k) => (
-                <MDTypography key={k} variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body, mb: 0.6 }}>
+                <MDTypography key={k} variant="caption" color="text" component="div" sx={{ fontSize: 10.5, mb: 0.4 }}>
                   {String(provenance[k])}
                 </MDTypography>
               ))}
               {(plan.backend || plan.seconds != null) && (
-                <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body, mb: 0.6 }}>
+                <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: 10.5, mb: 0.4 }}>
                   {plan.backend ? `Fitted with: ${plan.backend}. ` : ""}
                   {plan.seconds != null ? `The plan took ${fmt(plan.seconds, 1)} s of the request.` : ""}
                 </MDTypography>
               )}
               {strata.length > 0 && (
                 <MDBox mt={0.8}>
-                  <MDTypography variant="caption" fontWeight="medium" component="div" sx={{ fontSize: TYPE.num }}>
+                  <MDTypography variant="caption" fontWeight="medium" component="div">
                     The fit for each pulse width and side
                   </MDTypography>
                   <RecordTable rows={strata} columns={STRATA_COLUMNS} limit={20} />
@@ -229,13 +223,13 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
               )}
               {Object.keys(skipped).length > 0 && (
                 <MDBox mt={0.8}>
-                  <MDTypography variant="caption" fontWeight="medium" component="div" sx={{ fontSize: TYPE.num }}>
+                  <MDTypography variant="caption" fontWeight="medium" component="div">
                     Combinations that could not be fitted
                   </MDTypography>
                   <MDBox component="ul" sx={{ m: 0, pl: 2.5 }}>
                     {Object.entries(skipped).map(([k, v]) => (
                       <li key={k}>
-                        <MDTypography variant="caption" color="text" sx={{ fontSize: TYPE.body }}>
+                        <MDTypography variant="caption" color="text" sx={{ fontSize: 10.5 }}>
                           {`${String(k).replace("__pw", " at ").replace(/_/g, " ")} µs: ${String(v)}`}
                         </MDTypography>
                       </li>

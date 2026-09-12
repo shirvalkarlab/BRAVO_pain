@@ -12,25 +12,21 @@
  * Everything is read: `optimum`, `incumbent_xy`, `comparison` and `optimum_resolved` per arm,
  * exactly as the table read them. The verdict is the SERVED one; `resolutionOf` in index.js still
  * owns the legacy fallback and passes the state in.
- *
- * Resized 2026-09-12 after the PI's review: cells at 13 px body, the gain at 15 px, the bar's
- * axis labels at 11 px, the footnotes at 12 px, and more room around each cell.
  */
 import { Tooltip } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
+import Fold from "views/Reports/ClosedLoopSim/Fold";
 import PAL from "views/Reports/ClosedLoopSim/palette";
 import { AmberGlyph } from "views/Reports/ClosedLoopSim/glyphs";
 
 import { GainBar, VerdictGlyph } from "./GainBar";
 import { num, fmtHz, fmtMa, fmtPts, siteName } from "./stimFormat";
-import { TYPE, HEAD, SMALL, SizedFold } from "./typeScale";
 
-const MONO = { fontFamily: PAL.mono, fontSize: TYPE.num, color: "#1A1A1A", whiteSpace: "nowrap" };
-const LABEL = { fontSize: TYPE.body, color: "#5E5E5E", whiteSpace: "nowrap" };
-const NOTE = { ...SMALL, whiteSpace: "nowrap" };
+const MONO = { fontFamily: PAL.mono, fontSize: 12, color: "#1A1A1A" };
+const SMALL = { fontSize: 10.5, color: "#6A6A6A" };
 
 export default function ArmGainStrip({ arms, resolutions, activeArm, onSelect }) {
   const entries = Object.entries(arms || {});
@@ -43,19 +39,21 @@ export default function ArmGainStrip({ arms, resolutions, activeArm, onSelect })
   }));
   return (
     <MDBox>
-      <MDBox sx={{ display: "grid", gridTemplateColumns: `110px repeat(${sides.length}, minmax(0, 1fr))`,
-        columnGap: "20px", rowGap: "16px", alignItems: "start" }}>
+      <MDBox sx={{ display: "grid", gridTemplateColumns: `90px repeat(${sides.length}, minmax(0, 1fr))`,
+        columnGap: "14px", rowGap: "10px", alignItems: "start" }}>
         <span />
         {sides.map((h) => (
-          <MDTypography key={h} variant="caption" sx={HEAD}>{`${h} side current`}</MDTypography>
+          <MDTypography key={h} variant="caption" sx={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4, color: "#8A8A8A", textTransform: "uppercase" }}>
+            {`${h} side current`}
+          </MDTypography>
         ))}
         {sites.map((site) => [
-          <MDTypography key={`${site}-l`} variant="button" fontWeight="medium" sx={{ fontSize: TYPE.num, pt: 1.5 }}>
+          <MDTypography key={`${site}-l`} variant="button" fontWeight="medium" sx={{ fontSize: 12.5, pt: 0.5 }}>
             {siteName(site)}
           </MDTypography>,
           ...sides.map((h) => {
             const found = entries.find(([, a]) => a.site === site && a.hemisphere === h);
-            if (!found) return <span key={`${site}-${h}`} style={{ ...SMALL, paddingTop: 12 }}>not fitted</span>;
+            if (!found) return <span key={`${site}-${h}`} style={SMALL}>not fitted</span>;
             const [key, a] = found;
             const r = (resolutions || {})[key] || {};
             const resolved = r.state === "resolved" ? true : (r.state === "unresolved" ? false : null);
@@ -67,30 +65,30 @@ export default function ArmGainStrip({ arms, resolutions, activeArm, onSelect })
             return (
               <MDBox key={key} onClick={() => onSelect && onSelect(key)} role="button" tabIndex={0}
                 onKeyDown={(e) => { if (onSelect && (e.key === "Enter" || e.key === " ")) onSelect(key); }}
-                sx={{ p: 1.75, borderRadius: "8px", cursor: "pointer",
+                sx={{ p: 1, borderRadius: "6px", cursor: "pointer",
                   border: `1px solid ${active ? PAL.accentBorder : PAL.neutralBorder}`,
                   backgroundColor: active ? PAL.accentFill : "transparent" }}>
-                <MDBox display="flex" alignItems="baseline" columnGap={1.2} rowGap={0.4} flexWrap="wrap">
-                  <span style={LABEL}>in force</span>
+                <MDBox display="flex" alignItems="baseline" gap={1} flexWrap="wrap">
+                  <span style={SMALL}>in force</span>
                   <span style={MONO}>{`${fmtHz(inc[0])} · ${fmtMa(inc[1])}`}</span>
-                  <span style={{ color: "#9A9A9A", fontSize: TYPE.num }}>→</span>
-                  <span style={LABEL}>candidate</span>
+                  <span style={{ color: "#9A9A9A" }}>→</span>
+                  <span style={SMALL}>candidate</span>
                   <span style={{ ...MONO, fontWeight: 600 }}>{`${fmtHz(opt.freq_hz)} · ${fmtMa(opt.amp_mA)}`}</span>
                   {aboveCeil && (
                     <Tooltip title={`the candidate's ${fmtMa(opt.amp_mA)} is above the ${fmtMa(ceil)} a current ramp can reach without crossing currents the safety model rejects`}>
-                      <span><AmberGlyph label="above the reachable safe ceiling" size={14} /></span>
+                      <span><AmberGlyph label="above the reachable safe ceiling" size={12} /></span>
                     </Tooltip>
                   )}
                 </MDBox>
-                <MDBox display="flex" alignItems="center" columnGap={1.5} mt={1} flexWrap="wrap">
+                <MDBox display="flex" alignItems="center" gap={1} mt={0.4}>
                   <GainBar gain={r.gain} sd={r.sdDiff} halfRange={halfRange} />
-                  <span style={{ ...MONO, fontSize: TYPE.gain }}>
+                  <span style={{ ...MONO, fontSize: 11.5 }}>
                     {num(r.gain) === null ? "—" : `${fmtPts(r.gain)}${num(r.sdDiff) === null ? "" : ` ± ${num(r.sdDiff).toFixed(2)}`}`}
                   </span>
                 </MDBox>
-                <MDBox display="flex" alignItems="center" justifyContent="space-between" columnGap={1.5} mt={0.8} flexWrap="wrap">
+                <MDBox display="flex" alignItems="center" justifyContent="space-between" mt={0.3}>
                   <VerdictGlyph resolved={resolved} />
-                  <span style={NOTE}>
+                  <span style={SMALL}>
                     {`${a.n_epochs_fitted ?? "—"} stretches`}
                     {ceil !== null ? ` · safe ceiling ${fmtMa(ceil)}` : ""}
                     {a.safe_contiguous === false ? " · safe set not contiguous" : ""}
@@ -101,8 +99,8 @@ export default function ArmGainStrip({ arms, resolutions, activeArm, onSelect })
           }),
         ])}
       </MDBox>
-      <SizedFold show="How the gain and its uncertainty are computed, and what the 3 verdicts mean" hide="Hide" mt={1.2}>
-        <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body }}>
+      <Fold show="How the gain and its uncertainty are computed, and what the 3 verdicts mean" hide="Hide">
+        <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: 10.5 }}>
           The objective is a pain score, so lower is better and a positive gain means the candidate
           cell is predicted better than the setting in force. An arm is marked resolved only when
           that gain exceeds 1 standard deviation of the difference itself, propagated from both
@@ -112,14 +110,14 @@ export default function ArmGainStrip({ arms, resolutions, activeArm, onSelect })
           overstates the uncertainty and the test is conservative: it can withhold a recommendation
           it might have supported, but it cannot manufacture one.
         </MDTypography>
-        <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body, mt: 0.8 }}>
+        <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: 10.5, mt: 0.5 }}>
           <strong>not resolved</strong> means the comparison was made and the two cells were not
           separated. <strong>not determinable</strong> means the comparison could not be made at
           all, because a posterior mean or standard deviation this arm needs is missing or
           degenerate; it calls for fixing the fit rather than collecting more exposure. Neither is
           drawn in the failure ink, because in neither case has a setting been shown to be worse.
         </MDTypography>
-      </SizedFold>
+      </Fold>
     </MDBox>
   );
 }

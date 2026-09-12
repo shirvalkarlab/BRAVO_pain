@@ -57,10 +57,7 @@ import SensingEvidenceTable from "./SensingEvidenceTable";
 // The 4 arms as small multiples with a shared gain axis (redesign phase 4).
 import ArmGainStrip from "./ArmGainStrip";
 import { fmtHz as fmtHzU, fmtMa as fmtMaU, siteName } from "./stimFormat";
-// The page's one type scale (2026-09-12, after the PI's review of the redesign: nothing under
-// 11 px, body 13-14 px, section titles 17 px, the headline 19 px), and the shared reveal control
-// with its toggle resized to that scale.
-import { TYPE, HEAD, SMALL, SizedFold as Fold } from "./typeScale";
+import Fold from "views/Reports/ClosedLoopSim/Fold";
 import { TickGlyph, NotTestedGlyph } from "views/Reports/ClosedLoopSim/glyphs";
 // Semantic colour roles live in one place for the whole closed-loop family of pages, so a verdict
 // that means the same thing on the deployment page and here is drawn in the same ink. The roles
@@ -70,9 +67,6 @@ import PAL from "views/Reports/ClosedLoopSim/palette";
 
 const MODEBAR = { responsive: true, displaylogo: false,
   modeBarButtonsToRemove: ["select2d", "lasso2d", "autoScale2d"] };
-
-/** One cell of the "what to test next" table: a number in the tabular font, never wrapped. */
-const QUEUE_CELL = { fontFamily: PAL.mono, fontSize: TYPE.body, whiteSpace: "nowrap" };
 
 /**
  * THE REQUEST THIS VIEW SENDS, WRITTEN OUT IN FULL RATHER THAN LEFT TO THE SERVER'S DEFAULTS.
@@ -291,11 +285,11 @@ function FigurePanel({ title, blurb, figure, prominence, error }) {
         borderRadius: "6px", border: "1px solid #e0c187", backgroundColor: "#fdf6e7",
       }}>
         <MDTypography variant="button" fontWeight="medium">{title}</MDTypography>
-        <MDTypography variant="caption" display="block" sx={{ fontSize: TYPE.body, color: "#8a6a1f" }}>
+        <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, color: "#8a6a1f" }}>
           {`This figure could not be built, so it is absent rather than empty. `
             + `${error.error_type || "Error"}: ${error.message || "no message supplied"}`}
         </MDTypography>
-        <MDTypography variant="caption" display="block" sx={{ fontSize: TYPE.small, color: "#8a6a1f" }}>
+        <MDTypography variant="caption" display="block" sx={{ fontSize: 9.5, color: "#8a6a1f" }}>
           {`Builder: ${error.builder || "unknown"}. The other figures on this page are unaffected.`}
         </MDTypography>
       </MDBox>
@@ -305,10 +299,10 @@ function FigurePanel({ title, blurb, figure, prominence, error }) {
   return (
     <MDBox mb={primary ? 4 : 3}>
       <MDTypography variant={primary ? "h6" : "button"} fontWeight="medium"
-        sx={{ fontSize: primary ? TYPE.section : TYPE.num }}>
+        sx={primary ? { fontSize: 15 } : undefined}>
         {title}
       </MDTypography>
-      <MDTypography variant="caption" color="text" component="div" sx={{ mb: 1, fontSize: TYPE.body }}>{blurb}</MDTypography>
+      <MDTypography variant="caption" color="text" component="div" sx={{ mb: 1 }}>{blurb}</MDTypography>
       {/* The primary figure is given roughly two thirds more height. The question it answers is
           read off the surface itself — whether the optimum and the incumbent are separated — and
           that is exactly the judgement a cramped colour map makes hard. */}
@@ -443,18 +437,18 @@ export default function StimOptimizer() {
             <Card>
               <MDBox p={2}>
                 <MDBox display="flex" alignItems="center" gap={1} flexWrap="wrap">
-                  <MDTypography variant="h6" sx={{ fontSize: TYPE.headline }}>
+                  <MDTypography variant="h6" sx={{ fontSize: 15 }}>
                     {supported
                       ? `Program: ${nResolved} of ${armStates.length} arms resolve a gain larger than its own uncertainty`
                       : `No setting is recommended today: ${nResolved} of ${armStates.length} arms resolve a gain larger than its own uncertainty`}
                   </MDTypography>
                   {nUndeterminable > 0 && (
-                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, color: PAL.neutral }}>
+                    <MDTypography variant="caption" sx={{ fontSize: 11, color: PAL.neutral }}>
                       {`· ${nUndeterminable} of ${armStates.length} could not be compared at all`}
                     </MDTypography>
                   )}
                 </MDBox>
-                <MDBox mt={2}>
+                <MDBox mt={1.2}>
                   <DecisionStrip arms={arms} plan={twoStage.data} planLoading={twoStage.loading}
                     planErr={twoStage.err} inForce={data.in_force_by_side || null} />
                 </MDBox>
@@ -463,7 +457,7 @@ export default function StimOptimizer() {
                     hide="Hide the reasons">
                     {(data.blockers || []).map((b, i) => (
                       <MDTypography key={i} variant="caption" color="text" component="div"
-                        sx={{ mt: 0.6, fontSize: TYPE.body }}>
+                        sx={{ mt: 0.5, fontSize: 10.5 }}>
                         &bull; {b}
                       </MDTypography>
                     ))}
@@ -494,12 +488,12 @@ export default function StimOptimizer() {
             <Card>
               <MDBox p={2}>
                 <MDBox display="flex" alignItems="baseline" gap={1} flexWrap="wrap">
-                  <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>Evidence base</MDTypography>
-                  <MDTypography variant="caption" sx={SMALL}>
+                  <MDTypography variant="h6" sx={{ fontSize: 15 }}>Evidence base</MDTypography>
+                  <MDTypography variant="caption" sx={{ fontSize: 10.5, color: "#6A6A6A" }}>
                     a stretch is one continuous exposure to one setting; reports inside the wash-in are excluded
                   </MDTypography>
                 </MDBox>
-                <MDBox mt={1.2} display="flex" columnGap={4} rowGap={1.5} flexWrap="wrap">
+                <MDBox mt={0.8} display="flex" gap={3} flexWrap="wrap">
                   {[
                     ["stretches of unchanged settings", dm.n_epochs],
                     ["pain reports used", dm.n_reports],
@@ -509,15 +503,15 @@ export default function StimOptimizer() {
                     ["right currents delivered", dm.amp_mA_Right_range ? `${Number(dm.amp_mA_Right_range[0]).toFixed(1)}–${Number(dm.amp_mA_Right_range[1]).toFixed(1)} mA` : "—"],
                   ].map(([k, v]) => (
                     <MDBox key={k}>
-                      <MDTypography variant="caption" component="div" sx={HEAD}>{k}</MDTypography>
-                      <MDTypography variant="h6" sx={{ fontSize: TYPE.numLarge, fontFamily: PAL.mono, whiteSpace: "nowrap" }}>{v === null || v === undefined ? "—" : v}</MDTypography>
+                      <MDTypography variant="caption" component="div" sx={{ fontSize: 10, color: "#8A8A8A", textTransform: "uppercase", letterSpacing: 0.4 }}>{k}</MDTypography>
+                      <MDTypography variant="h6" sx={{ fontSize: 15, fontFamily: PAL.mono }}>{v === null || v === undefined ? "—" : v}</MDTypography>
                     </MDBox>
                   ))}
                   {dm.states && (
                     <MDBox>
-                      <MDTypography variant="caption" component="div" sx={HEAD}>stretches by state</MDTypography>
+                      <MDTypography variant="caption" component="div" sx={{ fontSize: 10, color: "#8A8A8A", textTransform: "uppercase", letterSpacing: 0.4 }}>stretches by state</MDTypography>
                       <Tooltip title="A side at 0 mA is a distinct therapeutic state, not the low end of a dose axis, and is modelled separately.">
-                        <MDTypography variant="h6" sx={{ fontSize: TYPE.num, fontFamily: PAL.mono }}>
+                        <MDTypography variant="h6" sx={{ fontSize: 13, fontFamily: PAL.mono }}>
                           {Object.entries(dm.states).map(([k, v]) => `${k.replace(/_/g, " ")} ${v}`).join(" · ")}
                         </MDTypography>
                       </Tooltip>
@@ -533,12 +527,12 @@ export default function StimOptimizer() {
             <Card>
               <MDBox p={2}>
                 <MDBox display="flex" alignItems="baseline" gap={1} flexWrap="wrap">
-                  <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>Arms: each pain site on each side, fitted on its own</MDTypography>
-                  <MDTypography variant="caption" sx={SMALL}>
+                  <MDTypography variant="h6" sx={{ fontSize: 15 }}>Arms: each pain site on each side, fitted on its own</MDTypography>
+                  <MDTypography variant="caption" sx={{ fontSize: 10.5, color: "#6A6A6A" }}>
                     click a cell to show its model surfaces below
                   </MDTypography>
                 </MDBox>
-                <MDBox mt={1.5}>
+                <MDBox mt={1}>
                   <ArmGainStrip arms={arms} resolutions={resolutions} activeArm={activeArm} onSelect={setArm} />
                 </MDBox>
               </MDBox>
@@ -552,21 +546,26 @@ export default function StimOptimizer() {
                 <MDBox p={2}>
                   <MDBox display="flex" alignItems="center" justifyContent="space-between"
                          flexWrap="wrap" gap={2}>
-                    <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>
+                    <MDTypography variant="h6" sx={{ fontSize: 15 }}>
                       {`${siteName(current.site)} · ${current.hemisphere} side: model surfaces and what to test next`}
                     </MDTypography>
-                    {/* The arm selector, sized as an ordinary control beside the title rather
-                        than a small field in the corner. */}
-                    <FormControl size="medium" sx={{ minWidth: 300 }}>
-                      <InputLabel sx={{ fontSize: TYPE.num }}>Arm</InputLabel>
-                      <Select value={activeArm} label="Arm" onChange={(e) => setArm(e.target.value)}
-                        sx={{ fontSize: TYPE.num, minHeight: 44, "& .MuiSelect-select": { fontSize: TYPE.num, py: 1.4 } }}>
+                    <FormControl size="small" sx={{ minWidth: 240 }}>
+                      <InputLabel>Arm</InputLabel>
+                      <Select value={activeArm} label="Arm" onChange={(e) => setArm(e.target.value)}>
                         {Object.keys(arms).map((k) => (
-                          <MenuItem key={k} value={k} sx={{ fontSize: TYPE.num }}>{`${siteName(arms[k].site)} · ${arms[k].hemisphere}`}</MenuItem>
+                          <MenuItem key={k} value={k}>{`${siteName(arms[k].site)} · ${arms[k].hemisphere}`}</MenuItem>
                         ))}
                       </Select>
                     </FormControl>
                   </MDBox>
+                  <MDTypography variant="caption" color="text" component="div" sx={{ mt: 0.5 }}>
+                    Provenance: {current.provenance?.data_horizon || "undeclared"} &middot; wash-in{" "}
+                    {current.provenance?.washin_min ?? "\u2014"} min &middot; amplitude column{" "}
+                    {current.provenance?.amp_col || "\u2014"}
+                  </MDTypography>
+                  <MDTypography variant="caption" color="text" component="div">
+                    Kernel: {current.kernel || "\u2014"}
+                  </MDTypography>
                   <Divider sx={{ my: 1.5 }} />
 
                   {/* THE 5 SURFACES, FOLDED, MOUNTED ON FIRST REVEAL (redesign phase 4). They are
@@ -576,26 +575,15 @@ export default function StimOptimizer() {
                       panels are rendered only once the fold has been opened. */}
                   <Fold show="Show the 5 model surfaces (the first answers whether the candidate is separated from the setting in force; the other 4 say where to look next)"
                     hide="Hide the model surfaces" onChange={(o) => { if (o) setFiguresMounted(true); }}>
-                    {/* Where the fitted surfaces came from and the kernel that was fitted: the two
-                        lines a reader of the figures needs and nobody else does, so they sit inside
-                        the fold with the figures (PI's review, 2026-09-12). */}
-                    <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.small, mb: 0.4 }}>
-                      Provenance: {current.provenance?.data_horizon || "undeclared"} &middot; wash-in{" "}
-                      <span style={{ whiteSpace: "nowrap" }}>{current.provenance?.washin_min ?? "\u2014"} min</span>
-                      {" "}&middot; amplitude column {current.provenance?.amp_col || "\u2014"}
-                    </MDTypography>
-                    <MDTypography variant="caption" color="text" component="div"
-                      sx={{ fontSize: TYPE.small, mb: 1.2, fontFamily: PAL.mono, wordBreak: "normal" }}>
-                      Kernel: {current.kernel || "\u2014"}
-                    </MDTypography>
                     {figuresMounted && FIGURES.filter(([, , , p]) => p === "primary").map(([key, title, blurb, prom]) => (
                       <FigurePanel key={key} title={title} blurb={blurb} prominence={prom}
                                    figure={(current.figures || {})[key]}
                                    error={(current.figure_errors || {})[key]} />
                     ))}
                     {figuresMounted && (
-                      <MDTypography variant="caption" display="block" sx={{ ...HEAD, mb: 1 }}>
-                        where to look next
+                      <MDTypography variant="caption" display="block"
+                        sx={{ fontSize: 10, fontWeight: "bold", letterSpacing: 0.4, color: "#888" }}>
+                        WHERE TO LOOK NEXT
                       </MDTypography>
                     )}
                     {figuresMounted && FIGURES.filter(([, , , p]) => p !== "primary").map(([key, title, blurb, prom]) => (
@@ -605,7 +593,7 @@ export default function StimOptimizer() {
                     ))}
                     {current.figures_error && (
                       <MDAlert color="warning" dismissible={false}>
-                        <MDTypography variant="caption" color="white" sx={{ fontSize: TYPE.body }}>
+                        <MDTypography variant="caption" color="white">
                           Figures could not be built: {current.figures_error}
                         </MDTypography>
                       </MDAlert>
@@ -615,35 +603,32 @@ export default function StimOptimizer() {
                   {(current.queue || []).length > 0 && (
                     <MDBox mt={2}>
                       <MDBox display="flex" alignItems="baseline" gap={1} flexWrap="wrap">
-                        <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>What to test at the next visit</MDTypography>
-                        <MDTypography variant="caption" sx={SMALL}>
+                        <MDTypography variant="h6" sx={{ fontSize: 15 }}>What to test at the next visit</MDTypography>
+                        <MDTypography variant="caption" sx={{ fontSize: 10.5, color: "#6A6A6A" }}>
                           {`cells never tested, ranked by expected improvement · ${current.queue.slice(0, 10).filter((r) => r.schedulable_without_new_clinical_signoff === true).length} of ${Math.min(10, current.queue.length)} eligible without new sign-off · currents capped at ${fmtMaU((data.closed_loop || {}).amp_hard_limit_mA ?? 5)}`}
                         </MDTypography>
                       </MDBox>
-                      {/* The table takes the card's width: fixed-minimum columns that share the
-                          remaining space, rows at 13 px under 11 px headers. */}
-                      <MDBox mt={1} sx={{ display: "grid",
-                        gridTemplateColumns: "minmax(56px, 0.5fr) minmax(90px, 1fr) minmax(100px, 1fr) minmax(130px, 1.2fr) minmax(110px, 1fr) minmax(170px, 1.4fr) minmax(120px, 1fr) minmax(90px, 0.8fr)",
-                        columnGap: "14px", rowGap: "8px", alignItems: "center" }}>
+                      <MDBox mt={0.6} sx={{ display: "grid", gridTemplateColumns: "34px 70px 80px 110px 90px 120px 90px 60px",
+                        columnGap: "10px", rowGap: "3px", alignItems: "center", maxWidth: 760 }}>
                         {["rank", "rate", "current", "predicted (pts)", "±1 SD (pts)", "expected improvement", "prior records", "eligible"].map((h) => (
-                          <MDTypography key={h} variant="caption" sx={{ ...HEAD, alignSelf: "end" }}>{h}</MDTypography>
+                          <MDTypography key={h} variant="caption" sx={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4, color: "#8A8A8A", textTransform: "uppercase" }}>{h}</MDTypography>
                         ))}
                         {current.queue.slice(0, 10).map((r, i) => [
-                          <span key={`${i}-a`} style={QUEUE_CELL}>{r.rank ?? i + 1}</span>,
-                          <span key={`${i}-b`} style={QUEUE_CELL}>{fmtHzU(r.freq_hz)}</span>,
-                          <span key={`${i}-c`} style={QUEUE_CELL}>{fmtMaU(r.amp_mA)}</span>,
-                          <span key={`${i}-d`} style={QUEUE_CELL}>{typeof r.posterior_mean === "number" ? `${r.posterior_mean >= 0 ? "+" : "−"}${Math.abs(r.posterior_mean).toFixed(2)}` : "—"}</span>,
-                          <span key={`${i}-e`} style={QUEUE_CELL}>{typeof r.posterior_sd === "number" ? r.posterior_sd.toFixed(2) : "—"}</span>,
-                          <span key={`${i}-f`} style={QUEUE_CELL}>{typeof r.expected_improvement === "number" ? r.expected_improvement.toFixed(3) : "—"}</span>,
-                          <span key={`${i}-g`} style={QUEUE_CELL}>{r.prior_records_at_this_rate_and_amp ?? "—"}</span>,
-                          <span key={`${i}-h`} style={{ display: "inline-flex" }}>
-                            {r.schedulable_without_new_clinical_signoff == null ? <span style={{ color: "#9A9A9A", fontSize: TYPE.body }}>—</span>
-                              : (r.schedulable_without_new_clinical_signoff ? <TickGlyph label="eligible without new sign-off" size={17} /> : <NotTestedGlyph label="needs sign-off: never delivered before" size={17} />)}
+                          <span key={`${i}-a`} style={{ fontFamily: PAL.mono, fontSize: 11.5 }}>{r.rank ?? i + 1}</span>,
+                          <span key={`${i}-b`} style={{ fontFamily: PAL.mono, fontSize: 11.5 }}>{fmtHzU(r.freq_hz)}</span>,
+                          <span key={`${i}-c`} style={{ fontFamily: PAL.mono, fontSize: 11.5 }}>{fmtMaU(r.amp_mA)}</span>,
+                          <span key={`${i}-d`} style={{ fontFamily: PAL.mono, fontSize: 11.5 }}>{typeof r.posterior_mean === "number" ? `${r.posterior_mean >= 0 ? "+" : "−"}${Math.abs(r.posterior_mean).toFixed(2)}` : "—"}</span>,
+                          <span key={`${i}-e`} style={{ fontFamily: PAL.mono, fontSize: 11.5 }}>{typeof r.posterior_sd === "number" ? r.posterior_sd.toFixed(2) : "—"}</span>,
+                          <span key={`${i}-f`} style={{ fontFamily: PAL.mono, fontSize: 11.5 }}>{typeof r.expected_improvement === "number" ? r.expected_improvement.toFixed(3) : "—"}</span>,
+                          <span key={`${i}-g`} style={{ fontFamily: PAL.mono, fontSize: 11.5 }}>{r.prior_records_at_this_rate_and_amp ?? "—"}</span>,
+                          <span key={`${i}-h`}>
+                            {r.schedulable_without_new_clinical_signoff == null ? <span style={{ color: "#9A9A9A" }}>—</span>
+                              : (r.schedulable_without_new_clinical_signoff ? <TickGlyph label="eligible without new sign-off" /> : <NotTestedGlyph label="needs sign-off: never delivered before" />)}
                           </span>,
                         ])}
                       </MDBox>
-                      <Fold show="Why this list and the clinic schedule disagree by design" hide="Hide" mt={1}>
-                        <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body }}>
+                      <Fold show="Why this list and the clinic schedule disagree by design" hide="Hide">
+                        <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: 10.5 }}>
                           These are cells that have never been tested, ordered by expected
                           improvement. That is exactly what makes them informative, a setting with no
                           reports is where the model knows least, and it is also why most of them are

@@ -1,0 +1,107 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap">
+  <style>
+    body { margin: 0; font-family: Roboto, "Helvetica Neue", Arial, sans-serif; background: #f0f2f5; color: #344767; }
+    a { color: #0072B2; } a:hover { color: #005a8e; }
+    .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 6px rgba(0,0,0,.08); padding: 14px; }
+    .h6 { font-size: 15px; font-weight: 600; margin: 0; }
+    .prose { font-size: 10.5px; color: #6A6A6A; line-height: 1.35; }
+    .tag { display:inline-block; font-size: 10px; font-weight: 700; letter-spacing:.4px; padding: 2px 6px; border-radius: 4px; margin-left: 8px; vertical-align: middle; }
+    .noise { background: #D55E0022; color: #8A3A00; } .support { background: #E69F0033; color: #8A6100; } .action { background: #009E7322; color: #00694c; }
+    .fig { background: repeating-linear-gradient(45deg, #e6e6e6 0 6px, #f4f4f4 6px 12px); border: 1px dashed #bbb; border-radius: 6px; display:flex; align-items:center; justify-content:center; color:#666; font-size: 12px; }
+    .raw { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: #1A1A1A; }
+    .badge { display:inline-block; background:#E69F00; color:#1A1A1A; font-size:11px; font-weight:600; padding:3px 10px; border-radius:12px; }
+  </style>
+</helmet>
+<div style="width: 1180px; padding: 20px; display: flex; flex-direction: column; gap: 14px; box-sizing: border-box;">
+  <div style="font-size:12px; color:#6A6A6A;">The Stim Optimizer page as it is on 2026-09-12 for RCS08, to scale (card heights follow what each renders). Word counts are from the source strings and the live response; the tag on each card is the inventory's verdict.</div>
+
+  <div class="card" style="background:#1A73E8; color:#fff;">
+    <p class="h6" style="color:#fff;">The data do not yet support a stimulation parameter recommendation <span class="tag support">SUPPORTING · 472 words</span></p>
+    <div class="prose" style="color:#fff; opacity:.95;">For all 4 arms, the predicted gain over the setting currently in force is smaller than the uncertainty of that difference. The surfaces show where to look next, not what to program.</div>
+    <div class="prose" style="color:#fff; opacity:.9; margin-top:6px;">• No arm can distinguish its own best setting from the setting currently in force. The surfaces show where to look next, not what to program. For 4 arm(s) the predicted gain over the setting in force is smaller than the uncertainty of that difference, which more exposure at those cells could change. (52 words)</div>
+    <div class="prose" style="color:#fff; opacity:.9;">• left_leg__Right: the safe set is not contiguous in amplitude, so the safety model permits isolated cells rather than a single ceiling … (34) • back__Right: … (34)</div>
+    <div class="prose" style="color:#fff; opacity:.9;">• Proposed optimum lies ABOVE the contiguous safe ceiling for: left_leg__Right (optimum 4 mA vs reachable ceiling 1.9 mA), back__Right (optimum 4.9 mA vs reachable ceiling 1.9 mA). The cell is inside the safe set but in a disconnected island … (80)</div>
+    <div class="prose" style="color:#fff; opacity:.9;">• Optimum lies ABOVE the highest amplitude ever delivered for: back__Right (optimum 4.9 mA vs 4.5 mA ever delivered on the Right side) … (69) • Settings were historically confounded with time … (48)</div>
+  </div>
+
+  <div class="card">
+    <p class="h6">Closed-loop readiness (Adaptive Therapy) <span class="badge">12 of 50 cells deployable</span><span class="tag support">SUPPORTING · 399 words + 20-row table</span></p>
+    <div class="prose" style="margin-top:6px;">Adaptive Therapy can only be driven by a band inside 8–30 Hz, and only at a rate of at least 55 Hz. Its only lever is amplitude, so a candidate band must be shown to MOVE with amplitude — a separate question from whether it tracks pain.</div>
+    <div class="prose" style="font-weight:600; color:#344767; margin-top:4px;">using screened best: ONE_THREE_LEFT Left @165 Hz (12 of 50 cells deployable)</div>
+    <div style="margin-top:6px; font-size:10.5px;">
+      <div style="display:grid; grid-template-columns: 130px 40px 60px 90px 90px 90px 80px 60px 1fr; gap:6px; color:#8A8A8A; font-weight:600;"><span>Channel</span><span>Side</span><span>Rate (Hz)</span><span>Bands responding</span><span>Era-significant</span><span>Amp range (mA)</span><span>Amp limit (mA)</span><span>Deployable</span><span>Why not</span></div>
+      <div style="display:grid; grid-template-columns: 130px 40px 60px 90px 90px 90px 80px 60px 1fr; gap:6px;"><span class="raw">ONE_THREE_LEFT</span><span>Left</span><span>165</span><span>18 / 18</span><span>18 / 18</span><span>1.6–4.8</span><span>5.0</span><span style="color:#009E73;font-weight:600">yes</span><span>—</span></div>
+      <div style="display:grid; grid-template-columns: 130px 40px 60px 90px 90px 90px 80px 60px 1fr; gap:6px;"><span class="raw">ZERO_THREE_RIGHT</span><span>Left</span><span>165</span><span>18 / 18</span><span>15 / 18</span><span>1.6–4.8</span><span>5.0</span><span style="color:#009E73;font-weight:600">yes</span><span>—</span></div>
+      <div style="display:grid; grid-template-columns: 130px 40px 60px 90px 90px 90px 80px 60px 1fr; gap:6px;"><span class="raw">ZERO_THREE_LEFT</span><span>Left</span><span>55</span><span>15 / 18</span><span>7 / 18</span><span>1.5–4.5</span><span>5.0</span><span style="color:#6C757D;font-weight:600">no</span><span class="prose">only 7 of 18 bands have a significant NEGATIVE era-blocked slope (need 50%; 7 are significant in either direction). Once the amplitude-versus-time confound is removed the response does not fall with amplitude in a majority of bands, which is what Adaptive Therapy needs; falling arm means without a falling adjusted slope are a time artifact (55 words)</span></div>
+      <div class="prose" style="margin-top:4px;">… 17 more rows; 8 of the 20 carry a 21- to 55-word sentence in the last column (338 words in the column).</div>
+    </div>
+    <div class="prose" style="margin-top:8px;">A cell is deployable only if a majority of scanned bands respond, the slope survives era blocking, and the amplitude contrast sits at or below the flat 5.0 mA hard limit. That limit is PI-declared and was established by testing at 165 Hz; it does not vary with rate or pulse width. An earlier version of this panel applied an energy-matched ceiling that scaled as the square root of 55/f — that model has been withdrawn, because tolerable amplitude at a given frequency is not governed by total delivered energy. The amplitude condition still matters for the same reason it always did: a response measured only above the amplitude we are willing to program was never deployable evidence. (110 words)</div>
+  </div>
+
+  <div class="card">
+    <p class="h6">Evidence base <span class="tag support">SUPPORTING · 62 words</span></p>
+    <div class="prose">An epoch is one continuous exposure to one parameter setting; a new epoch opens whenever any parameter changes. Pain reports inside the wash-in window are excluded.</div>
+    <div style="display:flex; gap:40px; margin-top:6px; font-size:11px;"><span>Exposure epochs <b style="font-size:15px">92</b></span><span>Pain reports used <b style="font-size:15px">765</b></span><span>Left amplitude levels <b style="font-size:15px">22</b></span><span>First epoch <b style="font-size:15px">2025-07-18</b></span><span>Last epoch <b style="font-size:15px">2026-09-03</b></span><span>Wash-in (min) <b style="font-size:15px">1</b></span></div>
+    <div class="prose" style="margin-top:6px;">chips: bilateral active: 57 · left off right on: 20 · right off left on: 9 · both off: 6</div>
+  </div>
+
+  <div class="card">
+    <p class="h6">Arms <span class="tag action">ACTIONABLE (the gain column) · 205 words + 7-column table</span></p>
+    <div class="prose">One arm is one pain site crossed with one hemisphere, fitted independently. Sites are never blended: the left leg and the back are separate optimization problems. Click a row to show its surfaces.</div>
+    <div style="margin-top:6px; font-size:10.5px;">
+      <div style="display:grid; grid-template-columns: 120px 60px 110px 110px 110px 240px 110px; gap:6px; color:#8A8A8A; font-weight:600;"><span>Arm</span><span>Epochs</span><span>Candidate cell</span><span>Predicted ± SD</span><span>In force ± SD</span><span>Gain over in force (±1 SD of the difference)</span><span>Optimum</span></div>
+      <div style="display:grid; grid-template-columns: 120px 60px 110px 110px 110px 240px 110px; gap:6px;"><span>left_leg · Left</span><span>61</span><span>55 Hz / 4.7 mA</span><span>0.16 ± 1.05</span><span>0.48 ± 0.99</span><span class="raw" style="color:#8A6100">+0.32 (−1.13 to +1.77)</span><span>◯ not resolved</span></div>
+      <div style="display:grid; grid-template-columns: 120px 60px 110px 110px 110px 240px 110px; gap:6px;"><span>left_leg · Right</span><span>69</span><span>55 Hz / 4.0 mA</span><span>0.30 ± 1.06</span><span>1.24 ± 1.08</span><span class="raw" style="color:#8A6100">+0.94 (−0.57 to +2.45)</span><span>◯ not resolved</span></div>
+      <div style="display:grid; grid-template-columns: 120px 60px 110px 110px 110px 240px 110px; gap:6px;"><span>back · Left</span><span>61</span><span>55 Hz / 4.8 mA</span><span>−0.44 ± 0.72</span><span>−0.05 ± 0.65</span><span class="raw" style="color:#8A6100">+0.39 (−0.58 to +1.36)</span><span>◯ not resolved</span></div>
+      <div style="display:grid; grid-template-columns: 120px 60px 110px 110px 110px 240px 110px; gap:6px;"><span>back · Right</span><span>69</span><span>40 Hz / 4.9 mA</span><span>0.58 ± 1.08</span><span>0.70 ± 0.92</span><span class="raw" style="color:#8A6100">+0.12 (−1.30 to +1.54)</span><span>◯ not resolved</span></div>
+    </div>
+    <div class="prose" style="margin-top:6px;">The objective is a pain score, so lower is better and a POSITIVE gain means the candidate cell is predicted to be better than the setting in force. An arm is marked resolved only when that gain exceeds one standard deviation of the difference itself, propagated from both cells' posteriors as sqrt(sd_candidate² + sd_in-force²). The joint covariance between the two cells is not carried in this payload … (2 paragraphs, 150 words)</div>
+  </div>
+
+  <div class="card">
+    <p class="h6">left_leg · Left <span class="tag noise">NOISE on first read (5 figures, 2,340 px tall) · 149 words + 10-row table</span></p>
+    <div class="prose">Provenance: epochs 2025-07-18 to 2026-09-11 (92 epochs, 765 reports) · wash-in 1 min · amplitude column amp_mA_Left · Kernel: 0.782**2 * Matern(length_scale=[0.823, 3.07], nu=1.5) + WhiteKernel(noise_level=0.409)</div>
+    <div class="fig" style="height:180px; margin-top:8px;">Posterior objective surface with the safe set — 620 px tall on the page — "Nothing on the grid is predicted better than the incumbent — posterior mu spans +0.16 to +2.18 NRS points"</div>
+    <div class="prose" style="margin-top:6px; font-weight:700; letter-spacing:.4px; color:#888;">WHERE TO LOOK NEXT</div>
+    <div class="fig" style="height:110px; margin-top:4px;">Where the search explores versus exploits — 380 px</div>
+    <div class="fig" style="height:110px; margin-top:4px;">Search trajectory across simulated batches — 380 px</div>
+    <div class="fig" style="height:110px; margin-top:4px;">Composite objective against the preference model — 380 px</div>
+    <div class="fig" style="height:110px; margin-top:4px;">Coverage: what the grid has never tested — 380 px</div>
+    <p class="h6" style="margin-top:10px;">Where the model is most uncertain (not the clinic schedule)</p>
+    <div class="prose">These are cells that have never been tested, ordered by expected improvement. That is exactly what makes them informative — a setting with no reports is where the model knows least — and it is also why most of them are not on the in-clinic testing schedule … (2 paragraphs, 200 words) then a 10-row table with values to 3 decimals: 40.000 Hz, 5.000 mA, 0.221, 1.220, 0.628, 0, no.</div>
+  </div>
+
+  <div class="card">
+    <p class="h6">Two-stage plan: open loop, then the gate, then closed loop <span class="tag action">ACTIONABLE (the 4 checks) but buried · 1,465 words</span></p>
+    <div class="prose">The open-loop search freezes a stimulation rate, pulse width and preferred current on each side. A check then decides whether closed loop may start on that frozen setting. Only if it may are closed-loop policies drawn up. Every number here is read from the server's own answer; nothing is recomputed on the page.</div>
+    <div class="prose" style="margin-top:6px; color:#344767;">Setting in force today: 55 Hz at 100 µs. Pain score the search judged by: left leg vas. Data used: epochs 2025-07-18 to 2026-09-11 (92 epochs, 765 reports).</div>
+    <div class="prose" style="color:#344767; font-size:12px; margin-top:6px;">Left: the open-loop search freezes 55 Hz at 100 µs, preferred 4.5 mA (currents delivered so far 1.0–4.8 mA; fitted on 11 stretches of unchanged settings) — <b style="color:#8A6100">not yet resolved</b>: the chosen rate 55 Hz is the rate already in force. Retaining the setting in force is not the same as having resolved it: the gain over the incumbent is zero by construction, so the resolution criterion cannot be met and the rate is carried forward as an unresolved default</div>
+    <div class="prose">• the best slice IS the pulse width in force (100 us); there is nothing to resolve against … • NOTE ON THE DESIGN: no rate in this record was delivered at two pulse-width levels that both clear the 8-epoch stratum floor (5 rates carry two levels if thin cells are counted, and only 11 of 24 rate x pulse-width combinations were delivered at all) … (72) • ADAPTIVE ENVELOPE: without the constraint this stratum would have recommended 40 Hz at 4.50 mA (posterior mean -0.1317); 40 Hz excluded … (43)</div>
+    <div class="prose" style="color:#344767; font-size:12px; margin-top:6px;">Right: the open-loop search freezes 55 Hz at 100 µs, preferred 4.9 mA (currents delivered so far 1.0–4.5 mA; fitted on 15 stretches …) — <b style="color:#8A6100">not yet resolved</b>: … + 4 more bullets (250 words)</div>
+    <div class="prose" style="margin-top:6px;">Settings adaptive mode can use: constrained to the adaptive envelope (rate >= 55 Hz, the device's adaptive minimum; the adaptive rate and pulse-width ceilings are not published and are not enforced)</div>
+    <div class="prose" style="margin-top:4px;"><b>Settings the search excluded because adaptive mode cannot use them</b> • Left, 40 Hz at 4.50 mA on the 100 us stratum (posterior mean -0.1317), which the unconstrained search would have preferred; the best in-envelope cell on this stratum is 55 Hz at 4.50 mA (posterior mean +0.0664) — 40 Hz excluded: below the 55 Hz adaptive minimum • Right, … (82 words)</div>
+    <div style="margin-top:8px; font-size:12px; font-weight:600;">The check that decides whether closed loop may start</div>
+    <div style="font-size:18px; color:#D55E00; font-weight:500;">Stage 2 MUST NOT START: 1 of 4 conditions block</div>
+    <div class="prose" style="margin-top:4px;"><span style="color:#009E73;font-size:14px;font-weight:700">✓</span> The frozen stimulation rate is at or above the lowest rate the device allows once adaptive mode is configured [passes] — every frozen rate is at or above the adaptive minimum of 55 Hz (Left 55 Hz, Right 55 Hz)</div>
+    <div class="prose"><span style="color:#D55E00;font-size:14px;font-weight:700">✗</span> The open-loop search has settled its rate and pulse width: the predicted gain over the setting in force is larger than the uncertainty of that difference [fails] — the frozen rate and/or pulse width are NOT resolved against their uncertainty on Left (rate resolved: False, pulse width resolved: False); Right (rate resolved: False, pulse width resolved: False). Freezing them forecloses the open-loop search … (70 words)</div>
+    <div class="prose"><span style="color:#009E73;font-size:14px;font-weight:700">✓</span> A frequency band the device can use for adaptive control shows brain-signal power that responds to stimulation current [passes] — 12 of 18 tested bands inside the adaptive range respond to stimulation amplitude. Best separated: centre 23.5 Hz, width 5 Hz — RESPONDS — direction correct for suppression and captures separated by d=1.83 | captures 229.7 -> 137.1 device units at 1.5 -> 4.5 mA … (66 words)</div>
+    <div class="prose"><span style="color:#009E73;font-size:14px;font-weight:700">✓</span> The closed-loop current limits sit inside the range of currents already delivered and under the 5 mA ceiling [passes] — adaptive amplitude limits sit inside the delivered envelope and under the 5 mA ceiling on every hemisphere (Left 1-4.8 mA; Right 1-4.5 mA). NOTE: limits were not supplied for Left, Right and were DEFAULTED … (57 words)</div>
+    <div class="prose" style="margin-top:4px;">Brain-signal evidence the check read: one sensing contact and band was selected (ZERO_TWO_LEFT, Left, 55); evidence was restricted to recordings at the frozen rate 55 Hz; 12 contact-and-band combinations screened, 12 could not be built (12: None).</div>
+    <div style="margin-top:8px; font-size:12px; font-weight:600;">Closed loop</div>
+    <div class="prose">Closed loop did not start: the gate refused, so Stage 2 did not start; the refusals are listed under gate.refusals and repeated here • The open-loop search has settled its rate and pulse width … — the frozen rate and/or pulse width are NOT resolved … (70 words, repeated from above) the gate refused; no policy was enumerated</div>
+    <div class="prose" style="margin-top:6px;">An override with a stated reason can be sent with the request; there is no control for it here yet.</div>
+    <div class="prose" style="color:#0072B2; margin-top:6px;">▶ How this plan was arrived at (what each stage read, and the fit for each combination of pulse width and side)</div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

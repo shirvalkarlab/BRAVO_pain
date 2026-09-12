@@ -1,0 +1,265 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap">
+  <style>
+    body { margin: 0; font-family: Roboto, "Helvetica Neue", Arial, sans-serif; background: #f0f2f5; color: #344767; }
+    a { color: #0072B2; } a:hover { color: #005a8e; }
+    .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 6px rgba(0,0,0,.08); padding: 16px; }
+    .h6 { font-size: 15px; font-weight: 600; color: #344767; margin: 0; }
+    .cap { font-size: 10.5px; color: #6A6A6A; }
+    .head { font-size: 10px; font-weight: 700; letter-spacing: .4px; color: #8A8A8A; text-transform: uppercase; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13.5px; color: #1A1A1A; }
+    .mono-s { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; color: #1A1A1A; }
+    .fold { font-size: 11px; color: #0072B2; }
+    .pass { color: #009E73; } .warnt { color: #8A6100; } .neut { color: #6C757D; } .fail { color: #D55E00; }
+    .grid7 { display: grid; grid-template-columns: 56px 1.35fr 24px 1.35fr 1fr 1.2fr 1fr; column-gap: 10px; row-gap: 6px; align-items: center; }
+    .arm { border: 1px solid #6C757D44; border-radius: 6px; padding: 8px; }
+    .arm.active { border-color: #0072B255; background: #0072B215; }
+  </style>
+</helmet>
+<div style="width: 1180px; padding: 20px; display: flex; flex-direction: column; gap: 16px; box-sizing: border-box;">
+
+  <!-- Recompute bar, unchanged (shared component) -->
+  <div class="card" style="display:flex; justify-content:space-between; align-items:center; padding: 10px 16px;">
+    <div><span class="head">stim parameter optimizer</span> <span class="cap" style="margin-left:10px">computed 2026-09-12 18:39 UTC · stored copy exists under the current key</span></div>
+    <div style="border:1px solid #0072B2; color:#0072B2; border-radius:6px; padding:4px 12px; font-size:12px; font-weight:600;">Recompute</div>
+  </div>
+
+  <!-- 1. THE DECISION STRIP (phase 1) -->
+  <div class="card">
+    <p class="h6">No setting is recommended today: 0 of 4 arms resolve a gain larger than its own uncertainty</p>
+    <div class="grid7" style="margin-top: 12px;">
+      <span></span><span class="head">programmed now</span><span></span><span class="head">search prefers (usable in adaptive mode)</span><span class="head">change</span><span class="head">gain over the setting in force ± 1 SD</span><span class="head">verdict</span>
+
+      <span style="font-weight:600; font-size:13px;">Left</span>
+      <div><span class="mono">55 Hz <span style="color:#9A9A9A">·</span> 100 µs <span style="color:#9A9A9A">·</span> 3.0 mA</span><div class="cap">contacts L 2⁻ · since 2026-09-03</div></div>
+      <span style="color:#9A9A9A; font-size:16px; text-align:center;">→</span>
+      <div><span class="mono">55 Hz <span style="color:#9A9A9A">·</span> 100 µs <span style="color:#9A9A9A">·</span> 4.5 mA</span><div class="cap">delivered so far 1.0–4.8 mA · fitted on 11 stretches of unchanged settings</div></div>
+      <div class="mono-s">0 Hz<br>0 µs<br>+1.5 mA</div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <svg width="180" height="26"><line x1="6" x2="174" y1="13" y2="13" stroke="#E0E0E0"/><line x1="90" x2="90" y1="3" y2="23" stroke="#6A6A6A"/><rect x="54.5" y="8" width="71" height="10" fill="#6C757D12" stroke="#6C757D44"/><circle cx="90.1" cy="13" r="4.5" fill="#0072B2"/><text x="6" y="25" font-size="8" fill="#9A9A9A">−2</text><text x="174" y="25" font-size="8" fill="#9A9A9A" text-anchor="end">+2</text></svg>
+        <span class="mono-s">+0.00 pts ± 0.85</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:4px;"><svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#E69F00"/></svg><span class="warnt" style="font-size:11.5px; font-weight:600;">not resolved</span></div>
+
+      <span style="font-weight:600; font-size:13px;">Right</span>
+      <div><span class="mono">55 Hz <span style="color:#9A9A9A">·</span> 150 µs <span style="color:#9A9A9A">·</span> 2.5 mA</span><div class="cap">contacts R 1⁻2⁻ · since 2026-09-03</div></div>
+      <span style="color:#9A9A9A; font-size:16px; text-align:center;">→</span>
+      <div><span class="mono">55 Hz <span style="color:#9A9A9A">·</span> 100 µs <span style="color:#9A9A9A">·</span> 4.9 mA</span><div class="cap">delivered so far 1.0–4.5 mA · fitted on 15 stretches of unchanged settings</div></div>
+      <div class="mono-s">0 Hz<br><span style="display:inline-flex; align-items:center; gap:4px;">−50 µs <svg width="12" height="12" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#E69F00"/></svg></span><br><span style="display:inline-flex; align-items:center; gap:4px;">+2.4 mA <svg width="12" height="12" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#E69F00"/></svg></span></div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <svg width="180" height="26"><line x1="6" x2="174" y1="13" y2="13" stroke="#E0E0E0"/><line x1="90" x2="90" y1="3" y2="23" stroke="#6A6A6A"/><rect x="68.7" y="8" width="42.9" height="10" fill="#6C757D12" stroke="#6C757D44"/><circle cx="90.2" cy="13" r="4.5" fill="#0072B2"/><text x="6" y="25" font-size="8" fill="#9A9A9A">−2</text><text x="174" y="25" font-size="8" fill="#9A9A9A" text-anchor="end">+2</text></svg>
+        <span class="mono-s">+0.00 pts ± 0.51</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:4px;"><svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#E69F00"/></svg><span class="warnt" style="font-size:11.5px; font-weight:600;">not resolved</span></div>
+    </div>
+    <div class="cap" style="margin-top:6px;">Pain objective: lower is better; a positive gain favours the preferred setting. Resolved means the gain is larger than 1 standard deviation of the difference itself. Amber marks on the Right: 4.9 mA is above the 4.5 mA ever delivered on that side; the 100 µs is the LEFT column's pulse width, which the search reads for both sides today (a backend finding, see the proposal §6).</div>
+    <div class="fold" style="margin-top:6px;">▶ Why each side reads as it does (9 reasons from the search)</div>
+    <div class="fold" style="margin-top:4px;">▶ Why no setting is recommended (6 reasons from the model)</div>
+  </div>
+
+  <!-- 2. CLOSED LOOP (phase 2 + 3) -->
+  <div class="card">
+    <p class="h6">Closed loop: may it start on the frozen setting?</p>
+    <div style="display:flex; align-items:center; gap:8px; margin-top:10px;">
+      <svg width="18" height="18" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#D55E00"/><path d="M4.5 4.5 L11.5 11.5 M11.5 4.5 L4.5 11.5" stroke="#fff" stroke-width="1.9" stroke-linecap="round"/></svg>
+      <p class="h6 fail">Closed loop may not start: 1 of 4 checks block</p>
+    </div>
+    <div style="display:grid; grid-template-columns: 20px 2fr 3fr; column-gap:10px; row-gap:10px; align-items:start; margin-top:10px;">
+      <svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#009E73"/><path d="M4.5 8.3 L7 10.8 L11.5 5.5" stroke="#fff" stroke-width="1.9" fill="none" stroke-linecap="round"/></svg>
+      <div><div style="font-size:11.5px; font-weight:600;">Rate at or above the adaptive minimum</div><div class="fold">▶ Sentence</div></div>
+      <div class="mono-s">L 55 Hz · R 55 Hz <span class="cap">(minimum 55 Hz)</span></div>
+
+      <svg width="15" height="15" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#D55E00"/><path d="M4.5 4.5 L11.5 11.5 M11.5 4.5 L4.5 11.5" stroke="#fff" stroke-width="1.9" stroke-linecap="round"/></svg>
+      <div><div style="font-size:11.5px; font-weight:600;">Rate and pulse width resolved against their own uncertainty</div><div class="fold">▶ Sentence</div></div>
+      <div class="mono-s" style="display:flex; gap:14px; align-items:center;">
+        <span>L <svg width="11" height="11" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#E69F00"/></svg> rate <svg width="11" height="11" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#E69F00"/></svg> pulse width</span>
+        <span>R <svg width="11" height="11" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#E69F00"/></svg> rate <svg width="11" height="11" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#E69F00"/></svg> pulse width</span>
+      </div>
+
+      <svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#009E73"/><path d="M4.5 8.3 L7 10.8 L11.5 5.5" stroke="#fff" stroke-width="1.9" fill="none" stroke-linecap="round"/></svg>
+      <div><div style="font-size:11.5px; font-weight:600;">A sensed band inside 8–30 Hz responds to stimulation current</div><div class="fold">▶ Sentence</div></div>
+      <div>
+        <span class="mono-s">12 of 18 bands respond</span> <span class="cap">· 17 not measurable</span>
+        <svg width="340" height="96">
+          <text x="60" y="14" font-size="9" fill="#1A1A1A">best 23.5 Hz · d 1.83 · 229.7 → 137.1 units at 1.5 → 4.5 mA</text>
+          <line x1="26" x2="332" y1="78" y2="78" stroke="#D8D8D8"/>
+          <line x1="26" x2="332" y1="64" y2="64" stroke="#4A4A4A" stroke-dasharray="3 2"/><text x="332" y="62" font-size="8" fill="#4A4A4A" text-anchor="end">required d ≥ 0.50</text>
+          <text x="2" y="28" font-size="8" fill="#9A9A9A">2.0</text><text x="2" y="81" font-size="8" fill="#9A9A9A">0</text>
+          <!-- bars: x = 26 + (c-8)/22*306; height = d/2.0*56 -->
+          <rect x="58" y="65" width="10" height="13" fill="#D55E00" rx="1"/>   <!-- 10.5 d0.47 -->
+          <rect x="72" y="61.5" width="10" height="16.5" fill="#009E73" rx="1"/> <!-- 11.5 d0.59 -->
+          <rect x="86" y="68.8" width="10" height="9.2" fill="#D55E00" rx="1"/>  <!-- 12.5 d0.33 -->
+          <rect x="100" y="68.5" width="10" height="9.5" fill="#D55E00" rx="1"/> <!-- 13.5 d0.34 -->
+          <rect x="114" y="64.6" width="10" height="13.4" fill="#D55E00" rx="1"/><!-- 14.5 d0.48 -->
+          <rect x="128" y="66" width="10" height="12" fill="#D55E00" rx="1"/>    <!-- 15.5 d0.43 -->
+          <rect x="142" y="63.4" width="10" height="14.6" fill="#009E73" rx="1"/><!-- 16.5 d0.52 -->
+          <rect x="156" y="77" width="10" height="1" fill="#D55E00" rx="1"/>     <!-- 17.5 wrong way -->
+          <rect x="170" y="63.2" width="10" height="14.8" fill="#009E73" rx="1"/><!-- 18.5 d0.53 -->
+          <rect x="184" y="62.3" width="10" height="15.7" fill="#009E73" rx="1"/><!-- 19.5 d0.56 -->
+          <rect x="198" y="48.9" width="10" height="29.1" fill="#009E73" rx="1"/><!-- 20.5 d1.04 -->
+          <rect x="212" y="41.6" width="10" height="36.4" fill="#009E73" rx="1"/><!-- 21.5 d1.30 -->
+          <rect x="226" y="37.4" width="10" height="40.6" fill="#009E73" rx="1"/><!-- 22.5 d1.45 -->
+          <rect x="240" y="26.8" width="10" height="51.2" fill="#009E73" rx="1"/><!-- 23.5 d1.83 -->
+          <rect x="254" y="27.6" width="10" height="50.4" fill="#009E73" rx="1"/><!-- 24.5 d1.80 -->
+          <rect x="268" y="44.7" width="10" height="33.3" fill="#009E73" rx="1"/><!-- 25.5 d1.19 -->
+          <rect x="282" y="48.3" width="10" height="29.7" fill="#009E73" rx="1"/><!-- 26.5 d1.06 -->
+          <rect x="296" y="45" width="10" height="33" fill="#009E73" rx="1"/>    <!-- 27.5 d1.18 -->
+          <text x="26" y="90" font-size="8" fill="#9A9A9A" text-anchor="middle">8</text><text x="82" y="90" font-size="8" fill="#9A9A9A" text-anchor="middle">12</text><text x="137" y="90" font-size="8" fill="#9A9A9A" text-anchor="middle">16</text><text x="193" y="90" font-size="8" fill="#9A9A9A" text-anchor="middle">20</text><text x="249" y="90" font-size="8" fill="#9A9A9A" text-anchor="middle">24</text><text x="304" y="90" font-size="8" fill="#9A9A9A" text-anchor="middle">28</text><text x="332" y="90" font-size="8" fill="#6A6A6A" text-anchor="end">Hz</text>
+        </svg>
+        <div class="cap">read on L 0⁻2⁺ at 55 Hz · 12 contact-and-rate combinations screened, 12 could not be built · responding centres 11.5, 16.5, 18.5, 19.5, 20.5, 21.5, 22.5, 23.5, 24.5, 25.5, 26.5, 27.5 Hz</div>
+      </div>
+
+      <svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#009E73"/><path d="M4.5 8.3 L7 10.8 L11.5 5.5" stroke="#fff" stroke-width="1.9" fill="none" stroke-linecap="round"/></svg>
+      <div><div style="font-size:11.5px; font-weight:600;">Closed-loop current limits inside the delivered range and under the ceiling</div><div class="fold">▶ Sentence</div></div>
+      <div class="mono-s">L 1.0 mA–4.8 mA · R 1.0 mA–4.5 mA <span class="cap">(ceiling 5.0 mA) · limits defaulted to the delivered range</span></div>
+    </div>
+
+    <div style="margin-top:18px; font-size:12px; font-weight:600;">What adaptive mode ruled out</div>
+    <div class="cap" style="font-size:11px; color:#2A2A2A;">2 settings ruled out because adaptive mode cannot run below 55 Hz · grid rates 10, 20, 30, 40 Hz excluded</div>
+    <div style="display:flex; gap:16px; margin-top:4px;">
+      <!-- Left panel: W420 H170 L44 R12 T22 B30; x(f)=44+((log2 f - 3.17)/(7.52-3.17))*364; yMax=1.15*1.15=1.32; y(v)=22+((1.32-v)/2.64)*118 -->
+      <svg width="420" height="170">
+        <text x="44" y="12" font-size="11" font-weight="600" fill="#2A2A2A">Left</text>
+        <rect x="44" y="22" width="128" height="118" fill="#D55E0012"/>
+        <line x1="172" x2="172" y1="22" y2="140" stroke="#D55E00" stroke-width="1.4" stroke-dasharray="4 3"/><text x="175" y="31" font-size="9" fill="#D55E00">adaptive minimum 55 Hz</text>
+        <line x1="44" x2="408" y1="81" y2="81" stroke="#6A6A6A"/><text x="408" y="78" font-size="8.5" fill="#6A6A6A" text-anchor="end">0 = setting in force</text>
+        <text x="4" y="30" font-size="8" fill="#9A9A9A">+1.3</text><text x="4" y="140" font-size="8" fill="#9A9A9A">−1.3</text><text x="4" y="85" font-size="8" fill="#9A9A9A">pts</text>
+        <line x1="44" x2="408" y1="140" y2="140" stroke="#D8D8D8"/>
+        <text x="57" y="151" font-size="8" fill="#9A9A9A" text-anchor="middle">10</text><text x="140" y="151" font-size="8" fill="#9A9A9A" text-anchor="middle">20</text><text x="189" y="151" font-size="8" fill="#9A9A9A" text-anchor="middle">30</text><text x="224" y="151" font-size="8" fill="#9A9A9A" text-anchor="middle">40</text><text x="262" y="151" font-size="8" fill="#9A9A9A" text-anchor="middle">55</text><text x="291" y="151" font-size="8" fill="#9A9A9A" text-anchor="middle">70</text><text x="314" y="151" font-size="8" fill="#9A9A9A" text-anchor="middle">85</text><text x="345" y="151" font-size="8" fill="#9A9A9A" text-anchor="middle">110</text><text x="394" y="151" font-size="8" fill="#9A9A9A" text-anchor="middle">165</text>
+        <text x="408" y="168" font-size="8.5" fill="#6A6A6A" text-anchor="end">stimulation rate (Hz)</text>
+        <circle cx="262" cy="30" r="3" fill="#B8B8B8"/><text x="267" y="33" font-size="8" fill="#8A8A8A">60 µs</text>
+        <circle cx="394" cy="70" r="3" fill="#B8B8B8"/><text x="399" y="73" font-size="8" fill="#8A8A8A">140 µs</text>
+        <line x1="224" y1="87" x2="262" y2="78" stroke="#4A4A4A" stroke-width="1.2"/>
+        <circle cx="224" cy="87" r="5.5" fill="none" stroke="#D55E00" stroke-width="2"/><text x="224" y="103" font-size="9" fill="#D55E00" text-anchor="middle">ruled out: 40 Hz · 4.5 mA · −0.13 pts</text>
+        <circle cx="262" cy="78" r="5.5" fill="#0072B2"/><text x="271" y="66" font-size="9" fill="#0072B2">chosen: 55 Hz · 4.5 mA · +0.07 pts</text>
+      </svg>
+      <svg width="420" height="170">
+        <text x="44" y="12" font-size="11" font-weight="600" fill="#2A2A2A">Right</text>
+        <rect x="44" y="22" width="128" height="118" fill="#D55E0012"/>
+        <line x1="172" x2="172" y1="22" y2="140" stroke="#D55E00" stroke-width="1.4" stroke-dasharray="4 3"/><text x="175" y="31" font-size="9" fill="#D55E00">adaptive minimum 55 Hz</text>
+        <line x1="44" x2="408" y1="81" y2="81" stroke="#6A6A6A"/><text x="408" y="78" font-size="8.5" fill="#6A6A6A" text-anchor="end">0 = setting in force</text>
+        <text x="4" y="30" font-size="8" fill="#9A9A9A">+1.2</text><text x="4" y="140" font-size="8" fill="#9A9A9A">−1.2</text><text x="4" y="85" font-size="8" fill="#9A9A9A">pts</text>
+        <line x1="44" x2="408" y1="140" y2="140" stroke="#D8D8D8"/>
+        <text x="57" y="151" font-size="8" fill="#9A9A9A" text-anchor="middle">10</text><text x="140" y="151" font-size="8" fill="#9A9A9A" text-anchor="middle">20</text><text x="189" y="151" font-size="8" fill="#9A9A9A" text-anchor="middle">30</text><text x="224" y="151" font-size="8" fill="#9A9A9A" text-anchor="middle">40</text><text x="262" y="151" font-size="8" fill="#9A9A9A" text-anchor="middle">55</text><text x="291" y="151" font-size="8" fill="#9A9A9A" text-anchor="middle">70</text><text x="314" y="151" font-size="8" fill="#9A9A9A" text-anchor="middle">85</text><text x="345" y="151" font-size="8" fill="#9A9A9A" text-anchor="middle">110</text><text x="394" y="151" font-size="8" fill="#9A9A9A" text-anchor="middle">165</text>
+        <text x="408" y="168" font-size="8.5" fill="#6A6A6A" text-anchor="end">stimulation rate (Hz)</text>
+        <circle cx="262" cy="30" r="3" fill="#B8B8B8"/><text x="267" y="33" font-size="8" fill="#8A8A8A">60 µs</text>
+        <circle cx="394" cy="69" r="3" fill="#B8B8B8"/><text x="399" y="72" font-size="8" fill="#8A8A8A">140 µs</text>
+        <line x1="224" y1="74" x2="262" y2="72" stroke="#4A4A4A" stroke-width="1.2"/>
+        <circle cx="224" cy="74" r="5.5" fill="none" stroke="#D55E00" stroke-width="2"/><text x="224" y="92" font-size="9" fill="#D55E00" text-anchor="middle">ruled out: 40 Hz · 4.9 mA · +0.15 pts</text>
+        <circle cx="262" cy="72" r="5.5" fill="#0072B2"/><text x="271" y="60" font-size="9" fill="#0072B2">chosen: 55 Hz · 4.9 mA · +0.18 pts</text>
+      </svg>
+    </div>
+    <div class="cap">Grey dots: each pulse-width group's own best cell. Predicted pain is in points against the setting in force; lower is better.</div>
+
+    <div style="margin-top:14px; font-size:12px; font-weight:600;">If closed loop could start</div>
+    <div class="cap">Nothing was drawn up: 1 check above blocks (Rate and pulse width resolved against their own uncertainty).</div>
+    <div class="cap" style="margin-top:8px;">An override with a stated reason can be sent with the request; there is no control for it here yet.</div>
+    <div class="fold" style="margin-top:6px;">▶ How this was arrived at (what each step read, and the fit for each pulse width and side)</div>
+  </div>
+
+  <!-- 3. SENSING EVIDENCE (phase 3) -->
+  <div class="card">
+    <div style="display:flex; align-items:center; gap:8px;">
+      <svg width="18" height="18" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#009E73"/><path d="M4.5 8.3 L7 10.8 L11.5 5.5" stroke="#fff" stroke-width="1.9" fill="none" stroke-linecap="round"/></svg>
+      <p class="h6">12 of 50 contact-and-rate combinations usable for closed loop</p>
+      <span class="mono-s" style="font-size:12px;">· best L 1⁻3⁺ at 165 Hz (Left stimulation)</span>
+    </div>
+    <div class="cap">Adaptive mode can use a band inside 8–30 Hz at a rate of at least 55 Hz; its only lever is current, so a band must move with current, which is a different question from whether it tracks pain. Current limit 5.0 mA.</div>
+    <div style="display:grid; grid-template-columns: 84px 56px 60px 150px 150px 92px 54px 22px 1fr; column-gap:10px; row-gap:4px; align-items:center; margin-top:8px;">
+      <span class="head">sensing contact</span><span class="head">stim side</span><span class="head">rate</span><span class="head">bands responding (of 18)</span><span class="head">still falling after the time confound is removed</span><span class="head">currents tested</span><span class="head">separation</span><span></span><span class="head">why not</span>
+      <!-- rows in contact order; bars: width 72, 50% line -->
+      <span class="mono-s" style="font-weight:600">L 0⁻2⁺</span><span class="mono-s">L</span><span class="mono-s">165 Hz</span><span><svg width="72" height="10"><rect width="72" height="8" y="1" fill="#EEE"/><rect width="56" height="8" y="1" fill="#009E73"/><line x1="36" x2="36" y1="0" y2="10" stroke="#4A4A4A"/></svg> <span class="mono-s" style="font-size:11px">14 of 18</span></span><span><svg width="72" height="10"><rect width="72" height="8" y="1" fill="#EEE"/><rect width="52" height="8" y="1" fill="#009E73"/><line x1="36" x2="36" y1="0" y2="10" stroke="#4A4A4A"/></svg> <span class="mono-s" style="font-size:11px">13 of 18</span></span><span class="mono-s">1.6–4.2 mA</span><span class="mono-s">d 1.43</span><svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#009E73"/><path d="M4.5 8.3 L7 10.8 L11.5 5.5" stroke="#fff" stroke-width="1.9" fill="none" stroke-linecap="round"/></svg><span class="cap">—</span>
+      <span class="mono-s" style="font-weight:600">L 0⁻2⁺</span><span class="mono-s">L</span><span class="mono-s">55 Hz</span><span><svg width="72" height="10"><rect width="72" height="8" y="1" fill="#EEE"/><rect width="48" height="8" y="1" fill="#009E73"/><line x1="36" x2="36" y1="0" y2="10" stroke="#4A4A4A"/></svg> <span class="mono-s" style="font-size:11px">12 of 18</span></span><span><svg width="72" height="10"><rect width="72" height="8" y="1" fill="#EEE"/><rect width="72" height="8" y="1" fill="#009E73"/><line x1="36" x2="36" y1="0" y2="10" stroke="#4A4A4A"/></svg> <span class="mono-s" style="font-size:11px">18 of 18</span></span><span class="mono-s">1.5–4.5 mA</span><span class="mono-s">d 0.58</span><svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#009E73"/><path d="M4.5 8.3 L7 10.8 L11.5 5.5" stroke="#fff" stroke-width="1.9" fill="none" stroke-linecap="round"/></svg><span class="cap">—</span>
+      <span class="mono-s" style="font-weight:600">L 0⁻3⁺</span><span class="mono-s">L</span><span class="mono-s">55 Hz</span><span><svg width="72" height="10"><rect width="72" height="8" y="1" fill="#EEE"/><rect width="60" height="8" y="1" fill="#009E73"/><line x1="36" x2="36" y1="0" y2="10" stroke="#4A4A4A"/></svg> <span class="mono-s" style="font-size:11px">15 of 18</span></span><span><svg width="72" height="10"><rect width="72" height="8" y="1" fill="#EEE"/><rect width="28" height="8" y="1" fill="#6C757D"/><line x1="36" x2="36" y1="0" y2="10" stroke="#4A4A4A"/></svg> <span class="mono-s" style="font-size:11px">7 of 18</span></span><span class="mono-s">1.5–4.5 mA</span><span class="mono-s">d 0.86</span><svg width="15" height="15" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#D55E00"/><path d="M4.5 4.5 L11.5 11.5 M11.5 4.5 L4.5 11.5" stroke="#fff" stroke-width="1.9" stroke-linecap="round"/></svg><span class="fold">▶ Reason</span>
+      <span class="mono-s" style="font-weight:600">L 0⁻3⁺</span><span class="mono-s">L</span><span class="mono-s">165 Hz</span><span><svg width="72" height="10"><rect width="72" height="8" y="1" fill="#EEE"/><rect width="56" height="8" y="1" fill="#009E73"/><line x1="36" x2="36" y1="0" y2="10" stroke="#4A4A4A"/></svg> <span class="mono-s" style="font-size:11px">14 of 18</span></span><span><svg width="72" height="10"><rect width="72" height="8" y="1" fill="#EEE"/><line x1="36" x2="36" y1="0" y2="10" stroke="#4A4A4A"/></svg> <span class="mono-s" style="font-size:11px">0 of 18</span></span><span class="mono-s">1.6–4.2 mA</span><span class="mono-s">d 1.57</span><svg width="15" height="15" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#D55E00"/><path d="M4.5 4.5 L11.5 11.5 M11.5 4.5 L4.5 11.5" stroke="#fff" stroke-width="1.9" stroke-linecap="round"/></svg><span class="fold">▶ Reason</span>
+      <span class="mono-s" style="font-weight:600">L 1⁻3⁺</span><span class="mono-s">L</span><span class="mono-s">165 Hz</span><span><svg width="72" height="10"><rect width="72" height="8" y="1" fill="#EEE"/><rect width="72" height="8" y="1" fill="#009E73"/><line x1="36" x2="36" y1="0" y2="10" stroke="#4A4A4A"/></svg> <span class="mono-s" style="font-size:11px">18 of 18</span></span><span><svg width="72" height="10"><rect width="72" height="8" y="1" fill="#EEE"/><rect width="72" height="8" y="1" fill="#009E73"/><line x1="36" x2="36" y1="0" y2="10" stroke="#4A4A4A"/></svg> <span class="mono-s" style="font-size:11px">18 of 18</span></span><span class="mono-s">1.6–4.8 mA</span><span class="mono-s">d 1.58</span><svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#009E73"/><path d="M4.5 8.3 L7 10.8 L11.5 5.5" stroke="#fff" stroke-width="1.9" fill="none" stroke-linecap="round"/></svg><span class="cap">—</span>
+      <span class="mono-s" style="font-weight:600">L 1⁻3⁺</span><span class="mono-s">L</span><span class="mono-s">55 Hz</span><span><svg width="72" height="10"><rect width="72" height="8" y="1" fill="#EEE"/><rect width="28" height="8" y="1" fill="#6C757D"/><line x1="36" x2="36" y1="0" y2="10" stroke="#4A4A4A"/></svg> <span class="mono-s" style="font-size:11px">7 of 18</span></span><span><svg width="72" height="10"><rect width="72" height="8" y="1" fill="#EEE"/><rect width="56" height="8" y="1" fill="#009E73"/><line x1="36" x2="36" y1="0" y2="10" stroke="#4A4A4A"/></svg> <span class="mono-s" style="font-size:11px">14 of 18</span></span><span class="mono-s">1.5–4.5 mA</span><span class="mono-s">d 0.42</span><svg width="15" height="15" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#D55E00"/><path d="M4.5 4.5 L11.5 11.5 M11.5 4.5 L4.5 11.5" stroke="#fff" stroke-width="1.9" stroke-linecap="round"/></svg><span class="fold">▶ Reason</span>
+      <span class="mono-s" style="font-weight:600">R 0⁻3⁺</span><span class="mono-s">L</span><span class="mono-s">165 Hz</span><span><svg width="72" height="10"><rect width="72" height="8" y="1" fill="#EEE"/><rect width="72" height="8" y="1" fill="#009E73"/><line x1="36" x2="36" y1="0" y2="10" stroke="#4A4A4A"/></svg> <span class="mono-s" style="font-size:11px">18 of 18</span></span><span><svg width="72" height="10"><rect width="72" height="8" y="1" fill="#EEE"/><rect width="60" height="8" y="1" fill="#009E73"/><line x1="36" x2="36" y1="0" y2="10" stroke="#4A4A4A"/></svg> <span class="mono-s" style="font-size:11px">15 of 18</span></span><span class="mono-s">1.6–4.8 mA</span><span class="mono-s">d 1.39</span><svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#009E73"/><path d="M4.5 8.3 L7 10.8 L11.5 5.5" stroke="#fff" stroke-width="1.9" fill="none" stroke-linecap="round"/></svg><span class="cap">—</span>
+      <span class="mono-s" style="font-weight:600">R 1⁻3⁺</span><span class="mono-s">R</span><span class="mono-s">55 Hz</span><span><svg width="72" height="10"><rect width="72" height="8" y="1" fill="#EEE"/><rect width="48" height="8" y="1" fill="#009E73"/><line x1="36" x2="36" y1="0" y2="10" stroke="#4A4A4A"/></svg> <span class="mono-s" style="font-size:11px">12 of 18</span></span><span><svg width="72" height="10"><rect width="72" height="8" y="1" fill="#EEE"/><rect width="4" height="8" y="1" fill="#6C757D"/><line x1="36" x2="36" y1="0" y2="10" stroke="#4A4A4A"/></svg> <span class="mono-s" style="font-size:11px">1 of 18</span></span><span class="mono-s">1.1–4.5 mA</span><span class="mono-s">d 0.99</span><svg width="15" height="15" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="#D55E00"/><path d="M4.5 4.5 L11.5 11.5 M11.5 4.5 L4.5 11.5" stroke="#fff" stroke-width="1.9" stroke-linecap="round"/></svg><span class="fold">▶ Reason</span>
+      <span class="cap" style="grid-column: 1 / -1;">… 12 more rows (20 in all), in the same order: left contacts before right, then by contact number, then stimulation side and rate.</span>
+    </div>
+    <div class="fold" style="margin-top:8px;">▶ What 'usable' requires, and why the current limit is flat</div>
+  </div>
+
+  <!-- 4. EVIDENCE BASE (phase 4) -->
+  <div class="card">
+    <div style="display:flex; align-items:baseline; gap:8px;"><p class="h6">Evidence base</p><span class="cap">a stretch is one continuous exposure to one setting; reports inside the wash-in are excluded</span></div>
+    <div style="display:flex; gap:28px; flex-wrap:wrap; margin-top:8px;">
+      <div><div class="head">stretches of unchanged settings</div><div class="mono" style="font-size:15px;">92</div></div>
+      <div><div class="head">pain reports used</div><div class="mono" style="font-size:15px;">765</div></div>
+      <div><div class="head">first to last</div><div class="mono" style="font-size:15px;">2025-07-18 → 2026-09-03</div></div>
+      <div><div class="head">wash-in</div><div class="mono" style="font-size:15px;">1 min</div></div>
+      <div><div class="head">left currents delivered</div><div class="mono" style="font-size:15px;">0.0–4.8 mA</div></div>
+      <div><div class="head">right currents delivered</div><div class="mono" style="font-size:15px;">0.0–4.5 mA</div></div>
+      <div><div class="head">stretches by state</div><div class="mono" style="font-size:13px;">bilateral active 57 · left off right on 20 · right off left on 9 · both off 6</div></div>
+    </div>
+  </div>
+
+  <!-- 5. ARMS (phase 4) -->
+  <div class="card">
+    <div style="display:flex; align-items:baseline; gap:8px;"><p class="h6">Arms: each pain site on each side, fitted on its own</p><span class="cap">click a cell to show its model surfaces below</span></div>
+    <div style="display:grid; grid-template-columns: 90px 1fr 1fr; column-gap:14px; row-gap:10px; align-items:start; margin-top:10px;">
+      <span></span><span class="head">Left side current</span><span class="head">Right side current</span>
+      <span style="font-weight:600; font-size:12.5px; padding-top:4px;">left leg</span>
+      <div class="arm active">
+        <div style="display:flex; gap:8px; align-items:baseline;"><span class="cap">in force</span><span class="mono-s" style="font-size:12px">55 Hz · 3.0 mA</span><span style="color:#9A9A9A">→</span><span class="cap">candidate</span><span class="mono-s" style="font-size:12px; font-weight:600">55 Hz · 4.7 mA</span></div>
+        <div style="display:flex; align-items:center; gap:8px; margin-top:4px;"><svg width="180" height="26"><line x1="6" x2="174" y1="13" y2="13" stroke="#E0E0E0"/><line x1="90" x2="90" y1="3" y2="23" stroke="#6A6A6A"/><rect x="59.9" y="8" width="80.9" height="10" fill="#6C757D12" stroke="#6C757D44"/><circle cx="99" cy="13" r="4.5" fill="#0072B2"/><text x="6" y="25" font-size="8" fill="#9A9A9A">−3</text><text x="174" y="25" font-size="8" fill="#9A9A9A" text-anchor="end">+3</text></svg><span class="mono-s">+0.32 pts ± 1.45</span></div>
+        <div style="display:flex; justify-content:space-between; margin-top:3px;"><span style="display:inline-flex; align-items:center; gap:4px;"><svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#E69F00"/></svg><span class="warnt" style="font-size:11.5px; font-weight:600">not resolved</span></span><span class="cap">61 stretches · safe ceiling 5.0 mA</span></div>
+      </div>
+      <div class="arm">
+        <div style="display:flex; gap:8px; align-items:baseline;"><span class="cap">in force</span><span class="mono-s" style="font-size:12px">55 Hz · 2.5 mA</span><span style="color:#9A9A9A">→</span><span class="cap">candidate</span><span class="mono-s" style="font-size:12px; font-weight:600">55 Hz · 4.0 mA</span><svg width="12" height="12" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#E69F00"/></svg></div>
+        <div style="display:flex; align-items:center; gap:8px; margin-top:4px;"><svg width="180" height="26"><line x1="6" x2="174" y1="13" y2="13" stroke="#E0E0E0"/><line x1="90" x2="90" y1="3" y2="23" stroke="#6A6A6A"/><rect x="74" y="8" width="84.5" height="10" fill="#6C757D12" stroke="#6C757D44"/><circle cx="116.2" cy="13" r="4.5" fill="#0072B2"/><text x="6" y="25" font-size="8" fill="#9A9A9A">−3</text><text x="174" y="25" font-size="8" fill="#9A9A9A" text-anchor="end">+3</text></svg><span class="mono-s">+0.94 pts ± 1.51</span></div>
+        <div style="display:flex; justify-content:space-between; margin-top:3px;"><span style="display:inline-flex; align-items:center; gap:4px;"><svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#E69F00"/></svg><span class="warnt" style="font-size:11.5px; font-weight:600">not resolved</span></span><span class="cap">69 stretches · safe ceiling 1.9 mA · safe set not contiguous</span></div>
+      </div>
+      <span style="font-weight:600; font-size:12.5px; padding-top:4px;">back</span>
+      <div class="arm">
+        <div style="display:flex; gap:8px; align-items:baseline;"><span class="cap">in force</span><span class="mono-s" style="font-size:12px">55 Hz · 3.0 mA</span><span style="color:#9A9A9A">→</span><span class="cap">candidate</span><span class="mono-s" style="font-size:12px; font-weight:600">55 Hz · 4.8 mA</span></div>
+        <div style="display:flex; align-items:center; gap:8px; margin-top:4px;"><svg width="180" height="26"><line x1="6" x2="174" y1="13" y2="13" stroke="#E0E0E0"/><line x1="90" x2="90" y1="3" y2="23" stroke="#6A6A6A"/><rect x="73.7" y="8" width="54.2" height="10" fill="#6C757D12" stroke="#6C757D44"/><circle cx="100.9" cy="13" r="4.5" fill="#0072B2"/><text x="6" y="25" font-size="8" fill="#9A9A9A">−3</text><text x="174" y="25" font-size="8" fill="#9A9A9A" text-anchor="end">+3</text></svg><span class="mono-s">+0.39 pts ± 0.97</span></div>
+        <div style="display:flex; justify-content:space-between; margin-top:3px;"><span style="display:inline-flex; align-items:center; gap:4px;"><svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#E69F00"/></svg><span class="warnt" style="font-size:11.5px; font-weight:600">not resolved</span></span><span class="cap">61 stretches · safe ceiling 5.0 mA</span></div>
+      </div>
+      <div class="arm">
+        <div style="display:flex; gap:8px; align-items:baseline;"><span class="cap">in force</span><span class="mono-s" style="font-size:12px">55 Hz · 2.5 mA</span><span style="color:#9A9A9A">→</span><span class="cap">candidate</span><span class="mono-s" style="font-size:12px; font-weight:600">40 Hz · 4.9 mA</span><svg width="12" height="12" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#E69F00"/></svg></div>
+        <div style="display:flex; align-items:center; gap:8px; margin-top:4px;"><svg width="180" height="26"><line x1="6" x2="174" y1="13" y2="13" stroke="#E0E0E0"/><line x1="90" x2="90" y1="3" y2="23" stroke="#6A6A6A"/><rect x="56.7" y="8" width="79.4" height="10" fill="#6C757D12" stroke="#6C757D44"/><circle cx="93.3" cy="13" r="4.5" fill="#0072B2"/><text x="6" y="25" font-size="8" fill="#9A9A9A">−3</text><text x="174" y="25" font-size="8" fill="#9A9A9A" text-anchor="end">+3</text></svg><span class="mono-s">+0.12 pts ± 1.42</span></div>
+        <div style="display:flex; justify-content:space-between; margin-top:3px;"><span style="display:inline-flex; align-items:center; gap:4px;"><svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#E69F00"/></svg><span class="warnt" style="font-size:11.5px; font-weight:600">not resolved</span></span><span class="cap">69 stretches · safe ceiling 1.9 mA · safe set not contiguous</span></div>
+      </div>
+    </div>
+    <div class="fold" style="margin-top:8px;">▶ How the gain and its uncertainty are computed, and what the 3 verdicts mean</div>
+  </div>
+
+  <!-- 6. SELECTED ARM: surfaces folded, queue compact (phase 4) -->
+  <div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <p class="h6">left leg · Left side: model surfaces and what to test next</p>
+      <div style="border:1px solid #d2d6da; border-radius:6px; padding:4px 10px; font-size:12px; min-width:220px;">Arm: left leg · Left ▾</div>
+    </div>
+    <div class="cap">Provenance: epochs 2025-07-18 to 2026-09-11 (92 epochs, 765 reports) · wash-in 1 min · amplitude column amp_mA_Left · Kernel: 0.782² · Matern(length_scale=[0.823, 3.07], ν=1.5) + WhiteKernel(noise_level=0.409)</div>
+    <div class="fold" style="margin-top:8px;">▶ Show the 5 model surfaces (the first answers whether the candidate is separated from the setting in force; the other 4 say where to look next)</div>
+    <div style="margin-top:16px; display:flex; align-items:baseline; gap:8px;"><p class="h6">What to test at the next visit</p><span class="cap">cells never tested, ranked by expected improvement · 0 of 10 eligible without new sign-off · currents capped at 5.0 mA</span></div>
+    <div style="display:grid; grid-template-columns: 34px 70px 80px 110px 90px 120px 90px 60px; column-gap:10px; row-gap:3px; align-items:center; margin-top:6px; max-width:760px;">
+      <span class="head">rank</span><span class="head">rate</span><span class="head">current</span><span class="head">predicted (pts)</span><span class="head">±1 SD (pts)</span><span class="head">expected improvement</span><span class="head">prior records</span><span class="head">eligible</span>
+      <span class="mono-s">1</span><span class="mono-s">40 Hz</span><span class="mono-s">5.0 mA</span><span class="mono-s">+0.22</span><span class="mono-s">1.22</span><span class="mono-s">0.628</span><span class="mono-s">0</span><svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="#6C757D" stroke-width="1.4" stroke-dasharray="2 2"/></svg>
+      <span class="mono-s">2</span><span class="mono-s">40 Hz</span><span class="mono-s">4.9 mA</span><span class="mono-s">+0.22</span><span class="mono-s">1.21</span><span class="mono-s">0.627</span><span class="mono-s">0</span><svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="#6C757D" stroke-width="1.4" stroke-dasharray="2 2"/></svg>
+      <span class="mono-s">3</span><span class="mono-s">40 Hz</span><span class="mono-s">4.8 mA</span><span class="mono-s">+0.22</span><span class="mono-s">1.21</span><span class="mono-s">0.625</span><span class="mono-s">0</span><svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="#6C757D" stroke-width="1.4" stroke-dasharray="2 2"/></svg>
+      <span class="mono-s">4</span><span class="mono-s">40 Hz</span><span class="mono-s">4.7 mA</span><span class="mono-s">+0.22</span><span class="mono-s">1.21</span><span class="mono-s">0.623</span><span class="mono-s">0</span><svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="#6C757D" stroke-width="1.4" stroke-dasharray="2 2"/></svg>
+      <span class="mono-s">5</span><span class="mono-s">40 Hz</span><span class="mono-s">4.6 mA</span><span class="mono-s">+0.22</span><span class="mono-s">1.20</span><span class="mono-s">0.621</span><span class="mono-s">0</span><svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="#6C757D" stroke-width="1.4" stroke-dasharray="2 2"/></svg>
+      <span class="mono-s">6</span><span class="mono-s">40 Hz</span><span class="mono-s">4.5 mA</span><span class="mono-s">+0.22</span><span class="mono-s">1.20</span><span class="mono-s">0.617</span><span class="mono-s">0</span><svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="#6C757D" stroke-width="1.4" stroke-dasharray="2 2"/></svg>
+      <span class="mono-s">7</span><span class="mono-s">40 Hz</span><span class="mono-s">4.4 mA</span><span class="mono-s">+0.23</span><span class="mono-s">1.19</span><span class="mono-s">0.613</span><span class="mono-s">0</span><svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="#6C757D" stroke-width="1.4" stroke-dasharray="2 2"/></svg>
+      <span class="mono-s">8</span><span class="mono-s">40 Hz</span><span class="mono-s">4.3 mA</span><span class="mono-s">+0.23</span><span class="mono-s">1.19</span><span class="mono-s">0.609</span><span class="mono-s">0</span><svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="#6C757D" stroke-width="1.4" stroke-dasharray="2 2"/></svg>
+      <span class="mono-s">9</span><span class="mono-s">55 Hz</span><span class="mono-s">5.0 mA</span><span class="mono-s">+0.17</span><span class="mono-s">1.08</span><span class="mono-s">0.607</span><span class="mono-s">0</span><svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="#6C757D" stroke-width="1.4" stroke-dasharray="2 2"/></svg>
+      <span class="mono-s">10</span><span class="mono-s">55 Hz</span><span class="mono-s">4.9 mA</span><span class="mono-s">+0.16</span><span class="mono-s">1.07</span><span class="mono-s">0.605</span><span class="mono-s">0</span><svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="#6C757D" stroke-width="1.4" stroke-dasharray="2 2"/></svg>
+    </div>
+    <div class="fold" style="margin-top:8px;">▶ Why this list and the clinic schedule disagree by design</div>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

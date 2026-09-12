@@ -23,24 +23,28 @@
  * tick for resolved; an amber disc for "not resolved" (measured and too small to call -- never the
  * failure ink, since no setting has been shown worse); an open dashed circle for "not determinable"
  * (the difference could not be formed). The words sit beside the symbols.
+ *
+ * Resized 2026-09-12 after the PI's review ("text running into images"): the three numbers of a
+ * setting at 16 px, the sub-lines at 12 px, the gain in a cell of its own that cannot wrap, and
+ * the gain bar's axis labels at 11 px.
  */
 import { CircularProgress, Tooltip } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
-import Fold from "views/Reports/ClosedLoopSim/Fold";
 import PAL from "views/Reports/ClosedLoopSim/palette";
 import { AmberGlyph } from "views/Reports/ClosedLoopSim/glyphs";
 
 import { GainBar, VerdictGlyph } from "./GainBar";
+import { TYPE, HEAD, SMALL, SizedFold } from "./typeScale";
 
 import { num, fmtMa, fmtHz, fmtUs, fmtPts, fmtDelta, contactLabel } from "./stimFormat";
 
-const HEAD = { fontSize: 10, fontWeight: 700, letterSpacing: 0.4, color: "#8A8A8A",
-  textTransform: "uppercase" };
-const VALUE = { fontFamily: PAL.mono, fontSize: 13.5, color: "#1A1A1A" };
-const SMALL = { fontSize: 10.5, color: "#6A6A6A" };
+const VALUE = { fontFamily: PAL.mono, fontSize: TYPE.numLarge, color: "#1A1A1A", whiteSpace: "nowrap" };
+const DELTA = { fontFamily: PAL.mono, fontSize: TYPE.num, color: "#1A1A1A", whiteSpace: "nowrap" };
+const GAIN = { fontFamily: PAL.mono, fontSize: TYPE.num, color: "#1A1A1A", whiteSpace: "nowrap" };
+const NW = { whiteSpace: "nowrap" };
 
 /** A setting as one line of digits with units: "55 Hz · 100 µs · 3.0 mA". */
 function Setting({ rate, pw, amp, missingPw }) {
@@ -75,6 +79,11 @@ function sideRows(arms, plan, inForce) {
   return sides;
 }
 
+// The columns: side | programmed now | arrow | search prefers | change | gain bar | gain | verdict.
+// The gain has a cell of its own, wide enough for "+0.00 pts ± 0.85" at 14 px in the tabular
+// font, and the bar sits in its own cell before it, so the value can never wrap beside the bar.
+const COLUMNS = "64px minmax(230px, 1.3fr) 28px minmax(230px, 1.3fr) 130px 224px 160px 168px";
+
 export default function DecisionStrip({ arms, plan, planLoading, planErr, inForce }) {
   const rows = sideRows(arms, plan, inForce);
   const halfRange = Math.max(2, ...rows.map((r) => {
@@ -83,103 +92,110 @@ export default function DecisionStrip({ arms, plan, planLoading, planErr, inForc
   }));
   return (
     <MDBox>
-      <MDBox sx={{ display: "grid", gridTemplateColumns: "56px 1.35fr 24px 1.35fr 1fr 1.2fr 1fr",
-        columnGap: "10px", rowGap: "4px", alignItems: "center" }}>
-        <span />
-        <MDTypography variant="caption" sx={HEAD}>programmed now</MDTypography>
-        <span />
-        <MDTypography variant="caption" sx={HEAD}>search prefers (usable in adaptive mode)</MDTypography>
-        <MDTypography variant="caption" sx={HEAD}>change</MDTypography>
-        <MDTypography variant="caption" sx={HEAD}>gain over the setting in force ± 1 SD</MDTypography>
-        <MDTypography variant="caption" sx={HEAD}>verdict</MDTypography>
+      <MDBox sx={{ overflowX: "auto" }}>
+        <MDBox sx={{ display: "grid", gridTemplateColumns: COLUMNS,
+          columnGap: "14px", rowGap: "14px", alignItems: "center" }}>
+          <span />
+          <MDTypography variant="caption" sx={HEAD}>programmed now</MDTypography>
+          <span />
+          <MDTypography variant="caption" sx={HEAD}>search prefers (usable in adaptive mode)</MDTypography>
+          <MDTypography variant="caption" sx={HEAD}>change</MDTypography>
+          <MDTypography variant="caption" sx={HEAD}>gain over the setting in force ± 1 SD</MDTypography>
+          <span />
+          <MDTypography variant="caption" sx={HEAD}>verdict</MDTypography>
 
-        {rows.map((r) => {
-          const s = r.s;
-          const st = r.stratum;
-          const prefRate = num(s && s.rate_hz), prefPw = num(s && s.pulse_width_us),
-            prefAmp = num(s && s.amplitude_preferred_mA);
-          const dMax = num(s && s.amplitude_delivered_max_mA), dMin = num(s && s.amplitude_delivered_min_mA);
-          const aboveDelivered = prefAmp !== null && dMax !== null && prefAmp > dMax + 1e-9;
-          const gain = num(st && st.gain), sd = num(st && st.sd_of_difference);
-          const resolved = st ? (st.optimum_resolved === true ? true : (st.optimum_resolved === false ? false : null))
-            : (s ? (s.resolved === true ? true : null) : null);
-          return [
-            <MDTypography key={`${r.side}-a`} variant="button" fontWeight="medium" sx={{ fontSize: 13 }}>{r.side}</MDTypography>,
-            <MDBox key={`${r.side}-b`}>
-              <Setting rate={r.nowRate} pw={r.nowPw} amp={r.nowAmp} missingPw={r.nowPw === null} />
-              <MDTypography variant="caption" component="div" sx={SMALL}>
-                {r.contacts ? `contacts ${r.contacts}` : "contacts: not in the response"}
-                {r.nowPw === null ? " · pulse width: not in the response for this side" : ""}
-              </MDTypography>
-            </MDBox>,
-            <span key={`${r.side}-c`} style={{ color: "#9A9A9A", fontSize: 16, textAlign: "center" }}>→</span>,
-            <MDBox key={`${r.side}-d`}>
-              {planLoading && !s ? (
-                <MDBox display="flex" alignItems="center" gap={1}>
-                  <CircularProgress size={12} />
-                  <MDTypography variant="caption" sx={SMALL}>computing the plan (about 10 s more)</MDTypography>
-                </MDBox>
-              ) : (s ? (
-                prefRate === null ? (
-                  <MDTypography variant="caption" sx={{ fontSize: 12, color: PAL.warnText, fontWeight: 600 }}>
-                    no rate adaptive mode can use
-                  </MDTypography>
-                ) : <Setting rate={prefRate} pw={prefPw} amp={prefAmp} missingPw={prefPw === null} />
-              ) : (
-                <MDTypography variant="caption" sx={SMALL}>{planErr ? `plan unavailable: ${planErr}` : "—"}</MDTypography>
-              ))}
-              {s && (
-                <MDTypography variant="caption" component="div" sx={SMALL}>
-                  {dMin !== null && dMax !== null ? `delivered so far ${dMin.toFixed(1)}–${dMax.toFixed(1)} mA` : ""}
-                  {num(s.n_epochs_fitted_on_the_chosen_stratum) !== null
-                    ? ` · fitted on ${Math.round(num(s.n_epochs_fitted_on_the_chosen_stratum))} stretches of unchanged settings` : ""}
+          {rows.map((r) => {
+            const s = r.s;
+            const st = r.stratum;
+            const prefRate = num(s && s.rate_hz), prefPw = num(s && s.pulse_width_us),
+              prefAmp = num(s && s.amplitude_preferred_mA);
+            const dMax = num(s && s.amplitude_delivered_max_mA), dMin = num(s && s.amplitude_delivered_min_mA);
+            const aboveDelivered = prefAmp !== null && dMax !== null && prefAmp > dMax + 1e-9;
+            const gain = num(st && st.gain), sd = num(st && st.sd_of_difference);
+            const resolved = st ? (st.optimum_resolved === true ? true : (st.optimum_resolved === false ? false : null))
+              : (s ? (s.resolved === true ? true : null) : null);
+            const nFit = num(s && s.n_epochs_fitted_on_the_chosen_stratum);
+            return [
+              <MDTypography key={`${r.side}-a`} variant="button" fontWeight="medium" sx={{ fontSize: TYPE.num }}>{r.side}</MDTypography>,
+              <MDBox key={`${r.side}-b`}>
+                <Setting rate={r.nowRate} pw={r.nowPw} amp={r.nowAmp} missingPw={r.nowPw === null} />
+                <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.3 }}>
+                  {r.contacts ? <>contacts <span style={NW}>{r.contacts}</span></> : "contacts: not in the response"}
+                  {r.nowPw === null ? " · pulse width: not in the response for this side" : ""}
                 </MDTypography>
-              )}
-            </MDBox>,
-            <MDBox key={`${r.side}-e`}>
-              {s && prefRate !== null ? (
-                <MDBox sx={{ fontFamily: PAL.mono, fontSize: 12 }}>
-                  <div>{fmtDelta(prefRate - (r.nowRate ?? prefRate), "Hz", 0)}</div>
-                  <div>{r.nowPw === null || prefPw === null ? "— µs" : fmtDelta(prefPw - r.nowPw, "µs", 0)}</div>
-                  <MDBox display="flex" alignItems="center" gap={0.5}>
-                    <span>{fmtDelta(prefAmp - (r.nowAmp ?? prefAmp), "mA", 1)}</span>
-                    {aboveDelivered && (
-                      <Tooltip title={`the preferred ${fmtMa(prefAmp)} is above the ${fmtMa(dMax)} ever delivered on this side, so it is an extrapolation`}>
-                        <span><AmberGlyph label="above the highest current ever delivered on this side" size={12} /></span>
-                      </Tooltip>
-                    )}
+              </MDBox>,
+              <span key={`${r.side}-c`} style={{ color: "#9A9A9A", fontSize: 20, textAlign: "center" }}>→</span>,
+              <MDBox key={`${r.side}-d`}>
+                {planLoading && !s ? (
+                  <MDBox display="flex" alignItems="center" gap={1}>
+                    <CircularProgress size={14} />
+                    <MDTypography variant="caption" sx={SMALL}>
+                      computing the two-stage plan (about a minute the first time; a few seconds afterwards)
+                    </MDTypography>
                   </MDBox>
-                </MDBox>
-              ) : <MDTypography variant="caption" sx={SMALL}>—</MDTypography>}
-            </MDBox>,
-            <MDBox key={`${r.side}-f`} display="flex" alignItems="center" gap={1}>
-              <GainBar gain={gain} sd={sd} halfRange={halfRange} />
-              <span style={{ fontFamily: PAL.mono, fontSize: 11.5 }}>
+                ) : (s ? (
+                  prefRate === null ? (
+                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, color: PAL.warnText, fontWeight: 600 }}>
+                      no rate adaptive mode can use
+                    </MDTypography>
+                  ) : <Setting rate={prefRate} pw={prefPw} amp={prefAmp} missingPw={prefPw === null} />
+                ) : (
+                  <MDTypography variant="caption" sx={SMALL}>{planErr ? `plan unavailable: ${planErr}` : "—"}</MDTypography>
+                ))}
+                {s && (
+                  <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.3 }}>
+                    {dMin !== null && dMax !== null
+                      ? <>delivered so far <span style={NW}>{`${dMin.toFixed(1)}–${dMax.toFixed(1)} mA`}</span></> : ""}
+                    {nFit !== null
+                      ? <>{dMin !== null && dMax !== null ? " · " : ""}fitted on <span style={NW}>{`${Math.round(nFit)} stretches`}</span> of unchanged settings</> : ""}
+                  </MDTypography>
+                )}
+              </MDBox>,
+              <MDBox key={`${r.side}-e`}>
+                {s && prefRate !== null ? (
+                  <MDBox sx={{ ...DELTA, lineHeight: 1.5 }}>
+                    <div>{fmtDelta(prefRate - (r.nowRate ?? prefRate), "Hz", 0)}</div>
+                    <div>{r.nowPw === null || prefPw === null ? "— µs" : fmtDelta(prefPw - r.nowPw, "µs", 0)}</div>
+                    <MDBox display="flex" alignItems="center" gap={0.6}>
+                      <span>{fmtDelta(prefAmp - (r.nowAmp ?? prefAmp), "mA", 1)}</span>
+                      {aboveDelivered && (
+                        <Tooltip title={`the preferred ${fmtMa(prefAmp)} is above the ${fmtMa(dMax)} ever delivered on this side, so it is an extrapolation`}>
+                          <span><AmberGlyph label="above the highest current ever delivered on this side" size={14} /></span>
+                        </Tooltip>
+                      )}
+                    </MDBox>
+                  </MDBox>
+                ) : <MDTypography variant="caption" sx={SMALL}>—</MDTypography>}
+              </MDBox>,
+              <MDBox key={`${r.side}-f`}>
+                <GainBar gain={gain} sd={sd} halfRange={halfRange} />
+              </MDBox>,
+              <span key={`${r.side}-g`} style={GAIN}>
                 {gain === null ? "—" : `${fmtPts(gain)}${sd === null ? "" : ` ± ${sd.toFixed(2)}`}`}
-              </span>
-            </MDBox>,
-            <MDBox key={`${r.side}-g`}><VerdictGlyph resolved={resolved} /></MDBox>,
-          ];
-        })}
+              </span>,
+              <MDBox key={`${r.side}-h`}><VerdictGlyph resolved={resolved} /></MDBox>,
+            ];
+          })}
+        </MDBox>
       </MDBox>
-      <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.6 }}>
+      <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 1.2 }}>
         Pain objective: lower is better; a positive gain favours the preferred setting. Resolved
         means the gain is larger than 1 standard deviation of the difference itself.
       </MDTypography>
       {rows.some((r) => r.s && Array.isArray(r.s.reasons) && r.s.reasons.length) && (
-        <Fold show={`Why each side reads as it does (${rows.reduce((n, r) => n + ((r.s && r.s.reasons) || []).length, 0)} reasons from the search)`}
+        <SizedFold show={`Why each side reads as it does (${rows.reduce((n, r) => n + ((r.s && r.s.reasons) || []).length, 0)} reasons from the search)`}
           hide="Hide the reasons">
           {rows.map((r) => (r.s && Array.isArray(r.s.reasons) && r.s.reasons.length) ? (
-            <MDBox key={r.side} mt={0.4}>
-              <MDTypography variant="caption" fontWeight="medium" component="div" sx={{ fontSize: 11 }}>{r.side}</MDTypography>
+            <MDBox key={r.side} mt={0.6}>
+              <MDTypography variant="caption" fontWeight="medium" component="div" sx={{ fontSize: TYPE.body }}>{r.side}</MDTypography>
               <MDBox component="ul" sx={{ m: 0, pl: 2.5 }}>
                 {r.s.reasons.map((t, i) => (
-                  <li key={i}><MDTypography variant="caption" color="text" sx={{ fontSize: 10.5 }}>{String(t)}</MDTypography></li>
+                  <li key={i}><MDTypography variant="caption" color="text" sx={{ fontSize: TYPE.body }}>{String(t)}</MDTypography></li>
                 ))}
               </MDBox>
             </MDBox>
           ) : null)}
-        </Fold>
+        </SizedFold>
       )}
     </MDBox>
   );
