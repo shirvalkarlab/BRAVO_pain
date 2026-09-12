@@ -46,6 +46,7 @@ import MDButton from "components/MDButton";
 import { diverging, divergingRgb } from "views/Reports/Biomarkers/binarizationModel";
 import { orderContacts } from "views/Reports/Biomarkers/contactOrder";
 import PAL from "./palette";
+import { TickGlyph, CrossGlyph, AmberGlyph, NotTestedGlyph } from "./glyphs";
 import { fmtHz, fmtNum } from "./deployFormat";
 import { commitBandCandidate } from "./bandCandidateStore";
 
@@ -88,44 +89,9 @@ function inkFor(v, center, half) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// THE FOUR SYMBOLS. Distinct shapes as well as distinct inks, because about eight per cent of men
-// cannot separate these hues and this page prints: a filled disc with a tick, a filled square with
-// a cross, a plain amber disc, and an open dashed circle for "not tested".
+// THE FOUR SYMBOLS live in ./glyphs.js since 2026-09-12, so the Stim Optimizer page draws the same
+// shapes for the same meanings. Nothing about them changed in the move.
 // ---------------------------------------------------------------------------------------------
-const GLYPH = 15;
-function TickGlyph({ label }) {
-  return (
-    <svg width={GLYPH} height={GLYPH} viewBox="0 0 16 16" role="img" aria-label={label}>
-      <circle cx="8" cy="8" r="7" fill={PAL.pass} />
-      <path d="M4.5 8.3 L7 10.8 L11.5 5.5" stroke="#fff" strokeWidth="1.9" fill="none"
-        strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-function CrossGlyph({ label }) {
-  return (
-    <svg width={GLYPH} height={GLYPH} viewBox="0 0 16 16" role="img" aria-label={label}>
-      <rect width="16" height="16" rx="2" fill={PAL.fail} />
-      <path d="M4.5 4.5 L11.5 11.5 M11.5 4.5 L4.5 11.5" stroke="#fff" strokeWidth="1.9"
-        strokeLinecap="round" />
-    </svg>
-  );
-}
-function AmberGlyph({ label }) {
-  return (
-    <svg width={GLYPH} height={GLYPH} viewBox="0 0 16 16" role="img" aria-label={label}>
-      <circle cx="8" cy="8" r="7" fill={PAL.warn} />
-    </svg>
-  );
-}
-function NotTestedGlyph({ label }) {
-  return (
-    <svg width={GLYPH} height={GLYPH} viewBox="0 0 16 16" role="img" aria-label={label}>
-      <circle cx="8" cy="8" r="6.5" fill="none" stroke={PAL.neutral} strokeWidth="1.4"
-        strokeDasharray="2 2" />
-    </svg>
-  );
-}
 
 function FamilyWiseMark({ significant, q }) {
   const qTxt = q != null ? ` (q = ${fmtNum(q, 3)})` : "";

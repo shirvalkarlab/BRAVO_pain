@@ -540,6 +540,38 @@ def check_selected_band_statistical_support(selected_bands, *, alpha=SELECTION_A
         evidence=ev)
 
 
+def verdict_row(center_hz, r) -> dict:
+    """One band's response verdict as numbers, for a page to draw rather than parse.
+
+    Added 2026-09-12 for the Stim Optimizer page redesign: the page drew the 18 band verdicts from
+    the sentences in ``evidence["verdicts"]`` (their prefix and nothing else), because every number
+    in them -- the two captured power readings, the currents they were read at, the standardised
+    separation and the era-adjusted slope -- was inside the sentence. This is the same
+    ``ResponseResult`` copied out field by field; the sentence stays beside it unchanged.
+    """
+    def _f(v):
+        try:
+            x = float(v)
+        except (TypeError, ValueError):
+            return None
+        return x if np.isfinite(x) else None
+    return {
+        "center_hz": float(center_hz),
+        "responds": (None if getattr(r, "responds", None) is None else bool(r.responds)),
+        "separation_d": _f(getattr(r, "separation_d", None)),
+        "separation_d_on_log": _f(getattr(r, "separation_d_on_log", None)),
+        "power_low": _f(getattr(r, "power_low", None)),
+        "power_high": _f(getattr(r, "power_high", None)),
+        "amp_low_mA": _f(getattr(r, "amp_low_mA", None)),
+        "amp_high_mA": _f(getattr(r, "amp_high_mA", None)),
+        "slope_log_per_mA": _f(getattr(r, "slope_log_per_mA", None)),
+        "slope_p": _f(getattr(r, "slope_p", None)),
+        "n_low": int(getattr(r, "n_low", 0) or 0),
+        "n_high": int(getattr(r, "n_high", 0) or 0),
+        "reason": str(getattr(r, "reason", "") or ""),
+    }
+
+
 def check_adaptive_band(frozen, *, lfp=None, band_centers=DEFAULT_BAND_CENTERS_HZ,
                         band_width_hz=DEFAULT_BAND_WIDTH_HZ,
                         min_sep_d=LFP.MIN_CAPTURE_SEPARATION_D,
@@ -624,11 +656,16 @@ def check_adaptive_band(frozen, *, lfp=None, band_centers=DEFAULT_BAND_CENTERS_H
             passing.append(float(c))
     ev.update(n_tested=len(results), n_passing=len(passing), passing_centers=sorted(passing),
               n_power_unavailable=len(not_assessed),
-              verdicts={k: v.describe() for k, v in results.items()})
+              verdicts={k: v.describe() for k, v in results.items()},
+              # The same verdicts as numbers (2026-09-12), for the page to draw; and the
+              # separation floor they were judged against, so the page can draw that line too.
+              verdict_rows=[verdict_row(k, v) for k, v in sorted(results.items())],
+              min_sep_d=float(min_sep_d))
 
     if passing:
         best = min(passing, key=lambda c: -results[c].separation_d)
         r = results[best]
+        ev["best_center_hz"] = float(best)
         return GateCondition(
             "adaptive_band_passes_lfp_response", True,
             f"{len(passing)} of {len(results)} tested bands inside the adaptive range respond to "
@@ -704,17 +741,20 @@ def check_amplitude_limits(frozen, *, amp_limits=None, ceiling_mA=AMP_CEILING_MA
             f" NOTE: limits were not supplied for {', '.join(sorted(defaulted))} and were "
             "DEFAULTED to the delivered envelope, so the envelope test on those hemispheres is "
             "satisfied by construction rather than by a check on a proposal.")
+    # `defaulted` is in the evidence as well as in the sentence (2026-09-12), so a page can mark
+    # a limit that was never proposed without reading the sentence for the word.
     if problems:
         return GateCondition("amplitude_limits_inside_envelope_and_under_ceiling", False,
                              "; ".join(problems) + note,
-                             evidence=dict(checked=checked, ceiling_mA=float(ceiling_mA)))
+                             evidence=dict(checked=checked, ceiling_mA=float(ceiling_mA),
+                                           defaulted=sorted(defaulted)))
     return GateCondition(
         "amplitude_limits_inside_envelope_and_under_ceiling", True,
         "adaptive amplitude limits sit inside the delivered envelope and under the "
         f"{float(ceiling_mA):g} mA ceiling on every hemisphere ("
         + "; ".join(f"{h} {v['amp_min_mA']:g}-{v['amp_max_mA']:g} mA"
                     for h, v in sorted(checked.items())) + ")." + note,
-        evidence=dict(checked=checked, ceiling_mA=float(ceiling_mA)))
+        evidence=dict(checked=checked, ceiling_mA=float(ceiling_mA), defaulted=sorted(defaulted)))
 
 
 # ---------------------------------------------------------------------------------------------

@@ -196,9 +196,9 @@ def test_without_the_flag_the_response_has_no_two_stage_key_and_the_path_is_neve
     assert "two_stage" not in out
     assert bench.live.calls == [], "the LFP evidence builder must not run without the flag"
     assert sorted(out) == ["amplitude_effect", "arms", "available", "blockers", "cache_status",
-                           "closed_loop", "design_matrix", "ground_truth", "manifest",
-                           "participant", "recommendation_supported", "store", "summary",
-                           "washin_min"]
+                           "closed_loop", "design_matrix", "ground_truth", "in_force_by_side",
+                           "manifest", "participant", "recommendation_supported", "store",
+                           "summary", "washin_min"]
 
 
 # FIT ONCE, ASSERT MANY (2026-09-12). The flag-on requests below all fit Stage 1 on `bench.es`
@@ -286,7 +286,8 @@ def test_the_block_equals_a_direct_call_of_run_two_stage_live_field_for_field(be
         washin_min=1.0, amp_ceiling=OBJ.AMP_HARD_LIMIT_MA, hemispheres=("Left",),
         primary_item="left_leg",
         data_horizon=two["stage1"]["frozen_configuration"]["data_horizon"])
-    direct = BS._two_stage_payload(rep, inputs=two["inputs"], seconds=0.0)
+    direct = BS._two_stage_payload(rep, inputs=two["inputs"], seconds=0.0,
+                                   in_force=BS.in_force_by_side(bench.es))
     a, b = _flatten(two), _flatten(direct)
     a.pop("seconds"); b.pop("seconds")
     assert set(a) == set(b), (set(a) ^ set(b))

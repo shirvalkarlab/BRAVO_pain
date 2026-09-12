@@ -26,8 +26,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import {
-  Card, Grid, Chip, Divider, Table, TableBody, TableCell, TableHead, TableRow,
-  FormControl, InputLabel, Select, MenuItem, CircularProgress, Tooltip,
+  Card, Grid, Divider, FormControl, InputLabel, Select, MenuItem, CircularProgress, Tooltip,
 } from "@mui/material";
 
 import Plotly from "plotly.js-dist";
@@ -49,6 +48,17 @@ import { recomputeSlots, STIM_OPTIMIZER_SLOTS } from "views/Reports/moduleCacheK
 // has arrived and cached in its own slot; see useTwoStagePlan.js for why.
 import useTwoStagePlan from "./useTwoStagePlan";
 import TwoStagePlanCard from "./TwoStagePlanCard";
+// The decision strip: the setting programmed now beside the setting the search prefers, per
+// side, with the gain drawn against its own uncertainty (2026-09-12, the page redesign, phase 1).
+import DecisionStrip from "./DecisionStrip";
+// The sensing evidence behind closed-loop readiness, contacts in Medtronic form, reasons folded
+// (redesign phase 3).
+import SensingEvidenceTable from "./SensingEvidenceTable";
+// The 4 arms as small multiples with a shared gain axis (redesign phase 4).
+import ArmGainStrip from "./ArmGainStrip";
+import { fmtHz as fmtHzU, fmtMa as fmtMaU, siteName } from "./stimFormat";
+import Fold from "views/Reports/ClosedLoopSim/Fold";
+import { TickGlyph, NotTestedGlyph } from "views/Reports/ClosedLoopSim/glyphs";
 // Semantic colour roles live in one place for the whole closed-loop family of pages, so a verdict
 // that means the same thing on the deployment page and here is drawn in the same ink. The roles
 // used below are `neutral` for a question that has not been answered and `warnText` for a caveat
@@ -207,16 +217,6 @@ function resolutionOf(a) {
   };
 }
 
-// Chip appearance for the three states. "Not determinable" takes the neutral ink and an outline,
-// never the failure ink and never the same treatment as "not resolved": the first means the
-// question could not be put, the second means it was put and answered no, and a reader deciding
-// what to do next needs to tell them apart.
-const RESOLUTION_CHIP = {
-  resolved: { label: "resolved", color: "success", variant: "filled" },
-  unresolved: { label: "not resolved", color: "default", variant: "outlined" },
-  undeterminable: { label: "not determinable", color: "default", variant: "outlined" },
-};
-
 /**
  * The five figures, with the one that answers the page's question marked as primary.
  *
@@ -248,9 +248,6 @@ const FIGURES = [
    "Posterior standard deviation across the grid, with the optimistic bound in never-tested cells. This is the visual form of the unexplored-region audit.",
    "secondary"],
 ];
-
-const fmt = (v, d = 2) =>
-  (v === null || v === undefined || Number.isNaN(Number(v))) ? "\u2014" : Number(v).toFixed(d);
 
 /**
  * One Plotly figure from server-supplied figure JSON.
@@ -334,6 +331,8 @@ export default function StimOptimizer() {
   const errorText = cached.err;
 
   const [arm, setArm] = useState(() => LAST_ARM.get(String(participant_uid)) || null);
+  // Whether the surfaces fold has been opened once; the Plotly panels mount only then.
+  const [figuresMounted, setFiguresMounted] = useState(false);
   useEffect(() => {
     if (arm) LAST_ARM.set(String(participant_uid), arm);
   }, [participant_uid, arm]);
@@ -404,9 +403,9 @@ export default function StimOptimizer() {
   // "we checked and it is not enough". The two populations are counted here so the banner can
   // report each of them.
   const armStates = Object.values(arms).map((a) => resolutionOf(a).state);
-  const nUnresolved = armStates.filter((s) => s === "unresolved").length;
   const nUndeterminable = armStates.filter((s) => s === "undeterminable").length;
-  const armWord = (n) => `${n} arm${n === 1 ? "" : "s"}`;
+  const nResolved = armStates.filter((s) => s === "resolved").length;
+  const resolutions = Object.fromEntries(Object.entries(arms).map(([k, a]) => [k, resolutionOf(a)]));
 
   return (
     <DatabaseLayout>
@@ -430,340 +429,112 @@ export default function StimOptimizer() {
             <CacheStatusLine status={data ? data.cache_status : null} />
           </Grid>
 
-          {/* ---------- verdict first, before any figure ---------- */}
-          <Grid item xs={12}>
-            <MDAlert color={supported ? "success" : "info"} dismissible={false}>
-              <MDBox>
-                <MDTypography variant="button" fontWeight="medium" color="white" component="div">
-                  {supported
-                    ? "At least one arm resolves its optimum against the setting currently in force"
-                    : "The data do not yet support a stimulation parameter recommendation"}
-                </MDTypography>
-                <MDTypography variant="caption" color="white" component="div" sx={{ mt: 0.5 }}>
-                  {supported
-                    ? "Only arms marked resolved below have a predicted gain larger than the uncertainty of the difference against the setting in force."
-                    : (nUndeterminable === 0
-                      ? `For all ${armWord(nUnresolved)}, the predicted gain over the setting `
-                        + "currently in force is smaller than the uncertainty of that difference. "
-                        + "The surfaces show where to look next, not what to program."
-                      : (nUnresolved === 0
-                        ? `For ${armWord(nUndeterminable)}, the difference against the setting `
-                          + "currently in force could not be formed at all, so no arm has been "
-                          + "compared to its incumbent. The surfaces show where to look next, not "
-                          + "what to program."
-                        : `For ${armWord(nUnresolved)}, the predicted gain over the setting `
-                          + "currently in force is smaller than the uncertainty of that "
-                          + `difference. A further ${armWord(nUndeterminable)} could not be `
-                          + "compared to the setting in force at all. The surfaces show where to "
-                          + "look next, not what to program."))}
-                </MDTypography>
-                {(data.blockers || []).map((b, i) => (
-                  <MDTypography key={i} variant="caption" color="white" component="div" sx={{ mt: 0.75 }}>
-                    &bull; {b}
-                  </MDTypography>
-                ))}
-              </MDBox>
-            </MDAlert>
-          </Grid>
-
-          {/* ---------- closed-loop readiness ----------
-              A DIFFERENT question from everything above it, and the panel says so. The optimizer
-              asks which setting relieves pain best; this asks whether any sensed band moves with
-              stimulation amplitude, which is the only lever Adaptive Therapy has. A band can
-              predict pain beautifully and be useless as a control signal.
-
-              Do NOT collapse this to a single ready/not-ready chip. The per-cell blocking reasons
-              are the content: a refusal because the data cannot support the test and a refusal
-              because the response is genuinely absent are different clinical conclusions. */}
-          {data.closed_loop && (
-            <Grid item xs={12}>
-              <Card>
-                <MDBox p={2}>
-                  <MDBox display="flex" alignItems="center" justifyContent="space-between">
-                    <MDTypography variant="h6">Closed-loop readiness (Adaptive Therapy)</MDTypography>
-                    {data.closed_loop.available && (
-                      <MDBox
-                        px={1.5}
-                        py={0.4}
-                        borderRadius="lg"
-                        sx={{
-                          // A screen that ran and qualified nothing, and a screen that never ran,
-                          // are different states and the badge used to word them identically as
-                          // "no deployable control signal" — which reads as a measured finding in
-                          // both cases. The served payload carries `n_cells_screened`, so the
-                          // second case can be named for what it is. Neither takes the failure
-                          // colour: an unscreened participant has not failed anything.
-                          backgroundColor: data.closed_loop.ready
-                            ? "success.main"
-                            : (data.closed_loop.n_cells_screened ? "warning.main" : "text.disabled"),
-                        }}
-                      >
-                        <MDTypography variant="caption" color="white" fontWeight="medium">
-                          {data.closed_loop.ready
-                            ? `${data.closed_loop.n_cells_deployable} of ${data.closed_loop.n_cells_screened} cells deployable`
-                            : (data.closed_loop.n_cells_screened
-                              ? `no deployable control signal \u2014 0 of ${data.closed_loop.n_cells_screened} screened cells qualified`
-                              : "no cells screened \u2014 deployability not yet assessed")}
-                        </MDTypography>
-                      </MDBox>
-                    )}
-                  </MDBox>
-
-                  {!data.closed_loop.available ? (
-                    <MDTypography variant="caption" color="text" component="div" sx={{ mt: 1 }}>
-                      {data.closed_loop.reason}
-                    </MDTypography>
-                  ) : (
-                    <>
-                      <MDTypography variant="caption" color="text" component="div" sx={{ mt: 0.5 }}>
-                        Adaptive Therapy can only be driven by a band inside{" "}
-                        {(data.closed_loop.adaptive_window_hz || []).join("\u2013")}&nbsp;Hz, and only
-                        at a rate of at least {data.closed_loop.min_adaptive_rate_hz}&nbsp;Hz. Its
-                        only lever is amplitude, so a candidate band must be shown to MOVE with
-                        amplitude &mdash; a separate question from whether it tracks pain.
-                      </MDTypography>
-                      <MDTypography variant="button" fontWeight="medium" component="div" sx={{ mt: 1 }}>
-                        {data.closed_loop.verdict}
-                      </MDTypography>
-
-                      {(data.closed_loop.responding_cells || []).length > 0 && (
-                        <MDBox sx={{ overflowX: "auto", mt: 1.5 }}>
-                          <Table size="small">
-                            <TableBody>
-                              <TableRow>
-                                {["Channel", "Side", "Rate (Hz)", "Bands responding",
-                                  "Era-significant", "Amp range (mA)", "Amp limit (mA)",
-                                  "Deployable", "Why not"].map((h) => (
-                                  <TableCell key={h}>
-                                    <MDTypography variant="caption" fontWeight="medium">
-                                      {h}
-                                    </MDTypography>
-                                  </TableCell>
-                                ))}
-                              </TableRow>
-                              {data.closed_loop.responding_cells.map((c, i) => (
-                                <TableRow key={i}>
-                                  <TableCell>
-                                    <MDTypography variant="caption">{c.channel}</MDTypography>
-                                  </TableCell>
-                                  <TableCell>
-                                    <MDTypography variant="caption">{c.hemisphere}</MDTypography>
-                                  </TableCell>
-                                  <TableCell>
-                                    <MDTypography variant="caption">{fmt(c.rate_hz, 0)}</MDTypography>
-                                  </TableCell>
-                                  <TableCell>
-                                    <MDTypography variant="caption">
-                                      {c.n_responding} / {c.n_bands}
-                                    </MDTypography>
-                                  </TableCell>
-                                  <TableCell>
-                                    <MDTypography variant="caption">
-                                      {c.n_era_significant} / {c.n_bands}
-                                    </MDTypography>
-                                  </TableCell>
-                                  <TableCell>
-                                    <MDTypography variant="caption">
-                                      {fmt(c.amp_low_mA, 1)}&ndash;{fmt(c.amp_high_mA, 1)}
-                                    </MDTypography>
-                                  </TableCell>
-                                  <TableCell>
-                                    <MDTypography variant="caption">
-                                      {c.amp_limit_mA == null ? "\u2014" : fmt(c.amp_limit_mA, 1)}
-                                    </MDTypography>
-                                  </TableCell>
-                                  <TableCell>
-                                    <MDTypography
-                                      variant="caption"
-                                      fontWeight="medium"
-                                      // A cell that does not clear the device constraints has
-                                      // not failed in the sense the error ink means; it is simply
-                                      // outside what this device can actuate on, and the reason is
-                                      // spelled out in the next column. The error ink is reserved
-                                      // for a finding that blocks, so this reads in the neutral
-                                      // register and the word carries the meaning.
-                                      sx={{ color: c.deployable ? undefined : PAL.neutral }}
-                                      color={c.deployable ? "success" : "text"}
-                                    >
-                                      {c.deployable ? "yes" : "no"}
-                                    </MDTypography>
-                                  </TableCell>
-                                  <TableCell sx={{ maxWidth: 420 }}>
-                                    <MDTypography variant="caption" color="text">
-                                      {c.blocking_reasons || "\u2014"}
-                                    </MDTypography>
-                                  </TableCell>
-                                </TableRow>
-                              ))}
-                            </TableBody>
-                          </Table>
-                        </MDBox>
-                      )}
-
-                      <MDTypography variant="caption" color="text" component="div" sx={{ mt: 1.5 }}>
-                        A cell is deployable only if a majority of scanned bands respond, the slope
-                        survives era blocking, and the amplitude contrast sits at or below the flat{" "}
-                        {fmt(data.closed_loop.amp_hard_limit_mA, 1)}&nbsp;mA hard limit. That limit is
-                        PI-declared and was established by testing at 165&nbsp;Hz; it does not vary
-                        with rate or pulse width. An earlier version of this panel applied an
-                        energy-matched ceiling that scaled as the square root of 55/f &mdash; that
-                        model has been withdrawn, because tolerable amplitude at a given frequency is
-                        not governed by total delivered energy. The amplitude condition still matters
-                        for the same reason it always did: a response measured only above the
-                        amplitude we are willing to program was never deployable evidence.
-                      </MDTypography>
-                    </>
-                  )}
-                </MDBox>
-              </Card>
-            </Grid>
-          )}
-
-          {/* ---------- evidence base ---------- */}
+          {/* ---------- the decision, before any figure (redesign phase 1, 2026-09-12) ----------
+              One headline computed from the counts, then the per-side strip. The six model
+              blockers are still here, one click away; what changed is that the values now lead
+              and the sentences follow. */}
           <Grid item xs={12}>
             <Card>
               <MDBox p={2}>
-                <MDTypography variant="h6">Evidence base</MDTypography>
-                <MDTypography variant="caption" color="text" component="div">
-                  An epoch is one continuous exposure to one parameter setting; a new epoch opens
-                  whenever any parameter changes. Pain reports inside the wash-in window are excluded.
-                </MDTypography>
-                <Grid container spacing={2} sx={{ mt: 1 }}>
-                  {[
-                    ["Exposure epochs", dm.n_epochs],
-                    ["Pain reports used", dm.n_reports],
-                    ["Left amplitude levels", dm.amp_mA_Left_levels],
-                    ["First epoch", dm.t_first ? String(dm.t_first).slice(0, 10) : "\u2014"],
-                    ["Last epoch", dm.t_last ? String(dm.t_last).slice(0, 10) : "\u2014"],
-                    ["Wash-in (min)", data.washin_min],
-                  ].map(([k, v]) => (
-                    <Grid item xs={6} md={2} key={k}>
-                      <MDTypography variant="caption" color="text" component="div">{k}</MDTypography>
-                      <MDTypography variant="h6">{v === null || v === undefined ? "\u2014" : v}</MDTypography>
-                    </Grid>
-                  ))}
-                </Grid>
-                {dm.states && (
-                  <MDBox mt={2} display="flex" gap={1} flexWrap="wrap">
-                    {Object.entries(dm.states).map(([k, v]) => (
-                      <Tooltip key={k} title="A hemisphere at 0 mA is a distinct therapeutic state, not the low end of a dose axis, and is modelled separately.">
-                        <Chip size="small" variant="outlined" label={`${k.replace(/_/g, " ")}: ${v}`} />
-                      </Tooltip>
+                <MDBox display="flex" alignItems="center" gap={1} flexWrap="wrap">
+                  <MDTypography variant="h6" sx={{ fontSize: 15 }}>
+                    {supported
+                      ? `Program: ${nResolved} of ${armStates.length} arms resolve a gain larger than its own uncertainty`
+                      : `No setting is recommended today: ${nResolved} of ${armStates.length} arms resolve a gain larger than its own uncertainty`}
+                  </MDTypography>
+                  {nUndeterminable > 0 && (
+                    <MDTypography variant="caption" sx={{ fontSize: 11, color: PAL.neutral }}>
+                      {`· ${nUndeterminable} of ${armStates.length} could not be compared at all`}
+                    </MDTypography>
+                  )}
+                </MDBox>
+                <MDBox mt={1.2}>
+                  <DecisionStrip arms={arms} plan={twoStage.data} planLoading={twoStage.loading}
+                    planErr={twoStage.err} inForce={data.in_force_by_side || null} />
+                </MDBox>
+                {(data.blockers || []).length > 0 && (
+                  <Fold show={`Why no setting is recommended (${(data.blockers || []).length} reasons from the model)`}
+                    hide="Hide the reasons">
+                    {(data.blockers || []).map((b, i) => (
+                      <MDTypography key={i} variant="caption" color="text" component="div"
+                        sx={{ mt: 0.5, fontSize: 10.5 }}>
+                        &bull; {b}
+                      </MDTypography>
                     ))}
-                  </MDBox>
+                  </Fold>
                 )}
               </MDBox>
             </Card>
           </Grid>
 
-          {/* ---------- per-arm table ---------- */}
+          {/* ---------- the sensing evidence behind closed-loop readiness (redesign phase 3) ----------
+              A DIFFERENT question from the strip above it: the optimizer asks which setting
+              relieves pain best; this asks whether any sensed band moves with stimulation current,
+              which is the only lever adaptive mode has. The per-row reasons stay, folded, because a
+              refusal for want of data and a refusal on a measured negative are different clinical
+              conclusions. */}
+          {data.closed_loop && (
+            <Grid item xs={12}>
+              <Card>
+                <MDBox p={2}>
+                  <SensingEvidenceTable closedLoop={data.closed_loop} />
+                </MDBox>
+              </Card>
+            </Grid>
+          )}
+
+          {/* ---------- evidence base, one row of counts (redesign phase 4) ---------- */}
           <Grid item xs={12}>
             <Card>
               <MDBox p={2}>
-                <MDTypography variant="h6">Arms</MDTypography>
-                <MDTypography variant="caption" color="text" component="div">
-                  One arm is one pain site crossed with one hemisphere, fitted independently. Sites
-                  are never blended: the left leg and the back are separate optimization problems.
-                  Click a row to show its surfaces.
-                </MDTypography>
-                <Table size="small" sx={{ mt: 1 }}>
-                  <TableHead>
-                    <TableRow>
-                      {/* The column that decides the verdict is the DIFFERENCE against the setting
-                          in force, together with the uncertainty of that difference — so it is a
-                          column of the table rather than something the reader assembles from the
-                          two posterior columns beside it. "Candidate cell" replaces the old header
-                          "Best cell": the cell is where the surrogate's mean is lowest, which is
-                          not the same as a setting the evidence recommends, and a header should not
-                          say "best" about a cell whose advantage may be indistinguishable from
-                          zero. */}
-                      {["Arm", "Epochs", "Candidate cell", "Predicted \u00b1 SD",
-                        "In force \u00b1 SD", "Gain over in force (\u00b11 SD of the difference)",
-                        "Optimum"]
-                        .map((h) => (
-                          <TableCell key={h}>
-                            <MDTypography variant="caption" fontWeight="medium">{h}</MDTypography>
-                          </TableCell>
-                        ))}
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {Object.entries(arms).map(([label, a]) => {
-                      const res = resolutionOf(a);
-                      const chip = RESOLUTION_CHIP[res.state];
-                      return (
-                        <TableRow key={label} hover selected={label === activeArm}
-                                  onClick={() => setArm(label)} sx={{ cursor: "pointer" }}>
-                          <TableCell><MDTypography variant="caption">{label.replace("__", " \u00b7 ")}</MDTypography></TableCell>
-                          <TableCell><MDTypography variant="caption">{a.n_epochs_fitted ?? "\u2014"}</MDTypography></TableCell>
-                          <TableCell>
-                            <MDTypography variant="caption">
-                              {fmt(a.optimum?.freq_hz, 0)} Hz / {fmt(a.optimum?.amp_mA, 1)} mA
-                            </MDTypography>
-                          </TableCell>
-                          <TableCell>
-                            <MDTypography variant="caption">
-                              {`${fmt(a.optimum?.posterior_mean)} \u00b1 ${fmt(a.optimum?.posterior_sd)}`}
-                            </MDTypography>
-                          </TableCell>
-                          <TableCell>
-                            <MDTypography variant="caption">
-                              {fmt(a.incumbent_mu)}
-                              {a.incumbent_sd === null || a.incumbent_sd === undefined
-                                ? "" : ` \u00b1 ${fmt(a.incumbent_sd)}`}
-                            </MDTypography>
-                          </TableCell>
-                          {/* The gain and its interval, in the objective's own units. The interval
-                              is one standard deviation of the difference wide on each side, which
-                              is the width the resolution rule uses — it is NOT a 95% interval and
-                              is not labelled as one. An interval that straddles zero is the visual
-                              form of "this arm has not earned a recommendation". */}
-                          <TableCell>
-                            {res.sdDiff === null ? (
-                              <MDTypography variant="caption" sx={{ color: PAL.neutral }}>
-                                {"not formable"}
-                              </MDTypography>
-                            ) : (
-                              <MDTypography variant="caption"
-                                sx={{ color: res.state === "resolved" ? "inherit" : PAL.warnText }}>
-                                {`${res.gain >= 0 ? "+" : ""}${fmt(res.gain)}`}
-                                {`  (${res.gain - res.sdDiff >= 0 ? "+" : ""}${fmt(res.gain - res.sdDiff)}`}
-                                {` to ${res.gain + res.sdDiff >= 0 ? "+" : ""}${fmt(res.gain + res.sdDiff)})`}
-                              </MDTypography>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            <Tooltip title={res.why}>
-                              <Chip size="small" color={chip.color} variant={chip.variant}
-                                    label={chip.label} />
-                            </Tooltip>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-                <MDTypography variant="caption" color="text" component="div" sx={{ mt: 1 }}>
-                  The objective is a pain score, so lower is better and a POSITIVE gain means the
-                  candidate cell is predicted to be better than the setting in force. An arm is
-                  marked resolved only when that gain exceeds one standard deviation of the
-                  difference itself, propagated from both cells&apos; posteriors as{" "}
-                  <em>sqrt(sd_candidate&sup2; + sd_in-force&sup2;)</em>. The joint covariance
-                  between the two cells is not carried in this payload, so the propagated standard
-                  deviation omits the <em>&minus;2&thinsp;cov</em> term; nearby cells on a smooth
-                  kernel are positively correlated, so the omission overstates the uncertainty and
-                  the test is strictly conservative &mdash; it can withhold a recommendation it
-                  might have supported, but it cannot manufacture one.
-                </MDTypography>
-                <MDTypography variant="caption" color="text" component="div" sx={{ mt: 0.75 }}>
-                  <strong>not resolved</strong> means the comparison was made and the two cells were
-                  not separated. <strong>not determinable</strong> means the comparison could not be
-                  made at all, because a posterior mean or standard deviation this arm needs is
-                  missing or degenerate; it is not a weaker form of the same answer and it calls for
-                  a different response, namely fixing the fit rather than collecting more exposure.
-                  Neither is a recommendation, and neither is drawn in the failure ink, because in
-                  neither case has a setting been shown to be worse.
-                </MDTypography>
+                <MDBox display="flex" alignItems="baseline" gap={1} flexWrap="wrap">
+                  <MDTypography variant="h6" sx={{ fontSize: 15 }}>Evidence base</MDTypography>
+                  <MDTypography variant="caption" sx={{ fontSize: 10.5, color: "#6A6A6A" }}>
+                    a stretch is one continuous exposure to one setting; reports inside the wash-in are excluded
+                  </MDTypography>
+                </MDBox>
+                <MDBox mt={0.8} display="flex" gap={3} flexWrap="wrap">
+                  {[
+                    ["stretches of unchanged settings", dm.n_epochs],
+                    ["pain reports used", dm.n_reports],
+                    ["first to last", `${dm.t_first ? String(dm.t_first).slice(0, 10) : "—"} → ${dm.t_last ? String(dm.t_last).slice(0, 10) : "—"}`],
+                    ["wash-in", data.washin_min != null ? `${data.washin_min} min` : "—"],
+                    ["left currents delivered", dm.amp_mA_Left_range ? `${Number(dm.amp_mA_Left_range[0]).toFixed(1)}–${Number(dm.amp_mA_Left_range[1]).toFixed(1)} mA` : "—"],
+                    ["right currents delivered", dm.amp_mA_Right_range ? `${Number(dm.amp_mA_Right_range[0]).toFixed(1)}–${Number(dm.amp_mA_Right_range[1]).toFixed(1)} mA` : "—"],
+                  ].map(([k, v]) => (
+                    <MDBox key={k}>
+                      <MDTypography variant="caption" component="div" sx={{ fontSize: 10, color: "#8A8A8A", textTransform: "uppercase", letterSpacing: 0.4 }}>{k}</MDTypography>
+                      <MDTypography variant="h6" sx={{ fontSize: 15, fontFamily: PAL.mono }}>{v === null || v === undefined ? "—" : v}</MDTypography>
+                    </MDBox>
+                  ))}
+                  {dm.states && (
+                    <MDBox>
+                      <MDTypography variant="caption" component="div" sx={{ fontSize: 10, color: "#8A8A8A", textTransform: "uppercase", letterSpacing: 0.4 }}>stretches by state</MDTypography>
+                      <Tooltip title="A side at 0 mA is a distinct therapeutic state, not the low end of a dose axis, and is modelled separately.">
+                        <MDTypography variant="h6" sx={{ fontSize: 13, fontFamily: PAL.mono }}>
+                          {Object.entries(dm.states).map(([k, v]) => `${k.replace(/_/g, " ")} ${v}`).join(" · ")}
+                        </MDTypography>
+                      </Tooltip>
+                    </MDBox>
+                  )}
+                </MDBox>
+              </MDBox>
+            </Card>
+          </Grid>
+
+          {/* ---------- the 4 arms as small multiples (redesign phase 4) ---------- */}
+          <Grid item xs={12}>
+            <Card>
+              <MDBox p={2}>
+                <MDBox display="flex" alignItems="baseline" gap={1} flexWrap="wrap">
+                  <MDTypography variant="h6" sx={{ fontSize: 15 }}>Arms: each pain site on each side, fitted on its own</MDTypography>
+                  <MDTypography variant="caption" sx={{ fontSize: 10.5, color: "#6A6A6A" }}>
+                    click a cell to show its model surfaces below
+                  </MDTypography>
+                </MDBox>
+                <MDBox mt={1}>
+                  <ArmGainStrip arms={arms} resolutions={resolutions} activeArm={activeArm} onSelect={setArm} />
+                </MDBox>
               </MDBox>
             </Card>
           </Grid>
@@ -775,12 +546,14 @@ export default function StimOptimizer() {
                 <MDBox p={2}>
                   <MDBox display="flex" alignItems="center" justifyContent="space-between"
                          flexWrap="wrap" gap={2}>
-                    <MDTypography variant="h6">{activeArm.replace("__", " \u00b7 ")}</MDTypography>
+                    <MDTypography variant="h6" sx={{ fontSize: 15 }}>
+                      {`${siteName(current.site)} · ${current.hemisphere} side: model surfaces and what to test next`}
+                    </MDTypography>
                     <FormControl size="small" sx={{ minWidth: 240 }}>
                       <InputLabel>Arm</InputLabel>
                       <Select value={activeArm} label="Arm" onChange={(e) => setArm(e.target.value)}>
                         {Object.keys(arms).map((k) => (
-                          <MenuItem key={k} value={k}>{k.replace("__", " \u00b7 ")}</MenuItem>
+                          <MenuItem key={k} value={k}>{`${siteName(arms[k].site)} · ${arms[k].hemisphere}`}</MenuItem>
                         ))}
                       </Select>
                     </FormControl>
@@ -793,113 +566,81 @@ export default function StimOptimizer() {
                   <MDTypography variant="caption" color="text" component="div">
                     Kernel: {current.kernel || "\u2014"}
                   </MDTypography>
-                  <Divider sx={{ my: 2 }} />
+                  <Divider sx={{ my: 1.5 }} />
 
-                  {/* The primary figure, alone and above the divider, because it is the one that
-                      answers the page's question. */}
-                  {FIGURES.filter(([, , , p]) => p === "primary").map(([key, title, blurb, prom]) => (
-                    <FigurePanel key={key} title={title} blurb={blurb} prominence={prom}
-                                 figure={(current.figures || {})[key]}
-                                 error={(current.figure_errors || {})[key]} />
-                  ))}
-
-                  <Divider sx={{ my: 2 }} />
-                  <MDTypography variant="caption" display="block"
-                    sx={{ fontSize: 10, fontWeight: "bold", letterSpacing: 0.4, color: "#888" }}>
-                    WHERE TO LOOK NEXT
-                  </MDTypography>
-                  <MDTypography variant="caption" display="block"
-                    sx={{ fontSize: 10.5, color: "#666", mb: 1.5 }}>
-                    These four describe how the search is behaving and what the grid has not yet
-                    tested. They inform which settings to try at the next visit; they are not
-                    statements about what to program now, which is the question the surface above
-                    answers.
-                  </MDTypography>
-
-                  {FIGURES.filter(([, , , p]) => p !== "primary").map(([key, title, blurb, prom]) => (
-                    <FigurePanel key={key} title={title} blurb={blurb} prominence={prom}
-                                 figure={(current.figures || {})[key]}
-                                 error={(current.figure_errors || {})[key]} />
-                  ))}
-
-                  {current.figures_error && (
-                    <MDAlert color="warning" dismissible={false}>
-                      <MDTypography variant="caption" color="white">
-                        Figures could not be built: {current.figures_error}
+                  {/* THE 5 SURFACES, FOLDED, MOUNTED ON FIRST REVEAL (redesign phase 4). They are
+                      the same server-drawn figures in the same order (the posterior surface first
+                      and largest, per the figure conventions); nothing about them changed. A Plotly
+                      graph first drawn in a hidden container measures itself at 0 px wide, so the
+                      panels are rendered only once the fold has been opened. */}
+                  <Fold show="Show the 5 model surfaces (the first answers whether the candidate is separated from the setting in force; the other 4 say where to look next)"
+                    hide="Hide the model surfaces" onChange={(o) => { if (o) setFiguresMounted(true); }}>
+                    {figuresMounted && FIGURES.filter(([, , , p]) => p === "primary").map(([key, title, blurb, prom]) => (
+                      <FigurePanel key={key} title={title} blurb={blurb} prominence={prom}
+                                   figure={(current.figures || {})[key]}
+                                   error={(current.figure_errors || {})[key]} />
+                    ))}
+                    {figuresMounted && (
+                      <MDTypography variant="caption" display="block"
+                        sx={{ fontSize: 10, fontWeight: "bold", letterSpacing: 0.4, color: "#888" }}>
+                        WHERE TO LOOK NEXT
                       </MDTypography>
-                    </MDAlert>
-                  )}
+                    )}
+                    {figuresMounted && FIGURES.filter(([, , , p]) => p !== "primary").map(([key, title, blurb, prom]) => (
+                      <FigurePanel key={key} title={title} blurb={blurb} prominence={prom}
+                                   figure={(current.figures || {})[key]}
+                                   error={(current.figure_errors || {})[key]} />
+                    ))}
+                    {current.figures_error && (
+                      <MDAlert color="warning" dismissible={false}>
+                        <MDTypography variant="caption" color="white">
+                          Figures could not be built: {current.figures_error}
+                        </MDTypography>
+                      </MDAlert>
+                    )}
+                  </Fold>
 
                   {(current.queue || []).length > 0 && (
                     <MDBox mt={2}>
-                      <MDTypography variant="h6">
-                        Where the model is most uncertain (not the clinic schedule)
-                      </MDTypography>
-                      <MDTypography variant="caption" color="text" component="div">
-                        These are cells that have <strong>never been tested</strong>, ordered by
-                        expected improvement. That is exactly what makes them informative &mdash; a
-                        setting with no reports is where the model knows least &mdash; and it is also
-                        why most of them are <strong>not</strong> on the in-clinic testing schedule.
-                        The schedule is built by the opposite rule: it uses only combinations of rate,
-                        amplitude and pulse width this patient has <strong>already received</strong>,
-                        so that tolerability is established before a setting is programmed for a
-                        60-second step.
-                      </MDTypography>
-                      <MDTypography variant="caption" color="text" component="div" sx={{ mt: 0.75 }}>
-                        So read this table as the research question, and the clinic schedule as what
-                        can be run tomorrow. The two disagree by design. The{" "}
-                        <strong>eligible</strong> column marks the rows that satisfy the schedule&apos;s
-                        safety rule as they stand; a row marked no is not forbidden, but moving to a
-                        combination never delivered before is a clinical decision and needs explicit
-                        sign-off rather than being run because the model ranked it highly. Amplitudes
-                        are additionally capped at the flat{" "}
-                        {fmt((data.closed_loop || {}).amp_hard_limit_mA ?? 5, 1)}&nbsp;mA hard limit.
-                      </MDTypography>
-                      {/* Explicit column list rather than the first six keys of the payload: the
-                          eligibility flag is the whole point of this panel and a positional slice
-                          would silently drop it as soon as the backend adds a column. */}
-                      <Table size="small" sx={{ mt: 1 }}>
-                        <TableHead>
-                          <TableRow>
-                            {[["rank", "rank"], ["freq_hz", "freq (Hz)"], ["amp_mA", "amp (mA)"],
-                              ["posterior_mean", "posterior mean"], ["posterior_sd", "posterior SD"],
-                              ["expected_improvement", "exp. improvement"],
-                              ["prior_records_at_this_rate_and_amp", "prior records"],
-                              ["schedulable_without_new_clinical_signoff", "eligible"]].map(([k, label]) => (
-                              <TableCell key={k}>
-                                <MDTypography variant="caption" fontWeight="medium">
-                                  {label}
-                                </MDTypography>
-                              </TableCell>
-                            ))}
-                          </TableRow>
-                        </TableHead>
-                        <TableBody>
-                          {current.queue.slice(0, 10).map((r, i) => (
-                            <TableRow key={i}>
-                              {["rank", "freq_hz", "amp_mA", "posterior_mean", "posterior_sd",
-                                "expected_improvement", "prior_records_at_this_rate_and_amp",
-                                "schedulable_without_new_clinical_signoff"].map((h) => (
-                                <TableCell key={h}>
-                                  {h === "schedulable_without_new_clinical_signoff" ? (
-                                    <MDTypography
-                                      variant="caption"
-                                      fontWeight="medium"
-                                      color={r[h] ? "success" : "text"}
-                                    >
-                                      {r[h] == null ? "\u2014" : r[h] ? "yes" : "no"}
-                                    </MDTypography>
-                                  ) : (
-                                    <MDTypography variant="caption">
-                                      {typeof r[h] === "number" ? fmt(r[h], 3) : String(r[h] ?? "\u2014")}
-                                    </MDTypography>
-                                  )}
-                                </TableCell>
-                              ))}
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
+                      <MDBox display="flex" alignItems="baseline" gap={1} flexWrap="wrap">
+                        <MDTypography variant="h6" sx={{ fontSize: 15 }}>What to test at the next visit</MDTypography>
+                        <MDTypography variant="caption" sx={{ fontSize: 10.5, color: "#6A6A6A" }}>
+                          {`cells never tested, ranked by expected improvement · ${current.queue.slice(0, 10).filter((r) => r.schedulable_without_new_clinical_signoff === true).length} of ${Math.min(10, current.queue.length)} eligible without new sign-off · currents capped at ${fmtMaU((data.closed_loop || {}).amp_hard_limit_mA ?? 5)}`}
+                        </MDTypography>
+                      </MDBox>
+                      <MDBox mt={0.6} sx={{ display: "grid", gridTemplateColumns: "34px 70px 80px 110px 90px 120px 90px 60px",
+                        columnGap: "10px", rowGap: "3px", alignItems: "center", maxWidth: 760 }}>
+                        {["rank", "rate", "current", "predicted (pts)", "±1 SD (pts)", "expected improvement", "prior records", "eligible"].map((h) => (
+                          <MDTypography key={h} variant="caption" sx={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4, color: "#8A8A8A", textTransform: "uppercase" }}>{h}</MDTypography>
+                        ))}
+                        {current.queue.slice(0, 10).map((r, i) => [
+                          <span key={`${i}-a`} style={{ fontFamily: PAL.mono, fontSize: 11.5 }}>{r.rank ?? i + 1}</span>,
+                          <span key={`${i}-b`} style={{ fontFamily: PAL.mono, fontSize: 11.5 }}>{fmtHzU(r.freq_hz)}</span>,
+                          <span key={`${i}-c`} style={{ fontFamily: PAL.mono, fontSize: 11.5 }}>{fmtMaU(r.amp_mA)}</span>,
+                          <span key={`${i}-d`} style={{ fontFamily: PAL.mono, fontSize: 11.5 }}>{typeof r.posterior_mean === "number" ? `${r.posterior_mean >= 0 ? "+" : "−"}${Math.abs(r.posterior_mean).toFixed(2)}` : "—"}</span>,
+                          <span key={`${i}-e`} style={{ fontFamily: PAL.mono, fontSize: 11.5 }}>{typeof r.posterior_sd === "number" ? r.posterior_sd.toFixed(2) : "—"}</span>,
+                          <span key={`${i}-f`} style={{ fontFamily: PAL.mono, fontSize: 11.5 }}>{typeof r.expected_improvement === "number" ? r.expected_improvement.toFixed(3) : "—"}</span>,
+                          <span key={`${i}-g`} style={{ fontFamily: PAL.mono, fontSize: 11.5 }}>{r.prior_records_at_this_rate_and_amp ?? "—"}</span>,
+                          <span key={`${i}-h`}>
+                            {r.schedulable_without_new_clinical_signoff == null ? <span style={{ color: "#9A9A9A" }}>—</span>
+                              : (r.schedulable_without_new_clinical_signoff ? <TickGlyph label="eligible without new sign-off" /> : <NotTestedGlyph label="needs sign-off: never delivered before" />)}
+                          </span>,
+                        ])}
+                      </MDBox>
+                      <Fold show="Why this list and the clinic schedule disagree by design" hide="Hide">
+                        <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: 10.5 }}>
+                          These are cells that have never been tested, ordered by expected
+                          improvement. That is exactly what makes them informative, a setting with no
+                          reports is where the model knows least, and it is also why most of them are
+                          not on the in-clinic testing schedule. The schedule is built by the opposite
+                          rule: it uses only combinations of rate, current and pulse width this
+                          patient has already received, so that tolerability is established before a
+                          setting is programmed for a 60-second step. A row not marked eligible is not
+                          forbidden, but moving to a combination never delivered before is a clinical
+                          decision and needs explicit sign-off rather than being run because the
+                          model ranked it highly.
+                        </MDTypography>
+                      </Fold>
                     </MDBox>
                   )}
                 </MDBox>

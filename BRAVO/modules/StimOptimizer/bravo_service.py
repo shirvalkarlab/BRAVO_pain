@@ -420,6 +420,92 @@ def _frame_records(df, cols=None, limit=None):
     return [_jsonable(r) for r in d.to_dict("records")]
 
 
+#: ==========================================================================================
+#: DISPLAY FIELDS FOR THE PAGE (2026-09-12, the page redesign, phase 3).
+#:
+#: The page printed sensing contacts by their raw keys ("ONE_THREE_LEFT"), which spell the
+#: contact numbers out as words, and printed the setting in force as ONE rate and ONE pulse width
+#: for both sides, read from Stage 1's `incumbent_pw_us` -- which Stage 1 reads from the LEFT
+#: column (`stage1_openloop.run_stage1`, `pw_col="pw_us_Left"`). On RCS08 the design matrix carries
+#: `pw_us_Right` too and it reads 150 us on the incumbent epoch while the left reads 100 us, so the
+#: page was printing the left pulse width as the right side's. These fields carry each side's own
+#: values, and the Medtronic-form labels, so the page reads rather than derives them.
+#:
+#: ONE DEFINITION OF THE CONTACT LABEL. The sensing label is `Biomarkers.routines.analytics
+#: .format_channel` (the "L 0⁻2⁺" every other page prints, decision 131); it is called here and
+#: not re-implemented. The STIMULATION contacts are a different thing -- the settings stream keeps
+#: the cathode segments only ("2a-2b-2c"), never the anode -- so their label is the side letter and
+#: the cathode contacts with a superscript minus, a whole ring collapsed to its digit ("L 2⁻"), and
+#: no anode is printed because none is recorded. `contacts_raw` travels beside it.
+#: ==========================================================================================
+def sensing_display(channel) -> dict:
+    """`display_short` / `display_hemisphere` / `display_contacts` for a sensing contact pair,
+    from the Biomarkers formatter. Absent (None) when the formatter cannot be imported, never a
+    label invented here."""
+    try:
+        try:
+            from modules.Biomarkers.routines import analytics as _an
+        except ImportError:
+            from Biomarkers.routines import analytics as _an
+        f = _an.format_channel(str(channel), region="")
+        return {"display_short": f["short"], "display_hemisphere": f["hemisphere"],
+                "display_contacts": f["contacts"]}
+    except Exception:                                     # noqa: BLE001 -- no label, not an error
+        return {"display_short": None, "display_hemisphere": None, "display_contacts": None}
+
+
+def stim_contacts_short(cathode, hemisphere) -> str | None:
+    """The programmed cathode contacts in the page's Medtronic form: "L 2⁻" for "2a-2b-2c" on the
+    Left, "R 1⁻2⁻" for "1a-1b-1c-2a-2b-2c" on the Right, "L 1a⁻1b⁻" when a ring is only partly
+    used. None when nothing is recorded ("none", empty, NaN)."""
+    if cathode is None:
+        return None
+    raw = str(cathode).strip()
+    if not raw or raw.lower() in ("none", "nan", "case"):
+        return None
+    side = "L" if str(hemisphere) == "Left" else ("R" if str(hemisphere) == "Right" else "")
+    segs = [t for t in raw.replace("+", "-").split("-") if t]
+    by_ring = {}
+    for t in segs:
+        digit = "".join(ch for ch in t if ch.isdigit())
+        letter = "".join(ch for ch in t if ch.isalpha()).lower()
+        by_ring.setdefault(digit, set()).add(letter)
+    parts = []
+    for digit in sorted(by_ring, key=lambda d: (d == "", d)):
+        letters = by_ring[digit]
+        if letters == {"a", "b", "c"} or letters == {""}:
+            parts.append(f"{digit}⁻")
+        else:
+            parts.extend(f"{digit}{l}⁻" for l in sorted(letters))
+    return f"{side} {''.join(parts)}".strip()
+
+
+def in_force_by_side(es) -> dict:
+    """The setting in force on EACH side, from the newest epoch of the design matrix: rate, that
+    side's own pulse width and current, and its programmed cathode contacts, with the epoch and
+    the time it began. Empty when there is no epoch; a side's value is None when its column is
+    absent or empty, never the other side's value."""
+    if es is None or len(es) == 0 or "t0" not in es.columns:
+        return {}
+    row = es.sort_values("t0").iloc[-1]
+    out = {}
+    for side in ("Left", "Right"):
+        def _col(name):
+            v = row.get(name) if hasattr(row, "get") else None
+            return None if v is None or (isinstance(v, float) and np.isnan(v)) else v
+        cath = _col(f"cathode_{side}")
+        out[side] = {
+            "rate_hz": _jsonable(_col("freq_hz")),
+            "pulse_width_us": _jsonable(_col(f"pw_us_{side}")),
+            "amplitude_mA": _jsonable(_col(f"amp_mA_{side}")),
+            "contacts_raw": (None if cath is None else str(cath)),
+            "contacts_short": stim_contacts_short(cath, side),
+            "epoch": _jsonable(_col("epoch")),
+            "since_utc": _jsonable(_col("t_start") if _col("t_start") is not None else _col("t0")),
+        }
+    return out
+
+
 def design_matrix_summary(es: pd.DataFrame) -> dict:
     """What the warm start actually contains — shown above the figures so the reader sees the
     evidence base before any surface. Counts, not adjectives."""
@@ -515,7 +601,7 @@ def _two_stage_jsonable(v):
     return _jsonable(v)
 
 
-def _two_stage_payload(rep, *, inputs, seconds) -> dict:
+def _two_stage_payload(rep, *, inputs, seconds, in_force=None) -> dict:
     """The `two_stage` block from a `pipeline.TwoStageReport`: Stage 1's frozen configuration,
     the gate's verdict with each condition's reason and the evidence it read, Stage 2's output or
     its refusal, and a provenance sentence per stage. Read from the report, never recomputed."""
@@ -566,6 +652,10 @@ def _two_stage_payload(rep, *, inputs, seconds) -> dict:
                               "freezes the rate, the pulse width and the preferred amplitude on "
                               "each side. The sensing contact behind the gate's LFP evidence is "
                               "named in lfp_evidence.selected_key."),
+            # Each side's OWN setting in force (2026-09-12): `incumbent_pulse_width_us` above is
+            # the LEFT column's value, which Stage 1 uses for both sides; this block is what the
+            # device is actually programmed to on each side, contacts included.
+            "in_force_by_side": dict(in_force or {}),
         },
         "strata": _frame_records(s1.summary),
         "strata_skipped": {str(k): str(v) for k, v in (s1.skipped or {}).items()},
@@ -643,6 +733,10 @@ def _two_stage_payload(rep, *, inputs, seconds) -> dict:
                       if s2.started else "; it did not start because the gate refused.")),
     }
 
+    lfp_out = _two_stage_jsonable(lfp)
+    # The sensing contact the check read, in the page's form ("L 0⁻2⁺"), beside its raw key.
+    lfp_out["selected_display_short"] = (sensing_display(sel[0])["display_short"]
+                                         if sel and len(sel) else None)
     return {
         "requested": True,
         "available": True,
@@ -651,7 +745,7 @@ def _two_stage_payload(rep, *, inputs, seconds) -> dict:
         "can_deploy_closed_loop": bool(rep.can_deploy_closed_loop()),
         "stage1": stage1,
         "gate": gate_block,
-        "lfp_evidence": _two_stage_jsonable(lfp),
+        "lfp_evidence": lfp_out,
         "stage2": stage2,
         "manifest": _two_stage_jsonable({k: v for k, v in man.items() if k != "lfp_evidence"}),
         "inputs": dict(inputs),
@@ -661,7 +755,7 @@ def _two_stage_payload(rep, *, inputs, seconds) -> dict:
 
 
 def two_stage_block(participant, es, *, request_data, stream, washin_min, hemispheres, sites,
-                    data_horizon, inputs) -> dict:
+                    data_horizon, inputs, in_force=None) -> dict:
     """Run the open-loop -> gate -> closed-loop path on this request's own inputs and report it.
 
     Never raises into the response: a failure here is reported under `two_stage.reason` and the
@@ -699,7 +793,8 @@ def two_stage_block(participant, es, *, request_data, stream, washin_min, hemisp
         return {"requested": True, "available": False, "backend": TWO_STAGE_BACKEND,
                 "seconds": _jsonable(_time.perf_counter() - t0), "inputs": dict(inputs),
                 "reason": f"the two-stage path could not run: {type(exc).__name__}: {exc}"}
-    return _two_stage_payload(rep, inputs=inputs, seconds=_time.perf_counter() - t0)
+    return _two_stage_payload(rep, inputs=inputs, seconds=_time.perf_counter() - t0,
+                              in_force=in_force)
 
 
 def run_for_participant(request_data: dict) -> dict:
@@ -953,10 +1048,14 @@ def run_for_participant(request_data: dict) -> dict:
             if len(s):
                 observed_amp_range[hemi] = (float(s.min()), float(s.max()))
     blockers = _blockers(rep, arms, observed_amp_range)
+    in_force = in_force_by_side(es)
     out = {
         "available": True,
         "participant": uid,
         "design_matrix": design_matrix_summary(es),
+        # Each side's own rate, pulse width, current and cathode contacts from the newest epoch
+        # (2026-09-12), so the page's decision strip reads them rather than the left side's twice.
+        "in_force_by_side": in_force,
         "manifest": _jsonable(rep.manifest),
         "summary": _frame_records(rep.summary),
         "arms": arms,
@@ -978,7 +1077,8 @@ def run_for_participant(request_data: dict) -> dict:
             participant, es, request_data=request_data, stream=_stream, washin_min=washin_min,
             hemispheres=hemis, sites=sites, data_horizon=horizon,
             inputs={"matched_table": matched_key, "tiles": tiles_key,
-                    "settings_stream": stream_key})
+                    "settings_stream": stream_key},
+            in_force=in_force)
     if sig is not None:
         try:
             _write_outputs(str(uid), sig, prov, rep, out)
@@ -1034,12 +1134,23 @@ def closed_loop_readiness(participant, es, *, include=True) -> dict:
         le = _pl.live_evidence(participant, amp_ceiling=_obj.AMP_HARD_LIMIT_MA, bands=bands)
         screen = le.screen if le.screen is not None else pd.DataFrame()
         n_deployable = 0 if screen.empty else int(screen["deployable"].sum())
+        # The contact pair in the page's form on every row and on the selected cell
+        # (2026-09-12): `display_short` "L 0⁻2⁺" beside the raw key, from the one formatter.
+        cells = _frame_records(
+            screen[screen["n_responding"] > 0].sort_values("n_responding", ascending=False)
+            if not screen.empty else screen, limit=20)
+        for c in cells:
+            c.update(sensing_display(c.get("channel")))
+        selected = None
+        if le.selected_key:
+            selected = {"channel": le.selected_key[0], "hemisphere": le.selected_key[1],
+                        "rate_hz": float(le.selected_key[2])}
+            selected.update(sensing_display(le.selected_key[0]))
         return {
             "available": True,
             "ready": bool(le.selected is not None),
             "verdict": le.describe(),
-            "selected": ({"channel": le.selected_key[0], "hemisphere": le.selected_key[1],
-                          "rate_hz": float(le.selected_key[2])} if le.selected_key else None),
+            "selected": selected,
             "n_cells_screened": int(len(screen)),
             "n_cells_deployable": n_deployable,
             "amp_hard_limit_mA": _jsonable(_obj.AMP_HARD_LIMIT_MA),
@@ -1047,9 +1158,7 @@ def closed_loop_readiness(participant, es, *, include=True) -> dict:
             "min_adaptive_rate_hz": _jsonable(_pa.MIN_ADAPTIVE_RATE_HZ),
             # Only the cells that responded at all: the full 50-row screen is mostly cells with no
             # response, which is not what a reader needs to see first.
-            "responding_cells": _frame_records(
-                screen[screen["n_responding"] > 0].sort_values("n_responding", ascending=False)
-                if not screen.empty else screen, limit=20),
+            "responding_cells": cells,
             "audit": _frame_records(le.audit, limit=100) if le.audit is not None else [],
         }
     except Exception as e:                                    # noqa: BLE001 — adjunct panel

@@ -1,20 +1,22 @@
 /**
- * The two-stage plan card on the Stim Optimizer page: what the open-loop search froze on each
- * side, which settings it set aside because adaptive mode cannot use them, the check that decides
- * whether closed loop may start (four conditions, one verdict each), and what closed loop would
- * do if it were allowed to start -- or why it was not.
+ * The closed-loop card on the Stim Optimizer page: may closed loop start on the setting the
+ * open-loop search froze, and if not, which of the 4 checks blocks; what adaptive mode ruled out,
+ * drawn; and what closed loop would do if it were allowed to start.
  *
- * Added 2026-09-12 at the PI's direction ("wire the front end"). Everything on the card is READ
- * from the `two_stage` block the server returns (`_two_stage_payload` in
- * `StimOptimizer/bravo_service.py`); nothing is recomputed here. The block was built while
- * another change was landing on the server (an adaptive-range constraint and an `exclusions`
- * list), so this card renders the exclusions when the list is present and nothing when it is
- * absent, and it ignores keys it does not know.
- *
- * WHAT IS IN THE OPEN AND WHAT FOLDS. The rule this page's family follows (Closed-Loop page,
- * 2026-09-11): values, verdicts, reasons and the exclusions are never inside a fold. Only the
- * per-combination fit table and the provenance sentences fold, because they say how the answer
- * was arrived at rather than what it is.
+ * Rewritten 2026-09-12 (page redesign, phase 2) from the first two-stage card of the same day.
+ * What moved where:
+ *   - the frozen setting per side, the setting in force and the reasons: to the decision strip at
+ *     the top of the page (DecisionStrip.js), so they are not printed twice;
+ *   - the four conditions: to ClosedLoopChecks.js, symbols and numbers in the open, sentences
+ *     folded;
+ *   - the exclusions list: to ExcludedSettingsChart.js, drawn on a rate axis with the adaptive
+ *     minimum marked;
+ *   - the per-combination fit table, the skipped combinations and the provenance sentences: kept,
+ *     folded, unchanged.
+ * Everything on the card is READ from the `two_stage` block the server returns
+ * (`_two_stage_payload` in `StimOptimizer/bravo_service.py`); nothing is recomputed here. The
+ * rule this page's family follows (Closed-Loop page, decision 123): values, verdicts and reasons
+ * are never inside a fold; only the sentences that say how they were arrived at fold.
  *
  * NO OVERRIDE CONTROL YET. The endpoint accepts an override with a stated reason
  * (`TwoStageOverrideReason` / `TwoStageOverrideBy`); this card does not send one, and says so.
@@ -27,120 +29,20 @@ import MDTypography from "components/MDTypography";
 import Fold from "views/Reports/ClosedLoopSim/Fold";
 import PAL from "views/Reports/ClosedLoopSim/palette";
 
-export const TWO_STAGE_CARD_TITLE = "Two-stage plan: open loop, then the gate, then closed loop";
+import ClosedLoopChecks, { CHECK_LABELS } from "./ClosedLoopChecks";
+import ExcludedSettingsChart from "./ExcludedSettingsChart";
+import { num } from "./stimFormat";
 
-const fmt = (v, d = 1) =>
-  (v === null || v === undefined || Number.isNaN(Number(v))) ? "—" : Number(v).toFixed(d);
-const num = (v) => (v === null || v === undefined || !Number.isFinite(Number(v)) ? null : Number(v));
+export const TWO_STAGE_CARD_TITLE = "Closed loop: may it start on the frozen setting?";
+
+const fmt = (v, d = 1) => (num(v) === null ? "—" : num(v).toFixed(d));
 const cell = (v) => {
   if (v === null || v === undefined) return "—";
   if (typeof v === "boolean") return v ? "yes" : "no";
   if (typeof v === "number") return Number.isInteger(v) ? String(v) : v.toFixed(3);
   return String(v);
 };
-
-/**
- * Plain-language names for the four conditions the server reports by their code names
- * (HOUSE_RULES §2: say what the check does, put the code name in brackets only where it helps).
- */
-const CONDITION_LABELS = {
-  rate_at_or_above_adaptive_minimum:
-    "The frozen stimulation rate is at or above the lowest rate the device allows once adaptive mode is configured",
-  openloop_choice_resolved:
-    "The open-loop search has settled its rate and pulse width: the predicted gain over the setting in force is larger than the uncertainty of that difference",
-  adaptive_band_passes_lfp_response:
-    "A frequency band the device can use for adaptive control shows brain-signal power that responds to stimulation current",
-  amplitude_limits_inside_envelope_and_under_ceiling:
-    "The closed-loop current limits sit inside the range of currents already delivered and under the 5 mA ceiling",
-};
-const conditionLabel = (name) => CONDITION_LABELS[name] || String(name || "").replace(/_/g, " ");
-
-/** The verdict of one condition, normalised to one of three states whatever spelling arrives. */
-function verdictState(c) {
-  const v = String((c && c.verdict) || "").trim().toUpperCase();
-  if (v === "PASS") return "pass";
-  if (v === "FAIL") return "fail";
-  if (v.startsWith("NOT")) return "not_assessed";
-  if (c && c.passed === true) return "pass";
-  if (c && c.passed === false) return "fail";
-  return "not_assessed";
-}
-const VERDICT = {
-  pass: { glyph: "✓", word: "passes", color: PAL.pass },
-  fail: { glyph: "✗", word: "fails", color: PAL.fail },
-  not_assessed: { glyph: "○", word: "not assessed", color: PAL.indeterminate },
-};
-
-/** One side's headline sentence, built from the frozen setting's own numbers and reasons. */
-function sideHeadline(s) {
-  const side = s.hemisphere || "?";
-  const rate = num(s.rate_hz);
-  const pw = num(s.pulse_width_us);
-  const amp = num(s.amplitude_preferred_mA);
-  const lo = num(s.amplitude_delivered_min_mA);
-  const hi = num(s.amplitude_delivered_max_mA);
-  const n = num(s.n_epochs_fitted_on_the_chosen_stratum);
-  const parts = [];
-  // A side with no rate is the server's honest "no setting adaptive mode can use exists in this
-  // record" (the adaptive-range constraint, 2026-09-12), arriving as null; it is said, not dashed.
-  parts.push(rate == null
-    ? `${side}: the open-loop search found no rate adaptive mode can use`
-      + (pw == null ? "" : ` (pulse width ${fmt(pw, 0)} µs)`)
-      + (amp == null ? "" : `, preferred ${fmt(amp, 1)} mA`)
-    : `${side}: the open-loop search freezes ${fmt(rate, 0)} Hz `
-      + `at ${pw == null ? "a pulse width not observed" : `${fmt(pw, 0)} µs`}, preferred ${fmt(amp, 1)} mA`);
-  const extras = [];
-  if (lo != null && hi != null) extras.push(`currents delivered so far ${fmt(lo, 1)}–${fmt(hi, 1)} mA`);
-  if (n != null) extras.push(`fitted on ${fmt(n, 0)} stretches of unchanged settings`);
-  const status = s.resolved ? "resolved" : "not yet resolved";
-  return { head: parts[0] + (extras.length ? ` (${extras.join("; ")})` : ""), status };
-}
-
-/**
- * The exclusions, wherever the server puts them. The block builder was being extended while this
- * card was written (an adaptive-range constraint, PI 2026-09-12), so the list is looked for as a
- * flat list under `stage1.exclusions` / the frozen configuration / the block itself, and as a
- * mapping by side under `adaptive_envelope.exclusions` (each entry `{what, reason}`). The first
- * non-empty one wins; an absent or empty list renders nothing.
- */
-function collectExclusions(plan, stage1, frozen) {
-  const env = frozen.adaptive_envelope || stage1.adaptive_envelope || {};
-  const candidates = [stage1.exclusions, frozen.exclusions, plan && plan.exclusions, env.exclusions];
-  for (let i = 0; i < candidates.length; i += 1) {
-    const c = candidates[i];
-    if (Array.isArray(c)) {
-      if (c.length) return c;
-    } else if (c && typeof c === "object") {
-      const out = [];
-      Object.keys(c).forEach((side) => {
-        const list = Array.isArray(c[side]) ? c[side] : [c[side]];
-        list.forEach((e) => out.push(e && typeof e === "object" ? { hemisphere: side, ...e }
-          : { hemisphere: side, what: e }));
-      });
-      if (out.length) return out;
-    }
-  }
-  return [];
-}
-
-/** Describe one excluded setting from whichever keys the server put on it. */
-function exclusionText(e) {
-  if (e === null || e === undefined) return "";
-  if (typeof e === "string") return e;
-  const bits = [];
-  if (e.hemisphere) bits.push(String(e.hemisphere));
-  if (e.what != null) bits.push(String(e.what));
-  const rate = num(e.rate_hz);
-  if (rate != null) bits.push(`${fmt(rate, 0)} Hz`);
-  const pw = num(e.pulse_width_us != null ? e.pulse_width_us : e.pw_us);
-  if (pw != null) bits.push(`${fmt(pw, 0)} µs`);
-  const amp = num(e.amplitude_mA != null ? e.amplitude_mA : e.amp_mA);
-  if (amp != null) bits.push(`${fmt(amp, 1)} mA`);
-  const setting = e.setting || e.label || e.name;
-  if (!bits.length && setting) bits.push(String(setting));
-  const reason = e.reason || e.detail || e.note || e.why;
-  return { setting: bits.join(", ") || "a setting", reason: reason ? String(reason) : null };
-}
+const conditionLabel = (name) => CHECK_LABELS[name] || String(name || "").replace(/_/g, " ");
 
 /** A small table from a list of records, showing only the named columns that are present. */
 function RecordTable({ rows, columns, limit = 12 }) {
@@ -163,7 +65,7 @@ function RecordTable({ rows, columns, limit = 12 }) {
             <TableRow key={i}>
               {present.map(([k]) => (
                 <TableCell key={k} sx={{ py: 0.3 }}>
-                  <MDTypography variant="caption" sx={{ fontSize: 10.5 }}>{cell(r[k])}</MDTypography>
+                  <MDTypography variant="caption" sx={{ fontSize: 10.5, fontFamily: PAL.mono }}>{cell(r[k])}</MDTypography>
                 </TableCell>
               ))}
             </TableRow>
@@ -182,8 +84,8 @@ function RecordTable({ rows, columns, limit = 12 }) {
 const STRATA_COLUMNS = [
   ["hemisphere", "side"], ["pw_us", "pulse width (µs)"], ["n_epochs", "stretches fitted"],
   ["n_reports", "pain reports"], ["opt_rate_hz", "best rate (Hz)"], ["opt_amp_mA", "best current (mA)"],
-  ["gain", "predicted gain (points)"], ["sd_of_difference", "uncertainty of that gain"],
-  ["optimum_resolved", "resolved"], ["incumbent_rate_supported", "setting in force was delivered here"],
+  ["gain", "predicted gain (pts)"], ["sd_of_difference", "1 SD of that gain (pts)"],
+  ["optimum_resolved", "resolved"], ["incumbent_rate_supported", "rate in force was delivered here"],
   ["optimum_rate_supported", "best rate was delivered here"],
 ];
 const POLICY_COLUMNS = [
@@ -198,106 +100,56 @@ const POLICY_COLUMNS = [
 export default function TwoStagePlanCard({ plan, loading, err }) {
   const stage1 = (plan && plan.stage1) || {};
   const frozen = stage1.frozen_configuration || {};
-  const settings = Array.isArray(frozen.settings) ? frozen.settings : [];
-  const exclusions = collectExclusions(plan, stage1, frozen);
   const envelope = frozen.adaptive_envelope || stage1.adaptive_envelope || {};
-  const gate = (plan && plan.gate) || {};
-  const conditions = Array.isArray(gate.conditions) ? gate.conditions : [];
   const stage2 = (plan && plan.stage2) || {};
-  const lfp = (plan && plan.lfp_evidence) || {};
   const provenance = (plan && plan.provenance) || {};
   const strata = Array.isArray(stage1.strata) ? stage1.strata : [];
   const skipped = stage1.strata_skipped || {};
   const policies = Array.isArray(stage2.policies) ? stage2.policies : [];
   const refusals = Array.isArray(stage2.refusal_reasons) ? stage2.refusal_reasons : [];
 
-  const gatePassed = gate.passed === true;
-  const gateColor = gatePassed ? PAL.pass : (conditions.length ? PAL.fail : PAL.indeterminate);
-
   return (
     <Card>
       <MDBox p={2}>
-        <MDTypography variant="h6">{TWO_STAGE_CARD_TITLE}</MDTypography>
-        <MDTypography variant="caption" color="text" component="div">
-          The open-loop search freezes a stimulation rate, pulse width and preferred current on each
-          side. A check then decides whether closed loop may start on that frozen setting. Only if
-          it may are closed-loop policies drawn up. Every number here is read from the server&apos;s
-          own answer; nothing is recomputed on the page.
-        </MDTypography>
+        <MDTypography variant="h6" sx={{ fontSize: 15 }}>{TWO_STAGE_CARD_TITLE}</MDTypography>
 
         {loading && (
           <MDBox mt={1.5} display="flex" alignItems="center" gap={1.5}>
             <CircularProgress size={16} />
-            <MDTypography variant="caption" color="text">computing the two-stage plan&hellip;</MDTypography>
+            <MDTypography variant="caption" color="text">computing the plan (about 10 s)&hellip;</MDTypography>
           </MDBox>
         )}
 
         {!loading && err && (
           <MDBox mt={1.5} p={1} sx={{ borderRadius: "6px", border: `1px solid ${PAL.warn}`, backgroundColor: "#fdf6e7" }}>
             <MDTypography variant="caption" sx={{ color: PAL.warnText }} component="div">
-              {`The two-stage plan is not available: ${err}`}
+              {`The plan is not available: ${err}`}
             </MDTypography>
           </MDBox>
         )}
 
         {!loading && !err && plan && (
           <>
-            {/* ---------- Stage 1: what was frozen on each side ---------- */}
-            <MDBox mt={1.5}>
-              <MDTypography variant="button" fontWeight="medium">Open loop: what the search froze</MDTypography>
-              {(frozen.incumbent_rate_hz != null || frozen.primary_item) && (
-                <MDTypography variant="caption" color="text" component="div">
-                  {`Setting in force today: ${fmt(frozen.incumbent_rate_hz, 0)} Hz at `
-                    + `${fmt(frozen.incumbent_pulse_width_us, 0)} µs. `}
-                  {frozen.primary_item ? `Pain score the search judged by: ${String(frozen.primary_item).replace(/_/g, " ")}. ` : ""}
-                  {frozen.data_horizon ? `Data used: ${frozen.data_horizon}.` : ""}
-                </MDTypography>
-              )}
-              {settings.length === 0 && (
-                <MDTypography variant="caption" color="text" component="div">
-                  No side was frozen: the search returned no setting.
-                </MDTypography>
-              )}
-              {settings.map((s, i) => {
-                const h = sideHeadline(s);
-                const reasons = Array.isArray(s.reasons) ? s.reasons : [];
-                return (
-                  <MDBox key={i} mt={0.8}>
-                    <MDTypography variant="body2" component="div" sx={{ fontSize: 13 }}>
-                      {h.head}
-                      {" — "}
-                      <span style={{ color: s.resolved ? PAL.pass : PAL.warnText, fontWeight: 600 }}>{h.status}</span>
-                      {reasons.length ? `: ${reasons[0]}` : "."}
-                    </MDTypography>
-                    {reasons.length > 1 && (
-                      <MDBox component="ul" sx={{ m: 0, mt: 0.3, pl: 2.5 }}>
-                        {reasons.slice(1).map((r, j) => (
-                          <li key={j}>
-                            <MDTypography variant="caption" color="text" sx={{ fontSize: 10.5 }}>{String(r)}</MDTypography>
-                          </li>
-                        ))}
-                      </MDBox>
-                    )}
-                  </MDBox>
-                );
-              })}
-              {frozen.overridden && (
-                <MDTypography variant="caption" sx={{ color: PAL.warnText }} component="div" mt={0.5}>
-                  {`A clinician override was recorded with the request`
-                    + (frozen.override && frozen.override.reason ? `: ${frozen.override.reason}` : ".")
-                    + (frozen.override && frozen.override.by ? ` (${frozen.override.by})` : "")}
-                </MDTypography>
-              )}
+            {frozen.overridden && (
+              <MDTypography variant="caption" sx={{ color: PAL.warnText }} component="div" mt={0.5}>
+                {`A clinician override was recorded with the request`
+                  + (frozen.override && frozen.override.reason ? `: ${frozen.override.reason}` : ".")
+                  + (frozen.override && frozen.override.by ? ` (${frozen.override.by})` : "")}
+              </MDTypography>
+            )}
+
+            {/* ---------- the 4 checks ---------- */}
+            <MDBox mt={1.2}>
+              <ClosedLoopChecks plan={plan} />
             </MDBox>
 
-            {/* ---------- The settings adaptive mode can use: statement, then the exclusions ---------- */}
-            {(envelope.statement || envelope.override_ignored) && (
-              <MDBox mt={1}>
-                {envelope.statement && (
-                  <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: 10.5 }}>
-                    {`Settings adaptive mode can use: ${String(envelope.statement)}`}
-                  </MDTypography>
-                )}
+            {/* ---------- what adaptive mode ruled out ---------- */}
+            {(envelope.statement || envelope.n_exclusions != null) && (
+              <MDBox mt={2}>
+                <MDTypography variant="button" fontWeight="medium">What adaptive mode ruled out</MDTypography>
+                <MDBox mt={0.4}>
+                  <ExcludedSettingsChart envelope={envelope} strata={strata} />
+                </MDBox>
                 {envelope.override_ignored && (
                   <MDTypography variant="caption" component="div" sx={{ fontSize: 10.5, color: PAL.warnText }}>
                     {String(envelope.override_ignored)}
@@ -305,85 +157,15 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
                 )}
               </MDBox>
             )}
-            {exclusions.length > 0 && (
-              <MDBox mt={1.5}>
-                <MDTypography variant="button" fontWeight="medium">
-                  Settings the search excluded because adaptive mode cannot use them
-                </MDTypography>
-                <MDBox component="ul" sx={{ m: 0, mt: 0.3, pl: 2.5 }}>
-                  {exclusions.map((e, i) => {
-                    const t = exclusionText(e);
-                    return (
-                      <li key={i}>
-                        <MDTypography variant="caption" component="div" sx={{ fontSize: 11 }}>
-                          {typeof t === "string" ? t : (
-                            <>
-                              <strong>{t.setting}</strong>
-                              {t.reason ? ` — ${t.reason}` : ""}
-                            </>
-                          )}
-                        </MDTypography>
-                      </li>
-                    );
-                  })}
-                </MDBox>
-              </MDBox>
-            )}
 
-            {/* ---------- The check that decides whether closed loop may start ---------- */}
+            {/* ---------- what closed loop would do ---------- */}
             <MDBox mt={2}>
-              <MDTypography variant="button" fontWeight="medium">
-                The check that decides whether closed loop may start
-              </MDTypography>
-              <MDTypography variant="h5" component="div" sx={{ color: gateColor, mt: 0.3 }}>
-                {gate.verdict || (conditions.length ? "no verdict was returned" : "the check did not run")}
-              </MDTypography>
-              {conditions.map((c, i) => {
-                const st = verdictState(c);
-                const v = VERDICT[st];
-                return (
-                  <MDBox key={i} mt={0.8} display="flex" alignItems="flex-start" gap={1}>
-                    <MDTypography variant="body2" component="span" aria-label={v.word}
-                      sx={{ color: v.color, fontWeight: 700, fontSize: 16, lineHeight: 1.2, minWidth: 18 }}>
-                      {v.glyph}
-                    </MDTypography>
-                    <MDBox>
-                      <MDTypography variant="caption" fontWeight="medium" component="div" sx={{ fontSize: 11.5 }}>
-                        {conditionLabel(c.name)}
-                        <span style={{ color: v.color, marginLeft: 6 }}>{`[${v.word}]`}</span>
-                        {c.overridden ? <span style={{ color: PAL.warnText, marginLeft: 6 }}>[overridden]</span> : null}
-                      </MDTypography>
-                      <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: 10.5 }}>
-                        {c.detail || "no reason was returned"}
-                      </MDTypography>
-                    </MDBox>
-                  </MDBox>
-                );
-              })}
-              {(lfp.selection_note || lfp.refusal_class || lfp.selected != null) && (
-                <MDTypography variant="caption" color="text" component="div" sx={{ mt: 0.8, fontSize: 10.5 }}>
-                  {"Brain-signal evidence the check read: "}
-                  {lfp.selected
-                    ? `one sensing contact and band was selected (${Array.isArray(lfp.selected_key) ? lfp.selected_key.join(", ") : String(lfp.selected_key)})`
-                    : `none could be used${lfp.selection_note ? ` — ${lfp.selection_note}` : ""}`}
-                  {lfp.pinned_rate_hz != null ? `; evidence was restricted to recordings at the frozen rate ${fmt(lfp.pinned_rate_hz, 0)} Hz` : ""}
-                  {lfp.n_cells_screened != null ? `; ${lfp.n_cells_screened} contact-and-band combinations screened` : ""}
-                  {lfp.n_cells_unbuildable != null ? `, ${lfp.n_cells_unbuildable} could not be built` : ""}
-                  {lfp.unbuildable_reasons && Object.keys(lfp.unbuildable_reasons).length
-                    ? ` (${Object.entries(lfp.unbuildable_reasons).map(([k, n]) => `${n}: ${k}`).join("; ")})` : ""}
-                  .
-                </MDTypography>
-              )}
-            </MDBox>
-
-            {/* ---------- Stage 2: closed loop ---------- */}
-            <MDBox mt={2}>
-              <MDTypography variant="button" fontWeight="medium">Closed loop</MDTypography>
+              <MDTypography variant="button" fontWeight="medium">If closed loop could start</MDTypography>
               {stage2.started ? (
                 <>
                   <MDTypography variant="caption" color="text" component="div">
                     {`${stage2.n_valid_policies != null ? stage2.n_valid_policies : policies.length} closed-loop `
-                      + `policies could be drawn up`
+                      + `settings could be drawn up`
                       + (stage2.n_rejected != null ? `; ${stage2.n_rejected} were rejected` : "")
                       + (stage2.ranking_basis ? `. Ranked by: ${stage2.ranking_basis}` : "")
                       + (stage2.ranking_assessed === false ? " (ranking not assessed)" : "")
@@ -392,35 +174,23 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
                   <RecordTable rows={policies} columns={POLICY_COLUMNS} limit={10} />
                   {policies.length === 0 && (
                     <MDTypography variant="caption" color="text" component="div">
-                      Closed loop started but returned no policy rows.
+                      Closed loop started but returned no settings.
                     </MDTypography>
                   )}
                 </>
               ) : (
-                <>
-                  <MDTypography variant="caption" color="text" component="div">
-                    {stage2.reason
-                      ? `Closed loop did not start: ${stage2.reason}`
-                      : "Closed loop did not start."}
-                  </MDTypography>
-                  {refusals.length > 0 && (
-                    <MDBox component="ul" sx={{ m: 0, mt: 0.3, pl: 2.5 }}>
-                      {refusals.map((r, i) => (
-                        <li key={i}>
-                          <MDTypography variant="caption" component="div" sx={{ fontSize: 10.5 }}>
-                            <strong>{conditionLabel(r.condition)}</strong>
-                            {r.reason ? ` — ${r.reason}` : ""}
-                          </MDTypography>
-                        </li>
-                      ))}
-                    </MDBox>
-                  )}
-                </>
+                <MDTypography variant="caption" color="text" component="div">
+                  {refusals.length
+                    ? `Nothing was drawn up: ${refusals.length} check${refusals.length === 1 ? "" : "s"} above block${refusals.length === 1 ? "s" : ""} (${refusals.map((r) => conditionLabel(r.condition)).join("; ")}).`
+                    : "Nothing was drawn up."}
+                </MDTypography>
               )}
               {Array.isArray(stage2.notes) && stage2.notes.length > 0 && (
-                <MDTypography variant="caption" color="text" component="div" sx={{ mt: 0.4, fontSize: 10.5 }}>
-                  {stage2.notes.map((n) => String(n)).join(" ")}
-                </MDTypography>
+                <Fold show="Notes" hide="Hide notes" dense>
+                  <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: 10.5 }}>
+                    {stage2.notes.map((n) => String(n)).join(" ")}
+                  </MDTypography>
+                </Fold>
               )}
             </MDBox>
 
@@ -430,8 +200,8 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
             </MDTypography>
 
             {/* ---------- folded: how the answer was arrived at ---------- */}
-            <Fold show="How this plan was arrived at (what each stage read, and the fit for each combination of pulse width and side)"
-              hide="Hide how this plan was arrived at">
+            <Fold show="How this was arrived at (what each step read, and the fit for each pulse width and side)"
+              hide="Hide how this was arrived at">
               {["stage1", "gate", "stage2"].filter((k) => provenance[k]).map((k) => (
                 <MDTypography key={k} variant="caption" color="text" component="div" sx={{ fontSize: 10.5, mb: 0.4 }}>
                   {String(provenance[k])}
@@ -446,7 +216,7 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
               {strata.length > 0 && (
                 <MDBox mt={0.8}>
                   <MDTypography variant="caption" fontWeight="medium" component="div">
-                    The fit for each combination of pulse width and side
+                    The fit for each pulse width and side
                   </MDTypography>
                   <RecordTable rows={strata} columns={STRATA_COLUMNS} limit={20} />
                 </MDBox>
