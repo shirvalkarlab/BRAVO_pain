@@ -205,3 +205,8 @@
   inits + 3 guard tests + settings note; Django process: bravo_service / adapter / plots one object
   each, tile memo one dict. Frontend rebuilt (559.b3145144: "adaptive cannot use", new loading
   line; old loading line absent). Suites: host 1160/43/0; container 633/0. Decision 143.
+- Watched the Closed-Loop page after the landings: the PI's browser has L 1-3+ 24.5 Hz, and D19
+  blocked ("slope sign 1, must be negative"). Builder measured: hazard 1's margin alone -- slope
+  -3.79 (13 pts/4 runs) -> +17.31 (11/3), "established" by the interval though p 0.074. Put the
+  margin behind post_ramp.USE_POST_RAMP_MARGIN, shipped OFF, rule versions carry the state; live:
+  eligible / unsupported / E1 -3.79 again. Host 1161/43/0; container 633/0. Decision 144.

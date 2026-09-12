@@ -21,7 +21,9 @@ import pandas as pd
 from . import three_source_response as _3src
 
 KIND = "ground_truth_verdict"
-RULE_VERSION = "v3_post_ramp_margin"   # v3: the voltage-trace route carries the 20 s post-ramp margin (2026-09-12)
+from . import post_ramp as _post_ramp
+
+RULE_VERSION = "v3_post_ramp_margin_" + _post_ramp.version_tag()   # v3: the voltage-trace route carries the margin, on or off (2026-09-12)
 
 ROUTE_DEVICE = "device"
 ROUTE_VOLTAGE_TRACE = "voltage_trace_calibrated"

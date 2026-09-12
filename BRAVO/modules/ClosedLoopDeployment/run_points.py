@@ -32,7 +32,9 @@ import numpy as np
 import pandas as pd
 
 KIND = "three_source_run_points"
-RULE_VERSION = "v3_run_points_post_ramp_margin"   # v3: the 20 s post-ramp margin (2026-09-12)
+from . import post_ramp as _post_ramp
+
+RULE_VERSION = "v3_run_points_post_ramp_margin_" + _post_ramp.version_tag()   # v3: the margin, on or off (2026-09-12)
 
 # The three routes, by the names the comparison uses (three_source_response.SOURCE_*). Spelled here
 # rather than imported so a reader of a stored table can match them without the module.

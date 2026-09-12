@@ -5,16 +5,17 @@ problem is that the module never handed the rule the value the device already re
 that still blocks does so for a reason the PI has read and agreed with.
 
 ## Next Step
-PI away 3-4 h, autonomous (2026-09-12 afternoon). Layout fix landed (f2bdb7a5); Phase 6 landed
-(8882c92c, 51 s -> 10 s). Phase 7: the Biomarkers and
-Closed-Loop reviews are in (artifacts/review_2026-09-12_*.md) and their builders are running; the
-StimOptimizer reviewer starts when Phase 6 lands, then C4 (package double-import). Each landing:
-review the report, suites, commit, push, reload workers, decision rows.
+All seven phases landed (f2bdb7a5 layout, 8882c92c speed, e5531f43 Closed-Loop, b7910fdb
+Biomarkers, 48bf7abf Stim Optimizer + C4). Three pages smoke-tested in the PI's browser. Open on
+the PI: the four number-moving changes (decisions 141-143) -- the California day (B1), the 20 s
+post-ramp margin (hazard 1, which now blocks D19 on L 1-3+ 24.5 Hz), the Right pulse width (S1),
+and the stream safety anchors (S8, shipped OFF). Awaiting the D19 before/after measurement, then
+the plain-language summary for him.
 
 ## Current Phase
 Phase 7
 
-phases: 6/7 complete
+phases: 7/7 complete
 
 ### Phase 1: Measure what the ledger says today
 - [x] Run the live report on RCS08 at the committed band (L 0-2+, 24.5 Hz) and list every non-pass row
@@ -52,10 +53,10 @@ phases: 6/7 complete
 - **Status:** complete
 
 ### Phase 7: Code review of the three modules, findings implemented
-- [ ] Three reviewers in parallel (Biomarkers, Closed-Loop, Stim Optimizer), actionable findings with evidence
-- [ ] Findings implemented by builders, one module at a time, suites after each; equality proofs where a number could move
-- [ ] Decisions and the review report into the record; commit; push
-- **Status:** in_progress
+- [x] Three reviewers in parallel (Biomarkers, Closed-Loop, Stim Optimizer), actionable findings with evidence
+- [x] Findings implemented by builders, one module at a time, suites after each; equality proofs where a number could move
+- [x] Decisions and the review report into the record; commit; push
+- **Status:** complete
 
 ### Phase 5: Prove it on the page and land
 - [x] Frontend: ledger shows the new verdict kinds and the measurement current; rebuild; strings found in the served chunk

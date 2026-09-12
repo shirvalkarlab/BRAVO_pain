@@ -97,6 +97,7 @@ import pandas as pd
 
 from Biomarkers.routines import analytics
 from . import clinic_steps
+from . import post_ramp as _post_ramp
 from StimOptimizer.routines import within_visit
 
 
@@ -850,13 +851,14 @@ def _tile_panel(source, tile_t, tile_power, ok_mask, centres, steps, *, band_ind
     # settled-tile reading applies. This CHANGES the settled numbers wherever a setting was held
     # for less than window_s + 20 s; the count on RCS08 is in the implementation report of that
     # review, and the rule versions of every stored table derived from here were bumped so no
-    # entry built without the margin is served as if built with it.
+    # entry built without the margin is served as if built with it. SHIPPED OFF (decision 144):
+    # `post_ramp.USE_POST_RAMP_MARGIN` decides, and `post_ramp.py` says what it did to the PI's band.
     power, table = within_visit.mean_power_before_next_change(
         steps["t0"].to_numpy(dtype=float), steps["current_mA"].to_numpy(dtype=float),
         t, P, block=steps["block"].to_numpy(), step_end_t=steps["t_end"].to_numpy(dtype=float),
         window_s=window_s, min_chunks=min_pieces,
         ramp_end_t=steps["t0"].to_numpy(dtype=float),
-        ramp_margin_s=within_visit.RAMP_EXCLUDE_S)
+        ramp_margin_s=_post_ramp.margin_s())
 
     used = np.isfinite(power).any(axis=1) if power.ndim == 2 else np.isfinite(power)
     panel.n_settings_used = int(used.sum())

@@ -433,12 +433,15 @@ def test_the_device_route_refuses_a_window_where_its_sensing_band_changed():
 # -------------------------------------------------------------------------------------------------
 # 7. The 20 s post-ramp margin (the 2026-09-12 review's hazard 1)
 # -------------------------------------------------------------------------------------------------
-def test_the_first_twenty_seconds_after_a_current_change_are_left_out_of_the_settled_window():
+def test_the_first_twenty_seconds_after_a_current_change_are_left_out_of_the_settled_window(monkeypatch):
     """Each setting's t0 is the last increment of the move that produced it, so the settled window
     could never reach INTO the ramp -- but it could start the instant the current stopped moving.
-    `within_visit.RAMP_EXCLUDE_S` (20 s) is now applied here, as it is in the Stim Optimizer's own
-    settled-tile reading. Pieces in those 20 s carry a value the settled mean must not contain."""
+    WITH THE SWITCH ON, `within_visit.RAMP_EXCLUDE_S` (20 s) is applied here, as it is in the Stim
+    Optimizer's own settled-tile reading. Pieces in those 20 s carry a value the settled mean must
+    not contain. The switch ships OFF (decision 144; `post_ramp.py` says why) -- the next test."""
     from StimOptimizer.routines import within_visit as WV
+    from ClosedLoopDeployment import post_ramp
+    monkeypatch.setattr(post_ramp, "USE_POST_RAMP_MARGIN", True)
     hold_s, piece_s = 45.0, 1.5
     currents = [0.0, 1.0, 2.0, 3.0]
     steps = _steps(currents, hold_s=hold_s)
@@ -469,8 +472,41 @@ def test_the_first_twenty_seconds_after_a_current_change_are_left_out_of_the_set
     assert all(v > 100.0 for v in power[1:, 0])
 
 
-def test_every_stored_table_derived_from_the_comparison_changed_rule_version_for_the_margin():
+def test_the_margin_ships_off_and_the_settled_window_then_starts_at_the_move_end():
+    """The default (decision 144): the first 20 s after a move stay IN the window, exactly the rule
+    before 2026-09-12, so the PI's page reads as it did until he decides on the margin. Same ladder
+    as the test above: with the margin off the settled mean carries the first-20-seconds value."""
+    from ClosedLoopDeployment import post_ramp
+    from StimOptimizer.routines import within_visit as WV
+    assert post_ramp.USE_POST_RAMP_MARGIN is False
+    assert post_ramp.margin_s() == 0.0 and post_ramp.version_tag() == "off"
+    hold_s, piece_s = 45.0, 1.5
+    currents = [0.0, 1.0, 2.0, 3.0]
+    steps = _steps(currents, hold_s=hold_s)
+    n = int(len(currents) * hold_s / piece_s)
+    t = 1_000_000.0 + piece_s * np.arange(n, dtype=float)
+    since_t0 = (t - 1_000_000.0) % hold_s
+    lsb = np.where(since_t0 < WV.RAMP_EXCLUDE_S, 1000.0, 100.0)[:, None] * np.ones((1, CENTRES.size))
+    tiles = {"centers_hz": CENTRES.tolist(), "band_half_hz": 2.5, "window_s": piece_s,
+             "td": {"t": t, "lsb": lsb, "ok": np.ones(n, bool), "saturated": np.zeros(n, bool)},
+             "psd": {"t": np.empty(0), "lsb": np.empty((0, CENTRES.size))}}
+    comp = TSR.build_comparison(
+        label="test run", ramped_side="Left", sensing_contact="ONE_THREE_LEFT", steps=steps,
+        visit_date="2026-08-18", window_start_local="2026-08-18 12:00:00",
+        window_end_local="2026-08-18 12:03:00", tiles=tiles,
+        device_band_power=_device(value=300.0, n_settings=len(currents), currents=currents,
+                                  hold_s=hold_s),
+        stimulation_rate_hz=RATE_HZ)
+    td = _panel(comp, TSR.SOURCE_TIME_DOMAIN)
+    got = [v for v in td.settled_power if v is not None]
+    assert len(got) == 3, td.settled_power
+    assert all(v > 100.0 for v in got), got       # the 1000-valued pieces are inside the window
+
+
+def test_every_stored_table_derived_from_the_comparison_carries_the_margin_state_in_its_rule_version():
     from ClosedLoopDeployment import run_points as RP, amplitude_effect as AE, ground_truth as GT
+    from ClosedLoopDeployment import post_ramp
     for mod, name in ((RP, "RULE_VERSION"), (AE, "RULE_VERSION"), (AE, "POOLED_RULE_VERSION"),
                       (GT, "RULE_VERSION")):
-        assert "post_ramp_margin" in getattr(mod, name), (mod.__name__, name, getattr(mod, name))
+        v = getattr(mod, name)
+        assert "post_ramp_margin" in v and v.endswith("_" + post_ramp.version_tag()), (mod.__name__, name, v)

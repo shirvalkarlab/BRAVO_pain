@@ -322,3 +322,50 @@ store stamp, which the Biomarkers builder rewrote in the same checkout while thi
    is what fills it.
 4. The reliable-change floor's epoch cut (`reliable_change.py`) still ends the open epoch at the
    last export; the review named it and the fix instruction did not include it.
+
+---
+
+## Hazard 1 on the band in the PI's browser (L 1-3+ at 24.5 Hz)
+
+**Question.** The PI's browser has ONE_THREE_LEFT (L 1-3+) at 24.5 Hz committed, and the live page
+reads "NOT eligible: 1 blocking" on D19. Is that block caused by hazard 1 (the 20 s post-ramp
+margin) alone? **Yes.** Measured 2026-09-12 at commit `48bf7abf` with
+`BRAVO/_agent_bridge/_probe_tl/probe_h1_L13_d19.py`: three runs of the report for that candidate in
+one process -- the production store as the page reads it now; a scratch store rebuilt under the new
+margin; a scratch store rebuilt with the margin set to 0 (the old rule). The scratch stores are the
+adapter's own root override, so the production store was never written to by the old-margin run
+(read back afterwards: its row still reads +17.31). No production code was edited.
+
+| | OLD margin (0 s), scratch rebuild | NEW margin (20 s), scratch rebuild | production store now |
+|---|---|---|---|
+| pooled slope, device units per mA | **−3.788** | **+17.310** | +17.310 |
+| standard error | 4.447 | 8.237 | 8.237 |
+| pooled p | 0.419 | 0.0737 | 0.0737 |
+| points / runs of rising current | **13 / 4** | **11 / 3** | 11 / 3 |
+| E1 interval (1.96 SE) | −12.50 to +4.93 | +1.17 to +33.46 | same |
+| E1 sign, established? | −1, not established | **+1, established** (interval excludes zero) | same |
+| D19 row | advisory, `recorded_value` -- passes on the point sign −1 (decision 134), interval printed | **failure, `failed`**: "power-versus-amplitude slope sign 1 (must be negative)" | same |
+| D19 observed text | "... sign −1 (must be negative) -- a point sign that is NOT statistically established: interval −12.5 to 4.93, p 0.419 and power-versus-pain slope sign 1 ... interval −0.0826 to 0.197, p 0.46" | "... slope sign 1 (must be negative) and power-versus-pain slope sign 1 (must be positive) -- a point sign that is NOT statistically established: interval −0.0826 to 0.197, p 0.46" | same, word for word what the browser shows |
+| eligibility summary | eligible (51 rules checked, 30 advisory) | NOT eligible: 1 blocking, 0 unknown of 51, 1 deferred | same |
+| verdict / licensed | **unsupported** / False | **blocked** / False | blocked / False |
+
+**In plain words.** Under the old rule the current-to-power slope on L 1-3+ at 24.5 Hz was a small
+negative number that could not be told from zero (13 points across 4 runs, p 0.42), so D19 passed
+on the point sign and the page read "unsupported". The 20 s margin removes one whole run
+(2025-09-04 14:15, whose only usable setting had exactly the 10 pieces required) and one point from
+the 2026-08-18 12:51 run, leaving 11 points across 3 runs, and the slope on those is +17.3 per mA
+with a standard error of 8.2. That is a positive slope -- power rising with current, the wrong way
+for the control law -- and its 1.96-standard-error interval (+1.2 to +33.5) excludes zero, so the
+edge is now "established" and D19 blocks. Nothing else in the report differs between the two
+scratch runs' D19 inputs; the power-to-pain edge (E2, +1, not established, interval −0.0826 to
+0.197, p 0.46) is identical in all three runs.
+
+**One thing the PI should see beside this.** The edge is called "established" because its
+1.96-standard-error interval excludes zero, while the same row's own p-value is 0.074. The two
+come from different calculations in `edges.pooled_actuation_edge` (decision 126): the interval is
+slope ± 1.96 × the standard error, the p is the pooled model's test. That disagreement predates
+hazard 1 and is not changed by it, but it is what turns the +17.3 into a blocking D19 rather than
+a recorded point sign. Reverting the margin (drop the two keyword arguments in
+`three_source_response._tile_panel` and the five rule-version bumps) restores the left column.
+The scratch stores are under `_agent_bridge/_probe_tl/_scratch_h1/` (gitignored) and can be
+deleted.
