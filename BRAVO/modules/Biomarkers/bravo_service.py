@@ -342,6 +342,35 @@ def _resolve_biomarker_metric(request_data, pro_df):
     return pro_df, metric, (metric,)
 
 
+def _recording_set_identity(participant_uid):
+    """Identity of every recording row the database holds for this participant, from the rows
+    alone (no file is opened): the participant, the row count, and a digest over every row's
+    (uid, content hash, type), sorted. A new ingest, a re-decode that replaces a row in place, or
+    a deletion balanced by an insertion each produce a different value.
+
+    WHY, 2026-09-11. The in-process memos below used to be keyed on the participant alone, with
+    the justification "recordings are immutable once exported". Each recording is; the SET is
+    not: the daily noon ingest (`bravo_daily_ingest.sh` -> `manage.py ingest_percept_folder`)
+    adds 4-5 rows a day for RCS08, and nothing cleared the memos, so a worker that had served the
+    timeline before noon kept serving the previous day's recording list until it happened to
+    restart. Reproduced in one process on the live server: a new row appeared, the endpoint
+    performed 0 recording loads and reported the old count. Every memo now carries this value in
+    its key. Mirrors `ClosedLoopDeployment.adapter.recording_set_signature` (decision 24), ported
+    rather than imported because that module imports this one and the reverse would be a cycle.
+    Costs one indexed query over the rows (measured below in the decision row), which is small
+    beside the seconds of decoding the memos save.
+    """
+    import hashlib
+    Participant = models.Participant.find(uid=participant_uid)
+    if not Participant:
+        return (str(participant_uid), 0, "")
+    SourceFiles = models.SourceFile.find_all(owner=Participant)
+    rows = models.Recording.find_all(source__in=SourceFiles).values_list("uid", "hashed", "type")
+    ident = sorted((str(u), str(h), str(t)) for u, h, t in rows)
+    blob = "|".join("~".join(t) for t in ident).encode("utf8")
+    return (str(participant_uid), len(ident), hashlib.blake2b(blob, digest_size=16).hexdigest())
+
+
 def _load_recordings(participant_uid, types):
     """Return a list of loaded recording dicts for a participant, for the given DB types."""
     Participant = models.Participant.find(uid=participant_uid)
@@ -862,19 +891,22 @@ def _pain_reports_for_drilldown(request_data, participant):
     return _load_pros(request_data, participant)
 
 
-def _recordings_setup_cached(participant_uid, td=None):
+def _recordings_setup_cached(participant_uid, td=None, recording_set=None):
     """(td, psd_list, event_blocks, montage_blocks, chan_order, channels) for one participant.
 
-    Memoized in-process, and holding no pain-report data of any kind -- the report table has its
-    own, separately-ruled cache (`_PRO_BUILD_CACHE`), and mixing the two here would hide which of
-    them a given reader is actually relying on.
+    Memoized in-process under the participant's CURRENT recording set (`_recording_set_identity`),
+    so a row added by the daily ingest is a miss, never a stale hit. Holds no pain-report data of
+    any kind -- the report table has its own, separately-ruled cache (`_PRO_BUILD_CACHE`), and
+    mixing the two here would hide which of them a given reader is actually relying on.
 
     `td` lets a caller that has ALREADY loaded the time-domain recordings hand them in rather than
     have them read a second time; the grid build does exactly that. It is only consulted when this
-    participant is not in the memo yet.
+    recording set is not in the memo yet. `recording_set` lets a caller that has already computed
+    the identity hand it in.
     """
+    key = recording_set or _recording_set_identity(participant_uid)
     with _RECORDINGS_SETUP_MEMO_LOCK:
-        cached = _RECORDINGS_SETUP_MEMO.get(participant_uid)
+        cached = _RECORDINGS_SETUP_MEMO.get(key)
     if cached is not None:
         return cached
     td = td if td is not None else _load_recordings(participant_uid, TIMEDOMAIN_TYPES)
@@ -886,15 +918,16 @@ def _recordings_setup_cached(participant_uid, td=None):
     channels = list(dict.fromkeys(availability._canon_channel(c) for c in (chan_order or [])))
     result = (td, psd_list, event_blocks, montage_blocks, chan_order, channels)
     with _RECORDINGS_SETUP_MEMO_LOCK:
-        if len(_RECORDINGS_SETUP_MEMO) >= _RECORDINGS_SETUP_MEMO_MAX:
+        if key not in _RECORDINGS_SETUP_MEMO and len(_RECORDINGS_SETUP_MEMO) >= _RECORDINGS_SETUP_MEMO_MAX:
             _RECORDINGS_SETUP_MEMO.pop(next(iter(_RECORDINGS_SETUP_MEMO)))
-        _RECORDINGS_SETUP_MEMO[participant_uid] = result
+        _RECORDINGS_SETUP_MEMO[key] = result
     return result
 
 
-# Same shape and same decision-22 justification as _RECORDINGS_SETUP_MEMO above (recordings are
-# immutable once exported, so a no-expiry, participant-keyed memo is safe): the chronic/power-domain
-# branch had no cache at all, unlike the time-domain branch's _cached_psd_matrix. Holds ONLY
+# Same shape as _RECORDINGS_SETUP_MEMO above and keyed the same way, on the participant's current
+# recording set (each recording is immutable once exported, but the SET grows with every ingest,
+# so a participant-only key served the previous day's list -- see _recording_set_identity): the
+# chronic/power-domain branch had no cache at all, unlike the time-domain branch's _cached_psd_matrix. Holds ONLY
 # recording-derived data (chronic_list, powerdomain_list, and their already-concatenated
 # power_list), never any pain-report data.
 _POWER_LIST_MEMO = {}
@@ -902,16 +935,18 @@ _POWER_LIST_MEMO_MAX = 8
 _POWER_LIST_MEMO_LOCK = threading.Lock()
 
 
-def _power_list_cached(participant_uid):
-    """(chronic_list, powerdomain_list, power_list) for one participant, memoized in-process.
+def _power_list_cached(participant_uid, recording_set=None):
+    """(chronic_list, powerdomain_list, power_list) for one participant, memoized in-process under
+    the participant's current recording set (`_recording_set_identity`).
 
     `power_list` is `chronic_list` concatenated with `powerdomain_list` converted to chronic-shaped
     entries (adapter.bravo_powerdomain_to_chronic_like) -- exactly the value run_for_participant's
     powerdomain/both branch already built inline before this memo existed, moved here unchanged so
     a second request for the same participant does not reload and re-concatenate it.
     """
+    key = recording_set or _recording_set_identity(participant_uid)
     with _POWER_LIST_MEMO_LOCK:
-        cached = _POWER_LIST_MEMO.get(participant_uid)
+        cached = _POWER_LIST_MEMO.get(key)
     if cached is not None:
         return cached
     chronic_list = _load_recordings(participant_uid, CHRONIC_TYPES)
@@ -922,15 +957,15 @@ def _power_list_cached(participant_uid):
     power_list = list(chronic_list) + adapter.bravo_powerdomain_to_chronic_like(powerdomain_list)
     result = (chronic_list, powerdomain_list, power_list)
     with _POWER_LIST_MEMO_LOCK:
-        if len(_POWER_LIST_MEMO) >= _POWER_LIST_MEMO_MAX:
+        if key not in _POWER_LIST_MEMO and len(_POWER_LIST_MEMO) >= _POWER_LIST_MEMO_MAX:
             _POWER_LIST_MEMO.pop(next(iter(_POWER_LIST_MEMO)))
-        _POWER_LIST_MEMO[participant_uid] = result
+        _POWER_LIST_MEMO[key] = result
     return result
 
 
-# Same decision-22 justification as _RECORDINGS_SETUP_MEMO/_POWER_LIST_MEMO above (recordings are
-# immutable once exported): availability_for_participant's own three raw loads (td, chronic_list,
-# powerdomain_list), memoized in-process. Deliberately a THIRD, narrower memo rather than a reuse
+# Keyed like _RECORDINGS_SETUP_MEMO/_POWER_LIST_MEMO above, on the participant's current recording
+# set (see _recording_set_identity): availability_for_participant's own three raw loads (td,
+# chronic_list, powerdomain_list), memoized in-process. Deliberately a THIRD, narrower memo rather than a reuse
 # of the two above: _recordings_setup_cached also builds psd_list/event/montage PSD blocks this
 # lightweight endpoint never reads, and _power_list_cached does not carry td. Holds no pain-report
 # data of any kind.
@@ -939,10 +974,12 @@ _AVAILABILITY_RECORDINGS_MEMO_MAX = 8
 _AVAILABILITY_RECORDINGS_MEMO_LOCK = threading.Lock()
 
 
-def _availability_recordings_cached(participant_uid):
-    """(td, chronic_list, powerdomain_list) for one participant, memoized in-process."""
+def _availability_recordings_cached(participant_uid, recording_set=None):
+    """(td, chronic_list, powerdomain_list) for one participant, memoized in-process under the
+    participant's current recording set (`_recording_set_identity`)."""
+    key = recording_set or _recording_set_identity(participant_uid)
     with _AVAILABILITY_RECORDINGS_MEMO_LOCK:
-        cached = _AVAILABILITY_RECORDINGS_MEMO.get(participant_uid)
+        cached = _AVAILABILITY_RECORDINGS_MEMO.get(key)
     if cached is not None:
         return cached
     td = _load_recordings(participant_uid, TIMEDOMAIN_TYPES)
@@ -953,9 +990,9 @@ def _availability_recordings_cached(participant_uid):
             c.setdefault("Source", "chronic")
     result = (td, chronic_list, powerdomain_list)
     with _AVAILABILITY_RECORDINGS_MEMO_LOCK:
-        if len(_AVAILABILITY_RECORDINGS_MEMO) >= _AVAILABILITY_RECORDINGS_MEMO_MAX:
+        if key not in _AVAILABILITY_RECORDINGS_MEMO and len(_AVAILABILITY_RECORDINGS_MEMO) >= _AVAILABILITY_RECORDINGS_MEMO_MAX:
             _AVAILABILITY_RECORDINGS_MEMO.pop(next(iter(_AVAILABILITY_RECORDINGS_MEMO)))
-        _AVAILABILITY_RECORDINGS_MEMO[participant_uid] = result
+        _AVAILABILITY_RECORDINGS_MEMO[key] = result
     return result
 
 
@@ -963,9 +1000,10 @@ def _availability_recordings_cached(participant_uid):
 # that could change it -- participant, the native-LSB-tolerance knob (the one live-updating control
 # this lightweight endpoint reads), the resolved label metric, and a CONTENT DIGEST of the
 # pain-report table (never the participant alone) -- so a newly-filed rating is a cache MISS, never
-# a stale HIT, honouring decision 22's rule that no pain-derived product may serve stale. No expiry
-# beyond that: recordings are immutable once exported and everything else that could change the
-# answer is already in the key. `_load_pros` itself is NOT memoized here or anywhere in this
+# a stale HIT, honouring decision 22's rule that no pain-derived product may serve stale -- and,
+# since 2026-09-11, the participant's current recording set (`_recording_set_identity`), so the
+# row the daily ingest adds is a miss too. No expiry beyond that: each recording is immutable once
+# exported and everything else that could change the answer is already in the key. `_load_pros` itself is NOT memoized here or anywhere in this
 # function -- decision 22 requires it fetched fresh every time, which is also what makes the digest
 # in this key trustworthy rather than itself stale.
 _AVAILABILITY_RESULT_MEMO = {}
@@ -3852,7 +3890,8 @@ def availability_for_participant(request_data):
     pro_df = _load_pros(request_data, Participant)
     pro_df, label_metric, _ = _resolve_biomarker_metric(request_data, pro_df)
     pro_digest = _pro_table_digest(pro_df) if pro_df is not None and len(pro_df) else "empty"
-    cache_key = ("availability_v1", participant_uid, native_lsb_tolerance_s, label_metric, pro_digest)
+    recording_set = _recording_set_identity(participant_uid)
+    cache_key = ("availability_v2", recording_set, native_lsb_tolerance_s, label_metric, pro_digest)
 
     def _build():
         # Only reached on a genuine cache miss -- the recording loads and _build_availability
@@ -3860,7 +3899,8 @@ def availability_for_participant(request_data):
         # a hit. Recordings are loaded through the participant-scoped memo above so that even a
         # miss (a newly-filed rating, say) does not re-pay the recording-decode cost if some other
         # request already warmed it for this participant.
-        td, chronic_list, powerdomain_list = _availability_recordings_cached(participant_uid)
+        td, chronic_list, powerdomain_list = _availability_recordings_cached(
+            participant_uid, recording_set=recording_set)
         chan_order = _derive_chan_order(td)
         recorded_powers = _recorded_powers(powerdomain_list)
         region_map = _region_map(Participant, list(chan_order) + [p["raw"] for p in recorded_powers])
