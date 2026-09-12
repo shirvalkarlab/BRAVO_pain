@@ -802,13 +802,34 @@ def test_cycling_is_read_from_the_newest_active_sensing_group_not_device_wide(tm
     assert sum(S["cycling_by_group_kind"].values()) == 2, "one group setting per file, no extras"
 
 
-def test_pocket_adaptor_stays_unknown_rather_than_assumed_absent():
+def test_pocket_adaptor_stays_unknown_rather_than_assumed_absent(tmp_path, monkeypatch):
     """The session report does not carry it, so D32 must keep it unknown. Assuming absence would
     let a rule pass on a fact nobody checked, which is the failure mode this module exists to
-    avoid."""
+    avoid.
+
+    Pointed at a temporary store with the background rebuild switched off (2026-09-12). Since
+    commit 56d04cfc the facts resolve through the store and, on a stale summary, START a real
+    rebuild against the production root; a test reaching that path from the live record is the
+    decision-96 class of accident, and this one did as soon as the daily ingest made the stored
+    summary stale. The committed 2026-09-05 file is the fallback the test now exercises, which is
+    the one that carries no pocket-adaptor field, so the assertion is unchanged.
+    """
     from ClosedLoopDeployment import device_facts as DF
-    f, _p = DF.session_report_facts_for("2e3c75c00d7f4f37b53a048d195f11da",
-                                        channel="ONE_THREE_LEFT", hemisphere="Left")
+    try:
+        from modules.CacheStore import store as st
+    except ImportError:
+        from CacheStore import store as st
+    prev = st.DIR_OVERRIDE
+    st.DIR_OVERRIDE = str(tmp_path)
+    monkeypatch.setattr(DF, "SESSION_REPORT_SUMMARY_BACKGROUND", False)
+    monkeypatch.setattr(DF, "_spawn_detached",
+                        lambda argv, log: (_ for _ in ()).throw(AssertionError("launcher fired")))
+    try:
+        f, _p = DF.session_report_facts_for("2e3c75c00d7f4f37b53a048d195f11da",
+                                            channel="ONE_THREE_LEFT", hemisphere="Left")
+    finally:
+        st.clear()                    # while still pointed at tmp_path; never the real root
+        st.DIR_OVERRIDE = prev
     assert "has_pocket_adaptor" not in f or f["has_pocket_adaptor"] is None
 
 
