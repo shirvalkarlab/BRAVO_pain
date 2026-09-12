@@ -36,6 +36,7 @@
 #   BAND_SWEEP_PRECOMPUTE=0                     skip the every-pain-score half only, and still run
 #                                               the stability half
 #   SESSION_REPORT_SUMMARY_PRECOMPUTE=0         skip the session-report summary rebuild only
+#   LIVE_TESTS_DAILY=0                          skip the daily run of the `live` tests only
 set -u
 
 BRAVO_DIR=/usr/src/BRAVO
@@ -113,6 +114,21 @@ while true; do
     say "session-report summary pass finished, every participant either stored a summary, was current, or had no reports"
   else
     say "SESSION-REPORT SUMMARY PASS FINISHED WITH FAILURES — see the lines above for which participant"
+  fi
+
+  # THE LIVE-RECORD TESTS (2026-09-12). The tests marked `live` read the live RCS08 record through the
+  # real service and cost about a minute, so they left the routine test run; this is where they still
+  # run every day. Last in the pass, AFTER the precomputes, so they read the freshly built entries
+  # rather than racing the jobs that build them. The two summary lines are written to this log;
+  # a failure is reported and never stops the loop.
+  if [ "${LIVE_TESTS_DAILY:-1}" = "0" ]; then
+    say "the daily live-test run is switched off by LIVE_TESTS_DAILY=0"
+  else
+    LIVE_OUT="$(sh _agent_bridge/run_both_suites.sh --live 2>&1)"
+    say "live tests: $(printf '%s' "$LIVE_OUT" | tr '\n' ' ')"
+    if printf '%s' "$LIVE_OUT" | grep -q -E ' failed| error|FAIL=[1-9]'; then
+      say "LIVE TESTS FINISHED WITH FAILURES — see _agent_bridge/_suite_logs/host_live.log and container_live.log"
+    fi
   fi
   sleep "$INTERVAL"
 done

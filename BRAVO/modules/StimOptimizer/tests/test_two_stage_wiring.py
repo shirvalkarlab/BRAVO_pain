@@ -201,7 +201,12 @@ def test_without_the_flag_the_response_has_no_two_stage_key_and_the_path_is_neve
                            "washin_min"]
 
 
-def test_without_the_flag_every_field_equals_the_flag_on_response_outside_the_new_block(bench):
+# FIT ONCE, ASSERT MANY (2026-09-12). The flag-on requests below all fit Stage 1 on `bench.es`
+# with the same arguments, once per test, and assert on the block the service builds AFTER the fit.
+# `shared_stage1` (conftest.py) hands them one result. The field-for-field comparison against a
+# direct `run_two_stage_live` call deliberately does NOT request it, so that test still compares
+# two independent fits, which is what its name says it does.
+def test_without_the_flag_every_field_equals_the_flag_on_response_outside_the_new_block(bench, shared_stage1):
     """The flag adds the `two_stage` block and changes nothing else: every other field of the
     two responses is compared and must be equal, except the store's own key and timestamp, which
     differ BECAUSE the flag is in the key."""
@@ -222,7 +227,7 @@ def test_without_the_flag_every_field_equals_the_flag_on_response_outside_the_ne
 # ---------------------------------------------------------------------------------------------
 # With the flag
 # ---------------------------------------------------------------------------------------------
-def test_with_the_flag_the_block_carries_the_gate_verdict_with_every_condition_named(bench):
+def test_with_the_flag_the_block_carries_the_gate_verdict_with_every_condition_named(bench, shared_stage1):
     out = BS.run_for_participant(dict(REQ_FLAG))
     two = out["two_stage"]
     assert two["available"] is True and two["requested"] is True
@@ -253,7 +258,7 @@ def test_with_the_flag_the_block_carries_the_gate_verdict_with_every_condition_n
     assert TILES_KEY in two["provenance"]["gate"]
 
 
-def test_a_gate_refusal_is_reported_with_its_reasons_and_stage_2_is_absent(bench):
+def test_a_gate_refusal_is_reported_with_its_reasons_and_stage_2_is_absent(bench, shared_stage1):
     """On the aliased matrix Stage 1 cannot resolve its choice, so the gate refuses on
     `openloop_choice_resolved`; the refusal is named, and no policies are reported."""
     two = BS.run_for_participant(dict(REQ_FLAG))["two_stage"]
@@ -335,7 +340,7 @@ def test_the_flag_is_in_the_response_key_and_the_four_tables_key_ignores_it():
     assert "none" not in BS._products_signature(off)
 
 
-def test_a_flag_on_response_is_served_from_the_store_with_its_block_and_a_flag_off_one_without(bench):
+def test_a_flag_on_response_is_served_from_the_store_with_its_block_and_a_flag_off_one_without(bench, shared_stage1):
     first = BS.run_for_participant(dict(REQ_FLAG))
     assert first["store"]["served_from_store"] is False and "two_stage" in first
     second = BS.run_for_participant(dict(REQ_FLAG))

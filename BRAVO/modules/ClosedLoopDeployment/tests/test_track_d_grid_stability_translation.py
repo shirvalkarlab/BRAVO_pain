@@ -102,7 +102,19 @@ def test_d1_reads_the_real_stored_grid_without_refusal(sandbox):
     assert grid["best_correlation_rows"][0]["band_center_hz"] == 12.5
 
 
-def test_d1_reports_unavailable_with_no_stored_entry(sandbox):
+def test_d1_reports_unavailable_with_no_stored_entry(sandbox, monkeypatch):
+    """No stored entry and nothing buildable: the reader says so rather than inventing a grid.
+
+    Since decision 131 the reader BUILDS a grid through the Biomarkers sweep when nothing is stored
+    under the requested settings, and that build reads the live record. In a process where Django
+    happens to be set up (the one-job run of every suite on 2026-09-12) this test spent 53 s
+    building RCS08's real grid; in the host suite's own process the Biomarkers service cannot
+    import and the build raised at once. Either way the assertion below was about the environment,
+    not about the reader. The builder is stood in for -- `_build_grid_through_biomarkers` is its
+    own function for exactly that (its docstring) -- so the test asserts what its name says with
+    no live record and no clock: an empty store and no build give `available: False` with a reason.
+    """
+    monkeypatch.setattr(adapter, "_build_grid_through_biomarkers", lambda uid, rd: None)
     got = adapter.band_sweep_grid_for_closed_loop(UID)
     assert got["available"] is False
     assert got["reason"]

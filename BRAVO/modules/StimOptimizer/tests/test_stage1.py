@@ -63,10 +63,42 @@ def rcs08_like():
     return _matrix(n_per_cell=11, pw_levels=(100.0, 140.0), rates=(55.0, 165.0), aliased=True)
 
 
+# FIT ONCE, ASSERT MANY (2026-09-12). The three fits below are the ones this file used to repeat:
+# the same matrix, the same arguments, fitted once per test at 3 to 7 s a fit, to assert different
+# things about the one result. They are module-scoped so each is fitted once and every test that
+# needs it reads the SAME result object. No test mutates a result: `FrozenConfiguration` refuses
+# writes (one test proves exactly that), `clinician_override` returns a new object, and the frames
+# and dicts are only read. A test whose arguments differ -- another data horizon, a crossed design,
+# an absent right-hemisphere column -- still makes its own fit, so it asserts on what it asked for.
+@pytest.fixture(scope="module")
+def stage1_both_hemispheres():
+    """`run_stage1` on the RCS08-like matrix, both hemispheres, the test horizon."""
+    d = _matrix(n_per_cell=11, pw_levels=(100.0, 140.0), rates=(55.0, 165.0), aliased=True)
+    return S1.run_stage1(d, data_horizon="test", washin_min=1.0)
+
+
+@pytest.fixture(scope="module")
+def stage1_left():
+    """The same matrix, the left hemisphere only."""
+    d = _matrix(n_per_cell=11, pw_levels=(100.0, 140.0), rates=(55.0, 165.0), aliased=True)
+    return S1.run_stage1(d, hemispheres=("Left",), data_horizon="test", washin_min=1.0)
+
+
+@pytest.fixture(scope="module")
+def stage1_left_with_thin_stratum():
+    """The same matrix plus a 2-epoch 120 us stratum, which is below the stratum floor."""
+    thin = _matrix(n_per_cell=11, pw_levels=(100.0, 140.0), rates=(55.0, 165.0), aliased=True)
+    extra = thin.iloc[:2].copy()
+    extra["epoch"] = [9001.0, 9002.0]
+    extra["pw_us_Left"] = 120.0
+    d = pd.concat([thin, extra], ignore_index=True)
+    return S1.run_stage1(d, hemispheres=("Left",), data_horizon="test", washin_min=1.0)
+
+
 # ---------------------------------------------------------------------------------------------
 # The common incumbent
 # ---------------------------------------------------------------------------------------------
-def test_every_stratum_is_referenced_to_one_common_incumbent(rcs08_like):
+def test_every_stratum_is_referenced_to_one_common_incumbent(rcs08_like, stage1_both_hemispheres):
     """J is only comparable across strata if they share an incumbent.
 
     build_objective defines J as the pain item minus its value at the incumbent epoch. If each
@@ -74,7 +106,7 @@ def test_every_stratum_is_referenced_to_one_common_incumbent(rcs08_like):
     most recent epoch of whatever frame it is handed — the posterior means could not be compared
     between strata at all, and the pulse-width comparison would be meaningless.
     """
-    res = S1.run_stage1(rcs08_like, data_horizon="test", washin_min=1.0)
+    res = stage1_both_hemispheres
     expected = float(rcs08_like.sort_values("t0")["epoch"].iloc[-1])
     assert res.frozen.incumbent_epoch == expected
     # J is zero at the incumbent by construction, on the single shared objective build.
@@ -90,31 +122,26 @@ def test_an_incumbent_absent_from_the_matrix_is_refused(rcs08_like):
 # ---------------------------------------------------------------------------------------------
 # Pulse-width strata
 # ---------------------------------------------------------------------------------------------
-def test_one_surface_is_fitted_per_adequately_sampled_pulse_width(rcs08_like):
-    res = S1.run_stage1(rcs08_like, hemispheres=("Left",), data_horizon="test", washin_min=1.0)
+def test_one_surface_is_fitted_per_adequately_sampled_pulse_width(stage1_left):
+    res = stage1_left
     fitted = sorted(pw for (_h, pw) in res.slices)
     assert fitted == [100.0, 140.0]
     assert set(res.summary["pw_us"]) == {100.0, 140.0}
 
 
-def test_an_undersampled_stratum_is_skipped_with_its_reason_never_pooled():
+def test_an_undersampled_stratum_is_skipped_with_its_reason_never_pooled(stage1_left_with_thin_stratum):
     """A thin stratum must be recorded as skipped, not merged into a neighbouring pulse width.
 
     Pooling it would put two different pulse widths on one surface under a single length scale,
     which is exactly the borrowing the stratification exists to prevent.
     """
-    thin = _matrix(n_per_cell=11, pw_levels=(100.0, 140.0), rates=(55.0, 165.0), aliased=True)
-    extra = thin.iloc[:2].copy()
-    extra["epoch"] = [9001.0, 9002.0]
-    extra["pw_us_Left"] = 120.0
-    d = pd.concat([thin, extra], ignore_index=True)
-    res = S1.run_stage1(d, hemispheres=("Left",), data_horizon="test", washin_min=1.0)
+    res = stage1_left_with_thin_stratum
     assert 120.0 not in [pw for (_h, pw) in res.slices]
     assert "Left__pw120" in res.skipped
     assert "below the 8-epoch floor" in res.skipped["Left__pw120"]
 
 
-def test_the_epoch_counts_are_internally_consistent():
+def test_the_epoch_counts_are_internally_consistent(stage1_left_with_thin_stratum):
     """The per-stratum counts must sum to the total they are reported against.
 
     Regression, 2026-09-02. The audit exposed one count under the name of another: the number of
@@ -123,12 +150,7 @@ def test_the_epoch_counts_are_internally_consistent():
     difference being a skipped 2-epoch stratum. Eligible, in-fitted-strata, and per-stratum counts
     are three different numbers and the arithmetic between them has to close.
     """
-    thin = _matrix(n_per_cell=11, pw_levels=(100.0, 140.0), rates=(55.0, 165.0), aliased=True)
-    extra = thin.iloc[:2].copy()
-    extra["epoch"] = [9001.0, 9002.0]
-    extra["pw_us_Left"] = 120.0
-    d = pd.concat([thin, extra], ignore_index=True)
-    res = S1.run_stage1(d, hemispheres=("Left",), data_horizon="test", washin_min=1.0)
+    res = stage1_left_with_thin_stratum
     a = res.audit["per_hemisphere"]["Left"]
     per_stratum = {pw: s.n_epochs for (_h, pw), s in res.slices.items()}
     skipped_epochs = sum(v for k, v in a["design"]["epochs_per_pw"].items()
@@ -162,7 +184,7 @@ def test_pulse_width_is_reported_as_not_observed_when_the_column_is_absent(rcs08
 # ---------------------------------------------------------------------------------------------
 # The support gate on the resolution comparison — the module's most consequential correction
 # ---------------------------------------------------------------------------------------------
-def test_a_stratum_that_never_ran_the_incumbent_rate_reports_not_assessed_not_resolved():
+def test_a_stratum_that_never_ran_the_incumbent_rate_reports_not_assessed_not_resolved(stage1_left):
     """Regression, found by running the real RCS08 matrix on 2026-09-02.
 
     J is zero at the incumbent BY CONSTRUCTION. A pulse-width stratum with no epoch at the
@@ -174,8 +196,7 @@ def test_a_stratum_that_never_ran_the_incumbent_rate_reports_not_assessed_not_re
     artefact of extrapolating into a rate the stratum never ran, so an unsupported comparison must
     return None rather than a boolean.
     """
-    d = _matrix(n_per_cell=11, pw_levels=(100.0, 140.0), rates=(55.0, 165.0), aliased=True)
-    res = S1.run_stage1(d, hemispheres=("Left",), data_horizon="test", washin_min=1.0)
+    res = stage1_left
     inc_rate = res.frozen.incumbent_rate_hz
     for (_h, pw), sl in res.slices.items():
         ran_incumbent_rate = inc_rate in set(sl.meta["rates_delivered"])
@@ -188,17 +209,17 @@ def test_a_stratum_that_never_ran_the_incumbent_rate_reports_not_assessed_not_re
     assert unsupported, "fixture must contain a stratum that never ran the incumbent rate"
 
 
-def test_not_assessed_never_counts_as_resolved(rcs08_like):
+def test_not_assessed_never_counts_as_resolved(stage1_both_hemispheres):
     """A three-valued verdict must collapse to "not resolved", never to "resolved"."""
-    res = S1.run_stage1(rcs08_like, data_horizon="test", washin_min=1.0)
+    res = stage1_both_hemispheres
     for s in res.frozen.settings:
         if s.rate_resolved is None or s.pw_resolved is None:
             assert s.resolved is False
     assert res.frozen.resolved is False
 
 
-def test_the_unsupported_refusal_names_the_extrapolation(rcs08_like):
-    res = S1.run_stage1(rcs08_like, hemispheres=("Left",), data_horizon="test", washin_min=1.0)
+def test_the_unsupported_refusal_names_the_extrapolation(stage1_left):
+    res = stage1_left
     s = res.frozen.setting("Left")
     if s.rate_resolved is None:
         joined = " ".join(s.reasons)
@@ -269,14 +290,13 @@ def test_the_audit_detects_a_crossed_design():
     assert a["rate_pw_coverage"] == pytest.approx(1.0)
 
 
-def test_the_pulse_width_contrast_refuses_a_rank_deficient_design():
+def test_the_pulse_width_contrast_refuses_a_rank_deficient_design(stage1_left):
     """With rate blocked, a pulse width delivered at one rate only is collinear with that rate.
 
     statsmodels will return a pseudo-inverse solution rather than complain, so the check has to be
     explicit; a coefficient from a rank-deficient fit is an arbitrary point on a flat ridge.
     """
-    d = _matrix(n_per_cell=11, pw_levels=(100.0, 140.0), rates=(55.0, 165.0), aliased=True)
-    res = S1.run_stage1(d, hemispheres=("Left",), data_horizon="test", washin_min=1.0)
+    res = stage1_left
     c = res.audit["per_hemisphere"]["Left"]["contrast"]
     assert c["estimable"] is False
     assert "rank deficient" in c["reason"]
@@ -355,9 +375,9 @@ def test_a_single_pulse_width_level_is_unidentifiable_not_null():
 # ---------------------------------------------------------------------------------------------
 # The frozen configuration and the override
 # ---------------------------------------------------------------------------------------------
-def test_the_frozen_configuration_cannot_be_written_to(rcs08_like):
+def test_the_frozen_configuration_cannot_be_written_to(stage1_left):
     """The device freeze is enforced by the type, not merely documented."""
-    res = S1.run_stage1(rcs08_like, hemispheres=("Left",), data_horizon="test", washin_min=1.0)
+    res = stage1_left
     with pytest.raises(dataclasses.FrozenInstanceError):
         res.frozen.settings = ()
     with pytest.raises(dataclasses.FrozenInstanceError):
@@ -366,15 +386,15 @@ def test_the_frozen_configuration_cannot_be_written_to(rcs08_like):
         res.frozen.setting("Left").pw_us = 60.0
 
 
-def test_an_override_requires_a_reason(rcs08_like):
-    res = S1.run_stage1(rcs08_like, hemispheres=("Left",), data_horizon="test", washin_min=1.0)
+def test_an_override_requires_a_reason(stage1_left):
+    res = stage1_left
     for bad in ("", "   ", "\n"):
         with pytest.raises(ValueError, match="non-empty reason"):
             S1.clinician_override(res.frozen, reason=bad)
 
 
-def test_an_override_records_itself_and_changes_no_setting(rcs08_like):
-    res = S1.run_stage1(rcs08_like, hemispheres=("Left",), data_horizon="test", washin_min=1.0)
+def test_an_override_records_itself_and_changes_no_setting(stage1_left):
+    res = stage1_left
     before = res.frozen
     after = S1.clinician_override(before, reason="tolerated at this rate for two years", by="PI")
     assert after.overridden is True
@@ -400,9 +420,9 @@ def test_an_unknown_hemisphere_column_is_refused_not_substituted(rcs08_like):
         S1.run_stage1(rcs08_like, hemispheres=("Both",))
 
 
-def test_the_summary_reports_support_alongside_every_verdict(rcs08_like):
+def test_the_summary_reports_support_alongside_every_verdict(stage1_both_hemispheres):
     """A reader must be able to see WHY a resolution verdict is trustworthy or absent."""
-    res = S1.run_stage1(rcs08_like, data_horizon="test", washin_min=1.0)
+    res = stage1_both_hemispheres
     for col in ("optimum_resolved", "incumbent_rate_supported", "optimum_rate_supported",
                 "gain", "sd_of_difference"):
         assert col in res.summary.columns

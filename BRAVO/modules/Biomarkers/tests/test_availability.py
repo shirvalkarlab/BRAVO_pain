@@ -722,11 +722,14 @@ def _import_service():
     for mod in ("Server", "Server.models", "modules.Database"):
         if mod not in _sys.modules:
             _sys.modules[mod] = _mock.MagicMock()
-    # analytics and availability are real; stub pipeline/adapter/redcap
-    for mod in ("modules.Biomarkers.pipeline", "modules.Biomarkers.adapter",
-                "modules.Biomarkers.routines.redcap_client"):
+    # analytics and availability are real; stub pipeline/adapter. `redcap_client` is imported FOR
+    # REAL and explicitly (2026-09-12): it needs nothing Django provides, and until now it was
+    # stubbed only when no earlier test had imported it, so what `bravo_service` bound to depended
+    # on the order the files ran in (`test_redcap_request_scope.py` already keeps the real one).
+    for mod in ("modules.Biomarkers.pipeline", "modules.Biomarkers.adapter"):
         if mod not in _sys.modules:
             _sys.modules[mod] = _mock.MagicMock()
+    import modules.Biomarkers.routines.redcap_client  # noqa: F401  (the real one, always)
     import modules.Biomarkers.bravo_service as _bs
     return _bs
 

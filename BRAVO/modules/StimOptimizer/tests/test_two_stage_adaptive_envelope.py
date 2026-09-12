@@ -170,6 +170,16 @@ def _run(d, **kw):
     return S1.run_stage1(d, hemispheres=("Left",), data_horizon="test", washin_min=1.0, **kw)
 
 
+# FIT ONCE, ASSERT MANY (2026-09-12). Four tests below fitted `_run(_matrix())` -- the constraint
+# on, no override, the default grid -- once each, at 3 to 4 s a fit, to assert four things about
+# the one result. This module-scoped fixture fits it once. Every test whose arguments differ (the
+# control with the constraint lifted, a stated override, an empty one, a grid with nothing in the
+# envelope) still makes its own fit. No test writes to the result.
+@pytest.fixture(scope="module")
+def constrained_run():
+    return _run(_matrix())
+
+
 # ---------------------------------------------------------------------------------------------
 # Stage 1: the constraint is applied before scoring
 # ---------------------------------------------------------------------------------------------
@@ -180,8 +190,8 @@ def test_the_unconstrained_search_really_prefers_the_out_of_envelope_stratum():
     assert res.frozen.setting("Left").rate_hz == 40.0
 
 
-def test_a_stratum_below_the_adaptive_minimum_is_excluded_and_named_with_its_reason():
-    res = _run(_matrix())
+def test_a_stratum_below_the_adaptive_minimum_is_excluded_and_named_with_its_reason(constrained_run):
+    res = constrained_run
     s = res.frozen.setting("Left")
     assert s.rate_hz >= MIN_RATE
     env = res.frozen.adaptive_envelope
@@ -203,10 +213,10 @@ def test_a_stratum_below_the_adaptive_minimum_is_excluded_and_named_with_its_rea
     assert "x EXCLUDED: 40 Hz" in res.frozen.describe()
 
 
-def test_with_the_exclusion_the_frozen_rate_is_the_best_in_envelope_cell():
+def test_with_the_exclusion_the_frozen_rate_is_the_best_in_envelope_cell(constrained_run):
     """Not the incumbent, not the best cell overall: the lowest posterior mean among the cells
     that are safe AND at or above the minimum, read off the slice's own arrays."""
-    res = _run(_matrix())
+    res = constrained_run
     s = res.frozen.setting("Left")
     sl = res.slices[("Left", s.pw_us)]
     gx = sl.grid.grid_X()
@@ -227,8 +237,8 @@ def test_with_the_exclusion_the_frozen_rate_is_the_best_in_envelope_cell():
     assert int(row["n_allowed"]) == int(allowed.sum())
 
 
-def test_the_within_visit_batch_and_the_queue_never_propose_an_out_of_envelope_cell():
-    res = _run(_matrix())
+def test_the_within_visit_batch_and_the_queue_never_propose_an_out_of_envelope_cell(constrained_run):
+    res = constrained_run
     n_batch = 0
     for sl in res.slices.values():
         gx = sl.grid.grid_X()
@@ -274,8 +284,8 @@ def test_an_override_with_an_empty_reason_is_ignored_and_said_to_be_ignored(empt
     assert "NOTE: an override to explore outside the adaptive envelope" in res.frozen.describe()
 
 
-def test_no_override_asked_for_means_no_ignored_note():
-    res = _run(_matrix())
+def test_no_override_asked_for_means_no_ignored_note(constrained_run):
+    res = constrained_run
     assert res.frozen.adaptive_envelope["override_ignored"] is None
 
 

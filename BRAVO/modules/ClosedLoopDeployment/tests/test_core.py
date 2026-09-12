@@ -805,6 +805,7 @@ def test_cycling_is_read_from_the_newest_active_sensing_group_not_device_wide(tm
     assert sum(S["cycling_by_group_kind"].values()) == 2, "one group setting per file, no extras"
 
 
+@pytest.mark.store
 def test_pocket_adaptor_stays_unknown_rather_than_assumed_absent(tmp_path, monkeypatch):
     """The session report does not carry it, so D32 must keep it unknown. Assuming absence would
     let a rule pass on a fact nobody checked, which is the failure mode this module exists to

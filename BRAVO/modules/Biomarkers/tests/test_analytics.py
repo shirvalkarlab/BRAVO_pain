@@ -8,9 +8,19 @@ import os
 import sys
 import numpy as np
 import pandas as pd
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from Biomarkers.routines import analytics  # noqa: E402
+
+# THE `live` MARK (2026-09-12). The six tests carrying it read the live RCS08 record through the real
+# service (they skip when the participant is absent) and cost 7 to 15 s each, about 52 s of the
+# container suite's 80 s. They leave the routine run and run once a day instead: the container
+# runner (`_agent_bridge/run_tests.py`) reads this mark off each function's `pytestmark` and skips
+# it unless started with `--live`; `run_both_suites.sh --live` runs only these, and the daily pass
+# (`stability_precompute_loop.sh`) calls that. `pytest` is imported only for the mark; every test
+# in this file is still a plain-`assert` function the container runner can call with no arguments.
+live = pytest.mark.live
 
 
 def _cv_df(n=5000, seed=0):
@@ -1302,6 +1312,7 @@ def test_deployment_summary_identity_is_json_serializable():
     assert isinstance(restored["identity"]["participant"], str)
 
 
+@live
 def test_deployment_summary_real_payload_json_serializable():
     """Integration guard (code-review PR #8 nit): the hand-built test above can't catch a
     non-serializable value (numpy scalar, model object) leaking from a REAL roc/forward/by_era/threshold
@@ -1490,6 +1501,7 @@ def test_roc_small_sample_advisory_is_label_only():
             f"advisory must not change {k}: {a} vs {b}"
 
 
+@live
 def test_deployment_summary_carries_temporal_validity_block():
     """Audit [23]: the deployment_summary device record must ALWAYS carry an explicit
     `temporal_validity` block (forward_validation / threshold_drift / stim_state_portability), each
@@ -2111,6 +2123,7 @@ if __name__ == "__main__":
             _fn(); print("PASS", _name)
 
 
+@live
 def test_deployment_summary_survives_unestimable_power_requirement():
     """Regression, 2026-08-30: `n_ratings_needed` is legitimately None when the power calculation
     flags underpowering but cannot solve for the required N (an effect at chance has no finite N
@@ -2523,6 +2536,7 @@ def test_rating_equal_weighting_makes_every_rating_count_once():
     assert abs(metrics.roc_auc_score(y, x, sample_weight=w) - 1.0) < 1e-9
 
 
+@live
 def test_deployment_reports_both_weightings_and_their_difference():
     import sys
     sys.path.insert(0, "/usr/src/BRAVO"); sys.path.insert(0, "/usr/src/BRAVO/modules")
@@ -2541,6 +2555,7 @@ def test_deployment_reports_both_weightings_and_their_difference():
 
 
 # --- F10: the outlier rule's influence must be visible on the exploration path -----------------
+@live
 def test_exploration_publishes_an_outlier_sensitivity_block():
     """The rule's median and MAD come from the same sample the exclusion then alters, and neither
     the Fisher-z interval nor the permutation p accounts for that. The headline stays filtered
@@ -2609,6 +2624,7 @@ def test_neff_inversion_round_trips():
         assert abs(got - n_true) / n_true < 0.02, (r_true, n_true, got)
 
 
+@live
 def test_family_guard_passes_on_the_reconciled_left_leg_outcome():
     """THE DEFECT THIS GUARD WAS BUILT FOR, AND ITS REPAIR.
 
