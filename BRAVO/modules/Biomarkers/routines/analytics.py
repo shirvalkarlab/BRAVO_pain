@@ -6039,13 +6039,21 @@ def _sweep_blank(reason, *, n_reports=0):
 #: discarded 0.708% of the 1 s row but only 0.300% from the 20 s row up, because an average of 100
 #: chunks sits far closer to the middle than any single chunk does.
 #:
-#: FALLS BACK TO THE OLD MAD RULE FOR ANY CHANNEL THIS TABLE DOES NOT COVER -- a synthetic test
-#: channel, the demo participant, or a real contact this table has not yet been rebuilt for --
-#: so outlier exclusion is never silently skipped rather than merely using a different method.
-#: This is also why every existing test of `band_time_sweep_from_power`'s outlier behaviour still
-#: passes unchanged: none of them pass one of these six real channel names, so they all still
-#: exercise the MAD path exactly as before.
+#: KEYED ON THE PARTICIPANT FIRST, THEN THE CONTACT (review B3, 2026-09-12). These six names are
+#: the standard Percept contact-pair names every participant has, and the numbers are ONE
+#: participant's history. Keyed on the contact alone, a second participant would have had RCS08's
+#: ceilings applied to their own band powers -- excluding the wrong 3 s pieces, silently, and
+#: reporting "historical ceiling" on the page as if it were theirs. The outer key is the
+#: participant's uid; a participant with no entry takes the MAD rule below.
+#:
+#: FALLS BACK TO THE OLD MAD RULE FOR ANY (PARTICIPANT, CHANNEL) THIS TABLE DOES NOT COVER -- a
+#: synthetic test channel, another participant, or a real contact this table has not yet been
+#: rebuilt for -- so outlier exclusion is never silently skipped rather than merely using a
+#: different method. This is also why every existing test of `band_time_sweep_from_power`'s
+#: outlier behaviour still passes unchanged: none of them pass one of these six real channel
+#: names under RCS08's uid, so they all still exercise the MAD path exactly as before.
 BAND_SWEEP_LSB_CEILINGS = {
+  "2e3c75c00d7f4f37b53a048d195f11da": {      # RCS08 (decision 94; measured on its own record)
     "ZERO_THREE_RIGHT": {8.5: 5229.9, 9.5: 4623.2, 10.5: 3875.9, 11.5: 3210.1, 12.5: 2397.3,
         13.5: 1596.9, 14.5: 1012.0, 15.5: 750.7, 16.5: 639.6, 17.5: 615.4, 18.5: 622.7,
         19.5: 660.7, 20.5: 661.7, 21.5: 628.9, 22.5: 566.0, 23.5: 499.5, 24.5: 498.6,
@@ -6070,14 +6078,29 @@ BAND_SWEEP_LSB_CEILINGS = {
         13.5: 2025.0, 14.5: 1026.9, 15.5: 645.9, 16.5: 509.4, 17.5: 510.0, 18.5: 571.2,
         19.5: 602.7, 20.5: 618.2, 21.5: 582.7, 22.5: 521.0, 23.5: 455.0, 24.5: 400.6,
         25.5: 353.1, 26.5: 318.6, 27.5: 274.1, 28.5: 236.7, 29.5: 198.9},
+  },
 }
 
 
-def band_sweep_lsb_ceiling(channel, centre_hz):
-    """The historical 99.5th-percentile ceiling for one (contact, band centre), or `None` if this
-    channel has no table entry at all (falls back to the MAD rule) or this exact centre is
-    missing from an otherwise-covered channel (that one column gets no ceiling exclusion)."""
-    table = BAND_SWEEP_LSB_CEILINGS.get(channel)
+def band_sweep_ceiling_table(participant_uid, channel):
+    """The per-centre ceiling table for one (participant, contact pair), or `None` when this
+    participant has no table at all or this contact is not in it -- in which case the sweep takes
+    the MAD rule. THIS IS THE ONE LOOKUP: `bravo_service._band_time_sweep_power_by_seconds` calls
+    it rather than reading the dict itself (review B9.2), so the participant key cannot be dropped
+    at one call site and kept at another."""
+    if participant_uid is None or channel is None:
+        return None
+    by_channel = BAND_SWEEP_LSB_CEILINGS.get(str(participant_uid))
+    if not by_channel:
+        return None
+    return by_channel.get(channel) or None
+
+
+def band_sweep_lsb_ceiling(participant_uid, channel, centre_hz):
+    """The historical 99.5th-percentile ceiling for one (participant, contact, band centre), or
+    `None` if the participant or the contact has no table (falls back to the MAD rule) or this
+    exact centre is missing from an otherwise-covered contact (that column gets no ceiling)."""
+    table = band_sweep_ceiling_table(participant_uid, channel)
     if not table:
         return None
     return table.get(round(float(centre_hz), 1))

@@ -192,6 +192,11 @@ def test_align_pros_chronic():
 # Chronic ("10-min PSD") source: adapter, science, merge, back-compat
 # ---------------------------------------------------------------------------
 _MIDNIGHT_UTC = 1_699_920_000.0  # 2023-11-14 00:00:00 UTC
+# The chronic-trend fixtures build whole DAYS of samples with one rating per day, and "day" in
+# the detector is the CALIFORNIA calendar day (review B1, 2026-09-12). A day of samples must
+# therefore start at California midnight, which on 2023-11-14 (PST, UTC-8) is 08:00 UTC; a day
+# built from UTC midnight would have its first eight hours labelled by the previous day's rating.
+_MIDNIGHT_LOCAL = _MIDNIGHT_UTC + 8 * 3_600.0  # 2023-11-14 00:00:00 America/Los_Angeles
 
 
 def _utc_str(unix):
@@ -204,7 +209,7 @@ def _make_chronic_trend(days=14, step_hours=2):
     for d in range(days):
         pain_day = (d % 2 == 0)
         for h in range(0, 24, step_hours):
-            times.append(_MIDNIGHT_UTC + d * 86_400 + h * 3_600)
+            times.append(_MIDNIGHT_LOCAL + d * 86_400 + h * 3_600)
             lfp.append(150.0 if pain_day else 110.0)
             amp.append(2.0)
     chronic = {
@@ -214,7 +219,7 @@ def _make_chronic_trend(days=14, step_hours=2):
         "ChannelNames": ["L LFP", "L Amplitude"],
     }
     pro = pd.DataFrame({
-        "date_time_s1_daily": [_utc_str(_MIDNIGHT_UTC + d * 86_400 + 12 * 3_600) for d in range(days)],
+        "date_time_s1_daily": [_utc_str(_MIDNIGHT_LOCAL + d * 86_400 + 12 * 3_600) for d in range(days)],
         "nrs": [8 if d % 2 == 0 else 2 for d in range(days)],
     })
     return chronic, pro
@@ -686,7 +691,7 @@ def test_run_powerdomain_branch_per_channel_split():
     for d in range(14):
         pain_day = (d % 2 == 0)
         for h in range(0, 24, 2):
-            times.append(_MIDNIGHT_UTC + d * 86_400 + h * 3_600)
+            times.append(_MIDNIGHT_LOCAL + d * 86_400 + h * 3_600)
             lfp_r.append(80.0 if pain_day else 130.0)   # inverted coupling
             amp_r.append(2.0)
     chronic_r = {

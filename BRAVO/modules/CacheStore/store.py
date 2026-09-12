@@ -569,6 +569,12 @@ KEEP_NEWEST_BY_KIND = {
     # switching the committed band must not evict the last one -- the decision-107 lesson again,
     # met live on 2026-09-11 when the page's own report evicted the probe's entry.
     "closed_loop_simulation": 6,
+    # Two live writers, two keys (Biomarkers review B4, 2026-09-12): the page writes the assembled
+    # spectrum matrix rating-centred on the pain-report set, the daily ingest's warm writes it
+    # under the legacy first-window key with no report set. Under a limit of one they evicted each
+    # other every day -- noon ingest evicted the page's, the next Recompute reassembled (the
+    # decision-51 per-recording loop plus a store write) and evicted the ingest's. Two keeps both.
+    "biomarker_psd_matrix": 2,
 }
 
 

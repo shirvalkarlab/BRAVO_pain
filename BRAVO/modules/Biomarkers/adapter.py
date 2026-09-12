@@ -36,6 +36,12 @@ except ImportError:
     from DecodeCommon.representation import missing_per_sample as _missing_per_sample
     from DecodeCommon import matching as _matching
 
+# THE CALENDAR DAY IS THE CALIFORNIA DAY (review B1, 2026-09-12). Every instant in this file is
+# tz-naive UTC by the time a "day" is read from it, and UTC midnight is 4-5 pm in California, so
+# reading `.date()` off the instant filed every evening rating under the next day. One rule, one
+# module, imported here rather than from `bravo_service` (which needs Django to import).
+from .routines.local_time import local_calendar_day as _local_day
+
 
 # ---------------------------------------------------------------------------
 # 1) Recording reshape: BRAVO TimeDomain dict -> Stream-like epoch dict
@@ -114,8 +120,10 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
     target : {"session", "chronic"}
         "session": one output row per streaming session (mirrors notebook cell 7 -- PRO
                    metrics aggregated by the session's calendar date: mean & min).
-        "chronic": one output row per chronic 10-min sample, with the nearest-date PRO
+        "chronic": one output row per chronic 10-min sample, with the same-date PRO mean
                    joined and the stim amplitude taken from the chronic packet itself.
+        "Calendar date" on both is the CALIFORNIA date of the UTC instant
+        (`routines.local_time.local_calendar_day`), never the UTC date -- review B1, 2026-09-12.
     recordings : list[dict], required for target="session"
         BRAVO TimeDomain (or PowerDomain) recordings; their `StartTime` sets the session date.
     chronic : dict, required for target="chronic"
@@ -154,7 +162,8 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
         df[timestamp_col] = pd.to_datetime(df["_pro_time_utc"], errors="coerce")
     else:
         df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors="coerce")
-    df["_date"] = df[timestamp_col].dt.date
+    # The rating's CALIFORNIA calendar day, not the UTC one (review B1).
+    df["_date"] = _local_day(df[timestamp_col])
 
     if target == "session":
         if recordings is None:
@@ -203,7 +212,7 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
             for i, rec in enumerate(recordings):
                 ts = session_ts[i]
                 row = {"session_index": i, "session_start": ts,
-                       "session_date": (ts.date() if not pd.isna(ts) else None),
+                       "session_date": _local_day(ts),
                        "matched": False, "match_dt_min": np.nan,
                        "matched_pro_time": pd.NaT}
                 j = int(match["rating_cluster_id"][i])
@@ -237,7 +246,7 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
         rows = []
         for i, rec in enumerate(recordings):
             ts = _to_datetime(rec.get("StartTime"))
-            sess_date = ts.date() if not pd.isna(ts) else None
+            sess_date = _local_day(ts)
             same_day = df[df["_date"] == sess_date] if sess_date is not None else df.iloc[0:0]
             # On this path the "rating" is the DAY'S AGGREGATE (mean/min over that date's reports),
             # so the identity of the matched rating is the date itself: two sessions on the same day
@@ -276,7 +285,9 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
         # the loop; `df.groupby("_date")` drops NaT dates by default, matching the old
         # `pro_by_date.get(d)` returning None (-> NaN) for any date that never appears.
         present_metrics = [m for m in metrics if m in df.columns]
-        chronic_dates = pd.Index([ts.date() if not pd.isna(ts) else None for ts in chronic_ts])
+        # Each sample's CALIFORNIA calendar day, the same rule `_date` above was built with, so a
+        # rating filed at 18:00 local joins the samples recorded that local day (review B1).
+        chronic_dates = _local_day(chronic_ts)
         out = pd.DataFrame({"time": chronic_ts, "lfp": lfp, "stim_amplitude": amp})
         if present_metrics:
             joined = df.groupby("_date")[present_metrics].mean().reindex(chronic_dates)
@@ -516,7 +527,10 @@ def _threshold_pain_level(df, label_metric, *, strategy="median", pain_cutoff=No
 
     # Build the distribution the thresholds are computed on.
     if daily_broadcast and "timestamp" in df.columns:
-        day = pd.to_datetime(df["timestamp"], errors="coerce").dt.floor("D")
+        # One value per CALIFORNIA calendar day (review B1): flooring the UTC instant split each
+        # local day's samples across two UTC days, so the daily series the cut is computed on held
+        # means of two different days' ratings.
+        day = _local_day(df["timestamp"])
         # one value per day: mean of that day's (already nearest-date-aligned) metric values
         daily = pd.Series(metric_vals, index=day).groupby(level=0).mean()
         ref = daily.to_numpy(dtype=float)

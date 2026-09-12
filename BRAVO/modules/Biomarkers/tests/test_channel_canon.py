@@ -57,3 +57,9 @@ def test_canon_lowercase_input():
 def test_canon_version_in_cache_keys():
     """The canon version is folded into both cache keys so a rule change invalidates stale caches."""
     assert bs._CHANNEL_CANON_VERSION in bs._recording_psd_cache_path("uid123", "hashabc")
+
+
+def test_the_service_and_the_availability_module_share_one_canonicaliser():
+    """Review B9.1 (2026-09-12): the service no longer carries its own copy of the rule."""
+    from modules.Biomarkers.routines import availability as av
+    assert bs._canon_channel is av._canon_channel

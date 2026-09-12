@@ -40,6 +40,7 @@ from .routines import streaming_psd
 from .routines import threshold_biomarker
 from .routines import redcap_client
 from .routines import stats_utils
+from .routines.local_time import local_calendar_day as _local_day
 from .routines.analytics import format_channel
 from . import adapter
 
@@ -249,8 +250,9 @@ def _available_frequencies(cv_ch):
     finite = np.isfinite(fhz)
     if not finite.any():
         return []
-    ts = pd.to_datetime(df["timestamp"], errors="coerce")
-    day = ts.dt.floor("D")
+    # "Day" is the CALIFORNIA calendar day of the UTC sample time, the same rule the chronic join
+    # and the pain cut use (review B1), so a day counted here is a day the detector labelled.
+    day = _local_day(df["timestamp"])
     pl = df["pain_level"].to_numpy(dtype=float) if "pain_level" in df.columns else np.full(len(df), np.nan)
     out = []
     for hz in sorted(set(np.round(fhz[finite], 1))):
@@ -301,15 +303,15 @@ def _decode_by_frequency(cv_ch, label_metric, *, min_labeled=8):
         sub = cv_ch[np.round(fhz, 1) == hz]
         if len(sub) == 0:
             continue
-        # Daily pain aggregation for the binarization preview (one row per calendar day at this band).
-        ts = pd.to_datetime(sub["timestamp"], errors="coerce")
-        day = ts.dt.floor("D")
+        # Daily pain aggregation for the binarization preview (one row per CALIFORNIA calendar day
+        # at this band -- the day rule the cut itself uses, review B1).
+        day = _local_day(sub["timestamp"])
         pain = sub[label_metric].to_numpy(dtype=float) if label_metric in sub.columns else np.full(len(sub), np.nan)
         pl = sub["pain_level"].to_numpy(dtype=float) if "pain_level" in sub.columns else np.full(len(sub), np.nan)
         daily = []
         dser = pd.Series(pain, index=day)
         for d, grp in dser.groupby(level=0):
-            if d is None or (isinstance(d, float) and not np.isfinite(d)):
+            if d is None or pd.isna(d):
                 continue
             vals = grp.to_numpy(dtype=float)
             vals = vals[np.isfinite(vals)]
@@ -1361,7 +1363,7 @@ def run_powerdomain_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=N
     lfp_s = cv_df["LFP_smoothed"].to_numpy(dtype=float)
     timeline = pd.DataFrame({
         "time": pd.to_datetime(cv_df["timestamp"]),
-        "date": pd.to_datetime(cv_df["timestamp"]).dt.date,
+        "date": _local_day(cv_df["timestamp"]),   # California day (review B1)
         "powerdomain_biomarker_value": lfp_s,
         "powerdomain_lfp_raw": cv_df["LFP"].to_numpy(dtype=float),
         "powerdomain_threshold": thr,
