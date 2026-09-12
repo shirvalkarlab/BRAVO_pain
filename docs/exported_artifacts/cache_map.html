@@ -1,0 +1,227 @@
+
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Diagram</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f8fafc;
+    --fg: #172033;
+    --muted: #5b6475;
+    --line: #64748b;
+    --neutral: #e2e8f0;
+    --input: #bfdbfe;
+    --process: #c7d2fe;
+    --storage: #99f6e4;
+    --external: #fde68a;
+    --risk: #fecaca;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a;
+      --fg: #e5e7eb;
+      --muted: #a3adbd;
+      --line: #94a3b8;
+      --neutral: #334155;
+      --input: #1d4ed8;
+      --process: #4338ca;
+      --storage: #0f766e;
+      --external: #92400e;
+      --risk: #991b1b;
+    }
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font:
+      14px/1.4 ui-sans-serif,
+      system-ui,
+      -apple-system,
+      BlinkMacSystemFont,
+      "Segoe UI",
+      sans-serif;
+  }
+  main {
+    max-width: 980px;
+    margin: 32px auto;
+    padding: 0 20px;
+  }
+  svg {
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+  .title {
+    font-size: 20px;
+    font-weight: 650;
+    fill: var(--fg);
+  }
+  .label {
+    font-size: 14px;
+    font-weight: 600;
+    fill: var(--fg);
+  }
+  .small {
+    font-size: 12px;
+    fill: var(--muted);
+  }
+  .node {
+    stroke: var(--line);
+    stroke-width: 1;
+  }
+  .neutral {
+    fill: var(--neutral);
+  }
+  .input {
+    fill: var(--input);
+  }
+  .process {
+    fill: var(--process);
+  }
+  .storage {
+    fill: var(--storage);
+  }
+  .external {
+    fill: var(--external);
+  }
+  .risk {
+    fill: var(--risk);
+  }
+  .edge {
+    stroke: var(--line);
+    stroke-width: 1.5;
+    fill: none;
+  }
+  .zone {
+    fill: none;
+    stroke: var(--line);
+    stroke-width: 1;
+    stroke-dasharray: 6 5;
+    opacity: 0.8;
+  }
+</style>
+<main>
+  <svg viewBox="0 0 1500 1060" role="img" aria-label="BRAVO cache map">
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--line)"/></marker></defs>
+  <path class="edge" marker-end="url(#a)" d="M328,210 C347,210 347,248 366,248"/>
+  <path class="edge" marker-end="url(#a)" d="M524,248 C551,248 551,162 578,162"/>
+  <path class="edge" stroke-dasharray="7 5" d="M328,432 L368,432 L368,830 L952,830"/>
+  <path class="edge" stroke-dasharray="7 5" d="M952,830 L952,228"/>
+  <path class="edge" marker-end="url(#a)" stroke-dasharray="7 5" d="M952,228 L986,228"/>
+  <path class="edge" marker-end="url(#a)" stroke-dasharray="7 5" d="M952,488 L986,488"/>
+  <path class="edge" marker-end="url(#a)" stroke-dasharray="7 5" d="M952,748 L986,748"/>
+  <text x="380" y="820" class="small" font-weight="700">REDCap, fetched fresh every request</text>
+  <path class="edge" stroke-dasharray="4 6" d="M328,654 L390,654"/>
+  <text x="336" y="642" class="small" font-weight="700" fill="var(--muted)">stops here</text>
+  <path class="edge" marker-end="url(#a)" d="M908,162 C947,162 947,182 986,182"/>
+  <path class="edge" marker-end="url(#a)" d="M908,498 C947,498 947,702 986,702"/>
+  <text x="28" y="40" class="title" text-anchor="start">What BRAVO caches, and what it does not</text>
+  <text x="28" y="62" class="small" text-anchor="start">Measured in the running container, 2026-09-06. Three inputs, one cache location, three modules.</text>
+  <text x="28" y="92" class="small" text-anchor="start" font-weight="700">THE THREE INPUTS</text>
+  <text x="366" y="92" class="small" text-anchor="start" font-weight="700">INGESTION</text>
+  <text x="578" y="92" class="small" text-anchor="start" font-weight="700">ONE CACHE LOCATION</text>
+  <text x="986" y="92" class="small" text-anchor="start" font-weight="700">THE THREE MODULES</text>
+  <rect x="28" y="112" width="300" height="196" rx="10" class="node input"/>
+  <circle cx="58" cy="144" r="15" fill="var(--bg)" stroke="var(--line)"/>
+  <text x="58" y="149" class="label" text-anchor="middle" font-weight="700">1</text>
+  <text x="84" y="142" class="label" text-anchor="start">Medtronic Percept RC</text>
+  <text x="84" y="162" class="small" text-anchor="start">Session Report JSON, exported per visit</text>
+  <text x="52" y="196" class="small" text-anchor="start">569 stored files for RCS08</text>
+  <text x="52" y="215" class="small" text-anchor="start">voltage traces at 250/s, chronic power,</text>
+  <text x="52" y="234" class="small" text-anchor="start">device spectra, therapy settings</text>
+  <text x="52" y="290" class="small" text-anchor="start" font-weight="700">the ONLY input that is cached</text>
+  <rect x="28" y="334" width="300" height="196" rx="10" class="node risk"/>
+  <circle cx="58" cy="366" r="15" fill="var(--bg)" stroke="var(--line)"/>
+  <text x="58" y="371" class="label" text-anchor="middle" font-weight="700">2</text>
+  <text x="84" y="364" class="label" text-anchor="start">REDCap pain reports</text>
+  <text x="84" y="384" class="small" text-anchor="start">pulled fresh on every page request</text>
+  <text x="52" y="418" class="small" text-anchor="start">760 reports, 765 rows x 28 columns</text>
+  <text x="52" y="437" class="small" text-anchor="start">0.651 s per request</text>
+  <text x="52" y="456" class="small" text-anchor="start">filed continuously by the participant</text>
+  <text x="52" y="512" class="small" text-anchor="start" font-weight="700">NEVER cached, and deliberately so</text>
+  <rect x="28" y="556" width="300" height="196" rx="10" class="node risk"/>
+  <circle cx="58" cy="588" r="15" fill="var(--bg)" stroke="var(--line)"/>
+  <text x="58" y="593" class="label" text-anchor="middle" font-weight="700">3</text>
+  <text x="84" y="586" class="label" text-anchor="start">Google Drive visit sheets</text>
+  <text x="84" y="606" class="small" text-anchor="start">at-home and in-clinic stim testing tabs</text>
+  <text x="52" y="640" class="small" text-anchor="start">parsed offline 2026-09-05, 30 sheets</text>
+  <text x="52" y="659" class="small" text-anchor="start">live in the analysis folder only</text>
+  <text x="52" y="678" class="small" text-anchor="start">THE SERVER HAS NO COPY</text>
+  <text x="52" y="734" class="small" text-anchor="start" font-weight="700">never reaches the server at all</text>
+  <rect x="366" y="150" width="158" height="196" rx="10" class="node process"/>
+  <text x="445" y="184" class="label" text-anchor="middle">Ingestion</text>
+  <text x="445" y="204" class="small" text-anchor="middle">decode + store</text>
+  <text x="445" y="232" class="small" text-anchor="middle">JSON decoder</text>
+  <text x="445" y="249" class="small" text-anchor="middle">writes the DB rows,</text>
+  <text x="445" y="266" class="small" text-anchor="middle">then warms the cache</text>
+  <text x="445" y="283" class="small" text-anchor="middle">in a background</text>
+  <text x="445" y="300" class="small" text-anchor="middle">thread that cannot</text>
+  <text x="445" y="317" class="small" text-anchor="middle">fail an upload</text>
+  <rect x="568" y="102" width="350" height="472" rx="12" class="zone"/>
+  <text x="908" y="92" class="small" text-anchor="end">$DATASERVER_PATH/cache/</text>
+  <rect x="578" y="112" width="330" height="100" rx="10" class="node storage"/>
+  <text x="602" y="140" class="label" text-anchor="start">biomarker_shared</text>
+  <text x="602" y="160" class="small" text-anchor="start">3-second tiles + 98-band spectra</text>
+  <text x="602" y="180" class="small" text-anchor="start">1 file   245.90 MB   owner: Biomarkers</text>
+  <text x="602" y="200" class="small" text-anchor="start">read on every page view</text>
+  <rect x="578" y="224" width="330" height="100" rx="10" class="node storage"/>
+  <text x="602" y="252" class="label" text-anchor="start">biomarker_psd</text>
+  <text x="602" y="272" class="small" text-anchor="start">whole-participant assembled matrix</text>
+  <text x="602" y="292" class="small" text-anchor="start">97 files   500.32 MB   owner: Biomarkers</text>
+  <text x="602" y="312" class="small" text-anchor="start">read on every page view</text>
+  <rect x="578" y="336" width="330" height="100" rx="10" class="node neutral"/>
+  <text x="602" y="364" class="label" text-anchor="start">biomarker_psd_rows</text>
+  <text x="602" y="384" class="small" text-anchor="start">per-recording spectra</text>
+  <text x="602" y="404" class="small" text-anchor="start">6,309 files   30.47 MB   owner: Biomarkers</text>
+  <text x="602" y="424" class="small" text-anchor="start" font-weight="700">NEVER READ by any live page (0 reads measured)</text>
+  <rect x="578" y="448" width="330" height="100" rx="10" class="node storage"/>
+  <text x="602" y="476" class="label" text-anchor="start">closed_loop</text>
+  <text x="602" y="496" class="small" text-anchor="start">evidence inputs + response</text>
+  <text x="602" y="516" class="small" text-anchor="start">2 files   5.52 MB   owner: ClosedLoop</text>
+  <text x="602" y="536" class="small" text-anchor="start">read on every page view</text>
+  <text x="578" y="590" class="small" text-anchor="start" font-weight="700">TWO implementations of this one store, with different caps:</text>
+  <text x="578" y="608" class="small" text-anchor="start">Biomarkers 1074 MB cap  /  ClosedLoop 268 MB cap</text>
+  <text x="578" y="626" class="small" text-anchor="start">Stim Optimizer has no entry here at all.</text>
+  <rect x="986" y="112" width="490" height="232" rx="10" class="node neutral"/>
+  <text x="1010" y="144" class="label" text-anchor="start">Biomarker Exploration</text>
+  <text x="1010" y="164" class="small" text-anchor="start">reads: tiles + assembled matrix + REDCap</text>
+  <text x="1010" y="188" class="small" text-anchor="start" font-weight="700">Outputs</text>
+  <text x="1010" y="208" class="small" text-anchor="start">1.  Correlation per band centre, one row per contact pair</text>
+  <text x="1010" y="229" class="small" text-anchor="start">2.  Discrimination (area under curve) per band centre</text>
+  <text x="1010" y="250" class="small" text-anchor="start">3.  Band centre x integration-time sweep, 22 x 10 grid</text>
+  <text x="1010" y="271" class="small" text-anchor="start">4.  Data-availability timeline per channel</text>
+  <text x="1010" y="324" class="small" text-anchor="start" font-weight="700">CACHED  cold 42.83 s -&gt; 6.06 s with the file present</text>
+  <rect x="986" y="372" width="490" height="232" rx="10" class="node risk"/>
+  <text x="1010" y="404" class="label" text-anchor="start">Stim Optimizer</text>
+  <text x="1010" y="424" class="small" text-anchor="start">reads: therapy settings stream + REDCap</text>
+  <text x="1010" y="448" class="small" text-anchor="start" font-weight="700">Outputs</text>
+  <text x="1010" y="468" class="small" text-anchor="start">1.  Posterior surface over stimulation rate and current</text>
+  <text x="1010" y="489" class="small" text-anchor="start">2.  Exploration queue with delivered-settings eligibility</text>
+  <text x="1010" y="510" class="small" text-anchor="start">3.  Forward-simulated selection batches</text>
+  <text x="1010" y="531" class="small" text-anchor="start">4.  Coverage and safety map</text>
+  <text x="1010" y="584" class="small" text-anchor="start" font-weight="700">NO ON-DISK CACHE  2 stream rebuilds = 65.71 s per request</text>
+  <rect x="986" y="632" width="490" height="232" rx="10" class="node neutral"/>
+  <text x="1010" y="664" class="label" text-anchor="start">Closed-Loop Deployment</text>
+  <text x="1010" y="684" class="small" text-anchor="start">reads: evidence inputs (from the tile cache) + REDCap</text>
+  <text x="1010" y="708" class="small" text-anchor="start" font-weight="700">Outputs</text>
+  <text x="1010" y="728" class="small" text-anchor="start">1.  Deployability verdict, 6 of 50 settings</text>
+  <text x="1010" y="749" class="small" text-anchor="start">2.  Evidence triangle: current -&gt; power -&gt; pain</text>
+  <text x="1010" y="770" class="small" text-anchor="start">3.  Three-source comparison of how current moves power</text>
+  <text x="1010" y="791" class="small" text-anchor="start">4.  Prescription, duty cycle and device rule ledger</text>
+  <text x="1010" y="844" class="small" text-anchor="start" font-weight="700">CACHED  evidence inputs keyed on the recording set</text>
+  <text x="28" y="960" class="small" text-anchor="start" font-weight="700">Legend</text>
+  <rect x="28" y="972" width="18" height="14" rx="3" class="node input"/>
+  <text x="54" y="984" class="small" text-anchor="start">cached on disk</text>
+  <rect x="306" y="972" width="18" height="14" rx="3" class="node process"/>
+  <text x="332" y="984" class="small" text-anchor="start">ingestion (the only writer of new data)</text>
+  <rect x="584" y="972" width="18" height="14" rx="3" class="node storage"/>
+  <text x="610" y="984" class="small" text-anchor="start">cache read by a live page</text>
+  <rect x="862" y="972" width="18" height="14" rx="3" class="node neutral"/>
+  <text x="888" y="984" class="small" text-anchor="start">present but not read by any live page</text>
+  <rect x="1140" y="972" width="18" height="14" rx="3" class="node risk"/>
+  <text x="1166" y="984" class="small" text-anchor="start">not cached, or no cache at all</text>
+  <text x="28" y="1016" class="small" text-anchor="start">Solid arrow = data flows and is cached on the way.   Dashed arrow = flows on every request, never cached.   Short dashed stub = never reaches the server.</text>
+</svg>
+</main>

@@ -30,47 +30,23 @@ import TextField from "@mui/material/TextField";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
-import { BIN_LO as LO, BIN_HI as HI, BIN_MID as MID } from "./binarizationModel";
+import { BIN_LO as LO, BIN_HI as HI, BIN_MID as MID, computeCuts as computeCutsShared }
+  from "./binarizationModel";
 
-// Lightweight percentile (linear interpolation, q in 0..100) over a finite-value array.
-function percentile(values, q) {
-  if (!values || values.length === 0) return null;
-  const a = [...values].sort((x, y) => x - y);
-  const idx = (q / 100) * (a.length - 1);
-  const lo = Math.floor(idx), hi = Math.ceil(idx);
-  if (lo === hi) return a[lo];
-  return a[lo] + (a[hi] - a[lo]) * (idx - lo);
-}
-
-// Compute cuts given strategy + percentile state (legacy daily-mode fallback only; matched mode
-// takes its cuts straight from the scanModel so they are byte-identical to the backend labeler).
+// Daily-mode (legacy fallback) cuts: the shared, backend-faithful computeCuts for the numeric
+// values, with the same UI percentile/strategy labels matchedCuts (below) attaches to the
+// matched-mode cuts -- one cut-computation implementation for both modes instead of two.
 function computeCuts(vals, strategy, lowPct, highPct) {
-  if (!vals || vals.length === 0) return { kind: "none" };
-  if (strategy === "tertile" || strategy === "percentile") {
-    return {
-      kind: "two-cut",
-      lowCut: percentile(vals, strategy === "tertile" ? 33.3333 : lowPct),
-      highCut: percentile(vals, strategy === "tertile" ? 66.6667 : highPct),
+  const c = computeCutsShared(vals, strategy, lowPct, highPct);
+  if (c.kind === "two-cut") {
+    return { ...c,
       lowLabel: `${(strategy === "tertile" ? 33.3 : lowPct).toFixed(0)}th pct`,
-      highLabel: `${(strategy === "tertile" ? 66.7 : highPct).toFixed(0)}th pct`,
-    };
+      highLabel: `${(strategy === "tertile" ? 66.7 : highPct).toFixed(0)}th pct` };
   }
-  if (strategy === "median") {
-    const m = percentile(vals, 50);
-    return { kind: "one-cut", cut: m, label: "median (50th pct)" };
+  if (c.kind === "one-cut") {
+    return { ...c, label: strategy === "median" ? "median (50th pct)" : "KMeans midpoint (1-D preview)" };
   }
-  let c0 = percentile(vals, 25), c1 = percentile(vals, 75);
-  for (let it = 0; it < 30; it++) {
-    const mid = (c0 + c1) / 2;
-    let s0 = 0, n0 = 0, s1 = 0, n1 = 0;
-    for (const v of vals) {
-      if (v <= mid) { s0 += v; n0 += 1; } else { s1 += v; n1 += 1; }
-    }
-    const nc0 = n0 ? s0 / n0 : c0, nc1 = n1 ? s1 / n1 : c1;
-    if (Math.abs(nc0 - c0) < 1e-9 && Math.abs(nc1 - c1) < 1e-9) { c0 = nc0; c1 = nc1; break; }
-    c0 = nc0; c1 = nc1;
-  }
-  return { kind: "one-cut", cut: (c0 + c1) / 2, label: "KMeans midpoint (1-D preview)" };
+  return c;
 }
 
 // Integer-valued pain metrics: NRS and the count-like sums are reported on an integer scale, so the
@@ -91,7 +67,7 @@ function binWidthForMetric(metricKey, vmin, vmax) {
 }
 
 function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percentileHigh,
-                               metricLabel, metricKey, loading,
+                               metricLabel, metricKey, loading, totalReports,
                                matchTolerance, setMatchTolerance, matchDirty,
                                scanModel, matchedLoading,
                                setPercentileLow, setPercentileHigh, setStrategy }) {
@@ -443,12 +419,23 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
 
   // Header caption — PRO-first by default (the discovery framing). For PSD-first modes (nearest /
   // prior) lead with the PSD-coverage number instead, so the headline matches the toggle.
+  //
+  // EVERY COUNT HERE IS FOR THE SELECTED SCORE, AND SAYS SO (PI, 2026-09-10). Not every report
+  // answers every score: on RCS08 there are 764 reports, 764 with an NRS value and 599 with a
+  // Left Leg VAS value. The caption used to read "599 PRO reports across 315 days" with no score
+  // named, so next to a record of 764 it looked like a stale number that had not updated -- and
+  // because several scores share a count (NRS = VAS = Relief = 764; Left Leg = Back = 599),
+  // switching between those visibly changed nothing. The score is now in the sentence and the
+  // record total sits beside it, so a smaller count reads as "reports carrying this score".
+  const scoreName = metricLabel || metricKey || "this score";
+  const totalTxt = Number.isFinite(totalReports) && totalReports > 0
+    ? ` · ${totalReports.toLocaleString()} reports in the record` : "";
   const headerCaption = matchedMode
     ? (dir === "pro_first" && su
-        ? `${(su.n_pro_used || 0).toLocaleString()} of ${(su.n_pro_total || 0).toLocaleString()} pain reports paired with neural data at ±${matchTolerance} min (${su.pct_pro_used}%)`
-        : `${(counts.n_matched || 0).toLocaleString()} of ${(counts.n_sessions || 0).toLocaleString()} neural samples paired with a pain report at ±${matchTolerance} min`)
+        ? `${(su.n_pro_used || 0).toLocaleString()} of ${(su.n_pro_total || 0).toLocaleString()} ${scoreName} reports paired with neural data at ±${matchTolerance} min (${su.pct_pro_used}%)${totalTxt}`
+        : `${(counts.n_matched || 0).toLocaleString()} of ${(counts.n_sessions || 0).toLocaleString()} neural samples paired with a ${scoreName} report at ±${matchTolerance} min${totalTxt}`)
     : (vals.length
-        ? `${dayAgg.reduce((s, d) => s + d.nSamples, 0).toLocaleString()} PRO reports across ${vals.length.toLocaleString()} days`
+        ? `${dayAgg.reduce((s, d) => s + d.nSamples, 0).toLocaleString()} ${scoreName} reports across ${vals.length.toLocaleString()} days${totalTxt}`
         : ((loading || matchedLoading) ? "loading…" : "no data yet"));
 
   // Footer caption.
@@ -591,10 +578,33 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
           {"Band-power LSB appears on the timeline but is not a full-spectrum PSD, so it is not pooled here."}
         </MDTypography>
       ) : (hasTolControl ? (
+        // WHY THIS IS THREE MESSAGES AND NOT ONE. The card falls back to the daily pain-report
+        // distribution whenever no neural sample carries a pain label, and it used to explain that
+        // fallback with a single sentence — "No PSD scan index available" — regardless of the
+        // reason. That sentence is true in only one of the three cases, and in the case that
+        // matters most it is actively wrong: when the scan index and the pain series are both
+        // present and the match window is simply too narrow for anything to pair, the correct
+        // statement is that ZERO of the available neural samples reached a pain rating at this
+        // window, which is a measured result the reader can fix by widening the window. Announcing
+        // a missing input instead sends them looking for a data problem that does not exist. The
+        // scan model now reports which situation it is in, so each gets its own sentence.
         <MDTypography variant="caption" color="dark" sx={{ fontSize: 11.5, fontStyle: "italic", mb: 0.25 }}>
           {(loading || matchedLoading)
             ? "Loading neural-sample availability…"
-            : "No PSD scan index available — showing the daily PRO distribution."}
+            : (scanModel && scanModel.matchable)
+              ? `None of the ${(scanModel.counts && scanModel.counts.n_sessions) || 0} available `
+                + `neural samples fell within \u00b1${matchTolerance} min of a pain rating, so nothing `
+                + "can be binarized at this window. Widen the match window above. The histogram "
+                + "below has fallen back to the daily pain-report distribution, which is a "
+                + "different quantity: it shows the pain scores themselves, not the neural data "
+                + "they could label."
+              : (scanModel && scanModel.unmatchableReason === "no_pain_series")
+                ? "No pain reports are available for the selected metric, so no neural sample can "
+                  + "be labelled and matching was not attempted. This is an absence of pain data, "
+                  + "not a finding about the neural data."
+                : "The neural-sample index for this participant has not been loaded, so matching "
+                  + "was not attempted and nothing here describes how much neural data could be "
+                  + "binarized. The histogram below is the daily pain-report distribution."}
         </MDTypography>
       ) : null)}
 

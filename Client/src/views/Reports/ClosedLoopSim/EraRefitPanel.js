@@ -11,7 +11,7 @@
  * separate AUC numbers does not afford. The Plotly graph is drawn once per dataset with the
  * imperative Plotly.react pattern the module standardized on (no figure rebuilds on interaction).
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import Plotly from "plotly.js-dist";
 
 import { Card } from "@mui/material";
@@ -19,6 +19,10 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import { SessionController } from "database/session-control";
+import { useCachedResult } from "database/useCachedResult";
+
+import { CL, recomputeSlots } from "views/Reports/moduleCacheKeys";
+import PanelStaleNote from "./PanelStaleNote";
 import PAL from "./palette";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
@@ -29,31 +33,43 @@ const ROW_ORDER = ["OFF", "LOW", "HIGH", "Pooled"];
 
 function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
   const ref = useRef(null);
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState(null);
 
   const bc = bandCandidate || {};
   const channelRaw = bc.contact;
   const centerHz = bc.center_freq_hz;
   const bandWidthHz = bc.bandwidth_hz || 5.0;
 
-  useEffect(() => {
-    if (!participantUid || channelRaw == null || centerHz == null) return;
-    setLoading(true); setErr(null);
-    SessionController.query("/api/queryDeploymentRocByEra", {
-      ParticipantId: participantUid,
-      Channel: channelRaw,
-      CenterHz: Number(centerHz),
-      BandWidthHz: Number(bandWidthHz),
-      ...requestParams,
-    }).then((response) => {
-      const d = response && response.data;
-      if (d && d.available && d.by_era && d.by_era.available) setData(d.by_era);
-      else { setData(null); setErr((d && (d.reason || (d.by_era && d.by_era.reason))) || "unavailable"); }
-      setLoading(false);
-    }).catch(() => { setData(null); setErr("request failed"); setLoading(false); });
-  }, [participantUid, channelRaw, centerHz, bandWidthHz, requestParams]);
+  // The request, minus the participant, is the cache key. See useDeploymentReport for why that
+  // rule rather than a hand-kept list: the body is the complete statement of what changes the
+  // answer, so a key derived from it cannot fall behind the request.
+  const settings = {
+    Channel: channelRaw,
+    CenterHz: centerHz == null ? null : Number(centerHz),
+    BandWidthHz: Number(bandWidthHz),
+    ...requestParams,
+  };
+
+  const cached = useCachedResult({
+    moduleKey: CL.era,
+    uid: participantUid,
+    settings,
+    enabled: !!participantUid && channelRaw != null && centerHz != null,
+    fetcher: () => SessionController.query("/api/queryDeploymentRocByEra",
+      { ParticipantId: participantUid, ...settings })
+      .then((response) => (response && response.data) || null),
+  });
+
+  // The panel has always worked on the `by_era` sub-object rather than the envelope, and it keeps
+  // doing so. The ENVELOPE is what gets cached, because the reason an unavailable answer gives is
+  // in the envelope and is worth keeping alongside the answer it explains.
+  const env = cached.data;
+  const byEra = env && env.available && env.by_era && env.by_era.available ? env.by_era : null;
+  const data = byEra;
+  const loading = cached.loading;
+  const err = cached.err
+    || (env && !byEra
+      ? ((env.reason || (env.by_era && env.by_era.reason)) || "unavailable")
+      : null);
 
   // Portability verdict by INFERENCE, not raw point-AUC spread (audit C3). The backend now orients
   // every era to the POOLED sign, so a reversed era reports a signed AUC < 0.5 (any_reversed), and
@@ -209,6 +225,9 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
         <MDTypography variant="h6" sx={{ fontSize: 14, mb: 1 }}>
           Per-era refit (OFF / LOW / HIGH stim)
         </MDTypography>
+        <PanelStaleNote stale={cached.stale} staleReasons={cached.staleReasons}
+          loading={cached.loading} notKept={cached.notKept}
+          onRecompute={() => recomputeSlots(participantUid, [CL.era])} />
         {loading ? (
           <MDTypography variant="caption" color="text" sx={{ fontStyle: "italic", fontSize: 11 }}>
             Refitting the ROC within each stim era…

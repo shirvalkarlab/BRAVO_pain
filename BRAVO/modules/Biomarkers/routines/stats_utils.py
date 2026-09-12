@@ -144,7 +144,40 @@ def balanced_metrics(sens, spec, n_pos, n_neg):
 def block_length_for(labels, n=None):
     """Default circular-block length = the lag-1 autocorrelation (decorrelation) timescale of the
     labels, -1/ln(r1), clipped to [1, n//4]. 1 when there is no positive autocorrelation. Shared by
-    both the scalar and the vectorized permutation paths so they always agree."""
+    both the scalar and the vectorized permutation paths so they always agree.
+
+    **A returned 1 does NOT mean an independent shuffle.** An earlier version of this docstring said
+    it did, and that was wrong. ``circular_block_indices`` and ``circular_block_perm_matrix`` return
+    a pure CIRCULAR SHIFT when ``block <= 1``, so a block length of 1 selects the rotation test:
+    only ``n`` distinct nulls exist, the label series' entire autocorrelation function is preserved,
+    and only its alignment with the features is destroyed. That is a legitimate and conservative
+    null for a serially dependent label series — it is stricter than an independent shuffle, not
+    looser — but it has a hard resolution limit, documented on those two functions.
+
+    MEASURED ON THE REAL DATA (2026-09-02), because the lag-1 estimator's assumption is worth
+    checking rather than trusting. It models the autocorrelation as AR(1), where ACF(k) = r1**k, and
+    reads lag 1 only. For the `nrs` rating-level series (72 ratings) the observed function is
+        +0.357 +0.402 +0.426 +0.374 +0.354 +0.226   (lags 1-6; still +0.35 at lag 12)
+    where an AR(1) at r1 = 0.357 predicts +0.357 +0.128 +0.046 +0.016 +0.006 +0.002. The series does
+    not decay geometrically at all, and Ljung-Box rejects independence at p = 0.0020 (lag 1) and
+    p < 0.0001 (lags 3, 5, 10). So -1/ln(0.357) = 0.97 rounds to 1. For `left_leg_vas` (43 ratings)
+    the same rounding happens for the opposite reason: there is no detectable dependence to preserve
+    (Ljung-Box minimum p = 0.10).
+
+    Both therefore run the rotation test, which is the right answer for `nrs` (its dependence is
+    fully preserved) and harmless for `left_leg_vas` (there is none to preserve). The lag-1
+    estimator arrives there by a route that does not generalise, though: a series with a high
+    lag-1 value would get multi-sample blocks, and those preserve dependence only WITHIN a block.
+
+    **OPEN DESIGN QUESTION, deliberately not resolved here.** Dependence preservation is therefore
+    NON-MONOTONE in the block length: length 1 preserves everything (a shift), intermediate lengths
+    preserve only within-block structure, and length n is a shift again. For a null whose purpose is
+    to preserve the label series' temporal structure, the block machinery is arguably the wrong tool
+    and the rotation test should be selected explicitly rather than reached by rounding. Changing
+    that would move published p-values, so it is recorded rather than done. An integrated
+    autocorrelation time, tau = 1 + 2*sum ACF(k), was implemented and reverted on 2026-09-02 for
+    exactly this reason: it correctly gave 10 for `nrs`, but a block length of 10 preserves LESS of
+    the dependence than the shift the old estimator already selected, so it made the null worse."""
     labels = np.asarray(labels, dtype=float)
     n = int(labels.size if n is None else n)
     # Use the POSITIVE lag-1 autocorrelation only. Circular-block permutation exists to preserve
@@ -161,7 +194,23 @@ def block_length_for(labels, n=None):
 
 def circular_block_indices(n, block, rng):
     """One circular-block-permuted index vector of length n (block length `block`). Preserves
-    within-block temporal structure, breaking only the cross-block label-feature alignment."""
+    within-block temporal structure, breaking only the cross-block label-feature alignment.
+
+    **``block <= 1`` returns a pure CIRCULAR SHIFT, not an independent shuffle.** Only ``n`` distinct
+    outcomes exist (the n rotations), one of which is the identity. This is the rotation test: it
+    preserves the series' whole autocorrelation function and destroys only its alignment with the
+    features. Two consequences a caller must not overlook:
+
+    * **The p-value is quantised and floored.** With ``n`` distinct nulls the smallest attainable
+      p is about ``1/(n+1)`` and p moves in steps of about ``1/n``, no matter how many permutations
+      are drawn. Drawing 1000 permutations from ``n`` distinct outcomes does NOT give 1000
+      independent null draws; the effective null sample size is ``n``. At n = 72 the floor is
+      1/73 = 0.0137 and the step is 1/72 = 0.0139 — note the floor is marginally SMALLER than the
+      step, since one is over n+1 and the other over n. So a reported 0.08 means "about 6 of 72
+      rotations matched or beat the observed value" and should not be read to three decimal places.
+    * **The identity is always among the draws**, so the observed statistic appears in its own null
+      and the count of null values at least as extreme is never zero. The ``(ge + 1)/(used + 1)``
+      correction elsewhere is therefore doubly conservative here, which is the safe direction."""
     block = max(1, int(block))
     shift = int(rng.integers(0, n))
     base = (np.arange(n) + shift) % n
@@ -172,6 +221,24 @@ def circular_block_indices(n, block, rng):
     blocks = [base[i * block:(i + 1) * block] for i in range(nb)]
     rng.shuffle(blocks)
     return np.concatenate(blocks)[:n]
+
+
+def permutation_null_resolution(n, block):
+    """How well a permutation null of this shape can resolve a p-value.
+
+    Returns ``(n_distinct, p_floor, p_step)``. At ``block <= 1`` the builders below return the ``n``
+    circular rotations, so only ``n`` distinct nulls exist however many permutations are drawn: the
+    smallest attainable p is ``1/(n+1)`` and p moves in steps of about ``1/n``. Published beside any
+    p-value from this machinery so a reader cannot over-read a quantised number, which is a real
+    hazard when the floor (about 0.015 at n = 72) sits close to a 0.05 threshold.
+
+    At ``block > 1`` the block ORDER is shuffled, so the count of distinct outcomes is the number of
+    block orderings times the ``n`` shifts and is large enough not to bind; it is reported as None
+    rather than computed, because the exact count depends on the ragged final block."""
+    n = int(n); block = max(1, int(block))
+    if block <= 1:
+        return n, 1.0 / (n + 1), 1.0 / n
+    return None, None, None
 
 
 def circular_block_perm_matrix(n, block, n_perm, rng):
@@ -328,3 +395,87 @@ def block_perm_pvalue(observed_stat, feature_matrix, labels, stat_fn, n_perm=100
     if used == 0:
         return (np.nan, 0)
     return ((ge + 1) / (used + 1), used)   # +1: never report p=0
+
+
+# =================================================================================================
+# THE outlier rule for the biomarker plate. ONE implementation, one threshold, used everywhere.
+# =================================================================================================
+# PI decision, 2026-08-30 (superseding an interim 3 MAD decision the same day): every reported
+# statistic on the biomarker plate — the correlation spectrum, the full-spectrum exploration scan,
+# the chronic LFP-power path, the AUC, the effect sizes — uses ONE filter at 5 MAD, applied
+# uniformly to the FEATURE, the LABEL and the chronic power column.
+#
+# Before this consolidation there were three separate implementations with two different thresholds
+# (analytics at 5 MAD dropping, streaming_psd._mad_keep at 3 MAD keeping, adapter.mad_outlier_mask
+# at 3 MAD keeping) and inverted polarity between them. They now all delegate here. Raising or
+# lowering MAD_N_DEFAULT changes the whole plate at once, which is the point.
+#
+# NOTE: moving from 3 to 5 MAD LOOSENS the correlation spectrum and the chronic path — they reject
+# fewer samples than before this change. That is the intended consequence of the PI's decision.
+MAD_N_DEFAULT = 5.0
+
+
+def mad_outlier_flags(x, n_mad=None, scale="raw"):
+    """Boolean mask of OUTLIERS (True == outlier == exclude) under the MAD rule.
+
+    Rule: ``|v - median(v)| > n_mad * MAD``, with ``MAD = median(|v - median(v)|)`` and NO
+    consistency rescaling (so ``n_mad`` is in raw MAD units, not sigma; 5 raw MAD is about
+    3.37 sigma on Gaussian data). The inequality is STRICT so this is the exact complement of
+    :func:`mad_keep_mask` at every threshold, boundary included.
+
+    ``scale`` selects the space the rule is evaluated in, and it matters:
+
+    * ``"raw"`` — use for quantities that are already additive: dB/log power, z-scored features,
+      and bounded ordinal pain scores.
+    * ``"log"`` — use for MULTIPLICATIVE quantities on a linear axis, i.e. raw linear band power
+      and raw LSB. A symmetric window on such a feature is proportionally far tighter above the
+      median than below, so a raw-scale rule deletes the upper tail almost exclusively. Measured on
+      RCS08: the raw rule removed 3.71% one-sidedly vs 6.19% two-sidedly on the log scale, and the
+      SELECTED BAND changed as a result.
+
+    Non-finite entries are never flagged (they are already absent from every statistic), so the
+    returned count means genuine exclusions.
+
+    ZERO-MAD GUARD: when a majority of samples share one value the MAD is 0 and a naive rule would
+    flag everything that merely differs from the median, deleting all remaining variation. In that
+    case nothing is flagged and ``info["skipped"]`` says why.
+
+    Returns ``(mask, info)`` with info = {n_finite, n_mad, scale, median, mad, n_removed, skipped}.
+    """
+    x = np.asarray(x, dtype=float)
+    n_mad = float(MAD_N_DEFAULT if n_mad is None else n_mad)
+    finite = np.isfinite(x)
+    info = {"n_finite": int(finite.sum()), "n_mad": n_mad, "scale": str(scale),
+            "median": None, "mad": None, "n_removed": 0, "skipped": None}
+    if finite.sum() < 4:
+        info["skipped"] = "fewer than 4 finite samples"
+        return np.zeros_like(x, dtype=bool), info
+    if scale == "log":
+        with np.errstate(divide="ignore", invalid="ignore"):
+            v = np.log10(np.where(x > 0, x, np.nan))
+        finite = np.isfinite(v)
+        if finite.sum() < 4:
+            info["skipped"] = "fewer than 4 strictly-positive samples for the log-scale rule"
+            return np.zeros_like(x, dtype=bool), info
+    else:
+        v = x
+    med = float(np.median(v[finite]))
+    mad = float(np.median(np.abs(v[finite] - med)))
+    info["median"], info["mad"] = med, mad
+    if not np.isfinite(mad) or mad <= 0:
+        info["skipped"] = "MAD is zero (majority of samples share one value); no removal applied"
+        return np.zeros_like(x, dtype=bool), info
+    mask = finite & (np.abs(v - med) > n_mad * mad)
+    info["n_removed"] = int(mask.sum())
+    return mask, info
+
+
+def mad_keep_mask(x, n_mad=None, scale="raw"):
+    """Boolean KEEP-mask (True == keep) — the exact complement of :func:`mad_outlier_flags`.
+
+    Provided because the historical call sites in ``streaming_psd`` and ``adapter`` are written in
+    keep-polarity. Non-finite entries are never kept.
+    """
+    x = np.asarray(x, dtype=float)
+    mask, _ = mad_outlier_flags(x, n_mad=n_mad, scale=scale)
+    return np.isfinite(x) & ~mask

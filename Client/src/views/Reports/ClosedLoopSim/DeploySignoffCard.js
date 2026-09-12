@@ -7,12 +7,14 @@
  * for the device-programming record. This is a SUMMARY, not a new analysis — every number here is
  * the same one the Phase B–D panels show, gathered in one place.
  */
+import { useEffect, useState } from "react";
 import { Card, Grid, Icon } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDButton from "components/MDButton";
 
 import useDeploymentSummary from "./useDeploymentSummary";
+import { captureFigureSnapshots } from "./figureSnapshots";
 import PAL from "./palette";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
@@ -69,7 +71,26 @@ function KV({ k, v }) {
   );
 }
 
-function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpoint, summary }) {
+function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpoint, summary,
+                             deploymentReport }) {
+  // THE DEVICE ANSWER, read from the deployment report rather than from the statistical summary.
+  //
+  // This card used to print `power ≥ N LSB` at twenty-four-point type inside a PRINTABLE sign-off
+  // record, gated only on the statistical threshold being available. It had no reference to the
+  // device rules at all, so a configuration the Percept forbids could be printed, signed and
+  // carried into a programming visit as though it were authorised. That was first fixed by
+  // suppressing the number when the device answer was negative; as of the 2026-09-04 rebuild the
+  // number is not on this card in any state, because the values to transcribe belong on the
+  // prescription panel, which withholds the whole table on the same condition and carries the
+  // read-back checklist that makes a value safe to act on. One number in one place.
+  //
+  // Fail closed: a report that has not loaded, or that carries no device answer, is treated as a
+  // refusal, because an absent verdict is not permission.
+  const _rep = deploymentReport && deploymentReport.data ? deploymentReport.data : deploymentReport;
+  const _vd = (_rep && _rep.verdict_detail) || {};
+  const deviceOk = !!(_rep && _rep.available && _vd.device_eligible === true);
+  const _nFail = ((_rep && _rep.eligibility && _rep.eligibility.failures) || []).length;
+  const _nUnknown = ((_rep && _rep.eligibility && _rep.eligibility.unknowns) || []).length;
   const bc = bandCandidate || {};
   const channelRaw = bc.contact;
   const centerHz = bc.center_freq_hz;
@@ -86,6 +107,26 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
     enabled: !summary,
   });
   const { data, loading, err } = summary || ownSummary;
+
+  // STALENESS MUST REACH A PRINTED RECORD, added 2026-09-04 with the result cache.
+  //
+  // The summary's cache key includes the cut-point, so choosing a new operating point in the ROC
+  // panel marks this page stale rather than silently refetching — which is the behaviour the PI
+  // asked for and is right for a screen. It is not sufficient for a sheet. Everything else on this
+  // card is transient: a reader who sees an amber Recompute bar at the top of the page understands
+  // that the numbers below it describe the previous settings. A printed or exported sign-off record
+  // outlives the screen and loses the bar, so it would assert an operating point that had already
+  // been superseded, with a signature under it.
+  //
+  // The record is therefore marked at its own head and in the exported payload, rather than the
+  // cut-point being exempted from the key. Exempting it would have refetched on every drag of the
+  // operating point — the expensive call this cache exists to avoid — and would have broken the
+  // rule the PI set. Marking keeps both properties: the screen stays responsive, and nothing that
+  // leaves the screen can quietly lag.
+  const _eff = summary || ownSummary;
+  const inputsStale = !!(_eff && _eff.stale);
+  const staleWhy = (_eff && _eff.staleReasons) || [];
+  const computedAt = (_eff && _eff.computedAt) || null;
   // Operating-point provenance for the auditable device-programming record: WHICH rule chose the
   // cut-point and at what sensitivity/specificity. Without this two clinicians could program the same
   // patient at different operating points with identical-looking sign-off sheets.
@@ -98,10 +139,66 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
     degenerate: !!cutpoint.degenerate,
   } : null;
 
-  const exportJson = () => {
+  // PICTURES OF THE FIGURES ON THE RECORD (audit item [49]). Taken in the browser at the moment
+  // Print or Export is pressed, from the figures as drawn on this page, so the sheet shows the
+  // operating point the reader chose and not a server's idea of it. `snapshots` holds the last
+  // capture and is drawn inside this card, which is what lets the print stylesheet carry it: that
+  // stylesheet shows `.cl-signoff-card *` and hides everything else. `printPending` is the reason
+  // the capture and the print are two steps -- window.print() blocks, so the pictures must be in
+  // the document BEFORE it is called, and React commits them only after this render returns.
+  const [snapshots, setSnapshots] = useState(null);
+  const [capturing, setCapturing] = useState(false);
+  const [printPending, setPrintPending] = useState(false);
+
+  const takeSnapshots = async () => {
+    setCapturing(true);
+    try {
+      const snap = await captureFigureSnapshots();
+      setSnapshots(snap);
+      return snap;
+    } catch (e) {
+      const snap = { figures: [], missing: [], captured_at: new Date().toISOString(),
+        error: `figures could not be captured (${e && e.message ? e.message : e})` };
+      setSnapshots(snap);
+      return snap;
+    } finally {
+      setCapturing(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!printPending || capturing || !snapshots) return;
+    setPrintPending(false);
+    // The pictures are in the document now; print on the next frame so their <img> nodes have laid out.
+    window.requestAnimationFrame(() => window.print());
+  }, [printPending, capturing, snapshots]);
+
+  const printWithFigures = async () => {
+    setPrintPending(true);
+    await takeSnapshots();
+  };
+
+  const exportJson = async () => {
     if (!data) return;
+    const snap = await takeSnapshots();
     const blob = new Blob([JSON.stringify({ schema_version: "deploy_signoff_v1",
-      generated_at: new Date().toISOString(), operating_point: opProvenance, summary: data }, null, 2)],
+      generated_at: new Date().toISOString(), operating_point: opProvenance, summary: data,
+      // Carried in the FILE, not only on the screen. An export is the most durable form this
+      // record takes and the least likely to be read next to the page that produced it, so a
+      // consumer parsing it must be able to see that the analysis predates the current settings.
+      // `computed_at` is included even when nothing is stale, because a record with no timestamp
+      // cannot be reconciled against anything later.
+      inputs_stale: inputsStale,
+      inputs_stale_reasons: inputsStale ? staleWhy : [],
+      summary_computed_at: computedAt ? new Date(computedAt).toISOString() : null,
+      // The figures as drawn when the file was made, as PNG data URLs, plus the ones that were NOT
+      // on the page at that moment -- a record that is silent about a missing figure reads as if
+      // there had been none.
+      figures: snap.figures.map((f) => ({ section_id: f.section_id, title: f.title, index: f.index,
+        n_in_section: f.n_in_section, width_px: f.width_px, height_px: f.height_px,
+        image_data_url: f.image_data_url })),
+      figures_missing: snap.missing,
+      figures_captured_at: snap.captured_at }, null, 2)],
       { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -112,34 +209,72 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
   const id = data && data.identity;
   const dc = data && data.device_control;
   const ev = data && data.evidence;
-  const th = data && data.threshold;
-  // ESTIMATED (modeled) threshold for an unsensed-but-modelable band: deployment_summary keeps
-  // threshold.available=False / upper_lsb=None and nests the modeled value under threshold.estimate.
-  // Surface it as an amber ESTIMATED card (power ≈, fail-closed — never as a measured `available`
-  // value), matching what the LSB panel and the top verdict strip show for the same band.
-  const thEst = th && th.estimated && th.estimate ? th.estimate : null;
+  // The threshold object from the statistical summary is deliberately NOT read here any more. The
+  // deployable value and its provenance live on the prescription panel, which is the only surface
+  // with a read-back step, and duplicating the number onto a printable sheet is what allowed a
+  // signed record to disagree with the device rules.
   const pw = data && data.power;
   const fwd = data && data.forward;
-  // Audit C8: "ready to program" keys on the NECESSARY gates alone (a hard prerequisite failing
-  // blocks deployment even at a high passed-count), NOT on n_gates_passed === n_gates. Fall back to
-  // the count only for older payloads that predate ready_to_program.
-  const ready = data
+  // The statistical summary's own readiness flag, which keys on the NECESSARY gates alone rather
+  // than on the passed-count. It is read here only so the gate line can be worded correctly; it no
+  // longer drives a headline or the card's frame, because a statistical readiness flag that knows
+  // nothing about the device rules is not a verdict.
+  const summaryReady = data
     ? (data.ready_to_program != null ? !!data.ready_to_program : data.n_gates_passed === data.n_gates)
     : false;
   const nIndet = (data && data.n_gates_indeterminate) || 0;
 
+  // The card's frame keys on the DEVICE answer and not on the statistical one, so the card's own
+  // chrome cannot imply a permission that the rule table has refused.
+  const frameInk = deviceOk ? PAL.pass : PAL.warn;
+
+  // The notice is rendered as part of the card's own content rather than as a floating overlay, so
+  // that it survives the print stylesheet. An overlay or a tooltip would be exactly the thing that
+  // disappears on the paper copy.
+  const staleNotice = inputsStale ? (
+    <MDBox className="cl-signoff-stale" mb={1} p={1}
+      sx={{ borderRadius: "4px", backgroundColor: PAL.warnFill, border: `1px solid ${PAL.warnText}` }}>
+      <MDTypography variant="caption" sx={{
+        fontSize: 10, fontWeight: "bold", letterSpacing: 0.3, color: PAL.warnText,
+      }}>
+        THIS RECORD DESCRIBES AN EARLIER ANALYSIS
+      </MDTypography>
+      <MDTypography variant="caption" display="block" sx={{ fontSize: 9.5, color: PAL.warnText }}>
+        {computedAt
+          ? `The analysis below was computed at ${new Date(computedAt).toLocaleString()} and the `
+            + "settings on the page have changed since. Press Recompute before signing or "
+            + "exporting this record."
+          : "The settings on the page have changed since the analysis below was computed. Press "
+            + "Recompute before signing or exporting this record."}
+      </MDTypography>
+      {staleWhy.length ? (
+        <MDBox component="ul" sx={{ pl: 2, my: 0.3 }}>
+          {staleWhy.map((r) => (
+            <MDTypography key={r} component="li" variant="caption" display="list-item"
+              sx={{ fontSize: 9, color: PAL.warnText }}>
+              {r}
+            </MDTypography>
+          ))}
+        </MDBox>
+      ) : null}
+    </MDBox>
+  ) : null;
+
   return (
     <Card className="cl-signoff-card"
-      sx={{ width: "100%", border: data ? `2px solid ${ready ? PAL.pass : PAL.warn}` : undefined }}>
+      sx={{ width: "100%", border: data ? `2px solid ${inputsStale ? PAL.warnText : frameInk}` : undefined }}>
       <MDBox p={2.5}>
+        {/* Above the title, because a reader who has already started reading the gate lines has
+            passed the point where this would change what they do with the sheet. */}
+        {staleNotice}
         <MDBox display="flex" justifyContent="space-between" alignItems="center" mb={1}>
           <MDTypography variant="h5" sx={{ fontSize: 18 }}>Deploy-to-Percept review</MDTypography>
           {data ? (
             <MDBox className="cl-signoff-actions">
-              <MDButton size="small" variant="outlined" color="dark" onClick={() => window.print()} sx={{ mr: 1 }}>
-                Print
+              <MDButton size="small" variant="outlined" color="dark" onClick={printWithFigures} disabled={capturing} sx={{ mr: 1 }}>
+                {capturing ? "Capturing figures…" : "Print"}
               </MDButton>
-              <MDButton size="small" variant="gradient" color="info" onClick={exportJson}>
+              <MDButton size="small" variant="gradient" color="info" onClick={exportJson} disabled={capturing}>
                 Export JSON
               </MDButton>
             </MDBox>
@@ -154,20 +289,50 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
           <MDTypography variant="caption" sx={{ fontSize: 11, color: PAL.fail }}>{`Unavailable: ${err}.`}</MDTypography>
         ) : data ? (
           <>
-            {/* headline verdict — driven by the NECESSARY gates (audit C8), not the passed-count */}
+            {/* NO SECOND VERDICT, changed 2026-09-04. This card used to print its own readiness
+                headline computed from the statistical gates alone, which made it the third verdict
+                statement on a page whose two endpoints answer different questions and can disagree.
+                A printed record carrying a permissive sentence that the device rules contradict is
+                worse than a screen doing so, because the sheet outlives the screen and loses
+                whatever context surrounded it.
+
+                What replaces it is a pointer to the one reconciled verdict, plus the device answer
+                restated in a single line. The device answer is restated rather than omitted because
+                a printed sheet that says nothing about permission can be read as granting it. The
+                statistical gate counts stay, labelled as evidence. */}
             <MDBox p={1} mb={1.5} sx={{ borderRadius: "6px",
-              backgroundColor: ready ? PAL.passFill : PAL.warnFill }}>
-              <MDTypography variant="h6" sx={{ fontSize: 14, color: ready ? PAL.pass : PAL.warnText }}>
-                {ready
-                  ? "Ready to program — all required gates passed"
-                  : (data.n_necessary != null
-                    ? `Not ready — ${data.n_necessary_passed} of ${data.n_necessary} required gates passed`
-                    : "Not ready — review caveats before programming")}
+              backgroundColor: deviceOk ? PAL.passFill : PAL.warnFill }}>
+              <MDTypography variant="caption" sx={{ display: "block", fontSize: 10,
+                fontWeight: "bold", letterSpacing: 0.4,
+                color: deviceOk ? PAL.pass : PAL.warnText }}>
+                THE VERDICT FOR THIS RECORD IS THE RECONCILED HEADER AT THE TOP OF THIS SHEET
               </MDTypography>
-              <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, color: "#666" }}>
-                {`${data.n_gates_passed} of ${data.n_gates} total gates passed`}
-                {nIndet ? ` · ${nIndet} not tested` : ""}
-                {` · verdict: ${data.verdict} · match direction: ${data.match_direction}`}
+              <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
+                color: "#2A2A2A", mt: 0.2 }}>
+                {deviceOk
+                  ? "The device rules permit this configuration. Read the header for the evidence "
+                    + "answer as well, because both have to clear before anything is programmed."
+                  : !_rep || !_rep.available
+                    ? "The device rules have not been evaluated for this configuration. This sheet "
+                      + "is not a record of an authorised setting."
+                    : "The device rules do NOT permit this configuration"
+                      + `${_nFail ? `: ${_nFail} rule${_nFail === 1 ? "" : "s"} violated` : ""}`
+                      + `${_nUnknown ? `, ${_nUnknown} that could not be evaluated` : ""}. `
+                      + "This sheet is not a record of an authorised setting."}
+              </MDTypography>
+              <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5,
+                color: "#666", mt: 0.3 }}>
+                {`Statistical gates, as evidence rather than as permission: `
+                  + `${data.n_gates_passed} of ${data.n_gates} passed`}
+                {data.n_necessary != null
+                  ? `, of which ${data.n_necessary_passed} of ${data.n_necessary} required` : ""}
+                {nIndet ? `, ${nIndet} not tested` : ""}
+                {`. Summary verdict: ${data.verdict}. Match direction: ${data.match_direction}.`}
+                {summaryReady
+                  ? " The summary's own required gates all passed, which is a statement about "
+                    + "discrimination and not about whether the device will accept the "
+                    + "configuration."
+                  : " The summary's own required gates did not all pass."}
               </MDTypography>
             </MDBox>
 
@@ -188,50 +353,34 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                   </>
                 ) : null}
 
+                {/* WHERE THE VALUES TO TRANSCRIBE LIVE. This block used to print the threshold
+                    itself at twenty-four-point type. It now points at the prescription panel
+                    instead, for two reasons. The first is that one number belongs in one place: two
+                    renderings of the same threshold on one page can drift, and this card is the one
+                    that gets printed and signed. The second is that a threshold on its own is not
+                    enough to program from — it needs its units, its provenance, the fields it is
+                    coupled to and a read-back step — and all of those are on the prescription
+                    panel, which withholds the whole table on exactly the device condition stated
+                    above. */
+                }
                 <MDBox mt={1.2} p={1.2} sx={{ borderRadius: "6px",
-                  backgroundColor: th && th.available ? PAL.accentFill : PAL.warnFill,
-                  border: `1px solid ${th && th.available ? PAL.accentBorder : PAL.warnBorder}` }}>
+                  backgroundColor: PAL.neutralFill,
+                  border: `1px solid ${PAL.neutralBorder}` }}>
                   <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold",
-                    color: th && th.available ? PAL.accent : PAL.warnText }}>
-                    THRESHOLD TO PROGRAM
+                    letterSpacing: 0.4, color: PAL.neutral }}>
+                    VALUES TO TRANSCRIBE
                   </MDTypography>
-                  {th && th.available ? (
-                    <>
-                      <MDTypography variant="h4" sx={{ fontSize: 24, color: PAL.accent, lineHeight: 1.1 }}>
-                        {`power ≥ ${fmt(th.upper_lsb, 1)} LSB`}
-                      </MDTypography>
-                      <MDTypography variant="caption" sx={{ fontSize: 9.5, color: "#777" }}>
-                        {`p${fmt(th.percentile, 0)} of device Timeline LSB · ${th.n_timeline_samples} in-band samples`}
-                      </MDTypography>
-                      {opProvenance && opProvenance.rule_label ? (
-                        <MDTypography variant="caption" display="block" sx={{ fontSize: 9.5, color: "#777", mt: 0.3 }}>
-                          {`Operating point: ${opProvenance.rule_label}`}
-                          {opProvenance.sensitivity != null
-                            ? ` · sens ${fmt(opProvenance.sensitivity)} / spec ${fmt(opProvenance.specificity)}` : ""}
-                          {opProvenance.degenerate ? " · ⚠ degenerate — not deployable" : ""}
-                        </MDTypography>
-                      ) : null}
-                    </>
-                  ) : thEst ? (
-                    <>
-                      <MDTypography variant="h4" sx={{ fontSize: 24, color: PAL.warnText, lineHeight: 1.1 }}>
-                        {`power ≈ ${fmt(thEst.estimated_upper_lsb, 1)} LSB`}
-                      </MDTypography>
-                      <MDTypography variant="caption" display="block" sx={{ fontSize: 9.5, color: "#777" }}>
-                        {`ESTIMATED (${thEst.tier || "modeled"}) — device never sensed this band; `}
-                        {thEst.estimated_upper_lsb_lo != null && thEst.estimated_upper_lsb_hi != null
-                          ? `±1σ ${fmt(thEst.estimated_upper_lsb_lo, 1)}–${fmt(thEst.estimated_upper_lsb_hi, 1)} LSB` : ""}
-                        {thEst.freq_extrapolated ? " · ⚠ extrapolated beyond validated 8–30 Hz" : ""}
-                      </MDTypography>
-                      <MDTypography variant="caption" display="block" sx={{ fontSize: 9, color: "#999", mt: 0.3 }}>
-                        For planning only — not a measured prerequisite. See the LSB panel for the ±1σ gauge.
-                      </MDTypography>
-                    </>
-                  ) : (
-                    <MDTypography variant="caption" display="block" sx={{ fontSize: 11, mt: 0.3 }}>
-                      No deployable LSB threshold — no measured Timeline LSB and no modeled estimate for this band.
-                    </MDTypography>
-                  )}
+                  <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5,
+                    color: "#2A2A2A", mt: 0.2 }}>
+                    {deviceOk
+                      ? "The parameter table on the deployment page carries every value to enter, "
+                        + "with its units in a separate column, the minutes-and-seconds reading for "
+                        + "each duration, and a read-back box per row. Transcribe from that table "
+                        + "and not from this sheet, because this sheet has no read-back step."
+                      : "No value to program is printed on this sheet or on the deployment page, "
+                        + "because the device does not permit this configuration. A number on a "
+                        + "signed sheet gets entered."}
+                  </MDTypography>
                 </MDBox>
 
                 {/* Advisory ramp guidance (audit C10): the closed-loop tuning surface is band +
@@ -318,6 +467,50 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                 </MDBox>
               </Grid>
             </Grid>
+
+            {/* THE PICTURES. Present only after Print or Export has taken them, and drawn INSIDE this
+                card so the print stylesheet (which shows only this card and the verdict strip)
+                carries them onto paper. Each figure is captioned with the section it came from, and a
+                section whose figure was not on the page is named as missing rather than left out. */}
+            {snapshots ? (
+              <MDBox className="cl-signoff-figures" mt={2} pt={1.5} sx={{ borderTop: "1px solid #e0e0e0" }}>
+                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: "#999" }}>
+                  FIGURES AS DRAWN WHEN THIS RECORD WAS MADE
+                  {snapshots.captured_at ? ` — ${new Date(snapshots.captured_at).toLocaleString()}` : ""}
+                </MDTypography>
+                {snapshots.error ? (
+                  <MDTypography variant="caption" display="block" sx={{ fontSize: 10, color: PAL.fail }}>
+                    {snapshots.error}
+                  </MDTypography>
+                ) : null}
+                {snapshots.figures.map((f) => (
+                  <MDBox key={`${f.section_id}-${f.index}`} mt={1} sx={{ pageBreakInside: "avoid" }}>
+                    <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, fontWeight: "bold" }}>
+                      {f.n_in_section > 1 ? `${f.title} (${f.index} of ${f.n_in_section})` : f.title}
+                    </MDTypography>
+                    {/* Shown at the figure's own on-screen size. The PNG carries two pixels per
+                        CSS pixel so it stays crisp on paper; without a width it would display at
+                        its pixel size, twice as large as the figure it copies. */}
+                    <img src={f.image_data_url} alt={f.title}
+                      style={{ display: "block", width: f.width_px, maxWidth: "100%", height: "auto",
+                        border: "1px solid #eee" }} />
+                  </MDBox>
+                ))}
+                {snapshots.missing.length ? (
+                  <MDBox mt={1}>
+                    <MDTypography variant="caption" display="block" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.warnText }}>
+                      NOT ON THIS RECORD
+                    </MDTypography>
+                    {snapshots.missing.map((m) => (
+                      <MDTypography key={m.section_id + m.reason} variant="caption" display="block"
+                        sx={{ fontSize: 10, color: PAL.warnText }}>
+                        {`${m.title}: ${m.reason}`}
+                      </MDTypography>
+                    ))}
+                  </MDBox>
+                ) : null}
+              </MDBox>
+            ) : null}
           </>
         ) : null}
       </MDBox>

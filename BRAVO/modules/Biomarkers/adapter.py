@@ -17,7 +17,8 @@ ChronicBrainSense.py):
 Routine input contract (what streaming_psd expects per epoch; identical to dbs_io.Stream):
   {"stream_data": [<per-group (n_ch, n_samples) array>, ...],
    "channel_names": [[name, ...], ...],
-   "sample_rate": float}
+   "sample_rate": float,
+   "missing": <(n_samples,) 0/1 dropped-packet flag, or None>}
 """
 
 import datetime
@@ -25,6 +26,15 @@ import datetime
 import numpy as np
 import pandas as pd
 from scipy.signal import savgol_filter
+
+# Both spellings on purpose: the container's path root makes the package `modules.DecodeCommon`,
+# the host suite's root makes it `DecodeCommon` (same convention as routines/availability.py).
+try:
+    from modules.DecodeCommon.representation import missing_per_sample as _missing_per_sample
+    from modules.DecodeCommon import matching as _matching
+except ImportError:
+    from DecodeCommon.representation import missing_per_sample as _missing_per_sample
+    from DecodeCommon import matching as _matching
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +50,8 @@ def bravo_timedomain_to_streamdata(recording):
       {"stream_data": [ (n_ch, n_samples) ],     # single group per recording
        "channel_names": [ [ch0, ch1, ...] ],
        "sample_rate": float,
-       "start_time": float or None}
+       "start_time": float or None,
+       "missing": (n_samples,) 0/1 dropped-packet flag, or None if the recording carries none}
     """
     data = np.asarray(recording["Data"], dtype=float)
     if data.ndim == 1:
@@ -51,6 +62,7 @@ def bravo_timedomain_to_streamdata(recording):
         "channel_names": [list(recording["ChannelNames"])],
         "sample_rate": float(recording["SamplingRate"]),
         "start_time": recording.get("StartTime"),
+        "missing": _missing_per_sample(recording.get("Missing"), data.shape[0]),
     }
 
 
@@ -123,7 +135,9 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
         far finer match than the legacy same-day mean. `*_mean` and `*_min` are both set to that one
         matched report's value (a single report has no spread); sessions with no PRO inside the window
         get NaN metrics and `matched=False`. When None, the legacy same-calendar-day mean/min is used.
-        Every session row carries `matched` (bool) and `match_dt_min` (signed minutes PRO-minus-session,
+        Every session row carries `matched` (bool), `matched_pro_time` (the IDENTITY of the matched
+        report — its timestamp under time-window matching, or the calendar date under legacy same-day
+        aggregation; NaT when unmatched) and `match_dt_min` (signed minutes PRO-minus-session,
         NaN when unmatched) so the caller can count matched neural samples and surface sparsity.
 
     Returns
@@ -146,36 +160,64 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
         if recordings is None:
             raise ValueError('target="session" requires `recordings`.')
 
-        # Time-window matching path: pre-sort PRO reports by timestamp once, then for each session
-        # take the nearest report within tolerance. Vectorized via searchsorted on the sorted times.
+        # Time-window matching path: nearest report within tolerance, via the shared Layer 1
+        # matcher (`DecodeCommon.matching.matched_samples`) rather than a private reimplementation
+        # of the same nearest-neighbour search -- Track B of the shared matching layer plan.
+        # `max_per_rating=None` reproduces this call site's own, pre-existing behavior exactly: no
+        # independence rule, so one PRO report may still match any number of sessions.
         tol = None if match_tolerance_min is None else float(match_tolerance_min)
         if tol is not None and tol > 0:
             valid = df[pd.notna(df[timestamp_col])].sort_values(timestamp_col).reset_index(drop=True)
-            pro_times = valid[timestamp_col].to_numpy("datetime64[ns]")
-            tol_ns = np.timedelta64(int(round(tol * 60.0 * 1e9)), "ns")
+            pro_times_ns = valid[timestamp_col].to_numpy("datetime64[ns]")
+            pro_ns_i64 = pro_times_ns.astype(np.int64)
+            session_ts = [_to_datetime(rec.get("StartTime")) for rec in recordings]
+            # `.to_datetime64()` on a pandas Timestamp does NOT always give nanosecond resolution
+            # -- a Timestamp built from a plain `datetime.datetime` (as `_to_datetime` does, via
+            # `datetime.datetime.utcfromtimestamp`) carries only microsecond resolution in pandas
+            # 2.x, so casting it to int64 directly would read microseconds as if they were
+            # nanoseconds, a 1000x error. Forcing "datetime64[ns]" first, exactly as already done
+            # for `pro_times_ns` above, makes both sides' units agree.
+            session_ns_i64 = np.array([
+                (t.to_datetime64().astype("datetime64[ns]").astype(np.int64) if not pd.isna(t)
+                else np.iinfo(np.int64).min)
+                for t in session_ts
+            ])
+            # A shared reference epoch, subtracted in exact integer nanoseconds before converting
+            # to the float64 seconds `matched_samples` takes. Epoch nanoseconds since 1970 are
+            # ~1.7e18, so a raw float64 conversion keeps only ~7 significant digits after the
+            # decimal at that magnitude (float64 has ~15-17 total) -- a few hundred nanoseconds of
+            # noise, negligible for a minutes-wide tolerance window but still a real, avoidable
+            # loss of precision this project's own equality-proof discipline does not accept
+            # without checking. Shifting first keeps the matched magnitude near zero, so the
+            # float64 conversion below is exact to well under a nanosecond.
+            finite_session_ns = session_ns_i64[session_ns_i64 != np.iinfo(np.int64).min]
+            ref_ns = int(min(pro_ns_i64.min() if pro_ns_i64.size else 0,
+                             finite_session_ns.min() if finite_session_ns.size else 0))
+            pro_times_s = (pro_ns_i64 - ref_ns) / 1e9
+            session_times_s = np.where(session_ns_i64 == np.iinfo(np.int64).min, np.nan,
+                                       (session_ns_i64 - ref_ns) / 1e9)
+            match = _matching.matched_samples(
+                session_times_s, session_times_s, pro_times_s, np.zeros(len(valid)),
+                tolerance_min=tol, direction="nearest", max_per_rating=None)
             rows = []
             for i, rec in enumerate(recordings):
-                ts = _to_datetime(rec.get("StartTime"))
+                ts = session_ts[i]
                 row = {"session_index": i, "session_start": ts,
                        "session_date": (ts.date() if not pd.isna(ts) else None),
-                       "matched": False, "match_dt_min": np.nan}
-                j = -1
-                if not pd.isna(ts) and len(pro_times):
-                    ts64 = np.datetime64(ts.to_datetime64())
-                    pos = int(np.searchsorted(pro_times, ts64))
-                    # Nearest of the two neighbours straddling ts (searchsorted gives the right one).
-                    best, best_d = -1, None
-                    for k in (pos - 1, pos):
-                        if 0 <= k < len(pro_times):
-                            d = abs(pro_times[k] - ts64)
-                            if d <= tol_ns and (best_d is None or d < best_d):
-                                best, best_d = k, d
-                    j = best
+                       "matched": False, "match_dt_min": np.nan,
+                       "matched_pro_time": pd.NaT}
+                j = int(match["rating_cluster_id"][i])
                 if j >= 0:
                     rr = valid.iloc[j]
-                    dt_min = (pro_times[j] - np.datetime64(ts.to_datetime64())) / np.timedelta64(1, "m")
                     row["matched"] = True
-                    row["match_dt_min"] = float(dt_min)
+                    row["match_dt_min"] = float(match["dt_min"][i])
+                    # IDENTITY of the matched report, not its value. Callers need to know WHICH
+                    # rating a session was matched to in order to cluster/group correctly. Without
+                    # it, pipeline.run_timedomain_branch reconstructed the grouping by searching for
+                    # a PRO whose VALUE equalled the label, which on an integer pain scale collapses
+                    # every session sharing a score into one "rating" — and worse, makes the grouping
+                    # a function of the outcome being predicted.
+                    row["matched_pro_time"] = pd.Timestamp(pro_times_ns[j])
                     for m in metrics:
                         v = float(rr[m]) if (m in valid.columns and pd.notna(rr[m])) else np.nan
                         row[f"{m}_mean"] = v
@@ -197,8 +239,14 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
             ts = _to_datetime(rec.get("StartTime"))
             sess_date = ts.date() if not pd.isna(ts) else None
             same_day = df[df["_date"] == sess_date] if sess_date is not None else df.iloc[0:0]
+            # On this path the "rating" is the DAY'S AGGREGATE (mean/min over that date's reports),
+            # so the identity of the matched rating is the date itself: two sessions on the same day
+            # genuinely share one rating and belong in one group.
             row = {"session_index": i, "session_start": ts, "session_date": sess_date,
-                   "matched": bool(len(same_day) > 0), "match_dt_min": np.nan}
+                   "matched": bool(len(same_day) > 0), "match_dt_min": np.nan,
+                   "matched_pro_time": (pd.Timestamp(sess_date) if (sess_date is not None
+                                                                    and len(same_day) > 0)
+                                        else pd.NaT)}
             for m in metrics:
                 if m in same_day.columns and len(same_day) > 0:
                     row[f"{m}_mean"] = same_day[m].mean()
@@ -222,17 +270,22 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
         amp = cdata[:, 1] if cdata.shape[1] > 1 else np.full(len(time), np.nan)
         chronic_ts = [_to_datetime(t) for t in time]
 
-        # Nearest-date PRO join (PROs are daily; chronic samples are ~10 min).
-        pro_by_date = {d: g for d, g in df.groupby("_date")}
-        out_rows = []
-        for k, ts in enumerate(chronic_ts):
-            d = ts.date() if not pd.isna(ts) else None
-            g = pro_by_date.get(d)
-            row = {"time": ts, "lfp": lfp[k], "stim_amplitude": amp[k]}
-            for m in metrics:
-                row[m] = (g[m].mean() if (g is not None and m in g.columns) else np.nan)
-            out_rows.append(row)
-        return pd.DataFrame(out_rows)
+        # Nearest-date PRO join (PROs are daily; chronic samples are ~10 min). One vectorized
+        # per-date mean instead of a per-sample `.mean()` call per metric per row: `m in g.columns`
+        # was really checking df's own columns (identical for every group), so it's hoisted out of
+        # the loop; `df.groupby("_date")` drops NaT dates by default, matching the old
+        # `pro_by_date.get(d)` returning None (-> NaN) for any date that never appears.
+        present_metrics = [m for m in metrics if m in df.columns]
+        chronic_dates = pd.Index([ts.date() if not pd.isna(ts) else None for ts in chronic_ts])
+        out = pd.DataFrame({"time": chronic_ts, "lfp": lfp, "stim_amplitude": amp})
+        if present_metrics:
+            joined = df.groupby("_date")[present_metrics].mean().reindex(chronic_dates)
+            for m in present_metrics:
+                out[m] = joined[m].to_numpy()
+        for m in metrics:
+            if m not in present_metrics:
+                out[m] = np.nan
+        return out
 
     else:
         raise ValueError('target must be "session" or "chronic"')
@@ -255,24 +308,21 @@ def _session_stim_amplitude(recording):
 # ---------------------------------------------------------------------------
 # 4) Chronic (10-min trend) glue for the threshold biomarker
 # ---------------------------------------------------------------------------
-def mad_outlier_mask(x, k=3.0):
-    """Boolean KEEP-mask: True for samples within k median-absolute-deviations of the median.
-    Excludes artifact spikes where |x - median| > k*MAD (NaN/non-finite are excluded). Returns the
-    finite mask when MAD==0 (all equal) or fewer than 3 finite points (MAD undefined/unstable).
-    Robust (median/MAD), so a few extreme values don't move the threshold like mean/SD would.
+def mad_outlier_mask(x, k=None):
+    """Boolean KEEP-mask under the ONE canonical MAD rule (stats_utils.mad_keep_mask).
+
+    Delegates rather than reimplementing. Previously carried its own copy defaulting to k=3.0; the
+    PI consolidated the biomarker plate onto a single 5 MAD filter on 2026-08-30, so ``k=None`` now
+    means the canonical threshold. Name and keep-polarity are preserved for existing callers.
+
+    NOTE for the chronic path: this is applied to the LFP POWER column, which is a raw linear
+    multiplicative quantity, so callers there pass scale via `_concat_chronic` using the log-scale
+    rule. A raw-scale window on linear power deletes the upper tail almost exclusively.
     """
-    x = np.asarray(x, dtype=float)
-    finite = np.isfinite(x)
-    if finite.sum() < 3:
-        return finite
-    med = np.median(x[finite])
-    mad = np.median(np.abs(x[finite] - med))
-    if mad <= 0:
-        return finite
-    return finite & (np.abs(x - med) <= k * mad)
+    from .routines.stats_utils import mad_keep_mask
+    return mad_keep_mask(x, n_mad=k, scale="raw")
 
-
-def _concat_chronic(chronic, mad_k=3.0):
+def _concat_chronic(chronic, mad_k=None):
     """Accept one Chronic recording dict OR a list of them, returning a single dict with a
     time-sorted, concatenated Time/Data. The threshold detector needs many days of trend
     (train+gap+test, default ~10 days); a single Chronic recording spans only minutes, so
@@ -281,7 +331,8 @@ def _concat_chronic(chronic, mad_k=3.0):
     `mad_k`: per-recording MAD outlier rejection on the LFP-power column (Data[:,0]) BEFORE
     concatenation. Applied PER RECORDING (each recording is one homogeneous-scale source —
     Chronic ~10-min LFP vs per-session Power-Domain band power differ ~8x), so a global MAD
-    wouldn't wrongly flag an entire lower-scale source. Set mad_k=None to disable.
+    wouldn't wrongly flag an entire lower-scale source. mad_k=None means the CANONICAL
+    threshold (stats_utils.MAD_N_DEFAULT); pass mad_k=0 to disable rejection entirely.
     """
     if isinstance(chronic, dict):
         chronic = [chronic]
@@ -301,8 +352,16 @@ def _concat_chronic(chronic, mad_k=3.0):
         # (channel, frequency) combo without a separate timestamp-to-schedule join. Snapped to the
         # Percept FFT bin (~250/256 Hz); NaN when the recording carries no CenterFrequencyHz.
         fhz = _snap_freq_local(c.get("CenterFrequencyHz"))
-        if mad_k and d.ndim == 2 and d.shape[0] == t.shape[0] and t.shape[0] >= 3:
-            keep = mad_outlier_mask(d[:, 0], k=mad_k)   # per-recording (homogeneous scale)
+        # `mad_k is None` now means "use the canonical threshold", NOT "disabled" — a plain
+        # `if mad_k` truthiness test would silently skip outlier rejection for the default call.
+        # Explicit disable is mad_k=0 or mad_k=False.
+        _mad_on = not (mad_k is False or (isinstance(mad_k, (int, float)) and float(mad_k) == 0.0))
+        if _mad_on and d.ndim == 2 and d.shape[0] == t.shape[0] and t.shape[0] >= 3:
+            # LOG-scale rule: Data[:,0] is LINEAR LFP power, a multiplicative quantity, so a
+            # symmetric raw-scale MAD window would delete the upper tail almost exclusively. Same
+            # canonical threshold as everywhere else; only the space it is evaluated in differs.
+            from .routines.stats_utils import mad_keep_mask as _mk
+            keep = _mk(d[:, 0], n_mad=mad_k, scale="log")   # per-recording (homogeneous scale)
             t, d = t[keep], d[keep]
         if t.size:
             times_list.append(t)

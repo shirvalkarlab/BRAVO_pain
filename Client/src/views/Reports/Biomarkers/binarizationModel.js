@@ -21,6 +21,30 @@
 export const BIN_HI = "#D55E00";   // high pain
 export const BIN_LO = "#0072B2";   // low pain
 export const BIN_MID = "#7E8794";  // excluded middle
+// RGB triplets for consumers that interpolate a gradient (e.g. a diverging colormap) rather than
+// setting a flat fill -- same two colors as BIN_HI/BIN_LO, just pre-split for math.
+export const BIN_HI_RGB = [213, 94, 0];
+export const BIN_LO_RGB = [0, 114, 178];
+
+// A diverging scale around the value that means "no relationship" for each quantity -- 0 for a
+// correlation, 0.5 (never 0) for an area under the curve. House rule: an AUC is never read against
+// zero. Moved here from BiomarkerHeatmapGrids on 2026-09-11 so the Closed-Loop page's band heat map
+// and the Biomarkers heat maps read ONE definition of the colour and cannot drift apart.
+export function divergingRgb(v, center, halfRange) {
+  const t = Math.max(-1, Math.min(1, (Number(v) - center) / halfRange));
+  const neg = BIN_LO_RGB;         // blue
+  const pos = BIN_HI_RGB;         // vermillion
+  const mid = [255, 255, 255];
+  const lerp = (a, b, k) => a + (b - a) * k;
+  return t < 0
+    ? [lerp(neg[0], mid[0], 1 + t), lerp(neg[1], mid[1], 1 + t), lerp(neg[2], mid[2], 1 + t)]
+    : [lerp(mid[0], pos[0], t), lerp(mid[1], pos[1], t), lerp(mid[2], pos[2], t)];
+}
+export function diverging(v, center, halfRange) {
+  if (v == null || !Number.isFinite(Number(v))) return "#e9e9e9";
+  const c = divergingRgb(v, center, halfRange);
+  return `rgb(${c.map((x) => Math.round(x)).join(",")})`;
+}
 
 // numpy-percentile (linear interpolation, q in 0..100) over a finite-value array.
 function percentile(values, q) {
@@ -68,7 +92,7 @@ function matchNearest(tSec, proSorted, tolSec, direction = "prior") {
 //   * "percentile" -> low/high slider percentiles
 //   * "median"   -> single median cut (>= median => high)
 //   * "kmeans"   -> 1-D 2-means (Lloyd from p25/p75), split at the cluster midpoint
-function computeCuts(vals, strategy, lowPct, highPct) {
+export function computeCuts(vals, strategy, lowPct, highPct) {
   if (!vals || vals.length === 0) return { kind: "none" };
   if (strategy === "tertile" || strategy === "percentile") {
     const loQ = strategy === "tertile" ? 33.3333 : Number(lowPct);
@@ -118,17 +142,36 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
                                           maxPerRating = 3, refractoryMin = 2,
                                           matchDirection = "prior",
                                           allowWindowReuse = false }) {
-  const empty = {
+  // WHY THIS RETURN CARRIES A REASON. There are three quite different situations in which this
+  // function produces no matched samples, and every consumer of the result used to see the same
+  // object for all three:
+  //   (a) the availability payload has not arrived, or carries no psd_scan_index, so MATCHING WAS
+  //       NEVER ATTEMPTED;
+  //   (b) no pain series is available for the selected metric, so again nothing could be attempted;
+  //   (c) both inputs are present and matching ran, but the match window is too narrow for any
+  //       neural sample to reach a pain rating — a real, informative negative.
+  // Case (c) is a finding the reader should act on by widening the window. Cases (a) and (b) are an
+  // absence of inputs and say nothing at all about the data. Because the returned object was
+  // identical, the preview card announced "No PSD scan index available" for case (c) and the
+  // timeline drew every pain rating as an open circle labelled "no neural match" for cases (a) and
+  // (b) — each page asserting, on the strength of missing inputs, a negative result it had not
+  // measured. `matchable` and `unmatchableReason` let each consumer say which situation it is in.
+  const emptyWith = (reason) => ({
     samples: [], binByKey: new Map(), matchedValues: [], cuts: { kind: "none" },
+    // painMatched is length-zero here rather than absent, so a consumer indexing into it gets
+    // `undefined` for every rating instead of reading a stale array from an earlier model.
+    painMatched: [],
+    matchable: false,
+    unmatchableReason: reason,
     counts: { n_sessions: 0, n_matched: 0, n_high: 0, n_low: 0, n_excluded_middle: 0,
               n_matched_td: 0, n_matched_montage: 0,
               by_source: { low: { td: 0, montage: 0, lsb: 0 },
                            high: { td: 0, montage: 0, lsb: 0 },
                            excluded: { td: 0, montage: 0, lsb: 0 } },
               tolerance_min: toleranceMin, median_abs_offset_min: null },
-  };
-  if (!Array.isArray(scanIndex) || !scanIndex.length || !painSeries
-      || !painSeries.t || !painSeries.t.length) return empty;
+  });
+  if (!Array.isArray(scanIndex) || !scanIndex.length) return emptyWith("no_scan_index");
+  if (!painSeries || !painSeries.t || !painSeries.t.length) return emptyWith("no_pain_series");
 
   const tolSec = (toleranceMin && toleranceMin > 0) ? toleranceMin * 60 : 0;
   // `i0` = original index into painSeries.t/y, captured here so we can map a matched proIdx (an
@@ -350,6 +393,10 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
 
   return {
     samples, binByKey, matchedValues, cuts, painMatched,
+    // Matching was attempted with both inputs present. `matchedValues.length === 0` from here is
+    // therefore a MEASURED result — the window is too narrow — and consumers may say so.
+    matchable: true,
+    unmatchableReason: null,
     counts: {
       n_sessions: scanIndex.length,
       n_matched: matchedValues.length,

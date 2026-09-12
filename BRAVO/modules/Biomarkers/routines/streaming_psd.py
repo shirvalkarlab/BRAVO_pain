@@ -34,6 +34,13 @@ The transform functions operate on PSD arrays of shape (E, C, F):
 import datetime as _dt
 
 import numpy as np
+
+# The shared matching step. Both spellings on purpose: the container's path root makes the package
+# `modules.DecodeCommon`, the host suite's root makes it `DecodeCommon` (see `CacheStore/__init__.py`).
+try:
+    from modules.DecodeCommon import matching as _matching
+except ImportError:
+    from DecodeCommon import matching as _matching
 from scipy.signal import welch, butter, filtfilt
 from scipy.stats import t
 
@@ -86,46 +93,68 @@ def normalize_psd_across_epochs(psd, method="zscore", scale_gaussian=True):
 
 
 # ---------- Pearson correlation (NaN-safe) ----------
-def _mad_keep(x, k=3.0):
-    """Boolean KEEP-mask: True for finite samples within k median-absolute-deviations of the median.
-    Excludes artifact spikes where |x - median| > k*MAD. Returns the finite mask when MAD==0 (all
-    equal) or fewer than 3 finite points (MAD undefined). Robust (median/MAD), so a few extreme
-    sessions can't drag a Pearson correlation. Mirrors adapter.mad_outlier_mask; duplicated here to
-    keep streaming_psd dependency-free."""
-    x = np.asarray(x, dtype=float)
-    finite = np.isfinite(x)
-    if finite.sum() < 3:
-        return finite
-    med = np.median(x[finite])
-    mad = np.median(np.abs(x[finite] - med))
-    if mad <= 0:
-        return finite
-    return finite & (np.abs(x - med) <= k * mad)
+def _mad_keep(x, k=None):
+    """Boolean KEEP-mask under the ONE canonical MAD rule (stats_utils.mad_keep_mask).
 
+    Delegates rather than reimplementing. This function used to carry its own copy of the rule with
+    a default of k=3.0, which disagreed with the analytics module's 5 MAD and used the opposite
+    polarity convention; the PI consolidated the plate onto a single 5 MAD filter on 2026-08-30.
+    ``k=None`` means the canonical threshold (stats_utils.MAD_N_DEFAULT).
 
-def pearson_corr_psd_label(psd_feat, label, mad_k=3.0):
+    Scale: the features reaching this function are post-daywise-normalization log/z quantities and
+    the label is a bounded ordinal score, so both are additive and the rule is applied on the raw
+    scale. Do NOT pass a raw-linear power/LSB feature here — that needs scale="log" (see
+    stats_utils.mad_outlier_flags).
+    """
+    from .stats_utils import mad_keep_mask
+    return mad_keep_mask(x, n_mad=k, scale="raw")
+
+def pearson_corr_psd_label(psd_feat, label, mad_k=None, rating_group=None, return_extra=False):
     """
     psd_feat: (E, C, F) features AFTER daywise normalization
     label:    (E,)
-    mad_k:    MAD outlier rejection (>=k MADs from the median is dropped) applied per (channel,
+    mad_k:    MAD outlier rejection applied per (channel,
               frequency) on the feature AND on the label before each correlation, so a single
-              artifact session can't drive the Pearson R. Set None to disable.
-    Returns: corr (C,F), pval (C,F)
+              artifact session can't drive the Pearson R. None = canonical threshold; 0 disables.
+    rating_group: (E,) integer grouping factor, one code per matched pain report (-1 = ungrouped;
+              see pipeline.rating_group_from_identity). WHEN GIVEN, `pval` is CLUSTER-ROBUST on
+              rating clusters with df = G-1 instead of a naive t with df = n-2. This matters a lot:
+              several epochs share one pain report, so the naive df overstates the information by
+              roughly the average cluster size. Measured on RCS08 at the selected cell, the naive
+              p was 9.24e-10 against 1.56e-04 cluster-robust — an SE inflation of about 1.65x, and
+              the BH-significant count over the displayed family fell from 20 cells to 4.
+              When omitted, behaviour is unchanged (naive p), so existing callers are unaffected.
+    return_extra: also return a dict with `pval_naive`, `n_clusters`, `se_cluster` and `method`,
+              so the panel can show the corrected and naive families side by side rather than
+              silently swapping one for the other.
+    Returns: corr (C,F), pval (C,F)[, extra dict]
     """
     X = np.asarray(psd_feat, dtype=float)
     y = np.asarray(label, dtype=float)
     E, C, F = X.shape
     corr = np.full((C, F), np.nan)
     pval = np.full((C, F), np.nan)
+    pval_naive = np.full((C, F), np.nan)
+    n_clusters = np.full((C, F), np.nan)
+    se_cluster = np.full((C, F), np.nan)
+    g_all = None
+    if rating_group is not None:
+        g_all = np.asarray(rating_group, dtype=int)
+        if g_all.size != E:
+            raise ValueError(f"rating_group has {g_all.size} entries for {E} epochs")
 
     yv = np.isfinite(y)
     # Label-side MAD keep-mask (computed once; the feature side is per (c,f) below).
-    y_keep = _mad_keep(y, k=mad_k) if mad_k else yv
+    # `mad_k is None` means USE THE CANONICAL THRESHOLD, not "disabled" — a plain truthiness test
+    # here would silently switch the correlation spectrum's outlier rejection off for every default
+    # call. Explicit disable is mad_k=0 or mad_k=False.
+    _mad_on = not (mad_k is False or (isinstance(mad_k, (int, float)) and float(mad_k) == 0.0))
+    y_keep = _mad_keep(y, k=mad_k) if _mad_on else yv
 
     for c in range(C):
         for f in range(F):
             x = X[:, c, f]
-            x_keep = _mad_keep(x, k=mad_k) if mad_k else np.isfinite(x)
+            x_keep = _mad_keep(x, k=mad_k) if _mad_on else np.isfinite(x)
             v = x_keep & y_keep
             n = v.sum()
             if n < 3:
@@ -135,8 +164,62 @@ def pearson_corr_psd_label(psd_feat, label, mad_k=3.0):
             y_z = (y[v] - np.nanmean(y[v])) / (np.nanstd(y[v]) + 1e-12)
             r = np.mean(x_z * y_z)
             corr[c, f] = r
+            # NAIVE p: t on r with df = n-2, where n counts EPOCHS. Kept as an explicit contrast
+            # because it is what the panel used to present as its only p-value.
             tstat = r * np.sqrt((n - 2) / (1 - r**2 + 1e-12))
-            pval[c, f] = 2 * (1 - t.cdf(abs(tstat), df=n - 2))
+            pval_naive[c, f] = 2 * (1 - t.cdf(abs(tstat), df=n - 2))
+
+            if g_all is None:
+                pval[c, f] = pval_naive[c, f]
+                continue
+            # CLUSTER-ROBUST p on RATING clusters. Several epochs are matched to the same pain
+            # report, so the epochs are not independent and df = n-2 overstates the information by
+            # roughly the average cluster size. With both variables standardized, r IS the OLS slope
+            # of y_z on x_z, so the cluster-robust (Liang-Zeger) sandwich for a simple regression
+            # reduces to a few lines: with residuals u = y_z - r*x_z,
+            #     Var(r) = c * sum_g (sum_{i in g} x_i u_i)^2 / (sum_i x_i^2)^2
+            # and c the usual finite-cluster correction G/(G-1) * (N-1)/(N-2).
+            # Done in closed form rather than via statsmodels because this runs per (channel,
+            # frequency) — hundreds of cells on every request — and the closed form is validated
+            # against statsmodels' cov_type="cluster" in the test suite.
+            g = g_all[v]
+            ok = g >= 0
+            if ok.sum() < 3:
+                pval[c, f] = np.nan
+                continue
+            xz_o, yz_o, g_o = x_z[ok], y_z[ok], g[ok]
+            uniq = np.unique(g_o)
+            G = uniq.size
+            if G < 3:
+                # Too few clusters for a sandwich to mean anything. Report NOTHING rather than a
+                # number that would be read as inference.
+                pval[c, f] = np.nan
+                n_clusters[c, f] = G
+                continue
+            u = yz_o - r * xz_o
+            sxx = float(np.sum(xz_o * xz_o))
+            if sxx <= 0:
+                pval[c, f] = np.nan
+                continue
+            # per-cluster score sums, vectorized over clusters
+            score = xz_o * u
+            sums = np.zeros(G, dtype=float)
+            np.add.at(sums, np.searchsorted(uniq, g_o), score)
+            N = xz_o.size
+            corr_factor = (G / (G - 1.0)) * ((N - 1.0) / max(N - 2.0, 1.0))
+            var_r = corr_factor * float(np.sum(sums * sums)) / (sxx * sxx)
+            se_r = float(np.sqrt(max(var_r, 1e-300)))
+            t_cl = r / se_r if se_r > 0 else np.nan
+            # df = G - 1, the standard choice for cluster-robust inference (NOT n - 2)
+            pval[c, f] = float(2 * t.sf(abs(t_cl), df=G - 1)) if np.isfinite(t_cl) else np.nan
+            n_clusters[c, f] = G
+            se_cluster[c, f] = se_r
+
+    if return_extra:
+        return corr, pval, {"pval_naive": pval_naive, "n_clusters": n_clusters,
+                            "se_cluster": se_cluster,
+                            "method": ("cluster-robust sandwich on rating clusters, t with df=G-1"
+                                       if g_all is not None else "naive t on epochs, df=n-2")}
     return corr, pval
 
 
@@ -515,7 +598,9 @@ def welch_rating_centered(channel_data, channel_names, fs, chan_order, centers_s
 
 def _match_to_pro(times_s, pro_times_s, pro_values, tolerance_min, direction="nearest",
                   channels=None, max_per_rating=None):
-    """Match each PSD timestamp to a PRO report within the window.
+    """REFERENCE IMPLEMENTATION, kept for the equality check in `DecodeCommon/tests/test_matching.py`;
+    the live path is `DecodeCommon.matching.matched_samples` (see `build_pooled_detail_from_matrix`).
+    Match each PSD timestamp to a PRO report within the window.
 
     `times_s` (N,) epoch seconds per PSD; `pro_times_s` / `pro_values` the PRO report timestamps +
     the chosen continuous metric value. Returns (labels (N,), dt_min (N,), pro_idx (N,)): the matched
@@ -651,8 +736,8 @@ def build_pooled_psd_detail(psd_rows, pro_times_s, pro_values, *, tolerance_min=
 
     Returns
     -------
-    dict shaped like compute_psd_pain_correlation's output (so spectral_feature_importance consumes
-    it unchanged) with `prelog=True`, channel axis = the bipolar channels found, plus `pool_meta`.
+    dict shaped like compute_psd_pain_correlation's output, with `prelog=True`, channel axis = the
+    bipolar channels found, plus `pool_meta`.
     """
     mat = psd_rows_to_matrix(psd_rows, f_set=f_set)
     if mat is None:
@@ -740,10 +825,9 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
     # Per-row source tag (unchanged z-score machinery uses src_arr directly; the short
     # _lsb_tier tag is kept so callers can label rows as td/survey/patient_event in the UI).
     # NOTE: the old Welch-density × k=269 / device-FFT rescale path was REMOVED 2026-06-27 (PI).
-    # Per-band LSB for the spectral scan now comes from the shared per-pair cache (CS-1…CS-4 routes,
-    # k=352.62 transform / k≈73.63 bridge) via bravo_service._pro_lsb_spectrum_cached, threaded in
-    # as `pro_lsb_spectrum_by_channel` to spectral_feature_importance. psd_abs_uv2_per_hz and
-    # device_psd_scale_by_channel are no longer emitted from this function.
+    # Per-band LSB now comes from the shared per-pair cache (CS-1…CS-4 routes, k=352.62 transform /
+    # k≈73.63 bridge) via availability.live_lsb_spectrum_match, not from this routine.
+    # psd_abs_uv2_per_hz and device_psd_scale_by_channel are no longer emitted from this function.
     src_str = np.array([str(s) for s in src_arr]) if src_arr.size else np.zeros(0, dtype=object)
     _is_td = np.isin(src_str, ("TD streaming", "Montage/survey")) if src_str.size else np.zeros(0, bool)
     _lsb_tier = np.full(src_str.shape, "patient_event", dtype=object)
@@ -762,46 +846,28 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
                 # too few to standardize -> center only (keeps it on a comparable additive scale)
                 Xz[m] = X[m] - np.nanmean(X[m], axis=0)
 
-    # PRO-first matching gets the channels array and max_per_rating up-front so the matcher can
-    # claim PSDs per channel per PRO; PSD-first ignores those args.
-    labels, dt_min, pro_idx = _match_to_pro(t_arr, pro_times_s, pro_values, tolerance_min,
-                                            direction=match_direction,
-                                            channels=ch_arr, max_per_rating=max_per_rating)
-
-    # --- Per-(channel, rating) CAP with refractory window ---------------------------------------
-    # A single pain rating can sit within tolerance of a whole BURST of PSDs (the patient triggered
-    # streaming many times around one survey), which double-counts that rating in every downstream
-    # stat. Cap how many PSDs any one rating absorbs PER CHANNEL: keep the `max_per_rating` matched
-    # PSDs closest in time to the rating, but never two closer together than `refractory_min` minutes
-    # (so the kept set is temporally spread, not a tight cluster). Dropped PSDs become unmatched
-    # (label NaN, pro_idx -1) — they stay in the pool as unmatched samples but feed no rating.
-    # When matching is PRO-first the matcher already enforced max_per_rating per channel, so this
-    # cap would be a no-op at best and a double-cap at worst — skip it cleanly.
-    n_capped_dropped = 0
-    if (match_direction != "pro_first") and max_per_rating is not None and max_per_rating >= 1:
-        ref_s = float(refractory_min or 0.0) * 60.0
-        matched_i = np.where(np.isfinite(labels) & (pro_idx >= 0))[0]
-        # group matched rows by (channel, matched-PRO index)
-        groups = {}
-        for i in matched_i:
-            groups.setdefault((ch_arr[i], int(pro_idx[i])), []).append(i)
-        for key, idxs in groups.items():
-            if len(idxs) <= 1:
-                continue
-            idxs = np.asarray(idxs)
-            # order candidates by closeness to the rating (|dt|), then greedily keep up to N that
-            # respect the refractory gap among the KEPT set.
-            order_close = idxs[np.argsort(np.abs(dt_min[idxs]))]
-            kept_t = []
-            for i in order_close:
-                if len(kept_t) >= int(max_per_rating):
-                    labels[i] = np.nan; dt_min[i] = np.nan; pro_idx[i] = -1; n_capped_dropped += 1
-                    continue
-                ti = float(t_arr[i])
-                if ref_s > 0 and any(abs(ti - tk) < ref_s for tk in kept_t):
-                    labels[i] = np.nan; dt_min[i] = np.nan; pro_idx[i] = -1; n_capped_dropped += 1
-                    continue
-                kept_t.append(ti)
+    # THE SHARED MATCHING STEP (Layer 1, `DecodeCommon.matching`, decision 76; wired here as the
+    # first of the four call sites, 2026-09-10). One call replaces what used to be two steps in this
+    # function: `_match_to_pro` (kept below as the REFERENCE implementation the shared one is proven
+    # equal to in `DecodeCommon/tests/test_matching.py`) followed by a per-(channel, rating) cap
+    # with a refractory window. Both steps live in the shared function now, value for value: the
+    # three directions, the pro_first claim-once rule, and the closeness-first, temporally-spread
+    # cap. Proven on RCS08 before this was committed (decision 117): every array this function
+    # returns identical for all three directions and three cap settings.
+    #
+    # WHY THE CAP MATTERS (unchanged reasoning): a single pain rating can sit within tolerance of a
+    # whole BURST of PSDs (the patient triggered streaming many times around one survey), which
+    # double-counts that rating in every downstream stat. Keep the `max_per_rating` matched PSDs
+    # closest in time to the rating, never two closer together than `refractory_min` minutes.
+    # Dropped PSDs become unmatched (label NaN, pro_idx -1) -- they stay in the pool as unmatched
+    # samples but feed no rating. For pro_first the matcher already claims each PSD at most once
+    # per rating, so no post-hoc cap applies there.
+    _m = _matching.matched_samples(t_arr, None, pro_times_s, pro_values,
+                                   tolerance_min=tolerance_min, direction=match_direction,
+                                   group_keys=ch_arr, max_per_rating=max_per_rating,
+                                   refractory_min=refractory_min)
+    labels, dt_min, pro_idx = _m["matched_value"], _m["dt_min"], _m["rating_cluster_id"]
+    n_capped_dropped = int(_m["n_dropped_by_cap"])
 
     # --- Optional one-per-rating aggregation ----------------------------------------------------
     # Collapse every (channel, matched-PRO) cluster of z-scored spectra to a single mean vector, so
@@ -950,8 +1016,7 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
         # "aggregated") and the row's channel.
         # NOTE: psd_abs_uv2_per_hz and device_psd_scale_by_channel were REMOVED 2026-06-27 (PI).
         # The old Welch × k=269 / device-FFT rescale path is superseded by the CS-1…CS-4
-        # transform/bridge cache (bravo_service._pro_lsb_spectrum_cached), threaded into
-        # spectral_feature_importance as `pro_lsb_spectrum_by_channel`.
+        # transform/bridge cache, read via availability.live_lsb_spectrum_match.
         "row_source": np.asarray(src_arr, dtype=object),
         "row_channel": np.asarray(ch_arr, dtype=object),
         # Per-row source tier: "td" | "survey" | "patient_event". Used for UI fidelity display.
@@ -962,7 +1027,7 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
         "aggregate": aggregate,
         "chan_order": chan_order,
         "times": [_dt.datetime.utcfromtimestamp(float(t)).isoformat(sep=" ") for t in t_arr],
-        "prelog": True,                      # spectral_feature_importance: do NOT re-log
+        "prelog": True,                      # already log-scaled above: do NOT re-log
         "transform": "log_zscore_within_channel_source",
         "pool_meta": {
             "n_psds": int(N),
@@ -988,7 +1053,7 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
 
 
 def compute_psd_pain_correlation(streams, labels, chan_order, f_set=F_SET,
-                                 transform="log"):
+                                 transform="log", rating_group=None):
     """
     Orchestrates the streaming biomarker: build a per-epoch PSD stack, normalize, and
     correlate each (channel, frequency) feature against a pain label.
@@ -1003,6 +1068,11 @@ def compute_psd_pain_correlation(streams, labels, chan_order, f_set=F_SET,
             "stream_data"    : list of per-group channel arrays (or 2-D (n_ch, n_samples))
             "channel_names"  : list aligned to stream_data groups (list of lists)
             "sample_rate"    : float
+            "missing"        : optional (n_samples,) 0/1 dropped-packet flag; when present,
+                               a group whose window is more than WELCH_MAX_MISSING_FRAC
+                               zero-filled is rejected (returned as NaN) rather than pooled
+                               deflated, mirroring `bravo_service._welch_rows_into`. Absent
+                               (the legacy shape) means no rejection, same as before.
         This is exactly the shape `adapter.bravo_timedomain_to_streamdata` emits, and is
         also what `dbs_io.Stream.Stream` exposes (`.stream_data`, `.channel_names`,
         `.sample_rate`).
@@ -1031,12 +1101,17 @@ def compute_psd_pain_correlation(streams, labels, chan_order, f_set=F_SET,
         sd = ep["stream_data"]
         cn = ep["channel_names"]
         fs = ep["sample_rate"]
+        # Reject rather than pool a window that's mostly zero-fill (decision 4); absent for a
+        # legacy caller with no "missing" key, this is None and welch_psd_for_instance keeps its
+        # old no-rejection behavior.
+        missing_vec = ep.get("missing")
         # A "stream" may hold several groups; average their per-group PSDs into one epoch.
         group_psds = []
         for g_idx, group in enumerate(sd):
             names = cn[g_idx] if isinstance(cn[g_idx], (list, tuple)) else [cn[g_idx]]
             group_psds.append(
-                welch_psd_for_instance(group, names, fs, chan_order, f_set=f_set)
+                welch_psd_for_instance(group, names, fs, chan_order, f_set=f_set,
+                                       missing=missing_vec)
             )
         psd_epochs.append(np.nanmean(np.concatenate(group_psds, axis=0), axis=0, keepdims=True))
 
@@ -1060,13 +1135,20 @@ def compute_psd_pain_correlation(streams, labels, chan_order, f_set=F_SET,
             "'log'|'log_zscore'|'fooof'|'relative_power'|'relative_power_log'"
         )
 
-    corr, pval = pearson_corr_psd_label(feature, np.asarray(labels, dtype=float))
+    corr, pval, _pextra = pearson_corr_psd_label(
+        feature, np.asarray(labels, dtype=float), rating_group=rating_group, return_extra=True)
     return {
         "f_set": f_set,
         "psd": psd,
         "feature": feature,
         "corr": corr,
-        "pval": pval,
+        "pval": pval,                       # cluster-robust on ratings when rating_group is given
+        # The naive t-on-epochs family, kept alongside rather than discarded so the panel can show
+        # the contrast (this is the same pattern the scan already uses with p_pearson/q_pearson).
+        "pval_naive": _pextra["pval_naive"],
+        "n_clusters_per_cell": _pextra["n_clusters"],
+        "se_cluster": _pextra["se_cluster"],
+        "pval_method": _pextra["method"],
         "chan_order": list(chan_order),
         "transform": transform,
         "labels": np.asarray(labels, dtype=float),

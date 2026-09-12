@@ -10,13 +10,11 @@
 import { useEffect, useRef, useState } from "react";
 import Plotly from "plotly.js-dist";
 
-import { Card, Grid, Slider, ToggleButton, ToggleButtonGroup } from "@mui/material";
+import { Card, Grid, Slider } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
-import MDButton from "components/MDButton";
 import BinarizationPreview from "./BinarizationPreview";
-import { SessionController } from "database/session-control";
-import { commitBandCandidate, downloadBandCandidate } from "../ClosedLoopSim/bandCandidateStore";
+import { BIN_HI, BIN_LO } from "./binarizationModel";
 
 // Publication-quality shared style for every panel — one font, faint gridlines, generous
 // axis-title spacing (standoff), readable tick fonts, x-unified hover. Per-panel props can override
@@ -43,12 +41,45 @@ const mergeAxis = (override = {}) => ({
     : { ...AXIS_BASE.title, ...(override.title || {}) },
 });
 
+/**
+ * The generic figure wrapper the analytics panels draw through.
+ *
+ * TWO THINGS HERE WERE DESTROYING THE READER'S VIEW ON EVERY RENDER, and both are fixed below
+ * rather than at the nine call sites.
+ *
+ * The first is that every caller passes its `layout` as an object literal written inline in the
+ * markup, so a new object identity arrives on every render of the surrounding panel even when
+ * nothing about the figure has changed. That object is in this effect's dependency list, so the
+ * effect re-ran on every render — and its cleanup, which ran before each of those redraws as well
+ * as on unmount, destroyed the graph with `Plotly.purge` and built it again from nothing. Any zoom,
+ * pan or legend selection went with it. Moving a slider elsewhere on the page was enough.
+ *
+ * The purge now happens ONLY when the figure really goes away, which is what it is for: releasing
+ * the graph's event handlers and its rendering context. `Plotly.react` is a diff against what is
+ * already drawn, so re-running the effect redraws in place instead of rebuilding.
+ *
+ * The second is that `Plotly.react` keeps the reader's interactions only when the layout carries an
+ * unchanged `uirevision`, and this base layout carried none — so even an in-place redraw reset the
+ * axes to autorange. A constant revision string is added below, the same mechanism and the same
+ * reasoning as the scan figure further down this file.
+ *
+ * Rebuilding the layout objects at the call sites still costs a redraw diff on every render, which
+ * is work that could be avoided by memoising them. That is a performance question rather than a
+ * correctness one, and it is left as a follow-up because it touches nine separate call sites.
+ */
 function Fig({ traces, layout = {}, height = 320 }) {
   const ref = useRef(null);
+  // Purge on unmount only. The node is read at cleanup time rather than captured, because this
+  // effect never re-runs and the ref must be the one that is current when the figure goes away.
+  useEffect(() => () => { if (ref.current) Plotly.purge(ref.current); }, []);
   useEffect(() => {
     if (!ref.current || !traces || traces.length === 0) return;
     const base = {
       ...FIG_BASE, autosize: true, height,
+      // A constant revision string, so Plotly carries the reader's zoom, pan and legend choices
+      // across redraws. It is spread BEFORE the caller's layout so that a caller with a genuine
+      // reason to force a reset can still set its own.
+      uirevision: "biomarker-analytics-figure",
       ...layout,
       xaxis: mergeAxis(layout.xaxis),
       yaxis: mergeAxis(layout.yaxis),
@@ -62,7 +93,8 @@ function Fig({ traces, layout = {}, height = 320 }) {
       modeBarButtonsToRemove: ["select2d", "lasso2d", "autoScale2d", "toggleSpikelines"],
       toImageButtonOptions: { format: "png", scale: 2 },   // crisp 2x PNG export for figures/slides
     });
-    return () => { if (ref.current) Plotly.purge(ref.current); };
+    // No cleanup here on purpose: see the note above the component. Purging on each redraw is what
+    // was throwing away the reader's zoom, pan and legend state.
   }, [traces, layout, height]);
   return <div ref={ref} style={{ width: "100%", height }} />;
 }
@@ -74,728 +106,6 @@ function Panel({ title, children, lg = 6 }) {
         <MDBox p={2}>
           <MDTypography variant="h6" fontSize={17} mb={0.5}>{title}</MDTypography>
           {children}
-        </MDBox>
-      </Card>
-    </Grid>
-  );
-}
-
-// DESIGN §8b — the exploratory spectral feature-importance scan, the centerpiece TD panel.
-// One dual-axis curve per main bipolar channel: Pearson r vs the CONTINUOUS PRO (left axis) and
-// cross-validated logistic AUC vs the BINARIZED PRO (right axis), both over the same 5 Hz sliding
-// band-center x-axis, so the two complementary views of "which band tracks pain" overlay. The
-// 8–30 Hz Percept-RC adaptive-valid range is shaded (that's the band the device can actually act
-// on). CLICK any band on a curve to drop a scatter of that band's power vs the PRO below it.
-// Click-validate readout — renders the mixed-effects OR + 95% CI, the stim-stability badge, and
-// the per-era ORs from /queryBandValidation. Stays compact (three lines + one badge) so it tucks
-// under the violin without pushing the layout. Empty-state and in-flight handled.
-function ValidationReadout({ validation, validating, emitContext }) {
-  // Commit-to-band: when the clicked band is VALIDATED, the user can export it as a §6
-  // BandCandidate into the threshold-deployment (Closed-Loop Sim) view. We POST the IDENTICAL
-  // band-feature envelope the validation used (emitContext), so the committed candidate is
-  // byte-identical to what the readout shows.
-  const [committing, setCommitting] = useState(false);
-  const [committed, setCommitted] = useState(null);   // {ok, msg} after a commit attempt
-  if (validating) {
-    return (
-      <MDTypography variant="caption" color="text" display="block" mt={0.5}
-        sx={{ fontStyle: "italic", fontSize: 11 }}>
-        Running mixed-effects validation (mixed-effects logistic fit + stim-era likelihood-ratio test)…
-      </MDTypography>
-    );
-  }
-  if (!validation || !validation.available) {
-    if (validation && validation.reason) {
-      return (
-        <MDTypography variant="caption" color="text" display="block" mt={0.5}
-          sx={{ fontStyle: "italic", fontSize: 11 }}>
-          {`Click-validate: ${validation.reason}.`}
-        </MDTypography>
-      );
-    }
-    return null;
-  }
-  const g = validation.glmer || {};
-  const s = validation.stim || {};
-  const verdict = validation.verdict || "—";
-  // Badge color: green for validated, amber for stim-dependent, grey for n.s./degenerate.
-  const badgeColor =
-    /VALIDATED \(stim-stable\)/.test(verdict) ? "#0a7f3f"
-    : /VALIDATED \(stim-dependent\)/.test(verdict) ? "#B17500"
-    : /failed/.test(verdict) ? "#9A3324"
-    : "#6c757d";
-  const fmt = (v, d = 2) => (v == null || !Number.isFinite(v) ? "—" : v.toFixed(d));
-  const fmtP = (p) => (p == null || !Number.isFinite(p) ? "—"
-    : p < 0.001 ? p.toExponential(1) : p.toFixed(3));
-  // Effect direction in plain language for the headline.
-  const direction = g.odds_ratio != null && Number.isFinite(g.odds_ratio)
-    ? (g.odds_ratio < 1 ? "lower" : "higher") : null;
-  const dirLine = direction
-    ? `Higher band power → ${direction} odds of high pain.`
-    : null;
-  const erasArr = s.or_by_era ? ["OFF", "LOW", "HIGH"]
-    .map((tag) => `${tag} (${(s.era_counts && s.era_counts[tag]) || 0}): ${fmt(s.or_by_era[tag])}`)
-    .join("  ·  ") : null;
-  return (
-    <MDBox mt={1}>
-      <MDBox display="flex" alignItems="center" gap={1.2} mb={0.5} flexWrap="wrap">
-        <MDBox px={1.6} py={0.5} sx={{ backgroundColor: badgeColor, color: "white",
-          borderRadius: "12px", fontSize: 14, fontWeight: "bold", letterSpacing: 0.3 }}>
-          {verdict}
-        </MDBox>
-        {dirLine ? (
-          <MDTypography color="dark" sx={{ fontSize: 15, fontWeight: "bold" }}>{dirLine}</MDTypography>
-        ) : null}
-      </MDBox>
-      {/* Enlarged + bold headline of the mixed-effects result — the takeaway the PI wants to read at
-          a glance (OR per 1 SD, 95% CI, p, cluster n). The full method prose stays below in small text. */}
-      {g.available !== false && g.odds_ratio != null && (
-        <MDTypography color="dark" display="block" mb={0.5}
-          sx={{ fontSize: 16, fontWeight: "bold", lineHeight: 1.4 }}>
-          {`OR = ${fmt(g.odds_ratio)} per 1 SD`
-           + (g.or_lo != null && g.or_hi != null ? `  (95% CI ${fmt(g.or_lo)}–${fmt(g.or_hi)})` : "")
-           + `  ·  p = ${fmtP(g.p)}`}
-          <span style={{ fontSize: 12.5, fontWeight: 400, color: "#6c757d" }}>
-            {`   across ${g.n_clusters} weekly eras (n = ${g.n})`}
-          </span>
-        </MDTypography>
-      )}
-      {g.available !== false ? (
-        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11.5, lineHeight: 1.45 }}>
-          {`Mixed-effects logistic regression (lme4::glmer, random intercept per weekly era). `
-           + `Full fit: OR = ${fmt(g.odds_ratio)}`
-           + (g.or_lo != null && g.or_hi != null
-              ? ` (95% CI ${fmt(g.or_lo)}–${fmt(g.or_hi)}), ` : ", ")
-           + `p = ${fmtP(g.p)}, n = ${g.n} across ${g.n_clusters} weekly eras.`}
-        </MDTypography>
-      ) : (
-        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11.5 }}>
-          {`Mixed-effects fit unavailable: ${g.reason || "no result"}.`}
-        </MDTypography>
-      )}
-      {s.available !== false ? (
-        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11.5, lineHeight: 1.45 }}>
-          <strong style={{ fontSize: 13, color: s.stim_stable ? "#0a7f3f" : "#B17500" }}>
-            {`Stim ${s.stim_stable ? "stable" : "dependent"}`}
-          </strong>
-          {` — band × stim-era interaction LRT: χ² = ${fmt(s.chisq)}, `}
-          <strong>{`p = ${fmtP(s.lrt_p)}`}</strong>
-          {`. Per-era OR (n): ${erasArr}. `
-           + `Eras: OFF (<${fmt(s.thresholds_mA && s.thresholds_mA.off_max, 2)} mA), `
-           + `LOW (≤${fmt(s.thresholds_mA && s.thresholds_mA.low_max, 2)} mA), HIGH (>${fmt(s.thresholds_mA && s.thresholds_mA.low_max, 2)} mA).`}
-        </MDTypography>
-      ) : (
-        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11.5 }}>
-          {`Stim-stability test unavailable: ${s.reason || "no result"}.`}
-        </MDTypography>
-      )}
-      {/* Commit-to-band: only offered for a VALIDATED verdict and when the parent supplied the
-          emit envelope. POSTs /api/emitBandCandidate with the SAME band feature the readout used,
-          stashes the returned §6 BandCandidate for the threshold-deployment view, and offers a
-          JSON download as the persistence escape hatch. */}
-      {emitContext && /VALIDATED/.test(verdict) ? (
-        <MDBox mt={1.2} display="flex" alignItems="center" gap={1} flexWrap="wrap">
-          <MDButton
-            size="small" color="info" variant="gradient"
-            disabled={committing}
-            onClick={() => {
-              setCommitting(true); setCommitted(null);
-              SessionController.query("/api/emitBandCandidate", {
-                ParticipantId: emitContext.participantUid,
-                Channel: emitContext.channelRaw,
-                CenterHz: Number(emitContext.centerHz),
-                BandWidthHz: emitContext.bandWidthHz,
-                ...emitContext.requestParams,
-              }).then((response) => {
-                const data = response && response.data;
-                if (data && data.available && data.band_candidate) {
-                  commitBandCandidate(emitContext.participantUid, data.band_candidate);
-                  downloadBandCandidate(emitContext.participantUid, data.band_candidate);
-                  setCommitted({ ok: true, msg: "Committed → Closed-Loop Sim (JSON downloaded)." });
-                } else {
-                  setCommitted({ ok: false, msg: (data && data.reason) || "emit failed" });
-                }
-                setCommitting(false);
-              }).catch(() => {
-                setCommitted({ ok: false, msg: "emit request failed" });
-                setCommitting(false);
-              });
-            }}
-          >
-            {committing ? "Committing…" : "Commit this band →"}
-          </MDButton>
-          {committed ? (
-            <MDTypography variant="caption" sx={{ fontSize: 11,
-              color: committed.ok ? "#0a7f3f" : "#9A3324" }}>
-              {committed.msg}
-            </MDTypography>
-          ) : (
-            <MDTypography variant="caption" color="text" sx={{ fontSize: 10.5, fontStyle: "italic" }}>
-              Export this validated band as a deployment BandCandidate.
-            </MDTypography>
-          )}
-        </MDBox>
-      ) : null}
-    </MDBox>
-  );
-}
-
-
-function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, requestParams, matchDirty }) {
-  const ref = useRef(null);
-  const [sel, setSel] = useState(null);   // {ci, bi} selected (channel, band-center) for the scatter
-  // Click-triggered VALIDATION bundle: { available, glmer:{...}, stim:{...}, verdict } from the
-  // /queryBandValidation endpoint. Re-fetched whenever the user clicks a new band so the readout
-  // matches the band the violin is showing. `validating` flags the in-flight state for the spinner.
-  const [validation, setValidation] = useState(null);
-  const [validating, setValidating] = useState(false);
-  const channels = (scan && scan.channels) || [];
-  const centers = (scan && scan.centers) || [];
-  const adaptive = scan && scan.adaptive_band;            // [lo, hi] | null
-  const fmax = (scan && scan.fmax) || 100;
-  // Feature the scan ran on: "lsb_cs14" (CS-1…CS-4 transform/bridge, k=352.62/73.63, new as of
-  // 2026-06-27) or legacy "lsb_calibrated" (269 × TD Welch band integral, kept for back-compat) vs
-  // "logpsd_db". Drives every axis/hover label so the panel states the unit the numbers carry.
-  const isLsb = scan && (scan.feature === "lsb_cs14" || scan.feature === "lsb_calibrated");
-  // LSB is shown on the RAW (linear) scale — the Percept device applies no onboard log10, so the
-  // axis matches the scale the closed-loop threshold operates on (2026-06-28). Power features stay on
-  // the log/dB scale they are computed on.
-  const featAxis = isLsb ? "Calibrated LSB" : "Std. log band power";
-  const featHover = isLsb ? "LSB" : "log power";
-  // Correlation statistic shown for this feature: Spearman ρ for LSB (rank-based, robust to the
-  // heavy-tailed LSB distribution), Pearson r for the log-power feature. Backend stamps corr_method
-  // per channel; fall back to the feature type when absent.
-  const corrName = isLsb ? "Spearman ρ" : "Pearson r";
-
-  // Hemisphere coloring: Left = blue family, Right = vermillion family (matches the rest of the card).
-  const hemiOf = (ch) => { const s = (ch.short || ch.name || "").trim(); return s[0] === "R" ? "Right" : "Left"; };
-
-  // Click-triggered VALIDATION fetch (mixed-effects logistic + band x stim-era LRT). Fires only
-  // when the user has clicked a band AND we have the request envelope from the parent (carries
-  // LabelMetric / binarization / match knobs so the band feature is defined identically to the
-  // clicked scan dot). selChannelRaw/selCenterHz are the two coordinates the endpoint keys on.
-  const selChannel = sel && channels[sel.ci];
-  const selChannelRaw = selChannel ? (selChannel.raw || selChannel.short) : null;
-  const selCenterHz = sel != null ? centers[sel.bi] : null;
-  useEffect(() => {
-    if (!participantUid || !requestParams || sel == null || selChannelRaw == null
-        || selCenterHz == null) {
-      setValidation(null); return undefined;
-    }
-    let cancelled = false;
-    setValidating(true);
-    setValidation(null);
-    SessionController.query("/api/queryBandValidation", {
-      ParticipantId: participantUid,
-      Channel: selChannelRaw,
-      CenterHz: Number(selCenterHz),
-      BandWidthHz: scan && scan.band_width_hz ? Number(scan.band_width_hz) : 5.0,
-      ...requestParams,
-    }).then((response) => {
-      if (cancelled) return;
-      setValidation(response && response.data ? response.data : null);
-      setValidating(false);
-    }).catch(() => {
-      if (cancelled) return;
-      // Network/API failure -> empty-state caption; never block the rest of the panel.
-      setValidation({ available: false, reason: "validation request failed" });
-      setValidating(false);
-    });
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [participantUid, requestParams, selChannelRaw, selCenterHz]);
-
-  useEffect(() => {
-    if (!ref.current || !channels.length || !centers.length) return;
-    const traces = [];
-    // Legend order: all LEFT-hemisphere contacts first, then all RIGHT, each block alphabetized,
-    // so the key reads as two tidy hemisphere groups. Keep the ORIGINAL channel index (ci) for the
-    // band-click customdata so selection still maps to the right channel after reordering.
-    const orderedChannels = channels
-      .map((ch, ci) => ({ ch, ci }))
-      .sort((a, b) => {
-        const ha = hemiOf(a.ch), hb = hemiOf(b.ch);
-        if (ha !== hb) return ha === "Left" ? -1 : 1;
-        return String(a.ch.short || "").localeCompare(String(b.ch.short || ""));
-      });
-    orderedChannels.forEach(({ ch, ci }) => {
-      const color = hemiOf(ch) === "Right" ? HI : LO;
-      // Per-channel count shown in the legend AND echoed into the curve hover (the hovertemplate's
-      // <extra> renders fullData.name). The honest count is the number of INDEPENDENT LSB vectors
-      // feeding this channel's analysis, split into the only two sources the PI wants surfaced:
-      // time-domain-derived (n_td) vs PSD-derived (n_psd_bridge). This is NOT ch.n_channel — that
-      // counts matched PSD ROWS (e.g. 278) and massively overstates the independent vectors (e.g.
-      // 17 TD + 3 PSD = 20), which is exactly why the old hover N never matched rendered points.
-      const nch = (ch.n_td != null || ch.n_psd_bridge != null)
-        ? ` (${ch.n_td || 0} TD · ${ch.n_psd_bridge || 0} PSD)`
-        : (ch.n_channel != null ? ` (n=${ch.n_channel})` : "");   // logpsd fallback
-      // r curve (solid, left axis) + AUC curve (dashed, right axis), shared legend group per channel.
-      traces.push({ x: centers, y: ch.r, name: `${ch.short}${nch} · r`, type: "scattergl", mode: "lines",
-        line: { width: 2, color }, connectgaps: false, legendgroup: ch.short, yaxis: "y",
-        customdata: centers.map((c, bi) => [ci, bi]),
-        hovertemplate: "%{x:.1f} Hz · r=%{y:.2f}<extra>%{fullData.name}</extra>" });
-      // R1/A1: plot the SIGNED AUC (oriented by the band's correlation sign) so a band whose power
-      // FALLS with pain reads below the 0.5 chance line and a null band sits at ~0.5 — the folded
-      // `auc` (always >= 0.5) made every band look discriminative. Fall back to folded auc if absent.
-      traces.push({ x: centers,
-        y: (ch.auc_signed && ch.auc_signed.length === centers.length) ? ch.auc_signed : ch.auc,
-        name: `${ch.short}${nch} · AUC (signed)`, type: "scattergl", mode: "lines",
-        line: { width: 1.6, color, dash: "dot" }, connectgaps: false, legendgroup: ch.short, yaxis: "y2",
-        customdata: centers.map((c, bi) => [ci, bi]),
-        hovertemplate: "%{x:.1f} Hz · signed AUC=%{y:.2f}<extra>%{fullData.name}</extra>" });
-      // Rigor-pass overlay: solid black-outlined markers at every band whose rating-clustered
-      // logit p survives BH-FDR over the band x channel grid (`is_fdr_sig` from the backend).
-      // The markers sit on the r curve (left axis) — same color as the channel, with a black ring
-      // so they read as "validated under proper clustered inference" against the unstyled
-      // pooled-by-default points the line implies. legendgroup ties them to the channel toggle so
-      // hiding a channel hides its FDR markers too. showlegend=false (channel curve already
-      // identifies the channel; a separate "FDR" entry is in the style legend up top).
-      const fdrMask = ch.is_fdr_sig || [];
-      const fdrCenters = [], fdrRs = [], fdrCustom = [], fdrHover = [];
-      for (let bi = 0; bi < centers.length; bi += 1) {
-        if (fdrMask[bi] && ch.r && ch.r[bi] != null) {
-          fdrCenters.push(centers[bi]); fdrRs.push(ch.r[bi]);
-          fdrCustom.push([ci, bi]);
-          const q = ch.q && ch.q[bi];
-          fdrHover.push(`${centers[bi].toFixed(1)} Hz · r=${ch.r[bi].toFixed(2)} · q=${q != null ? q.toFixed(3) : "—"}`);
-        }
-      }
-      if (fdrCenters.length) {
-        traces.push({ x: fdrCenters, y: fdrRs, name: `${ch.short} · FDR`, type: "scattergl", mode: "markers",
-          marker: { size: 9, color, line: { width: 1.2, color: "#000" } },
-          legendgroup: ch.short, yaxis: "y", showlegend: false,
-          customdata: fdrCustom,
-          hovertext: fdrHover, hoverinfo: "text" });
-      }
-    });
-    // Single dedicated legend entry explaining the FDR-marker style — drawn invisibly off-axis
-    // with `visible: 'legendonly'` so it never plots data, just adds a labeled swatch to the
-    // legend. Placed at the end of `traces` so it appears as the last legend item.
-    traces.push({
-      x: [null], y: [null], type: "scattergl", mode: "markers",
-      name: "● False Discovery Rate-significant (q<0.05, rating-clustered logistic)",
-      marker: { size: 9, color: "#777", line: { width: 1.2, color: "#000" } },
-      showlegend: true, hoverinfo: "skip",
-    });
-    // Marker for the currently-selected band (vertical guide).
-    const shapes = [];
-    if (adaptive && adaptive.length === 2) {
-      shapes.push({ type: "rect", xref: "x", yref: "paper", x0: adaptive[0], x1: adaptive[1],
-        y0: 0, y1: 1, fillcolor: "#009E73", opacity: 0.10, line: { width: 0 }, layer: "below" });
-    }
-    // R1/A1: chance line at signed-AUC 0.5 (right axis) so direction reads against an explicit
-    // reference — bands below discriminate in the pain-DOWN direction, above it pain-UP.
-    shapes.push({ type: "line", xref: "paper", x0: 0, x1: 1, yref: "y2", y0: 0.5, y1: 0.5,
-      line: { width: 1, color: "#9AA0A6", dash: "dash" }, layer: "below" });
-    // The selected-band vertical guide is NOT drawn here. It is applied by a separate
-    // Plotly.relayout effect keyed on `sel` (below), so that clicking a band never rebuilds the
-    // traces — a rebuild is what used to wipe the user's legend on/off state (the cleanup purge
-    // emptied gd.data before the visibility carry-over could read it). This effect omits `sel`.
-
-    const layout = {
-      ...FIG_BASE, autosize: true, height: 575,
-      margin: { ...FIG_BASE.margin, b: 96 },   // room for the larger two-group legend
-      xaxis: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Band-center frequency (Hz)" },
-        // ALWAYS show the full 0–fmax (0–100 Hz) spectrum in both LSB and log-PSD modes. The scan
-        // now runs the full range in every mode (centers 2.5–97.5 Hz); the 8–30 Hz deployable band
-        // is marked by the green tint + annotation below, not by cropping the axis. (Was previously
-        // clamped to [adaptive[0], fmax] in LSB mode, which hid the out-of-band spectrum entirely.)
-        range: [0, fmax] },
-      yaxis: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: `${corrName} vs ${pain}` },
-        range: [-1.05, 1.05], zeroline: true },
-      yaxis2: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Signed logistic AUC (binarized · 0.5 = chance)" },
-        overlaying: "y", side: "right", range: [0.0, 1.0], showgrid: false },
-      legend: { orientation: "h", y: -0.20, groupclick: "togglegroup",
-                // Single-click toggles a group on/off; that's the only legend gesture that changes
-                // visibility. Double-click-to-isolate is disabled — without this, a double-click
-                // isolates one item (hides all others) and a second restores everything, which
-                // surprises users who expect their hidden curves to STAY hidden. To restore
-                // everything the user uses the modebar Reset Axes button (an explicit gesture).
-                itemclick: "toggle",
-                itemdoubleclick: false,
-                font: { size: 13 }, tracegroupgap: 14 },
-      // Larger, higher-contrast hover tooltip on the scan curves (the per-band r=… / AUC=… readout):
-      // 14 px dark text on a near-opaque white card with a darker (less washed-out) gray border, so
-      // the label reads clearly even where it sits near the cursor.
-      hoverlabel: { bgcolor: "rgba(255,255,255,0.97)", bordercolor: "#5A6470",
-                    font: { family: "Roboto, Helvetica, Arial, sans-serif", size: 14, color: "#1A1A1A" } },
-      shapes,
-      // Plotly preserves user UI state (legend visibility, zoom, axis ranges, selections) across
-      // Plotly.react calls whenever `uirevision` is unchanged. We use a constant string here so
-      // every re-render of this effect (e.g. a band click that re-builds traces with new
-      // customdata) keeps whichever channels the user has toggled off in the legend. The toolbar
-      // "Reset axes" button still works — it's a user action, not a react call.
-      uirevision: "biomarker-scan",
-      // Legend group selection follows the same rule — explicit so a band click doesn't reset it.
-      legend_uirevision: "biomarker-scan-legend",
-      annotations: (adaptive ? [{ x: (adaptive[0] + adaptive[1]) / 2, yref: "paper", y: 1.02,
-        yanchor: "bottom", xanchor: "center", text: "Percept-RC adaptive band (8–30 Hz)",
-        showarrow: false, font: { size: 10, color: "#1B7837" } }] : []),
-    };
-    // Preserve per-trace legend on/off state across renders. Two layers:
-    //  (a) layout.uirevision (set below) — Plotly's canonical mechanism; when the revision string
-    //      is unchanged, plotly preserves user UI state (legend visibility, zoom, axis ranges)
-    //      across Plotly.react calls.
-    //  (b) explicit visibility carry-over keyed by trace `name` — belt-and-suspenders for cases
-    //      where plotly's uirevision doesn't catch (older versions; trace insertions/deletions
-    //      that shift indices). We DO NOT gate on prevData.length === traces.length because the
-    //      FDR-marker overlay traces flip on per-channel based on backend output, so the count
-    //      changes between renders. Keying purely by `name` survives that: matched names get
-    //      their previous visibility; new traces get plotly's default (visible).
-    //
-    // We treat anything that's NOT explicitly `true` as a hide signal — that catches
-    // "legendonly" (the value plotly sets on legend click) and any other non-true sentinel.
-    const prevData = ref.current.data;
-    if (prevData && prevData.length) {
-      const visByName = {};
-      prevData.forEach((t) => { if (t && t.name != null) visByName[t.name] = t.visible; });
-      traces.forEach((t) => {
-        if (Object.prototype.hasOwnProperty.call(visByName, t.name)) {
-          const prev = visByName[t.name];
-          if (prev !== undefined && prev !== true) t.visible = prev;
-        }
-      });
-    }
-    Plotly.react(ref.current, traces, layout, {
-      responsive: true, displaylogo: false,
-      modeBarButtonsToRemove: ["select2d", "lasso2d", "autoScale2d", "toggleSpikelines"],
-    });
-    const gd = ref.current;
-    const onClick = (ev) => {
-      const pt = ev && ev.points && ev.points[0];
-      if (pt && pt.customdata) setSel({ ci: pt.customdata[0], bi: pt.customdata[1] });
-    };
-    gd.on("plotly_click", onClick);
-    return () => { if (gd) { gd.removeAllListeners && gd.removeAllListeners("plotly_click"); Plotly.purge(gd); } };
-    // NOTE: `sel` is intentionally NOT in this dependency list. A band click only updates `sel`,
-    // and the selected-band guide line is applied by the relayout effect below — so a click never
-    // re-runs this effect, never triggers the cleanup purge, and therefore never resets the user's
-    // legend visibility toggles. (That purge-on-every-click was the cause of hidden curves coming
-    // back when isolating a single curve.)
-  }, [scan, pain, HI, LO]);   // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Selected-band vertical guide — applied without rebuilding traces, so legend on/off state set by
-  // the user survives every band click. Re-applies the adaptive-band shaded rect alongside it
-  // (Plotly.relayout replaces the whole `shapes` array, so both must be specified together).
-  useEffect(() => {
-    const gd = ref.current;
-    if (!gd || !gd.data || !centers.length) return;
-    const shapes = [];
-    if (adaptive && adaptive.length === 2) {
-      shapes.push({ type: "rect", xref: "x", yref: "paper", x0: adaptive[0], x1: adaptive[1],
-        y0: 0, y1: 1, fillcolor: "#009E73", opacity: 0.10, line: { width: 0 }, layer: "below" });
-    }
-    if (sel && centers[sel.bi] != null) {
-      shapes.push({ type: "line", xref: "x", yref: "paper", x0: centers[sel.bi], x1: centers[sel.bi],
-        y0: 0, y1: 1, line: { color: "#444", width: 1.5, dash: "dash" } });
-    }
-    Plotly.relayout(gd, { shapes });
-    // Depends on `scan` too so that after the draw effect rebuilds the plot (scan/pain change), the
-    // current selected-band guide is re-applied on top. relayout never touches trace visibility, so
-    // the user's legend toggles are unaffected.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sel, scan]);
-
-  // Scatter for the selected (channel, band): band power vs continuous PRO.
-  let scatterNode = null;
-  if (sel && channels[sel.ci]) {
-    const ch = channels[sel.ci];
-    const sc = ch.scatter && ch.scatter[sel.bi];
-    const center = centers[sel.bi];
-    const r = ch.r && ch.r[sel.bi];
-    const pBand = ch.p && ch.p[sel.bi];       // rating-clustered logistic Wald p (AUC's inference twin)
-    const pPearson = ch.p_pearson && ch.p_pearson[sel.bi];   // Pearson r's own p-value (independence-assuming)
-    if (sc && sc.x && sc.x.length) {
-      const color = hemiOf(ch) === "Right" ? HI : LO;
-      // Fixed pain-group identity colors (DESIGN §8d/§8e idiom): high = vermillion, low = blue,
-      // excluded-middle = grey. Shared by the scatter point colors and the violin fills.
-      const GRP = { high: "#D55E00", low: "#0072B2", mid: "#9AA0A6" };
-      const gArr = sc.g || [];
-      const ptColors = gArr.length ? gArr.map((g) => GRP[g] || color) : color;
-
-      // LEFT — band power vs continuous PRO, points colored by pain group (keeps the original view).
-      const scTraces = [{ x: sc.x, y: sc.y, type: "scatter", mode: "markers", name: "matched samples",
-        marker: { color: ptColors, size: 6, opacity: 0.72 }, text: sc.dates || [],
-        hovertemplate: `${featHover}=%{x:.2f}<br>${pain}=%{y:.2f}<extra></extra>` }];
-
-      // RIGHT — violin of THIS band's power split by pain group, with jittered raw points + box +
-      // median, so you SEE how low vs high segregate (the comparison the scatter only implies).
-      // One violin trace per group; excluded-middle drawn last in grey so it never dominates.
-      const order = ["low", "high", "mid"];
-      const glabel = { low: "Low pain", high: "High pain", mid: "Excluded (middle)" };
-      const vioTraces = order
-        .map((g) => {
-          const ys = sc.x.filter((_, i) => gArr[i] === g);
-          if (!ys.length) return null;
-          // Darker shade of the group color for the jittered dots so they pop against the fill
-          // (which is the same hue at low opacity). White outline draws the eye to individual
-          // observations without competing with the violin silhouette.
-          const dotColor = { low: "#053D6E", high: "#7A2C00", mid: "#3C3F45" }[g] || GRP[g];
-          return {
-            type: "violin", y: ys, x: ys.map(() => glabel[g]), name: glabel[g],
-            legendgroup: g, scalemode: "width", width: 0.85, spanmode: "soft",
-            points: "all", jitter: 0.5, pointpos: 0,
-            marker: { color: dotColor, size: 6, opacity: 0.85,
-                      line: { color: "#fff", width: 0.8 } },
-            line: { color: GRP[g], width: 1.4 }, fillcolor: GRP[g], opacity: g === "mid" ? 0.28 : 0.42,
-            box: { visible: true, width: 0.18 }, meanline: { visible: false },
-            hovertemplate: `${glabel[g]}<br>${featHover}=%{y:.2f}<extra></extra>` };
-        })
-        .filter(Boolean);
-
-      // Effect-size annotation (computed server-side on this band's matched samples): Cohen's d
-      // (pooled-SD standardized mean diff, high−low), median delta in SD units, and the
-      // rating-clustered logistic p already in the payload. The headline of the right panel.
-      const cd = sc.cohens_d, md = sc.median_delta;
-      const nlo = (sc.n_grp && sc.n_grp.low) || 0, nhi = (sc.n_grp && sc.n_grp.high) || 0;
-      const nmid = (sc.n_grp && sc.n_grp.mid) || 0;
-      const dMag = cd == null ? "" : (Math.abs(cd) >= 0.8 ? " (large)"
-        : Math.abs(cd) >= 0.5 ? " (medium)" : Math.abs(cd) >= 0.2 ? " (small)" : " (negligible)");
-      const effLine = `Low vs high ${isLsb ? "LSB" : "band power"}:  Cohen's d = ${cd != null ? cd.toFixed(2) : "—"}${dMag}`
-        + `,  median Δ = ${md != null ? md.toFixed(2) : "—"} SD,  `
-        + `${scan && scan.auc_mode === "rating_grouped" ? "rating-clustered " : ""}p = ${fmtP(pBand)}`;
-
-      // Headline n = DISTINCT observations actually rendered. The server de-duplicates the scatter
-      // to one point per rating in rating-grouped (LSB) mode, so n_obs == sc.x.length == the violin's
-      // jittered-point count == nlo+nhi+nmid. This is the honest count the title must show — NOT the
-      // pre-dedup matched-PSD-row count (sc.n_rows) and NOT the montage match ceiling (ch.n_channel),
-      // both of which were previously printed as the headline and exceeded the rendered dots (the
-      // "n=84 but 2 dots" bug). Those two are kept as SECONDARY context only.
-      const nShown = nlo + nhi + nmid;                 // == sc.n_obs by construction
-      // LSB-source split of the rendered points — the two counts the PI wants on every label:
-      // how many rendered LSB vectors are time-domain-derived vs PSD-derived. null in logpsd mode.
-      const nTD = (sc.n_td != null) ? sc.n_td : null;
-      const nPSD = (sc.n_psd != null) ? sc.n_psd : null;
-      const hasSrc = nTD != null && nPSD != null;
-      const srcLbl = hasSrc ? `${nTD} TD · ${nPSD} PSD` : null;   // e.g. "16 TD · 83 PSD"
-      const subsampled = (sc.n_distinct != null) && (sc.n_distinct > nShown); // display cap fired
-      scatterNode = (
-        <MDBox mt={1}>
-          {/* Big, bold two-line title centered over BOTH the left scatter and the right violin, so
-              it reads as the heading for the whole selected-band readout below it. Line 1: contact
-              + samples shown + center frequency. Line 2: the correlation (Spearman ρ for LSB,
-              Pearson r for log-power) with its p-value when available. */}
-          {/* pt gives the first line room so its ascenders aren't clipped by the panel edge; the
-              generous lineHeight (1.45) keeps each line's glyph box taller than the bumped-up
-              fontSize so neither line is cut at the top (the MUI variant's default line-height is
-              tighter than these sizes, which was clipping the second line). */}
-          {/* mt + extra pt give the super-title clearance from the panel/card edge above it. At narrow
-              widths line 1 wraps to two physical lines, which previously pushed the block into the
-              edge and clipped the top line's ascenders; the added top space keeps it clear at every
-              window size. */}
-          <MDBox sx={{ textAlign: "center", mb: 1, mt: 2, pt: 1.5 }}>
-            {/* Line 1: contact + sample count + center frequency (the WHAT). Line 2: the Pearson
-                statistic (the RESULT). Grouping the band identity on line 1 and the stat on line 2
-                reads cleaner than splitting freq onto the stat line. */}
-            <MDTypography fontWeight="bold" color="dark"
-              sx={{ fontSize: 22, lineHeight: 1.45, display: "block" }}>
-              {`${ch.short} (n=${nShown}${srcLbl ? `: ${srcLbl}` : ""}${subsampled ? ` of ${sc.n_distinct}` : ""}) @ ${center.toFixed(1)} Hz`}
-              {matchDirty && <span style={{ fontSize: 13, fontWeight: 400, color: "#6c757d", marginLeft: 6 }}>{"· scan at prior window"}</span>}
-            </MDTypography>
-            <MDTypography fontWeight="bold" color="dark"
-              sx={{ fontSize: 18, lineHeight: 1.45, display: "block" }}>
-              {`${(ch.corr_method === "spearman" ? "Spearman ρ" : (ch.corr_method === "pearson" ? "Pearson r" : corrName))} = ${r != null ? r.toFixed(2) : "—"}`
-               + (pPearson != null ? ` (p = ${fmtP(pPearson)})` : "")}
-            </MDTypography>
-          </MDBox>
-          <Grid container spacing={2} mt={0}>
-            <Grid item xs={12} lg={6}>
-              {/* Taller (was 300) so the panel is closer to SQUARE: at lg the column is ~half the
-                  card width (~450–520 px), so ~440 px tall makes the scatter near-1:1 — the right
-                  aspect for reading a correlation cloud rather than a wide, flat strip. */}
-              <Fig height={440} traces={scTraces} layout={{
-                xaxis: { title: `${featAxis} @ ${center.toFixed(1)} Hz` },
-                yaxis: { title: pain }, showlegend: false }} />
-            </Grid>
-            <Grid item xs={12} lg={6}>
-              <Fig height={440} traces={vioTraces} layout={{
-                xaxis: { title: "" },
-                yaxis: { title: `${featAxis} @ ${center.toFixed(1)} Hz` },
-                showlegend: false, violingap: 0.25, violinmode: "group" }} />
-              <MDTypography variant="caption" display="block" mt={0.5}
-                sx={{ color: "#344767", fontWeight: "bold", fontSize: 12.5 }}>
-                {effLine}
-              </MDTypography>
-              <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11.5 }}>
-                {`n=${nShown}: ${nlo} low · ${nhi} high · ${nmid} excluded-middle`
-                 + (srcLbl ? ` · LSB source: ${srcLbl}` : "")
-                 + (subsampled ? ` (subsampled from ${sc.n_distinct} for display). ` : ". ")
-                 + "Power is z-scored within channel/source, so Δ is in SD units; "
-                 + "d>0 means the band is higher when pain is high."}
-              </MDTypography>
-              <ValidationReadout validation={validation} validating={validating}
-                emitContext={(participantUid && requestParams && selChannelRaw != null
-                              && selCenterHz != null) ? {
-                  participantUid,
-                  channelRaw: selChannelRaw,
-                  centerHz: Number(selCenterHz),
-                  bandWidthHz: scan && scan.band_width_hz ? Number(scan.band_width_hz) : 5.0,
-                  requestParams,
-                } : null} />
-            </Grid>
-          </Grid>
-        </MDBox>
-      );
-    } else {
-      scatterNode = (
-        <MDTypography variant="caption" color="text" mt={1} display="block">
-          {`No scatter for ${ch.short} @ ${center.toFixed(1)} Hz (fewer than 3 matched samples in this band).`}
-        </MDTypography>
-      );
-    }
-  }
-
-  if (!channels.length) return null;
-  return (
-    <Grid item xs={12}>
-      <Card sx={{ width: "100%", scrollMarginTop: "96px" }}>
-        <MDBox p={2}>
-          <MDTypography variant="h6" fontSize={19} fontWeight="bold" mb={0.25}>
-            {`Spectral feature importance — which band tracks ${pain}? (click a band for its scatter)`}
-          </MDTypography>
-          {/* LSB-SOURCE INDICATOR: every value feeding this panel is a modeled/real LSB vector derived
-              from a time-domain recording (TD-transform, k=352.62) OR a PSD-only patient event (CS-3
-              bridge, k≈73.63), computed across the full 0–100 Hz. The chip below pools the independent
-              TD- vs PSD-derived LSB counts across the displayed channels so the provenance mix is
-              explicit (the per-channel split is in the summary above and on each scatter title). */}
-          {(() => {
-            const ch = channels || [];
-            const tdN = ch.reduce((a, c) => a + (c.n_td || 0), 0);
-            const psdN = ch.reduce((a, c) => a + (c.n_psd_bridge || 0), 0);
-            if (tdN + psdN === 0) return null;
-            return (
-              <MDBox display="inline-flex" alignItems="center" gap={0.75} mb={0.75} px={1} py={0.4}
-                sx={{ backgroundColor: "rgba(44,82,130,0.06)", border: "1px solid rgba(44,82,130,0.25)",
-                      borderRadius: "8px" }}>
-                <span style={{ fontSize: 13, fontWeight: 700, color: "#2C5282" }}>{"LSB source"}</span>
-                <span style={{ fontSize: 12.5, color: "#33475b" }}>
-                  {`derived from TD + PSD sections (0–100 Hz):  `}
-                  <strong>{`${tdN} TD-transform`}</strong>{`  ·  `}
-                  <strong>{`${psdN} PSD-bridge`}</strong>
-                  {`  independent LSB vectors`}
-                </span>
-              </MDBox>
-            );
-          })()}
-          {/* Bold one-line takeaway: state exactly what the two curves are and the headline caveat,
-              before the detailed (backend-supplied) note. Font bumped from caption (~12px) to 14px
-              with key phrases bold so the caveats are not lost in a wall of small grey text. */}
-          <MDTypography variant="body2" color="text" display="block" fontSize={14} mb={0.5}>
-            <strong>Each frequency band is screened two ways</strong>:{` ${corrName} vs the`}
-            {` continuous ${pain} score (all matched samples) and a cross-validated logistic `}
-            <strong>AUC</strong> on the high-vs-low split.{" "}
-            {isLsb && <span>{"LSB is shown on the raw (linear) device scale; ρ is rank-based, robust to its heavy tail. "}</span>}
-            <strong>Exploratory screen — neither the correlation nor AUC is a validated biomarker.</strong>
-          </MDTypography>
-          {/* R2/A2: per-contact biomarker selection — the pain-tracking band AND its direction are
-              contact-specific, so name each contact's own best band rather than implying one global
-              biomarker. Direction from the sign of ρ; ✓ marks bands clearing rigorous BH-FDR. Built
-              as a self-contained IIFE (the proven JSX pattern here) to avoid the react-hooks eslint
-              false-positive that a component-body const+map triggers. */}
-          {(() => {
-            const rows = ((scan && Array.isArray(scan.channels)) ? scan.channels : [])
-              .filter((c) => c.selected_band);
-            if (!rows.length) return null;
-            return (
-              <MDBox mb={1} mt={0.5} sx={{ overflowX: "auto" }}>
-                <MDTypography variant="caption" display="block" fontWeight="bold" mb={0.5} sx={{ fontSize: 12.5 }}>
-                  {"Per-contact best band (no single global biomarker — band & direction differ by contact):"}
-                </MDTypography>
-                <table style={{ borderCollapse: "collapse", fontSize: 12.5 }}>
-                  <thead>
-                    <tr style={{ borderBottom: "1px solid #cfd6dd", textAlign: "left" }}>
-                      {["Contact", "Band", "Direction", "\u03c1", "Signed AUC", "q (FDR)"].map((h) => (
-                        <th key={h} style={{ padding: "2px 10px 2px 0", fontWeight: 600 }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((c) => {
-                      const sb = c.selected_band;
-                      const dc = sb.sign === "positive" ? "#D55E00" : sb.sign === "negative" ? "#0072B2" : "#9AA0A6";
-                      const dl = sb.direction === "elevation" ? "\u2191 elevation"
-                        : sb.direction === "suppression" ? "\u2193 suppression" : "\u2014 flat";
-                      return (
-                        <tr key={c.short} style={{ borderBottom: "1px solid #eef1f4" }}>
-                          <td style={{ padding: "2px 10px 2px 0", fontWeight: 600 }}>{c.short}</td>
-                          <td style={{ padding: "2px 10px 2px 0" }}>{`${sb.center_hz.toFixed(1)} Hz`}</td>
-                          <td style={{ padding: "2px 10px 2px 0", color: dc, fontWeight: 600 }}>{dl}</td>
-                          <td style={{ padding: "2px 10px 2px 0" }}>{sb.rho == null ? "\u2014" : sb.rho.toFixed(2)}</td>
-                          <td style={{ padding: "2px 10px 2px 0" }}>{sb.auc_signed == null ? "\u2014" : sb.auc_signed.toFixed(2)}</td>
-                          <td style={{ padding: "2px 10px 2px 0", fontWeight: sb.fdr_significant ? 700 : 400,
-                                       color: sb.fdr_significant ? "#0a7f3f" : "#6c757d" }}>
-                            {sb.q == null ? "\u2014" : `${sb.q.toFixed(3)}${sb.fdr_significant ? " \u2713" : ""}`}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-                <MDTypography variant="caption" display="block" mt={0.3} sx={{ fontSize: 11, fontStyle: "italic", color: "#6c757d" }}>
-                  {"\u2713 = survives band\u00d7channel BH-FDR (q<0.05); others are the contact's strongest exploratory band. Signed AUC <0.5 = power falls with pain."}
-                </MDTypography>
-              </MDBox>
-            );
-          })()}
-          {scan && scan.note && (
-            <MDTypography variant="body2" color="text" display="block" fontSize={14} mb={0.5}>
-              {scan.note}
-            </MDTypography>
-          )}
-          {/* Condensed methods line: matching policy + survey usage in ONE compact statement. The
-              per-channel high/low/excluded + TD/PSD-LSB counts now live in the summary above the
-              scan and on each scatter title, so this line states only the pooled method facts. */}
-          {scan && scan.max_per_rating != null && (
-            <MDTypography variant="body2" display="block" mb={0.5} fontSize={13.5}
-              sx={{ color: "#2C5282" }}>
-              <strong>{"Matching: "}</strong>
-              {(scan.match_direction === "pro_first"
-                  ? `PRO-first — each rating claims ≤${scan.max_per_rating} closest PSD${scan.max_per_rating > 1 ? "s" : ""}/channel in the window`
-                  : scan.match_direction === "nearest"
-                    ? "each PSD → nearest rating either direction"
-                    : scan.match_direction === "prior"
-                      ? "each PSD → next rating after it (forecasting)"
-                      : `≤${scan.max_per_rating} PSD${scan.max_per_rating > 1 ? "s" : ""}/rating (legacy payload)`)
-               + (scan.max_per_rating > 1 && scan.refractory_min ? `, ≥${scan.refractory_min} min apart` : "")
-               + (scan.n_capped_dropped ? `, ${scan.n_capped_dropped} excess dropped` : "")
-               + ". "
-               + (scan.auc_mode === "rating_grouped"
-                  ? "AUC folds grouped by rating (effective n = independent ratings)."
-                  : "Every matched sample treated as independent.")
-               + (scan.survey_usage
-                  ? ` Surveys used: ${scan.survey_usage.n_pro_used}/${scan.survey_usage.n_pro_total} (${scan.survey_usage.pct_pro_used}%).`
-                  : "")}
-            </MDTypography>
-          )}
-          {/* One-line LSB provenance + validated-range note (only in LSB mode). */}
-          {scan && scan.feature === "lsb_cs14" && (
-            <MDTypography variant="body2" color="text" display="block" mb={0.5} fontSize={13.5} sx={{ fontStyle: "italic" }}>
-              {"LSB per rating: TD-transform (k\u202f=\u202f352.62) when a time-domain recording covers it, "
-               + "else CS-3 PSD bridge (k\u202f\u2248\u202f73.63). Full 0\u2013100\u202fHz; green shading = validated 7.8\u201330\u202fHz."}
-            </MDTypography>
-          )}
-          {/* Double-dipping: only suppress when PRO-first + rating-grouped AUC already handles it.
-              In PRO-first mode each rating is the unit of analysis and the AUC groups folds by rating,
-              so multi-PSD-per-rating is intentional and the AUC n is already the independent count.
-              Show the warning for every other direction — INCLUDING legacy payloads with no
-              match_direction field (cached prior/nearest scans), where double-dipping is real and
-              hiding it would mislead the clinician. Only the explicit "pro_first" string suppresses. */}
-          {scan && scan.pro_independence && scan.pro_independence.n_excess_matches > 0
-            && scan.match_direction !== "pro_first" && (
-            <MDTypography variant="body2" display="block" mb={0.5} fontSize={14}
-              sx={{ color: scan.pro_independence.pct_nonindependent >= 50 ? "#B7791F" : "text.secondary",
-                    fontWeight: scan.pro_independence.pct_nonindependent >= 50 ? "bold" : "regular" }}>
-              {`⚠ PRO double-dipping: ${scan.pro_independence.n_matched} matched samples `
-               + `cover only ${scan.pro_independence.n_unique_pro} unique pain scores `
-               + `(${scan.pro_independence.pct_nonindependent}% non-independent; worst score reused `
-               + `${scan.pro_independence.max_reuse}×). `
-               + (scan.auc_mode === "rating_grouped"
-                  ? `AUC folds are grouped by rating so AUC is corrected; ${corrName} still pools all samples — treat the correlation as exploratory.`
-                  : `Effective sample size is well below the matched n — treat both the correlation and AUC as exploratory.`)}
-            </MDTypography>
-          )}
-          <div ref={ref} style={{ width: "100%", height: 420 }} />
-          {scatterNode}
         </MDBox>
       </Card>
     </Grid>
@@ -826,8 +136,10 @@ function Section({ title, subtitle, panels, header = null }) {
 
 // Okabe-Ito colorblind-safe palette (8% of males have red-green color blindness; this set is
 // distinguishable to every common type and remains legible in grayscale). HI/LO pair: orange/blue
-// (orange = high pain, blue = low pain) — the strongest contrast in the palette.
-const HI = "#D55E00", LO = "#0072B2";   // vermillion / blue
+// (orange = high pain, blue = low pain) — the strongest contrast in the palette. Same two colors
+// as binarizationModel's BIN_HI/BIN_LO, imported from there rather than redeclared, so this
+// histogram and the binarization preview can't drift apart.
+const HI = BIN_HI, LO = BIN_LO;
 const PALETTE = ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#56B4E9", "#E69F00", "#F0E442", "#000000"];
 
 // Vertical (threshold) average of several ROC curves onto a common FPR grid. Each input is a
@@ -872,7 +184,7 @@ const featLabel = (k) => FEATURE_LABELS[k] || String(k).replace(/_/g, " ").repla
 export default function BiomarkerAnalytics({ analytics, summary, metricLabel, recordedPowers, programmedThresholds,
   binStrategy: previewStrategy, binMetricKey: previewMetricKey,
   binPercentileLow: previewPctLow, binPercentileHigh: previewPctHigh,
-  participantUid, requestParams, matchDirty }) {
+  participantUid, requestParams, onBandCommitted }) {
   // Hooks MUST be called unconditionally before any early return (React rules-of-hooks).
   const td = analytics ? (analytics.timedomain || {}) : {};
   const pdRoot = analytics ? (analytics.powerdomain || analytics.chronic || {}) : {};
@@ -1008,7 +320,12 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
                    && progAll[selHemiForProg].lower != null
                    && isFinite(progAll[selHemiForProg].lower))
     ? progAll[selHemiForProg] : null;
-  const PROG_COLOR = "#6E0F8A";   // muted purple — the device's programmed trigger (matches timeline)
+  // Muted purple for the device's programmed trigger. NOTE: BiomarkerTimeline.js (the legacy
+  // fallback view, rendered only when the modern availability payload is absent) uses a different
+  // color, "#1A1A1A", for the same semantic marker — this comment previously claimed the two
+  // matched, which was false. Left as two colors deliberately rather than repainting the rarely-
+  // rendered legacy view as a drive-by; align them explicitly if that view is revisited.
+  const PROG_COLOR = "#6E0F8A";
 
   if (!analytics) return null;
 
@@ -1133,13 +450,10 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   // scatter, and mean-PSD-by-pain-state) are replaced by ONE exploratory scan over ALL pooled
   // full-spectrum PSDs (TD streaming + montage/survey) per channel — r vs continuous PRO and CV
   // logistic AUC vs binarized PRO over a 5 Hz sliding band, click-to-scatter.
-  const scan = td.spectral_feature_importance || null;
-  if (scan && scan.channels && scan.channels.length) {
-    tdPanels.push(
-      <SpectralFeatureImportance key="sfi" scan={scan} pain={pain} HI={HI} LO={LO}
-        participantUid={participantUid} requestParams={requestParams} matchDirty={matchDirty} />
-    );
-  }
+  // The exploratory 5 Hz sliding-band scan (SpectralFeatureImportance) was removed as an
+  // unnecessary duplicated analysis: the calibrated band-by-length grid (BiomarkerHeatmapGrids.js)
+  // is the headline result, answers the same question, and applies a stronger correction. The
+  // backend no longer computes `spectral_feature_importance` either (bravo_service.py's `td_tasks`).
 
   // (PSD spectrograms removed — they added little over the correlation spectrum + mean-PSD panels.)
 
@@ -1883,27 +1197,15 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   // Channel selector (channelToggle) REMOVED with the Power-domain section (2026-06-28, PI):
   // it only drove the chronic ROC / distribution / sliding-window panels, which are gone.
 
-  // Rigor-pass annotation: if the backend supplied a band x channel BH-FDR summary, append the
-  // naive-vs-rigorous count contrast to the subtitle. This is the headline pseudoreplication
-  // honesty number. The naive family treats every matched neural sample as independent, but each
-  // pain rating contributes UP TO MaxPerRating samples (the cap on the slider) — so the naive FDR
-  // over-reports. The rating-clustered logistic q accounts for the samples that share a rating. This
-  // holds whether or not LSB vectors are reused: the no-reuse rule changes each sample's FEATURE
-  // VALUE, not how many samples a rating contributes (that is the MaxPerRating cap). Reads as e.g.
-  // "[N bands survive rating-clustered FDR vs M under naive FDR; ringed dots mark the survivors]".
-  const fdrSummary = scan && scan.fdr_summary;
-  const rigorAnnotation = fdrSummary
-    ? ` ${fdrSummary.n_rigorous_fdr} of ${fdrSummary.n_bands_total} bands survive BH-FDR under rating-clustered logistic (the inferential headline); ${fdrSummary.n_naive_fdr} survive the naive per-sample FDR, which treats each matched sample as independent and over-reports because one rating contributes up to MaxPerRating samples. Ringed dots above mark the rigorous-FDR survivors.`
-    : "";
-
   return (
     <>
-      <Section title="Full-spectrum exploration (all PSDs pooled per channel)"
-               subtitle={(scan && (scan.feature === "lsb_cs14" || scan.feature === "lsb_calibrated")
-                 ? (scan.feature === "lsb_cs14"
-                   ? "One LSB per matched (channel, rating) pair: 30 s rating-centred window through the transform DSP (k\u202f=\u202f352.62) when a time-domain recording covers the rating, else the CS-3 PSD bridge (k\u202f\u2248\u202f73.63) for PSD-only patient events. Raw (linear) LSB on the device scale, full 0\u2013100\u202fHz in a 5\u202fHz sliding band; green shading marks the validated 7.8\u201330\u202fHz range. Per band: Spearman \u03c1 vs the continuous score and cross-validated logistic AUC vs the binarized score; click a band for its scatter."
-                   : "Every neural recording matched to the nearest pain report, scanned in a 5\u202fHz sliding band. Feature: raw calibrated LSB (269\u202f\u00d7 TD Welch band integral). Per band: Spearman \u03c1 and logistic AUC; click a band for its scatter.")
-                 : "Every full-spectrum PSD (time-domain streaming + montage/survey sweeps) matched to the nearest pain report within the chosen window, then scanned in a 5\u202fHz sliding band. Per band: Pearson r vs the continuous score and cross-validated logistic AUC vs the binarized score; click a band for its scatter.") + rigorAnnotation}
+      {/* The exploratory 5 Hz sliding-band scan that used to headline this section
+          (SpectralFeatureImportance) is gone -- an unnecessary duplicated analysis, per the
+          calibrated band-by-length grid above it on the page. What remains in `tdPanels` is only
+          the sliding correlation-over-time heatmap (`sliding_corr_spectrum`, sliding mode only),
+          so the title/subtitle here describe that alone rather than the removed scan's methodology. */}
+      <Section title="Correlation over time (sliding window)"
+               subtitle="How the band-power/pain correlation for each frequency has shifted across sliding windows of the record."
                panels={tdPanels} />
       {/* Power-domain analysis section (chronic 10-min trend + per-session band power) REMOVED
           (2026-06-28, PI): chronic LSB averaging is irrelevant to closed-loop deployment, so the

@@ -53,23 +53,40 @@ def get_redcap_credentials(redcap_config=None):
     )
 
 
-def pull_redcap(redcap_config=None, save=False, save_path=None):
+def pull_redcap(redcap_config=None, save=False, save_path=None, fields=None, records=None):
     """
     Pull survey data from REDCap, returning a pandas DataFrame.
 
-    Vendored from dbs_io.utils.pull_redcap; the PyCap export call is identical. Credentials
-    are resolved via `get_redcap_credentials` (env vars preferred). `redcap` (PyCap) is
-    imported lazily so this module is importable in environments without it installed.
+    Vendored from dbs_io.utils.pull_redcap; the PyCap export call is identical when `fields`
+    and `records` are left at None, which is the default and what every pre-existing caller
+    gets. Credentials are resolved via `get_redcap_credentials` (env vars preferred). `redcap`
+    (PyCap) is imported lazily so this module is importable in environments without it
+    installed.
+
+    `fields` and `records` ASK REDCAP FOR LESS, they do not cache anything. Every call still
+    goes to the server and still returns whatever is on the server at that instant, so a report
+    filed one second ago is in the answer. The full export for this project is 3,496 rows by
+    637 columns and takes about 1.4 s; the 24 columns of one participant's daily pain survey are
+    765 rows by 28 columns and take about 0.29 s. `redcap_fields_for_field_map` derives the
+    column list from the same patient field map that `process_redcap` then consumes, so the
+    tidy pain-report table is unchanged (proved cell-by-cell on the live RCS08 record: 760 rows,
+    identical columns, zero differing cells).
     """
     import redcap  # PyCap; lazy so tests / library imports don't require it
 
     api_url, api_key = get_redcap_credentials(redcap_config)
 
     project = redcap.Project(api_url, api_key)
+    export_kwargs = {}
+    if fields:
+        export_kwargs["fields"] = list(fields)
+    if records:
+        export_kwargs["records"] = list(records)
     redcap_data = project.export_records(
         format_type="df",
         export_checkbox_labels=True,
         export_survey_fields=True,
+        **export_kwargs,
     )
 
     if save:
@@ -83,6 +100,33 @@ def pull_redcap(redcap_config=None, save=False, save_path=None):
 
 # Canonical timestamp column the Pain Scores / Biomarker endpoints expect downstream.
 TIDY_TIMESTAMP_COL = "date_time_s1_daily"
+
+
+def redcap_fields_for_field_map(field_map):
+    """The raw REDCap column names `process_redcap` will actually read out of an export.
+
+    Returns (fields, record_ids). `fields` is the timestamp column plus every column named in
+    `metric_labels` (list-valued entries contribute all their components), de-duplicated and in a
+    stable order. `record_ids` is `[pt]` when the field map names one participant, else None.
+
+    Handing these to `pull_redcap` asks REDCap for the same information over a smaller wire. It is
+    NOT a cache: nothing is retained between calls and no answer can be stale. Returns
+    (None, None) when the field map is not usable, which makes the caller fall back to the full
+    export it does today.
+    """
+    if not isinstance(field_map, dict):
+        return None, None
+    timestamp_label = field_map.get("timestamp_label")
+    metric_labels = field_map.get("metric_labels") or {}
+    if not (timestamp_label and metric_labels):
+        return None, None
+    fields = [timestamp_label]
+    for value in metric_labels.values():
+        fields.extend(value if isinstance(value, list) else [value])
+    fields = [f for f in dict.fromkeys(fields) if isinstance(f, str) and f]
+    record_id = field_map.get("pt", field_map.get("record_id"))
+    record_ids = [str(record_id)] if record_id is not None else None
+    return fields, record_ids
 
 
 def process_redcap(redcap_data, field_map):

@@ -20,9 +20,28 @@ from the JSON `FirstPacketDateTime`, so there is NO timestamp bug in the product
 was only in the agent's raw-JSON probe, which filtered montage channels by the wrong label).
 """
 import datetime
+import warnings
+
 import numpy as np
 
 from . import analytics
+
+# THE CANONICAL DECODED FORM (Track B). Both spellings on purpose: the container's path root makes
+# the package `modules.DecodeCommon`, the host suite's root makes it `DecodeCommon`.
+try:
+    from modules.DecodeCommon import (build_channel_index as _build_channel_index,
+                                      per_pro_lsb_indexed as _per_pro_lsb_indexed)
+except ImportError:
+    from DecodeCommon import (build_channel_index as _build_channel_index,
+                              per_pro_lsb_indexed as _per_pro_lsb_indexed)
+
+#: THE SWITCH BETWEEN THE INDEXED READER AND THE REFERENCE SCAN. `per_pro_lsb` reads from a
+#: `ChannelIndex` prepared once per request when this is True, and runs its original per-call
+#: scan (`_per_pro_lsb_scan`) when it is False. The scans are kept, not deleted: they are the reference the indexed readers are
+#: proven equal to (DecodeCommon/tests), and flipping this in one process is how the equality proof
+#: on the live record alternates rounds honestly. If a served number is ever suspected, set this
+#: False and the page recomputes the old way with no deployment.
+USE_CHANNEL_INDEX = True
 
 # Recording.type -> (dtype lane, product key). Mirrors the type strings assigned at ingestion in
 # MedtronicPercept/Session.py. Several map onto the same lane (density-gated, not product-gated).
@@ -69,7 +88,16 @@ def snap_freq(hz):
 
 
 def _to_epoch(value):
-    """BRAVO StartTime -> Unix epoch seconds (float), or None. Accepts epoch float/int or ISO str."""
+    """BRAVO StartTime -> Unix epoch seconds (float), or None. Accepts epoch float/int or ISO str.
+
+    A value with no timezone attached -- a naive string or a naive `datetime` -- names a moment
+    in Universal Time (UTC), on every machine this code runs on, never the process's own local
+    zone. This mirrors `DecodeCommon.representation.to_epoch` exactly; the two were changed
+    together (open item 19, `DECISIONS_and_open_items.md`) because a naive value used to be read
+    in the server's local zone here and in Universal Time there, which agreed only because the
+    container happens to run in Universal Time. No naive start time has ever been seen in the
+    live record, so this changes no number the platform has produced.
+    """
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -78,11 +106,16 @@ def _to_epoch(value):
     if isinstance(value, str):
         try:
             dt = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
-            return dt.timestamp()
         except ValueError:
             return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return dt.timestamp()
     if isinstance(value, datetime.datetime):
-        return value.timestamp()
+        dt = value
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return dt.timestamp()
     return None
 
 
@@ -442,8 +475,125 @@ _POWER_SENTINEL = 2.0 ** 31 - 1   # device missing-sample sentinel for LFP power
 
 def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
                montage_td_recordings=None, sensing_hz_by_channel=None,
-               event_psd_recordings=None):
+               event_psd_recordings=None, index=None):
     """REAL band-power (LSB) time series per channel, for inline display on the timeline.
+
+    Same contract, same four sources, same output shape as `_lsb_series_scan`, whose docstring
+    is the specification. Pass `index=` (from `channel_index`, built with `chronic_recordings=`
+    and `powerdomain_recordings=`) when the caller already has one; without it, an index is built
+    here from the two native-tier arguments. With `USE_CHANNEL_INDEX` False and no `index`, the
+    reference scan runs instead -- same rule as `per_pro_lsb`.
+    """
+    if index is None and not USE_CHANNEL_INDEX:
+        return _lsb_series_scan(chronic_recordings, powerdomain_recordings, region_map=region_map,
+                                montage_td_recordings=montage_td_recordings,
+                                sensing_hz_by_channel=sensing_hz_by_channel,
+                                event_psd_recordings=event_psd_recordings)
+    if index is None:
+        index = channel_index(chronic_recordings=chronic_recordings,
+                              powerdomain_recordings=powerdomain_recordings)
+    region_map = region_map or {}
+    sensing_hz_by_channel = sensing_hz_by_channel or {}
+    # The native tier: the device's own sensed band power, read from the index exactly as
+    # `native_lsb_by_channel` built it -- unconverted, per `DecodeCommon`'s own docstring on why
+    # this tier needs no calibration constant. Copied per channel (never the index's own lists,
+    # which a reader must not mutate) so this function's own time-sort below can reorder freely.
+    out = {}
+    for ch, d in index.native_lsb_by_channel.items():
+        out[ch] = {"t": list(d["t"]), "y": list(d["y"]), "center_hz": list(d["center_hz"]),
+                  "source": list(d["source"]), "modeled": [False] * len(d["t"]),
+                  "method": [None] * len(d["t"])}
+    _lsb_series_modeled_tiers(out, montage_td_recordings, event_psd_recordings,
+                              sensing_hz_by_channel)
+    for ch, d in out.items():
+        order = np.argsort(d["t"])
+        for k_ in ("t", "y", "center_hz", "source", "modeled", "method"):
+            d[k_] = [d[k_][i] for i in order]
+    return out
+
+
+def _lsb_series_modeled_tiers(out, montage_td_recordings, event_psd_recordings,
+                              sensing_hz_by_channel):
+    """The two MODELED tiers of `lsb_series` -- montage survey TD (transform DSP) and PSD-only
+    event snapshots (the bridge) -- shared, byte-for-byte, between `lsb_series`'s indexed path
+    and `_lsb_series_scan`'s own inline copy of the same logic. Mutates `out` in place, the same
+    dict shape `_push` builds in `_lsb_series_scan`. These two tiers stay OUT of the canonical
+    decoded form on purpose: each needs a calibrated conversion (`analytics.td_to_lsb` or
+    `analytics.device_psd_to_lsb`), and `DecodeCommon`'s own docstring is explicit that a shared
+    decode layer must never become a second place a unit conversion can drift.
+    """
+    def _push(ch, t, y, hz, src, *, modeled=False, method=None):
+        d = out.setdefault(ch, {"t": [], "y": [], "center_hz": [], "source": [],
+                                "modeled": [], "method": []})
+        d["t"].append(float(t)); d["y"].append(float(y))
+        d["center_hz"].append(snap_freq(hz)); d["source"].append(src)
+        d["modeled"].append(bool(modeled)); d["method"].append(method)
+
+    for r in (montage_td_recordings or []):
+        if not isinstance(r, dict):
+            continue
+        names = list(r.get("ChannelNames", []) or [])
+        data = np.asarray(r.get("Data"), dtype=float)
+        if data.ndim != 2 or data.shape[0] == 0:
+            continue
+        fs = float(r.get("SamplingRate") or 250.0) or 250.0
+        t0 = _to_epoch(r.get("StartTime"))
+        if t0 is None:
+            continue
+        if data.shape[0] == len(names) and data.shape[1] != len(names):
+            data = data.T
+        desc = r.get("Descriptor") if isinstance(r.get("Descriptor"), dict) else {}
+        med_psd = desc.get("MedtronicPSD") if isinstance(desc.get("MedtronicPSD"), list) else []
+        rec_peak = snap_freq(r.get("PeakFrequencyInHertz"))
+        for ci, nm in enumerate(names):
+            if ci >= data.shape[1]:
+                continue
+            col = data[:, ci]
+            col = col[np.isfinite(col)]
+            if col.size < int(round(fs * analytics.TRANSFORM_WIN_SECONDS)):
+                continue
+            key = _canon_channel(nm)
+            contact_peak = None
+            if ci < len(med_psd) and isinstance(med_psd[ci], dict):
+                contact_peak = snap_freq(med_psd[ci].get("PeakFrequencyInHertz"))
+            center = (sensing_hz_by_channel.get(key) or sensing_hz_by_channel.get(nm)
+                      or sensing_hz_by_channel.get(str(nm)) or contact_peak or rec_peak)
+            if center is None or not np.isfinite(center) or float(center) <= 0:
+                continue
+            lsb = analytics.td_to_lsb(col, fs, float(center))
+            if lsb is None or not np.isfinite(lsb) or lsb <= 0:
+                continue
+            _push(key, t0, lsb, center, "psd_modeled",
+                  modeled=True, method=f"td_transform_x_k={analytics.LSB_PER_UV2_TRANSFORM:.2f}")
+
+    for ev in (event_psd_recordings or []):
+        if not isinstance(ev, dict):
+            continue
+        key = ev.get("channel")
+        t0 = _to_epoch(ev.get("t"))
+        freq = ev.get("freq"); power = ev.get("power")
+        if key is None or t0 is None or freq is None or power is None:
+            continue
+        center = ev.get("center_hz") or sensing_hz_by_channel.get(key) \
+            or sensing_hz_by_channel.get(str(key))
+        if center is None or not np.isfinite(center) or float(center) <= 0:
+            continue
+        if not (analytics.LSB_VALIDATED_HZ_LO <= float(center) <= analytics.LSB_DEPLOYABLE_HZ_HI):
+            continue
+        lsb = analytics.device_psd_to_lsb(freq, power, float(center))
+        if not np.isfinite(lsb) or lsb <= 0:
+            continue
+        _push(key, t0, lsb, center, "psd_modeled",
+              modeled=True, method=f"event_psd_bridge_x_k={analytics.LSB_PER_DEVICE_PSD:.2f}")
+
+
+def _lsb_series_scan(chronic_recordings, powerdomain_recordings, region_map=None,
+                     montage_td_recordings=None, sensing_hz_by_channel=None,
+                     event_psd_recordings=None):
+    """REAL band-power (LSB) time series per channel, for inline display on the timeline.
+
+    THE REFERENCE IMPLEMENTATION -- `lsb_series` above is proven equal to this on the live
+    record; this docstring is the specification either path must match.
 
     Unlike `extract_availability` (which emits one metadata RECORD per recording), this returns the
     ACTUAL per-sample LFP-power values vs absolute time, so the frontend draws the true trace — not
@@ -701,10 +851,83 @@ def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
 
 
 def modeled_lsb_at_center(channel, center_hz, *, td_recordings=None, psd_recordings=None,
-                          half_hz=2.5):
+                          half_hz=2.5, index=None):
+    """DEPLOYMENT-ONLY: modeled device-LSB samples for ONE (channel, band center). Same contract
+    as `_modeled_lsb_at_center_scan`, whose docstring is the specification.
+
+    The TD tier (Track D step 1) reads from `channel_index` when `index=` is given or
+    `USE_CHANNEL_INDEX` is True -- `td_recordings` is exactly the superset `channel_index` already
+    groups by channel for `per_pro_lsb`, so this tier reuses that grouping instead of its own
+    column scan. The PSD-only tier stays a direct scan of `psd_recordings` on BOTH paths: its
+    record shape (`PSD`/`Frequencies` arrays keyed by `ChannelNames` row) does not match
+    `channel_index.psd_by_channel`'s shape (flat per-event blocks the service assembles
+    elsewhere), and both live call sites pass `psd_recordings=None` today, so there is no live
+    data to prove a translation correct against -- left unchanged rather than guessed at.
+    """
+    if index is None and not USE_CHANNEL_INDEX:
+        return _modeled_lsb_at_center_scan(channel, center_hz, td_recordings=td_recordings,
+                                           psd_recordings=psd_recordings, half_hz=half_hz)
+    try:
+        cz = float(center_hz)
+    except (TypeError, ValueError):
+        return np.asarray([], dtype=float)
+    if not np.isfinite(cz) or cz <= 0:
+        return np.asarray([], dtype=float)
+    if index is None:
+        index = channel_index(td_recordings=td_recordings)
+    vals = []
+    for trace in index.td(channel)["traces"]:
+        fs = trace["fs"]
+        if not np.isfinite(fs) or fs <= 0:
+            continue
+        col = np.asarray(trace["col"], dtype=float)
+        col = col[np.isfinite(col)]
+        min_n = int(round(fs * analytics.TRANSFORM_WIN_SECONDS))
+        if col.size < min_n:
+            continue
+        lsb = analytics.td_to_lsb(col, fs, cz, half_hz=half_hz)
+        if lsb is not None and np.isfinite(lsb) and lsb > 0:
+            vals.append(float(lsb))
+    if analytics.LSB_VALIDATED_HZ_LO <= cz <= analytics.LSB_DEPLOYABLE_HZ_HI:
+        target = _canon_channel(channel)
+        for r in (psd_recordings or []):
+            if not isinstance(r, dict):
+                continue
+            names = list(r.get("ChannelNames", []) or [])
+            if not names:
+                continue
+            psd = r.get("PSD") if r.get("PSD") is not None else r.get("Data")
+            freqs = r.get("Frequencies")
+            if freqs is None:
+                freqs = r.get("FrequenciesInHertz")
+            if psd is None or freqs is None:
+                continue
+            psd = np.asarray(psd, dtype=float)
+            freqs = np.asarray(freqs, dtype=float)
+            if psd.ndim == 1:
+                psd = psd[None, :]
+            for ci, nm in enumerate(names):
+                if ci >= psd.shape[0]:
+                    continue
+                if _canon_channel(nm) != target:
+                    continue
+                row = np.asarray(psd[ci], dtype=float)
+                if row.shape != freqs.shape:
+                    continue
+                lsb = analytics.device_psd_to_lsb(freqs, row, cz, half_hz=half_hz)
+                if lsb is not None and np.isfinite(lsb) and lsb > 0:
+                    vals.append(float(lsb))
+    return np.asarray(vals, dtype=float)
+
+
+def _modeled_lsb_at_center_scan(channel, center_hz, *, td_recordings=None, psd_recordings=None,
+                                half_hz=2.5):
     """DEPLOYMENT-ONLY: modeled device-LSB samples for ONE (channel, band center), via the SAME
     primary routes the exploration timeline uses — applied at an ARBITRARY center the deployment ROC
     chose, not only the montage's configured sensing bands.
+
+    THE REFERENCE IMPLEMENTATION -- `modeled_lsb_at_center` above is proven equal to this on the
+    live record; this docstring is the specification either path must match.
 
     Units-consistent replacement for the retired µV²-cut-point fallback (the old TIER-2
     estimate_lsb(cutpoint) path, removed 2026-06-28): instead of pushing a z-scored ROC cut-point
@@ -842,12 +1065,20 @@ PRO_LSB_TIER_BRIDGE = "psd_bridge"    # PSD-only patient event coincided -> CS-3
 # real LFP rarely exceeds a few hundred µV, so touching this is a hardware-limit artifact, not signal.
 PRO_LSB_SATURATION_UV = 4000.0
 
+#: How much signal one of the device's own FFT snapshots covers. From `DEVICE_percept_rc.md`: the
+#: patient-event snapshot is "30 s, beginning 30 s after the button press". The calibrated grid's
+#: length-of-signal axis counts snapshots by this (decision 121): a row of N seconds needs
+#: ceil(N / 30) of them.
+PSD_SNAPSHOT_SECONDS = 30.0
 
-def per_pro_lsb(pro_times, native_lsb_series, channel, center_hz, *, band_half_hz=2.5,
+
+def _per_pro_lsb_scan(pro_times, native_lsb_series, channel, center_hz, *, band_half_hz=2.5,
                 td_recordings=None, event_psd_recordings=None,
                 native_tol_s=120.0, extent_s=None, max_missing_frac=0.10,
                 saturation_uv=PRO_LSB_SATURATION_UV):
-    """One LSB value per PRO for THIS channel/band, chosen by a strict source precedence (CS-4).
+    """REFERENCE IMPLEMENTATION, kept for the equality check; `per_pro_lsb` is the entry point.
+
+    One LSB value per PRO for THIS channel/band, chosen by a strict source precedence (CS-4).
 
     For each PRO timestamp, walk the precedence and stop at the first tier that yields a value:
       (1) NATIVE device LSB  — if `native_lsb_series` (a channel's lsb_series entry, NATIVE samples
@@ -1003,144 +1234,66 @@ def per_pro_lsb(pro_times, native_lsb_series, channel, center_hz, *, band_half_h
     return out
 
 
-def per_pro_lsb_spectrum(pro_times, channel, centers_hz, *, band_half_hz=2.5,
-                         td_recordings=None, event_psd_recordings=None,
-                         native_tol_s=120.0, extent_s=None, max_missing_frac=0.10,
-                         saturation_uv=PRO_LSB_SATURATION_UV):
-    """Per-matched-pair FULL-SPECTRUM modeled LSB — the SHARED source of truth for both the timeline
-    modeled markers and the spectral feature-importance panel. For each PRO and a vector of band
-    centers, return the 0–100 Hz LSB vector via the SAME CS-1…CS-4 routes per_pro_lsb uses, but
-    computed for EVERY center in one vectorized pass instead of a single sensing band.
+# `_per_pro_lsb_spectrum_scan` and `per_pro_lsb_spectrum` -- the SAME rule as `_per_pro_lsb_scan` /
+# `per_pro_lsb` evaluated at MANY band centres for one pain rating, returning one list of LSB
+# band-power values per rating -- were DELETED on 2026-09-10 at the PI's direction (decision 115).
+# Nothing on any page had read them since 2026-06-28, when matching against the 3 s tile cache
+# (`live_lsb_spectrum_match`) replaced the live per-rating computation; their only callers were
+# tests. Measured before deletion on RCS08: for every rating served from the voltage trace or the
+# PSD bridge, the many-centre list's entry at the contact's own centre equalled the timeline
+# circle bit for bit, 240 of 240 -- so nothing that is drawn depended on them.
 
-    Per (channel, PRO), source preference is decided ONCE for the whole spectrum (not per band):
-      * TD-TRANSFORM (tier td_transform, k=LSB_PER_UV2_TRANSFORM=352.62): if any TD-bearing recording
-        covers the rating, cut the rating-centered extent ONCE (transform_centered_window:
-        clip-don't-slide, 1 s-min, fail-closed >max_missing_frac Missing) and run
-        analytics.td_transform_band_power over ALL centers at 50 % overlap (median across windows),
-        then × 352.62. A saturated window is flagged + skipped (falls through to the bridge).
-      * PSD-BRIDGE (tier psd_bridge, k=LSB_PER_DEVICE_PSD≈73.63): else the nearest coincident PSD-only
-        patient event's onboard FFT through analytics.device_psd_band_power over ALL centers, × 73.63.
 
-    Unlike per_pro_lsb's single-band bridge (gated to [7.8,30]), the bridge spectrum is computed across
-    the FULL 0–100 Hz for exploration (PI 2026-06-27). Each band carries a per-band `calibrated` flag:
-    True only where the center is within [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI] (the bridge has no
-    validated meaning in the delta/gamma bands outside it). The TD-transform route is calibrated across
-    the whole spectrum (k=352.62 is band-agnostic), so its `calibrated` is True everywhere a band has
-    signal. The NATIVE tier is intentionally NOT used here — a native device reading is a single sensed
-    band, not a full spectrum; the full-spectrum modeled LSB is exactly the TD-transform / bridge view.
+def channel_index(td_recordings=None, event_psd_recordings=None, *,
+                  chronic_recordings=None, powerdomain_recordings=None):
+    """The canonical decoded form for one request's recordings, built once and read many times.
 
-    Returns a list (PRO order) of dicts:
-        {"t": pro_epoch_s, "tier": "td_transform"|"psd_bridge"|None,
-         "lsb": [float|None per center],            # LINEAR LSB (NOT logged) per band center
-         "calibrated": [bool per center],
-         "center_hz": [float per center],           # echoes centers_hz
-         "used_s": float, "saturated": bool, "reason": str}
-    A PRO with neither a covering TD recording nor a coincident PSD event → tier=None, lsb all None.
+    Group every voltage trace and every device-spectrum record by canonical channel name ONCE,
+    with the band-power recipe's own step, so no reader canonicalises a name or parses a start
+    time again. On the live record the per-report scan this replaces made 72,332,380 channel-name
+    canonicalisations in one page request (99.87 percent of all of them); through the index the
+    same work is one per (recording, channel).
+
+    `chronic_recordings`/`powerdomain_recordings` are optional (Track D step 1): when given, the
+    same one call also groups the device's own sensed band-power products (Power-Domain streaming
+    + Chronic Timeline), unconverted, for `lsb_series` to read instead of its own inline scan --
+    every stream now goes through this one decode step, each handled per its own kind, with the
+    native tier passed through as-is because it is already in the device units the platform cares
+    about (no calibration constant applies to it the way one does to the montage-TD and
+    event-PSD MODELED tiers, which stay reader-side; see `native_lsb_by_channel`'s own docstring).
     """
-    if extent_s is None:
-        extent_s = analytics.TRANSFORM_CENTERED_EXTENT_SECONDS
-    half = float(band_half_hz)
-    lo_hz = float(analytics.LSB_VALIDATED_HZ_LO)
-    hi_hz = float(analytics.LSB_DEPLOYABLE_HZ_HI)
-    channel = _canon_channel(channel)
-    centers = np.atleast_1d(np.asarray(centers_hz, dtype=float))
-    nC = centers.size
-    # per-band calibration validity: same gate as the single-band bridge tier, applied per center.
-    cal_band = (centers >= lo_hz - 1e-9) & (centers <= hi_hz + 1e-9)
+    return _build_channel_index(td_recordings, event_psd_recordings,
+                                step_seconds=analytics.TRANSFORM_STEP_SECONDS,
+                                chronic_recordings=chronic_recordings,
+                                powerdomain_recordings=powerdomain_recordings)
 
-    # prep TD recordings ONCE (identical to per_pro_lsb): channel column, t0/t1, fs, missing, step.
-    td_prepped = []
-    for r in (td_recordings or []):
-        if not isinstance(r, dict):
-            continue
-        names = list(r.get("ChannelNames") or [])
-        ci = next((i for i, n in enumerate(names) if _canon_channel(n) == channel), None)
-        if ci is None:
-            continue
-        data = np.asarray(r.get("Data"), dtype=float)
-        if data.ndim != 2:
-            continue
-        if data.shape[0] == len(names) and data.shape[1] != len(names):
-            data = data.T
-        fs = float(r.get("SamplingRate") or 250.0) or 250.0
-        t0 = _to_epoch(r.get("StartTime"))
-        if t0 is None or ci >= data.shape[1]:
-            continue
-        nsamp = data.shape[0]
-        td_prepped.append({
-            "t0": t0, "t1": t0 + (nsamp / fs if fs > 0 else 0.0), "fs": fs,
-            "col": data[:, ci], "miss": _missing_per_sample(r.get("Missing"), nsamp),
-            "step": int(round(fs * analytics.TRANSFORM_STEP_SECONDS))})
-    td_prepped.sort(key=lambda d: d["t0"])
-    td_t0 = np.array([d["t0"] for d in td_prepped], dtype=float)
 
-    none_vec = [None] * nC
-    out = []
-    for tp in np.asarray(pro_times, dtype=float):
-        rec = {"t": float(tp), "tier": None, "lsb": list(none_vec),
-               "calibrated": [False] * nC, "center_hz": [float(c) for c in centers],
-               "used_s": 0.0, "saturated": False, "reason": ""}
+def per_pro_lsb(pro_times, native_lsb_series, channel, center_hz, *, band_half_hz=2.5,
+                td_recordings=None, event_psd_recordings=None,
+                native_tol_s=120.0, extent_s=None, max_missing_frac=0.10,
+                saturation_uv=PRO_LSB_SATURATION_UV, index=None):
+    """One LSB value per PRO for THIS channel/band, chosen by a strict source precedence (CS-4).
 
-        # (1) TD-TRANSFORM spectrum — rating must fall inside a TD recording's real coverage.
-        matched_td = False
-        hi = int(np.searchsorted(td_t0, tp, side="right")) if td_t0.size else 0
-        for pr in td_prepped[:hi]:
-            if not (pr["t0"] <= tp <= pr["t1"]):
-                continue
-            fs = pr["fs"]
-            slice_uv, used_s = analytics.transform_centered_window(
-                pr["col"], fs, tp - pr["t0"], extent_s=extent_s, missing=pr["miss"],
-                max_missing_frac=max_missing_frac)
-            if slice_uv is None:
-                continue
-            if np.nanmax(np.abs(slice_uv)) >= saturation_uv:
-                rec["saturated"] = True
-                rec["reason"] = "TD window saturated (ADC rail)"
-                continue
-            # ONE strided rFFT over the whole centered window -> band power for ALL centers at once.
-            bp = np.atleast_1d(analytics.td_transform_band_power(
-                slice_uv, fs, centers, half_hz=half, step_samples=pr["step"]))
-            lsb = np.where(np.isfinite(bp) & (bp > 0),
-                           analytics.LSB_PER_UV2_TRANSFORM * bp, np.nan)
-            rec["tier"] = PRO_LSB_TIER_TD
-            rec["lsb"] = [float(v) if np.isfinite(v) else None for v in lsb]
-            # transform route is band-agnostic-calibrated: any band with signal is calibrated.
-            rec["calibrated"] = [bool(np.isfinite(v)) for v in lsb]
-            rec["used_s"] = float(used_s)
-            rec["saturated"] = False
-            rec["reason"] = "direct TD->LSB transform (k=%.2f)" % analytics.LSB_PER_UV2_TRANSFORM
-            matched_td = True
-            break
-        if matched_td:
-            out.append(rec); continue
-
-        # (2) PSD-BRIDGE spectrum — nearest coincident PSD-only patient event, FULL 0–100 Hz.
-        best = None
-        for ev in (event_psd_recordings or []):
-            if not isinstance(ev, dict) or _canon_channel(ev.get("channel")) != channel:
-                continue
-            te = _to_epoch(ev.get("t"))
-            if te is None or abs(te - tp) > native_tol_s:
-                continue
-            if best is None or abs(te - tp) < abs(best[0] - tp):
-                best = (te, ev)
-        if best is not None:
-            ev = best[1]
-            bp = np.atleast_1d(analytics.device_psd_band_power(
-                ev.get("freq"), ev.get("power"), centers, half_hz=half))
-            lsb = np.where(np.isfinite(bp) & (bp > 0),
-                           analytics.LSB_PER_DEVICE_PSD * bp, np.nan)
-            rec["tier"] = PRO_LSB_TIER_BRIDGE
-            rec["lsb"] = [float(v) if np.isfinite(v) else None for v in lsb]
-            # bridge is only VALIDATED inside [7.8,30]; outside is exploratory (computed, flagged).
-            rec["calibrated"] = [bool(np.isfinite(v) and cal_band[i]) for i, v in enumerate(lsb)]
-            rec["reason"] = "PSD-only event bridge (k=%.2f); calibrated only in [%.1f,%.1f] Hz" % (
-                analytics.LSB_PER_DEVICE_PSD, lo_hz, hi_hz)
-            out.append(rec); continue
-
-        rec["reason"] = "no TD coverage and no coincident PSD event"
-        out.append(rec)
-    return out
+    Same contract, same rule, same record fields as `_per_pro_lsb_scan`, whose docstring is the
+    specification. Pass `index=` (from `channel_index`) when the caller serves several channels
+    from the same recordings, so the form is built once rather than once per channel; without
+    it the form is built here from `td_recordings` and `event_psd_recordings`. With
+    `USE_CHANNEL_INDEX` False and no `index`, the reference scan runs instead.
+    """
+    if index is None and not USE_CHANNEL_INDEX:
+        return _per_pro_lsb_scan(pro_times, native_lsb_series, channel, center_hz,
+                                 band_half_hz=band_half_hz, td_recordings=td_recordings,
+                                 event_psd_recordings=event_psd_recordings,
+                                 native_tol_s=native_tol_s, extent_s=extent_s,
+                                 max_missing_frac=max_missing_frac, saturation_uv=saturation_uv)
+    if index is None:
+        index = channel_index(td_recordings, event_psd_recordings)
+    return _per_pro_lsb_indexed(pro_times, native_lsb_series, channel, center_hz,
+                                index=index, analytics=analytics, band_half_hz=band_half_hz,
+                                native_tol_s=native_tol_s, extent_s=extent_s,
+                                max_missing_frac=max_missing_frac, saturation_uv=saturation_uv,
+                                tier_native=PRO_LSB_TIER_NATIVE, tier_td=PRO_LSB_TIER_TD,
+                                tier_bridge=PRO_LSB_TIER_BRIDGE)
 
 
 # Map a TD recording's `product` key (TYPE_MAP, e.g. "streaming_td"/"indefinite"/"montage_td") to the
@@ -1157,8 +1310,13 @@ def raw_lsb_spectrum_cache(channel, centers_hz, *, band_half_hz=2.5,
                            td_recordings=None, event_psd_recordings=None,
                            montage_psd_recordings=None,
                            window_s=None, max_missing_frac=0.10,
-                           saturation_uv=PRO_LSB_SATURATION_UV):
+                           saturation_uv=PRO_LSB_SATURATION_UV, index=None):
     """Match-AGNOSTIC raw LSB spectrum cache for ONE channel — the decoupled source of truth.
+
+    `index=` (Track B step 4): a `ChannelIndex` from `channel_index`, whose prepared traces replace
+    the per-channel re-resolution of the column and re-conversion of every recording's samples to
+    float. The traces are walked in the recording list's own order, so the tile arrays come out
+    in the same order as without the index. Without `index`, the recordings are prepared here.
 
     Tiles the ENTIRE recording history into fixed `window_s` (default RAW_LSB_WINDOW_SECONDS = 3 s)
     NON-OVERLAPPING windows and computes the full 0–100 Hz LSB vector for every window, INDEPENDENT of
@@ -1182,9 +1340,9 @@ def raw_lsb_spectrum_cache(channel, centers_hz, *, band_half_hz=2.5,
       * PSD-derived (tier psd_bridge, k=LSB_PER_DEVICE_PSD≈73.63): each PSD-only event is ONE window at
         its own onboard-FFT timestamp, device_psd_band_power over all centers × 73.63. Per-band
         `calibrated` is True only inside [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI]; outside is
-        exploratory (computed and flagged), matching per_pro_lsb_spectrum's bridge contract.
+        exploratory (computed and flagged), the bridge contract the per-rating readers use.
 
-    Parameters mirror per_pro_lsb_spectrum (same recording dict schema, same constants) MINUS pro_times
+    Parameters mirror per_pro_lsb (same recording dict schema, same constants) MINUS pro_times
     and extent_s — there is no rating and no extent at cache-build time.
 
     Returns a dict (zero-length axes, never None, when a family is empty so the [W × C] shape holds):
@@ -1210,26 +1368,36 @@ def raw_lsb_spectrum_cache(channel, centers_hz, *, band_half_hz=2.5,
     psd_out = {"t": [], "lsb": [], "calibrated": [], "source": []}
 
     # ---- TD-derived tiles -------------------------------------------------------------------------
-    for r in (td_recordings or []):
-        if not isinstance(r, dict):
-            continue
-        names = list(r.get("ChannelNames") or [])
-        ci = next((i for i, n in enumerate(names) if _canon_channel(n) == channel), None)
-        if ci is None:
-            continue
-        data = np.asarray(r.get("Data"), dtype=float)
-        if data.ndim != 2:
-            continue
-        if data.shape[0] == len(names) and data.shape[1] != len(names):
-            data = data.T
-        fs = float(r.get("SamplingRate") or 250.0) or 250.0
-        t0 = _to_epoch(r.get("StartTime"))
-        if t0 is None or ci >= data.shape[1] or fs <= 0:
-            continue
-        col = data[:, ci]
+    def _prepared_traces():
+        """(col, miss, fs, t0, product) per recording carrying this channel, in list order."""
+        if index is not None:
+            for pr in sorted(index.td(channel)["traces"], key=lambda d: d["seq"]):
+                if pr["fs"] <= 0:
+                    continue
+                yield pr["col"], pr["miss"], pr["fs"], pr["t0"], pr.get("product")
+            return
+        for r in (td_recordings or []):
+            if not isinstance(r, dict):
+                continue
+            names = list(r.get("ChannelNames") or [])
+            ci = next((i for i, n in enumerate(names) if _canon_channel(n) == channel), None)
+            if ci is None:
+                continue
+            data = np.asarray(r.get("Data"), dtype=float)
+            if data.ndim != 2:
+                continue
+            if data.shape[0] == len(names) and data.shape[1] != len(names):
+                data = data.T
+            fs = float(r.get("SamplingRate") or 250.0) or 250.0
+            t0 = _to_epoch(r.get("StartTime"))
+            if t0 is None or ci >= data.shape[1] or fs <= 0:
+                continue
+            col = data[:, ci]
+            yield col, _missing_per_sample(r.get("Missing"), col.shape[0]), fs, t0, r.get("product")
+
+    for col, miss, fs, t0, product in _prepared_traces():
         nsamp = col.shape[0]
-        miss = _missing_per_sample(r.get("Missing"), nsamp)
-        src = TD_PRODUCT_SOURCE_LABEL.get(r.get("product"), r.get("product") or "time-domain")
+        src = TD_PRODUCT_SOURCE_LABEL.get(product, product or "time-domain")
         win_tile = int(round(fs * window_s))
         step_sub = int(round(fs * analytics.TRANSFORM_STEP_SECONDS))   # 50% overlap sub-window hop
         min_finite = int(round(fs * analytics.TRANSFORM_WIN_SECONDS))  # ≥1 sub-window (1 s) to score
@@ -1318,12 +1486,477 @@ def raw_lsb_spectrum_cache(channel, centers_hz, *, band_half_hz=2.5,
             "n_td_windows": len(td_out["t"]), "n_psd_windows": len(psd_out["t"])}
 
 
+#: Key under which a window family's converted float matrix is parked inside the family dict itself
+#: (see `_lsb_rows_to_mat`). Private to this module; nothing reads the cache by key set, and the
+#: cache never leaves the server, so an extra private key is invisible to every consumer.
+_LSB_MAT_MEMO_KEY = "_lsb_mat_memo"
+
+
+def _lsb_family_mat(family, nC):
+    """The float [W x C] matrix for one window family of a raw cache, converted AT MOST ONCE.
+
+    The conversion depends only on the cache, never on the match settings, but the band-by-length
+    sweep calls the matcher TEN times per sensing contact pair with the same cache, so converting
+    every time was the single largest remaining cost (measured: 1.19 s of 1.53 s per pair). The
+    matrix is therefore parked back inside the family dict.
+
+    The memo holds a REFERENCE to the exact row list it was built from and is only accepted when
+    that identical object comes back (`is`, not equality), so replacing the list invalidates the
+    memo and holding the reference stops the row list's identity from ever being recycled under it.
+    Rows are never edited in place after `raw_lsb_spectrum_cache` returns; the matrix is marked
+    non-writeable so an accidental attempt to edit it fails loudly rather than silently corrupting
+    a cache other panels share.
+    """
+    rows = family.get("lsb")
+    if rows is None:
+        rows = []
+    # `family.get("lsb") or []` was what stood here, and it cannot stay: a family restored from the
+    # shared tile-cache file holds its spectra as one float array, and asking a two-dimensional
+    # array whether it is truthy raises rather than answering. Taking the value and replacing only
+    # a missing one keeps every other case identical, and has the incidental benefit that an empty
+    # family now hits its own memo instead of building a fresh empty list on every call.
+    memo = family.get(_LSB_MAT_MEMO_KEY)
+    if memo is not None and memo[0] is rows and memo[1] == nC:
+        return memo[2]
+    mat = _lsb_rows_to_mat(rows, nC)
+    mat.flags.writeable = False
+    try:
+        family[_LSB_MAT_MEMO_KEY] = (rows, nC, mat)
+    except Exception:                                   # a read-only mapping: convert every time
+        pass
+    return mat
+
+
+def _lsb_rows_to_mat(rows, nC):
+    """[W][C] list-of-lists-with-None -> float [W x C] with NaN; empty -> (0, nC).
+
+    FAST PATH: `raw_lsb_spectrum_cache` always emits each window as a list of exactly nC entries
+    holding a float or None, and numpy coerces None to NaN under a float dtype, so a whole window
+    family converts in ONE C-level call instead of W x C Python assignments. Anything ragged, short
+    or None-valued falls back to the explicit element-by-element fill, which is what the
+    pre-vectorised code did unconditionally, so the result is identical either way.
+
+    ALREADY A MATRIX: a window family restored from the shared tile-cache file
+    (`bravo_service._raw_lsb_unpack`) holds its per-window spectra as one float array rather than
+    as a list of lists, because turning 29 million numbers back into Python floats on every worker
+    would cost most of what the file saves. Such an array is exactly what this function builds from
+    the equivalent list of lists — the two are compared value by value in
+    tests/test_shared_raw_lsb_cache.py — so it is handed straight back. A width that does not match
+    the band-centre count is padded or trimmed the same way the element-by-element path would.
+    """
+    if isinstance(rows, np.ndarray):
+        m = np.asarray(rows, dtype=float)
+        if m.ndim == 1:
+            m = m.reshape((0, nC)) if m.size == 0 else m.reshape((1, m.size))
+        if m.ndim != 2:
+            return np.empty((0, nC), dtype=float)
+        if m.shape[1] == nC:
+            return m
+        out = np.full((m.shape[0], nC), np.nan, dtype=float)
+        w = min(nC, m.shape[1])
+        out[:, :w] = m[:, :w]
+        return out
+    if not rows:
+        return np.empty((0, nC), dtype=float)
+    if all(type(r) is list and len(r) == nC for r in rows):
+        try:
+            return np.asarray(rows, dtype=float)
+        except (TypeError, ValueError):
+            pass
+    m = np.full((len(rows), nC), np.nan, dtype=float)
+    for i, row in enumerate(rows):
+        if row is None:
+            continue
+        for j, v in enumerate(row[:nC]):
+            if v is not None:
+                m[i, j] = v
+    return m
+
+
+def _pad_owned_windows(owners, nP):
+    """STRICT match: per-window owner rating index (-1 = unowned) -> ONE padded index matrix.
+
+    Returns (idx_pad, counts). `idx_pad` is (nP, max_count) int64 with -1 in every padding slot;
+    row p lists the ORIGINAL window indices owned by rating p in ASCENDING WINDOW ORDER -- exactly
+    the array `np.where(owners == p)[0]` returned for that rating one at a time. `counts[p]` is how
+    many of row p's entries are real.
+    """
+    counts = np.zeros(nP, dtype=np.int64)
+    empty = np.empty((nP, 0), dtype=np.int64)
+    if nP == 0 or owners.size == 0:
+        return empty, counts
+    keep = np.where(owners >= 0)[0]                     # ascending original window index
+    if keep.size == 0:
+        return empty, counts
+    own = owners[keep]
+    counts = np.bincount(own, minlength=nP).astype(np.int64)
+    srt = np.argsort(own, kind="stable")                # group by owner, keep ascending within group
+    flat = keep[srt]
+    rows = np.repeat(np.arange(nP, dtype=np.int64), counts)
+    starts = np.concatenate(([0], np.cumsum(counts)[:-1]))
+    cols = np.arange(flat.size, dtype=np.int64) - np.repeat(starts, counts)
+    idx_pad = np.full((nP, int(counts.max())), -1, dtype=np.int64)
+    idx_pad[rows, cols] = flat
+    return idx_pad, counts
+
+
+def _pad_windows_in_extent(win_t, valid_mask, pro, tol, nP, direction="nearest"):
+    """REUSE match: every eligible window within +/-tol of each rating -> ONE padded index matrix.
+
+    Identical searchsorted-bounds logic to the per-rating list-of-arrays version it replaces
+    (O(W log W + total matches), never the P x W outer product) -- it writes each rating's
+    contiguous slice straight into a padded matrix instead of into its own array. Row p lists the
+    ORIGINAL window indices in ASCENDING WINDOW TIME, which is the order the slice `vi_sorted[a:b]`
+    carried, so the stable tie-breaking in the nearest-N cap below sees the same ordering.
+
+    `direction="prior"` restricts eligibility to windows AT OR BEFORE the rating (the
+    forecasting-safe direction: every window used to answer a rating already existed when that
+    rating was filed) by narrowing the upper bound from `pro + tol` to `pro`. Everything else about
+    the eligibility test (the lower bound, the +/-tol radius itself) is unchanged.
+    """
+    counts = np.zeros(nP, dtype=np.int64)
+    empty = np.empty((nP, 0), dtype=np.int64)
+    if nP == 0 or win_t.size == 0:
+        return empty, counts
+    vi = np.where(valid_mask)[0]                        # original indices that are valid
+    if vi.size == 0:
+        return empty, counts
+    wt = win_t[vi]
+    wo = np.argsort(wt, kind="stable")
+    wt_sorted = wt[wo]
+    vi_sorted = vi[wo]
+    hi_bound = pro if direction == "prior" else pro + tol
+    lo_idx = np.searchsorted(wt_sorted, pro - tol, side="left")
+    hi_idx = np.searchsorted(wt_sorted, hi_bound, side="right")
+    counts = np.maximum(hi_idx - lo_idx, 0).astype(np.int64)
+    total = int(counts.sum())
+    if total == 0:
+        return empty, counts
+    rows = np.repeat(np.arange(nP, dtype=np.int64), counts)
+    starts = np.concatenate(([0], np.cumsum(counts)[:-1]))
+    cols = np.arange(total, dtype=np.int64) - np.repeat(starts, counts)
+    idx_pad = np.full((nP, int(counts.max())), -1, dtype=np.int64)
+    idx_pad[rows, cols] = vi_sorted[np.repeat(lo_idx, counts) + cols]
+    return idx_pad, counts
+
+
+def _cap_nearest_windows(idx_pad, win_t, pro, cap):
+    """Keep only the `cap` windows closest in time to each rating, for all ratings at once.
+
+    Reproduces the old per-rating branch exactly. That branch, for a rating owning MORE than `cap`
+    windows, did `keep = np.argsort(|win_t[sel] - pro_t|, kind="stable")[:cap]` then
+    `sel = sel[np.sort(keep)]` so the surviving windows stayed in their original order for a stable
+    median. Here the same STABLE argsort runs along axis 1 for every rating simultaneously. Padding
+    slots are handed an INFINITE distance so they always sort last, which means a row holding <=cap
+    real windows keeps every one of them and merely carries padding forward -- the identical set the
+    old code left untouched when it skipped the branch.
+    """
+    if idx_pad.shape[1] <= cap:
+        return idx_pad
+    safe = np.maximum(idx_pad, 0)
+    dist = np.where(idx_pad >= 0, np.abs(win_t[safe] - pro[:, None]), np.inf)
+    rank = np.argsort(dist, axis=1, kind="stable")[:, :cap]
+    rank.sort(axis=1)                                   # back to ascending row position
+    return np.take_along_axis(idx_pad, rank, axis=1)
+
+
+def _padded_nanmedian(mat, idx_pad):
+    """Per-rating nan-median over each rating's selected windows as ONE numpy reduction.
+
+    `idx_pad` is (nR, K) with -1 padding. The gather writes NaN into every padding slot, so
+    `np.nanmedian(..., axis=1)` over the resulting (nR, K, nC) block equals the old per-rating
+    `np.nanmedian(mat[sel], axis=0)` row by row: NaN skips padding exactly as the shorter selection
+    simply had nothing there. A row that is entirely NaN yields NaN and a RuntimeWarning, which the
+    old per-rating call did too, so the warning is silenced instead of being left to flood the log.
+    """
+    nR, K = idx_pad.shape
+    nC = mat.shape[1]
+    if nR == 0 or K == 0 or mat.shape[0] == 0:
+        return np.full((nR, nC), np.nan, dtype=float)
+    safe = np.maximum(idx_pad, 0)
+    block = np.where((idx_pad >= 0)[:, :, None], mat[safe], np.nan)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        return np.nanmedian(block, axis=1)
+
+
+def _lsb_none_lists(med):
+    """(nR, nC) float -> (list-of-lists with None where non-finite, list-of-lists of finite flags).
+
+    Replaces the per-rating per-band comprehensions `[float(v) if np.isfinite(v) else None ...]` and
+    `[bool(np.isfinite(v)) ...]`. `astype(object)` yields real Python floats, so the emitted values
+    are the same objects `float(v)` produced, and `.tolist()` on the boolean mask yields real Python
+    bools.
+    """
+    finite = np.isfinite(med)
+    obj = med.astype(object)
+    obj[~finite] = None
+    return obj.tolist(), finite
+
+
+def _nearest_pro_idx(win_t, pro_sorted, order, nP, tol, prior=False):
+    """Vectorized nearest-PRO index (orig order) per window time, -1 if beyond tol.
+
+    `prior=True` restricts a window to a PRO at or AFTER it (the window must precede the rating,
+    dt = pro_time - win_time >= 0) instead of whichever PRO is symmetrically closest -- the same
+    forecasting-safe restriction `streaming_psd._match_to_pro`'s "prior" mode applies, adapted to
+    this module's window-first (rather than PRO-first) search.
+
+    Lifted out of `live_lsb_spectrum_match` unchanged so the per-band exclusion path below decides
+    which rating owns a chunk by the identical rule rather than a second copy of it.
+    """
+    if win_t.size == 0 or nP == 0:
+        return np.full(win_t.size, -1, dtype=int)
+    pos = np.searchsorted(pro_sorted, win_t)
+    if prior:
+        right = np.clip(pos, 0, nP - 1)
+        dr = pro_sorted[right] - win_t
+        nn = order[right]
+        nn[(dr < 0) | (dr > tol) | (pos >= nP)] = -1
+        return nn
+    left = np.clip(pos - 1, 0, nP - 1)
+    right = np.clip(pos, 0, nP - 1)
+    dl = np.abs(win_t - pro_sorted[left])
+    dr = np.abs(win_t - pro_sorted[right])
+    take_left = dl <= dr                       # tie -> earlier PRO (deterministic)
+    nn_sorted = np.where(take_left, left, right)
+    dist = np.where(take_left, dl, dr)
+    nn = order[nn_sorted]
+    nn[dist > tol] = -1
+    return nn
+
+
+def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, centers_hz,
+                                    band_ceilings, allow_window_reuse=False,
+                                    match_direction="nearest"):
+    """Band power per pain report and per length of signal, excluding contaminated 3 s chunks
+    BEFORE they are averaged, and taking the next-nearest clean chunk in place of each one dropped.
+
+    WHY THIS EXISTS, AND WHY IT IS NOT THE SAME AS EXCLUDING AFTERWARDS (PI, 2026-09-09).
+    The ceilings in `analytics.BAND_SWEEP_LSB_CEILINGS` are the 99.5th percentile of this
+    participant's INDIVIDUAL 3 s chunk values. Comparing them against a cell that already averaged
+    up to 100 chunks compares a threshold against a different, much narrower distribution: measured
+    on RCS08, that discarded 0.708 percent of the 1 s row but only 0.300 percent from the 20 s row
+    up, so "the top 0.5 percent" meant ten different things down one column. Excluding here, before
+    any averaging, compares each value against the population the ceiling was actually built from,
+    so one chunk gets one verdict at a given band in every row of the grid.
+
+    IT EXCLUDES PER BAND, NOT PER WHOLE CHUNK, and that was measured rather than assumed. Of
+    296,157 chunks on RCS08, 11,208 (3.78 percent) sit above the ceiling in at least one band but
+    only 4 (0.001 percent) do in all 22, and a third of them are over in exactly one band -- so
+    dropping a whole chunk for one bad band would discard 3.78 percent of the record, almost all of
+    it good data. A chunk therefore drops out at 8.5 Hz and stays in at 20 Hz.
+
+    BACKFILL, the PI's own choice over simply dropping. Each rating's eligible chunks are put in
+    one fixed order, nearest in time first; the value for length N at band c is the median of the
+    first N chunks of that order that are CLEAN AT BAND c. So a cell keeps the sample count its row
+    asks for and the length-of-signal axis stays comparable across the grid, instead of a cell
+    quietly averaging 97 chunks where its neighbour averaged 100.
+
+    Which chunks are eligible, and which rating owns each one, are decided by the SAME two helpers
+    `live_lsb_spectrum_match` uses (`_pad_windows_in_extent` / `_pad_owned_windows` over
+    `_nearest_pro_idx`), so only the surviving-chunk step differs between the two paths.
+
+    `band_ceilings` is one ceiling per entry of `centers_hz`, `np.inf` where that centre has none
+    (that band then keeps every chunk). Nothing is written back into `raw_cache`.
+
+    Returns `(power_by_length, info, stats_by_length)`. `power_by_length` maps each requested length
+    in seconds to an (n_ratings x n_centres) array of linear device-LSB band power, NaN where a
+    rating has no surviving measurement. `info` carries the exclusion counts for the page's own
+    notes. `stats_by_length` is the same per-length matching summary `live_lsb_spectrum_match`
+    reports, and carries the same numbers: eligibility, ownership and the quantity cap are what
+    those fields describe, and this function changes none of them. `n_td_used` counts the pieces a
+    rating's cell averages, which backfill holds at the requested count except where a rating's own
+    eligible pieces run out -- `info["n_cells_short_of_requested"]` counts exactly those cells.
+    """
+    centers_cache = np.atleast_1d(np.asarray(raw_cache.get("centers_hz") or [], dtype=float))
+    sweep_c = np.atleast_1d(np.asarray(centers_hz, dtype=float))
+    nCc, nCs = centers_cache.size, sweep_c.size
+    window_s = float(raw_cache.get("window_s") or analytics.RAW_LSB_WINDOW_SECONDS)
+    pro = np.atleast_1d(np.asarray(pro_times, dtype=float))
+    nP = pro.size
+    lengths = [float(s) for s in lengths_s]
+    out = {s: np.full((nP, nCs), np.nan, dtype=float) for s in lengths}
+    info = {"n_chunk_band_values_excluded": 0, "n_chunks_eligible": 0,
+            "n_cells_short_of_requested": 0, "tol_s": float(tol_s),
+            "allow_window_reuse": bool(allow_window_reuse),
+            # WHICH RATINGS THE LENGTH-OF-SIGNAL AXIS DOES NOT APPLY TO (open item 26). One entry
+            # per rating, True where its value came from the device's own spectrum. That branch
+            # never reads a length of signal -- it has no quantity cap, so it writes the SAME
+            # number into every row of the grid -- and nothing downstream could tell, because the
+            # number is perfectly ordinary. Carried out of here rather than re-derived later so
+            # the flag and the value it describes are produced by one pass over one rule.
+            "from_device_spectrum": []}
+    stats_by_length = {}
+    if nP == 0 or nCs == 0 or nCc == 0 or window_s <= 0:
+        return out, info, stats_by_length
+
+    col = np.asarray([int(np.argmin(np.abs(centers_cache - c))) for c in sweep_c], dtype=int)
+    ceil = np.asarray(band_ceilings, dtype=float)
+    caps = [max(1, int(round(s / window_s))) for s in lengths]
+    cap_max = max(caps) if caps else 1
+
+    prior = str(match_direction or "nearest").lower() == "prior"
+    order = np.argsort(pro, kind="stable")
+    pro_sorted = pro[order]
+
+    td = raw_cache.get("td") or {}
+    td_t = np.atleast_1d(np.asarray(td.get("t") or [], dtype=float))
+    td_ok = np.atleast_1d(np.asarray(td.get("ok") or [], dtype=bool))
+    td_mat = _lsb_family_mat(td, nCc)
+    td_valid = (td_ok if td_ok.size == td_t.size else np.zeros(td_t.size, bool)) & np.isfinite(td_t)
+
+    if allow_window_reuse:
+        idx, cnt = _pad_windows_in_extent(td_t, td_valid, pro, tol_s, nP, direction=match_direction)
+    else:
+        nn = np.full(td_t.size, -1, dtype=int)
+        if td_valid.any():
+            nn[td_valid] = _nearest_pro_idx(td_t[td_valid], pro_sorted, order, nP, tol_s,
+                                            prior=prior)
+        idx, cnt = _pad_owned_windows(nn, nP)
+    td_tier = cnt > 0
+    info["n_chunks_eligible"] = int(cnt.sum())
+
+    if idx.shape[1] > 0:
+        # One fixed order per rating, closest in time first, so "the nearest N that survive at this
+        # band" is a prefix of it. Padding sorts last on an infinite distance.
+        safe = np.maximum(idx, 0)
+        dist = np.where(idx >= 0, np.abs(td_t[safe] - pro[:, None]), np.inf)
+        S = np.take_along_axis(idx, np.argsort(dist, axis=1, kind="stable"), axis=1)
+        real = S >= 0
+        Ssafe = np.maximum(S, 0)
+
+        for j in range(nCs):
+            vals = np.where(real, td_mat[Ssafe, col[j]], np.nan)
+            bad = real & np.isfinite(vals) & (vals > ceil[j])
+            good = real & ~bad
+            info["n_chunk_band_values_excluded"] += int(bad.sum())
+            rank = np.cumsum(good, axis=1)
+            # Columns past the point where every rating already has cap_max clean chunks can never
+            # change any length's answer, so the per-length reduction below runs on a narrow slice
+            # rather than the full eligible width.
+            over = rank > cap_max
+            any_over = over.any(axis=1)
+            last = np.where(any_over, np.argmax(over, axis=1), rank.shape[1] - 1)
+            width = int(last.max()) + 1
+            g, r, v = good[:, :width], rank[:, :width], vals[:, :width]
+            for s, cap in zip(lengths, caps):
+                keep = g & (r <= cap)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)
+                    out[s][:, j] = np.where(td_tier, np.nanmedian(np.where(keep, v, np.nan), axis=1),
+                                            np.nan)
+                # Only cells the EXCLUSION left short, never cells that were always going to be
+                # short because the rating has little recording near it -- that is pre-existing and
+                # counting it here would blame this rule for it. The comparison is therefore
+                # against what this rating would have averaged with nothing excluded at all.
+                would_have = np.minimum(cap, cnt)
+                info["n_cells_short_of_requested"] += int(
+                    (td_tier & (keep.sum(axis=1) < would_have)).sum())
+
+    # ---- PSD bridge, for ratings with no eligible chunk of voltage trace at all -------------------
+    # Same eligibility rule as `live_lsb_spectrum_match`: the voltage trace is preferred, and a rating
+    # only falls here when it owns none.
+    #
+    # THE LENGTH-OF-SIGNAL AXIS APPLIES HERE TOO, since 2026-09-10 (the PI's rule, decision 121).
+    # Each of the device's own FFT snapshots covers 30 s of signal (DEVICE_percept_rc.md: "30 s,
+    # beginning 30 s after the button press"), so a row asking for N seconds takes the nearest
+    # ceil(N / 30) snapshots -- one for every row up to 30 s, two for 45 s and 60 s, ten for 5 min --
+    # and a rating that does not have that many clean snapshots within the match window contributes
+    # NOTHING to that row. Before this, the bridge had no quantity cap at all: it took the median of
+    # every snapshot in the window and wrote the same number into every row, so for a rating served
+    # this way the length axis was a constant dressed as a trend (open item 26, decision 106). The
+    # per-band clean-prefix rule is the same one the voltage-trace block above uses, so a snapshot
+    # contaminated at one band drops out at that band only.
+    psd = raw_cache.get("psd") or {}
+    psd_t = np.atleast_1d(np.asarray(psd.get("t") or [], dtype=float))
+    psd_mat = _lsb_family_mat(psd, nCc)
+    psd_valid = np.isfinite(psd_t)
+    pcnt = np.zeros(nP, dtype=np.int64)
+    take = np.zeros(nP, dtype=bool)
+    psd_caps = [max(1, int(np.ceil(s / PSD_SNAPSHOT_SECONDS))) for s in lengths]
+    info["psd_snapshot_s"] = float(PSD_SNAPSHOT_SECONDS)
+    info["psd_snapshots_needed_by_length"] = {float(s): int(k) for s, k in zip(lengths, psd_caps)}
+    info["n_psd_ratings_short_by_length"] = {float(s): 0 for s in lengths}
+    psd_filled = {s: np.zeros(nP, dtype=bool) for s in lengths}
+    if psd_t.size and (~td_tier).any():
+        if allow_window_reuse:
+            pidx, pcnt = _pad_windows_in_extent(psd_t, psd_valid, pro, tol_s, nP,
+                                                direction=match_direction)
+        else:
+            pnn = np.full(psd_t.size, -1, dtype=int)
+            if psd_valid.any():
+                pnn[psd_valid] = _nearest_pro_idx(psd_t[psd_valid], pro_sorted, order, nP, tol_s,
+                                                  prior=prior)
+            pidx, pcnt = _pad_owned_windows(pnn, nP)
+        take = (~td_tier) & (pcnt > 0)
+        if take.any() and pidx.shape[1] > 0:
+            psafe = np.maximum(pidx, 0)
+            pdist = np.where(pidx >= 0, np.abs(psd_t[psafe] - pro[:, None]), np.inf)
+            PS = np.take_along_axis(pidx, np.argsort(pdist, axis=1, kind="stable"), axis=1)
+            preal = PS >= 0
+            PSsafe = np.maximum(PS, 0)
+            for j in range(nCs):
+                pv = np.where(preal, psd_mat[PSsafe, col[j]], np.nan)
+                pbad = preal & np.isfinite(pv) & (pv > ceil[j])
+                pgood = preal & ~pbad
+                info["n_chunk_band_values_excluded"] += int(pbad.sum())
+                prank = np.cumsum(pgood, axis=1)
+                for s, need in zip(lengths, psd_caps):
+                    keep = pgood & (prank <= need)
+                    enough = keep.sum(axis=1) >= need
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", RuntimeWarning)
+                        pmed = np.nanmedian(np.where(keep, pv, np.nan), axis=1)
+                    row_take = take & enough
+                    out[s][row_take, j] = pmed[row_take]
+                    psd_filled[s] |= row_take
+            for s, need in zip(lengths, psd_caps):
+                info["n_psd_ratings_short_by_length"][float(s)] = int((take & (pcnt < need)).sum())
+
+    # `take` is exactly the ratings whose value came from the device's own spectrum, and it is what
+    # the loop above wrote into EVERY length. Reported per rating so a cell can later count only
+    # the ratings it actually used, rather than a whole contact's average pasted onto every cell.
+    info["from_device_spectrum"] = [bool(v) for v in take.tolist()]
+
+    # The same per-length matching summary the established matcher reports, built from the same
+    # quantities: which pieces were eligible, which rating owns each, and the quantity cap. Those
+    # are the three things this path does NOT change, so these fields keep their meaning exactly.
+    n_pro_td = int(td_tier.sum())
+    for s, cap, need in zip(lengths, caps, psd_caps):
+        # A snapshot-served rating counts for a row only when it could fill it (decision 121), so
+        # `n_pro_psd` and `n_psd_used` are per length now, where they used to be one number.
+        n_pro_psd = int(psd_filled[s].sum())
+        stats_by_length[s] = {
+            "n_pro": int(nP), "n_pro_td": n_pro_td, "n_pro_psd": n_pro_psd,
+            "n_pro_unmatched": int(nP - n_pro_td - n_pro_psd),
+            "n_td_windows": int(td_t.size), "n_psd_windows": int(psd_t.size),
+            "n_td_assigned": int(cnt.sum()),
+            "n_td_used": int(np.minimum(cnt, cap)[td_tier].sum()),
+            "n_psd_assigned": int(pcnt.sum()),
+            "n_psd_used": int(np.minimum(pcnt, need)[psd_filled[s]].sum()),
+            "psd_n_snapshots_cap": int(need), "psd_snapshot_s": float(PSD_SNAPSHOT_SECONDS),
+            "tol_s": float(tol_s), "td_quantity_s": float(s), "td_n_epochs_cap": int(cap),
+            "extent_s": float(s), "psd_tol_s": float(tol_s),
+            "allow_window_reuse": bool(allow_window_reuse),
+            "match_direction": "prior" if prior else "prospective"}
+    return out, info, stats_by_length
+
+
 def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=None,
-                            allow_window_reuse=False, extent_s=None, psd_tol_s=None):
+                            allow_window_reuse=False, extent_s=None, psd_tol_s=None,
+                            match_direction="nearest", want_records=True):
     """LIVE per-PRO LSB spectrum by matching PROs against the match-AGNOSTIC raw cache.
 
+    `want_records=False` skips building the per-PRO record list entirely (the `recs` return is
+    `None`) and returns only `stats`. Every stats field is already computed from counts/booleans
+    that exist before the per-tier median-and-record-building blocks below run, so this changes
+    no number in `stats` — it only skips work whose sole purpose is populating `recs`. Default
+    True preserves the return contract for every existing caller.
+
     Consumes one channel's `raw_lsb_spectrum_cache(...)` output and produces the SAME per-PRO
-    record list `per_pro_lsb_spectrum` returns (drop-in for the spectral scan), but with the
+    record list the retired per-rating many-centre reader returned (one list of LSB band-power values
+    per rating; deleted 2026-09-10, decision 115), but with the
     matching done at request time over the pre-computed 3 s LSB tiles.
 
     TWO-WINDOW MATCHING (PI 2026-06-28 — the modality split):
@@ -1363,6 +1996,12 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
                  "td_n_epochs_cap","extent_s","psd_tol_s","allow_window_reuse"}.
                 — n_td_assigned (eligible TD tiles owned within ±tol_s) minus n_td_used (after the
                 nearest-N quantity cap) is the count of eligible TD tiles dropped by the slider cap.
+
+    VECTORISED 2026-09-06: the two per-rating Python loops (one nan-median per rating per
+    modality, plus per-band list comprehensions) were replaced by a padded
+    (n_ratings x max_windows x n_bands) gather collapsed with a SINGLE np.nanmedian per
+    modality. The eligibility test and the nearest-rating assignment are untouched. Output
+    values are unchanged; see tests/test_live_match_vectorised.py.
     """
     # Back-compat: the old API passed extent_s (a ±half-window) and psd_tol_s. The new API passes
     # tol_s (main eligibility) + td_quantity_s (TD quantity). If only the legacy args arrived, map
@@ -1392,150 +2031,121 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
     order = np.argsort(pro, kind="stable")
     pro_sorted = pro[order]
 
-    none_vec = [None] * nC
-    recs = [{"t": float(tp), "tier": None, "lsb": list(none_vec),
-             "calibrated": [False] * nC, "center_hz": [float(c) for c in centers],
-             "used_s": 0.0, "saturated": False, "reason": "", "n_td_used": 0, "n_psd_used": 0}
-            for tp in pro]
+    if want_records:
+        none_vec = [None] * nC
+        center_vec = [float(c) for c in centers]
+        recs = [{"t": float(tp), "tier": None, "lsb": list(none_vec),
+                 "calibrated": [False] * nC, "center_hz": list(center_vec),
+                 "used_s": 0.0, "saturated": False, "reason": "", "n_td_used": 0, "n_psd_used": 0}
+                for tp in pro]
+    else:
+        recs = None
 
-    def _nearest_pro(win_t, tol):
-        """Vectorized nearest-PRO index (orig order) per window time, -1 if beyond tol."""
-        if win_t.size == 0 or nP == 0:
-            return np.full(win_t.size, -1, dtype=int)
-        pos = np.searchsorted(pro_sorted, win_t)
-        left = np.clip(pos - 1, 0, nP - 1)
-        right = np.clip(pos, 0, nP - 1)
-        dl = np.abs(win_t - pro_sorted[left])
-        dr = np.abs(win_t - pro_sorted[right])
-        take_left = dl <= dr                       # tie -> earlier PRO (deterministic)
-        nn_sorted = np.where(take_left, left, right)
-        dist = np.where(take_left, dl, dr)
-        nn = order[nn_sorted]
-        nn[dist > tol] = -1
-        return nn
+    # Only "prior" changes behaviour here: this matcher is window-first (it asks "which PRO owns
+    # this window"), so the older routine's PRO-first FRAMING has no equivalent to switch to — every
+    # other UI value ("nearest", "pro_first") matches symmetrically, in either time direction.
+    _prior_mode = str(match_direction or "nearest").lower() == "prior"
 
-    def _windows_in_extent(win_t, valid_mask, tol):
-        """REUSE mode: per-PRO list of window indices whose |t - pro_t| <= tol (a window may appear
-        under several PROs). Vectorized via searchsorted bounds on the sorted window times — O(W log W
-        + total matches), not the O(P·W) full outer product. Returns a list-of-arrays indexed by ORIG
-        PRO order, each holding ORIG window indices."""
-        out = [np.empty(0, dtype=int) for _ in range(nP)]
-        if nP == 0 or win_t.size == 0:
-            return out
-        vi = np.where(valid_mask)[0]                  # orig window indices that are valid
-        if vi.size == 0:
-            return out
-        wt = win_t[vi]
-        wo = np.argsort(wt, kind="stable")
-        wt_sorted = wt[wo]
-        vi_sorted = vi[wo]
-        lo_idx = np.searchsorted(wt_sorted, pro - tol, side="left")
-        hi_idx = np.searchsorted(wt_sorted, pro + tol, side="right")
-        for p in range(nP):
-            a, b = int(lo_idx[p]), int(hi_idx[p])
-            if b > a:
-                out[p] = vi_sorted[a:b]
-        return out
-
-    def _to_mat(rows):
-        """[W][C] list-with-None -> float [W×C] with NaN; empty -> (0,nC)."""
-        if not rows:
-            return np.empty((0, nC), dtype=float)
-        m = np.full((len(rows), nC), np.nan, dtype=float)
-        for i, row in enumerate(rows):
-            if row is None:
-                continue
-            for j, v in enumerate(row[:nC]):
-                if v is not None:
-                    m[i, j] = v
-        return m
+    def _nearest_pro(win_t, tol, prior=False):
+        """This function's own bindings applied to the module-level search (`_nearest_pro_idx`),
+        which was lifted out of here so `live_lsb_band_medians_by_length` decides ownership by the
+        identical rule rather than a second copy of it."""
+        return _nearest_pro_idx(win_t, pro_sorted, order, nP, tol, prior=prior)
 
     # ---- TD assignment ---------------------------------------------------------------------------
     td = raw_cache.get("td") or {}
     td_t = np.atleast_1d(np.asarray(td.get("t") or [], dtype=float))
     td_ok = np.atleast_1d(np.asarray(td.get("ok") or [], dtype=bool))
-    td_mat = _to_mat(td.get("lsb") or [])
+    td_mat = _lsb_family_mat(td, nC)
     n_td_windows = int(td_t.size)
     td_valid = (td_ok if td_ok.size == td_t.size else np.zeros(td_t.size, bool)) & np.isfinite(td_t)
     # TD ELIGIBILITY uses tol_s (the main slider), NOT the quantity slider. STRICT: each eligible tile
     # -> its single nearest PRO within +/-tol_s (nn_td). REUSE: each PRO -> every eligible tile within
-    # +/-tol_s (td_sel_by_pro); a tile may then appear under multiple PROs. The QUANTITY cap
-    # (td_n_epochs_cap = nearest-N tiles by |dt|) is applied per-PRO below, AFTER eligibility.
+    # +/-tol_s; a tile may then appear under multiple PROs. The QUANTITY cap
+    # (td_n_epochs_cap = nearest-N tiles by |dt|) is applied below, AFTER eligibility, for all PROs at
+    # once. Both branches now hand back ONE padded (nP x max_tiles) index matrix plus a per-PRO real
+    # count, so the collapse below is a single reduction rather than nP small ones.
     if allow_window_reuse:
-        td_sel_by_pro = _windows_in_extent(td_t, td_valid, tol_s)
-        n_td_assigned = int(sum(s.size for s in td_sel_by_pro))
+        td_idx, td_cnt = _pad_windows_in_extent(td_t, td_valid, pro, tol_s, nP,
+                                                direction=match_direction)
     else:
         nn_td = np.full(td_t.size, -1, dtype=int)
         if td_valid.any():
-            nn_td[td_valid] = _nearest_pro(td_t[td_valid], tol_s)
-        n_td_assigned = int((nn_td >= 0).sum())
+            nn_td[td_valid] = _nearest_pro(td_t[td_valid], tol_s, prior=_prior_mode)
+        td_idx, td_cnt = _pad_owned_windows(nn_td, nP)
+    n_td_assigned = int(td_cnt.sum())
 
-    n_td_used = 0
-    td_tier_pro = np.zeros(nP, dtype=bool)
-    for p in range(nP):
-        sel = td_sel_by_pro[p] if allow_window_reuse else np.where(nn_td == p)[0]
-        if sel.size == 0:
-            continue
-        # QUANTITY CAP: of this PRO's eligible tiles, keep only the td_n_epochs_cap CLOSEST to the
-        # rating (by |tile_t - pro_t|, before/after agnostic). This is the "how much TD signal to use"
-        # slider: 30 s -> nearest 10 non-overlapping 3 s tiles -> their median. Ties on |dt| break to
-        # the earlier tile (stable argsort) so the choice is deterministic.
-        if sel.size > td_n_epochs_cap:
-            dt = np.abs(td_t[sel] - pro[p])
-            keep = np.argsort(dt, kind="stable")[:td_n_epochs_cap]
-            sel = sel[np.sort(keep)]                  # keep original tile order for a stable median
-        med = np.nanmedian(td_mat[sel], axis=0)
-        rec = recs[p]
-        rec["tier"] = PRO_LSB_TIER_TD
-        rec["lsb"] = [float(v) if np.isfinite(v) else None for v in med]
-        rec["calibrated"] = [bool(np.isfinite(v)) for v in med]   # TD k is band-agnostic-calibrated
-        rec["n_td_used"] = int(sel.size)
-        rec["used_s"] = float(sel.size * window_s)
-        rec["reason"] = ("live TD->LSB median over nearest %d of %d eligible tile(s) "
-                         "(<=%.0fs signal within +/-%.0fs tol, k=%.2f)"
-                         % (sel.size, (td_sel_by_pro[p].size if allow_window_reuse
-                                       else int((nn_td == p).sum())),
-                            td_quantity_s, tol_s, analytics.LSB_PER_UV2_TRANSFORM))
-        td_tier_pro[p] = True
-        n_td_used += int(sel.size)
+    # QUANTITY CAP: of each PRO's eligible tiles, keep only the td_n_epochs_cap CLOSEST to the rating
+    # (by |tile_t - pro_t|, before/after agnostic). This is the "how much TD signal to use" slider:
+    # 30 s -> nearest 10 non-overlapping 3 s tiles -> their median. Ties on |dt| break to the earlier
+    # tile (stable argsort) so the choice is deterministic.
+    td_idx = _cap_nearest_windows(td_idx, td_t, pro, td_n_epochs_cap)
+    td_use = np.minimum(td_cnt, td_n_epochs_cap)
+    td_tier_pro = td_cnt > 0
+    n_td_used = int(td_use[td_tier_pro].sum())
+
+    if want_records and td_tier_pro.any():
+        td_rows = np.where(td_tier_pro)[0]
+        td_med = _padded_nanmedian(td_mat, td_idx[td_rows])
+        td_lsb, td_fin = _lsb_none_lists(td_med)
+        td_cal = td_fin.tolist()                       # TD k is band-agnostic-calibrated
+        td_used_s = (td_use[td_rows] * window_s).astype(float).tolist()
+        td_use_l = td_use[td_rows].tolist()
+        td_cnt_l = td_cnt[td_rows].tolist()
+        td_reason_tail = ("(<=%.0fs signal within +/-%.0fs tol, k=%.2f)"
+                          % (td_quantity_s, tol_s, analytics.LSB_PER_UV2_TRANSFORM))
+        for i, p in enumerate(td_rows.tolist()):
+            rec = recs[p]
+            rec["tier"] = PRO_LSB_TIER_TD
+            rec["lsb"] = td_lsb[i]
+            rec["calibrated"] = td_cal[i]
+            rec["n_td_used"] = int(td_use_l[i])
+            rec["used_s"] = td_used_s[i]
+            rec["reason"] = ("live TD->LSB median over nearest %d of %d eligible tile(s) %s"
+                             % (td_use_l[i], td_cnt_l[i], td_reason_tail))
 
     # ---- PSD assignment (only PROs with no TD become psd_bridge) ----------------------------------
     psd = raw_cache.get("psd") or {}
     psd_t = np.atleast_1d(np.asarray(psd.get("t") or [], dtype=float))
-    psd_mat = _to_mat(psd.get("lsb") or [])
+    psd_mat = _lsb_family_mat(psd, nC)
     n_psd_windows = int(psd_t.size)
     psd_valid = np.isfinite(psd_t)
     # PSD ELIGIBILITY also uses tol_s (the main slider) — the ONLY PSD control. No quantity cap: a
     # PRO's PSD-bridge LSB is the nan-median over EVERY eligible PSD event within +/-tol_s.
     if allow_window_reuse:
-        psd_sel_by_pro = _windows_in_extent(psd_t, psd_valid, tol_s)
-        n_psd_assigned = int(sum(s.size for s in psd_sel_by_pro))
+        psd_idx, psd_cnt = _pad_windows_in_extent(psd_t, psd_valid, pro, tol_s, nP,
+                                                  direction=match_direction)
     else:
         nn_psd = np.full(psd_t.size, -1, dtype=int)
         if psd_valid.any():
-            nn_psd[psd_valid] = _nearest_pro(psd_t[psd_valid], tol_s)
-        n_psd_assigned = int((nn_psd >= 0).sum())
+            nn_psd[psd_valid] = _nearest_pro(psd_t[psd_valid], tol_s, prior=_prior_mode)
+        psd_idx, psd_cnt = _pad_owned_windows(nn_psd, nP)
+    n_psd_assigned = int(psd_cnt.sum())
 
-    n_psd_used = 0
-    for p in range(nP):
-        if td_tier_pro[p]:
-            continue                                  # TD preferred — PSD here stays unused
-        sel = psd_sel_by_pro[p] if allow_window_reuse else np.where(nn_psd == p)[0]
-        if sel.size == 0:
-            continue
-        med = np.nanmedian(psd_mat[sel], axis=0)
-        rec = recs[p]
-        rec["tier"] = PRO_LSB_TIER_BRIDGE
-        rec["lsb"] = [float(v) if np.isfinite(v) else None for v in med]
-        rec["calibrated"] = [bool(np.isfinite(v) and cal_band[i]) for i, v in enumerate(med)]
-        rec["n_psd_used"] = int(sel.size)
-        rec["reason"] = ("live PSD->LSB median over %d event(s) within +/-%.0fs (k=%.2f); "
-                         "calibrated only in [%.1f,%.1f] Hz"
-                         % (sel.size, tol_s, analytics.LSB_PER_DEVICE_PSD, lo_hz, hi_hz))
-        n_psd_used += int(sel.size)
+    # TD is PREFERRED: a PSD event whose nearest PRO turned out TD-tier is left unused (reported).
+    psd_take = (~td_tier_pro) & (psd_cnt > 0)
+    n_psd_used = int(psd_cnt[psd_take].sum())
+
+    if want_records and psd_take.any():
+        psd_rows = np.where(psd_take)[0]
+        keep_cols = int(psd_cnt[psd_rows].max())
+        psd_med = _padded_nanmedian(psd_mat, psd_idx[psd_rows][:, :keep_cols])
+        psd_lsb, psd_fin = _lsb_none_lists(psd_med)
+        psd_cal = (psd_fin & cal_band[None, :]).tolist()
+        psd_cnt_l = psd_cnt[psd_rows].tolist()
+        psd_reason_tail = ("within +/-%.0fs (k=%.2f); calibrated only in [%.1f,%.1f] Hz"
+                           % (tol_s, analytics.LSB_PER_DEVICE_PSD, lo_hz, hi_hz))
+        for i, p in enumerate(psd_rows.tolist()):
+            rec = recs[p]
+            rec["tier"] = PRO_LSB_TIER_BRIDGE
+            rec["lsb"] = psd_lsb[i]
+            rec["calibrated"] = psd_cal[i]
+            rec["n_psd_used"] = int(psd_cnt_l[i])
+            rec["reason"] = ("live PSD->LSB median over %d event(s) %s"
+                             % (psd_cnt_l[i], psd_reason_tail))
 
     n_pro_td = int(td_tier_pro.sum())
-    n_pro_psd = int(sum(1 for r in recs if r["tier"] == PRO_LSB_TIER_BRIDGE))
+    n_pro_psd = int(psd_take.sum())
     stats = {"n_pro": int(nP), "n_pro_td": n_pro_td, "n_pro_psd": n_pro_psd,
              "n_pro_unmatched": int(nP - n_pro_td - n_pro_psd),
              "n_td_windows": n_td_windows, "n_psd_windows": n_psd_windows,
@@ -1544,78 +2154,25 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
              "tol_s": tol_s, "td_quantity_s": td_quantity_s, "td_n_epochs_cap": int(td_n_epochs_cap),
              # legacy aliases kept so existing UI/echo readers don't KeyError:
              "extent_s": td_quantity_s, "psd_tol_s": tol_s,
-             "allow_window_reuse": bool(allow_window_reuse)}
+             "allow_window_reuse": bool(allow_window_reuse),
+             "match_direction": "prior" if _prior_mode else "prospective"}
     return recs, stats
 
 
-def per_pro_lsb_overlay(samples_uv, fs, center_offset_s, center_hz, *, band_half_hz=2.5,
-                        extent_s=None, missing=None, max_missing_frac=0.10,
-                        saturation_uv=PRO_LSB_SATURATION_UV):
-    """The 50%-overlap sliding-window LSB trace WITHIN one PRO's rating-centered TD extent (CS-4).
-
-    Where per_pro_lsb returns the single median LSB the device would act on, this returns the full
-    per-window series so the timeline can OVERLAY how the band power moved across the ~30 s around the
-    rating (and show the spread the median collapses). Same window geometry as the deployed sweep:
-    1 s rcs-Hann window, 50 % overlap (step = TRANSFORM_STEP_SECONDS), median is `np.nanmedian` of the
-    returned `lsb`. Per-window QC: a window touching the ADC rail is flagged saturated; the >max_missing
-    rejection is applied to the whole extent up front (same as per_pro_lsb's tier 2).
-
-    Returns dict:
-        {"t_offset_s": [win-start offsets within the extent],
-         "lsb": [per-window LSB], "median_lsb": float|None, "used_s": float,
-         "n_windows": int, "n_saturated": int, "saturated": bool, "ok": bool, "reason": str}
-    `ok=False` (with reason) when the extent is below one window or >max_missing Missing.
-
-    NOTE on `t_offset_s`: these are FINITE-SAMPLE-ELAPSED offsets (s/fs over the non-finite-filtered
-    vector), NOT wall-clock offsets from the extent start. t_offset_s, lsb, and the saturation flags
-    share this one window axis (the alignment guarantee), so the trace is internally consistent. But on
-    a gappy recording (NaN samples dropped before windowing) the axis COMPRESSES relative to wall clock:
-    a 2 s gap near the start shifts every later window's wall-clock time ahead of its t_offset_s. A
-    frontend overlaying this trace against a wall-clock PRO marker must map `starts` back through the
-    finite mask to true sample indices first; for showing the within-window spread the median collapses,
-    elapsed-finite time is fine as-is.
-    """
-    if extent_s is None:
-        extent_s = analytics.TRANSFORM_CENTERED_EXTENT_SECONDS
-    fs = float(fs)
-    half = float(band_half_hz)
-    slice_uv, used_s = analytics.transform_centered_window(
-        samples_uv, fs, center_offset_s, extent_s=extent_s, missing=missing,
-        max_missing_frac=max_missing_frac)
-    if slice_uv is None:
-        return {"t_offset_s": [], "lsb": [], "median_lsb": None, "used_s": 0.0,
-                "n_windows": 0, "n_saturated": 0, "saturated": False, "ok": False,
-                "reason": "extent below one window or >max_missing Missing"}
-    win = int(round(fs * analytics.TRANSFORM_WIN_SECONDS))
-    step = int(round(fs * analytics.TRANSFORM_STEP_SECONDS))
-    # td_transform_band_power(agg='none') drops non-finite samples FIRST and strides over the
-    # COMPACTED array, so the window axis (and hence the trace x and the saturation flags) MUST be
-    # derived from that same finite-filtered vector — otherwise a gappy recording decouples t_offset_s,
-    # lsb, and sat. Finite-filter once here and build everything (band power, starts, saturation) from it.
-    sl = np.asarray(slice_uv, dtype=float)
-    vf = sl[np.isfinite(sl)]
-    if vf.size < win:
-        return {"t_offset_s": [], "lsb": [], "median_lsb": None, "used_s": float(used_s),
-                "n_windows": 0, "n_saturated": 0, "saturated": False, "ok": False,
-                "reason": "fewer than one finite window after dropping non-finite samples"}
-    pw = analytics.td_transform_band_power(vf, fs, float(center_hz), half_hz=half,
-                                           step_samples=step, agg="none")
-    pw = np.asarray(pw, dtype=float).ravel()
-    lsb = np.where(np.isfinite(pw) & (pw > 0), analytics.LSB_PER_UV2_TRANSFORM * pw, np.nan)
-    starts = np.arange(0, vf.size - win + 1, step)        # SAME axis the band power strided over
-    # per-window saturation, vectorized: one strided window matrix -> per-window max|.| -> rail test.
-    # No Python loop; shares the window axis with pw/lsb so the QC flags align to the trace.
-    M = vf[starts[:, None] + np.arange(win)[None, :]]      # (W, win)
-    sat = (np.nanmax(np.abs(M), axis=1) >= saturation_uv) if starts.size else np.zeros(0, dtype=bool)
-    med = float(np.nanmedian(lsb)) if np.isfinite(lsb).any() else None
-    return {"t_offset_s": [float(s / fs) for s in starts],
-            "lsb": [float(x) for x in lsb],
-            "median_lsb": med, "used_s": float(used_s),
-            "n_windows": int(starts.size), "n_saturated": int(sat.sum()),
-            "saturated": bool(sat.any()), "ok": True,
-            "reason": ("ok" if not sat.any() else "%d/%d windows saturated"
-                       % (int(sat.sum()), int(starts.size)))}
-
+# THE PER-RATING SLIDING-WINDOW TRACE WAS HERE, AND IS DELETED (PI, 2026-09-10).
+#
+# It returned all ~60 of the 1 s half-overlapping windows inside one pain rating's 30 s of voltage
+# trace, plus a per-window saturation flag, so a page could have drawn how the band power moved
+# across that half minute instead of the single median `per_pro_lsb` returns. It was built, tested
+# and correct, and NO PAGE EVER DREW IT -- its only callers were its own tests.
+#
+# His decision, in his words: "for the data availability timeline, we don't need those 60 slices.
+# You can discard them after they're calculated. The median is just for visualization to get an
+# idea." That is exactly what the wired path already does, so the trace had no destination.
+#
+# Nothing else used it: the only production call of `td_transform_band_power(agg="none")` -- the
+# per-window mode -- was inside this function, and that mode itself stays, since it is a general
+# capability of the transform rather than part of this display.
 
 def lsb_overview(lsb, *, session_gap_s=1800.0, chronic_max_points=1500):
     """Compact the per-sample LSB series into RENDER-CHEAP geometry for the calendar-scale timeline.

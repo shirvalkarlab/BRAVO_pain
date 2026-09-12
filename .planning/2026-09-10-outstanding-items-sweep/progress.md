@@ -1,0 +1,77 @@
+# Progress — outstanding items sweep
+
+## 2026-09-10
+- Plan opened after decision 112. Item 1 started: read DeploySignoffCard.js, deployPrint.css,
+  index.js section ids, and how each panel draws (Plotly.react on a useRef div, purge on unmount).
+- Item 1 built. PI supplied the section list (four sections, no per-week refit); the entries were
+  strings where the code reads objects, so they were put in `{id,title}` form with plain captions.
+  `cl-evidence` is hand-drawn SVG, so the helper serialises `svg[role="img"]` alongside Plotly.
+  Field renamed `png_data_url` -> `image_data_url` since SVG ones are not PNG. Build clean, neither
+  touched file in the warnings; five owned strings in `703.9c3946c8.chunk.js`. Not yet watched.
+- Item 1 watched live on RCS08 with the PI signed in. Two defects found on the way and fixed/handled:
+  the grid and report shared one cache slot (fixed, `CL.grid`); two stale gunicorn workers
+  (SIGHUP, four fresh workers). Print: 11 pictures, print called once after they were in the
+  document; Export JSON: 567 KB, 11 pictures, missing empty; fold closed: 6 pictures and two named
+  as NOT ON THIS RECORD. Display-size fix so a 2x PNG shows at the figure's own size. Reliable-change
+  panel seen rendered for the first time, numbers equal decision 111's.
+- PI's brief for the next session (CL page redesign) recorded as Phase 7 and findings §3.
+- Item 2 done. Found first that the "spectral point" is on no page (per_pro_lsb_spectrum has no
+  production caller since 2026-06-28); measured 240/240 equal on RCS08; wrote
+  `test_timeline_circle_equals_spectrum_point.py` (3 tests, live one ~16 s, skips without RCS08).
+  Container 636/0 (+3). Host suite untouched (Biomarkers is not in it).
+- Item 2 follow-up: PI had `per_pro_lsb_spectrum` (+ scan, + indexed twin, + my test, + 7 DecodeCommon
+  tests) deleted — decision 115. Trap met and caught: `CENTERS` lived in the removed test block and
+  the tile-cache test still needs it. Container 626/0; host 1018/42/1 known. House rule added: never
+  write "spectrum" bare. Item 3 folded into Phase 7. Suite logs now saved to /tmp/claude-502/.
+- Item 4 done, decision 116. The always-failing host test was also wiping the production
+  closed_loop cache on every suite run (fixture teardown + override=None). Measured: old test 2->0
+  files, new 2->2, full host suite 1019/42/0 with the directory intact. Host run logged to
+  /tmp/claude-502/host_item4.log.
+- Item 5 / B4 done, decision 117: streaming_psd's builder now calls DecodeCommon.matching; 9 combos
+  x 7,600,506 fields 0 diff, page 1,018,093 fields 0 diff. Container 626/0, host 1019/42/0 (logs in
+  /tmp/claude-502/{container,host}_b4.log). Dead one_per_rating branch noted (findings §5).
+- Item 5 closed, decision 118: B1 found already migrated (38371d6b); B2/B3 are window selectors,
+  not matchers -- left on their own code with the reason recorded. Sharing measured: align_pros at
+  60 min has 39 reports claimed by >1 session (max 24); per_pro_lsb <=2 pairs per contact. Cap
+  question put to the PI. Probe: _agent_bridge/_probe_tl/probe_sharing.py.
+- Phase 8 done, decision 119: the 599/315 was Left Leg VAS's own count, unlabelled; both captions
+  now name the score and show "764 reports in the record". Watched on the live page (NRS -> Left
+  Leg VAS). Browser had cached index.html; forced reload to the new main chunk.
+- Phase 9 done, decision 120: second slider removed; circles follow the main tolerance. 345 -> 790
+  circles measured before; live page returns 790 after. Container 626/0. Workers HUP'd.
+- Phase 10 done, decision 121: snapshot-served reports honour the length axis (ceil(N/30) snapshots
+  or nothing); dashes and long hover removed. RCS08: 11,694 of 36,406 fields moved, 0 on the two
+  control contacts; ZERO_THREE_RIGHT 5-min row 451 -> 140 reports. Container 626/0. Watched live.
+
+## HANDOFF — where things stand at the end of 2026-09-10 (landed; read this first next session)
+**Branch `PS_closedloop_deployment`, pushed; the tree is clean.** Final gates, run after the last
+code change: container 626 passed / 0 failed; host 1019 passed / 42 skipped / 0 failed; frontend
+built and its chunks committed. Decisions 113-121 in `DECISIONS_and_open_items.md` carry every
+change of this session with its measurement.
+
+**Done today, in the PI's order:** pictures in the sign-off card (113); timeline-circle test then
+the many-centre reader deleted (114, 115); the always-failing host test, which was wiping the
+production closed-loop cache on every run (116); the shared matching step -- one call site moved,
+one found already moved, two judged not matchers (117, 118); the histogram caption naming its
+score (119); one match window for the Biomarkers page (120); heat maps -- no dashes, snapshot
+route honours the length axis (121). Also: worktrees cleaned, .mcp.json ignored (item 29), the
+"never say spectrum bare" house rule.
+
+**Open on the PI, nothing blocked on them:**
+- decision 118: should the time-domain lane on the timeline obey the direction and
+  max-per-rating sliders like the pooled scan does (it reads only the tolerance today)?
+- open item 29: the repository's default branch is `v3.1.0`, months behind; agent worktrees start
+  there. Merge, or move the default.
+- decision 121's caption percent is against the largest per-cell count, not the matcher's total
+  (reads 86% where the matcher says 79%) -- pre-existing formula, flagged.
+- findings §5: `build_pooled_detail_from_matrix(aggregate="one_per_rating")` is dead and would
+  crash if revived.
+
+**NEXT SESSION IS PHASE 7**, the Closed-Loop page redesign: the PI's brief, in his words, is
+findings.md §3 and task_plan.md Phase 7. Load the scientific-visualization and UI/UX skills first.
+The closed-loop simulation design (old item 9) belongs in that session too.
+
+**Operational notes that cost time today:** after any backend commit the gunicorn workers keep old
+code until `docker exec bravo_pain-bravo-server-1 kill -HUP 1`; the in-app browser caches
+index.html, so verify the loaded `main.<hash>.js` before trusting what the page shows; save every
+suite run to a log file and read the summary from it rather than re-running.

@@ -10,26 +10,48 @@ import { useEffect, useMemo, useState, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { Card, Grid, Select, MenuItem, FormControl,
-  Slider, LinearProgress, CircularProgress,
+  Slider, LinearProgress,
   ToggleButton, ToggleButtonGroup } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
-import MDButton from "components/MDButton";
 
 import BiomarkerTimeline from "./BiomarkerTimeline";
 import BiomarkerDataTimeline from "./BiomarkerDataTimeline";
 import BiomarkerAnalytics from "./BiomarkerAnalytics";
 import BinarizationPreview from "./BinarizationPreview";
+// BandTimeSweepPanel (the older, non-interactive tables-and-server-figures rendering of this
+// same grid) is superseded on this page by BiomarkerHeatmapGrids below -- kept as a file rather
+// than deleted (CLAUDE.md §2 principle 4 warns against deleting something that still works), but
+// no longer imported here now that the interactive version carries its job plus the drill-down.
+import BiomarkerHeatmapGrids from "./BiomarkerHeatmapGrids";
 import { computeMatchedScanModel } from "./binarizationModel";
-import {
-  saveControls, loadControls, putHeavy, getHeavy, underMemoryPressure, memoryInfo,
-} from "./biomarkerStateStore";
+import { saveControls, loadControls } from "./biomarkerStateStore";
+
+// TWO PANELS RELOCATED FROM THE CLOSED-LOOP DEPLOYMENT PAGE (CLD_REDESIGN_PLAN.md item 11).
+// Both answer questions about the PSD-to-device-LSB calibration, and both are read by the analyst
+// preparing for a visit rather than by the clinician during one, which is why they were taken off
+// the clinician route. They are IMPORTED from their original location rather than copied, so there
+// remains one implementation of each and a fix applied there is a fix here. Editing those files is
+// out of scope for this page; only their placement and their framing change.
+import ConversionModelPanel from "views/Reports/ClosedLoopSim/ConversionModelPanel";
+import PsdLsbPanel from "views/Reports/ClosedLoopSim/PsdLsbPanel";
+// The committed band candidate is the only source on this page of the channel and centre frequency
+// PsdLsbPanel needs. It is written to localStorage by the commit button inside BiomarkerAnalytics.
+import { loadBandCandidate } from "views/Reports/ClosedLoopSim/bandCandidateStore";
+// Semantic colour roles, defined once in the deployment module and imported so the two pages agree.
+import PAL from "views/Reports/ClosedLoopSim/palette";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
 
 import { SessionController } from "database/session-control";
+import { MODULES, memoryInfo, underMemoryPressure } from "database/resultCache";
+import { useCachedResult } from "database/useCachedResult";
 import { usePlatformContext, setContextState } from "context.js";
+
+import RecomputeBar from "views/Reports/RecomputeBar";
+import CacheStatusLine from "views/Reports/CacheStatusLine";
+import { markClosedLoopFamilyStale, recomputeSlots, biomarkerHeatmapSlot } from "views/Reports/moduleCacheKeys";
 
 // Pain metric the LFP biomarker is computed against (sent as LabelMetric). Used until the server
 // echoes its own `available_metrics` list. The composite blends MPQ sum + left-leg VAS.
@@ -85,11 +107,10 @@ function Biomarkers() {
   const persisted = useMemo(() => loadControls(participant_uid), [participant_uid]);
   const P = persisted || {};
 
-  // The heavy result is restored from the module-level LRU cache (survives route unmount/mount).
-  // If a fresh cached bundle exists for this participant, seed `data` with it on the very first
-  // render so the page paints the full analysis immediately instead of the loading view.
-  const cachedHeavy = useMemo(() => getHeavy(participant_uid), [participant_uid]);
-  const [data, setData] = useState((cachedHeavy && cachedHeavy.bundle) || false);
+  // The heavy result now comes from the shared result cache (database/resultCache), read through
+  // the hook below. There is no `data` state on this component any more: holding one would mean the
+  // page could disagree with the store about what has been computed, which is the ambiguity that
+  // removing this file's own heavy layer was meant to end.
   // Source tabs (time-domain / power-domain / both) removed — the analysis is always unified
   // (time-domain streaming PSD + power-domain band power together). One code path, no tab.
   const source = "both";
@@ -107,6 +128,8 @@ function Biomarkers() {
   // lifts PRO coverage to 290/682 (42.5%) of the matched discovery pool (measured on RCS08, vas,
   // pro_first, ±60 min — matching the offline validation pool; see FIXHANDOUT_pro_timezone_mismatch).
   const [matchTolerance, setMatchTolerance] = useState(P.matchTolerance != null ? P.matchTolerance : 60);
+  // Debounced copy, declared here because the availability fetch above the scan model reads it.
+  const matchToleranceD = useDebounced(matchTolerance);
   // Per-rating CAP for the exploratory scan (replaces the old all-vs-one-per-rating toggle, which
   // it subsumes): how many PSDs a single pain rating may absorb PER CHANNEL, and the refractory gap
   // (minutes) enforced among the kept set so a streaming burst around one survey can't double-count.
@@ -129,10 +152,19 @@ function Biomarkers() {
   //   • the MAIN match-tolerance slider (matchTolerance, minutes) = eligibility radius for BOTH TD & PSD;
   //   • matchExtentSec = how many SECONDS of the nearest time-domain signal to aggregate (nearest
   //     round(matchExtentSec/3) of the 3 s tiles -> their median). PSD has no quantity cap.
-  // useLiveMatching is pinned true (kept only as the request flag the backend still echoes).
-  const [useLiveMatching] = useState(true);
+  // `useLiveMatching` (previously pinned true with no UI control) is gone: it was a request field
+  // the backend read once and only ever echoed back, never branched on — removed rather than wired
+  // up, since there was no live behavior to give a knob to.
   const [matchExtentSec, setMatchExtentSec] = useState(P.matchExtentSec != null ? P.matchExtentSec : 30);
   const [allowWindowReuse, setAllowWindowReuse] = useState(P.allowWindowReuse != null ? P.allowWindowReuse : false);
+  // The timeline's per-pain-rating sensed-band-power circles (av.pro_lsb, BiomarkerDataTimeline.js)
+  // are chosen by `availability.per_pro_lsb`'s own match window in SECONDS — separate from, and much
+  // narrower than, the main match-tolerance slider (which is minutes, and governs the exploratory
+  // scan/compute below, not the timeline). This was a hardcoded 120 s with no request path at all
+  // until the backend wiring above; default kept at the historical 120 s so nothing already drawn
+  // moves until this slider is touched.
+  // Declared here (rather than beside the other debounced copies below) because the always-on
+  // data-availability fetch effect, which needs it, runs earlier in this component than that block.
   // Timeline color mode: "multimodal" colors the neural lanes by sensing center frequency (the data
   // view); "binarization" recolors every modality LIVE by its high/low/excluded pain label at the
   // current match window (matched-and-included = vermillion/blue, everything else dimmed light grey),
@@ -147,7 +179,8 @@ function Biomarkers() {
   // the fetch effect short-circuits (cache hit); otherwise this drives the auto-recompute.
   const [requestParams, setRequestParams] = useState(
     (persisted && persisted.requestParams) || null);
-  const [computing, setComputing] = useState(false);
+  // There is no `computing` state either: whether a request is in flight is the shared cache hook's
+  // answer to give, and a local copy could only ever disagree with it.
   const [alert, setAlert] = useState(null);
 
   // Raw pain-score distribution for the LIVE binarization preview card. Fetched once per
@@ -165,6 +198,18 @@ function Biomarkers() {
   const [availData, setAvailData] = useState(null);
   const [availLoading, setAvailLoading] = useState(false);
 
+  // The band candidate committed for THIS participant, if any. It is the envelope the commit button
+  // in BiomarkerAnalytics writes to localStorage, and it carries the contact, centre frequency and
+  // bandwidth that the relocated PsdLsbPanel needs in order to fit a conversion for the band on
+  // screen. It is read here rather than inside the panel because localStorage is not observable
+  // from React: the value is re-read on a participant change and again whenever a commit happens
+  // (see onBandCommitted below), so committing a band updates the panel without a page reload.
+  const [committedBand, setCommittedBand] = useState(null);
+  useEffect(() => {
+    const env = loadBandCandidate(participant_uid);
+    setCommittedBand((env && env.band_candidate) || null);
+  }, [participant_uid]);
+
   const snapshot = () => ({
     source, LabelMetric: metric, LabelStrategy: strategy,
     PercentileLow: percentileLow, PercentileHigh: percentileHigh,
@@ -172,12 +217,38 @@ function Biomarkers() {
     MaxPerRating: maxPerRating,
     RefractoryMin: refractoryMin,
     MatchDirection: matchDirection,
-    UseLiveMatching: useLiveMatching,
     MatchExtentSec: matchExtentSec,
     AllowWindowReuse: allowWindowReuse,
     SlidingWindow: slidingWindow,
   });
-  const compute = () => setRequestParams(snapshot());
+  /**
+   * ASKING FOR A REBUILD, WHICH TAKES MORE THAN SETTING THE REQUEST.
+   *
+   * The shared cache fetches on its own only when it is holding nothing at all. A changed settings
+   * key does NOT start a request: it marks the stored result stale and leaves it on screen, which is
+   * the whole point of the change. So this button cannot work by publishing a new snapshot and
+   * waiting — the new key would miss the stored entry, the previous result would be handed back
+   * marked stale, and no request would ever go out.
+   *
+   * A press therefore does two things: it publishes the snapshot, and it raises a counter. The
+   * effect below sees the counter move and asks for the rebuild. By the time it runs, the render
+   * carrying the new snapshot has committed, so the request that goes out is the one the reader
+   * asked for rather than the one that happened to be on screen when they pressed.
+   */
+  const [computeRequests, setComputeRequests] = useState(0);
+  const servicedComputeRequests = useRef(0);
+  const compute = () => {
+    setRequestParams(snapshot());
+    setComputeRequests((n) => n + 1);
+    // The calibrated heat-map grid (BiomarkerHeatmapGrids) is a SEPARATE cache family from the
+    // older scan above -- one slot per pain-score metric, so that a metric already viewed stays
+    // cached instead of evicting the last one (see moduleCacheKeys.js). This was the page's SECOND
+    // Recompute-shaped control (the other was a page-specific button, now removed) -- both used to
+    // call this same function but neither actually touched the calibrated grid's own fetch, which
+    // ran independently. Now the one remaining control covers both.
+    recomputeSlots(participant_uid,
+      DEFAULT_METRIC_OPTIONS.map((m) => biomarkerHeatmapSlot(m.key)));
+  };
   // "Dirty" = the live options differ from what's currently displayed (or nothing computed yet),
   // so the shown results are stale and a (re)compute is needed.
   const dirty = !requestParams || JSON.stringify(requestParams) !== JSON.stringify(snapshot());
@@ -202,41 +273,68 @@ function Biomarkers() {
     setContextState(dispatch, "report", "CustomizedAnalysis");
   }, [participant_uid]);
 
-  // Fetch ONLY when a compute was requested (requestParams set by the Compute button). Progress is
-  // shown INLINE (a labeled bar in the card) instead of the generic "loading data" overlay.
-  useEffect(() => {
-    if (!participant_uid || !requestParams) return undefined;
-    const requestKey = JSON.stringify(requestParams);
-
-    // CACHE HIT: the in-memory LRU holds the heavy result for THIS exact requestParams (e.g. we just
-    // came back from the deployment view). Restore it with zero recompute — instant, identical view.
-    const cached = getHeavy(participant_uid);
-    if (cached && cached.request_key === requestKey) {
-      setData((prev) => (prev === cached.bundle ? prev : cached.bundle));
-      setComputing(false);
-      return undefined;
-    }
-
-    // CACHE MISS: compute (or recompute after a controls change / hard reload). The backend caches
-    // the PSD inputs, so even the ~19 MB analysis returns quickly on a return visit.
-    let cancelled = false;
-    setComputing(true);
-    SessionController.query("/api/queryBiomarkerAnalysis", {
+  // THE HEAVY ANALYSIS, THROUGH THE SHARED CACHE.
+  //
+  // `enabled` is what preserves the rule this page has always followed: nothing is computed until
+  // the reader asks for it. Until a compute has been requested — this session, or in a previous one
+  // whose request was restored from localStorage above — the hook is switched off and issues no
+  // request at all. Once a request exists, the hook's ordinary behaviour is exactly what is wanted:
+  // serve the stored bundle if there is one, fetch once if there is not, and never refetch behind
+  // the reader's back.
+  const cached = useCachedResult({
+    moduleKey: MODULES.biomarkers,
+    uid: participant_uid,
+    // The request the Compute button published IS the settings key. It is built by `snapshot()`
+    // from every control that changes the analysis, which is the same object that has always been
+    // sent to the server, so the key cannot describe a different request from the one that ran.
+    settings: requestParams,
+    enabled: !!participant_uid && !!requestParams,
+    fetcher: () => SessionController.query("/api/queryBiomarkerAnalysis", {
       ParticipantId: participant_uid, ...requestParams,
-    }).then((response) => {
-      if (cancelled) return;
-      setData(response.data);
-      setComputing(false);
-      // Stash in the heap cache (memory-guarded — declines under pressure) so the next return is
-      // instant. Persist the controls+requestParams so a hard reload restores the view too.
-      putHeavy(participant_uid, response.data, requestKey);
-    }).catch((error) => {
-      if (cancelled) return;
-      setComputing(false);
-      SessionController.displayError(error, setAlert);
-    });
-    return () => { cancelled = true; };
-  }, [participant_uid, requestParams]);
+    }).then((response) => response.data),
+  });
+  // `false` rather than null, because every test on this page reads `data` as a flag for "an
+  // analysis has been computed" and the surrounding code was written against that value.
+  const data = cached.data || false;
+  const computing = cached.loading;
+
+  // Errors used to be raised from the fetch's own catch. The hook catches them instead and reports
+  // the message, so the dialog is raised from here. Note what is lost in the handover: the hook
+  // stringifies the error, so the response status is gone by the time it arrives and the dialog
+  // shows the transport's own message rather than this application's wording for a 403 or a 500.
+  // The report accompanying this change asks for the error object to be carried alongside the
+  // message for that reason.
+  useEffect(() => {
+    if (cached.err) SessionController.displayError(cached.err, setAlert);
+  }, [cached.err]);
+
+  // The rebuild the Compute button asked for. See `compute` above for why it is a counter rather
+  // than a direct call.
+  useEffect(() => {
+    if (computeRequests === servicedComputeRequests.current) return;
+    servicedComputeRequests.current = computeRequests;
+    recomputeSlots(participant_uid, [MODULES.biomarkers]);
+  }, [computeRequests, participant_uid]);
+
+  /**
+   * WHAT MAKES THIS PAGE'S RESULT STALE, WHICH IS MORE THAN THE CACHE CAN SEE BY ITSELF.
+   *
+   * The cache compares a stored result against the request that produced it. On this page that
+   * request changes only when Compute is pressed, because the controls are deliberately not wired
+   * to the endpoint — so a reader who drags a percentile slider has changed nothing the cache can
+   * compare, and the cache would go on reporting the displayed analysis as current. The page has
+   * always tracked that drift itself, as `dirty`. Both sources are pooled for the Recompute
+   * control, and the drift case is worded as a full sentence in the same register as the store's own
+   * reasons so that a reader is not left to work out which of two vocabularies they are reading.
+   */
+  const controlsDrifted = !!(requestParams && dirty);
+  const pageStaleReasons = Array.from(new Set([
+    ...(cached.staleReasons || []),
+    ...(controlsDrifted
+      ? ["the controls on this page have been changed since this analysis was computed, so what is "
+         + "shown still describes the previous metric, binarization or matching window"]
+      : []),
+  ]));
 
   // Persist the lightweight control panel + the last-computed requestParams to localStorage whenever
   // they change, so navigating to the deployment view and back (or a hard reload) restores the exact
@@ -246,9 +344,11 @@ function Biomarkers() {
     saveControls(participant_uid, {
       metric, strategy, percentileLow, percentileHigh, matchTolerance,
       maxPerRating, refractoryMin, matchDirection, timelineColorMode, requestParams,
+      matchExtentSec, allowWindowReuse,
     });
   }, [participant_uid, metric, strategy, percentileLow, percentileHigh, matchTolerance,
-    maxPerRating, refractoryMin, matchDirection, timelineColorMode, requestParams]);
+    maxPerRating, refractoryMin, matchDirection, timelineColorMode, requestParams,
+    matchExtentSec, allowWindowReuse]);
 
   // Fetch raw pain-score reports ONCE per participant (no LFP, just the PRO surveys) so the
   // binarization preview card can show a live histogram with cuts before any heavy compute.
@@ -263,18 +363,26 @@ function Biomarkers() {
       .catch(() => { setPainLoading(false); /* preview is optional — degrade silently */ });
   }, [participant_uid]);
 
-  // Fetch the data-availability payload ONCE per participant (lightweight, no biomarker compute),
-  // so the timeline renders immediately on page load.
+  // Fetch the data-availability payload per participant (lightweight, no biomarker compute), so the
+  // timeline renders immediately on page load. Also refetches when the main match-tolerance slider
+  // settles: the timeline's per-rating circles (av.pro_lsb) are paired with recordings under THAT
+  // window -- the one slider on the page, on the histogram card. Until 2026-09-10 the circles had a
+  // second slider of their own ("Timeline's own match window", seconds, default 120 s), so the
+  // circles and everything else paired under two different windows; the PI removed it (decision
+  // 120). The tolerance is the only matching control this lightweight endpoint reads, because it
+  // is the one that changes what the timeline itself draws; the rest take effect on Compute.
   useEffect(() => {
     if (!participant_uid) return;
     setAvailLoading(true);
-    SessionController.query("/api/queryDataAvailability", { ParticipantId: participant_uid })
+    SessionController.query("/api/queryDataAvailability", {
+      ParticipantId: participant_uid, MatchToleranceMin: matchToleranceD,
+    })
       .then((response) => {
         setAvailData(response.data);
         setAvailLoading(false);
       })
       .catch(() => { setAvailLoading(false); /* timeline is optional — degrade silently */ });
-  }, [participant_uid]);
+  }, [participant_uid, matchToleranceD]);
 
   // The object handed to the timeline: prefer the live availability payload; fall back to the
   // availability embedded in a heavy compute result if the live fetch is unavailable.
@@ -367,11 +475,14 @@ function Biomarkers() {
   // states stay live everywhere else (slider thumbs, value labels, the binarization preview's
   // cut-lines and counts); only the expensive scanModel + timeline overlay wait for the drag to
   // settle, so all of these sliders now feel as snappy as the survey-match one.
-  const matchToleranceD = useDebounced(matchTolerance);
   const percentileLowD = useDebounced(percentileLow);
   const percentileHighD = useDebounced(percentileHigh);
   const maxPerRatingD = useDebounced(maxPerRating);
   const refractoryMinD = useDebounced(refractoryMin);
+  // Added with the native-LSB-tolerance knob: matchExtentSec fed heatmapRequestParams RAW below,
+  // unlike every sibling slider here, so every intermediate value during a drag fired its own
+  // request to the calibrated grid instead of waiting for the drag to settle like the rest.
+  const matchExtentSecD = useDebounced(matchExtentSec);
   const scanModel = useMemo(() => {
     if (!scanIndex || !painSeriesLive) return null;
     return computeMatchedScanModel({
@@ -382,6 +493,30 @@ function Biomarkers() {
     });
   }, [scanIndex, painSeriesLive, matchToleranceD, strategy, percentileLowD, percentileHighD,
       maxPerRatingD, refractoryMinD, matchDirection, allowWindowReuse]);
+
+  // TRACK A, TASK A1: THE CALIBRATED GRID'S OWN REQUEST, BUILT FROM THE LIVE CONTROLS.
+  //
+  // `requestParams` above is a SNAPSHOT that only exists once the older routine's "Start
+  // exploratory analysis" button has been pressed -- that is exactly the gating the PRD asked to
+  // remove. The calibrated heat-map section (BiomarkerHeatmapGrids) is instead handed this object,
+  // built straight from the controls as they currently stand, so it has something to compute from
+  // on the very first render and fires without any button press. It uses the same DEBOUNCED slider
+  // copies the live scan model already uses (matchToleranceD, percentileLowD/HighD,
+  // maxPerRatingD, refractoryMinD) so that dragging a slider fires one request when the drag
+  // settles rather than one per pixel -- the same discipline, applied to a real backend call
+  // instead of a client-side recompute.
+  const heatmapRequestParams = useMemo(() => ({
+    source, LabelMetric: metric, LabelStrategy: strategy,
+    PercentileLow: percentileLowD, PercentileHigh: percentileHighD,
+    MatchToleranceMin: matchToleranceD,
+    MaxPerRating: maxPerRatingD,
+    RefractoryMin: refractoryMinD,
+    MatchDirection: matchDirection,
+    MatchExtentSec: matchExtentSecD,
+    AllowWindowReuse: allowWindowReuse,
+    SlidingWindow: slidingWindow,
+  }), [source, metric, strategy, percentileLowD, percentileHighD, matchToleranceD, maxPerRatingD,
+      refractoryMinD, matchDirection, matchExtentSecD, allowWindowReuse]);
 
   // Render an honest, multi-line summary for a branch: the headline estimate plus the rigor
   // statistics (FDR q, permutation p, autocorrelation-adjusted effective n, Fisher-z CI for the
@@ -396,6 +531,22 @@ function Biomarkers() {
       <DatabaseLayout>
         <MDBox pt={3}>
           <Grid container spacing={2}>
+            {/* The Recompute control, at the top of the page, above everything it describes.
+                Pressing it runs the analysis against the controls as they stand right now, which is
+                the same act as the red button further down — one code path, so the two cannot
+                disagree about what a recompute means. */}
+            <Grid item xs={12}>
+              <RecomputeBar
+                title="pain biomarker exploration"
+                stale={!!(cached.stale || controlsDrifted)}
+                staleReasons={pageStaleReasons}
+                computedAt={cached.computedAt}
+                loading={computing}
+                notKept={cached.notKept}
+                onRecompute={compute}
+              />
+              <CacheStatusLine status={data ? data.cache_status : null} />
+            </Grid>
             <Grid item xs={12}>
               <Card sx={{ width: "100%" }}>
                 <Grid container>
@@ -436,41 +587,6 @@ function Biomarkers() {
                       </MDBox>
                     </Grid>
                   ))}
-
-                  {/* Pain-metric picker DIRECTLY BELOW the timeline — drives the pain row live. */}
-                  {timelineData && timelineData.availability && timelineData.availability.records
-                        && timelineData.availability.records.length > 0 ? (
-                    <Grid item xs={12}>
-                      <MDBox px={2} pb={1.5} display="flex" flexDirection="row" alignItems="center"
-                             gap={2} flexWrap="wrap" justifyContent="center">
-                        <MDTypography variant="button" fontWeight="bold"
-                                      sx={{ fontSize: 18, color: "#1a1a1a !important" }}>
-                          {"Pain metric (drives live timeline + exploratory analysis):"}
-                        </MDTypography>
-                        <FormControl size="small" sx={{ minWidth: 420 }}>
-                          <Select value={metric} onChange={(e) => setMetric(e.target.value)}
-                                  sx={{
-                                    // Enlarge ONLY the closed / displayed selected value. A plain
-                                    // fontSize on <Select> lands on .MuiInputBase-root and does NOT
-                                    // resize the rendered value — that text is the inner
-                                    // .MuiSelect-select slot, so target it directly. !important beats
-                                    // MUI's own .MuiInputBase-input rule (equal specificity otherwise).
-                                    "& .MuiSelect-select": {
-                                      fontSize: "18px !important",  // matches the open-menu items
-                                      fontWeight: 700,
-                                      lineHeight: 1.2,
-                                      color: "#1a1a1a !important",  // ink (red is reserved for errors/warnings)
-                                    },
-                                  }}>
-                            {((timelineData && timelineData.available_metrics)
-                               || (data && data.available_metrics) || DEFAULT_METRIC_OPTIONS).map((m) => (
-                              <MenuItem key={m.key} value={m.key} sx={{ fontSize: 18 }}>{m.label}</MenuItem>
-                            ))}
-                          </Select>
-                        </FormControl>
-                      </MDBox>
-                    </Grid>
-                  ) : null}
 
                   {computing ? (
                     <Grid item xs={12}>
@@ -542,6 +658,22 @@ function Biomarkers() {
                                     : strategy === "median"
                                       ? "Every sample is labeled at the median split (~50/50)."
                                       : "Legacy 2-cluster KMeans labeler."}
+                              </MDTypography>
+
+                              {/* PAIN-REPORT MATCHING — every remaining knob that decides which
+                                  recording counts as evidence for which pain rating, grouped under
+                                  one heading because they all govern the same question and none of
+                                  them recolors anything live on screen the way the main match-
+                                  tolerance slider does (that one stays in the histogram panel to the
+                                  right, directly above the histogram it recolors — see its own note
+                                  below). Every knob here is sent on every Compute press
+                                  (matchDirection, maxPerRating, refractoryMin, matchExtentSec,
+                                  allowWindowReuse). The timeline's circles follow the main
+                                  match-tolerance slider as well, live, since 2026-09-10 (decision
+                                  120); they used to have a second slider of their own here. */}
+                              <MDTypography variant="button" fontWeight="bold" color="dark"
+                                sx={{ fontSize: 15, display: "block", mt: 2 }}>
+                                {"Pain-report matching — which recording counts as evidence for a rating"}
                               </MDTypography>
 
                               {/* Match direction: pro_first (PRO-anchored, default) vs nearest (PSD-first
@@ -661,6 +793,7 @@ function Biomarkers() {
                                   </MDTypography>
                                 )}
                               </MDBox>
+
                             </MDBox>
                           </Grid>
 
@@ -674,6 +807,7 @@ function Biomarkers() {
                                 percentileHigh={percentileHigh}
                                 metricLabel={previewMetricLabel}
                                 metricKey={metric}
+                                totalReports={painScores && Number.isFinite(painScores.n_reports) ? painScores.n_reports : null}
                                 loading={painLoading}
                                 matchTolerance={matchTolerance}
                                 setMatchTolerance={setMatchTolerance}
@@ -692,30 +826,64 @@ function Biomarkers() {
                     </MDBox>
                   </Grid>
 
-                  {/* ── Exploratory analysis trigger, DIRECTLY BENEATH the Pain Biomarkers box ──
+                  {/* ── THE ONE CONSOLIDATED PAIN-SCORE DROPDOWN (open item 7, part 1) ───────────
+                      This used to be two dropdowns: this one directly below the timeline, and a
+                      second, independent one inside BiomarkerHeatmapGrids's own header (with only a
+                      one-way sync from this one, so the two could disagree). The second is now gone
+                      — BiomarkerHeatmapGrids reads `metric` straight from this component's own prop
+                      (`pageMetric`) — so this is the ONLY place a reader picks the pain score, and
+                      it drives all three consumers at once: the timeline's pain row, the
+                      binarization preview/matched-scan model, and the calibrated grid. Moved here,
+                      below the binarization box, and given a red outline for visibility, per the
+                      requested redesign; the label text, the options list and the Select component
+                      itself are unchanged. */}
+                  <Grid item xs={12}>
+                    <MDBox px={2} pb={1.5}>
+                      <MDBox display="flex" flexDirection="row" alignItems="center" gap={2}
+                        flexWrap="wrap" justifyContent="center"
+                        sx={{
+                          border: "2.5px solid #D32F2F", borderRadius: 2, px: 2, py: 1.5,
+                          background: "#D32F2F08",
+                        }}>
+                        <MDTypography variant="button" fontWeight="bold"
+                                      sx={{ fontSize: 18, color: "#1a1a1a !important" }}>
+                          {"Pain metric (drives live timeline + exploratory analysis):"}
+                        </MDTypography>
+                        <FormControl size="small" sx={{ minWidth: 420 }}>
+                          <Select value={metric} onChange={(e) => setMetric(e.target.value)}
+                                  sx={{
+                                    // Enlarge ONLY the closed / displayed selected value. A plain
+                                    // fontSize on <Select> lands on .MuiInputBase-root and does NOT
+                                    // resize the rendered value — that text is the inner
+                                    // .MuiSelect-select slot, so target it directly. !important beats
+                                    // MUI's own .MuiInputBase-input rule (equal specificity otherwise).
+                                    "& .MuiSelect-select": {
+                                      fontSize: "18px !important",  // matches the open-menu items
+                                      fontWeight: 700,
+                                      lineHeight: 1.2,
+                                      color: "#1a1a1a !important",  // ink (red is reserved for errors/warnings)
+                                    },
+                                  }}>
+                            {((timelineData && timelineData.available_metrics)
+                               || (data && data.available_metrics) || DEFAULT_METRIC_OPTIONS).map((m) => (
+                              <MenuItem key={m.key} value={m.key} sx={{ fontSize: 18 }}>{m.label}</MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                      </MDBox>
+                    </MDBox>
+                  </Grid>
+
+                  {/* ── Full-spectrum exploration status, DIRECTLY BENEATH the Pain Biomarkers box ──
                       The timeline + preview above are live (no compute). The full-spectrum
                       exploration (5 Hz sliding-band r + AUC over the matched PSDs) is EXPENSIVE
-                      and runs ONLY on click, using the metric / binarization / match-window chosen
-                      in the box above. */}
+                      and used to run behind its own page-specific button here; that button was
+                      removed (it called the exact same `compute()` the RecomputeBar above already
+                      does, and the two disagreeing about what "recompute" meant was its own source
+                      of confusion) -- the sample-count and memory-retention notes below are about
+                      the RESULT once it exists, not about the button, so they stay. */}
                   <Grid item xs={12}>
                     <MDBox px={2} pt={0.5} pb={1.5} display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
-                      <MDButton
-                        variant="contained" color="error" size="large"
-                        onClick={compute} disabled={computing}
-                        sx={{ fontWeight: "bold", fontSize: 16, px: 3, py: 1.25,
-                              backgroundColor: "#d32f2f", color: "#ffffff",
-                              "&:hover": { backgroundColor: "#b71c1c" },
-                              "&.Mui-disabled": { backgroundColor: "#e57373", color: "#ffffff" } }}
-                      >
-                        {computing ? (
-                          <><CircularProgress size={18} sx={{ color: "#fff", mr: 1 }} />{"Computing…"}</>
-                        ) : (data ? "↻ Recompute full-spectrum exploration" : "▶ Start exploratory analysis")}
-                      </MDButton>
-                      {!computing && dirty && data ? (
-                        <MDTypography variant="button" color="error" fontWeight="medium">
-                          {"Settings changed — click to recompute."}
-                        </MDTypography>
-                      ) : null}
                       {data && data.timeline_points_full ? (
                         <MDTypography variant="caption" color="dark">
                           {`(computed on ${Number(data.timeline_points_full).toLocaleString()} full-resolution samples)`}
@@ -724,17 +892,40 @@ function Biomarkers() {
                       {/* Persistence status: tells the user this view will survive a trip to the
                           deployment view. Green when the heavy result is cached in memory (instant
                           restore); amber when memory is tight so it'll recompute on return instead. */}
-                      {data && !computing ? (
-                        underMemoryPressure() ? (
-                          <MDTypography variant="caption" sx={{ color: "#8A6100", fontStyle: "italic" }}>
-                            {`⚠ memory tight${memoryInfo() ? ` (${memoryInfo().usedMB.toFixed(0)}/${memoryInfo().limitMB.toFixed(0)} MB)` : ""} — view will recompute on return`}
+                      {/* RETENTION STATUS, WHICH HAS THREE ANSWERS AND USED TO SHOW TWO.
+                          `underMemoryPressure()` returns false both when the heap is comfortably
+                          below the eviction ratio and when the browser does not expose heap
+                          figures at all — `performance.memory` exists on Chromium and not on
+                          Firefox or Safari. The green tick therefore appeared on those browsers as
+                          a confirmed promise that the cached result would survive a trip to the
+                          deployment page, when in truth the guard had simply declined to measure.
+                          The measurement is now read first and its absence is its own state,
+                          worded as a caching decision rather than a guarantee. */}
+                      {data && !computing ? (() => {
+                        const mi = memoryInfo();
+                        if (mi === null) {
+                          return (
+                            <MDTypography variant="caption" sx={{ color: PAL.neutral, fontStyle: "italic" }}>
+                              {"View cached in memory. This browser does not report heap usage, so "
+                               + "whether it survives a return trip cannot be confirmed here."}
+                            </MDTypography>
+                          );
+                        }
+                        if (underMemoryPressure()) {
+                          return (
+                            <MDTypography variant="caption" sx={{ color: PAL.warnText, fontStyle: "italic" }}>
+                              {`Memory tight (${mi.usedMB.toFixed(0)} of ${mi.limitMB.toFixed(0)} MB used)`
+                               + " — this view will be recomputed rather than restored on return."}
+                            </MDTypography>
+                          );
+                        }
+                        return (
+                          <MDTypography variant="caption" sx={{ color: PAL.neutral, fontStyle: "italic" }}>
+                            {`View retained in memory (${mi.usedMB.toFixed(0)} of ${mi.limitMB.toFixed(0)} MB used)`
+                             + " — it returns without recomputing from the deployment page."}
                           </MDTypography>
-                        ) : (
-                          <MDTypography variant="caption" sx={{ color: "#0a7f3f", fontStyle: "italic" }}>
-                            {"✓ view retained — returns instantly from the deployment page"}
-                          </MDTypography>
-                        )
-                      ) : null}
+                        );
+                      })() : null}
                     </MDBox>
                   </Grid>
 
@@ -743,7 +934,7 @@ function Biomarkers() {
                       <MDBox p={2}>
                         <MDTypography variant="button" color="dark">
                           {"Pick a pain metric and binarization above — the timeline and binarization preview are already live. Click "}
-                          <strong>▶ Start exploratory analysis</strong>{" to run the full-spectrum scan."}
+                          <strong>Recompute</strong>{" above to run the full-spectrum scan."}
                         </MDTypography>
                       </MDBox>
                     </Grid>
@@ -848,11 +1039,6 @@ function Biomarkers() {
                             </MDBox>
                           );
                         })()}
-                        {data.powerdomain_pooled_warning ? (
-                          <MDTypography variant="button" fontWeight="medium" color="warning" display="block">
-                            {`⚠ ${data.powerdomain_pooled_warning}`}
-                          </MDTypography>
-                        ) : null}
                         {data.recorded_powers && data.recorded_powers.length ? (() => {
                           const left  = data.recorded_powers.filter((p) => /\bL\b|Left/i.test(p.label));
                           const right = data.recorded_powers.filter((p) => /\bR\b|Right/i.test(p.label));
@@ -917,6 +1103,41 @@ function Biomarkers() {
               </Card>
             </Grid>
 
+            {/* ── THE CALIBRATED HEAT MAPS, NOW THE HEADLINE (PRD decision 62, Track A of the
+                heat-map redesign) ─────────────────────────────────────────────────────────────
+                Runs on page load rather than waiting for the older full-spectrum scan below to
+                have been pressed first: `heatmapRequestParams` is built straight from the live
+                controls above (debounced the same way the live scan model already is), not from
+                the older routine's click-triggered `requestParams` snapshot. This is why it sits
+                directly under the binarization controls and above the older routine's own
+                trigger and results -- the fixed order the PRD asks for. */}
+            <Grid item xs={12}>
+              <BiomarkerHeatmapGrids participantUid={participant_uid}
+                requestParams={heatmapRequestParams}
+                availableMetrics={DEFAULT_METRIC_OPTIONS}
+                pageMetric={metric}
+                metricLabel={(DEFAULT_METRIC_OPTIONS.find((m) => m.key === metric) || {}).label}
+                onOpenInClosedLoop={() => {
+                  // Take the reader to the grid on the page that can act on it. Nothing is
+                  // exported and nothing is marked out of date here: browsing changes no stored
+                  // value, and Closed-Loop Deployment reads the calibrated grid straight out of
+                  // the shared store on its own (decision 67). Marking the deployment results
+                  // stale is reserved for actually COMMITTING a band, which the older routine's
+                  // own `onBandCommitted` below still does.
+                  //
+                  // The `#cl-grid` fragment names the anchor that page already puts on the grid
+                  // panel's own Grid item, so the reader lands on the grid rather than at the top
+                  // of a long page.
+                  navigate(`/reports/closed-loop/${participant_uid}#cl-grid`);
+                }} />
+            </Grid>
+
+            {/* ── THE OLDER, UNCALIBRATED FULL-SPECTRUM SCAN AND ITS SCATTER/VIOLIN DRILL-DOWN ──
+                Moved BELOW the calibrated grids and their own drill-down. Decision 61 settled that
+                these two calculations must stay separate rather than folded together (different
+                scale, different frequency coverage, different correction method), so this section
+                keeps its own uncalibrated scatter-and-violin drill-down rather than sharing the
+                calibrated grid's per-cell one above. */}
             {data && data.analytics ? (
               <BiomarkerAnalytics analytics={data.analytics} summary={data.summary}
                 recordedPowers={data.recorded_powers}
@@ -925,10 +1146,98 @@ function Biomarkers() {
                 binPercentileLow={percentileLow} binPercentileHigh={percentileHigh}
                 participantUid={participant_uid}
                 requestParams={requestParams}
-                matchDirty={dirty}
+                onBandCommitted={(bc) => {
+                  setCommittedBand(bc || null);
+                  // A committed band is WHAT THE DEPLOYMENT VIEW IS ABOUT, so committing a
+                  // different one puts every deployment answer behind — not wrong about the band it
+                  // was computed for, but no longer about the band that has been chosen. The
+                  // deployment results are marked rather than discarded, so a reader can still see
+                  // what the previous candidate looked like while that page's Recompute control
+                  // tells them it is out of date.
+                  markClosedLoopFamilyStale(participant_uid,
+                    "a new band candidate was committed on the Biomarker Exploration page since "
+                    + "this result was computed");
+                }}
                 metricLabel={(((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
                   .find((m) => m.key === data.label_metric) || {}).label || data.label_metric} />
             ) : null}
+
+            {/* ── DEVICE-SCALE CALIBRATION ──────────────────────────────────────────────────────
+                Two panels relocated here from the Closed-Loop Deployment page. They belong on this
+                page because each answers a question the analyst asks while choosing a band, not a
+                question the clinician asks while programming: the deployment page now carries only
+                what has to be read at a visit.
+
+                The two are complementary and are deliberately framed against each other. The
+                left-hand panel fits a conversion from the participant's OWN paired recordings for
+                the band that has been committed, so it is an observed measurement and is drawn in
+                a solid frame. The right-hand panel serves the frozen per-participant model that
+                the threshold estimator falls back on when the device never sensed a band at all,
+                so every number in it is a MODELLED extrapolation and it is drawn in a dashed
+                frame. The dashed-versus-solid distinction is the deployment page's convention for
+                modelled against observed, applied here for the same reason: a reader should not
+                have to remember which of two adjacent conversion figures was measured. */}
+            <Grid item xs={12}>
+              <MDBox px={2} pt={2}>
+                <MDTypography variant="h5" fontWeight="bold" sx={{ fontSize: 24, lineHeight: 1.3 }}>
+                  {"Device-scale calibration"}
+                </MDTypography>
+                <MDTypography variant="body2" color="dark" sx={{ fontSize: 13.5 }}>
+                  {"The exploration above works in physical units; the device works in its own "
+                   + "least-significant-bit units. These two panels are how a band power measured "
+                   + "offline is turned into a number that can be entered on the Percept RC, and "
+                   + "they are placed here because that translation has to be settled before a "
+                   + "programming visit rather than during one. A solid frame marks a quantity "
+                   + "measured from this participant's own paired recordings; a dashed frame marks "
+                   + "a quantity produced by a model standing in for recordings that do not exist."}
+                </MDTypography>
+              </MDBox>
+            </Grid>
+            <Grid item xs={12} lg={6}>
+              <MDBox px={2} pb={1}>
+                <MDTypography variant="button" fontWeight="bold" color="dark"
+                  sx={{ fontSize: 14, display: "block", mb: 0.5 }}>
+                  {"Does the committed band convert to device units, and is the conversion linear?"}
+                </MDTypography>
+                {/* Solid frame: an OBSERVED quantity. The panel pairs offline PSD epochs with the
+                    device's own LSB recordings for this band and fits the proportional law, and it
+                    reports its own falsification check on that law's slope. */}
+                <MDBox sx={{ border: `2px solid ${PAL.accentBorder}`, borderRadius: 2, p: 0.75 }}>
+                  <PsdLsbPanel participantUid={participant_uid} bandCandidate={committedBand}
+                    requestParams={requestParams} />
+                </MDBox>
+                <MDTypography variant="caption" color="dark"
+                  sx={{ fontSize: 11.5, display: "block", mt: 0.5, fontStyle: "italic" }}>
+                  {committedBand
+                    ? "Solid frame: fitted from this participant's own time-matched recordings of "
+                      + "the committed band."
+                    : "Solid frame: this panel fits from observed recordings, so it has nothing to "
+                      + "fit until a band is committed. Click a band in the scan above, then use "
+                      + "\u201CCommit this band\u201D in its validation readout."}
+                </MDTypography>
+              </MDBox>
+            </Grid>
+            <Grid item xs={12} lg={6}>
+              <MDBox px={2} pb={1}>
+                <MDTypography variant="button" fontWeight="bold" color="dark"
+                  sx={{ fontSize: 14, display: "block", mb: 0.5 }}>
+                  {"What conversion is assumed for a band the device never sensed?"}
+                </MDTypography>
+                {/* Dashed frame: a MODELLED quantity. Nothing in this panel was measured at the
+                    band a reader may be considering; the gain there is read off a fitted trend
+                    across frequency, which is exactly the kind of number that should not be
+                    mistaken for an observation. */}
+                <MDBox sx={{ border: `2px dashed ${PAL.neutralBorder}`, borderRadius: 2, p: 0.75 }}>
+                  <ConversionModelPanel participantUid={participant_uid} />
+                </MDBox>
+                <MDTypography variant="caption" color="dark"
+                  sx={{ fontSize: 11.5, display: "block", mt: 0.5, fontStyle: "italic" }}>
+                  {"Dashed frame: a frozen model, not a measurement. The gain at any particular "
+                   + "band is interpolated from the fitted trend across frequency, so it carries "
+                   + "the trend's assumptions as well as its uncertainty."}
+                </MDTypography>
+              </MDBox>
+            </Grid>
           </Grid>
         </MDBox>
       </DatabaseLayout>

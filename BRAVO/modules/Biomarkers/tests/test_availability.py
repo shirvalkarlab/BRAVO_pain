@@ -238,6 +238,130 @@ def test_lsb_series_psd_modeled_canon_name_and_device_peak():
     assert s["source"] == ["psd_modeled"] and s["center_hz"][0] == av.snap_freq(center)
 
 
+def _rich_lsb_series_fixture():
+    """A richer fixture than the four tests above, built to exercise every branch of the native
+    (Power-Domain + Chronic Timeline) tiers at once: two contacts, a sentinel and a negative
+    value, a missing-sample flag, a chronic frequency SCHEDULE change mid-run (not just a scalar
+    CenterFrequencyHz), and a montage-TD plus an event-PSD modeled point layered on top -- so the
+    scan-vs-indexed comparison below is not just proving the easy cases agree."""
+    sentinel = 2.0 ** 31 - 1
+    pd_recs = [
+        {"ChannelNames": ["ZERO_THREE_LEFT Power", "ZERO_THREE_LEFT Stimulation"],
+         "Data": np.array([[535.0, 0.0], [596.0, 0.0], [sentinel, 0.0], [-3.0, 0.0],
+                           [610.0, 1.5]]),
+         "Missing": np.array([[0, 0], [0, 0], [0, 0], [0, 0], [1, 0]]),
+         "SamplingRate": 2, "StartTime": T0,
+         "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 12.7}}}}},
+        {"ChannelNames": ["ZERO_THREE_RIGHT Power"], "Data": np.array([[720.0], [740.0]]),
+         "SamplingRate": 2, "StartTime": T0 + 100,
+         "Descriptor": {"Therapy": {"Right": {"SensingSetup": {"FrequencyInHertz": 13.7}}}}},
+    ]
+    chronic_recs = [
+        {"ChannelNames": ["LeftHemisphere LFP"],
+         "Time": np.array([T0 + 600, T0 + 1200, T0 + 1800]),
+         "Data": np.array([[810.0], [830.0], [850.0]]), "SamplingRate": -1,
+         # a schedule that changes mid-run: 12.7 Hz up to T0+1200, then 13.7 Hz after
+         "FreqScheduleHz": [[T0, 12.7], [T0 + 1200, 13.7]],
+         "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 12.7}}}}},
+    ]
+    rng = np.random.default_rng(2)
+    fs, center = 250.0, 20.0
+    n = 250 * 30
+    tsec = np.arange(n) / fs
+    sig = 8.0 * np.sin(2 * np.pi * center * tsec) + rng.normal(0, 2.0, n)
+    montage_td = [{"ChannelNames": ["ZERO_THREE_LEFT"], "Data": sig.reshape(-1, 1),
+                  "SamplingRate": fs, "StartTime": T0 + 5000, "PeakFrequencyInHertz": center}]
+    event_psd = [{"channel": "ZERO_THREE_RIGHT", "t": T0 + 6000,
+                 "freq": np.linspace(1, 100, 200),
+                 "power": np.ones(200) * 5.0, "center_hz": 13.7}]
+    return chronic_recs, pd_recs, montage_td, event_psd
+
+
+def test_lsb_series_indexed_path_matches_the_reference_scan():
+    """`lsb_series` (indexed, USE_CHANNEL_INDEX default True) must equal `_lsb_series_scan` (the
+    reference) field for field on a fixture exercising every branch of the native tiers at once --
+    the equality proof this project's own rule requires before a stored/served number's source
+    changes (CLAUDE.md Core Principle 2), done here at the unit level before the live proof on
+    RCS08. Every list-valued field is compared as a (t, y, center_hz, source) tuple set per
+    channel, not by list order, because the two paths pool the SAME samples but the indexed path's
+    internal dict-iteration order need not match the scan's."""
+    chronic, pd_recs, montage_td, event_psd = _rich_lsb_series_fixture()
+    sensing_hz = {"ZERO_THREE_RIGHT": 13.7}
+
+    indexed = av.lsb_series(chronic, pd_recs, montage_td_recordings=montage_td,
+                            sensing_hz_by_channel=sensing_hz, event_psd_recordings=event_psd)
+    scanned = av._lsb_series_scan(chronic, pd_recs, montage_td_recordings=montage_td,
+                                  sensing_hz_by_channel=sensing_hz, event_psd_recordings=event_psd)
+
+    assert set(indexed.keys()) == set(scanned.keys()), (
+        f"channel sets differ: indexed={set(indexed)} scanned={set(scanned)}")
+    total_samples = 0
+    for ch in scanned:
+        si, ss = indexed[ch], scanned[ch]
+        assert len(si["t"]) == len(ss["t"]), f"{ch}: sample count differs"
+        tup_i = sorted(zip(si["t"], si["y"], si["center_hz"], si["source"]))
+        tup_s = sorted(zip(ss["t"], ss["y"], ss["center_hz"], ss["source"]))
+        assert tup_i == tup_s, f"{ch}: samples differ\nindexed={tup_i}\nscanned={tup_s}"
+        total_samples += len(ss["t"])
+    assert total_samples > 0, "fixture produced no samples on either path -- test proves nothing"
+    print(f"OK the indexed lsb_series matches the reference scan on {total_samples} samples "
+          f"across {len(scanned)} channels, native and modeled tiers together")
+
+
+def test_lsb_series_indexed_path_matches_scan_on_the_four_existing_fixtures():
+    """The same equality check, run against each of the four simpler fixtures the existing tests
+    above already construct -- so the easy cases are pinned by this same discipline, not only the
+    rich one above."""
+    cases = [
+        ([], [{"ChannelNames": ["ZERO_THREE_LEFT Power", "ZERO_THREE_LEFT Stimulation"],
+              "Data": np.array([[535.0, 0.0], [596.0, 0.0], [2.0 ** 31 - 1, 0.0], [-3.0, 0.0],
+                                [610.0, 1.5]]),
+              "SamplingRate": 2, "StartTime": T0,
+              "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 12.7}}}}}],
+         {}, {}),
+        ([{"ChannelNames": ["LeftHemisphere LFP", "LeftHemisphere Amplitude"],
+          "Time": np.array([T0 + 600, T0 + 1200]),
+          "Data": np.column_stack([[810.0, 830.0], [1.5, 1.5]]), "SamplingRate": -1,
+          "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 12.7}}}}}],
+         [{"ChannelNames": ["ZERO_THREE_LEFT Power"], "Data": np.array([[500.0], [520.0]]),
+          "SamplingRate": 2, "StartTime": T0,
+          "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 12.7}}}}}],
+         {}, {}),
+    ]
+    for chronic, pd_recs, mt, ep in cases:
+        indexed = av.lsb_series(chronic, pd_recs)
+        scanned = av._lsb_series_scan(chronic, pd_recs)
+        assert set(indexed.keys()) == set(scanned.keys())
+        for ch in scanned:
+            tup_i = sorted(zip(indexed[ch]["t"], indexed[ch]["y"], indexed[ch]["center_hz"],
+                               indexed[ch]["source"]))
+            tup_s = sorted(zip(scanned[ch]["t"], scanned[ch]["y"], scanned[ch]["center_hz"],
+                               scanned[ch]["source"]))
+            assert tup_i == tup_s, f"{ch}: {tup_i} != {tup_s}"
+    print("OK the indexed path matches the scan on both of the simpler existing fixtures too")
+
+
+def test_lsb_series_scan_path_when_switch_is_off():
+    """`USE_CHANNEL_INDEX = False` with no `index=` must take the reference-scan branch, not the
+    indexed one -- the same fallback contract `per_pro_lsb` already has."""
+    chronic, pd_recs, montage_td, event_psd = _rich_lsb_series_fixture()
+    orig = av.USE_CHANNEL_INDEX
+    av.USE_CHANNEL_INDEX = False
+    try:
+        off = av.lsb_series(chronic, pd_recs, montage_td_recordings=montage_td,
+                            event_psd_recordings=event_psd,
+                            sensing_hz_by_channel={"ZERO_THREE_RIGHT": 13.7})
+    finally:
+        av.USE_CHANNEL_INDEX = orig
+    ref = av._lsb_series_scan(chronic, pd_recs, montage_td_recordings=montage_td,
+                              event_psd_recordings=event_psd,
+                              sensing_hz_by_channel={"ZERO_THREE_RIGHT": 13.7})
+    assert set(off.keys()) == set(ref.keys())
+    for ch in ref:
+        assert off[ch]["y"] == ref[ch]["y"], f"{ch}: switch-off path diverged from the scan"
+    print("OK USE_CHANNEL_INDEX=False takes the reference-scan branch, matching it exactly")
+
+
 def test_lsb_overview_modeled_tier_is_separate_hollow_layer():
     """Modeled points must NOT fold into native streaming session blocks or the chronic line — they
     ride a separate 'modeled' layer (hollow markers), and a modeled outlier must not rescale the
@@ -534,6 +658,50 @@ def test_modeled_lsb_at_center_pools_streaming_and_montage_td():
     assert both.size == 2 and only_montage.size == 1
     # The streamed record's point is genuinely in the union (not a duplicate of the montage one).
     assert set(np.round(both, 6)) >= set(np.round(only_montage, 6))
+
+
+def test_modeled_lsb_at_center_indexed_path_matches_the_reference_scan():
+    """`modeled_lsb_at_center`'s TD tier (indexed, via `channel_index`) must equal
+    `_modeled_lsb_at_center_scan`'s own column scan field for field -- the same equality
+    discipline as the `lsb_series` proof above, on a fixture with two TD records (one streaming-
+    shaped, one montage-shaped, at distinct times, matching the pooling test just above) plus a
+    malformed extra-column record the guard must still reject identically on both paths."""
+    fs, center = 250.0, 20.0
+    streaming = _td_rec("ZERO_THREE_RIGHT", center, fs=fs, secs=30, seed=33, start=T0)
+    montage = _td_rec("ZERO_THREE_RIGHT", center, fs=fs, secs=30, seed=44, start=T0 + 3600.0)
+    malformed = _td_rec("ZERO_THREE_RIGHT", center, fs=fs, secs=30, seed=55, start=T0 + 7200.0,
+                        names=["ZERO_THREE_RIGHT", "FOREIGN_CHANNEL"], ncols=2)
+    recs = [streaming, montage, malformed]
+
+    indexed = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", center, td_recordings=recs,
+                                       half_hz=2.5)
+    scanned = av._modeled_lsb_at_center_scan("ZERO_THREE_RIGHT", center, td_recordings=recs,
+                                             half_hz=2.5)
+    assert indexed.size == scanned.size and indexed.size > 0, (
+        f"sample counts differ or fixture produced none: indexed={indexed.size} "
+        f"scanned={scanned.size}")
+    assert np.allclose(sorted(indexed), sorted(scanned), atol=1e-9), (
+        f"indexed={sorted(indexed)}\nscanned={sorted(scanned)}")
+    print(f"OK the indexed modeled_lsb_at_center matches the reference scan on "
+          f"{indexed.size} samples")
+
+
+def test_modeled_lsb_at_center_scan_path_when_switch_is_off():
+    """`USE_CHANNEL_INDEX = False` with no `index=` must take the reference-scan branch, the same
+    fallback contract as `per_pro_lsb`/`lsb_series`."""
+    fs, center = 250.0, 20.0
+    rec = _td_rec("ZERO_THREE_RIGHT", center, fs=fs, secs=30, seed=66, start=T0)
+    orig = av.USE_CHANNEL_INDEX
+    av.USE_CHANNEL_INDEX = False
+    try:
+        off = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", center, td_recordings=[rec],
+                                       half_hz=2.5)
+    finally:
+        av.USE_CHANNEL_INDEX = orig
+    ref = av._modeled_lsb_at_center_scan("ZERO_THREE_RIGHT", center, td_recordings=[rec],
+                                         half_hz=2.5)
+    assert np.allclose(sorted(off), sorted(ref), atol=1e-9)
+    print("OK USE_CHANNEL_INDEX=False takes the reference-scan branch, matching it exactly")
 
 
 # ---------------------------------------------------------------------------

@@ -10,7 +10,7 @@
  *   3) Empirical µV²/LSB ratio — a confidence-rated FYI cross-check, explicitly NOT the deployable
  *      number.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import Plotly from "plotly.js-dist";
 
 import { Card } from "@mui/material";
@@ -18,6 +18,10 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import { SessionController } from "database/session-control";
+import { useCachedResult } from "database/useCachedResult";
+
+import { CL, recomputeSlots } from "views/Reports/moduleCacheKeys";
+import PanelStaleNote from "./PanelStaleNote";
 import PAL from "./palette";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
@@ -34,12 +38,25 @@ const TIER_LABEL = {
   channel_pooled: "from frozen PSD→LSB model (channel-pooled)",
 };
 
-function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint, onLsbThreshold }) {
+function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint, onLsbThreshold,
+                         deploymentReport }) {
+  // THE DEVICE VERDICT GATES THE HEADLINE NUMBER, added 2026-09-04, the third of three places that
+  // printed a value to program without consulting the device rules. This panel is the most
+  // defensible of the three, because its job is genuinely analytic — it shows where a percentile of
+  // the device's own Timeline band power falls — but it labels that number "THRESHOLD TO PROGRAM"
+  // at twenty-six-point type, which is an instruction rather than an analysis. So the label and the
+  // framing change when the device forbids the configuration, while the measurement itself stays
+  // on the page: an analyst still needs to see where the percentile sits, and hiding a measurement
+  // would remove information rather than remove a hazard.
+  //
+  // That is the distinction against the verdict strip and the sign-off card, where the number was
+  // SUPPRESSED. Those two exist to tell a clinician what to do next, so a number in them gets
+  // typed. This one exists to show where a distribution sits, so it is relabelled instead.
+  const _rep = deploymentReport && deploymentReport.data ? deploymentReport.data : deploymentReport;
+  const _vd = (_rep && _rep.verdict_detail) || {};
+  const deviceBlocks = !(_rep && _rep.available && _vd.device_eligible === true);
   const pwRef = useRef(null);
   const thrRef = useRef(null);
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState(null);
 
   const bc = bandCandidate || {};
   const channelRaw = bc.contact;
@@ -49,27 +66,34 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
   const matchDir = cutpoint ? cutpoint.matchDir : "prior";
   const cutDegenerate = !!(cutpoint && cutpoint.degenerate);
 
-  useEffect(() => {
-    if (!participantUid || channelRaw == null || centerHz == null || cutThr == null) {
-      setData(null);
-      return;
-    }
-    setLoading(true); setErr(null);
-    SessionController.query("/api/queryLsbPower", {
-      ParticipantId: participantUid,
-      Channel: channelRaw,
-      CenterHz: Number(centerHz),
-      BandWidthHz: Number(bandWidthHz),
-      MatchDirection: matchDir,
-      Cutpoint: Number(cutThr),
-      ...requestParams,
-    }).then((response) => {
-      const d = response && response.data;
-      if (d && d.available) setData(d);
-      else { setData(null); setErr((d && d.reason) || "unavailable"); }
-      setLoading(false);
-    }).catch(() => { setData(null); setErr("request failed"); setLoading(false); });
-  }, [participantUid, channelRaw, centerHz, bandWidthHz, matchDir, cutThr, requestParams]);
+  // The request, minus the participant, is the cache key. The operating point is IN it, because
+  // this panel exists to anchor that particular cut-point to device units — a different cut-point
+  // is a different question, not a different view of the same answer.
+  const settings = {
+    Channel: channelRaw,
+    CenterHz: centerHz == null ? null : Number(centerHz),
+    BandWidthHz: Number(bandWidthHz),
+    MatchDirection: matchDir,
+    Cutpoint: cutThr == null ? null : Number(cutThr),
+    ...requestParams,
+  };
+
+  const cached = useCachedResult({
+    moduleKey: CL.lsbPower,
+    uid: participantUid,
+    settings,
+    // Nothing is asked for until the ROC panel has settled on an operating point, because the
+    // request has no meaning without one.
+    enabled: !!participantUid && channelRaw != null && centerHz != null && cutThr != null,
+    fetcher: () => SessionController.query("/api/queryLsbPower",
+      { ParticipantId: participantUid, ...settings })
+      .then((response) => (response && response.data) || null),
+  });
+
+  const raw = cached.data;
+  const data = raw && raw.available ? raw : null;
+  const loading = cached.loading;
+  const err = cached.err || (raw && !raw.available ? (raw.reason || "unavailable") : null);
 
   const tl = data && data.threshold_lsb;
   const pw = data && data.power;
@@ -301,6 +325,9 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
         <MDTypography variant="h6" sx={{ fontSize: 14, mb: 1 }}>
           LSB threshold + power / sample-size
         </MDTypography>
+        <PanelStaleNote stale={cached.stale} staleReasons={cached.staleReasons}
+          loading={cached.loading} notKept={cached.notKept}
+          onRecompute={() => recomputeSlots(participantUid, [CL.lsbPower])} />
 
         {/* Audit [42]: operating-point chip echoing the ROC cut-point that THIS LSB threshold derives
             from — the decision rule + sensitivity/specificity that produced it, then the oriented
@@ -362,12 +389,25 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
             {tl && tl.available && !tl.estimated ? (
               <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: PAL.accentFill, borderRadius: "6px",
                 border: `1px solid ${PAL.accentBorder}` }}>
-                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.accent }}>
-                  THRESHOLD TO PROGRAM (device LSB)
+                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold",
+                  color: deviceBlocks ? PAL.warnText : PAL.accent }}>
+                  {deviceBlocks
+                    ? "WHERE THE PERCENTILE FALLS (device LSB) — NOT A VALUE TO PROGRAM"
+                    : "THRESHOLD TO PROGRAM (device LSB)"}
                 </MDTypography>
-                <MDTypography variant="h4" sx={{ fontSize: 26, color: PAL.accent, lineHeight: 1.1 }}>
-                  {`power ≥ ${fmt(tl.upper_lsb, 1)} LSB`}
+                <MDTypography variant="h4" sx={{ fontSize: 26,
+                  color: deviceBlocks ? PAL.neutral : PAL.accent, lineHeight: 1.1 }}>
+                  {`power ${deviceBlocks ? "=" : "≥"} ${fmt(tl.upper_lsb, 1)} LSB`}
                 </MDTypography>
+                {deviceBlocks ? (
+                  <MDTypography variant="caption" display="block"
+                    sx={{ fontSize: 9.5, color: PAL.warnText, mt: 0.3 }}>
+                    The device does not currently permit this configuration, so this is a
+                    measurement of where the percentile sits and not a setting to enter. The
+                    comparison operator is shown as an equals sign for the same reason: a
+                    greater-than-or-equal sign reads as a rule to apply.
+                  </MDTypography>
+                ) : null}
                 <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 10, mt: 0.3 }}>
                   {`p${fmt(tl.percentile, 0)} of the device's own Timeline band power · `
                     + `${tl.n_timeline_samples} in-band samples · device LSB p10/median/p90 `

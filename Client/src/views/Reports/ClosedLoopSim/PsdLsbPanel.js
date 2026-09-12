@@ -16,7 +16,7 @@
  * Imperative Plotly.react-once + restyle/relayout discipline — the figure is drawn once per dataset
  * and never rebuilt on interaction (module standard; see commit 255e0ef).
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import Plotly from "plotly.js-dist";
 
 import { Card } from "@mui/material";
@@ -24,6 +24,10 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import { SessionController } from "database/session-control";
+import { useCachedResult } from "database/useCachedResult";
+
+import { CL, recomputeSlots } from "views/Reports/moduleCacheKeys";
+import PanelStaleNote from "./PanelStaleNote";
 import PAL from "./palette";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
@@ -31,33 +35,37 @@ const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Nu
 function PsdLsbPanel({ participantUid, bandCandidate, requestParams }) {
   const figRef = useRef(null);
   const modeRef = useRef(null);
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState(null);
 
   const bc = bandCandidate || {};
   const channelRaw = bc.contact;
   const centerHz = bc.center_freq_hz;
   const bandWidthHz = bc.bandwidth_hz || 5.0;
 
-  useEffect(() => {
-    if (!participantUid || channelRaw == null) { setData(null); return; }
-    setLoading(true); setErr(null);
-    SessionController.query("/api/queryPsdLsbConversion", {
-      ParticipantId: participantUid,
-      Channel: channelRaw,
-      // Fix the band centre to the committed candidate so the conversion matches the band on screen.
-      CenterHz: centerHz == null ? undefined : Number(centerHz),
-      BandWidthHz: Number(bandWidthHz),
-      MatchWindowH: 1.0,
-      ...requestParams,
-    }).then((response) => {
-      const d = response && response.data;
-      if (d && d.available) setData(d);
-      else { setData(null); setErr((d && d.reason) || "unavailable"); }
-      setLoading(false);
-    }).catch(() => { setData(null); setErr("request failed"); setLoading(false); });
-  }, [participantUid, channelRaw, centerHz, bandWidthHz, requestParams]);
+  // The request, minus the participant, is the cache key. See useDeploymentReport for the reasoning
+  // behind that rule rather than a hand-kept dependency list.
+  const settings = {
+    Channel: channelRaw,
+    // Fix the band centre to the committed candidate so the conversion matches the band on screen.
+    CenterHz: centerHz == null ? undefined : Number(centerHz),
+    BandWidthHz: Number(bandWidthHz),
+    MatchWindowH: 1.0,
+    ...requestParams,
+  };
+
+  const cached = useCachedResult({
+    moduleKey: CL.psdLsb,
+    uid: participantUid,
+    settings,
+    enabled: !!participantUid && channelRaw != null,
+    fetcher: () => SessionController.query("/api/queryPsdLsbConversion",
+      { ParticipantId: participantUid, ...settings })
+      .then((response) => (response && response.data) || null),
+  });
+
+  const raw = cached.data;
+  const data = raw && raw.available ? raw : null;
+  const loading = cached.loading;
+  const err = cached.err || (raw && !raw.available ? (raw.reason || "unavailable") : null);
 
   // --- the log-log scatter + proportional fit + scatter band (drawn once per dataset) ---
   useEffect(() => {
@@ -198,6 +206,9 @@ function PsdLsbPanel({ participantUid, bandCandidate, requestParams }) {
         <MDTypography variant="caption" color="text" sx={{ fontSize: 10.5 }}>
           {`${bc.contact || "—"} · time-matched chronic streams (±1 h)`}
         </MDTypography>
+        <PanelStaleNote stale={cached.stale} staleReasons={cached.staleReasons}
+          loading={cached.loading} notKept={cached.notKept}
+          onRecompute={() => recomputeSlots(participantUid, [CL.psdLsb])} />
 
         {channelRaw == null ? (
           <MDTypography variant="caption" color="text" sx={{ display: "block", mt: 1, fontStyle: "italic", fontSize: 11 }}>

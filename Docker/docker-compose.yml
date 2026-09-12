@@ -18,6 +18,23 @@ services:
   redis:
     image: redis:5
     restart: always
+    # BOUND THE MEMORY AND GIVE REDIS A REAL EVICTION POLICY. Added 2026-09-06 at the PI's
+    # instruction. Same change as in the repository-root docker-compose.yml, applied here too
+    # because both files define a redis service and which one is deployed depends on how the
+    # stack was brought up. redis:5 starts with maxmemory=0 (unlimited) and
+    # maxmemory-policy=noeviction, so when the host fills it REFUSES NEW WRITES instead of
+    # dropping old entries, on a machine shared with MySQL and the four application workers.
+    #
+    # 512mb suits what this instance is for: build locks, cache freshness keys, and Django's
+    # small cache values. Large spectrum payloads stay as files -- measured faster from the
+    # filesystem than through Redis, since they are already in the operating system's page cache.
+    #
+    # allkeys-lru rather than volatile-lru, because volatile-lru only evicts keys with an expiry
+    # and one key written without one could refill the instance and restore the write-refusal wall.
+    #
+    # NOTE the RedisDatabase volume below: snapshotting is unaffected by this command override,
+    # since redis-server keeps its built-in save points when only these two flags are passed.
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
     volumes:
       - RedisDatabase:/data
     ports:

@@ -21,6 +21,21 @@ else
   echo "[bridge] agent_runner.py not found at $BRIDGE — skipping (app still starts)"
 fi
 
+# --- daily precompute of the Closed-Loop grid's stability column (DEV ONLY) ---
+# The PI asked for the stability answer to be computed BOTH in the background once a page's own grid
+# lands AND on a schedule off the request path. The page-triggered half lives in
+# `Biomarkers.bravo_service.launch_stability_grid_in_background`; this is the scheduled half. Started
+# the same best-effort way as the bridge above: if it fails, the app still starts.
+# A pass whose inputs have not moved does no fitting at all, which is what makes a daily pass over
+# every participant cheap. Turn it off with STABILITY_PRECOMPUTE=0 in the environment.
+if [ -f "$BRIDGE/stability_precompute_loop.sh" ]; then
+  nohup bash "$BRIDGE/stability_precompute_loop.sh" \
+      >> "$BRIDGE/logs/stability_precompute.boot.log" 2>&1 &
+  echo "[stability-precompute] daily loop launched (pid $!)"
+else
+  echo "[stability-precompute] stability_precompute_loop.sh not found at $BRIDGE — skipping"
+fi
+
 # --- normal bravo-server startup (mirrors docker-compose.yml base command) ---
 env >> /etc/environment
 service nginx start

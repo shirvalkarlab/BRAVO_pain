@@ -92,6 +92,65 @@ def test_compute_psd_pain_correlation_runs():
     assert out["pval"].shape == (C, F)
 
 
+def test_adapter_carries_missing_forward():
+    """The stream-data dict must carry a per-sample Missing flag, not silently drop it
+    (decision 57 / open item 9: this is the field compute_psd_pain_correlation needs and,
+    before this fix, never received)."""
+    rec = _make_recording(n_seconds=2)
+    n = rec["Data"].shape[0]
+    # Mark the first 30% of samples missing on channel 0 only -- the any-channel rule
+    # (decision 4's own convention, mirrored by DecodeCommon.missing_per_sample) must still
+    # flag those samples missing even though channel 1 is clean there.
+    rec["Missing"] = np.zeros_like(rec["Data"])
+    rec["Missing"][: int(0.3 * n), 0] = 1.0
+    epoch = adapter.bravo_timedomain_to_streamdata(rec)
+    assert epoch["missing"] is not None
+    assert epoch["missing"].shape == (n,)
+    assert epoch["missing"][: int(0.3 * n)].astype(bool).all()
+    assert not epoch["missing"][int(0.3 * n):].astype(bool).any()
+
+
+def test_adapter_missing_absent_gives_none():
+    """A recording with no Missing field at all (legacy shape) must not raise, and must give
+    the routine no mask -- i.e. the pre-fix, no-rejection behavior for such a caller."""
+    rec = _make_recording()
+    del rec["Missing"]
+    epoch = adapter.bravo_timedomain_to_streamdata(rec)
+    assert epoch["missing"] is None
+
+
+def test_compute_psd_pain_correlation_rejects_a_mostly_missing_epoch():
+    """The decision-57 fix itself: a window that's mostly zero-fill must come back NaN, not a
+    real-looking but artificially deflated power value. Before this fix, `adapter` never carried
+    the Missing field into the epoch dict and `compute_psd_pain_correlation` never read one, so
+    a heavily zero-filled recording was pooled as if it were a genuine, quiet measurement."""
+    recs = [_make_recording(seed=k) for k in range(5)]
+    n = recs[2]["Data"].shape[0]
+    # Zero-fill 60% of the third recording, on every channel -- well over the 10% cutoff
+    # (streaming_psd.WELCH_MAX_MISSING_FRAC) this project applies everywhere else (decision 4).
+    recs[2]["Data"][: int(0.6 * n), :] = 0.0
+    recs[2]["Missing"][: int(0.6 * n), :] = 1.0
+    streams = adapter.bravo_timedomain_recordings_to_streams(recs)
+    labels = np.array([2.0, 4.0, 6.0, 8.0, 9.0])
+    out = streaming_psd.compute_psd_pain_correlation(streams, labels, CHAN_ORDER, transform="log")
+    assert np.isnan(out["psd"][2]).all(), "a >10%-zero-filled epoch must be rejected, not pooled"
+    for k in (0, 1, 3, 4):
+        assert np.isfinite(out["psd"][k]).all()
+
+
+def test_missing_rejection_is_not_a_false_positive_from_zero_signal():
+    """Guard against the trivial explanation that zero-filling the data alone (independent of
+    whether `missing=` is threaded through) already yields a degenerate PSD for some unrelated
+    reason. Confirms the NaN in the test above comes specifically from the missing-fraction gate,
+    not incidentally from Welch on a partly-zero signal with no mask supplied."""
+    rec = _make_recording(seed=99)
+    n = rec["Data"].shape[0]
+    rec["Data"][: int(0.6 * n), :] = 0.0
+    group = rec["Data"].T
+    psd_without_mask = streaming_psd.welch_psd_for_instance(group, CHAN_ORDER, FS, CHAN_ORDER)
+    assert np.isfinite(psd_without_mask).all()
+
+
 def _make_pro_df():
     return pd.DataFrame({
         "date_time_s1_daily": ["2023-11-14 09:00", "2023-11-14 21:00", "2023-11-15 09:00"],
@@ -328,22 +387,27 @@ def test_td_sliding_corr_spectrum_matches_scipy():
 
 
 def test_pearson_corr_psd_label_rejects_mad_outliers():
-    """MAD>=3 outlier rejection: a single artifact session must be excluded from the PSD<->pain
+    """MAD outlier rejection: a single artifact session must be excluded from the PSD<->pain
     correlation so it cannot fabricate (or destroy) a correlation. The MAD-filtered R on data with
-    one planted spike must match the R on the clean data, and differ from the naive (unfiltered) R."""
+    one planted spike must match the R on the clean data, and differ from the naive (unfiltered) R.
+
+    Updated 2026-08-30 for the plate-wide consolidation: the threshold is now read from
+    stats_utils.MAD_N_DEFAULT instead of being hardcoded at 3, so this test follows the canonical
+    rule rather than pinning a value that has since changed. Note the API change it also covers:
+    `mad_k=None` now means USE THE CANONICAL THRESHOLD, and disabling is `mad_k=0`."""
     pearson_corr_psd_label = streaming_psd.pearson_corr_psd_label
     rng = np.random.default_rng(7)
     E = 60
     label = np.linspace(0, 10, E)
     feat_clean = (label + rng.normal(0, 1.0, E))           # genuinely correlated feature
     psd_clean = feat_clean.reshape(E, 1, 1)
-    r_clean, _ = pearson_corr_psd_label(psd_clean, label, mad_k=3.0)
+    r_clean, _ = pearson_corr_psd_label(psd_clean, label)      # canonical threshold
 
     # Plant one extreme artifact session (huge feature, mid-range label) that would distort a naive R.
     feat_spk = feat_clean.copy(); feat_spk[E // 2] += 500.0
     psd_spk = feat_spk.reshape(E, 1, 1)
-    r_filtered, _ = pearson_corr_psd_label(psd_spk, label, mad_k=3.0)     # MAD drops the spike
-    r_naive, _ = pearson_corr_psd_label(psd_spk, label, mad_k=None)       # naive keeps it
+    r_filtered, _ = pearson_corr_psd_label(psd_spk, label)                # MAD drops the spike
+    r_naive, _ = pearson_corr_psd_label(psd_spk, label, mad_k=0)          # 0 == disabled
 
     rc, rf, rn = float(r_clean[0, 0]), float(r_filtered[0, 0]), float(r_naive[0, 0])
     # Filtered R recovers the clean correlation; naive R is corrupted by the spike.
@@ -378,20 +442,21 @@ def test_concat_chronic_mad_is_per_recording_not_global():
     dB = np.column_stack([np.full(60, 100.0), np.full(60, 2.0)])   # tight high-scale source
     rec_a = {"Time": tA, "Data": dA, "ChannelNames": ["L LFP", "L Amplitude"]}
     rec_b = {"Time": tB, "Data": dB, "ChannelNames": ["L LFP", "L Amplitude"]}
-    lfp = adapter._concat_chronic([rec_a, rec_b], mad_k=3.0)["Data"][:, 0]
+    lfp = adapter._concat_chronic([rec_a, rec_b])["Data"][:, 0]   # canonical threshold
     assert (lfp == 10.0).sum() == 8 and (lfp == 100.0).sum() == 60   # both sources fully survive
     # Control: a GLOBAL MAD would flag every low-scale sample as an outlier.
     allv = np.concatenate([dA[:, 0], dB[:, 0]])
     med = np.median(allv); mad = np.median(np.abs(allv - med))
-    assert (np.abs(allv[:8] - med) <= 3.0 * mad).sum() == 0
+    from modules.Biomarkers.routines.stats_utils import MAD_N_DEFAULT as _K
+    assert (np.abs(allv[:8] - med) <= _K * mad).sum() == 0
     # A within-source spike IS dropped (give the source spread so MAD is defined).
     rng = np.random.default_rng(3)
     dS = np.column_stack([rng.normal(10, 1, 40), np.full(40, 2.0)]); dS[5, 0] = 9000.0
     rec_s = {"Time": _MIDNIGHT_UTC + np.arange(40) * 3600.0, "Data": dS,
              "ChannelNames": ["L LFP", "L Amplitude"]}
-    assert 9000.0 not in set(adapter._concat_chronic(rec_s, mad_k=3.0)["Data"][:, 0])
-    # mad_k=None disables rejection -> the spike survives.
-    assert 9000.0 in set(adapter._concat_chronic(rec_s, mad_k=None)["Data"][:, 0])
+    assert 9000.0 not in set(adapter._concat_chronic(rec_s)["Data"][:, 0])
+    # mad_k=0 disables rejection -> the spike survives. (None now means CANONICAL, not off.)
+    assert 9000.0 in set(adapter._concat_chronic(rec_s, mad_k=0)["Data"][:, 0])
 
 
 def test_sliding_window_test_fold_expansion_fires_and_categorizes_skips():
@@ -728,3 +793,384 @@ if __name__ == "__main__":
     test_sliding_window_test_fold_expansion_fires_and_categorizes_skips()
     test_decimate_for_plot_thins_only()
     print("All adapter tests passed.")
+
+
+def test_align_pros_records_the_matched_report_identity_not_just_its_value():
+    """`matched_pro_time` is the IDENTITY of the matched report, which is what callers need in order
+    to cluster correctly.
+
+    Regression for a defect fixed 2026-08-30: pipeline.run_timedomain_branch used to reconstruct the
+    grouping by searching pro_df for a report whose VALUE equalled the session's label and taking the
+    first hit. On an integer pain scale that collapses every session sharing a score into one
+    "rating". Measured on live RCS08 with Metric=nrs: 72 genuinely distinct matched reports were
+    represented as 7 groups, because there were only 7 distinct NRS values. Two sessions matched to
+    DIFFERENT reports that happen to share a score must land in different groups.
+    """
+    import datetime as _dt
+    base = _dt.datetime(2026, 3, 1, 12, 0, 0)
+    # three reports, two of which share the SAME pain value but are different reports
+    pro = pd.DataFrame({
+        "date_time_s1_daily": [base, base + _dt.timedelta(days=1), base + _dt.timedelta(days=2)],
+        "nrs": [7.0, 7.0, 4.0],
+    })
+    recs = [{"StartTime": base + _dt.timedelta(minutes=1)},
+            {"StartTime": base + _dt.timedelta(days=1, minutes=1)},
+            {"StartTime": base + _dt.timedelta(days=2, minutes=1)}]
+    sdf = adapter.align_pros(pro, target="session", recordings=recs, metrics=("nrs",),
+                             match_tolerance_min=60.0)
+    assert "matched_pro_time" in sdf.columns
+    assert sdf["matched"].all(), sdf[["matched", "match_dt_min"]]
+    ids = pd.to_datetime(sdf["matched_pro_time"])
+    # the two 7.0 sessions matched DIFFERENT reports -> distinct identities
+    assert ids.nunique() == 3, list(ids)
+    assert sdf["nrs_min"].tolist() == [7.0, 7.0, 4.0]
+    # the old value-matching would have produced only 2 groups (one per distinct value)
+    assert sdf["nrs_min"].nunique() == 2
+
+
+def test_align_pros_unmatched_session_has_no_identity():
+    """An unmatched session must carry NaT, so factorize maps it to -1 (no group) rather than
+    silently joining whichever group sorts first."""
+    import datetime as _dt
+    base = _dt.datetime(2026, 3, 1, 12, 0, 0)
+    pro = pd.DataFrame({"date_time_s1_daily": [base], "nrs": [5.0]})
+    recs = [{"StartTime": base + _dt.timedelta(minutes=1)},
+            {"StartTime": base + _dt.timedelta(days=30)}]          # far outside tolerance
+    sdf = adapter.align_pros(pro, target="session", recordings=recs, metrics=("nrs",),
+                             match_tolerance_min=60.0)
+    assert sdf["matched"].tolist() == [True, False]
+    ids = pd.to_datetime(sdf["matched_pro_time"])
+    assert pd.notna(ids.iloc[0]) and pd.isna(ids.iloc[1])
+    codes, _ = pd.factorize(ids, use_na_sentinel=True)
+    assert list(codes) == [0, -1], list(codes)
+
+
+def test_align_pros_same_day_branch_groups_by_date():
+    """On the legacy same-day path the 'rating' is the day's aggregate, so two sessions on one day
+    genuinely share a rating and must share a group."""
+    import datetime as _dt
+    d = _dt.datetime(2026, 3, 1, 8, 0, 0)
+    pro = pd.DataFrame({"date_time_s1_daily": [d, d + _dt.timedelta(hours=6)], "nrs": [6.0, 8.0]})
+    recs = [{"StartTime": d + _dt.timedelta(hours=1)},
+            {"StartTime": d + _dt.timedelta(hours=9)},
+            {"StartTime": d + _dt.timedelta(days=5)}]
+    sdf = adapter.align_pros(pro, target="session", recordings=recs, metrics=("nrs",))
+    ids = pd.to_datetime(sdf["matched_pro_time"])
+    codes, _ = pd.factorize(ids, use_na_sentinel=True)
+    assert list(codes[:2]) == [0, 0], list(codes)     # same day -> one shared rating
+    assert codes[2] == -1                              # no report that day -> ungrouped
+
+
+# --- the pipeline half of the rating_group fix (was untested; gap recorded 2026-08-31) ----------
+def test_rating_group_from_identity_gives_one_group_per_matched_report():
+    """Distinct matched report -> distinct group, even when the pain SCORES are identical.
+
+    This is the assertion the original fix was missing: its three tests all exercised align_pros,
+    leaving pipeline's factorize step backed only by a live measurement.
+    """
+    sdf = pd.DataFrame({"matched_pro_time": pd.to_datetime(
+        ["2026-03-01 12:00", "2026-03-02 12:00", "2026-03-02 12:00", "2026-03-03 12:00"])})
+    labels = np.array([7.0, 7.0, 7.0, 7.0])          # every score identical on purpose
+    g = pipeline.rating_group_from_identity(sdf, labels)
+    assert len(set(g.tolist())) == 3, g              # three distinct reports
+    assert g[1] == g[2] and g[0] != g[1] and g[3] not in (g[0], g[1])
+    # the old value-matching would have produced ONE group here, since all four scores are equal
+    assert len(set(g.tolist())) > 1
+
+
+def test_rating_group_from_identity_excludes_unmatched_and_unusable():
+    """NaT identity -> -1, and a non-finite label -> -1 even when a report was matched."""
+    sdf = pd.DataFrame({"matched_pro_time": pd.to_datetime(
+        ["2026-03-01 12:00", None, "2026-03-03 12:00", "2026-03-04 12:00"])})
+    labels = np.array([5.0, 5.0, np.nan, 6.0])
+    g = pipeline.rating_group_from_identity(sdf, labels)
+    assert g[1] == -1, "no matched report must not get a group"
+    assert g[2] == -1, "an unusable label must not occupy a group"
+    assert g[0] >= 0 and g[3] >= 0 and g[0] != g[3]
+
+
+def test_rating_group_from_identity_refuses_to_guess_on_a_shape_mismatch():
+    """If the session/epoch alignment does not hold, leave the grouping UNSET. Falling back to
+    value-matching would silently restore a grouping that clusters on the outcome."""
+    sdf = pd.DataFrame({"matched_pro_time": pd.to_datetime(["2026-03-01 12:00"])})
+    g = pipeline.rating_group_from_identity(sdf, np.array([5.0, 6.0, 7.0]))
+    assert list(g) == [-1, -1, -1], g
+    # and the same when the column is absent entirely
+    g2 = pipeline.rating_group_from_identity(pd.DataFrame({"other": [1, 2]}), np.array([5.0, 6.0]))
+    assert list(g2) == [-1, -1], g2
+
+
+def test_rating_group_end_to_end_from_align_pros():
+    """align_pros -> rating_group_from_identity: the two halves must compose, which is what the
+    live 7 -> 72 measurement was standing in for."""
+    import datetime as _dt
+    base = _dt.datetime(2026, 3, 1, 12, 0, 0)
+    pro = pd.DataFrame({
+        "date_time_s1_daily": [base, base + _dt.timedelta(days=1), base + _dt.timedelta(days=2)],
+        "nrs": [7.0, 7.0, 7.0],                       # all identical scores, three distinct reports
+    })
+    recs = [{"StartTime": base + _dt.timedelta(minutes=1)},
+            {"StartTime": base + _dt.timedelta(days=1, minutes=1)},
+            {"StartTime": base + _dt.timedelta(days=2, minutes=1)}]
+    sdf = adapter.align_pros(pro, target="session", recordings=recs, metrics=("nrs",),
+                             match_tolerance_min=60.0)
+    g = pipeline.rating_group_from_identity(sdf, sdf["nrs_min"].to_numpy(dtype=float))
+    assert len(set(g.tolist())) == 3, (list(g), sdf["nrs_min"].tolist())
+
+
+# --- cluster-robust p for the correlation spectrum (audit C2, 2026-08-31) -----------------------
+def test_cluster_robust_p_matches_statsmodels_cluster_covariance():
+    """The sandwich is implemented in closed form (this runs per channel x frequency, hundreds of
+    cells per request, so a statsmodels fit per cell is not affordable). That makes an equivalence
+    test mandatory rather than optional: assert it reproduces statsmodels' cov_type='cluster'
+    exactly, so the closed form can never silently drift from the reference implementation.
+    """
+    from modules.Biomarkers.routines import streaming_psd as sp
+    import statsmodels.api as smapi
+    from scipy.stats import t as _t
+
+    rng = np.random.default_rng(11)
+    G, per = 40, 4
+    g = np.repeat(np.arange(G), per)
+    u_g = rng.normal(0, 1.0, G)                       # cluster effect -> real within-cluster dependence
+    x = rng.normal(0, 1, G * per) + np.repeat(u_g, per)
+    y = 0.5 * x + np.repeat(u_g, per) + rng.normal(0, 1, G * per)
+
+    corr, pval, extra = sp.pearson_corr_psd_label(x.reshape(-1, 1, 1), y, mad_k=0,
+                                                  rating_group=g, return_extra=True)
+    xz = (x - x.mean()) / x.std()
+    yz = (y - y.mean()) / y.std()
+    m = smapi.OLS(yz, smapi.add_constant(xz)).fit(cov_type="cluster",
+                                                  cov_kwds={"groups": g}, use_t=True)
+    assert abs(float(corr[0, 0]) - float(m.params[1])) < 1e-9
+    assert abs(float(extra["se_cluster"][0, 0]) - float(m.bse[1])) < 1e-9, \
+        (float(extra["se_cluster"][0, 0]), float(m.bse[1]))
+    p_ref = float(2 * _t.sf(abs(float(m.params[1]) / float(m.bse[1])), df=G - 1))
+    assert abs(float(pval[0, 0]) - p_ref) < 1e-12
+    # and the whole point: clustering must WIDEN the interval relative to the naive fit
+    se_naive = float(smapi.OLS(yz, smapi.add_constant(xz)).fit().bse[1])
+    assert float(extra["se_cluster"][0, 0]) > se_naive
+
+
+def test_cluster_robust_p_is_not_more_significant_than_naive_under_dependence():
+    """With genuine within-cluster dependence the corrected p must be LARGER. If a refactor ever
+    inverts this, the panel would be reporting pseudoreplication as extra confidence."""
+    from modules.Biomarkers.routines import streaming_psd as sp
+    rng = np.random.default_rng(3)
+    g = np.repeat(np.arange(30), 5)
+    u = rng.normal(0, 1.2, 30)
+    x = rng.normal(0, 1, 150) + np.repeat(u, 5)
+    y = 0.4 * x + np.repeat(u, 5) + rng.normal(0, 1, 150)
+    _, pval, extra = sp.pearson_corr_psd_label(x.reshape(-1, 1, 1), y, mad_k=0,
+                                               rating_group=g, return_extra=True)
+    assert float(pval[0, 0]) >= float(extra["pval_naive"][0, 0])
+    assert int(extra["n_clusters"][0, 0]) == 30
+
+
+def test_omitting_rating_group_leaves_the_naive_behaviour_untouched():
+    """Back-compat: existing callers that pass no grouping must get exactly the old p-value."""
+    from modules.Biomarkers.routines import streaming_psd as sp
+    rng = np.random.default_rng(7)
+    x = rng.normal(0, 1, 60)
+    y = 0.5 * x + rng.normal(0, 1, 60)
+    _, p_no_g = sp.pearson_corr_psd_label(x.reshape(-1, 1, 1), y, mad_k=0)
+    _, p2, extra = sp.pearson_corr_psd_label(x.reshape(-1, 1, 1), y, mad_k=0, return_extra=True)
+    assert abs(float(p_no_g[0, 0]) - float(extra["pval_naive"][0, 0])) < 1e-15
+    assert abs(float(p_no_g[0, 0]) - float(p2[0, 0])) < 1e-15
+    assert "naive" in extra["method"]
+
+
+def test_too_few_clusters_reports_nothing_rather_than_a_number():
+    """Under 3 clusters a sandwich is meaningless; it must yield NaN, not a p-value someone reads."""
+    from modules.Biomarkers.routines import streaming_psd as sp
+    rng = np.random.default_rng(5)
+    g = np.repeat(np.arange(2), 20)                    # only 2 clusters
+    x = rng.normal(0, 1, 40)
+    y = 0.6 * x + rng.normal(0, 1, 40)
+    _, pval, extra = sp.pearson_corr_psd_label(x.reshape(-1, 1, 1), y, mad_k=0,
+                                               rating_group=g, return_extra=True)
+    assert not np.isfinite(float(pval[0, 0]))
+    assert int(extra["n_clusters"][0, 0]) == 2
+    assert np.isfinite(float(extra["pval_naive"][0, 0]))   # the naive contrast still computes
+
+
+def test_ungrouped_epochs_are_excluded_from_the_cluster_p():
+    """rating_group == -1 marks an epoch with no matched report; it must not form its own cluster."""
+    from modules.Biomarkers.routines import streaming_psd as sp
+    rng = np.random.default_rng(13)
+    g = np.concatenate([np.repeat(np.arange(10), 4), np.full(8, -1)])
+    x = rng.normal(0, 1, g.size)
+    y = 0.5 * x + rng.normal(0, 1, g.size)
+    _, _, extra = sp.pearson_corr_psd_label(x.reshape(-1, 1, 1), y, mad_k=0,
+                                            rating_group=g, return_extra=True)
+    assert int(extra["n_clusters"][0, 0]) == 10, extra["n_clusters"][0, 0]
+
+
+# --- F3: the permutation null's exchangeable unit is the RATING (2026-09-02) ---------------------
+def test_rating_level_null_broadcasts_one_value_per_rating():
+    """Every epoch sharing a rating must receive the SAME permuted value. If the permutation can
+    hand two epochs of one report different labels, the null has more freedom than the data and the
+    p-value is not interpretable."""
+    from modules.Biomarkers import pipeline as pl
+    g = np.repeat(np.arange(12), 4)                 # 12 ratings x 4 epochs
+    y = np.repeat(np.linspace(2.0, 9.0, 12), 4)     # constant within rating, by construction
+    rng = np.random.default_rng(0)
+    Yp, info = pl._rating_level_perm_matrix(y, g, 50, rng)
+    assert Yp is not None and info["unit" if "unit" in info else "n_ratings"] is not None
+    assert info["n_ratings"] == 12 and info["n_epochs_used"] == 48
+    for p in range(Yp.shape[0]):
+        for k in range(12):
+            block = Yp[p, g[info["rows"]] == k]
+            assert np.allclose(block, block[0]), (p, k, block)
+
+
+def test_rating_level_null_permutes_ratings_not_epochs():
+    """The multiset of rating values must be preserved: a permutation relabels which rating goes
+    where, it does not invent values."""
+    from modules.Biomarkers import pipeline as pl
+    g = np.repeat(np.arange(10), 3)
+    y = np.repeat(np.arange(10) * 1.0, 3)
+    Yp, info = pl._rating_level_perm_matrix(y, g, 25, np.random.default_rng(1))
+    for p in range(Yp.shape[0]):
+        vals = sorted(set(np.round(Yp[p], 9)))
+        assert vals == sorted(set(np.round(y, 9))), (p, vals)
+
+
+def test_ungrouped_epochs_are_dropped_from_both_null_and_observed():
+    """rating_group == -1 has no rating identity, so it cannot take part in a rating-level null.
+    The rows mask is returned so the CALLER computes the observed statistic on the same subset —
+    an observed value on more rows than its null is the F8 defect."""
+    from modules.Biomarkers import pipeline as pl
+    g = np.concatenate([np.repeat(np.arange(8), 3), np.full(6, -1)])
+    y = np.concatenate([np.repeat(np.arange(8) * 1.0, 3), np.full(6, 5.0)])
+    Yp, info = pl._rating_level_perm_matrix(y, g, 10, np.random.default_rng(2))
+    assert info["n_ratings"] == 8
+    assert info["n_epochs_used"] == 24 and Yp.shape[1] == 24
+    assert info["rows"].sum() == 24 and not info["rows"][-6:].any()
+
+
+def test_too_few_ratings_refuses_rather_than_returning_a_null():
+    from modules.Biomarkers import pipeline as pl
+    g = np.repeat(np.arange(3), 5)
+    y = np.repeat(np.arange(3) * 1.0, 5)
+    Yp, info = pl._rating_level_perm_matrix(y, g, 10, np.random.default_rng(3))
+    assert Yp is None and "at least 4" in (info["reason"] or "")
+
+
+def test_perm_pvalue_reports_which_unit_it_permuted():
+    """Provenance is mandatory: an epoch-level fallback is anti-conservative, so a consumer must be
+    able to tell which null produced the p it is reading."""
+    from modules.Biomarkers import pipeline as pl
+    rng = np.random.default_rng(4)
+    g = np.repeat(np.arange(20), 3)
+    y = np.repeat(rng.normal(5, 2, 20), 3)
+    X = rng.normal(0, 1, (60, 8))
+    _, _, _, _, m_rat = pl._block_perm_maxcorr_pvalue(X, y, n_perm=200, return_null=True,
+                                                      rating_group=g)
+    _, _, _, _, m_ep = pl._block_perm_maxcorr_pvalue(X, y, n_perm=200, return_null=True)
+    assert m_rat["unit"] == "rating" and m_rat["n_ratings"] == 20
+    assert m_ep["unit"] == "epoch" and m_ep["n_ratings"] is None
+
+
+def test_return_shape_is_invariant_including_the_degenerate_path():
+    """The early-return paths used to hand back a 4-tuple while the success path returned 5, so a
+    consumer reading perm_info raised on exactly the inputs where it needed the reason."""
+    from modules.Biomarkers import pipeline as pl
+    rng = np.random.default_rng(5)
+    ok = pl._block_perm_maxcorr_pvalue(rng.normal(0, 1, (30, 4)), rng.normal(0, 1, 30),
+                                       n_perm=50, return_null=True)
+    tiny = pl._block_perm_maxcorr_pvalue(rng.normal(0, 1, (3, 4)), rng.normal(0, 1, 3),
+                                         n_perm=50, return_null=True)
+    assert len(ok) == 5 and len(tiny) == 5
+    assert isinstance(tiny[4], dict)
+
+
+# --- F14: the winner's curse gets a magnitude ---------------------------------------------------
+def test_null_max_summary_is_reported_and_internally_consistent():
+    """The null distribution of the family max was already computed and shipped as a raw array while
+    the plate said only selection_biased=True. These summaries are what turn that flag into a
+    number a reader can act on."""
+    from modules.Biomarkers import pipeline as pl
+    rng = np.random.default_rng(6)
+    X = rng.normal(0, 1, (60, 25))
+    y = rng.normal(0, 1, 60)
+    p, used, obs, null, m = pl._block_perm_maxcorr_pvalue(X, y, n_perm=400, return_null=True)
+    assert m["family_size"] == 25
+    assert np.isclose(m["null_max_mean"], float(np.mean(null)))
+    assert np.isclose(m["null_max_p95"], float(np.quantile(null, 0.95)))
+    assert np.isclose(m["obs_minus_null_mean"], obs - np.mean(null))
+    assert m["obs_exceeds_null_p95"] == bool(obs > np.quantile(null, 0.95))
+    # under pure noise the observed family max should sit INSIDE the null, which is the whole point
+    assert 0.0 < m["null_max_mean"] < 1.0
+
+
+def test_null_max_mean_grows_with_family_size():
+    """E[max|r|] under the null rises with the number of cells searched. That is the winner's curse
+    in one line, and it is why a bare per-cell q is not a selection-corrected statement."""
+    from modules.Biomarkers import pipeline as pl
+    rng = np.random.default_rng(7)
+    y = rng.normal(0, 1, 80)
+    small = pl._block_perm_maxcorr_pvalue(rng.normal(0, 1, (80, 3)), y, n_perm=300,
+                                          return_null=True)[4]["null_max_mean"]
+    big = pl._block_perm_maxcorr_pvalue(rng.normal(0, 1, (80, 120)), y, n_perm=300,
+                                        return_null=True)[4]["null_max_mean"]
+    assert big > small, (small, big)
+
+
+# --- F8 part 2: the outlier rule is ONE rule, but its verdict depends on the estimation base -----
+def test_mad_rule_is_shared_by_adapter_and_streaming_psd():
+    """There must be exactly one MAD rule on this plate. `adapter.mad_outlier_mask` and
+    `streaming_psd._mad_keep` both delegate to `stats_utils.mad_keep_mask`, and the F8 part 2
+    reconciliation relies on that: the permutation family rebuilds the selection grid's masks by
+    calling the streaming_psd helper, so if the two helpers ever diverged the rebuilt family would
+    silently stop being the selection grid."""
+    rng = np.random.default_rng(11)
+    x = rng.normal(0, 1, 200)
+    x[3] = 60.0
+    x[7] = -55.0
+    x[11] = np.nan
+    a = adapter.mad_outlier_mask(x)
+    b = streaming_psd._mad_keep(x)
+    assert a.dtype == bool and b.dtype == bool
+    assert np.array_equal(a, b)
+    # and it is a KEEP mask that never keeps a non-finite entry
+    assert not a[11] and not a[3] and not a[7]
+
+
+def test_mad_verdict_depends_on_the_estimation_base():
+    """THE MECHANISM OF THE F8 PART 2 DEFECT, in one assertion.
+
+    The rule is `|v - median| > 5 * MAD`, so both the centre and the scale are estimated from
+    whatever sample is handed in. Estimating on a subset of rows can therefore flag a value that
+    estimating on the full set keeps, and vice versa. That is why building the permutation family
+    on the label-valid rows produced different correlations from the selection grid, which
+    estimates the same rule on the full epoch stack: nobody had changed the rule, only the sample
+    it was estimated from.
+
+    Concretely, the value 30 below is flagged when the base is the six-element subset (median 3,
+    MAD 1.5, so the window is +/- 7.5) and kept when five more large values join the base (median
+    20, MAD 10, window +/- 50).
+    """
+    subset = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 30.0])
+    full = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 30.0, 20.0, 22.0, 24.0, 26.0, 28.0])
+    keep_subset = streaming_psd._mad_keep(subset)
+    keep_full = streaming_psd._mad_keep(full)
+    assert bool(keep_subset[5]) is False, "premise broken: 30 is not an outlier in the subset"
+    assert bool(keep_full[5]) is True, "premise broken: 30 is still an outlier in the full base"
+    # the first five entries are kept under both bases, so the disagreement is about that one row
+    assert keep_subset[:5].all() and keep_full[:5].all()
+
+
+def test_min_pairs_floor_is_the_correlation_routines_own_floor():
+    """`pipeline.SELECTION_MIN_PAIRS` must be the number of surviving pairs at which
+    `pearson_corr_psd_label` starts producing a correlation, because that routine's floor is what
+    decides which cells are members of the selection family. The permutation family previously used
+    a floor of 4, which excluded any 3-pair cell the selection could nevertheless have chosen."""
+    assert pipeline.SELECTION_MIN_PAIRS == 3
+    for n_finite, want_finite in ((3, True), (2, False)):
+        feat = np.full((6, 1, 1), np.nan)
+        feat[:n_finite, 0, 0] = np.arange(n_finite, dtype=float) + 1.0
+        lab = np.arange(6, dtype=float) * 1.5 + 0.5
+        corr, _pval = streaming_psd.pearson_corr_psd_label(feat, lab)
+        got = np.isfinite(corr[0, 0])
+        assert bool(got) is want_finite, (n_finite, corr[0, 0])

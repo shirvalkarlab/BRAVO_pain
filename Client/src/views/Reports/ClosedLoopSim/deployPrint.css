@@ -16,12 +16,31 @@
     visibility: hidden !important;
   }
 
-  /* Re-show ONLY the verdict strip and the sign-off card (and their descendants). */
+  /* Re-show ONLY the reconciled verdict header, the sign-off card, and the parameter table when
+     that table is AUTHORISED (and their descendants).
+
+     THE PRESCRIPTION TABLE IS OPTED IN BY CLASS, NOT BY POSITION, and only in one of its two
+     states. PrescriptionPanel sets `cl-prescription-authorised` when the device rules permit the
+     configuration and `cl-prescription-planning` when they do not. Only the first is listed here,
+     so the read-only planning view — the watermarked table a reader can open while the device
+     refuses the configuration — never reaches paper. That matters because the watermark is a
+     screen affordance: a printed sheet of parameter values loses whatever surrounded it on screen
+     and can be carried into a programming visit as though it were authorised, which is the exact
+     failure the withholding behaviour exists to prevent. The default-hidden rule above is what
+     makes this safe by construction: a state that is not named here cannot print. */
   body.cl-deploy-root .cl-verdict-strip,
   body.cl-deploy-root .cl-verdict-strip *,
+  body.cl-deploy-root .cl-prescription-authorised,
+  body.cl-deploy-root .cl-prescription-authorised *,
   body.cl-deploy-root .cl-signoff-card,
   body.cl-deploy-root .cl-signoff-card * {
     visibility: visible !important;
+  }
+
+  /* Belt and braces: even if the planning card were somehow made visible by a future rule, remove
+     it from the printed layout entirely. */
+  body.cl-deploy-root .cl-prescription-planning {
+    display: none !important;
   }
 
   /* Lay the two printed blocks flat at the top of the page. */
@@ -32,13 +51,19 @@
     margin: 0 0 10px 0 !important;
     width: 100% !important;
   }
+  /* Lay every printed block in document order rather than positioning any of them absolutely.
+     The sign-off card used to be pinned at a fixed offset below the strip, which worked only while
+     exactly two blocks printed and the first had a known height. There are now three blocks and the
+     verdict header's height varies with how many blocker sentences the rule table returned, so a
+     fixed offset would overlap or leave a gap. Static positioning in flow order needs no such
+     assumption. */
+  body.cl-deploy-root .cl-prescription-authorised,
   body.cl-deploy-root .cl-signoff-card {
-    position: absolute !important;
-    left: 0;
-    top: 64px;     /* below the flattened strip */
+    position: static !important;
     width: 100% !important;
     box-shadow: none !important;
     border: 1px solid #444 !important;
+    margin: 0 0 10px 0 !important;
   }
 
   /* Interactive-only affordances have no place on a paper record. */
@@ -49,6 +74,7 @@
 
   /* Let the record break across pages naturally rather than clipping. */
   body.cl-deploy-root .cl-signoff-card,
+  body.cl-deploy-root .cl-prescription-authorised,
   body.cl-deploy-root .cl-verdict-strip {
     overflow: visible !important;
     page-break-inside: auto;

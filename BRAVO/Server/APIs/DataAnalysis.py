@@ -20,6 +20,7 @@ Data Upload Handler Module
 
 import os
 import json
+import logging
 import traceback
 from copy import deepcopy
 from pathlib import Path
@@ -38,6 +39,8 @@ from Server import models
 from modules.HelperFunctions import sanitize_input, get_or_none, json_compliant_handler
 from modules import Database, DataCurator, DataAnalysis
 from modules.AsyncJobScheduler import ProcessingScheduler
+
+_log = logging.getLogger(__name__)
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
@@ -732,6 +735,205 @@ class EmitBandCandidate(RestViews.APIView):
             return Response(status=200, data={
                 "available": False, "reason": "emit error: " + str(e),
             })
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
+class QueryServerIdentity(RestViews.APIView):
+    """
+    API View returning a token that changes when the server restarts or its analysis code reloads.
+
+    **URL:** ``/queryServerIdentity``  **Methods:** POST
+
+    WHY THIS EXISTS. The browser caches the three analysis modules' results in memory so that
+    switching between the Biomarkers, Stim Optimizer and Closed-Loop Deployment views, or hiding
+    and showing a plot, does not recompute anything. That cache lives in the tab and therefore
+    OUTLIVES a server restart: without this endpoint a clinician could restart the server, come
+    back to a tab left open, and be shown results computed by code that is no longer running, with
+    nothing on screen indicating it.
+
+    The token is built from two parts, and both are needed.
+
+    The first is the start time of the MASTER server process, read from the process table rather
+    than generated here. A value generated per process would differ between the gunicorn workers,
+    so consecutive requests would land on different workers, return different tokens, and the
+    browser would invalidate its cache constantly — the opposite of what the cache is for. The
+    master's start time is shared by every worker and changes only when the server is restarted.
+
+    The second is a fingerprint of the analysis code's modification times. A reload signal
+    (``kill -HUP``) re-executes the workers while the master keeps running, so the master's start
+    time alone would NOT change after a code change, and a cache built against the old code would
+    survive a deployment. Taking the newest modification time across the three analysis packages
+    means a code change invalidates the browser's cache, which is the behaviour a developer
+    reloading the server expects.
+
+    The endpoint deliberately does no database work and touches no participant data, so it is cheap
+    enough to call on every module mount.
+
+    **Response:** ``{"boot_token": str, "started_at": float | None, "code_fingerprint": str,
+    "detail": str}``
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    # Matches every neighbouring analysis view rather than relying on the framework default. This
+    # endpoint returns no participant data, but an unauthenticated route here would still disclose
+    # the server's restart time and a fingerprint of its deployed code, and an inconsistent
+    # permission declaration in a file where every other view is authenticated is the kind of thing
+    # a reader assumes is deliberate.
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        return Response(_server_identity())
+
+
+def _master_process_start_ticks():
+    """Start time of the master server process, shared by every worker.
+
+    Read from ``/proc`` rather than generated, for the reason the view's docstring gives: a value
+    generated in the worker would differ per worker and the browser would never see a stable token.
+    Returns None off Linux or when the process table is not readable, in which case the caller
+    falls back to a weaker token and says so.
+    """
+    import os
+
+    try:
+        ppid = os.getppid()
+        with open("/proc/%d/stat" % ppid, "r") as fh:
+            raw = fh.read()
+        # The second field is the executable name in parentheses and may itself contain spaces or
+        # parentheses, so the fields after it are found by splitting on the LAST closing bracket.
+        # `starttime` is field 22 counting from one; the first field after the bracket is field 3,
+        # so it sits at index 19 of the remainder.
+        tail = raw.rsplit(")", 1)[1].split()
+        return "ppid%d-%s" % (ppid, tail[19])
+    except Exception:
+        return None
+
+
+def _analysis_code_fingerprint():
+    """Newest modification time across the analysis packages, as a short hex string.
+
+    This is what makes a reload visible to the browser. Only the three packages whose results are
+    cached are walked, and only their Python files, so the cost is a directory scan rather than a
+    read of any file's contents.
+    """
+    import hashlib
+    import os
+
+    roots = []
+    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    for pkg in ("Biomarkers", "StimOptimizer", "ClosedLoopDeployment"):
+        roots.append(os.path.join(here, "modules", pkg))
+    newest = 0.0
+    count = 0
+    for root in roots:
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d not in ("__pycache__", "tests")]
+            for fn in filenames:
+                if not fn.endswith(".py"):
+                    continue
+                try:
+                    newest = max(newest, os.path.getmtime(os.path.join(dirpath, fn)))
+                    count += 1
+                except OSError:
+                    continue
+    if not count:
+        return "unknown"
+    return hashlib.sha1(("%.3f/%d" % (newest, count)).encode("utf-8")).hexdigest()[:12]
+
+
+#: Computed once per worker at first use rather than on every request. The values it depends on
+#: cannot change within the life of a worker process: the master's start time is fixed, and a code
+#: change re-executes the workers, which recomputes this.
+_SERVER_IDENTITY_CACHE = {}
+
+
+def _server_identity():
+    if _SERVER_IDENTITY_CACHE:
+        return dict(_SERVER_IDENTITY_CACHE)
+    import os
+    import time
+
+    ticks = _master_process_start_ticks()
+    fp = _analysis_code_fingerprint()
+    if ticks is None:
+        # No process table: fall back to this worker's own identity and SAY SO, because the caller
+        # needs to know the token is weaker than usual. A per-worker token can differ between
+        # requests, so a browser seeing `stable` as false should invalidate on a token change only
+        # when it also has other reason to, rather than treating every change as a restart.
+        token = "worker%d-%s" % (os.getpid(), fp)
+        detail = ("the master process start time could not be read, so this token identifies the "
+                  "WORKER rather than the server and may differ between requests")
+        stable = False
+    else:
+        token = "%s-%s" % (ticks, fp)
+        detail = ("token combines the master process start time with a fingerprint of the analysis "
+                  "code's modification times, so it changes on a restart and on a code reload")
+        stable = True
+    _SERVER_IDENTITY_CACHE.update({
+        "boot_token": token,
+        "code_fingerprint": fp,
+        "stable_across_workers": stable,
+        "observed_at": time.time(),
+        "detail": detail,
+    })
+    return dict(_SERVER_IDENTITY_CACHE)
+
+
+class QueryClosedLoopDeployment(RestViews.APIView):
+    """
+    API View for the closed-loop deployment report (ClosedLoopDeployment module).
+
+    Returns the whole report for ONE candidate configuration: device eligibility against all 51
+    encoded Percept rules, the three edges of the amplitude/power/pain triangle each labelled with
+    the clustering unit it was estimated at, the sign-coherence verdict, and the threshold placement
+    with the device alerts it predicts.
+
+    The verdict is deliberately THREE-valued (``blocked`` / ``unsupported`` / ``supported``) rather
+    than a boolean. A configuration the device forbids and a configuration the evidence does not
+    support call for different actions from the reader — the first is a configuration problem, the
+    second a measurement problem — and collapsing them into a single "not ready" was the specific
+    complaint the panel disposition raised.
+
+    **URL:** ``/queryClosedLoopDeployment``  **Methods:** POST
+
+    **Request Parameters:** ParticipantId, Candidates (list of candidate dicts), optional
+    Hemisphere (default "Left") and PowerScale (default "power_linear", the device-parity scale of
+    rule D11).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                        study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            # THROUGH THE MODULE'S OWN SERVICE ENTRY POINT, like the other two analysis modules.
+            # `run_for_participant` resolves the participant, applies the endpoint's documented
+            # defaults, and never raises -- so reaching the handler below now means the module could
+            # not even be IMPORTED, which is a different and much louder kind of problem.
+            from modules.ClosedLoopDeployment import bravo_service as cld_service
+            Analysis = cld_service.run_for_participant(request.data)
+        except Exception as e:
+            # LOGGED, WITH THE TRACEBACK. This handler answering HTTP 200 with a readable sentence
+            # is right for the page and was catastrophic as the ONLY record: on 2026-09-04 a
+            # module-level import broke the whole package, every request came back through here, and
+            # nothing wrote it down. It stayed broken for five days and was found by reading code.
+            # `exception` rather than `error`, because the name of the module that would not import
+            # exists only in the traceback.
+            _log.exception("closed-loop deployment report failed for participant %s",
+                           request.data.get("ParticipantId"))
+            return Response(status=200, data={"available": False,
+                                              "reason": "deployment report error: " + str(e)})
 
         Analysis = json_compliant_handler(Analysis)
         return Response(status=200, data=Analysis)
@@ -1694,3 +1896,57 @@ class QueryMedicationCycleAnalysis(RestViews.APIView):
             return Response(status=200, data=result)
 
         return Response(status=400, data={"message": "Malformed Input"})
+class QueryStimOptimizer(RestViews.APIView):
+    """
+    API View for Bayesian optimization of DBS stimulation parameters (StimOptimizer module).
+
+    **URL:** ``/queryStimOptimizer``  **Methods:** POST
+
+    Fits an independent Gaussian-process surrogate per ARM, where an arm is one pain site crossed
+    with one hemisphere, over the (frequency, amplitude) grid, under a separately modelled safety
+    constraint. Returns the posterior surfaces, the exploration queue, the next proposed batch and
+    the Plotly figure JSON for the browser.
+
+    This endpoint is deliberately built to be able to say that the data do NOT support a parameter
+    recommendation. Read ``recommendation_supported`` and ``blockers`` before reading any optimum:
+    an arm whose ``optimum_resolved`` is false has a predicted gain smaller than the posterior
+    uncertainty at that cell, which means the surface indicates where to look next, not what to
+    program.
+
+    **Request Parameters:**
+
+    :param ParticipantId: participant uid (required)
+    :param Sites: list of pain-site metrics (default ["left_leg", "back"])
+    :param Hemispheres: list of "Left"/"Right" (default both)
+    :param WashinMin: wash-in exclusion window in MINUTES (default 1.0)
+    :param Backend: "plotly" to include figure JSON (default) or "none" for tables only
+    :param NBatches: forward-simulated batches for the trajectory panel (default 3)
+    :param Q: batch size per simulated batch (default 4)
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                    study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.StimOptimizer import bravo_service
+            Analysis = bravo_service.run_for_participant(request.data)
+        except Exception as e:
+            # Never 500 the card; surface the error as a message the view can render.
+            return Response(status=200, data={
+                "available": False, "arms": {}, "summary": [], "blockers": [],
+                "reason": "StimOptimizer computation error: " + str(e),
+            })
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
