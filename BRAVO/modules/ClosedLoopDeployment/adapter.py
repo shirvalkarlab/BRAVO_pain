@@ -2283,6 +2283,41 @@ def programmed_settings_from_epochs(eps, hemisphere):
     return out
 
 
+def rate_commitment_from_active_group(candidate_rate_hz, active_group):
+    """D30's committed-for-this-attempt flag, DERIVED from the device (PI decision 2026-09-12,
+    option a): the candidate's rate counts as committed when it equals the rate frozen in the
+    device's newest ACTIVE sensing group.
+
+    Pure, so it is testable with no database. ``active_group`` is what
+    ``device_facts.active_sensing_group_facts`` returns. Returns a dict with
+    ``rate_committed_for_this_attempt`` (True or False) and ``_provenance`` (one sentence), or an
+    EMPTY dict when either rate is unknown -- then nothing is supplied and D30 stays not
+    determinable, which is the honest answer rather than a guessed one.
+    """
+    try:
+        cand = float(candidate_rate_hz) if candidate_rate_hz is not None else None
+    except (TypeError, ValueError):
+        cand = None
+    dev_rate = (active_group or {}).get("active_sensing_group_rate_hz")
+    try:
+        dev_rate = float(dev_rate) if dev_rate is not None else None
+    except (TypeError, ValueError):
+        dev_rate = None
+    if cand is None or dev_rate is None:
+        return {}
+    group = (active_group or {}).get("active_sensing_group")
+    if cand == dev_rate:
+        return {"rate_committed_for_this_attempt": True,
+                "_provenance": (
+                    f"derived: the candidate's {cand:g} Hz equals the rate already frozen in the "
+                    f"device's active sensing group {group} (PI decision 2026-09-12, option a)")}
+    return {"rate_committed_for_this_attempt": False,
+            "_provenance": (
+                f"derived: the candidate's {cand:g} Hz differs from the {dev_rate:g} Hz frozen in "
+                f"the device's active sensing group {group}; committing this rate means a new "
+                f"group and a new threshold capture (PI decision 2026-09-12, option a)")}
+
+
 def report_for_participant(participant, request_data=None, *, candidates=None, hemisphere="Left",
                            power_scale="power_linear", force_refresh=None):
     """Fetch this participant's data from the platform and build the report.
@@ -2394,6 +2429,41 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     except Exception as exc:                # never let this take down the report either
         _log.warning("closed-loop report: programmed rate/pulse width unavailable for %s",
                      getattr(participant, "uid", participant), exc_info=True)
+
+    # THE DEVICE'S ACTIVE SENSING GROUP, read live from the newest ingested session report, and
+    # D30's committed-rate flag derived from it (PI decision 2026-09-12, option a). Read live rather
+    # than from the committed session-report summary because that summary is stale on this exact
+    # point (it says 110 Hz; the device says 55 Hz). Its own try/except: a failure here is logged
+    # with its traceback and D30 simply stays not determinable; it never takes down the report.
+    try:
+        from ClosedLoopDeployment import device_facts as _df_ag
+        _ag = _df_ag.active_sensing_group_facts(participant)
+        if _ag:
+            dev.setdefault("_provenance", {})
+            _ag_sentence = (
+                f"measured: the device's newest session report ({_ag.get('session_report_date')}), "
+                f"active group {_ag.get('active_sensing_group')} with sensing configured, rate "
+                f"{_ag.get('active_sensing_group_rate_hz')!r} Hz, pulse widths "
+                f"{_ag.get('active_sensing_group_pulse_widths_us')!r} us, adaptive therapy "
+                f"{_ag.get('active_sensing_group_adaptive_status')!r}")
+            for _ak, _av in _ag.items():
+                if dev.get(_ak) is None:
+                    dev[_ak] = _av
+                    dev["_provenance"][_ak] = _ag_sentence
+            # The candidate's rate is what pipeline._facts_for will end up with: its own rate_hz
+            # when it states one, else the device fact filled in above from the exposure epochs.
+            _cand_rate = (cands[0] or {}).get("rate_hz")
+            if _cand_rate is None:
+                _cand_rate = dev.get("rate_hz")
+            _rc = rate_commitment_from_active_group(_cand_rate, _ag)
+            _rc_prov = _rc.pop("_provenance", None)
+            if _rc and dev.get("rate_committed_for_this_attempt") is None:
+                dev["rate_committed_for_this_attempt"] = _rc["rate_committed_for_this_attempt"]
+                if _rc_prov:
+                    dev["_provenance"]["rate_committed_for_this_attempt"] = _rc_prov
+    except Exception as exc:                # never let this take down the report either
+        _log.warning("closed-loop report: the device's active sensing group could not be read "
+                     "for %s", getattr(participant, "uid", participant), exc_info=True)
 
     # The pooled titration slope for the first candidate, from the stored table (decision 103),
     # handed to the pipeline as E1 (redesign decision 9). None when nothing is stored yet.

@@ -65,6 +65,20 @@ def _facts_for(candidate, e1, e2, power_scale, device_facts=None):
     interval spans zero. Passing it would let D19 be satisfied by a direction the data does not
     support, which is precisely the substitution of a guess for a measurement that this module is
     built to refuse. An absent key is reported as not determinable, and not determinable blocks.
+    (SUPERSEDED 2026-09-12 by the PI's decision, kept here because this project keeps a reversed
+    rule on the record rather than deleting it. The paragraph below is the rule in force.)
+
+    A SIGN IS SUPPLIED WHENEVER THE EDGE HAS ONE, RESOLVED OR NOT — PI decision, 2026-09-12. On
+    RCS08 at the committed band (ZERO_TWO_LEFT, 24.5 Hz) the three edges' point signs were exactly
+    the pattern the device's fixed polarity needs (E1 −1, E2 +1, E3 −1), but E1 and E2 were
+    unresolved (E1 −4.45, interval −18.6 to +9.7, p 0.54; E2 an AUC of 0.588 with interval 0.477 to
+    0.695), so D19 reported "the inputs needed to evaluate this rule were not supplied" and blocked
+    the verdict. The concern in the superseded paragraph was put to the PI and he chose the point
+    sign. So that nothing downstream loses the distinction, each sign travels with a sibling flag,
+    ``power_slope_vs_amplitude_sign_established`` and ``power_slope_vs_pain_sign_established``
+    (the edge's ``resolved``), and with the edge's interval and p-value
+    (``power_slope_vs_amplitude_ci`` / ``_p``, ``power_slope_vs_pain_ci`` / ``_p``), which D19's
+    observed-values line prints for any sign that is not established.
 
     THE POWER SCALE IS A FACT ABOUT THIS RUN, not an assumption. It is whatever scale the edges were
     actually estimated on, so if a caller asks for the log scale, D11 correctly fails rather than
@@ -75,10 +89,23 @@ def _facts_for(candidate, e1, e2, power_scale, device_facts=None):
     f["power_scale"] = "linear" if power_scale == "power_linear" else "log"
     # One centre frequency and one threshold mode per report, so no pooling occurs by construction.
     f.setdefault("pooled_across_center_or_mode", False)
-    if e1 is not None and e1.resolved and e1.sign is not None:
-        f["power_slope_vs_amplitude_sign"] = int(e1.sign)
-    if e2 is not None and e2.resolved and e2.sign is not None:
-        f["power_slope_vs_pain_sign"] = int(e2.sign)
+    # PI decision 2026-09-12: the point sign is supplied whenever the edge has one, and whether it
+    # is statistically established travels beside it rather than deciding whether it is supplied.
+    for _edge, _key in ((e1, "power_slope_vs_amplitude"), (e2, "power_slope_vs_pain")):
+        if _edge is None or _edge.sign is None:
+            continue
+        f[f"{_key}_sign"] = int(_edge.sign)
+        f[f"{_key}_sign_established"] = bool(_edge.resolved)
+        if _edge.ci is not None:
+            try:
+                f[f"{_key}_ci"] = [float(_edge.ci[0]), float(_edge.ci[1])]
+            except (TypeError, ValueError, IndexError):
+                pass
+        if _edge.p is not None:
+            try:
+                f[f"{_key}_p"] = float(_edge.p)
+            except (TypeError, ValueError):
+                pass
     # Participant-level device facts are merged LAST and never overwrite a value the candidate
     # already carries: an explicit per-candidate setting is a deliberate override, while these are
     # defaults for the participant. Keys beginning with an underscore are provenance and diagnostics

@@ -612,3 +612,112 @@ def _match_survey_channel(mapping, channel, hemisphere):
         if pair.upper().replace("_AND_", "").replace("_", "") == want:
             return key
     return None
+
+
+# ---------------------------------------------------------------------------------------------
+# THE DEVICE'S ACTIVE SENSING GROUP, READ LIVE FROM THE NEWEST SESSION REPORT (D30)
+# ---------------------------------------------------------------------------------------------
+# WHY THIS IS NOT READ FROM ``_facts_RCS08.json``. That committed summary was scanned once and is
+# stale on exactly this point: it says the newest active sensing group runs at 110 Hz, and the
+# device's newest session report (SessionDate 2026-09-11T15:30:00Z) says GROUP_D at 55 Hz. D30
+# asks whether the candidate's rate is the one already frozen in the device, so it has to read
+# the device as it is today, not as a scan of it was on 2026-09-05. The report is decrypted from
+# the file the ingest stored (``DataCurator.loadCacheFile``), the same route
+# ``StimOptimizer.adapter`` already takes for the therapy history.
+#
+# WHY THERE IS A MEMO, AND WHAT IT IS KEYED ON. Decrypting and parsing an 8-15 MB session report
+# costs real time on every page load, and the answer changes only when a new report is ingested.
+# The memo is keyed on the participant AND the newest report's own file identity (its uid and its
+# stored hash), never on the participant alone -- decision 130's lesson: the daily noon ingest adds
+# a file, and a participant-keyed memo would keep serving yesterday's group until a worker happened
+# to restart. A new file is a new key and therefore a miss; a repeat request costs one database
+# query for the file list and nothing else.
+_ACTIVE_GROUP_MEMO = {}
+_ACTIVE_GROUP_MEMO_MAX = 32
+
+
+def active_sensing_group_from_report(d):
+    """The device's newest ACTIVE group with sensing configured, from one decoded session report.
+
+    Pure: takes the report as a dict and returns a dict, so it is testable with no Django. Reads
+    ``Groups.Final`` -- the groups as they stood at the END of the session, which is what the device
+    left the clinic running -- and takes the first group that is both ``ActiveGroup`` and carries at
+    least one ``SensingChannel``. An active group WITHOUT sensing is not it (D30 is about the rate
+    BrainSense froze), and an inactive group with sensing is not it either (a group nobody is
+    running freezes nothing a clinician is about to program against).
+
+    Returns ``{}`` when the report has no such group, so the caller supplies nothing and D30 stays
+    not determinable rather than being handed a fabricated rate.
+    """
+    if not isinstance(d, dict):
+        return {}
+    groups = (d.get("Groups") or {}).get("Final") or []
+    for g in groups:
+        if not isinstance(g, dict) or not g.get("ActiveGroup"):
+            continue
+        ps = g.get("ProgramSettings") or {}
+        sens = ps.get("SensingChannel") or []
+        if not sens:
+            continue
+        rate = ps.get("RateInHertz")
+        try:
+            rate = float(rate) if rate is not None else None
+        except (TypeError, ValueError):
+            rate = None
+        out = {
+            # The export spells the group as an enum ("GroupIdDef.GROUP_D"); keep the part a
+            # clinician would say, "GROUP_D".
+            "active_sensing_group": str(g.get("GroupId")).split(".")[-1] if g.get("GroupId") is not None else None,
+            "active_sensing_group_rate_hz": rate,
+            "active_sensing_group_pulse_widths_us": [c.get("PulseWidthInMicroSecond")
+                                                     for c in sens if isinstance(c, dict)],
+            "active_sensing_group_adaptive_status": [c.get("AdaptiveTherapyStatus")
+                                                     for c in sens if isinstance(c, dict)],
+            "session_report_date": d.get("SessionDate"),
+        }
+        return out
+    return {}
+
+
+def _memoised_active_group_facts(key, build):
+    """Serve ``build()``'s answer from the memo under ``key``; a new key is a miss.
+
+    Split out from ``active_sensing_group_facts`` so the miss-on-new-file rule can be tested with
+    no database: the key is the file identity, and the test changes it.
+    """
+    hit = _ACTIVE_GROUP_MEMO.get(key)
+    if hit is not None:
+        return dict(hit)
+    facts = dict(build() or {})
+    if len(_ACTIVE_GROUP_MEMO) >= _ACTIVE_GROUP_MEMO_MAX:
+        _ACTIVE_GROUP_MEMO.pop(next(iter(_ACTIVE_GROUP_MEMO)))
+    _ACTIVE_GROUP_MEMO[key] = dict(facts)
+    return facts
+
+
+def active_sensing_group_facts(participant):
+    """The device's newest active sensing group for one participant, read live from the newest
+    ingested session report; ``{}`` when there is no session report or no active sensing group.
+
+    The Django imports live inside the function because this module is imported by tests that
+    have no Django. ``participant`` may be a Participant row or its uid.
+    """
+    import json as _json
+    from Server import models as _m
+    from modules import DataCurator as _DC
+
+    p = participant if hasattr(participant, "uid") else _m.Participant.find(uid=participant)
+    if p is None:
+        return {}
+    sfs = [s for s in _m.SourceFile.find_all(owner=p) if "Session" in (s.name or "")]
+    if not sfs:
+        return {}
+    newest = max(sfs, key=lambda s: s.date or 0)
+    key = (str(p.uid), str(newest.uid), str(newest.hashed or ""))
+
+    def _build():
+        raw = _DC.loadCacheFile(newest)
+        d = _json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
+        return active_sensing_group_from_report(d)
+
+    return _memoised_active_group_facts(key, _build)

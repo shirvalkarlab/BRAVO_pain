@@ -187,7 +187,10 @@ def test_passing_report_records_the_programming_regime_it_was_written_in():
     # D16 joined this set on 2026-09-12: a passing impedance check is recorded with its reading and
     # the measurement current it came from, because a pass at a fixed current can sit beside a
     # spurious fail at the device's automatic low-current mode and a reader must see both.
-    assert ids(recorded) == {"D03", "D04", "D16", "D31"}
+    # D19 and D30 joined on 2026-09-12: D19 now passes on a POINT sign (PI decision), so its pass
+    # must show which signs are not established; D30's pass is derived from the device's active
+    # sensing group, so its pass must show which group and rate it was matched against.
+    assert ids(recorded) == {"D03", "D04", "D16", "D19", "D30", "D31"}
     d03 = next(row for row in recorded if row["rule_id"] == "D03")
     assert "parkinsons" in d03["observed"]
 

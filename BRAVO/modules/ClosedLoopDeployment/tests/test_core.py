@@ -225,16 +225,23 @@ def test_the_rendered_coherence_reason_states_the_device_direction_correctly():
     assert "ramps amplitude UP" in C.coherence_report(e1, e2, e3).note
 
 
-def test_an_unresolved_edge_does_not_supply_its_sign_to_the_device_gate():
-    """Rule D19 asks which way the band moves. An unresolved edge HAS a point-estimate sign, but
-    that sign is not established. Supplying it would let the most important safety gate be
-    satisfied by a direction the data does not support."""
+def test_an_unresolved_edge_supplies_its_point_sign_to_d19_and_is_flagged_as_not_established():
+    """PI decision 2026-09-12, reversing the rule this test used to pin. Rule D19 asks which way
+    the band moves. An unresolved edge HAS a point-estimate sign, and it is now supplied -- with a
+    sibling flag saying it is NOT statistically established, and the edge's interval and p-value,
+    so nothing downstream loses the distinction the old rule enforced by omission."""
     from ClosedLoopDeployment.pipeline import _facts_for
     resolved = EdgeEstimate("E1", -1.0, (-1.5, -0.5), 0.01, 50, "setting epoch", 60)
     spans_zero = EdgeEstimate("E2", 0.9, (-0.2, 2.0), 0.2, 50, "rating", 60)
     f = _facts_for({"channel": "CH"}, resolved, spans_zero, "power_linear")
     assert f["power_slope_vs_amplitude_sign"] == -1
-    assert "power_slope_vs_pain_sign" not in f, "an unresolved edge must not supply a sign"
+    assert f["power_slope_vs_amplitude_sign_established"] is True
+    assert f["power_slope_vs_amplitude_ci"] == [-1.5, -0.5]
+    assert f["power_slope_vs_amplitude_p"] == 0.01
+    assert f["power_slope_vs_pain_sign"] == 1, "an unresolved edge now supplies its point sign"
+    assert f["power_slope_vs_pain_sign_established"] is False
+    assert f["power_slope_vs_pain_ci"] == [-0.2, 2.0]
+    assert f["power_slope_vs_pain_p"] == 0.2
     assert f["power_scale"] == "linear" and f["intent"] == "adaptive"
     # asking for the log scale must be reported honestly, not silently corrected to what D11 wants
     assert _facts_for({}, resolved, resolved, "power_mean_of_log")["power_scale"] == "log"

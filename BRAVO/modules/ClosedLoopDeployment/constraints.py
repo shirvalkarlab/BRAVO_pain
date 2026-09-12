@@ -309,17 +309,46 @@ CANDIDATE_KEYS = {
     "impedance_automatic_measured_at": "D16. The date of that automatic-mode test.",
     "artifact_flags": "D17. A list; an empty list means the device flagged nothing.",
     "power_slope_vs_amplitude_sign": "D19. Must be -1: the LFP must be suppressed when stimulation "
-                                     "is high.",
+                                     "is high. Since the PI's decision of 2026-09-12 this is the "
+                                     "edge's POINT sign, supplied whether or not its interval "
+                                     "excludes zero.",
     "power_slope_vs_pain_sign": "D19. Must be +1: the device can only ask for more stimulation when "
-                                "band power rises.",
+                                "band power rises. Point sign, as above.",
+    "power_slope_vs_amplitude_sign_established": "D19. True when the current-to-power edge's "
+                                                 "interval excludes zero, so the sign above is "
+                                                 "statistically established; False when it is a "
+                                                 "point sign only. Read by the observed-values "
+                                                 "line, not by the predicate.",
+    "power_slope_vs_pain_sign_established": "D19. The same flag for the power-to-pain edge.",
+    "power_slope_vs_amplitude_ci": "D19. The current-to-power edge's interval, printed on the "
+                                   "observed-values line when the sign is not established.",
+    "power_slope_vs_amplitude_p": "D19. The current-to-power edge's p-value, printed likewise.",
+    "power_slope_vs_pain_ci": "D19. The power-to-pain edge's interval, printed likewise.",
+    "power_slope_vs_pain_p": "D19. The power-to-pain edge's p-value, printed likewise.",
     "capture_amp_low_mA": "D24, D28.",
     "capture_amp_high_mA": "D24, D27, D28.",
     "adaptive_min_mA": "D07, D28.",
     "adaptive_max_mA": "D28.",
     "paused_amplitude_mA": "D34.",
     "vertically_aligned_segments_matched": "D29.",
-    "frequency_search_closed": "D30. Rate and pulse width freeze when BrainSense is set up, so the "
-                               "open-loop frequency search must be finished first.",
+    "rate_committed_for_this_attempt": "D30. True when the candidate's rate is the one to commit "
+                                       "for this attempt. Since the PI's decision of 2026-09-12 "
+                                       "(option a) the adapter DERIVES it: True when the "
+                                       "candidate's rate equals the rate frozen in the device's "
+                                       "newest ACTIVE sensing group, False when the two differ, "
+                                       "absent when either rate is unknown.",
+    "frequency_search_closed": "D30. The retired spelling of the flag above, still honoured so an "
+                               "un-updated caller does not silently regress to not-determinable.",
+    "active_sensing_group": "D30. The GroupId of the device's newest ACTIVE group with sensing "
+                            "configured, read live from the newest session report. Printed on "
+                            "the observed-values line; the predicate reads the derived flag.",
+    "active_sensing_group_rate_hz": "D30. The rate frozen in that group, in Hz. Printed likewise.",
+    "active_sensing_group_pulse_widths_us": "D30. That group's sensing-channel pulse widths, in "
+                                            "microseconds, one per channel. Recorded.",
+    "active_sensing_group_adaptive_status": "D30. That group's AdaptiveTherapyStatus per sensing "
+                                            "channel. Recorded.",
+    "session_report_date": "D30. The SessionDate of the report the active group was read from. "
+                           "Recorded.",
     "has_pocket_adaptor": "D32.",
     "multiple_rates_in_group": "D32.",
     "interleaving_in_group": "D32.",
@@ -1335,9 +1364,31 @@ def _o_d18(c, p):
 
 
 def _o_d19(c, p):
-    return (f"power-versus-amplitude slope sign {c.get('power_slope_vs_amplitude_sign')!r} "
-            f"(must be negative) and power-versus-pain slope sign "
-            f"{c.get('power_slope_vs_pain_sign')!r} (must be positive)")
+    """Both signs, and for each one that is not statistically established, say so with the edge's
+    interval and p-value when the candidate carries them (PI decision 2026-09-12: D19 passes on the
+    point sign, so the reader must be able to see which signs the data has not settled)."""
+    def _one(prefix, label, must):
+        sign = c.get(f"{prefix}_sign")
+        text = f"{label} slope sign {sign!r} ({must})"
+        est = c.get(f"{prefix}_sign_established")
+        if sign is None or est is not False:
+            return text
+        ci, pv = c.get(f"{prefix}_ci"), c.get(f"{prefix}_p")
+        extra = []
+        if isinstance(ci, (list, tuple)) and len(ci) == 2:
+            try:
+                extra.append(f"interval {float(ci[0]):.3g} to {float(ci[1]):.3g}")
+            except (TypeError, ValueError):
+                pass
+        if pv is not None:
+            try:
+                extra.append(f"p {float(pv):.3g}")
+            except (TypeError, ValueError):
+                pass
+        return (text + " -- a point sign that is NOT statistically established"
+                + (": " + ", ".join(extra) if extra else ""))
+    return (_one("power_slope_vs_amplitude", "power-versus-amplitude", "must be negative")
+            + " and " + _one("power_slope_vs_pain", "power-versus-pain", "must be positive"))
 
 
 def _o_d24(c, p):
@@ -1360,7 +1411,15 @@ def _o_d28(c, p):
 
 
 def _o_d30(c, p):
-    return f"frequency search closed: {c.get('frequency_search_closed')!r}"
+    """The candidate's rate against the rate frozen in the device's active sensing group."""
+    committed = c.get("rate_committed_for_this_attempt")
+    text = (f"candidate rate {c.get('rate_hz')!r} Hz against the rate frozen in the device's "
+            f"newest active sensing group {c.get('active_sensing_group')!r}: "
+            f"{c.get('active_sensing_group_rate_hz')!r} Hz; committed for this attempt: "
+            f"{committed!r}")
+    if committed is None and c.get("frequency_search_closed") is not None:
+        text += f" (retired flag frequency_search_closed: {c.get('frequency_search_closed')!r})"
+    return text
 
 
 def _o_d31(c, p):
@@ -1420,8 +1479,12 @@ _OBSERVED = {
 #: Parkinson's mode than it would for one who is not. D04 and D31 are here because they are the two
 #: rules whose values are unread today, so when a value finally is supplied the report should say
 #: what it was rather than merely dropping the unknown. Recording every passing rule's value would
-#: bury these three among twenty routine lines.
-_RECORD_VALUE_ON_PASS = ("D03", "D04", "D16", "D31")
+#: bury these three among twenty routine lines. D19 and D30 joined on 2026-09-12: D19 now passes on
+#: an edge's POINT sign whether or not its interval excludes zero (PI decision), so a pass must show
+#: which signs the data has not established rather than vanish from the ledger; and D30's pass is
+#: DERIVED from the device's active sensing group, so the reader must see which group and which rate
+#: the candidate was matched against.
+_RECORD_VALUE_ON_PASS = ("D03", "D04", "D16", "D19", "D30", "D31")
 
 
 # ------------------------------------------------------------------------------------------------
@@ -1752,7 +1815,13 @@ RULES = (
             "that cannot deliver therapy. For a pain biomarker this is a hard sign constraint and it "
             "is separate from the amplitude-response requirement: band power must FALL as amplitude "
             "rises and RISE as pain rises. A band whose power falls as pain rises cannot drive "
-            "Adaptive Therapy in either direction, and no choice of thresholds repairs it."
+            "Adaptive Therapy in either direction, and no choice of thresholds repairs it. "
+            "PI decision, 2026-09-12: the two signs this rule reads are the POINT signs of the "
+            "current-to-power and power-to-pain edges, supplied whether or not each edge's "
+            "interval excludes zero; until then a sign was supplied only when its edge was "
+            "resolved, which left this rule unevaluable on RCS08 while all three point signs "
+            "already matched the required pattern. This row's observed text names any sign that "
+            "is not statistically established, with that edge's interval and p-value."
         ),
         predicate=_p_d19,
     ),
@@ -1943,7 +2012,13 @@ RULES = (
             "frequency search and the closed-loop configuration are sequential and not concurrent. "
             "This rule is where that ordering is enforced: a candidate whose frequency search is "
             "not closed is not deployable, because committing it would freeze a rate nobody has "
-            "finished choosing."
+            "finished choosing. PI decision, 2026-09-12 (option a): the committed-for-this-attempt "
+            "flag is DERIVED from the device rather than asked of the caller -- the candidate's "
+            "rate counts as committed when it equals the rate frozen in the device's newest "
+            "ACTIVE sensing group, read live from the newest ingested session report; a "
+            "candidate at a different rate is not committed, because programming it means a new "
+            "group and a new threshold capture; when either rate is unknown the flag is not "
+            "supplied and the rule stays not determinable."
         ),
         predicate=_p_d30,
     ),
