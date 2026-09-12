@@ -143,6 +143,9 @@ export default function DeploymentDecisionHeader({ bandCandidate, summary, deplo
 
   const sm = (summary && summary.data) || null;
   const blockers = ((rep && rep.verdict_detail) || {}).blockers || [];
+  // Warnings gate nothing (decision 139, 2026-09-12): the two D26 capture checks moved out of the
+  // blockers into here. Shown beside the verdict in the warn colour so a reader still sees them.
+  const warnings = ((rep && rep.verdict_detail) || {}).warnings || [];
   const el = (rep && rep.eligibility) || null;
 
   return (
@@ -238,6 +241,26 @@ export default function DeploymentDecisionHeader({ bandCandidate, summary, deplo
               <MDTypography key={`blk${i}`} variant="caption"
                 sx={{ display: "block", fontSize: 11, color: "#3A3A3A", mt: 0.3 }}>
                 {b}
+              </MDTypography>
+            ))}
+          </MDBox>
+        ) : null}
+
+        {/* Warnings, verbatim from the module. They change no verdict: the capture checks say
+            what the device is likely to report at the visit, judged on the pooled titration
+            slope when one is stored for the band (decision 139). */}
+        {warnings.length > 0 ? (
+          <MDBox mt={0.8} p={1} sx={{ backgroundColor: PAL.warnFill || "#FFF7E6", borderRadius: "4px",
+            border: `1px solid ${PAL.warnBorder || PAL.warn}` }}>
+            <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold",
+              letterSpacing: 0.4, color: PAL.warn }}>
+              {`WARNINGS THAT CHANGE NO VERDICT — ${warnings.length} `
+                + `${warnings.length === 1 ? "STATEMENT" : "STATEMENTS"} FROM THE CAPTURE CHECKS`}
+            </MDTypography>
+            {warnings.map((w, i) => (
+              <MDTypography key={`wrn${i}`} variant="caption"
+                sx={{ display: "block", fontSize: 11, color: "#3A3A3A", mt: 0.3 }}>
+                {w}
               </MDTypography>
             ))}
           </MDBox>

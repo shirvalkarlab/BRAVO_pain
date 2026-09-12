@@ -128,17 +128,53 @@ def test_control_authority_refuses_a_distribution_with_no_measured_spread():
     assert d is not None and d > 3
 
 
-def test_threshold_placement_flags_inverted_and_too_close_captures():
+def test_threshold_placement_reports_the_between_visit_comparison_but_no_longer_judges_on_it():
+    """Until 2026-09-12 this test pinned "inverted capture" and "too close" in `problems`, judged
+    on the two capture means and their separation. PI decision that day ("b and c"): the two D26
+    verdicts read the pooled titration slope instead (`test_d26_reads_pooled_slope.py`) and warn
+    rather than block. What this test now pins is that the between-visit numbers are STILL
+    computed and reported -- labelled as the comparison decision 124 distrusts -- and that, with
+    no pooled slope supplied, neither sentence is a problem and both verdicts say not assessed."""
     rng = np.random.default_rng(0)
     lo, hi = rng.normal(10, 1, 40), rng.normal(4, 1, 40)      # power FALLS as amplitude rises
     good = AU.threshold_placement(lo, hi, amp_low=1.0, amp_high=3.0, expected_sign=-1)
-    assert good.predicted_recapture_alert is False and good.upper > good.lower
+    assert good.upper > good.lower and good.problems == []
+    assert good.capture_verdicts["historical"]["inverted_by_means"] is False
+    assert good.capture_verdicts["historical"]["below_declared_minimum"] is False
     inv = AU.threshold_placement(hi, lo, amp_low=1.0, amp_high=3.0, expected_sign=-1)
-    assert inv.predicted_recapture_alert is True
-    assert any("inverted capture" in p for p in inv.problems)
+    assert inv.capture_verdicts["historical"]["inverted_by_means"] is True
+    assert inv.problems == [] and not any("inverted capture" in p for p in inv.problems)
     close = AU.threshold_placement(rng.normal(10, 1, 40), rng.normal(10.2, 1, 40),
                                    amp_low=1.0, amp_high=3.0, expected_sign=-1)
-    assert any("too close" in p for p in close.problems)
+    h = close.capture_verdicts["historical"]
+    assert h["below_declared_minimum"] is True and abs(h["separation_pooled_sd"]) < 0.5
+    assert h["separation_pooled_sd"] == close.control_authority
+    assert "decision 124 distrusts" in h["label"]
+    for plan in (good, inv, close):
+        # no pooled slope was handed in, so the verdicts are not assessed and the alert is None,
+        # never a value manufactured from the distrusted comparison
+        assert plan.predicted_recapture_alert is None
+        assert plan.capture_verdicts["inverted"]["status"] == "not assessed"
+        assert plan.capture_verdicts["too_close"]["status"] == "not assessed"
+        assert len(plan.warnings) == 2 and all("not assessed" in w for w in plan.warnings)
+
+
+def test_threshold_placement_judges_the_two_d26_verdicts_on_the_pooled_slope():
+    """The same three sample pairs as above, now with a pooled slope: the verdicts follow the
+    slope's sign and interval, not the means."""
+    rng = np.random.default_rng(0)
+    lo, hi = rng.normal(10, 1, 40), rng.normal(4, 1, 40)
+    neg = EdgeEstimate("E1", -3.6, (-6.0, -1.2), 0.01, 13, "run", 4, "power_linear")
+    pos = EdgeEstimate("E1", +3.6, (+1.2, +6.0), 0.01, 13, "run", 4, "power_linear")
+    # means inverted (hi, lo) but the pooled slope is negative and established: NOT inverted
+    r = AU.threshold_placement(hi, lo, amp_low=1.0, amp_high=3.0, expected_sign=-1, pooled_slope=neg)
+    assert r.predicted_recapture_alert is False and r.warnings == []
+    assert r.capture_verdicts["historical"]["inverted_by_means"] is True
+    # means the right way round but the pooled slope is positive and established: inverted
+    r = AU.threshold_placement(lo, hi, amp_low=1.0, amp_high=3.0, expected_sign=-1, pooled_slope=pos)
+    assert r.predicted_recapture_alert is True
+    assert len(r.warnings) == 1 and r.warnings[0].startswith("D26 inverted capture: INDICATED")
+    assert r.problems == []
 
 
 def test_threshold_placement_enforces_the_d27_capture_artefact_ceiling():

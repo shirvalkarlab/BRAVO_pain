@@ -178,10 +178,15 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
     # the triangle and the panel cannot disagree. The historical setting-epoch estimate is kept
     # on the report beside it rather than thrown away. A row with no assessed slope leaves the
     # historical estimate in place -- absence of a pooled answer is not a reason to lose an edge.
+    # `pooled_edge` is what the two D26 capture verdicts read (PI decision 2026-09-12, "b and c");
+    # it stays None when no slope is stored so those verdicts say "not assessed" rather than
+    # quietly reading the historical setting-epoch edge, which is a different quantity.
+    pooled_edge = None
     if pooled_e1 and pooled_e1.get("pooled_slope_per_mA") is not None \
             and np.isfinite(float(pooled_e1["pooled_slope_per_mA"])):
         rep.edges_historical = {"E1": e1}
         e1 = E.pooled_actuation_edge(pooled_e1, scale=power_scale)
+        pooled_edge = e1
     e2 = E.state_edge(T, channel=ch, center_hz=fc, scale=power_scale)
     e3 = E.therapy_edge(design_matrix)
     rep.edges = {"E1": e1, "E2": e2, "E3": e3}
@@ -264,7 +269,8 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
                 d.loc[(amps > 0) & (amps <= lo_a), power_scale].to_numpy(),
                 d.loc[(amps > 0) & (amps >= hi_a), power_scale].to_numpy(),
                 amp_low=float(lo_a), amp_high=float(hi_a),
-                expected_sign=-1, observed_series=d[power_scale].to_numpy())
+                expected_sign=-1, observed_series=d[power_scale].to_numpy(),
+                pooled_slope=pooled_edge)
 
     # --- controller replay -----------------------------------------------------------------------
     # Run BEFORE the prescription because the prescription's amplitude-side duty figures come from
@@ -350,4 +356,11 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
 
     if strict and rep.threshold is not None and rep.threshold.problems:
         rep.blockers.extend(rep.threshold.problems)
+    # THE TWO D26 CAPTURE VERDICTS WARN AND DO NOT BLOCK. PI decision 2026-09-12, "b and c". They
+    # used to travel in `threshold.problems` and land in `blockers` on the line above; they now
+    # travel in `threshold.warnings` and land in `rep.warnings`, which `is_licensed` does not
+    # read. Copied whether or not the run is strict, because a sentence that gates nothing has no
+    # strictness to respect.
+    if rep.threshold is not None and rep.threshold.warnings:
+        rep.warnings.extend(rep.threshold.warnings)
     return rep

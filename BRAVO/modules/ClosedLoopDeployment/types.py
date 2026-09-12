@@ -134,7 +134,19 @@ class ThresholdPlan:
     frac_time_above: float | None = None
     predicted_recapture_alert: bool | None = None
     control_authority: float | None = None
+    #: Sentences that BLOCK the verdict when the pipeline runs strict: the D27 capture-artefact
+    #: ceiling, and a capture whose spread cannot be measured. Since 2026-09-12 the two D26
+    #: capture verdicts are NOT in here -- see ``warnings``.
     problems: list = field(default_factory=list)
+    #: The two D26 capture verdicts ("inverted capture", "thresholds too close") when adverse, not
+    #: yet established, or not assessed. They WARN and gate nothing: the pipeline copies them into
+    #: ``DeploymentReport.warnings``, never into ``blockers``. PI decision 2026-09-12, "b and c".
+    warnings: list = field(default_factory=list)
+    #: The structured form of the two D26 verdicts: what each was judged on (the pooled titration
+    #: slope, decision 124), its status, whether it is established, and the between-visit
+    #: comparison the verdicts used to rest on, kept beside them as a number and labelled as the
+    #: comparison decision 124 distrusts. Built by ``authority.d26_capture_verdicts``.
+    capture_verdicts: dict = field(default_factory=dict)
     note: str = ""
 
 
@@ -203,6 +215,12 @@ class DeploymentReport:
     prescriptions: Any = None
     candidates: Any = None
     blockers: list = field(default_factory=list)
+    #: WARNINGS GATE NOTHING. Sentences a reader should see beside the verdict that do not enter
+    #: ``is_licensed``: today the two D26 capture verdicts (``ThresholdPlan.warnings``). Added
+    #: 2026-09-12 as a new field with a default, so a caller that predates it is unaffected, and
+    #: mirroring decision 104, which made the reliable-change check a warning that blocks nothing.
+    #: Serialised by ``adapter.report_to_dict`` as ``verdict_detail.warnings``.
+    warnings: list = field(default_factory=list)
     manifest: dict = field(default_factory=dict)
 
     def is_licensed(self) -> bool:
@@ -212,6 +230,15 @@ class DeploymentReport:
         resolved AND the sign pattern coherent AND no blocker. Anything unmeasured reads as not
         licensed, because the alternative — treating absence of evidence as permission — is the
         failure this module exists to prevent.
+
+        ``warnings`` IS NOT READ HERE, on purpose. PI decision 2026-09-12, his words "b and c":
+        the two D26 capture checks (inverted capture, thresholds too close) warn rather than block.
+        Two reasons. A wrong-way loop is caught by the device's own inverted-capture alert at the
+        programming visit, so the module's prediction of it is a heads-up and not the last line of
+        defence. And the quantity those two verdicts now read -- the pooled titration slope, E1 --
+        already gates through "every edge resolved" above: a slope whose interval spans zero leaves
+        E1 unresolved and the report unlicensed, so a second block from the same number would be
+        the same fact charged twice.
         """
         if self.blockers:
             return False

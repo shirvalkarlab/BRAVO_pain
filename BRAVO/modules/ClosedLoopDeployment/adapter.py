@@ -1292,6 +1292,22 @@ def _num(x):
     return f if np.isfinite(f) else None
 
 
+def _capture_verdicts_to_dict(v):
+    """JSON-safe copy of ``ThresholdPlan.capture_verdicts`` (``authority.d26_capture_verdicts``):
+    every number through ``_num``, strings and booleans as they are, nested one level."""
+    if not v:
+        return None
+    def _leaf(x):
+        if x is None or isinstance(x, (bool, str)):
+            return x
+        if isinstance(x, (list, tuple)):
+            return [_leaf(i) for i in x]
+        if isinstance(x, dict):
+            return {str(k): _leaf(i) for k, i in x.items()}
+        return _num(x)
+    return _leaf(dict(v))
+
+
 def report_to_dict(rep):
     """Flatten a DeploymentReport for the interface.
 
@@ -1328,6 +1344,10 @@ def report_to_dict(rep):
             "all_edges_resolved": edges_ok,
             "coherent": coherent,
             "blockers": list(rep.blockers),
+            # Gate nothing; shown beside the verdict. The two D26 capture verdicts live here since
+            # 2026-09-12 (PI: "b and c"). `getattr` so a report object that predates the field
+            # serialises as an empty list rather than raising.
+            "warnings": list(getattr(rep, "warnings", []) or []),
         },
         "eligibility": None if el is None else {
             "eligible": el.eligible, "checked": el.checked, "summary": el.summary(),
@@ -1481,6 +1501,11 @@ def report_to_dict(rep):
             "frac_time_above": _num(rep.threshold.frac_time_above),
             "predicted_recapture_alert": rep.threshold.predicted_recapture_alert,
             "problems": list(rep.threshold.problems), "note": rep.threshold.note,
+            # The two D26 verdicts as warnings (gate nothing) and in structured form, with the
+            # between-visit comparison they used to rest on reported beside them as a number.
+            "warnings": list(getattr(rep.threshold, "warnings", []) or []),
+            "capture_verdicts": _capture_verdicts_to_dict(
+                getattr(rep.threshold, "capture_verdicts", None)),
         },
         "manifest": rep.manifest,
         "candidates": rep.candidates,

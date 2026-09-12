@@ -13,6 +13,13 @@ together or inverted". The document's own encoding note observes that both are q
 module already estimates: an inverted capture is an amplitude-to-power slope with the wrong sign,
 and a too-close capture is a separation that is small relative to the noise. Predicting the alert is
 therefore not speculation, it is arithmetic on numbers we have.
+
+WHICH NUMBERS, since 2026-09-12 (PI decision, "b and c"): the two D26 verdicts are judged on the
+POOLED TITRATION SLOPE -- band power on current across every run of rising current on the contact,
+one baseline per run (decisions 55, 124, 126) -- and they WARN rather than block. The between-visit
+separation described in the first paragraph is still computed and reported, labelled as the
+comparison decision 124 distrusts, but it no longer decides either verdict. See
+``d26_capture_verdicts``.
 """
 from __future__ import annotations
 
@@ -66,8 +73,164 @@ def control_authority(power_low, power_high):
     return float((np.mean(b) - np.mean(a)) / pooled)
 
 
+#: What the two D26 verdicts are judged on since 2026-09-12. Named once so the sentences, the
+#: structured field and the tests read one string.
+D26_JUDGED_ON = "pooled titration slope (E1, decision 124)"
+
+#: The label the between-visit comparison carries wherever its number is still reported.
+D26_HISTORICAL_LABEL = ("between-visit comparison decision 124 distrusts: every band-power sample "
+                        "recorded at the lowest therapeutic current on record pooled against every "
+                        "sample at the highest, across every visit and month. Reported beside the "
+                        "verdicts as a number; it is not the verdict.")
+
+
+def _fmt_ci_p(edge):
+    """'interval -18.6 to +9.7, p 0.54', or what is missing, for a D26 sentence."""
+    parts = []
+    ci = getattr(edge, "ci", None)
+    if ci is not None:
+        try:
+            parts.append(f"interval {float(ci[0]):+.1f} to {float(ci[1]):+.1f}")
+        except (TypeError, ValueError, IndexError):
+            parts.append("no interval is available")
+    else:
+        parts.append("no interval is available")
+    p = getattr(edge, "p", None)
+    if p is not None and np.isfinite(float(p)):
+        parts.append(f"p {float(p):.2f}")
+    return ", ".join(parts)
+
+
+def d26_capture_verdicts(pooled_slope, *, expected_sign=-1, historical_d=None,
+                         historical_low_mean=None, historical_high_mean=None):
+    """The two D26 verdicts -- "inverted capture" and "thresholds too close" -- judged on the
+    POOLED TITRATION SLOPE, and reported as warnings that gate nothing.
+
+    PI decision 2026-09-12, his words "b and c". Until then both verdicts were judged on the
+    between-visit comparison this function still receives as ``historical_*``: the mean of every
+    sample recorded at the lowest therapeutic current on record against the mean at the highest,
+    pooled over every visit and month. Decisions 124 and 126 had already ruled that comparison
+    confounded by time and replaced it, as the report's current-to-power edge, with the pooled
+    slope across runs of rising current, one baseline per run (``edges.pooled_actuation_edge``).
+    On RCS08 at the committed band the two disagreed in sign: the between-visit means read power
+    HIGHER at 4.8 mA than at 1.4 mA (196.1 against 190.9, an "inverted capture") while the pooled
+    slope reads −4.45 device units per mA, the direction the control law needs. The verdicts now
+    read the number the project trusts.
+
+    THE RULE. "Inverted" is the pooled slope's SIGN being wrong for the control law, judged on the
+    point estimate. "Too close" is the slope not being established -- its interval spans zero --
+    so the signal's response to current cannot yet be told from no response. When no pooled slope
+    is stored for the band, both verdicts say NOT ASSESSED rather than falling back to the
+    historical comparison silently; the historical separation is still reported beside them,
+    labelled as the comparison decision 124 distrusts.
+
+    WHAT COMES BACK. ``(verdicts, warnings, predicted_recapture_alert)``. ``verdicts`` is the
+    structured form for the page; ``warnings`` carries the sentence of every verdict that is
+    adverse, not yet established, or not assessed, and is EMPTY when the slope is established with
+    the right sign; ``predicted_recapture_alert`` is True when either verdict is adverse or not
+    established, False when both are clear, and None when nothing could be assessed -- the same
+    None the field carried before when the historical spread could not be measured, because a
+    prediction made from no number would be a fabrication.
+    """
+    hist_inverted = None
+    if historical_low_mean is not None and historical_high_mean is not None:
+        s = (1 if historical_high_mean > historical_low_mean
+             else (-1 if historical_high_mean < historical_low_mean else 0))
+        hist_inverted = bool(s != 0 and s != expected_sign)
+    historical = {
+        "label": D26_HISTORICAL_LABEL,
+        "mean_power_at_low_capture": historical_low_mean,
+        "mean_power_at_high_capture": historical_high_mean,
+        "separation_pooled_sd": historical_d,
+        "inverted_by_means": hist_inverted,
+        "below_declared_minimum": (None if historical_d is None
+                                   else bool(abs(historical_d) < MIN_CAPTURE_SEPARATION_D)),
+        "declared_minimum": MIN_CAPTURE_SEPARATION_D,
+    }
+    est = getattr(pooled_slope, "estimate", None)
+    have_slope = est is not None and np.isfinite(float(est))
+
+    if not have_slope:
+        tail = ""
+        if historical_d is not None:
+            tail = (f" For the record only, the between-visit comparison decision 124 distrusts "
+                    f"gives a separation of {abs(historical_d):.2f} pooled standard deviations"
+                    + (" with power higher at the higher current" if hist_inverted else "")
+                    + "; it is not the verdict.")
+        inv = ("D26 inverted capture: not assessed -- no pooled titration slope is stored for this "
+               "band, so whether power falls as current rises cannot be judged from the runs of "
+               "rising current." + tail)
+        close = ("D26 thresholds too close: not assessed -- no pooled titration slope is stored for "
+                 "this band, so whether the signal's response to current can be told from no "
+                 "response is unknown; the device may raise RECAPTURE THRESHOLDS." + tail)
+        verdicts = {
+            "judged_on": None, "assessed": False,
+            "pooled_slope_per_mA": None, "pooled_slope_ci": None, "pooled_slope_p": None,
+            "pooled_slope_established": None,
+            "inverted": {"status": "not assessed", "established": None, "sentence": inv},
+            "too_close": {"status": "not assessed", "established": None, "sentence": close},
+            "historical": historical,
+        }
+        return verdicts, [inv, close], None
+
+    b = float(est)
+    sign = getattr(pooled_slope, "sign", None)
+    resolved = bool(getattr(pooled_slope, "resolved", False))
+    unit = ("device units per mA" if str(getattr(pooled_slope, "scale", "linear")).endswith("linear")
+            else "units of log power per mA")
+    ci_p = _fmt_ci_p(pooled_slope)
+    if sign is not None and sign < 0:
+        direction = "power falls as current rises"
+    elif sign is not None and sign > 0:
+        direction = "power rises as current rises"
+    else:
+        direction = "power does not change with current"
+    inverted = bool(sign is not None and sign != 0 and sign != expected_sign)
+    needs = ("as the control law needs" if not inverted and sign != 0
+             else "the opposite of what the control law assumes")
+    established = "established" if resolved else "though not yet established"
+    if inverted and resolved:
+        inv = (f"D26 inverted capture: INDICATED -- the pooled titration slope is {b:+.2f} {unit} "
+               f"({direction}, {needs}), {established} ({ci_p}), so the device would drive the loop "
+               "the wrong way. This is the condition the programmer reports as an inverted capture.")
+    elif inverted:
+        inv = (f"D26 inverted capture: indicated on the point estimate -- the pooled titration slope "
+               f"is {b:+.2f} {unit} ({direction}, {needs}), {established} ({ci_p}). If it holds, the "
+               "device would drive the loop the wrong way.")
+    else:
+        inv = (f"D26 inverted capture: NOT indicated -- the pooled titration slope is {b:+.2f} {unit} "
+               f"({direction}, {needs}), {established} ({ci_p}).")
+    if resolved:
+        close = (f"D26 thresholds too close: NOT indicated -- the pooled slope's interval excludes "
+                 f"zero ({ci_p}), so the signal's response to current is established and can be told "
+                 "from no response.")
+    else:
+        close = (f"D26 thresholds too close: the pooled slope's interval spans zero ({ci_p}), so the "
+                 "signal's response to current is not yet established; the device may raise "
+                 "RECAPTURE THRESHOLDS.")
+    ci = getattr(pooled_slope, "ci", None)
+    verdicts = {
+        "judged_on": D26_JUDGED_ON, "assessed": True,
+        "pooled_slope_per_mA": b,
+        "pooled_slope_ci": None if ci is None else [float(ci[0]), float(ci[1])],
+        "pooled_slope_p": getattr(pooled_slope, "p", None),
+        "pooled_slope_established": resolved,
+        "inverted": {"status": "indicated" if inverted else "not indicated",
+                     "established": resolved, "sentence": inv},
+        "too_close": {"status": "not indicated" if resolved else "not established",
+                      "established": resolved, "sentence": close},
+        "historical": historical,
+    }
+    warnings = []
+    if inverted or not resolved:
+        warnings.append(inv)
+    if not resolved:
+        warnings.append(close)
+    return verdicts, warnings, bool(inverted or not resolved)
+
+
 def threshold_placement(power_low, power_high, *, amp_low, amp_high, expected_sign=-1,
-                        pulse_width_us=None, observed_series=None):
+                        pulse_width_us=None, observed_series=None, pooled_slope=None):
     """Place the two thresholds and predict what the device will report.
 
     The thresholds are placed at the two capture means, which is what the device does when it
@@ -75,6 +238,13 @@ def threshold_placement(power_low, power_high, *, amp_low, amp_high, expected_si
     whether the capture will be flagged as inverted, whether it will be flagged as too close, how
     much of the time the signal will sit in each of the three control states, and whether the
     capture amplitudes themselves violate the artefact ceiling of D27.
+
+    ``pooled_slope`` is the report's E1 when it is the pooled titration slope (an ``EdgeEstimate``
+    from ``edges.pooled_actuation_edge``), or None when no slope is stored. Since 2026-09-12 the
+    two D26 verdicts are judged on it and land in ``ThresholdPlan.warnings`` rather than
+    ``problems`` -- see ``d26_capture_verdicts``. The two threshold VALUES and the two capture
+    amplitudes are computed exactly as before, from the two capture means; only what the two
+    verdict sentences are judged on, and where they land, changed.
     """
     problems = []
     d = control_authority(power_low, power_high)
@@ -95,22 +265,15 @@ def threshold_placement(power_low, power_high, *, amp_low, amp_high, expected_si
             f"D27: pulse width {pulse_width_us:.0f} us exceeds {CAPTURE_ARTEFACT_PW_US:.0f} us, with "
             "the same artefact consequence for the capture.")
 
-    inverted = None
-    if lo_mean is not None and hi_mean is not None:
-        observed_sign = 1 if hi_mean > lo_mean else (-1 if hi_mean < lo_mean else 0)
-        inverted = (observed_sign != expected_sign) and observed_sign != 0
-        if inverted:
-            problems.append(
-                "D26 inverted capture: power moves with amplitude in the opposite direction to the "
-                "one the control law assumes, so the device would drive the loop the wrong way. "
-                "This is the condition the programmer reports as an inverted capture.")
-    too_close = (d is not None and abs(d) < MIN_CAPTURE_SEPARATION_D)
-    if too_close:
-        problems.append(
-            f"D26 thresholds too close: separation is {abs(d):.2f} within-state standard deviations, "
-            f"below the declared minimum of {MIN_CAPTURE_SEPARATION_D}. The signal is minimally "
-            "responsive to amplitude at these settings and the device is likely to raise RECAPTURE "
-            "THRESHOLDS.")
+    # THE TWO D26 VERDICTS READ THE POOLED TITRATION SLOPE AND WARN, since 2026-09-12 (PI: "b and
+    # c"). Until then they were judged here on `lo_mean` against `hi_mean` and on `d`, the
+    # between-visit comparison decision 124 distrusts, and appended to `problems`, which blocks.
+    # Those numbers are still computed above -- the thresholds ARE the two means, and `d` is still
+    # reported as `control_authority` -- but they judge nothing now; they travel in the structured
+    # verdicts as the historical comparison, labelled as such.
+    verdicts, warnings, alert = d26_capture_verdicts(
+        pooled_slope, expected_sign=expected_sign, historical_d=d,
+        historical_low_mean=lo_mean, historical_high_mean=hi_mean)
     if d is None:
         problems.append("control authority is not estimable: at least one capture has fewer than "
                         "two usable samples, so its spread is unknown.")
@@ -128,8 +291,12 @@ def threshold_placement(power_low, power_high, *, amp_low, amp_high, expected_si
         lower=min(lo_mean, hi_mean) if None not in (lo_mean, hi_mean) else None,
         capture_amp_low=amp_low, capture_amp_high=amp_high,
         frac_time_below=fb, frac_time_between=fbet, frac_time_above=fab,
-        predicted_recapture_alert=(bool(inverted) or bool(too_close)) if d is not None else None,
-        control_authority=d, problems=problems,
-        note=("Thresholds are placed at the two capture means, as the device does. The separation "
-              "criterion is declared by this module, not published by the manufacturer, who "
-              "describes the alert qualitatively as the signal being minimally responsive."))
+        predicted_recapture_alert=alert,
+        control_authority=d, problems=problems, warnings=warnings, capture_verdicts=verdicts,
+        note=("Thresholds are placed at the two capture means, as the device does. Since 2026-09-12 "
+              "the two D26 verdicts (inverted capture, thresholds too close) are judged on the "
+              "pooled titration slope across runs of rising current, not on the between-visit "
+              "comparison of the two capture means, and they warn rather than block. The "
+              "separation criterion on that comparison is declared by this module, not published "
+              "by the manufacturer, who describes the alert qualitatively as the signal being "
+              "minimally responsive."))
