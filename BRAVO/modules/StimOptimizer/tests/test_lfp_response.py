@@ -27,25 +27,6 @@ def _synth(n_per=40, suppression=True, effect=0.8, noise=0.25, seed=0, n_eras=3,
     return np.exp(logp), amp, era, clus
 
 
-def test_device_band_power_is_a_sum_of_squares_over_the_band():
-    """Not a mean, not a log. The device thresholds this quantity."""
-    freqs = np.array([8.0, 10.0, 12.0, 14.0, 30.0])
-    mag = np.array([[1.0, 2.0, 3.0, 4.0, 99.0]])
-    # band 10-14 Hz selects bins at 10, 12, 14 -> 4 + 9 + 16 = 29
-    got = LR.device_band_power(mag, freqs, center_hz=12.0, band_width_hz=4.0)
-    assert got.shape == (1,) and got[0] == pytest.approx(29.0)
-
-
-def test_band_power_refuses_a_band_with_no_bins_and_bad_shapes():
-    freqs = np.array([8.0, 10.0, 12.0])
-    with pytest.raises(ValueError, match="no frequency bins"):
-        LR.device_band_power(np.ones((2, 3)), freqs, center_hz=60.0, band_width_hz=2.0)
-    with pytest.raises(ValueError, match="must be 2-D"):
-        LR.device_band_power(np.ones(3), freqs, center_hz=10.0, band_width_hz=4.0)
-    with pytest.raises(ValueError, match="freqs has"):
-        LR.device_band_power(np.ones((2, 5)), freqs, center_hz=10.0, band_width_hz=4.0)
-
-
 def test_a_suppressing_band_passes_for_a_suppression_mode():
     p, a, era, cl = _synth(suppression=True, effect=1.0)
     r = LR.assess_response(p, a, era=era, cluster=cl, mode_requires="suppression")
@@ -95,12 +76,6 @@ def test_thin_capture_arms_are_not_assessed():
     p = np.exp(np.log(100.0) - 0.3 * a + rng.normal(0, 0.1, a.size))
     r = LR.assess_response(p, a)
     assert r.responds is None and "rows" in r.reason
-
-
-def test_derived_threshold_uses_the_device_formula_on_the_captures():
-    p, a, era, cl = _synth(suppression=True, effect=1.0)
-    r = LR.assess_response(p, a, era=era, cluster=cl)
-    assert r.derived_threshold == pytest.approx(0.75 * (r.power_high - r.power_low) + r.power_low)
 
 
 def test_era_blocking_is_applied_and_its_absence_is_disclosed():

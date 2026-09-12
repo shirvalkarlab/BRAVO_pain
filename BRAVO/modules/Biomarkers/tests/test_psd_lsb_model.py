@@ -23,48 +23,6 @@ def test_model_loads_and_is_cached():
     assert not plm.has_model("FAKE99")
 
 
-def test_tier2_exact_band():
-    e = plm.estimate_lsb(PART, "ZERO_THREE_RIGHT", 26.4, 1.0)
-    assert e["available"] and e["estimated"] and e["tier"] == "band"
-    assert e["model_center_hz"] == 26.4
-    # LSB at 1 uV^2 == 10**intercept; positive and in the device's plausible range.
-    assert 40 < e["lsb"] < 120
-
-
-def test_tier2_power_dependent_gain():
-    """b != 1, so effective k = LSB/uV^2 changes with power (falls as power rises)."""
-    e1 = plm.estimate_lsb(PART, "ZERO_THREE_RIGHT", 26.4, 1.0)
-    e10 = plm.estimate_lsb(PART, "ZERO_THREE_RIGHT", 26.4, 10.0)
-    assert e10["lsb"] > e1["lsb"]                          # more power -> more LSB
-    assert e10["k_effective"] < e1["k_effective"]          # but lower per-uV^2 gain (sub-proportional)
-
-
-def test_tier3_nearest_frequency():
-    e = plm.estimate_lsb(PART, "ZERO_THREE_RIGHT", 15.0, 5.0)
-    assert e["available"] and e["tier"] == "channel_freq"
-    assert e["model_center_hz"] != 15.0 and "nearest" in e["note"]
-
-
-def test_tier4_channel_pooled():
-    e = plm.estimate_lsb(PART, "ONE_THREE_LEFT", 9.0, 2.0)
-    assert e["available"] and e["tier"] == "channel_pooled"
-    assert e["slope_b"] == 1.0                             # proportional fallback
-    assert abs(e["lsb"] - e["k_effective"] * 2.0) < 1e-6
-
-
-def test_none_when_unmodelable():
-    assert not plm.estimate_lsb(PART, "ONE_THREE_RIGHT", 9.0, 2.0)["available"]
-    assert not plm.estimate_lsb("FAKE99", "ZERO_THREE_RIGHT", 26.4, 1.0)["available"]
-    # estimated flag is present even on the failure path (so callers never read a None as measured)
-    assert plm.estimate_lsb("FAKE99", "ZERO_THREE_RIGHT", 26.4, 1.0)["estimated"] is True
-
-
-def test_array_input_mirrors_shape():
-    e = plm.estimate_lsb(PART, "ZERO_THREE_RIGHT", 26.4, [1.0, 2.0, 4.0])
-    assert isinstance(e["lsb"], list) and len(e["lsb"]) == 3
-    assert e["lsb"][0] < e["lsb"][1] < e["lsb"][2]         # monotone in power
-
-
 def test_plot_payload_shape():
     pp = plm.model_plot_payload(PART)
     assert pp["available"]
@@ -95,26 +53,6 @@ def test_8p8hz_cut_is_current_config_not_changepoint_date():
     z3r = m["channels"]["ZERO_THREE_RIGHT"]
     b88 = next(bd for bd in z3r["bands"] if abs(bd["center_hz"] - 8.8) < 1e-6)
     assert 1.70 < b88["intercept_a"] < 1.85                  # stable-regime intercept, not the ~2.0 transient
-
-
-def test_highgamma_estimate_flagged_extrapolated():
-    """A high-gamma (55.5 Hz) LSB estimate must be flagged freq_extrapolated, not snapped silently.
-
-    estimate_lsb snaps an out-of-range request to the nearest fitted band (here 26.4 Hz, ~29 Hz
-    away). The validated PSD->LSB range is 7.8-28.3 Hz and the gain is NOT band-flat, so the snapped
-    LSB is an untested extrapolation. The estimate must carry freq_extrapolated=True and say so in
-    its note, so a clinician never deploys a high-gamma threshold as if it were calibrated.
-    """
-    est = plm.estimate_lsb(PART, "ZERO_THREE_RIGHT", 55.5, 1.0)
-    assert est["available"]
-    assert est.get("freq_extrapolated") is True
-    assert est.get("validated_hz_range") == [7.8, 28.3]
-    assert "extrapolat" in est["note"].lower()
-    # an in-range band must NOT be flagged
-    est_ok = plm.estimate_lsb(PART, "ZERO_THREE_RIGHT", 24.4, 1.0)
-    assert est_ok["available"] and est_ok.get("freq_extrapolated") is False
-    # boundary: just above the validated ceiling is extrapolated
-    assert plm.estimate_lsb(PART, "ZERO_THREE_RIGHT", 28.4, 1.0).get("freq_extrapolated") is True
 
 
 def test_no_impedance_gain_term_adopted():

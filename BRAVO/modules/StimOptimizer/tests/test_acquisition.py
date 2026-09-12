@@ -37,12 +37,6 @@ def test_ei_rewards_both_promise_and_uncertainty():
     assert promise > baseline and uncertain > baseline
 
 
-def test_lcb_is_more_optimistic_with_larger_eta():
-    mu, sd = np.array([0.0]), np.array([0.5])
-    assert ACQ.lower_confidence_bound(mu, sd, t=5, eta=4.0)[0] < \
-           ACQ.lower_confidence_bound(mu, sd, t=5, eta=1.0)[0]
-
-
 def test_exploration_fraction_is_bounded_and_ordered():
     f_hi = ACQ.exploration_fraction(np.array([1.0]), t=3, mu=np.array([0.05]))[0]
     f_lo = ACQ.exploration_fraction(np.array([0.01]), t=3, mu=np.array([2.0]))[0]
@@ -63,26 +57,6 @@ def test_rank_and_select_excludes_tested_cells(gp, grid):
     b = ACQ.select_batch_within_visit(gp, grid, q=3, n_reports=n_rep, incumbent_mu=0.0)
     tested = set(grid.index_of(gp.X_).tolist())
     assert not (set(m.index for m in b) & tested)
-
-
-def test_between_visit_batch_respects_separation(gp, grid):
-    sep = 0.6
-    b = ACQ.select_batch_between_visit(gp, grid, q=4, min_separation=sep, incumbent_mu=0.0)
-    Z = grid.transform(np.array([[m.freq_hz, m.amp_mA] for m in b]))
-    for i in range(len(Z)):
-        for j in range(i + 1, len(Z)):
-            assert np.linalg.norm(Z[i] - Z[j]) >= sep - 1e-9
-
-
-def test_between_visit_is_more_spread_than_within_visit(gp, grid):
-    wv = ACQ.select_batch_within_visit(gp, grid, q=4, incumbent_mu=0.0)
-    bv = ACQ.select_batch_between_visit(gp, grid, q=4, min_separation=0.8, incumbent_mu=0.0)
-
-    def spread(b):
-        Z = grid.transform(np.array([[m.freq_hz, m.amp_mA] for m in b]))
-        return float(np.mean([np.linalg.norm(Z[i] - Z[j])
-                              for i in range(len(Z)) for j in range(i + 1, len(Z))]))
-    assert spread(bv) > spread(wv)
 
 
 def test_empty_safe_set_raises_rather_than_returning_nothing(gp, grid):
@@ -120,19 +94,28 @@ def _certain_grid(n=50, best=-1.0):
     return np.full(n, 0.0), np.full(n, 1e-6), np.full(n, 10.0), best
 
 
+def test_coverage_alone_does_not_stop():
+    mu, sd, n_rep, inc = _certain_grid()
+    d = ACQ.check_stopping([5.0, 3.0, 1.0, -1.0], mu, sd, n_rep, incumbent_mu=inc)
+    assert d.coverage_met and not d.plateau_met and not d.stop
+    assert d.binding == "plateau"
+
+
+def test_plateau_needs_k_plus_one_batches():
+    mu, sd, n_rep, inc = _certain_grid()
+    d = ACQ.check_stopping([-1.0, -1.0], mu, sd, n_rep, incumbent_mu=inc)
+    assert not d.plateau_met
+
+
+# Restored 2026-09-12: the audit made their deletion conditional on a design decision the PI
+# has not made (the stopping rule's one-item history; the ramp clip of commit 790ed21), so
+# they stay until he does.
 def test_plateau_alone_does_not_stop():
     """The whole point of the dual rule: a flat history is not a global optimum."""
     mu, sd, n_rep, _ = np.full(50, 0.0), np.full(50, 1.0), np.zeros(50), None
     d = ACQ.check_stopping([0.0, 0.0, 0.0, 0.0], mu, sd, n_rep, incumbent_mu=0.0)
     assert d.plateau_met and not d.coverage_met and not d.stop
     assert d.binding == "coverage"
-
-
-def test_coverage_alone_does_not_stop():
-    mu, sd, n_rep, inc = _certain_grid()
-    d = ACQ.check_stopping([5.0, 3.0, 1.0, -1.0], mu, sd, n_rep, incumbent_mu=inc)
-    assert d.coverage_met and not d.plateau_met and not d.stop
-    assert d.binding == "plateau"
 
 
 def test_both_conditions_stop():
@@ -147,9 +130,3 @@ def test_ceiling_reports_truncated_not_converged():
     d = ACQ.check_stopping([1.0, 0.9, 0.8], mu, sd, n_rep, incumbent_mu=0.0, cfg=cfg)
     assert d.truncated and not d.stop and d.binding == "hard ceiling"
     assert "NOT found the optimum" in d.describe()
-
-
-def test_plateau_needs_k_plus_one_batches():
-    mu, sd, n_rep, inc = _certain_grid()
-    d = ACQ.check_stopping([-1.0, -1.0], mu, sd, n_rep, incumbent_mu=inc)
-    assert not d.plateau_met

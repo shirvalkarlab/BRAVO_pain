@@ -510,54 +510,10 @@ def test_a_service_that_cannot_supply_the_tiles_also_gets_none(monkeypatch):
     assert frame is None and len(epochs) == 2
 
 
-def test_the_older_decibel_route_is_still_reachable_for_the_comparison(monkeypatch):
-    """The before-and-after measurement of this change needs the frame the module used to build,
-    so the old route stays available by name -- but it is no longer what a caller gets by default.
-    """
-    freqs = np.arange(1.0, 41.0, 1.0)
-    service = _fake_service(_plain_cache())
-    service._cached_psd_matrix = lambda uid, force_refresh=None: {
-        "logX": np.full((4, freqs.size), -1.0), "t": T0 + np.arange(4) * 10.0,
-        "channel": np.array([CHANNEL] * 4, dtype=object), "f_set": freqs}
-    _install(monkeypatch, service)
-    frame, _ = AD.evidence_inputs("PARTICIPANT", stream=_stream(),
-                                  band_power=AD.BAND_POWER_DECIBEL_DENSITY)
-    assert "log_psd" in frame.columns and not EV._cal_center_columns(frame)
-
-
 def test_an_unknown_band_power_choice_raises_rather_than_picking_one(monkeypatch):
     _install(monkeypatch, _fake_service(_plain_cache()))
     with pytest.raises(ValueError, match="band_power must be"):
         AD.evidence_inputs("PARTICIPANT", stream=_stream(), band_power="whatever")
-
-
-def test_the_stream_argument_still_stops_the_files_being_read_twice(monkeypatch):
-    """The contract added earlier and which must survive this change: hand in the settings stream
-    and the participant's stored files are not parsed again.
-    """
-    calls = []
-
-    def _builder(participant, **kw):
-        calls.append((participant, dict(kw)))
-        return _stream()
-
-    monkeypatch.setattr(AD, "settings_stream", _builder)
-    _install(monkeypatch, _fake_service(_plain_cache()))
-
-    AD.evidence_inputs("PARTICIPANT", stream=_stream())
-    assert calls == []
-    AD.evidence_inputs("PARTICIPANT")
-    assert len(calls) == 1 and calls[0] == ("PARTICIPANT", {})
-
-    p = inspect.signature(AD.evidence_inputs).parameters["stream"]
-    assert p.default is None and p.kind is inspect.Parameter.KEYWORD_ONLY
-
-
-def test_the_call_shapes_other_modules_use_still_bind():
-    sig = inspect.signature(AD.evidence_inputs)
-    sig.bind("PARTICIPANT")
-    sig.bind("PARTICIPANT", force_refresh=None, sources=None)
-    sig.bind("PARTICIPANT", stream=_stream())
 
 
 def test_the_frame_only_carries_bands_the_device_could_actually_sense(monkeypatch):

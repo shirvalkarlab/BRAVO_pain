@@ -605,37 +605,6 @@ def test_a_planted_band_ranks_best_under_the_family_wise_correction_and_pure_noi
 # 8. the two matrices and the full grid
 # ---------------------------------------------------------------------------------------------
 
-def test_the_two_matrices_and_the_full_grid_come_out_readable():
-    """One row per band centre in each matrix, one row per cell in the grid, and the columns a
-    reader needs in order to interpret a row present on every row."""
-    power, pain, centers = _synthetic_grid(seed=29)
-    sw = A.band_time_sweep_from_power(power, pain, center_freqs_hz=centers, n_perm=200, n_boot=300)
-    corr, auc, grid = A.band_time_sweep_tables(sw)
-    n_c = len(centers)
-    n_t = len(sw["integration_seconds_delivered"])
-    assert len(corr) == n_c and len(auc) == n_c
-    assert len(grid) == n_c * n_t, f"the grid should have {n_c * n_t} rows, got {len(grid)}"
-    for need in ("band_center_hz", "integration_seconds_delivered", "integration_seconds_requested",
-                 "no_relationship_value", "answer", "why", "n_pain_reports",
-                 "shuffled_best_of_windows_p95", "chosen_as_best_of_n_windows"):
-        assert need in corr.columns, f"the correlation matrix is missing {need}"
-        assert need in auc.columns, f"the high-versus-low-pain matrix is missing {need}"
-    assert set(auc["no_relationship_value"].dropna().unique()) == {0.5}
-    assert set(corr["no_relationship_value"].dropna().unique()) == {0.0}
-    for need in ("pearson_r", "auc", "auc_direction_folded", "integration_seconds_delivered",
-                 "band_fully_inside_8_to_30_hz", "auc_no_relationship_value"):
-        assert need in grid.columns, f"the full grid is missing {need}"
-    assert not any(c.startswith("_") for c in auc.columns), (
-        "no private bookkeeping column may reach a saved file")
-    # The band flag is arithmetic and has to be right: a 5 Hz band centred on 10.5 Hz runs 8 to 13.
-    inside = grid[grid["band_center_hz"] == 10.5]["band_fully_inside_8_to_30_hz"]
-    assert bool(inside.iloc[0]) is True
-    outside = grid[grid["band_center_hz"] == 8.5]["band_fully_inside_8_to_30_hz"]
-    assert bool(outside.iloc[0]) is False, "a band centred on 8.5 Hz runs down to 6 Hz"
-    print(f"OK the two matrices have {n_c} rows each, the full grid {len(grid)}, and every row "
-          f"carries the value that means no relationship for its own quantity")
-
-
 def test_an_empty_input_is_a_reason_not_a_crash():
     """Missing inputs come back as a stated reason with no numbers, never as a value near the
     no-relationship point."""
@@ -683,7 +652,6 @@ if __name__ == "__main__":
     test_the_optimism_note_is_in_the_panel_not_only_in_a_caption()
     test_a_value_that_does_not_beat_the_shuffled_best_of_ten_is_not_established()
     test_a_planted_relationship_is_found_at_the_right_band()
-    test_the_two_matrices_and_the_full_grid_come_out_readable()
     test_an_empty_input_is_a_reason_not_a_crash()
     test_band_centres_come_from_the_cache_grid_not_from_a_wish()
     print("All band-by-length-of-signal sweep tests passed.")

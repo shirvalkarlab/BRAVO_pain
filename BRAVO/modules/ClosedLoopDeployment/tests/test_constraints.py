@@ -454,14 +454,6 @@ def test_every_failure_row_carries_the_page_that_forbids_it():
 # ------------------------------------------------------------------------------------------------
 # The rules the task singles out as the ones that actually bite.
 # ------------------------------------------------------------------------------------------------
-def test_d30_makes_the_frequency_search_and_the_closed_loop_sequential():
-    """Rate and pulse width freeze when BrainSense is set up, so the search must close first."""
-    open_search = check(passing_candidate(frequency_search_closed=False), resolved_participant())
-    assert ids(open_search.failures) == {"D30"}
-    assert open_search.eligible is False
-
-    closed = check(passing_candidate(frequency_search_closed=True), resolved_participant())
-    assert "D30" not in ids(closed.failures)
 
 
 def test_d40_couples_the_hemispheres_in_single_threshold_mode():

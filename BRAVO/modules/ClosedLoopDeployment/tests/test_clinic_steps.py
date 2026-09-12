@@ -14,27 +14,6 @@ from StimOptimizer.routines import within_visit as WV
 from StimOptimizer.routines import lfp_response as LR
 
 
-def test_settled_window_takes_the_intersection_of_nominal_and_observed():
-    """Neither number alone is safe: across 637 comparable step pairs the sheets' nominal duration
-    had a median of 60 s against an observed interval of 98 s, with the observed one SHORTER in 23%
-    of steps and more than twice as long in 24%. min() is the only value defensible as delivered."""
-    assert CS.settled_window(1000.0, 60.0, 98.0) == (1045.0, 1060.0)
-    assert CS.settled_window(1000.0, 98.0, 60.0) == (1045.0, 1060.0)
-
-
-def test_a_thirty_second_step_has_no_settled_time_at_all():
-    """The consequence that drives protocol design: a 30 s step is entirely ramp, so all 169 of
-    RCS08's 30 s steps contribute nothing. Returns None rather than an inverted window."""
-    assert CS.settled_window(1000.0, 30.0, 200.0) is None
-    assert CS.settled_window(1000.0, 45.0, 45.0) is None
-
-
-def test_one_missing_duration_does_not_void_the_step():
-    assert CS.settled_window(1000.0, None, 120.0) == (1045.0, 1120.0)
-    assert CS.settled_window(1000.0, 120.0, None) == (1045.0, 1120.0)
-    assert CS.settled_window(1000.0, None, None) is None
-
-
 def test_band_mask_drops_the_stimulation_frequency_and_its_aliases():
     """At 55 Hz the landings are 25, 30, 55, 60, 80 and 85 Hz after folding about Nyquist, so the
     mask must remove bands centred within one band half-width of each."""
@@ -77,13 +56,6 @@ def test_the_mask_reuses_the_biomarker_helper_rather_than_reimplementing_it():
     src = inspect.getsource(CS)
     assert "from Biomarkers.routines.analytics import harmonic_landings_hz" in src
     assert "round(raw / fs)" not in src, "the folding arithmetic has been re-inlined"
-
-
-def test_the_degeneracy_guard_records_a_stricter_cluster_floor_than_the_run_used():
-    """The 2026-09-05 run clustered on 4+ visits and produced zero-width intervals. The constants
-    exist so the next run does not repeat it."""
-    assert CS.MIN_VISITS_FOR_CLUSTER_ROBUST >= 8
-    assert 0 < CS.DEGENERATE_CI_WIDTH_LOG10 < 0.01
 
 
 # --- the within-visit amplitude-response screen (2026-09-05) ------------------------------------

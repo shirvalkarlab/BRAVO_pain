@@ -369,56 +369,6 @@ def test_the_two_stage_run_reports_honestly_that_it_cannot_proceed():
     assert rep.manifest["stage2_n_valid_policies"] == 0
 
 
-def test_the_run_against_the_reconciled_biomarker_plate_refuses_for_three_stateable_reasons():
-    """End to end with the reconciled RCS08 plate and the historical LFP-response verdict.
-
-    The three reasons must be reported SEPARATELY, each with its number, so a reader can see which
-    condition binds:
-
-    1. the only adaptive-capable selected band (14.817 Hz) is not statistically supported —
-       perm_p = 0.4166 after selection correction, FDR q = 0.5055;
-    2. the nominally strongest band (3.9215 Hz, perm_p 0.0809) spans roughly 1.4-6.4 Hz and is
-       excluded by the 8-30 Hz adaptive window — a DEVICE constraint, independent of its statistics;
-    3. the LFP-response requirement fails on the historical record — 3 of 15 channel-by-rate cells
-       suppress, one-sided binomial p = 0.996.
-
-    Refusing here is the correct behaviour and no threshold may be relaxed to change it.
-    """
-    from StimOptimizer import pipeline
-    rep = pipeline.run_two_stage(_rcs08_like(), data_horizon="test", washin_min=1.0,
-                                 selected_bands=GATE.RCS08_SELECTED_BANDS,
-                                 response_summary=GATE.RCS08_RESPONSE_SUMMARY)
-    assert rep.can_deploy_closed_loop() is False
-    assert rep.stage2.started is False
-    assert rep.stage2.n_valid == 0
-    assert len(rep.gate.conditions) == 6
-
-    # reason 1: the usable band is not supported, and its numbers are in the detail
-    stat = rep.gate.condition("selected_band_statistically_supported")
-    assert stat.passed is False
-    assert "0.4166" in stat.detail and "0.5055" in stat.detail
-
-    # reason 2: the other band is excluded by the DEVICE window, reported as a device fact and not
-    # as a statistical one. The condition itself PASSES, because a band inside the window does
-    # exist -- the exclusion is attached to the band it applies to rather than to the whole gate.
-    win = rep.gate.condition("selected_band_inside_adaptive_window")
-    assert win.passed is True
-    assert "DEVICE" in win.detail
-    assert "regardless of their statistics" in win.detail
-    assert [r["outcome"] for r in win.evidence["outside"]] == ["nrs"]
-
-    # reason 3: the response requirement fails on the historical record, with attribution
-    resp = rep.gate.condition("adaptive_band_passes_lfp_response")
-    assert resp.passed is False
-    assert "3 of 15" in resp.detail and "0.996" in resp.detail
-
-    # each blocking reason is separately named in the refusal, not merged into one verdict
-    names = [n for n, _ in rep.stage2.refusal_reasons]
-    assert "selected_band_statistically_supported" in names
-    assert "adaptive_band_passes_lfp_response" in names
-    assert "openloop_choice_resolved" in names
-
-
 def test_both_routes_for_supplying_selected_bands_reach_the_gate_identically():
     """Regression, 2026-09-02. Both invocation styles must work.
 

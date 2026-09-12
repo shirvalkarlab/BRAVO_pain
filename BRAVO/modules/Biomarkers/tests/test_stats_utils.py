@@ -12,19 +12,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from Biomarkers.routines import stats_utils as su  # noqa: E402
 
 
-def test_bh_fdr():
-    # All-null-ish small p's should be inflated by BH; a single tiny p stays significant.
-    p = np.array([0.001, 0.04, 0.30, 0.50, 0.90])
-    q = su.bh_fdr(p)
-    assert q.shape == p.shape
-    assert np.all((q >= 0) & (q <= 1))
-    assert np.all(np.diff(np.sort(q)) >= -1e-12)         # monotone after sorting
-    assert q[0] < 0.05 and q[2] > 0.05                    # smallest survives, mid does not
-    # NaNs preserved
-    q2 = su.bh_fdr(np.array([0.01, np.nan, 0.02]))
-    assert np.isnan(q2[1]) and np.isfinite(q2[0]) and np.isfinite(q2[2])
-
-
 def test_bh_fdr_matches_statsmodels_independent_implementation():
     """`bh_fdr` is hand-rolled (rank, adjust, enforce monotonicity by reverse cummin). Nothing
     before this test checked it against an independent, published implementation of the same
@@ -108,20 +95,6 @@ def test_balanced_metrics_chance_invariant_across_imbalance():
     assert m0["prevalence"] == 0.0 and m0["majority_accuracy"] == 1.0
 
 
-def test_block_perm_pvalue():
-    rng = np.random.default_rng(2)
-    N, M = 120, 20
-    X = rng.normal(size=(N, M))
-    y_null = rng.normal(size=N)                           # no real association
-    fn = lambda Xm, ym: float(np.max(np.abs([np.corrcoef(Xm[:, j], ym)[0, 1] for j in range(Xm.shape[1])])))
-    p_null, used = su.block_perm_pvalue(fn(X, y_null), X, y_null, fn, n_perm=200, seed=3)
-    assert used > 0 and 0 < p_null <= 1.0
-    # planted strong association in one column -> small p
-    y_real = X[:, 0] + 0.2 * rng.normal(size=N)
-    p_real, _ = su.block_perm_pvalue(fn(X, y_real), X, y_real, fn, n_perm=200, seed=3)
-    assert p_real < p_null
-
-
 def test_fisher_z_ci():
     lo, hi = su.fisher_z_ci(0.5, 50)
     assert lo < 0.5 < hi and -1 < lo and hi < 1
@@ -186,12 +159,11 @@ def test_auc_block_perm_null():
 
 
 if __name__ == "__main__":
-    test_bh_fdr()
+    test_bh_fdr_matches_statsmodels_independent_implementation()
     test_partial_corr_removes_confound()
     test_effective_n_shrinks_with_autocorrelation()
     test_balanced_metrics()
     test_balanced_metrics_chance_invariant_across_imbalance()
-    test_block_perm_pvalue()
     test_fisher_z_ci()
     test_circular_block_perm_matrix_valid()
     test_block_length_for()

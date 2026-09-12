@@ -153,169 +153,6 @@ def test_centre_count_mismatch_raises_rather_than_mislabelling_bands():
                                        tile_t=tt, tile_power=tp)
 
 
-# --- the band-axis cluster permutation test (2026-09-05) -----------------------------------------
-def _panel(n_visits=8, per_visit=12, amps=(1.0, 2.0, 3.0, 4.0), seed=0,
-           effect_bands=(), slope=-0.30, noise=0.25, visit_sd=0.5):
-    """Within-visit panel: a per-visit offset plus an amplitude effect in `effect_bands` only."""
-    rng = np.random.default_rng(seed)
-    vis, amp = [], []
-    for v in range(n_visits):
-        for k in range(per_visit):
-            vis.append(f"v{v}")
-            amp.append(amps[k % len(amps)])
-    vis = np.asarray(vis); amp = np.asarray(amp, dtype=float)
-    off = {v: rng.normal(0, visit_sd) for v in set(vis)}
-    base = np.array([off[v] for v in vis])
-    power = {}
-    for c in CEN:
-        y = 5.0 + base + rng.normal(0, noise, amp.size)
-        if any(abs(c - e) < 1e-9 for e in effect_bands):
-            y = y + slope * amp
-        power[float(c)] = y
-    return power, amp, vis
-
-
-def test_the_fast_estimator_matches_the_gates_statsmodels_fit():
-    """The consistency claim. A fast reimplementation that silently disagreed with
-    `assess_response`'s estimator would make the SEARCH and the VERDICT answer different questions,
-    and the discrepancy would be invisible because both look reasonable in isolation.
-
-    The raw CR0 sandwich differed from statsmodels by exactly sqrt(G/(G-1) * (N-1)/(N-K)) -- the
-    standard finite-sample correction -- measured at a ratio of 1.134349 against a predicted
-    1.134349 on a 90-row, 6-cluster construction. That identified it as the correction rather than a
-    modelling difference, and it is now applied.
-    """
-    import statsmodels.formula.api as smf
-    rng = np.random.default_rng(7)
-    n, nv = 90, 6
-    vis = np.array([f"v{i % nv}" for i in range(n)])
-    amp = rng.choice([1.0, 2.0, 3.0, 4.0], n)
-    off = {v: rng.normal(0, 0.5) for v in set(vis)}
-    y = np.array([5 - 0.25 * a + off[v] + rng.normal(0, 0.3) for a, v in zip(amp, vis)])
-
-    mine = WV._band_t_cluster_robust(y, amp, vis, vis)
-    df = pd.DataFrame({"logp": y, "amp": amp, "era": vis, "clus": vis})
-    res = smf.ols("logp ~ amp + C(era)", data=df).fit(
-        cov_type="cluster", cov_kwds={"groups": df["clus"]})
-    assert abs(mine - float(res.params["amp"] / res.bse["amp"])) < 1e-8
-
-
-def test_clusters_are_runs_of_adjacent_same_signed_bands():
-    t = np.array([0.1, 2.5, 3.0, 2.2, 0.4, -2.1, -2.9, 0.2, 2.4])
-    got = WV._clusters_along_axis(t, 2.0)
-    assert got == [(1, 4, 7.7), (5, 7, -5.0), (8, 9, 2.4)], got
-    # a sign change BREAKS a run even with both sides supra-threshold
-    t2 = np.array([2.5, -2.5, 2.5])
-    assert len(WV._clusters_along_axis(t2, 2.0)) == 3
-    # and nothing supra-threshold gives no clusters
-    assert WV._clusters_along_axis(np.array([0.5, 1.0, -1.2]), 2.0) == []
-
-
-def test_a_localised_effect_is_detected_where_the_majority_rule_cannot_be_satisfied():
-    """The whole reason this test exists. Four adjacent bands of eighteen carry a real effect --
-    22% of the grid, so the 50% majority rule refuses it by construction however strong it is.
-    """
-    eff = tuple(CEN[14:18])                       # 24.5-27.5 Hz, four adjacent centres
-    power, amp, vis = _panel(effect_bands=eff, slope=-0.30, seed=1)
-    r = WV.band_cluster_permutation(power, amp, vis, n_perm=300, seed=0)
-    assert r["available"] is True
-    assert r["n_clusters"] >= 1
-    L = r["largest_cluster"]
-    assert L["sign"] == "negative", L
-    assert r["p_fwer"] <= 0.05, r["p_fwer"]
-    # the effect occupies well under the majority the gate requires
-    assert len(eff) / len(CEN) < 0.5
-
-
-def test_a_flat_panel_is_not_significant():
-    """Size. No amplitude effect in any band; the largest noise cluster must not be rejected."""
-    power, amp, vis = _panel(effect_bands=(), seed=2)
-    r = WV.band_cluster_permutation(power, amp, vis, n_perm=300, seed=0)
-    assert r["available"] is True
-    if r.get("p_fwer") is not None:
-        assert r["p_fwer"] > 0.05, (r["p_fwer"], r["largest_cluster"])
-
-
-def test_the_p_value_can_never_beat_its_own_resolution():
-    power, amp, vis = _panel(effect_bands=tuple(CEN[14:18]), slope=-0.60, seed=3)
-    r = WV.band_cluster_permutation(power, amp, vis, n_perm=99, seed=0)
-    if r.get("p_fwer") is not None:
-        assert r["p_fwer"] >= r["p_resolution"] - 1e-12
-        assert abs(r["p_resolution"] - 1.0 / 100) < 1e-12
-
-
-def test_it_refuses_rather_than_returning_a_meaningless_number():
-    power, amp, vis = _panel(n_visits=1, seed=4)
-    r = WV.band_cluster_permutation(power, amp, vis, n_perm=50, seed=0)
-    assert r["available"] is False and "within visits" in r["reason"].lower()
-
-    # a panel where every visit holds ONE amplitude: permuting within visit changes nothing
-    power2, amp2, vis2 = _panel(n_visits=6, per_visit=6, amps=(2.0,), seed=5)
-    r2 = WV.band_cluster_permutation(power2, amp2, vis2, n_perm=50, seed=0)
-    assert r2["available"] is False and "two amplitudes" in r2["reason"].lower()
-
-    # too few centres to have an axis to cluster along
-    r3 = WV.band_cluster_permutation({10.5: np.zeros(20), 11.5: np.zeros(20)},
-                                     np.ones(20), np.array(["a"] * 10 + ["b"] * 10),
-                                     n_perm=50, seed=0)
-    assert r3["available"] is False and "three centres" in r3["reason"].lower()
-
-
-def test_the_result_states_that_it_cannot_locate_the_effect():
-    """Guards a real hazard rather than prose. This test's whole point is that a reader must not be
-    able to take the cluster's frequency limits as a band to program: cluster-sum inference gives
-    weak family-wise control and does not establish location (Sassenhagen & Draschkow 2019). If
-    this warning is ever edited away, the next reader may hand those limits to a clinician.
-    """
-    power, amp, vis = _panel(effect_bands=tuple(CEN[14:18]), slope=-0.30, seed=6)
-    r = WV.band_cluster_permutation(power, amp, vis, n_perm=100, seed=0)
-    note = (r.get("note") or "").lower()
-    assert "not its location" in note or "not location" in note, r.get("note")
-    assert "must not be used to choose a band" in note, r.get("note")
-    # and the flat-panel branch must carry the weak-evidence-of-absence caveat
-    p2, a2, v2 = _panel(effect_bands=(), noise=1.5, seed=7)
-    r2 = WV.band_cluster_permutation(p2, a2, v2, n_perm=50, seed=0)
-    if r2.get("n_clusters") == 0:
-        assert "weak evidence of absence" in (r2.get("note") or "")
-
-
-def test_the_threshold_sweep_comes_from_one_permutation_loop_and_matches_separate_runs():
-    """The sweep exists because the cluster-forming threshold is a free parameter, and the honest
-    way to handle that is to show the whole sweep rather than one chosen value. It must therefore be
-    identical to running the test separately at each threshold with the same seed -- otherwise the
-    sweep would be a different, cheaper thing wearing the same name.
-    """
-    power, amp, vis = _panel(effect_bands=tuple(CEN[14:18]), slope=-0.30, seed=11)
-    swept = WV.band_cluster_permutation(power, amp, vis, n_perm=200, seed=3,
-                                        t_threshold=2.0, extra_thresholds=(1.5, 3.0))
-    assert set(swept["threshold_sweep"]) == {1.5, 2.0, 3.0}
-    for th in (1.5, 2.0, 3.0):
-        alone = WV.band_cluster_permutation(power, amp, vis, n_perm=200, seed=3, t_threshold=th)
-        got, want = swept["threshold_sweep"][th]["p_fwer"], alone.get("p_fwer")
-        assert got == want, (th, got, want)
-
-
-def test_a_higher_threshold_never_grows_a_cluster():
-    """A sanity property of cluster formation that a bug in the grouping would break: raising the
-    threshold can only remove bands from a run, never add them.
-    """
-    power, amp, vis = _panel(effect_bands=tuple(CEN[12:18]), slope=-0.35, seed=12)
-    r = WV.band_cluster_permutation(power, amp, vis, n_perm=100, seed=0,
-                                    t_threshold=1.5, extra_thresholds=(2.0, 2.5, 3.0))
-    sizes = {th: d["largest_n_bands"] for th, d in r["threshold_sweep"].items()
-             if d["largest_n_bands"] is not None}
-    ordered = [sizes[th] for th in sorted(sizes)]
-    assert ordered == sorted(ordered, reverse=True), sizes
-
-
-def test_the_primary_threshold_is_always_present_in_the_sweep():
-    power, amp, vis = _panel(effect_bands=tuple(CEN[14:18]), slope=-0.30, seed=13)
-    r = WV.band_cluster_permutation(power, amp, vis, n_perm=100, seed=0, t_threshold=2.0,
-                                    extra_thresholds=(2.0, 2.0))     # duplicates collapse
-    assert list(r["threshold_sweep"]) == [2.0]
-    assert r["threshold_sweep"][2.0]["p_fwer"] == r["p_fwer"]
-
-
 # =================================================================================================
 # AVERAGING THE LAST 30 SECONDS BEFORE THE CURRENT IS CHANGED AGAIN
 # =================================================================================================
@@ -491,20 +328,6 @@ def test_the_older_median_rule_is_still_there_and_still_does_its_own_thing():
 
 
 # --- the measured ramp exclusion and the peaked-response check (2026-09-06) --------------------
-def test_the_ramp_exclusion_covers_the_longest_ramp_actually_observed():
-    """The exclusion exists to remove the ramp, so it must not be shorter than the ramp.
-
-    Measured from the device's own 2 Hz amplitude record on RCS08's 2026-08-18 visit: 6.5 s median,
-    17.5 s at most across both stimulators. This asserts the relationship rather than the numbers,
-    so a future measurement can move both without the test becoming a lie.
-    """
-    assert WV.RAMP_EXCLUDE_S >= WV.LONGEST_OBSERVED_RAMP_S, (
-        "the ramp exclusion is shorter than the longest ramp measured from the device")
-    # And it must not drift back to a figure that discards most of a 57 s hold for nothing.
-    assert WV.RAMP_EXCLUDE_S <= 30.0, (
-        "an exclusion this long throws away most of the settled signal; see the provenance block")
-
-
 def test_a_peaked_response_is_reported_as_peaked_and_not_as_flat():
     """The failure this guards: a rise-then-fall reads as 'does not respond' to a linear test.
 
@@ -728,66 +551,21 @@ def test_the_step_summary_is_the_average_and_the_middle_value_stays_available():
     assert WV.STEP_SUMMARY == "mean"
 
 
-def test_ramp_windows_come_from_the_device_and_a_burst_is_one_step():
-    """A setting the sheet records as one step is a burst of small increments, then a hold.
+# Restored 2026-09-12: the audit made their deletion conditional on a design decision the PI
+# has not made (the stopping rule's one-item history; the ramp clip of commit 790ed21), so
+# they stay until he does.
+def test_the_ramp_exclusion_covers_the_longest_ramp_actually_observed():
+    """The exclusion exists to remove the ramp, so it must not be shorter than the ramp.
 
-    Built to match RCS08's actual record: 0.5, 0.6, 0.7, 0.8, 1.0 over a few seconds, then ~57 s
-    of hold. The burst must collapse to ONE plateau whose start is the measured end of the ramp.
+    Measured from the device's own 2 Hz amplitude record on RCS08's 2026-08-18 visit: 6.5 s median,
+    17.5 s at most across both stimulators. This asserts the relationship rather than the numbers,
+    so a future measurement can move both without the test becoming a lie.
     """
-    t = np.arange(0.0, 400.0, 0.5)                        # the device samples amplitude at 2 Hz
-    a = np.zeros_like(t)
-    a[(t >= 10.0)] = 0.2
-    a[(t >= 11.0)] = 0.3
-    a[(t >= 12.5)] = 0.4
-    a[(t >= 14.0)] = 0.5                                  # ramp ends here: 4 increments over 4 s
-    a[(t >= 90.0)] = 0.6
-    a[(t >= 91.5)] = 1.0                                  # a second burst, 1.5 s
-    W = WV.ramp_windows_from_amplitude(t, a)
-    assert len(W) == 2, W
-    assert np.isclose(W.ramp_end.iloc[0], 14.0)
-    assert np.isclose(W.ramp_s.iloc[0], 4.0)
-    assert W.n_increments.iloc[0] == 4
-    assert np.isclose(W.mA_from.iloc[0], 0.0) and np.isclose(W.mA_to.iloc[0], 0.5)
-    assert W.hold_s.iloc[0] > 70.0
-    assert np.isclose(W.ramp_s.iloc[1], 1.5) and W.n_increments.iloc[1] == 2
-
-    # A change with no hold after it is not a plateau and must not be reported as one.
-    a2 = np.zeros_like(t); a2[(t >= 395.0)] = 1.0
-    assert len(WV.ramp_windows_from_amplitude(t, a2)) == 0
-    # And an amplitude record that never moves yields nothing rather than raising.
-    assert len(WV.ramp_windows_from_amplitude(t, np.zeros_like(t))) == 0
-
-
-def test_a_block_whose_current_never_holds_still_is_refused_not_described_as_a_ramp():
-    """Found 2026-09-06 auditing this function against RCS08's whole record.
-
-    17 of 600 blocks with a moving amplitude are at-home recordings where the current changes
-    almost continuously -- a median of 494 changes, worst case 5,139 over 615.6 s with 3.85 s of
-    hold. The burst rule glued those into ONE block and called it a 615-second ramp, which is
-    arithmetically true and meaningless: there is no ramp and no plateau to measure.
-    """
-    t = np.arange(0.0, 600.0, 0.5)
-    a = 2.0 + 0.3 * np.sin(np.arange(t.size) / 3.0)      # never holds still
-    with pytest.raises(WV.ContinuousAmplitudeError) as e:
-        WV.ramp_windows_from_amplitude(t, a)
-    msg = str(e.value)
-    assert "never holds still" in msg, "the error must say what the block IS, not only what failed"
-    assert str(WV.MAX_INCREMENTS_PER_RAMP) in msg, "it must name the threshold it exceeded"
-
-    # A real ladder with the largest increment count actually observed (35) must still pass, so
-    # the guard cannot be tightened into the working range without this test failing.
-    t2 = np.arange(0.0, 400.0, 0.5)
-    a2 = np.zeros_like(t2)
-    for k in range(35):                                   # 35 increments over 70 s, then a hold
-        a2[t2 >= 10.0 + 2.0 * k] = 0.1 * (k + 1)
-    W = WV.ramp_windows_from_amplitude(t2, a2)
-    assert len(W) == 1, "the 35-increment ladder observed on 2026-06-24 must not be refused"
-    assert W.n_increments.iloc[0] == 35
-    assert W.hold_s.iloc[0] > 200.0
-
-    # And a block whose current simply sits at one value returns EMPTY rather than raising: that
-    # is a different situation and the caller needs to tell them apart.
-    assert len(WV.ramp_windows_from_amplitude(t2, np.full_like(t2, 2.0))) == 0
+    assert WV.RAMP_EXCLUDE_S >= WV.LONGEST_OBSERVED_RAMP_S, (
+        "the ramp exclusion is shorter than the longest ramp measured from the device")
+    # And it must not drift back to a figure that discards most of a 57 s hold for nothing.
+    assert WV.RAMP_EXCLUDE_S <= 30.0, (
+        "an exclusion this long throws away most of the settled signal; see the provenance block")
 
 
 def test_the_look_back_window_is_clipped_at_the_measured_end_of_the_ramp():

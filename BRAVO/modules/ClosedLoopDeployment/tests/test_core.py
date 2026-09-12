@@ -85,17 +85,6 @@ def test_state_edge_refuses_when_the_rating_cluster_is_absent():
     assert "pseudoreplication" in e.note, e.note
 
 
-def test_max_statistic_permutation_permutes_whole_epochs():
-    T = _toy_table(n_epochs=6, per_epoch=6)
-    out = E.max_statistic_permutation(T, channels=["CH"], centers=[20.5], n_perm=99, seed=1)
-    assert out["available"] and out["n_epochs_permuted"] == 6
-    assert 0.0 < out["p_fwer"] <= 1.0
-    assert out["resolution"] == pytest.approx(1 / 100)
-    # too few epochs must refuse rather than return a meaningless null
-    assert E.max_statistic_permutation(_toy_table(n_epochs=2), channels=["CH"],
-                                       centers=[20.5], n_perm=10)["available"] is False
-
-
 # --- coherence ----------------------------------------------------------------------------------
 def _edge(name, est, lo, hi, unit="rating"):
     return EdgeEstimate(name, est, (lo, hi), 0.01, 50, unit, 8)

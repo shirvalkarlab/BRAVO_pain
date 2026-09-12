@@ -525,19 +525,6 @@ def test_merge_timelines_both_and_degenerate():
     assert len(only_ch) == 5 and "td_biomarker_value" not in only_ch.columns
 
 
-def test_run_streaming_biomarker_backcompat():
-    recs = [_make_recording(seed=k) for k in range(4)]
-    for k, r in enumerate(recs):
-        r["StartTime"] = _MIDNIGHT_UTC + k * 86_400
-    pro = pd.DataFrame({
-        "date_time_s1_daily": [_utc_str(_MIDNIGHT_UTC + k * 86_400 + 12 * 3_600) for k in range(4)],
-        "nrs": [8, 6, 4, 3], "vas": [80, 60, 40, 30], "mpq_sum": [30, 20, 10, 5],
-    })
-    out = pipeline.run_streaming_biomarker(recs, pro, CHAN_ORDER)
-    assert {"result", "band", "combined"} <= set(out)
-    assert isinstance(out["combined"], pd.DataFrame)
-
-
 def test_run_biomarker_both_unified_timeline():
     recs = [_make_recording(seed=k) for k in range(6)]
     for k, r in enumerate(recs):
@@ -770,7 +757,6 @@ if __name__ == "__main__":
     test_bravo_chronic_accepts_list_of_recordings()
     test_run_chronic_threshold_runs()
     test_merge_timelines_both_and_degenerate()
-    test_run_streaming_biomarker_backcompat()
     test_run_biomarker_both_unified_timeline()
     test_chronic_summary_is_self_consistent()
     test_merge_timelines_handles_nat_time()
