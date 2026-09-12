@@ -275,8 +275,21 @@ def ground_truth_block(participant, *, tiles_key_now):
 
 
 #: How many trailing elements of the response key describe the RESPONSE only and not the four
-#: tables: the two-stage settings (the flag and the override reason) and the figure backend.
-_RESPONSE_ONLY_KEY_TAIL = 3
+#: tables: the two-stage settings (the flag, the override reason, and the explore-outside-the-
+#: adaptive-envelope override) and the figure backend.
+_RESPONSE_ONLY_KEY_TAIL = 4
+
+
+def _explore_outside_key_element(rd) -> str:
+    """The response-key element for the explore-outside-the-envelope override.
+
+    "absent" and "present but empty" produce different blocks (the second says the override was
+    ignored), so they must be different key elements, or a request naming the key with no reason
+    could be served a copy that never mentions it.
+    """
+    if TWO_STAGE_EXPLORE_OUTSIDE_KEY not in (rd or {}):
+        return "0:"
+    return "1:" + str((rd or {}).get(TWO_STAGE_EXPLORE_OUTSIDE_KEY) or "").strip()
 
 
 def _response_signature(uid, matched_key, tiles_key, amp_key, gt_key, request_data, sites, hemis,
@@ -291,6 +304,7 @@ def _response_signature(uid, matched_key, tiles_key, amp_key, gt_key, request_da
             # reason that shape it are in the key: a request without the flag is never served a
             # copy that carries the block, and one with it is never served a copy without it.
             bool(_two_stage_requested(rd)), str(rd.get(TWO_STAGE_OVERRIDE_REASON_KEY) or ""),
+            _explore_outside_key_element(rd),
             str(backend))
 
 
@@ -461,6 +475,15 @@ def design_matrix_summary(es: pd.DataFrame) -> dict:
 TWO_STAGE_FLAG = "TwoStage"
 TWO_STAGE_OVERRIDE_REASON_KEY = "TwoStageOverrideReason"
 TWO_STAGE_OVERRIDE_BY_KEY = "TwoStageOverrideBy"
+#: THE ADAPTIVE ENVELOPE (2026-09-12, the PI: "don't recommend settings that adaptive cannot use
+#: unless there is a scientific or physiological reason"). Stage 1 now searches only settings the
+#: device's closed-loop mode can be programmed with (rate at or above the 55 Hz adaptive minimum,
+#: `routines/adaptive_envelope.py`) and reports what it excluded and why. These two keys are the
+#: exception the instruction allows: a NON-EMPTY reason under the first lifts the constraint and
+#: travels, with the name under the second, on the frozen configuration. The first key present
+#: with an empty reason changes nothing and the block says the override was ignored.
+TWO_STAGE_EXPLORE_OUTSIDE_KEY = "TwoStageExploreOutsideAdaptive"
+TWO_STAGE_EXPLORE_OUTSIDE_BY_KEY = "TwoStageExploreOutsideAdaptiveBy"
 TWO_STAGE_BACKEND = ("scikit-learn Gaussian process (StimOptimizer/routines/surrogate.py); "
                      "PyTorch, GPyTorch and BoTorch are not used on this path")
 
@@ -529,6 +552,12 @@ def _two_stage_payload(rep, *, inputs, seconds) -> dict:
             "resolved": bool(frozen.resolved),
             "overridden": bool(frozen.overridden),
             "override": _two_stage_jsonable(dict(frozen.override)) if frozen.override else None,
+            # The adaptive envelope (2026-09-12): whether the search was held to settings the
+            # closed-loop mode can use, what it excluded and why, and -- when lifted -- the stated
+            # reason and who gave it. Copied from Stage 1's own record; the per-side detail is
+            # under each setting's `detail.adaptive_envelope`.
+            "adaptive_envelope": _two_stage_jsonable(dict(getattr(frozen, "adaptive_envelope",
+                                                                  None) or {})),
             # Stage 1 searches rate x pulse width x amplitude per side. The electrode contacts are
             # not a searched dimension and the frozen configuration does not carry them; the
             # sensing contact the gate's evidence came from is under `lfp_evidence.selected_key`.
@@ -586,13 +615,21 @@ def _two_stage_payload(rep, *, inputs, seconds) -> dict:
         }
 
     sel = lfp.get("selected_key")
+    env = dict(getattr(frozen, "adaptive_envelope", None) or {})
+    env_sentence = ""
+    if env.get("statement"):
+        env_sentence = (f" The search was {env['statement']}"
+                        + (f"; {env.get('n_exclusions', 0)} exclusion(s) are listed under the "
+                           "frozen configuration" if env.get("constrained") else "")
+                        + "." + (f" NOTE: {env['override_ignored']}."
+                                 if env.get("override_ignored") else ""))
     provenance = {
         "stage1": (f"Stage 1 read the matched therapy-and-pain table this request loaded "
                    f"({inputs.get('matched_table') or 'no store key'}): "
                    f"{frozen.n_epochs_total} epochs, primary outcome {frozen.primary_item}, "
                    f"incumbent epoch {frozen.incumbent_epoch:g} at "
                    f"{frozen.incumbent_rate_hz:g} Hz; {len(s1.slices)} pulse-width strata fitted, "
-                   f"{len(s1.skipped or {})} skipped."),
+                   f"{len(s1.skipped or {})} skipped." + env_sentence),
         "gate": (f"The gate read the frozen configuration from Stage 1 and LFP evidence built "
                  f"from the tile cache ({inputs.get('tiles') or 'no store key'}) with the "
                  f"settings stream ({inputs.get('settings_stream') or 'no store key'}), pinned to "
@@ -636,6 +673,14 @@ def two_stage_block(participant, es, *, request_data, stream, washin_min, hemisp
     rd = request_data or {}
     override_reason = rd.get(TWO_STAGE_OVERRIDE_REASON_KEY)
     override_reason = str(override_reason).strip() if override_reason else None
+    # The explore-outside-the-adaptive-envelope override. `requested` is "the key is present",
+    # whatever it carries, so that a key with an empty reason is reported as ignored rather than
+    # treated as if it had never been sent.
+    explore_requested = TWO_STAGE_EXPLORE_OUTSIDE_KEY in rd
+    explore_reason = rd.get(TWO_STAGE_EXPLORE_OUTSIDE_KEY) if explore_requested else None
+    explore_reason = str(explore_reason).strip() if explore_reason else None
+    explore_by = (str(rd.get(TWO_STAGE_EXPLORE_OUTSIDE_BY_KEY)).strip()
+                  if explore_reason and rd.get(TWO_STAGE_EXPLORE_OUTSIDE_BY_KEY) else None)
     t0 = _time.perf_counter()
     try:
         rep = pipeline.run_two_stage_live(
@@ -645,7 +690,10 @@ def two_stage_block(participant, es, *, request_data, stream, washin_min, hemisp
             data_horizon=data_horizon,
             override_reason=override_reason,
             override_by=(str(rd.get(TWO_STAGE_OVERRIDE_BY_KEY)) if override_reason
-                         and rd.get(TWO_STAGE_OVERRIDE_BY_KEY) else None))
+                         and rd.get(TWO_STAGE_OVERRIDE_BY_KEY) else None),
+            explore_outside_adaptive_reason=explore_reason,
+            explore_outside_adaptive_by=explore_by,
+            explore_outside_adaptive_requested=explore_requested)
     except Exception as exc:                          # noqa: BLE001 -- adjunct block
         _log.exception("StimOptimizer: the two-stage path failed")
         return {"requested": True, "available": False, "backend": TWO_STAGE_BACKEND,
@@ -670,6 +718,15 @@ def run_for_participant(request_data: dict) -> dict:
       TwoStageOverrideReason, TwoStageOverrideBy
                      a clinician override of the gate's resolution condition, with the reason it
                      requires (stage1_openloop.clinician_override); only read when TwoStage is on
+      TwoStageExploreOutsideAdaptive, TwoStageExploreOutsideAdaptiveBy
+                     by default Stage 1 recommends only settings the device's closed-loop mode
+                     can use (rate at or above the 55 Hz adaptive minimum) and lists what it
+                     excluded and why under two_stage.stage1.frozen_configuration
+                     .adaptive_envelope. A NON-EMPTY scientific or physiological reason under
+                     the first key lifts that constraint; the reason and the name under the
+                     second travel on the frozen configuration. The first key with an empty
+                     reason changes nothing and the block says the override was ignored. Only
+                     read when TwoStage is on; both are in the response key.
     """
     from Server import models
 

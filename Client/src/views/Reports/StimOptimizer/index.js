@@ -43,7 +43,12 @@ import { useCachedResult } from "database/useCachedResult";
 
 import RecomputeBar from "views/Reports/RecomputeBar";
 import CacheStatusLine from "views/Reports/CacheStatusLine";
-import { recomputeSlots } from "views/Reports/moduleCacheKeys";
+import { recomputeSlots, STIM_OPTIMIZER_SLOTS } from "views/Reports/moduleCacheKeys";
+// The two-stage plan (open loop, then the check that decides whether closed loop may start, then
+// closed loop) is a second request to the same endpoint, fetched after this page's own response
+// has arrived and cached in its own slot; see useTwoStagePlan.js for why.
+import useTwoStagePlan from "./useTwoStagePlan";
+import TwoStagePlanCard from "./TwoStagePlanCard";
 // Semantic colour roles live in one place for the whole closed-loop family of pages, so a verdict
 // that means the same thing on the deployment page and here is drawn in the same ink. The roles
 // used below are `neutral` for a question that has not been answered and `warnText` for a caveat
@@ -333,6 +338,15 @@ export default function StimOptimizer() {
     if (arm) LAST_ARM.set(String(participant_uid), arm);
   }, [participant_uid, arm]);
 
+  // THE TWO-STAGE PLAN IS FETCHED ONLY ONCE THE PAGE'S OWN RESPONSE HAS ARRIVED. `afterMain` is
+  // this page's `data`; while it is null the hook issues nothing, so the first paint is unchanged.
+  // Called here, before any early return, because a hook must run on every render.
+  const twoStage = useTwoStagePlan({
+    participantUid: participant_uid,
+    baseRequest: OPTIMIZER_REQUEST,
+    afterMain: cached.data,
+  });
+
   // THE SELECTED ARM IS DERIVED, NOT ASSIGNED IN THE FETCH CALLBACK.
   //
   // It used to be set from inside the response handler, which worked only because a response always
@@ -410,7 +424,8 @@ export default function StimOptimizer() {
               computedAt={cached.computedAt}
               loading={cached.loading}
               notKept={cached.notKept}
-              onRecompute={() => recomputeSlots(participant_uid, [MODULES.stimOptimizer])}
+              // Both slots: the page's own response and the two-stage plan fetched after it.
+              onRecompute={() => recomputeSlots(participant_uid, STIM_OPTIMIZER_SLOTS)}
             />
             <CacheStatusLine status={data ? data.cache_status : null} />
           </Grid>
@@ -891,6 +906,11 @@ export default function StimOptimizer() {
               </Card>
             </Grid>
           )}
+
+          {/* ---------- the two-stage plan, after every figure (PI, 2026-09-12) ---------- */}
+          <Grid item xs={12}>
+            <TwoStagePlanCard plan={twoStage.data} loading={twoStage.loading} err={twoStage.err} />
+          </Grid>
         </Grid>
       </MDBox>
     </DatabaseLayout>

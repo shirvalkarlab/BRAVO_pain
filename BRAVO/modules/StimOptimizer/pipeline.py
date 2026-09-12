@@ -413,6 +413,8 @@ def run_two_stage(design_csv, *, hemispheres=DEFAULT_HEMISPHERES, primary_item="
                   outdir=None, data_horizon=PLT.DATA_HORIZON, washin_min=PLT.WASHIN_MIN,
                   lfp=None, amp_limits=None, selected_bands=None, response_summary=None,
                   override_reason=None, override_by=None,
+                  explore_outside_adaptive_reason=None, explore_outside_adaptive_by=None,
+                  explore_outside_adaptive_requested=None,
                   stage1_kwargs=None, gate_kwargs=None, stage2_kwargs=None) -> TwoStageReport:
     """Run the open-loop stage, the gate, and the closed-loop stage in that order.
 
@@ -448,6 +450,14 @@ def run_two_stage(design_csv, *, hemispheres=DEFAULT_HEMISPHERES, primary_item="
         Record a clinician override of the gate's resolution condition. The reason is mandatory if
         an override is wanted at all; an override without a stated reason is indistinguishable from
         disabling the check and is refused by ``stage1_openloop.clinician_override``.
+    explore_outside_adaptive_reason, explore_outside_adaptive_by, explore_outside_adaptive_requested
+        Stage 1 keeps its search inside the adaptive envelope (rate at or above the device's
+        adaptive minimum, ``routines/adaptive_envelope.py``) so it never recommends a setting the
+        closed-loop mode cannot use. A NON-EMPTY reason -- scientific or physiological -- lifts
+        that constraint and travels with the frozen configuration together with the name of who
+        gave it. ``..._requested`` says the override was asked for; asked for with no reason, the
+        constraint stays and the configuration reports the override as ignored. Forwarded to
+        ``stage1_openloop.run_stage1`` unchanged.
     outdir
         When given, Stage 1's slice summary and the gate's condition table are written there.
         ``None`` means in-memory only, the same convention :func:`run` uses.
@@ -464,6 +474,9 @@ def run_two_stage(design_csv, *, hemispheres=DEFAULT_HEMISPHERES, primary_item="
 
     s1 = S1.run_stage1(design_csv, hemispheres=hemispheres, primary_item=primary_item,
                        data_horizon=data_horizon, washin_min=washin_min,
+                       explore_outside_reason=explore_outside_adaptive_reason,
+                       explore_outside_by=explore_outside_adaptive_by,
+                       explore_outside_requested=explore_outside_adaptive_requested,
                        **(stage1_kwargs or {}))
     frozen = s1.frozen
     if override_reason is not None:
@@ -620,12 +633,23 @@ def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemispher
         gate blocks on an unassessed response either way -- and it avoids silently attributing one
         hemisphere's evidence to the other's configuration.
         """
+        # A NaN rate is Stage 1's "no adaptive-capable setting can be recommended" (2026-09-12);
+        # there is no rate to pin evidence to on that side, so it is left out here and the gate's
+        # rate condition refuses on it.
         rates = sorted({float(hs.rate_hz) for hs in frozen.settings
-                        if getattr(hs, "rate_hz", None) is not None})
+                        if getattr(hs, "rate_hz", None) is not None
+                        and np.isfinite(float(hs.rate_hz))})
         pin = rate_hz
         if pin is None:
             if len(rates) == 1:
                 pin = rates[0]
+            elif not rates:
+                box["ev"] = LiveEvidence(
+                    selected=None, selected_key=None,
+                    selection_note=("Stage 1 recommended no adaptive-capable rate on any side, "
+                                    "so there is no rate to pin the LFP evidence to"))
+                box["frozen_rates"] = rates
+                return None
             else:
                 box["ev"] = LiveEvidence(
                     selected=None, selected_key=None,

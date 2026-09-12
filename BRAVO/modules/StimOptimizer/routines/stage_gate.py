@@ -350,6 +350,23 @@ def check_rate_floor(frozen, *, min_rate_hz=PA.MIN_ADAPTIVE_RATE_HZ) -> GateCond
         return GateCondition("rate_at_or_above_adaptive_minimum", None,
                              "no frozen setting to check: Stage 1 produced no hemisphere result",
                              evidence=dict(rates=rates))
+    # A NaN rate is Stage 1's honest "no adaptive-capable setting can be recommended from this
+    # record" (2026-09-12: every fitted stratum's safe cells lay below the adaptive minimum). It
+    # must FAIL here, not slip through: `nan < 55` is False, so without this check an absent rate
+    # would read as a rate at or above the minimum.
+    absent = {h: r for h, r in rates.items() if not np.isfinite(r)}
+    if absent:
+        return GateCondition(
+            "rate_at_or_above_adaptive_minimum", False,
+            "no adaptive-capable rate could be recommended on "
+            + ", ".join(sorted(absent))
+            + f": Stage 1 found no safe setting at or above the {float(min_rate_hz):g} Hz adaptive "
+              "minimum on any fitted pulse-width stratum, and did not carry a rate forward rather "
+              "than recommend one the closed-loop mode cannot use. The strata it excluded, and "
+              "what each would have recommended, are on the frozen configuration under "
+              "adaptive_envelope.",
+            evidence=dict(rates=rates, no_adaptive_capable_rate=sorted(absent),
+                          min_rate_hz=float(min_rate_hz)))
     below = {h: r for h, r in rates.items() if r < float(min_rate_hz)}
     if below:
         return GateCondition(

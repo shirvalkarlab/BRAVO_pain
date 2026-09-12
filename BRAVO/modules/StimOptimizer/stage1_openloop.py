@@ -35,6 +35,25 @@ this record the design gives an independent reason to prefer no borrowing, which
 :func:`pulse_width_design_audit` measures rather than assumes: rate and pulse width were changed
 together, so most (rate, pulse width) combinations were never delivered at all.
 
+THE ADAPTIVE ENVELOPE, APPLIED BEFORE SCORING (2026-09-12)
+----------------------------------------------------------
+The principal investigator's instruction, verbatim: "don't recommend settings that adaptive cannot
+use unless there is a scientific or physiological reason." On the first live run this module froze
+40 Hz on both sides of RCS08 and the gate then refused closed loop because 40 Hz is below the
+device's 55 Hz adaptive minimum -- a recommendation the closed-loop mode could never have used,
+caught only afterwards. So the envelope (``routines/adaptive_envelope.py``: rate at or above
+``percept_adaptive.MIN_ADAPTIVE_RATE_HZ``; the adaptive rate and pulse-width ceilings are not
+published and are not enforced) is now applied to every stratum's candidate grid BEFORE its optimum
+is chosen: a cell outside it is masked exactly as an unsafe cell is, so the frozen rate is the best
+IN-ENVELOPE cell, and what the unconstrained search would have chosen instead is REPORTED, per
+stratum, with the reason it was excluded ("40 Hz excluded: below the 55 Hz adaptive minimum").
+Nothing is hidden: the excluded grid rates and the per-stratum exclusions are on the frozen
+configuration under ``adaptive_envelope``. The constraint is lifted only by a NON-EMPTY stated
+reason (``explore_outside_reason``), which then travels with the configuration together with the
+name of who gave it; an override asked for without a reason is ignored and reported as ignored.
+When no stratum has any safe in-envelope cell, the honest answer is a setting with no rate ("no
+adaptive-capable setting can be recommended from this record"), never a fabricated one.
+
 WHY THE COMMON INCUMBENT MATTERS, AND WHY ``build_context`` IS NOT USED PER STRATUM
 ----------------------------------------------------------------------------------
 ``routines/objective.build_objective`` defines ``J_pain`` as the primary pain item minus its value
@@ -84,6 +103,7 @@ import pandas as pd
 
 from .routines.resolution import RESOLUTION_K as _RES_K
 from .routines import acquisition as ACQ
+from .routines import adaptive_envelope as ENV
 from .routines import objective as OBJ
 from .routines import plots as PLT
 from .routines import surrogate as SUR
@@ -167,6 +187,11 @@ class FrozenConfiguration:
 
     ``override`` records a clinician's explicit decision to proceed on an unresolved configuration.
     It is a mapping and it must carry a non-empty ``reason``; see :func:`clinician_override`.
+
+    ``adaptive_envelope`` records whether the search was constrained to the settings the device's
+    closed-loop mode can use (``routines/adaptive_envelope.py``), what it excluded and why, and --
+    when the constraint was lifted -- the stated reason and who gave it. See
+    :func:`run_stage1`'s ``explore_outside_reason``.
     """
 
     settings: tuple                        # tuple[HemisphereSetting, ...]
@@ -179,6 +204,7 @@ class FrozenConfiguration:
     n_epochs_total: int
     override: dict | None = None
     audit: dict = field(default_factory=dict)
+    adaptive_envelope: dict = field(default_factory=dict)
 
     def setting(self, hemisphere: str) -> HemisphereSetting:
         for s in self.settings:
@@ -203,16 +229,25 @@ class FrozenConfiguration:
     def describe(self) -> str:
         lines = [f"FROZEN CONFIGURATION (primary outcome: {self.primary_item}; "
                  f"data horizon {self.data_horizon}; wash-in {self.washin_min:g} min)"]
+        env = dict(self.adaptive_envelope or {})
+        if env.get("statement"):
+            lines.append(f"  adaptive envelope: {env['statement']}")
+        if env.get("override_ignored"):
+            lines.append(f"  NOTE: {env['override_ignored']}")
         for s in self.settings:
             pw = "NOT OBSERVED" if s.pw_us is None else f"{s.pw_us:g} us"
+            rate = ("NO ADAPTIVE-CAPABLE RATE" if not np.isfinite(float(s.rate_hz))
+                    else f"{s.rate_hz:g} Hz")
             lines.append(
-                f"  {s.hemisphere:5s}: rate {s.rate_hz:g} Hz, pulse width {pw}, "
+                f"  {s.hemisphere:5s}: rate {rate}, pulse width {pw}, "
                 f"amplitude preferred {s.amp_star_mA:.2f} mA "
                 f"(delivered {s.amp_delivered_min_mA:.2f}-{s.amp_delivered_max_mA:.2f} mA, "
                 f"{s.n_epochs_fitted} epochs) | rate resolved: {s.rate_resolved}, "
                 f"pulse width resolved: {s.pw_resolved}")
             for r in s.reasons:
                 lines.append(f"         - {r}")
+            for x in (env.get("exclusions") or {}).get(s.hemisphere, []):
+                lines.append(f"         x EXCLUDED: {x.get('what')} -- {x.get('reason')}")
         lines.append(f"  overall resolved: {self.resolved}"
                      + (f" | CLINICIAN OVERRIDE: {self.override.get('reason')}"
                         if self.overridden else ""))
@@ -444,6 +479,23 @@ class Stage1Slice:
     optimum_rate_supported: bool = True
     batch: list = field(default_factory=list)
     meta: dict = field(default_factory=dict)
+    #: The adaptive envelope on this slice (2026-09-12). ``allowed`` is ``safe`` AND in-envelope,
+    #: the mask ``i_star`` was chosen under. ``i_star_unconstrained`` is what the same surface
+    #: would have chosen under ``safe`` alone; when it differs from ``i_star`` the difference is
+    #: reported as an exclusion. ``envelope_empty`` means no safe cell lies inside the envelope, so
+    #: this slice cannot produce an adaptive-capable recommendation and is excluded whole.
+    allowed: np.ndarray | None = None
+    i_star_unconstrained: int | None = None
+    x_star_unconstrained: tuple | None = None
+    mu_star_unconstrained: float = float("nan")
+    envelope_empty: bool = False
+    envelope_constrained: bool = False
+
+    @property
+    def optimum_moved_by_envelope(self) -> bool:
+        """Did the envelope change which cell this slice recommends?"""
+        return (self.envelope_constrained and self.i_star_unconstrained is not None
+                and int(self.i_star_unconstrained) != int(self.i_star))
 
     def gain_over_incumbent(self) -> float:
         """Positive means the slice optimum is better (lower J) than the setting in force."""
@@ -484,7 +536,7 @@ class Stage1Slice:
 
 
 def _fit_slice(hemi, pw, sub, *, grid, sgp, safe, incumbent_xy, amp_col, fixed_length_scale,
-               kappa, q, eta) -> Stage1Slice:
+               kappa, q, eta, constraint=None) -> Stage1Slice:
     """Fit the existing surrogate to one pulse-width stratum and derive everything downstream.
 
     ``sgp``/``safe`` are the SHARED safety model, fitted once on the whole record. Sharing it is a
@@ -493,6 +545,13 @@ def _fit_slice(hemi, pw, sub, *, grid, sgp, safe, incumbent_xy, amp_col, fixed_l
     all strata is therefore OPTIMISTIC at the wider pulse widths. It is shared because the safety
     seed is built from the programmed ``UpperLimitInMilliAmps`` anchors, which carry a frequency and
     an amplitude and no pulse width at all, so there is nothing in the record to stratify it by.
+
+    ``constraint`` is the adaptive envelope (``routines/adaptive_envelope.Constraint``). Unless it
+    has been lifted by a stated reason, a grid cell whose rate the closed-loop mode cannot use is
+    masked out BEFORE the optimum, the exploration queue and the within-visit batch are chosen --
+    the same way an unsafe cell is -- so nothing downstream can recommend it. The unconstrained
+    optimum is still computed and kept, so the report can say what would have been chosen and why
+    it was not.
     """
     Xobs = sub[["freq_hz", amp_col]].to_numpy(float)
     gp = SUR.ObjectiveGP(grid, fixed_length_scale=fixed_length_scale, random_state=0).fit(
@@ -504,14 +563,28 @@ def _fit_slice(hemi, pw, sub, *, grid, sgp, safe, incumbent_xy, amp_col, fixed_l
 
     inc_mu, inc_sd = gp.predict(np.atleast_2d(incumbent_xy), return_std=True)
     incumbent_mu, incumbent_sd = float(inc_mu[0]), float(inc_sd[0])
-    i_star = int(np.argmin(np.where(safe, mu, np.inf)))
     gx = grid.grid_X()
 
+    # The adaptive envelope, applied before scoring. `safe` alone is what the search used before
+    # 2026-09-12; `allowed` is what it chooses under now.
+    constrained = bool(constraint is not None and not constraint.lifted)
+    if constrained:
+        allowed = np.asarray(safe, bool) & ENV.grid_mask(grid, min_rate_hz=constraint.min_rate_hz)
+    else:
+        allowed = np.asarray(safe, bool)
+    i_star_unc = int(np.argmin(np.where(safe, mu, np.inf)))
+    envelope_empty = bool(constrained and not allowed.any())
+    i_star = i_star_unc if envelope_empty else int(np.argmin(np.where(allowed, mu, np.inf)))
+
     queue, qmeta = ACQ.exploration_queue(mu, sd, n_reports, incumbent_mu, kappa=kappa)
+    if constrained and queue.size:
+        # A queue is "settings that must be tested before the question can be closed"; under
+        # the constraint a cell adaptive cannot use is not a setting to be tested for closed loop.
+        queue = queue[allowed[queue]]
     stopping = ACQ.check_stopping([float(mu[i_star])], mu, sd, n_reports,
                                   incumbent_mu=incumbent_mu)
     try:
-        batch = ACQ.select_batch_within_visit(gp, grid, q=int(q), safe_mask=safe,
+        batch = ACQ.select_batch_within_visit(gp, grid, q=int(q), safe_mask=allowed,
                                               n_reports=n_reports, incumbent_mu=incumbent_mu,
                                               eta=eta)
     except ValueError as exc:
@@ -534,12 +607,17 @@ def _fit_slice(hemi, pw, sub, *, grid, sgp, safe, incumbent_xy, amp_col, fixed_l
         incumbent_mu=incumbent_mu, incumbent_sd=incumbent_sd,
         n_reports=n_reports, queue=queue, stopping=stopping, batch=batch,
         incumbent_rate_supported=inc_supported, optimum_rate_supported=opt_supported,
+        allowed=allowed, i_star_unconstrained=i_star_unc,
+        x_star_unconstrained=(float(gx[i_star_unc, 0]), float(gx[i_star_unc, 1])),
+        mu_star_unconstrained=float(mu[i_star_unc]),
+        envelope_empty=envelope_empty, envelope_constrained=constrained,
         meta=dict(kernel=gp.hyperparameters["kernel"],
                   log_marginal_likelihood=gp.hyperparameters["log_marginal_likelihood"],
                   n_reports_total=float(sub["n"].sum()),
                   rates_delivered=[float(v) for v in sorted(sub["freq_hz"].unique())],
                   amp_min=float(sub[amp_col].min()), amp_max=float(sub[amp_col].max()),
-                  n_safe=int(safe.sum()), queue_size=int(queue.size),
+                  n_safe=int(safe.sum()), n_allowed=int(allowed.sum()),
+                  queue_size=int(queue.size),
                   best_optimistic_unexplored=float(qmeta.get("best_optimistic", float("nan"))),
                   batch_note=batch_note))
 
@@ -568,7 +646,10 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
                limit_anchors=PLT.LIMIT_ANCHORS, min_tolerated_h=MIN_TOLERATED_H,
                min_stratum_epochs=PW_STRATUM_MIN_EPOCHS, q=4, eta=1.0,
                incumbent_epoch=None, data_horizon=PLT.DATA_HORIZON, washin_min=PLT.WASHIN_MIN,
-               resolution_k=RESOLUTION_K, era_scheme="quarter") -> Stage1Result:
+               resolution_k=RESOLUTION_K, era_scheme="quarter",
+               explore_outside_reason=None, explore_outside_by=None,
+               explore_outside_requested=None,
+               adaptive_min_rate_hz=ENV.MIN_RATE_HZ) -> Stage1Result:
     """Run the open-loop search and freeze a configuration.
 
     Parameters
@@ -591,6 +672,16 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
     incumbent_epoch
         Defaults to the most recent epoch in the matrix, which is the setting currently in force.
         ``J`` is referenced to it, so every stratum shares one scale.
+    explore_outside_reason, explore_outside_by, explore_outside_requested
+        The adaptive envelope (``routines/adaptive_envelope.py``) is applied to every candidate
+        grid BEFORE scoring, so the frozen rate is at or above the device's adaptive minimum
+        (``adaptive_min_rate_hz``, 55 Hz) and nothing the closed-loop mode cannot use is
+        recommended. A NON-EMPTY ``explore_outside_reason`` -- a scientific or physiological
+        reason to look outside that envelope -- lifts the constraint, and the reason and
+        ``explore_outside_by`` travel with the frozen configuration. ``explore_outside_requested``
+        says an override was ASKED for; when it is asked for with no reason the constraint stays
+        and the configuration says the override was ignored. Every exclusion the constraint made
+        is on ``.frozen.adaptive_envelope`` with its reason; nothing is silently dropped.
 
     Returns
     -------
@@ -619,6 +710,15 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
 
     grid = SUR.ParameterGrid(freq_grid, amp_grid)
     gx = grid.grid_X()
+
+    # The adaptive envelope, built ONCE and handed to every stratum and every freeze, so the
+    # constraint the surfaces were scored under is the one the report describes.
+    constraint = ENV.make_constraint(reason=explore_outside_reason, by=explore_outside_by,
+                                     requested=explore_outside_requested,
+                                     min_rate_hz=adaptive_min_rate_hz)
+    grid_rates_excluded = ([] if constraint.lifted
+                           else ENV.rates_excluded_from_grid(grid, min_rate_hz=constraint.min_rate_hz))
+    exclusions = {}
 
     slices, rows, skipped, settings = {}, [], {}, []
     audit = dict(incumbent_epoch=float(incumbent_epoch), incumbent_rate_hz=inc_rate,
@@ -676,7 +776,8 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
             try:
                 sl = _fit_slice(hemi, pw, sub, grid=grid, sgp=sgp, safe=safe,
                                 incumbent_xy=incumbent_xy, amp_col=amp_col,
-                                fixed_length_scale=fixed_length_scale, kappa=kappa, q=q, eta=eta)
+                                fixed_length_scale=fixed_length_scale, kappa=kappa, q=q, eta=eta,
+                                constraint=constraint)
             except (ValueError, RuntimeError) as exc:
                 skipped[f"{hemi}__pw{pw:g}"] = f"{type(exc).__name__}: {exc}"
                 continue
@@ -693,29 +794,58 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
                 optimum_rate_supported=sl.optimum_rate_supported,
                 n_safe=sl.meta["n_safe"], queue_size=sl.meta["queue_size"],
                 stop=bool(sl.stopping.stop), stop_binding=sl.stopping.binding,
-                kernel=sl.meta["kernel"]))
+                kernel=sl.meta["kernel"],
+                # The envelope, per stratum: what the surface would have chosen with no
+                # constraint, and whether the constraint moved the choice or emptied the stratum.
+                adaptive_envelope_applied=bool(sl.envelope_constrained),
+                opt_rate_hz_unconstrained=sl.x_star_unconstrained[0],
+                opt_amp_mA_unconstrained=sl.x_star_unconstrained[1],
+                opt_posterior_mean_unconstrained=sl.mu_star_unconstrained,
+                optimum_moved_by_envelope=bool(sl.optimum_moved_by_envelope),
+                no_safe_cell_in_envelope=bool(sl.envelope_empty),
+                n_allowed=sl.meta["n_allowed"]))
 
         # Now that the strata are known, record how many epochs actually reached a fitted surface.
         h_audit["n_epochs_in_fitted_strata"] = int(
             sum(s.n_epochs for (h, _p), s in slices.items() if h == hemi))
 
         # --- choose the configuration for this hemisphere -------------------------------------
-        settings.append(_freeze_hemisphere(
+        setting, h_excl = _freeze_hemisphere(
             hemi, [s for (h, _p), s in slices.items() if h == hemi], inc_rate, inc_pw,
             fit=fit, amp_col=amp_col, h_audit=h_audit, grid=grid, gx=gx,
-            resolution_k=resolution_k, pw_observed=pw_present))
+            resolution_k=resolution_k, pw_observed=pw_present, constraint=constraint)
+        settings.append(setting)
+        exclusions[hemi] = h_excl
+
+    envelope = dict(
+        constrained=not constraint.lifted,
+        min_rate_hz=float(constraint.min_rate_hz),
+        max_rate_hz=ENV.MAX_RATE_HZ, max_pw_us=ENV.MAX_PW_US,
+        statement=constraint.statement(),
+        override=(dict(reason=constraint.reason, by=constraint.by) if constraint.lifted else None),
+        override_ignored=constraint.ignored_note,
+        grid_rates_excluded=list(grid_rates_excluded),
+        grid_rates_excluded_reason=(
+            ", ".join(ENV.exclusion_reason(r, min_rate_hz=constraint.min_rate_hz)
+                      for r in grid_rates_excluded)
+            if grid_rates_excluded else None),
+        exclusions=exclusions,
+        n_exclusions=int(sum(len(v) for v in exclusions.values())),
+        source=ENV.SOURCE,
+    )
+    audit["adaptive_envelope"] = dict(envelope)
 
     frozen = FrozenConfiguration(
         settings=tuple(settings), primary_item=resolved_item,
         incumbent_epoch=float(incumbent_epoch), incumbent_rate_hz=inc_rate, incumbent_pw_us=inc_pw,
         data_horizon=str(data_horizon), washin_min=float(washin_min),
-        n_epochs_total=int(len(D)), audit=audit)
+        n_epochs_total=int(len(D)), audit=audit, adaptive_envelope=envelope)
     return Stage1Result(frozen=frozen, slices=slices, summary=pd.DataFrame(rows), audit=audit,
                         D=D, skipped=skipped)
 
 
 def _freeze_hemisphere(hemi, hslices, inc_rate, inc_pw, *, fit, amp_col, h_audit, grid, gx,
-                       resolution_k, pw_observed) -> HemisphereSetting:
+                       resolution_k, pw_observed, constraint=None):
     """Pick the rate and pulse width for one hemisphere and state whether either is resolved.
 
     The rate comes from the best slice's own optimum and is tested against the setting in force
@@ -723,9 +853,84 @@ def _freeze_hemisphere(hemi, hslices, inc_rate, inc_pw, *, fit, amp_col, h_audit
     across slices, comparing the best slice's optimum against the posterior at THE SAME (rate,
     amplitude) CELL in the incumbent pulse width's slice. Holding the cell fixed is what makes the
     comparison a pulse-width contrast rather than a mixture of a pulse-width move and a rate move.
+
+    Returns ``(HemisphereSetting, exclusions)``. ``exclusions`` is a list of mappings, one per
+    thing the adaptive envelope kept out of the recommendation on this side -- a stratum with no
+    safe in-envelope cell, or a stratum whose unconstrained optimum sat outside the envelope --
+    each with ``what`` and ``reason``. Empty when the constraint is lifted or excluded nothing.
     """
     reasons = []
+    exclusions = []
+    constrained = bool(constraint is not None and not constraint.lifted)
+    min_rate = float(constraint.min_rate_hz) if constraint is not None else ENV.MIN_RATE_HZ
+    all_slices = list(hslices)
+
+    if constrained:
+        # A stratum with no safe cell inside the envelope cannot recommend anything adaptive can
+        # use, so it is excluded WHOLE and named; the other strata compete on their in-envelope
+        # optima. What each excluded or moved stratum would have chosen is written out so nothing
+        # the unconstrained search preferred is hidden from the reader.
+        usable = []
+        for s in all_slices:
+            if s.envelope_empty:
+                exclusions.append(dict(
+                    kind="stratum",
+                    what=(f"the {s.pw_us:g} us stratum, whose unconstrained optimum is "
+                          f"{s.x_star_unconstrained[0]:g} Hz at {s.x_star_unconstrained[1]:.2f} mA "
+                          f"(posterior mean {s.mu_star_unconstrained:+.4f})"),
+                    reason=(f"no safe cell on this stratum has a rate at or above the "
+                            f"{min_rate:g} Hz adaptive minimum, so it cannot recommend a setting "
+                            "the closed-loop mode can use"),
+                    pw_us=float(s.pw_us),
+                    unconstrained_rate_hz=float(s.x_star_unconstrained[0]),
+                    unconstrained_amp_mA=float(s.x_star_unconstrained[1]),
+                    unconstrained_posterior_mean=float(s.mu_star_unconstrained)))
+                continue
+            if s.optimum_moved_by_envelope:
+                exclusions.append(dict(
+                    kind="cell",
+                    what=(f"{s.x_star_unconstrained[0]:g} Hz at {s.x_star_unconstrained[1]:.2f} mA "
+                          f"on the {s.pw_us:g} us stratum (posterior mean "
+                          f"{s.mu_star_unconstrained:+.4f}), which the unconstrained search "
+                          f"would have preferred; the best in-envelope cell on this stratum is "
+                          f"{s.x_star[0]:g} Hz at {s.x_star[1]:.2f} mA (posterior mean "
+                          f"{s.mu_star:+.4f})"),
+                    reason=ENV.exclusion_reason(s.x_star_unconstrained[0], min_rate_hz=min_rate),
+                    pw_us=float(s.pw_us),
+                    unconstrained_rate_hz=float(s.x_star_unconstrained[0]),
+                    unconstrained_amp_mA=float(s.x_star_unconstrained[1]),
+                    unconstrained_posterior_mean=float(s.mu_star_unconstrained),
+                    constrained_rate_hz=float(s.x_star[0]),
+                    constrained_amp_mA=float(s.x_star[1]),
+                    constrained_posterior_mean=float(s.mu_star)))
+            usable.append(s)
+        hslices = usable
+
     if not hslices:
+        if all_slices and constrained:
+            # Strata were fitted and every one of them was excluded by the envelope. The honest
+            # answer is NO recommendation, not the incumbent and not the best out-of-envelope cell:
+            # the rate is NaN so that no downstream reader can mistake it for a setting.
+            excluded_pws = ", ".join(f"{s.pw_us:g} us" for s in all_slices)
+            return HemisphereSetting(
+                hemisphere=hemi, rate_hz=float("nan"), pw_us=None,
+                amp_star_mA=float("nan"),
+                amp_delivered_min_mA=h_audit["amp_delivered_min"],
+                amp_delivered_max_mA=h_audit["amp_delivered_max"],
+                n_epochs_fitted=int(h_audit.get("n_epochs_in_fitted_strata", 0)),
+                rate_resolved=None, pw_resolved=None,
+                reasons=(f"NO ADAPTIVE-CAPABLE SETTING CAN BE RECOMMENDED FROM THIS RECORD on "
+                         f"the {hemi} side: {len(all_slices)} pulse-width strata were fitted "
+                         f"({excluded_pws}) and none has a safe cell at or above the "
+                         f"{min_rate:g} Hz adaptive minimum. What each would have recommended "
+                         "without the constraint is listed under the exclusions. A rate is "
+                         "deliberately not carried forward: recommending one the closed-loop "
+                         "mode cannot use is what the constraint exists to prevent",),
+                detail=dict(n_slices=0, n_slices_fitted=len(all_slices),
+                            adaptive_envelope=dict(
+                                constrained=True, min_rate_hz=min_rate,
+                                no_adaptive_capable_setting=True,
+                                n_excluded=len(exclusions)))), exclusions
         return HemisphereSetting(
             hemisphere=hemi, rate_hz=inc_rate, pw_us=inc_pw if pw_observed else None,
             amp_star_mA=float("nan"),
@@ -736,7 +941,7 @@ def _freeze_hemisphere(hemi, hslices, inc_rate, inc_pw, *, fit, amp_col, h_audit
             reasons=("no pulse-width stratum had enough fitted epochs to support a surface, so "
                      "neither the rate nor the pulse width was searched at all; the setting in "
                      "force is carried forward as a default, not as a choice",),
-            detail=dict(n_slices=0))
+            detail=dict(n_slices=0)), exclusions
 
     best = min(hslices, key=lambda s: s.mu_star)
     rate_resolved = best.resolves_its_optimum(resolution_k)
@@ -871,11 +1076,56 @@ def _freeze_hemisphere(hemi, hslices, inc_rate, inc_pw, *, fit, amp_col, h_audit
                     "they adjust for, and a pulse width the two disagree about the sign of is not "
                     "a pulse width to freeze")
 
+    # --- the adaptive envelope, said on the setting itself ----------------------------------
+    chosen_rate = float(best.x_star[0])
+    in_env = ENV.rate_in_envelope(chosen_rate, min_rate_hz=min_rate)
+    env_detail = dict(constrained=constrained, min_rate_hz=min_rate,
+                      chosen_rate_in_envelope=bool(in_env),
+                      n_excluded=len(exclusions),
+                      n_strata_excluded_whole=sum(1 for x in exclusions if x["kind"] == "stratum"),
+                      n_strata_usable=len(hslices))
+    if constrained:
+        moved = [x for x in exclusions if x["kind"] == "cell" and x["pw_us"] == float(best.pw_us)]
+        if moved:
+            x = moved[0]
+            reasons.append(
+                f"ADAPTIVE ENVELOPE: without the constraint this stratum would have recommended "
+                f"{x['unconstrained_rate_hz']:g} Hz at {x['unconstrained_amp_mA']:.2f} mA "
+                f"(posterior mean {x['unconstrained_posterior_mean']:+.4f}); "
+                f"{x['reason']}. The recommendation is the best in-envelope cell instead: "
+                f"{chosen_rate:g} Hz at {best.x_star[1]:.2f} mA (posterior mean "
+                f"{best.mu_star:+.4f})")
+            env_detail["unconstrained_optimum"] = dict(
+                rate_hz=x["unconstrained_rate_hz"], amp_mA=x["unconstrained_amp_mA"],
+                posterior_mean=x["unconstrained_posterior_mean"], pw_us=x["pw_us"])
+        elif exclusions:
+            reasons.append(
+                f"ADAPTIVE ENVELOPE: the chosen rate {chosen_rate:g} Hz is at or above the "
+                f"{min_rate:g} Hz adaptive minimum; {len(exclusions)} exclusion(s) on this side "
+                "are listed under the frozen configuration's adaptive_envelope")
+        else:
+            reasons.append(
+                f"ADAPTIVE ENVELOPE: the chosen rate {chosen_rate:g} Hz is at or above the "
+                f"{min_rate:g} Hz adaptive minimum and the constraint excluded nothing on this "
+                "side")
+    elif constraint is not None and constraint.lifted and not in_env:
+        who = f" by {constraint.by}" if constraint.by else ""
+        reasons.append(
+            f"OUTSIDE THE ADAPTIVE ENVELOPE: the chosen rate {chosen_rate:g} Hz is below the "
+            f"{min_rate:g} Hz adaptive minimum and the closed-loop mode cannot be programmed with "
+            f"it. It is recommended only because the constraint was lifted{who} for the stated "
+            f"reason: {constraint.reason}")
+        env_detail["override"] = dict(reason=constraint.reason, by=constraint.by)
+    # REPORTING ONLY: has the device accepted this exact rate and pulse width in a BrainSense
+    # group on this side? Absence is not a prohibition (device_facts says so) and excludes nothing.
+    env_detail["brainsense_pair"] = ENV.brainsense_pair_demonstrated(chosen_rate, pw_us, hemi)
+    detail["adaptive_envelope"] = env_detail
+
     return HemisphereSetting(
-        hemisphere=hemi, rate_hz=float(best.x_star[0]), pw_us=pw_us,
+        hemisphere=hemi, rate_hz=chosen_rate, pw_us=pw_us,
         amp_star_mA=float(best.x_star[1]),
         amp_delivered_min_mA=h_audit["amp_delivered_min"],
         amp_delivered_max_mA=h_audit["amp_delivered_max"],
         n_epochs_fitted=int(best.n_epochs),
         rate_resolved=rate_resolved, pw_resolved=pw_resolved,
-        reasons=tuple(reasons), detail=detail)
+        reasons=tuple(reasons), detail=detail), exclusions
