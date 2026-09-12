@@ -40,6 +40,7 @@ from .routines import redcap_client
 from .routines import analytics
 from .routines import availability
 from .routines import band_results_tables
+from .routines import sweep_settings
 from .routines import streaming_psd
 
 _log = logging.getLogger(__name__)
@@ -285,17 +286,12 @@ def _loader_threads():
 # Pain metrics the LFP biomarker can be computed against (correlated for time-domain; clustered
 # into the binary pain_level for the chronic detector). The composite is a normalized blend of
 # MPQ sum + left-leg VAS. `key` must be a column in the tidy PRO table (composite is synthesized).
-BIOMARKER_METRICS = [
-    {"key": "nrs", "label": "NRS (0–10)"},
-    {"key": "vas", "label": "Overall VAS"},
-    {"key": "left_leg_vas", "label": "Left Leg VAS"},
-    {"key": "back_vas", "label": "Back VAS"},
-    {"key": "mpq_sum", "label": "MPQ Sum"},
-    {"key": "composite_mpq_leftleg", "label": "Composite (MPQ + Left Leg VAS)"},
-]
-DEFAULT_BIOMARKER_METRIC = "nrs"
-COMPOSITE_METRIC = "composite_mpq_leftleg"
-COMPOSITE_PARTS = ("mpq_sum", "left_leg_vas")
+# Defined in `routines/sweep_settings.py` (Django-free, so the Closed-Loop module can derive the
+# same grid tag in the host suite) and bound here under the names the module always used.
+BIOMARKER_METRICS = sweep_settings.BIOMARKER_METRICS
+DEFAULT_BIOMARKER_METRIC = sweep_settings.DEFAULT_BIOMARKER_METRIC
+COMPOSITE_METRIC = sweep_settings.COMPOSITE_METRIC
+COMPOSITE_PARTS = sweep_settings.COMPOSITE_PARTS
 
 
 def _resolve_biomarker_metric(request_data, pro_df):
@@ -3448,34 +3444,9 @@ def _window_params(request_data):
 # into low/high tertiles and EXCLUDES the ambiguous middle (best detector target on RCS08);
 # "median" keeps every day at a 50/50 split; "kmeans" is the legacy 2-cluster notebook labeler.
 # See docs/binarization_recommendation_RCS08.md.
-BINARIZATION_STRATEGIES = [
-    {"key": "tertile", "label": "Tertile (low/high, drop middle)"},
-    {"key": "percentile", "label": "Percentile (adjustable cuts)"},
-    {"key": "median",  "label": "Median split"},
-    {"key": "kmeans",  "label": "KMeans (legacy)"},
-]
-DEFAULT_BINARIZATION = "tertile"
-
-
-def _label_strategy_params(request_data):
-    """Resolve the binarization strategy + percentile cuts from the request.
-
-    Returns (label_strategy, low_pct, high_pct). `LabelStrategy` selects the labeler (default
-    'tertile'); `PercentileLow`/`PercentileHigh` override the tertile cuts when the strategy is
-    'tertile'/'percentile'. Unknown strategies fall back to the default.
-    """
-    strat = (request_data.get("LabelStrategy") or DEFAULT_BINARIZATION)
-    valid = {s["key"] for s in BINARIZATION_STRATEGIES} | {"percentile", "cutoff"}
-    if strat not in valid:
-        strat = DEFAULT_BINARIZATION
-    try:
-        low = float(request_data.get("PercentileLow", 33.3333))
-        high = float(request_data.get("PercentileHigh", 66.6667))
-    except (TypeError, ValueError):
-        low, high = 33.3333, 66.6667
-    if not (0 <= low < high <= 100):
-        low, high = 33.3333, 66.6667
-    return strat, low, high
+BINARIZATION_STRATEGIES = sweep_settings.BINARIZATION_STRATEGIES   # routines/sweep_settings.py
+DEFAULT_BINARIZATION = sweep_settings.DEFAULT_BINARIZATION
+_label_strategy_params = sweep_settings.label_strategy_params
 
 
 # PRO timestamp column (REDCap daily survey clock time). Carries real clock times (not midnight),
@@ -3588,11 +3559,11 @@ def _all_pro_times(pro_df):
 # a daily PRO is matched to the nearest streaming/PSD session whose timestamp falls within this
 # many minutes. The frontend slider sends `MatchToleranceMin`; None disables time-matching and
 # falls back to the legacy same-calendar-day aggregation.
-DEFAULT_MATCH_TOLERANCE_MIN = 60.0  # was 15. Pain reports anchor neural data on a minutes-to-hours
-# timescale, not minutes — a PSD 30 min from a rating is still informative about that rating. The
-# narrow 15-min window dropped 80% of the otherwise-usable pool on RCS08 (see AUDIT_stream_*).
-# Coupled with the new direction='pro_first' default, this lifts PRO coverage to 290/682 (42.5%) of
-# the matched discovery pool (RCS08, vas, ±60 min) — matching the offline validation pool.
+# Was 15: pain reports anchor neural data on a minutes-to-hours timescale, and the narrow window
+# dropped 80% of the otherwise-usable pool on RCS08 (see AUDIT_stream_*); with the pro_first
+# direction the 60-minute window lifts coverage to 290/682 (42.5%) of the matched discovery pool.
+DEFAULT_MATCH_TOLERANCE_MIN = sweep_settings.DEFAULT_MATCH_TOLERANCE_MIN
+_match_tolerance_param = sweep_settings.match_tolerance_param
 
 
 def _int_param(request_data, key, *, default, lo=None, hi=None):
@@ -3623,22 +3594,6 @@ def _float_param(request_data, key, *, default, lo=None, hi=None):
     if hi is not None:
         v = min(hi, v)
     return v
-
-
-def _match_tolerance_param(request_data):
-    """Resolve the PRO<->PSD match window (minutes) from the request.
-
-    `MatchToleranceMin` is a positive number of minutes (the frontend tolerance slider). A missing
-    key uses DEFAULT_MATCH_TOLERANCE_MIN; an explicit 0 / negative / non-numeric value disables
-    time-matching (returns None -> legacy same-day aggregation).
-    """
-    if "MatchToleranceMin" not in request_data:
-        return DEFAULT_MATCH_TOLERANCE_MIN
-    try:
-        v = float(request_data.get("MatchToleranceMin"))
-    except (TypeError, ValueError):
-        return DEFAULT_MATCH_TOLERANCE_MIN
-    return v if v > 0 else None
 
 
 def _native_lsb_tolerance_param(request_data):
@@ -7588,6 +7543,12 @@ def _attach_grid_export_columns(participant_uid, sweeps, *, band_width_hz):
                 row["device_rules_status"] = DEVICE_RULES_STATUS_NOTE
 
 
+# The discovery sweep's own reading of MatchDirection (falls back to "pro_first"); lives in
+# routines/sweep_settings.py so the Closed-Loop module can call it without Django. Deliberately
+# not the same helper as `_forecast_match_direction` below, which falls back to "prior".
+_sweep_match_direction = sweep_settings.sweep_match_direction
+
+
 def _forecast_match_direction(request_data):
     """The PSD<->PRO match-direction parsing used by `run_for_participant` and
     `_validate_band_core`, extracted from two byte-identical inline copies (a review found the
@@ -7611,21 +7572,6 @@ def _forecast_match_direction(request_data):
     if _md == "nearest":
         return "nearest"
     return "prior"
-
-
-def _sweep_match_direction(request_data):
-    """The band-by-length sweep's own MatchDirection parsing, shared by the full grid
-    (`band_time_sweep_for_participant`) and the per-cell drill-down
-    (`band_time_sweep_cell_for_participant`) so the two always read the request the same way.
-
-    Deliberately NOT the same helper as `_forecast_match_direction` above: that one falls back to
-    "prior" for an unrecognised value, because it is the threshold-deployment view's
-    causal-forecasting reading. This one falls back to "pro_first", because it is the discovery
-    sweep's own reading, unchanged from before MatchDirection was wired into it. Collapsing the two
-    would silently change one of their fallback behaviours.
-    """
-    _md = str(request_data.get("MatchDirection", "pro_first")).lower()
-    return "prior" if _md == "prior" else ("nearest" if _md == "nearest" else "pro_first")
 
 
 def band_time_sweep_for_participant(request_data):
@@ -7795,6 +7741,7 @@ def band_time_sweep_for_participant(request_data):
             "outlier_n_mad": float(outlier_n_mad),
             "outlier_scale": outlier_scale,
             "sweep_metric": label_metric,
+            "match_direction": match_direction,
             "match_extent_sec_ignored": ("the top-of-page slider for how much recording goes into "
                                          "one measurement is not read here, because that quantity "
                                          "is the axis this section sweeps"),
@@ -7993,24 +7940,13 @@ def band_time_sweep_cell_for_participant(request_data):
 #: be exercised on every live read path or it protects nothing.
 #: ==========================================================================================
 _BAND_SWEEP_RESPONSE_KIND = "biomarker_band_sweep"
-#: Bump this whenever the sweep's own computation changes in a way that is not already reflected
-#: by a change to `sweep_settings` (decision 63 added the family-wise q-value and pass/fail label
-#: to every row without adding a new user-facing setting, so a returning request with unchanged
-#: settings would otherwise be served a stored response computed before those fields existed --
-#: confirmed live: an unversioned before/after check on RCS08 showed 0 new fields because both
-#: runs hit the same pre-existing cache entry).
-#: Track D added `include_cross_setting_stability` to `sweep_settings` (folded into the signature
-#: already, so a flagged and an unflagged request are already two different keys) and, when set,
-#: the `cross_setting_stability` / `device_rules_status` fields on every best-row. Bumped anyway,
-#: belt and suspenders, after this exact class of bug (an unversioned response shape change served
-#: stale) was found and fixed twice already in this feature's own Tracks B and C.
-#: v6 replaces the sweep's own outlier rule for a contact that has a historical ceiling table
-#: entry: instead of 5 median absolute deviations computed from the window being looked at, each
-#: contaminated 3 s piece is left out BEFORE anything is averaged, and the next closest clean piece
-#: is taken in its place. This changes which measurements are excluded, so it changes numbers -- a
-#: stored response built under any earlier rule must never be served as if it were built under this
-#: one.
-_BAND_SWEEP_RULE_VERSION = "v8_sweep_psd_snapshots_by_length"
+
+
+sweep_settings_tag = sweep_settings.sweep_settings_tag                       # routines/sweep_settings.py
+sweep_settings_tag_from_request = sweep_settings.sweep_settings_tag_from_request
+
+
+_BAND_SWEEP_RULE_VERSION = "v9_sweep_settings_tag"
 
 #: Response fields that are timings of the run that produced them, not results. They are not
 #: compared when a stored response is checked against a fresh one, and a served response keeps the
@@ -8094,8 +8030,18 @@ def _store_sweep_results(participant_uid, sig, prov, response, *, n_recordings=N
     response["store_written"] = written
     sweeps = response.get("band_time_sweep") or {}
     metric = response.get("label_metric")
+    sa = response.get("settings_applied") or {}
+    try:
+        tag = sweep_settings_tag(
+            label_metric=metric, match_tolerance_min=sa.get("match_tolerance_min"),
+            match_direction=sa.get("match_direction"), allow_window_reuse=sa.get("allow_window_reuse"),
+            label_strategy=sa.get("label_strategy"), percentile_low=sa.get("percentile_low"),
+            percentile_high=sa.get("percentile_high"))
+    except (TypeError, ValueError):                             # a response without the block
+        tag = None
     common = dict(writer="biomarkers", trigger="band_time_sweep", provenance=prov,
-                  n_recordings=n_recordings, root=_SHARED_CACHE_DIR_OVERRIDE)
+                  n_recordings=n_recordings, root=_SHARED_CACHE_DIR_OVERRIDE,
+                  extra={"sweep_settings": tag, "metric_label": response.get("metric_label")})
     try:
         corr = band_results_tables.correlation_table(sweeps, metric_key=metric)
         disc = band_results_tables.discrimination_table(sweeps, metric_key=metric)

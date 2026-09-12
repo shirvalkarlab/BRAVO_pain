@@ -522,32 +522,104 @@ def _shared_store(kind, signature, payload, *, participant_uid=None, provenance=
 STABILITY_GRID_KIND = "biomarker_band_stability_grid"
 
 
-def band_sweep_grid_for_closed_loop(participant_uid):
-    """The calibrated grid, as `consumer="closed_loop"`, with every row's stability result
-    translated to the honest four-valued answer. Never raises.
+#: The request keys that decide WHICH stored grid the Biomarkers page shows: the pain score and
+#: the matching and split settings. The Closed-Loop page sends the same ones (read from the
+#: Biomarkers page's own persisted controls), and nothing else from the request reaches the sweep.
+GRID_SETTING_KEYS = ("SweepMetric", "LabelMetric", "MatchToleranceMin", "MatchDirection",
+                     "AllowWindowReuse", "LabelStrategy", "PercentileLow", "PercentileHigh")
 
-    Returns `{"available": False, "reason": ...}` when nothing is stored yet -- Track D's export
-    reads a grid Biomarkers already built and cached; it does not trigger a fresh, expensive build
-    on Closed-Loop Deployment's own request, the same "browse a pre-computed grid" design the ADR
-    calls for (`adr_2026-09-08_biomarkers_closedloop_matrix_export.md`).
+
+def _build_grid_through_biomarkers(participant_uid, rd):
+    """Build (and store) the calibrated grid exactly as the Biomarkers page would for these
+    settings. Its own function so a test can stand in for it; needs Django and the recordings."""
+    try:
+        from Biomarkers import bravo_service as _bio
+    except ImportError:                                          # pragma: no cover
+        from modules.Biomarkers import bravo_service as _bio
+    return _bio.band_time_sweep_for_participant(dict(rd, ParticipantId=participant_uid,
+                                                     BandTimeSweep="1"))
+
+
+def band_sweep_grid_for_closed_loop(participant_uid, request_data=None):
+    """The calibrated grid the Biomarkers page shows under the SAME pain score and matching and
+    split settings, as `consumer="closed_loop"`, with every row's stability result translated to
+    the honest four-valued answer. Never raises.
+
+    WHICH ENTRY, 2026-09-11. The store keeps up to twelve grids per participant (decision 107),
+    one per score and settings combination, and this used to read the newest of them whatever it
+    was built under -- so the card disagreed with the Biomarkers page whenever the daily precompute
+    had written another score last (the decision-107 defect met a third time). It now matches the
+    newest entry whose sidecar tag equals the tag of the settings in the request
+    (`Biomarkers.bravo_service.sweep_settings_tag_from_request`, the same helpers the sweep uses),
+    which is the newest grid the Biomarkers page has stored under those settings: a grid that page
+    rebuilt for a new pain report or a new ingest supersedes the older one here too. When no stored
+    grid matches -- the settings were never used on the Biomarkers page, or the rule version moved
+    -- it builds one through the Biomarkers sweep itself (the PI: "fetch each time from the
+    Biomarkers latest cache heat-map grid, if it's outdated"), which stores it, and reads that back;
+    the response says so (`built_now`). `grid_settings` carries what the served grid was built
+    under, for the card to print.
     """
     try:
         from . import stability as _stab
     except ImportError:                                          # pragma: no cover
         from modules.ClosedLoopDeployment import stability as _stab
+    rd = {k: v for k, v in (request_data or {}).items() if k in GRID_SETTING_KEYS}
+    # The tag comes from the Django-free routine (`routines/sweep_settings.py`) so this works in
+    # the host suite too; the Biomarkers service itself is imported only when a grid must be built.
     try:
-        payload, stamp = _cache_store.load_newest(
+        try:
+            from Biomarkers.routines import sweep_settings as _sweep_settings
+        except ImportError:                                      # pragma: no cover
+            from modules.Biomarkers.routines import sweep_settings as _sweep_settings
+        want = _sweep_settings.sweep_settings_tag_from_request(rd)
+    except Exception as exc:                                     # noqa: BLE001
+        _log.warning("closed-loop: the grid settings could not be resolved", exc_info=True)
+        return {"available": False, "reason": f"the grid settings could not be resolved: {exc!r}"}
+
+    def _matches(meta):
+        return ((meta.get("extra") or {}).get("sweep_settings") or None) == want
+
+    def _read():
+        return _cache_store.load_newest(
             "biomarker_band_sweep", participant_uid, consumer="closed_loop",
-            root=_SHARED_CACHE_DIR_OVERRIDE)
+            root=_SHARED_CACHE_DIR_OVERRIDE, match=_matches)
+
+    built_now = False
+    try:
+        payload, stamp = _read()
     except Exception as exc:                                     # noqa: BLE001
         _log.warning("closed-loop: reading the stored calibrated grid raised for %s",
                      participant_uid, exc_info=True)
         return {"available": False, "reason": f"reading the calibrated grid raised {exc!r}"}
     if payload is None:
+        # Nothing stored under these settings: build it the way the Biomarkers page would, which
+        # writes it under the tag, then read it back as this module. A build that could not be
+        # stored (no report key, say) is served from the response itself and marked as such.
+        try:
+            fresh = _build_grid_through_biomarkers(participant_uid, rd)
+            built_now = True
+            payload, stamp = _read()
+            if payload is None and isinstance(fresh, dict) and fresh.get("band_time_sweep"):
+                payload, stamp = fresh, {"written_utc": None, "extra": {"sweep_settings": want}}
+        except Exception as exc:                                 # noqa: BLE001
+            _log.warning("closed-loop: building the calibrated grid raised for %s",
+                         participant_uid, exc_info=True)
+            return {"available": False, "reason": f"building the calibrated grid raised {exc!r}",
+                    "grid_settings": dict(want, metric_label=None, stored_utc=None, built_now=True)}
+    if payload is None:
         return {"available": False,
-                "reason": ("no calibrated grid is stored yet for this participant; visit the "
-                           "Biomarkers exploration page first"),
-                "stamp": stamp}
+                "reason": ("no calibrated grid could be built for this participant under these "
+                           "settings; visit the Biomarkers exploration page first"),
+                "stamp": stamp, "grid_settings": dict(want, metric_label=None, stored_utc=None,
+                                                      built_now=built_now)}
+    grid_settings = dict(want)
+    grid_settings.update({
+        "metric_label": (payload.get("metric_label")
+                         or ((stamp or {}).get("extra") or {}).get("metric_label")
+                         or _sweep_settings.metric_label(want["sweep_metric"])),
+        "stored_utc": (stamp or {}).get("written_utc"),
+        "built_now": built_now,
+    })
 
     # THE SECOND SOURCE OF THE STABILITY ANSWER, and in practice the only one that ever fires.
     # `cross_setting_stability_raw` is attached to a row only when the grid was built with
@@ -630,6 +702,7 @@ def band_sweep_grid_for_closed_loop(participant_uid):
         out_sweeps[channel] = new_sweep
 
     return {"available": True, "band_time_sweep": out_sweeps, "stamp": stamp,
+            "grid_settings": grid_settings,
             "cross_setting_stability_included": any_stability,
             # How many rows got their answer from the stored grid rather than from the row itself.
             # Reported so a reader can tell "the background job has run" from "the request computed
@@ -2162,7 +2235,7 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     # a first candidate. Cheap even when it finds nothing: one store read, no model fit, no ORM
     # query beyond the participant already resolved by the caller.
     try:
-        _grid_export = band_sweep_grid_for_closed_loop(getattr(participant, "uid", participant))
+        _grid_export = band_sweep_grid_for_closed_loop(getattr(participant, "uid", participant), rd)
     except Exception as _grid_exc:                     # noqa: BLE001
         _log.warning("closed-loop report: the calibrated grid could not be read for %s",
                      getattr(participant, "uid", participant), exc_info=True)

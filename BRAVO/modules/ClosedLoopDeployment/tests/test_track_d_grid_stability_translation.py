@@ -30,6 +30,7 @@ from CacheStore import provenance as prov
 from CacheStore import store as st
 from ClosedLoopDeployment import adapter
 from ClosedLoopDeployment import stability as stab
+from Biomarkers.routines import sweep_settings
 
 UID = "2e3c75c00d7f4f37b53a048d195f11da"
 
@@ -52,9 +53,13 @@ def sandbox():
     shutil.rmtree(d, ignore_errors=True)
 
 
-def _write_real_band_sweep_entry(*, stability_raw=None, sig=("sweep", 1), center_hz=12.5):
+def _write_real_band_sweep_entry(*, stability_raw=None, sig=("sweep", 1), center_hz=12.5,
+                                 request=None, tagged=True):
     """Mirrors `Biomarkers.bravo_service._band_sweep_signature`'s real chain shape: flattened from
-    the raw tile entry and the raw pain-report snapshot, nothing else."""
+    the raw tile entry and the raw pain-report snapshot, nothing else -- and, since decision 131,
+    the sidecar tag of the settings the grid was built under (`extra["sweep_settings"]`), which is
+    what the Closed-Loop reader matches on. `tagged=False` writes an entry from before the tag
+    existed, which the reader must never serve."""
     tiles_key = st.product_key("raw_lsb_tiles", UID, ("tiles", 1))
     st.store("raw_lsb_tiles", UID, ("tiles", 1), {"tiles": [[0.0]]}, writer="biomarkers")
     report_key = st.product_key("redcap_reports", UID, ("reports", 1))
@@ -77,8 +82,10 @@ def _write_real_band_sweep_entry(*, stability_raw=None, sig=("sweep", 1), center
             }
         },
     }
+    extra = ({"sweep_settings": sweep_settings.sweep_settings_tag_from_request(request or {}),
+              "metric_label": "NRS (0–10)"} if tagged else None)
     st.store("biomarker_band_sweep", UID, sig, payload, writer="biomarkers",
-             trigger="band_time_sweep", provenance=chain, fmt="pickle")
+             trigger="band_time_sweep", provenance=chain, fmt="pickle", extra=extra)
     return sig
 
 

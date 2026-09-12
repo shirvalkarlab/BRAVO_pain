@@ -174,6 +174,51 @@ function ScaleBar({ center, half, lo, mid, hi }) {
   );
 }
 
+/**
+ * The settings the served grid was built under, in one fine-print line (the PI, 2026-09-11: "very
+ * brief concise stats of what match window was used, if it's PRO-first discovery or not, a median
+ * split or what kind of split"). Every value comes from the server's own tag of the stored entry
+ * (`grid_settings`), never from this page's state, so a mismatch would be visible rather than
+ * silent. Nothing here is a threshold.
+ */
+const DIRECTION_TEXT = { pro_first: "PRO-first match", prior: "recording-before-rating match",
+  nearest: "nearest-in-time match" };
+export function gridSettingsLine(gs) {
+  if (!gs) return null;
+  const parts = [];
+  parts.push(gs.metric_label || gs.sweep_metric || "pain score ?");
+  parts.push(gs.match_tolerance_min != null ? `\u00b1${fmtNum(gs.match_tolerance_min, 0)} min window`
+    : "same-day match");
+  parts.push(DIRECTION_TEXT[gs.match_direction] || `${gs.match_direction || "?"} match`);
+  if (gs.allow_window_reuse) parts.push("windows reused");
+  const lo = gs.percentile_low != null ? fmtNum(gs.percentile_low, 0) : "?";
+  const hi = gs.percentile_high != null ? fmtNum(gs.percentile_high, 0) : "?";
+  const split = { tertile: `tertile split ${lo}/${hi} %`, percentile: `percentile split ${lo}/${hi} %`,
+    median: "median split", kmeans: "k-means split", cutoff: "fixed cut-off split" };
+  parts.push(split[gs.label_strategy] || `${gs.label_strategy || "?"} split`);
+  return parts.join(" \u00b7 ");
+}
+function gridBuiltText(gs) {
+  if (!gs) return null;
+  if (gs.built_now) return "built just now";
+  if (!gs.stored_utc) return null;
+  const d = new Date(gs.stored_utc);
+  if (Number.isNaN(d.getTime())) return `built ${gs.stored_utc}`;
+  return `built ${d.toLocaleDateString(undefined, { day: "numeric", month: "short" })} `
+    + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
+function SettingsFinePrint({ gs }) {
+  const line = gridSettingsLine(gs);
+  if (!line) return null;
+  const built = gridBuiltText(gs);
+  return (
+    <MDTypography variant="caption" sx={{ fontSize: 10, color: "#8A8A8A", textAlign: "right",
+      lineHeight: 1.35, maxWidth: "62ch" }}>
+      {line}{built ? <><br />{built}</> : null}
+    </MDTypography>
+  );
+}
+
 const HEAD = { fontSize: 10, fontWeight: 700, letterSpacing: 0.4, color: "#8A8A8A",
   textTransform: "uppercase", lineHeight: 1.2, textAlign: "center", paddingBottom: 4 };
 const CELL_H = 19;
@@ -193,7 +238,10 @@ export default function BandSweepGridPanel({ grid, participantUid, committed, on
   if (!grid || grid.available === false) {
     return (
       <Card sx={{ p: 2, mb: 2 }}>
-        <MDTypography variant="h6" fontWeight="bold">Choose a band</MDTypography>
+        <MDBox display="flex" alignItems="flex-start" justifyContent="space-between" gap={1}>
+          <MDTypography variant="h6" fontWeight="bold">Choose a band</MDTypography>
+          <SettingsFinePrint gs={grid && grid.grid_settings} />
+        </MDBox>
         <MDTypography variant="body2" color="text" mt={1}>
           {(grid && grid.reason) || "no calibrated grid is available for this participant yet."}
           {" "}Visit the Biomarkers exploration page first, then return here.
@@ -264,12 +312,18 @@ export default function BandSweepGridPanel({ grid, participantUid, committed, on
 
   return (
     <Card sx={{ p: 2, mb: 2 }}>
-      <MDBox display="flex" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap={1}>
-        <MDTypography variant="h6" fontWeight="bold">Choose a band</MDTypography>
-        {!grid.cross_setting_stability_included && (
-          <Chip size="small" label="stability across settings not yet computed for this grid"
-            sx={{ opacity: 0.6 }} />
-        )}
+      <MDBox display="flex" alignItems="flex-start" justifyContent="space-between" flexWrap="wrap" gap={1}>
+        <MDBox display="flex" alignItems="center" gap={1} flexWrap="wrap">
+          <MDTypography variant="h6" fontWeight="bold">Choose a band</MDTypography>
+          {!grid.cross_setting_stability_included && (
+            <Chip size="small" label="stability across settings not yet computed for this grid"
+              sx={{ opacity: 0.6 }} />
+          )}
+        </MDBox>
+        {/* Top right, in fine print: the pain score and the matching and split settings this grid
+            was built under, and when -- the same entry the Biomarkers page shows for its controls
+            (decision 131). */}
+        <SettingsFinePrint gs={grid.grid_settings} />
       </MDBox>
 
       <MDBox display="flex" gap={0.6} flexWrap="wrap" alignItems="center" mt={1} mb={1.25}>
