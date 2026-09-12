@@ -59,6 +59,49 @@ MIN_CAPTURE_SEPARATION_D = 0.5
 #: Minimum rows per capture arm before an estimate is reported at all.
 MIN_ROWS_PER_ARM = 8
 
+# =================================================================================================
+# THE REGRESSION'S DESIGN MATRIX IS BUILT ONCE PER CELL, NOT ONCE PER BAND (2026-09-12)
+# =================================================================================================
+# `assess_response` is called once per band, and a cell has eighteen bands. The amplitude, the era
+# labels and the cluster labels are the same for all eighteen; only the band power changes. The
+# formula interface (`statsmodels.formula.api.ols`) rebuilt the design matrix from the formula on
+# every call, and on RCS08 that rebuilding was 10.4 s of the 19.4 s the 1,116 calls took in one
+# request. `_ols_fit` below builds the right-hand side once for a given (formula, amplitude, era)
+# and hands statsmodels the same two frames the formula interface would have handed it -- the
+# left-hand side as a one-column frame named `logp`, the right-hand side as the frame patsy builds
+# with rows dropped on missing values, which is what `Model.from_formula` does -- so the fit sees
+# identical arrays and returns identical numbers. The frames are never mutated by the fit.
+#
+# `USE_DESIGN_CACHE = False` restores the formula interface call for call; it exists so the two
+# can be run against each other on the live record (probe_so_screen_equal.py), and it is what the
+# before-and-after measurement used.
+USE_DESIGN_CACHE = True
+_DESIGN_CACHE_MAX = 64
+_DESIGN_CACHE: dict = {}
+
+
+def _design_key(rhs, df):
+    parts = [rhs, df["amp"].to_numpy(float).tobytes()]
+    if "era" in rhs:
+        parts.append(tuple(df["era"].tolist()))
+    return tuple(parts)
+
+
+def _ols_fit(formula, df, **fit_kw):
+    """`smf.ols(formula, data=df).fit(**fit_kw)`, with the right-hand side cached per cell."""
+    import statsmodels.api as sm
+    from patsy import NAAction, dmatrix
+    lhs, rhs = (s.strip() for s in formula.split("~", 1))
+    key = _design_key(rhs, df)
+    exog = _DESIGN_CACHE.get(key)
+    if exog is None:
+        exog = dmatrix(rhs, df, return_type="dataframe", NA_action=NAAction(on_NA="drop"))
+        if len(_DESIGN_CACHE) >= _DESIGN_CACHE_MAX:
+            _DESIGN_CACHE.pop(next(iter(_DESIGN_CACHE)))
+        _DESIGN_CACHE[key] = exog
+    endog = df[[lhs]]
+    return sm.OLS(endog, exog, missing="drop").fit(**fit_kw)
+
 
 @dataclass
 class ResponseResult:
@@ -233,7 +276,6 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
     try:
         import statsmodels.formula.api as smf
         df = pd.DataFrame({"logp": lg, "amp": a})
-        slope_unadj = float(smf.ols("logp ~ amp", data=df).fit().params["amp"])
         formula = "logp ~ amp"
         if era_v is not None and pd.Series(era_v).nunique() > 1:
             df["era"] = pd.Series(era_v).astype(str).values
@@ -243,7 +285,12 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
         if clus is not None and pd.Series(clus).nunique() > 1:
             df["clus"] = pd.Series(clus).values
             fit_kw = dict(cov_type="cluster", cov_kwds={"groups": df["clus"]})
-        res = smf.ols(formula, data=df).fit(**fit_kw)
+        if USE_DESIGN_CACHE:
+            slope_unadj = float(_ols_fit("logp ~ amp", df).params["amp"])
+            res = _ols_fit(formula, df, **fit_kw)
+        else:
+            slope_unadj = float(smf.ols("logp ~ amp", data=df).fit().params["amp"])
+            res = smf.ols(formula, data=df).fit(**fit_kw)
         slope = float(res.params["amp"])
         lo_ci, hi_ci = res.conf_int().loc["amp"]
         ci = (float(lo_ci), float(hi_ci))

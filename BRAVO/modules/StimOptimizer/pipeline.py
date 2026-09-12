@@ -364,7 +364,7 @@ class LiveEvidence:
 
 def live_evidence(participant, *, amp_ceiling=None,
                   channel=None, hemisphere=None, rate_hz=None, bands=None,
-                  force_refresh=None, **build_kwargs) -> LiveEvidence:
+                  force_refresh=None, inputs=None, **build_kwargs) -> LiveEvidence:
     """Build, screen and select LFP evidence for a participant from platform data.
 
     This is the seam that lets the gate be evaluated against real recordings instead of against
@@ -383,12 +383,14 @@ def live_evidence(participant, *, amp_ceiling=None,
     from .routines import lfp_evidence as EV, lfp_response as LR
     from . import adapter as AD
 
+    # `inputs` is the already-built (sensed frame, epochs) pair, or None to build it here; see
+    # `adapter.evidence_for_participant`.
     ev, audit = AD.evidence_for_participant(
         participant, force_refresh=force_refresh,
         rates=([rate_hz] if rate_hz is not None else None),
         channels=([channel] if channel is not None else None),
         hemispheres=((hemisphere,) if hemisphere is not None else ("Left", "Right")),
-        bands=bands, **build_kwargs)
+        bands=bands, inputs=inputs, **build_kwargs)
 
     screen, best = EV.screen_cells(ev, response_fn=LR.assess_response, amp_ceiling=amp_ceiling)
     if hemisphere is not None and rate_hz is not None:
@@ -578,7 +580,7 @@ def _render(ctx, label, outdir, backend, dpi):
 
 def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemisphere=None,
                        rate_hz=None, bands=None, force_refresh=None, request_data=None,
-                       washin_min=1.0, design=None, stream=None,
+                       washin_min=1.0, design=None, stream=None, evidence_inputs=None,
                        **two_stage_kwargs) -> TwoStageReport:
     """Run the staged pipeline on a PARTICIPANT, with the LFP evidence built from real recordings.
 
@@ -659,9 +661,11 @@ def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemispher
                                     % rates))
                 box["frozen_rates"] = rates
                 return None
+        # `evidence_inputs` is the (sensed frame, epochs) pair the service layer already built
+        # for the readiness screen, or None to build it here (2026-09-12).
         ev_ = live_evidence(participant, amp_ceiling=amp_ceiling, channel=channel,
                             hemisphere=hemisphere, rate_hz=pin, bands=bands,
-                            force_refresh=force_refresh, stream=stream)
+                            force_refresh=force_refresh, stream=stream, inputs=evidence_inputs)
         box["ev"] = ev_
         box["pinned_rate_hz"] = float(pin)
         box["frozen_rates"] = rates

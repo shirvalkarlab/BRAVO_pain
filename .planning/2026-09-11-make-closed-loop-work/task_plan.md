@@ -5,10 +5,11 @@ problem is that the module never handed the rule the value the device already re
 that still blocks does so for a reason the PI has read and agreed with.
 
 ## Next Step
-PI away 3-4 h, autonomous (2026-09-12 afternoon). In flight: the Stim Optimizer page layout fix
-(frontend). Phase 6: profile and speed up the Stim Optimizer request (56-66 s on first load), with
-equality proof and alternating-round timings. Then Phase 7: code review of the three modules and
-auto-implementation of the findings, suites after each landing.
+PI away 3-4 h, autonomous (2026-09-12 afternoon). Layout fix landed (f2bdb7a5). Phase 6 builder
+running on StimOptimizer/bravo_service.py and routines/lfp_evidence.py. Phase 7: the Biomarkers and
+Closed-Loop reviews are in (artifacts/review_2026-09-12_*.md) and their builders are running; the
+StimOptimizer reviewer starts when Phase 6 lands, then C4 (package double-import). Each landing:
+review the report, suites, commit, push, reload workers, decision rows.
 
 ## Current Phase
 Phase 6

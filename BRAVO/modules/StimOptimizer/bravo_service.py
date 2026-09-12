@@ -46,6 +46,46 @@ DEFAULT_SITES = ("left_leg", "back")
 DEFAULT_HEMISPHERES = ("Left", "Right")
 
 #: ==========================================================================================
+#: THE LINEAR-ALGEBRA THREAD POOL IS CAPPED TO ONE THREAD FOR THE WHOLE REQUEST (2026-09-12).
+#:
+#: Every matrix this request factorises is small: a Gaussian-process fit on 54 to 69 epochs, an
+#: ordinary least-squares fit on a few hundred tiles with about ten columns. OpenBLAS in the
+#: container defaults to sixteen threads, and on matrices this size the threads spend their time
+#: waiting for each other rather than computing. Measured on RCS08 (probe_so_blas_threads.py): one
+#: arm's fit took 3.9 to 4.7 s with the default pool and 0.26 to 0.32 s with one thread, in two
+#: alternating rounds, and every number it produced -- the posterior mean and spread over the whole
+#: grid, the safe mask, the fitted kernel, the marginal likelihood, the optimum, the queue, the
+#: batches -- was bit for bit identical. The cap is applied around the whole request rather than
+#: around each fit because the same overhead sits under every small factorisation on the way, and
+#: a request holds one gunicorn worker either way, so nothing else in the process loses threads it
+#: was using.
+#:
+#: `STIM_OPTIMIZER_BLAS_THREADS` in the environment overrides the cap: "0" leaves the pool as it
+#: is (this is how the before-and-after timing was measured), any other integer sets it. The
+#: `threadpoolctl` package ships with scikit-learn and is present in the container; where it is
+#: absent (the host test runner) the request runs with the pool untouched, which is what it did
+#: before this cap existed.
+#: ==========================================================================================
+BLAS_THREADS_ENV = "STIM_OPTIMIZER_BLAS_THREADS"
+
+
+def _blas_threads_capped():
+    """Context manager: the BLAS/LAPACK thread pool capped for the duration, or a no-op."""
+    import contextlib
+    raw = os.environ.get(BLAS_THREADS_ENV, "1").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 1
+    if n <= 0:
+        return contextlib.nullcontext()
+    try:
+        from threadpoolctl import threadpool_limits
+    except ImportError:                               # pragma: no cover - host runner
+        return contextlib.nullcontext()
+    return threadpool_limits(limits=n, user_api="blas")
+
+#: ==========================================================================================
 #: TRACK A STEP 8 — "Have Stim Optimizer read the store and write its outputs back".
 #:
 #: READS. The matched table comes through `adapter.build_design_matrix`, which asks the store as
@@ -755,7 +795,7 @@ def _two_stage_payload(rep, *, inputs, seconds, in_force=None) -> dict:
 
 
 def two_stage_block(participant, es, *, request_data, stream, washin_min, hemispheres, sites,
-                    data_horizon, inputs, in_force=None) -> dict:
+                    data_horizon, inputs, in_force=None, evidence_inputs=None) -> dict:
     """Run the open-loop -> gate -> closed-loop path on this request's own inputs and report it.
 
     Never raises into the response: a failure here is reported under `two_stage.reason` and the
@@ -781,7 +821,7 @@ def two_stage_block(participant, es, *, request_data, stream, washin_min, hemisp
             participant, design=es, stream=stream, request_data=request_data,
             washin_min=float(washin_min), amp_ceiling=_obj.AMP_HARD_LIMIT_MA,
             hemispheres=tuple(hemispheres), primary_item=str(tuple(sites)[0]),
-            data_horizon=data_horizon,
+            data_horizon=data_horizon, evidence_inputs=evidence_inputs,
             override_reason=override_reason,
             override_by=(str(rd.get(TWO_STAGE_OVERRIDE_BY_KEY)) if override_reason
                          and rd.get(TWO_STAGE_OVERRIDE_BY_KEY) else None),
@@ -798,6 +838,17 @@ def two_stage_block(participant, es, *, request_data, stream, washin_min, hemisp
 
 
 def run_for_participant(request_data: dict) -> dict:
+    """Build the design matrix from platform data, fit every arm, return a JSON-able payload.
+
+    The work is `_run_for_participant`; this wrapper only caps the linear-algebra thread pool for
+    its duration (see `BLAS_THREADS_ENV` above), which changes no number and, measured on RCS08,
+    removes most of the time the arm fits and the closed-loop screen spent waiting on threads.
+    """
+    with _blas_threads_capped():
+        return _run_for_participant(request_data)
+
+
+def _run_for_participant(request_data: dict) -> dict:
     """Build the design matrix from platform data, fit every arm, return a JSON-able payload.
 
     Request keys (all optional except ParticipantId):
@@ -1049,6 +1100,21 @@ def run_for_participant(request_data: dict) -> dict:
                 observed_amp_range[hemi] = (float(s.min()), float(s.max()))
     blockers = _blockers(rep, arms, observed_amp_range)
     in_force = in_force_by_side(es)
+    # THE SENSED SIGNAL AND THE EPOCHS ARE BUILT ONCE FOR BOTH CONSUMERS BELOW (2026-09-12). The
+    # closed-loop readiness screen and the two-stage path each asked `adapter.evidence_inputs` for
+    # the same pair -- the recordings, the tile cache and the exposure epochs -- and on RCS08 each
+    # build cost about 3 s. Built here with the stream this request already holds; a failure hands
+    # None to both, and each then builds its own exactly as it did before, so the degradation is
+    # unchanged. The screen's own try/except still owns any failure inside the screen.
+    _ev_inputs = None
+    if bool((request_data or {}).get("ClosedLoop", True)) or _two_stage_requested(request_data):
+        try:
+            _ev_inputs = adapter.evidence_inputs(participant, stream=_stream)
+        except Exception as exc:                          # noqa: BLE001 -- each consumer builds its own
+            # One line rather than a traceback: the consumer that then fails the same way logs
+            # its own traceback and reports the reason in the response.
+            _log.warning("StimOptimizer: the shared evidence inputs could not be built (%r); "
+                         "each consumer will build its own", exc)
     out = {
         "available": True,
         "participant": uid,
@@ -1064,7 +1130,8 @@ def run_for_participant(request_data: dict) -> dict:
         "washin_min": washin_min,
         "closed_loop": closed_loop_readiness(participant, es,
                                              include=bool((request_data or {})
-                                                          .get("ClosedLoop", True))),
+                                                          .get("ClosedLoop", True)),
+                                             inputs=_ev_inputs),
         "amplitude_effect": amp_block,
         "ground_truth": gt_block,
         "store": store_block,
@@ -1078,7 +1145,7 @@ def run_for_participant(request_data: dict) -> dict:
             hemispheres=hemis, sites=sites, data_horizon=horizon,
             inputs={"matched_table": matched_key, "tiles": tiles_key,
                     "settings_stream": stream_key},
-            in_force=in_force)
+            in_force=in_force, evidence_inputs=_ev_inputs)
     if sig is not None:
         try:
             _write_outputs(str(uid), sig, prov, rep, out)
@@ -1106,7 +1173,7 @@ def _cache_status(uid, sig):
                                         root=_SHARED_CACHE_DIR_OVERRIDE)
 
 
-def closed_loop_readiness(participant, es, *, include=True) -> dict:
+def closed_loop_readiness(participant, es, *, include=True, inputs=None) -> dict:
     """Whether the sensed LFP could drive Adaptive Therapy for this participant, and if not why.
 
     This is a DIFFERENT question from the open-loop optimizer above it, and the payload keeps them
@@ -1131,7 +1198,10 @@ def closed_loop_readiness(participant, es, *, include=True) -> dict:
 
         lo, hi = _pa.ADAPTIVE_LFP_BAND_HZ
         bands = [(float(c), 5.0) for c in _np.arange(lo + 2.5, hi - 2.5 + 0.01, 1.0)]
-        le = _pl.live_evidence(participant, amp_ceiling=_obj.AMP_HARD_LIMIT_MA, bands=bands)
+        # `inputs` is the (sensed frame, epochs) pair the request built once for both this
+        # screen and the two-stage path; None builds it here (2026-09-12).
+        le = _pl.live_evidence(participant, amp_ceiling=_obj.AMP_HARD_LIMIT_MA, bands=bands,
+                               inputs=inputs)
         screen = le.screen if le.screen is not None else pd.DataFrame()
         n_deployable = 0 if screen.empty else int(screen["deployable"].sum())
         # The contact pair in the page's form on every row and on the selected cell

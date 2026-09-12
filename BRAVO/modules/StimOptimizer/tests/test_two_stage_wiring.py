@@ -142,8 +142,8 @@ def bench(monkeypatch):
     es = _matrix()
     monkeypatch.setattr(AD, "build_design_matrix", lambda p, rd=None, **kw: es.copy())
     monkeypatch.setattr(BS, "_tiles_key_for", lambda p: (TILES_KEY, None))
-    monkeypatch.setattr(BS, "closed_loop_readiness",
-                        lambda p, es, include=True: {"available": False, "reason": "stubbed"})
+    monkeypatch.setattr(BS, "closed_loop_readiness",     # `**kw`: the `inputs=` pair, 2026-09-12
+                        lambda p, es, include=True, **kw: {"available": False, "reason": "stubbed"})
     monkeypatch.setattr(BS, "_blockers", lambda rep, arms, observed=None: [])
     monkeypatch.setattr(BS.pipeline, "run", lambda es, **kw: _Report())
     live = _LiveEvidenceStub(_responding_lfp())

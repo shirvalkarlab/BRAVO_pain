@@ -110,3 +110,39 @@
   pw_us_Left for both sides (Right is 150 us). Awaiting the PI's phase choice.
 - Redesign phases 1-4 applied at the PI's direction, committed 6e5b55c0, pushed, workers reloaded; host 1073/42/0, container 598+6; chunk 183.8b78d2d0. Not watched in a browser.
 - PI (away 3-4 h, autonomous): (1) speed up the Stim Optimizer load; (2) then code-review the three modules and auto-implement. Phases 6-7 added. Frontend layout-fix builder still running.
+- Layout fix watched live in the PI's Chrome (every open section, no overlaps), committed f2bdb7a5,
+  pushed. Residual NOT fixed: inside the model-surfaces fold the server-drawn figure's italic caption
+  clips at the right edge (routines/plots.py, PI's figure conventions -- noted for him). The redesign
+  artifacts and this plan directory were untracked until this commit; now tracked.
+- Phase 6 (Stim Optimizer speed, builder): PROFILED FIRST (probe_so_profile.py, module override
+  pointed at a scratch store so the response is a genuine fresh build, inputs from production):
+  73.3 s under cProfile with TwoStage. The loading line blames the arm fits; the profile says the
+  closed-loop readiness screen (live_evidence) is 38.5 s, run again pinned inside two-stage 7.7 s,
+  the four arm fits 18.2 s. Inside: sklearn GP fits 22.9 s, ALL in cho_solve on 54-69 row matrices
+  (OpenBLAS at 16 threads; 1 thread gives 0.26-0.32 s per arm against 3.9-4.7 s, 12 result groups
+  bit-identical); strftime of the era month per TILE row 8.5 s; Timestamp-object epoch lookup
+  6.1 s; patsy rebuilding the design matrix per band 10.4 s of 19.4 s in assess_response. No GPU
+  (no nvidia-smi, no /dev/dri, no torch). Landed: BLAS cap around the request (env
+  STIM_OPTIMIZER_BLAS_THREADS), int64 epoch lookup, era per epoch, design-matrix cache per cell
+  (USE_DESIGN_CACHE switch), evidence inputs built once for readiness + two-stage, per-channel
+  preparation shared in build_all. Proofs: 304,488 tile lookups 0 differing; 900 band fits x 19
+  fields = 17,100 compared 0 differing; whole response 22,398 fields, 0 only-either-side, 3
+  differing = response key + 2 timing fields. 73.3 s -> 19.7 s profiled, 15.1 s real (TwoStage).
+  Old-code test found a real defect the old lookup had with a MISSING tile time (neighbour
+  misplaced; none on the live record). A/B alternating rounds running (old code from git HEAD in
+  _probe_tl/_so_old). Tests: 11 new in test_request_speed_equalities.py; 3 stubs given **kw.
+- Phase 7 reviews landed: artifacts/review_2026-09-12_ClosedLoopDeployment.md (0 critical, 1 high
+  C1: the page always sends Hemisphere "Left", so a right-side band is judged on the left lead and
+  stimulator; 5 medium, 6 low; hazards 2 and 4 confirmed, 1 partly, 3 in Stim Optimizer) and
+  artifacts/review_2026-09-12_Biomarkers.md (2 high: B1 the power-domain "same day" join uses the
+  UTC date, 193 of 678 ratings move a day; B2 a failed availability build memoised as "no
+  recordings"; 4 medium, 6 low). Builders dispatched: Closed-Loop (C1-C3, C5-C7, C9-C12, hazard 1;
+  C4 deferred until the Stim Optimizer builder is off its files) and Biomarkers (B1-B7, B9-B11;
+  B8 and B12 left for the PI). Phase 6 builder still running.
+- Phase 6 A/B, alternating rounds old/new/old/new, separate processes, genuinely fresh builds
+  (old = git HEAD package via _probe_tl/_so_old, BLAS pool at default): no flag 51.0 / 10.2 /
+  50.5 / 9.6 s; TwoStage 60.9 / 11.5 / 68.7 / 11.1 s. Each old/new pair: 21,496 (no flag) and
+  22,398 (flag) fields, 0 only-either-side, non-timing differing = response key only. Suites:
+  host 1084/42/0 (+11), container 598 + LIVE 6/0. Not done: gunicorn reload (orchestrator's step);
+  the page's loading line (Client/) now misdescribes the cost. Remaining cost is mostly Biomarkers
+  loading (~3.4 s) that this module cannot avoid.

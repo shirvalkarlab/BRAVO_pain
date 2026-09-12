@@ -710,12 +710,27 @@ class EvidenceAudit:
                 + (f". Where the numbers came from: {tiers}" if tiers else ""))
 
 
+def _utc_ns(values):
+    """Timestamps as int64 nanoseconds since the epoch, in UTC; a missing value is the minimum int.
+
+    The comparisons below used to run on arrays of Timestamp OBJECTS -- ``to_numpy()`` on a
+    timezone-aware series hands back one Python object per row -- so each of the four to five
+    million comparisons a request makes went through Python. The integer form compares the same
+    instants (two timezone-aware timestamps compare by instant, which is what the integer is) and
+    gives the same answer for a missing value: pandas' NaT sorts first in the integer form and
+    compares as "not less than" and "not greater than" anything in the object form, and both make
+    ``searchsorted`` place it before every epoch and every ``<`` against it false.
+    """
+    t = pd.to_datetime(pd.Series(values), utc=True)
+    return t.to_numpy(dtype="datetime64[ns]").astype("int64")
+
+
 def _epoch_for_times(times, epochs, *, t_start="t_start", t_end="t_end"):
     """Index of the exposure epoch containing each timestamp, or -1. Half-open [start, end)."""
     ep = epochs.reset_index(drop=True)
-    starts = pd.to_datetime(ep[t_start], utc=True).to_numpy()
-    ends = pd.to_datetime(ep[t_end], utc=True).to_numpy()
-    tv = pd.to_datetime(pd.Series(times), utc=True).to_numpy()
+    starts = _utc_ns(ep[t_start])
+    ends = _utc_ns(ep[t_end])
+    tv = _utc_ns(times)
     idx = np.searchsorted(starts, tv, side="right") - 1
     ok = (idx >= 0) & (idx < len(ep))
     within = np.zeros(len(tv), bool)
@@ -818,10 +833,105 @@ def _derive_era(ep, era_col, aud):
     return np.zeros(len(ep), dtype=int)
 
 
+class _PreparedChannel:
+    """One sensing channel's rows, filtered, merged and joined to the epochs; see `build_evidence`."""
+    __slots__ = ("p", "ep", "center_cols", "cal_values", "cal_tiers", "audit", "reason")
+
+    def __init__(self):
+        self.p = self.ep = None
+        self.center_cols = []
+        self.cal_values = self.cal_tiers = None
+        self.audit = {}
+        self.reason = None
+
+
+def _prepare_channel(psd, epochs, *, channel, time_unit="s", native_tol_s=None):
+    """The channel-only half of `build_evidence`, verbatim, returning what the cell half needs.
+
+    `audit` holds the audit fields this half used to set on the cell's audit directly, in the
+    order it set them; `reason` is the early-exit reason, when the channel cannot be used at all.
+    """
+    out = _PreparedChannel()
+    aud = out.audit
+    p = pd.DataFrame(psd)
+    p = p[p["channel"].astype(str) == str(channel)].copy()
+    aud["n_psd_rows"] = len(p)
+    if not len(p):
+        out.reason = f"no rows of sensed signal for channel {channel!r}"
+        return out
+    p["t_utc"] = _to_utc(p["t"], unit=time_unit)
+
+    # ---- band power already on the device's scale, when the frame carries it ---------------------
+    # Two things happen here and nowhere else, because this is the only point where both families of
+    # measurement and their quality flags are all present: bad tiles are dropped, and the device's
+    # own reading is allowed to win over the value modelled from the raw samples for the same moment
+    # and the same band. Everything after this point treats the result as one table of rows.
+    center_cols = _cal_center_columns(p)
+    cal_values = cal_tiers = None
+    if center_cols:
+        aud["band_power_source"] = BAND_POWER_FROM_CALIBRATED_CACHE
+        # A frame carrying band power on the device's scale must also carry the things that make it
+        # readable: which family each row belongs to, the two quality flags, and the band half width
+        # and tile length that say what one stored value covers. A hand-built frame with the value
+        # columns and none of the rest would otherwise fail somewhere further down with a message
+        # about whichever column happened to be reached first.
+        companions = ["family", "tile_ok", "tile_saturated", "band_half_hz", "tile_window_s"]
+        absent = [c for c in companions if c not in p.columns]
+        if absent:
+            raise KeyError(f"this frame carries band power on the device's scale but is missing "
+                           f"{absent}; build it with frame_from_lsb_cache rather than by hand, so "
+                           "that the quality flags and the band width travel with the numbers")
+        aud["band_half_hz"] = float(p["band_half_hz"].iloc[0])
+
+        # QUALITY FIRST. The cache flags a tile whose raw samples hit the converter's rail, and a
+        # tile it could not score at all. Either way the stored value is not a measurement of the
+        # brain, so the tile is dropped rather than used. Dropping happens before the merge so that
+        # a bad tile cannot absorb a device reading and hide it.
+        fam = p["family"].astype(str).to_numpy()
+        is_td = fam == FAMILY_TIME_DOMAIN
+        sat = p["tile_saturated"].to_numpy(bool) & is_td
+        bad = (~p["tile_ok"].to_numpy(bool)) & is_td & ~sat
+        aud["n_dropped_saturated_tile"] = int(sat.sum())
+        aud["n_dropped_unusable_tile"] = int(bad.sum())
+        p = p[~(sat | bad)].reset_index(drop=True)
+        if not len(p):
+            out.reason = (f"every tile for channel {channel!r} was refused on the cache's "
+                          f"quality flags ({aud['n_dropped_saturated_tile']} saturated, "
+                          f"{aud['n_dropped_unusable_tile']} otherwise unusable)")
+            return out
+
+        tol = (float(native_tol_s) if native_tol_s is not None
+               else float(p["tile_window_s"].iloc[0]) * DEFAULT_NATIVE_TOLERANCE_FRACTION_OF_TILE)
+        cal_values, cal_tiers, keep, counts = _merge_device_over_time_domain(
+            p, center_cols, tol_s=tol)
+        p = p[keep].reset_index(drop=True)
+        # A stable position into the two matrices above, so that every filter after this point can
+        # subset the rows without the values and the rows drifting out of alignment.
+        p["_cal_row"] = np.arange(len(p))
+        aud["n_device_rows"] = counts["n_device_rows"]
+        aud["n_device_rows_merged_into_a_tile"] = counts["n_device_rows_merged_into_a_tile"]
+        aud["n_device_rows_standing_alone"] = counts["n_device_rows_standing_alone"]
+    else:
+        aud["band_power_source"] = BAND_POWER_FROM_INTEGRATED_DENSITY
+
+    ep = pd.DataFrame(epochs).reset_index(drop=True)
+    j = _epoch_for_times(p["t_utc"], ep)
+    aud["n_dropped_no_epoch"] = int((j < 0).sum())
+    p = p.assign(_ep=j)
+    p = p[p._ep >= 0]
+    aud["n_joined"] = len(p)
+    if not len(p):
+        out.reason = "no PSD window falls inside any exposure epoch"
+        return out
+    out.p, out.ep = p, ep
+    out.center_cols, out.cal_values, out.cal_tiers = center_cols, cal_values, cal_tiers
+    return out
+
+
 def build_evidence(psd, epochs, *, channel, hemisphere, rate_hz, bands=None,
                    require_stim_on=True, amp_col=None, era_col="visit", rate_col=None,
                    time_unit="s", mode_requires=None, log_scale=DEFAULT_LOG_SCALE,
-                   recent_eras=RECENT_ERAS_FOR_RESPONSE, native_tol_s=None):
+                   recent_eras=RECENT_ERAS_FOR_RESPONSE, native_tol_s=None, _prepared=None):
     """One :class:`LfpEvidence` for a single (channel, hemisphere, rate), plus its audit.
 
     Parameters
@@ -873,81 +983,39 @@ def build_evidence(psd, epochs, *, channel, hemisphere, rate_hz, bands=None,
     aud.amp_col = amp_col
     aud.rate_col = rate_col
 
-    p = pd.DataFrame(psd)
-    p = p[p["channel"].astype(str) == str(channel)].copy()
-    aud.n_psd_rows = len(p)
-    if not len(p):
-        aud.reason_unusable = f"no rows of sensed signal for channel {channel!r}"
+    # EVERYTHING THAT DEPENDS ONLY ON THE CHANNEL AND THE EPOCHS is done once per channel and
+    # shared across the cells built from the same frame (2026-09-12): the channel filter, the
+    # timestamp conversion, the quality filter, the device-over-tile merge and the epoch join.
+    # `build_all` hands in a per-call dictionary so the sixteen cells of one channel (two
+    # hemispheres, eight rates on RCS08) prepare it once; a direct caller hands nothing and gets
+    # exactly the old one-cell path. Nothing after this point writes into the shared frame or the
+    # shared matrices: every later step filters into a new frame or reads by index.
+    prepared = None if _prepared is None else _prepared.get(str(channel))
+    if prepared is None:
+        prepared = _prepare_channel(psd, epochs, channel=channel, time_unit=time_unit,
+                                    native_tol_s=native_tol_s)
+        if _prepared is not None:
+            _prepared[str(channel)] = prepared
+    for name, value in prepared.audit.items():
+        setattr(aud, name, value)
+    if prepared.reason is not None:
+        aud.reason_unusable = prepared.reason
         return None, aud
-    p["t_utc"] = _to_utc(p["t"], unit=time_unit)
+    p, ep = prepared.p, prepared.ep
+    center_cols, cal_values, cal_tiers = prepared.center_cols, prepared.cal_values, prepared.cal_tiers
 
-    # ---- band power already on the device's scale, when the frame carries it ---------------------
-    # Two things happen here and nowhere else, because this is the only point where both families of
-    # measurement and their quality flags are all present: bad tiles are dropped, and the device's
-    # own reading is allowed to win over the value modelled from the raw samples for the same moment
-    # and the same band. Everything after this point treats the result as one table of rows.
-    center_cols = _cal_center_columns(p)
-    cal_values = cal_tiers = None
-    if center_cols:
-        aud.band_power_source = BAND_POWER_FROM_CALIBRATED_CACHE
-        # A frame carrying band power on the device's scale must also carry the things that make it
-        # readable: which family each row belongs to, the two quality flags, and the band half width
-        # and tile length that say what one stored value covers. A hand-built frame with the value
-        # columns and none of the rest would otherwise fail somewhere further down with a message
-        # about whichever column happened to be reached first.
-        companions = ["family", "tile_ok", "tile_saturated", "band_half_hz", "tile_window_s"]
-        absent = [c for c in companions if c not in p.columns]
-        if absent:
-            raise KeyError(f"this frame carries band power on the device's scale but is missing "
-                           f"{absent}; build it with frame_from_lsb_cache rather than by hand, so "
-                           "that the quality flags and the band width travel with the numbers")
-        aud.band_half_hz = float(p["band_half_hz"].iloc[0])
-
-        # QUALITY FIRST. The cache flags a tile whose raw samples hit the converter's rail, and a
-        # tile it could not score at all. Either way the stored value is not a measurement of the
-        # brain, so the tile is dropped rather than used. Dropping happens before the merge so that
-        # a bad tile cannot absorb a device reading and hide it.
-        fam = p["family"].astype(str).to_numpy()
-        is_td = fam == FAMILY_TIME_DOMAIN
-        sat = p["tile_saturated"].to_numpy(bool) & is_td
-        bad = (~p["tile_ok"].to_numpy(bool)) & is_td & ~sat
-        aud.n_dropped_saturated_tile = int(sat.sum())
-        aud.n_dropped_unusable_tile = int(bad.sum())
-        p = p[~(sat | bad)].reset_index(drop=True)
-        if not len(p):
-            aud.reason_unusable = (f"every tile for channel {channel!r} was refused on the cache's "
-                                   f"quality flags ({aud.n_dropped_saturated_tile} saturated, "
-                                   f"{aud.n_dropped_unusable_tile} otherwise unusable)")
-            return None, aud
-
-        tol = (float(native_tol_s) if native_tol_s is not None
-               else float(p["tile_window_s"].iloc[0]) * DEFAULT_NATIVE_TOLERANCE_FRACTION_OF_TILE)
-        cal_values, cal_tiers, keep, counts = _merge_device_over_time_domain(
-            p, center_cols, tol_s=tol)
-        p = p[keep].reset_index(drop=True)
-        # A stable position into the two matrices above, so that every filter after this point can
-        # subset the rows without the values and the rows drifting out of alignment.
-        p["_cal_row"] = np.arange(len(p))
-        aud.n_device_rows = counts["n_device_rows"]
-        aud.n_device_rows_merged_into_a_tile = counts["n_device_rows_merged_into_a_tile"]
-        aud.n_device_rows_standing_alone = counts["n_device_rows_standing_alone"]
-    else:
-        aud.band_power_source = BAND_POWER_FROM_INTEGRATED_DENSITY
-
-    ep = pd.DataFrame(epochs).reset_index(drop=True)
-    j = _epoch_for_times(p["t_utc"], ep)
-    aud.n_dropped_no_epoch = int((j < 0).sum())
-    p = p.assign(_ep=j)
-    p = p[p._ep >= 0]
-    aud.n_joined = len(p)
-    if not len(p):
-        aud.reason_unusable = "no PSD window falls inside any exposure epoch"
-        return None, aud
-
-    meta = ep.loc[p._ep.to_numpy()]
-    p = p.assign(amp=pd.to_numeric(meta[amp_col], errors="coerce").to_numpy(),
-                 rate=pd.to_numeric(meta[rate_col], errors="coerce").to_numpy(),
-                 era=_derive_era(meta, era_col, aud))
+    # ONE VALUE PER EPOCH, THEN ONE LOOKUP PER TILE. The amplitude, the rate and the era label are
+    # properties of the epoch a tile fell in, so they are read off the epoch table once (about a
+    # hundred rows) and spread over the tiles by index. This used to be done the other way round --
+    # the epoch rows were first repeated once per tile and the era's month string was then formatted
+    # for every one of those tens of thousands of rows, in every one of the ninety-odd cells; that
+    # formatting alone was 8.5 s of a 73 s request on RCS08 (2026-09-12). Same strings, same
+    # numbers: `ep` carries a fresh 0..n-1 index, so indexing its columns by position is the same
+    # lookup `ep.loc[...]` made.
+    j = p._ep.to_numpy()
+    p = p.assign(amp=pd.to_numeric(ep[amp_col], errors="coerce").to_numpy()[j],
+                 rate=pd.to_numeric(ep[rate_col], errors="coerce").to_numpy()[j],
+                 era=_derive_era(ep, era_col, aud)[j])
 
     n_before = len(p)
     p = p[np.isclose(p["rate"], float(rate_hz))]
@@ -1274,10 +1342,12 @@ def build_all(psd, epochs, *, hemispheres=("Left", "Right"), rates=None, channel
         pd.to_numeric(ep[_resolve_col(ep, RATE_COLS, "stimulation rate")],
                       errors="coerce").dropna().unique().tolist())
     out, rows = {}, []
+    prepared = {}          # one prepared frame per channel, shared by that channel's cells
     for ch in chans:
         for h in hemispheres:
             for r in rs:
-                ev, aud = build_evidence(p, ep, channel=ch, hemisphere=h, rate_hz=r, **kw)
+                ev, aud = build_evidence(p, ep, channel=ch, hemisphere=h, rate_hz=r,
+                                         _prepared=prepared, **kw)
                 rows.append({**aud.__dict__, "usable": ev is not None,
                              "n_amplitudes": len(aud.amplitudes)})
                 if ev is not None:

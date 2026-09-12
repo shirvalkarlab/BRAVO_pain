@@ -100,8 +100,10 @@ def bench(monkeypatch):
     monkeypatch.setattr(AD, "settings_stream", lambda p, **kw: stream)
     monkeypatch.setattr(AD, "build_design_matrix", lambda p, rd=None, **kw: _es())
     monkeypatch.setattr(BS, "_tiles_key_for", lambda p: (TILES_KEY, None))
+    # `inputs=` arrived 2026-09-12 (the evidence pair built once for this screen and the
+    # two-stage path), so the stub takes and ignores keyword arguments.
     monkeypatch.setattr(BS, "closed_loop_readiness",
-                        lambda p, es, include=True: {"available": False, "reason": "stubbed"})
+                        lambda p, es, include=True, **kw: {"available": False, "reason": "stubbed"})
     monkeypatch.setattr(BS, "_blockers", lambda rep, arms, observed=None: [])
     runs = _Runs()
     monkeypatch.setattr(BS.pipeline, "run", runs)

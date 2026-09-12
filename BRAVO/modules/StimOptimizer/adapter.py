@@ -567,7 +567,8 @@ def evidence_inputs(participant, *, force_refresh=None, sources=None, stream=Non
 
 
 def evidence_for_participant(participant, *, hemispheres=("Left", "Right"), rates=None,
-                             channels=None, force_refresh=None, sources=None, stream=None, **kw):
+                             channels=None, force_refresh=None, sources=None, stream=None,
+                             inputs=None, **kw):
     """Every usable ``LfpEvidence`` for a participant, plus the audit of what was unusable.
 
     Returns ``(evidence_dict, audit_frame)`` keyed on ``(channel, hemisphere, rate_hz)``. The audit
@@ -578,11 +579,21 @@ def evidence_for_participant(participant, *, hemispheres=("Left", "Right"), rate
     ``stream`` is an already-built settings stream, forwarded to :func:`evidence_inputs` so a
     caller that has parsed the participant's stored Percept files once does not pay for it again.
     ``None`` means build it here, which is what every caller written before this argument did.
+
+    ``inputs`` is the ``(sensed_frame, epochs)`` pair :func:`evidence_inputs` returns, already
+    built by the caller (2026-09-12). One Stim Optimizer request builds the evidence twice -- once
+    for the closed-loop readiness screen and once, pinned to the rate Stage 1 froze, inside the
+    two-stage path -- and the sensed frame is the same both times: loading the recordings and the
+    tile cache cost about 3 s per build on RCS08. Handing the pair in skips that; ``None`` builds
+    it here as before. Nothing downstream writes into either frame.
     """
     from .routines import lfp_evidence as _ev
-    psd, epochs = evidence_inputs(participant, force_refresh=force_refresh, sources=sources,
-                                  stream=stream,
-                                  band_power=kw.pop("band_power", BAND_POWER_CALIBRATED))
+    band_power = kw.pop("band_power", BAND_POWER_CALIBRATED)
+    if inputs is not None:
+        psd, epochs = inputs
+    else:
+        psd, epochs = evidence_inputs(participant, force_refresh=force_refresh, sources=sources,
+                                      stream=stream, band_power=band_power)
     if psd is None:
         return {}, pd.DataFrame([{"reason_unusable": "no sensed signal for this participant",
                                   "usable": False}])
