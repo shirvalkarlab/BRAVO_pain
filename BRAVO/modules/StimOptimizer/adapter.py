@@ -567,16 +567,21 @@ def evidence_inputs(participant, *, force_refresh=None, sources=None, stream=Non
 
 
 def evidence_for_participant(participant, *, hemispheres=("Left", "Right"), rates=None,
-                             channels=None, force_refresh=None, sources=None, **kw):
+                             channels=None, force_refresh=None, sources=None, stream=None, **kw):
     """Every usable ``LfpEvidence`` for a participant, plus the audit of what was unusable.
 
     Returns ``(evidence_dict, audit_frame)`` keyed on ``(channel, hemisphere, rate_hz)``. The audit
     frame is not optional output: a cell that yields no evidence because the data cannot support the
     test must be distinguishable from one that yields a genuine negative, and only the audit says
     which. Callers handing this to the stage gate should report both.
+
+    ``stream`` is an already-built settings stream, forwarded to :func:`evidence_inputs` so a
+    caller that has parsed the participant's stored Percept files once does not pay for it again.
+    ``None`` means build it here, which is what every caller written before this argument did.
     """
     from .routines import lfp_evidence as _ev
     psd, epochs = evidence_inputs(participant, force_refresh=force_refresh, sources=sources,
+                                  stream=stream,
                                   band_power=kw.pop("band_power", BAND_POWER_CALIBRATED))
     if psd is None:
         return {}, pd.DataFrame([{"reason_unusable": "no sensed signal for this participant",

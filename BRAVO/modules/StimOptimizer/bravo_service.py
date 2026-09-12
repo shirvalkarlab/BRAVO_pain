@@ -274,25 +274,35 @@ def ground_truth_block(participant, *, tiles_key_now):
     return block
 
 
+#: How many trailing elements of the response key describe the RESPONSE only and not the four
+#: tables: the two-stage settings (the flag and the override reason) and the figure backend.
+_RESPONSE_ONLY_KEY_TAIL = 3
+
+
 def _response_signature(uid, matched_key, tiles_key, amp_key, gt_key, request_data, sites, hemis,
                         washin_min, backend):
     """The response key: every input and every setting the fitted result depends on, and the
-    figure backend last, so `_products_signature` can drop it."""
+    response-only settings last, so `_products_signature` can drop them."""
     rd = request_data or {}
     return (RESPONSE_KIND, _RULE_VERSION, _CODE_DIGEST, str(uid), matched_key, tiles_key, amp_key,
             gt_key, tuple(sites), tuple(hemis), float(washin_min),
             int(rd.get("NBatches", 3)), int(rd.get("Q", 4)), bool(rd.get("ClosedLoop", True)),
+            # The two-stage block is part of the stored response, so the flag and the override
+            # reason that shape it are in the key: a request without the flag is never served a
+            # copy that carries the block, and one with it is never served a copy without it.
+            bool(_two_stage_requested(rd)), str(rd.get(TWO_STAGE_OVERRIDE_REASON_KEY) or ""),
             str(backend))
 
 
 def _products_signature(sig):
-    """The key of the four tables: the response key without the figure backend.
+    """The key of the four tables: the response key without the response-only tail.
 
-    The backend changes only whether figure JSON is in the response. Keyed on it, a request
-    with figures and one without would sweep each other's tables on every write, since the store
-    keeps one entry per kind and participant.
+    The backend changes only whether figure JSON is in the response, and the two-stage settings
+    change only whether the `two_stage` block is in it; neither changes the four tables. Keyed on
+    them, two requests differing only in one of those would sweep each other's tables on every
+    write, since the store keeps one entry per kind and participant.
     """
-    return tuple(sig[:-1])
+    return tuple(sig[:-_RESPONSE_ONLY_KEY_TAIL])
 
 
 def _write_outputs(uid, sig, prov, rep, out):
@@ -422,6 +432,228 @@ def design_matrix_summary(es: pd.DataFrame) -> dict:
     return out
 
 
+#: ==========================================================================================
+#: THE TWO-STAGE PATH, WIRED 2026-09-12 ("wire/configure stim optimizer with a two-stage
+#: openloop to CL-path setup").
+#:
+#: The open-loop search that freezes a rate and pulse width (`stage1_openloop`), the gate that
+#: decides whether that frozen configuration may proceed to closed loop (`routines/stage_gate`),
+#: and the closed-loop stage (`stage2_closedloop`) existed, were tested, and were reached by
+#: nothing: `pipeline.run_two_stage_live`'s only callers were tests. This block is the caller.
+#:
+#: OFF BY DEFAULT. A request that does not carry `TwoStage: true` gets the response it always got,
+#: with no `two_stage` key. With the flag, the path runs on the inputs this request has already
+#: loaded -- the matched therapy-and-pain table (`es`) and the settings stream -- and the LFP
+#: evidence is built from the same tile cache the closed-loop readiness panel reads, pinned to the
+#: rate Stage 1 froze. Every number in the block is copied out of the subsystem's own result
+#: objects; nothing is recomputed here.
+#:
+#: BACKEND. Stage 1 fits `routines/surrogate.py`, the scikit-learn Gaussian process that
+#: `pipeline.run` also uses. PyTorch, GPyTorch and BoTorch are not imported anywhere on this path
+#: (BOTORCH_REFACTOR.md: "Do not add PyTorch to the production Django container").
+#:
+#: NOT AN INPUT, said plainly. `routines/stage_gate.RCS08_SELECTED_BANDS` and
+#: `RCS08_RESPONSE_SUMMARY` are a snapshot of 2026-09-02 that the decision log has moved past
+#: (decisions 38, 59, 62, 64, 124); they are NOT passed, so the gate evaluates its four live
+#: conditions and not the two snapshot ones. The amplitude-effect table the service reads is
+#: reported beside this block and is not an argument the subsystem accepts.
+#: ==========================================================================================
+TWO_STAGE_FLAG = "TwoStage"
+TWO_STAGE_OVERRIDE_REASON_KEY = "TwoStageOverrideReason"
+TWO_STAGE_OVERRIDE_BY_KEY = "TwoStageOverrideBy"
+TWO_STAGE_BACKEND = ("scikit-learn Gaussian process (StimOptimizer/routines/surrogate.py); "
+                     "PyTorch, GPyTorch and BoTorch are not used on this path")
+
+
+def _two_stage_requested(request_data) -> bool:
+    v = (request_data or {}).get(TWO_STAGE_FLAG, False)
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "on")
+    return bool(v)
+
+
+def _two_stage_jsonable(v):
+    """`_jsonable`, extended for what the two-stage result objects carry: tables, dataclasses,
+    numpy scalars inside tuples used as dictionary keys, and sets."""
+    import dataclasses
+    if isinstance(v, pd.DataFrame):
+        return {"columns": [str(c) for c in v.columns],
+                "index": [_two_stage_jsonable(i) for i in v.index],
+                "records": [_two_stage_jsonable(r) for r in v.to_dict("records")]}
+    if dataclasses.is_dataclass(v) and not isinstance(v, type):
+        return {f.name: _two_stage_jsonable(getattr(v, f.name)) for f in dataclasses.fields(v)}
+    if isinstance(v, dict):
+        return {(("%g" % k) if isinstance(k, (float, np.floating)) else str(k)):
+                _two_stage_jsonable(x) for k, x in v.items()}
+    if isinstance(v, (set, frozenset)):
+        return [_two_stage_jsonable(x) for x in sorted(v, key=str)]
+    if isinstance(v, (list, tuple, np.ndarray, pd.Series)):
+        return [_two_stage_jsonable(x) for x in list(v)]
+    return _jsonable(v)
+
+
+def _two_stage_payload(rep, *, inputs, seconds) -> dict:
+    """The `two_stage` block from a `pipeline.TwoStageReport`: Stage 1's frozen configuration,
+    the gate's verdict with each condition's reason and the evidence it read, Stage 2's output or
+    its refusal, and a provenance sentence per stage. Read from the report, never recomputed."""
+    s1, gate, s2, man = rep.stage1, rep.gate, rep.stage2, dict(rep.manifest or {})
+    frozen = s1.frozen
+    lfp = dict(man.get("lfp_evidence") or {})
+
+    settings = []
+    for s in frozen.settings:
+        settings.append({
+            "hemisphere": s.hemisphere,
+            "rate_hz": _jsonable(s.rate_hz),
+            "pulse_width_us": _jsonable(s.pw_us),
+            "amplitude_preferred_mA": _jsonable(s.amp_star_mA),
+            "amplitude_delivered_min_mA": _jsonable(s.amp_delivered_min_mA),
+            "amplitude_delivered_max_mA": _jsonable(s.amp_delivered_max_mA),
+            "n_epochs_fitted_on_the_chosen_stratum": _jsonable(s.n_epochs_fitted),
+            "rate_resolved": _jsonable(s.rate_resolved),
+            "pulse_width_resolved": _jsonable(s.pw_resolved),
+            "resolved": bool(s.resolved),
+            "reasons": [str(r) for r in s.reasons],
+            "detail": _two_stage_jsonable(dict(s.detail or {})),
+        })
+    stage1 = {
+        "frozen_configuration": {
+            "settings": settings,
+            "primary_item": str(frozen.primary_item),
+            "incumbent_epoch": _jsonable(frozen.incumbent_epoch),
+            "incumbent_rate_hz": _jsonable(frozen.incumbent_rate_hz),
+            "incumbent_pulse_width_us": _jsonable(frozen.incumbent_pw_us),
+            "data_horizon": str(frozen.data_horizon),
+            "washin_min": _jsonable(frozen.washin_min),
+            "n_epochs_total": _jsonable(frozen.n_epochs_total),
+            "resolved": bool(frozen.resolved),
+            "overridden": bool(frozen.overridden),
+            "override": _two_stage_jsonable(dict(frozen.override)) if frozen.override else None,
+            # Stage 1 searches rate x pulse width x amplitude per side. The electrode contacts are
+            # not a searched dimension and the frozen configuration does not carry them; the
+            # sensing contact the gate's evidence came from is under `lfp_evidence.selected_key`.
+            "contacts": None,
+            "contacts_note": ("Stage 1 does not choose or freeze the stimulation contacts; it "
+                              "freezes the rate, the pulse width and the preferred amplitude on "
+                              "each side. The sensing contact behind the gate's LFP evidence is "
+                              "named in lfp_evidence.selected_key."),
+        },
+        "strata": _frame_records(s1.summary),
+        "strata_skipped": {str(k): str(v) for k, v in (s1.skipped or {}).items()},
+        "audit": _two_stage_jsonable(dict(s1.audit or {})),
+        "describe": frozen.describe(),
+    }
+
+    conditions = []
+    for c in gate.conditions:
+        conditions.append({"name": c.name, "verdict": c.verdict, "passed": _jsonable(c.passed),
+                           "overridden": bool(c.overridden), "detail": str(c.detail),
+                           "evidence": _two_stage_jsonable(dict(c.evidence or {}))})
+    gate_block = {
+        "passed": bool(gate.passed),
+        "verdict": ("Stage 2 MAY START: every condition passed" if gate.passed
+                    else "Stage 2 MUST NOT START: %d of %d conditions block"
+                    % (len(gate.refusals()), len(gate.conditions))),
+        "n_conditions": len(gate.conditions),
+        "conditions": conditions,
+        "refusals": [{"condition": n, "reason": d} for n, d in gate.refusals()],
+        "failed": list(gate.failed_names()),
+        "not_assessed": list(gate.not_assessed_names()),
+        "describe": gate.describe(),
+    }
+
+    if s2.started:
+        stage2 = {
+            "started": True,
+            "n_valid_policies": int(s2.n_valid),
+            "n_rejected": int(len(s2.rejected)) if s2.rejected is not None else 0,
+            "policies": _frame_records(s2.policies),
+            "rejected": _frame_records(s2.rejected, limit=200),
+            "best": (_two_stage_jsonable(s2.best().to_dict()) if s2.best() is not None else None),
+            "ranking_basis": str(s2.ranking_basis),
+            "ranking_assessed": _jsonable(s2.ranking_assessed),
+            "notes": [str(n) for n in s2.notes],
+            "describe": s2.describe(),
+        }
+    else:
+        stage2 = {
+            "started": False,
+            "reason": ("the gate refused, so Stage 2 did not start; the refusals are listed "
+                       "under gate.refusals and repeated here"),
+            "refusal_reasons": [{"condition": n, "reason": d} for n, d in s2.refusal_reasons],
+            "notes": [str(n) for n in s2.notes],
+            "describe": s2.describe(),
+        }
+
+    sel = lfp.get("selected_key")
+    provenance = {
+        "stage1": (f"Stage 1 read the matched therapy-and-pain table this request loaded "
+                   f"({inputs.get('matched_table') or 'no store key'}): "
+                   f"{frozen.n_epochs_total} epochs, primary outcome {frozen.primary_item}, "
+                   f"incumbent epoch {frozen.incumbent_epoch:g} at "
+                   f"{frozen.incumbent_rate_hz:g} Hz; {len(s1.slices)} pulse-width strata fitted, "
+                   f"{len(s1.skipped or {})} skipped."),
+        "gate": (f"The gate read the frozen configuration from Stage 1 and LFP evidence built "
+                 f"from the tile cache ({inputs.get('tiles') or 'no store key'}) with the "
+                 f"settings stream ({inputs.get('settings_stream') or 'no store key'}), pinned to "
+                 f"the frozen rate {lfp.get('pinned_rate_hz')} Hz: "
+                 + (f"cell {tuple(sel)} was selected"
+                    if sel else f"no cell was selected ({lfp.get('refusal_class')})")
+                 + f"; {lfp.get('n_cells_screened', 0)} cells screened, "
+                   f"{lfp.get('n_cells_unbuildable', 0)} could not be built."),
+        "stage2": ("Stage 2 read the frozen configuration and the gate result"
+                   + (" and enumerated closed-loop policies on the selected LFP evidence."
+                      if s2.started else "; it did not start because the gate refused.")),
+    }
+
+    return {
+        "requested": True,
+        "available": True,
+        "backend": TWO_STAGE_BACKEND,
+        "seconds": _jsonable(seconds),
+        "can_deploy_closed_loop": bool(rep.can_deploy_closed_loop()),
+        "stage1": stage1,
+        "gate": gate_block,
+        "lfp_evidence": _two_stage_jsonable(lfp),
+        "stage2": stage2,
+        "manifest": _two_stage_jsonable({k: v for k, v in man.items() if k != "lfp_evidence"}),
+        "inputs": dict(inputs),
+        "provenance": provenance,
+        "describe": rep.describe(),
+    }
+
+
+def two_stage_block(participant, es, *, request_data, stream, washin_min, hemispheres, sites,
+                    data_horizon, inputs) -> dict:
+    """Run the open-loop -> gate -> closed-loop path on this request's own inputs and report it.
+
+    Never raises into the response: a failure here is reported under `two_stage.reason` and the
+    open-loop optimizer's own result stands.
+    """
+    import time as _time
+    from .routines import objective as _obj
+
+    rd = request_data or {}
+    override_reason = rd.get(TWO_STAGE_OVERRIDE_REASON_KEY)
+    override_reason = str(override_reason).strip() if override_reason else None
+    t0 = _time.perf_counter()
+    try:
+        rep = pipeline.run_two_stage_live(
+            participant, design=es, stream=stream, request_data=request_data,
+            washin_min=float(washin_min), amp_ceiling=_obj.AMP_HARD_LIMIT_MA,
+            hemispheres=tuple(hemispheres), primary_item=str(tuple(sites)[0]),
+            data_horizon=data_horizon,
+            override_reason=override_reason,
+            override_by=(str(rd.get(TWO_STAGE_OVERRIDE_BY_KEY)) if override_reason
+                         and rd.get(TWO_STAGE_OVERRIDE_BY_KEY) else None))
+    except Exception as exc:                          # noqa: BLE001 -- adjunct block
+        _log.exception("StimOptimizer: the two-stage path failed")
+        return {"requested": True, "available": False, "backend": TWO_STAGE_BACKEND,
+                "seconds": _jsonable(_time.perf_counter() - t0), "inputs": dict(inputs),
+                "reason": f"the two-stage path could not run: {type(exc).__name__}: {exc}"}
+    return _two_stage_payload(rep, inputs=inputs, seconds=_time.perf_counter() - t0)
+
+
 def run_for_participant(request_data: dict) -> dict:
     """Build the design matrix from platform data, fit every arm, return a JSON-able payload.
 
@@ -432,6 +664,12 @@ def run_for_participant(request_data: dict) -> dict:
       WashinMin      wash-in exclusion in MINUTES (default 1.0 — PI-declared for a rapid responder)
       Backend        "plotly" (default, returns figure JSON) or "none" (tables only, fast)
       NBatches, Q    forward-simulation depth for the trajectory panel
+      TwoStage       true runs the open-loop -> gate -> closed-loop path on the same inputs and
+                     attaches it under `two_stage`; absent or false (the default) leaves the
+                     response exactly as it was
+      TwoStageOverrideReason, TwoStageOverrideBy
+                     a clinician override of the gate's resolution condition, with the reason it
+                     requires (stage1_openloop.clinician_override); only read when TwoStage is on
     """
     from Server import models
 
@@ -675,6 +913,15 @@ def run_for_participant(request_data: dict) -> dict:
         "ground_truth": gt_block,
         "store": store_block,
     }
+    # THE TWO-STAGE PATH, only when asked for. Attached before the write-back so the stored
+    # response carries it; the flag is in the response key, so a request without the flag is
+    # never served this copy.
+    if _two_stage_requested(request_data):
+        out["two_stage"] = two_stage_block(
+            participant, es, request_data=request_data, stream=_stream, washin_min=washin_min,
+            hemispheres=hemis, sites=sites, data_horizon=horizon,
+            inputs={"matched_table": matched_key, "tiles": tiles_key,
+                    "settings_stream": stream_key})
     if sig is not None:
         try:
             _write_outputs(str(uid), sig, prov, rep, out)

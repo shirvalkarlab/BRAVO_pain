@@ -565,7 +565,8 @@ def _render(ctx, label, outdir, backend, dpi):
 
 def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemisphere=None,
                        rate_hz=None, bands=None, force_refresh=None, request_data=None,
-                       washin_min=1.0, **two_stage_kwargs) -> TwoStageReport:
+                       washin_min=1.0, design=None, stream=None,
+                       **two_stage_kwargs) -> TwoStageReport:
     """Run the staged pipeline on a PARTICIPANT, with the LFP evidence built from real recordings.
 
     WHY THIS EXISTS. The handoff carried "STILL NOT BUILT: Stage 2 does not yet CALL lfp_evidence on
@@ -577,6 +578,15 @@ def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemispher
     the ONLY callers of ``run_two_stage`` and ``run_stage2`` anywhere in the repository were tests,
     and the endpoint layer never invoked the staged path at all. So the device's sequencing
     constraint was encoded, tested, and unreachable from the running system.
+
+    WIRED INTO THE REQUEST PATH, 2026-09-12. ``StimOptimizer.bravo_service.run_for_participant``
+    calls this when the request carries ``TwoStage: true`` and attaches the result under the
+    response key ``two_stage``. That caller has already built the epoch-level design matrix and the
+    dated settings stream for its own fit, so both can be handed in: ``design`` is the matrix
+    (``adapter.build_design_matrix``'s output, a DataFrame) and ``stream`` the settings stream
+    (``adapter.settings_stream``'s output). ``None`` for either means build it here, exactly as
+    before this argument existed. The two-stage path runs on the scikit-learn surrogate
+    (``routines/surrogate.py``) that Stage 1 has always used; nothing here imports PyTorch.
 
     WHY THE DEFAULT WAS NOT MERELY HARMLESS. Left alone, the staged path runs with ``lfp=None``,
     and the gate then reports the LFP-response condition as NOT ASSESSED, which blocks. That is the
@@ -591,7 +601,9 @@ def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemispher
     """
     from . import adapter as _AD
 
-    design = _AD.build_design_matrix(participant, request_data, washin_min=washin_min)
+    if design is None:
+        design = _AD.build_design_matrix(participant, request_data, washin_min=washin_min,
+                                         stream=stream)
     box = {}
 
     def _select_after_freezing(frozen):
@@ -625,7 +637,7 @@ def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemispher
                 return None
         ev_ = live_evidence(participant, amp_ceiling=amp_ceiling, channel=channel,
                             hemisphere=hemisphere, rate_hz=pin, bands=bands,
-                            force_refresh=force_refresh)
+                            force_refresh=force_refresh, stream=stream)
         box["ev"] = ev_
         box["pinned_rate_hz"] = float(pin)
         box["frozen_rates"] = rates
@@ -646,6 +658,15 @@ def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemispher
         "selection_note": ev.selection_note,
         "n_cells_screened": (0 if ev.screen is None else int(len(ev.screen))),
         "n_cells_unbuildable": (0 if ev.audit is None else int(len(ev.audit))),
+        # WHY the unbuildable cells could not be built, as the audit frame states it, counted by
+        # distinct reason. Without this a reader of the report sees "12 could not be built" and
+        # cannot tell "no recording exists at the frozen rate" from "recordings exist and are
+        # unusable", which are different instructions to the clinic.
+        "unbuildable_reasons": (
+            {str(k): int(v) for k, v in
+             ev.audit["reason_unusable"].astype(str).value_counts().items()}
+            if ev.audit is not None and len(ev.audit) and "reason_unusable" in ev.audit.columns
+            else {}),
         "refusal_class": (
             "evidence_selected" if ev.selected is not None
             else ("frozen_rates_disagree" if box.get("pinned_rate_hz") is None
