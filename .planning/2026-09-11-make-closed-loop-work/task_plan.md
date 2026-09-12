@@ -5,12 +5,12 @@ problem is that the module never handed the rule the value the device already re
 that still blocks does so for a reason the PI has read and agreed with.
 
 ## Next Step
-All seven phases landed (f2bdb7a5 layout, 8882c92c speed, e5531f43 Closed-Loop, b7910fdb
-Biomarkers, 48bf7abf Stim Optimizer + C4). Three pages smoke-tested in the PI's browser. Open on
-the PI: the four number-moving changes (decisions 141-143) -- the California day (B1), the 20 s
-post-ramp margin (hazard 1, which now blocks D19 on L 1-3+ 24.5 Hz), the Right pulse width (S1),
-and the stream safety anchors (S8, shipped OFF). Awaiting the D19 before/after measurement, then
-the plain-language summary for him.
+Session complete (2026-09-12 evening). Six commits pushed: f2bdb7a5 layout, 8882c92c speed,
+e5531f43 Closed-Loop review, b7910fdb Biomarkers review, 48bf7abf Stim Optimizer review + C4,
+1d29f706 the ramp margin switched off. Three pages watched in the PI's browser after the last
+reload. Waiting on him: four number-moving changes -- B1 the California day (ON, decision 142),
+S1 the Right pulse width (ON, 143), S8 the stream safety anchors (OFF, 143), the 20 s post-ramp
+margin (OFF, 144) -- plus B8, B12, S14 (dead code and unread analytics, his call).
 
 ## Current Phase
 Phase 7
