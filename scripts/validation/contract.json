@@ -184,6 +184,10 @@
         "_available_frequencies",
         "_decode_by_frequency",
         "run_powerdomain_branch"
+      ],
+      "BRAVO/modules/ClosedLoopDeployment/types.py": [
+        "EdgeEstimate.sign",
+        "EdgeEstimate.resolved"
       ]
     }
   },
@@ -474,6 +478,15 @@
       "alternative_evidence": "Full optimizer core regression suite, missing/nonfinite reference pipeline checks and strict build_objective coverage.",
       "owner": "Aditya BRAVO maintainer",
       "revisit": "Expand strict coverage before substantive changes to any remaining inherited function; all changed functions stay subject to 95 percent true branch coverage."
+    },
+    {
+      "path": "BRAVO/modules/ClosedLoopDeployment/types.py",
+      "source_revision": "6bb6de77d5e4c2f4b90c7fef8fed27cbb0ce618d with selective bbd3d74f invalid-estimate adaptation",
+      "reason": "Finite-estimate sign and resolution guards are strict named properties; the existing interval-excludes-zero rule is preserved. Remaining unchanged report dataclasses and helpers stay measured legacy scope.",
+      "risk": "No whole-file 95 percent or clinical licensing claim for unchanged report helpers.",
+      "alternative_evidence": "Full closed-loop portable suite, malformed and nonfinite estimate coherence regressions, strict property branch coverage, and independent preservation review of the existing evidence rules.",
+      "owner": "Aditya BRAVO maintainer",
+      "revisit": "Expand strict scope before substantive changes to remaining helpers; do not import point-sign licensing or provisional verdict policy through this exception."
     }
   ]
 }

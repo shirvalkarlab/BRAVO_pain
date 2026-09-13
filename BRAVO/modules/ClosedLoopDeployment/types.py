@@ -5,6 +5,9 @@ the failure mode for that shape is each file inventing its own near-miss of the 
 """
 from __future__ import annotations
 
+import math
+from numbers import Complex, Number, Real
+
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -86,15 +89,24 @@ class EdgeEstimate:
 
     @property
     def sign(self) -> int | None:
-        if self.estimate is None:
+        try:
+            valid = (isinstance(self.estimate, Number) and not isinstance(self.estimate, bool)
+                     and (not isinstance(self.estimate, Complex) or isinstance(self.estimate, Real))
+                     and math.isfinite(self.estimate))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if not valid:
             return None
         return 0 if self.estimate == 0 else (1 if self.estimate > 0 else -1)
 
     @property
     def resolved(self) -> bool:
-        """True only when the interval excludes zero. An estimate whose interval spans zero has not
-        established a direction, and every downstream sign test must treat it as unknown."""
-        if self.ci is None or self.estimate is None:
+        """True only for a finite estimate whose interval excludes zero.
+
+        An invalid estimate or an interval spanning zero cannot establish a direction.
+        The existing interval rule for finite estimates is otherwise unchanged.
+        """
+        if self.ci is None or self.sign is None:
             return False
         lo, hi = self.ci
         return bool((lo > 0 and hi > 0) or (lo < 0 and hi < 0))
