@@ -175,7 +175,14 @@ function buildItems(data) {
     });
   }
 
-  (el.advisories || []).filter((a) => a && a.kind === "advisory_failed").forEach((a) => {
+  // D01 and D02 are labelling statements about the participant's indication (the approved
+  // indications; Parkinson's-only adaptive labelling), surfaced on every report by design and
+  // never something a change to the configuration could clear -- so they do not belong in a
+  // panel titled "what would change this". PI, 2026-09-13: "irrelevant". They stay in the ledger.
+  const LABELLING_RULES = new Set(["D01", "D02"]);
+  (el.advisories || [])
+    .filter((a) => a && a.kind === "advisory_failed" && !LABELLING_RULES.has(a.rule_id))
+    .forEach((a) => {
     items.push({
       key: `adv-${a.rule_id}`,
       rank: 7,
