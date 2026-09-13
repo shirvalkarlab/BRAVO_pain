@@ -296,3 +296,37 @@ def test_output_records_which_item_and_scale_were_used(epochs):
     assert d["left_leg_vas"].max() <= 10.0
     d_nrs = OBJ.build_objective(epochs, incumbent_epoch=1, cfg={"primary_item": "nrs"})
     assert d_nrs["primary_scale_factor"].iloc[0] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("rating", [np.nan, np.inf, -np.inf])
+@pytest.mark.parametrize("metric", ["left_leg_vas", "nrs"])
+def test_nonfinite_reference_names_missing_rating(epochs, rating, metric):
+    epochs.loc[epochs.epoch == 1, metric] = rating
+    before = epochs.copy(deep=True)
+    with pytest.raises(ValueError, match=f"incumbent epoch 1 has no finite {metric} rating"):
+        OBJ.build_objective(epochs, incumbent_epoch=1, cfg={"primary_item": metric})
+    pd.testing.assert_frame_equal(epochs, before)
+
+
+def test_missing_nonreference_rating_keeps_other_epochs_usable(epochs):
+    epochs.loc[epochs.epoch == 2, "left_leg_vas"] = np.nan
+    d = OBJ.build_objective(epochs, incumbent_epoch=1).set_index("epoch")
+    assert d.loc[1, "J"] == 0
+    assert not d.loc[2, "feasible"]
+    assert d.drop(index=2)["feasible"].all()
+
+
+def test_missing_reference_is_reported_by_pipeline_without_fitting(epochs):
+    from StimOptimizer import pipeline
+    incumbent = epochs.sort_values("t0").iloc[-1]["epoch"]
+    epochs.loc[epochs.epoch == incumbent, "left_leg_vas"] = np.nan
+    report = pipeline.run(epochs, sites=("left_leg",), hemispheres=("Left", "Right"),
+                          outdir=None, render_figures=False)
+    assert report.arms == {}
+    assert len(report.manifest["skipped"]) == 2
+    assert all("no finite left_leg_vas rating" in reason for reason in report.manifest["skipped"].values())
+
+
+def test_objective_requires_observation_counts(epochs):
+    with pytest.raises(KeyError, match="missing required columns.*n"):
+        OBJ.build_objective(epochs.drop(columns=["n"]), incumbent_epoch=1)

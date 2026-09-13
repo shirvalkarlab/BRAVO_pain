@@ -340,6 +340,10 @@ def build_objective(epoch_stats: pd.DataFrame, *, incumbent_epoch, cfg=None,
     d["primary_item"] = item
     d["primary_scale_factor"] = sf
     ref = float(d.loc[d["epoch"] == incumbent_epoch, item].iloc[0])
+    if not np.isfinite(ref):
+        raise ValueError(
+            f"incumbent epoch {incumbent_epoch!r} has no finite {item} rating; "
+            "the objective cannot be referenced to this epoch")
 
     d["J_pain"] = d[item].astype(float) - ref
 

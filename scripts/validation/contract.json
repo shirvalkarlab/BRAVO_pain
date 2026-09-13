@@ -173,6 +173,9 @@
       ],
       "BRAVO/modules/Biomarkers/routines/streaming_psd.py": [
         "compute_psd_pain_correlation"
+      ],
+      "BRAVO/modules/StimOptimizer/routines/objective.py": [
+        "build_objective"
       ]
     }
   },
