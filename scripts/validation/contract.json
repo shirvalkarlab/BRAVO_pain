@@ -456,6 +456,24 @@
       "alternative_evidence": "React 18 lifecycle regressions cover all 11 changed branch outcomes, unchanged raw values, epoch units, missing gaps and event-handler ownership. Full-file targeted branch baseline: 267/426 (62.68 percent). Full frontend regression gate remains required.",
       "owner": "Aditya BRAVO maintainer",
       "revisit": "Expand strict coverage before changing scientific trace construction; rerun lifecycle and participant-boundary regressions on further lifecycle changes."
+    },
+    {
+      "path": "BRAVO/modules/Biomarkers/pipeline.py",
+      "source_revision": "1a116f465c5dc726c92e5f1cf2d33697e4065ffd with selective Prasad 92eebd59 technical adaptation",
+      "reason": "Pacific per-frequency calendar counts, daily previews and the powerdomain branch are strict named functions; remaining unchanged inherited spectral and streaming pipelines stay measured legacy scope.",
+      "risk": "Untested branches remain in inherited spectral and streaming research pathways; no whole-file 95 percent or participant-model acceptance claim.",
+      "alternative_evidence": "Full biomarker portable suite, independent calendar/DST boundary tests, private canonical date reconciliation, and strict coverage for all changed functions.",
+      "owner": "Aditya BRAVO maintainer",
+      "revisit": "Expand strict coverage before substantive changes to any remaining inherited function; all changed functions stay subject to 95 percent true branch coverage."
+    },
+    {
+      "path": "BRAVO/modules/StimOptimizer/routines/objective.py",
+      "source_revision": "1a116f465c5dc726c92e5f1cf2d33697e4065ffd with selective Prasad 92eebd59 technical adaptation",
+      "reason": "build_objective including nonfinite incumbent-reference handling is strict; unchanged inherited item definitions and objective helper routines remain measured legacy scope.",
+      "risk": "Remaining objective helper branches are not claimed 95 percent covered; no change to scoring or clinical safety policy is authorized by this exception.",
+      "alternative_evidence": "Full optimizer core regression suite, missing/nonfinite reference pipeline checks and strict build_objective coverage.",
+      "owner": "Aditya BRAVO maintainer",
+      "revisit": "Expand strict coverage before substantive changes to any remaining inherited function; all changed functions stay subject to 95 percent true branch coverage."
     }
   ]
 }
