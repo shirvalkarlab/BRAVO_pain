@@ -2447,7 +2447,7 @@ _PRO_TIME_COL = "date_time_s1_daily"
 # per the Medtronic Percept white paper, all report data (BrainSense PSD/TD, patient events) is
 # already stored in UTC (ISO-8601), and an internal consistency check confirmed the stored epochs
 # match true CA wall-clock to <1 min in every DST era. So ONLY the PRO clock is corrected here.
-_PRO_LOCAL_TZ = "America/Los_Angeles"
+from .routines.local_time import PRO_LOCAL_TZ as _PRO_LOCAL_TZ
 
 
 def _pro_timestamps_utc(pro_df):

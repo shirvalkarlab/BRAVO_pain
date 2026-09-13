@@ -60,7 +60,8 @@
       "BRAVO/modules/Biomarkers/routines/live_match_scalar.py",
       "BRAVO/modules/PerceptClock.py",
       "BRAVO/modules/PerceptClockData.py",
-      "BRAVO/Server/management/commands/index_percept_clock.py"
+      "BRAVO/Server/management/commands/index_percept_clock.py",
+      "BRAVO/modules/Biomarkers/routines/local_time.py"
     ],
     "critical_functions": {
       "BRAVO/modules/Biomarkers/bravo_service.py": [
@@ -169,13 +170,20 @@
         "get_client_ip"
       ],
       "BRAVO/modules/Biomarkers/adapter.py": [
-        "bravo_timedomain_to_streamdata"
+        "bravo_timedomain_to_streamdata",
+        "align_pros",
+        "_threshold_pain_level"
       ],
       "BRAVO/modules/Biomarkers/routines/streaming_psd.py": [
         "compute_psd_pain_correlation"
       ],
       "BRAVO/modules/StimOptimizer/routines/objective.py": [
         "build_objective"
+      ],
+      "BRAVO/modules/Biomarkers/pipeline.py": [
+        "_available_frequencies",
+        "_decode_by_frequency",
+        "run_powerdomain_branch"
       ]
     }
   },
@@ -425,7 +433,7 @@
     {
       "path": "BRAVO/modules/Biomarkers/adapter.py",
       "source_revision": "71e3933c8a2e45059d29a1713e84c315b07b3310 with selective Prasad 1f757484 adaptation",
-      "reason": "Missing-mask propagation in bravo_timedomain_to_streamdata is strict; unchanged inherited survey, chronic and timestamp adapters remain measured legacy scope.",
+      "reason": "Missing-mask propagation, Pacific calendar alignment and daily threshold labeling are strict named functions; unchanged inherited conversion helpers remain measured legacy scope.",
       "risk": "No whole-file 95 percent claim for inherited adapter pathways.",
       "alternative_evidence": "Full adapter/pipeline regressions; strict changed-function branch gate; private canonical first-window PSD equivalence and rejection check.",
       "owner": "Aditya BRAVO maintainer",

@@ -41,6 +41,7 @@ from .routines import threshold_biomarker
 from .routines import redcap_client
 from .routines import stats_utils
 from .routines.analytics import format_channel
+from .routines.local_time import local_calendar_day
 from . import adapter
 
 # This module had no logging at all. The rating_group fallback below needs to be able to say
@@ -249,14 +250,12 @@ def _available_frequencies(cv_ch):
     finite = np.isfinite(fhz)
     if not finite.any():
         return []
-    ts = pd.to_datetime(df["timestamp"], errors="coerce")
-    day = ts.dt.floor("D")
+    day = local_calendar_day(df["timestamp"])
     pl = df["pain_level"].to_numpy(dtype=float) if "pain_level" in df.columns else np.full(len(df), np.nan)
     out = []
     for hz in sorted(set(np.round(fhz[finite], 1))):
         m = finite & (np.round(fhz, 1) == hz)
-        if not m.any():
-            continue
+        # hz came from this exact finite rounded-frequency set, so m is nonempty.
         labeled = m & np.isin(pl, (0.0, 1.0))
         days_all = day[m].dropna()
         days_lab = day[labeled].dropna()
@@ -299,18 +298,15 @@ def _decode_by_frequency(cv_ch, label_metric, *, min_labeled=8):
     out = {}
     for hz in sorted(set(np.round(fhz[finite], 1))):
         sub = cv_ch[np.round(fhz, 1) == hz]
-        if len(sub) == 0:
-            continue
+        # hz is one of this frame's observed rounded frequencies; sub is nonempty.
         # Daily pain aggregation for the binarization preview (one row per calendar day at this band).
-        ts = pd.to_datetime(sub["timestamp"], errors="coerce")
-        day = ts.dt.floor("D")
+        day = local_calendar_day(sub["timestamp"])
         pain = sub[label_metric].to_numpy(dtype=float) if label_metric in sub.columns else np.full(len(sub), np.nan)
         pl = sub["pain_level"].to_numpy(dtype=float) if "pain_level" in sub.columns else np.full(len(sub), np.nan)
         daily = []
         dser = pd.Series(pain, index=day)
         for d, grp in dser.groupby(level=0):
-            if d is None or (isinstance(d, float) and not np.isfinite(d)):
-                continue
+            # groupby drops missing day keys; no missing date is rendered as a day.
             vals = grp.to_numpy(dtype=float)
             vals = vals[np.isfinite(vals)]
             if vals.size == 0:
@@ -1361,7 +1357,7 @@ def run_powerdomain_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=N
     lfp_s = cv_df["LFP_smoothed"].to_numpy(dtype=float)
     timeline = pd.DataFrame({
         "time": pd.to_datetime(cv_df["timestamp"]),
-        "date": pd.to_datetime(cv_df["timestamp"]).dt.date,
+        "date": local_calendar_day(cv_df["timestamp"]),
         "powerdomain_biomarker_value": lfp_s,
         "powerdomain_lfp_raw": cv_df["LFP"].to_numpy(dtype=float),
         "powerdomain_threshold": thr,

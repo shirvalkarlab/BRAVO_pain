@@ -27,6 +27,7 @@ import pandas as pd
 from scipy.signal import savgol_filter
 
 from .routines.availability import _missing_per_sample
+from .routines.local_time import local_calendar_day
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +147,10 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
         df[timestamp_col] = pd.to_datetime(df["_pro_time_utc"], errors="coerce")
     else:
         df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors="coerce")
-    df["_date"] = df[timestamp_col].dt.date
+    # Canonical values are UTC instants; the raw library fallback can still be
+    # naive local wall time. Choose dates without reinterpreting match timestamps.
+    df["_date"] = local_calendar_day(df[timestamp_col],
+                                     naive_is_local="_pro_time_utc" not in pro_df.columns)
 
     if target == "session":
         if recordings is None:
@@ -163,7 +167,7 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
             for i, rec in enumerate(recordings):
                 ts = _to_datetime(rec.get("StartTime"))
                 row = {"session_index": i, "session_start": ts,
-                       "session_date": (ts.date() if not pd.isna(ts) else None),
+                       "session_date": local_calendar_day(ts),
                        "matched": False, "match_dt_min": np.nan,
                        "matched_pro_time": pd.NaT}
                 j = -1
@@ -209,7 +213,7 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
         rows = []
         for i, rec in enumerate(recordings):
             ts = _to_datetime(rec.get("StartTime"))
-            sess_date = ts.date() if not pd.isna(ts) else None
+            sess_date = local_calendar_day(ts)
             same_day = df[df["_date"] == sess_date] if sess_date is not None else df.iloc[0:0]
             # On this path the "rating" is the DAY'S AGGREGATE (mean/min over that date's reports),
             # so the identity of the matched rating is the date itself: two sessions on the same day
@@ -246,7 +250,7 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
         pro_by_date = {d: g for d, g in df.groupby("_date")}
         out_rows = []
         for k, ts in enumerate(chronic_ts):
-            d = ts.date() if not pd.isna(ts) else None
+            d = local_calendar_day(ts)
             g = pro_by_date.get(d)
             row = {"time": ts, "lfp": lfp[k], "stim_amplitude": amp[k]}
             for m in metrics:
@@ -483,7 +487,7 @@ def _threshold_pain_level(df, label_metric, *, strategy="median", pain_cutoff=No
 
     # Build the distribution the thresholds are computed on.
     if daily_broadcast and "timestamp" in df.columns:
-        day = pd.to_datetime(df["timestamp"], errors="coerce").dt.floor("D")
+        day = local_calendar_day(df["timestamp"])
         # one value per day: mean of that day's (already nearest-date-aligned) metric values
         daily = pd.Series(metric_vals, index=day).groupby(level=0).mean()
         ref = daily.to_numpy(dtype=float)

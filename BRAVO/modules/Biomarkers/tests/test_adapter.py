@@ -581,7 +581,8 @@ def test_merge_timelines_both_and_degenerate():
 def test_run_streaming_biomarker_backcompat():
     recs = [_make_recording(seed=k) for k in range(4)]
     for k, r in enumerate(recs):
-        r["StartTime"] = _MIDNIGHT_UTC + k * 86_400
+        # November Pacific midnight, so the session shares the naive local PRO day.
+        r["StartTime"] = _MIDNIGHT_UTC + 8 * 3_600 + k * 86_400
     pro = pd.DataFrame({
         "date_time_s1_daily": [_utc_str(_MIDNIGHT_UTC + k * 86_400 + 12 * 3_600) for k in range(4)],
         "nrs": [8, 6, 4, 3], "vas": [80, 60, 40, 30], "mpq_sum": [30, 20, 10, 5],
@@ -746,13 +747,15 @@ def test_run_powerdomain_branch_per_channel_split():
     """Two-channel chronic input -> branch returns a per_channel dict keyed by ChannelNames[0]
     with independent summaries; the pooled run continues to work alongside it."""
     chronic_l, pro = _make_chronic_trend(days=14)
+    # The synthetic coupling alternates by local day, not by the UTC date boundary.
+    chronic_l["Time"] = chronic_l["Time"] + 8 * 3_600
     # Build a Right-hemisphere counterpart with the OPPOSITE pain-LFP coupling so the per-channel
     # thresholds (and AUCs) genuinely differ from the pooled result.
     times, lfp_r, amp_r = [], [], []
     for d in range(14):
         pain_day = (d % 2 == 0)
         for h in range(0, 24, 2):
-            times.append(_MIDNIGHT_UTC + d * 86_400 + h * 3_600)
+            times.append(_MIDNIGHT_UTC + 8 * 3_600 + d * 86_400 + h * 3_600)
             lfp_r.append(80.0 if pain_day else 130.0)   # inverted coupling
             amp_r.append(2.0)
     chronic_r = {
