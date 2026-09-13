@@ -1349,10 +1349,23 @@ def report_to_dict(rep):
     # made the interface report a contradiction that the data had not shown — the exact failure this
     # panel was rebuilt to prevent.
     coherent = None if rep.coherence is None else rep.coherence.coherent
+    # THE PROVISIONAL FLAG (PI rule 2026-09-13, "established means mean only": point sign decides,
+    # but flag as provisional). `resolved` is the point sign since that date, so a report can be
+    # licensed while an edge's interval spans zero; the verdict string then carries the count so a
+    # reader of the word "supported" also reads what it rests on. The denominator is the number of
+    # edges the report holds, three on every real report.
+    n_unest = int(getattr(rep, "n_edges_unestablished", 0) or 0)
+    n_edges = len(rep.edges or {})
+    licensed = rep.is_licensed()
+    provisional = bool(getattr(rep, "provisional", False))
+    unestablished_edges = [k for k, e in (rep.edges or {}).items()
+                           if not getattr(e, "statistically_established", False)]
 
     if device_ok is False:
         verdict = "blocked"
-    elif rep.is_licensed():
+    elif licensed and provisional:
+        verdict = f"supported (point signs only; {n_unest} of {n_edges} intervals span zero)"
+    elif licensed:
         verdict = "supported"
     else:
         verdict = "unsupported"
@@ -1361,10 +1374,17 @@ def report_to_dict(rep):
         "available": True,
         "participant": rep.participant,
         "verdict": verdict,
-        "licensed": rep.is_licensed(),
+        "licensed": licensed,
         "verdict_detail": {
             "device_eligible": device_ok,
             "all_edges_resolved": edges_ok,
+            # The caveat beside the verdict, never inside it: which edges rest on their point
+            # sign alone, and how many. `provisional` is True only for a licensed report.
+            "provisional": provisional,
+            "n_edges_unestablished": n_unest,
+            "n_edges": n_edges,
+            "unestablished_edges": unestablished_edges,
+            "all_edges_statistically_established": bool(rep.edges) and n_unest == 0,
             "coherent": coherent,
             "blockers": list(rep.blockers),
             # Gate nothing; shown beside the verdict. The two D26 capture verdicts live here since
@@ -1387,7 +1407,11 @@ def report_to_dict(rep):
             "ci": None if e.ci is None else [_num(e.ci[0]), _num(e.ci[1])],
             "p": _num(e.p), "n": int(e.n), "cluster_unit": e.cluster_unit,
             "n_clusters": int(e.n_clusters), "scale": e.scale, "sign": e.sign,
-            "resolved": e.resolved, "note": e.note, "confounded_by": list(e.confounded_by),
+            # `resolved` is the point sign since 2026-09-13; `statistically_established` is the
+            # interval rule it used to be, carried as the caveat the page prints beside the sign.
+            "resolved": e.resolved,
+            "statistically_established": bool(getattr(e, "statistically_established", False)),
+            "note": e.note, "confounded_by": list(e.confounded_by),
             # WHICH ESTIMATOR produced the interval and the p-value, read from edges.py so the
             # switch has exactly one definition. The deployment panel used to hardcode the cluster
             # threshold in JavaScript with a comment claiming to mirror edges.py, and by then the
@@ -1401,7 +1425,9 @@ def report_to_dict(rep):
             "ci": None if e.ci is None else [_num(e.ci[0]), _num(e.ci[1])],
             "p": _num(e.p), "n": int(e.n), "cluster_unit": e.cluster_unit,
             "n_clusters": int(e.n_clusters), "scale": e.scale, "sign": e.sign,
-            "resolved": e.resolved, "note": e.note, "confounded_by": list(e.confounded_by),
+            "resolved": e.resolved,
+            "statistically_established": bool(getattr(e, "statistically_established", False)),
+            "note": e.note, "confounded_by": list(e.confounded_by),
         } for k, e in (getattr(rep, "edges_historical", None) or {}).items()},
         "coherence": None if rep.coherence is None else {
             "coherent": rep.coherence.coherent, "p_coherent": _num(rep.coherence.p_coherent),

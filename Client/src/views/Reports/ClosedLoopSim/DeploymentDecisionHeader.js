@@ -34,6 +34,7 @@ import MDTypography from "components/MDTypography";
 
 import PAL from "./palette";
 import StateTrack from "./StateTrack";
+import ProvisionalNote, { provisionalCaveat } from "./ProvisionalNote";
 import { TRACKS } from "./stateTracks";
 import { fmtHz } from "./deployFormat";
 
@@ -61,7 +62,7 @@ function jumpTo(id) {
  * gets read as a score. The wording avoids the word "ready", which the previous strip used for a
  * state in which the device would have refused the configuration.
  */
-function reconcile(device, evidence, transcription) {
+function reconcile(device, evidence, transcription, provisional) {
   if (device === 2) {
     return {
       ink: PAL.neutral, icon: "hourglass_empty",
@@ -96,8 +97,24 @@ function reconcile(device, evidence, transcription) {
       headline: "The device permits this configuration; the evidence has not established that it "
               + "would work",
       body: "This is a measurement problem rather than a programming one. At least one edge of the "
-          + "amplitude-power-pain triangle is unresolved, or the sign-agreement test could not be run, "
-          + "so the evidence has not answered the question in either direction.",
+          + "amplitude-power-pain triangle has no point estimate, or the sign-agreement test could "
+          + "not be run, so the evidence has not answered the question in either direction.",
+    };
+  }
+  if (transcription === 0 && provisional) {
+    // PI rule 2026-09-13 ("established means mean only"): licensed on the point signs, with the
+    // intervals that span zero printed as a caveat beneath. Warn ink, not pass ink, so the word
+    // "provisional" is carried by the colour as well as the text.
+    return {
+      ink: PAL.warn, icon: "check_circle",
+      headline: `The device permits this configuration and the evidence supports it on point `
+              + `signs alone (provisional: ${provisional.n} of ${provisional.total} intervals span `
+              + "zero)",
+      body: "Each edge of the amplitude-power-pain triangle has the sign the control law needs, "
+          + "and for the edges named beneath the interval spans zero, so the direction rests on "
+          + "the point estimate. The parameter table below is shown with its read-back checklist "
+          + "enabled and carries the same caveat. Confirm every value against what the programmer "
+          + "displays before accepting it.",
     };
   }
   if (transcription === 0) {
@@ -121,11 +138,14 @@ function reconcile(device, evidence, transcription) {
  * One sub-answer cell. `flex` rather than a fixed width so three long state labels wrap inside
  * their own cell instead of pushing the third cell off the row.
  */
-function Cell({ track, data, first }) {
+function Cell({ track, data, first, provisional }) {
   return (
     <MDBox flex="1 1 240px" px={1.4} py={0.6}
       sx={{ borderLeft: first ? "none" : "1px solid rgba(0,0,0,0.12)" }}>
       <StateTrack track={track} data={data} dense showBlurb />
+      {/* The provisional caveat, under the evidence answer and under the transcription answer,
+          never in a fold: the edges whose intervals span zero, with interval and p. */}
+      {provisional ? <ProvisionalNote deploymentReport={data} dense mt={0.5} /> : null}
     </MDBox>
   );
 }
@@ -139,7 +159,8 @@ export default function DeploymentDecisionHeader({ bandCandidate, summary, deplo
   const device = TRACKS.device.lit(rep);
   const evidence = TRACKS.evidence.lit(rep);
   const transcription = TRACKS.transcription.lit(rep);
-  const v = reconcile(device, evidence, transcription);
+  const provisional = provisionalCaveat(rep);
+  const v = reconcile(device, evidence, transcription, provisional);
 
   const sm = (summary && summary.data) || null;
   const blockers = ((rep && rep.verdict_detail) || {}).blockers || [];
@@ -197,8 +218,8 @@ export default function DeploymentDecisionHeader({ bandCandidate, summary, deplo
         <MDBox display="flex" flexDirection="row" flexWrap="wrap" mt={1}
           sx={{ borderTop: "1px solid rgba(0,0,0,0.10)", pt: 0.8 }}>
           <Cell track={TRACKS.device} data={rep} first />
-          <Cell track={TRACKS.evidence} data={rep} />
-          <Cell track={TRACKS.transcription} data={rep} />
+          <Cell track={TRACKS.evidence} data={rep} provisional={!!provisional} />
+          <Cell track={TRACKS.transcription} data={rep} provisional={!!provisional} />
         </MDBox>
 
         {/* The statistical gate counts, kept on the page as evidence and labelled as such. They

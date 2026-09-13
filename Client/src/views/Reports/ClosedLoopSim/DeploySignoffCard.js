@@ -16,6 +16,7 @@ import MDButton from "components/MDButton";
 import useDeploymentSummary from "./useDeploymentSummary";
 import { captureFigureSnapshots } from "./figureSnapshots";
 import PAL from "./palette";
+import ProvisionalNote from "./ProvisionalNote";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 
@@ -59,6 +60,17 @@ function GateRow({ gate }) {
         </MDTypography>
       </MDBox>
     </MDBox>
+  );
+}
+
+/** The module's own verdict string, so the signed sheet carries the same words as the page. */
+function EvidenceVerdictLine({ rep }) {
+  const verdict = rep && rep.available ? rep.verdict : null;
+  if (!verdict) return null;
+  return (
+    <MDTypography variant="caption" display="block" sx={{ fontSize: 11, color: "#2A2A2A", mt: 0.5 }}>
+      {`Evidence verdict from the deployment report: ${verdict}.`}
+    </MDTypography>
   );
 }
 
@@ -381,6 +393,14 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                         + "because the device does not permit this configuration. A number on a "
                         + "signed sheet gets entered."}
                   </MDTypography>
+                  {/* The evidence verdict this sheet is signed against, verbatim from the module,
+                      with the provisional caveat when the verdict rests on point signs alone (PI
+                      rule 2026-09-13). On the printed record, not in a fold. Rendered by its own
+                      component: this function already carries so many conditional branches that
+                      one more ternary here overflowed eslint's rules-of-hooks path count and made
+                      it report every hook above as "called conditionally". */}
+                  <EvidenceVerdictLine rep={_rep} />
+                  <ProvisionalNote deploymentReport={_rep} dense mt={0.5} />
                 </MDBox>
 
                 {/* Advisory ramp guidance (audit C10): the closed-loop tuning surface is band +

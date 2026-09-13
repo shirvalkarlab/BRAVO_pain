@@ -89,13 +89,36 @@ def _edge(name, est, lo, hi, unit="rating"):
     return EdgeEstimate(name, est, (lo, hi), 0.01, 50, unit, 8)
 
 
-def test_unresolved_edge_makes_coherence_unknown_not_false():
-    """None and False mean different things: not established versus contradictory."""
+def test_an_edge_with_no_estimate_makes_coherence_unknown_not_false():
+    """None and False mean different things: not established versus contradictory. Since
+    2026-09-13 (PI rule, "established means mean only") only an edge with NO point estimate makes
+    the answer None; an interval spanning zero no longer does (the test below pins that)."""
+    ok1, ok2 = _edge("E1", -1.0, -1.5, -0.5), _edge("E2", 1.0, 0.5, 1.5)
+    none = EdgeEstimate("E3", None, None, None, 0, "rating", 0)
+    assert C.signs_coherent(ok1, ok2, none) is None
+    r = C.coherence_report(ok1, ok2, none)
+    assert r.coherent is None and "NOT ESTABLISHED" in r.note
+    assert "no point estimate" in r.note
+
+
+def test_an_edge_whose_interval_spans_zero_enters_the_sign_test_on_its_point_sign_with_a_caveat():
+    """THE PI'S RULE OF 2026-09-13, his words "Established means mean only for flexibility",
+    read as "point sign decides, but flag as provisional". Until that date an edge whose interval
+    spanned zero made `signs_coherent` return None. Now its point sign enters the test, the
+    interval and p are written into the note as a PROVISIONAL caveat, and the caveat names the
+    edge with its numbers rather than an adjective."""
     ok1, ok2 = _edge("E1", -1.0, -1.5, -0.5), _edge("E2", 1.0, 0.5, 1.5)
     spans = _edge("E3", -0.1, -0.6, 0.4)
-    assert C.signs_coherent(ok1, ok2, spans) is None
+    assert spans.resolved is True and spans.statistically_established is False
+    assert C.signs_coherent(ok1, ok2, spans) is True
     r = C.coherence_report(ok1, ok2, spans)
-    assert r.coherent is None and "NOT ESTABLISHED" in r.note
+    assert r.coherent is True
+    assert "PROVISIONAL: 1 of 3 intervals span zero" in r.note
+    assert "E3 (interval -0.6 to +0.4, p 0.01)" in r.note
+    assert "NOT ESTABLISHED" not in r.note
+    # an established triangle carries no caveat at all
+    r_ok = C.coherence_report(ok1, ok2, _edge("E3", -1.0, -1.5, -0.5))
+    assert r_ok.coherent is True and "PROVISIONAL" not in r_ok.note
 
 
 def test_contradictory_triangle_is_detected():
@@ -268,16 +291,20 @@ def test_an_unresolved_edge_supplies_its_point_sign_to_d19_and_is_flagged_as_not
 
 def test_the_payload_keeps_coherence_as_three_states():
     """None means 'not established' and False means 'the signs contradict'. Collapsing the first
-    into the second makes the interface report a contradiction the data never showed."""
+    into the second makes the interface report a contradiction the data never showed. Since
+    2026-09-13 the None case is an edge with NO estimate (an interval spanning zero no longer
+    withholds the sign -- PI rule, "established means mean only"), so that is what is fed here."""
     from ClosedLoopDeployment.adapter import report_to_dict
     from ClosedLoopDeployment.types import DeploymentReport
     e_ok = _edge("E1", -1.0, -1.5, -0.5)
-    e_unres = _edge("E2", 0.5, -0.2, 1.2)
-    rep = DeploymentReport(participant="x", edges={"E1": e_ok, "E2": e_unres, "E3": e_ok})
-    rep.coherence = C.coherence_report(e_ok, e_unres, e_ok)
+    e_none = EdgeEstimate("E2", None, None, None, 0, "rating", 0)
+    rep = DeploymentReport(participant="x", edges={"E1": e_ok, "E2": e_none, "E3": e_ok})
+    rep.coherence = C.coherence_report(e_ok, e_none, e_ok)
     d = report_to_dict(rep)
     assert d["coherence"]["coherent"] is None
     assert d["verdict_detail"]["coherent"] is None, "None must not be collapsed to False"
+    assert d["verdict"] == "unsupported" and d["licensed"] is False
+    assert d["verdict_detail"]["provisional"] is False, "an unlicensed report is never provisional"
 
 
 # --- D09 as a per-bin advisory (PI decision 2026-09-04) -----------------------------------------
@@ -1306,27 +1333,32 @@ def test_state_edge_reads_the_table_the_biomarker_page_exported():
     assert "split into thirds" in e.note, e.note
 
 
-def test_state_edge_stores_the_value_measured_against_half_so_resolved_still_means_something():
+def test_state_edge_stores_the_value_measured_against_half_so_the_sign_and_the_caveat_mean_something():
     """THE CORRECTNESS POINT OF THE WHOLE REWIRING, and the one that would fail silently.
 
-    An EdgeEstimate defines `resolved` as its interval excluding ZERO, and everything downstream
-    reads only `resolved` and `sign`. An area under the curve is measured against 0.5, and its
-    interval lies between 0 and 1, so storing it raw would make `resolved` true for every band ever
-    computed and would destroy the one check this module exists to perform. 0.5 is therefore
-    subtracted from the value and from both ends of its interval.
+    An area under the curve is measured against 0.5, and its interval lies between 0 and 1. Since
+    2026-09-13 (PI rule, "established means mean only") `resolved` is the point SIGN, so stored
+    raw every band would read as positive -- more power, more pain -- whatever it showed, and
+    `statistically_established` (the interval rule `resolved` used to be) would be true for every
+    band ever computed. 0.5 is therefore subtracted from the value and from both ends of its
+    interval, so that a positive sign means exactly "more power in this band goes with more pain"
+    and an interval that spans zero means exactly "the band has not separated high pain from low".
 
-    A band whose interval runs from 0.47 to 0.66 has established nothing. Stored raw, that interval
-    excludes zero and would read as established. Stored shifted, it spans zero and reads as
-    unresolved, which is the truth.
+    A band whose interval runs from 0.47 to 0.66 has a point sign (0.56 is above 0.5, so +1) and
+    is NOT statistically established; stored raw it would have read as established.
     """
     established = E.state_edge(_auc_export_for(auc=0.72, lo=0.61, hi=0.83),
                                channel="CH", center_hz=20.5)
     undecided = E.state_edge(_auc_export_for(auc=0.56, lo=0.47, hi=0.66),
                              channel="CH", center_hz=20.5)
-    assert established.resolved is True, established.ci
-    assert undecided.resolved is False, undecided.ci
-    assert undecided.estimate is not None, "an unresolved band must still carry its value"
+    assert established.resolved is True and established.statistically_established is True
+    assert undecided.resolved is True and undecided.sign == 1, "the point sign is +1 (0.56 > 0.5)"
+    assert undecided.statistically_established is False, undecided.ci
+    assert undecided.estimate is not None, "an unestablished band must still carry its value"
     assert undecided.ci[0] < 0.0 < undecided.ci[1], undecided.ci
+    # a band at exactly 0.5 has no sign at all and is the one thing the sign rule refuses
+    at_chance = E.state_edge(_auc_export_for(auc=0.5, lo=0.4, hi=0.6), channel="CH", center_hz=20.5)
+    assert at_chance.sign == 0 and at_chance.resolved is False
     # both raw intervals sit wholly above zero, which is exactly why the shift is load-bearing
     assert 0.61 > 0 and 0.47 > 0
     # and a band where more power goes with LESS pain reads as a negative sign, not as absent
@@ -1402,7 +1434,9 @@ def test_state_edge_keeps_never_assessed_apart_from_nothing_established():
     undecided = E.state_edge(_auc_export_for(auc=0.53, lo=0.44, hi=0.62),
                              channel="CH", center_hz=20.5)
     assert undecided.estimate is not None, "a band that was assessed must still carry its value"
-    assert undecided.resolved is False
+    # since 2026-09-13 an assessed band has a sign (`resolved`) and its interval spanning zero is
+    # the caveat; a never-assessed band has neither
+    assert undecided.resolved is True and undecided.statistically_established is False
     # and the two states are genuinely different, not the same one twice
     assert (never.estimate is None) != (undecided.estimate is None)
 
@@ -1417,15 +1451,16 @@ def test_state_edge_keeps_never_assessed_apart_from_nothing_established():
         center_hz=20.5)["answer"] == analytics.BAND_PAIN_NOT_ASSESSED
 
 
-def test_a_noise_band_is_not_resolved_on_this_modules_own_table_either():
+def test_a_noise_band_is_not_statistically_established_on_this_modules_own_table_either():
     """The same three-way answer has to survive the route that does not go through the exported
-    table, or the two routes would disagree about a band with nothing in it."""
+    table, or the two routes would disagree about a band with nothing in it. Since 2026-09-13 the
+    field that says "the interval spans zero" is `statistically_established`, not `resolved`."""
     rng = np.random.default_rng(11)
     noisy = _toy_table(n_epochs=45, per_epoch=4, seed=11)
     noisy["nrs"] = rng.normal(5.0, 2.0, len(noisy))          # pain unrelated to power
     e = E.state_edge(noisy, channel="CH", center_hz=20.5)
-    assert e.estimate is not None, "an unresolved edge must still carry its value"
-    assert e.resolved is False, e.ci
+    assert e.estimate is not None, "an unestablished edge must still carry its value"
+    assert e.statistically_established is False, e.ci
     assert "Nothing is established" in e.note, e.note
 
 

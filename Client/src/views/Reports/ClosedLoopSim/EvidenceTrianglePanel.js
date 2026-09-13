@@ -16,11 +16,19 @@
  * test asks and alignment at zero is what makes that comparison readable by eye.
  *
  * WHY AN UNRESOLVED EDGE IS DRAWN AT FULL WEIGHT WITH NO ARROWHEAD. An arrowhead asserts a
- * direction, and an edge whose interval spans zero has not established one. Withholding the
- * arrowhead withholds the assertion. Drawing the line at full weight and full length is equally
- * deliberate: an unresolved edge must read as present but undetermined, never as absent and never as
- * zero, so it keeps its full stroke and gains a hollow diamond carrying a question mark at its
- * midpoint — a visible placeholder for a sign rather than a sign.
+ * direction, and an edge with no point estimate has none. Withholding the arrowhead withholds the
+ * assertion. Drawing the line at full weight and full length is equally deliberate: an unresolved
+ * edge must read as present but undetermined, never as absent and never as zero, so it keeps its
+ * full stroke and gains a hollow diamond carrying a question mark at its midpoint — a visible
+ * placeholder for a sign rather than a sign.
+ *
+ * WHAT "RESOLVED" MEANS SINCE 2026-09-13. PI rule, his words: "Established means mean only for
+ * flexibility", read as "point sign decides, but flag as provisional". `resolved` on the payload is
+ * now the point sign (the estimate is finite and non-zero); whether the interval excludes zero is
+ * the separate flag `statistically_established`. So an edge whose interval spans zero is drawn WITH
+ * an arrowhead (it has a direction) and with a HOLLOW point marker (the interval spans zero), and
+ * its label reads the numbers -- "sign − (interval spans zero)" -- rather than an adjective. Until
+ * that date such an edge was drawn as unresolved.
  *
  * WHY AN UNBOUNDED LIMIT IS AN OPEN ARROW WITH THE WORD SPELLED OUT. The serialiser maps a
  * non-finite interval endpoint to null, and the previous panel rendered that through a formatter
@@ -151,8 +159,9 @@ function TriangleGraph({ edges }) {
               fill={ink}>{E.k}</text>
             <text x={E.lx} y={E.ly + 11} textAnchor={E.anchor} fontSize="9" fill="#6A6A6A">
               {resolved
-                ? (sign > 0 ? "positive" : sign < 0 ? "negative" : "sign not reported")
-                : "not established"}
+                ? `sign ${sign > 0 ? "+" : sign < 0 ? "\u2212" : "?"}`
+                  + `${e && e.statistically_established === false ? " (interval spans zero)" : ""}`
+                : "no point estimate"}
             </text>
           </g>
         );
@@ -189,6 +198,15 @@ function EdgeAxis({ k, e }) {
   const hi = ciBound(e && e.ci, 1);
   const est = e && Number.isFinite(Number(e.estimate)) ? Number(e.estimate) : null;
   const resolved = !!(e && e.resolved);
+  // The caveat flag (PI rule 2026-09-13): the interval excludes zero. Read off the payload's own
+  // field, and derived from the interval only when a payload predates the field.
+  const established = e
+    ? (e.statistically_established != null
+        ? !!e.statistically_established
+        : !!(!lo.unbounded && !hi.unbounded && lo.value != null && hi.value != null
+             && ((lo.value > 0 && hi.value > 0) || (lo.value < 0 && hi.value < 0))))
+    : false;
+  const signWord = resolved ? (est > 0 ? "+" : "\u2212") : null;
   const ink = edgeInk(e);
 
   // The half-span is set by the largest finite magnitude the row has to show, with headroom so a
@@ -216,9 +234,15 @@ function EdgeAxis({ k, e }) {
         <MDTypography variant="caption" sx={{ fontSize: 10.5, color: "#4A4A4A" }}>
           {`${meta.from} \u2192 ${meta.to} \u00B7 ${meta.question}`}
         </MDTypography>
+        {/* Numbers, not adjectives (PI rule 2026-09-13): the sign, then whether the interval
+            excludes zero. "sign − (interval spans zero)" is a direction with a caveat; "no point
+            estimate" is no direction at all. */}
         <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold",
-          color: resolved ? PAL.accent : PAL.neutral, letterSpacing: 0.3 }}>
-          {resolved ? "DIRECTION ESTABLISHED" : "DIRECTION NOT ESTABLISHED"}
+          color: resolved ? (established ? PAL.accent : PAL.warnText) : PAL.neutral,
+          letterSpacing: 0.3 }}>
+          {resolved
+            ? `SIGN ${signWord} (${established ? "INTERVAL EXCLUDES ZERO" : "INTERVAL SPANS ZERO"})`
+            : "NO POINT ESTIMATE"}
         </MDTypography>
       </MDBox>
 
@@ -245,11 +269,12 @@ function EdgeAxis({ k, e }) {
             markerEnd={hi.unbounded ? `url(#cle-open-${k})` : undefined} />
         ) : null}
 
-        {/* The point estimate: filled when the direction is established, hollow when it is not, so
-            a point estimate cannot be read as a result. */}
+        {/* The point estimate: filled when the interval excludes zero, hollow when it spans zero,
+            so a reader sees at the marker itself which edges the verdict rests on point sign
+            alone for. */}
         {est != null ? (
           <circle cx={px(est)} cy={yAxis} r="5"
-            fill={resolved ? ink : "#FFFFFF"} stroke={ink} strokeWidth="2" />
+            fill={established ? ink : "#FFFFFF"} stroke={ink} strokeWidth="2" />
         ) : null}
 
         {/* The words at the terminal, for an unbounded limit. */}

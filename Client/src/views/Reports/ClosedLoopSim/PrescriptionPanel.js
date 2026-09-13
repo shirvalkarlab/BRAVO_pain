@@ -38,6 +38,7 @@ import MDButton from "components/MDButton";
 
 import PAL from "./palette";
 import Fold from "./Fold";
+import ProvisionalNote from "./ProvisionalNote";
 import { MODE_LABEL, MODE_ORDER, fmtFieldValue } from "./deployFormat";
 
 /** What the reader is being asked to do with a row, keyed on the payload's `confirm` axis. */
@@ -574,6 +575,11 @@ export default function PrescriptionPanel({ report, mode, onMode }) {
             ) : null}
 
             <ModeBanner mode={activeMode} fields={fields} notApplicable={notApplicable} />
+
+            {/* The provisional caveat beside the values (PI rule 2026-09-13: point sign decides,
+                but flag as provisional). Printed here, on the table a reader transcribes from,
+                and never inside a fold. Nothing is rendered when every interval excludes zero. */}
+            <ProvisionalNote deploymentReport={data} mt={1} />
 
             {couplings.map((c, i) => (
               <CouplingBanner key={`cpl${i}`} c={c} duty={m.duty} />

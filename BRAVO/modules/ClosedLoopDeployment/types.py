@@ -86,17 +86,62 @@ class EdgeEstimate:
 
     @property
     def sign(self) -> int | None:
+        """+1, -1, 0 for an estimate of exactly zero, and None when there is no estimate. A NaN
+        estimate is "no estimate" too: until 2026-09-13 ``nan > 0`` being False made a NaN read
+        as -1, which mattered once the sign alone could resolve an edge."""
         if self.estimate is None:
             return None
-        return 0 if self.estimate == 0 else (1 if self.estimate > 0 else -1)
+        try:
+            v = float(self.estimate)
+        except (TypeError, ValueError):
+            return None
+        if v != v:
+            return None
+        return 0 if v == 0 else (1 if v > 0 else -1)
 
     @property
     def resolved(self) -> bool:
-        """True only when the interval excludes zero. An estimate whose interval spans zero has not
-        established a direction, and every downstream sign test must treat it as unknown."""
+        """True when the edge HAS A DIRECTION: the point estimate is finite and not exactly zero,
+        so ``sign`` is +1 or -1.
+
+        PI RULE, 2026-09-13, his words: "Established means mean only for flexibility." Three
+        readings were put to him and he chose "point sign decides, but flag as provisional": the
+        sign of the point estimate alone resolves an edge; the interval and the p-value stay on
+        the page as caveats and gate nothing; a report licensed on point signs while any interval
+        spans zero is flagged provisional (``DeploymentReport.provisional``). He was told, and
+        accepted, that on RCS08 this turns the Closed-Loop verdict from "unsupported" into a
+        provisional "supported".
+
+        THE RULE THIS REPLACES, kept on the record: until 2026-09-13 an edge was resolved only when
+        its interval excluded zero, so an estimate of -4.45 with an interval of -18.6 to +9.7 was
+        treated as having no direction at all, and the sign-agreement test and ``is_licensed``
+        both read it as unknown. That rule now lives in ``statistically_established``, which every
+        page and every ledger row still prints beside the sign.
+
+        WHAT STILL BLOCKS. Decision 9 ("absence of evidence is not permission") is untouched: an
+        edge with NO estimate (None or NaN) is unresolved, and an estimate of exactly zero has no
+        sign and is unresolved too. Only the interval stopped gating.
+        """
+        if self.estimate is None:
+            return False
+        try:
+            v = float(self.estimate)
+        except (TypeError, ValueError):
+            return False
+        return bool(v == v and v not in (float("inf"), float("-inf")) and v != 0.0)
+
+    @property
+    def statistically_established(self) -> bool:
+        """The rule ``resolved`` used to carry, kept as a CAVEAT: True only when the interval
+        exists and excludes zero. Read by D19's "sign established" flags, by the two D26 capture
+        verdicts' caveat sentences, and by ``DeploymentReport.n_edges_unestablished``; read by no
+        gate since 2026-09-13."""
         if self.ci is None or self.estimate is None:
             return False
-        lo, hi = self.ci
+        try:
+            lo, hi = float(self.ci[0]), float(self.ci[1])
+        except (TypeError, ValueError, IndexError):
+            return False
         return bool((lo > 0 and hi > 0) or (lo < 0 and hi < 0))
 
 
@@ -223,6 +268,22 @@ class DeploymentReport:
     warnings: list = field(default_factory=list)
     manifest: dict = field(default_factory=dict)
 
+    @property
+    def n_edges_unestablished(self) -> int:
+        """How many of the report's edges are NOT statistically established: the interval spans
+        zero, or there is no interval. This is the count the provisional flag prints ("N of 3
+        intervals span zero"). It counts caveats and gates nothing."""
+        return int(sum(1 for e in (self.edges or {}).values()
+                       if not getattr(e, "statistically_established", False)))
+
+    @property
+    def provisional(self) -> bool:
+        """True when the report IS licensed and at least one edge's interval spans zero (or has
+        no interval): the verdict rests on point signs alone. PI decision 2026-09-13, "point sign
+        decides, but flag as provisional". Never True for an unlicensed report, because there is
+        then no verdict to qualify."""
+        return bool(self.n_edges_unestablished > 0 and self.is_licensed())
+
     def is_licensed(self) -> bool:
         """The single boolean the interface reads.
 
@@ -230,6 +291,22 @@ class DeploymentReport:
         resolved AND the sign pattern coherent AND no blocker. Anything unmeasured reads as not
         licensed, because the alternative — treating absence of evidence as permission — is the
         failure this module exists to prevent.
+
+        WHAT "EVERY EDGE RESOLVED" MEANS SINCE 2026-09-13. PI rule, his words: "Established means
+        mean only for flexibility." Of the three readings put to him he chose "point sign decides,
+        but flag as provisional". So an edge is resolved by the SIGN OF ITS POINT ESTIMATE alone
+        (``EdgeEstimate.resolved``); whether its interval excludes zero is carried beside it as
+        ``statistically_established`` and read by no gate. A report licensed while any interval
+        spans zero is ``provisional`` and the serialised verdict says so: "supported (point signs
+        only; N of 3 intervals span zero)". Until that date an edge whose interval spanned zero was
+        unresolved and the report unlicensed; on RCS08 at the band in his browser that read
+        "unsupported" with all three point signs the pattern the control law needs, and he chose
+        to license it provisionally rather than withhold it.
+
+        DECISION 9 STILL HOLDS: absence of evidence is not permission. An edge with NO estimate
+        (None or NaN), or one of exactly zero, has no sign, is unresolved, and still blocks. A
+        sign that contradicts the control law still blocks through ``coherence``. Only the
+        interval stopped gating.
 
         ``warnings`` IS NOT READ HERE, on purpose. PI decision 2026-09-12, his words "b and c":
         the two D26 capture checks (inverted capture, thresholds too close) warn rather than block.

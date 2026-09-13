@@ -42,7 +42,10 @@ def test_d19_passes_on_the_expected_point_signs_even_when_neither_edge_is_resolv
     sign. Under the old rule D19 was not determinable; under the PI's decision it passes."""
     e1 = EdgeEstimate("E1", -4.45, (-18.6, 9.7), 0.54, 13, "run", 4)
     e2 = EdgeEstimate("E2", 0.088, (-0.023, 0.195), 0.12, 400, "rating", 60)
-    assert e1.resolved is False and e2.resolved is False
+    # since 2026-09-13 both ARE resolved (they have a point sign) and neither is statistically
+    # established (both intervals span zero); the flag D19 prints reads the latter
+    assert e1.resolved is True and e2.resolved is True
+    assert e1.statistically_established is False and e2.statistically_established is False
     facts = PL._facts_for({"channel": "ZERO_TWO_LEFT", "center_hz": 24.5}, e1, e2, "power_linear")
     assert facts["power_slope_vs_amplitude_sign"] == -1
     assert facts["power_slope_vs_pain_sign"] == 1

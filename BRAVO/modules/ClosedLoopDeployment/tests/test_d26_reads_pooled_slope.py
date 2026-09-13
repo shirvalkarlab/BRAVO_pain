@@ -5,7 +5,9 @@ What is pinned here, each by the value it produces and not by the shape of the a
 
 - a negative, established pooled slope gives neither warning;
 - a positive, established slope gives "inverted" as a WARNING and never as a blocker;
-- an unresolved slope gives "not yet established" on both verdicts, as warnings;
+- a slope whose interval spans zero, with the right sign, gives BOTH verdicts "not indicated" on
+  the point sign, each carrying the interval and p as a CAVEAT, as warnings that gate nothing
+  (PI rule 2026-09-13, "established means mean only": the verdict follows the sign);
 - no stored slope gives "not assessed" on both, with the between-visit separation reported beside
   them and labelled as the comparison decision 124 distrusts;
 - ``is_licensed`` reads none of this: a report that would otherwise be licensed stays licensed
@@ -42,7 +44,8 @@ def _d26(sentences):
 # --- the four slope cases ------------------------------------------------------------------------
 def test_a_negative_established_pooled_slope_gives_neither_d26_warning(monkeypatch):
     rep = _run(monkeypatch, _row(pooled_slope_per_mA=-3.6, pooled_slope_stderr=1.2))
-    assert rep.edges["E1"].resolved is True and rep.edges["E1"].sign == -1
+    assert rep.edges["E1"].resolved is True and rep.edges["E1"].statistically_established is True
+    assert rep.edges["E1"].sign == -1
     assert rep.warnings == [] and rep.threshold.warnings == []
     assert _d26(rep.blockers) == [] and _d26(rep.threshold.problems) == []
     v = rep.threshold.capture_verdicts
@@ -57,7 +60,8 @@ def test_a_negative_established_pooled_slope_gives_neither_d26_warning(monkeypat
 
 def test_a_positive_established_pooled_slope_gives_inverted_as_a_warning_not_a_blocker(monkeypatch):
     rep = _run(monkeypatch, _row(pooled_slope_per_mA=+3.6, pooled_slope_stderr=1.2))
-    assert rep.edges["E1"].resolved is True and rep.edges["E1"].sign == +1
+    assert rep.edges["E1"].resolved is True and rep.edges["E1"].statistically_established is True
+    assert rep.edges["E1"].sign == +1
     assert len(rep.warnings) == 1 and rep.warnings == rep.threshold.warnings
     w = rep.warnings[0]
     assert w.startswith("D26 inverted capture: INDICATED")
@@ -72,25 +76,49 @@ def test_a_positive_established_pooled_slope_gives_inverted_as_a_warning_not_a_b
     assert rep.threshold.predicted_recapture_alert is True
 
 
-def test_an_unresolved_pooled_slope_gives_not_yet_established_on_both_verdicts_as_warnings(monkeypatch):
-    # RCS08's own numbers at the committed band: -4.445 per mA, se such that the interval spans zero
+def test_a_pooled_slope_whose_interval_spans_zero_is_judged_on_its_sign_with_the_caveat_as_warnings(monkeypatch):
+    """PI rule 2026-09-13, his words "Established means mean only for flexibility", read as
+    "point sign decides, but flag as provisional". Until that date this slope -- RCS08's own
+    -4.445 per mA with an interval spanning zero -- gave "too close: not established" and raised
+    the predicted RECAPTURE THRESHOLDS alert. Now both verdicts follow the point sign (right way,
+    so neither is indicated and no alert is predicted), and the interval and p travel on both
+    sentences as a CAVEAT, which lands in the warnings so it is on the page and gates nothing."""
     rep = _run(monkeypatch, _row(pooled_slope_per_mA=-4.445, pooled_slope_stderr=7.23,
                                  pooled_slope_p=0.5387))
     e1 = rep.edges["E1"]
-    assert e1.resolved is False and e1.sign == -1
+    assert e1.resolved is True and e1.sign == -1, "the point sign resolves the edge"
+    assert e1.statistically_established is False, "the interval spans zero: the caveat"
     assert len(rep.warnings) == 2 and rep.warnings == rep.threshold.warnings
     inv, close = rep.warnings
     assert inv.startswith("D26 inverted capture: NOT indicated")
-    assert "-4.45 device units per mA" in inv and "though not yet established" in inv
-    assert "interval -18.6 to +9.7" in inv and "p 0.54" in inv
-    assert close.startswith("D26 thresholds too close: the pooled slope's interval spans zero")
-    assert "not yet established" in close and "RECAPTURE THRESHOLDS" in close
+    assert "-4.45 device units per mA" in inv
+    assert "CAVEAT: the interval spans zero (interval -18.6 to +9.7, p 0.54)" in inv
+    assert "not statistically established" in inv
+    assert close.startswith("D26 thresholds too close: NOT indicated")
+    assert "CAVEAT: the interval spans zero (interval -18.6 to +9.7, p 0.54)" in close
+    assert "RECAPTURE THRESHOLDS" in close and "that is a caveat, not the verdict" in close
     assert _d26(rep.blockers) == []
     v = rep.threshold.capture_verdicts
     assert v["inverted"]["status"] == "not indicated" and v["inverted"]["established"] is False
-    assert v["too_close"]["status"] == "not established"
+    assert v["too_close"]["status"] == "not indicated" and v["too_close"]["established"] is False
     assert v["pooled_slope_per_mA"] == -4.445 and v["pooled_slope_established"] is False
+    assert rep.threshold.predicted_recapture_alert is False, "the alert follows the sign"
+
+
+def test_an_inverted_pooled_slope_whose_interval_spans_zero_is_still_indicated_on_its_sign(monkeypatch):
+    """The other half of the same rule: a wrong-way point sign is "inverted" whether or not the
+    interval excludes zero; the caveat says the sign is not statistically established, and the
+    alert is predicted because the verdict follows the sign."""
+    rep = _run(monkeypatch, _row(pooled_slope_per_mA=+2.0, pooled_slope_stderr=3.0,
+                                 pooled_slope_p=0.5))
+    assert rep.edges["E1"].sign == +1 and rep.edges["E1"].statistically_established is False
+    v = rep.threshold.capture_verdicts
+    assert v["inverted"]["status"] == "indicated" and v["inverted"]["established"] is False
+    assert v["inverted"]["sentence"].startswith("D26 inverted capture: INDICATED")
+    assert "CAVEAT: the interval spans zero" in v["inverted"]["sentence"]
+    assert v["too_close"]["status"] == "not indicated"
     assert rep.threshold.predicted_recapture_alert is True
+    assert _d26(rep.blockers) == [], "still a warning, never a blocker"
 
 
 def test_no_pooled_slope_gives_not_assessed_on_both_and_reports_the_distrusted_separation(monkeypatch):

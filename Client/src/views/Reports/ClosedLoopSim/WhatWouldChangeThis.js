@@ -123,10 +123,31 @@ function buildItems(data) {
       rank: 5,
       ink: PAL.neutral,
       actor: "measurement \u2014 the titration session",
-      title: "At least one edge of the amplitude, band power and pain triangle is unresolved",
+      title: "At least one edge of the amplitude, band power and pain triangle has no point "
+           + "estimate",
       page: null,
-      clears: "An unresolved edge is not a negative finding; it is an absent one. A titration "
-            + "session sized to resolve it is what changes this, and no reprogramming will.",
+      clears: "An edge with no estimate is not a negative finding; it is an absent one. A "
+            + "titration session sized to estimate it is what changes this, and no reprogramming "
+            + "will.",
+      observed: null,
+      why: null,
+    });
+  } else if (vd.provisional === true) {
+    // PI rule 2026-09-13 ("established means mean only"): the verdict is licensed on the point
+    // signs; the intervals that span zero are the one thing left to establish, and only more
+    // measurement establishes them.
+    const names = (vd.unestablished_edges || []).join(", ");
+    items.push({
+      key: "edges-provisional",
+      rank: 5,
+      ink: PAL.warn,
+      actor: "measurement \u2014 the titration session",
+      title: `The verdict is provisional: ${vd.n_edges_unestablished} of ${vd.n_edges || 3} `
+           + `intervals span zero${names ? ` (${names})` : ""}`,
+      page: null,
+      clears: "Nothing here changes the verdict, which rests on the point signs by the PI's rule. "
+            + "A titration session at one rate, up and down in 0.5 mA steps, is what would take "
+            + "the interval off zero and remove the word provisional.",
       observed: null,
       why: null,
     });

@@ -5,15 +5,15 @@ problem is that the module never handed the rule the value the device already re
 that still blocks does so for a reason the PI has read and agreed with.
 
 ## Next Step
-Session complete (2026-09-12, late evening). Phase 8 landed: b945fd67 (items 1-3, 5-7) and the
-titration card commit (item 4 + open item 30, decision 146). Nothing waiting on the PI except the
-titration session itself (a clinic visit) and the interval-versus-p mismatch in the pooled slope's
-"established" label, which he has not ruled on.
+Session complete (2026-09-13). Phase 9 landed: "established" is the point sign, flagged
+provisional (decision 147); RCS08's Closed-Loop verdict now reads supported (point signs only;
+2 of 3 intervals span zero). Nothing waiting on the PI except the titration session (a clinic
+visit, recommended on the Stim Optimizer page) and two pre-existing page-level jest failures.
 
 ## Current Phase
-Phase 8
+Phase 9
 
-phases: 8/8 complete
+phases: 9/9 complete
 
 ### Phase 1: Measure what the ledger says today
 - [x] Run the live report on RCS08 at the committed band (L 0-2+, 24.5 Hz) and list every non-pass row
@@ -62,6 +62,12 @@ phases: 8/8 complete
 - [x] Item 3: the safety model seeded from a PI-stated amplitude ceiling per side, one place to change, provenance "stated by PI"
 - [x] Item 4 + open item 30: the Stim Optimizer page recommends the titration session (rate, steps, hold, sides, contacts, bands to avoid), states that the 20 s post-ramp margin switches on once such a run exists
 - [x] Suites, equality proofs, commits, decisions
+- **Status:** complete
+
+### Phase 9: "Established" is the point sign, flagged provisional (PI, 2026-09-13)
+- [x] An edge is resolved by its point estimate's sign; interval/p kept as caveats; the report counts the edges whose intervals span zero
+- [x] The verdict and the sign-off card read "supported (point signs only; N of 3 intervals span zero)" when any does; the parameters card shows values under that flag
+- [x] Equality proof on RCS08 (L 1-3+ 24.5 Hz and L 0-2+ 24.5 Hz), suites, frontend rebuild, watched in the browser, decision 147
 - **Status:** complete
 
 ### Phase 5: Prove it on the page and land

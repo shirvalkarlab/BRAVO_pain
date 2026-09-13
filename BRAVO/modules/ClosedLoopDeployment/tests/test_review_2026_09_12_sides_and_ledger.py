@@ -277,13 +277,21 @@ def test_c2_the_d26_row_reads_the_alert_the_same_run_predicted(monkeypatch):
     rep = _run(monkeypatch, cand, pooled_e1=_pooled(-3.6, 1.2, 0.01), with_rules=True)
     assert rep.threshold is not None and rep.threshold.predicted_recapture_alert is False
     assert "D26" not in _rows(rep)
-    # a slope whose interval spans zero: the alert is predicted and the row says so
+    # a slope whose interval spans zero, sign right: since 2026-09-13 (PI rule, "established
+    # means mean only") the alert follows the SIGN, so none is predicted and D26 passes; the
+    # unestablished interval travels as a caveat in the plan's warnings, not in the D26 row
     rep = _run(monkeypatch, cand, pooled_e1=_pooled(-3.6, 9.9, 0.72), with_rules=True)
+    assert rep.threshold.predicted_recapture_alert is False
+    assert "D26" not in _rows(rep)
+    assert any("CAVEAT: the interval spans zero" in w for w in rep.warnings)
+    # an INVERTED slope (wrong sign on the point estimate): the alert is predicted, the row says
+    # so, and the reason carries the plan's own sentence
+    rep = _run(monkeypatch, cand, pooled_e1=_pooled(+3.6, 1.2, 0.01), with_rules=True)
     assert rep.threshold.predicted_recapture_alert is True
     bucket, row = _rows(rep)["D26"]
     assert (bucket, row["kind"]) == ("advisories", "advisory_failed")
     assert "a RECAPTURE THRESHOLDS alert IS predicted" in row["observed"]
-    assert "not yet established" in row["observed"]
+    assert "inverted capture: INDICATED" in row["observed"]
     # and, before this change, the same run read "could not be determined"
     f = PL._facts_for(cand, None, None, "power_linear", threshold=None)
     assert "predicted_recapture_alert" not in f

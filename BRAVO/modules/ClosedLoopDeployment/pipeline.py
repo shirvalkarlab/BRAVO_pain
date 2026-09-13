@@ -7,6 +7,11 @@ The report is deliberately conjunctive and deliberately pessimistic. ``Deploymen
 requires device eligibility AND three resolved edges AND a coherent sign pattern AND no blocker.
 Anything unmeasured reads as not licensed, because on a device that actuates, treating absence of
 evidence as permission is the specific failure this module exists to prevent.
+
+"Resolved" has meant the POINT SIGN since 2026-09-13 (PI rule: "established means mean only for
+flexibility", read as "point sign decides, but flag as provisional"): an edge with a finite,
+non-zero estimate has a direction; its interval and p stay on the page as caveats; a report
+licensed while any interval spans zero is ``provisional`` and its verdict string says so.
 """
 from __future__ import annotations
 
@@ -81,7 +86,9 @@ def _facts_for(candidate, e1, e2, power_scale, device_facts=None, threshold=None
     the verdict. The concern in the superseded paragraph was put to the PI and he chose the point
     sign. So that nothing downstream loses the distinction, each sign travels with a sibling flag,
     ``power_slope_vs_amplitude_sign_established`` and ``power_slope_vs_pain_sign_established``
-    (the edge's ``resolved``), and with the edge's interval and p-value
+    (the edge's ``statistically_established``: its interval excludes zero -- until 2026-09-13
+    this was the edge's ``resolved``, which the PI's rule of that day, "established means mean
+    only", turned into the point sign itself), and with the edge's interval and p-value
     (``power_slope_vs_amplitude_ci`` / ``_p``, ``power_slope_vs_pain_ci`` / ``_p``), which D19's
     observed-values line prints for any sign that is not established.
 
@@ -100,7 +107,9 @@ def _facts_for(candidate, e1, e2, power_scale, device_facts=None, threshold=None
         if _edge is None or _edge.sign is None:
             continue
         f[f"{_key}_sign"] = int(_edge.sign)
-        f[f"{_key}_sign_established"] = bool(_edge.resolved)
+        # Since 2026-09-13 ``resolved`` is the point sign itself (PI: "established means mean
+        # only"), so the flag D19 prints beside the sign reads the interval rule by its own name.
+        f[f"{_key}_sign_established"] = bool(getattr(_edge, "statistically_established", False))
         if _edge.ci is not None:
             try:
                 f[f"{_key}_ci"] = [float(_edge.ci[0]), float(_edge.ci[1])]

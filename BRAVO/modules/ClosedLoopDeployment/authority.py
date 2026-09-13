@@ -120,20 +120,27 @@ def d26_capture_verdicts(pooled_slope, *, expected_sign=-1, historical_d=None,
     slope reads −4.45 device units per mA, the direction the control law needs. The verdicts now
     read the number the project trusts.
 
-    THE RULE. "Inverted" is the pooled slope's SIGN being wrong for the control law, judged on the
-    point estimate. "Too close" is the slope not being established -- its interval spans zero --
-    so the signal's response to current cannot yet be told from no response. When no pooled slope
-    is stored for the band, both verdicts say NOT ASSESSED rather than falling back to the
-    historical comparison silently; the historical separation is still reported beside them,
-    labelled as the comparison decision 124 distrusts.
+    THE RULE, SINCE 2026-09-13 (PI: "Established means mean only for flexibility", read as "point
+    sign decides, but flag as provisional"). BOTH verdicts are judged on the SIGN OF THE POINT
+    ESTIMATE. "Inverted" is the pooled slope's sign being wrong for the control law. "Too close"
+    is the slope being exactly zero -- no separation between the two captures at all. Whether the
+    slope is STATISTICALLY ESTABLISHED (its interval excludes zero) is a CAVEAT: it is printed on
+    both sentences with the interval and p, it is carried as ``established`` beside each status,
+    and it changes neither status nor the predicted alert. Until that date "too close" was the
+    slope not being established, and an unestablished slope raised the predicted alert; that rule
+    is kept here on the record. When no pooled slope is stored for the band, both verdicts say
+    NOT ASSESSED rather than falling back to the historical comparison silently; the historical
+    separation is still reported beside them, labelled as the comparison decision 124 distrusts.
 
     WHAT COMES BACK. ``(verdicts, warnings, predicted_recapture_alert)``. ``verdicts`` is the
     structured form for the page; ``warnings`` carries the sentence of every verdict that is
-    adverse, not yet established, or not assessed, and is EMPTY when the slope is established with
-    the right sign; ``predicted_recapture_alert`` is True when either verdict is adverse or not
-    established, False when both are clear, and None when nothing could be assessed -- the same
-    None the field carried before when the historical spread could not be measured, because a
-    prediction made from no number would be a fabrication.
+    adverse or not assessed, PLUS the caveat sentence of every verdict whose slope is not
+    statistically established (a caveat gates nothing, and warnings gate nothing, which is where
+    a caveat belongs on the page); it is EMPTY when the slope is established with the right sign.
+    ``predicted_recapture_alert`` is True when either verdict is adverse on the point sign, False
+    when both are clear, and None when nothing could be assessed -- the same None the field
+    carried before when the historical spread could not be measured, because a prediction made
+    from no number would be a fabrication.
     """
     hist_inverted = None
     if historical_low_mean is not None and historical_high_mean is not None:
@@ -178,7 +185,8 @@ def d26_capture_verdicts(pooled_slope, *, expected_sign=-1, historical_d=None,
 
     b = float(est)
     sign = getattr(pooled_slope, "sign", None)
-    resolved = bool(getattr(pooled_slope, "resolved", False))
+    # The CAVEAT flag, not the verdict (PI rule 2026-09-13): does the interval exclude zero?
+    established = bool(getattr(pooled_slope, "statistically_established", False))
     unit = ("device units per mA" if str(getattr(pooled_slope, "scale", "linear")).endswith("linear")
             else "units of log power per mA")
     ci_p = _fmt_ci_p(pooled_slope)
@@ -189,47 +197,52 @@ def d26_capture_verdicts(pooled_slope, *, expected_sign=-1, historical_d=None,
     else:
         direction = "power does not change with current"
     inverted = bool(sign is not None and sign != 0 and sign != expected_sign)
+    # "Too close" on the point estimate: a slope of exactly zero separates nothing.
+    too_close = bool(sign == 0)
     needs = ("as the control law needs" if not inverted and sign != 0
              else "the opposite of what the control law assumes")
-    established = "established" if resolved else "though not yet established"
-    if inverted and resolved:
+    caveat = ("" if established else
+              f" CAVEAT: the interval spans zero ({ci_p}), so this rests on the point estimate "
+              "alone; the sign is not statistically established.")
+    if inverted:
         inv = (f"D26 inverted capture: INDICATED -- the pooled titration slope is {b:+.2f} {unit} "
-               f"({direction}, {needs}), {established} ({ci_p}), so the device would drive the loop "
-               "the wrong way. This is the condition the programmer reports as an inverted capture.")
-    elif inverted:
-        inv = (f"D26 inverted capture: indicated on the point estimate -- the pooled titration slope "
-               f"is {b:+.2f} {unit} ({direction}, {needs}), {established} ({ci_p}). If it holds, the "
-               "device would drive the loop the wrong way.")
+               f"({direction}, {needs}; {ci_p}), so the device would drive the loop the wrong way. "
+               f"This is the condition the programmer reports as an inverted capture.{caveat}")
     else:
         inv = (f"D26 inverted capture: NOT indicated -- the pooled titration slope is {b:+.2f} {unit} "
-               f"({direction}, {needs}), {established} ({ci_p}).")
-    if resolved:
-        close = (f"D26 thresholds too close: NOT indicated -- the pooled slope's interval excludes "
-                 f"zero ({ci_p}), so the signal's response to current is established and can be told "
-                 "from no response.")
+               f"({direction}, {needs}; {ci_p}).{caveat}")
+    if too_close:
+        close = (f"D26 thresholds too close: INDICATED -- the pooled titration slope is exactly zero "
+                 f"({ci_p}), so the two captures do not separate and the device may raise RECAPTURE "
+                 f"THRESHOLDS.{caveat}")
     else:
-        close = (f"D26 thresholds too close: the pooled slope's interval spans zero ({ci_p}), so the "
-                 "signal's response to current is not yet established; the device may raise "
-                 "RECAPTURE THRESHOLDS.")
+        close = (f"D26 thresholds too close: NOT indicated -- the pooled titration slope is "
+                 f"{b:+.2f} {unit} ({ci_p}), so on the point estimate the two captures separate."
+                 + ("" if established else
+                    f" CAVEAT: the interval spans zero ({ci_p}), so the signal's response to current "
+                    "is not statistically established and the device may still raise RECAPTURE "
+                    "THRESHOLDS at the visit; that is a caveat, not the verdict."))
     ci = getattr(pooled_slope, "ci", None)
     verdicts = {
         "judged_on": D26_JUDGED_ON, "assessed": True,
         "pooled_slope_per_mA": b,
         "pooled_slope_ci": None if ci is None else [float(ci[0]), float(ci[1])],
         "pooled_slope_p": getattr(pooled_slope, "p", None),
-        "pooled_slope_established": resolved,
+        "pooled_slope_established": established,
         "inverted": {"status": "indicated" if inverted else "not indicated",
-                     "established": resolved, "sentence": inv},
-        "too_close": {"status": "not indicated" if resolved else "not established",
-                      "established": resolved, "sentence": close},
+                     "established": established, "sentence": inv},
+        "too_close": {"status": "indicated" if too_close else "not indicated",
+                      "established": established, "sentence": close},
         "historical": historical,
     }
     warnings = []
-    if inverted or not resolved:
+    # Adverse verdicts and unestablished caveats both go on the page as warnings (which gate
+    # nothing); an established slope with the right sign leaves the list empty.
+    if inverted or not established:
         warnings.append(inv)
-    if not resolved:
+    if too_close or not established:
         warnings.append(close)
-    return verdicts, warnings, bool(inverted or not resolved)
+    return verdicts, warnings, bool(inverted or too_close)
 
 
 def threshold_placement(power_low, power_high, *, amp_low, amp_high, expected_sign=-1,
