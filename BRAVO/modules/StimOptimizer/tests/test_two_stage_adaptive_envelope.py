@@ -381,7 +381,7 @@ def test_the_flag_off_response_is_unchanged_and_never_runs_the_path(bench, monke
     assert sorted(out) == ["amplitude_effect", "arms", "available", "blockers", "cache_status",
                            "closed_loop", "design_matrix", "ground_truth", "in_force_by_side",
                            "manifest", "participant", "recommendation_supported", "store",
-                           "summary", "washin_min"]
+                           "summary", "titration_plan", "washin_min"]   # titration_plan: 2026-09-12 evening
     # the explore-outside keys are only read with the flag on: with it off they change nothing
     out2 = BS.run_for_participant(dict(REQ, TwoStageExploreOutsideAdaptive=REASON))
     assert "two_stage" not in out2

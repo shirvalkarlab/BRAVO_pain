@@ -198,7 +198,7 @@ def test_without_the_flag_the_response_has_no_two_stage_key_and_the_path_is_neve
     assert sorted(out) == ["amplitude_effect", "arms", "available", "blockers", "cache_status",
                            "closed_loop", "design_matrix", "ground_truth", "in_force_by_side",
                            "manifest", "participant", "recommendation_supported", "store",
-                           "summary", "washin_min"]
+                           "summary", "titration_plan", "washin_min"]   # titration_plan: 2026-09-12 evening
 
 
 # FIT ONCE, ASSERT MANY (2026-09-12). The flag-on requests below all fit Stage 1 on `bench.es`

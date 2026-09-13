@@ -5,16 +5,15 @@ problem is that the module never handed the rule the value the device already re
 that still blocks does so for a reason the PI has read and agreed with.
 
 ## Next Step
-PI's answers, 2026-09-12 evening: items 1 and 2 confirmed (California day stays ON; the Right
-pulse width fix stays). Do 5, 6, 7 (delete the unread analytics, the two unused endpoints, the
-unused Stim Optimizer code). Item 3: the safety ceiling is a PI-DICTATED amplitude ceiling, not
-anchors from the device files. Item 4: the 20 s post-ramp margin becomes a feature of the Stim
-Optimizer's next-visit recommendation, combined with open item 30 (the titration session). Phase 8.
+Session complete (2026-09-12, late evening). Phase 8 landed: b945fd67 (items 1-3, 5-7) and the
+titration card commit (item 4 + open item 30, decision 146). Nothing waiting on the PI except the
+titration session itself (a clinic visit) and the interval-versus-p mismatch in the pooled slope's
+"established" label, which he has not ruled on.
 
 ## Current Phase
 Phase 8
 
-phases: 7/8 complete
+phases: 8/8 complete
 
 ### Phase 1: Measure what the ledger says today
 - [x] Run the live report on RCS08 at the committed band (L 0-2+, 24.5 Hz) and list every non-pass row
@@ -58,12 +57,12 @@ phases: 7/8 complete
 - **Status:** complete
 
 ### Phase 8: The PI's answers to the review's open items
-- [ ] B8: the analytics no panel reads and the figures nothing draws are dropped from the Biomarkers request; B12: the two unused endpoints removed
-- [ ] S14: the unused Stim Optimizer code deleted; the code digest no longer hashes files nothing calls
-- [ ] Item 3: the safety model seeded from a PI-stated amplitude ceiling per side, one place to change, provenance "stated by PI"
-- [ ] Item 4 + open item 30: the Stim Optimizer page recommends the titration session (rate, steps, hold, sides, contacts, bands to avoid), states that the 20 s post-ramp margin switches on once such a run exists
-- [ ] Suites, equality proofs, commits, decisions
-- **Status:** in_progress
+- [x] B8: the analytics no panel reads and the figures nothing draws are dropped from the Biomarkers request; B12: the two unused endpoints removed
+- [x] S14: the unused Stim Optimizer code deleted; the code digest no longer hashes files nothing calls
+- [x] Item 3: the safety model seeded from a PI-stated amplitude ceiling per side, one place to change, provenance "stated by PI"
+- [x] Item 4 + open item 30: the Stim Optimizer page recommends the titration session (rate, steps, hold, sides, contacts, bands to avoid), states that the 20 s post-ramp margin switches on once such a run exists
+- [x] Suites, equality proofs, commits, decisions
+- **Status:** complete
 
 ### Phase 5: Prove it on the page and land
 - [x] Frontend: ledger shows the new verdict kinds and the measurement current; rebuild; strings found in the served chunk

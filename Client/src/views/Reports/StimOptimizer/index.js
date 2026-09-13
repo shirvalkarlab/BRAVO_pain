@@ -48,6 +48,9 @@ import { recomputeSlots, STIM_OPTIMIZER_SLOTS } from "views/Reports/moduleCacheK
 // has arrived and cached in its own slot; see useTwoStagePlan.js for why.
 import useTwoStagePlan from "./useTwoStagePlan";
 import TwoStagePlanCard from "./TwoStagePlanCard";
+// The titration session to run next (2026-09-12 evening: open item 30 and the 20 s post-ramp
+// margin of decision 144, joined as one recommendation), read from `data.titration_plan`.
+import TitrationSessionCard from "./TitrationSessionCard";
 // The decision strip: the setting programmed now beside the setting the search prefers, per
 // side, with the gain drawn against its own uncertainty (2026-09-12, the page redesign, phase 1).
 import DecisionStrip from "./DecisionStrip";
@@ -669,6 +672,14 @@ export default function StimOptimizer() {
                   )}
                 </MDBox>
               </Card>
+            </Grid>
+          )}
+
+          {/* ---------- the titration session to run next, directly under "What to test at the
+              next visit" (PI, 2026-09-12 evening) ---------- */}
+          {data.titration_plan && (
+            <Grid item xs={12}>
+              <TitrationSessionCard plan={data.titration_plan} />
             </Grid>
           )}
 

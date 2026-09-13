@@ -1218,6 +1218,7 @@ def _run_for_participant(request_data: dict) -> dict:
         _log.warning("StimOptimizer: the full epoch table could not be built (%r)", exc)
         _epochs_full = None
     in_force = in_force_by_side(es, epochs=_epochs_full)
+    _screen_out = {}
     out = {
         "available": True,
         "participant": uid,
@@ -1234,7 +1235,7 @@ def _run_for_participant(request_data: dict) -> dict:
         "closed_loop": closed_loop_readiness(participant, es,
                                              include=bool((request_data or {})
                                                           .get("ClosedLoop", True)),
-                                             inputs=_ev_inputs),
+                                             inputs=_ev_inputs, screen_out=_screen_out),
         "amplitude_effect": amp_block,
         "ground_truth": gt_block,
         "store": store_block,
@@ -1250,6 +1251,12 @@ def _run_for_participant(request_data: dict) -> dict:
                     "settings_stream": stream_key},
             in_force=in_force, evidence_inputs=_ev_inputs,
             safety_ceiling_by_hemisphere=_ceilings)
+    # THE TITRATION SESSION TO RUN NEXT (2026-09-12 evening, the PI: "make #4 a feature of next
+    # stim opt recommendation combined with 30"): designed from this participant's own record,
+    # attached before the write-back so the stored response carries it. Never raises.
+    out["titration_plan"] = titration_plan_block(
+        participant, in_force=in_force, screen=_screen_out.get("screen"),
+        ceilings=_ceilings, hemispheres=hemis)
     if sig is not None:
         try:
             _write_outputs(str(uid), sig, prov, rep, out)
@@ -1277,7 +1284,144 @@ def _cache_status(uid, sig):
                                         root=_SHARED_CACHE_DIR_OVERRIDE)
 
 
-def closed_loop_readiness(participant, es, *, include=True, inputs=None) -> dict:
+#: ==========================================================================================
+#: THE TITRATION SESSION TO RUN NEXT (open item 30 and decision 144, joined by the PI's decision
+#: of 2026-09-12 evening). `titration_plan.py` holds the arithmetic; this block gathers the
+#: inputs the request already holds -- each side's setting in force, the PI-stated ceiling, the
+#: readiness screen's per-side best contact -- and reads the two stored tables the Closed-Loop
+#: page writes (the pooled current-to-power table and the per-run points table) ONCE each, as
+#: `stim_optimizer`, so the sentence "no run holds 8 settled settings today" is derived from the
+#: record and not typed. On screen: Stim Optimizer page, "Titration session to run next".
+#: ==========================================================================================
+POOLED_KIND = "within_visit_pooled_shape"
+RUN_POINTS_KIND = "three_source_run_points"
+
+
+def _stored_table_as_stim_optimizer(kind, uid):
+    """`(frame or None, note)`: the newest stored entry of `kind`, read as stim_optimizer; a
+    refusal or a miss is a note, never an error."""
+    try:
+        table, stamp = _cache_store.load_newest(kind, uid, consumer="stim_optimizer",
+                                                root=_SHARED_CACHE_DIR_OVERRIDE)
+    except _provenance.SelfDerivedProduct as exc:
+        return None, f"{kind}: refused by the store: {exc}"
+    except Exception as exc:                          # noqa: BLE001
+        return None, f"{kind}: could not be read: {exc!r}"
+    if table is None:
+        return None, (f"{kind}: no entry is stored for this participant (the Closed-Loop page writes it)"
+                      if not stamp else f"{kind}: the newest entry could not be read")
+    if not isinstance(table, pd.DataFrame):
+        try:
+            table = pd.DataFrame(table)
+        except Exception:                             # noqa: BLE001
+            return None, f"{kind}: the stored payload is not a table"
+    return table, f"{kind}: read, {len(table)} rows, written {stamp.get('written_utc')}"
+
+
+def _best_contact_for_side(screen, side, rate_hz=None):
+    """The readiness screen's best cell for stimulation on `side`, as a dict with the page's
+    contact label: the screen's own ranking (`lfp_evidence.best_deployable`, ipsilateral first)
+    among deployable cells AT THE SESSION'S RATE when `rate_hz` is given -- the same selection
+    the two-stage gate makes per side (`pipeline.select_for_side`), because a response measured
+    at one rate says nothing about another -- else among deployable cells at any rate, named as
+    such; else the cell on that side with the most responding bands. None when the screen has no
+    cell for the side."""
+    if screen is None or len(screen) == 0 or "hemisphere" not in screen.columns:
+        return None, "the readiness screen has no cells"
+    from .routines import lfp_evidence as _ev
+    key = _ev.best_deployable(screen, hemisphere=side, rate_hz=rate_hz) if rate_hz is not None else None
+    how = None
+    if key is not None:
+        how = (f"the readiness screen's best deployable cell for this side at the session's rate, "
+               f"{float(rate_hz):g} Hz (lfp_evidence.best_deployable, the gate's own per-side pick)")
+    else:
+        key = _ev.best_deployable(screen, hemisphere=side)
+        if key is not None:
+            how = ("the readiness screen's best deployable cell for this side, at any rate "
+                   "(lfp_evidence.best_deployable)"
+                   + (f"; no cell on this side passed at the session's rate of {float(rate_hz):g} Hz, "
+                      f"so its evidence is from {float(key[2]):g} Hz" if rate_hz is not None else ""))
+    if key is not None:
+        rows = screen[(screen["channel"].astype(str) == str(key[0]))
+                      & (screen["hemisphere"].astype(str) == str(key[1]))
+                      & np.isclose(pd.to_numeric(screen["rate_hz"], errors="coerce"), float(key[2]))]
+    else:
+        rows = screen[screen["hemisphere"].astype(str) == str(side)]
+        if rows.empty:
+            return None, f"the readiness screen has no cell for {side} stimulation"
+        rows = rows.sort_values(["n_responding", "median_separation_d"], ascending=False).head(1) \
+            if "n_responding" in rows.columns else rows.head(1)
+        how = ("no cell for this side passed the readiness screen; the cell on this side with the "
+               "most responding bands")
+    r = rows.iloc[0]
+    rec = {k: _jsonable(r.get(k)) for k in ("channel", "hemisphere", "rate_hz", "n_bands", "n_responding",
+                                            "responding_fraction", "median_separation_d",
+                                            "laterality", "sensing_side", "deployable")}
+    rec.update(sensing_display(rec.get("channel")))
+    if str(rec.get("laterality")) == "contralateral" and "sensing_side" in screen.columns:
+        # The pick is a contact on the OTHER side (decision 143, S3): name the best contact on
+        # THIS side too, whatever it scored, so the clinician can weigh the extra device
+        # configuration a contralateral pairing needs against the evidence on the side itself.
+        own = screen[(screen["hemisphere"].astype(str) == str(side))
+                     & (screen["sensing_side"].astype(str) == str(side))]
+        if rate_hz is not None and "rate_hz" in own.columns:
+            at_rate = own[np.isclose(pd.to_numeric(own["rate_hz"], errors="coerce"), float(rate_hz))]
+            own = at_rate if len(at_rate) else own
+        if len(own):
+            cols = [c for c in ("deployable", "n_responding", "median_separation_d") if c in own.columns]
+            o = own.sort_values(cols, ascending=False).iloc[0]
+            alt = {k: _jsonable(o.get(k)) for k in ("channel", "rate_hz", "n_bands", "n_responding",
+                                                    "deployable", "blocking_reasons")}
+            alt.update(sensing_display(alt.get("channel")))
+            rec["ipsilateral_alternative"] = alt
+    return rec, how
+
+
+def titration_plan_block(participant, *, in_force, screen, ceilings, hemispheres) -> dict:
+    """The `titration_plan` response block (`titration_plan.plan_for_sides`), never raising."""
+    from . import titration_plan as _tp
+    from .routines import percept_adaptive as _pa
+    uid = str(getattr(participant, "uid", participant))
+    try:
+        pooled, pooled_note = _stored_table_as_stim_optimizer(POOLED_KIND, uid)
+        runs, runs_note = _stored_table_as_stim_optimizer(RUN_POINTS_KIND, uid)
+        try:
+            from modules.ClosedLoopDeployment import post_ramp as _pr
+        except ImportError:
+            from ClosedLoopDeployment import post_ramp as _pr
+        margin = _pr.margin_becomes_available(runs)
+        lo, hi = _pa.ADAPTIVE_LFP_BAND_HZ
+        sides = {}
+        for side in hemispheres:
+            side = str(side)
+            f = dict((in_force or {}).get(side) or {})
+            src = f.get("source") or "the settings stream"
+            since = f.get("since_utc")
+            in_force_src = (f"the setting in force on the {side} side, from the {src}"
+                            + (f", since {since}" if since else ""))
+            ceiling = (ceilings or {}).get(side)
+            if ceiling is None:
+                ceiling = SC.ceiling_for(uid, side)
+            contact, how = _best_contact_for_side(
+                screen, side, rate_hz=_tp.rate_to_hold(f.get("rate_hz"))["rate_hz"])
+            rec = _tp.record_today_for_contact(pooled, runs, (contact or {}).get("channel"),
+                                               lo_hz=lo, hi_hz=hi)
+            rec["pooled_table_note"] = pooled_note
+            rec["run_points_table_note"] = runs_note
+            sides[side] = dict(
+                rate_in_force_hz=f.get("rate_hz"), rate_source=in_force_src,
+                pulse_width_us=f.get("pulse_width_us"), pulse_width_source=in_force_src,
+                ceiling_mA=ceiling[0], ceiling_source=str(ceiling[1]),
+                contact=contact, contact_source=how, record_today=rec)
+        block = _tp.plan_for_sides(sides, margin=margin)
+        block["stored_tables"] = {"pooled": pooled_note, "run_points": runs_note}
+        return _jsonable(block)
+    except Exception as exc:                          # noqa: BLE001 -- adjunct card
+        _log.exception("StimOptimizer: the titration plan could not be built for %s", uid)
+        return {"available": False, "reason": f"the titration plan could not be built: {exc}"}
+
+
+def closed_loop_readiness(participant, es, *, include=True, inputs=None, screen_out=None) -> dict:
     """Whether the sensed LFP could drive Adaptive Therapy for this participant, and if not why.
 
     This is a DIFFERENT question from the open-loop optimizer above it, and the payload keeps them
@@ -1309,6 +1453,11 @@ def closed_loop_readiness(participant, es, *, include=True, inputs=None) -> dict
         le = _pl.live_evidence(participant, amp_ceiling=_obj.AMP_HARD_LIMIT_MA, bands=None,
                                inputs=inputs)
         screen = le.screen if le.screen is not None else pd.DataFrame()
+        if screen_out is not None:
+            # The full screen frame for the titration plan (2026-09-12), which picks each side's
+            # best contact off it; handed back through the caller's own dict so the readiness
+            # payload itself is unchanged and the screen is built once.
+            screen_out["screen"] = screen
         n_deployable = 0 if screen.empty else int(screen["deployable"].sum())
         # The contact pair in the page's form on every row and on the selected cell
         # (2026-09-12): `display_short` "L 0⁻2⁺" beside the raw key, from the one formatter.

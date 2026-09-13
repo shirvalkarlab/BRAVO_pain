@@ -263,7 +263,17 @@ def test_the_four_tables_are_keyed_without_the_figure_backend(bench):
     assert out["store"]["served_from_store"] is False, "a different backend is a different response"
     keys_plotly = {k: _sidecar(bench.root, k)["signature_key"] for k in keys_none}
     assert keys_plotly == keys_none, "the tables do not depend on the backend, so one entry serves both"
-    assert _sidecar(bench.root, BS.RESPONSE_KIND)["signature_key"] != resp_none
+    # The response IS keyed on the backend, and since 2026-09-12 the store keeps TWO response
+    # entries (the page's plain and two-stage requests used to evict each other, decision 146),
+    # so the first response is still there beside the second and their keys differ.
+    d = os.path.join(bench.root, BS.RESPONSE_KIND)
+    metas = sorted(f for f in os.listdir(d) if f.endswith(".meta.json"))
+    assert len(metas) == 2, metas
+    resp_keys = set()
+    for m in metas:
+        with open(os.path.join(d, m)) as fh:
+            resp_keys.add(json.load(fh)["signature_key"])
+    assert resp_none in resp_keys and len(resp_keys) == 2
 
 
 def test_a_response_computed_without_the_settings_census_is_not_stored(bench, monkeypatch):
