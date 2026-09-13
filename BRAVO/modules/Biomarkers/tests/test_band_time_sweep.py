@@ -369,56 +369,26 @@ def test_not_assessed_is_a_different_state_from_not_settled():
 
 
 # ---------------------------------------------------------------------------------------------
-# 6. the colour scales
+# 6. the notes that travel with the numbers
 # ---------------------------------------------------------------------------------------------
+# Until 2026-09-12 this section also pinned the server-drawn figures (`band_time_sweep_figures`):
+# the colour scales centred on 0 and 0.5, the printed cell values, the delivered-length axis and
+# the warning welded into the figure footers. Those figures were drawn by nothing and were deleted
+# on the PI's decision (review finding B8); the page's own heat maps take their colour scale from
+# `binarizationModel.diverging` (decision 122), which is not this module's to test. The half of
+# the old optimism-note test that checked the NOTES, which the page does show, is kept below
+# under a name that says only what it still checks.
 
-def test_colour_scales_are_centred_on_the_right_no_relationship_value():
-    """0.5 for high-versus-low pain, 0 for the correlation, and the figures say so.
-
-    A diverging scale centred anywhere but 0.5 on the high-versus-low-pain grid would make a band
-    that discriminates nothing look like a result, which is the specific error this asserts against.
-    """
-    power, pain, centers = _synthetic_grid(seed=13)
-    sw = A.band_time_sweep_from_power(power, pain, center_freqs_hz=centers, n_perm=200, n_boot=300)
-    figs = A.band_time_sweep_figures(sw)
-    assert set(figs) == {"correlation", "auc"}
-    auc = figs["auc"]["data"][0]
-    corr = figs["correlation"]["data"][0]
-    assert auc["zmid"] == 0.5, f"the high-versus-low-pain scale must be centred on 0.5, got {auc['zmid']}"
-    assert corr["zmid"] == 0.0, f"the correlation scale must be centred on 0, got {corr['zmid']}"
-    assert auc["zmin"] < 0.5 < auc["zmax"], "0.5 must sit inside the scale, not at one end"
-    assert corr["zmin"] < 0.0 < corr["zmax"]
-    # The value is printed in every cell while the grid is small enough to read.
-    assert "text" in auc and auc.get("texttemplate") == "%{text}"
-    assert len(auc["text"]) == len(sw["integration_seconds_delivered"])
-    assert len(auc["text"][0]) == len(sw["center_freqs_hz"])
-    # The vertical axis is labelled with the length DELIVERED, and says so when it differs.
-    ylab = figs["auc"]["layout"]["yaxis"]
-    assert "Seconds of recording averaged into one measurement" in ylab["title"]["text"]
-    assert any("asked" in str(v) for v in auc["y"]), (
-        "a length that could not be delivered exactly must say so on the axis")
-    # Both headlines are DERIVED: they carry a number that is in the result.
-    for key in ("correlation", "auc"):
-        title = figs[key]["layout"]["title"]["text"]
-        assert any(ch.isdigit() for ch in title), f"the {key} headline states no number: {title}"
-    print("OK the high-versus-low-pain scale is centred on 0.5 and the correlation scale on 0; "
-          "every cell prints its value; both headlines carry numbers from the result")
-
-
-def test_the_optimism_note_is_in_the_panel_not_only_in_a_caption():
-    """The best-of-ten warning has to travel with the numbers."""
+def test_the_optimism_note_and_the_half_note_are_in_the_first_notes():
+    """The best-of-ten warning and the 0.5-means-no-discrimination note have to travel with the
+    numbers, in the notes the page prints in its "how to read this" drawer."""
     power, pain, centers = _synthetic_grid(seed=17)
     sw = A.band_time_sweep_from_power(power, pain, center_freqs_hz=centers, n_perm=200, n_boot=300)
     first_two = " ".join(sw["notes"][:2]).lower()
     assert "largest of the ten lengths" in first_two
     assert "optimistic" in first_two or "larger than" in first_two
     assert "0.5, not 0" in " ".join(sw["notes"])
-    # And it is welded into both figures, so a screenshot of one carries it.
-    figs = A.band_time_sweep_figures(sw)
-    for key in ("correlation", "auc"):
-        foot = figs[key]["layout"]["annotations"][0]["text"].lower()
-        assert "largest of the ten lengths" in foot and "0.5, not 0" in foot
-    print("OK the best-of-ten warning and the 0.5 note are in the notes and welded into both figures")
+    print("OK the best-of-ten warning and the 0.5 note are in the notes")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -615,7 +585,6 @@ def test_an_empty_input_is_a_reason_not_a_crash():
     no_bands = A.band_time_sweep_from_power({1.0: np.zeros((3, 0))}, np.asarray([1.0, 2.0, 3.0]),
                                             center_freqs_hz=np.asarray([]))
     assert no_bands["answer"] == A.BAND_PAIN_NOT_ASSESSED and "nothing to sweep" in no_bands["why"]
-    assert A.band_time_sweep_figures(empty) == {}
     print("OK a missing input is reported as a reason with no numbers")
 
 
@@ -648,8 +617,7 @@ if __name__ == "__main__":
     test_settings_are_echoed_so_a_reader_can_check_them()
     test_interval_spanning_one_half_reads_as_unsettled_and_never_as_negative()
     test_not_assessed_is_a_different_state_from_not_settled()
-    test_colour_scales_are_centred_on_the_right_no_relationship_value()
-    test_the_optimism_note_is_in_the_panel_not_only_in_a_caption()
+    test_the_optimism_note_and_the_half_note_are_in_the_first_notes()
     test_a_value_that_does_not_beat_the_shuffled_best_of_ten_is_not_established()
     test_a_planted_relationship_is_found_at_the_right_band()
     test_an_empty_input_is_a_reason_not_a_crash()

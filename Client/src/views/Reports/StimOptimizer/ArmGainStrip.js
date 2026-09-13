@@ -92,7 +92,17 @@ export default function ArmGainStrip({ arms, resolutions, activeArm, onSelect })
                   <VerdictGlyph resolved={resolved} />
                   <span style={NOTE}>
                     {`${a.n_epochs_fitted ?? "—"} stretches`}
-                    {ceil !== null ? ` · safe ceiling ${fmtMa(ceil)}` : ""}
+                    {ceil !== null && (
+                      // "safe ceiling" is the highest current a ramp from zero reaches without
+                      // crossing a cell the safety model rejects. The model's own ceiling -- the
+                      // current the PI stated as not acceptable on this side, 2026-09-12 -- is
+                      // in `safety_anchors` and is named here so the two are never confused.
+                      <Tooltip title={(a.safety_anchors && a.safety_anchors.ceiling_mA != null)
+                        ? `the safety model was told: not above ${fmtMa(a.safety_anchors.ceiling_mA)} on this side (${a.safety_anchors.provenance || "no provenance recorded"}); ${fmtMa(ceil)} is the highest current a ramp from zero reaches without crossing a cell the model rejects`
+                        : `${fmtMa(ceil)} is the highest current a ramp from zero reaches without crossing a cell the safety model rejects`}>
+                        <span>{` · safe ceiling ${fmtMa(ceil)}`}</span>
+                      </Tooltip>
+                    )}
                     {a.safe_contiguous === false ? " · safe set not contiguous" : ""}
                   </span>
                 </MDBox>

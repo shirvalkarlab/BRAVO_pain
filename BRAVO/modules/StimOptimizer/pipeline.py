@@ -194,8 +194,9 @@ def _queue_frame(ctx, top=25, *, delivered=None, hemisphere=None,
     out["inside_delivered_envelope"] = out["amp_mA"].between(lo, hi)
     # Has this (rate, amplitude) pair ever been delivered on this side? Pulse width is not a queue
     # dimension, so this is a NECESSARY condition for schedulability and not a sufficient one — the
-    # full joint (rate, amplitude, pulse width) check happens in schedule.safety_filter once a pulse
-    # width is chosen. Reported as such rather than as a green light.
+    # full joint (rate, amplitude, pulse width) check is the clinic's, once a pulse width is chosen
+    # (the module's own sheet builder, routines/schedule.py, was deleted 2026-09-12 as unreached).
+    # Reported as such rather than as a green light.
     pair = []
     for _, r in out.iterrows():
         m = ok & np.isclose(rate, float(r["freq_hz"])) & (np.abs(amp - float(r["amp_mA"])) <= 0.06)
@@ -222,7 +223,7 @@ def _batch_frame(ctx) -> pd.DataFrame:
 
 
 def run(design_csv, *, sites=DEFAULT_SITES, hemispheres=DEFAULT_HEMISPHERES,
-        delivered_census=None, limit_anchors_by_hemisphere=None,
+        delivered_census=None, safety_ceiling_by_hemisphere=None,
         outdir=".", data_horizon=PLT.DATA_HORIZON, washin_min=PLT.WASHIN_MIN,
         render_figures=True, figure_backend="mpl", dpi=200, top_queue=25,
         strict=False, **ctx_kwargs) -> RunReport:
@@ -240,11 +241,11 @@ def run(design_csv, *, sites=DEFAULT_SITES, hemispheres=DEFAULT_HEMISPHERES,
     render_figures, figure_backend
         ``"mpl"`` writes PNG via matplotlib; ``"plotly"`` writes interactive HTML. Static export
         never goes through kaleido in this environment.
-    limit_anchors_by_hemisphere
-        ``{hemisphere: (anchors, meta)}`` from ``plots.limit_anchors_from_stream`` (review S8,
-        2026-09-12): the safety model's limit anchors for each side, built from the participant's
-        own settings stream. Absent, every arm uses ``ctx_kwargs["limit_anchors"]`` or the
-        hard-coded default, as before.
+    safety_ceiling_by_hemisphere
+        ``{hemisphere: (ceiling_mA, provenance)}`` from ``safety_ceiling.ceilings_by_hemisphere``
+        (2026-09-12): the PI-stated current above which each side is not acceptable, the
+        severity-3 seed of that side's safety model. Absent, every arm uses the module hard limit
+        with a provenance that says no ceiling was stated.
 
     Returns
     -------
@@ -266,9 +267,8 @@ def run(design_csv, *, sites=DEFAULT_SITES, hemispheres=DEFAULT_HEMISPHERES,
         for hemi in hemispheres:
             label = f"{site}__{hemi}"
             kw = dict(ctx_kwargs)
-            if limit_anchors_by_hemisphere and hemi in limit_anchors_by_hemisphere:
-                anchors, meta_la = limit_anchors_by_hemisphere[hemi]
-                kw.update(limit_anchors=anchors, limit_anchors_meta=meta_la)
+            if safety_ceiling_by_hemisphere and hemi in safety_ceiling_by_hemisphere:
+                kw.update(safety_ceiling=safety_ceiling_by_hemisphere[hemi])
             try:
                 ctx = PLT.build_context(es, hemisphere=hemi, primary_item=site,
                                         data_horizon=data_horizon, washin_min=washin_min,

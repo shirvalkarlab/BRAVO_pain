@@ -223,7 +223,13 @@ function Numbers({ c, lfp }) {
           <span style={{ ...MONO, whiteSpace: "nowrap" }}>
             {["Left", "Right"].filter((h) => checked[h]).map((h) => `${h[0]} ${fmtMa(checked[h].amp_min_mA)}–${fmtMa(checked[h].amp_max_mA)}`).join(" · ")}
           </span>
-          {ev.ceiling_mA != null && <span style={NOTE}>{`ceiling ${fmtMa(ev.ceiling_mA)}`}</span>}
+          {ev.ceiling_by_side
+            // 2026-09-12: the ceiling is the current the PI stated as not acceptable, per side,
+            // with its provenance; an older response carries only the one number.
+            ? (<span style={NOTE} title={["Left", "Right"].filter((h) => ev.ceiling_by_side[h]).map((h) => `${h}: ${ev.ceiling_by_side[h].provenance}`).join(" · ")}>
+                {`ceiling ${["Left", "Right"].filter((h) => ev.ceiling_by_side[h]).map((h) => `${h[0]} ${fmtMa(ev.ceiling_by_side[h].ceiling_mA)}`).join(" · ")}`}
+              </span>)
+            : (ev.ceiling_mA != null && <span style={NOTE}>{`ceiling ${fmtMa(ev.ceiling_mA)}`}</span>)}
           {defaulted && <span style={NOTE}>limits defaulted to the delivered range</span>}
         </MDBox>
       );

@@ -30,6 +30,7 @@ import pandas as pd
 
 from . import adapter
 from . import pipeline
+from . import safety_ceiling as SC
 from .routines import plots as PLT
 
 # THE IMPORT ROOT DIFFERS BETWEEN THE TWO TEST RUNNERS, so both spellings are tried (see adapter).
@@ -668,7 +669,8 @@ TWO_STAGE_OVERRIDE_BY_KEY = "TwoStageOverrideBy"
 TWO_STAGE_EXPLORE_OUTSIDE_KEY = "TwoStageExploreOutsideAdaptive"
 TWO_STAGE_EXPLORE_OUTSIDE_BY_KEY = "TwoStageExploreOutsideAdaptiveBy"
 TWO_STAGE_BACKEND = ("scikit-learn Gaussian process (StimOptimizer/routines/surrogate.py); "
-                     "PyTorch, GPyTorch and BoTorch are not used on this path")
+                     "PyTorch, GPyTorch and BoTorch are not used on this path -- the optional "
+                     "PyTorch backend was deleted on 2026-09-12 and no request can select it")
 
 
 def _two_stage_requested(request_data) -> bool:
@@ -863,7 +865,7 @@ def _two_stage_payload(rep, *, inputs, seconds, in_force=None) -> dict:
 
 def two_stage_block(participant, es, *, request_data, stream, washin_min, hemispheres, sites,
                     data_horizon, inputs, in_force=None, evidence_inputs=None,
-                    limit_anchors_by_hemisphere=None) -> dict:
+                    safety_ceiling_by_hemisphere=None) -> dict:
     """Run the open-loop -> gate -> closed-loop path on this request's own inputs and report it.
 
     Never raises into the response: a failure here is reported under `two_stage.reason` and the
@@ -896,9 +898,12 @@ def two_stage_block(participant, es, *, request_data, stream, washin_min, hemisp
             explore_outside_adaptive_reason=explore_reason,
             explore_outside_adaptive_by=explore_by,
             explore_outside_adaptive_requested=explore_requested,
-            # review S8: each side's safety-model anchors from the stream, as the flat fit uses
-            stage1_kwargs=({"limit_anchors_by_hemisphere": limit_anchors_by_hemisphere}
-                           if limit_anchors_by_hemisphere else None))
+            # The PI-stated ceiling per side (2026-09-12): the safety model's severity-3 seed
+            # in Stage 1, as in the flat fit, and the ceiling the gate checks the limits against.
+            stage1_kwargs=({"safety_ceiling_by_hemisphere": safety_ceiling_by_hemisphere}
+                           if safety_ceiling_by_hemisphere else None),
+            gate_kwargs=({"ceiling_mA": safety_ceiling_by_hemisphere}
+                         if safety_ceiling_by_hemisphere else None))
     except Exception as exc:                          # noqa: BLE001 -- adjunct block
         _log.exception("StimOptimizer: the two-stage path failed")
         return {"requested": True, "available": False, "backend": TWO_STAGE_BACKEND,
@@ -1094,13 +1099,12 @@ def _run_for_participant(request_data: dict) -> dict:
         # the build at the top failed, this is None and the queue omits its eligibility annotation,
         # which is the same degradation this line's own try/except gave.
         _census = _stream
-        # THE SAFETY MODEL'S LIMIT ANCHORS, from this participant's own settings stream, per
-        # side (review S8, 2026-09-12; `routines/plots.USE_STREAM_LIMIT_ANCHORS` switches it).
-        # None when there is no stream, in which case both fitters use the hard-coded default.
-        _anchors = ({h: PLT.limit_anchors_from_stream(_stream, h) for h in hemis}
-                    if _stream is not None else None)
+        # THE SAFETY MODEL'S CEILING, stated by the PI per side (`safety_ceiling.py`,
+        # 2026-09-12): built once here and handed to the flat fit, to Stage 1 and to the gate, so
+        # every safe set and the "under the ceiling" check read one source.
+        _ceilings = SC.ceilings_by_hemisphere(uid, hemis)
         rep = pipeline.run(es, sites=sites, hemispheres=hemis, delivered_census=_census,
-                           limit_anchors_by_hemisphere=_anchors,
+                           safety_ceiling_by_hemisphere=_ceilings,
                            outdir=None, render_figures=False,
                            data_horizon=horizon, washin_min=washin_min,
                            n_batches=int((request_data or {}).get("NBatches", 3)),
@@ -1144,14 +1148,17 @@ def _run_for_participant(request_data: dict) -> dict:
             # disabled the non-contiguous-safe-set blocker for every arm.
             "safe_contiguous": _jsonable(m.get("safe_is_contiguous")),
             "safe_contiguous_ceiling": _jsonable(m.get("safe_contiguous_ceiling")),
-            # The safety model's limit anchors and their source (review S8): on no page yet;
-            # in the response so the numbers behind `safe_contiguous_ceiling` can be read.
+            # What the safety model was told (2026-09-12): the PI-stated ceiling for this side
+            # and where it comes from, the severity-3 anchors it became (one per grid rate), and
+            # the tolerated settings. In the response so the numbers behind
+            # `safe_contiguous_ceiling` can be read; the page prints the ceiling on the arm card.
             "safety_anchors": {
-                "source": _jsonable(m.get("limit_anchors_source")),
-                "n": _jsonable(m.get("n_limit_anchors")),
-                "anchors_rate_hz_upper_mA": _jsonable(m.get("limit_anchors")),
-                "n_stream_rows_with_upper": _jsonable(m.get("limit_anchors_rows_with_upper")),
-                "n_excluded_adaptive_limit": _jsonable(m.get("limit_anchors_excluded_adaptive_limit")),
+                "ceiling_mA": _jsonable(m.get("safety_ceiling_mA")),
+                "provenance": _jsonable(m.get("safety_ceiling_provenance")),
+                "ceiling_anchors_rate_hz_mA": _jsonable(m.get("safety_ceiling_anchors")),
+                "n_ceiling_anchors": _jsonable(m.get("n_safety_ceiling_anchors")),
+                "n_tolerated_anchors": _jsonable(m.get("n_tolerated_anchors")),
+                "tolerated_rule": _jsonable(m.get("tolerated_rule")),
                 "n_safe_cells": _jsonable(m.get("n_safe")),
             },
             "queue": _frame_records(arm.queue, limit=25),
@@ -1242,7 +1249,7 @@ def _run_for_participant(request_data: dict) -> dict:
             inputs={"matched_table": matched_key, "tiles": tiles_key,
                     "settings_stream": stream_key},
             in_force=in_force, evidence_inputs=_ev_inputs,
-            limit_anchors_by_hemisphere=_anchors)
+            safety_ceiling_by_hemisphere=_ceilings)
     if sig is not None:
         try:
             _write_outputs(str(uid), sig, prov, rep, out)

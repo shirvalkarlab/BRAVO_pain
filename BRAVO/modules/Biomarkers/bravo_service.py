@@ -1995,7 +1995,9 @@ def _psd_sample_index(td_list, psd_list, pro_times=None):
     pooled PSD matrix — modulo the rare degenerate spectrum Welch drops (<4 finite bins), which
     effectively never occurs on real recordings. This lets the frontend replicate the backend's
     nearest-PRO match + binarization LIVE as the match-window slider moves, so the binarization
-    histogram and the timeline coloring stay faithful to `matched_sample_counts` without a recompute.
+    histogram and the timeline coloring are computed from the same sample set the backend matches
+    (the browser's own count, binarizationModel.js, is the only count of matched samples since the
+    server's `matched_sample_counts` was deleted on 2026-09-12, review finding B8).
 
     `pro_times` mirrors `_welch_rows_into`: when provided, TD-streaming entries become
     RATING-CENTERED — one entry per (overlapping PRO, channel), stamped at the PRO's own timestamp
@@ -3472,56 +3474,24 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
             times = [str(x) for x in tl["time"]] if (tl is not None and "time" in tl) else []
             td_window_days = train_days if train_days is not None else 30
             td_step_days = step_days if step_days is not None else 7
-            # Inject times into det so corr_spectrum can build per-session scatter data.
-            det["times"] = times
-            # PRO<->PSD match offsets (signed minutes) carried on the td timeline, for the matched-
-            # sample count readout. Present only when time-window matching ran.
-            match_dt = (tl["td_match_dt_min"].to_numpy()
-                        if (tl is not None and "td_match_dt_min" in tl) else None)
-            # DESIGN §8b/§8c: the exploratory scan runs on the POOLED full-spectrum PSDs (TD
-            # streaming + montage/survey), per main bipolar channel, each PSD matched to the nearest
-            # continuous PRO within the window — NOT just the TD streaming sessions. Built from the
-            # cached per-channel matrix (Welch already done) + the PRO times/values, so a compute
-            # only pays for the cheap z-score + match + scan.
-            pooled = None
-            if psd_matrix is not None and pro_match is not None:
-                try:
-                    pooled = streaming_psd.build_pooled_detail_from_matrix(
-                        psd_matrix, pro_match[0], pro_match[1], tolerance_min=match_tolerance_min,
-                        aggregate=aggregate, max_per_rating=max_per_rating,
-                        refractory_min=refractory_min, match_direction=match_direction)
-                except Exception as e:
-                    _log.warning("Biomarkers: pooled PSD detail failed (%s)", e)
-            scan_src = pooled if pooled is not None else det
-            # Matched counts come from the POOLED labels when available (all-source matches), with the
-            # signed offsets the pooled matcher recorded; else fall back to the TD timeline offsets.
-            if pooled is not None:
-                count_task = lambda: analytics.matched_sample_counts(
-                    pooled.get("labels"), strategy=label_strategy, low_pct=low_pct, high_pct=high_pct,
-                    match_dt_min=None, tolerance_min=match_tolerance_min)
-            else:
-                count_task = lambda: analytics.matched_sample_counts(
-                    det.get("labels"), strategy=label_strategy, low_pct=low_pct, high_pct=high_pct,
-                    match_dt_min=match_dt, tolerance_min=match_tolerance_min)
-            td_tasks = {
-                "corr_spectrum": lambda: analytics.corr_spectrum(det, region_map=region_map),
-                "psd_spectra": lambda: analytics.psd_spectra(det, region_map=region_map),
-                # `spectral_feature_importance` (the exploratory 5 Hz sliding-band scan) is no longer
-                # computed: its only frontend consumer, BiomarkerAnalytics.js's scatter+violin
-                # drill-down, was removed as an unnecessary duplicated analysis -- the calibrated
-                # band-by-length grid (band_time_sweep_for_participant) is the headline result and
-                # already covers the same question with a stronger correction. `_live_pro_lsb_spectrum`
-                # above is still called, but with `return_spectra=False` -- only `live_match_stats`,
-                # which the matching-controls caption still reads, is built; the per-PRO spectrum
-                # records nothing here ever consumed are no longer computed at all.
-                "matched_sample_counts": count_task,
-                "pool_meta": lambda: (pooled or {}).get("pool_meta"),
-                # PSD spectrogram removed from the UI (added little over the spectrum + mean-PSD
-                # panels); no longer computed to keep the response lean.
-            }
+            # THE ONLY KEY OF THIS BLOCK THE PAGE READS IS `sliding_corr_spectrum`
+            # (BiomarkerAnalytics.js). On the PI's decision of 2026-09-12 (review finding B8) the
+            # four other tasks this block used to compute on every Recompute -- `corr_spectrum`
+            # (the static correlation-against-frequency curve with its peaks), `psd_spectra` (the
+            # mean PSD per channel split by pain group), `matched_sample_counts` (which the browser
+            # re-derives itself, binarizationModel.js) and `pool_meta` -- were deleted rather than
+            # hidden behind a flag, together with the pooled-detail build that fed only the last
+            # two, the `det["times"]` injection that fed only `corr_spectrum`, and the functions
+            # themselves. Nothing on any page changed; the field count is in
+            # artifacts/review_2026-09-12_Biomarkers_IMPLEMENTED.md. The pooled detail
+            # (`streaming_psd.build_pooled_detail_from_matrix`) is still built where it is
+            # actually read: `_validate_band_core`, the stability column's own path. The
+            # parameters this function no longer reads (`match_tolerance_min`, `psd_matrix`,
+            # `pro_match`, `aggregate`, `max_per_rating`, `refractory_min`, `match_direction`)
+            # are kept in the signature so the one call site in `run_for_participant` is unchanged.
+            td_tasks = {}
             # The sliding R-vs-frequency-over-time HEATMAP is computed ONLY in sliding mode (a window
-            # is selected). With no window (all data) the card shows the static R-vs-frequency
-            # spectrum (corr_spectrum) with peaks highlighted instead.
+            # is selected). With no window (all data) the card shows nothing from this block.
             if sliding:
                 td_tasks["sliding_corr_spectrum"] = lambda: analytics.td_sliding_corr_spectrum(
                     det, times, window_days=td_window_days, step_days=td_step_days, region_map=region_map)
@@ -4334,13 +4304,17 @@ def run_for_participant(request_data):
     # Pooled per-channel PSD matrix (TD streaming + montage/survey), cached on disk so the expensive
     # Welch is computed once (eagerly, when the availability timeline loaded) and reused here. The
     # DB-keyed cache decodes only recordings not already Welch'd, so no full reload is needed here.
-    # The cheap match-to-PRO + scan reruns per compute with the chosen tolerance.
+    # Since 2026-09-12 (review finding B8) this request no longer matches the matrix to the pain
+    # reports itself -- the only readers of that match were the unread `matched_sample_counts` and
+    # `pool_meta` tasks, now deleted -- but the matrix is still built here so that the
+    # per-recording spectra stay current with the record and the page's `cache.spectrum_builder`
+    # counters (B6) can be reported. The stability column's own path (`_validate_band_core`)
+    # still matches it to the reports where that match is actually read.
     # TD-streaming PSDs are rating-centered (one centered window per PRO inside a session's coverage)
     # instead of a single first-30 s spectrum stamped at the session start — this is what lets a
     # rating in the middle of a long stream match. Use the METRIC-AGNOSTIC PRO set (all timestamps),
     # which is the SAME set `warm_psd_cache` built the matrix on, so this request hits the warm cache
-    # instead of re-decoding on the request thread. Per-metric PRO filtering stays downstream in the
-    # match step (build_pooled_detail_from_matrix / pro_match).
+    # instead of re-decoding on the request thread.
     pro_match = _pro_match_arrays(pro_df, label_metric)
     _force_refresh = _normalize_force_refresh(request_data.get("ForceRefresh"))
     psd_matrix = _cached_psd_matrix(participant_uid, pro_times=_all_pro_times(pro_df),
@@ -4994,15 +4968,19 @@ def _band_validation_setup(request_data):
 
 
 def _validate_band_core(request_data):
-    """Shared heavy-lifting core for the per-band validation + BandCandidate emission.
+    """Shared heavy-lifting core for the per-band validation (the stability column).
 
     Resolves the participant, PRO metric, binarization, and PSD<->PRO match params from the
     request; builds the same pooled td_detail the scan uses (so the band feature is defined
     identically); then runs the mixed-effects logistic (glmer) and the band x stim-era LRT.
 
-    Returns a rich intermediate dict consumed by BOTH `validate_band_for_participant` (which
-    trims it to the click-panel shape) and `build_band_candidate` (which assembles the full
-    §6 BandCandidate). On any failure returns {available: False, reason: ...}.
+    Returns a rich intermediate dict. Its live readers are `raw_stability_result_for_point` (the
+    stability column of the calibrated grid, decision 67), `band_deployment_roc`,
+    `band_lsb_and_power`, `band_deployment_roc_by_era` and `deployment_summary` (the four
+    Closed-Loop endpoints). Until 2026-09-12 two more readers existed,
+    `validate_band_for_participant` and `build_band_candidate`, behind two routes no page
+    called; both were deleted on the PI's decision (review finding B12).
+    On any failure returns {available: False, reason: ...}.
     """
     participant_uid = request_data.get("ParticipantId")
     channel = request_data.get("Channel")
@@ -5894,54 +5872,11 @@ def compute_and_store_band_sweep(participant_uid, metric, request_data=None):
     return out
 
 
-def validate_band_for_participant(request_data):
-    """Run the click-triggered VALIDATION bundle for one band on one participant.
-
-    Inputs (in request_data): ParticipantId, Channel (raw or short name), CenterHz, plus the same
-    LabelMetric/BinarizationStrategy/LowPct/HighPct/MatchToleranceMin/MaxPerRating/RefractoryMin
-    /MatchDirection knobs the scan uses (so the band feature is defined identically to what the
-    scan dot represents). Optional BandWidthHz (default 5.0).
-
-    Output: {
-      'available': True,
-      'channel': '...', 'center_hz': N.N, 'band_lo': N.N, 'band_hi': N.N,
-      'glmer': {                      # from analytics.band_mixedmodel_inference, OR + CI + q
-         'available', 'odds_ratio', 'or_lo', 'or_hi', 'p', 'q_glmer',
-         'n', 'n_clusters', 'separation', 'singular', 'note', ...
-      },
-      'stim': {                       # from analytics.band_stim_stability
-         'available', 'chisq', 'lrt_p', 'stim_stable', 'or_by_era', 'era_counts',
-         'thresholds_mA', ...
-      },
-      'verdict': 'VALIDATED (stim-stable)' | 'VALIDATED (stim-dependent)' |
-                 'candidate (FDR n.s.)' | 'failed (separation/singular)' | 'unavailable',
-    }
-    Degrades to {available: False, reason: ...} when the participant has no matched data or pymer4
-    isn't installed; the frontend renders an empty-state caption rather than erroring.
-    """
-    core = _validate_band_core(request_data)
-    if not core.get("available"):
-        return core
-
-    def _ff(x):
-        try:
-            return float(x) if x is not None and np.isfinite(x) else None
-        except (TypeError, ValueError):
-            return None
-    center_hz = core["center_hz"]
-    band_width_hz = core["band_width_hz"]
-    return {
-        "available": True,
-        "channel": core["channel"],
-        "center_hz": _ff(center_hz),
-        "band_lo": _ff(center_hz - band_width_hz / 2.0),
-        "band_hi": _ff(center_hz + band_width_hz / 2.0),
-        "band_width_hz": _ff(band_width_hz),
-        "label_metric": core["label_metric"],
-        "glmer": core["glmer"],
-        "stim": core["stim"],
-        "verdict": core["verdict"],
-    }
+# `validate_band_for_participant` stood here until 2026-09-12: the click-panel trim of
+# `_validate_band_core`, reached only through the /queryBandValidation route, which no page ever
+# called. Route, view and function deleted on the PI's decision (review finding B12).
+# `_validate_band_core` itself STAYS: the stability column reads it through
+# `raw_stability_result_for_point`.
 
 
 # --- Percept RC device-mapping constants (DESIGN_biomarker_pipeline_v2 §1) ----------------------
@@ -6053,192 +5988,13 @@ def _ramp_guidance(polarity, adaptive_valid, suggested_mode, *, stim_stable=None
     }
 
 
-def build_band_candidate(request_data):
-    """Assemble a serializable BandCandidate object (DESIGN_biomarker_pipeline_v2 §6) for ONE
-    validated (channel, band) — the contract handed from the discovery/Biomarkers view to the
-    Closed-Loop Simulation / threshold-deployment view.
-
-    Reuses `_validate_band_core` (identical pooled-detail + glmer + stim-stability machinery as the
-    click-validate panel), so the committed band is defined byte-identically to the scan dot the
-    user clicked. Phase A populates identity, label provenance, device-control mapping, evidence,
-    and pool-bias provenance; the threshold (`threshold_lsb`), the unit-conversion FYI
-    (`conversion_check`), and the labeled time-series handoff (`timeseries_ref`) are filled by the
-    deployment view in later phases and ship here as honest nulls/stubs.
-
-    Output: {available: True, band_candidate: {...§6 schema...}, verdict, glmer, stim} OR
-    {available: False, reason: ...}.
-    """
-    core = _validate_band_core(request_data)
-    if not core.get("available"):
-        return core
-
-    def _ff(x):
-        try:
-            return float(x) if x is not None and np.isfinite(x) else None
-        except (TypeError, ValueError):
-            return None
-
-    channel = core["channel"]
-    center_hz = core["center_hz"]
-    band_width_hz = core["band_width_hz"]
-    glmer = core["glmer"]
-    hetero = core["stim"]
-    verdict = core["verdict"]
-
-    # ---- identity ----
-    fmt = analytics.format_channel(channel)
-    hemisphere = fmt.get("hemisphere") or ("Left" if "LEFT" in str(channel).upper()
-                                           else "Right" if "RIGHT" in str(channel).upper() else None)
-    # Percept FFT-bin snap: Dual-threshold uses a 256-pt FFT on 250 Hz -> 250/256 ≈ 0.977 Hz bins;
-    # Single uses 64-pt -> 250/64 ≈ 3.906 Hz bins. We snap the center to the Dual grid (the closed-
-    # loop default) and note the assumption so the sim module can re-snap for Single if needed.
-    fs = 250.0
-    bin_dual = fs / 256.0
-    snapped_center = round(center_hz / bin_dual) * bin_dual
-    snapped_note = (f"snapped to Dual-threshold 256-pt FFT grid ({bin_dual:.3f} Hz bins); "
-                    f"{center_hz:.2f} → {snapped_center:.2f} Hz. Re-snap to 64-pt "
-                    f"({fs/64.0:.3f} Hz) for Single-threshold mode.")
-
-    # ---- device-control mapping ----
-    adaptive_valid = bool(ADAPTIVE_LO_HZ <= center_hz <= ADAPTIVE_HI_HZ)
-    adaptive_reason = ("within the 8–30 Hz adaptive sensing range" if adaptive_valid
-                       else (f"{center_hz:.1f} Hz outside the 8–30 Hz adaptive range — "
-                             f"{'below the 8 Hz floor' if center_hz < ADAPTIVE_LO_HZ else 'above the 30 Hz ceiling'}"))
-    odds = glmer.get("odds_ratio")
-    coef = glmer.get("coef")
-    # Polarity = sign of corr(band power, pain). OR>1 (or coef>0) => higher power tracks higher
-    # pain => positive; OR<1 => negative. Fall back to coef sign when OR is unavailable.
-    polarity = None
-    if isinstance(odds, (int, float)) and np.isfinite(odds):
-        polarity = "positive" if odds > 1.0 else "negative"
-    elif isinstance(coef, (int, float)) and np.isfinite(coef):
-        polarity = "positive" if coef > 0 else "negative"
-    suggested_mode, mode_reason = _suggested_percept_mode(polarity, adaptive_valid)
-
-    # ---- credible-CI flag (v2 rule) ----
-    credible_ci, ci_width = _band_credible_ci(glmer.get("or_lo"), glmer.get("or_hi"))
-
-    # ---- label provenance ----
-    pm = core["pm"]
-    pro_vals = np.asarray(pm[1], dtype=float) if pm is not None else np.array([])
-    pl = analytics._binarize_labels(pro_vals, strategy=core["label_strategy"],
-                                    low_pct=core["low_pct"], high_pct=core["high_pct"])
-    n_labeled = int(np.isfinite(pl).sum())
-    n_pos = int(np.nansum(pl == 1.0))
-    n_neg = int(np.nansum(pl == 0.0))
-    metric_label = next((m["label"] for m in BIOMARKER_METRICS
-                         if m["key"] == core["label_metric"]), core["label_metric"])
-
-    # ---- evidence: per-era ORs + stim eras from the LRT result ----
-    or_by_era = hetero.get("or_by_era") if hetero.get("available") else None
-    era_counts = hetero.get("era_counts") if hetero.get("available") else None
-    stim_thresholds = hetero.get("thresholds_mA") if hetero.get("available") else None
-
-    band_candidate = {
-        # ---- identity (the atomic device unit) ----
-        "hemisphere": hemisphere,
-        "contact": fmt.get("raw") or str(channel),
-        "contact_label": fmt.get("short") or fmt.get("label"),
-        "center_freq_hz": _ff(center_hz),
-        "bandwidth_hz": _ff(band_width_hz),
-        "band_lo_hz": _ff(center_hz - band_width_hz / 2.0),
-        "band_hi_hz": _ff(center_hz + band_width_hz / 2.0),
-        "snapped_center_freq_hz": _ff(snapped_center),
-        "snapped_bin_note": snapped_note,
-
-        # ---- label provenance (REDCap PRO, NOT events) ----
-        "label": {
-            "pro_metric": core["label_metric"],
-            "pro_metric_label": metric_label,
-            "is_composite": core["is_composite"],
-            "composite_parts": core["composite_parts"],
-            "binarization": {
-                "strategy": core["label_strategy"],
-                "pain_cutoff": None,
-                "low_pct": _ff(core["low_pct"]),
-                "high_pct": _ff(core["high_pct"]),
-                "daily_broadcast": False,
-            },
-            "join": "pro_first" if core["match_direction"] == "pro_first" else core["match_direction"],
-            "match_tolerance_min": _ff(core["match_tol_min"]),
-            "n_labeled_days": n_labeled,
-            "n_pos_days": n_pos,
-            "n_neg_days": n_neg,
-        },
-
-        # ---- device-control mapping ----
-        "adaptive_valid": adaptive_valid,
-        "adaptive_valid_reason": adaptive_reason,
-        "polarity": polarity,
-        "suggested_mode": suggested_mode,
-        "suggested_mode_reason": mode_reason,
-
-        # ---- threshold, in DEPLOYMENT-STREAM LSB (set by Phase B/C deployment view) ----
-        "threshold_lsb": {"upper": None, "lower": None},
-        "threshold_basis": "not yet set — assign in the threshold-deployment view (Phase B cut-point + Phase C LSB anchoring)",
-
-        # ---- unit sanity check (FYI, confidence-rated; §4 — filled by Phase C) ----
-        "conversion_check": {
-            "ratio_uV2_per_lsb": None,
-            "n_overlap_sessions": 0,
-            "scatter_cv": None,
-            "rule_of_thumb": LSB_RULE_OF_THUMB,
-            "fold_off_rule": None,
-            "diverges": None,
-            "confidence": "low",
-            "note": "empirical LSB↔µV² ratio measured in Phase C from concurrent streaming-TD + device-LSB at ~0 mA",
-        },
-
-        # ---- evidence (cluster-robust mixed-effects; stim-context aware) ----
-        "evidence": {
-            "discovery_method": "glmer logistic (lme4 via pymer4), pain_high ~ band_power + (1|weekly_era)",
-            "odds_ratio": _ff(odds),
-            "or_lo": _ff(glmer.get("or_lo")),
-            "or_hi": _ff(glmer.get("or_hi")),
-            "ci_width_or": _ff(ci_width),
-            "credible_ci": credible_ci,
-            "p_glmer": _ff(glmer.get("p")),
-            "z_glmer": _ff(glmer.get("z")),
-            "coef": _ff(coef),
-            "n_matched_samples": glmer.get("n"),
-            "n_clusters": glmer.get("n_clusters"),
-            "separation": glmer.get("separation"),
-            "singular": glmer.get("singular"),
-            "stim_stable": (hetero.get("stim_stable") if hetero.get("available") else None),
-            "stim_lrt_p": _ff(hetero.get("lrt_p")) if hetero.get("available") else None,
-            "or_by_era": or_by_era,
-            "per_stream_n": {"matched_total": glmer.get("n")},
-            "mixed_model_effect": _ff(coef),
-            "stim_off_only": False,
-        },
-
-        # ---- confounds / honesty about the pool (§5) ----
-        "provenance": {
-            "selection_biased": True,
-            "selection_note": ("candidate pool is intuition-narrowed and non-uniform by construction "
-                               "(e.g. right 0-3 ~26 Hz over-sampled by design); cross-candidate "
-                               "ranking must treat the pool as biased"),
-            "stim_context_eras": era_counts,        # OFF/LOW/HIGH sample counts (full montage/freq/mA reconstruction is a §5 TODO)
-            "stim_era_thresholds_mA": stim_thresholds,
-            "stim_era_heterogeneity_tested": bool(hetero.get("available")),
-            "match_direction": core["match_direction"],
-        },
-
-        # ---- handoff to the Closed-Loop Simulation module (set when the labeled series is exported) ----
-        "timeseries_ref": None,
-
-        # ---- top-level verdict echo (for the sign-off card) ----
-        "verdict": verdict,
-        "schema_version": "bandcandidate_v1",
-    }
-
-    return {
-        "available": True,
-        "band_candidate": band_candidate,
-        "verdict": verdict,
-        "glmer": glmer,
-        "stim": hetero,
-    }
+# `build_band_candidate` stood here until 2026-09-12: the server half of the BandCandidate
+# contract (DESIGN_biomarker_pipeline_v2.md section 6), reached only through the /emitBandCandidate
+# route, which no page ever called. The Closed-Loop Deployment page commits a candidate from the
+# stored grid on the browser side (decision 122). Route, view and function deleted on the PI's
+# decision (review finding B12). The helpers it shared with `deployment_summary` -- the adaptive
+# range constants, `_band_credible_ci`, `_suggested_percept_mode`, `_ramp_guidance` and
+# `_threshold_mode_block` -- stay, because `deployment_summary` still reads them.
 
 
 def _threshold_mode_block(request_data, center_hz, threshold_lsb):
@@ -6343,7 +6099,8 @@ def band_deployment_roc(request_data):
     PRECEDE a rating), unlike the discovery scan's `pro_first` — the frontend exposes a toggle to
     switch back to `pro_first` for the full-pool AUC. Pass `MatchDirection` to override.
 
-    Inputs: same as /emitBandCandidate, plus optional NBoot (bootstrap replicates, default 500).
+    Inputs: ParticipantId, Channel, CenterHz and the scan's own matching and binarization keys
+    (the ones `_validate_band_core` reads), plus optional NBoot (bootstrap replicates, default 500).
     Output: {available, channel, center_hz, band_lo, band_hi, label_metric, match_direction,
              roc:{auc, auc_lo, auc_hi, fpr[], tpr[], thr[], operating_point, ...}} or
             {available: False, reason: ...}.
@@ -7130,7 +6887,7 @@ def deployment_summary(request_data):
             power = analytics.auc_power(roc["auc"], n_pos, n_clu - n_pos, auc_lo=_gate_auc_lo,
                                         design_effect=roc.get("deff", 1.0))
 
-    # Device-control mapping (same as build_band_candidate).
+    # Device-control mapping (the adaptive-range gate, the polarity and the suggested mode).
     or_val = g.get("odds_ratio"); coef = g.get("coef")
     if isinstance(or_val, (int, float)) and np.isfinite(or_val) and or_val > 0:
         polarity = "positive" if or_val > 1 else "negative"
@@ -7783,7 +7540,11 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
                                               "n_td_assigned", "n_td_used")
                          if kk in (v or {})}
                 for k, v in (stats or {}).items()}
-            sweep["figures"] = analytics.band_time_sweep_figures(sweep)
+            # No `figures` entry: the server-drawn heat-map descriptions were built into every
+            # response and stored, and drawn by nothing (the page draws its own heat maps from
+            # the grids, BiomarkerHeatmapGrids.js). Deleted on the PI's decision of 2026-09-12
+            # (review finding B8) with `_BAND_SWEEP_RULE_VERSION` bumped so no stored entry
+            # carrying the old field is served as if it were this shape.
             out[raw_ch] = sweep
         except Exception as e:
             _log.warning("Biomarkers: band/length-of-signal sweep failed for %s (%s)",
@@ -8277,7 +8038,7 @@ sweep_settings_tag = sweep_settings.sweep_settings_tag                       # r
 sweep_settings_tag_from_request = sweep_settings.sweep_settings_tag_from_request
 
 
-_BAND_SWEEP_RULE_VERSION = "v10_ceilings_keyed_on_participant"
+_BAND_SWEEP_RULE_VERSION = "v11_no_server_figures"
 
 #: Response fields that are timings of the run that produced them, not results. They are not
 #: compared when a stored response is checked against a fresh one, and a served response keeps the

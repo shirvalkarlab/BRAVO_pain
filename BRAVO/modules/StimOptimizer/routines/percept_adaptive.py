@@ -514,29 +514,11 @@ MODES = {
                            "(e.g. gamma)"),
 }
 
-#: Fraction used by the device to derive a single threshold from two captured LFP values
-#: (white paper p. 15): "The generated single threshold value is based on 75% of the difference
-#: between the two captured values", i.e. threshold = frac * (upper - lower) + lower.
-SINGLE_THRESHOLD_FRACTION = 0.75
-
-
-def derive_single_threshold(lfp_lower, lfp_upper, frac=SINGLE_THRESHOLD_FRACTION):
-    """Reproduce the device's single-threshold calculation: ``frac * (upper - lower) + lower``.
-
-    This is NOT a free parameter of ours — it is what the device will compute from the two captured
-    LFP values, so any plan that proposes a single-threshold policy must predict the threshold this
-    way rather than choosing one. Raises on inverted captures, which the device also refuses: "it is
-    possible that the thresholds gathered by the system are either too close together or are
-    inverted. In this case, the A610 application will prompt the user to either ... recapture ... or
-    select the manual adjustment option." (p. 15)
-    """
-    lo, hi = float(lfp_lower), float(lfp_upper)
-    if not (hi > lo):
-        raise ValueError(
-            f"inverted or degenerate LFP captures (lower={lo!r}, upper={hi!r}). The device refuses "
-            "this and prompts for recapture or manual adjustment; a derived threshold from an "
-            "inverted pair is meaningless.")
-    return frac * (hi - lo) + lo
+# The device derives a single threshold from two captured LFP values as 75% of the difference plus
+# the lower value (white paper p. 15), and refuses inverted captures. A helper that reproduced that
+# arithmetic (`derive_single_threshold`, with `SINGLE_THRESHOLD_FRACTION = 0.75`) was reached by
+# nothing in the running platform and was deleted on the PI's decision of 2026-09-12 (review S14);
+# the device fact is kept here so nobody re-derives it as a free parameter.
 
 
 def band_is_adaptive_capable(center_hz, band_width_hz):

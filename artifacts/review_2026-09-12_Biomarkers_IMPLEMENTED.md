@@ -296,10 +296,12 @@ version bump of B3 made today's first sweep request a fresh build.
 
 ## Not done, and why
 
-- **B8** (analytics computed and shipped that no page reads): not touched. Deleting a
-  computed-but-unread block is the PI's call (CLAUDE.md §2 principle 4); left for him.
+- **B8** (analytics computed and shipped that no page reads): not touched in this pass. Deleting a
+  computed-but-unread block is the PI's call (CLAUDE.md §2 principle 4); left for him. **He
+  decided the same evening: deleted -- see the section "B8 and B12, done on the PI's decision of
+  2026-09-12" at the end of this file.**
 - **B12** (two routed endpoints no page calls): flagged in the review, not for deletion; left for
-  him.
+  him. **Same decision, same evening: deleted -- see the section at the end of this file.**
 - **B4's timing** after a forced legacy warm: not measured, for the reason in B4.
 - **The rows-set cache and the per-recording files were not cleared or rebuilt by hand**: the
   migration in B5 handled the voltage-trace files in 1.03 s on the first reassembly, and the
@@ -310,3 +312,147 @@ version bump of B3 made today's first sweep request a fresh build.
 The page's `cache.spectrum_builder` block (B6) reads 0 / 0 / 832 / 0 today: the 832 is every
 recording whose file pre-dates the counters. It will fall as recordings are re-Welched for a real
 reason (a moved in-coverage rating, a new upload); it is not an error.
+
+---
+
+## B8 and B12, done on the PI's decision of 2026-09-12
+
+The two "not done" items above were left for the PI because deleting something built and unread
+is his call. On the evening of 2026-09-12 he decided: delete, do not hide behind a flag. Both are
+done. Nothing on any page changed, and the numbers below prove it.
+
+### What was deleted
+
+**B8, the analytics computed on every Recompute that no panel read** (module: Biomarkers; page:
+the Biomarkers page, whose analytics block is built by `_compute_analytics` in
+`BRAVO/modules/Biomarkers/bravo_service.py`).
+
+- Four tasks of the time-domain analytics block, checked by grep of `Client/src` before deleting:
+  the page reads only `sliding_corr_spectrum` (`BiomarkerAnalytics.js` line 460). Gone:
+  `corr_spectrum` (the static correlation-against-frequency curve with its peaks), `psd_spectra`
+  (the mean PSD per channel split by high and low pain), `matched_sample_counts` (the browser
+  derives the same counts itself in `binarizationModel.js` and never read the server's copy) and
+  `pool_meta`. With them the pooled-detail build inside that function, which fed only the last
+  two; the `scan_src` assignment and its stale comment; and the `det["times"]` injection, which
+  fed only `corr_spectrum`. The pooled detail is still built where it is actually read, in
+  `_validate_band_core` (the stability column). The matrix build in `run_for_participant` stays,
+  because the page's `cache.spectrum_builder` counters (B6) read it and the per-recording spectra
+  must stay current; its comment now says so.
+- The server-drawn heat-map descriptions on the band-sweep response (`figures` on every contact
+  pair, built by `band_time_sweep_figures` and kept in the store). Grep of `Client/src`: the only
+  reader is `BandTimeSweepPanel.js`, which is imported by nothing (decision 80); the page draws its
+  own heat maps from the grids. `_BAND_SWEEP_RULE_VERSION` bumped from
+  `v10_ceilings_keyed_on_participant` to `v11_no_server_figures`, so a stored entry carrying the
+  old field is never served as if it were the new shape.
+- The functions themselves, in `BRAVO/modules/Biomarkers/routines/analytics.py`, each with zero
+  callers once the tasks went: `corr_spectrum` (123 lines), `matched_sample_counts` (38),
+  `psd_spectra` (41), `band_time_sweep_figures` (112), and `psd_spectrogram` (25), which was of the
+  same family and already had no caller (its own comment said it had been dropped from the
+  response). 340 lines out, 16 lines of dated notes in where they stood. `_binarize_labels`, which
+  `matched_sample_counts` called, stays: 9 other callers.
+
+**B12, the two routed endpoints no page called** (modules: Biomarkers and the API layer; on no
+page -- grep of `Client/src` finds neither route).
+
+- `BRAVO/Server/APIs/urls.py`: the routes `queryBandValidation` and `emitBandCandidate`.
+- `BRAVO/Server/APIs/DataAnalysis.py`: the view classes `QueryBandValidation` and
+  `EmitBandCandidate`, 97 lines; two docstrings of kept views that said "same as
+  /emitBandCandidate" now name the inputs.
+- `BRAVO/modules/Biomarkers/bravo_service.py`: `validate_band_for_participant` (48 lines) and
+  `build_band_candidate` (186 lines). `_validate_band_core` STAYS: its live readers, checked by
+  grep, are `raw_stability_result_for_point` (the stability column), `band_deployment_roc`,
+  `band_lsb_and_power`, `band_deployment_roc_by_era` and `deployment_summary`. The helpers the
+  deleted `build_band_candidate` shared with `deployment_summary` (the adaptive range constants,
+  `_band_credible_ci`, `_suggested_percept_mode`, `_ramp_guidance`, `_threshold_mode_block`, and
+  the deliberately kept `LSB_RULE_OF_THUMB`) stay, because `deployment_summary` reads them.
+- `DESIGN_biomarker_pipeline_v2.md` section 6 does not name `build_band_candidate`, so the
+  condition for a note was not met; a five-line dated note was added at the top of the section
+  anyway, so a reader looking for the code that emits that schema learns it was removed and that
+  the Closed-Loop page builds the candidate on the browser side (decision 122). The schema text is
+  unchanged.
+
+**Tests.** Three deleted, because each tested only a deleted function:
+`test_corr_spectrum_enforces_50hz_cap` and `test_matched_sample_counts_reports_high_low_and_offset`
+(`test_analytics.py`), and `test_colour_scales_are_centred_on_the_right_no_relationship_value`
+(`test_band_time_sweep.py`, which pinned the figures' colour scales -- the page's own heat maps
+take theirs from `binarizationModel.diverging`, decision 122). One split rather than weakened:
+`test_the_optimism_note_is_in_the_panel_not_only_in_a_caption` checked the notes (which the page
+shows) and the figure footers (gone); it is now
+`test_the_optimism_note_and_the_half_note_are_in_the_first_notes` and checks only the notes. One
+trimmed: `test_an_empty_input_is_a_reason_not_a_crash` lost its one figure assertion. The store
+test's fake sweep no longer carries a `figures` key, the AST audit's allow-list no longer names
+`matched_sample_counts`, and `test_band_candidate.py`'s header no longer says the deleted endpoint
+exercises the deleted function.
+
+**Line count**, `git diff --numstat` over the eight code files: 107 insertions, 832 deletions,
+net 725 lines fewer.
+
+### Proof that nothing on any page changed (rule 4, field for field, never a tolerance)
+
+Captured through the bridge on RCS08 before any edit and again after all of them
+(`_agent_bridge/_probe_tl/probe_b8_capture.py`, compared by `probe_b8_compare.py`). Both sweep
+captures were built fresh, not served from the store (`served_from_store` False both times).
+
+- **The Biomarkers page response** (`run_for_participant`, source "both"): **1,033,084 fields
+  before, 1,025,907 after, 1,025,907 in common, 0 differing** (not even a timing field moved),
+  **0 present only after, 7,177 present only before -- every one under the four removed blocks**:
+  `analytics.timedomain.corr_spectrum` 5,761, `analytics.timedomain.psd_spectra` 1,332,
+  `analytics.timedomain.pool_meta` 76, `analytics.timedomain.matched_sample_counts` 8; 0 outside
+  them. `analytics.timedomain` now holds `sliding_corr_spectrum` alone. Response size as the page
+  receives it: **18,870,630 bytes before, 18,753,693 after** (116,937 bytes fewer).
+- **The band-sweep response**, all six contact pairs: **36,528 fields before, 27,252 after,
+  27,252 in common, 23 differing, 0 present only after, 9,276 present only before -- all 9,276
+  under `band_time_sweep.<contact>.figures`** (1,546 per contact pair), 0 outside. The 23 that
+  differ are all timings or store keys: `matched_seconds`, `total_seconds`, `wall_seconds`,
+  `logistic_fit_crosscheck.seconds` (one per contact pair), the three `store_keys` entries
+  (`correlation`, `discrimination`, `response`) and `sweep_key` -- the keys change because the
+  rule version is in them. No scientific value moved. Size: **1,198,999 bytes before, 737,444
+  after** (461,555 bytes fewer, 38.5 percent of the response was the unread figures).
+- **One contact pair, ZERO_THREE_RIGHT (R 0⁻3⁺)**: 6,077 fields before, 4,531 after, 1,546 only
+  before (all under `figures`), 3 differing (`matched_seconds`, `total_seconds`,
+  `logistic_fit_crosscheck.seconds`), 0 only after.
+- No speed claim: the single-run timings (page 40.3 s before, 39.4 s after; sweep 9.2 s and
+  9.1 s) were not taken in alternating rounds.
+
+### The live server
+
+Workers reloaded with `kill -HUP 1` (four fresh workers, 14-16 s old when checked). A POST to
+each removed route on gunicorn itself now gets 405 (no API view; Django's catch-all for the page
+bundle takes GET only) where the kept routes `queryBiomarkerAnalysis` and `queryDeploymentROC` get
+403 (the login check) -- so the two routes are gone from the running server, not only from the
+file. The edited modules and the URL table import cleanly in the container.
+
+### The suites (both re-run, `sh _agent_bridge/run_both_suites.sh` through the bridge)
+
+```
+host:      995 passed, 2 skipped, 35 failed, 0 errors  [parallel: 35 failed, 994 passed, 2 skipped in 10.05s | store, serial: 1 passed, 1031 deselected in 0.39s]
+container: PASS=629 FAIL=1 LIVE_SKIPPED=6
+```
+
+**Container arithmetic:** 629 passed + 1 failed = 630 tests ran = 633 (baseline) minus the 3
+tests deleted above. The count fell by exactly the deletions. **The one container failure and all
+35 host failures are not in any file this work touched:** the container failure is
+`DecodeCommon/tests/test_one_object_under_both_spellings.py::test_a_module_level_switch_is_one_switch`,
+which reads `StimOptimizer.routines.plots.USE_STREAM_LIMIT_ANCHORS`, a switch the other builder is
+removing in the same working tree at the time of this run (their uncommitted diff touches
+`StimOptimizer/routines/acquisition.py`, `lfp_response.py`, `percept_adaptive.py` and
+`within_visit.py`); the 35 host failures are 34 in `StimOptimizer/tests/` (`test_review_2026_09_12_limit_anchors.py` 10,
+`test_service_store.py` 14, `test_two_stage_adaptive_envelope.py` 4, `test_two_stage_wiring.py`
+6) plus that same DecodeCommon test. The host suite does not run Biomarkers tests at all, so this
+work cannot move its count; those failures are the other builder's in-flight state and must be
+re-run once their edits settle. The four Biomarkers test files this work touched, run on their
+own in the container afterwards: `test_analytics` 132 passed, 0 failed, 6 live skipped;
+`test_band_time_sweep` 18 passed, 0 failed; `test_band_sweep_store` 7 passed, 0 failed;
+`test_band_candidate` 8 passed, 0 failed.
+
+### Not changed, and why
+
+- Three comments in `Client/src` (`Biomarkers/index.js` line 471, `BinarizationPreview.js` line
+  10, `binarizationModel.js` line 11) still say the browser's count "is verified identical to the
+  backend `matched_sample_counts`". They are comments in code that reads nothing from the server;
+  correcting them would require a bundle rebuild for no change in what is served, so they were
+  left for the next frontend change to pick up.
+- The `_compute_analytics` signature keeps the seven parameters it no longer reads
+  (`match_tolerance_min`, `psd_matrix`, `pro_match`, `aggregate`, `max_per_rating`,
+  `refractory_min`, `match_direction`), so the one call site is unchanged; the comment inside says
+  so.

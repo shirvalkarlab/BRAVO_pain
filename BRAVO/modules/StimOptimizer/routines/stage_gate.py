@@ -808,19 +808,49 @@ def check_adaptive_band(frozen, *, lfp=None, band_centers=DEFAULT_BAND_CENTERS_H
         f"stimulation amplitude, by the readiness screen's own rule: {sentence}", evidence=ev)
 
 
+def _ceiling_by_side(ceiling_mA, hemispheres):
+    """``(scalar_ceiling, by_side)`` from either one number or a per-side mapping.
+
+    ``ceiling_mA`` is a float (the module hard limit, the default) or a mapping ``{hemisphere:
+    (ceiling_mA, provenance)}`` / ``{hemisphere: ceiling_mA}`` from
+    ``safety_ceiling.ceilings_by_hemisphere`` (2026-09-12). ``scalar_ceiling`` is the smallest of
+    the sides' ceilings, for the one number the page's condition line prints; ``by_side`` maps each
+    hemisphere to ``{"ceiling_mA", "provenance"}`` and is ``None`` when a plain number was given.
+    """
+    if isinstance(ceiling_mA, dict):
+        by_side = {}
+        for h in hemispheres:
+            v = ceiling_mA.get(h)
+            if v is None:
+                v = (float(AMP_CEILING_MA), "module hard limit, no ceiling given for this side")
+            if isinstance(v, (tuple, list)):
+                by_side[h] = dict(ceiling_mA=float(v[0]), provenance=str(v[1]))
+            else:
+                by_side[h] = dict(ceiling_mA=float(v), provenance="caller-supplied")
+        scalar = min(v["ceiling_mA"] for v in by_side.values()) if by_side else float(AMP_CEILING_MA)
+        return scalar, by_side
+    return float(ceiling_mA), None
+
+
 def check_amplitude_limits(frozen, *, amp_limits=None, ceiling_mA=AMP_CEILING_MA) -> GateCondition:
     """Adaptive amplitude limits must sit under the ceiling and inside the delivered envelope.
 
     ``amp_limits`` maps hemisphere to ``(min_mA, max_mA)``. When it is omitted the DELIVERED
     ENVELOPE is used, which passes the envelope test by construction; the detail string says so, so
     a reader is never left thinking a proposal was checked when a default was.
+
+    ``ceiling_mA`` is one number or a per-side mapping (see :func:`_ceiling_by_side`); with the
+    mapping each hemisphere's upper limit is checked against ITS OWN ceiling and the evidence
+    carries ``ceiling_by_side`` with the provenance of each.
     """
     problems, checked = [], {}
     if not frozen.settings:
         return GateCondition("amplitude_limits_inside_envelope_and_under_ceiling", None,
                              "no frozen setting to check: Stage 1 produced no hemisphere result")
+    ceiling_scalar, by_side = _ceiling_by_side(ceiling_mA, [s.hemisphere for s in frozen.settings])
     defaulted = []
     for s in frozen.settings:
+        ceil_h = by_side[s.hemisphere]["ceiling_mA"] if by_side else ceiling_scalar
         lo_env, hi_env = float(s.amp_delivered_min_mA), float(s.amp_delivered_max_mA)
         if amp_limits is not None and s.hemisphere in amp_limits:
             lo, hi = (float(v) for v in amp_limits[s.hemisphere])
@@ -836,9 +866,9 @@ def check_amplitude_limits(frozen, *, amp_limits=None, ceiling_mA=AMP_CEILING_MA
         if not hi > lo:
             problems.append(f"{s.hemisphere}: limits must satisfy max > min (got {lo:g}, {hi:g}); "
                             "the device needs a range to move within")
-        if hi > float(ceiling_mA) + 1e-9:
+        if hi > ceil_h + 1e-9:
             problems.append(f"{s.hemisphere}: upper limit {hi:g} mA exceeds the declared ceiling "
-                            f"of {float(ceiling_mA):g} mA")
+                            f"of {ceil_h:g} mA")
         if np.isfinite(hi_env) and hi > hi_env + 1e-9:
             problems.append(
                 f"{s.hemisphere}: upper limit {hi:g} mA is above the highest amplitude ever "
@@ -858,18 +888,19 @@ def check_amplitude_limits(frozen, *, amp_limits=None, ceiling_mA=AMP_CEILING_MA
             "satisfied by construction rather than by a check on a proposal.")
     # `defaulted` is in the evidence as well as in the sentence (2026-09-12), so a page can mark
     # a limit that was never proposed without reading the sentence for the word.
+    evidence = dict(checked=checked, ceiling_mA=float(ceiling_scalar), defaulted=sorted(defaulted))
+    if by_side is not None:
+        evidence["ceiling_by_side"] = by_side
     if problems:
         return GateCondition("amplitude_limits_inside_envelope_and_under_ceiling", False,
-                             "; ".join(problems) + note,
-                             evidence=dict(checked=checked, ceiling_mA=float(ceiling_mA),
-                                           defaulted=sorted(defaulted)))
+                             "; ".join(problems) + note, evidence=evidence)
     return GateCondition(
         "amplitude_limits_inside_envelope_and_under_ceiling", True,
         "adaptive amplitude limits sit inside the delivered envelope and under the "
-        f"{float(ceiling_mA):g} mA ceiling on every hemisphere ("
+        f"{float(ceiling_scalar):g} mA ceiling on every hemisphere ("
         + "; ".join(f"{h} {v['amp_min_mA']:g}-{v['amp_max_mA']:g} mA"
                     for h, v in sorted(checked.items())) + ")." + note,
-        evidence=dict(checked=checked, ceiling_mA=float(ceiling_mA), defaulted=sorted(defaulted)))
+        evidence=evidence)
 
 
 # ---------------------------------------------------------------------------------------------

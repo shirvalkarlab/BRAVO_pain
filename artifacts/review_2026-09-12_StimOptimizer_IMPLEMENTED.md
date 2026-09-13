@@ -405,3 +405,194 @@ set through the new argument gives the same fit, field for field, as handing not
 
 The gunicorn workers were reloaded (`kill -HUP 1`) after the last edit, so the live server runs
 this code; the first page load rebuilt the settings stream under its new rule version.
+
+---
+
+## S14 and item 3, done on the PI's decision of 2026-09-12
+
+**What was decided.** On the evening of 2026-09-12 the PI said to delete the Stim Optimizer code
+that nothing reaches (review S14, "delete item 7 as listed"), and, for item 3 of the "Make
+Closed-Loop Work" session, that the safety model's ceiling is a current HE STATES per side, not a
+number read out of the device's programmed limits. Both are built, proven on RCS08, and the
+suites are green. Nothing here is on the Closed-Loop Deployment page; everything is on the **Stim
+Optimizer page**, and the sections are named below.
+
+**Words used.** "Safety model": the model of side-effect severity whose "safe set" is the grid
+cells (one stimulation rate at one current) the search may propose. "Reachable ceiling" (printed
+"safe ceiling" on the arm cards): the highest current a ramp from zero reaches on every rate
+without crossing a cell the safety model rejects. "Stated ceiling": the current above which the PI
+says a side is not acceptable; new today. "Tolerated setting": a rate-and-current the patient
+held for at least 72 hours with that side's current above zero.
+
+### A. The unused code is deleted (S14)
+
+Each name on the review's list was searched for again across `modules/` and `Server/` (tests and
+the scratch area excluded) before anything was removed, because today's other work added
+callers in several places. **Two names on the list now HAVE a caller and were kept:**
+`lfp_response.device_band_power` (called by `stage_gate.py`, the gate's band-power check) and
+`percept_adaptive.validate_policy` (called by `stage2_closedloop.py`, which the two-stage path
+reaches since decision 137). `within_visit.ramp_windows_from_amplitude` was kept as instructed
+(decision 144's margin is its reason to exist).
+
+Deleted, with line counts from `git diff --stat`:
+
+- **Four whole modules, 3,696 lines:** `routines/schedule.py` (211; the blank clinic sheet),
+  `routines/session_analysis.py` (998; the analysis of a filled-in sheet),
+  `routines/safety_ordinal.py` (917; the ordinal severity model) and
+  `routines/surrogate_torch.py` (1,570; the PyTorch/BoTorch twin of the surrogate). **Their four
+  test files, 2,128 lines** (`test_schedule.py` 111, `test_session_analysis.py` 755,
+  `test_safety_ordinal.py` 413, `test_surrogate_torch.py` 849).
+- **Seven functions inside kept files:** `lfp_response.span_needed_for_separation`,
+  `expected_separation_d` and `within_arm_sd_from_result` (121 lines net; the reasoning about why
+  the separation floor does not scale with the current span is kept above where they were);
+  `acquisition.lower_confidence_bound` and `select_batch_between_visit` (61 lines net);
+  `percept_adaptive.derive_single_threshold` with its 0.75 constant (18 lines net; the device
+  fact is kept as a comment); `within_visit.band_cluster_permutation` with its two private helpers
+  and its threshold constant (247 lines net; a note stands where the block was). None of the
+  seven had a test of its own left to delete.
+- **Tests split rather than weakened:** `test_safety_and_evidence.py` lost its 6 tests of
+  `schedule.safety_filter` and keeps its other 42; the 14-test anchors file of review S8 became
+  `test_stream_limit_kind.py`, keeping the 4 tests of the stream's own "is this limit a patient
+  limit" column (a fact about the record that stays on the stream) and dropping the 10 that
+  tested the deleted builder and plumbing.
+- **The PyTorch backend option:** there was no request key that could select it -- the only
+  `Backend` key on the request chooses the figure renderer (`plotly` or `none`) -- so nothing had
+  to be refused; the response's `two_stage.backend` sentence now says the PyTorch backend was
+  deleted on 2026-09-12 and no request can select it. `BOTORCH_REFACTOR.md` carries a note at the
+  top saying the code it describes is gone.
+
+**Proof that A changes nothing but the key.** Genuinely fresh builds through the scratch store
+override, before any edit and after A alone:
+
+- without `TwoStage`: **8,738 fields before, 8,738 after, 8,738 in common, 0 only-before, 0
+  only-after, 1 non-timing difference: `store.response_key`** (the key hashes every file in the
+  package, so deleting files changes it; a stored response rebuilds once).
+- with `TwoStage: true`: **10,324 / 10,324 / 10,324 in common, 0 / 0, 2 non-timing differences:
+  the key and the `two_stage.backend` sentence** reworded above.
+
+### B. The safety model's ceiling is the current the PI states (item 3)
+
+**Where it lives.** `BRAVO/modules/StimOptimizer/safety_ceiling.py`, and the ONE place to change a
+number is its table:
+
+```
+PI_STATED_CEILING_MA = {"2e3c75c00d7f4f37b53a048d195f11da": {"Left": 5.0, "Right": 5.0}}
+```
+
+with the provenance "stated by PI (2026-09-02 hard limit, objective.AMP_HARD_LIMIT_MA; confirmed
+as the safety ceiling 2026-09-12)". 5.0 mA is the hard limit he set on 2026-09-02 and the only
+ceiling he has stated; whether a lower per-side value is wanted is being put to him, and editing
+that table is the whole change. A participant with no row falls back to the module hard limit
+with the provenance "module hard limit, no PI-stated ceiling for this participant"; a stated
+value above the hard limit is clamped to it and the provenance says so; a non-positive value is
+refused. The table's file is inside the package the response key hashes, so a changed number is
+never served from a copy computed under the old one.
+
+**What the safety model is now told.** Severity 3 ("not acceptable") at the stated ceiling, once
+at every stimulation rate on the search grid (12 anchors, a flat line across the rate axis), and
+severity 0 at every tolerated setting. **The twelve typed numbers of 2026-08 (`LIMIT_ANCHORS`),
+the stream-derived anchors behind the switch (`limit_anchors_from_stream`,
+`USE_STREAM_LIMIT_ANCHORS`) and their tests are deleted** -- the PI chose neither input.
+
+**One seed builder for both fitters.** The flat fit (`plots.build_context`) and the two-stage
+search's Stage 1 (`run_stage1`) now call the same function (`safety_ceiling.safety_seed`). Until
+today they read different tolerated sets: Stage 1 also counted epochs where THIS side was at 0 mA
+as "tolerated at zero current", the flat fit did not, so one side under one set of anchors had
+two safe sets (S8's report recorded flat Left 228 against Stage 1 Left 540). The shared rule is
+the flat fit's: a side at 0 mA is a different therapeutic state, not the low end of its dose axis
+(OBJECTIVE_SPEC amendment 2026-08-29), so it says nothing about what that side tolerates. On
+RCS08 the two fitters now agree per side (below).
+
+**The gate reads the same source.** The two-stage plan's "closed-loop current limits inside the
+delivered range and under the ceiling" check is handed the same per-side ceilings; each side's
+upper limit is judged against its own, and the evidence carries `ceiling_by_side` with the
+provenance. A page from before today that carries only the one number still renders.
+
+**On screen (Stim Optimizer page).** The arm cards ("safe ceiling N mA" now carries a hover text
+naming the stated ceiling and its provenance -- `ArmGainStrip.js`); the queue table's `safe`
+column; the blockers list; and, in the "Two-stage plan" card, the gate's ceiling line, which
+reads "ceiling L 5.0 mA · R 5.0 mA" with the provenance on hover (`ClosedLoopChecks.js`). Source
+only; the orchestrator rebuilds the bundle, and nothing was watched in a browser.
+
+### Per arm on RCS08, before (the hard-coded twelve, switch off) and after (the stated 5.0 mA)
+
+| arm | safe cells (of 612) | contiguous | reachable ceiling | flat optimum |
+|---|---|---|---|---|
+| left_leg__Left | 612 → **600** | yes → yes | 5.0 → **4.9 mA** | 55 Hz 4.70 mA → 55 Hz 4.70 mA |
+| back__Left | 612 → **600** | yes → yes | 5.0 → **4.9 mA** | 55 Hz 4.80 mA → 55 Hz 4.80 mA |
+| left_leg__Right | 564 → **588** | **no → yes** | 1.9 → **4.8 mA** | 55 Hz 4.00 mA → 55 Hz 4.00 mA |
+| back__Right | 564 → **588** | **no → yes** | 1.9 → **4.8 mA** | 40 Hz 4.90 mA → **40 Hz 4.80 mA** |
+
+What the numbers mean: with the ceiling at 5.0 mA on every rate, the 5.0 mA row of the grid is
+no longer safe on the Left (12 rates × 1 cell = 612 → 600; the Left tolerated 4.8 mA), so the
+reachable ceiling is one step below the stated one. On the Right the twelve old anchors (five of
+them at 55 Hz between 1.6 and 2.0 mA) had cut the safe set into islands with a reachable ceiling
+of 1.9 mA under a record where 4.5 mA was delivered; under the stated ceiling the Right's safe
+set is one piece up to 4.8 mA, with the 4.9 and 5.0 mA rows out (24 cells, 612 → 588: nothing on
+the Right was tolerated above 4.5 mA, so the model's uncertainty next to the ceiling anchor keeps
+one more row out than on the Left). The back__Right optimum moves from the now-unsafe 4.9 mA cell
+to 4.8 mA. Tolerated settings: Left 26, Right 30. Queue rows marked unsafe, of 25 (read from the
+capture): Left arms 0 → 2 (40 Hz 5.0 mA and 55 Hz 5.0 mA), left_leg__Right 3 → 0, back__Right
+1 → 2 (40 Hz 5.0 and 40 Hz 4.9 mA).
+
+**Stage 1 (two-stage plan):** Left strata safe cells 612 → **600**, Right 576 → **588** -- now
+equal to the flat fit's on each side, which is the "one seed builder" point above. **The
+preferred settings are unchanged:** Left 55 Hz, 100 us, 4.50 mA; Right 55 Hz, 160 us, 4.30 mA.
+**The gate's verdict is unchanged** (refuses on the open-loop resolution check; the ceiling check
+passes, "Left 1-4.8 mA; Right 1-4.5 mA under the 5 mA ceiling").
+
+**Blockers on the page:** the two "the safe set is not contiguous" blockers on the Right arms and
+the "proposed optimum lies ABOVE the contiguous safe ceiling" blocker (Right arms, 4.0 and 4.9 mA
+against 1.9) are gone; the "above the highest amplitude ever delivered" note on back__Right now
+reads 4.8 mA against 4.5; the two record-wide notes stand. `recommendation_supported` stays False.
+
+**Proof (after A alone, against after A and B).** Timing fields excluded by name; every other
+difference assigned; **0 unexplained** in either shape
+(`_agent_bridge/_probe_tl/probe_so_s14_compare.py`):
+
+- without `TwoStage`: 8,738 fields before, 8,739 after, 8,623 in common, 115 only-before, 116
+  only-after, 120 non-timing differences -- the key (1); the four arms' `safety_anchors` blocks
+  (the twelve typed anchors and the stream counts gone, the ceiling, its provenance, the 12
+  ceiling anchors and the tolerated count in; 4 differing + 112 + 116); and 118 under the safe
+  set, the reachable ceiling, the optimum, the queue's `safe` column, the batches and the
+  blockers (115 differing, 3 only-before: the three blocker sentences that no longer apply).
+- with `TwoStage: true`: 10,324 / 10,327 / 10,147 in common, 177 / 180, 135 non-timing -- the
+  key (1); the anchors blocks on the four arms and the two Stage 1 audits (4 + 174 + 176); the
+  gate's `ceiling_by_side` (4 only-after); and 133 under the safe set, queue, batches, blockers
+  and Stage 1's strata (130 differing, 3 only-before).
+
+No speed claim is made.
+
+**Live.** The four gunicorn workers were reloaded (`kill -HUP 1`, four new PIDs). Through the
+production store, the page's own request rebuilt once under the new key (9.4 s, `served_from_store
+False`) and was served on the second call (1.8 s), with `ceiling_mA 5.0` and the PI provenance on
+every arm and the Left reachable ceiling 4.9 mA.
+
+**Tests** (`tests/test_safety_ceiling.py`, 18): RCS08 reads 5.0 on both sides with the PI
+provenance; an unknown participant, or a missing side, falls back to the hard limit and says so;
+a value above the hard limit is clamped and says so; a non-positive or non-numeric value is
+refused; the uid appears in no module but the table's; the ceiling anchors are one per grid rate
+at the ceiling; tolerated anchors exclude 0 mA and holds under 72 h; the seed's shape and
+severities equal what the model's own seeder makes of the same two sets; a seed with nothing
+tolerated is refused, never silently empty; each arm records its own side's ceiling and
+provenance; **measured on the test design in the container** (`probe_ceiling_test_design.py`),
+the Left arm's safe cells and reachable ceiling under a stated 5.0 / 4.0 / 3.0 / 2.0 mA are 612 /
+5.0, 468 / 3.8, 324 / 2.6, 240 / 1.9, and under 1.0 mA -- below what the design tolerated -- 57
+cells and no contiguous ceiling (pinned: 612/5.0, 240/1.9, 57/NaN); the flat fit and Stage 1
+agree on the safe set with 0 mA epochs present; Stage 1 writes each side's ceiling into its
+audit; the gate judges each side against its own ceiling and reports both; a plain number still
+works. The wiring test hands the direct call the same ceilings the service builds.
+
+### Suites (both runners, one run after every edit, job 20260912-190502-56ce2fdf)
+
+- host: `1038 passed, 2 skipped, 0 failed, 0 errors  [parallel: 1037 passed, 2 skipped in 10.26s | store, serial: 1 passed, 1039 deselected in 0.40s]`
+- container: `PASS=630 FAIL=0 LIVE_SKIPPED=6`
+
+**The arithmetic against the baseline (host 1161 / 43 / 0).** Items collected on the host went
+from 1,204 to 1,040, −164 exactly: the four deleted files collected 166 (12 + 89 + 32 + 33,
+counted by collecting the HEAD versions in the container), 10 anchor-builder tests and 6
+`safety_filter` tests went, 18 new ceiling tests came. Skipped 43 → 2: the 41 that went were the
+PyTorch tests in `test_surrogate_torch.py` and `test_safety_ordinal.py`, which skipped because the
+container has no torch. Passed 1161 → 1038: 141 passing tests removed, 18 added. The container
+runner does not run Stim Optimizer, so its count is unaffected by this work; its line is what the
+run printed with the other builder's Biomarkers edits in the working tree.

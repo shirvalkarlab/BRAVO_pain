@@ -281,16 +281,17 @@ def test_the_block_equals_a_direct_call_of_run_two_stage_live_field_for_field(be
     out = BS.run_for_participant(dict(REQ_FLAG))
     two = out["two_stage"]
     participant = types.SimpleNamespace(uid=UID)
-    # review S8 (2026-09-12): the service hands Stage 1 each side's safety-model anchors built
-    # from the settings stream; the direct call hands it the same, through the same function,
-    # so this test also pins that wiring.
-    anchors = {h: BS.PLT.limit_anchors_from_stream(bench.stream, h) for h in ("Left",)}
+    # 2026-09-12: the service hands Stage 1 and the gate the PI-stated ceiling per side
+    # (`safety_ceiling.ceilings_by_hemisphere`); the direct call hands them the same, through the
+    # same function, so this test also pins that wiring.
+    ceilings = BS.SC.ceilings_by_hemisphere(UID, ("Left",))
     rep = PL.run_two_stage_live(
         participant, design=bench.es.copy(), stream=bench.stream, request_data=dict(REQ_FLAG),
         washin_min=1.0, amp_ceiling=OBJ.AMP_HARD_LIMIT_MA, hemispheres=("Left",),
         primary_item="left_leg",
         data_horizon=two["stage1"]["frozen_configuration"]["data_horizon"],
-        stage1_kwargs={"limit_anchors_by_hemisphere": anchors})
+        stage1_kwargs={"safety_ceiling_by_hemisphere": ceilings},
+        gate_kwargs={"ceiling_mA": ceilings})
     direct = BS._two_stage_payload(rep, inputs=two["inputs"], seconds=0.0,
                                    in_force=BS.in_force_by_side(bench.es))
     a, b = _flatten(two), _flatten(direct)

@@ -891,129 +891,10 @@ def td_sliding_corr_spectrum(td_detail, times, *, window_days=30, step_days=7, m
     return {"channels": channels, "window_days": window_days, "step_days": step_days}
 
 
-def corr_spectrum(td_detail, ignore_band=None, p_significant=0.001, region_map=None, n_peaks=6,
-                  max_freq_hz=50.0, q_significant=0.05):
-    """Pearson-R-vs-frequency correlation spectrum per channel
-    (biomarker_analysis_streaming.ipynb cell 12). `td_detail` is the streaming_psd result dict.
-
-    `ignore_band` defaults to None (no 55–66 Hz mask — 60 Hz is preserved, consistent with the
-    notch removal). Each channel also gets `peaks`: the strongest |R| local maxima (freq, r) so the
-    UI can HIGHLIGHT peaks instead of relying on hover. `region_map` (raw-channel -> region) lets
-    the brain region come from the patient's device metadata instead of a static map.
-
-    Each channel also carries `peak_scatter`: per-session (feature value at the peak frequency,
-    pain label, date) for the scatterplot of observed correlation at the peak frequency vs pain.
-    The peak is the frequency with the single largest |R| for that channel — NOT the family max
-    over all channels (which is what `perm_obs` captures). This is the biologically meaningful
-    "best frequency for this electrode" that the permutation test is really interrogating.
-    """
-    if not td_detail:
-        return None
-    from scipy.signal import find_peaks
-    f = np.asarray(td_detail["f_set"], dtype=float)
-    corr = np.asarray(td_detail["corr"], dtype=float)   # (C, F)
-    pval = np.asarray(td_detail["pval"], dtype=float)
-    # `pval` is now CLUSTER-ROBUST on rating clusters when the caller supplied a grouping
-    # (streaming_psd.pearson_corr_psd_label). The naive t-on-epochs family is carried alongside so
-    # the panel can show the contrast instead of silently swapping one p-value for another — the
-    # same pattern the exploration scan uses with p_pearson/q_pearson.
-    _pv_naive = td_detail.get("pval_naive")
-    pval_naive = (np.asarray(_pv_naive, dtype=float) if _pv_naive is not None else None)
-    _pval_method = td_detail.get("pval_method") or "naive t on epochs, df=n-2"
-    chans = td_detail.get("chan_order", [])
-    ignore = np.zeros(len(f), bool) if not ignore_band else ((f > ignore_band[0]) & (f < ignore_band[1]))
-    # Enforce the biomarker frequency cap: frequencies at/above max_freq_hz are excluded from peak
-    # picking, the peak-scatter, and significance markers (a biomarker can't be selected there).
-    if max_freq_hz is not None:
-        ignore = ignore | (f >= float(max_freq_hz))
-
-    # Per-session feature (E, C, F) and labels (E,) for scatter data.
-    feature = td_detail.get("feature")   # may be None for legacy callers
-    feat = np.asarray(feature, dtype=float) if feature is not None else None
-    raw_labels = td_detail.get("labels")
-    labels_arr = np.asarray(raw_labels, dtype=float) if raw_labels is not None else None
-    times = td_detail.get("times")   # (E,) ISO strings or None
-
-    # Significance markers are FDR-corrected, not raw p<p_significant. The spectrum shows ~101
-    # frequencies x C channels, so an uncorrected p<0.001 marker over-states significance to a
-    # viewer reading the panel directly. Build a Benjamini-Hochberg q-grid over the DISPLAYED family
-    # (all non-ignored channel x freq cells) and mark a cell significant only when its FDR q is
-    # below q_significant. Ignored cells (>=cap / notch) are excluded from the family. (Band
-    # SELECTION still uses the autocorrelation-adjusted FDR in pipeline; the headline statement is
-    # the permutation perm_p — this only makes the on-panel green markers honest.)
-    from .stats_utils import bh_fdr
-    pflat = pval.astype(float).copy()
-    pflat[:, ignore] = np.nan                     # drop capped/notched cells from the FDR family
-    qgrid = bh_fdr(pflat.ravel()).reshape(pval.shape)
-    # Second BH family on the NAIVE p over exactly the same displayed cells, so the panel can state
-    # how much of its apparent significance came from treating correlated epochs as independent.
-    _q_naive_grid = None
-    if pval_naive is not None and pval_naive.shape == pval.shape:
-        _pn = pval_naive.astype(float).copy()
-        _pn[:, ignore] = np.nan
-        _q_naive_grid = bh_fdr(_pn.ravel()).reshape(pval.shape)
-
-    channels = []
-    for ci in range(corr.shape[0]):
-        raw = chans[ci] if ci < len(chans) else f"ch{ci}"
-        fmt = format_channel(raw, region=(region_map or {}).get(raw, ""))
-        r_row = corr[ci].copy()
-        p_row = pval[ci].copy()
-        q_row = qgrid[ci]
-        r_row[ignore] = np.nan
-        # Significant = survives BH-FDR (q < q_significant) on the displayed family, not raw p.
-        sig = [(_f(r_row[k]) if (np.isfinite(q_row[k]) and q_row[k] < q_significant and not ignore[k]) else None)
-               for k in range(len(f))]
-
-        # Peaks: strongest |R| local maxima, for highlighting.
-        absr = np.abs(np.nan_to_num(r_row, nan=0.0))
-        pk, _props = find_peaks(absr, prominence=0.05)
-        pk = sorted(pk, key=lambda k: -absr[k])[:n_peaks]
-        peaks = [{"freq": float(f[k]), "r": _f(r_row[k])} for k in sorted(pk)]
-
-        # Peak-scatter: per-session feature at this channel's single best-|R| frequency.
-        # Uses argmax |R| (the strongest individual correlation for this channel), NOT the
-        # family-max used by perm_obs (which ranges over ALL channels x frequencies).
-        peak_scatter = None
-        best_fi = int(np.argmax(absr)) if absr.any() else None
-        if best_fi is not None and feat is not None and labels_arr is not None:
-            peak_feat = feat[:, ci, best_fi]           # (E,) feature values at peak freq
-            valid = np.isfinite(peak_feat) & np.isfinite(labels_arr)
-            if valid.sum() >= 3:
-                peak_scatter = {
-                    "peak_freq": float(f[best_fi]),
-                    "peak_r": _f(r_row[best_fi]),
-                    "x": [_f(v) for v in peak_feat[valid]],   # feature (log power) per session
-                    "y": [_f(v) for v in labels_arr[valid]],  # pain label per session
-                    "dates": ([str(times[i]) for i, ok in enumerate(valid) if ok]
-                              if times is not None else None),
-                }
-
-        channels.append({
-            "name": fmt["label"], "short": fmt["short"], "region": fmt["region"], "raw": fmt["raw"],
-            "r": [_f(x) for x in r_row],
-            "p": [_f(x) for x in p_row],
-            "q": [_f(x) for x in q_row],          # BH-FDR q over the displayed family
-            # The naive t-on-epochs family, for the contrast. NOT the headline.
-            "p_naive": ([_f(x) for x in pval_naive[ci]] if pval_naive is not None else None),
-            "q_naive": ([_f(x) for x in _q_naive_grid[ci]] if _q_naive_grid is not None else None),
-            "significant": sig,
-            "peaks": peaks,
-            "peak_scatter": peak_scatter,
-        })
-    return {"freqs": [float(x) for x in f], "channels": channels,
-            "transform": td_detail.get("transform", "log"),
-            "p_significant": p_significant, "q_significant": q_significant,
-            "significance_method": "BH-FDR over displayed channel x freq family",
-            "pval_method": _pval_method,
-            # How many displayed cells survive BH under each p definition. The gap IS the
-            # pseudoreplication: epochs sharing one pain report are not independent, and the naive
-            # t with df = n-2 counts each epoch as a fresh observation.
-            "n_sig_cluster": int(np.sum(np.isfinite(qgrid) & (qgrid < q_significant)
-                                        & ~ignore[None, :])),
-            "n_sig_naive": (int(np.sum(np.isfinite(_q_naive_grid) & (_q_naive_grid < q_significant)
-                                       & ~ignore[None, :])) if _q_naive_grid is not None else None),
-            "n_cells_displayed": int(np.sum(~ignore) * corr.shape[0])}
+# `corr_spectrum` stood here until 2026-09-12: the static Pearson-r-against-frequency curve per
+# channel with its peaks, BH-FDR markers and peak scatter, computed into every Biomarkers page
+# response. The page reads only the sliding version (`td_sliding_corr_spectrum`, above), which
+# takes the session times as its own argument. Deleted on the PI's decision (review finding B8).
 
 
 # --- Exploratory spectral feature-importance scan (DESIGN §8b) -------------------------------
@@ -1091,44 +972,10 @@ def _binarize_labels(values, strategy="tertile", low_pct=33.3333, high_pct=66.66
     return out
 
 
-def matched_sample_counts(labels, strategy="tertile", low_pct=33.3333, high_pct=66.6667,
-                          pain_cutoff=None, match_dt_min=None, tolerance_min=None):
-    """Count, ON THE PSD/NEURAL SAMPLES, how many carry a matched pain label and how that label
-    binarizes into high/low (+ excluded middle).
-
-    `labels` is the per-session continuous PRO already matched within the tolerance window (NaN
-    where no PRO fell inside the window). This is the count the binarization histogram must report:
-    distinct matched neural samples, not raw daily pain surveys. `match_dt_min` (signed minutes,
-    optional) lets us report the median |offset| of the matches so the user sees how tight the
-    window actually bit.
-    """
-    y = np.asarray(labels, dtype=float)
-    n_sessions = int(y.size)
-    matched = np.isfinite(y)
-    n_matched = int(matched.sum())
-    pl = _binarize_labels(y, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
-                          pain_cutoff=pain_cutoff)
-    n_high = int(np.nansum(pl == 1.0))
-    n_low = int(np.nansum(pl == 0.0))
-    # Excluded middle only exists for the tertile/percentile labelers.
-    n_excluded = int(n_matched - n_high - n_low) if strategy in ("tertile", "percentile") else 0
-    out = {
-        "n_sessions": n_sessions,          # total streaming/PSD sessions
-        "n_matched": n_matched,            # sessions with a pain report inside the window
-        "n_unmatched": int(n_sessions - n_matched),
-        "n_high": n_high,
-        "n_low": n_low,
-        "n_excluded_middle": max(n_excluded, 0),
-        "strategy": strategy,
-        "tolerance_min": (None if tolerance_min is None else float(tolerance_min)),
-    }
-    if match_dt_min is not None:
-        d = np.asarray(match_dt_min, dtype=float)
-        d = d[np.isfinite(d)]
-        if d.size:
-            out["median_abs_offset_min"] = float(np.median(np.abs(d)))
-            out["max_abs_offset_min"] = float(np.max(np.abs(d)))
-    return out
+# `matched_sample_counts` stood here until 2026-09-12: the count of neural samples carrying a
+# matched pain label and how the label split into high, low and the excluded middle. The page
+# derives the same counts itself (binarizationModel.js) and never read the server's copy.
+# Deleted on the PI's decision (review finding B8).
 
 
 def _cv_logistic_auc(x, y, n_splits=5, seed=0, groups=None):
@@ -5493,73 +5340,10 @@ def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
     }
 
 
-# --- Time-domain (streaming) analytics -------------------------------------------------------
-def psd_spectra(td_detail, db=True, region_map=None):
-    """Mean PSD per channel split by pain group (high vs low, by median label).
-    Returns {freqs, unit, channels:[{name, short, region, high:[...], low:[...]}]}.
-    `td_detail` is the streaming_psd result (psd (E,C,F), labels (E,), f_set, chan_order).
-    `region_map` (raw-channel -> region) sources the region from device metadata.
-    """
-    if not td_detail:
-        return None
-    psd = np.asarray(td_detail.get("psd"), dtype=float)
-    if psd.ndim != 3 or psd.shape[0] == 0:
-        return None
-    labels = np.asarray(td_detail.get("labels"), dtype=float)
-    f = np.asarray(td_detail["f_set"], dtype=float)
-    chans = td_detail.get("chan_order", [])
-
-    valid = np.isfinite(labels)
-    if valid.sum() >= 2 and np.unique(labels[valid]).size >= 2:
-        thr = np.nanmedian(labels[valid])
-        hi = labels >= thr
-        lo = labels < thr
-    else:  # not enough label variety -> everything is one group
-        hi = np.ones(len(labels), bool)
-        lo = np.zeros(len(labels), bool)
-
-    def grp(mask, ci):
-        if mask.sum() == 0:
-            return [None] * len(f)
-        m = np.nanmean(psd[mask, ci, :], axis=0)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            m = 10 * np.log10(m) if db else m
-        return [_f(x) for x in m]
-
-    channels = []
-    for ci in range(psd.shape[1]):
-        raw = chans[ci] if ci < len(chans) else f"ch{ci}"
-        fmt = format_channel(raw, region=(region_map or {}).get(raw, ""))
-        channels.append({"name": fmt["label"], "short": fmt["short"], "region": fmt["region"],
-                         "high": grp(hi, ci), "low": grp(lo, ci)})
-    return {"freqs": [float(x) for x in f], "unit": "dB" if db else "power", "channels": channels}
-
-
-def psd_spectrogram(td_detail, times, db=True, fmax=100.0, region_map=None):
-    """Per-channel PSD heatmap over sessions (z = freq x session). times: list[str] per epoch.
-    `region_map` (raw-channel -> region) sources the region from device metadata."""
-    if not td_detail:
-        return None
-    psd = np.asarray(td_detail.get("psd"), dtype=float)
-    if psd.ndim != 3 or psd.shape[0] == 0:
-        return None
-    f = np.asarray(td_detail["f_set"], dtype=float)
-    chans = td_detail.get("chan_order", [])
-    fmask = f <= fmax
-    fz = f[fmask]
-
-    channels = []
-    for ci in range(psd.shape[1]):
-        z = psd[:, ci, :][:, fmask]  # (E, Fz)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            z = 10 * np.log10(z) if db else z
-        zt = z.T  # (Fz, E) -> rows=freq, cols=session
-        raw = chans[ci] if ci < len(chans) else f"ch{ci}"
-        fmt = format_channel(raw, region=(region_map or {}).get(raw, ""))
-        channels.append({"name": fmt["label"], "short": fmt["short"], "region": fmt["region"],
-                         "z": [[_f(v) for v in row] for row in zt]})
-    return {"freqs": [float(x) for x in fz], "times": list(times),
-            "unit": "dB" if db else "power", "channels": channels}
+# `psd_spectra` (the mean PSD per channel split by high and low pain) and `psd_spectrogram` (the
+# per-channel PSD over sessions) stood here until 2026-09-12. The first was computed into every
+# Biomarkers page response and read by no panel; the second had already been dropped from the
+# response and kept no caller. Both deleted on the PI's decision (review finding B8).
 
 
 # =================================================================================================
@@ -7210,115 +6994,7 @@ def _sweep_headline_auc(sweep):
             f"so none of them settles the question either way")
 
 
-def band_time_sweep_figures(sweep):
-    """The two heat maps the browser draws: band centre against length of signal, one for the
-    correlation and one for telling high pain from low pain.
-
-    ONE CONTEXT, AND NOTHING IS RENDERED HERE. The module returns Plotly figure descriptions as
-    plain data and the browser draws them; nothing on the server needs a headless browser. Both
-    figures take their headline and every piece of their text from ``sweep``, computed in this pass,
-    so a figure cannot carry a claim the numbers do not support.
-
-    THE TWO COLOUR SCALES ARE NOT INTERCHANGEABLE. The correlation scale is centred on 0 and the
-    classification scale is centred on 0.5, because those are the two values that mean no
-    relationship for the two quantities. A diverging scale centred anywhere else on the
-    classification figure would make a band that discriminates nothing look like a result.
-    """
-    centers = [float(c) for c in (sweep.get("center_freqs_hz") or [])]
-    deliv = [float(s) for s in (sweep.get("integration_seconds_delivered") or [])]
-    req = [float(s) for s in (sweep.get("integration_seconds_requested") or [])]
-    cg = sweep.get("correlation_grid") or []
-    ag = sweep.get("auc_grid") or []
-    ng = sweep.get("n_grid") or []
-    if not centers or not deliv:
-        return {}
-    ylab = [(f"{d:g} s" if abs(d - r) < 1e-9 else f"{d:g} s (asked {r:g} s)")
-            for d, r in zip(deliv, req)]
-    small = len(centers) * len(deliv) <= 320       # small enough to print every value and read it
-    notes = list(sweep.get("notes") or [])
-    footer = "  ".join(notes[:2])
-    inside = list(sweep.get("band_fully_inside_8_to_30_hz") or [])
-    outside = [centers[i] for i in range(len(centers))
-               if i < len(inside) and not inside[i]]
-    half = float(sweep.get("band_width_hz") or BAND_TIME_SWEEP_WIDTH_HZ) / 2.0
-
-    def _hover(grid, name, null_value):
-        return [[(f"{name} {grid[t][c]:.3f}<br>band {centers[c]:g} Hz "
-                  f"({centers[c] - half:g}-{centers[c] + half:g} Hz)<br>"
-                  f"{deliv[t]:g} s of recording per measurement<br>"
-                  f"{(ng[t][c] if t < len(ng) and c < len(ng[t]) else 0)} pain reports<br>"
-                  f"no relationship = {null_value:g}")
-                 if (t < len(grid) and c < len(grid[t]) and grid[t][c] is not None)
-                 else "not measured"
-                 for c in range(len(centers))] for t in range(len(deliv))]
-
-    def _shapes():
-        """Faint marks over the band centres whose 5 Hz window reaches outside the 8-30 Hz range the
-        firmware can place an adaptive sensing band in. Drawn under the data so printed values stay
-        readable."""
-        out = []
-        for fc in outside:
-            out.append({"type": "rect", "xref": "x", "yref": "paper",
-                        "x0": fc - 0.5, "x1": fc + 0.5, "y0": 0, "y1": 1,
-                        "fillcolor": "rgba(120,120,120,0.14)", "line": {"width": 0},
-                        "layer": "below"})
-        return out
-
-    def _figure(grid, title, colorscale, zmid, zmin, zmax, fmt, name, null_value, cbtitle):
-        return {
-            "data": [{
-                "type": "heatmap",
-                "x": centers,
-                "y": ylab,
-                "z": grid,
-                # The value is printed in every cell only while the grid is small enough for the
-                # printed numbers to be readable; above that the keys are left out entirely rather
-                # than set to nothing, which Plotly reads as an instruction it cannot follow.
-                **({"text": [[("" if (t >= len(grid) or c >= len(grid[t])
-                                      or grid[t][c] is None) else format(grid[t][c], fmt))
-                              for c in range(len(centers))] for t in range(len(deliv))],
-                    "texttemplate": "%{text}",
-                    "textfont": {"size": 8}} if small else {}),
-                "customdata": _hover(grid, name, null_value),
-                "hovertemplate": "%{customdata}<extra></extra>",
-                "colorscale": colorscale,
-                "zmid": zmid, "zmin": zmin, "zmax": zmax,
-                "colorbar": {"title": {"text": cbtitle, "side": "right"}, "thickness": 14},
-                "xgap": 1, "ygap": 1,
-            }],
-            "layout": {
-                "title": {"text": title, "font": {"size": 15}, "x": 0.01, "xanchor": "left"},
-                "xaxis": {"title": {"text": "Band centre (Hz), each band 5 Hz wide"},
-                          "dtick": 2, "tickmode": "linear", "showgrid": False},
-                "yaxis": {"title": {"text": "Seconds of recording averaged into one measurement"},
-                          "type": "category", "showgrid": False},
-                "shapes": _shapes(),
-                "annotations": [{
-                    "text": footer, "xref": "paper", "yref": "paper", "x": 0, "y": -0.30,
-                    "xanchor": "left", "yanchor": "top", "showarrow": False,
-                    "align": "left", "font": {"size": 9.5, "color": "#444"},
-                }],
-                "margin": {"l": 130, "r": 20, "t": 46, "b": 130},
-                "height": 420,
-                "uirevision": "band-time-sweep",
-            },
-        }
-
-    finite_c = [v for row in cg for v in row if v is not None and np.isfinite(v)]
-    cmax = max(0.1, min(1.0, max((abs(v) for v in finite_c), default=0.1)))
-    finite_a = [v for row in ag for v in row if v is not None and np.isfinite(v)]
-    amax = max(0.05, min(0.5, max((abs(v - AUC_NO_DISCRIMINATION) for v in finite_a), default=0.05)))
-    out = {}
-    if cg:
-        out["correlation"] = _figure(
-            cg, _sweep_headline_correlation(sweep), "RdBu", 0.0, -cmax, cmax, ".2f",
-            "correlation", CORRELATION_NO_RELATIONSHIP,
-            "Correlation<br>(0 = none)")
-    if ag:
-        out["auc"] = _figure(
-            ag, _sweep_headline_auc(sweep), "RdBu",
-            AUC_NO_DISCRIMINATION,
-            AUC_NO_DISCRIMINATION - amax, AUC_NO_DISCRIMINATION + amax, ".2f",
-            "area under the curve", AUC_NO_DISCRIMINATION,
-            "High vs low pain<br>(0.5 = none)")
-    return out
+# `band_time_sweep_figures` stood here until 2026-09-12: it built Plotly heat-map descriptions of
+# the two grids into every sweep response, which the store then kept, and nothing drew them -- the
+# page draws its own heat maps from the grids (BiomarkerHeatmapGrids.js), and the only reader,
+# BandTimeSweepPanel.js, is imported by nothing. Deleted on the PI's decision (review finding B8).

@@ -10,16 +10,10 @@ import pandas as pd
 import pytest
 
 from StimOptimizer.routines import objective as OBJ
-from StimOptimizer.routines import schedule as SCHED
 from StimOptimizer.routines import lfp_evidence as EV
 
 
 # --- the flat amplitude hard limit (replaces the retracted energy-matched cap) ----------------
-#: Delivered amplitude envelope for the filter fixtures. Defined here rather than inside the
-#: excised energy block it used to share, which is why five tests briefly referenced an undefined
-#: name after the retraction.
-ENV = {"Left": (0.0, 5.0), "Right": (0.0, 5.0)}
-
 def test_the_amplitude_limit_is_flat_and_lives_in_one_place():
     """PI-declared 5.0 mA per hemisphere, established by testing at 165 Hz.
 
@@ -61,29 +55,10 @@ def test_the_composite_objective_no_longer_carries_an_energy_term():
     assert np.allclose(d["J"], d["J_pain"] + d["J_SE"])
 
 
-def test_safety_filter_refuses_an_energy_budget_argument():
-    """A caller still passing one is working from the retracted model and must see that."""
-    c = pd.DataFrame([dict(id="x", rate=55.0, ampL=1.4, ampR=3.0, pwL=60.0, pwR=150.0)])
-    with pytest.raises(TypeError):
-        SCHED.safety_filter(c, delivered_envelope=ENV, energy_budget={"Left": 1.0})
-
-
-def test_the_flat_limit_binds_identically_at_every_rate():
-    """The point of the retraction: 4.5 mA is now equally acceptable at 55 and at 165 Hz, where
-    the energy model would have refused it at the higher rate."""
-    rows = [dict(id=f"r{f:.0f}", rate=f, ampL=4.5, ampR=4.5, pwL=100.0, pwR=150.0)
-            for f in (55.0, 110.0, 165.0)]
-    kept, rej = SCHED.safety_filter(pd.DataFrame(rows), delivered_envelope=ENV)
-    assert len(kept) == 3 and rej.empty
-
-
-def test_above_the_flat_limit_is_refused_at_every_rate():
-    rows = [dict(id=f"r{f:.0f}", rate=f, ampL=5.1, ampR=1.0, pwL=100.0, pwR=150.0)
-            for f in (55.0, 165.0)]
-    kept, rej = SCHED.safety_filter(pd.DataFrame(rows), delivered_envelope={"Left": (0.0, 9.0),
-                                                                            "Right": (0.0, 9.0)})
-    assert kept.empty and len(rej) == 2
-    assert rej.reject_reason.str.contains("hard limit").all()
+# Three tests of `schedule.safety_filter` (the retracted energy budget refused; the flat limit
+# binding identically at every rate; above the limit refused at every rate) stood here until
+# 2026-09-12, when `routines/schedule.py` was deleted as reached by nothing (review S14). The
+# flat limit itself is still pinned above, on the constants the running code reads.
 
 
 # --- LfpEvidence from real-shaped data ---------------------------------------------------------
@@ -181,48 +156,9 @@ def test_hemisphere_must_be_named_explicitly():
                           rate_hz=165.0)
 
 
-# --- joint prior exposure: the failure that produced a wrong clinic document -------------------
-def _prior():
-    """1.4 mA seen only at 60 us; 100 us seen only at 3.5 mA. Neither pairing is 1.4 @ 100."""
-    return pd.DataFrame([
-        dict(hemi="Left",  amp=1.4, pw=60.0,  rate=55.0),
-        dict(hemi="Left",  amp=3.5, pw=100.0, rate=55.0),
-        dict(hemi="Right", amp=3.0, pw=150.0, rate=55.0),
-    ])
-
-
-def test_marginal_familiarity_does_not_imply_the_pair_was_ever_delivered():
-    """The exact bug: a plan built from individually-familiar numbers, novel as a combination.
-
-    1.4 mA appears at 55 Hz. 100 us appears at 55 Hz. The PAIR 1.4 mA @ 100 us never happened,
-    and an amplitude-only check cannot see that.
-    """
-    c = pd.DataFrame([dict(id="novel_pair", rate=55.0, ampL=1.4, ampR=3.0,
-                           pwL=100.0, pwR=150.0)])
-    kept, rej = SCHED.safety_filter(c, delivered_envelope=ENV, amp_ceiling=4.9,
-                                    prior_triples=_prior())
-    assert kept.empty, "a novel combination must not pass"
-    assert "NEVER been delivered" in rej.iloc[0]["reject_reason"]
-    assert rej.iloc[0]["prior_joint_L"] == 0
-    # and it would have PASSED without the joint check, which is why the check exists
-    kept2, _ = SCHED.safety_filter(c, delivered_envelope=ENV, amp_ceiling=4.9,
-                                   prior_triples=None)
-    assert len(kept2) == 1
-
-
-def test_a_genuinely_delivered_triple_passes_and_reports_its_record_count():
-    c = pd.DataFrame([dict(id="real", rate=55.0, ampL=1.4, ampR=3.0, pwL=60.0, pwR=150.0)])
-    kept, rej = SCHED.safety_filter(c, delivered_envelope=ENV, amp_ceiling=4.9,
-                                    prior_triples=_prior())
-    assert len(kept) == 1 and rej.empty
-    assert kept.iloc[0]["prior_joint_L"] == 1 and kept.iloc[0]["prior_joint_R"] == 1
-
-
-def test_joint_check_is_opt_in_and_validates_its_own_input():
-    c = pd.DataFrame([dict(id="x", rate=55.0, ampL=1.4, ampR=3.0, pwL=60.0, pwR=150.0)])
-    with pytest.raises(KeyError, match="prior_triples missing"):
-        SCHED.safety_filter(c, delivered_envelope=ENV,
-                            prior_triples=_prior().rename(columns={"pw": "pulse_width"}))
+# The joint-prior-exposure tests of `schedule.safety_filter` (a novel amplitude/pulse-width pair
+# refused even when each number was familiar on its own) went with `routines/schedule.py` on
+# 2026-09-12 (review S14).
 
 
 # --- production column names (2026-09-02) ------------------------------------------------------

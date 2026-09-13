@@ -49,6 +49,7 @@ import pandas as pd
 from . import acquisition as ACQ
 from . import objective as OBJ
 from . import surrogate as SUR
+from .. import safety_ceiling as SC
 from .preference import PreferenceGP
 
 # --- canonical configuration -------------------------------------------------------------
@@ -73,93 +74,14 @@ KAPPA = 2.0
 BETA = 2.0
 PREF_MARGIN = 0.15
 
-#: Programmed ``UpperLimitInMilliAmps`` anchors, (freq_hz, upper_mA), from the device JSONs.
-#:
-#: A HARD-CODED SNAPSHOT OF ONE PARTICIPANT'S RECORD AS OF 2026-08, kept as the FALLBACK only
-#: (review S8, 2026-09-12). Checked against RCS08's settings stream on 2026-09-12: 8 of the twelve
-#: match a legacy-program row, 3 match a row of a sensing-configured group, and 4 match no row in
-#: the stream at all. Decision 136 established that on a sensing channel with adaptive therapy
-#: RUNNING the programmed upper limit is the controller's own amplitude range, not a clinician's
-#: ceiling, so an anchor read from such a row tells the safety model "severity 3 here" about a
-#: current the patient was being moved through by design. `limit_anchors_from_stream` builds the
-#: anchors from the participant's own stream instead, per side, and this array is used only when
-#: `USE_STREAM_LIMIT_ANCHORS` is off or the stream yields no usable anchor.
-LIMIT_ANCHORS = np.array([[55., 2.0], [55., 1.8], [55., 1.9], [10., 1.9], [110., 4.0],
-                          [110., 3.2], [130., 3.2], [125., 2.5], [165., 2.5], [110., 2.2],
-                          [55., 1.6], [10., 2.0]])
-
-#: THE SWITCH for review S8. True: the safety model's limit anchors come from the participant's
-#: settings stream (`limit_anchors_from_stream`); False: the hard-coded `LIMIT_ANCHORS` above, as
-#: before 2026-09-12. A module switch so this one change can be reversed on its own.
-#:
-#: OFF BY DEFAULT, on the orchestrator's judgement of 2026-09-12 (decision 143), for the PI to
-#: switch on if he agrees with it. Measured on RCS08 with it on: the Left side's reachable ceiling
-#: fell from 5.0 to 0.1 mA and the Right side's preferred current from 4.0 to 1.0 mA, on a record
-#: where 4.5-4.8 mA was delivered and tolerated for weeks -- because the stream's `upper` on a
-#: sensing-only group (a 0-4 mA programming range, decision 136) is no more a clinician's
-#: side-effect ceiling than the adaptive limits this rule already excludes. The hard-coded
-#: snapshot is wrong in kind too (review S8); which limits count is his call, not the code's.
-USE_STREAM_LIMIT_ANCHORS = False
-
-
-def limit_anchors_from_stream(stream, hemisphere=None, *, fallback=LIMIT_ANCHORS,
-                              use_stream=None):
-    """``(anchors, meta)``: the safety model's limit anchors for one side, from the settings stream.
-
-    An anchor is a distinct ``(rate_hz, upper_mA)`` the device was programmed with as a
-    CLINICIAN'S CEILING: every legacy-program row with an upper limit (``schema == "hemisphere"``),
-    and a sensing-configured group's row only when its limit is a patient limit and not the
-    adaptive amplitude limit of a group running adaptive therapy (``upper_is_patient_limit``,
-    decision 136's rule applied when the stream was built). Rows are restricted to ``hemisphere``
-    when one is given, because the safety model is fitted per side.
-
-    ``meta`` says where the anchors came from and what was left out, so the report can print it:
-    ``source``, ``n_rows_with_upper``, ``n_kept``, ``n_excluded_adaptive_limit``,
-    ``n_excluded_unknown_kind``, ``anchors``. When the switch is off, or the stream carries no
-    usable anchor (the seed needs at least one), the hard-coded snapshot is returned with a
-    ``source`` that says so.
-    """
-    use = USE_STREAM_LIMIT_ANCHORS if use_stream is None else bool(use_stream)
-    fb = np.asarray(fallback, float)
-    base = dict(hemisphere=(None if hemisphere is None else str(hemisphere)),
-                n_rows_with_upper=0, n_kept=0, n_excluded_adaptive_limit=0,
-                n_excluded_unknown_kind=0, anchors=[[float(a), float(b)] for a, b in fb])
-    if not use:
-        return fb, dict(base, source="hard-coded 2026-08 snapshot (USE_STREAM_LIMIT_ANCHORS off)")
-    if stream is None or len(stream) == 0 or "upper" not in getattr(stream, "columns", ()):
-        return fb, dict(base, source="hard-coded 2026-08 snapshot (no settings stream to read)")
-    d = pd.DataFrame(stream)
-    if hemisphere is not None and "hemi" in d.columns:
-        d = d[d["hemi"].astype(str) == str(hemisphere)]
-    upper = pd.to_numeric(d["upper"], errors="coerce")
-    rate = pd.to_numeric(d["rate"], errors="coerce")
-    d = d.assign(_upper=upper, _rate=rate)[upper.notna() & rate.notna()]
-    n_with = int(len(d))
-    schema = d["schema"].astype(str) if "schema" in d.columns else pd.Series("", index=d.index)
-    kind = d["upper_is_patient_limit"] if "upper_is_patient_limit" in d.columns \
-        else pd.Series([None] * len(d), index=d.index, dtype=object)
-    legacy = schema == "hemisphere"
-    # The column comes back from Parquet as booleans with nulls (pandas' NA), so the test is on
-    # the type, never `== True`, which is NA for a null and cannot be used as a truth value.
-    patient = kind.map(lambda v: isinstance(v, (bool, np.bool_)) and bool(v))
-    unknown = (~legacy) & kind.isna()
-    keep = legacy | ((~legacy) & patient)
-    excluded_adaptive = int(((~legacy) & (~keep) & (~unknown)).sum())
-    kept = d[keep]
-    pairs = sorted({(float(r), float(u)) for r, u in zip(kept["_rate"], kept["_upper"])})
-    meta = dict(base, n_rows_with_upper=n_with, n_kept=len(pairs),
-                n_excluded_adaptive_limit=excluded_adaptive,
-                n_excluded_unknown_kind=int(unknown.sum()))
-    if not pairs:
-        meta.update(source=("hard-coded 2026-08 snapshot (the stream carries no usable limit "
-                            f"anchor for this side: {n_with} rows with an upper limit, "
-                            f"{excluded_adaptive} adaptive limits excluded, "
-                            f"{int(unknown.sum())} of unknown kind excluded)"))
-        return fb, meta
-    meta.update(source=("the participant's settings stream: legacy program limits and "
-                        "sensing-group limits that are patient limits (decision 136)"),
-                anchors=[[a, b] for a, b in pairs])
-    return np.asarray(pairs, float), meta
+# THE SAFETY MODEL'S SEVERITY-3 SEED IS A CEILING THE PI STATES, per participant and per side
+# (`StimOptimizer/safety_ceiling.py`, 2026-09-12). Until then it was twelve (rate, current) pairs
+# read off RCS08's programmed `UpperLimitInMilliAmps` in 2026-08 (`LIMIT_ANCHORS`), and, behind a
+# switch shipped off, every such limit in the participant's settings stream (review S8, decision
+# 143). Both were deleted: a programmed upper limit is a range the patient or the adaptive controller
+# was allowed to move within, not a current at which side effects begin, and on RCS08 the stream's
+# limits put the Left side's reachable ceiling at 0.1 mA on a record where 4.5-4.8 mA was tolerated
+# for weeks. `build_context` seeds from `safety_ceiling.safety_seed`, the same call Stage 1 makes.
 
 # Declared provenance. The CALLER should pass the true horizon; this default is deliberately
 # labelled as unset so a stale value can never be silently stamped onto a figure.
@@ -239,11 +161,11 @@ def _cell_edges(centres):
 def build_context(design_csv, *, freq_grid=FREQ_GRID, amp_grid=AMP_GRID,
                   incumbent_epoch=None, incumbent_xy=None,
                   fixed_length_scale=FIXED_LENGTH_SCALE, beta=BETA, kappa=KAPPA,
-                  limit_anchors=LIMIT_ANCHORS, pref_margin=PREF_MARGIN,
+                  safety_ceiling=None, pref_margin=PREF_MARGIN,
                   n_batches=3, q=4, min_tolerated_h=72.0,
                   data_horizon=DATA_HORIZON, washin_min=WASHIN_MIN,
                   hemisphere="Left", primary_item=None,
-                  random_state=0, limit_anchors_meta=None) -> FigureContext:
+                  random_state=0) -> FigureContext:
     """Fit every model the figures need from one design matrix.
 
     Parameters
@@ -273,6 +195,12 @@ def build_context(design_csv, *, freq_grid=FREQ_GRID, amp_grid=AMP_GRID,
     primary_item
         Pain metric name passed through to :func:`objective.build_objective` (e.g. ``"left_leg"``,
         ``"back"``). ``None`` uses the module default, which is the left leg.
+    safety_ceiling
+        ``(ceiling_mA, provenance)`` from ``safety_ceiling.ceiling_for`` -- the current above which
+        this side is not acceptable, stated by the PI. The safety model is seeded with severity 3
+        at that current on every grid rate and severity 0 at every setting this side sustained
+        (``safety_ceiling.safety_seed``). ``None`` means the module hard limit, with a provenance
+        that says no ceiling was stated.
     """
     es = pd.read_csv(design_csv) if not isinstance(design_csv, pd.DataFrame) else design_csv.copy()
     grid = SUR.ParameterGrid(freq_grid, amp_grid)
@@ -319,9 +247,12 @@ def build_context(design_csv, *, freq_grid=FREQ_GRID, amp_grid=AMP_GRID,
     n_reports = np.zeros(len(grid))
     np.add.at(n_reports, grid.index_of(Xobs), fit["n"].to_numpy(float))
 
-    # safety GP, two-anchor seed (OBJECTIVE_SPEC amendment 2026-08-29)
-    deliv = D.loc[D["dur_h"] >= float(min_tolerated_h), ["freq_hz", amp_col]].to_numpy(float)
-    Xs, sev, sv = SUR.SafetyGP.seed_from_history(deliv, np.asarray(limit_anchors, float))
+    # safety GP, two-anchor seed (OBJECTIVE_SPEC amendment 2026-08-29): tolerated settings at
+    # severity 0 and the PI-stated ceiling at severity 3, from the ONE seed builder Stage 1 also
+    # calls (`safety_ceiling.safety_seed`, 2026-09-12).
+    Xs, sev, sv, seed_meta = SC.safety_seed(D, amp_col, freq_grid=freq_grid,
+                                            ceiling=safety_ceiling,
+                                            min_tolerated_h=min_tolerated_h)
     sgp = SUR.SafetyGP(grid, random_state=random_state).fit(Xs, sev, sv)
     smu, ssd = sgp.predict(gx)
     sub = smu + float(beta) * ssd
@@ -350,16 +281,10 @@ def build_context(design_csv, *, freq_grid=FREQ_GRID, amp_grid=AMP_GRID,
     oper_ceiling = float(grid.amps[min(contiguous) - 1]) if min(contiguous) > 0 else float("nan")
 
     band = (gx[:, 0] <= 55) & (gx[:, 1] > 1.8)
-    _la = np.asarray(limit_anchors, float)
-    _lam = dict(limit_anchors_meta or {})
     meta = dict(
         hemisphere=str(hemisphere), amp_col=amp_col,
-        # The safety model's limit anchors and where they came from (review S8, 2026-09-12).
-        limit_anchors=[[float(a), float(b)] for a, b in _la],
-        n_limit_anchors=int(len(_la)),
-        limit_anchors_source=str(_lam.get("source") or "caller-supplied"),
-        limit_anchors_excluded_adaptive_limit=_lam.get("n_excluded_adaptive_limit"),
-        limit_anchors_rows_with_upper=_lam.get("n_rows_with_upper"),
+        # What the safety model was told: the stated ceiling, its provenance, the anchors.
+        **seed_meta,
         primary_item=str(D["primary_item"].iloc[0]) if "primary_item" in D.columns else "unknown",
         data_horizon=str(data_horizon), washin_min=float(washin_min),
         beta=float(beta), kappa=float(kappa), q=int(q), n_batches=int(n_batches),

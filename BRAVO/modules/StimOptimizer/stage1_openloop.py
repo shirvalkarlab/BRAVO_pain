@@ -107,6 +107,7 @@ from .routines import adaptive_envelope as ENV
 from .routines import objective as OBJ
 from .routines import plots as PLT
 from .routines import surrogate as SUR
+from . import safety_ceiling as SC
 from .routines import validation as VAL
 
 #: Minimum epochs in a pulse-width stratum before a surface is fitted for it. Matched to the floor
@@ -676,14 +677,14 @@ def pw_col_for(hemisphere, columns, *, pw_col=None) -> tuple:
 def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_leg",
                pw_col=None, freq_grid=PLT.FREQ_GRID, amp_grid=PLT.AMP_GRID,
                fixed_length_scale=PLT.FIXED_LENGTH_SCALE, beta=PLT.BETA, kappa=PLT.KAPPA,
-               limit_anchors=PLT.LIMIT_ANCHORS, min_tolerated_h=MIN_TOLERATED_H,
+               min_tolerated_h=MIN_TOLERATED_H,
                min_stratum_epochs=PW_STRATUM_MIN_EPOCHS, q=4, eta=1.0,
                incumbent_epoch=None, data_horizon=PLT.DATA_HORIZON, washin_min=PLT.WASHIN_MIN,
                resolution_k=RESOLUTION_K, era_scheme="quarter",
                explore_outside_reason=None, explore_outside_by=None,
                explore_outside_requested=None,
                adaptive_min_rate_hz=ENV.MIN_RATE_HZ,
-               limit_anchors_by_hemisphere=None) -> Stage1Result:
+               safety_ceiling_by_hemisphere=None) -> Stage1Result:
     """Run the open-loop search and freeze a configuration.
 
     Parameters
@@ -722,11 +723,11 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
         says an override was ASKED for; when it is asked for with no reason the constraint stays
         and the configuration says the override was ignored. Every exclusion the constraint made
         is on ``.frozen.adaptive_envelope`` with its reason; nothing is silently dropped.
-    limit_anchors_by_hemisphere
-        ``{hemisphere: (anchors, meta)}`` from ``routines/plots.limit_anchors_from_stream``
-        (review S8, 2026-09-12): each side's safety-model limit anchors built from the
-        participant's own settings stream, recorded in that side's audit under
-        ``limit_anchors``. Absent, ``limit_anchors`` is used for every side as before.
+    safety_ceiling_by_hemisphere
+        ``{hemisphere: (ceiling_mA, provenance)}`` from ``safety_ceiling.ceilings_by_hemisphere``
+        (2026-09-12): the current above which each side is not acceptable, stated by the PI, the
+        severity-3 seed of that side's safety model. Recorded in the side's audit under
+        ``safety_ceiling``. Absent, the module hard limit with a provenance that says so.
 
     Returns
     -------
@@ -796,15 +797,16 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
         inc_amp = float(inc_row[amp_col])
         incumbent_xy = (inc_rate, inc_amp)
 
-        # Shared safety model, fitted once on the whole record for this hemisphere. Its limit
-        # anchors are this side's own when the caller built them from the stream (review S8).
-        anchors_h, anchors_meta = np.asarray(limit_anchors, float), dict(source="caller-supplied")
-        if limit_anchors_by_hemisphere and hemi in limit_anchors_by_hemisphere:
-            a_, m_ = limit_anchors_by_hemisphere[hemi]
-            anchors_h, anchors_meta = np.asarray(a_, float), dict(m_ or {})
-        deliv = D.loc[D["dur_h"].astype(float) >= float(min_tolerated_h),
-                      ["freq_hz", amp_col]].to_numpy(float)
-        Xs, sev, sv = SUR.SafetyGP.seed_from_history(deliv, anchors_h)
+        # Shared safety model, fitted once on the whole record for this hemisphere, from the ONE
+        # seed builder the flat fit (`plots.build_context`) also calls: severity 0 at every
+        # setting this side sustained above 0 mA, severity 3 at the PI-stated ceiling on every
+        # grid rate (`safety_ceiling.safety_seed`, 2026-09-12). Until then this fit also counted
+        # epochs at 0 mA on this side as tolerated anchors at zero current and the flat fit did
+        # not, so the two safe sets differed for one side under one seed.
+        ceiling_h = (safety_ceiling_by_hemisphere or {}).get(hemi)
+        Xs, sev, sv, seed_meta = SC.safety_seed(D, amp_col, freq_grid=freq_grid,
+                                                ceiling=ceiling_h,
+                                                min_tolerated_h=min_tolerated_h)
         sgp = SUR.SafetyGP(grid, random_state=0).fit(Xs, sev, sv)
         safe = sgp.safe_mask(beta=beta)
 
@@ -820,8 +822,7 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
                        pw_observed=bool(pw_present),
                        pw_col=str(pw_col_h), pw_col_fallback=bool(pw_fallback),
                        incumbent_pw_us=inc_pw_h,
-                       limit_anchors=dict(anchors_meta, n=int(len(anchors_h)),
-                                          anchors=[[float(a), float(b)] for a, b in anchors_h]))
+                       safety_ceiling=dict(seed_meta))
         if pw_present:
             h_audit["design"] = pulse_width_design_audit(fit, pw_col=pw_col_h,
                                                          min_epochs=min_stratum_epochs)

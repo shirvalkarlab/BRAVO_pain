@@ -3,7 +3,7 @@
 Sign convention throughout: **J is minimised**, so "better" means smaller and the optimistic
 (best-case) bound at a cell is ``mu - kappa*sigma``.
 
-Two batch designs, because a pain score integrates over hours to days and that latency is the
+One batch design, because a pain score integrates over hours to days and that latency is the
 dominant cost of a sample:
 
 ``select_batch_within_visit``
@@ -12,13 +12,10 @@ dominant cost of a sample:
     the discrete-space failure mode Sarikhani et al. had to patch, since maximising the
     acquisition on a grid repeatedly returns the incumbent.
 
-``select_batch_between_visit``
-    q settings programmed as selectable home groups over a follow-up interval, with a minimum
-    grid-separation constraint so the batch spans the space instead of clustering. Kaplan et al.
-    2021 (doi:10.1111/biom.13313) formulate this as choosing a group of configurations per
-    follow-up interval under a spatially autoregressive prior over neighbouring settings; here
-    the GP kernel already carries the neighbour correlation, so the separation constraint is what
-    remains to be added.
+A second selector, ``select_batch_between_visit`` (q settings programmed as selectable home
+groups over a follow-up interval with a minimum grid-separation constraint, after Kaplan et al.
+2021, doi:10.1111/biom.13313), and a GP-UCB lower-confidence-bound acquisition were reached by
+nothing in the running platform and were deleted on the PI's decision of 2026-09-12 (review S14).
 
 The stopping rule requires BOTH a plateau condition and a coverage condition
 (OBJECTIVE_SPEC section 4). The coverage condition is what makes "we have plateaued" an auditable
@@ -50,16 +47,6 @@ def ucb_kappa(t):
     """
     t = np.maximum(np.asarray(t, float), 1.0)
     return np.maximum(2.0 * np.log(t ** 2 * np.pi ** 2 / 6.0), 0.0)
-
-
-def lower_confidence_bound(mu, sd, t=1, eta=1.0):
-    """GP-UCB adapted to minimisation: ``mu - sqrt(eta*kappa_t)*sigma``.
-
-    ``eta`` is the exploration weight. Cole et al.'s configuration sweep found it did *not*
-    significantly predict unsafe overshoot — only the safety conservatism beta did — so it is a
-    genuine tuning knob rather than a safety-critical one.
-    """
-    return np.asarray(mu, float) - np.sqrt(float(eta) * ucb_kappa(t)) * np.asarray(sd, float)
 
 
 def exploration_fraction(sd, t=1, eta=1.0, mu=None):
@@ -145,54 +132,6 @@ def select_batch_within_visit(gp, grid, *, q, safe_mask=None, n_reports=None,
         avail[chosen] = False
         if not avail.any():
             break
-        idx = int(np.flatnonzero(avail)[np.argmax(acq[avail])])
-        ef = float(exploration_fraction(sd[idx], t=t + k, eta=eta, mu=mu[idx] - best))
-        edge = (expansion_edge_amp is not None
-                and gx[idx, 1] > float(expansion_edge_amp) - 1e-9)
-        out.append(BatchMember(idx, float(gx[idx, 0]), float(gx[idx, 1]), float(mu[idx]),
-                               float(sd[idx]), float(acq[idx]),
-                               _reason(mu[idx], sd[idx], best, ef, edge), ef))
-        chosen.append(idx)
-        model = model.with_fantasy(gx[[idx]], fv)
-    return out
-
-
-def select_batch_between_visit(gp, grid, *, q, min_separation, safe_mask=None, n_reports=None,
-                               incumbent_mu=None, fantasy_var=None, t=1, eta=1.0,
-                               exclude_tested=True, expansion_edge_amp=None):
-    """q settings to be programmed as home groups over a follow-up interval.
-
-    Same sequential-greedy machinery, plus a hard minimum separation in *standardised grid
-    units* between batch members. Between visits each setting is evaluated over days, so a batch
-    that clusters wastes the whole interval confirming one region; the separation constraint buys
-    coverage at some cost in expected improvement.
-
-    ``min_separation`` is measured on the same standardised (log2-frequency, amplitude) axes the
-    kernel uses, so a value near the fitted amplitude length scale means "batch members should
-    not be within one correlation length of each other".
-    """
-    if float(min_separation) <= 0:
-        raise ValueError("min_separation must be positive; use the within-visit selector for 0")
-    q = int(q)
-    cand = candidate_mask(grid, safe_mask=safe_mask, n_reports=n_reports,
-                          exclude_tested=exclude_tested)
-    if not cand.any():
-        raise ValueError("no eligible candidates for a between-visit batch")
-    fv = float(np.median(gp.y_var_)) if fantasy_var is None else float(fantasy_var)
-    gx = grid.grid_X()
-    Z = grid.transform(gx)
-    model = gp
-    chosen, out = [], []
-    for k in range(q):
-        mu, sd = model.predict_grid()
-        best = float(np.min(mu)) if incumbent_mu is None else float(incumbent_mu)
-        acq = expected_improvement(mu, sd, best)
-        avail = cand.copy()
-        avail[chosen] = False
-        for c in chosen:
-            avail &= np.linalg.norm(Z - Z[c], axis=1) >= float(min_separation)
-        if not avail.any():
-            break                     # separation exhausted the space; short batch is correct
         idx = int(np.flatnonzero(avail)[np.argmax(acq[avail])])
         ef = float(exploration_fraction(sd[idx], t=t + k, eta=eta, mu=mu[idx] - best))
         edge = (expansion_edge_amp is not None

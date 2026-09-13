@@ -35,14 +35,14 @@ def test_each_package_submodule_is_one_object_under_both_spellings():
 
 
 def test_a_module_level_switch_is_one_switch():
-    a = importlib.import_module("StimOptimizer.routines.plots")
-    b = importlib.import_module("modules.StimOptimizer.routines.plots")
-    before = a.USE_STREAM_LIMIT_ANCHORS
+    a = importlib.import_module("ClosedLoopDeployment.post_ramp")
+    b = importlib.import_module("modules.ClosedLoopDeployment.post_ramp")
+    before = a.USE_POST_RAMP_MARGIN
     try:
-        a.USE_STREAM_LIMIT_ANCHORS = not before
-        assert b.USE_STREAM_LIMIT_ANCHORS is (not before)
+        a.USE_POST_RAMP_MARGIN = not before
+        assert b.USE_POST_RAMP_MARGIN is (not before)
     finally:
-        a.USE_STREAM_LIMIT_ANCHORS = before
+        a.USE_POST_RAMP_MARGIN = before
 
 
 def test_the_package_itself_is_one_object():

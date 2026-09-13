@@ -1,5 +1,13 @@
 # An ordinal safety model, a BoTorch objective surrogate, and whether torch belongs in the container
 
+**Status, 2026-09-12: the code this document describes is deleted.** `routines/safety_ordinal.py`,
+`routines/surrogate_torch.py` and their tests (40 of them needing a PyTorch the container does not
+have) were reached by nothing in the running platform and were removed on the PI's decision of
+2026-09-12 (review S14 of `artifacts/review_2026-09-12_StimOptimizer.md`). The scikit-learn
+surrogate (`routines/surrogate.py`) is the only backend; no request key can select another. The
+document is kept as the record of why the ordinal model was designed and what it found.
+
+
 This document reports three things. The first is what an ordinal Gaussian-process model of
 side-effect severity says about participant RCS08 when it is fitted to the coded acute-step
 record. The second is whether the BoTorch objective surrogate in `routines/surrogate_torch.py`

@@ -126,35 +126,6 @@ def test_lfp_distribution_robust_range():
     assert max(d["counts"]) < sum(d["counts"])             # not all samples in one bar
 
 
-def test_corr_spectrum_enforces_50hz_cap():
-    """50 Hz cap in the correlation spectrum: a planted, dominant correlation at a >=50 Hz bin must
-    be excluded from peak-picking, the per-frequency significance markers, AND the peak-scatter — a
-    biomarker can never be drawn from there, so the panel must not surface it."""
-    from Biomarkers.routines import streaming_psd
-    f = streaming_psd.F_SET
-    Ff = len(f)
-    rng = np.random.default_rng(1)
-    E = 40
-    labels = np.linspace(0, 10, E)
-    feat = rng.normal(0, 1, (E, 2, Ff))
-    hi = int(np.argmin(np.abs(f - 70)))                 # plant the strongest |R| at 70 Hz
-    feat[:, 0, hi] = labels * 3
-    corr = np.array([[ (np.corrcoef(feat[:, c, j], labels)[0, 1] if np.std(feat[:, c, j]) > 0 else 0.0)
-                       for j in range(Ff)] for c in range(2)])
-    det = {"f_set": f, "corr": corr, "pval": np.full((2, Ff), 1e-4), "feature": feat,
-           "labels": labels, "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "transform": "log"}
-    # The global argmax |R| for ch0 IS the >=50 Hz cell -- the cap must keep it out of the outputs.
-    assert f[int(np.argmax(np.abs(corr[0])))] >= 50.0
-    cs = analytics.corr_spectrum(det, max_freq_hz=50.0)
-    ch0 = cs["channels"][0]
-    assert all(p["freq"] < 50.0 for p in ch0["peaks"]), "a >=50 Hz peak leaked past the cap"
-    assert all(ch0["significant"][k] is None for k in range(Ff) if f[k] >= 50.0)
-    if ch0["peak_scatter"] is not None:
-        assert ch0["peak_scatter"]["peak_freq"] < 50.0
-    # r is NaN'd at every >=50 Hz bin so nothing downstream can pick it.
-    assert all(ch0["r"][k] is None for k in range(Ff) if f[k] >= 50.0)
-
-
 def test_lfp_distribution_otsu_on_mad_filtered_data():
     """The Otsu split must be computed on the MAD-filtered LFP (within 3 MADs of the median), so a
     handful of artifact spikes cannot drag the threshold. The returned otsu sits between the two
@@ -454,15 +425,6 @@ def test_binarize_cut_invariant_to_sample_multiplicity():
     assert not np.array_equal(np.nan_to_num(b_unique, nan=-1),
                               np.nan_to_num(b_pseudo[:9], nan=-1)), \
         "dedup made no difference — rating_group not wired through"
-
-
-def test_matched_sample_counts_reports_high_low_and_offset():
-    vals = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, np.nan], float)
-    dt = np.array([2, -5, 10, np.nan, 3, -12, 1, 8, -2, np.nan], float)
-    mc = analytics.matched_sample_counts(vals, strategy="tertile", match_dt_min=dt, tolerance_min=15)
-    assert mc["n_matched"] == 9 and mc["n_high"] == 3 and mc["n_low"] == 3, mc
-    assert mc["n_excluded_middle"] == 3, mc
-    assert abs(mc["median_abs_offset_min"] - 4.0) < 1e-9, mc
 
 
 def test_builder_no_device_psd_scale_in_detail():
@@ -874,7 +836,6 @@ if __name__ == "__main__":
     test_cluster_scatter_missing_features()
     test_pain_binarization()
     test_lfp_distribution_robust_range()
-    test_corr_spectrum_enforces_50hz_cap()
     test_lfp_distribution_otsu_on_mad_filtered_data()
     test_power_pain_scatter_corr_and_outlier_exclusion()
     test_td_sliding_corr_grid_reaches_last_session_drops_corrupt_dates()
@@ -886,7 +847,6 @@ if __name__ == "__main__":
     test_chronic_center_freqs_active_group_wins()
     test_chronic_center_freqs_missing_is_safe()
     test_binarize_labels_tertile_excludes_middle()
-    test_matched_sample_counts_reports_high_low_and_offset()
     test_builder_no_device_psd_scale_in_detail()
     test_band_stim_stability_shape_and_no_stim_degrades()
     test_band_mixedmodel_inference_emits_or_ci()
@@ -2497,9 +2457,8 @@ def test_all_deployment_binarizations_pass_rating_group():
             where = owner_of(node.lineno)
             (passes if any(k.arg == "rating_group" for k in node.keywords) else omits).add(where)
     assert omits <= {
-        # counts high and low on the neural samples for a histogram; it is not an estimate, and
-        # it is handed a flat array of one score per session with no report grouping to pass
-        "matched_sample_counts",
+        # (`matched_sample_counts`, which counted high and low on the neural samples for a
+        # histogram nothing drew, was in this list until its deletion on 2026-09-12, B8.)
         # these two split on ONE channel's own samples through `finite_mask`, reproducing the
         # offline per-channel cut on purpose (parity audit section 6b)
         "band_mixedmodel_inference", "band_stim_stability",

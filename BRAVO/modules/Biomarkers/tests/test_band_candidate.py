@@ -1,8 +1,12 @@
-"""Unit tests for the BandCandidate emission helpers (DESIGN_biomarker_pipeline_v2 sec.6).
+"""Unit tests for the device-control mapping helpers (DESIGN_biomarker_pipeline_v2 sec.6) and the
+sign-off card's gates.
 
-These target the pure schema-assembly helpers and the device-control mapping logic, which do not
-need Django/DB. The end-to-end build_band_candidate path (DB + glmer) is exercised live via the
-/emitBandCandidate endpoint, not here.
+These target the pure helpers (`_band_credible_ci`, `_suggested_percept_mode`, the adaptive-range
+constants, `_band_decide_verdict` and the two `deployment_summary` gates), which do not need
+Django/DB. Until 2026-09-12 the same helpers also fed `build_band_candidate` behind the
+/emitBandCandidate route; that route and function were deleted on the PI's decision (Biomarkers
+review finding B12) because no page called them. The helpers stay because `deployment_summary`,
+the sign-off card's own endpoint, still reads them.
 
 Run inside the container:
     python3 -W ignore modules/Biomarkers/tests/test_band_candidate.py
