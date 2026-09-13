@@ -5,15 +5,17 @@ problem is that the module never handed the rule the value the device already re
 that still blocks does so for a reason the PI has read and agreed with.
 
 ## Next Step
-Session complete (2026-09-13). Phase 9 landed: "established" is the point sign, flagged
-provisional (decision 147); RCS08's Closed-Loop verdict now reads supported (point signs only;
-2 of 3 intervals span zero). Nothing waiting on the PI except the titration session (a clinic
-visit, recommended on the Stim Optimizer page) and two pre-existing page-level jest failures.
+Phase 10 landed (decision 148): the adaptive timing ranges (FDA Table 2 the one real source), the
+repo's "fixed timing" claim corrected, RCS08's own dynamics measured, recommendations in
+artifacts/research_2026-09-13_percept_adaptive_timing_SYNTHESIS.md. Open for the PI: the Percept
+clinician programmer guide ("A610") is not on this machine; whether the simulation card should
+replay the programmed group's own timing (next change, his call); the ganged right channel and the
+one-unit threshold gap.
 
 ## Current Phase
-Phase 9
+Phase 10
 
-phases: 9/9 complete
+phases: 10/10 complete
 
 ### Phase 1: Measure what the ledger says today
 - [x] Run the live report on RCS08 at the committed band (L 0-2+, 24.5 Hz) and list every non-pass row
@@ -68,6 +70,13 @@ phases: 9/9 complete
 - [x] An edge is resolved by its point estimate's sign; interval/p kept as caveats; the report counts the edges whose intervals span zero
 - [x] The verdict and the sign-off card read "supported (point signs only; N of 3 intervals span zero)" when any does; the parameters card shows values under that flag
 - [x] Equality proof on RCS08 (L 1-3+ 24.5 Hz and L 0-2+ 24.5 Hz), suites, frontend rebuild, watched in the browser, decision 147
+- **Status:** complete
+
+### Phase 10: Closed-loop timing parameters -- documented ranges and RCS08's own dynamics
+- [x] Manuals researcher: every adaptive parameter with its documented range, page-cited; contradictions with the repo's fixed-timing table
+- [x] Web + toolkits researcher: published ranges, FDA/Medtronic documents, Percept JSON field names from the open toolkits
+- [x] Data researcher: RCS08's programmed adaptive state; ACF/PSD time scales; crossing chatter vs onset; settling constants vs transitions; post-programming settling vs startup delay
+- [x] Synthesis: recommended settings inside the documented ranges with the rationale per parameter; what the record cannot decide
 - **Status:** complete
 
 ### Phase 5: Prove it on the page and land

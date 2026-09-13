@@ -225,3 +225,11 @@
 - 2026-09-13 Phase 9 built (builder): "established means the mean only" -- `EdgeEstimate.resolved` is the point sign, `statistically_established` is the interval rule kept as a caveat, `DeploymentReport.provisional` / `n_edges_unestablished`; verdict string "supported (point signs only; N of 3 intervals span zero)"; D26 verdicts follow the sign with the interval as a caveat; page: ProvisionalNote.js under the evidence and transcribe tracks, on the parameter card and the sign-off sheet; triangle labels read "SIGN − (INTERVAL SPANS ZERO)". RCS08 through the bridge, both L 1-3+ and L 0-2+ at 24.5 Hz: verdict unsupported -> supported (point signs only; 2 of 3 intervals span zero) -- 2 not 3, E3's interval excludes zero -- licensed False -> True; edge numbers 21 compared 0 differing, thresholds 8 / 0, prescription fields 48 / 0, ledger keyed by rule id 120 and 124 fields / 0 differing (the D26 advisory-failed row leaves L 1-3+ because the alert follows the sign). host 1086 / 2 / 0 (+17: 15 new, 2 splits), container 631 / 0; chunk 576.08f0ab97.chunk.js; workers reloaded. Report: artifacts/established_point_sign_2026-09-13.md. Not committed (orchestrator's).
 - Phase 9 watched live on L 1-3+ 24.5 Hz: header "supports it on point signs alone (provisional:
   2 of 3 intervals span zero)". Committed as decision 147. Phase 9 complete.
+- 2026-09-13: D01/D02 labelling advisories removed from the "What would change this" panel
+  (8181850d; watched: D09 still shown). Phase 10 opened: three researchers on the adaptive timing
+  parameters (manuals in the lab Dropbox extracted to scratchpad/medtronic_docs; web + toolkits;
+  RCS08 data through the bridge).
+- Phase 10 synthesis written (artifacts/research_2026-09-13_percept_adaptive_timing_SYNTHESIS.md);
+  DEVICE_percept_rc.md §2 corrected in place (defaults, not fixed; FDA ranges; startup delay);
+  decision 148. Recommendation: onset 30 s, averaging 30 s, transitions 30 s / 30 s, startup delay
+  15 s (or nearest above 12 s), blanking 30 s, thresholds separated. Phase 10 complete.
