@@ -131,7 +131,10 @@
         "_o_d27",
         "_p_d30",
         "_o_d30",
-        "_p_d32"
+        "_p_d32",
+        "_finite_timing",
+        "_p_d20",
+        "_p_d21"
       ],
       "BRAVO/modules/ClosedLoopDeployment/edges.py": [
         "state_edge"
