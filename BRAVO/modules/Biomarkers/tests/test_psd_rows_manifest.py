@@ -114,7 +114,7 @@ def test_a_cold_manifest_still_finds_files_already_on_disk():
         assert os.path.exists(path)
         assert not os.path.exists(B._rows_manifest_path(UID))   # no manifest at all yet
 
-        rows, n_cached, n_computed = B._assemble_psd_rows_cached(UID)
+        rows, n_cached, n_computed, _q = B._assemble_psd_rows_cached(UID)
         # Entry 1's file was found without a manifest entry; only entries 0 and 2 were decoded.
         assert n_cached == 1, f"expected the pre-existing file to be found, got n_cached={n_cached}"
         assert n_computed == 2, f"expected the two recordings with no file decoded, got {n_computed}"
@@ -130,11 +130,11 @@ def test_a_manifest_hit_skips_the_existence_check_and_still_matches():
     """A recording the manifest already calls good is opened directly; the rows it contributes are
     identical to a full recompute of the same recording."""
     with _Bench(n=2) as bench:
-        rows1, nc1, ncomp1 = B._assemble_psd_rows_cached(UID)
+        rows1, nc1, ncomp1, _q = B._assemble_psd_rows_cached(UID)
         assert ncomp1 == 2 and nc1 == 0
         assert bench.decodes == 2
 
-        rows2, nc2, ncomp2 = B._assemble_psd_rows_cached(UID)
+        rows2, nc2, ncomp2, _q = B._assemble_psd_rows_cached(UID)
         # Second call: everything is either in the rows-set cache or the per-recording manifest,
         # so nothing is decoded again.
         assert ncomp2 == 0, f"expected no further decodes on the second call, got {ncomp2}"
@@ -149,11 +149,11 @@ def test_force_recompute_ignores_and_then_repairs_both_caches():
     with _Bench(n=2) as bench:
         B._assemble_psd_rows_cached(UID)
         assert bench.decodes == 2
-        rows, nc, ncomp = B._assemble_psd_rows_cached(UID, force_recompute=True)
+        rows, nc, ncomp, _q = B._assemble_psd_rows_cached(UID, force_recompute=True)
         assert ncomp == 2, "force_recompute must ignore both caches and decode every recording"
         assert bench.decodes == 4
         # And the caches are repaired: the very next ordinary call decodes nothing.
-        _, _, ncomp2 = B._assemble_psd_rows_cached(UID)
+        _, _, ncomp2, _q = B._assemble_psd_rows_cached(UID)
         assert ncomp2 == 0
         assert bench.decodes == 4
     print("OK force_recompute ignores both caches and repairs them for the next ordinary call")

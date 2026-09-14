@@ -41,6 +41,7 @@ from .routines import analytics
 from .routines import availability
 from .routines import band_results_tables
 from .routines import sweep_settings
+from .routines import local_time
 from .routines import streaming_psd
 
 _log = logging.getLogger(__name__)
@@ -456,7 +457,6 @@ def _load_patient_events(participant_uid):
 
     Returns [{"name": str, "category": str, "t": epoch_s, "psds": [(freq_list, power_list), ...]}, ...].
     """
-    import datetime as _dt
     Participant = models.Participant.find(uid=participant_uid)
     if not Participant:
         return []
@@ -478,11 +478,10 @@ def _load_patient_events(participant_uid):
             if not isinstance(hemi_block, dict):
                 continue
             if t is None and hemi_block.get("DateTime"):
-                try:
-                    t = _dt.datetime.fromisoformat(
-                        str(hemi_block["DateTime"]).replace("Z", "+00:00")).timestamp()
-                except (ValueError, TypeError):
-                    t = None
+                # One parser for every device timestamp (review B9.3): `availability._to_epoch`
+                # reads a naive string as UTC on every machine (decision 102); this copy read it
+                # in the process's own zone, which agreed only because the container runs in UTC.
+                t = availability._to_epoch(str(hemi_block["DateTime"]))
             freq = hemi_block.get("Frequency")
             power = hemi_block.get("FFTBinData")
             if isinstance(freq, (list, tuple)) and isinstance(power, (list, tuple)) \
@@ -528,7 +527,6 @@ def _event_psd_rows(participant_uid, sensing_index=None):
     Returns a list of {"channel", "source", "t": epoch_s, "freq", "power"} rows — the SAME schema
     `_welch_rows_into` emits, ready for `streaming_psd.psd_rows_to_matrix`.
     """
-    import datetime as _dt
     Participant = models.Participant.find(uid=participant_uid)
     if not Participant:
         return []
@@ -551,11 +549,7 @@ def _event_psd_rows(participant_uid, sensing_index=None):
             # Parse event timestamp first so the resolver can do the temporal lookup.
             t = None
             if hb.get("DateTime"):
-                try:
-                    t = _dt.datetime.fromisoformat(
-                        str(hb["DateTime"]).replace("Z", "+00:00")).timestamp()
-                except (ValueError, TypeError):
-                    t = None
+                t = availability._to_epoch(str(hb["DateTime"]))   # one parser (review B9.3)
             if t is None:
                 t = getattr(r, "date", None)
             if t is None:
@@ -581,7 +575,6 @@ def _event_psd_index(participant_uid, sensing_index=None):
         sensing_index : optional output of _build_sensing_config_index; enables per-timestamp
                         channel resolution for no-SenseID blocks (the 84% majority on RCS08).
     """
-    import datetime as _dt
     Participant = models.Participant.find(uid=participant_uid)
     if not Participant:
         return []
@@ -603,11 +596,7 @@ def _event_psd_index(participant_uid, sensing_index=None):
                 continue
             t = None
             if hb.get("DateTime"):
-                try:
-                    t = _dt.datetime.fromisoformat(
-                        str(hb["DateTime"]).replace("Z", "+00:00")).timestamp()
-                except (ValueError, TypeError):
-                    t = None
+                t = availability._to_epoch(str(hb["DateTime"]))   # one parser (review B9.3)
             if t is None:
                 t = getattr(r, "date", None)
             if t is None:
@@ -1007,13 +996,28 @@ _AVAILABILITY_RESULT_MEMO_MAX = 8
 _AVAILABILITY_RESULT_MEMO_LOCK = threading.Lock()
 
 
+def _availability_build_failed(result):
+    """True when `result` is the payload `_build_availability` returns from its catch-all -- an
+    empty timeline that carries `failed: True` and the reason. It must never be memoized."""
+    return isinstance(result, dict) and bool(result.get("failed"))
+
+
 def _availability_result_cached(key, build_fn):
-    """Return the cached availability result for `key`, else call `build_fn()`, store it, return it."""
+    """Return the cached availability result for `key`, else call `build_fn()`, store it, return it.
+
+    A FAILED BUILD IS RETURNED BUT NOT STORED (review B2, 2026-09-12). `_build_availability`
+    answers any exception with an empty payload, and until this check that empty payload went into
+    the memo under the key like a real answer: every later request with the same key was handed
+    "no recordings" without rebuilding, for hours on a participant who keeps rating (the key
+    changes with the pain table) and until the worker restarted on one who does not. The failure
+    is now marked on the payload and refused here, so the next request tries the build again."""
     with _AVAILABILITY_RESULT_MEMO_LOCK:
         cached = _AVAILABILITY_RESULT_MEMO.get(key)
     if cached is not None:
         return cached
     result = build_fn()
+    if _availability_build_failed(result):
+        return result
     with _AVAILABILITY_RESULT_MEMO_LOCK:
         if key not in _AVAILABILITY_RESULT_MEMO and len(_AVAILABILITY_RESULT_MEMO) >= _AVAILABILITY_RESULT_MEMO_MAX:
             _AVAILABILITY_RESULT_MEMO.pop(next(iter(_AVAILABILITY_RESULT_MEMO)))
@@ -1797,24 +1801,12 @@ def _missing_time_vector(missing, nsamp):
     return np.asarray(m).ravel()
 
 
-def _canon_channel(name):
-    """Normalize a Medtronic channel name to the canonical bipolar form used by `_MAIN_BIPOLAR`.
-
-    The same physical bipolar pair is spelled differently across products:
-      * TD streaming / Stim+Baseline montages:  `ZERO_THREE_LEFT`         (already canonical)
-      * BrainSense Survey / montage sweeps:      `ZERO_AND_THREE_LEFT_RING`
-
-    Before this normalizer the per-channel scan tested membership with an EXACT string match, so the
-    Survey product's ring-named channels never matched and its 202 recordings contributed ZERO rows
-    to the pool (the pool only looked healthy because Stim/Baseline montages re-export three of the
-    same pairs under the short spelling). Stripping `_AND_` and the `_RING` suffix maps the ring
-    names onto the canonical pairs (`ZERO_AND_THREE_LEFT_RING` -> `ZERO_THREE_LEFT`); already-short
-    names are unchanged (idempotent). Returns the canonical upper-case name.
-    """
-    u = str(name).upper().replace("_AND_", "_")
-    if u.endswith("_RING"):
-        u = u[:-len("_RING")]
-    return u
+# ONE channel canonicaliser (review B9.1, 2026-09-12). This file used to carry its own copy of
+# `availability._canon_channel`, identical line for line; the copy is gone and the name is bound
+# here so the callers below and `tests/test_channel_canon.py` keep reading it as
+# `bravo_service._canon_channel`. `_CHANNEL_CANON_VERSION` above still names the rule's version
+# in every per-recording cache key.
+_canon_channel = availability._canon_channel
 
 # Single-worker pool that warms the PSD-matrix cache off the request thread (eager compute while the
 # user reviews the availability timeline). Daemon threads so it never blocks process shutdown.
@@ -1852,9 +1844,27 @@ def _assemble_psd_rows(participant_uid, td_list, psd_list):
     return rows
 
 
-def _welch_rows_into(rows, recs, source_label, _sp, pro_times=None):
+#: The two quality counters `_welch_rows_into` keeps (review B6): how many recordings whose
+#: rating-centred spectrum RAISED and were given a session-start spectrum instead, and how many
+#: were DROPPED because their first-window spectrum raised. Both used to happen in silence.
+_WELCH_COUNTER_KEYS = ("n_centered_fell_back", "n_skipped")
+
+
+def _new_welch_counts():
+    return {k: 0 for k in _WELCH_COUNTER_KEYS}
+
+
+def _welch_rows_into(rows, recs, source_label, _sp, pro_times=None, counts=None):
     """Welch every main-bipolar channel of each loaded recording dict, appending
     {"channel", "source", "t", "freq", "power", "dur"} rows to `rows`.
+
+    Returns `(n_centered_fell_back, n_skipped)` for THIS call, and adds the same two numbers into
+    `counts` when a dict is passed (review B6, 2026-09-12). Both are cases the page could not
+    see: a recording whose rating-centred spectrum raised was silently given a spectrum stamped
+    at the recording START instead of at the rating, and a recording whose first-window spectrum
+    raised was silently absent from the pool -- and both outcomes were then persisted by the
+    per-recording cache. Each is now logged with its traceback and counted; the counts travel
+    with the cached rows to the matrix payload and to `run_for_participant`'s `cache` block.
 
     Single source of truth for the row schema: BOTH the legacy whole-participant assembly
     (`_assemble_psd_rows`) and the per-recording cache (`_recording_psd_rows`) build rows through
@@ -1875,6 +1885,8 @@ def _welch_rows_into(rows, recs, source_label, _sp, pro_times=None):
     """
     centered = (pro_times is not None and source_label == "TD streaming")
     pt = np.asarray(pro_times, dtype=float) if centered else None
+    n_fell_back = 0
+    n_skipped = 0
     for r in recs or []:
         if not isinstance(r, dict):
             continue
@@ -1929,6 +1941,13 @@ def _welch_rows_into(rows, recs, source_label, _sp, pro_times=None):
                                          "dur": dk})
                     emitted = psd_k.shape[0] > 0
                 except Exception:
+                    # NOT SILENT (review B6): this recording now gets a spectrum stamped at its
+                    # START instead of at the rating, which is a different quantity, and the
+                    # substitution is counted so the page can say how many rows it affects.
+                    n_fell_back += 1
+                    _log.warning("Biomarkers: rating-centred spectrum failed for the recording "
+                                 "starting %s (%d ratings inside); falling back to its "
+                                 "session-start spectrum", t0, int(in_win.size), exc_info=True)
                     emitted = False
             if emitted:
                 continue
@@ -1939,6 +1958,10 @@ def _welch_rows_into(rows, recs, source_label, _sp, pro_times=None):
             psd = _sp.welch_psd_for_instance(sig, names, fs, keep_names,
                                              missing=miss_vec)  # (1, k, F)
         except Exception:
+            # NOT SILENT (review B6): the recording is absent from the pool, and that is counted.
+            n_skipped += 1
+            _log.warning("Biomarkers: first-window spectrum failed for the %s recording starting "
+                         "%s; it is left out of the pool", source_label, t0, exc_info=True)
             continue
         psd = np.asarray(psd)
         # Missing-aware rejection: welch_psd_for_instance returns an all-NaN PSD when the first
@@ -1957,6 +1980,10 @@ def _welch_rows_into(rows, recs, source_label, _sp, pro_times=None):
             rows.append({"channel": _canon_channel(n), "source": source_label,
                          "t": float(t0), "freq": _sp.F_SET, "power": psd[0, j, :],
                          "dur": used_dur})
+    if counts is not None:
+        counts["n_centered_fell_back"] = int(counts.get("n_centered_fell_back", 0)) + n_fell_back
+        counts["n_skipped"] = int(counts.get("n_skipped", 0)) + n_skipped
+    return n_fell_back, n_skipped
 
 
 def _psd_sample_index(td_list, psd_list, pro_times=None):
@@ -1968,7 +1995,9 @@ def _psd_sample_index(td_list, psd_list, pro_times=None):
     pooled PSD matrix — modulo the rare degenerate spectrum Welch drops (<4 finite bins), which
     effectively never occurs on real recordings. This lets the frontend replicate the backend's
     nearest-PRO match + binarization LIVE as the match-window slider moves, so the binarization
-    histogram and the timeline coloring stay faithful to `matched_sample_counts` without a recompute.
+    histogram and the timeline coloring are computed from the same sample set the backend matches
+    (the browser's own count, binarizationModel.js, is the only count of matched samples since the
+    server's `matched_sample_counts` was deleted on 2026-09-12, review finding B8).
 
     `pro_times` mirrors `_welch_rows_into`: when provided, TD-streaming entries become
     RATING-CENTERED — one entry per (overlapping PRO, channel), stamped at the PRO's own timestamp
@@ -2132,34 +2161,46 @@ def _save_rows_manifest(participant_uid, known_good):
             pass
 
 
-def _rows_cache_path(participant_uid, rows_sig):
-    return os.path.join(_psd_rows_index_dir(), f"rows_{participant_uid}_{rows_sig}.pkl")
+def _rows_cache_path(participant_uid, rows_sig, pro_sig=""):
+    """The rows-set file for one participant and one recording-set stamp. The name also says which
+    PAIN-SET CLASS the rows were built for (review B4): `_p` for rating-centred rows (a report set
+    was given) and `_nop` for the legacy first-window rows (none was), so the sweep below can keep
+    one entry of EACH class rather than one in total -- the page (`_p`) and the calibration panel
+    and the ingest's warm (`_nop`) are both live writers, and under one-in-total they evicted each
+    other's rows-set every day."""
+    cls = "_p" if pro_sig else "_nop"
+    return os.path.join(_psd_rows_index_dir(), f"rows_{participant_uid}_{rows_sig}{cls}.pkl")
 
 
-def _load_rows_cache(participant_uid, rows_sig):
+def _load_rows_cache(participant_uid, rows_sig, pro_sig=""):
     """The fully assembled per-recording rows for this exact recording set, or None on a miss or
     any read error. Holds the rows BEFORE patient-event rows are appended: those are read fresh
     from the ORM on every call regardless, exactly as they always have been, because a new patient
     event is not a new recording and does not change `rows_sig`."""
-    path = _rows_cache_path(participant_uid, rows_sig)
+    path = _rows_cache_path(participant_uid, rows_sig, pro_sig)
     if not os.path.exists(path):
         return None
     try:
         with open(path, "rb") as fh:
-            return pickle.load(fh)
+            got = pickle.load(fh)
     except Exception as e:
         _log.warning("Biomarkers: PSD rows-set cache read failed (%s); recomputing", e)
         return None
+    # Since 2026-09-12 the file is {"rows": [...], "quality": {...}} (review B6); an older file
+    # holds the bare list, whose quality counters are then "not recorded".
+    if isinstance(got, dict) and "rows" in got:
+        return got["rows"], (got.get("quality") or None)
+    return got, None
 
 
-def _save_rows_cache(participant_uid, rows_sig, rows):
-    path = _rows_cache_path(participant_uid, rows_sig)
+def _save_rows_cache(participant_uid, rows_sig, rows, quality=None, pro_sig=""):
+    path = _rows_cache_path(participant_uid, rows_sig, pro_sig)
     tmp = f"{path}.{os.getpid()}.tmp"
     try:
         with open(tmp, "wb") as fh:
-            pickle.dump(rows, fh, protocol=pickle.HIGHEST_PROTOCOL)
+            pickle.dump({"rows": rows, "quality": quality}, fh, protocol=pickle.HIGHEST_PROTOCOL)
         os.replace(tmp, path)
-        _sweep_old_rows_cache(participant_uid, rows_sig)
+        _sweep_old_rows_cache(participant_uid, rows_sig, pro_sig)
     except Exception as e:
         _log.warning("Biomarkers: PSD rows-set cache write failed (%s)", e)
         try:
@@ -2168,24 +2209,31 @@ def _save_rows_cache(participant_uid, rows_sig, rows):
             pass
 
 
-def _sweep_old_rows_cache(participant_uid, keep_sig):
-    """Remove this participant's other rows-set entries once the new one has landed. Every new
-    upload changes `rows_sig`, so without this the old entries would sit there forever -- the same
-    reason `CacheStore._sweep_superseded` exists, at the same modest per-write cost (one directory
-    listing, only on a write, never on a read)."""
+def _sweep_old_rows_cache(participant_uid, keep_sig, pro_sig=""):
+    """Remove this participant's other rows-set entries OF THE SAME PAIN-SET CLASS once the new
+    one has landed. Every new upload changes `rows_sig`, so without this the old entries would sit
+    there forever -- the same reason `CacheStore._sweep_superseded` exists, at the same modest
+    per-write cost (one directory listing, only on a write, never on a read). Only names sharing
+    the new entry's class suffix (`_p` / `_nop`, see `_rows_cache_path`) are removed, so a
+    rating-centred entry and a first-window entry can both stay (review B4). A file from before
+    the suffix existed (`rows_<uid>_<sig>.pkl`, no class) is removed by either class's sweep."""
     d = _psd_rows_index_dir()
     prefix = f"rows_{participant_uid}_"
-    keep = os.path.basename(_rows_cache_path(participant_uid, keep_sig))
+    keep = os.path.basename(_rows_cache_path(participant_uid, keep_sig, pro_sig))
+    other = "_nop.pkl" if pro_sig else "_p.pkl"
     try:
         names = os.listdir(d)
     except OSError:
         return
     for name in names:
-        if name.startswith(prefix) and name != keep and not name.endswith(".tmp"):
-            try:
-                os.remove(os.path.join(d, name))
-            except OSError:
-                pass
+        if not name.startswith(prefix) or name == keep or name.endswith(".tmp"):
+            continue
+        if name.endswith(other):
+            continue                      # the other class's current entry stays
+        try:
+            os.remove(os.path.join(d, name))
+        except OSError:
+            pass
 
 
 def _pro_set_signature(pro_times):
@@ -2208,6 +2256,79 @@ def _pro_set_signature(pro_times):
         return ""
     pt = np.unique(np.round(pt).astype(np.int64))   # sorted + de-duped whole-second stamps
     return hashlib.sha1(pt.tobytes()).hexdigest()[:12]
+
+
+#: How far beyond a recording's own coverage the key looks for ratings (review B5). The row's
+#: start and duration equal the decoded values exactly on the whole live record, so no margin is
+#: needed for correctness today; the margin guards a future ingest whose row metadata is off by a
+#: little from the decoded coverage. Its only cost is that a rating within a minute of a
+#: recording's edge invalidates that recording's file although it did not change its rows.
+_COVERAGE_KEY_MARGIN_S = 60.0
+
+
+def _recording_pro_signature(entry, pt_all, whole_set_sig):
+    """The report-set signature ONE recording's spectrum file is keyed on: the ratings inside its
+    own coverage (plus the margin above), computed from the row's start and duration alone.
+    Returns `(signature, fell_back)`; `fell_back` is True when the row carries no coverage and
+    the whole-set signature is used for this recording instead. An empty in-coverage set gives
+    "" -- the same key as the first-window rows, which is exactly what `_welch_rows_into` emits
+    for a recording with no rating inside it."""
+    t0, dur = entry.get("t0"), entry.get("dur")
+    if pt_all is None or t0 is None or dur is None:
+        return whole_set_sig, True
+    lo, hi = float(t0) - _COVERAGE_KEY_MARGIN_S, float(t0) + float(dur) + _COVERAGE_KEY_MARGIN_S
+    inside = pt_all[(pt_all >= lo) & (pt_all <= hi)]
+    return _pro_set_signature(inside), False
+
+
+def _migrate_whole_set_file(entry, new_path, whole_set_sig):
+    """One-time migration (review B5, 2026-09-12): before today a voltage-trace recording's
+    spectrum file was keyed on the WHOLE report set. Such a file built for the current report set
+    holds exactly the rows the new per-recording key names -- `_welch_rows_into` only ever used
+    the ratings inside the recording's coverage -- so its rows are written under the new key
+    through the one per-recording writer (`_save_recording_psd_rows`, the construct the one-store
+    guard grandfathers) and the old file removed, instead of the recording being decoded and
+    Welch'd again (about 190 s for the whole record, once). Returns True when a file now sits at
+    `new_path`."""
+    if not whole_set_sig or entry.get("source") != "TD streaming":
+        return False
+    old_path = _recording_psd_cache_path(entry["uid"], entry["hash"], whole_set_sig)
+    if old_path == new_path or not os.path.exists(old_path):
+        return False
+    rows, counts = _load_recording_psd_rows(old_path, with_counts=True)
+    if rows is None:
+        return False
+    try:
+        _save_recording_psd_rows(new_path, rows, counts=counts)
+        os.remove(old_path)
+        return True
+    except OSError:
+        return os.path.exists(new_path)
+
+
+def _sweep_recording_psd_siblings(path):
+    """Remove the OTHER rating-centred spectrum files of the recording `path` belongs to, once the
+    new one is in place (review B5); returns the basenames removed. The legacy first-window file
+    (no `_p` part) is not touched: it is a different product, still read by the ingest's warm and
+    the calibration panel. Best-effort, like every cache write here."""
+    d, base = os.path.split(path)
+    marker = f"_{_TD_MISSING_VERSION}_p"
+    if marker not in base:
+        return []
+    stem = base.split(marker, 1)[0] + marker
+    removed = []
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return removed
+    for name in names:
+        if name.startswith(stem) and name != base and name.endswith(".npz") and ".tmp." not in name:
+            try:
+                os.remove(os.path.join(d, name))
+                removed.append(name)
+            except OSError:
+                pass
+    return removed
 
 
 def _recording_psd_cache_path(rec_uid, rec_hash, pro_sig=""):
@@ -2233,12 +2354,16 @@ def _recording_psd_cache_path(rec_uid, rec_hash, pro_sig=""):
                         f"{rec_uid}_{h}_w{w}_{_CHANNEL_CANON_VERSION}_{_TD_MISSING_VERSION}{p}.npz")
 
 
-def _save_recording_psd_rows(path, rows):
+def _save_recording_psd_rows(path, rows, counts=None):
     """Persist one recording's PSD rows (the per-channel spectra) to a compact .npz.
 
     `rows` is a list of {"channel","source","t","freq","power"} for a SINGLE recording instance.
     Stored as parallel arrays; an empty list is still written (a valid 0-row cache entry) so a
     recording that legitimately yields no main-bipolar spectra is not re-decoded every time.
+
+    `counts` (review B6): the two `_welch_rows_into` quality counters for this recording, stored
+    beside the rows so a later assembly served from this file can still report them. A file
+    written without them (before 2026-09-12) reads back as "not recorded", never as zero.
     """
     chans = np.asarray([str(r["channel"]) for r in rows], dtype=object)
     srcs = np.asarray([str(r["source"]) for r in rows], dtype=object)
@@ -2250,29 +2375,39 @@ def _save_recording_psd_rows(path, rows):
     # np.savez APPENDS ".npz" if the name lacks it, so the temp name must already end in ".npz"
     # (else savez writes "<tmp>.npz" and the os.replace below moves a nonexistent file). Keep ".npz".
     tmp = path[:-4] + ".tmp.npz" if path.endswith(".npz") else path + ".tmp.npz"
+    extra = {}
+    if counts is not None:
+        extra = {k: np.asarray([int(counts.get(k, 0))]) for k in _WELCH_COUNTER_KEYS}
     np.savez(tmp, channel=chans, source=srcs, t=ts, dur=durs, power=powers, freq=freq,
-             n=np.asarray([len(rows)]))
+             n=np.asarray([len(rows)]), **extra)
     os.replace(tmp, path)   # atomic — a concurrent reader never sees a half-written file
 
 
-def _load_recording_psd_rows(path):
+def _load_recording_psd_rows(path, with_counts=False):
     """Reload one recording's PSD rows from its .npz, reconstructing the row dicts (or None on miss/
-    error so the caller recomputes). Returns a possibly-empty list when the cache entry is valid."""
+    error so the caller recomputes). Returns a possibly-empty list when the cache entry is valid.
+
+    With `with_counts=True` returns `(rows, counts)` instead, where `counts` is the stored pair of
+    `_welch_rows_into` quality counters, or None for a file written before they were stored."""
     try:
         z = np.load(path, allow_pickle=True)
         n = int(z["n"][0])
+        counts = None
+        if all(k in z.files for k in _WELCH_COUNTER_KEYS):
+            counts = {k: int(z[k][0]) for k in _WELCH_COUNTER_KEYS}
         if n == 0:
-            return []
+            return ([], counts) if with_counts else []
         freq = z["freq"]
         chans, srcs, ts, powers = z["channel"], z["source"], z["t"], z["power"]
         durs = z["dur"] if "dur" in z.files else None   # older cache entries lack dur
-        return [{"channel": str(chans[i]), "source": str(srcs[i]), "t": float(ts[i]),
+        rows = [{"channel": str(chans[i]), "source": str(srcs[i]), "t": float(ts[i]),
                  "freq": freq, "power": powers[i],
                  "dur": (float(durs[i]) if durs is not None else float("nan"))}
                 for i in range(n)]
+        return (rows, counts) if with_counts else rows
     except Exception as e:
         _log.warning("Biomarkers: per-recording PSD cache read failed (%s); will recompute", e)
-        return None
+        return (None, None) if with_counts else None
 
 
 def _recording_rows_for_psd(participant_uid):
@@ -2293,8 +2428,22 @@ def _recording_rows_for_psd(participant_uid):
     for types, source_label in ((TIMEDOMAIN_TYPES, "TD streaming"),
                                 (AVAILABILITY_PSD_TYPES, "Montage/survey")):
         for rec in models.Recording.find_all(source__in=SourceFiles, type__in=types):
+            # The recording's coverage, off the ROW (review B5): `date` is the decoded StartTime
+            # and `metadata["Duration"]` the decoded length -- equal to the digit on all 386 of
+            # RCS08's voltage-trace rows, measured 2026-09-12. A row with no Duration gets None,
+            # and its spectrum file is then keyed on the whole report set as before.
+            md = getattr(rec, "metadata", None)
+            dur = md.get("Duration") if isinstance(md, dict) else None
+            try:
+                t0 = float(rec.date)
+            except (TypeError, ValueError):
+                t0 = None
+            try:
+                dur = float(dur) if dur is not None else None
+            except (TypeError, ValueError):
+                dur = None
             out.append({"rec": rec, "uid": rec.uid, "hash": getattr(rec, "hashed", ""),
-                        "source": source_label})
+                        "source": source_label, "t0": t0, "dur": dur})
     return out
 
 
@@ -2329,26 +2478,51 @@ def _assemble_psd_rows_cached(participant_uid, pro_times=None, force_recompute=F
     at all, costs at most the existence check this function has always made -- never a redecode of
     a recording whose file was already on disk, and never a wrong or missing recording.
 
-    Returns (rows, n_cached, n_computed) — the row counts let callers log/verify the cache hit rate.
+    Returns (rows, n_cached, n_computed, quality) — the row counts let callers log/verify the
+    cache hit rate; `quality` (review B6) is the sum over recordings of `_welch_rows_into`'s two
+    counters, `n_centered_fell_back` and `n_skipped`, plus `n_recordings_without_counts` for
+    recordings served from a per-recording file written before the counters were stored (their
+    two numbers are unknown, and are NOT counted as zero).
     """
     from .routines import streaming_psd as _sp
     entries = _recording_rows_for_psd(participant_uid)
     if not entries:
-        return [], 0, 0
+        return [], 0, 0, _new_quality()
 
     pro_sig = _pro_set_signature(pro_times) if pro_times is not None else ""
+    pt_all = (np.asarray(pro_times, dtype=float) if pro_sig else None)
+    n_keyed_on_whole_set = 0
+    keys = {}
 
-    def _key_for(e):
+    for e in entries:
         # Only TD-streaming recordings carry the PRO signature in their key (their spectra are
         # rating-centered); montage/survey stay PRO-independent so their cache is never invalidated
         # by a PRO edit.
-        sig = pro_sig if (pro_sig and e["source"] == "TD streaming") else ""
-        return _recording_psd_cache_path(e["uid"], e["hash"], sig)
+        if not (pro_sig and e["source"] == "TD streaming"):
+            keys[id(e)] = _recording_psd_cache_path(e["uid"], e["hash"], "")
+            continue
+        # THE KEY IS THE RATINGS INSIDE THIS RECORDING'S OWN COVERAGE (review B5), because those
+        # are the only ratings its rating-centred rows depend on (`_welch_rows_into`'s `in_win`).
+        # Keyed on the whole report set, every rating filed anywhere re-Welched all 386 voltage-
+        # trace recordings and left 386 new files behind. A row with no coverage on it keeps the
+        # whole-set key, and is counted.
+        sig, fell_back = _recording_pro_signature(e, pt_all, pro_sig)
+        n_keyed_on_whole_set += int(fell_back)
+        keys[id(e)] = _recording_psd_cache_path(e["uid"], e["hash"], sig)
+
+    def _key_for(e):
+        return keys[id(e)]
 
     rows_sig = _rows_set_signature(entries, _key_for)
-    rows = None if force_recompute else _load_rows_cache(participant_uid, rows_sig)
-    if rows is not None:
+    hit = None if force_recompute else _load_rows_cache(participant_uid, rows_sig, pro_sig)
+    quality = _new_quality()
+    if hit is not None:
+        rows, stored_quality = hit
         n_cached, n_computed = len(entries), 0
+        if stored_quality:
+            quality.update({k: int(stored_quality.get(k, 0)) for k in quality})
+        else:
+            quality["n_recordings_without_counts"] = len(entries)
     else:
         known_good = set() if force_recompute else _load_rows_manifest(participant_uid)
         manifest_changed = False
@@ -2358,29 +2532,33 @@ def _assemble_psd_rows_cached(participant_uid, pro_times=None, force_recompute=F
         for e in entries:
             path = _key_for(e)
             name = os.path.basename(path)
-            cached = None
+            cached, cached_counts = None, None
             # force_recompute ignores the on-disk spectra so every recording is decoded and Welch'd
             # again. The rebuilt rows are still written back, so this is a one-off cost.
             if not force_recompute:
                 if name in known_good:
                     # The manifest says this file is good: skip the existence check and open it
                     # directly. If the manifest was wrong, the load itself catches that below.
-                    cached = _load_recording_psd_rows(path)
+                    cached, cached_counts = _load_recording_psd_rows(path, with_counts=True)
                     if cached is None:
                         known_good.discard(name)
                         manifest_changed = True
-                elif os.path.exists(path):
+                elif os.path.exists(path) or _migrate_whole_set_file(e, path, pro_sig):
                     # NOT IN THE MANIFEST IS NOT THE SAME AS MISSING. A file already on disk from
                     # before this manifest existed, or from a manifest write that was lost to a
                     # concurrent request, is still found here exactly as it always was; finding it
                     # also repairs the manifest, so this fallback is paid at most once per file.
-                    cached = _load_recording_psd_rows(path)
+                    # (`_migrate_whole_set_file`: a file this recording had under the pre-B5
+                    # whole-set key for THIS report set holds exactly the rows the new key names,
+                    # so it is renamed rather than re-Welched -- once.)
+                    cached, cached_counts = _load_recording_psd_rows(path, with_counts=True)
                     if cached is not None:
                         known_good.add(name)
                         manifest_changed = True
             if cached is not None:
                 rows.extend(cached)
                 n_cached += 1
+                _add_quality(quality, cached_counts)
             else:
                 missing.append(e)
 
@@ -2404,25 +2582,34 @@ def _assemble_psd_rows_cached(participant_uid, pro_times=None, force_recompute=F
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 for e, dicts in pool.map(_decode, missing):
                     rec_rows = []
+                    rec_counts = _new_welch_counts()
                     if dicts:
                         # TD streaming gets rating-centered rows when pro_times is provided; other
                         # sources ignore it (pass None so they keep the first-window behavior).
                         _pt = (pro_times if (pro_times is not None and e["source"] == "TD streaming")
                                else None)
-                        _welch_rows_into(rec_rows, dicts, e["source"], _sp, pro_times=_pt)
+                        _welch_rows_into(rec_rows, dicts, e["source"], _sp, pro_times=_pt,
+                                         counts=rec_counts)
                     rows.extend(rec_rows)
                     n_computed += 1
+                    _add_quality(quality, rec_counts)
                     # Persist this recording's rows (even if empty) so it is never re-decoded.
                     try:
-                        _save_recording_psd_rows(_key_for(e), rec_rows)
-                        known_good.add(os.path.basename(_key_for(e)))
+                        path = _key_for(e)
+                        _save_recording_psd_rows(path, rec_rows, counts=rec_counts)
+                        known_good.add(os.path.basename(path))
+                        # This recording's OTHER rating-centred files are superseded by the one
+                        # just written (review B5): remove them, and forget them in the manifest.
+                        for gone in _sweep_recording_psd_siblings(path):
+                            known_good.discard(gone)
                         manifest_changed = True
                     except Exception as ex:
                         _log.warning("Biomarkers: per-recording PSD cache write failed (%s)", ex)
 
         if manifest_changed:
             _save_rows_manifest(participant_uid, known_good)
-        _save_rows_cache(participant_uid, rows_sig, rows)
+        quality["n_recordings_keyed_on_whole_set"] = n_keyed_on_whole_set
+        _save_rows_cache(participant_uid, rows_sig, rows, quality=dict(quality), pro_sig=pro_sig)
 
     # Patient-event PSDs (incl. Streaming markers): read off ORM metadata, no decode/Welch, so they
     # need no per-recording cache and are never part of the rows-set stamp above. Appended on every
@@ -2440,7 +2627,27 @@ def _assemble_psd_rows_cached(participant_uid, pro_times=None, force_recompute=F
     except Exception as ex:
         _log.warning("Biomarkers: patient-event PSD harvest failed (%s); pool excludes events", ex)
 
-    return rows, n_cached, n_computed
+    return rows, n_cached, n_computed, quality
+
+
+#: The quality summary an assembly reports (review B6): the two `_welch_rows_into` counters summed
+#: over recordings, and how many recordings' files pre-date the counters (unknown, not zero).
+_QUALITY_KEYS = ("n_centered_fell_back", "n_skipped", "n_recordings_without_counts",
+                 "n_recordings_keyed_on_whole_set")
+
+
+def _new_quality():
+    return {k: 0 for k in _QUALITY_KEYS}
+
+
+def _add_quality(quality, counts):
+    """Fold one recording's stored counters into the assembly's summary; a recording with no
+    stored counters is counted as such rather than as having had no failure."""
+    if counts is None:
+        quality["n_recordings_without_counts"] += 1
+        return
+    for k in _WELCH_COUNTER_KEYS:
+        quality[k] += int(counts.get(k, 0))
 
 
 def _psd_matrix_signature(td_list, psd_list):
@@ -2536,16 +2743,31 @@ def _normalize_force_refresh(value):
 PSD_MATRIX_KIND = "biomarker_psd_matrix"
 
 
-def _psd_matrix_payload(mat):
+def _psd_matrix_payload(mat, quality=None):
     """`psd_rows_to_matrix`'s dict, as the plain array bundle the store writes -- same fields, same
     dtypes, as the on-disk npz this replaces, so an entry already on disk in the old ad hoc
-    directory and one written through the store are byte-for-byte the same shape."""
+    directory and one written through the store are byte-for-byte the same shape.
+
+    `quality` (review B6) adds the assembly's three quality counters as one-element integer
+    arrays, so a matrix served from the store can still say how many recordings fell back to a
+    session-start spectrum, how many were left out, and how many are unknown."""
     out = dict(logX=mat["logX"], t=mat["t"],
               channel=np.asarray(mat["channel"], dtype=str),
               source=np.asarray(mat["source"], dtype=str), f_set=mat["f_set"])
     if mat.get("dur") is not None:
         out["dur"] = np.asarray(mat["dur"], dtype=float)
+    if quality is not None:
+        for k in _QUALITY_KEYS:
+            out[k] = np.asarray([int(quality.get(k, 0))])
     return out
+
+
+def _psd_matrix_quality(payload):
+    """The three quality counters read back out of a matrix payload (`None` for a payload written
+    before they existed), as plain ints for the page."""
+    if not isinstance(payload, dict) or not all(k in payload for k in _QUALITY_KEYS):
+        return None
+    return {k: int(np.asarray(payload[k]).ravel()[0]) for k in _QUALITY_KEYS}
 
 
 def _cached_psd_matrix(participant_uid, td_list=None, psd_list=None, pro_times=None,
@@ -2588,15 +2810,17 @@ def _cached_psd_matrix(participant_uid, td_list=None, psd_list=None, pro_times=N
         if cached is not None:
             return cached
 
-    rows, n_cached, n_computed = _assemble_psd_rows_cached(
+    rows, n_cached, n_computed, quality = _assemble_psd_rows_cached(
         participant_uid, pro_times=pro_times, force_recompute=(_fr == "all"))
     if n_computed or n_cached:
         _log.info("Biomarkers: PSD rows assembled for %s — %d from per-recording cache, %d Welch'd",
                   participant_uid, n_cached, n_computed)
+    if quality.get("n_centered_fell_back") or quality.get("n_skipped"):
+        _log.warning("Biomarkers: spectrum builder quality for %s: %s", participant_uid, quality)
     mat = _sp.psd_rows_to_matrix(rows)
     if mat is None:
         return None
-    payload = _psd_matrix_payload(mat)
+    payload = _psd_matrix_payload(mat, quality=quality)
     if not _cache_store.store(PSD_MATRIX_KIND, participant_uid, sig, payload,
                               writer="biomarkers", trigger="biomarker_page",
                               n_recordings=len(_entries)):
@@ -2666,18 +2890,20 @@ def _warm_centered_matrix_from_decoded(participant_uid, td_list, psd_list, pro_t
         return cached
 
     rows = []
+    quality = _new_quality()
     # TD streaming -> rating-centered rows; montage/survey -> first-window rows (PRO-agnostic).
-    _welch_rows_into(rows, td_list, "TD streaming", _sp, pro_times=pro_times)
-    _welch_rows_into(rows, psd_list, "Montage/survey", _sp)
+    _welch_rows_into(rows, td_list, "TD streaming", _sp, pro_times=pro_times, counts=quality)
+    _welch_rows_into(rows, psd_list, "Montage/survey", _sp, counts=quality)
     try:
         _ev_idx = _build_sensing_config_index(list(td_list or []))  # td only; psd_list = sweeps
         rows.extend(_event_psd_rows(participant_uid, sensing_index=_ev_idx))
     except Exception:
-        pass
+        _log.warning("Biomarkers: patient-event PSD harvest failed for %s during the timeline "
+                     "warm; the pool excludes events", participant_uid, exc_info=True)
     mat = _sp.psd_rows_to_matrix(rows)
     if mat is None:
         return None
-    payload = _psd_matrix_payload(mat)
+    payload = _psd_matrix_payload(mat, quality=quality)
     if not _cache_store.store(PSD_MATRIX_KIND, participant_uid, sig, payload,
                               writer="biomarkers", trigger="timeline_render",
                               n_recordings=len(_entries)):
@@ -2954,16 +3180,42 @@ def pro_request_scope():
 
     NO CROSS-REQUEST CACHE IS BUILT, ON PURPOSE. Patients and clinicians file pain reports
     continuously, so a cache that outlived a request would eventually hand a biomarker analysis a
-    report set that is one report short, with no error to show for it. Measured on the live record,
-    a cross-request cache could not pay for itself either. The cheapest check that could prove a
-    remembered report set still complete is REDCap's own record-edit log,
-    `export_logging(log_type="record", begin_time=...)`. On the live RCS08 record that check and
-    an outright fresh fetch of the reports, narrowed to the columns the field map consumes, cost
-    the same to within the run-to-run scatter of the network -- both a few tenths of a second. So a
-    cross-request cache would buy nothing and could hand back a pain-report table one report short.
-    That trade is not worth taking. `_agent_bridge/_sync_redcap/_rc_probe2.py` is the script that
-    times both; re-run it for current numbers rather than trusting a figure quoted here, since they
-    move with the network.
+    report set that is one report short, with no error to show for it. That is the whole argument,
+    and it does not rest on a timing.
+
+    THE TIMINGS, RE-MEASURED 2026-09-12 (3 rounds each, means, in the server container):
+
+    ==========================================================  =========
+    operation                                                     cost
+    ==========================================================  =========
+    export_records(fields=[record_id]) -- cheapest freshness      0.232 s
+    export_logging(record edits, last 90 days)                    0.245 s
+    fresh fetch, narrowed to the daily-survey instrument          0.313 s
+    fresh fetch, narrowed to the 24 columns the field map uses     0.347 s
+    full export as it once ran, 637 columns                       1.561 s
+    ==========================================================  =========
+
+    So the cheapest freshness check really is cheaper than a fresh fetch -- but only by about a
+    tenth of a second. A cross-request cache would therefore save roughly 0.1 s per request while
+    risking a pain-report table one report short. That trade is not worth taking.
+
+    A PREVIOUS VERSION OF THIS PARAGRAPH SAID THE TWO COST "the same to within the run-to-run
+    scatter". That was too generous: the check is consistently the cheaper of the two, and the
+    honest statement is that the saving is real but far too small to buy the staleness risk.
+
+    Evidence that reports genuinely arrive continuously, from the same run rather than asserted: the
+    edit log showed 2 edits in the preceding 24 hours and the newest pain report was timestamped
+    2026-09-11 18:37.
+
+    The script that times all of the above is `_agent_bridge/_sync_redcap/_rc_probe2.py`. Re-run it
+    for current numbers rather than trusting the figures above, since they move with the network.
+
+    DO NOT "CLEAN UP" THAT FILE. It sits under `_agent_bridge/_*`, which `.gitignore` excludes as
+    bridge scratch, and it is deliberately force-added so that it is tracked anyway. Until
+    2026-09-12 it was untracked, which meant this docstring instructed the reader to re-run a script
+    that no clone of the repository contained -- a claim of reproducibility that was not one. A file
+    cited by production code has to survive a clone, so the exception to the ignore rule is
+    intentional rather than an accident to be tidied away.
     """
     existing = _PRO_REQUEST_CACHE.get()
     if existing is not None:
@@ -3222,56 +3474,24 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
             times = [str(x) for x in tl["time"]] if (tl is not None and "time" in tl) else []
             td_window_days = train_days if train_days is not None else 30
             td_step_days = step_days if step_days is not None else 7
-            # Inject times into det so corr_spectrum can build per-session scatter data.
-            det["times"] = times
-            # PRO<->PSD match offsets (signed minutes) carried on the td timeline, for the matched-
-            # sample count readout. Present only when time-window matching ran.
-            match_dt = (tl["td_match_dt_min"].to_numpy()
-                        if (tl is not None and "td_match_dt_min" in tl) else None)
-            # DESIGN §8b/§8c: the exploratory scan runs on the POOLED full-spectrum PSDs (TD
-            # streaming + montage/survey), per main bipolar channel, each PSD matched to the nearest
-            # continuous PRO within the window — NOT just the TD streaming sessions. Built from the
-            # cached per-channel matrix (Welch already done) + the PRO times/values, so a compute
-            # only pays for the cheap z-score + match + scan.
-            pooled = None
-            if psd_matrix is not None and pro_match is not None:
-                try:
-                    pooled = streaming_psd.build_pooled_detail_from_matrix(
-                        psd_matrix, pro_match[0], pro_match[1], tolerance_min=match_tolerance_min,
-                        aggregate=aggregate, max_per_rating=max_per_rating,
-                        refractory_min=refractory_min, match_direction=match_direction)
-                except Exception as e:
-                    _log.warning("Biomarkers: pooled PSD detail failed (%s)", e)
-            scan_src = pooled if pooled is not None else det
-            # Matched counts come from the POOLED labels when available (all-source matches), with the
-            # signed offsets the pooled matcher recorded; else fall back to the TD timeline offsets.
-            if pooled is not None:
-                count_task = lambda: analytics.matched_sample_counts(
-                    pooled.get("labels"), strategy=label_strategy, low_pct=low_pct, high_pct=high_pct,
-                    match_dt_min=None, tolerance_min=match_tolerance_min)
-            else:
-                count_task = lambda: analytics.matched_sample_counts(
-                    det.get("labels"), strategy=label_strategy, low_pct=low_pct, high_pct=high_pct,
-                    match_dt_min=match_dt, tolerance_min=match_tolerance_min)
-            td_tasks = {
-                "corr_spectrum": lambda: analytics.corr_spectrum(det, region_map=region_map),
-                "psd_spectra": lambda: analytics.psd_spectra(det, region_map=region_map),
-                # `spectral_feature_importance` (the exploratory 5 Hz sliding-band scan) is no longer
-                # computed: its only frontend consumer, BiomarkerAnalytics.js's scatter+violin
-                # drill-down, was removed as an unnecessary duplicated analysis -- the calibrated
-                # band-by-length grid (band_time_sweep_for_participant) is the headline result and
-                # already covers the same question with a stronger correction. `_live_pro_lsb_spectrum`
-                # above is still called, but with `return_spectra=False` -- only `live_match_stats`,
-                # which the matching-controls caption still reads, is built; the per-PRO spectrum
-                # records nothing here ever consumed are no longer computed at all.
-                "matched_sample_counts": count_task,
-                "pool_meta": lambda: (pooled or {}).get("pool_meta"),
-                # PSD spectrogram removed from the UI (added little over the spectrum + mean-PSD
-                # panels); no longer computed to keep the response lean.
-            }
+            # THE ONLY KEY OF THIS BLOCK THE PAGE READS IS `sliding_corr_spectrum`
+            # (BiomarkerAnalytics.js). On the PI's decision of 2026-09-12 (review finding B8) the
+            # four other tasks this block used to compute on every Recompute -- `corr_spectrum`
+            # (the static correlation-against-frequency curve with its peaks), `psd_spectra` (the
+            # mean PSD per channel split by pain group), `matched_sample_counts` (which the browser
+            # re-derives itself, binarizationModel.js) and `pool_meta` -- were deleted rather than
+            # hidden behind a flag, together with the pooled-detail build that fed only the last
+            # two, the `det["times"]` injection that fed only `corr_spectrum`, and the functions
+            # themselves. Nothing on any page changed; the field count is in
+            # artifacts/review_2026-09-12_Biomarkers_IMPLEMENTED.md. The pooled detail
+            # (`streaming_psd.build_pooled_detail_from_matrix`) is still built where it is
+            # actually read: `_validate_band_core`, the stability column's own path. The
+            # parameters this function no longer reads (`match_tolerance_min`, `psd_matrix`,
+            # `pro_match`, `aggregate`, `max_per_rating`, `refractory_min`, `match_direction`)
+            # are kept in the signature so the one call site in `run_for_participant` is unchanged.
+            td_tasks = {}
             # The sliding R-vs-frequency-over-time HEATMAP is computed ONLY in sliding mode (a window
-            # is selected). With no window (all data) the card shows the static R-vs-frequency
-            # spectrum (corr_spectrum) with peaks highlighted instead.
+            # is selected). With no window (all data) the card shows nothing from this block.
             if sliding:
                 td_tasks["sliding_corr_spectrum"] = lambda: analytics.td_sliding_corr_spectrum(
                     det, times, window_days=td_window_days, step_days=td_step_days, region_map=region_map)
@@ -3461,7 +3681,9 @@ _PRO_TIME_COL = "date_time_s1_daily"
 # per the Medtronic Percept white paper, all report data (BrainSense PSD/TD, patient events) is
 # already stored in UTC (ISO-8601), and an internal consistency check confirmed the stored epochs
 # match true CA wall-clock to <1 min in every DST era. So ONLY the PRO clock is corrected here.
-_PRO_LOCAL_TZ = "America/Los_Angeles"
+# The zone is DEFINED in `routines/local_time.py` (Django-free, so the adapter and the pipeline
+# can read the same one) and bound here under the name this file always used (review B1).
+_PRO_LOCAL_TZ = local_time.PRO_LOCAL_TZ
 
 
 def _pro_timestamps_utc(pro_df):
@@ -3813,11 +4035,15 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
                 "psd_scan_index": psd_scan_index}
     except Exception as e:
         _log.warning("Biomarkers: availability payload failed: %s", e, exc_info=True)
+        # The empty payload is MARKED as a failure (review B2): `failed`/`failure` are what stop
+        # `_availability_result_cached` from memoizing it and what let the page say "the build
+        # failed" rather than "there are no recordings", which is a different fact.
         return {"records": [], "pain": {"metric": label_metric, "t": [], "y": []},
                 "stim": {"t": [], "y": []}, "freq_bands": [], "span": [], "lsb_overview": {},
                 "pro_lsb": {},
                 "events": {"events": [], "n": 0},
-                "montage_events": {"events": [], "n": 0}, "psd_scan_index": []}
+                "montage_events": {"events": [], "n": 0}, "psd_scan_index": [],
+                "failed": True, "failure": repr(e)}
 
 
 @_pro_scoped
@@ -3881,11 +4107,44 @@ def availability_for_participant(request_data):
     av = _availability_result_cached(cache_key, _build)
 
     msg = None
-    if not av.get("records"):
+    if av.get("failed"):
+        # A failure is not an empty record (review B2). Name it, and say which it is.
+        msg = (f"The availability timeline could not be built: {av.get('failure')}. This is a "
+               "failure, not an empty record -- the next request will try the build again.")
+    elif not av.get("records"):
         msg = ("No Percept recordings decoded for this participant yet — upload sessions to populate "
                "the availability timeline.")
     return {"availability": av, "available_metrics": BIOMARKER_METRICS,
             "label_metric": label_metric, "message": msg}
+
+
+def _chronic_list_for(participant_uid):
+    """The chronic recordings through the power-list memo (review B7.3) -- the same list
+    `run_for_participant` reads, decoded once per recording set -- or a plain load when the memo
+    switch is off (the alternating-round measurement)."""
+    if RUN_REUSES_RECORDING_MEMO:
+        return _power_list_cached(participant_uid)[0]
+    return _load_recordings(participant_uid, CHRONIC_TYPES)
+
+
+def _sign_off_recordings(participant_uid):
+    """(chronic_list, powerdomain_list, streaming_td, psd_list) for the sign-off endpoints
+    (`deployment_summary`, `band_lsb_and_power`): the same four lists they always loaded, from the
+    two recording memos rather than four fresh decodes per request (review B7.3)."""
+    if RUN_REUSES_RECORDING_MEMO:
+        chronic_list, pd_list, _power = _power_list_cached(participant_uid)
+        streaming_td, psd_list, _ev, _mont, _order, _chan = _recordings_setup_cached(participant_uid)
+        return chronic_list, pd_list, streaming_td, psd_list
+    return (_load_recordings(participant_uid, CHRONIC_TYPES),
+            _load_recordings(participant_uid, POWERDOMAIN_TYPES),
+            _load_recordings(participant_uid, TIMEDOMAIN_TYPES),
+            _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES))
+
+
+#: Review B7.1: `run_for_participant` reads the voltage-trace recordings, the montage/survey
+#: spectra and the event blocks from `_recordings_setup_cached` (True) instead of decoding them on
+#: every Recompute (False, the old loads, kept for measuring the two in alternating rounds).
+RUN_REUSES_RECORDING_MEMO = True
 
 
 @_pro_scoped
@@ -3939,7 +4198,22 @@ def run_for_participant(request_data):
 
     Participant = models.Participant.find(uid=participant_uid)
 
-    td = _load_recordings(participant_uid, TIMEDOMAIN_TYPES) if source in ("timedomain", "both") else []
+    # The voltage-trace recordings, the montage/survey spectra and the two event-block sets come
+    # from the memo the sweep and the hover drill-down already share (review B7.1), keyed on the
+    # participant's current recording set (decision 130) -- not decoded afresh on every Recompute.
+    # `RUN_REUSES_RECORDING_MEMO` is a switch for measuring this against the old loads in
+    # alternating rounds; the memo's lists are only ever edited idempotently (`_stamp_td_product`).
+    if source in ("timedomain", "both"):
+        if RUN_REUSES_RECORDING_MEMO:
+            td, _scan_psd_list, _scan_event_blocks, _scan_montage_blocks, chan_order, _ = (
+                _recordings_setup_cached(participant_uid))
+        else:
+            td = _load_recordings(participant_uid, TIMEDOMAIN_TYPES)
+            _scan_psd_list = _scan_event_blocks = _scan_montage_blocks = chan_order = None
+    else:
+        # power-domain only: no voltage trace; the scan inputs are loaded below exactly as before
+        td, chan_order = [], None
+        _scan_psd_list = _scan_event_blocks = _scan_montage_blocks = None
 
     # Power domain = Chronic ~10-min LFP power + per-session Power-Domain band power, concatenated
     # (raw units) into one chronic-shaped list so they're compared apples-to-apples.
@@ -3966,7 +4240,8 @@ def run_for_participant(request_data):
         return {"source": source, "channels": [], "timeline": [], "summary": {},
                 "message": "Cannot compute biomarker — missing: " + "; ".join(missing) + "."}
 
-    chan_order = _derive_chan_order(td)
+    if chan_order is None:
+        chan_order = _derive_chan_order(td)
     chronic = power_list if power_list else None
 
     pro_df, label_metric, kmeans_features = _resolve_biomarker_metric(request_data, pro_df)
@@ -4029,13 +4304,17 @@ def run_for_participant(request_data):
     # Pooled per-channel PSD matrix (TD streaming + montage/survey), cached on disk so the expensive
     # Welch is computed once (eagerly, when the availability timeline loaded) and reused here. The
     # DB-keyed cache decodes only recordings not already Welch'd, so no full reload is needed here.
-    # The cheap match-to-PRO + scan reruns per compute with the chosen tolerance.
+    # Since 2026-09-12 (review finding B8) this request no longer matches the matrix to the pain
+    # reports itself -- the only readers of that match were the unread `matched_sample_counts` and
+    # `pool_meta` tasks, now deleted -- but the matrix is still built here so that the
+    # per-recording spectra stay current with the record and the page's `cache.spectrum_builder`
+    # counters (B6) can be reported. The stability column's own path (`_validate_band_core`)
+    # still matches it to the reports where that match is actually read.
     # TD-streaming PSDs are rating-centered (one centered window per PRO inside a session's coverage)
     # instead of a single first-30 s spectrum stamped at the session start — this is what lets a
     # rating in the middle of a long stream match. Use the METRIC-AGNOSTIC PRO set (all timestamps),
     # which is the SAME set `warm_psd_cache` built the matrix on, so this request hits the warm cache
-    # instead of re-decoding on the request thread. Per-metric PRO filtering stays downstream in the
-    # match step (build_pooled_detail_from_matrix / pro_match).
+    # instead of re-decoding on the request thread.
     pro_match = _pro_match_arrays(pro_df, label_metric)
     _force_refresh = _normalize_force_refresh(request_data.get("ForceRefresh"))
     psd_matrix = _cached_psd_matrix(participant_uid, pro_times=_all_pro_times(pro_df),
@@ -4051,16 +4330,18 @@ def run_for_participant(request_data):
     # shared PRO because the per-rating reader is deterministic in (pro_time, channel, recordings) — the
     # numbers match by construction, NOT by sharing one memo slot. td_recordings = ALL TD-bearing
     # products (streaming + montage/survey, 250 Hz); event_psd_blocks = PatientControllerEvent FFT only.
-    _scan_psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
-    # Index from streaming TD only — psd_list is montage sweeps (all pairs, excluded by guard).
-    _scan_sensing_idx = _build_sensing_config_index(list(td or []))
-    _scan_event_blocks = _event_psd_lsb_blocks(participant_uid,
-                                               sensing_index=_scan_sensing_idx)
-    # Montage/survey device-PSD snapshots (Descriptor.MedtronicPSD) as their own bridge windows, so a
-    # montage contributes a PSD-tier LSB even when its TD tile fails the cache quality gate. Same unit /
-    # bridge constant as the patient-event PSD (validated paired vs the TD transform).
-    _scan_montage_blocks = _montage_psd_lsb_blocks(participant_uid,
-                                                   montage_recordings=_scan_psd_list)
+    if _scan_psd_list is None:     # the old loads, kept only for the alternating-round switch
+        _scan_psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
+        # Index from streaming TD only — psd_list is montage sweeps (all pairs, excluded by guard).
+        _scan_sensing_idx = _build_sensing_config_index(list(td or []))
+        _scan_event_blocks = _event_psd_lsb_blocks(participant_uid,
+                                                   sensing_index=_scan_sensing_idx)
+        # Montage/survey device-PSD snapshots (Descriptor.MedtronicPSD) as their own bridge windows,
+        # so a montage contributes a PSD-tier LSB even when its TD tile fails the cache quality
+        # gate. Same unit / bridge constant as the patient-event PSD (validated paired vs the TD
+        # transform).
+        _scan_montage_blocks = _montage_psd_lsb_blocks(participant_uid,
+                                                       montage_recordings=_scan_psd_list)
     _scan_channels = list(dict.fromkeys(
         availability._canon_channel(ch) for ch in (chan_order or [])))
     _scan_pro_times = (pro_match[0] if pro_match is not None else None)
@@ -4113,6 +4394,11 @@ def run_for_participant(request_data):
                            "(minutes). NOTE: a stale cache has never yet been the cause of a frozen "
                            "plot here — on 2026-08-30 the cause was device files that had never been "
                            "ingested. Check the newest SourceFile date before reaching for this."),
+        # Review B6: what the spectrum builder could not do, read back out of the matrix this
+        # response used. `n_centered_fell_back` recordings carry a spectrum stamped at their start
+        # instead of at the rating; `n_skipped` are absent from the pool; a recording whose file
+        # pre-dates the counters is "without counts" (unknown), never a zero.
+        "spectrum_builder": _psd_matrix_quality(psd_matrix),
     }
     out["outlier_n_mad"] = (float(outlier_n_mad) if outlier_n_mad is not None
                             else float(analytics.OUTLIER_N_MAD))
@@ -4568,6 +4854,17 @@ def _deployment_summary_adaptive_band_gate(center_hz, band_width_hz):
 
 
 @_pro_scoped
+def _validation_tolerance_min(match_tol_min):
+    """The matching window the sign-off endpoints use, in minutes (review B11). The page's number
+    box accepts a typed 0, which `_match_tolerance_param` reads as "time-matching off" (None); the
+    sweep answers that with its longest length of signal, and until 2026-09-12 this path answered
+    it with `float(None)`, a TypeError the four Closed-Loop endpoints returned as an error. Same
+    fallback as the sweep now: the longest length of signal, as minutes."""
+    if match_tol_min:
+        return float(match_tol_min)
+    return float(max(analytics.BAND_TIME_SWEEP_SECONDS)) / 60.0
+
+
 def _band_validation_setup(request_data):
     """Everything `_validate_band_core` needs that does NOT depend on which band is being asked
     about: the participant, the pain-report table, the assembled spectrum matrix, the pooled
@@ -4634,7 +4931,7 @@ def _band_validation_setup(request_data):
     from .routines import streaming_psd as sp
     pooled = sp.build_pooled_detail_from_matrix(
         mat, pm[0], pm[1],
-        tolerance_min=float(match_tol_min), aggregate="all",
+        tolerance_min=_validation_tolerance_min(match_tol_min), aggregate="all",
         max_per_rating=max_per_rating, refractory_min=refractory_min,
         match_direction=match_direction)
     if not pooled or pooled.get("psd") is None:
@@ -4643,11 +4940,12 @@ def _band_validation_setup(request_data):
     # The chronic stim trajectory the band x stim-era test needs. Loaded here rather than after the
     # per-band fit because it, too, is the same for every band; a failure to build it is not fatal
     # (`band_stim_stability` reports "no stim series" and the caller shows that honestly).
-    chronic_list = _load_recordings(participant_uid, CHRONIC_TYPES)
+    chronic_list = _chronic_list_for(participant_uid)
     try:
-        from .routines import availability as _av
-        stim = _av.stim_series(chronic_list) if chronic_list else None
+        stim = availability.stim_series(chronic_list) if chronic_list else None
     except Exception:
+        _log.warning("Biomarkers: the chronic stim series could not be built for %s; the "
+                     "stability answer will say 'no stim series'", participant_uid, exc_info=True)
         stim = None
 
     return {
@@ -4670,15 +4968,19 @@ def _band_validation_setup(request_data):
 
 
 def _validate_band_core(request_data):
-    """Shared heavy-lifting core for the per-band validation + BandCandidate emission.
+    """Shared heavy-lifting core for the per-band validation (the stability column).
 
     Resolves the participant, PRO metric, binarization, and PSD<->PRO match params from the
     request; builds the same pooled td_detail the scan uses (so the band feature is defined
     identically); then runs the mixed-effects logistic (glmer) and the band x stim-era LRT.
 
-    Returns a rich intermediate dict consumed by BOTH `validate_band_for_participant` (which
-    trims it to the click-panel shape) and `build_band_candidate` (which assembles the full
-    §6 BandCandidate). On any failure returns {available: False, reason: ...}.
+    Returns a rich intermediate dict. Its live readers are `raw_stability_result_for_point` (the
+    stability column of the calibrated grid, decision 67), `band_deployment_roc`,
+    `band_lsb_and_power`, `band_deployment_roc_by_era` and `deployment_summary` (the four
+    Closed-Loop endpoints). Until 2026-09-12 two more readers existed,
+    `validate_band_for_participant` and `build_band_candidate`, behind two routes no page
+    called; both were deleted on the PI's decision (review finding B12).
+    On any failure returns {available: False, reason: ...}.
     """
     participant_uid = request_data.get("ParticipantId")
     channel = request_data.get("Channel")
@@ -5570,54 +5872,11 @@ def compute_and_store_band_sweep(participant_uid, metric, request_data=None):
     return out
 
 
-def validate_band_for_participant(request_data):
-    """Run the click-triggered VALIDATION bundle for one band on one participant.
-
-    Inputs (in request_data): ParticipantId, Channel (raw or short name), CenterHz, plus the same
-    LabelMetric/BinarizationStrategy/LowPct/HighPct/MatchToleranceMin/MaxPerRating/RefractoryMin
-    /MatchDirection knobs the scan uses (so the band feature is defined identically to what the
-    scan dot represents). Optional BandWidthHz (default 5.0).
-
-    Output: {
-      'available': True,
-      'channel': '...', 'center_hz': N.N, 'band_lo': N.N, 'band_hi': N.N,
-      'glmer': {                      # from analytics.band_mixedmodel_inference, OR + CI + q
-         'available', 'odds_ratio', 'or_lo', 'or_hi', 'p', 'q_glmer',
-         'n', 'n_clusters', 'separation', 'singular', 'note', ...
-      },
-      'stim': {                       # from analytics.band_stim_stability
-         'available', 'chisq', 'lrt_p', 'stim_stable', 'or_by_era', 'era_counts',
-         'thresholds_mA', ...
-      },
-      'verdict': 'VALIDATED (stim-stable)' | 'VALIDATED (stim-dependent)' |
-                 'candidate (FDR n.s.)' | 'failed (separation/singular)' | 'unavailable',
-    }
-    Degrades to {available: False, reason: ...} when the participant has no matched data or pymer4
-    isn't installed; the frontend renders an empty-state caption rather than erroring.
-    """
-    core = _validate_band_core(request_data)
-    if not core.get("available"):
-        return core
-
-    def _ff(x):
-        try:
-            return float(x) if x is not None and np.isfinite(x) else None
-        except (TypeError, ValueError):
-            return None
-    center_hz = core["center_hz"]
-    band_width_hz = core["band_width_hz"]
-    return {
-        "available": True,
-        "channel": core["channel"],
-        "center_hz": _ff(center_hz),
-        "band_lo": _ff(center_hz - band_width_hz / 2.0),
-        "band_hi": _ff(center_hz + band_width_hz / 2.0),
-        "band_width_hz": _ff(band_width_hz),
-        "label_metric": core["label_metric"],
-        "glmer": core["glmer"],
-        "stim": core["stim"],
-        "verdict": core["verdict"],
-    }
+# `validate_band_for_participant` stood here until 2026-09-12: the click-panel trim of
+# `_validate_band_core`, reached only through the /queryBandValidation route, which no page ever
+# called. Route, view and function deleted on the PI's decision (review finding B12).
+# `_validate_band_core` itself STAYS: the stability column reads it through
+# `raw_stability_result_for_point`.
 
 
 # --- Percept RC device-mapping constants (DESIGN_biomarker_pipeline_v2 §1) ----------------------
@@ -5729,192 +5988,13 @@ def _ramp_guidance(polarity, adaptive_valid, suggested_mode, *, stim_stable=None
     }
 
 
-def build_band_candidate(request_data):
-    """Assemble a serializable BandCandidate object (DESIGN_biomarker_pipeline_v2 §6) for ONE
-    validated (channel, band) — the contract handed from the discovery/Biomarkers view to the
-    Closed-Loop Simulation / threshold-deployment view.
-
-    Reuses `_validate_band_core` (identical pooled-detail + glmer + stim-stability machinery as the
-    click-validate panel), so the committed band is defined byte-identically to the scan dot the
-    user clicked. Phase A populates identity, label provenance, device-control mapping, evidence,
-    and pool-bias provenance; the threshold (`threshold_lsb`), the unit-conversion FYI
-    (`conversion_check`), and the labeled time-series handoff (`timeseries_ref`) are filled by the
-    deployment view in later phases and ship here as honest nulls/stubs.
-
-    Output: {available: True, band_candidate: {...§6 schema...}, verdict, glmer, stim} OR
-    {available: False, reason: ...}.
-    """
-    core = _validate_band_core(request_data)
-    if not core.get("available"):
-        return core
-
-    def _ff(x):
-        try:
-            return float(x) if x is not None and np.isfinite(x) else None
-        except (TypeError, ValueError):
-            return None
-
-    channel = core["channel"]
-    center_hz = core["center_hz"]
-    band_width_hz = core["band_width_hz"]
-    glmer = core["glmer"]
-    hetero = core["stim"]
-    verdict = core["verdict"]
-
-    # ---- identity ----
-    fmt = analytics.format_channel(channel)
-    hemisphere = fmt.get("hemisphere") or ("Left" if "LEFT" in str(channel).upper()
-                                           else "Right" if "RIGHT" in str(channel).upper() else None)
-    # Percept FFT-bin snap: Dual-threshold uses a 256-pt FFT on 250 Hz -> 250/256 ≈ 0.977 Hz bins;
-    # Single uses 64-pt -> 250/64 ≈ 3.906 Hz bins. We snap the center to the Dual grid (the closed-
-    # loop default) and note the assumption so the sim module can re-snap for Single if needed.
-    fs = 250.0
-    bin_dual = fs / 256.0
-    snapped_center = round(center_hz / bin_dual) * bin_dual
-    snapped_note = (f"snapped to Dual-threshold 256-pt FFT grid ({bin_dual:.3f} Hz bins); "
-                    f"{center_hz:.2f} → {snapped_center:.2f} Hz. Re-snap to 64-pt "
-                    f"({fs/64.0:.3f} Hz) for Single-threshold mode.")
-
-    # ---- device-control mapping ----
-    adaptive_valid = bool(ADAPTIVE_LO_HZ <= center_hz <= ADAPTIVE_HI_HZ)
-    adaptive_reason = ("within the 8–30 Hz adaptive sensing range" if adaptive_valid
-                       else (f"{center_hz:.1f} Hz outside the 8–30 Hz adaptive range — "
-                             f"{'below the 8 Hz floor' if center_hz < ADAPTIVE_LO_HZ else 'above the 30 Hz ceiling'}"))
-    odds = glmer.get("odds_ratio")
-    coef = glmer.get("coef")
-    # Polarity = sign of corr(band power, pain). OR>1 (or coef>0) => higher power tracks higher
-    # pain => positive; OR<1 => negative. Fall back to coef sign when OR is unavailable.
-    polarity = None
-    if isinstance(odds, (int, float)) and np.isfinite(odds):
-        polarity = "positive" if odds > 1.0 else "negative"
-    elif isinstance(coef, (int, float)) and np.isfinite(coef):
-        polarity = "positive" if coef > 0 else "negative"
-    suggested_mode, mode_reason = _suggested_percept_mode(polarity, adaptive_valid)
-
-    # ---- credible-CI flag (v2 rule) ----
-    credible_ci, ci_width = _band_credible_ci(glmer.get("or_lo"), glmer.get("or_hi"))
-
-    # ---- label provenance ----
-    pm = core["pm"]
-    pro_vals = np.asarray(pm[1], dtype=float) if pm is not None else np.array([])
-    pl = analytics._binarize_labels(pro_vals, strategy=core["label_strategy"],
-                                    low_pct=core["low_pct"], high_pct=core["high_pct"])
-    n_labeled = int(np.isfinite(pl).sum())
-    n_pos = int(np.nansum(pl == 1.0))
-    n_neg = int(np.nansum(pl == 0.0))
-    metric_label = next((m["label"] for m in BIOMARKER_METRICS
-                         if m["key"] == core["label_metric"]), core["label_metric"])
-
-    # ---- evidence: per-era ORs + stim eras from the LRT result ----
-    or_by_era = hetero.get("or_by_era") if hetero.get("available") else None
-    era_counts = hetero.get("era_counts") if hetero.get("available") else None
-    stim_thresholds = hetero.get("thresholds_mA") if hetero.get("available") else None
-
-    band_candidate = {
-        # ---- identity (the atomic device unit) ----
-        "hemisphere": hemisphere,
-        "contact": fmt.get("raw") or str(channel),
-        "contact_label": fmt.get("short") or fmt.get("label"),
-        "center_freq_hz": _ff(center_hz),
-        "bandwidth_hz": _ff(band_width_hz),
-        "band_lo_hz": _ff(center_hz - band_width_hz / 2.0),
-        "band_hi_hz": _ff(center_hz + band_width_hz / 2.0),
-        "snapped_center_freq_hz": _ff(snapped_center),
-        "snapped_bin_note": snapped_note,
-
-        # ---- label provenance (REDCap PRO, NOT events) ----
-        "label": {
-            "pro_metric": core["label_metric"],
-            "pro_metric_label": metric_label,
-            "is_composite": core["is_composite"],
-            "composite_parts": core["composite_parts"],
-            "binarization": {
-                "strategy": core["label_strategy"],
-                "pain_cutoff": None,
-                "low_pct": _ff(core["low_pct"]),
-                "high_pct": _ff(core["high_pct"]),
-                "daily_broadcast": False,
-            },
-            "join": "pro_first" if core["match_direction"] == "pro_first" else core["match_direction"],
-            "match_tolerance_min": _ff(core["match_tol_min"]),
-            "n_labeled_days": n_labeled,
-            "n_pos_days": n_pos,
-            "n_neg_days": n_neg,
-        },
-
-        # ---- device-control mapping ----
-        "adaptive_valid": adaptive_valid,
-        "adaptive_valid_reason": adaptive_reason,
-        "polarity": polarity,
-        "suggested_mode": suggested_mode,
-        "suggested_mode_reason": mode_reason,
-
-        # ---- threshold, in DEPLOYMENT-STREAM LSB (set by Phase B/C deployment view) ----
-        "threshold_lsb": {"upper": None, "lower": None},
-        "threshold_basis": "not yet set — assign in the threshold-deployment view (Phase B cut-point + Phase C LSB anchoring)",
-
-        # ---- unit sanity check (FYI, confidence-rated; §4 — filled by Phase C) ----
-        "conversion_check": {
-            "ratio_uV2_per_lsb": None,
-            "n_overlap_sessions": 0,
-            "scatter_cv": None,
-            "rule_of_thumb": LSB_RULE_OF_THUMB,
-            "fold_off_rule": None,
-            "diverges": None,
-            "confidence": "low",
-            "note": "empirical LSB↔µV² ratio measured in Phase C from concurrent streaming-TD + device-LSB at ~0 mA",
-        },
-
-        # ---- evidence (cluster-robust mixed-effects; stim-context aware) ----
-        "evidence": {
-            "discovery_method": "glmer logistic (lme4 via pymer4), pain_high ~ band_power + (1|weekly_era)",
-            "odds_ratio": _ff(odds),
-            "or_lo": _ff(glmer.get("or_lo")),
-            "or_hi": _ff(glmer.get("or_hi")),
-            "ci_width_or": _ff(ci_width),
-            "credible_ci": credible_ci,
-            "p_glmer": _ff(glmer.get("p")),
-            "z_glmer": _ff(glmer.get("z")),
-            "coef": _ff(coef),
-            "n_matched_samples": glmer.get("n"),
-            "n_clusters": glmer.get("n_clusters"),
-            "separation": glmer.get("separation"),
-            "singular": glmer.get("singular"),
-            "stim_stable": (hetero.get("stim_stable") if hetero.get("available") else None),
-            "stim_lrt_p": _ff(hetero.get("lrt_p")) if hetero.get("available") else None,
-            "or_by_era": or_by_era,
-            "per_stream_n": {"matched_total": glmer.get("n")},
-            "mixed_model_effect": _ff(coef),
-            "stim_off_only": False,
-        },
-
-        # ---- confounds / honesty about the pool (§5) ----
-        "provenance": {
-            "selection_biased": True,
-            "selection_note": ("candidate pool is intuition-narrowed and non-uniform by construction "
-                               "(e.g. right 0-3 ~26 Hz over-sampled by design); cross-candidate "
-                               "ranking must treat the pool as biased"),
-            "stim_context_eras": era_counts,        # OFF/LOW/HIGH sample counts (full montage/freq/mA reconstruction is a §5 TODO)
-            "stim_era_thresholds_mA": stim_thresholds,
-            "stim_era_heterogeneity_tested": bool(hetero.get("available")),
-            "match_direction": core["match_direction"],
-        },
-
-        # ---- handoff to the Closed-Loop Simulation module (set when the labeled series is exported) ----
-        "timeseries_ref": None,
-
-        # ---- top-level verdict echo (for the sign-off card) ----
-        "verdict": verdict,
-        "schema_version": "bandcandidate_v1",
-    }
-
-    return {
-        "available": True,
-        "band_candidate": band_candidate,
-        "verdict": verdict,
-        "glmer": glmer,
-        "stim": hetero,
-    }
+# `build_band_candidate` stood here until 2026-09-12: the server half of the BandCandidate
+# contract (DESIGN_biomarker_pipeline_v2.md section 6), reached only through the /emitBandCandidate
+# route, which no page ever called. The Closed-Loop Deployment page commits a candidate from the
+# stored grid on the browser side (decision 122). Route, view and function deleted on the PI's
+# decision (review finding B12). The helpers it shared with `deployment_summary` -- the adaptive
+# range constants, `_band_credible_ci`, `_suggested_percept_mode`, `_ramp_guidance` and
+# `_threshold_mode_block` -- stay, because `deployment_summary` still reads them.
 
 
 def _threshold_mode_block(request_data, center_hz, threshold_lsb):
@@ -6019,7 +6099,8 @@ def band_deployment_roc(request_data):
     PRECEDE a rating), unlike the discovery scan's `pro_first` — the frontend exposes a toggle to
     switch back to `pro_first` for the full-pool AUC. Pass `MatchDirection` to override.
 
-    Inputs: same as /emitBandCandidate, plus optional NBoot (bootstrap replicates, default 500).
+    Inputs: ParticipantId, Channel, CenterHz and the scan's own matching and binarization keys
+    (the ones `_validate_band_core` reads), plus optional NBoot (bootstrap replicates, default 500).
     Output: {available, channel, center_hz, band_lo, band_hi, label_metric, match_direction,
              roc:{auc, auc_lo, auc_hi, fpr[], tpr[], thr[], operating_point, ...}} or
             {available: False, reason: ...}.
@@ -6114,7 +6195,7 @@ def band_psd_lsb_conversion(request_data):
 
     # --- raw PSD rows for this channel (cached per-recording; {channel, source, t, freq, power}) ---
     try:
-        rows, _nc, _ncomp = _assemble_psd_rows_cached(participant_uid)
+        rows, _nc, _ncomp, _quality = _assemble_psd_rows_cached(participant_uid)
     except Exception as e:  # noqa: BLE001
         return {"available": False, "reason": f"PSD assembly failed: {e}"}
     psds = []
@@ -6130,8 +6211,7 @@ def band_psd_lsb_conversion(request_data):
     # --- device LSB Timeline for this channel (chronic + powerdomain streaming) ---
     chronic = _load_recordings(participant_uid, CHRONIC_TYPES)
     pdl = _load_recordings(participant_uid, POWERDOMAIN_TYPES)
-    from modules.Biomarkers.routines import availability as _av
-    lsb = _av.lsb_series(chronic, pdl)
+    lsb = availability.lsb_series(chronic, pdl)
     L = lsb.get(channel) or lsb.get(short)
     if not L:
         return {"available": False, "reason": f"no device LSB Timeline for {channel}", "n_pairs": 0}
@@ -6297,7 +6377,7 @@ def psd_lsb_conversion_model(request_data):
     Output: {available, participant, schema, pipeline, channels:[{channel, fittable, common_slope_b,
              r2, channel_pooled_k, bands:[{center_hz, lsb_at_1uv2, intercept_a, intercept_ci, n}]}]}.
     """
-    from modules.Biomarkers.routines import psd_lsb_model as _plm
+    from .routines import psd_lsb_model as _plm      # package-relative: works on both runners (B10)
     participant = request_data.get("Participant") or request_data.get("ParticipantId")
     if not participant:
         return {"available": False, "reason": "Participant (code) required"}
@@ -6434,23 +6514,20 @@ def band_lsb_and_power(request_data):
             percentile = float((bp <= float(cutpoint)).mean() * 100.0)
 
     # ---- device Timeline LSB for this channel, restricted to this band's sensing ----
-    chronic_list = _load_recordings(core["participant_uid"], CHRONIC_TYPES)
-    pd_list = _load_recordings(core["participant_uid"], POWERDOMAIN_TYPES)
-    from modules.Biomarkers.routines import availability as _av
     # Include the montage-survey TD so the MODELED LSB tier (psd_modeled, transform×352.62 — the same
     # hollow-diamond series the timeline draws) is available as a fallback when the device never
     # sensed THIS band natively. Mirrors deployment_summary and the timeline caller so this panel
     # sees exactly the modeled points the clinician sees on the timeline.
-    psd_list = _load_recordings(core["participant_uid"], AVAILABILITY_PSD_TYPES)
     # ALL raw-uV TD for the modeled tier: BrainSense streaming TD + IndefiniteStream (TIMEDOMAIN_TYPES)
     # AND the montage/survey sweeps (psd_list). The exploration timeline already pools every TD product
     # into the modeled LSB; the deployment fallback must see the same superset so no modeled point is
     # dropped just because the band was only ever streamed, never montage-swept. Power-domain records
     # (chronic/powerdomain) are NOT raw TD and are excluded by the helper's fs/name guards.
-    streaming_td = _load_recordings(core["participant_uid"], TIMEDOMAIN_TYPES)
+    # The four lists come from the two recording memos (review B7.3), not four fresh decodes.
+    chronic_list, pd_list, streaming_td, psd_list = _sign_off_recordings(core["participant_uid"])
     td_for_modeled = list(streaming_td or []) + list(psd_list or [])
     sensing_hz = analytics.power_center_freqs(pd_list)
-    lsb = _av.lsb_series(chronic_list, pd_list,
+    lsb = availability.lsb_series(chronic_list, pd_list,
                          montage_td_recordings=psd_list, sensing_hz_by_channel=sensing_hz)
     half = band_width_hz / 2.0
     threshold_lsb = {"available": False, "reason": "not computed"}
@@ -6476,7 +6553,7 @@ def band_lsb_and_power(request_data):
     # estimate_lsb fallback, removed 2026-06-28). `td_for_modeled` is ALL raw-µV TD (streaming +
     # montage/survey); chronic/powerdomain are power-domain, not TD, and excluded by the helper guards.
     # Used only if there's no native threshold.
-    mvals = _av.modeled_lsb_at_center(channel, center_hz,
+    mvals = availability.modeled_lsb_at_center(channel, center_hz,
                                       td_recordings=td_for_modeled,
                                       psd_recordings=None, half_hz=half)
     n_modeled = int(mvals.size)
@@ -6742,21 +6819,18 @@ def deployment_summary(request_data):
         bp = np.asarray(feat[0], dtype=float); bp = bp[np.isfinite(bp)]
         if bp.size:
             percentile = float((bp <= float(cutpoint)).mean() * 100.0)
-    chronic_list = _load_recordings(core["participant_uid"], CHRONIC_TYPES)
-    pd_list = _load_recordings(core["participant_uid"], POWERDOMAIN_TYPES)
-    from modules.Biomarkers.routines import availability as _av
     # Include the montage-survey TD so the MODELED LSB tier (psd_modeled, transform×352.62 — the same
     # hollow-diamond series the timeline draws) is available as a fallback when the device never
     # sensed THIS band natively. Mirrors the timeline caller so the deployment fallback sees exactly
     # the modeled points the clinician sees on the timeline.
-    psd_list = _load_recordings(core["participant_uid"], AVAILABILITY_PSD_TYPES)
     # ALL raw-uV TD for the modeled tier (see band_lsb_and_power): BrainSense streaming TD +
     # IndefiniteStream (TIMEDOMAIN_TYPES) AND the montage/survey sweeps. Mirror the exploration
     # timeline's TD superset so no modeled point is dropped for a streamed-only band.
-    streaming_td = _load_recordings(core["participant_uid"], TIMEDOMAIN_TYPES)
+    # The four lists come from the two recording memos (review B7.3), not four fresh decodes.
+    chronic_list, pd_list, streaming_td, psd_list = _sign_off_recordings(core["participant_uid"])
     td_for_modeled = list(streaming_td or []) + list(psd_list or [])
     sensing_hz = analytics.power_center_freqs(pd_list)
-    lsb = _av.lsb_series(chronic_list, pd_list,
+    lsb = availability.lsb_series(chronic_list, pd_list,
                          montage_td_recordings=psd_list, sensing_hz_by_channel=sensing_hz)
     half = band_width_hz / 2.0
     series = lsb.get(channel) or lsb.get(analytics.format_channel(channel)["short"])
@@ -6781,7 +6855,7 @@ def deployment_summary(request_data):
     # consistent (replaces the retired µV²-cut-point estimate_lsb fallback, removed 2026-06-28).
     # `td_for_modeled` is ALL raw-µV TD (streaming + montage/survey); chronic/powerdomain are
     # power-domain, not TD. Gathered regardless; used only if there's no native threshold (below).
-    mvals = _av.modeled_lsb_at_center(channel, center_hz,
+    mvals = availability.modeled_lsb_at_center(channel, center_hz,
                                       td_recordings=td_for_modeled,
                                       psd_recordings=None, half_hz=half)
     n_modeled = int(mvals.size)
@@ -6813,7 +6887,7 @@ def deployment_summary(request_data):
             power = analytics.auc_power(roc["auc"], n_pos, n_clu - n_pos, auc_lo=_gate_auc_lo,
                                         design_effect=roc.get("deff", 1.0))
 
-    # Device-control mapping (same as build_band_candidate).
+    # Device-control mapping (the adaptive-range gate, the polarity and the suggested mode).
     or_val = g.get("odds_ratio"); coef = g.get("coef")
     if isinstance(or_val, (int, float)) and np.isfinite(or_val) and or_val > 0:
         polarity = "positive" if or_val > 1 else "negative"
@@ -7304,7 +7378,8 @@ def _wants_band_time_sweep(request_data):
 
 def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
                                       allow_window_reuse, seconds=None,
-                                      match_direction="pro_first", channel=None):
+                                      match_direction="pro_first", channel=None,
+                                      participant_uid=None):
     """One band-power matrix per length of signal, each with one row per pain report and one column
     per band centre.
 
@@ -7320,7 +7395,9 @@ def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
     pain report, so the band axis arrives as columns of a matrix and every statistic downstream is a
     matrix operation across all bands at once.
 
-    A `channel` that `analytics.BAND_SWEEP_LSB_CEILINGS` covers takes a different route entirely:
+    A (`participant_uid`, `channel`) that `analytics.BAND_SWEEP_LSB_CEILINGS` covers takes a
+    different route entirely (the table is keyed on the participant first, review B3 -- the six
+    contact names are every participant's, the numbers are one participant's):
     `availability.live_lsb_band_medians_by_length` drops each contaminated 3 s piece BEFORE any of
     them are averaged and backfills with the next closest clean one, so no outlier rule is left to
     apply to the finished cell (PI, 2026-09-09). Every other channel keeps the original path
@@ -7349,8 +7426,10 @@ def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
     col = np.asarray([int(np.argmin(np.abs(cache_centers - c))) for c in centers], dtype=int)
     pt = np.asarray(pro_times, dtype=float)
 
-    ceiling_table = analytics.BAND_SWEEP_LSB_CEILINGS.get(channel) if channel else None
+    ceiling_table = analytics.band_sweep_ceiling_table(participant_uid, channel)
     if ceiling_table:
+        # A centre the table does not name gets no ceiling (np.inf excludes nothing), which is
+        # what `analytics.band_sweep_lsb_ceiling` means by returning None for that centre.
         ceilings = [ceiling_table.get(round(float(c), 1), np.inf) for c in centers]
         power, excl, stats = availability.live_lsb_band_medians_by_length(
             pt, raw_cache, tol_s=tol_s, lengths_s=secs, centers_hz=centers,
@@ -7397,8 +7476,11 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
                               pain_values, label_strategy, low_pct, high_pct,
                               outlier_n_mad, outlier_scale, metric_key, metric_label,
                               n_perm=None, n_boot=None, seed=0, match_direction="pro_first",
-                              region_map=None):
+                              region_map=None, participant_uid=None):
     """Run the sweep for every sensing contact pair that has a cache, one entry per pair.
+
+    `participant_uid` selects WHOSE outlier ceilings apply (review B3): the ceiling table is keyed
+    on the participant first, and a participant with no table takes the MAD rule.
 
     ONE CONTACT PAIR IS ONE ANSWER, never pooled. A contact pair fixes which side of the brain and
     which pair of electrode contacts the signal came from, and two pairs are two different
@@ -7422,7 +7504,7 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
             power, stats, centers, _, chunk_excl, from_device = _band_time_sweep_power_by_seconds(
                 pro_times, raw_cache, None, tol_s=tol_s,
                 allow_window_reuse=allow_window_reuse, match_direction=match_direction,
-                channel=raw_ch)
+                channel=raw_ch, participant_uid=participant_uid)
             match_s = _time.perf_counter() - t0
             sweep = analytics.band_time_sweep_from_power(
                 power, pain_values, center_freqs_hz=centers,
@@ -7458,7 +7540,11 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
                                               "n_td_assigned", "n_td_used")
                          if kk in (v or {})}
                 for k, v in (stats or {}).items()}
-            sweep["figures"] = analytics.band_time_sweep_figures(sweep)
+            # No `figures` entry: the server-drawn heat-map descriptions were built into every
+            # response and stored, and drawn by nothing (the page draws its own heat maps from
+            # the grids, BiomarkerHeatmapGrids.js). Deleted on the PI's decision of 2026-09-12
+            # (review finding B8) with `_BAND_SWEEP_RULE_VERSION` bumped so no stored entry
+            # carrying the old field is served as if it were this shape.
             out[raw_ch] = sweep
         except Exception as e:
             _log.warning("Biomarkers: band/length-of-signal sweep failed for %s (%s)",
@@ -7588,16 +7674,16 @@ def band_time_sweep_for_participant(request_data):
              "integration_seconds": [float(s) for s in analytics.BAND_TIME_SWEEP_SECONDS],
              "tile_seconds": float(analytics.RAW_LSB_WINDOW_SECONDS)}
 
-    td = _load_recordings(participant_uid, TIMEDOMAIN_TYPES)
+    # THE VOLTAGE TRACE IS NOT DECODED BEFORE THE STORE IS ASKED (review B7.2). It used to be
+    # loaded here, so a request served from the store still paid the decode -- the cost decision
+    # 38 recorded as "what a served request still pays". The store key needs only the database
+    # rows, and a participant with no recordings has no key, so the "no recordings" answer below
+    # is still reached, after the store says it holds nothing.
     pro_df = _load_pros(request_data, Participant)
     if pro_df is None or len(pro_df) == 0:
         return dict(blank, message=("No patient-reported pain scores are available for this "
                                     "participant, so there is nothing to track the band power "
                                     "against."))
-    if not td:
-        return dict(blank, message=("No time-domain Percept recordings have been ingested for this "
-                                    "participant, so no band power can be computed at any length "
-                                    "of signal."))
 
     # The section's OWN pain-score choice, sent as SweepMetric, falling back to the page's. Resolved
     # through the SAME helper the main analysis uses, so a composite score is blended identically
@@ -7696,8 +7782,13 @@ def band_time_sweep_for_participant(request_data):
     # return above, not before it: a request served from the store must keep paying nothing for the
     # spectra and event blocks, which is the whole point of asking the store first (decision 38).
     # A store-served grid therefore leaves the memo cold and its first hover fills it once.
-    _td_seed, psd_list, event_blocks, montage_blocks, chan_order, channels = (
-        _recordings_setup_cached(participant_uid, td=td))
+    td, psd_list, event_blocks, montage_blocks, chan_order, channels = (
+        _recordings_setup_cached(participant_uid))
+    if not td:
+        return dict(blank, label_metric=label_metric, metric_label=metric_label,
+                    message=("No time-domain Percept recordings have been ingested for this "
+                             "participant, so no band power can be computed at any length "
+                             "of signal."))
     if not channels:
         return dict(blank, label_metric=label_metric, metric_label=metric_label,
                     message="No sensing contact pair could be identified in the recordings.")
@@ -7712,7 +7803,7 @@ def band_time_sweep_for_participant(request_data):
         pain_values=pain_values, label_strategy=label_strategy, low_pct=low_pct,
         high_pct=high_pct, outlier_n_mad=outlier_n_mad, outlier_scale=outlier_scale,
         metric_key=label_metric, metric_label=metric_label, match_direction=match_direction,
-        region_map=_region_map(Participant, chan_order))
+        region_map=_region_map(Participant, chan_order), participant_uid=participant_uid)
     wall = float(_time.perf_counter() - t0)
     if include_stability:
         _attach_grid_export_columns(participant_uid, sweeps,
@@ -7875,7 +7966,8 @@ def band_time_sweep_cell_for_participant(request_data):
 
     power, _stats, centers, _col, chunk_excl, _from_device = _band_time_sweep_power_by_seconds(
         pro_times, raw_cache, center_hz, tol_s=tol_s, allow_window_reuse=allow_window_reuse,
-        seconds=[seconds], match_direction=match_direction, channel=canon_channel)
+        seconds=[seconds], match_direction=match_direction, channel=canon_channel,
+        participant_uid=participant_uid)
     mat = power.get(float(seconds))
     if mat is None or mat.size == 0 or not centers.size:
         return dict(blank, message="No band-power measurements could be produced for this cell.")
@@ -7946,7 +8038,7 @@ sweep_settings_tag = sweep_settings.sweep_settings_tag                       # r
 sweep_settings_tag_from_request = sweep_settings.sweep_settings_tag_from_request
 
 
-_BAND_SWEEP_RULE_VERSION = "v9_sweep_settings_tag"
+_BAND_SWEEP_RULE_VERSION = "v11_no_server_figures"
 
 #: Response fields that are timings of the run that produced them, not results. They are not
 #: compared when a stored response is checked against a fresh one, and a served response keeps the

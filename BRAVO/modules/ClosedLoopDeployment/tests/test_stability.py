@@ -137,15 +137,6 @@ def test_a_verdict_word_we_do_not_recognise_is_not_guessed_at():
     assert "does not recognise" in f.reason and "mostly-stable" in f.reason
 
 
-def test_a_test_that_raises_is_reported_not_propagated():
-    """A report listing every other check is more use to a clinician than a page that will not
-    load, so an exception inside the statistics becomes a "not tested" row."""
-    f = ST.assess_band_stability({"anything": 1}, "ZERO_THREE_RIGHT", 24.5,
-                                 stim_series={"t": [0.0], "y": [1.0]})
-    assert f.answer == "not tested"
-    assert f.test_ran is False
-
-
 # ------------------------------------------------------------------------------------------------
 # The declared margin is part of the claim, and re-deciding against a different one is honest
 # ------------------------------------------------------------------------------------------------

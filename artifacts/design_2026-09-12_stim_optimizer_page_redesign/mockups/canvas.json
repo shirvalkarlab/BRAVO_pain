@@ -1,0 +1,11 @@
+{
+  "artboards": [
+    { "file": "Today.dc.html", "x": 0, "y": 0, "w": 1180, "h": 2380, "title": "Today (2026-09-12, RCS08, to scale)" },
+    { "file": "Main.dc.html", "x": 1300, "y": 0, "w": 1180, "h": 2140, "title": "Proposed (phases 1-4 applied, RCS08 values)" },
+    { "file": "Notation.dc.html", "x": 2600, "y": 0, "w": 760, "h": 900, "title": "Notation rule" }
+  ],
+  "annotations": [
+    { "id": "brief", "x": 0, "y": -150, "w": 620, "text": "PI brief 2026-09-12: readability, actionable items first, visuals over text, digits with Medtronic contact form. Left: the page as it is (3,095 words in its strings; 1,599 of them from the server). Right: the same RCS08 numbers, values first, sentences one click away. Nothing has been built; each phase is a patch under artifacts/design_2026-09-12_stim_optimizer_page_redesign/." }
+  ],
+  "launch": { "view": "canvas" }
+}

@@ -70,12 +70,38 @@ def test_a_participant_that_does_not_exist_is_an_ordinary_answer_not_an_error(fa
 
 
 def test_the_endpoints_documented_defaults_are_what_reaches_the_adapter(fake):
+    """A request that names no side ANYWHERE -- no ``Hemisphere`` and a candidate carrying no side
+    -- falls to the documented default."""
     a = fake(result={"available": True})
     svc.run_for_participant({"ParticipantId": "p1", "Candidates": [{"channel": "L", "center_hz": 9}]})
     call = a.calls[0]
     assert call["hemisphere"] == svc.DEFAULT_HEMISPHERE == "Left"
     assert call["power_scale"] == svc.DEFAULT_POWER_SCALE == "power_linear"
     assert call["candidates"] == [{"channel": "L", "center_hz": 9}]
+
+
+def test_the_candidates_own_side_wins_over_the_default_when_the_request_names_none(fake):
+    """Review C1, 2026-09-12. The page never sends ``Hemisphere``, so before this the adapter was
+    handed "Left" for a band on a RIGHT contact and judged it on the left lead and stimulator."""
+    a = fake(result={"available": True})
+    svc.run_for_participant({"ParticipantId": "p1", "Candidates": [
+        {"channel": "ZERO_THREE_RIGHT", "center_hz": 24.5,
+         "sensing_hemisphere": "Right", "actuated_hemisphere": "Right"}]})
+    assert a.calls[0]["hemisphere"] == "Right"
+    # The actuated side is what is read first; a candidate that names only its sensing side is
+    # evaluated on that side.
+    svc.run_for_participant({"ParticipantId": "p1", "Candidates": [
+        {"channel": "ZERO_THREE_RIGHT", "center_hz": 24.5, "sensing_hemisphere": "Right"}]})
+    assert a.calls[1]["hemisphere"] == "Right"
+    # The stored-simulation read follows the same rule.
+    a.simulation_calls = []
+    def _sim(participant, cand, *, hemisphere):
+        a.simulation_calls.append(hemisphere)
+        return {"available": True}
+    a.closed_loop_simulation_for_participant = _sim
+    svc.run_for_participant({"ParticipantId": "p1", "ClosedLoopSimulation": 1, "Candidates": [
+        {"channel": "ZERO_THREE_RIGHT", "center_hz": 24.5, "sensing_hemisphere": "Right"}]})
+    assert a.simulation_calls == ["Right"]
 
 
 def test_a_caller_supplied_hemisphere_and_scale_win_over_the_defaults(fake):
@@ -85,6 +111,12 @@ def test_a_caller_supplied_hemisphere_and_scale_win_over_the_defaults(fake):
     call = a.calls[0]
     assert call["hemisphere"] == "Right"
     assert call["power_scale"] == "power_mean_of_log"
+    # An explicit ``Hemisphere`` is passed through as given. (The adapter then prefers the
+    # candidate's own side over it for the device facts and the pipeline -- pinned in test_core --
+    # so this value is a fallback for a candidate that names no side, not an override.)
+    svc.run_for_participant({"ParticipantId": "p1", "Hemisphere": "Left", "Candidates": [
+        {"channel": "ZERO_THREE_RIGHT", "center_hz": 24.5, "sensing_hemisphere": "Right"}]})
+    assert a.calls[1]["hemisphere"] == "Left"
 
 
 def test_the_report_is_returned_untouched_when_it_succeeds(fake):

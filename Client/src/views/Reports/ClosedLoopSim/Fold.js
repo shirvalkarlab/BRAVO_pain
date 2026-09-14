@@ -19,12 +19,18 @@ import MDTypography from "components/MDTypography";
 
 import PAL from "./palette";
 
-export default function Fold({ show, hide, defaultOpen = false, children, mt = 0.6, dense = false }) {
+export default function Fold({ show, hide, defaultOpen = false, children, mt = 0.6, dense = false,
+  onChange = null }) {
   const [open, setOpen] = useState(!!defaultOpen);
+  // `onChange(open)` (2026-09-12) lets a caller learn when the fold is first opened: a Plotly
+  // figure first drawn inside a hidden container measures itself at 0 px wide (the Closed-Loop
+  // page's three-source panel met this, decision 123), so the Stim Optimizer page mounts its
+  // surfaces on first reveal rather than on first render. Children stay mounted, as before.
+  const toggle = () => setOpen((o) => { const n = !o; if (onChange) onChange(n); return n; });
   return (
     <MDBox mt={mt}>
       <MDTypography variant="caption" component="button" type="button"
-        onClick={() => setOpen((o) => !o)} aria-expanded={open}
+        onClick={toggle} aria-expanded={open}
         sx={{ fontSize: dense ? 10.5 : 11, color: PAL.accent, cursor: "pointer", display: "inline-flex",
           alignItems: "center", gap: 0.5, background: "none", border: 0, padding: 0,
           fontFamily: "inherit", "&:hover": { textDecoration: "underline" },

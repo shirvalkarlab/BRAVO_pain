@@ -438,7 +438,7 @@ def test_at_or_above_the_threshold_the_edge_stays_on_cr0_and_says_so():
                          channel="CH", center_hz=20.5)
     assert e.n_clusters == E.MIN_RELIABLE_CLUSTERS
     assert "CR0 cluster-robust" in e.note and "WILD CLUSTER BOOTSTRAP" not in e.note
-    assert e.ci is not None and e.resolved
+    assert e.ci is not None and e.resolved and e.statistically_established
 
 
 def test_a_few_cluster_edge_is_reported_rather_than_disqualified():
@@ -449,7 +449,9 @@ def test_a_few_cluster_edge_is_reported_rather_than_disqualified():
     e = E.actuation_edge(_toy_table(n_epochs=4, per_epoch=8), channel="CH", center_hz=20.5)
     assert e.estimate is not None and e.n_clusters == 4
     assert e.p == pytest.approx(2.0 / 16), "the enumerated floor at four clusters is 2/16"
-    assert e.ci is None and not e.resolved
+    # no interval means not statistically established; the point sign still resolves the edge
+    # (PI rule 2026-09-13, "established means mean only")
+    assert e.ci is None and not e.statistically_established and e.resolved
     assert "UNBOUNDED" in e.note
     assert "FEW CLUSTERS" in e.note, "the historical marker stays, as information"
 

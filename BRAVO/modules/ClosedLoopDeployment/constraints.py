@@ -117,8 +117,20 @@ IMPEDANCE_OPEN_OHMS = 10_000.0
 
 #: D27. Above either of these the stimulation artefact may inflate the LFP during capture. This is a
 #: measurement-validity ceiling, not a safety ceiling, and the two must not be conflated.
-CAPTURE_ARTEFACT_AMP_MA = 5.0
-CAPTURE_ARTEFACT_PW_US = 120.0
+#: ONE HOME FOR THE TWO NUMBERS (review C10, 2026-09-12): they live in ``session_report_facts``,
+#: which this module already imports through ``device_facts``, and ``authority`` imports them from
+#: here -- three literals for one rule had drifted once before (``authority.py``'s own note).
+from .session_report_facts import (CAPTURE_AMP_CEILING_MA as CAPTURE_ARTEFACT_AMP_MA,
+                                   CAPTURE_PW_CEILING_US as CAPTURE_ARTEFACT_PW_US)
+
+# THE DOCUMENTED SELECTION RANGES of the adaptive parameters live in ONE place,
+# ``StimOptimizer.routines.percept_adaptive`` (2026-09-13); rules D20 and D21 read them from there.
+# Two spellings because the container's path root makes the package ``modules.StimOptimizer`` and
+# the host suite makes it ``StimOptimizer`` (the same shim ``device_facts`` uses).
+try:
+    from modules.StimOptimizer.routines import percept_adaptive as _PA
+except Exception:                                       # pragma: no cover - import shim
+    from StimOptimizer.routines import percept_adaptive as _PA
 
 #: D44. The only published rate floor. It is written for movement disorders and its relevance to a
 #: pain participant is not established by the document, so it is a soft floor.
@@ -239,10 +251,25 @@ THRESHOLD_MODE_TABLE = {
     },
 }
 
-#: D21. The adjustable range of the onset duration is not printed in either Medtronic document. The
-#: only published ranges come from the ADAPT-PD methodology paper and are labelled as such wherever
-#: they are used, because a trial paper is not device labelling.
-ONSET_DURATION_RANGE_MS_ADAPT_PD = {"dual": (1200.0, 2000.0), "single": (200.0, 500.0)}
+#: D21. The documented selection range of the onset duration, per mode: 0-6 min in Dual Threshold,
+#: 0-30 s in Single Threshold (FDA SSED P960009/S478, Table 2, p. 8). Until 2026-09-13 this file
+#: carried the ADAPT-PD trial's own setting (1.2-2 s dual, 200-500 ms single) as if it were the
+#: device's range, and RCS08's programmed 30 s onset would have read as outside it. The trial's
+#: values are kept beside the range, labelled as the trial's.
+ONSET_DURATION_RANGE_MS = {"dual": _PA.ONSET_RANGE_DUAL_MS, "single": _PA.ONSET_RANGE_SINGLE_MS}
+ONSET_DURATION_RANGE_MS_ADAPT_PD = {"dual": _PA.ADAPT_PD_ONSET_RANGE_MS[_PA.DUAL],
+                                    "single": _PA.ADAPT_PD_ONSET_RANGE_MS[_PA.SINGLE]}
+
+#: D20. The documented range each declared timing key is judged against, in the units the
+#: THRESHOLD_MODE_TABLE row uses. ``None`` means no range is documented anywhere found, so a
+#: declared value there is reported and never judged. The onset's range depends on the mode.
+TIMING_RANGE_BY_KEY = {
+    "averaging_ms_adaptive": _PA.AVERAGING_RANGE_MS,
+    "onset_ms_adaptive": None,                      # per mode: ONSET_DURATION_RANGE_MS
+    "detection_blanking_ms_adaptive": None,
+    "transition_up_s": (_PA.TRANSITION_RANGE_MS[0] / 1000.0, _PA.TRANSITION_RANGE_MS[1] / 1000.0),
+    "transition_down_s": (_PA.TRANSITION_RANGE_MS[0] / 1000.0, _PA.TRANSITION_RANGE_MS[1] / 1000.0),
+}
 
 #: Accepted spellings of the three threshold modes, normalised before use so that a caller writing
 #: "Dual Threshold" and a caller writing "dual" get the same verdict.
@@ -286,7 +313,10 @@ CANDIDATE_KEYS = {
     "pulse_width_us": "D27, D31.",
     "amp_mA": "D31.",
     "threshold_mode": "D08, D12, D18, D24, D25, D40.",
-    "lfp_amplitude_uvp": "D09.",
+    "lfp_amplitude_uvp": "D09. A single band amplitude; read only when 'lfp_bins_uvp' is absent.",
+    "lfp_bins_uvp": "D09. The survey's per-bin (Hz, uVp) list for the sensing channel, from "
+                    "device_facts.session_report_facts_for; read FIRST, and the rule passes when "
+                    "any bin inside the band clears the capture floor.",
     "power_scale": "D11. Must be 'linear'; the device thresholds a linear sum of squared magnitude.",
     "pooled_across_center_or_mode": "D12. Power values from different centre frequencies or "
                                     "different threshold modes are not comparable.",
@@ -294,19 +324,64 @@ CANDIDATE_KEYS = {
                    "filter stopband.",
     "impedance_ohms": "D16.",
     "impedance_tested": "D16.",
+    "impedance_measurement_current": "D16. The impedance test's own measurement current: a float "
+                                     "number of mA, or 'automatic_increase' for the device's "
+                                     "default, automatically stepping low-current mode. Recorded "
+                                     "for the ledger; the predicate does not read it directly, "
+                                     "because it is device_facts.py that already chose which "
+                                     "recording 'impedance_ohms' came from.",
+    "impedance_measured_at": "D16. The date of the impedance test 'impedance_ohms' came from.",
+    "impedance_ohms_automatic_newest": "D16. Present only when the newest impedance test of all "
+                                       "ran in the device's automatic low-current mode and read "
+                                       "above the open limit while the fixed-current test this "
+                                       "rule trusts read inside it -- the PI's ruled spurious-fail "
+                                       "case, 2026-09-12.",
+    "impedance_automatic_measured_at": "D16. The date of that automatic-mode test.",
     "artifact_flags": "D17. A list; an empty list means the device flagged nothing.",
     "power_slope_vs_amplitude_sign": "D19. Must be -1: the LFP must be suppressed when stimulation "
-                                     "is high.",
+                                     "is high. Since the PI's decision of 2026-09-12 this is the "
+                                     "edge's POINT sign, supplied whether or not its interval "
+                                     "excludes zero.",
     "power_slope_vs_pain_sign": "D19. Must be +1: the device can only ask for more stimulation when "
-                                "band power rises.",
+                                "band power rises. Point sign, as above.",
+    "power_slope_vs_amplitude_sign_established": "D19. True when the current-to-power edge's "
+                                                 "interval excludes zero, so the sign above is "
+                                                 "statistically established; False when it is a "
+                                                 "point sign only. Read by the observed-values "
+                                                 "line, not by the predicate.",
+    "power_slope_vs_pain_sign_established": "D19. The same flag for the power-to-pain edge.",
+    "power_slope_vs_amplitude_ci": "D19. The current-to-power edge's interval, printed on the "
+                                   "observed-values line when the sign is not established.",
+    "power_slope_vs_amplitude_p": "D19. The current-to-power edge's p-value, printed likewise.",
+    "power_slope_vs_pain_ci": "D19. The power-to-pain edge's interval, printed likewise.",
+    "power_slope_vs_pain_p": "D19. The power-to-pain edge's p-value, printed likewise.",
     "capture_amp_low_mA": "D24, D28.",
     "capture_amp_high_mA": "D24, D27, D28.",
+    "capture_pulse_width_us": "D27. The pulse width in force at the newest capture on the "
+                              "actuated side (device_facts.session_report_facts_for); read "
+                              "before 'pulse_width_us', which is the fallback.",
     "adaptive_min_mA": "D07, D28.",
     "adaptive_max_mA": "D28.",
     "paused_amplitude_mA": "D34.",
     "vertically_aligned_segments_matched": "D29.",
-    "frequency_search_closed": "D30. Rate and pulse width freeze when BrainSense is set up, so the "
-                               "open-loop frequency search must be finished first.",
+    "rate_committed_for_this_attempt": "D30. True when the candidate's rate is the one to commit "
+                                       "for this attempt. Since the PI's decision of 2026-09-12 "
+                                       "(option a) the adapter DERIVES it: True when the "
+                                       "candidate's rate equals the rate frozen in the device's "
+                                       "newest ACTIVE sensing group, False when the two differ, "
+                                       "absent when either rate is unknown.",
+    "frequency_search_closed": "D30. The retired spelling of the flag above, still honoured so an "
+                               "un-updated caller does not silently regress to not-determinable.",
+    "active_sensing_group": "D30. The GroupId of the device's newest ACTIVE group with sensing "
+                            "configured, read live from the newest session report. Printed on "
+                            "the observed-values line; the predicate reads the derived flag.",
+    "active_sensing_group_rate_hz": "D30. The rate frozen in that group, in Hz. Printed likewise.",
+    "active_sensing_group_pulse_widths_us": "D30. That group's sensing-channel pulse widths, in "
+                                            "microseconds, one per channel. Recorded.",
+    "active_sensing_group_adaptive_status": "D30. That group's AdaptiveTherapyStatus per sensing "
+                                            "channel. Recorded.",
+    "session_report_date": "D30. The SessionDate of the report the active group was read from. "
+                           "Recorded.",
     "has_pocket_adaptor": "D32.",
     "multiple_rates_in_group": "D32.",
     "interleaving_in_group": "D32.",
@@ -314,7 +389,14 @@ CANDIDATE_KEYS = {
     "patient_limits_configured": "D32.",
     "group_threshold_modes": "D23. The threshold modes of the other adaptive programs in the group.",
     "onset_duration_ms": "D21.",
-    "predicted_recapture_alert": "D26.",
+    "predicted_recapture_alert": "D26. The RECAPTURE THRESHOLDS alert this module predicts from "
+                                 "the threshold plan it placed for the candidate "
+                                 "(authority.threshold_placement); since 2026-09-12 "
+                                 "pipeline._facts_for fills it in from that plan, which is why "
+                                 "eligibility now runs AFTER threshold placement.",
+    "predicted_recapture_alert_reason": "D26. The plan's own sentences behind the prediction "
+                                        "(each capture verdict that is adverse, not established "
+                                        "or not assessed), printed on the observed-values line.",
     "charge_density_state": "D41. The device's own charge-density state, taken rather than "
                             "recomputed.",
     "transitions_through_zero": "D48.",
@@ -693,35 +775,48 @@ def _p_d19(candidate, participant):
 
 
 def _p_d20(candidate, participant):
-    """Any timing parameters the caller declares must match the documented defaults for the mode.
+    """Any timing parameters the caller declares must sit inside the DOCUMENTED selection range.
 
-    Advisory rather than blocking: the device supplies these defaults itself, and the adjustable
-    ranges are not printed in either document, so a declared value that differs from the default is
-    something to look at rather than something this file can call wrong.
+    Until 2026-09-13 this compared a declared value against the white paper's default and read a
+    difference as a failure -- which made every adjusted configuration, including the one RCS08
+    runs (30 s onset, 4 s transitions, 30 s averaging), an advisory failure for being adjusted.
+    The defaults are defaults (WP Table 1 is titled "Default Settings"); the envelope is the FDA
+    approval summary's Table 2. A key with no documented range (detection blanking) is reported
+    and not judged; a declaration containing only such keys gives no verdict.
     """
     mode = _mode(candidate)
     declared = candidate.get("declared_mode_timing") if isinstance(candidate, dict) else None
     if mode is None or not isinstance(declared, dict) or not declared:
         return None
-    row = THRESHOLD_MODE_TABLE[mode]
+    judged = 0
     for key, value in declared.items():
-        if key in row and row[key] is not None and value != row[key]:
+        rng = TIMING_RANGE_BY_KEY.get(key)
+        if key == "onset_ms_adaptive":
+            rng = ONSET_DURATION_RANGE_MS.get(mode)
+        if rng is None or value is None:
+            continue
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
             return False
-    return True
+        judged += 1
+        if not (rng[0] <= v <= rng[1]):
+            return False
+    return True if judged else None
 
 
 def _p_d21(candidate, participant):
-    """Onset duration inside the only published range, which comes from the trial paper.
+    """Onset duration inside the documented selection range for the mode (FDA Table 2).
 
-    Neither Medtronic document prints the adjustable range, so this check cites Stanslaski et al.
-    2024 and is advisory. A value outside the trial range is not thereby unprogrammable; it is
-    simply outside what has been published.
+    0-6 min in Dual Threshold, 0-30 s in Single Threshold. A value outside it cannot be entered on
+    the tablet. Advisory rather than blocking because the candidate's onset is a recommendation
+    the clinician types, not a property of the band.
     """
     mode = _mode(candidate)
     onset = _num(candidate, "onset_duration_ms")
     if mode is None or onset is None:
         return None
-    rng = ONSET_DURATION_RANGE_MS_ADAPT_PD.get(mode)
+    rng = ONSET_DURATION_RANGE_MS.get(mode)
     if rng is None:
         return None
     return rng[0] <= onset <= rng[1]
@@ -804,10 +899,22 @@ def _p_d27(candidate, participant):
     derivation. For this participant the recorded pulse width is asymmetric between hemispheres,
     most commonly 60 us on the left and 160 us on the right, so right-hemisphere captures are
     artefact-suspect by this rule.
+
+    THE PULSE WIDTH THIS RULE NEEDS IS THE ONE USED AT THE CAPTURE, not necessarily whatever pulse
+    width the candidate is otherwise carrying. ``capture_pulse_width_us`` (from
+    ``device_facts.session_report_facts_for``, the newest capture on record) is read first for
+    exactly the reason ``capture_amp_high_mA`` is already preferred over the general ``amp_mA``
+    two lines below: a candidate's general pulse width can now be filled in from the device's
+    CURRENTLY programmed setting (``adapter.programmed_settings_from_epochs``), which is a
+    deployment fact and not a statement about what was running when the threshold was captured.
+    The two usually agree, but this rule must answer the capture question even on the day they do
+    not. ``pulse_width_us`` is kept as the fallback for a caller that has no capture record at all.
     """
     if not _is_adaptive(candidate):
         return True
-    pw = _num(candidate, "pulse_width_us")
+    pw = _num(candidate, "capture_pulse_width_us")
+    if pw is None:
+        pw = _num(candidate, "pulse_width_us")
     hi = _num(candidate, "capture_amp_high_mA")
     if hi is None:
         hi = _num(candidate, "amp_mA")
@@ -1271,8 +1378,34 @@ def _o_d15(c, p):
 
 
 def _o_d16(c, p):
-    return (f"impedance {c.get('impedance_ohms')!r} ohms on a {p.get('lead_type')!r} lead, "
-            f"impedance test performed: {c.get('impedance_tested')!r}")
+    """The observed text for D16, naming which recording the reading came from and why.
+
+    A bare ohm figure does not say whether it came from the device's automatic low-current mode,
+    where a healthy lead can read as an apparent open circuit (the PI's finding, 2026-09-12), or a
+    fixed-current test that actually confirms it. This makes that visible on every ledger row,
+    passing or failing.
+    """
+    cur = c.get("impedance_measurement_current")
+    when = c.get("impedance_measured_at")
+    if isinstance(cur, (int, float)) and not isinstance(cur, bool):
+        current_txt = f"a fixed measurement current of {cur:g} mA, recorded {when!r}"
+    elif cur == "automatic_increase":
+        current_txt = (f"the device's automatic low-current mode, recorded {when!r}; no "
+                       f"fixed-current impedance test is on record, so a fixed-current test would "
+                       f"settle whether this reading is a spurious fail at low measurement current")
+    else:
+        current_txt = "a measurement current that was not recorded"
+    text = (f"impedance {c.get('impedance_ohms')!r} ohms on a {p.get('lead_type')!r} lead, "
+            f"impedance test performed: {c.get('impedance_tested')!r}, measured at "
+            f"{current_txt}")
+    auto_ohm = c.get("impedance_ohms_automatic_newest")
+    if auto_ohm is not None:
+        text += (f". The newest impedance test of all, recorded "
+                 f"{c.get('impedance_automatic_measured_at')!r}, used the device's automatic "
+                 f"low-current mode and read {auto_ohm!r} ohms -- ruled a spurious fail at that "
+                 f"measurement current by the principal investigator on 2026-09-12, not a real "
+                 f"open circuit")
+    return text
 
 
 def _o_d17(c, p):
@@ -1284,9 +1417,31 @@ def _o_d18(c, p):
 
 
 def _o_d19(c, p):
-    return (f"power-versus-amplitude slope sign {c.get('power_slope_vs_amplitude_sign')!r} "
-            f"(must be negative) and power-versus-pain slope sign "
-            f"{c.get('power_slope_vs_pain_sign')!r} (must be positive)")
+    """Both signs, and for each one that is not statistically established, say so with the edge's
+    interval and p-value when the candidate carries them (PI decision 2026-09-12: D19 passes on the
+    point sign, so the reader must be able to see which signs the data has not settled)."""
+    def _one(prefix, label, must):
+        sign = c.get(f"{prefix}_sign")
+        text = f"{label} slope sign {sign!r} ({must})"
+        est = c.get(f"{prefix}_sign_established")
+        if sign is None or est is not False:
+            return text
+        ci, pv = c.get(f"{prefix}_ci"), c.get(f"{prefix}_p")
+        extra = []
+        if isinstance(ci, (list, tuple)) and len(ci) == 2:
+            try:
+                extra.append(f"interval {float(ci[0]):.3g} to {float(ci[1]):.3g}")
+            except (TypeError, ValueError):
+                pass
+        if pv is not None:
+            try:
+                extra.append(f"p {float(pv):.3g}")
+            except (TypeError, ValueError):
+                pass
+        return (text + " -- a point sign that is NOT statistically established"
+                + (": " + ", ".join(extra) if extra else ""))
+    return (_one("power_slope_vs_amplitude", "power-versus-amplitude", "must be negative")
+            + " and " + _one("power_slope_vs_pain", "power-versus-pain", "must be positive"))
 
 
 def _o_d24(c, p):
@@ -1294,9 +1449,26 @@ def _o_d24(c, p):
             f"{c.get('capture_amp_high_mA')!r} mA in {c.get('threshold_mode')!r} mode")
 
 
+def _o_d26(c, p):
+    a = c.get("predicted_recapture_alert")
+    reason = c.get("predicted_recapture_alert_reason")
+    if a is None:
+        if c.get("_threshold_plan_placed"):
+            return ("a threshold plan was placed, but the alert could not be predicted from it"
+                    + (f": {reason}" if reason else ""))
+        return "no threshold plan was placed for this candidate, so no alert could be predicted"
+    head = ("a RECAPTURE THRESHOLDS alert IS predicted" if a
+            else "no RECAPTURE THRESHOLDS alert is predicted")
+    return f"{head} from the threshold plan placed for this candidate" + (f": {reason}" if reason else "")
+
+
 def _o_d27(c, p):
+    if c.get("capture_pulse_width_us") is not None:
+        pw_label, pw_val = "capture pulse width", c.get("capture_pulse_width_us")
+    else:
+        pw_label, pw_val = "pulse width", c.get("pulse_width_us")
     return (f"capture high amplitude {c.get('capture_amp_high_mA', c.get('amp_mA'))!r} mA against "
-            f"{CAPTURE_ARTEFACT_AMP_MA} mA and pulse width {c.get('pulse_width_us')!r} us against "
+            f"{CAPTURE_ARTEFACT_AMP_MA} mA and {pw_label} {pw_val!r} us against "
             f"{CAPTURE_ARTEFACT_PW_US} us")
 
 
@@ -1305,7 +1477,15 @@ def _o_d28(c, p):
 
 
 def _o_d30(c, p):
-    return f"frequency search closed: {c.get('frequency_search_closed')!r}"
+    """The candidate's rate against the rate frozen in the device's active sensing group."""
+    committed = c.get("rate_committed_for_this_attempt")
+    text = (f"candidate rate {c.get('rate_hz')!r} Hz against the rate frozen in the device's "
+            f"newest active sensing group {c.get('active_sensing_group')!r}: "
+            f"{c.get('active_sensing_group_rate_hz')!r} Hz; committed for this attempt: "
+            f"{committed!r}")
+    if committed is None and c.get("frequency_search_closed") is not None:
+        text += f" (retired flag frequency_search_closed: {c.get('frequency_search_closed')!r})"
+    return text
 
 
 def _o_d31(c, p):
@@ -1353,7 +1533,7 @@ def _o_d44(c, p):
 _OBSERVED = {
     "D01": _o_d01, "D02": _o_d02, "D03": _o_d03, "D04": _o_d04, "D08": _o_d08, "D09": _o_d09,
     "D10": _o_d10, "D11": _o_d11, "D12": _o_d12, "D13": _o_d13, "D15": _o_d15, "D16": _o_d16,
-    "D17": _o_d17, "D18": _o_d18, "D19": _o_d19, "D24": _o_d24, "D27": _o_d27, "D28": _o_d28,
+    "D17": _o_d17, "D18": _o_d18, "D19": _o_d19, "D24": _o_d24, "D26": _o_d26, "D27": _o_d27, "D28": _o_d28,
     "D30": _o_d30, "D31": _o_d31, "D32": _o_d32, "D34": _o_d34, "D38": _o_d38, "D39": _o_d39,
     "D40": _o_d40, "D44": _o_d44,
 }
@@ -1365,8 +1545,12 @@ _OBSERVED = {
 #: Parkinson's mode than it would for one who is not. D04 and D31 are here because they are the two
 #: rules whose values are unread today, so when a value finally is supplied the report should say
 #: what it was rather than merely dropping the unknown. Recording every passing rule's value would
-#: bury these three among twenty routine lines.
-_RECORD_VALUE_ON_PASS = ("D03", "D04", "D31")
+#: bury these three among twenty routine lines. D19 and D30 joined on 2026-09-12: D19 now passes on
+#: an edge's POINT sign whether or not its interval excludes zero (PI decision), so a pass must show
+#: which signs the data has not established rather than vanish from the ledger; and D30's pass is
+#: DERIVED from the device's active sensing group, so the reader must see which group and which rate
+#: the candidate was matched against.
+_RECORD_VALUE_ON_PASS = ("D03", "D04", "D16", "D19", "D30", "D31")
 
 
 # ------------------------------------------------------------------------------------------------
@@ -1637,7 +1821,18 @@ RULES = (
             "microseconds and 100 Hz at 0.1, 0.4 or 1.0 mA, rising to 450 microseconds if impedance "
             "measures higher than normal. An untested channel fails this rule even when a stored "
             "impedance value happens to be in range, because the stored value may predate the "
-            "current lead state."
+            "current lead state.\n\n"
+            "PI DECISION, 2026-09-12: the device's DEFAULT impedance test steps a low measurement "
+            "current up automatically, and at that low current a healthy lead can read above the "
+            "10 kilohm open limit even though the same lead reads normal at a fixed, higher "
+            "measurement current. Measured on RCS08's own record: 351 of 544 recordings run in "
+            "the automatic mode read the Left lead's worst pair above 10,000 ohms, against 0 of "
+            "18 recordings run at a fixed current. A high reading produced only by the automatic "
+            "mode must not, by itself, fail this rule. This predicate is therefore evaluated "
+            "against the NEWEST recording run at a FIXED measurement current, when one exists on "
+            "record, and only falls back to the newest recording of any kind when no fixed-current "
+            "recording exists -- this is a deliberate reading of the data, not an oversight, and "
+            "should not be reverted without a further PI decision."
         ),
         predicate=_p_d16,
     ),
@@ -1686,41 +1881,51 @@ RULES = (
             "that cannot deliver therapy. For a pain biomarker this is a hard sign constraint and it "
             "is separate from the amplitude-response requirement: band power must FALL as amplitude "
             "rises and RISE as pain rises. A band whose power falls as pain rises cannot drive "
-            "Adaptive Therapy in either direction, and no choice of thresholds repairs it."
+            "Adaptive Therapy in either direction, and no choice of thresholds repairs it. "
+            "PI decision, 2026-09-12: the two signs this rule reads are the POINT signs of the "
+            "current-to-power and power-to-pain edges, supplied whether or not each edge's "
+            "interval excludes zero; until then a sign was supplied only when its edge was "
+            "resolved, which left this rule unevaluable on RCS08 while all three point signs "
+            "already matched the required pattern. This row's observed text names any sign that "
+            "is not statistically established, with that edge's interval and p-value."
         ),
         predicate=_p_d19,
     ),
     types.DeviceConstraint(
         rule_id="D20",
-        title="Per-mode timing parameters and defaults",
-        source="WP + A610", page="WP p. 14 Table 1, A610 p. 38, A610 p. 42",
+        title="Per-mode timing defaults, and the documented range each may be set within",
+        source="WP + A610 + FDA", page="WP p. 14 Table 1 ('Default Settings'), A610 p. 38, p. 42; FDA SSED P960009/S478 Table 2 p. 8; Tip Cards p. 8",
         severity="advisory",
         human_text=(
-            "The two therapy-driving modes differ throughout: FFT size 256 against 64 points, "
-            "adaptive update rate 5 Hz against 20 Hz, averaging 1200 ms against 100 ms, onset "
-            "1200 ms against 200 ms, detection blanking 2000 ms against 550 ms, and transition "
-            "durations of 2.5 and 5 minutes against 250 ms in each direction. Dual Threshold sets "
-            "its two thresholds manually while both single modes compute one as 0.75 times the "
-            "difference between the captures added to the lower capture. The full table is exposed "
-            "as THRESHOLD_MODE_TABLE so that downstream code reads it rather than restating it. "
-            "This is advisory because the device supplies these defaults itself and the adjustable "
-            "ranges are not printed, so a declared value that differs is worth seeing rather than "
-            "wrong."
+            "The two therapy-driving modes differ throughout in their DEFAULTS: FFT size 256 "
+            "against 64 points, adaptive update rate 5 Hz against 20 Hz, averaging 1200 ms against "
+            "100 ms, onset 1200 ms against 200 ms, detection blanking 2000 ms against 550 ms, and "
+            "transition durations of 2.5 and 5 minutes against 250 ms in each direction. Every one "
+            "of those is adjustable, and the documented selection ranges are: onset 0-6 min (Dual) "
+            "or 0-30 s (Single) and transition up and down 250 ms-30 min each (FDA approval "
+            "summary, Table 2); averaging 0-30 s (tip card). No range is documented for detection "
+            "blanking or the adaptive startup delay. A declared timing value is judged against the "
+            "documented range, not against the default; a value with no documented range is "
+            "reported and not judged. Dual Threshold sets its two thresholds manually while both "
+            "single modes compute one as 0.75 times the difference between the captures added to "
+            "the lower capture. The defaults are exposed as THRESHOLD_MODE_TABLE and the ranges as "
+            "TIMING_RANGE_BY_KEY so that downstream code reads them rather than restating them."
         ),
         predicate=_p_d20,
     ),
     types.DeviceConstraint(
         rule_id="D21",
-        title="Programmable range of the onset duration is published only in the trial paper",
-        source="ADAPT-PD", page="Stanslaski et al. 2024",
+        title="Onset duration inside its documented selection range: 0-6 min (Dual), 0-30 s (Single)",
+        source="FDA + ADAPT-PD", page="FDA SSED P960009/S478 Table 2 p. 8; Stanslaski et al. 2024 for the trial's own settings",
         severity="advisory",
         human_text=(
-            "Neither Medtronic document prints the adjustable range of the onset duration; both "
-            "give only the default. The ADAPT-PD methodology paper states a range of 1.2 to 2 "
-            "seconds in dual threshold mode and 200 to 500 milliseconds in single threshold mode. "
-            "These are the only published ranges found and they are labelled as coming from the "
-            "trial paper rather than from the device labelling, which is why a value outside them "
-            "is surfaced rather than refused."
+            "The FDA approval summary for BrainSense Adaptive prints the selection range of the "
+            "onset duration: 0 to 6 minutes in Dual Threshold mode and 0 to 30 seconds in Single "
+            "Threshold mode. Neither Medtronic manual on this machine prints it. The ADAPT-PD "
+            "trial let its clinicians set 1.2 to 2 seconds (Dual) and 200 to 500 milliseconds "
+            "(Single); until 2026-09-13 this rule treated the trial's setting as the device's "
+            "range, under which the 30 s onset RCS08's device runs would have read as out of "
+            "range. A value outside the documented range cannot be entered on the tablet."
         ),
         predicate=_p_d21,
     ),
@@ -1877,7 +2082,13 @@ RULES = (
             "frequency search and the closed-loop configuration are sequential and not concurrent. "
             "This rule is where that ordering is enforced: a candidate whose frequency search is "
             "not closed is not deployable, because committing it would freeze a rate nobody has "
-            "finished choosing."
+            "finished choosing. PI decision, 2026-09-12 (option a): the committed-for-this-attempt "
+            "flag is DERIVED from the device rather than asked of the caller -- the candidate's "
+            "rate counts as committed when it equals the rate frozen in the device's newest "
+            "ACTIVE sensing group, read live from the newest ingested session report; a "
+            "candidate at a different rate is not committed, because programming it means a new "
+            "group and a new threshold capture; when either rate is unknown the flag is not "
+            "supplied and the rule stays not determinable."
         ),
         predicate=_p_d30,
     ),

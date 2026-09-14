@@ -49,6 +49,7 @@ import pandas as pd
 from . import acquisition as ACQ
 from . import objective as OBJ
 from . import surrogate as SUR
+from .. import safety_ceiling as SC
 from .preference import PreferenceGP
 
 # --- canonical configuration -------------------------------------------------------------
@@ -73,10 +74,14 @@ KAPPA = 2.0
 BETA = 2.0
 PREF_MARGIN = 0.15
 
-#: Programmed ``UpperLimitInMilliAmps`` anchors, (freq_hz, upper_mA), from the device JSONs.
-LIMIT_ANCHORS = np.array([[55., 2.0], [55., 1.8], [55., 1.9], [10., 1.9], [110., 4.0],
-                          [110., 3.2], [130., 3.2], [125., 2.5], [165., 2.5], [110., 2.2],
-                          [55., 1.6], [10., 2.0]])
+# THE SAFETY MODEL'S SEVERITY-3 SEED IS A CEILING THE PI STATES, per participant and per side
+# (`StimOptimizer/safety_ceiling.py`, 2026-09-12). Until then it was twelve (rate, current) pairs
+# read off RCS08's programmed `UpperLimitInMilliAmps` in 2026-08 (`LIMIT_ANCHORS`), and, behind a
+# switch shipped off, every such limit in the participant's settings stream (review S8, decision
+# 143). Both were deleted: a programmed upper limit is a range the patient or the adaptive controller
+# was allowed to move within, not a current at which side effects begin, and on RCS08 the stream's
+# limits put the Left side's reachable ceiling at 0.1 mA on a record where 4.5-4.8 mA was tolerated
+# for weeks. `build_context` seeds from `safety_ceiling.safety_seed`, the same call Stage 1 makes.
 
 # Declared provenance. The CALLER should pass the true horizon; this default is deliberately
 # labelled as unset so a stale value can never be silently stamped onto a figure.
@@ -156,7 +161,7 @@ def _cell_edges(centres):
 def build_context(design_csv, *, freq_grid=FREQ_GRID, amp_grid=AMP_GRID,
                   incumbent_epoch=None, incumbent_xy=None,
                   fixed_length_scale=FIXED_LENGTH_SCALE, beta=BETA, kappa=KAPPA,
-                  limit_anchors=LIMIT_ANCHORS, pref_margin=PREF_MARGIN,
+                  safety_ceiling=None, pref_margin=PREF_MARGIN,
                   n_batches=3, q=4, min_tolerated_h=72.0,
                   data_horizon=DATA_HORIZON, washin_min=WASHIN_MIN,
                   hemisphere="Left", primary_item=None,
@@ -190,6 +195,12 @@ def build_context(design_csv, *, freq_grid=FREQ_GRID, amp_grid=AMP_GRID,
     primary_item
         Pain metric name passed through to :func:`objective.build_objective` (e.g. ``"left_leg"``,
         ``"back"``). ``None`` uses the module default, which is the left leg.
+    safety_ceiling
+        ``(ceiling_mA, provenance)`` from ``safety_ceiling.ceiling_for`` -- the current above which
+        this side is not acceptable, stated by the PI. The safety model is seeded with severity 3
+        at that current on every grid rate and severity 0 at every setting this side sustained
+        (``safety_ceiling.safety_seed``). ``None`` means the module hard limit, with a provenance
+        that says no ceiling was stated.
     """
     es = pd.read_csv(design_csv) if not isinstance(design_csv, pd.DataFrame) else design_csv.copy()
     grid = SUR.ParameterGrid(freq_grid, amp_grid)
@@ -236,9 +247,12 @@ def build_context(design_csv, *, freq_grid=FREQ_GRID, amp_grid=AMP_GRID,
     n_reports = np.zeros(len(grid))
     np.add.at(n_reports, grid.index_of(Xobs), fit["n"].to_numpy(float))
 
-    # safety GP, two-anchor seed (OBJECTIVE_SPEC amendment 2026-08-29)
-    deliv = D.loc[D["dur_h"] >= float(min_tolerated_h), ["freq_hz", amp_col]].to_numpy(float)
-    Xs, sev, sv = SUR.SafetyGP.seed_from_history(deliv, np.asarray(limit_anchors, float))
+    # safety GP, two-anchor seed (OBJECTIVE_SPEC amendment 2026-08-29): tolerated settings at
+    # severity 0 and the PI-stated ceiling at severity 3, from the ONE seed builder Stage 1 also
+    # calls (`safety_ceiling.safety_seed`, 2026-09-12).
+    Xs, sev, sv, seed_meta = SC.safety_seed(D, amp_col, freq_grid=freq_grid,
+                                            ceiling=safety_ceiling,
+                                            min_tolerated_h=min_tolerated_h)
     sgp = SUR.SafetyGP(grid, random_state=random_state).fit(Xs, sev, sv)
     smu, ssd = sgp.predict(gx)
     sub = smu + float(beta) * ssd
@@ -269,6 +283,8 @@ def build_context(design_csv, *, freq_grid=FREQ_GRID, amp_grid=AMP_GRID,
     band = (gx[:, 0] <= 55) & (gx[:, 1] > 1.8)
     meta = dict(
         hemisphere=str(hemisphere), amp_col=amp_col,
+        # What the safety model was told: the stated ceiling, its provenance, the anchors.
+        **seed_meta,
         primary_item=str(D["primary_item"].iloc[0]) if "primary_item" in D.columns else "unknown",
         data_horizon=str(data_horizon), washin_min=float(washin_min),
         beta=float(beta), kappa=float(kappa), q=int(q), n_batches=int(n_batches),

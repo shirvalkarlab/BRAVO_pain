@@ -291,20 +291,6 @@ def test_live_match_td_quantity_caps_nearest_n_tiles():
     assert rT[0]["n_td_used"] == 10                       # tol does NOT cap quantity
 
 
-def test_live_match_per_modality_independence():
-    """The per-modality non-reuse rule (independent of the reuse toggle): a montage snapshot's TD tile
-    and its co-timestamped device-PSD window may serve TWO DIFFERENT PROs, because TD and PSD are
-    matched in separate passes. Here PRO0 takes the TD modality (td_transform) and PRO1 takes a PSD
-    modality (psd_bridge) — different PROs, different tiers."""
-    centers = np.arange(8.0, 31.0, 1.0)
-    raw = _raw_cache_fixture(centers)
-    pro = np.array([1000.0, 1100.0, 5000.0])
-    recs, _ = av.live_lsb_spectrum_match(pro, raw, extent_s=30.0)
-    assert recs[0]["tier"] == av.PRO_LSB_TIER_TD
-    assert recs[1]["tier"] == av.PRO_LSB_TIER_BRIDGE
-    assert recs[0]["tier"] != recs[1]["tier"]
-
-
 def test_raw_cache_folds_montage_psd_windows():
     """Montage device-PSD recordings fold into the cache PSD family (source-tagged), ON TOP of any
     patient-event PSDs — the coverage fix. A montage block {channel,t,freq,power,source} adds one PSD

@@ -57,15 +57,19 @@ export const TRACKS = {
   evidence: {
     label: "Does the evidence support this configuration?",
     cells: [
+      // "Resolved" has meant the POINT SIGN since 2026-09-13 (PI rule: "established means mean
+      // only for flexibility"). An interval that spans zero no longer moves the answer to NOT
+      // ESTABLISHED; it is printed beneath as a provisional caveat (ProvisionalNote.js).
       { key: "supported", label: "SUPPORTED", role: "pass",
-        blurb: "All three edges are resolved and their signs match the pattern the selected "
-             + "control law requires." },
+        blurb: "All three edges have a point sign and the signs match the pattern the selected "
+             + "control law requires. When any edge's interval spans zero the verdict is "
+             + "provisional and the line beneath names the edge with its interval and p." },
       { key: "misaligned", label: "NOT ALIGNED WITH THE CONTROL LAW", role: "fail",
-        blurb: "All three edges are resolved, and their signs do not match the pattern the "
+        blurb: "All three edges have a point sign, and the signs do not match the pattern the "
              + "selected control law requires." },
       { key: "unestablished", label: "NOT ESTABLISHED", role: "neutral",
-        blurb: "At least one edge is unresolved, or the sign-agreement test could not be run, so the "
-             + "evidence has not answered the question either way." },
+        blurb: "At least one edge has no point estimate, or the sign-agreement test could not be "
+             + "run, so the evidence has not answered the question either way." },
     ],
     lit: (d) => {
       if (!d || !d.available) return 2;
@@ -86,7 +90,8 @@ export const TRACKS = {
     cells: [
       { key: "ready", label: "READY TO TRANSCRIBE", role: "pass",
         blurb: "The device permits the configuration, so the parameter table is shown with its "
-             + "read-back checklist enabled." },
+             + "read-back checklist enabled. When the evidence verdict is provisional the same "
+             + "caveat is printed beside the values (PI rule 2026-09-13)." },
       { key: "withheld", label: "WITHHELD", role: "fail",
         blurb: "The device does not permit this configuration, so no value to program is shown. A "
              + "read-only planning view is available and is watermarked as such." },

@@ -134,3 +134,40 @@ def test_one_participants_scores_do_not_evict_anothers():
             st.store(KIND, other, sig, {"metric": f"m{i:03d}"}, writer="biomarkers", provenance=[])
         for sig in mine:
             assert st.load(KIND, UID, sig, consumer="biomarkers") is not None
+
+
+def test_the_spectrum_matrix_keeps_its_two_live_writers_entries():
+    """Biomarkers review B4 (2026-09-12). The assembled spectrum matrix has two live writers under
+    two keys -- the page's rating-centred key and the daily ingest's legacy first-window key --
+    and under a limit of one they evicted each other every day. Written in turn, both must still
+    read back; a third key still evicts the oldest."""
+    kind = "biomarker_psd_matrix"
+    assert st.KEEP_NEWEST_BY_KIND.get(kind) == 2
+    with _Sandbox():
+        sig_page = (kind, "v1", UID, "recordings", "reports-abc")   # the page: with a report set
+        sig_ingest = (kind, "v1", UID, "recordings", "")            # the ingest: no report set
+        st.store(kind, UID, sig_page, {"which": "page"}, writer="biomarkers", provenance=[])
+        st.store(kind, UID, sig_ingest, {"which": "ingest"}, writer="biomarkers", provenance=[])
+        assert st.load(kind, UID, sig_page) == {"which": "page"}, "the ingest's write evicted the page's"
+        assert st.load(kind, UID, sig_ingest) == {"which": "ingest"}
+        assert len(_payload_files(kind)) == 2
+        sig_page2 = (kind, "v1", UID, "recordings", "reports-def")  # a new rating: a third key
+        st.store(kind, UID, sig_page2, {"which": "page2"}, writer="biomarkers", provenance=[])
+        assert len(_payload_files(kind)) == 2, _payload_files(kind)
+        assert st.load(kind, UID, sig_page) is None, "the oldest goes"
+        assert st.load(kind, UID, sig_page2) == {"which": "page2"}
+
+
+def test_the_stim_optimizer_response_keeps_both_page_requests():
+    """The Stim Optimizer page makes two requests, plain and with the two-stage plan, each under
+    its own key (2026-09-12). Under a limit of one they evicted each other, so the second page
+    load rebuilt what the first had just stored. Written in turn, both must still read back."""
+    kind = "stim_optimizer_response"
+    assert st.KEEP_NEWEST_BY_KIND.get(kind) == 2
+    with _Sandbox():
+        sig_plain = (kind, "v1", UID, "inputs", "two_stage=0")
+        sig_two = (kind, "v1", UID, "inputs", "two_stage=1")
+        st.store(kind, UID, sig_plain, {"which": "plain"}, writer="stim_optimizer", provenance=[])
+        st.store(kind, UID, sig_two, {"which": "two_stage"}, writer="stim_optimizer", provenance=[])
+        assert st.load(kind, UID, sig_plain)["which"] == "plain"
+        assert st.load(kind, UID, sig_two)["which"] == "two_stage"

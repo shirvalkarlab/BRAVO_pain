@@ -6,10 +6,12 @@ Make the Closed-Loop Deployment page much shorter and easier to read, following 
 is built, and every built change proven in the served bundle and on the live RCS08 page.
 
 ## Next Step
-WAITING ON THE PI: a look at the "CL-DBS simulations" card at the foot of the live page -- on his
-committed band (L 0-2+ at 24.5 Hz, one run) it says honestly that no response curve can be fitted
-yet; on L 1-3+ at 20.5 Hz (4 runs) it draws the three figures with M1 and the M3 interval. Open
-items on him are unchanged (30: the titration protocol; 29: the default branch). Nothing is queued.
+NOTHING QUEUED. The redesign is complete and merged into `v3.1.0` (PR #10, merge `8e18f4bd`,
+2026-09-11). Two follow-ups landed the same evening after the PI's questions: decision 130 (the
+Biomarkers recording memos keyed on the recording set, so the daily ingest's rows are not served
+stale) and decision 131 (the "Choose a band" card reads the same stored grid the Biomarkers page
+shows and prints its score, match window, direction and split). Open on him: item 30 (the
+titration protocol) and the second half of item 29 (moving the default branch).
 
 ## Current Phase
 Phase 8 complete; all eight phases landed and pushed

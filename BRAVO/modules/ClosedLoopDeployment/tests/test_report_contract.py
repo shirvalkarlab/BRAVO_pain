@@ -156,7 +156,9 @@ def _handler_key_mismatches(fn):
     for node in ast.walk(fn):
         if not isinstance(node, ast.Try):
             continue
-        for var in ("out",):
+        # `_pre` gathers the payloads built BEFORE the pipeline runs (review C6, 2026-09-12) and is
+        # copied onto `out` once it exists, so its handlers are held to the same rule.
+        for var in ("out", "_pre"):
             tk = keys(node.body, var)
             if not tk:
                 continue
@@ -207,7 +209,7 @@ def _handler_messages_for(fn, key):
                     continue
                 for t in sub.targets:
                     if (isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name)
-                            and t.value.id == "out" and isinstance(t.slice, ast.Constant)
+                            and t.value.id in ("out", "_pre") and isinstance(t.slice, ast.Constant)
                             and t.slice.value == key):
                         text = "".join(
                             c.value for c in ast.walk(sub.value)
@@ -276,14 +278,42 @@ def test_every_failure_handler_in_the_report_also_logs():
                   for n in body)
               if says_something and not logs:
                   unlogged.append(h.lineno)
-              # the silent store-read handler is the one that used to vanish entirely
-              if not says_something and not logs and "_amp_stored" in names:
+              # the silent store-read handlers are the ones that used to vanish entirely: the
+              # amplitude-effect read, and (review C7, 2026-09-12) the stability-grid read,
+              # whose failure shows as "not tested" on every row of the "Choose a band" card
+              if not says_something and not logs and ({"_amp_stored", "stored_stability"} & names):
                   unlogged.append(h.lineno)
 
     assert not unlogged, (
         f"handler(s) at line(s) {unlogged} report a failure to the page but not to the log. "
         f"A failure nobody can see from outside one participant's page is a failure nobody "
         f"will act on.")
+
+
+def test_the_payloads_built_before_the_pipeline_reach_the_response():
+    """Review C6: the three-source comparison and the two table writes run BEFORE the pipeline so
+    E1 reads the table this request wrote. They land in `_pre`; this pins that `_pre` is copied
+    onto `out`, and that the keys the page reads are assigned there."""
+    fn = _function("report_for_participant")
+    pre_keys, copied = set(), False
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if (isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name)
+                        and t.value.id == "_pre" and isinstance(t.slice, ast.Constant)):
+                    pre_keys.add(t.slice.value)
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "update" and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "out" and node.args
+                and isinstance(node.args[0], ast.Name) and node.args[0].id == "_pre"):
+            copied = True
+    assert {"three_source_response", "within_visit_pooled_shape", "three_source_run_points",
+            "three_source_pooled"} <= pre_keys, pre_keys
+    assert copied, "`_pre` is never copied onto `out`, so the page would lose those four payloads"
+    # and the pooled read the pipeline consumes comes AFTER the write, in source order
+    src = _ADAPTER_SRC
+    assert src.index("_pre[\"within_visit_pooled_shape\"] = write_pooled_shape(") \
+        < src.index("_pooled_e1 = _amp_e1.pooled_row(pooled_shape_if_stored(participant),")
 
 
 def test_the_module_actually_calls_the_logger_it_declares():

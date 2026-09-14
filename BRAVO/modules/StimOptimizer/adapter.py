@@ -90,7 +90,11 @@ THERAPY_PAIN_MATCHED_KIND = "therapy_pain_matched"
 
 #: Bumped when the RULE that produces either table changes: the group parser, the epoch keys, the
 #: aggregation. The constants that shape a table are in its key already.
-_THERAPY_SETTINGS_RULE_VERSION = "v1_active_groups"
+#: v2 (2026-09-12, review S8): the stream carries `upper_is_patient_limit`, whether each row's
+#: programmed upper limit is a patient limit (a clinician's ceiling) or the adaptive amplitude
+#: limit of a group running adaptive therapy (decision 136). A stream stored under v1 lacks the
+#: column and is rebuilt once (about 33 s on RCS08).
+_THERAPY_SETTINGS_RULE_VERSION = "v2_active_groups_limit_kind"
 _THERAPY_PAIN_MATCHED_RULE_VERSION = "v1_epoch_means"
 
 #: The frame attribute under which a table carries the key of the store entry it came from, so a
@@ -132,11 +136,38 @@ def contact_label(estates):
     return ("-".join(sorted(neg)) or "none", "+".join(sorted(pos)) or "case")
 
 
+def _sensing_upper_is_patient_limit(ch):
+    """Is a sensing channel's ``UpperLimitInMilliAmps`` a PATIENT limit, or the adaptive
+    amplitude limit of a group running adaptive therapy? Decision 136's rule, IMPORTED from the
+    closed-loop module (``session_report_facts._patient_limits_configured``) rather than retyped:
+    a limit on a channel whose ``AdaptiveTherapyStatus`` is RUNNING is the controller's own
+    range, not a clinician's ceiling. ``None`` when the channel carries no limit or the rule
+    cannot be read; ``True``/``False`` otherwise.
+    """
+    u, lo = ch.get("UpperLimitInMilliAmps"), ch.get("LowerLimitInMilliAmps")
+    if u is None and lo is None:
+        return None
+    try:
+        try:
+            from modules.ClosedLoopDeployment import session_report_facts as _srf
+        except ImportError:
+            from ClosedLoopDeployment import session_report_facts as _srf
+    except Exception as exc:                          # noqa: BLE001 -- the rule could not be read
+        _log.debug("StimOptimizer: decision 136's limit rule unavailable (%r)", exc)
+        return None
+    v = _srf._patient_limits_configured([ch], [(u, lo)])
+    return None if v is None else bool(v)
+
+
 def group_settings(g):
     """Amplitude / pulse width / rate / contacts per hemisphere, handling BOTH schemas.
 
     Legacy hemisphere keys win when present; the sensing channel fills any side they did not cover
     (``setdefault``), so a group carrying both never double-counts.
+
+    ``upper_is_patient_limit`` (2026-09-12, review S8): a legacy program's upper limit is a
+    clinician's ceiling (True when present); a sensing channel's is judged by decision 136's rule
+    (see :func:`_sensing_upper_is_patient_limit`). ``None`` when no limit is recorded.
     """
     ps = g.get("ProgramSettings") or {}
     out = {}
@@ -145,10 +176,12 @@ def group_settings(g):
         if isinstance(h, dict) and (h.get("Programs") or []):
             pr = h["Programs"][0]
             cath, _ = contact_label(pr.get("ElectrodeState"))
+            upper = pr.get("UpperLimitInMilliAmps")
             out[tag] = dict(amp=pr.get("AmplitudeInMilliAmps"),
                             pw=pr.get("PulseWidthInMicroSecond"),
                             rate=ps.get("RateInHertz"),
-                            upper=pr.get("UpperLimitInMilliAmps"),
+                            upper=upper,
+                            upper_is_patient_limit=(True if upper is not None else None),
                             cathode=cath, schema="hemisphere")
     for ch in (ps.get("SensingChannel") or []):
         tag = ((ch.get("HemisphereLocation") or "").split(".")[-1])
@@ -159,6 +192,7 @@ def group_settings(g):
                                  pw=ch.get("PulseWidthInMicroSecond"),
                                  rate=ch.get("RateInHertz") or ps.get("RateInHertz"),
                                  upper=ch.get("UpperLimitInMilliAmps"),
+                                 upper_is_patient_limit=_sensing_upper_is_patient_limit(ch),
                                  cathode=cath, schema="sensing"))
     return out
 
@@ -270,7 +304,7 @@ def _build_settings_stream(participant, *, source_types=_JSON_SOURCE_TYPES) -> p
         _log.info("StimOptimizer: read %d source files, %d unreadable", n_read, n_failed)
     if not recs:
         out = pd.DataFrame(columns=["t", "src", "hemi", "amp", "pw", "rate", "upper",
-                                    "cathode", "schema"])
+                                    "upper_is_patient_limit", "cathode", "schema"])
     else:
         out = pd.DataFrame(recs).dropna(subset=["t", "amp", "rate"])
         out = out.sort_values("t").reset_index(drop=True)
@@ -338,7 +372,24 @@ def exposure_epochs(stream: pd.DataFrame) -> pd.DataFrame:
     wide = wide.sort_index()
     # One shared frequency: the device runs both sides at the same rate. Prefer the left, fall back
     # to the right so a unilateral record still yields a frequency.
+    #
+    # THAT ASSUMPTION IS CHECKED, NOT TRUSTED (review S9, 2026-09-12). An epoch opens on
+    # `freq_hz`, which is the Left rate wherever the Left has one, so a change of the Right rate
+    # alone would open no epoch and every Right-side surface would be fitted at the Left's rate.
+    # Measured on RCS08's stream: 1,172 timestamps carry both sides and 0 carry different rates.
+    # The count of timestamps where the two sides disagree is carried on the frame as
+    # `attrs["n_timestamps_rates_differ"]`; a record where it is not zero needs `rate_Right` in
+    # `_EPOCH_KEYS` and a bump of `_THERAPY_SETTINGS_RULE_VERSION`, and `rates_agree_across_sides`
+    # says so rather than letting the epochs quietly carry one side's rate for both.
     freq = None
+    n_differ = 0
+    if "rate_Left" in wide.columns and "rate_Right" in wide.columns:
+        both = wide[["rate_Left", "rate_Right"]].dropna()
+        n_differ = int((~np.isclose(pd.to_numeric(both["rate_Left"], errors="coerce"),
+                                    pd.to_numeric(both["rate_Right"], errors="coerce"))).sum())
+        if n_differ:
+            _log.warning("StimOptimizer: the Left and Right rates differ at %d timestamps; the "
+                         "epochs open on the Left rate only", n_differ)
     for c in ("rate_Left", "rate_Right"):
         if c in wide.columns:
             freq = wide[c] if freq is None else freq.fillna(wide[c])
@@ -359,6 +410,8 @@ def exposure_epochs(stream: pd.DataFrame) -> pd.DataFrame:
     ep["dur_h"] = (ep["t_end"] - ep["t_start"]).dt.total_seconds() / 3600.0
     ep["open_ended"] = False
     ep.loc[ep.index[-1], "open_ended"] = True
+    ep.attrs["n_timestamps_rates_differ"] = int(n_differ)
+    ep.attrs["rates_agree_across_sides"] = bool(n_differ == 0)
     return ep
 
 
@@ -484,18 +537,31 @@ def _deployable_band_span(_bs):
     same range. Carrying all 98 stored centres instead of these 22 would quadruple the size of a
     frame that is already large and would add nothing a deployment could use.
 
-    Returns ``None`` when the service does not expose the constants, which means "carry every centre
-    the cache holds" rather than a guess at the range.
+    RAISES when the constants cannot be read (review S12, 2026-09-12). Until then a failed import
+    returned ``None``, which ``evidence_inputs`` reads as "carry every centre the cache holds":
+    under the host runner the single spelling ``modules.Biomarkers`` did not resolve, so the
+    frame silently carried 98 centres instead of 22 with no message. Both spellings are tried,
+    the way every other cross-module import in this module is; a service that genuinely lacks
+    the constants is a broken service, not a wider range.
     """
     try:
         from modules.Biomarkers.routines import analytics as _an
-    except Exception:                                     # pragma: no cover - stand-in service
-        return None
+    except ImportError:
+        from Biomarkers.routines import analytics as _an
     lo = getattr(_an, "LSB_VALIDATED_HZ_LO", None)
     hi = getattr(_an, "LSB_DEPLOYABLE_HZ_HI", None)
     if lo is None or hi is None:
-        return None
+        raise RuntimeError("the Biomarkers analytics module carries no LSB_VALIDATED_HZ_LO / "
+                           "LSB_DEPLOYABLE_HZ_HI, so the deployable band range cannot be read")
     return (float(lo), float(hi))
+
+
+def deployable_band_span() -> tuple:
+    """``(lo_hz, hi_hz)`` of the band centres the device could place a sensing window on, read
+    from the Biomarkers module's two constants. Public so the response key can name them
+    (review S11): the evidence frame's centres depend on them and nothing else in the key did.
+    """
+    return _deployable_band_span(None)
 
 
 def evidence_inputs(participant, *, force_refresh=None, sources=None, stream=None,
@@ -536,7 +602,10 @@ def evidence_inputs(participant, *, force_refresh=None, sources=None, stream=Non
     participant and with no filtering applied afterwards, so a caller that hands in exactly that
     gets exactly the same epochs it would have got otherwise.
     """
-    from modules.Biomarkers import bravo_service as _bs      # local: avoids a module-level cycle
+    try:
+        from modules.Biomarkers import bravo_service as _bs  # local: avoids a module-level cycle
+    except ImportError:                                       # the host runner's spelling
+        from Biomarkers import bravo_service as _bs
     from .routines import lfp_evidence as _ev
 
     epochs = exposure_epochs(_use_stream_or_build_one(participant, stream))
@@ -567,17 +636,33 @@ def evidence_inputs(participant, *, force_refresh=None, sources=None, stream=Non
 
 
 def evidence_for_participant(participant, *, hemispheres=("Left", "Right"), rates=None,
-                             channels=None, force_refresh=None, sources=None, **kw):
+                             channels=None, force_refresh=None, sources=None, stream=None,
+                             inputs=None, **kw):
     """Every usable ``LfpEvidence`` for a participant, plus the audit of what was unusable.
 
     Returns ``(evidence_dict, audit_frame)`` keyed on ``(channel, hemisphere, rate_hz)``. The audit
     frame is not optional output: a cell that yields no evidence because the data cannot support the
     test must be distinguishable from one that yields a genuine negative, and only the audit says
     which. Callers handing this to the stage gate should report both.
+
+    ``stream`` is an already-built settings stream, forwarded to :func:`evidence_inputs` so a
+    caller that has parsed the participant's stored Percept files once does not pay for it again.
+    ``None`` means build it here, which is what every caller written before this argument did.
+
+    ``inputs`` is the ``(sensed_frame, epochs)`` pair :func:`evidence_inputs` returns, already
+    built by the caller (2026-09-12). One Stim Optimizer request builds the evidence twice -- once
+    for the closed-loop readiness screen and once, pinned to the rate Stage 1 froze, inside the
+    two-stage path -- and the sensed frame is the same both times: loading the recordings and the
+    tile cache cost about 3 s per build on RCS08. Handing the pair in skips that; ``None`` builds
+    it here as before. Nothing downstream writes into either frame.
     """
     from .routines import lfp_evidence as _ev
-    psd, epochs = evidence_inputs(participant, force_refresh=force_refresh, sources=sources,
-                                  band_power=kw.pop("band_power", BAND_POWER_CALIBRATED))
+    band_power = kw.pop("band_power", BAND_POWER_CALIBRATED)
+    if inputs is not None:
+        psd, epochs = inputs
+    else:
+        psd, epochs = evidence_inputs(participant, force_refresh=force_refresh, sources=sources,
+                                      stream=stream, band_power=band_power)
     if psd is None:
         return {}, pd.DataFrame([{"reason_unusable": "no sensed signal for this participant",
                                   "usable": False}])
@@ -599,7 +684,10 @@ def build_design_matrix(participant, request_data=None, *, washin_min=1.0,
     participant and with no filtering applied afterwards, which is the same frame
     ``evidence_inputs`` builds for itself, so one frame can safely serve both.
     """
-    from modules.Biomarkers import bravo_service as _bs
+    try:
+        from modules.Biomarkers import bravo_service as _bs
+    except ImportError:                                       # the host runner's spelling
+        from Biomarkers import bravo_service as _bs
 
     stream = _use_stream_or_build_one(participant, stream)
     if stream.empty:

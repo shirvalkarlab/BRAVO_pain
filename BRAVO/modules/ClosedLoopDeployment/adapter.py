@@ -128,8 +128,19 @@ def _assign_epoch(t_epoch_s, epochs):
               .astype("datetime64[ns]").astype("int64") / 1e9)
     ends = (pd.to_datetime(epochs["t_end"], utc=True).to_numpy()
             .astype("datetime64[ns]").astype("int64") / 1e9)
-    for i, (a, b) in enumerate(zip(starts, ends)):
-        m = (t >= a) & (t < b) if np.isfinite(b) else (t >= a)
+    # THE OPEN-ENDED LAST EPOCH EXTENDS TO +INF (review C9, 2026-09-12). The settings stream's
+    # last epoch ends at the newest export's own session time, not at the moment the setting
+    # stopped being in force (`StimOptimizer.adapter.exposure_epochs` marks it `open_ended`, and
+    # its own `attach_pros` already extends it for the pain reports for exactly this reason). A
+    # recording made after that export's session time is still under that setting; treating the
+    # end as a wall put it in no epoch, with no amplitude and no row in the joined table. Measured
+    # on RCS08 on 2026-09-12: 0 of 304,488 spectra fell there (the newest precedes the last
+    # export's session time by 49 s), so on this record the change moves nothing; the rule is
+    # kept right for the day a recording lands between two exports.
+    open_ended = (epochs["open_ended"].fillna(False).astype(bool).to_numpy()
+                  if "open_ended" in epochs.columns else np.zeros(len(epochs), dtype=bool))
+    for i, (a, b, oe) in enumerate(zip(starts, ends, open_ended)):
+        m = (t >= a) & (t < b) if (np.isfinite(b) and not oe) else (t >= a)
         out[m] = i
     return out
 
@@ -653,7 +664,13 @@ def band_sweep_grid_for_closed_loop(participant_uid, request_data=None):
             except (TypeError, ValueError):
                 continue
     except Exception:                                            # noqa: BLE001
-        stored_stability = {}                                    # never fatal; rows say "not tested"
+        # Never fatal: the rows say "not tested". But LOGGED (review C7, 2026-09-12): on this
+        # failure every row of the "Choose a band" card's stability column reads the dashed "not
+        # tested", indistinguishable from "the background job has not run yet", and nothing else
+        # would say which of the two it was.
+        _log.warning("closed-loop: the stored stability grid could not be read for %s; every row "
+                     "will show 'not tested'", participant_uid, exc_info=True)
+        stored_stability = {}
 
     sweeps = payload.get("band_time_sweep") or {}
     out_sweeps = {}
@@ -856,6 +873,10 @@ def _inputs_provenance(participant, stream, dm):
             stamp = _cache_store.newest_stamp(kind, uid, root=_SHARED_CACHE_DIR_OVERRIDE) or {}
             chain = stamp.get("provenance") or []
         except Exception:                                 # noqa: BLE001 — the chain is optional
+            # Logged (review C7): a shorter chain is what lets the self-derived refusal miss.
+            _log.warning("closed-loop: the matched table's provenance chain could not be read "
+                         "for %s; the inputs entry cites it without its chain",
+                         getattr(participant, "uid", participant), exc_info=True)
             chain = []
         entries.append(_prov.entry(dm_key, kind="therapy_pain_matched", writer="stim_optimizer",
                                    chain=chain))
@@ -868,7 +889,9 @@ def _inputs_provenance(participant, stream, dm):
                 _cache_store.product_key(_bsvc._RAW_LSB_SHARED_KIND, uid, tiles_sig),
                 kind=_bsvc._RAW_LSB_SHARED_KIND, writer="biomarkers"))
     except Exception:                                     # noqa: BLE001 — no server, no tile key
-        pass
+        _log.warning("closed-loop: the tile entry's key could not be built for %s; the inputs "
+                     "entry's provenance omits it", getattr(participant, "uid", participant),
+                     exc_info=True)
     return _prov.flatten(entries)
 
 
@@ -1292,6 +1315,22 @@ def _num(x):
     return f if np.isfinite(f) else None
 
 
+def _capture_verdicts_to_dict(v):
+    """JSON-safe copy of ``ThresholdPlan.capture_verdicts`` (``authority.d26_capture_verdicts``):
+    every number through ``_num``, strings and booleans as they are, nested one level."""
+    if not v:
+        return None
+    def _leaf(x):
+        if x is None or isinstance(x, (bool, str)):
+            return x
+        if isinstance(x, (list, tuple)):
+            return [_leaf(i) for i in x]
+        if isinstance(x, dict):
+            return {str(k): _leaf(i) for k, i in x.items()}
+        return _num(x)
+    return _leaf(dict(v))
+
+
 def report_to_dict(rep):
     """Flatten a DeploymentReport for the interface.
 
@@ -1310,10 +1349,23 @@ def report_to_dict(rep):
     # made the interface report a contradiction that the data had not shown — the exact failure this
     # panel was rebuilt to prevent.
     coherent = None if rep.coherence is None else rep.coherence.coherent
+    # THE PROVISIONAL FLAG (PI rule 2026-09-13, "established means mean only": point sign decides,
+    # but flag as provisional). `resolved` is the point sign since that date, so a report can be
+    # licensed while an edge's interval spans zero; the verdict string then carries the count so a
+    # reader of the word "supported" also reads what it rests on. The denominator is the number of
+    # edges the report holds, three on every real report.
+    n_unest = int(getattr(rep, "n_edges_unestablished", 0) or 0)
+    n_edges = len(rep.edges or {})
+    licensed = rep.is_licensed()
+    provisional = bool(getattr(rep, "provisional", False))
+    unestablished_edges = [k for k, e in (rep.edges or {}).items()
+                           if not getattr(e, "statistically_established", False)]
 
     if device_ok is False:
         verdict = "blocked"
-    elif rep.is_licensed():
+    elif licensed and provisional:
+        verdict = f"supported (point signs only; {n_unest} of {n_edges} intervals span zero)"
+    elif licensed:
         verdict = "supported"
     else:
         verdict = "unsupported"
@@ -1322,12 +1374,23 @@ def report_to_dict(rep):
         "available": True,
         "participant": rep.participant,
         "verdict": verdict,
-        "licensed": rep.is_licensed(),
+        "licensed": licensed,
         "verdict_detail": {
             "device_eligible": device_ok,
             "all_edges_resolved": edges_ok,
+            # The caveat beside the verdict, never inside it: which edges rest on their point
+            # sign alone, and how many. `provisional` is True only for a licensed report.
+            "provisional": provisional,
+            "n_edges_unestablished": n_unest,
+            "n_edges": n_edges,
+            "unestablished_edges": unestablished_edges,
+            "all_edges_statistically_established": bool(rep.edges) and n_unest == 0,
             "coherent": coherent,
             "blockers": list(rep.blockers),
+            # Gate nothing; shown beside the verdict. The two D26 capture verdicts live here since
+            # 2026-09-12 (PI: "b and c"). `getattr` so a report object that predates the field
+            # serialises as an empty list rather than raising.
+            "warnings": list(getattr(rep, "warnings", []) or []),
         },
         "eligibility": None if el is None else {
             "eligible": el.eligible, "checked": el.checked, "summary": el.summary(),
@@ -1344,7 +1407,11 @@ def report_to_dict(rep):
             "ci": None if e.ci is None else [_num(e.ci[0]), _num(e.ci[1])],
             "p": _num(e.p), "n": int(e.n), "cluster_unit": e.cluster_unit,
             "n_clusters": int(e.n_clusters), "scale": e.scale, "sign": e.sign,
-            "resolved": e.resolved, "note": e.note, "confounded_by": list(e.confounded_by),
+            # `resolved` is the point sign since 2026-09-13; `statistically_established` is the
+            # interval rule it used to be, carried as the caveat the page prints beside the sign.
+            "resolved": e.resolved,
+            "statistically_established": bool(getattr(e, "statistically_established", False)),
+            "note": e.note, "confounded_by": list(e.confounded_by),
             # WHICH ESTIMATOR produced the interval and the p-value, read from edges.py so the
             # switch has exactly one definition. The deployment panel used to hardcode the cluster
             # threshold in JavaScript with a comment claiming to mirror edges.py, and by then the
@@ -1358,7 +1425,9 @@ def report_to_dict(rep):
             "ci": None if e.ci is None else [_num(e.ci[0]), _num(e.ci[1])],
             "p": _num(e.p), "n": int(e.n), "cluster_unit": e.cluster_unit,
             "n_clusters": int(e.n_clusters), "scale": e.scale, "sign": e.sign,
-            "resolved": e.resolved, "note": e.note, "confounded_by": list(e.confounded_by),
+            "resolved": e.resolved,
+            "statistically_established": bool(getattr(e, "statistically_established", False)),
+            "note": e.note, "confounded_by": list(e.confounded_by),
         } for k, e in (getattr(rep, "edges_historical", None) or {}).items()},
         "coherence": None if rep.coherence is None else {
             "coherent": rep.coherence.coherent, "p_coherent": _num(rep.coherence.p_coherent),
@@ -1481,6 +1550,11 @@ def report_to_dict(rep):
             "frac_time_above": _num(rep.threshold.frac_time_above),
             "predicted_recapture_alert": rep.threshold.predicted_recapture_alert,
             "problems": list(rep.threshold.problems), "note": rep.threshold.note,
+            # The two D26 verdicts as warnings (gate nothing) and in structured form, with the
+            # between-visit comparison they used to rest on reported beside them as a number.
+            "warnings": list(getattr(rep.threshold, "warnings", []) or []),
+            "capture_verdicts": _capture_verdicts_to_dict(
+                getattr(rep.threshold, "capture_verdicts", None)),
         },
         "manifest": rep.manifest,
         "candidates": rep.candidates,
@@ -1890,7 +1964,8 @@ def three_source_pooled_for_participant(participant):
 # ---------------------------------------------------------------------------------------------
 # THE CLOSED-LOOP SIMULATION (Phase 8 of the 2026-09-11 redesign; simulation.py)
 # ---------------------------------------------------------------------------------------------
-def simulation_inputs_for_participant(uid, *, contact, centre_hz, hemisphere, epochs=None):
+def simulation_inputs_for_participant(uid, *, contact, centre_hz, hemisphere, epochs=None,
+                                      loaded=None):
     """The series the simulation runs over: every 3 s piece of voltage trace on `contact`, its
     band power at the stored centre nearest `centre_hz`, and the amplitude the device was
     delivering on `hemisphere` at that moment.
@@ -1914,14 +1989,24 @@ def simulation_inputs_for_participant(uid, *, contact, centre_hz, hemisphere, ep
     out = {"t": np.empty(0), "power": np.empty(0), "amp_obs": np.empty(0), "n_pieces": 0,
            "n_unusable_pieces": 0, "n_dropped_no_amplitude": 0, "n_from_device_current": 0,
            "n_from_epochs": 0, "centre_used_hz": None, "contact": str(contact)}
-    power = bs._load_recordings(uid, bs.POWERDOMAIN_TYPES)
-    td = bs._load_recordings(uid, bs.TIMEDOMAIN_TYPES)
-    psd = bs._load_recordings(uid, bs.AVAILABILITY_PSD_TYPES)
-    chans = list(dict.fromkeys(_avail._canon_channel(c) for c in bs._derive_chan_order(td)))
-    cache = bs._raw_lsb_cache_cached(
-        uid, chans, list(td) + list(psd),
-        bs._event_psd_lsb_blocks(uid, sensing_index=bs._build_sensing_config_index(list(td))),
-        montage_psd_blocks=bs._montage_psd_lsb_blocks(uid, montage_recordings=psd))
+    # THE RECORDINGS THE SAME REQUEST ALREADY DECODED are taken from ``loaded`` when the
+    # three-source build handed them over (review C8, 2026-09-12); anything it did not load is
+    # loaded here as before. ``_load_recordings`` decodes from disk on every call, so without this
+    # every report that wrote a simulation decoded the same files twice.
+    loaded = loaded if isinstance(loaded, dict) else {}
+    power = loaded.get("power") if loaded.get("power") is not None else \
+        bs._load_recordings(uid, bs.POWERDOMAIN_TYPES)
+    td = loaded.get("td") if loaded.get("td") is not None else \
+        bs._load_recordings(uid, bs.TIMEDOMAIN_TYPES)
+    psd = loaded.get("psd") if loaded.get("psd") is not None else \
+        bs._load_recordings(uid, bs.AVAILABILITY_PSD_TYPES)
+    cache = loaded.get("cache")
+    if cache is None:
+        chans = list(dict.fromkeys(_avail._canon_channel(c) for c in bs._derive_chan_order(td)))
+        cache = bs._raw_lsb_cache_cached(
+            uid, chans, list(td) + list(psd),
+            bs._event_psd_lsb_blocks(uid, sensing_index=bs._build_sensing_config_index(list(td))),
+            montage_psd_blocks=bs._montage_psd_lsb_blocks(uid, montage_recordings=psd))
     entry = cache.get(str(contact)) or {}
     tiles = entry.get("td") or {}
     t = np.asarray(tiles.get("t", []), dtype=float)
@@ -1963,20 +2048,21 @@ def simulation_inputs_for_participant(uid, *, contact, centre_hz, hemisphere, ep
         k = np.clip(np.searchsorted(bt, t[m]), 0, bt.size - 1)
         amp[m] = ba[k]
         src[m] = 1
-    # then the settings epochs
+    # then the settings epochs -- through the ONE epoch assignment the joined table uses
+    # (`_assign_epoch`; review C9, 2026-09-12). This used to be a private copy with a closed end
+    # (`t <= t_end` where `_assign_epoch` is half-open) and without the nanosecond cast that
+    # function documents, so the report and the simulation could have disagreed about which
+    # epoch a piece was in; measured on RCS08 the two agree on every piece today (0 differences,
+    # see the review's implementation report), and now they cannot drift.
     if epochs is not None and len(epochs):
         col = canonical_amp_col(hemisphere)
         if col not in epochs.columns:
             col = resolve_setting_column(epochs.columns, "amp", hemisphere)
         if col is not None and "t_start" in epochs.columns and "t_end" in epochs.columns:
-            es = pd.to_datetime(epochs["t_start"], utc=True).astype("int64").to_numpy(dtype=float) / 1e9
-            ee = pd.to_datetime(epochs["t_end"], utc=True).astype("int64").to_numpy(dtype=float) / 1e9
             ea = pd.to_numeric(epochs[col], errors="coerce").to_numpy(dtype=float)
-            order = np.argsort(es)
-            es, ee, ea = es[order], ee[order], ea[order]
             need = ~np.isfinite(amp)
-            k = np.clip(np.searchsorted(es, t[need], side="right") - 1, 0, es.size - 1)
-            inside = (t[need] >= es[k]) & (t[need] <= ee[k]) & np.isfinite(ea[k])
+            k = _assign_epoch(t[need], epochs)
+            inside = (k >= 0) & np.isfinite(np.where(k >= 0, ea[np.clip(k, 0, None)], np.nan))
             idx = np.flatnonzero(need)[inside]
             amp[idx] = ea[k[inside]]
             src[idx] = 2
@@ -2003,6 +2089,12 @@ def _run_windows_epoch_s(points, *, contact):
             hi = pd.Timestamp(r["window_end_local"], tz="America/Los_Angeles").timestamp()
             wins.append((float(lo), float(hi)))
         except Exception:                               # noqa: BLE001
+            # The ambiguous hour of a daylight-saving change is one way this raises; the run is
+            # dropped from the simulation's windows, and since review C7 that is logged.
+            _log.warning("closed-loop: run %r on %s has a window the simulation could not "
+                         "parse (%r to %r); it is left out of the simulation",
+                         r.get("run"), contact, r.get("window_start_local"),
+                         r.get("window_end_local"), exc_info=True)
             continue
     return wins
 
@@ -2031,7 +2123,17 @@ def simulation_signature(participant, *, tiles_key, contact, centre_hz, hemisphe
     """The key: the tile entry and recording set (the series), the candidate, the thresholds and
     limits the controller runs with, the resampling settings, and this module's rule version."""
     from . import simulation as _sim
-    return (_sim.KIND, _sim.RULE_VERSION, str(getattr(participant, "uid", participant)), tiles_key,
+    from . import amplitude_effect as _amp_sig
+    from . import timing_recommendation as _tr_sig
+    # The pooled table's rule version is IN the key (2026-09-12): the simulation closes its loop
+    # through that table's fitted curve, so a table rebuilt under a new rule must not be served
+    # a simulation built from the old one -- the decision-107 class of defect, one table over.
+    # The RECOMMENDED-timing table's own version is folded in the same way (T2, 2026-09-13): an
+    # edit to `RECORD_DERIVED_TIMING_MS` must invalidate a stored replay built under the old
+    # numbers. `recording_set_signature` already changes when a new session report is ingested
+    # (session reports are Recording rows), which is what invalidates the PROGRAMMED-timing half.
+    return (_sim.KIND, _sim.RULE_VERSION, _amp_sig.POOLED_RULE_VERSION, _tr_sig.TABLE_VERSION,
+            str(getattr(participant, "uid", participant)), tiles_key,
             recording_set_signature(participant), str(contact), round(float(centre_hz), 3),
             str(hemisphere), str(power_scale),
             tuple(None if v is None else round(float(v), 6)
@@ -2039,13 +2141,86 @@ def simulation_signature(participant, *, tiles_key, contact, centre_hz, hemisphe
             int(n_resample), int(seed))
 
 
+# --- the two timing regimes T2 replays (2026-09-13) --------------------------------------------
+#: `replay.DEFAULT_PARAMS`'s field name -> the field name it reads from a timing dict, whether
+#: that dict is `device_facts.programmed_closed_loop_timing`'s per-side entry (both onset timers,
+#: `onset_upper_ms`/`onset_lower_ms`) or `timing_recommendation.for_participant`'s per-participant
+#: table (the same two field names, decision 150). THE REPLAY CARRIES ONE ONSET TIMER, NOT TWO --
+#: `replay.DEFAULT_PARAMS["onset_ms"]` applies to both directions -- so the upper threshold's own
+#: onset is used and the lower one is not silently averaged into it.
+_SIM_PARAM_FROM_TIMING_FIELD = (
+    ("averaging_ms", "averaging_ms"),
+    ("onset_ms", "onset_upper_ms"),
+    ("detection_blanking_ms", "detection_blanking_ms"),
+    ("transition_up_ms", "transition_up_ms"),
+    ("transition_down_ms", "transition_down_ms"),
+)
+
+
+def _simulation_params_from_timing_dict(values_by_field):
+    """`{replay param name: float ms}` for every field a timing dict states; a field the dict does
+    not carry is left out, so `simulate_series` falls back to `replay.DEFAULT_PARAMS` (the
+    white-paper Dual Threshold value) for it rather than being handed a fabricated number."""
+    out = {}
+    for repl_key, dev_key in _SIM_PARAM_FROM_TIMING_FIELD:
+        v = (values_by_field or {}).get(dev_key)
+        if v is None:
+            continue
+        try:
+            out[repl_key] = float(v)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _timing_runs_for_simulation(uid, hemisphere, device_facts):
+    """The two timing regimes T2 replays (contest_2026-09-13_SYNTHESIS.md section 4): what the
+    device is PROGRAMMED to run today on the candidate's own hemisphere, and this participant's
+    record-derived RECOMMENDATION (decision 150). Reads `device_facts["active_sensing_group_timing"]`
+    -- already computed once by `report_for_participant` -- rather than looking the session report
+    up again. Either regime may be wholly or partly absent; an absent field falls back to the
+    white-paper default inside `simulate_series`, and the source sentence below says so rather than
+    silently substituting the other regime's numbers."""
+    from . import timing_recommendation as _tr
+
+    prog_all = (device_facts or {}).get("active_sensing_group_timing")
+    programmed_raw = (prog_all or {}).get(hemisphere) if isinstance(prog_all, dict) else None
+    programmed_params = _simulation_params_from_timing_dict(programmed_raw)
+    programmed_source = (
+        f"measured: the device's newest session report, the active sensing group's own programmed "
+        f"timing on {hemisphere} (the onset shown is the upper threshold's own onset timer; the "
+        "replay applies one onset timer to both directions)"
+        if programmed_raw else
+        "no active sensing group with a programmed timing was found for this hemisphere on this "
+        "participant's newest session report; the white-paper Dual Threshold default is used")
+
+    rec_raw = _tr.for_participant(uid) or {}
+    rec_values = {k: (v or {}).get("value_ms") for k, v in rec_raw.items()}
+    recommended_params = _simulation_params_from_timing_dict(rec_values) if rec_raw else dict(programmed_params)
+    recommended_source = (_tr.RECORD_DERIVED_PROVENANCE if rec_raw else
+                          "no record-derived recommendation is on file for this participant; the "
+                          "same timing as \"as programmed today\" is used instead")
+
+    return {
+        "programmed": {"label": "As programmed today", "params": programmed_params,
+                       "source": programmed_source},
+        "recommended": {"label": "Record-derived recommendation", "params": recommended_params,
+                        "source": recommended_source},
+    }
+
+
 def write_simulation(participant, *, rep, build, candidate, hemisphere, power_scale, epochs,
-                     n_resample=None, seed=0):
-    """Run the simulation for the report's first candidate and store it (kind
-    `closed_loop_simulation`), citing the raw roots its inputs cite. The summary says what was
-    written or why not; the payload itself is read back by `closed_loop_simulation_for_participant`
-    when the page asks for it after its first figures are up."""
+                     n_resample=None, seed=0, loaded=None, device_facts=None):
+    """Run the simulation for the report's first candidate TWICE -- once under the timing the
+    device is programmed to run today, once under this participant's record-derived recommendation
+    (T2, 2026-09-13, contest_2026-09-13_SYNTHESIS.md section 4) -- and store both under one entry
+    (kind `closed_loop_simulation`), citing the raw roots its inputs cite. The summary says what
+    was written or why not; the payload itself is read back by
+    `closed_loop_simulation_for_participant` when the page asks for it after its first figures are
+    up. `device_facts` is the `dev` dict `report_for_participant` already built (it carries
+    `active_sensing_group_timing`); passing it here avoids a second, redundant session-report read."""
     from . import simulation as _sim
+    from . import replay as _replay
     try:
         from modules.CacheStore import provenance as _prov
     except ImportError:                                # pragma: no cover - depends on the runner
@@ -2082,6 +2257,7 @@ def write_simulation(participant, *, rep, build, candidate, hemisphere, power_sc
     import time as _time
     t0 = _time.perf_counter()
     inputs = simulation_inputs_for_participant(uid, contact=contact, centre_hz=float(centre),
+                                               loaded=loaded,
                                                hemisphere=hemisphere, epochs=epochs)
     summary["n_pieces"] = int(inputs.get("n_pieces", 0))
     if inputs.get("absent_reason") or not len(inputs["t"]):
@@ -2092,11 +2268,27 @@ def write_simulation(participant, *, rep, build, candidate, hemisphere, power_sc
     pooled_row = _amp.pooled_row(pooled_table, contact, float(centre))
     stored_points = run_points_if_stored(participant)
     points = _run_points_for(stored_points, contact=contact, centre_hz=float(centre))
-    payload = _sim.run_models(inputs["t"], inputs["power"], inputs["amp_obs"], plan, pooled_row,
-                              run_points=points,
-                              run_windows=_run_windows_epoch_s(stored_points, contact=contact),
-                              n_resample=n_resample, seed=seed,
-                              min_points_resample=_amp.MIN_POINTS_CURVATURE)
+    run_windows = _run_windows_epoch_s(stored_points, contact=contact)
+
+    # THE TWO TIMING REGIMES (T2, 2026-09-13): the same series, thresholds and response curve, run
+    # once under what the device is programmed to run today and once under this participant's
+    # record-derived recommendation, so the card can show both rather than silently replacing one
+    # with the other. `run_models` already accepts `params=`; each regime just supplies a different
+    # (possibly partial) override of `replay.DEFAULT_PARAMS`.
+    timing = _timing_runs_for_simulation(uid, hemisphere, device_facts)
+    runs = {}
+    for _key, _meta in timing.items():
+        runs[_key] = _sim.run_models(inputs["t"], inputs["power"], inputs["amp_obs"], plan, pooled_row,
+                                     run_points=points, run_windows=run_windows,
+                                     n_resample=n_resample, seed=seed,
+                                     params=(_meta["params"] or None),
+                                     min_points_resample=_amp.MIN_POINTS_CURVATURE)
+        runs[_key]["timing_label"] = _meta["label"]
+        runs[_key]["timing_source"] = _meta["source"]
+        runs[_key]["timing_params_ms"] = dict(_replay.DEFAULT_PARAMS, **(_meta["params"] or {}))
+
+    payload = {"gates_nothing": True, "rule_version": _sim.RULE_VERSION,
+              "timing_runs": runs, "primary_run": "recommended"}
     payload["inputs"] = {k: inputs[k] for k in ("n_pieces", "n_unusable_pieces", "n_dropped_no_amplitude",
                                                 "n_from_device_current", "n_from_epochs",
                                                 "centre_used_hz", "contact")}
@@ -2113,17 +2305,21 @@ def write_simulation(participant, *, rep, build, candidate, hemisphere, power_sc
                                                  root=_SHARED_CACHE_DIR_OVERRIDE)
             chain += list((stamp or {}).get("provenance") or [])
         except Exception:                               # noqa: BLE001 -- the tiles alone then
-            pass
+            _log.warning("closed-loop: the %s chain could not be read for %s; the simulation's "
+                         "provenance cites the tiles alone", kind, uid, exc_info=True)
+    _primary = runs.get("recommended") or {}
     _cache_store.store_if_absent(_sim.KIND, uid, sig, lambda: payload,
                                  writer="closed_loop", trigger="deployment_report",
                                  provenance=_prov.flatten(chain), n_recordings=None,
-                                 extra={"n_pieces": summary["n_pieces"], "active_model": payload.get("active_model"),
-                                        "refused": bool(payload.get("refused")),
+                                 extra={"n_pieces": summary["n_pieces"], "active_model": _primary.get("active_model"),
+                                        "refused": bool(_primary.get("refused")),
                                         "candidate": _simulation_candidate_tag(contact, centre, hemisphere)},
                                  root=_SHARED_CACHE_DIR_OVERRIDE)
     summary["written"] = _cache_store.read_stamp(_sim.KIND, uid, sig, root=_SHARED_CACHE_DIR_OVERRIDE) is not None
-    summary["active_model"] = payload.get("active_model")
-    summary["refused"] = bool(payload.get("refused"))
+    summary["active_model"] = _primary.get("active_model")
+    summary["refused"] = bool(_primary.get("refused"))
+    summary["timing_runs"] = {k: {"refused": bool(v.get("refused")), "active_model": v.get("active_model"),
+                                  "timing_source": v.get("timing_source")} for k, v in runs.items()}
     return summary
 
 
@@ -2145,7 +2341,8 @@ def simulation_if_stored(participant, candidate=None, *, hemisphere="Left"):
     match = None
     if candidate and candidate.get("channel") is not None and candidate.get("center_hz") is not None:
         want = _simulation_candidate_tag(candidate["channel"], candidate["center_hz"],
-                                         candidate.get("actuated_hemisphere") or hemisphere)
+                                         candidate.get("actuated_hemisphere")
+                                         or candidate.get("sensing_hemisphere") or hemisphere)
         match = lambda meta: (meta.get("extra") or {}).get("candidate") == want  # noqa: E731
     try:
         payload, _stamp = _cache_store.load_newest(_sim.KIND, str(getattr(participant, "uid", participant)),
@@ -2163,13 +2360,235 @@ def closed_loop_simulation_for_participant(participant, candidate=None, *, hemis
     first figures. Builds nothing: the report writes it, this reads it back."""
     payload = simulation_if_stored(participant, candidate, hemisphere=hemisphere)
     if payload is None:
+        # `refused`/`models` kept alongside the newer `timing_runs`/`primary_run` (2026-09-13, T2)
+        # so a caller written against either shape reads the same "nothing stored yet" answer.
         payload = {"gates_nothing": True, "refused": True, "models": {},
+                   "timing_runs": {}, "primary_run": None,
                    "absent_reason": ("no simulation is stored for this configuration yet; the report "
                                      "writes one the next time it runs with thresholds placed for it")}
     payload = dict(payload)
     payload["available"] = True
     payload["cache_status"] = _cache_status_or_reason(participant)
     return payload
+
+
+# ---------------------------------------------------------------------------------------------
+# THE CONFIRMATIONS-AND-SEPARATION DESIGN RULE (T3, 2026-09-13; design_rule.py)
+# ---------------------------------------------------------------------------------------------
+def design_rule_signature(participant, *, tiles_key, contact, centre_hz, hemisphere, upper, lower):
+    """The key: the tile entry and recording set (the series the model is fit on), the candidate,
+    the two stored thresholds (the noise simulation holds the level at their midpoint, so a
+    recaptured pair is a different question), and this file's own rule version."""
+    from . import design_rule as _dr
+    return (_dr.KIND, _dr.RULE_VERSION, str(getattr(participant, "uid", participant)), tiles_key,
+            recording_set_signature(participant), str(contact), round(float(centre_hz), 3),
+            str(hemisphere),
+            None if upper is None else round(float(upper), 6),
+            None if lower is None else round(float(lower), 6))
+
+
+def write_design_rule(participant, *, candidate, hemisphere, threshold_plan, loaded=None,
+                      epochs=None):
+    """Fit the design-rule model on the same 3 s tiles the simulation reads and store the
+    averaging x onset separation table, citing the tiles as its raw root. Refuses, rather than
+    fits on nothing, exactly where `write_simulation` refuses: no thresholds, no candidate, no
+    tile entry, or no usable pieces. A matching key is served from the store rather than refit."""
+    from . import design_rule as _dr
+    try:
+        from modules.CacheStore import provenance as _prov
+    except ImportError:                                # pragma: no cover - depends on the runner
+        from CacheStore import provenance as _prov
+
+    summary = {"written": False, "store_key": None, "seconds": None}
+    plan = threshold_plan
+    if plan is None or plan.upper is None or plan.lower is None:
+        summary["reason"] = ("no thresholds were placed for this candidate, so there is nothing "
+                             "for a separation rule to be measured against")
+        return summary
+    contact = (candidate or {}).get("channel")
+    centre = (candidate or {}).get("center_hz")
+    if contact is None or centre is None:
+        summary["reason"] = "the candidate carries no sensing contact or band centre"
+        return summary
+    tiles_key = _tiles_key_for(participant)
+    if tiles_key is None:
+        summary["reason"] = "no tile entry key, so nothing could be run or stored"
+        return summary
+    uid = str(getattr(participant, "uid", participant))
+    sig = design_rule_signature(participant, tiles_key=tiles_key, contact=contact,
+                                centre_hz=centre, hemisphere=hemisphere, upper=plan.upper,
+                                lower=plan.lower)
+    summary["store_key"] = _cache_store.product_key(_dr.KIND, uid, sig)
+    if _cache_store.read_stamp(_dr.KIND, uid, sig, root=_SHARED_CACHE_DIR_OVERRIDE) is not None:
+        summary["written"] = True
+        summary["already_stored"] = True
+        return summary
+
+    import time as _time
+    t0 = _time.perf_counter()
+    inputs = simulation_inputs_for_participant(uid, contact=contact, centre_hz=float(centre),
+                                               loaded=loaded, hemisphere=hemisphere, epochs=epochs)
+    if inputs.get("absent_reason") or not len(inputs["t"]):
+        summary["reason"] = inputs.get("absent_reason") or "no usable pieces with a known amplitude"
+        return summary
+    payload = _dr.design_rule_for_series(inputs["t"], inputs["power"], inputs["amp_obs"],
+                                         upper=plan.upper, lower=plan.lower)
+    payload["candidate"] = {"channel": str(contact), "center_hz": float(centre),
+                            "hemisphere": str(hemisphere)}
+    payload["seconds"] = _time.perf_counter() - t0
+    summary["seconds"] = payload["seconds"]
+
+    chain = [_prov.entry(tiles_key, kind="raw_lsb_tiles", writer="biomarkers")]
+    _cache_store.store_if_absent(
+        _dr.KIND, uid, sig, lambda: payload, writer="closed_loop", trigger="deployment_report",
+        provenance=_prov.flatten(chain), n_recordings=None,
+        extra={"refused": bool(payload.get("refused")), "model": payload.get("model"),
+              "candidate": _simulation_candidate_tag(contact, centre, hemisphere)},
+        root=_SHARED_CACHE_DIR_OVERRIDE)
+    summary["written"] = (_cache_store.read_stamp(_dr.KIND, uid, sig,
+                                                  root=_SHARED_CACHE_DIR_OVERRIDE) is not None)
+    summary["refused"] = bool(payload.get("refused"))
+    summary["model"] = payload.get("model")
+    return summary
+
+
+def design_rule_if_stored(participant, candidate=None, *, hemisphere="Left"):
+    """The newest stored design-rule table for this candidate, matched on the sidecar's
+    `candidate` tag exactly as `simulation_if_stored` matches -- or ``None``."""
+    from . import design_rule as _dr
+    match = None
+    if candidate and candidate.get("channel") is not None and candidate.get("center_hz") is not None:
+        want = _simulation_candidate_tag(candidate["channel"], candidate["center_hz"],
+                                         candidate.get("actuated_hemisphere")
+                                         or candidate.get("sensing_hemisphere") or hemisphere)
+        match = lambda meta: (meta.get("extra") or {}).get("candidate") == want  # noqa: E731
+    try:
+        payload, _stamp = _cache_store.load_newest(_dr.KIND,
+                                                   str(getattr(participant, "uid", participant)),
+                                                   consumer="closed_loop",
+                                                   root=_SHARED_CACHE_DIR_OVERRIDE, match=match)
+        return payload
+    except Exception:                                  # noqa: BLE001 - a miss is not an error
+        _log.warning("closed-loop: the stored design-rule table could not be read for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
+        return None
+
+
+# ---------------------------------------------------------------------------------------------
+# THE BLOCK-BOOTSTRAP ROBUSTNESS CHECK (T5, 2026-09-13; robustness.py)
+# ---------------------------------------------------------------------------------------------
+def robustness_signature(participant, *, tiles_key, contact, centre_hz, hemisphere, upper, lower,
+                         amp_low, amp_high, n_boot, seed):
+    """The key: the tile entry and recording set (the series the bootstrap resamples), the
+    candidate, the two stored thresholds and the capture amplitude range (the grid is centred at
+    the thresholds' own midpoint and the replay is held to the capture range), the bootstrap's own
+    replicate count and seed, and this file's own rule version -- the identical shape
+    `design_rule_signature` uses, one row over."""
+    from . import robustness as _rb
+    return (_rb.KIND, _rb.RULE_VERSION, str(getattr(participant, "uid", participant)), tiles_key,
+            recording_set_signature(participant), str(contact), round(float(centre_hz), 3),
+            str(hemisphere),
+            None if upper is None else round(float(upper), 6),
+            None if lower is None else round(float(lower), 6),
+            None if amp_low is None else round(float(amp_low), 6),
+            None if amp_high is None else round(float(amp_high), 6),
+            int(n_boot), int(seed))
+
+
+def write_robustness(participant, *, candidate, hemisphere, threshold_plan, loaded=None,
+                     epochs=None, n_boot=None, seed=0):
+    """Replay the real controller over the same 3 s tiles the simulation and the design rule read,
+    across the grid `robustness.py` defines, and store the 200-replicate block-bootstrap interval
+    on the onset duration, threshold gap and detection blanking. Refuses, rather than bootstraps on
+    nothing, exactly where `write_design_rule` and `write_simulation` refuse: no thresholds, no
+    candidate, no tile entry, no capture amplitude range, or no usable pieces. A matching key is
+    served from the store rather than rebootstrapped."""
+    from . import robustness as _rb
+    try:
+        from modules.CacheStore import provenance as _prov
+    except ImportError:                                # pragma: no cover - depends on the runner
+        from CacheStore import provenance as _prov
+
+    summary = {"written": False, "store_key": None, "seconds": None}
+    plan = threshold_plan
+    if plan is None or plan.upper is None or plan.lower is None:
+        summary["reason"] = ("no thresholds were placed for this candidate, so there is nothing "
+                             "for a robustness bootstrap to be measured against")
+        return summary
+    if plan.capture_amp_low is None or plan.capture_amp_high is None:
+        summary["reason"] = "the plan has no capture amplitude range, which the replay is held to"
+        return summary
+    contact = (candidate or {}).get("channel")
+    centre = (candidate or {}).get("center_hz")
+    if contact is None or centre is None:
+        summary["reason"] = "the candidate carries no sensing contact or band centre"
+        return summary
+    tiles_key = _tiles_key_for(participant)
+    if tiles_key is None:
+        summary["reason"] = "no tile entry key, so nothing could be run or stored"
+        return summary
+    n_boot = _rb.DEFAULT_N_BOOT if n_boot is None else int(n_boot)
+    uid = str(getattr(participant, "uid", participant))
+    sig = robustness_signature(participant, tiles_key=tiles_key, contact=contact,
+                               centre_hz=centre, hemisphere=hemisphere, upper=plan.upper,
+                               lower=plan.lower, amp_low=plan.capture_amp_low,
+                               amp_high=plan.capture_amp_high, n_boot=n_boot, seed=seed)
+    summary["store_key"] = _cache_store.product_key(_rb.KIND, uid, sig)
+    if _cache_store.read_stamp(_rb.KIND, uid, sig, root=_SHARED_CACHE_DIR_OVERRIDE) is not None:
+        summary["written"] = True
+        summary["already_stored"] = True
+        return summary
+
+    import time as _time
+    t0 = _time.perf_counter()
+    inputs = simulation_inputs_for_participant(uid, contact=contact, centre_hz=float(centre),
+                                               loaded=loaded, hemisphere=hemisphere, epochs=epochs)
+    if inputs.get("absent_reason") or not len(inputs["t"]):
+        summary["reason"] = inputs.get("absent_reason") or "no usable pieces with a known amplitude"
+        return summary
+    payload = _rb.robustness_for_series(inputs["t"], inputs["power"], inputs["amp_obs"],
+                                        upper=plan.upper, lower=plan.lower,
+                                        amp_low=plan.capture_amp_low,
+                                        amp_high=plan.capture_amp_high, n_boot=n_boot, seed=seed)
+    payload["candidate"] = {"channel": str(contact), "center_hz": float(centre),
+                            "hemisphere": str(hemisphere)}
+    payload["seconds"] = _time.perf_counter() - t0
+    summary["seconds"] = payload["seconds"]
+
+    chain = [_prov.entry(tiles_key, kind="raw_lsb_tiles", writer="biomarkers")]
+    _cache_store.store_if_absent(
+        _rb.KIND, uid, sig, lambda: payload, writer="closed_loop", trigger="deployment_report",
+        provenance=_prov.flatten(chain), n_recordings=None,
+        extra={"refused": bool(payload.get("refused")), "n_feasible": payload.get("n_feasible"),
+              "candidate": _simulation_candidate_tag(contact, centre, hemisphere)},
+        root=_SHARED_CACHE_DIR_OVERRIDE)
+    summary["written"] = (_cache_store.read_stamp(_rb.KIND, uid, sig,
+                                                  root=_SHARED_CACHE_DIR_OVERRIDE) is not None)
+    summary["refused"] = bool(payload.get("refused"))
+    summary["n_feasible"] = payload.get("n_feasible")
+    return summary
+
+
+def robustness_if_stored(participant, candidate=None, *, hemisphere="Left"):
+    """The newest stored robustness bootstrap for this candidate, matched on the sidecar's
+    `candidate` tag exactly as `design_rule_if_stored` matches -- or ``None``."""
+    from . import robustness as _rb
+    match = None
+    if candidate and candidate.get("channel") is not None and candidate.get("center_hz") is not None:
+        want = _simulation_candidate_tag(candidate["channel"], candidate["center_hz"],
+                                         candidate.get("actuated_hemisphere")
+                                         or candidate.get("sensing_hemisphere") or hemisphere)
+        match = lambda meta: (meta.get("extra") or {}).get("candidate") == want  # noqa: E731
+    try:
+        payload, _stamp = _cache_store.load_newest(_rb.KIND,
+                                                   str(getattr(participant, "uid", participant)),
+                                                   consumer="closed_loop",
+                                                   root=_SHARED_CACHE_DIR_OVERRIDE, match=match)
+        return payload
+    except Exception:                                  # noqa: BLE001 - a miss is not an error
+        _log.warning("closed-loop: the stored robustness bootstrap could not be read for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
+        return None
 
 
 def cache_status_for_page(participant):
@@ -2212,6 +2631,110 @@ def _cache_status_or_reason(participant):
         return {"kind": "inputs", "exists": False, "last_built_utc": None,
                 "note": f"the cache status could not be read: {exc!r}",
                 "what_it_means": "the report itself is unaffected; only its freshness line is."}
+
+
+def programmed_settings_from_epochs(eps, hemisphere):
+    """The device's own programmed rate and pulse width on one side, read off the exposure-epoch
+    table (``StimOptimizer.adapter.exposure_epochs``) rather than asked of the caller.
+
+    WHY THIS EXISTS. A band picked from the calibrated grid (the "Choose a band" card) carries a
+    channel and a centre frequency and nothing about stimulation, because the grid is built from
+    recordings, not from a proposed setting. D27 and D31 both need a rate and a pulse width, so
+    every such candidate reached them as ``None`` and both rules blocked or went unknown for a
+    reason that has nothing to do with the band -- the device has a real, current rate and pulse
+    width on record, it was simply never read.
+
+    WHICH EPOCH. The one in force now: the open-ended epoch if the table has one (the current row
+    never closes because nothing has changed since), otherwise the epoch with the latest start
+    time.
+
+    WHICH SIDE. Pulse width is asymmetric between hemispheres on this participant, so the caller
+    must say which hemisphere's column to read (``"Left"`` or ``"Right"``); this function does not
+    guess or pool the two sides.
+
+    NEVER A FABRICATED VALUE. An absent table, an empty table, an unrecognised hemisphere, or a
+    hemisphere whose pulse-width column the table does not carry all return an empty dict, never a
+    guessed number. A ``None``-valued fact must stay ``None``.
+
+    Returns a dict with up to three keys: ``rate_hz``, ``pulse_width_us``, and ``_provenance`` (one
+    sentence naming the epoch and when it started, for the caller to attach to whichever of the two
+    facts it actually filled in).
+    """
+    out = {}
+    if hemisphere not in ("Left", "Right"):
+        return out
+    try:
+        if eps is None or len(eps) == 0 or "t_start" not in eps.columns:
+            return out
+    except (TypeError, AttributeError):
+        return out
+
+    if "open_ended" in eps.columns and bool(eps["open_ended"].fillna(False).any()):
+        rows = eps.loc[eps["open_ended"] == True]                       # noqa: E712
+    else:
+        rows = eps
+    row = rows.sort_values("t_start").iloc[-1]
+
+    rate = row.get("freq_hz")
+    if rate is not None and not pd.isna(rate):
+        out["rate_hz"] = float(rate)
+
+    pw_col = f"pw_us_{hemisphere}"
+    pw = row.get(pw_col) if pw_col in row.index else None
+    if pw is not None and not pd.isna(pw):
+        out["pulse_width_us"] = float(pw)
+
+    if out:
+        when = row.get("t_start")
+        try:
+            when_s = pd.Timestamp(when).strftime("%Y-%m-%d %H:%M UTC")
+        except (TypeError, ValueError):
+            when_s = str(when)
+        state = "open-ended" if bool(row.get("open_ended")) else "closed"
+        # The epoch number arrives as a numpy float; print it as the integer a reader expects.
+        try:
+            epoch_s = str(int(row.get("epoch")))
+        except (TypeError, ValueError):
+            epoch_s = str(row.get("epoch"))
+        out["_provenance"] = (
+            f"measured: the device's programmed setting on the {hemisphere} as of {when_s} "
+            f"(exposure epoch {epoch_s}, {state})")
+    return out
+
+
+def rate_commitment_from_active_group(candidate_rate_hz, active_group):
+    """D30's committed-for-this-attempt flag, DERIVED from the device (PI decision 2026-09-12,
+    option a): the candidate's rate counts as committed when it equals the rate frozen in the
+    device's newest ACTIVE sensing group.
+
+    Pure, so it is testable with no database. ``active_group`` is what
+    ``device_facts.active_sensing_group_facts`` returns. Returns a dict with
+    ``rate_committed_for_this_attempt`` (True or False) and ``_provenance`` (one sentence), or an
+    EMPTY dict when either rate is unknown -- then nothing is supplied and D30 stays not
+    determinable, which is the honest answer rather than a guessed one.
+    """
+    try:
+        cand = float(candidate_rate_hz) if candidate_rate_hz is not None else None
+    except (TypeError, ValueError):
+        cand = None
+    dev_rate = (active_group or {}).get("active_sensing_group_rate_hz")
+    try:
+        dev_rate = float(dev_rate) if dev_rate is not None else None
+    except (TypeError, ValueError):
+        dev_rate = None
+    if cand is None or dev_rate is None:
+        return {}
+    group = (active_group or {}).get("active_sensing_group")
+    if cand == dev_rate:
+        return {"rate_committed_for_this_attempt": True,
+                "_provenance": (
+                    f"derived: the candidate's {cand:g} Hz equals the rate already frozen in the "
+                    f"device's active sensing group {group} (PI decision 2026-09-12, option a)")}
+    return {"rate_committed_for_this_attempt": False,
+            "_provenance": (
+                f"derived: the candidate's {cand:g} Hz differs from the {dev_rate:g} Hz frozen in "
+                f"the device's active sensing group {group}; committing this rate means a new "
+                f"group and a new threshold capture (PI decision 2026-09-12, option a)")}
 
 
 def report_for_participant(participant, request_data=None, *, candidates=None, hemisphere="Left",
@@ -2271,6 +2794,29 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                           "evaluated for a specific configuration, not for a participant.",
                 "band_sweep_grid": _grid_export,
                 "cache_status": _status}
+    # THE TWO SIDES OF THE FIRST CANDIDATE, resolved once here and used everywhere below (review
+    # C1, 2026-09-12). Until then one name, ``_hemi``, preferred the ACTUATED side and was used
+    # for the impedance and the survey facts too, and the page always sent
+    # ``actuated_hemisphere: "Left"`` -- so a band on a right contact was judged on the left
+    # lead's impedance, the left survey's artefact flags and LFP bins, the left capture, the left
+    # paused amplitude, and (through ``hemisphere`` handed to the pipeline as the raw request
+    # value) the left current for E1, E3, the capture currents and the simulation. Nothing on the
+    # page said so; the only symptom was a D39 "contralateral pairing" row that was wrong about
+    # why. Facts about the SENSING lead use ``_sens_hemi``; facts about the STIMULATED side and
+    # every current column use ``_act_hemi``. The request's own ``Hemisphere`` is the fallback for
+    # a candidate that names no side, never an override of one that does.
+    _c0_side = (cands[0] or {}) if cands else {}
+    _sens_hemi = (_c0_side.get("sensing_hemisphere") or _c0_side.get("actuated_hemisphere")
+                  or hemisphere)
+    _act_hemi = (_c0_side.get("actuated_hemisphere") or _c0_side.get("sensing_hemisphere")
+                 or hemisphere)
+    _norm_side = {"left": "Left", "right": "Right"}
+    _sens_hemi = _norm_side.get(str(_sens_hemi).strip().lower(), _sens_hemi) if _sens_hemi else _sens_hemi
+    _act_hemi = _norm_side.get(str(_act_hemi).strip().lower(), _act_hemi) if _act_hemi else _act_hemi
+    # From here on ``hemisphere`` IS the actuated side: the pipeline's manifest, its amplitude
+    # column, the prescription's validated side and the simulation's amplitude series all take it.
+    hemisphere = _act_hemi or hemisphere
+
     # Device facts the rules need but the analysis tables cannot supply. Fetched here rather than
     # inside pipeline.run so the pipeline stays free of ORM imports and remains testable on frames.
     dev = {}
@@ -2280,15 +2826,193 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
         _p = participant if hasattr(participant, "uid") else _m.Participant.find(uid=participant)
         _sfs = _m.SourceFile.find_all(owner=_p)
         _imp = list(_m.Recording.find_all(source__in=_sfs, type="MedtronicDeviceImpedance"))
-        _hemi = (cands[0] or {}).get("actuated_hemisphere") or (cands[0] or {}).get(
-            "sensing_hemisphere") or hemisphere
         dev = _df.facts_for_participant(getattr(_p, "uid", participant), _imp,
-                                        hemisphere=_hemi,
+                                        sensing_hemisphere=_sens_hemi,
+                                        actuated_hemisphere=_act_hemi,
                                         channel=(cands[0] or {}).get("channel"))
     except Exception as exc:                      # never let a fact lookup take down the report
         _log.warning("closed-loop report: device facts unavailable for %s",
                      getattr(participant, "uid", participant), exc_info=True)
         dev = {"_provenance": {}, "_error": f"device facts unavailable: {exc!r}"}
+
+    # RATE AND PULSE WIDTH THE DEVICE IS ACTUALLY PROGRAMMED AT, read from the exposure-epoch
+    # table `eps` already loaded above (`evidence_inputs_cached`) rather than asked of the caller.
+    # D27 and D31 both need a rate and a pulse width, and a band picked from the calibrated grid
+    # (the "Choose a band" card) carries neither -- the frontend never sends them, because the grid
+    # is built from recordings, not from a proposed setting. Without this every such candidate
+    # blocked or went unknown on D27/D31 for a reason that has nothing to do with the band.
+    #
+    # This is a DEVICE FACT, not a candidate default, so it is folded into `dev` the same way the
+    # facts above are: `pipeline._facts_for` only fills a candidate's key when the candidate itself
+    # left it `None`, so an explicit rate or pulse width the caller already supplied is never
+    # overridden here.
+    #
+    # THE SENSING SIDE, the same ``_sens_hemi`` the device facts above use: D31's own predicate
+    # keys its programmed-pair lookup on `sensing_hemisphere` (then the legacy `hemisphere` key,
+    # never `actuated_hemisphere`), so the rate/pulse-width pair filled in here must come from the
+    # side D31 then checks it against. (Before review C1 this was the one place that already read
+    # the sensing side; the split above made the rest of the function agree with it.)
+    try:
+        _prog_hemi = _sens_hemi if _sens_hemi in ("Left", "Right") else None
+        _prog = programmed_settings_from_epochs(eps, _prog_hemi) if _prog_hemi else {}
+        _prog_prov = _prog.pop("_provenance", None)
+        if _prog:
+            dev.setdefault("_provenance", {})
+            for _pk, _pv in _prog.items():
+                if dev.get(_pk) is None:
+                    dev[_pk] = _pv
+                    if _prog_prov:
+                        dev["_provenance"][_pk] = _prog_prov
+    except Exception as exc:                # never let this take down the report either
+        _log.warning("closed-loop report: programmed rate/pulse width unavailable for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
+
+    # THE DEVICE'S ACTIVE SENSING GROUP, read live from the newest ingested session report, and
+    # D30's committed-rate flag derived from it (PI decision 2026-09-12, option a). Read live rather
+    # than from the committed session-report summary because that summary is stale on this exact
+    # point (it says 110 Hz; the device says 55 Hz). Its own try/except: a failure here is logged
+    # with its traceback and D30 simply stays not determinable; it never takes down the report.
+    try:
+        from ClosedLoopDeployment import device_facts as _df_ag
+        _ag = _df_ag.active_sensing_group_facts(participant)
+        if _ag:
+            dev.setdefault("_provenance", {})
+            _ag_sentence = (
+                f"measured: the device's newest session report ({_ag.get('session_report_date')}), "
+                f"active group {_ag.get('active_sensing_group')} with sensing configured, rate "
+                f"{_ag.get('active_sensing_group_rate_hz')!r} Hz, pulse widths "
+                f"{_ag.get('active_sensing_group_pulse_widths_us')!r} us, adaptive therapy "
+                f"{_ag.get('active_sensing_group_adaptive_status')!r}")
+            for _ak, _av in _ag.items():
+                if dev.get(_ak) is None:
+                    dev[_ak] = _av
+                    dev["_provenance"][_ak] = _ag_sentence
+            # The candidate's rate is what pipeline._facts_for will end up with: its own rate_hz
+            # when it states one, else the device fact filled in above from the exposure epochs.
+            _cand_rate = (cands[0] or {}).get("rate_hz")
+            if _cand_rate is None:
+                _cand_rate = dev.get("rate_hz")
+            _rc = rate_commitment_from_active_group(_cand_rate, _ag)
+            _rc_prov = _rc.pop("_provenance", None)
+            if _rc and dev.get("rate_committed_for_this_attempt") is None:
+                dev["rate_committed_for_this_attempt"] = _rc["rate_committed_for_this_attempt"]
+                if _rc_prov:
+                    dev["_provenance"]["rate_committed_for_this_attempt"] = _rc_prov
+    except Exception as exc:                # never let this take down the report either
+        _log.warning("closed-loop report: the device's active sensing group could not be read "
+                     "for %s", getattr(participant, "uid", participant), exc_info=True)
+
+    # ---------------------------------------------------------------------------------------------
+    # THE THREE-SOURCE COMPARISON AND THE TWO TABLES IT WRITES COME BEFORE THE PIPELINE (review
+    # C6, 2026-09-12). The pipeline's E1 and the two D26 verdicts read the stored pooled table
+    # (``_pooled_e1`` below); until this move the request READ that table first and WROTE it
+    # afterwards, so on the first request after a new run of rising current landed (a clinic
+    # visit) the triangle and the D26 warnings came from the previous table while the simulation
+    # card, which reads the table after the write, used the new one -- two panels on one page
+    # disagreeing about which table they read, and the page caches the whole answer until
+    # Recompute. The payloads are gathered in ``_pre`` and copied onto ``out`` once it exists.
+    _pre = {}
+    # ---------------------------------------------------------------------------------------------
+    # HOW STIMULATION CURRENT MOVED BAND POWER, MEASURED THREE SEPARATE WAYS AND PUT SIDE BY SIDE.
+    #
+    # WHY THIS IS ON THIS PAGE. Closed loop watches the power in one band and moves the current when
+    # that power crosses a threshold typed into the stimulator. There are three different ways to get
+    # a band power out of this device -- from the streamed voltage trace, from the device's own
+    # onboard spectrum, and from the band power the device computes on board and reports directly --
+    # and they come from three different recordings. Whoever is about to program a threshold should be
+    # able to see all three next to each other over the same stimulation settings, in the device's own
+    # units, before they pick a number.
+    #
+    # THIS GATES NOTHING, and that is deliberate rather than an oversight. The payload says so in
+    # `gates_nothing`, no verdict on this page reads it, and no blocking rule depends on it. The PI
+    # asked for it as something informative for the person reading the page, and a comparison of
+    # three measurement routes is not a device rule traceable to a page of a Medtronic manual, which
+    # is what every blocking rule here is.
+    #
+    # AND IT MUST NOT BE READ AS THREE INDEPENDENT CONFIRMATIONS. The device computes its own band
+    # power on board from the very voltage trace the first route reads, and the contact surveys
+    # behind the second route are where the conversion into device units was fitted in the first
+    # place. Agreement across the three says the conversion is behaving. The payload carries that
+    # sentence in `notes` and in the figure footer, so a panel cannot show the numbers without it.
+    _3build, _amp_stored = None, None
+    _3_is_every_run = False
+    _3loaded = {}                    # the recordings the build decoded, for the simulation (C8)
+    try:
+        from . import three_source_response as _3src
+        from . import three_source_plots as _3plot
+        # The table (Track A step 7) needs every run; the page draws the newest few. When the
+        # table for this record is already stored, only the page's runs are built.
+        try:
+            _amp_stored = amplitude_effect_if_stored(participant)
+            _gt_stored = ground_truth_if_stored(participant)
+        except Exception:                               # noqa: BLE001 — the page comes first
+            _log.warning("closed-loop report: could not read the stored amplitude-effect or ground-truth entries for %s; both will be rebuilt",
+                         getattr(participant, "uid", participant), exc_info=True)
+            _amp_stored = None
+            _gt_stored = None
+        # Every run is built when ANY of the write-back tables is missing for this recording set:
+        # the amplitude-effect table, the ground-truth verdict, or (since 2026-09-11) the per-run
+        # points behind the pooled three-source view. Otherwise only the page's runs are built.
+        try:
+            _rp_stored = run_points_stored_for_current_key(participant)
+            _ps_stored = pooled_shape_stored_for_current_key(participant)
+        except Exception:                               # noqa: BLE001 -- a miss means build
+            _log.warning("closed-loop report: could not check the stored per-run points for %s",
+                         getattr(participant, "uid", participant), exc_info=True)
+            _rp_stored = _ps_stored = False
+        _3_max_runs = (THREE_SOURCE_RUNS_ON_PAGE
+                       if (_amp_stored and _gt_stored and _rp_stored and _ps_stored) else _ALL_RUNS)
+        _3_is_every_run = _3_max_runs == _ALL_RUNS
+        _3loaded = {}
+        _3build = _3src.build_for_participant(
+            getattr(participant, "uid", participant), max_runs=_3_max_runs,
+            loaded_sink=_3loaded)
+        _page = dict(_3build, comparisons=list(_3build.get("comparisons", []))
+                     [:THREE_SOURCE_RUNS_ON_PAGE])
+        _pre["three_source_response"] = _3plot.report_payload(_page)
+    except Exception as _exc:                          # never let this take down the whole report
+        # Say WHY it is missing, for the same reason as the stability block above: an absent key
+        # reads on the page as "does not apply", and this having failed is not that.
+        _log.warning("closed-loop report: the three-source comparison could not be assembled for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
+        _pre["three_source_response"] = {
+            "comparisons": [], "gates_nothing": True,
+            "absent_reason": ("the three-way comparison of how current moves band power could not "
+                              f"be assembled: {_exc!r}"),
+        }
+
+    # THE POOLED WITHIN-VISIT TABLE, written only from a build that holds every run. This is what
+    # lets the consistency check below answer the same way on every request instead of depending on
+    # whether this particular one happened to rebuild the comparison in full.
+    try:
+        _pre["within_visit_pooled_shape"] = write_pooled_shape(
+            participant, _3build, is_every_run=_3_is_every_run)
+    except Exception as _exc:                          # noqa: BLE001
+        _log.warning("closed-loop report: the pooled within-visit table could not be written "
+                     "for %s", getattr(participant, "uid", participant), exc_info=True)
+        _pre["within_visit_pooled_shape"] = {
+            "written": False, "n_rows": 0, "n_contacts": 0, "n_bands": 0, "store_key": None,
+            "reason": f"the pooled within-visit table could not be written: {_exc!r}"}
+
+    # THE PER-RUN POINTS, stored beside the pooled table under the same refusal, and the pooled-by-
+    # side view the redesigned three-source panel draws (redesign plan decisions 5, 9, 10). Read
+    # back on EVERY request, including the truncated ones, for the same reason the pooled table is.
+    try:
+        from . import run_points as _rp
+        _pre["three_source_run_points"] = write_run_points(
+            participant, _3build, is_every_run=_3_is_every_run)
+        _pre["three_source_pooled"] = _rp.pooled_view_payload(
+            run_points_if_stored(participant), pooled_shape_if_stored(participant),
+            absent_reason=(_pre["three_source_run_points"].get("reason")
+                           if not _pre["three_source_run_points"].get("written") else None))
+    except Exception as _exc:                          # noqa: BLE001
+        _log.warning("closed-loop report: the per-run points could not be stored or grouped "
+                     "for %s", getattr(participant, "uid", participant), exc_info=True)
+        _pre["three_source_run_points"] = {"written": False, "n_rows": 0, "n_runs": 0,
+                                          "store_key": None,
+                                          "reason": f"could not be stored: {_exc!r}"}
+        _pre["three_source_pooled"] = {"gates_nothing": True, "sides": [],
+                                      "absent_reason": f"could not be grouped: {_exc!r}"}
 
     # The pooled titration slope for the first candidate, from the stored table (decision 103),
     # handed to the pipeline as E1 (redesign decision 9). None when nothing is stored yet.
@@ -2307,6 +3031,7 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                   design_matrix=dm, candidates=cands, hemisphere=hemisphere,
                   power_scale=power_scale, device_facts=dev, pooled_e1=_pooled_e1)
     out = report_to_dict(rep)
+    out.update(_pre)                     # the three-source and table payloads built above
     out["device_facts"] = {k: v for k, v in dev.items() if not k.startswith("_")}
     out["device_facts_provenance"] = dev.get("_provenance", {})
     out["impedance_status"] = dev.get("_impedance_status")
@@ -2388,72 +3113,6 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     # TRACK D: the grid computed once, at the top of this function -- see the note there on why it
     # runs before either early return, and `band_sweep_grid_for_closed_loop` above for the design.
     out["band_sweep_grid"] = _grid_export
-
-    # ---------------------------------------------------------------------------------------------
-    # HOW STIMULATION CURRENT MOVED BAND POWER, MEASURED THREE SEPARATE WAYS AND PUT SIDE BY SIDE.
-    #
-    # WHY THIS IS ON THIS PAGE. Closed loop watches the power in one band and moves the current when
-    # that power crosses a threshold typed into the stimulator. There are three different ways to get
-    # a band power out of this device -- from the streamed voltage trace, from the device's own
-    # onboard spectrum, and from the band power the device computes on board and reports directly --
-    # and they come from three different recordings. Whoever is about to program a threshold should be
-    # able to see all three next to each other over the same stimulation settings, in the device's own
-    # units, before they pick a number.
-    #
-    # THIS GATES NOTHING, and that is deliberate rather than an oversight. The payload says so in
-    # `gates_nothing`, no verdict on this page reads it, and no blocking rule depends on it. The PI
-    # asked for it as something informative for the person reading the page, and a comparison of
-    # three measurement routes is not a device rule traceable to a page of a Medtronic manual, which
-    # is what every blocking rule here is.
-    #
-    # AND IT MUST NOT BE READ AS THREE INDEPENDENT CONFIRMATIONS. The device computes its own band
-    # power on board from the very voltage trace the first route reads, and the contact surveys
-    # behind the second route are where the conversion into device units was fitted in the first
-    # place. Agreement across the three says the conversion is behaving. The payload carries that
-    # sentence in `notes` and in the figure footer, so a panel cannot show the numbers without it.
-    _3build, _amp_stored = None, None
-    _3_is_every_run = False
-    try:
-        from . import three_source_response as _3src
-        from . import three_source_plots as _3plot
-        # The table (Track A step 7) needs every run; the page draws the newest few. When the
-        # table for this record is already stored, only the page's runs are built.
-        try:
-            _amp_stored = amplitude_effect_if_stored(participant)
-            _gt_stored = ground_truth_if_stored(participant)
-        except Exception:                               # noqa: BLE001 — the page comes first
-            _log.warning("closed-loop report: could not read the stored amplitude-effect or ground-truth entries for %s; both will be rebuilt",
-                         getattr(participant, "uid", participant), exc_info=True)
-            _amp_stored = None
-            _gt_stored = None
-        # Every run is built when ANY of the write-back tables is missing for this recording set:
-        # the amplitude-effect table, the ground-truth verdict, or (since 2026-09-11) the per-run
-        # points behind the pooled three-source view. Otherwise only the page's runs are built.
-        try:
-            _rp_stored = run_points_stored_for_current_key(participant)
-            _ps_stored = pooled_shape_stored_for_current_key(participant)
-        except Exception:                               # noqa: BLE001 -- a miss means build
-            _log.warning("closed-loop report: could not check the stored per-run points for %s",
-                         getattr(participant, "uid", participant), exc_info=True)
-            _rp_stored = _ps_stored = False
-        _3_max_runs = (THREE_SOURCE_RUNS_ON_PAGE
-                       if (_amp_stored and _gt_stored and _rp_stored and _ps_stored) else _ALL_RUNS)
-        _3_is_every_run = _3_max_runs == _ALL_RUNS
-        _3build = _3src.build_for_participant(
-            getattr(participant, "uid", participant), max_runs=_3_max_runs)
-        _page = dict(_3build, comparisons=list(_3build.get("comparisons", []))
-                     [:THREE_SOURCE_RUNS_ON_PAGE])
-        out["three_source_response"] = _3plot.report_payload(_page)
-    except Exception as _exc:                          # never let this take down the whole report
-        # Say WHY it is missing, for the same reason as the stability block above: an absent key
-        # reads on the page as "does not apply", and this having failed is not that.
-        _log.warning("closed-loop report: the three-source comparison could not be assembled for %s",
-                     getattr(participant, "uid", participant), exc_info=True)
-        out["three_source_response"] = {
-            "comparisons": [], "gates_nothing": True,
-            "absent_reason": ("the three-way comparison of how current moves band power could not "
-                              f"be assembled: {_exc!r}"),
-        }
 
     # ---------------------------------------------------------------------------------------------
     # HOW BIG A PAIN CHANGE HAS TO BE, FOR THIS PARTICIPANT, BEFORE IT CAN BE TOLD FROM THEIR OWN
@@ -2560,50 +3219,213 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
             "gates_nothing": True, "items": {}, "n_items_assessed": 0,
             "note": f"the reliable-change floor could not be estimated: {_exc!r}"}
 
-    # THE POOLED WITHIN-VISIT TABLE, written only from a build that holds every run. This is what
-    # lets the consistency check below answer the same way on every request instead of depending on
-    # whether this particular one happened to rebuild the comparison in full.
-    try:
-        out["within_visit_pooled_shape"] = write_pooled_shape(
-            participant, _3build, is_every_run=_3_is_every_run)
-    except Exception as _exc:                          # noqa: BLE001
-        _log.warning("closed-loop report: the pooled within-visit table could not be written "
-                     "for %s", getattr(participant, "uid", participant), exc_info=True)
-        out["within_visit_pooled_shape"] = {
-            "written": False, "n_rows": 0, "n_contacts": 0, "n_bands": 0, "store_key": None,
-            "reason": f"the pooled within-visit table could not be written: {_exc!r}"}
-
-    # THE PER-RUN POINTS, stored beside the pooled table under the same refusal, and the pooled-by-
-    # side view the redesigned three-source panel draws (redesign plan decisions 5, 9, 10). Read
-    # back on EVERY request, including the truncated ones, for the same reason the pooled table is.
-    try:
-        from . import run_points as _rp
-        out["three_source_run_points"] = write_run_points(
-            participant, _3build, is_every_run=_3_is_every_run)
-        out["three_source_pooled"] = _rp.pooled_view_payload(
-            run_points_if_stored(participant), pooled_shape_if_stored(participant),
-            absent_reason=(out["three_source_run_points"].get("reason")
-                           if not out["three_source_run_points"].get("written") else None))
-    except Exception as _exc:                          # noqa: BLE001
-        _log.warning("closed-loop report: the per-run points could not be stored or grouped "
-                     "for %s", getattr(participant, "uid", participant), exc_info=True)
-        out["three_source_run_points"] = {"written": False, "n_rows": 0, "n_runs": 0,
-                                          "store_key": None,
-                                          "reason": f"could not be stored: {_exc!r}"}
-        out["three_source_pooled"] = {"gates_nothing": True, "sides": [],
-                                      "absent_reason": f"could not be grouped: {_exc!r}"}
-
     # THE CLOSED-LOOP SIMULATION, run for the first candidate and stored under its own key; the
     # page fetches the payload after its first figures are up. Its inputs are the 3 s tiles, the
     # stored pooled curve and the stored per-run points, so it runs after those are written.
     try:
         out["closed_loop_simulation"] = write_simulation(
             participant, rep=rep, build=_3build, candidate=(cands[0] if cands else None),
-            hemisphere=hemisphere, power_scale=power_scale, epochs=eps)
+            hemisphere=hemisphere, power_scale=power_scale, epochs=eps, loaded=_3loaded,
+            device_facts=dev)
     except Exception as _exc:                          # noqa: BLE001
         _log.warning("closed-loop report: the simulation could not be run or stored for %s",
                      getattr(participant, "uid", participant), exc_info=True)
         out["closed_loop_simulation"] = {"written": False, "store_key": None,
+                                         "reason": f"could not be run or stored: {_exc!r}"}
+
+    # THE CONFIRMATIONS-AND-SEPARATION DESIGN RULE (T3, 2026-09-13; design_rule.py): fit the
+    # noise-only model on the same tiles the simulation reads, store the averaging x onset
+    # separation table, and read it straight back -- a matching key is a store read, a fresh fit
+    # costs what the simulation's own fit already costs. Attached by patching the SERIALISED
+    # ``out["prescriptions"]``/``out["prescription"]`` row dicts `report_to_dict(rep)` already
+    # built a few lines above (`out = report_to_dict(rep)`), rather than mutating `rep.prescriptions`
+    # itself -- `report_to_dict` runs once, before this point, and a mutation made to the
+    # dataclasses afterward would never reach the dict this function actually returns. The table
+    # needs the thresholds `pipeline.run` itself just placed (the noise simulation holds the level
+    # at their midpoint), which is also why this runs after `pipeline.run`, alongside
+    # `write_simulation`, rather than inside `pipeline.run`.
+    try:
+        _dr_summary = write_design_rule(
+            participant, candidate=(cands[0] if cands else None), hemisphere=hemisphere,
+            threshold_plan=rep.threshold, loaded=_3loaded, epochs=eps)
+        out["closed_loop_design_rule"] = _dr_summary
+        _dr_payload = design_rule_if_stored(participant, (cands[0] if cands else None),
+                                            hemisphere=hemisphere)
+        if _dr_payload is not None and out.get("prescriptions"):
+            from . import timing_recommendation as _tr_dr
+            from . import prescription as _presc
+            _rec_timing = _tr_dr.for_participant(getattr(participant, "uid", participant)) or {}
+            _avg_ms = (_rec_timing.get("averaging_ms") or {}).get("value_ms")
+            _onset_ms = (_rec_timing.get("onset_upper_ms") or {}).get("value_ms")
+
+            def _patch_rows(field_rows):
+                for row in (field_rows or []):
+                    if row.get("parameter") not in ("Upper LFP threshold", "Lower LFP threshold"):
+                        continue
+                    up_v = next((r.get("value") for r in field_rows
+                               if r.get("parameter") == "Upper LFP threshold"), None)
+                    lo_v = next((r.get("value") for r in field_rows
+                               if r.get("parameter") == "Lower LFP threshold"), None)
+                    note = _presc.design_rule_note(_dr_payload, upper=up_v, lower=lo_v,
+                                                   averaging_ms=_avg_ms, onset_ms=_onset_ms)
+                    if note is not None:
+                        row["design_rule_note"] = note
+
+            for _mode_dict in (out["prescriptions"].get("modes") or {}).values():
+                _patch_rows(_mode_dict.get("fields"))
+            if out.get("prescription"):
+                _patch_rows(out["prescription"].get("fields"))
+    except Exception as _exc:                          # noqa: BLE001
+        _log.warning("closed-loop report: the design rule could not be run, stored or attached "
+                     "for %s", getattr(participant, "uid", participant), exc_info=True)
+        out["closed_loop_design_rule"] = {"written": False, "store_key": None,
+                                          "reason": f"could not be run or stored: {_exc!r}"}
+
+    # ---------------------------------------------------------------------------------------------
+    # THE THRESHOLD OCCUPANCY CHECK (T4, 2026-09-13; occupancy.py; contest decision 150,
+    # synthesis section 4): where this participant's own averaged readings actually sit relative
+    # to the stored pair, at the averaging duration the card recommends -- and whether the pair
+    # behaves as a single threshold in all but name, or sits well off the level the signal
+    # occupies. Uses the SAME loader design_rule.py and simulation.py already call
+    # (`simulation_inputs_for_participant`, defined in this file) and is patched onto the
+    # SERIALISED prescription rows, for the identical reason the design-rule block above is:
+    # `report_to_dict` has already turned the dataclasses into plain dicts by this point.
+    try:
+        from . import occupancy as _occ
+        from . import timing_recommendation as _tr_occ
+        from . import prescription as _presc_occ
+        _c0_occ = (cands[0] or {}) if cands else {}
+        _up_occ = getattr(rep.threshold, "upper", None)
+        _lo_occ = getattr(rep.threshold, "lower", None)
+        _rec_timing_occ = _tr_occ.for_participant(getattr(participant, "uid", participant)) or {}
+        _avg_s_occ = ((_rec_timing_occ.get("averaging_ms") or {}).get("value_ms") or 0.0) / 1000.0
+        if (_c0_occ.get("channel") is not None and _c0_occ.get("center_hz") is not None
+                and _up_occ is not None and _lo_occ is not None and _avg_s_occ > 0):
+            _occ_inputs = simulation_inputs_for_participant(
+                getattr(participant, "uid", participant), contact=_c0_occ["channel"],
+                centre_hz=float(_c0_occ["center_hz"]), loaded=_3loaded, hemisphere=hemisphere,
+                epochs=eps)
+            if not _occ_inputs.get("absent_reason") and len(_occ_inputs["t"]):
+                _occ_payload = _occ.threshold_occupancy(
+                    _occ_inputs["t"], _occ_inputs["power"], upper=_up_occ, lower=_lo_occ,
+                    averaging_s=_avg_s_occ)
+            else:
+                _occ_payload = {"available": False,
+                                "reason": (_occ_inputs.get("absent_reason")
+                                          or "no usable pieces for this contact")}
+        elif _up_occ is None or _lo_occ is None:
+            _occ_payload = {"available": False,
+                            "reason": "no thresholds are placed for this candidate"}
+        elif _avg_s_occ <= 0:
+            _occ_payload = {"available": False,
+                            "reason": "no averaging duration is in force to average onto"}
+        else:
+            _occ_payload = {"available": False,
+                            "reason": "the candidate carries no sensing contact or band centre"}
+        out["threshold_occupancy"] = _occ_payload
+        _occ_note = _presc_occ.occupancy_note(_occ_payload)
+        if _occ_note is not None and out.get("prescriptions"):
+
+            def _patch_occ_rows(field_rows):
+                for row in (field_rows or []):
+                    if row.get("parameter") in ("Upper LFP threshold", "Lower LFP threshold"):
+                        row["occupancy_note"] = _occ_note
+
+            for _mode_dict in (out["prescriptions"].get("modes") or {}).values():
+                _patch_occ_rows(_mode_dict.get("fields"))
+            if out.get("prescription"):
+                _patch_occ_rows(out["prescription"].get("fields"))
+    except Exception as _exc:                          # noqa: BLE001
+        _log.warning("closed-loop report: the threshold occupancy check could not be computed "
+                     "for %s", getattr(participant, "uid", participant), exc_info=True)
+        out["threshold_occupancy"] = {"available": False,
+                                      "reason": f"could not be computed: {_exc!r}"}
+
+    # ---------------------------------------------------------------------------------------------
+    # THE START-OF-STRETCH BIAS CHECK (T6, 2026-09-13; startup_bias.py; contest decision 150,
+    # synthesis section 4, task 7): are the first readings after a gap in recording low compared
+    # with the rest of that stretch, and for how long -- two of the contest's own entries measured
+    # this on the same participant and band and disagreed (D found a real dip, E found none), and
+    # both methods are run here, faithfully, on THIS candidate's own recordings rather than
+    # reconciled into one answer. Needs no optimiser and no simulation (unlike `design_rule.py`),
+    # so it is computed fresh on every report exactly as `occupancy.py` is, and patched onto the
+    # SERIALISED prescription rows for the identical reason the two blocks above are: by this
+    # point `report_to_dict` has already turned the dataclasses into plain dicts.
+    try:
+        from . import startup_bias as _sb
+        from . import prescription as _presc_sb
+        _c0_sb = (cands[0] or {}) if cands else {}
+        if _c0_sb.get("channel") is not None and _c0_sb.get("center_hz") is not None:
+            _sb_inputs = simulation_inputs_for_participant(
+                getattr(participant, "uid", participant), contact=_c0_sb["channel"],
+                centre_hz=float(_c0_sb["center_hz"]), loaded=_3loaded, hemisphere=hemisphere,
+                epochs=eps)
+            if not _sb_inputs.get("absent_reason") and len(_sb_inputs["t"]):
+                _sb_payload = _sb.startup_bias_for_series(_sb_inputs["t"], _sb_inputs["power"],
+                                                          _sb_inputs["amp_obs"])
+            else:
+                _sb_payload = {"refused": True,
+                               "reason": (_sb_inputs.get("absent_reason")
+                                         or "no usable pieces for this contact")}
+        else:
+            _sb_payload = {"refused": True,
+                           "reason": "the candidate carries no sensing contact or band centre"}
+        out["closed_loop_startup_bias"] = _sb_payload
+        _sb_note = _presc_sb.startup_bias_note(_sb_payload)
+        if _sb_note is not None and out.get("prescriptions"):
+
+            def _patch_sb_rows(field_rows):
+                for row in (field_rows or []):
+                    if row.get("parameter") == "Adaptive startup delay":
+                        row["startup_bias_note"] = _sb_note
+
+            for _mode_dict in (out["prescriptions"].get("modes") or {}).values():
+                _patch_sb_rows(_mode_dict.get("fields"))
+            if out.get("prescription"):
+                _patch_sb_rows(out["prescription"].get("fields"))
+    except Exception as _exc:                          # noqa: BLE001
+        _log.warning("closed-loop report: the start-of-stretch bias check could not be computed "
+                     "for %s", getattr(participant, "uid", participant), exc_info=True)
+        out["closed_loop_startup_bias"] = {"refused": True,
+                                           "reason": f"could not be computed: {_exc!r}"}
+
+    # ---------------------------------------------------------------------------------------------
+    # THE BLOCK-BOOTSTRAP ROBUSTNESS CHECK (T5, 2026-09-13; robustness.py; contest decision 150,
+    # synthesis section 4, task 5): "robustness as an interval, not a point" -- a 200-replicate
+    # block bootstrap, resampling this participant's own recorded stretches with replacement,
+    # reporting the 2.5th-97.5th percentile of the onset duration (and threshold gap, and detection
+    # blanking) a designer replaying the real controller against this record would have picked.
+    # Stored (unlike occupancy.py and startup_bias.py, T4 and T6, which are cheap enough to compute
+    # fresh on every report) because it is a real numerical search -- 576 configurations replayed
+    # over every training stretch -- the same cost class as `write_design_rule`'s own fit, and for
+    # the identical reason that function is stored. Attached by patching the SERIALISED
+    # `out["prescriptions"]`/`out["prescription"]` row dicts, for the identical reason the three
+    # blocks above are: `report_to_dict` has already turned the dataclasses into plain dicts.
+    try:
+        _rb_summary = write_robustness(
+            participant, candidate=(cands[0] if cands else None), hemisphere=hemisphere,
+            threshold_plan=rep.threshold, loaded=_3loaded, epochs=eps)
+        out["closed_loop_robustness"] = _rb_summary
+        _rb_payload = robustness_if_stored(participant, (cands[0] if cands else None),
+                                           hemisphere=hemisphere)
+        if _rb_payload is not None and out.get("prescriptions"):
+            from . import prescription as _presc_rb
+            _rb_note = _presc_rb.robustness_note(_rb_payload)
+            if _rb_note is not None:
+
+                def _patch_rb_rows(field_rows):
+                    for row in (field_rows or []):
+                        if "nset duration" in (row.get("parameter") or ""):
+                            row["robustness_note"] = _rb_note
+
+                for _mode_dict in (out["prescriptions"].get("modes") or {}).values():
+                    _patch_rb_rows(_mode_dict.get("fields"))
+                if out.get("prescription"):
+                    _patch_rb_rows(out["prescription"].get("fields"))
+    except Exception as _exc:                          # noqa: BLE001
+        _log.warning("closed-loop report: the robustness bootstrap could not be run, stored or "
+                     "attached for %s", getattr(participant, "uid", participant), exc_info=True)
+        out["closed_loop_robustness"] = {"written": False, "store_key": None,
                                          "reason": f"could not be run or stored: {_exc!r}"}
 
     # ---------------------------------------------------------------------------------------------

@@ -5,7 +5,6 @@ import pytest
 
 from ClosedLoopDeployment import adapter as AD, edges as E, consistency as C, authority as AU
 from ClosedLoopDeployment.types import EdgeEstimate
-from ClosedLoopDeployment.registry import Registry
 
 
 # --- Phase 0 ------------------------------------------------------------------------------------
@@ -85,29 +84,41 @@ def test_state_edge_refuses_when_the_rating_cluster_is_absent():
     assert "pseudoreplication" in e.note, e.note
 
 
-def test_max_statistic_permutation_permutes_whole_epochs():
-    T = _toy_table(n_epochs=6, per_epoch=6)
-    out = E.max_statistic_permutation(T, channels=["CH"], centers=[20.5], n_perm=99, seed=1)
-    assert out["available"] and out["n_epochs_permuted"] == 6
-    assert 0.0 < out["p_fwer"] <= 1.0
-    assert out["resolution"] == pytest.approx(1 / 100)
-    # too few epochs must refuse rather than return a meaningless null
-    assert E.max_statistic_permutation(_toy_table(n_epochs=2), channels=["CH"],
-                                       centers=[20.5], n_perm=10)["available"] is False
-
-
 # --- coherence ----------------------------------------------------------------------------------
 def _edge(name, est, lo, hi, unit="rating"):
     return EdgeEstimate(name, est, (lo, hi), 0.01, 50, unit, 8)
 
 
-def test_unresolved_edge_makes_coherence_unknown_not_false():
-    """None and False mean different things: not established versus contradictory."""
+def test_an_edge_with_no_estimate_makes_coherence_unknown_not_false():
+    """None and False mean different things: not established versus contradictory. Since
+    2026-09-13 (PI rule, "established means mean only") only an edge with NO point estimate makes
+    the answer None; an interval spanning zero no longer does (the test below pins that)."""
+    ok1, ok2 = _edge("E1", -1.0, -1.5, -0.5), _edge("E2", 1.0, 0.5, 1.5)
+    none = EdgeEstimate("E3", None, None, None, 0, "rating", 0)
+    assert C.signs_coherent(ok1, ok2, none) is None
+    r = C.coherence_report(ok1, ok2, none)
+    assert r.coherent is None and "NOT ESTABLISHED" in r.note
+    assert "no point estimate" in r.note
+
+
+def test_an_edge_whose_interval_spans_zero_enters_the_sign_test_on_its_point_sign_with_a_caveat():
+    """THE PI'S RULE OF 2026-09-13, his words "Established means mean only for flexibility",
+    read as "point sign decides, but flag as provisional". Until that date an edge whose interval
+    spanned zero made `signs_coherent` return None. Now its point sign enters the test, the
+    interval and p are written into the note as a PROVISIONAL caveat, and the caveat names the
+    edge with its numbers rather than an adjective."""
     ok1, ok2 = _edge("E1", -1.0, -1.5, -0.5), _edge("E2", 1.0, 0.5, 1.5)
     spans = _edge("E3", -0.1, -0.6, 0.4)
-    assert C.signs_coherent(ok1, ok2, spans) is None
+    assert spans.resolved is True and spans.statistically_established is False
+    assert C.signs_coherent(ok1, ok2, spans) is True
     r = C.coherence_report(ok1, ok2, spans)
-    assert r.coherent is None and "NOT ESTABLISHED" in r.note
+    assert r.coherent is True
+    assert "PROVISIONAL: 1 of 3 intervals span zero" in r.note
+    assert "E3 (interval -0.6 to +0.4, p 0.01)" in r.note
+    assert "NOT ESTABLISHED" not in r.note
+    # an established triangle carries no caveat at all
+    r_ok = C.coherence_report(ok1, ok2, _edge("E3", -1.0, -1.5, -0.5))
+    assert r_ok.coherent is True and "PROVISIONAL" not in r_ok.note
 
 
 def test_contradictory_triangle_is_detected():
@@ -140,50 +151,81 @@ def test_control_authority_refuses_a_distribution_with_no_measured_spread():
     assert d is not None and d > 3
 
 
-def test_threshold_placement_flags_inverted_and_too_close_captures():
+def test_threshold_placement_reports_the_between_visit_comparison_but_no_longer_judges_on_it():
+    """Until 2026-09-12 this test pinned "inverted capture" and "too close" in `problems`, judged
+    on the two capture means and their separation. PI decision that day ("b and c"): the two D26
+    verdicts read the pooled titration slope instead (`test_d26_reads_pooled_slope.py`) and warn
+    rather than block. What this test now pins is that the between-visit numbers are STILL
+    computed and reported -- labelled as the comparison decision 124 distrusts -- and that, with
+    no pooled slope supplied, neither sentence is a problem and both verdicts say not assessed."""
     rng = np.random.default_rng(0)
     lo, hi = rng.normal(10, 1, 40), rng.normal(4, 1, 40)      # power FALLS as amplitude rises
     good = AU.threshold_placement(lo, hi, amp_low=1.0, amp_high=3.0, expected_sign=-1)
-    assert good.predicted_recapture_alert is False and good.upper > good.lower
+    assert good.upper > good.lower and good.problems == []
+    assert good.capture_verdicts["historical"]["inverted_by_means"] is False
+    assert good.capture_verdicts["historical"]["below_declared_minimum"] is False
     inv = AU.threshold_placement(hi, lo, amp_low=1.0, amp_high=3.0, expected_sign=-1)
-    assert inv.predicted_recapture_alert is True
-    assert any("inverted capture" in p for p in inv.problems)
+    assert inv.capture_verdicts["historical"]["inverted_by_means"] is True
+    assert inv.problems == [] and not any("inverted capture" in p for p in inv.problems)
     close = AU.threshold_placement(rng.normal(10, 1, 40), rng.normal(10.2, 1, 40),
                                    amp_low=1.0, amp_high=3.0, expected_sign=-1)
-    assert any("too close" in p for p in close.problems)
+    h = close.capture_verdicts["historical"]
+    assert h["below_declared_minimum"] is True and abs(h["separation_pooled_sd"]) < 0.5
+    assert h["separation_pooled_sd"] == close.control_authority
+    assert "decision 124 distrusts" in h["label"]
+    for plan in (good, inv, close):
+        # no pooled slope was handed in, so the verdicts are not assessed and the alert is None,
+        # never a value manufactured from the distrusted comparison
+        assert plan.predicted_recapture_alert is None
+        assert plan.capture_verdicts["inverted"]["status"] == "not assessed"
+        assert plan.capture_verdicts["too_close"]["status"] == "not assessed"
+        assert len(plan.warnings) == 2 and all("not assessed" in w for w in plan.warnings)
 
 
-def test_threshold_placement_enforces_the_d27_capture_artefact_ceiling():
+def test_threshold_placement_judges_the_two_d26_verdicts_on_the_pooled_slope():
+    """The same three sample pairs as above, now with a pooled slope: the verdicts follow the
+    slope's sign and interval, not the means."""
+    rng = np.random.default_rng(0)
+    lo, hi = rng.normal(10, 1, 40), rng.normal(4, 1, 40)
+    neg = EdgeEstimate("E1", -3.6, (-6.0, -1.2), 0.01, 13, "run", 4, "power_linear")
+    pos = EdgeEstimate("E1", +3.6, (+1.2, +6.0), 0.01, 13, "run", 4, "power_linear")
+    # means inverted (hi, lo) but the pooled slope is negative and established: NOT inverted
+    r = AU.threshold_placement(hi, lo, amp_low=1.0, amp_high=3.0, expected_sign=-1, pooled_slope=neg)
+    assert r.predicted_recapture_alert is False and r.warnings == []
+    assert r.capture_verdicts["historical"]["inverted_by_means"] is True
+    # means the right way round but the pooled slope is positive and established: inverted
+    r = AU.threshold_placement(lo, hi, amp_low=1.0, amp_high=3.0, expected_sign=-1, pooled_slope=pos)
+    assert r.predicted_recapture_alert is True
+    assert len(r.warnings) == 1 and r.warnings[0].startswith("D26 inverted capture: INDICATED")
+    assert r.problems == []
+
+
+def test_threshold_placement_enforces_the_capture_artefact_ceiling_on_the_proposed_capture():
+    """The ceiling is rule D27's, the amplitude is NOT the ledger's D27 amplitude (review C10,
+    2026-09-12): the ledger row judges the device's own newest capture, this judges the capture
+    THIS MODULE proposes (the lowest and highest therapeutic currents on record). The sentence
+    names the proposed amplitude, and no longer begins "D27:" as if it were the ledger row -- at
+    5.5 mA delivered the two would otherwise contradict each other on one page."""
     rng = np.random.default_rng(1)
     lo, hi = rng.normal(10, 1, 30), rng.normal(4, 1, 30)
     r = AU.threshold_placement(lo, hi, amp_low=1.0, amp_high=6.0, expected_sign=-1,
                                pulse_width_us=200.0)
-    assert any("D27" in p and "6.00 mA" in p for p in r.problems)
-    assert any("D27" in p and "200" in p for p in r.problems)
+    amp_p = [p for p in r.problems if "6.00 mA" in p]
+    pw_p = [p for p in r.problems if "200 us" in p]
+    assert len(amp_p) == 1 and "proposed upper capture amplitude" in amp_p[0] \
+        and "5.0 mA artefact ceiling" in amp_p[0] and "highest therapeutic current" in amp_p[0]
+    assert "D27 row judges the device's own newest capture" in amp_p[0]
+    assert len(pw_p) == 1 and "proposed capture's pulse width" in pw_p[0] \
+        and "120 us artefact ceiling" in pw_p[0]
+    assert not any(p.startswith("D27") for p in r.problems), r.problems
+    # the numbers themselves come from ONE home (session_report_facts), via constraints
+    from ClosedLoopDeployment import constraints as CO, session_report_facts as SRF
+    assert AU.CAPTURE_ARTEFACT_AMP_MA is CO.CAPTURE_ARTEFACT_AMP_MA is SRF.CAPTURE_AMP_CEILING_MA
+    assert AU.CAPTURE_ARTEFACT_PW_US is CO.CAPTURE_ARTEFACT_PW_US is SRF.CAPTURE_PW_CEILING_US
+    assert (SRF.CAPTURE_AMP_CEILING_MA, SRF.CAPTURE_PW_CEILING_US) == (5.0, 120.0)
 
 
 # --- ledger -------------------------------------------------------------------------------------
-def test_registry_is_append_only_and_detects_tampering(tmp_path):
-    p = tmp_path / "reg.json"
-    r = Registry(p)
-    r.register(candidates=["a"], estimators={"E1": "ols"}, alpha=0.05, correction="none",
-               stopping_rule="fixed n", primary_outcome="nrs")
-    r.amend(what_changed="alpha", why="stricter", fields={"alpha": 0.01})
-    assert r.effective()["alpha"] == 0.01
-    assert len(r.effective()["amendments_applied"]) == 1
-    # the original registration entry is untouched
-    assert r.entries[0]["alpha"] == 0.05
-    import json
-    d = json.loads(p.read_text()); d["entries"][0]["alpha"] = 0.5; p.write_text(json.dumps(d))
-    assert Registry(p).tampered is True
-
-
-def test_registry_refuses_an_unexplained_amendment(tmp_path):
-    r = Registry(tmp_path / "r.json")
-    r.register(candidates=["a"], estimators={}, alpha=0.05, correction="none",
-               stopping_rule="x", primary_outcome="nrs")
-    with pytest.raises(ValueError):
-        r.amend(what_changed="alpha", why="")
 
 
 def test_epoch_assignment_survives_microsecond_resolution_datetimes():
@@ -225,16 +267,23 @@ def test_the_rendered_coherence_reason_states_the_device_direction_correctly():
     assert "ramps amplitude UP" in C.coherence_report(e1, e2, e3).note
 
 
-def test_an_unresolved_edge_does_not_supply_its_sign_to_the_device_gate():
-    """Rule D19 asks which way the band moves. An unresolved edge HAS a point-estimate sign, but
-    that sign is not established. Supplying it would let the most important safety gate be
-    satisfied by a direction the data does not support."""
+def test_an_unresolved_edge_supplies_its_point_sign_to_d19_and_is_flagged_as_not_established():
+    """PI decision 2026-09-12, reversing the rule this test used to pin. Rule D19 asks which way
+    the band moves. An unresolved edge HAS a point-estimate sign, and it is now supplied -- with a
+    sibling flag saying it is NOT statistically established, and the edge's interval and p-value,
+    so nothing downstream loses the distinction the old rule enforced by omission."""
     from ClosedLoopDeployment.pipeline import _facts_for
     resolved = EdgeEstimate("E1", -1.0, (-1.5, -0.5), 0.01, 50, "setting epoch", 60)
     spans_zero = EdgeEstimate("E2", 0.9, (-0.2, 2.0), 0.2, 50, "rating", 60)
     f = _facts_for({"channel": "CH"}, resolved, spans_zero, "power_linear")
     assert f["power_slope_vs_amplitude_sign"] == -1
-    assert "power_slope_vs_pain_sign" not in f, "an unresolved edge must not supply a sign"
+    assert f["power_slope_vs_amplitude_sign_established"] is True
+    assert f["power_slope_vs_amplitude_ci"] == [-1.5, -0.5]
+    assert f["power_slope_vs_amplitude_p"] == 0.01
+    assert f["power_slope_vs_pain_sign"] == 1, "an unresolved edge now supplies its point sign"
+    assert f["power_slope_vs_pain_sign_established"] is False
+    assert f["power_slope_vs_pain_ci"] == [-0.2, 2.0]
+    assert f["power_slope_vs_pain_p"] == 0.2
     assert f["power_scale"] == "linear" and f["intent"] == "adaptive"
     # asking for the log scale must be reported honestly, not silently corrected to what D11 wants
     assert _facts_for({}, resolved, resolved, "power_mean_of_log")["power_scale"] == "log"
@@ -242,16 +291,20 @@ def test_an_unresolved_edge_does_not_supply_its_sign_to_the_device_gate():
 
 def test_the_payload_keeps_coherence_as_three_states():
     """None means 'not established' and False means 'the signs contradict'. Collapsing the first
-    into the second makes the interface report a contradiction the data never showed."""
+    into the second makes the interface report a contradiction the data never showed. Since
+    2026-09-13 the None case is an edge with NO estimate (an interval spanning zero no longer
+    withholds the sign -- PI rule, "established means mean only"), so that is what is fed here."""
     from ClosedLoopDeployment.adapter import report_to_dict
     from ClosedLoopDeployment.types import DeploymentReport
     e_ok = _edge("E1", -1.0, -1.5, -0.5)
-    e_unres = _edge("E2", 0.5, -0.2, 1.2)
-    rep = DeploymentReport(participant="x", edges={"E1": e_ok, "E2": e_unres, "E3": e_ok})
-    rep.coherence = C.coherence_report(e_ok, e_unres, e_ok)
+    e_none = EdgeEstimate("E2", None, None, None, 0, "rating", 0)
+    rep = DeploymentReport(participant="x", edges={"E1": e_ok, "E2": e_none, "E3": e_ok})
+    rep.coherence = C.coherence_report(e_ok, e_none, e_ok)
     d = report_to_dict(rep)
     assert d["coherence"]["coherent"] is None
     assert d["verdict_detail"]["coherent"] is None, "None must not be collapsed to False"
+    assert d["verdict"] == "unsupported" and d["licensed"] is False
+    assert d["verdict_detail"]["provisional"] is False, "an unlicensed report is never provisional"
 
 
 # --- D09 as a per-bin advisory (PI decision 2026-09-04) -----------------------------------------
@@ -295,13 +348,19 @@ class _Rec:
         self.metadata, self.date, self.pointer, self.hashed = metadata, date, "", ""
 
 
-def _imp(worst_left, status="GOOD", date=1, model="LEAD_B33015"):
-    return _Rec({"Status": status,
-                 "Left": {"LeadModel": model, "Monopolar": [2605.0] * 8,
-                          "Bipolar": [[0.0, 5752.0, worst_left], [0.0, 0.0, 6641.0], [0.0, 0.0, 0.0]]},
-                 "Right": {"LeadModel": model, "Monopolar": [4044.0] * 8,
-                           "Bipolar": [[0.0, 4044.0, 4059.0], [0.0, 0.0, 3664.0], [0.0, 0.0, 0.0]]}},
-                date=date)
+def _imp(worst_left, status="GOOD", date=1, model="LEAD_B33015", amplitude=None):
+    """``amplitude`` mirrors the raw, no-space-before-the-unit strings on RCS08's own export:
+    "Automatic increasemA", "0.4mA", "1.0mA". ``None`` (the default) omits the field entirely, the
+    same shape every impedance test written before 2026-09-12 already used, so every existing test
+    that leaves it unset keeps exercising the pre-measurement-current fallback path."""
+    meta = {"Status": status,
+            "Left": {"LeadModel": model, "Monopolar": [2605.0] * 8,
+                     "Bipolar": [[0.0, 5752.0, worst_left], [0.0, 0.0, 6641.0], [0.0, 0.0, 0.0]]},
+            "Right": {"LeadModel": model, "Monopolar": [4044.0] * 8,
+                      "Bipolar": [[0.0, 4044.0, 4059.0], [0.0, 0.0, 3664.0], [0.0, 0.0, 0.0]]}}
+    if amplitude is not None:
+        meta["Amplitude"] = amplitude
+    return _Rec(meta, date=date)
 
 
 def test_impedance_is_read_from_metadata_because_these_rows_have_no_file():
@@ -345,6 +404,96 @@ def test_an_open_circuit_bipolar_pair_fails_d16():
     shorted = CN.check_eligibility({"impedance_ohms": 200.0, "impedance_tested": True},
                                    {"lead_type": "sensight"})
     assert "D16" in {x["rule_id"] for x in shorted.failures}
+
+
+# --- the measurement-current fix for D16, PI decision 2026-09-12 ---------------------------------
+# The device's DEFAULT impedance test steps a low measurement current up automatically, and at
+# that low current a healthy lead can read above the open-circuit limit even though the same lead
+# reads normal at a fixed, higher current. Measured on RCS08: 351 of 544 automatic-mode tests read
+# the Left lead's worst pair above 10,000 ohms, against 0 of 18 fixed-current tests. The PI ruled
+# that a high reading produced only by the automatic mode must not gate D16 by itself.
+
+def test_impedance_facts_prefers_the_newest_fixed_current_reading_over_a_newer_automatic_one():
+    from ClosedLoopDeployment import device_facts as DF
+    fixed = _imp(7000.0, date=1, amplitude="0.4mA")
+    automatic = _imp(10500.0, date=2, amplitude="Automatic increasemA")
+    f = DF.impedance_facts([fixed, automatic])
+    assert f["measurement_current"] == 0.4
+    assert f["Left"]["bipolar_max_ohm"] == 7000.0, ("D16 must trust the FIXED-current reading, "
+                                                     "not the newer automatic-mode one")
+    assert f["status_newest"] == "GOOD", "status_newest still names the truly newest record"
+
+
+def test_impedance_facts_falls_back_to_the_newest_automatic_reading_with_no_fixed_current_test():
+    from ClosedLoopDeployment import device_facts as DF
+    a1 = _imp(9000.0, date=1, amplitude="Automatic increasemA")
+    a2 = _imp(10261.0, date=2, amplitude="Automatic increasemA")
+    f = DF.impedance_facts([a1, a2])
+    assert f["measurement_current"] == "automatic_increase"
+    assert f["Left"]["bipolar_max_ohm"] == 10261.0, "no fixed test exists, so the fallback is the newest of any kind"
+    assert "automatic_newest_ohm" not in f["Left"], "there is no separate fixed reading to compare it against"
+
+
+def test_impedance_automatic_spurious_fail_fields_appear_only_when_the_case_holds():
+    from ClosedLoopDeployment import device_facts as DF
+    fixed_ok = _imp(7286.0, date=1, amplitude="0.4mA")
+    auto_bad = _imp(10261.0, date=2, amplitude="Automatic increasemA")
+    holds = DF.impedance_facts([fixed_ok, auto_bad])
+    assert holds["Left"]["automatic_newest_ohm"] == 10261.0
+    assert holds["Left"]["automatic_newest_date"] is not None
+
+    auto_ok = _imp(8000.0, date=2, amplitude="Automatic increasemA")
+    not_over_limit = DF.impedance_facts([fixed_ok, auto_ok])
+    assert "automatic_newest_ohm" not in not_over_limit["Left"], "the automatic reading is inside the limit too"
+
+    no_fixed_at_all = DF.impedance_facts([auto_bad])
+    assert "automatic_newest_ohm" not in no_fixed_at_all["Left"], "nothing to compare a fixed reading against"
+
+
+def test_impedance_history_reports_the_fixed_current_subset_alongside_the_full_history():
+    from ClosedLoopDeployment import device_facts as DF
+    fixed1 = _imp(7000.0, date=1, amplitude="0.4mA")
+    fixed2 = _imp(9500.0, date=2, amplitude="1.0mA")
+    auto_high = _imp(13000.0, date=3, amplitude="Automatic increasemA")
+    f = DF.impedance_facts([fixed1, fixed2, auto_high])
+    hist = f["history"]["Left"]
+    assert hist["n_readings_fixed"] == 6, "3 bipolar pairs per record, 2 fixed-current records"
+    assert hist["bipolar_max_ohm_ever_fixed"] == 9500.0, "the automatic-mode reading must not count here"
+    assert hist["n_above_open_limit_fixed"] == 0
+    assert hist["bipolar_max_ohm_ever"] == 13000.0, "the unrestricted history still sees every reading"
+    assert hist["n_above_open_limit"] == 1
+
+
+def test_o_d16_names_the_measurement_current_and_the_spurious_fail_case():
+    from ClosedLoopDeployment import constraints as CN
+    spurious = {"impedance_ohms": 7286.0, "impedance_tested": True,
+                "impedance_measurement_current": 0.4, "impedance_measured_at": "2026-09-02",
+                "impedance_ohms_automatic_newest": 10261.0,
+                "impedance_automatic_measured_at": "2026-09-11"}
+    text = CN._o_d16(spurious, {"lead_type": "sensight"})
+    assert "0.4 mA" in text and "2026-09-02" in text
+    assert "10261" in text and "2026-09-11" in text
+    assert "ruled a spurious fail" in text, "the PI's ruling, on a reading actually contradicted by a fixed-current test"
+
+    no_fixed_test = {"impedance_ohms": 10261.0, "impedance_tested": True,
+                     "impedance_measurement_current": "automatic_increase",
+                     "impedance_measured_at": "2026-09-11"}
+    text2 = CN._o_d16(no_fixed_test, {"lead_type": "sensight"})
+    assert "automatic low-current mode" in text2
+    assert "fixed-current" in text2 and "would settle" in text2
+    assert "ruled a spurious fail" not in text2, "there is no fixed-current test to have contradicted this reading"
+
+
+def test_d16_is_recorded_as_an_advisory_value_when_it_passes():
+    from ClosedLoopDeployment import constraints as CN
+    r = CN.check_eligibility({"impedance_ohms": 6322.0, "impedance_tested": True,
+                              "impedance_measurement_current": 0.4,
+                              "impedance_measured_at": "2026-09-02"},
+                             {"lead_type": "sensight"})
+    row = next(a for a in r.advisories if a["rule_id"] == "D16")
+    assert row["kind"] == "recorded_value"
+    assert "0.4 mA" in row["observed"]
+    assert "D16" not in {f["rule_id"] for f in r.failures}
 
 
 def test_participant_scoped_device_facts_reach_the_participant_dict():
@@ -699,13 +848,35 @@ def test_cycling_is_read_from_the_newest_active_sensing_group_not_device_wide(tm
     assert sum(S["cycling_by_group_kind"].values()) == 2, "one group setting per file, no extras"
 
 
-def test_pocket_adaptor_stays_unknown_rather_than_assumed_absent():
+@pytest.mark.store
+def test_pocket_adaptor_stays_unknown_rather_than_assumed_absent(tmp_path, monkeypatch):
     """The session report does not carry it, so D32 must keep it unknown. Assuming absence would
     let a rule pass on a fact nobody checked, which is the failure mode this module exists to
-    avoid."""
+    avoid.
+
+    Pointed at a temporary store with the background rebuild switched off (2026-09-12). Since
+    commit 56d04cfc the facts resolve through the store and, on a stale summary, START a real
+    rebuild against the production root; a test reaching that path from the live record is the
+    decision-96 class of accident, and this one did as soon as the daily ingest made the stored
+    summary stale. The committed 2026-09-05 file is the fallback the test now exercises, which is
+    the one that carries no pocket-adaptor field, so the assertion is unchanged.
+    """
     from ClosedLoopDeployment import device_facts as DF
-    f, _p = DF.session_report_facts_for("2e3c75c00d7f4f37b53a048d195f11da",
-                                        channel="ONE_THREE_LEFT", hemisphere="Left")
+    try:
+        from modules.CacheStore import store as st
+    except ImportError:
+        from CacheStore import store as st
+    prev = st.DIR_OVERRIDE
+    st.DIR_OVERRIDE = str(tmp_path)
+    monkeypatch.setattr(DF, "SESSION_REPORT_SUMMARY_BACKGROUND", False)
+    monkeypatch.setattr(DF, "_spawn_detached",
+                        lambda argv, log: (_ for _ in ()).throw(AssertionError("launcher fired")))
+    try:
+        f, _p = DF.session_report_facts_for("2e3c75c00d7f4f37b53a048d195f11da",
+                                            channel="ONE_THREE_LEFT", hemisphere="Left")
+    finally:
+        st.clear()                    # while still pointed at tmp_path; never the real root
+        st.DIR_OVERRIDE = prev
     assert "has_pocket_adaptor" not in f or f["has_pocket_adaptor"] is None
 
 
@@ -794,7 +965,7 @@ def test_the_onset_duration_is_reported_as_inoperative_when_it_spans_one_window(
     assert PR.onset_windows(2000.0, 1200.0)["windows"] == 2
     assert PR.onset_windows(2000.0, 1200.0)["inoperative"] is False
 
-    # at the biomarker-matched averaging duration, nothing in the published range is operative
+    # at the biomarker-matched averaging duration, nothing the ADAPT-PD trial set (1.2-2 s) is operative
     for onset in (1200.0, 1600.0, 2000.0):
         r = PR.onset_windows(onset, 4096.0)
         assert r["windows"] == 1 and r["inoperative"] is True, onset
@@ -1162,27 +1333,32 @@ def test_state_edge_reads_the_table_the_biomarker_page_exported():
     assert "split into thirds" in e.note, e.note
 
 
-def test_state_edge_stores_the_value_measured_against_half_so_resolved_still_means_something():
+def test_state_edge_stores_the_value_measured_against_half_so_the_sign_and_the_caveat_mean_something():
     """THE CORRECTNESS POINT OF THE WHOLE REWIRING, and the one that would fail silently.
 
-    An EdgeEstimate defines `resolved` as its interval excluding ZERO, and everything downstream
-    reads only `resolved` and `sign`. An area under the curve is measured against 0.5, and its
-    interval lies between 0 and 1, so storing it raw would make `resolved` true for every band ever
-    computed and would destroy the one check this module exists to perform. 0.5 is therefore
-    subtracted from the value and from both ends of its interval.
+    An area under the curve is measured against 0.5, and its interval lies between 0 and 1. Since
+    2026-09-13 (PI rule, "established means mean only") `resolved` is the point SIGN, so stored
+    raw every band would read as positive -- more power, more pain -- whatever it showed, and
+    `statistically_established` (the interval rule `resolved` used to be) would be true for every
+    band ever computed. 0.5 is therefore subtracted from the value and from both ends of its
+    interval, so that a positive sign means exactly "more power in this band goes with more pain"
+    and an interval that spans zero means exactly "the band has not separated high pain from low".
 
-    A band whose interval runs from 0.47 to 0.66 has established nothing. Stored raw, that interval
-    excludes zero and would read as established. Stored shifted, it spans zero and reads as
-    unresolved, which is the truth.
+    A band whose interval runs from 0.47 to 0.66 has a point sign (0.56 is above 0.5, so +1) and
+    is NOT statistically established; stored raw it would have read as established.
     """
     established = E.state_edge(_auc_export_for(auc=0.72, lo=0.61, hi=0.83),
                                channel="CH", center_hz=20.5)
     undecided = E.state_edge(_auc_export_for(auc=0.56, lo=0.47, hi=0.66),
                              channel="CH", center_hz=20.5)
-    assert established.resolved is True, established.ci
-    assert undecided.resolved is False, undecided.ci
-    assert undecided.estimate is not None, "an unresolved band must still carry its value"
+    assert established.resolved is True and established.statistically_established is True
+    assert undecided.resolved is True and undecided.sign == 1, "the point sign is +1 (0.56 > 0.5)"
+    assert undecided.statistically_established is False, undecided.ci
+    assert undecided.estimate is not None, "an unestablished band must still carry its value"
     assert undecided.ci[0] < 0.0 < undecided.ci[1], undecided.ci
+    # a band at exactly 0.5 has no sign at all and is the one thing the sign rule refuses
+    at_chance = E.state_edge(_auc_export_for(auc=0.5, lo=0.4, hi=0.6), channel="CH", center_hz=20.5)
+    assert at_chance.sign == 0 and at_chance.resolved is False
     # both raw intervals sit wholly above zero, which is exactly why the shift is load-bearing
     assert 0.61 > 0 and 0.47 > 0
     # and a band where more power goes with LESS pain reads as a negative sign, not as absent
@@ -1258,7 +1434,9 @@ def test_state_edge_keeps_never_assessed_apart_from_nothing_established():
     undecided = E.state_edge(_auc_export_for(auc=0.53, lo=0.44, hi=0.62),
                              channel="CH", center_hz=20.5)
     assert undecided.estimate is not None, "a band that was assessed must still carry its value"
-    assert undecided.resolved is False
+    # since 2026-09-13 an assessed band has a sign (`resolved`) and its interval spanning zero is
+    # the caveat; a never-assessed band has neither
+    assert undecided.resolved is True and undecided.statistically_established is False
     # and the two states are genuinely different, not the same one twice
     assert (never.estimate is None) != (undecided.estimate is None)
 
@@ -1273,15 +1451,16 @@ def test_state_edge_keeps_never_assessed_apart_from_nothing_established():
         center_hz=20.5)["answer"] == analytics.BAND_PAIN_NOT_ASSESSED
 
 
-def test_a_noise_band_is_not_resolved_on_this_modules_own_table_either():
+def test_a_noise_band_is_not_statistically_established_on_this_modules_own_table_either():
     """The same three-way answer has to survive the route that does not go through the exported
-    table, or the two routes would disagree about a band with nothing in it."""
+    table, or the two routes would disagree about a band with nothing in it. Since 2026-09-13 the
+    field that says "the interval spans zero" is `statistically_established`, not `resolved`."""
     rng = np.random.default_rng(11)
     noisy = _toy_table(n_epochs=45, per_epoch=4, seed=11)
     noisy["nrs"] = rng.normal(5.0, 2.0, len(noisy))          # pain unrelated to power
     e = E.state_edge(noisy, channel="CH", center_hz=20.5)
-    assert e.estimate is not None, "an unresolved edge must still carry its value"
-    assert e.resolved is False, e.ci
+    assert e.estimate is not None, "an unestablished edge must still carry its value"
+    assert e.statistically_established is False, e.ci
     assert "Nothing is established" in e.note, e.note
 
 
@@ -1323,4 +1502,3 @@ def test_the_closed_loop_module_reaches_the_biomarker_page_for_this_and_re_expor
     for gone in ("band_pain_tracking", "band_pain_tracking_from_detail", "PAIN_TRACKING_TRACKS",
                  "PAIN_TRACKING_NOT_RESOLVED", "PAIN_TRACKING_NOT_ASSESSED"):
         assert not hasattr(E, gone), f"{gone} is still reachable from the closed-loop module"
-

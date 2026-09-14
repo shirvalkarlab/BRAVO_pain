@@ -184,7 +184,13 @@ def test_passing_report_records_the_programming_regime_it_was_written_in():
     """
     report = check(passing_candidate(), resolved_participant())
     recorded = [row for row in report.advisories if row["kind"] == "recorded_value"]
-    assert ids(recorded) == {"D03", "D04", "D31"}
+    # D16 joined this set on 2026-09-12: a passing impedance check is recorded with its reading and
+    # the measurement current it came from, because a pass at a fixed current can sit beside a
+    # spurious fail at the device's automatic low-current mode and a reader must see both.
+    # D19 and D30 joined on 2026-09-12: D19 now passes on a POINT sign (PI decision), so its pass
+    # must show which signs are not established; D30's pass is derived from the device's active
+    # sensing group, so its pass must show which group and rate it was matched against.
+    assert ids(recorded) == {"D03", "D04", "D16", "D19", "D30", "D31"}
     d03 = next(row for row in recorded if row["rule_id"] == "D03")
     assert "parkinsons" in d03["observed"]
 
@@ -448,14 +454,6 @@ def test_every_failure_row_carries_the_page_that_forbids_it():
 # ------------------------------------------------------------------------------------------------
 # The rules the task singles out as the ones that actually bite.
 # ------------------------------------------------------------------------------------------------
-def test_d30_makes_the_frequency_search_and_the_closed_loop_sequential():
-    """Rate and pulse width freeze when BrainSense is set up, so the search must close first."""
-    open_search = check(passing_candidate(frequency_search_closed=False), resolved_participant())
-    assert ids(open_search.failures) == {"D30"}
-    assert open_search.eligible is False
-
-    closed = check(passing_candidate(frequency_search_closed=True), resolved_participant())
-    assert "D30" not in ids(closed.failures)
 
 
 def test_d40_couples_the_hemispheres_in_single_threshold_mode():
@@ -524,6 +522,44 @@ def test_d27_flags_the_right_hemispheres_160_us_pulse_width():
     over_amplitude = check(passing_candidate(capture_amp_high_mA=5.5, adaptive_max_mA=5.5),
                            resolved_participant())
     assert "D27" in ids(over_amplitude.failures)
+
+
+def test_d27_prefers_the_capture_pulse_width_over_the_candidates_general_pulse_width():
+    """D27 asks about the pulse width AT THE CAPTURE, not whatever the candidate carries generally.
+
+    The candidate's general ``pulse_width_us`` can now be filled in from the device's currently
+    programmed setting (``adapter.programmed_settings_from_epochs``), which need not be the pulse
+    width that was running when the Lower LFP Threshold was captured. ``capture_pulse_width_us``
+    must win whenever it is present, and the observer text must say which field it read.
+    """
+    # capture_pulse_width_us (60, compliant) must win over pulse_width_us (160, over the ceiling):
+    # the rule must pass, and its own predicate/observer must have read the capture field.
+    compliant = passing_candidate(capture_pulse_width_us=60.0, pulse_width_us=160.0)
+    assert constraints._p_d27(compliant, resolved_participant()) is True
+    observed = constraints._o_d27(compliant, resolved_participant())
+    assert "capture pulse width" in observed
+    assert "60.0" in observed
+
+    # And the reverse: capture_pulse_width_us (160, over the ceiling) must win over a compliant
+    # general pulse_width_us (60), so the candidate is refused end to end.
+    over_ceiling = passing_candidate(capture_pulse_width_us=160.0, pulse_width_us=60.0)
+    failing = check(over_ceiling, resolved_participant())
+    assert "D27" in ids(failing.failures)
+    observed = next(row for row in failing.failures if row["rule_id"] == "D27")["observed"]
+    assert "capture pulse width" in observed
+    assert "160.0" in observed
+
+
+def test_d27_falls_back_to_the_general_pulse_width_when_no_capture_pulse_width_is_recorded():
+    """A caller with no capture record at all still gets a real verdict from `pulse_width_us`."""
+    no_capture_field = passing_candidate(pulse_width_us=160.0)
+    assert "capture_pulse_width_us" not in no_capture_field
+    report = check(no_capture_field, resolved_participant())
+    assert "D27" in ids(report.failures)
+    observed = next(row for row in report.failures if row["rule_id"] == "D27")["observed"]
+    assert "capture pulse width" not in observed
+    assert "pulse width" in observed
+    assert "160.0" in observed
 
 
 def test_d19_rejects_a_biomarker_whose_power_falls_as_pain_rises():

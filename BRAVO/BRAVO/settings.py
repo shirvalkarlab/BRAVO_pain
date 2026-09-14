@@ -38,6 +38,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # `ModuleNotFoundError: No module named 'ClosedLoopDeployment'`. `git log -L` dates the first such
 # import to `293a1c98`, 2026-09-04.
 #
+# BOTH SPELLINGS ARE ONE OBJECT since 2026-09-12 (decision 143): each analysis package's
+# `__init__` registers a finder (`DecodeCommon.import_alias`) so `modules.X.sub` and `X.sub` are
+# the same module. Before that, a worker that had served both a Biomarkers and a Closed-Loop
+# request held every in-process memo and every module-level switch twice.
+#
 # APPENDED, NOT INSERTED AT THE FRONT. `modules/` holds names like `utility`, `Resources`,
 # `Database.py` and `Event.py` that could shadow a standard-library or site-packages module if this
 # directory won the search. Appending means it is consulted only after everything else, so it can

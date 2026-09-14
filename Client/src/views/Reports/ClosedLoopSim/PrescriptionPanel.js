@@ -38,6 +38,7 @@ import MDButton from "components/MDButton";
 
 import PAL from "./palette";
 import Fold from "./Fold";
+import ProvisionalNote from "./ProvisionalNote";
 import { MODE_LABEL, MODE_ORDER, fmtFieldValue } from "./deployFormat";
 
 /** What the reader is being asked to do with a row, keyed on the payload's `confirm` axis. */
@@ -190,6 +191,17 @@ function FieldRow({ f, index, ticked, onTick, readBackEnabled }) {
                 {`default ${f.device_default}`}
               </MDTypography>
             ) : null}
+            {/* What the device RUNS on this side today, from the newest session report's active
+                sensing group (2026-09-13). Shown whenever the report carries it, so a value that
+                already matches the recommendation reads "programmed today" too and the reader
+                knows nothing needs entering. */}
+            {f.programmed != null ? (
+              <MDTypography variant="caption" sx={{ display: "block", fontSize: 9.5,
+                fontFamily: PAL.mono, fontWeight: 600,
+                color: String(f.programmed) === String(f.value) ? "#3A7D44" : "#8A5A00" }}>
+                {`programmed today ${f.programmed}`}
+              </MDTypography>
+            ) : null}
           </>
         )}
       </MDBox>
@@ -219,7 +231,54 @@ function FieldRow({ f, index, ticked, onTick, readBackEnabled }) {
         {f.range && f.range.length === 2 ? (
           <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5,
             fontFamily: PAL.mono, color: "#6A6A6A" }}>
-            {`published range ${f.range[0]} to ${f.range[1]}`}
+            {`documented range ${f.range[0]} to ${f.range[1]}`}
+          </MDTypography>
+        ) : null}
+        {f.confidence ? (
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10,
+            fontWeight: 600, color: "#6A6A6A" }}>
+            {`confidence ${f.confidence} (measured on this participant's record)`}
+          </MDTypography>
+        ) : null}
+        {/* The confirmations-and-separation design rule (T3, 2026-09-13): a fitted noise-only
+            model's own answer for how far apart the two thresholds need to be at the timing shown
+            on this card, printed beside the thresholds themselves rather than folded into the
+            "Why this value" reveal, since it is a design constraint and not only a justification. */}
+        {f.design_rule_note ? (
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mt: 0.2,
+            color: PAL.warnText }}>
+            {f.design_rule_note}
+          </MDTypography>
+        ) : null}
+        {/* The threshold occupancy check (T4, 2026-09-13): where this participant's own readings
+            actually sit relative to this pair, printed beside the thresholds themselves for the
+            same reason the design-rule note above is -- it is a fact about this configuration on
+            this record, not only a justification behind the "Why this value" reveal. */}
+        {f.occupancy_note ? (
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mt: 0.2,
+            color: PAL.warnText }}>
+            {f.occupancy_note}
+          </MDTypography>
+        ) : null}
+        {/* The start-of-stretch bias check (T6, 2026-09-13): what this participant's own
+            recordings show about the first readings of a stretch, measured two ways because two
+            of the method contest's own entries disagreed (decision 150) -- printed beside the
+            Adaptive startup delay row itself for the same reason the two notes above are. */}
+        {f.startup_bias_note ? (
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mt: 0.2,
+            color: PAL.warnText }}>
+            {f.startup_bias_note}
+          </MDTypography>
+        ) : null}
+        {/* The block-bootstrap robustness check (T5, 2026-09-13): a 2.5th-97.5th percentile
+            interval, over 200 resamples of this participant's own recorded stretches, on the onset
+            duration a design search would pick -- printed on the onset row(s) for the same reason
+            the three notes above are: it is a fact about this configuration on this record, not
+            only a justification behind the "Why this value" reveal. */}
+        {f.robustness_note ? (
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mt: 0.2,
+            color: PAL.warnText }}>
+            {f.robustness_note}
           </MDTypography>
         ) : null}
         {confirm.detail ? (
@@ -574,6 +633,11 @@ export default function PrescriptionPanel({ report, mode, onMode }) {
             ) : null}
 
             <ModeBanner mode={activeMode} fields={fields} notApplicable={notApplicable} />
+
+            {/* The provisional caveat beside the values (PI rule 2026-09-13: point sign decides,
+                but flag as provisional). Printed here, on the table a reader transcribes from,
+                and never inside a fold. Nothing is rendered when every interval excludes zero. */}
+            <ProvisionalNote deploymentReport={data} mt={1} />
 
             {couplings.map((c, i) => (
               <CouplingBanner key={`cpl${i}`} c={c} duty={m.duty} />

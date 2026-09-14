@@ -14,6 +14,21 @@ per-participant summary, which ``device_facts`` then reads. It is deliberately a
 live scan — the reports are 8.5 GB across 1154 files for one participant, so scanning them per
 request is not an option.
 
+WHERE THE SUMMARY COMES FROM, changed 2026-09-12. Until then the only summary was
+``_facts_RCS08.json``, produced once on 2026-09-05 by ``scan_folder`` over a plain-JSON folder on a
+shared drive, committed next to the module, and refreshed by nothing. It went stale on the point
+that matters most: it says the newest active sensing group runs at 110 Hz with adaptive therapy
+NOT_CONFIGURED, and the device's newest report (2026-09-11) says GROUP_D at 55 Hz with adaptive
+RUNNING on both channels. The server holds every ingested session report itself (572 files for
+RCS08, 4,079 MB, encrypted at ``SourceFile.pointer``), so the summary is now built from THOSE by
+``summary_from_ingested``, stored in the one cache store as the raw kind
+``session_report_summary`` keyed on the participant's session-report file set, and rebuilt off the
+request path (``manage.py rebuild_session_report_summary``, started detached by ``device_facts``
+when the stored summary is missing or behind, and daily by the precompute loop). The committed
+file is now the LAST fallback, and every rule's provenance sentence says which of the three was
+used. ``scan_documents`` is the pure scanner both routes share; ``scan_folder`` is kept as a thin
+wrapper so the two are provably the same pass.
+
 The summary records the NEWEST value for each fact plus the distribution across the whole record,
 because for several of these rules the distribution is the finding: D27 is violated by 1571 of 1736
 right-hemisphere capture records, and reporting only the newest would hide that.
@@ -23,6 +38,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import re
 from collections import Counter, defaultdict
 
 #: D27 ceilings (A610 p. 73). Above either of these the stimulation artefact contaminates the
@@ -49,16 +65,114 @@ def _tail(v):
     return str(v).split(".")[-1]
 
 
+#: Bumped when the scanner's output changes shape or meaning. It is part of the stored summary's
+#: key, so a summary built by older scanner code is never served as if this code had built it
+#: (decision 25: the key carries every constant the stored numbers depend on).
+SUMMARY_RULE_VERSION = "v3_session_report_summary_d32_per_hemisphere_and_adaptive_limits"
+
+#: The store kind. Registered as RAW in ``CacheStore.provenance``: it is read straight off the
+#: device export and no module's choice produced it, so it can never close a provenance cycle.
+SUMMARY_KIND = "session_report_summary"
+
+
+_STAMP_TOKEN = re.compile(r"(\d{8}T\d{6})")
+
+
+def report_stamp(name):
+    """The string "newest" is decided on, for one session-report file name.
+
+    The export names carry the session's date as a token, ``Report_Json_Session_Report_
+    20260911T083131.json``, and the scanner orders "newest" by comparing stamps. On the shared-drive
+    folder every basename has the same prefix, so comparing basenames compared those tokens. THE
+    INGESTED RECORD IS NOT LIKE THAT, found on the first live rebuild (2026-09-12): the uploader
+    prefixes the export name with the folder it came from -- ``Rcs08.db - Report_Json_...`` for
+    532 of RCS08's 572 files, ``RCS08 - ...``, ``JI - ...``, ``Report_JI Pacu_...`` for the rest --
+    so comparing names compared prefixes, and "newest" came out as an August 2025 file whose
+    prefix-less name sorted above every ``Rcs08.db - ...`` name from 2026. The stamp is therefore
+    the date token first and the whole name after it as a tie-break; a name with no token is its
+    own stamp, which is what it was before. For a uniformly named folder this is exactly the old
+    order.
+    """
+    name = str(name or "")
+    m = _STAMP_TOKEN.search(name)
+    return f"{m.group(1)} {name}" if m else name
+
+
 def scan_folder(folder, *, limit=None):
     """One pass over every session report under ``folder``. Returns a JSON-able summary.
 
-    Files that fail to parse are counted and skipped rather than aborting the scan: a single
-    truncated export must not cost the other eleven hundred.
+    A THIN WRAPPER over ``scan_documents`` since 2026-09-12: it opens the files and hands each one
+    over as ``(stamp, dict)``, the stamp being ``report_stamp`` of the file's basename (the date
+    token the export name carries, then the basename -- see that function for why not the bare
+    basename). A file that fails to parse is handed over as ``(stamp, None)`` so it is counted
+    rather than aborting the scan: a single truncated export must not cost the other eleven
+    hundred. ``tests/test_session_report_summary_store.py`` proves this wrapper and
+    ``scan_documents`` agree field for field.
     """
     files = sorted(glob.glob(os.path.join(folder, "**", "*.json"), recursive=True))
     if limit:
         files = files[:limit]
 
+    def _docs():
+        for f in files:
+            try:
+                with open(f) as fh:
+                    d = json.load(fh)
+            except Exception:
+                d = None
+            yield report_stamp(os.path.basename(f)), d
+
+    return scan_documents(_docs())
+
+
+def _interleaving_per_hemisphere(progs):
+    """True when any ONE hemisphere carries more than one distinct (rate, pulse width)."""
+    if not progs:
+        return None
+    per_hemi = defaultdict(set)
+    for ch in progs:
+        hemi = _tail(ch.get("HemisphereLocation", "")) or "Unknown"
+        rate, pw = ch.get("RateInHertz"), ch.get("PulseWidthInMicroSecond")
+        if rate is not None or pw is not None:
+            per_hemi[hemi].add((rate, pw))
+    if not per_hemi:
+        return None
+    return any(len(v) > 1 for v in per_hemi.values())
+
+
+def _patient_limits_configured(progs, limits):
+    """True when a limit is present on a sensing channel whose adaptive therapy is NOT running.
+
+    While Adaptive Therapy is RUNNING the channel's limits are the adaptive amplitude limits the
+    controller moves between (D28), which D32 does not exclude; a limit on a channel that is not
+    running adaptive therapy is a patient limit.
+    """
+    if not progs or not limits:
+        return None
+    flagged = False
+    for ch in progs:
+        u, l = ch.get("UpperLimitInMilliAmps"), ch.get("LowerLimitInMilliAmps")
+        if u is None and l is None:
+            continue
+        if _tail(ch.get("AdaptiveTherapyStatus", "")) == "RUNNING":
+            continue
+        flagged = True
+    return flagged
+
+
+def scan_documents(docs):
+    """One pass over decoded session reports. Returns a JSON-able summary.
+
+    ``docs`` is an iterable of ``(stamp, report)`` pairs: ``stamp`` is the string "newest" is
+    decided on (the export file name, which carries the date) and ``report`` is the decoded JSON
+    dict, or ``None`` for a document that could not be read, which is counted in ``n_unreadable``
+    and otherwise skipped. Pure: no file, no database, so the same pass serves the shared-drive
+    folder, the ingested record and the tests.
+
+    The summary records the NEWEST value for each fact plus the distribution across the whole
+    record; see the module docstring for why both are kept.
+    """
+    n_files = 0
     adaptive = Counter()
     artifact = defaultdict(Counter)
     cap_pairs = defaultdict(Counter)
@@ -70,16 +184,15 @@ def scan_folder(folder, *, limit=None):
     sensing_channels = Counter()
     electrodes = Counter()
     unreadable = 0
+    programmed_pairs = defaultdict(Counter)                # hemi -> (rate, pw) -> count (D31)
     newest = {"stamp": "", "adaptive": None, "capture": {}, "d32": {}}
 
-    for f in files:
-        try:
-            with open(f) as fh:
-                d = json.load(fh)
-        except Exception:
+    for stamp, d in docs:
+        n_files += 1
+        if not isinstance(d, dict):
             unreadable += 1
             continue
-        stamp = os.path.basename(f)
+        stamp = str(stamp)
 
         for p, v in _walk(d):
             if p.endswith("AdaptiveTherapyStatus"):
@@ -142,15 +255,21 @@ def scan_folder(folder, *, limit=None):
                         # More than one distinct rate inside the group is what "multiple rates"
                         # means; a single rate at the group level with agreeing channels is one.
                         "multiple_rates_in_group": (len(rates) > 1) if rates else None,
-                        # Interleaving shows up as programs on one hemisphere at different pulse
+                        # Interleaving shows up as programs on ONE hemisphere at different pulse
                         # widths or rates. With one program per hemisphere there is nothing to
-                        # interleave, which is the common case here.
-                        "interleaving_in_group": (len(pws) > 1) if pws else None,
-                        # Patient amplitude limits are configured when an upper or lower limit is
-                        # present on the program rather than absent.
-                        "patient_limits_configured": (
-                            any(u is not None or l is not None for u, l in limits)
-                            if limits else None),
+                        # interleave, which is the common case here. Counted PER HEMISPHERE
+                        # (corrected 2026-09-12): the earlier pool across both sides read RCS08's
+                        # ordinary 100 us Left / 150 us Right as interleaving and failed D32 the
+                        # first time the scanner met current data.
+                        "interleaving_in_group": _interleaving_per_hemisphere(progs),
+                        # Patient amplitude limits. The SensingChannel's Upper/LowerLimitInMilliAmps
+                        # are the ADAPTIVE amplitude limits while Adaptive Therapy is RUNNING (they
+                        # default to the capture amplitudes, D28; on RCS08's GROUP_D they read
+                        # 2.0-3.0 mA, exactly the capture range) and become patient limits only
+                        # when the group is sensing-only (D28; RCS08's GROUP_A reads 0-4 mA).
+                        # Corrected 2026-09-12: reading a present limit as a patient limit
+                        # regardless of status failed D32 on the very group running adaptive DBS.
+                        "patient_limits_configured": _patient_limits_configured(progs, limits),
                         # The pocket adaptor is a hardware accessory and is NOT reported anywhere in
                         # the session report, so it stays None and D32 stays honest about it rather
                         # than assuming its absence.
@@ -165,6 +284,17 @@ def scan_folder(folder, *, limit=None):
                     up = ch.get("UpperCaptureAmplitudeInMilliAmps")
                     pw = ch.get("PulseWidthInMicroSecond")
                     hemi = _tail(ch.get("HemisphereLocation", "")) or "Unknown"
+                    # D31's table: every (rate, pulse width) the device has accepted in a group
+                    # carrying a SensingChannel, per hemisphere. Counted here ONLY -- nothing in
+                    # this task reads it into ``brainsense_pair_programmed``; the next step
+                    # compares these counts against the hardcoded
+                    # ``device_facts.BRAINSENSE_PROGRAMMED_PAIRS`` before anything switches over.
+                    _rate = ch.get("RateInHertz") if ch.get("RateInHertz") is not None else rate
+                    if _rate is not None and pw is not None:
+                        try:
+                            programmed_pairs[hemi][(float(_rate), float(pw))] += 1
+                        except (TypeError, ValueError):
+                            pass
                     if lo or up:
                         cap_pairs[hemi][(lo, up)] += 1
                         if pw:
@@ -194,7 +324,7 @@ def scan_folder(folder, *, limit=None):
         return xs[len(xs) // 2] if xs else None
 
     return {
-        "n_files": len(files), "n_unreadable": unreadable,
+        "n_files": n_files, "n_unreadable": unreadable,
         "adaptive_status_counts": dict(adaptive),
         "adaptive_status_newest": newest["adaptive"],
         "adaptive_has_run": bool(adaptive.get("RUNNING")),
@@ -218,7 +348,27 @@ def scan_folder(folder, *, limit=None):
         "artifact_status": {ch: dict(c) for ch, c in artifact.items()},
         "lfp_bins_median_uvp": {ch: {str(f): med(v) for f, v in sorted(bins.items())}
                                 for ch, bins in lfp_bins.items()},
+        # Same content as ``device_facts.BRAINSENSE_PROGRAMMED_PAIRS``, spelled "rate/pw" so it
+        # survives JSON; ``programmed_pairs_table`` turns it back into that tuple-keyed shape.
+        "brainsense_programmed_pairs": {h: {"%g/%g" % k: v for k, v in sorted(c.items())}
+                                        for h, c in programmed_pairs.items()},
     }
+
+
+def programmed_pairs_table(summary):
+    """``brainsense_programmed_pairs`` in the tuple-keyed shape of
+    ``device_facts.BRAINSENSE_PROGRAMMED_PAIRS``: ``{"Left": {(55.0, 60.0): 1274, ...}}``."""
+    out = {}
+    for hemi, pairs in ((summary or {}).get("brainsense_programmed_pairs") or {}).items():
+        table = {}
+        for k, v in (pairs or {}).items():
+            try:
+                r, pw = str(k).split("/")
+                table[(float(r), float(pw))] = int(v)
+            except (TypeError, ValueError):
+                continue
+        out[hemi] = table
+    return out
 
 
 def candidate_lfp_bins(summary, channel, hemisphere):
@@ -238,3 +388,160 @@ def candidate_lfp_bins(summary, channel, hemisphere):
         if pair.upper().replace("_AND_", "").replace("_", "") == want.replace("LEFT", "").replace("RIGHT", ""):
             return [(float(f), float(v)) for f, v in per_f.items() if v is not None]
     return []
+
+
+# ---------------------------------------------------------------------------------------------
+# THE SAME SCAN OVER THE INGESTED RECORD, STORED UNDER THE FILE SET'S OWN KEY
+# ---------------------------------------------------------------------------------------------
+# The store import is spelled twice on purpose: the container puts /usr/src/BRAVO on the path and
+# makes the package ``modules.CacheStore``; the test suite runs from BRAVO/modules and makes it
+# ``CacheStore``. See ARCHITECTURE_cache_store.md §3.
+try:
+    from modules.CacheStore import store as _cache_store
+except ImportError:                                   # pragma: no cover - depends on the runner
+    from CacheStore import store as _cache_store
+
+
+def is_session_report(source_file):
+    """The rule for which ingested files are session reports: the name contains "Session"."""
+    return "Session" in (getattr(source_file, "name", None) or "")
+
+
+def session_report_files(participant):
+    """This participant's ingested session-report rows, sorted by name. Django inside; the caller
+    passes a Participant row or its uid. One query over ``SourceFile``; no file is opened."""
+    from Server import models as _m
+    p = participant if hasattr(participant, "uid") else _m.Participant.find(uid=participant)
+    if p is None:
+        return []
+    rows = [s for s in _m.SourceFile.find_all(owner=p) if is_session_report(s)]
+    rows.sort(key=lambda s: (str(s.name or ""), str(s.uid)))
+    return rows
+
+
+def file_set_signature(rows):
+    """The store key for a summary of exactly these session-report files.
+
+    A digest over each file's (uid, hashed, name) in a fixed order, with the file count and the
+    scanner's rule version beside it -- never the file NAMES alone, because a re-ingested file
+    keeps its name and changes its hash, and never a date, because a summary must be found by what
+    it was built from (decision 24: the key is built from the database rows, before anything is
+    opened). Pure: takes anything with ``uid``, ``hashed`` and ``name`` attributes, so the tests
+    hand it stub rows. Returns None for an empty set, so nothing is ever stored for a participant
+    with no session reports.
+    """
+    import hashlib
+    items = sorted((str(getattr(r, "uid", "")), str(getattr(r, "hashed", "") or ""),
+                    str(getattr(r, "name", "") or "")) for r in (rows or []))
+    if not items:
+        return None
+    h = hashlib.blake2b(digest_size=16)
+    for uid, hashed, name in items:
+        h.update(f"{uid}\x1f{hashed}\x1f{name}\x1e".encode("utf8"))
+    return (SUMMARY_KIND, SUMMARY_RULE_VERSION, len(items), h.hexdigest())
+
+
+def newest_by_stamp(rows):
+    """The row whose name's stamp is greatest, or None for an empty set."""
+    rows = list(rows or [])
+    if not rows:
+        return None
+    return max(rows, key=lambda r: report_stamp(getattr(r, "name", "") or ""))
+
+
+def _decoded_documents(rows, loader):
+    """``(stamp, dict-or-None)`` for each ingested row, decrypted through ``loader``; a file that
+    cannot be decrypted or parsed becomes ``(stamp, None)`` and is counted, not fatal."""
+    for sf in rows:
+        stamp = report_stamp(getattr(sf, "name", "") or "")
+        try:
+            raw = loader(sf)
+            if isinstance(raw, (bytes, bytearray)):
+                raw = raw.decode("utf-8")
+            d = json.loads(raw)
+        except Exception:                                        # noqa: BLE001
+            d = None
+        yield stamp, d
+
+
+def summary_from_ingested(participant, *, rows=None, loader=None):
+    """The summary built from the participant's INGESTED session reports, the same pass
+    ``scan_folder`` makes over a folder.
+
+    Each row is decrypted with ``DataCurator.loadCacheFile`` (the route the therapy history and
+    the D30 reader already take) and handed to ``scan_documents`` with ``report_stamp`` of
+    ``SourceFile.name`` as the stamp. Over the whole record this takes minutes -- decrypting and parsing the 20 newest,
+    small daily files alone took 1.34 s on RCS08 -- so it must run off the request path: the
+    management command and the detached launcher call it, a page request never does.
+
+    ``rows`` and ``loader`` exist for the tests; production passes neither and the Django imports
+    happen here, inside the function, because this module is imported by tests with no Django.
+    Adds to the scanner's dict: ``newest_stamp`` (the NAME of the newest file, by ``report_stamp``
+    order), ``newest_stamp_key`` (its stamp, what a later file set is compared against),
+    ``built_utc``, ``source_signature`` (the file-set key the summary is stored under),
+    ``participant_uid`` and ``source``.
+    """
+    import datetime as _dt
+    if rows is None:
+        rows = session_report_files(participant)
+    if loader is None:
+        from modules import DataCurator as _DC
+        loader = _DC.loadCacheFile
+    sig = file_set_signature(rows)
+    summary = scan_documents(_decoded_documents(rows, loader))
+    newest = newest_by_stamp(rows)
+    summary["newest_stamp"] = str(newest.name or "") if newest is not None else None
+    summary["newest_stamp_key"] = report_stamp(newest.name) if newest is not None else None
+    summary["built_utc"] = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    summary["source_signature"] = list(sig) if sig else None
+    summary["participant_uid"] = str(getattr(participant, "uid", participant))
+    summary["source"] = "ingested"
+    return summary
+
+
+def rebuild_and_store(participant, *, force=False, rows=None, loader=None):
+    """Build the summary from the ingested record and store it under its file-set key, unless the
+    store already holds that key. Returns a status dict; never raises.
+
+    THE KEY DECIDES WHETHER ANY WORK HAPPENS (decision 26): the file-set signature is one database
+    query, and if the store already has an entry under it the minutes-long scan is not paid. This
+    is what makes the daily pass cheap and the second run of the command ``already_current``.
+    ``force`` rebuilds anyway, for a deliberate refresh. Nothing is stored for a participant with
+    no session reports, and a summary that could not be stored is reported as such rather than
+    silently kept in this process only.
+    """
+    import time as _time
+    uid = str(getattr(participant, "uid", participant))
+    out = {"participant_uid": uid, "stored": False, "already_current": False, "reason": None,
+           "n_files": None, "newest_stamp": None, "store_key": None, "wall_seconds": None}
+    t0 = _time.perf_counter()
+    try:
+        if rows is None:
+            rows = session_report_files(participant)
+        sig = file_set_signature(rows)
+        if sig is None:
+            out["reason"] = "this participant has no ingested session reports, so there is nothing to summarise"
+            return out
+        out["n_files"] = len(rows)
+        out["store_key"] = _cache_store.product_key(SUMMARY_KIND, uid, sig)
+        if not force and _cache_store.load(SUMMARY_KIND, uid, sig) is not None:
+            out["already_current"] = True
+            out["reason"] = "a summary of exactly this session-report file set is already stored"
+            out["newest_stamp"] = str(newest_by_stamp(rows).name or "")
+            return out
+        summary = summary_from_ingested(participant, rows=rows, loader=loader)
+        out["newest_stamp"] = summary.get("newest_stamp")
+        out["n_unreadable"] = summary.get("n_unreadable")
+        wrote = _cache_store.store(SUMMARY_KIND, uid, sig, summary,
+                                   trigger="rebuild_session_report_summary",
+                                   n_recordings=summary.get("n_files"), writer="closed_loop",
+                                   provenance=[])
+        out["stored"] = bool(wrote)
+        if not wrote:
+            out["reason"] = ("the summary was computed and NOT stored (the store refused or has "
+                             "nowhere to write); a page request will keep using the stale copy")
+    except Exception as exc:                                     # noqa: BLE001
+        out["reason"] = f"raised {exc!r}"
+    finally:
+        out["wall_seconds"] = round(_time.perf_counter() - t0, 3)
+    return out

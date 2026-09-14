@@ -10,16 +10,10 @@ import pandas as pd
 import pytest
 
 from StimOptimizer.routines import objective as OBJ
-from StimOptimizer.routines import schedule as SCHED
 from StimOptimizer.routines import lfp_evidence as EV
 
 
 # --- the flat amplitude hard limit (replaces the retracted energy-matched cap) ----------------
-#: Delivered amplitude envelope for the filter fixtures. Defined here rather than inside the
-#: excised energy block it used to share, which is why five tests briefly referenced an undefined
-#: name after the retraction.
-ENV = {"Left": (0.0, 5.0), "Right": (0.0, 5.0)}
-
 def test_the_amplitude_limit_is_flat_and_lives_in_one_place():
     """PI-declared 5.0 mA per hemisphere, established by testing at 165 Hz.
 
@@ -61,29 +55,10 @@ def test_the_composite_objective_no_longer_carries_an_energy_term():
     assert np.allclose(d["J"], d["J_pain"] + d["J_SE"])
 
 
-def test_safety_filter_refuses_an_energy_budget_argument():
-    """A caller still passing one is working from the retracted model and must see that."""
-    c = pd.DataFrame([dict(id="x", rate=55.0, ampL=1.4, ampR=3.0, pwL=60.0, pwR=150.0)])
-    with pytest.raises(TypeError):
-        SCHED.safety_filter(c, delivered_envelope=ENV, energy_budget={"Left": 1.0})
-
-
-def test_the_flat_limit_binds_identically_at_every_rate():
-    """The point of the retraction: 4.5 mA is now equally acceptable at 55 and at 165 Hz, where
-    the energy model would have refused it at the higher rate."""
-    rows = [dict(id=f"r{f:.0f}", rate=f, ampL=4.5, ampR=4.5, pwL=100.0, pwR=150.0)
-            for f in (55.0, 110.0, 165.0)]
-    kept, rej = SCHED.safety_filter(pd.DataFrame(rows), delivered_envelope=ENV)
-    assert len(kept) == 3 and rej.empty
-
-
-def test_above_the_flat_limit_is_refused_at_every_rate():
-    rows = [dict(id=f"r{f:.0f}", rate=f, ampL=5.1, ampR=1.0, pwL=100.0, pwR=150.0)
-            for f in (55.0, 165.0)]
-    kept, rej = SCHED.safety_filter(pd.DataFrame(rows), delivered_envelope={"Left": (0.0, 9.0),
-                                                                            "Right": (0.0, 9.0)})
-    assert kept.empty and len(rej) == 2
-    assert rej.reject_reason.str.contains("hard limit").all()
+# Three tests of `schedule.safety_filter` (the retracted energy budget refused; the flat limit
+# binding identically at every rate; above the limit refused at every rate) stood here until
+# 2026-09-12, when `routines/schedule.py` was deleted as reached by nothing (review S14). The
+# flat limit itself is still pinned above, on the constants the running code reads.
 
 
 # --- LfpEvidence from real-shaped data ---------------------------------------------------------
@@ -109,25 +84,6 @@ def _epochs(t0=1_760_000_000):
         dict(t_start=s + pd.Timedelta(hours=6), t_end=s + pd.Timedelta(hours=8), amp_Left=3.0,
              amp_Right=2.0, rate=55.0, visit=4),
     ])
-
-
-def test_band_power_exponentiates_before_summing():
-    """Summing logs is a PRODUCT of powers, not the linear sum the device thresholds.
-
-    This fixture is built as a PLAIN base-10 log, so it must say so. It originally relied on the
-    default, and when the default became "db10" — the platform's real convention — the test failed
-    on its own stale premise rather than on a code defect. Naming the convention at the call site
-    is exactly the discipline the log_scale parameter exists to force.
-    """
-    log = np.array([[np.log10(2.0), np.log10(8.0)]])
-    f = np.array([10.0, 11.0])
-    got = EV.band_power_linear(log, f, 10.5, 2.0, log_scale="log10")
-    assert got[0] == pytest.approx((2.0 + 8.0) * 1.0)      # 10, not log10(2)+log10(8)=1.204
-    assert got[0] != pytest.approx(np.log10(2.0) + np.log10(8.0))
-
-
-def test_band_outside_the_frequency_axis_returns_none_rather_than_nearest_bins():
-    assert EV.band_power_linear(np.zeros((2, FREQS.size)), FREQS, 200.0, 5.0) is None
 
 
 def test_nanosecond_timestamps_raise_instead_of_silently_emptying_the_join():
@@ -200,131 +156,9 @@ def test_hemisphere_must_be_named_explicitly():
                           rate_hz=165.0)
 
 
-# --- joint prior exposure: the failure that produced a wrong clinic document -------------------
-def _prior():
-    """1.4 mA seen only at 60 us; 100 us seen only at 3.5 mA. Neither pairing is 1.4 @ 100."""
-    return pd.DataFrame([
-        dict(hemi="Left",  amp=1.4, pw=60.0,  rate=55.0),
-        dict(hemi="Left",  amp=3.5, pw=100.0, rate=55.0),
-        dict(hemi="Right", amp=3.0, pw=150.0, rate=55.0),
-    ])
-
-
-def test_marginal_familiarity_does_not_imply_the_pair_was_ever_delivered():
-    """The exact bug: a plan built from individually-familiar numbers, novel as a combination.
-
-    1.4 mA appears at 55 Hz. 100 us appears at 55 Hz. The PAIR 1.4 mA @ 100 us never happened,
-    and an amplitude-only check cannot see that.
-    """
-    c = pd.DataFrame([dict(id="novel_pair", rate=55.0, ampL=1.4, ampR=3.0,
-                           pwL=100.0, pwR=150.0)])
-    kept, rej = SCHED.safety_filter(c, delivered_envelope=ENV, amp_ceiling=4.9,
-                                    prior_triples=_prior())
-    assert kept.empty, "a novel combination must not pass"
-    assert "NEVER been delivered" in rej.iloc[0]["reject_reason"]
-    assert rej.iloc[0]["prior_joint_L"] == 0
-    # and it would have PASSED without the joint check, which is why the check exists
-    kept2, _ = SCHED.safety_filter(c, delivered_envelope=ENV, amp_ceiling=4.9,
-                                   prior_triples=None)
-    assert len(kept2) == 1
-
-
-def test_a_genuinely_delivered_triple_passes_and_reports_its_record_count():
-    c = pd.DataFrame([dict(id="real", rate=55.0, ampL=1.4, ampR=3.0, pwL=60.0, pwR=150.0)])
-    kept, rej = SCHED.safety_filter(c, delivered_envelope=ENV, amp_ceiling=4.9,
-                                    prior_triples=_prior())
-    assert len(kept) == 1 and rej.empty
-    assert kept.iloc[0]["prior_joint_L"] == 1 and kept.iloc[0]["prior_joint_R"] == 1
-
-
-def test_joint_check_is_opt_in_and_validates_its_own_input():
-    c = pd.DataFrame([dict(id="x", rate=55.0, ampL=1.4, ampR=3.0, pwL=60.0, pwR=150.0)])
-    with pytest.raises(KeyError, match="prior_triples missing"):
-        SCHED.safety_filter(c, delivered_envelope=ENV,
-                            prior_triples=_prior().rename(columns={"pw": "pulse_width"}))
-
-
-# --- the dB convention, and the assembled-matrix adapter (2026-09-02) --------------------------
-def test_the_platform_stores_decibels_and_undoing_it_wrongly_is_silent():
-    """streaming_psd.psd_rows_to_matrix stores 10*log10(power). Using 10**logX is wrong by a
-    factor of ten IN THE EXPONENT and still returns finite, plausible numbers — no exception,
-    just band powers inflated by orders of magnitude. Hence the explicit log_scale.
-    """
-    power = np.array([[4.0, 16.0]])
-    db = 10.0 * np.log10(power)                      # what the platform actually stores
-    f = np.array([10.0, 11.0])
-    got = EV.band_power_linear(db, f, 10.5, 2.0, log_scale="db10")
-    assert got[0] == pytest.approx(4.0 + 16.0)
-    wrong = EV.band_power_linear(db, f, 10.5, 2.0, log_scale="log10")
-    assert wrong[0] > 100 * got[0], "the two conventions must differ enough to matter"
-    assert np.isfinite(wrong[0]), "and the wrong one is finite, which is why it is dangerous"
-
-
-def test_db10_is_the_default_because_that_is_what_the_platform_stores():
-    assert EV.DEFAULT_LOG_SCALE == "db10"
-    power = np.array([[4.0, 16.0]])
-    db = 10.0 * np.log10(power)
-    f = np.array([10.0, 11.0])
-    assert EV.band_power_linear(db, f, 10.5, 2.0)[0] == pytest.approx(20.0)
-
-
-def test_unknown_log_scale_raises_rather_than_guessing():
-    with pytest.raises(ValueError, match="log_scale"):
-        EV.band_power_linear(np.zeros((1, 2)), np.array([1.0, 2.0]), 1.5, 2.0, log_scale="ln")
-
-
-def _matrix(n=6):
-    f_set = np.arange(1.0, 41.0, 1.0)
-    return {"logX": np.full((n, f_set.size), -1.0), "t": np.arange(n) * 600.0 + 1_760_000_000,
-            "channel": np.array(["ZERO_TWO_LEFT"] * n, dtype=object),
-            "source": np.array(["td"] * (n - 2) + ["montage"] * 2, dtype=object),
-            "f_set": f_set}
-
-
-def test_frame_from_matrix_attaches_the_shared_frequency_axis_to_every_row():
-    """f_set is ONE axis for all rows, not per-row; the frame builder must not re-derive it."""
-    fr = EV.frame_from_matrix(_matrix())
-    assert list(fr.columns) == ["t", "channel", "source", "log_psd", "freqs"]
-    assert len(fr) == 6
-    assert all(len(x) == 40 for x in fr.freqs)
-    assert np.array_equal(fr.freqs.iloc[0], fr.freqs.iloc[-1])
-
-
-def test_frame_from_matrix_can_restrict_sources_but_keeps_all_by_default():
-    assert len(EV.frame_from_matrix(_matrix())) == 6
-    assert len(EV.frame_from_matrix(_matrix(), sources=["td"])) == 4
-
-
-def test_frame_from_matrix_refuses_a_shape_mismatch():
-    m = _matrix(); m["f_set"] = np.arange(1.0, 10.0)
-    with pytest.raises(ValueError, match="frequency columns"):
-        EV.frame_from_matrix(m)
-    with pytest.raises(KeyError, match="missing"):
-        EV.frame_from_matrix({"logX": np.zeros((2, 2))})
-
-
-def test_matrix_to_evidence_round_trip_uses_the_db_convention():
-    """End to end: assembled matrix -> frame -> evidence, with band power on the linear scale."""
-    m = _matrix(n=40)
-    m["t"] = np.arange(40) * 600.0 + 1_760_000_000
-    fr = EV.frame_from_matrix(m)
-    ev, aud = EV.build_evidence(fr, _epochs(), channel="ZERO_TWO_LEFT", hemisphere="Left",
-                                rate_hz=165.0, bands=[(20.0, 5.0)])
-    assert ev is not None and aud.n_final > 0
-    bp = ev.power_for(20.0, 5.0)
-    # THE DECIBEL CONVENTION, which is what this test is named for. The fixture's spectrum is a flat
-    # -1 dB, so undoing the logarithm the db10 way gives a linear power density of 10**(-0.1) in
-    # every bin, and five one-hertz bins across the band sum to 5 * 10**(-0.1). Reading the stored
-    # value as a plain base-ten logarithm instead would give 5 * 10**(-1) -- a tenfold error that
-    # this comparison catches and that would not raise anywhere else.
-    #
-    # NOTE, 2026-09-06: for part of one night this expectation carried a unit-conversion factor as
-    # well, because I had added one here. It was removed after HANDOFF_TD_LSB_calibration_2026-06-27
-    # showed that a new constant for this recipe contradicts a written architecture decision and
-    # that my measurement of it was not sound. This value is therefore the INTEGRATED POWER DENSITY
-    # and is deliberately NOT on the device's own number scale; see the block at the top of
-    # lfp_evidence.py for what that means for anything downstream.
-    assert bp[0] == pytest.approx(5 * 10 ** (-0.1), rel=1e-6)
+# The joint-prior-exposure tests of `schedule.safety_filter` (a novel amplitude/pulse-width pair
+# refused even when each number was familiar on its own) went with `routines/schedule.py` on
+# 2026-09-12 (review S14).
 
 
 # --- production column names (2026-09-02) ------------------------------------------------------
@@ -571,8 +405,12 @@ def test_averaging_recommendation_tracks_the_biomarker_not_the_device_default():
     assert tp["device_default_averaging_ms"] == 1200.0
     assert tp["averaging_matches_biomarker"] is False
     assert any("factor of" in n for n in tp["notes"])
-    # the unpublished-range caveat must travel with the recommendation, not be assumed away
-    assert "averaging duration" in tp["ranges_unpublished"]
+    # the averaging range IS documented (0-30 s, tip card; 2026-09-13) and 4096 ms is inside it;
+    # the two parameters still without any documented range travel with the plan by name
+    assert "averaging duration" not in tp["ranges_unpublished"]
+    assert tp["averaging_range_ms"] == [0.0, 30_000.0]
+    assert tp["averaging_in_documented_range"] is True
+    assert set(tp["ranges_unpublished"]) == {"adaptive startup delay", "detection blanking duration"}
 
 
 def test_blanking_covers_the_ramp_plus_the_estimator_turnover():
@@ -605,11 +443,16 @@ def test_ramp_is_clamped_into_the_manufacturers_titration_range():
     assert any("clamped" in n for n in tp["notes"])
 
 
-def test_onset_duration_stays_inside_the_published_dual_mode_range():
+def test_onset_duration_stays_inside_the_documented_dual_mode_range():
     from StimOptimizer.routines import percept_adaptive as PA
     tp = PA.timing_plan()
     lo, hi = PA.ONSET_RANGE_DUAL_MS
+    assert (lo, hi) == (0.0, 6.0 * 60_000.0)             # FDA SSED P960009/S478 Table 2
     assert lo <= tp["onset_duration_ms"] <= hi
+    assert tp["onset_range_ms"] == [lo, hi]
+    assert tp["transition_range_ms"] == [250.0, 30.0 * 60_000.0]
+    single = PA.timing_plan(mode=PA.SINGLE)
+    assert single["onset_range_ms"] == [0.0, 30_000.0]
 
 
 def test_latency_estimator_recovers_a_known_time_constant_and_refuses_an_inert_band():
@@ -738,32 +581,3 @@ def test_recent_eras_are_ordered_by_TIME_not_by_label():
                                hemisphere="Left", rate_hz=55.0, era_col="visit", recent_eras=2)
     assert set(aud.recent_eras_kept) == {"bravo", "alpha"}, aud.recent_eras_kept
     assert "each era's latest timestamp" in (aud.era_order_source or "")
-
-
-def test_an_era_with_one_amplitude_contributes_nothing_to_the_within_era_slope():
-    """Why restricting the window left the measured slope unchanged to four decimals.
-
-    An era carrying a SINGLE amplitude level is absorbed entirely by its own dummy in a model with
-    `C(era)`, so it supplies no within-era amplitude contrast and cannot move the slope. Dropping
-    such eras therefore changes n and the cluster count while leaving the estimate identical --
-    which is exactly what happened on RCS08 (-0.1222 log per mA at 8, 5 and 4 eras while n fell
-    from 361 to 328). Pinned because a future reader seeing an unchanged slope would reasonably
-    suspect the restriction was not being applied at all.
-    """
-    import statsmodels.formula.api as smf
-    rng = np.random.default_rng(3)
-    # two eras with real within-era amplitude variation, plus two single-amplitude eras
-    rows = []
-    for era, amps in (("A", [1.0, 2.0, 3.0]), ("B", [2.0, 3.0, 4.0]),
-                      ("C", [5.0]), ("D", [6.0])):
-        for a in amps:
-            for _ in range(6):
-                rows.append(dict(era=era, amp=a,
-                                 logp=-0.2 * a + rng.normal(0, 0.05) + {"A": 0, "B": 1,
-                                                                        "C": 3, "D": 4}[era]))
-    df = pd.DataFrame(rows)
-    full = float(smf.ols("logp ~ amp + C(era)", data=df).fit().params["amp"])
-    trimmed = float(smf.ols("logp ~ amp + C(era)",
-                            data=df[df.era.isin(["A", "B"])]).fit().params["amp"])
-    assert len(df[df.era.isin(["A", "B"])]) < len(df)          # rows really were dropped
-    assert abs(full - trimmed) < 1e-9, (full, trimmed)

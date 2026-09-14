@@ -24,22 +24,26 @@ def _cand():
 
 # --- the two provenance axes --------------------------------------------------------------------
 def test_origin_and_confirm_are_independent_axes_not_a_relabelled_status():
-    """The averaging duration is the case that PROVES the axes must be separate, and it is the
+    """The adaptive startup delay is the case that PROVES the axes must be separate, and it is the
     reason a single `status` enum was not enough.
 
-    That field is `derived` — this module computed it from the biomarker's own integration window —
-    AND its adjustable range is unpublished, so nobody can promise the A610 will accept the value.
-    Rendering it as merely "derived" would tell a clinician the number is trustworthy while
+    That field is `derived` — this module computed it from the ramp and the averaging window — AND
+    its adjustable range is documented nowhere, so nobody can promise the A610 will accept the
+    value. Rendering it as merely "derived" would tell a clinician the number is trustworthy while
     withholding that the device may silently clamp it. So origin must say `participant` while
-    confirm says `check_on_device`, and no single-axis encoding can express that.
+    confirm says `check_on_device`, and no single-axis encoding can express that. (Until 2026-09-13
+    the averaging duration was this test's case; its range is now documented, 0-30 s on the tip
+    card, so it is enterable, and the startup delay is the field still without a range.)
     """
     pr = PR.prescribe(mode=PA.DUAL, threshold_plan=_plan(), candidate=_cand(),
                       timing=PA.timing_plan(mode=PA.DUAL))
     rows = {r["parameter"]: r for r in pr.as_rows()}
 
+    sd = rows["Adaptive startup delay"]
+    assert sd["origin"] == "participant", "the module computed this from the ramp and the window"
+    assert sd["confirm"] == "check_on_device", "its adjustable range is documented nowhere"
     avg = rows["Averaging duration"]
-    assert avg["origin"] == "participant", "the module computed this from the integration window"
-    assert avg["confirm"] == "check_on_device", "its adjustable range is unpublished (WP p. 14)"
+    assert avg["origin"] == "participant" and avg["confirm"] == "enterable", "0-30 s, tip card p. 8"
 
     # and the two axes are genuinely non-redundant across the table: at least one field pairs a
     # participant origin with a non-enterable confirm, which a single enum could not encode.
@@ -98,12 +102,19 @@ def test_the_gloss_helper_boundary_and_non_numeric_inputs():
 # --- couplings ----------------------------------------------------------------------------------
 def test_the_inoperative_onset_is_reported_as_a_field_PAIR_not_as_a_row_property():
     """The most consequential fact about this configuration is not a property of any single field:
-    at the derived averaging duration the onset duration does nothing. A sixteen-row table renders
-    each field as though its value could be judged alone, so this has to travel as a coupling
-    between two named fields with both their values.
+    when the onset equals the averaging duration the onset does nothing. A sixteen-row table
+    renders each field as though its value could be judged alone, so this has to travel as a
+    coupling between two named fields with both their values.
+
+    Since 2026-09-13 the fallback pair (two windows of the biomarker's own averaging) does not
+    conflict, and neither does RCS08's record-derived pair (decision 150: 3 s averaging under a
+    30 s onset); the pair the device RUNS today (30 s onset on 30 s averaging) does, so that is
+    the configuration this test builds, as a record-derived dict.
     """
+    thirty = {k: {"value_ms": 30000.0, "why": "as programmed", "confidence": "Low", "provenance": "t"}
+              for k in ("onset_upper_ms", "onset_lower_ms", "averaging_ms")}
     pr = PR.prescribe(mode=PA.DUAL, threshold_plan=_plan(), candidate=_cand(),
-                      timing=PA.timing_plan(mode=PA.DUAL))
+                      timing=PA.timing_plan(mode=PA.DUAL), record_timing=thirty)
     assert len(pr.couplings) == 1, "expected exactly the onset/averaging coupling"
     c = pr.couplings[0]
     assert len(c["fields"]) == 2 and len(c["values"]) == 2, "a coupling names BOTH fields"
@@ -123,61 +134,54 @@ def test_the_inoperative_onset_is_reported_as_a_field_PAIR_not_as_a_row_property
     assert "clinical trade" in c["resolution"] or "different feature" in c["resolution"]
 
 
-@pytest.mark.parametrize("integration_s, expect_windows, expect_coupling", [
-    # Measured from the shipping timing plan, so this table also documents WHERE the onset stops
-    # working. The onset is operative while the averaging duration is short relative to it, and
-    # becomes inoperative at an integration window of about two seconds — which is the regime the
-    # validated biomarker actually needs, at 4.096 s.
-    (0.25, 5, False),
-    (0.5, 3, False),
-    (1.0, 2, False),
-    (2.0, 1, True),
-    (4.096, 1, True),
-])
-def test_the_coupling_is_measured_from_the_chosen_pair_not_a_constant_warning(
-        integration_s, expect_windows, expect_coupling):
+@pytest.mark.parametrize("integration_s", [0.25, 0.5, 1.0, 2.0, 4.096])
+def test_the_coupling_is_measured_from_the_chosen_pair_not_a_constant_warning(integration_s):
     """The coupling must appear only when the two chosen values actually conflict, or the banner
     becomes a permanent decoration that a reader learns to ignore.
 
-    Written as a ladder rather than as one case with a conditional assertion, because a test whose
-    assertion depends on a branch can pass without ever reaching the interesting comparison. This
-    version fails if the timing plan changes such that the onset never works, or always does.
-
-    Note that Medtronic's own defaults pair a 1200 ms onset with 1200 ms averaging, which is itself
-    exactly one window, so the averaging duration has to be made short relative to the onset before
-    the coupling disappears at all.
+    Rewritten 2026-09-13. The ladder used to expect 5, 3, 2, 1, 1 windows, the arithmetic of the
+    ADAPT-PD trial's 1.2 s floor against each window; with the documented range (0-6 min) the
+    fallback onset is two averaging windows at EVERY window, so the coupling is absent at every
+    rung -- and it is present for the pair the device runs today (30 s onset on 30 s averaging).
+    The test fails if the fallback ever becomes inoperative, or if that pair stops raising the
+    banner.
     """
     pr = PR.prescribe(mode=PA.DUAL, threshold_plan=_plan(), candidate=_cand(),
                       timing=PA.timing_plan(mode=PA.DUAL, biomarker_integration_s=integration_s))
     rows = {r["parameter"]: r["value"] for r in pr.as_rows()}
     onset = float(rows["Upper onset duration"])
     avg = float(rows["Averaging duration"])
+    assert math.ceil(onset / avg) == 2, f"onset {onset:.0f} ms against averaging {avg:.0f} ms"
+    assert PR.onset_windows(onset, avg)["inoperative"] is False
+    assert not pr.couplings, "the banner must track the measured conflict, not appear unconditionally"
 
-    assert math.ceil(onset / avg) == expect_windows, (
-        f"onset {onset:.0f} ms against averaging {avg:.0f} ms")
-    assert PR.onset_windows(onset, avg)["inoperative"] is expect_coupling
-    assert bool(pr.couplings) is expect_coupling, (
-        "the banner must track the measured conflict, not appear unconditionally")
+    thirty = {k: {"value_ms": 30000.0, "why": "as programmed", "confidence": "Low", "provenance": "t"}
+              for k in ("onset_upper_ms", "onset_lower_ms", "averaging_ms")}
+    rec = PR.prescribe(mode=PA.DUAL, threshold_plan=_plan(), candidate=_cand(),
+                       timing=PA.timing_plan(mode=PA.DUAL, biomarker_integration_s=integration_s),
+                       record_timing=thirty)
+    rrows = {r["parameter"]: r["value"] for r in rec.as_rows()}
+    assert math.ceil(float(rrows["Upper onset duration"]) / float(rrows["Averaging duration"])) == 1
+    assert rec.couplings and rec.couplings[0]["severity"] == "consequential"
 
 
-def test_the_onset_cannot_be_rescued_within_the_published_range_at_the_validated_window():
-    """The finding that makes the coupling a clinical trade rather than a setting to fix.
-
-    At the averaging duration the validated biomarker requires, NO onset value a clinician can
-    enter makes the onset operative, because the published dual-mode range has a ceiling. If a
-    future device document widens that range this test should fail and be revisited, which is the
-    point of pinning it.
+def test_the_onset_can_be_rescued_inside_the_documented_range_at_the_validated_window():
+    """Rewritten 2026-09-13. Its predecessor pinned that NO onset a clinician could enter made the
+    onset operative at the validated 4096 ms averaging, because it took the ADAPT-PD trial's 2 s
+    setting as the device's ceiling and said "if a future device document widens that range this
+    test should fail and be revisited". The FDA approval summary (P960009/S478, Table 2) documents
+    0-6 min in Dual mode, so it did widen, and the finding inverts: the trial's values are still
+    one window, and an onset of twice the averaging duration, well inside the range, is two.
     """
     avg_ms = 4096.0
     lo, hi = PA.ONSET_RANGE_DUAL_MS
-    for onset in (lo, (lo + hi) / 2.0, hi):
-        assert PR.onset_windows(onset, avg_ms)["windows"] == 1, (
-            f"onset {onset} ms unexpectedly spans more than one {avg_ms} ms window")
+    assert (lo, hi) == (0.0, 360_000.0)
+    for onset in PA.ADAPT_PD_ONSET_RANGE_MS[PA.DUAL]:
+        assert lo <= onset <= hi                     # the trial's settings sit inside the range
         assert PR.onset_windows(onset, avg_ms)["inoperative"] is True
-
-    # it is the CEILING that binds, not the arithmetic: an onset above the published range would
-    # work, which is why this is a range limitation rather than a property of the control law
-    assert PR.onset_windows(hi * 3.0, avg_ms)["inoperative"] is False
+    assert PR.onset_windows(2.0 * avg_ms, avg_ms)["windows"] == 2
+    assert PR.onset_windows(2.0 * avg_ms, avg_ms)["inoperative"] is False
+    assert lo <= 2.0 * avg_ms <= hi
 
 
 # --- every mode, and the field sets genuinely differing -----------------------------------------

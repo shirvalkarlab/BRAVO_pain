@@ -1,11 +1,20 @@
 /**
- * CL-DBS simulations (Phase 8 of the 2026-09-11 redesign). The device's Dual Threshold controller
- * run over this participant's own recorded band power three ways, drawn rather than described:
+ * CL-DBS simulations (Phase 8 of the 2026-09-11 redesign; T2, 2026-09-13, replays TWO timing
+ * regimes rather than one). The device's Dual Threshold controller run over this participant's own
+ * recorded band power, three response models, drawn rather than described:
  *
  *   M0  replayed over the power as recorded (the card this one replaces showed exactly this);
  *   M1  the loop closed through the fitted straight-line response of power to amplitude
  *       (M2, the peaked response, takes its place once a bend is established);
  *   M3  M1 rerun with the response refitted on runs resampled with replacement -- the interval.
+ *
+ * TWO TIMING REGIMES, labelled and never silently swapped (contest_2026-09-13_SYNTHESIS.md
+ * section 4, T2): "As programmed today" replays the averaging, onset, blanking and ramp durations
+ * the device's own newest session report shows programmed on this candidate's hemisphere; "Record-
+ * derived recommendation" replays the participant's own measured recommendation (decision 150). A
+ * small toggle picks which one the three figures below draw; a summary line always shows both
+ * regimes' switch rate and how many of those switches were undone within one onset, so a reader
+ * never has to trust one number over the other from memory.
  *
  * FIGURES, in the order the question is asked (the panel that answers it is the largest):
  *   A  the longest continuous stretch: the amplitude each model commands, with the recorded
@@ -20,7 +29,7 @@
  * unmount only, with a constant uirevision; every figure is drawn from the stored payload and no
  * number is recomputed here. The card is dashed because everything in it is modelled.
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Plotly from "plotly.js-dist";
 import { Card } from "@mui/material";
 import MDBox from "components/MDBox";
@@ -260,16 +269,60 @@ function Line({ children }) {
   );
 }
 
+const RUN_KEYS = ["programmed", "recommended"];
+const RUN_TAB_LABEL = { programmed: "As programmed today", recommended: "Record-derived recommendation" };
+
+/** The switch rate and how many of those switches were undone within one onset, for the base
+ * replay (M0 -- the recorded power, no response curve), under one timing regime. This is the
+ * quantity the contest's own held-out proof reports (contest_2026-09-13_SYNTHESIS.md section 2),
+ * so it is shown for BOTH regimes side by side regardless of which one the figures below draw. */
+function RunSummaryRow({ label, run, active, onClick }) {
+  const m0 = run && !run.refused && run.models ? run.models.M0 : null;
+  const params = run && run.timing_params_ms;
+  return (
+    <MDBox onClick={onClick} sx={{
+      flex: "1 1 260px", minWidth: 240, p: 1, borderRadius: "6px", cursor: onClick ? "pointer" : "default",
+      border: `1.5px solid ${active ? INK_ACTIVE : "rgba(0,0,0,0.16)"}`,
+      backgroundColor: active ? "rgba(0,114,178,0.06)" : "transparent",
+    }}>
+      <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, fontWeight: 700, color: active ? INK_ACTIVE : "#333" }}>
+        {label}{active ? " (shown below)" : ""}
+      </MDTypography>
+      {run && run.refused ? (
+        <Caption>{run.absent_reason || "could not be replayed at this timing"}</Caption>
+      ) : m0 ? (
+        <>
+          <Line>{`${fmtNum(m0.transitions_per_hour, 1)} switches/h · ${m0.n_transitions_undone} undone within one onset (${fmtNum(m0.undone_per_hour, 1)}/h)`}</Line>
+          <Line>{`at upper limit ${fmtPct(m0.frac_time_at_upper, 1)} · at lower ${fmtPct(m0.frac_time_at_lower, 1)} · mean ${fmtNum(m0.mean_amplitude_mA, 2)} mA`}</Line>
+        </>
+      ) : (
+        <Caption>no run stored for this timing</Caption>
+      )}
+      {params ? (
+        <Line>{`averaging ${fmtNum(params.averaging_ms, 0)} ms · onset ${fmtNum(params.onset_ms, 0)} ms · blanking ${fmtNum(params.detection_blanking_ms, 0)} ms · transitions ${fmtNum(params.transition_up_ms, 0)}/${fmtNum(params.transition_down_ms, 0)} ms`}</Line>
+      ) : null}
+    </MDBox>
+  );
+}
+
 export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabel, bandCandidate }) {
   const { data, loading, err } = sim || { data: null, loading: false, err: null };
+  const runs = (data && data.timing_runs) || {};
+  const hasAnyRun = RUN_KEYS.some((k) => runs[k] && !runs[k].refused && runs[k].models && runs[k].models.M0);
+  const [selected, setSelected] = useState("recommended");
+  // if the preferred regime could not be replayed but the other one could, show the one that can
+  const effective = (runs[selected] && !runs[selected].refused && runs[selected].models && runs[selected].models.M0)
+    ? selected : RUN_KEYS.find((k) => runs[k] && !runs[k].refused && runs[k].models && runs[k].models.M0) || selected;
+  const run = runs[effective];
+
   const trajRef = useRef(null); const cmpRef = useRef(null); const distRef = useRef(null);
 
   useEffect(() => {
-    if (!data || data.refused || !data.models || !data.models.M0) return;
-    if (trajRef.current) drawTrajectory(trajRef.current, data, hemisphere);
-    if (cmpRef.current) drawComparison(cmpRef.current, data);
-    if (distRef.current) drawDistributionAndCurve(distRef.current, data);
-  }, [data, hemisphere]);
+    if (!run || run.refused || !run.models || !run.models.M0) return;
+    if (trajRef.current) drawTrajectory(trajRef.current, run, hemisphere);
+    if (cmpRef.current) drawComparison(cmpRef.current, run);
+    if (distRef.current) drawDistributionAndCurve(distRef.current, run);
+  }, [run, hemisphere]);
   // purge on unmount only: cleanup on every redraw would destroy the figures the reader is looking at
   useEffect(() => () => {
     [trajRef, cmpRef, distRef].forEach((r) => { if (r.current) Plotly.purge(r.current); });
@@ -285,27 +338,35 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
       <Caption>Fetching the stored simulation…</Caption>
     </MDBox></Card>);
   }
-  if (!data || data.refused || !data.models || !data.models.M0) {
+
+  const runSelector = (
+    <MDBox mt={1} mb={0.6} display="flex" flexWrap="wrap" gap={1}>
+      {RUN_KEYS.map((k) => (
+        <RunSummaryRow key={k} label={RUN_TAB_LABEL[k]} run={runs[k]} active={k === effective}
+          onClick={hasAnyRun ? () => setSelected(k) : null} />
+      ))}
+    </MDBox>
+  );
+
+  if (!data || !hasAnyRun) {
     return (<Card sx={{ border: "2px dashed rgba(0,0,0,0.28)" }}><MDBox p={2}>
       <MDTypography variant="h6" sx={{ fontSize: 15 }}>{title}</MDTypography>
       <MDTypography variant="button" sx={{ display: "block", fontSize: 12.5, mt: 0.4 }}>
-        {data ? headline(data) : "No simulation is stored for this configuration yet"}
+        No simulation is stored for this configuration yet
       </MDTypography>
       <Caption>{(data && data.absent_reason) || err || "The report writes one the next time it runs with thresholds placed for a candidate."}</Caption>
-      {data && isNum(data.median_interval_s) ? (
-        <Line>{`samples every ${fmtNum(data.median_interval_s, 0)} s · ramp resolvable: ${String(data.ramp_resolvable)}`}</Line>
-      ) : null}
+      {data && data.timing_runs && Object.keys(data.timing_runs).length ? runSelector : null}
     </MDBox></Card>);
   }
 
-  const act = data.active_model;
-  const d0 = data.drawn && data.drawn[0];
-  const rec = data.record || {};
+  const act = run.active_model;
+  const d0 = run.drawn && run.drawn[0];
+  const rec = run.record || {};
   const inp = data.inputs || {};
-  const st = data.settling || {};
-  const rs = data.resampling || {};
-  const P = data.params || {};
-  const diff = data.closed_loop_difference || {};
+  const st = run.settling || {};
+  const rs = run.resampling || {};
+  const P = run.params || {};
+  const diff = run.closed_loop_difference || {};
   const stretchDate = d0 && isNum(d0.start_epoch_s) ? new Date(d0.start_epoch_s * 1000).toLocaleString() : null;
 
   return (
@@ -315,13 +376,16 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
           <MDTypography variant="h6" sx={{ fontSize: 15, lineHeight: 1.3 }}>{title}</MDTypography>
           {label ? <MDTypography variant="caption" sx={{ fontSize: 11, color: "#6A6A6A" }}>{label}</MDTypography> : null}
         </MDBox>
+        <Caption>Two timing regimes, replayed separately and never silently swapped for each other; click a box to draw its figures below.</Caption>
+        {runSelector}
         <MDTypography variant="button" sx={{ display: "block", fontSize: 12.5, fontWeight: 600, mt: 0.3, lineHeight: 1.35 }}>
-          {headline(data)}
+          {headline(run)}
         </MDTypography>
-        {data.wrong_side && data.wrong_side.warning ? (
+        <Caption>{run.timing_source}</Caption>
+        {run.wrong_side && run.wrong_side.warning ? (
           <MDBox mt={0.6} p={0.8} sx={{ backgroundColor: PAL.warnFill, borderRadius: "4px", border: `1px solid ${PAL.warnBorder}` }}>
             <MDTypography variant="caption" sx={{ display: "block", fontSize: 11, color: PAL.warnText }}>
-              {data.wrong_side.warning}
+              {run.wrong_side.warning}
             </MDTypography>
           </MDBox>
         ) : null}
@@ -344,7 +408,7 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
           <Caption>
             {`B · each quantity for the replay (open) and the closed loop (filled), over ${fmtNum(rec.hours_of_signal, 1)} h of streaming in `
               + `${rec.n_segments_used} stretches; `
-              + (data.models.M3 ? `the bar is the 2.5–97.5 % range across ${rs.n_fitted || 0} refits on resampled runs. `
+              + (run.models.M3 ? `the bar is the 2.5–97.5 % range across ${rs.n_fitted || 0} refits on resampled runs. `
                 : `no interval is drawn${rs.reason ? ` (${rs.reason})` : ""}. `)
               + `Closing the loop changes time at the upper limit by ${isNum(diff.frac_time_at_upper) ? `${(100 * diff.frac_time_at_upper).toFixed(1)} points` : "—"} `
               + `and state changes by ${isNum(diff.transitions_per_hour) ? `${diff.transitions_per_hour.toFixed(0)} per hour` : "—"}.`}
@@ -357,20 +421,21 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
           <Caption>
             {`C · left, the share of controller steps at each commanded amplitude between the limits ${fmtNum(P.amp_low_mA, 1)}–${fmtNum(P.amp_high_mA, 1)} mA; `
               + `right, the fitted change in band power against amplitude the loop is closed through`
-              + (data.models.M3 && data.models.M3.slope_interval_per_mA ? ", with the resampled slope range shaded" : "")
-              + (data.curves && data.curves.M2 ? "; the dotted line is the fitted peak." : ".")}
+              + (run.models.M3 && run.models.M3.slope_interval_per_mA ? ", with the resampled slope range shaded" : "")
+              + (run.curves && run.curves.M2 ? "; the dotted line is the fitted peak." : ".")}
           </Caption>
         </MDBox>
 
         <Fold show="How this was modelled" hide="Hide the method" mt={1} dense>
-          <Line>{`response curve: ${act} ${data.curves && data.curves[act] ? data.curves[act].source : ""} · slope ${fmtNum(data.curves && data.curves[act] && data.curves[act].slope_per_mA, 3)} ± ${fmtNum(data.curves && data.curves[act] && data.curves[act].slope_stderr, 3)} units/mA · fitted on ${data.n_points_in_curve} points, ${data.n_runs_in_curve} runs`}</Line>
-          <Line>{`M2 (peaked): ${data.curves && data.curves.M2 ? "active" : (data.m2_absent_reason || "absent")}`}</Line>
+          <Line>{`timing regime drawn above: ${RUN_TAB_LABEL[effective]} · ${run.timing_source || ""}`}</Line>
+          <Line>{`response curve: ${act} ${run.curves && run.curves[act] ? run.curves[act].source : ""} · slope ${fmtNum(run.curves && run.curves[act] && run.curves[act].slope_per_mA, 3)} ± ${fmtNum(run.curves && run.curves[act] && run.curves[act].slope_stderr, 3)} units/mA · fitted on ${run.n_points_in_curve} points, ${run.n_runs_in_curve} runs`}</Line>
+          <Line>{`M2 (peaked): ${run.curves && run.curves.M2 ? "active" : (run.m2_absent_reason || "absent")}`}</Line>
           <Line>{`settling time τ = ${fmtNum(st.tau_s, 1)} s · ${st.source || ""}`}</Line>
           <Line>{`series: ${inp.n_pieces} three-second pieces on ${inp.contact} at ${fmtNum(inp.centre_used_hz, 1)} Hz · ${inp.n_unusable_pieces} unusable (held as missing) · ${inp.n_dropped_no_amplitude} dropped for no known amplitude · amplitude from the device's own record for ${inp.n_from_device_current}, from the settings history for ${inp.n_from_epochs}`}</Line>
           <Line>{`record: ${rec.n_segments} stretches, ${rec.n_segments_used} run, ${rec.n_segments_skipped} shorter than 3 steps · ${rec.n_cells_without_a_piece} device-clock cells without a piece (held), ${rec.n_cells_merging_pieces} merging two · ${fmtNum(rec.hours_of_signal, 2)} h of signal across ${fmtNum((rec.span_s || 0) / 86400, 0)} days (coverage ${fmtPct(rec.coverage_frac, 3)})`}</Line>
           <Line>{`controller: thresholds ${fmtNum(P.lower, 1)} / ${fmtNum(P.upper, 1)} device units · limits ${fmtNum(P.amp_low_mA, 2)}–${fmtNum(P.amp_high_mA, 2)} mA (the capture range, held) · ramp ${fmtNum(P.ramp_up_mA_per_s, 4)} mA/s up, ${fmtNum(P.ramp_down_mA_per_s, 4)} down · step ${fmtNum(P.dt_controller_s, 1)} s · onset ${P.onset_steps} step(s), blanking ${P.blanking_steps}`}</Line>
           <Line>{`M3: ${rs.n_fitted || 0} of ${rs.n_resample || 0} refits on ${rs.n_runs || 0} runs resampled with replacement${rs.reason ? ` · ${rs.reason}` : ""}`}</Line>
-          <Caption>{data.caveat}</Caption>
+          <Caption>{run.caveat}</Caption>
           <Caption>Dashed frame: every number here is modelled, not measured. It gates nothing.</Caption>
         </Fold>
       </MDBox>

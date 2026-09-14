@@ -30,6 +30,7 @@ import pandas as pd
 
 from . import adapter
 from . import pipeline
+from . import safety_ceiling as SC
 from .routines import plots as PLT
 
 # THE IMPORT ROOT DIFFERS BETWEEN THE TWO TEST RUNNERS, so both spellings are tried (see adapter).
@@ -44,6 +45,46 @@ _log = logging.getLogger(__name__)
 
 DEFAULT_SITES = ("left_leg", "back")
 DEFAULT_HEMISPHERES = ("Left", "Right")
+
+#: ==========================================================================================
+#: THE LINEAR-ALGEBRA THREAD POOL IS CAPPED TO ONE THREAD FOR THE WHOLE REQUEST (2026-09-12).
+#:
+#: Every matrix this request factorises is small: a Gaussian-process fit on 54 to 69 epochs, an
+#: ordinary least-squares fit on a few hundred tiles with about ten columns. OpenBLAS in the
+#: container defaults to sixteen threads, and on matrices this size the threads spend their time
+#: waiting for each other rather than computing. Measured on RCS08 (probe_so_blas_threads.py): one
+#: arm's fit took 3.9 to 4.7 s with the default pool and 0.26 to 0.32 s with one thread, in two
+#: alternating rounds, and every number it produced -- the posterior mean and spread over the whole
+#: grid, the safe mask, the fitted kernel, the marginal likelihood, the optimum, the queue, the
+#: batches -- was bit for bit identical. The cap is applied around the whole request rather than
+#: around each fit because the same overhead sits under every small factorisation on the way, and
+#: a request holds one gunicorn worker either way, so nothing else in the process loses threads it
+#: was using.
+#:
+#: `STIM_OPTIMIZER_BLAS_THREADS` in the environment overrides the cap: "0" leaves the pool as it
+#: is (this is how the before-and-after timing was measured), any other integer sets it. The
+#: `threadpoolctl` package ships with scikit-learn and is present in the container; where it is
+#: absent (the host test runner) the request runs with the pool untouched, which is what it did
+#: before this cap existed.
+#: ==========================================================================================
+BLAS_THREADS_ENV = "STIM_OPTIMIZER_BLAS_THREADS"
+
+
+def _blas_threads_capped():
+    """Context manager: the BLAS/LAPACK thread pool capped for the duration, or a no-op."""
+    import contextlib
+    raw = os.environ.get(BLAS_THREADS_ENV, "1").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 1
+    if n <= 0:
+        return contextlib.nullcontext()
+    try:
+        from threadpoolctl import threadpool_limits
+    except ImportError:                               # pragma: no cover - host runner
+        return contextlib.nullcontext()
+    return threadpool_limits(limits=n, user_api="blas")
 
 #: ==========================================================================================
 #: TRACK A STEP 8 — "Have Stim Optimizer read the store and write its outputs back".
@@ -274,25 +315,73 @@ def ground_truth_block(participant, *, tiles_key_now):
     return block
 
 
+#: How many trailing elements of the response key describe the RESPONSE only and not the four
+#: tables (review S11, 2026-09-12, raised from 4): the deployable band range the evidence carries
+#: (two Biomarkers constants), the ClosedLoop flag (the readiness block only), the two-stage
+#: settings (the flag, the override reason AND the override's name, the explore-outside-the-
+#: adaptive-envelope override AND its name) and the figure backend. None of these changes the
+#: four tables, which come from the flat fit alone; keyed on them, two requests differing only
+#: in one of these would sweep each other's tables on every write.
+_RESPONSE_ONLY_KEY_TAIL = 9
+
+
+def _band_span_key_element():
+    """The deployable band range as a key element: the two Biomarkers constants the evidence
+    frame's centres depend on (`adapter.deployable_band_span`), which the code digest does not
+    cover because they live in another module (review S11). Their absence is itself a key
+    element, so a response computed without them is never served to a request that has them."""
+    try:
+        lo, hi = adapter.deployable_band_span()
+        return (float(lo), float(hi))
+    except Exception as exc:                              # noqa: BLE001 -- named, not hidden
+        return ("band span unavailable", type(exc).__name__)
+
+
+def _explore_outside_key_element(rd) -> str:
+    """The response-key element for the explore-outside-the-envelope override.
+
+    "absent" and "present but empty" produce different blocks (the second says the override was
+    ignored), so they must be different key elements, or a request naming the key with no reason
+    could be served a copy that never mentions it.
+    """
+    if TWO_STAGE_EXPLORE_OUTSIDE_KEY not in (rd or {}):
+        return "0:"
+    return "1:" + str((rd or {}).get(TWO_STAGE_EXPLORE_OUTSIDE_KEY) or "").strip()
+
+
 def _response_signature(uid, matched_key, tiles_key, amp_key, gt_key, request_data, sites, hemis,
                         washin_min, backend):
     """The response key: every input and every setting the fitted result depends on, and the
-    figure backend last, so `_products_signature` can drop it."""
+    response-only settings last, so `_products_signature` can drop them."""
     rd = request_data or {}
     return (RESPONSE_KIND, _RULE_VERSION, _CODE_DIGEST, str(uid), matched_key, tiles_key, amp_key,
             gt_key, tuple(sites), tuple(hemis), float(washin_min),
-            int(rd.get("NBatches", 3)), int(rd.get("Q", 4)), bool(rd.get("ClosedLoop", True)),
+            int(rd.get("NBatches", 3)), int(rd.get("Q", 4)),
+            # ---- the response-only tail, `_RESPONSE_ONLY_KEY_TAIL` elements from here ----
+            _band_span_key_element(),
+            bool(rd.get("ClosedLoop", True)),
+            # The two-stage block is part of the stored response, so the flag and the override
+            # reason that shape it are in the key: a request without the flag is never served a
+            # copy that carries the block, and one with it is never served a copy without it.
+            # The NAMES travel too (review S11): the block prints them, so a second request with
+            # the same reason and a different name must not be served the first name.
+            bool(_two_stage_requested(rd)), str(rd.get(TWO_STAGE_OVERRIDE_REASON_KEY) or ""),
+            str(rd.get(TWO_STAGE_OVERRIDE_BY_KEY) or ""),
+            _explore_outside_key_element(rd),
+            str(rd.get(TWO_STAGE_EXPLORE_OUTSIDE_BY_KEY) or ""),
             str(backend))
 
 
 def _products_signature(sig):
-    """The key of the four tables: the response key without the figure backend.
+    """The key of the four tables: the response key without the response-only tail.
 
-    The backend changes only whether figure JSON is in the response. Keyed on it, a request
-    with figures and one without would sweep each other's tables on every write, since the store
-    keeps one entry per kind and participant.
+    The backend changes only whether figure JSON is in the response, the two-stage settings
+    change only whether the `two_stage` block is in it, the ClosedLoop flag only whether the
+    readiness block is, and the band range only what the evidence frame carries; none changes
+    the four tables. Keyed on them, two requests differing only in one of those would sweep
+    each other's tables on every write, since the store keeps one entry per kind and participant.
     """
-    return tuple(sig[:-1])
+    return tuple(sig[:-_RESPONSE_ONLY_KEY_TAIL])
 
 
 def _write_outputs(uid, sig, prov, rep, out):
@@ -396,6 +485,125 @@ def _frame_records(df, cols=None, limit=None):
     return [_jsonable(r) for r in d.to_dict("records")]
 
 
+#: ==========================================================================================
+#: DISPLAY FIELDS FOR THE PAGE (2026-09-12, the page redesign, phase 3).
+#:
+#: The page printed sensing contacts by their raw keys ("ONE_THREE_LEFT"), which spell the
+#: contact numbers out as words, and printed the setting in force as ONE rate and ONE pulse width
+#: for both sides, read from Stage 1's `incumbent_pw_us` -- which Stage 1 read from the LEFT
+#: column for both sides until 2026-09-12 (review S1; it now reads each side's own column). On
+#: RCS08 the design matrix carries `pw_us_Right` too and it reads 150 us on the incumbent epoch
+#: while the left reads 100 us, so the page was printing the left pulse width as the right side's.
+#: These fields carry each side's own values, and the Medtronic-form labels, so the page reads
+#: rather than derives them.
+#:
+#: ONE DEFINITION OF THE CONTACT LABEL. The sensing label is `Biomarkers.routines.analytics
+#: .format_channel` (the "L 0⁻2⁺" every other page prints, decision 131); it is called here and
+#: not re-implemented. The STIMULATION contacts are a different thing -- the settings stream keeps
+#: the cathode segments only ("2a-2b-2c"), never the anode -- so their label is the side letter and
+#: the cathode contacts with a superscript minus, a whole ring collapsed to its digit ("L 2⁻"), and
+#: no anode is printed because none is recorded. `contacts_raw` travels beside it.
+#: ==========================================================================================
+def sensing_display(channel) -> dict:
+    """`display_short` / `display_hemisphere` / `display_contacts` for a sensing contact pair,
+    from the Biomarkers formatter. Absent (None) when the formatter cannot be imported, never a
+    label invented here."""
+    try:
+        try:
+            from modules.Biomarkers.routines import analytics as _an
+        except ImportError:
+            from Biomarkers.routines import analytics as _an
+        f = _an.format_channel(str(channel), region="")
+        return {"display_short": f["short"], "display_hemisphere": f["hemisphere"],
+                "display_contacts": f["contacts"]}
+    except Exception:                                     # noqa: BLE001 -- no label, not an error
+        return {"display_short": None, "display_hemisphere": None, "display_contacts": None}
+
+
+def stim_contacts_short(cathode, hemisphere) -> str | None:
+    """The programmed cathode contacts in the page's Medtronic form: "L 2⁻" for "2a-2b-2c" on the
+    Left, "R 1⁻2⁻" for "1a-1b-1c-2a-2b-2c" on the Right, "L 1a⁻1b⁻" when a ring is only partly
+    used. None when nothing is recorded ("none", empty, NaN)."""
+    if cathode is None:
+        return None
+    raw = str(cathode).strip()
+    if not raw or raw.lower() in ("none", "nan", "case"):
+        return None
+    side = "L" if str(hemisphere) == "Left" else ("R" if str(hemisphere) == "Right" else "")
+    segs = [t for t in raw.replace("+", "-").split("-") if t]
+    by_ring = {}
+    for t in segs:
+        digit = "".join(ch for ch in t if ch.isdigit())
+        letter = "".join(ch for ch in t if ch.isalpha()).lower()
+        by_ring.setdefault(digit, set()).add(letter)
+    parts = []
+    for digit in sorted(by_ring, key=lambda d: (d == "", d)):
+        letters = by_ring[digit]
+        if letters == {"a", "b", "c"} or letters == {""}:
+            parts.append(f"{digit}⁻")
+        else:
+            parts.extend(f"{digit}{l}⁻" for l in sorted(letters))
+    return f"{side} {''.join(parts)}".strip()
+
+
+def in_force_by_side(es, epochs=None) -> dict:
+    """The setting in force on EACH side: rate, that side's own pulse width and current, and its
+    programmed cathode contacts, with the epoch and the time it began. Empty when there is no
+    epoch; a side's value is None when its column is absent or empty, never the other side's.
+
+    READ FROM THE FULL EPOCH TABLE when one is given (review S7, 2026-09-12). ``es`` is the
+    matched table, which keeps only the epochs with at least one usable pain report, so its
+    newest epoch is the newest RATED setting -- and after a reprogramming, until the first
+    rating filed more than one minute later, that is the PREVIOUS setting, not the one the
+    device is on. ``epochs`` is ``adapter.exposure_epochs``'s output, every epoch rated or not;
+    its newest row is the setting in force. Each side's block then carries
+    ``has_ratings_yet`` (is that epoch in the matched table) and ``fitted_incumbent_epoch`` (the
+    newest rated epoch, which every surface's gain is referenced to, unchanged), and
+    ``differs_from_fitted_incumbent`` says when the two are not the same epoch. Without
+    ``epochs`` the matched table is read as before.
+    """
+    if es is None or len(es) == 0 or "t0" not in es.columns:
+        return {}
+    fitted = es.sort_values("t0").iloc[-1]
+    fitted_epoch = float(fitted["epoch"]) if "epoch" in es.columns else None
+    src = "matched table (newest rated epoch)"
+    row = fitted
+    if epochs is not None and len(epochs) and "t_start" in epochs.columns:
+        row = epochs.sort_values("t_start").iloc[-1]
+        src = "full epoch table (newest device setting, rated or not)"
+    rated = set(pd.to_numeric(es["epoch"], errors="coerce").dropna().astype(float)) \
+        if "epoch" in es.columns else set()
+    out = {}
+    for side in ("Left", "Right"):
+        def _col(name, r=row):
+            v = r.get(name) if hasattr(r, "get") else None
+            return None if v is None or (isinstance(v, float) and np.isnan(v)) else v
+        cath = _col(f"cathode_{side}")
+        epoch = _col("epoch")
+        has_ratings = (float(epoch) in rated) if epoch is not None else None
+        out[side] = {
+            "rate_hz": _jsonable(_col("freq_hz")),
+            "pulse_width_us": _jsonable(_col(f"pw_us_{side}")),
+            "amplitude_mA": _jsonable(_col(f"amp_mA_{side}")),
+            "contacts_raw": (None if cath is None else str(cath)),
+            "contacts_short": stim_contacts_short(cath, side),
+            "epoch": _jsonable(epoch),
+            "since_utc": _jsonable(_col("t_start") if _col("t_start") is not None else _col("t0")),
+            "source": src,
+            "has_ratings_yet": has_ratings,
+            "fitted_incumbent_epoch": _jsonable(fitted_epoch),
+            "differs_from_fitted_incumbent": (
+                bool(float(epoch) != float(fitted_epoch))
+                if epoch is not None and fitted_epoch is not None else None),
+            "note": (None if epoch is None or fitted_epoch is None or float(epoch) == float(fitted_epoch)
+                     else (f"the device has been on epoch {float(epoch):g} since "
+                           f"{_jsonable(_col('t_start'))}, but no pain rating has been filed under "
+                           f"it yet, so every surface's gain is still measured against epoch "
+                           f"{float(fitted_epoch):g}, the newest rated one")),
+        }
+    return out
+
+
 def design_matrix_summary(es: pd.DataFrame) -> dict:
     """What the warm start actually contains — shown above the figures so the reader sees the
     evidence base before any surface. Counts, not adjectives."""
@@ -422,7 +630,301 @@ def design_matrix_summary(es: pd.DataFrame) -> dict:
     return out
 
 
+#: ==========================================================================================
+#: THE TWO-STAGE PATH, WIRED 2026-09-12 ("wire/configure stim optimizer with a two-stage
+#: openloop to CL-path setup").
+#:
+#: The open-loop search that freezes a rate and pulse width (`stage1_openloop`), the gate that
+#: decides whether that frozen configuration may proceed to closed loop (`routines/stage_gate`),
+#: and the closed-loop stage (`stage2_closedloop`) existed, were tested, and were reached by
+#: nothing: `pipeline.run_two_stage_live`'s only callers were tests. This block is the caller.
+#:
+#: OFF BY DEFAULT. A request that does not carry `TwoStage: true` gets the response it always got,
+#: with no `two_stage` key. With the flag, the path runs on the inputs this request has already
+#: loaded -- the matched therapy-and-pain table (`es`) and the settings stream -- and the LFP
+#: evidence is built from the same tile cache the closed-loop readiness panel reads, pinned to the
+#: rate Stage 1 froze. Every number in the block is copied out of the subsystem's own result
+#: objects; nothing is recomputed here.
+#:
+#: BACKEND. Stage 1 fits `routines/surrogate.py`, the scikit-learn Gaussian process that
+#: `pipeline.run` also uses. PyTorch, GPyTorch and BoTorch are not imported anywhere on this path
+#: (BOTORCH_REFACTOR.md: "Do not add PyTorch to the production Django container").
+#:
+#: NOT AN INPUT, said plainly. `routines/stage_gate.RCS08_SELECTED_BANDS` and
+#: `RCS08_RESPONSE_SUMMARY` are a snapshot of 2026-09-02 that the decision log has moved past
+#: (decisions 38, 59, 62, 64, 124); they are NOT passed, so the gate evaluates its four live
+#: conditions and not the two snapshot ones. The amplitude-effect table the service reads is
+#: reported beside this block and is not an argument the subsystem accepts.
+#: ==========================================================================================
+TWO_STAGE_FLAG = "TwoStage"
+TWO_STAGE_OVERRIDE_REASON_KEY = "TwoStageOverrideReason"
+TWO_STAGE_OVERRIDE_BY_KEY = "TwoStageOverrideBy"
+#: THE ADAPTIVE ENVELOPE (2026-09-12, the PI: "don't recommend settings that adaptive cannot use
+#: unless there is a scientific or physiological reason"). Stage 1 now searches only settings the
+#: device's closed-loop mode can be programmed with (rate at or above the 55 Hz adaptive minimum,
+#: `routines/adaptive_envelope.py`) and reports what it excluded and why. These two keys are the
+#: exception the instruction allows: a NON-EMPTY reason under the first lifts the constraint and
+#: travels, with the name under the second, on the frozen configuration. The first key present
+#: with an empty reason changes nothing and the block says the override was ignored.
+TWO_STAGE_EXPLORE_OUTSIDE_KEY = "TwoStageExploreOutsideAdaptive"
+TWO_STAGE_EXPLORE_OUTSIDE_BY_KEY = "TwoStageExploreOutsideAdaptiveBy"
+TWO_STAGE_BACKEND = ("scikit-learn Gaussian process (StimOptimizer/routines/surrogate.py); "
+                     "PyTorch, GPyTorch and BoTorch are not used on this path -- the optional "
+                     "PyTorch backend was deleted on 2026-09-12 and no request can select it")
+
+
+def _two_stage_requested(request_data) -> bool:
+    v = (request_data or {}).get(TWO_STAGE_FLAG, False)
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "on")
+    return bool(v)
+
+
+def _two_stage_jsonable(v):
+    """`_jsonable`, extended for what the two-stage result objects carry: tables, dataclasses,
+    numpy scalars inside tuples used as dictionary keys, and sets."""
+    import dataclasses
+    if isinstance(v, pd.DataFrame):
+        return {"columns": [str(c) for c in v.columns],
+                "index": [_two_stage_jsonable(i) for i in v.index],
+                "records": [_two_stage_jsonable(r) for r in v.to_dict("records")]}
+    if dataclasses.is_dataclass(v) and not isinstance(v, type):
+        return {f.name: _two_stage_jsonable(getattr(v, f.name)) for f in dataclasses.fields(v)}
+    if isinstance(v, dict):
+        return {(("%g" % k) if isinstance(k, (float, np.floating)) else str(k)):
+                _two_stage_jsonable(x) for k, x in v.items()}
+    if isinstance(v, (set, frozenset)):
+        return [_two_stage_jsonable(x) for x in sorted(v, key=str)]
+    if isinstance(v, (list, tuple, np.ndarray, pd.Series)):
+        return [_two_stage_jsonable(x) for x in list(v)]
+    return _jsonable(v)
+
+
+def _two_stage_payload(rep, *, inputs, seconds, in_force=None) -> dict:
+    """The `two_stage` block from a `pipeline.TwoStageReport`: Stage 1's frozen configuration,
+    the gate's verdict with each condition's reason and the evidence it read, Stage 2's output or
+    its refusal, and a provenance sentence per stage. Read from the report, never recomputed."""
+    s1, gate, s2, man = rep.stage1, rep.gate, rep.stage2, dict(rep.manifest or {})
+    frozen = s1.frozen
+    lfp = dict(man.get("lfp_evidence") or {})
+
+    settings = []
+    for s in frozen.settings:
+        settings.append({
+            "hemisphere": s.hemisphere,
+            "rate_hz": _jsonable(s.rate_hz),
+            "pulse_width_us": _jsonable(s.pw_us),
+            "amplitude_preferred_mA": _jsonable(s.amp_star_mA),
+            "amplitude_delivered_min_mA": _jsonable(s.amp_delivered_min_mA),
+            "amplitude_delivered_max_mA": _jsonable(s.amp_delivered_max_mA),
+            "n_epochs_fitted_on_the_chosen_stratum": _jsonable(s.n_epochs_fitted),
+            "rate_resolved": _jsonable(s.rate_resolved),
+            "pulse_width_resolved": _jsonable(s.pw_resolved),
+            "resolved": bool(s.resolved),
+            "reasons": [str(r) for r in s.reasons],
+            "detail": _two_stage_jsonable(dict(s.detail or {})),
+        })
+    stage1 = {
+        "frozen_configuration": {
+            "settings": settings,
+            "primary_item": str(frozen.primary_item),
+            "incumbent_epoch": _jsonable(frozen.incumbent_epoch),
+            "incumbent_rate_hz": _jsonable(frozen.incumbent_rate_hz),
+            "incumbent_pulse_width_us": _jsonable(frozen.incumbent_pw_us),
+            # Each side's own pulse width in force, from its own column (review S1);
+            # `incumbent_pulse_width_us` above is the LEFT column's value, kept under its name.
+            "incumbent_pulse_width_us_by_side": _two_stage_jsonable(
+                dict(getattr(frozen, "incumbent_pw_us_by_side", None) or {})),
+            "data_horizon": str(frozen.data_horizon),
+            "washin_min": _jsonable(frozen.washin_min),
+            "n_epochs_total": _jsonable(frozen.n_epochs_total),
+            "resolved": bool(frozen.resolved),
+            "overridden": bool(frozen.overridden),
+            "override": _two_stage_jsonable(dict(frozen.override)) if frozen.override else None,
+            # The adaptive envelope (2026-09-12): whether the search was held to settings the
+            # closed-loop mode can use, what it excluded and why, and -- when lifted -- the stated
+            # reason and who gave it. Copied from Stage 1's own record; the per-side detail is
+            # under each setting's `detail.adaptive_envelope`.
+            "adaptive_envelope": _two_stage_jsonable(dict(getattr(frozen, "adaptive_envelope",
+                                                                  None) or {})),
+            # Stage 1 searches rate x pulse width x amplitude per side. The electrode contacts are
+            # not a searched dimension and the frozen configuration does not carry them; the
+            # sensing contact the gate's evidence came from is under `lfp_evidence.selected_key`.
+            "contacts": None,
+            "contacts_note": ("Stage 1 does not choose or freeze the stimulation contacts; it "
+                              "freezes the rate, the pulse width and the preferred amplitude on "
+                              "each side. The sensing contact behind the gate's LFP evidence is "
+                              "named in lfp_evidence.selected_key."),
+            # Each side's OWN setting in force (2026-09-12), read from the full epoch table
+            # (review S7): what the device is actually programmed to on each side, contacts
+            # included, whether or not a rating has been filed under it yet.
+            "in_force_by_side": dict(in_force or {}),
+        },
+        "strata": _frame_records(s1.summary),
+        "strata_skipped": {str(k): str(v) for k, v in (s1.skipped or {}).items()},
+        "audit": _two_stage_jsonable(dict(s1.audit or {})),
+        "describe": frozen.describe(),
+    }
+
+    conditions = []
+    for c in gate.conditions:
+        conditions.append({"name": c.name, "verdict": c.verdict, "passed": _jsonable(c.passed),
+                           "overridden": bool(c.overridden), "detail": str(c.detail),
+                           "evidence": _two_stage_jsonable(dict(c.evidence or {}))})
+    gate_block = {
+        "passed": bool(gate.passed),
+        "verdict": ("Stage 2 MAY START: every condition passed" if gate.passed
+                    else "Stage 2 MUST NOT START: %d of %d conditions block"
+                    % (len(gate.refusals()), len(gate.conditions))),
+        "n_conditions": len(gate.conditions),
+        "conditions": conditions,
+        "refusals": [{"condition": n, "reason": d} for n, d in gate.refusals()],
+        "failed": list(gate.failed_names()),
+        "not_assessed": list(gate.not_assessed_names()),
+        "describe": gate.describe(),
+    }
+
+    if s2.started:
+        stage2 = {
+            "started": True,
+            "n_valid_policies": int(s2.n_valid),
+            "n_rejected": int(len(s2.rejected)) if s2.rejected is not None else 0,
+            "policies": _frame_records(s2.policies),
+            "rejected": _frame_records(s2.rejected, limit=200),
+            "best": (_two_stage_jsonable(s2.best().to_dict()) if s2.best() is not None else None),
+            "ranking_basis": str(s2.ranking_basis),
+            "ranking_assessed": _jsonable(s2.ranking_assessed),
+            "notes": [str(n) for n in s2.notes],
+            "describe": s2.describe(),
+        }
+    else:
+        stage2 = {
+            "started": False,
+            "reason": ("the gate refused, so Stage 2 did not start; the refusals are listed "
+                       "under gate.refusals and repeated here"),
+            "refusal_reasons": [{"condition": n, "reason": d} for n, d in s2.refusal_reasons],
+            "notes": [str(n) for n in s2.notes],
+            "describe": s2.describe(),
+        }
+
+    sel = lfp.get("selected_key")
+    env = dict(getattr(frozen, "adaptive_envelope", None) or {})
+    env_sentence = ""
+    if env.get("statement"):
+        env_sentence = (f" The search was {env['statement']}"
+                        + (f"; {env.get('n_exclusions', 0)} exclusion(s) are listed under the "
+                           "frozen configuration" if env.get("constrained") else "")
+                        + "." + (f" NOTE: {env['override_ignored']}."
+                                 if env.get("override_ignored") else ""))
+    provenance = {
+        "stage1": (f"Stage 1 read the matched therapy-and-pain table this request loaded "
+                   f"({inputs.get('matched_table') or 'no store key'}): "
+                   f"{frozen.n_epochs_total} epochs, primary outcome {frozen.primary_item}, "
+                   f"incumbent epoch {frozen.incumbent_epoch:g} at "
+                   f"{frozen.incumbent_rate_hz:g} Hz; {len(s1.slices)} pulse-width strata fitted, "
+                   f"{len(s1.skipped or {})} skipped." + env_sentence),
+        "gate": (f"The gate read the frozen configuration from Stage 1 and LFP evidence built "
+                 f"from the tile cache ({inputs.get('tiles') or 'no store key'}) with the "
+                 f"settings stream ({inputs.get('settings_stream') or 'no store key'}), pinned to "
+                 f"the frozen rate {lfp.get('pinned_rate_hz')} Hz: "
+                 + (f"cell {tuple(sel)} was selected"
+                    if sel else f"no cell was selected ({lfp.get('refusal_class')})")
+                 + f"; {lfp.get('n_cells_screened', 0)} cells screened, "
+                   f"{lfp.get('n_cells_unbuildable', 0)} could not be built."),
+        "stage2": ("Stage 2 read the frozen configuration and the gate result"
+                   + (" and enumerated closed-loop policies on the selected LFP evidence."
+                      if s2.started else "; it did not start because the gate refused.")),
+    }
+
+    lfp_out = _two_stage_jsonable(lfp)
+    # The sensing contact the check read, in the page's form ("L 0⁻2⁺"), beside its raw key;
+    # and, per side (review S3), the contact each side's check read.
+    lfp_out["selected_display_short"] = (sensing_display(sel[0])["display_short"]
+                                         if sel and len(sel) else None)
+    for side, blk in (lfp_out.get("selected_by_side") or {}).items():
+        k = blk.get("selected_key") if isinstance(blk, dict) else None
+        if isinstance(blk, dict):
+            blk["selected_display_short"] = (sensing_display(k[0])["display_short"]
+                                             if k and len(k) else None)
+    return {
+        "requested": True,
+        "available": True,
+        "backend": TWO_STAGE_BACKEND,
+        "seconds": _jsonable(seconds),
+        "can_deploy_closed_loop": bool(rep.can_deploy_closed_loop()),
+        "stage1": stage1,
+        "gate": gate_block,
+        "lfp_evidence": lfp_out,
+        "stage2": stage2,
+        "manifest": _two_stage_jsonable({k: v for k, v in man.items() if k != "lfp_evidence"}),
+        "inputs": dict(inputs),
+        "provenance": provenance,
+        "describe": rep.describe(),
+    }
+
+
+def two_stage_block(participant, es, *, request_data, stream, washin_min, hemispheres, sites,
+                    data_horizon, inputs, in_force=None, evidence_inputs=None,
+                    safety_ceiling_by_hemisphere=None) -> dict:
+    """Run the open-loop -> gate -> closed-loop path on this request's own inputs and report it.
+
+    Never raises into the response: a failure here is reported under `two_stage.reason` and the
+    open-loop optimizer's own result stands.
+    """
+    import time as _time
+    from .routines import objective as _obj
+
+    rd = request_data or {}
+    override_reason = rd.get(TWO_STAGE_OVERRIDE_REASON_KEY)
+    override_reason = str(override_reason).strip() if override_reason else None
+    # The explore-outside-the-adaptive-envelope override. `requested` is "the key is present",
+    # whatever it carries, so that a key with an empty reason is reported as ignored rather than
+    # treated as if it had never been sent.
+    explore_requested = TWO_STAGE_EXPLORE_OUTSIDE_KEY in rd
+    explore_reason = rd.get(TWO_STAGE_EXPLORE_OUTSIDE_KEY) if explore_requested else None
+    explore_reason = str(explore_reason).strip() if explore_reason else None
+    explore_by = (str(rd.get(TWO_STAGE_EXPLORE_OUTSIDE_BY_KEY)).strip()
+                  if explore_reason and rd.get(TWO_STAGE_EXPLORE_OUTSIDE_BY_KEY) else None)
+    t0 = _time.perf_counter()
+    try:
+        rep = pipeline.run_two_stage_live(
+            participant, design=es, stream=stream, request_data=request_data,
+            washin_min=float(washin_min), amp_ceiling=_obj.AMP_HARD_LIMIT_MA,
+            hemispheres=tuple(hemispheres), primary_item=str(tuple(sites)[0]),
+            data_horizon=data_horizon, evidence_inputs=evidence_inputs,
+            override_reason=override_reason,
+            override_by=(str(rd.get(TWO_STAGE_OVERRIDE_BY_KEY)) if override_reason
+                         and rd.get(TWO_STAGE_OVERRIDE_BY_KEY) else None),
+            explore_outside_adaptive_reason=explore_reason,
+            explore_outside_adaptive_by=explore_by,
+            explore_outside_adaptive_requested=explore_requested,
+            # The PI-stated ceiling per side (2026-09-12): the safety model's severity-3 seed
+            # in Stage 1, as in the flat fit, and the ceiling the gate checks the limits against.
+            stage1_kwargs=({"safety_ceiling_by_hemisphere": safety_ceiling_by_hemisphere}
+                           if safety_ceiling_by_hemisphere else None),
+            gate_kwargs=({"ceiling_mA": safety_ceiling_by_hemisphere}
+                         if safety_ceiling_by_hemisphere else None))
+    except Exception as exc:                          # noqa: BLE001 -- adjunct block
+        _log.exception("StimOptimizer: the two-stage path failed")
+        return {"requested": True, "available": False, "backend": TWO_STAGE_BACKEND,
+                "seconds": _jsonable(_time.perf_counter() - t0), "inputs": dict(inputs),
+                "reason": f"the two-stage path could not run: {type(exc).__name__}: {exc}"}
+    return _two_stage_payload(rep, inputs=inputs, seconds=_time.perf_counter() - t0,
+                              in_force=in_force)
+
+
 def run_for_participant(request_data: dict) -> dict:
+    """Build the design matrix from platform data, fit every arm, return a JSON-able payload.
+
+    The work is `_run_for_participant`; this wrapper only caps the linear-algebra thread pool for
+    its duration (see `BLAS_THREADS_ENV` above), which changes no number and, measured on RCS08,
+    removes most of the time the arm fits and the closed-loop screen spent waiting on threads.
+    """
+    with _blas_threads_capped():
+        return _run_for_participant(request_data)
+
+
+def _run_for_participant(request_data: dict) -> dict:
     """Build the design matrix from platform data, fit every arm, return a JSON-able payload.
 
     Request keys (all optional except ParticipantId):
@@ -432,6 +934,21 @@ def run_for_participant(request_data: dict) -> dict:
       WashinMin      wash-in exclusion in MINUTES (default 1.0 — PI-declared for a rapid responder)
       Backend        "plotly" (default, returns figure JSON) or "none" (tables only, fast)
       NBatches, Q    forward-simulation depth for the trajectory panel
+      TwoStage       true runs the open-loop -> gate -> closed-loop path on the same inputs and
+                     attaches it under `two_stage`; absent or false (the default) leaves the
+                     response exactly as it was
+      TwoStageOverrideReason, TwoStageOverrideBy
+                     a clinician override of the gate's resolution condition, with the reason it
+                     requires (stage1_openloop.clinician_override); only read when TwoStage is on
+      TwoStageExploreOutsideAdaptive, TwoStageExploreOutsideAdaptiveBy
+                     by default Stage 1 recommends only settings the device's closed-loop mode
+                     can use (rate at or above the 55 Hz adaptive minimum) and lists what it
+                     excluded and why under two_stage.stage1.frozen_configuration
+                     .adaptive_envelope. A NON-EMPTY scientific or physiological reason under
+                     the first key lifts that constraint; the reason and the name under the
+                     second travel on the frozen configuration. The first key with an empty
+                     reason changes nothing and the block says the override was ignored. Only
+                     read when TwoStage is on; both are in the response key.
     """
     from Server import models
 
@@ -582,7 +1099,12 @@ def run_for_participant(request_data: dict) -> dict:
         # the build at the top failed, this is None and the queue omits its eligibility annotation,
         # which is the same degradation this line's own try/except gave.
         _census = _stream
+        # THE SAFETY MODEL'S CEILING, stated by the PI per side (`safety_ceiling.py`,
+        # 2026-09-12): built once here and handed to the flat fit, to Stage 1 and to the gate, so
+        # every safe set and the "under the ceiling" check read one source.
+        _ceilings = SC.ceilings_by_hemisphere(uid, hemis)
         rep = pipeline.run(es, sites=sites, hemispheres=hemis, delivered_census=_census,
+                           safety_ceiling_by_hemisphere=_ceilings,
                            outdir=None, render_figures=False,
                            data_horizon=horizon, washin_min=washin_min,
                            n_batches=int((request_data or {}).get("NBatches", 3)),
@@ -626,6 +1148,19 @@ def run_for_participant(request_data: dict) -> dict:
             # disabled the non-contiguous-safe-set blocker for every arm.
             "safe_contiguous": _jsonable(m.get("safe_is_contiguous")),
             "safe_contiguous_ceiling": _jsonable(m.get("safe_contiguous_ceiling")),
+            # What the safety model was told (2026-09-12): the PI-stated ceiling for this side
+            # and where it comes from, the severity-3 anchors it became (one per grid rate), and
+            # the tolerated settings. In the response so the numbers behind
+            # `safe_contiguous_ceiling` can be read; the page prints the ceiling on the arm card.
+            "safety_anchors": {
+                "ceiling_mA": _jsonable(m.get("safety_ceiling_mA")),
+                "provenance": _jsonable(m.get("safety_ceiling_provenance")),
+                "ceiling_anchors_rate_hz_mA": _jsonable(m.get("safety_ceiling_anchors")),
+                "n_ceiling_anchors": _jsonable(m.get("n_safety_ceiling_anchors")),
+                "n_tolerated_anchors": _jsonable(m.get("n_tolerated_anchors")),
+                "tolerated_rule": _jsonable(m.get("tolerated_rule")),
+                "n_safe_cells": _jsonable(m.get("n_safe")),
+            },
             "queue": _frame_records(arm.queue, limit=25),
             "batch": _frame_records(arm.batch),
             "provenance": {"data_horizon": _jsonable(m.get("data_horizon")),
@@ -658,10 +1193,39 @@ def run_for_participant(request_data: dict) -> dict:
             if len(s):
                 observed_amp_range[hemi] = (float(s.min()), float(s.max()))
     blockers = _blockers(rep, arms, observed_amp_range)
+    # THE SENSED SIGNAL AND THE EPOCHS ARE BUILT ONCE FOR BOTH CONSUMERS BELOW (2026-09-12). The
+    # closed-loop readiness screen and the two-stage path each asked `adapter.evidence_inputs` for
+    # the same pair -- the recordings, the tile cache and the exposure epochs -- and on RCS08 each
+    # build cost about 3 s. Built here with the stream this request already holds; a failure hands
+    # None to both, and each then builds its own exactly as it did before, so the degradation is
+    # unchanged. The screen's own try/except still owns any failure inside the screen.
+    _ev_inputs = None
+    if bool((request_data or {}).get("ClosedLoop", True)) or _two_stage_requested(request_data):
+        try:
+            _ev_inputs = adapter.evidence_inputs(participant, stream=_stream)
+        except Exception as exc:                          # noqa: BLE001 -- each consumer builds its own
+            # One line rather than a traceback: the consumer that then fails the same way logs
+            # its own traceback and reports the reason in the response.
+            _log.warning("StimOptimizer: the shared evidence inputs could not be built (%r); "
+                         "each consumer will build its own", exc)
+    # THE SETTING IN FORCE, from the full epoch table (review S7): the epochs the evidence
+    # inputs already carry when they were built, else the stream collapsed to epochs here
+    # (0.02 s on RCS08), else the matched table's newest rated epoch as before.
+    try:
+        _epochs_full = (_ev_inputs[1] if _ev_inputs is not None
+                        else (adapter.exposure_epochs(_stream) if _stream is not None else None))
+    except Exception as exc:                              # noqa: BLE001 -- fall back to the matched table
+        _log.warning("StimOptimizer: the full epoch table could not be built (%r)", exc)
+        _epochs_full = None
+    in_force = in_force_by_side(es, epochs=_epochs_full)
+    _screen_out = {}
     out = {
         "available": True,
         "participant": uid,
         "design_matrix": design_matrix_summary(es),
+        # Each side's own rate, pulse width, current and cathode contacts from the newest epoch
+        # (2026-09-12), so the page's decision strip reads them rather than the left side's twice.
+        "in_force_by_side": in_force,
         "manifest": _jsonable(rep.manifest),
         "summary": _frame_records(rep.summary),
         "arms": arms,
@@ -670,11 +1234,29 @@ def run_for_participant(request_data: dict) -> dict:
         "washin_min": washin_min,
         "closed_loop": closed_loop_readiness(participant, es,
                                              include=bool((request_data or {})
-                                                          .get("ClosedLoop", True))),
+                                                          .get("ClosedLoop", True)),
+                                             inputs=_ev_inputs, screen_out=_screen_out),
         "amplitude_effect": amp_block,
         "ground_truth": gt_block,
         "store": store_block,
     }
+    # THE TWO-STAGE PATH, only when asked for. Attached before the write-back so the stored
+    # response carries it; the flag is in the response key, so a request without the flag is
+    # never served this copy.
+    if _two_stage_requested(request_data):
+        out["two_stage"] = two_stage_block(
+            participant, es, request_data=request_data, stream=_stream, washin_min=washin_min,
+            hemispheres=hemis, sites=sites, data_horizon=horizon,
+            inputs={"matched_table": matched_key, "tiles": tiles_key,
+                    "settings_stream": stream_key},
+            in_force=in_force, evidence_inputs=_ev_inputs,
+            safety_ceiling_by_hemisphere=_ceilings)
+    # THE TITRATION SESSION TO RUN NEXT (2026-09-12 evening, the PI: "make #4 a feature of next
+    # stim opt recommendation combined with 30"): designed from this participant's own record,
+    # attached before the write-back so the stored response carries it. Never raises.
+    out["titration_plan"] = titration_plan_block(
+        participant, in_force=in_force, screen=_screen_out.get("screen"),
+        ceilings=_ceilings, hemispheres=hemis)
     if sig is not None:
         try:
             _write_outputs(str(uid), sig, prov, rep, out)
@@ -702,7 +1284,144 @@ def _cache_status(uid, sig):
                                         root=_SHARED_CACHE_DIR_OVERRIDE)
 
 
-def closed_loop_readiness(participant, es, *, include=True) -> dict:
+#: ==========================================================================================
+#: THE TITRATION SESSION TO RUN NEXT (open item 30 and decision 144, joined by the PI's decision
+#: of 2026-09-12 evening). `titration_plan.py` holds the arithmetic; this block gathers the
+#: inputs the request already holds -- each side's setting in force, the PI-stated ceiling, the
+#: readiness screen's per-side best contact -- and reads the two stored tables the Closed-Loop
+#: page writes (the pooled current-to-power table and the per-run points table) ONCE each, as
+#: `stim_optimizer`, so the sentence "no run holds 8 settled settings today" is derived from the
+#: record and not typed. On screen: Stim Optimizer page, "Titration session to run next".
+#: ==========================================================================================
+POOLED_KIND = "within_visit_pooled_shape"
+RUN_POINTS_KIND = "three_source_run_points"
+
+
+def _stored_table_as_stim_optimizer(kind, uid):
+    """`(frame or None, note)`: the newest stored entry of `kind`, read as stim_optimizer; a
+    refusal or a miss is a note, never an error."""
+    try:
+        table, stamp = _cache_store.load_newest(kind, uid, consumer="stim_optimizer",
+                                                root=_SHARED_CACHE_DIR_OVERRIDE)
+    except _provenance.SelfDerivedProduct as exc:
+        return None, f"{kind}: refused by the store: {exc}"
+    except Exception as exc:                          # noqa: BLE001
+        return None, f"{kind}: could not be read: {exc!r}"
+    if table is None:
+        return None, (f"{kind}: no entry is stored for this participant (the Closed-Loop page writes it)"
+                      if not stamp else f"{kind}: the newest entry could not be read")
+    if not isinstance(table, pd.DataFrame):
+        try:
+            table = pd.DataFrame(table)
+        except Exception:                             # noqa: BLE001
+            return None, f"{kind}: the stored payload is not a table"
+    return table, f"{kind}: read, {len(table)} rows, written {stamp.get('written_utc')}"
+
+
+def _best_contact_for_side(screen, side, rate_hz=None):
+    """The readiness screen's best cell for stimulation on `side`, as a dict with the page's
+    contact label: the screen's own ranking (`lfp_evidence.best_deployable`, ipsilateral first)
+    among deployable cells AT THE SESSION'S RATE when `rate_hz` is given -- the same selection
+    the two-stage gate makes per side (`pipeline.select_for_side`), because a response measured
+    at one rate says nothing about another -- else among deployable cells at any rate, named as
+    such; else the cell on that side with the most responding bands. None when the screen has no
+    cell for the side."""
+    if screen is None or len(screen) == 0 or "hemisphere" not in screen.columns:
+        return None, "the readiness screen has no cells"
+    from .routines import lfp_evidence as _ev
+    key = _ev.best_deployable(screen, hemisphere=side, rate_hz=rate_hz) if rate_hz is not None else None
+    how = None
+    if key is not None:
+        how = (f"the readiness screen's best deployable cell for this side at the session's rate, "
+               f"{float(rate_hz):g} Hz (lfp_evidence.best_deployable, the gate's own per-side pick)")
+    else:
+        key = _ev.best_deployable(screen, hemisphere=side)
+        if key is not None:
+            how = ("the readiness screen's best deployable cell for this side, at any rate "
+                   "(lfp_evidence.best_deployable)"
+                   + (f"; no cell on this side passed at the session's rate of {float(rate_hz):g} Hz, "
+                      f"so its evidence is from {float(key[2]):g} Hz" if rate_hz is not None else ""))
+    if key is not None:
+        rows = screen[(screen["channel"].astype(str) == str(key[0]))
+                      & (screen["hemisphere"].astype(str) == str(key[1]))
+                      & np.isclose(pd.to_numeric(screen["rate_hz"], errors="coerce"), float(key[2]))]
+    else:
+        rows = screen[screen["hemisphere"].astype(str) == str(side)]
+        if rows.empty:
+            return None, f"the readiness screen has no cell for {side} stimulation"
+        rows = rows.sort_values(["n_responding", "median_separation_d"], ascending=False).head(1) \
+            if "n_responding" in rows.columns else rows.head(1)
+        how = ("no cell for this side passed the readiness screen; the cell on this side with the "
+               "most responding bands")
+    r = rows.iloc[0]
+    rec = {k: _jsonable(r.get(k)) for k in ("channel", "hemisphere", "rate_hz", "n_bands", "n_responding",
+                                            "responding_fraction", "median_separation_d",
+                                            "laterality", "sensing_side", "deployable")}
+    rec.update(sensing_display(rec.get("channel")))
+    if str(rec.get("laterality")) == "contralateral" and "sensing_side" in screen.columns:
+        # The pick is a contact on the OTHER side (decision 143, S3): name the best contact on
+        # THIS side too, whatever it scored, so the clinician can weigh the extra device
+        # configuration a contralateral pairing needs against the evidence on the side itself.
+        own = screen[(screen["hemisphere"].astype(str) == str(side))
+                     & (screen["sensing_side"].astype(str) == str(side))]
+        if rate_hz is not None and "rate_hz" in own.columns:
+            at_rate = own[np.isclose(pd.to_numeric(own["rate_hz"], errors="coerce"), float(rate_hz))]
+            own = at_rate if len(at_rate) else own
+        if len(own):
+            cols = [c for c in ("deployable", "n_responding", "median_separation_d") if c in own.columns]
+            o = own.sort_values(cols, ascending=False).iloc[0]
+            alt = {k: _jsonable(o.get(k)) for k in ("channel", "rate_hz", "n_bands", "n_responding",
+                                                    "deployable", "blocking_reasons")}
+            alt.update(sensing_display(alt.get("channel")))
+            rec["ipsilateral_alternative"] = alt
+    return rec, how
+
+
+def titration_plan_block(participant, *, in_force, screen, ceilings, hemispheres) -> dict:
+    """The `titration_plan` response block (`titration_plan.plan_for_sides`), never raising."""
+    from . import titration_plan as _tp
+    from .routines import percept_adaptive as _pa
+    uid = str(getattr(participant, "uid", participant))
+    try:
+        pooled, pooled_note = _stored_table_as_stim_optimizer(POOLED_KIND, uid)
+        runs, runs_note = _stored_table_as_stim_optimizer(RUN_POINTS_KIND, uid)
+        try:
+            from modules.ClosedLoopDeployment import post_ramp as _pr
+        except ImportError:
+            from ClosedLoopDeployment import post_ramp as _pr
+        margin = _pr.margin_becomes_available(runs)
+        lo, hi = _pa.ADAPTIVE_LFP_BAND_HZ
+        sides = {}
+        for side in hemispheres:
+            side = str(side)
+            f = dict((in_force or {}).get(side) or {})
+            src = f.get("source") or "the settings stream"
+            since = f.get("since_utc")
+            in_force_src = (f"the setting in force on the {side} side, from the {src}"
+                            + (f", since {since}" if since else ""))
+            ceiling = (ceilings or {}).get(side)
+            if ceiling is None:
+                ceiling = SC.ceiling_for(uid, side)
+            contact, how = _best_contact_for_side(
+                screen, side, rate_hz=_tp.rate_to_hold(f.get("rate_hz"))["rate_hz"])
+            rec = _tp.record_today_for_contact(pooled, runs, (contact or {}).get("channel"),
+                                               lo_hz=lo, hi_hz=hi)
+            rec["pooled_table_note"] = pooled_note
+            rec["run_points_table_note"] = runs_note
+            sides[side] = dict(
+                rate_in_force_hz=f.get("rate_hz"), rate_source=in_force_src,
+                pulse_width_us=f.get("pulse_width_us"), pulse_width_source=in_force_src,
+                ceiling_mA=ceiling[0], ceiling_source=str(ceiling[1]),
+                contact=contact, contact_source=how, record_today=rec)
+        block = _tp.plan_for_sides(sides, margin=margin)
+        block["stored_tables"] = {"pooled": pooled_note, "run_points": runs_note}
+        return _jsonable(block)
+    except Exception as exc:                          # noqa: BLE001 -- adjunct card
+        _log.exception("StimOptimizer: the titration plan could not be built for %s", uid)
+        return {"available": False, "reason": f"the titration plan could not be built: {exc}"}
+
+
+def closed_loop_readiness(participant, es, *, include=True, inputs=None, screen_out=None) -> dict:
     """Whether the sensed LFP could drive Adaptive Therapy for this participant, and if not why.
 
     This is a DIFFERENT question from the open-loop optimizer above it, and the payload keeps them
@@ -721,21 +1440,42 @@ def closed_loop_readiness(participant, es, *, include=True) -> dict:
     if not include:
         return {"available": False, "reason": "not requested (ClosedLoop=false)"}
     try:
-        import numpy as _np
         from . import pipeline as _pl
         from .routines import objective as _obj, percept_adaptive as _pa
 
-        lo, hi = _pa.ADAPTIVE_LFP_BAND_HZ
-        bands = [(float(c), 5.0) for c in _np.arange(lo + 2.5, hi - 2.5 + 0.01, 1.0)]
-        le = _pl.live_evidence(participant, amp_ceiling=_obj.AMP_HARD_LIMIT_MA, bands=bands)
+        # ONE definition of the 18 bands (review S13, 2026-09-12): `bands=None` lets
+        # `lfp_evidence.build_evidence` take every stored band that fits inside the adaptive
+        # range, at the cache's own width, exactly as the two-stage path does. This used to
+        # build the list by hand at a hard-coded 5 Hz width, so a change of the cache's band
+        # width would have broken this panel while the two-stage path kept working.
+        # `inputs` is the (sensed frame, epochs) pair the request built once for both this
+        # screen and the two-stage path; None builds it here (2026-09-12).
+        le = _pl.live_evidence(participant, amp_ceiling=_obj.AMP_HARD_LIMIT_MA, bands=None,
+                               inputs=inputs)
         screen = le.screen if le.screen is not None else pd.DataFrame()
+        if screen_out is not None:
+            # The full screen frame for the titration plan (2026-09-12), which picks each side's
+            # best contact off it; handed back through the caller's own dict so the readiness
+            # payload itself is unchanged and the screen is built once.
+            screen_out["screen"] = screen
         n_deployable = 0 if screen.empty else int(screen["deployable"].sum())
+        # The contact pair in the page's form on every row and on the selected cell
+        # (2026-09-12): `display_short` "L 0⁻2⁺" beside the raw key, from the one formatter.
+        cells = _frame_records(
+            screen[screen["n_responding"] > 0].sort_values("n_responding", ascending=False)
+            if not screen.empty else screen, limit=20)
+        for c in cells:
+            c.update(sensing_display(c.get("channel")))
+        selected = None
+        if le.selected_key:
+            selected = {"channel": le.selected_key[0], "hemisphere": le.selected_key[1],
+                        "rate_hz": float(le.selected_key[2])}
+            selected.update(sensing_display(le.selected_key[0]))
         return {
             "available": True,
             "ready": bool(le.selected is not None),
             "verdict": le.describe(),
-            "selected": ({"channel": le.selected_key[0], "hemisphere": le.selected_key[1],
-                          "rate_hz": float(le.selected_key[2])} if le.selected_key else None),
+            "selected": selected,
             "n_cells_screened": int(len(screen)),
             "n_cells_deployable": n_deployable,
             "amp_hard_limit_mA": _jsonable(_obj.AMP_HARD_LIMIT_MA),
@@ -743,9 +1483,7 @@ def closed_loop_readiness(participant, es, *, include=True) -> dict:
             "min_adaptive_rate_hz": _jsonable(_pa.MIN_ADAPTIVE_RATE_HZ),
             # Only the cells that responded at all: the full 50-row screen is mostly cells with no
             # response, which is not what a reader needs to see first.
-            "responding_cells": _frame_records(
-                screen[screen["n_responding"] > 0].sort_values("n_responding", ascending=False)
-                if not screen.empty else screen, limit=20),
+            "responding_cells": cells,
             "audit": _frame_records(le.audit, limit=100) if le.audit is not None else [],
         }
     except Exception as e:                                    # noqa: BLE001 — adjunct panel

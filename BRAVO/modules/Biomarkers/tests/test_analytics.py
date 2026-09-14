@@ -8,9 +8,19 @@ import os
 import sys
 import numpy as np
 import pandas as pd
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from Biomarkers.routines import analytics  # noqa: E402
+
+# THE `live` MARK (2026-09-12). The six tests carrying it read the live RCS08 record through the real
+# service (they skip when the participant is absent) and cost 7 to 15 s each, about 52 s of the
+# container suite's 80 s. They leave the routine run and run once a day instead: the container
+# runner (`_agent_bridge/run_tests.py`) reads this mark off each function's `pytestmark` and skips
+# it unless started with `--live`; `run_both_suites.sh --live` runs only these, and the daily pass
+# (`stability_precompute_loop.sh`) calls that. `pytest` is imported only for the mark; every test
+# in this file is still a plain-`assert` function the container runner can call with no arguments.
+live = pytest.mark.live
 
 
 def _cv_df(n=5000, seed=0):
@@ -114,35 +124,6 @@ def test_lfp_distribution_robust_range():
     assert d["n_clipped"] >= 3 and d["n_total"] == 5003
     assert edges[-1] - edges[0] < 2000                     # range zoomed to the bulk, not [-20k, 146k]
     assert max(d["counts"]) < sum(d["counts"])             # not all samples in one bar
-
-
-def test_corr_spectrum_enforces_50hz_cap():
-    """50 Hz cap in the correlation spectrum: a planted, dominant correlation at a >=50 Hz bin must
-    be excluded from peak-picking, the per-frequency significance markers, AND the peak-scatter — a
-    biomarker can never be drawn from there, so the panel must not surface it."""
-    from Biomarkers.routines import streaming_psd
-    f = streaming_psd.F_SET
-    Ff = len(f)
-    rng = np.random.default_rng(1)
-    E = 40
-    labels = np.linspace(0, 10, E)
-    feat = rng.normal(0, 1, (E, 2, Ff))
-    hi = int(np.argmin(np.abs(f - 70)))                 # plant the strongest |R| at 70 Hz
-    feat[:, 0, hi] = labels * 3
-    corr = np.array([[ (np.corrcoef(feat[:, c, j], labels)[0, 1] if np.std(feat[:, c, j]) > 0 else 0.0)
-                       for j in range(Ff)] for c in range(2)])
-    det = {"f_set": f, "corr": corr, "pval": np.full((2, Ff), 1e-4), "feature": feat,
-           "labels": labels, "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "transform": "log"}
-    # The global argmax |R| for ch0 IS the >=50 Hz cell -- the cap must keep it out of the outputs.
-    assert f[int(np.argmax(np.abs(corr[0])))] >= 50.0
-    cs = analytics.corr_spectrum(det, max_freq_hz=50.0)
-    ch0 = cs["channels"][0]
-    assert all(p["freq"] < 50.0 for p in ch0["peaks"]), "a >=50 Hz peak leaked past the cap"
-    assert all(ch0["significant"][k] is None for k in range(Ff) if f[k] >= 50.0)
-    if ch0["peak_scatter"] is not None:
-        assert ch0["peak_scatter"]["peak_freq"] < 50.0
-    # r is NaN'd at every >=50 Hz bin so nothing downstream can pick it.
-    assert all(ch0["r"][k] is None for k in range(Ff) if f[k] >= 50.0)
 
 
 def test_lfp_distribution_otsu_on_mad_filtered_data():
@@ -446,25 +427,6 @@ def test_binarize_cut_invariant_to_sample_multiplicity():
         "dedup made no difference — rating_group not wired through"
 
 
-def test_matched_sample_counts_reports_high_low_and_offset():
-    vals = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, np.nan], float)
-    dt = np.array([2, -5, 10, np.nan, 3, -12, 1, 8, -2, np.nan], float)
-    mc = analytics.matched_sample_counts(vals, strategy="tertile", match_dt_min=dt, tolerance_min=15)
-    assert mc["n_matched"] == 9 and mc["n_high"] == 3 and mc["n_low"] == 3, mc
-    assert mc["n_excluded_middle"] == 3, mc
-    assert abs(mc["median_abs_offset_min"] - 4.0) < 1e-9, mc
-
-
-def test_cv_logistic_auc_oriented_and_guards_small_n():
-    rng = np.random.default_rng(1)
-    x = np.concatenate([rng.normal(0, 1, 30), rng.normal(3, 1, 30)])
-    y = np.array([0] * 30 + [1] * 30, float)
-    auc, n = analytics._cv_logistic_auc(x, y)
-    assert np.isfinite(auc) and auc > 0.8, auc
-    assert np.isnan(analytics._cv_logistic_auc(x[:6], y[:6])[0])        # too few -> NaN
-    assert np.isnan(analytics._cv_logistic_auc(x, np.ones_like(y))[0])  # single class -> NaN
-
-
 def test_builder_no_device_psd_scale_in_detail():
     """device_psd_scale_by_channel and psd_abs_uv2_per_hz were REMOVED from build_pooled_detail
     (PI 2026-06-27). Validates: (1) neither key is present in the returned detail;
@@ -549,37 +511,6 @@ def test_band_stim_stability_shape_and_no_stim_degrades():
         assert k in out, list(out)
     assert set(out["or_by_era"].keys()) == {"OFF", "LOW", "HIGH"}, out["or_by_era"]
     assert set(out["era_counts"].keys()) == {"OFF", "LOW", "HIGH"}, out["era_counts"]
-
-
-def test_pooled_psd_detail_is_per_channel_and_matches_pro():
-    from Biomarkers.routines import streaming_psd as sp
-    f = sp.F_SET
-    # Two channels, two sources; flat spectra so interpolation is exact.
-    def spec(level):
-        return (f, np.full(f.shape, level, float))
-    T0 = 1.75e9
-    HR = 3600.0
-    rows = []
-    # channel A: TD streaming at t=T0 and t=T0+10h; channel B: montage at t=T0+20h. Spaced hours
-    # apart so the 15-min window matches AT MOST one of them.
-    for i, t in enumerate([T0, T0 + 10 * HR]):
-        fr, pw = spec(2.0 + i)
-        rows.append({"channel": "ZERO_TWO_LEFT", "source": "TD streaming", "t": t, "freq": fr, "power": pw})
-    fr, pw = spec(5.0)
-    rows.append({"channel": "ZERO_TWO_RIGHT", "source": "Montage/survey", "t": T0 + 20 * HR, "freq": fr, "power": pw})
-    # PRO: one report 5 min after T0 (matches ONLY the first A row), one far from everything
-    pro_t = np.array([T0 + 300, T0 + 1e6]); pro_v = np.array([8.0, 2.0])
-    det = sp.build_pooled_psd_detail(rows, pro_t, pro_v, tolerance_min=15)
-    assert det["chan_order"] == ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], det["chan_order"]
-    assert det["prelog"] is True
-    # channel axis is per-channel: each row populates ONLY its own channel column (no cross-pooling)
-    psd = det["psd"]            # (N, C, F)
-    chA = ~np.isnan(psd[:, 0, 0]); chB = ~np.isnan(psd[:, 1, 0])
-    assert chA.sum() == 2 and chB.sum() == 1, (chA.sum(), chB.sum())
-    assert not (chA & chB).any()   # no row appears in two channels
-    # matching: exactly the first A row (within 15 min of pro_t[0]) carries a label
-    assert det["pool_meta"]["n_matched"] == 1, det["pool_meta"]
-    assert np.isfinite(det["labels"]).sum() == 1
 
 
 def test_deployment_roc_bootstrap_defolded_null_ci_drops_below_chance():
@@ -905,7 +836,6 @@ if __name__ == "__main__":
     test_cluster_scatter_missing_features()
     test_pain_binarization()
     test_lfp_distribution_robust_range()
-    test_corr_spectrum_enforces_50hz_cap()
     test_lfp_distribution_otsu_on_mad_filtered_data()
     test_power_pain_scatter_corr_and_outlier_exclusion()
     test_td_sliding_corr_grid_reaches_last_session_drops_corrupt_dates()
@@ -917,12 +847,9 @@ if __name__ == "__main__":
     test_chronic_center_freqs_active_group_wins()
     test_chronic_center_freqs_missing_is_safe()
     test_binarize_labels_tertile_excludes_middle()
-    test_matched_sample_counts_reports_high_low_and_offset()
-    test_cv_logistic_auc_oriented_and_guards_small_n()
     test_builder_no_device_psd_scale_in_detail()
     test_band_stim_stability_shape_and_no_stim_degrades()
     test_band_mixedmodel_inference_emits_or_ci()
-    test_pooled_psd_detail_is_per_channel_and_matches_pro()
     test_deployment_roc_recovers_planted_band()
     test_deployment_roc_clustered_ci_wider_than_naive()
     test_deployment_roc_feature_hist_shape_and_counts()
@@ -1345,6 +1272,7 @@ def test_deployment_summary_identity_is_json_serializable():
     assert isinstance(restored["identity"]["participant"], str)
 
 
+@live
 def test_deployment_summary_real_payload_json_serializable():
     """Integration guard (code-review PR #8 nit): the hand-built test above can't catch a
     non-serializable value (numpy scalar, model object) leaking from a REAL roc/forward/by_era/threshold
@@ -1533,6 +1461,7 @@ def test_roc_small_sample_advisory_is_label_only():
             f"advisory must not change {k}: {a} vs {b}"
 
 
+@live
 def test_deployment_summary_carries_temporal_validity_block():
     """Audit [23]: the deployment_summary device record must ALWAYS carry an explicit
     `temporal_validity` block (forward_validation / threshold_drift / stim_state_portability), each
@@ -2154,6 +2083,7 @@ if __name__ == "__main__":
             _fn(); print("PASS", _name)
 
 
+@live
 def test_deployment_summary_survives_unestimable_power_requirement():
     """Regression, 2026-08-30: `n_ratings_needed` is legitimately None when the power calculation
     flags underpowering but cannot solve for the required N (an effect at chance has no finite N
@@ -2327,19 +2257,6 @@ def test_log_scale_rule_is_two_sided_where_raw_is_not():
     # the log rule catches BOTH extremes
     assert m_log[-1] and m_log[-2]
     assert (m_raw & (x < med)).sum() == 0, "raw-scale removals are one-sided (high only)"
-
-
-def test_one_exclusion_set_blanks_every_array_identically():
-    """The whole point: a single exclusion set must reach every statistic. Blanking to NaN keeps row
-    alignment against the label and cluster vectors, so no downstream filter can disagree."""
-    from modules.Biomarkers.routines import analytics as an
-    disp = np.array([1., 1.1, 0.9, 1.05, 1e6, 0.95])
-    log = np.log10(disp)
-    (d2, l2), info = an.apply_outlier_exclusion([disp, log], detect_on=disp,
-                                                n_mad=5.0, scale="log")
-    assert info["n_removed"] == 1
-    assert list(np.where(~np.isfinite(d2))[0]) == list(np.where(~np.isfinite(l2))[0]) == [4]
-    assert d2.shape == disp.shape and l2.shape == log.shape     # alignment preserved
 
 
 def test_the_two_mad_helpers_have_opposite_polarity_and_must_not_be_confused():
@@ -2540,9 +2457,8 @@ def test_all_deployment_binarizations_pass_rating_group():
             where = owner_of(node.lineno)
             (passes if any(k.arg == "rating_group" for k in node.keywords) else omits).add(where)
     assert omits <= {
-        # counts high and low on the neural samples for a histogram; it is not an estimate, and
-        # it is handed a flat array of one score per session with no report grouping to pass
-        "matched_sample_counts",
+        # (`matched_sample_counts`, which counted high and low on the neural samples for a
+        # histogram nothing drew, was in this list until its deletion on 2026-09-12, B8.)
         # these two split on ONE channel's own samples through `finite_mask`, reproducing the
         # offline per-channel cut on purpose (parity audit section 6b)
         "band_mixedmodel_inference", "band_stim_stability",
@@ -2579,6 +2495,7 @@ def test_rating_equal_weighting_makes_every_rating_count_once():
     assert abs(metrics.roc_auc_score(y, x, sample_weight=w) - 1.0) < 1e-9
 
 
+@live
 def test_deployment_reports_both_weightings_and_their_difference():
     import sys
     sys.path.insert(0, "/usr/src/BRAVO"); sys.path.insert(0, "/usr/src/BRAVO/modules")
@@ -2597,6 +2514,7 @@ def test_deployment_reports_both_weightings_and_their_difference():
 
 
 # --- F10: the outlier rule's influence must be visible on the exploration path -----------------
+@live
 def test_exploration_publishes_an_outlier_sensitivity_block():
     """The rule's median and MAD come from the same sample the exclusion then alters, and neither
     the Fisher-z interval nor the permutation p accounts for that. The headline stays filtered
@@ -2665,6 +2583,7 @@ def test_neff_inversion_round_trips():
         assert abs(got - n_true) / n_true < 0.02, (r_true, n_true, got)
 
 
+@live
 def test_family_guard_passes_on_the_reconciled_left_leg_outcome():
     """THE DEFECT THIS GUARD WAS BUILT FOR, AND ITS REPAIR.
 
@@ -3054,22 +2973,6 @@ def _band_arrays(n_reports=40, per_report=3, effect=0.0, seed=0, pain_low=1.0, p
     return power, pain, rg, times
 
 
-def _pooled_detail_with_one_good_band(n_reports=40, per_report=3, center=20.0, effect=0.9, seed=0):
-    """Pooled spectra shaped like the biomarker page's own, with a separation planted in ONE band
-    on ONE contact pair, so a sweep over contacts and bands has something to find and somewhere to
-    correctly find nothing."""
-    power, pain, rg, times = _band_arrays(n_reports=n_reports, per_report=per_report,
-                                          effect=effect, seed=seed)
-    rng = np.random.default_rng(seed + 1)
-    f = np.arange(2.0, 40.0, 0.5)
-    chans = ["ZERO_TWO_LEFT", "ONE_THREE_RIGHT"]
-    psd = rng.normal(0.0, 1.0, (pain.size, len(chans), f.size))
-    band = (f >= center - 2.5) & (f < center + 2.5)
-    psd[:, 0, :][:, band] = power[:, None] + rng.normal(0.0, 0.05, (pain.size, int(band.sum())))
-    return {"f_set": f, "psd": psd, "labels": pain, "chan_order": chans,
-            "rating_group": rg, "times": list(times), "prelog": True}
-
-
 def test_band_pain_auc_finds_a_planted_separation_and_says_it_is_established():
     """A band that really does separate this patient's high pain from their low pain must come back
     with a value above 0.5, an interval that stays above 0.5, and the word "established"."""
@@ -3256,131 +3159,6 @@ def test_the_resampling_agrees_with_the_one_the_deployment_roc_already_used():
                                           np.random.default_rng(4))
     b = analytics._weighted_auc_matrix(power, y, W)
     assert np.allclose(np.nan_to_num(a, nan=-1), np.nan_to_num(b, nan=-1)), "the two disagree"
-
-
-def test_the_exported_table_covers_every_contact_pair_and_every_band_centre_from_8_to_30_hz():
-    """What the PI asked for: one row per electrode contact pair per band centre, across 8 to 30 Hz.
-    Each row must name the contact pair, which side of the brain it is on, the band, the value, its
-    interval, how many pain reports are behind it and how pain was split."""
-    det = _pooled_detail_with_one_good_band(n_reports=30, per_report=2, center=20.0, effect=1.0)
-    tbl = analytics.band_pain_auc_export(det, n_boot=200, seed=1)
-    assert list(analytics.DEFAULT_PAIN_BAND_CENTERS_HZ)[0] == 8.0
-    assert list(analytics.DEFAULT_PAIN_BAND_CENTERS_HZ)[-1] == 30.0
-    assert len(analytics.DEFAULT_PAIN_BAND_CENTERS_HZ) == 23
-    assert len(tbl) == 2 * 23, len(tbl)
-    for col in ("channel", "contacts", "brain_side", "band_center_hz", "band_low_hz",
-                "band_high_hz", "band_fully_inside_8_to_30_hz", "answer", "auc", "auc_low",
-                "auc_high", "no_relationship_value", "n_pain_reports", "n_spectral_samples",
-                "pain_split_rule", "power_feature", "why"):
-        assert col in tbl.columns, col
-    assert set(tbl.channel) == {"ZERO_TWO_LEFT", "ONE_THREE_RIGHT"}, set(tbl.channel)
-    assert set(tbl.brain_side) == {"Left", "Right"}, set(tbl.brain_side)
-    # the bands at the two ends stick out past 8 and past 30 Hz and are flagged as such
-    ends = tbl[tbl.band_center_hz.isin([8.0, 30.0])]
-    assert not ends.band_fully_inside_8_to_30_hz.any(), ends[["band_center_hz"]]
-    mids = tbl[tbl.band_center_hz.isin([15.0, 20.0])]
-    assert mids.band_fully_inside_8_to_30_hz.all(), mids[["band_center_hz"]]
-    assert (tbl.no_relationship_value.dropna() == 0.5).all(), "0.5 is what coin flipping gives"
-    # the planted band on the planted contact pair is found, and the same band on the other pair
-    # is correctly not established
-    good = tbl[(tbl.channel == "ZERO_TWO_LEFT") & (tbl.band_center_hz == 20.0)].iloc[0]
-    other = tbl[(tbl.channel == "ONE_THREE_RIGHT") & (tbl.band_center_hz == 20.0)].iloc[0]
-    assert good["answer"] == analytics.BAND_PAIN_ESTABLISHED, dict(good)
-    assert other["answer"] != analytics.BAND_PAIN_ESTABLISHED, dict(other)
-
-
-def test_the_exported_table_says_not_assessed_for_a_contact_pair_that_is_not_there():
-    """An absent contact pair must not appear as a value near 0.5, which a reader would take for a
-    measurement showing no separation."""
-    det = _pooled_detail_with_one_good_band(n_reports=20, per_report=2)
-    tbl = analytics.band_pain_auc_export(det, channels=["NOT_A_CONTACT"], centers=[20.0],
-                                         n_boot=100, seed=1)
-    assert len(tbl) == 1
-    assert tbl.answer.iloc[0] == analytics.BAND_PAIN_NOT_ASSESSED, dict(tbl.iloc[0])
-    assert tbl.auc.iloc[0] is None or not np.isfinite(tbl.auc.iloc[0]), tbl.auc.iloc[0]
-    assert "not present" in tbl.why.iloc[0], tbl.why.iloc[0]
-
-
-def test_the_correlation_table_covers_the_same_rows_and_is_measured_against_zero_not_half():
-    """The companion table. It must cover the same contact pairs and band centres so the two can be
-    read side by side, and every row must say that the value meaning no relationship is 0 here
-    rather than 0.5, so the two tables can never be read against the wrong comparison."""
-    det = _pooled_detail_with_one_good_band(n_reports=30, per_report=2, center=20.0, effect=1.0)
-    auc = analytics.band_pain_auc_export(det, centers=[15.0, 20.0], n_boot=200, seed=1)
-    cor = analytics.band_pain_correlation_export(det, centers=[15.0, 20.0], n_boot=200, seed=1)
-    assert len(cor) == len(auc), (len(cor), len(auc))
-    assert list(cor.channel) == list(auc.channel), "the two tables must line up row for row"
-    assert list(cor.band_center_hz) == list(auc.band_center_hz)
-    assert (cor.no_relationship_value.dropna() == 0.0).all(), "zero means no relationship here"
-    for col in ("pearson_r", "pearson_r_low", "pearson_r_high", "pearson_r_per_sample",
-                "n_pain_reports", "answer", "power_feature", "why"):
-        assert col in cor.columns, col
-    good = cor[(cor.channel == "ZERO_TWO_LEFT") & (cor.band_center_hz == 20.0)].iloc[0]
-    assert good["answer"] == analytics.BAND_PAIN_ESTABLISHED, dict(good)
-    assert good["pearson_r"] > 0, good["pearson_r"]
-    assert good["pearson_r_low"] > 0, (good["pearson_r_low"], good["pearson_r_high"])
-    assert -1.0 <= good["pearson_r"] <= 1.0
-
-
-def test_the_correlation_says_none_where_the_other_table_says_how_pain_was_split():
-    """The correlation uses the continuous pain score and does not split it, and the row has to say
-    so, or a reader comparing the two tables will assume both used the same high-or-low split."""
-    power, pain, rg, times = _band_arrays(n_reports=30, per_report=3, effect=0.9, seed=37)
-    out = analytics.band_pain_correlation(power, pain, rg, times=times, n_boot=200, seed=1)
-    assert out["pain_split_rule"].startswith("none"), out["pain_split_rule"]
-    assert "continuous pain score" in out["pain_split_rule"], out["pain_split_rule"]
-
-
-def test_the_correlation_moves_with_the_power_scale_and_the_other_number_does_not():
-    """The reason the two tables need different warnings on them. A correlation is about
-    straight-line agreement, so putting the power through a logarithm changes it. The area under the
-    curve depends only on the order of the values, so it does not."""
-    power, pain, rg, times = _band_arrays(n_reports=40, per_report=3, effect=1.0, seed=41)
-    curved = 10.0 ** (power / 2.0)                  # same order, very different spacing
-    r_flat = analytics.band_pain_correlation(power, pain, rg, times=times, n_boot=200, seed=1)
-    r_curved = analytics.band_pain_correlation(curved, pain, rg, times=times, n_boot=200, seed=1)
-    a_flat = analytics.band_pain_auc(power, pain, rg, times=times, n_boot=200, seed=1)
-    a_curved = analytics.band_pain_auc(curved, pain, rg, times=times, n_boot=200, seed=1)
-    assert abs(r_curved["pearson_r"] - r_flat["pearson_r"]) > 0.05, \
-        (r_flat["pearson_r"], r_curved["pearson_r"])
-    assert abs(a_curved["auc"] - a_flat["auc"]) < 1e-12, (a_flat["auc"], a_curved["auc"])
-
-
-def test_the_correlation_table_also_reports_the_value_with_the_logarithm_undone():
-    """The power in the pooled spectra is a logarithm that has already been standardised within each
-    recording source, so the stimulator's own units cannot be recovered from it. The extra column
-    lets a reader see whether the answer turns on the scale."""
-    det = _pooled_detail_with_one_good_band(n_reports=30, per_report=2, center=20.0, effect=1.0)
-    cor = analytics.band_pain_correlation_export(det, centers=[20.0], n_boot=200, seed=1)
-    for col in ("pearson_r_after_undoing_the_logarithm",
-                "pearson_r_after_undoing_the_logarithm_low",
-                "pearson_r_after_undoing_the_logarithm_high",
-                "answer_after_undoing_the_logarithm"):
-        assert col in cor.columns, col
-    row = cor[cor.channel == "ZERO_TWO_LEFT"].iloc[0]
-    assert row["pearson_r_after_undoing_the_logarithm"] is not None
-    assert "NOT the stimulator's own units" in row["power_feature"], row["power_feature"]
-
-
-def test_reading_a_band_that_is_not_in_the_exported_table_says_not_assessed_and_carries_no_value():
-    """The lookup the closed-loop page goes through. A missing row must never come back as a value
-    near 0.5, because that reads as a measurement showing no separation when nothing was measured."""
-    det = _pooled_detail_with_one_good_band(n_reports=20, per_report=2)
-    tbl = analytics.band_pain_auc_export(det, centers=[20.0], n_boot=100, seed=1)
-    hit = analytics.read_band_pain_auc_from_export(tbl, channel="ZERO_TWO_LEFT", center_hz=20.0)
-    assert hit["answer"] in (analytics.BAND_PAIN_ESTABLISHED, analytics.BAND_PAIN_NOT_RESOLVED)
-    assert hit["auc"] is not None
-    for miss in (analytics.read_band_pain_auc_from_export(tbl, channel="NOPE", center_hz=20.0),
-                 analytics.read_band_pain_auc_from_export(tbl, channel="ZERO_TWO_LEFT",
-                                                          center_hz=11.0),
-                 analytics.read_band_pain_auc_from_export(None, channel="ZERO_TWO_LEFT",
-                                                          center_hz=20.0)):
-        assert miss["answer"] == analytics.BAND_PAIN_NOT_ASSESSED, miss
-        assert miss["auc"] is None, miss
-    # a centre frequency that has been through a comma-separated file still matches
-    near = analytics.read_band_pain_auc_from_export(tbl, channel="ZERO_TWO_LEFT",
-                                                    center_hz=20.000000000000004)
-    assert near["answer"] == hit["answer"], (near["answer"], hit["answer"])
 
 
 def test_the_old_straight_line_calculation_is_gone_from_this_page():

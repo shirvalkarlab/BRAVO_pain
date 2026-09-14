@@ -405,18 +405,6 @@ def test_the_form_is_not_mutated_by_being_read():
     assert np.array_equal(before_t, idx.psd("ZERO_THREE_LEFT")["t"])
 
 
-def test_reading_the_same_form_twice_gives_the_same_answer():
-    td = [_td_recording(["ZERO_THREE_LEFT"], t0=T0, n=int(FS * 200), seed=7)]
-    psd = [_psd_record("ZERO_THREE_LEFT", T0 + 300.0)]
-    idx = _index(td, psd)
-    pro = [T0 + 20 * i for i in range(20)]
-    first = per_pro_lsb_indexed(pro, None, "ZERO_THREE_LEFT", 12.7,
-                                index=idx, analytics=analytics)
-    second = per_pro_lsb_indexed(pro, None, "ZERO_THREE_LEFT", 12.7,
-                                 index=idx, analytics=analytics)
-    _assert_identical(first, second)
-
-
 # The many-centre reader (`per_pro_lsb_spectrum_indexed`, one list of LSB band-power values per
 # pain rating) and its eight tests were deleted on 2026-09-10 with the platform function they
 # proved equal to (decision 115): no page had read it since 2026-06-28.

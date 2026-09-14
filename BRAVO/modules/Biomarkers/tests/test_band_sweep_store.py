@@ -72,7 +72,7 @@ def _sweep_stub(channel):
         "best_auc_rows": [{"band_center_hz": 9.5, "integration_seconds_requested": 5.0,
                            "auc": 0.7, "answer": "not_resolved"}],
         "pain_split_rule": "median split", "pain_low_cut": 4.0, "pain_high_cut": 4.0,
-        "matched_seconds": 0.01, "total_seconds": 0.02, "figures": {"heat": {"data": []}},
+        "matched_seconds": 0.01, "total_seconds": 0.02,
     }
 
 

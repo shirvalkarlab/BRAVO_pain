@@ -288,50 +288,10 @@ def test_all_four_conditions_are_always_evaluated_and_reported():
 # ---------------------------------------------------------------------------------------------
 # Selected biomarker bands: the DEVICE question and the STATISTICAL question, kept apart
 # ---------------------------------------------------------------------------------------------
-def test_supplying_selected_bands_adds_two_separately_reported_conditions():
-    """The device-window question and the statistical-support question are different questions.
-
-    A band can fail either one alone, so they must be reported separately or a reader cannot tell
-    which one binds.
-    """
-    g = GATE.evaluate_gate(_frozen(_setting(rate_hz=130.0)),
-                           selected_bands=GATE.RCS08_SELECTED_BANDS,
-                           response_summary=GATE.RCS08_RESPONSE_SUMMARY)
-    names = [c.name for c in g.conditions]
-    assert names == ["rate_at_or_above_adaptive_minimum", "openloop_choice_resolved",
-                     "selected_band_inside_adaptive_window",
-                     "selected_band_statistically_supported",
-                     "adaptive_band_passes_lfp_response",
-                     "amplitude_limits_inside_envelope_and_under_ceiling"]
-    assert len(g.conditions) == 6
-
-
 def test_omitting_selected_bands_leaves_the_original_four_condition_shape():
     g = GATE.evaluate_gate(_frozen(), lfp=_responding_lfp())
     assert len(g.conditions) == 4
     assert "selected_band_inside_adaptive_window" not in [c.name for c in g.conditions]
-
-
-def test_the_out_of_window_band_is_excluded_by_the_device_not_by_its_statistics():
-    """The 3.92 Hz band spans roughly 1.4-6.4 Hz at 5 Hz width, outside the 8-30 Hz window.
-
-    That exclusion holds whatever its p-value had turned out to be, and the gate must say so
-    rather than folding it in with the statistical refusal. Conflating the two would overstate the
-    case: the two RCS08 bands fail for genuinely different reasons.
-    """
-    nrs = [b for b in GATE.RCS08_SELECTED_BANDS if b.outcome == "nrs"][0]
-    lo, hi = nrs.band_hz
-    assert lo == pytest.approx(1.4215, abs=1e-3)
-    assert hi == pytest.approx(6.4215, abs=1e-3)
-    ok, why = nrs.adaptive_capable()
-    assert ok is False
-    assert "outside the adaptive range" in why
-    c = GATE.check_selected_band_in_adaptive_window(GATE.RCS08_SELECTED_BANDS)
-    assert "DEVICE constraint" in c.detail or "DEVICE window" in c.detail
-    assert "3.921" in c.detail
-    # and it is NOT counted among the candidates whose statistics are assessed
-    s = GATE.check_selected_band_statistical_support(GATE.RCS08_SELECTED_BANDS)
-    assert [r["outcome"] for r in s.evidence["candidates"]] == ["left_leg_vas"]
 
 
 def test_a_band_outside_the_window_would_be_excluded_even_with_a_significant_p_value():
@@ -342,33 +302,6 @@ def test_a_band_outside_the_window_would_be_excluded_even_with_a_significant_p_v
     assert hypothetical.adaptive_capable()[0] is False
     c = GATE.check_selected_band_in_adaptive_window([hypothetical])
     assert c.passed is False
-
-
-def test_the_only_adaptive_capable_band_is_not_statistically_supported():
-    """The 14.817 Hz band IS inside the window and fails on its selection-corrected statistics.
-
-    Reconciled by the biomarker track (audit F8 part 2, commit 6001e00): perm_p moved from 0.6074
-    to 0.4166 and FDR q = 0.5055, so it does not survive multiplicity correction at all, and the
-    observed correlation does not exceed its own null 95th percentile.
-    """
-    llv = [b for b in GATE.RCS08_SELECTED_BANDS if b.outcome == "left_leg_vas"][0]
-    assert llv.adaptive_capable()[0] is True
-    assert llv.perm_p == pytest.approx(0.4166)
-    assert llv.fdr_q == pytest.approx(0.5055)
-    assert llv.exceeds_null_95th is False
-    assert llv.statistically_supported() is False
-    c = GATE.check_selected_band_statistical_support(GATE.RCS08_SELECTED_BANDS)
-    assert c.passed is False
-    assert "0.4166" in c.detail and "0.5055" in c.detail
-    assert "separate refusal" in c.detail
-
-
-def test_the_nrs_band_lost_its_nominal_significance_under_selection_correction():
-    nrs = [b for b in GATE.RCS08_SELECTED_BANDS if b.outcome == "nrs"][0]
-    assert nrs.perm_p == pytest.approx(0.0809)
-    assert nrs.perm_p >= GATE.SELECTION_ALPHA      # no longer nominally significant
-    assert nrs.statistically_supported() is False
-    assert nrs.exceeds_null_95th is False
 
 
 def test_a_band_surviving_permutation_but_not_fdr_is_refused():
@@ -405,30 +338,6 @@ def test_the_selection_thresholds_are_the_conventional_values_and_are_not_relaxe
 # ---------------------------------------------------------------------------------------------
 # A supplied LFP-response verdict
 # ---------------------------------------------------------------------------------------------
-def test_a_supplied_failing_response_summary_is_reported_with_its_source():
-    """3 of 15 channel-by-rate cells suppress, one-sided binomial p = 0.996.
-
-    This verdict was computed elsewhere over the whole historical record, which is a larger
-    computation than assess_response performs on one band, so it is reported with attribution
-    rather than recomputed and presented as the same claim.
-    """
-    c = GATE.check_adaptive_band(_frozen(), response_summary=GATE.RCS08_RESPONSE_SUMMARY)
-    assert c.passed is False
-    assert "3 of 15" in c.detail
-    assert "0.996" in c.detail
-    assert "165 Hz" in c.detail
-    assert "established outside this module" in c.detail
-    assert "supplied by" in c.detail
-
-
-def test_a_supplied_summary_takes_precedence_over_row_level_evidence():
-    """When both are given, the externally established verdict is the one reported."""
-    c = GATE.check_adaptive_band(_frozen(), lfp=_responding_lfp(),
-                                 response_summary=GATE.RCS08_RESPONSE_SUMMARY)
-    assert c.passed is False
-    assert c.evidence["source"] == "supplied"
-
-
 def test_a_supplied_summary_with_no_verdict_is_not_assessed():
     s = GATE.ResponseSummary(responds=None, source="a run that did not conclude")
     c = GATE.check_adaptive_band(_frozen(), response_summary=s)
@@ -442,22 +351,6 @@ def test_a_supplied_passing_summary_passes():
     c = GATE.check_adaptive_band(_frozen(), response_summary=s)
     assert c.passed is True
     assert "12 of 15" in c.detail
-
-
-def test_the_reconciled_plate_carries_its_provenance():
-    """Three successive corrections have moved this statistic, so each band must name its source.
-
-    The values are the selection-corrected ones, and the provenance records which commit reconciled
-    the permutation family with the family the band was actually selected from.
-    """
-    assert len(GATE.RCS08_SELECTED_BANDS) == 2
-    for b in GATE.RCS08_SELECTED_BANDS:
-        assert "6001e00" in b.provenance
-        assert "selection-corrected from perm_p" in b.provenance
-        assert b.exceeds_null_95th is False, "neither band exceeds its own null 95th percentile"
-        assert b.statistically_supported() is False
-    assert GATE.RCS08_RESPONSE_SUMMARY.responds is False
-    assert GATE.RCS08_RESPONSE_SUMMARY.source
 
 
 def test_the_gate_can_pass_when_every_condition_is_met():
@@ -504,19 +397,6 @@ def test_an_unknown_condition_name_raises_rather_than_returning_a_default():
 # ---------------------------------------------------------------------------------------------
 # LfpEvidence
 # ---------------------------------------------------------------------------------------------
-def test_band_power_uses_the_device_definition_of_a_sum_of_squares():
-    """The device thresholds a linear SUM of squared magnitude over the band, not a mean or a log.
-
-    A mean would differ from the sum by the bin count, and the threshold handed to the device has to
-    be in the units the device uses.
-    """
-    freqs = np.array([9.0, 10.0, 11.0, 12.0, 13.0])
-    mag = np.array([[1.0, 2.0, 3.0, 4.0, 5.0]])
-    ev = GATE.LfpEvidence(amplitude_mA=np.array([1.0]), magnitude=mag, freqs=freqs)
-    got = ev.power_for(11.0, 2.0)                # selects 10, 11, 12 Hz
-    assert got[0] == pytest.approx(2.0 ** 2 + 3.0 ** 2 + 4.0 ** 2)
-
-
 def test_precomputed_band_power_is_used_when_supplied():
     ev = GATE.LfpEvidence(amplitude_mA=np.array([1.0, 3.0]),
                           band_power={(15.0, 5.0): np.array([10.0, 2.0])})

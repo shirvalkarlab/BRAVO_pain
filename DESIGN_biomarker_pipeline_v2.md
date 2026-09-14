@@ -169,6 +169,12 @@ Timeline are band-locked (deployment), but the underlying streaming TD is not.
 
 ## 6. BandCandidate contract (the interface to the sim module) — FINALIZED v1
 
+> **Note added 2026-09-12.** The server-side emitter of this schema (`build_band_candidate` in
+> `Biomarkers/bravo_service.py`, behind the `/emitBandCandidate` route) was removed on the PI's
+> decision of 2026-09-12 (Biomarkers review finding B12): no page ever called it. The Closed-Loop
+> Deployment page builds the candidate on the browser side from the stored calibrated grid
+> (decision 122). The schema below is unchanged and still describes what that page commits.
+
 **The label is REDCap-PRO-defined.** The biomarker is built against one of the module's existing PRO
 metrics (`BIOMARKER_METRICS`: nrs, vas, left_leg_vas, back_vas, mpq_sum, composite_mpq_leftleg). Multiple
 PRO flavors stay selectable (the menu the module already exposes via `LabelMetric`). **Events corroborate;

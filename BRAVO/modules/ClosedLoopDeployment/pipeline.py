@@ -7,6 +7,11 @@ The report is deliberately conjunctive and deliberately pessimistic. ``Deploymen
 requires device eligibility AND three resolved edges AND a coherent sign pattern AND no blocker.
 Anything unmeasured reads as not licensed, because on a device that actuates, treating absence of
 evidence as permission is the specific failure this module exists to prevent.
+
+"Resolved" has meant the POINT SIGN since 2026-09-13 (PI rule: "established means mean only for
+flexibility", read as "point sign decides, but flag as provisional"): an edge with a finite,
+non-zero estimate has a direction; its interval and p stay on the page as caveats; a report
+licensed while any interval spans zero is ``provisional`` and its verdict string says so.
 """
 from __future__ import annotations
 
@@ -54,8 +59,13 @@ def _participant_facts(participant_uid, device_facts=None, constraints_module=No
     return facts
 
 
-def _facts_for(candidate, e1, e2, power_scale, device_facts=None):
+def _facts_for(candidate, e1, e2, power_scale, device_facts=None, threshold=None):
     """The candidate dict augmented with the facts this module has actually established.
+
+    ``threshold`` is the ``ThresholdPlan`` placed for this candidate, when one was; its
+    ``predicted_recapture_alert`` is what rule D26 reads (review C2, 2026-09-12: the ledger's D26
+    row had never once been evaluated, because eligibility ran BEFORE the plan that computes the
+    alert existed, and nothing else sets the key).
 
     Two rules about what may be filled in here, both of which exist to stop a gate being satisfied
     by something that was never measured.
@@ -65,6 +75,22 @@ def _facts_for(candidate, e1, e2, power_scale, device_facts=None):
     interval spans zero. Passing it would let D19 be satisfied by a direction the data does not
     support, which is precisely the substitution of a guess for a measurement that this module is
     built to refuse. An absent key is reported as not determinable, and not determinable blocks.
+    (SUPERSEDED 2026-09-12 by the PI's decision, kept here because this project keeps a reversed
+    rule on the record rather than deleting it. The paragraph below is the rule in force.)
+
+    A SIGN IS SUPPLIED WHENEVER THE EDGE HAS ONE, RESOLVED OR NOT — PI decision, 2026-09-12. On
+    RCS08 at the committed band (ZERO_TWO_LEFT, 24.5 Hz) the three edges' point signs were exactly
+    the pattern the device's fixed polarity needs (E1 −1, E2 +1, E3 −1), but E1 and E2 were
+    unresolved (E1 −4.45, interval −18.6 to +9.7, p 0.54; E2 an AUC of 0.588 with interval 0.477 to
+    0.695), so D19 reported "the inputs needed to evaluate this rule were not supplied" and blocked
+    the verdict. The concern in the superseded paragraph was put to the PI and he chose the point
+    sign. So that nothing downstream loses the distinction, each sign travels with a sibling flag,
+    ``power_slope_vs_amplitude_sign_established`` and ``power_slope_vs_pain_sign_established``
+    (the edge's ``statistically_established``: its interval excludes zero -- until 2026-09-13
+    this was the edge's ``resolved``, which the PI's rule of that day, "established means mean
+    only", turned into the point sign itself), and with the edge's interval and p-value
+    (``power_slope_vs_amplitude_ci`` / ``_p``, ``power_slope_vs_pain_ci`` / ``_p``), which D19's
+    observed-values line prints for any sign that is not established.
 
     THE POWER SCALE IS A FACT ABOUT THIS RUN, not an assumption. It is whatever scale the edges were
     actually estimated on, so if a caller asks for the log scale, D11 correctly fails rather than
@@ -75,10 +101,25 @@ def _facts_for(candidate, e1, e2, power_scale, device_facts=None):
     f["power_scale"] = "linear" if power_scale == "power_linear" else "log"
     # One centre frequency and one threshold mode per report, so no pooling occurs by construction.
     f.setdefault("pooled_across_center_or_mode", False)
-    if e1 is not None and e1.resolved and e1.sign is not None:
-        f["power_slope_vs_amplitude_sign"] = int(e1.sign)
-    if e2 is not None and e2.resolved and e2.sign is not None:
-        f["power_slope_vs_pain_sign"] = int(e2.sign)
+    # PI decision 2026-09-12: the point sign is supplied whenever the edge has one, and whether it
+    # is statistically established travels beside it rather than deciding whether it is supplied.
+    for _edge, _key in ((e1, "power_slope_vs_amplitude"), (e2, "power_slope_vs_pain")):
+        if _edge is None or _edge.sign is None:
+            continue
+        f[f"{_key}_sign"] = int(_edge.sign)
+        # Since 2026-09-13 ``resolved`` is the point sign itself (PI: "established means mean
+        # only"), so the flag D19 prints beside the sign reads the interval rule by its own name.
+        f[f"{_key}_sign_established"] = bool(getattr(_edge, "statistically_established", False))
+        if _edge.ci is not None:
+            try:
+                f[f"{_key}_ci"] = [float(_edge.ci[0]), float(_edge.ci[1])]
+            except (TypeError, ValueError, IndexError):
+                pass
+        if _edge.p is not None:
+            try:
+                f[f"{_key}_p"] = float(_edge.p)
+            except (TypeError, ValueError):
+                pass
     # Participant-level device facts are merged LAST and never overwrite a value the candidate
     # already carries: an explicit per-candidate setting is a deliberate override, while these are
     # defaults for the participant. Keys beginning with an underscore are provenance and diagnostics
@@ -86,6 +127,22 @@ def _facts_for(candidate, e1, e2, power_scale, device_facts=None):
     for _k, _v in (device_facts or {}).items():
         if not _k.startswith("_") and f.get(_k) is None:
             f[_k] = _v
+    # D26, from the threshold plan this same run placed. Only a plan that actually carries the
+    # alert fills it in: a run with no plan (no thresholds could be placed) leaves the key absent,
+    # so D26 reads "not determinable" rather than passing on nothing.
+    if threshold is not None:
+        _alert = getattr(threshold, "predicted_recapture_alert", None)
+        if _alert is not None and f.get("predicted_recapture_alert") is None:
+            f["predicted_recapture_alert"] = bool(_alert)
+        # The plan's own sentences (each capture verdict that is adverse, not established or not
+        # assessed), so the D26 row can say WHY -- why an alert is predicted, or why none could
+        # be: on RCS08's committed band no pooled slope is stored, the alert is None by
+        # authority's own rule (a prediction from no number would be a fabrication, decision 139),
+        # and the row stays not determinable WITH that reason on it instead of a blank.
+        _why = [str(w) for w in (getattr(threshold, "warnings", None) or []) if w]
+        if _why and f.get("predicted_recapture_alert_reason") is None:
+            f["predicted_recapture_alert_reason"] = "; ".join(_why)
+        f.setdefault("_threshold_plan_placed", True)
     return f
 
 
@@ -108,6 +165,15 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
         if "epoch" in cols and len(cols) > 1:
             pro_frame = design_matrix[cols].copy()
             pro_frame["report_id"] = pro_frame["epoch"].astype(str)
+    # THE SIDE IS THE CANDIDATE'S OWN (review C1, 2026-09-12): its actuated side, else its sensing
+    # side, else what the caller passed. ``hemisphere`` decides which current column E1, E3, the
+    # capture currents and the prescription read, and which side the manifest names; the page used
+    # to send "Left" for every request, so a band on a right contact was read against the LEFT
+    # stimulator's current. The caller's value is a fallback for a candidate that names no side.
+    _first_side = (candidates[0] if candidates and isinstance(candidates[0], dict) else {}) or {}
+    _side = (_first_side.get("actuated_hemisphere") or _first_side.get("sensing_hemisphere")
+             or hemisphere)
+    hemisphere = {"left": "Left", "right": "Right"}.get(str(_side).strip().lower(), _side)
     # The candidate's own centre joins the default grid, so a committed band outside 10.5 to
     # 27.5 Hz (the sweep offers 8.5 to 29.5) is evaluated rather than silently matching no rows.
     cen = set(float(c) for c in adapter.DEFAULT_BAND_CENTERS_HZ)
@@ -151,30 +217,27 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
     # the triangle and the panel cannot disagree. The historical setting-epoch estimate is kept
     # on the report beside it rather than thrown away. A row with no assessed slope leaves the
     # historical estimate in place -- absence of a pooled answer is not a reason to lose an edge.
+    # `pooled_edge` is what the two D26 capture verdicts read (PI decision 2026-09-12, "b and c");
+    # it stays None when no slope is stored so those verdicts say "not assessed" rather than
+    # quietly reading the historical setting-epoch edge, which is a different quantity.
+    pooled_edge = None
     if pooled_e1 and pooled_e1.get("pooled_slope_per_mA") is not None \
             and np.isfinite(float(pooled_e1["pooled_slope_per_mA"])):
         rep.edges_historical = {"E1": e1}
         e1 = E.pooled_actuation_edge(pooled_e1, scale=power_scale)
+        pooled_edge = e1
     e2 = E.state_edge(T, channel=ch, center_hz=fc, scale=power_scale)
-    e3 = E.therapy_edge(design_matrix)
+    # E3 ON THE ACTUATED SIDE'S CURRENT (review C1). ``therapy_edge`` defaults to the left column;
+    # the design matrix carries one amplitude column per side, and the side the loop would drive
+    # is the one whose current is regressed on pain.
+    _e3_col = None
+    if design_matrix is not None and hasattr(design_matrix, "columns"):
+        _e3_col = (adapter.resolve_setting_column(design_matrix.columns, "amp", hemisphere)
+                   or adapter.canonical_amp_col(hemisphere))
+    e3 = (E.therapy_edge(design_matrix, amp_col=_e3_col) if _e3_col
+          else E.therapy_edge(design_matrix))
     rep.edges = {"E1": e1, "E2": e2, "E3": e3}
     rep.coherence = C.coherence_report(e1, e2, e3)
-
-    # --- Phase 1: device eligibility, with every fact this module can legitimately supply ---------
-    con = _optional("constraints")
-    if con is not None and hasattr(con, "check_eligibility"):
-        # Device facts must be routed to the dict the rule actually READS. Several rules take
-        # their input from the PARTICIPANT dict rather than the candidate — D04 reads
-        # n_neurostimulators, D16 reads lead_type, D31 reads the BrainSense envelope — so merging
-        # everything into the candidate left those rules unevaluable while the values sat one
-        # dictionary away. That failure is silent: the rule reports "input not supplied" and the
-        # verdict stays blocked, which looks identical to genuinely missing data.
-        rep.eligibility = con.check_eligibility(
-            _facts_for(first, e1, e2, power_scale, device_facts=device_facts),
-            _participant_facts(participant_uid, device_facts, con))
-    else:
-        rep.blockers.append("constraints.py not available: device eligibility was NOT checked, so "
-                            "no candidate may be licensed")
 
     # --- control authority and threshold placement ----------------------------------------------
     d = T[(T.channel == ch) & (np.isclose(T.center_hz, fc))].dropna(subset=[power_scale])
@@ -237,7 +300,43 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
                 d.loc[(amps > 0) & (amps <= lo_a), power_scale].to_numpy(),
                 d.loc[(amps > 0) & (amps >= hi_a), power_scale].to_numpy(),
                 amp_low=float(lo_a), amp_high=float(hi_a),
-                expected_sign=-1, observed_series=d[power_scale].to_numpy())
+                expected_sign=-1, observed_series=d[power_scale].to_numpy(),
+                pooled_slope=pooled_edge)
+        elif np.isfinite(lo_a) and np.isfinite(hi_a):
+            # ONE therapeutic current on record (review C12, 2026-09-12). The two capture
+            # amplitudes must differ (D24: the thresholds are read at a low and a high current),
+            # so no plan can be placed -- and until this line nothing said so: the block was
+            # skipped, ``rep.threshold`` stayed None, and ``is_licensed`` does not require a plan,
+            # so with a stored pooled slope such a report could have read "supported" with no
+            # prescription behind it.
+            rep.blockers.append(
+                f"only one therapeutic {hemisphere} amplitude on record for this cell "
+                f"({float(lo_a):g} mA), so no low and high capture amplitudes exist (D24) and no "
+                f"thresholds were placed")
+
+    # --- Phase 1: device eligibility, with every fact this module can legitimately supply ---------
+    # RUNS AFTER THRESHOLD PLACEMENT, NOT BEFORE (review C2, 2026-09-12). Rule D26 reads the
+    # predicted RECAPTURE THRESHOLDS alert, and the only place that value is computed is the
+    # threshold plan above; with eligibility checked first the D26 row read "could not be
+    # determined from the inputs given" on every report ever made, while the same request computed
+    # the alert a few lines later and serialised it where the page does not show it. Nothing in
+    # threshold placement reads the eligibility report, and D19 still sees the edges because they
+    # are estimated first, so the move changes only which facts D26 is handed.
+    con = _optional("constraints")
+    if con is not None and hasattr(con, "check_eligibility"):
+        # Device facts must be routed to the dict the rule actually READS. Several rules take
+        # their input from the PARTICIPANT dict rather than the candidate — D04 reads
+        # n_neurostimulators, D16 reads lead_type, D31 reads the BrainSense envelope — so merging
+        # everything into the candidate left those rules unevaluable while the values sat one
+        # dictionary away. That failure is silent: the rule reports "input not supplied" and the
+        # verdict stays blocked, which looks identical to genuinely missing data.
+        rep.eligibility = con.check_eligibility(
+            _facts_for(first, e1, e2, power_scale, device_facts=device_facts,
+                       threshold=rep.threshold),
+            _participant_facts(participant_uid, device_facts, con))
+    else:
+        rep.blockers.append("constraints.py not available: device eligibility was NOT checked, so "
+                            "no candidate may be licensed")
 
     # --- controller replay -----------------------------------------------------------------------
     # Run BEFORE the prescription because the prescription's amplitude-side duty figures come from
@@ -280,12 +379,22 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
             # interface needs a toggle, and a toggle needs every option's field set. Building them
             # here rather than on demand also means the comparison is against one snapshot of the
             # data instead of two fetches that could straddle a change.
+            # The participant's own measured timing (decision 148; RCS08 today) and what the
+            # device RUNS on the sensing side (the newest session report's active group, read by
+            # the adapter into device_facts["active_sensing_group_timing"]) ride into every
+            # row of the parameter card, so the recommendation is shown against the current
+            # programming (2026-09-13). Either may be absent; the card says so per row.
+            _tr = _optional("timing_recommendation")
+            _record_timing = _tr.for_participant(participant_uid) if _tr is not None else {}
+            _prog_all = (device_facts or {}).get("active_sensing_group_timing") or {}
+            _programmed = _prog_all.get(hemisphere) if isinstance(_prog_all, dict) else None
             _all = presc.prescribe_all_modes(
                 threshold_plan=rep.threshold, candidate=first,
                 power_series=d[power_scale].to_numpy() if len(d) else None,
                 t_s=_t, replay_result=rep.replay,
                 validated_hemispheres=(hemisphere,) if rep.threshold is not None else (),
-                configuring_both_hemispheres=False)
+                configuring_both_hemispheres=False,
+                record_timing=_record_timing, programmed_timing=_programmed or {})
             rep.prescriptions = _all
             # `rep.prescription` stays as the mode the CANDIDATE asked for, so callers that predate
             # the toggle keep the behaviour they had. The recommendation is separate from the
@@ -323,4 +432,11 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
 
     if strict and rep.threshold is not None and rep.threshold.problems:
         rep.blockers.extend(rep.threshold.problems)
+    # THE TWO D26 CAPTURE VERDICTS WARN AND DO NOT BLOCK. PI decision 2026-09-12, "b and c". They
+    # used to travel in `threshold.problems` and land in `blockers` on the line above; they now
+    # travel in `threshold.warnings` and land in `rep.warnings`, which `is_licensed` does not
+    # read. Copied whether or not the run is strict, because a sentence that gates nothing has no
+    # strictness to respect.
+    if rep.threshold is not None and rep.threshold.warnings:
+        rep.warnings.extend(rep.threshold.warnings)
     return rep

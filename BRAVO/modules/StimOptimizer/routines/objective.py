@@ -340,6 +340,15 @@ def build_objective(epoch_stats: pd.DataFrame, *, incumbent_epoch, cfg=None,
     d["primary_item"] = item
     d["primary_scale_factor"] = sf
     ref = float(d.loc[d["epoch"] == incumbent_epoch, item].iloc[0])
+    if not np.isfinite(ref):
+        # Review S10 (2026-09-12): with a NaN reference every J is NaN, every epoch reads
+        # infeasible, and the arm is skipped as "only 0 feasible epochs ... too few to fit a
+        # surface" -- a reason that says the record has no usable epochs when it has plenty and
+        # the incumbent simply was not rated on this item. Name the actual cause.
+        raise ValueError(
+            f"the incumbent epoch {incumbent_epoch!r} carries no {item} rating, so J cannot be "
+            "referenced to it; every other epoch's rating is unusable until the setting in force "
+            f"has at least one {item} report")
 
     d["J_pain"] = d[item].astype(float) - ref
 

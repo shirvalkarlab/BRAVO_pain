@@ -14,7 +14,8 @@ Louie 2021 doi:10.1186/s12984-021-00873-9), and Matern-3/2 is the right smoothne
 for a response surface that is continuous but not analytic.
 
 Implementation note. scikit-learn's ``GaussianProcessRegressor`` is used rather than a
-torch-based stack. The grid is 228 cells, so the acquisition function is evaluated
+torch-based stack (the optional PyTorch/BoTorch twin, ``surrogate_torch.py``, and its ordinal
+safety model were deleted on 2026-09-12 as reached by nothing). The grid is 228 cells, so the acquisition function is evaluated
 exhaustively and no gradient-based acquisition optimizer is needed — this is what Sarikhani
 et al. did, and it makes the extra dependency pure cost inside a Django container.
 Per-observation noise variance enters through ``alpha``, which is how the heteroscedastic

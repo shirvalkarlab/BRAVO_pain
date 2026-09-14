@@ -97,6 +97,7 @@ import pandas as pd
 
 from Biomarkers.routines import analytics
 from . import clinic_steps
+from . import post_ramp as _post_ramp
 from StimOptimizer.routines import within_visit
 
 
@@ -841,10 +842,23 @@ def _tile_panel(source, tile_t, tile_power, ok_mask, centres, steps, *, band_ind
         panel.absent_reason = absent_when_empty
         return panel
 
+    # THE 20 s POST-RAMP MARGIN, wired in on 2026-09-12 (the review's hazard 1; commit 790ed21's
+    # clip had no caller here). Each setting's ``t0`` is already the LAST increment of the move
+    # that produced it (the device-derived ladder, above), so the settled window could never
+    # reach into the ramp itself; what it could do was start the instant the current stopped
+    # moving. ``ramp_end_t=t0`` with ``ramp_margin_s=within_visit.RAMP_EXCLUDE_S`` keeps the
+    # first 20 s after the move out of the window -- the same rule the Stim Optimizer's own
+    # settled-tile reading applies. This CHANGES the settled numbers wherever a setting was held
+    # for less than window_s + 20 s; the count on RCS08 is in the implementation report of that
+    # review, and the rule versions of every stored table derived from here were bumped so no
+    # entry built without the margin is served as if built with it. SHIPPED OFF (decision 144):
+    # `post_ramp.USE_POST_RAMP_MARGIN` decides, and `post_ramp.py` says what it did to the PI's band.
     power, table = within_visit.mean_power_before_next_change(
         steps["t0"].to_numpy(dtype=float), steps["current_mA"].to_numpy(dtype=float),
         t, P, block=steps["block"].to_numpy(), step_end_t=steps["t_end"].to_numpy(dtype=float),
-        window_s=window_s, min_chunks=min_pieces)
+        window_s=window_s, min_chunks=min_pieces,
+        ramp_end_t=steps["t0"].to_numpy(dtype=float),
+        ramp_margin_s=_post_ramp.margin_s())
 
     used = np.isfinite(power).any(axis=1) if power.ndim == 2 else np.isfinite(power)
     panel.n_settings_used = int(used.sum())
@@ -1164,8 +1178,14 @@ def comparison_rows(comparison: ThreeSourceComparison) -> List[Dict[str, Any]]:
 # -------------------------------------------------------------------------------------------------
 # The one call the server makes
 # -------------------------------------------------------------------------------------------------
-def build_for_participant(uid, *, max_runs=4, min_settings=3):
+def build_for_participant(uid, *, max_runs=4, min_settings=3, loaded_sink=None):
     """Build every three-source comparison this participant's record supports, for the report.
+
+    ``loaded_sink``, when a dict is given, receives the decoded recordings this build loaded
+    (``power``, ``td``, ``psd``) and the tile cache entry (``cache``), so the same request can hand
+    them to the simulation instead of decoding the same files a second time (review C8,
+    2026-09-12; decision 77 measured the time-domain load at 1.27 s and the PSD load at 0.38 s).
+    They are NOT put in the payload, which is serialised to the page whole.
 
     WHERE THE LADDER OF CURRENTS COMES FROM, and why it is not the clinic testing sheet. The sheets
     are a spreadsheet a person keeps during the visit, they live in the analysis folder, and the
@@ -1204,6 +1224,8 @@ def build_for_participant(uid, *, max_runs=4, min_settings=3):
                                "ladder_from": "the device's own per-sample current record"}
 
     power = bs._load_recordings(uid, bs.POWERDOMAIN_TYPES)
+    if isinstance(loaded_sink, dict):
+        loaded_sink["power"] = power
     if not power:
         payload["absent_reason"] = (
             "the device has no streaming recordings stored for this participant, so there is no "
@@ -1229,6 +1251,8 @@ def build_for_participant(uid, *, max_runs=4, min_settings=3):
         uid, chans, list(td) + list(psd),
         bs._event_psd_lsb_blocks(uid, sensing_index=bs._build_sensing_config_index(list(td))),
         montage_psd_blocks=bs._montage_psd_lsb_blocks(uid, montage_recordings=psd))
+    if isinstance(loaded_sink, dict):
+        loaded_sink.update({"td": td, "psd": psd, "cache": cache})
 
     # Newest runs first: a reader of the deployment page is deciding about the present settings.
     runs.sort(key=lambda r: float(r["steps"]["t0"].max()), reverse=True)

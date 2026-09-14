@@ -45,10 +45,24 @@ variables; **none of it exists**, and it is not carried here.
 
 ---
 
-## 2. The three threshold modes, and their fixed timing
+## 2. The three threshold modes, and their default timing
 
-Defined in code at `analytics.py:3351`, tabulated from the white paper's Table 1. **The timing is
-fixed per mode and is not adjustable.**
+Defined in code at `analytics.py:3351`, tabulated from the white paper's Table 1. ~~**The timing is
+fixed per mode and is not adjustable.**~~ **CORRECTED 2026-09-13: the timings below are the white
+paper's DEFAULTS (its Table 1 is titled "Threshold Mode Default Settings", p. 14), not fixed
+values.** The FDA approval summary for BrainSense Adaptive (P960009/S478, Table 2, p. 8) gives the
+selection ranges: onset 0 to 6 min (Dual) / 0 to 30 s (Single), transition up and down 250 ms to
+30 min each, thresholds 0.55 to 400 uVrms, amplitude limits 0 to 25.5 mA; the white paper's p. 16
+shows the transition sliders (2.00 s to 30.00 min) and lists Onset Duration, Detection Blanking
+Duration and **Adaptive Startup Delay** -- a parameter this document never carried -- under
+"Advanced Settings". RCS08's own device has run onset 200 ms to 30 s, transitions 250 ms to 300 s,
+averaging 100 ms to 30 s and startup delay 0 / 10 / 30 s across 572 session reports; today's
+active group runs onset 30 s, transitions 4 s, averaging 30 s, blanking 30 s, startup delay 0.
+What IS fixed per mode is the FFT size and update rate. Full evidence and the recommended values:
+`artifacts/research_2026-09-13_percept_adaptive_timing_SYNTHESIS.md`. The A610 clinician programming guide (edition 2025-02-14) arrived on this machine later the
+same day (lab Dropbox, ADMIN/Equipment/Percept RC): it defines the three timing parameters and
+confirms every one is adjustable, and states NO range for any of them -- the FDA summary stays
+the only source of the ranges (synthesis §6).
 
 | What | Dual Threshold | Single Threshold | Single Threshold Inverse |
 |---|---|---|---|

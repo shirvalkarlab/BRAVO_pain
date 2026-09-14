@@ -65,6 +65,26 @@ export const CL = {
 export const CLOSED_LOOP_SLOTS = Object.keys(CL).map((k) => CL[k]);
 
 /**
+ * The Stim Optimizer page's slots.
+ *
+ * `result` is the bare `MODULES.stimOptimizer`, the slot the page has always used for its one
+ * response. `twoStage` is a SECOND request to the same endpoint with `TwoStage: true` added --
+ * the open-loop -> gate -> closed-loop plan (PI, 2026-09-12: "wire the front end"). It needs its
+ * own slot for the reason `CL.grid` has one: the cache keeps one answer per slot per participant
+ * and hands a request with different settings the held answer marked stale rather than fetching,
+ * so two fetches sharing `result` would show the plan's response as the page's own or the other
+ * way round (decision 113, watched live on the Closed-Loop page). The plan is fetched only after
+ * the page's own response has arrived, so the first paint is unchanged.
+ */
+export const STIM = {
+  result: MODULES.stimOptimizer,
+  twoStage: `${MODULES.stimOptimizer}/twoStage`,
+};
+
+/** Every Stim Optimizer slot, which is what that page's Recompute control rebuilds. */
+export const STIM_OPTIMIZER_SLOTS = Object.keys(STIM).map((k) => STIM[k]);
+
+/**
  * Rebuild a set of cached answers, with exactly one request per answer.
  *
  * WHY THIS EXISTS RATHER THAN A CALL TO THE HOOK'S OWN `recompute()`. `recompute()` discards the

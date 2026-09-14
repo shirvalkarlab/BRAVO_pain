@@ -258,7 +258,13 @@ def test_the_blank_result_carries_the_fields_rather_than_omitting_them():
 # ---------------------------------------------------------------------------------------------
 # The two paths into the sweep, and the one field that must not travel with the flag.
 
-def _sweep_power(channel):
+# The ceiling table is keyed on the participant first (review B3): a covered (participant, contact)
+# pair is one of RCS08's six real contacts under RCS08's own uid.
+COVERED_UID = next(iter(A.BAND_SWEEP_LSB_CEILINGS))
+COVERED_CHANNEL = next(iter(A.BAND_SWEEP_LSB_CEILINGS[COVERED_UID]))
+
+
+def _sweep_power(channel, participant_uid=COVERED_UID):
     from .. import bravo_service as B
     # Two reports: the first sits on voltage trace, the second only near device-spectrum events.
     td_t = [T0 + 1.5 + 3.0 * k for k in range(8)]
@@ -267,7 +273,7 @@ def _sweep_power(channel):
     pro = [T0 + 12.0, T0 + 90001.0]
     return B._band_time_sweep_power_by_seconds(
         pro, cache, CENTERS, tol_s=600.0, allow_window_reuse=False, seconds=LENGTHS,
-        channel=channel)
+        channel=channel, participant_uid=participant_uid)
 
 
 def test_both_matching_paths_report_the_flag_and_agree_about_which_report_is_which():
@@ -275,7 +281,7 @@ def test_both_matching_paths_report_the_flag_and_agree_about_which_report_is_whi
     covers, and the older path for one it does not. A caveat that appeared on only one of them
     would be missing exactly where a reader has least reason to expect it, so both are asked, and
     both must name the same report."""
-    covered = next(iter(A.BAND_SWEEP_LSB_CEILINGS))          # a real contact with a ceiling table
+    covered = COVERED_CHANNEL                                # a real contact with a ceiling table
     for channel in (covered, "A_CONTACT_WITH_NO_CEILING_TABLE"):
         *_rest, chunk_excl, flags = _sweep_power(channel)
         assert flags == [False, True], (channel, flags)
@@ -289,7 +295,7 @@ def test_the_per_report_flag_does_not_ride_into_the_response_inside_the_exclusio
     built inside it, which shipped one boolean per pain report per contact pair -- 4,584 of them on
     RCS08, growing with every report filed -- for a fact the grids already carry summarised per
     cell, under a name that does not describe it. It is lifted out before the response is built."""
-    covered = next(iter(A.BAND_SWEEP_LSB_CEILINGS))
+    covered = COVERED_CHANNEL
     *_rest, chunk_excl, flags = _sweep_power(covered)
     assert chunk_excl is not None
     assert "from_device_spectrum" not in chunk_excl, sorted(chunk_excl)

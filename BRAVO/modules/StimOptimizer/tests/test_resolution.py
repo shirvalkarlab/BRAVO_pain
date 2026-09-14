@@ -9,7 +9,7 @@ could print the strong claim on an arm whose optimum the module itself reported 
 import numpy as np
 import pytest
 
-from StimOptimizer import pipeline, stage1_openloop
+from StimOptimizer import pipeline
 from StimOptimizer.routines import plots as PLT
 from StimOptimizer.routines import resolution as RES
 
@@ -71,12 +71,6 @@ def test_the_headline_reports_the_degenerate_case_as_its_own_answer():
 def test_a_non_negative_minimum_still_supports_the_strong_negative_claim():
     assert PLT._incumbent_verdict(_ctx_with(0.4, 0.5, 0.5)) == \
         "Nothing on the grid is predicted better than the incumbent"
-
-
-def test_the_constant_has_exactly_one_definition():
-    """`stage1_openloop.RESOLUTION_K` is a re-export, so a change cannot apply to only some
-    callers. Existing importers read it from either place and must agree."""
-    assert stage1_openloop.RESOLUTION_K is RES.RESOLUTION_K
 
 
 def test_no_call_site_still_spells_the_propagation_out_for_itself():

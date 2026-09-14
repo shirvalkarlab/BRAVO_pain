@@ -62,8 +62,11 @@ MODULES = ("biomarkers", "closed_loop", "stim_optimizer")
 #: `biomarker_psd_matrix` (Track E, decision 52) is the assembled per-channel spectrum matrix, a
 #: deterministic decode-and-Welch of the device's own recordings with no other module's choices
 #: baked in, the same reasoning that makes the tile cache raw.
+#: `session_report_summary` (2026-09-12) is the per-participant summary of the device's own
+#: session-report exports -- capture amplitudes, adaptive status, artefact verdicts, the D32 group
+#: shape -- scanned straight off the ingested files. No module's choice produced any of it.
 RAW_KINDS = ("raw_lsb_tiles", "redcap_reports", "therapy_settings", "therapy_pain_matched",
-            "biomarker_psd_matrix")
+            "biomarker_psd_matrix", "session_report_summary")
 
 
 def module_of(key):
@@ -96,6 +99,7 @@ _WRITER_BY_KIND = {
     "within_visit_pooled_shape": "closed_loop",
     "three_source_run_points": "closed_loop",
     "closed_loop_simulation": "closed_loop",
+    "session_report_summary": "closed_loop",
     "exploration_ladder": "stim_optimizer",
     "exploration_batch": "stim_optimizer",
     "stim_optimizer_summary": "stim_optimizer",

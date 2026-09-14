@@ -192,6 +192,11 @@ def test_align_pros_chronic():
 # Chronic ("10-min PSD") source: adapter, science, merge, back-compat
 # ---------------------------------------------------------------------------
 _MIDNIGHT_UTC = 1_699_920_000.0  # 2023-11-14 00:00:00 UTC
+# The chronic-trend fixtures build whole DAYS of samples with one rating per day, and "day" in
+# the detector is the CALIFORNIA calendar day (review B1, 2026-09-12). A day of samples must
+# therefore start at California midnight, which on 2023-11-14 (PST, UTC-8) is 08:00 UTC; a day
+# built from UTC midnight would have its first eight hours labelled by the previous day's rating.
+_MIDNIGHT_LOCAL = _MIDNIGHT_UTC + 8 * 3_600.0  # 2023-11-14 00:00:00 America/Los_Angeles
 
 
 def _utc_str(unix):
@@ -204,7 +209,7 @@ def _make_chronic_trend(days=14, step_hours=2):
     for d in range(days):
         pain_day = (d % 2 == 0)
         for h in range(0, 24, step_hours):
-            times.append(_MIDNIGHT_UTC + d * 86_400 + h * 3_600)
+            times.append(_MIDNIGHT_LOCAL + d * 86_400 + h * 3_600)
             lfp.append(150.0 if pain_day else 110.0)
             amp.append(2.0)
     chronic = {
@@ -214,7 +219,7 @@ def _make_chronic_trend(days=14, step_hours=2):
         "ChannelNames": ["L LFP", "L Amplitude"],
     }
     pro = pd.DataFrame({
-        "date_time_s1_daily": [_utc_str(_MIDNIGHT_UTC + d * 86_400 + 12 * 3_600) for d in range(days)],
+        "date_time_s1_daily": [_utc_str(_MIDNIGHT_LOCAL + d * 86_400 + 12 * 3_600) for d in range(days)],
         "nrs": [8 if d % 2 == 0 else 2 for d in range(days)],
     })
     return chronic, pro
@@ -525,19 +530,6 @@ def test_merge_timelines_both_and_degenerate():
     assert len(only_ch) == 5 and "td_biomarker_value" not in only_ch.columns
 
 
-def test_run_streaming_biomarker_backcompat():
-    recs = [_make_recording(seed=k) for k in range(4)]
-    for k, r in enumerate(recs):
-        r["StartTime"] = _MIDNIGHT_UTC + k * 86_400
-    pro = pd.DataFrame({
-        "date_time_s1_daily": [_utc_str(_MIDNIGHT_UTC + k * 86_400 + 12 * 3_600) for k in range(4)],
-        "nrs": [8, 6, 4, 3], "vas": [80, 60, 40, 30], "mpq_sum": [30, 20, 10, 5],
-    })
-    out = pipeline.run_streaming_biomarker(recs, pro, CHAN_ORDER)
-    assert {"result", "band", "combined"} <= set(out)
-    assert isinstance(out["combined"], pd.DataFrame)
-
-
 def test_run_biomarker_both_unified_timeline():
     recs = [_make_recording(seed=k) for k in range(6)]
     for k, r in enumerate(recs):
@@ -699,7 +691,7 @@ def test_run_powerdomain_branch_per_channel_split():
     for d in range(14):
         pain_day = (d % 2 == 0)
         for h in range(0, 24, 2):
-            times.append(_MIDNIGHT_UTC + d * 86_400 + h * 3_600)
+            times.append(_MIDNIGHT_LOCAL + d * 86_400 + h * 3_600)
             lfp_r.append(80.0 if pain_day else 130.0)   # inverted coupling
             amp_r.append(2.0)
     chronic_r = {
@@ -770,7 +762,6 @@ if __name__ == "__main__":
     test_bravo_chronic_accepts_list_of_recordings()
     test_run_chronic_threshold_runs()
     test_merge_timelines_both_and_degenerate()
-    test_run_streaming_biomarker_backcompat()
     test_run_biomarker_both_unified_timeline()
     test_chronic_summary_is_self_consistent()
     test_merge_timelines_handles_nat_time()

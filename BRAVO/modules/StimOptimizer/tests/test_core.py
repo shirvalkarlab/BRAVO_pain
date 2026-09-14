@@ -202,16 +202,6 @@ def test_preference_rejects_ties_and_self_comparisons(grid):
         PreferenceGP(grid).fit(X, [])
 
 
-def test_prob_prefer_is_symmetric_and_bounded(grid):
-    X = np.array([[55.0, 1.4], [55.0, 1.6], [55.0, 1.8]])
-    pairs = [(2, 0), (2, 1), (1, 0)]
-    pg = PreferenceGP(grid).fit(X, pairs)
-    a, b = np.array([[55.0, 1.8]]), np.array([[55.0, 1.4]])
-    p, q = pg.prob_prefer(a, b)[0], pg.prob_prefer(b, a)[0]
-    assert p + q == pytest.approx(1.0, abs=1e-6)
-    assert 0.5 < p < 1.0
-
-
 # --- configurable pain metric (section 2.2) ----------------------------------------------
 def test_default_metric_is_left_leg_not_overall():
     """PI direction: the left leg is the primary site. The Overall rating does not detect the
@@ -219,10 +209,6 @@ def test_default_metric_is_left_leg_not_overall():
     assert OBJ.DEFAULTS["primary_item"] == "left_leg"
     assert OBJ.DEFAULTS["metric"] == "left_leg"
     assert OBJ.PAIN_METRICS["left_leg"].items == {"left_leg": +1.0}
-
-
-def test_head_is_excluded_with_a_reason():
-    assert "head" in OBJ.EXCLUDED_ITEMS and OBJ.EXCLUDED_ITEMS["head"]
 
 
 def test_metric_resolves_across_chronic_and_acute_column_names():

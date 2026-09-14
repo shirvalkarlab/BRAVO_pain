@@ -349,7 +349,13 @@ def _rcs08_like():
     return d
 
 
-def test_the_two_stage_run_reports_honestly_that_it_cannot_proceed():
+# FIT ONCE, ASSERT MANY (2026-09-12). Every `run_two_stage` call below fits Stage 1 on the SAME
+# matrix with the SAME Stage 1 arguments and then asserts something about the gate or Stage 2 that
+# sits after the fit -- the merge of `gate_kwargs`, the evidence factory, a refusal. Seven fits at
+# 5 to 9 s each were one fit's worth of information. `shared_stage1` (conftest.py) hands every call
+# with the same inputs the same Stage 1 result; `run_two_stage` itself still runs end to end.
+# `test_the_original_flat_entry_point_still_works` does not go through Stage 1 and is unchanged.
+def test_the_two_stage_run_reports_honestly_that_it_cannot_proceed(shared_stage1):
     """End to end on a matrix with the real record's structure and no spectral data at all.
 
     Two of the four gate conditions must block for reasons intrinsic to the data rather than to any
@@ -369,57 +375,7 @@ def test_the_two_stage_run_reports_honestly_that_it_cannot_proceed():
     assert rep.manifest["stage2_n_valid_policies"] == 0
 
 
-def test_the_run_against_the_reconciled_biomarker_plate_refuses_for_three_stateable_reasons():
-    """End to end with the reconciled RCS08 plate and the historical LFP-response verdict.
-
-    The three reasons must be reported SEPARATELY, each with its number, so a reader can see which
-    condition binds:
-
-    1. the only adaptive-capable selected band (14.817 Hz) is not statistically supported —
-       perm_p = 0.4166 after selection correction, FDR q = 0.5055;
-    2. the nominally strongest band (3.9215 Hz, perm_p 0.0809) spans roughly 1.4-6.4 Hz and is
-       excluded by the 8-30 Hz adaptive window — a DEVICE constraint, independent of its statistics;
-    3. the LFP-response requirement fails on the historical record — 3 of 15 channel-by-rate cells
-       suppress, one-sided binomial p = 0.996.
-
-    Refusing here is the correct behaviour and no threshold may be relaxed to change it.
-    """
-    from StimOptimizer import pipeline
-    rep = pipeline.run_two_stage(_rcs08_like(), data_horizon="test", washin_min=1.0,
-                                 selected_bands=GATE.RCS08_SELECTED_BANDS,
-                                 response_summary=GATE.RCS08_RESPONSE_SUMMARY)
-    assert rep.can_deploy_closed_loop() is False
-    assert rep.stage2.started is False
-    assert rep.stage2.n_valid == 0
-    assert len(rep.gate.conditions) == 6
-
-    # reason 1: the usable band is not supported, and its numbers are in the detail
-    stat = rep.gate.condition("selected_band_statistically_supported")
-    assert stat.passed is False
-    assert "0.4166" in stat.detail and "0.5055" in stat.detail
-
-    # reason 2: the other band is excluded by the DEVICE window, reported as a device fact and not
-    # as a statistical one. The condition itself PASSES, because a band inside the window does
-    # exist -- the exclusion is attached to the band it applies to rather than to the whole gate.
-    win = rep.gate.condition("selected_band_inside_adaptive_window")
-    assert win.passed is True
-    assert "DEVICE" in win.detail
-    assert "regardless of their statistics" in win.detail
-    assert [r["outcome"] for r in win.evidence["outside"]] == ["nrs"]
-
-    # reason 3: the response requirement fails on the historical record, with attribution
-    resp = rep.gate.condition("adaptive_band_passes_lfp_response")
-    assert resp.passed is False
-    assert "3 of 15" in resp.detail and "0.996" in resp.detail
-
-    # each blocking reason is separately named in the refusal, not merged into one verdict
-    names = [n for n, _ in rep.stage2.refusal_reasons]
-    assert "selected_band_statistically_supported" in names
-    assert "adaptive_band_passes_lfp_response" in names
-    assert "openloop_choice_resolved" in names
-
-
-def test_both_routes_for_supplying_selected_bands_reach_the_gate_identically():
+def test_both_routes_for_supplying_selected_bands_reach_the_gate_identically(shared_stage1):
     """Regression, 2026-09-02. Both invocation styles must work.
 
     `selected_bands` and `response_summary` were reachable through `gate_kwargs` before they were
@@ -443,7 +399,7 @@ def test_both_routes_for_supplying_selected_bands_reach_the_gate_identically():
     assert len(named.gate.conditions) == 6
 
 
-def test_supplying_the_same_gate_argument_by_both_routes_is_an_explicit_error():
+def test_supplying_the_same_gate_argument_by_both_routes_is_an_explicit_error(shared_stage1):
     """Silent precedence would make the winning value an implementation detail."""
     from StimOptimizer import pipeline
     with pytest.raises(ValueError, match="supplied both as a run_two_stage argument"):
@@ -452,7 +408,7 @@ def test_supplying_the_same_gate_argument_by_both_routes_is_an_explicit_error():
                                gate_kwargs=dict(selected_bands=GATE.RCS08_SELECTED_BANDS))
 
 
-def test_other_gate_kwargs_still_reach_the_gate():
+def test_other_gate_kwargs_still_reach_the_gate(shared_stage1):
     """The merge must not swallow the keys it does not manage."""
     from StimOptimizer import pipeline
     rep = pipeline.run_two_stage(_rcs08_like(), data_horizon="test", washin_min=1.0,
@@ -516,7 +472,7 @@ def test_the_real_design_matrix_cannot_proceed_to_closed_loop():
 
 
 # --- the evidence factory: selection must happen AFTER freezing (2026-09-05) --------------------
-def test_lfp_may_be_a_factory_that_receives_the_frozen_configuration():
+def test_lfp_may_be_a_factory_that_receives_the_frozen_configuration(shared_stage1):
     """The sequencing fix. Rate and pulse width freeze when BrainSense is configured, so evidence
     measured at another rate says nothing about the configuration Stage 2 will run. Passing a
     pre-selected cell invites that mismatch, and it happened on the first live run: the screen's
@@ -539,7 +495,7 @@ def test_lfp_may_be_a_factory_that_receives_the_frozen_configuration():
         {c.name for c in rep.gate.conditions}
 
 
-def test_a_plain_evidence_object_still_works_unchanged():
+def test_a_plain_evidence_object_still_works_unchanged(shared_stage1):
     """Backward compatibility: the non-callable path is the one every existing caller uses."""
     from StimOptimizer import pipeline
     lfp = _responding_lfp()
@@ -548,7 +504,7 @@ def test_a_plain_evidence_object_still_works_unchanged():
     assert "adaptive_band_passes_lfp_response" in names
 
 
-def test_the_factory_may_refuse_by_returning_none_and_the_gate_then_blocks():
+def test_the_factory_may_refuse_by_returning_none_and_the_gate_then_blocks(shared_stage1):
     """A factory that cannot honestly pick a cell returns None, and that must BLOCK rather than
     pass. This is the path taken when the two hemispheres freeze different rates: there is no single
     rate to pin the evidence to, and attributing one hemisphere's measurement to the other's

@@ -59,6 +59,49 @@ MIN_CAPTURE_SEPARATION_D = 0.5
 #: Minimum rows per capture arm before an estimate is reported at all.
 MIN_ROWS_PER_ARM = 8
 
+# =================================================================================================
+# THE REGRESSION'S DESIGN MATRIX IS BUILT ONCE PER CELL, NOT ONCE PER BAND (2026-09-12)
+# =================================================================================================
+# `assess_response` is called once per band, and a cell has eighteen bands. The amplitude, the era
+# labels and the cluster labels are the same for all eighteen; only the band power changes. The
+# formula interface (`statsmodels.formula.api.ols`) rebuilt the design matrix from the formula on
+# every call, and on RCS08 that rebuilding was 10.4 s of the 19.4 s the 1,116 calls took in one
+# request. `_ols_fit` below builds the right-hand side once for a given (formula, amplitude, era)
+# and hands statsmodels the same two frames the formula interface would have handed it -- the
+# left-hand side as a one-column frame named `logp`, the right-hand side as the frame patsy builds
+# with rows dropped on missing values, which is what `Model.from_formula` does -- so the fit sees
+# identical arrays and returns identical numbers. The frames are never mutated by the fit.
+#
+# `USE_DESIGN_CACHE = False` restores the formula interface call for call; it exists so the two
+# can be run against each other on the live record (probe_so_screen_equal.py), and it is what the
+# before-and-after measurement used.
+USE_DESIGN_CACHE = True
+_DESIGN_CACHE_MAX = 64
+_DESIGN_CACHE: dict = {}
+
+
+def _design_key(rhs, df):
+    parts = [rhs, df["amp"].to_numpy(float).tobytes()]
+    if "era" in rhs:
+        parts.append(tuple(df["era"].tolist()))
+    return tuple(parts)
+
+
+def _ols_fit(formula, df, **fit_kw):
+    """`smf.ols(formula, data=df).fit(**fit_kw)`, with the right-hand side cached per cell."""
+    import statsmodels.api as sm
+    from patsy import NAAction, dmatrix
+    lhs, rhs = (s.strip() for s in formula.split("~", 1))
+    key = _design_key(rhs, df)
+    exog = _DESIGN_CACHE.get(key)
+    if exog is None:
+        exog = dmatrix(rhs, df, return_type="dataframe", NA_action=NAAction(on_NA="drop"))
+        if len(_DESIGN_CACHE) >= _DESIGN_CACHE_MAX:
+            _DESIGN_CACHE.pop(next(iter(_DESIGN_CACHE)))
+        _DESIGN_CACHE[key] = exog
+    endog = df[[lhs]]
+    return sm.OLS(endog, exog, missing="drop").fit(**fit_kw)
+
 
 @dataclass
 class ResponseResult:
@@ -233,7 +276,6 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
     try:
         import statsmodels.formula.api as smf
         df = pd.DataFrame({"logp": lg, "amp": a})
-        slope_unadj = float(smf.ols("logp ~ amp", data=df).fit().params["amp"])
         formula = "logp ~ amp"
         if era_v is not None and pd.Series(era_v).nunique() > 1:
             df["era"] = pd.Series(era_v).astype(str).values
@@ -243,7 +285,12 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
         if clus is not None and pd.Series(clus).nunique() > 1:
             df["clus"] = pd.Series(clus).values
             fit_kw = dict(cov_type="cluster", cov_kwds={"groups": df["clus"]})
-        res = smf.ols(formula, data=df).fit(**fit_kw)
+        if USE_DESIGN_CACHE:
+            slope_unadj = float(_ols_fit("logp ~ amp", df).params["amp"])
+            res = _ols_fit(formula, df, **fit_kw)
+        else:
+            slope_unadj = float(smf.ols("logp ~ amp", data=df).fit().params["amp"])
+            res = smf.ols(formula, data=df).fit(**fit_kw)
         slope = float(res.params["amp"])
         lo_ci, hi_ci = res.conf_int().loc["amp"]
         ci = (float(lo_ci), float(hi_ci))
@@ -303,131 +350,10 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
 # apart and overlapping really would chatter. Loosening the floor to admit it would be loosening a
 # safety-relevant gate to accommodate an experimental design choice.
 #
-# WHAT IS ACTUALLY WRONG is that the module returns ONE refusal for two different situations:
+# WHAT WAS ACTUALLY WRONG is that the module returned ONE refusal for two different situations:
 # "this band does not respond to amplitude" and "this band may well respond, but the ladder was too
-# narrow to place a threshold on". Those have opposite remedies -- abandon the band, or widen the
-# ladder -- and the screen currently reports them identically. The helpers below separate them by
-# asking what span the OBSERVED slope would need in order to clear the floor. That converts
-# "refused: captures too close" into "refused: captures too close; at this slope the ladder would
-# need N mA", which is a protocol instruction rather than a dead end.
-
-def expected_separation_d(slope_log_per_mA, amp_span_mA, within_arm_sd):
-    """The standardised separation a given slope implies over a given amplitude span.
-
-    Under the same model the slope is fitted from -- power linear in amplitude with within-arm
-    scatter ``within_arm_sd`` -- the two capture means differ by ``slope * span``, so the
-    standardised separation is ``|slope| * span / sd``. This is the quantity the fixed floor is
-    implicitly compared against, made explicit.
-    """
-    s, span, sd = float(slope_log_per_mA), float(amp_span_mA), float(within_arm_sd)
-    if not np.isfinite(s) or not np.isfinite(span) or not np.isfinite(sd) or sd <= 0:
-        return float("nan")
-    return abs(s) * abs(span) / sd
-
-
-def within_arm_sd_from_result(res):
-    """Recover the pooled within-arm scatter implied by a ``ResponseResult``.
-
-    ``separation_d = (P_high - P_low) / sd`` by construction, so ``sd`` follows from the two
-    reported capture values and the reported separation. Recovered rather than re-derived from the
-    raw data so it cannot disagree with the separation the gate actually used.
-    """
-    d = getattr(res, "separation_d", float("nan"))
-    lo, hi = getattr(res, "power_low", float("nan")), getattr(res, "power_high", float("nan"))
-    if not np.isfinite(d) or d == 0 or not np.isfinite(lo) or not np.isfinite(hi):
-        return float("nan")
-    return abs(float(hi) - float(lo)) / abs(float(d))
-
-
-def span_needed_for_separation(res, floor=None, amp_ceiling_mA=None):
-    """What amplitude span this cell's own slope would need to clear the separation floor.
-
-    Returns a dict distinguishing the two refusals the screen currently conflates. ``verdict`` is:
-
-      * ``"clears"``            -- the observed separation already meets the floor;
-      * ``"widen_the_ladder"``  -- the slope is estimable and non-zero, so a wider span would
-                                   clear the floor, and ``span_needed_mA`` says how wide;
-      * ``"slope_not_estimable"`` -- no slope, so nothing can be said about what would help;
-      * ``"slope_indistinguishable_from_zero"`` -- the slope is present but so small that the span
-                                   required is beyond any amplitude this device will deliver, which
-                                   is the honest way to say "this band does not respond" rather than
-                                   quoting an absurd number.
-
-    The device's own hard amplitude limit bounds what "wider" can mean, so a required span larger
-    than that is reported as unreachable rather than as an instruction.
-    """
-    fl = float(MIN_CAPTURE_SEPARATION_D if floor is None else floor)
-    d = getattr(res, "separation_d", float("nan"))
-    slope = getattr(res, "slope_log_per_mA", float("nan"))
-    lo_a, hi_a = getattr(res, "amp_low_mA", float("nan")), getattr(res, "amp_high_mA", float("nan"))
-    span = abs(float(hi_a) - float(lo_a)) if np.isfinite(hi_a) and np.isfinite(lo_a) else float("nan")
-    sd = within_arm_sd_from_result(res)
-    out = {"floor": fl, "observed_d": (float(d) if np.isfinite(d) else None),
-           "observed_span_mA": (span if np.isfinite(span) else None),
-           "within_arm_sd": (sd if np.isfinite(sd) else None),
-           "slope_log_per_mA": (float(slope) if np.isfinite(slope) else None),
-           "expected_d_at_observed_span": None, "span_needed_mA": None}
-    if np.isfinite(d) and d >= fl:
-        out["verdict"] = "clears"
-        return out
-    if not np.isfinite(slope) or not np.isfinite(sd) or sd <= 0:
-        out["verdict"] = "slope_not_estimable"
-        out["note"] = ("no usable slope or within-arm scatter, so nothing can be said about whether "
-                       "a wider ladder would help")
-        return out
-    out["expected_d_at_observed_span"] = expected_separation_d(slope, span, sd)
-    if abs(slope) < 1e-12:
-        out["verdict"] = "slope_indistinguishable_from_zero"
-        return out
-    need = fl * sd / abs(slope)
-    out["span_needed_mA"] = float(need)
-    # The ceiling is what the device will actually deliver; a span beyond it is not an instruction.
-    #
-    # TAKEN AS A PARAMETER WITH AN EXPLICIT DEFAULT, not probed from globals(). The first version of
-    # this line read `float(AMP_HARD_LIMIT_MA) if "AMP_HARD_LIMIT_MA" in globals() else inf`, and
-    # that constant lives in `objective`, not here -- so the probe always missed, the ceiling was
-    # always infinity, and the "span unreachable" branch could never fire. The failure was silent
-    # and would have reported a 40 mA ladder as a protocol instruction. Imported inside the
-    # function because `objective` is a heavier module and a top-level import would make every
-    # importer of the response test pay for it.
-    if amp_ceiling_mA is None:
-        try:
-            from .objective import AMP_HARD_LIMIT_MA as _cap
-            ceiling = float(_cap)
-        except Exception:                                  # pragma: no cover - defensive
-            raise RuntimeError(
-                "cannot resolve the device amplitude ceiling from objective.AMP_HARD_LIMIT_MA; "
-                "pass amp_ceiling_mA explicitly rather than letting it default to infinity, which "
-                "would report an unreachable ladder as a protocol instruction")
-    else:
-        ceiling = float(amp_ceiling_mA)
-    if need > ceiling:
-        out["verdict"] = "slope_indistinguishable_from_zero"
-        out["note"] = (f"clearing d={fl:.2f} at this slope would need a {need:.1f} mA span, beyond "
-                       f"the {ceiling:.1f} mA the device delivers, so this is a non-responding band "
-                       f"rather than a narrow ladder")
-    elif np.isfinite(span) and need <= span:
-        # THE INCOHERENT CASE, and it is diagnostic rather than a nuisance. If the span already
-        # used exceeds what the slope says is needed, then the slope predicts MORE separation than
-        # the arms actually show, so "widen the ladder" would be nonsense -- the ladder is already
-        # wide enough on the slope's own account. Found on real data 2026-09-05: one band came back
-        # needing 1.78 mA against 2.0 mA used, which is what exposed the missing branch.
-        #
-        # The usual cause is that the two quantities are not estimated on the same footing. The
-        # slope is ERA-BLOCKED while the capture arms are RAW group means, so when era adjustment is
-        # doing most of the work the adjusted slope can imply a contrast the unadjusted arms do not
-        # contain. That is the same mechanism behind the ONE_THREE_LEFT sign flip, and it means the
-        # amplitude contrast is not what is carrying the apparent relationship.
-        out["verdict"] = "arms_inconsistent_with_slope"
-        out["note"] = (f"the era-blocked slope implies d={out['expected_d_at_observed_span']:.2f} "
-                       f"over the {span:.1f} mA already used -- above the {fl:.2f} floor -- yet the "
-                       f"observed separation is only {float(d):.2f}. Widening the ladder is not the "
-                       f"remedy: the adjusted slope and the raw capture arms disagree, which "
-                       f"indicates the era adjustment rather than the amplitude contrast is "
-                       f"carrying the relationship.")
-    else:
-        out["verdict"] = "widen_the_ladder"
-        out["note"] = (f"the slope is real enough that a {need:.1f} mA ladder would clear d={fl:.2f}, "
-                       f"against the {span:.1f} mA actually used. This is a PROTOCOL shortfall, not "
-                       f"evidence that the band does not respond.")
-    return out
+# narrow to place a threshold on". Three helpers once sat here to separate them by asking what span
+# the OBSERVED slope would need in order to clear the floor (`expected_separation_d`,
+# `within_arm_sd_from_result`, `span_needed_for_separation`). They were reached by nothing in the
+# running platform and were deleted on the PI's decision of 2026-09-12 (review S14); the reasoning
+# above about the floor stands on its own and is why the floor still does not scale with the span.

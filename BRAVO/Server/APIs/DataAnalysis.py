@@ -641,103 +641,11 @@ class QueryBiomarkerAnalysis(RestViews.APIView):
         return Response(status=200, data=Analysis)
 
 
-class QueryBandValidation(RestViews.APIView):
-    """
-    API View for the click-triggered VALIDATION bundle on one spectral band.
-
-    **URL:** ``/queryBandValidation``  **Methods:** POST
-
-    For a single (channel, center_hz), runs:
-      * mixed-effects logistic regression (glmer) on pain_high ~ band_power + (1|weekly_era),
-        emitting OR, 95% CI, p, plus separation/singular guards;
-      * band x stim-era LRT (m0 reduced vs m1 with the interaction), emitting chisq, p,
-        per-era ORs, and a `stim_stable` boolean -- the closed-loop-defensibility flag.
-
-    Frontend wires this to the click-panel "validate this band" action; the existing scan call
-    already does the band x channel FDR pass.
-
-    **Request Parameters:**
-
-    :param ParticipantId: participant uid (required)
-    :param Channel: raw or short channel name from the scan (required)
-    :param CenterHz: band center in Hz (required) -- band is [CenterHz - W/2, CenterHz + W/2]
-    :param BandWidthHz: band full width in Hz (default 5.0)
-    :param LabelMetric / BinarizationStrategy / LowPct / HighPct / MatchToleranceMin /
-        MaxPerRating / RefractoryMin / MatchDirection: same as the scan endpoint -- the band
-        feature is defined identically to the scan dot the user clicked.
-    """
-
-    parser_classes = [RestParsers.JSONParser]
-    permission_classes = [IsAuthenticated]
-
-    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
-    def post(self, request):
-        if not get_or_none(sanitize_input)(request.data,
-                                           required_keys=["ParticipantId", "Channel", "CenterHz"]):
-            return Response(status=400, data={"message": "Malformed Input"})
-
-        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
-                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
-        if not Permissions:
-            return Response(status=403)
-
-        try:
-            from modules.Biomarkers import bravo_service
-            Analysis = bravo_service.validate_band_for_participant(request.data)
-        except Exception as e:
-            # Never 500 the click panel; surface a friendly empty-state.
-            return Response(status=200, data={
-                "available": False, "reason": "validation error: " + str(e),
-            })
-
-        Analysis = json_compliant_handler(Analysis)
-        return Response(status=200, data=Analysis)
-
-
-class EmitBandCandidate(RestViews.APIView):
-    """
-    API View that exports ONE validated spectral band as a serializable BandCandidate object --
-    the contract (DESIGN_biomarker_pipeline_v2 sec.6) handed from the discovery/Biomarkers view to
-    the Closed-Loop Simulation / threshold-deployment view.
-
-    **URL:** ``/emitBandCandidate``  **Methods:** POST
-
-    Runs the same pooled-detail + glmer + stim-stability machinery as ``/queryBandValidation``
-    (so the committed band is byte-identical to the scan dot the user clicked), then assembles the
-    full BandCandidate: identity (hemisphere, contact, FFT-bin-snapped center freq), REDCap-PRO
-    label provenance + binarization, Percept device-control mapping (8-30 Hz adaptive-valid gate,
-    polarity, suggested mode), cluster-robust mixed-effects evidence (OR + CI + credible-CI flag +
-    per-era ORs + stim-stability), and pool-bias provenance. The threshold (``threshold_lsb``), the
-    LSB-uV2 conversion FYI (``conversion_check``), and the labeled time-series handoff
-    (``timeseries_ref``) ship as nulls/stubs filled by the deployment view in later phases.
-
-    **Request Parameters:** identical to ``/queryBandValidation``.
-    """
-
-    parser_classes = [RestParsers.JSONParser]
-    permission_classes = [IsAuthenticated]
-
-    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
-    def post(self, request):
-        if not get_or_none(sanitize_input)(request.data,
-                                           required_keys=["ParticipantId", "Channel", "CenterHz"]):
-            return Response(status=400, data={"message": "Malformed Input"})
-
-        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
-                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
-        if not Permissions:
-            return Response(status=403)
-
-        try:
-            from modules.Biomarkers import bravo_service
-            Analysis = bravo_service.build_band_candidate(request.data)
-        except Exception as e:
-            return Response(status=200, data={
-                "available": False, "reason": "emit error: " + str(e),
-            })
-
-        Analysis = json_compliant_handler(Analysis)
-        return Response(status=200, data=Analysis)
+# `QueryBandValidation` (/queryBandValidation) and `EmitBandCandidate` (/emitBandCandidate) stood
+# here until 2026-09-12. No page called either route (grep of Client/src), and the service
+# functions behind them had no other caller. Deleted on the PI's decision (Biomarkers review
+# finding B12). The shared core they trimmed, `_validate_band_core`, stays: the stability column
+# and the four Closed-Loop endpoints below read it.
 
 
 class QueryServerIdentity(RestViews.APIView):
@@ -942,13 +850,14 @@ class QueryClosedLoopDeployment(RestViews.APIView):
 class QueryDeploymentROC(RestViews.APIView):
     """
     API View that computes the rating-clustered deployment ROC + cut-point table for ONE committed
-    band (DESIGN_biomarker_pipeline_v2 Phase B). Same band feature as /emitBandCandidate; the AUC
-    bootstrap CI resamples whole rating clusters (not raw samples), and the match direction defaults
+    band (DESIGN_biomarker_pipeline_v2 Phase B). Same band feature as the stability column (the
+    shared `_validate_band_core`); the AUC bootstrap CI resamples whole rating clusters (not raw samples), and the match direction defaults
     to causal prior/forecasting (toggle to pro_first via MatchDirection).
 
     **URL:** ``/queryDeploymentROC``  **Methods:** POST
 
-    **Request Parameters:** same as /emitBandCandidate, plus optional NBoot (default 500).
+    **Request Parameters:** ParticipantId, Channel, CenterHz and the scan's own matching and
+    binarization keys, plus optional NBoot (default 500).
     """
 
     parser_classes = [RestParsers.JSONParser]
