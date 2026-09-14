@@ -237,3 +237,24 @@
   defines onset / blanking / startup delay (Table 6 p. 42), confirms all adjustable, gives NO
   ranges; adds the manufacturer's tuning directions (Table 16 p. 73-74) and the 5 mA / 120 us
   capture-artefact note. Synthesis §6 addendum; DEVICE_percept_rc.md note updated.
+- 2026-09-13 evening, Phase 11 (PI: "wire up the new ranges ... into whatever modules need to be
+  updated"): `percept_adaptive` is the one home of the documented ranges (FDA Table 2: onset 0-6
+  min dual / 0-30 s single, transitions 250 ms-30 min, thresholds 0.55-400 uVrms, limits 0-25.5
+  mA; tip card: averaging 0-30 s; startup delay and blanking still undocumented); `validate_policy`
+  checks them; D20 judges declared timing against the range (RCS08's 30 s / 4 s / 30 s now passes
+  where it failed for differing from the defaults), D21 reads the FDA onset range (30 s passes; it
+  was outside the trial's 1.2-2 s); the parameter card carries range + source per row, the
+  decision-148 values from `ClosedLoopDeployment/timing_recommendation.py` (participant table, the
+  safety_ceiling pattern) with reason and confidence, "programmed today" from the newest session
+  report's active group (`device_facts.programmed_closed_loop_timing`), and a fallback onset of
+  two averaging windows (8192 ms at the 4096 ms window) instead of the trial's 2 s ceiling. First
+  suite run: host 1092 / 2 / 5 failed (the five pinned the old floor or the exact facts dict) --
+  rewritten; second run submitted. Frontend rebuilt, "programmed today" in chunk 576.e37f8ee0.
+  Contest A (LTI) landed: averaging 9 s, onset 72 / 63 s, thresholds re-placed; finds the Phase 10
+  30 s onset was computed on the 3 s clock (ten confirmations) and is ONE update at the device's
+  30 s averaging -- the current device settings and the Phase 10 recommendation replay
+  identically. Not yet acted on: the table keeps decision 148's values until the six are judged.
+- Phase 11 proven and landed: second suite run (direct `docker exec`, the bridge being queued
+  behind contest jobs) host 1097 / 2 / 0, container 631 / 0; RCS08 L 1-3+ 24.5 Hz before/after
+  49,343 / 49,473 fields, 173 differing, all explained (parameter card, D20/D21 text, the new
+  programmed-timing block; verdict / thresholds / edges 0 differing); workers HUP'd; decision 149.

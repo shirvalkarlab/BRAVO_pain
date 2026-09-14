@@ -5,17 +5,16 @@ problem is that the module never handed the rule the value the device already re
 that still blocks does so for a reason the PI has read and agreed with.
 
 ## Next Step
-Phase 10 landed (decision 148): the adaptive timing ranges (FDA Table 2 the one real source), the
-repo's "fixed timing" claim corrected, RCS08's own dynamics measured, recommendations in
-artifacts/research_2026-09-13_percept_adaptive_timing_SYNTHESIS.md. Open for the PI: the Percept
-clinician programmer guide ("A610") is not on this machine; whether the simulation card should
-replay the programmed group's own timing (next change, his call); the ganged right channel and the
-one-unit threshold gap.
+Phase 12: five contest reports still to land (B Kalman, C FOPDT, D dwell-time, E nonlinear, F
+ML/statistics; A landed). Judge all six by the brief's scoring rule, write the synthesis with the
+highest-confidence, most robust approach and the implementation plan for the CL module, and update
+`ClosedLoopDeployment/timing_recommendation.py` from it (decision 149 says that table is the one
+place to change).
 
 ## Current Phase
-Phase 10
+Phase 12
 
-phases: 10/10 complete
+phases: 11/12 complete
 
 ### Phase 1: Measure what the ledger says today
 - [x] Run the live report on RCS08 at the committed band (L 0-2+, 24.5 Hz) and list every non-pass row
@@ -78,6 +77,19 @@ phases: 10/10 complete
 - [x] Data researcher: RCS08's programmed adaptive state; ACF/PSD time scales; crossing chatter vs onset; settling constants vs transitions; post-programming settling vs startup delay
 - [x] Synthesis: recommended settings inside the documented ranges with the rationale per parameter; what the record cannot decide
 - **Status:** complete
+
+### Phase 11: Wire the documented ranges and the record-derived timing into the modules (PI, 2026-09-13)
+- [x] One home for the FDA / tip-card ranges (`percept_adaptive.DOCUMENTED_RANGES`); the ADAPT-PD trial's settings kept and labelled as the trial's; `validate_policy` checks timings and limits against them
+- [x] Device rules D20 (declared timing judged against the range, not the default) and D21 (onset 0-6 min / 0-30 s) read the one home; ledger text rewritten
+- [x] The parameter card: every timing row carries its documented range and source; the record-derived values (decision 148, `timing_recommendation.py`, one table keyed on the participant) with reason and confidence; the fallback onset is two averaging windows inside the range; what the device RUNS today ("programmed today") beside every row, read from the newest session report's active group
+- [x] Frontend: programmed value and confidence on the card; rebuilt (chunk 576.e37f8ee0)
+- [x] Both suites green (host 1097 / 2 / 0, container 631 / 0); equality proof on RCS08 L 1-3+ 24.5 Hz (49,343 / 49,473 fields, 173 differing, all under the parameter card, D20/D21 text and the new programmed-timing block); workers reloaded; decision 149; commit; push
+- **Status:** complete
+
+### Phase 12: Method contest -- six control-theory approaches to the timing and threshold parameters
+- [x] Brief written (`_agent_bridge/_probe_tl/_contest/BRIEF.md`), ctrlsys installed, six Opus agents dispatched (LTI state-space, Kalman estimator, FOPDT/lambda, dwell-time Markov, nonlinear dynamics, ML/statistics)
+- [ ] Judge the six reports by the brief's scoring rule; synthesis with the highest-confidence, most robust approach and an implementation plan for the CL module; the timing table updated from it
+- **Status:** pending
 
 ### Phase 5: Prove it on the page and land
 - [x] Frontend: ledger shows the new verdict kinds and the measurement current; rebuild; strings found in the served chunk

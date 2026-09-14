@@ -379,12 +379,22 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
             # interface needs a toggle, and a toggle needs every option's field set. Building them
             # here rather than on demand also means the comparison is against one snapshot of the
             # data instead of two fetches that could straddle a change.
+            # The participant's own measured timing (decision 148; RCS08 today) and what the
+            # device RUNS on the sensing side (the newest session report's active group, read by
+            # the adapter into device_facts["active_sensing_group_timing"]) ride into every
+            # row of the parameter card, so the recommendation is shown against the current
+            # programming (2026-09-13). Either may be absent; the card says so per row.
+            _tr = _optional("timing_recommendation")
+            _record_timing = _tr.for_participant(participant_uid) if _tr is not None else {}
+            _prog_all = (device_facts or {}).get("active_sensing_group_timing") or {}
+            _programmed = _prog_all.get(hemisphere) if isinstance(_prog_all, dict) else None
             _all = presc.prescribe_all_modes(
                 threshold_plan=rep.threshold, candidate=first,
                 power_series=d[power_scale].to_numpy() if len(d) else None,
                 t_s=_t, replay_result=rep.replay,
                 validated_hemispheres=(hemisphere,) if rep.threshold is not None else (),
-                configuring_both_hemispheres=False)
+                configuring_both_hemispheres=False,
+                record_timing=_record_timing, programmed_timing=_programmed or {})
             rep.prescriptions = _all
             # `rep.prescription` stays as the mode the CANDIDATE asked for, so callers that predate
             # the toggle keep the behaviour they had. The recommendation is separate from the

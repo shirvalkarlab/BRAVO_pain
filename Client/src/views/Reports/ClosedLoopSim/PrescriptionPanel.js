@@ -191,6 +191,17 @@ function FieldRow({ f, index, ticked, onTick, readBackEnabled }) {
                 {`default ${f.device_default}`}
               </MDTypography>
             ) : null}
+            {/* What the device RUNS on this side today, from the newest session report's active
+                sensing group (2026-09-13). Shown whenever the report carries it, so a value that
+                already matches the recommendation reads "programmed today" too and the reader
+                knows nothing needs entering. */}
+            {f.programmed != null ? (
+              <MDTypography variant="caption" sx={{ display: "block", fontSize: 9.5,
+                fontFamily: PAL.mono, fontWeight: 600,
+                color: String(f.programmed) === String(f.value) ? "#3A7D44" : "#8A5A00" }}>
+                {`programmed today ${f.programmed}`}
+              </MDTypography>
+            ) : null}
           </>
         )}
       </MDBox>
@@ -220,7 +231,13 @@ function FieldRow({ f, index, ticked, onTick, readBackEnabled }) {
         {f.range && f.range.length === 2 ? (
           <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5,
             fontFamily: PAL.mono, color: "#6A6A6A" }}>
-            {`published range ${f.range[0]} to ${f.range[1]}`}
+            {`documented range ${f.range[0]} to ${f.range[1]}`}
+          </MDTypography>
+        ) : null}
+        {f.confidence ? (
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10,
+            fontWeight: 600, color: "#6A6A6A" }}>
+            {`confidence ${f.confidence} (measured on this participant's record)`}
           </MDTypography>
         ) : null}
         {confirm.detail ? (

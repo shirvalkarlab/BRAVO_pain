@@ -405,8 +405,12 @@ def test_averaging_recommendation_tracks_the_biomarker_not_the_device_default():
     assert tp["device_default_averaging_ms"] == 1200.0
     assert tp["averaging_matches_biomarker"] is False
     assert any("factor of" in n for n in tp["notes"])
-    # the unpublished-range caveat must travel with the recommendation, not be assumed away
-    assert "averaging duration" in tp["ranges_unpublished"]
+    # the averaging range IS documented (0-30 s, tip card; 2026-09-13) and 4096 ms is inside it;
+    # the two parameters still without any documented range travel with the plan by name
+    assert "averaging duration" not in tp["ranges_unpublished"]
+    assert tp["averaging_range_ms"] == [0.0, 30_000.0]
+    assert tp["averaging_in_documented_range"] is True
+    assert set(tp["ranges_unpublished"]) == {"adaptive startup delay", "detection blanking duration"}
 
 
 def test_blanking_covers_the_ramp_plus_the_estimator_turnover():
@@ -439,11 +443,16 @@ def test_ramp_is_clamped_into_the_manufacturers_titration_range():
     assert any("clamped" in n for n in tp["notes"])
 
 
-def test_onset_duration_stays_inside_the_published_dual_mode_range():
+def test_onset_duration_stays_inside_the_documented_dual_mode_range():
     from StimOptimizer.routines import percept_adaptive as PA
     tp = PA.timing_plan()
     lo, hi = PA.ONSET_RANGE_DUAL_MS
+    assert (lo, hi) == (0.0, 6.0 * 60_000.0)             # FDA SSED P960009/S478 Table 2
     assert lo <= tp["onset_duration_ms"] <= hi
+    assert tp["onset_range_ms"] == [lo, hi]
+    assert tp["transition_range_ms"] == [250.0, 30.0 * 60_000.0]
+    single = PA.timing_plan(mode=PA.SINGLE)
+    assert single["onset_range_ms"] == [0.0, 30_000.0]
 
 
 def test_latency_estimator_recovers_a_known_time_constant_and_refuses_an_inert_band():

@@ -965,7 +965,7 @@ def test_the_onset_duration_is_reported_as_inoperative_when_it_spans_one_window(
     assert PR.onset_windows(2000.0, 1200.0)["windows"] == 2
     assert PR.onset_windows(2000.0, 1200.0)["inoperative"] is False
 
-    # at the biomarker-matched averaging duration, nothing in the published range is operative
+    # at the biomarker-matched averaging duration, nothing the ADAPT-PD trial set (1.2-2 s) is operative
     for onset in (1200.0, 1600.0, 2000.0):
         r = PR.onset_windows(onset, 4096.0)
         assert r["windows"] == 1 and r["inoperative"] is True, onset

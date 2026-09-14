@@ -123,6 +123,15 @@ IMPEDANCE_OPEN_OHMS = 10_000.0
 from .session_report_facts import (CAPTURE_AMP_CEILING_MA as CAPTURE_ARTEFACT_AMP_MA,
                                    CAPTURE_PW_CEILING_US as CAPTURE_ARTEFACT_PW_US)
 
+# THE DOCUMENTED SELECTION RANGES of the adaptive parameters live in ONE place,
+# ``StimOptimizer.routines.percept_adaptive`` (2026-09-13); rules D20 and D21 read them from there.
+# Two spellings because the container's path root makes the package ``modules.StimOptimizer`` and
+# the host suite makes it ``StimOptimizer`` (the same shim ``device_facts`` uses).
+try:
+    from modules.StimOptimizer.routines import percept_adaptive as _PA
+except Exception:                                       # pragma: no cover - import shim
+    from StimOptimizer.routines import percept_adaptive as _PA
+
 #: D44. The only published rate floor. It is written for movement disorders and its relevance to a
 #: pain participant is not established by the document, so it is a soft floor.
 LOW_RATE_SOFT_FLOOR_HZ = 30.0
@@ -242,10 +251,25 @@ THRESHOLD_MODE_TABLE = {
     },
 }
 
-#: D21. The adjustable range of the onset duration is not printed in either Medtronic document. The
-#: only published ranges come from the ADAPT-PD methodology paper and are labelled as such wherever
-#: they are used, because a trial paper is not device labelling.
-ONSET_DURATION_RANGE_MS_ADAPT_PD = {"dual": (1200.0, 2000.0), "single": (200.0, 500.0)}
+#: D21. The documented selection range of the onset duration, per mode: 0-6 min in Dual Threshold,
+#: 0-30 s in Single Threshold (FDA SSED P960009/S478, Table 2, p. 8). Until 2026-09-13 this file
+#: carried the ADAPT-PD trial's own setting (1.2-2 s dual, 200-500 ms single) as if it were the
+#: device's range, and RCS08's programmed 30 s onset would have read as outside it. The trial's
+#: values are kept beside the range, labelled as the trial's.
+ONSET_DURATION_RANGE_MS = {"dual": _PA.ONSET_RANGE_DUAL_MS, "single": _PA.ONSET_RANGE_SINGLE_MS}
+ONSET_DURATION_RANGE_MS_ADAPT_PD = {"dual": _PA.ADAPT_PD_ONSET_RANGE_MS[_PA.DUAL],
+                                    "single": _PA.ADAPT_PD_ONSET_RANGE_MS[_PA.SINGLE]}
+
+#: D20. The documented range each declared timing key is judged against, in the units the
+#: THRESHOLD_MODE_TABLE row uses. ``None`` means no range is documented anywhere found, so a
+#: declared value there is reported and never judged. The onset's range depends on the mode.
+TIMING_RANGE_BY_KEY = {
+    "averaging_ms_adaptive": _PA.AVERAGING_RANGE_MS,
+    "onset_ms_adaptive": None,                      # per mode: ONSET_DURATION_RANGE_MS
+    "detection_blanking_ms_adaptive": None,
+    "transition_up_s": (_PA.TRANSITION_RANGE_MS[0] / 1000.0, _PA.TRANSITION_RANGE_MS[1] / 1000.0),
+    "transition_down_s": (_PA.TRANSITION_RANGE_MS[0] / 1000.0, _PA.TRANSITION_RANGE_MS[1] / 1000.0),
+}
 
 #: Accepted spellings of the three threshold modes, normalised before use so that a caller writing
 #: "Dual Threshold" and a caller writing "dual" get the same verdict.
@@ -751,35 +775,48 @@ def _p_d19(candidate, participant):
 
 
 def _p_d20(candidate, participant):
-    """Any timing parameters the caller declares must match the documented defaults for the mode.
+    """Any timing parameters the caller declares must sit inside the DOCUMENTED selection range.
 
-    Advisory rather than blocking: the device supplies these defaults itself, and the adjustable
-    ranges are not printed in either document, so a declared value that differs from the default is
-    something to look at rather than something this file can call wrong.
+    Until 2026-09-13 this compared a declared value against the white paper's default and read a
+    difference as a failure -- which made every adjusted configuration, including the one RCS08
+    runs (30 s onset, 4 s transitions, 30 s averaging), an advisory failure for being adjusted.
+    The defaults are defaults (WP Table 1 is titled "Default Settings"); the envelope is the FDA
+    approval summary's Table 2. A key with no documented range (detection blanking) is reported
+    and not judged; a declaration containing only such keys gives no verdict.
     """
     mode = _mode(candidate)
     declared = candidate.get("declared_mode_timing") if isinstance(candidate, dict) else None
     if mode is None or not isinstance(declared, dict) or not declared:
         return None
-    row = THRESHOLD_MODE_TABLE[mode]
+    judged = 0
     for key, value in declared.items():
-        if key in row and row[key] is not None and value != row[key]:
+        rng = TIMING_RANGE_BY_KEY.get(key)
+        if key == "onset_ms_adaptive":
+            rng = ONSET_DURATION_RANGE_MS.get(mode)
+        if rng is None or value is None:
+            continue
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
             return False
-    return True
+        judged += 1
+        if not (rng[0] <= v <= rng[1]):
+            return False
+    return True if judged else None
 
 
 def _p_d21(candidate, participant):
-    """Onset duration inside the only published range, which comes from the trial paper.
+    """Onset duration inside the documented selection range for the mode (FDA Table 2).
 
-    Neither Medtronic document prints the adjustable range, so this check cites Stanslaski et al.
-    2024 and is advisory. A value outside the trial range is not thereby unprogrammable; it is
-    simply outside what has been published.
+    0-6 min in Dual Threshold, 0-30 s in Single Threshold. A value outside it cannot be entered on
+    the tablet. Advisory rather than blocking because the candidate's onset is a recommendation
+    the clinician types, not a property of the band.
     """
     mode = _mode(candidate)
     onset = _num(candidate, "onset_duration_ms")
     if mode is None or onset is None:
         return None
-    rng = ONSET_DURATION_RANGE_MS_ADAPT_PD.get(mode)
+    rng = ONSET_DURATION_RANGE_MS.get(mode)
     if rng is None:
         return None
     return rng[0] <= onset <= rng[1]
@@ -1856,35 +1893,39 @@ RULES = (
     ),
     types.DeviceConstraint(
         rule_id="D20",
-        title="Per-mode timing parameters and defaults",
-        source="WP + A610", page="WP p. 14 Table 1, A610 p. 38, A610 p. 42",
+        title="Per-mode timing defaults, and the documented range each may be set within",
+        source="WP + A610 + FDA", page="WP p. 14 Table 1 ('Default Settings'), A610 p. 38, p. 42; FDA SSED P960009/S478 Table 2 p. 8; Tip Cards p. 8",
         severity="advisory",
         human_text=(
-            "The two therapy-driving modes differ throughout: FFT size 256 against 64 points, "
-            "adaptive update rate 5 Hz against 20 Hz, averaging 1200 ms against 100 ms, onset "
-            "1200 ms against 200 ms, detection blanking 2000 ms against 550 ms, and transition "
-            "durations of 2.5 and 5 minutes against 250 ms in each direction. Dual Threshold sets "
-            "its two thresholds manually while both single modes compute one as 0.75 times the "
-            "difference between the captures added to the lower capture. The full table is exposed "
-            "as THRESHOLD_MODE_TABLE so that downstream code reads it rather than restating it. "
-            "This is advisory because the device supplies these defaults itself and the adjustable "
-            "ranges are not printed, so a declared value that differs is worth seeing rather than "
-            "wrong."
+            "The two therapy-driving modes differ throughout in their DEFAULTS: FFT size 256 "
+            "against 64 points, adaptive update rate 5 Hz against 20 Hz, averaging 1200 ms against "
+            "100 ms, onset 1200 ms against 200 ms, detection blanking 2000 ms against 550 ms, and "
+            "transition durations of 2.5 and 5 minutes against 250 ms in each direction. Every one "
+            "of those is adjustable, and the documented selection ranges are: onset 0-6 min (Dual) "
+            "or 0-30 s (Single) and transition up and down 250 ms-30 min each (FDA approval "
+            "summary, Table 2); averaging 0-30 s (tip card). No range is documented for detection "
+            "blanking or the adaptive startup delay. A declared timing value is judged against the "
+            "documented range, not against the default; a value with no documented range is "
+            "reported and not judged. Dual Threshold sets its two thresholds manually while both "
+            "single modes compute one as 0.75 times the difference between the captures added to "
+            "the lower capture. The defaults are exposed as THRESHOLD_MODE_TABLE and the ranges as "
+            "TIMING_RANGE_BY_KEY so that downstream code reads them rather than restating them."
         ),
         predicate=_p_d20,
     ),
     types.DeviceConstraint(
         rule_id="D21",
-        title="Programmable range of the onset duration is published only in the trial paper",
-        source="ADAPT-PD", page="Stanslaski et al. 2024",
+        title="Onset duration inside its documented selection range: 0-6 min (Dual), 0-30 s (Single)",
+        source="FDA + ADAPT-PD", page="FDA SSED P960009/S478 Table 2 p. 8; Stanslaski et al. 2024 for the trial's own settings",
         severity="advisory",
         human_text=(
-            "Neither Medtronic document prints the adjustable range of the onset duration; both "
-            "give only the default. The ADAPT-PD methodology paper states a range of 1.2 to 2 "
-            "seconds in dual threshold mode and 200 to 500 milliseconds in single threshold mode. "
-            "These are the only published ranges found and they are labelled as coming from the "
-            "trial paper rather than from the device labelling, which is why a value outside them "
-            "is surfaced rather than refused."
+            "The FDA approval summary for BrainSense Adaptive prints the selection range of the "
+            "onset duration: 0 to 6 minutes in Dual Threshold mode and 0 to 30 seconds in Single "
+            "Threshold mode. Neither Medtronic manual on this machine prints it. The ADAPT-PD "
+            "trial let its clinicians set 1.2 to 2 seconds (Dual) and 200 to 500 milliseconds "
+            "(Single); until 2026-09-13 this rule treated the trial's setting as the device's "
+            "range, under which the 30 s onset RCS08's device runs would have read as out of "
+            "range. A value outside the documented range cannot be entered on the tablet."
         ),
         predicate=_p_d21,
     ),

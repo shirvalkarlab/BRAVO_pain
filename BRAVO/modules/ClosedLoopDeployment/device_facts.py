@@ -996,9 +996,58 @@ def active_sensing_group_from_report(d):
             "active_sensing_group_adaptive_status": [c.get("AdaptiveTherapyStatus")
                                                      for c in sens if isinstance(c, dict)],
             "session_report_date": d.get("SessionDate"),
+            # The closed-loop timing and threshold values the device is RUNNING on each side, so
+            # the parameter card can print "programmed today" beside every recommendation
+            # (2026-09-13). Read from the same group; the export's own field names are kept in
+            # the comment beside each key.
+            "active_sensing_group_timing": programmed_closed_loop_timing(sens),
         }
         return out
     return {}
+
+
+def programmed_closed_loop_timing(sensing_channels):
+    """Per hemisphere, the adaptive timing and threshold fields as programmed in one group.
+
+    Pure. ``sensing_channels`` is the ``ProgramSettings.SensingChannel`` list of a group. Returns
+    ``{"Left": {...}, "Right": {...}}`` with milliseconds for every duration, the two thresholds
+    in the device's own units, the two adaptive amplitude limits in mA, and the sensing centre in
+    Hz; a field the export does not carry is ``None`` rather than invented. An empty list gives
+    ``{}``.
+    """
+    out = {}
+    for c in sensing_channels or []:
+        if not isinstance(c, dict):
+            continue
+        side = str(c.get("HemisphereLocation") or "").split(".")[-1] or None
+        if side is None:
+            continue
+        adaptive = c.get("AdaptiveTherapy") or {}
+        setup = c.get("SensingSetup") or {}
+
+        def _f(v):
+            try:
+                return float(v) if v is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        out[side] = {
+            "onset_upper_ms": _f(adaptive.get("UpperThresholdOnsetInMilliSeconds")),      # AdaptiveTherapy.UpperThresholdOnsetInMilliSeconds
+            "onset_lower_ms": _f(adaptive.get("LowerThresholdOnsetInMilliSeconds")),      # AdaptiveTherapy.LowerThresholdOnsetInMilliSeconds
+            "detection_blanking_ms": _f(adaptive.get("DetectionBlankingDurationInMilliSeconds")),
+            "adaptive_startup_delay_ms": _f(adaptive.get("AdaptiveStartupDelayInMilliSeconds")),
+            "transition_up_ms": _f(c.get("TransitionUpInMilliSeconds")),
+            "transition_down_ms": _f(c.get("TransitionDownInMilliSeconds")),
+            "averaging_ms": _f(setup.get("AveragingDurationInMilliSeconds")),           # SensingSetup.AveragingDurationInMilliSeconds
+            "sensing_centre_hz": _f(setup.get("FrequencyInHertz")),
+            "upper_threshold": _f(c.get("UpperLfpThreshold")),
+            "lower_threshold": _f(c.get("LowerLfpThreshold")),
+            "upper_limit_mA": _f(c.get("UpperLimitInMilliAmps")),
+            "lower_limit_mA": _f(c.get("LowerLimitInMilliAmps")),
+            "suspend_amplitude_mA": _f(c.get("SuspendAmplitudeInMilliAmps")),
+            "adaptive_status": str(c.get("AdaptiveTherapyStatus") or "").split(".")[-1] or None,
+        }
+    return out
 
 
 def _memoised_active_group_facts(key, build):
