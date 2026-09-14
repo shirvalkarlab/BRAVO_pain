@@ -536,3 +536,68 @@ the threshold re-centring as what remains. Commit and push done by this session 
 - Decision 154 written (next number after 153, read from the file's own tail, not guessed).
   task_plan.md Phase 16 added and marked complete; Next Step rewritten to name T5 and T7 as what
   remains. Commit and push done by this session itself.
+
+## Session 2026-09-13, continued: T5, the block bootstrap as an interval
+- Read the reference scripts on the container (`_agent_bridge/_probe_tl/_contest/ml_stats/`):
+  `s4_bootstrap.py` (the grid, feasibility rule, tie-break, bootstrap loop) and `fastreplay.py`
+  (the config-vectorised controller replay, self-checked against `simulation.simulate_series` in
+  `s1_selfcheck.py`). The actual grid is 18 onset x 8 gap x 4 blanking = 576 configurations, not
+  the "1,440" the task's own paraphrase used -- ported from the working script, not the paraphrase.
+- Read the T3/T4/T6 wiring pattern in `adapter.py`/`prescription.py` (patch the already-serialised
+  `out["prescriptions"]`/`out["prescription"]` row dicts, never mutate the dataclasses after
+  `report_to_dict` has run) and `simulation.py`'s `regrid_stretches`/`_grid_like`.
+- Built `ClosedLoopDeployment/robustness.py`: `prepare`/`run_stretch`/`run_many` ported line for
+  line from `fastreplay.py`; `choose_naive` a literal port of `s4_bootstrap.choose`.
+- THE PI'S HARD REQUIREMENT ("vectorized code for bootstrapping so it's super fast") met by an
+  optimisation beyond a literal port: since `run_stretch` resets the controller's state at the
+  start of every stretch, one stretch's replay is independent of every other stretch and
+  deterministic given a configuration -- so a resample's answer (a weighted sum over whichever
+  stretches it draws, with replacement) can be built from numbers computed ONCE per training
+  stretch (`_stretch_accumulators`, the one per-reading Python loop in the file, config-vectorised
+  across all 576 configurations) rather than re-simulated per replicate. Every one of the 200
+  bootstrap replicates (`_choose_from_precompute`) is then a weighted sum via matrix multiplication
+  and `numpy.bincount` -- no further calls into `run_stretch`.
+- 20 tests written (`tests/test_robustness.py`), all passing first try in the container: the grid
+  shape, `run_stretch`'s own known-by-construction behaviour, the fraction-between precompute
+  against the naive function (including a duplicated-stretch case), the CENTRAL equality (fast
+  path == naive path) at weights of one, with one stretch drawn twice, and over 15 independently
+  drawn resample vectors, the refusal paths, an end-to-end run on constructed data, the fixed
+  device averaging default, and the `robustness_note`/`attach_robustness` prescription wiring.
+- Checked the port against the reference script's own stored CSV output, not only re-derived
+  arithmetic: fed the identical npz series (`series_ONE_THREE_LEFT_24.5.npz`) and seed (20260913),
+  the onset interval came back 36.0-90.0 s -- bit for bit the acceptance text and the reference's
+  own `s4_bootstrap_ONE_THREE_LEFT_20260913.csv`. Gap-separation interval matched to 12 significant
+  figures, blanking matched exactly. One honest, traced gap: the reported MEDIAN differs (48.0 s
+  here vs 54.0 s there) because this file filters out missing-power readings before regridding --
+  the same convention `design_rule.py` (T3) and `startup_bias.py` (T6) already use -- while the
+  ad hoc contest script did not; 246 training stretches here against 231 unfiltered, a disclosed
+  difference in an already-established convention, not a defect.
+- Wired into `adapter.report_for_participant` (`write_robustness`/`robustness_if_stored`, stored
+  via CacheStore under `closed_loop_robustness`, same pattern as `write_design_rule`); patched onto
+  every onset-duration field ("nset duration" substring match, matching Dual's two onset fields and
+  Single's one). `prescription.py` gained `Field_.robustness_note`, `robustness_note()`,
+  `attach_robustness()`. No pipeline.py ledger row added or touched -- same as T3/T4/T6.
+- Both suites via `run_both_suites.sh` (bridge, submit-then-poll, job 20260913-222923-b202335b):
+  host 1182 passed, 2 skipped, 0 failed, 0 errors (parallel 1181/2, serial store pass 1/0);
+  container PASS=631 FAIL=0 LIVE_SKIPPED=6.
+- Live field-count/difference-count proof on RCS08, the currently committed band (ZERO_TWO_LEFT /
+  L 0-2+, 24.5 Hz), genuinely before and after (`git stash -u` for "before", `git stash pop` to
+  restore "after"; `_agent_bridge/_probe_t5.py capture`/`diff`, calling
+  `bravo_service.run_for_participant` directly, not through gunicorn): 49,756 fields before, 49,806
+  after, 49,756 in common, 0 real differences (4 nominal "differing" fields are `nan != nan` on
+  both sides, unrelated to this change), 0 only-before, 50 only-after (4 the new
+  `closed_loop_robustness` summary, 46 the new `robustness_note` key on every field row across the
+  three prescription views).
+- The bootstrap's own wall-clock measured directly (not folded into page timing): 0.059 s on the
+  committed band (46,118 tiles, 4 training stretches, 159/200 feasible), 1.53 s on the richer
+  L 1-3+ series (37,891 raw samples, 246 training stretches, 200/200 feasible) -- both timed twice,
+  identical each time, since the computation is deterministic given the seed.
+- On the committed band itself: onset interval 27-60 s, blanking 3-3 s, thresholds 43.5-108.7
+  device units apart -- a different, real number from L 1-3+'s 36-90 s, expected given the far
+  sparser recording history on this band (4 training stretches against 246).
+- Frontend rebuilt; `PrescriptionPanel.js` gained a `robustness_note` block, identical placement to
+  the three earlier notes, beside the onset-duration row(s). New sentence's own wording ("are one
+  recommendation") found (grep) in the served chunk `576.9888adf4.chunk.js`.
+- Decision 155 written (next number after 154, read from the file's own tail). task_plan.md Phase
+  17 added and marked complete; Next Step rewritten to name T7 and the threshold re-centring as
+  what remains. Commit and push done by this session itself.

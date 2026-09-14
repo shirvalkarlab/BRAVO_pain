@@ -270,6 +270,17 @@ function FieldRow({ f, index, ticked, onTick, readBackEnabled }) {
             {f.startup_bias_note}
           </MDTypography>
         ) : null}
+        {/* The block-bootstrap robustness check (T5, 2026-09-13): a 2.5th-97.5th percentile
+            interval, over 200 resamples of this participant's own recorded stretches, on the onset
+            duration a design search would pick -- printed on the onset row(s) for the same reason
+            the three notes above are: it is a fact about this configuration on this record, not
+            only a justification behind the "Why this value" reveal. */}
+        {f.robustness_note ? (
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mt: 0.2,
+            color: PAL.warnText }}>
+            {f.robustness_note}
+          </MDTypography>
+        ) : null}
         {confirm.detail ? (
           <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5,
             color: "#5A5A5A" }}>

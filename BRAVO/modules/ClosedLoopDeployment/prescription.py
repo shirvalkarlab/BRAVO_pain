@@ -193,6 +193,13 @@ class Field_:
     #: method contest's own entries (decision 150) disagreed and neither is corrected toward the
     #: other. Same always-visible placement as `design_rule_note` and `occupancy_note`.
     startup_bias_note: str | None = None
+    #: The block-bootstrap robustness check's own sentence (T5, 2026-09-13; `robustness_note`), on
+    #: the onset duration row(s) only: the 2.5th-97.5th percentile interval, over 200 resamples of
+    #: this participant's own recorded stretches, of the onset (and detection blanking, and
+    #: threshold gap) a designer replaying the real controller against this record would have
+    #: picked -- a range, not a single recommended number with an implied margin of error. Same
+    #: always-visible placement as the three notes above.
+    robustness_note: str | None = None
 
     #: WHY `status` ALONE IS NOT ENOUGH, and why two axes are derived from it below.
     #:
@@ -344,7 +351,7 @@ class Prescription:
                  "device_default": f.default, "range": f.range_, "range_source": f.range_source,
                  "why": f.why, "programmed": f.programmed, "confidence": f.confidence,
                  "design_rule_note": f.design_rule_note, "occupancy_note": f.occupancy_note,
-                 "startup_bias_note": f.startup_bias_note,
+                 "startup_bias_note": f.startup_bias_note, "robustness_note": f.robustness_note,
                  # The two provenance axes, so the interface never has to re-derive them from the
                  # status string and cannot disagree with this module about what a status means.
                  "origin": f.origin, "confirm": f.confirm,
@@ -967,6 +974,67 @@ def attach_startup_bias(prescriptions, startup_bias_payload):
         if sd_f is None:
             continue
         sd_f.startup_bias_note = note
+    return prescriptions
+
+
+# --- the block-bootstrap robustness check (T5, 2026-09-13; robustness.py) ----------------------
+def robustness_note(robustness_payload):
+    """One sentence for the onset duration row(s): the 2.5th-97.5th percentile interval, over a
+    block bootstrap of this participant's own recorded stretches, of the onset a designer replaying
+    the real controller against this record would have picked -- with the threshold-gap and
+    detection-blanking intervals from the identical bootstrap alongside it.
+
+    Returns ``None`` when there is nothing to say -- no payload, the series was refused, or the
+    bootstrap found no feasible resample at all (``intervals["onset_s"]`` absent) -- rather than a
+    sentence that reads like a finding when it is not one, the same rule ``design_rule_note``,
+    ``occupancy_note`` and ``startup_bias_note`` each apply to their own payload.
+    """
+    if not robustness_payload or robustness_payload.get("refused"):
+        return None
+    intervals = robustness_payload.get("intervals") or {}
+    onset_i = intervals.get("onset_s")
+    if not onset_i:
+        return None
+    n_boot = robustness_payload.get("n_boot")
+    n_feasible = robustness_payload.get("n_feasible")
+    parts = [
+        f"Robustness (block bootstrap, {n_feasible} of {n_boot} resamples of this participant's "
+        f"own recorded stretches feasible, 2.5th-97.5th percentile): the onset duration a designer "
+        f"replaying the real Dual Threshold controller against this record would pick ranges from "
+        f"{onset_i['lower']:.0f} to {onset_i['upper']:.0f} s -- "
+        f"{onset_i['lower']:.0f}–{onset_i['upper']:.0f} s are one recommendation, not a "
+        "single number with an implied margin of error."
+    ]
+    bl_i = intervals.get("blanking_s")
+    if bl_i:
+        parts.append(f"Detection blanking ranges {bl_i['lower']:.0f}"
+                     f"–{bl_i['upper']:.0f} s over the same resamples.")
+    gap_i = intervals.get("gap_units")
+    if gap_i:
+        parts.append(f"The two thresholds the same search would place sit "
+                     f"{gap_i['lower']:.1f} to {gap_i['upper']:.1f} device units apart.")
+    return " ".join(parts)
+
+
+def attach_robustness(prescriptions, robustness_payload):
+    """Append ``robustness_note``'s sentence to every onset-duration field of every mode in
+    ``prescriptions["modes"]`` -- "Upper onset duration" and "Lower onset duration" in Dual mode,
+    "Onset duration" in Single mode, matched the same way the onset-inoperative coupling banner
+    already does (``"nset duration" in f.name``), because one bootstrap answer applies to whichever
+    onset field(s) the selected mode actually has. Mutates the ``Field_`` objects in place and
+    returns ``prescriptions`` for convenience; a caller with nothing to attach (``None`` or refused)
+    gets the object back unchanged, since ``robustness_note`` itself returns ``None`` in that case.
+    """
+    if not prescriptions or not isinstance(prescriptions.get("modes"), dict):
+        return prescriptions
+    note = robustness_note(robustness_payload)
+    if note is None:
+        return prescriptions
+    for presc in prescriptions["modes"].values():
+        fields = getattr(presc, "fields", None) or []
+        for f in fields:
+            if "nset duration" in f.name:
+                f.robustness_note = note
     return prescriptions
 
 

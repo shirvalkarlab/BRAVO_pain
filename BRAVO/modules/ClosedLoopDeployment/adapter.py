@@ -2474,6 +2474,123 @@ def design_rule_if_stored(participant, candidate=None, *, hemisphere="Left"):
         return None
 
 
+# ---------------------------------------------------------------------------------------------
+# THE BLOCK-BOOTSTRAP ROBUSTNESS CHECK (T5, 2026-09-13; robustness.py)
+# ---------------------------------------------------------------------------------------------
+def robustness_signature(participant, *, tiles_key, contact, centre_hz, hemisphere, upper, lower,
+                         amp_low, amp_high, n_boot, seed):
+    """The key: the tile entry and recording set (the series the bootstrap resamples), the
+    candidate, the two stored thresholds and the capture amplitude range (the grid is centred at
+    the thresholds' own midpoint and the replay is held to the capture range), the bootstrap's own
+    replicate count and seed, and this file's own rule version -- the identical shape
+    `design_rule_signature` uses, one row over."""
+    from . import robustness as _rb
+    return (_rb.KIND, _rb.RULE_VERSION, str(getattr(participant, "uid", participant)), tiles_key,
+            recording_set_signature(participant), str(contact), round(float(centre_hz), 3),
+            str(hemisphere),
+            None if upper is None else round(float(upper), 6),
+            None if lower is None else round(float(lower), 6),
+            None if amp_low is None else round(float(amp_low), 6),
+            None if amp_high is None else round(float(amp_high), 6),
+            int(n_boot), int(seed))
+
+
+def write_robustness(participant, *, candidate, hemisphere, threshold_plan, loaded=None,
+                     epochs=None, n_boot=None, seed=0):
+    """Replay the real controller over the same 3 s tiles the simulation and the design rule read,
+    across the grid `robustness.py` defines, and store the 200-replicate block-bootstrap interval
+    on the onset duration, threshold gap and detection blanking. Refuses, rather than bootstraps on
+    nothing, exactly where `write_design_rule` and `write_simulation` refuse: no thresholds, no
+    candidate, no tile entry, no capture amplitude range, or no usable pieces. A matching key is
+    served from the store rather than rebootstrapped."""
+    from . import robustness as _rb
+    try:
+        from modules.CacheStore import provenance as _prov
+    except ImportError:                                # pragma: no cover - depends on the runner
+        from CacheStore import provenance as _prov
+
+    summary = {"written": False, "store_key": None, "seconds": None}
+    plan = threshold_plan
+    if plan is None or plan.upper is None or plan.lower is None:
+        summary["reason"] = ("no thresholds were placed for this candidate, so there is nothing "
+                             "for a robustness bootstrap to be measured against")
+        return summary
+    if plan.capture_amp_low is None or plan.capture_amp_high is None:
+        summary["reason"] = "the plan has no capture amplitude range, which the replay is held to"
+        return summary
+    contact = (candidate or {}).get("channel")
+    centre = (candidate or {}).get("center_hz")
+    if contact is None or centre is None:
+        summary["reason"] = "the candidate carries no sensing contact or band centre"
+        return summary
+    tiles_key = _tiles_key_for(participant)
+    if tiles_key is None:
+        summary["reason"] = "no tile entry key, so nothing could be run or stored"
+        return summary
+    n_boot = _rb.DEFAULT_N_BOOT if n_boot is None else int(n_boot)
+    uid = str(getattr(participant, "uid", participant))
+    sig = robustness_signature(participant, tiles_key=tiles_key, contact=contact,
+                               centre_hz=centre, hemisphere=hemisphere, upper=plan.upper,
+                               lower=plan.lower, amp_low=plan.capture_amp_low,
+                               amp_high=plan.capture_amp_high, n_boot=n_boot, seed=seed)
+    summary["store_key"] = _cache_store.product_key(_rb.KIND, uid, sig)
+    if _cache_store.read_stamp(_rb.KIND, uid, sig, root=_SHARED_CACHE_DIR_OVERRIDE) is not None:
+        summary["written"] = True
+        summary["already_stored"] = True
+        return summary
+
+    import time as _time
+    t0 = _time.perf_counter()
+    inputs = simulation_inputs_for_participant(uid, contact=contact, centre_hz=float(centre),
+                                               loaded=loaded, hemisphere=hemisphere, epochs=epochs)
+    if inputs.get("absent_reason") or not len(inputs["t"]):
+        summary["reason"] = inputs.get("absent_reason") or "no usable pieces with a known amplitude"
+        return summary
+    payload = _rb.robustness_for_series(inputs["t"], inputs["power"], inputs["amp_obs"],
+                                        upper=plan.upper, lower=plan.lower,
+                                        amp_low=plan.capture_amp_low,
+                                        amp_high=plan.capture_amp_high, n_boot=n_boot, seed=seed)
+    payload["candidate"] = {"channel": str(contact), "center_hz": float(centre),
+                            "hemisphere": str(hemisphere)}
+    payload["seconds"] = _time.perf_counter() - t0
+    summary["seconds"] = payload["seconds"]
+
+    chain = [_prov.entry(tiles_key, kind="raw_lsb_tiles", writer="biomarkers")]
+    _cache_store.store_if_absent(
+        _rb.KIND, uid, sig, lambda: payload, writer="closed_loop", trigger="deployment_report",
+        provenance=_prov.flatten(chain), n_recordings=None,
+        extra={"refused": bool(payload.get("refused")), "n_feasible": payload.get("n_feasible"),
+              "candidate": _simulation_candidate_tag(contact, centre, hemisphere)},
+        root=_SHARED_CACHE_DIR_OVERRIDE)
+    summary["written"] = (_cache_store.read_stamp(_rb.KIND, uid, sig,
+                                                  root=_SHARED_CACHE_DIR_OVERRIDE) is not None)
+    summary["refused"] = bool(payload.get("refused"))
+    summary["n_feasible"] = payload.get("n_feasible")
+    return summary
+
+
+def robustness_if_stored(participant, candidate=None, *, hemisphere="Left"):
+    """The newest stored robustness bootstrap for this candidate, matched on the sidecar's
+    `candidate` tag exactly as `design_rule_if_stored` matches -- or ``None``."""
+    from . import robustness as _rb
+    match = None
+    if candidate and candidate.get("channel") is not None and candidate.get("center_hz") is not None:
+        want = _simulation_candidate_tag(candidate["channel"], candidate["center_hz"],
+                                         candidate.get("actuated_hemisphere")
+                                         or candidate.get("sensing_hemisphere") or hemisphere)
+        match = lambda meta: (meta.get("extra") or {}).get("candidate") == want  # noqa: E731
+    try:
+        payload, _stamp = _cache_store.load_newest(_rb.KIND,
+                                                   str(getattr(participant, "uid", participant)),
+                                                   consumer="closed_loop",
+                                                   root=_SHARED_CACHE_DIR_OVERRIDE, match=match)
+        return payload
+    except Exception:                                  # noqa: BLE001 - a miss is not an error
+        _log.warning("closed-loop: the stored robustness bootstrap could not be read for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
+        return None
+
+
 def cache_status_for_page(participant):
     """When the decoded recordings and settings this report reads were last assembled."""
     meaning = ("the date the decoded recordings, the therapy settings and the matched pain reports "
@@ -3271,6 +3388,45 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                      "for %s", getattr(participant, "uid", participant), exc_info=True)
         out["closed_loop_startup_bias"] = {"refused": True,
                                            "reason": f"could not be computed: {_exc!r}"}
+
+    # ---------------------------------------------------------------------------------------------
+    # THE BLOCK-BOOTSTRAP ROBUSTNESS CHECK (T5, 2026-09-13; robustness.py; contest decision 150,
+    # synthesis section 4, task 5): "robustness as an interval, not a point" -- a 200-replicate
+    # block bootstrap, resampling this participant's own recorded stretches with replacement,
+    # reporting the 2.5th-97.5th percentile of the onset duration (and threshold gap, and detection
+    # blanking) a designer replaying the real controller against this record would have picked.
+    # Stored (unlike occupancy.py and startup_bias.py, T4 and T6, which are cheap enough to compute
+    # fresh on every report) because it is a real numerical search -- 576 configurations replayed
+    # over every training stretch -- the same cost class as `write_design_rule`'s own fit, and for
+    # the identical reason that function is stored. Attached by patching the SERIALISED
+    # `out["prescriptions"]`/`out["prescription"]` row dicts, for the identical reason the three
+    # blocks above are: `report_to_dict` has already turned the dataclasses into plain dicts.
+    try:
+        _rb_summary = write_robustness(
+            participant, candidate=(cands[0] if cands else None), hemisphere=hemisphere,
+            threshold_plan=rep.threshold, loaded=_3loaded, epochs=eps)
+        out["closed_loop_robustness"] = _rb_summary
+        _rb_payload = robustness_if_stored(participant, (cands[0] if cands else None),
+                                           hemisphere=hemisphere)
+        if _rb_payload is not None and out.get("prescriptions"):
+            from . import prescription as _presc_rb
+            _rb_note = _presc_rb.robustness_note(_rb_payload)
+            if _rb_note is not None:
+
+                def _patch_rb_rows(field_rows):
+                    for row in (field_rows or []):
+                        if "nset duration" in (row.get("parameter") or ""):
+                            row["robustness_note"] = _rb_note
+
+                for _mode_dict in (out["prescriptions"].get("modes") or {}).values():
+                    _patch_rb_rows(_mode_dict.get("fields"))
+                if out.get("prescription"):
+                    _patch_rb_rows(out["prescription"].get("fields"))
+    except Exception as _exc:                          # noqa: BLE001
+        _log.warning("closed-loop report: the robustness bootstrap could not be run, stored or "
+                     "attached for %s", getattr(participant, "uid", participant), exc_info=True)
+        out["closed_loop_robustness"] = {"written": False, "store_key": None,
+                                         "reason": f"could not be run or stored: {_exc!r}"}
 
     # ---------------------------------------------------------------------------------------------
     # THE CONSISTENCY CHECK (decision 74): does raising current on this contact move pain the way
