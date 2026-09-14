@@ -3225,6 +3225,54 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                                       "reason": f"could not be computed: {_exc!r}"}
 
     # ---------------------------------------------------------------------------------------------
+    # THE START-OF-STRETCH BIAS CHECK (T6, 2026-09-13; startup_bias.py; contest decision 150,
+    # synthesis section 4, task 7): are the first readings after a gap in recording low compared
+    # with the rest of that stretch, and for how long -- two of the contest's own entries measured
+    # this on the same participant and band and disagreed (D found a real dip, E found none), and
+    # both methods are run here, faithfully, on THIS candidate's own recordings rather than
+    # reconciled into one answer. Needs no optimiser and no simulation (unlike `design_rule.py`),
+    # so it is computed fresh on every report exactly as `occupancy.py` is, and patched onto the
+    # SERIALISED prescription rows for the identical reason the two blocks above are: by this
+    # point `report_to_dict` has already turned the dataclasses into plain dicts.
+    try:
+        from . import startup_bias as _sb
+        from . import prescription as _presc_sb
+        _c0_sb = (cands[0] or {}) if cands else {}
+        if _c0_sb.get("channel") is not None and _c0_sb.get("center_hz") is not None:
+            _sb_inputs = simulation_inputs_for_participant(
+                getattr(participant, "uid", participant), contact=_c0_sb["channel"],
+                centre_hz=float(_c0_sb["center_hz"]), loaded=_3loaded, hemisphere=hemisphere,
+                epochs=eps)
+            if not _sb_inputs.get("absent_reason") and len(_sb_inputs["t"]):
+                _sb_payload = _sb.startup_bias_for_series(_sb_inputs["t"], _sb_inputs["power"],
+                                                          _sb_inputs["amp_obs"])
+            else:
+                _sb_payload = {"refused": True,
+                               "reason": (_sb_inputs.get("absent_reason")
+                                         or "no usable pieces for this contact")}
+        else:
+            _sb_payload = {"refused": True,
+                           "reason": "the candidate carries no sensing contact or band centre"}
+        out["closed_loop_startup_bias"] = _sb_payload
+        _sb_note = _presc_sb.startup_bias_note(_sb_payload)
+        if _sb_note is not None and out.get("prescriptions"):
+
+            def _patch_sb_rows(field_rows):
+                for row in (field_rows or []):
+                    if row.get("parameter") == "Adaptive startup delay":
+                        row["startup_bias_note"] = _sb_note
+
+            for _mode_dict in (out["prescriptions"].get("modes") or {}).values():
+                _patch_sb_rows(_mode_dict.get("fields"))
+            if out.get("prescription"):
+                _patch_sb_rows(out["prescription"].get("fields"))
+    except Exception as _exc:                          # noqa: BLE001
+        _log.warning("closed-loop report: the start-of-stretch bias check could not be computed "
+                     "for %s", getattr(participant, "uid", participant), exc_info=True)
+        out["closed_loop_startup_bias"] = {"refused": True,
+                                           "reason": f"could not be computed: {_exc!r}"}
+
+    # ---------------------------------------------------------------------------------------------
     # THE CONSISTENCY CHECK (decision 74): does raising current on this contact move pain the way
     # the correlation implies, THROUGH this band?
     #

@@ -187,6 +187,12 @@ class Field_:
     #: level the signal occupies. Same rows, same reason, same always-visible placement as
     #: `design_rule_note`.
     occupancy_note: str | None = None
+    #: The start-of-stretch bias check's own sentence for this row (T6, 2026-09-13;
+    #: `startup_bias_note`), on the Adaptive startup delay row only: what this participant's own
+    #: recordings show about the first readings of a stretch, computed two ways because two of the
+    #: method contest's own entries (decision 150) disagreed and neither is corrected toward the
+    #: other. Same always-visible placement as `design_rule_note` and `occupancy_note`.
+    startup_bias_note: str | None = None
 
     #: WHY `status` ALONE IS NOT ENOUGH, and why two axes are derived from it below.
     #:
@@ -338,6 +344,7 @@ class Prescription:
                  "device_default": f.default, "range": f.range_, "range_source": f.range_source,
                  "why": f.why, "programmed": f.programmed, "confidence": f.confidence,
                  "design_rule_note": f.design_rule_note, "occupancy_note": f.occupancy_note,
+                 "startup_bias_note": f.startup_bias_note,
                  # The two provenance axes, so the interface never has to re-derive them from the
                  # status string and cannot disagree with this module about what a status means.
                  "origin": f.origin, "confirm": f.confirm,
@@ -899,6 +906,67 @@ def attach_occupancy(prescriptions, occupancy_payload):
             continue
         up_f.occupancy_note = note
         lo_f.occupancy_note = note
+    return prescriptions
+
+
+# --- the start-of-stretch bias check (T6, 2026-09-13; startup_bias.py) -------------------------
+def startup_bias_note(startup_bias_payload):
+    """One sentence for the Adaptive startup delay row: what this participant's own recordings
+    show about the first readings of a stretch, computed two ways -- the method-contest entries
+    ``dwell_markov`` ("D") and ``nonlin_dyn`` ("E") disagreed on this (decision 150), and neither
+    is corrected toward the other here; see ``startup_bias.py``'s own module docstring for the
+    mechanism the disagreement traces to.
+
+    Returns ``None`` when there is nothing to say -- no payload, the fit was refused, or neither
+    method has a first-reading row to report -- rather than a sentence that reads like a finding
+    when it is not one.
+    """
+    if not startup_bias_payload or startup_bias_payload.get("refused"):
+        return None
+    d = startup_bias_payload.get("d_method") or {}
+    e = startup_bias_payload.get("e_method") or {}
+    parts = []
+    if d.get("available") and d.get("rows"):
+        r0 = d["rows"][0]
+        parts.append(
+            f"Method D (compacts each training stretch to the readings it actually measured; "
+            f"only stretches with more than {d.get('min_finite_readings', 20)} finite readings "
+            f"count): the first reading sits {r0['bias_in_sd']:+.3f} of this participant's own "
+            f"scatter from that stretch's own median (t={r0['t_stat']:.2f}, "
+            f"{r0['n_stretches']} stretches).")
+    if e.get("available") and e.get("rows") and e["rows"][0].get("bias_in_sd") is not None:
+        r0 = e["rows"][0]
+        parts.append(
+            f"Method E (reads the raw device-clock position; every training stretch that reaches "
+            f"it counts, no minimum length): the first reading sits {r0['bias_in_sd']:+.3f} of "
+            f"the scatter (z={r0['z']:.2f}, {r0['n_stretches']} stretches).")
+    if not parts:
+        return None
+    return ("Two ways of measuring the start of a recorded stretch, on this participant's own "
+           "training recordings (decision 150, T6): " + " ".join(parts) + " The two methods "
+           "disagree because they use different rules for which readings count as \"the first "
+           "reading\" and which stretches are long enough to include; neither is corrected "
+           "toward the other.")
+
+
+def attach_startup_bias(prescriptions, startup_bias_payload):
+    """Append ``startup_bias_note``'s sentence to the Adaptive startup delay field of every mode
+    in ``prescriptions["modes"]`` that has one. Mutates the ``Field_`` objects in place and
+    returns ``prescriptions`` for convenience; a caller with nothing to attach (``None`` or
+    refused) gets the object back unchanged, since ``startup_bias_note`` itself returns ``None``
+    in that case.
+    """
+    if not prescriptions or not isinstance(prescriptions.get("modes"), dict):
+        return prescriptions
+    note = startup_bias_note(startup_bias_payload)
+    if note is None:
+        return prescriptions
+    for presc in prescriptions["modes"].values():
+        fields = getattr(presc, "fields", None) or []
+        sd_f = next((f for f in fields if f.name == "Adaptive startup delay"), None)
+        if sd_f is None:
+            continue
+        sd_f.startup_bias_note = note
     return prescriptions
 
 

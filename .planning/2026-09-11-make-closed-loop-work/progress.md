@@ -471,3 +471,68 @@ the threshold re-centring as what remains. Commit and push done by this session 
   task_plan.md Phase 15 added and marked complete; Next Step rewritten to name T5-T7 and the
   threshold re-centring, with T4's own live finding on the committed band noted as a live reading
   in favour of that re-centring. Commit and push done by this session itself.
+
+## Session: T6, the start-of-recording dip measured two disagreeing ways (2026-09-13)
+- Read `design_rule.py` and `occupancy.py` fully, and the T3/T4 wiring in `adapter.py` and
+  `prescription.py`, before writing anything -- confirmed the actual wiring pattern patches the
+  ALREADY-SERIALISED prescription-row dicts (`_patch_rows` inside `report_for_participant`, after
+  `report_to_dict(rep)` has run), never the `Prescription`/`Field_` dataclasses directly; the
+  dataclass-mutation functions (`attach_design_rule`, `attach_occupancy`) exist only for testing
+  against the dataclasses and are not on the live wiring path -- the exact trap the task warned
+  about, avoided by following the established pattern rather than the dead one.
+- Read the two contest scripts on the container directly: `_probe_tl/_contest/dwell_markov/
+  d1_explore.py` ("startup check") and `_probe_tl/_contest/nonlin_dyn/s3_returnmap.py`
+  ("(D) start-of-stretch transient"). Confirmed by reading, not assuming: both split stretches
+  70/30 by start time and by count; both call their baseline "the stretch's own median"; the
+  baselines are numerically IDENTICAL functions (`np.median` of the finite values); what differs
+  is which reading each contestant calls "the k-th reading" -- D compacts a stretch to its real
+  readings first (`f = pp[np.isfinite(pp)]`, needs `f.size > 20`), E indexes the raw regridded
+  grid position directly (`p[j]`, no minimum length).
+- Wrote `startup_bias.py` porting both methods line for line, plus the one train/test split both
+  used. Verified the port against the contest's OWN raw CSVs (`d1_startup_bias.csv`,
+  `e3_startup_transient.csv`, read on the container) before wiring anything: fed the identical
+  stretches the contest scripts built (raw `regrid_stretches` on the npz's own `t`/`p`/`a`, no
+  power-isfinite pre-filter), both methods reproduce the contest's printed numbers to every
+  digit -- D: n=82, bias=-0.10404153099836579, t=-2.4914058108928567; E: n=221,
+  bias=-0.03452435522071541, z=-1.4706266338270466.
+- Then ran the SAME functions through `startup_bias_for_series`'s own top-level preprocessing
+  (which mirrors `design_rule_for_series`'s established convention: filter to `isfinite(power)`
+  BEFORE computing gaps and calling `regrid_stretches`) and found close but not identical numbers
+  (n=88, bias=-0.095, t=-2.40 on the same band). Traced the cause rather than forcing agreement:
+  the power-isfinite pre-filter removes a sample's time slot entirely before gap detection, which
+  can turn one short interruption into what looks like two separate stretches -- a real, disclosed
+  side effect of matching this module's OWN established loader (already used unmodified by T3 and
+  T4) rather than the contest's own, different preprocessing. Decided to keep the module's
+  established convention rather than diverge from it for this one file, per the task's own
+  instruction to reuse the existing loader.
+- Wired into `adapter.report_for_participant` (new block after the T4 occupancy block, before the
+  decision-74 consistency check), and into `prescription.py` (`Field_.startup_bias_note`,
+  `startup_bias_note()`, `attach_startup_bias()`, `as_rows()` carries the new key) -- the identical
+  shape as T3/T4.
+- 19 new tests in `test_startup_bias.py`: the split; both methods' arithmetic against independently
+  computed expected values (never re-deriving from the function under test); the exact mechanism
+  (a missing raw-grid cell excludes a stretch from E but not from D, demonstrated by construction
+  on the same two stretches through both methods); the top-level series builder on a constructed
+  dip; the prescription-note wiring. One test's first draft asserted the wrong thing (`bias_in_sd
+  is not None` on a reading index with only 1 contributing stretch, where `None` is the correct,
+  honest answer since there is no standard error to report with n=1) -- caught by running the
+  suite, not assumed correct; fixed by asserting `is None` with a comment explaining why.
+- Both suites via `run_both_suites.sh` (bridge, submit-then-poll, job 20260913-220649-d8aac8cf):
+  host 1162 passed, 2 skipped, 0 failed, 0 errors (was 1143, +19); container PASS=631 FAIL=0
+  LIVE_SKIPPED=6.
+- Field-count/difference-count proof on the committed band (ZERO_TWO_LEFT / L 0-2+, 24.5 Hz),
+  genuinely before and after (`git stash -u` for "before" since two of the four changed files are
+  new/untracked, `git stash pop` to restore "after"; `_startup_bias_proof.py` calls
+  `adapter.report_for_participant` directly rather than through gunicorn, so no worker-staleness
+  risk): 49,594 fields before, 49,741 after, 49,594 in common, 0 only-before, 147 only-after
+  (all under `closed_loop_startup_bias` or the two `startup_bias_note` keys), 0 differing.
+- On the committed band the two methods disagree even on the SIGN of the first reading's bias:
+  D reads 71 stretches, -0.045 of the scatter (not confident, t=-1.04); E reads 205 stretches,
+  +0.007 (essentially flat, z=0.35). Reported exactly as measured, not smoothed toward agreement.
+- Frontend: `PrescriptionPanel.js` gained a block for `f.startup_bias_note`, identical placement
+  and styling to `design_rule_note`/`occupancy_note`, beside the Adaptive startup delay row.
+  Rebuilt; the new sentence's own wording found (grep) in the served chunk `576.e196d94a.chunk.js`;
+  `PrescriptionPanel.js` produced no new build warning. Not watched in a browser this session.
+- Decision 154 written (next number after 153, read from the file's own tail, not guessed).
+  task_plan.md Phase 16 added and marked complete; Next Step rewritten to name T5 and T7 as what
+  remains. Commit and push done by this session itself.

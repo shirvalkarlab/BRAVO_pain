@@ -260,6 +260,16 @@ function FieldRow({ f, index, ticked, onTick, readBackEnabled }) {
             {f.occupancy_note}
           </MDTypography>
         ) : null}
+        {/* The start-of-stretch bias check (T6, 2026-09-13): what this participant's own
+            recordings show about the first readings of a stretch, measured two ways because two
+            of the method contest's own entries disagreed (decision 150) -- printed beside the
+            Adaptive startup delay row itself for the same reason the two notes above are. */}
+        {f.startup_bias_note ? (
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mt: 0.2,
+            color: PAL.warnText }}>
+            {f.startup_bias_note}
+          </MDTypography>
+        ) : null}
         {confirm.detail ? (
           <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5,
             color: "#5A5A5A" }}>

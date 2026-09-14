@@ -5,17 +5,17 @@ problem is that the module never handed the rule the value the device already re
 that still blocks does so for a reason the PI has read and agreed with.
 
 ## Next Step
-Nothing queued. For the PI: T2, T3 and T4 of the contest's implementation plan are now built; T5
-(the block bootstrap as an interval on the card), T6 (the startup dip measured in the module) and
-T7 (the titration session supplying the gain, decision 146, open item 30) remain, plus the
-threshold re-centring / separation itself (decision 139's capture question) -- T4's own live
-numbers on the committed band (2.0% of readings between the stored pair, centred 12.4 units above
-the participant's own median) are themselves a live reading in favour of that re-centring.
+Nothing queued. For the PI: T2, T3, T4 and T6 of the contest's implementation plan are now built;
+T5 (the block bootstrap as an interval on the card) and T7 (the titration session supplying the
+gain, decision 146, open item 30) remain, plus the threshold re-centring / separation itself
+(decision 139's capture question) -- T4's own live numbers on the committed band (2.0% of readings
+between the stored pair, centred 12.4 units above the participant's own median) are themselves a
+live reading in favour of that re-centring.
 
 ## Current Phase
-Phase 15
+Phase 16
 
-phases: 15/15 complete
+phases: 16/16 complete
 
 ### Phase 1: Measure what the ledger says today
 - [x] Run the live report on RCS08 at the committed band (L 0-2+, 24.5 Hz) and list every non-pass row
@@ -121,6 +121,15 @@ phases: 15/15 complete
 - [x] A sign error in the direction word ("above"/"below") was found by comparing the live number against the contest's own report and fixed before landing, with two tests pinning the correct word on both sides
 - [x] 20 new tests; both suites green (host 1143 / 2 / 0, container 631 / 0); live field-count/difference-count proof on RCS08 (49,484 / 49,543 fields, 0 differing); the acceptance case (device 167/166 near-zero-and-flagged) matches closely, the stored L 1-3+ pair's own number (15.9% between, no off-centre warning) is honestly disclosed as different from the synthesis's 18-21%/61-units figures and traced to mean-at-30s vs median-at-3s on a skewed series, not a bug
 - [x] Frontend: `PrescriptionPanel.js` renders `occupancy_note` beside `design_rule_note`; rebuilt, found in the served chunk (576.c76946db.chunk.js); decision 153; commit; push
+- **Status:** complete
+
+### Phase 16: T6 -- the start-of-recording dip in band power, measured two disagreeing ways
+- [x] `startup_bias.py`: the training/test split both contest entries used, ported once; contestant D's method (compacts a stretch to its real readings first, needs more than 20) and contestant E's method (reads the raw device-clock position, no minimum length) ported line for line from their own scratch scripts, neither method corrected toward the other
+- [x] Port checked against the contest's own printed numbers directly, using the identical recorded stretches the contest script built: bit-for-bit match on both methods (D: -0.10404153099836579, t=-2.4914058108928567, n=82; E: -0.03452435522071541, z=-1.4706266338270466, n=221)
+- [x] Wired into `adapter.report_for_participant`, patched onto the "Adaptive startup delay" row of the SERIALISED prescription rows (the T3/T4 pattern, not the dataclass-mutation trap); `prescription.py` gained `Field_.startup_bias_note`, `startup_bias_note()`, `attach_startup_bias()`
+- [x] 19 new tests (`test_startup_bias.py`); both suites green (host 1162 / 2 / 0, container 631 / 0 / live-skipped 6); live field-count/difference-count proof on RCS08, the committed band (49,594 / 49,741 fields, 0 differing, 147 only-after, all under the new check)
+- [x] The everyday-path numbers on the committed band are reported honestly rather than forced to agree with the contest's snapshot: D reads 71 stretches, bias -0.045, t=-1.04 (not a confident finding); E reads 205 stretches, bias +0.007, z=0.35 (flat, opposite sign) -- the two methods disagree even on direction on this band, and the cause of the small everyday-path-vs-contest-snapshot gap on L 1-3+ (88/-0.095/-2.40 against the contest's own 82/-0.104/-2.49) is named: this module's own established stretch-builder (already used by T3 and T4) drops a reading with no computable band power before deciding where a recording gap begins, which the contest's own scripts did not do
+- [x] Frontend: `PrescriptionPanel.js` prints the sentence beside the Adaptive startup delay row; rebuilt, found in the served chunk (576.e196d94a.chunk.js); decision 154; commit; push
 - **Status:** complete
 
 ## Decisions Made
