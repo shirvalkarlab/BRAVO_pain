@@ -5,16 +5,15 @@ problem is that the module never handed the rule the value the device already re
 that still blocks does so for a reason the PI has read and agreed with.
 
 ## Next Step
-Nothing queued. For the PI: the contest's implementation plan (synthesis section 4, T2-T7), in
-particular T2 (the simulation card replaying the programmed group's timing, averaging included)
-and the threshold re-centring / separation on both bands (decision 139's capture question); and
-the finding that the device's 30 s / 30 s pair is one comparison, which argues for changing the
-programmed averaging.
+Nothing queued. For the PI: the contest's implementation plan (synthesis section 4, T3-T7) --
+T2 is now built -- in particular the threshold re-centring / separation on both bands (decision
+139's capture question), T3 (a confirmations-and-separation design rule shown on the card), and
+T7 (the titration session supplying the gain, decision 146, open item 30).
 
 ## Current Phase
-Phase 12
+Phase 13
 
-phases: 12/12 complete
+phases: 13/13 complete
 
 ### Phase 1: Measure what the ledger says today
 - [x] Run the live report on RCS08 at the committed band (L 0-2+, 24.5 Hz) and list every non-pass row
@@ -95,6 +94,15 @@ phases: 12/12 complete
 - [x] Frontend: ledger shows the new verdict kinds and the measurement current; rebuild; strings found in the served chunk
 - [x] Watched live in the PI's browser ("cl page looks good", 2026-09-12)
 - [x] Decisions to DECISIONS_and_open_items.md; commit and push
+- **Status:** complete
+
+### Phase 13: T2 -- the simulation card replays both timing regimes, not the white-paper default
+- [x] `write_simulation` reads the candidate's own programmed timing (`device_facts["active_sensing_group_timing"]`, already computed by the report) and this participant's record-derived recommendation (`timing_recommendation.for_participant`), and runs the full simulation (M0-M3) once under each, stored together under one `closed_loop_simulation` entry as `timing_runs.programmed` / `timing_runs.recommended`
+- [x] A reversal count (a switch undone within one onset, the contest's own definition) added to `simulation.py` on every model, on both regimes
+- [x] `timing_recommendation.TABLE_VERSION` and the recommendation's own values folded into `simulation_signature`, so an edited recommendation table never serves a stale replay
+- [x] Frontend: the CL-DBS simulations card shows both regimes side by side (switches/hour, undone count, timing values), labelled, with a click-to-select toggle for which one draws the three figures; never a silent swap
+- [x] Four new tests (`test_simulation.py` 10-13): the reversal count against the contest's own definition; `run_models` under two timing params gives two pinned, different answers; `_timing_runs_for_simulation` reads the programmed group and the recommendation correctly, including both absent cases; the signature changes with the table version
+- [x] Both suites green (host 1102 / 2 / 0, container 631 / 0); frontend rebuilt, new strings ("As programmed today", "Record-derived recommendation", "undone within one onset") found in the served chunk; field-count / difference-count proof on RCS08 (ONE_THREE_LEFT, 24.5 Hz); the module's own full-record replay reported honestly under both regimes rather than forced to match the contest's own 20-stretch subset numbers; decision 151
 - **Status:** complete
 
 ## Decisions Made

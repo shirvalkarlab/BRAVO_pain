@@ -34,6 +34,11 @@ sentence below as their reason and the confidence beside it.
 """
 from __future__ import annotations
 
+#: Bumped whenever a value in `RECORD_DERIVED_TIMING_MS` changes for any participant -- folded into
+#: `simulation.simulation_signature` (T2, 2026-09-13) so a table edit invalidates the stored
+#: closed-loop simulation rather than serving a replay built under the old recommendation.
+TABLE_VERSION = "v1_decision150"
+
 #: THE ONE PLACE TO CHANGE A PARTICIPANT'S RECORD-DERIVED TIMING. Participant uid -> field -> ms.
 RECORD_DERIVED_TIMING_MS = {
     # RCS08 -- decision 150, contest judgement section 3, held-out replay through 2026-09-13.

@@ -379,3 +379,117 @@ def test_9_each_candidate_keeps_its_own_stored_simulation_and_is_read_back_by_ca
     finally:
         st.clear()
         st.DIR_OVERRIDE, _ledger.ENABLED, AD._SHARED_CACHE_DIR_OVERRIDE = prev
+
+
+# --------------------------------------------------------------------------------------------
+# 10-13. T2 (2026-09-13): the two timing regimes (contest_2026-09-13_SYNTHESIS.md section 4).
+# The card must replay "as programmed" AND "recommended" rather than silently pick one, and a
+# reversal (a switch undone within one onset) must be counted the same way the contest counted it.
+# --------------------------------------------------------------------------------------------
+def test_10_reversal_count_matches_the_contest_own_definition():
+    """Reproduced from `_agent_bridge/_probe_tl/_contest/nonlin_dyn/s5_controller.py`'s `replay`:
+    a switch at i is undone when the NEXT switch, at j, lands within one onset (j - i <= onset)
+    AND reverts to the state held just before i."""
+    state = np.array([0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1])
+    # transitions at 2 (0->1), 5 (1->0), 9 (0->1); (5-2)=3 reverts to state[1]=0: undone;
+    # (9-5)=4 reverts to state[4]=1: undone
+    assert S._count_reversals(state, onset_steps=4) == 2
+    # a tighter onset window catches neither
+    assert S._count_reversals(state, onset_steps=2) == 0
+    # a single transition, or none, can never be undone
+    assert S._count_reversals(np.array([0, 0, 0, 1, 1, 1]), onset_steps=100) == 0
+    assert S._count_reversals(np.array([0, 0, 0, 0, 0]), onset_steps=100) == 0
+
+
+def test_11_run_models_under_two_timing_params_gives_two_different_honest_answers():
+    """`run_models` already accepted `params=`; T2 asks it to be called once per timing regime.
+    Pinned against the SAME `_series()` fixture every other test in this file uses -- values, not
+    shapes, per this project's own rule."""
+    t, p, a = _series()
+    plan = _plan()
+    short = {"averaging_ms": 1200, "onset_ms": 2400, "detection_blanking_ms": 2400,
+             "transition_up_ms": 4000, "transition_down_ms": 4000}
+    long = {"averaging_ms": 12000, "onset_ms": 36000, "detection_blanking_ms": 36000,
+            "transition_up_ms": 4000, "transition_down_ms": 4000}
+    out_short = S.run_models(t, p, a, plan, None, params=short)
+    out_long = S.run_models(t, p, a, plan, None, params=long)
+    m0_short = out_short["models"]["M0"]
+    m0_long = out_long["models"]["M0"]
+    assert m0_short["n_transitions"] == 22 and m0_short["n_transitions_undone"] == 3
+    assert m0_long["n_transitions"] == 11 and m0_long["n_transitions_undone"] == 0
+    # every model carries the new field, not only M0
+    assert "n_transitions_undone" in out_short["models"]["M1"]
+    assert "undone_per_hour" in out_short["models"]["M1"]
+
+
+def test_12_timing_runs_for_simulation_reads_the_programmed_group_and_the_recommendation():
+    """`adapter._timing_runs_for_simulation` maps `device_facts["active_sensing_group_timing"]`
+    and `timing_recommendation.for_participant` onto `replay.DEFAULT_PARAMS`'s field names, using
+    the UPPER onset timer for the replay's single onset (T2's own documented choice)."""
+    try:
+        from modules.ClosedLoopDeployment import adapter as AD, timing_recommendation as TR
+    except ImportError:                                          # pragma: no cover
+        from ClosedLoopDeployment import adapter as AD, timing_recommendation as TR
+
+    uid = "p-timing-runs"
+    prev_table = dict(TR.RECORD_DERIVED_TIMING_MS)
+    try:
+        # --- both regimes present and different -------------------------------------------------
+        TR.RECORD_DERIVED_TIMING_MS[uid] = {"onset_upper_ms": 30_000.0, "onset_lower_ms": 30_000.0,
+                                            "averaging_ms": 3_000.0, "transition_up_ms": 30_000.0,
+                                            "transition_down_ms": 30_000.0, "detection_blanking_ms": 30_000.0}
+        dev = {"active_sensing_group_timing": {"Left": {
+            "averaging_ms": 30_000.0, "onset_upper_ms": 30_000.0, "onset_lower_ms": 30_000.0,
+            "detection_blanking_ms": 30_000.0, "transition_up_ms": 4_000.0, "transition_down_ms": 4_000.0}}}
+        out = AD._timing_runs_for_simulation(uid, "Left", dev)
+        assert out["programmed"]["params"] == {"averaging_ms": 30_000.0, "onset_ms": 30_000.0,
+                                                "detection_blanking_ms": 30_000.0,
+                                                "transition_up_ms": 4_000.0, "transition_down_ms": 4_000.0}
+        assert out["recommended"]["params"] == {"averaging_ms": 3_000.0, "onset_ms": 30_000.0,
+                                                 "detection_blanking_ms": 30_000.0,
+                                                 "transition_up_ms": 30_000.0, "transition_down_ms": 30_000.0}
+        assert "measured" in out["programmed"]["source"]
+        assert "decision 150" in out["recommended"]["source"] or "contest" in out["recommended"]["source"]
+
+        # --- no programmed group on this hemisphere: an empty dict, not a fabricated one --------
+        out2 = AD._timing_runs_for_simulation(uid, "Right", dev)
+        assert out2["programmed"]["params"] == {}
+        assert "white-paper" in out2["programmed"]["source"]
+
+        # --- no recommendation on file: falls back to the programmed regime, stated as such -----
+        del TR.RECORD_DERIVED_TIMING_MS[uid]
+        out3 = AD._timing_runs_for_simulation(uid, "Left", dev)
+        assert out3["recommended"]["params"] == out3["programmed"]["params"]
+        assert "no record-derived recommendation" in out3["recommended"]["source"]
+
+        # --- neither present: both empty, no exception -------------------------------------------
+        out4 = AD._timing_runs_for_simulation(uid, "Left", {})
+        assert out4["programmed"]["params"] == {} and out4["recommended"]["params"] == {}
+    finally:
+        TR.RECORD_DERIVED_TIMING_MS.clear()
+        TR.RECORD_DERIVED_TIMING_MS.update(prev_table)
+
+
+def test_13_simulation_signature_changes_with_the_recommendation_table_version(monkeypatch):
+    """A future edit to `RECORD_DERIVED_TIMING_MS` must invalidate a stored replay built under the
+    old numbers -- the decision-107 class of defect, one table over (T2's own comment)."""
+    try:
+        from modules.ClosedLoopDeployment import adapter as AD, timing_recommendation as TR
+    except ImportError:                                          # pragma: no cover
+        from ClosedLoopDeployment import adapter as AD, timing_recommendation as TR
+    import types as _pytypes
+
+    monkeypatch.setattr(AD, "recording_set_signature", lambda p: ("rs-fixed",))
+    participant = _pytypes.SimpleNamespace(uid="p-sig")
+    plan = _plan()
+    kw = dict(tiles_key="tiles-1", contact="ONE_THREE_LEFT", centre_hz=20.5, hemisphere="Left",
+              power_scale="lsb", plan=plan, n_resample=50, seed=0)
+    sig_a = AD.simulation_signature(participant, **kw)
+    prev = TR.TABLE_VERSION
+    try:
+        TR.TABLE_VERSION = "v2_test_only"
+        sig_b = AD.simulation_signature(participant, **kw)
+    finally:
+        TR.TABLE_VERSION = prev
+    assert sig_a != sig_b
+    assert TR.TABLE_VERSION in sig_a

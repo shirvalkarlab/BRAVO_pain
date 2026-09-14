@@ -50,7 +50,10 @@ from . import replay as _replay
 KIND = "closed_loop_simulation"
 #: Bumped whenever the numbers a stored entry holds would change: v2 put the pieces on the device
 #: clock before the loop (regrid_stretches), which admitted 114 stretches where v1 ran 16.
-RULE_VERSION = "v5_pooled_rule_in_key"   # v5: the pooled table's rule version is in the key (2026-09-12); v4: the sidecar names the candidate
+RULE_VERSION = "v6_two_timing_runs"   # v6: the stored payload carries TWO replays -- "as programmed"
+# and "recommended" timing (T2, 2026-09-13, contest_2026-09-13_SYNTHESIS.md section 4) -- plus a
+# reversal (undone-switch) count on every model; v5: the pooled table's rule version is in the key
+# (2026-09-12); v4: the sidecar names the candidate
 
 #: The settling time when no run supports a measured one (decision 15): the settled window the
 #: three-source comparison already trusts (`within_visit.PRE_CHANGE_WINDOW_S`, 30 s).
@@ -107,6 +110,24 @@ def _bank_dg(bank, x):
     d_quad = np.where(has_post & (x > np.where(has_post, bank["peak"], 0.0)),
                       np.where(has_post, bank["post"], 0.0), d_quad)
     return np.where(bank["kind"] == 0, 0.0, np.where(bank["kind"] == 1, bank["slope"], d_quad))
+
+
+# --------------------------------------------------------------------------------------------
+# A REVERSAL -- a switch undone within one onset duration (contest brief section, "Controller
+# score"; reproduced from the contest's own definition in
+# `_agent_bridge/_probe_tl/_contest/nonlin_dyn/s5_controller.py`, function `replay`): the state
+# changes at step i (from `state[i-1]` to `state[i]`); if the NEXT change is at step j with
+# `(j - i) <= onset_steps` AND that next change lands back on `state[i-1]` -- the same state the
+# controller had held before this switch -- the switch at i is counted as undone.
+# --------------------------------------------------------------------------------------------
+def _count_reversals(state_row: np.ndarray, onset_steps: int) -> int:
+    ch = np.flatnonzero(np.diff(state_row) != 0) + 1
+    n_rev = 0
+    for k in range(ch.size - 1):
+        i, j = int(ch[k]), int(ch[k + 1])
+        if (j - i) <= onset_steps and state_row[j] == state_row[i - 1]:
+            n_rev += 1
+    return n_rev
 
 
 # --------------------------------------------------------------------------------------------
@@ -244,6 +265,7 @@ def simulate_series(t_s, power, amp_obs, plan, curves: Sequence[ResponseCurve], 
     tol = float(p_in["amp_at_limit_tol_mA"])
     at_high = np.mean(np.abs(amp_out - amp_high) <= tol, axis=1)
     at_low = np.mean(np.abs(amp_out - amp_low) <= tol, axis=1)
+    n_undone = np.array([_count_reversals(state_out[k], onset_steps) for k in range(K)], dtype=int)
     return {
         "K": K, "n_steps": n, "dt_s": float(dt), "t_s": t, "p_obs": p, "a_obs": a_obs,
         "amp": amp_out, "p_sim": p_out, "state": state_out,
@@ -252,7 +274,8 @@ def simulate_series(t_s, power, amp_obs, plan, curves: Sequence[ResponseCurve], 
                                         for k in range(K)]),
         "longest_at_lower_s": np.array([_replay._longest_run_at_level_s(amp_out[k], dt, amp_low) or 0.0
                                         for k in range(K)]),
-        "n_transitions": n_trans, "n_onset_suppressed": n_onset_supp,
+        "n_transitions": n_trans, "n_transitions_undone": n_undone,
+        "n_onset_suppressed": n_onset_supp,
         "n_blank_suppressed": n_blank_supp,
         "frac_above": np.mean(state_out == _ABOVE, axis=1),
         "frac_between": np.mean(state_out == _BETWEEN, axis=1),
@@ -384,7 +407,7 @@ def simulate_segments(t_s, power, amp_obs, plan, curves: Sequence[ResponseCurve]
     acc = {k: np.zeros(K) for k in ("frac_at_upper", "frac_at_lower", "frac_above", "frac_between",
                                    "frac_below", "frac_wrong_side", "mean_amp")}
     longest_up = np.zeros(K); longest_lo = np.zeros(K)
-    n_trans = np.zeros(K, dtype=int); n_sat = np.zeros(K, dtype=int)
+    n_trans = np.zeros(K, dtype=int); n_undone = np.zeros(K, dtype=int); n_sat = np.zeros(K, dtype=int)
     n_used = skipped = 0; n_missing = 0
     hist_edges = None; hist = None
     drawn = []
@@ -403,7 +426,8 @@ def simulate_segments(t_s, power, amp_obs, plan, curves: Sequence[ResponseCurve]
             acc[k] += w * r[k]
         longest_up = np.maximum(longest_up, r["longest_at_upper_s"])
         longest_lo = np.maximum(longest_lo, r["longest_at_lower_s"])
-        n_trans += r["n_transitions"]; n_sat += r["saturated"].astype(int)
+        n_trans += r["n_transitions"]; n_undone += r["n_transitions_undone"]
+        n_sat += r["saturated"].astype(int)
         n_missing += r["n_missing"]
         W += w; n_used += 1
         seg_params = r["params"]
@@ -430,6 +454,7 @@ def simulate_segments(t_s, power, amp_obs, plan, curves: Sequence[ResponseCurve]
         **{k: v / W for k, v in acc.items()},
         "longest_at_upper_s": longest_up, "longest_at_lower_s": longest_lo,
         "n_transitions": n_trans, "transitions_per_hour": n_trans / (W * med / 3600.0),
+        "n_transitions_undone": n_undone, "undone_per_hour": n_undone / (W * med / 3600.0),
         "n_segments_saturated": n_sat, "n_missing_steps": int(n_missing),
         "amp_hist_edges_mA": hist_edges.tolist(), "amp_hist": hist,
         "n_segments": int(bounds.size - 1), "n_segments_used": int(n_used),
@@ -522,6 +547,8 @@ def _summary(res, k) -> Dict[str, Any]:
         "longest_run_at_lower_s": float(res["longest_at_lower_s"][k]),
         "n_transitions": int(res["n_transitions"][k]),
         "transitions_per_hour": float(res["transitions_per_hour"][k]),
+        "n_transitions_undone": int(res["n_transitions_undone"][k]),
+        "undone_per_hour": float(res["undone_per_hour"][k]),
         "frac_time_above": float(res["frac_above"][k]),
         "frac_time_between": float(res["frac_between"][k]),
         "frac_time_below": float(res["frac_below"][k]),
@@ -532,8 +559,9 @@ def _summary(res, k) -> Dict[str, Any]:
 
 
 _INTERVAL_FIELDS = ("frac_time_at_upper", "frac_time_at_lower", "longest_run_at_upper_s",
-                    "longest_run_at_lower_s", "transitions_per_hour", "frac_time_above",
-                    "frac_time_between", "frac_time_below", "frac_time_wrong_side", "mean_amplitude_mA")
+                    "longest_run_at_lower_s", "transitions_per_hour", "undone_per_hour",
+                    "frac_time_above", "frac_time_between", "frac_time_below", "frac_time_wrong_side",
+                    "mean_amplitude_mA")
 
 
 def run_models(t_s, power, amp_obs, plan, pooled_row, *, run_points=None, run_windows=None,

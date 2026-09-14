@@ -316,3 +316,51 @@
   unchanged (3 s); the stated reason corrected in timing_recommendation.py and the synthesis
   (new section 3a) and decision 150. Proof: 49,443 fields both sides, 3 differing, all the
   averaging row's "why" text. Host 1098/2/0, container 631/0. Workers reloaded.
+- Phase 13, T2 from the synthesis (section 4): the CL-DBS simulations card replayed only the
+  white-paper Dual Threshold default (averaging 1200 ms, onset 1200 ms, blanking 2000 ms,
+  transitions 150000/300000 ms) -- `write_simulation` called `run_models` with no `params=` at
+  all, so `simulate_segments` fell through to `replay.DEFAULT_PARAMS` regardless of what the
+  device actually runs or what decision 150 recommends. Read `device_facts.py`'s
+  `programmed_closed_loop_timing` (already computed as `active_sensing_group_timing`, per
+  hemisphere) and `timing_recommendation.for_participant`; built `adapter._timing_runs_for_simulation`
+  mapping both onto `replay.DEFAULT_PARAMS`'s field names (the replay carries ONE onset timer,
+  so the upper threshold's own onset is used, stated in a comment and the on-screen source
+  sentence rather than silently averaging the two). `write_simulation` now calls `run_models`
+  TWICE, once per regime, and stores both under `timing_runs.programmed` / `timing_runs.recommended`
+  in the one `closed_loop_simulation` entry (`RULE_VERSION` bumped to v6; `timing_recommendation.
+  TABLE_VERSION` new, folded into `simulation_signature` so an edited recommendation table
+  invalidates a stale replay). Added a reversal counter to `simulation.py` (`_count_reversals`,
+  reproduced from the contest's own `nonlin_dyn/s5_controller.py` definition: a switch undone
+  within one onset) on every model, both regimes. Frontend (`ClosedLoopSimulationPanel.js`):
+  both regimes shown side by side (switches/h, undone count, undone/h, timing values), a click
+  toggle picks which one draws the three figures, default "recommended"; the absent-payload
+  shape kept both the old (`refused`/`models`) and new (`timing_runs`/`primary_run`) fields so
+  no reader breaks. Four new tests (test_simulation.py 10-13), all pinned to real numbers:
+  the reversal count against a constructed state array (2 of 3 transitions undone at onset=4,
+  0 at onset=2); `run_models` under two params on the file's own `_series()` fixture (short
+  timing: 22 transitions, 3 undone; long timing: 11 transitions, 0 undone -- pinned exactly, not
+  "differ"); `_timing_runs_for_simulation`'s four cases (both present, hemisphere absent, table
+  absent, both absent); the signature changes with `TABLE_VERSION`. Both suites green: host
+  1102 passed, 2 skipped, 0 failed (was 1098, +4); container 631 passed, 0 failed. Frontend
+  rebuilt; "As programmed today", "Record-derived recommendation" and "undone within one onset"
+  all found in the served chunk (576.0531f929.chunk.js) by grep, never by component name.
+  Equality proof on RCS08, ONE_THREE_LEFT at 24.5 Hz, the live report, before (stashed to the
+  pre-edit code) and after: 49,443 fields before, 49,450 after, 49,442 in common, 1 only-before,
+  8 only-after, 3 differing (2 non-timing) -- every one under `closed_loop_simulation`; nothing
+  outside that block moved (the verdict, edges, thresholds and eligibility are byte-identical).
+  The "before" run happened to serve an already-stored entry from an earlier session (built
+  under the OLD rule version, `already_stored: True`, 0 pieces reported); the "after" run's new
+  signature (rule version v6) correctly missed that stale entry and rebuilt fresh (51,105
+  pieces). Separately, read the module's own FULL-RECORD replay for both regimes directly
+  (`closed_loop_simulation_for_participant`, what the page actually shows), honestly, with NO
+  attempt to force agreement with the contest's own 20-stretch held-out numbers (39.6/h, 49
+  undone; 2.5/h, 0 undone), which were computed on a specific subset, not the whole record:
+  "as programmed today" (30 s averaging / 30 s onset / 4 s ramps, GROUP_D) gives 243.0
+  switches/h, 722 transitions, 253 undone (85.2/h), over 2.97 h of signal in 102 stretches --
+  far higher than the contest's 39.6/h, because a 30 s averaging window discards almost the
+  whole record (most 3 s-tile stretches never reach two 30 s windows, so only 102 short,
+  noisier stretches survive out of far more available). "Recommended" (3 s averaging / 30 s
+  onset / 30 s ramps) gives 2.469 switches/h, 78 transitions, 0 undone, over 31.59 h of signal
+  in 325 stretches -- close to the contest's own 2.53/h at the same setting on its own
+  held-out subset, a genuine agreement across two very different samples of the record, stated
+  as such rather than manufactured. Commit and push done by the builder itself (not isolated).

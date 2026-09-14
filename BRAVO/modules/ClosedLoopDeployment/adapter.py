@@ -2124,10 +2124,15 @@ def simulation_signature(participant, *, tiles_key, contact, centre_hz, hemisphe
     limits the controller runs with, the resampling settings, and this module's rule version."""
     from . import simulation as _sim
     from . import amplitude_effect as _amp_sig
+    from . import timing_recommendation as _tr_sig
     # The pooled table's rule version is IN the key (2026-09-12): the simulation closes its loop
     # through that table's fitted curve, so a table rebuilt under a new rule must not be served
     # a simulation built from the old one -- the decision-107 class of defect, one table over.
-    return (_sim.KIND, _sim.RULE_VERSION, _amp_sig.POOLED_RULE_VERSION,
+    # The RECOMMENDED-timing table's own version is folded in the same way (T2, 2026-09-13): an
+    # edit to `RECORD_DERIVED_TIMING_MS` must invalidate a stored replay built under the old
+    # numbers. `recording_set_signature` already changes when a new session report is ingested
+    # (session reports are Recording rows), which is what invalidates the PROGRAMMED-timing half.
+    return (_sim.KIND, _sim.RULE_VERSION, _amp_sig.POOLED_RULE_VERSION, _tr_sig.TABLE_VERSION,
             str(getattr(participant, "uid", participant)), tiles_key,
             recording_set_signature(participant), str(contact), round(float(centre_hz), 3),
             str(hemisphere), str(power_scale),
@@ -2136,13 +2141,86 @@ def simulation_signature(participant, *, tiles_key, contact, centre_hz, hemisphe
             int(n_resample), int(seed))
 
 
+# --- the two timing regimes T2 replays (2026-09-13) --------------------------------------------
+#: `replay.DEFAULT_PARAMS`'s field name -> the field name it reads from a timing dict, whether
+#: that dict is `device_facts.programmed_closed_loop_timing`'s per-side entry (both onset timers,
+#: `onset_upper_ms`/`onset_lower_ms`) or `timing_recommendation.for_participant`'s per-participant
+#: table (the same two field names, decision 150). THE REPLAY CARRIES ONE ONSET TIMER, NOT TWO --
+#: `replay.DEFAULT_PARAMS["onset_ms"]` applies to both directions -- so the upper threshold's own
+#: onset is used and the lower one is not silently averaged into it.
+_SIM_PARAM_FROM_TIMING_FIELD = (
+    ("averaging_ms", "averaging_ms"),
+    ("onset_ms", "onset_upper_ms"),
+    ("detection_blanking_ms", "detection_blanking_ms"),
+    ("transition_up_ms", "transition_up_ms"),
+    ("transition_down_ms", "transition_down_ms"),
+)
+
+
+def _simulation_params_from_timing_dict(values_by_field):
+    """`{replay param name: float ms}` for every field a timing dict states; a field the dict does
+    not carry is left out, so `simulate_series` falls back to `replay.DEFAULT_PARAMS` (the
+    white-paper Dual Threshold value) for it rather than being handed a fabricated number."""
+    out = {}
+    for repl_key, dev_key in _SIM_PARAM_FROM_TIMING_FIELD:
+        v = (values_by_field or {}).get(dev_key)
+        if v is None:
+            continue
+        try:
+            out[repl_key] = float(v)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _timing_runs_for_simulation(uid, hemisphere, device_facts):
+    """The two timing regimes T2 replays (contest_2026-09-13_SYNTHESIS.md section 4): what the
+    device is PROGRAMMED to run today on the candidate's own hemisphere, and this participant's
+    record-derived RECOMMENDATION (decision 150). Reads `device_facts["active_sensing_group_timing"]`
+    -- already computed once by `report_for_participant` -- rather than looking the session report
+    up again. Either regime may be wholly or partly absent; an absent field falls back to the
+    white-paper default inside `simulate_series`, and the source sentence below says so rather than
+    silently substituting the other regime's numbers."""
+    from . import timing_recommendation as _tr
+
+    prog_all = (device_facts or {}).get("active_sensing_group_timing")
+    programmed_raw = (prog_all or {}).get(hemisphere) if isinstance(prog_all, dict) else None
+    programmed_params = _simulation_params_from_timing_dict(programmed_raw)
+    programmed_source = (
+        f"measured: the device's newest session report, the active sensing group's own programmed "
+        f"timing on {hemisphere} (the onset shown is the upper threshold's own onset timer; the "
+        "replay applies one onset timer to both directions)"
+        if programmed_raw else
+        "no active sensing group with a programmed timing was found for this hemisphere on this "
+        "participant's newest session report; the white-paper Dual Threshold default is used")
+
+    rec_raw = _tr.for_participant(uid) or {}
+    rec_values = {k: (v or {}).get("value_ms") for k, v in rec_raw.items()}
+    recommended_params = _simulation_params_from_timing_dict(rec_values) if rec_raw else dict(programmed_params)
+    recommended_source = (_tr.RECORD_DERIVED_PROVENANCE if rec_raw else
+                          "no record-derived recommendation is on file for this participant; the "
+                          "same timing as \"as programmed today\" is used instead")
+
+    return {
+        "programmed": {"label": "As programmed today", "params": programmed_params,
+                       "source": programmed_source},
+        "recommended": {"label": "Record-derived recommendation", "params": recommended_params,
+                        "source": recommended_source},
+    }
+
+
 def write_simulation(participant, *, rep, build, candidate, hemisphere, power_scale, epochs,
-                     n_resample=None, seed=0, loaded=None):
-    """Run the simulation for the report's first candidate and store it (kind
-    `closed_loop_simulation`), citing the raw roots its inputs cite. The summary says what was
-    written or why not; the payload itself is read back by `closed_loop_simulation_for_participant`
-    when the page asks for it after its first figures are up."""
+                     n_resample=None, seed=0, loaded=None, device_facts=None):
+    """Run the simulation for the report's first candidate TWICE -- once under the timing the
+    device is programmed to run today, once under this participant's record-derived recommendation
+    (T2, 2026-09-13, contest_2026-09-13_SYNTHESIS.md section 4) -- and store both under one entry
+    (kind `closed_loop_simulation`), citing the raw roots its inputs cite. The summary says what
+    was written or why not; the payload itself is read back by
+    `closed_loop_simulation_for_participant` when the page asks for it after its first figures are
+    up. `device_facts` is the `dev` dict `report_for_participant` already built (it carries
+    `active_sensing_group_timing`); passing it here avoids a second, redundant session-report read."""
     from . import simulation as _sim
+    from . import replay as _replay
     try:
         from modules.CacheStore import provenance as _prov
     except ImportError:                                # pragma: no cover - depends on the runner
@@ -2190,11 +2268,27 @@ def write_simulation(participant, *, rep, build, candidate, hemisphere, power_sc
     pooled_row = _amp.pooled_row(pooled_table, contact, float(centre))
     stored_points = run_points_if_stored(participant)
     points = _run_points_for(stored_points, contact=contact, centre_hz=float(centre))
-    payload = _sim.run_models(inputs["t"], inputs["power"], inputs["amp_obs"], plan, pooled_row,
-                              run_points=points,
-                              run_windows=_run_windows_epoch_s(stored_points, contact=contact),
-                              n_resample=n_resample, seed=seed,
-                              min_points_resample=_amp.MIN_POINTS_CURVATURE)
+    run_windows = _run_windows_epoch_s(stored_points, contact=contact)
+
+    # THE TWO TIMING REGIMES (T2, 2026-09-13): the same series, thresholds and response curve, run
+    # once under what the device is programmed to run today and once under this participant's
+    # record-derived recommendation, so the card can show both rather than silently replacing one
+    # with the other. `run_models` already accepts `params=`; each regime just supplies a different
+    # (possibly partial) override of `replay.DEFAULT_PARAMS`.
+    timing = _timing_runs_for_simulation(uid, hemisphere, device_facts)
+    runs = {}
+    for _key, _meta in timing.items():
+        runs[_key] = _sim.run_models(inputs["t"], inputs["power"], inputs["amp_obs"], plan, pooled_row,
+                                     run_points=points, run_windows=run_windows,
+                                     n_resample=n_resample, seed=seed,
+                                     params=(_meta["params"] or None),
+                                     min_points_resample=_amp.MIN_POINTS_CURVATURE)
+        runs[_key]["timing_label"] = _meta["label"]
+        runs[_key]["timing_source"] = _meta["source"]
+        runs[_key]["timing_params_ms"] = dict(_replay.DEFAULT_PARAMS, **(_meta["params"] or {}))
+
+    payload = {"gates_nothing": True, "rule_version": _sim.RULE_VERSION,
+              "timing_runs": runs, "primary_run": "recommended"}
     payload["inputs"] = {k: inputs[k] for k in ("n_pieces", "n_unusable_pieces", "n_dropped_no_amplitude",
                                                 "n_from_device_current", "n_from_epochs",
                                                 "centre_used_hz", "contact")}
@@ -2213,16 +2307,19 @@ def write_simulation(participant, *, rep, build, candidate, hemisphere, power_sc
         except Exception:                               # noqa: BLE001 -- the tiles alone then
             _log.warning("closed-loop: the %s chain could not be read for %s; the simulation's "
                          "provenance cites the tiles alone", kind, uid, exc_info=True)
+    _primary = runs.get("recommended") or {}
     _cache_store.store_if_absent(_sim.KIND, uid, sig, lambda: payload,
                                  writer="closed_loop", trigger="deployment_report",
                                  provenance=_prov.flatten(chain), n_recordings=None,
-                                 extra={"n_pieces": summary["n_pieces"], "active_model": payload.get("active_model"),
-                                        "refused": bool(payload.get("refused")),
+                                 extra={"n_pieces": summary["n_pieces"], "active_model": _primary.get("active_model"),
+                                        "refused": bool(_primary.get("refused")),
                                         "candidate": _simulation_candidate_tag(contact, centre, hemisphere)},
                                  root=_SHARED_CACHE_DIR_OVERRIDE)
     summary["written"] = _cache_store.read_stamp(_sim.KIND, uid, sig, root=_SHARED_CACHE_DIR_OVERRIDE) is not None
-    summary["active_model"] = payload.get("active_model")
-    summary["refused"] = bool(payload.get("refused"))
+    summary["active_model"] = _primary.get("active_model")
+    summary["refused"] = bool(_primary.get("refused"))
+    summary["timing_runs"] = {k: {"refused": bool(v.get("refused")), "active_model": v.get("active_model"),
+                                  "timing_source": v.get("timing_source")} for k, v in runs.items()}
     return summary
 
 
@@ -2263,7 +2360,10 @@ def closed_loop_simulation_for_participant(participant, candidate=None, *, hemis
     first figures. Builds nothing: the report writes it, this reads it back."""
     payload = simulation_if_stored(participant, candidate, hemisphere=hemisphere)
     if payload is None:
+        # `refused`/`models` kept alongside the newer `timing_runs`/`primary_run` (2026-09-13, T2)
+        # so a caller written against either shape reads the same "nothing stored yet" answer.
         payload = {"gates_nothing": True, "refused": True, "models": {},
+                   "timing_runs": {}, "primary_run": None,
                    "absent_reason": ("no simulation is stored for this configuration yet; the report "
                                      "writes one the next time it runs with thresholds placed for it")}
     payload = dict(payload)
@@ -2906,7 +3006,8 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     try:
         out["closed_loop_simulation"] = write_simulation(
             participant, rep=rep, build=_3build, candidate=(cands[0] if cands else None),
-            hemisphere=hemisphere, power_scale=power_scale, epochs=eps, loaded=_3loaded)
+            hemisphere=hemisphere, power_scale=power_scale, epochs=eps, loaded=_3loaded,
+            device_facts=dev)
     except Exception as _exc:                          # noqa: BLE001
         _log.warning("closed-loop report: the simulation could not be run or stored for %s",
                      getattr(participant, "uid", participant), exc_info=True)
