@@ -59,8 +59,10 @@ Duration and **Adaptive Startup Delay** -- a parameter this document never carri
 averaging 100 ms to 30 s and startup delay 0 / 10 / 30 s across 572 session reports; today's
 active group runs onset 30 s, transitions 4 s, averaging 30 s, blanking 30 s, startup delay 0.
 What IS fixed per mode is the FFT size and update rate. Full evidence and the recommended values:
-`artifacts/research_2026-09-13_percept_adaptive_timing_SYNTHESIS.md`. Also corrected there: "A610"
-is cited by the device rules but is not on this machine (the local 4NR010 guide is Summit RC+S).
+`artifacts/research_2026-09-13_percept_adaptive_timing_SYNTHESIS.md`. The A610 clinician programming guide (edition 2025-02-14) arrived on this machine later the
+same day (lab Dropbox, ADMIN/Equipment/Percept RC): it defines the three timing parameters and
+confirms every one is adjustable, and states NO range for any of them -- the FDA summary stays
+the only source of the ranges (synthesis §6).
 
 | What | Dual Threshold | Single Threshold | Single Threshold Inverse |
 |---|---|---|---|

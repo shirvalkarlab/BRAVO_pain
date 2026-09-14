@@ -233,3 +233,7 @@
   DEVICE_percept_rc.md §2 corrected in place (defaults, not fixed; FDA ranges; startup delay);
   decision 148. Recommendation: onset 30 s, averaging 30 s, transitions 30 s / 30 s, startup delay
   15 s (or nearest above 12 s), blanking 30 s, thresholds separated. Phase 10 complete.
+- A610 (2025-02-14 edition) found in ADMIN/Equipment/Percept RC after the PI's upload; read whole:
+  defines onset / blanking / startup delay (Table 6 p. 42), confirms all adjustable, gives NO
+  ranges; adds the manufacturer's tuning directions (Table 16 p. 73-74) and the 5 mA / 120 us
+  capture-artefact note. Synthesis §6 addendum; DEVICE_percept_rc.md note updated.

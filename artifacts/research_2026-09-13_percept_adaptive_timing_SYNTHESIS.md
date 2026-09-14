@@ -167,3 +167,61 @@ tissue.
    programmed values as the candidate's, instead of treating the white paper's defaults as fixed.
    Not built today.
 4. The PI: the Percept RC clinician programmer guide (the cited "A610"), if he has it.
+
+---
+
+## 6. Addendum, later on 2026-09-13: the A610 clinician programming guide, read
+
+The PI put the Percept RC clinician programmer manual in the lab Dropbox
+(`ADMIN/Equipment/Percept RC/Percept RC Clinician Program MANUAL - M066414C_b_001_view_color.pdf`,
+80 pages, footer "A610 English 2025-02-14"; beside it `M929534A_b_156_view.pdf`, the System
+Eligibility and Battery Longevity reference, which has no adaptive parameter). This IS the A610 the
+device rules cite. Read whole (text extracted; the adaptive pages 41-43 and the troubleshooting
+pages 73-74 also viewed as images for slider screenshots -- there are none).
+
+**What it settles.** Table 6 (p. 42, "Advanced settings for Adaptive Therapy") DEFINES the three
+timing parameters -- Onset Duration ("the amount of time that the LFP signal must remain above the
+upper threshold, or below the lower threshold, before the system classifies the LFP state ... and
+initiates a consequent change in stimulation amplitude"; separate Upper and Lower Onset Durations
+are named on p. 73), Detection Blanking Duration ("once the system classifies an LFP signal as
+above or below a threshold, it will not attempt to re-classify the LFP signal until after the
+Detection Blanking Duration"), and Adaptive Startup Delay ("the delay after switching to, or
+activating, Adaptive Therapy before automatic adjustments to stimulation begin") -- and confirms
+all of them, and both Transition Durations, are adjustable (p. 42: sliders and left/right arrow
+marks "for incremental adjustments"; a Transition Up Test and Transition Down Test on p. 42-43).
+So the correction in §1.1 stands on the manufacturer's own programming guide, not only on the
+white paper and the FDA summary.
+
+**What it does NOT give.** No minimum, maximum, step or default for any of the four timing
+parameters, nor for the thresholds, the averaging window or the amplitude limits. The only
+numeric bounds in the BrainSense sections are: the sensing band 8-30 Hz (p. 36-37); the
+BrainSense streaming ramp interval "can be adjusted from 0.5 seconds to 10 seconds" (p. 45 --
+the streaming amplitude-titration tool, not an adaptive parameter); and the artefact note on
+p. 73, "if the stimulation level is above 5 mA (amplitude) or 120 us (pulse width), the artifact
+of stimulation may cause the LFP to appear elevated when capturing the Lower LFP Threshold" --
+which is the source of the capture ceilings the device rules D27 and the pipeline already apply.
+**The FDA approval summary's Table 2 therefore remains the only document that states the selection
+ranges**, and the rows marked "not documented" in §2 (startup delay, detection blanking, every step
+size) stay that way.
+
+**What it adds: the manufacturer's own tuning directions** (Table 16, p. 73-74), which read as
+rules the platform could carry beside the ranges:
+
+| Symptom the clinician sees | A610's direction |
+|---|---|
+| Adaptive therapy transiently delivers stimulation that is too LOW | lengthen Transition Down; shorten Transition Up (as tolerated); decrease the Upper Onset Duration and increase the Lower Onset Duration; if it persists, increase the minimum amplitude limit |
+| transiently too HIGH | lengthen Transition Up; shorten Transition Down; increase the Upper Onset Duration and decrease the Lower Onset Duration; if it persists, decrease the maximum amplitude limit |
+| chronically too low / stuck at the upper limit | increase the maximum limit; else decrease the upper LFP threshold, then the lower |
+| chronically too high / stuck at the lower limit | decrease the minimum limit; else increase the lower LFP threshold, then the upper |
+| in Single Threshold mode, repeatedly ramps to the upper limit immediately after adjusting to the lower limit | increase the Detection Blanking Duration until it stops |
+| transiently at the upper limit immediately after Resuming or activating Adaptive Therapy | increase the Adaptive Startup Delay until it stops |
+
+Two of those bear directly on §4: the blanking direction ("increase until the ramp-to-upper
+immediately-after-lower stops") is the manufacturer's own reason for blanking to be at least the
+onset, and the startup-delay direction ("increase until the transient at the upper limit after
+Resuming stops") is the manufacturer's own reading of the 12-second start-up dip §3 measured.
+Neither changes a recommended value; both strengthen the rationale.
+
+**On the rules' citations.** The device rules cite "A610 p. NN" throughout `constraints.py`
+against an edition whose page numbers were never checked here; this edition is dated 2025-02-14.
+Checking all 84 citations against it is a separate pass, not done today.
