@@ -240,6 +240,16 @@ function FieldRow({ f, index, ticked, onTick, readBackEnabled }) {
             {`confidence ${f.confidence} (measured on this participant's record)`}
           </MDTypography>
         ) : null}
+        {/* The confirmations-and-separation design rule (T3, 2026-09-13): a fitted noise-only
+            model's own answer for how far apart the two thresholds need to be at the timing shown
+            on this card, printed beside the thresholds themselves rather than folded into the
+            "Why this value" reveal, since it is a design constraint and not only a justification. */}
+        {f.design_rule_note ? (
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mt: 0.2,
+            color: PAL.warnText }}>
+            {f.design_rule_note}
+          </MDTypography>
+        ) : null}
         {confirm.detail ? (
           <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5,
             color: "#5A5A5A" }}>

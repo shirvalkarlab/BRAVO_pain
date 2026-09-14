@@ -175,6 +175,12 @@ class Field_:
     #: Confidence of a record-derived value (High / Medium / Low, from the synthesis table); None
     #: for a default or a clinician's choice.
     confidence: str | None = None
+    #: The confirmations-and-separation design rule's own sentence for this row (T3, 2026-09-13;
+    #: `design_rule_note`), on the Upper/Lower LFP threshold rows only; None everywhere else and
+    #: on those two rows until `attach_design_rule` has something to say. Kept as its own field,
+    #: not folded into `why`, so the interface can show it without the reader having to open the
+    #: "Why this value" reveal first.
+    design_rule_note: str | None = None
 
     #: WHY `status` ALONE IS NOT ENOUGH, and why two axes are derived from it below.
     #:
@@ -325,6 +331,7 @@ class Prescription:
         return [{"parameter": f.name, "value": f.value, "units": f.units, "status": f.status,
                  "device_default": f.default, "range": f.range_, "range_source": f.range_source,
                  "why": f.why, "programmed": f.programmed, "confidence": f.confidence,
+                 "design_rule_note": f.design_rule_note,
                  # The two provenance axes, so the interface never has to re-derive them from the
                  # status string and cannot disagree with this module about what a status means.
                  "origin": f.origin, "confirm": f.confirm,
@@ -779,6 +786,78 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
               "device's newest session report carries the value it runs today, that is printed "
               "beside the recommendation. There is no published resolution grid for these values, "
               "so nothing here is rounded to one."))
+
+
+# --- the confirmations-and-separation design rule (T3, 2026-09-13; design_rule.py) -------------
+def design_rule_note(design_rule_payload, *, upper, lower, averaging_ms, onset_ms):
+    """One sentence for the threshold rows: what a fitted noise-only model says the two
+    thresholds need to be apart from each other, at the averaging and onset duration actually
+    shown on this card, next to what they are apart today.
+
+    Returns ``None`` when there is nothing to say -- no table was passed, fitting it was refused,
+    or one of the four numbers needed is missing -- rather than a sentence that reads like a
+    finding when it is not one.
+    """
+    if not design_rule_payload or design_rule_payload.get("refused"):
+        return None
+    rows = design_rule_payload.get("table") or []
+    if upper is None or lower is None or averaging_ms is None or onset_ms is None:
+        return None
+    try:
+        from . import design_rule as _dr
+    except Exception:                                  # pragma: no cover - import shim
+        return None
+    row = _dr.lookup_min_separation(rows, averaging_ms=averaging_ms, onset_ms=onset_ms)
+    if row is None:
+        return None
+    stored_sep = abs(float(upper) - float(lower)) / 2.0
+    avg_s, ons_s = row["averaging_s"], row["onset_s"]
+    at_this_timing = ("" if row["exact_match"] else
+                      f" (nearest evaluated timing, {avg_s:g} s averaging / {ons_s:g} s onset)")
+    model = design_rule_payload.get("model", "a fitted noise model")
+    if row["min_separation"] is None:
+        return (f"Noise-only design rule (fitted on this participant's own recordings, {model}): "
+                f"no separation up to {SEPARATION_GRID_MAX:g} device units keeps noise-only "
+                f"threshold crossings at or below one an hour at {avg_s:g} s averaging / "
+                f"{ons_s:g} s onset{at_this_timing}. The stored pair is +-{stored_sep:.1f} apart "
+                "from its midpoint.")
+    return (f"Noise-only design rule (fitted on this participant's own recordings, {model}): the "
+           f"stored pair is +-{stored_sep:.1f} from its midpoint; the rule needs "
+           f"+-{row['min_separation']:g} at this timing ({avg_s:g} s averaging / {ons_s:g} s "
+           f"onset{at_this_timing}) to keep noise-only threshold crossings at or below one an "
+           "hour.")
+
+
+try:                                                    # pragma: no cover - import shim
+    from . import design_rule as _DR
+    SEPARATION_GRID_MAX = max(_DR.SEPARATION_GRID)
+except Exception:                                       # pragma: no cover
+    SEPARATION_GRID_MAX = 300.0
+
+
+def attach_design_rule(prescriptions, design_rule_payload, *, averaging_ms, onset_ms):
+    """Append `design_rule_note`'s sentence to the Upper/Lower LFP threshold fields' ``why`` text
+    of every mode in ``prescriptions["modes"]`` that has them (Dual Threshold; Single Threshold's
+    one threshold is device-computed, decision-9-style verify-only, and is left alone). Mutates
+    the `Field_` objects in place and returns ``prescriptions`` for convenience; a caller with
+    nothing to attach (``design_rule_payload`` is ``None`` or refused) gets the object back
+    unchanged, since `design_rule_note` itself returns ``None`` in that case.
+    """
+    if not prescriptions or not isinstance(prescriptions.get("modes"), dict):
+        return prescriptions
+    for presc in prescriptions["modes"].values():
+        fields = getattr(presc, "fields", None) or []
+        up_f = next((f for f in fields if f.name == "Upper LFP threshold"), None)
+        lo_f = next((f for f in fields if f.name == "Lower LFP threshold"), None)
+        if up_f is None or lo_f is None:
+            continue
+        note = design_rule_note(design_rule_payload, upper=up_f.value, lower=lo_f.value,
+                                averaging_ms=averaging_ms, onset_ms=onset_ms)
+        if note is None:
+            continue
+        up_f.design_rule_note = note
+        lo_f.design_rule_note = note
+    return prescriptions
 
 
 def duty_cycle(power_series, *, upper, lower, t_s=None, dt_s=None, averaging_ms=1200.0,

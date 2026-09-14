@@ -5,15 +5,16 @@ problem is that the module never handed the rule the value the device already re
 that still blocks does so for a reason the PI has read and agreed with.
 
 ## Next Step
-Nothing queued. For the PI: the contest's implementation plan (synthesis section 4, T3-T7) --
-T2 is now built -- in particular the threshold re-centring / separation on both bands (decision
-139's capture question), T3 (a confirmations-and-separation design rule shown on the card), and
-T7 (the titration session supplying the gain, decision 146, open item 30).
+Nothing queued. For the PI: T2 and T3 of the contest's implementation plan are both built; T4
+(threshold occupancy check), T5 (the block bootstrap as an interval on the card), T6 (the startup
+dip measured in the module) and T7 (the titration session supplying the gain, decision 146, open
+item 30) remain, plus the threshold re-centring / separation itself (decision 139's capture
+question).
 
 ## Current Phase
-Phase 13
+Phase 14
 
-phases: 13/13 complete
+phases: 14/14 complete
 
 ### Phase 1: Measure what the ledger says today
 - [x] Run the live report on RCS08 at the committed band (L 0-2+, 24.5 Hz) and list every non-pass row
@@ -103,6 +104,14 @@ phases: 13/13 complete
 - [x] Frontend: the CL-DBS simulations card shows both regimes side by side (switches/hour, undone count, timing values), labelled, with a click-to-select toggle for which one draws the three figures; never a silent swap
 - [x] Four new tests (`test_simulation.py` 10-13): the reversal count against the contest's own definition; `run_models` under two timing params gives two pinned, different answers; `_timing_runs_for_simulation` reads the programmed group and the recommendation correctly, including both absent cases; the signature changes with the table version
 - [x] Both suites green (host 1102 / 2 / 0, container 631 / 0); frontend rebuilt, new strings ("As programmed today", "Record-derived recommendation", "undone within one onset") found in the served chunk; field-count / difference-count proof on RCS08 (ONE_THREE_LEFT, 24.5 Hz); the module's own full-record replay reported honestly under both regimes rather than forced to match the contest's own 20-stretch subset numbers; decision 151
+- **Status:** complete
+
+### Phase 14: T3 -- a confirmations-and-separation design rule, ported from contest entry B
+- [x] `design_rule.py`: the two-component (L4) fit with an L1 fallback, the Riccati steady state (numpy iteration, primary) with a guarded `ctrlsys.sb02md` cross-check, the noise-only crossing simulation (counts runs, not readings), the averaging x onset separation table, and the analytic single-reading check
+- [x] Wired into `adapter.report_for_participant`: `write_design_rule`/`design_rule_if_stored` (the same store-backed pattern as `write_simulation`); the sentence patched onto the SERIALISED "Upper LFP threshold"/"Lower LFP threshold" rows of `prescriptions` and `prescription`, since `report_to_dict(rep)` had already turned the dataclasses into plain dicts by that point in the function
+- [x] `prescription.py`: `Field_.design_rule_note`, `design_rule_note()`, `attach_design_rule()` (kept for testability against the dataclasses); frontend renders it always-visible beside the threshold rows, not folded into "Why this value"
+- [x] Found and fixed live: `closed_loop_design_rule` was missing from `CacheStore.store.KEEP_NEWEST_BY_KIND`, so a second candidate's table evicted the first's -- the decision-107 class of defect, met again; fixed with the same limit (6) `closed_loop_simulation` already uses
+- [x] 20 new tests (`test_design_rule.py`) plus 6 in `test_prescription_modes.py`'s style; both suites green (host 1122 / 3 / 0, container 631 / 0); the white-noise analytic check passes; the design table reproduces B's own reported values exactly everywhere B's own (narrower) separation grid resolved a finite answer, with the two disclosed, explained exceptions (a wider search grid finds a finite answer where B's capped grid says "never"; one cell one grid-step off, plausibly the smaller default simulated-hours budget); live field-count/difference-count proof on RCS08 (49,382 / 49,426 fields, 2 differing, both a pre-existing cache-hit bookkeeping artifact of capturing "after" twice, not a functional change); frontend rebuilt, `design_rule_note` found in the served chunk; decision 152
 - **Status:** complete
 
 ## Decisions Made

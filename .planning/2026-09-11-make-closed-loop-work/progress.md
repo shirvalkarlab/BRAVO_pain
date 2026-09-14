@@ -364,3 +364,62 @@
   in 325 stretches -- close to the contest's own 2.53/h at the same setting on its own
   held-out subset, a genuine agreement across two very different samples of the record, stated
   as such rather than manufactured. Commit and push done by the builder itself (not isolated).
+
+## Session: T3 -- a confirmations-and-separation design rule (2026-09-13/14)
+
+Read the synthesis (artifacts/contest_2026-09-13_SYNTHESIS.md section 4, T3's acceptance
+criteria) and contest entry B's own report and its scratch source
+(`_agent_bridge/_probe_tl/_contest/kalman_est/{common,kf,k0b_ctrlsys,k1_models,k2_derive}.py`,
+gitignored, read via `docker exec ... cat`). Ported the two-component/one-component fit, the
+Riccati steady state (own iteration, `ctrlsys.sb02md` cross-check guarded behind an ImportError
+since `ctrlsys` is container-only), and the noise-only crossing simulation into a new production
+file, `ClosedLoopDeployment/design_rule.py` -- pure functions, no Django import required except
+inside the one entry point that calls `simulation.regrid_stretches`. Smoke-tested standalone on
+the host (bravo_app conda env) before wiring anything: a synthetic white-noise check matched the
+analytic Phi-inverse answer to within simulation noise; a synthetic two-component series fit
+correctly as L4 with phi_f < phi_s.
+
+Wired into `adapter.report_for_participant`, store-backed the same way `write_simulation` is
+(`write_design_rule`/`design_rule_if_stored`). Caught, before shipping, that `report_to_dict(rep)`
+runs BEFORE this point in the function and turns the `Prescription` dataclasses into plain dicts
+-- mutating `rep.prescriptions` afterward (my first draft, via `prescription.attach_design_rule`)
+would have changed nothing the response actually returns. Fixed by patching the already-serialised
+`out["prescriptions"]`/`out["prescription"]` row dicts directly. `attach_design_rule` (the
+dataclass-mutating version) kept for its own tests since it is a legitimate, independently useful
+function, just not the one the live wiring calls.
+
+20 new tests in `test_design_rule.py`, 6 more in the same file for `design_rule_note`/
+`attach_design_rule`. Host suite 1122 passed, 3 skipped, 0 failed (fresh run). Container suite
+PASS=631 FAIL=0 LIVE_SKIPPED=6.
+
+Live proof on RCS08 found a real bug within minutes: fitting L 1-3+ right after L 0-2+ evicted
+L 0-2+'s just-written `closed_loop_design_rule` entry -- `closed_loop_design_rule` was missing
+from `CacheStore.store.KEEP_NEWEST_BY_KIND`, the exact decision-107 class of defect this project
+has already paid for twice on the neighbouring `closed_loop_simulation` kind. Fixed with the same
+limit (6); re-ran both suites (unaffected) and re-captured both candidates' tables, which then
+coexisted correctly.
+
+Compared the live table against B's own published table (contest_2026-09-13_kalman_est.md
+§3.3) honestly rather than forcing agreement: on L 0-2+ at 3s/30s, exact match (±5.0 both). On
+L 1-3+, nine of eleven comparable cells match exactly (±25, ±5 x6, ±120 x2, ±60, ±15); one cell
+one grid step off (±10 vs B's ±5 at 15s/120s, plausibly the smaller default simulated-hours
+budget, 100h vs B's 200h); two cells B reports "never" (its own separation grid capped at 120)
+come out as large-but-finite here (this file's grid extends to 300) -- a disclosed difference in
+search range, not a method disagreement.
+
+Live before/after field-count proof (git-stashed adapter.py/prescription.py for "before"):
+49,382 fields before, 49,426 after, 48,271 in common, 2 differing (both a pre-existing
+`write_simulation` cache-hit bookkeeping artifact from capturing "after" twice -- traced to root
+cause, not a functional change), 51 only-after (30+16 `design_rule_note` keys, mostly `None`,
+2+2 carrying the real sentence on the Upper/Lower LFP threshold rows; 4 the new
+`closed_loop_design_rule` summary; 1 a pre-existing bookkeeping key), 8 only-before (the same
+`write_simulation` artifact's fresh-build-only fields). Verdict, licensed flag, threshold block:
+0 differing.
+
+Frontend: `PrescriptionPanel.js` renders `design_rule_note` as an always-visible line beside the
+threshold rows. Rebuilt; `design_rule_note` found in the served chunk (576.b59d4c09.chunk.js) by
+grep. Workers reloaded (`kill -HUP 1`); not watched in a browser this session.
+
+Decision 152 written (next number after 151, which T2's worker had already used -- checked, not
+guessed). task_plan.md Phase 14 added and marked complete; Next Step rewritten to name T4-T7 and
+the threshold re-centring as what remains. Commit and push done by this session itself.

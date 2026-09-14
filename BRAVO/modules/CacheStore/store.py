@@ -569,6 +569,10 @@ KEEP_NEWEST_BY_KIND = {
     # switching the committed band must not evict the last one -- the decision-107 lesson again,
     # met live on 2026-09-11 when the page's own report evicted the probe's entry.
     "closed_loop_simulation": 6,
+    # Same reasoning, same lesson, met live again on 2026-09-13 while building the design rule
+    # (decision 151): fitting the L 1-3+ candidate right after L 0-2+ evicted L 0-2+'s just-written
+    # entry, because the design-rule table is also keyed on the candidate.
+    "closed_loop_design_rule": 6,
     # The Stim Optimizer page makes TWO requests, plain and with the two-stage plan, and each is
     # its own key; under a limit of one they evicted each other, so the second page load rebuilt
     # what the first had just stored (watched live 2026-09-12: plain, two-stage, plain again --

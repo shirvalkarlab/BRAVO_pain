@@ -2372,6 +2372,108 @@ def closed_loop_simulation_for_participant(participant, candidate=None, *, hemis
     return payload
 
 
+# ---------------------------------------------------------------------------------------------
+# THE CONFIRMATIONS-AND-SEPARATION DESIGN RULE (T3, 2026-09-13; design_rule.py)
+# ---------------------------------------------------------------------------------------------
+def design_rule_signature(participant, *, tiles_key, contact, centre_hz, hemisphere, upper, lower):
+    """The key: the tile entry and recording set (the series the model is fit on), the candidate,
+    the two stored thresholds (the noise simulation holds the level at their midpoint, so a
+    recaptured pair is a different question), and this file's own rule version."""
+    from . import design_rule as _dr
+    return (_dr.KIND, _dr.RULE_VERSION, str(getattr(participant, "uid", participant)), tiles_key,
+            recording_set_signature(participant), str(contact), round(float(centre_hz), 3),
+            str(hemisphere),
+            None if upper is None else round(float(upper), 6),
+            None if lower is None else round(float(lower), 6))
+
+
+def write_design_rule(participant, *, candidate, hemisphere, threshold_plan, loaded=None,
+                      epochs=None):
+    """Fit the design-rule model on the same 3 s tiles the simulation reads and store the
+    averaging x onset separation table, citing the tiles as its raw root. Refuses, rather than
+    fits on nothing, exactly where `write_simulation` refuses: no thresholds, no candidate, no
+    tile entry, or no usable pieces. A matching key is served from the store rather than refit."""
+    from . import design_rule as _dr
+    try:
+        from modules.CacheStore import provenance as _prov
+    except ImportError:                                # pragma: no cover - depends on the runner
+        from CacheStore import provenance as _prov
+
+    summary = {"written": False, "store_key": None, "seconds": None}
+    plan = threshold_plan
+    if plan is None or plan.upper is None or plan.lower is None:
+        summary["reason"] = ("no thresholds were placed for this candidate, so there is nothing "
+                             "for a separation rule to be measured against")
+        return summary
+    contact = (candidate or {}).get("channel")
+    centre = (candidate or {}).get("center_hz")
+    if contact is None or centre is None:
+        summary["reason"] = "the candidate carries no sensing contact or band centre"
+        return summary
+    tiles_key = _tiles_key_for(participant)
+    if tiles_key is None:
+        summary["reason"] = "no tile entry key, so nothing could be run or stored"
+        return summary
+    uid = str(getattr(participant, "uid", participant))
+    sig = design_rule_signature(participant, tiles_key=tiles_key, contact=contact,
+                                centre_hz=centre, hemisphere=hemisphere, upper=plan.upper,
+                                lower=plan.lower)
+    summary["store_key"] = _cache_store.product_key(_dr.KIND, uid, sig)
+    if _cache_store.read_stamp(_dr.KIND, uid, sig, root=_SHARED_CACHE_DIR_OVERRIDE) is not None:
+        summary["written"] = True
+        summary["already_stored"] = True
+        return summary
+
+    import time as _time
+    t0 = _time.perf_counter()
+    inputs = simulation_inputs_for_participant(uid, contact=contact, centre_hz=float(centre),
+                                               loaded=loaded, hemisphere=hemisphere, epochs=epochs)
+    if inputs.get("absent_reason") or not len(inputs["t"]):
+        summary["reason"] = inputs.get("absent_reason") or "no usable pieces with a known amplitude"
+        return summary
+    payload = _dr.design_rule_for_series(inputs["t"], inputs["power"], inputs["amp_obs"],
+                                         upper=plan.upper, lower=plan.lower)
+    payload["candidate"] = {"channel": str(contact), "center_hz": float(centre),
+                            "hemisphere": str(hemisphere)}
+    payload["seconds"] = _time.perf_counter() - t0
+    summary["seconds"] = payload["seconds"]
+
+    chain = [_prov.entry(tiles_key, kind="raw_lsb_tiles", writer="biomarkers")]
+    _cache_store.store_if_absent(
+        _dr.KIND, uid, sig, lambda: payload, writer="closed_loop", trigger="deployment_report",
+        provenance=_prov.flatten(chain), n_recordings=None,
+        extra={"refused": bool(payload.get("refused")), "model": payload.get("model"),
+              "candidate": _simulation_candidate_tag(contact, centre, hemisphere)},
+        root=_SHARED_CACHE_DIR_OVERRIDE)
+    summary["written"] = (_cache_store.read_stamp(_dr.KIND, uid, sig,
+                                                  root=_SHARED_CACHE_DIR_OVERRIDE) is not None)
+    summary["refused"] = bool(payload.get("refused"))
+    summary["model"] = payload.get("model")
+    return summary
+
+
+def design_rule_if_stored(participant, candidate=None, *, hemisphere="Left"):
+    """The newest stored design-rule table for this candidate, matched on the sidecar's
+    `candidate` tag exactly as `simulation_if_stored` matches -- or ``None``."""
+    from . import design_rule as _dr
+    match = None
+    if candidate and candidate.get("channel") is not None and candidate.get("center_hz") is not None:
+        want = _simulation_candidate_tag(candidate["channel"], candidate["center_hz"],
+                                         candidate.get("actuated_hemisphere")
+                                         or candidate.get("sensing_hemisphere") or hemisphere)
+        match = lambda meta: (meta.get("extra") or {}).get("candidate") == want  # noqa: E731
+    try:
+        payload, _stamp = _cache_store.load_newest(_dr.KIND,
+                                                   str(getattr(participant, "uid", participant)),
+                                                   consumer="closed_loop",
+                                                   root=_SHARED_CACHE_DIR_OVERRIDE, match=match)
+        return payload
+    except Exception:                                  # noqa: BLE001 - a miss is not an error
+        _log.warning("closed-loop: the stored design-rule table could not be read for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
+        return None
+
+
 def cache_status_for_page(participant):
     """When the decoded recordings and settings this report reads were last assembled."""
     meaning = ("the date the decoded recordings, the therapy settings and the matched pain reports "
@@ -3013,6 +3115,54 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                      getattr(participant, "uid", participant), exc_info=True)
         out["closed_loop_simulation"] = {"written": False, "store_key": None,
                                          "reason": f"could not be run or stored: {_exc!r}"}
+
+    # THE CONFIRMATIONS-AND-SEPARATION DESIGN RULE (T3, 2026-09-13; design_rule.py): fit the
+    # noise-only model on the same tiles the simulation reads, store the averaging x onset
+    # separation table, and read it straight back -- a matching key is a store read, a fresh fit
+    # costs what the simulation's own fit already costs. Attached by patching the SERIALISED
+    # ``out["prescriptions"]``/``out["prescription"]`` row dicts `report_to_dict(rep)` already
+    # built a few lines above (`out = report_to_dict(rep)`), rather than mutating `rep.prescriptions`
+    # itself -- `report_to_dict` runs once, before this point, and a mutation made to the
+    # dataclasses afterward would never reach the dict this function actually returns. The table
+    # needs the thresholds `pipeline.run` itself just placed (the noise simulation holds the level
+    # at their midpoint), which is also why this runs after `pipeline.run`, alongside
+    # `write_simulation`, rather than inside `pipeline.run`.
+    try:
+        _dr_summary = write_design_rule(
+            participant, candidate=(cands[0] if cands else None), hemisphere=hemisphere,
+            threshold_plan=rep.threshold, loaded=_3loaded, epochs=eps)
+        out["closed_loop_design_rule"] = _dr_summary
+        _dr_payload = design_rule_if_stored(participant, (cands[0] if cands else None),
+                                            hemisphere=hemisphere)
+        if _dr_payload is not None and out.get("prescriptions"):
+            from . import timing_recommendation as _tr_dr
+            from . import prescription as _presc
+            _rec_timing = _tr_dr.for_participant(getattr(participant, "uid", participant)) or {}
+            _avg_ms = (_rec_timing.get("averaging_ms") or {}).get("value_ms")
+            _onset_ms = (_rec_timing.get("onset_upper_ms") or {}).get("value_ms")
+
+            def _patch_rows(field_rows):
+                for row in (field_rows or []):
+                    if row.get("parameter") not in ("Upper LFP threshold", "Lower LFP threshold"):
+                        continue
+                    up_v = next((r.get("value") for r in field_rows
+                               if r.get("parameter") == "Upper LFP threshold"), None)
+                    lo_v = next((r.get("value") for r in field_rows
+                               if r.get("parameter") == "Lower LFP threshold"), None)
+                    note = _presc.design_rule_note(_dr_payload, upper=up_v, lower=lo_v,
+                                                   averaging_ms=_avg_ms, onset_ms=_onset_ms)
+                    if note is not None:
+                        row["design_rule_note"] = note
+
+            for _mode_dict in (out["prescriptions"].get("modes") or {}).values():
+                _patch_rows(_mode_dict.get("fields"))
+            if out.get("prescription"):
+                _patch_rows(out["prescription"].get("fields"))
+    except Exception as _exc:                          # noqa: BLE001
+        _log.warning("closed-loop report: the design rule could not be run, stored or attached "
+                     "for %s", getattr(participant, "uid", participant), exc_info=True)
+        out["closed_loop_design_rule"] = {"written": False, "store_key": None,
+                                          "reason": f"could not be run or stored: {_exc!r}"}
 
     # ---------------------------------------------------------------------------------------------
     # THE CONSISTENCY CHECK (decision 74): does raising current on this contact move pain the way
