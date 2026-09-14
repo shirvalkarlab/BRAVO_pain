@@ -5,16 +5,17 @@ problem is that the module never handed the rule the value the device already re
 that still blocks does so for a reason the PI has read and agreed with.
 
 ## Next Step
-Nothing queued. For the PI: T2 and T3 of the contest's implementation plan are both built; T4
-(threshold occupancy check), T5 (the block bootstrap as an interval on the card), T6 (the startup
-dip measured in the module) and T7 (the titration session supplying the gain, decision 146, open
-item 30) remain, plus the threshold re-centring / separation itself (decision 139's capture
-question).
+Nothing queued. For the PI: T2, T3 and T4 of the contest's implementation plan are now built; T5
+(the block bootstrap as an interval on the card), T6 (the startup dip measured in the module) and
+T7 (the titration session supplying the gain, decision 146, open item 30) remain, plus the
+threshold re-centring / separation itself (decision 139's capture question) -- T4's own live
+numbers on the committed band (2.0% of readings between the stored pair, centred 12.4 units above
+the participant's own median) are themselves a live reading in favour of that re-centring.
 
 ## Current Phase
-Phase 14
+Phase 15
 
-phases: 14/14 complete
+phases: 15/15 complete
 
 ### Phase 1: Measure what the ledger says today
 - [x] Run the live report on RCS08 at the committed band (L 0-2+, 24.5 Hz) and list every non-pass row
@@ -112,6 +113,14 @@ phases: 14/14 complete
 - [x] `prescription.py`: `Field_.design_rule_note`, `design_rule_note()`, `attach_design_rule()` (kept for testability against the dataclasses); frontend renders it always-visible beside the threshold rows, not folded into "Why this value"
 - [x] Found and fixed live: `closed_loop_design_rule` was missing from `CacheStore.store.KEEP_NEWEST_BY_KIND`, so a second candidate's table evicted the first's -- the decision-107 class of defect, met again; fixed with the same limit (6) `closed_loop_simulation` already uses
 - [x] 20 new tests (`test_design_rule.py`) plus 6 in `test_prescription_modes.py`'s style; both suites green (host 1122 / 3 / 0, container 631 / 0); the white-noise analytic check passes; the design table reproduces B's own reported values exactly everywhere B's own (narrower) separation grid resolved a finite answer, with the two disclosed, explained exceptions (a wider search grid finds a finite answer where B's capped grid says "never"; one cell one grid-step off, plausibly the smaller default simulated-hours budget); live field-count/difference-count proof on RCS08 (49,382 / 49,426 fields, 2 differing, both a pre-existing cache-hit bookkeeping artifact of capturing "after" twice, not a functional change); frontend rebuilt, `design_rule_note` found in the served chunk; decision 152
+- **Status:** complete
+
+### Phase 15: T4 -- a threshold occupancy check, contest decision 150
+- [x] `occupancy.py`: re-averages the same 3 s power series design_rule.py/simulation.py already read onto the card's recommended averaging duration, never averaging across a gap between recordings; reports frac_above/between/below, the participant's median, the pair's centre/half-width and a warning below 10% between or more than one half-width off centre
+- [x] Wired into `adapter.report_for_participant`, right after the T3 design-rule step; the sentence patched onto the SAME serialised threshold rows `design_rule_note` already uses; `prescription.py` gained `Field_.occupancy_note`, `occupancy_note()`, `attach_occupancy()`
+- [x] A sign error in the direction word ("above"/"below") was found by comparing the live number against the contest's own report and fixed before landing, with two tests pinning the correct word on both sides
+- [x] 20 new tests; both suites green (host 1143 / 2 / 0, container 631 / 0); live field-count/difference-count proof on RCS08 (49,484 / 49,543 fields, 0 differing); the acceptance case (device 167/166 near-zero-and-flagged) matches closely, the stored L 1-3+ pair's own number (15.9% between, no off-centre warning) is honestly disclosed as different from the synthesis's 18-21%/61-units figures and traced to mean-at-30s vs median-at-3s on a skewed series, not a bug
+- [x] Frontend: `PrescriptionPanel.js` renders `occupancy_note` beside `design_rule_note`; rebuilt, found in the served chunk (576.c76946db.chunk.js); decision 153; commit; push
 - **Status:** complete
 
 ## Decisions Made

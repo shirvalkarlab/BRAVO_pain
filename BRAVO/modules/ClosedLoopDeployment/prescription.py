@@ -181,6 +181,12 @@ class Field_:
     #: not folded into `why`, so the interface can show it without the reader having to open the
     #: "Why this value" reveal first.
     design_rule_note: str | None = None
+    #: The threshold occupancy check's own sentence for this row (T4, 2026-09-13;
+    #: `occupancy_note`): where the participant's own averaged readings sit relative to this
+    #: pair, and whether the pair is a single threshold in all but name or sits well off the
+    #: level the signal occupies. Same rows, same reason, same always-visible placement as
+    #: `design_rule_note`.
+    occupancy_note: str | None = None
 
     #: WHY `status` ALONE IS NOT ENOUGH, and why two axes are derived from it below.
     #:
@@ -331,7 +337,7 @@ class Prescription:
         return [{"parameter": f.name, "value": f.value, "units": f.units, "status": f.status,
                  "device_default": f.default, "range": f.range_, "range_source": f.range_source,
                  "why": f.why, "programmed": f.programmed, "confidence": f.confidence,
-                 "design_rule_note": f.design_rule_note,
+                 "design_rule_note": f.design_rule_note, "occupancy_note": f.occupancy_note,
                  # The two provenance axes, so the interface never has to re-derive them from the
                  # status string and cannot disagree with this module about what a status means.
                  "origin": f.origin, "confirm": f.confirm,
@@ -857,6 +863,42 @@ def attach_design_rule(prescriptions, design_rule_payload, *, averaging_ms, onse
             continue
         up_f.design_rule_note = note
         lo_f.design_rule_note = note
+    return prescriptions
+
+
+# --- the threshold occupancy check (T4, 2026-09-13; occupancy.py) ------------------------------
+def occupancy_note(occupancy_payload):
+    """The one sentence for the threshold rows from an ``occupancy.threshold_occupancy`` payload
+    (a plain dict), or ``None`` when there is nothing to report -- no candidate, no thresholds, or
+    too few averaged readings. The payload already carries the finished sentence under ``why``;
+    this function's only job is to say when there is nothing there, the same role
+    ``design_rule_note`` plays for its own payload.
+    """
+    if not occupancy_payload or not occupancy_payload.get("available"):
+        return None
+    return occupancy_payload.get("why")
+
+
+def attach_occupancy(prescriptions, occupancy_payload):
+    """Append ``occupancy_note``'s sentence to the Upper/Lower LFP threshold fields of every mode
+    in ``prescriptions["modes"]`` that has them -- the identical scope ``attach_design_rule`` uses
+    and for the identical reason: Single Threshold's one threshold is device-computed and
+    verify-only (decision 9), and is left alone. Mutates the ``Field_`` objects in place and
+    returns ``prescriptions`` for convenience.
+    """
+    if not prescriptions or not isinstance(prescriptions.get("modes"), dict):
+        return prescriptions
+    note = occupancy_note(occupancy_payload)
+    if note is None:
+        return prescriptions
+    for presc in prescriptions["modes"].values():
+        fields = getattr(presc, "fields", None) or []
+        up_f = next((f for f in fields if f.name == "Upper LFP threshold"), None)
+        lo_f = next((f for f in fields if f.name == "Lower LFP threshold"), None)
+        if up_f is None or lo_f is None:
+            continue
+        up_f.occupancy_note = note
+        lo_f.occupancy_note = note
     return prescriptions
 
 

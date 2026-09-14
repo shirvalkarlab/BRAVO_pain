@@ -250,6 +250,16 @@ function FieldRow({ f, index, ticked, onTick, readBackEnabled }) {
             {f.design_rule_note}
           </MDTypography>
         ) : null}
+        {/* The threshold occupancy check (T4, 2026-09-13): where this participant's own readings
+            actually sit relative to this pair, printed beside the thresholds themselves for the
+            same reason the design-rule note above is -- it is a fact about this configuration on
+            this record, not only a justification behind the "Why this value" reveal. */}
+        {f.occupancy_note ? (
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mt: 0.2,
+            color: PAL.warnText }}>
+            {f.occupancy_note}
+          </MDTypography>
+        ) : null}
         {confirm.detail ? (
           <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5,
             color: "#5A5A5A" }}>

@@ -3165,6 +3165,66 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                                           "reason": f"could not be run or stored: {_exc!r}"}
 
     # ---------------------------------------------------------------------------------------------
+    # THE THRESHOLD OCCUPANCY CHECK (T4, 2026-09-13; occupancy.py; contest decision 150,
+    # synthesis section 4): where this participant's own averaged readings actually sit relative
+    # to the stored pair, at the averaging duration the card recommends -- and whether the pair
+    # behaves as a single threshold in all but name, or sits well off the level the signal
+    # occupies. Uses the SAME loader design_rule.py and simulation.py already call
+    # (`simulation_inputs_for_participant`, defined in this file) and is patched onto the
+    # SERIALISED prescription rows, for the identical reason the design-rule block above is:
+    # `report_to_dict` has already turned the dataclasses into plain dicts by this point.
+    try:
+        from . import occupancy as _occ
+        from . import timing_recommendation as _tr_occ
+        from . import prescription as _presc_occ
+        _c0_occ = (cands[0] or {}) if cands else {}
+        _up_occ = getattr(rep.threshold, "upper", None)
+        _lo_occ = getattr(rep.threshold, "lower", None)
+        _rec_timing_occ = _tr_occ.for_participant(getattr(participant, "uid", participant)) or {}
+        _avg_s_occ = ((_rec_timing_occ.get("averaging_ms") or {}).get("value_ms") or 0.0) / 1000.0
+        if (_c0_occ.get("channel") is not None and _c0_occ.get("center_hz") is not None
+                and _up_occ is not None and _lo_occ is not None and _avg_s_occ > 0):
+            _occ_inputs = simulation_inputs_for_participant(
+                getattr(participant, "uid", participant), contact=_c0_occ["channel"],
+                centre_hz=float(_c0_occ["center_hz"]), loaded=_3loaded, hemisphere=hemisphere,
+                epochs=eps)
+            if not _occ_inputs.get("absent_reason") and len(_occ_inputs["t"]):
+                _occ_payload = _occ.threshold_occupancy(
+                    _occ_inputs["t"], _occ_inputs["power"], upper=_up_occ, lower=_lo_occ,
+                    averaging_s=_avg_s_occ)
+            else:
+                _occ_payload = {"available": False,
+                                "reason": (_occ_inputs.get("absent_reason")
+                                          or "no usable pieces for this contact")}
+        elif _up_occ is None or _lo_occ is None:
+            _occ_payload = {"available": False,
+                            "reason": "no thresholds are placed for this candidate"}
+        elif _avg_s_occ <= 0:
+            _occ_payload = {"available": False,
+                            "reason": "no averaging duration is in force to average onto"}
+        else:
+            _occ_payload = {"available": False,
+                            "reason": "the candidate carries no sensing contact or band centre"}
+        out["threshold_occupancy"] = _occ_payload
+        _occ_note = _presc_occ.occupancy_note(_occ_payload)
+        if _occ_note is not None and out.get("prescriptions"):
+
+            def _patch_occ_rows(field_rows):
+                for row in (field_rows or []):
+                    if row.get("parameter") in ("Upper LFP threshold", "Lower LFP threshold"):
+                        row["occupancy_note"] = _occ_note
+
+            for _mode_dict in (out["prescriptions"].get("modes") or {}).values():
+                _patch_occ_rows(_mode_dict.get("fields"))
+            if out.get("prescription"):
+                _patch_occ_rows(out["prescription"].get("fields"))
+    except Exception as _exc:                          # noqa: BLE001
+        _log.warning("closed-loop report: the threshold occupancy check could not be computed "
+                     "for %s", getattr(participant, "uid", participant), exc_info=True)
+        out["threshold_occupancy"] = {"available": False,
+                                      "reason": f"could not be computed: {_exc!r}"}
+
+    # ---------------------------------------------------------------------------------------------
     # THE CONSISTENCY CHECK (decision 74): does raising current on this contact move pain the way
     # the correlation implies, THROUGH this band?
     #

@@ -423,3 +423,51 @@ grep. Workers reloaded (`kill -HUP 1`); not watched in a browser this session.
 Decision 152 written (next number after 151, which T2's worker had already used -- checked, not
 guessed). task_plan.md Phase 14 added and marked complete; Next Step rewritten to name T4-T7 and
 the threshold re-centring as what remains. Commit and push done by this session itself.
+
+## Session 2026-09-13 (continued): T4 -- threshold occupancy check
+- Built `ClosedLoopDeployment/occupancy.py`: re-averages the same power series design_rule.py and
+  simulation.py already read (`adapter.simulation_inputs_for_participant`) onto the recommended
+  averaging duration (`timing_recommendation.for_participant`), never across a gap between
+  recordings (`simulation.regrid_stretches`'s own device-clock grid), and reports frac_above /
+  frac_between / frac_below, the median reading, the pair's centre and half-width, and a warning
+  when frac_between < 10% or the centre sits more than one half-width from the median.
+- Wired into `adapter.report_for_participant` right after the T3 design-rule step; the sentence
+  patched onto the SAME serialised threshold rows `design_rule_note` already patches. Added
+  `Field_.occupancy_note`, `occupancy_note()`, `attach_occupancy()` to prescription.py, mirroring
+  T3's own pattern exactly.
+- 20 new tests in `tests/test_occupancy.py` (known-by-construction fractions, gap-awareness,
+  empty-window dropping, both direction words, the card-wiring tests). Ran the new file alone
+  first through the bridge (18 passed), before the full-suite run.
+- Live probe (`_agent_bridge/_probe_tl/probe_t4_occupancy.py`): git-stashed adapter.py and
+  prescription.py for "before", restored for "after", `CLS.run_for_participant` on the committed
+  candidate (ZERO_TWO_LEFT / L 0-2+, 24.5 Hz). Found ONE thing worth a second look immediately:
+  the committed pair's own occupancy (2.0% between, warning True) looked right, but the stored
+  L 1-3+ pair's number (15.9% between) fell noticeably short of the synthesis's own 18-21%, and
+  its off-centre distance (9.3 units) was nowhere near the synthesis's "61 units below the
+  median" -- wrote `probe_t4_diag.py` to isolate the cause without re-running the full report:
+  confirmed the mean is stable across averaging duration (233.5 at both 3s and 30s) but the
+  MEDIAN is not (195.5 at 3s vs 223.4 at 30s) on this heavily right-skewed series (10th/90th
+  percentile 83.7/428.7 at 3s averaging) -- the synthesis's own number is a MEAN at 30s
+  averaging, this check reports a MEDIAN at the averaging duration actually in force today
+  (3s, since decision 150). Both are real, correct answers to different questions; disclosed
+  honestly in the decision row rather than forced to match.
+- A real sign bug was found the same way: the committed band's own live note read "sits 12.4
+  units BELOW the median" when the centre (193.51) is numerically ABOVE the median (181.12) --
+  `side = "below" if distance > 0 else "above"` had it backwards (distance = centre - median, so
+  positive distance means centre IS above median). Fixed in occupancy.py; two new tests
+  (`test_occupancy_names_the_correct_side_when_the_centre_sits_{above,below}_the_median`) pin
+  the correct word on both sides so this cannot silently flip back. Re-ran the live probe after
+  the fix to get the corrected "before"/"after" pkls for the final field-count proof.
+- Field-count/difference-count proof (`probe_t4_diff.py`, flattening both pickles): 49,484
+  fields before, 49,543 after, 49,484 in common, 0 only-before, 59 only-after (all under
+  `threshold_occupancy` or `occupancy_note`), 0 differing.
+- Both suites via `run_both_suites.sh` (bridge, submit-then-poll): host 1143 passed, 2 skipped,
+  0 failed, 0 errors; container PASS=631 FAIL=0 LIVE_SKIPPED=6.
+- Frontend: `PrescriptionPanel.js` renders `f.occupancy_note` beside `f.design_rule_note`, same
+  always-visible placement and warning colour. Rebuilt; `occupancy_note` found (grep) in the
+  served chunk `576.c76946db.chunk.js`, the same chunk as `design_rule_note`. No new warning on
+  the touched file. Not watched in a browser this session.
+- Decision 153 written (next number after 152, read from the file's own tail, not guessed).
+  task_plan.md Phase 15 added and marked complete; Next Step rewritten to name T5-T7 and the
+  threshold re-centring, with T4's own live finding on the committed band noted as a live reading
+  in favour of that re-centring. Commit and push done by this session itself.
