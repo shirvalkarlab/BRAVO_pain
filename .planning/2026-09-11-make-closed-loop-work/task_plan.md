@@ -5,16 +5,16 @@ problem is that the module never handed the rule the value the device already re
 that still blocks does so for a reason the PI has read and agreed with.
 
 ## Next Step
-Phase 12: five contest reports still to land (B Kalman, C FOPDT, D dwell-time, E nonlinear, F
-ML/statistics; A landed). Judge all six by the brief's scoring rule, write the synthesis with the
-highest-confidence, most robust approach and the implementation plan for the CL module, and update
-`ClosedLoopDeployment/timing_recommendation.py` from it (decision 149 says that table is the one
-place to change).
+Nothing queued. For the PI: the contest's implementation plan (synthesis section 4, T2-T7), in
+particular T2 (the simulation card replaying the programmed group's timing, averaging included)
+and the threshold re-centring / separation on both bands (decision 139's capture question); and
+the finding that the device's 30 s / 30 s pair is one comparison, which argues for changing the
+programmed averaging.
 
 ## Current Phase
 Phase 12
 
-phases: 11/12 complete
+phases: 12/12 complete
 
 ### Phase 1: Measure what the ledger says today
 - [x] Run the live report on RCS08 at the committed band (L 0-2+, 24.5 Hz) and list every non-pass row
@@ -88,8 +88,8 @@ phases: 11/12 complete
 
 ### Phase 12: Method contest -- six control-theory approaches to the timing and threshold parameters
 - [x] Brief written (`_agent_bridge/_probe_tl/_contest/BRIEF.md`), ctrlsys installed, six Opus agents dispatched (LTI state-space, Kalman estimator, FOPDT/lambda, dwell-time Markov, nonlinear dynamics, ML/statistics)
-- [ ] Judge the six reports by the brief's scoring rule; synthesis with the highest-confidence, most robust approach and an implementation plan for the CL module; the timing table updated from it
-- **Status:** pending
+- [x] Judge the six reports by the brief's scoring rule; synthesis (artifacts/contest_2026-09-13_SYNTHESIS.md) with the highest-confidence, most robust approach (B's fitted slow-level model + noise-simulation design rule; F's bootstrap as the robustness test) and a seven-task implementation plan; the timing table updated (averaging 3 s), proof 49,473 / 49,443 fields, 73 differing, all in the parameter card; host 1098 / 2 / 0, container 631 / 0; decision 150
+- **Status:** complete
 
 ### Phase 5: Prove it on the page and land
 - [x] Frontend: ledger shows the new verdict kinds and the measurement current; rebuild; strings found in the served chunk

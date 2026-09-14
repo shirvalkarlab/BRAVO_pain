@@ -258,3 +258,49 @@
   behind contest jobs) host 1097 / 2 / 0, container 631 / 0; RCS08 L 1-3+ 24.5 Hz before/after
   49,343 / 49,473 fields, 173 differing, all explained (parameter card, D20/D21 text, the new
   programmed-timing block; verdict / thresholds / edges 0 differing); workers HUP'd; decision 149.
+- Contest F (ML/statistics) landed (artifacts/contest_2026-09-13_ml_stats.md): models explain
+  only ~18 % / 8 % of the next-reading variance (persistence is WORSE than the mean); onset 48 s /
+  36 s by split, but a 200-replicate block bootstrap spans 36-90 s / 27-60 s -- the split test
+  flatters every method; blanking undetermined once the onset is long; averaging and onset
+  interact (a 30 s averaging turns the 48 s onset into two confirmations; the device's 30/30
+  today is ONE); the High-confidence recommendation is to SEPARATE the thresholds by ~0.4 of the
+  scatter (halves the switching rate at every split and replicate). Agrees with A on the
+  averaging/onset interaction and the threshold separation; disagrees on averaging (F: 3 s, A: 9 s)
+  and startup delay (F 12 / 9 s measured, A 87 / 54 s extrapolated). Waiting on B, C, D, E.
+- Contest C (FOPDT + lambda) landed (artifacts/contest_2026-09-13_fopdt_lambda.md): the
+  stimulation current has NO measurable effect on the next reading (removing it from the model
+  changes the error by nothing or improves it; the record's step tests are 20-34x too blunt);
+  with 30 s averaging emulated, the device's settings and the Phase 10 recommendation replay
+  IDENTICALLY (39.6 switches/h, 49 reversals, at a limit 98-100 % of the time); its own settings
+  (averaging 30 s, onset 60/60, blanking 60, transitions 360 s, startup 60/30 s, thresholds at
+  3-5 noise SD) make the loop almost inert (0-0.34 switches/h, 3.10 mA). Refutes the Phase 10
+  "0.5 mA step moves the band 0.30-0.46 SD" as evidence (placebo windows give 0.65-0.78). Its
+  headline: do not run adaptive on this evidence; run open item 30's titration. Agrees with A
+  and F on the averaging/onset interaction and the stored pairs being single thresholds.
+  Waiting on B, D, E.
+- Contest E (nonlinear dynamics) landed (artifacts/contest_2026-09-13_nonlin_dyn.md): surrogate
+  test says NO nonlinearity is established (p 0.35 / 0.33; a linear AR does as well); the slow
+  part of a reading is 12 % / 11 % of its variance and peaks at a 15 s window; the switching
+  rate at every setting is within 10-30 % of the same readings SHUFFLED, so the loop switches on
+  the value distribution, not the history (no onset "knee"); Phase 10's 30 s onset reproduces
+  2.6 switches/h only WITHOUT averaging and gives 38.7/h with 51 undone at the 30 s averaging it
+  recommended; the device's 167/166 pins the current at the ceiling 92-94 % of the time.
+  Recommends averaging 15 s, onset 60 / 75 s, blanking = onset, startup 15 s, ramps 180 s (not
+  robust), thresholds at the 40th/60th percentiles (280.0/201.3; 213.8/173.3). Startup dip:
+  finds NONE (disagrees with Phase 10 and F). Waiting on B, D.
+- Contest D (dwell-time Markov) landed (artifacts/contest_2026-09-13_dwell_markov.md): two-state
+  chain on the 30 s averaged readings; a single 30 s comparison is wrong 46 % of the time, three
+  comparisons 2.5 % -- so onset 90 s (L 1-3+) / 120-150 s (L 0-2+) at averaging 30 s; the
+  fitted chain PREDICTED the replay's switching rate (1.79 vs 1.77 /h); ramps 30 s (an upper
+  bound: the state outlasts a 30 s ramp in 99 % of episodes), blanking 30 s, startup 45 s (one
+  window + a measured 0.10-SD first-reading dip); thresholds re-placed as a 0.4-0.8-SD deadband
+  around the best single value (not robust across splits, 3-15 units). Confirms A/C/E/F: the
+  device's 30 s onset at 30 s averaging is ONE comparison, 34-40 switches/h with 49 undone.
+  Waiting on B.
+- Contest B (Kalman) landed; all six in. Judged on the brief's rule; synthesis written
+  (artifacts/contest_2026-09-13_SYNTHESIS.md): B adopted (best prediction 0.162 / 0.128, nine
+  values identical across splits, reproduces Phase 10's 2.5/h under the same conditions, its noise
+  simulation is a computable rule), threshold centring from A/D/E, F's bootstrap as the robustness
+  test. Table changed: averaging 30 s -> 3 s. Suites host 1098 / 2 / 0, container 631 / 0; RCS08
+  L 1-3+ capture 49,473 / 49,443 fields, 73 differing, all parameter-card; workers HUP'd; decision
+  150. Phase 12 complete.

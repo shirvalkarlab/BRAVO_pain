@@ -1,27 +1,32 @@
 """The closed-loop timing values the participant's OWN record argues for, per participant.
 
-WHY A TABLE (2026-09-13, decision 148 and its wiring). The parameter card on the Closed-Loop
-Deployment page ("Full parameter recommendation") derived its onset from the biomarker's 4.096 s
-integration window and left the transitions, blanking and startup delay at the white paper's
-Parkinson's defaults, because nothing in the platform had measured what this participant's signal
-does over time. Phase 10 of the "Make Closed-Loop Work" session measured it: on RCS08's own
-calibrated band power (31.6 h on L 1-3+, 27.4 h on L 0-2+, at 24.5 Hz), the 3-second readings are
-near-independent draws, excursions past a threshold last one or two readings, a 1.2 s onset
-switches the current about 440 times an hour with a third of the switches undone within one onset,
-and 30 s cuts that to about 2.5 an hour with none undone. The whole analysis, every number's
-source, and what the record CANNOT decide are in
-``artifacts/research_2026-09-13_percept_adaptive_timing_SYNTHESIS.md`` (section 4 is the table
-this file transcribes).
+WHY A TABLE (2026-09-13, decisions 148-150). The parameter card on the Closed-Loop Deployment page
+("Full parameter recommendation") derived its onset from the biomarker's 4.096 s integration
+window and left the transitions, blanking and startup delay at the white paper's Parkinson's
+defaults, because nothing in the platform had measured what this participant's signal does over
+time. Phase 10 measured it (decision 148), and a six-method contest then re-derived every value
+on one held-out scoring rule (decision 150; the judgement is
+``artifacts/contest_2026-09-13_SYNTHESIS.md``, the six reports beside it). The contest's central
+correction: the device forms one averaged reading per averaging window and counts the onset in
+those readings, so the 30 s averaging with 30 s onset that RCS08 runs today -- and that decision
+148 recommended -- is ONE comparison with no confirmation behind it; replayed with the averaging
+honoured it switches the current 34-40 times an hour and undoes about 49 of those within one
+onset in 3.4 h. The Phase 10 sweep had left the averaging at the replay's default, so its "30 s
+onset" was ten confirmations of 3 s. With averaging at 3 s (the nearest device value to the
+validated 4.096 s feature window) the same 30 s onset IS ten confirmations: 2.5 switches an hour,
+none undone, on the held-out stretches.
 
 These are RCS08's values, derived from RCS08's record; they are not device defaults and they are
 not another participant's answer. So they live in one table keyed on the participant, exactly as
 the PI-stated safety ceiling does (``StimOptimizer.safety_ceiling``): a participant absent from the
-table gets the derivation the card used before (the biomarker window for the onset, the
+table gets the derivation the card used before (two averaging windows for the onset, the
 manufacturer's defaults for the rest), with the provenance saying so. Every value here sits inside
 the documented selection range where one exists (``percept_adaptive.DOCUMENTED_RANGES``).
 
-A method contest (six modelling approaches over the same held-out stretches, 2026-09-13) is
-re-deriving these values; when it lands, this table is the one place to change.
+WHAT THE RECORD CANNOT DECIDE, and every entry said so: the two ramp durations and the blanking
+(no measurement separates 4 s from 60 s once the onset filters), and the response of the band to
+the stimulation current at all -- every replay runs the controller over the recorded power with a
+zero response curve. The titration session (open item 30) is what would supply the gain.
 
 WHERE IT REACHES THE PAGE. Closed-Loop Deployment page, the "Full parameter recommendation" card:
 the onset, averaging, transition, blanking and startup-delay rows carry these values with the
@@ -31,11 +36,11 @@ from __future__ import annotations
 
 #: THE ONE PLACE TO CHANGE A PARTICIPANT'S RECORD-DERIVED TIMING. Participant uid -> field -> ms.
 RECORD_DERIVED_TIMING_MS = {
-    # RCS08 -- decision 148, synthesis section 4, measured on the record through 2026-09-13.
+    # RCS08 -- decision 150, contest judgement section 3, held-out replay through 2026-09-13.
     "2e3c75c00d7f4f37b53a048d195f11da": {
         "onset_upper_ms": 30_000.0,
         "onset_lower_ms": 30_000.0,
-        "averaging_ms": 30_000.0,
+        "averaging_ms": 3_000.0,
         "transition_up_ms": 30_000.0,
         "transition_down_ms": 30_000.0,
         "detection_blanking_ms": 30_000.0,
@@ -43,45 +48,49 @@ RECORD_DERIVED_TIMING_MS = {
     },
 }
 
-#: One sentence of reason and a confidence per field, from the synthesis table, printed on the card.
+#: One sentence of reason and a confidence per field, from the contest judgement, printed on the card.
 RECORD_DERIVED_WHY = {
     "onset_upper_ms": (
-        "Measured on this participant's own band power: the 3-second readings are near-independent "
-        "draws whose excursions past a threshold last one or two readings, so 30 s is the shortest "
-        "onset that switches the current about 2.5 times an hour with no switch undone within one "
-        "onset, on both candidate bands; 1.2 s would switch about 440 times an hour.", "High"),
+        "Ten confirmations of the 3 s averaged reading: the shortest onset that holds noise-only "
+        "threshold crossings at or below one an hour at the stored separation on this "
+        "participant's own signal (a fitted slow-level model's noise simulation), and replayed on "
+        "held-out stretches it switches the current 2.5 times an hour with none undone, against "
+        "34-40 an hour with about 49 undone for the 30 s averaging / 30 s onset the device runs "
+        "today. A block bootstrap over the recordings puts 36-90 s in the same recommendation.",
+        "High"),
     "onset_lower_ms": (
-        "Same measurement as the upper onset; nothing in the record argues for the two timers to "
-        "differ, and asymmetry is the manufacturer's first lever if the delivered current turns out "
-        "transiently too low or too high (D51).", "High"),
+        "Same measurement as the upper onset; the replay applies one onset to both directions, so "
+        "equal timers are the honest choice, and asymmetry is the manufacturer's first lever if "
+        "the delivered current turns out transiently too low or too high (D51).", "Medium"),
     "averaging_ms": (
-        "More than half of a reading's variance is faster than 10 s and is noise to a loop that "
-        "should follow the slow part; 30 s is the documented maximum and the device already runs "
-        "it on this participant.", "High"),
+        "The validated feature was computed on a 4.1 s window and 3 s is the nearest the device "
+        "offers; every method that shortened the averaging cut the switching rate below 8 an hour "
+        "with nothing undone, and at the device's 30 s averaging no onset under 120 s keeps "
+        "noise-only crossings at one an hour. The device's own 1.2 s default is indistinguishable "
+        "from 3 s on this record.", "High"),
     "transition_up_ms": (
-        "Replaying the controller over the record, outcomes are indistinguishable from 4 s up to "
-        "60 s once the onset is 30 s, so the choice is about ramp comfort; 30 s smooths a 1 mA "
-        "change over 100 steps of 0.01 mA and stays well below the 2.5 min at which the loop stops "
-        "reaching its limits. Keeping today's 4 s is equally defensible on the data.", "Medium"),
+        "The record cannot decide this: the band's slow level carries over with a time constant of "
+        "hours, so every ramp on the device's grid is fast against it, and 4 s to 60 s replay "
+        "identically at any onset that filters. 30 s finishes before the next decision could "
+        "arrive (onset plus blanking) and is inside every method's acceptable set.", "Low"),
     "transition_down_ms": (
-        "Same evidence as the transition up; the record gives no reason for down to differ from "
-        "up. The white paper's 2.5 and 5 min defaults are Parkinson's defaults and would leave "
-        "this loop mid-ramp most of the time.", "Medium"),
+        "Same evidence as the transition up; nothing in the record distinguishes the two "
+        "directions.", "Low"),
     "detection_blanking_ms": (
-        "With a 30 s onset, blanking shorter than the onset would let a decision be re-classified "
-        "while the ramp it triggered is still under way; equal to the onset is the consistent "
-        "choice and is what runs today. No direct measurement is possible from this record.",
+        "Undetermined by the record: at a filtering onset every blanking value from 3 to 60 s "
+        "gives the identical switching rate. Equal to the onset stops a decision being "
+        "re-classified while the ramp it triggered is still under way, and is what runs today.",
         "Low"),
     "adaptive_startup_delay_ms": (
-        "The first 12 s of sensing after a stretch starts read 0.24 to 0.41 of the scatter low on "
-        "this record (85 and 71 stretches), so a delay shorter than that lets a startup artefact "
-        "drive the first decision; today's 0 is the one value the record argues against. 15 s if "
-        "the tablet offers it, else 30 s.", "Medium"),
+        "The measured start-of-recording dips (0.10 to 0.41 of the scatter, three independent "
+        "measurements) are gone by 12 s; one method finds none. 15 s is the shortest value above "
+        "12 s the device has been seen to accept; the 60-87 s two model-based methods derived are "
+        "settling times of their estimators, not of the device.", "Medium"),
 }
 
-RECORD_DERIVED_PROVENANCE = ("measured on this participant's own record (decision 148, "
-                             "artifacts/research_2026-09-13_percept_adaptive_timing_SYNTHESIS.md "
-                             "section 4)")
+RECORD_DERIVED_PROVENANCE = ("measured on this participant's own record: six-method contest, "
+                             "held-out replay (decision 150, "
+                             "artifacts/contest_2026-09-13_SYNTHESIS.md section 3)")
 
 
 def for_participant(participant_uid):

@@ -107,13 +107,14 @@ def test_the_inoperative_onset_is_reported_as_a_field_PAIR_not_as_a_row_property
     coupling between two named fields with both their values.
 
     Since 2026-09-13 the fallback pair (two windows of the biomarker's own averaging) does not
-    conflict; the record-derived pair for RCS08 (30 s onset against 30 s averaging, decision 148)
-    does, so that is the configuration this test builds.
+    conflict, and neither does RCS08's record-derived pair (decision 150: 3 s averaging under a
+    30 s onset); the pair the device RUNS today (30 s onset on 30 s averaging) does, so that is
+    the configuration this test builds, as a record-derived dict.
     """
-    from ClosedLoopDeployment import timing_recommendation as TR
+    thirty = {k: {"value_ms": 30000.0, "why": "as programmed", "confidence": "Low", "provenance": "t"}
+              for k in ("onset_upper_ms", "onset_lower_ms", "averaging_ms")}
     pr = PR.prescribe(mode=PA.DUAL, threshold_plan=_plan(), candidate=_cand(),
-                      timing=PA.timing_plan(mode=PA.DUAL),
-                      record_timing=TR.for_participant("2e3c75c00d7f4f37b53a048d195f11da"))
+                      timing=PA.timing_plan(mode=PA.DUAL), record_timing=thirty)
     assert len(pr.couplings) == 1, "expected exactly the onset/averaging coupling"
     c = pr.couplings[0]
     assert len(c["fields"]) == 2 and len(c["values"]) == 2, "a coupling names BOTH fields"
@@ -141,11 +142,10 @@ def test_the_coupling_is_measured_from_the_chosen_pair_not_a_constant_warning(in
     Rewritten 2026-09-13. The ladder used to expect 5, 3, 2, 1, 1 windows, the arithmetic of the
     ADAPT-PD trial's 1.2 s floor against each window; with the documented range (0-6 min) the
     fallback onset is two averaging windows at EVERY window, so the coupling is absent at every
-    rung -- and it is present for the one participant whose record-derived values pair a 30 s
-    onset with 30 s averaging. The test fails if the fallback ever becomes inoperative, or if the
-    record-derived pair stops raising the banner.
+    rung -- and it is present for the pair the device runs today (30 s onset on 30 s averaging).
+    The test fails if the fallback ever becomes inoperative, or if that pair stops raising the
+    banner.
     """
-    from ClosedLoopDeployment import timing_recommendation as TR
     pr = PR.prescribe(mode=PA.DUAL, threshold_plan=_plan(), candidate=_cand(),
                       timing=PA.timing_plan(mode=PA.DUAL, biomarker_integration_s=integration_s))
     rows = {r["parameter"]: r["value"] for r in pr.as_rows()}
@@ -155,9 +155,11 @@ def test_the_coupling_is_measured_from_the_chosen_pair_not_a_constant_warning(in
     assert PR.onset_windows(onset, avg)["inoperative"] is False
     assert not pr.couplings, "the banner must track the measured conflict, not appear unconditionally"
 
+    thirty = {k: {"value_ms": 30000.0, "why": "as programmed", "confidence": "Low", "provenance": "t"}
+              for k in ("onset_upper_ms", "onset_lower_ms", "averaging_ms")}
     rec = PR.prescribe(mode=PA.DUAL, threshold_plan=_plan(), candidate=_cand(),
                        timing=PA.timing_plan(mode=PA.DUAL, biomarker_integration_s=integration_s),
-                       record_timing=TR.for_participant("2e3c75c00d7f4f37b53a048d195f11da"))
+                       record_timing=thirty)
     rrows = {r["parameter"]: r["value"] for r in rec.as_rows()}
     assert math.ceil(float(rrows["Upper onset duration"]) / float(rrows["Averaging duration"])) == 1
     assert rec.couplings and rec.couplings[0]["severity"] == "consequential"

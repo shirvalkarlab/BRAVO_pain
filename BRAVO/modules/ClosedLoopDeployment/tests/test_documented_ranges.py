@@ -147,16 +147,17 @@ def test_the_active_group_reader_carries_the_timing_alongside_the_rate():
 
 
 # --- the record-derived table --------------------------------------------------------------
-def test_rcs08s_record_derived_timing_is_the_decision_148_table_and_sits_inside_every_range():
+def test_rcs08s_record_derived_timing_is_the_decision_150_table_and_sits_inside_every_range():
     r = TR.for_participant(RCS08)
     assert {k: v["value_ms"] for k, v in r.items()} == {
-        "onset_upper_ms": 30000.0, "onset_lower_ms": 30000.0, "averaging_ms": 30000.0,
+        "onset_upper_ms": 30000.0, "onset_lower_ms": 30000.0, "averaging_ms": 3000.0,
         "transition_up_ms": 30000.0, "transition_down_ms": 30000.0,
         "detection_blanking_ms": 30000.0, "adaptive_startup_delay_ms": 15000.0}
     assert r["onset_upper_ms"]["confidence"] == "High"
-    assert r["transition_up_ms"]["confidence"] == "Medium"
+    assert r["averaging_ms"]["confidence"] == "High"
+    assert r["transition_up_ms"]["confidence"] == "Low"
     assert r["detection_blanking_ms"]["confidence"] == "Low"
-    assert all("decision 148" in v["provenance"] for v in r.values())
+    assert all("decision 150" in v["provenance"] for v in r.values())
     lo, hi = PA.ONSET_RANGE_DUAL_MS
     assert lo <= r["onset_upper_ms"]["value_ms"] <= hi
     assert PA.TRANSITION_RANGE_MS[0] <= r["transition_up_ms"]["value_ms"] <= PA.TRANSITION_RANGE_MS[1]
@@ -187,7 +188,8 @@ def test_the_card_carries_the_record_derived_values_with_their_confidence_and_th
     assert rows["Transition up duration"]["programmed"] == 4000.0
     assert rows["Transition up duration"]["range"] == PA.TRANSITION_RANGE_MS
     assert rows["Transition up duration"]["confirm"] == "enterable"
-    assert rows["Averaging duration"]["value"] == 30000.0
+    assert rows["Averaging duration"]["value"] == 3000.0
+    assert rows["Averaging duration"]["programmed"] == 30000.0
     assert rows["Averaging duration"]["range"] == PA.AVERAGING_RANGE_MS
     assert rows["Averaging duration"]["confirm"] == "enterable"
     assert rows["Adaptive startup delay"]["value"] == 15000.0
@@ -224,8 +226,22 @@ def test_without_a_measured_record_the_card_falls_back_to_the_window_and_the_def
     assert srow["value"] == pytest.approx(2 * 4096.0) and srow["range"] == PA.ONSET_RANGE_SINGLE_MS
 
 
-def test_the_onset_averaging_coupling_names_the_documented_ceiling_not_the_trials():
+def _thirty_thirty():
+    """A record-derived pair like the one the device runs today: 30 s onset on 30 s averaging."""
+    return {k: {"value_ms": 30000.0, "why": "constructed", "confidence": "Low", "provenance": "t"}
+            for k in ("onset_upper_ms", "onset_lower_ms", "averaging_ms")}
+
+
+def test_rcs08s_table_gives_ten_confirmations_and_raises_no_coupling():
+    """Decision 150: averaging 3 s under a 30 s onset is ten controller steps."""
     rows, p = _rows(record_timing=TR.for_participant(RCS08))
+    ow = PR.onset_windows(rows["Upper onset duration"]["value"], rows["Averaging duration"]["value"])
+    assert ow["windows"] == 10 and ow["inoperative"] is False
+    assert p.couplings == []
+
+
+def test_the_onset_averaging_coupling_names_the_documented_ceiling_not_the_trials():
+    rows, p = _rows(record_timing=_thirty_thirty())
     # 30 s onset against 30 s averaging is one controller step under the module's reading
     assert p.couplings and p.couplings[0]["fields"][0] == "Upper onset duration"
     assert "6 min" in p.couplings[0]["resolution"]
