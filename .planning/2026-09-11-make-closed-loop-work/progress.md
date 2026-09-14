@@ -601,3 +601,57 @@ the threshold re-centring as what remains. Commit and push done by this session 
 - Decision 155 written (next number after 154, read from the file's own tail). task_plan.md Phase
   17 added and marked complete; Next Step rewritten to name T7 and the threshold re-centring as
   what remains. Commit and push done by this session itself.
+
+### Phase 18: T7 -- the gain (verification only)
+- REALITY CHECK done first: no titration session has been recorded on RCS08; decision 146 says the
+  20 s post-ramp margin "stays off until the session is recorded", and that is still true. So the
+  task's literal acceptance test ("the simulation card's M1 run differs from M0 on the titration
+  run's data") cannot be satisfied with real data today. This is open item 30, a clinical
+  scheduling matter, not a missing-code problem.
+- Read `simulation.py`'s `run_models`: it already builds M0 (`ResponseCurve.zero()`) and M1
+  (`ResponseCurve.from_pooled_row(pooled_row, use_bend=False, ...)`) whenever `pooled_row` is not
+  None, and `active_name = "M2" if has_bend else "M1"` already reports M1, not M0, as the active
+  model whenever a pooled slope exists. Built by decision 128, well before the contest.
+- Read `post_ramp.py`'s `margin_becomes_available`: fully derived from the stored per-run points
+  table (`titration_plan.settled_settings_per_run`), no manual flag; returns `available` from the
+  data alone. Confirmed it is kept deliberately separate from `USE_POST_RAMP_MARGIN`, the actual
+  behaviour switch -- the docstring and decision 144 both say turning the margin on is his call,
+  not something derived data should auto-flip. `StimOptimizer/tests/test_titration_plan.py`
+  already pins this (a 6-setting run gives False, an 8-setting run gives True), so this was not a
+  gap in test coverage either.
+- Read `edges.py`'s `pooled_actuation_edge` (E1, decision 126): reads `pooled_row` directly, no
+  manual step. `ClosedLoopDeployment/tests/test_pooled_e1.py` already covers this thoroughly.
+- Read `adapter.py`'s `write_simulation`/`write_pooled_shape`/`simulation_signature`/
+  `pooled_shape_signature`: both signatures fold in `recording_set_signature(participant)`, which
+  changes whenever the recording set changes (new uid/hash/type per recording). A titration
+  session is new recordings, so its key is new -- no stale cached M0-only entry can be served.
+  `write_pooled_shape` refuses to write from a truncated (page-only) build, only from a full run
+  (`is_every_run=True`), which is what the periodic full build/daily pass triggers.
+- Traced the full chain end to end: device recording -> `recording_set_signature` change ->
+  `pooled_shape_signature` change -> `within_visit_pooled_shape` recomputed on the next full build
+  -> `pooled_row` picks up the new slope -> `edges.pooled_actuation_edge` (E1) and
+  `simulation.run_models` (M1) both read it automatically, no manual step anywhere in the chain.
+- CONCLUSION: no gap found. No production code changed.
+- Added `ClosedLoopDeployment/tests/test_t7_gain_wiring.py`, 5 tests, all on CONSTRUCTED data
+  (never claimed as an RCS08 result): (1) a hand-built pooled row shaped like a real titration
+  result (slope -18 device units/mA, p=0.002, 24 points/5 runs) makes `run_models` report
+  `active_model == "M1"` with the drawn amplitude trajectory differing from M0's at more than a
+  quarter of its steps; (1b) the control -- no resolved slope (today's actual RCS08 state on the
+  committed band) -- gives an M1 trajectory bit-identical to M0's, confirming the difference in (1)
+  comes from the slope; (2) the same row resolves E1 automatically; (3) `margin_becomes_available`
+  flips False->True between a constructed 6-setting run and an 11-step 0-5.0 mA constructed
+  titration run, while `USE_POST_RAMP_MARGIN`/`margin_s()` stay untouched; (4) monkeypatching
+  `recording_set_signature` to two different values changes both `pooled_shape_signature` and
+  `simulation_signature`.
+- Both suites via `run_both_suites.sh` (bridge, submit-then-poll, job 20260913-224246-b0aa3eee):
+  host 1187 passed, 2 skipped, 0 failed, 0 errors (was 1182, +5 new tests, exact arithmetic);
+  container PASS=631 FAIL=0 LIVE_SKIPPED=6 (unaffected -- ClosedLoopDeployment is not in the
+  container's test set).
+- No production code changed, so no live RCS08 field-count/difference-count proof applies.
+- Decision 156 written (next number after 155, read from the file's own tail: 151/153/155/154/152/
+  150 were the six most recent rows). task_plan.md Phase 18 added and marked complete; phases
+  counter and Current Phase both bumped to 18/18; Next Step rewritten to say the seven-task plan is
+  done except the titration session itself, and that the threshold re-centring (decision 139) is
+  the PI's next open decision. `check-complete.sh` confirms ALL PHASES COMPLETE (18/18). Commit and
+  push done by this session itself -- this is the sixth and last of six sequential builder agents
+  on this arc.

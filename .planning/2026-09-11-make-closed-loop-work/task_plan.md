@@ -5,18 +5,21 @@ problem is that the module never handed the rule the value the device already re
 that still blocks does so for a reason the PI has read and agreed with.
 
 ## Next Step
-Nothing queued. For the PI: T2, T3, T4, T5 and T6 of the contest's implementation plan are now
-built; T7 (the titration session supplying the gain, decision 146, open item 30) is the only step
-of the seven left, plus the threshold re-centring / separation itself (decision 139's capture
-question) -- T4's own live numbers on the committed band (2.0% of readings between the stored
-pair, centred 12.4 units above the participant's own median) and T5's own bootstrap interval on
-the committed band (onset 27-60 s, thresholds 43.5-108.7 device units apart) are themselves live
+Nothing queued. The contest's seven-task implementation plan is now DONE except for one thing that
+is not a code task: T1-T6 are built and proven live on RCS08 (decisions 150-155); T7's wiring is
+confirmed correct and proven on constructed data (decision 156), but its own acceptance test needs
+a real titration session recorded on RCS08 first -- that has not happened (open item 30), and it is
+a clinical/scheduling matter for the PI, not something an agent can build. The one thing left open
+for the PI to decide is the threshold re-centring / separation itself (decision 139's capture
+question) -- T4's own live numbers on the committed band (2.0% of readings between the stored pair,
+centred 12.4 units above the participant's own median) and T5's own bootstrap interval on the
+committed band (onset 27-60 s, thresholds 43.5-108.7 device units apart) are themselves live
 readings in favour of that re-centring.
 
 ## Current Phase
-Phase 17
+Phase 18
 
-phases: 17/17 complete
+phases: 18/18 complete
 
 ### Phase 1: Measure what the ledger says today
 - [x] Run the live report on RCS08 at the committed band (L 0-2+, 24.5 Hz) and list every non-pass row
@@ -141,6 +144,17 @@ phases: 17/17 complete
 - [x] Wired into `adapter.report_for_participant` as a store-backed step (`write_robustness`/`robustness_if_stored`, same CacheStore pattern as T3), patched onto the onset-duration row(s) of the SERIALISED prescription rows; `prescription.py` gained `Field_.robustness_note`, `robustness_note()`, `attach_robustness()`; no ledger row added, matching T3/T4/T6
 - [x] Both suites green (host 1182 / 2 / 0, container 631 / 0 / live-skipped 6); live field-count/difference-count proof on RCS08, the committed band (49,756 / 49,806 fields, 0 real differences, 50 only-after, all under the new check); the bootstrap's own wall clock measured directly: 0.059 s on the committed band, 1.53 s on the richer L 1-3+ series
 - [x] Frontend: `PrescriptionPanel.js` prints the sentence beside the onset-duration row(s); rebuilt, found in the served chunk (576.9888adf4.chunk.js); decision 155; commit; push
+- **Status:** complete
+
+### Phase 18: T7 -- the gain (verification only; no titration session exists yet)
+- [x] Confirmed by reading the code, not from memory: `simulation.run_models` already builds M0 and M1 whenever the stored pooled row carries a real slope, and already reports M1 (not M0) as the active model -- built by decision 128, before this contest
+- [x] Confirmed `post_ramp.margin_becomes_available` is fully derived from the stored per-run points table with no manual flag, and that it is kept separate from `USE_POST_RAMP_MARGIN`, the actual behaviour switch, which is the PI's call (decision 144) and is never auto-flipped
+- [x] Confirmed `edges.pooled_actuation_edge` (E1) reads the stored pooled row automatically, no manual step
+- [x] Confirmed both `pooled_shape_signature` and `simulation_signature` fold in `recording_set_signature`, so a titration session's new recordings give every downstream table a new key and no stale cached entry can be served
+- [x] No gap found; no production code changed
+- [x] New test file `ClosedLoopDeployment/tests/test_t7_gain_wiring.py`, 5 tests, constructed data only (never claimed as an RCS08 result): M1 differs from M0 given a real pooled slope; a control with no slope reproduces M0 bit-identically; the same row resolves E1; `margin_becomes_available` flips on constructed 6-setting vs 11-step data while the behaviour switch stays untouched; both signatures change when the recording set does
+- [x] Both suites green, run together through the bridge: host 1187 passed / 2 skipped / 0 failed (was 1182, +5); container 631 passed / 0 failed
+- [x] No live RCS08 proof needed (no production code changed); decision 156; commit; push
 - **Status:** complete
 
 ## Decisions Made
