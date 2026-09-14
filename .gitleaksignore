@@ -1,0 +1,13 @@
+# Confirmed 2026-09-14, PI's own call: these four are inert example values from the upstream
+# open-source project's own installation documentation and its legacy Docker/docker-compose.yml,
+# not credentials this lab ever used. Every one traces (git blame) to jackson.cagle@gmail.com,
+# 2022-2024, before this lab's fork -- not to anything committed here. Nothing this lab runs reads
+# these files: the real deployment uses the root docker-compose.yml / docker-compose.override.yml
+# pair (CLAUDE.md's own Tech Stack table), and the real REDCap credential lives in the gitignored
+# secrets/redcap.env, never in git. Listed by the exact fingerprint gitleaks itself reports, so a
+# genuinely new secret added anywhere else, including a new line in these same two files, is still
+# caught.
+Docker/docker-compose.yml:generic-api-key:57
+docs/installation.rst:generic-api-key:218
+docs/installation.rst:generic-api-key:453
+docs/installation.rst:generic-api-key:647

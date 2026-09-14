@@ -93,6 +93,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install and run gitleaks
+        # The gitleaks CLI itself is free (MIT). The `gitleaks/gitleaks-action` wrapper is not --
+        # its v2 gates organization repositories behind a paid license ("license key is required")
+        # -- so this installs and runs the open-source binary directly instead of that wrapper.
+        run: |
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz \
+            | tar -xz gitleaks
+          ./gitleaks detect --source . --redact -v
