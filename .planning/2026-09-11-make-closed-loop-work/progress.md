@@ -304,3 +304,15 @@
   test. Table changed: averaging 30 s -> 3 s. Suites host 1098 / 2 / 0, container 631 / 0; RCS08
   L 1-3+ capture 49,473 / 49,443 fields, 73 differing, all parameter-card; workers HUP'd; decision
   150. Phase 12 complete.
+- Correction, same evening: asked directly whether every contestant assumed 30 s averaging.
+  Answer: no -- four of six computed short values from real sweeps (A 9 s, B 3 s, E 15 s, F 3 s),
+  two computed 30 s (C, D), by four genuinely different objectives. But re-checking the switching-
+  rate comparison the synthesis leaned on found it held the onset FIXED IN SECONDS across
+  averaging windows -- the same confound several entries warned about. Re-measured directly
+  (averaging_sweep.py, gitignored) holding the threshold pair fixed and re-tuning the onset
+  properly at each averaging: switching rate is FLAT, 3.1-4.4/h from 3 s to 30 s, on both the
+  stored pair and the device's actual 167/166. What differs is response time: 21-24 s to a
+  confirmed decision at 3 s averaging against 90-180 s at 30 s, same switching rate. Table value
+  unchanged (3 s); the stated reason corrected in timing_recommendation.py and the synthesis
+  (new section 3a) and decision 150. Proof: 49,443 fields both sides, 3 differing, all the
+  averaging row's "why" text. Host 1098/2/0, container 631/0. Workers reloaded.

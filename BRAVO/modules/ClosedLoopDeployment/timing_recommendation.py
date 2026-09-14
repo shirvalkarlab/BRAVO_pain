@@ -64,10 +64,16 @@ RECORD_DERIVED_WHY = {
         "the delivered current turns out transiently too low or too high (D51).", "Medium"),
     "averaging_ms": (
         "The validated feature was computed on a 4.1 s window and 3 s is the nearest the device "
-        "offers; every method that shortened the averaging cut the switching rate below 8 an hour "
-        "with nothing undone, and at the device's 30 s averaging no onset under 120 s keeps "
-        "noise-only crossings at one an hour. The device's own 1.2 s default is indistinguishable "
-        "from 3 s on this record.", "High"),
+        "offers. CORRECTED 2026-09-13, in answer to a direct question: once the onset is properly "
+        "re-tuned at EACH averaging duration (rather than compared at one onset held fixed in "
+        "seconds, the confound that inflated some of the contest's own switching-rate numbers), "
+        "the switching rate is nearly flat, about 3-4 an hour, from 3 s all the way to 30 s, on "
+        "both the calibrated grid's own threshold pair and the device's actual programmed 167/166 "
+        "pair. What genuinely differs is how long a confirmation takes: at 3 s averaging the "
+        "shortest onset reaching zero undone switches is about 21-24 s; at 30 s averaging the same "
+        "stability needs 90-180 s. Short averaging is kept for that reason -- it reaches a "
+        "confirmed decision in a quarter to a sixth of the time, at an equal switching rate -- not "
+        "because it switches less.", "High"),
     "transition_up_ms": (
         "The record cannot decide this: the band's slow level carries over with a time constant of "
         "hours, so every ramp on the device's grid is fast against it, and 4 s to 60 s replay "

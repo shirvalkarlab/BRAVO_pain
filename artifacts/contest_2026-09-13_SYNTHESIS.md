@@ -108,6 +108,44 @@ Cost of the fit on training: A 0.9 s, C 2 s, F 2.5 s (plus 315 s for the bootstr
 
 ---
 
+## 3a. A correction to the averaging judgement above, made the same evening
+
+Asked directly why every entry seemed to assume the averaging duration rather than tuning it, and
+whether it was in fact tuned from the data: it was, by all six, but the comparison in §2 above that
+this synthesis leaned on -- switching rate at each averaging duration -- carries the same confound
+several entries warned about in the Phase 10 recommendation: **it compared different averaging
+windows at one onset held fixed in seconds**, and a fixed onset in seconds is a different number of
+controller confirmations at every averaging duration. F's own table said this in words; the mistake
+was not catching that the same shape of comparison, once folded into one ranking table across six
+entries with six different onset choices, was no longer controlled for it either.
+
+**Re-measured directly**, holding the threshold pair FIXED and re-tuning the onset PROPERLY at each
+averaging duration (the shortest number of controller confirmations that reaches zero switches
+undone across the whole 31-hour record, at that averaging window): the switching rate is **nearly
+flat, 3.3 to 3.9 an hour, from 3 s all the way to 30 s** on L 1-3+ with the calibrated grid's own
+stored pair (210.58 / 161.90), and 3.1 to 4.4 an hour with the device's actual programmed pair
+(167 / 166); L 0-2+ runs 3.0 to 3.9 an hour across the same range. **The switching-rate argument for
+short averaging does not hold up once the onset is compared fairly.**
+
+**What does differ, and by a lot, is how long a confirmed decision takes.** At 3 s averaging the
+shortest onset reaching zero undone switches is 21-24 s; at 30 s averaging the same stability needs
+90-180 s -- four to six times longer -- because each controller confirmation costs a whole
+averaging window regardless of how short it is. That is the real, defensible reason to keep the
+averaging short: not fewer switches, but a confirmed answer several times faster at an equal
+switching rate.
+
+**This also reconciles A and E, who never claimed the switching-rate framing.** A's 9 s and E's
+15 s are answers to different questions -- how well a short window tracks a fitted slow signal (A),
+and how much of a reading's variance is genuinely slow rather than noise dressed as slow (E) -- and
+neither number was ever compared against the controller's own switching behaviour at a properly
+re-tuned onset. Both remain correct answers to their own questions; neither is a counter-example to
+the response-time argument above, because that argument does not depend on switching rate at all.
+
+**The table's value is unchanged (3 s); the stated reason is corrected** in
+`ClosedLoopDeployment/timing_recommendation.py`. Measured with a throwaway script against the same
+series the contest used (`_agent_bridge/_probe_tl/_ranges/averaging_sweep.py`, gitignored, not
+committed); the numbers above are quoted from its output.
+
 ## 4. Implementation plan for the Closed-Loop module
 
 Each task is independently mergeable; the order is the dependency order. Acceptance criteria are what the test or the live proof must show.
