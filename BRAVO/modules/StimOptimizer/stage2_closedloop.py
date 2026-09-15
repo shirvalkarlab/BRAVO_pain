@@ -209,10 +209,11 @@ def _amp_windows(setting, *, half_widths, ceiling_mA) -> list:
     """Candidate ``(min_mA, max_mA)`` adaptive limit pairs for one hemisphere.
 
     Always bounded by the DELIVERED envelope on that hemisphere and by the declared ceiling. The
-    envelope bound is not a formality: this record establishes that amplitude does not predict
-    side-effect severity, and only 5 of the 417 non-procedural rows with stimulation on sit above
-    4 mA, so amplitudes above what was delivered are UNKNOWN rather than safe. A pair that would
-    fall outside the envelope is dropped here rather than clipped into it.
+    envelope bound is not a formality: amplitudes above what was delivered are UNKNOWN rather than
+    safe, because nothing was observed there -- whatever the side-effect-versus-current statistic
+    of the day says (it is recomputed per request, `clinic_pain.amplitude_severity_evidence`, and
+    quoted by the gate; no number is typed here). A pair that would fall outside the envelope is
+    dropped here rather than clipped into it.
     """
     lo_env = float(setting.amp_delivered_min_mA)
     hi_env = min(float(setting.amp_delivered_max_mA), float(ceiling_mA))

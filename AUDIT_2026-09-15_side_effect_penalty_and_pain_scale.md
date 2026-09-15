@@ -183,12 +183,14 @@ So the first time a clinic sheet scores a setting 3 or 4, that setting is correc
 
 That analysis says of its own labels (lines 84-97): of the 417 fitted steps, 375 were "none" -- and **402 of the file's 696 "none" labels were rows never shown to a coder**, i.e. absence of a note, not an observation of no side effect. Refitting on the 153 explicitly coded rows raised the moderate-or-worse rate from 4.56% to 12.42% and shrank the safe set from 14 cells to 0. The document's own words: "the absolute risk level for this participant is uncertain by roughly a factor of three."
 
+**Resolved the same day (decision 166), the PI's rule "recompute always":** the statistic is now computed from the clinic sheets on every request (`clinic_pain.amplitude_severity_evidence`) and quoted by the gate, or the gate says none was available. Live on RCS08 today: 15 scored steps, rho = -0.04, p = 0.895, 0 above 4 mA. The typed number is gone from every runtime string and docstring. The original finding, kept for the record:
+
 What that sentence gates in today's code is **conservative**: it justifies bounding the adaptive amplitude limits to the range actually delivered (`_amp_windows`), which refuses to go above what was tested. So the weak label does not make anything unsafe. But the sentence is quoted as an established fact in three places, with no path back to the data, and it should either be recomputed on the new numeric side-effect column once enough rows exist, or reworded to say "under the 2026-09-02 coding, which counted uncoded rows as none".
 
 ### 5c. Two small labelling points, no behaviour change
 
 - On the REDCap stream, 17 of 92 epochs read `feasible = False`. None of them is a side-effect reject; they simply have no left-leg VAS rating (the pain term is NaN, so J is not finite). The word "infeasible" therefore covers both "intolerable" and "unrated" on this stream. Correct behaviour, misleading label.
-- The clinic ingest folds sheet score 2 ("mild persistent") into "mild" (penalty 1.0). If the PI intends "mild persistent" to cost more than "mild", the map at `clinic_pain.py` line 97 is the one place to change.
+- ~~The clinic ingest folds sheet score 2 ("mild persistent") into "mild" (penalty 1.0).~~ **Resolved the same day (decision 165):** the PI ruled "yes score 2 cost more" and set it at 2.0 NRS points; score 2 is now its own rung, `mild_persistent`, in `objective.SE_LADDER`. No sheet row scores 2 yet, so no penalty on record moved.
 
 ---
 
@@ -206,4 +208,4 @@ What that sentence gates in today's code is **conservative**: it justifies bound
 | Stage 1 wiring | `BRAVO/modules/StimOptimizer/stage1_openloop.py` lines 870-885 |
 | Planning files for this audit | `.planning/2026-09-15-drive-data-side-effect-penalty-and-pain-/` |
 
-The audit itself changed no code. The fix in §5a was applied afterwards as decision 164 (`safety_ceiling.py`, `tests/test_safety_ceiling.py`); the package digest change makes every stored Stim Optimizer answer rebuild once.
+The audit itself changed no code. All three findings were then applied the same day at the PI's direction: 5a as decision 164, 5c as decision 165, 5b as decision 166; the package digest change makes every stored Stim Optimizer answer rebuild once.

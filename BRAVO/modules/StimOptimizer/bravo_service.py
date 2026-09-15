@@ -859,6 +859,24 @@ def _joint_batch_frame(s1, frozen):
 #: (amplitude-Left, amplitude-Right) surfaces Stage 1 already fits on the REDCap stream, on the
 #: clinic-and-home testing workbooks alone -- never pooled with the REDCap stream, never changing
 #: the REDCap-based recommendation. See `StimOptimizer.clinic_pain`.
+def _side_effect_evidence_block(participant):
+    """`clinic_pain.amplitude_severity_evidence` on this participant's stored clinic steps, for
+    the closed-loop gate's over-envelope refusal (2026-09-15, the PI: "recompute always"). Never
+    raises: a failure comes back as a not-assessable answer naming the failure, so the gate still
+    says plainly that no statistic was available rather than quoting a stale one."""
+    try:
+        steps, _stamp, reason = CLPAIN.load_clinic_steps(participant, consumer="stim_optimizer",
+                                                          root=_SHARED_CACHE_DIR_OVERRIDE)
+        if steps is None or len(steps) == 0:
+            return dict(assessable=False, rho=None, p=None, n_scored_stim_on=0, n_above_4mA=0,
+                        reason=reason or "no clinic steps stored", sentence=None)
+        return CLPAIN.amplitude_severity_evidence(steps)
+    except Exception as exc:                                      # noqa: BLE001 -- adjunct block
+        _log.exception("StimOptimizer: the side-effect-versus-current statistic could not be computed")
+        return dict(assessable=False, rho=None, p=None, n_scored_stim_on=0, n_above_4mA=0,
+                    reason=f"could not be computed: {type(exc).__name__}: {exc}", sentence=None)
+
+
 def _clinic_stream_stage1_block(participant, *, hemispheres, safety_ceiling_by_hemisphere,
                                 redcap_pooled_var, in_force=None) -> dict:
     """`{"rate_strata_clinic": [...], "clinic_stream": {...}}`. Never raises: a failure is
@@ -1130,6 +1148,12 @@ def two_stage_block(participant, es, *, request_data, stream, washin_min, hemisp
     explore_by = (str(rd.get(TWO_STAGE_EXPLORE_OUTSIDE_BY_KEY)).strip()
                   if explore_reason and rd.get(TWO_STAGE_EXPLORE_OUTSIDE_BY_KEY) else None)
     t0 = _time.perf_counter()
+    # Recomputed from the clinic sheets on every request and handed to the gate, which quotes it
+    # (or says none was available) in an over-envelope refusal -- never a typed number.
+    side_effect_evidence = _side_effect_evidence_block(participant)
+    gate_kwargs = {"side_effect_evidence": side_effect_evidence}
+    if safety_ceiling_by_hemisphere:
+        gate_kwargs["ceiling_mA"] = safety_ceiling_by_hemisphere
     try:
         rep = pipeline.run_two_stage_live(
             participant, design=es, stream=stream, request_data=request_data,
@@ -1146,8 +1170,7 @@ def two_stage_block(participant, es, *, request_data, stream, washin_min, hemisp
             # in Stage 1, as in the flat fit, and the ceiling the gate checks the limits against.
             stage1_kwargs=({"safety_ceiling_by_hemisphere": safety_ceiling_by_hemisphere}
                            if safety_ceiling_by_hemisphere else None),
-            gate_kwargs=({"ceiling_mA": safety_ceiling_by_hemisphere}
-                         if safety_ceiling_by_hemisphere else None))
+            gate_kwargs=gate_kwargs)
     except Exception as exc:                          # noqa: BLE001 -- adjunct block
         _log.exception("StimOptimizer: the two-stage path failed")
         return {"requested": True, "available": False, "backend": TWO_STAGE_BACKEND,
@@ -1165,6 +1188,9 @@ def two_stage_block(participant, es, *, request_data, stream, washin_min, hemisp
         participant, hemispheres=hemispheres,
         safety_ceiling_by_hemisphere=safety_ceiling_by_hemisphere,
         redcap_pooled_var=_redcap_pooled_var, in_force=in_force)
+    # The same answer the gate was given, beside the clinic stream it was computed from.
+    clinic_block.setdefault("clinic_stream", {})["side_effect_vs_current"] = _jsonable(
+        side_effect_evidence)
     return _two_stage_payload(rep, inputs=inputs, seconds=_time.perf_counter() - t0,
                               in_force=in_force, clinic_block=clinic_block)
 

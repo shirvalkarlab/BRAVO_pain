@@ -65,11 +65,15 @@ THE FOUR CONDITIONS
     The adaptive amplitude limits are the range the device will move within, and they become the
     patient limits if the group is later switched from Adaptive to Sensing Only. They must sit under
     the declared 4.9 mA ceiling and inside the amplitude envelope actually delivered on that
-    hemisphere. The envelope requirement is doing real work rather than being a formality: this
-    record establishes that amplitude does NOT predict side-effect severity (Spearman rho = -0.013,
-    p = 0.79, n = 417 non-procedural steps with stimulation on), and only 5 of those rows sit above
-    4 mA. So above 4 mA is UNKNOWN rather than safe, and an adaptive limit above the delivered
-    maximum would hand the device authority to go somewhere no one has ever been.
+    hemisphere. The envelope requirement is doing real work rather than being a formality: above
+    the delivered maximum is UNKNOWN rather than safe, and an adaptive limit there would hand the
+    device authority to go somewhere no one has ever been. Whether reported side-effect severity
+    moves with current on this record is RECOMPUTED on every request from the clinic sheets'
+    numeric side-effect column (``clinic_pain.amplitude_severity_evidence``, passed in as
+    ``side_effect_evidence``) and quoted in the refusal, or the refusal says no such statistic is
+    available. (Until 2026-09-15 a fixed "rho = -0.013 over 417 steps" was typed here; it came
+    from a 2026-09-02 analysis whose labels were 96% uncoded and whose model was deleted in
+    decision 145. The PI's rule: "recompute always".)
 
 Typical use::
 
@@ -832,7 +836,8 @@ def _ceiling_by_side(ceiling_mA, hemispheres):
     return float(ceiling_mA), None
 
 
-def check_amplitude_limits(frozen, *, amp_limits=None, ceiling_mA=AMP_CEILING_MA) -> GateCondition:
+def check_amplitude_limits(frozen, *, amp_limits=None, ceiling_mA=AMP_CEILING_MA,
+                           side_effect_evidence=None) -> GateCondition:
     """Adaptive amplitude limits must sit under the ceiling and inside the delivered envelope.
 
     ``amp_limits`` maps hemisphere to ``(min_mA, max_mA)``. When it is omitted the DELIVERED
@@ -842,8 +847,18 @@ def check_amplitude_limits(frozen, *, amp_limits=None, ceiling_mA=AMP_CEILING_MA
     ``ceiling_mA`` is one number or a per-side mapping (see :func:`_ceiling_by_side`); with the
     mapping each hemisphere's upper limit is checked against ITS OWN ceiling and the evidence
     carries ``ceiling_by_side`` with the provenance of each.
+
+    ``side_effect_evidence`` is ``clinic_pain.amplitude_severity_evidence``'s answer for this
+    record (or ``None``): its ``sentence`` is quoted in an over-envelope refusal and the whole
+    dict is carried in the evidence under ``side_effect_vs_current``, so the page can show the
+    number the refusal rests on. No number is ever typed here.
     """
     problems, checked = [], {}
+    if side_effect_evidence is not None and side_effect_evidence.get("sentence"):
+        severity_sentence = ("On this record, " + str(side_effect_evidence["sentence"]) + ".")
+    else:
+        severity_sentence = ("There is no side-effect-versus-current statistic for this record "
+                             "(no scored clinic steps were supplied).")
     if not frozen.settings:
         return GateCondition("amplitude_limits_inside_envelope_and_under_ceiling", None,
                              "no frozen setting to check: Stage 1 produced no hemisphere result")
@@ -872,11 +887,10 @@ def check_amplitude_limits(frozen, *, amp_limits=None, ceiling_mA=AMP_CEILING_MA
         if np.isfinite(hi_env) and hi > hi_env + 1e-9:
             problems.append(
                 f"{s.hemisphere}: upper limit {hi:g} mA is above the highest amplitude ever "
-                f"delivered on this hemisphere ({hi_env:g} mA). This record establishes that "
-                "amplitude does NOT predict side-effect severity (Spearman rho = -0.013, p = 0.79 "
-                "over 417 non-procedural steps with stimulation on), and only 5 of those rows sit "
-                "above 4 mA, so amplitudes above the delivered maximum are UNKNOWN rather than "
-                "safe. Handing the device authority to go there is not supported by the data")
+                f"delivered on this hemisphere ({hi_env:g} mA). {severity_sentence} Amplitudes "
+                "above the delivered maximum are UNKNOWN rather than safe, whatever that "
+                "statistic says, because nothing was observed there. Handing the device authority "
+                "to go there is not supported by the data")
         if np.isfinite(lo_env) and lo < lo_env - 1e-9:
             problems.append(
                 f"{s.hemisphere}: lower limit {lo:g} mA is below the lowest amplitude delivered on "
@@ -888,7 +902,9 @@ def check_amplitude_limits(frozen, *, amp_limits=None, ceiling_mA=AMP_CEILING_MA
             "satisfied by construction rather than by a check on a proposal.")
     # `defaulted` is in the evidence as well as in the sentence (2026-09-12), so a page can mark
     # a limit that was never proposed without reading the sentence for the word.
-    evidence = dict(checked=checked, ceiling_mA=float(ceiling_scalar), defaulted=sorted(defaulted))
+    evidence = dict(checked=checked, ceiling_mA=float(ceiling_scalar), defaulted=sorted(defaulted),
+                    side_effect_vs_current=(dict(side_effect_evidence)
+                                            if side_effect_evidence is not None else None))
     if by_side is not None:
         evidence["ceiling_by_side"] = by_side
     if problems:
@@ -911,7 +927,7 @@ def evaluate_gate(frozen, *, lfp=None, amp_limits=None, selected_bands=None,
                   band_centers=DEFAULT_BAND_CENTERS_HZ, band_width_hz=DEFAULT_BAND_WIDTH_HZ,
                   min_rate_hz=PA.MIN_ADAPTIVE_RATE_HZ, ceiling_mA=AMP_CEILING_MA,
                   min_sep_d=LFP.MIN_CAPTURE_SEPARATION_D, alpha=SELECTION_ALPHA,
-                  fdr_q=SELECTION_FDR_Q) -> GateResult:
+                  fdr_q=SELECTION_FDR_Q, side_effect_evidence=None) -> GateResult:
     """Evaluate every gate condition on a frozen configuration and return all four verdicts.
 
     Evaluation deliberately does NOT short-circuit. A clinician looking at a refusal needs the whole
@@ -959,6 +975,7 @@ def evaluate_gate(frozen, *, lfp=None, amp_limits=None, selected_bands=None,
         check_adaptive_band(frozen, lfp=lfp, band_centers=band_centers,
                             band_width_hz=band_width_hz, min_sep_d=min_sep_d,
                             response_summary=response_summary),
-        check_amplitude_limits(frozen, amp_limits=amp_limits, ceiling_mA=ceiling_mA),
+        check_amplitude_limits(frozen, amp_limits=amp_limits, ceiling_mA=ceiling_mA,
+                               side_effect_evidence=side_effect_evidence),
     ]
     return GateResult(conditions=conditions, frozen=frozen)

@@ -172,6 +172,37 @@ def test_expansion_cap_bounds_the_step(grid):
         sgp.expansion_capped_mask(worst_severity="terrible", prev_max_amp=1.6)
 
 
+def test_a_mild_persistent_side_effect_costs_two_nrs_points(epochs):
+    """The PI's ruling of 2026-09-15 ("yes score 2 cost more" / "2"): the clinic sheet's score 2,
+    printed on the sheet as "mild persistent", is its own rung between mild (1.0) and moderate
+    (+inf), costing exactly 2.0 NRS points. It is finite, so a large enough pain benefit can still
+    outbid it -- unlike moderate and severe, which never can."""
+    assert OBJ.side_effect_penalty("mild_persistent") == 2.0
+    assert OBJ.side_effect_penalty("Mild Persistent") == 2.0      # label lookup is case-insensitive
+    assert "mild_persistent" not in OBJ.SE_HARD_REJECT
+    assert (OBJ.SE_SEVERITY_RANK["mild"] < OBJ.SE_SEVERITY_RANK["mild_persistent"]
+            < OBJ.SE_SEVERITY_RANK["moderate"] < OBJ.SE_SEVERITY_RANK["severe"])
+    e = epochs.copy()
+    e["se_severity"] = ["none", "mild_persistent", "none", "mild", "none", "none"]
+    d = OBJ.build_objective(e, incumbent_epoch=1)
+    assert d.loc[d.epoch == 2, "J_SE"].iloc[0] == 2.0
+    assert d.loc[d.epoch == 4, "J_SE"].iloc[0] == 1.0
+    assert bool(d["feasible"].all())                              # finite: still eligible
+
+
+def test_expansion_cap_has_a_rung_for_mild_persistent_between_mild_and_moderate(grid):
+    deliv = np.array([[55.0, 1.6], [110.0, 4.0], [10.0, 1.6]])
+    lims = np.array([[55.0, 2.0], [110.0, 4.0], [10.0, 1.9]])
+    X, s, v = SafetyGP.seed_from_history(deliv, lims)
+    sgp = SafetyGP(grid).fit(X, s, v)
+    mild = sgp.max_safe_amplitude(mask=sgp.expansion_capped_mask("mild", prev_max_amp=1.6))
+    persistent = sgp.max_safe_amplitude(
+        mask=sgp.expansion_capped_mask("mild_persistent", prev_max_amp=1.6))
+    moderate = sgp.max_safe_amplitude(mask=sgp.expansion_capped_mask("moderate", prev_max_amp=1.6))
+    assert persistent <= 1.6 + 0.1 + 1e-9
+    assert moderate <= persistent <= mild
+
+
 def test_monotone_prior_mean_never_decreases(grid):
     """Severity must not be modelled as falling with amplitude, whatever the fit wants."""
     deliv = np.array([[55.0, 1.0], [55.0, 1.5], [55.0, 2.0]])

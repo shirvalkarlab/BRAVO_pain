@@ -94,7 +94,73 @@ PAIN_FIELDS = ("overall", "head", "back", "left_leg", "left_foot", "right_leg", 
 #: 1=mild, 2=mild persistent, 3=moderate, 4=avoid"). Only that one workbook carries a genuine
 #: numeric severity column (the two-row "SIDE EFFECT"/"SCORE" header); every other workbook's
 #: "Side Effect?" column is free text and is not parsed as a number here.
-SIDE_EFFECT_SEVERITY_LABEL = {0: "none", 1: "mild", 2: "mild", 3: "moderate", 4: "severe"}
+#: 2026-09-15: a 2 is its own rung, "mild_persistent" (2.0 NRS points in `objective.SE_LADDER`),
+#: no longer folded into "mild" -- the PI's ruling, "yes score 2 cost more".
+SIDE_EFFECT_SEVERITY_LABEL = {0: "none", 1: "mild", 2: "mild_persistent", 3: "moderate", 4: "severe"}
+
+#: The fewest scored steps with stimulation on before `amplitude_severity_evidence` will report a
+#: correlation at all. Below it the honest answer is "not assessable", never a number.
+SEVERITY_EVIDENCE_MIN_ROWS = 10
+
+
+def amplitude_severity_evidence(steps) -> dict:
+    """Does reported side-effect severity move with stimulation current, on THIS record, today?
+
+    WHY THIS EXISTS (2026-09-15, the PI: "recompute always"). Three places in this package used to
+    state, as a fixed fact, that "amplitude does NOT predict side-effect severity (Spearman rho =
+    -0.013, p = 0.79 over 417 non-procedural steps)". That number came from a 2026-09-02 analysis
+    whose own report says 402 of its 417 "none" labels were rows nobody had coded, and whose model
+    was deleted in decision 145 -- so it had no reproducible path and rested on labels the analysis
+    itself distrusted. It is now computed here from the clinic sheets' numeric side-effect column
+    on every request, and the closed-loop gate quotes what it finds or says it could not.
+
+    Rows counted: a numeric ``side_effect_score`` AND stimulation on, where "on" means the higher
+    of the two sides' currents is above 0 mA -- that higher current is the one correlated against,
+    because the sheet scores the patient's experience of the step, not one side of it. Spearman's
+    rank correlation, two-sided. "Not assessable" (with the reason) when fewer than
+    ``SEVERITY_EVIDENCE_MIN_ROWS`` rows qualify or every score is the same; it never fills in a
+    number for a record that cannot support one.
+    """
+    from scipy.stats import spearmanr
+
+    d = pd.DataFrame(steps) if steps is not None else pd.DataFrame()
+    out = dict(assessable=False, rho=None, p=None, n_scored_stim_on=0, n_above_4mA=0,
+               current_used="the higher of the two sides' currents on each step",
+               min_rows=int(SEVERITY_EVIDENCE_MIN_ROWS), reason=None, sentence=None)
+    if len(d) == 0 or "side_effect_score" not in d.columns:
+        out["reason"] = "no clinic steps with a numeric side-effect score are stored"
+        out["sentence"] = f"not assessable: {out['reason']}"
+        return out
+    score = pd.to_numeric(d["side_effect_score"], errors="coerce")
+    aL = pd.to_numeric(d.get("amp_mA_Left"), errors="coerce").fillna(0.0)
+    aR = pd.to_numeric(d.get("amp_mA_Right"), errors="coerce").fillna(0.0)
+    amp = np.maximum(aL.to_numpy(float), aR.to_numpy(float))
+    keep = score.notna().to_numpy() & (amp > 0)
+    n = int(keep.sum())
+    out["n_scored_stim_on"] = n
+    out["n_above_4mA"] = int((amp[keep] > 4.0).sum())
+    if n < SEVERITY_EVIDENCE_MIN_ROWS:
+        out["reason"] = (f"only {n} scored clinic steps with stimulation on; at least "
+                         f"{SEVERITY_EVIDENCE_MIN_ROWS} are needed")
+        out["sentence"] = f"not assessable: {out['reason']}"
+        return out
+    sc = score.to_numpy(float)[keep]
+    if np.unique(sc).size < 2:
+        out["reason"] = (f"no variation: all {n} scored steps with stimulation on carry the same "
+                         f"score ({sc[0]:g})")
+        out["sentence"] = f"not assessable: {out['reason']}"
+        return out
+    rho, p = spearmanr(amp[keep], sc)
+    rho, p = float(rho), float(p)
+    out.update(assessable=True, rho=rho, p=p)
+    if p < 0.05:
+        verb = "rises" if rho > 0 else "falls"
+    else:
+        verb = "does not move measurably"
+    out["sentence"] = (f"on {n} scored clinic steps with stimulation on, reported side-effect "
+                       f"severity {verb} with current (Spearman rho = {rho:+.2f}, p = {p:.3f}); "
+                       f"{out['n_above_4mA']} of them sit above 4 mA")
+    return out
 
 
 # =====================================================================================

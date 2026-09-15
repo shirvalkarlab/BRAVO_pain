@@ -509,8 +509,8 @@ class SafetyGP:
         aggressively, so Sarikhani et al. added a hard cap on how far the boundary may move in
         one step, keyed to the worst severity reported so far. Two independent brakes.
         """
-        caps = caps or {"none": 0.4, "mild": 0.2, "moderate": 0.0, "severe": 0.0}
-        key = str(worst_severity).strip().lower()
+        caps = caps or {"none": 0.4, "mild": 0.2, "mild_persistent": 0.1, "moderate": 0.0, "severe": 0.0}
+        key = str(worst_severity).strip().lower().replace(" ", "_").replace("-", "_")
         if key not in caps:
             raise ValueError(f"unknown severity {worst_severity!r}; expected {sorted(caps)}")
         mask = self.safe_mask(beta=beta)

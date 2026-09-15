@@ -347,6 +347,79 @@ def _steps_from_epoch_frame(ep):
     return pd.DataFrame(rows)
 
 
+def _scored_steps(scores, amps_left, amps_right=None, rate=55.0):
+    """One clinic step per (score, current) pair, a left-leg score on every row so the epoch
+    frame keeps them, currents in mA; `amps_right` defaults to 0 (a left-only ladder)."""
+    amps_right = [0.0] * len(scores) if amps_right is None else amps_right
+    rows = []
+    for i, (sc, aL, aR) in enumerate(zip(scores, amps_left, amps_right)):
+        rows.append(dict(visit_date="v1", setting="clinic", file="f", sha256="x", t_local=None,
+                         t_utc=pd.Timestamp("2026-01-01", tz="UTC") + pd.Timedelta(minutes=i),
+                         amp_mA_Left=aL, amp_mA_Right=aR, freq_hz=rate, pw_us_Left=60.0,
+                         pw_us_Right=60.0, contacts_raw="c", duration_s=60.0,
+                         side_effect_score=sc, overall=np.nan, head=np.nan, back=np.nan,
+                         left_leg=5.0, left_foot=np.nan, right_leg=np.nan, right_foot=np.nan,
+                         notes=None, row_index=i))
+    return pd.DataFrame(rows)
+
+
+def test_sheet_score_2_is_mild_persistent_and_costs_more_than_mild():
+    """The sheet's own printed ladder is 0 none, 1 mild, 2 mild persistent, 3 moderate, 4 avoid.
+    Until 2026-09-15 a 2 was folded into "mild"; the PI ruled it costs more (2.0 NRS points)."""
+    from StimOptimizer.routines import objective as OBJ
+    assert CP.SIDE_EFFECT_SEVERITY_LABEL[2] == "mild_persistent"
+    assert CP.SIDE_EFFECT_SEVERITY_LABEL[1] == "mild"
+    ep = CP.epoch_frame_from_steps(_scored_steps([1.0, 2.0, 0.0], [1.0, 2.0, 3.0]))
+    by_amp = {float(r["amp_mA_Left"]): r["se_severity"] for _, r in ep.iterrows()}
+    assert by_amp == {1.0: "mild", 2.0: "mild_persistent", 3.0: "none"}
+    ep["epoch"] = np.arange(len(ep), dtype=float)
+    d = OBJ.build_objective(ep, incumbent_epoch=0.0, pooled_var_override=1.0)
+    assert dict(zip(d["amp_mA_Left"].astype(float), d["J_SE"])) == {1.0: 1.0, 2.0: 2.0, 3.0: 0.0}
+
+
+# ---------------------------------------------------------------------------------------------
+# amplitude versus reported severity, recomputed from the record on every request (2026-09-15,
+# the PI: "recompute always") -- never a number typed into a docstring
+# ---------------------------------------------------------------------------------------------
+def test_amplitude_severity_evidence_is_not_assessable_below_the_row_floor():
+    ev = CP.amplitude_severity_evidence(_scored_steps([0.0, 1.0, 0.0], [1.0, 2.0, 3.0]))
+    assert ev["assessable"] is False
+    assert ev["n_scored_stim_on"] == 3
+    assert str(CP.SEVERITY_EVIDENCE_MIN_ROWS) in ev["reason"]
+    assert "not assessable" in ev["sentence"]
+    assert "-0.013" not in ev["sentence"]
+
+
+def test_amplitude_severity_evidence_is_not_assessable_when_every_score_is_the_same():
+    n = CP.SEVERITY_EVIDENCE_MIN_ROWS + 2
+    ev = CP.amplitude_severity_evidence(_scored_steps([0.0] * n, list(np.linspace(1, 4, n))))
+    assert ev["assessable"] is False
+    assert "no variation" in ev["reason"]
+
+
+def test_amplitude_severity_evidence_reports_a_rising_ladder_with_its_numbers():
+    n = CP.SEVERITY_EVIDENCE_MIN_ROWS + 4
+    amps = list(np.linspace(0.5, 4.5, n))
+    scores = [0.0 if a < 2 else (1.0 if a < 3 else (2.0 if a < 4 else 3.0)) for a in amps]
+    ev = CP.amplitude_severity_evidence(_scored_steps(scores, amps))
+    assert ev["assessable"] is True
+    assert ev["rho"] > 0.9 and ev["p"] < 0.01
+    assert ev["n_scored_stim_on"] == n
+    assert ev["n_above_4mA"] == sum(a > 4.0 for a in amps)
+    assert ev["current_used"] == "the higher of the two sides' currents on each step"
+    assert f"{ev['rho']:+.2f}" in ev["sentence"] and str(n) in ev["sentence"]
+    assert "rises" in ev["sentence"]
+
+
+def test_amplitude_severity_evidence_ignores_unscored_rows_and_stimulation_off():
+    n = CP.SEVERITY_EVIDENCE_MIN_ROWS
+    scores = [1.0] * n + [np.nan, 3.0]
+    amps = list(np.linspace(1, 4, n)) + [4.5, 0.0]           # unscored; scored but stim off
+    ev = CP.amplitude_severity_evidence(_scored_steps(scores, amps))
+    assert ev["n_scored_stim_on"] == n
+    assert ev["n_above_4mA"] == 0
+
+
 def test_epoch_frame_pools_repeated_identical_settings():
     """`epoch_frame_from_steps` collapses a setting tested more than once into ONE epoch with
     n = the repeat count, so `pooled_within_epoch_var` has something to pool."""
