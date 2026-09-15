@@ -5,21 +5,19 @@ problem is that the module never handed the rule the value the device already re
 that still blocks does so for a reason the PI has read and agreed with.
 
 ## Next Step
-Nothing queued on the closed-loop ledger itself. Two PI-directed changes have now landed on the
-neighbouring Stim Optimizer page in this same session: the two-stimulator search models both sides
-together (decision 157), and the current it recommends is now checked honestly, one stimulation
-speed at a time, with a home titration schedule to fill in the record where that check fails
-(decision 158) -- backend only; the schedule and the honest-current change are in the response but
-not yet drawn on the page, which is separate frontend work, not yet done. What remains open on THIS
-plan's own topic is unchanged from before: the threshold re-centring / separation question (decision
-139's capture question) is still the PI's call, and T7's own acceptance test still needs a real
-titration session recorded on RCS08 (open item 30), which is a clinical scheduling matter, not
-something an agent can build.
+Nothing queued on the closed-loop ledger itself, and nothing queued on the Stim Optimizer page
+either: decision 159 drew decision 158's honest-current picture and its home titration schedule
+onto the page (two new cards, `CurrentMapCard.js` and `CurrentMapScheduleCard.js`), so every
+backend field this plan's later phases added now has somewhere on screen. What remains open is
+unchanged from before and is not something an agent can build: the threshold re-centring /
+separation question (decision 139's capture question) is still the PI's call, and T7's own
+acceptance test still needs a real titration session recorded on RCS08 (open item 30), a clinical
+scheduling matter.
 
 ## Current Phase
 Phase 20
 
-phases: 19/20 complete
+phases: 20/20 complete
 
 ### Phase 1: Measure what the ledger says today
 - [x] Run the live report on RCS08 at the committed band (L 0-2+, 24.5 Hz) and list every non-pass row
@@ -177,8 +175,9 @@ phases: 19/20 complete
 - [x] Wired into `bravo_service.py` as `current_map_schedule`, computed on every request, not stored on its own; `stage1.rate_strata` added to the existing `two_stage` response block so every attempted speed's fit and verdict is visible
 - [x] 25 new tests (9 in `test_stage1.py`, 16 in the new `test_current_map_schedule.py`); 3 pre-existing tests corrected in place, not deleted, since they pinned exactly the borrowed-confidence behaviour this change replaces
 - [x] Both suites green (host 1211 / 2 / 0, container 631 / 0 / live-skipped 6); live field-count/difference-count proof on RCS08, genuinely before (decision 157's code) and after: 8,596 fields before, 9,001 after, 0 only-before, 405 only-after (the new blocks), 8 differing of 8,596 shared (6 bookkeeping, 2 real: both sides' recommended current, 1.5/1.0 mA -> none); decision 158; commit; push
-- [ ] **NOT DONE: the frontend.** Nothing on the Stim Optimizer page has been changed to draw the new schedule sheet or the per-speed detail; the response carries everything, no component reads it yet
-- **Status:** in_progress
+- [x] The frontend: `bravo_service.py` gained a `surface` grid on every fitted `rate_strata` row and a `pooled_surfaces` reference block, read straight off the fitted objects Stage 1 already holds; two new cards, `CurrentMapCard.js` (one heatmap per fitted speed, the setting in force marked, the three checks printed beside it) and `CurrentMapScheduleCard.js` (the day-by-day titration table), placed above the two-stage plan card; `DecisionStrip.js`'s "search prefers" row now states plainly when no current can be recommended instead of a bare dash
+- [x] 4 new tests (`test_surface_serialization.py`); both suites green (host 1215 / 2 / 0, container 631 / 0 / live-skipped 6); live field-count/difference-count proof on RCS08 (9,145 fields before, 17,357 after, 1 only-before, 8,213 only-after, 4 differing of 9,144 shared, all bookkeeping); frontend rebuilt, the two cards' own wording found in the served chunk; decision 159; commit; push
+- **Status:** complete
 
 ## Decisions Made
 | # | Decision | Rationale |

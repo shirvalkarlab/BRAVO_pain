@@ -605,6 +605,13 @@ def _fit_rate_stratum(pwl, pwr, rate, sub, *, amp_grid, sgp_left, sgp_right,
     np.add.at(n_reports, grid.index_of(Xobs), sub["n"].to_numpy(float))
     i_star = int(np.argmin(np.where(safe, mu, np.inf)))
     coverage = current_coverage(sub)
+    # The individual observed epochs behind this rate's own surface (2026-09-14, for the Stim
+    # Optimizer page's own heatmap): one point per row of `sub`, carrying the two currents, how
+    # many reports it rests on, the objective value the fit actually regressed, and which epoch it
+    # came from. Not a grid cell -- the raw evidence a reader can overlay ON the grid.
+    points = [dict(amp_left_mA=float(r["amp_mA_Left"]), amp_right_mA=float(r["amp_mA_Right"]),
+                   n_reports=float(r["n"]), J=float(r["J"]), epoch=float(r["epoch"]))
+             for _, r in sub.iterrows()]
     return RateStratum(
         pw_us_left=float(pwl), pw_us_right=float(pwr), rate_hz=float(rate),
         n_epochs=int(len(sub)), fitted=True,
@@ -615,7 +622,7 @@ def _fit_rate_stratum(pwl, pwr, rate, sub, *, amp_grid, sgp_left, sgp_right,
         x_star=(float(gx[i_star, 1]), float(gx[i_star, 2])),
         mu_star=float(mu[i_star]), sd_star=float(sd[i_star]),
         n_reports_total=float(sub["n"].sum()), coverage=coverage,
-        meta=dict(kernel=gp.hyperparameters["kernel"], n_safe=int(safe.sum())))
+        meta=dict(kernel=gp.hyperparameters["kernel"], n_safe=int(safe.sum()), points=points))
 
 
 def _pooled_slice_at_rate(sl: JointStratum, rate_hz: float) -> dict:

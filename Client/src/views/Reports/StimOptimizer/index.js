@@ -47,6 +47,10 @@ import { recomputeSlots, STIM_OPTIMIZER_SLOTS } from "views/Reports/moduleCacheK
 // has arrived and cached in its own slot; see useTwoStagePlan.js for why.
 import useTwoStagePlan from "./useTwoStagePlan";
 import TwoStagePlanCard from "./TwoStagePlanCard";
+// The (left current, right current) surface behind decision 158's honest-current rule, and the
+// home titration schedule that fills the record in where that rule fails (2026-09-14).
+import CurrentMapCard from "./CurrentMapCard";
+import CurrentMapScheduleCard from "./CurrentMapScheduleCard";
 // The titration session to run next (2026-09-12 evening: open item 30 and the 20 s post-ramp
 // margin of decision 144, joined as one recommendation), read from `data.titration_plan`.
 import TitrationSessionCard from "./TitrationSessionCard";
@@ -226,6 +230,13 @@ export default function StimOptimizer() {
 
           {/* ---------- the titration session to run next (PI, 2026-09-12 evening) ---------- */}
           {data.titration_plan && <TitrationSessionCard plan={data.titration_plan} />}
+
+          {/* ---------- where the two currents have been tried, and the home schedule to fill
+              the record in (decision 158, 2026-09-14) -- placed directly above the two-stage
+              plan card, since it is the evidence behind that card's own current recommendation
+              (or the lack of one). ---------- */}
+          {twoStage.data && <CurrentMapCard plan={twoStage.data} />}
+          {data.current_map_schedule && <CurrentMapScheduleCard schedule={data.current_map_schedule} />}
 
           {/* ---------- the two-stage plan: the joint open-loop search, the gate, and closed
               loop -- the ONLY recommendation this page makes (PI, 2026-09-14) ---------- */}

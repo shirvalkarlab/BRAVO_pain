@@ -745,3 +745,54 @@ the threshold re-centring as what remains. Commit and push done by this session 
 - NOT DONE: the frontend. The response carries everything (`current_map_schedule`, the per-speed
   detail, the recommended current reading `None`) but no page has been changed to draw any of it --
   left for a second builder, as the task specified.
+
+## Session: second builder, drawing decision 158's frontend (2026-09-14)
+- Read `stage1_openloop.py`, `bravo_service.py`, `current_map_schedule.py`, and the real captured
+  response `_agent_bridge/_probe_tl/cms_after.pkl` before writing any frontend code, to know the
+  exact shapes rather than guess them.
+- Backend addition (the only backend change): `bravo_service.py` gained `_round_grid`,
+  `_rate_stratum_surface`, `_rate_stratum_lookup`, `_attach_rate_stratum_surfaces`,
+  `_joint_pooled_surfaces`. Every FITTED `rate_strata` row now carries `surface` (`amps_mA`, `mu`,
+  `sd`, `safe`, `points`), read straight off the raw `RateStratum` objects Stage 1 already holds,
+  rounded to 4 decimals; a new `stage1.pooled_surfaces` block carries the pooled 3-input model's
+  own slice at every rate a stratum delivered, once per (pulse-width-Left, pulse-width-Right) pair.
+  `stage1_openloop._fit_rate_stratum` was extended to store the individual observed epochs
+  (`meta["points"]`) the fit actually regressed, since `RateStratum` did not keep them before.
+- Live equality proof on RCS08 through the bridge, before (the existing `cms_after.pkl` capture)
+  against a fresh capture with this change: 9,145 fields before, 17,357 after, 9,144 in common,
+  1 only-before (a stored-answer timestamp that only exists once a response has been served from
+  the saved copy), 8,213 only-after (all the new `surface`/`pooled_surfaces` data), 4 differing
+  among the 9,144 shared fields, all bookkeeping (a timestamp, the store key, the served-from-store
+  flag, a timing figure) -- 0 scientific values moved.
+- Frontend: two new cards, `CurrentMapCard.js` ("Where the two currents have been tried, and what
+  the record says" -- one square Plotly heatmap per fitted speed, left current on x, right current
+  on y, colour the pain-plus-side-effect score reversed RdYlGn so low/green is better and zero is
+  the setting in force, a black x for that setting, dots for the rated combinations sized by report
+  count, a star on the best cell only when all three checks pass, plus the three checks printed as
+  lines with a tick or cross, and a folded, reference-only pooled-surface section) and
+  `CurrentMapScheduleCard.js` ("Home programming schedule to map the two currents" -- the day-by-day
+  table, what is already in the record, and the plain sentence on whether completing the schedule
+  would be enough). Wired into `index.js` directly above the two-stage plan card. `DecisionStrip.js`
+  now prints "no current can be recommended from this record -- see the current map" instead of a
+  bare dash when the preferred current reads `null` (decision 158's honest-current case);
+  everywhere else in the page's own files already used a plain dash for a missing value via the
+  shared `num`/`fmtMa`/`cell` helpers, so no other render site needed the same fix.
+- Frontend build clean; neither `CurrentMapCard.js`, `CurrentMapScheduleCard.js`, `index.js` nor
+  `DecisionStrip.js` appear in the build's own warning list. Grepped the served bundle (chunk
+  `100.277c25cc.chunk.js`): "Where the two currents have been tried", "Home programming schedule to
+  map the two currents" and "see the current map" are all present.
+- New test file `StimOptimizer/tests/test_surface_serialization.py`, 4 tests, a self-contained
+  two-rate fixture (one rate with 12 epochs, one with 3, at one pulse-width pair) rather than
+  reusing `rcs08_like` (which aliases pulse width to rate one-to-one and never exercises a mixed
+  fitted/unfitted stratum): a fitted row's surface matches the raw `RateStratum` value for value
+  across all 441 grid cells with 0 differing; an unfitted row carries no `surface` key; the pooled
+  block carries every rate a stratum was ever asked about; the whole response, built through the
+  real `_two_stage_payload` code path, carries both new pieces.
+- Both suites green through `run_both_suites.sh`: host 1,215 passed, 2 skipped, 0 failed (was
+  1,211, +4); container PASS=631 FAIL=0 LIVE_SKIPPED=6, unaffected.
+- Gunicorn workers reloaded (`kill -HUP 1`) after the backend change.
+- NOT DONE: watching the two cards render in a real browser. This session's tool set did not
+  include a browser control tool, so this is disclosed rather than claimed -- verification rests on
+  the field-count proof, the served-bundle text search, and the four new tests.
+- task_plan.md Phase 20 checked off in full, status `complete`; phases counter 20/20; Next Step
+  rewritten; `check-complete.sh` confirms ALL PHASES COMPLETE (20/20). Decision 159 written.

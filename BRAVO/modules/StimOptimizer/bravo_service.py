@@ -488,6 +488,98 @@ def _frame_records(df, cols=None, limit=None):
 
 
 #: ==========================================================================================
+#: THE RATE-STRATUM AND POOLED SURFACES (2026-09-14, following decisions 157/158).
+#:
+#: `two_stage.stage1.rate_strata` and `current_map_schedule` carry the NUMBERS decision 158's
+#: three-check honesty rule reads, but not the (left current, right current) surface those
+#: numbers describe -- so nothing could draw the heatmap the page needs to show WHY a rate reads
+#: flat, or WHERE the tried combinations sit. These two functions add it, read straight off the
+#: RateStratum/JointStratum objects Stage 1 already holds; no number here is recomputed.
+def _round_grid(a, ndigits=4):
+    """A 2-D array as a plain nested list, each finite value rounded, a non-finite value `None`
+    (never `NaN`, which is not valid JSON)."""
+    out = []
+    for row in np.asarray(a, float):
+        out.append([None if not np.isfinite(v) else round(float(v), ndigits) for v in row])
+    return out
+
+
+def _rate_stratum_surface(rs) -> dict | None:
+    """The (amplitude-Left, amplitude-Right) surface for one FITTED `stage1_openloop.RateStratum`.
+
+    `mu[i][j]` / `sd[i][j]` / `safe[i][j]` are the posterior mean, its standard deviation, and
+    whether the cell clears the safety model, at `amps_mA[i]` on the left and `amps_mA[j]` on the
+    right -- both axes share the one grid the rate was fitted on
+    (`rs.grid.amps_left`, identical to `amps_right` since both sides are fit on
+    `stage1_openloop.JOINT_AMP_GRID`). `points` are the individual rated epochs the fit actually
+    regressed (`rs.meta["points"]`), never a grid cell -- the raw evidence a reader overlays ON
+    the surface.
+    """
+    if rs is None or not getattr(rs, "fitted", False) or rs.grid is None:
+        return None
+    amps = [round(float(v), 4) for v in np.asarray(rs.grid.amps_left, float)]
+    points = [dict(amp_left_mA=_jsonable(p.get("amp_left_mA")),
+                   amp_right_mA=_jsonable(p.get("amp_right_mA")),
+                   n_reports=_jsonable(p.get("n_reports")),
+                   J=_jsonable(p.get("J")), epoch=_jsonable(p.get("epoch")))
+             for p in ((rs.meta or {}).get("points") or [])]
+    return dict(amps_mA=amps, mu=_round_grid(rs.mu), sd=_round_grid(rs.sd),
+               safe=[[bool(v) for v in row] for row in np.asarray(rs.safe, bool)],
+               points=points)
+
+
+def _rate_stratum_lookup(s1) -> dict:
+    """`{(pw_us_left, pw_us_right, rate_hz), rounded: RateStratum}` over every joint stratum Stage
+    1 fitted, so a serialised `rate_strata` row can find its own raw object back."""
+    out = {}
+    for (pwl, pwr), sl in (getattr(s1, "slices", None) or {}).items():
+        for rate, rs in (getattr(sl, "rate_strata", None) or {}).items():
+            out[(round(float(pwl), 6), round(float(pwr), 6), round(float(rate), 6))] = rs
+    return out
+
+
+def _attach_rate_stratum_surfaces(records, s1):
+    """Add a `surface` key to every FITTED row of the already-serialised `rate_strata` records,
+    in place. An unfitted row (`fitted: False`) is left exactly as it was -- no `surface` key --
+    so the frontend's own presence check ("does this row carry a surface") is enough to tell a
+    fitted rate from one that never cleared the epoch floor."""
+    lut = _rate_stratum_lookup(s1)
+    for row in records:
+        if not row.get("fitted"):
+            continue
+        key = (round(float(row["pw_us_left"]), 6), round(float(row["pw_us_right"]), 6),
+              round(float(row["rate_hz"]), 6))
+        surf = _rate_stratum_surface(lut.get(key))
+        if surf is not None:
+            row["surface"] = surf
+    return records
+
+
+def _joint_pooled_surfaces(s1) -> dict:
+    """One entry per fitted (pulse-width-Left, pulse-width-Right) joint stratum:
+    `{"<pwl:g>_<pwr:g>": {pw_us_left, pw_us_right, surface_at_rate: {"<rate:g>": {amps_mA, mu, sd,
+    safe}}}}` -- the POOLED 3-input surface's own slice at each rate that stratum actually
+    delivered, for reference only (see `stage1_openloop.RateStratum`'s own docstring on why the
+    honest per-rate surface, not this one, decides a current). Built once per stratum rather than
+    once per rate-strata row, since every rate inside one stratum shares the one pooled fit."""
+    out = {}
+    for (pwl, pwr), sl in (getattr(s1, "slices", None) or {}).items():
+        key = f"{float(pwl):g}_{float(pwr):g}"
+        rates = {}
+        for rate in (getattr(sl, "rate_strata", None) or {}).keys():
+            fi = int(np.argmin(np.abs(np.asarray(sl.grid.freqs, float) - float(rate))))
+            mu3 = sl.grid.as_surface(sl.mu)[fi]
+            sd3 = sl.grid.as_surface(sl.sd)[fi]
+            safe3 = sl.grid.as_surface(np.asarray(sl.safe, float))[fi] > 0
+            rates[f"{float(rate):g}"] = dict(
+                amps_mA=[round(float(v), 4) for v in np.asarray(sl.grid.amps_left, float)],
+                mu=_round_grid(mu3), sd=_round_grid(sd3),
+                safe=[[bool(v) for v in row] for row in safe3])
+        out[key] = dict(pw_us_left=float(pwl), pw_us_right=float(pwr), surface_at_rate=rates)
+    return out
+
+
+#: ==========================================================================================
 #: DISPLAY FIELDS FOR THE PAGE (2026-09-12, the page redesign, phase 3).
 #:
 #: The page printed sensing contacts by their raw keys ("ONE_THREE_LEFT"), which spell the
@@ -831,7 +923,12 @@ def _two_stage_payload(rep, *, inputs, seconds, in_force=None) -> dict:
         # pooled 3-input model's own slice at that rate for reference only. This is what
         # actually decided the current under "frozen_configuration" above; see
         # ``stage1_openloop.RateStratum``.
-        "rate_strata": _frame_records(getattr(s1, "rate_summary", None)),
+        "rate_strata": _attach_rate_stratum_surfaces(
+            _frame_records(getattr(s1, "rate_summary", None)), s1),
+        # The POOLED 3-input surface's own slice at every rate a stratum delivered, once per
+        # (pulse-width-Left, pulse-width-Right) stratum -- reference only, never what a current is
+        # read off; see `_joint_pooled_surfaces` and `stage1_openloop.RateStratum`.
+        "pooled_surfaces": _joint_pooled_surfaces(s1),
         "strata_skipped": {str(k): str(v) for k, v in (s1.skipped or {}).items()},
         "audit": _two_stage_jsonable(dict(s1.audit or {})),
         # WHAT TO TEST NEXT, from the JOINT stratum that was actually frozen (2026-09-14). There
