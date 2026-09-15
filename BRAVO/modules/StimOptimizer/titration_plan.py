@@ -35,18 +35,17 @@ current in force, rather than at 0 mA or unstated; an optional third block, "joi
 the pain surface's off-diagonal points a one-side ladder cannot; and every plan carries a flat
 `sheet_rows` list laid out exactly like the clinic sheet's own "Stim Testing" tab.
 
-THE SHEET LAYOUT SOURCE, READ DIRECTLY RATHER THAN ASSUMED. The column list below is not the
-approximate one first drafted from memory -- it is read straight out of the real workbook,
-`BRAVO/_pro_dump/clinic_sheets/RCS08/2026_Sep2_RCS08 Stage 2 - September 2026 In-Clinic Testing
-09_02_2026.xlsx`, tab "Stim Testing," row 11 (neither this host nor the container carries
-openpyxl, checked 2026-09-14; read instead with a raw zipfile/XML parse of the workbook's shared
-strings and the sheet's own cell references). TWO differences from the approximate list, kept
-rather than silently corrected: the real workbook has no separate "sEEG Contacts" column and no
-"Right Leg" pain column; it carries one "SIDE EFFECT" column, not a "Side Effect?" plus a separate
-"SIDE EFFECT SCORE." Three header-row cells were left out of `SHEET_COLUMNS` as not real per-step
-fields: "Pain Scores" (a stray section label sitting in column A above the score block), "optional
-- possible future:" (column E, a placeholder header with no populated row anywhere in the file),
-and a Timed-Up-and-Go footnote pasted into column K.
+THE SHEET LAYOUT SOURCE, READ DIRECTLY RATHER THAN ASSUMED. The column list below is row 11 of
+the "Stim Testing" tab of the lab's own TEMPLATE workbook, `[Template]RCS08 Stage 2 - {Month} 2025
+Clinic Testing {MM}_{DD}_{YY}` (local copy under `BRAVO/_pro_dump/clinic_sheets/RCS08/`), read
+with openpyxl on 2026-09-14. The template is the file the "Make Google sheet" export copies, so
+its header is the one these rows must match cell for cell. Filled-in visit sheets add two hand-made
+columns the template does not have -- "Stim Set" in column A and "SIDE EFFECT SCORE" in column K of
+the 2026-09-02 sheet -- so the step number and the block travel as separate `step` / `block`
+fields on each row rather than as sheet columns. A first draft of this list, made with a raw
+zip/XML read of the workbook instead of openpyxl, dropped four real columns ("sEEG Contacts",
+"Side Effect?", "Right Leg", "Right Foot") and swapped Group and Contacts; that draft was wrong and
+is replaced here.
 """
 from __future__ import annotations
 
@@ -101,14 +100,14 @@ PROTOCOL_SOURCE = ("artifacts/research_2026-09-11_stim_amplitude_vs_lfp_power.md
                    "once such a session exists); the PI's ruling of 2026-09-14 on the ladder's down "
                    "leg, the two-row step, the held other side and the joint corners")
 
-#: THE "STIM TESTING" TAB COLUMN ORDER, verbatim from row 11 of the real 2026-09-02 workbook (see
-#: the module docstring for how this was read and what it deliberately leaves out).
-SHEET_COLUMNS = ("Stim Set", "Contacts", "Group", "Amp (mA)", "Rate (Hz)", "PW (µs)",
-                 "Threshold", "Duration (s)", "SIDE EFFECT", "Timestamp",
+#: THE "STIM TESTING" TAB COLUMN ORDER, verbatim from row 11 of the lab's template workbook, the
+#: file the Google Sheet export copies (see the module docstring). Columns A..S in that order.
+SHEET_COLUMNS = ("Group", "Contacts", "sEEG Contacts", "Amp (mA)", "Rate (Hz)", "PW (µs)",
+                 "Threshold", "Duration (s)", "Side Effect?", "Timestamp",
                  "Movement/Change point", "General Notes / Pt Verbal Notes", "Overall", "Head",
-                 "Back", "Left Leg", "Left Foot", "Right Foot")
-SHEET_SOURCE = ('BRAVO/_pro_dump/clinic_sheets/RCS08/2026_Sep2_RCS08 Stage 2 - September 2026 '
-                'In-Clinic Testing 09_02_2026.xlsx, tab "Stim Testing," row 11')
+                 "Back", "Left Leg", "Left Foot", "Right Leg", "Right Foot")
+SHEET_SOURCE = ('BRAVO/_pro_dump/clinic_sheets/RCS08/[Template]RCS08 Stage 2 - {Month} 2025 Clinic '
+                'Testing {MM}_{DD}_{YY}.xlsx, tab "Stim Testing," row 11, columns A-S')
 
 #: One off-stimulation baseline and one impedance test before the first step and after the last
 #: (decision 133: impedance at a FIXED measurement current, not the device's automatic low-current
@@ -452,14 +451,13 @@ def _sheet_row_pair(step, block, *, contacts, amp, rate_hz, pw, timing) -> list:
     duration; the test row carries only the test duration (the PI's ruling, 2026-09-14 -- that is
     how the real sheet is filled today, see the September 2026 workbook's own two-row steps)."""
     ramp = {c: None for c in SHEET_COLUMNS}
-    ramp.update({"Stim Set": int(step), "Contacts": contacts, "Amp (mA)": amp,
+    ramp.update({"Contacts": contacts, "Amp (mA)": amp,
                 "Rate (Hz)": (None if rate_hz is None else round(float(rate_hz), 3)),
                 "PW (µs)": pw, "Duration (s)": float(timing["ramp_s"])})
     ramp["block"] = str(block)
     ramp["step"] = int(step)
     ramp["row_kind"] = "ramp"
     test = {c: None for c in SHEET_COLUMNS}
-    test["Stim Set"] = int(step)
     test["Duration (s)"] = float(timing["test_s"])
     test["block"] = str(block)
     test["step"] = int(step)

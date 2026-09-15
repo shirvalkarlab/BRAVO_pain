@@ -396,12 +396,14 @@ def test_plan_for_sides_offers_joint_corners_when_both_sides_are_requested():
 # ---------------------------------------------------------------------------------------------
 # the flat clinic-sheet rows
 # ---------------------------------------------------------------------------------------------
-def test_sheet_columns_match_the_real_workbooks_own_header_row():
+def test_sheet_columns_match_the_template_workbooks_own_header_row():
+    # Row 11, columns A-S, of the lab's template "Stim Testing" tab (read with openpyxl,
+    # 2026-09-14); the export copies that template, so this is the header the rows must match.
     assert TP.SHEET_COLUMNS == (
-        "Stim Set", "Contacts", "Group", "Amp (mA)", "Rate (Hz)", "PW (µs)", "Threshold",
-        "Duration (s)", "SIDE EFFECT", "Timestamp", "Movement/Change point",
+        "Group", "Contacts", "sEEG Contacts", "Amp (mA)", "Rate (Hz)", "PW (µs)", "Threshold",
+        "Duration (s)", "Side Effect?", "Timestamp", "Movement/Change point",
         "General Notes / Pt Verbal Notes", "Overall", "Head", "Back", "Left Leg", "Left Foot",
-        "Right Foot")
+        "Right Leg", "Right Foot")
 
 
 def _sides_for_sheet():
@@ -442,7 +444,7 @@ def test_build_sheet_rows_has_two_rows_per_step_and_the_bilateral_contacts_and_a
     t0 = test_rows[0]
     assert t0["Contacts"] is None and t0["Amp (mA)"] is None and t0["Rate (Hz)"] is None
     assert t0["PW (µs)"] is None and t0["Duration (s)"] == 60.0
-    assert t0["Stim Set"] == r0["Stim Set"] and t0["step"] == r0["step"]
+    assert t0["step"] == r0["step"] and "Stim Set" not in r0
     # blocks are named and steps number sequentially within a block
     blocks = [r["block"] for r in ramp_rows]
     assert blocks == (["left_ladder"] * n_left + ["right_ladder"] * n_right
