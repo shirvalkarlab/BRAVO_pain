@@ -110,6 +110,42 @@ def test_tolerated_anchors_exclude_zero_current_and_short_holds():
     assert t.tolist() == [[55.0, 2.0], [110.0, 3.5]]
 
 
+def test_tolerated_anchors_exclude_epochs_reported_moderate_or_severe():
+    """Audit of 2026-09-15: an epoch the sheet scored moderate or severe is barred from the pain
+    fit (`objective.SE_HARD_REJECT`, J = +inf) but was still handed to the safety model as a
+    severity-0 "tolerated" anchor -- the opposite of what was reported. Only a REPORTED
+    intolerable severity excludes; an unreported epoch (None) and a mild one are still tolerated,
+    and a frame with no severity column at all is unchanged."""
+    D = pd.DataFrame(dict(freq_hz=[55.0, 55.0, 55.0, 55.0],
+                          amp_mA_Left=[1.0, 2.0, 3.0, 4.0],
+                          dur_h=[500.0, 500.0, 500.0, 500.0],
+                          se_severity=[None, "mild", "moderate", "severe"]))
+    t = SC.tolerated_anchors(D, "amp_mA_Left", min_tolerated_h=72.0)
+    assert t.tolist() == [[55.0, 1.0], [55.0, 2.0]]
+    same_without_column = SC.tolerated_anchors(D.drop(columns=["se_severity"]), "amp_mA_Left",
+                                               min_tolerated_h=72.0)
+    assert same_without_column.tolist() == [[55.0, 1.0], [55.0, 2.0], [55.0, 3.0], [55.0, 4.0]]
+
+
+def test_the_seed_names_how_many_intolerable_epochs_it_kept_out_of_the_tolerated_set():
+    """The report must be able to say "N settings reported intolerable were not counted as
+    tolerated", and 0 when the frame carries no severity column."""
+    D = pd.DataFrame(dict(freq_hz=[55.0, 55.0, 55.0],
+                          amp_mA_Left=[1.0, 3.0, 4.0],
+                          dur_h=[500.0, 500.0, 500.0],
+                          se_severity=[None, "moderate", "severe"]))
+    _X, sev, _v, meta = SC.safety_seed(D, "amp_mA_Left", freq_grid=PLT.FREQ_GRID,
+                                       ceiling=(4.5, "test"), min_tolerated_h=72.0)
+    assert meta["n_tolerated_anchors"] == 1
+    assert meta["n_intolerable_excluded"] == 2
+    assert sev.tolist().count(0.0) == 1
+    _X, _s, _v, meta0 = SC.safety_seed(D.drop(columns=["se_severity"]), "amp_mA_Left",
+                                       freq_grid=PLT.FREQ_GRID, ceiling=(4.5, "test"),
+                                       min_tolerated_h=72.0)
+    assert meta0["n_tolerated_anchors"] == 3
+    assert meta0["n_intolerable_excluded"] == 0
+
+
 def test_the_seed_has_the_shape_the_safety_model_expects_and_the_severities_are_0_and_3():
     D = _design()
     X, sev, var, meta = SC.safety_seed(D, "amp_mA_Left", freq_grid=PLT.FREQ_GRID,

@@ -63,7 +63,8 @@ FALLBACK_PROVENANCE = "module hard limit, no PI-stated ceiling for this particip
 #: differed for the same side under the same anchors). Zero current on a side is a different
 #: therapeutic state, not the low end of that side's dose axis (OBJECTIVE_SPEC amendment
 #: 2026-08-29), so it says nothing about what that side tolerates.
-TOLERATED_RULE = "epochs with this side's current above 0 mA held at least min_tolerated_h hours"
+TOLERATED_RULE = ("epochs with this side's current above 0 mA held at least min_tolerated_h hours, "
+                  "and not reported moderate or severe")
 
 
 def ceiling_for(participant_uid, hemisphere):
@@ -107,13 +108,40 @@ def ceiling_anchors(ceiling_mA, freq_grid):
     return np.array([[float(f), c] for f in freq_grid], dtype=float).reshape(-1, 2)
 
 
+def _intolerable_mask(d) -> pd.Series:
+    """True where the epoch carries a REPORTED severity in ``objective.SE_HARD_REJECT``. Absent
+    column, None or NaN is False: an unreported side effect is not a reported one (the same
+    distinction ``objective.build_objective`` keeps with ``se_observed``)."""
+    if "se_severity" not in d.columns:
+        return pd.Series(False, index=d.index)
+    sev = d["se_severity"].map(lambda v: str(v).strip().lower() if isinstance(v, str) else None)
+    return sev.isin(OBJ.SE_HARD_REJECT).fillna(False).astype(bool)
+
+
 def tolerated_anchors(D, amp_col, *, min_tolerated_h):
-    """The severity-0 seed: every ``(rate, current)`` this side sustained, under ``TOLERATED_RULE``."""
+    """The severity-0 seed: every ``(rate, current)`` this side sustained, under ``TOLERATED_RULE``.
+
+    2026-09-15 (audit finding 5a): an epoch the clinic sheet scored moderate or severe is barred
+    from the pain fit (``objective.SE_HARD_REJECT``, J = +inf) and until today was STILL handed
+    here as a severity-0 anchor because only current and hold time were checked -- telling the
+    safety model the opposite of what was reported. A reported intolerable severity now excludes
+    the epoch. Nothing else changed: a frame without the column, an unreported epoch and a mild
+    one are tolerated exactly as before.
+    """
     d = pd.DataFrame(D)
     amp = pd.to_numeric(d[amp_col], errors="coerce")
     dur = pd.to_numeric(d["dur_h"], errors="coerce")
-    keep = (amp > 0) & (dur >= float(min_tolerated_h))
+    keep = (amp > 0) & (dur >= float(min_tolerated_h)) & ~_intolerable_mask(d)
     return d.loc[keep, ["freq_hz", amp_col]].to_numpy(float).reshape(-1, 2)
+
+
+def n_intolerable_excluded(D, amp_col, *, min_tolerated_h) -> int:
+    """How many epochs would have been tolerated anchors on current and hold time alone but were
+    kept out because their reported severity is moderate or severe -- for the report."""
+    d = pd.DataFrame(D)
+    amp = pd.to_numeric(d[amp_col], errors="coerce")
+    dur = pd.to_numeric(d["dur_h"], errors="coerce")
+    return int(((amp > 0) & (dur >= float(min_tolerated_h)) & _intolerable_mask(d)).sum())
 
 
 def safety_seed(D, amp_col, *, freq_grid, ceiling=None, min_tolerated_h=72.0):
@@ -137,6 +165,7 @@ def safety_seed(D, amp_col, *, freq_grid, ceiling=None, min_tolerated_h=72.0):
         safety_ceiling_anchors=[[float(a), float(b)] for a, b in limits],
         n_safety_ceiling_anchors=int(len(limits)),
         n_tolerated_anchors=int(len(deliv)),
+        n_intolerable_excluded=n_intolerable_excluded(D, amp_col, min_tolerated_h=min_tolerated_h),
         tolerated_rule=TOLERATED_RULE,
         min_tolerated_h=float(min_tolerated_h),
     )
