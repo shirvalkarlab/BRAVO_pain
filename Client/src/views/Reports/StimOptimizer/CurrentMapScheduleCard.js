@@ -94,7 +94,7 @@ export default function CurrentMapScheduleCard({ schedule }) {
 
         <MDBox sx={{ overflowX: "auto", mt: 1.5 }}>
           <Table size="small">
-            <TableHead>
+            <TableHead sx={{ display: "table-header-group", p: 0 }}>
               <TableRow>
                 {["step", "left current", "right current", "days", "target reports", "why", "safe"].map((h) => (
                   <TableCell key={h} sx={{ py: 0.6 }}>

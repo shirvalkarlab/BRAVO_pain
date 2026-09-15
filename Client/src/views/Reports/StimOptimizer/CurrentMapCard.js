@@ -51,7 +51,7 @@ function CheckRow({ label, passes, detail }) {
 /** One (left-current, right-current) surface: the heatmap, the setting-in-force ×, the observed
  * points, and a ★ on the best cell when (and only when) that rate's own current is resolved. */
 function CurrentSurfaceHeatmap({ divId, surface, inForceLeft, inForceRight, starLeft, starRight,
-  showStar, size = 340 }) {
+  showStar, size = 400 }) {
   const figRef = useRef(null);
   const rows = surface ? surface.mu.length : 0;
   const cols = rows ? surface.mu[0].length : 0;
@@ -60,11 +60,16 @@ function CurrentSurfaceHeatmap({ divId, surface, inForceLeft, inForceRight, star
     if (!surface) return { zmin: -1, zmax: 1, gridZ: [] };
     const finite = [];
     surface.mu.forEach((row, i) => row.forEach((v, j) => {
-      if (v != null && surface.safe[i][j]) finite.push(Math.abs(v));
+      if (v != null && surface.safe[i][j]) finite.push(v);
     }));
-    const half = Math.max(0.5, ...finite, 0);
+    // The colour range must COVER the surface and include 0 (the setting in force). A range
+    // symmetric about 0 clipped a surface sitting at +0.74 to one saturated colour (watched live,
+    // 2026-09-14). A flat surface then shows as one flat colour, which is the honest picture.
+    let lo = Math.min(0, ...finite);
+    let hi = Math.max(0, ...finite);
+    if (hi - lo < 0.1) { lo -= 0.05; hi += 0.05; }
     const gz = surface.mu.map((row, i) => row.map((v, j) => (surface.safe[i][j] ? v : null)));
-    return { zmin: -half, zmax: half, gridZ: gz };
+    return { zmin: lo, zmax: hi, gridZ: gz };
   }, [surface]);
 
   useEffect(() => {
@@ -75,9 +80,14 @@ function CurrentSurfaceHeatmap({ divId, surface, inForceLeft, inForceRight, star
     fig.subplots(1, 1, { sharex: false, sharey: false });
     fig.traces.push({
       type: "heatmap", z: gridZ, x: surface.amps_mA, y: surface.amps_mA,
-      colorscale: "RdYlGn", reversescale: true, zmin, zmax, zmid: 0,
-      colorbar: { title: { text: "pain + side-effect score<br>(lower is better; 0 = setting in force)",
-        font: { size: 10 } }, thickness: 12, len: 0.9, tickfont: { size: 10 } },
+      // Explicit stops: "RdYlGn" is a plotly.PY name, not a plotly.JS one, and plotly.js silently
+      // fell back to a red-to-grey scale that painted the BEST score red (watched live, 2026-09-14).
+      colorscale: [[0, "#1A9850"], [0.5, "#FEE08B"], [1, "#D73027"]], zmin, zmax,
+      // A short title on the side: the long two-line title this first shipped with was placed
+      // ABOVE the bar, and Plotly's automatic margin then took 222 of the 340 px for it, leaving
+      // the plot 70 px wide (measured live, 2026-09-14). The score's meaning is in the caption.
+      colorbar: { title: { text: "score (lower is better)", side: "right", font: { size: 10 } },
+        thickness: 12, len: 0.9, tickfont: { size: 10 } },
       xgap: 1, ygap: 1,
       hovertemplate: "left %{x:.2f} mA, right %{y:.2f} mA<br>score %{z:.3f}<extra></extra>",
     });
@@ -110,7 +120,7 @@ function CurrentSurfaceHeatmap({ divId, surface, inForceLeft, inForceRight, star
       });
     }
     fig.setLayoutProps({
-      height: size, width: size, margin: { l: 46, r: 70, t: 8, b: 40 },
+      height: size, width: size, margin: { l: 46, r: 20, t: 8, b: 40 },
       xaxis: { showgrid: false, zeroline: false, range: [-0.15, 5.15] },
       yaxis: { showgrid: false, zeroline: false, range: [-0.15, 5.15] },
       hovermode: "closest",

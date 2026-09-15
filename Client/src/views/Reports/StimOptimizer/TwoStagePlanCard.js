@@ -55,7 +55,7 @@ function RecordTable({ rows, columns, limit = 12 }) {
   return (
     <MDBox sx={{ overflowX: "auto" }}>
       <Table size="small" sx={{ mt: 0.5 }}>
-        <TableHead>
+        <TableHead sx={{ display: "table-header-group", p: 0 }}>
           <TableRow>
             {present.map(([k, label]) => (
               <TableCell key={k} sx={{ py: 0.6 }}>
