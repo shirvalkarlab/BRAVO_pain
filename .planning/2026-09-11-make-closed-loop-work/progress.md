@@ -970,3 +970,76 @@ the threshold re-centring as what remains. Commit and push done by this session 
   `in_progress` (only the Google Sheet export itself remains), Next Step rewritten.
 - Commit: source + rebuilt bundle together, PI identity inline, `Co-Authored-By: Claude Opus 5`.
   Pushed to `origin/PS_closedloop_deployment` per the standing go-ahead (CLAUDE.md §2 principle 6).
+
+## Session: 2026-09-15, the "Make Google sheet" export (Phase 22, closing it)
+- PI's ruling, verbatim: "make a button that says 'Make Google sheet' that has a date input to use
+  that entered date. This should use Google Sheets template -> copy to a new file (do not write
+  into template) -> write schedule into the new file -> rename new file with date (Wed, Sep 16 OR
+  USER ENTERED DATE) and allow it to be overwritten if re-exported."
+- Read `titration_plan.py`'s `sheet_rows`/`sheet_columns`/`SHEET_SOURCE`, the real template on
+  disk (`_pro_dump/clinic_sheets/RCS08/_Template_...xlsx` -- the logical
+  `[Template]...{Month}...{MM}_{DD}_{YY}` name with every filename-unsafe character replaced by
+  `_`), and a real filled visit sheet, both through the bridge with openpyxl. Confirmed: header row
+  11 columns A-S match `SHEET_COLUMNS` by POSITION (the real header carries "(Aditya)"/"(Donna)"
+  editor suffixes `SHEET_COLUMNS` does not); data starts row 12, with a stray "Detailed pain
+  survey" label at column L the fill must overwrite; real visit sheets carry the date as a real
+  Excel `datetime` in cell B1, `mm/dd/yy` number format.
+- Built `StimOptimizer/sheet_export.py` (`sheet_name_for`, `values_for_sheets_api`, `fill_workbook`,
+  `export`) and `StimOptimizer/google_sheets_client.py` (`available`, `folder_id`, `template_id`,
+  `GoogleClient`, `client_if_available`, `SETUP_NOTE`) -- pure, no Django. `export`'s Drive path:
+  find-by-name in the lab's folder, reuse if found (`overwrote: True`) else `files.copy` the
+  template (never a write to the template's own id), then `values.clear` + two `values.update`
+  calls (the data rows, the date cell). Without a `drive` client: fill a local copy of the template,
+  return its path.
+- New endpoint `Server/APIs/DataAnalysis.ExportTitrationSheet`, `/api/exportTitrationSheet`,
+  registered in `Server/APIs/urls.py`. Rebuilds the plan through the EXACT SAME call the page's own
+  request makes (`bravo_service.run_for_participant`) rather than a second, independently-derived
+  copy -- so the exported sheet can never drift from what is on screen. JSON for the drive/error
+  cases; a real `FileResponse` with `Content-Disposition: attachment` for the xlsx fallback.
+- `requirements.txt`: `openpyxl`'s existing pin got a second reason note (`sheet_export.py` also
+  uses it); added `google-api-python-client==2.149.0`, `google-auth==2.35.0`,
+  `google-auth-httplib2==0.2.0`, all lazy-imported so their absence is not an error. Installed and
+  import-checked live in the container (`pip install --break-system-packages`).
+- `TitrationSessionCard.js`: the button is enabled, posts `{ParticipantId, VisitDate}` with
+  `responseType: "blob"` (through `SessionController.query`), branches on the response's own
+  `Content-Type` -- JSON text parsed for the drive/error cases, a real blob triggers a synthetic
+  `<a download>` click for the xlsx case. Drive mode swaps the button for "Open in Google Sheets"
+  (a link) plus a "re-export" button; xlsx mode shows a caption with this page's OWN copy of the
+  setup note (`SHEET_EXPORT_SETUP_NOTE`, kept word-for-word identical to
+  `google_sheets_client.SETUP_NOTE`, since a raw file download carries no JSON body to read a note
+  from). `index.js` passes `participantUid={participant_uid}` down.
+- 12 new tests, `test_sheet_export.py`, all against a REAL small template built with openpyxl and a
+  REAL small clinic sheet built through `titration_plan.build_sheet_rows` (not hand-typed rows).
+  **A real bug caught by the tests, not by review**: `ws.cell(row, column, value=None)` is a
+  documented openpyxl no-op -- passing `value=None` leaves whatever the cell already held, so the
+  first draft of `fill_workbook` would have left the template's stray "Detailed pain survey" label
+  in row 12 instead of overwriting it with the plan's own (empty) value there. Fixed by assigning
+  `.value` directly (`ws.cell(row=row, column=i).value = r.get(col)`), which always overwrites
+  including with `None`. A second test proves the fake Drive client's template id is only ever
+  passed to `copy_file`'s SOURCE argument, never to a `clear_values`/`update_values` write.
+- Live on RCS08 through the bridge, in order: (1) `fill_workbook` against the REAL template for
+  2026-09-16 with a FRESH `run_for_participant` plan -- 68 rows, rows 12..79, template sha256
+  identical before/after, B1 = 2026-09-16 `mm/dd/yy`, header row 11 matches the real template's own
+  19-column text exactly; left at `_agent_bridge/_probe_tl/export_2026-09-16.xlsx` (260,577 bytes).
+  (2) The real Django view, via `APIRequestFactory` + `force_authenticate` (DEBUG-mode grants any
+  authenticated user full access, per `Database.checkAccessPermission`'s own documented local-dev
+  branch) -- xlsx mode: 200, `Content-Type` the real spreadsheet mimetype, `Content-Disposition:
+  attachment; filename="RCS08 Stage 2 - September 2026 In-Clinic Testing 09_16_26.xlsx"`, 260,577
+  bytes, BYTE-IDENTICAL to (1)'s file size; malformed input (`VisitDate` missing) -> 400; unknown
+  participant uid -> 403.
+- Both suites, one bridge job (`run_both_suites.sh`, submit-then-poll):
+  **host 1257 passed, 2 skipped, 0 failed, 0 errors** (was 1245, +12, exactly the new test file);
+  **container PASS=631 FAIL=0 LIVE_SKIPPED=6** (unaffected -- no Biomarkers file touched).
+- `npm run build`: exit 0, no warning in either touched file. Served chunk
+  `build/static/js/100.f23cdf8b.chunk.js` carries "Open in Google Sheets", "Making sheet…",
+  and the setup note's own first words ("To let this server write directly to Google Sheets").
+  Committed the rebuilt bundle with the source, and removed the superseded prior chunk.
+- The Drive path is built and unit-proven against a fake client but has never touched the real
+  Google APIs -- this server carries no service-account key today. `google_sheets_client.SETUP_NOTE`
+  (and its identical frontend copy) states, in plain language, what the PI must do to turn it on.
+- Not watched in a real browser this session (no browser-control tool was present).
+- task_plan.md: Phase 22 -> complete (22/22 phases), Next Step rewritten, decision 163 added to
+  `DECISIONS_and_open_items.md`.
+- Commit: source + rebuilt bundle together, PI identity inline (`git -c user.name=... -c
+  user.email=...`), `Co-Authored-By: Claude Opus 5`. Pushed to `origin/PS_closedloop_deployment`
+  per the standing go-ahead (CLAUDE.md §2 principle 6).

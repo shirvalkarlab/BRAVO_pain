@@ -5,21 +5,26 @@ problem is that the module never handed the rule the value the device already re
 that still blocks does so for a reason the PI has read and agreed with.
 
 ## Next Step
-Phase 22's clinic-sheet ingest is built and proven live, and decision 162 put it on the page:
-`TitrationSessionCard.js` now draws the header strip and the three printable clinic-sheet tables
-(`held_other_side`/`joint_corners`/`sheet_rows`, the lowered 4.5 mA ceiling), and `CurrentMapCard.js`
-draws the second, independent clinic-and-home stream (`rate_strata_clinic`/`clinic_stream`) beside
-the REDCap one. What remains of Phase 22 is the Google Sheet export itself: turning `sheet_rows`
-into an actual shared sheet a clinician can open at the visit, behind the disabled "Make Google
-sheet" button the page already has waiting for it. What remains open from earlier phases is
-unchanged: the threshold re-centring / separation question (decision 139's capture question) is
-still the PI's call, and T7's own acceptance test still needs a real titration session recorded on
-RCS08 (open item 30), a clinical scheduling matter.
+Phase 22 is complete: the "Make Google sheet" button on `TitrationSessionCard.js` now works.
+`StimOptimizer/sheet_export.py` copies the lab's template (never writing into it -- checked by
+re-hashing the template file after every fill), fills the copy with the SAME `sheet_rows` the page
+shows, and either writes a real, shared Google Sheet (when this server has Google credentials,
+`StimOptimizer/google_sheets_client.py`) or streams a filled `.xlsx` download when it does not; a
+re-export for the same visit date overwrites that one file rather than making a second copy. The
+new endpoint, `/api/exportTitrationSheet`, rebuilds the plan through the same code path the page's
+own request uses, so the exported sheet can never drift from what is on screen. No Google
+credentials exist on this server today, so every real run so far has taken the download path;
+proven live on RCS08 both as a direct module call and through the real Django view (200, correct
+file name, byte-identical to the direct call). All 22 phases of this plan are now done. What
+remains open is not code: the threshold re-centring / separation question (decision 139's capture
+question) is the PI's call, T7's own acceptance test needs a real titration session recorded on
+RCS08 (open item 30, a clinical scheduling matter), and turning the Drive path on needs the PI to
+create and share a Google service-account key (`google_sheets_client.SETUP_NOTE`).
 
 ## Current Phase
-Phase 22
+Phase 22 (last phase; plan complete)
 
-phases: 21/22 complete
+phases: 22/22 complete
 
 ### Phase 1: Measure what the ledger says today
 - [x] Run the live report on RCS08 at the committed band (L 0-2+, 24.5 Hz) and list every non-pass row
@@ -208,7 +213,13 @@ phases: 21/22 complete
 - [x] Live field-count/difference-count proof on RCS08, genuinely before and after (`git stash -u`): 18,787 fields before, 22,518 after, 0 only-before, 3,731 only-after (all under the new clinic block), 3 differing of 18,787 shared, all bookkeeping (a timestamp, the response key, one timing field) -- no REDCap-based value moved
 - [x] On the clinic stream: two rate strata fitted (55 Hz, 110 Hz), neither resolves a current to recommend yet -- the honest answer given the evidence so far, not a defect; decision 161; commit; push
 - [x] The page draws all of it, decision 162: `TitrationSessionCard.js` gained a header strip (rate, both pulse widths, both ceilings, the held-other-side current per block, step timing, session length) and three printable tables built from `sheet_rows`/`sheet_columns` (left ladder, right ladder, optional joint corners), plus a date field and a disabled "Make Google sheet" button; `CurrentMapCard.js` gained a second, un-pooled section reading `rate_strata_clinic`/`clinic_stream` with a folded visit list. Build clean, both new files' owned strings present in the served chunk; no backend file touched, so no suite run applies; not watched in a real browser this session (no browser-control tool was available)
-- **Status:** in_progress (backend, ingest and the page display are done and either proven live or verified by build+bundle search; the Google Sheet export itself is not started)
+- [x] The "Make Google sheet" button is wired, decision 163: `StimOptimizer/sheet_export.py` (`fill_workbook`, `export`, `sheet_name_for`, `values_for_sheets_api`) and `StimOptimizer/google_sheets_client.py` (optional Drive/Sheets client, `available()`/`client_if_available()`, off today -- no key file on this server); new endpoint `/api/exportTitrationSheet` (`Server/APIs/DataAnalysis.ExportTitrationSheet`) rebuilds the plan through `bravo_service.run_for_participant` so the export can never drift from the page; `TitrationSessionCard.js`'s button is enabled, posts the chosen date, and follows either answer (a "drive" JSON naming a real Sheet URL with a "re-export" control, or a downloaded `.xlsx` with this page's own copy of the setup note). A real openpyxl gotcha caught by the new tests before it shipped: `ws.cell(row, column, value=None)` is a no-op, so writing rows straight through it would have left the template's stray "Detailed pain survey" label in place; fixed by assigning `.value` directly
+- [x] 12 new tests, `test_sheet_export.py`: the template's own bytes are provably unchanged after every fill (sha256 before/after, plus a monkeypatched-mutation case that must raise); every row lands at A12.. in the real column order; the B1 date cell is a real Excel date, `mm/dd/yy`; a fake Drive client proves a re-export reuses the existing file (`overwrote: True`) while a first export copies the template (`overwrote: False`), and that the template's own id is passed only as `copy_file`'s SOURCE, never to `clear_values`/`update_values`
+- [x] Live on RCS08 through the bridge: `fill_workbook` against the REAL template for 2026-09-16 with a fresh `run_for_participant` plan -- 68 rows, 12..79, template sha256 identical before and after, B1 set to 2026-09-16 `mm/dd/yy`; then the real Django view (`APIRequestFactory` + `force_authenticate`, DEBUG-mode permission grant) end to end: xlsx mode returns 200, `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`, `Content-Disposition: attachment; filename="RCS08 Stage 2 - September 2026 In-Clinic Testing 09_16_26.xlsx"`, 260,577 bytes -- byte-identical to the direct `fill_workbook` call; malformed input 400, unknown participant 403
+- [x] Both suites green through one bridge job: host 1257 passed / 2 skipped / 0 failed (was 1245, +12); container PASS=631 FAIL=0 LIVE_SKIPPED=6
+- [x] Frontend rebuilt clean, no warning in either touched file; served chunk carries "Open in Google Sheets", the setup note's own first words ("To let this server write directly to Google Sheets"), and "Making sheet…"; not watched in a real browser this session (no browser-control tool was available)
+- [x] The Drive path is built and unit-tested against a fake client but NOT exercised against the real Google APIs -- no service-account key exists on this server; `google_sheets_client.SETUP_NOTE` states what the PI must do to turn it on
+- **Status:** complete
 
 ## Decisions Made
 | # | Decision | Rationale |

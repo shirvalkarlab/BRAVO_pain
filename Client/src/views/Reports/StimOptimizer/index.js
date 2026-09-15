@@ -229,7 +229,9 @@ export default function StimOptimizer() {
           </Card>
 
           {/* ---------- the titration session to run next (PI, 2026-09-12 evening) ---------- */}
-          {data.titration_plan && <TitrationSessionCard plan={data.titration_plan} />}
+          {data.titration_plan && (
+            <TitrationSessionCard plan={data.titration_plan} participantUid={participant_uid} />
+          )}
 
           {/* ---------- where the two currents have been tried, and the home schedule to fill
               the record in (decision 158, 2026-09-14) -- placed directly above the two-stage

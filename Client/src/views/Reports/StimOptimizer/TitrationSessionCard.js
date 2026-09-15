@@ -19,9 +19,17 @@
  * widths, both ceilings, the current the OTHER side is held at while each ladder runs, the
  * ramp+test step timing, the total session length) and three printable tables -- the left ladder,
  * the right ladder, and the optional joint-corner points -- built directly from `sheet_rows`, in
- * the clinic template's own 19-column order (`sheet_columns`), never re-derived on the page. A
- * date field and a "Make Google sheet" button sit at the top right of the card; the button is
- * disabled today (the export itself is the next builder's work) and says so on hover.
+ * the clinic template's own 19-column order (`sheet_columns`), never re-derived on the page.
+ *
+ * THE "MAKE GOOGLE SHEET" BUTTON IS WIRED (decision 163). It posts the chosen date to
+ * `/api/exportTitrationSheet` (`Server/APIs/DataAnalysis.ExportTitrationSheet`, which rebuilds the
+ * plan the same way this page's own request does and hands it to
+ * `StimOptimizer/sheet_export.py`). The server answers one of two ways and the button follows
+ * either: with Google credentials configured, JSON naming the real, shared Google Sheet it wrote
+ * (the button becomes "Open in Google Sheets", plus "Re-export" to overwrite it); without them, a
+ * filled `.xlsx` file, downloaded directly -- this page's own copy of the setup note
+ * (`SHEET_EXPORT_SETUP_NOTE`, kept identical to `google_sheets_client.SETUP_NOTE`) is shown
+ * underneath, since the download itself carries no JSON body to read a note from.
  */
 import { useState } from "react";
 import { Button, Card, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip } from "@mui/material";
@@ -29,10 +37,32 @@ import { Button, Card, Table, TableBody, TableCell, TableHead, TableRow, TextFie
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
+import { SessionController } from "database/session-control";
+
 import PAL from "views/Reports/ClosedLoopSim/palette";
 
 import { num, fmtHz, fmtMa, fmtUs, contactLabel } from "./stimFormat";
 import { TYPE, HEAD, SMALL, MONO, NOWRAP, SizedFold as Fold } from "./typeScale";
+
+/** Kept word-for-word identical to `StimOptimizer/google_sheets_client.py`'s `SETUP_NOTE` -- the
+ * download itself is a raw file with no JSON body to carry the server's own copy in, so this page
+ * shows its own. If one changes, change the other. */
+const SHEET_EXPORT_SETUP_NOTE =
+  "To let this server write directly to Google Sheets: (1) create a Google Cloud service " +
+  "account and download its JSON key file; (2) put that file on this server at " +
+  "secrets/google_service_account.json (or point the GOOGLE_SERVICE_ACCOUNT_FILE environment " +
+  "variable at it); (3) in Google Drive, share BOTH the \"Clinic Testing\" folder and the " +
+  "template workbook with the service account's own e-mail address, giving it Editor access; " +
+  "(4) restart the server's worker processes. Until then, this button downloads a filled " +
+  ".xlsx file instead.";
+
+/** Pulls a `filename="..."` out of a `Content-Disposition` response header; falls back to a
+ * generic name rather than failing the download outright. */
+function filenameFromDisposition(disposition, fallback) {
+  if (!disposition) return fallback;
+  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition);
+  return m ? decodeURIComponent(m[1]) : fallback;
+}
 
 export const TITRATION_CARD_TITLE = "Titration session to run next";
 
@@ -291,8 +321,54 @@ function SideColumn({ side, plan }) {
   );
 }
 
-export default function TitrationSessionCard({ plan }) {
+export default function TitrationSessionCard({ plan, participantUid }) {
   const [sessionDate, setSessionDate] = useState(nextWednesdayISO);
+  // status: "idle" | "working" | "error" | "xlsx" | "drive"
+  const [exportState, setExportState] = useState({ status: "idle" });
+
+  const handleExport = async () => {
+    if (!participantUid || exportState.status === "working") return;
+    setExportState({ status: "working" });
+    try {
+      const response = await SessionController.query(
+        "/api/exportTitrationSheet",
+        { ParticipantId: participantUid, VisitDate: sessionDate },
+        undefined, undefined, "blob");
+      const contentType = String((response.headers || {})["content-type"] || "");
+      if (contentType.indexOf("json") !== -1) {
+        const text = await response.data.text();
+        const data = JSON.parse(text);
+        if (data.available === false) {
+          setExportState({ status: "error", message: data.reason || "the export could not be built" });
+          return;
+        }
+        if (data.mode === "drive") {
+          setExportState({ status: "drive", url: data.url, name: data.name,
+            overwrote: !!data.overwrote, nRows: data.n_rows });
+          return;
+        }
+        setExportState({ status: "error",
+          message: "the server returned an answer this page does not recognise" });
+        return;
+      }
+      const disposition = (response.headers || {})["content-disposition"];
+      const filename = filenameFromDisposition(disposition, "titration_session.xlsx");
+      const blobUrl = window.URL.createObjectURL(response.data);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(blobUrl);
+      setExportState({ status: "xlsx", name: filename });
+    } catch (err) {
+      const message = (err && err.response && err.response.data && err.response.data.message)
+        || (err && err.message) || "the export request failed";
+      setExportState({ status: "error", message });
+    }
+  };
+
   if (!plan) return null;
   const sides = plan.sides || {};
   const margin = plan.margin || {};
@@ -328,18 +404,53 @@ export default function TitrationSessionCard({ plan }) {
           </MDBox>
           <MDBox display="flex" alignItems="center" gap={1}>
             <TextField type="date" size="small" value={sessionDate}
-              onChange={(e) => setSessionDate(e.target.value)}
+              onChange={(e) => { setSessionDate(e.target.value); setExportState({ status: "idle" }); }}
               inputProps={{ style: { fontSize: TYPE.small, fontFamily: PAL.mono, padding: "6px 8px" } }} />
-            <Tooltip title="export is being built">
-              <span>
-                <Button variant="outlined" size="small" disabled
+            {exportState.status === "drive" ? (
+              <MDBox display="flex" alignItems="center" gap={1}>
+                <MDTypography component="a" href={exportState.url} target="_blank" rel="noreferrer"
+                  variant="caption" sx={{ fontSize: TYPE.small, color: PAL.pass, whiteSpace: "nowrap" }}>
+                  Open in Google Sheets
+                </MDTypography>
+                <Button variant="text" size="small" onClick={handleExport}
+                  disabled={!participantUid}
                   sx={{ fontSize: TYPE.small, textTransform: "none", whiteSpace: "nowrap" }}>
-                  Make Google sheet
+                  re-export
                 </Button>
-              </span>
-            </Tooltip>
+              </MDBox>
+            ) : (
+              <Tooltip title={participantUid ? "copies the clinic-sheet template and writes this "
+                + "session's rows into it" : "no participant is selected"}>
+                <span>
+                  <Button variant="outlined" size="small" onClick={handleExport}
+                    disabled={!participantUid || exportState.status === "working"}
+                    sx={{ fontSize: TYPE.small, textTransform: "none", whiteSpace: "nowrap" }}>
+                    {exportState.status === "working" ? "Making sheet…" : "Make Google sheet"}
+                  </Button>
+                </span>
+              </Tooltip>
+            )}
           </MDBox>
         </MDBox>
+
+        {exportState.status === "error" && (
+          <MDTypography variant="caption" component="div"
+            sx={{ ...SMALL, mt: 0.5, color: PAL.warnText }}>
+            {`could not make the sheet: ${exportState.message}`}
+          </MDTypography>
+        )}
+        {exportState.status === "drive" && (
+          <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.5 }}>
+            {`${exportState.overwrote ? "Overwrote" : "Wrote"} "${exportState.name}" with `
+              + `${exportState.nRows} rows. Re-export overwrites this same file rather than `
+              + "making a new copy."}
+          </MDTypography>
+        )}
+        {exportState.status === "xlsx" && (
+          <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.5 }}>
+            {`Downloaded ${exportState.name}. ${SHEET_EXPORT_SETUP_NOTE}`}
+          </MDTypography>
+        )}
 
         {!plan.available ? (
           <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 1, color: PAL.warnText }}>
