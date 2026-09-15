@@ -151,6 +151,29 @@ MIN_TOLERATED_H = 72.0
 JOINT_AMP_STEP = 0.25
 JOINT_AMP_GRID = np.round(np.arange(0.0, OBJ.AMP_HARD_LIMIT_MA + 0.01, JOINT_AMP_STEP), 2)
 
+#: Minimum epochs at ONE rate, inside an already-fitted (pulse-width-Left, pulse-width-Right)
+#: stratum, before a PER-RATE (amplitude-Left, amplitude-Right) surface is fitted for it. The
+#: same floor as ``PW_STRATUM_MIN_EPOCHS`` -- a rate is not held to a laxer or a stricter standard
+#: than a pulse-width pair was.
+RATE_STRATUM_MIN_EPOCHS = PW_STRATUM_MIN_EPOCHS
+
+#: The three checks a PER-RATE current recommendation must clear (2026-09-14, following the PI's
+#: own measurement that the 3-input joint surface can recommend a current from a surface that is
+#: flat almost everywhere, drawing its confidence at a thin rate from data collected at OTHER
+#: rates through the shared, pinned rate axis). All three must pass for a rate's current
+#: recommendation to be honest:
+#:   (i)   the fitted surface is not flat -- its range over safe cells must exceed
+#:         ``RESOLUTION_K`` times the median posterior standard deviation over those cells;
+#:   (ii)  the usual gain-over-incumbent test (``RESOLUTION_K`` times the standard deviation of
+#:         the difference), read from THIS rate's own surface, never a borrowed one;
+#:   (iii) the design actually supports telling the two currents apart: at least
+#:         ``CURRENT_COVERAGE_MIN_PAIRS`` distinct (left, right) current pairs, each with at least
+#:         ``CURRENT_COVERAGE_MIN_REPORTS_PER_PAIR`` reports, spanning at least
+#:         ``CURRENT_COVERAGE_MIN_SPAN_MA`` on EACH axis.
+CURRENT_COVERAGE_MIN_PAIRS = 6
+CURRENT_COVERAGE_MIN_REPORTS_PER_PAIR = 5
+CURRENT_COVERAGE_MIN_SPAN_MA = 1.0
+
 #: Per-axis length-scale pinning for the joint (rate, amp_Left, amp_Right) surrogate. Pins the
 #: RATE axis only, at the same value ``routines.plots.FIXED_LENGTH_SCALE`` pins it to for the
 #: pre-joint 2-D surrogate (the frequency length scale is not identifiable from this design; see
@@ -382,6 +405,12 @@ class JointStratum:
     mu_star_unconstrained: float = float("nan")
     envelope_empty: bool = False
     envelope_constrained: bool = False
+    #: One :class:`RateStratum` per rate this (pulse-width-Left, pulse-width-Right) stratum
+    #: actually delivered, keyed on the rate in Hz (2026-09-14). Built by ``run_stage1`` right
+    #: after this joint surface is fitted; see the module docstring's "WHY THE SEARCH IS NOW
+    #: JOINT" section's sibling, the per-rate honesty check, for why this exists alongside the
+    #: 3-input surface rather than instead of it.
+    rate_strata: dict = field(default_factory=dict)
 
     @property
     def optimum_moved_by_envelope(self) -> bool:
@@ -412,6 +441,199 @@ class JointStratum:
         if not np.isfinite(sd_diff) or sd_diff <= 0:
             return False
         return bool(self.gain_over_incumbent() > float(k) * sd_diff)
+
+
+@dataclass
+class RateStratum:
+    """One (amplitude-Left, amplitude-Right) surface, fitted at a SINGLE stimulation rate inside
+    one (pulse-width-Left, pulse-width-Right) stratum (2026-09-14).
+
+    This is what actually decides a current recommendation now. The 3-input
+    :class:`JointStratum` this sits inside is left untouched and is still reported (as
+    ``pooled_across_rates`` in the summary table) because it is still the right tool for choosing
+    the RATE and the PULSE WIDTH -- those choices need to pool across rates to have any data at
+    all. But reading a CURRENT off that pooled surface at a rate it barely sampled draws its
+    apparent precision from OTHER rates through the shared, pinned rate axis; measured on RCS08,
+    the pooled surface's own range across every safe cell at 55 Hz was 0.965-0.969 (its kernel's
+    signal amplitude sits at its lower bound), so its argmin is noise, not a finding. This class
+    fits amplitude alone, at one rate, with no rate axis to borrow through.
+
+    ``fitted`` is ``False`` when there were not enough epochs at this rate to fit anything; every
+    other numeric field is then meaningless and ``reason`` says why.
+    """
+
+    pw_us_left: float
+    pw_us_right: float
+    rate_hz: float
+    n_epochs: int
+    fitted: bool
+    reason: str = ""
+    grid: object = None
+    gp: object = None
+    mu: np.ndarray = None                  # (n_amp_left, n_amp_right), this rate's own surface
+    sd: np.ndarray = None
+    safe: np.ndarray = None
+    n_reports: np.ndarray = None
+    x_star: tuple = None                   # (amp_mA_left, amp_mA_right)
+    mu_star: float = float("nan")
+    sd_star: float = float("nan")
+    n_reports_total: float = 0.0
+    coverage: dict = field(default_factory=dict)
+    resolution: dict = field(default_factory=dict)
+    meta: dict = field(default_factory=dict)
+
+
+def current_coverage(sub, *, min_pairs=CURRENT_COVERAGE_MIN_PAIRS,
+                     min_reports_per_pair=CURRENT_COVERAGE_MIN_REPORTS_PER_PAIR,
+                     min_span_mA=CURRENT_COVERAGE_MIN_SPAN_MA) -> dict:
+    """Check (iii) of the honest-current rule: does the DESIGN actually let the two currents be
+    told apart? ``sub`` needs ``amp_mA_Left``, ``amp_mA_Right`` and ``n`` (report count) columns;
+    every row counts, fitted or not, so this can also be run on a PLANNED schedule
+    (``current_map_schedule.py``) to check what it would buy before it is run.
+
+    Counts distinct (left, right) current PAIRS carrying at least ``min_reports_per_pair`` reports
+    between them, and the span those qualifying pairs cover on each axis separately -- a pair at
+    (1.0, 1.0) and one at (1.0, 4.0) span the right axis but say nothing about the left one.
+    """
+    d = pd.DataFrame(sub)
+    if d.empty or not {"amp_mA_Left", "amp_mA_Right", "n"}.issubset(d.columns):
+        return dict(n_pairs=0, n_pairs_required=int(min_pairs),
+                    reports_per_pair_required=float(min_reports_per_pair),
+                    span_left_mA=0.0, span_right_mA=0.0,
+                    span_required_mA=float(min_span_mA), passes=False)
+    g = (d.assign(amp_mA_Left=pd.to_numeric(d["amp_mA_Left"], errors="coerce").round(3),
+                 amp_mA_Right=pd.to_numeric(d["amp_mA_Right"], errors="coerce").round(3),
+                 n=pd.to_numeric(d["n"], errors="coerce").fillna(0.0))
+           .groupby(["amp_mA_Left", "amp_mA_Right"])["n"].sum().reset_index())
+    qual = g.loc[g["n"] >= float(min_reports_per_pair)]
+    n_pairs = int(len(qual))
+    span_left = float(qual["amp_mA_Left"].max() - qual["amp_mA_Left"].min()) if n_pairs else 0.0
+    span_right = float(qual["amp_mA_Right"].max() - qual["amp_mA_Right"].min()) if n_pairs else 0.0
+    passes = bool(n_pairs >= int(min_pairs) and span_left >= float(min_span_mA)
+                 and span_right >= float(min_span_mA))
+    return dict(n_pairs=n_pairs, n_pairs_required=int(min_pairs),
+               reports_per_pair_required=float(min_reports_per_pair),
+               span_left_mA=span_left, span_right_mA=span_right,
+               span_required_mA=float(min_span_mA), passes=passes)
+
+
+def _rate_stratum_resolution(rs: "RateStratum", joint_stratum: JointStratum, *,
+                             resolution_k: float = RESOLUTION_K) -> dict:
+    """The three-part honest-current check for one :class:`RateStratum`. Returns a dict with
+    ``resolved`` and the three sub-checks (``flat``, ``gain``, ``coverage``), each carrying its
+    own numbers, plus one plain-language ``sentence``.
+
+    The gain check (ii) is read against ``joint_stratum``'s OWN incumbent prediction
+    (``incumbent_mu``/``incumbent_sd``/``incumbent_rate_supported``) -- the 3-input model's
+    already-extrapolation-aware statement of whether comparing against the incumbent means
+    anything at all for this pulse-width pair -- but the CANDIDATE side of that comparison is
+    this rate's own, never-borrowed ``mu_star``/``sd_star``. That is the fix: the question of
+    whether a comparison against the incumbent is even meaningful stays where it always was; the
+    number being compared is no longer allowed to be drawn from other rates.
+    """
+    if rs.safe is not None and np.asarray(rs.safe).any():
+        mu_safe = np.asarray(rs.mu)[np.asarray(rs.safe)]
+        sd_safe = np.asarray(rs.sd)[np.asarray(rs.safe)]
+        rng = float(np.nanmax(mu_safe) - np.nanmin(mu_safe))
+        med_sd = float(np.nanmedian(sd_safe))
+        flat_passes = bool(np.isfinite(rng) and np.isfinite(med_sd) and med_sd > 0
+                           and rng > float(resolution_k) * med_sd)
+    else:
+        rng, med_sd, flat_passes = float("nan"), float("nan"), False
+    flat = dict(range=rng, median_sd=med_sd, passes=flat_passes)
+
+    if not joint_stratum.incumbent_rate_supported:
+        gain = dict(gain=float("nan"), sd_diff=float("nan"), passes=None)
+    else:
+        g = float(joint_stratum.incumbent_mu) - float(rs.mu_star)
+        sdd = float(np.sqrt(float(rs.sd_star) ** 2 + float(joint_stratum.incumbent_sd) ** 2))
+        g_passes = bool(np.isfinite(sdd) and sdd > 0 and g > float(resolution_k) * sdd)
+        gain = dict(gain=g, sd_diff=sdd, passes=g_passes)
+
+    coverage = dict(rs.coverage or {})
+    resolved = bool(flat["passes"] and gain["passes"] is True and coverage.get("passes"))
+
+    reasons = []
+    if not flat["passes"]:
+        if not (rs.safe is not None and np.asarray(rs.safe).any()):
+            reasons.append("no current combination at this rate clears the safety model")
+        else:
+            reasons.append(f"the fitted surface varies by {rng:.3f} across the whole grid against "
+                           f"a typical uncertainty of {med_sd:.3f}")
+    if gain["passes"] is None:
+        reasons.append("this pulse-width pair never ran the setting currently in force, so there "
+                       "is nothing to compare a gain against")
+    elif not gain["passes"]:
+        reasons.append(f"the best cell's predicted improvement, {gain['gain']:+.3f}, does not "
+                       f"clear the uncertainty in that difference, {gain['sd_diff']:.3f}")
+    if not coverage.get("passes"):
+        reasons.append(
+            f"only {coverage.get('n_pairs', 0)} current combination(s) have been tried with at "
+            f"least {coverage.get('reports_per_pair_required', CURRENT_COVERAGE_MIN_REPORTS_PER_PAIR):g} "
+            f"reports each (need {coverage.get('n_pairs_required', CURRENT_COVERAGE_MIN_PAIRS)}), "
+            f"spanning {coverage.get('span_left_mA', 0.0):.2f} mA on the left and "
+            f"{coverage.get('span_right_mA', 0.0):.2f} mA on the right (need "
+            f"{coverage.get('span_required_mA', CURRENT_COVERAGE_MIN_SPAN_MA):g} mA on each)")
+    if resolved:
+        sentence = (f"a current can be recommended at {rs.rate_hz:g} Hz: the fitted surface "
+                    f"varies by {rng:.3f} against a typical uncertainty of {med_sd:.3f}, "
+                    f"{coverage.get('n_pairs', 0)} current combinations have been tried with "
+                    f"enough spread, and the best cell beats the setting in force by "
+                    f"{gain['gain']:+.3f} against an uncertainty of {gain['sd_diff']:.3f}")
+    else:
+        sentence = (f"no current can be recommended from this record at {rs.rate_hz:g} Hz: "
+                    + "; and ".join(reasons))
+    return dict(resolved=resolved, flat=flat, gain=gain, coverage=coverage, sentence=sentence)
+
+
+def _fit_rate_stratum(pwl, pwr, rate, sub, *, amp_grid, sgp_left, sgp_right,
+                      fixed_length_scale, beta) -> RateStratum:
+    """Fit ONE (amplitude-Left, amplitude-Right) surface at a single rate. ``sub`` is already
+    restricted to this (pulse-width pair, rate); the caller has already checked it clears
+    ``RATE_STRATUM_MIN_EPOCHS``. ``sgp_left``/``sgp_right`` are the SAME shared, per-side safety
+    models the enclosing :class:`JointStratum` fit was given -- one safety model per side, fitted
+    once on the whole record, unchanged by this per-rate split."""
+    grid = SUR.JointParameterGrid([rate], amp_grid, amp_grid)
+    Xobs = sub[["freq_hz", "amp_mA_Left", "amp_mA_Right"]].to_numpy(float)
+    gp = SUR.ObjectiveGP(grid, fixed_length_scale=fixed_length_scale, random_state=0).fit(
+        Xobs, sub["J"].to_numpy(float), sub["obs_var"].to_numpy(float))
+    mu, sd = gp.predict_grid()
+    gx = grid.grid_X()
+    safe = (np.asarray(sgp_left.safe_mask(X=gx[:, [0, 1]], beta=beta), bool)
+            & np.asarray(sgp_right.safe_mask(X=gx[:, [0, 2]], beta=beta), bool))
+    n_reports = np.zeros(len(grid))
+    np.add.at(n_reports, grid.index_of(Xobs), sub["n"].to_numpy(float))
+    i_star = int(np.argmin(np.where(safe, mu, np.inf)))
+    coverage = current_coverage(sub)
+    return RateStratum(
+        pw_us_left=float(pwl), pw_us_right=float(pwr), rate_hz=float(rate),
+        n_epochs=int(len(sub)), fitted=True,
+        grid=grid, gp=gp,
+        mu=grid.as_surface(mu)[0], sd=grid.as_surface(sd)[0],
+        safe=grid.as_surface(safe.astype(float))[0] > 0,
+        n_reports=grid.as_surface(n_reports)[0],
+        x_star=(float(gx[i_star, 1]), float(gx[i_star, 2])),
+        mu_star=float(mu[i_star]), sd_star=float(sd[i_star]),
+        n_reports_total=float(sub["n"].sum()), coverage=coverage,
+        meta=dict(kernel=gp.hyperparameters["kernel"], n_safe=int(safe.sum())))
+
+
+def _pooled_slice_at_rate(sl: JointStratum, rate_hz: float) -> dict:
+    """What the 3-input, POOLED-ACROSS-RATES surface says at ``rate_hz``, for reference only. This
+    is never used to choose or resolve a current (see :class:`RateStratum`'s docstring) -- it is
+    reported beside the honest per-rate surface so a reader can see exactly what the pooled model
+    would have claimed and how it differs."""
+    fi = int(np.argmin(np.abs(sl.grid.freqs - float(rate_hz))))
+    mu3 = sl.grid.as_surface(sl.mu)[fi]
+    safe3 = sl.grid.as_surface(sl.safe.astype(float))[fi] > 0
+    rng = float(np.nanmax(mu3[safe3]) - np.nanmin(mu3[safe3])) if safe3.any() else float("nan")
+    delivered = float(rate_hz) in set(np.round(np.asarray(sl.meta["rates_delivered"], float), 6))
+    note = ("this rate was directly delivered on the pooled surface too, but the pooled surface "
+            "still borrows its precision from every other rate through the shared, pinned rate "
+            "axis; for reference only, not used for the recommendation" if delivered else
+            "this rate's slice of the pooled surface is BORROWED from other rates through the "
+            "shared, pinned rate axis; for reference only, not used for the recommendation")
+    return dict(mu_range=rng, delivered_at_this_rate=bool(delivered), note=note)
 
 
 def _fit_joint_stratum(pwl, pwr, sub, *, grid, sgp_left, sgp_right, incumbent_xyz,
@@ -508,6 +730,12 @@ class Stage1Result:
     audit: dict
     D: pd.DataFrame
     skipped: dict = field(default_factory=dict)
+    #: One row per (pulse-width pair, rate) that was even ATTEMPTED (2026-09-14): whether a
+    #: per-rate surface was fitted, its resolution verdict and numbers when it was, and the
+    #: POOLED 3-input model's own slice at that rate for reference -- see
+    #: ``JointStratum.rate_strata`` and ``_pooled_slice_at_rate``. Empty when nothing was fitted
+    #: at all.
+    rate_summary: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     def slices_for(self, hemisphere: str) -> list:
         """Every fitted joint stratum. Kept for callers written against the pre-joint API: since
@@ -689,6 +917,34 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
         except (ValueError, RuntimeError) as exc:
             skipped[f"pwL{pwl:g}_pwR{pwr:g}"] = f"{type(exc).__name__}: {exc}"
             continue
+        # --- PER-RATE 2-input surfaces (2026-09-14): the honest current-recommendation engine.
+        # Every rate this stratum actually delivered gets its own (amp_Left, amp_Right) fit when
+        # it clears RATE_STRATUM_MIN_EPOCHS; a thinner rate is recorded as not fitted, never
+        # silently pooled into a neighbour, exactly the discipline the pulse-width strata
+        # themselves already use.
+        rate_strata = {}
+        for rate, subr in sub.groupby("freq_hz"):
+            rate = float(rate)
+            n_r = int(len(subr))
+            if n_r < int(RATE_STRATUM_MIN_EPOCHS):
+                rate_strata[rate] = RateStratum(
+                    pw_us_left=float(pwl), pw_us_right=float(pwr), rate_hz=rate,
+                    n_epochs=n_r, fitted=False,
+                    reason=f"{n_r} epochs, below the {int(RATE_STRATUM_MIN_EPOCHS)}-epoch floor")
+                continue
+            try:
+                rs = _fit_rate_stratum(pwl, pwr, rate, subr, amp_grid=amp_grid,
+                                       sgp_left=sgp_by_side["Left"], sgp_right=sgp_by_side["Right"],
+                                       fixed_length_scale=fixed_length_scale, beta=beta)
+            except (ValueError, RuntimeError) as exc:
+                rate_strata[rate] = RateStratum(
+                    pw_us_left=float(pwl), pw_us_right=float(pwr), rate_hz=rate,
+                    n_epochs=n_r, fitted=False, reason=f"{type(exc).__name__}: {exc}")
+                continue
+            rs.resolution = _rate_stratum_resolution(rs, sl, resolution_k=resolution_k)
+            rate_strata[rate] = rs
+        sl.rate_strata = rate_strata
+
         slices[key] = sl
         rows.append(dict(
             pw_us_left=pwl, pw_us_right=pwr, n_epochs=sl.n_epochs,
@@ -762,8 +1018,50 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
             summary_rows.append(row)
     summary = pd.DataFrame(summary_rows)
 
+    # --- the per-rate table (2026-09-14): one row per (pulse-width pair, rate) that was even
+    # attempted, fitted or not, with the pooled 3-input model's own slice at that rate alongside
+    # it for reference. See ``JointStratum.rate_strata``.
+    rate_rows = []
+    for (pwl, pwr), sl in slices.items():
+        for rate, rs in (sl.rate_strata or {}).items():
+            pooled = _pooled_slice_at_rate(sl, rate)
+            row = dict(pw_us_left=float(pwl), pw_us_right=float(pwr), rate_hz=float(rate),
+                       fitted=bool(rs.fitted), n_epochs=int(rs.n_epochs),
+                       pooled_across_rates_mu_range=pooled["mu_range"],
+                       pooled_across_rates_delivered_at_this_rate=pooled["delivered_at_this_rate"],
+                       pooled_across_rates_note=pooled["note"])
+            if rs.fitted:
+                res = rs.resolution or {}
+                row.update(
+                    n_reports=float(rs.n_reports_total),
+                    amp_mA_left=rs.x_star[0], amp_mA_right=rs.x_star[1],
+                    posterior_mean=rs.mu_star, posterior_sd=rs.sd_star,
+                    resolved=bool(res.get("resolved")),
+                    flat_range=res.get("flat", {}).get("range"),
+                    flat_median_sd=res.get("flat", {}).get("median_sd"),
+                    flat_passes=res.get("flat", {}).get("passes"),
+                    gain=res.get("gain", {}).get("gain"),
+                    gain_sd_of_difference=res.get("gain", {}).get("sd_diff"),
+                    gain_passes=res.get("gain", {}).get("passes"),
+                    coverage_n_pairs=res.get("coverage", {}).get("n_pairs"),
+                    coverage_span_left_mA=res.get("coverage", {}).get("span_left_mA"),
+                    coverage_span_right_mA=res.get("coverage", {}).get("span_right_mA"),
+                    coverage_passes=res.get("coverage", {}).get("passes"),
+                    sentence=res.get("sentence"), reason=None)
+            else:
+                row.update(n_reports=float("nan"), amp_mA_left=float("nan"),
+                          amp_mA_right=float("nan"), posterior_mean=float("nan"),
+                          posterior_sd=float("nan"), resolved=False, flat_range=float("nan"),
+                          flat_median_sd=float("nan"), flat_passes=None, gain=float("nan"),
+                          gain_sd_of_difference=float("nan"), gain_passes=None,
+                          coverage_n_pairs=0, coverage_span_left_mA=float("nan"),
+                          coverage_span_right_mA=float("nan"), coverage_passes=False,
+                          sentence=None, reason=str(rs.reason))
+            rate_rows.append(row)
+    rate_summary = pd.DataFrame(rate_rows)
+
     return Stage1Result(frozen=frozen, slices=slices, summary=summary, audit=audit,
-                        D=D, skipped=skipped)
+                        D=D, skipped=skipped, rate_summary=rate_summary)
 
 
 def _freeze_joint(slices: dict, inc_rate, inc_pw_by_side: dict, *, h_audit, gx, resolution_k,
@@ -880,6 +1178,41 @@ def _freeze_joint(slices: dict, inc_rate, inc_pw_by_side: dict, *, h_audit, gx, 
     rate_resolved = best.resolves_its_optimum(resolution_k)
     gain = best.gain_over_incumbent()
     sd_diff = best.sd_of_difference()
+    chosen_rate = float(best.x_star[0])
+
+    # --- THE HONEST CURRENT RECOMMENDATION (2026-09-14). The rate and the pulse-width pair are
+    # still chosen from the POOLED 3-input surface above -- that choice needs to pool across
+    # rates to have any data to choose from at all. But the CURRENT itself is read from the
+    # PER-RATE 2-input surface at the chosen rate, never from the pooled surface's own optimum,
+    # because that is exactly what let a flat, borrowed surface recommend a current that was
+    # noise (module docstring, "WHY THE SEARCH IS NOW JOINT"). A current is only handed back when
+    # that rate's own surface clears all three checks in ``_rate_stratum_resolution``; otherwise
+    # ``amp_star_mA`` is NaN and the reason names which check failed.
+    rate_strata_here = best.rate_strata or {}
+    rs_chosen = next((v for k, v in rate_strata_here.items() if abs(k - chosen_rate) < 1e-6), None)
+    if rs_chosen is not None and rs_chosen.fitted and (rs_chosen.resolution or {}).get("resolved"):
+        amp_left_current, amp_right_current = rs_chosen.x_star
+        current_ok = True
+        current_reason = f"CURRENT: {rs_chosen.resolution['sentence']}"
+        current_resolution = dict(rs_chosen.resolution)
+    else:
+        amp_left_current = amp_right_current = float("nan")
+        current_ok = False
+        if rs_chosen is None:
+            current_reason = (
+                f"CURRENT: no current can be recommended at {chosen_rate:g} Hz: this rate was "
+                f"never delivered at the chosen pulse-width pair (Left {best.pw_us_left:g} us, "
+                f"Right {best.pw_us_right:g} us), so there is no rate-specific surface to read a "
+                "current from")
+            current_resolution = dict(resolved=False, sentence=current_reason)
+        elif not rs_chosen.fitted:
+            current_reason = (f"CURRENT: no current can be recommended at {chosen_rate:g} Hz: "
+                              f"{rs_chosen.reason}")
+            current_resolution = dict(resolved=False, sentence=current_reason,
+                                      reason=rs_chosen.reason)
+        else:
+            current_reason = f"CURRENT: {rs_chosen.resolution['sentence']}"
+            current_resolution = dict(rs_chosen.resolution)
 
     reasons = []
     if rate_resolved is None:
@@ -1014,22 +1347,31 @@ def _freeze_joint(slices: dict, inc_rate, inc_pw_by_side: dict, *, h_audit, gx, 
             f"reason: {constraint.reason}")
         env_detail["override"] = dict(reason=constraint.reason, by=constraint.by)
 
+    # The current recommendation's own honesty check (computed above, just after `best` was
+    # chosen) is appended last, and a rate choice that was otherwise resolved is DOWNGRADED to
+    # unresolved when the current cannot be: freezing a rate move with no idea what current to
+    # run it at is not a configuration Stage 2 should ever receive. `False` -> `False` and
+    # `None` -> `None` are left alone; only `True` -> `False` changes, and only for that reason.
+    reasons.append(current_reason)
+    rate_resolved_effective = (False if rate_resolved is True and not current_ok else rate_resolved)
+
     reasons_t = tuple(reasons)
     settings = []
     for hemi in hemispheres:
         pw_this = best.pw_us_left if hemi == "Left" else best.pw_us_right
-        amp_this = float(best.x_star[1] if hemi == "Left" else best.x_star[2])
+        amp_this = float(amp_left_current if hemi == "Left" else amp_right_current)
         detail = dict(n_slices=len(usable), best_pw_us_left=float(best.pw_us_left),
                      best_pw_us_right=float(best.pw_us_right),
                      incumbent_pw_us_left=inc_pwl, incumbent_pw_us_right=inc_pwr,
-                     adaptive_envelope=dict(env_detail))
+                     adaptive_envelope=dict(env_detail),
+                     current_resolution=dict(current_resolution))
         detail["adaptive_envelope"]["brainsense_pair"] = ENV.brainsense_pair_demonstrated(
             chosen_rate, pw_this, hemi)
         settings.append(HemisphereSetting(
             hemisphere=hemi, rate_hz=chosen_rate, pw_us=float(pw_this), amp_star_mA=amp_this,
             amp_delivered_min_mA=h_audit.get(hemi, {}).get("amp_delivered_min", float("nan")),
             amp_delivered_max_mA=h_audit.get(hemi, {}).get("amp_delivered_max", float("nan")),
-            n_epochs_fitted=int(best.n_epochs), rate_resolved=rate_resolved,
+            n_epochs_fitted=int(best.n_epochs), rate_resolved=rate_resolved_effective,
             pw_resolved=pw_resolved, gain=float(gain), sd_of_difference=float(sd_diff),
             reasons=reasons_t, detail=detail))
     return settings, exclusions_by_side

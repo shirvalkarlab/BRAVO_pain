@@ -417,3 +417,226 @@ def test_the_joint_safe_set_is_exactly_the_and_of_both_sides_own_safety_models()
     assert np.array_equal(sl.safe, expected)
     assert sl.safe.any(), "some cell under both ceilings must remain safe in this fixture"
     assert (~sl.safe).any(), "some cell must be excluded by at least one side's ceiling"
+
+
+# ---------------------------------------------------------------------------------------------
+# The per-rate honest-current check (2026-09-14): current_coverage, _rate_stratum_resolution,
+# and the full run_stage1 -> HemisphereSetting.amp_star_mA integration.
+# ---------------------------------------------------------------------------------------------
+def test_current_coverage_needs_enough_pairs_and_enough_span():
+    good = pd.DataFrame({
+        "amp_mA_Left": [0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 4.0, 4.0],
+        "amp_mA_Right": [0.0, 4.0, 1.0, 3.0, 0.0, 4.0, 0.0, 4.0],
+        "n": [8, 8, 8, 8, 8, 8, 8, 8],
+    })
+    cov = S1.current_coverage(good)
+    assert cov["n_pairs"] == 8
+    assert cov["span_left_mA"] == pytest.approx(4.0)
+    assert cov["span_right_mA"] == pytest.approx(4.0)
+    assert cov["passes"] is True
+
+    too_few_reports = pd.DataFrame({
+        "amp_mA_Left": [0.0, 1.0, 2.0, 3.0, 4.0, 4.0],
+        "amp_mA_Right": [0.0, 1.0, 2.0, 3.0, 4.0, 0.0],
+        "n": [1, 1, 1, 1, 1, 1],           # below the 5-report-per-pair floor
+    })
+    cov2 = S1.current_coverage(too_few_reports)
+    assert cov2["n_pairs"] == 0
+    assert cov2["passes"] is False
+
+    clustered = pd.DataFrame({
+        "amp_mA_Left": [1.0, 1.1, 1.2, 1.3, 1.4, 1.5],
+        "amp_mA_Right": [1.0, 1.1, 1.2, 1.3, 1.4, 1.5],
+        "n": [8, 8, 8, 8, 8, 8],           # 6 pairs, enough reports, but span < 1.0 mA
+    })
+    cov3 = S1.current_coverage(clustered)
+    assert cov3["n_pairs"] == 6
+    assert cov3["span_left_mA"] == pytest.approx(0.5)
+    assert cov3["passes"] is False
+
+    empty = S1.current_coverage(pd.DataFrame(columns=["amp_mA_Left", "amp_mA_Right", "n"]))
+    assert empty["n_pairs"] == 0
+    assert empty["passes"] is False
+
+
+def _stub_rate_stratum(*, mu, sd, safe, mu_star, sd_star, coverage):
+    mu, sd, safe = np.asarray(mu, float), np.asarray(sd, float), np.asarray(safe, bool)
+    return S1.RateStratum(pw_us_left=60.0, pw_us_right=160.0, rate_hz=55.0,
+                          n_epochs=40, fitted=True, mu=mu, sd=sd, safe=safe,
+                          x_star=(2.0, 2.0), mu_star=mu_star, sd_star=sd_star,
+                          coverage=coverage)
+
+
+def _stub_joint_stratum(*, incumbent_rate_supported, incumbent_mu=0.0, incumbent_sd=0.3):
+    return S1.JointStratum(
+        pw_us_left=60.0, pw_us_right=160.0, n_epochs=40, grid=None, gp=None,
+        mu=np.zeros(1), sd=np.ones(1), safe=np.ones(1, bool), i_star=0,
+        x_star=(55.0, 2.0, 2.0), mu_star=0.0, sd_star=0.5,
+        incumbent_mu=incumbent_mu, incumbent_sd=incumbent_sd, n_reports=np.zeros(1),
+        queue=np.array([], int), stopping=None,
+        incumbent_rate_supported=incumbent_rate_supported)
+
+
+_GOOD_COVERAGE = dict(n_pairs=8, n_pairs_required=6, reports_per_pair_required=5.0,
+                      span_left_mA=4.0, span_right_mA=4.0, span_required_mA=1.0, passes=True)
+_BAD_COVERAGE = dict(n_pairs=1, n_pairs_required=6, reports_per_pair_required=5.0,
+                     span_left_mA=0.0, span_right_mA=0.0, span_required_mA=1.0, passes=False)
+
+
+def test_rate_stratum_resolves_only_when_all_three_checks_pass():
+    joint = _stub_joint_stratum(incumbent_rate_supported=True, incumbent_mu=0.0, incumbent_sd=0.3)
+    # A real, well-separated surface: safe cells range from -3 to +1, typical SD 0.3 -- clears
+    # the flatness check; the best cell (-3.0) beats the incumbent (0.0) by far more than the
+    # propagated SD; coverage is good.
+    resolved = _stub_rate_stratum(
+        mu=[[-3.0, -1.0], [1.0, 0.5]], sd=[[0.3, 0.3], [0.3, 0.3]],
+        safe=[[True, True], [True, True]], mu_star=-3.0, sd_star=0.3, coverage=_GOOD_COVERAGE)
+    res = S1._rate_stratum_resolution(resolved, joint, resolution_k=S1.RESOLUTION_K)
+    assert res["flat"]["passes"] is True
+    assert res["gain"]["passes"] is True
+    assert res["coverage"]["passes"] is True
+    assert res["resolved"] is True
+    assert "can be recommended" in res["sentence"]
+
+
+def test_rate_stratum_does_not_resolve_when_flat():
+    joint = _stub_joint_stratum(incumbent_rate_supported=True)
+    # Every safe cell reads almost the same value -- the PI's own live finding (0.965-0.969
+    # across the whole 55 Hz grid): the argmin is noise, not a recommendation.
+    flat = _stub_rate_stratum(
+        mu=[[-0.002, -0.001], [0.000, 0.001]], sd=[[1.1, 1.1], [1.1, 1.1]],
+        safe=[[True, True], [True, True]], mu_star=-0.002, sd_star=1.1, coverage=_GOOD_COVERAGE)
+    res = S1._rate_stratum_resolution(flat, joint, resolution_k=S1.RESOLUTION_K)
+    assert res["flat"]["passes"] is False
+    assert res["resolved"] is False
+    assert "no current can be recommended" in res["sentence"]
+    assert "varies by" in res["sentence"]
+
+
+def test_rate_stratum_does_not_resolve_with_poor_coverage_even_if_not_flat():
+    joint = _stub_joint_stratum(incumbent_rate_supported=True, incumbent_mu=0.0, incumbent_sd=0.1)
+    thin = _stub_rate_stratum(
+        mu=[[-5.0, -1.0], [1.0, 0.5]], sd=[[0.1, 0.1], [0.1, 0.1]],
+        safe=[[True, True], [True, True]], mu_star=-5.0, sd_star=0.1, coverage=_BAD_COVERAGE)
+    res = S1._rate_stratum_resolution(thin, joint, resolution_k=S1.RESOLUTION_K)
+    assert res["flat"]["passes"] is True
+    assert res["gain"]["passes"] is True
+    assert res["coverage"]["passes"] is False
+    assert res["resolved"] is False
+    assert "current combination" in res["sentence"]
+
+
+def test_rate_stratum_gain_not_assessed_when_the_stratum_never_ran_the_incumbent_rate():
+    joint = _stub_joint_stratum(incumbent_rate_supported=False)
+    surf = _stub_rate_stratum(
+        mu=[[-3.0, -1.0], [1.0, 0.5]], sd=[[0.3, 0.3], [0.3, 0.3]],
+        safe=[[True, True], [True, True]], mu_star=-3.0, sd_star=0.3, coverage=_GOOD_COVERAGE)
+    res = S1._rate_stratum_resolution(surf, joint, resolution_k=S1.RESOLUTION_K)
+    assert res["gain"]["passes"] is None
+    assert res["resolved"] is False
+    assert "never ran the setting currently in force" in res["sentence"]
+
+
+# ---------------------------------------------------------------------------------------------
+# End to end: run_stage1 -> HemisphereSetting.amp_star_mA, honest per-rate
+# ---------------------------------------------------------------------------------------------
+def _current_effect_matrix(*, slope_per_mA=0.0, noise_sd=0.3, n_per_cell=15, seed=0,
+                           thin_rate=None, thin_rate_n=0, n_reps=3):
+    """One (pulse-width) stratum, one rate (55 Hz), a 5x5 (left, right) current grid, each cell
+    repeated `n_reps` times at different timestamps. `slope_per_mA` controls how strongly pain
+    falls with the SUM of the two currents; 0 means no current effect at all. `thin_rate`, when
+    given, adds a second, deliberately undersampled rate (`thin_rate_n` epochs, all at one
+    current) so a caller can check it is reported as not enough data."""
+    rng = np.random.default_rng(seed)
+    levels = [0.0, 1.0, 2.0, 3.0, 4.0]
+    rows, ep = [], 0
+    for rep in range(int(n_reps)):
+        for l in levels:
+            for r in levels:
+                ep += 1
+                # No floor/ceiling clip: a clean linear response, so a "flat" or "resolved"
+                # verdict comes from the fitted surface alone, never from a saturation artefact.
+                pain = 60.0 - float(slope_per_mA) * (l + r) + noise_sd * rng.standard_normal()
+                rows.append(dict(epoch=float(ep), freq_hz=55.0, pw_us_Left=60.0, pw_us_Right=160.0,
+                                 amp_mA_Left=l, amp_mA_Right=r, n=float(n_per_cell), dur_h=200.0,
+                                 left_leg_vas=float(pain), left_leg_vas_sd=1.0))
+    if thin_rate is not None and thin_rate_n > 0:
+        for k in range(thin_rate_n):
+            ep += 1
+            rows.append(dict(epoch=float(ep), freq_hz=float(thin_rate), pw_us_Left=60.0,
+                             pw_us_Right=160.0, amp_mA_Left=2.0, amp_mA_Right=2.0,
+                             n=float(n_per_cell), dur_h=200.0, left_leg_vas=60.0,
+                             left_leg_vas_sd=1.0))
+    d = pd.DataFrame(rows)
+    d["t0"] = pd.date_range("2025-07-01", periods=len(d), freq="6h", tz="UTC")
+    return d
+
+
+def test_a_real_well_covered_current_effect_resolves_and_is_used():
+    d = _current_effect_matrix(slope_per_mA=1.2, noise_sd=0.3, seed=1)
+    incumbent = float(d.iloc[0]["epoch"])          # the (0, 0) mA cell: highest pain, well-rated
+    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0, incumbent_epoch=incumbent)
+    ((_key, sl),) = res.slices.items()
+    rs = sl.rate_strata[55.0]
+    assert rs.fitted is True
+    assert rs.resolution["resolved"] is True, rs.resolution["sentence"]
+    left = res.frozen.setting("Left")
+    assert np.isfinite(left.amp_star_mA), "a resolved current must not be NaN"
+    right = res.frozen.setting("Right")
+    assert np.isfinite(right.amp_star_mA)
+    # the true optimum is the highest current on both sides (pain falls monotonically)
+    assert left.amp_star_mA >= 2.0
+    assert right.amp_star_mA >= 2.0
+
+
+def test_the_same_matrix_with_no_current_effect_does_not_resolve_and_carries_no_current():
+    d = _current_effect_matrix(slope_per_mA=0.0, noise_sd=2.0, seed=2, n_reps=6)
+    incumbent = float(d.iloc[0]["epoch"])
+    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0, incumbent_epoch=incumbent)
+    ((_key, sl),) = res.slices.items()
+    rs = sl.rate_strata[55.0]
+    assert rs.fitted is True
+    assert rs.resolution["resolved"] is False, "a flat surface must not resolve a current"
+    left = res.frozen.setting("Left")
+    right = res.frozen.setting("Right")
+    assert np.isnan(left.amp_star_mA), "no current may be recommended from a flat surface"
+    assert np.isnan(right.amp_star_mA)
+    assert left.resolved is False
+    joined = " ".join(left.reasons)
+    assert "CURRENT:" in joined
+    assert "no current can be recommended" in joined
+
+
+def test_a_thinly_sampled_rate_is_reported_not_enough_data_with_no_surface():
+    d = _current_effect_matrix(slope_per_mA=1.2, noise_sd=0.3, seed=3, thin_rate=110.0,
+                               thin_rate_n=5)
+    incumbent = float(d.iloc[0]["epoch"])
+    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0, incumbent_epoch=incumbent)
+    ((_key, sl),) = res.slices.items()
+    thin = sl.rate_strata[110.0]
+    assert thin.fitted is False
+    assert thin.n_epochs == 5
+    assert "5 epochs" in thin.reason
+    assert "below the 8-epoch floor" in thin.reason
+    assert thin.resolution == {}
+    # the well-sampled rate is unaffected by the thin one sitting alongside it
+    rich = sl.rate_strata[55.0]
+    assert rich.fitted is True
+    assert rich.n_epochs == 75
+
+
+def test_rate_summary_reports_one_row_per_pw_pair_and_rate_attempted():
+    d = _current_effect_matrix(slope_per_mA=1.2, noise_sd=0.3, seed=4, thin_rate=110.0,
+                               thin_rate_n=5)
+    incumbent = float(d.iloc[0]["epoch"])
+    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0, incumbent_epoch=incumbent)
+    rs = res.rate_summary
+    assert set(rs["rate_hz"]) == {55.0, 110.0}
+    fitted_row = rs.loc[rs["rate_hz"] == 55.0].iloc[0]
+    thin_row = rs.loc[rs["rate_hz"] == 110.0].iloc[0]
+    assert bool(fitted_row["fitted"]) is True
+    assert bool(fitted_row["resolved"]) is True
+    assert bool(thin_row["fitted"]) is False
+    assert bool(thin_row["resolved"]) is False
+    assert "pooled_across_rates_mu_range" in rs.columns
+    assert "pooled_across_rates_note" in rs.columns

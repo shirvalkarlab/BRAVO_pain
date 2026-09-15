@@ -226,8 +226,21 @@ def test_with_the_exclusion_the_frozen_rate_is_the_best_in_envelope_cell(constra
     assert allowed.any() and allowed.sum() < sl.safe.sum()
     i_best = int(np.argmin(np.where(allowed, sl.mu, np.inf)))
     assert sl.i_star == i_best
-    assert s.rate_hz == float(gx[i_best, 0]) and s.amp_star_mA == float(gx[i_best, 1])
+    assert s.rate_hz == float(gx[i_best, 0])
     assert sl.mu_star == float(sl.mu[i_best])
+    # THE CURRENT ITSELF (2026-09-14) is no longer read off this pooled, 3-input cell: the
+    # fixture's two pulse-width strata each carry only ONE rate of real data (40 Hz and 165 Hz),
+    # so 55 Hz -- the constrained choice -- has no per-rate surface of its own on this stratum,
+    # and honestly recommending nothing is the whole point of the per-rate redesign (a pooled
+    # cell's amplitude at a rate with zero real data there is exactly what let the pooled model
+    # recommend noise on RCS08; see stage1_openloop.py's module docstring). `gx[i_best, 1]` is
+    # the pooled model's own (unreliable) answer and is asserted here as a control only, never
+    # as what the module hands back.
+    assert math.isnan(s.amp_star_mA)
+    assert sl.rate_strata.get(55.0) is None, "the fixture must not deliver real 55 Hz data"
+    joined = " ".join(s.reasons)
+    assert "CURRENT:" in joined and "no rate-specific surface" in joined
+    assert gx[i_best, 1] != 0.0, "sanity: the pooled cell's own amplitude is a real grid value"
     # and what the same surface would have chosen under `safe` alone is the excluded 40 Hz cell
     i_unc = int(np.argmin(np.where(sl.safe, sl.mu, np.inf)))
     assert sl.i_star_unconstrained == i_unc and float(gx[i_unc, 0]) == 40.0
@@ -386,8 +399,8 @@ def test_the_flag_off_response_is_unchanged_and_never_runs_the_path(bench, monke
     # per-arm pipeline, which `run_for_participant` no longer calls (2026-09-14: the arm strip
     # and its chart are gone from the page; only the two-stage plan is served now).
     assert sorted(out) == ["amplitude_effect", "available", "cache_status",
-                           "closed_loop", "design_matrix", "ground_truth", "in_force_by_side",
-                           "participant", "store",
+                           "closed_loop", "current_map_schedule", "design_matrix", "ground_truth",
+                           "in_force_by_side", "participant", "store",
                            "titration_plan", "washin_min"]
     # the explore-outside keys are only read with the flag on: with it off they change nothing
     out2 = BS.run_for_participant(dict(REQ, TwoStageExploreOutsideAdaptive=REASON))

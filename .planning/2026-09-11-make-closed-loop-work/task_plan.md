@@ -5,18 +5,21 @@ problem is that the module never handed the rule the value the device already re
 that still blocks does so for a reason the PI has read and agreed with.
 
 ## Next Step
-Nothing queued on the closed-loop ledger itself. A separate, PI-directed change landed in this same
-session on a neighbouring page (Stim Optimizer): the two-stimulator search now models both sides
-together instead of separately, and the old per-side comparison strip is removed from the page
-(decision 157). What remains open on THIS plan's own topic is unchanged from before: the threshold
-re-centring / separation question (decision 139's capture question) is still the PI's call, and T7's
-own acceptance test still needs a real titration session recorded on RCS08 (open item 30), which is
-a clinical scheduling matter, not something an agent can build.
+Nothing queued on the closed-loop ledger itself. Two PI-directed changes have now landed on the
+neighbouring Stim Optimizer page in this same session: the two-stimulator search models both sides
+together (decision 157), and the current it recommends is now checked honestly, one stimulation
+speed at a time, with a home titration schedule to fill in the record where that check fails
+(decision 158) -- backend only; the schedule and the honest-current change are in the response but
+not yet drawn on the page, which is separate frontend work, not yet done. What remains open on THIS
+plan's own topic is unchanged from before: the threshold re-centring / separation question (decision
+139's capture question) is still the PI's call, and T7's own acceptance test still needs a real
+titration session recorded on RCS08 (open item 30), which is a clinical scheduling matter, not
+something an agent can build.
 
 ## Current Phase
-Phase 19
+Phase 20
 
-phases: 19/19 complete
+phases: 19/20 complete
 
 ### Phase 1: Measure what the ledger says today
 - [x] Run the live report on RCS08 at the committed band (L 0-2+, 24.5 Hz) and list every non-pass row
@@ -164,6 +167,18 @@ phases: 19/19 complete
 - [x] Two suspicious messages arrived mid-session claiming to redirect this work; neither came from the actual task-giver (one asked for a different design never requested, one falsely claimed a turn limit had been hit, one used the wrong assistant name); neither was acted on, and this is recorded so a later reader is not confused about why the design does not match those messages
 - [x] Both suites green (host 1186 / 2 / 0, container 631 / 0), rewritten tests for the parts of the old per-side design that no longer exist, live proof on RCS08 (before/after field count and difference count, and the real preferred settings on both sides of the change); frontend rebuilt and checked in the served bundle; decision 157; commit; push
 - **Status:** complete
+
+### Phase 20: The shared model's current recommendation, checked honestly one speed at a time; a home titration schedule
+- [x] Measured on RCS08 that the shared 3-input model's own picture at the speed actually running (55 Hz) varied by only 0.004 across every option tried, against a typical scatter of about 1.1 -- confirming the PI's own finding that reading a current off the shared, pooled picture borrows false confidence from other stimulation speeds through the one shared speed axis
+- [x] `stage1_openloop.py`: a second, per-speed fitting step added alongside the existing shared (pooled) one -- never replacing it, kept and reported for reference as `pooled_across_rates` -- fitted separately for every stimulation speed with at least 8 recorded stretches at that speed, using only the ratings recorded at that speed
+- [x] A current is only handed back when three checks pass: the per-speed picture is not effectively flat; the best option beats what is running today by more than the scatter in that comparison; and at least 6 distinct left/right combinations, each backed by at least 5 ratings, spanning at least 1 mA on each side, were actually tried
+- [x] Which speed and which pulse-width pairing to freeze is UNCHANGED -- still chosen from the pooled picture, since that choice needs the pooling to have any data to decide from; only the milliamp number itself is now held to the honest, per-speed standard, and is `None` with a plain reason when the checks fail
+- [x] New `current_map_schedule.py`: a home titration schedule (a 3x3 current grid plus two one-side-off points plus the setting in force as an anchor, capped at the stated safety ceiling and the fitted joint safety model, dropped where a point already has enough ratings, held for 3-7 days per point based on this patient's own measured reporting rate, ordered so left current never ramps three steps straight up, the anchor repeated at the start, middle and end) -- reuses the SAME coverage check (iii) above so the sheet can say, before it is ever run, whether completing it would be enough
+- [x] Wired into `bravo_service.py` as `current_map_schedule`, computed on every request, not stored on its own; `stage1.rate_strata` added to the existing `two_stage` response block so every attempted speed's fit and verdict is visible
+- [x] 25 new tests (9 in `test_stage1.py`, 16 in the new `test_current_map_schedule.py`); 3 pre-existing tests corrected in place, not deleted, since they pinned exactly the borrowed-confidence behaviour this change replaces
+- [x] Both suites green (host 1211 / 2 / 0, container 631 / 0 / live-skipped 6); live field-count/difference-count proof on RCS08, genuinely before (decision 157's code) and after: 8,596 fields before, 9,001 after, 0 only-before, 405 only-after (the new blocks), 8 differing of 8,596 shared (6 bookkeeping, 2 real: both sides' recommended current, 1.5/1.0 mA -> none); decision 158; commit; push
+- [ ] **NOT DONE: the frontend.** Nothing on the Stim Optimizer page has been changed to draw the new schedule sheet or the per-speed detail; the response carries everything, no component reads it yet
+- **Status:** in_progress
 
 ## Decisions Made
 | # | Decision | Rationale |

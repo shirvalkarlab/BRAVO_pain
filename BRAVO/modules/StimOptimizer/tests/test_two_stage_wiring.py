@@ -199,8 +199,8 @@ def test_without_the_flag_the_response_has_no_two_stage_key_and_the_path_is_neve
     # per-arm pipeline, which `run_for_participant` no longer calls (2026-09-14: the arm strip
     # and its chart are gone from the page; only the two-stage plan is served now).
     assert sorted(out) == ["amplitude_effect", "available", "cache_status",
-                           "closed_loop", "design_matrix", "ground_truth", "in_force_by_side",
-                           "participant", "store",
+                           "closed_loop", "current_map_schedule", "design_matrix", "ground_truth",
+                           "in_force_by_side", "participant", "store",
                            "titration_plan", "washin_min"]
 
 

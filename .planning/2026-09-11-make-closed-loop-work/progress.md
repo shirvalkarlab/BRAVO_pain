@@ -702,3 +702,46 @@ the threshold re-centring as what remains. Commit and push done by this session 
   task_plan.md Phase 19 added and marked complete; phases counter and Current Phase both bumped to
   19/19; Next Step rewritten to note this is a separate change on a neighbouring page and that this
   plan's own open items (the threshold re-centring, the titration session) are unchanged.
+
+### Phase 20: honest per-speed current, home titration schedule (2026-09-14, continuation)
+- Measured on RCS08, at the speed actually running (55 Hz): decision 157's shared, pooled picture
+  varied by only 0.004 across every option tried, against a typical scatter of about 1.05-1.11 --
+  confirming the PI's own finding that its apparent confidence at a thinly-sampled speed is
+  borrowed from OTHER speeds through the one shared speed axis, not real.
+- Built: `stage1_openloop.py` gained a per-speed fit (`RateStratum`, `current_coverage`,
+  `_rate_stratum_resolution`, `_fit_rate_stratum`, `_pooled_slice_at_rate`) alongside the existing
+  shared, pooled one (kept, reported as `pooled_across_rates` for reference only). A current is
+  handed back only when the per-speed picture is not flat, the best option beats the setting in
+  force by more than the scatter allows, and at least 6 distinct current combinations with at
+  least 5 ratings each, spanning at least 1 mA on both sides, were actually tried. Which speed and
+  pulse-width pairing to freeze is unchanged (still the pooled choice); only the milliamp number is
+  now honest, `None` with a reason when the checks fail. New `current_map_schedule.py`: a home
+  titration schedule (3x3 current grid plus two one-side-off points plus the anchor, capped at the
+  safety ceiling and the fitted joint safety model, held 3-7 days per point from this patient's own
+  measured reporting rate, ordered so left current never ramps three steps straight up). Wired into
+  `bravo_service.py` as `current_map_schedule` (computed fresh every request) and
+  `two_stage.stage1.rate_strata`.
+- 25 new tests (9 `test_stage1.py`, 16 new `test_current_map_schedule.py`); 3 pre-existing tests
+  corrected in place (two asserted the pooled model's own cell as the current, one asserted the
+  response's exact key list) rather than deleted, since they pinned exactly the behaviour this
+  change replaces.
+- Both suites green through `run_both_suites.sh`: host 1211 passed, 2 skipped, 0 failed; container
+  PASS=631 FAIL=0 LIVE_SKIPPED=6.
+- Live proof on RCS08, genuinely before (decision 157's code, via `git stash push -u --
+  BRAVO/modules/StimOptimizer`) and after: 8,596 fields before, 9,001 after, 0 only-before, 405
+  only-after (the new blocks), 8 of 8,596 shared fields differ -- 6 bookkeeping (a timestamp, a
+  stored-answer key, a served-from-store flag, two description strings carrying the timestamp, a
+  timing figure), 2 real: both sides' recommended current, 1.5/1.0 mA -> none. On the speed chosen
+  (55 Hz, 19 ratings there): flat check fails (0.004 against 1.054), gain check fails (+0.227
+  against 1.532), coverage passes (7 combinations, full 3.5 mA span both sides) -- two of three
+  fail, so no current is recommended. Schedule for the setting actually running (100 us / 150 us,
+  4 stretches, too thin to fit a picture at all): 14 steps, 7 days each (zero ratings/day measured
+  there over 90 days), reaching 12 new combinations; completing it would pass the coverage check.
+- Decision 158 written (next number after 157). Two claims in decision 157's own text corrected in
+  place, struck rather than deleted: the "combination actually in force" it named (60/160) was not
+  in force (the device ran 100/150, too thin to fit); the record delivered 13 pulse-width
+  combinations that day, not 15. task_plan.md Phase 20 added, status `in_progress` (the frontend is
+  not done); phases counter set to 19/20; Next Step rewritten.
+- NOT DONE: the frontend. The response carries everything (`current_map_schedule`, the per-speed
+  detail, the recommended current reading `None`) but no page has been changed to draw any of it --
+  left for a second builder, as the task specified.

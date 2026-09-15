@@ -29,8 +29,10 @@ import numpy as np
 import pandas as pd
 
 from . import adapter
+from . import current_map_schedule as CMS
 from . import pipeline
 from . import safety_ceiling as SC
+from . import stage1_openloop as S1
 from .routines import plots as PLT
 
 # THE IMPORT ROOT DIFFERS BETWEEN THE TWO TEST RUNNERS, so both spellings are tried (see adapter).
@@ -824,6 +826,12 @@ def _two_stage_payload(rep, *, inputs, seconds, in_force=None) -> dict:
             "in_force_by_side": dict(in_force or {}),
         },
         "strata": _frame_records(s1.summary),
+        # ONE ROW PER (pulse-width pair, rate) that was even attempted (2026-09-14): whether a
+        # per-rate current surface was fitted, its resolution verdict and numbers, and the
+        # pooled 3-input model's own slice at that rate for reference only. This is what
+        # actually decided the current under "frozen_configuration" above; see
+        # ``stage1_openloop.RateStratum``.
+        "rate_strata": _frame_records(getattr(s1, "rate_summary", None)),
         "strata_skipped": {str(k): str(v) for k, v in (s1.skipped or {}).items()},
         "audit": _two_stage_jsonable(dict(s1.audit or {})),
         # WHAT TO TEST NEXT, from the JOINT stratum that was actually frozen (2026-09-14). There
@@ -1236,6 +1244,11 @@ def _run_for_participant(request_data: dict) -> dict:
     out["titration_plan"] = titration_plan_block(
         participant, in_force=in_force, screen=_screen_out.get("screen"),
         ceilings=_ceilings, hemispheres=hemis)
+    # THE JOINT CURRENT-MAP TITRATION SCHEDULE (2026-09-14, his instruction: "do (c) both and
+    # make a titration schedule to actually make these plots useful"). Computed on every request
+    # from inputs this request already holds; nothing is stored.
+    out["current_map_schedule"] = current_map_schedule_block(
+        participant, es=es, in_force=in_force, ceilings=_ceilings)
     if sig is not None:
         try:
             # `rep` no longer exists on this path (the flat pipeline is not run here); every
@@ -1357,6 +1370,80 @@ def _best_contact_for_side(screen, side, rate_hz=None):
             alt.update(sensing_display(alt.get("channel")))
             rec["ipsilateral_alternative"] = alt
     return rec, how
+
+
+#: ==========================================================================================
+#: THE JOINT CURRENT-TITRATION SCHEDULE (2026-09-14). His instruction, verbatim: "do (c) both and
+#: make a titration schedule to actually make these plots useful." The finding it answers: the
+#: pooled 3-input surface's own optimum at a thinly-sampled rate was noise (a 0.002-point "gain"
+#: against a 1.11-point spread), so the honest per-rate check in `stage1_openloop.py` often
+#: correctly reports "no current can be recommended" -- and this schedule is the sheet that fills
+#: in the record so that stops being the answer. See `current_map_schedule.py` for the arithmetic.
+#: ==========================================================================================
+def _schedule_safety_predicate(es, *, ceilings):
+    """A cheap `is_safe(left_mA, right_mA)` for the schedule: the two per-side `SafetyGP`s the
+    open-loop search already fits, built here directly from the request's own design matrix so
+    the schedule can be computed on every request, not only when `TwoStage` is asked for. Returns
+    `(predicate_or_None, note)`; a fit failure degrades to no safety restriction beyond each
+    side's own PI-stated ceiling, which the schedule always applies regardless."""
+    try:
+        from .routines import surrogate as _SUR
+        safety_grid = _SUR.ParameterGrid(PLT.FREQ_GRID, S1.JOINT_AMP_GRID)
+        sgp = {}
+        for side in ("Left", "Right"):
+            Xs, sev, sv, _meta = SC.safety_seed(
+                es, f"amp_mA_{side}", freq_grid=PLT.FREQ_GRID, ceiling=(ceilings or {}).get(side),
+                min_tolerated_h=S1.MIN_TOLERATED_H)
+            sgp[side] = _SUR.SafetyGP(safety_grid, random_state=0).fit(Xs, sev, sv)
+    except Exception as exc:                          # noqa: BLE001 -- degrade, never raise
+        _log.info("StimOptimizer: schedule safety model unavailable (%r); ceiling only", exc)
+        return None, f"the joint safety model could not be fitted ({exc!r}); only each side's own ceiling was applied"
+
+    def is_safe(left_mA, right_mA, *, rate_hz):
+        ok_l = bool(np.asarray(sgp["Left"].safe_mask(X=[[float(rate_hz), float(left_mA)]],
+                                                      beta=PLT.BETA))[0])
+        ok_r = bool(np.asarray(sgp["Right"].safe_mask(X=[[float(rate_hz), float(right_mA)]],
+                                                       beta=PLT.BETA))[0])
+        return ok_l and ok_r
+    return is_safe, "the joint safety model fitted from this participant's own settings history"
+
+
+def current_map_schedule_block(participant, *, es, in_force, ceilings) -> dict:
+    """The `current_map_schedule` response block, never raising."""
+    uid = str(getattr(participant, "uid", participant))
+    try:
+        left = dict((in_force or {}).get("Left") or {})
+        right = dict((in_force or {}).get("Right") or {})
+        rate_hz = left.get("rate_hz") if left.get("rate_hz") is not None else right.get("rate_hz")
+        pwl, pwr = left.get("pulse_width_us"), right.get("pulse_width_us")
+        if rate_hz is None or pwl is None or pwr is None:
+            return CMS.unavailable_schedule(
+                "the setting in force is not fully known (rate and both pulse widths are needed), "
+                "so no schedule can be designed")
+        cl = (ceilings or {}).get("Left"); cr = (ceilings or {}).get("Right")
+        ceiling_left = cl[0] if cl else None
+        ceiling_right = cr[0] if cr else None
+        stratum = pd.DataFrame()
+        if isinstance(es, pd.DataFrame) and len(es):
+            need = {"freq_hz", "pw_us_Left", "pw_us_Right", "amp_mA_Left", "amp_mA_Right", "n"}
+            if need.issubset(es.columns):
+                m = (np.isclose(pd.to_numeric(es["freq_hz"], errors="coerce"), float(rate_hz))
+                     & np.isclose(pd.to_numeric(es["pw_us_Left"], errors="coerce"), float(pwl))
+                     & np.isclose(pd.to_numeric(es["pw_us_Right"], errors="coerce"), float(pwr)))
+                stratum = es.loc[m]
+        is_safe_raw, safety_note = _schedule_safety_predicate(es, ceilings=ceilings)
+        is_safe = ((lambda l, r: is_safe_raw(l, r, rate_hz=rate_hz)) if is_safe_raw is not None
+                  else None)
+        block = CMS.build_schedule(
+            rate_hz=rate_hz, pw_us_left=pwl, pw_us_right=pwr,
+            ceiling_left_mA=ceiling_left, ceiling_right_mA=ceiling_right,
+            in_force_left_mA=left.get("amplitude_mA"), in_force_right_mA=right.get("amplitude_mA"),
+            existing_epochs_at_stratum=stratum, epochs_for_reporting_rate=es, is_safe=is_safe)
+        block["safety_model_note"] = safety_note
+        return _jsonable(block)
+    except Exception as exc:                          # noqa: BLE001 -- adjunct card
+        _log.exception("StimOptimizer: the current-map schedule could not be built for %s", uid)
+        return CMS.unavailable_schedule(f"the schedule could not be built: {exc}")
 
 
 def titration_plan_block(participant, *, in_force, screen, ceilings, hemispheres) -> dict:
