@@ -94,6 +94,78 @@ class ParameterGrid:
         return fi * len(self.amps) + ai
 
 
+class JointParameterGrid:
+    """The discrete (rate, amplitude-Left, amplitude-Right) search space, plus the transform the
+    GP sees, for a fit that models both stimulators AT ONCE (decision, 2026-09-14: "model the
+    left and right sides together because they're always on").
+
+    Both stimulation devices are reprogrammed concurrently on RCS08 -- there is one shared rate
+    column in the settings history (``freq_hz``, never a per-side rate), and every exposure epoch
+    carries both currents, so a fit that changes only one side's current while pretending the
+    other side's current is not also acting on the same pain report is confounded by construction.
+    This grid is the 3-D generalisation of :class:`ParameterGrid`: rate stays on the log2 axis for
+    the same reason (OBJECTIVE_SPEC section 1), and both amplitude axes are left linear, since a
+    joint dose-response has no reason to treat the two currents differently from each other. All
+    three axes are standardised to unit scale so one set of ARD length-scale bounds means the same
+    thing on every one of them.
+    """
+
+    def __init__(self, freqs, amps_left, amps_right):
+        self.freqs = np.asarray(sorted(set(np.asarray(freqs, float))), float)
+        self.amps_left = np.asarray(sorted(set(np.asarray(amps_left, float))), float)
+        self.amps_right = np.asarray(sorted(set(np.asarray(amps_right, float))), float)
+        if self.freqs.min() <= 0:
+            raise ValueError("frequencies must be positive for a log2 axis")
+        FF, AL, AR = np.meshgrid(self.freqs, self.amps_left, self.amps_right, indexing="ij")
+        self.raw = np.column_stack([FF.ravel(), AL.ravel(), AR.ravel()])
+        lf = np.log2(self.freqs)
+        self._loc = np.array([lf.mean(), self.amps_left.mean(), self.amps_right.mean()])
+        self._scale = np.array([max(lf.std(), 1e-9), max(self.amps_left.std(), 1e-9),
+                                max(self.amps_right.std(), 1e-9)])
+
+    def __len__(self):
+        return self.raw.shape[0]
+
+    @property
+    def shape(self):
+        return (len(self.freqs), len(self.amps_left), len(self.amps_right))
+
+    def transform(self, X):
+        X = np.atleast_2d(np.asarray(X, float))
+        if X.shape[1] != 3:
+            raise ValueError("expected columns (freq_hz, amp_mA_Left, amp_mA_Right)")
+        if np.any(X[:, 0] <= 0):
+            raise ValueError("non-positive frequency cannot be placed on a log2 axis")
+        Z = np.column_stack([np.log2(X[:, 0]), X[:, 1], X[:, 2]])
+        return (Z - self._loc) / self._scale
+
+    def grid_X(self):
+        return self.raw.copy()
+
+    def as_surface(self, values):
+        """Reshape a per-cell vector into (n_freq, n_amp_left, n_amp_right)."""
+        v = np.asarray(values, float)
+        if v.size != len(self):
+            raise ValueError(f"expected {len(self)} values, got {v.size}")
+        return v.reshape(self.shape)
+
+    def snap(self, X):
+        """Snap arbitrary (freq, amp_left, amp_right) triples to their nearest grid cell."""
+        X = np.atleast_2d(np.asarray(X, float))
+        f = self.freqs[np.abs(X[:, [0]] - self.freqs).argmin(axis=1)]
+        al = self.amps_left[np.abs(X[:, [1]] - self.amps_left).argmin(axis=1)]
+        ar = self.amps_right[np.abs(X[:, [2]] - self.amps_right).argmin(axis=1)]
+        return np.column_stack([f, al, ar])
+
+    def index_of(self, X):
+        """Row indices into ``grid_X()`` for the nearest grid cell of each input."""
+        S = self.snap(X)
+        fi = np.abs(S[:, [0]] - self.freqs).argmin(axis=1)
+        ali = np.abs(S[:, [1]] - self.amps_left).argmin(axis=1)
+        ari = np.abs(S[:, [2]] - self.amps_right).argmin(axis=1)
+        return (fi * len(self.amps_left) + ali) * len(self.amps_right) + ari
+
+
 def _make_kernel(n_dim, length_scale_bounds, nugget_bounds, fixed_length_scale=None):
     """Matern-3/2 ARD kernel plus a white nugget.
 

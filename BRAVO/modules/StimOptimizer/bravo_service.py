@@ -700,6 +700,63 @@ def _two_stage_jsonable(v):
     return _jsonable(v)
 
 
+def _frozen_joint_stratum(s1, frozen):
+    """The one `stage1_openloop.JointStratum` that the frozen configuration was chosen from, or
+    ``None`` when nothing was fitted (no adaptive-capable setting, or no strata at all)."""
+    if not frozen.settings:
+        return None
+    left = frozen.setting("Left") if any(s.hemisphere == "Left" for s in frozen.settings) else None
+    right = frozen.setting("Right") if any(s.hemisphere == "Right" for s in frozen.settings) else None
+    pwl = left.pw_us if left is not None else None
+    pwr = right.pw_us if right is not None else None
+    if pwl is None or pwr is None:
+        return None
+    return (s1.slices or {}).get((float(pwl), float(pwr)))
+
+
+def _joint_queue_frame(s1, frozen, limit=25):
+    """WHAT TO TEST NEXT: never-tested cells whose optimistic bound still beats the incumbent, on
+    the ONE joint stratum that was actually frozen -- the direct replacement for the old per-arm
+    "what to test at the next visit" table, now over (rate, amplitude-Left, amplitude-Right)
+    jointly rather than one side at a time.
+
+    Ordered by expected improvement exactly as `routines.acquisition.exploration_queue` orders it
+    (unchanged). Eligibility against the delivered-settings census -- whether a row is already on
+    the in-clinic testing schedule -- is NOT reproduced here: that annotation belongs to the flat,
+    per-arm pipeline's own `_queue_frame`, which cross-references a census this joint path does not
+    carry the same way, and building an equivalent joint version is future work, not silently
+    faked. This table therefore carries a `rank`, both currents, the predicted gain and its
+    uncertainty, and the expected improvement only.
+    """
+    sl = _frozen_joint_stratum(s1, frozen)
+    if sl is None or sl.queue is None or len(sl.queue) == 0:
+        return pd.DataFrame()
+    from .routines import acquisition as _ACQ
+    gx = sl.grid.grid_X()
+    idx = np.asarray(sl.queue, int)[:limit]
+    ei = _ACQ.expected_improvement(sl.mu[idx], sl.sd[idx], float(sl.incumbent_mu))
+    return pd.DataFrame({
+        "rank": np.arange(1, len(idx) + 1),
+        "freq_hz": gx[idx, 0], "amp_mA_left": gx[idx, 1], "amp_mA_right": gx[idx, 2],
+        "posterior_mean": sl.mu[idx], "posterior_sd": sl.sd[idx],
+        "expected_improvement": ei,
+        "prior_reports_at_this_cell": sl.n_reports[idx],
+    })
+
+
+def _joint_batch_frame(s1, frozen):
+    """The within-visit batch (``ACQ.select_batch_within_visit_joint``) for the ONE joint stratum
+    that was frozen, as a plain table."""
+    sl = _frozen_joint_stratum(s1, frozen)
+    if sl is None or not sl.batch:
+        return pd.DataFrame()
+    return pd.DataFrame([
+        dict(rank=i + 1, freq_hz=b.freq_hz, amp_mA_left=b.amp_mA_left, amp_mA_right=b.amp_mA_right,
+             posterior_mean=b.mu, posterior_sd=b.sd, acquisition=b.acq, reason=b.reason,
+             exploration_fraction=b.exploration_fraction)
+        for i, b in enumerate(sl.batch)])
+
+
 def _two_stage_payload(rep, *, inputs, seconds, in_force=None) -> dict:
     """The `two_stage` block from a `pipeline.TwoStageReport`: Stage 1's frozen configuration,
     the gate's verdict with each condition's reason and the evidence it read, Stage 2's output or
@@ -721,6 +778,12 @@ def _two_stage_payload(rep, *, inputs, seconds, in_force=None) -> dict:
             "rate_resolved": _jsonable(s.rate_resolved),
             "pulse_width_resolved": _jsonable(s.pw_resolved),
             "resolved": bool(s.resolved),
+            # The joint resolution's own numbers (2026-09-14): identical on both sides of one
+            # configuration, since there is one rate knob and one joint comparison against the
+            # incumbent now. Carried here so a reader (DecisionStrip.js) does not have to
+            # cross-reference the strata table to find the gain the verdict rests on.
+            "gain": _jsonable(getattr(s, "gain", float("nan"))),
+            "sd_of_difference": _jsonable(getattr(s, "sd_of_difference", float("nan"))),
             "reasons": [str(r) for r in s.reasons],
             "detail": _two_stage_jsonable(dict(s.detail or {})),
         })
@@ -763,6 +826,12 @@ def _two_stage_payload(rep, *, inputs, seconds, in_force=None) -> dict:
         "strata": _frame_records(s1.summary),
         "strata_skipped": {str(k): str(v) for k, v in (s1.skipped or {}).items()},
         "audit": _two_stage_jsonable(dict(s1.audit or {})),
+        # WHAT TO TEST NEXT, from the JOINT stratum that was actually frozen (2026-09-14). There
+        # is one such stratum now, not one per side (rate is shared), so there is one queue and
+        # one batch rather than a per-arm pair. Never rate/amplitude combinations already
+        # delivered -- `ACQ.exploration_queue`'s own rule, unchanged.
+        "queue": _frame_records(_joint_queue_frame(s1, frozen)),
+        "batch": _frame_records(_joint_batch_frame(s1, frozen)),
         "describe": frozen.describe(),
     }
 
@@ -1087,112 +1156,23 @@ def _run_for_participant(request_data: dict) -> dict:
                    f"{last:%Y-%m-%d} ({int(len(es))} epochs, "
                    f"{int(pd.to_numeric(es.get('n'), errors='coerce').fillna(0).sum())} reports)")
 
-    try:
-        # The settings census is what lets the exploration queue report ELIGIBILITY rather than
-        # just promise. Without it the queue panel cannot distinguish a cell the patient has already
-        # received from one that has never been delivered, which is precisely the contradiction
-        # between this queue and the in-clinic schedule that the panel now explains. Failure to
-        # build it must not take down the optimizer, so it degrades to no annotation.
-        # The census IS the stream built at the top of this function -- the same frame, built with
-        # `settings_stream(participant)` and no filtering, which is exactly what this line used to
-        # build for itself. Reusing it is what removes the second pass over the stored files. When
-        # the build at the top failed, this is None and the queue omits its eligibility annotation,
-        # which is the same degradation this line's own try/except gave.
-        _census = _stream
-        # THE SAFETY MODEL'S CEILING, stated by the PI per side (`safety_ceiling.py`,
-        # 2026-09-12): built once here and handed to the flat fit, to Stage 1 and to the gate, so
-        # every safe set and the "under the ceiling" check read one source.
-        _ceilings = SC.ceilings_by_hemisphere(uid, hemis)
-        rep = pipeline.run(es, sites=sites, hemispheres=hemis, delivered_census=_census,
-                           safety_ceiling_by_hemisphere=_ceilings,
-                           outdir=None, render_figures=False,
-                           data_horizon=horizon, washin_min=washin_min,
-                           n_batches=int((request_data or {}).get("NBatches", 3)),
-                           q=int((request_data or {}).get("Q", 4)))
-    except Exception as e:
-        _log.exception("StimOptimizer: pipeline failed for %s", uid)
-        return {"available": False, "reason": f"pipeline failed: {e}",
-                "design_matrix": design_matrix_summary(es)}
-
-    arms = {}
-    for label, arm in (rep.arms or {}).items():
-        ctx = arm.ctx
-        m = dict(ctx.meta)
-        entry = {
-            "site": arm.site, "hemisphere": arm.hemisphere,
-            "n_epochs_fitted": _jsonable(m.get("n_epochs_fitted") or m.get("n_epochs")),
-            "incumbent_epoch": _jsonable(m.get("incumbent_epoch")),
-            "incumbent_xy": _jsonable(m.get("incumbent_xy")),
-            "incumbent_mu": _jsonable(m.get("incumbent_mu")),
-            # the incumbent's OWN uncertainty — the resolution gate compares the DIFFERENCE, so the
-            # UI must be able to show both sides of it rather than a band on the candidate alone
-            "incumbent_sd": _jsonable(m.get("incumbent_sd")),
-            "optimum": {"freq_hz": _jsonable(m.get("x_star", [None, None])[0]),
-                        "amp_mA": _jsonable(m.get("x_star", [None, None])[1]),
-                        "posterior_mean": _jsonable(m.get("mu_star")),
-                        "posterior_sd": _jsonable(m.get("sd_star"))},
-            # `_jsonable`, NOT `bool(...)`. The bool() cast collapsed a three-valued answer to
-            # two: an arm whose predicted advantage was measured and found too small to call, and
-            # an arm whose difference could not be formed at all, both arrived as False. The
-            # interface was recomputing the difference itself to recover the third state.
-            "optimum_resolved": _jsonable(arm.surface_can_resolve_its_optimum())
-                                if hasattr(arm, "surface_can_resolve_its_optimum") else None,
-            # THE COMPARISON THE VERDICT IS ABOUT, serialised rather than left to the interface.
-            # The panel was duplicating sqrt(sd_star^2 + sd_incumbent^2) and hardcoding the
-            # resolution multiple, so a change to either would leave the displayed numbers
-            # silently disagreeing with the verdict printed beside them.
-            "comparison": _arm_comparison(arm),
-            "kernel": _jsonable(m.get("kernel")),
-            # Use the canonical boolean. `safe_contiguous_ceiling` is a float (NaN when there is no
-            # ceiling), never None, so testing it against None was constant True and silently
-            # disabled the non-contiguous-safe-set blocker for every arm.
-            "safe_contiguous": _jsonable(m.get("safe_is_contiguous")),
-            "safe_contiguous_ceiling": _jsonable(m.get("safe_contiguous_ceiling")),
-            # What the safety model was told (2026-09-12): the PI-stated ceiling for this side
-            # and where it comes from, the severity-3 anchors it became (one per grid rate), and
-            # the tolerated settings. In the response so the numbers behind
-            # `safe_contiguous_ceiling` can be read; the page prints the ceiling on the arm card.
-            "safety_anchors": {
-                "ceiling_mA": _jsonable(m.get("safety_ceiling_mA")),
-                "provenance": _jsonable(m.get("safety_ceiling_provenance")),
-                "ceiling_anchors_rate_hz_mA": _jsonable(m.get("safety_ceiling_anchors")),
-                "n_ceiling_anchors": _jsonable(m.get("n_safety_ceiling_anchors")),
-                "n_tolerated_anchors": _jsonable(m.get("n_tolerated_anchors")),
-                "tolerated_rule": _jsonable(m.get("tolerated_rule")),
-                "n_safe_cells": _jsonable(m.get("n_safe")),
-            },
-            "queue": _frame_records(arm.queue, limit=25),
-            "batch": _frame_records(arm.batch),
-            "provenance": {"data_horizon": _jsonable(m.get("data_horizon")),
-                           "washin_min": _jsonable(m.get("washin_min")),
-                           "amp_col": _jsonable(m.get("amp_col"))},
-        }
-        if backend == "plotly":
-            try:
-                _fig = _plotly_figures(ctx)
-                entry["figures"] = _fig["figures"]
-                # Per-figure failures, keyed by the same name the page uses to look the figure up,
-                # so a panel can render the reason in place of the figure it expected. Distinct
-                # from `figures_error`, which means the whole attempt failed and there is nothing
-                # at all to draw — most often because plotly is missing from the image.
-                entry["figure_errors"] = _fig["figure_errors"]
-            except Exception as e:
-                entry["figures"] = {}
-                entry["figure_errors"] = {}
-                entry["figures_error"] = str(e)
-        arms[label] = entry
-
-    supported = bool(rep.recommendation_is_supported()) if hasattr(rep, "recommendation_is_supported") else False
-    # Amplitude actually DELIVERED per hemisphere, so a blocker can tell a prediction inside the
-    # model's support from one beyond it.
-    observed_amp_range = {}
-    for hemi in ("Left", "Right"):
-        col = f"amp_mA_{hemi}"
-        if col in es.columns:
-            s = pd.to_numeric(es[col], errors="coerce").dropna()
-            if len(s):
-                observed_amp_range[hemi] = (float(s.min()), float(s.max()))
-    blockers = _blockers(rep, arms, observed_amp_range)
+    # THE FLAT, PER-ARM PIPELINE (`pipeline.run`) IS NO LONGER CALLED FROM THIS REQUEST PATH
+    # (2026-09-14). The PI's instruction, verbatim: "Get rid of the whole arm strip and chart
+    # display. That arm thing doesn't make any sense and shouldn't belong there. Only keep the
+    # newer two-stage plan." The page no longer renders the per-arm strip, its chart, the 5
+    # per-arm figures or the per-arm "what to test next" queue that all read `arms` -- see
+    # `Client/src/views/Reports/StimOptimizer/index.js`. `pipeline.run`, `routines.plots`,
+    # `_arm_comparison` and `_blockers` are UNCHANGED and still fully tested
+    # (`tests/test_pipeline.py`); `pipeline.run` remains a valid, documented, independent entry
+    # point for anyone who wants the two independent per-hemisphere (frequency, amplitude)
+    # surfaces (its own module docstring is unchanged), it is simply not reachable from this page
+    # any more. The two-stage plan (`two_stage_block`, below) is unaffected: it has always run
+    # its own path (`pipeline.run_two_stage_live`), never through this call.
+    #
+    # THE SAFETY MODEL'S CEILING, stated by the PI per side (`safety_ceiling.py`, 2026-09-12):
+    # built once here and handed to Stage 1 (inside `two_stage_block`) and to the gate, so every
+    # safe set and the "under the ceiling" check read one source.
+    _ceilings = SC.ceilings_by_hemisphere(uid, hemis)
     # THE SENSED SIGNAL AND THE EPOCHS ARE BUILT ONCE FOR BOTH CONSUMERS BELOW (2026-09-12). The
     # closed-loop readiness screen and the two-stage path each asked `adapter.evidence_inputs` for
     # the same pair -- the recordings, the tile cache and the exposure epochs -- and on RCS08 each
@@ -1226,11 +1206,10 @@ def _run_for_participant(request_data: dict) -> dict:
         # Each side's own rate, pulse width, current and cathode contacts from the newest epoch
         # (2026-09-12), so the page's decision strip reads them rather than the left side's twice.
         "in_force_by_side": in_force,
-        "manifest": _jsonable(rep.manifest),
-        "summary": _frame_records(rep.summary),
-        "arms": arms,
-        "recommendation_supported": supported,
-        "blockers": blockers,
+        # `manifest`, `summary`, `arms`, `recommendation_supported` and `blockers` came from the
+        # flat, per-arm pipeline (`pipeline.run`), which this request path no longer calls
+        # (2026-09-14: the arm strip and its chart are gone from the page). The two-stage plan
+        # under `two_stage`, below, is the page's only recommendation now.
         "washin_min": washin_min,
         "closed_loop": closed_loop_readiness(participant, es,
                                              include=bool((request_data or {})
@@ -1259,7 +1238,10 @@ def _run_for_participant(request_data: dict) -> dict:
         ceilings=_ceilings, hemispheres=hemis)
     if sig is not None:
         try:
-            _write_outputs(str(uid), sig, prov, rep, out)
+            # `rep` no longer exists on this path (the flat pipeline is not run here); every
+            # read of it inside `_write_outputs` already goes through `getattr(rep, ..., None)`,
+            # so `None` degrades exactly the way an empty `rep.arms`/`rep.summary` always did.
+            _write_outputs(str(uid), sig, prov, None, out)
         except Exception as exc:                      # noqa: BLE001
             # Say so in the response rather than only in the log: a request that silently
             # stores nothing looks, from the page, exactly like one that stored everything.

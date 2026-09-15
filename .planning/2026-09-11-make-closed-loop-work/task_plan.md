@@ -5,21 +5,18 @@ problem is that the module never handed the rule the value the device already re
 that still blocks does so for a reason the PI has read and agreed with.
 
 ## Next Step
-Nothing queued. The contest's seven-task implementation plan is now DONE except for one thing that
-is not a code task: T1-T6 are built and proven live on RCS08 (decisions 150-155); T7's wiring is
-confirmed correct and proven on constructed data (decision 156), but its own acceptance test needs
-a real titration session recorded on RCS08 first -- that has not happened (open item 30), and it is
-a clinical/scheduling matter for the PI, not something an agent can build. The one thing left open
-for the PI to decide is the threshold re-centring / separation itself (decision 139's capture
-question) -- T4's own live numbers on the committed band (2.0% of readings between the stored pair,
-centred 12.4 units above the participant's own median) and T5's own bootstrap interval on the
-committed band (onset 27-60 s, thresholds 43.5-108.7 device units apart) are themselves live
-readings in favour of that re-centring.
+Nothing queued on the closed-loop ledger itself. A separate, PI-directed change landed in this same
+session on a neighbouring page (Stim Optimizer): the two-stimulator search now models both sides
+together instead of separately, and the old per-side comparison strip is removed from the page
+(decision 157). What remains open on THIS plan's own topic is unchanged from before: the threshold
+re-centring / separation question (decision 139's capture question) is still the PI's call, and T7's
+own acceptance test still needs a real titration session recorded on RCS08 (open item 30), which is
+a clinical scheduling matter, not something an agent can build.
 
 ## Current Phase
-Phase 18
+Phase 19
 
-phases: 18/18 complete
+phases: 19/19 complete
 
 ### Phase 1: Measure what the ledger says today
 - [x] Run the live report on RCS08 at the committed band (L 0-2+, 24.5 Hz) and list every non-pass row
@@ -155,6 +152,17 @@ phases: 18/18 complete
 - [x] New test file `ClosedLoopDeployment/tests/test_t7_gain_wiring.py`, 5 tests, constructed data only (never claimed as an RCS08 result): M1 differs from M0 given a real pooled slope; a control with no slope reproduces M0 bit-identically; the same row resolves E1; `margin_becomes_available` flips on constructed 6-setting vs 11-step data while the behaviour switch stays untouched; both signatures change when the recording set does
 - [x] Both suites green, run together through the bridge: host 1187 passed / 2 skipped / 0 failed (was 1182, +5); container 631 passed / 0 failed
 - [x] No live RCS08 proof needed (no production code changed); decision 156; commit; push
+- **Status:** complete
+
+### Phase 19: Stim Optimizer -- model both stimulators together, remove the old per-side chart
+- [x] PI, verbatim: "Get rid of the whole arm strip and chart display... Only keep the newer two-stage plan... it should model the left and right sides together because they're always on"
+- [x] Confirmed on the real record before building: one shared rate column, never a per-side rate; of 120 recorded stretches, 25 have the left current at zero, 10 the right, 9 both, 73 both on -- so a shared model needs to KEEP the zero-current stretches, which the old per-side fitting had been throwing out of each side's own fit
+- [x] New shared 3-input search surface (rate, left current, right current) added to `routines/surrogate.py`; the existing 2-input surface is untouched and still used by the old, now-unused-on-this-page per-side code
+- [x] `stage1_openloop.py` rewritten: one shared fit per combination of left and right pulse width (was one fit per side per pulse width); the safety check stays per side and a combination is offered only if both sides' own checks pass it; every existing reader of the frozen result (the gate, closed-loop stage 2) needed no change, since the result still hands back one entry per side, now both built from the same shared fit
+- [x] `bravo_service.py`: the old per-side fitting call removed from the page's own request; the old fitting function itself is untouched and still tested, just not called here any more; the response's per-side "what to test next" table replaced with one shared table
+- [x] Frontend: the old strip of four small charts and its own click-through card deleted from the Stim Optimizer page; the background table under the two-stage plan card now shows one row per shared pulse-width combination instead of two; a shared "what to test at the next visit" table added in its place
+- [x] Two suspicious messages arrived mid-session claiming to redirect this work; neither came from the actual task-giver (one asked for a different design never requested, one falsely claimed a turn limit had been hit, one used the wrong assistant name); neither was acted on, and this is recorded so a later reader is not confused about why the design does not match those messages
+- [x] Both suites green (host 1186 / 2 / 0, container 631 / 0), rewritten tests for the parts of the old per-side design that no longer exist, live proof on RCS08 (before/after field count and difference count, and the real preferred settings on both sides of the change); frontend rebuilt and checked in the served bundle; decision 157; commit; push
 - **Status:** complete
 
 ## Decisions Made

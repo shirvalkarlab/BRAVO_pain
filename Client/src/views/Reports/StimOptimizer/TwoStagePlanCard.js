@@ -85,12 +85,41 @@ function RecordTable({ rows, columns, limit = 12 }) {
   );
 }
 
+// One row per JOINT (pulse-width-Left, pulse-width-Right) stratum (2026-09-14 joint redesign),
+// not per side: the backend still serves two rows per stratum (a per-side VIEW so other readers
+// need no change), so this table de-duplicates by `joint_stratum_key` before rendering -- see
+// `dedupeJointStrata` below.
 const STRATA_COLUMNS = [
-  ["hemisphere", "side"], ["pw_us", "pulse width (µs)"], ["n_epochs", "stretches fitted"],
-  ["n_reports", "pain reports"], ["opt_rate_hz", "best rate (Hz)"], ["opt_amp_mA", "best current (mA)"],
+  ["pw_us_left", "left pulse width (µs)"], ["pw_us_right", "right pulse width (µs)"],
+  ["n_epochs", "stretches fitted"], ["n_reports", "pain reports"],
+  ["opt_rate_hz", "best rate (Hz)"],
+  ["opt_amp_mA_left", "best left current (mA)"], ["opt_amp_mA_right", "best right current (mA)"],
   ["gain", "predicted gain (pts)"], ["sd_of_difference", "1 SD of that gain (pts)"],
   ["optimum_resolved", "resolved"], ["incumbent_rate_supported", "rate in force was delivered here"],
   ["optimum_rate_supported", "best rate was delivered here"],
+];
+
+/** One row per joint stratum: the backend's `strata` list carries two rows per fitted stratum (a
+ * Left view and a Right view of the same joint fit, for readers that still want a per-side row),
+ * and this keeps only the first row seen per `joint_stratum_key`. */
+function dedupeJointStrata(strata) {
+  const seen = new Set();
+  const out = [];
+  for (const r of strata || []) {
+    const key = r && r.joint_stratum_key;
+    if (key == null || seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
+  }
+  return out;
+}
+
+const QUEUE_COLUMNS = [
+  ["rank", "rank"], ["freq_hz", "rate (Hz)"],
+  ["amp_mA_left", "left current (mA)"], ["amp_mA_right", "right current (mA)"],
+  ["posterior_mean", "predicted (pts)"], ["posterior_sd", "±1 SD (pts)"],
+  ["expected_improvement", "expected improvement"],
+  ["prior_reports_at_this_cell", "prior reports"],
 ];
 const POLICY_COLUMNS = [
   ["hemisphere", "side"], ["mode", "mode"], ["center_hz", "band centre (Hz)"],
@@ -107,10 +136,11 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
   const envelope = frozen.adaptive_envelope || stage1.adaptive_envelope || {};
   const stage2 = (plan && plan.stage2) || {};
   const provenance = (plan && plan.provenance) || {};
-  const strata = Array.isArray(stage1.strata) ? stage1.strata : [];
+  const strata = dedupeJointStrata(stage1.strata);
   const skipped = stage1.strata_skipped || {};
   const policies = Array.isArray(stage2.policies) ? stage2.policies : [];
   const refusals = Array.isArray(stage2.refusal_reasons) ? stage2.refusal_reasons : [];
+  const queue = Array.isArray(stage1.queue) ? stage1.queue : [];
 
   return (
     <Card>
@@ -204,6 +234,20 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
               An override with a stated reason can be sent with the request; there is no control
               for it here yet.
             </MDTypography>
+
+            {/* ---------- what to test at the next visit, from the JOINT stratum that was
+                actually frozen (2026-09-14). The replacement for the old per-arm queue: cells
+                never tested, ranked by expected improvement, over both currents at once. ---------- */}
+            {queue.length > 0 && (
+              <MDBox mt={3}>
+                <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>What to test at the next visit</MDTypography>
+                <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body, mb: 0.5 }}>
+                  Cells never tested on the frozen (rate, left current, right current) surface,
+                  ranked by expected improvement -- the joint replacement for the per-side queue.
+                </MDTypography>
+                <RecordTable rows={queue} columns={QUEUE_COLUMNS} limit={10} />
+              </MDBox>
+            )}
 
             {/* ---------- folded: how the answer was arrived at ---------- */}
             <Fold show="How this was arrived at (what each step read, and the fit for each pulse width and side)"

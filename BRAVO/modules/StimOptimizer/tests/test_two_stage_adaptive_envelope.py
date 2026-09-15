@@ -218,7 +218,9 @@ def test_with_the_exclusion_the_frozen_rate_is_the_best_in_envelope_cell(constra
     that are safe AND at or above the minimum, read off the slice's own arrays."""
     res = constrained_run
     s = res.frozen.setting("Left")
-    sl = res.slices[("Left", s.pw_us)]
+    # The fixture carries no `pw_us_Right` column, so the Right side falls back to the Left
+    # column and the joint stratum key is (pw, pw) -- the joint redesign's key shape.
+    sl = res.slices[(s.pw_us, s.pw_us)]
     gx = sl.grid.grid_X()
     allowed = sl.safe & (gx[:, 0] >= MIN_RATE)
     assert allowed.any() and allowed.sum() < sl.safe.sum()
@@ -260,7 +262,9 @@ def test_an_override_with_a_reason_lifts_the_exclusion_and_the_reason_and_name_t
     assert env["constrained"] is False
     assert env["override"] == {"reason": REASON, "by": "Prasad Shirvalkar"}
     assert env["override_ignored"] is None
-    assert env["exclusions"] == {"Left": []} and env["grid_rates_excluded"] == []
+    # both sides are always modelled jointly now, so the (empty) exclusion list is reported
+    # under both keys even though this fixture only requested a Left setting.
+    assert env["exclusions"] == {"Left": [], "Right": []} and env["grid_rates_excluded"] == []
     assert env["statement"] == ("explored outside the adaptive envelope for the stated reason by "
                                 f"Prasad Shirvalkar: {REASON}")
     assert any("OUTSIDE THE ADAPTIVE ENVELOPE" in r and REASON in r
@@ -378,10 +382,13 @@ def test_the_flag_off_response_is_unchanged_and_never_runs_the_path(bench, monke
     out = BS.run_for_participant(dict(REQ))
     assert out["available"] is True and "two_stage" not in out
     assert bench.live.calls == []
-    assert sorted(out) == ["amplitude_effect", "arms", "available", "blockers", "cache_status",
+    # `arms`, `blockers`, `manifest`, `recommendation_supported` and `summary` came from the flat
+    # per-arm pipeline, which `run_for_participant` no longer calls (2026-09-14: the arm strip
+    # and its chart are gone from the page; only the two-stage plan is served now).
+    assert sorted(out) == ["amplitude_effect", "available", "cache_status",
                            "closed_loop", "design_matrix", "ground_truth", "in_force_by_side",
-                           "manifest", "participant", "recommendation_supported", "store",
-                           "summary", "titration_plan", "washin_min"]   # titration_plan: 2026-09-12 evening
+                           "participant", "store",
+                           "titration_plan", "washin_min"]
     # the explore-outside keys are only read with the flag on: with it off they change nothing
     out2 = BS.run_for_participant(dict(REQ, TwoStageExploreOutsideAdaptive=REASON))
     assert "two_stage" not in out2
@@ -416,7 +423,7 @@ def test_the_service_override_key_with_a_reason_returns_the_out_of_envelope_rate
     env = fc["adaptive_envelope"]
     assert env["constrained"] is False
     assert env["override"] == {"reason": REASON, "by": "Prasad Shirvalkar"}
-    assert env["exclusions"] == {"Left": []}
+    assert env["exclusions"] == {"Left": [], "Right": []}
     assert "explored outside the adaptive envelope" in two["provenance"]["stage1"]
     assert REASON in two["provenance"]["stage1"]
     assert any(REASON in r for r in fc["settings"][0]["reasons"])

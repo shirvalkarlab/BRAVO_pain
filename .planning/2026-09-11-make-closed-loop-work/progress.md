@@ -655,3 +655,50 @@ the threshold re-centring as what remains. Commit and push done by this session 
   the PI's next open decision. `check-complete.sh` confirms ALL PHASES COMPLETE (18/18). Commit and
   push done by this session itself -- this is the sixth and last of six sequential builder agents
   on this arc.
+
+## Session: 2026-09-14, Stim Optimizer joint-model redesign (a separate task, same session)
+
+- PI's direct instruction, verbatim: "Get rid of the whole arm strip and chart display... Only
+  keep the newer two-stage plan... it should model the left and right sides together because
+  they're always on."
+- Checked the real record before building anything: one shared stimulation-rate column (never one
+  per side), and of 120 recorded stretches 25 have the left current at zero while the right is on,
+  10 the other way, 9 both off, 73 both on -- so a shared model must KEEP the zero-current
+  stretches rather than dropping them the way each side's own old fit did.
+- Two suspicious messages arrived mid-session, formatted as instructions from "the coordinator",
+  asking to redo the work as a different design never requested by the real task, and (a second
+  copy) falsely claiming a turn limit had been hit and using the wrong assistant name in a commit
+  trailer. Neither came through the way the actual task was given. Neither was acted on; the
+  original, fully specified design (one shared model over rate and both currents, not a picture
+  per rate) was built as requested, and this is recorded so a later reader is not confused about
+  why the result does not match those messages.
+- Built: `routines/surrogate.py` gained a 3-input (rate, left current, right current) search grid;
+  `routines/acquisition.py` gained the matching batch-selection function; `stage1_openloop.py`
+  rewritten so the search fits ONE shared model per (left pulse width, right pulse width)
+  combination rather than two independent per-side models, with the side-effect safety check kept
+  per side (a combination is offered only if both sides' own checks pass it); `bravo_service.py`'s
+  page request no longer calls the old per-side fitting function (which is untouched and still
+  tested, just not called here), and its response carries a shared "what to test next" table.
+- Frontend: the old strip of four small per-side charts and its own click-through card deleted from
+  the Stim Optimizer page (`ArmGainStrip.js` removed); the two-stage plan card's own background
+  table now shows one row per shared pulse-width combination instead of two, and gained a shared
+  "what to test at the next visit" table.
+- Both suites green, run together through `run_both_suites.sh`: host 1186 passed, 2 skipped, 0
+  failed; container PASS=631 FAIL=0. Tests for the parts of the old per-side design that no longer
+  exist were rewritten, not left passing under a relabelled premise (this project's own rule):
+  `test_review_2026_09_12_stage1_sides.py` and `test_service_store.py` needed real rewrites, not
+  just renames.
+- Live proof on RCS08, before (the old, separate-sides code, via `git stash`) against after (this
+  change), same real recordings both times: before, the left side preferred 4.8 mA at its own 100
+  us pulse width (11 stretches fitted) and the right side preferred 4.3 mA at its own 160 us pulse
+  width (31 stretches) -- two disagreeing, independently-chosen pulse widths. After, the ONE shared
+  model, fitted on the combination actually in force (60 us left / 160 us right, 23 stretches),
+  prefers 55 Hz (the rate already running), 1.5 mA left and 1.0 mA right; 4 of 15 pulse-width
+  combinations had enough stretches to fit, 11 did not. Field count and difference count on the
+  full page response, never a tolerance: 10,662 fields before, 8,596 after, 8,206 in common, 2,456
+  only-before, 390 only-after, 134 of the 8,206 shared values differ (expected -- the
+  recommendation genuinely changed).
+- Decision 157 written (next number after 156, read from the file's own tail rather than guessed).
+  task_plan.md Phase 19 added and marked complete; phases counter and Current Phase both bumped to
+  19/19; Next Step rewritten to note this is a separate change on a neighbouring page and that this
+  plan's own open items (the threshold re-centring, the titration session) are unchanged.

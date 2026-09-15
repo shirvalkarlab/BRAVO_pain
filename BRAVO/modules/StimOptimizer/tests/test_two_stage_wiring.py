@@ -195,10 +195,13 @@ def test_without_the_flag_the_response_has_no_two_stage_key_and_the_path_is_neve
     assert out["available"] is True
     assert "two_stage" not in out
     assert bench.live.calls == [], "the LFP evidence builder must not run without the flag"
-    assert sorted(out) == ["amplitude_effect", "arms", "available", "blockers", "cache_status",
+    # `arms`, `blockers`, `manifest`, `recommendation_supported` and `summary` came from the flat
+    # per-arm pipeline, which `run_for_participant` no longer calls (2026-09-14: the arm strip
+    # and its chart are gone from the page; only the two-stage plan is served now).
+    assert sorted(out) == ["amplitude_effect", "available", "cache_status",
                            "closed_loop", "design_matrix", "ground_truth", "in_force_by_side",
-                           "manifest", "participant", "recommendation_supported", "store",
-                           "summary", "titration_plan", "washin_min"]   # titration_plan: 2026-09-12 evening
+                           "participant", "store",
+                           "titration_plan", "washin_min"]
 
 
 # FIT ONCE, ASSERT MANY (2026-09-12). The flag-on requests below all fit Stage 1 on `bench.es`
