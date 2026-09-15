@@ -295,8 +295,15 @@ def test_the_block_equals_a_direct_call_of_run_two_stage_live_field_for_field(be
         data_horizon=two["stage1"]["frozen_configuration"]["data_horizon"],
         stage1_kwargs={"safety_ceiling_by_hemisphere": ceilings},
         gate_kwargs={"ceiling_mA": ceilings})
+    # `two_stage_block` also fits the clinic-sheet stream (2026-09-14) and folds it into
+    # `stage1.rate_strata_clinic`/`stage1.clinic_stream`; the direct call must do the same to stay
+    # a field-for-field equal of the service's own wiring.
+    clinic_block = BS._clinic_stream_stage1_block(
+        participant, hemispheres=("Left",), safety_ceiling_by_hemisphere=ceilings,
+        redcap_pooled_var=float(rep.stage1.D["pooled_within_var"].iloc[0]))
     direct = BS._two_stage_payload(rep, inputs=two["inputs"], seconds=0.0,
-                                   in_force=BS.in_force_by_side(bench.es))
+                                   in_force=BS.in_force_by_side(bench.es),
+                                   clinic_block=clinic_block)
     a, b = _flatten(two), _flatten(direct)
     a.pop("seconds"); b.pop("seconds")
     assert set(a) == set(b), (set(a) ^ set(b))

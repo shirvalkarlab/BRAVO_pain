@@ -296,7 +296,7 @@ def observation_variance(n, sd, dur_h, age_days, *, pooled_var, cfg=None) -> np.
 
 
 def build_objective(epoch_stats: pd.DataFrame, *, incumbent_epoch, cfg=None,
-                    reference_time=None) -> pd.DataFrame:
+                    reference_time=None, pooled_var_override=None) -> pd.DataFrame:
     """Assemble the epoch-level design table the surrogate consumes.
 
     Parameters
@@ -311,6 +311,17 @@ def build_objective(epoch_stats: pd.DataFrame, *, incumbent_epoch, cfg=None,
         J = 0 at the incumbent by construction and negative means better than status quo.
     reference_time
         Timestamp against which observation age is measured; defaults to the latest ``t0``.
+    pooled_var_override
+        ``None`` (the default) means the pooled within-epoch variance is estimated from
+        ``epoch_stats`` itself via ``pooled_within_epoch_var``, exactly as before this
+        parameter existed -- every existing caller is unaffected. When a frame has NO epoch
+        with at least ``min_n`` reports (a thin, independent stream such as the clinic-sheet
+        pain stream in ``StimOptimizer.clinic_pain``, where most settings were tried once),
+        that estimate cannot be formed and would raise; a caller who has a pooled variance
+        from elsewhere (e.g. the same participant's REDCap-based stream) may pass it here
+        instead, so a thin epoch table still gets a real (if imported) noise estimate rather
+        than failing outright. Never used silently: the caller decides, and states in its own
+        report which variance was actually used.
 
     Returns
     -------
@@ -373,8 +384,10 @@ def build_objective(epoch_stats: pd.DataFrame, *, incumbent_epoch, cfg=None,
     ref_t = pd.to_datetime(reference_time, utc=True) if reference_time is not None else t0.max()
     d["age_days"] = (ref_t - t0).dt.total_seconds() / 86400.0
 
-    pooled = pooled_within_epoch_var(d, sd_col, "n")
+    pooled = (float(pooled_var_override) if pooled_var_override is not None
+             else pooled_within_epoch_var(d, sd_col, "n"))
     d["pooled_within_var"] = pooled
+    d["pooled_within_var_overridden"] = pooled_var_override is not None
     d["obs_var"] = observation_variance(d["n"], d[sd_col], d["dur_h"], d["age_days"],
                                         pooled_var=pooled, cfg=cfg)
     return d

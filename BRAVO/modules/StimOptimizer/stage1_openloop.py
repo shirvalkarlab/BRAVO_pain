@@ -761,7 +761,7 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
               explore_outside_reason=None, explore_outside_by=None,
               explore_outside_requested=None,
               adaptive_min_rate_hz=ENV.MIN_RATE_HZ,
-              safety_ceiling_by_hemisphere=None) -> Stage1Result:
+              safety_ceiling_by_hemisphere=None, pooled_var_override=None) -> Stage1Result:
     """Run the open-loop search JOINTLY over both stimulators and freeze one configuration.
 
     Parameters
@@ -798,6 +798,11 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
         ``{hemisphere: (ceiling_mA, provenance)}`` from ``safety_ceiling.ceilings_by_hemisphere``:
         the current above which each side is not acceptable, stated by the PI, the severity-3 seed
         of that side's OWN safety model (still fitted per side; see the module docstring).
+    pooled_var_override
+        Passed straight to ``objective.build_objective``; see its own docstring. ``None`` (the
+        default) is the original behaviour. Exists for a thin, independent design matrix (e.g. the
+        clinic-sheet pain stream, ``StimOptimizer.clinic_pain``) that has no epoch with enough
+        repeats to estimate its own pooled variance.
 
     Returns
     -------
@@ -826,7 +831,8 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
 
     # ONE objective build, ONE incumbent, so J is on a single scale across every stratum below.
     D = OBJ.build_objective(es, incumbent_epoch=float(incumbent_epoch),
-                            cfg={"primary_item": primary_item} if primary_item else None)
+                            cfg={"primary_item": primary_item} if primary_item else None,
+                            pooled_var_override=pooled_var_override)
     inc_row = D.loc[D["epoch"].astype(float) == float(incumbent_epoch)].iloc[0]
     inc_rate = float(inc_row["freq_hz"])
     inc_amp_left = float(inc_row["amp_mA_Left"])

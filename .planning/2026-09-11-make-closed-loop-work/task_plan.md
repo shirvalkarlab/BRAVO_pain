@@ -5,19 +5,19 @@ problem is that the module never handed the rule the value the device already re
 that still blocks does so for a reason the PI has read and agreed with.
 
 ## Next Step
-Phase 21's backend is built and proven live; three more builders follow it, each its own change:
-the clinic-sheet ingest (reading a filled-in sheet back into the record), the page (drawing the new
-`held_other_side`/`joint_corners`/`sheet_rows` fields Phase 21 added, and the lowered 4.5 mA
-ceiling, on screen), and the Google Sheet export (turning `sheet_rows` into an actual shared
-sheet a clinician can open at the visit). None of those three is started. What remains open from
-earlier phases is unchanged: the threshold re-centring / separation question (decision 139's
-capture question) is still the PI's call, and T7's own acceptance test still needs a real
+Phase 22's clinic-sheet ingest is built and proven live (backend only, not on any page yet). Two
+more builders follow it, each its own change: the page (drawing the new
+`held_other_side`/`joint_corners`/`sheet_rows` fields Phase 21 added, the lowered 4.5 mA ceiling,
+and Phase 22's `rate_strata_clinic`/`clinic_stream` block, on screen), and the Google Sheet export
+(turning `sheet_rows` into an actual shared sheet a clinician can open at the visit). What remains
+open from earlier phases is unchanged: the threshold re-centring / separation question (decision
+139's capture question) is still the PI's call, and T7's own acceptance test still needs a real
 titration session recorded on RCS08 (open item 30), a clinical scheduling matter.
 
 ## Current Phase
-Phase 21
+Phase 22
 
-phases: 21/21 complete
+phases: 21/22 complete
 
 ### Phase 1: Measure what the ledger says today
 - [x] Run the live report on RCS08 at the committed band (L 0-2+, 24.5 Hz) and list every non-pass row
@@ -190,6 +190,22 @@ phases: 21/21 complete
 - [x] 78 tests across `test_safety_ceiling.py`, `test_titration_plan.py`, `test_current_map_schedule.py`, all green; both suites green through one bridge job (host 1229 / 2 / 0, container 631 / 0)
 - [x] Live field-count/difference-count proof on RCS08, genuinely before and after (`git stash`): 7,148 fields before, 8,647 after, 12 only-before, 1,511 only-after, 49 differing of 7,136 shared (4 the ceiling change, 43 the ladder/session redesign, 2 bookkeeping); decision 160; commit; push
 - **Status:** complete
+
+### Phase 22: The clinic-sheet pain stream, imported as a second, independent data stream (backend only)
+- [x] PI, 2026-09-14, verbatim: "Import all in-clinic AND at-home testing visits. Pull the in-clinic numbers separately (not in REDCap) as an independent data stream for system optimization (critical)"
+- [x] New `StimOptimizer/clinic_pain.py`: `parse_workbook`/`parse_folder` read the 29 real workbooks, header found by name not position, typo-tolerant ("Timastamp", "PW (ms)"), the bilateral left-before-separator convention in all three forms, the one transposed workbook (July 2025) read from its Notes tab with rate/pulse width left blank rather than guessed
+- [x] A real Excel corruption found and fixed: some pain scores ("8/10") were auto-converted by Excel into date objects (month 8, day 10); read back correctly, never guessed when the shape does not fit
+- [x] Prose pain descriptions in a notes column counted as `n_unparsed_prose`, never parsed into a number
+- [x] Stored as raw kind `clinic_pain_steps`, keyed on the folder's own file set (name + content hash per file); `manage.py ingest_clinic_sheets --participant <uid>` writes it with `writer="clinic_sheet_ingest"`; re-running over an unchanged folder writes nothing
+- [x] `epoch_frame_from_steps` collapses a setting tested more than once into one epoch with `n` = the repeat count, in the acute clinic-testing frame's own column names (`pain_Left_Leg` etc.) `routines/objective.py` already expected
+- [x] `objective.build_objective` and `stage1_openloop.run_stage1` gained one additive, backward-compatible parameter, `pooled_var_override` (default `None`, no existing caller affected), so a thin stream with no epoch repeated 3+ times can still borrow the REDCap stream's own pooled variance rather than failing outright
+- [x] `bravo_service._clinic_stream_stage1_block` fits the SAME per-rate two-input surface on the clinic stream alone and reports it under `two_stage.stage1.rate_strata_clinic` (tagged `source: "clinic_sheets"`) and `two_stage.stage1.clinic_stream` (file/step counts, visit list, which pooled variance was used and why); never pooled with the REDCap-based recommendation, which is untouched
+- [x] 16 new tests in `test_clinic_pain.py`; one existing wiring test in `test_two_stage_wiring.py` extended (not weakened) to cover the new step
+- [x] Ingest run on RCS08 in the container: 816 steps, 472 with a usable pain score, 7 unparsed prose, 16 skipped (no setting known), 370 in-clinic / 102 at-home, 63 distinct (left, right) current pairs at 55 Hz; re-run confirmed no rewrite
+- [x] Both suites green through one bridge job: host 1245 passed / 2 skipped / 0 failed (was 1229, +16); container PASS=631 FAIL=0
+- [x] Live field-count/difference-count proof on RCS08, genuinely before and after (`git stash -u`): 18,787 fields before, 22,518 after, 0 only-before, 3,731 only-after (all under the new clinic block), 3 differing of 18,787 shared, all bookkeeping (a timestamp, the response key, one timing field) -- no REDCap-based value moved
+- [x] On the clinic stream: two rate strata fitted (55 Hz, 110 Hz), neither resolves a current to recommend yet -- the honest answer given the evidence so far, not a defect; decision 161; commit; push
+- **Status:** in_progress (backend and ingest done and proven live; the page display and the Google Sheet export are not started)
 
 ## Decisions Made
 | # | Decision | Rationale |

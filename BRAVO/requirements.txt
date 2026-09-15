@@ -50,3 +50,9 @@ plotly==7.0.0
 # tied, so this is a choice about size and durability, not speed.
 # modules/CacheStore/store.py imports it only when a table is written or read.
 pyarrow==17.0.0
+
+# Reads the lab's clinic-and-home testing workbooks (.xlsx) so their pain scores can become a
+# second, independent stream for Stim Optimizer (the PI's decision, 2026-09-14). Already present
+# in the live container at this version; pinned here so it is not an unstated dependency.
+# modules/StimOptimizer/clinic_pain.py imports it only inside parse_workbook.
+openpyxl==3.1.5

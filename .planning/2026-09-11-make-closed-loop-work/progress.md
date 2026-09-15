@@ -852,3 +852,77 @@ the threshold re-centring as what remains. Commit and push done by this session 
   carries a dated note at its top saying which of its own numbers this session's rulings moved.
 - Client/ untouched -- this is backend only; the page, the ingest and the export are the next
   three builders' work, named in Next Step.
+
+## Phase 22: the clinic-sheet pain stream (2026-09-14/15)
+- PI's decision, verbatim: "Import all in-clinic AND at-home testing visits. Pull the in-clinic
+  numbers separately (not in REDCap) as an independent data stream for system optimization
+  (critical)."
+- Read `ClosedLoopDeployment/clinic_steps.py`'s module docstring first, as instructed -- it
+  documents the same 29 workbooks and their five parsing traps, but only for the amplitude-ramp
+  analysis; it never reads the pain scores. New `StimOptimizer/clinic_pain.py` fills that gap.
+- Surveyed all 29 real workbooks with openpyxl before writing the parser: header naming is stable,
+  its ROW and column POSITION are not (an extra "Stim Set" column and a two-row merged
+  "SIDE EFFECT"/"SCORE" sub-header on the newest workbook, absent from every other one) -- so
+  columns are matched by name, typo-tolerant, never by position.
+- Found and fixed a real, previously unknown data-corruption trap by reading the actual cell
+  values, not assuming: several workbooks (confirmed on the September 2025 and June 2026 files)
+  store a pain score of "8/10" not as text but as a genuine Excel DATE object (month 8, day 10),
+  because Excel auto-converted the typed text. `_parse_pain_value` reads a date back as its month
+  whenever the day is exactly 10 and the month is 1-10; any other date shape is left unparsed.
+- The store: raw kind `clinic_pain_steps`, keyed on the folder's own file set (name + content hash
+  per file, never the decoded content), written by `manage.py ingest_clinic_sheets`.
+- `epoch_frame_from_steps` groups repeated identical settings into one epoch with n = the repeat
+  count, in the exact column names (`pain_Left_Leg`, `pain_Left_Leg_sd`, ...) `routines/objective.py`
+  already names as its "acute clinic-testing frame" (found in its own comments before writing
+  anything: `ITEM_COLUMNS`/`NATIVE_SCALE` already expected this shape, on a native 0-10 scale, no
+  rescaling needed).
+- `objective.build_objective` and `stage1_openloop.run_stage1` gained one additive parameter,
+  `pooled_var_override` (default `None`), so a caller with a thin stream (few settings repeated
+  3+ times) can supply a variance from elsewhere rather than the call raising outright. Every
+  existing call site is unaffected; both host suites confirm this (no other test's numbers moved).
+- `bravo_service._clinic_stream_stage1_block` fits the identical per-rate two-input surface
+  `run_stage1` already fits on the REDCap stream, tags every row `source: "clinic_sheets"`, and
+  reports it under `two_stage.stage1.rate_strata_clinic` / `two_stage.stage1.clinic_stream`.
+  Never pooled with the REDCap-based recommendation.
+- Local dev loop: built a throwaway Python 3.12 virtualenv (openpyxl/numpy/pandas/scipy/
+  scikit-learn/statsmodels/pyarrow pinned to `requirements.txt`) to iterate the parser and the fit
+  against the real, gitignored workbooks before ever touching the container, then re-verified
+  everything in the container itself.
+- 16 new tests, `StimOptimizer/tests/test_clinic_pain.py`: the two-row step (settings inherited
+  from the ramp row), the score-on-first-row form, all three bilateral forms, the
+  "Timastamp"/"PW (ms)" typos, a prose score counted not parsed, missing right-side columns as
+  NaN, a score with no prior setting skipped, the Excel-date trap both ways, "N/10" string
+  parsing, the clinic-stream fit resolving/not-resolving a real current effect, every serialised
+  row tagged `source == "clinic_sheets"`, and repeated identical settings pooling into one epoch.
+  One existing test, `test_two_stage_wiring.py::test_the_block_equals_a_direct_call_...`, was
+  EXTENDED (not weakened) to also build the clinic block in its direct-call comparison, since the
+  service's own wiring now includes that step.
+- Real ingest, RCS08, inside the container: 816 steps across the 29 workbooks, 472 carrying a
+  usable pain score, 7 counted as unparsed prose, 16 skipped for no known setting; 370 in-clinic
+  rows, 102 at-home; 63 distinct (left, right) current pairs delivered at 55 Hz. Re-running the
+  ingest over the unchanged folder reported "already stored, key unchanged" and left exactly 2
+  files on disk both times (the key-decides rule, decision 26).
+- Both suites, one bridge job (`run_both_suites.sh`): host 1245 passed / 2 skipped / 0 failed (was
+  1229, +16 new); container PASS=631 FAIL=0 LIVE_SKIPPED=6 (unaffected).
+- Live field-count/difference-count proof on RCS08, the real Stim Optimizer two-stage request,
+  genuinely before and after (`git stash -u` for "before", `git stash pop` to restore "after"):
+  18,787 fields before, 22,518 after, 0 only-before, 3,731 only-after (every one under the new
+  clinic block), 3 differing of the 18,787 shared -- `cache_status.last_built_utc` (a timestamp),
+  `store.response_key` (carries a digest of the module's own source by design), and
+  `two_stage.seconds` (a timing field). No REDCap-based value moved.
+- What the clinic stream itself found, read plainly: 118 distinct settings were built from the 472
+  pain scores across 29 visits; its own pooled within-setting variance was estimable from the
+  record's own repeats (2.676 on the left-leg item, so the REDCap fallback was not needed). Two
+  stimulation speeds had enough repeated settings to fit a picture at all -- 55 Hz and 110 Hz --
+  and NEITHER can recommend a current yet: at 55 Hz that pulse-width pairing has never been run at
+  the setting currently in force, so there is nothing to compare a gain against; at 110 Hz the
+  best-looking cell's improvement is smaller than the fit's own uncertainty about it. That is the
+  honest answer this stream gives today, not a defect in the code.
+- task_plan.md: Phase 22 added, status `in_progress` (the backend and the ingest are done and
+  proven live; the page display and the Google Sheet export are not started); phases counter
+  21/22; Next Step rewritten naming the two remaining builders. Decision 161 written in
+  DECISIONS_and_open_items.md, inserted after decision 160.
+- Client/ untouched -- this is backend only, as the task specified; the page and the export are
+  the next two builders' work.
+- Never staged anything under `BRAVO/_pro_dump/` (gitignored; the notes columns of the real
+  workbooks carry the patient's own words).

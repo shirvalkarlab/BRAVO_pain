@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 
 from . import adapter
+from . import clinic_pain as CLPAIN
 from . import current_map_schedule as CMS
 from . import pipeline
 from . import safety_ceiling as SC
@@ -851,7 +852,69 @@ def _joint_batch_frame(s1, frozen):
         for i, b in enumerate(sl.batch)])
 
 
-def _two_stage_payload(rep, *, inputs, seconds, in_force=None) -> dict:
+#: ==========================================================================================
+#: THE CLINIC-SHEET PAIN STREAM (2026-09-14). The PI's decision, verbatim: "Import all in-clinic
+#: AND at-home testing visits. Pull the in-clinic numbers separately (not in REDCap) as an
+#: independent data stream for system optimization (critical)." This fits the SAME per-rate
+#: (amplitude-Left, amplitude-Right) surfaces Stage 1 already fits on the REDCap stream, on the
+#: clinic-and-home testing workbooks alone -- never pooled with the REDCap stream, never changing
+#: the REDCap-based recommendation. See `StimOptimizer.clinic_pain`.
+def _clinic_stream_stage1_block(participant, *, hemispheres, safety_ceiling_by_hemisphere,
+                                redcap_pooled_var) -> dict:
+    """`{"rate_strata_clinic": [...], "clinic_stream": {...}}`. Never raises: a failure is
+    reported under `clinic_stream.reason` with `clinic_stream.available = False`."""
+    try:
+        fit = CLPAIN.fit_clinic_rate_strata(
+            participant, hemispheres=tuple(hemispheres),
+            safety_ceiling_by_hemisphere=safety_ceiling_by_hemisphere,
+            redcap_pooled_var=redcap_pooled_var, root=_SHARED_CACHE_DIR_OVERRIDE)
+    except Exception as exc:                                      # noqa: BLE001 -- adjunct block
+        _log.exception("StimOptimizer: the clinic-sheet stream fit failed")
+        return {"rate_strata_clinic": [],
+               "clinic_stream": {"available": False,
+                                 "reason": f"the clinic-sheet fit could not run: "
+                                          f"{type(exc).__name__}: {exc}"}}
+    fit["visits"] = _clinic_stream_visits_summary(participant)
+    s1c = fit.pop("stage1_result", None)
+    if s1c is None or not fit.get("available"):
+        return {"rate_strata_clinic": [], "clinic_stream": fit}
+    rate_strata_clinic = _attach_rate_stratum_surfaces(
+        _frame_records(getattr(s1c, "rate_summary", None)), s1c)
+    for row in rate_strata_clinic:
+        row["source"] = "clinic_sheets"
+        row["n_visits"] = fit.get("n_files")
+        row["n_clinic"] = fit.get("n_clinic")
+        row["n_home"] = fit.get("n_home")
+    fit["strata_skipped"] = {str(k): str(v) for k, v in (s1c.skipped or {}).items()}
+    return {"rate_strata_clinic": rate_strata_clinic, "clinic_stream": fit}
+
+
+def _clinic_stream_visits_summary(participant) -> list:
+    """One row per visit date: setting, step/pain counts, rates and current ranges tried -- what
+    the page can list as "what was ingested" without re-reading the store's raw table."""
+    try:
+        steps, _stamp, reason = CLPAIN.load_clinic_steps(
+            participant, consumer="stim_optimizer", root=_SHARED_CACHE_DIR_OVERRIDE)
+    except Exception:                                             # noqa: BLE001
+        return []
+    if steps is None or len(steps) == 0:
+        return []
+    out = []
+    for (vdate, setting), sub in steps.groupby(["visit_date", "setting"]):
+        rates = sorted(float(r) for r in sub["freq_hz"].dropna().unique())
+        amps = pd.concat([sub["amp_mA_Left"], sub["amp_mA_Right"]]).dropna()
+        # Every row in the stored table already carries at least one pain score (that is what
+        # made it a step worth parsing), so "with pain" and "steps" are the same count here.
+        out.append(dict(
+            visit_date=str(vdate), setting=str(setting), n_steps=int(len(sub)),
+            n_with_pain=int(len(sub)), rates_hz=rates,
+            amp_mA_min=(float(amps.min()) if len(amps) else None),
+            amp_mA_max=(float(amps.max()) if len(amps) else None)))
+    out.sort(key=lambda r: r["visit_date"])
+    return out
+
+
+def _two_stage_payload(rep, *, inputs, seconds, in_force=None, clinic_block=None) -> dict:
     """The `two_stage` block from a `pipeline.TwoStageReport`: Stage 1's frozen configuration,
     the gate's verdict with each condition's reason and the evidence it read, Stage 2's output or
     its refusal, and a provenance sentence per stage. Read from the report, never recomputed."""
@@ -938,6 +1001,12 @@ def _two_stage_payload(rep, *, inputs, seconds, in_force=None) -> dict:
         "queue": _frame_records(_joint_queue_frame(s1, frozen)),
         "batch": _frame_records(_joint_batch_frame(s1, frozen)),
         "describe": frozen.describe(),
+        # THE CLINIC-SHEET PAIN STREAM (2026-09-14), independent of everything above: the SAME
+        # per-rate surface shape, fitted on the clinic-and-home testing workbooks alone. Never
+        # pooled with the REDCap-based `rate_strata`; see `_clinic_stream_stage1_block`.
+        "rate_strata_clinic": (clinic_block or {}).get("rate_strata_clinic", []),
+        "clinic_stream": (clinic_block or {}).get(
+            "clinic_stream", {"available": False, "reason": "not requested"}),
     }
 
     conditions = []
@@ -1083,8 +1152,20 @@ def two_stage_block(participant, es, *, request_data, stream, washin_min, hemisp
         return {"requested": True, "available": False, "backend": TWO_STAGE_BACKEND,
                 "seconds": _jsonable(_time.perf_counter() - t0), "inputs": dict(inputs),
                 "reason": f"the two-stage path could not run: {type(exc).__name__}: {exc}"}
+    # The REDCap stream's own pooled within-setting variance, already computed inside Stage 1
+    # (`objective.build_objective`'s own `pooled_within_var` column) -- read back, not
+    # recomputed, and used ONLY as a fallback noise estimate for the clinic stream when the
+    # clinic stream cannot estimate its own (see `clinic_pain.fit_clinic_rate_strata`).
+    try:
+        _redcap_pooled_var = float(rep.stage1.D["pooled_within_var"].iloc[0])
+    except Exception:                                  # noqa: BLE001
+        _redcap_pooled_var = None
+    clinic_block = _clinic_stream_stage1_block(
+        participant, hemispheres=hemispheres,
+        safety_ceiling_by_hemisphere=safety_ceiling_by_hemisphere,
+        redcap_pooled_var=_redcap_pooled_var)
     return _two_stage_payload(rep, inputs=inputs, seconds=_time.perf_counter() - t0,
-                              in_force=in_force)
+                              in_force=in_force, clinic_block=clinic_block)
 
 
 def run_for_participant(request_data: dict) -> dict:
