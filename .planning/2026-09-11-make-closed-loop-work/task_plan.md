@@ -5,19 +5,19 @@ problem is that the module never handed the rule the value the device already re
 that still blocks does so for a reason the PI has read and agreed with.
 
 ## Next Step
-Nothing queued on the closed-loop ledger itself, and nothing queued on the Stim Optimizer page
-either: decision 159 drew decision 158's honest-current picture and its home titration schedule
-onto the page (two new cards, `CurrentMapCard.js` and `CurrentMapScheduleCard.js`), so every
-backend field this plan's later phases added now has somewhere on screen. What remains open is
-unchanged from before and is not something an agent can build: the threshold re-centring /
-separation question (decision 139's capture question) is still the PI's call, and T7's own
-acceptance test still needs a real titration session recorded on RCS08 (open item 30), a clinical
-scheduling matter.
+Phase 21's backend is built and proven live; three more builders follow it, each its own change:
+the clinic-sheet ingest (reading a filled-in sheet back into the record), the page (drawing the new
+`held_other_side`/`joint_corners`/`sheet_rows` fields Phase 21 added, and the lowered 4.5 mA
+ceiling, on screen), and the Google Sheet export (turning `sheet_rows` into an actual shared
+sheet a clinician can open at the visit). None of those three is started. What remains open from
+earlier phases is unchanged: the threshold re-centring / separation question (decision 139's
+capture question) is still the PI's call, and T7's own acceptance test still needs a real
+titration session recorded on RCS08 (open item 30), a clinical scheduling matter.
 
 ## Current Phase
-Phase 20
+Phase 21
 
-phases: 20/20 complete
+phases: 21/21 complete
 
 ### Phase 1: Measure what the ledger says today
 - [x] Run the live report on RCS08 at the committed band (L 0-2+, 24.5 Hz) and list every non-pass row
@@ -177,6 +177,18 @@ phases: 20/20 complete
 - [x] Both suites green (host 1211 / 2 / 0, container 631 / 0 / live-skipped 6); live field-count/difference-count proof on RCS08, genuinely before (decision 157's code) and after: 8,596 fields before, 9,001 after, 0 only-before, 405 only-after (the new blocks), 8 differing of 8,596 shared (6 bookkeeping, 2 real: both sides' recommended current, 1.5/1.0 mA -> none); decision 158; commit; push
 - [x] The frontend: `bravo_service.py` gained a `surface` grid on every fitted `rate_strata` row and a `pooled_surfaces` reference block, read straight off the fitted objects Stage 1 already holds; two new cards, `CurrentMapCard.js` (one heatmap per fitted speed, the setting in force marked, the three checks printed beside it) and `CurrentMapScheduleCard.js` (the day-by-day titration table), placed above the two-stage plan card; `DecisionStrip.js`'s "search prefers" row now states plainly when no current can be recommended instead of a bare dash
 - [x] 4 new tests (`test_surface_serialization.py`); both suites green (host 1215 / 2 / 0, container 631 / 0 / live-skipped 6); live field-count/difference-count proof on RCS08 (9,145 fields before, 17,357 after, 1 only-before, 8,213 only-after, 4 differing of 9,144 shared, all bookkeeping); frontend rebuilt, the two cards' own wording found in the served chunk; decision 159; commit; push
+- **Status:** complete
+
+### Phase 21: RCS08's stated ceiling lowered to 4.5 mA; the in-clinic titration session redesigned (backend only)
+- [x] `safety_ceiling.PI_STATED_CEILING_MA` for RCS08 changed 5.0 -> 4.5 mA both sides ("make max safe amp on each side 4.5 mA, PI decided"); `objective.AMP_HARD_LIMIT_MA` (the module's own search-grid edge, a different thing) untouched; `current_map_schedule.py`'s comment referencing the old number corrected
+- [x] `titration_plan.ladder()` rewritten: up in 0.5 mA steps unchanged, down now in 1.0 mA drops rather than retracing the up steps, always ending at 0 ("keep the 1.0 mA down legs")
+- [x] `titration_plan.step_timing()` added: a 60 s ramp row then the unchanged 60 s test row, 2 min a step ("test-period hold time = 60 s, not 120 s; 2 min per step")
+- [x] `side_plan` carries `held_other_side` (current + source); `plan_for_sides` reads `in_force` to fill it from the OTHER side's own setting
+- [x] `joint_corners()` added: four (left, right) combinations at 1.0/4.0 mA, capped per side and restricted to the joint safety model, optional, for the pain surface's off-diagonal points
+- [x] `SHEET_COLUMNS`/`build_sheet_rows()` added: the flat clinic-sheet row list in the real 2026-09-02 workbook's own "Stim Testing" column order (read directly from the xlsx via zipfile/XML, not approximated), two rows a step, bilateral cells "L x / R y"
+- [x] `bravo_service.titration_plan_block` threads `es` through to fit the joint safety model for the corners block; single-side requests correctly build no joint-corners rows (a real bug caught by this session's own new tests before it shipped)
+- [x] 78 tests across `test_safety_ceiling.py`, `test_titration_plan.py`, `test_current_map_schedule.py`, all green; both suites green through one bridge job (host 1229 / 2 / 0, container 631 / 0)
+- [x] Live field-count/difference-count proof on RCS08, genuinely before and after (`git stash`): 7,148 fields before, 8,647 after, 12 only-before, 1,511 only-after, 49 differing of 7,136 shared (4 the ceiling change, 43 the ladder/session redesign, 2 bookkeeping); decision 160; commit; push
 - **Status:** complete
 
 ## Decisions Made

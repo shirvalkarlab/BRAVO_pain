@@ -26,11 +26,13 @@ RCS08 = "2e3c75c00d7f4f37b53a048d195f11da"
 # the table and its provenance
 # ---------------------------------------------------------------------------------------------
 def test_rcs08_reads_the_stated_ceiling_on_both_sides_with_the_pi_provenance():
+    """4.5 mA on both sides as of 2026-09-14 (his words: "make max safe amp on each side 4.5 mA,
+    PI decided"); the earlier 5.0 mA value is named in the provenance as history, not served."""
     for side in ("Left", "Right"):
         c, why = SC.ceiling_for(RCS08, side)
-        assert c == 5.0
+        assert c == 4.5
         assert why == SC.PI_STATED_PROVENANCE
-        assert "stated by PI" in why and "2026-09-12" in why
+        assert "stated by PI" in why and "2026-09-14" in why and "5.0 mA" in why
 
 
 def test_an_unknown_participant_falls_back_to_the_module_hard_limit_and_says_so():

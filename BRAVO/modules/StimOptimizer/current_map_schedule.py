@@ -33,7 +33,8 @@ from . import stage1_openloop as _S1
 
 #: The three current levels the joint design grid is built from, before any ceiling or safety
 #: restriction is applied. 1.0 / 2.5 / 4.0 mA span the range this participant's own record has
-#: actually explored (decision 150's synthesis) without approaching the 5.0 mA PI-stated ceiling.
+#: actually explored (decision 150's synthesis) without approaching RCS08's PI-stated ceiling,
+#: 4.5 mA per side as of 2026-09-14 (`safety_ceiling.PI_STATED_CEILING_MA`; was 5.0 mA).
 DESIGN_LEVELS_MA = (1.0, 2.5, 4.0)
 
 #: A design point already carrying this many rated reports at the schedule's own (rate, pulse

@@ -16,9 +16,13 @@ had been delivered and tolerated for weeks.
 
 WHAT IT IS NOW. The severity-3 seed is ONE current per side, stated by the PI, placed at every
 stimulation rate on the search grid: "above this current, on this side, is not acceptable". The
-only ceiling he has stated is the 5.0 mA hard limit of 2026-09-02 (``objective.AMP_HARD_LIMIT_MA``),
-confirmed as the safety ceiling on 2026-09-12; whether a lower per-side value is wanted is being
-put to him, so the number lives in ONE place -- the table below -- and nowhere else.
+first ceiling he stated was the 5.0 mA hard limit of 2026-09-02
+(``objective.AMP_HARD_LIMIT_MA``), confirmed as the safety ceiling on 2026-09-12. **He lowered it
+on 2026-09-14**, his instruction verbatim: "make max safe amp on each side 4.5 mA, PI decided" --
+RCS08's own ceiling is now 4.5 mA on both sides, still below the 5.0 mA module hard limit
+(``AMP_HARD_LIMIT_MA``, which is a different thing: the highest amplitude the search grid can
+represent at all, not a participant's own stated ceiling -- see ``routines/plots.py``'s
+``AMP_GRID``). The number lives in ONE place -- the table below -- and nowhere else.
 
 WHERE IT REACHES THE PAGE. Stim Optimizer page: the per-arm cards ("safe ceiling N mA", the amber
 "above the reachable safe ceiling" mark), the queue table's ``safe`` column, the blockers list,
@@ -42,13 +46,14 @@ from .routines import objective as OBJ
 #: A side that is absent, or a participant that is absent, falls back to the module hard limit
 #: with a provenance that says so; nothing is invented.
 PI_STATED_CEILING_MA = {
-    # RCS08
-    "2e3c75c00d7f4f37b53a048d195f11da": {"Left": 5.0, "Right": 5.0},
+    # RCS08 -- 4.5 mA on both sides, lowered from 5.0 mA on 2026-09-14 (his words, verbatim:
+    # "make max safe amp on each side 4.5 mA, PI decided").
+    "2e3c75c00d7f4f37b53a048d195f11da": {"Left": 4.5, "Right": 4.5},
 }
 
 #: What the table's numbers rest on, printed beside every ceiling the page shows.
-PI_STATED_PROVENANCE = ("stated by PI (2026-09-02 hard limit, objective.AMP_HARD_LIMIT_MA; "
-                        "confirmed as the safety ceiling 2026-09-12)")
+PI_STATED_PROVENANCE = ("stated by PI, 2026-09-14 (was 5.0 mA, stated 2026-09-02 as the hard "
+                        "limit and confirmed as the safety ceiling 2026-09-12)")
 FALLBACK_PROVENANCE = "module hard limit, no PI-stated ceiling for this participant"
 
 #: An epoch counts as TOLERATED (severity 0 at its setting) when this side's current was above zero

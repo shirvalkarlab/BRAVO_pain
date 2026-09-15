@@ -1,13 +1,16 @@
 """The titration session the Stim Optimizer recommends for the next visit (`titration_plan.py`,
 2026-09-12 evening: open item 30 and the 20 s post-ramp margin of decision 144 joined into one
-recommendation).
+recommendation; REVISED 2026-09-14, the PI's ruling on the ladder's down leg, the two-row step,
+the held other side, the joint corners and the flat clinic-sheet rows).
 
-Values, never shapes: the ladder never exceeds the stated ceiling and rounds DOWN; a rate below
-55 Hz is lifted to 55 with the reason; the harmonic-avoidance lists for 55, 110 and 145 Hz are
-pinned centre by centre; the hold is at least 60 s and leaves at least 10 usable 3 s pieces after
-the margin; the points-yield arithmetic; `post_ramp.margin_becomes_available` on a constructed
-table with a 6-setting run (False) and an 8-setting run (True); and the service response carries
-`titration_plan` for both sides with every `source` non-empty.
+Values, never shapes: the ladder goes UP in 0.5 mA steps to the ceiling (rounding down when the
+ceiling is not a multiple of the step) and back DOWN in 1.0 mA drops, always ending at 0; a rate
+below 55 Hz is lifted to 55 with the reason; the harmonic-avoidance lists for 55, 110 and 145 Hz
+are pinned centre by centre; a step is a ramp row then a test row, 60 s each; the points-yield
+arithmetic; `post_ramp.margin_becomes_available` on a constructed table with a 6-setting run
+(False) and an 8-setting run (True); the joint-corners block caps, dedupes and excludes; the flat
+clinic-sheet rows carry the real workbook's own column order and the "L x / R y" bilateral form;
+and the service response carries `titration_plan` for both sides with every `source` non-empty.
 """
 import shutil
 import sys
@@ -26,33 +29,55 @@ from StimOptimizer.routines import within_visit as WV
 
 
 # ---------------------------------------------------------------------------------------------
-# the ladder
+# the ladder: up in 0.5 mA steps, down in 1.0 mA drops (the PI's ruling, 2026-09-14)
 # ---------------------------------------------------------------------------------------------
 @pytest.mark.parametrize("ceiling", [5.0, 4.8, 3.0, 0.5, 2.25, 6.0])
-def test_the_ladder_never_exceeds_the_stated_ceiling_and_goes_up_then_down(ceiling):
+def test_the_ladder_never_exceeds_the_ceiling_goes_up_then_down_and_ends_at_zero(ceiling):
     lad = TP.ladder(ceiling)
     assert max(lad["steps_mA"]) <= ceiling + 1e-9
     assert lad["top_mA"] == max(lad["steps_mA"])
     assert lad["steps_mA"][0] == 0.0 and lad["steps_mA"][-1] == 0.0
-    # up in 0.5 mA steps, the top held once, then down the same steps
-    up = lad["steps_mA"][: lad["n_distinct_currents"]]
-    assert up == [round(0.5 * i, 3) for i in range(lad["n_distinct_currents"])]
-    assert lad["steps_mA"] == up + list(reversed(up[:-1]))
-    assert lad["n_steps"] == 2 * lad["n_distinct_currents"] - 1
+    up = lad["steps_mA"][: lad["n_distinct_currents_up"]]
+    down = lad["steps_mA"][lad["n_distinct_currents_up"]:]
+    assert up == [round(0.5 * i, 3) for i in range(lad["n_distinct_currents_up"])]
+    assert len(down) == lad["n_down"]
+    assert lad["n_steps"] == lad["n_distinct_currents_up"] + lad["n_down"]
+    # the down leg never takes a step bigger than 1.0 mA, and never goes back up
+    full = [up[-1]] + down
+    for a, b in zip(full, full[1:]):
+        assert 0.0 < a - b <= 1.0 + 1e-9
 
 
-def test_the_ladder_for_the_stated_5_mA_ceiling_is_11_currents_and_21_steps():
+def test_the_ladder_for_the_stated_4_5_mA_ceiling_is_10_up_and_5_down():
+    """The PI's own worked example, 2026-09-14: "4.5 -> 0, 0.5, ..., 4.5 = 10 steps" on the way
+    up, "3.5, 2.5, 1.5, 0.5, 0" on the way down."""
+    lad = TP.ladder(4.5)
+    assert lad["top_mA"] == 4.5
+    assert lad["n_distinct_currents_up"] == 10 and lad["n_down"] == 5 and lad["n_steps"] == 15
+    assert lad["steps_mA"] == [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5,
+                               3.5, 2.5, 1.5, 0.5, 0.0]
+    assert lad["compact"] == "0 → 0.5 → … → 4.5 → … → 0 mA"
+
+
+def test_the_ladder_for_the_stated_5_mA_ceiling_is_11_up_and_5_down():
     lad = TP.ladder(5.0)
     assert lad["top_mA"] == 5.0
-    assert lad["n_distinct_currents"] == 11 and lad["n_steps"] == 21
+    assert lad["n_distinct_currents_up"] == 11 and lad["n_down"] == 5 and lad["n_steps"] == 16
     assert lad["steps_mA"] == [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0,
-                               4.5, 4.0, 3.5, 3.0, 2.5, 2.0, 1.5, 1.0, 0.5, 0.0]
-    assert lad["compact"] == "0 → 0.5 → … → 5.0 → … → 0 mA"
+                               4.0, 3.0, 2.0, 1.0, 0.0]
+
+
+def test_a_ceiling_below_1_0_mA_still_ends_at_zero_with_one_down_row():
+    # top=0.5: the down leg's first 1.0 mA drop would go negative, so it lands straight on 0.
+    lad = TP.ladder(0.5)
+    assert lad["top_mA"] == 0.5 and lad["n_distinct_currents_up"] == 2
+    assert lad["n_down"] == 1 and lad["steps_mA"][-2:] == [0.5, 0.0]
 
 
 def test_a_ceiling_that_is_not_a_multiple_of_the_step_rounds_down_and_says_so():
     lad = TP.ladder(4.8)
-    assert lad["top_mA"] == 4.5 and lad["n_distinct_currents"] == 10 and lad["n_steps"] == 19
+    assert lad["top_mA"] == 4.5 and lad["n_distinct_currents_up"] == 10 and lad["n_down"] == 5
+    assert lad["n_steps"] == 15
     assert "not a multiple of 0.5 mA" in lad["why"]
 
 
@@ -60,6 +85,7 @@ def test_no_ceiling_means_no_ladder_and_a_reason():
     for bad in (None, 0.0, -1.0, float("nan")):
         lad = TP.ladder(bad)
         assert lad["steps_mA"] == [] and lad["n_steps"] == 0 and lad["top_mA"] is None
+        assert lad["n_down"] == 0 and lad["n_distinct_currents_up"] == 0
         assert "no ceiling" in lad["why"]
 
 
@@ -129,7 +155,7 @@ def test_a_candidate_centre_is_judged_the_same_way():
 
 
 # ---------------------------------------------------------------------------------------------
-# the hold
+# the hold (test row, unchanged) and the step timing (ramp + test, new 2026-09-14)
 # ---------------------------------------------------------------------------------------------
 def test_the_hold_is_at_least_60_s_and_leaves_at_least_10_usable_pieces_after_the_margin():
     h = TP.hold_per_step()
@@ -141,6 +167,14 @@ def test_the_hold_is_at_least_60_s_and_leaves_at_least_10_usable_pieces_after_th
     assert h["min_pieces_required"] == WV.MIN_CHUNKS_PRE_CHANGE == 10
     assert h["usable_pieces_after_margin"] == 13 >= h["min_pieces_required"]
     assert "30 s settled window" in h["why"] and "20 s" in h["why"] and "10 s of slack" in h["why"]
+
+
+def test_the_step_timing_is_a_60_s_ramp_row_then_the_60_s_test_row_120_s_a_step():
+    t = TP.step_timing()
+    assert t["ramp_s"] == 60.0
+    assert t["test_s"] == TP.hold_per_step()["seconds"] == 60.0
+    assert t["total_s"] == 120.0
+    assert "ramp row" in t["why"] and "test row" in t["why"] and "2 min" in t["why"]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -247,7 +281,7 @@ def test_the_points_yield_arithmetic_and_the_margin_sentence():
     margin = PR.margin_becomes_available(runs)
     p = TP.side_plan("Left", margin=margin, **_side())
     y = p["yield"]
-    assert y["settled_points_from_session"] == 21 == p["ladder"]["n_steps"]
+    assert y["settled_points_from_session"] == 16 == p["ladder"]["n_steps"]   # 5.0 mA -> 11 up + 5 down
     assert y["distinct_currents_up_leg"] == 11
     assert y["min_settled_settings_for_margin"] == 8
     assert y["session_clears_margin_floor"] is True          # 11 >= 8
@@ -255,7 +289,7 @@ def test_the_points_yield_arithmetic_and_the_margin_sentence():
     assert y["margin_switched_on_today"] is False
     s = y["sentence"]
     assert "13 settled points across 4 runs" in s and "at most 6 currents in any one run" in s
-    assert "21 settled points" in s and "11 distinct currents" in s
+    assert "16 settled points" in s and "11 distinct currents" in s
     assert "no run in the record has the 8 settled settings" in s and "stays off" in s
 
 
@@ -279,13 +313,154 @@ def test_a_contralateral_contact_is_named_as_on_the_other_side():
 def test_every_source_is_non_empty_and_every_number_has_one():
     p = TP.side_plan("Left", margin=PR.margin_becomes_available(None), **_side())
     src = p["sources"]
-    for k in ("rate_hz", "pulse_width_us", "ceiling_mA", "sensing_contact", "ladder", "hold", "bands",
-              "yield.settled_points_from_session", "yield.record_today", "yield.margin", "conditions"):
+    for k in ("rate_hz", "pulse_width_us", "ceiling_mA", "sensing_contact", "held_other_side",
+              "ladder", "step_timing", "hold", "bands", "yield.settled_points_from_session",
+              "yield.record_today", "yield.margin", "conditions"):
         assert isinstance(src.get(k), str) and src[k].strip(), k
     for k in ("rate_hz", "pulse_width_us", "ceiling_mA"):
         assert p[k] is not None
-    assert "decision 133" in p["conditions"][2] and "FIXED measurement current" in p["conditions"][2]
-    assert "streaming on" in p["conditions"][0] and "baseline before" in p["conditions"][1]
+    assert any("decision 133" in c and "FIXED measurement current" in c for c in p["conditions"])
+    assert any("streaming on" in c for c in p["conditions"])
+    assert any("baseline before" in c for c in p["conditions"])
+
+
+# ---------------------------------------------------------------------------------------------
+# the other side is held at its own current in force (new, 2026-09-14)
+# ---------------------------------------------------------------------------------------------
+def test_held_other_side_is_reported_and_reaches_the_sources():
+    p = TP.side_plan("Left", margin=PR.margin_becomes_available(None),
+                     held_other_side_mA=2.5, held_other_side_source="the Right side, stream",
+                     **_side())
+    assert p["held_other_side"] == {"current_mA": 2.5, "source": "the Right side, stream"}
+    assert p["sources"]["held_other_side"] == "the Right side, stream"
+    assert any("HELD" in c for c in p["conditions"])
+
+
+def test_no_held_other_side_reading_says_so_rather_than_zero():
+    p = TP.side_plan("Left", margin=PR.margin_becomes_available(None), **_side())
+    assert p["held_other_side"]["current_mA"] is None
+    assert p["held_other_side"]["source"] == "no reading for the other side"
+
+
+# ---------------------------------------------------------------------------------------------
+# the joint corners (optional): caps, dedupes and excludes
+# ---------------------------------------------------------------------------------------------
+def test_joint_corners_are_the_four_1_0_4_0_combinations_capped_at_each_sides_ceiling():
+    jc = TP.joint_corners(4.5, 4.5)
+    pts = {(p["amp_left_mA"], p["amp_right_mA"]) for p in jc["points"]}
+    assert pts == {(1.0, 1.0), (4.0, 1.0), (1.0, 4.0), (4.0, 4.0)}
+    assert jc["optional"] is True and "off-diagonal" in jc["why"]
+    assert jc["n_points"] == 4 and jc["n_excluded"] == 0
+
+
+def test_a_low_ceiling_caps_and_can_collapse_two_corners_together():
+    jc = TP.joint_corners(0.8, 4.5)   # the left 4.0 mA corners both cap to 0.8
+    pts = {(p["amp_left_mA"], p["amp_right_mA"]) for p in jc["points"]}
+    assert pts == {(0.8, 1.0), (0.8, 4.0)}
+    assert jc["n_points"] == 2
+
+
+def test_an_unsafe_corner_is_excluded_and_named_not_silently_dropped():
+    def is_safe(l, r):
+        return not (l >= 4.0 and r >= 4.0)
+    jc = TP.joint_corners(4.5, 4.5, is_safe=is_safe)
+    excluded = {(p["amp_left_mA"], p["amp_right_mA"]) for p in jc["excluded"]}
+    assert (4.0, 4.0) in excluded
+    assert (4.0, 4.0) not in {(p["amp_left_mA"], p["amp_right_mA"]) for p in jc["points"]}
+    hit = [p for p in jc["excluded"] if (p["amp_left_mA"], p["amp_right_mA"]) == (4.0, 4.0)][0]
+    assert "reason" in hit and "safe set" in hit["reason"]
+    assert jc["n_points"] == 3 and jc["n_excluded"] == 1
+
+
+def test_no_ceiling_on_either_side_uses_the_raw_levels():
+    jc = TP.joint_corners(None, None)
+    pts = {(p["amp_left_mA"], p["amp_right_mA"]) for p in jc["points"]}
+    assert pts == {(1.0, 1.0), (4.0, 1.0), (1.0, 4.0), (4.0, 4.0)}
+
+
+def test_plan_for_sides_offers_no_joint_corners_when_only_one_side_is_requested():
+    margin = PR.margin_becomes_available(None)
+    out = TP.plan_for_sides({"Left": _side()}, margin=margin)
+    assert out["joint_corners"]["points"] == []
+    assert "only one side was requested" in out["joint_corners"]["note"]
+    assert all(r["block"] != "joint_corners" for r in out["sheet_rows"])
+
+
+def test_plan_for_sides_offers_joint_corners_when_both_sides_are_requested():
+    margin = PR.margin_becomes_available(None)
+    out = TP.plan_for_sides({"Left": _side(), "Right": _side()}, margin=margin)
+    assert len(out["joint_corners"]["points"]) == 4
+    assert any(r["block"] == "joint_corners" for r in out["sheet_rows"])
+
+
+# ---------------------------------------------------------------------------------------------
+# the flat clinic-sheet rows
+# ---------------------------------------------------------------------------------------------
+def test_sheet_columns_match_the_real_workbooks_own_header_row():
+    assert TP.SHEET_COLUMNS == (
+        "Stim Set", "Contacts", "Group", "Amp (mA)", "Rate (Hz)", "PW (µs)", "Threshold",
+        "Duration (s)", "SIDE EFFECT", "Timestamp", "Movement/Change point",
+        "General Notes / Pt Verbal Notes", "Overall", "Head", "Back", "Left Leg", "Left Foot",
+        "Right Foot")
+
+
+def _sides_for_sheet():
+    margin = PR.margin_becomes_available(None)
+    left = TP.side_plan("Left", margin=margin, held_other_side_mA=2.0,
+                        held_other_side_source="the Right side", **_side(ceiling_mA=4.5))
+    right = TP.side_plan("Right", margin=margin, held_other_side_mA=1.5,
+                         held_other_side_source="the Left side",
+                         **_side(rate_in_force_hz=55.0, pulse_width_us=150.0, ceiling_mA=4.5))
+    return {"Left": left, "Right": right}
+
+
+def test_build_sheet_rows_has_two_rows_per_step_and_the_bilateral_contacts_and_amps():
+    sides = _sides_for_sheet()
+    in_force = {"Left": {"contacts_short": "L 2⁻", "pulse_width_us": 100.0},
+               "Right": {"contacts_short": "R 1⁻", "pulse_width_us": 150.0}}
+    timing = TP.step_timing()
+    jc = TP.joint_corners(4.5, 4.5)
+    rows = TP.build_sheet_rows(sides, jc, in_force=in_force, timing=timing)
+    n_left = sides["Left"]["ladder"]["n_steps"]
+    n_right = sides["Right"]["ladder"]["n_steps"]
+    n_joint = len(jc["points"])
+    assert len(rows) == 2 * (n_left + n_right + n_joint)
+    for r in rows:
+        assert set(r) >= set(TP.SHEET_COLUMNS) | {"block", "step", "row_kind"}
+    ramp_rows = [r for r in rows if r["row_kind"] == "ramp"]
+    test_rows = [r for r in rows if r["row_kind"] == "test"]
+    assert len(ramp_rows) == n_left + n_right + n_joint
+    assert len(test_rows) == len(ramp_rows)
+    # the ramp row carries Contacts/Amp/Rate/PW and the ramp duration; the test row carries only
+    # the test duration (the PI's ruling, 2026-09-14)
+    r0 = ramp_rows[0]
+    assert r0["Contacts"] == "L 2⁻ / R 1⁻"
+    assert r0["Amp (mA)"].startswith("L ") and " / R " in r0["Amp (mA)"]
+    assert r0["Rate (Hz)"] == 55.0
+    assert r0["PW (µs)"] == "L 100 / R 150"
+    assert r0["Duration (s)"] == 60.0
+    t0 = test_rows[0]
+    assert t0["Contacts"] is None and t0["Amp (mA)"] is None and t0["Rate (Hz)"] is None
+    assert t0["PW (µs)"] is None and t0["Duration (s)"] == 60.0
+    assert t0["Stim Set"] == r0["Stim Set"] and t0["step"] == r0["step"]
+    # blocks are named and steps number sequentially within a block
+    blocks = [r["block"] for r in ramp_rows]
+    assert blocks == (["left_ladder"] * n_left + ["right_ladder"] * n_right
+                      + ["joint_corners"] * n_joint)
+    left_steps = [r["step"] for r in ramp_rows if r["block"] == "left_ladder"]
+    assert left_steps == list(range(1, n_left + 1))
+
+
+def test_the_left_ladder_varies_left_and_holds_right_at_its_own_current():
+    sides = _sides_for_sheet()
+    in_force = {"Left": {"contacts_short": "L 2⁻", "pulse_width_us": 100.0},
+               "Right": {"contacts_short": "R 1⁻", "pulse_width_us": 150.0}}
+    timing = TP.step_timing()
+    rows = TP.build_sheet_rows(sides, {"points": []}, in_force=in_force, timing=timing)
+    left_ramp = [r for r in rows if r["block"] == "left_ladder" and r["row_kind"] == "ramp"]
+    ladder_currents = sides["Left"]["ladder"]["steps_mA"]
+    for r, cur in zip(left_ramp, ladder_currents):
+        assert r["Amp (mA)"] == f"L {cur:g} / R 2"    # right held at 2.0 mA throughout
 
 
 # ---------------------------------------------------------------------------------------------
@@ -389,11 +564,14 @@ def test_the_response_carries_a_titration_plan_for_both_sides_with_every_source_
         assert p["pulse_width_us"] == (100.0 if side == "Left" else 150.0)   # each side's OWN column
         assert p["ceiling_mA"] == 5.0                                        # the module hard limit fallback
         assert "no PI-stated ceiling" in p["sources"]["ceiling_mA"]
-        assert p["ladder"]["n_steps"] == 21 and p["hold"]["seconds"] == 60.0
+        assert p["ladder"]["n_steps"] == 16 and p["hold"]["seconds"] == 60.0
+        assert p["step_timing"]["total_s"] == 120.0
         assert p["bands"]["avoid_hz"] == [11.5, 12.5, 13.5, 14.5, 15.5, 25.5, 26.5, 27.5, 28.5, 29.5]
         for k, v in p["sources"].items():
             assert isinstance(v, str) and v.strip(), (side, k)
         assert "setting in force on the" in p["sources"]["rate_hz"]
+        # the other side is held at its own current in force, read from the same matrix
+        assert p["held_other_side"]["current_mA"] is not None
     # the Left side's best deployable cell; the Right side's cell did not pass and is named as such
     assert tp["sides"]["Left"]["sensing_contact"]["channel"] == "ONE_THREE_LEFT"
     assert tp["sides"]["Left"]["sensing_contact"]["n_responding"] == 12
@@ -406,6 +584,16 @@ def test_the_response_carries_a_titration_plan_for_both_sides_with_every_source_
     assert tp["margin"]["table_stored"] is False and tp["margin"]["available"] is False
     assert "no entry is stored" in tp["stored_tables"]["pooled"] and "no entry is stored" in tp["stored_tables"]["run_points"]
     assert tp["sides"]["Left"]["yield"]["record_today"]["points"] is None
+    # the joint corners and the flat sheet rows are both present
+    assert tp["joint_corners"]["optional"] is True
+    assert isinstance(tp["sheet_rows"], list) and len(tp["sheet_rows"]) > 0
+    assert tp["sheet_columns"] == list(TP.SHEET_COLUMNS)
+    n_left = tp["sides"]["Left"]["ladder"]["n_steps"]
+    n_right = tp["sides"]["Right"]["ladder"]["n_steps"]
+    n_joint = len(tp["joint_corners"]["points"])
+    assert len(tp["sheet_rows"]) == 2 * (n_left + n_right + n_joint)
+    assert tp["session_time"]["n_steps_total"] == n_left + n_right + n_joint
+    assert tp["session_time"]["total_minutes"] > tp["session_time"]["steps_minutes"]
     # JSON-safe: no numpy scalars anywhere
     def walk(o):
         if isinstance(o, dict):
@@ -446,4 +634,6 @@ def test_the_plan_is_in_the_stored_response_and_a_readiness_failure_does_not_rem
     assert tp["available"] is True and set(tp["sides"]) == {"Left"}
     assert tp["sides"]["Left"]["sensing_contact"] is None
     assert "no sensing contact is named" in tp["sides"]["Left"]["sensing_contact_note"]
-    assert tp["sides"]["Left"]["ladder"]["n_steps"] == 21
+    assert tp["sides"]["Left"]["ladder"]["n_steps"] == 16
+    # a single side means no joint corners rows in the flat sheet
+    assert all(r["block"] != "joint_corners" for r in tp["sheet_rows"])

@@ -1340,7 +1340,7 @@ def _run_for_participant(request_data: dict) -> dict:
     # attached before the write-back so the stored response carries it. Never raises.
     out["titration_plan"] = titration_plan_block(
         participant, in_force=in_force, screen=_screen_out.get("screen"),
-        ceilings=_ceilings, hemispheres=hemis)
+        ceilings=_ceilings, hemispheres=hemis, es=es)
     # THE JOINT CURRENT-MAP TITRATION SCHEDULE (2026-09-14, his instruction: "do (c) both and
     # make a titration schedule to actually make these plots useful"). Computed on every request
     # from inputs this request already holds; nothing is stored.
@@ -1543,8 +1543,14 @@ def current_map_schedule_block(participant, *, es, in_force, ceilings) -> dict:
         return CMS.unavailable_schedule(f"the schedule could not be built: {exc}")
 
 
-def titration_plan_block(participant, *, in_force, screen, ceilings, hemispheres) -> dict:
-    """The `titration_plan` response block (`titration_plan.plan_for_sides`), never raising."""
+def titration_plan_block(participant, *, in_force, screen, ceilings, hemispheres, es=None) -> dict:
+    """The `titration_plan` response block (`titration_plan.plan_for_sides`), never raising.
+
+    `es` (2026-09-14) is the request's own design matrix, used only to fit the joint safety model
+    the "joint corners" block is restricted to (the same builder `current_map_schedule_block`
+    already uses, `_schedule_safety_predicate`); `None` degrades to capping the corners at each
+    side's own ceiling with no further safety restriction, named as such.
+    """
     from . import titration_plan as _tp
     from .routines import percept_adaptive as _pa
     uid = str(getattr(participant, "uid", participant))
@@ -1579,8 +1585,28 @@ def titration_plan_block(participant, *, in_force, screen, ceilings, hemispheres
                 pulse_width_us=f.get("pulse_width_us"), pulse_width_source=in_force_src,
                 ceiling_mA=ceiling[0], ceiling_source=str(ceiling[1]),
                 contact=contact, contact_source=how, record_today=rec)
-        block = _tp.plan_for_sides(sides, margin=margin)
+        # THE JOINT CORNERS' SAFETY RESTRICTION (2026-09-14): the same per-side SafetyGP the home
+        # current-map schedule already fits, at the session's own rate (the higher of the two
+        # sides' held rates, so neither side's own adaptive minimum is understated). A fit
+        # failure degrades to capping only, never raises.
+        joint_is_safe = None
+        joint_safety_note = "no design matrix was supplied, so the joint corners are capped at each side's own ceiling only"
+        if isinstance(es, pd.DataFrame) and len(es):
+            rl = (sides.get("Left") or {}).get("rate_in_force_hz")
+            rr = (sides.get("Right") or {}).get("rate_in_force_hz")
+            rl2 = _tp.rate_to_hold(rl)["rate_hz"] if "Left" in sides else None
+            rr2 = _tp.rate_to_hold(rr)["rate_hz"] if "Right" in sides else None
+            session_rate = (max(rl2, rr2) if (rl2 is not None and rr2 is not None)
+                           else (rl2 if rl2 is not None else rr2))
+            if session_rate is not None:
+                is_safe_raw, joint_safety_note = _schedule_safety_predicate(es, ceilings=ceilings)
+                if is_safe_raw is not None:
+                    joint_is_safe = (lambda l, r, _f=is_safe_raw, _rt=session_rate:
+                                     _f(l, r, rate_hz=_rt))
+        block = _tp.plan_for_sides(sides, margin=margin, in_force=in_force,
+                                   joint_is_safe=joint_is_safe)
         block["stored_tables"] = {"pooled": pooled_note, "run_points": runs_note}
+        block["joint_corners"]["safety_model_note"] = joint_safety_note
         return _jsonable(block)
     except Exception as exc:                          # noqa: BLE001 -- adjunct card
         _log.exception("StimOptimizer: the titration plan could not be built for %s", uid)

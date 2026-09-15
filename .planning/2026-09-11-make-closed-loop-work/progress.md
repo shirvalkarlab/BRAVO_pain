@@ -811,3 +811,44 @@ the threshold re-centring as what remains. Commit and push done by this session 
   left edge (step 314/314, left current 401/401, right current 565/565 px).
 - Frontend rebuilt (chunk 100.41ee87f5.chunk.js); no Python changed, so no suite run applies.
   Commit 78c1cd0e, pushed.
+
+### 2026-09-14 (later) -- Phase 21: the 4.5 mA ceiling and the redesigned titration session (backend only)
+- Two PI rulings, built together in one commit. (A) RCS08's stated safety ceiling lowered
+  5.0 -> 4.5 mA on both sides, changed only in `safety_ceiling.PI_STATED_CEILING_MA`;
+  `objective.AMP_HARD_LIMIT_MA` (a different thing, the search grid's own edge) left alone.
+  (B) `titration_plan.py` redesigned: the ladder's down leg is now 1.0 mA drops, not the same
+  0.5 mA steps as the way up; each step is two clinic-sheet rows (a 60 s ramp row then the
+  unchanged 60 s test row), 2 min a step; the other side is held at its own current in force
+  while one side's ladder runs (`held_other_side`); an optional `joint_corners` block adds four
+  off-diagonal (left, right) points, capped per side and restricted to the joint safety model;
+  and every plan now carries a flat `sheet_rows` list in the real clinic workbook's own column
+  order, read directly from the 2026-09-02 xlsx (opened with a raw zipfile/XML parse -- neither
+  runner carries openpyxl) rather than approximated from memory. Two real, disclosed differences
+  from the task's own paraphrase of the sheet's columns: no separate "sEEG Contacts" column, no
+  "Right Leg" pain column, and one "SIDE EFFECT" column rather than two.
+- One real bug caught by this session's own new tests, not by review: a single-side request
+  (`Hemispheres: ["Left"]`) still built `joint_corners` rows for a Right side that had no plan
+  to explain them, because the safety predicate used to fit both sides' models regardless of
+  what was requested. Fixed: the joint-corners block is only built when both sides are present
+  in the response; otherwise it says why in one sentence. Two new tests pin both directions.
+- Both suites run through one bridge job: host 1229 passed / 2 skipped / 0 failed; container
+  PASS=631 FAIL=0. 78 tests across the three touched test files, all green, including the new
+  ladder shape (10 up / 5 down at 4.5 mA), the held-other-side field, the joint-corners
+  capping/dedupe/exclusion, and the flat sheet rows' exact header and two-row-per-step shape.
+- Live proof on RCS08, the real Stim Optimizer request, genuinely before and after
+  (`git stash push` on the four touched source files for "before", `git stash pop` to restore):
+  7,148 fields before, 8,647 after, 7,136 in common, 12 only-before (six retired `steps_mA`
+  indices per side), 1,511 only-after (all under the new `titration_plan` fields), 49 differing
+  of the 7,136 shared -- 4 under `current_map_schedule` (both sides' ceiling, 5.0 to 4.5, exactly
+  what (A) should move), 43 under `titration_plan` (the ladder's shape and its sentences, exactly
+  what (B) should move), and exactly 2 bookkeeping (the stored-answer timestamp and the response
+  key, which by design carries a digest of the module's own source). `closed_loop`,
+  `amplitude_effect`, `ground_truth`, `design_matrix`, `in_force_by_side`: 0 differences.
+- task_plan.md: Phase 21 added and checked off, status `complete`; phases counter 21/21; Next
+  Step rewritten naming the three builders that follow (clinic-sheet ingest, the page, the
+  Google Sheet export). Decision 160 written in DECISIONS_and_open_items.md; decision 145's
+  RCS08 ceiling value struck-and-corrected in place; decision 146's row marked AMENDED, both per
+  the log's own convention for a superseded number. `artifacts/titration_plan_2026-09-12.md`
+  carries a dated note at its top saying which of its own numbers this session's rulings moved.
+- Client/ untouched -- this is backend only; the page, the ingest and the export are the next
+  three builders' work, named in Next Step.
