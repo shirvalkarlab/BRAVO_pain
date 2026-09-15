@@ -8,6 +8,9 @@ by me against the code or a live number before it was kept. Two were softened, o
 dropped. The four raw reports and the check-by-check table are in
 `.planning/2026-09-15-clinician-adversarial-review-of-the-thre/`.
 
+
+> **Addendum, same day (decision 168).** The three Criticals (S1, C1, B1) and the two findings on the same lines (S2, B4) are fixed, test-first, and pushed. The averaging-range check the PI asked for changed B4's wording: the 0-30 s range is a 2020 sensing-era tip-card figure, RCS08's device has never run longer, and the device's Dual onset (0-6 min) holds a level rather than averaging it -- so the grid tiers its rows rather than calling anything above 30 s impossible.
+
 **Who this is written for.** A clinician who has RCS08's record on screen, is planning Wednesday's
 (2026-09-16) titration session, and will afterwards type a closed-loop configuration into the tablet by hand.
 Every finding says which module, which page and panel, and whether the thing is on screen today.

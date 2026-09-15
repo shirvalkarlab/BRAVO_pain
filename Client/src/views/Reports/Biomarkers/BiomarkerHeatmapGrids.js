@@ -56,6 +56,7 @@ import { biomarkerHeatmapSlot, prefetchBiomarkerHeatmapMetric } from "views/Repo
 import PAL from "views/Reports/ClosedLoopSim/palette";
 import { BIN_HI, BIN_LO, BIN_HI_RGB, BIN_LO_RGB, divergingRgb, diverging } from "./binarizationModel";
 import { contactSortKey } from "./contactOrder";
+import { bestCellReadout, hoverCustomData, rowLabelWithTier, tierCaption } from "./gridReadouts";
 
 const num = (v, d = 3) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 
@@ -249,7 +250,7 @@ function welchTTest(a, b) {
  * axis type, where a shape positioned by category index is not.
  */
 function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onClick, flashKey,
-  width = 750 }) {
+  width = 750, deviceRanges = null }) {
   const centers = useMemo(() => sw.center_freqs_hz || [], [sw]);
   // DELIVERED, not requested, for the axis LABEL -- see the module-level note. (The cell
   // drill-down request must still send the REQUESTED value; that happens in the parent, not here.)
@@ -263,7 +264,13 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
   const bestRows = kind === "auc" ? sw.best_auc_rows : sw.best_correlation_rows;
   const bestByCol = useMemo(() => bestCellIndexByColumn(sw, bestRows), [sw, bestRows]);
 
-  const yLabels = useMemo(() => seconds.map((s) => secondsLabel(s)), [seconds]);
+  // Review 2026-09-15, B4: each row label says whether its length of signal is an averaging window
+  // the device can be set to, or only a level the device can hold through its onset (the ranges
+  // come from the response, `device_timing_ranges`, never a number typed here).
+  const yLabels = useMemo(() => seconds.map((s) => rowLabelWithTier(s, deviceRanges)),
+    [seconds, deviceRanges]);
+  // Review 2026-09-15, B1: the corrected statistics for each column's best cell, on hover.
+  const customdata = useMemo(() => hoverCustomData(sw, kind === "auc" ? "auc" : "corr"), [sw, kind]);
   // Sized 25% larger than the first Plotly pass, per the PI's own comparison against the size
   // before this redesign.
   const height = heatmapHeight(rows);
@@ -296,7 +303,8 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
       colorscale: divergingColorscale(center, halfRange), zmin: center - halfRange,
       zmax: center + halfRange, zmid: center, showscale: false,
       xgap: 1.5, ygap: 1.5,
-      hovertemplate: `${kind === "auc" ? "AUC" : "r"} = %{z:.3f}<br>%{x} Hz, %{y}<extra></extra>`,
+      customdata,
+      hovertemplate: `${kind === "auc" ? "AUC" : "r"} = %{z:.3f}<br>%{x} Hz, %{y}<br>%{customdata}<extra></extra>`,
     });
     // Family-wise-significant "best of ten lengths" cells -- an open circle, exactly the marker
     // the SVG version drew.
@@ -597,6 +605,20 @@ function DeviceSpectrumCaption({ sw }) {
   );
 }
 
+/** Review 2026-09-15, B4: which rows the device can be set to. The strongest cells on RCS08 sit at
+ * 300 s, and the device's only documented averaging range is 0-30 s (a 2020 sensing-era tip card);
+ * the Dual onset (0-6 min) can hold a level that long but does not average. Built from the ranges
+ * on the response, so a change to the one home changes this sentence. */
+function DeviceTierCaption({ ranges, sw }) {
+  const text = tierCaption(ranges, (sw && sw.integration_seconds_delivered) || []);
+  if (!text) return null;
+  return (
+    <MDTypography variant="caption" color="dark" sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
+      {text}
+    </MDTypography>
+  );
+}
+
 function PanelTitle({ pinnedCell, channelLabel }) {
   if (!pinnedCell) return null;
   // Shown ONLY above the scatter panel now -- the violin panel repeated the identical title
@@ -624,7 +646,7 @@ function PanelTitle({ pinnedCell, channelLabel }) {
  * The big pinned-cell title (`PanelTitle`) moves out further still, up to sit beside the contact
  * strip (see the main render below) so its own bottom edge lines up with the strip's.
  */
-function ScatterStatsLine({ cell, pinnedCell }) {
+function ScatterStatsLine({ cell, pinnedCell, sw }) {
   if (!pinnedCell) {
     return (
       <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
@@ -644,10 +666,22 @@ function ScatterStatsLine({ cell, pinnedCell }) {
   const { r, n } = pearsonR(xs, ys);
   const t = (r != null && n > 2) ? r * Math.sqrt((n - 2) / (1 - r * r)) : null;
   const p = t != null ? tTestPValue(t, n - 2) : null;
+  // Review 2026-09-15, B1: the grid's OWN corrected statistic for this cell, printed beside the
+  // plain one and labelled as a different thing. Only each column's best cell has one; for any
+  // other cell the readout says so rather than leaving the reader to assume the plain r is it.
+  const readout = (sw && pinnedCell) ? bestCellReadout(sw, "corr", pinnedCell.col, pinnedCell.row) : null;
   return (
-    <MDTypography variant="caption" color="dark" sx={{ fontSize: 15, display: "block", mb: 0.5 }}>
-      {`Pearson r = ${num(r, 3)}, p = ${p == null ? "—" : num(p, 4)} (n = ${n})`}
-    </MDTypography>
+    <MDBox>
+      <MDTypography variant="caption" color="dark" sx={{ fontSize: 15, display: "block", mb: 0.25 }}>
+        {`Plain, uncorrected: Pearson r = ${num(r, 3)}, p = ${p == null ? "—" : num(p, 4)} (n = ${n})`}
+      </MDTypography>
+      {readout ? (
+        <MDTypography variant="caption" sx={{ fontSize: 13, display: "block", mb: 0.5,
+          color: readout.isBest ? PAL.accent : "#6A6A6A" }}>
+          {`Grid's corrected statistic: ${readout.text}`}
+        </MDTypography>
+      ) : null}
+    </MDBox>
   );
 }
 
@@ -912,6 +946,9 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   const aucSweeps = (aucResult && aucResult.band_time_sweep) || {};
   const corrSw = channel && corrSweeps[channel];
   const aucSw = channel && aucSweeps[channel];
+  // The device's documented timing ranges, carried on the response since rule version v12
+  // (review 2026-09-15, B4). Absent on an older response: the rows are then labelled plainly.
+  const deviceRanges = (corrResult && corrResult.device_timing_ranges) || null;
   const matchDirectionLabel = (aucSw && aucSw.match_direction) || (corrSw && corrSw.match_direction);
   // Medtronic-style display name for a raw channel key, matching "Recorded power channels" —
   // reused everywhere this section names a contact pair (the panel titles).
@@ -1074,13 +1111,15 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
                   {"Correlation with pain — depends only on matching"}
                 </MDTypography>
                 <DeviceSpectrumCaption sw={corrSw} />
+                <DeviceTierCaption ranges={deviceRanges} sw={corrSw} />
               </Grid>
               <Grid item xs={12} md={5}>
-                <ScatterStatsLine cell={pinnedCellData} pinnedCell={pinnedCell} />
+                <ScatterStatsLine cell={pinnedCellData} pinnedCell={pinnedCell} sw={corrSw} />
               </Grid>
 
               <Grid item xs={12} md={7}>
                 <PlotlyHeatmap divId="biomarker-heatmap-correlation" sw={corrSw} kind="correlation"
+                  deviceRanges={deviceRanges}
                   hoveredCell={hoveredCell} pinnedCell={pinnedCell}
                   onHover={handleHover} onClick={(r, c) => handleClick(corrSw, r, c)} />
               </Grid>
@@ -1095,6 +1134,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
                   {"High vs low pain (AUC) — also depends on the binarization cuts above"}
                 </MDTypography>
                 <PlotlyHeatmap divId="biomarker-heatmap-auc" sw={aucSw} kind="auc"
+                  deviceRanges={deviceRanges}
                   hoveredCell={hoveredCell} pinnedCell={pinnedCell} flashKey={aucFlashKey}
                   onHover={handleHover} onClick={(r, c) => handleClick(aucSw, r, c)} />
               </Grid>

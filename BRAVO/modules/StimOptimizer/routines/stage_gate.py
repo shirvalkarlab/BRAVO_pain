@@ -864,6 +864,13 @@ def check_amplitude_limits(frozen, *, amp_limits=None, ceiling_mA=AMP_CEILING_MA
                              "no frozen setting to check: Stage 1 produced no hemisphere result")
     ceiling_scalar, by_side = _ceiling_by_side(ceiling_mA, [s.hemisphere for s in frozen.settings])
     defaulted = []
+    # Review 2026-09-15, finding S1: a DEFAULTED upper limit is the highest current the device has
+    # ever delivered on that side, not a proposal. When it sits above the PI's ceiling (4.8 mA
+    # delivered against the 4.5 mA ceiling of decision 160 on RCS08) the old code failed the
+    # condition with "upper limit exceeds the declared ceiling", which reads as the plan wanting an
+    # unsafe current. It is history. Recorded here, named in the sentence, and the condition is
+    # NOT ASSESSED (None still blocks) rather than FAIL.
+    history_above_ceiling = {}
     for s in frozen.settings:
         ceil_h = by_side[s.hemisphere]["ceiling_mA"] if by_side else ceiling_scalar
         lo_env, hi_env = float(s.amp_delivered_min_mA), float(s.amp_delivered_max_mA)
@@ -882,8 +889,12 @@ def check_amplitude_limits(frozen, *, amp_limits=None, ceiling_mA=AMP_CEILING_MA
             problems.append(f"{s.hemisphere}: limits must satisfy max > min (got {lo:g}, {hi:g}); "
                             "the device needs a range to move within")
         if hi > ceil_h + 1e-9:
-            problems.append(f"{s.hemisphere}: upper limit {hi:g} mA exceeds the declared ceiling "
-                            f"of {ceil_h:g} mA")
+            if s.hemisphere in defaulted:
+                history_above_ceiling[s.hemisphere] = dict(delivered_max_mA=float(hi),
+                                                           ceiling_mA=float(ceil_h))
+            else:
+                problems.append(f"{s.hemisphere}: upper limit {hi:g} mA exceeds the declared "
+                                f"ceiling of {ceil_h:g} mA")
         if np.isfinite(hi_env) and hi > hi_env + 1e-9:
             problems.append(
                 f"{s.hemisphere}: upper limit {hi:g} mA is above the highest amplitude ever "
@@ -903,13 +914,23 @@ def check_amplitude_limits(frozen, *, amp_limits=None, ceiling_mA=AMP_CEILING_MA
     # `defaulted` is in the evidence as well as in the sentence (2026-09-12), so a page can mark
     # a limit that was never proposed without reading the sentence for the word.
     evidence = dict(checked=checked, ceiling_mA=float(ceiling_scalar), defaulted=sorted(defaulted),
+                    history_above_ceiling=history_above_ceiling,
                     side_effect_vs_current=(dict(side_effect_evidence)
                                             if side_effect_evidence is not None else None))
     if by_side is not None:
         evidence["ceiling_by_side"] = by_side
+    history_note = "".join(
+        f" {h}: no limit was proposed, and the highest current the device has ever delivered on "
+        f"this side ({v['delivered_max_mA']:g} mA) is above today's ceiling ({v['ceiling_mA']:g} mA)"
+        " -- this is history, not a proposal; the check cannot be made until a limit at or under "
+        "the ceiling is proposed."
+        for h, v in sorted(history_above_ceiling.items()))
     if problems:
         return GateCondition("amplitude_limits_inside_envelope_and_under_ceiling", False,
-                             "; ".join(problems) + note, evidence=evidence)
+                             "; ".join(problems) + note + history_note, evidence=evidence)
+    if history_above_ceiling:
+        return GateCondition("amplitude_limits_inside_envelope_and_under_ceiling", None,
+                             "not assessed:" + history_note + note, evidence=evidence)
     return GateCondition(
         "amplitude_limits_inside_envelope_and_under_ceiling", True,
         "adaptive amplitude limits sit inside the delivered envelope and under the "

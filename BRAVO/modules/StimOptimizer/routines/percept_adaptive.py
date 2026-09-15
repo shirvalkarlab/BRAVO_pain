@@ -147,18 +147,25 @@ TITRATION_SETTLE_RANGE_S = (30.0, 45.0)
 #:
 #: The ADAPT-PD trial's own settings are kept, LABELLED AS THE TRIAL'S, because they are the one
 #: published example of values clinicians actually used (Stanslaski et al. 2024, Methods).
-RANGE_SOURCE_FDA = "FDA SSED P960009/S478 (20 Feb 2025), Table 2 'Key aDBS Configurable Parameters', p. 8"
-RANGE_SOURCE_TIP_CARD = "Medtronic BrainSense Tip Cards (2020, FIELDPORTAL1594651482409), p. 8"
-
+# THE RANGES AND THEIR SOURCES LIVE IN `DecodeCommon.device_ranges` since 2026-09-15 (review
+# finding B4), because the Biomarkers grid needs them and may not import this module. The names
+# below are kept for every reader in this module, constraints.py, prescription.py and timing_plan;
+# they are the same objects, pinned by `tests/test_device_ranges_one_home.py`.
+try:
+    from modules.DecodeCommon import device_ranges as _DR
+except ImportError:                                              # pragma: no cover
+    from DecodeCommon import device_ranges as _DR
+RANGE_SOURCE_FDA = _DR.RANGE_SOURCE_FDA
+RANGE_SOURCE_TIP_CARD = _DR.RANGE_SOURCE_TIP_CARD
 #: Onset duration: "Dual Threshold - 0 to 6 min"; "Single Threshold - 0 to 30 seconds".
-ONSET_RANGE_DUAL_MS = (0.0, 6.0 * 60_000.0)
-ONSET_RANGE_SINGLE_MS = (0.0, 30_000.0)
+ONSET_RANGE_DUAL_MS = _DR.ONSET_RANGE_DUAL_MS
+ONSET_RANGE_SINGLE_MS = _DR.ONSET_RANGE_SINGLE_MS
 ONSET_RANGE_MS_BY_MODE = {DUAL: ONSET_RANGE_DUAL_MS, SINGLE: ONSET_RANGE_SINGLE_MS}
 #: Transition up and transition down ("Stimulation Ramp Up/Down Duration"): "250ms-30 minutes",
 #: each. The white paper's Dual Threshold demo (p. 16) shows the slider from 2.00 s to 30.00 min.
-TRANSITION_RANGE_MS = (250.0, 30.0 * 60_000.0)
-#: Averaging duration: 0 to 30 s (tip card). The device already runs 30 s on RCS08.
-AVERAGING_RANGE_MS = (0.0, 30_000.0)
+TRANSITION_RANGE_MS = _DR.TRANSITION_RANGE_MS
+#: Averaging duration: 0 to 30 s (tip card, sensing era -- see device_ranges for the caveat).
+AVERAGING_RANGE_MS = _DR.AVERAGING_RANGE_MS
 #: The two LFP thresholds, each: 0.55 to 400 uVrms ON THE PROGRAMMER'S OWN SCALE. This project's
 #: thresholds are placed in the device's exported linear units, which are not uVrms, so this range
 #: is REPORTED beside a threshold and never applied to it numerically.

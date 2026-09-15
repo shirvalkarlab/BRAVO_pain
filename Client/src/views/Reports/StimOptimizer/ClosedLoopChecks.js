@@ -231,6 +231,25 @@ function Numbers({ c, lfp }) {
               </span>)
             : (ev.ceiling_mA != null && <span style={NOTE}>{`ceiling ${fmtMa(ev.ceiling_mA)}`}</span>)}
           {defaulted && <span style={NOTE}>limits defaulted to the delivered range</span>}
+          {/* Review 2026-09-15, S1: a DEFAULTED limit is the highest current the device has ever
+              delivered, not a proposal. When it sits above the PI's ceiling the backend now
+              returns "not assessed" and names both numbers here; a reader must not take the
+              4.8 mA as the plan asking for an unsafe current. */}
+          {Object.entries(ev.history_above_ceiling || {}).map(([h, v]) => (
+            <span key={h} style={{ ...NOTE, color: PAL.warnText, flexBasis: "100%" }}>
+              {`${h[0]}: ${fmtMa(v.delivered_max_mA)} delivered in the past is above today's ${fmtMa(v.ceiling_mA)} ceiling — history, not a proposal; no limit has been proposed yet`}
+            </span>
+          ))}
+          {/* Review 2026-09-15, S2: the side-effect-versus-current statistic the gate recomputes on
+              every request (decision 166), printed with its n whether the check passes or fails,
+              so "does not move with current" is never read without the 15 rows behind it. */}
+          {ev.side_effect_vs_current && (
+            <span style={{ ...NOTE, flexBasis: "100%" }}>
+              {ev.side_effect_vs_current.sentence
+                ? `Side effects versus current: ${ev.side_effect_vs_current.sentence}`
+                : `Side effects versus current: not assessable${ev.side_effect_vs_current.reason ? ` (${ev.side_effect_vs_current.reason})` : ""}`}
+            </span>
+          )}
         </MDBox>
       );
     }

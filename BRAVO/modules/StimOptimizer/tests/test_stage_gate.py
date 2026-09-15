@@ -416,3 +416,42 @@ def test_precomputed_band_power_is_used_when_supplied():
                           band_power={(15.0, 5.0): np.array([10.0, 2.0])})
     assert list(ev.power_for(15.0, 5.0)) == [10.0, 2.0]
     assert ev.power_for(20.0, 5.0) is None       # no magnitude to fall back on
+
+
+# ---------------------------------------------------------------------------------------------
+# Review 2026-09-15, finding S1: a defaulted limit that is above the ceiling is HISTORY, not a proposal
+# ---------------------------------------------------------------------------------------------
+def test_defaulted_limits_above_the_ceiling_are_not_assessed_and_named_as_history():
+    """RCS08 on 2026-09-15: no candidate limit proposed, the Left's highest delivered current 4.8 mA,
+    the PI's ceiling 4.5 mA (decision 160). The old code returned FAIL "upper limit 4.8 mA exceeds the
+    declared ceiling", which a clinician reads as the plan wanting an unsafe current. It is the
+    record's own past exposure. The condition must be NOT ASSESSED (None, which still blocks), say
+    so in plain words, and carry the two numbers in its evidence."""
+    g = GATE.evaluate_gate(_frozen(_setting(amp_lo=1.0, amp_hi=4.8)), lfp=_responding_lfp(),
+                           amp_limits=None, ceiling_mA=4.5)
+    c = g.condition("amplitude_limits_inside_envelope_and_under_ceiling")
+    assert c.passed is None, c.detail
+    assert c.blocking is True
+    assert "history" in c.detail.lower() and "not a proposal" in c.detail.lower()
+    assert "4.8" in c.detail and "4.5" in c.detail
+    assert "exceeds the declared ceiling" not in c.detail
+    assert c.evidence["history_above_ceiling"] == {"Left": {"delivered_max_mA": 4.8, "ceiling_mA": 4.5}}
+
+
+def test_a_proposed_limit_above_the_ceiling_still_fails_outright():
+    """The softening is only for a defaulted limit. A limit somebody actually proposed above the
+    ceiling is a real refusal, as before."""
+    g = GATE.evaluate_gate(_frozen(_setting(amp_lo=1.0, amp_hi=4.8)), lfp=_responding_lfp(),
+                           amp_limits={"Left": (1.0, 4.8)}, ceiling_mA=4.5)
+    c = g.condition("amplitude_limits_inside_envelope_and_under_ceiling")
+    assert c.passed is False
+    assert "exceeds the declared ceiling" in c.detail
+    assert c.evidence["history_above_ceiling"] == {}
+
+
+def test_defaulted_limits_under_the_ceiling_still_pass_and_carry_an_empty_history_map():
+    g = GATE.evaluate_gate(_frozen(_setting(amp_lo=1.0, amp_hi=4.0)), lfp=_responding_lfp(),
+                           amp_limits=None, ceiling_mA=4.5)
+    c = g.condition("amplitude_limits_inside_envelope_and_under_ceiling")
+    assert c.passed is True
+    assert c.evidence["history_above_ceiling"] == {}

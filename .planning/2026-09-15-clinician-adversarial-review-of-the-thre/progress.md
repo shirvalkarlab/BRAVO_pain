@@ -16,3 +16,10 @@
 - 15:40-16:00: Phase 3. Report written (`artifacts/review_2026-09-15_clinician_three_modules.md`), page published
   (https://claude.ai/artifact/2B71nChGmAnXaxyYe1NMiQ v1), decision 167 inserted above 166. Committing and pushing.
   Planning dirs for both of today's plans (audit + review) go in this commit; `.active_plan` too.
+- 16:05-16:40: Phase 4, his go-ahead "fix the three Criticals now, tests first". Averaging range checked first (tip card
+  0-30 s, sensing era; FDA and A610 give none; RCS08 100 ms-30 s; onset holds 0-6 min). RED watched: 6 pytest (2 files),
+  4 pytest (2 new files), 1 container-runner file (collection error before the module existed), 15 jest (3 new files).
+  GREEN: host 1280/2/0, container 637/0, jest 15/15. Live proof before/after: SO 22,532->22,534 (12 diff, all the
+  amplitude condition or timing), CL 49,740->49,743 (0 diff, 3 added `source`), BM 27,258->27,265 (0 scientific diffs,
+  8 added `device_timing_ranges`). Frontend rebuilt clean; strings in chunks 100.50504491/576.7e79e101/753.7a08bfb2.
+  Workers HUPed. Decision 168 written. Committing and pushing.

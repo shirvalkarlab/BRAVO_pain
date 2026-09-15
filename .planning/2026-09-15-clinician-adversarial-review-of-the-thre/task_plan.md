@@ -10,11 +10,11 @@ patient's time dynamics and thin, fluctuating data. Name the main shortcomings w
 (backend, frontend, or documentation), each tied to a file:line, a test, or a live number.
 
 ## Next Step
-Done: report written, page published (https://claude.ai/artifact/2B71nChGmAnXaxyYe1NMiQ), decision 167
-logged, committed and pushed. Nothing queued; every fix is his call (rule 8).
+Done (decision 168): the three Criticals plus S2 and B4 fixed test-first, suites green, live proof, frontend
+rebuilt, pushed. Not watched in a browser. Remaining fixes from the review (ranks 4-23) are his call.
 
 ## Current Phase
-Phase 3
+Phase 4
 
 ### Phase 1: Parallel review
 - [x] Biomarkers reviewer dispatched and returned
@@ -32,6 +32,16 @@ Phase 3
 ### Phase 3: Report
 - [x] `artifacts/review_2026-09-15_clinician_three_modules.md` in house style, with ranked fixes
 - [x] Published artifact page; decision-log entry; commit + push per bravo-session-rules Rule 4
+- **Status:** complete
+
+### Phase 4: Fix the three Criticals, tests first
+- [x] S1 backend: defaulted limits above the ceiling -> not assessed, history named (RED then GREEN)
+- [x] S1 frontend: the checks panel says "history, not a proposal"
+- [x] C1 backend: E1 carries `source` (screening_historical | pooled_titration), serialised
+- [x] C1 frontend: the triangle draws a screening E1 distinctly and labels it
+- [x] B1 frontend: n, interval, q on hover and the pinned panel, beside the plain statistic
+- [x] B4: device timing ranges from one home (DecodeCommon), on the sweep response, rows tiered on the grid
+- [x] Suites (host + container), live field-count proof on RCS08, frontend rebuild, decision-log entry, push
 - **Status:** complete
 
 ## Decisions Made
