@@ -1094,3 +1094,22 @@ the threshold re-centring as what remains. Commit and push done by this session 
   readiness recordings, which is not what "max safe amp" means.
 - 44 tests in the three touched test files pass in the container; bundle rebuilt (chunk
   100.2e0644f7); stored answer cleared, workers reloaded; watched in the PI's Chrome.
+
+### 2026-09-15 09:30 -- landing (PI: /land-the-plane this session)
+- Preflight: working tree clean except the gitignored `_agent_bridge/_*` scratch; no stash; no
+  `scratchpad/corrections.log`; nothing unpushed (HEAD 400708d2 == origin/PS_closedloop_deployment).
+- Gates on the final state, one bridge job: host 1260 passed, 2 skipped, 0 failed, 0 errors;
+  container PASS=631 FAIL=0 LIVE_SKIPPED=6 (30 s wall). The frontend build ran clean on the last
+  commit (chunk 100.2e0644f7).
+- Sync: `git pull --rebase` brought nothing; HEAD equals origin. 14 commits on this branch are not
+  yet in origin/v3.1.0 (542dc353 .. 400708d2, decisions 157-163): the joint model, the honest
+  current check and home schedule, the current-map cards, the 4.5 mA ceiling and the redesigned
+  session, the clinic-sheet stream, the Google Sheet export, and the live-check fixes. A PR to
+  v3.1.0 is the PI's call (PR #11 was opened on his request).
+- Released: the scratchpad HTTP server used for the side-by-side figure stopped; the Chrome tab
+  opened for the live checks closed. Left on purpose: `BRAVO/_pro_dump/clinic_sheets/RCS08/`
+  (gitignored, the ingest's input) and `_agent_bridge/_probe_tl/export_2026-09-16.xlsx` (the
+  builder's proof file, gitignored).
+- Open, not code: decision 139's threshold re-centring; open item 30's titration session (Wednesday
+  2026-09-16 is now on the sheet); the Google service-account key for the Drive path; whether the
+  5.0 mA module hard cap should also drop to 4.5 (left at 5.0 on purpose, see 02:00 entry).
