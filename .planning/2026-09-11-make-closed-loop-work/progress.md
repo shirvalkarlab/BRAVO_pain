@@ -796,3 +796,18 @@ the threshold re-centring as what remains. Commit and push done by this session 
   the field-count proof, the served-bundle text search, and the four new tests.
 - task_plan.md Phase 20 checked off in full, status `complete`; phases counter 20/20; Next Step
   rewritten; `check-complete.sh` confirms ALL PHASES COMPLETE (20/20). Decision 159 written.
+
+### 2026-09-14 (late) -- the two new Stim Optimizer cards watched live, three display defects fixed
+- Watched in the PI's own signed-in Chrome on RCS08 (the builder that landed decision 159 had no
+  browser tool). Measured on the live page before changing anything: the current-map heatmap was
+  70 px wide on a 340 px figure (Plotly's automatic margin gave 222 px to the colourbar's two-line
+  title); the colour range was symmetric about zero (-0.745..+0.745) so a surface at +0.74 was one
+  saturated colour; "RdYlGn" is not a plotly.js colourscale name, so the fallback painted the best
+  score red; and every table header on the page (schedule, queue, strata) sat detached from its
+  columns because the app theme sets table headers to display: block.
+- Fixed: short side title on the colourbar, right margin 70 -> 20 px, figure 400 px square; colour
+  range covers the surface and includes zero; explicit green-yellow-red stops; the three table
+  headers pinned to the table layout. Measured after: every header's left edge equals its column's
+  left edge (step 314/314, left current 401/401, right current 565/565 px).
+- Frontend rebuilt (chunk 100.41ee87f5.chunk.js); no Python changed, so no suite run applies.
+  Commit 78c1cd0e, pushed.
