@@ -1079,3 +1079,18 @@ the threshold re-centring as what remains. Commit and push done by this session 
   27 tests in the two touched test files pass in the container; frontend rebuilt (chunk
   100.25417ae3); stored stim_optimizer_response entries for RCS08 removed and workers reloaded so
   no stale answer is served.
+
+### 2026-09-15 02:00 -- "fonts all messed up" on the decision strip (PI screenshot); fixed and watched
+- `DecisionStrip.js`: the "no current can be recommended" sentence sat inside the no-wrap value
+  span and ran across the "change" and "gain" columns; it is now a wrapped block under the rate and
+  pulse width. The change column's mA line subtracted a current that does not exist (null - 3.0
+  printed as -3.0 mA); it now prints "-- mA" when either side is unknown.
+- `SensingEvidenceTable.js` caption printed "Current limit 5.0 mA" (the module hard cap,
+  `objective.AMP_HARD_LIMIT_MA`) where a reader expects the safe limit. The readiness block now
+  also carries `safe_ceiling_mA_by_side` (from `safety_ceiling.ceilings_by_hemisphere`, 4.5/4.5 on
+  RCS08) and the caption reads "Safe ceiling, stated by the PI: L 4.5 mA / R 4.5 mA; evidence above
+  the 5.0 mA module cap is excluded." The hard cap itself is unchanged on purpose: it bounds the
+  search grid and the readiness EVIDENCE, and lowering it would start excluding RCS08's real 4.8 mA
+  readiness recordings, which is not what "max safe amp" means.
+- 44 tests in the three touched test files pass in the container; bundle rebuilt (chunk
+  100.2e0644f7); stored answer cleared, workers reloaded; watched in the PI's Chrome.

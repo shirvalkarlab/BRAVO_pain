@@ -1401,7 +1401,8 @@ def _run_for_participant(request_data: dict) -> dict:
         "closed_loop": closed_loop_readiness(participant, es,
                                              include=bool((request_data or {})
                                                           .get("ClosedLoop", True)),
-                                             inputs=_ev_inputs, screen_out=_screen_out),
+                                             inputs=_ev_inputs, screen_out=_screen_out,
+                                             ceilings=_ceilings),
         "amplitude_effect": amp_block,
         "ground_truth": gt_block,
         "store": store_block,
@@ -1695,7 +1696,8 @@ def titration_plan_block(participant, *, in_force, screen, ceilings, hemispheres
         return {"available": False, "reason": f"the titration plan could not be built: {exc}"}
 
 
-def closed_loop_readiness(participant, es, *, include=True, inputs=None, screen_out=None) -> dict:
+def closed_loop_readiness(participant, es, *, include=True, inputs=None, screen_out=None,
+                          ceilings=None) -> dict:
     """Whether the sensed LFP could drive Adaptive Therapy for this participant, and if not why.
 
     This is a DIFFERENT question from the open-loop optimizer above it, and the payload keeps them
@@ -1753,6 +1755,13 @@ def closed_loop_readiness(participant, es, *, include=True, inputs=None, screen_
             "n_cells_screened": int(len(screen)),
             "n_cells_deployable": n_deployable,
             "amp_hard_limit_mA": _jsonable(_obj.AMP_HARD_LIMIT_MA),
+            # The PI-stated SAFE ceiling per side (safety_ceiling.py, 4.5 mA on RCS08 since
+            # 2026-09-14) is a different number from the module's hard cap above: the search and
+            # the titration ladder obey the safe ceiling; the hard cap only bounds the search grid
+            # and the readiness evidence. The page prints both so "current limit" is never read
+            # as the safe one when it is not.
+            "safe_ceiling_mA_by_side": ({h: _jsonable(v[0]) for h, v in (ceilings or {}).items()}
+                                        if ceilings else None),
             "adaptive_window_hz": list(_pa.ADAPTIVE_LFP_BAND_HZ),
             "min_adaptive_rate_hz": _jsonable(_pa.MIN_ADAPTIVE_RATE_HZ),
             # Only the cells that responded at all: the full 50-row screen is mostly cells with no
