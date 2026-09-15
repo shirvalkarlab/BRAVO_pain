@@ -14,8 +14,17 @@
  * bottom says what the record holds on that contact today against what the session yields, and
  * whether the margin can be switched on. The page's type scale (typeScale.js) and formatters
  * (stimFormat.js) are used throughout; nothing under 11 px.
+ *
+ * REBUILT AS THE CLINIC SHEET, 2026-09-14 (decisions 160-161): a header strip (rate, both pulse
+ * widths, both ceilings, the current the OTHER side is held at while each ladder runs, the
+ * ramp+test step timing, the total session length) and three printable tables -- the left ladder,
+ * the right ladder, and the optional joint-corner points -- built directly from `sheet_rows`, in
+ * the clinic template's own 19-column order (`sheet_columns`), never re-derived on the page. A
+ * date field and a "Make Google sheet" button sit at the top right of the card; the button is
+ * disabled today (the export itself is the next builder's work) and says so on hover.
  */
-import { Card } from "@mui/material";
+import { useState } from "react";
+import { Button, Card, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -26,6 +35,122 @@ import { num, fmtHz, fmtMa, fmtUs, contactLabel } from "./stimFormat";
 import { TYPE, HEAD, SMALL, MONO, NOWRAP, SizedFold as Fold } from "./typeScale";
 
 export const TITRATION_CARD_TITLE = "Titration session to run next";
+
+/** The soonest Wednesday on or after today, as "YYYY-MM-DD" for a `<input type="date">`. */
+function nextWednesdayISO() {
+  const d = new Date();
+  const add = (3 - d.getDay() + 7) % 7; // Wed = 3; 0 if today already is Wednesday
+  d.setDate(d.getDate() + add);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+/** A cell of the clinic sheet, formatted by its column name; a blank cell (most "test" rows,
+ * every visit-filled column) prints as an em dash. */
+const SHEET_MONO_COLS = new Set(["Amp (mA)", "Rate (Hz)", "PW (µs)", "Duration (s)"]);
+function fmtSheetCell(col, v) {
+  if (v === null || v === undefined || v === "") return "—";
+  if (col === "Rate (Hz)") return fmtHz(v);
+  if (col === "Duration (s)") return `${v} s`;
+  return String(v);
+}
+
+/** One printable clinic-sheet table: a leading Step column, then the template's own columns in
+ * order, two rows per step (a "ramp" row and a "test" row) exactly as `sheet_rows` gives them. */
+function SheetTable({ title, caption, rows, columns }) {
+  if (!rows || !rows.length) return null;
+  return (
+    <MDBox sx={{ mt: 2 }}>
+      <MDTypography variant="caption" component="div" fontWeight="medium"
+        sx={{ fontSize: TYPE.num, mb: 0.3 }}>
+        {title}
+      </MDTypography>
+      {caption && (
+        <MDTypography variant="caption" component="div" color="text" sx={{ ...SMALL, mb: 0.6 }}>
+          {caption}
+        </MDTypography>
+      )}
+      <MDBox sx={{ overflowX: "auto" }}>
+        <Table size="small">
+          <TableHead sx={{ display: "table-header-group", p: 0 }}>
+            <TableRow>
+              <TableCell sx={{ py: 0.4, px: 0.6 }}>
+                <MDTypography variant="caption" sx={HEAD}>step</MDTypography>
+              </TableCell>
+              {columns.map((c) => (
+                <TableCell key={c} sx={{ py: 0.4, px: 0.6 }}>
+                  <MDTypography variant="caption" sx={{ ...HEAD, whiteSpace: "nowrap" }}>{c}</MDTypography>
+                </TableCell>
+              ))}
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {rows.map((r, i) => (
+              <TableRow key={i}
+                sx={{ backgroundColor: r.row_kind === "ramp" ? "rgba(0,0,0,0.025)" : "transparent" }}>
+                <TableCell sx={{ py: 0.3, px: 0.6 }}>
+                  <MDTypography variant="caption"
+                    sx={{ fontSize: TYPE.small, fontFamily: PAL.mono, whiteSpace: "nowrap" }}>
+                    {`${r.step ?? "—"}${r.row_kind ? ` · ${r.row_kind}` : ""}`}
+                  </MDTypography>
+                </TableCell>
+                {columns.map((c) => (
+                  <TableCell key={c} sx={{ py: 0.3, px: 0.6 }}>
+                    <MDTypography variant="caption"
+                      sx={{ fontSize: TYPE.small, whiteSpace: "nowrap",
+                        fontFamily: SHEET_MONO_COLS.has(c) ? PAL.mono : "inherit" }}>
+                      {fmtSheetCell(c, r[c])}
+                    </MDTypography>
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </MDBox>
+    </MDBox>
+  );
+}
+
+/** The header strip: the session's fixed facts, read once, printed once, above both columns. */
+function SessionHeaderStrip({ plan }) {
+  const left = (plan.sides || {}).Left || null;
+  const right = (plan.sides || {}).Right || null;
+  const st = plan.step_timing || {};
+  const sess = plan.session_time || {};
+  const stepLine = num(st.ramp_s) != null && num(st.test_s) != null
+    ? `${num(st.ramp_s)} s ramp + ${num(st.test_s)} s test = ${Math.round((num(st.total_s) ?? (num(st.ramp_s) + num(st.test_s))) / 60)} min`
+    : "—";
+  const items = [
+    ["rate", fmtHz((left || right || {}).rate_hz)],
+    ["left pulse width", fmtUs(left && left.pulse_width_us)],
+    ["right pulse width", fmtUs(right && right.pulse_width_us)],
+    ["left ceiling", fmtMa(left && left.ceiling_mA)],
+    ["right ceiling", fmtMa(right && right.ceiling_mA)],
+    ["left's ladder holds right at", fmtMa(left && left.held_other_side && left.held_other_side.current_mA)],
+    ["right's ladder holds left at", fmtMa(right && right.held_other_side && right.held_other_side.current_mA)],
+    ["step timing", stepLine],
+    ["total session time", num(sess.total_minutes) != null ? `~${Math.round(num(sess.total_minutes))} min` : "—"],
+  ];
+  return (
+    <MDBox mt={1} display="flex" columnGap={3} rowGap={1} flexWrap="wrap">
+      {items.map(([k, v]) => (
+        <MDBox key={k}>
+          <MDTypography variant="caption" component="div" sx={HEAD}>{k}</MDTypography>
+          <MDTypography variant="caption" component="div"
+            sx={{ fontSize: TYPE.num, fontFamily: PAL.mono, whiteSpace: "nowrap" }}>{v}</MDTypography>
+        </MDBox>
+      ))}
+      {sess.why && (
+        <MDTypography variant="caption" component="div" color="text" sx={{ ...SMALL, width: "100%", mt: 0.3 }}>
+          {sess.why}
+        </MDTypography>
+      )}
+    </MDBox>
+  );
+}
 
 const LABEL = { ...HEAD, alignSelf: "baseline" };
 const VALUE = { ...MONO, fontSize: TYPE.numLarge };
@@ -167,6 +292,7 @@ function SideColumn({ side, plan }) {
 }
 
 export default function TitrationSessionCard({ plan }) {
+  const [sessionDate, setSessionDate] = useState(nextWednesdayISO);
   if (!plan) return null;
   const sides = plan.sides || {};
   const margin = plan.margin || {};
@@ -182,24 +308,83 @@ export default function TitrationSessionCard({ plan }) {
     const most = num(margin.max_settled_settings_in_one_run);
     return `No run in the record holds the ${need} settled settings the 20 s post-ramp margin needs${most === null ? "" : ` (the most in any one run is ${most}, ${margin.run} on ${margin.sensing_contact})`}; the margin stays off until this session is recorded, and its rising leg alone gives ${num((left || right || {}).yield ? (left || right).yield.distinct_currents_up_leg : null) ?? "—"}.`;
   })();
+
+  const sheetRows = Array.isArray(plan.sheet_rows) ? plan.sheet_rows : [];
+  const sheetColumns = Array.isArray(plan.sheet_columns) ? plan.sheet_columns : [];
+  const leftRows = sheetRows.filter((r) => r.block === "left_ladder");
+  const rightRows = sheetRows.filter((r) => r.block === "right_ladder");
+  const jointRows = sheetRows.filter((r) => r.block === "joint_corners");
+  const jc = plan.joint_corners || {};
+
   return (
     <Card>
       <MDBox p={2}>
-        <MDBox display="flex" alignItems="baseline" gap={1} flexWrap="wrap">
-          <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>{TITRATION_CARD_TITLE}</MDTypography>
-          <MDTypography variant="caption" sx={SMALL}>
-            {`one rate, 0 mA to the ceiling in ${num(plan.step_mA) ?? 0.5} mA steps, up and then down, ${num(plan.hold_s) ?? 60} s a step, streaming on`}
-          </MDTypography>
+        <MDBox display="flex" justifyContent="space-between" alignItems="flex-start" flexWrap="wrap" gap={1.5}>
+          <MDBox display="flex" alignItems="baseline" gap={1} flexWrap="wrap">
+            <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>{TITRATION_CARD_TITLE}</MDTypography>
+            <MDTypography variant="caption" sx={SMALL}>
+              {`one rate, 0 mA to the ceiling in ${num(plan.step_mA) ?? 0.5} mA steps, up and then down, ${num(plan.hold_s) ?? 60} s a step, streaming on`}
+            </MDTypography>
+          </MDBox>
+          <MDBox display="flex" alignItems="center" gap={1}>
+            <TextField type="date" size="small" value={sessionDate}
+              onChange={(e) => setSessionDate(e.target.value)}
+              inputProps={{ style: { fontSize: TYPE.small, fontFamily: PAL.mono, padding: "6px 8px" } }} />
+            <Tooltip title="export is being built">
+              <span>
+                <Button variant="outlined" size="small" disabled
+                  sx={{ fontSize: TYPE.small, textTransform: "none", whiteSpace: "nowrap" }}>
+                  Make Google sheet
+                </Button>
+              </span>
+            </Tooltip>
+          </MDBox>
         </MDBox>
+
         {!plan.available ? (
           <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 1, color: PAL.warnText }}>
             {plan.reason || "the plan could not be built"}
           </MDTypography>
         ) : (
-          <MDBox mt={1} sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" }, columnGap: "28px", rowGap: "16px" }}>
-            <SideColumn side="Left" plan={left} />
-            <SideColumn side="Right" plan={right} />
-          </MDBox>
+          <>
+            <SessionHeaderStrip plan={plan} />
+
+            <MDBox mt={1.5} sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" }, columnGap: "28px", rowGap: "16px" }}>
+              <SideColumn side="Left" plan={left} />
+              <SideColumn side="Right" plan={right} />
+            </MDBox>
+
+            <MDBox mt={1.5} sx={{ borderTop: `1px solid ${PAL.neutralBorder}`, pt: 1 }}>
+              <MDTypography variant="caption" component="div" fontWeight="medium" sx={{ fontSize: TYPE.num }}>
+                The clinic sheet
+              </MDTypography>
+              <SheetTable
+                title={`Left ladder${left && left.sensing_contact ? ` — record from ${contactLabel(left.sensing_contact)}` : ""}`}
+                caption={left
+                  ? `0 mA to ${fmtMa(left.ceiling_mA)} in ${num(plan.step_mA) ?? 0.5} mA steps, top held once, back down to 0 mA in `
+                    + `${num(plan.down_step_mA) ?? 1.0} mA drops; the right side held at `
+                    + `${fmtMa(left.held_other_side && left.held_other_side.current_mA)} for the whole ladder.`
+                  : null}
+                rows={leftRows} columns={sheetColumns} />
+              <SheetTable
+                title={`Right ladder${right && right.sensing_contact ? ` — record from ${contactLabel(right.sensing_contact)}` : ""}`}
+                caption={right
+                  ? `0 mA to ${fmtMa(right.ceiling_mA)} in ${num(plan.step_mA) ?? 0.5} mA steps, top held once, back down to 0 mA in `
+                    + `${num(plan.down_step_mA) ?? 1.0} mA drops; the left side held at `
+                    + `${fmtMa(right.held_other_side && right.held_other_side.current_mA)} for the whole ladder.`
+                  : null}
+                rows={rightRows} columns={sheetColumns} />
+              <SheetTable
+                title={`Joint corners (optional, ${jointRows.length ? Math.round(jointRows.length / 2) : 0} points)`}
+                caption={jc.why ? `${jc.why}; not run if the visit is short on time.` : "not run if the visit is short on time."}
+                rows={jointRows} columns={sheetColumns} />
+              {plan.sheet_source && (
+                <MDTypography variant="caption" component="div" color="text" sx={{ ...SMALL, mt: 1 }}>
+                  {`sheet template: ${plan.sheet_source}`}
+                </MDTypography>
+              )}
+            </MDBox>
+          </>
         )}
         {plan.available && (
           <MDBox mt={1.2} sx={{ borderTop: `1px solid ${PAL.neutralBorder}`, pt: 0.8 }}>

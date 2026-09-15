@@ -16,10 +16,19 @@
  * recommendation and, on RCS08, turned out to be flat (varying by 0.004 against a scatter of 1.1)
  * -- is folded, closed by default, and labelled reference only: the caveat is that it borrows its
  * apparent precision from every OTHER rate through the fit's shared, pinned rate axis.
+ *
+ * SECOND SECTION, added 2026-09-14 (decision 160/161): the identical (left current, right current)
+ * surface fitted a second time, from the clinic-and-home testing workbooks read directly off the
+ * lab's own file share rather than from REDCap (`two_stage.stage1.rate_strata_clinic`, the same
+ * per-row shape as `rate_strata` plus `source`/`n_visits`/`n_clinic`/`n_home`). It is drawn with the
+ * same `CurrentSurfaceHeatmap` and the same per-row checks, in its own section below the REDCap one
+ * -- never pooled with it, because the two streams are independent measurements of the same 0-10
+ * scale and mixing them would hide whether they agree. `two_stage.stage1.clinic_stream` carries the
+ * ingest counts and the list of visits folded underneath.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { Card, Grid } from "@mui/material";
+import { Card, Grid, Table, TableBody, TableCell, TableHead, TableRow } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -30,7 +39,7 @@ import Fold from "views/Reports/ClosedLoopSim/Fold";
 import PAL from "views/Reports/ClosedLoopSim/palette";
 
 import { num, fmtHz, fmtUs } from "./stimFormat";
-import { TYPE, SMALL } from "./typeScale";
+import { TYPE, HEAD, SMALL } from "./typeScale";
 
 const CHECK_MARK = "✓";
 const CROSS_MARK = "✗";
@@ -158,17 +167,210 @@ function groupByPulseWidthPair(rateStrata) {
   return out;
 }
 
+/** One (pulse-width pair, rate) rendering pass -- shared by the REDCap stream and the clinic
+ * stream below it. `pooledSurfaces` is `{}` for a stream that has none (the clinic stream does
+ * not fit a pooled-across-rates surface), in which case the pooled fold is simply not drawn. */
+function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, idPrefix }) {
+  const [poolOpen, setPoolOpen] = useState({});
+  return groups.map((g) => (
+    <MDBox key={g.key} sx={{ mt: 2.5, "&:first-of-type": { mt: 0 } }}>
+      <MDTypography variant="caption" fontWeight="medium" component="div"
+        sx={{ fontSize: TYPE.num, mb: 0.5 }}>
+        {`left pulse width ${fmtUs(g.pw_us_left)} · right pulse width ${fmtUs(g.pw_us_right)}`}
+      </MDTypography>
+
+      {g.rows.map((r) => {
+        const divId = `${idPrefix}-surface-${g.key}-${r.rate_hz}`;
+        if (!r.fitted) {
+          return (
+            <MDTypography key={divId} variant="caption" component="div" color="text"
+              sx={{ fontSize: TYPE.body, mt: 1, mb: 1 }}>
+              {`${fmtHz(r.rate_hz)} · ${num(r.n_epochs) ?? 0} epoch${num(r.n_epochs) === 1 ? "" : "s"} — `
+                + `not enough data (${r.reason || "below the 8-epoch floor"}); no surface is drawn.`}
+            </MDTypography>
+          );
+        }
+        return (
+          <MDBox key={divId} sx={{ mt: 1, mb: 2 }}>
+            <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, mb: 0.6 }}>
+              {`${fmtHz(r.rate_hz)} · left ${fmtUs(g.pw_us_left)} / right ${fmtUs(g.pw_us_right)} · `
+                + `${num(r.n_epochs) ?? 0} epochs · ${Math.round(num(r.n_reports) || 0)} reports`}
+            </MDTypography>
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm="auto">
+                <CurrentSurfaceHeatmap divId={divId} surface={r.surface}
+                  inForceLeft={inForceLeft} inForceRight={inForceRight}
+                  starLeft={num(r.amp_mA_left)} starRight={num(r.amp_mA_right)}
+                  showStar={r.resolved === true} />
+              </Grid>
+              <Grid item xs={12} sm>
+                <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, mb: 0.6 }}>
+                  {r.resolved ? "a current CAN be recommended at this speed." : "no current can be recommended at this speed yet."}
+                </MDTypography>
+                {/* `flat_passes` is the BACKEND's own check that the surface VARIES enough
+                    to mean something (it is NOT flat), so a tick here means "not flat,
+                    this check passed" -- read in the same "good = passed" direction as the
+                    other two rows below, and not negated here. */}
+                <CheckRow label="Surface flat?"
+                  passes={r.flat_passes}
+                  detail={num(r.flat_range) != null && num(r.flat_median_sd) != null
+                    ? `varies by ${num(r.flat_range).toFixed(3)} against a typical uncertainty of ${num(r.flat_median_sd).toFixed(3)}`
+                    : "not assessable"} />
+                <CheckRow label="Beats the setting in force?"
+                  passes={r.gain_passes}
+                  detail={num(r.gain) != null && num(r.gain_sd_of_difference) != null
+                    ? `${num(r.gain) >= 0 ? "+" : "−"}${Math.abs(num(r.gain)).toFixed(3)} against ${num(r.gain_sd_of_difference).toFixed(3)}`
+                    : "no comparison available"} />
+                <CheckRow label="Enough combinations tried?"
+                  passes={r.coverage_passes}
+                  detail={`${num(r.coverage_n_pairs) ?? 0} pairs, `
+                    + `${num(r.coverage_span_left_mA) != null ? num(r.coverage_span_left_mA).toFixed(1) : "0.0"} mA left / `
+                    + `${num(r.coverage_span_right_mA) != null ? num(r.coverage_span_right_mA).toFixed(1) : "0.0"} mA right span`} />
+                {r.sentence && (
+                  <MDTypography variant="caption" component="div" color="text"
+                    sx={{ ...SMALL, mt: 0.8 }}>
+                    {String(r.sentence)}
+                  </MDTypography>
+                )}
+              </Grid>
+            </Grid>
+          </MDBox>
+        );
+      })}
+
+      {/* Note the flat-surface check reads a `flat` PASS as "the surface is NOT flat" --
+          CheckRow above negates `flat_passes` so its tick/cross reads the same direction as
+          the other two ("passing" = good), matching the label "Surface flat?" answered "no". */}
+
+      {Object.keys(pooledSurfaces).length > 0 && (
+        <Fold show="Pooled across rates — reference only" hide="Hide the pooled surface"
+          onChange={(open) => setPoolOpen((s) => ({ ...s, [g.key]: open || s[g.key] }))}>
+          <MDTypography variant="caption" component="div" color="text" sx={{ fontSize: TYPE.small, mb: 1 }}>
+            The surface below pools every rate together through one shared, pinned rate axis.
+            It is shown for reference only: reading a current off it draws confidence from
+            OTHER rates, not the one being asked about, which is exactly why the honest
+            surfaces above are fitted one rate at a time.
+          </MDTypography>
+          {g.rows.map((r) => {
+            const stratumKey = `${Number(g.pw_us_left).toString()}_${Number(g.pw_us_right).toString()}`;
+            const rateKey = Number(r.rate_hz).toString();
+            const pooled = (pooledSurfaces[stratumKey] || {}).surface_at_rate || {};
+            const pooledSurface = pooled[rateKey];
+            const divId = `${idPrefix}-pooled-${g.key}-${r.rate_hz}`;
+            if (!pooledSurface) return null;
+            return (
+              <MDBox key={divId} sx={{ mt: 1, mb: 1.5 }}>
+                <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, mb: 0.4 }}>
+                  {fmtHz(r.rate_hz)}
+                </MDTypography>
+                {poolOpen[g.key] && (
+                  <CurrentSurfaceHeatmap divId={divId} surface={pooledSurface}
+                    inForceLeft={inForceLeft} inForceRight={inForceRight}
+                    starLeft={null} starRight={null} showStar={false} size={220} />
+                )}
+                <MDTypography variant="caption" component="div" color="text" sx={{ ...SMALL, mt: 0.4 }}>
+                  {String(r.pooled_across_rates_note || "")}
+                </MDTypography>
+              </MDBox>
+            );
+          })}
+        </Fold>
+      )}
+    </MDBox>
+  ));
+}
+
+/** The second, independent stream: rates and reports read from the lab's own clinic and
+ * home-testing workbooks rather than from REDCap. Same fit, same checks, own section, own fold of
+ * the visits that were ingested to build it -- never pooled with the REDCap stream above. */
+function ClinicStreamSection({ groups, inForceLeft, inForceRight, clinicStream }) {
+  const cs = clinicStream || {};
+  if (!cs.available || !groups.length) {
+    return (
+      <MDBox sx={{ mt: 3, pt: 2, borderTop: `1px solid ${PAL.neutralBorder}` }}>
+        <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>
+          From the clinic and home testing sheets (independent of REDCap)
+        </MDTypography>
+        <MDTypography variant="caption" component="div" color="text" sx={{ fontSize: TYPE.body, mt: 0.6 }}>
+          {cs.note || "no clinic or home-testing workbooks could be read for this participant."}
+        </MDTypography>
+      </MDBox>
+    );
+  }
+  const visits = Array.isArray(cs.visits) ? cs.visits : [];
+  return (
+    <MDBox sx={{ mt: 3, pt: 2, borderTop: `1px solid ${PAL.neutralBorder}` }}>
+      <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>
+        From the clinic and home testing sheets (independent of REDCap)
+      </MDTypography>
+      <MDTypography variant="caption" component="div" color="text" sx={{ fontSize: TYPE.body, mt: 0.5, mb: 1.5 }}>
+        {`These scores come from the lab's testing workbooks (${num(cs.n_files) ?? 0} files, `
+          + `${num(cs.n_steps) ?? 0} steps, ${num(cs.n_with_pain) ?? 0} with a score, `
+          + `${num(cs.n_unparsed_prose) ?? 0} prose notes not parsed), are on the same 0-10 scale `
+          + "as the primary item, and are fitted separately -- never pooled -- with the REDCap "
+          + "stream above."}
+      </MDTypography>
+      {cs.note && (
+        <MDTypography variant="caption" component="div" color="text" sx={{ ...SMALL, mb: 1 }}>
+          {cs.note}
+        </MDTypography>
+      )}
+      <RateStrataGroups groups={groups} inForceLeft={inForceLeft} inForceRight={inForceRight}
+        pooledSurfaces={{}} idPrefix="cms-clinic" />
+      <Fold show={`Ingested clinic and home-testing visits (${visits.length})`} hide="Hide the visit list"
+        mt={1.5}>
+        <MDBox sx={{ overflowX: "auto" }}>
+          <Table size="small">
+            <TableHead sx={{ display: "table-header-group", p: 0 }}>
+              <TableRow>
+                {["visit", "setting", "steps", "steps with a score"].map((h) => (
+                  <TableCell key={h} sx={{ py: 0.5 }}>
+                    <MDTypography variant="caption" sx={HEAD}>{h}</MDTypography>
+                  </TableCell>
+                ))}
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {visits.map((v, i) => (
+                <TableRow key={i}>
+                  <TableCell sx={{ py: 0.4 }}>
+                    <MDTypography variant="caption" sx={{ fontSize: TYPE.small }}>{v.visit_date}</MDTypography>
+                  </TableCell>
+                  <TableCell sx={{ py: 0.4 }}>
+                    <MDTypography variant="caption" sx={{ fontSize: TYPE.small, textTransform: "capitalize" }}>
+                      {v.setting === "home" ? "at home" : "in clinic"}
+                    </MDTypography>
+                  </TableCell>
+                  <TableCell sx={{ py: 0.4 }}>
+                    <MDTypography variant="caption" sx={{ fontSize: TYPE.small, fontFamily: PAL.mono }}>{num(v.n_steps) ?? "—"}</MDTypography>
+                  </TableCell>
+                  <TableCell sx={{ py: 0.4 }}>
+                    <MDTypography variant="caption" sx={{ fontSize: TYPE.small, fontFamily: PAL.mono }}>{num(v.n_with_pain) ?? "—"}</MDTypography>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </MDBox>
+      </Fold>
+    </MDBox>
+  );
+}
+
 export default function CurrentMapCard({ plan }) {
   const stage1 = (plan && plan.stage1) || {};
   const rawRateStrata = stage1.rate_strata;
   const rateStrata = useMemo(() => (Array.isArray(rawRateStrata) ? rawRateStrata : []), [rawRateStrata]);
+  const rawRateStrataClinic = stage1.rate_strata_clinic;
+  const rateStrataClinic = useMemo(() => (Array.isArray(rawRateStrataClinic) ? rawRateStrataClinic : []),
+    [rawRateStrataClinic]);
   const pooledSurfaces = stage1.pooled_surfaces || {};
   const inForceBySide = (stage1.frozen_configuration || {}).in_force_by_side || {};
   const inForceLeft = num(inForceBySide.Left && inForceBySide.Left.amplitude_mA);
   const inForceRight = num(inForceBySide.Right && inForceBySide.Right.amplitude_mA);
 
   const groups = useMemo(() => groupByPulseWidthPair(rateStrata), [rateStrata]);
-  const [poolOpen, setPoolOpen] = useState({});
+  const clinicGroups = useMemo(() => groupByPulseWidthPair(rateStrataClinic), [rateStrataClinic]);
 
   if (!rateStrata.length) return null;
 
@@ -188,110 +390,11 @@ export default function CurrentMapCard({ plan }) {
           trust it, per the three checks printed beside each square.
         </MDTypography>
 
-        {groups.map((g) => (
-          <MDBox key={g.key} sx={{ mt: 2.5, "&:first-of-type": { mt: 0 } }}>
-            <MDTypography variant="caption" fontWeight="medium" component="div"
-              sx={{ fontSize: TYPE.num, mb: 0.5 }}>
-              {`left pulse width ${fmtUs(g.pw_us_left)} · right pulse width ${fmtUs(g.pw_us_right)}`}
-            </MDTypography>
+        <RateStrataGroups groups={groups} inForceLeft={inForceLeft} inForceRight={inForceRight}
+          pooledSurfaces={pooledSurfaces} idPrefix="cms" />
 
-            {g.rows.map((r) => {
-              const divId = `cms-surface-${g.key}-${r.rate_hz}`;
-              if (!r.fitted) {
-                return (
-                  <MDTypography key={divId} variant="caption" component="div" color="text"
-                    sx={{ fontSize: TYPE.body, mt: 1, mb: 1 }}>
-                    {`${fmtHz(r.rate_hz)} · ${num(r.n_epochs) ?? 0} epoch${num(r.n_epochs) === 1 ? "" : "s"} — `
-                      + `not enough data (${r.reason || "below the 8-epoch floor"}); no surface is drawn.`}
-                  </MDTypography>
-                );
-              }
-              return (
-                <MDBox key={divId} sx={{ mt: 1, mb: 2 }}>
-                  <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, mb: 0.6 }}>
-                    {`${fmtHz(r.rate_hz)} · left ${fmtUs(g.pw_us_left)} / right ${fmtUs(g.pw_us_right)} · `
-                      + `${num(r.n_epochs) ?? 0} epochs · ${Math.round(num(r.n_reports) || 0)} reports`}
-                  </MDTypography>
-                  <Grid container spacing={2}>
-                    <Grid item xs={12} sm="auto">
-                      <CurrentSurfaceHeatmap divId={divId} surface={r.surface}
-                        inForceLeft={inForceLeft} inForceRight={inForceRight}
-                        starLeft={num(r.amp_mA_left)} starRight={num(r.amp_mA_right)}
-                        showStar={r.resolved === true} />
-                    </Grid>
-                    <Grid item xs={12} sm>
-                      <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, mb: 0.6 }}>
-                        {r.resolved ? "a current CAN be recommended at this speed." : "no current can be recommended at this speed yet."}
-                      </MDTypography>
-                      {/* `flat_passes` is the BACKEND's own check that the surface VARIES enough
-                          to mean something (it is NOT flat), so a tick here means "not flat,
-                          this check passed" -- read in the same "good = passed" direction as the
-                          other two rows below, and not negated here. */}
-                      <CheckRow label="Surface flat?"
-                        passes={r.flat_passes}
-                        detail={num(r.flat_range) != null && num(r.flat_median_sd) != null
-                          ? `varies by ${num(r.flat_range).toFixed(3)} against a typical uncertainty of ${num(r.flat_median_sd).toFixed(3)}`
-                          : "not assessable"} />
-                      <CheckRow label="Beats the setting in force?"
-                        passes={r.gain_passes}
-                        detail={num(r.gain) != null && num(r.gain_sd_of_difference) != null
-                          ? `${num(r.gain) >= 0 ? "+" : "−"}${Math.abs(num(r.gain)).toFixed(3)} against ${num(r.gain_sd_of_difference).toFixed(3)}`
-                          : "no comparison available"} />
-                      <CheckRow label="Enough combinations tried?"
-                        passes={r.coverage_passes}
-                        detail={`${num(r.coverage_n_pairs) ?? 0} pairs, `
-                          + `${num(r.coverage_span_left_mA) != null ? num(r.coverage_span_left_mA).toFixed(1) : "0.0"} mA left / `
-                          + `${num(r.coverage_span_right_mA) != null ? num(r.coverage_span_right_mA).toFixed(1) : "0.0"} mA right span`} />
-                      {r.sentence && (
-                        <MDTypography variant="caption" component="div" color="text"
-                          sx={{ ...SMALL, mt: 0.8 }}>
-                          {String(r.sentence)}
-                        </MDTypography>
-                      )}
-                    </Grid>
-                  </Grid>
-                </MDBox>
-              );
-            })}
-
-            {/* Note the flat-surface check reads a `flat` PASS as "the surface is NOT flat" --
-                CheckRow above negates `flat_passes` so its tick/cross reads the same direction as
-                the other two ("passing" = good), matching the label "Surface flat?" answered "no". */}
-
-            <Fold show="Pooled across rates — reference only" hide="Hide the pooled surface"
-              onChange={(open) => setPoolOpen((s) => ({ ...s, [g.key]: open || s[g.key] }))}>
-              <MDTypography variant="caption" component="div" color="text" sx={{ fontSize: TYPE.small, mb: 1 }}>
-                The surface below pools every rate together through one shared, pinned rate axis.
-                It is shown for reference only: reading a current off it draws confidence from
-                OTHER rates, not the one being asked about, which is exactly why the honest
-                surfaces above are fitted one rate at a time.
-              </MDTypography>
-              {g.rows.map((r) => {
-                const stratumKey = `${Number(g.pw_us_left).toString()}_${Number(g.pw_us_right).toString()}`;
-                const rateKey = Number(r.rate_hz).toString();
-                const pooled = (pooledSurfaces[stratumKey] || {}).surface_at_rate || {};
-                const pooledSurface = pooled[rateKey];
-                const divId = `cms-pooled-${g.key}-${r.rate_hz}`;
-                if (!pooledSurface) return null;
-                return (
-                  <MDBox key={divId} sx={{ mt: 1, mb: 1.5 }}>
-                    <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, mb: 0.4 }}>
-                      {fmtHz(r.rate_hz)}
-                    </MDTypography>
-                    {poolOpen[g.key] && (
-                      <CurrentSurfaceHeatmap divId={divId} surface={pooledSurface}
-                        inForceLeft={inForceLeft} inForceRight={inForceRight}
-                        starLeft={null} starRight={null} showStar={false} size={220} />
-                    )}
-                    <MDTypography variant="caption" component="div" color="text" sx={{ ...SMALL, mt: 0.4 }}>
-                      {String(r.pooled_across_rates_note || "")}
-                    </MDTypography>
-                  </MDBox>
-                );
-              })}
-            </Fold>
-          </MDBox>
-        ))}
+        <ClinicStreamSection groups={clinicGroups} inForceLeft={inForceLeft} inForceRight={inForceRight}
+          clinicStream={stage1.clinic_stream} />
       </MDBox>
     </Card>
   );

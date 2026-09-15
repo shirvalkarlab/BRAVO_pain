@@ -926,3 +926,47 @@ the threshold re-centring as what remains. Commit and push done by this session 
   the next two builders' work.
 - Never staged anything under `BRAVO/_pro_dump/` (gitignored; the notes columns of the real
   workbooks carry the patient's own words).
+
+### 2026-09-15: the page draws Phase 21/22's new fields (decision 162)
+- Read the real captured response (`BRAVO/_agent_bridge/_probe_tl/two_stage_clinic_after.pkl`)
+  before writing any JS, so every field name and shape below is read off the live payload, not
+  guessed: `response.titration_plan` (sides.Left/Right, held_other_side, ladder, hold, step_timing,
+  bands, sheet_columns (19), sheet_rows (68: 30 left / 30 right / 8 joint-corner), joint_corners,
+  session_time, sheet_source, margin) and `response.two_stage.stage1.rate_strata_clinic` (19 rows,
+  the same per-row shape as `rate_strata` plus `source`/`n_visits`/`n_clinic`/`n_home`) and
+  `.clinic_stream` (n_files 29, n_steps 472, n_with_pain 472, n_unparsed_prose None, n_clinic 370,
+  n_home 102, visits[] with visit_date/setting/n_steps/n_with_pain).
+- `TitrationSessionCard.js`: added `nextWednesdayISO()`, `SheetTable` (a leading Step column plus
+  the response's own `sheet_columns` in order, two rows per step exactly as `sheet_rows` gives
+  them, ramp rows lightly shaded), and `SessionHeaderStrip` (rate, both pulse widths, both
+  ceilings, the current each side's ladder holds the other side at, the ramp+test step-timing
+  sentence, the total session length). Added a date field (`useState(nextWednesdayISO)`) and a
+  disabled "Make Google sheet" button with a "export is being built" tooltip at the card's top
+  right. Kept every existing element (`SideColumn`, the band strip, the today/margin sentences,
+  the protocol-source line) unchanged; the three `SheetTable`s and the sheet-template source line
+  sit in a new section, "The clinic sheet", below the two side columns.
+- `CurrentMapCard.js`: extracted the existing REDCap section's per-(pulse-width-pair, rate)
+  rendering into a shared `RateStrataGroups` component (behaviour-preserving -- same JSX, same
+  keys, only the pooled-surface fold is now conditional on `pooledSurfaces` being non-empty, since
+  the clinic stream has none), then added `ClinicStreamSection` reading `rate_strata_clinic`
+  (grouped with the existing `groupByPulseWidthPair`, which already worked on the new rows'
+  matching field names) and `clinic_stream`, with its own caption stating the file/step/prose
+  counts and a `Fold`-ed table of the 29 ingested visits (date, in-clinic or at-home, steps, steps
+  with a score). Titled "From the clinic and home testing sheets (independent of REDCap)", drawn
+  under a divider below the REDCap section, never mixed into it.
+- `npm run build`: exit 0. Grepped the full warning list for both touched file names -- absent.
+  Grepped the built chunks for three owned strings ("Make Google sheet", "independent of REDCap",
+  "Joint corners"): all three found in `build/static/js/100.71e67ed7.chunk.js`.
+- `curl` confirmed the local server already serves the freshly built `index.html`/chunk (200 on
+  both the page route and the chunk URL) -- so the served bundle is this session's build, not a
+  stale one.
+- Browser check: NOT PERFORMED. This session's tool list contained only Read/Write/Edit/Bash --
+  no Chrome-control tool was present to load via ToolSearch, and no ToolSearch tool was present
+  either. Disclosed rather than claimed; the correctness check for this session is the build
+  succeeding, the bundle-string search above, and a full read-through of both finished files.
+- No backend file changed -> no test-suite run applies (CLAUDE.md's own two-suites-only rule).
+- Decision 162 written in DECISIONS_and_open_items.md (next number after 161, dated 2026-09-15,
+  the real system date). task_plan.md Phase 22: added a `[x]` line for the page work, left
+  `in_progress` (only the Google Sheet export itself remains), Next Step rewritten.
+- Commit: source + rebuilt bundle together, PI identity inline, `Co-Authored-By: Claude Opus 5`.
+  Pushed to `origin/PS_closedloop_deployment` per the standing go-ahead (CLAUDE.md §2 principle 6).

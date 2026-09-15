@@ -5,14 +5,16 @@ problem is that the module never handed the rule the value the device already re
 that still blocks does so for a reason the PI has read and agreed with.
 
 ## Next Step
-Phase 22's clinic-sheet ingest is built and proven live (backend only, not on any page yet). Two
-more builders follow it, each its own change: the page (drawing the new
-`held_other_side`/`joint_corners`/`sheet_rows` fields Phase 21 added, the lowered 4.5 mA ceiling,
-and Phase 22's `rate_strata_clinic`/`clinic_stream` block, on screen), and the Google Sheet export
-(turning `sheet_rows` into an actual shared sheet a clinician can open at the visit). What remains
-open from earlier phases is unchanged: the threshold re-centring / separation question (decision
-139's capture question) is still the PI's call, and T7's own acceptance test still needs a real
-titration session recorded on RCS08 (open item 30), a clinical scheduling matter.
+Phase 22's clinic-sheet ingest is built and proven live, and decision 162 put it on the page:
+`TitrationSessionCard.js` now draws the header strip and the three printable clinic-sheet tables
+(`held_other_side`/`joint_corners`/`sheet_rows`, the lowered 4.5 mA ceiling), and `CurrentMapCard.js`
+draws the second, independent clinic-and-home stream (`rate_strata_clinic`/`clinic_stream`) beside
+the REDCap one. What remains of Phase 22 is the Google Sheet export itself: turning `sheet_rows`
+into an actual shared sheet a clinician can open at the visit, behind the disabled "Make Google
+sheet" button the page already has waiting for it. What remains open from earlier phases is
+unchanged: the threshold re-centring / separation question (decision 139's capture question) is
+still the PI's call, and T7's own acceptance test still needs a real titration session recorded on
+RCS08 (open item 30), a clinical scheduling matter.
 
 ## Current Phase
 Phase 22
@@ -205,7 +207,8 @@ phases: 21/22 complete
 - [x] Both suites green through one bridge job: host 1245 passed / 2 skipped / 0 failed (was 1229, +16); container PASS=631 FAIL=0
 - [x] Live field-count/difference-count proof on RCS08, genuinely before and after (`git stash -u`): 18,787 fields before, 22,518 after, 0 only-before, 3,731 only-after (all under the new clinic block), 3 differing of 18,787 shared, all bookkeeping (a timestamp, the response key, one timing field) -- no REDCap-based value moved
 - [x] On the clinic stream: two rate strata fitted (55 Hz, 110 Hz), neither resolves a current to recommend yet -- the honest answer given the evidence so far, not a defect; decision 161; commit; push
-- **Status:** in_progress (backend and ingest done and proven live; the page display and the Google Sheet export are not started)
+- [x] The page draws all of it, decision 162: `TitrationSessionCard.js` gained a header strip (rate, both pulse widths, both ceilings, the held-other-side current per block, step timing, session length) and three printable tables built from `sheet_rows`/`sheet_columns` (left ladder, right ladder, optional joint corners), plus a date field and a disabled "Make Google sheet" button; `CurrentMapCard.js` gained a second, un-pooled section reading `rate_strata_clinic`/`clinic_stream` with a folded visit list. Build clean, both new files' owned strings present in the served chunk; no backend file touched, so no suite run applies; not watched in a real browser this session (no browser-control tool was available)
+- **Status:** in_progress (backend, ingest and the page display are done and either proven live or verified by build+bundle search; the Google Sheet export itself is not started)
 
 ## Decisions Made
 | # | Decision | Rationale |
