@@ -8,13 +8,17 @@
  */
 import { bestCellReadout, hoverCustomData, rowTier, rowLabelWithTier, tierCaption } from "./gridReadouts";
 
+// The block the sweep response carries (DecodeCommon.device_ranges.timing_ranges_for_page), as
+// corrected against the clinician tablet on 2026-09-15: onset (Dual) 0-30 s, not the FDA's 6 min.
 const RANGES = {
   averaging_s: [0, 30],
   averaging_source: "Medtronic BrainSense Tip Cards (2020, FIELDPORTAL1594651482409), p. 8",
-  averaging_caveat: "The 0-30 s range is printed in a 2020 sensing-era tip card ... not stated ...",
-  onset_dual_s: [0, 360],
-  onset_source: "FDA SSED P960009/S478 (20 Feb 2025), Table 2 'Key aDBS Configurable Parameters', p. 8",
+  averaging_caveat: "The 0-30 s range ... confirmed on the clinician tablet's adaptive setup screen ...",
+  onset_dual_s: [0, 30],
+  onset_source: "Clinician tablet (A610), Adaptive Therapy setup screens, read by the PI on 2026-09-15",
+  onset_note: "The FDA summary prints 0 to 6 min ...",
   onset_meaning: "The onset duration does not average: it holds an averaged reading past a threshold ...",
+  hold_horizon_s: 60,
 };
 
 const SW = {
@@ -73,12 +77,13 @@ describe("rowTier (B4)", () => {
     expect(rowTier(30, RANGES).tier).toBe("averaging");
     expect(rowTier(3, RANGES).tier).toBe("averaging");
   });
-  test("a row above the averaging range but inside the Dual onset range is a held level, not a mean", () => {
+  test("a row above the averaging range but inside the hold horizon (averaging + onset) is a held level, not a mean", () => {
     expect(rowTier(45, RANGES).tier).toBe("onset");
-    expect(rowTier(300, RANGES).tier).toBe("onset");
+    expect(rowTier(60, RANGES).tier).toBe("onset");
   });
-  test("a row beyond the onset range is beyond anything the device can be set to", () => {
-    expect(rowTier(600, RANGES).tier).toBe("beyond");
+  test("the 5-minute rows, where RCS08's strongest cells sit, are beyond anything the device can be set to", () => {
+    expect(rowTier(300, RANGES).tier).toBe("beyond");
+    expect(rowLabelWithTier(300, RANGES)).toBe("5m \u23F5 beyond device");
   });
   test("with no ranges on the response the tier is unknown and the label is untouched", () => {
     expect(rowTier(300, null).tier).toBe("unknown");
@@ -87,14 +92,16 @@ describe("rowTier (B4)", () => {
   test("the row label carries the tier where it is not an averaging window", () => {
     expect(rowLabelWithTier(30, RANGES)).toBe("30s");
     expect(rowLabelWithTier(45, RANGES)).toBe("45s ⏵ onset");
-    expect(rowLabelWithTier(300, RANGES)).toBe("5m ⏵ onset");
+    expect(rowLabelWithTier(60, RANGES)).toBe("1m ⏵ onset");
   });
   test("the caption names the boundary, the source, and that an onset holds rather than averages", () => {
     const c = tierCaption(RANGES, SW.integration_seconds_delivered);
     expect(c).toContain("Rows up to 30s are an averaging window the device can be set to");
     expect(c).toContain("Tip Cards");
-    expect(c).toContain("Rows from 45s to 5m");
+    expect(c).toContain("Rows from 45s to 1m");
     expect(c).toContain("holds");
-    expect(c).toContain("sensing-era");
+    expect(c).toContain("Rows from 5m are beyond anything the device can be set to");
+    expect(c).toContain("6 min");
+    expect(c).toContain("confirmed on the clinician tablet");
   });
 });

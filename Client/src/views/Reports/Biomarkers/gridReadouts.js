@@ -10,11 +10,13 @@
  * plain per-cell number, and say plainly that the other nine cells in a column carry no corrected
  * statistic at all.
  *
- * B4. A row's length of signal is compared with the device's DOCUMENTED ranges carried on the
- * response (`device_timing_ranges`, from `DecodeCommon.device_ranges`, never a number typed here):
- * up to the averaging range it is an averaging window the device can be set to; above that and up
- * to the Dual onset range it is a level the device can only HOLD past a threshold through its
- * onset, not average; beyond that nothing on the device reaches it.
+ * B4. A row's length of signal is compared with the device's ranges carried on the response
+ * (`device_timing_ranges`, from `DecodeCommon.device_ranges`, never a number typed here): up to
+ * the averaging range it is an averaging window the device can be set to; above that and up to
+ * the HOLD HORIZON (one averaging window plus one onset hold -- 30 s + 30 s on the clinician
+ * tablet, read 2026-09-15) it is a level the device can only HOLD past a threshold through its
+ * onset, not average; beyond that nothing on the device reaches it. On RCS08 the strongest cells
+ * sit at 5 min, which is beyond.
  */
 
 /** "9s", "1m" -- the delivered length of signal a row holds. */
@@ -76,13 +78,21 @@ export function hoverCustomData(sw, kind) {
 }
 
 /** Which of the device's documented tiers a row's length of signal falls in. */
+function holdHorizon(ranges) {
+  if (!ranges) return null;
+  if (Number.isFinite(Number(ranges.hold_horizon_s))) return Number(ranges.hold_horizon_s);
+  const avg = Array.isArray(ranges.averaging_s) ? Number(ranges.averaging_s[1]) : NaN;
+  const onset = Array.isArray(ranges.onset_dual_s) ? Number(ranges.onset_dual_s[1]) : NaN;
+  return Number.isFinite(avg) && Number.isFinite(onset) ? avg + onset : null;
+}
+
 export function rowTier(seconds, ranges) {
   const s = Number(seconds);
   const avg = ranges && Array.isArray(ranges.averaging_s) ? Number(ranges.averaging_s[1]) : null;
-  const onset = ranges && Array.isArray(ranges.onset_dual_s) ? Number(ranges.onset_dual_s[1]) : null;
+  const horizon = holdHorizon(ranges);
   if (!Number.isFinite(s) || !Number.isFinite(avg)) return { tier: "unknown" };
   if (s <= avg + 1e-9) return { tier: "averaging" };
-  if (Number.isFinite(onset) && s <= onset + 1e-9) return { tier: "onset" };
+  if (Number.isFinite(horizon) && s <= horizon + 1e-9) return { tier: "onset" };
   return { tier: "beyond" };
 }
 
@@ -106,13 +116,14 @@ export function tierCaption(ranges, secondsList) {
   }
   if (onsetRows.length) {
     bits.push(`Rows from ${secondsLabel(Math.min(...onsetRows))} to ${secondsLabel(Math.max(...onsetRows))} are longer `
-      + "than any documented averaging window; the device can only require a level held that long through its "
-      + `onset duration (Dual Threshold, up to ${secondsLabel(ranges.onset_dual_s[1])}; ${ranges.onset_source}), `
+      + "than any averaging window; the device can only require a level held that long -- one averaging window "
+      + `plus its onset duration (Dual Threshold, up to ${secondsLabel(ranges.onset_dual_s[1])}; ${ranges.onset_source}), `
       + "which holds an averaged reading past a threshold rather than averaging over it.");
   }
   if (beyondRows.length) {
     bits.push(`Rows from ${secondsLabel(Math.min(...beyondRows))} are beyond anything the device can be set to.`);
   }
-  if (ranges.averaging_caveat) bits.push(ranges.averaging_caveat.replace("sensing-era", "sensing-era"));
+  if (ranges.onset_note) bits.push(ranges.onset_note);
+  if (ranges.averaging_caveat) bits.push(ranges.averaging_caveat);
   return bits.join(" ");
 }

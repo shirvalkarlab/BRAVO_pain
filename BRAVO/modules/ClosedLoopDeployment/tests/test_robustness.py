@@ -382,3 +382,15 @@ def test_default_averaging_is_the_device_white_paper_dual_threshold_default():
     except ImportError:                                          # pragma: no cover
         from ClosedLoopDeployment import replay as R
     assert out["averaging_ms"] == pytest.approx(float(R.DEFAULT_PARAMS["averaging_ms"]))
+
+
+def test_robustness_note_names_the_part_of_the_interval_that_cannot_be_entered():
+    """The tablet's Dual onset maximum is 30 s (2026-09-15). The bootstrap grid searches to 120 s,
+    so an interval can run past what a clinician can type -- 36-90 s on L 1-3+, 27-60 s on the
+    committed band. The note must say so rather than recommend an unenterable value."""
+    note = PR.robustness_note({"refused": False, "n_boot": 200, "n_feasible": 159,
+                               "intervals": {"onset_s": {"lower": 27.0, "upper": 60.0, "median": 48.0}}})
+    assert "30 s" in note and "cannot be entered" in note
+    inside = PR.robustness_note({"refused": False, "n_boot": 200, "n_feasible": 200,
+                                 "intervals": {"onset_s": {"lower": 9.0, "upper": 27.0, "median": 15.0}}})
+    assert "cannot be entered" not in inside

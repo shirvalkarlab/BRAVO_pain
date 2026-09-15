@@ -23,3 +23,8 @@
   amplitude condition or timing), CL 49,740->49,743 (0 diff, 3 added `source`), BM 27,258->27,265 (0 scientific diffs,
   8 added `device_timing_ranges`). Frontend rebuilt clean; strings in chunks 100.50504491/576.7e79e101/753.7a08bfb2.
   Workers HUPed. Decision 168 written. Committing and pushing.
+- 16:45-17:15: Phase 5, the tablet ranges. Compared each against the manuals report; the one real disagreement is onset
+  (tablet 0-30 s vs FDA 0-6 min; manual and WP silent). RED: 13 pytest + 3 jest rewritten and watched failing; GREEN with
+  3 new tests and 6 old pins moved. Host 1285/2/0, container 640/0, jest 15/15. Live proof: SO 4 diff all timing; CL 38
+  diff, 0 timing, all range/source/rule text/robustness note; BM 4 range fields + 2 bookkeeping. Rebuilt; HUPed;
+  decision 169; DEVICE_percept_rc.md corrected; synthesis addendum. Committing and pushing.

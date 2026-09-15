@@ -410,7 +410,7 @@ def test_averaging_recommendation_tracks_the_biomarker_not_the_device_default():
     assert "averaging duration" not in tp["ranges_unpublished"]
     assert tp["averaging_range_ms"] == [0.0, 30_000.0]
     assert tp["averaging_in_documented_range"] is True
-    assert set(tp["ranges_unpublished"]) == {"adaptive startup delay", "detection blanking duration"}
+    assert set(tp["ranges_unpublished"]) == {"adaptive startup delay"}   # blanking has a range since 2026-09-15 (tablet)
 
 
 def test_blanking_covers_the_ramp_plus_the_estimator_turnover():
@@ -447,10 +447,13 @@ def test_onset_duration_stays_inside_the_documented_dual_mode_range():
     from StimOptimizer.routines import percept_adaptive as PA
     tp = PA.timing_plan()
     lo, hi = PA.ONSET_RANGE_DUAL_MS
-    assert (lo, hi) == (0.0, 6.0 * 60_000.0)             # FDA SSED P960009/S478 Table 2
+    # 2026-09-15: the clinician tablet's 0-30 s on both Dual timers; the FDA SSED Table 2's 0-6 min
+    # is kept as ONSET_RANGE_DUAL_MS_FDA and never applied
+    assert (lo, hi) == (0.0, 30_000.0)
+    assert PA.ONSET_RANGE_DUAL_MS_FDA == (0.0, 6.0 * 60_000.0)
     assert lo <= tp["onset_duration_ms"] <= hi
     assert tp["onset_range_ms"] == [lo, hi]
-    assert tp["transition_range_ms"] == [250.0, 30.0 * 60_000.0]
+    assert tp["transition_range_ms"] == [2_000.0, 30.0 * 60_000.0]   # WP p. 16 slider, tablet-confirmed
     single = PA.timing_plan(mode=PA.SINGLE)
     assert single["onset_range_ms"] == [0.0, 30_000.0]
 

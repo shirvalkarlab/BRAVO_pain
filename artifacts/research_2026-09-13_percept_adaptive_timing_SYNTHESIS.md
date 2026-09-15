@@ -22,6 +22,19 @@ durations). Nothing on the platform writes to the device.
 
 ---
 
+
+> **Addendum 2026-09-15 (decision 169).** The PI read the ranges off the clinician tablet's Adaptive
+> Therapy setup screens. Against this synthesis: averaging 0-30 s and transitions 2 s-30 min agree
+> with the tip card and the white paper's p. 16 slider; **the onset (both Dual timers) is 0.00 ms to
+> 30.00 s on the tablet, not the FDA summary's 0-6 min** -- the white paper and the A610 manual print
+> no onset range, so the tablet's 30 s is applied and the FDA figure is kept as a discrepancy;
+> detection blanking has a range now, 0-30 s; sensing blanking reads 0-2.28 ms on the tablet against
+> the tip card's 0-2500 us, and by the PI's rule the tip card stands. Consequences: the recommended
+> onset of 30 s / 30 s is the tablet's maximum; the design rule's finding that "at 30 s averaging no
+> onset under 120 s reaches one false crossing an hour" now reads "no enterable onset does", which
+> strengthens 3 s averaging with a 30 s onset; the robustness intervals (36-90 s on L 1-3+, 27-60 s
+> on L 0-2+) run past the enterable maximum and the card now says so.
+
 ## 1. Three corrections to what the platform has believed, before any recommendation
 
 1. **The adaptive timings are programmable, not fixed.** `DEVICE_percept_rc.md` §2 has said since

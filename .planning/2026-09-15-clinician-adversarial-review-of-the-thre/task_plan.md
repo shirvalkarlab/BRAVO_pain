@@ -10,11 +10,11 @@ patient's time dynamics and thin, fluctuating data. Name the main shortcomings w
 (backend, frontend, or documentation), each tied to a file:line, a test, or a live number.
 
 ## Next Step
-Done (decision 168): the three Criticals plus S2 and B4 fixed test-first, suites green, live proof, frontend
-rebuilt, pushed. Not watched in a browser. Remaining fixes from the review (ranks 4-23) are his call.
+Done (decision 169): the tablet ranges reconciled, tests first, suites green, live proof, rebuilt, pushed. Left for
+his call: narrowing the T3/T5 onset search grids to the tablet's 30 s (changes two stored tables); review ranks 4-23.
 
 ## Current Phase
-Phase 4
+Phase 5
 
 ### Phase 1: Parallel review
 - [x] Biomarkers reviewer dispatched and returned
@@ -42,6 +42,14 @@ Phase 4
 - [x] B1 frontend: n, interval, q on hover and the pinned panel, beside the plain statistic
 - [x] B4: device timing ranges from one home (DecodeCommon), on the sweep response, rows tiered on the grid
 - [x] Suites (host + container), live field-count proof on RCS08, frontend rebuild, decision-log entry, push
+- **Status:** complete
+
+### Phase 5: Tablet ranges reconciled with the documents
+- [x] device_ranges: onset (tablet, FDA kept), transitions (WP + tablet), detection blanking, sensing blanking, high-pass, hold horizon
+- [x] Closed-Loop card and rules read the corrected ranges (D21 title, blanking row, coupling text)
+- [x] Robustness note names onsets above the enterable maximum
+- [x] Grid tiers: 45 s-60 s held level, 5 min beyond the device; caveat resolved
+- [x] Docs corrected (DEVICE_percept_rc.md, synthesis addendum), decision 169, suites, live proof, rebuild, push
 - **Status:** complete
 
 ## Decisions Made

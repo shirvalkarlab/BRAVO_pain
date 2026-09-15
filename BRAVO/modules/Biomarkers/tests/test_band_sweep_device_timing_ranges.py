@@ -26,4 +26,4 @@ def test_the_request_function_attaches_the_block_under_device_timing_ranges():
 
 
 def test_the_rule_version_moved_so_a_stored_grid_without_the_block_is_never_served():
-    assert BS._BAND_SWEEP_RULE_VERSION == "v12_device_timing_ranges"
+    assert BS._BAND_SWEEP_RULE_VERSION == "v13_device_timing_ranges_tablet"
