@@ -1043,3 +1043,22 @@ the threshold re-centring as what remains. Commit and push done by this session 
 - Commit: source + rebuilt bundle together, PI identity inline (`git -c user.name=... -c
   user.email=...`), `Co-Authored-By: Claude Opus 5`. Pushed to `origin/PS_closedloop_deployment`
   per the standing go-ahead (CLAUDE.md §2 principle 6).
+
+### 2026-09-15 01:00 -- the three Phase 21/22 cards watched live in the PI's Chrome; one stale-worker defect fixed on the spot
+- First load showed the session tables with 72 rows (16 steps per ladder, a 5.0 mA top), the held-side
+  current and contacts as "?" -- while the exported .xlsx from the same code had 68 rows and every
+  value. Cause, measured: the page's answer was `served_from_store: true`, built 07:38 UTC by a
+  gunicorn worker 10,964 s old (started before decision 160's Python landed; the `--reload` poll had
+  not recycled it), so old code's output was filed under the new code's key. Fix: removed the two
+  stored `stim_optimizer_response` entries for RCS08 and `kill -HUP 1`; workers 3-7 s old afterwards.
+- After the reload, measured on the live page: 30 + 30 + 8 = 68 rows, 15 steps per ladder (step 11 =
+  the first 1.0 mA drop, 3.5 mA), contacts `L 2⁻ / R 1⁻2⁻`, pulse widths `L 100 / R 150`, right
+  held at 2.5 mA during the left ladder and left at 3.0 mA during the right, `L ? / R ?` count 0,
+  "4.5 mA" 4 times and "5.0 mA" 0 times on the page, every table header's left edge equal to its
+  first cell's, the "Make Google sheet" button enabled, four heatmaps drawn (two REDCap, two
+  clinic-stream: 55 Hz at 60/160 us and 110 Hz at 100/100 us), the clinic fold listing 29 visits.
+- Two things noticed for the PI, not changed: (1) the clinic stream's reference setting is its own
+  last step (epoch 109, 145 Hz), not the device's setting in force, so its colour zero and its
+  "beats the setting in force" check do not mean what the REDCap section's do; (2) the page caption
+  prints "0 prose notes not parsed" because the response carries no such field (the ingest counted
+  7) -- cosmetic. Both are follow-ups.
