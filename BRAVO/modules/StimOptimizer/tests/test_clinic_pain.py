@@ -364,3 +364,54 @@ def test_epoch_frame_pools_repeated_identical_settings():
     assert ep.iloc[0]["n"] == 3
     assert ep.iloc[0]["pain_Left_Leg"] == pytest.approx(5.0)
     assert ep.iloc[0]["pain_Left_Leg_sd"] == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------------------------
+# the reference setting (2026-09-15): the clinic stream's zero is the device's setting in force
+# wherever a clinic step exists at that rate and those pulse widths, else the last clinic step,
+# said plainly
+# ---------------------------------------------------------------------------------------------
+def _ep_frame():
+    import pandas as pd
+    return pd.DataFrame([
+        dict(epoch=0.0, freq_hz=55.0, amp_mA_Left=1.0, amp_mA_Right=1.0, pw_us_Left=100.0,
+             pw_us_Right=150.0, n=2, t0=pd.Timestamp("2026-01-01T10:00Z")),
+        dict(epoch=1.0, freq_hz=55.0, amp_mA_Left=3.0, amp_mA_Right=2.0, pw_us_Left=100.0,
+             pw_us_Right=150.0, n=5, t0=pd.Timestamp("2026-02-01T10:00Z")),
+        dict(epoch=2.0, freq_hz=55.0, amp_mA_Left=3.0, amp_mA_Right=2.0, pw_us_Left=60.0,
+             pw_us_Right=160.0, n=9, t0=pd.Timestamp("2026-03-01T10:00Z")),
+        dict(epoch=3.0, freq_hz=145.0, amp_mA_Left=1.0, amp_mA_Right=0.5, pw_us_Left=100.0,
+             pw_us_Right=150.0, n=1, t0=pd.Timestamp("2026-04-01T10:00Z")),
+    ])
+
+
+def test_reference_is_the_nearest_clinic_step_at_the_in_force_rate_and_pulse_widths():
+    from StimOptimizer import clinic_pain as CP
+    in_force = {"Left": {"rate_hz": 55.0, "pulse_width_us": 100.0, "amplitude_mA": 3.0},
+                "Right": {"rate_hz": 55.0, "pulse_width_us": 150.0, "amplitude_mA": 2.5}}
+    epoch, info = CP.reference_epoch_for(_ep_frame(), in_force)
+    # epoch 1 (100/150, L3/R2) is 0.5 mA away; epoch 0 is 2.5 mA away; epoch 2 has the wrong pulse
+    # widths despite identical currents; epoch 3 is the wrong rate.
+    assert epoch == 1.0
+    assert info["source"] == "nearest_clinic_step_to_setting_in_force"
+    assert info["distance_mA"] == 0.5
+    assert info["n_steps_at_reference"] == 5
+    assert "0.50 mA from the L 3 / R 2.5 mA in force" in info["sentence"]
+
+
+def test_reference_falls_back_to_the_last_step_and_says_so_when_nothing_matches():
+    from StimOptimizer import clinic_pain as CP
+    in_force = {"Left": {"rate_hz": 110.0, "pulse_width_us": 100.0, "amplitude_mA": 3.0},
+                "Right": {"rate_hz": 110.0, "pulse_width_us": 150.0, "amplitude_mA": 2.5}}
+    epoch, info = CP.reference_epoch_for(_ep_frame(), in_force)
+    assert epoch == 3.0 and info["source"] == "last_clinic_step"
+    assert info["rate_hz"] == 145.0
+    assert "no clinic step was ever run at the device's setting in force (110 Hz" in info["sentence"]
+    assert "NOT the setting in force" in info["sentence"]
+
+
+def test_reference_with_no_in_force_uses_the_last_step_and_names_the_reason():
+    from StimOptimizer import clinic_pain as CP
+    epoch, info = CP.reference_epoch_for(_ep_frame(), None)
+    assert epoch == 3.0 and info["source"] == "last_clinic_step"
+    assert "was not available to reference to" in info["sentence"]

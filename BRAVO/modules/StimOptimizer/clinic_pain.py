@@ -830,6 +830,26 @@ def ingest_and_store(participant, folder, *, root=None) -> dict:
                store_key=_cache_store.product_key(CLINIC_PAIN_KIND, uid, sig))
 
 
+def _manifest_counts(participant, *, root=None) -> dict:
+    """The per-file counts the ingest measured, summed over the stored manifest: steps parsed
+    (with or without a score), prose scores left unparsed, scores skipped for having no setting.
+    Empty when the stored entry predates the manifest."""
+    uid = _participant_uid(participant)
+    try:
+        got, _stamp = _cache_store.load_newest(CLINIC_PAIN_KIND, uid, consumer="stim_optimizer",
+                                               root=root)
+    except Exception:                                                # noqa: BLE001
+        return {}
+    man = (got or {}).get("manifest")
+    if man is None or len(man) == 0:
+        return {}
+    out = {}
+    for c in ("n_steps", "n_with_pain", "n_unparsed_prose", "n_skipped_no_setting"):
+        if c in man.columns:
+            out[c] = int(pd.to_numeric(man[c], errors="coerce").fillna(0).sum())
+    return out
+
+
 def load_clinic_steps(participant, *, consumer=None, root=None):
     """The newest stored clinic-pain-steps table for this participant, or ``None`` with a reason
     when nothing has been ingested yet."""
@@ -844,9 +864,86 @@ def load_clinic_steps(participant, *, consumer=None, root=None):
 # The independent per-rate fit
 # =====================================================================================
 
+def reference_epoch_for(ep: pd.DataFrame, in_force: dict | None) -> tuple:
+    """Which clinic epoch the clinic stream's scores are referenced to (`objective.build_objective`
+    subtracts that epoch's mean pain from every other, so it is the colour-scale zero and the
+    "beats the setting in force" baseline).
+
+    The device's setting in force (rate, both pulse widths, both currents -- `in_force`, the same
+    per-side dict `bravo_service.in_force_by_side` builds) is what the REDCap section references
+    to, so the clinic section should reference to the same thing wherever the clinic record lets
+    it. Rule, in order: (1) a clinic epoch at the in-force rate AND both in-force pulse widths, the
+    one nearest to the in-force currents (Euclidean distance in mA, ties to the more-tested epoch);
+    (2) failing that, the LAST clinic step in time -- and the answer says so plainly, because in
+    that case the zero point is NOT the device's setting and the two sections' zeros mean
+    different things (watched on the live page 2026-09-15: the last clinic step was a 145 Hz
+    test while the device runs 55 Hz).
+
+    Returns ``(epoch_id, info_dict)``; ``info_dict`` is what the page prints.
+    """
+    if ep is None or len(ep) == 0:
+        return None, {"source": "none", "sentence": "no clinic epochs to reference to"}
+    last_idx = ep["t0"].astype("int64").idxmax() if "t0" in ep.columns else ep.index[-1]
+    last = ep.loc[last_idx]
+    fallback = dict(
+        source="last_clinic_step", epoch=float(last["epoch"]),
+        rate_hz=float(last["freq_hz"]),
+        amp_mA_Left=float(last["amp_mA_Left"]), amp_mA_Right=float(last["amp_mA_Right"]),
+        pw_us_Left=float(last["pw_us_Left"]), pw_us_Right=float(last["pw_us_Right"]))
+    def _f(side, key):
+        v = (in_force or {}).get(side, {}).get(key)
+        try:
+            return float(v) if v is not None and np.isfinite(float(v)) else None
+        except (TypeError, ValueError):
+            return None
+    rate = _f("Left", "rate_hz") or _f("Right", "rate_hz")
+    pwl, pwr = _f("Left", "pulse_width_us"), _f("Right", "pulse_width_us")
+    al, ar = _f("Left", "amplitude_mA"), _f("Right", "amplitude_mA")
+    if rate is None or pwl is None or pwr is None:
+        fallback["sentence"] = ("referenced to the last clinic step "
+                                f"({fallback['rate_hz']:g} Hz, L {fallback['amp_mA_Left']:g} / "
+                                f"R {fallback['amp_mA_Right']:g} mA): the device's setting in "
+                                "force was not available to reference to")
+        return fallback["epoch"], fallback
+    cand = ep[(ep["freq_hz"].astype(float).round(3) == round(rate, 3))
+              & (ep["pw_us_Left"].astype(float).round(1) == round(pwl, 1))
+              & (ep["pw_us_Right"].astype(float).round(1) == round(pwr, 1))]
+    if len(cand) == 0:
+        fallback["sentence"] = (
+            f"referenced to the last clinic step ({fallback['rate_hz']:g} Hz, "
+            f"L {fallback['amp_mA_Left']:g} / R {fallback['amp_mA_Right']:g} mA) because no clinic "
+            f"step was ever run at the device's setting in force ({rate:g} Hz, L {pwl:g} / R {pwr:g} "
+            "us) -- so this section's zero is NOT the setting in force, unlike the REDCap section's")
+        return fallback["epoch"], fallback
+    dist = np.hypot(cand["amp_mA_Left"].astype(float) - (al if al is not None else 0.0),
+                    cand["amp_mA_Right"].astype(float) - (ar if ar is not None else 0.0))
+    order = np.lexsort((-cand["n"].astype(float).to_numpy(), dist.to_numpy()))
+    best = cand.iloc[order[0]]
+    d_best = float(dist.iloc[order[0]])
+    info = dict(
+        source="nearest_clinic_step_to_setting_in_force", epoch=float(best["epoch"]),
+        rate_hz=float(best["freq_hz"]),
+        amp_mA_Left=float(best["amp_mA_Left"]), amp_mA_Right=float(best["amp_mA_Right"]),
+        pw_us_Left=float(best["pw_us_Left"]), pw_us_Right=float(best["pw_us_Right"]),
+        distance_mA=d_best, n_steps_at_reference=int(best["n"]),
+        in_force=dict(rate_hz=rate, pw_us_Left=pwl, pw_us_Right=pwr, amp_mA_Left=al,
+                      amp_mA_Right=ar))
+    if d_best == 0.0:
+        info["sentence"] = (f"referenced to the clinic step at the device's setting in force "
+                            f"({rate:g} Hz, L {pwl:g} / R {pwr:g} us, L {al:g} / R {ar:g} mA; "
+                            f"{int(best['n'])} step(s) there)")
+    else:
+        info["sentence"] = (
+            f"referenced to the clinic step nearest the device's setting in force at the same "
+            f"rate and pulse widths ({rate:g} Hz, L {pwl:g} / R {pwr:g} us): "
+            f"L {best['amp_mA_Left']:g} / R {best['amp_mA_Right']:g} mA, {d_best:.2f} mA from "
+            f"the L {al:g} / R {ar:g} mA in force; {int(best['n'])} step(s) there")
+    return info["epoch"], info
+
+
 def fit_clinic_rate_strata(participant, *, hemispheres=("Left", "Right"),
                            safety_ceiling_by_hemisphere=None, redcap_pooled_var=None,
-                           root=None) -> dict:
+                           in_force=None, root=None) -> dict:
     """Fit the SAME per-rate (amp-Left, amp-Right) surfaces `stage1_openloop.run_stage1` fits on
     the REDCap stream, on the clinic stream alone. Never raises: a failure comes back as
     ``{"available": False, "reason": ...}``.
@@ -868,9 +965,13 @@ def fit_clinic_rate_strata(participant, *, hemispheres=("Left", "Right"),
     visit_dates = sorted(str(v) for v in steps["visit_date"].dropna().unique())
     n_clinic = int((steps["setting"] == "clinic").sum())
     n_home = int((steps["setting"] == "home").sum())
-    base = dict(available=True, n_files=n_files, n_steps=int(len(steps)),
-               n_with_pain=int(len(steps)), n_unparsed_prose=None, visit_dates=visit_dates,
-               n_clinic=n_clinic, n_home=n_home,
+    man = _manifest_counts(participant, root=root)
+    base = dict(available=True, n_files=n_files,
+               n_steps=int(man.get("n_steps") or len(steps)),
+               n_with_pain=int(len(steps)),
+               n_unparsed_prose=man.get("n_unparsed_prose"),
+               n_skipped_no_setting=man.get("n_skipped_no_setting"),
+               visit_dates=visit_dates, n_clinic=n_clinic, n_home=n_home,
                store_key=(stamp or {}).get("signature_key") if isinstance(stamp, dict) else None)
 
     if len(ep) == 0 or "pain_Left_Leg" not in ep.columns or ep["pain_Left_Leg"].notna().sum() < 2:
@@ -882,6 +983,7 @@ def fit_clinic_rate_strata(participant, *, hemispheres=("Left", "Right"),
     ep = ep.dropna(subset=["pain_Left_Leg", "pain_Left_Leg_sd"], how="all")
     ep = ep[ep["pain_Left_Leg"].notna()].reset_index(drop=True)
     ep["epoch"] = np.arange(len(ep), dtype=float)
+    ref_epoch, reference = reference_epoch_for(ep, in_force)
 
     try:
         own_pooled = OBJ.pooled_within_epoch_var(ep, "pain_Left_Leg_sd", "n", min_n=3)
@@ -903,7 +1005,8 @@ def fit_clinic_rate_strata(participant, *, hemispheres=("Left", "Right"),
         s1 = S1.run_stage1(ep, hemispheres=hemispheres, primary_item="left_leg",
                           safety_ceiling_by_hemisphere=safety_ceiling_by_hemisphere,
                           pooled_var_override=pooled_var_used,
-                          min_tolerated_h=CLINIC_MIN_TOLERATED_H)
+                          min_tolerated_h=CLINIC_MIN_TOLERATED_H,
+                          incumbent_epoch=ref_epoch)
     except Exception as exc:                                        # noqa: BLE001
         base.update(available=False, reason=f"the clinic-stream fit failed: "
                                             f"{type(exc).__name__}: {exc}")
@@ -911,5 +1014,6 @@ def fit_clinic_rate_strata(participant, *, hemispheres=("Left", "Right"),
 
     base.update(n_epochs=int(len(ep)), pooled_var=pooled_var_used, pooled_var_source=pooled_source,
                note=note, incumbent_epoch=float(s1.frozen.incumbent_epoch),
-               incumbent_rate_hz=float(s1.frozen.incumbent_rate_hz))
+               incumbent_rate_hz=float(s1.frozen.incumbent_rate_hz),
+               reference=reference)
     return dict(base, stage1_result=s1)

@@ -1062,3 +1062,20 @@ the threshold re-centring as what remains. Commit and push done by this session 
   "beats the setting in force" check do not mean what the REDCap section's do; (2) the page caption
   prints "0 prose notes not parsed" because the response carries no such field (the ingest counted
   7) -- cosmetic. Both are follow-ups.
+
+### 2026-09-15 01:25 -- the two follow-ups from the live check, fixed (PI: "fix both follow-ups now")
+- `clinic_pain.reference_epoch_for`: the clinic stream's reference epoch (the colour-scale zero and
+  the "beats the setting in force" baseline) is now the clinic step nearest the device's setting in
+  force at the same rate and both pulse widths (ties to the more-tested step), else the last clinic
+  step with a sentence saying plainly that the zero is then NOT the setting in force. Threaded
+  `in_force` from `bravo_service.two_stage_block` into the fit; the page prints the sentence above
+  the clinic heatmaps (amber when it is the fallback). 3 new tests.
+- `clinic_pain._manifest_counts`: the ingest's own per-file counts (steps parsed, prose left
+  unparsed, scores skipped for no setting) are summed from the stored manifest and reported.
+- Verified server-side on RCS08 (the page's own request): n_steps 816, n_with_pain 472,
+  n_unparsed_prose 7, n_skipped_no_setting 16; reference = 55 Hz, L 100 / R 150 us, L 3.5 / R 3.0
+  mA, 0.71 mA from the L 3.0 / R 2.5 in force, 6 steps there (was: the last step, 145 Hz). The 55 Hz
+  clinic surface's gain check now reads +0.234 against 0.507 (a real comparison; still fails).
+  27 tests in the two touched test files pass in the container; frontend rebuilt (chunk
+  100.25417ae3); stored stim_optimizer_response entries for RCS08 removed and workers reloaded so
+  no stale answer is served.

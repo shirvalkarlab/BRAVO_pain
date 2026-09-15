@@ -315,6 +315,16 @@ function ClinicStreamSection({ groups, inForceLeft, inForceRight, clinicStream }
           {cs.note}
         </MDTypography>
       )}
+      {/* The zero point of this section's colour scale. The REDCap section's zero is the device's
+          setting in force; this one is too WHEN a clinic step exists at that rate and those pulse
+          widths, and otherwise it is the last clinic step -- said here so the two sections' zeros
+          are never read as the same thing when they are not. */}
+      {cs.reference && cs.reference.sentence && (
+        <MDTypography variant="caption" component="div" sx={{ ...SMALL, mb: 1,
+          color: cs.reference.source === "last_clinic_step" ? PAL.warnText : undefined }}>
+          {`Zero on these colour scales: ${cs.reference.sentence}.`}
+        </MDTypography>
+      )}
       <RateStrataGroups groups={groups} inForceLeft={inForceLeft} inForceRight={inForceRight}
         pooledSurfaces={{}} idPrefix="cms-clinic" />
       <Fold show={`Ingested clinic and home-testing visits (${visits.length})`} hide="Hide the visit list"

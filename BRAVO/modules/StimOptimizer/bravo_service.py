@@ -860,14 +860,15 @@ def _joint_batch_frame(s1, frozen):
 #: clinic-and-home testing workbooks alone -- never pooled with the REDCap stream, never changing
 #: the REDCap-based recommendation. See `StimOptimizer.clinic_pain`.
 def _clinic_stream_stage1_block(participant, *, hemispheres, safety_ceiling_by_hemisphere,
-                                redcap_pooled_var) -> dict:
+                                redcap_pooled_var, in_force=None) -> dict:
     """`{"rate_strata_clinic": [...], "clinic_stream": {...}}`. Never raises: a failure is
     reported under `clinic_stream.reason` with `clinic_stream.available = False`."""
     try:
         fit = CLPAIN.fit_clinic_rate_strata(
             participant, hemispheres=tuple(hemispheres),
             safety_ceiling_by_hemisphere=safety_ceiling_by_hemisphere,
-            redcap_pooled_var=redcap_pooled_var, root=_SHARED_CACHE_DIR_OVERRIDE)
+            redcap_pooled_var=redcap_pooled_var, in_force=in_force,
+            root=_SHARED_CACHE_DIR_OVERRIDE)
     except Exception as exc:                                      # noqa: BLE001 -- adjunct block
         _log.exception("StimOptimizer: the clinic-sheet stream fit failed")
         return {"rate_strata_clinic": [],
@@ -1163,7 +1164,7 @@ def two_stage_block(participant, es, *, request_data, stream, washin_min, hemisp
     clinic_block = _clinic_stream_stage1_block(
         participant, hemispheres=hemispheres,
         safety_ceiling_by_hemisphere=safety_ceiling_by_hemisphere,
-        redcap_pooled_var=_redcap_pooled_var)
+        redcap_pooled_var=_redcap_pooled_var, in_force=in_force)
     return _two_stage_payload(rep, inputs=inputs, seconds=_time.perf_counter() - t0,
                               in_force=in_force, clinic_block=clinic_block)
 
