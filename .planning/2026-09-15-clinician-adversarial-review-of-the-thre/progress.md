@@ -28,3 +28,8 @@
   3 new tests and 6 old pins moved. Host 1285/2/0, container 640/0, jest 15/15. Live proof: SO 4 diff all timing; CL 38
   diff, 0 timing, all range/source/rule text/robustness note; BM 4 range fields + 2 bookkeeping. Rebuilt; HUPed;
   decision 169; DEVICE_percept_rc.md corrected; synthesis addendum. Committing and pushing.
+- 17:20-17:50: Phase 6, his two instructions. RED: 3 new tests + the end-to-end design-rule test extended, watched
+  failing. The cap exposed a real defect (equal-window onsets simulated separately, 200 vs 300 units for one setting):
+  fixed with one answer per window count. GREEN; 3 old pins moved. Host 1287/2/0, container 641/0. Live: SO 0 diff;
+  CL 9 diff (robustness sentence 27-60 -> 27-30 s), verdict same; BM 1,659 fields gone (the 5 m row), 12.5 Hz best now
+  60 s r -0.47 n 166 q 0.0017. Rebuilt; HUPed; decision 170. Committing and pushing.

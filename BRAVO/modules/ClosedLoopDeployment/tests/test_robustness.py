@@ -68,10 +68,19 @@ def _concat(stretches):
 # ------------------------------------------------------------------------------------------------
 # the config grid: shape and the fixed transition
 # ------------------------------------------------------------------------------------------------
-def test_default_grid_has_576_configurations():
+def test_default_grid_has_320_configurations_none_with_an_onset_the_tablet_refuses():
+    """Was 576 (18 onsets to 120 s). The PI's instruction of 2026-09-15: evaluate onsets only up to
+    the tablet's 30 s maximum, so the eight onsets above it are gone: 10 x 8 x 4."""
     cfgs = RB._build_config_grid(100.0, 20.0, RB.ONSET_GRID_S, RB.GAP_SD_GRID, RB.BLANKING_GRID_S)
     assert len(cfgs) == len(RB.ONSET_GRID_S) * len(RB.GAP_SD_GRID) * len(RB.BLANKING_GRID_S)
-    assert len(cfgs) == 576
+    assert len(cfgs) == 320
+
+
+def test_the_onset_grid_stops_at_the_tablets_maximum_read_from_the_one_home():
+    from StimOptimizer.routines import percept_adaptive as PA
+    assert max(RB.ONSET_GRID_S) == PA.ONSET_RANGE_DUAL_MS[1] / 1000.0 == 30.0
+    assert RB.ONSET_GRID_S == (3, 6, 9, 12, 15, 18, 21, 24, 27, 30)
+    assert RB.RULE_VERSION != "v1_block_bootstrap_port", "a stored table built on the old grid must not be served"
 
 
 def test_fixed_transition_is_3000_ms():

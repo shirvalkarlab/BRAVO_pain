@@ -10,11 +10,11 @@ patient's time dynamics and thin, fluctuating data. Name the main shortcomings w
 (backend, frontend, or documentation), each tied to a file:line, a test, or a live number.
 
 ## Next Step
-Done (decision 169): the tablet ranges reconciled, tests first, suites green, live proof, rebuilt, pushed. Left for
-his call: narrowing the T3/T5 onset search grids to the tablet's 30 s (changes two stored tables); review ranks 4-23.
+Done (decision 170): both onset grids capped at 30 s (and a one-answer-per-window-count rule the cap exposed), the
+sweep ends at one minute; suites green, live proof, rebuilt, pushed. Review ranks 4-23 remain his call.
 
 ## Current Phase
-Phase 5
+Phase 6
 
 ### Phase 1: Parallel review
 - [x] Biomarkers reviewer dispatched and returned
@@ -50,6 +50,12 @@ Phase 5
 - [x] Robustness note names onsets above the enterable maximum
 - [x] Grid tiers: 45 s-60 s held level, 5 min beyond the device; caveat resolved
 - [x] Docs corrected (DEVICE_percept_rc.md, synthesis addendum), decision 169, suites, live proof, rebuild, push
+- **Status:** complete
+
+### Phase 6: Onset grids capped at 30 s; sweep capped at one minute
+- [x] robustness.ONSET_GRID_S and design_rule.ONSET_GRID_S stop at the tablet's 30 s; rule versions bumped
+- [x] BAND_TIME_SWEEP_SECONDS ends at 60 s; the "ten lengths" wording follows the count; sweep rule version bumped
+- [x] Suites, live proof, frontend rebuild, decision 170, push
 - **Status:** complete
 
 ## Decisions Made

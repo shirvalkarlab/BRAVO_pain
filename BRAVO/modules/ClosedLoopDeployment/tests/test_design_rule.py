@@ -318,6 +318,20 @@ def test_design_rule_for_series_end_to_end_on_a_constructed_two_component_record
         # non-increasing as onset grows, allowing equality (both may bottom out at the grid floor)
         for (o1, s1), (o2, s2) in zip(finite, finite[1:]):
             assert s2 <= s1, (avg, o1, s1, o2, s2)
+        # 2026-09-15: two onsets that round to the SAME number of confirmation windows at this
+        # averaging duration are one device configuration and must carry one answer. With the
+        # grid capped at 30 s, at 30 s averaging every onset is one window; before this rule the
+        # table re-simulated each and printed 200 and 300 device units for the same setting.
+        by_windows = {}
+        for r in group:
+            by_windows.setdefault(r["windows_in_onset"], set()).add(r["min_separation"])
+        for n_win, seps in by_windows.items():
+            assert len(seps) == 1, (avg, n_win, seps)
+    # and the table says which onsets it merged, so a reader is not left to infer it
+    thirty = sorted(by_avg[30.0], key=lambda r: r["onset_s"])
+    assert [r["windows_in_onset"] for r in thirty] == [1, 1, 1, 1]
+    assert all(r["same_configuration_as_onset_s"] == 3.0 for r in thirty[1:])
+    assert thirty[0]["same_configuration_as_onset_s"] is None
 
 
 # --------------------------------------------------------------------------------------------
@@ -392,3 +406,13 @@ def test_attach_design_rule_is_a_no_op_when_nothing_is_stored():
     out = PR.attach_design_rule(prescriptions, None, averaging_ms=3000.0, onset_ms=30000.0)
     dual = out["modes"][PR.PA.DUAL]
     assert all(f.design_rule_note is None for f in dual.fields)
+
+
+def test_the_design_rule_onset_grid_stops_at_the_tablets_maximum():
+    """The PI's instruction of 2026-09-15: onsets only up to 30 s. The 60/120/180 s columns the
+    contest evaluated cannot be entered on the tablet; the grid now mirrors the averaging grid so
+    the table keeps its two dimensions with every pair enterable."""
+    from StimOptimizer.routines import percept_adaptive as PA
+    assert max(DR.ONSET_GRID_S) == PA.ONSET_RANGE_DUAL_MS[1] / 1000.0 == 30.0
+    assert DR.ONSET_GRID_S == (3.0, 6.0, 15.0, 30.0)
+    assert DR.RULE_VERSION != "v1_kalman_est_port", "a stored table built on the old grid must not be served"

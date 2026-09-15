@@ -123,7 +123,7 @@ function bulletsFor(sw) {
       + "with a continuous pain score ignores the high/low split; the right grid does, and "
       + "flashes when it recomputes.",
     "Clicking a cell shows a plain Pearson r/p and Welch t-test computed on the spot — not the "
-      + "grid's own corrected, best-of-ten numbers.",
+      + "grid's own corrected, best-of-all-lengths numbers.",
     // Only when this contact has such reports -- a contact with none gets no bullet rather than a
     // reassuring one. (The per-cell dash markers this bullet used to explain were removed on
     // 2026-09-10 at the PI's direction; the orange caption above the grids carries the count.)

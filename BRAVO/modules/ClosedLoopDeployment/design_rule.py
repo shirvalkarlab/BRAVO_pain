@@ -68,17 +68,29 @@ from scipy.optimize import minimize
 
 _log = logging.getLogger(__name__)
 
+try:
+    from modules.DecodeCommon import device_ranges as _DR
+except ImportError:                                              # pragma: no cover
+    from DecodeCommon import device_ranges as _DR
+
 KIND = "closed_loop_design_rule"
 #: Bumped whenever a change here would change an already-stored table's numbers.
-RULE_VERSION = "v1_kalman_est_port"
+RULE_VERSION = "v2_onset_grid_capped_at_the_tablets_30s"
 
 LOG2PI = float(np.log(2.0 * np.pi))
 
-#: The device's own averaging x onset grid this rule is evaluated on -- the same grid the contest
-#: used (`k2_derive.py`), which spans the documented averaging range (0-30 s,
-#: `percept_adaptive.AVERAGING_RANGE_MS`) and the onset range up to 3 minutes.
+#: The device's own averaging x onset grid this rule is evaluated on. The averaging grid is the
+#: contest's (`k2_derive.py`), spanning the documented 0-30 s. The ONSET grid was the contest's
+#: 30, 60, 120 and 180 s until 2026-09-15, when the PI read the clinician tablet: the onset accepts
+#: 0.00 ms to 30.00 s on both Dual timers (`DecodeCommon.device_ranges.ONSET_RANGE_DUAL_MS`), so
+#: three of those four columns could never be typed in. His instruction: "limit the search grid to
+#: evaluate onsets only up to a maximum of 30 seconds." The grid now mirrors the averaging grid, so
+#: the table keeps two dimensions and every pair is enterable. The contest's finding "at 30 s
+#: averaging no onset under 120 s reaches one false crossing an hour" therefore reads: at 30 s
+#: averaging no enterable onset does.
 AVERAGING_GRID_S: Tuple[float, ...] = (3.0, 6.0, 15.0, 30.0)
-ONSET_GRID_S: Tuple[float, ...] = (30.0, 60.0, 120.0, 180.0)
+ONSET_GRID_S: Tuple[float, ...] = tuple(
+    o for o in (3.0, 6.0, 15.0, 30.0) if o <= _DR.ONSET_RANGE_DUAL_MS[1] / 1000.0)
 #: The separations the sweep tries at each averaging x onset pair, in the recorded series' own
 #: units (device LSB). "never" (``None``) is reported when none of these holds the target.
 SEPARATION_GRID: Tuple[float, ...] = (5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 60.0, 80.0, 120.0,
@@ -522,13 +534,32 @@ def separation_table(model: FittedModel, *, level: float,
     rng = np.random.default_rng(seed)
     rows = []
     for avg in averaging_grid:
+        # 2026-09-15: the device counts the onset in whole averaging windows (D14, decision 150),
+        # so two onsets that round to the same window count are ONE configuration. With the onset
+        # grid capped at the tablet's 30 s, that happens at 30 s averaging for every onset on the
+        # grid; simulated separately they printed two different requirements (200 and 300 device
+        # units) for the same setting. The first onset of each window count is simulated and the
+        # others copy it, and each row says which onset it shares its answer with.
+        n_per = max(1, int(round(float(avg) / float(dt_s))))
+        by_windows: Dict[int, Dict[str, Any]] = {}
         for onset in onset_grid:
-            need, sweep = min_separation_for_rate(model, averaging_s=avg, onset_s=onset,
-                                                   level=level, rng=rng, dt_s=dt_s,
-                                                   target_per_hour=target_per_hour, hours=hours,
-                                                   separations=separations)
-            rows.append({"averaging_s": float(avg), "onset_s": float(onset),
-                        "min_separation": need, "sweep": sweep})
+            n_on = max(1, int(np.ceil(float(onset) / (n_per * float(dt_s)))))
+            first = by_windows.get(n_on)
+            if first is None:
+                need, sweep = min_separation_for_rate(model, averaging_s=avg, onset_s=onset,
+                                                       level=level, rng=rng, dt_s=dt_s,
+                                                       target_per_hour=target_per_hour,
+                                                       hours=hours, separations=separations)
+                row = {"averaging_s": float(avg), "onset_s": float(onset),
+                       "min_separation": need, "sweep": sweep, "windows_in_onset": int(n_on),
+                       "same_configuration_as_onset_s": None}
+                by_windows[n_on] = row
+            else:
+                row = {"averaging_s": float(avg), "onset_s": float(onset),
+                       "min_separation": first["min_separation"], "sweep": first["sweep"],
+                       "windows_in_onset": int(n_on),
+                       "same_configuration_as_onset_s": float(first["onset_s"])}
+            rows.append(row)
     return rows
 
 

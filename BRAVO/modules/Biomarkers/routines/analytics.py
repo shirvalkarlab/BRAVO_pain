@@ -5387,7 +5387,13 @@ def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
 
 #: The lengths of signal, in seconds, that one band-power measurement may be averaged over. The
 #: PI's list. Requests shorter than one tile are delivered as one tile; see the module note above.
-BAND_TIME_SWEEP_SECONDS = (1.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 45.0, 60.0, 300.0)
+#: The 300 s length was dropped on 2026-09-15 (the PI: "get rid of the five-minute ... leave the max
+#: at one minute"): the clinician tablet's averaging window tops out at 30 s and its onset hold at
+#: 30 s, so nothing the device can be set to reaches five minutes of signal, and RCS08's strongest
+#: cells sitting there had been read as programmable (review 2026-09-15, finding B4).
+BAND_TIME_SWEEP_SECONDS = (1.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 45.0, 60.0)
+_N_LENGTHS_WORD = {8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve"}.get(
+    len(BAND_TIME_SWEEP_SECONDS), str(len(BAND_TIME_SWEEP_SECONDS)))
 
 #: The span of band centres the sweep covers, in hertz. The firmware can only place an adaptive
 #: sensing band between 8 and 30 Hz (design ledger section 1), so a centre outside this span could
@@ -6371,9 +6377,9 @@ def _best_of_windows_null_auc(X, y_binary, *, n_perm, rng):
 #: must not be able to see the best cell without being told that it was chosen as the best of ten.
 #: Condensed for open item 7's display cleanup (decision, 2026-09-09) -- same claim, fewer words.
 BEST_OF_WINDOWS_OPTIMISM_NOTE = (
-    "The value in each row is the LARGEST of the ten lengths of signal tried for that band -- "
+    f"The value in each row is the LARGEST of the {_N_LENGTHS_WORD} lengths of signal tried for that band -- "
     "chosen after seeing the results, so it runs larger than a fresh set of ratings would give. "
-    "Its own p-value isn't a real probability; compare it to the shuffled best-of-ten value "
+    f"Its own p-value isn't a real probability; compare it to the shuffled best-of-{_N_LENGTHS_WORD} value "
     "beside it, the level chance alone reaches under the same selection."
 )
 

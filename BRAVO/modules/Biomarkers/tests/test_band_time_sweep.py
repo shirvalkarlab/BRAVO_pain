@@ -8,7 +8,7 @@ Every test here exists because something specific could go wrong silently. In or
   * the vectorised outlier rule has to be the same rule as the scalar one it replaced for speed;
   * the relationship between the ordering's area under the curve and a real fitted one-predictor
     logistic regression's own area under the curve has to hold on every cell of a grid, since that
-    relationship is what lets 220 cells be filled without 220 model fits;
+    relationship is what lets every cell be filled without a model fit per cell;
   * the sweep has to HONOUR THE TOP-OF-PAGE SETTINGS rather than recomputing with its own defaults;
   * an interval that spans 0.5 must NOT read as a negative result anywhere -- not in the word, not
     in the sentence, and not in the figure headline;
@@ -167,7 +167,7 @@ def test_vectorised_outlier_rule_matches_the_scalar_one():
 # ---------------------------------------------------------------------------------------------
 
 def test_fitted_logistic_is_the_ordering_or_one_minus_it_on_every_cell():
-    """A real fit at every one of the 220 cells, and the exact relationship checked.
+    """A real fit at every one of the 22 x 9 cells, and the exact relationship checked.
 
     This is the claim the fast path rests on. A one-predictor logistic regression's own area under
     the curve, scored on the data it was fitted to, is EXACTLY the ordering's area under the curve
@@ -192,7 +192,9 @@ def test_fitted_logistic_is_the_ordering_or_one_minus_it_on_every_cell():
             f"worst gap {float(np.min([same.max(), flip.max()])):.3g}")
         n_exact += int((np.minimum(same, flip) < 1e-9).sum())
         n_slope_agrees += int(((slope[ok] > 0) == (same < 1e-9)).sum())
-    assert n_cells >= 200, f"only {n_cells} cells were fitted; the grid should be about 220"
+    # 22 centres x the sweep's lengths (10 until 2026-09-15, 9 since the 5-minute length went)
+    expect = 22 * len(A.BAND_TIME_SWEEP_SECONDS)
+    assert n_cells >= expect - 20, f"only {n_cells} cells were fitted; the grid should be about {expect}"
     assert n_slope_agrees == n_cells, "which of the two it is must follow the fitted slope's sign"
     print(f"OK on all {n_cells} cells the fitted logistic regression's own value is exactly the "
           f"ordering's value or one minus it, and the sign of its slope decides which")
@@ -385,7 +387,7 @@ def test_the_optimism_note_and_the_half_note_are_in_the_first_notes():
     power, pain, centers = _synthetic_grid(seed=17)
     sw = A.band_time_sweep_from_power(power, pain, center_freqs_hz=centers, n_perm=200, n_boot=300)
     first_two = " ".join(sw["notes"][:2]).lower()
-    assert "largest of the ten lengths" in first_two
+    assert "largest of the nine lengths" in first_two
     assert "optimistic" in first_two or "larger than" in first_two
     assert "0.5, not 0" in " ".join(sw["notes"])
     print("OK the best-of-ten warning and the 0.5 note are in the notes")
@@ -623,3 +625,12 @@ if __name__ == "__main__":
     test_an_empty_input_is_a_reason_not_a_crash()
     test_band_centres_come_from_the_cache_grid_not_from_a_wish()
     print("All band-by-length-of-signal sweep tests passed.")
+
+
+# 9. the sweep stops at one minute (the PI, 2026-09-15: "get rid of the five-minute ... leave the max at one minute")
+def test_the_sweep_stops_at_one_minute_and_its_note_counts_its_own_lengths():
+    assert max(A.BAND_TIME_SWEEP_SECONDS) == 60.0
+    assert len(A.BAND_TIME_SWEEP_SECONDS) == 9
+    assert 300.0 not in A.BAND_TIME_SWEEP_SECONDS
+    assert "nine lengths" in A.BEST_OF_WINDOWS_OPTIMISM_NOTE and "ten" not in A.BEST_OF_WINDOWS_OPTIMISM_NOTE
+    print("OK the sweep ends at 60 s over nine lengths and the note says nine")
