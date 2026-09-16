@@ -476,7 +476,7 @@ def createTherapyTimeline(TherapyHistory):
                                         if TherapyTimeline[j]["DefinedTherapies"][m]["GroupId"] == key:
                                             TherapyTimeline[j]["DefinedTherapies"][m]["PercentUsage"] = DutyCycleCalculation[key]
                             
-    if TherapyTimeline[-1]["Date"] - TherapyTimeline[-2]["Date"] < 3600*12:
+    if len(TherapyTimeline) > 1 and TherapyTimeline[-1]["Date"] - TherapyTimeline[-2]["Date"] < 3600*12:
         TherapyTimeline[-1] = copy.deepcopy(TherapyTimeline[-2])
 
     return TherapyTimeline

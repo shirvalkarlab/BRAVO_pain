@@ -3,6 +3,93 @@ from django.test import SimpleTestCase
 from modules.Therapy import sameElectrodeSide, createTherapyTimeline
 from modules.MedtronicPercept.ChronicBrainSense import channelTherapyNote
 
+
+class TherapyTimelineSessionTests(SimpleTestCase):
+    @staticmethod
+    def history_at(*dates):
+        electrode = {'Id': 'synthetic-left', 'Hemisphere': 'Left', 'Target': 'Left STN'}
+        device = {'Id': 'synthetic-device', 'Date': dates[0], 'Electrodes': [electrode]}
+        history = [
+            {'Id': f'therapy-{i}', 'SourceId': f'source-{i}', 'Date': date,
+             'GroupId': 'A', 'GroupType': 'Standard', 'Type': 'Post-visit Therapy',
+             'Label': '',
+             'StimulationSettings': [{'Electrode': electrode, 'Amplitude': 1.5 + i,
+                                      'Frequency': 130, 'PulseWidth': 60,
+                                      'Contacts': [{'Contact': 1, 'Polarity': 'Cathode'}]}],
+             'AdaptiveSettings': [{'Mode': 'Dual threshold', 'Thresholds': [10, 20]}]}
+            for i, date in enumerate(dates)
+        ]
+        return {'TherapyConfiguration': [{'Device': device, 'History': history}],
+                'TherapyDevices': [device], 'TherapyModification': []}
+
+    def test_single_session_retains_processed_stimulation_and_adaptive_settings(self):
+        history = self.history_at(1700000000)
+        original = copy.deepcopy(history)
+
+        timeline = createTherapyTimeline(history)
+
+        self.assertEqual(len(timeline), 1)
+        self.assertEqual(timeline[0]['Date'], 1700000000)
+        group = timeline[0]['Therapies'][0]
+        self.assertEqual(group['GroupId'], 'A')
+        self.assertEqual(len(group['Processed']), 1)
+        therapy = group['Processed'][0]
+        self.assertEqual(therapy['SourceId'], 'source-0')
+        self.assertEqual(therapy['TherapyIds'], ['therapy-0'])
+        self.assertEqual(therapy['Device']['Id'], 'synthetic-device')
+        stimulation = therapy['Stimulation'][0][0]
+        self.assertEqual(stimulation['Amplitude'], 1.5)
+        self.assertEqual(stimulation['Frequency'], 130)
+        self.assertEqual(stimulation['PulseWidth'], 60)
+        self.assertEqual(stimulation['Contacts'], [{'Contact': 1, 'Polarity': 'Cathode'}])
+        self.assertEqual(stimulation['Electrode']['Target'], 'Left STN')
+        self.assertEqual(therapy['Adaptive'][0][0]['Thresholds'], [10, 20])
+        self.assertEqual(timeline[0]['DefinedTherapies'][0]['Post'], ['therapy-0'])
+        self.assertEqual(history, original)
+
+    def test_single_device_date_without_therapy_returns_one_empty_entry(self):
+        history = {'TherapyConfiguration': [],
+                   'TherapyDevices': [{'Id': 'synthetic-device', 'Date': 1700000000,
+                                       'Electrodes': []}],
+                   'TherapyModification': []}
+        self.assertEqual(createTherapyTimeline(history), [
+            {'Date': 1700000000, 'Therapies': [], 'DefinedTherapies': []}])
+
+    def test_close_final_session_keeps_existing_deep_copy_behavior(self):
+        start = 1700000000
+        history = self.history_at(start, start + 24 * 3600, start + 25 * 3600)
+        original = copy.deepcopy(history)
+
+        timeline = createTherapyTimeline(history)
+
+        # The legacy final-copy rule carries the preceding entry, including its date.
+        self.assertEqual([entry['Date'] for entry in timeline],
+                         [start, start + 24 * 3600, start + 24 * 3600])
+        self.assertEqual(timeline[-1], timeline[-2])
+        self.assertIsNot(timeline[-1], timeline[-2])
+        last = timeline[-1]['Therapies'][0]['Processed'][0]
+        preceding = timeline[-2]['Therapies'][0]['Processed'][0]
+        last['Stimulation'][0][0]['Contacts'][0]['Contact'] = 9
+        last['Adaptive'][0][0]['Thresholds'][0] = 99
+        self.assertEqual(preceding['Stimulation'][0][0]['Contacts'][0]['Contact'], 1)
+        self.assertEqual(preceding['Adaptive'][0][0]['Thresholds'], [10, 20])
+        self.assertEqual(history, original)
+
+    def test_final_sessions_at_or_above_twelve_hours_remain_distinct(self):
+        start = 1700000000
+        for separation in (12 * 3600, 12 * 3600 + 1):
+            with self.subTest(separation=separation):
+                history = self.history_at(start, start + separation)
+                timeline = createTherapyTimeline(history)
+                self.assertEqual([entry['Date'] for entry in timeline],
+                                 [start, start + separation])
+                self.assertEqual([entry['DefinedTherapies'][0]['Post'] for entry in timeline],
+                                 [['therapy-0'], ['therapy-1']])
+                self.assertEqual([
+                    entry['Therapies'][0]['Processed'][0]['Stimulation'][0][0]['Amplitude']
+                    for entry in timeline], [1.5, 2.5])
+
+
 class TherapyLateralityTests(SimpleTestCase):
     def test_blank_hemispheres_do_not_mix_left_and_right(self):
         self.assertFalse(sameElectrodeSide({'Hemisphere':'','Target':'Left GPi'},{'Hemisphere':'','Target':'Right VIM'}))
