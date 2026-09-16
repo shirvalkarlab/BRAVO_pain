@@ -10,24 +10,24 @@ This is the class the PI caught twice on 2026-09-15 (decisions 172, 173) after t
 found its mirror image ("computed, stored, tested, not on the page", decision 167 §5).
 
 ## Next Step
-The PI runs `/swarm-review` with the brief in findings.md §1 (Phase 1). When the four reports are in,
-Phase 2 verifies every item against the served page before it is kept.
+Phase 3: the PI runs `/swarm-execute` with the brief in findings.md §2 against the ranked list in §3 (12 items,
+2 recorded as deliberate) and the three fixtures in §4. Fixture render tests RED first, then the fixes.
 
 ## Current Phase
-Phase 1
+Phase 3
 
 ### Phase 1: Review (the PI calls /swarm-review with findings.md §1)
-- [ ] Rendered-text inventory per page: every string a card draws, its panel, the element beside it, its referent
-- [ ] Stale-referent list: strings whose referent is not on the page today, with the decision that retired it
-- [ ] Adjacent-duplicate list: facts printed twice inside one visual block
-- [ ] Backend-note-vs-display list: response sentences (`notes`, `why`, `human_text`, `detail`, `*_note`) that describe a display other than the one drawing them
-- **Status:** pending
+- [x] Rendered-text inventory per page: every string a card draws, its panel, the element beside it, its referent
+- [x] Stale-referent list: strings whose referent is not on the page today, with the decision that retired it
+- [x] Adjacent-duplicate list: facts printed twice inside one visual block
+- [x] Backend-note-vs-display list: response sentences (`notes`, `why`, `human_text`, `detail`, `*_note`) that describe a display other than the one drawing them
+- **Status:** complete
 
 ### Phase 2: Verify and rank
-- [ ] Every item re-checked against the served page or the component source before it is kept (never the reviewer's word)
-- [ ] Items ranked; each carries file:line, the fix (frontend / backend / both), and the test that will pin it
-- [ ] Two missing fixtures captured from the live RCS08 responses: Biomarkers sweep, Stim Optimizer two-stage
-- **Status:** pending
+- [x] Every item re-checked against the served page or the component source before it is kept (never the reviewer's word)
+- [x] Items ranked; each carries file:line, the fix (frontend / backend / both), and the test that will pin it
+- [x] Two missing fixtures captured from the live RCS08 responses: Biomarkers sweep, Stim Optimizer two-stage (plus a dated Closed-Loop one)
+- **Status:** complete
 
 ### Phase 3: Execute (the PI calls /swarm-execute with findings.md §2)
 - [ ] Fixture render test per card on all three pages, asserting the strings a clinician must read and the retired words' absence, RED first

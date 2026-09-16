@@ -73,5 +73,49 @@ the frontend rebuild with the new strings found in the served chunks, the decisi
 one screenshot per card is done only if a signed-in session exists, and is otherwise reported as not done.
 ```
 
-## 3. Ranked list (filled in Phase 2)
-(empty until the reports are verified)
+## 3. Ranked list (Phase 2, verified 2026-09-15 evening)
+
+Every item below was re-checked by the orchestrator against the component source or the served RCS08
+response before being kept. Rank = how likely a clinician is to read it. "Test" names the fixture render
+test (jest, `Client/src/views/Reports/<page>/*.referent.test.js`) or container/host test that pins the fix.
+Kept 12; dropped 0; 2 reclassified (BND-5 is the duplicates reviewer's, not a referent; BND-1 already fixed).
+
+| # | Id | Page · panel | On screen | Offending text (verbatim) | Referent today | Fix | Test |
+|---|---|---|---|---|---|---|---|
+| 1 | STALE-1 | Closed-Loop · "Choose a band" grid, AUC hover | always, every AUC cell | `BandSweepGridPanel.js:276` `, best of 10 lengths at ${...} s` (line 270 reads `chosen_as_best_of_n_windows`, 276 types 10) | the sweep tries 9 lengths since decision 170 | frontend: read the field on 276; fallback 9 on both lines | CL grid test: hover text says "best of 9 lengths"; string "10 lengths" absent |
+| 2 | DUP-4 | Closed-Loop · "Full parameter recommendation", onset rows, "Why this value" fold | fold | `timing_recommendation.py:64` "A block bootstrap over the recordings puts 36-90 s in the same recommendation." | the live `robustness_note` on the same row says 27-30 s (committed band); the typed number is one contact's 2026-09-13 value | backend: drop the typed interval from the static `why`; the number belongs to `robustness_note` only | host test on `timing_recommendation.for_participant`: no digits-dash-digits " s" in the onset `why` |
+| 3 | DUP-1 / BND-3 | Biomarkers · heat-map card, orange caption AND "how to read this" drawer | caption always; drawer folded | `analytics.py:6141-6146` appends "N of this contact pair's matched pain reports were answered from the device's own FFT snapshots ... most affected cell drew P% ..." to `notes`; `gridReadouts.deviceSpectrumBullets` prints the same 358 / 79% / ceil(N/30) in the caption | same fact twice in one card, two code paths that can drift | backend: stop appending to `notes` (the counts stay on the response); `bulletsFor` comment at `BiomarkerHeatmapGrids.js:117` is then true | container test: no `notes` entry contains "FFT snapshots"; BM fixture render: the drawer has no "answered from" bullet |
+| 4 | DUP-2 | Closed-Loop · sticky verdict header | always, top of page | `DeploymentDecisionHeader.js:112-116` headline "(provisional: N of 3 intervals span zero)" + two `ProvisionalNote` boxes (lines 157-158) carrying "PROVISIONAL -- POINT SIGNS ONLY; 2 OF 3 INTERVALS SPAN ZERO" | the count printed three times in one glance; the two boxes are deliberate (ProvisionalNote.js:13-17) | frontend, narrow: headline says "(provisional -- see below)"; keep both boxes | CL header render: the string "of 3 intervals span zero" appears at most twice |
+| 5 | STALE-2 | Closed-Loop · "Choose a band", fold "How to read this, and what it cannot tell you" | fold | `BandSweepGridPanel.js:377` "Each colour cell is the strongest of ten lengths of signal for that band" | nine lengths; the Biomarkers copy was fixed at decision 172, this copy was not | frontend: read the count from the row (`chosen_as_best_of_n_windows`) or `device_timing_ranges`; never a literal | CL grid test: fold text has no "ten lengths" |
+| 6 | DUP-3 | Closed-Loop · parameter card, Upper/Lower LFP threshold rows | always | `design_rule_note` "... needs +-5 at this timing (3 s averaging / 30 s onset)" directly above `occupancy_note` "At the 3 s averaging duration in force, ..." | the timing stated twice in two stacked lines under one field | backend, small: `design_rule_note` says "at the timing shown on this card" when `exact_match`; occupancy keeps the number (its percentages depend on it) | host test on `prescription.design_rule_note`: exact-match case carries no "s averaging /" |
+| 7 | INV-1 | Biomarkers · "Matched samples per channel" block under the summary | NEVER drawn since decision 77 | `Biomarkers/index.js:985-1003` reads `data.analytics.timedomain.spectral_feature_importance`, which the backend no longer computes (0 hits in `bravo_service.py`) | nothing | frontend: delete the block (~40 lines) and the comment at line 526 that points at it | BM page render: no "Matched samples per channel" string in the bundle |
+| 8 | INV-2 | Biomarkers · older full-spectrum panel | NEVER drawn | `BiomarkerAnalytics.js:482-1083` builds `chPanels` (six panels with real titles) and returns only `tdPanels` (line 1195) | nothing; ~600 lines of display code | frontend: delete `chPanels` and its six builders after `grep` confirms no other reader (CLAUDE.md §2 principle 4: check decisions 66/77/80 first) | build clean; the six panel titles absent from every chunk |
+| 9 | BND-2 | Closed-Loop · "Stimulation amplitude effects on band power, measured three ways" | NOT drawn (only `footer` and `absent_reason` are read, `ThreeSourceResponsePanel.js:280-288`) | `three_source_plots.py` per-comparison `headline`, `caption`, `label`, `subtitle`, `amp_axis_label`, `notes[]` -- e.g. "Right stimulator turned up 0.5 to 2 mA with the other side at zero ..." | a single-run chart decision 125 replaced with the pooled view | backend: stop building the five unread text fields (keep `footer`), or mark them unused in the builder; computing prose nobody prints is the hazard decision 172 came from | host test: the comparison dict carries `footer` and not `headline` |
+| 10 | STALE-3 | Biomarkers/Closed-Loop · per-row `why` on `best_correlation_rows` / `best_auc_rows` | NOT drawn (no live reader of `.why`) | `analytics.py:6754` "... the strongest of 9 lengths ... which is what the SAME best-of-ten choice reaches ..." | one sentence contradicts itself; `_N_LENGTHS_WORD` exists two hundred lines up | backend: use `_N_LENGTHS_WORD` in `_corr_row_sentence`, `_auc_row_sentence` and `_verdict_against`'s docstring | container test: no row `why` contains "best-of-ten" |
+| 11 | BND-4 | Closed-Loop · reliable-change panel | prose is hard-coded in the component; the backend's `what_it_means` is unread | `ReliableChangePanel.js:114-121` own fold text vs `reliable_change.what_it_means` | two copies of one explanation, compatible today | frontend: print `rc.what_it_means` in the fold and delete the hard-coded copy | CL fixture render: the fold text equals the fixture's `what_it_means` |
+| 12 | DUP-5 / DUP-6 | Stim Optimizer · closed-loop checks (rate row) and sensing-evidence fold | folds | `stage_gate.py:387-391` detail restates the rates the open Numbers line shows; `SensingEvidenceTable.js:190-192` fold restates the cap the caption shows | the fold's job is to restate in prose (the file's own design) | leave both; record as deliberate | none |
+
+Reclassified / not kept: BND-1 (the two notes decision 172 already fixed -- confirmed live, closed); BND-5
+(the D26 sentence under three response keys -- the three consumers are different panels by design, and it is
+a referent-correct sentence; not a duplicate within one block). Unread-but-harmless response fields the
+reviewers listed (`two_stage.describe`, `device_timing_ranges.*_note`, `closedloop.protocol.*`,
+`logistic_fit_crosscheck`, `length_rounding`, the `*_auc` device-spectrum grids) are recorded here and left:
+they are data for a reader of the response, not text a card prints, and `length_rounding` was moved there on
+purpose (decision 171).
+
+Deliberate repeats, do not remove: the two `ProvisionalNote` boxes; the parameter card's two-mode view; the
+four threshold-row notes as four separate checks; the DecisionStrip vs the two-stage fold's strata table.
+
+## 4. Fixtures captured for Phase 3 (2026-09-15 19:00, live RCS08, serialised through `json_compliant_handler`)
+- `Client/src/views/Reports/Biomarkers/__fixtures__/rcs08_band_sweep.json` (716,889 bytes): 9 lengths 3-60 s; L 1-3+ 12.5 Hz
+  best r -0.473, n 166, at 60 s; `notes[0]` starts "The circled cell in each column is the LARGEST of the nine"; the
+  backend snapshot note IS present in `notes` (item 3's RED assertion targets it).
+- `Client/src/views/Reports/StimOptimizer/__fixtures__/rcs08_stim_optimizer_two_stage.json` (477,708 bytes): gate
+  "Stage 2 MUST NOT START: 2 of 4 conditions block"; the amplitude condition `passed: null` with
+  `history_above_ceiling.Left = {4.8, 4.5}`.
+- `Client/src/views/Reports/ClosedLoopSim/__fixtures__/rcs08_deployment_payload_2026-09-15.json` (1,436,191 bytes):
+  verdict "supported (point signs only; 2 of 3 intervals span zero)", `edges.E1.source = screening_historical`, onset
+  range [0, 30000], robustness note 27-30 s. The 2026-09-04 fixture stays for the existing `panels.payload.test.js`
+  (its 2 known failures are staleness, decision 147); new tests read the dated file.
+- Captured by `BRAVO/_agent_bridge/_referent_fixtures_capture.py` (gitignored); no patient name in any file, the
+  participant appears as the uid only.
