@@ -337,10 +337,26 @@ class GateResult:
     def not_assessed_names(self) -> list:
         return [c.name for c in self.conditions if c.passed is None]
 
+    @property
+    def headline(self) -> str:
+        """The one-line verdict, the only place its count is worded.
+
+        A condition that could not be assessed still refuses (decision 9: absence of evidence is
+        not permission), but it is not a condition that FAILED, and until 2026-09-15 this count
+        called it one -- "2 of 4 conditions block" for one failure and one not assessed, while the
+        Stim Optimizer card reading the same conditions said "1 of 4 checks block, 1 not assessed".
+        `describe()` and the response's `gate.verdict` (`bravo_service.two_stage_block`) both read
+        this; the response used to build its own copy, which is how one of the two stayed wrong.
+        """
+        if self.passed:
+            return "Stage 2 MAY START: every condition passed"
+        n_failed = len(self.failed_names())
+        n_unassessed = len(self.not_assessed_names())
+        return (f"Stage 2 MUST NOT START: {n_failed} of {len(self.conditions)} conditions block"
+                + (f", {n_unassessed} not assessed" if n_unassessed else ""))
+
     def describe(self) -> str:
-        head = ("GATE: Stage 2 MAY START — every condition passed" if self.passed
-                else f"GATE: Stage 2 MUST NOT START — {len(self.refusals())} of "
-                     f"{len(self.conditions)} conditions block")
+        head = "GATE: " + self.headline.replace(": ", " — ", 1)
         lines = [head]
         for c in self.conditions:
             lines.append(f"  [{c.verdict:12s}] {c.name}: {c.detail}")

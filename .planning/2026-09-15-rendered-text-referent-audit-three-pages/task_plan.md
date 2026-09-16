@@ -10,13 +10,12 @@ This is the class the PI caught twice on 2026-09-15 (decisions 172, 173) after t
 found its mirror image ("computed, stored, tested, not on the page", decision 167 §5).
 
 ## Next Step
-Done and merged (PR #12 -> v3.1.0 as a2dd109a; decisions 174-175; browser walk done in the PI's own signed-in session).
-Still his call: the lowercase opening of the reliable-change fold's sentence, two stale comments in `Biomarkers/index.js`,
-the two dead "best-of-ten" headline builders in `analytics.py`, and whether the server's gate verdict should call a
-not-assessed condition "blocking".
+Nothing queued. Phase 4 done (decision 176): the four leftovers of decision 174 fixed test-first, plus the second
+copy of the gate count the live proof exposed. Still his: open item 29 (the default branch), decision 139's threshold
+re-centring, decision 144's post-ramp switch, the Google Sheets key (decision 163), the titration session (item 30).
 
 ## Current Phase
-Phase 3
+Phase 4
 
 ### Phase 1: Review (the PI calls /swarm-review with findings.md §1)
 - [x] Rendered-text inventory per page: every string a card draws, its panel, the element beside it, its referent
@@ -38,6 +37,14 @@ Phase 3
 - [x] Browser walk: one screenshot per card with the PI signed in or the Chrome extension connected; not claimed if not done -- DONE 2026-09-15 evening, the PI signed in to the in-app browser himself; every card on the ranked list read as decision 174 states
 - **Status:** complete
 
+### Phase 4: The four leftovers of decision 174 (the PI's go-ahead 2026-09-15)
+- [x] Reliable-change fold sentence opens with a capital (Closed-Loop page, "How big a change..." card)
+- [x] Two stale comments in `Biomarkers/index.js` (lines 40, 202) describe a commit button decision 80 deleted
+- [x] The two dead "best-of-ten" headline builders in `analytics.py` deleted, with the one test that called them
+- [x] The server gate verdict string no longer counts a not-assessed condition as blocking (`stage_gate.py`) -- BOTH copies: `describe()` and the response's `gate.verdict`, the second found by the live proof
+- [x] Suites, rebuild where a Client file changes, decision-log entry, push
+- **Status:** complete
+
 ## Decisions Made
 | Decision | Reason |
 |----------|--------|
@@ -45,9 +52,13 @@ Phase 3
 | The PI calls the swarms himself | His instruction 2026-09-15; the briefs are written here so they can be pasted |
 | Referent, not wording, is the unit of review | Decision 172: a sentence compressed for length in isolation kept describing a retired table |
 | Fixture render tests are the deliverable, not a report | Decision 167 §5 named them; decisions 172-173 show why a report alone would not hold |
+| Phase 4: a sentence that reaches the response gets ONE home (`reliable_change.what_it_means`, `GateResult.headline`) | The live proof showed `describe()` fixed and `gate.verdict` still wrong: two copies of one sentence drift, decision 30's lesson |
+| Phase 4: item 2 removes the dead handler, not only the comments | A comment about a commit button cannot be made true while the page still passes a commit handler nothing reads |
 
 ## Errors Encountered
 | Error | Attempt | Resolution |
+| Phase 4: a JSX `{/* */}` comment placed inside `cond ? (` broke the build (`Unexpected token`, index.js:1080) | 1 | folded into the neighbouring JSX comment above the ternary |
+| Phase 4: `test_surface_serialization.py`'s hand-made `_FakeGate` had no `headline` after the property was added | 1 | the stub gained the field; the test's assertions unchanged |
 |-------|---------|------------|
 | Container suite 642/1 on the first run: the pin holding `_BAND_SWEEP_RULE_VERSION` still read v16 after the backend builder bumped to v17 | 1 | The pin moved to v17 (its purpose is to move with every deliberate bump); re-run PASS=643 FAIL=0 |
 | Item-3 fixture-state pin read `true` for the pre-fix fixture by design; the re-captured fixture made it fail | 1 | Flipped to `false` with the reason in its comment -- the intended visible change |

@@ -1035,9 +1035,7 @@ def _two_stage_payload(rep, *, inputs, seconds, in_force=None, clinic_block=None
                            "evidence": _two_stage_jsonable(dict(c.evidence or {}))})
     gate_block = {
         "passed": bool(gate.passed),
-        "verdict": ("Stage 2 MAY START: every condition passed" if gate.passed
-                    else "Stage 2 MUST NOT START: %d of %d conditions block"
-                    % (len(gate.refusals()), len(gate.conditions))),
+        "verdict": gate.headline,
         "n_conditions": len(gate.conditions),
         "conditions": conditions,
         "refusals": [{"condition": n, "reason": d} for n, d in gate.refusals()],

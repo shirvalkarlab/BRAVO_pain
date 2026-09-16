@@ -164,3 +164,24 @@ def test_farrar_fraction_check_applies_when_points_check_would_not():
     assert out["change"] == pytest.approx(-1.5)
     assert "meets the Farrar" in out["population_verdict"]
     assert "cannot be distinguished" in out["individual_verdict"]
+
+
+# ---------------------------------------------------------------------------------------------
+# The sentence the Closed-Loop page prints under "How big a change in this patient's own rating
+# means anything?" (decision 174 left it opening lowercase; the PI asked for it fixed 2026-09-15).
+# ---------------------------------------------------------------------------------------------
+def test_the_what_it_means_sentence_opens_with_a_capital_and_names_the_gap():
+    """The card prints it as a paragraph of its own, so it must read as one from its first word."""
+    s = RC.what_it_means()
+    assert s[0].isupper(), f"the sentence opens lowercase: {s[:40]!r}"
+    assert f"{RC.MAX_PAIR_GAP_HOURS:g} hour" in s, s
+    assert "A smaller change is not no change" in s, s
+
+
+def test_the_report_reads_the_sentence_from_the_module_rather_than_keeping_its_own_copy():
+    """Two copies of one sentence drift (decision 30's lesson, one store); the report calls the
+    module's function and carries no literal of its own."""
+    import pathlib
+    src = (pathlib.Path(RC.__file__).resolve().parent / "adapter.py").read_text()
+    assert "how large a pain change" not in src.lower(), "adapter.py still carries its own copy"
+    assert "_rc.what_it_means(" in src, "adapter.py does not call reliable_change.what_it_means"

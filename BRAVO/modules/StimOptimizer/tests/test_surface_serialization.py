@@ -141,6 +141,7 @@ def test_d_the_full_two_stage_payload_carries_both_new_fields(stage1_two_rates):
     class _FakeGate:
         conditions = []
         passed = False
+        headline = "Stage 2 MUST NOT START: 0 of 0 conditions block"   # GateResult.headline, 2026-09-15
 
         @staticmethod
         def refusals():

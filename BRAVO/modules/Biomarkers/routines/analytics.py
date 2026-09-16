@@ -5381,7 +5381,7 @@ def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
 # ten independent looks, but they are not one look either: the largest of them is larger than the
 # value that same length of signal would give on a fresh set of pain reports, and its ordinary
 # p-value is not the probability of what was actually done. This module therefore reports, beside
-# every best cell, the largest value the SAME best-of-ten selection produced when the pain scores
+# every best cell, the largest value the SAME best-of-lengths selection produced when the pain scores
 # were shuffled -- so a reader compares the observed best against the distribution of bests under
 # no relationship rather than against the distribution of a single value.
 
@@ -5616,7 +5616,7 @@ def rank_auc_columns(X, y_binary):
     THE CONSEQUENCE FOR READING THE PANEL. The folded number cannot fall below 0.5 wherever the two
     directions agree, so 0.5 is close to a floor for it rather than a neutral middle, and a band
     carrying nothing lands a little above 0.5 rather than on it. That is why the level a folded
-    value has to beat is the shuffled best-of-ten reference in the table, not 0.5. The grid the page
+    value has to beat is the shuffled best-of-lengths reference in the table, not 0.5. The grid the page
     draws is this UNFOLDED value, which does straddle 0.5 in both directions and for which 0.5 is
     the genuine no-discrimination point.
 
@@ -6116,8 +6116,8 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         low_cut=low_cut, high_cut=high_cut)
 
     # DECISION 63: a second, independent correction across the grid's own 22 band centres, on top
-    # of (never instead of) each row's existing best-of-ten-lengths answer. `p_selection_aware`
-    # already corrects for picking the best of ten lengths at one centre; feeding those 22
+    # of (never instead of) each row's existing best-of-lengths answer. `p_selection_aware`
+    # already corrects for picking the best of the lengths tried at one centre; feeding those 22
     # per-centre p-values into the SAME Benjamini-Hochberg function the older full-spectrum routine
     # already uses (`stats_utils.bh_fdr`) corrects for having tested 22 centres at once too. The
     # family is exactly this grid's own 22 points, restricted to 8-30 Hz by the device's own limits
@@ -6230,7 +6230,7 @@ def _best_of_windows_null_correlation(X, pain, *, n_perm, rng):
 
     THIS IS THE COMPARISON THE PANEL'S BEST CELL HAS TO BE READ AGAINST. The reported best cell in a
     band's row was chosen after seeing ten values, so comparing it against the distribution of a
-    single correlation overstates how unusual it is. Here the same best-of-ten choice is made on
+    single correlation overstates how unusual it is. Here the same best-of-lengths choice is made on
     each shuffle, so the observed best is compared against a distribution of bests.
 
     The shuffling is a circular block permutation of the pain scores, the same null the rest of this
@@ -6380,7 +6380,7 @@ def _best_of_windows_null_auc(X, y_binary, *, n_perm, rng):
 
 
 #: The sentence that goes in the panel itself, not only in a caption. The PI's requirement: a reader
-#: must not be able to see the best cell without being told that it was chosen as the best of ten.
+#: must not be able to see the best cell without being told that it was chosen as the best of the lengths tried.
 #: Condensed for open item 7's display cleanup (decision, 2026-09-09) -- same claim, fewer words.
 #: Reworded 2026-09-15 for the heat map (the PI: "Every row's value is the largest ... doesn't make
 #: sense"): the old sentence described the retired table, one row per band; on the heat map a row is
@@ -6893,7 +6893,7 @@ def band_time_sweep_tables(sweep):
 
     Returns ``(correlation_table, auc_table, grid_table)``. The first two are one row per band
     centre -- the two matrices the PI asked for -- each carrying the best value, the length of
-    signal that produced it, the count behind it, the interval, and the shuffled best-of-ten
+    signal that produced it, the count behind it, the interval, and the shuffled best-of-lengths
     reference. The third is one row per cell of the whole grid, because the shape of the surface is
     what the panel is for and a reader who wants to check a sliders' worth of the surface needs the
     cells and not only the winners.
@@ -6952,64 +6952,12 @@ def band_time_sweep_tables(sweep):
     return corr, auc, pd.DataFrame(grid_rows)
 
 
-def _sweep_headline_correlation(sweep):
-    """The correlation figure's headline, computed from the numbers in the same pass that draws it.
-
-    Never asserted. It names the band and the length of signal that came out strongest, states the
-    value, and says in the same breath whether that value clears the level the same best-of-ten
-    choice reaches on shuffled pain scores -- which is the only way the number can be read.
-    """
-    rows = [r for r in (sweep.get("best_correlation_rows") or [])
-            if r.get("pearson_r") is not None]
-    if not rows:
-        return ("No band centre produced a usable correlation with this pain score at any length "
-                "of signal")
-    top = max(rows, key=lambda r: abs(float(r["pearson_r"])))
-    r = float(top["pearson_r"])
-    fc = float(top["band_center_hz"])
-    s = float(top["integration_seconds_delivered"])
-    n = int(top.get("n_pain_reports") or 0)
-    p95 = top.get("shuffled_best_of_windows_p95")
-    lead = (f"Strongest tracking is {r:+.2f} at {fc:g} Hz when one measurement averages {s:g} s of "
-            f"recording, on {n} pain reports")
-    if p95 is None:
-        return lead + "; no shuffled reference could be built, so it cannot yet be read"
-    if abs(r) > float(p95):
-        return (lead + f"; that exceeds the {float(p95):.2f} the same best-of-ten choice reaches on "
-                f"19 of 20 shuffles")
-    return (lead + f"; the same best-of-ten choice reaches {float(p95):.2f} on shuffled pain "
-            f"scores, so this is NOT above chance")
-
-
-def _sweep_headline_auc(sweep):
-    """The classification figure's headline, computed from the numbers, and referenced to 0.5.
-
-    An interval that spans 0.5 is reported as unsettled in the headline itself, so a reader who only
-    ever sees the headline cannot take it for a negative result.
-    """
-    rows = [r for r in (sweep.get("best_auc_rows") or []) if r.get("auc") is not None]
-    if not rows:
-        return ("No band centre produced a usable value for telling high-pain reports from low-pain "
-                "ones at any length of signal")
-    top = max(rows, key=lambda r: abs(float(r["auc"]) - AUC_NO_DISCRIMINATION))
-    a = float(top["auc"])
-    fc = float(top["band_center_hz"])
-    s = float(top["integration_seconds_delivered"])
-    est = sum(1 for r in rows if r.get("answer") == BAND_PAIN_ESTABLISHED)
-    unres = sum(1 for r in rows if r.get("answer") == BAND_PAIN_NOT_RESOLVED)
-    lead = (f"Furthest from 0.5 is {a:.2f} at {fc:g} Hz when one measurement averages {s:g} s of "
-            f"recording")
-    p95 = top.get("shuffled_best_of_windows_p95")
-    if p95 is not None:
-        lead += (f", against {float(p95):.2f} for the same best-of-ten choice on shuffled pain "
-                 f"scores")
-    if est:
-        return (lead + f"; {est} of {len(rows)} band centres have an interval that stays off 0.5 "
-                f"and {unres} do not settle the question")
-    return (lead + f"; every one of the {len(rows)} band centres has an interval that includes 0.5, "
-            f"so none of them settles the question either way")
-
-
+# `_sweep_headline_correlation` and `_sweep_headline_auc` stood here until 2026-09-15: one-line
+# headlines for the two server-rendered heat-map figures. Nothing drew those figures after decision
+# 145 (the page draws its own heat maps from the grids), so nothing but a test called either
+# builder, and after decision 170 cut the sweep to nine lengths the sentences they built called the
+# choice "best-of-ten". Deleted on the PI's instruction (decision 174's leftover);
+# `tests/test_no_dead_sweep_headline_builders.py` keeps them gone.
 # `band_time_sweep_figures` stood here until 2026-09-12: it built Plotly heat-map descriptions of
 # the two grids into every sweep response, which the store then kept, and nothing drew them -- the
 # page draws its own heat maps from the grids (BiomarkerHeatmapGrids.js), and the only reader,

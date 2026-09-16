@@ -324,9 +324,9 @@ def test_settings_are_echoed_so_a_reader_can_check_them():
 def test_interval_spanning_one_half_reads_as_unsettled_and_never_as_negative():
     """A band whose interval includes 0.5 must be reported as an UNSETTLED question.
 
-    Three surfaces have to agree about it and none of them may read as a negative result: the
-    three-word answer, the sentence, and the figure headline. The words that would make it read
-    negative are named here explicitly so that a future rewording cannot reintroduce them.
+    Two surfaces have to agree about it and neither may read as a negative result: the
+    three-word answer and the sentence. The words that would make it read negative are named here
+    explicitly so that a future rewording cannot reintroduce them.
     """
     power, pain, centers = _pure_noise_grid(seed=21, n_reports=40)
     sw = A.band_time_sweep_from_power(power, pain, center_freqs_hz=centers, n_perm=300, n_boot=400)
@@ -353,13 +353,10 @@ def test_interval_spanning_one_half_reads_as_unsettled_and_never_as_negative():
     words = {r["answer"] for r in sw["best_auc_rows"]}
     assert words <= {A.BAND_PAIN_ESTABLISHED, A.BAND_PAIN_NOT_RESOLVED, A.BAND_PAIN_NOT_ASSESSED}
     assert True not in words and False not in words and None not in words
-    # And the headline, which is the one line a reader might see on its own.
-    head = A._sweep_headline_auc(sw).lower()
-    assert "0.5" in head
-    assert "does not separate" not in head and "no discrimination" not in head
+    # (The figure headline this test also checked until 2026-09-15 is gone with its builder: no
+    # page drew the server-rendered figure it headed after decision 145.)
     print(f"OK {len(spanning)} of {len(sw['best_auc_rows'])} band centres have an interval spanning "
-          f"0.5; every one is reported as an unsettled question, in the word, the sentence and the "
-          f"headline")
+          f"0.5; every one is reported as an unsettled question, in the word and the sentence")
 
 
 def test_not_assessed_is_a_different_state_from_not_settled():

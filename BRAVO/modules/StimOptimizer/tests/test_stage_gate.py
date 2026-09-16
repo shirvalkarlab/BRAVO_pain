@@ -455,3 +455,52 @@ def test_defaulted_limits_under_the_ceiling_still_pass_and_carry_an_empty_histor
     c = g.condition("amplitude_limits_inside_envelope_and_under_ceiling")
     assert c.passed is True
     assert c.evidence["history_above_ceiling"] == {}
+
+
+# ---------------------------------------------------------------------------------------------
+# The verdict string's count (decision 174 found it calling a not-assessed condition "blocking";
+# the PI asked for the wording fixed 2026-09-15). The page's own card already reads
+# "1 of 4 checks block, 1 not assessed"; the server's sentence now says the same two things.
+# ---------------------------------------------------------------------------------------------
+def _four(b, c):
+    return GATE.GateResult(conditions=[
+        GATE.GateCondition("a", True, "ok"),
+        GATE.GateCondition("b", b, "b's detail"),
+        GATE.GateCondition("c", c, "c's detail"),
+        GATE.GateCondition("d", True, "ok")])
+
+
+def test_describe_counts_a_not_assessed_condition_separately_from_a_failed_one():
+    head = _four(False, None).describe().splitlines()[0]
+    assert "MUST NOT START" in head
+    assert "1 of 4 conditions block, 1 not assessed" in head, head
+    assert "2 of 4" not in head, head
+
+
+def test_describe_omits_the_not_assessed_clause_when_every_condition_was_assessed():
+    head = _four(False, False).describe().splitlines()[0]
+    assert "2 of 4 conditions block" in head, head
+    assert "not assessed" not in head, head
+
+
+def test_describe_still_refuses_when_the_only_shortfall_is_a_condition_not_assessed():
+    """Decision 9: absence of evidence is not permission. The count changes; the refusal does not."""
+    g = _four(True, None)
+    assert g.passed is False
+    head = g.describe().splitlines()[0]
+    assert "MUST NOT START" in head
+    assert "0 of 4 conditions block, 1 not assessed" in head, head
+
+
+def test_the_verdict_sentence_has_one_home_that_describe_and_the_response_both_read():
+    """`bravo_service.two_stage_block` used to build its own copy of the count (`gate.verdict` on
+    the response) beside `describe()`'s; the live proof of 2026-09-15 showed one fixed and the other
+    still reading "2 of 4 conditions block". Both now read `GateResult.headline`."""
+    import pathlib
+    g = _four(False, None)
+    assert g.headline == "Stage 2 MUST NOT START: 1 of 4 conditions block, 1 not assessed", g.headline
+    assert _four(True, True).headline == "Stage 2 MAY START: every condition passed"
+    assert g.describe().splitlines()[0] == "GATE: " + g.headline.replace(": ", " — ", 1)
+    src = (pathlib.Path(GATE.__file__).resolve().parents[1] / "bravo_service.py").read_text()
+    assert "conditions block" not in src, "bravo_service.py still builds its own copy of the count"
+    assert "gate.headline" in src, "bravo_service.py does not read GateResult.headline"

@@ -78,6 +78,20 @@ SAME_MINUTE_SECONDS = 60.0
 MIN_PAIRS = 5
 
 
+def what_it_means(max_gap_hours=None):
+    """The sentence the Closed-Loop page prints under the reliable-change threshold.
+
+    One home for it, called by the report (`adapter.report_for_participant`), because a copy kept in
+    the report drifted from the estimator once already: it opened lowercase until 2026-09-15.
+    """
+    gap = MAX_PAIR_GAP_HOURS if max_gap_hours is None else float(max_gap_hours)
+    return ("How large a pain change has to be, for this participant, before it can be told from "
+            "their own short-gap noise: the difference between two ratings of the same score filed "
+            f"within {gap:g} hour(s) of each other with every stimulation setting unchanged. Two "
+            "entries within the same minute count once. Reported alongside the population "
+            "benchmark, never in place of it. A smaller change is not no change.")
+
+
 def _f(v):
     try:
         x = float(v)

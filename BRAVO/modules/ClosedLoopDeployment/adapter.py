@@ -3202,13 +3202,7 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                                "source": "Farrar et al. 2001, a group-derived benchmark"},
             "max_gap_hours": _rc.MAX_PAIR_GAP_HOURS,
             "items_order": list(_PRO_ITEMS),
-            "what_it_means": (
-                "how large a pain change has to be, for this participant, before it can be told "
-                "from their own short-gap noise: the difference between two ratings of the same "
-                f"score filed within {_rc.MAX_PAIR_GAP_HOURS:g} hour(s) of each other with every "
-                "stimulation setting unchanged. Two entries within the same minute count once. "
-                "Reported alongside the population benchmark, never in place of it. A smaller "
-                "change is not no change."),
+            "what_it_means": _rc.what_it_means(),
             "note": (None if _rc_assessed else
                      "not assessed for any pain score yet: this participant has too few pairs of "
                      f"ratings filed within {_rc.MAX_PAIR_GAP_HOURS:g} hour(s) of each other under "

@@ -172,3 +172,24 @@ describe("Biomarkers/BiomarkerAnalytics.js source text", () => {
     expect(SRC("BiomarkerAnalytics.js")).not.toMatch(/\bchPanels\b/);
   });
 });
+
+describe("the committed band on this page (decision 80 deleted the commit button)", () => {
+  // Decision 174 found two comments in `index.js` (lines 40 and 202 that day) describing "the commit
+  // button inside BiomarkerAnalytics" as the writer of the committed band. That button went with the
+  // `ValidationReadout` cluster in decision 80; a band is committed on the Closed-Loop Deployment
+  // page's "Choose a band" card (decision 122) and read here from localStorage. `BiomarkerAnalytics`
+  // reads two props (`analytics`, `metricLabel`); the `onBandCommitted` handler this page passed it
+  // was reached by nothing. The PI asked for the comments fixed on 2026-09-15.
+  const read = (f) => fs.readFileSync(path.join(__dirname, f), "utf8");
+
+  it("index.js no longer says a commit button inside BiomarkerAnalytics writes the band", () => {
+    const idx = read("index.js");
+    expect(idx).not.toMatch(/commit button (inside|in) BiomarkerAnalytics/);
+    expect(idx).toMatch(/Choose a band/);
+  });
+
+  it("index.js no longer passes BiomarkerAnalytics a commit handler nothing reads", () => {
+    expect(read("index.js")).not.toMatch(/onBandCommitted/);
+    expect(read("BiomarkerAnalytics.js")).not.toMatch(/onBandCommitted|commitBandCandidate/);
+  });
+});

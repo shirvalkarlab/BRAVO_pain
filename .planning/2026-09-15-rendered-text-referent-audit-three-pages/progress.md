@@ -102,3 +102,14 @@
   read before deciding; the three fingerprints added to `.gitleaksignore` with the reason (372fbfff). CLAUDE.md §1 and
   §7 corrected to say the three CI jobs exist and what they leave out (22288091). All six checks green on the head;
   merged as a2dd109a with the branch kept, as #9-#11 were. Open item 29's gap reopens with the next commit here.
+- Phase 4 (2026-09-15, late). The PI: "do items 1-4 now, tests first". Ten tests written and watched RED (6 pytest
+  in the container, 2 jest; a control in `test_stage_gate.py` green by design), then: `reliable_change.what_it_means()`
+  (capital, one home, adapter calls it); `index.js` comments corrected and the dead `onBandCommitted` handler + nine
+  unread props + `markClosedLoopFamilyStale` import removed; `_sweep_headline_*` deleted (58 lines) with the three
+  test lines that called one, seven "best-of-ten" comments -> "best-of-lengths"; `GateResult.headline` read by
+  `describe()`. Live proof p4_before (backend stashed) / p4_after: SO 22,534/22,534, 5 diff (3 timing + the two
+  describe strings) -- and `gate.verdict` UNCHANGED, a second copy in `bravo_service.two_stage_block`; fixed with a
+  further RED test (one home), re-captured: 6 diff, all the count sentence. CL 48,092/48,092, 1 diff
+  (`what_it_means`). BM 25,660 -> 25,655, 4 diff + 5 only-before, all background-launch bookkeeping. Suites: host 1297
+  / 2 / 0 (a `_FakeGate` stub needed the field), container 645 / 0; jest Reports 68 / 2 (known pair). Build
+  main.308939e8, same three index.js warnings shifted two lines. Workers HUP'd, four fresh. Decision 176.

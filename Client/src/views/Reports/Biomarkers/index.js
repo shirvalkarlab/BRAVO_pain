@@ -37,7 +37,9 @@ import { saveControls, loadControls } from "./biomarkerStateStore";
 import ConversionModelPanel from "views/Reports/ClosedLoopSim/ConversionModelPanel";
 import PsdLsbPanel from "views/Reports/ClosedLoopSim/PsdLsbPanel";
 // The committed band candidate is the only source on this page of the channel and centre frequency
-// PsdLsbPanel needs. It is written to localStorage by the commit button inside BiomarkerAnalytics.
+// PsdLsbPanel needs. It is written to localStorage by the Closed-Loop Deployment page's "Choose a
+// band" card (decision 122) and only READ here. (Until decision 80 this page had its own commit
+// button, inside BiomarkerAnalytics; it is gone.)
 import { loadBandCandidate } from "views/Reports/ClosedLoopSim/bandCandidateStore";
 // Semantic colour roles, defined once in the deployment module and imported so the two pages agree.
 import PAL from "views/Reports/ClosedLoopSim/palette";
@@ -51,7 +53,7 @@ import { usePlatformContext, setContextState } from "context.js";
 
 import RecomputeBar from "views/Reports/RecomputeBar";
 import CacheStatusLine from "views/Reports/CacheStatusLine";
-import { markClosedLoopFamilyStale, recomputeSlots, biomarkerHeatmapSlot } from "views/Reports/moduleCacheKeys";
+import { recomputeSlots, biomarkerHeatmapSlot } from "views/Reports/moduleCacheKeys";
 
 // Pain metric the LFP biomarker is computed against (sent as LabelMetric). Used until the server
 // echoes its own `available_metrics` list. The composite blends MPQ sum + left-leg VAS.
@@ -198,12 +200,12 @@ function Biomarkers() {
   const [availData, setAvailData] = useState(null);
   const [availLoading, setAvailLoading] = useState(false);
 
-  // The band candidate committed for THIS participant, if any. It is the envelope the commit button
-  // in BiomarkerAnalytics writes to localStorage, and it carries the contact, centre frequency and
-  // bandwidth that the relocated PsdLsbPanel needs in order to fit a conversion for the band on
-  // screen. It is read here rather than inside the panel because localStorage is not observable
-  // from React: the value is re-read on a participant change and again whenever a commit happens
-  // (see onBandCommitted below), so committing a band updates the panel without a page reload.
+  // The band candidate committed for THIS participant, if any: the envelope the Closed-Loop
+  // Deployment page's "Choose a band" card writes to localStorage, carrying the contact, centre
+  // frequency and bandwidth that the relocated PsdLsbPanel needs in order to fit a conversion for
+  // the band on screen. It is read here rather than inside the panel because localStorage is not
+  // observable from React; the value is re-read on a participant change. Nothing on THIS page
+  // commits a band any more (decision 80), so there is no commit handler to re-read it after.
   const [committedBand, setCommittedBand] = useState(null);
   useEffect(() => {
     const env = loadBandCandidate(participant_uid);
@@ -1054,9 +1056,9 @@ function Biomarkers() {
                   // Take the reader to the grid on the page that can act on it. Nothing is
                   // exported and nothing is marked out of date here: browsing changes no stored
                   // value, and Closed-Loop Deployment reads the calibrated grid straight out of
-                  // the shared store on its own (decision 67). Marking the deployment results
-                  // stale is reserved for actually COMMITTING a band, which the older routine's
-                  // own `onBandCommitted` below still does.
+                  // the shared store on its own (decision 67). Committing a band happens on that
+                  // page's "Choose a band" card, which is what marks the deployment results
+                  // out of date.
                   //
                   // The `#cl-grid` fragment names the anchor that page already puts on the grid
                   // panel's own Grid item, so the reader lands on the grid rather than at the top
@@ -1070,27 +1072,12 @@ function Biomarkers() {
                 these two calculations must stay separate rather than folded together (different
                 scale, different frequency coverage, different correction method), so this section
                 keeps its own uncalibrated scatter-and-violin drill-down rather than sharing the
-                calibrated grid's per-cell one above. */}
+                calibrated grid's per-cell one above.
+                BiomarkerAnalytics reads two props, `analytics` and `metricLabel` (decision 80 took
+                the rest with the commit cluster); the nine others this page passed until 2026-09-15,
+                including a commit handler nothing called, are gone. */}
             {data && data.analytics ? (
-              <BiomarkerAnalytics analytics={data.analytics} summary={data.summary}
-                recordedPowers={data.recorded_powers}
-                programmedThresholds={data.programmed_thresholds}
-                binStrategy={strategy} binMetricKey={metric}
-                binPercentileLow={percentileLow} binPercentileHigh={percentileHigh}
-                participantUid={participant_uid}
-                requestParams={requestParams}
-                onBandCommitted={(bc) => {
-                  setCommittedBand(bc || null);
-                  // A committed band is WHAT THE DEPLOYMENT VIEW IS ABOUT, so committing a
-                  // different one puts every deployment answer behind — not wrong about the band it
-                  // was computed for, but no longer about the band that has been chosen. The
-                  // deployment results are marked rather than discarded, so a reader can still see
-                  // what the previous candidate looked like while that page's Recompute control
-                  // tells them it is out of date.
-                  markClosedLoopFamilyStale(participant_uid,
-                    "a new band candidate was committed on the Biomarker Exploration page since "
-                    + "this result was computed");
-                }}
+              <BiomarkerAnalytics analytics={data.analytics}
                 metricLabel={(((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
                   .find((m) => m.key === data.label_metric) || {}).label || data.label_metric} />
             ) : null}
