@@ -144,14 +144,15 @@ def _bilateral(left_val, right_val) -> str:
 
 
 def _bilateral_str(left_val, right_val) -> str:
-    """The same "L x / R y" convention for a string value (e.g. contacts) rather than a number."""
+    """The same "L x / R y" convention for a string value -- the contacts cell, as the lab's own
+    2026-09-16 visit sheet writes it: "L C+2- / R C+1-2-"."""
     l = left_val if left_val else "?"
     r = right_val if right_val else "?"
     return f"L {l} / R {r}"
 
 
 def _strip_side_prefix(s):
-    """"L 2⁻" -> "2⁻"; anything without a leading "L "/"R " is returned unchanged."""
+    """"L C+2-" -> "C+2-"; anything without a leading "L "/"R " is returned unchanged."""
     if not s:
         return s
     s = str(s)

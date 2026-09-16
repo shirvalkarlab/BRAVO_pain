@@ -120,6 +120,8 @@ def fill_workbook(template_path, sheet_rows, sheet_columns, visit_date, out_path
     ws["B1"] = _dt.datetime(d.year, d.month, d.day)
     ws["B1"].number_format = "mm/dd/yy"
 
+    from openpyxl.styles import Alignment
+    centred = Alignment(horizontal="center")           # the PI's rule of 2026-09-16, written rows only
     row = data_start_row
     for r in sheet_rows:
         for i, col in enumerate(sheet_columns, start=1):
@@ -127,7 +129,9 @@ def fill_workbook(template_path, sheet_rows, sheet_columns, visit_date, out_path
             # value is not None), so a `None` row value would silently leave whatever the
             # template's own cell already held -- e.g. row 12 column L's stray "Detailed pain
             # survey" label. Assigning `.value` directly always overwrites, `None` included.
-            ws.cell(row=row, column=i).value = r.get(col)
+            cell = ws.cell(row=row, column=i)
+            cell.value = r.get(col)
+            cell.alignment = centred
         row += 1
     wb.save(out_path)
 
@@ -176,6 +180,9 @@ def export(plan, participant_code, visit_date, *, drive=None, template_path=None
         drive.clear_values(file_id, rng)
         values = values_for_sheets_api(sheet_rows, sheet_columns)
         drive.update_values(file_id, f"'{SHEET_TAB}'!A{DATA_START_ROW}", values)
+        # The PI's rule of 2026-09-16: the rows this export enters are centred in every column;
+        # nothing above them (the header, the date, the template's own rows) is touched.
+        drive.center_cells(file_id, SHEET_TAB, DATA_START_ROW, len(values), len(sheet_columns))
         d = _parse_date(visit_date)
         drive.update_values(file_id, f"'{SHEET_TAB}'!B1", [[d.strftime("%m/%d/%Y")]])
 

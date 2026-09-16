@@ -48,13 +48,15 @@ import { TYPE, HEAD, SMALL, MONO, NOWRAP, SizedFold as Fold } from "./typeScale"
  * download itself is a raw file with no JSON body to carry the server's own copy in, so this page
  * shows its own. If one changes, change the other. */
 const SHEET_EXPORT_SETUP_NOTE =
-  "To let this server write directly to Google Sheets: (1) create a Google Cloud service " +
-  "account and download its JSON key file; (2) put that file on this server at " +
-  "secrets/google_service_account.json (or point the GOOGLE_SERVICE_ACCOUNT_FILE environment " +
-  "variable at it); (3) in Google Drive, share BOTH the \"Clinic Testing\" folder and the " +
-  "template workbook with the service account's own e-mail address, giving it Editor access; " +
-  "(4) restart the server's worker processes. Until then, this button downloads a filled " +
-  ".xlsx file instead.";
+  "To let this server write directly to Google Sheets, sign it in as yourself: (1) in Google " +
+  "Cloud, create an OAuth client (Desktop app) and put its JSON at " +
+  "secrets/google_oauth_client.json; (2) on a machine with a browser, run " +
+  "google_oauth_consent.py once and click Allow -- it writes secrets/google_oauth_token.json " +
+  "(or point GOOGLE_OAUTH_TOKEN_FILE at it); (3) restart the server's worker processes. A " +
+  "service-account key at secrets/google_service_account.json is used only when no user token " +
+  "exists, and cannot CREATE sheets in a My Drive folder: a service account owns what it " +
+  "creates and has no Drive storage, so the copy is refused for quota. Until one of these is " +
+  "in place, this button downloads a filled .xlsx file instead.";
 
 /** Pulls a `filename="..."` out of a `Content-Disposition` response header; falls back to a
  * generic name rather than failing the download outright. */

@@ -127,3 +127,8 @@
   both fixed with tests. After: L 0-2+ 196.13/190.89 -> 186.12/176.12 (median 181.12, +-5), L 1-3+ 210.58/161.90 ->
   242.27/192.27 (median 217.27, +-25); verdicts and ledgers 0 diff. Host 1314/2/0, container 645/0. Decision 180.
   The Google service-account key is blocked by org policy (iam.disableServiceAccountKeyCreation); OAuth-user route proposed.
+- Google Sheets (2026-09-16 evening): service-account key made (org policy lifted) but cannot create in My Drive
+  (quota); Internal audience refused Gmail; audience made External + published; consent completed through his Chrome;
+  user token preferred by `google_sheets_client`. Apps Script fallback built then removed. Notation `L C+2- / R C+1-2-`
+  read off the 09_16_26 sheet; written rows centred. Live export 12_30_26 read back. Host 1322/2/0, container 645/0.
+  Build clean. Decision 181.

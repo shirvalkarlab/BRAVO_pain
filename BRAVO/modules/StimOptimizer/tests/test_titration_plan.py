@@ -431,8 +431,8 @@ def _sides_for_sheet():
 
 def test_build_sheet_rows_has_two_rows_per_step_and_the_bilateral_contacts_and_amps():
     sides = _sides_for_sheet()
-    in_force = {"Left": {"contacts_short": "L 2⁻", "pulse_width_us": 100.0},
-               "Right": {"contacts_short": "R 1⁻", "pulse_width_us": 150.0}}
+    in_force = {"Left": {"contacts_short": "L C+2-", "pulse_width_us": 100.0},
+               "Right": {"contacts_short": "R C+1-", "pulse_width_us": 150.0}}
     timing = TP.step_timing()
     jc = TP.joint_corners(4.5, 4.5)
     rows = TP.build_sheet_rows(sides, jc, in_force=in_force, timing=timing)
@@ -449,7 +449,7 @@ def test_build_sheet_rows_has_two_rows_per_step_and_the_bilateral_contacts_and_a
     # the ramp row carries Contacts/Amp/Rate/PW and the ramp duration; the test row carries only
     # the test duration (the PI's ruling, 2026-09-14)
     r0 = ramp_rows[0]
-    assert r0["Contacts"] == "L 2⁻ / R 1⁻"
+    assert r0["Contacts"] == "L C+2- / R C+1-"   # as the lab's 2026-09-16 visit sheet writes it
     assert r0["Amp (mA)"].startswith("L ") and " / R " in r0["Amp (mA)"]
     assert r0["Rate (Hz)"] == 55.0
     assert r0["PW (µs)"] == "L 100 / R 150"
@@ -468,8 +468,8 @@ def test_build_sheet_rows_has_two_rows_per_step_and_the_bilateral_contacts_and_a
 
 def test_the_left_ladder_varies_left_and_holds_right_at_its_own_current():
     sides = _sides_for_sheet()
-    in_force = {"Left": {"contacts_short": "L 2⁻", "pulse_width_us": 100.0},
-               "Right": {"contacts_short": "R 1⁻", "pulse_width_us": 150.0}}
+    in_force = {"Left": {"contacts_short": "L C+2-", "pulse_width_us": 100.0},
+               "Right": {"contacts_short": "R C+1-", "pulse_width_us": 150.0}}
     timing = TP.step_timing()
     rows = TP.build_sheet_rows(sides, {"points": []}, in_force=in_force, timing=timing)
     left_ramp = [r for r in rows if r["block"] == "left_ladder" and r["row_kind"] == "ramp"]

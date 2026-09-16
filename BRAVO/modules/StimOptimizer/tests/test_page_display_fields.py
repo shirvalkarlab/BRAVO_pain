@@ -41,9 +41,9 @@ def test_each_side_reports_its_own_pulse_width_and_contacts_from_the_newest_epoc
     assert out["Left"]["amplitude_mA"] == 3.0 and out["Right"]["amplitude_mA"] == 2.5
     assert out["Left"]["rate_hz"] == 55.0 and out["Right"]["rate_hz"] == 55.0
     assert out["Left"]["contacts_raw"] == "2a-2b-2c"
-    assert out["Left"]["contacts_short"] == "L 2⁻"
+    assert out["Left"]["contacts_short"] == "L C+2-"
     assert out["Right"]["contacts_raw"] == "1a-1b-1c-2a-2b-2c"
-    assert out["Right"]["contacts_short"] == "R 1⁻2⁻"
+    assert out["Right"]["contacts_short"] == "R C+1-2-"
     assert out["Left"]["epoch"] == 123.0 and out["Right"]["epoch"] == 123.0
 
 
@@ -61,10 +61,10 @@ def test_no_epochs_means_an_empty_block():
 
 
 @pytest.mark.parametrize("cathode,side,expected", [
-    ("2a-2b-2c", "Left", "L 2⁻"),
-    ("1a-1b-1c-2a-2b-2c", "Right", "R 1⁻2⁻"),
-    ("1a-1b", "Left", "L 1a⁻1b⁻"),           # a partly used ring keeps its segments
-    ("0", "Right", "R 0⁻"),                   # a non-segmented contact
+    ("2a-2b-2c", "Left", "L C+2-"),
+    ("1a-1b-1c-2a-2b-2c", "Right", "R C+1-2-"),
+    ("1a-1b", "Left", "L C+1a-1b-"),        # a partly used ring keeps its segments
+    ("0", "Right", "R C+0-"),                   # a non-segmented contact
     ("none", "Left", None),
     ("", "Left", None),
     (None, "Left", None),
@@ -148,3 +148,13 @@ def test_the_limits_check_names_the_defaulted_sides_in_its_evidence():
     assert c.evidence["defaulted"] == ["Left"]
     c2 = GATE.check_amplitude_limits(_frozen(), amp_limits={"Left": (1.0, 4.0)})
     assert c2.evidence["defaulted"] == []
+
+
+def test_the_notation_is_the_clinic_sheets_own_case_positive_then_cathodes_with_a_hyphen():
+    """Read off the lab's 2026-09-16 visit sheet ("L C+2- / R C+1-2-"): the case (C) is the
+    anode, each cathode contact carries a plain hyphen, no space after "C+", never a superscript.
+    Monopolar on the left, double monopolar on the right."""
+    from StimOptimizer import bravo_service as BS
+    assert BS.stim_contacts_short("2a-2b-2c", "Left") == "L C+2-"
+    assert BS.stim_contacts_short("1a-1b-1c-2a-2b-2c", "Right") == "R C+1-2-"
+    assert "\u207b" not in BS.stim_contacts_short("2a-2b-2c", "Left")

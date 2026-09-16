@@ -615,10 +615,18 @@ def sensing_display(channel) -> dict:
         return {"display_short": None, "display_hemisphere": None, "display_contacts": None}
 
 
+#: The cathode mark: a plain hyphen, exactly as the lab's own clinic sheets type it (read off the
+#: 2026-09-16 visit sheet, "L C+2- / R C+1-2-") -- never the superscript "⁻" this project used
+#: until that day (the PI: a typo, "all along").
+MINUS = "-"
+
+
 def stim_contacts_short(cathode, hemisphere) -> str | None:
-    """The programmed cathode contacts in the page's Medtronic form: "L 2⁻" for "2a-2b-2c" on the
-    Left, "R 1⁻2⁻" for "1a-1b-1c-2a-2b-2c" on the Right, "L 1a⁻1b⁻" when a ring is only partly
-    used. None when nothing is recorded ("none", empty, NaN)."""
+    """The programmed cathode contacts in the lab's and Medtronic's own form, read off the
+    2026-09-16 visit sheet: "L C+2-" for "2a-2b-2c" on the Left (monopolar: the case C is the
+    anode, contact 2 the cathode), "R C+1-2-" for "1a-1b-1c-2a-2b-2c" on the Right (double
+    monopolar), "L C+1a-1b-" when a ring is only partly used. None when nothing is recorded
+    ("none", empty, NaN)."""
     if cathode is None:
         return None
     raw = str(cathode).strip()
@@ -635,10 +643,10 @@ def stim_contacts_short(cathode, hemisphere) -> str | None:
     for digit in sorted(by_ring, key=lambda d: (d == "", d)):
         letters = by_ring[digit]
         if letters == {"a", "b", "c"} or letters == {""}:
-            parts.append(f"{digit}⁻")
+            parts.append(f"{digit}{MINUS}")
         else:
-            parts.extend(f"{digit}{l}⁻" for l in sorted(letters))
-    return f"{side} {''.join(parts)}".strip()
+            parts.extend(f"{digit}{l}{MINUS}" for l in sorted(letters))
+    return f"{side} C+{''.join(parts)}".strip()
 
 
 def in_force_by_side(es, epochs=None) -> dict:

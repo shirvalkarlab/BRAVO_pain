@@ -48,8 +48,8 @@ def _real_sheet_rows():
                          held_other_side_source="the Left side",
                          **_side(rate_in_force_hz=55.0, pulse_width_us=150.0))
     sides = {"Left": left, "Right": right}
-    in_force = {"Left": {"contacts_short": "L 2⁻", "pulse_width_us": 100.0},
-               "Right": {"contacts_short": "R 1⁻", "pulse_width_us": 150.0}}
+    in_force = {"Left": {"contacts_short": "L C+2-", "pulse_width_us": 100.0},
+               "Right": {"contacts_short": "R C+1-", "pulse_width_us": 150.0}}
     timing = TP.step_timing()
     jc = TP.joint_corners(1.5, 1.5)
     rows = TP.build_sheet_rows(sides, jc, in_force=in_force, timing=timing)
@@ -192,6 +192,9 @@ class _FakeDrive:
         self.calls.append(("find_file_in_folder", folder_id, name))
         return self.existing_by_name.get(name)
 
+    def center_cells(self, file_id, sheet_tab, first_row, n_rows, n_cols):
+        self.calls.append(("center_cells", file_id, sheet_tab, first_row, n_rows, n_cols))
+
     def copy_file(self, source_id, folder_id, name):
         self.calls.append(("copy_file", source_id, folder_id, name))
         self._next_id += 1
@@ -280,3 +283,36 @@ def test_export_with_no_sheet_rows_is_reported_as_an_error_not_an_exception():
                        "RCS08", "2026-09-16", drive=_FakeDrive())
     assert result["mode"] == "error"
     assert "no clinic-sheet rows" in result["reason"]
+
+
+# --- the PI's formatting rule of 2026-09-16: the rows the export enters are centred; the rest untouched
+def test_the_drive_export_centres_only_the_rows_it_wrote(monkeypatch):
+    from StimOptimizer import sheet_export as SE
+    calls = []
+
+    class _Drive:
+        def find_file_in_folder(self, folder, name): return None
+        def copy_file(self, src, folder, name): return "NEW"
+        def clear_values(self, fid, rng): calls.append(("clear", rng))
+        def update_values(self, fid, rng, values): calls.append(("update", rng, len(values)))
+        def center_cells(self, fid, sheet_tab, first_row, n_rows, n_cols): calls.append(("center", sheet_tab, first_row, n_rows, n_cols))
+        def file_url(self, fid): return "u"
+    plan = {"sheet_rows": [{"Step": "1", "Amp": "L 1 / R 1"}, {"Step": "2", "Amp": "L 2 / R 2"}],
+            "sheet_columns": ["Step", "Amp"]}
+    SE.export(plan, "RCS08", "2026-12-30", drive=_Drive())
+    centre = [c for c in calls if c[0] == "center"]
+    assert centre == [("center", SE.SHEET_TAB, SE.DATA_START_ROW, 2, 2)], calls
+
+
+def test_the_xlsx_export_centres_the_written_cells_and_leaves_the_header_row_alone(tmp_path):
+    from StimOptimizer import sheet_export as SE
+    from openpyxl import load_workbook
+    tmpl = tmp_path / "tmpl.xlsx"
+    _write_template(str(tmpl))
+    rows = [{"Group": "A", "Contacts": "L C+2- / R C+1-"}]
+    out = tmp_path / "out.xlsx"
+    SE.fill_workbook(str(tmpl), rows, ["Group", "Contacts"], "2026-12-30", str(out))
+    ws = load_workbook(str(out))["Stim Testing"]
+    assert ws.cell(row=SE.DATA_START_ROW, column=1).alignment.horizontal == "center"
+    assert ws.cell(row=SE.DATA_START_ROW, column=2).alignment.horizontal == "center"
+    assert ws.cell(row=SE.DATA_START_ROW - 1, column=1).alignment.horizontal != "center"
