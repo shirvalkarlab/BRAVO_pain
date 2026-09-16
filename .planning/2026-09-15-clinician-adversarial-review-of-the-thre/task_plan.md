@@ -15,7 +15,6 @@ eyeball -- no browser session was available this round. Review ranks 4-23 remain
 
 ## Current Phase
 Phase 7
-Phase 6
 
 ### Phase 1: Parallel review
 - [x] Biomarkers reviewer dispatched and returned
@@ -63,6 +62,7 @@ Phase 6
 - [x] Hover "best cell corrected (1m circled)"; white circle on every best cell; plain row labels
 - [x] Caption as bullets; pinned title and lines moved down beside the scatter; drawer's rounding bullet removed, notes concise
 - [x] Container suite, rebuild, decision 171, push (not watched in a browser)
+- [x] Notes 1 and 3 reworded for the heat map, not the retired table (decision 172)
 - **Status:** complete
 
 ## Decisions Made

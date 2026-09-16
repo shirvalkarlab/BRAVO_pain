@@ -398,6 +398,14 @@ def test_the_optimism_note_and_the_half_note_are_in_the_first_notes():
     assert "largest of the nine lengths" in first_two
     assert "optimistic" in first_two or "larger than" in first_two
     assert "0.5, not 0" in " ".join(sw["notes"])
+    # 2026-09-15, the PI: the note said "each row's value is the largest", which was true of the
+    # retired table (one row per band) and false of the heat map, where a row is a length of
+    # signal and every cell has its own value. The note must speak of the CIRCLED cell.
+    assert "circled cell in each column" in first_two
+    assert "row's value" not in first_two
+    # and the direction note must not refer to "the table" or a logistic fit the heat map never shows
+    direction = sw["notes"][2].lower()
+    assert "table" not in direction and "logistic" not in direction
     print("OK the best-of-ten warning and the 0.5 note are in the notes")
 
 

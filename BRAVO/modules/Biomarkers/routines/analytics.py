@@ -6377,10 +6377,14 @@ def _best_of_windows_null_auc(X, y_binary, *, n_perm, rng):
 #: The sentence that goes in the panel itself, not only in a caption. The PI's requirement: a reader
 #: must not be able to see the best cell without being told that it was chosen as the best of ten.
 #: Condensed for open item 7's display cleanup (decision, 2026-09-09) -- same claim, fewer words.
+#: Reworded 2026-09-15 for the heat map (the PI: "Every row's value is the largest ... doesn't make
+#: sense"): the old sentence described the retired table, one row per band; on the heat map a row is
+#: a length of signal, every cell has its own value, and only the CIRCLED cell per column is the
+#: best of the lengths.
 BEST_OF_WINDOWS_OPTIMISM_NOTE = (
-    f"Each row's value is the LARGEST of the {_N_LENGTHS_WORD} lengths of signal tried for that band, "
-    "chosen after the fact, so it runs larger than fresh ratings would give; judge it against the "
-    f"shuffled best-of-{_N_LENGTHS_WORD} value beside it, not its own p-value."
+    f"The circled cell in each column is the LARGEST of the {_N_LENGTHS_WORD} lengths tried for that "
+    "band, chosen after the fact, so it runs larger than fresh ratings would; its corrected p and q "
+    f"are judged against the shuffled best-of-{_N_LENGTHS_WORD} value. Other cells are uncorrected."
 )
 
 #: The sentence about what 0.5 means, carried with every area-under-the-curve row and figure.
@@ -6393,9 +6397,10 @@ AUC_REFERENCE_NOTE = (
 #: The direction-and-folding note, moved up next to AUC_REFERENCE_NOTE (open item 7, decision
 #: 2026-09-09): both explain how to read the AUC quantity itself, so both belong with the other
 #: non-negotiable interpretation notes rather than after the sweep's own mechanical bookkeeping.
+#: The second sentence ("the table's logistic fit folds direction away") described the retired
+#: table's own column; the heat map's circled AUC keeps direction, so it is gone (2026-09-15).
 AUC_DIRECTION_NOTE = (
-    "The AUC map keeps direction (above 0.5: higher power in high-pain reports). The table's "
-    "logistic fit folds direction away and cannot go below 0.5."
+    "The AUC map keeps direction: above 0.5 means higher power in high-pain reports, below means lower."
 )
 
 

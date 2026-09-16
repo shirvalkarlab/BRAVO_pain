@@ -36,3 +36,5 @@
 - 17:55-18:25: Phase 7, his page feedback. RED jest (10) + container rounding test rewritten; GREEN. Notes compressed
   (first note 62->42 words). Container 641/0. Rebuilt; HUPed; decision 171. No browser session (in-app: no login;
   Chrome extension not connected) -- not watched. Committing and pushing.
+- 18:30-18:45: his catch: note 1 described the retired table. Test-first reword (circled cell), direction note's stale
+  sentence dropped, v16. Container 641/0; HUPed; decision 172. Committing and pushing.
