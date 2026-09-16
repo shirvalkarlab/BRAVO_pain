@@ -92,3 +92,7 @@
   card's "What to test at the next visit" queue (25 rows, all 0.950/0.951 +-1.111, improvement 0.444 -- noise) is off
   the page, one line points at the titration card. Two RED-then-GREEN render tests; jest 64/2 (known pair); build
   main.1ab6286e clean; watched live after a forced reload. Left for him: the sign-off sheet prints the count twice.
+- Sign-off sheet duplicate fixed on the PI's instruction (decision 175 amended): `ProvisionalNote` gained a
+  `headline` switch, off on the sheet; the verbatim verdict line is the headline, the box keeps the per-edge intervals.
+  Two RED-then-GREEN tests; jest 66/2 (known pair); build main.00efb7be; watched live -- the sheet carries the count
+  once, the page four times (header x2, parameter card, sheet).

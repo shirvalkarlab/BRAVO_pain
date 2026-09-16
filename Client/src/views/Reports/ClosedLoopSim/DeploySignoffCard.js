@@ -400,7 +400,9 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                       one more ternary here overflowed eslint's rules-of-hooks path count and made
                       it report every hook above as "called conditionally". */}
                   <EvidenceVerdictLine rep={_rep} />
-                  <ProvisionalNote deploymentReport={_rep} dense mt={0.5} />
+                  {/* The verdict line above is this sheet's headline and already carries the
+                      count; the box adds each edge's interval and p (referent audit, 2026-09-15). */}
+                  <ProvisionalNote deploymentReport={_rep} dense mt={0.5} headline={false} />
                 </MDBox>
 
                 {/* Advisory ramp guidance (audit C10): the closed-loop tuning surface is band +

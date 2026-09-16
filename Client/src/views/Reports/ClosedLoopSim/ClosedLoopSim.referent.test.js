@@ -27,6 +27,7 @@ import BandSweepGridPanel from "./BandSweepGridPanel";
 import DeploymentDecisionHeader from "./DeploymentDecisionHeader";
 import ReliableChangePanel from "./ReliableChangePanel";
 import WhatWouldChangeThis from "./WhatWouldChangeThis";
+import ProvisionalNote from "./ProvisionalNote";
 import PrescriptionPanel from "./PrescriptionPanel";
 import payload from "./__fixtures__/rcs08_deployment_payload_2026-09-15.json";
 
@@ -181,5 +182,24 @@ describe("What would change this answer (WhatWouldChangeThis)", () => {
     expect(text).not.toMatch(/The verdict is provisional/);
     // What establishes them stays on the card.
     expect(text).toMatch(/titration session/i);
+  });
+});
+
+describe("Deploy-to-Percept review (the sign-off sheet) and its provisional box", () => {
+  // The PI, 2026-09-15 evening: the sheet printed the module's verbatim verdict ("supported (point
+  // signs only; 2 of 3 intervals span zero)") and, directly beneath it, the provisional box whose
+  // headline repeats the same count. The verdict line is the headline on that sheet; the box keeps
+  // the per-edge intervals and p, which are printed nowhere else on it.
+  it("the provisional box can drop its headline and keep the per-edge lines", () => {
+    const { container } = render(<ProvisionalNote deploymentReport={payload} headline={false} />);
+    const text = container.textContent;
+    expect(text).not.toMatch(/INTERVALS SPAN ZERO/);
+    expect(text).toMatch(/E1 sign/);
+    expect(text).toMatch(/E2 sign/);
+  });
+  it("the sign-off sheet passes the verdict line as the headline and the box without one", () => {
+    const fs = require("fs");
+    const src = fs.readFileSync(require.resolve("./DeploySignoffCard.js"), "utf8");
+    expect(src).toMatch(/<ProvisionalNote[^>]*headline=\{false\}/);
   });
 });

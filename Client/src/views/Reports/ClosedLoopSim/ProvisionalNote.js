@@ -65,7 +65,13 @@ export function provisionalSentence(rep) {
     + `${c.edges.map((e) => e.text).join("; ")}).`;
 }
 
-export default function ProvisionalNote({ deploymentReport, dense = false, mt = 0.6 }) {
+/**
+ * `headline`: print the count line ("PROVISIONAL — POINT SIGNS ONLY; N OF 3 INTERVALS SPAN ZERO").
+ * Off on the sign-off sheet, where the module's verbatim verdict string sits directly above the box
+ * and already carries the count (referent audit, 2026-09-15); the box then contributes only what the
+ * sheet has nowhere else -- each edge's interval and p, and the rule.
+ */
+export default function ProvisionalNote({ deploymentReport, dense = false, mt = 0.6, headline = true }) {
   const rep = deploymentReport && deploymentReport.data ? deploymentReport.data : deploymentReport;
   const c = provisionalCaveat(rep);
   if (!c) return null;
@@ -73,10 +79,12 @@ export default function ProvisionalNote({ deploymentReport, dense = false, mt = 
     <MDBox className="cl-provisional" mt={mt} px={dense ? 0.8 : 1} py={dense ? 0.4 : 0.6}
       sx={{ backgroundColor: PAL.warnFill || "#FFF7E6", borderRadius: "4px",
         border: `1px solid ${PAL.warnBorder || PAL.warn}` }}>
-      <MDTypography variant="caption" sx={{ display: "block", fontSize: dense ? 10 : 10.5,
-        fontWeight: "bold", letterSpacing: 0.3, color: PAL.warnText || PAL.warn }}>
-        {`PROVISIONAL — POINT SIGNS ONLY; ${c.n} OF ${c.total} INTERVALS SPAN ZERO`}
-      </MDTypography>
+      {headline && (
+        <MDTypography variant="caption" sx={{ display: "block", fontSize: dense ? 10 : 10.5,
+          fontWeight: "bold", letterSpacing: 0.3, color: PAL.warnText || PAL.warn }}>
+          {`PROVISIONAL — POINT SIGNS ONLY; ${c.n} OF ${c.total} INTERVALS SPAN ZERO`}
+        </MDTypography>
+      )}
       {c.edges.map((e) => (
         <MDTypography key={e.k} variant="caption" sx={{ display: "block", fontSize: dense ? 10 : 10.5,
           fontFamily: PAL.mono, color: "#2A2A2A" }}>
