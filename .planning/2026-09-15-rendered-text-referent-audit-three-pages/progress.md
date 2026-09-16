@@ -87,3 +87,8 @@
   this card" above the occupancy line, no "36-90" with the onset fold open, robustness 27-30 s, reliable-change fold
   prints `what_it_means` (opens lowercase -- cosmetic, for the PI). Stim Optimizer: "1 of 4 checks block, 1 not
   assessed", history line, Spearman n = 15, no "2 of 4 conditions block". Decision 174 amended; committing.
+- Follow-ons from the PI after the walk (decision 175): the "What would change this answer" item no longer restates the
+  header's count (now "The interval spans zero on E1 and E2: a point sign, not yet an established one"); the two-stage
+  card's "What to test at the next visit" queue (25 rows, all 0.950/0.951 +-1.111, improvement 0.444 -- noise) is off
+  the page, one line points at the titration card. Two RED-then-GREEN render tests; jest 64/2 (known pair); build
+  main.1ab6286e clean; watched live after a forced reload. Left for him: the sign-off sheet prints the count twice.

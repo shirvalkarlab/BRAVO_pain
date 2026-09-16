@@ -34,6 +34,7 @@ import PAL from "views/Reports/ClosedLoopSim/palette";
 
 import ClosedLoopChecks, { CHECK_LABELS } from "./ClosedLoopChecks";
 import ExcludedSettingsChart from "./ExcludedSettingsChart";
+import { TITRATION_CARD_TITLE } from "./TitrationSessionCard";
 import { num } from "./stimFormat";
 import { TYPE, HEAD, SizedFold as Fold } from "./typeScale";
 
@@ -114,13 +115,6 @@ function dedupeJointStrata(strata) {
   return out;
 }
 
-const QUEUE_COLUMNS = [
-  ["rank", "rank"], ["freq_hz", "rate (Hz)"],
-  ["amp_mA_left", "left current (mA)"], ["amp_mA_right", "right current (mA)"],
-  ["posterior_mean", "predicted (pts)"], ["posterior_sd", "±1 SD (pts)"],
-  ["expected_improvement", "expected improvement"],
-  ["prior_reports_at_this_cell", "prior reports"],
-];
 const POLICY_COLUMNS = [
   ["hemisphere", "side"], ["mode", "mode"], ["center_hz", "band centre (Hz)"],
   ["band_lo_hz", "band from (Hz)"], ["band_hi_hz", "band to (Hz)"],
@@ -235,18 +229,20 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
               for it here yet.
             </MDTypography>
 
-            {/* ---------- what to test at the next visit, from the JOINT stratum that was
-                actually frozen (2026-09-14). The replacement for the old per-arm queue: cells
-                never tested, ranked by expected improvement, over both currents at once. ---------- */}
+            {/* ---------- the in-clinic plan lives on ONE card. Until 2026-09-15 this card also
+                printed the joint model's "What to test at the next visit" queue (decision 157: cells
+                never tested on the frozen surface, ranked by expected improvement). On this record
+                every row's predicted value is identical to three decimals, so the ranking is noise
+                (decision 158 found the picture flat), and the page then carried two in-clinic
+                recommendations that disagreed -- the PI's own titration session (decisions 146, 160,
+                163) and this queue. The PI's instruction, 2026-09-15: one. The queue stays on the
+                response (`two_stage.stage1.queue`, stored as the exploration ladder) and is drawn
+                nowhere. ---------- */}
             {queue.length > 0 && (
-              <MDBox mt={3}>
-                <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>What to test at the next visit</MDTypography>
-                <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body, mb: 0.5 }}>
-                  Cells never tested on the frozen (rate, left current, right current) surface,
-                  ranked by expected improvement -- the joint replacement for the per-side queue.
-                </MDTypography>
-                <RecordTable rows={queue} columns={QUEUE_COLUMNS} limit={10} />
-              </MDBox>
+              <MDTypography variant="caption" color="text" component="div" sx={{ mt: 2, fontSize: TYPE.small }}>
+                {`The in-clinic test to run next is the "${TITRATION_CARD_TITLE}" card above; the joint `}
+                {`search's ${queue.length} untested cells are on the response and are not a second plan.`}
+              </MDTypography>
             )}
 
             {/* ---------- folded: how the answer was arrived at ---------- */}

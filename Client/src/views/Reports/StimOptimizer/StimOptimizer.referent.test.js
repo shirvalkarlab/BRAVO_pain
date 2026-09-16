@@ -29,6 +29,8 @@ import theme from "assets/theme";
 import { PlatformContextProvider } from "context";
 
 import ClosedLoopChecks from "./ClosedLoopChecks";
+import TwoStagePlanCard from "./TwoStagePlanCard";
+import { TITRATION_CARD_TITLE } from "./TitrationSessionCard";
 import response from "./__fixtures__/rcs08_stim_optimizer_two_stage.json";
 
 const wrap = (ui) => (
@@ -70,5 +72,21 @@ describe("Closed loop: may it start? (ClosedLoopChecks)", () => {
     const { container } = rtlRender(wrap(<ClosedLoopChecks plan={plan} />));
     expect(container.textContent).toContain("15 scored clinic steps");
     expect(container.textContent).toMatch(/Spearman rho = -0\.04, p = 0\.895/);
+  });
+});
+
+describe("Closed loop: may it start on the frozen setting? (TwoStagePlanCard)", () => {
+  // The PI, 2026-09-15 evening: the page carried TWO in-clinic recommendations -- the titration
+  // session card he designed (decisions 146, 160, 163) and, at the foot of this card, the joint
+  // model's "What to test at the next visit" queue from decision 157: 25 untested (rate, left,
+  // right) cells whose predicted values are identical to three decimals on this record, so the
+  // ranking is noise, and which mixes 55/70/85/110 Hz. One in-clinic plan: the titration session.
+  it("prints no second in-clinic recommendation; it points at the titration session card instead", () => {
+    expect(Array.isArray(plan.stage1.queue) && plan.stage1.queue.length).toBe(25);
+    const { container } = rtlRender(wrap(<TwoStagePlanCard plan={plan} loading={false} err={null} />));
+    const text = container.textContent;
+    expect(text).not.toMatch(/What to test at the next visit/);
+    expect(text).not.toMatch(/ranked by expected improvement/);
+    expect(text).toContain(TITRATION_CARD_TITLE);
   });
 });

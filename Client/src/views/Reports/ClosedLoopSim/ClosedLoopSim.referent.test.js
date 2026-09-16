@@ -26,6 +26,7 @@ import { PlatformContextProvider } from "context";
 import BandSweepGridPanel from "./BandSweepGridPanel";
 import DeploymentDecisionHeader from "./DeploymentDecisionHeader";
 import ReliableChangePanel from "./ReliableChangePanel";
+import WhatWouldChangeThis from "./WhatWouldChangeThis";
 import PrescriptionPanel from "./PrescriptionPanel";
 import payload from "./__fixtures__/rcs08_deployment_payload_2026-09-15.json";
 
@@ -164,5 +165,21 @@ describe("Full parameter recommendation, threshold rows (PrescriptionPanel)", ()
       .filter((el) => el.children.length === 0 && /^At the 3 s averaging duration in force/.test(el.textContent || ""));
     expect(occupancy.length).toBeGreaterThanOrEqual(2);
     notes.forEach((n) => expect(n).not.toMatch(/s averaging \//));
+  });
+});
+
+describe("What would change this answer (WhatWouldChangeThis)", () => {
+  // The PI, 2026-09-15 evening, after the browser walk: this card printed "The verdict is
+  // provisional: 2 of 3 intervals span zero (E1, E2)" -- the header's count a fourth time on the
+  // page. This card's own contribution is WHICH edges and what would establish them; the count and
+  // the word "provisional" belong to the verdict header and its two boxes.
+  it("names the edges whose intervals span zero without restating the header's count", () => {
+    const { container } = render(<WhatWouldChangeThis report={{ data: payload, loading: false, err: null }} />);
+    const text = container.textContent;
+    expect(text).toMatch(/E1 and E2/);
+    expect(text).not.toMatch(/of 3 intervals span zero/);
+    expect(text).not.toMatch(/The verdict is provisional/);
+    // What establishes them stays on the card.
+    expect(text).toMatch(/titration session/i);
   });
 });
