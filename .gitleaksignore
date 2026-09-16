@@ -11,3 +11,14 @@ Docker/docker-compose.yml:generic-api-key:57
 docs/installation.rst:generic-api-key:218
 docs/installation.rst:generic-api-key:453
 docs/installation.rst:generic-api-key:647
+
+# Added 2026-09-15: the three live RCS08 response fixtures behind the referent-audit render tests
+# (decision 174). What gitleaks' generic-api-key rule matched in each is a cache-store key --
+# `<kind>/<participant uid>/<40-hex digest>` or the bare 40-hex signature digest -- the label a
+# stored answer is filed under, built from the inputs it was computed from (decisions 24, 25). It
+# opens nothing; the uid is the de-identified participant id used throughout the repository. The
+# fixtures are single-line JSON, so the fingerprint stays at line 1 across re-captures; a real
+# secret added to any OTHER file is still caught.
+Client/src/views/Reports/Biomarkers/__fixtures__/rcs08_band_sweep.json:generic-api-key:1
+Client/src/views/Reports/StimOptimizer/__fixtures__/rcs08_stim_optimizer_two_stage.json:generic-api-key:1
+Client/src/views/Reports/ClosedLoopSim/__fixtures__/rcs08_deployment_payload_2026-09-15.json:generic-api-key:1
