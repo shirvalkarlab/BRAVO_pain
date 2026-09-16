@@ -56,7 +56,7 @@ import { biomarkerHeatmapSlot, prefetchBiomarkerHeatmapMetric } from "views/Repo
 import PAL from "views/Reports/ClosedLoopSim/palette";
 import { BIN_HI, BIN_LO, BIN_HI_RGB, BIN_LO_RGB, divergingRgb, diverging } from "./binarizationModel";
 import { contactSortKey } from "./contactOrder";
-import { bestCellReadout, hoverCustomData, rowLabelWithTier, tierCaption } from "./gridReadouts";
+import { bestCellReadout, hoverCustomData, tierBullets, deviceSpectrumBullets } from "./gridReadouts";
 
 const num = (v, d = 3) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 
@@ -114,25 +114,17 @@ function heatmapHeight(rows) {
  * is never different (both grids share one per-channel sweep response), so reading both and
  * concatenating them, as this drawer used to, only doubled every bullet for no reason. */
 function bulletsFor(sw) {
+  // Concise since 2026-09-15 (the PI). The backend's own notes are already short; the three
+  // display-only bullets say one thing each; the snapshot bullet is gone from here because the
+  // orange caption above the grid already carries it (say a small point once).
   const notes = sw.notes || [];
   return [
     ...notes.slice(0, 3),
-    "A circled cell also clears a stricter correction across all 22 band centres in this grid — "
-      + "a research finding, not a sign a setting is ready for the device.",
-    "The left grid never redraws when you change the binarization cuts above, since correlation "
-      + "with a continuous pain score ignores the high/low split; the right grid does, and "
-      + "flashes when it recomputes.",
-    "Clicking a cell shows a plain Pearson r/p and Welch t-test computed on the spot — not the "
-      + "grid's own corrected, best-of-all-lengths numbers.",
-    // Only when this contact has such reports -- a contact with none gets no bullet rather than a
-    // reassuring one. (The per-cell dash markers this bullet used to explain were removed on
-    // 2026-09-10 at the PI's direction; the orange caption above the grids carries the count.)
-    ...(sw.n_pain_reports_from_device_spectrum
-      ? ["Pain reports with no voltage trace within the match window are answered from the "
-        + "device's own FFT snapshots. Each snapshot covers 30 s, so a row of N seconds takes the "
-        + "nearest ceil(N / 30) snapshots, and a report without that many contributes nothing to "
-        + "that row."]
-      : []),
+    "A white circle marks each column's best cell; a heavy ring also clears the 22-band correction "
+      + "\u2014 a research finding, not a device-ready setting.",
+    "The left grid ignores the binarization cuts (a continuous score has no split); the right grid "
+      + "recomputes and flashes.",
+    "Clicking a cell shows a plain, uncorrected Pearson r/p and Welch t \u2014 not the grid's corrected numbers.",
     ...notes.slice(3),
   ];
 }
@@ -264,11 +256,9 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
   const bestRows = kind === "auc" ? sw.best_auc_rows : sw.best_correlation_rows;
   const bestByCol = useMemo(() => bestCellIndexByColumn(sw, bestRows), [sw, bestRows]);
 
-  // Review 2026-09-15, B4: each row label says whether its length of signal is an averaging window
-  // the device can be set to, or only a level the device can hold through its onset (the ranges
-  // come from the response, `device_timing_ranges`, never a number typed here).
-  const yLabels = useMemo(() => seconds.map((s) => rowLabelWithTier(s, deviceRanges)),
-    [seconds, deviceRanges]);
+  // Plain lengths of signal on the axis (the PI, 2026-09-15: nothing appended -- which rows the
+  // device can be set to is said once, in the caption's bullets).
+  const yLabels = useMemo(() => seconds.map((s) => secondsLabel(s)), [seconds]);
   // Review 2026-09-15, B1: the corrected statistics for each column's best cell, on hover.
   const customdata = useMemo(() => hoverCustomData(sw, kind === "auc" ? "auc" : "corr"), [sw, kind]);
   // Sized 25% larger than the first Plotly pass, per the PI's own comparison against the size
@@ -306,18 +296,20 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
       customdata,
       hovertemplate: `${kind === "auc" ? "AUC" : "r"} = %{z:.3f}<br>%{x} Hz, %{y}<br>%{customdata}<extra></extra>`,
     });
-    // Family-wise-significant "best of ten lengths" cells -- an open circle, exactly the marker
-    // the SVG version drew.
-    const bestX = [], bestY = [];
+    // A WHITE circle on every column's best cell (the PI, 2026-09-15: "use a white circle for the
+    // relevant values on top of the relevant cell" -- the hover's "(1m circled)" points at it), a
+    // heavier ring where that cell also clears the 22-band correction. Until today only the
+    // corrected cells carried a marker, in dark ink, so "circled" often pointed at nothing.
+    const bestX = [], bestY = [], bestW = [];
     Object.keys(bestByCol).forEach((c) => {
       const b = bestByCol[c];
-      if (b && b.row_data && b.row_data.family_wise_significant_8_to_30hz === true) {
-        bestX.push(centers[Number(c)]); bestY.push(yLabels[b.row]);
-      }
+      if (!b) return;
+      bestX.push(centers[Number(c)]); bestY.push(yLabels[b.row]);
+      bestW.push(b.row_data && b.row_data.family_wise_significant_8_to_30hz === true ? 3 : 1.4);
     });
     fig.traces.push({
       type: "scatter", mode: "markers", x: bestX, y: bestY, showlegend: false,
-      marker: { symbol: "circle-open", size: 14, color: "#1a1a1a", line: { width: 1.4 } },
+      marker: { symbol: "circle-open", size: 14, color: "#FFFFFF", line: { width: bestW, color: "#FFFFFF" } },
       hoverinfo: "skip",
     });
     // The shared cross-highlight, trace index HIGHLIGHT_TRACE -- always pushed, empty until the
@@ -586,37 +578,30 @@ function PlotlyViolin({ divId, highVals, lowVals, side }) {
  * the two contacts with none). A contact with none renders nothing at all rather than a reassuring
  * line: there is nothing to reassure about, and a caveat that appears everywhere stops being read.
  */
-function DeviceSpectrumCaption({ sw }) {
-  const n = sw && sw.n_pain_reports_from_device_spectrum;
-  if (!n) return null;
-  const tot = (sw.device_spectrum_total_grid || [])
-    .reduce((m, row) => Math.max(m, ...(row || [0])), 0);
-  const pct = tot > 0 ? Math.round((100 * n) / tot) : null;
+function CaptionBullets({ items, color }) {
+  if (!items || !items.length) return null;
   return (
-    <MDTypography variant="caption" color="dark"
-      sx={{ fontSize: 13, display: "block", mb: 0.5, color: "#8a5a00" }}>
-      {`${n} of this contact pair's matched pain reports`}
-      {pct != null ? ` (about ${pct}%)` : ""}
-      {" had no voltage trace within the match window and were answered from the device's own "}
-      {"FFT snapshots. The heat maps do their own matching, under the match tolerance set on the "}
-      {"histogram card. Each snapshot covers 30 s, so a row of N seconds takes the nearest "}
-      {"ceil(N / 30) snapshots, and a report without that many contributes nothing to that row."}
-    </MDTypography>
+    <MDBox component="ul" sx={{ m: 0, mb: 0.5, pl: 2.2 }}>
+      {items.map((line) => (
+        <MDTypography key={line} component="li" variant="caption" color="dark"
+          sx={{ fontSize: 13, display: "list-item", color }}>
+          {line}
+        </MDTypography>
+      ))}
+    </MDBox>
   );
 }
 
-/** Review 2026-09-15, B4: which rows the device can be set to. The strongest cells on RCS08 sit at
- * 300 s, and the device's only documented averaging range is 0-30 s (a 2020 sensing-era tip card);
- * the Dual onset (0-6 min) can hold a level that long but does not average. Built from the ranges
- * on the response, so a change to the one home changes this sentence. */
+/** Two short bullets (the PI, 2026-09-15: "MUCH more concise, ideally with bullet points"). A
+ * contact with no snapshot-served report renders nothing. */
+function DeviceSpectrumCaption({ sw }) {
+  return <CaptionBullets items={deviceSpectrumBullets(sw)} color="#8a5a00" />;
+}
+
+/** Which rows the device can be set to, from the ranges on the response (`device_timing_ranges`,
+ * the one home), as bullets. */
 function DeviceTierCaption({ ranges, sw }) {
-  const text = tierCaption(ranges, (sw && sw.integration_seconds_delivered) || []);
-  if (!text) return null;
-  return (
-    <MDTypography variant="caption" color="dark" sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
-      {text}
-    </MDTypography>
-  );
+  return <CaptionBullets items={tierBullets(ranges, (sw && sw.integration_seconds_delivered) || [])} />;
 }
 
 function PanelTitle({ pinnedCell, channelLabel }) {
@@ -673,12 +658,12 @@ function ScatterStatsLine({ cell, pinnedCell, sw }) {
   return (
     <MDBox>
       <MDTypography variant="caption" color="dark" sx={{ fontSize: 15, display: "block", mb: 0.25 }}>
-        {`Plain, uncorrected: Pearson r = ${num(r, 3)}, p = ${p == null ? "—" : num(p, 4)} (n = ${n})`}
+        {`Pearson r = ${num(r, 3)}, p = ${p == null ? "—" : num(p, 4)}, n = ${n} (uncorrected)`}
       </MDTypography>
       {readout ? (
         <MDTypography variant="caption" sx={{ fontSize: 13, display: "block", mb: 0.5,
           color: readout.isBest ? PAL.accent : "#6A6A6A" }}>
-          {`Grid's corrected statistic: ${readout.text}`}
+          {readout.text}
         </MDTypography>
       ) : null}
     </MDBox>
@@ -1086,9 +1071,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
               <Grid item xs={12} md={7}>
                 <ContactStrip sweeps={corrSweeps} channel={channel} setChannel={setChannel} />
               </Grid>
-              <Grid item xs={12} md={5}>
-                <PanelTitle pinnedCell={pinnedCell} channelLabel={channelLabel} />
-              </Grid>
+              <Grid item xs={12} md={5} />
             </Grid>
 
             {/* Each grid sits at ~2/3 of its previous footprint, with a persistent panel to its
@@ -1113,7 +1096,13 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
                 <DeviceSpectrumCaption sw={corrSw} />
                 <DeviceTierCaption ranges={deviceRanges} sw={corrSw} />
               </Grid>
-              <Grid item xs={12} md={5}>
+              {/* The pinned cell's title and its two statistics lines sit at the BOTTOM of this
+                  cell, visually just above the scatter plot (the PI, 2026-09-15: they "sat way too
+                  high"). `alignSelf: stretch` + a column flex with `justifyContent: flex-end`
+                  pushes them down against whatever height the captions on the left take. */}
+              <Grid item xs={12} md={5} sx={{ display: "flex", flexDirection: "column",
+                justifyContent: "flex-end", alignSelf: "stretch" }}>
+                <PanelTitle pinnedCell={pinnedCell} channelLabel={channelLabel} />
                 <ScatterStatsLine cell={pinnedCellData} pinnedCell={pinnedCell} sw={corrSw} />
               </Grid>
 

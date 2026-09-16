@@ -10,10 +10,11 @@ patient's time dynamics and thin, fluctuating data. Name the main shortcomings w
 (backend, frontend, or documentation), each tied to a file:line, a test, or a live number.
 
 ## Next Step
-Done (decision 170): both onset grids capped at 30 s (and a one-answer-per-window-count rule the cap exposed), the
-sweep ends at one minute; suites green, live proof, rebuilt, pushed. Review ranks 4-23 remain his call.
+Done (decision 171): the heat-map wording and layout to his instruction; pushed. The layout move is for him to
+eyeball -- no browser session was available this round. Review ranks 4-23 remain his call.
 
 ## Current Phase
+Phase 7
 Phase 6
 
 ### Phase 1: Parallel review
@@ -56,6 +57,12 @@ Phase 6
 - [x] robustness.ONSET_GRID_S and design_rule.ONSET_GRID_S stop at the tablet's 30 s; rule versions bumped
 - [x] BAND_TIME_SWEEP_SECONDS ends at 60 s; the "ten lengths" wording follows the count; sweep rule version bumped
 - [x] Suites, live proof, frontend rebuild, decision 170, push
+- **Status:** complete
+
+### Phase 7: Biomarkers heat-map text and layout, to the PI's wording
+- [x] Hover "best cell corrected (1m circled)"; white circle on every best cell; plain row labels
+- [x] Caption as bullets; pinned title and lines moved down beside the scatter; drawer's rounding bullet removed, notes concise
+- [x] Container suite, rebuild, decision 171, push (not watched in a browser)
 - **Status:** complete
 
 ## Decisions Made

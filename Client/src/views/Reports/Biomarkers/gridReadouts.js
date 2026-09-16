@@ -56,10 +56,8 @@ export function bestCellReadout(sw, kind, colIndex, rowIndex) {
   if (!best) return { isBest: false, text: "no corrected statistic for this column" };
   const bestRow = rowIndexOf(sw, best.integration_seconds_delivered);
   if (bestRow !== rowIndex) {
-    return {
-      isBest: false,
-      text: `corrected statistics are computed for this column's best cell only (${secondsLabel(best.integration_seconds_delivered)}, circled)`,
-    };
+    // The PI's wording, 2026-09-15: point at the circled best cell and stop.
+    return { isBest: false, text: `best cell corrected (${secondsLabel(best.integration_seconds_delivered)} circled)` };
   }
   const parts = [`${Number(best.n_pain_reports)} ratings`];
   if (kind !== "auc" && best.pearson_r_low != null && best.pearson_r_high != null) {
@@ -96,34 +94,40 @@ export function rowTier(seconds, ranges) {
   return { tier: "beyond" };
 }
 
-const TIER_SUFFIX = { averaging: "", onset: " ⏵ onset", beyond: " ⏵ beyond device", unknown: "" };
-
-export function rowLabelWithTier(seconds, ranges) {
-  return `${secondsLabel(seconds)}${TIER_SUFFIX[rowTier(seconds, ranges).tier]}`;
-}
-
-/** The one-paragraph caption under the grids, built from the ranges and the rows actually drawn. */
-export function tierCaption(ranges, secondsList) {
-  if (!ranges || !Array.isArray(ranges.averaging_s)) return "";
+/** Short bullets for the caption under the grids (the PI, 2026-09-15: "MUCH more concise, ideally
+ * with bullet points"; the row labels themselves stay plain numbers). Sources are named in a word,
+ * not spelled out; the full sentences stay on the response for anyone who opens it. */
+export function tierBullets(ranges, secondsList) {
+  if (!ranges || !Array.isArray(ranges.averaging_s)) return [];
   const rows = (secondsList || []).map(Number).filter(Number.isFinite);
   const avgRows = rows.filter((s) => rowTier(s, ranges).tier === "averaging");
   const onsetRows = rows.filter((s) => rowTier(s, ranges).tier === "onset");
   const beyondRows = rows.filter((s) => rowTier(s, ranges).tier === "beyond");
-  const bits = [];
+  const out = [];
   if (avgRows.length) {
-    bits.push(`Rows up to ${secondsLabel(Math.max(...avgRows))} are an averaging window the device can be set to `
-      + `(${ranges.averaging_source}).`);
+    out.push(`Rows to ${secondsLabel(Math.max(...avgRows))}: an averaging window the device can be set to `
+      + `(${ranges.averaging_s[0]}-${ranges.averaging_s[1]} s on the tablet).`);
   }
   if (onsetRows.length) {
-    bits.push(`Rows from ${secondsLabel(Math.min(...onsetRows))} to ${secondsLabel(Math.max(...onsetRows))} are longer `
-      + "than any averaging window; the device can only require a level held that long -- one averaging window "
-      + `plus its onset duration (Dual Threshold, up to ${secondsLabel(ranges.onset_dual_s[1])}; ${ranges.onset_source}), `
-      + "which holds an averaged reading past a threshold rather than averaging over it.");
+    out.push(`Rows ${secondsLabel(Math.min(...onsetRows))}-${secondsLabel(Math.max(...onsetRows))}: one averaging window plus `
+      + `an onset hold (each \u2264${ranges.onset_dual_s[1]} s); the device holds a level there, it does not average.`);
   }
   if (beyondRows.length) {
-    bits.push(`Rows from ${secondsLabel(Math.min(...beyondRows))} are beyond anything the device can be set to.`);
+    out.push(`Rows from ${secondsLabel(Math.min(...beyondRows))}: beyond anything the device can be set to.`);
   }
-  if (ranges.onset_note) bits.push(ranges.onset_note);
-  if (ranges.averaging_caveat) bits.push(ranges.averaging_caveat);
-  return bits.join(" ");
+  return out;
+}
+
+/** The snapshot-served share, as two short bullets, or nothing when no report was served that way. */
+export function deviceSpectrumBullets(sw) {
+  const n = sw && Number(sw.n_pain_reports_from_device_spectrum);
+  if (!n) return [];
+  const tot = ((sw && sw.device_spectrum_total_grid) || []).reduce((m, row) => Math.max(m, ...(row || [0])), 0);
+  const share = tot > 0 ? ` (${Math.round((100 * n) / tot)}%)` : "";
+  const ofTot = tot > 0 ? ` of ${tot}` : "";
+  return [
+    `${n}${ofTot} matched reports${share} had no voltage trace in the match window and were read from the device's `
+      + "30 s FFT snapshots: a row of N s uses the nearest ceil(N/30) snapshots, or nothing.",
+    "Matching here uses the histogram card's tolerance.",
+  ];
 }

@@ -111,13 +111,21 @@ def test_delivered_length_matches_the_matcher_not_the_request():
           f"{len(A.BAND_TIME_SWEEP_SECONDS)} lengths; 1 s is delivered as 3 s")
 
 
-def test_notes_declare_the_lengths_that_could_not_be_delivered():
-    """The panel must SAY which lengths could not be delivered, with both numbers."""
+def test_the_lengths_that_could_not_be_delivered_are_on_the_response_but_not_in_the_drawer():
+    """Both numbers stay on the response (`length_rounding`, one pair per rounded length) so a
+    reader who opens it can see them; the drawer no longer prints them (the PI, 2026-09-15:
+    remove that bullet -- every label already shows the delivered length)."""
     power, pain, centers = _pure_noise_grid()
     sw = A.band_time_sweep_from_power(power, pain, center_freqs_hz=centers, n_perm=100, n_boot=200)
     joined = " ".join(sw["notes"])
-    assert "could not be delivered exactly" in joined
-    assert "1 s asked for, 3 s delivered" in joined
+    assert "could not be delivered" not in joined and "asked for" not in joined
+    rounding = sw["length_rounding"]
+    assert {"requested_s": 1.0, "delivered_s": 3.0} in rounding
+    assert {"requested_s": 5.0, "delivered_s": 6.0} in rounding
+    assert all(r["requested_s"] != r["delivered_s"] for r in rounding)
+    # every note is short: the PI reads this drawer, and asked for it to be concise
+    for note in sw["notes"]:
+        assert len(note.split()) <= 45, note
     for row in sw["best_correlation_rows"] + sw["best_auc_rows"]:
         if row.get("integration_seconds_delivered") is None:
             continue

@@ -33,3 +33,6 @@
   fixed with one answer per window count. GREEN; 3 old pins moved. Host 1287/2/0, container 641/0. Live: SO 0 diff;
   CL 9 diff (robustness sentence 27-60 -> 27-30 s), verdict same; BM 1,659 fields gone (the 5 m row), 12.5 Hz best now
   60 s r -0.47 n 166 q 0.0017. Rebuilt; HUPed; decision 170. Committing and pushing.
+- 17:55-18:25: Phase 7, his page feedback. RED jest (10) + container rounding test rewritten; GREEN. Notes compressed
+  (first note 62->42 words). Container 641/0. Rebuilt; HUPed; decision 171. No browser session (in-app: no login;
+  Chrome extension not connected) -- not watched. Committing and pushing.

@@ -26,4 +26,4 @@ def test_the_request_function_attaches_the_block_under_device_timing_ranges():
 
 
 def test_the_rule_version_moved_so_a_stored_grid_without_the_block_is_never_served():
-    assert BS._BAND_SWEEP_RULE_VERSION == "v14_sweep_ends_at_one_minute"
+    assert BS._BAND_SWEEP_RULE_VERSION == "v15_concise_notes_length_rounding"

@@ -6215,6 +6215,7 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         "n_shuffles": int(n_perm),
         "n_resamples": int(n_boot),
         "notes": notes,
+        "length_rounding": _length_rounding(kept_req, delivered),
     }
 
 
@@ -6377,26 +6378,24 @@ def _best_of_windows_null_auc(X, y_binary, *, n_perm, rng):
 #: must not be able to see the best cell without being told that it was chosen as the best of ten.
 #: Condensed for open item 7's display cleanup (decision, 2026-09-09) -- same claim, fewer words.
 BEST_OF_WINDOWS_OPTIMISM_NOTE = (
-    f"The value in each row is the LARGEST of the {_N_LENGTHS_WORD} lengths of signal tried for that band -- "
-    "chosen after seeing the results, so it runs larger than a fresh set of ratings would give. "
-    f"Its own p-value isn't a real probability; compare it to the shuffled best-of-{_N_LENGTHS_WORD} value "
-    "beside it, the level chance alone reaches under the same selection."
+    f"Each row's value is the LARGEST of the {_N_LENGTHS_WORD} lengths of signal tried for that band, "
+    "chosen after the fact, so it runs larger than fresh ratings would give; judge it against the "
+    f"shuffled best-of-{_N_LENGTHS_WORD} value beside it, not its own p-value."
 )
 
 #: The sentence about what 0.5 means, carried with every area-under-the-curve row and figure.
 #: Condensed for open item 7's display cleanup (decision, 2026-09-09) -- same claim, fewer words.
 AUC_REFERENCE_NOTE = (
-    "0.5, not 0, is what no discrimination between high and low pain looks like. An interval "
-    "spanning 0.5 means the question is unsettled for that band, not that it carries nothing."
+    "AUC 0.5, not 0, is no discrimination between high and low pain; an interval spanning 0.5 "
+    "leaves the band unsettled, not empty."
 )
 
 #: The direction-and-folding note, moved up next to AUC_REFERENCE_NOTE (open item 7, decision
 #: 2026-09-09): both explain how to read the AUC quantity itself, so both belong with the other
 #: non-negotiable interpretation notes rather than after the sweep's own mechanical bookkeeping.
 AUC_DIRECTION_NOTE = (
-    "The AUC heat map keeps direction: above 0.5 means higher power in high-pain reports, below "
-    "means lower. The table's own number instead comes from a fitted logistic regression, which "
-    "folds direction away and can't go below 0.5."
+    "The AUC map keeps direction (above 0.5: higher power in high-pain reports). The table's "
+    "logistic fit folds direction away and cannot go below 0.5."
 )
 
 
@@ -6409,45 +6408,40 @@ def _sweep_notes(requested, delivered, tiles, tile_s, n_times, n_centers, n_mad,
     plus the direction/folding note, ordered together (open item 7, decision 2026-09-09) since a
     reader needs all three before the rest, which is mechanical bookkeeping about how the sweep ran.
     """
+    # Concise since 2026-09-15 (the PI: "much more concisely"; ps-scientific-writing 6a: compress
+    # tokens, keep every statistic). The tile-rounding sentence is GONE from the drawer at his
+    # direction -- the rows are labelled with the delivered length -- and the pairs travel on the
+    # response as `length_rounding` instead (see the caller).
     notes = [BEST_OF_WINDOWS_OPTIMISM_NOTE, AUC_REFERENCE_NOTE, AUC_DIRECTION_NOTE]
-    short = [(float(r), float(d)) for r, d in zip(requested, delivered) if abs(d - r) > 1e-9]
-    if short:
-        pairs = ", ".join(f"{r:g} s asked for, {d:g} s delivered" for r, d in short)
-        notes.append(
-            f"Length of signal is delivered in whole {tile_s:g} s pieces: {len(short)} of "
-            f"{len(requested)} requested lengths could not be delivered exactly ({pairs}). "
-            f"Every label shows the length delivered.")
-    else:
-        notes.append(f"Every requested length of signal is a whole number of {tile_s:g} s pieces, "
-                     f"so each was delivered exactly.")
-    notes.append(f"The grid's {n_times * n_centers} cells ({n_times} lengths x {n_centers} band "
-                 f"centres, each {BAND_TIME_SWEEP_WIDTH_HZ:g} Hz wide, 1 Hz apart) overlap heavily "
-                 f"and are not independent of each other.")
+    notes.append(f"The {n_times * n_centers} cells ({n_times} lengths x {n_centers} centres, "
+                 f"{BAND_TIME_SWEEP_WIDTH_HZ:g} Hz wide, 1 Hz apart) overlap heavily and are not "
+                 f"independent.")
     if outlier_rule == "historical_99p5_ceiling_per_chunk":
-        notes.append(f"{n_excluded} single {tile_s:g} s pieces were left out before anything was "
-                     f"averaged, each one above this contact's own historical ceiling for that "
-                     f"band -- the top 0.5% of everything this contact has ever recorded there, "
-                     f"fixed in advance rather than judged from the data on screen. Each piece "
-                     f"left out was replaced by the next closest clean one, so every cell still "
-                     f"averages the number of pieces its row asks for.")
+        notes.append(f"{n_excluded} single {tile_s:g} s pieces above this contact's fixed historical "
+                     f"ceiling (top 0.5% of its own record, per band) were dropped before averaging "
+                     f"and replaced by the next clean piece, so every cell keeps its row's count.")
     elif n_mad > 0:
         notes.append(f"{n_excluded} measurements were excluded as outliers ({n_mad:g} median "
                      f"absolute deviations on the {o_scale} scale), per band and length.")
     else:
-        notes.append("Outlier exclusion was switched off for this sweep; every measurement is "
-                     "included.")
-    notes.append(f"The shuffled reference is {n_perm} circular block shuffles of the pain scores "
-                 f"(preserving day-to-day similarity), making the same best-of-ten choice each "
-                 f"time, in either direction.")
+        notes.append("Outlier exclusion was switched off; every measurement is included.")
+    notes.append(f"Shuffled reference: {n_perm} circular block shuffles of the pain scores "
+                 f"(day-to-day similarity kept), each making the same best-of-{_N_LENGTHS_WORD} "
+                 f"choice in either direction.")
     notes.append(f"High vs low pain: {split_why}.")
     if crosscheck and int(crosscheck.get("n_cells") or 0):
         n_ag = int(crosscheck.get("n_agree") or 0)
         n_all = int(crosscheck.get("n_cells") or 0)
-        notes.append(
-            f"A logistic regression fit at each of the {n_all} cells matched the folded ordering "
-            f"in {n_ag} of them; a mismatch means that band's own fit runs against its power "
-            f"values, which happens where the band carries little.")
+        notes.append(f"A logistic fit at each of the {n_all} cells matched the folded ordering in "
+                     f"{n_ag}; a mismatch means the band carries little.")
     return notes
+
+
+def _length_rounding(requested, delivered):
+    """One pair per requested length that the 3 s tiles could not deliver exactly (moved off the
+    drawer on 2026-09-15; the row labels already show the delivered length)."""
+    return [{"requested_s": float(r), "delivered_s": float(d)}
+            for r, d in zip(requested, delivered) if abs(float(d) - float(r)) > 1e-9]
 
 
 def _percentile_interval(draws, alpha=0.05):
