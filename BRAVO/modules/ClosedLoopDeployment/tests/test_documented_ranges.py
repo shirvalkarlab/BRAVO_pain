@@ -175,6 +175,25 @@ def test_rcs08s_record_derived_timing_is_the_decision_150_table_and_sits_inside_
     assert TR.for_participant(None) == {}
 
 
+def test_the_static_onset_reason_carries_no_typed_bootstrap_interval():
+    """Referent audit 2026-09-15, item 2. The onset rows' static reason used to end "A block
+    bootstrap over the recordings puts 36-90 s in the same recommendation" -- one contact's
+    2026-09-13 value, printed on every participant's card, while the live `robustness_note` on the
+    SAME row said 27-30 s for the committed band. The interval belongs to `robustness_note` alone,
+    which is computed per band; the static text may keep every other statistic but not that one.
+    """
+    import re
+    r = TR.for_participant(RCS08)
+    for key in ("onset_upper_ms", "onset_lower_ms"):
+        why = r[key]["why"]
+        assert not re.search(r"\d+\s*[-\u2013]\s*\d+\s*s\b", why), (key, why)
+        assert "bootstrap" not in why.lower(), (key, why)
+    # the statistics that DO belong to the static reason are still there
+    up = r["onset_upper_ms"]["why"]
+    for kept in ("Ten confirmations", "2.5 times an hour", "34-40 an hour", "about 49 undone"):
+        assert kept in up, (kept, up)
+
+
 # --- the parameter card ------------------------------------------------------------------------
 def _rows(**kw):
     p = PR.prescribe(mode=PA.DUAL, timing=PA.timing_plan(mode=PA.DUAL),

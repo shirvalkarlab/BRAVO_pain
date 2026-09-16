@@ -835,20 +835,22 @@ def design_rule_note(design_rule_payload, *, upper, lower, averaging_ms, onset_m
         return None
     stored_sep = abs(float(upper) - float(lower)) / 2.0
     avg_s, ons_s = row["averaging_s"], row["onset_s"]
-    at_this_timing = ("" if row["exact_match"] else
-                      f" (nearest evaluated timing, {avg_s:g} s averaging / {ons_s:g} s onset)")
+    # The timing is spelled out ONLY when the rule was evaluated somewhere other than the card's
+    # own timing. This sentence sits directly above `occupancy_note`, which opens with the
+    # averaging duration in force; restating "3 s averaging / 30 s onset" here printed the same
+    # numbers on two stacked lines under one field (referent audit 2026-09-15, item 6).
+    at_this_timing = ("at the timing shown on this card" if row["exact_match"] else
+                      f"at the nearest evaluated timing, {avg_s:g} s averaging / {ons_s:g} s onset")
     model = design_rule_payload.get("model", "a fitted noise model")
     if row["min_separation"] is None:
         return (f"Noise-only design rule (fitted on this participant's own recordings, {model}): "
                 f"no separation up to {SEPARATION_GRID_MAX:g} device units keeps noise-only "
-                f"threshold crossings at or below one an hour at {avg_s:g} s averaging / "
-                f"{ons_s:g} s onset{at_this_timing}. The stored pair is +-{stored_sep:.1f} apart "
-                "from its midpoint.")
+                f"threshold crossings at or below one an hour {at_this_timing}. The stored pair "
+                f"is +-{stored_sep:.1f} apart from its midpoint.")
     return (f"Noise-only design rule (fitted on this participant's own recordings, {model}): the "
            f"stored pair is +-{stored_sep:.1f} from its midpoint; the rule needs "
-           f"+-{row['min_separation']:g} at this timing ({avg_s:g} s averaging / {ons_s:g} s "
-           f"onset{at_this_timing}) to keep noise-only threshold crossings at or below one an "
-           "hour.")
+           f"+-{row['min_separation']:g} {at_this_timing} to keep noise-only threshold crossings "
+           "at or below one an hour.")
 
 
 try:                                                    # pragma: no cover - import shim

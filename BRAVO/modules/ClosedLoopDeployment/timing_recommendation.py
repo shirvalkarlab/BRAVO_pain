@@ -61,7 +61,10 @@ RECORD_DERIVED_WHY = {
         "participant's own signal (a fitted slow-level model's noise simulation), and replayed on "
         "held-out stretches it switches the current 2.5 times an hour with none undone, against "
         "34-40 an hour with about 49 undone for the 30 s averaging / 30 s onset the device runs "
-        "today. A block bootstrap over the recordings puts 36-90 s in the same recommendation.",
+        "today.",
+        # The block bootstrap's interval is NOT typed here: it is computed per band and printed by
+        # `robustness_note` on the same row. A typed "36-90 s" (one contact's 2026-09-13 value) sat
+        # beside a live "27-30 s" until the referent audit of 2026-09-15.
         "High"),
     "onset_lower_ms": (
         "Same measurement as the upper onset; the replay applies one onset to both directions, so "

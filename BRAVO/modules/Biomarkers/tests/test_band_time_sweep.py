@@ -409,6 +409,30 @@ def test_the_optimism_note_and_the_half_note_are_in_the_first_notes():
     print("OK the best-of-ten warning and the 0.5 note are in the notes")
 
 
+def test_every_row_sentence_counts_the_lengths_with_the_one_word_the_notes_use():
+    """Referent audit 2026-09-15, item 10. A row's `why` read "the strongest of 9 lengths ... the
+    SAME best-of-ten choice" -- one sentence with two counts, the second typed before the 300 s
+    length was dropped (decision 170). The count comes from `_N_LENGTHS_WORD`, the one place the
+    notes already take it from, so the two cannot disagree again."""
+    power, pain, centers = _synthetic_grid(seed=17)
+    sw = A.band_time_sweep_from_power(power, pain, center_freqs_hz=centers, n_perm=200, n_boot=300)
+    word = A._N_LENGTHS_WORD
+    assert word == "nine", word
+    rows = list(sw["best_correlation_rows"]) + list(sw["best_auc_rows"])
+    assert rows
+    n_shuffled = 0
+    for r in rows:
+        why = str(r["why"]).lower()
+        assert "best-of-ten" not in why, why
+        assert " ten " not in why and "of ten" not in why, why
+        assert f" {word} lengths of signal" in why, why
+        if "shuffled" in why:
+            n_shuffled += 1
+            assert f"best-of-{word}" in why, why
+    assert n_shuffled, "no row named the shuffled level, so the best-of wording was not exercised"
+    print(f"OK {len(rows)} row sentences count the lengths as '{word}', {n_shuffled} name the shuffled level")
+
+
 # ---------------------------------------------------------------------------------------------
 # 7. the reported maximum is judged against the shuffled best of ten
 # ---------------------------------------------------------------------------------------------

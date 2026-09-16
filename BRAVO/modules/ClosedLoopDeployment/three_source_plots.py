@@ -224,18 +224,17 @@ def _route_direction(panel) -> str:
 
 def build_context(comparison: TSR.ThreeSourceComparison, *,
                   spectrum_lo_hz=SPECTRUM_LO_HZ, spectrum_hi_hz=SPECTRUM_HI_HZ) -> FigureContext:
-    """Reduce one comparison to the numbers and every sentence the figure prints.
+    """Reduce one comparison to the numbers the page and the static figure draw, plus the footer.
 
-    Both renderings read this and only this. Every sentence below is built out of what the data
-    turned out to be; none of them is written down in advance, because a written-down claim goes
-    false the moment the data move and does it without saying anything.
+    Both renderings read this and only this; the static figure's own sentences come from
+    `figure_text`, called by the renderers. Every sentence is built out of what the data turned out
+    to be; none is written down in advance, because a written-down claim goes false the moment the
+    data move and does it without saying anything.
     """
     ctx = FigureContext(comparison=comparison,
                         spectrum_lo_hz=float(spectrum_lo_hz),
                         spectrum_hi_hz=float(spectrum_hi_hz))
     c = comparison
-    band_phrase = (f"{c.programmed_centre_hz:g} Hz" if c.programmed_centre_hz is not None
-                   else "no band the device reported sensing")
     striped = [f for f in c.bands_measuring_the_stimulator_hz
                if ctx.spectrum_lo_hz - 1e-9 <= f <= ctx.spectrum_hi_hz + 1e-9]
     ctx.striped_centres_hz = striped
@@ -243,47 +242,13 @@ def build_context(comparison: TSR.ThreeSourceComparison, *,
         f for f in c.stimulator_landings_hz
         if ctx.spectrum_lo_hz - TSR.BAND_HALF_HZ <= f <= ctx.spectrum_hi_hz + TSR.BAND_HALF_HZ)
 
-    dev = next((p for p in c.panels if p.source == TSR.SOURCE_DEVICE_BAND_POWER), None)
-    on_stim = bool(dev.band_is_measuring_the_stimulator) if dev else False
-
-    # The headline states what came out, and the clause about the stimulator is added ONLY when the
-    # band the device was sensing is one of the marked ones. A reader must not have to guess whether
-    # a missing clause means "checked and clean" or "not checked".
-    ctx.headline = (f"{c.ramped_side} stimulator turned up "
-                    f"{c.current_from_mA:g} to {c.current_to_mA:g} mA with the other side at zero: "
-                    f"{_agreement_sentence(c)}")
-    if on_stim:
-        ctx.headline += (f", and the {band_phrase} band the device was sensing is one of the bands "
-                         f"carrying a folded landing")
-
-    # Compressed 2026-09-11 (the PI: the text "should be significantly made much more concise").
-    ctx.subtitle = (f"{c.visit_date} \u00b7 sensing {c.sensing_contact} at {band_phrase} \u00b7 "
-                    f"{c.stimulation_rate_hz:g} Hz stimulation \u00b7 each point = mean of the last "
-                    f"{c.settled_window_s:g} s before the next step up")
-
-    ctx.amp_axis_label = f"Current delivered by the {c.ramped_side.lower()} stimulator (mA)"
-    ctx.power_axis_label = "Settled band power (device units)"
-
+    # The single-run prose (headline, subtitle, axis labels, per-column captions) is NOT built
+    # here. The page's pooled view (decision 125) reads `footer` and `absent_reason` and nothing
+    # else, so building the rest on every request computed sentences nobody printed -- the hazard
+    # decision 172 came from. `figure_text` builds them for the static figure, on demand.
     for p in c.panels:
         vals = [(a, v, n) for a, v, n in zip(p.current_mA, p.settled_power, p.n_pieces)
                 if v is not None]
-        if vals:
-            ns = [n for _, _, n in vals]
-            piece = (f"{min(ns)} pieces per point" if min(ns) == max(ns)
-                     else f"{min(ns)}\u2013{max(ns)} pieces per point")
-            band = (f"{p.band_centre_hz:g} Hz band" if p.band_centre_hz is not None else "no band")
-            off = p.offset_from_programmed_centre_hz
-            off_txt = ("" if off is None or abs(off) < 1e-9 else
-                       f" ({abs(off):.2f} Hz off the sensed band)")
-            outside = (p.band_inside_checked_conversion_range is False)
-            caption = (f"{_route_direction(p)}"
-                       f"{len(vals)} of {p.n_settings_offered} settings settled; {piece}. "
-                       f"{band}{off_txt}."
-                       + (f" Outside the checked {TSR.CHECKED_LO_HZ:g}\u2013{TSR.CHECKED_HI_HZ:g} Hz "
-                          f"conversion range: extrapolated."
-                          if outside else ""))
-        else:
-            caption = p.absent_reason or "no settled value"
 
         # The whole-spectrum lines for this column, cut to the drawn frequency range.
         centres = np.asarray(p.spectrum_centres_hz, dtype=float) if p.spectrum_centres_hz \
@@ -305,7 +270,6 @@ def build_context(comparison: TSR.ThreeSourceComparison, *,
             "current_mA": [a for a, _, _ in vals],
             "settled_power": [v for _, v, _ in vals],
             "n_pieces": [n for _, _, n in vals],
-            "caption": caption,
             "absent_reason": p.absent_reason,
             "covers_whole_spectrum": p.covers_whole_spectrum,
             "band_centre_hz": p.band_centre_hz,
@@ -327,6 +291,63 @@ def build_context(comparison: TSR.ThreeSourceComparison, *,
         + (f"; values span \u00d7{all_span:.0f} across all bands against \u00d7{drawn_span:.1f} "
            f"in the drawn range."
            if np.isfinite(all_span) and np.isfinite(drawn_span) else "."))
+    return ctx
+
+
+def figure_text(ctx: FigureContext) -> FigureContext:
+    """Fill in the sentences ONLY the static figure prints: the headline, the one-line subtitle,
+    the two axis labels and one caption per column. Mutates ``ctx`` in place and returns it.
+
+    Split out of `build_context` on 2026-09-15 (referent audit, item 9): the page's panel reads
+    `footer` and `absent_reason` alone, so these sentences are built only when `mpl_figure` or
+    `plotly_figure` is about to draw them, never on the request path and never into the response.
+    Every sentence is still derived from the numbers, none is written down in advance.
+    """
+    c = ctx.comparison
+    band_phrase = (f"{c.programmed_centre_hz:g} Hz" if c.programmed_centre_hz is not None
+                   else "no band the device reported sensing")
+    dev = next((p for p in c.panels if p.source == TSR.SOURCE_DEVICE_BAND_POWER), None)
+    on_stim = bool(dev.band_is_measuring_the_stimulator) if dev else False
+
+    # The headline states what came out, and the clause about the stimulator is added ONLY when the
+    # band the device was sensing is one of the marked ones. A reader must not have to guess whether
+    # a missing clause means "checked and clean" or "not checked".
+    ctx.headline = (f"{c.ramped_side} stimulator turned up "
+                    f"{c.current_from_mA:g} to {c.current_to_mA:g} mA with the other side at zero: "
+                    f"{_agreement_sentence(c)}")
+    if on_stim:
+        ctx.headline += (f", and the {band_phrase} band the device was sensing is one of the bands "
+                         f"carrying a folded landing")
+
+    # Compressed 2026-09-11 (the PI: the text "should be significantly made much more concise").
+    ctx.subtitle = (f"{c.visit_date} \u00b7 sensing {c.sensing_contact} at {band_phrase} \u00b7 "
+                    f"{c.stimulation_rate_hz:g} Hz stimulation \u00b7 each point = mean of the last "
+                    f"{c.settled_window_s:g} s before the next step up")
+
+    ctx.amp_axis_label = f"Current delivered by the {c.ramped_side.lower()} stimulator (mA)"
+    ctx.power_axis_label = "Settled band power (device units)"
+
+    # One column per panel, in the same order `build_context` appended them.
+    for p, col in zip(c.panels, ctx.columns):
+        vals = [(a, v, n) for a, v, n in zip(p.current_mA, p.settled_power, p.n_pieces)
+                if v is not None]
+        if vals:
+            ns = [n for _, _, n in vals]
+            piece = (f"{min(ns)} pieces per point" if min(ns) == max(ns)
+                     else f"{min(ns)}\u2013{max(ns)} pieces per point")
+            band = (f"{p.band_centre_hz:g} Hz band" if p.band_centre_hz is not None else "no band")
+            off = p.offset_from_programmed_centre_hz
+            off_txt = ("" if off is None or abs(off) < 1e-9 else
+                       f" ({abs(off):.2f} Hz off the sensed band)")
+            outside = (p.band_inside_checked_conversion_range is False)
+            col["caption"] = (f"{_route_direction(p)}"
+                              f"{len(vals)} of {p.n_settings_offered} settings settled; {piece}. "
+                              f"{band}{off_txt}."
+                              + (f" Outside the checked {TSR.CHECKED_LO_HZ:g}\u2013"
+                                 f"{TSR.CHECKED_HI_HZ:g} Hz conversion range: extrapolated."
+                                 if outside else ""))
+        else:
+            col["caption"] = p.absent_reason or "no settled value"
     return ctx
 
 
@@ -369,6 +390,7 @@ def _current_shades(ink: str, currents) -> List[str]:
 # The static picture
 # -------------------------------------------------------------------------------------------------
 def mpl_figure(ctx: FigureContext):
+    figure_text(ctx)
     """Draw the comparison with matplotlib and hand back the figure.
 
     Drawn directly rather than exported from the browser figure, because static export needs a
@@ -516,6 +538,7 @@ def _wrap(text: str, width: int) -> str:
 # The picture the browser gets
 # -------------------------------------------------------------------------------------------------
 def plotly_figure(ctx: FigureContext) -> Dict[str, Any]:
+    figure_text(ctx)
     """The same comparison as a Plotly figure dictionary, built from the SAME context.
 
     Returned as a plain dictionary of data and layout rather than a Plotly object, so the server can
@@ -635,11 +658,14 @@ def render_all(comparisons, outdir=".", *, prefix="three_source_response"):
 
 
 def context_payload(ctx: FigureContext) -> Dict[str, Any]:
-    """One comparison, packaged for the browser: the numbers plus every derived sentence.
+    """One comparison, packaged for the browser: the numbers, the footer and each route's reason
+    for being absent.
 
-    The panel on the page draws from this, and so does the static picture, so the two cannot come to
-    disagree about what happened. No Plotly is needed to build it, which matters because the report
-    is assembled on a request where a missing drawing library must not cost the reader the numbers.
+    The page's panel (`ThreeSourceResponsePanel.js`) reads `footer` and `absent_reason` from this;
+    the single-run headline, subtitle, axis labels, captions and notes it used to carry were read
+    by nothing after decision 125 and are no longer built into it (referent audit 2026-09-15,
+    item 9). No Plotly is needed to build it, which matters because the report is assembled on a
+    request where a missing drawing library must not cost the reader the numbers.
     """
     c = ctx.comparison
     return {
@@ -655,12 +681,7 @@ def context_payload(ctx: FigureContext) -> Dict[str, Any]:
         "current_to_mA": c.current_to_mA,
         "n_settings": c.n_settings,
         "settled_window_s": c.settled_window_s,
-        "headline": ctx.headline,
-        "subtitle": ctx.subtitle,
         "footer": ctx.footer,
-        "amp_axis_label": ctx.amp_axis_label,
-        "power_axis_label": ctx.power_axis_label,
-        "band_axis_label": "Middle of the 5 Hz band (Hz)",
         "spectrum_lo_hz": ctx.spectrum_lo_hz,
         "spectrum_hi_hz": ctx.spectrum_hi_hz,
         "striped_centres_hz": ctx.striped_centres_hz,
@@ -668,11 +689,12 @@ def context_payload(ctx: FigureContext) -> Dict[str, Any]:
         "checked_lo_hz": TSR.CHECKED_LO_HZ,
         "checked_hi_hz": TSR.CHECKED_HI_HZ,
         "band_half_hz": TSR.BAND_HALF_HZ,
-        "columns": ctx.columns,
+        # `caption` is filled in only by `figure_text`, for the static figure; it is dropped here
+        # in case a caller drew the figure from this same context before packaging it.
+        "columns": [{k: v for k, v in col.items() if k != "caption"} for col in ctx.columns],
         # Said in the payload as well as on the figure, so a panel written later cannot pick up the
-        # numbers without the sentence that says what they do and do not show.
+        # numbers without the sentence (the footer) that says what they do and do not show.
         "gates_nothing": True,
-        "notes": c.notes,
     }
 
 

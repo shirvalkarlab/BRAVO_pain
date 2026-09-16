@@ -8052,7 +8052,7 @@ sweep_settings_tag = sweep_settings.sweep_settings_tag                       # r
 sweep_settings_tag_from_request = sweep_settings.sweep_settings_tag_from_request
 
 
-_BAND_SWEEP_RULE_VERSION = "v16_notes_speak_of_the_circled_cell"
+_BAND_SWEEP_RULE_VERSION = "v17_snapshot_count_in_fields_not_notes_and_one_lengths_word"
 
 #: Response fields that are timings of the run that produced them, not results. They are not
 #: compared when a stored response is checked against a fresh one, and a served response keeps the

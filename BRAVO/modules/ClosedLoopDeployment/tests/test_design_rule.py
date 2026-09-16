@@ -361,7 +361,36 @@ def test_design_rule_note_states_the_stored_and_required_separation():
     assert note is not None
     assert "+-24.3" in note                # (234.87-186.27)/2 = 24.30
     assert "+-25" in note
-    assert "3 s averaging" in note and "30 s onset" in note
+
+
+def test_design_rule_note_at_the_cards_own_timing_does_not_restate_the_timing():
+    """Referent audit 2026-09-15, item 6. This sentence sits directly above `occupancy_note`,
+    which opens "At the 3 s averaging duration in force"; when the rule's row IS the card's timing
+    the note says so and leaves the numbers to the row above it, rather than printing the same
+    averaging and onset on two stacked lines under one field."""
+    rows = [{"averaging_s": 3.0, "onset_s": 30.0, "min_separation": 25.0, "sweep": []}]
+    note = PR.design_rule_note(_payload(rows), upper=234.87, lower=186.27, averaging_ms=3000.0,
+                               onset_ms=30000.0)
+    assert "at the timing shown on this card" in note, note
+    assert "s averaging /" not in note, note
+    assert "s onset" not in note, note
+    # the "never" branch takes the same rule
+    never = [{"averaging_s": 30.0, "onset_s": 30.0, "min_separation": None, "sweep": []}]
+    note2 = PR.design_rule_note(_payload(never), upper=220.0, lower=200.0, averaging_ms=30000.0,
+                                onset_ms=30000.0)
+    assert "at the timing shown on this card" in note2, note2
+    assert "s averaging /" not in note2, note2
+
+
+def test_design_rule_note_names_both_timings_when_the_rule_was_evaluated_elsewhere():
+    """When the table holds no row at the card's timing the nearest one is used, and THEN the
+    timing is information the reader cannot get from the row above: both numbers stay."""
+    rows = [{"averaging_s": 3.0, "onset_s": 30.0, "min_separation": 25.0, "sweep": []}]
+    note = PR.design_rule_note(_payload(rows), upper=234.87, lower=186.27, averaging_ms=6000.0,
+                               onset_ms=60000.0)
+    assert "3 s averaging" in note and "30 s onset" in note, note
+    assert "nearest evaluated timing" in note, note
+    assert "at the timing shown on this card" not in note, note
 
 
 def test_design_rule_note_states_never_when_min_separation_is_none():

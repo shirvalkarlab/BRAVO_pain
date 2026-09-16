@@ -518,12 +518,10 @@ function Biomarkers() {
   }), [source, metric, strategy, percentileLowD, percentileHighD, matchToleranceD, maxPerRatingD,
       refractoryMinD, matchDirection, matchExtentSecD, allowWindowReuse]);
 
-  // Render an honest, multi-line summary for a branch: the headline estimate plus the rigor
-  // statistics (FDR q, permutation p, autocorrelation-adjusted effective n, Fisher-z CI for the
-  // time domain; balanced accuracy vs chance + AUC for the power domain) and any caveats.
-  // [removed] summaryLine() — the legacy Time-/Power-domain dual-pipeline prose summary it
-  // generated was replaced by the concise per-channel matched-sample + TD/PSD-LSB summary
-  // rendered inline below the Recompute button (see the spectral_feature_importance block).
+  // [removed] summaryLine() — the legacy Time-/Power-domain dual-pipeline prose summary — and,
+  // on 2026-09-15 (referent audit, item 7), the per-channel high/low/excluded count block that
+  // replaced it: that block read a field the backend stopped computing at decision 77, so it had
+  // drawn nothing since. The calibrated heat maps below carry the matched-report counts now.
 
   return (
     <>
@@ -974,71 +972,6 @@ function Biomarkers() {
                               : ""}
                           </MDTypography>
                         ) : null}
-                        {/* Concise per-channel matched-sample summary (replaces the legacy dual-
-                            pipeline Time-/Power-domain prose). For each bipolar channel: how many
-                            matched samples fell HIGH / LOW / excluded-middle by the active cut, and
-                            how many of the channel's LSB vectors are time-domain-derived vs PSD-
-                            derived. Only modeled/real LSB values feed the spectral feature-importance
-                            scan, so these two source counts ARE the analyzable-sample budget. */}
-                        {(() => {
-                          const sfi = data.analytics && data.analytics.timedomain
-                            && data.analytics.timedomain.spectral_feature_importance;
-                          const chansRaw = (sfi && sfi.channels) || [];
-                          if (!chansRaw.length) return null;
-                          // Group all LEFT channels first, then all RIGHT (stable within each side),
-                          // so the list reads L … L, R … R rather than interleaved by backend order.
-                          const sideRank = (c) => {
-                            const s = String((c && c.short) || "").trim().toUpperCase();
-                            if (s[0] === "L") return 0;
-                            if (s[0] === "R") return 1;
-                            return 2;
-                          };
-                          const chans = chansRaw
-                            .map((c, i) => [c, i])
-                            .sort((a, b) => (sideRank(a[0]) - sideRank(b[0])) || (a[1] - b[1]))
-                            .map((pair) => pair[0]);
-                          return (
-                            <MDBox mt={0.5} mb={0.5}>
-                              <MDTypography variant="button" fontWeight="medium" color="dark" display="block">
-                                {"Matched samples per channel "}
-                                <span style={{ fontWeight: 400, color: "#6c757d" }}>
-                                  {"(high / low / excluded · LSB source TD / PSD)"}
-                                </span>
-                              </MDTypography>
-                              {chans.map((c, i) => (
-                                <MDTypography key={i} variant="caption" color="text" display="block"
-                                  sx={{ fontSize: 12.5, lineHeight: 1.5 }}>
-                                  <strong>{c.short}</strong>
-                                  {`: ${c.n_high != null ? c.n_high : "—"} high · `
-                                   + `${c.n_low != null ? c.n_low : "—"} low · `
-                                   + `${c.n_excluded != null ? c.n_excluded : "—"} excluded`}
-                                  {(c.n_td != null || c.n_psd_bridge != null)
-                                    ? <span style={{ color: "#6c757d" }}>{`  ·  ${c.n_td || 0} TD / ${c.n_psd_bridge || 0} PSD LSBs`}</span>
-                                    : null}
-                                </MDTypography>
-                              ))}
-                              {chans.length > 0 && (() => {
-                                // Coherent pooled total = SUM of the per-channel distinct-LSB counts
-                                // above (NOT sfi.binarization, which is pooled epoch-rows in a different
-                                // unit) so this line reconciles with the rows it summarizes.
-                                const sH = chans.reduce((s, c) => s + (c.n_high || 0), 0);
-                                const sL = chans.reduce((s, c) => s + (c.n_low || 0), 0);
-                                const sE = chans.reduce((s, c) => s + (c.n_excluded || 0), 0);
-                                const sTD = chans.reduce((s, c) => s + (c.n_td || 0), 0);
-                                const sPSD = chans.reduce((s, c) => s + (c.n_psd_bridge || 0), 0);
-                                return (
-                                  <MDTypography variant="caption" fontStyle="italic" color="dark" display="block"
-                                    sx={{ fontSize: 11.5, lineHeight: 1.5, mt: 0.25 }}>
-                                    {`All channels: ${sH} high · ${sL} low · ${sE} excluded-middle `
-                                     + `(${sTD} TD · ${sPSD} PSD LSBs). `
-                                     + "Each count is one distinct rating carrying a resolved LSB; only "
-                                     + "those feed the spectral feature-importance scan."}
-                                  </MDTypography>
-                                );
-                              })()}
-                            </MDBox>
-                          );
-                        })()}
                         {data.recorded_powers && data.recorded_powers.length ? (() => {
                           const left  = data.recorded_powers.filter((p) => /\bL\b|Left/i.test(p.label));
                           const right = data.recorded_powers.filter((p) => /\bR\b|Right/i.test(p.label));

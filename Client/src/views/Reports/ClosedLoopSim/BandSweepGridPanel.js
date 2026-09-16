@@ -66,6 +66,7 @@ function mergedRows(sweepForChannel) {
     existing.auc_high = r.auc_high;
     existing.auc_n_pain_reports = r.n_pain_reports;
     existing.auc_seconds = r.integration_seconds_delivered;
+    existing.auc_chosen_as_best_of_n_windows = r.chosen_as_best_of_n_windows;
     existing.auc_answer = r.answer;
     existing.family_wise_q_auc = r.family_wise_q_8_to_30hz;
     existing.family_wise_significant_auc = r.family_wise_significant_8_to_30hz;
@@ -78,6 +79,35 @@ function mergedRows(sweepForChannel) {
     byCenter.set(r.band_center_hz, existing);
   });
   return Array.from(byCenter.values()).sort((a, b) => a.band_center_hz - b.band_center_hz);
+}
+
+// How many lengths of signal the sweep tried, read from the data and never typed here: a row's
+// own `chosen_as_best_of_n_windows` first, then the channel's list of delivered lengths. The
+// sweep tried ten lengths until decision 170 and nine since, and a typed "10" outlived the change
+// on this card (referent audit 2026-09-15, items 1 and 5). The last-resort fallback is the count
+// the sweep runs today, used only when a response carries neither field.
+const N_LENGTHS_FALLBACK = 9;
+const N_LENGTHS_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
+  "nine", "ten", "eleven", "twelve"];
+
+function nLengthsForRow(row, fromAucSide) {
+  const own = fromAucSide ? row.auc_chosen_as_best_of_n_windows : row.chosen_as_best_of_n_windows;
+  const other = fromAucSide ? row.chosen_as_best_of_n_windows : row.auc_chosen_as_best_of_n_windows;
+  const n = own != null ? own : other;
+  return n != null && Number.isFinite(Number(n)) ? Number(n) : N_LENGTHS_FALLBACK;
+}
+
+function nLengthsForChannel(sweepForChannel, rows) {
+  const delivered = sweepForChannel && sweepForChannel.integration_seconds_delivered;
+  if (Array.isArray(delivered) && delivered.length > 0) return delivered.length;
+  const row = (rows || []).find((r) => r.chosen_as_best_of_n_windows != null
+    || r.auc_chosen_as_best_of_n_windows != null);
+  return row ? nLengthsForRow(row, row.chosen_as_best_of_n_windows == null) : N_LENGTHS_FALLBACK;
+}
+
+/** "nine" for 9, "22" for 22: a word where English has a short one, digits otherwise. */
+function countWord(n) {
+  return Number.isInteger(n) && n >= 0 && n < N_LENGTHS_WORDS.length ? N_LENGTHS_WORDS[n] : String(n);
 }
 
 /** Near-black on a pale cell, white on a saturated one, so the value reads on every fill. */
@@ -267,13 +297,13 @@ export default function BandSweepGridPanel({ grid, participantUid, committed, on
       + (row.pearson_r_low != null && row.pearson_r_high != null
         ? ` (95% interval ${fmtNum(row.pearson_r_low, 3)} to ${fmtNum(row.pearson_r_high, 3)})` : "")
       + (row.integration_seconds_delivered != null
-        ? `, best of ${row.chosen_as_best_of_n_windows || 10} lengths at ${fmtNum(row.integration_seconds_delivered, 0)} s` : "")
+        ? `, best of ${nLengthsForRow(row, false)} lengths at ${fmtNum(row.integration_seconds_delivered, 0)} s` : "")
       + (row.n_pain_reports != null ? `, ${row.n_pain_reports} pain reports` : ""));
   const aucTip = (row) => (row.auc == null ? "no AUC for this band"
     : `AUC = ${fmtNum(row.auc, 3)}`
       + (row.auc_low != null && row.auc_high != null
         ? ` (95% interval ${fmtNum(row.auc_low, 3)} to ${fmtNum(row.auc_high, 3)})` : "")
-      + (row.auc_seconds != null ? `, best of 10 lengths at ${fmtNum(row.auc_seconds, 0)} s` : "")
+      + (row.auc_seconds != null ? `, best of ${nLengthsForRow(row, true)} lengths at ${fmtNum(row.auc_seconds, 0)} s` : "")
       + (row.auc_n_pain_reports != null ? `, ${row.auc_n_pain_reports} pain reports` : ""));
 
   return (
@@ -374,7 +404,7 @@ export default function BandSweepGridPanel({ grid, participantUid, committed, on
         <Collapse in={showHelp}>
           <MDTypography variant="caption" color="text" display="block" mt={0.5}
             sx={{ fontSize: 11, maxWidth: "80ch" }}>
-            Each colour cell is the strongest of ten lengths of signal for that band, so it is
+            Each colour cell is the strongest of {countWord(nLengthsForChannel(sw, rows))} lengths of signal for that band, so it is
             optimistic by construction; hover a cell for its interval, the length it came from and
             the number of pain reports. Every band is selectable, including one that does not clear
             the 22-centre correction &mdash; the marks are labels, not permissions. The device&apos;s

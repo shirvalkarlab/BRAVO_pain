@@ -223,16 +223,19 @@ def test_the_marking_reaches_every_row_of_the_table_and_the_figure_text():
     assert all(TSP.SPECTRUM_LO_HZ <= f <= TSP.SPECTRUM_HI_HZ for f in ctx.striped_centres_hz)
 
 
-def test_the_headline_says_so_when_the_sensed_band_is_measuring_the_stimulator():
-    """A band the device was sensing that is really the stimulator must be named in the headline.
+def test_the_static_figures_headline_says_so_when_the_sensed_band_is_measuring_the_stimulator():
+    """A band the device was sensing that is really the stimulator must be named in the STATIC
+    figure's headline (`mpl_figure` / `plotly_figure`, reached by no page since decision 125; the
+    page's pooled view reads `footer` only). The headline is built by `figure_text`, on demand,
+    not on the request path.
 
     This is the failure that actually happened on this record: an artifact band reaching 45506
     device units looked like a spectacular biomarker until it was marked.
     """
     on_stim = _build(device=_device(centre_hz=25.0, value=300.0, currents=[0.0, 1.0, 2.0, 3.0]))
-    assert "carrying a folded landing" in TSP.build_context(on_stim).headline
+    assert "carrying a folded landing" in TSP.figure_text(TSP.build_context(on_stim)).headline
     clean = _build(device=_device(centre_hz=10.0, value=300.0, currents=[0.0, 1.0, 2.0, 3.0]))
-    assert "carrying a folded landing" not in TSP.build_context(clean).headline
+    assert "carrying a folded landing" not in TSP.figure_text(TSP.build_context(clean)).headline
 
 
 # -------------------------------------------------------------------------------------------------
@@ -406,15 +409,43 @@ def test_the_payload_gates_nothing_and_carries_no_verdict():
     flat = repr(payload).lower()
     for word in ("blocking_status", "verdict", '"pass"', '"fail"', "gate_passed", "deployable"):
         assert word not in flat, f"the payload carries {word}, which would let it gate something"
-    assert payload["comparisons"][0]["notes"], "the payload lost the sentence about independence"
-    assert any("not independent" in n or "checks the conversion" in n or "conversion is behaving" in n
-               for n in payload["comparisons"][0]["notes"] + [payload["comparisons"][0]["footer"]])
+    footer = payload["comparisons"][0]["footer"]
+    assert footer, "the payload lost the sentence about independence"
+    assert "not independent" in footer or "checks the conversion" in footer, footer
 
 
-def test_the_figure_text_is_derived_and_moves_when_the_numbers_move():
-    """No sentence on the figure may be a fixed claim: change the data, the sentence must change."""
-    a = TSP.build_context(_build(device=_device(value=300.0, currents=[0.0, 1.0, 2.0, 3.0])))
-    b = TSP.build_context(_build(device=_device(value=3000.0, currents=[0.0, 1.0, 2.0, 3.0])))
+def test_the_comparison_payload_carries_the_footer_and_none_of_the_unread_figure_text():
+    """Referent audit 2026-09-15, item 9. The page's panel reads `comparisons[0].footer` and
+    `absent_reason` and nothing else (`ThreeSourceResponsePanel.js`); the single-run headline,
+    subtitle, axis labels, per-column captions and the four `notes` were computed on every request
+    and printed nowhere since decision 125 replaced the single-run chart with the pooled view. The
+    numbers all stay; the prose nobody prints is no longer built into the response."""
+    comp = _build()
+    payload = TSP.report_payload({"comparisons": [comp], "gates_nothing": True})
+    entry = payload["comparisons"][0]
+    assert entry["footer"]
+    for gone in ("headline", "subtitle", "amp_axis_label", "power_axis_label", "band_axis_label",
+                 "notes"):
+        assert gone not in entry, gone
+    for kept in ("label", "ramped_side", "sensing_contact", "visit_date", "programmed_centre_hz",
+                 "stimulation_rate_hz", "current_from_mA", "current_to_mA", "n_settings",
+                 "settled_window_s", "spectrum_lo_hz", "spectrum_hi_hz", "striped_centres_hz",
+                 "landings_in_view_hz", "columns", "gates_nothing"):
+        assert kept in entry, kept
+    for col in entry["columns"]:
+        assert "caption" not in col, col.keys()
+        for kept in ("source", "current_mA", "settled_power", "n_pieces", "absent_reason",
+                     "band_centre_hz", "spectrum_lines", "conversion"):
+            assert kept in col, kept
+
+
+def test_the_static_figure_text_is_derived_and_moves_when_the_numbers_move():
+    """No sentence on the static figure may be a fixed claim: change the data, the sentence must
+    change. (`figure_text` builds these; the request path does not.)"""
+    a = TSP.figure_text(TSP.build_context(
+        _build(device=_device(value=300.0, currents=[0.0, 1.0, 2.0, 3.0]))))
+    b = TSP.figure_text(TSP.build_context(
+        _build(device=_device(value=3000.0, currents=[0.0, 1.0, 2.0, 3.0]))))
     assert a.headline != b.headline, "the headline did not move when the numbers moved"
     dev_a = next(c for c in a.columns if c["source"] == TSR.SOURCE_DEVICE_BAND_POWER)
     dev_b = next(c for c in b.columns if c["source"] == TSR.SOURCE_DEVICE_BAND_POWER)
