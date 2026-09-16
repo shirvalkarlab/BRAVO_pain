@@ -665,6 +665,11 @@ def _yield_sentence(n_points, n_up, rec, margin) -> str:
             m = (f"a run with at least {need} settled settings already exists, so the 20 s post-ramp "
                  f"margin (decision 144) " + ("is switched on" if on else
                                               "can be switched on (it is off today)"))
+        elif on:
+            m = (f"no run in the record has the {need} settled settings that would make the 20 s "
+                 f"post-ramp margin safe against two removed points flipping a verdict, and it is "
+                 f"switched on (decision 178) ahead of that; this session's rising leg alone gives "
+                 f"{n_up}")
         else:
             m = (f"no run in the record has the {need} settled settings the margin needs, so the "
                  f"20 s post-ramp margin (decision 144) stays off until this session is recorded; "

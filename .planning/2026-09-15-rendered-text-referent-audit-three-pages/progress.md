@@ -115,3 +115,9 @@
   main.308939e8, same three index.js warnings shifted two lines. Workers HUP'd, four fresh. Decision 176.
 - Open item 29 closed (2026-09-15, late): on the PI's "go ahead", GitHub default branch v3.1.0 -> PS_closedloop_deployment
   (`gh repo edit`, read back), upstream set, origin/HEAD refreshed, CLAUDE.md §4 and AGENTS.md corrected. Decision 177.
+- Phase 5 (2026-09-15, late): "do 144". Before capture (switch off) on L 0-2+ / L 1-3+ 24.5 Hz; 2 tests RED
+  (default ON; titration sentence's on-but-no-session case), 3 "never flips" tests re-pinned to "unchanged"; switch
+  ON; GREEN 83/83; after capture (tables rebuilt under _20s). L 0-2+: 48,092 -> 47,508, 2,898 diff (2,848 pooled
+  panel), verdict/thresholds/ledger 0 diff. L 1-3+: E1 -3.79 (13 pts, 4 runs) -> +17.31 (11 pts, 3 runs, p 0.074),
+  D19 blocks, verdict supported(provisional) -> blocked. Suites host 1298/2/0, container 645/0. Workers HUP'd.
+  Decision 178; open item 31 written (139 vs Kalman: no interference, but the capture rule still owns the pair).

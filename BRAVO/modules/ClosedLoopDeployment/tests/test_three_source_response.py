@@ -469,7 +469,8 @@ def test_the_first_twenty_seconds_after_a_current_change_are_left_out_of_the_set
     could never reach INTO the ramp -- but it could start the instant the current stopped moving.
     WITH THE SWITCH ON, `within_visit.RAMP_EXCLUDE_S` (20 s) is applied here, as it is in the Stim
     Optimizer's own settled-tile reading. Pieces in those 20 s carry a value the settled mean must
-    not contain. The switch ships OFF (decision 144; `post_ramp.py` says why) -- the next test."""
+    not contain. The switch shipped OFF from decision 144 until decision 178 (2026-09-15); it is
+    set explicitly here so the test reads the same whichever way the default goes."""
     from StimOptimizer.routines import within_visit as WV
     from ClosedLoopDeployment import post_ramp
     monkeypatch.setattr(post_ramp, "USE_POST_RAMP_MARGIN", True)
@@ -503,13 +504,16 @@ def test_the_first_twenty_seconds_after_a_current_change_are_left_out_of_the_set
     assert all(v > 100.0 for v in power[1:, 0])
 
 
-def test_the_margin_ships_off_and_the_settled_window_then_starts_at_the_move_end():
-    """The default (decision 144): the first 20 s after a move stay IN the window, exactly the rule
-    before 2026-09-12, so the PI's page reads as it did until he decides on the margin. Same ladder
-    as the test above: with the margin off the settled mean carries the first-20-seconds value."""
+def test_the_margin_ships_on_since_decision_178_and_off_puts_the_first_20_s_back_in_the_window(monkeypatch):
+    """The default is ON (the PI's "do 144", 2026-09-15; decision 178): `post_ramp.margin_s()` is
+    20 and every derived table's rule version ends in "_20s". Switched OFF by monkeypatch, the rule
+    before 2026-09-12 returns: the first 20 s after a move stay IN the window, and on the same
+    ladder as the test above the settled mean carries the first-20-seconds value."""
     from ClosedLoopDeployment import post_ramp
     from StimOptimizer.routines import within_visit as WV
-    assert post_ramp.USE_POST_RAMP_MARGIN is False
+    assert post_ramp.USE_POST_RAMP_MARGIN is True
+    assert post_ramp.margin_s() == 20.0 and post_ramp.version_tag() == "20s"
+    monkeypatch.setattr(post_ramp, "USE_POST_RAMP_MARGIN", False)
     assert post_ramp.margin_s() == 0.0 and post_ramp.version_tag() == "off"
     hold_s, piece_s = 45.0, 1.5
     currents = [0.0, 1.0, 2.0, 3.0]

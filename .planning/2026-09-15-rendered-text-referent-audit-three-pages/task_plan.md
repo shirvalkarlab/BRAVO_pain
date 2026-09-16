@@ -10,12 +10,14 @@ This is the class the PI caught twice on 2026-09-15 (decisions 172, 173) after t
 found its mirror image ("computed, stored, tested, not on the page", decision 167 §5).
 
 ## Next Step
-Nothing queued. Phase 4 done (decision 176): the four leftovers of decision 174 fixed test-first, plus the second
+Nothing queued. Phase 5 done (decision 178: the margin is on; L 1-3+ reads blocked, L 0-2+ unchanged). The
+Google Sheets key is his to create (guide given 2026-09-15); open item 31 (who owns the threshold pair) is his call.
+(Phase 4 done, decision 176): the four leftovers of decision 174 fixed test-first, plus the second
 copy of the gate count the live proof exposed. Open item 29 closed the same night (decision 177). Still his: decision 139's threshold
 re-centring, decision 144's post-ramp switch, the Google Sheets key (decision 163), the titration session (item 30).
 
 ## Current Phase
-Phase 4
+Phase 5
 
 ### Phase 1: Review (the PI calls /swarm-review with findings.md §1)
 - [x] Rendered-text inventory per page: every string a card draws, its panel, the element beside it, its referent
@@ -43,6 +45,14 @@ Phase 4
 - [x] The two dead "best-of-ten" headline builders in `analytics.py` deleted, with the one test that called them
 - [x] The server gate verdict string no longer counts a not-assessed condition as blocking (`stage_gate.py`) -- BOTH copies: `describe()` and the response's `gate.verdict`, the second found by the live proof
 - [x] Suites, rebuild where a Client file changes, decision-log entry, push
+- **Status:** complete
+
+### Phase 5: Decision 144's switch, on (the PI's "do 144", 2026-09-15 late)
+- [x] "Before" capture with the margin off: the Closed-Loop report on L 0-2+ and L 1-3+ at 24.5 Hz
+- [x] Tests RED: the default is ON; the three "never flips the switch" tests pin "unchanged", not "False"; the titration card's sentence for on-but-no-session
+- [x] `USE_POST_RAMP_MARGIN = True`; GREEN; both suites
+- [x] "After" capture; field count and difference count per band; the verdict, E1, D19 and the thresholds named
+- [x] Workers reloaded; decision-log entry; push
 - **Status:** complete
 
 ## Decisions Made

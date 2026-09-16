@@ -140,9 +140,10 @@ def _run_rows(run, currents, *, contact="ONE_THREE_LEFT", centre=20.5, source="v
 def test_3_margin_availability_is_derived_from_the_stored_table_and_never_flips_the_switch():
     # today's record: at most six settled settings in one run -> not available
     today = pd.DataFrame(_run_rows("2026-08-18 L", [1.0, 1.5, 2.0, 2.5, 3.0, 3.5]))
+    switch_before, margin_before = PR.USE_POST_RAMP_MARGIN, PR.margin_s()
     m = PR.margin_becomes_available(today)
-    assert m["available"] is False and m["switch_on"] is False
-    assert PR.USE_POST_RAMP_MARGIN is False, "asking the question must never change the answer"
+    assert m["available"] is False and m["switch_on"] is switch_before
+    assert PR.USE_POST_RAMP_MARGIN is switch_before, "asking the question must never change the answer"
 
     # a titration session, constructed: 0-5.0 mA in 0.5 mA steps, all settled -> 11 settings
     titration = pd.DataFrame(_run_rows("titration L", [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]))
@@ -150,9 +151,10 @@ def test_3_margin_availability_is_derived_from_the_stored_table_and_never_flips_
     assert m2["available"] is True, "the derived flag reflects the titration session's own data"
     assert m2["max_settled_settings_in_one_run"] == 11 and m2["run"] == "titration L"
     # AND STILL, the module constant that actually changes behaviour is untouched: this is his
-    # call (decision 144), not a thing code flips for him once the data support it
-    assert m2["switch_on"] is False and PR.USE_POST_RAMP_MARGIN is False
-    assert PR.margin_s() == 0.0, "the margin does not start applying itself"
+    # call (decision 144 off, decision 178 on), not a thing code flips for him once the data
+    # support it
+    assert m2["switch_on"] is switch_before and PR.USE_POST_RAMP_MARGIN is switch_before
+    assert PR.margin_s() == margin_before, "the margin does not switch itself either way"
 
 
 # --------------------------------------------------------------------------------------------
