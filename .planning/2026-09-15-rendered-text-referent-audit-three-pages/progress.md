@@ -96,3 +96,9 @@
   `headline` switch, off on the sheet; the verbatim verdict line is the headline, the box keeps the per-edge intervals.
   Two RED-then-GREEN tests; jest 66/2 (known pair); build main.00efb7be; watched live -- the sheet carries the count
   once, the page four times (header x2, parameter card, sheet).
+- Landing (2026-09-15 late evening). PR #12 opened against v3.1.0 (29 commits, decisions 157-175). CI -- which does
+  exist, `.github/workflows/ci.yml`, three jobs -- failed its secret scan on the three fixture JSONs: gitleaks'
+  generic rule matched the cache-store keys (`<kind>/<uid>/<40-hex digest>`), labels not secrets; every flagged value
+  read before deciding; the three fingerprints added to `.gitleaksignore` with the reason (372fbfff). CLAUDE.md §1 and
+  §7 corrected to say the three CI jobs exist and what they leave out (22288091). All six checks green on the head;
+  merged as a2dd109a with the branch kept, as #9-#11 were. Open item 29's gap reopens with the next commit here.

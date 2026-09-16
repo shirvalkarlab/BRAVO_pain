@@ -10,8 +10,10 @@ This is the class the PI caught twice on 2026-09-15 (decisions 172, 173) after t
 found its mirror image ("computed, stored, tested, not on the page", decision 167 §5).
 
 ## Next Step
-Done (decision 174, pushed; browser walk done in the PI's own signed-in session). Open for his call: the four things
-decision 174 lists under "found on the way, not fixed", plus the lowercase opening of the reliable-change fold's sentence.
+Done and merged (PR #12 -> v3.1.0 as a2dd109a; decisions 174-175; browser walk done in the PI's own signed-in session).
+Still his call: the lowercase opening of the reliable-change fold's sentence, two stale comments in `Biomarkers/index.js`,
+the two dead "best-of-ten" headline builders in `analytics.py`, and whether the server's gate verdict should call a
+not-assessed condition "blocking".
 
 ## Current Phase
 Phase 3
