@@ -318,6 +318,20 @@ def test_design_rule_for_series_end_to_end_on_a_constructed_two_component_record
         # non-increasing as onset grows, allowing equality (both may bottom out at the grid floor)
         for (o1, s1), (o2, s2) in zip(finite, finite[1:]):
             assert s2 <= s1, (avg, o1, s1, o2, s2)
+        # 2026-09-15: two onsets that round to the SAME number of confirmation windows at this
+        # averaging duration are one device configuration and must carry one answer. With the
+        # grid capped at 30 s, at 30 s averaging every onset is one window; before this rule the
+        # table re-simulated each and printed 200 and 300 device units for the same setting.
+        by_windows = {}
+        for r in group:
+            by_windows.setdefault(r["windows_in_onset"], set()).add(r["min_separation"])
+        for n_win, seps in by_windows.items():
+            assert len(seps) == 1, (avg, n_win, seps)
+    # and the table says which onsets it merged, so a reader is not left to infer it
+    thirty = sorted(by_avg[30.0], key=lambda r: r["onset_s"])
+    assert [r["windows_in_onset"] for r in thirty] == [1, 1, 1, 1]
+    assert all(r["same_configuration_as_onset_s"] == 3.0 for r in thirty[1:])
+    assert thirty[0]["same_configuration_as_onset_s"] is None
 
 
 # --------------------------------------------------------------------------------------------
@@ -347,7 +361,36 @@ def test_design_rule_note_states_the_stored_and_required_separation():
     assert note is not None
     assert "+-24.3" in note                # (234.87-186.27)/2 = 24.30
     assert "+-25" in note
-    assert "3 s averaging" in note and "30 s onset" in note
+
+
+def test_design_rule_note_at_the_cards_own_timing_does_not_restate_the_timing():
+    """Referent audit 2026-09-15, item 6. This sentence sits directly above `occupancy_note`,
+    which opens "At the 3 s averaging duration in force"; when the rule's row IS the card's timing
+    the note says so and leaves the numbers to the row above it, rather than printing the same
+    averaging and onset on two stacked lines under one field."""
+    rows = [{"averaging_s": 3.0, "onset_s": 30.0, "min_separation": 25.0, "sweep": []}]
+    note = PR.design_rule_note(_payload(rows), upper=234.87, lower=186.27, averaging_ms=3000.0,
+                               onset_ms=30000.0)
+    assert "at the timing shown on this card" in note, note
+    assert "s averaging /" not in note, note
+    assert "s onset" not in note, note
+    # the "never" branch takes the same rule
+    never = [{"averaging_s": 30.0, "onset_s": 30.0, "min_separation": None, "sweep": []}]
+    note2 = PR.design_rule_note(_payload(never), upper=220.0, lower=200.0, averaging_ms=30000.0,
+                                onset_ms=30000.0)
+    assert "at the timing shown on this card" in note2, note2
+    assert "s averaging /" not in note2, note2
+
+
+def test_design_rule_note_names_both_timings_when_the_rule_was_evaluated_elsewhere():
+    """When the table holds no row at the card's timing the nearest one is used, and THEN the
+    timing is information the reader cannot get from the row above: both numbers stay."""
+    rows = [{"averaging_s": 3.0, "onset_s": 30.0, "min_separation": 25.0, "sweep": []}]
+    note = PR.design_rule_note(_payload(rows), upper=234.87, lower=186.27, averaging_ms=6000.0,
+                               onset_ms=60000.0)
+    assert "3 s averaging" in note and "30 s onset" in note, note
+    assert "nearest evaluated timing" in note, note
+    assert "at the timing shown on this card" not in note, note
 
 
 def test_design_rule_note_states_never_when_min_separation_is_none():
@@ -392,3 +435,13 @@ def test_attach_design_rule_is_a_no_op_when_nothing_is_stored():
     out = PR.attach_design_rule(prescriptions, None, averaging_ms=3000.0, onset_ms=30000.0)
     dual = out["modes"][PR.PA.DUAL]
     assert all(f.design_rule_note is None for f in dual.fields)
+
+
+def test_the_design_rule_onset_grid_stops_at_the_tablets_maximum():
+    """The PI's instruction of 2026-09-15: onsets only up to 30 s. The 60/120/180 s columns the
+    contest evaluated cannot be entered on the tablet; the grid now mirrors the averaging grid so
+    the table keeps its two dimensions with every pair enterable."""
+    from StimOptimizer.routines import percept_adaptive as PA
+    assert max(DR.ONSET_GRID_S) == PA.ONSET_RANGE_DUAL_MS[1] / 1000.0 == 30.0
+    assert DR.ONSET_GRID_S == (3.0, 6.0, 15.0, 30.0)
+    assert DR.RULE_VERSION != "v1_kalman_est_port", "a stored table built on the old grid must not be served"

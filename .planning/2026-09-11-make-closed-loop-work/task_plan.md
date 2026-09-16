@@ -5,21 +5,26 @@ problem is that the module never handed the rule the value the device already re
 that still blocks does so for a reason the PI has read and agreed with.
 
 ## Next Step
-Nothing queued. The contest's seven-task implementation plan is now DONE except for one thing that
-is not a code task: T1-T6 are built and proven live on RCS08 (decisions 150-155); T7's wiring is
-confirmed correct and proven on constructed data (decision 156), but its own acceptance test needs
-a real titration session recorded on RCS08 first -- that has not happened (open item 30), and it is
-a clinical/scheduling matter for the PI, not something an agent can build. The one thing left open
-for the PI to decide is the threshold re-centring / separation itself (decision 139's capture
-question) -- T4's own live numbers on the committed band (2.0% of readings between the stored pair,
-centred 12.4 units above the participant's own median) and T5's own bootstrap interval on the
-committed band (onset 27-60 s, thresholds 43.5-108.7 device units apart) are themselves live
-readings in favour of that re-centring.
+Phase 22 is complete: the "Make Google sheet" button on `TitrationSessionCard.js` now works.
+`StimOptimizer/sheet_export.py` copies the lab's template (never writing into it -- checked by
+re-hashing the template file after every fill), fills the copy with the SAME `sheet_rows` the page
+shows, and either writes a real, shared Google Sheet (when this server has Google credentials,
+`StimOptimizer/google_sheets_client.py`) or streams a filled `.xlsx` download when it does not; a
+re-export for the same visit date overwrites that one file rather than making a second copy. The
+new endpoint, `/api/exportTitrationSheet`, rebuilds the plan through the same code path the page's
+own request uses, so the exported sheet can never drift from what is on screen. No Google
+credentials exist on this server today, so every real run so far has taken the download path;
+proven live on RCS08 both as a direct module call and through the real Django view (200, correct
+file name, byte-identical to the direct call). All 22 phases of this plan are now done. What
+remains open is not code: the threshold re-centring / separation question (decision 139's capture
+question) is the PI's call, T7's own acceptance test needs a real titration session recorded on
+RCS08 (open item 30, a clinical scheduling matter), and turning the Drive path on needs the PI to
+create and share a Google service-account key (`google_sheets_client.SETUP_NOTE`).
 
 ## Current Phase
-Phase 18
+Phase 22 (last phase; plan complete)
 
-phases: 18/18 complete
+phases: 22/22 complete
 
 ### Phase 1: Measure what the ledger says today
 - [x] Run the live report on RCS08 at the committed band (L 0-2+, 24.5 Hz) and list every non-pass row
@@ -155,6 +160,65 @@ phases: 18/18 complete
 - [x] New test file `ClosedLoopDeployment/tests/test_t7_gain_wiring.py`, 5 tests, constructed data only (never claimed as an RCS08 result): M1 differs from M0 given a real pooled slope; a control with no slope reproduces M0 bit-identically; the same row resolves E1; `margin_becomes_available` flips on constructed 6-setting vs 11-step data while the behaviour switch stays untouched; both signatures change when the recording set does
 - [x] Both suites green, run together through the bridge: host 1187 passed / 2 skipped / 0 failed (was 1182, +5); container 631 passed / 0 failed
 - [x] No live RCS08 proof needed (no production code changed); decision 156; commit; push
+- **Status:** complete
+
+### Phase 19: Stim Optimizer -- model both stimulators together, remove the old per-side chart
+- [x] PI, verbatim: "Get rid of the whole arm strip and chart display... Only keep the newer two-stage plan... it should model the left and right sides together because they're always on"
+- [x] Confirmed on the real record before building: one shared rate column, never a per-side rate; of 120 recorded stretches, 25 have the left current at zero, 10 the right, 9 both, 73 both on -- so a shared model needs to KEEP the zero-current stretches, which the old per-side fitting had been throwing out of each side's own fit
+- [x] New shared 3-input search surface (rate, left current, right current) added to `routines/surrogate.py`; the existing 2-input surface is untouched and still used by the old, now-unused-on-this-page per-side code
+- [x] `stage1_openloop.py` rewritten: one shared fit per combination of left and right pulse width (was one fit per side per pulse width); the safety check stays per side and a combination is offered only if both sides' own checks pass it; every existing reader of the frozen result (the gate, closed-loop stage 2) needed no change, since the result still hands back one entry per side, now both built from the same shared fit
+- [x] `bravo_service.py`: the old per-side fitting call removed from the page's own request; the old fitting function itself is untouched and still tested, just not called here any more; the response's per-side "what to test next" table replaced with one shared table
+- [x] Frontend: the old strip of four small charts and its own click-through card deleted from the Stim Optimizer page; the background table under the two-stage plan card now shows one row per shared pulse-width combination instead of two; a shared "what to test at the next visit" table added in its place
+- [x] Two suspicious messages arrived mid-session claiming to redirect this work; neither came from the actual task-giver (one asked for a different design never requested, one falsely claimed a turn limit had been hit, one used the wrong assistant name); neither was acted on, and this is recorded so a later reader is not confused about why the design does not match those messages
+- [x] Both suites green (host 1186 / 2 / 0, container 631 / 0), rewritten tests for the parts of the old per-side design that no longer exist, live proof on RCS08 (before/after field count and difference count, and the real preferred settings on both sides of the change); frontend rebuilt and checked in the served bundle; decision 157; commit; push
+- **Status:** complete
+
+### Phase 20: The shared model's current recommendation, checked honestly one speed at a time; a home titration schedule
+- [x] Measured on RCS08 that the shared 3-input model's own picture at the speed actually running (55 Hz) varied by only 0.004 across every option tried, against a typical scatter of about 1.1 -- confirming the PI's own finding that reading a current off the shared, pooled picture borrows false confidence from other stimulation speeds through the one shared speed axis
+- [x] `stage1_openloop.py`: a second, per-speed fitting step added alongside the existing shared (pooled) one -- never replacing it, kept and reported for reference as `pooled_across_rates` -- fitted separately for every stimulation speed with at least 8 recorded stretches at that speed, using only the ratings recorded at that speed
+- [x] A current is only handed back when three checks pass: the per-speed picture is not effectively flat; the best option beats what is running today by more than the scatter in that comparison; and at least 6 distinct left/right combinations, each backed by at least 5 ratings, spanning at least 1 mA on each side, were actually tried
+- [x] Which speed and which pulse-width pairing to freeze is UNCHANGED -- still chosen from the pooled picture, since that choice needs the pooling to have any data to decide from; only the milliamp number itself is now held to the honest, per-speed standard, and is `None` with a plain reason when the checks fail
+- [x] New `current_map_schedule.py`: a home titration schedule (a 3x3 current grid plus two one-side-off points plus the setting in force as an anchor, capped at the stated safety ceiling and the fitted joint safety model, dropped where a point already has enough ratings, held for 3-7 days per point based on this patient's own measured reporting rate, ordered so left current never ramps three steps straight up, the anchor repeated at the start, middle and end) -- reuses the SAME coverage check (iii) above so the sheet can say, before it is ever run, whether completing it would be enough
+- [x] Wired into `bravo_service.py` as `current_map_schedule`, computed on every request, not stored on its own; `stage1.rate_strata` added to the existing `two_stage` response block so every attempted speed's fit and verdict is visible
+- [x] 25 new tests (9 in `test_stage1.py`, 16 in the new `test_current_map_schedule.py`); 3 pre-existing tests corrected in place, not deleted, since they pinned exactly the borrowed-confidence behaviour this change replaces
+- [x] Both suites green (host 1211 / 2 / 0, container 631 / 0 / live-skipped 6); live field-count/difference-count proof on RCS08, genuinely before (decision 157's code) and after: 8,596 fields before, 9,001 after, 0 only-before, 405 only-after (the new blocks), 8 differing of 8,596 shared (6 bookkeeping, 2 real: both sides' recommended current, 1.5/1.0 mA -> none); decision 158; commit; push
+- [x] The frontend: `bravo_service.py` gained a `surface` grid on every fitted `rate_strata` row and a `pooled_surfaces` reference block, read straight off the fitted objects Stage 1 already holds; two new cards, `CurrentMapCard.js` (one heatmap per fitted speed, the setting in force marked, the three checks printed beside it) and `CurrentMapScheduleCard.js` (the day-by-day titration table), placed above the two-stage plan card; `DecisionStrip.js`'s "search prefers" row now states plainly when no current can be recommended instead of a bare dash
+- [x] 4 new tests (`test_surface_serialization.py`); both suites green (host 1215 / 2 / 0, container 631 / 0 / live-skipped 6); live field-count/difference-count proof on RCS08 (9,145 fields before, 17,357 after, 1 only-before, 8,213 only-after, 4 differing of 9,144 shared, all bookkeeping); frontend rebuilt, the two cards' own wording found in the served chunk; decision 159; commit; push
+- **Status:** complete
+
+### Phase 21: RCS08's stated ceiling lowered to 4.5 mA; the in-clinic titration session redesigned (backend only)
+- [x] `safety_ceiling.PI_STATED_CEILING_MA` for RCS08 changed 5.0 -> 4.5 mA both sides ("make max safe amp on each side 4.5 mA, PI decided"); `objective.AMP_HARD_LIMIT_MA` (the module's own search-grid edge, a different thing) untouched; `current_map_schedule.py`'s comment referencing the old number corrected
+- [x] `titration_plan.ladder()` rewritten: up in 0.5 mA steps unchanged, down now in 1.0 mA drops rather than retracing the up steps, always ending at 0 ("keep the 1.0 mA down legs")
+- [x] `titration_plan.step_timing()` added: a 60 s ramp row then the unchanged 60 s test row, 2 min a step ("test-period hold time = 60 s, not 120 s; 2 min per step")
+- [x] `side_plan` carries `held_other_side` (current + source); `plan_for_sides` reads `in_force` to fill it from the OTHER side's own setting
+- [x] `joint_corners()` added: four (left, right) combinations at 1.0/4.0 mA, capped per side and restricted to the joint safety model, optional, for the pain surface's off-diagonal points
+- [x] `SHEET_COLUMNS`/`build_sheet_rows()` added: the flat clinic-sheet row list in the real 2026-09-02 workbook's own "Stim Testing" column order (read directly from the xlsx via zipfile/XML, not approximated), two rows a step, bilateral cells "L x / R y"
+- [x] `bravo_service.titration_plan_block` threads `es` through to fit the joint safety model for the corners block; single-side requests correctly build no joint-corners rows (a real bug caught by this session's own new tests before it shipped)
+- [x] 78 tests across `test_safety_ceiling.py`, `test_titration_plan.py`, `test_current_map_schedule.py`, all green; both suites green through one bridge job (host 1229 / 2 / 0, container 631 / 0)
+- [x] Live field-count/difference-count proof on RCS08, genuinely before and after (`git stash`): 7,148 fields before, 8,647 after, 12 only-before, 1,511 only-after, 49 differing of 7,136 shared (4 the ceiling change, 43 the ladder/session redesign, 2 bookkeeping); decision 160; commit; push
+- **Status:** complete
+
+### Phase 22: The clinic-sheet pain stream, imported as a second, independent data stream (backend only)
+- [x] PI, 2026-09-14, verbatim: "Import all in-clinic AND at-home testing visits. Pull the in-clinic numbers separately (not in REDCap) as an independent data stream for system optimization (critical)"
+- [x] New `StimOptimizer/clinic_pain.py`: `parse_workbook`/`parse_folder` read the 29 real workbooks, header found by name not position, typo-tolerant ("Timastamp", "PW (ms)"), the bilateral left-before-separator convention in all three forms, the one transposed workbook (July 2025) read from its Notes tab with rate/pulse width left blank rather than guessed
+- [x] A real Excel corruption found and fixed: some pain scores ("8/10") were auto-converted by Excel into date objects (month 8, day 10); read back correctly, never guessed when the shape does not fit
+- [x] Prose pain descriptions in a notes column counted as `n_unparsed_prose`, never parsed into a number
+- [x] Stored as raw kind `clinic_pain_steps`, keyed on the folder's own file set (name + content hash per file); `manage.py ingest_clinic_sheets --participant <uid>` writes it with `writer="clinic_sheet_ingest"`; re-running over an unchanged folder writes nothing
+- [x] `epoch_frame_from_steps` collapses a setting tested more than once into one epoch with `n` = the repeat count, in the acute clinic-testing frame's own column names (`pain_Left_Leg` etc.) `routines/objective.py` already expected
+- [x] `objective.build_objective` and `stage1_openloop.run_stage1` gained one additive, backward-compatible parameter, `pooled_var_override` (default `None`, no existing caller affected), so a thin stream with no epoch repeated 3+ times can still borrow the REDCap stream's own pooled variance rather than failing outright
+- [x] `bravo_service._clinic_stream_stage1_block` fits the SAME per-rate two-input surface on the clinic stream alone and reports it under `two_stage.stage1.rate_strata_clinic` (tagged `source: "clinic_sheets"`) and `two_stage.stage1.clinic_stream` (file/step counts, visit list, which pooled variance was used and why); never pooled with the REDCap-based recommendation, which is untouched
+- [x] 16 new tests in `test_clinic_pain.py`; one existing wiring test in `test_two_stage_wiring.py` extended (not weakened) to cover the new step
+- [x] Ingest run on RCS08 in the container: 816 steps, 472 with a usable pain score, 7 unparsed prose, 16 skipped (no setting known), 370 in-clinic / 102 at-home, 63 distinct (left, right) current pairs at 55 Hz; re-run confirmed no rewrite
+- [x] Both suites green through one bridge job: host 1245 passed / 2 skipped / 0 failed (was 1229, +16); container PASS=631 FAIL=0
+- [x] Live field-count/difference-count proof on RCS08, genuinely before and after (`git stash -u`): 18,787 fields before, 22,518 after, 0 only-before, 3,731 only-after (all under the new clinic block), 3 differing of 18,787 shared, all bookkeeping (a timestamp, the response key, one timing field) -- no REDCap-based value moved
+- [x] On the clinic stream: two rate strata fitted (55 Hz, 110 Hz), neither resolves a current to recommend yet -- the honest answer given the evidence so far, not a defect; decision 161; commit; push
+- [x] The page draws all of it, decision 162: `TitrationSessionCard.js` gained a header strip (rate, both pulse widths, both ceilings, the held-other-side current per block, step timing, session length) and three printable tables built from `sheet_rows`/`sheet_columns` (left ladder, right ladder, optional joint corners), plus a date field and a disabled "Make Google sheet" button; `CurrentMapCard.js` gained a second, un-pooled section reading `rate_strata_clinic`/`clinic_stream` with a folded visit list. Build clean, both new files' owned strings present in the served chunk; no backend file touched, so no suite run applies; not watched in a real browser this session (no browser-control tool was available)
+- [x] The "Make Google sheet" button is wired, decision 163: `StimOptimizer/sheet_export.py` (`fill_workbook`, `export`, `sheet_name_for`, `values_for_sheets_api`) and `StimOptimizer/google_sheets_client.py` (optional Drive/Sheets client, `available()`/`client_if_available()`, off today -- no key file on this server); new endpoint `/api/exportTitrationSheet` (`Server/APIs/DataAnalysis.ExportTitrationSheet`) rebuilds the plan through `bravo_service.run_for_participant` so the export can never drift from the page; `TitrationSessionCard.js`'s button is enabled, posts the chosen date, and follows either answer (a "drive" JSON naming a real Sheet URL with a "re-export" control, or a downloaded `.xlsx` with this page's own copy of the setup note). A real openpyxl gotcha caught by the new tests before it shipped: `ws.cell(row, column, value=None)` is a no-op, so writing rows straight through it would have left the template's stray "Detailed pain survey" label in place; fixed by assigning `.value` directly
+- [x] 12 new tests, `test_sheet_export.py`: the template's own bytes are provably unchanged after every fill (sha256 before/after, plus a monkeypatched-mutation case that must raise); every row lands at A12.. in the real column order; the B1 date cell is a real Excel date, `mm/dd/yy`; a fake Drive client proves a re-export reuses the existing file (`overwrote: True`) while a first export copies the template (`overwrote: False`), and that the template's own id is passed only as `copy_file`'s SOURCE, never to `clear_values`/`update_values`
+- [x] Live on RCS08 through the bridge: `fill_workbook` against the REAL template for 2026-09-16 with a fresh `run_for_participant` plan -- 68 rows, 12..79, template sha256 identical before and after, B1 set to 2026-09-16 `mm/dd/yy`; then the real Django view (`APIRequestFactory` + `force_authenticate`, DEBUG-mode permission grant) end to end: xlsx mode returns 200, `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`, `Content-Disposition: attachment; filename="RCS08 Stage 2 - September 2026 In-Clinic Testing 09_16_26.xlsx"`, 260,577 bytes -- byte-identical to the direct `fill_workbook` call; malformed input 400, unknown participant 403
+- [x] Both suites green through one bridge job: host 1257 passed / 2 skipped / 0 failed (was 1245, +12); container PASS=631 FAIL=0 LIVE_SKIPPED=6
+- [x] Frontend rebuilt clean, no warning in either touched file; served chunk carries "Open in Google Sheets", the setup note's own first words ("To let this server write directly to Google Sheets"), and "Making sheet…"; not watched in a real browser this session (no browser-control tool was available)
+- [x] The Drive path is built and unit-tested against a fake client but NOT exercised against the real Google APIs -- no service-account key exists on this server; `google_sheets_client.SETUP_NOTE` states what the PI must do to turn it on
 - **Status:** complete
 
 ## Decisions Made

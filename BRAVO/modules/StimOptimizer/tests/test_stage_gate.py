@@ -228,19 +228,33 @@ def test_limits_above_the_declared_ceiling_are_refused():
     assert "ceiling" in c.detail
 
 
-def test_limits_above_the_delivered_envelope_are_refused_with_the_severity_evidence():
-    """Above the delivered maximum is UNKNOWN, not safe.
-
-    Amplitude does not predict side-effect severity in this record, and only a handful of coded
-    steps sit above 4 mA, so an adaptive ceiling above what was ever delivered would hand the device
-    authority to go somewhere nobody has observed.
-    """
+def test_limits_above_the_delivered_envelope_are_refused_as_unknown_not_safe():
+    """Above the delivered maximum is UNKNOWN, not safe. With no side-effect-versus-current
+    statistic supplied, the sentence says so and quotes NO number: the "rho = -0.013" that used to
+    be typed here came from a 2026-09-02 analysis whose labels were 96% uncoded and whose model
+    was deleted (decision 145); the PI's rule of 2026-09-15 is "recompute always"."""
     g = GATE.evaluate_gate(_frozen(_setting(amp_lo=1.0, amp_hi=3.0)), lfp=_responding_lfp(),
                            amp_limits={"Left": (1.0, 4.5)})
     c = g.condition("amplitude_limits_inside_envelope_and_under_ceiling")
     assert c.passed is False
     assert "delivered" in c.detail
     assert "UNKNOWN rather than safe" in c.detail
+    assert "-0.013" not in c.detail and "417" not in c.detail
+    assert "no side-effect-versus-current statistic" in c.detail
+    assert c.evidence["side_effect_vs_current"] is None
+
+
+def test_the_envelope_refusal_quotes_the_live_severity_statistic_when_one_is_supplied():
+    ev = dict(assessable=True, rho=0.42, p=0.031, n_scored_stim_on=38, n_above_4mA=2,
+              sentence="on 38 scored clinic steps with stimulation on, reported severity rises "
+                       "with current (Spearman rho = +0.42, p = 0.031); 2 of them sit above 4 mA")
+    g = GATE.evaluate_gate(_frozen(_setting(amp_lo=1.0, amp_hi=3.0)), lfp=_responding_lfp(),
+                           amp_limits={"Left": (1.0, 4.5)}, side_effect_evidence=ev)
+    c = g.condition("amplitude_limits_inside_envelope_and_under_ceiling")
+    assert c.passed is False
+    assert ev["sentence"] in c.detail
+    assert "UNKNOWN rather than safe" in c.detail
+    assert c.evidence["side_effect_vs_current"] == ev
 
 
 def test_inverted_limits_are_refused():
@@ -402,3 +416,42 @@ def test_precomputed_band_power_is_used_when_supplied():
                           band_power={(15.0, 5.0): np.array([10.0, 2.0])})
     assert list(ev.power_for(15.0, 5.0)) == [10.0, 2.0]
     assert ev.power_for(20.0, 5.0) is None       # no magnitude to fall back on
+
+
+# ---------------------------------------------------------------------------------------------
+# Review 2026-09-15, finding S1: a defaulted limit that is above the ceiling is HISTORY, not a proposal
+# ---------------------------------------------------------------------------------------------
+def test_defaulted_limits_above_the_ceiling_are_not_assessed_and_named_as_history():
+    """RCS08 on 2026-09-15: no candidate limit proposed, the Left's highest delivered current 4.8 mA,
+    the PI's ceiling 4.5 mA (decision 160). The old code returned FAIL "upper limit 4.8 mA exceeds the
+    declared ceiling", which a clinician reads as the plan wanting an unsafe current. It is the
+    record's own past exposure. The condition must be NOT ASSESSED (None, which still blocks), say
+    so in plain words, and carry the two numbers in its evidence."""
+    g = GATE.evaluate_gate(_frozen(_setting(amp_lo=1.0, amp_hi=4.8)), lfp=_responding_lfp(),
+                           amp_limits=None, ceiling_mA=4.5)
+    c = g.condition("amplitude_limits_inside_envelope_and_under_ceiling")
+    assert c.passed is None, c.detail
+    assert c.blocking is True
+    assert "history" in c.detail.lower() and "not a proposal" in c.detail.lower()
+    assert "4.8" in c.detail and "4.5" in c.detail
+    assert "exceeds the declared ceiling" not in c.detail
+    assert c.evidence["history_above_ceiling"] == {"Left": {"delivered_max_mA": 4.8, "ceiling_mA": 4.5}}
+
+
+def test_a_proposed_limit_above_the_ceiling_still_fails_outright():
+    """The softening is only for a defaulted limit. A limit somebody actually proposed above the
+    ceiling is a real refusal, as before."""
+    g = GATE.evaluate_gate(_frozen(_setting(amp_lo=1.0, amp_hi=4.8)), lfp=_responding_lfp(),
+                           amp_limits={"Left": (1.0, 4.8)}, ceiling_mA=4.5)
+    c = g.condition("amplitude_limits_inside_envelope_and_under_ceiling")
+    assert c.passed is False
+    assert "exceeds the declared ceiling" in c.detail
+    assert c.evidence["history_above_ceiling"] == {}
+
+
+def test_defaulted_limits_under_the_ceiling_still_pass_and_carry_an_empty_history_map():
+    g = GATE.evaluate_gate(_frozen(_setting(amp_lo=1.0, amp_hi=4.0)), lfp=_responding_lfp(),
+                           amp_limits=None, ceiling_mA=4.5)
+    c = g.condition("amplitude_limits_inside_envelope_and_under_ceiling")
+    assert c.passed is True
+    assert c.evidence["history_above_ceiling"] == {}

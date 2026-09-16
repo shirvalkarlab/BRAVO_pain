@@ -87,7 +87,10 @@ export default function SensingEvidenceTable({ closedLoop }) {
         )}
       </MDBox>
       <MDTypography variant="caption" component="div" sx={{ ...SMALL, fontSize: TYPE.body, mt: 0.4 }}>
-        {`Adaptive mode can use a band inside ${(cl.adaptive_window_hz || []).map((v) => Number(v)).join("–")} Hz at a rate of at least ${fmtHz(cl.min_adaptive_rate_hz)}; its only lever is current, so a band must move with current, which is a different question from whether it tracks pain. Current limit ${fmtMa(cl.amp_hard_limit_mA)}.`}
+        {`Adaptive mode can use a band inside ${(cl.adaptive_window_hz || []).map((v) => Number(v)).join("–")} Hz at a rate of at least ${fmtHz(cl.min_adaptive_rate_hz)}; its only lever is current, so a band must move with current, which is a different question from whether it tracks pain. ${
+          cl.safe_ceiling_mA_by_side
+            ? `Safe ceiling, stated by the PI: L ${fmtMa(cl.safe_ceiling_mA_by_side.Left)} / R ${fmtMa(cl.safe_ceiling_mA_by_side.Right)}; evidence above the ${fmtMa(cl.amp_hard_limit_mA)} module cap is excluded.`
+            : `Current limit ${fmtMa(cl.amp_hard_limit_mA)}.`}`}
       </MDTypography>
 
       {rows.length > 0 && (

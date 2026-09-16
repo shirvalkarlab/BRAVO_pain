@@ -16,9 +16,13 @@ had been delivered and tolerated for weeks.
 
 WHAT IT IS NOW. The severity-3 seed is ONE current per side, stated by the PI, placed at every
 stimulation rate on the search grid: "above this current, on this side, is not acceptable". The
-only ceiling he has stated is the 5.0 mA hard limit of 2026-09-02 (``objective.AMP_HARD_LIMIT_MA``),
-confirmed as the safety ceiling on 2026-09-12; whether a lower per-side value is wanted is being
-put to him, so the number lives in ONE place -- the table below -- and nowhere else.
+first ceiling he stated was the 5.0 mA hard limit of 2026-09-02
+(``objective.AMP_HARD_LIMIT_MA``), confirmed as the safety ceiling on 2026-09-12. **He lowered it
+on 2026-09-14**, his instruction verbatim: "make max safe amp on each side 4.5 mA, PI decided" --
+RCS08's own ceiling is now 4.5 mA on both sides, still below the 5.0 mA module hard limit
+(``AMP_HARD_LIMIT_MA``, which is a different thing: the highest amplitude the search grid can
+represent at all, not a participant's own stated ceiling -- see ``routines/plots.py``'s
+``AMP_GRID``). The number lives in ONE place -- the table below -- and nowhere else.
 
 WHERE IT REACHES THE PAGE. Stim Optimizer page: the per-arm cards ("safe ceiling N mA", the amber
 "above the reachable safe ceiling" mark), the queue table's ``safe`` column, the blockers list,
@@ -42,13 +46,14 @@ from .routines import objective as OBJ
 #: A side that is absent, or a participant that is absent, falls back to the module hard limit
 #: with a provenance that says so; nothing is invented.
 PI_STATED_CEILING_MA = {
-    # RCS08
-    "2e3c75c00d7f4f37b53a048d195f11da": {"Left": 5.0, "Right": 5.0},
+    # RCS08 -- 4.5 mA on both sides, lowered from 5.0 mA on 2026-09-14 (his words, verbatim:
+    # "make max safe amp on each side 4.5 mA, PI decided").
+    "2e3c75c00d7f4f37b53a048d195f11da": {"Left": 4.5, "Right": 4.5},
 }
 
 #: What the table's numbers rest on, printed beside every ceiling the page shows.
-PI_STATED_PROVENANCE = ("stated by PI (2026-09-02 hard limit, objective.AMP_HARD_LIMIT_MA; "
-                        "confirmed as the safety ceiling 2026-09-12)")
+PI_STATED_PROVENANCE = ("stated by PI, 2026-09-14 (was 5.0 mA, stated 2026-09-02 as the hard "
+                        "limit and confirmed as the safety ceiling 2026-09-12)")
 FALLBACK_PROVENANCE = "module hard limit, no PI-stated ceiling for this participant"
 
 #: An epoch counts as TOLERATED (severity 0 at its setting) when this side's current was above zero
@@ -58,7 +63,8 @@ FALLBACK_PROVENANCE = "module hard limit, no PI-stated ceiling for this particip
 #: differed for the same side under the same anchors). Zero current on a side is a different
 #: therapeutic state, not the low end of that side's dose axis (OBJECTIVE_SPEC amendment
 #: 2026-08-29), so it says nothing about what that side tolerates.
-TOLERATED_RULE = "epochs with this side's current above 0 mA held at least min_tolerated_h hours"
+TOLERATED_RULE = ("epochs with this side's current above 0 mA held at least min_tolerated_h hours, "
+                  "and not reported moderate or severe")
 
 
 def ceiling_for(participant_uid, hemisphere):
@@ -102,13 +108,40 @@ def ceiling_anchors(ceiling_mA, freq_grid):
     return np.array([[float(f), c] for f in freq_grid], dtype=float).reshape(-1, 2)
 
 
+def _intolerable_mask(d) -> pd.Series:
+    """True where the epoch carries a REPORTED severity in ``objective.SE_HARD_REJECT``. Absent
+    column, None or NaN is False: an unreported side effect is not a reported one (the same
+    distinction ``objective.build_objective`` keeps with ``se_observed``)."""
+    if "se_severity" not in d.columns:
+        return pd.Series(False, index=d.index)
+    sev = d["se_severity"].map(lambda v: str(v).strip().lower() if isinstance(v, str) else None)
+    return sev.isin(OBJ.SE_HARD_REJECT).fillna(False).astype(bool)
+
+
 def tolerated_anchors(D, amp_col, *, min_tolerated_h):
-    """The severity-0 seed: every ``(rate, current)`` this side sustained, under ``TOLERATED_RULE``."""
+    """The severity-0 seed: every ``(rate, current)`` this side sustained, under ``TOLERATED_RULE``.
+
+    2026-09-15 (audit finding 5a): an epoch the clinic sheet scored moderate or severe is barred
+    from the pain fit (``objective.SE_HARD_REJECT``, J = +inf) and until today was STILL handed
+    here as a severity-0 anchor because only current and hold time were checked -- telling the
+    safety model the opposite of what was reported. A reported intolerable severity now excludes
+    the epoch. Nothing else changed: a frame without the column, an unreported epoch and a mild
+    one are tolerated exactly as before.
+    """
     d = pd.DataFrame(D)
     amp = pd.to_numeric(d[amp_col], errors="coerce")
     dur = pd.to_numeric(d["dur_h"], errors="coerce")
-    keep = (amp > 0) & (dur >= float(min_tolerated_h))
+    keep = (amp > 0) & (dur >= float(min_tolerated_h)) & ~_intolerable_mask(d)
     return d.loc[keep, ["freq_hz", amp_col]].to_numpy(float).reshape(-1, 2)
+
+
+def n_intolerable_excluded(D, amp_col, *, min_tolerated_h) -> int:
+    """How many epochs would have been tolerated anchors on current and hold time alone but were
+    kept out because their reported severity is moderate or severe -- for the report."""
+    d = pd.DataFrame(D)
+    amp = pd.to_numeric(d[amp_col], errors="coerce")
+    dur = pd.to_numeric(d["dur_h"], errors="coerce")
+    return int(((amp > 0) & (dur >= float(min_tolerated_h)) & _intolerable_mask(d)).sum())
 
 
 def safety_seed(D, amp_col, *, freq_grid, ceiling=None, min_tolerated_h=72.0):
@@ -132,6 +165,7 @@ def safety_seed(D, amp_col, *, freq_grid, ceiling=None, min_tolerated_h=72.0):
         safety_ceiling_anchors=[[float(a), float(b)] for a, b in limits],
         n_safety_ceiling_anchors=int(len(limits)),
         n_tolerated_anchors=int(len(deliv)),
+        n_intolerable_excluded=n_intolerable_excluded(D, amp_col, min_tolerated_h=min_tolerated_h),
         tolerated_rule=TOLERATED_RULE,
         min_tolerated_h=float(min_tolerated_h),
     )

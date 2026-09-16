@@ -210,17 +210,31 @@ def test_the_headline_row_carries_the_mark_for_its_own_winning_length():
         assert row["device_spectrum_share"] is not None
 
 
-def test_a_contact_with_no_device_served_reports_gets_no_note_and_a_zero_share():
+def test_a_contact_with_no_device_served_reports_gets_a_zero_count_and_a_zero_share():
     """Nothing to warn about must read as nothing, not as a reassurance and not as an absence."""
     pain = np.arange(12, dtype=float)
     sw = _grid(pain, [False] * 12, strategy="median")
     assert sw["n_pain_reports_from_device_spectrum"] == 0
     assert np.asarray(sw["device_spectrum_n_grid"], dtype=float).sum() == 0
-    assert not any("device's own FFT snapshots" in str(n) for n in sw["notes"])
+    assert not any("FFT snapshots" in str(n) or "answered from" in str(n) for n in sw["notes"])
 
+
+def test_the_snapshot_counts_travel_as_fields_and_never_as_a_sentence_in_the_notes():
+    """Referent audit 2026-09-15, item 3. The page's orange caption prints the snapshot count and
+    share from `n_pain_reports_from_device_spectrum` and `device_spectrum_total_grid`
+    (`gridReadouts.deviceSpectrumBullets`); a sentence with the same numbers used to be appended to
+    `notes` as well, so the "how to read this" drawer under the same card said the fact a second
+    time from a second code path. The fields stay; the sentence goes."""
+    pain = np.arange(12, dtype=float)
     marked = _grid(pain, [True] * 6 + [False] * 6, strategy="median")
     assert marked["n_pain_reports_from_device_spectrum"] == 6
-    assert any("device's own FFT snapshots" in str(n) for n in marked["notes"])
+    n_grid = np.asarray(marked["device_spectrum_n_grid"], dtype=float)
+    share = np.asarray(marked["device_spectrum_share_grid"], dtype=float)
+    assert n_grid.sum() > 0 and np.nanmax(share) > 0
+    assert "device_spectrum_total_grid" in marked and "device_spectrum_axis_note" in marked
+    for n in marked["notes"]:
+        assert "FFT snapshots" not in str(n), n
+        assert "answered from" not in str(n), n
 
 
 def test_the_flag_is_reported_as_unknown_rather_than_zero_when_it_never_arrived():

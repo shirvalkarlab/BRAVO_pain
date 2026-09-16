@@ -46,14 +46,30 @@ const DELTA = { fontFamily: PAL.mono, fontSize: TYPE.num, color: "#1A1A1A", whit
 const GAIN = { fontFamily: PAL.mono, fontSize: TYPE.num, color: "#1A1A1A", whiteSpace: "nowrap" };
 const NW = { whiteSpace: "nowrap" };
 
-/** A setting as one line of digits with units: "55 Hz · 100 µs · 3.0 mA". */
-function Setting({ rate, pw, amp, missingPw }) {
+/** A setting as one line of digits with units: "55 Hz · 100 µs · 3.0 mA". `missingAmp` is the
+ * decision-158 case -- a rate (and usually a pulse width) WAS chosen, but the three-check honest
+ * rule could not clear a current for it, so `amp` arrives as `null` on purpose, not as a gap in
+ * the data. Printing a bare "—" there reads as missing data; the sentence says what actually
+ * happened instead (never "NaN mA", never "None"). */
+function Setting({ rate, pw, amp, missingPw, missingAmp }) {
+  // The no-current sentence is a block of its own UNDER the rate and pulse width, not a third
+  // item inside the no-wrap value span: inside it, the sentence ran on across the "change" and
+  // "gain" columns (watched on the live page, 2026-09-15).
   return (
-    <span style={VALUE}>
-      {fmtHz(rate)}<span style={{ color: "#9A9A9A" }}> · </span>
-      {missingPw ? <span style={{ color: "#9A9A9A" }}>— µs</span> : fmtUs(pw)}
-      <span style={{ color: "#9A9A9A" }}> · </span>{fmtMa(amp)}
-    </span>
+    <>
+      <span style={VALUE}>
+        {fmtHz(rate)}<span style={{ color: "#9A9A9A" }}> · </span>
+        {missingPw ? <span style={{ color: "#9A9A9A" }}>— µs</span> : fmtUs(pw)}
+        {!missingAmp && <><span style={{ color: "#9A9A9A" }}> · </span>{fmtMa(amp)}</>}
+      </span>
+      {missingAmp && (
+        <MDTypography variant="caption" component="div"
+          sx={{ fontSize: TYPE.body, fontWeight: 600, color: PAL.warnText, whiteSpace: "normal",
+            lineHeight: 1.3, mt: 0.2 }}>
+          no current can be recommended from this record — see the current map
+        </MDTypography>
+      )}
+    </>
   );
 }
 
@@ -146,7 +162,8 @@ export default function DecisionStrip({ arms, plan, planLoading, planErr, inForc
                     <MDTypography variant="caption" sx={{ fontSize: TYPE.body, color: PAL.warnText, fontWeight: 600 }}>
                       no rate adaptive mode can use
                     </MDTypography>
-                  ) : <Setting rate={prefRate} pw={prefPw} amp={prefAmp} missingPw={prefPw === null} />
+                  ) : <Setting rate={prefRate} pw={prefPw} amp={prefAmp} missingPw={prefPw === null}
+                         missingAmp={prefAmp === null} />
                 ) : (
                   <MDTypography variant="caption" sx={SMALL}>{planErr ? `plan unavailable: ${planErr}` : "—"}</MDTypography>
                 ))}
@@ -165,7 +182,7 @@ export default function DecisionStrip({ arms, plan, planLoading, planErr, inForc
                     <div>{fmtDelta(prefRate - (r.nowRate ?? prefRate), "Hz", 0)}</div>
                     <div>{r.nowPw === null || prefPw === null ? "— µs" : fmtDelta(prefPw - r.nowPw, "µs", 0)}</div>
                     <MDBox display="flex" alignItems="center" gap={0.6}>
-                      <span>{fmtDelta(prefAmp - (r.nowAmp ?? prefAmp), "mA", 1)}</span>
+                      <span>{prefAmp === null || r.nowAmp === null ? "— mA" : fmtDelta(prefAmp - r.nowAmp, "mA", 1)}</span>
                       {aboveDelivered && (
                         <Tooltip title={`the preferred ${fmtMa(prefAmp)} is above the ${fmtMa(dMax)} ever delivered on this side, so it is an extrapolation`}>
                           <span><AmberGlyph label="above the highest current ever delivered on this side" size={14} /></span>

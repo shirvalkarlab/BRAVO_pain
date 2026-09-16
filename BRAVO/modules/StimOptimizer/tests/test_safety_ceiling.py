@@ -26,11 +26,13 @@ RCS08 = "2e3c75c00d7f4f37b53a048d195f11da"
 # the table and its provenance
 # ---------------------------------------------------------------------------------------------
 def test_rcs08_reads_the_stated_ceiling_on_both_sides_with_the_pi_provenance():
+    """4.5 mA on both sides as of 2026-09-14 (his words: "make max safe amp on each side 4.5 mA,
+    PI decided"); the earlier 5.0 mA value is named in the provenance as history, not served."""
     for side in ("Left", "Right"):
         c, why = SC.ceiling_for(RCS08, side)
-        assert c == 5.0
+        assert c == 4.5
         assert why == SC.PI_STATED_PROVENANCE
-        assert "stated by PI" in why and "2026-09-12" in why
+        assert "stated by PI" in why and "2026-09-14" in why and "5.0 mA" in why
 
 
 def test_an_unknown_participant_falls_back_to_the_module_hard_limit_and_says_so():
@@ -106,6 +108,42 @@ def test_tolerated_anchors_exclude_zero_current_and_short_holds():
                           dur_h=[500.0, 500.0, 10.0, 72.0]))
     t = SC.tolerated_anchors(D, "amp_mA_Left", min_tolerated_h=72.0)
     assert t.tolist() == [[55.0, 2.0], [110.0, 3.5]]
+
+
+def test_tolerated_anchors_exclude_epochs_reported_moderate_or_severe():
+    """Audit of 2026-09-15: an epoch the sheet scored moderate or severe is barred from the pain
+    fit (`objective.SE_HARD_REJECT`, J = +inf) but was still handed to the safety model as a
+    severity-0 "tolerated" anchor -- the opposite of what was reported. Only a REPORTED
+    intolerable severity excludes; an unreported epoch (None) and a mild one are still tolerated,
+    and a frame with no severity column at all is unchanged."""
+    D = pd.DataFrame(dict(freq_hz=[55.0, 55.0, 55.0, 55.0],
+                          amp_mA_Left=[1.0, 2.0, 3.0, 4.0],
+                          dur_h=[500.0, 500.0, 500.0, 500.0],
+                          se_severity=[None, "mild", "moderate", "severe"]))
+    t = SC.tolerated_anchors(D, "amp_mA_Left", min_tolerated_h=72.0)
+    assert t.tolist() == [[55.0, 1.0], [55.0, 2.0]]
+    same_without_column = SC.tolerated_anchors(D.drop(columns=["se_severity"]), "amp_mA_Left",
+                                               min_tolerated_h=72.0)
+    assert same_without_column.tolist() == [[55.0, 1.0], [55.0, 2.0], [55.0, 3.0], [55.0, 4.0]]
+
+
+def test_the_seed_names_how_many_intolerable_epochs_it_kept_out_of_the_tolerated_set():
+    """The report must be able to say "N settings reported intolerable were not counted as
+    tolerated", and 0 when the frame carries no severity column."""
+    D = pd.DataFrame(dict(freq_hz=[55.0, 55.0, 55.0],
+                          amp_mA_Left=[1.0, 3.0, 4.0],
+                          dur_h=[500.0, 500.0, 500.0],
+                          se_severity=[None, "moderate", "severe"]))
+    _X, sev, _v, meta = SC.safety_seed(D, "amp_mA_Left", freq_grid=PLT.FREQ_GRID,
+                                       ceiling=(4.5, "test"), min_tolerated_h=72.0)
+    assert meta["n_tolerated_anchors"] == 1
+    assert meta["n_intolerable_excluded"] == 2
+    assert sev.tolist().count(0.0) == 1
+    _X, _s, _v, meta0 = SC.safety_seed(D.drop(columns=["se_severity"]), "amp_mA_Left",
+                                       freq_grid=PLT.FREQ_GRID, ceiling=(4.5, "test"),
+                                       min_tolerated_h=72.0)
+    assert meta0["n_tolerated_anchors"] == 3
+    assert meta0["n_intolerable_excluded"] == 0
 
 
 def test_the_seed_has_the_shape_the_safety_model_expects_and_the_severities_are_0_and_3():
@@ -190,10 +228,20 @@ def test_without_a_ceiling_argument_every_arm_reads_the_hard_limit_and_says_no_c
         assert arm.meta["safety_ceiling_provenance"] == SC.FALLBACK_PROVENANCE
 
 
-def test_the_flat_fit_and_stage_1_seed_from_one_builder_and_agree_on_the_safe_set():
+def test_the_flat_fit_and_stage_1_seed_from_one_builder_and_agree_on_the_anchors():
     """Until 2026-09-12 the two fitters seeded from different epoch sets (Stage 1 counted a side's
     0 mA epochs as tolerated at zero current; the flat fit did not), so the same side under the
-    same anchors had two safe sets. Now both call `safety_ceiling.safety_seed`."""
+    same anchors had two safe sets. Now both call `safety_ceiling.safety_seed`.
+
+    REWRITTEN 2026-09-14 for the joint redesign: the flat fit's own safe count and Stage 1's can
+    no longer be compared directly, because Stage 1 now scores a JOINT (rate, amp-Left,
+    amp-Right) grid and the flat fit still scores a 2-D (rate, amp) grid of a different shape and
+    a different cell count -- the two were never going to have equal cell counts once the grids
+    themselves differ, whatever the anchors say. What both fitters MUST still agree on is what
+    they were TOLD: the same ceiling, the same provenance, and the same count of tolerated
+    (rate, current) anchors from the same epochs, since both call the one shared seed builder on
+    the same design frame.
+    """
     D = _design()
     # give the Left side some 0 mA epochs so the old difference would show
     D.loc[D["epoch"] <= 4, "amp_mA_Left"] = 0.0
@@ -201,11 +249,7 @@ def test_the_flat_fit_and_stage_1_seed_from_one_builder_and_agree_on_the_safe_se
     flat = PL.run(D, sites=("left_leg",), hemispheres=("Left",), outdir=None,
                   render_figures=False, data_horizon="t", washin_min=1.0,
                   safety_ceiling_by_hemisphere=by).arms["left_leg__Left"]
-    s1 = S1.run_stage1(D, hemispheres=("Left",), data_horizon="t", washin_min=1.0,
-                       safety_ceiling_by_hemisphere=by)
-    n_flat = int(flat.meta["n_safe"])
-    n_s1 = int(s1.summary[s1.summary["hemisphere"] == "Left"]["n_safe"].iloc[0])
-    assert n_flat == n_s1, (n_flat, n_s1)
+    s1 = S1.run_stage1(D, data_horizon="t", washin_min=1.0, safety_ceiling_by_hemisphere=by)
     audit = s1.frozen.audit["per_hemisphere"]["Left"]["safety_ceiling"]
     assert audit["safety_ceiling_mA"] == 3.0 and audit["safety_ceiling_provenance"] == "t"
     assert audit["n_tolerated_anchors"] == flat.meta["n_tolerated_anchors"]
@@ -213,16 +257,30 @@ def test_the_flat_fit_and_stage_1_seed_from_one_builder_and_agree_on_the_safe_se
     assert audit["n_tolerated_anchors"] == int((D["amp_mA_Left"] > 0).sum())
 
 
-def test_stage_1_reads_each_sides_own_ceiling_and_writes_it_into_the_audit():
-    by = {"Left": (2.0, "left test"), "Right": (4.5, "right test")}
-    res = S1.run_stage1(_design(), data_horizon="t", washin_min=1.0,
-                        safety_ceiling_by_hemisphere=by)
+def test_stage_1_reads_each_sides_own_ceiling_and_a_stricter_ceiling_shrinks_the_joint_safe_set():
+    """REWRITTEN 2026-09-14: the exact safe-cell count on the joint grid depends on the joint
+    grid's own resolution (``JOINT_AMP_GRID``), which is coarser than the flat fit's 2-D
+    ``plots.AMP_GRID`` on purpose (a 3-D grid otherwise multiplies the cell count roughly
+    50-fold) -- so the historical magic count pinned to the 2-D grid no longer applies. What must
+    still hold: each side's own stated ceiling and provenance reach the audit, and a STRICTER
+    ceiling on one side shrinks the JOINT safe set (never grows it), because the joint safe mask
+    is the AND of both sides' own per-side safety models.
+    """
+    d = _design()
+    by_strict = {"Left": (2.0, "left test"), "Right": (4.5, "right test")}
+    by_loose = {"Left": (5.0, "left test"), "Right": (4.5, "right test")}
+    res = S1.run_stage1(d, data_horizon="t", washin_min=1.0,
+                        safety_ceiling_by_hemisphere=by_strict)
     a_l = res.frozen.audit["per_hemisphere"]["Left"]["safety_ceiling"]
     a_r = res.frozen.audit["per_hemisphere"]["Right"]["safety_ceiling"]
     assert (a_l["safety_ceiling_mA"], a_l["safety_ceiling_provenance"]) == (2.0, "left test")
     assert (a_r["safety_ceiling_mA"], a_r["safety_ceiling_provenance"]) == (4.5, "right test")
-    n_l = int(res.summary[res.summary["hemisphere"] == "Left"]["n_safe"].iloc[0])
-    assert n_l == N_SAFE_LEFT_AT_2
+    n_strict = int(res.summary[res.summary["hemisphere"] == "Left"]["n_safe"].iloc[0])
+
+    loose = S1.run_stage1(d, data_horizon="t", washin_min=1.0,
+                          safety_ceiling_by_hemisphere=by_loose)
+    n_loose = int(loose.summary[loose.summary["hemisphere"] == "Left"]["n_safe"].iloc[0])
+    assert n_strict < n_loose, (n_strict, n_loose)
 
 
 # ---------------------------------------------------------------------------------------------

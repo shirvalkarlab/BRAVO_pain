@@ -5387,7 +5387,22 @@ def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
 
 #: The lengths of signal, in seconds, that one band-power measurement may be averaged over. The
 #: PI's list. Requests shorter than one tile are delivered as one tile; see the module note above.
-BAND_TIME_SWEEP_SECONDS = (1.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 45.0, 60.0, 300.0)
+#: The 300 s length was dropped on 2026-09-15 (the PI: "get rid of the five-minute ... leave the max
+#: at one minute"): the clinician tablet's averaging window tops out at 30 s and its onset hold at
+#: 30 s, so nothing the device can be set to reaches five minutes of signal, and RCS08's strongest
+#: cells sitting there had been read as programmable (review 2026-09-15, finding B4).
+BAND_TIME_SWEEP_SECONDS = (1.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 45.0, 60.0)
+
+
+def _lengths_word(n):
+    """The count of lengths of signal as a word ("nine"), for every sentence that names it. ONE
+    function, so the notes and each row's `why` cannot say two different counts (a row read "the
+    strongest of 9 lengths ... the SAME best-of-ten choice" until the referent audit of
+    2026-09-15; the "ten" was typed before decision 170 dropped the 300 s length)."""
+    return {8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve"}.get(int(n), str(int(n)))
+
+
+_N_LENGTHS_WORD = _lengths_word(len(BAND_TIME_SWEEP_SECONDS))
 
 #: The span of band centres the sweep covers, in hertz. The firmware can only place an adaptive
 #: sensing band between 8 and 30 Hz (design ledger section 1), so a centre outside this span could
@@ -6129,15 +6144,11 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         _r.pop("_grid_center_index", None)
     notes = _sweep_notes(kept_req, delivered, tiles, tile_s, T, C, n_mad, o_scale, n_excluded,
                          int(n_perm), split_why, crosscheck, outlier_rule=outlier_rule)
-    # Added only when this contact actually has such reports, and it carries the count, so a reader
-    # can check the sentence against a number instead of taking it on trust. A contact with none
-    # gets no note at all rather than a reassuring one -- there is nothing to reassure about.
-    if n_dev_reports:
-        _worst = float(np.nanmax(dev_share)) if np.isfinite(dev_share).any() else 0.0
-        notes.append(
-            "%d of this contact pair's matched pain reports were answered from the device's own "
-            "FFT snapshots rather than the voltage trace, and the most affected cell drew %.0f%% of "
-            "its reports that way. %s" % (n_dev_reports, 100.0 * _worst, DEVICE_SPECTRUM_AXIS_NOTE))
+    # The snapshot count and share are NOT appended to `notes`. They travel as the
+    # `device_spectrum_*` fields and `n_pain_reports_from_device_spectrum` below, and the page's
+    # orange caption prints them from those fields (`gridReadouts.deviceSpectrumBullets`); a
+    # sentence here printed the same fact a second time, from a second code path, in the "how to
+    # read this" drawer under the same card (referent audit 2026-09-15, item 3).
     n_used = int(np.nanmax(corr_n)) if corr_n.size and np.isfinite(corr).any() else 0
     return {
         "answer": (BAND_PAIN_ESTABLISHED
@@ -6209,6 +6220,7 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         "n_shuffles": int(n_perm),
         "n_resamples": int(n_boot),
         "notes": notes,
+        "length_rounding": _length_rounding(kept_req, delivered),
     }
 
 
@@ -6370,27 +6382,30 @@ def _best_of_windows_null_auc(X, y_binary, *, n_perm, rng):
 #: The sentence that goes in the panel itself, not only in a caption. The PI's requirement: a reader
 #: must not be able to see the best cell without being told that it was chosen as the best of ten.
 #: Condensed for open item 7's display cleanup (decision, 2026-09-09) -- same claim, fewer words.
+#: Reworded 2026-09-15 for the heat map (the PI: "Every row's value is the largest ... doesn't make
+#: sense"): the old sentence described the retired table, one row per band; on the heat map a row is
+#: a length of signal, every cell has its own value, and only the CIRCLED cell per column is the
+#: best of the lengths.
 BEST_OF_WINDOWS_OPTIMISM_NOTE = (
-    "The value in each row is the LARGEST of the ten lengths of signal tried for that band -- "
-    "chosen after seeing the results, so it runs larger than a fresh set of ratings would give. "
-    "Its own p-value isn't a real probability; compare it to the shuffled best-of-ten value "
-    "beside it, the level chance alone reaches under the same selection."
+    f"The circled cell in each column is the LARGEST of the {_N_LENGTHS_WORD} lengths tried for that "
+    "band, chosen after the fact, so it runs larger than fresh ratings would; its corrected p and q "
+    f"are judged against the shuffled best-of-{_N_LENGTHS_WORD} value. Other cells are uncorrected."
 )
 
 #: The sentence about what 0.5 means, carried with every area-under-the-curve row and figure.
 #: Condensed for open item 7's display cleanup (decision, 2026-09-09) -- same claim, fewer words.
 AUC_REFERENCE_NOTE = (
-    "0.5, not 0, is what no discrimination between high and low pain looks like. An interval "
-    "spanning 0.5 means the question is unsettled for that band, not that it carries nothing."
+    "AUC 0.5, not 0, is no discrimination between high and low pain; an interval spanning 0.5 "
+    "leaves the band unsettled, not empty."
 )
 
 #: The direction-and-folding note, moved up next to AUC_REFERENCE_NOTE (open item 7, decision
 #: 2026-09-09): both explain how to read the AUC quantity itself, so both belong with the other
 #: non-negotiable interpretation notes rather than after the sweep's own mechanical bookkeeping.
+#: The second sentence ("the table's logistic fit folds direction away") described the retired
+#: table's own column; the heat map's circled AUC keeps direction, so it is gone (2026-09-15).
 AUC_DIRECTION_NOTE = (
-    "The AUC heat map keeps direction: above 0.5 means higher power in high-pain reports, below "
-    "means lower. The table's own number instead comes from a fitted logistic regression, which "
-    "folds direction away and can't go below 0.5."
+    "The AUC map keeps direction: above 0.5 means higher power in high-pain reports, below means lower."
 )
 
 
@@ -6403,45 +6418,40 @@ def _sweep_notes(requested, delivered, tiles, tile_s, n_times, n_centers, n_mad,
     plus the direction/folding note, ordered together (open item 7, decision 2026-09-09) since a
     reader needs all three before the rest, which is mechanical bookkeeping about how the sweep ran.
     """
+    # Concise since 2026-09-15 (the PI: "much more concisely"; ps-scientific-writing 6a: compress
+    # tokens, keep every statistic). The tile-rounding sentence is GONE from the drawer at his
+    # direction -- the rows are labelled with the delivered length -- and the pairs travel on the
+    # response as `length_rounding` instead (see the caller).
     notes = [BEST_OF_WINDOWS_OPTIMISM_NOTE, AUC_REFERENCE_NOTE, AUC_DIRECTION_NOTE]
-    short = [(float(r), float(d)) for r, d in zip(requested, delivered) if abs(d - r) > 1e-9]
-    if short:
-        pairs = ", ".join(f"{r:g} s asked for, {d:g} s delivered" for r, d in short)
-        notes.append(
-            f"Length of signal is delivered in whole {tile_s:g} s pieces: {len(short)} of "
-            f"{len(requested)} requested lengths could not be delivered exactly ({pairs}). "
-            f"Every label shows the length delivered.")
-    else:
-        notes.append(f"Every requested length of signal is a whole number of {tile_s:g} s pieces, "
-                     f"so each was delivered exactly.")
-    notes.append(f"The grid's {n_times * n_centers} cells ({n_times} lengths x {n_centers} band "
-                 f"centres, each {BAND_TIME_SWEEP_WIDTH_HZ:g} Hz wide, 1 Hz apart) overlap heavily "
-                 f"and are not independent of each other.")
+    notes.append(f"The {n_times * n_centers} cells ({n_times} lengths x {n_centers} centres, "
+                 f"{BAND_TIME_SWEEP_WIDTH_HZ:g} Hz wide, 1 Hz apart) overlap heavily and are not "
+                 f"independent.")
     if outlier_rule == "historical_99p5_ceiling_per_chunk":
-        notes.append(f"{n_excluded} single {tile_s:g} s pieces were left out before anything was "
-                     f"averaged, each one above this contact's own historical ceiling for that "
-                     f"band -- the top 0.5% of everything this contact has ever recorded there, "
-                     f"fixed in advance rather than judged from the data on screen. Each piece "
-                     f"left out was replaced by the next closest clean one, so every cell still "
-                     f"averages the number of pieces its row asks for.")
+        notes.append(f"{n_excluded} single {tile_s:g} s pieces above this contact's fixed historical "
+                     f"ceiling (top 0.5% of its own record, per band) were dropped before averaging "
+                     f"and replaced by the next clean piece, so every cell keeps its row's count.")
     elif n_mad > 0:
         notes.append(f"{n_excluded} measurements were excluded as outliers ({n_mad:g} median "
                      f"absolute deviations on the {o_scale} scale), per band and length.")
     else:
-        notes.append("Outlier exclusion was switched off for this sweep; every measurement is "
-                     "included.")
-    notes.append(f"The shuffled reference is {n_perm} circular block shuffles of the pain scores "
-                 f"(preserving day-to-day similarity), making the same best-of-ten choice each "
-                 f"time, in either direction.")
+        notes.append("Outlier exclusion was switched off; every measurement is included.")
+    notes.append(f"Shuffled reference: {n_perm} circular block shuffles of the pain scores "
+                 f"(day-to-day similarity kept), each making the same best-of-{_N_LENGTHS_WORD} "
+                 f"choice in either direction.")
     notes.append(f"High vs low pain: {split_why}.")
     if crosscheck and int(crosscheck.get("n_cells") or 0):
         n_ag = int(crosscheck.get("n_agree") or 0)
         n_all = int(crosscheck.get("n_cells") or 0)
-        notes.append(
-            f"A logistic regression fit at each of the {n_all} cells matched the folded ordering "
-            f"in {n_ag} of them; a mismatch means that band's own fit runs against its power "
-            f"values, which happens where the band carries little.")
+        notes.append(f"A logistic fit at each of the {n_all} cells matched the folded ordering in "
+                     f"{n_ag}; a mismatch means the band carries little.")
     return notes
+
+
+def _length_rounding(requested, delivered):
+    """One pair per requested length that the 3 s tiles could not deliver exactly (moved off the
+    drawer on 2026-09-15; the row labels already show the delivered length)."""
+    return [{"requested_s": float(r), "delivered_s": float(d)}
+            for r, d in zip(requested, delivered) if abs(float(d) - float(r)) > 1e-9]
 
 
 def _percentile_interval(draws, alpha=0.05):
@@ -6458,14 +6468,16 @@ def _percentile_interval(draws, alpha=0.05):
 
 def _verdict_against(lo, hi, null_value, *, observed=None, shuffled_p95=None):
     """The three-word answer for one row, read against the value that means no relationship AND
-    against the level the same best-of-ten choice reaches on shuffled pain scores.
+    against the level the same best-of-every-length choice (`_N_LENGTHS_WORD` lengths, nine today)
+    reaches on shuffled pain scores.
 
     BOTH TESTS HAVE TO PASS FOR "established", and that is the point of this function. An interval
     that excludes the no-relationship value answers the question "is this particular cell's value
-    different from no relationship"; it does NOT answer "is the LARGEST of ten values different from
-    no relationship", which is the question the reported number actually poses, because the cell was
-    chosen after seeing all ten. Before this gate existed the row could read ``established`` while
-    its own figure headline said the value does not clear the shuffled best-of-ten level -- two
+    different from no relationship"; it does NOT answer "is the LARGEST of the values across every
+    length different from no relationship", which is the question the reported number actually
+    poses, because the cell was chosen after seeing all of them. Before this gate existed the row
+    could read ``established`` while its own figure headline said the value does not clear the
+    shuffled best-of-every-length level -- two
     surfaces contradicting each other about one number, which is exactly the class of error this
     section was asked to avoid.
 
@@ -6729,15 +6741,17 @@ def _corr_row_sentence(verdict, r_value, lo, hi, delivered_s, n_windows, shuffle
     """The sentence for one row of the correlation table, naming which of the two tests it failed.
 
     Same two-test structure as the high-pain-against-low-pain table: the interval has to stay off 0
-    AND the value has to be larger in size than what the same best-of-ten choice reaches on shuffled
-    pain scores. A row that fails either one says the question was not settled, never that the band
-    carries nothing.
+    AND the value has to be larger in size than what the same best-of-every-length choice reaches
+    on shuffled pain scores. A row that fails either one says the question was not settled, never
+    that the band carries nothing. ``n_windows`` is the row's own count of lengths, and the one
+    word made from it (`_lengths_word`) is the only count the sentence prints.
     """
-    at = (f"the strongest of {n_windows} lengths of signal for this band, reached when one "
+    word = _lengths_word(n_windows)
+    at = (f"the strongest of {word} lengths of signal for this band, reached when one "
           f"measurement averaged {delivered_s:g} s of recording")
     if verdict == BAND_PAIN_ESTABLISHED:
-        tail = (f" and larger in size than the {float(shuffled_p95):.3f} the same choice reaches on "
-                f"shuffled pain scores" if shuffled_p95 is not None else "")
+        tail = (f" and larger in size than the {float(shuffled_p95):.3f} the same best-of-{word} "
+                f"choice reaches on shuffled pain scores" if shuffled_p95 is not None else "")
         return (f"the interval from {lo:.3f} to {hi:.3f} stays wholly off 0{tail}, so this band's "
                 f"power does track this pain score for this patient; {at}")
     if verdict == BAND_PAIN_NOT_RESOLVED:
@@ -6746,7 +6760,7 @@ def _corr_row_sentence(verdict, r_value, lo, hi, delivered_s, n_windows, shuffle
                     f"power tracks this pain score was NOT SETTLED; {at}")
         ref = (f"{float(shuffled_p95):.3f}" if shuffled_p95 is not None else "the shuffled level")
         return (f"the interval from {lo:.3f} to {hi:.3f} does stay off 0, but the value is no "
-                f"larger in size than {ref}, which is what the SAME best-of-ten choice reaches on "
+                f"larger in size than {ref}, which is what the SAME best-of-{word} choice reaches on "
                 f"shuffled pain scores, so once that choice is accounted for nothing was SETTLED "
                 f"here; {at}")
     return f"an interval could not be formed, so nothing was established either way; {at}"
@@ -6759,18 +6773,20 @@ def _auc_row_sentence(verdict, auc_value, lo, hi, delivered_s, n_windows, shuffl
 
     The three answers get three different sentences on purpose, and ``not_resolved`` gets two
     versions of its own: one for an interval that includes 0.5, and one for a value that clears 0.5
-    but does not clear the level the same best-of-ten choice reaches on shuffled pain scores.
-    Neither of them ever says the band carries nothing.
+    but does not clear the level the same best-of-every-length choice reaches on shuffled pain
+    scores. Neither of them ever says the band carries nothing. ``n_windows`` is the row's own
+    count of lengths; its word form is the only count the sentence prints.
     """
+    word = _lengths_word(n_windows)
     at = (f"reached when one measurement averaged {delivered_s:g} s of recording, chosen as the "
-          f"furthest from 0.5 of {n_windows} lengths of signal tried")
+          f"furthest from 0.5 of {word} lengths of signal tried")
     if verdict == BAND_PAIN_ESTABLISHED:
         side = "above" if auc_value > AUC_NO_DISCRIMINATION else "below"
         which = "higher" if auc_value > AUC_NO_DISCRIMINATION else "lower"
         tail = ""
         if shuffled_p95 is not None:
             tail = (f", and it is further from 0.5 than the {float(shuffled_p95):.3f} the same "
-                    f"best-of-ten choice reaches on shuffled pain scores")
+                    f"best-of-{word} choice reaches on shuffled pain scores")
         return (f"the interval from {lo:.3f} to {hi:.3f} stays wholly {side} 0.5{tail}, so this "
                 f"band does separate high-pain reports from low-pain ones for this patient, with "
                 f"the band power {which} on the high-pain ones; {at}")
@@ -6781,7 +6797,7 @@ def _auc_row_sentence(verdict, auc_value, lo, hi, delivered_s, n_windows, shuffl
                     f"unsettled question, not a finding that the band carries nothing; {at}")
         ref = (f"{float(shuffled_p95):.3f}" if shuffled_p95 is not None else "the shuffled level")
         return (f"the interval from {lo:.3f} to {hi:.3f} does stay off 0.5, but the value is no "
-                f"further from 0.5 than {ref}, which is what the SAME best-of-ten choice reaches on "
+                f"further from 0.5 than {ref}, which is what the SAME best-of-{word} choice reaches on "
                 f"shuffled pain scores, so once that choice is accounted for nothing was SETTLED "
                 f"here. That is an unsettled question, not a finding that the band carries nothing; "
                 f"{at}")

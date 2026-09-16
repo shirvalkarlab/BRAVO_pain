@@ -144,6 +144,68 @@ def select_batch_within_visit(gp, grid, *, q, safe_mask=None, n_reports=None,
     return out
 
 
+@dataclass
+class JointBatchMember:
+    """One selected cell of a JOINT (rate, amplitude-Left, amplitude-Right) batch.
+
+    The per-side twin of :class:`BatchMember`, for :func:`select_batch_within_visit_joint`. Kept
+    as its own dataclass rather than adding optional Left/Right fields to ``BatchMember`` itself,
+    so a caller of the existing, well-tested 2-D batch selector never has to guard against fields
+    that only mean something for the 3-D grid.
+    """
+    index: int
+    freq_hz: float
+    amp_mA_left: float
+    amp_mA_right: float
+    mu: float
+    sd: float
+    acq: float
+    reason: str
+    exploration_fraction: float
+
+
+def select_batch_within_visit_joint(gp, grid, *, q, safe_mask=None, n_reports=None,
+                                    incumbent_mu=None, fantasy_var=None, t=1, eta=1.0,
+                                    exclude_tested=True):
+    """``select_batch_within_visit``'s sequential-greedy expected-improvement search, generalised
+    to the 3-column (rate, amplitude-Left, amplitude-Right) grid.
+
+    The acquisition, the fantasy-conditioning and the rank-and-select exclusion are IDENTICAL to
+    the 2-D selector -- none of that logic is specific to how many amplitude axes the grid has.
+    The only thing that differs is which grid columns get read back into the result, which is why
+    this is a short, separate function rather than a change to the tested 2-D one.
+    """
+    q = int(q)
+    if q < 1:
+        raise ValueError("q must be at least 1")
+    cand = candidate_mask(grid, safe_mask=safe_mask, n_reports=n_reports,
+                          exclude_tested=exclude_tested)
+    if not cand.any():
+        raise ValueError(
+            "no eligible candidates: the safe set and the already-tested exclusion together "
+            "leave nothing. Loosen beta, raise the expansion cap, or allow re-testing.")
+    fv = float(np.median(gp.y_var_)) if fantasy_var is None else float(fantasy_var)
+    gx = grid.grid_X()
+    model = gp
+    chosen, out = [], []
+    for k in range(q):
+        mu, sd = model.predict_grid()
+        best = float(np.min(mu)) if incumbent_mu is None else float(incumbent_mu)
+        acq = expected_improvement(mu, sd, best)
+        avail = cand.copy()
+        avail[chosen] = False
+        if not avail.any():
+            break
+        idx = int(np.flatnonzero(avail)[np.argmax(acq[avail])])
+        ef = float(exploration_fraction(sd[idx], t=t + k, eta=eta, mu=mu[idx] - best))
+        out.append(JointBatchMember(idx, float(gx[idx, 0]), float(gx[idx, 1]), float(gx[idx, 2]),
+                                    float(mu[idx]), float(sd[idx]), float(acq[idx]),
+                                    _reason(mu[idx], sd[idx], best, False, False), ef))
+        chosen.append(idx)
+        model = model.with_fantasy(gx[[idx]], fv)
+    return out
+
+
 # --- exploration queue and stopping ------------------------------------------------------
 def exploration_queue(mu, sd, n_reports, incumbent_mu, *, kappa=2.0,
                       min_reports=3, order_by="ei", limit=None):

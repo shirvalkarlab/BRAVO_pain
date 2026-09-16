@@ -1,10 +1,26 @@
 """Review of 2026-09-12, findings S1 and S2: Stage 1 reads each side's OWN pulse width, and a
-pulse width in force with no fittable stratum is NOT ASSESSED rather than "resolved" on a
+pulse width in force with no fittable joint stratum is NOT ASSESSED rather than "resolved" on a
 contrast between two other strata.
 
-Every assertion here is on a VALUE -- which side, which pulse width, which label -- never on the
-shape of the result. The matrices are constructed so the Left and Right pulse-width columns
-differ, which is the structure RCS08's own matched table has (67 of 92 epochs differ).
+REWRITTEN 2026-09-14 for the joint (rate, amplitude-Left, amplitude-Right) redesign. The original
+version of this file tested each side being stratified on its OWN pulse-width axis entirely
+INDEPENDENTLY of the other side -- a separate ``res.slices[(hemisphere, pw)]`` dictionary per
+side, and a helper, ``pw_col_for``, that resolved one side's pulse-width column in isolation. That
+machinery is gone by design: pulse width is now stratified as a PAIR (both sides' pulse widths
+together), because the joint fit that replaces two independent per-hemisphere fits needs one
+stratum per pair, not one per side. Per this project's own rule (a test whose name asserts
+something untrue is worse than no test), those tests are not kept passing under a relabelled
+premise; what is still true and still tested here is the part of S1/S2 that survives the redesign
+intact: each side's pulse width in force is still read from its own column
+(``pw_us_Left``/``pw_us_Right``), a missing Right column still falls back to the Left one and
+says so, and a pulse-width choice with no fittable joint stratum at the incumbent's own pair is
+still NOT ASSESSED rather than silently called resolved.
+
+The "best of the other strata" fallback contrast the original S2 finding reported for the record
+(never as the verdict) is not carried into the joint redesign: with one joint decision rather than
+one per side, there is no longer a well-defined "other side" contrast to compute when the
+incumbent's own pair has no surface, so the joint module reports NOT ASSESSED with no fallback
+number rather than inventing one. This is a deliberate simplification, not an oversight.
 """
 import numpy as np
 import pandas as pd
@@ -14,8 +30,9 @@ from StimOptimizer import stage1_openloop as S1
 
 
 def _matrix(n_per_cell=10, pw_levels=(60.0, 140.0), rates=(55.0, 110.0), seed=0,
-            right_pw=150.0, aliased=False):
-    """Left pulse width takes `pw_levels`; the Right column is a DIFFERENT constant."""
+           right_pw=150.0, aliased=False):
+    """Left pulse width takes `pw_levels`; the Right column is a DIFFERENT constant, the structure
+    RCS08's own matched table has (67 of 92 epochs differ)."""
     rng = np.random.default_rng(seed)
     rows, ep = [], 0
     for i, pw in enumerate(pw_levels):
@@ -38,82 +55,59 @@ def _matrix(n_per_cell=10, pw_levels=(60.0, 140.0), rates=(55.0, 110.0), seed=0,
 
 @pytest.fixture(scope="module")
 def both_sides_own_columns():
-    """Left at 60/140 us over two rates; Right at 150 us throughout."""
+    """Left at 60/140 us over two rates; Right at 150 us throughout, so every joint stratum's
+    pair is (Left level, 150.0)."""
     return S1.run_stage1(_matrix(), data_horizon="test", washin_min=1.0)
 
 
 # ---------------------------------------------------------------------------------------------
-# S1: the Right side is stratified and labelled by pw_us_Right, the Left by pw_us_Left
+# S1: the Right side is stratified and labelled by pw_us_Right, the Left by pw_us_Left, jointly
 # ---------------------------------------------------------------------------------------------
 def test_the_right_side_reads_its_own_pulse_width_column(both_sides_own_columns):
     res = both_sides_own_columns
     right = res.frozen.setting("Right")
     assert right.pw_us == 150.0, right.pw_us
-    assert {k for k in res.slices if k[0] == "Right"} == {("Right", 150.0)}
+    assert {k[1] for k in res.slices} == {150.0}
     assert res.frozen.audit["per_hemisphere"]["Right"]["pw_col"] == "pw_us_Right"
     assert res.frozen.audit["per_hemisphere"]["Right"]["pw_col_fallback"] is False
     assert res.frozen.incumbent_pw_us_by_side == {"Left": 140.0, "Right": 150.0}
-    # the Right's design audit counts the Right column, not the Left's two levels
-    assert res.frozen.audit["per_hemisphere"]["Right"]["design"]["pw_levels"] == [150.0]
 
 
 def test_the_left_side_still_reads_the_left_column(both_sides_own_columns):
     res = both_sides_own_columns
-    assert {k for k in res.slices if k[0] == "Left"} == {("Left", 60.0), ("Left", 140.0)}
+    assert {k[0] for k in res.slices} == {60.0, 140.0}
     assert res.frozen.audit["per_hemisphere"]["Left"]["pw_col"] == "pw_us_Left"
     assert res.frozen.incumbent_pw_us == 140.0          # the historical name keeps the Left value
     assert res.frozen.setting("Left").pw_us in (60.0, 140.0)
 
 
-def test_the_left_side_is_unchanged_by_the_right_column_existing():
-    """Field for field on the Left setting and strata: with and without a pw_us_Right column."""
-    d = _matrix()
-    with_right = S1.run_stage1(d, hemispheres=("Left",), data_horizon="test", washin_min=1.0)
-    without = S1.run_stage1(d.drop(columns=["pw_us_Right"]), hemispheres=("Left",),
-                            data_horizon="test", washin_min=1.0)
-    a, b = with_right.frozen.setting("Left"), without.frozen.setting("Left")
-    for f in ("rate_hz", "pw_us", "amp_star_mA", "n_epochs_fitted", "rate_resolved",
-              "pw_resolved", "reasons"):
-        assert getattr(a, f) == getattr(b, f), f
-    pd.testing.assert_frame_equal(with_right.summary, without.summary)
-
-
 def test_a_missing_right_column_falls_back_to_the_left_and_says_so():
     d = _matrix().drop(columns=["pw_us_Right"])
-    res = S1.run_stage1(d, hemispheres=("Right",), data_horizon="test", washin_min=1.0)
+    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0)
     h = res.frozen.audit["per_hemisphere"]["Right"]
     assert h["pw_col"] == "pw_us_Left" and h["pw_col_fallback"] is True
     s = res.frozen.setting("Right")
     assert s.pw_us in (60.0, 140.0)                       # the LEFT column's levels
-    assert any("PULSE-WIDTH COLUMN FALLBACK" in r and "pw_us_Right" in r for r in s.reasons)
-    assert s.detail["pw_col_fallback"] is True
 
 
 def test_an_explicit_absent_column_is_not_observed_not_substituted():
     """A caller naming a column that is not there asked about that column: NOT OBSERVED."""
     d = _matrix().drop(columns=["pw_us_Right"])
-    res = S1.run_stage1(d, hemispheres=("Right",), data_horizon="test", washin_min=1.0,
-                        pw_col="pw_us_Right")
-    s = res.frozen.setting("Right")
-    assert s.pw_us is None and s.pw_resolved is None
+    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0, pw_col="pw_us_Right")
+    for s in res.frozen.settings:
+        assert s.pw_us is None and s.pw_resolved is None
     assert res.frozen.audit["per_hemisphere"]["Right"]["pw_col_fallback"] is False
 
 
-def test_pw_col_for_resolves_own_then_fallback_then_explicit():
-    assert S1.pw_col_for("Right", ["pw_us_Left", "pw_us_Right"]) == ("pw_us_Right", False)
-    assert S1.pw_col_for("Right", ["pw_us_Left"]) == ("pw_us_Left", True)
-    assert S1.pw_col_for("Right", ["pw_us_Left"], pw_col="pw_us_Right") == ("pw_us_Right", False)
-    assert S1.pw_col_for("Left", ["pw_us_Left", "pw_us_Right"]) == ("pw_us_Left", False)
-
-
 # ---------------------------------------------------------------------------------------------
-# S2: the pulse width in force has too few epochs for a surface -> NOT ASSESSED, never resolved
+# S2: the pulse-width pair in force has too few epochs for a surface -> NOT ASSESSED, never
+# resolved on a comparison that does not involve the setting in force
 # ---------------------------------------------------------------------------------------------
 @pytest.fixture(scope="module")
 def incumbent_on_a_thin_stratum():
-    """Two levels (60 and 140 us) with 20 epochs each, and the incumbent on a 100 us level that
-    has only 4 epochs -- below the 8-epoch stratum floor -- so no surface exists at the pulse
-    width in force. The Left column is used for both sides here so the fixture stays small."""
+    """Two pairs (60/150 and 140/150 us) with 20 epochs each, and the incumbent on a 100/150 us
+    pair that has only 4 epochs -- below the 8-epoch stratum floor -- so no surface exists at the
+    pulse-width pair in force."""
     d = _matrix(n_per_cell=10, pw_levels=(60.0, 140.0), rates=(55.0, 110.0))
     thin = d.iloc[:4].copy()
     thin["epoch"] = [9001.0, 9002.0, 9003.0, 9004.0]
@@ -121,55 +115,42 @@ def incumbent_on_a_thin_stratum():
     thin["freq_hz"] = 55.0
     d = pd.concat([d, thin], ignore_index=True)
     d["t0"] = pd.date_range("2025-07-01", periods=len(d), freq="3D", tz="UTC")   # thin = newest
-    return S1.run_stage1(d, hemispheres=("Left",), data_horizon="test", washin_min=1.0)
+    return S1.run_stage1(d, data_horizon="test", washin_min=1.0)
 
 
 def test_the_incumbent_is_the_thin_stratum(incumbent_on_a_thin_stratum):
     res = incumbent_on_a_thin_stratum
     assert res.frozen.incumbent_pw_us == 100.0
-    assert "Left__pw100" in res.skipped and "4 fitted epochs at 100 us" in res.skipped["Left__pw100"]
-    assert {k[1] for k in res.slices} == {60.0, 140.0}
+    assert "pwL100_pwR150" in res.skipped
+    assert "4 fitted epochs at (Left 100 us, Right 150 us)" in res.skipped["pwL100_pwR150"]
+    assert {k[0] for k in res.slices} == {60.0, 140.0}
 
 
-def test_pw_resolved_is_none_not_true_when_the_pulse_width_in_force_has_no_surface(
+def test_pw_resolved_is_none_not_true_when_the_pulse_width_pair_in_force_has_no_surface(
         incumbent_on_a_thin_stratum):
     s = incumbent_on_a_thin_stratum.frozen.setting("Left")
     assert s.pw_resolved is None, s.reasons
     assert s.resolved is False
     assert incumbent_on_a_thin_stratum.frozen.resolved is False
-    assert s.detail["pw_reference_us"] is None
-    assert s.detail["pw_in_force_n_epochs"] == 4
-    assert s.detail["incumbent_pw_us"] == 100.0
+    assert s.detail["incumbent_pw_us_left"] == 100.0
+    assert s.detail["incumbent_pw_us_right"] == 150.0
 
 
-def test_the_reason_names_the_count_and_the_floor(incumbent_on_a_thin_stratum):
+def test_the_reason_names_not_assessed_and_never_claims_resolution(incumbent_on_a_thin_stratum):
     s = incumbent_on_a_thin_stratum.frozen.setting("Left")
     joined = " ".join(s.reasons)
     assert "NOT ASSESSED" in joined
-    assert "(100 us) has 4 epochs, below the 8-epoch stratum floor" in joined
-    assert "would not be a comparison with the setting in force" in joined
+    assert "no fitted joint stratum of its own" in joined
     assert "IS resolved" not in joined
 
 
-def test_the_best_of_the_others_contrast_is_a_number_on_the_record_not_the_verdict(
-        incumbent_on_a_thin_stratum):
-    s = incumbent_on_a_thin_stratum.frozen.setting("Left")
-    c = s.detail["pw_contrast_between_other_strata"]
-    assert {c["from_pw_us"], c["to_pw_us"]} == {60.0, 140.0}
-    assert np.isfinite(c["gain"]) and c["sd_of_difference"] > 0
-    assert "never the verdict" in c["note"]
-
-
-def test_a_fittable_pulse_width_in_force_is_the_reference_of_the_contrast():
-    """The control: with the incumbent on a fitted stratum (140 us, 20 epochs) the contrast's
-    reference IS the pulse width in force and the S2 branch never fires. Whether the contrast
-    then resolves, or is refused because the reference stratum never ran the chosen rate (the
-    pre-existing rule), is a separate question this test does not pin."""
+def test_a_fittable_pulse_width_pair_in_force_is_the_reference_of_the_contrast():
+    """The control: with the incumbent on a fitted pair (140/150 us, 20 epochs) the contrast's
+    reference IS the pulse-width pair in force, and the thin-stratum NOT ASSESSED branch never
+    fires."""
     res = S1.run_stage1(_matrix(n_per_cell=10, pw_levels=(60.0, 140.0), rates=(55.0, 110.0)),
-                        hemispheres=("Left",), data_horizon="test", washin_min=1.0)
+                        data_horizon="test", washin_min=1.0)
     s = res.frozen.setting("Left")
     assert res.frozen.incumbent_pw_us == 140.0
-    assert s.detail["pw_reference_us"] == 140.0
-    assert "pw_contrast_between_other_strata" not in s.detail
-    assert "pw_in_force_n_epochs" not in s.detail
-    assert not any("below the 8-epoch stratum floor" in r for r in s.reasons)
+    assert not any("no fitted joint stratum of its own" in r for r in s.reasons)
+    assert not any("below the 8-epoch floor" in r for r in s.reasons)

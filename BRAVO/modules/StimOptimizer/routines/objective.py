@@ -18,20 +18,27 @@ import pandas as pd
 # Calibration statement (OBJECTIVE_SPEC 2.3): one mild side effect cancels exactly 1.0 NRS
 # point of benefit. Moderate and severe are HARD INFEASIBLE, not large finite penalties.
 #
+# "mild_persistent" (2026-09-15): the clinic sheet's own printed ladder is 0 none, 1 mild,
+# 2 mild persistent, 3 moderate, 4 avoid (`clinic_pain.SIDE_EFFECT_SEVERITY_LABEL`). Until this
+# date a sheet score of 2 was folded into "mild" and cost 1.0. The PI's ruling, his words: "yes
+# score 2 cost more" and, asked for the number, "2" -- so a persistent mild side effect cancels
+# exactly 2.0 NRS points. It stays FINITE on purpose: a large enough pain benefit can still
+# outbid it, which is what separates it from moderate, where nothing can.
+#
 # Sarikhani et al. could use a finite penalty of 4 to mean "always rejected" because their
 # tremor term was bounded to [-4, 4], so no efficacy gain could outweigh it. J_pain here is
 # baseline-subtracted NRS referenced to an incumbent at 7.28, so it is bounded below by -7.28:
 # a finite penalty of 4.0 would be beaten by any cell showing more than 4 NRS points of
 # improvement (7.3 -> 3.3, which is clinically conceivable). Encoding the trade-off as +inf is
 # the only way the stated guarantee is actually true.
-SE_LADDER = {"none": 0.0, "mild": 1.0, "moderate": np.inf, "severe": np.inf}
+SE_LADDER = {"none": 0.0, "mild": 1.0, "mild_persistent": 2.0, "moderate": np.inf, "severe": np.inf}
 
 # Severity labels that make a cell ineligible for selection outright. Infeasible cells are NOT
 # discarded: they are excluded from the objective surrogate's argmin (an intolerable setting
 # carries no useful information about where the pain optimum is) while still informing the
 # safety GP, which is how a constrained Bayesian optimizer is supposed to treat them.
 SE_HARD_REJECT = frozenset({"moderate", "severe"})
-SE_SEVERITY_RANK = {"none": 0, "mild": 1, "moderate": 2, "severe": 3}
+SE_SEVERITY_RANK = {"none": 0, "mild": 1, "mild_persistent": 2, "moderate": 3, "severe": 4}
 SE_THRESHOLD = 3.0  # severity scale value that defines the unsafe boundary
 
 # --- section 2.2: the pain metric is a CHOICE, and it is now an explicit one -------------
@@ -200,7 +207,7 @@ def side_effect_penalty(severity) -> float:
     """Map a reported severity label (or NaN / None for unreported) to its NRS-point penalty."""
     if severity is None or (isinstance(severity, float) and np.isnan(severity)):
         return 0.0
-    key = str(severity).strip().lower()
+    key = str(severity).strip().lower().replace(" ", "_").replace("-", "_")
     if key not in SE_LADDER:
         raise ValueError(
             f"unknown side-effect severity {severity!r}; expected one of {sorted(SE_LADDER)}"
@@ -296,7 +303,7 @@ def observation_variance(n, sd, dur_h, age_days, *, pooled_var, cfg=None) -> np.
 
 
 def build_objective(epoch_stats: pd.DataFrame, *, incumbent_epoch, cfg=None,
-                    reference_time=None) -> pd.DataFrame:
+                    reference_time=None, pooled_var_override=None) -> pd.DataFrame:
     """Assemble the epoch-level design table the surrogate consumes.
 
     Parameters
@@ -311,6 +318,17 @@ def build_objective(epoch_stats: pd.DataFrame, *, incumbent_epoch, cfg=None,
         J = 0 at the incumbent by construction and negative means better than status quo.
     reference_time
         Timestamp against which observation age is measured; defaults to the latest ``t0``.
+    pooled_var_override
+        ``None`` (the default) means the pooled within-epoch variance is estimated from
+        ``epoch_stats`` itself via ``pooled_within_epoch_var``, exactly as before this
+        parameter existed -- every existing caller is unaffected. When a frame has NO epoch
+        with at least ``min_n`` reports (a thin, independent stream such as the clinic-sheet
+        pain stream in ``StimOptimizer.clinic_pain``, where most settings were tried once),
+        that estimate cannot be formed and would raise; a caller who has a pooled variance
+        from elsewhere (e.g. the same participant's REDCap-based stream) may pass it here
+        instead, so a thin epoch table still gets a real (if imported) noise estimate rather
+        than failing outright. Never used silently: the caller decides, and states in its own
+        report which variance was actually used.
 
     Returns
     -------
@@ -373,8 +391,10 @@ def build_objective(epoch_stats: pd.DataFrame, *, incumbent_epoch, cfg=None,
     ref_t = pd.to_datetime(reference_time, utc=True) if reference_time is not None else t0.max()
     d["age_days"] = (ref_t - t0).dt.total_seconds() / 86400.0
 
-    pooled = pooled_within_epoch_var(d, sd_col, "n")
+    pooled = (float(pooled_var_override) if pooled_var_override is not None
+             else pooled_within_epoch_var(d, sd_col, "n"))
     d["pooled_within_var"] = pooled
+    d["pooled_within_var_overridden"] = pooled_var_override is not None
     d["obs_var"] = observation_variance(d["n"], d[sd_col], d["dur_h"], d["age_days"],
                                         pooled_var=pooled, cfg=cfg)
     return d

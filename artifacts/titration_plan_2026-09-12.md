@@ -1,5 +1,19 @@
 # The titration session the Stim Optimizer page now recommends for the next visit
 
+**UPDATED 2026-09-14 — two rulings that change the numbers below, kept in place as history rather
+than rewritten (this project's own convention for a superseded row).** (1) The stated ceiling for
+RCS08 is now **4.5 mA on both sides**, not 5.0 mA (`safety_ceiling.PI_STATED_CEILING_MA`; decision
+145's table row is struck-and-corrected the same way). (2) The ladder's DOWN leg is now 1.0 mA
+steps, not the same 0.5 mA steps as the way up (his words: "keep the 1.0 mA down legs"); each step
+is now two clinic-sheet rows, a 60 s ramp row then the unchanged 60 s test row (2 min a step, not
+one 60 s row); the other side is held at its own current in force while one side's ladder runs,
+rather than left unstated; and an optional "joint corners" block gives the pain surface's
+off-diagonal points. At the new 4.5 mA ceiling the ladder is **10 distinct currents on the way up,
+15 steps in all** (0 → 0.5 → … → 4.5, then 3.5 → 2.5 → 1.5 → 0.5 → 0), not the 11/21 the table
+below states for the old 5.0 mA ceiling. See `titration_plan.py`'s own module docstring for the
+full reasoning; the live numbers below are from before this update and are kept as a record of
+what the card said that day, not as the current answer.
+
 **Built 2026-09-12 evening**, on the PI's decision: *"make #4 a feature of next stim opt
 recommendation combined with 30."* Item 4 is the 20 s post-ramp margin (decision 144: it ships
 OFF, because on the 11-13 points the record holds it flips a verdict by removing two of them);

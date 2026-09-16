@@ -90,6 +90,13 @@ const EDGE_META = {
 };
 
 const edgeInk = (e) => (e && e.resolved ? PAL.accent : PAL.neutral);
+// Review 2026-09-15, finding C1: E1 is one of two different quantities and the payload says which
+// (`edges.E1.source`). The screening statistic -- the setting-epoch slope over the whole record,
+// confounded with time, whose own note says it cannot be read as the causal effect of current on
+// power -- was drawn exactly like the pooled titration slope. It is now drawn dotted (a direction,
+// but not a measurement) and labelled with the word, so a reader never has to open the fold.
+const isScreening = (e) => !!(e && e.source === "screening_historical");
+const SCREENING_DASH = "1.5 3.5";
 
 /**
  * The triangle as a graph. Amplitude sits at the lower left, band power at the apex and pain at the
@@ -141,8 +148,8 @@ function TriangleGraph({ edges }) {
         return (
           <g key={E.k}>
             <line x1={p0[0]} y1={p0[1]} x2={p1[0]} y2={p1[1]} stroke={ink}
-              strokeWidth="2.2"
-              strokeDasharray={resolved ? undefined : "5 3"}
+              strokeWidth="2.2" data-edge={E.k}
+              strokeDasharray={resolved ? (isScreening(e) ? SCREENING_DASH : undefined) : "5 3"}
               markerEnd={resolved ? "url(#cle-head-accent)" : undefined} />
             {/* An unresolved edge carries a hollow diamond with a question mark at its midpoint:
                 a placeholder for a sign, in the position a sign would occupy. */}
@@ -163,6 +170,10 @@ function TriangleGraph({ edges }) {
                   + `${e && e.statistically_established === false ? " (interval spans zero)" : ""}`
                 : "no point estimate"}
             </text>
+            {isScreening(e) ? (
+              <text x={E.lx} y={E.ly + 22} textAnchor={E.anchor} fontSize="9" fontWeight="700"
+                fill={PAL.warnText}>screening statistic, not a measurement</text>
+            ) : null}
           </g>
         );
       })}
@@ -242,6 +253,7 @@ function EdgeAxis({ k, e }) {
           letterSpacing: 0.3 }}>
           {resolved
             ? `SIGN ${signWord} (${established ? "INTERVAL EXCLUDES ZERO" : "INTERVAL SPANS ZERO"})`
+              + (isScreening(e) ? " · SCREENING STATISTIC, NOT A MEASUREMENT" : "")
             : "NO POINT ESTIMATE"}
         </MDTypography>
       </MDBox>
@@ -515,7 +527,11 @@ export default function EvidenceTrianglePanel({ report }) {
             A solid line with an arrowhead is an edge whose direction the data established. A
             dotted line with a hollow diamond is an edge that was estimated and whose direction
             the data did not establish; it is drawn at full weight because it is present and
-            undetermined, not absent and not zero. Each edge has its own axis and its own units
+            undetermined, not absent and not zero. A finely dotted line with an arrowhead, marked
+            "screening statistic", is the current-to-power edge read off the whole historical
+            record, where current is confounded with time: it has a sign and it chooses what to
+            titrate, and it is not a measurement of what current does to power. It is replaced by
+            the pooled titration slope once one is stored for the band. Each edge has its own axis and its own units
             because the three quantities are not comparable in magnitude; only zero is aligned
             across the three, which is what makes the sign comparison readable.
           </MDTypography>

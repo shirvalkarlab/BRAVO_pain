@@ -195,10 +195,13 @@ def test_without_the_flag_the_response_has_no_two_stage_key_and_the_path_is_neve
     assert out["available"] is True
     assert "two_stage" not in out
     assert bench.live.calls == [], "the LFP evidence builder must not run without the flag"
-    assert sorted(out) == ["amplitude_effect", "arms", "available", "blockers", "cache_status",
-                           "closed_loop", "design_matrix", "ground_truth", "in_force_by_side",
-                           "manifest", "participant", "recommendation_supported", "store",
-                           "summary", "titration_plan", "washin_min"]   # titration_plan: 2026-09-12 evening
+    # `arms`, `blockers`, `manifest`, `recommendation_supported` and `summary` came from the flat
+    # per-arm pipeline, which `run_for_participant` no longer calls (2026-09-14: the arm strip
+    # and its chart are gone from the page; only the two-stage plan is served now).
+    assert sorted(out) == ["amplitude_effect", "available", "cache_status",
+                           "closed_loop", "current_map_schedule", "design_matrix", "ground_truth",
+                           "in_force_by_side", "participant", "store",
+                           "titration_plan", "washin_min"]
 
 
 # FIT ONCE, ASSERT MANY (2026-09-12). The flag-on requests below all fit Stage 1 on `bench.es`
@@ -285,15 +288,27 @@ def test_the_block_equals_a_direct_call_of_run_two_stage_live_field_for_field(be
     # (`safety_ceiling.ceilings_by_hemisphere`); the direct call hands them the same, through the
     # same function, so this test also pins that wiring.
     ceilings = BS.SC.ceilings_by_hemisphere(UID, ("Left",))
+    # 2026-09-15: the service also recomputes the side-effect-versus-current statistic from the
+    # clinic sheets and hands it to the gate ("recompute always"); the direct call does the same
+    # through the same function, so this test pins that wiring too.
+    se_evidence = BS._side_effect_evidence_block(participant)
     rep = PL.run_two_stage_live(
         participant, design=bench.es.copy(), stream=bench.stream, request_data=dict(REQ_FLAG),
         washin_min=1.0, amp_ceiling=OBJ.AMP_HARD_LIMIT_MA, hemispheres=("Left",),
         primary_item="left_leg",
         data_horizon=two["stage1"]["frozen_configuration"]["data_horizon"],
         stage1_kwargs={"safety_ceiling_by_hemisphere": ceilings},
-        gate_kwargs={"ceiling_mA": ceilings})
+        gate_kwargs={"ceiling_mA": ceilings, "side_effect_evidence": se_evidence})
+    # `two_stage_block` also fits the clinic-sheet stream (2026-09-14) and folds it into
+    # `stage1.rate_strata_clinic`/`stage1.clinic_stream`; the direct call must do the same to stay
+    # a field-for-field equal of the service's own wiring.
+    clinic_block = BS._clinic_stream_stage1_block(
+        participant, hemispheres=("Left",), safety_ceiling_by_hemisphere=ceilings,
+        redcap_pooled_var=float(rep.stage1.D["pooled_within_var"].iloc[0]))
+    clinic_block["clinic_stream"]["side_effect_vs_current"] = BS._jsonable(se_evidence)
     direct = BS._two_stage_payload(rep, inputs=two["inputs"], seconds=0.0,
-                                   in_force=BS.in_force_by_side(bench.es))
+                                   in_force=BS.in_force_by_side(bench.es),
+                                   clinic_block=clinic_block)
     a, b = _flatten(two), _flatten(direct)
     a.pop("seconds"); b.pop("seconds")
     assert set(a) == set(b), (set(a) ^ set(b))

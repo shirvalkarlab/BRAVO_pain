@@ -65,8 +65,11 @@ MODULES = ("biomarkers", "closed_loop", "stim_optimizer")
 #: `session_report_summary` (2026-09-12) is the per-participant summary of the device's own
 #: session-report exports -- capture amplitudes, adaptive status, artefact verdicts, the D32 group
 #: shape -- scanned straight off the ingested files. No module's choice produced any of it.
+#: `clinic_pain_steps` (2026-09-14) is the lab's own clinic-and-home testing workbooks, parsed
+#: verbatim -- the stimulation settings and verbal pain scores a clinician or the patient recorded
+#: at the time, with no module's choice in between. See `StimOptimizer.clinic_pain`.
 RAW_KINDS = ("raw_lsb_tiles", "redcap_reports", "therapy_settings", "therapy_pain_matched",
-            "biomarker_psd_matrix", "session_report_summary")
+            "biomarker_psd_matrix", "session_report_summary", "clinic_pain_steps")
 
 
 def module_of(key):

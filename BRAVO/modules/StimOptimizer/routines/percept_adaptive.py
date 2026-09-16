@@ -147,18 +147,32 @@ TITRATION_SETTLE_RANGE_S = (30.0, 45.0)
 #:
 #: The ADAPT-PD trial's own settings are kept, LABELLED AS THE TRIAL'S, because they are the one
 #: published example of values clinicians actually used (Stanslaski et al. 2024, Methods).
-RANGE_SOURCE_FDA = "FDA SSED P960009/S478 (20 Feb 2025), Table 2 'Key aDBS Configurable Parameters', p. 8"
-RANGE_SOURCE_TIP_CARD = "Medtronic BrainSense Tip Cards (2020, FIELDPORTAL1594651482409), p. 8"
-
-#: Onset duration: "Dual Threshold - 0 to 6 min"; "Single Threshold - 0 to 30 seconds".
-ONSET_RANGE_DUAL_MS = (0.0, 6.0 * 60_000.0)
-ONSET_RANGE_SINGLE_MS = (0.0, 30_000.0)
+# THE RANGES AND THEIR SOURCES LIVE IN `DecodeCommon.device_ranges` since 2026-09-15 (review
+# finding B4), because the Biomarkers grid needs them and may not import this module. The names
+# below are kept for every reader in this module, constraints.py, prescription.py and timing_plan;
+# they are the same objects, pinned by `tests/test_device_ranges_one_home.py`.
+try:
+    from modules.DecodeCommon import device_ranges as _DR
+except ImportError:                                              # pragma: no cover
+    from DecodeCommon import device_ranges as _DR
+RANGE_SOURCE_FDA = _DR.RANGE_SOURCE_FDA
+RANGE_SOURCE_TIP_CARD = _DR.RANGE_SOURCE_TIP_CARD
+RANGE_SOURCE_TABLET = _DR.RANGE_SOURCE_TABLET
+RANGE_SOURCE_WHITE_PAPER_P16 = _DR.RANGE_SOURCE_WHITE_PAPER_P16
+#: Onset duration: the tablet's 0-30 s on both Dual timers and in Single (2026-09-15); the FDA
+#: summary's "Dual Threshold - 0 to 6 min" is kept as ONSET_RANGE_DUAL_MS_FDA and never applied.
+ONSET_RANGE_DUAL_MS = _DR.ONSET_RANGE_DUAL_MS
+ONSET_RANGE_DUAL_MS_FDA = _DR.ONSET_RANGE_DUAL_MS_FDA
+ONSET_RANGE_SINGLE_MS = _DR.ONSET_RANGE_SINGLE_MS
 ONSET_RANGE_MS_BY_MODE = {DUAL: ONSET_RANGE_DUAL_MS, SINGLE: ONSET_RANGE_SINGLE_MS}
-#: Transition up and transition down ("Stimulation Ramp Up/Down Duration"): "250ms-30 minutes",
-#: each. The white paper's Dual Threshold demo (p. 16) shows the slider from 2.00 s to 30.00 min.
-TRANSITION_RANGE_MS = (250.0, 30.0 * 60_000.0)
-#: Averaging duration: 0 to 30 s (tip card). The device already runs 30 s on RCS08.
-AVERAGING_RANGE_MS = (0.0, 30_000.0)
+#: Transition up and transition down: the white paper's p. 16 slider, 2.00 s to 30.00 min, which
+#: the tablet confirms; the FDA summary's "250ms-30 minutes" is kept as the FDA figure.
+TRANSITION_RANGE_MS = _DR.TRANSITION_RANGE_MS
+TRANSITION_RANGE_MS_FDA = _DR.TRANSITION_RANGE_MS_FDA
+#: Averaging duration: 0 to 30 s (tip card; confirmed on the tablet's adaptive setup screen).
+AVERAGING_RANGE_MS = _DR.AVERAGING_RANGE_MS
+#: Detection blanking: 0 to 30 s (tablet, 2026-09-15; no document prints a range).
+DETECTION_BLANKING_RANGE_MS = _DR.DETECTION_BLANKING_RANGE_MS
 #: The two LFP thresholds, each: 0.55 to 400 uVrms ON THE PROGRAMMER'S OWN SCALE. This project's
 #: thresholds are placed in the device's exported linear units, which are not uVrms, so this range
 #: is REPORTED beside a threshold and never applied to it numerically.
@@ -171,19 +185,20 @@ ADAPT_PD_TRANSITION_RANGE_MS = (60_000.0, 600_000.0)
 
 #: One table a page or a rule can print from. Keys are the plain names used on the parameter card.
 DOCUMENTED_RANGES = {
-    "onset duration (dual)": {"range": ONSET_RANGE_DUAL_MS, "units": "ms", "source": RANGE_SOURCE_FDA},
-    "onset duration (single)": {"range": ONSET_RANGE_SINGLE_MS, "units": "ms", "source": RANGE_SOURCE_FDA},
-    "transition up duration": {"range": TRANSITION_RANGE_MS, "units": "ms", "source": RANGE_SOURCE_FDA},
-    "transition down duration": {"range": TRANSITION_RANGE_MS, "units": "ms", "source": RANGE_SOURCE_FDA},
-    "averaging duration": {"range": AVERAGING_RANGE_MS, "units": "ms", "source": RANGE_SOURCE_TIP_CARD},
+    "onset duration (dual)": {"range": ONSET_RANGE_DUAL_MS, "units": "ms", "source": RANGE_SOURCE_TABLET},
+    "onset duration (single)": {"range": ONSET_RANGE_SINGLE_MS, "units": "ms", "source": RANGE_SOURCE_FDA + "; " + RANGE_SOURCE_TABLET},
+    "transition up duration": {"range": TRANSITION_RANGE_MS, "units": "ms", "source": RANGE_SOURCE_WHITE_PAPER_P16 + "; " + RANGE_SOURCE_TABLET},
+    "transition down duration": {"range": TRANSITION_RANGE_MS, "units": "ms", "source": RANGE_SOURCE_WHITE_PAPER_P16 + "; " + RANGE_SOURCE_TABLET},
+    "averaging duration": {"range": AVERAGING_RANGE_MS, "units": "ms", "source": RANGE_SOURCE_TIP_CARD + "; " + RANGE_SOURCE_TABLET},
+    "detection blanking duration": {"range": DETECTION_BLANKING_RANGE_MS, "units": "ms", "source": RANGE_SOURCE_TABLET},
     "LFP threshold": {"range": LFP_THRESHOLD_RANGE_UVRMS, "units": "uVrms", "source": RANGE_SOURCE_FDA},
     "adaptive amplitude limit": {"range": ADAPTIVE_AMP_LIMIT_RANGE_MA, "units": "mA", "source": RANGE_SOURCE_FDA},
     "adaptive band centre": {"range": (8.0, 30.0), "units": "Hz", "source": RANGE_SOURCE_FDA + "; WP p. 14"},
 }
-#: The two parameters with NO documented range in any source found on 2026-09-13. A value for
-#: either is entered on the tablet's Advanced Settings screen and its limits read off there. On
-#: RCS08 the device has accepted startup delays of 0, 10 and 30 s and blanking of 550 ms to 30 s.
-UNPUBLISHED_RANGES = ("adaptive startup delay", "detection blanking duration")
+#: The one parameter with NO range in any source, the tablet included (2026-09-15: the PI read the
+#: detection-blanking range, 0-30 s, off the tablet; the startup delay was not on the screens he
+#: read). On RCS08 the device has accepted startup delays of 0, 10 and 30 s.
+UNPUBLISHED_RANGES = ("adaptive startup delay",)
 
 
 def documented_range_ms(name, mode=None):
@@ -199,6 +214,8 @@ def documented_range_ms(name, mode=None):
         return TRANSITION_RANGE_MS
     if key.startswith("averaging"):
         return AVERAGING_RANGE_MS
+    if key.startswith("detection_blanking"):
+        return DETECTION_BLANKING_RANGE_MS
     return None
 
 

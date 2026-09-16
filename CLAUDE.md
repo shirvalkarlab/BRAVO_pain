@@ -43,12 +43,25 @@ cd Client && export PATH="/usr/local/bin:$PATH" && export npm_config_cache=/tmp/
   && env CI=false GENERATE_SOURCEMAP=false npm run build
 ```
 
-**There is no linter, no type checker, no formatter and no continuous integration in this
-repository** — no `pyproject.toml`, no `setup.cfg`, no `ruff`, no standalone eslint configuration,
-no `.pre-commit-config.yaml`, no `.github/workflows`. `Client/package.json` carries only
-`start`, `build`, `test` and `eject`, with the default React eslint settings inline. **So "run the
-quality gates" here means exactly three things: the two test suites, and the frontend build.**
-Claiming a linter or type check passed would be claiming something that cannot have run.
+**There is no linter, no type checker and no formatter in this repository** — no
+`pyproject.toml`, no `setup.cfg`, no `ruff`, no standalone eslint configuration, no
+`.pre-commit-config.yaml`. `Client/package.json` carries only `start`, `build`, `test` and `eject`,
+with the default React eslint settings inline. **So "run the quality gates" here means exactly three
+things: the two test suites, and the frontend build.** Claiming a linter or type check passed would
+be claiming something that cannot have run.
+
+**Continuous integration exists, and covers two of the three gates** (`.github/workflows/ci.yml`,
+added 2026-09-14; corrected here 2026-09-15 after an earlier version of this paragraph said there
+was none). On every push to `v3.1.0`, `PS_closedloop_deployment` or `development`, and on every
+pull request, GitHub Actions runs three jobs: the **host test suite** (the pytest command above,
+with the `store` and `live` markers left out because the runner has no database and no participant
+record), the **frontend build** (the command above), and a **secret scan** (the open-source
+`gitleaks` binary over the checked-out files; known false positives — the upstream example keys and
+the cache-store keys inside the RCS08 render-test fixtures — are listed by fingerprint in
+`.gitleaksignore`, so add a new fingerprint there rather than loosening the scan). **What CI does
+NOT run: the container suite** (Biomarkers needs MySQL, Redis, R and rpy2) **and Jest** (the
+repository carries two known-failing page tests, decision 147). Both stay manual, and a green CI
+run is therefore not a green platform any more than a green host run is.
 
 ---
 
@@ -303,7 +316,7 @@ under `.claude/skills/` instead, gitignored with the rest of the tree.**
 | `/ui-ux-designer` | UI/UX Designer | the three module pages |
 | `/code-check` | Codebase Auditor | **read §2 principle 4 first** — several things that look like dead code here are deliberate |
 | `/land-the-plane` | Finish-Line Protocol | **its push step does not apply — see §2 principle 6** |
-| `/tailor` | Configuration Tailor | it will find no linter, no type checker and no continuous integration; that is accurate, not a gap to fill silently |
+| `/tailor` | Configuration Tailor | it will find no linter and no type checker, and a three-job CI (host suite, frontend build, secret scan) that deliberately omits the container suite and Jest; that is accurate, not a gap to fill silently |
 | `/swarm-plan` `/swarm-execute` `/swarm-review` `/swarm-research` | Orchestrators | the remaining tracks are largely independent and suit parallel work |
 
 ---

@@ -64,12 +64,23 @@ class _Report:
 
 
 class _Runs:
+    """Counts real recomputation.
+
+    Until 2026-09-14 this counted calls to the flat, per-arm pipeline (`pipeline.run`), which was
+    the expensive step the response cache existed to avoid. That pipeline is no longer called from
+    this request path at all (the arm strip and its chart are gone from the page), so a cache HIT
+    now short-circuits before ANY of the closed-loop-readiness / two-stage / titration work runs
+    (`run_for_participant`'s own early `return served` on a store hit, unchanged by that removal).
+    `closed_loop_readiness` -- already stubbed by every test in this file -- sits on exactly that
+    reachable-only-on-a-miss path, so counting calls to it is the equivalent, still-honest proxy
+    for "was this request actually recomputed".
+    """
     def __init__(self):
         self.calls = 0
 
-    def __call__(self, es, **kw):
+    def __call__(self, p, es, include=True, **kw):
         self.calls += 1
-        return _Report()
+        return {"available": False, "reason": "stubbed"}
 
 
 def _es():
@@ -101,12 +112,10 @@ def bench(monkeypatch):
     monkeypatch.setattr(AD, "build_design_matrix", lambda p, rd=None, **kw: _es())
     monkeypatch.setattr(BS, "_tiles_key_for", lambda p: (TILES_KEY, None))
     # `inputs=` arrived 2026-09-12 (the evidence pair built once for this screen and the
-    # two-stage path), so the stub takes and ignores keyword arguments.
-    monkeypatch.setattr(BS, "closed_loop_readiness",
-                        lambda p, es, include=True, **kw: {"available": False, "reason": "stubbed"})
-    monkeypatch.setattr(BS, "_blockers", lambda rep, arms, observed=None: [])
+    # two-stage path), so the stub takes and ignores keyword arguments. Counting, not just
+    # stubbing, is what makes `bench.runs.calls` a real "was this recomputed" proxy -- see _Runs.
     runs = _Runs()
-    monkeypatch.setattr(BS.pipeline, "run", runs)
+    monkeypatch.setattr(BS, "closed_loop_readiness", runs)
     # the matched table's own stamp, so the response can cite its chain
     st.store("therapy_pain_matched", UID, ("m", 1), _es().drop(columns=["t0", "t_end"]),
              writer="stim_optimizer", provenance=prov.flatten([
@@ -140,14 +149,20 @@ def _amplitude_table():
     return pd.DataFrame(rows)
 
 
-def test_the_request_writes_four_products_and_the_response_with_the_chain_of_its_inputs(bench):
+def test_the_request_writes_the_response_and_manifest_with_the_chain_of_its_inputs(bench):
+    """REWRITTEN 2026-09-14: `SUMMARY_KIND`/`LADDER_KIND`/`BATCH_KIND` were the flat, per-arm
+    pipeline's own tables (one row per arm's queue/batch); that pipeline is no longer called from
+    this request path (the arm strip and its chart are gone from the page), so those three kinds
+    have no source any more and are correctly left unwritten (`written[kind] is None`) rather than
+    written empty -- see `_write_outputs`'s own `if payload is None: ... continue`. Only the
+    response and the manifest (which still carries the real `design_matrix`) are written."""
     out = BS.run_for_participant(dict(REQ))
     assert out["available"] and bench.runs.calls == 1
     assert out["store"]["served_from_store"] is False and out["store"]["refusal"] is None
     assert out["store"]["inputs"] == {"matched_table": MATCHED_KEY, "tiles": TILES_KEY,
                                       "amplitude_effect": None, "ground_truth_verdict": None}
     written = out["store"]["written"]
-    assert written == {BS.SUMMARY_KIND: True, BS.LADDER_KIND: True, BS.BATCH_KIND: True,
+    assert written == {BS.SUMMARY_KIND: None, BS.LADDER_KIND: None, BS.BATCH_KIND: None,
                        BS.MANIFEST_KIND: True, BS.RESPONSE_KIND: True}
     meta = _sidecar(bench.root, BS.RESPONSE_KIND)
     assert meta["writer"] == "stim_optimizer"
@@ -157,11 +172,8 @@ def test_the_request_writes_four_products_and_the_response_with_the_chain_of_its
         "the matched table's own chain must be flattened into the response's"
     assert out["amplitude_effect"]["available"] is False
     assert "closed-loop deployment page writes it" in out["amplitude_effect"]["reason"]
-    ladder = _sidecar(bench.root, BS.LADDER_KIND)
-    assert ladder["writer"] == "stim_optimizer" and ladder["kind"] == "exploration_ladder"
-    table, _stamp = st.load_newest(BS.LADDER_KIND, UID, consumer="stim_optimizer", root=bench.root)
-    assert list(table.columns).count("rank") == 1 and list(table["rank"]) == [1, 2]
-    assert list(table.columns[:3]) == ["arm", "site", "hemisphere"]
+    manifest = _sidecar(bench.root, BS.MANIFEST_KIND)
+    assert manifest["writer"] == "stim_optimizer"
     assert "write_error" not in out["store"]
 
 
@@ -254,15 +266,18 @@ def test_a_stored_response_derived_from_the_ladder_is_refused_reported_and_recom
     assert third["store"]["written"][BS.RESPONSE_KIND] is True
 
 
-def test_the_four_tables_are_keyed_without_the_figure_backend(bench):
+def test_the_manifest_is_keyed_without_the_figure_backend(bench):
+    """REWRITTEN 2026-09-14: only `MANIFEST_KIND` is still written (`SUMMARY_KIND`/`LADDER_KIND`/
+    `BATCH_KIND` have no source now that the flat pipeline is not called -- see the test above);
+    what this test still holds is that the surviving product's key does not depend on the figure
+    backend, so one entry serves a plain request and a plotly one alike."""
     BS.run_for_participant(dict(REQ))
-    keys_none = {k: _sidecar(bench.root, k)["signature_key"]
-                 for k in (BS.SUMMARY_KIND, BS.LADDER_KIND, BS.BATCH_KIND, BS.MANIFEST_KIND)}
+    key_none = _sidecar(bench.root, BS.MANIFEST_KIND)["signature_key"]
     resp_none = _sidecar(bench.root, BS.RESPONSE_KIND)["signature_key"]
     out = BS.run_for_participant(dict(REQ, Backend="plotly"))
     assert out["store"]["served_from_store"] is False, "a different backend is a different response"
-    keys_plotly = {k: _sidecar(bench.root, k)["signature_key"] for k in keys_none}
-    assert keys_plotly == keys_none, "the tables do not depend on the backend, so one entry serves both"
+    key_plotly = _sidecar(bench.root, BS.MANIFEST_KIND)["signature_key"]
+    assert key_plotly == key_none, "the manifest does not depend on the backend, so one entry serves both"
     # The response IS keyed on the backend, and since 2026-09-12 the store keeps TWO response
     # entries (the page's plain and two-stage requests used to evict each other, decision 146),
     # so the first response is still there beside the second and their keys differ.

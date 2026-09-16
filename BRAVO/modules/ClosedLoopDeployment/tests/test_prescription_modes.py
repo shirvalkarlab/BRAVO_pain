@@ -172,10 +172,12 @@ def test_the_onset_can_be_rescued_inside_the_documented_range_at_the_validated_w
     test should fail and be revisited". The FDA approval summary (P960009/S478, Table 2) documents
     0-6 min in Dual mode, so it did widen, and the finding inverts: the trial's values are still
     one window, and an onset of twice the averaging duration, well inside the range, is two.
+    Corrected 2026-09-15: the clinician tablet offers 0-30 s on both Dual timers, not 6 min, and
+    the platform applies the tablet; 8192 ms is still well inside it, so the finding stands.
     """
     avg_ms = 4096.0
     lo, hi = PA.ONSET_RANGE_DUAL_MS
-    assert (lo, hi) == (0.0, 360_000.0)
+    assert (lo, hi) == (0.0, 30_000.0)
     for onset in PA.ADAPT_PD_ONSET_RANGE_MS[PA.DUAL]:
         assert lo <= onset <= hi                     # the trial's settings sit inside the range
         assert PR.onset_windows(onset, avg_ms)["inoperative"] is True

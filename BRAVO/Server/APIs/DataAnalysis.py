@@ -1859,3 +1859,90 @@ class QueryStimOptimizer(RestViews.APIView):
         Analysis = json_compliant_handler(Analysis)
         return Response(status=200, data=Analysis)
 
+
+class ExportTitrationSheet(RestViews.APIView):
+    """
+    Turns the Stim Optimizer page's titration session (`/queryStimOptimizer`'s own
+    `titration_plan` block, `modules/StimOptimizer/titration_plan.py`) into an actual clinic
+    workbook -- the "Make Google sheet" button on `TitrationSessionCard.js`. The PI's ruling,
+    2026-09-14: copy the lab's template into a new file (never write into the template itself),
+    write the schedule into the new file, name it from the visit date, and let a re-export for the
+    same date overwrite that file rather than making a second copy.
+
+    **URL:** ``/exportTitrationSheet``  **Methods:** POST
+
+    :param ParticipantId: participant uid (required)
+    :param VisitDate: "YYYY-MM-DD" (required) -- the date shown on the sheet's own header cell and
+        used to build the file's name.
+
+    Rebuilds the plan through the SAME code path `/queryStimOptimizer` uses
+    (`bravo_service.run_for_participant`), so the exported sheet is always the plan the page is
+    showing, not a second, independently derived copy of it.
+
+    Returns JSON in every case except one: when this server has Google credentials
+    (`modules/StimOptimizer/google_sheets_client.py`), a real Google Sheet is written and the
+    response names its URL. Without credentials, the response is a filled `.xlsx` file streamed as
+    a download -- ``Content-Disposition: attachment`` -- rather than JSON, and the frontend reads
+    the plain-language setup note from its own copy of the same text rather than from this
+    response.
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "VisitDate"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                    study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.StimOptimizer import bravo_service
+            Analysis = bravo_service.run_for_participant(request.data)
+        except Exception as e:
+            return Response(status=200, data={
+                "available": False,
+                "reason": "StimOptimizer computation error: " + str(e),
+            })
+
+        plan = (Analysis or {}).get("titration_plan") or {}
+        if not plan.get("available"):
+            return Response(status=200, data={
+                "available": False,
+                "reason": plan.get("reason") or "no titration plan is available for this participant",
+            })
+
+        participant = models.Participant.find(uid=request.data["ParticipantId"])
+        participant_code = (getattr(participant, "name", None) or "").strip() or "RCS08"
+
+        try:
+            from modules.StimOptimizer import sheet_export
+            from modules.StimOptimizer import google_sheets_client as gsc
+            drive = gsc.client_if_available()
+            result = sheet_export.export(plan, participant_code, request.data["VisitDate"], drive=drive)
+        except Exception as e:
+            return Response(status=200, data={
+                "available": False,
+                "reason": "sheet export error: " + str(e),
+            })
+
+        if result.get("mode") == "error":
+            return Response(status=200, data={"available": False, "reason": result.get("reason")})
+
+        if result.get("mode") == "drive":
+            return Response(status=200, data={"available": True, **result})
+
+        # xlsx mode: stream the filled workbook as a download.
+        from django.http import FileResponse
+        path = result["path"]
+        name = result["name"]
+        resp = FileResponse(
+            open(path, "rb"),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        resp["Content-Disposition"] = f'attachment; filename="{name}.xlsx"'
+        return resp
+

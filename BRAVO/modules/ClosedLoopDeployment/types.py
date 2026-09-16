@@ -83,6 +83,13 @@ class EdgeEstimate:
     scale: str = "linear"              # linear band power unless stated
     note: str = ""
     confounded_by: list = field(default_factory=list)
+    #: WHICH ESTIMATE THIS IS (review 2026-09-15, finding C1). E1 is one of two different
+    #: quantities: "screening_historical" -- the setting-epoch slope over the whole clinical record,
+    #: confounded with time, whose own note says it cannot be read as the causal effect of current
+    #: on power -- or "pooled_titration", the slope pooled across runs of rising current with one
+    #: baseline each (decision 126). A page must draw the two differently; before this field it
+    #: could only tell them apart by reading the prose in ``note``. None on E2 and E3.
+    source: str | None = None
 
     @property
     def sign(self) -> int | None:

@@ -7660,6 +7660,16 @@ def _forecast_match_direction(request_data):
     return "prior"
 
 
+def _device_timing_ranges():
+    """The Percept RC's documented averaging and onset ranges, from `DecodeCommon.device_ranges`
+    (the one home; Biomarkers may not import StimOptimizer)."""
+    try:
+        from modules.DecodeCommon import device_ranges as _DR
+    except ImportError:                                          # pragma: no cover
+        from DecodeCommon import device_ranges as _DR
+    return _DR.timing_ranges_for_page()
+
+
 def band_time_sweep_for_participant(request_data):
     """The payload for the band-by-length-of-signal section at the bottom of the exploration page.
 
@@ -7814,6 +7824,10 @@ def band_time_sweep_for_participant(request_data):
         "available_metrics": BIOMARKER_METRICS,
         "label_metric": label_metric,
         "metric_label": metric_label,
+        # The device's documented timing ranges (review 2026-09-15, B4), so the page can say which
+        # length-of-signal rows are an averaging window the device can be set to and which are only
+        # reachable as a held onset. From the one home; never a number typed here.
+        "device_timing_ranges": _device_timing_ranges(),
         "integration_seconds": [float(s) for s in analytics.BAND_TIME_SWEEP_SECONDS],
         "integration_seconds_delivered": [
             analytics.integration_time_tile_count(s)[1]
@@ -8038,7 +8052,7 @@ sweep_settings_tag = sweep_settings.sweep_settings_tag                       # r
 sweep_settings_tag_from_request = sweep_settings.sweep_settings_tag_from_request
 
 
-_BAND_SWEEP_RULE_VERSION = "v11_no_server_figures"
+_BAND_SWEEP_RULE_VERSION = "v17_snapshot_count_in_fields_not_notes_and_one_lengths_word"
 
 #: Response fields that are timings of the run that produced them, not results. They are not
 #: compared when a stored response is checked against a fresh one, and a served response keeps the

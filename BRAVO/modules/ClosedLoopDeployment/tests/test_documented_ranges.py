@@ -20,47 +20,51 @@ RCS08 = "2e3c75c00d7f4f37b53a048d195f11da"
 
 # --- the one home ------------------------------------------------------------------------------
 def test_the_documented_ranges_are_the_fda_and_tip_card_values_and_cite_them():
-    assert PA.ONSET_RANGE_DUAL_MS == (0.0, 360_000.0)
+    assert PA.ONSET_RANGE_DUAL_MS == (0.0, 30_000.0)   # the tablet, 2026-09-15; the FDA's 0-6 min is kept as ONSET_RANGE_DUAL_MS_FDA
+    assert PA.ONSET_RANGE_DUAL_MS_FDA == (0.0, 360_000.0)
     assert PA.ONSET_RANGE_SINGLE_MS == (0.0, 30_000.0)
-    assert PA.TRANSITION_RANGE_MS == (250.0, 1_800_000.0)
+    assert PA.TRANSITION_RANGE_MS == (2_000.0, 1_800_000.0)   # WP p. 16 slider, confirmed on the tablet
     assert PA.AVERAGING_RANGE_MS == (0.0, 30_000.0)
     assert PA.LFP_THRESHOLD_RANGE_UVRMS == (0.55, 400.0)
     assert PA.ADAPTIVE_AMP_LIMIT_RANGE_MA == (0.0, 25.5)
     assert "P960009/S478" in PA.RANGE_SOURCE_FDA and "Table 2" in PA.RANGE_SOURCE_FDA
     assert "Tip Cards" in PA.RANGE_SOURCE_TIP_CARD
-    for name in ("onset duration (dual)", "transition up duration", "adaptive amplitude limit"):
-        assert PA.DOCUMENTED_RANGES[name]["source"].startswith("FDA SSED")
+    assert PA.DOCUMENTED_RANGES["adaptive amplitude limit"]["source"].startswith("FDA SSED")
+    assert "tablet" in PA.DOCUMENTED_RANGES["onset duration (dual)"]["source"].lower()
+    assert "tablet" in PA.DOCUMENTED_RANGES["detection blanking duration"]["source"].lower()
     assert PA.DOCUMENTED_RANGES["averaging duration"]["source"].startswith("Medtronic BrainSense Tip Cards")
     # the trial's settings are kept, labelled as the trial's, and sit inside the device's range
     assert PA.ADAPT_PD_ONSET_RANGE_MS[PA.DUAL] == (1200.0, 2000.0)
     assert PA.ADAPT_PD_ONSET_RANGE_MS[PA.SINGLE] == (200.0, 500.0)
-    # the only two parameters with no documented range anywhere found
-    assert set(PA.UNPUBLISHED_RANGES) == {"adaptive startup delay", "detection blanking duration"}
+    # the one parameter with no range anywhere, the tablet included
+    assert set(PA.UNPUBLISHED_RANGES) == {"adaptive startup delay"}
     assert PA.documented_range_ms("onset", PA.SINGLE) == PA.ONSET_RANGE_SINGLE_MS
-    assert PA.documented_range_ms("detection_blanking") is None
+    assert PA.documented_range_ms("detection_blanking") == (0.0, 30_000.0)
 
 
 def test_the_closed_loop_module_reads_the_ranges_from_the_one_home_not_a_copy():
     assert CON.ONSET_DURATION_RANGE_MS["dual"] is PA.ONSET_RANGE_DUAL_MS
     assert CON.ONSET_DURATION_RANGE_MS["single"] is PA.ONSET_RANGE_SINGLE_MS
     assert CON.TIMING_RANGE_BY_KEY["averaging_ms_adaptive"] is PA.AVERAGING_RANGE_MS
-    assert CON.TIMING_RANGE_BY_KEY["transition_up_s"] == (0.25, 1800.0)
-    assert CON.TIMING_RANGE_BY_KEY["detection_blanking_ms_adaptive"] is None
+    assert CON.TIMING_RANGE_BY_KEY["transition_up_s"] == (2.0, 1800.0)
+    assert CON.TIMING_RANGE_BY_KEY["detection_blanking_ms_adaptive"] is PA.DETECTION_BLANKING_RANGE_MS
     assert PR.ONSET_RANGE_SINGLE_MS is PA.ONSET_RANGE_SINGLE_MS
 
 
 # --- D21: the onset inside the documented range -----------------------------------------------
-def test_d21_passes_the_30_s_onset_rcs08_runs_and_fails_one_past_six_minutes():
-    """Under the old rule RCS08's own programmed 30 s onset read as out of range (1.2-2 s)."""
+def test_d21_passes_the_30_s_onset_rcs08_runs_and_fails_one_past_the_tablets_maximum():
+    """Under the old rule RCS08's own programmed 30 s onset read as out of range (1.2-2 s). Since
+    2026-09-15 the range is the tablet's 0-30 s, so 30 s is the last value that passes."""
     base = {"threshold_mode": "dual", "onset_duration_ms": 30_000.0}
     assert CON._p_d21(base, {}) is True
     assert CON._p_d21(dict(base, onset_duration_ms=1200.0), {}) is True      # the trial's value
     assert CON._p_d21(dict(base, onset_duration_ms=7.0 * 60_000.0), {}) is False
+    assert CON._p_d21(dict(base, onset_duration_ms=31_000.0), {}) is False
     assert CON._p_d21(dict(base, threshold_mode="single", onset_duration_ms=30_000.0), {}) is True
     assert CON._p_d21(dict(base, threshold_mode="single", onset_duration_ms=31_000.0), {}) is False
     assert CON._p_d21({"threshold_mode": "dual"}, {}) is None
     rule = next(r for r in CON.RULES if r.rule_id == "D21")
-    assert "0-6 min" in rule.title and "FDA" in rule.source
+    assert "0-30 s" in rule.title and "tablet" in rule.source.lower() and "6 min" in rule.human_text
     assert "P960009/S478" in rule.page
 
 
@@ -86,7 +90,12 @@ def test_d20_judges_a_declared_timing_against_the_documented_range_not_the_defau
     # a declaration carrying only a key with no documented range gives no verdict
     blank_only = {"threshold_mode": "dual",
                   "declared_mode_timing": {"detection_blanking_ms_adaptive": 30_000.0}}
-    assert CON._p_d20(blank_only, {}) is None
+    # 2026-09-15: detection blanking has a range now (0-30 s, the tablet), so it IS judged; only a
+    # key with no range anywhere (the startup delay) still leaves D20 undetermined.
+    assert CON._p_d20(blank_only, {}) is True
+    blank_over = {"threshold_mode": "dual",
+                  "declared_mode_timing": {"detection_blanking_ms_adaptive": 31_000.0}}
+    assert CON._p_d20(blank_over, {}) is False
     rule = next(r for r in CON.RULES if r.rule_id == "D20")
     assert "documented range" in rule.title and "FDA" in rule.source
 
@@ -166,6 +175,25 @@ def test_rcs08s_record_derived_timing_is_the_decision_150_table_and_sits_inside_
     assert TR.for_participant(None) == {}
 
 
+def test_the_static_onset_reason_carries_no_typed_bootstrap_interval():
+    """Referent audit 2026-09-15, item 2. The onset rows' static reason used to end "A block
+    bootstrap over the recordings puts 36-90 s in the same recommendation" -- one contact's
+    2026-09-13 value, printed on every participant's card, while the live `robustness_note` on the
+    SAME row said 27-30 s for the committed band. The interval belongs to `robustness_note` alone,
+    which is computed per band; the static text may keep every other statistic but not that one.
+    """
+    import re
+    r = TR.for_participant(RCS08)
+    for key in ("onset_upper_ms", "onset_lower_ms"):
+        why = r[key]["why"]
+        assert not re.search(r"\d+\s*[-\u2013]\s*\d+\s*s\b", why), (key, why)
+        assert "bootstrap" not in why.lower(), (key, why)
+    # the statistics that DO belong to the static reason are still there
+    up = r["onset_upper_ms"]["why"]
+    for kept in ("Ten confirmations", "2.5 times an hour", "34-40 an hour", "about 49 undone"):
+        assert kept in up, (kept, up)
+
+
 # --- the parameter card ------------------------------------------------------------------------
 def _rows(**kw):
     p = PR.prescribe(mode=PA.DUAL, timing=PA.timing_plan(mode=PA.DUAL),
@@ -196,7 +224,7 @@ def test_the_card_carries_the_record_derived_values_with_their_confidence_and_th
     assert rows["Adaptive startup delay"]["programmed"] == 0.0
     assert rows["Adaptive startup delay"]["confirm"] == "check_on_device"     # no documented range
     assert rows["Detection blanking duration"]["value"] == 30000.0
-    assert rows["Detection blanking duration"]["confirm"] == "check_on_device"
+    assert rows["Detection blanking duration"]["confirm"] == "enterable"     # 0-30 s on the tablet, 2026-09-15
     assert rows["Adaptive amplitude limit, upper"]["range"] == PA.ADAPTIVE_AMP_LIMIT_RANGE_MA
     assert rows["Adaptive amplitude limit, upper"]["programmed"] == 3.0
     assert rows["Upper LFP threshold"]["programmed"] == 167.0
@@ -244,7 +272,7 @@ def test_the_onset_averaging_coupling_names_the_documented_ceiling_not_the_trial
     rows, p = _rows(record_timing=_thirty_thirty())
     # 30 s onset against 30 s averaging is one controller step under the module's reading
     assert p.couplings and p.couplings[0]["fields"][0] == "Upper onset duration"
-    assert "6 min" in p.couplings[0]["resolution"]
+    assert "30 s" in p.couplings[0]["resolution"] and "6 min" not in p.couplings[0]["resolution"]
     assert "60000 ms" in p.couplings[0]["resolution"]
     assert "2000 ms" not in p.couplings[0]["resolution"]
 
@@ -265,3 +293,13 @@ def test_validate_policy_refuses_a_timing_or_limit_outside_the_documented_range(
     assert any("amp_max_mA 26 mA is outside" in b for b in bad)
     assert PA.validate_policy(dict(base, mode=PA.SINGLE, onset_ms=31_000.0))[0].startswith(
         "onset duration 31000 ms is outside the documented range 0-30000 ms")
+
+
+# --- 2026-09-15 evening: the tablet's ranges on the card ---------------------------------------
+def test_the_detection_blanking_row_carries_the_tablets_range_instead_of_not_published():
+    rows, _ = _rows(record_timing=_thirty_thirty())
+    r = rows["Detection blanking duration"]
+    assert r["range"] == PA.DETECTION_BLANKING_RANGE_MS
+    assert "NOT published" not in (r["range_source"] or "")
+    assert "tablet" in r["range_source"].lower()
+    assert "NOT published" in rows["Adaptive startup delay"]["range_source"]

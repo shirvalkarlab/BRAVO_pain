@@ -60,9 +60,6 @@ export default function ReliableChangePanel({ reliableChange }) {
   const it = items[key] || null;
   const v = (it && it.verdict) || null;
 
-  const gap = rc && isNum(rc.max_gap_hours) ? Number(rc.max_gap_hours) : null;
-  const gapText = gap == null ? "a short gap" : (gap === 1 ? "one hour" : `${fmtNum(gap, 1)} hours`);
-
   return (
     <Card sx={{ p: 2, height: "100%" }}>
       <MDTypography variant="h6" fontWeight="medium" sx={{ lineHeight: 1.3 }}>
@@ -111,14 +108,17 @@ export default function ReliableChangePanel({ reliableChange }) {
               </MDTypography>
             </MDBox>
           ) : null}
-          <Fold show="How this is measured" hide="Hide" mt={1} dense>
-            <MDTypography variant="caption" sx={{ color: "#6A6A6A", display: "block", fontSize: 10.5 }}>
-              {`Noise is measured from pairs of ratings filed within ${gapText} of each other with `}
-              {"every stimulation setting unchanged. A change smaller than the threshold is not "}
-              {"\"no change\" \u2014 it is a change this patient's own noise could produce with "}
-              {"nothing therapeutic happening."}
-            </MDTypography>
-          </Fold>
+          {/* The explanation is the backend's own (`reliable_change.what_it_means`), which names
+              the gap, the same-minute rule and the population benchmark from the values it used.
+              A second, hand-written copy lived here until the referent audit of 2026-09-15 (item
+              11); when the field is absent nothing is printed rather than a copy that can drift. */}
+          {rc && typeof rc.what_it_means === "string" && rc.what_it_means ? (
+            <Fold show="How this is measured" hide="Hide" mt={1} dense>
+              <MDTypography variant="caption" sx={{ color: "#6A6A6A", display: "block", fontSize: 10.5 }}>
+                {rc.what_it_means}
+              </MDTypography>
+            </Fold>
+          ) : null}
         </MDBox>
       ) : (
         <MDBox px={1} py={0.75} borderRadius="4px" sx={{ backgroundColor: PAL.warnFill }}>

@@ -1412,6 +1412,9 @@ def report_to_dict(rep):
             "resolved": e.resolved,
             "statistically_established": bool(getattr(e, "statistically_established", False)),
             "note": e.note, "confounded_by": list(e.confounded_by),
+            # WHICH ESTIMATE this is (review 2026-09-15, C1): "screening_historical" or
+            # "pooled_titration" on E1, None on E2 and E3. The triangle draws them differently.
+            "source": getattr(e, "source", None),
             # WHICH ESTIMATOR produced the interval and the p-value, read from edges.py so the
             # switch has exactly one definition. The deployment panel used to hardcode the cluster
             # threshold in JavaScript with a comment claiming to mirror edges.py, and by then the
@@ -1428,6 +1431,7 @@ def report_to_dict(rep):
             "resolved": e.resolved,
             "statistically_established": bool(getattr(e, "statistically_established", False)),
             "note": e.note, "confounded_by": list(e.confounded_by),
+            "source": getattr(e, "source", None),
         } for k, e in (getattr(rep, "edges_historical", None) or {}).items()},
         "coherence": None if rep.coherence is None else {
             "coherent": rep.coherence.coherent, "p_coherent": _num(rep.coherence.p_coherent),

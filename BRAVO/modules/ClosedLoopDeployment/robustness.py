@@ -109,13 +109,25 @@ from . import startup_bias as _startup_bias
 
 _log = __import__("logging").getLogger(__name__)
 
+try:
+    from modules.DecodeCommon import device_ranges as _DR
+except ImportError:                                              # pragma: no cover
+    from DecodeCommon import device_ranges as _DR
+
 KIND = "closed_loop_robustness"
 #: Bumped whenever a change here would change an already-stored entry's numbers.
-RULE_VERSION = "v1_block_bootstrap_port"
+RULE_VERSION = "v2_onset_grid_capped_at_the_tablets_30s"
 
-#: The grid, faithfully carried over from ``s4_bootstrap.py``'s own module-level constants.
-ONSET_GRID_S: Tuple[float, ...] = (3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 36, 42, 48, 54, 60, 75,
-                                   90, 120)
+#: The grid, carried over from ``s4_bootstrap.py``'s own module-level constants and then CAPPED
+#: at the onset the clinician tablet accepts: 0.00 ms to 30.00 s on both Dual timers, read by the
+#: PI on 2026-09-15 (`DecodeCommon.device_ranges.ONSET_RANGE_DUAL_MS`). The reference script also
+#: searched 36, 42, 48, 54, 60, 75, 90 and 120 s; on RCS08 that put the bootstrap interval at
+#: 27-60 s on the committed band and 36-90 s on L 1-3+, values a clinician cannot type. His
+#: instruction: "limit the search grid to evaluate onsets only up to a maximum of 30 seconds."
+#: 320 configurations now (10 x 8 x 4), not 576.
+ONSET_GRID_S: Tuple[float, ...] = tuple(
+    o for o in (3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 36, 42, 48, 54, 60, 75, 90, 120)
+    if o <= _DR.ONSET_RANGE_DUAL_MS[1] / 1000.0)
 GAP_SD_GRID: Tuple[float, ...] = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0)
 BLANKING_GRID_S: Tuple[float, ...] = (3, 15, 30, 60)
 

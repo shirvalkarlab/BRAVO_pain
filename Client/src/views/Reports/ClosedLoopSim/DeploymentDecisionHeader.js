@@ -104,12 +104,13 @@ function reconcile(device, evidence, transcription, provisional) {
   if (transcription === 0 && provisional) {
     // PI rule 2026-09-13 ("established means mean only"): licensed on the point signs, with the
     // intervals that span zero printed as a caveat beneath. Warn ink, not pass ink, so the word
-    // "provisional" is carried by the colour as well as the text.
+    // "provisional" is carried by the colour as well as the text. The count of intervals that
+    // span zero is NOT repeated here: the two ProvisionalNote boxes directly beneath carry it,
+    // with the edges named (referent audit 2026-09-15, item 4).
     return {
       ink: PAL.warn, icon: "check_circle",
-      headline: `The device permits this configuration and the evidence supports it on point `
-              + `signs alone (provisional: ${provisional.n} of ${provisional.total} intervals span `
-              + "zero)",
+      headline: "The device permits this configuration and the evidence supports it on point "
+              + "signs alone (provisional — see below)",
       body: "Each edge of the amplitude-power-pain triangle has the sign the control law needs, "
           + "and for the edges named beneath the interval spans zero, so the direction rests on "
           + "the point estimate. The parameter table below is shown with its read-back checklist "

@@ -50,9 +50,20 @@ variables; **none of it exists**, and it is not carried here.
 Defined in code at `analytics.py:3351`, tabulated from the white paper's Table 1. ~~**The timing is
 fixed per mode and is not adjustable.**~~ **CORRECTED 2026-09-13: the timings below are the white
 paper's DEFAULTS (its Table 1 is titled "Threshold Mode Default Settings", p. 14), not fixed
-values.** The FDA approval summary for BrainSense Adaptive (P960009/S478, Table 2, p. 8) gives the
+values.** ~~The FDA approval summary for BrainSense Adaptive (P960009/S478, Table 2, p. 8) gives the
 selection ranges: onset 0 to 6 min (Dual) / 0 to 30 s (Single), transition up and down 250 ms to
-30 min each, thresholds 0.55 to 400 uVrms, amplitude limits 0 to 25.5 mA; the white paper's p. 16
+30 min each~~ **CORRECTED 2026-09-15 against the clinician tablet, read directly by the PI, with
+his rule that where the tablet deviates from the manual or white paper the manual wins: onset
+0.00 ms to 30.00 s on BOTH Dual timers and in Single (the FDA summary's 0 to 6 min for Dual is
+printed nowhere in the white paper or the A610 manual, so the tablet's 30 s is applied and the FDA
+figure kept as a discrepancy); transition up and down 2.0 s to 30 min (the white paper's p. 16
+slider, which the tablet confirms; the FDA's 250 ms is not on the slider); averaging 0.00 ms to
+30.00 s, non-overlapping (tip card and white paper, confirmed on the adaptive screen); detection
+blanking 0.00 ms to 30.0 s (the tablet; no document prints a range); sensing blanking 0.00 us to
+2.28 ms on the tablet against the tip card's 0-2500 (microseconds), so the tip card's figure
+stands with the tablet's recorded beside it; high-pass 1 or 10 Hz (as D13). Only the adaptive
+startup delay still has no range anywhere. One home: `DecodeCommon/device_ranges.py`.** The FDA
+summary still gives thresholds 0.55 to 400 uVrms and amplitude limits 0 to 25.5 mA; the white paper's p. 16
 shows the transition sliders (2.00 s to 30.00 min) and lists Onset Duration, Detection Blanking
 Duration and **Adaptive Startup Delay** -- a parameter this document never carried -- under
 "Advanced Settings". RCS08's own device has run onset 200 ms to 30 s, transitions 250 ms to 300 s,

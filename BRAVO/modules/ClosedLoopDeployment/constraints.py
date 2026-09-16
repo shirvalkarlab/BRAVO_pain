@@ -251,8 +251,9 @@ THRESHOLD_MODE_TABLE = {
     },
 }
 
-#: D21. The documented selection range of the onset duration, per mode: 0-6 min in Dual Threshold,
-#: 0-30 s in Single Threshold (FDA SSED P960009/S478, Table 2, p. 8). Until 2026-09-13 this file
+#: D21. The selection range of the onset duration, per mode: 0-30 s in Dual Threshold on both timers
+#: (the clinician tablet, read 2026-09-15; the FDA SSED Table 2 prints 0-6 min, kept beside it and
+#: never applied), 0-30 s in Single Threshold (FDA Table 2, tablet). Until 2026-09-13 this file
 #: carried the ADAPT-PD trial's own setting (1.2-2 s dual, 200-500 ms single) as if it were the
 #: device's range, and RCS08's programmed 30 s onset would have read as outside it. The trial's
 #: values are kept beside the range, labelled as the trial's.
@@ -266,7 +267,7 @@ ONSET_DURATION_RANGE_MS_ADAPT_PD = {"dual": _PA.ADAPT_PD_ONSET_RANGE_MS[_PA.DUAL
 TIMING_RANGE_BY_KEY = {
     "averaging_ms_adaptive": _PA.AVERAGING_RANGE_MS,
     "onset_ms_adaptive": None,                      # per mode: ONSET_DURATION_RANGE_MS
-    "detection_blanking_ms_adaptive": None,
+    "detection_blanking_ms_adaptive": _PA.DETECTION_BLANKING_RANGE_MS,   # the tablet, 2026-09-15
     "transition_up_s": (_PA.TRANSITION_RANGE_MS[0] / 1000.0, _PA.TRANSITION_RANGE_MS[1] / 1000.0),
     "transition_down_s": (_PA.TRANSITION_RANGE_MS[0] / 1000.0, _PA.TRANSITION_RANGE_MS[1] / 1000.0),
 }
@@ -1901,10 +1902,11 @@ RULES = (
             "against 64 points, adaptive update rate 5 Hz against 20 Hz, averaging 1200 ms against "
             "100 ms, onset 1200 ms against 200 ms, detection blanking 2000 ms against 550 ms, and "
             "transition durations of 2.5 and 5 minutes against 250 ms in each direction. Every one "
-            "of those is adjustable, and the documented selection ranges are: onset 0-6 min (Dual) "
-            "or 0-30 s (Single) and transition up and down 250 ms-30 min each (FDA approval "
-            "summary, Table 2); averaging 0-30 s (tip card). No range is documented for detection "
-            "blanking or the adaptive startup delay. A declared timing value is judged against the "
+            "of those is adjustable, and the selection ranges are: onset 0-30 s in either mode "
+            "(the clinician tablet, 2026-09-15; the FDA summary prints 0-6 min for Dual), transition "
+            "up and down 2 s-30 min each (white paper p. 16, confirmed on the tablet; the FDA summary "
+            "prints 250 ms), averaging 0-30 s (tip card, tablet), detection blanking 0-30 s (tablet). "
+            "No range is documented for the adaptive startup delay. A declared timing value is judged against the "
             "documented range, not against the default; a value with no documented range is "
             "reported and not judged. Dual Threshold sets its two thresholds manually while both "
             "single modes compute one as 0.75 times the difference between the captures added to "
@@ -1915,13 +1917,15 @@ RULES = (
     ),
     types.DeviceConstraint(
         rule_id="D21",
-        title="Onset duration inside its documented selection range: 0-6 min (Dual), 0-30 s (Single)",
-        source="FDA + ADAPT-PD", page="FDA SSED P960009/S478 Table 2 p. 8; Stanslaski et al. 2024 for the trial's own settings",
+        title="Onset duration inside its selection range: 0-30 s (Dual, both timers), 0-30 s (Single)",
+        source="Clinician tablet + FDA + ADAPT-PD", page="A610 Adaptive Therapy setup screens, read 2026-09-15; FDA SSED P960009/S478 Table 2 p. 8; Stanslaski et al. 2024 for the trial's own settings",
         severity="advisory",
         human_text=(
-            "The FDA approval summary for BrainSense Adaptive prints the selection range of the "
-            "onset duration: 0 to 6 minutes in Dual Threshold mode and 0 to 30 seconds in Single "
-            "Threshold mode. Neither Medtronic manual on this machine prints it. The ADAPT-PD "
+            "The clinician tablet offers the onset duration from 0.00 ms to 30.00 s on both Dual "
+            "Threshold timers and in Single Threshold mode (read directly by the PI, 2026-09-15). "
+            "The FDA approval summary prints 0 to 6 min for Dual Threshold; neither Medtronic manual "
+            "on this machine prints a range, so the tablet's 30 s is the value applied and the FDA "
+            "figure is recorded as a discrepancy. The ADAPT-PD "
             "trial let its clinicians set 1.2 to 2 seconds (Dual) and 200 to 500 milliseconds "
             "(Single); until 2026-09-13 this rule treated the trial's setting as the device's "
             "range, under which the 30 s onset RCS08's device runs would have read as out of "

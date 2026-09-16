@@ -28,10 +28,15 @@ itself so that no panel can present it as a causal effect.
 """
 from __future__ import annotations
 
+import functools
 import numpy as np
 import pandas as pd
 
 from .types import EdgeEstimate
+
+# Review 2026-09-15, finding C1: every E1 says which of the two estimates it is (types.EdgeEstimate.source).
+_SCREENING_E1 = functools.partial(EdgeEstimate, "E1", source="screening_historical")
+_POOLED_E1 = functools.partial(EdgeEstimate, "E1", source="pooled_titration")
 
 
 # THE CLUSTER-ROBUST TOOLKIT AND THE PAIN-RELATIONSHIP ESTIMATE NOW LIVE ON THE BIOMARKER SIDE.
@@ -86,24 +91,24 @@ def actuation_edge(T, *, channel, center_hz, hemisphere="Left", scale="power_lin
     from .adapter import resolve_setting_column
     amp_col = resolve_setting_column(T.columns if T is not None else [], "amp", hemisphere)
     if amp_col is None:
-        return EdgeEstimate("E1", None, None, None, 0, "setting epoch", 0, scale,
+        return _SCREENING_E1(None, None, None, 0, "setting epoch", 0, scale,
                             note=f"no amplitude column for the {hemisphere} hemisphere under any "
                                  "known spelling; the joined table carried no delivered amplitude, "
                                  "so an actuation slope cannot be formed")
     need = {amp_col, scale, "setting_epoch", "channel", "center_hz"}
     if T is None or T.empty or not need.issubset(T.columns):
-        return EdgeEstimate("E1", None, None, None, 0, "setting epoch", 0, scale,
+        return _SCREENING_E1(None, None, None, 0, "setting epoch", 0, scale,
                             note=f"missing columns: {sorted(need - set(T.columns if T is not None else []))}")
     d = T[(T.channel == channel) & (np.isclose(T.center_hz, center_hz))].copy()
     d = d.dropna(subset=[amp_col, scale, "setting_epoch"])
     d = d[d.setting_epoch >= 0]
     if len(d) < 6:
-        return EdgeEstimate("E1", None, None, None, len(d), "setting epoch",
+        return _SCREENING_E1(None, None, None, len(d), "setting epoch",
                             int(d.setting_epoch.nunique()), scale, note="too few usable samples")
     X = np.column_stack([np.ones(len(d)), pd.to_numeric(d[amp_col], errors="coerce").to_numpy()])
     res, bse, nclu = _cluster_ols(d[scale].to_numpy(), X, d.setting_epoch.to_numpy())
     if res is None:
-        return EdgeEstimate("E1", None, None, None, len(d), "setting epoch", nclu, scale,
+        return _SCREENING_E1(None, None, None, len(d), "setting epoch", nclu, scale,
                             note="fewer than two setting epochs; a within-subject slope is not "
                                  "identifiable from a single setting")
     b = float(res.params[1]); se = float(bse[1])
@@ -125,7 +130,7 @@ def actuation_edge(T, *, channel, center_hz, hemisphere="Left", scale="power_lin
         note += (f" Inference is CR0 cluster-robust at the setting epoch on {nclu} clusters, which "
                  f"is at or above the {MIN_RELIABLE_CLUSTERS}-cluster point where the asymptotic "
                  "approximation is usually adequate.")
-    return EdgeEstimate("E1", b, ci, p, len(d), "setting epoch", nclu, scale,
+    return _SCREENING_E1(b, ci, p, len(d), "setting epoch", nclu, scale,
                         note=note, confounded_by=conf)
 
 
@@ -152,7 +157,7 @@ def pooled_actuation_edge(pooled_row, *, scale="power_linear"):
     n_visits = int(r.get("n_visits") or 0)
     unit = "run of rising current (one baseline each)"
     if b is None or not np.isfinite(float(b)):
-        return EdgeEstimate("E1", None, None, None, n, unit, n_visits, scale,
+        return _POOLED_E1(None, None, None, n, unit, n_visits, scale,
                             note=("no pooled slope: " + str(r.get("verdict") or
                                   "the pooled within-visit table has no assessed row for this "
                                   "contact and band")))
@@ -184,7 +189,7 @@ def pooled_actuation_edge(pooled_row, *, scale="power_linear"):
         note += " Curvature could not be assessed on this many points."
     if n_visits and n_visits < 3:
         conf.append("few runs")
-    return EdgeEstimate("E1", b, ci, p, n, unit, n_visits, scale, note=note, confounded_by=conf)
+    return _POOLED_E1(b, ci, p, n, unit, n_visits, scale, note=note, confounded_by=conf)
 
 
 #: What the E2 estimate is a number of, written on every E2 estimate this module produces.

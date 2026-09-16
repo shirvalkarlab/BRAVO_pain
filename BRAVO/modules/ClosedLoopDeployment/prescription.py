@@ -576,7 +576,9 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
 
     # --- onset durations: TWO in dual, ONE in single ---------------------------------------------
     rng = PA.ONSET_RANGE_DUAL_MS if is_dual else PA.ONSET_RANGE_SINGLE_MS
-    src = f"documented range {PA.RANGE_SOURCE_FDA}"
+    # 2026-09-15: the tablet's 0-30 s on both Dual timers; the FDA summary's 0-6 min is a discrepancy
+    src = (f"selection range {PA.RANGE_SOURCE_TABLET}; the FDA summary "
+           f"({PA.RANGE_SOURCE_FDA}) prints 0-6 min for Dual, not applied")
     # The value: the participant's own measured onset when the record has been measured
     # (timing_recommendation); otherwise ONSET_SETTLE_WINDOWS times the biomarker's integration
     # window, inside the documented range -- two averaging windows, the module's own settling
@@ -623,8 +625,8 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
                         default=spec.onset_duration_ms, range_=rng, range_source=src,
                         programmed=_prog("onset_upper_ms"), confidence=conf_up,
                         why=("Single Threshold has one threshold and so one onset duration. Its "
-                             "documented range is 0-30 s against Dual mode's 0-6 min, because the "
-                             "mode is built for a signal that changes within a second. ")
+                             "selection range is 0-30 s, the same as each Dual timer's on the "
+                             "tablet; the mode is built for a signal that changes within a second. ")
                             + (why_up if rec_up is not None else tail)))
 
     # --- averaging, blanking -----------------------------------------------------------------
@@ -647,8 +649,8 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
                     rec_bl if rec_bl is not None else spec.detection_blanking_ms, "ms",
                     "derived" if rec_bl is not None else "device_default",
                     default=spec.detection_blanking_ms,
-                    range_source="range NOT published in any source found (manuals, FDA summary, "
-                                 "papers, toolkits); read off Advanced Settings",
+                    range_=PA.DETECTION_BLANKING_RANGE_MS,
+                    range_source=f"selection range {PA.RANGE_SOURCE_TABLET}; no document prints one",
                     programmed=_prog("detection_blanking_ms"), confidence=conf_bl,
                     why=(why_bl if rec_bl is not None else
                          "Left at the default. D51 uses it as the remedy for repeated ramping to "
@@ -656,7 +658,8 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
                          "reactive lever rather than something to preset.")))
 
     # --- transitions ----------------------------------------------------------------------------
-    tr_src = f"documented range {PA.RANGE_SOURCE_FDA}"
+    tr_src = (f"selection range {PA.RANGE_SOURCE_WHITE_PAPER_P16}, confirmed on the tablet "
+              f"(2026-09-15); the FDA summary prints 250 ms-30 min")
     for nm, key, dflt, direction in (
             ("Transition up duration", "transition_up_ms", spec.transition_up_ms, "rise"),
             ("Transition down duration", "transition_down_ms", spec.transition_down_ms, "fall")):
@@ -751,8 +754,8 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
                     f"against acting on one noisy window is the separation between the two "
                     f"thresholds."),
                 "resolution": (
-                    f"The documented onset range reaches {float(rng[1]) / 60000.0:g} min "
-                    f"({PA.RANGE_SOURCE_FDA}), so an onset of at least twice the averaging "
+                    f"The onset range reaches {float(rng[1]) / 1000.0:g} s on the tablet "
+                    f"({PA.RANGE_SOURCE_TABLET}), so an onset of at least twice the averaging "
                     f"duration -- {2.0 * float(_avg.value):.0f} ms here -- is two controller steps "
                     "and does filter. The other way is to shorten the averaging duration, but the "
                     "averaging duration is the feature definition: changing it deploys a "
@@ -832,20 +835,22 @@ def design_rule_note(design_rule_payload, *, upper, lower, averaging_ms, onset_m
         return None
     stored_sep = abs(float(upper) - float(lower)) / 2.0
     avg_s, ons_s = row["averaging_s"], row["onset_s"]
-    at_this_timing = ("" if row["exact_match"] else
-                      f" (nearest evaluated timing, {avg_s:g} s averaging / {ons_s:g} s onset)")
+    # The timing is spelled out ONLY when the rule was evaluated somewhere other than the card's
+    # own timing. This sentence sits directly above `occupancy_note`, which opens with the
+    # averaging duration in force; restating "3 s averaging / 30 s onset" here printed the same
+    # numbers on two stacked lines under one field (referent audit 2026-09-15, item 6).
+    at_this_timing = ("at the timing shown on this card" if row["exact_match"] else
+                      f"at the nearest evaluated timing, {avg_s:g} s averaging / {ons_s:g} s onset")
     model = design_rule_payload.get("model", "a fitted noise model")
     if row["min_separation"] is None:
         return (f"Noise-only design rule (fitted on this participant's own recordings, {model}): "
                 f"no separation up to {SEPARATION_GRID_MAX:g} device units keeps noise-only "
-                f"threshold crossings at or below one an hour at {avg_s:g} s averaging / "
-                f"{ons_s:g} s onset{at_this_timing}. The stored pair is +-{stored_sep:.1f} apart "
-                "from its midpoint.")
+                f"threshold crossings at or below one an hour {at_this_timing}. The stored pair "
+                f"is +-{stored_sep:.1f} apart from its midpoint.")
     return (f"Noise-only design rule (fitted on this participant's own recordings, {model}): the "
            f"stored pair is +-{stored_sep:.1f} from its midpoint; the rule needs "
-           f"+-{row['min_separation']:g} at this timing ({avg_s:g} s averaging / {ons_s:g} s "
-           f"onset{at_this_timing}) to keep noise-only threshold crossings at or below one an "
-           "hour.")
+           f"+-{row['min_separation']:g} {at_this_timing} to keep noise-only threshold crossings "
+           "at or below one an hour.")
 
 
 try:                                                    # pragma: no cover - import shim
@@ -1005,6 +1010,15 @@ def robustness_note(robustness_payload):
         f"{onset_i['lower']:.0f}–{onset_i['upper']:.0f} s are one recommendation, not a "
         "single number with an implied margin of error."
     ]
+    # 2026-09-15: the tablet's Dual onset maximum is 30 s. The bootstrap grid searches to 120 s, so
+    # an interval can run past what a clinician can type; say so rather than recommend it.
+    onset_max_s = PA.ONSET_RANGE_DUAL_MS[1] / 1000.0
+    if float(onset_i["upper"]) > onset_max_s + 1e-9:
+        parts.append(f"Onsets above {onset_max_s:g} s cannot be entered on the tablet "
+                     f"({PA.RANGE_SOURCE_TABLET}), so only the part of this interval at or under "
+                     f"{onset_max_s:g} s is programmable"
+                     + (f"; its lower end, {onset_i['lower']:.0f} s, is." if float(onset_i["lower"]) <= onset_max_s
+                        else "; none of it is, and the replay's grid should be narrowed."))
     bl_i = intervals.get("blanking_s")
     if bl_i:
         parts.append(f"Detection blanking ranges {bl_i['lower']:.0f}"

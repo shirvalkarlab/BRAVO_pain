@@ -8,7 +8,7 @@ Every test here exists because something specific could go wrong silently. In or
   * the vectorised outlier rule has to be the same rule as the scalar one it replaced for speed;
   * the relationship between the ordering's area under the curve and a real fitted one-predictor
     logistic regression's own area under the curve has to hold on every cell of a grid, since that
-    relationship is what lets 220 cells be filled without 220 model fits;
+    relationship is what lets every cell be filled without a model fit per cell;
   * the sweep has to HONOUR THE TOP-OF-PAGE SETTINGS rather than recomputing with its own defaults;
   * an interval that spans 0.5 must NOT read as a negative result anywhere -- not in the word, not
     in the sentence, and not in the figure headline;
@@ -111,13 +111,21 @@ def test_delivered_length_matches_the_matcher_not_the_request():
           f"{len(A.BAND_TIME_SWEEP_SECONDS)} lengths; 1 s is delivered as 3 s")
 
 
-def test_notes_declare_the_lengths_that_could_not_be_delivered():
-    """The panel must SAY which lengths could not be delivered, with both numbers."""
+def test_the_lengths_that_could_not_be_delivered_are_on_the_response_but_not_in_the_drawer():
+    """Both numbers stay on the response (`length_rounding`, one pair per rounded length) so a
+    reader who opens it can see them; the drawer no longer prints them (the PI, 2026-09-15:
+    remove that bullet -- every label already shows the delivered length)."""
     power, pain, centers = _pure_noise_grid()
     sw = A.band_time_sweep_from_power(power, pain, center_freqs_hz=centers, n_perm=100, n_boot=200)
     joined = " ".join(sw["notes"])
-    assert "could not be delivered exactly" in joined
-    assert "1 s asked for, 3 s delivered" in joined
+    assert "could not be delivered" not in joined and "asked for" not in joined
+    rounding = sw["length_rounding"]
+    assert {"requested_s": 1.0, "delivered_s": 3.0} in rounding
+    assert {"requested_s": 5.0, "delivered_s": 6.0} in rounding
+    assert all(r["requested_s"] != r["delivered_s"] for r in rounding)
+    # every note is short: the PI reads this drawer, and asked for it to be concise
+    for note in sw["notes"]:
+        assert len(note.split()) <= 45, note
     for row in sw["best_correlation_rows"] + sw["best_auc_rows"]:
         if row.get("integration_seconds_delivered") is None:
             continue
@@ -167,7 +175,7 @@ def test_vectorised_outlier_rule_matches_the_scalar_one():
 # ---------------------------------------------------------------------------------------------
 
 def test_fitted_logistic_is_the_ordering_or_one_minus_it_on_every_cell():
-    """A real fit at every one of the 220 cells, and the exact relationship checked.
+    """A real fit at every one of the 22 x 9 cells, and the exact relationship checked.
 
     This is the claim the fast path rests on. A one-predictor logistic regression's own area under
     the curve, scored on the data it was fitted to, is EXACTLY the ordering's area under the curve
@@ -192,7 +200,9 @@ def test_fitted_logistic_is_the_ordering_or_one_minus_it_on_every_cell():
             f"worst gap {float(np.min([same.max(), flip.max()])):.3g}")
         n_exact += int((np.minimum(same, flip) < 1e-9).sum())
         n_slope_agrees += int(((slope[ok] > 0) == (same < 1e-9)).sum())
-    assert n_cells >= 200, f"only {n_cells} cells were fitted; the grid should be about 220"
+    # 22 centres x the sweep's lengths (10 until 2026-09-15, 9 since the 5-minute length went)
+    expect = 22 * len(A.BAND_TIME_SWEEP_SECONDS)
+    assert n_cells >= expect - 20, f"only {n_cells} cells were fitted; the grid should be about {expect}"
     assert n_slope_agrees == n_cells, "which of the two it is must follow the fitted slope's sign"
     print(f"OK on all {n_cells} cells the fitted logistic regression's own value is exactly the "
           f"ordering's value or one minus it, and the sign of its slope decides which")
@@ -385,10 +395,42 @@ def test_the_optimism_note_and_the_half_note_are_in_the_first_notes():
     power, pain, centers = _synthetic_grid(seed=17)
     sw = A.band_time_sweep_from_power(power, pain, center_freqs_hz=centers, n_perm=200, n_boot=300)
     first_two = " ".join(sw["notes"][:2]).lower()
-    assert "largest of the ten lengths" in first_two
+    assert "largest of the nine lengths" in first_two
     assert "optimistic" in first_two or "larger than" in first_two
     assert "0.5, not 0" in " ".join(sw["notes"])
+    # 2026-09-15, the PI: the note said "each row's value is the largest", which was true of the
+    # retired table (one row per band) and false of the heat map, where a row is a length of
+    # signal and every cell has its own value. The note must speak of the CIRCLED cell.
+    assert "circled cell in each column" in first_two
+    assert "row's value" not in first_two
+    # and the direction note must not refer to "the table" or a logistic fit the heat map never shows
+    direction = sw["notes"][2].lower()
+    assert "table" not in direction and "logistic" not in direction
     print("OK the best-of-ten warning and the 0.5 note are in the notes")
+
+
+def test_every_row_sentence_counts_the_lengths_with_the_one_word_the_notes_use():
+    """Referent audit 2026-09-15, item 10. A row's `why` read "the strongest of 9 lengths ... the
+    SAME best-of-ten choice" -- one sentence with two counts, the second typed before the 300 s
+    length was dropped (decision 170). The count comes from `_N_LENGTHS_WORD`, the one place the
+    notes already take it from, so the two cannot disagree again."""
+    power, pain, centers = _synthetic_grid(seed=17)
+    sw = A.band_time_sweep_from_power(power, pain, center_freqs_hz=centers, n_perm=200, n_boot=300)
+    word = A._N_LENGTHS_WORD
+    assert word == "nine", word
+    rows = list(sw["best_correlation_rows"]) + list(sw["best_auc_rows"])
+    assert rows
+    n_shuffled = 0
+    for r in rows:
+        why = str(r["why"]).lower()
+        assert "best-of-ten" not in why, why
+        assert " ten " not in why and "of ten" not in why, why
+        assert f" {word} lengths of signal" in why, why
+        if "shuffled" in why:
+            n_shuffled += 1
+            assert f"best-of-{word}" in why, why
+    assert n_shuffled, "no row named the shuffled level, so the best-of wording was not exercised"
+    print(f"OK {len(rows)} row sentences count the lengths as '{word}', {n_shuffled} name the shuffled level")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -623,3 +665,12 @@ if __name__ == "__main__":
     test_an_empty_input_is_a_reason_not_a_crash()
     test_band_centres_come_from_the_cache_grid_not_from_a_wish()
     print("All band-by-length-of-signal sweep tests passed.")
+
+
+# 9. the sweep stops at one minute (the PI, 2026-09-15: "get rid of the five-minute ... leave the max at one minute")
+def test_the_sweep_stops_at_one_minute_and_its_note_counts_its_own_lengths():
+    assert max(A.BAND_TIME_SWEEP_SECONDS) == 60.0
+    assert len(A.BAND_TIME_SWEEP_SECONDS) == 9
+    assert 300.0 not in A.BAND_TIME_SWEEP_SECONDS
+    assert "nine lengths" in A.BEST_OF_WINDOWS_OPTIMISM_NOTE and "ten" not in A.BEST_OF_WINDOWS_OPTIMISM_NOTE
+    print("OK the sweep ends at 60 s over nine lengths and the note says nine")

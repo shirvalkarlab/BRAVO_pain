@@ -34,6 +34,7 @@ import PAL from "views/Reports/ClosedLoopSim/palette";
 
 import ClosedLoopChecks, { CHECK_LABELS } from "./ClosedLoopChecks";
 import ExcludedSettingsChart from "./ExcludedSettingsChart";
+import { TITRATION_CARD_TITLE } from "./TitrationSessionCard";
 import { num } from "./stimFormat";
 import { TYPE, HEAD, SizedFold as Fold } from "./typeScale";
 
@@ -55,7 +56,7 @@ function RecordTable({ rows, columns, limit = 12 }) {
   return (
     <MDBox sx={{ overflowX: "auto" }}>
       <Table size="small" sx={{ mt: 0.5 }}>
-        <TableHead>
+        <TableHead sx={{ display: "table-header-group", p: 0 }}>
           <TableRow>
             {present.map(([k, label]) => (
               <TableCell key={k} sx={{ py: 0.6 }}>
@@ -85,13 +86,35 @@ function RecordTable({ rows, columns, limit = 12 }) {
   );
 }
 
+// One row per JOINT (pulse-width-Left, pulse-width-Right) stratum (2026-09-14 joint redesign),
+// not per side: the backend still serves two rows per stratum (a per-side VIEW so other readers
+// need no change), so this table de-duplicates by `joint_stratum_key` before rendering -- see
+// `dedupeJointStrata` below.
 const STRATA_COLUMNS = [
-  ["hemisphere", "side"], ["pw_us", "pulse width (µs)"], ["n_epochs", "stretches fitted"],
-  ["n_reports", "pain reports"], ["opt_rate_hz", "best rate (Hz)"], ["opt_amp_mA", "best current (mA)"],
+  ["pw_us_left", "left pulse width (µs)"], ["pw_us_right", "right pulse width (µs)"],
+  ["n_epochs", "stretches fitted"], ["n_reports", "pain reports"],
+  ["opt_rate_hz", "best rate (Hz)"],
+  ["opt_amp_mA_left", "best left current (mA)"], ["opt_amp_mA_right", "best right current (mA)"],
   ["gain", "predicted gain (pts)"], ["sd_of_difference", "1 SD of that gain (pts)"],
   ["optimum_resolved", "resolved"], ["incumbent_rate_supported", "rate in force was delivered here"],
   ["optimum_rate_supported", "best rate was delivered here"],
 ];
+
+/** One row per joint stratum: the backend's `strata` list carries two rows per fitted stratum (a
+ * Left view and a Right view of the same joint fit, for readers that still want a per-side row),
+ * and this keeps only the first row seen per `joint_stratum_key`. */
+function dedupeJointStrata(strata) {
+  const seen = new Set();
+  const out = [];
+  for (const r of strata || []) {
+    const key = r && r.joint_stratum_key;
+    if (key == null || seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
+  }
+  return out;
+}
+
 const POLICY_COLUMNS = [
   ["hemisphere", "side"], ["mode", "mode"], ["center_hz", "band centre (Hz)"],
   ["band_lo_hz", "band from (Hz)"], ["band_hi_hz", "band to (Hz)"],
@@ -107,10 +130,11 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
   const envelope = frozen.adaptive_envelope || stage1.adaptive_envelope || {};
   const stage2 = (plan && plan.stage2) || {};
   const provenance = (plan && plan.provenance) || {};
-  const strata = Array.isArray(stage1.strata) ? stage1.strata : [];
+  const strata = dedupeJointStrata(stage1.strata);
   const skipped = stage1.strata_skipped || {};
   const policies = Array.isArray(stage2.policies) ? stage2.policies : [];
   const refusals = Array.isArray(stage2.refusal_reasons) ? stage2.refusal_reasons : [];
+  const queue = Array.isArray(stage1.queue) ? stage1.queue : [];
 
   return (
     <Card>
@@ -204,6 +228,22 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
               An override with a stated reason can be sent with the request; there is no control
               for it here yet.
             </MDTypography>
+
+            {/* ---------- the in-clinic plan lives on ONE card. Until 2026-09-15 this card also
+                printed the joint model's "What to test at the next visit" queue (decision 157: cells
+                never tested on the frozen surface, ranked by expected improvement). On this record
+                every row's predicted value is identical to three decimals, so the ranking is noise
+                (decision 158 found the picture flat), and the page then carried two in-clinic
+                recommendations that disagreed -- the PI's own titration session (decisions 146, 160,
+                163) and this queue. The PI's instruction, 2026-09-15: one. The queue stays on the
+                response (`two_stage.stage1.queue`, stored as the exploration ladder) and is drawn
+                nowhere. ---------- */}
+            {queue.length > 0 && (
+              <MDTypography variant="caption" color="text" component="div" sx={{ mt: 2, fontSize: TYPE.small }}>
+                {`The in-clinic test to run next is the "${TITRATION_CARD_TITLE}" card above; the joint `}
+                {`search's ${queue.length} untested cells are on the response and are not a second plan.`}
+              </MDTypography>
+            )}
 
             {/* ---------- folded: how the answer was arrived at ---------- */}
             <Fold show="How this was arrived at (what each step read, and the fit for each pulse width and side)"

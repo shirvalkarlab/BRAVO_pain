@@ -12,8 +12,8 @@ from ..routines import analytics as A
 
 
 def test_zero_and_negative_tolerances_fall_back_to_the_longest_length_of_signal():
-    expect = float(max(A.BAND_TIME_SWEEP_SECONDS)) / 60.0        # 300 s -> 5.0 min
-    assert expect == 5.0
+    expect = float(max(A.BAND_TIME_SWEEP_SECONDS)) / 60.0        # 60 s -> 1.0 min since 2026-09-15
+    assert expect == 1.0
     for raw in ({"MatchToleranceMin": 0}, {"MatchToleranceMin": -3}, {"MatchToleranceMin": "0"}):
         tol = B._match_tolerance_param(raw)
         assert tol is None, (raw, tol)

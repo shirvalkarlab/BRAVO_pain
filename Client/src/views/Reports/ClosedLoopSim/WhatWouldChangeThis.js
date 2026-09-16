@@ -135,19 +135,25 @@ function buildItems(data) {
   } else if (vd.provisional === true) {
     // PI rule 2026-09-13 ("established means mean only"): the verdict is licensed on the point
     // signs; the intervals that span zero are the one thing left to establish, and only more
-    // measurement establishes them.
-    const names = (vd.unestablished_edges || []).join(", ");
+    // measurement establishes them. This card's own contribution is WHICH edges those are and what
+    // establishes them; the count ("2 of 3 intervals span zero") and the word "provisional" are the
+    // verdict header's and its two boxes' (referent audit, 2026-09-15), so they are not repeated.
+    const edges = vd.unestablished_edges || [];
+    const names = edges.length > 1
+      ? `${edges.slice(0, -1).join(", ")} and ${edges[edges.length - 1]}`
+      : edges.join("");
     items.push({
       key: "edges-provisional",
       rank: 5,
       ink: PAL.warn,
       actor: "measurement \u2014 the titration session",
-      title: `The verdict is provisional: ${vd.n_edges_unestablished} of ${vd.n_edges || 3} `
-           + `intervals span zero${names ? ` (${names})` : ""}`,
+      title: names
+        ? `The interval spans zero on ${names}: a point sign, not yet an established one`
+        : "At least one edge's interval spans zero: a point sign, not yet an established one",
       page: null,
-      clears: "Nothing here changes the verdict, which rests on the point signs by the PI's rule. "
-            + "A titration session at one rate, up and down in 0.5 mA steps, is what would take "
-            + "the interval off zero and remove the word provisional.",
+      clears: "Nothing here changes the verdict, which rests on the point signs (PI rule, "
+            + "2026-09-13). A titration session at one rate, up and down in 0.5 mA steps, is what "
+            + "would take the interval off zero.",
       observed: null,
       why: null,
     });
