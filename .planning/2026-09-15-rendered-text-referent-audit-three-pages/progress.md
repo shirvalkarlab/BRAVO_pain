@@ -113,3 +113,5 @@
   (`what_it_means`). BM 25,660 -> 25,655, 4 diff + 5 only-before, all background-launch bookkeeping. Suites: host 1297
   / 2 / 0 (a `_FakeGate` stub needed the field), container 645 / 0; jest Reports 68 / 2 (known pair). Build
   main.308939e8, same three index.js warnings shifted two lines. Workers HUP'd, four fresh. Decision 176.
+- Open item 29 closed (2026-09-15, late): on the PI's "go ahead", GitHub default branch v3.1.0 -> PS_closedloop_deployment
+  (`gh repo edit`, read back), upstream set, origin/HEAD refreshed, CLAUDE.md §4 and AGENTS.md corrected. Decision 177.

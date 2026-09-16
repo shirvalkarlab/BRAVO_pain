@@ -11,7 +11,7 @@ found its mirror image ("computed, stored, tested, not on the page", decision 16
 
 ## Next Step
 Nothing queued. Phase 4 done (decision 176): the four leftovers of decision 174 fixed test-first, plus the second
-copy of the gate count the live proof exposed. Still his: open item 29 (the default branch), decision 139's threshold
+copy of the gate count the live proof exposed. Open item 29 closed the same night (decision 177). Still his: decision 139's threshold
 re-centring, decision 144's post-ramp switch, the Google Sheets key (decision 163), the titration session (item 30).
 
 ## Current Phase

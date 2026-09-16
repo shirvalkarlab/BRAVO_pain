@@ -17,9 +17,9 @@
 >    deliberately ahead of every remote. Following Mode B would put commits into the permanent
 >    record of a research repository under a name nobody authorised.
 > 2. **THERE IS NO `main` BRANCH.** Mode B says pull requests target `main` and describes
->    trunk-based development from it. The default branch here is **`v3.1.0`** and the working branch
->    **`PS_closedloop_deployment`** is long-lived — 61 commits of it were merged as pull request #9
->    and work continued on it afterwards.
+>    trunk-based development from it. The default branch here is **`PS_closedloop_deployment`**
+>    (since 2026-09-15, decision 177; it was `v3.1.0` before, which took this branch's work by pull
+>    request four times). Work lands on it directly; no pull request into `v3.1.0` is needed.
 > 3. **"RUN QUALITY GATES — TESTS, LINTER, TYPE CHECKER, BUILD" NAMES TWO THINGS THAT DO NOT
 >    EXIST.** There is no linter, no type checker, no formatter and no continuous integration
 >    anywhere in this repository. The gates are exactly three: the container test suite, the host

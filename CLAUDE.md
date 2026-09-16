@@ -191,14 +191,18 @@ Once `.claude/rules/tech-strategy.md` exists it should point back at `DEVICE_per
 ### Branching — corrected against this repository
 
 *The framework's default is trunk-based development off `main`.* **There is no `main` branch
-here.** The default branch is **`v3.1.0`**, and the working branch **`PS_closedloop_deployment`**
-is long-lived rather than short-lived: 61 commits of it were merged into `v3.1.0` as pull request
-#9, and work continued on it afterwards. Other remote branches are `development` and the release
-line `v2.0-alpha` through `v2.2.1`.
+here, but since 2026-09-15 the shape is trunk-based: `PS_closedloop_deployment` IS the default
+branch** (the PI's decision, decision 177; set on GitHub and read back that night). Work lands on
+it directly, CI runs on every push to it, and an agent worktree or a fresh clone now starts from
+the current work rather than months behind it (open item 29, closed). Until that night the default
+was `v3.1.0`, which took the working branch's commits by pull request four times (#9 to #12);
+`v3.1.0` is now a version label to tag from, not a branch to merge into. Other remote branches are
+`development`, `aditya` and the release line `v2.0-alpha` through `v2.2.1`.
 
-**So: keep working on `PS_closedloop_deployment`, never commit to `v3.1.0` directly, and treat
-"short-lived branches off `main`" as not describing this repository.** If trunk-based development
-is wanted here, that is a change to propose to the principal investigator, not a default to assume.
+**So: work on `PS_closedloop_deployment`, commit and push there, and use a short-lived branch only
+for something you might throw away.** Do not open pull requests into `v3.1.0` any more. Worktrees
+still do not fit here for a different reason: the container mounts only the main checkout, so code
+in a worktree can be run against nothing (`.claude/agents/README_no_worktrees.md`).
 
 ### Planning flow — the `planning-with-files` skill
 
