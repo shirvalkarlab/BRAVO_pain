@@ -10,9 +10,8 @@ This is the class the PI caught twice on 2026-09-15 (decisions 172, 173) after t
 found its mirror image ("computed, stored, tested, not on the page", decision 167 §5).
 
 ## Next Step
-Done (decision 174, pushed). The one unchecked box is the browser walk, which needs the PI signed in to the in-app browser
-or the Chrome extension connected; everything else is proven by the fixture render tests, both suites and the live
-RCS08 field-count proof. Open for his call: the four things decision 174 lists under "found on the way, not fixed".
+Done (decision 174, pushed; browser walk done in the PI's own signed-in session). Open for his call: the four things
+decision 174 lists under "found on the way, not fixed", plus the lowercase opening of the reliable-change fold's sentence.
 
 ## Current Phase
 Phase 3
@@ -34,7 +33,7 @@ Phase 3
 - [x] Fixture render test per card on all three pages, asserting the strings a clinician must read and the retired words' absence, RED first
 - [x] The fixes, test-first, with `ps-scientific-writing` §6a applied per panel with the referent list in hand
 - [x] Both suites, live field-count proof on RCS08, frontend rebuild, decision-log entry, push
-- [ ] Browser walk: one screenshot per card with the PI signed in or the Chrome extension connected; not claimed if not done -- NOT DONE 2026-09-15: no signed-in in-app session, Chrome extension not connected
+- [x] Browser walk: one screenshot per card with the PI signed in or the Chrome extension connected; not claimed if not done -- DONE 2026-09-15 evening, the PI signed in to the in-app browser himself; every card on the ranked list read as decision 174 states
 - **Status:** complete
 
 ## Decisions Made

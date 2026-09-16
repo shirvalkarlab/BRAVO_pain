@@ -80,3 +80,10 @@
   headline, the field-driven hover; absent: "10 lengths", "ten lengths", "Matched samples per channel", the deleted
   panel titles, "answered from the device"). Workers reloaded, four fresh. Decision 174 written. Browser walk NOT
   done (no session). Committing and pushing.
+- Browser walk DONE (the PI signed in to the in-app browser himself, 2026-09-15 evening). RCS08, L 0-2+ 24.5 Hz
+  committed via the grid's radio. Biomarkers: caption carries the snapshot count once; drawer 10 bullets, no snapshot
+  bullet, "nine lengths"/"best-of-nine". Closed-Loop: all grid hover titles "best of 9 lengths" (0 with "10"/"ten"),
+  fold "nine lengths", header "(provisional -- see below)" + two count boxes, design-rule line "at the timing shown on
+  this card" above the occupancy line, no "36-90" with the onset fold open, robustness 27-30 s, reliable-change fold
+  prints `what_it_means` (opens lowercase -- cosmetic, for the PI). Stim Optimizer: "1 of 4 checks block, 1 not
+  assessed", history line, Spearman n = 15, no "2 of 4 conditions block". Decision 174 amended; committing.
