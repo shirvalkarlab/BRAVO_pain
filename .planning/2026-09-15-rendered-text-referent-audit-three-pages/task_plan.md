@@ -10,9 +10,8 @@ This is the class the PI caught twice on 2026-09-15 (decisions 172, 173) after t
 found its mirror image ("computed, stored, tested, not on the page", decision 167 §5).
 
 ## Next Step
-Nothing queued. Phase 6 done (decisions 179, 180): the margin is off again, the pair comes from the record. The
-Google Sheets service-account key is blocked by his organisation's policy; the OAuth-user route is the way round
-and needs his go-ahead (a small code change plus a one-time consent on his Mac).
+Nothing queued. Google Sheets export live as the PI (decision 181); stimulation-contact notation is the clinic
+sheet's own; sensing-pair labels stay as they are (his ruling). Phase 6 done (decisions 179, 180).
 (Phase 5 done, decision 178; Phase 4 done, decision 176): the four leftovers of decision 174 fixed test-first, plus the second
 copy of the gate count the live proof exposed. Open item 29 closed the same night (decision 177). Still his: decision 139's threshold
 re-centring, decision 144's post-ramp switch, the Google Sheets key (decision 163), the titration session (item 30).
