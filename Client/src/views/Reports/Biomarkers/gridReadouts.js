@@ -51,7 +51,7 @@ function rowIndexOf(sw, seconds) {
 }
 
 /** The corrected statistics for one cell, or the sentence that says why there are none. */
-export function bestCellReadout(sw, kind, colIndex, rowIndex) {
+export function bestCellReadout(sw, kind, colIndex, rowIndex, { includeN = true } = {}) {
   const best = bestRowFor(sw, kind, colIndex);
   if (!best) return { isBest: false, text: "no corrected statistic for this column" };
   const bestRow = rowIndexOf(sw, best.integration_seconds_delivered);
@@ -59,7 +59,9 @@ export function bestCellReadout(sw, kind, colIndex, rowIndex) {
     // The PI's wording, 2026-09-15: point at the circled best cell and stop.
     return { isBest: false, text: `best cell corrected (${secondsLabel(best.integration_seconds_delivered)} circled)` };
   }
-  const parts = [`${Number(best.n_pain_reports)} ratings`];
+  // `includeN`: the hover carries the count (nothing else on a hover does); the panel lines beside
+  // the scatter and the violin leave it out, since the plain line above them already has it.
+  const parts = includeN ? [`${Number(best.n_pain_reports)} ratings`] : [];
   if (kind !== "auc" && best.pearson_r_low != null && best.pearson_r_high != null) {
     parts.push(`interval ${fmtSigned(best.pearson_r_low)} to ${fmtSigned(best.pearson_r_high)}`);
   }

@@ -654,7 +654,8 @@ function ScatterStatsLine({ cell, pinnedCell, sw }) {
   // Review 2026-09-15, B1: the grid's OWN corrected statistic for this cell, printed beside the
   // plain one and labelled as a different thing. Only each column's best cell has one; for any
   // other cell the readout says so rather than leaving the reader to assume the plain r is it.
-  const readout = (sw && pinnedCell) ? bestCellReadout(sw, "corr", pinnedCell.col, pinnedCell.row) : null;
+  const readout = (sw && pinnedCell)
+    ? bestCellReadout(sw, "corr", pinnedCell.col, pinnedCell.row, { includeN: false }) : null;
   return (
     <MDBox>
       <MDTypography variant="caption" color="dark" sx={{ fontSize: 15, display: "block", mb: 0.25 }}>
@@ -754,7 +755,7 @@ function PlotlyScatter({ divId, cell, pinnedCell, side, metricLabel }) {
 
 /** Persistent panel next to the AUC grid: two violins (high/low pain) and a Welch two-sample
  * t-test between them, reported because no other per-cell comparison statistic is stored. */
-function ViolinPanel({ cell, pinnedCell, channelLabel, height, aucValue }) {
+function ViolinPanel({ cell, pinnedCell, channelLabel, height, aucValue, sw }) {
   if (!pinnedCell) {
     return (
       <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
@@ -785,6 +786,18 @@ function ViolinPanel({ cell, pinnedCell, channelLabel, height, aucValue }) {
         {`Welch t(${num(df, 1)}) = ${num(t, 2)}, p = ${p == null ? "—" : num(p, 4)} `}
         {`(high n=${n1}, low n=${n2})`}
       </MDTypography>
+      {/* The grid's own corrected statistic for this cell, the same small line in the same ink as
+          beside the scatter (the PI, 2026-09-15); the plot below moves down by its height. */}
+      {(() => {
+        const readout = (sw && pinnedCell)
+          ? bestCellReadout(sw, "auc", pinnedCell.col, pinnedCell.row, { includeN: false }) : null;
+        return readout ? (
+          <MDTypography variant="caption" sx={{ fontSize: 13, display: "block", mb: 0.5,
+            color: readout.isBest ? PAL.accent : "#6A6A6A" }}>
+            {readout.text}
+          </MDTypography>
+        ) : null;
+      })()}
       <PlotlyViolin divId="biomarker-violin-panel" highVals={highVals} lowVals={lowVals}
         side={height} />
     </MDBox>
@@ -1129,7 +1142,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
               </Grid>
               <Grid item xs={12} md={5}>
                 <ViolinPanel cell={pinnedCellData} pinnedCell={pinnedCell}
-                  channelLabel={channelLabel} height={panelHeight}
+                  channelLabel={channelLabel} height={panelHeight} sw={aucSw}
                   aucValue={(pinnedCell && aucSw && aucSw.auc_grid
                     && aucSw.auc_grid[pinnedCell.row] && aucSw.auc_grid[pinnedCell.row][pinnedCell.col])}
                 />

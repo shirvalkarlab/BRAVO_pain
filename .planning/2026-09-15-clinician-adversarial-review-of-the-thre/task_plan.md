@@ -63,6 +63,7 @@ Phase 7
 - [x] Caption as bullets; pinned title and lines moved down beside the scatter; drawer's rounding bullet removed, notes concise
 - [x] Container suite, rebuild, decision 171, push (not watched in a browser)
 - [x] Notes 1 and 3 reworded for the heat map, not the retired table (decision 172)
+- [x] Panel lines drop the ratings count; the violin gets its own corrected line (decision 173)
 - **Status:** complete
 
 ## Decisions Made

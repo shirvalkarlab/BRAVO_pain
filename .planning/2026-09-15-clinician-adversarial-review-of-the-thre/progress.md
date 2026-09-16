@@ -38,3 +38,5 @@
   Chrome extension not connected) -- not watched. Committing and pushing.
 - 18:30-18:45: his catch: note 1 described the retired table. Test-first reword (circled cell), direction note's stale
   sentence dropped, v16. Container 641/0; HUPed; decision 172. Committing and pushing.
+- 18:45-19:00: his follow-up: no "N ratings" on the panel lines; a matching line above the violin. Test-first (jest
+  11/11); rebuilt; decision 173. Committing and pushing.

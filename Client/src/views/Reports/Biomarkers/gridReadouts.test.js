@@ -53,6 +53,15 @@ describe("bestCellReadout (B1)", () => {
     expect(r.isBest).toBe(false);
     expect(r.text).toBe("best cell corrected (5m circled)");
   });
+  test("the panel lines drop the ratings count, which the plain line beside them already carries", () => {
+    // The PI, 2026-09-15: "no reason to say '96 ratings' again".
+    expect(bestCellReadout(SW, "corr", 1, 9, { includeN: false }).text)
+      .toBe("interval −0.66 to −0.40 · corrected q = 0.0022 · established");
+    expect(bestCellReadout(SW, "auc", 2, 3, { includeN: false }).text)
+      .toBe("corrected q = 0.029 · established");
+    // the hover keeps the count: nothing else on a hover carries it
+    expect(bestCellReadout(SW, "corr", 1, 9).text).toMatch(/^117 ratings/);
+  });
   test("the AUC grid reads its own best row", () => {
     const r = bestCellReadout(SW, "auc", 2, 3);    // 13.5 Hz, 15 s
     expect(r.isBest).toBe(true);
