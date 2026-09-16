@@ -149,8 +149,15 @@ def _facts_for(candidate, e1, e2, power_scale, device_facts=None, threshold=None
 def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro_frame=None,
         candidates=(), washin_s=60.0, amp_limit_ma=5.0, power_scale="power_linear",
         hemisphere="Left", strict=True, n_boot=500, seed=0, device_facts=None,
-        pooled_e1=None):
+        pooled_e1=None, place_thresholds=None):
     """Build the deployment report for one participant.
+
+    ``place_thresholds`` (decision 180): a callable ``(rep, candidates) -> (plan, placement)``
+    invoked right after the capture rule has placed ``rep.threshold`` and BEFORE the eligibility
+    ledger, the replay and the prescription rows read it, so every one of them describes the pair
+    the card recommends. The adapter passes its record-based step
+    (`adapter._place_thresholds_from_record`); ``None`` keeps the capture pair. The placement dict
+    is kept on ``rep.threshold_placement``.
 
     ``psd_frame`` and ``epochs`` are what ``StimOptimizer.adapter.evidence_inputs`` returns. They are
     passed in rather than fetched here so this function stays testable without a database, and so
@@ -302,6 +309,15 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
                 amp_low=float(lo_a), amp_high=float(hi_a),
                 expected_sign=-1, observed_series=d[power_scale].to_numpy(),
                 pooled_slope=pooled_edge)
+            # THE PAIR FROM THE RECORD (decision 180): re-placed here, so the ledger, the replay
+            # and the rows below all read the pair the card recommends, with the capture pair
+            # kept beside it on the plan.
+            if place_thresholds is not None:
+                try:
+                    rep.threshold, rep.threshold_placement = place_thresholds(rep, list(candidates))
+                except Exception as _pex:              # noqa: BLE001 - the capture pair stands
+                    rep.threshold_placement = {"available": False,
+                                               "reason": f"placement failed: {_pex!r}"}
         elif np.isfinite(lo_a) and np.isfinite(hi_a):
             # ONE therapeutic current on record (review C12, 2026-09-12). The two capture
             # amplitudes must differ (D24: the thresholds are read at a low and a high current),

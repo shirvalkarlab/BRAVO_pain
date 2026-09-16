@@ -200,6 +200,15 @@ class ThresholdPlan:
     #: comparison decision 124 distrusts. Built by ``authority.d26_capture_verdicts``.
     capture_verdicts: dict = field(default_factory=dict)
     note: str = ""
+    #: Which rule placed ``upper``/``lower``: "capture" (the tablet's own rule, D24: the two
+    #: capture means) or "record" (decision 180: centred on the participant's own median averaged
+    #: reading, separated by the noise-only design rule's minimum). ``capture_upper``/``capture_lower``
+    #: are always the capture pair, so the tablet's answer travels beside the record's.
+    placement_rule: str = "capture"
+    capture_upper: float | None = None
+    capture_lower: float | None = None
+    placement: dict = field(default_factory=dict)
+    placement_note: str = ""
 
 
 @dataclass
@@ -253,6 +262,8 @@ class DeploymentReport:
     edges_historical: dict = field(default_factory=dict)
     coherence: CoherenceReport | None = None
     threshold: ThresholdPlan | None = None
+    #: Decision 180: what the record-based placement did to ``threshold`` (or why it could not).
+    threshold_placement: dict | None = None
     replay: ReplayResult | None = None
     protocol: Protocol | None = None
     #: The programmable device parameters and the predicted duty cycle, from prescription.py.

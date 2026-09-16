@@ -278,8 +278,8 @@ def _side(**kw):
 
 
 def test_the_points_yield_arithmetic_and_the_margin_sentence():
-    """The switch is ON by default since decision 178, so with no run at the floor the sentence
-    says it is on ahead of the session, not "stays off" -- that wording was decision 144's."""
+    """The switch is OFF by default (decision 144, reaffirmed by decision 179): with no run at the
+    floor the sentence says the margin stays off until the session is recorded."""
     runs = pd.DataFrame(_run_rows("a", [1.0, 1.5, 2.0, 2.5, 3.0, 3.5]))
     margin = PR.margin_becomes_available(runs)
     p = TP.side_plan("Left", margin=margin, **_side())
@@ -289,21 +289,21 @@ def test_the_points_yield_arithmetic_and_the_margin_sentence():
     assert y["min_settled_settings_for_margin"] == 8
     assert y["session_clears_margin_floor"] is True          # 11 >= 8
     assert y["run_with_enough_settings_exists_today"] is False
-    assert y["margin_switched_on_today"] is True
+    assert y["margin_switched_on_today"] is False
     s = y["sentence"]
     assert "13 settled points across 4 runs" in s and "at most 6 currents in any one run" in s
     assert "16 settled points" in s and "11 distinct currents" in s
-    assert "no run in the record has the 8 settled settings" in s
-    assert "is switched on (decision 178)" in s and "stays off" not in s
+    assert "no run in the record has the 8 settled settings" in s and "stays off" in s
 
 
-def test_the_margin_sentence_with_the_switch_off_says_it_stays_off(monkeypatch):
-    """The other state, kept testable: switched off, the sentence reads as it did under decision 144."""
-    monkeypatch.setattr(PR, "USE_POST_RAMP_MARGIN", False)
+def test_the_margin_sentence_with_the_switch_on_says_so_ahead_of_the_session(monkeypatch):
+    """The other state, kept testable (it was the default for part of 2026-09-15, decision 178):
+    switched on with no run at the floor, the sentence says so rather than "stays off"."""
+    monkeypatch.setattr(PR, "USE_POST_RAMP_MARGIN", True)
     runs = pd.DataFrame(_run_rows("a", [1.0, 1.5, 2.0, 2.5, 3.0, 3.5]))
     y = TP.side_plan("Left", margin=PR.margin_becomes_available(runs), **_side())["yield"]
-    assert y["margin_switched_on_today"] is False
-    assert "stays off until this session is recorded" in y["sentence"]
+    assert y["margin_switched_on_today"] is True
+    assert "is switched on (decision 178)" in y["sentence"] and "stays off" not in y["sentence"]
 
 
 def test_a_lifted_rate_changes_the_band_list_and_the_source_names_the_minimum():

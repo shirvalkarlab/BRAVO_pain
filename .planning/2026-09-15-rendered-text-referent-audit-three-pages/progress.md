@@ -121,3 +121,9 @@
   panel), verdict/thresholds/ledger 0 diff. L 1-3+: E1 -3.79 (13 pts, 4 runs) -> +17.31 (11 pts, 3 runs, p 0.074),
   D19 blocks, verdict supported(provisional) -> blocked. Suites host 1298/2/0, container 645/0. Workers HUP'd.
   Decision 178; open item 31 written (139 vs Kalman: no interference, but the capture rule still owns the pair).
+- Phase 6 (2026-09-16): 144 reversed (decision 179). (b) built test-first: 16 RED tests, `threshold_placement.py`,
+  `pipeline.run(place_thresholds=)`, design-rule key on the midpoint. Live proof found two defects: rows built inside
+  the run before the first (post-run) placement, and a leftover second application overwriting the capture pair;
+  both fixed with tests. After: L 0-2+ 196.13/190.89 -> 186.12/176.12 (median 181.12, +-5), L 1-3+ 210.58/161.90 ->
+  242.27/192.27 (median 217.27, +-25); verdicts and ledgers 0 diff. Host 1314/2/0, container 645/0. Decision 180.
+  The Google service-account key is blocked by org policy (iam.disableServiceAccountKeyCreation); OAuth-user route proposed.

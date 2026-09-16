@@ -549,13 +549,31 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
                f"uVrms on the programmer's own scale ({PA.RANGE_SOURCE_FDA}); the value here is in "
                "the device's exported units, so the range is reported and not applied")
     if is_dual:
+        # Since decision 180 the pair may come from the record rather than the capture; the row
+        # says which, and a record-placed row names the value the tablet's capture would have used.
+        if getattr(tp, "placement_rule", "capture") == "record":
+            pl = getattr(tp, "placement", {}) or {}
+            cu, cl = getattr(tp, "capture_upper", None), getattr(tp, "capture_lower", None)
+            _how = (f"Placed from the record (decision 180): the participant's own median averaged "
+                    f"reading at {pl.get('averaging_s', 0):g} s ({pl.get('centre', 0):.2f} device units) "
+                    f"plus the noise-only design rule's minimum of +-{pl.get('half_separation', 0):g} "
+                    f"at the card's timing. ")
+            why_up = _how + (f"The tablet's own capture would place this at {cu:.2f} (the capture "
+                             f"mean at the LOWER amplitude, D24)." if cu is not None else
+                             "No capture pair is available for comparison.")
+            why_lo = (f"Placed from the record (decision 180): the median minus the same "
+                      f"+-{pl.get('half_separation', 0):g}. "
+                      + (f"The tablet's own capture would place this at {cl:.2f} (the capture mean "
+                         f"at the UPPER amplitude, D24)." if cl is not None else
+                         "No capture pair is available for comparison."))
+        else:
+            why_up = ("Placed at the capture mean measured at the LOWER amplitude. The naming is "
+                      "crossed on purpose (D24). Set manually in Dual mode.")
+            why_lo = "Placed at the capture mean measured at the UPPER amplitude (D24)."
         F.append(Field_("Upper LFP threshold", up, "LFP power", "derived",
-                        range_source=thr_src, programmed=_prog("upper_threshold"),
-                        why="Placed at the capture mean measured at the LOWER amplitude. The "
-                            "naming is crossed on purpose (D24). Set manually in Dual mode."))
+                        range_source=thr_src, programmed=_prog("upper_threshold"), why=why_up))
         F.append(Field_("Lower LFP threshold", lo, "LFP power", "derived",
-                        range_source=thr_src, programmed=_prog("lower_threshold"),
-                        why="Placed at the capture mean measured at the UPPER amplitude (D24)."))
+                        range_source=thr_src, programmed=_prog("lower_threshold"), why=why_lo))
     else:
         single = None
         if up is not None and lo is not None:

@@ -10,9 +10,10 @@ This is the class the PI caught twice on 2026-09-15 (decisions 172, 173) after t
 found its mirror image ("computed, stored, tested, not on the page", decision 167 §5).
 
 ## Next Step
-Nothing queued. Phase 5 done (decision 178: the margin is on; L 1-3+ reads blocked, L 0-2+ unchanged). The
-Google Sheets key is his to create (guide given 2026-09-15); open item 31 (who owns the threshold pair) is his call.
-(Phase 4 done, decision 176): the four leftovers of decision 174 fixed test-first, plus the second
+Nothing queued. Phase 6 done (decisions 179, 180): the margin is off again, the pair comes from the record. The
+Google Sheets service-account key is blocked by his organisation's policy; the OAuth-user route is the way round
+and needs his go-ahead (a small code change plus a one-time consent on his Mac).
+(Phase 5 done, decision 178; Phase 4 done, decision 176): the four leftovers of decision 174 fixed test-first, plus the second
 copy of the gate count the live proof exposed. Open item 29 closed the same night (decision 177). Still his: decision 139's threshold
 re-centring, decision 144's post-ramp switch, the Google Sheets key (decision 163), the titration session (item 30).
 
@@ -53,6 +54,14 @@ Phase 5
 - [x] `USE_POST_RAMP_MARGIN = True`; GREEN; both suites
 - [x] "After" capture; field count and difference count per band; the verdict, E1, D19 and the thresholds named
 - [x] Workers reloaded; decision-log entry; push
+- **Status:** complete
+
+### Phase 6: Reverse 144; place the thresholds from the record (the PI's ruling, 2026-09-16)
+- [x] 144 reversed test-first (default OFF; ON state under a monkeypatch); decision 179
+- [x] Placement tests RED: median, pair, refusals, apply, rows, key, adapter step, hook order, idempotence
+- [x] `threshold_placement.py`, `pipeline.run(place_thresholds=)`, midpoint-keyed design rule, rows' wording
+- [x] Live before/after on L 0-2+ and L 1-3+ at 24.5 Hz; two defects found by it and fixed (rows built before the hook; a second application)
+- [x] Both suites; workers reloaded; decision 180; open item 31 closed; push
 - **Status:** complete
 
 ## Decisions Made

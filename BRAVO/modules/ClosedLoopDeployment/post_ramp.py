@@ -9,19 +9,21 @@ goes from -3.79 device units per mA (13 points, 4 runs; interval spanning zero) 
 points, 3 runs; interval +1.17 to +33.46, so "established") -- the wrong way for the control law,
 and the D19 rule then BLOCKS the verdict where it was "unsupported" before.
 
-Two removed points flipping a verdict is his call, not the code's, so the margin shipped OFF from
-decision 144 (2026-09-12) until decision 178: on 2026-09-15 he said "do 144", and it is ON. The rule
-versions of every stored table derived from the comparison carry the state, so a table built one
-way is never served as the other; the switch is read at import, so flipping it means restarting
-the workers, after which the tables rebuild under their own keys. Decision 178 records what the
-flip did to the two bands measured that night.
+Two removed points flipping a verdict is his call, not the code's, so the margin ships OFF
+(decision 144, 2026-09-12). It was switched ON for part of the evening of 2026-09-15 (decision
+178, which records what that did: L 1-3+ went from "supported (provisional)" to blocked on a slope
+of +17.31 from 11 points) and switched back the same night on his ruling, "let the next titration
+decide, so wait on more data" (decision 179). The rule versions of every stored table derived from
+the comparison carry the state, so a table built one way is never served as the other; the switch
+is read at import, so flipping it means restarting the workers, after which the tables rebuild
+under their own keys. `margin_becomes_available` is the condition for turning it on.
 """
 try:
     from modules.StimOptimizer.routines.within_visit import RAMP_EXCLUDE_S as _RAMP_EXCLUDE_S
 except ImportError:                                   # the host suite's root
     from StimOptimizer.routines.within_visit import RAMP_EXCLUDE_S as _RAMP_EXCLUDE_S
 
-USE_POST_RAMP_MARGIN = True
+USE_POST_RAMP_MARGIN = False
 
 
 def margin_s():

@@ -1544,6 +1544,9 @@ def report_to_dict(rep):
                     "predicted_failure_mode")} | {
                 "caveats": list(rep.prescription.duty.caveats or [])},
         },
+        # Decision 180: what the record-based placement did (`_place_thresholds_from_record`, handed
+        # to `pipeline.run` as `place_thresholds`, so the ledger, the replay and the rows all read it).
+        "threshold_placement": getattr(rep, "threshold_placement", None),
         "threshold": None if rep.threshold is None else {
             "upper": _num(rep.threshold.upper), "lower": _num(rep.threshold.lower),
             "control_authority": _num(rep.threshold.control_authority),
@@ -1557,6 +1560,11 @@ def report_to_dict(rep):
             # The two D26 verdicts as warnings (gate nothing) and in structured form, with the
             # between-visit comparison they used to rest on reported beside them as a number.
             "warnings": list(getattr(rep.threshold, "warnings", []) or []),
+            "placement_rule": getattr(rep.threshold, "placement_rule", "capture"),
+            "capture_upper": _num(getattr(rep.threshold, "capture_upper", None)),
+            "capture_lower": _num(getattr(rep.threshold, "capture_lower", None)),
+            "placement_note": getattr(rep.threshold, "placement_note", ""),
+            "placement": dict(getattr(rep.threshold, "placement", {}) or {}),
             "capture_verdicts": _capture_verdicts_to_dict(
                 getattr(rep.threshold, "capture_verdicts", None)),
         },
@@ -2381,14 +2389,73 @@ def closed_loop_simulation_for_participant(participant, candidate=None, *, hemis
 # ---------------------------------------------------------------------------------------------
 def design_rule_signature(participant, *, tiles_key, contact, centre_hz, hemisphere, upper, lower):
     """The key: the tile entry and recording set (the series the model is fit on), the candidate,
-    the two stored thresholds (the noise simulation holds the level at their midpoint, so a
-    recaptured pair is a different question), and this file's own rule version."""
+    the pair's MIDPOINT (the noise simulation holds the level there and answers the separation, so
+    two pairs with one midpoint are one question -- decision 180's placement fits at the median and
+    the record pair it places has that midpoint, one fit), and this file's own rule version."""
     from . import design_rule as _dr
+    mid = (None if upper is None or lower is None
+           else round(0.5 * (float(upper) + float(lower)), 6))
     return (_dr.KIND, _dr.RULE_VERSION, str(getattr(participant, "uid", participant)), tiles_key,
             recording_set_signature(participant), str(contact), round(float(centre_hz), 3),
-            str(hemisphere),
-            None if upper is None else round(float(upper), 6),
-            None if lower is None else round(float(lower), 6))
+            str(hemisphere), mid)
+
+
+def _place_thresholds_from_record(participant, rep, cands, *, hemisphere, loaded=None, epochs=None):
+    """Decision 180: return ``(plan, placement)`` where ``plan`` is ``rep.threshold`` re-placed from
+    the record when that is possible and the capture plan (labelled) when it is not.
+
+    Steps, in order: the median averaged reading at the recommended averaging (T4's re-averaging);
+    the design rule fitted with its level at that median (T3; stored under a key that depends on the
+    midpoint, so the record pair -- whose midpoint is the median -- reuses it); the pair.
+    """
+    from . import threshold_placement as _tpl
+    from . import timing_recommendation as _tr
+    plan = getattr(rep, "threshold", None)
+    if plan is None or plan.upper is None or plan.lower is None:
+        return plan, {"available": False, "rule": "record",
+                      "reason": "no capture pair was placed, so there is nothing to re-place"}
+    c0 = (cands[0] or {}) if cands else {}
+    contact, centre = c0.get("channel"), c0.get("center_hz")
+    if contact is None or centre is None:
+        return _tpl.apply(plan, {"available": False, "reason": "the candidate carries no sensing "
+                                                                "contact or band centre"}), \
+            {"available": False, "reason": "the candidate carries no sensing contact or band centre"}
+    uid = str(getattr(participant, "uid", participant))
+    timing = _tr.for_participant(uid) or {}
+    avg_ms = (timing.get("averaging_ms") or {}).get("value_ms")
+    onset_ms = (timing.get("onset_upper_ms") or {}).get("value_ms")
+    if not avg_ms or not onset_ms:
+        pl = {"available": False, "rule": "record",
+              "reason": "no recommended averaging or onset duration is in force for this participant"}
+        return _tpl.apply(plan, pl), pl
+    inputs = simulation_inputs_for_participant(uid, contact=contact, centre_hz=float(centre),
+                                               loaded=loaded, hemisphere=hemisphere, epochs=epochs)
+    if inputs.get("absent_reason") or not len(inputs["t"]):
+        pl = {"available": False, "rule": "record",
+              "reason": inputs.get("absent_reason") or "no usable pieces for this contact"}
+        return _tpl.apply(plan, pl), pl
+    med = _tpl.median_level(inputs["t"], inputs["power"], averaging_s=float(avg_ms) / 1000.0)
+    if not med.get("available"):
+        pl = {"available": False, "rule": "record", "reason": med.get("reason"), "median": med}
+        return _tpl.apply(plan, pl), pl
+    # the design rule, fitted (or served) with its level at the median
+    import dataclasses as _dc
+    provisional = _dc.replace(plan, upper=float(med["median"]), lower=float(med["median"]))
+    dr_summary = write_design_rule(participant, candidate=c0, hemisphere=hemisphere,
+                                   threshold_plan=provisional, loaded=loaded, epochs=epochs)
+    dr_payload = design_rule_if_stored(participant, c0, hemisphere=hemisphere)
+    rows = [] if not dr_payload or dr_payload.get("refused") else (dr_payload.get("table") or [])
+    placement = _tpl.record_pair(median=med["median"], design_rows=rows,
+                                 averaging_ms=avg_ms, onset_ms=onset_ms)
+    placement["median"] = med
+    placement["design_rule"] = {"store_key": dr_summary.get("store_key"),
+                                "model": (dr_payload or {}).get("model"),
+                                "refused": bool((dr_payload or {}).get("refused")) if dr_payload else None,
+                                "reason": dr_summary.get("reason")}
+    placement["capture_upper"], placement["capture_lower"] = plan.upper, plan.lower
+    new_plan = _tpl.apply(plan, placement, observed_series=inputs["power"])
+    placement["placement_rule"] = new_plan.placement_rule
+    return new_plan, placement
 
 
 def write_design_rule(participant, *, candidate, hemisphere, threshold_plan, loaded=None,
@@ -3031,9 +3098,15 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
         _log.warning("closed-loop report: the pooled slope for E1 could not be read for %s",
                      getattr(participant, "uid", participant), exc_info=True)
         _pooled_e1 = None
+    # Decision 180: the pair is re-placed from the record INSIDE the run, right after the capture
+    # rule, so the eligibility ledger, the replay and the parameter card's rows all read it.
+    def _place(rep_, cands_):
+        return _place_thresholds_from_record(participant, rep_, cands_, hemisphere=hemisphere,
+                                             loaded=_3loaded, epochs=eps)
     rep = _pl.run(getattr(participant, "uid", participant), psd_frame=psd, epochs=eps,
                   design_matrix=dm, candidates=cands, hemisphere=hemisphere,
-                  power_scale=power_scale, device_facts=dev, pooled_e1=_pooled_e1)
+                  power_scale=power_scale, device_facts=dev, pooled_e1=_pooled_e1,
+                  place_thresholds=_place)
     out = report_to_dict(rep)
     out.update(_pre)                     # the three-source and table payloads built above
     out["device_facts"] = {k: v for k, v in dev.items() if not k.startswith("_")}

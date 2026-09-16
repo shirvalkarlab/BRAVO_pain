@@ -445,3 +445,19 @@ def test_the_design_rule_onset_grid_stops_at_the_tablets_maximum():
     assert max(DR.ONSET_GRID_S) == PA.ONSET_RANGE_DUAL_MS[1] / 1000.0 == 30.0
     assert DR.ONSET_GRID_S == (3.0, 6.0, 15.0, 30.0)
     assert DR.RULE_VERSION != "v1_kalman_est_port", "a stored table built on the old grid must not be served"
+
+
+def test_the_design_rule_key_depends_on_the_pairs_midpoint_not_on_its_separation(monkeypatch):
+    """The table is simulated with the level held at the pair's MIDPOINT (design_rule_for_series);
+    the separation is what the table answers. Keying on upper and lower separately made the
+    record-derived pair (decision 180), whose midpoint is the same median the placement step fitted
+    at, a second fit of the identical model. Two pairs with one midpoint share the key."""
+    from ClosedLoopDeployment import adapter as AD
+    monkeypatch.setattr(AD, "recording_set_signature", lambda p: ("rs", "constructed"))
+    kw = dict(tiles_key="tiles/x", contact="ZERO_TWO_LEFT", centre_hz=24.5, hemisphere="Left")
+    part = "2e3c75c00d7f4f37b53a048d195f11da"
+    a = AD.design_rule_signature(part, upper=186.12, lower=176.12, **kw)
+    b = AD.design_rule_signature(part, upper=181.12, lower=181.12, **kw)
+    c = AD.design_rule_signature(part, upper=196.13, lower=190.89, **kw)
+    assert a == b, "same midpoint, different separation: one key"
+    assert a != c, "a different midpoint is a different question"
