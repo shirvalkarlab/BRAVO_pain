@@ -1082,11 +1082,16 @@ def fit_clinic_rate_strata(participant, *, hemispheres=("Left", "Right"),
                    "variance; a nominal value of 1.0 NRS^2 was used so the fit could still run")
 
     try:
+        # TIME-BLIND ON PURPOSE (decision 195, the PI, 2026-09-17: "the clinic data doesn't need
+        # drift correction, on such a short time scale these are real clinical effects of stim").
+        # The steps are minutes apart inside a visit and the visits months apart, so a time axis
+        # (floored at a month) could act only BETWEEN visits -- and the between-visit differences
+        # in the clinic are the stimulation effects this stream exists to measure.
         s1 = S1.run_stage1(ep, hemispheres=hemispheres, primary_item="left_leg",
                           safety_ceiling_by_hemisphere=safety_ceiling_by_hemisphere,
                           pooled_var_override=pooled_var_used,
                           min_tolerated_h=CLINIC_MIN_TOLERATED_H,
-                          incumbent_epoch=ref_epoch)
+                          incumbent_epoch=ref_epoch, time_input=False)
     except Exception as exc:                                        # noqa: BLE001
         base.update(available=False, reason=f"the clinic-stream fit failed: "
                                             f"{type(exc).__name__}: {exc}")
