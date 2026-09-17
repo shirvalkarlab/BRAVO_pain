@@ -73,8 +73,14 @@ def _responding_lfp(n=120, seed=0):
     mag = np.abs(rng.normal(1.0, 0.05, (n, freqs.size)))
     sel = (freqs >= 13.0) & (freqs <= 17.0)
     mag[:, sel] *= (np.exp(-0.9 * amp)[:, None] * 3.0)
-    return GATE.LfpEvidence(amplitude_mA=amp, magnitude=mag, freqs=freqs,
-                            era=np.tile(["a", "b"], n // 2), cluster=np.arange(n))
+    ev = GATE.LfpEvidence(amplitude_mA=amp, magnitude=mag, freqs=freqs,
+                          era=np.tile(["a", "b"], n // 2), cluster=np.arange(n))
+    ev.channel = "FIXTURE"
+    return ev
+
+
+#: The pain half of the gate's one-band rule (decision 199): the fixture's bands rise with pain.
+PAIN = {"FIXTURE": set(float(c) for c in GATE.DEFAULT_BAND_CENTERS_HZ)}
 
 
 class _Arm:
@@ -328,7 +334,8 @@ def test_stage_2_policies_are_reported_when_the_gate_licenses_it():
         primary_item="left_leg", incumbent_epoch=1.0, incumbent_rate_hz=55.0,
         incumbent_pw_us=60.0, data_horizon="test", washin_min=1.0, n_epochs_total=40)
     lfp = _responding_lfp()
-    gate = GATE.evaluate_gate(cfg, lfp=lfp, amp_limits={"Left": (1.5, 3.0)})
+    gate = GATE.evaluate_gate(cfg, lfp=lfp, amp_limits={"Left": (1.5, 3.0)},
+                              pain_positive_by_channel=PAIN)
     assert gate.passed, gate.describe()
     s2 = S2.run_stage2(cfg, gate, lfp=lfp)
     assert s2.started and s2.n_valid > 0

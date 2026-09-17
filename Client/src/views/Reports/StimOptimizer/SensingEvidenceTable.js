@@ -1,8 +1,11 @@
 /**
  * The sensing evidence behind closed-loop readiness: every sensing contact and stimulation rate
- * whose band power responded to stimulation current at all, with how many bands responded, how
- * many still fall once the time confound is removed, the currents tested, the separation, and
- * whether the combination is usable -- as numbers and symbols, the reasons one click away.
+ * with anything on it, with how many bands fall with current once the time confound is removed,
+ * how many rise with pain on the Biomarkers grid, WHICH bands do both (the one-band rule of
+ * decision 199, 2026-09-17: one such band makes the combination usable), the currents tested,
+ * the capture separation, and whether the combination is usable -- as numbers and symbols, the
+ * reasons one click away. A qualifying band that sits on the stimulator's own harmonic at that
+ * rate is marked, because a fall in it with current may be the stimulator and not the brain.
  *
  * Added 2026-09-12 (page redesign, phase 3). Replaces the "Closed-loop readiness (Adaptive
  * Therapy)" table, which printed the contact pair by its raw key ("ONE_THREE_LEFT" -- the contact
@@ -31,8 +34,9 @@ import { TYPE, HEAD, SMALL, SizedFold } from "./typeScale";
 const MONO = { fontFamily: PAL.mono, fontSize: TYPE.body, color: "#1A1A1A", whiteSpace: "nowrap" };
 
 /**
- * "n of N" as a filled bar that takes its cell's width, with the 50% requirement marked; the
- * count is printed by the caller in the next cell, so no text ever sits on the bar.
+ * "n of N" as a filled bar that takes its cell's width; the count is printed by the caller in
+ * the next cell, so no text ever sits on the bar. Green from ONE band up: one is what the rule
+ * needs (decision 199), so there is no half-way mark any more.
  */
 function CountBar({ n, of }) {
   const a = num(n), b = num(of);
@@ -41,20 +45,20 @@ function CountBar({ n, of }) {
   return (
     <svg width="100%" height={14} viewBox="0 0 100 14" preserveAspectRatio="none" role="img" aria-label={`${a} of ${b}`}>
       <rect x="0" y="1" width="100" height="12" fill="#EEEEEE" />
-      <rect x="0" y="1" width={frac * 100} height="12" fill={frac >= 0.5 ? PAL.pass : PAL.neutral} />
-      <line x1="50" x2="50" y1="0" y2="14" stroke="#4A4A4A" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+      <rect x="0" y="1" width={frac * 100} height="12" fill={a >= 1 ? PAL.pass : PAL.neutral} />
     </svg>
   );
 }
+const hzList = (xs) => (Array.isArray(xs) && xs.length ? `${xs.map((v) => Number(v)).join(", ")} Hz` : "—");
 const countText = (n, of) => {
   const a = num(n), b = num(of);
   return a === null || b === null || b <= 0 ? "" : `${Math.round(a)} of ${Math.round(b)}`;
 };
 
-// contact | side | rate | bar | count | bar | count | currents | separation | usable | reason
-const COLUMNS = "108px 64px 76px minmax(110px, 1fr) 76px minmax(110px, 1fr) 76px 150px 120px 36px minmax(120px, 1.1fr)";
-const HEADERS = ["sensing contact", "stim side", "rate", "bands responding", "", "still falling, time confound removed", "",
-  "currents tested", "Separation (SD)", "", "why not"];
+// contact | side | rate | bar | count | bar | count | both (which bands) | currents | separation | usable | reason
+const COLUMNS = "108px 64px 76px minmax(90px, 1fr) 76px minmax(90px, 1fr) 76px minmax(150px, 1.2fr) 150px 120px 36px minmax(120px, 1.1fr)";
+const HEADERS = ["sensing contact", "stim side", "rate", "falls with current (time removed)", "", "rises with pain (Biomarkers grid)", "",
+  "both: the bands that qualify", "currents tested", "Separation (SD)", "", "why not"];
 
 export default function SensingEvidenceTable({ closedLoop }) {
   const cl = closedLoop || {};
@@ -71,6 +75,10 @@ export default function SensingEvidenceTable({ closedLoop }) {
       || (num(a.rate_hz) || 0) - (num(b.rate_hz) || 0);
   });
   const sel = cl.selected || null;
+  const pr = cl.pain_relationship || null;
+  const painSummary = pr && pr.by_channel
+    ? Object.entries(pr.by_channel).map(([ch, v]) => `${contactLabel(v, ch)}: ${v.n_established_positive || 0} rise${v.n_established_negative ? `, ${v.n_established_negative} fall` : ""}`).join(" · ")
+    : "";
   const nScreened = num(cl.n_cells_screened), nDeploy = num(cl.n_cells_deployable);
   const headline = nScreened
     ? `${nDeploy === null ? "—" : Math.round(nDeploy)} of ${Math.round(nScreened)} contact-and-rate combinations usable for closed loop`
@@ -104,18 +112,31 @@ export default function SensingEvidenceTable({ closedLoop }) {
             {rows.map((c, i) => {
               const usable = c.deployable === true;
               const reason = c.blocking_reasons ? String(c.blocking_reasons) : "";
+              const painKnown = c.n_pain_positive !== null && c.n_pain_positive !== undefined;
+              const onHarmonic = Array.isArray(c.qualifying_near_stim_harmonic_hz) ? c.qualifying_near_stim_harmonic_hz : [];
+              const harmonicNote = onHarmonic.length
+                ? `${hzList(onHarmonic)} on a stimulator harmonic at ${fmtHz(c.rate_hz)}: ${Object.values(c.stim_harmonic_notes || {}).join("; ")} — a fall there with current may be the stimulator, not the brain`
+                : "";
               return [
                 <span key={`${i}-a`} style={{ ...MONO, fontWeight: 600 }}>{contactLabel(c)}</span>,
                 <span key={`${i}-b`} style={MONO}>{c.hemisphere ? String(c.hemisphere)[0] : "—"}</span>,
                 <span key={`${i}-c`} style={MONO}>{fmtHz(c.rate_hz)}</span>,
                 <MDBox key={`${i}-d`} sx={{ minHeight: 26, display: "flex", alignItems: "center" }}>
-                  <CountBar n={c.n_responding} of={c.n_bands} />
-                </MDBox>,
-                <span key={`${i}-d2`} style={MONO}>{countText(c.n_responding, c.n_bands)}</span>,
-                <MDBox key={`${i}-e`} sx={{ minHeight: 26, display: "flex", alignItems: "center" }}>
                   <CountBar n={c.n_era_negative_significant} of={c.n_bands} />
                 </MDBox>,
-                <span key={`${i}-e2`} style={MONO}>{countText(c.n_era_negative_significant, c.n_bands)}</span>,
+                <span key={`${i}-d2`} style={MONO}>{countText(c.n_era_negative_significant, c.n_bands)}</span>,
+                <MDBox key={`${i}-e`} sx={{ minHeight: 26, display: "flex", alignItems: "center" }}>
+                  {painKnown ? <CountBar n={c.n_pain_positive} of={c.n_bands} /> : <span style={SMALL}>not known</span>}
+                </MDBox>,
+                <span key={`${i}-e2`} style={MONO}>{painKnown ? countText(c.n_pain_positive, c.n_bands) : ""}</span>,
+                <MDBox key={`${i}-q`} sx={{ minHeight: 26, display: "flex", alignItems: "center", gap: 0.6, flexWrap: "wrap" }}>
+                  <span style={{ ...MONO, fontWeight: num(c.n_qualifying) ? 600 : 400, whiteSpace: "normal" }}>{hzList(c.qualifying_centers_hz)}</span>
+                  {harmonicNote && (
+                    <Tooltip title={harmonicNote}>
+                      <span style={{ ...SMALL, color: PAL.warnText, whiteSpace: "nowrap" }}>on a stimulator harmonic</span>
+                    </Tooltip>
+                  )}
+                </MDBox>,
                 <span key={`${i}-f`} style={MONO}>{`${fmtMa(c.amp_low_mA).replace(" mA", "")}–${fmtMa(c.amp_high_mA)}`}</span>,
                 <span key={`${i}-g`} style={MONO}>{num(c.median_separation_d) === null ? "—" : num(c.median_separation_d).toFixed(2)}</span>,
                 <Tooltip key={`${i}-h`} title={usable ? "usable for closed loop" : "not usable for closed loop"}>
@@ -134,9 +155,20 @@ export default function SensingEvidenceTable({ closedLoop }) {
         </MDBox>
       )}
 
+      {pr && pr.available && (
+        <MDTypography variant="caption" component="div" sx={{ ...SMALL, fontSize: TYPE.body, mt: 0.8 }}>
+          {`Which bands rise with pain is read off the Biomarkers grid for the ${pr.score_label || pr.score || "pain"} score${pr.stored_utc ? `, built ${new Date(pr.stored_utc).toLocaleString()}` : ""}: a band counts when its correlation with pain is positive and the grid calls it established. ${painSummary}`}
+        </MDTypography>
+      )}
+      {pr && pr.available === false && (
+        <MDTypography variant="caption" component="div" sx={{ ...SMALL, fontSize: TYPE.body, mt: 0.8, color: PAL.warnText }}>
+          {`Which bands rise with pain is not known: ${pr.reason || "no stored Biomarkers grid"}. Without it no combination can be called usable.`}
+        </MDTypography>
+      )}
+
       <SizedFold show="What 'usable' requires, and why the current limit is flat" hide="Hide">
         <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body }}>
-          {`A combination is usable only if at least 50% of the scanned bands respond, the slope survives the time-confound adjustment, and the currents tested sit at or below the flat ${fmtMa(cl.amp_hard_limit_mA)} limit. That limit is PI-declared and was established by testing at 165 Hz; it does not vary with rate or pulse width. An earlier version of this panel applied an energy-matched ceiling that scaled as the square root of 55/f; that model has been withdrawn, because tolerable current at a given frequency is not governed by total delivered energy. A response measured only above the current we are willing to program was never usable evidence. Separation is the gap between the two measured power levels, in units of their own scatter (standard deviations).`}
+          {`A combination is usable when at least ONE band both falls with current once the time confound is removed (a significant negative slope of band power on current, with the clinic-visit blocks removed) and rises with pain on the Biomarkers grid (a positive, established correlation with the pain score) — the device's fixed control polarity: more current, less power, less pain — and the currents tested sit at or below the flat ${fmtMa(cl.amp_hard_limit_mA)} limit. One band is enough (the PI's ruling of 2026-09-17, decision 199; until then half the bands had to respond). A qualifying band that sits within 2.5 Hz of the stimulator's own harmonics at that rate (|250 − rate|, half, a quarter and three quarters of the rate) is marked, not refused. The current limit is PI-declared and was established by testing at 165 Hz; it does not vary with rate or pulse width. Separation is the gap between the two measured power levels, in units of their own scatter (standard deviations), reported for information.`}
         </MDTypography>
       </SizedFold>
     </MDBox>

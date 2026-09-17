@@ -325,7 +325,7 @@ def ground_truth_block(participant, *, tiles_key_now):
 #: adaptive-envelope override AND its name) and the figure backend. None of these changes the
 #: four tables, which come from the flat fit alone; keyed on them, two requests differing only
 #: in one of these would sweep each other's tables on every write.
-_RESPONSE_ONLY_KEY_TAIL = 9
+_RESPONSE_ONLY_KEY_TAIL = 10
 
 
 def _band_span_key_element():
@@ -353,9 +353,12 @@ def _explore_outside_key_element(rd) -> str:
 
 
 def _response_signature(uid, matched_key, tiles_key, amp_key, gt_key, request_data, sites, hemis,
-                        washin_min, backend):
+                        washin_min, backend, pain_key=None):
     """The response key: every input and every setting the fitted result depends on, and the
-    response-only settings last, so `_products_signature` can drop them."""
+    response-only settings last, so `_products_signature` can drop them. `pain_key` is the
+    pain-relationship digest (`_pain_relationship_key`, decision 199): the readiness screen and
+    the gate read the stored Biomarkers grid, so a grid that changes which bands rise with pain
+    must not be served the old screen."""
     rd = request_data or {}
     return (RESPONSE_KIND, _RULE_VERSION, _CODE_DIGEST, str(uid), matched_key, tiles_key, amp_key,
             gt_key, tuple(sites), tuple(hemis), float(washin_min),
@@ -372,6 +375,7 @@ def _response_signature(uid, matched_key, tiles_key, amp_key, gt_key, request_da
             str(rd.get(TWO_STAGE_OVERRIDE_BY_KEY) or ""),
             _explore_outside_key_element(rd),
             str(rd.get(TWO_STAGE_EXPLORE_OUTSIDE_BY_KEY) or ""),
+            pain_key,
             str(backend))
 
 
@@ -1146,7 +1150,7 @@ def _two_stage_payload(rep, *, inputs, seconds, in_force=None, clinic_block=None
 
 def two_stage_block(participant, es, *, request_data, stream, washin_min, hemispheres, sites,
                     data_horizon, inputs, in_force=None, evidence_inputs=None,
-                    safety_ceiling_by_hemisphere=None) -> dict:
+                    safety_ceiling_by_hemisphere=None, pain_positive_by_channel=None) -> dict:
     """Run the open-loop -> gate -> closed-loop path on this request's own inputs and report it.
 
     Never raises into the response: a failure here is reported under `two_stage.reason` and the
@@ -1189,7 +1193,10 @@ def two_stage_block(participant, es, *, request_data, stream, washin_min, hemisp
             # in Stage 1, as in the flat fit, and the ceiling the gate checks the limits against.
             stage1_kwargs=({"safety_ceiling_by_hemisphere": safety_ceiling_by_hemisphere}
                            if safety_ceiling_by_hemisphere else None),
-            gate_kwargs=gate_kwargs)
+            gate_kwargs=gate_kwargs,
+            # Which bands rise with pain per contact (decision 199): the screen that picks
+            # each side's cell and the gate that judges it read the same mapping.
+            pain_positive_by_channel=pain_positive_by_channel)
     except Exception as exc:                          # noqa: BLE001 -- adjunct block
         _log.exception("StimOptimizer: the two-stage path failed")
         return {"requested": True, "available": False, "backend": TWO_STAGE_BACKEND,
@@ -1303,6 +1310,10 @@ def _run_for_participant(request_data: dict) -> dict:
                   if _stream is not None else None)
     amp_block = amplitude_effect_block(participant, tiles_key_now=tiles_key)
     gt_block = ground_truth_block(participant, tiles_key_now=tiles_key)
+    # WHICH BANDS RISE WITH PAIN, per sensing contact, off the stored Biomarkers grid (decision
+    # 199): the second half of the readiness screen's and the gate's one-band rule. Read once
+    # here as this module's own consumer; its digest is in the response key.
+    _pain_by_channel, _pain_block = pain_relationship_block(uid)
     store_block = {"response_key": None, "served_from_store": False, "written": None,
                    "refusal": None, "reason": None,
                    "inputs": {"matched_table": matched_key, "tiles": tiles_key,
@@ -1327,7 +1338,8 @@ def _run_for_participant(request_data: dict) -> dict:
     else:
         sig = _response_signature(uid, matched_key, tiles_key, amp_block.get("store_key"),
                                   gt_block.get("store_key"), request_data, sites, hemis,
-                                  washin_min, backend)
+                                  washin_min, backend,
+                                  pain_key=_pain_relationship_key(_pain_by_channel, _pain_block))
         store_block["response_key"] = _cache_store.product_key(RESPONSE_KIND, uid, sig)
         try:
             served = _cache_store.load(RESPONSE_KIND, uid, sig, consumer="stim_optimizer",
@@ -1372,6 +1384,10 @@ def _run_for_participant(request_data: dict) -> dict:
             entries.append(_provenance.entry(gt_block["store_key"], kind=GROUND_TRUTH_KIND,
                                              writer="closed_loop",
                                              chain=gt_block.get("provenance") or []))
+        if _pain_block.get("store_key"):
+            entries.append(_provenance.entry(_pain_block["store_key"], kind="biomarker_band_sweep",
+                                             writer="biomarkers",
+                                             chain=_pain_block.get("provenance") or []))
         prov = _provenance.flatten(entries)
 
     # The horizon must describe the DATA SPAN, not the last epoch's start. `t0` is when the final
@@ -1447,7 +1463,9 @@ def _run_for_participant(request_data: dict) -> dict:
                                              include=bool((request_data or {})
                                                           .get("ClosedLoop", True)),
                                              inputs=_ev_inputs, screen_out=_screen_out,
-                                             ceilings=_ceilings),
+                                             ceilings=_ceilings,
+                                             pain_positive_by_channel=_pain_by_channel,
+                                             pain_block=_pain_block),
         "amplitude_effect": amp_block,
         "ground_truth": gt_block,
         "store": store_block,
@@ -1462,7 +1480,8 @@ def _run_for_participant(request_data: dict) -> dict:
             inputs={"matched_table": matched_key, "tiles": tiles_key,
                     "settings_stream": stream_key},
             in_force=in_force, evidence_inputs=_ev_inputs,
-            safety_ceiling_by_hemisphere=_ceilings)
+            safety_ceiling_by_hemisphere=_ceilings,
+            pain_positive_by_channel=_pain_by_channel)
     # THE TITRATION SESSION TO RUN NEXT (2026-09-12 evening, the PI: "make #4 a feature of next
     # stim opt recommendation combined with 30"): designed from this participant's own record,
     # attached before the write-back so the stored response carries it. Never raises.
@@ -1569,14 +1588,17 @@ def _best_contact_for_side(screen, side, rate_hz=None):
         rows = screen[screen["hemisphere"].astype(str) == str(side)]
         if rows.empty:
             return None, f"the readiness screen has no cell for {side} stimulation"
-        rows = rows.sort_values(["n_responding", "median_separation_d"], ascending=False).head(1) \
-            if "n_responding" in rows.columns else rows.head(1)
+        cols = [c for c in ("n_qualifying", "n_era_negative_significant", "n_responding",
+                            "median_separation_d") if c in rows.columns]
+        rows = rows.sort_values(cols, ascending=False).head(1) if cols else rows.head(1)
         how = ("no cell for this side passed the readiness screen; the cell on this side with the "
-               "most responding bands")
+               "most bands falling with current")
     r = rows.iloc[0]
     rec = {k: _jsonable(r.get(k)) for k in ("channel", "hemisphere", "rate_hz", "n_bands", "n_responding",
                                             "responding_fraction", "median_separation_d",
-                                            "laterality", "sensing_side", "deployable")}
+                                            "laterality", "sensing_side", "deployable",
+                                            "n_era_negative_significant", "n_pain_positive",
+                                            "n_qualifying", "qualifying_centers_hz")}
     rec.update(sensing_display(rec.get("channel")))
     if str(rec.get("laterality")) == "contralateral" and "sensing_side" in screen.columns:
         # The pick is a contact on the OTHER side (decision 143, S3): name the best contact on
@@ -1588,9 +1610,11 @@ def _best_contact_for_side(screen, side, rate_hz=None):
             at_rate = own[np.isclose(pd.to_numeric(own["rate_hz"], errors="coerce"), float(rate_hz))]
             own = at_rate if len(at_rate) else own
         if len(own):
-            cols = [c for c in ("deployable", "n_responding", "median_separation_d") if c in own.columns]
+            cols = [c for c in ("deployable", "n_qualifying", "n_era_negative_significant",
+                                "n_responding", "median_separation_d") if c in own.columns]
             o = own.sort_values(cols, ascending=False).iloc[0]
             alt = {k: _jsonable(o.get(k)) for k in ("channel", "rate_hz", "n_bands", "n_responding",
+                                                    "n_qualifying", "qualifying_centers_hz",
                                                     "deployable", "blocking_reasons")}
             alt.update(sensing_display(alt.get("channel")))
             rec["ipsilateral_alternative"] = alt
@@ -1741,8 +1765,47 @@ def titration_plan_block(participant, *, in_force, screen, ceilings, hemispheres
         return {"available": False, "reason": f"the titration plan could not be built: {exc}"}
 
 
+def pain_relationship_block(participant_uid):
+    """Which bands rise with pain on each sensing contact, off the stored Biomarkers grid
+    (decision 199). Returns ``(mapping, block)``: the mapping
+    ``routines.pain_relationship.pain_positive_centers_by_channel`` builds (or None when there
+    is no grid) and the page's block -- the summary plus the grid entry's own key and chain so
+    the response can cite it. Read as this module's own consumer ("stim_optimizer"), under the
+    default settings the daily precompute stores (the NRS score). Never raises."""
+    from .routines import pain_relationship as _pr
+    try:
+        try:
+            from modules.ClosedLoopDeployment import adapter as _cl
+        except ImportError:                                  # pragma: no cover -- host spelling
+            from ClosedLoopDeployment import adapter as _cl
+        grid = _cl.band_sweep_grid_for_closed_loop(str(participant_uid), {},
+                                                    consumer="stim_optimizer")
+    except Exception as exc:                                 # noqa: BLE001 -- adjunct input
+        _log.warning("StimOptimizer: the Biomarkers grid could not be read for the pain "
+                     "relationship (%r)", exc)
+        grid = {"available": False, "reason": f"the Biomarkers grid could not be read: {exc!r}"}
+    block = _pr.summarise(grid)
+    for ch, v in (block.get("by_channel") or {}).items():
+        v.update(sensing_display(ch))              # the page's "R 1⁻3⁺" beside the raw key
+    stamp = (grid.get("stamp") or {}) if isinstance(grid, dict) else {}
+    block["store_key"] = stamp.get("signature_key")
+    block["provenance"] = list(stamp.get("provenance") or [])
+    return _pr.pain_positive_centers_by_channel(grid), block
+
+
+def _pain_relationship_key(mapping, block):
+    """The key element for the pain relationship: the grid entry's own key when it has one, else
+    the content itself, so the response is rebuilt exactly when the qualifying bands change."""
+    if block and block.get("store_key"):
+        return ("grid", str(block["store_key"]))
+    if mapping is None:
+        return None
+    return ("content", tuple((str(ch), tuple(sorted(float(c) for c in cs)))
+                             for ch, cs in sorted(mapping.items())))
+
+
 def closed_loop_readiness(participant, es, *, include=True, inputs=None, screen_out=None,
-                          ceilings=None) -> dict:
+                          ceilings=None, pain_positive_by_channel=None, pain_block=None) -> dict:
     """Whether the sensed LFP could drive Adaptive Therapy for this participant, and if not why.
 
     This is a DIFFERENT question from the open-loop optimizer above it, and the payload keeps them
@@ -1772,7 +1835,7 @@ def closed_loop_readiness(participant, es, *, include=True, inputs=None, screen_
         # `inputs` is the (sensed frame, epochs) pair the request built once for both this
         # screen and the two-stage path; None builds it here (2026-09-12).
         le = _pl.live_evidence(participant, amp_ceiling=_obj.AMP_HARD_LIMIT_MA, bands=None,
-                               inputs=inputs)
+                               inputs=inputs, pain_positive_by_channel=pain_positive_by_channel)
         screen = le.screen if le.screen is not None else pd.DataFrame()
         if screen_out is not None:
             # The full screen frame for the titration plan (2026-09-12), which picks each side's
@@ -1782,11 +1845,34 @@ def closed_loop_readiness(participant, es, *, include=True, inputs=None, screen_
         n_deployable = 0 if screen.empty else int(screen["deployable"].sum())
         # The contact pair in the page's form on every row and on the selected cell
         # (2026-09-12): `display_short` "L 0⁻2⁺" beside the raw key, from the one formatter.
-        cells = _frame_records(
-            screen[screen["n_responding"] > 0].sort_values("n_responding", ascending=False)
-            if not screen.empty else screen, limit=20)
+        # Every cell with any half of the rule on it (decision 199): a qualifying band, a band
+        # falling with current, or a band responding on capture -- usable cells first, then by
+        # how many bands qualify, then by how many fall with current.
+        if not screen.empty:
+            keep = ((screen["n_qualifying"] > 0) | (screen["n_era_negative_significant"] > 0)
+                    | (screen["n_responding"] > 0))
+            shown = screen[keep].sort_values(
+                ["deployable", "n_qualifying", "n_era_negative_significant", "n_responding"],
+                ascending=False)
+        else:
+            shown = screen
+        cells = _frame_records(shown, limit=30)
+        from . import titration_plan as _tp
         for c in cells:
             c.update(sensing_display(c.get("channel")))
+            # Which qualifying bands sit on the stimulator's own harmonics at this cell's rate
+            # (the titration card's rule, decision 146: |250 - rate|, rate/2, rate/4, 3 rate/4,
+            # within 2.5 Hz). Information beside the row, not a condition of the rule: a band
+            # at 27.5 Hz under 55 Hz stimulation is half the rate, and a fall in it with
+            # current may be the stimulator, not the brain. His call whether it should refuse.
+            q = [float(x) for x in (c.get("qualifying_centers_hz") or [])]
+            try:
+                h = _tp.harmonic_avoidance(float(c["rate_hz"]), centres_hz=q) if q else None
+            except Exception:                              # noqa: BLE001 -- information only
+                h = None
+            c["qualifying_near_stim_harmonic_hz"] = list(h["avoid_hz"]) if h else []
+            c["qualifying_clear_of_stim_harmonics_hz"] = list(h["clear_hz"]) if h else list(q)
+            c["stim_harmonic_notes"] = dict(h["avoid_reasons"]) if h else {}
         selected = None
         if le.selected_key:
             selected = {"channel": le.selected_key[0], "hemisphere": le.selected_key[1],
@@ -1809,9 +1895,12 @@ def closed_loop_readiness(participant, es, *, include=True, inputs=None, screen_
                                         if ceilings else None),
             "adaptive_window_hz": list(_pa.ADAPTIVE_LFP_BAND_HZ),
             "min_adaptive_rate_hz": _jsonable(_pa.MIN_ADAPTIVE_RATE_HZ),
-            # Only the cells that responded at all: the full 50-row screen is mostly cells with no
+            # Only the cells with something on them: the full screen is mostly cells with no
             # response, which is not what a reader needs to see first.
             "responding_cells": cells,
+            # The pain half of the rule, per contact, with the score and stamp of the grid it
+            # was read from (decision 199).
+            "pain_relationship": _jsonable(dict(pain_block or {})),
             "audit": _frame_records(le.audit, limit=100) if le.audit is not None else [],
         }
     except Exception as e:                                    # noqa: BLE001 — adjunct panel

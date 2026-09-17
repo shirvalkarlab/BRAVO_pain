@@ -150,3 +150,9 @@
   container 664/0 (one run with the live probe beside it tripped the timing-sensitive lock test, 663/1; alone 664/0).
   Jest Biomarkers 34/34. Build main.7930421b, chunk 753.26f2d196.
 
+
+## 2026-09-17 evening (autonomous, the PI away): decision 199, the one-band rule
+- RED: `StimOptimizer/tests/test_one_band_rule.py` (14) failed on import (`pain_relationship` missing); jest `SensingEvidenceTable.oneBand.test.js` (4) failed on the old headers.
+- GREEN: host 1353 passed / 2 skipped / 0 failed; container PASS=664 FAIL=0; jest under StimOptimizer 18 passed; frontend build clean (chunk 100.e12fdafa).
+- Live RCS08 before/after (`_agent_bridge/_d199_capture.py`, `_d199_diff.py`; only the stored response bypassed): 23,715 → 24,130 fields, 868 differing (2 timing), 62 only-before, 477 only-after, 0 differences outside the readiness table, the gate's band condition, the titration pick and the key. Usable 6 → 4 (R 1-3+ @110/@55, R 0-2+ Left @55, R 0-2+ @110), all on 26.5/27.5 Hz = stimulator harmonics.
+- Workers reloaded (`kill -HUP 1`, four fresh).

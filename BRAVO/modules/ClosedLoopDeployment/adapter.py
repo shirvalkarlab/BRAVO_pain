@@ -551,10 +551,11 @@ def _build_grid_through_biomarkers(participant_uid, rd):
                                                      BandTimeSweep="1"))
 
 
-def band_sweep_grid_for_closed_loop(participant_uid, request_data=None):
+def band_sweep_grid_for_closed_loop(participant_uid, request_data=None, *, consumer="closed_loop"):
     """The calibrated grid the Biomarkers page shows under the SAME pain score and matching and
-    split settings, as `consumer="closed_loop"`, with every row's stability result translated to
-    the honest four-valued answer. Never raises.
+    split settings, as `consumer="closed_loop"` (or the `consumer` given: the Stim Optimizer reads
+    it as "stim_optimizer" for decision 199's pain-relationship half of its readiness rule), with
+    every row's stability result translated to the honest four-valued answer. Never raises.
 
     WHICH ENTRY, 2026-09-11. The store keeps up to twelve grids per participant (decision 107),
     one per score and settings combination, and this used to read the newest of them whatever it
@@ -592,7 +593,7 @@ def band_sweep_grid_for_closed_loop(participant_uid, request_data=None):
 
     def _read():
         return _cache_store.load_newest(
-            "biomarker_band_sweep", participant_uid, consumer="closed_loop",
+            "biomarker_band_sweep", participant_uid, consumer=str(consumer),
             root=_SHARED_CACHE_DIR_OVERRIDE, match=_matches)
 
     built_now = False
@@ -655,7 +656,7 @@ def band_sweep_grid_for_closed_loop(participant_uid, request_data=None):
     stored_stability = {}
     try:
         _payload, _ = _cache_store.load_newest(
-            STABILITY_GRID_KIND, participant_uid, consumer="closed_loop",
+            STABILITY_GRID_KIND, participant_uid, consumer=str(consumer),
             root=_SHARED_CACHE_DIR_OVERRIDE)
         for _flat, _value in ((_payload or {}).get("points") or {}).items():
             _ch, _, _centre = str(_flat).rpartition("|")

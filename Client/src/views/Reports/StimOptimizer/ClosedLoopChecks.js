@@ -133,8 +133,9 @@ function Numbers({ c, lfp }) {
       // tick row built from the sentences' prefixes.
       const rows = Array.isArray(ev.verdict_rows) ? ev.verdict_rows : null;
       // PER SIDE (review S3, 2026-09-12): the check is judged on each frozen side's own sensing
-      // evidence, by the readiness screen's rule (a majority of bands respond AND a majority carry
-      // a significant negative era-blocked slope, review S4). One block per side, each with its
+      // evidence, by the readiness screen's rule (decision 199: at least one band that falls with
+      // current once time is removed AND rises with pain on the Biomarkers grid). One block per
+      // side, each with its
       // own count, strip and the contact it was read on; a side with no evidence says so.
       const per = ev.per_hemisphere && typeof ev.per_hemisphere === "object" ? ev.per_hemisphere : null;
       const bySide = (lfp && lfp.selected_by_side && typeof lfp.selected_by_side === "object") ? lfp.selected_by_side : {};
@@ -152,7 +153,9 @@ function Numbers({ c, lfp }) {
                   <MDBox display="flex" alignItems="baseline" columnGap={1.5} flexWrap="wrap">
                     <span style={{ ...MONO, fontWeight: 600 }}>{h[0]}</span>
                     <span style={{ ...MONO, whiteSpace: "nowrap" }}>
-                      {b.n_tested ? `${fmtOf(b.n_passing, b.n_tested)} bands respond · ${fmtOf(b.n_era_negative_significant, b.n_tested)} fall once time is removed` : state}
+                      {b.n_tested
+                        ? `${fmtOf(b.n_era_negative_significant, b.n_tested)} fall with current once time is removed · ${b.n_pain_positive == null ? "rise with pain: not known" : `${fmtOf(b.n_pain_positive, b.n_tested)} rise with pain`} · ${fmtOf(b.n_qualifying, b.n_tested)} do both${Array.isArray(b.qualifying_centers_hz) && b.qualifying_centers_hz.length ? ` (${b.qualifying_centers_hz.map((v) => Number(v)).join(", ")} Hz)` : ""}`
+                        : state}
                     </span>
                     {b.n_tested ? <span style={NOTE}>{state}</span> : null}
                     {b.n_power_unavailable != null && num(b.n_power_unavailable) > 0 && (

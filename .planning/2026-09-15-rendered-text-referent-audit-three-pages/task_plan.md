@@ -10,7 +10,10 @@ This is the class the PI caught twice on 2026-09-15 (decisions 172, 173) after t
 found its mirror image ("computed, stored, tested, not on the page", decision 167 §5).
 
 ## Next Step
-Nothing queued. Phases 1-9 complete (decisions 174-197). Left: C3, C4, C6, C7, T2, T3 of the 2026-09-15 review (explained,
+Nothing queued. Phases 1-9 complete (decisions 174-199; 199 on 2026-09-17: the one-band rule -- falls with
+current AND rises with pain -- replaced the two majorities on the readiness screen and the gate; two things for
+the PI: L 1-3+ and the committed L 0-2+ have no established band whose power rises with pain, and every qualifying
+band on RCS08 sits on a stimulator harmonic). Left: C3, C4, C6, C7, T2, T3 of the 2026-09-15 review (explained,
 not built); pooling across pulse widths (decision 189's plan); decision 118's `max_per_rating` question; item 15's list
 (scroll-link, print stylesheet); the four zero-caller chronic-detector routines (decision 187), his call.
 Not code: the titration session (open item 30).

@@ -59,8 +59,8 @@ def test_within_visit_import_does_not_pull_in_biomarkers():
 
 def test_builder_returns_the_same_shape_build_all_does_and_screen_cells_eats_it():
     """The load-bearing interoperability claim. If the mapping shape drifts, the whole gate
-    downstream -- the majority-of-bands rule, the era-significance condition, the amplitude
-    ceiling -- silently stops applying to within-visit evidence.
+    downstream -- the one-band rule (falls with current, rises with pain; decision 199), the
+    amplitude ceiling -- silently stops applying to within-visit evidence.
     """
     S = _steps()
     tt, tp = _tiles(S)
@@ -75,7 +75,9 @@ def test_builder_returns_the_same_shape_build_all_does_and_screen_cells_eats_it(
 
     # screen_cells returns (frame, selected_key) -- the selection is part of its contract, so a
     # test that unpacked only the frame would not notice the key going missing.
-    scr, selected = EV.screen_cells(ev, response_fn=LR.assess_response)
+    # every centre on this contact is taken to rise with pain: the test is about the shape
+    scr, selected = EV.screen_cells(ev, response_fn=LR.assess_response,
+                                    pain_positive_by_channel={"ZERO_TWO_LEFT": set(map(float, CEN))})
     assert isinstance(scr, pd.DataFrame) and len(scr) == 1
     for col in ("channel", "hemisphere", "rate_hz", "n_bands", "n_responding",
                 "deployable", "blocking_reasons"):

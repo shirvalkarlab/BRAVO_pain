@@ -46,10 +46,11 @@ THE FOUR CONDITIONS
     with its reason, and it is reported as an override and never as a pass.
 
 ``adaptive_band_passes_lfp_response``
-    ON EACH FROZEN SIDE, a sensed band must exist that lies entirely inside 8-30 Hz AND responds
-    to stimulation amplitude, by the readiness screen's own rule (a majority of the tested bands
-    respond and a majority carry a significant negative era-blocked slope). Evidence from one
-    side's sensing contact licenses only that side (2026-09-12, review S3 and S4). Both halves
+    ON EACH FROZEN SIDE, a sensed band must exist that lies entirely inside 8-30 Hz AND falls
+    with stimulation current once the time confound is removed AND rises with pain on the stored
+    Biomarkers grid -- the readiness screen's own rule, one band suffices (decision 199,
+    2026-09-17; it replaced the two majority rules of review S4). Evidence from one side's
+    sensing contact licenses only that side (2026-09-12, review S3). Both halves
     are necessary and they are independent. The range is the device's:
     Adaptive Therapy can only be driven by a band inside 8-30 Hz, and the wider 1-96 Hz range is
     Sensing Only, meaning the signal can be recorded but a change in it will not change stimulation.
@@ -650,9 +651,16 @@ def evidence_for_side(lfp, hemisphere):
 def check_adaptive_band(frozen, *, lfp=None, band_centers=DEFAULT_BAND_CENTERS_HZ,
                         band_width_hz=DEFAULT_BAND_WIDTH_HZ,
                         min_sep_d=LFP.MIN_CAPTURE_SEPARATION_D,
-                        response_summary=None) -> GateCondition:
-    """Does EACH frozen side have a sensed band inside 8-30 Hz that responds to stimulation
-    amplitude?
+                        response_summary=None, pain_positive_by_channel=None,
+                        response_fn=None) -> GateCondition:
+    """Does EACH frozen side have a sensed band inside 8-30 Hz that falls with stimulation
+    current AND rises with pain (decision 199)?
+
+    ``pain_positive_by_channel`` maps each sensing channel to the band centres whose correlation
+    with pain is positive and established on the stored Biomarkers grid
+    (``routines.pain_relationship``); the side's evidence names its channel (``e.channel``). A
+    channel the mapping does not carry leaves the side NOT ASSESSED. ``response_fn`` defaults to
+    ``lfp_response.assess_response`` and is injectable for tests only.
 
     Per side since 2026-09-12 (review S3): ``lfp`` may be one ``LfpEvidence`` (attributed to the
     side its ``hemisphere`` names, or to the only frozen side when it names none) or a mapping
@@ -736,9 +744,10 @@ def check_adaptive_band(frozen, *, lfp=None, band_centers=DEFAULT_BAND_CENTERS_H
     # ONE SIDE AT A TIME (review S3, 2026-09-12). Until then the check ran once on one evidence
     # object for a configuration that freezes a setting per side, so one sensing contact's
     # response licensed closed loop on both sides. Each frozen side is now judged on its own
-    # evidence, by the SAME rule the readiness screen applies (review S4): a majority of bands
-    # must respond AND a majority must carry a significant negative era-blocked slope.
+    # evidence, by the SAME rule the readiness screen applies (decision 199): at least one band
+    # that falls with current once time is removed AND rises with pain on the Biomarkers grid.
     from . import lfp_evidence as _EV        # lazy: lfp_evidence imports this module at its top
+    assess = response_fn if response_fn is not None else LFP.assess_response
     per = {}
     for h in sides:
         e = by_side.get(h)
@@ -753,17 +762,26 @@ def check_adaptive_band(frozen, *, lfp=None, band_centers=DEFAULT_BAND_CENTERS_H
             if power is None:
                 not_assessed.append(c)
                 continue
-            r = LFP.assess_response(power, e.amplitude_mA, era=e.era, cluster=e.cluster,
-                                    mode_requires=e.mode_requires, min_sep_d=min_sep_d)
+            if response_fn is None:
+                r = assess(power, e.amplitude_mA, era=e.era, cluster=e.cluster,
+                           mode_requires=e.mode_requires, min_sep_d=min_sep_d)
+            else:
+                r = assess(power, e.amplitude_mA, era=e.era, cluster=e.cluster)
             results[float(c)] = r
             if r.responds is True:
                 passing.append(float(c))
-        rule = _EV.cell_response_verdict(list(results.values()))
+        chan = getattr(e, "channel", None)
+        pain = ((pain_positive_by_channel or {}).get(str(chan))
+                if pain_positive_by_channel and chan is not None else None)
+        rule = _EV.cell_response_verdict(results, pain_positive_centers=pain)
         block = dict(n_tested=len(results), n_passing=len(passing),
                      passing_centers=sorted(passing), n_power_unavailable=len(not_assessed),
                      n_era_negative_significant=int(rule["n_era_negative_significant"]),
                      n_era_significant=int(rule["n_era_significant"]),
-                     min_responding_fraction=float(rule["min_responding_fraction"]),
+                     n_pain_positive=rule["n_pain_positive"],
+                     n_qualifying=int(rule["n_qualifying"]),
+                     qualifying_centers_hz=list(rule["qualifying_centers_hz"]),
+                     pain_relationship_known=(rule["n_pain_positive"] is not None),
                      rule_blocking_reasons=list(rule["blocking_reasons"]),
                      verdicts={k: v.describe() for k, v in results.items()},
                      verdict_rows=[verdict_row(k, v) for k, v in sorted(results.items())],
@@ -778,13 +796,23 @@ def check_adaptive_band(frozen, *, lfp=None, band_centers=DEFAULT_BAND_CENTERS_H
             block.update(passed=None, reason=(
                 f"all {len(results)} tested bands returned NOT ASSESSED rather than a verdict: "
                 f"the data cannot answer the question. First reason given: {one.reason}"))
-        elif rule["responds"]:
-            best = min(passing, key=lambda c: -results[c].separation_d)
+        elif rule["responds"] is True:
+            q = list(rule["qualifying_centers_hz"])
+            best = min(q, key=lambda c: -results[c].separation_d)
+            rb = results[best]
             block.update(passed=True, best_center_hz=float(best), reason=(
-                f"{len(passing)} of {len(results)} tested bands respond and "
-                f"{rule['n_era_negative_significant']} of {len(results)} carry a significant "
-                f"negative era-blocked slope. Best separated: centre {best:g} Hz, width "
-                f"{float(band_width_hz):g} Hz — {results[best].describe()}"))
+                f"{len(q)} of {len(results)} tested bands both fall with current once time is "
+                f"removed and rise with pain on the Biomarkers grid "
+                f"({', '.join(f'{c:g}' for c in q)} Hz); "
+                f"{rule['n_era_negative_significant']} fall with current, "
+                f"{rule['n_pain_positive']} rise with pain. Best separated qualifying band: "
+                f"centre {best:g} Hz, width {float(band_width_hz):g} Hz, era-blocked slope "
+                f"{float(rb.slope_log_per_mA):.3g} per mA (p = {float(rb.slope_p):.3g}), capture "
+                f"separation {float(rb.separation_d):.2f} SD"
+                + (" (the two captures alone do not separate it)" if rb.responds is not True
+                   else "")))
+        elif rule["responds"] is None:
+            block.update(passed=None, reason="; ".join(rule["blocking_reasons"]))
         else:
             block.update(passed=False, reason="; ".join(rule["blocking_reasons"]))
             if passing:
@@ -799,7 +827,8 @@ def check_adaptive_band(frozen, *, lfp=None, band_centers=DEFAULT_BAND_CENTERS_H
     top = next((h for h in sides if by_side.get(h) is not None), None)
     if top is not None:
         for k in ("n_tested", "n_passing", "passing_centers", "n_power_unavailable", "verdicts",
-                  "verdict_rows", "n_era_negative_significant"):
+                  "verdict_rows", "n_era_negative_significant", "n_pain_positive",
+                  "n_qualifying", "qualifying_centers_hz"):
             ev[k] = per[top].get(k)
         if per[top].get("best_center_hz") is not None:
             ev["best_center_hz"] = per[top]["best_center_hz"]
@@ -812,9 +841,10 @@ def check_adaptive_band(frozen, *, lfp=None, band_centers=DEFAULT_BAND_CENTERS_H
         return GateCondition(
             "adaptive_band_passes_lfp_response", False,
             "the stimulation-response requirement FAILS on at least one frozen side, by the same "
-            "rule the readiness screen applies (a majority of bands must respond and a majority "
-            f"must carry a significant negative era-blocked slope): {sentence}. A band that does "
-            "not move with amplitude gives the loop no authority, however well it tracks pain.",
+            "rule the readiness screen applies (at least one band must fall with current once "
+            f"time is removed AND rise with pain on the Biomarkers grid): {sentence}. A band that "
+            "does not move with amplitude gives the loop no authority, however well it tracks "
+            "pain; a band that falls with pain is the wrong sign for the device's control law.",
             evidence=ev)
     if any(v is None for v in verdicts.values()):
         return GateCondition(
@@ -824,8 +854,9 @@ def check_adaptive_band(frozen, *, lfp=None, band_centers=DEFAULT_BAND_CENTERS_H
             "with no evidence blocks.", evidence=ev)
     return GateCondition(
         "adaptive_band_passes_lfp_response", True,
-        "every frozen side has a sensed band inside the adaptive range that responds to "
-        f"stimulation amplitude, by the readiness screen's own rule: {sentence}", evidence=ev)
+        "every frozen side has a sensed band inside the adaptive range that falls with "
+        f"stimulation current and rises with pain, by the readiness screen's own rule: {sentence}",
+        evidence=ev)
 
 
 def _ceiling_by_side(ceiling_mA, hemispheres):
@@ -964,7 +995,8 @@ def evaluate_gate(frozen, *, lfp=None, amp_limits=None, selected_bands=None,
                   band_centers=DEFAULT_BAND_CENTERS_HZ, band_width_hz=DEFAULT_BAND_WIDTH_HZ,
                   min_rate_hz=PA.MIN_ADAPTIVE_RATE_HZ, ceiling_mA=AMP_CEILING_MA,
                   min_sep_d=LFP.MIN_CAPTURE_SEPARATION_D, alpha=SELECTION_ALPHA,
-                  fdr_q=SELECTION_FDR_Q, side_effect_evidence=None) -> GateResult:
+                  fdr_q=SELECTION_FDR_Q, side_effect_evidence=None,
+                  pain_positive_by_channel=None, response_fn=None) -> GateResult:
     """Evaluate every gate condition on a frozen configuration and return all four verdicts.
 
     Evaluation deliberately does NOT short-circuit. A clinician looking at a refusal needs the whole
@@ -1011,7 +1043,9 @@ def evaluate_gate(frozen, *, lfp=None, amp_limits=None, selected_bands=None,
     conditions += [
         check_adaptive_band(frozen, lfp=lfp, band_centers=band_centers,
                             band_width_hz=band_width_hz, min_sep_d=min_sep_d,
-                            response_summary=response_summary),
+                            response_summary=response_summary,
+                            pain_positive_by_channel=pain_positive_by_channel,
+                            response_fn=response_fn),
         check_amplitude_limits(frozen, amp_limits=amp_limits, ceiling_mA=ceiling_mA,
                                side_effect_evidence=side_effect_evidence),
     ]

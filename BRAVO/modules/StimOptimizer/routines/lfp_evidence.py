@@ -1155,12 +1155,6 @@ def build_evidence(psd, epochs, *, channel, hemisphere, rate_hz, bands=None,
     return ev, aud
 
 
-#: A cell must respond on at least this fraction of scanned bands. One band of eighteen is what a
-#: null looks like when eighteen OVERLAPPING bands are tested; a majority is the weakest claim that
-#: is not simply the maximum of a correlated family.
-MIN_RESPONDING_BAND_FRACTION = 0.5
-
-
 def band_era_negative_significant(r) -> bool:
     """Does one band's era-blocked slope fall with amplitude AND clear p < 0.05?
 
@@ -1172,59 +1166,79 @@ def band_era_negative_significant(r) -> bool:
                 and np.isfinite(r.slope_log_per_mA) and r.slope_log_per_mA < 0)
 
 
-def cell_response_verdict(results, *, min_responding_fraction=MIN_RESPONDING_BAND_FRACTION,
-                          require_era_significance=True) -> dict:
-    """THE ONE RULE for "this cell's sensed signal responds to stimulation current".
+def _centre_key(c) -> float:
+    """One spelling of a band centre for set membership: 24.5 and 24.500000001 are one band."""
+    return round(float(c), 3)
 
-    Written 2026-09-12 (code review S4) so the readiness screen and the stage gate cannot
-    disagree: until then the screen required a MAJORITY of bands to respond and a majority to
-    carry a significant NEGATIVE era-blocked slope, while the gate passed a cell on ANY ONE band
-    whose captures pointed the right way, and the page drew the gate's weaker count. Both now
-    call this. ``results`` is the list of ``lfp_response.ResponseResult`` for the cell's bands.
 
-    Returns a mapping with the counts (``n_bands``, ``n_responding``, ``n_era_significant``,
-    ``n_era_negative_significant``, ``responding_fraction``), ``responds`` (True when both
-    majorities hold; False otherwise; None when there are no bands), and ``blocking_reasons`` (a
-    list of sentences, empty on a pass) in the words the screen has always used.
+def _hz_list(centres) -> str:
+    return ", ".join(f"{c:g} Hz" for c in sorted(centres))
+
+
+def cell_response_verdict(results, *, pain_positive_centers) -> dict:
+    """THE ONE RULE for "this cell's sensed signal can drive Adaptive Therapy" (decision 199,
+    2026-09-17), shared by the readiness screen and the two-stage gate so they cannot disagree.
+
+    A cell is responsive when AT LEAST ONE band both
+      (a) FALLS with stimulation current -- a significant NEGATIVE era-blocked slope
+          (:func:`band_era_negative_significant`) -- and
+      (b) RISES with pain -- its centre is in ``pain_positive_centers``, the band centres whose
+          correlation with the pain score on the stored Biomarkers grid is positive and
+          established (``routines.pain_relationship``).
+    The two signs together are the device's fixed control polarity: more current, less power,
+    less pain. The PI's ruling, verbatim: "We literally only need one actual band that meets the
+    criteria. What we need is for the band to have a positive relationship with the biomarker and
+    a negative relationship with stimulation." The two MAJORITY rules of decision 143 (half the
+    bands responding on capture, half carrying the negative slope) are gone; the capture count
+    stays on the row as information.
+
+    ``results`` maps each band centre (Hz) to its ``lfp_response.ResponseResult``.
+    ``pain_positive_centers`` is the contact's set of centres, EMPTY when the grid has the contact
+    and none qualifies, ``None`` when the grid does not know the contact at all -- in which case
+    the verdict is NOT ASSESSED (``responds`` None), never a pass: a gate that goes green on
+    absence of evidence is unsafe (decision 9).
+
+    Returns the counts (``n_bands``, ``n_responding`` on capture, ``n_era_significant``,
+    ``n_era_negative_significant``, ``n_pain_positive`` or None, ``n_qualifying``,
+    ``qualifying_centers_hz``), ``responds`` (True / False / None) and ``blocking_reasons``.
     """
-    res = list(results or [])
+    res = dict(results or {})
     n = len(res)
+    known = pain_positive_centers is not None
+    pain = {_centre_key(c) for c in (pain_positive_centers or ())}
+    base = dict(n_bands=n, n_responding=0, n_era_significant=0, n_era_negative_significant=0,
+                n_pain_positive=(len(pain) if known else None), n_qualifying=0,
+                qualifying_centers_hz=[])
     if n == 0:
-        return dict(n_bands=0, n_responding=0, n_era_significant=0,
-                    n_era_negative_significant=0, responding_fraction=float("nan"),
-                    responds=None, blocking_reasons=["no band could be tested"],
-                    min_responding_fraction=float(min_responding_fraction))
-    n_resp = sum(1 for r in res if r.responds is True)
-    n_sig = sum(1 for r in res if np.isfinite(r.slope_p) and r.slope_p < 0.05)
-    n_sig_neg = sum(1 for r in res if band_era_negative_significant(r))
+        return dict(base, responds=None, blocking_reasons=["no band could be tested"])
+    n_resp = sum(1 for r in res.values() if r.responds is True)
+    n_sig = sum(1 for r in res.values() if np.isfinite(r.slope_p) and r.slope_p < 0.05)
+    falling = sorted(_centre_key(c) for c, r in res.items() if band_era_negative_significant(r))
+    scanned = {_centre_key(c) for c in res}
+    pain_here = sorted(pain & scanned)
+    qualifying = sorted(set(falling) & pain)
+    base.update(n_responding=n_resp, n_era_significant=n_sig,
+                n_era_negative_significant=len(falling),
+                n_pain_positive=(len(pain_here) if known else None),
+                n_qualifying=len(qualifying), qualifying_centers_hz=qualifying)
+    if not known:
+        return dict(base, responds=None, blocking_reasons=[
+            "the pain relationship of this contact's bands is not known (no stored Biomarkers "
+            "grid carries this contact), so no band can be shown to rise with pain"])
     fails = []
-    if n_resp / n < min_responding_fraction:
-        fails.append(f"only {n_resp} of {n} bands respond (need "
-                     f"{min_responding_fraction:.0%}; overlapping bands make the single best "
-                     f"band the maximum of a correlated family)")
-    # A MAJORITY of bands must carry the negative adjusted slope, not merely one. This is the
-    # same argument already applied to the responding fraction: the 18 bands are 5 Hz wide on a
-    # 1 Hz grid, so they overlap heavily and move together, and a single qualifying band is the
-    # maximum of a correlated family rather than a finding. Applying the rule to the responding
-    # fraction but not to the adjusted sign was an inconsistency: on RCS08 it let
-    # ZERO_TWO_RIGHT/Left/110 Hz through on 3 of 18 negative bands with a POSITIVE median slope
-    # of +0.0409.
-    if require_era_significance and n_sig_neg / n < min_responding_fraction:
-        if n_sig == 0:
-            fails.append("no band has a significant era-blocked slope, so the contrast is not "
-                         "separable from the amplitude-versus-time confound")
-        else:
-            fails.append(
-                f"only {n_sig_neg} of {n} bands have a significant NEGATIVE era-blocked slope "
-                f"(need {min_responding_fraction:.0%}; {n_sig} are significant in either "
-                "direction). Once the amplitude-versus-time confound is removed the response "
-                "does not fall with amplitude in a majority of bands, which is what Adaptive "
-                "Therapy needs; falling arm means without a falling adjusted slope are a time "
-                "artifact")
-    return dict(n_bands=n, n_responding=n_resp, n_era_significant=n_sig,
-                n_era_negative_significant=n_sig_neg, responding_fraction=round(n_resp / n, 3),
-                responds=(not fails), blocking_reasons=fails,
-                min_responding_fraction=float(min_responding_fraction))
+    if not falling:
+        fails.append("no band falls with current once the time confound is removed (no "
+                     "significant negative era-blocked slope)"
+                     + (f"; {n_sig} of {n} are significant in the WRONG direction" if n_sig
+                        else ""))
+    if not pain_here:
+        fails.append("no band on this contact has an established positive relationship with "
+                     "pain on the Biomarkers grid (power rising with pain), which the device's "
+                     "control polarity needs")
+    if falling and pain_here and not qualifying:
+        fails.append("no band both falls with current and rises with pain: falling with "
+                     f"current at {_hz_list(falling)}; rising with pain at {_hz_list(pain_here)}")
+    return dict(base, responds=(not fails), blocking_reasons=fails)
 
 
 def _sensing_side(channel) -> str:
@@ -1259,17 +1273,14 @@ def _laterality(channel, hemisphere) -> str:
     return "ipsilateral" if side == str(hemisphere) else "contralateral"
 
 
-def screen_cells(evidence, *, response_fn,
-                 min_responding_fraction=MIN_RESPONDING_BAND_FRACTION,
-                 require_era_significance=True, amp_ceiling=None):
+def screen_cells(evidence, *, response_fn, pain_positive_by_channel=None, amp_ceiling=None):
     """Which cells carry evidence that could actually license a closed-loop deployment.
 
-    Responding is necessary and not sufficient. Two further conditions apply:
-
-    1. **A majority of scanned bands must respond**, because the bands overlap and move together,
-       so the best band of eighteen is the maximum of a correlated family rather than a finding.
-    2. **The slope must survive era blocking.** Amplitude rose over time in this record, so an
-       unblocked slope can be time rather than dose.
+    The rule is :func:`cell_response_verdict` (decision 199): at least one band that falls with
+    current once the time confound is removed AND rises with pain on the stored Biomarkers grid.
+    ``pain_positive_by_channel`` maps each sensing channel to that set of band centres
+    (``routines.pain_relationship.pain_positive_centers_by_channel``); a channel it does not
+    carry, or ``None``, leaves every cell of that channel NOT ASSESSED.
 
     ``amp_ceiling`` optionally refuses a cell whose contrast reaches above the declared hard limit
     (:data:`objective.AMP_HARD_LIMIT_MA`). Left as ``None`` no amplitude condition is applied.
@@ -1288,15 +1299,16 @@ def screen_cells(evidence, *, response_fn,
     module does not depend on the response implementation and a caller can screen against an
     alternative test.
 
-    Returns ``(screen_frame, selected_key)``. Cells are ranked by responding fraction then median
-    separation, but ONLY among survivors — a cell that fails a condition is never selected on the
-    strength of a large separation.
+    Returns ``(screen_frame, selected_key)``. Cells are ranked by the number of qualifying bands
+    then median separation, but ONLY among survivors — a cell that fails a condition is never
+    selected on the strength of a large separation.
     """
     rows = []
     for (ch, hemi, rate), ev in (evidence or {}).items():
         band_keys = list(ev.band_power.keys())
-        res = [response_fn(ev.power_for(c, w), ev.amplitude_mA, era=ev.era, cluster=ev.cluster)
-               for (c, w) in band_keys]
+        res = {float(c): response_fn(ev.power_for(c, w), ev.amplitude_mA, era=ev.era,
+                                     cluster=ev.cluster)
+               for (c, w) in band_keys}
         n = len(res) or 1
         # SIGNIFICANT *AND* POINTING THE RIGHT WAY. This counted significance alone until
         # 2026-09-02, which inverted the purpose of the era-blocking condition instead of serving
@@ -1311,42 +1323,33 @@ def screen_cells(evidence, *, response_fn,
         # be negative. Both counts are reported: n_era_significant for continuity, and
         # n_era_negative_significant, which is the one the gate uses.
         #
-        # THE RULE ITSELF is `cell_response_verdict` (review S4, 2026-09-12), shared with the
-        # gate so the two cannot disagree; the amplitude-limit condition below is the screen's
-        # own, because the gate checks amplitude limits as a separate condition.
-        v = cell_response_verdict(res, min_responding_fraction=min_responding_fraction,
-                                  require_era_significance=require_era_significance)
+        # THE RULE ITSELF is `cell_response_verdict` (decision 199), shared with the gate so the
+        # two cannot disagree; the amplitude-limit condition below is the screen's own, because
+        # the gate checks amplitude limits as a separate condition.
+        pain = (pain_positive_by_channel or {}).get(str(ch)) if pain_positive_by_channel else None
+        v = cell_response_verdict(res, pain_positive_centers=pain)
         n_resp, n_sig, n_sig_neg = v["n_responding"], v["n_era_significant"], \
             v["n_era_negative_significant"]
-        seps = [r.separation_d for r in res if np.isfinite(r.separation_d)]
+        seps = [r.separation_d for r in res.values() if np.isfinite(r.separation_d)]
         amps = tuple(sorted(set(np.round(np.asarray(ev.amplitude_mA, float), 3))))
         amp_hi = max(amps) if amps else float("nan")
 
         cap = float(amp_ceiling) if amp_ceiling is not None else float("inf")
         within_limit = bool(np.isfinite(amp_hi) and amp_hi <= cap + 1e-9)
 
-        if res:
-            fails = list(v["blocking_reasons"])
-        else:
-            # A cell with no band at all, in the words this frame has always carried for it.
-            fails = [f"only 0 of {n} bands respond (need {min_responding_fraction:.0%}; "
-                     "overlapping bands make the single best band the maximum of a correlated "
-                     "family)"]
-            if require_era_significance:
-                fails.append("no band has a significant era-blocked slope, so the contrast is "
-                             "not separable from the amplitude-versus-time confound")
+        fails = list(v["blocking_reasons"])
         if not within_limit:
-            # Kept in its historical position: after the responding-fraction sentence and
-            # before the era-slope sentence, so the joined `blocking_reasons` string reads as
-            # it always did.
-            pos = 1 if (fails and fails[0].startswith("only ") and "respond (need" in fails[0]) else 0
-            fails.insert(pos, f"high arm {amp_hi:.1f} mA exceeds the {cap:.1f} mA hard limit, "
-                              "so the response was measured outside the programmable envelope")
+            fails.insert(0, f"high arm {amp_hi:.1f} mA exceeds the {cap:.1f} mA hard limit, "
+                            "so the response was measured outside the programmable envelope")
 
         rows.append(dict(channel=ch, hemisphere=hemi, rate_hz=float(rate), n_bands=n,
                          n_responding=n_resp, responding_fraction=round(n_resp / n, 3),
                          n_era_significant=n_sig,
                          n_era_negative_significant=n_sig_neg,
+                         n_pain_positive=v["n_pain_positive"],
+                         n_qualifying=int(v["n_qualifying"]),
+                         qualifying_centers_hz=list(v["qualifying_centers_hz"]),
+                         pain_relationship_known=(v["n_pain_positive"] is not None),
                          median_separation_d=(round(float(np.median(seps)), 3) if seps
                                               else float("nan")),
                          amp_low_mA=(min(amps) if amps else float("nan")), amp_high_mA=amp_hi,
@@ -1354,7 +1357,8 @@ def screen_cells(evidence, *, response_fn,
                          laterality=_laterality(ch, hemi),
                          amp_limit_mA=(round(cap, 2) if np.isfinite(cap) else None),
                          within_amp_limit=within_limit,
-                         deployable=(not fails), blocking_reasons="; ".join(fails)))
+                         deployable=(v["responds"] is True and not fails),
+                         blocking_reasons="; ".join(fails)))
     screen = pd.DataFrame(rows)
     if screen.empty:
         return screen, None
@@ -1367,8 +1371,8 @@ def best_deployable(screen, *, hemisphere=None, rate_hz=None, channel=None):
 
     The ranking is the screen's and lives here so the gate's per-side selection (review S3,
     2026-09-12) and the screen's own selection cannot differ: IPSILATERAL cells ahead of
-    contralateral ones before considering strength of evidence, then responding fraction, then
-    median separation. A contralateral pairing (sensing on one side driving stimulation on the
+    contralateral ones before considering strength of evidence, then the number of qualifying
+    bands (falling with current AND rising with pain, decision 199), then median separation. A contralateral pairing (sensing on one side driving stimulation on the
     other) is supported by the device but only once a contralateral sensing configuration has
     been set up, so preferring it on the strength of a slightly better separation would hand back
     a configuration that needs an extra clinical step without saying so. Contralateral cells
@@ -1386,8 +1390,8 @@ def best_deployable(screen, *, hemisphere=None, rate_hz=None, channel=None):
     if ok.empty:
         return None
     ok = ok.assign(_ipsi=(ok["laterality"] == "ipsilateral").astype(int))
-    best = ok.sort_values(["_ipsi", "responding_fraction", "median_separation_d"],
-                          ascending=False).iloc[0]
+    strength = "n_qualifying" if "n_qualifying" in ok.columns else "responding_fraction"
+    best = ok.sort_values(["_ipsi", strength, "median_separation_d"], ascending=False).iloc[0]
     return (best.channel, best.hemisphere, float(best.rate_hz))
 
 

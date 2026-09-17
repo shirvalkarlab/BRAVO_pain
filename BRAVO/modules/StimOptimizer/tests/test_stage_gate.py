@@ -39,8 +39,17 @@ def _responding_lfp(n=120, low=1.0, high=3.0, suppression=0.9, band=(13.0, 17.0)
     mag = np.abs(rng.normal(1.0, 0.05, (n, freqs.size)))
     sel = (freqs >= band[0]) & (freqs <= band[1])
     mag[:, sel] *= (np.exp(-suppression * amp)[:, None] * 3.0)
-    return GATE.LfpEvidence(amplitude_mA=amp, magnitude=mag, freqs=freqs,
-                            era=np.tile(["a", "b"], n // 2), cluster=np.arange(n))
+    ev = GATE.LfpEvidence(amplitude_mA=amp, magnitude=mag, freqs=freqs,
+                          era=np.tile(["a", "b"], n // 2), cluster=np.arange(n))
+    ev.channel = "FIXTURE"
+    return ev
+
+
+#: The pain half of the gate's one-band rule (decision 199): every default band centre on the
+#: fixture's contact is taken to rise with pain, so a test about the OTHER conditions can pass
+#: the band condition on its suppressed 13-17 Hz bands. A test that omits it is asserting the
+#: band condition is NOT ASSESSED without a pain relationship.
+PAIN = {"FIXTURE": set(float(c) for c in GATE.DEFAULT_BAND_CENTERS_HZ)}
 
 
 def _flat_lfp(n=120, seed=1):
@@ -201,10 +210,10 @@ def test_missing_lfp_evidence_is_not_assessed_and_still_blocks():
 
 
 def test_a_responding_band_passes_and_reports_its_separation():
-    g = GATE.evaluate_gate(_frozen(), lfp=_responding_lfp())
+    g = GATE.evaluate_gate(_frozen(), lfp=_responding_lfp(), pain_positive_by_channel=PAIN)
     c = g.condition("adaptive_band_passes_lfp_response")
-    assert c.passed is True
-    assert c.evidence["n_passing"] >= 1
+    assert c.passed is True, c.detail
+    assert c.evidence["n_passing"] >= 1 and c.evidence["n_qualifying"] >= 1
     assert "separation" in c.detail or "separated" in c.detail
     for centre in c.evidence["passing_centers"]:
         ok, _ = PA.band_is_adaptive_capable(centre, GATE.DEFAULT_BAND_WIDTH_HZ)
@@ -371,7 +380,8 @@ def test_the_gate_can_pass_when_every_condition_is_met():
     """The gate must be capable of a yes, or a refusal carries no information."""
     cfg = S1.clinician_override(_frozen(_setting(rate_hz=130.0, amp_lo=1.0, amp_hi=4.0)),
                                 reason="not needed here but harmless")
-    g = GATE.evaluate_gate(cfg, lfp=_responding_lfp(), amp_limits={"Left": (1.5, 3.0)})
+    g = GATE.evaluate_gate(cfg, lfp=_responding_lfp(), amp_limits={"Left": (1.5, 3.0)},
+                           pain_positive_by_channel=PAIN)
     assert g.passed is True, g.describe()
     assert g.refusals() == []
     assert "MAY START" in g.describe()

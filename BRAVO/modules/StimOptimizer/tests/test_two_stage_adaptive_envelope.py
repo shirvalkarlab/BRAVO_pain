@@ -476,6 +476,14 @@ def test_the_override_is_in_the_response_key_absent_empty_and_stated_all_differ(
     assert (BS._products_signature(absent) == BS._products_signature(empty)
             == BS._products_signature(stated))
     assert "none" not in BS._products_signature(absent)
-    # 9 since review S11 (2026-09-12): the band range, the ClosedLoop flag, the two-stage flag,
-    # the override reason and its name, the explore-outside override and its name, the backend.
-    assert BS._RESPONSE_ONLY_KEY_TAIL == 9
+    # 10 since decision 199 (2026-09-17): the band range, the ClosedLoop flag, the two-stage
+    # flag, the override reason and its name, the explore-outside override and its name, the
+    # pain-relationship digest, the backend.
+    assert BS._RESPONSE_ONLY_KEY_TAIL == 10
+    # a grid whose qualifying bands change is a different response, and never a different table
+    with_pain = BS._response_signature(*args, {"TwoStage": True}, *tail,
+                                       pain_key=("grid", "k1"))
+    other_pain = BS._response_signature(*args, {"TwoStage": True}, *tail,
+                                        pain_key=("grid", "k2"))
+    assert absent != with_pain != other_pain
+    assert BS._products_signature(absent) == BS._products_signature(other_pain)

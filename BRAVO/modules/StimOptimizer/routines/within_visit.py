@@ -649,8 +649,8 @@ def build_all_within_visit(steps, *, centers_hz, tiles_by_channel,
 
     ``tiles_by_channel`` maps a channel name to ``(tile_t, tile_power)``. Returns
     ``(dict, audit_frame)`` in the same shape as :func:`lfp_evidence.build_all`, so
-    ``lfp_evidence.screen_cells`` consumes it without modification -- the majority-of-bands rule,
-    the era-significance condition and the amplitude ceiling all apply identically.
+    ``lfp_evidence.screen_cells`` consumes it without modification -- the one-band rule (falls
+    with current, rises with pain; decision 199) and the amplitude ceiling apply identically.
     """
     S = pd.DataFrame(steps)
     chans = list(channels) if channels is not None else sorted(tiles_by_channel)
@@ -677,9 +677,9 @@ def build_all_within_visit(steps, *, centers_hz, tiles_by_channel,
 # (Maris & Oostenveld 2007) lived here as `band_cluster_permutation`, with its own fast
 # cluster-robust t (`_band_t_cluster_robust`) and the run-finder `_clusters_along_axis`. It was
 # reached by nothing in the running platform and was deleted on the PI's decision of 2026-09-12
-# (review S14). The majority rule in `screen_cells` is still the one the screen applies, and its
-# limitation for a signal confined to a few adjacent bands stands as recorded in decision 124's
-# research synthesis.
+# (review S14). The majority rule `screen_cells` applied then -- whose limitation for a signal
+# confined to a few adjacent bands is recorded in decision 124's research synthesis -- was
+# replaced by the one-band rule of decision 199 (2026-09-17).
 
 
 # =================================================================================================

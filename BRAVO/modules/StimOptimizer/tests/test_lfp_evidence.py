@@ -398,8 +398,8 @@ def test_no_new_scale_constant_exists_in_either_file():
 
     assert plain_numbers(EV) == {
         "DEFAULT_NATIVE_TOLERANCE_FRACTION_OF_TILE": 0.5,   # half a tile, not a scale
-        "MIN_RESPONDING_BAND_FRACTION": 0.5,                # a majority of bands must respond
         "RECENT_ERAS_FOR_RESPONSE": 5.0}                    # how many recent eras to use
+    # (MIN_RESPONDING_BAND_FRACTION, the majority rule, went with decision 199)
     assert plain_numbers(AD) == {}
 
     # The two calibration numbers belong to the Biomarkers module and are applied there. Neither

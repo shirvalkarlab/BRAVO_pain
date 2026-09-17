@@ -278,14 +278,14 @@ function SideColumn({ side, plan }) {
         )}
       </Row>
       <Row label="record from" sub={c ? (c.ipsilateral_alternative
-        ? `${c.note}. The best contact on this side itself: ${contactLabel(c.ipsilateral_alternative)}, ${c.ipsilateral_alternative.n_responding ?? "—"} of ${c.ipsilateral_alternative.n_bands ?? "—"} bands respond${c.ipsilateral_alternative.deployable ? "" : " (did not pass the screen)"}`
+        ? `${c.note}. The best contact on this side itself: ${contactLabel(c.ipsilateral_alternative)}, ${c.ipsilateral_alternative.n_qualifying ?? "—"} of ${c.ipsilateral_alternative.n_bands ?? "—"} bands both fall with current and rise with pain${c.ipsilateral_alternative.deployable ? "" : " (did not pass the screen)"}`
         : c.note) : plan.sensing_contact_note}>
         {c ? (
           <span>
             <span style={{ ...VALUE, color: c.on_other_side ? PAL.warnText : VALUE.color }}>{contactLabel(c)}</span>
-            {num(c.n_responding) !== null && (
+            {num(c.n_qualifying) !== null && (
               <span style={{ ...SMALL, marginLeft: 8 }}>
-                {`${c.n_responding} of ${num(c.n_bands) === null ? "—" : c.n_bands} bands respond at ${fmtHz(c.rate_hz)}${c.deployable ? "" : " · did not pass the screen"}`}
+                {`${c.n_qualifying} of ${num(c.n_bands) === null ? "—" : c.n_bands} bands both fall with current and rise with pain at ${fmtHz(c.rate_hz)}${Array.isArray(c.qualifying_centers_hz) && c.qualifying_centers_hz.length ? ` (${c.qualifying_centers_hz.map((v) => Number(v)).join(", ")} Hz)` : ""}${c.deployable ? "" : " · did not pass the screen"}`}
               </span>
             )}
           </span>

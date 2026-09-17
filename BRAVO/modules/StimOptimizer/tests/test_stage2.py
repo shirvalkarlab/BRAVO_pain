@@ -45,8 +45,15 @@ def _responding_lfp(n=120, seed=0):
     mag = np.abs(rng.normal(1.0, 0.05, (n, freqs.size)))
     sel = (freqs >= 13.0) & (freqs <= 17.0)
     mag[:, sel] *= (np.exp(-0.9 * amp)[:, None] * 3.0)
-    return GATE.LfpEvidence(amplitude_mA=amp, magnitude=mag, freqs=freqs,
-                            era=np.tile(["a", "b"], n // 2), cluster=np.arange(n))
+    ev = GATE.LfpEvidence(amplitude_mA=amp, magnitude=mag, freqs=freqs,
+                          era=np.tile(["a", "b"], n // 2), cluster=np.arange(n))
+    ev.channel = "FIXTURE"
+    return ev
+
+
+#: The pain half of the gate's one-band rule (decision 199): the fixture's bands all rise with
+#: pain, so the suppressed 13-17 Hz bands qualify and the gate can pass.
+PAIN = {"FIXTURE": set(float(c) for c in GATE.DEFAULT_BAND_CENTERS_HZ)}
 
 
 @pytest.fixture
@@ -54,7 +61,8 @@ def passing_gate():
     """A configuration and gate that pass every condition, so Stage 2 actually runs."""
     cfg = _frozen(_setting(rate_hz=130.0, amp_lo=1.0, amp_hi=4.0))
     lfp = _responding_lfp()
-    g = GATE.evaluate_gate(cfg, lfp=lfp, amp_limits={"Left": (1.5, 3.0)})
+    g = GATE.evaluate_gate(cfg, lfp=lfp, amp_limits={"Left": (1.5, 3.0)},
+                           pain_positive_by_channel=PAIN)
     assert g.passed, g.describe()
     return cfg, g, lfp
 

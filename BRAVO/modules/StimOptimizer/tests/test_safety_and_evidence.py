@@ -266,6 +266,10 @@ def _fn(responds, slope_p, sep_d=1.2, slope=-0.2):
 
 
 LIMIT = 5.0
+#: The pain half of the screen's one-band rule (decision 199): every band on every fixture
+#: contact rises with pain, so these tests exercise the OTHER conditions (the amplitude limit,
+#: the era-blocked slope's sign and significance, the ranking).
+PAIN = {ch: set(float(c) for c in range(10, 28)) for ch in ("ch", "a", "b")}
 
 
 def test_a_response_measured_above_the_hard_limit_is_not_deployable_evidence():
@@ -274,7 +278,8 @@ def test_a_response_measured_above_the_hard_limit_is_not_deployable_evidence():
     flat 5 mA limit this now takes a 5.4 mA arm, where the energy model refused 4.8 mA at 165 Hz.
     """
     ev = {("ch", "Left", 165.0): _Ev([2.4, 5.4])}
-    screen, best = EV.screen_cells(ev, response_fn=_fn(True, 0.001), amp_ceiling=LIMIT)
+    screen, best = EV.screen_cells(ev, response_fn=_fn(True, 0.001), amp_ceiling=LIMIT,
+                                   pain_positive_by_channel=PAIN)
     assert best is None
     row = screen.iloc[0]
     assert row.n_responding == 18 and not row.deployable
@@ -286,7 +291,8 @@ def test_the_previously_energy_refused_cells_now_qualify():
     """The concrete consequence on RCS08: 4.8 mA at 165 Hz and 4.0 mA at 110 Hz were refused by
     the energy cap (3.35 and 3.18 mA). Under a flat 5 mA limit neither breaches."""
     ev = {("a", "Left", 165.0): _Ev([1.6, 4.8]), ("b", "Left", 110.0): _Ev([1.0, 4.0])}
-    screen, best = EV.screen_cells(ev, response_fn=_fn(True, 0.001), amp_ceiling=LIMIT)
+    screen, best = EV.screen_cells(ev, response_fn=_fn(True, 0.001), amp_ceiling=LIMIT,
+                                   pain_positive_by_channel=PAIN)
     assert screen.within_amp_limit.all() and screen.deployable.all()
     assert best is not None
 
@@ -299,31 +305,37 @@ def test_screen_cells_refuses_the_retracted_parameters():
 
 def test_an_in_budget_responding_cell_is_deployable_and_selected():
     ev = {("ch", "Left", 55.0): _Ev([1.6, 4.0])}
-    screen, best = EV.screen_cells(ev, response_fn=_fn(True, 0.001), amp_ceiling=LIMIT)
+    screen, best = EV.screen_cells(ev, response_fn=_fn(True, 0.001), amp_ceiling=LIMIT,
+                                   pain_positive_by_channel=PAIN)
     assert best == ("ch", "Left", 55.0)
     assert screen.iloc[0].deployable and screen.iloc[0].within_amp_limit
 
 
 def test_a_cell_whose_slope_dies_under_era_blocking_is_refused():
     ev = {("ch", "Left", 55.0): _Ev([1.6, 4.0])}
-    screen, best = EV.screen_cells(ev, response_fn=_fn(True, 0.40), amp_ceiling=LIMIT)
+    screen, best = EV.screen_cells(ev, response_fn=_fn(True, 0.40), amp_ceiling=LIMIT,
+                                   pain_positive_by_channel=PAIN)
     assert best is None
     assert "era-blocked slope" in screen.iloc[0].blocking_reasons
 
 
-def test_one_lucky_band_of_eighteen_is_not_a_finding():
-    """Overlapping bands move together, so the best of a correlated family is not evidence."""
+def test_one_band_falling_with_current_and_rising_with_pain_IS_a_finding():
+    """Decision 199 reversed the 'one lucky band of eighteen' rule of 2026-09-02/12: the PI,
+    "we literally only need one actual band that meets the criteria". The capture count is
+    information now, not a condition."""
     ev = {("ch", "Left", 55.0): _Ev([1.6, 4.0])}
     calls = {"n": 0}
 
     def one_only(power, amp, era=None, cluster=None):
         calls["n"] += 1
-        return _Res(calls["n"] == 1, 0.001, 1.2)
+        first = calls["n"] == 1
+        return _Res(first, 0.001 if first else 0.5, 1.2, -0.2)
 
-    screen, best = EV.screen_cells(ev, response_fn=one_only, amp_ceiling=LIMIT)
-    assert best is None
-    assert screen.iloc[0].n_responding == 1
-    assert "correlated family" in screen.iloc[0].blocking_reasons
+    screen, best = EV.screen_cells(ev, response_fn=one_only, amp_ceiling=LIMIT,
+                                   pain_positive_by_channel=PAIN)
+    assert best == ("ch", "Left", 55.0)
+    assert screen.iloc[0].n_responding == 1 and screen.iloc[0].n_qualifying == 1
+    assert "correlated family" not in screen.iloc[0].blocking_reasons
 
 
 def test_a_failing_cell_is_never_selected_on_the_strength_of_its_separation():
@@ -331,7 +343,8 @@ def test_a_failing_cell_is_never_selected_on_the_strength_of_its_separation():
           ("ch", "Left", 55.0): _Ev([1.6, 4.0])}           # modest, within the limit
     def by_rate(power, amp, era=None, cluster=None):
         return _Res(True, 0.001, 9.9 if len(amp) and max(amp) > 5.0 else 0.6)
-    screen, best = EV.screen_cells(ev, response_fn=by_rate, amp_ceiling=LIMIT)
+    screen, best = EV.screen_cells(ev, response_fn=by_rate, amp_ceiling=LIMIT,
+                                   pain_positive_by_channel=PAIN)
     assert best == ("ch", "Left", 55.0)
 
 
@@ -367,29 +380,33 @@ def test_a_significant_but_POSITIVE_adjusted_slope_is_refused():
     """
     ev = {("ch", "Left", 55.0): _Ev([1.6, 4.0])}
     screen, best = EV.screen_cells(
-        ev, response_fn=_fn(True, 0.001, slope=+0.44), amp_ceiling=LIMIT)
+        ev, response_fn=_fn(True, 0.001, slope=+0.44), amp_ceiling=LIMIT,
+        pain_positive_by_channel=PAIN)
     row = screen.iloc[0]
     assert row.n_responding == 18 and row.n_era_significant == 18
     assert row.n_era_negative_significant == 0
     assert not row.deployable and best is None
-    assert "NEGATIVE era-blocked slope" in row.blocking_reasons
-    assert "time artifact" in row.blocking_reasons
+    assert "negative era-blocked slope" in row.blocking_reasons
+    assert "18 of 18 are significant in the WRONG direction" in row.blocking_reasons
 
 
-def test_a_negative_adjusted_slope_in_a_majority_is_required_not_one_lucky_band():
-    """The correlated-family argument applies to the SIGN as well as to the responding fraction.
-    Applying it to one and not the other let a cell through on 3 of 18 negative bands with a
-    positive median slope."""
+def test_three_negative_bands_of_eighteen_pass_when_they_rise_with_pain():
+    """Decision 143 refused this cell (3 of 18 negative, positive median slope) on the
+    correlated-family argument; decision 199 passes it, because the three bands that fall with
+    current also rise with pain, and one such band is what the PI asked for. The other fifteen
+    are reported, not counted against it."""
     def mostly_positive(power, amp, era=None, cluster=None):
         mostly_positive.i += 1
         neg = mostly_positive.i <= 3            # only 3 of 18 bands negative
         return _Res(True, 0.001, 0.9, slope=(-0.2 if neg else +0.2))
     mostly_positive.i = 0
     ev = {("ch", "Left", 110.0): _Ev([2.5, 4.0])}
-    screen, best = EV.screen_cells(ev, response_fn=mostly_positive, amp_ceiling=LIMIT)
+    screen, best = EV.screen_cells(ev, response_fn=mostly_positive, amp_ceiling=LIMIT,
+                                   pain_positive_by_channel=PAIN)
     row = screen.iloc[0]
     assert row.n_era_negative_significant == 3 and row.n_bands == 18
-    assert not row.deployable and best is None
+    assert row.n_qualifying == 3 and list(row.qualifying_centers_hz) == [10.0, 11.0, 12.0]
+    assert row.deployable and best == ("ch", "Left", 110.0)
 
 
 # --- closed-loop timing: the ramp is a knob, the averaging window must match the biomarker -------

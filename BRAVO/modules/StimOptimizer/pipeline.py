@@ -390,7 +390,8 @@ class LiveEvidence:
 
 def live_evidence(participant, *, amp_ceiling=None,
                   channel=None, hemisphere=None, rate_hz=None, bands=None,
-                  force_refresh=None, inputs=None, **build_kwargs) -> LiveEvidence:
+                  force_refresh=None, inputs=None, pain_positive_by_channel=None,
+                  **build_kwargs) -> LiveEvidence:
     """Build, screen and select LFP evidence for a participant from platform data.
 
     This is the seam that lets the gate be evaluated against real recordings instead of against
@@ -400,7 +401,10 @@ def live_evidence(participant, *, amp_ceiling=None,
     the screen, so a caller pinning a cell can see whether it would have survived screening.
 
     ``amp_ceiling`` optionally refuses a cell whose amplitude contrast reaches above the declared
-    hard limit; see :func:`routines.lfp_evidence.screen_cells`.
+    hard limit; see :func:`routines.lfp_evidence.screen_cells`. ``pain_positive_by_channel`` is
+    the per-contact set of band centres that rise with pain on the stored Biomarkers grid
+    (``routines.pain_relationship``), the second half of the screen's rule (decision 199); left
+    ``None``, every cell is NOT ASSESSED rather than passed.
 
     RETRACTION, 2026-09-02: this took ``energy_budget`` and ``pw_lookup`` to apply an energy-matched
     amplitude ceiling. That model is withdrawn — the limit is a flat 5 mA, not a per-rate energy
@@ -418,7 +422,8 @@ def live_evidence(participant, *, amp_ceiling=None,
         hemispheres=((hemisphere,) if hemisphere is not None else ("Left", "Right")),
         bands=bands, inputs=inputs, **build_kwargs)
 
-    screen, best = EV.screen_cells(ev, response_fn=LR.assess_response, amp_ceiling=amp_ceiling)
+    screen, best = EV.screen_cells(ev, response_fn=LR.assess_response, amp_ceiling=amp_ceiling,
+                                   pain_positive_by_channel=pain_positive_by_channel)
     if hemisphere is not None and rate_hz is not None:
         sel, note = EV.select_for(ev, rate_hz=rate_hz, hemisphere=hemisphere, channel=channel)
         key = None if sel is None else next(
@@ -647,7 +652,7 @@ def _render(ctx, label, outdir, backend, dpi):
 def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemisphere=None,
                        rate_hz=None, bands=None, force_refresh=None, request_data=None,
                        washin_min=1.0, design=None, stream=None, evidence_inputs=None,
-                       **two_stage_kwargs) -> TwoStageReport:
+                       pain_positive_by_channel=None, **two_stage_kwargs) -> TwoStageReport:
     """Run the staged pipeline on a PARTICIPANT, with the LFP evidence built from real recordings.
 
     WHY THIS EXISTS. The handoff carried "STILL NOT BUILT: Stage 2 does not yet CALL lfp_evidence on
@@ -677,11 +682,17 @@ def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemispher
     audit frames onto the manifest whether or not a cell was selected, which is the same reason
     ``LiveEvidence`` keeps those frames in its result rather than treating them as debug output.
 
+    ``pain_positive_by_channel`` (decision 199) is handed to both the screen that picks each
+    side's cell and the gate that judges it, so the two apply one rule.
+
     Returns the ordinary :class:`TwoStageReport`. A gate refusal is a legitimate terminal answer and
     on this project's current data it is the expected one.
     """
     from . import adapter as _AD
 
+    gk = dict(two_stage_kwargs.pop("gate_kwargs", None) or {})
+    gk.setdefault("pain_positive_by_channel", pain_positive_by_channel)
+    two_stage_kwargs["gate_kwargs"] = gk
     if design is None:
         design = _AD.build_design_matrix(participant, request_data, washin_min=washin_min,
                                          stream=stream)
@@ -733,7 +744,8 @@ def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemispher
             by_rate[r] = live_evidence(participant, amp_ceiling=amp_ceiling, channel=channel,
                                        hemisphere=None, rate_hz=r, bands=bands,
                                        force_refresh=force_refresh, stream=stream,
-                                       inputs=evidence_inputs)
+                                       inputs=evidence_inputs,
+                                       pain_positive_by_channel=pain_positive_by_channel)
         per, chosen = {}, {}
         for h in sides:
             sel, key, note = select_for_side(by_rate[pins[h]], h, pins[h], channel=channel)

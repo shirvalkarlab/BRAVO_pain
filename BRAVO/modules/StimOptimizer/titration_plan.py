@@ -568,6 +568,8 @@ def side_plan(side, *, rate_in_force_hz, rate_source, pulse_width_us, pulse_widt
                                                       "display_contacts", "n_responding", "n_bands",
                                                       "laterality", "deployable", "rate_hz",
                                                       "responding_fraction", "median_separation_d",
+                                                      "n_era_negative_significant", "n_pain_positive",
+                                                      "n_qualifying", "qualifying_centers_hz",
                                                       "ipsilateral_alternative")}
         lat = str(contact.get("laterality") or "")
         sensing_side = str(contact.get("sensing_side") or "")
@@ -579,7 +581,7 @@ def side_plan(side, *, rate_in_force_hz, rate_source, pulse_width_us, pulse_widt
             else f"the contact the readiness screen ranks best for {side} stimulation"
                  + ("" if contact.get("deployable") else
                     " (no contact on this side passed the screen; this is the one with the most "
-                    "responding bands)"))
+                    "bands falling with current)"))
     yield_block = {
         "settled_points_from_session": n_points,
         "distinct_currents_up_leg": n_up,
