@@ -196,10 +196,10 @@ describe("cross-setting stability on the grid (B3, decision 185)", () => {
 });
 
 describe("clinic-sheet ratings on the heat maps (B5, decision 186)", () => {
-  test("off: one bullet says the heat maps pool at-home ratings only", () => {
+  test("off: one bullet says the heat maps pool the chronic REDCap ratings only", () => {
     const b = clinicSheetBullets({ ...SW, clinic_sheet_ratings: { included: false, n_added: 0 } });
     expect(b).toHaveLength(1);
-    expect(b[0]).toMatch(/at-home REDCap ratings only/);
+    expect(b[0]).toMatch(/chronic REDCap ratings only/);
     expect(b[0]).toMatch(/switch/i);
   });
   test("on: the bullet counts the sheet ratings this contact pair uses and says the scale", () => {
@@ -207,7 +207,7 @@ describe("clinic-sheet ratings on the heat maps (B5, decision 186)", () => {
                  n_pain_reports_from_clinic_sheet: 83, n_pain_reports: 222 };
     const b = clinicSheetBullets(sw);
     expect(b[0]).toMatch(/83 of the 222/);
-    expect(b[0]).toMatch(/clinic or at-home testing sheets/);
+    expect(b[0]).toMatch(/clinic titration sessions/);
     expect(b[0]).toMatch(/times 10/);
     b.forEach((line) => expect(line.split(" ").length).toBeLessThanOrEqual(30));
   });

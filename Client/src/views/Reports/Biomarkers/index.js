@@ -799,8 +799,8 @@ function Biomarkers() {
                                     onChange={(e, v) => { if (v) setIncludeClinicSheetRatings(v === "include"); }}
                                     sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontSize: 12, py: 0.3, px: 1 } }}
                                   >
-                                    <ToggleButton value="exclude" title="The heat maps pool at-home REDCap ratings only">At-home only</ToggleButton>
-                                    <ToggleButton value="include" title="Also pool the clinic and at-home testing sheets' scores (0–10 verbal; times ten for the VAS scores). Those were taken while current was being stepped on purpose, one a minute inside a session, so treat the larger count with care">Add sheet scores</ToggleButton>
+                                    <ToggleButton value="exclude" title="The heat maps pool the chronic REDCap ratings only">Chronic REDCap only</ToggleButton>
+                                    <ToggleButton value="include" title="Also pool the clinic and at-home testing sheets' scores (0–10 verbal; times ten for the VAS scores). Those were taken while current was being stepped on purpose, one a minute inside a session, so treat the larger count with care">+ clinic titration sessions</ToggleButton>
                                   </ToggleButtonGroup>
                                 </MDBox>
                                 <MDTypography variant="caption" color="dark" fontStyle="italic"

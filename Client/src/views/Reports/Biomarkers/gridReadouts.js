@@ -210,7 +210,7 @@ export function clinicSheetBullets(sw) {
   const cs = sw && sw.clinic_sheet_ratings;
   if (!cs) return [];
   if (!cs.included) {
-    return ["The heat maps use at-home REDCap ratings only; the clinic and at-home testing sheets' scores are off (a switch on the matching card)."];
+    return ["The heat maps use the chronic REDCap ratings only; the clinic titration sessions' scores are off (a switch on the matching card)."];
   }
   if (!cs.n_added) {
     return [cs.reason ? `Sheet scores on, but ${cs.reason}.` : "Sheet scores on, but none carried this score."];
@@ -219,6 +219,6 @@ export function clinicSheetBullets(sw) {
   const tot = sw.n_pain_reports;
   const scale = Number(cs.scale) === 1 ? "as scored (0–10)" : `times ${Number(cs.scale)}`;
   const head = (n != null && tot != null) ? `${n} of the ${tot} ratings here` : `${cs.n_added} ratings`;
-  return [`${head} are clinic or at-home testing sheets' scores, ${scale}, taken while current was being stepped.`];
+  return [`${head} are the clinic titration sessions' scores, ${scale}, taken while current was being stepped.`];
 }
 
