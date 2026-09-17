@@ -768,6 +768,17 @@ CLINIC_MIN_TOLERATED_H = 0.001
 _SETTING_NDIGITS = 2
 
 
+def _rating_days(t_utc) -> tuple:
+    """The distinct California calendar days (ISO strings, sorted) the instants fall on --
+    decision 142's day rule, through the Biomarkers helper."""
+    try:
+        from modules.Biomarkers.routines.local_time import local_calendar_day
+    except ImportError:                                        # pragma: no cover - host spelling
+        from Biomarkers.routines.local_time import local_calendar_day
+    days = local_calendar_day(pd.Series(pd.to_datetime(t_utc, utc=True, errors="coerce")))
+    return tuple(sorted({d.isoformat() for d in days if d is not None and not pd.isna(d)}))
+
+
 def epoch_frame_from_steps(steps: pd.DataFrame, *, primary_item="left_leg") -> pd.DataFrame:
     """One row per DISTINCT (rate, amp-Left, amp-Right, pw-Left, pw-Right) setting actually
     observed in the clinic stream -- "each sheet step is one epoch" in the sense that this frame
@@ -818,7 +829,10 @@ def epoch_frame_from_steps(steps: pd.DataFrame, *, primary_item="left_leg") -> p
                    setting=("mixed" if sub["setting"].nunique() > 1 else sub["setting"].iloc[0]),
                    n_visits=int(sub["visit_date"].nunique()),
                    n_clinic=int((sub["setting"] == "clinic").sum()),
-                   n_home=int((sub["setting"] == "home").sum()))
+                   n_home=int((sub["setting"] == "home").sum()),
+                   # decision 184: the California days this setting's scores were filed on
+                   rating_days=_rating_days(sub["t_utc"]))
+        row["n_rating_days"] = len(row["rating_days"])
         for site, col in item_col.items():
             vals = sub[site].dropna().astype(float)
             row[col] = float(vals.mean()) if len(vals) else float("nan")

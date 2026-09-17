@@ -67,7 +67,37 @@ export function bestCellReadout(sw, kind, colIndex, rowIndex, { includeN = true 
   }
   parts.push(`corrected q = ${fmtQ(best.family_wise_q_8_to_30hz)}`);
   parts.push(String(best.answer || "").replace(/_/g, " ") || "not resolved");
+  // B3 (decision 185): the cross-setting stability answer, the same words the Closed-Loop card's
+  // "Choose a band" column prints, read off the row the backend attached it to. A row with no
+  // answer field at all (an older stored response) leaves the line as it was.
+  const stab = best.cross_setting_stability;
+  if (stab && stab.answer) parts.push(`across settings: ${stabilityAnswerWord(stab)}`);
   return { isBest: true, text: parts.join(" · ") };
+}
+
+/** The answer word for the hover: the backend's own word, except that "not tested" for the
+ *  reason that the background run has not landed yet reads "not yet computed" -- the reader's
+ *  question is "will this fill in", and it will. */
+export function stabilityAnswerWord(stab) {
+  if (!stab || !stab.answer) return "";
+  if (stab.answer === "not tested" && /not been computed/.test(String(stab.reason || ""))) return "not yet computed";
+  return stab.answer;
+}
+
+/** The symbol drawn on a column's best cell for its cross-setting stability answer -- the
+ *  Closed-Loop card's own three (tick / cross / amber disc), null for "not tested" so nothing is
+ *  drawn where nothing is known. Plotly marker symbols: a filled circle stands in for the tick. */
+export function stabilityMark(stab) {
+  const answer = stab && stab.answer;
+  if (answer === "behaves the same") return { symbol: "circle", color: "#2e7d32", label: "behaves the same at every setting" };
+  if (answer === "behaves differently") return { symbol: "x", color: "#c62828", label: "behaves differently across settings" };
+  if (answer === "cannot tell") return { symbol: "diamond", color: "#e0a100", label: "cannot tell" };
+  return null;
+}
+
+/** One caption bullet for the symbols, under 24 words like the tier bullets. */
+export function stabilityBullet() {
+  return "Inside a circle: green tick, the band tracks pain the same at every stimulation setting; red cross, differently; amber, cannot tell.";
 }
 
 /** rows x columns of readout strings, in the heat map's own orientation, for `customdata`. */

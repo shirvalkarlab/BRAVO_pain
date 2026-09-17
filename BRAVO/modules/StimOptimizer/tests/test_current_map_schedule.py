@@ -143,8 +143,8 @@ def test_with_no_anchor_every_point_appears_exactly_once():
 # what_this_buys
 # ---------------------------------------------------------------------------------------------
 def test_what_this_buys_reports_whether_the_completed_schedule_would_clear_coverage():
-    steps = [dict(amp_left_mA=l, amp_right_mA=r) for l in (0.0, 1.0, 2.5, 4.0)
-            for r in (0.0, 1.0, 2.5, 4.0)]
+    steps = [dict(amp_left_mA=l, amp_right_mA=r, planned_days=5) for l in (0.0, 1.0, 2.5, 4.0)
+            for r in (0.0, 1.0, 2.5, 4.0)]                      # decision 184: days, not only reports
     wtb = CMS.what_this_buys(None, steps, target_reports=5)
     assert wtb["resolution_coverage_would_pass"] is True
     assert wtb["coverage_after_schedule"]["n_pairs"] == 16

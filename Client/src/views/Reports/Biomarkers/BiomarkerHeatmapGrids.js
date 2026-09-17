@@ -56,7 +56,7 @@ import { biomarkerHeatmapSlot, prefetchBiomarkerHeatmapMetric } from "views/Repo
 import PAL from "views/Reports/ClosedLoopSim/palette";
 import { BIN_HI, BIN_LO, BIN_HI_RGB, BIN_LO_RGB, divergingRgb, diverging } from "./binarizationModel";
 import { contactSortKey } from "./contactOrder";
-import { bestCellReadout, hoverCustomData, tierBullets, deviceSpectrumBullets } from "./gridReadouts";
+import { bestCellReadout, hoverCustomData, tierBullets, deviceSpectrumBullets, stabilityMark, stabilityBullet } from "./gridReadouts";
 
 const num = (v, d = 3) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 
@@ -277,7 +277,7 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
   // Trace 2 (the cross-highlight) is ALWAYS present, even with empty x/y when nothing is active,
   // so its index never shifts -- the second effect below can restyle it directly by index without
   // touching trace 0 (the heatmap) or trace 1 (the best-cell markers).
-  const HIGHLIGHT_TRACE = 2;
+  const HIGHLIGHT_TRACE = 3;   // heatmap 0, best-cell circles 1, stability symbols 2 (decision 185)
 
   useEffect(() => {
     if (!rows || !cols) return undefined;
@@ -310,6 +310,22 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
     fig.traces.push({
       type: "scatter", mode: "markers", x: bestX, y: bestY, showlegend: false,
       marker: { symbol: "circle-open", size: 14, color: "#FFFFFF", line: { width: bestW, color: "#FFFFFF" } },
+      hoverinfo: "skip",
+    });
+    // B3 (decision 185): inside each column's circle, the cross-setting stability answer -- the
+    // Closed-Loop card's own symbol (green tick, red cross, amber disc), nothing where the answer
+    // is not known yet. Read off the best row's `cross_setting_stability`, which the backend
+    // attaches from the store at request time. Trace index STABILITY_TRACE, before the highlight.
+    const stX = [], stY = [], stSym = [], stCol = [];
+    Object.keys(bestByCol).forEach((c) => {
+      const b = bestByCol[c];
+      const m = b && b.row_data ? stabilityMark(b.row_data.cross_setting_stability) : null;
+      if (!m) return;
+      stX.push(centers[Number(c)]); stY.push(yLabels[b.row]); stSym.push(m.symbol); stCol.push(m.color);
+    });
+    fig.traces.push({
+      type: "scatter", mode: "markers", x: stX, y: stY, showlegend: false,
+      marker: { symbol: stSym, size: 7, color: stCol, line: { width: 1.5, color: stCol } },
       hoverinfo: "skip",
     });
     // The shared cross-highlight, trace index HIGHLIGHT_TRACE -- always pushed, empty until the
@@ -602,6 +618,15 @@ function DeviceSpectrumCaption({ sw }) {
  * the one home), as bullets. */
 function DeviceTierCaption({ ranges, sw }) {
   return <CaptionBullets items={tierBullets(ranges, (sw && sw.integration_seconds_delivered) || [])} />;
+}
+
+/** The symbols inside the circles (decision 185): one bullet, shown only once a stored stability
+ * answer has reached at least one row -- a legend for symbols that are not drawn is noise. */
+function StabilityCaption({ sw }) {
+  const rows = (sw && sw.best_correlation_rows) || [];
+  const any = rows.some((r) => stabilityMark(r.cross_setting_stability));
+  if (!any) return null;
+  return <CaptionBullets items={[stabilityBullet()]} />;
 }
 
 function PanelTitle({ pinnedCell, channelLabel }) {
@@ -1108,6 +1133,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
                 </MDTypography>
                 <DeviceSpectrumCaption sw={corrSw} />
                 <DeviceTierCaption ranges={deviceRanges} sw={corrSw} />
+                <StabilityCaption sw={corrSw} />
               </Grid>
               {/* The pinned cell's title and its two statistics lines sit at the BOTTOM of this
                   cell, visually just above the scatter plot (the PI, 2026-09-15: they "sat way too

@@ -428,6 +428,8 @@ def test_current_coverage_needs_enough_pairs_and_enough_span():
         "amp_mA_Left": [0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 4.0, 4.0],
         "amp_mA_Right": [0.0, 4.0, 1.0, 3.0, 0.0, 4.0, 0.0, 4.0],
         "n": [8, 8, 8, 8, 8, 8, 8, 8],
+        # decision 184: a pair also needs its ratings on at least two calendar days
+        "rating_days": [("2026-01-01", "2026-01-02")] * 8,
     })
     cov = S1.current_coverage(good)
     assert cov["n_pairs"] == 8
@@ -448,6 +450,7 @@ def test_current_coverage_needs_enough_pairs_and_enough_span():
         "amp_mA_Left": [1.0, 1.1, 1.2, 1.3, 1.4, 1.5],
         "amp_mA_Right": [1.0, 1.1, 1.2, 1.3, 1.4, 1.5],
         "n": [8, 8, 8, 8, 8, 8],           # 6 pairs, enough reports, but span < 1.0 mA
+        "rating_days": [("2026-01-01", "2026-01-02")] * 6,
     })
     cov3 = S1.current_coverage(clustered)
     assert cov3["n_pairs"] == 6
@@ -569,6 +572,9 @@ def _current_effect_matrix(*, slope_per_mA=0.0, noise_sd=0.3, n_per_cell=15, see
                              left_leg_vas_sd=1.0))
     d = pd.DataFrame(rows)
     d["t0"] = pd.date_range("2025-07-01", periods=len(d), freq="6h", tz="UTC")
+    # decision 184: an epoch's ratings fall on its own day; a cell's repetitions are 150 h apart,
+    # so every current pair is rated on `n_reps` distinct days
+    d["rating_days"] = [(t.strftime("%Y-%m-%d"),) for t in d["t0"]]
     return d
 
 

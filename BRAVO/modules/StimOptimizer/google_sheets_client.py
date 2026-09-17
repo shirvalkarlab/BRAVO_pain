@@ -171,6 +171,30 @@ class GoogleClient:
     def file_url(self, file_id):
         return f"https://docs.google.com/spreadsheets/d/{file_id}/edit"
 
+    # --- reads for the clinic-sheet sync (decision 182) -------------------------------------
+    def list_folder(self, folder_id_):
+        """Every non-trashed file directly inside `folder_id_`: id, name, mimeType, modifiedTime."""
+        out, token = [], None
+        while True:
+            resp = self._drive.files().list(
+                q=f"'{folder_id_}' in parents and trashed = false",
+                fields="nextPageToken,files(id,name,mimeType,modifiedTime)", pageSize=200,
+                pageToken=token).execute()
+            out.extend(resp.get("files") or [])
+            token = resp.get("nextPageToken")
+            if not token:
+                return out
+
+    def export_xlsx(self, file_id):
+        """A Google Sheet, exported as an .xlsx workbook (bytes)."""
+        return self._drive.files().export(
+            fileId=file_id,
+            mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet").execute()
+
+    def get_media(self, file_id):
+        """An uploaded (non-Google) file's own bytes."""
+        return self._drive.files().get_media(fileId=file_id).execute()
+
 
 def client_if_available():
     """A ready `GoogleClient`, or `None` when `available()` is False. Never raises: a

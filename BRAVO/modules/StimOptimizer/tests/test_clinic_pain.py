@@ -252,7 +252,12 @@ def _clinic_epoch_frame(*, slope_per_mA=0.0, noise_sd=0.3, n_reps=3, seed=0):
                                  dur_h=60.0 / 3600.0, pain_Left_Leg=float(pain),
                                  pain_Left_Leg_sd=np.nan))
     d = pd.DataFrame(rows)
-    d["t0"] = pd.date_range("2026-07-01", periods=len(d), freq="2min", tz="UTC")
+    # One visit day per repetition (decision 184: the coverage check counts the days a current
+    # pair was rated on, and one afternoon of steps is one occasion however many steps it holds).
+    per_rep = len(levels) ** 2
+    d["t0"] = [pd.Timestamp("2026-07-01", tz="UTC") + pd.Timedelta(days=i // per_rep, minutes=2 * (i % per_rep))
+               for i in range(len(d))]
+    d["rating_days"] = [(t.strftime("%Y-%m-%d"),) for t in d["t0"]]
     return d
 
 
@@ -303,6 +308,7 @@ def _redcap_shaped_epoch_frame(*, slope_per_mA, noise_sd, n_per_cell=15, n_reps=
                                  pain_Left_Leg_sd=1.0))
     d = pd.DataFrame(rows)
     d["t0"] = pd.date_range("2026-07-01", periods=len(d), freq="6h", tz="UTC")
+    d["rating_days"] = [(t.strftime("%Y-%m-%d"),) for t in d["t0"]]      # decision 184
     return d
 
 

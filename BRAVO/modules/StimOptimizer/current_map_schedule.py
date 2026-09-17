@@ -280,17 +280,21 @@ def what_this_buys(existing_epochs, steps, *, target_reports=TARGET_REPORTS_PER_
     existing = pd.DataFrame(existing_epochs) if existing_epochs is not None else pd.DataFrame()
     cols = ["amp_mA_Left", "amp_mA_Right", "n"]
     if not set(cols).issubset(existing.columns):
-        existing = pd.DataFrame(columns=cols)
+        existing = pd.DataFrame(columns=cols + ["rating_days"])
     else:
-        existing = existing[cols].copy()
+        existing = existing[cols + [c for c in ("rating_days",) if c in existing.columns]].copy()
+    # A planned step is credited the days it is held for (decision 184: the coverage check counts
+    # occasions, not ratings); a step with no `planned_days` is credited one day.
     added = pd.DataFrame([dict(amp_mA_Left=s["amp_left_mA"], amp_mA_Right=s["amp_right_mA"],
-                               n=float(target_reports)) for s in steps])
+                               n=float(target_reports),
+                               n_rating_days=float(s.get("planned_days") or 1)) for s in steps])
     combined = pd.concat([existing, added], ignore_index=True) if len(added) else existing
     cov = _S1.current_coverage(combined)
     return dict(
         coverage_after_schedule=cov, resolution_coverage_would_pass=bool(cov["passes"]),
         note=(f"once this schedule is complete: {_n(cov['n_pairs'], 'current combination')} with "
-             f"at least {cov['reports_per_pair_required']:g} reports each, spanning "
+             f"at least {cov['reports_per_pair_required']:g} reports each on at least "
+             f"{cov['days_per_pair_required']} days, spanning "
              f"{cov['span_left_mA']:.2f} mA on the left and {cov['span_right_mA']:.2f} mA on the "
              "right" + (" -- enough to clear the coverage half of the honest-current check"
                         if cov["passes"] else

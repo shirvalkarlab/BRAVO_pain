@@ -171,6 +171,10 @@ RATE_STRATUM_MIN_EPOCHS = PW_STRATUM_MIN_EPOCHS
 #:         ``CURRENT_COVERAGE_MIN_REPORTS_PER_PAIR`` reports, spanning at least
 #:         ``CURRENT_COVERAGE_MIN_SPAN_MA`` on EACH axis.
 CURRENT_COVERAGE_MIN_PAIRS = 6
+#: ... on at least this many distinct California calendar days per pair (decision 184, review S4).
+#: Five ratings filed in one afternoon are close to one observation (decision 111: two ratings an
+#: hour apart differ by 0.37 points), so a count alone can be satisfied by near-duplicates.
+CURRENT_COVERAGE_MIN_DAYS_PER_PAIR = 2
 CURRENT_COVERAGE_MIN_REPORTS_PER_PAIR = 5
 CURRENT_COVERAGE_MIN_SPAN_MA = 1.0
 
@@ -485,36 +489,70 @@ class RateStratum:
 
 def current_coverage(sub, *, min_pairs=CURRENT_COVERAGE_MIN_PAIRS,
                      min_reports_per_pair=CURRENT_COVERAGE_MIN_REPORTS_PER_PAIR,
-                     min_span_mA=CURRENT_COVERAGE_MIN_SPAN_MA) -> dict:
+                     min_span_mA=CURRENT_COVERAGE_MIN_SPAN_MA,
+                     min_days_per_pair=CURRENT_COVERAGE_MIN_DAYS_PER_PAIR) -> dict:
     """Check (iii) of the honest-current rule: does the DESIGN actually let the two currents be
-    told apart? ``sub`` needs ``amp_mA_Left``, ``amp_mA_Right`` and ``n`` (report count) columns;
-    every row counts, fitted or not, so this can also be run on a PLANNED schedule
-    (``current_map_schedule.py``) to check what it would buy before it is run.
+    told apart? ``sub`` needs ``amp_mA_Left``, ``amp_mA_Right`` and ``n`` (report count) columns,
+    and the days its ratings were filed on -- ``rating_days`` (a tuple of ISO dates per row) for
+    an observed stretch, or ``n_rating_days`` (a count) for a PLANNED one (``current_map_schedule``
+    credits each planned step its hold days). Every row counts, fitted or not.
 
     Counts distinct (left, right) current PAIRS carrying at least ``min_reports_per_pair`` reports
-    between them, and the span those qualifying pairs cover on each axis separately -- a pair at
-    (1.0, 1.0) and one at (1.0, 4.0) span the right axis but say nothing about the left one.
+    between them on at least ``min_days_per_pair`` distinct calendar days (decision 184: the union
+    of the pair's observed days, plus the planned days), and the span those qualifying pairs cover
+    on each axis separately -- a pair at (1.0, 1.0) and one at (1.0, 4.0) span the right axis but
+    say nothing about the left one. A frame carrying no day information cannot pass
+    (``days_known`` False): a yes must not be built from near-duplicate ratings.
     """
     d = pd.DataFrame(sub)
+    blank = dict(n_pairs=0, n_pairs_required=int(min_pairs),
+                 reports_per_pair_required=float(min_reports_per_pair),
+                 days_per_pair_required=int(min_days_per_pair), days_known=False,
+                 min_days_over_pairs=None, n_pairs_enough_reports=0,
+                 span_left_mA=0.0, span_right_mA=0.0,
+                 span_required_mA=float(min_span_mA), passes=False)
     if d.empty or not {"amp_mA_Left", "amp_mA_Right", "n"}.issubset(d.columns):
-        return dict(n_pairs=0, n_pairs_required=int(min_pairs),
-                    reports_per_pair_required=float(min_reports_per_pair),
-                    span_left_mA=0.0, span_right_mA=0.0,
-                    span_required_mA=float(min_span_mA), passes=False)
-    g = (d.assign(amp_mA_Left=pd.to_numeric(d["amp_mA_Left"], errors="coerce").round(3),
+        return blank
+    days_known = "rating_days" in d.columns or "n_rating_days" in d.columns
+    obs = d["rating_days"] if "rating_days" in d.columns else pd.Series([None] * len(d), index=d.index)
+    planned = (pd.to_numeric(d["n_rating_days"], errors="coerce") if "n_rating_days" in d.columns
+               else pd.Series([np.nan] * len(d), index=d.index))
+    d = d.assign(amp_mA_Left=pd.to_numeric(d["amp_mA_Left"], errors="coerce").round(3),
                  amp_mA_Right=pd.to_numeric(d["amp_mA_Right"], errors="coerce").round(3),
-                 n=pd.to_numeric(d["n"], errors="coerce").fillna(0.0))
-           .groupby(["amp_mA_Left", "amp_mA_Right"])["n"].sum().reset_index())
-    qual = g.loc[g["n"] >= float(min_reports_per_pair)]
+                 n=pd.to_numeric(d["n"], errors="coerce").fillna(0.0),
+                 _days=[tuple(v) if isinstance(v, (list, tuple, set, frozenset)) else () for v in obs],
+                 _planned=planned.fillna(0.0))
+
+    def _n_days(g):
+        seen = set()
+        extra = 0.0
+        for dd, pl in zip(g["_days"], g["_planned"]):
+            if dd:
+                seen.update(dd)
+            else:
+                extra += float(pl)
+        return float(len(seen) + extra)
+
+    g = (d.groupby(["amp_mA_Left", "amp_mA_Right"])
+          .apply(lambda gg: pd.Series({"n": float(gg["n"].sum()), "days": _n_days(gg)}),
+                 include_groups=False)
+          .reset_index())
+    enough_reports = g.loc[g["n"] >= float(min_reports_per_pair)]
+    qual = enough_reports.loc[enough_reports["days"] >= float(min_days_per_pair)] if days_known \
+        else enough_reports.iloc[0:0]
     n_pairs = int(len(qual))
     span_left = float(qual["amp_mA_Left"].max() - qual["amp_mA_Left"].min()) if n_pairs else 0.0
     span_right = float(qual["amp_mA_Right"].max() - qual["amp_mA_Right"].min()) if n_pairs else 0.0
-    passes = bool(n_pairs >= int(min_pairs) and span_left >= float(min_span_mA)
-                 and span_right >= float(min_span_mA))
+    passes = bool(days_known and n_pairs >= int(min_pairs) and span_left >= float(min_span_mA)
+                  and span_right >= float(min_span_mA))
     return dict(n_pairs=n_pairs, n_pairs_required=int(min_pairs),
-               reports_per_pair_required=float(min_reports_per_pair),
-               span_left_mA=span_left, span_right_mA=span_right,
-               span_required_mA=float(min_span_mA), passes=passes)
+                reports_per_pair_required=float(min_reports_per_pair),
+                days_per_pair_required=int(min_days_per_pair), days_known=bool(days_known),
+                min_days_over_pairs=(int(qual["days"].min()) if n_pairs else
+                                     (int(enough_reports["days"].min()) if len(enough_reports) and days_known else None)),
+                n_pairs_enough_reports=int(len(enough_reports)),
+                span_left_mA=span_left, span_right_mA=span_right,
+                span_required_mA=float(min_span_mA), passes=passes)
 
 
 def _rate_stratum_resolution(rs: "RateStratum", joint_stratum: JointStratum, *,
@@ -570,7 +608,9 @@ def _rate_stratum_resolution(rs: "RateStratum", joint_stratum: JointStratum, *,
         reasons.append(
             f"only {coverage.get('n_pairs', 0)} current combination(s) have been tried with at "
             f"least {coverage.get('reports_per_pair_required', CURRENT_COVERAGE_MIN_REPORTS_PER_PAIR):g} "
-            f"reports each (need {coverage.get('n_pairs_required', CURRENT_COVERAGE_MIN_PAIRS)}), "
+            f"reports each on at least "
+            f"{coverage.get('days_per_pair_required', CURRENT_COVERAGE_MIN_DAYS_PER_PAIR)} days "
+            f"(need {coverage.get('n_pairs_required', CURRENT_COVERAGE_MIN_PAIRS)}), "
             f"spanning {coverage.get('span_left_mA', 0.0):.2f} mA on the left and "
             f"{coverage.get('span_right_mA', 0.0):.2f} mA on the right (need "
             f"{coverage.get('span_required_mA', CURRENT_COVERAGE_MIN_SPAN_MA):g} mA on each)")
@@ -1060,6 +1100,10 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
                     coverage_span_left_mA=res.get("coverage", {}).get("span_left_mA"),
                     coverage_span_right_mA=res.get("coverage", {}).get("span_right_mA"),
                     coverage_passes=res.get("coverage", {}).get("passes"),
+                    # decision 184: occasions, not only ratings -- the fewest distinct rating
+                    # days any qualifying pair has, and how many the rule needs
+                    coverage_min_days_over_pairs=res.get("coverage", {}).get("min_days_over_pairs"),
+                    coverage_days_per_pair_required=res.get("coverage", {}).get("days_per_pair_required"),
                     sentence=res.get("sentence"), reason=None)
             else:
                 row.update(n_reports=float("nan"), amp_mA_left=float("nan"),

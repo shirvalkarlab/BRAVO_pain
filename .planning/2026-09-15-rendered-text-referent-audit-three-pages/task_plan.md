@@ -10,12 +10,12 @@ This is the class the PI caught twice on 2026-09-15 (decisions 172, 173) after t
 found its mirror image ("computed, stored, tested, not on the page", decision 167 §5).
 
 ## Next Step
-Nothing queued. Every phase is complete (decisions 174-181). Still his, none of it code: the titration session (open
-item 30, a clinic scheduling matter that also decides the post-ramp margin, decision 179); the five things below in
-"Open on the PI" of DECISIONS_and_open_items.md.
+Nothing queued. Phases 1-7 complete (decisions 174-185). Left from the 2026-09-15 review, his picks: S3, T1, B5,
+S5-S7, C3-C7, T2, T3; decision 118's `max_per_rating` question; item 15's list (scroll-link, print stylesheet).
+Not code: the titration session (open item 30).
 
 ## Current Phase
-Phase 6
+Phase 7
 
 ### Phase 1: Review (the PI calls /swarm-review with findings.md §1)
 - [x] Rendered-text inventory per page: every string a card draws, its panel, the element beside it, its referent
@@ -59,6 +59,14 @@ Phase 6
 - [x] `threshold_placement.py`, `pipeline.run(place_thresholds=)`, midpoint-keyed design rule, rows' wording
 - [x] Live before/after on L 0-2+ and L 1-3+ at 24.5 Hz; two defects found by it and fixed (rows built before the hook; a second application)
 - [x] Both suites; workers reloaded; decision 180; open item 31 closed; push
+- **Status:** complete
+
+### Phase 7: T4, B3, B6, S4 of the 2026-09-15 review (the PI, 2026-09-16: "Do T4 ... then B3, B6, and S4")
+- [x] T4: the clinic sheets pulled from Drive by the daily pass (`clinic_sheet_sync.py`, `sync_clinic_sheets`); live 30 down, 09_16_26 in, 29 unchanged file for file
+- [x] B6: the headline interval is a block bootstrap sized as the p-value's shuffle is (v18); live 16 rows at block 2, verdicts 0 changed
+- [x] S4: coverage counts occasions -- 2 calendar days per current pair; live 6 fields differ, none a verdict
+- [x] B3: the stability answer on the Biomarkers grid's winning cells, one home for the words (`DecodeCommon/stability_answer.py`); live 132 points, 28/232/4
+- [x] Suites, rebuild, decisions 182-185, one commit, push
 - **Status:** complete
 
 ## Decisions Made

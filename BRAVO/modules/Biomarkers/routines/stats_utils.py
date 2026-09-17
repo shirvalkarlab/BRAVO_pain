@@ -223,6 +223,27 @@ def circular_block_indices(n, block, rng):
     return np.concatenate(blocks)[:n]
 
 
+def block_bootstrap_picks(n, block, n_boot, rng):
+    """``(n_boot, n)`` row indices for a bootstrap of a series of ``n`` observations in TIME ORDER.
+
+    ``block <= 1`` is the plain i.i.d. draw, ``rng.integers(0, n, size=(n_boot, n))`` -- the same
+    call, the same place in the generator's order, so a caller that used to make that draw itself
+    gets the identical resamples. ``block > 1`` is the circular moving-block bootstrap (Politis and
+    Romano): ``ceil(n / block)`` block starts drawn uniformly, each start followed by the next
+    ``block - 1`` observations modulo ``n``, truncated to ``n``. Neighbouring observations travel
+    together, so an interval built on the draw is as wide as serially dependent observations
+    warrant, instead of as narrow as ``n`` independent ones would be. The same draw
+    ``analytics._block_bootstrap_aucs`` has made over rating clusters since audit [16]."""
+    n, B = int(n), int(n_boot)
+    if block is None or int(block) <= 1:
+        return rng.integers(0, n, size=(B, n))
+    L = int(block)
+    n_blocks = int(np.ceil(n / L))
+    starts = rng.integers(0, n, size=(B, n_blocks))
+    idx = (starts[:, :, None] + np.arange(L)[None, None, :]) % n
+    return idx.reshape(B, -1)[:, :n]
+
+
 def permutation_null_resolution(n, block):
     """How well a permutation null of this shape can resolve a p-value.
 

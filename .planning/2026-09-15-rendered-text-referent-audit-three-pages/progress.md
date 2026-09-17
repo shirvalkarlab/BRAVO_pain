@@ -132,3 +132,13 @@
   user token preferred by `google_sheets_client`. Apps Script fallback built then removed. Notation `L C+2- / R C+1-2-`
   read off the 09_16_26 sheet; written rows centred. Live export 12_30_26 read back. Host 1322/2/0, container 645/0.
   Build clean. Decision 181.
+- Phase 7 (2026-09-16, late): T4 (decision 182): `clinic_sheet_sync.py`, Drive read methods, `sync_clinic_sheets`, the daily
+  loop's first pass; 6 tests RED then GREEN; live 30 downloaded / 3 excluded / 0 failed, ingest 30 files 524 steps
+  (was 29 / 472), 29 files identical row for row, second run 0 down / nothing written. B6 (183): `block_bootstrap_picks`,
+  both headline builders, v18; 3 tests; live 264 rows, 248 block 1 / 16 block 2, r/AUC/verdict 0 diff, 39 intervals
+  moved. S4 (184): `rating_days` on both epoch builders, coverage needs 2 days per pair, schedule credits hold days;
+  6 tests + 4 fixtures given real days; live 15,419 -> 15,431, 6 differ (1 timing, 1 wording, 4 new day fields).
+  B3 (185): `DecodeCommon/stability_answer.py` one home, `attach_stored_stability_answers` on both sweep returns under
+  the grid's own key, symbols + hover + caption on the grid; 3 container + 5 jest tests; live 132 points 28/232/4.
+  Build main.b872af0d. Suites: see the commit.
+

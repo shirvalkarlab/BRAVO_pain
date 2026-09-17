@@ -85,6 +85,22 @@ while true; do
   #
   # ITS FAILURE IS REPORTED BUT DOES NOT SKIP THE STABILITY HALF, because the two are independent
   # and a reader denied one of them is worse off than a reader denied neither.
+  # THE CLINIC SHEETS (decision 182, 2026-09-16). The lab's clinic-testing workbooks live in a Google
+  # Drive folder; this pulls them down as .xlsx into the ingest folder and runs the ingest, so a
+  # visit's sheet reaches the Stim Optimizer's clinic stream the next day without anybody copying a
+  # file. Cheap when nothing changed: a file Drive reports unmodified is not downloaded, and an
+  # unchanged folder writes nothing. The Drive folder is RCS08's, so the participant is one uid.
+  if [ "${CLINIC_SHEET_SYNC:-1}" = "0" ]; then
+    say "the clinic-sheet sync is switched off by CLINIC_SHEET_SYNC=0"
+  elif python3 manage.py sync_clinic_sheets --participant "${CLINIC_SHEET_SYNC_PARTICIPANT:-2e3c75c00d7f4f37b53a048d195f11da}" --json >> "$LOG" 2>&1; then
+    say "clinic-sheet sync finished, the ingest folder matches the Drive folder and the ingest ran"
+  else
+    # Exit 2 means no signed-in Google client; exit 1 means at least one sheet could not be fetched
+    # and its previous copy was kept. Either way the ingest folder is a day behind and the page
+    # simply shows the older stream, which looks entirely fine.
+    say "CLINIC-SHEET SYNC FINISHED WITH FAILURES — see the lines above; the ingest folder may be behind Drive"
+  fi
+
   if [ "${BAND_SWEEP_PRECOMPUTE:-1}" = "0" ]; then
     say "the every-pain-score half is switched off by BAND_SWEEP_PRECOMPUTE=0"
   elif python3 manage.py precompute_band_sweeps --all --json >> "$LOG" 2>&1; then

@@ -81,18 +81,15 @@ except ImportError:                                              # pragma: no co
         stability_equivalence,
     )
 
-#: The four things this file is allowed to say. Anything else is a bug, and __post_init__ raises
-#: rather than letting an unrecognised word travel to a page a clinician reads.
-ANSWERS = ("behaves the same", "behaves differently", "cannot tell", "not tested")
-
-#: Translation from the words the Biomarkers test uses to the words above. Kept as data so that a
-#: reader can see the whole mapping at once, and so a new word appearing upstream turns into a loud
-#: failure here instead of being quietly treated as one of the existing answers.
-_FROM_BIOMARKERS = {
-    "stable": "behaves the same",
-    "stim-dependent": "behaves differently",
-    "inconclusive": "cannot tell",
-}
+#: The four things this file is allowed to say, and the translation from the Biomarkers test's own
+#: verdict words. ONE HOME since 2026-09-16 (decision 185): `DecodeCommon.stability_answer`, which
+#: the Biomarkers grid reads too, so the two pages can never disagree about a word. Bound here under
+#: the old names; `__post_init__` still raises on anything outside ANSWERS rather than letting an
+#: unrecognised word travel to a page a clinician reads.
+try:
+    from DecodeCommon.stability_answer import ANSWERS, FROM_BIOMARKERS_VERDICT as _FROM_BIOMARKERS
+except ImportError:                                        # pragma: no cover - container spelling
+    from modules.DecodeCommon.stability_answer import ANSWERS, FROM_BIOMARKERS_VERDICT as _FROM_BIOMARKERS
 
 #: What goes in the report where a blocking decision would normally sit. A phrase rather than a
 #: true-or-false value, because both true and false would be claims this file has no standing to

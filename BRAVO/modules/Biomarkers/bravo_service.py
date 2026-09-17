@@ -5487,6 +5487,86 @@ def compute_and_store_stability_grid(participant_uid, *, request_data=None, work
     return out
 
 
+def attach_stored_stability_answers(resp, participant_uid):
+    """Put the cross-setting stability answer on every headline row of a grid response (B3 of the
+    2026-09-15 review, decision 185): "does this band still track pain under a different
+    stimulation setting?" -- the check the Closed-Loop card has drawn since decisions 96-98, and
+    the Biomarkers page never has.
+
+    Read from the store under THIS grid's own key (`sweep_key` -> `_stability_grid_sig_tuple`, the
+    key the background run wrote), never the newest grid of any settings, so the answer beside a
+    cell belongs to the grid the cell is on. A grid whose answer has not been computed yet -- the
+    background run is still going, or has not started -- gets "not tested" with that reason on
+    every row, and `cross_setting_stability_from_store` 0. The words are the Closed-Loop card's
+    (`DecodeCommon.stability_answer`). Never raises: a failed read logs and leaves the rows saying
+    "not tested".
+    """
+    try:
+        from DecodeCommon.stability_answer import ANSWERS, answer_for_verdict
+    except ImportError:                                        # pragma: no cover - container spelling
+        from modules.DecodeCommon.stability_answer import ANSWERS, answer_for_verdict
+    if not isinstance(resp, dict):
+        return resp
+    sweeps = resp.get("band_time_sweep") or {}
+    sweep_key = ((resp.get("sweep_key") or {}).get("signature_key")) if isinstance(resp.get("sweep_key"), dict) else None
+    points = stability_grid_points(sweeps)
+    band_width_hz = float(resp.get("band_width_hz") or analytics.BAND_TIME_SWEEP_WIDTH_HZ)
+    stored = {}
+    if sweep_key and points:
+        try:
+            sig = _stability_grid_sig_tuple(sweep_key, band_width_hz=band_width_hz, points=points)
+            payload = _cache_store.load(STABILITY_GRID_KIND, participant_uid, sig,
+                                        consumer="biomarkers", root=_SHARED_CACHE_DIR_OVERRIDE)
+            for flat, value in ((payload or {}).get("points") or {}).items():
+                ch, _, centre = str(flat).rpartition("|")
+                try:
+                    stored[(ch, float(centre))] = value
+                except (TypeError, ValueError):
+                    continue
+        except Exception:                                      # noqa: BLE001
+            _log.warning("biomarkers: the stored stability grid could not be read for %s; every "
+                         "row will say 'not tested'", participant_uid, exc_info=True)
+            stored = {}
+    not_yet = ("the cross-setting stability answer has not been computed for this grid yet"
+               if not stored else "no stored answer for this band")
+    points_from_store = set()
+    for channel, sweep in sweeps.items():
+        for key in ("best_correlation_rows", "best_auc_rows"):
+            for row in sweep.get(key) or []:
+                if not isinstance(row, dict):
+                    continue
+                centre = row.get("band_center_hz")
+                raw = stored.get((str(channel), float(centre))) if centre is not None else None
+                if isinstance(raw, dict) and raw.get("available"):
+                    eq = raw.get("equivalence") or {}
+                    answer = answer_for_verdict(eq.get("verdict", raw.get("stability_verdict")))
+                    if answer is None:
+                        answer, reason = "not tested", (
+                            f"the test returned an answer this page does not recognise "
+                            f"({eq.get('verdict', raw.get('stability_verdict'))!r})")
+                    else:
+                        reason = str(eq.get("reason") or "")
+                    points_from_store.add((str(channel), float(centre)))
+                    row["cross_setting_stability"] = {
+                        "answer": answer, "reason": reason, "test_ran": answer != "not tested",
+                        "p_value": raw.get("lrt_p"), "n_measurements": raw.get("n"),
+                        "n_time_blocks": raw.get("n_clusters"),
+                        "from_store": True, "answers_possible": list(ANSWERS)}
+                elif isinstance(raw, dict):
+                    points_from_store.add((str(channel), float(centre)))
+                    row["cross_setting_stability"] = {
+                        "answer": "not tested", "reason": str(raw.get("reason") or "the test could not be run"),
+                        "test_ran": False, "p_value": None, "n_measurements": None,
+                        "n_time_blocks": None, "from_store": True, "answers_possible": list(ANSWERS)}
+                else:
+                    row["cross_setting_stability"] = {
+                        "answer": "not tested", "reason": not_yet, "test_ran": False,
+                        "p_value": None, "n_measurements": None, "n_time_blocks": None,
+                        "from_store": False, "answers_possible": list(ANSWERS)}
+    resp["cross_setting_stability_from_store"] = len(points_from_store)
+    return resp
+
+
 def load_stored_stability_grid(participant_uid, *, consumer="biomarkers"):
     """The newest stored stability grid for this participant, as
     `{(channel, centre_hz): raw_stim_result}`, or None. Returns the newest rather than a keyed
@@ -7785,7 +7865,9 @@ def band_time_sweep_for_participant(request_data):
                 participant_uid, request_data,
                 sweep_key=(stored["sweep_key"] or {}).get("signature_key"),
                 done_metric=label_metric)
-            return stored
+            # The stability answer for THIS grid, read at request time (decision 185): it lands in
+            # the store after the grid does, so it is never part of the stored response.
+            return attach_stored_stability_answers(stored, participant_uid)
 
     # Through the SAME memo the cell drill-down reads, so a grid that actually builds also leaves
     # this worker ready for the first hover on it. Deliberately placed AFTER the stored-response
@@ -7883,7 +7965,7 @@ def band_time_sweep_for_participant(request_data):
         participant_uid, request_data,
         sweep_key=(out["sweep_key"] or {}).get("signature_key"),
         done_metric=label_metric)
-    return out
+    return attach_stored_stability_answers(out, participant_uid)
 
 
 #: The request key that asks for one cell's underlying (band power, pain score) pairs alone,
@@ -8052,7 +8134,7 @@ sweep_settings_tag = sweep_settings.sweep_settings_tag                       # r
 sweep_settings_tag_from_request = sweep_settings.sweep_settings_tag_from_request
 
 
-_BAND_SWEEP_RULE_VERSION = "v17_snapshot_count_in_fields_not_notes_and_one_lengths_word"
+_BAND_SWEEP_RULE_VERSION = "v18_headline_interval_block_bootstrap"
 
 #: Response fields that are timings of the run that produced them, not results. They are not
 #: compared when a stored response is checked against a fresh one, and a served response keeps the

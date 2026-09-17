@@ -622,6 +622,7 @@ def power_pain_scatter(cv_df, label_metric, *, max_points=2000):
 # the correlation spectrum and chronic path used before, so those reject fewer samples than they did.
 from .stats_utils import MAD_N_DEFAULT as OUTLIER_N_MAD  # noqa: E402  (5.0)
 from .stats_utils import mad_outlier_flags  # noqa: E402  (True == outlier; see stats_utils)
+from .stats_utils import block_bootstrap_picks  # noqa: E402  (decision 183: the headline interval)
 
 # Scale for the pain LABEL. Pain scores are bounded ordinal scales, not multiplicative quantities,
 # so the rule is applied to them directly rather than in log space.
@@ -5966,6 +5967,13 @@ def _attach_device_spectrum_to_rows(rows, n_device, n_total, requested_seconds):
         row["device_spectrum_share"] = (float(n_device[t, c]) / tot) if tot > 0 else None
 
 
+# B6 of the 2026-09-15 review (decision 183). The interval on a headline cell resamples WHOLE BLOCKS
+# of pain reports, the block sized by the same rule the p-value's shuffle uses (`block_length_for`),
+# so the two answers about one cell rest on one assumption. False restores the plain one-report-at-
+# a-time draw, kept only so the widening can be measured (the tests, and the RCS08 proof).
+BAND_SWEEP_INTERVAL_BLOCK_BOOTSTRAP = True
+
+
 def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz,
                                band_width_hz=BAND_TIME_SWEEP_WIDTH_HZ,
                                strategy="tertile", low_pct=33.3333, high_pct=66.6667,
@@ -6522,6 +6530,16 @@ def _apply_family_wise_correction(rows):
             bool(qi < BAND_TIME_SWEEP_FAMILY_WISE_Q) if finite else None)
 
 
+def _interval_block_length(y_used):
+    """The block length the headline interval resamples in: the p-value's own rule
+    (`stats_utils.block_length_for`, the lag-1 decorrelation time of the pain series, at least 1),
+    or 1 (the plain draw) while `BAND_SWEEP_INTERVAL_BLOCK_BOOTSTRAP` is off."""
+    if not BAND_SWEEP_INTERVAL_BLOCK_BOOTSTRAP:
+        return 1
+    from .stats_utils import block_length_for
+    return int(block_length_for(np.asarray(y_used, dtype=np.float64), int(np.size(y_used))))
+
+
 def _best_rows_correlation(corr, corr_n, X, pain, centers, requested, delivered, tiles, null,
                            *, band_width_hz, n_boot, rng, power_feature, channel):
     """One row per band centre: the strongest correlation any length of signal produced for that
@@ -6556,12 +6574,17 @@ def _best_rows_correlation(corr, corr_n, X, pain, centers, requested, delivered,
         x = X[t, :, c]
         m = np.isfinite(x) & np.isfinite(y)
         # An interval by resampling whole pain reports. Each report is one row here, so resampling
-        # rows IS resampling reports and the interval means what it says.
+        # rows IS resampling reports and the interval means what it says. The rows are drawn in
+        # BLOCKS of consecutive reports (decision 183): the block length is the one the shuffle
+        # behind the p-value uses, so a run of near-duplicate ratings counts as the near-one
+        # observation it is, and the interval is not narrower than the p-value's own assumption.
         boot_lo = boot_hi = None
         n_res = 0
+        boot_block = None
         if int(m.sum()) >= 8:
             idx = np.where(m)[0]
-            picks = rng.integers(0, idx.size, size=(int(n_boot), idx.size))
+            boot_block = _interval_block_length(y[idx])
+            picks = block_bootstrap_picks(idx.size, boot_block, int(n_boot), rng)
             xb = x[idx][picks]
             yb = y[idx][picks]
             # THE SAME SUBTRACTIONS, THE SAME PRODUCTS AND THE SAME ROW SUMS as the plain form
@@ -6604,6 +6627,7 @@ def _best_rows_correlation(corr, corr_n, X, pain, centers, requested, delivered,
             "n_pain_reports": n_obs,
             "pearson_r_low": boot_lo,
             "pearson_r_high": boot_hi,
+            "interval_block_length": boot_block,
             "n_resamples_used": int(n_res),
             "answer": _verdict_against(boot_lo, boot_hi, CORRELATION_NO_RELATIONSHIP,
                                        observed=r_obs, shuffled_p95=shuf_p95),
@@ -6661,9 +6685,11 @@ def _best_rows_auc(auc, auc_pos, auc_neg, X, y_bin, centers, requested, delivere
         m = np.isfinite(x) & np.isfinite(yb)
         boot_lo = boot_hi = None
         n_res = 0
+        boot_block = None
         if int(m.sum()) >= 8 and len(np.unique(yb[m])) == 2:
             idx = np.where(m)[0]
-            picks = rng.integers(0, idx.size, size=(int(n_boot), idx.size))
+            boot_block = _interval_block_length(yb[idx])
+            picks = block_bootstrap_picks(idx.size, boot_block, int(n_boot), rng)
             # THE ORIENTATION IS FIXED ONCE, ON THE WHOLE SAMPLE, AND NEVER RE-CHOSEN INSIDE A
             # RESAMPLE. Re-folding each resample would push every one of them to or above 0.5 and
             # produce an interval that cannot include 0.5 however little the band carries, which is
@@ -6711,6 +6737,7 @@ def _best_rows_auc(auc, auc_pos, auc_neg, X, y_bin, centers, requested, delivere
             "n_low_pain_reports": int(auc_neg[t, c]),
             "auc_low": boot_lo,
             "auc_high": boot_hi,
+            "interval_block_length": boot_block,
             "n_resamples_used": int(n_res),
             "answer": verdict,
             "interval_spans_no_discrimination": (

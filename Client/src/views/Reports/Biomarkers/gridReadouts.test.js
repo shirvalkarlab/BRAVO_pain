@@ -6,7 +6,7 @@
  * review measured on RCS08 (L 1-3+, 12.5 Hz, 300 s: r -0.534, interval -0.656 to -0.402, n 117,
  * q 0.0022) and the device ranges from the one home.
  */
-import { bestCellReadout, hoverCustomData, rowTier, tierBullets, deviceSpectrumBullets, secondsLabel } from "./gridReadouts";
+import { bestCellReadout, hoverCustomData, rowTier, tierBullets, deviceSpectrumBullets, secondsLabel, stabilityMark, stabilityBullet } from "./gridReadouts";
 
 // The block the sweep response carries (DecodeCommon.device_ranges.timing_ranges_for_page), as
 // corrected against the clinician tablet on 2026-09-15: onset (Dual) 0-30 s, not the FDA's 6 min.
@@ -118,5 +118,38 @@ describe("deviceSpectrumBullets", () => {
     ]);
     expect(deviceSpectrumBullets({ n_pain_reports_from_device_spectrum: 0 })).toEqual([]);
     expect(deviceSpectrumBullets(null)).toEqual([]);
+  });
+});
+
+describe("cross-setting stability on the grid (B3, decision 185)", () => {
+  const withStability = (answer, reason) => ({
+    ...SW,
+    best_correlation_rows: SW.best_correlation_rows.map((r) =>
+      r.band_center_hz === 12.5 ? { ...r, cross_setting_stability: { answer, reason, from_store: answer !== "not tested" } } : r),
+  });
+  test("the best cell's hover ends with the answer the Closed-Loop card gives", () => {
+    const r = bestCellReadout(withStability("behaves differently", "the interaction test rejects"), "corr", 1, 9);
+    expect(r.text).toBe("117 ratings · interval −0.66 to −0.40 · corrected q = 0.0022 · established · across settings: behaves differently");
+  });
+  test("an answer not yet computed says so in three words, not 'not tested'", () => {
+    const r = bestCellReadout(withStability("not tested", "the cross-setting stability answer has not been computed for this grid yet"), "corr", 1, 9);
+    expect(r.text.endsWith("across settings: not yet computed")).toBe(true);
+  });
+  test("a row carrying no answer at all leaves the hover as it was", () => {
+    expect(bestCellReadout(SW, "corr", 1, 9).text).toBe("117 ratings · interval −0.66 to −0.40 · corrected q = 0.0022 · established");
+  });
+  test("one symbol per answer, the Closed-Loop card's: tick, cross, amber disc, nothing", () => {
+    expect(stabilityMark({ answer: "behaves the same" })).toEqual({ symbol: "circle", color: "#2e7d32", label: "behaves the same at every setting" });
+    expect(stabilityMark({ answer: "behaves differently" })).toEqual({ symbol: "x", color: "#c62828", label: "behaves differently across settings" });
+    expect(stabilityMark({ answer: "cannot tell" })).toEqual({ symbol: "diamond", color: "#e0a100", label: "cannot tell" });
+    expect(stabilityMark({ answer: "not tested" })).toBeNull();
+    expect(stabilityMark(undefined)).toBeNull();
+  });
+  test("the caption bullet names the three symbols in under 24 words", () => {
+    const line = stabilityBullet();
+    expect(line).toMatch(/tick/);
+    expect(line).toMatch(/cross/);
+    expect(line).toMatch(/amber/);
+    expect(line.split(" ").length).toBeLessThanOrEqual(24);
   });
 });

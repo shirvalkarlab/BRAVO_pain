@@ -434,6 +434,17 @@ def _stim_state(row) -> str:
     return "bilateral_active"
 
 
+def _california_day_strings(when):
+    """ISO date strings of the California calendar day of each UTC instant (decision 142's rule,
+    `Biomarkers.routines.local_time.local_calendar_day`); NaT gives None."""
+    try:
+        from modules.Biomarkers.routines.local_time import local_calendar_day
+    except ImportError:                                        # pragma: no cover - host spelling
+        from Biomarkers.routines.local_time import local_calendar_day
+    return pd.Series([d.isoformat() if d is not None and not pd.isna(d) else None
+                      for d in local_calendar_day(pd.Series(when))], index=getattr(when, "index", None))
+
+
 def attach_pros(epochs: pd.DataFrame, pro_df: pd.DataFrame, pro_times_utc,
                 *, washin_min=1.0, items=PRO_ITEMS) -> pd.DataFrame:
     """Aggregate pain reports onto epochs, excluding reports inside the wash-in window.
@@ -479,6 +490,14 @@ def attach_pros(epochs: pd.DataFrame, pro_df: pd.DataFrame, pro_times_utc,
         agg[f"{c}_sd"] = (c, "std")
         agg[f"{c}_n"] = (c, "count")
     cell = u.groupby("epoch", as_index=False).agg(n=("_t", "size"), **agg)
+    # The distinct California calendar days each epoch's usable ratings were filed on (decision
+    # 184): the coverage half of the honest-current check counts occasions, not ratings. The same
+    # day rule as the Biomarkers join (decision 142).
+    days = u.assign(_day=_california_day_strings(u["_t"])).groupby("epoch")["_day"].agg(
+        lambda v: tuple(sorted(set(v.dropna()))))
+    cell = cell.merge(days.rename("rating_days").reset_index(), on="epoch", how="left")
+    cell["rating_days"] = [tuple(v) if isinstance(v, tuple) else () for v in cell["rating_days"]]
+    cell["n_rating_days"] = [len(v) for v in cell["rating_days"]]
     out = ep.merge(cell, on="epoch", how="inner")
     out["t0"] = out["t_start"]
     out["state"] = out.apply(_stim_state, axis=1)
