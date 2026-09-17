@@ -1,5 +1,14 @@
 """THE SWITCH for the 20 s post-ramp margin on the three-source comparison (review hazard 1).
 
+SETTLED OFF BY MEASUREMENT, 2026-09-17 (decision 196, the PI: "settle the issue for S7, remove
+NO DATA since all is stable"). On the 2026-09-16 titration session at 55 Hz, 31 settings held
+107-168 s on L 1-3+, the band power in the first 3 s after a current move is 1.000 of the same
+setting's last-30 s level (95 % 0.86-1.16); on the record's 58 holds of 60 s or more, 0.98-1.02
+at every window from 3 to 30 s. There is no transient to exclude at the pieces' 3 s resolution.
+The switch stays False and is not to be turned on; it is kept only so the stored tables' rule
+versions (`_off`) do not move. The history that follows is why it existed.
+
+
 Commit 790ed21 wrote a clip that keeps the first `within_visit.RAMP_EXCLUDE_S` (20 s) after a
 current move out of the settled window; nothing in production called it until 2026-09-12, when the
 code review's hazard 1 wired it into `three_source_response._tile_panel`. Measured the same day on

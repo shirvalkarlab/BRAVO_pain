@@ -1032,9 +1032,6 @@ def _two_stage_payload(rep, *, inputs, seconds, in_force=None, clinic_block=None
         # (pulse-width-Left, pulse-width-Right) stratum -- reference only, never what a current is
         # read off; see `_joint_pooled_surfaces` and `stage1_openloop.RateStratum`.
         "pooled_surfaces": _joint_pooled_surfaces(s1),
-        # Decision 194: time is a fitted input; every surface above is the prediction at this
-        # reference time, and each rate row carries its own fitted time length scale (months).
-        "time_input": dict(getattr(s1, "rate_strata_time", None) or {}),
         "strata_skipped": {str(k): str(v) for k, v in (s1.skipped or {}).items()},
         "audit": _two_stage_jsonable(dict(s1.audit or {})),
         # WHAT TO TEST NEXT, from the JOINT stratum that was actually frozen (2026-09-14). There

@@ -160,3 +160,35 @@ is within 2 % of the level it holds 30–60 s later, with a 95 % interval of ±6
 at the 3 s resolution of the pieces: any settling happens inside the first piece. A margin of 0 s is the measured
 answer for this contact set at 110 Hz; the 55 Hz evidence is one visit and cannot decide it. The titration session
 (open item 30) would add 55 Hz holds at 60 s, which is where the record is thin.
+
+## S7 settled (2026-09-17, evening): the 2026-09-16 titration session at 55 Hz
+
+The PI: "you should have access to the 9-16 clinic session, which already did the 55 Hz stim titration session."
+It is on the server (6 time-domain and 4 streaming recordings that day). The device's own current record shows
+the session as designed in decision 160: the left ladder 0.5 → 4.5 mA in 0.5 mA steps held 107–120 s each, down
+in 1.0 mA drops, with the RIGHT held at 2.5 mA throughout; then a right ladder with the left held. **The page's
+run finder does not see it**, because `find_single_side_runs_from_device` requires the other side to be at ZERO
+(the rule written for the 2025 visits); holding the other side at its in-force current, which decision 160 chose
+on purpose, fails that rule. That is a separate fix (accept a constant other side, record what it was held at),
+named here and not made: it changes which runs enter the pooled slope, E1 and every table downstream.
+
+Measured directly from the tiles (probe `_agent_bridge/_s7_0916.py`): 31 settings held ≥ 60 s on 2026-09-16 (14
+left moves, 13 right moves, 4 both), settled values on L 1-3+ (31) and R 0-3+ (30).
+
+| first N s / last 30 s | L 1-3+ (31 settings) | R 0-3+ (30 settings) |
+|---|---|---|
+| 3 s | **1.000** (95 % 0.86–1.16, p 1.00) | 0.929 (0.81–1.07, p 0.31) |
+| 6 s | 0.972 (0.87–1.09, p 0.62) | 1.038 (0.92–1.17, p 0.55) |
+| 9 s | 0.971 (0.88–1.07, p 0.56) | 1.053 (0.96–1.16, p 0.28) |
+| 12 s | 0.969 (0.89–1.06, p 0.49) | 1.028 (0.94–1.12, p 0.55) |
+| 15 s | 1.011 (0.92–1.12, p 0.83) | 1.046 (0.98–1.12, p 0.22) |
+| 20 s | 1.033 (0.94–1.13, p 0.50) | 1.060 (1.00–1.13, p 0.07) |
+| 30 s | 1.045 (0.96–1.14, p 0.33) | 1.064 (1.00–1.13, p 0.06) |
+
+On the contact the titration was run for (L 1-3+), the first 3 s after a move are 1.000 of the settled level; no
+window differs from the settled level; the two R 0-3+ windows nearest p 0.05 are in the direction of the early
+window being HIGHER, i.e. no transient to exclude. **Settled: the margin is 0 s, no piece of recording is
+excluded, the switch stays off and the titration card says so.** The 55 Hz left-ladder curve itself (L 1-3+,
+right held at 2.5 mA): 0.0 mA 293, 0.5 mA 223, 1.0 mA 279 / 230, 1.5 mA 287 / 491, 2.5 mA 302 / 439, 3.0 mA 276,
+3.5 mA 265 / 292, 4.0 mA 247 / 222, 4.5 mA 244 device units (two values where the up and the down leg both held
+that current).

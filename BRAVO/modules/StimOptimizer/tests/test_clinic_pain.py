@@ -506,24 +506,3 @@ def test_sheet_ratings_kind_matches_the_ingest():
     m = _re.search(r'^CLINIC_SHEET_STEPS_KIND = "([^"]+)"', src, _re.M)     # read, not imported: Django
     assert m and m.group(1) == CP.CLINIC_PAIN_KIND
 
-
-def test_the_clinic_stream_is_fitted_without_the_time_input(monkeypatch):
-    """The PI, 2026-09-17: "the clinic data doesn't need drift correction, on such a short time
-    scale these are real clinical effects of stim." Its steps are minutes apart inside a visit and
-    the visits months apart; a time axis could only act between visits, which is where the
-    stimulation effects it would absorb live. So the clinic fit runs time-blind (decision 195)."""
-    from StimOptimizer import stage1_openloop as S1
-    seen = {}
-
-    def fake_run_stage1(*a, **kw):
-        seen.update(kw)
-        raise RuntimeError("stop here")
-    monkeypatch.setattr(S1, "run_stage1", fake_run_stage1)
-    ep = pd.DataFrame(dict(t0=pd.date_range("2026-09-02 17:00", periods=12, freq="2min", tz="UTC"),
-                           amp_mA_Left=[0.5 * (k % 6) for k in range(12)], amp_mA_Right=[0.5 * (k % 4) for k in range(12)],
-                           freq_hz=[55.0] * 12, pw_us_Left=[100.0] * 12, pw_us_Right=[150.0] * 12,
-                           pain_Left_Leg=[5.0 + 0.1 * k for k in range(12)]))
-    steps = _steps_from_epoch_frame(ep)
-    monkeypatch.setattr(CP, "load_clinic_steps", lambda *a, **k: (steps, None, None))
-    out = CP.fit_clinic_rate_strata("uid", hemispheres=("Left", "Right"), redcap_pooled_var=1.0)
-    assert seen.get("time_input") is False, seen

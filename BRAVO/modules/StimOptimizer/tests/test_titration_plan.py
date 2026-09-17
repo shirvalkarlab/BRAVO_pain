@@ -277,33 +277,29 @@ def _side(**kw):
     return base
 
 
-def test_the_points_yield_arithmetic_and_the_margin_sentence():
-    """The switch is OFF by default (decision 144, reaffirmed by decision 179): with no run at the
-    floor the sentence says the margin stays off until the session is recorded."""
+def test_the_points_yield_arithmetic_and_the_settled_margin_sentence():
+    """S7 settled (decision 196, 2026-09-17): the post-move margin is 0 s by measurement -- on the
+    2026-09-16 titration session the first 3 s after a current move read 1.000 of the same
+    setting's last-30 s level (31 settings, 95 % 0.86-1.16) -- so the sentence states that, and
+    never says the margin is waiting on anything."""
     runs = pd.DataFrame(_run_rows("a", [1.0, 1.5, 2.0, 2.5, 3.0, 3.5]))
     margin = PR.margin_becomes_available(runs)
     p = TP.side_plan("Left", margin=margin, **_side())
     y = p["yield"]
     assert y["settled_points_from_session"] == 16 == p["ladder"]["n_steps"]   # 5.0 mA -> 11 up + 5 down
     assert y["distinct_currents_up_leg"] == 11
-    assert y["min_settled_settings_for_margin"] == 8
-    assert y["session_clears_margin_floor"] is True          # 11 >= 8
-    assert y["run_with_enough_settings_exists_today"] is False
     assert y["margin_switched_on_today"] is False
     s = y["sentence"]
     assert "13 settled points across 4 runs" in s and "at most 6 currents in any one run" in s
     assert "16 settled points" in s and "11 distinct currents" in s
-    assert "no run in the record has the 8 settled settings" in s and "stays off" in s
+    assert "post-move margin is 0 s" in s and "measured" in s
+    for retired in ("stays off", "switched on", "can be switched on", "could not be judged"):
+        assert retired not in s, retired
 
 
-def test_the_margin_sentence_with_the_switch_on_says_so_ahead_of_the_session(monkeypatch):
-    """The other state, kept testable (it was the default for part of 2026-09-15, decision 178):
-    switched on with no run at the floor, the sentence says so rather than "stays off"."""
-    monkeypatch.setattr(PR, "USE_POST_RAMP_MARGIN", True)
-    runs = pd.DataFrame(_run_rows("a", [1.0, 1.5, 2.0, 2.5, 3.0, 3.5]))
-    y = TP.side_plan("Left", margin=PR.margin_becomes_available(runs), **_side())["yield"]
-    assert y["margin_switched_on_today"] is True
-    assert "is switched on (decision 178)" in y["sentence"] and "stays off" not in y["sentence"]
+def test_the_settled_margin_sentence_does_not_depend_on_the_per_run_table():
+    y = TP.side_plan("Left", margin=PR.margin_becomes_available(None), **_side())["yield"]
+    assert "post-move margin is 0 s" in y["sentence"] and "could not be judged" not in y["sentence"]
 
 
 def test_a_lifted_rate_changes_the_band_list_and_the_source_names_the_minimum():

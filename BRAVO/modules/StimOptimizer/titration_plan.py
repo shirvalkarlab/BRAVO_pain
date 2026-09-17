@@ -652,8 +652,6 @@ def _yield_sentence(n_points, n_up, rec, margin) -> str:
     runs = rec.get("runs")
     per_run = rec.get("max_settled_settings_in_one_run")
     need = (margin or {}).get("min_settled_settings")
-    exists = (margin or {}).get("available")
-    on = (margin or {}).get("switch_on")
     today = (f"today this contact holds {_n(have, 'settled point')} across {_n(runs or 0, 'run')}"
              + (f", at most {per_run} currents in any one run" if per_run is not None else "")
              if have is not None else
@@ -661,22 +659,13 @@ def _yield_sentence(n_points, n_up, rec, margin) -> str:
               + (f" (at most {per_run} currents in any one run)" if per_run is not None else "")))
     session = (f"this session yields {n_points} settled points, {n_up} distinct currents on the "
                f"way up")
-    if need:
-        if exists:
-            m = (f"a run with at least {need} settled settings already exists, so the 20 s post-ramp "
-                 f"margin (decision 144) " + ("is switched on" if on else
-                                              "can be switched on (it is off today)"))
-        elif on:
-            m = (f"no run in the record has the {need} settled settings that would make the 20 s "
-                 f"post-ramp margin safe against two removed points flipping a verdict, and it is "
-                 f"switched on (decision 178) ahead of that; this session's rising leg alone gives "
-                 f"{n_up}")
-        else:
-            m = (f"no run in the record has the {need} settled settings the margin needs, so the "
-                 f"20 s post-ramp margin (decision 144) stays off until this session is recorded; "
-                 f"its rising leg alone gives {n_up}")
-    else:
-        m = "whether the 20 s post-ramp margin can be switched on could not be judged (no per-run table)"
+    # S7 SETTLED (decision 196, 2026-09-17): the post-move exclusion margin is 0 s by measurement.
+    # On the 2026-09-16 titration session at 55 Hz (31 settings held 107-168 s on L 1-3+) the
+    # first 3 s after a current move read 1.000 of the same setting's own last-30 s level (95 %
+    # 0.86-1.16), and every earlier window on the record's 58 long holds read 0.98-1.02. Nothing
+    # is excluded; the switch in `post_ramp` stays off and this sentence no longer waits on it.
+    m = ("the post-move margin is 0 s, measured on the 2026-09-16 session (the first 3 s after a "
+         "move read 1.00 of the settled level), so no piece of recording is excluded")
     return f"{today}; {session}; {m}."
 
 

@@ -146,12 +146,10 @@ sigma^2_obs = s^2/n  +  tau^2_dur          (tau^2_age removed 2026-09-17, decisi
   a week has not reached steady state.
 - ~~`tau^2_age` — inflation with observation age, `c_age * (age_days/365)^2`. This is the interim stand-in
   for nonstationarity; the time-varying kernel is deferred (see README).~~ **REMOVED 2026-09-17, decision 194.**
-  A hold-out fit on RCS08 found the term inert at every weight from 0 to 16x (decision 193). Drift is now a
-  FITTED TIME INPUT to the objective model: each epoch's midpoint, in months since the record began, is a
-  fourth input with its own ARD length scale (`surrogate.TimeAwareGrid`), and every surface is the prediction
-  at the present -- the end of the newest epoch. On RCS08 the fitted time scale is about 1.6-1.8 months on the
-  55 Hz strata (strong drift) and 70-90 months at 110 Hz (none detectable); the 90-day hold-out error fell from
-  1.33 to 0.69 points on the 0-10 scale and its over-prediction from +1.20 to +0.40.
+  A hold-out fit on RCS08 found the term inert at every weight from 0 to 16x (decision 193). A fitted time input
+  was built in its place the same day and removed the same day on the PI's ruling (decision 196): this
+  participant has had the disease for more than three years, so any drift in the rating is an effect of the
+  stimulation settings, not of the disease -- time is not a confound and is modelled nowhere.
 
 This is what "use all the data" means operationally: nothing is thrown away, and nothing is
 overtrusted. The dominant epoch contributes an observation with a very small variance; a single-report
