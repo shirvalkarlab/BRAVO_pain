@@ -192,3 +192,85 @@ excluded, the switch stays off and the titration card says so.** The 55 Hz left-
 right held at 2.5 mA): 0.0 mA 293, 0.5 mA 223, 1.0 mA 279 / 230, 1.5 mA 287 / 491, 2.5 mA 302 / 439, 3.0 mA 276,
 3.5 mA 265 / 292, 4.0 mA 247 / 222, 4.5 mA 244 device units (two values where the up and the down leg both held
 that current).
+
+## Pooled (one intercept) against per-run fits of the current-to-power slope (2026-09-17, evening)
+
+The PI: "if both sides change current only, maybe we should still include those points in the pooled analysis for
+both sides. Show me the difference if you pool all points together for a common intercept and common slope vs
+separate intercept per run with those points excluded, for all recording contacts and all stimulation frequencies."
+
+Settled 24.5 Hz band power (time-domain route; the last 30 s of a setting, at least 10 pieces), every setting on every
+day the device streamed with a current record: 445 settings, 5 contacts, rates 55/85/110/125/145/165 Hz. Only **10 of
+the 445 settings are both-sides moves** (2 on L 1-3+ at 55 Hz, 8 on R 0-3+ at 55 Hz), so the two models differ
+almost entirely in their INTERCEPT structure, not in those points. Probe `_agent_bridge/_pooled_vs_runs.py`.
+
+- **A, pooled**: per (contact, rate), one intercept, band power = a + bL·left + bR·right, every setting.
+- **B, per run**: one intercept per run, band power = a_run + b·(ramped side's current), single-side runs only
+  (the committed rule of decision 197), fitted separately for left-ramped and right-ramped runs.
+
+Device units per mA, ± standard error; rows with enough data on at least one model:
+
+| contact · rate | settings (both-sides) · days | A: left | A: right | B: left (pts, runs) | B: right (pts, runs) |
+|---|---|---|---|---|---|
+| L 1-3+ · 55 Hz | 111 (2) · 7 | −7.8 ± 7.7 | −5.6 ± 8.1 | −5.0 ± 16.7 (44, 22) | +16.5 ± 10.5 (32, 12) |
+| L 1-3+ · 110 Hz | 26 (0) · 4 | **−53.6 ± 14.0** | −4.4 ± 21.4 | **−5.4 ± 4.1** (19, 9) | −27.2 (5 pts, 4 runs: 0 d.f.) |
+| L 1-3+ · 145 Hz | 16 (0) · 4 | −4.6 ± 7.3 | −19.6 ± 15.9 | — | +2.7 ± 12.1 (10, 4) |
+| L 0-3+ · 110 Hz | 21 (0) · 4 | −66.6 ± 62.2 | +2.4 ± 9.6 | — | +1.6 ± 6.3 (17, 5) |
+| R 0-3+ · 55 Hz | 130 (8) · 13 | −2.3 ± 4.6 | **+34.7 ± 4.9** | +2.1 ± 2.9 (45, 23) | **+51.0 ± 7.5** (40, 18) |
+| R 0-3+ · 110 Hz | 56 (0) · 7 | **−11.7 ± 4.0** | +0.5 ± 3.9 | −2.4 ± 3.7 (26, 10) | −9.8 ± 5.4 (22, 9) |
+| R 0-3+ · 145 Hz | 20 (0) · 4 | −3.1 ± 2.7 | **−20.2 ± 5.7** | — | +2.5 ± 5.6 (10, 4) |
+| R 0-3+ · 165 Hz | 13 (0) · 3 | −2.2 ± 2.8 | −15.4 ± 6.7 | +77.7 (3 pts, 3 runs: 0 d.f.) | — |
+| L 0-2+ · 110 Hz | 9 (0) · 1 | −17.5 ± 6.0 | no variation | −18.5 ± 8.7 (7, 1) | — |
+
+(85, 125 and 165 Hz on the left contacts, and the L 0-2+ 55 Hz cell, have 1-9 settings and no usable fit on either
+model.)
+
+**Where the two agree**: R 0-3+ at 55 Hz, the right current raises the band (+35 pooled, +51 per run, both more
+than four standard errors from zero) and the left does nothing; L 0-2+ at 110 Hz, the left current lowers it
+(−17.5 / −18.5); L 1-3+ at 55 Hz, nothing established either way.
+
+**Where they disagree, and why**: L 1-3+ at 110 Hz reads −53.6 ± 14.0 pooled against −5.4 ± 4.1 per run, and
+R 0-3+ at 110 Hz −11.7 ± 4.0 against −2.4 ± 3.7. The pooled model has one intercept for all 4-7 days, so when
+different days sat at different currents AND at different band-power levels (impedance, electrode contact, the
+day), it reads the between-day level difference as a current effect. The per-run model gives each run its own
+level and asks only how the band moved as the current was stepped inside the run. The pooled slopes at 110 Hz are
+day-to-day differences wearing a per-mA label; the per-run slopes are the within-run answer. R 0-3+ at 145 Hz is
+the same pattern in the other direction (−20 pooled against +2.5 per run).
+
+**The both-sides points**: with 10 of 445, adding them to either model changes no slope by more than its own
+standard error. The question that matters is the intercept structure, and on this record the per-run intercept is
+the one that isolates the current effect. A middle model -- one intercept per run AND both currents as inputs, so a
+both-sides move inside a run is used rather than dropped -- costs nothing today (10 points) and is the natural home
+for them if the titration protocol ever moves both sides inside one recording.
+
+### Model C: one intercept per recording, both currents as inputs, every setting (2026-09-17, evening)
+
+The PI: "Show me results for one intercept per run and both currents as inputs." Inside a single-side run the held
+current is constant and therefore indistinguishable from the run's intercept, so the intercept has to sit one level
+up, on the RECORDING a run lives in; both currents are then identified wherever a recording moved each of them.
+Every settled setting is used, both-sides moves included (probe `_agent_bridge/_model_c.py`). "never moved inside a
+recording" marks a slope that is a between-recording difference only.
+
+| contact · rate | settings · recordings (both-sides) | C: left | C: right | d.f. | B: left | B: right |
+|---|---|---|---|---|---|---|
+| L 1-3+ · 55 Hz | 111 · 24 (2) | −14.5 ± 8.8 | −3.2 ± 9.1 | 85 | −5.0 ± 16.7 | +16.5 ± 10.5 |
+| L 1-3+ · 110 Hz | 26 · 10 | −37.3 ± 17.1 | −47.9 ± 16.4 | 14 | −5.4 ± 4.1 | −27.2 (0 d.f.) |
+| L 1-3+ · 145 Hz | 16 · 10 | +30.5 ± 2.5 (never moved inside a recording) | +2.7 ± 12.1 | 5 | — | +2.7 ± 12.1 |
+| L 0-3+ · 110 Hz | 21 · 9 | +81.0 ± 13.8 (never moved inside a recording) | +1.6 ± 6.3 | 11 | — | +1.6 ± 6.3 |
+| R 0-3+ · 55 Hz | 130 · 34 (8) | −3.9 ± 4.6 | **+48.3 ± 4.5** | 94 | +2.1 ± 2.9 | **+51.0 ± 7.5** |
+| R 0-3+ · 110 Hz | 56 · 22 | −2.3 ± 4.8 | −9.0 ± 3.6 | 32 | −2.4 ± 3.7 | −9.8 ± 5.4 |
+| R 0-3+ · 145 Hz | 20 · 13 | −8.4 ± 18.7 | +2.5 ± 5.6 | 5 | — | +2.5 ± 5.6 |
+| R 0-3+ · 165 Hz | 13 · 9 | −22.1 ± 11.7 | +45.0 ± 43.8 | 2 | +77.7 (0 d.f.) | — |
+| L 0-2+ · 110 Hz | 9 · 3 | −18.5 ± 8.7 | no variation | 5 | −18.5 ± 8.7 | — |
+
+Where C is well-determined it agrees with B: R 0-3+ at 55 Hz right +48.3 ± 4.5 against +51.0 ± 7.5 and left
+≈ 0 on both; R 0-3+ at 110 Hz −9.0 / −9.8 right and −2.3 / −2.4 left; L 0-2+ at 110 Hz identical (−18.5). Where a
+current never moved inside a recording (the left at L 1-3+ 145 Hz and L 0-3+ 110 Hz) C prints a between-recording
+number with a small standard error that means nothing about a current effect. The one substantive disagreement is
+L 1-3+ at 110 Hz: C −37 ± 17 (14 d.f.) against B −5.4 ± 4.1 -- C uses 26 settings, B the 19 inside runs of three or
+more settings, and the seven extra settings (short runs, the settings a recording opened on) carry the difference,
+which is about 1.8 standard errors. The both-sides moves (10 of 445) move nothing.
+
+Conclusion: B (one intercept per run, the ramped side's current) remains the page's model; C adds nothing on this
+record and prints two spurious "established" slopes. C would become the right model only if a protocol stepped
+both sides inside one recording.
