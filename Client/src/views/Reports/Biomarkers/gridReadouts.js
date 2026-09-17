@@ -100,11 +100,50 @@ export function stabilityBullet() {
   return "Inside a circle: green tick, the band tracks pain the same at every stimulation setting; red cross, differently; amber, cannot tell.";
 }
 
-/** rows x columns of readout strings, in the heat map's own orientation, for `customdata`. */
+export function fmtP(p) {
+  const n = Number(p);
+  if (!Number.isFinite(n)) return "—";
+  if (n >= 0.001) return n.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
+  return n.toPrecision(3);
+}
+
+/** The hover's third line (the PI, 2026-09-16: "X ratings, q = Y" and nothing else -- the interval,
+ *  the answer and the stability word are on the panel lines beside the scatter and the violin).
+ *  The column's best cell prints its corrected q; every other cell, and a best cell whose q was not
+ *  assessed, prints its own uncorrected p, read off the response (`p_grid`: Pearson's; `auc_p_grid`:
+ *  the Mann-Whitney rank test's, scipy's own). A cell with no count prints nothing. */
+export function hoverReadout(sw, kind, colIndex, rowIndex) {
+  const best = bestRowFor(sw, kind, colIndex);
+  const isBest = best && rowIndexOf(sw, best.integration_seconds_delivered) === rowIndex;
+  if (isBest) {
+    const n = Number(best.n_pain_reports);
+    // `Number(null)` is 0, which would print "q = 0.0" for a q that was never assessed.
+    const q = best.family_wise_q_8_to_30hz == null ? NaN : Number(best.family_wise_q_8_to_30hz);
+    if (Number.isFinite(q)) return `${n} ratings, q = ${fmtQ(q)}`;
+    const p = best.p_selection_aware == null ? NaN : Number(best.p_selection_aware);
+    return Number.isFinite(p) ? `${n} ratings, p = ${fmtP(p)}` : `${n} ratings`;
+  }
+  const { n, p } = cellNP(sw, kind, colIndex, rowIndex);
+  if (!(n > 0)) return "";
+  return p == null ? `${n} ratings` : `${n} ratings, p = ${fmtP(p)}`;
+}
+
+/** One cell's own count and uncorrected p off the response; `p` null where the response has none. */
+export function cellNP(sw, kind, colIndex, rowIndex) {
+  const at = (a) => { const row = (a && a[rowIndex]) || []; const v = row[colIndex]; return v == null ? NaN : Number(v); };
+  const p = at(kind === "auc" ? sw && sw.auc_p_grid : sw && sw.p_grid);
+  const n = kind === "auc"
+    ? at(sw && sw.auc_n_high_grid) + at(sw && sw.auc_n_low_grid)
+    : at(sw && sw.n_grid);
+  return { n: Number.isFinite(n) ? n : 0, p: Number.isFinite(p) ? p : null,
+    nHigh: kind === "auc" ? at(sw && sw.auc_n_high_grid) : null, nLow: kind === "auc" ? at(sw && sw.auc_n_low_grid) : null };
+}
+
+/** rows x columns of hover strings, in the heat map's own orientation, for `customdata`. */
 export function hoverCustomData(sw, kind) {
   const grid = (kind === "auc" ? sw && sw.auc_grid : sw && sw.correlation_grid) || [];
   const ncol = ((sw && sw.center_freqs_hz) || []).length;
-  return grid.map((_, ri) => Array.from({ length: ncol }, (__, ci) => bestCellReadout(sw, kind, ci, ri).text));
+  return grid.map((_, ri) => Array.from({ length: ncol }, (__, ci) => hoverReadout(sw, kind, ci, ri)));
 }
 
 /** Which of the device's documented tiers a row's length of signal falls in. */
@@ -163,3 +202,23 @@ export function deviceSpectrumBullets(sw) {
     "Matching here uses the histogram card's tolerance.",
   ];
 }
+
+/** The clinic-sheet caveat (decision 186): what the heat maps pool, and how many of this contact
+ *  pair's ratings came from the clinic or at-home testing sheets when the switch is on. Nothing
+ *  for a response that predates the switch. */
+export function clinicSheetBullets(sw) {
+  const cs = sw && sw.clinic_sheet_ratings;
+  if (!cs) return [];
+  if (!cs.included) {
+    return ["The heat maps use at-home REDCap ratings only; the clinic and at-home testing sheets' scores are off (a switch on the matching card)."];
+  }
+  if (!cs.n_added) {
+    return [cs.reason ? `Sheet scores on, but ${cs.reason}.` : "Sheet scores on, but none carried this score."];
+  }
+  const n = sw.n_pain_reports_from_clinic_sheet;
+  const tot = sw.n_pain_reports;
+  const scale = Number(cs.scale) === 1 ? "as scored (0–10)" : `times ${Number(cs.scale)}`;
+  const head = (n != null && tot != null) ? `${n} of the ${tot} ratings here` : `${cs.n_added} ratings`;
+  return [`${head} are clinic or at-home testing sheets' scores, ${scale}, taken while current was being stepped.`];
+}
+

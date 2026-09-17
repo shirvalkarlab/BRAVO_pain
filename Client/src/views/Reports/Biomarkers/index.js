@@ -159,6 +159,10 @@ function Biomarkers() {
   // up, since there was no live behavior to give a knob to.
   const [matchExtentSec, setMatchExtentSec] = useState(P.matchExtentSec != null ? P.matchExtentSec : 30);
   const [allowWindowReuse, setAllowWindowReuse] = useState(P.allowWindowReuse != null ? P.allowWindowReuse : false);
+  // Decision 186: the clinic and at-home testing sheets' scores pooled into the heat maps as extra
+  // ratings. OFF by default -- those scores were taken while current was being stepped on purpose.
+  const [includeClinicSheetRatings, setIncludeClinicSheetRatings] = useState(
+    P.includeClinicSheetRatings != null ? P.includeClinicSheetRatings : false);
   // The timeline's per-pain-rating sensed-band-power circles (av.pro_lsb, BiomarkerDataTimeline.js)
   // are chosen by `availability.per_pro_lsb`'s own match window in SECONDS — separate from, and much
   // narrower than, the main match-tolerance slider (which is minutes, and governs the exploratory
@@ -221,6 +225,7 @@ function Biomarkers() {
     MatchDirection: matchDirection,
     MatchExtentSec: matchExtentSec,
     AllowWindowReuse: allowWindowReuse,
+    IncludeClinicSheetRatings: includeClinicSheetRatings,
     SlidingWindow: slidingWindow,
   });
   /**
@@ -346,11 +351,11 @@ function Biomarkers() {
     saveControls(participant_uid, {
       metric, strategy, percentileLow, percentileHigh, matchTolerance,
       maxPerRating, refractoryMin, matchDirection, timelineColorMode, requestParams,
-      matchExtentSec, allowWindowReuse,
+      matchExtentSec, allowWindowReuse, includeClinicSheetRatings,
     });
   }, [participant_uid, metric, strategy, percentileLow, percentileHigh, matchTolerance,
     maxPerRating, refractoryMin, matchDirection, timelineColorMode, requestParams,
-    matchExtentSec, allowWindowReuse]);
+    matchExtentSec, allowWindowReuse, includeClinicSheetRatings]);
 
   // Fetch raw pain-score reports ONCE per participant (no LFP, just the PRO surveys) so the
   // binarization preview card can show a live histogram with cuts before any heavy compute.
@@ -516,9 +521,10 @@ function Biomarkers() {
     MatchDirection: matchDirection,
     MatchExtentSec: matchExtentSecD,
     AllowWindowReuse: allowWindowReuse,
+    IncludeClinicSheetRatings: includeClinicSheetRatings,
     SlidingWindow: slidingWindow,
   }), [source, metric, strategy, percentileLowD, percentileHighD, matchToleranceD, maxPerRatingD,
-      refractoryMinD, matchDirection, matchExtentSecD, allowWindowReuse]);
+      refractoryMinD, matchDirection, matchExtentSecD, allowWindowReuse, includeClinicSheetRatings]);
 
   // [removed] summaryLine() — the legacy Time-/Power-domain dual-pipeline prose summary — and,
   // on 2026-09-15 (referent audit, item 7), the per-channel high/low/excluded count block that
@@ -777,6 +783,24 @@ function Biomarkers() {
                                   >
                                     <ToggleButton value="strict" title="Each raw window is assigned to its nearest rating only — one window, one rating (independent observations)">No reuse</ToggleButton>
                                     <ToggleButton value="reuse" title="Each raw window (per modality) is assigned to every rating whose match tolerance covers it — larger n, but ratings sharing a window are no longer independent">Allow reuse</ToggleButton>
+                                  </ToggleButtonGroup>
+                                </MDBox>
+                                {/* Decision 186: the clinic and at-home sheets' scores as extra ratings
+                                    for the heat maps (NRS as scored; the VAS scores times ten). Off by
+                                    default; the heat maps' caption says which way it is set. */}
+                                <MDBox sx={{ display: "flex", alignItems: "center", gap: 1, mt: 1 }}>
+                                  <MDTypography variant="caption" fontWeight="bold" color="dark"
+                                    sx={{ fontSize: 13 }}>
+                                    {"Clinic sheet scores"}
+                                  </MDTypography>
+                                  <ToggleButtonGroup
+                                    value={includeClinicSheetRatings ? "include" : "exclude"} exclusive size="small"
+                                    aria-label="clinic sheet scores in the heat maps"
+                                    onChange={(e, v) => { if (v) setIncludeClinicSheetRatings(v === "include"); }}
+                                    sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontSize: 12, py: 0.3, px: 1 } }}
+                                  >
+                                    <ToggleButton value="exclude" title="The heat maps pool at-home REDCap ratings only">At-home only</ToggleButton>
+                                    <ToggleButton value="include" title="Also pool the clinic and at-home testing sheets' scores (0–10 verbal; times ten for the VAS scores). Those were taken while current was being stepped on purpose, one a minute inside a session, so treat the larger count with care">Add sheet scores</ToggleButton>
                                   </ToggleButtonGroup>
                                 </MDBox>
                                 <MDTypography variant="caption" color="dark" fontStyle="italic"

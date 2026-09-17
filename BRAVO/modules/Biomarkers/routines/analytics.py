@@ -5781,6 +5781,8 @@ def _sweep_blank(reason, *, n_reports=0):
         "correlation_grid": [],
         "auc_grid": [],
         "n_grid": [],
+        "p_grid": [],
+        "auc_p_grid": [],
         # Present and empty rather than absent, for the same reason every other grid here is: the
         # page reads a missing key as "this does not apply to me" and would draw an unmarked grid.
         "device_spectrum_n_grid": [],
@@ -5790,6 +5792,9 @@ def _sweep_blank(reason, *, n_reports=0):
         "device_spectrum_total_grid_auc": [],
         "device_spectrum_share_grid_auc": [],
         "n_pain_reports_from_device_spectrum": None,
+        "clinic_sheet_n_grid": [],
+        "clinic_sheet_n_grid_auc": [],
+        "n_pain_reports_from_clinic_sheet": None,
         "best_correlation_rows": [],
         "best_auc_rows": [],
         "notes": [],
@@ -5967,11 +5972,61 @@ def _attach_device_spectrum_to_rows(rows, n_device, n_total, requested_seconds):
         row["device_spectrum_share"] = (float(n_device[t, c]) / tot) if tot > 0 else None
 
 
+def _attach_sheet_count_to_rows(rows, n_sheet, n_sheet_reports, requested_seconds):
+    """The winning cell's count of sheet ratings (decision 186) on each headline row, by the same
+    row-to-cell lookup as the device mark; None where the flag never arrived."""
+    req = [float(s) for s in (requested_seconds or [])]
+    for c, row in enumerate(rows or []):
+        row["n_pain_reports_from_clinic_sheet"] = None
+        if n_sheet_reports is None or c >= n_sheet.shape[1]:
+            continue
+        s = row.get("integration_seconds_requested")
+        if s is None:
+            continue
+        try:
+            t = req.index(float(s))
+        except ValueError:
+            continue
+        row["n_pain_reports_from_clinic_sheet"] = int(n_sheet[t, c])
+
+
 # B6 of the 2026-09-15 review (decision 183). The interval on a headline cell resamples WHOLE BLOCKS
 # of pain reports, the block sized by the same rule the p-value's shuffle uses (`block_length_for`),
 # so the two answers about one cell rest on one assumption. False restores the plain one-report-at-
 # a-time draw, kept only so the widening can be measured (the tests, and the RCS08 proof).
 BAND_SWEEP_INTERVAL_BLOCK_BOOTSTRAP = True
+
+
+def pearson_p_from_r(r, n):
+    """Two-tailed p for a Pearson r on n pairs, vectorised: t = r*sqrt((n-2)/(1-r^2)) on n-2 degrees
+    of freedom. NaN where r is missing, n <= 2 or |r| >= 1. This is the uncorrected p of ONE cell;
+    the column's corrected answer is on the best rows."""
+    from scipy import stats as _st
+    r = np.asarray(r, dtype=float); n = np.asarray(n, dtype=float)
+    out = np.full(r.shape, np.nan)
+    ok = np.isfinite(r) & (n > 2) & (np.abs(r) < 1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        t = r[ok] * np.sqrt((n[ok] - 2) / (1 - r[ok] ** 2))
+    out[ok] = 2 * _st.t.sf(np.abs(t), n[ok] - 2)
+    return out
+
+
+def mann_whitney_p_columns(Xt, y_bin):
+    """Two-tailed Mann-Whitney U p per column (the PI, 2026-09-16: the rank test, not a t-test, and
+    scipy's own asymptotic result): high-pain against low-pain band power, one call vectorised over
+    every band centre, missing values left out column by column. NaN where either group is empty."""
+    from scipy import stats as _st
+    import warnings
+    Xt = np.asarray(Xt, dtype=float); y = np.asarray(y_bin, dtype=float)
+    hi, lo = Xt[y == 1], Xt[y == 0]
+    out = np.full(Xt.shape[1], np.nan)
+    ok = (np.isfinite(hi).sum(axis=0) > 0) & (np.isfinite(lo).sum(axis=0) > 0)
+    if ok.any():
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            out[ok] = _st.mannwhitneyu(hi[:, ok], lo[:, ok], axis=0, method="asymptotic",
+                                       nan_policy="omit").pvalue
+    return out
 
 
 def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz,
@@ -5982,7 +6037,7 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
                                seed=0, power_feature="band power", channel=None,
                                metric_key=None, metric_label=None,
                                tile_seconds=None, requested_seconds=None, chunk_exclusion=None,
-                               from_device_spectrum=None):
+                               from_device_spectrum=None, from_clinic_sheet=None):
     """The whole grid: for every band centre and every length of signal averaged into one
     measurement, how well that band's power tracks the chosen pain score.
 
@@ -6076,6 +6131,7 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         pain, strategy=strategy, low_pct=low_pct, high_pct=high_pct, pain_cutoff=pain_cutoff)
     y_bin = np.asarray(y_bin, dtype=float)
     auc = np.full((T, C), np.nan)
+    auc_p = np.full((T, C), np.nan)
     auc_pos = np.zeros((T, C), dtype=int)
     auc_neg = np.zeros((T, C), dtype=int)
     for t in range(T):
@@ -6083,12 +6139,16 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         auc[t] = got["auc"]
         auc_pos[t] = got["n_pos"]
         auc_neg[t] = got["n_neg"]
+        auc_p[t] = mann_whitney_p_columns(X[t], y_bin)
     # The direction-folded value is what a fitted one-predictor logistic regression returns in
     # sample; see the identity documented on `rank_auc_columns`. It is carried alongside rather than
     # instead, because folding throws the direction away AND puts a floor at 0.5, and the grid the
     # page draws needs both sides of 0.5 to be visible.
     with np.errstate(invalid="ignore"):
         auc_folded = np.maximum(auc, 1.0 - auc)
+    # Every cell's own uncorrected p (the PI, 2026-09-16), so the page prints it rather than
+    # computing it: Pearson's for r (above), the rank test's for the AUC (`auc_p`, in the loop).
+    corr_p = pearson_p_from_r(corr, corr_n)
 
     # ---- which cells the length-of-signal axis does not apply to (open item 26) ----------------
     # Computed on the SAME X the two grids above were computed from, after the outlier step, so the
@@ -6107,6 +6167,15 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
     # Reported as None, not 0, when the flag did not arrive: "none of them" and "nobody checked"
     # are different answers, and a page that shows a confident zero for the second is lying quietly.
     n_dev_reports = int(sum(_dev_flags)) if len(_dev_flags) == P else None
+    # ---- which ratings came from a clinic or at-home sheet (decision 186) -- the same per-cell
+    # count as the device mark, for the same reason: the number behind a cell is the cell's own.
+    sheet_n, sheet_tot = _device_spectrum_cell_counts(X, pain, from_clinic_sheet)
+    sheet_n_auc, _sheet_tot_auc = _device_spectrum_cell_counts(X, y_bin, from_clinic_sheet)
+    _sheet_flags = [bool(v) for v in (from_clinic_sheet or [])]
+    # The contact pair's OWN count -- the most sheet ratings any cell used, the same rule
+    # `n_pain_reports` follows below -- not how many were handed in, which is the same number on
+    # every contact pair and says nothing about this one.
+    n_sheet_reports = (int(np.max(sheet_n)) if sheet_n.size else 0) if len(_sheet_flags) == P else None
 
     # ---- the selection-aware reference: the distribution of the BEST OF TEN under no relationship
     corr_null = _best_of_windows_null_correlation(X, pain, n_perm=int(n_perm), rng=rng)
@@ -6141,6 +6210,8 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
     # winning length chosen partly from reports for which no length was ever read.
     _attach_device_spectrum_to_rows(best_corr_rows, dev_n, dev_tot, kept_req)
     _attach_device_spectrum_to_rows(best_auc_rows, dev_n_auc, dev_tot_auc, kept_req)
+    _attach_sheet_count_to_rows(best_corr_rows, sheet_n, n_sheet_reports, kept_req)
+    _attach_sheet_count_to_rows(best_auc_rows, sheet_n_auc, n_sheet_reports, kept_req)
 
     crosscheck = logistic_fit_crosscheck(
         {float(kept_req[t]): X[t] for t in range(T)}, y_bin, best_auc_rows)
@@ -6182,6 +6253,8 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         "auc_grid": [[_f(v) for v in row] for row in auc],
         "auc_direction_folded_grid": [[_f(v) for v in row] for row in auc_folded],
         "n_grid": [[int(v) for v in row] for row in corr_n],
+        "p_grid": [[_f(v) for v in row] for row in corr_p],
+        "auc_p_grid": [[_f(v) for v in row] for row in auc_p],
         "auc_n_high_grid": [[int(v) for v in row] for row in auc_pos],
         "auc_n_low_grid": [[int(v) for v in row] for row in auc_neg],
         # OPEN ITEM 26. Same shape as the two grids above, one entry per cell: how many of the pain
@@ -6197,6 +6270,9 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         "device_spectrum_total_grid_auc": [[int(v) for v in row] for row in dev_tot_auc],
         "device_spectrum_share_grid_auc": [[_f(v) for v in row] for row in dev_share_auc],
         "n_pain_reports_from_device_spectrum": n_dev_reports,
+        "clinic_sheet_n_grid": [[int(v) for v in row] for row in sheet_n],
+        "clinic_sheet_n_grid_auc": [[int(v) for v in row] for row in sheet_n_auc],
+        "n_pain_reports_from_clinic_sheet": n_sheet_reports,
         "device_spectrum_axis_note": DEVICE_SPECTRUM_AXIS_NOTE,
         "best_correlation_rows": best_corr_rows,
         "best_auc_rows": best_auc_rows,

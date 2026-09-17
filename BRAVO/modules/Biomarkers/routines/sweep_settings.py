@@ -97,6 +97,16 @@ def allow_window_reuse_param(request_data):
     return str(request_data.get("AllowWindowReuse", "")).lower() in ("1", "true", "yes", "on")
 
 
+def include_clinic_sheet_ratings_param(request_data):
+    """Whether the clinic and at-home sheets' scores are pooled into the heat maps as extra ratings
+    (decision 186). OFF unless the request says so: the sheet steps were taken while current was
+    being stepped on purpose, and a reader should choose to look at the heat maps that way."""
+    # Spelled `request_data.get(...)` so the whitelist guard in
+    # `test_stability_background_launch.py` can read the key off this source (decision 131's rule).
+    value = request_data.get("IncludeClinicSheetRatings", "") if request_data else ""
+    return str(value).lower() in ("1", "true", "yes", "on")
+
+
 def sweep_metric_param(request_data):
     """The section's own `SweepMetric`, else the page's `LabelMetric`, else the default; an
     unknown score falls back to the default the way `_resolve_biomarker_metric` does."""
@@ -108,7 +118,8 @@ def sweep_metric_param(request_data):
 
 
 def sweep_settings_tag(*, label_metric, match_tolerance_min, match_direction, allow_window_reuse,
-                       label_strategy, percentile_low, percentile_high):
+                       label_strategy, percentile_low, percentile_high,
+                       include_clinic_sheet_ratings=False):
     """The settings a stored grid was built under, as one normalised, JSON-safe dict.
 
     WHY, 2026-09-11. The store keeps up to twelve grids per participant (decision 107), one per
@@ -127,6 +138,7 @@ def sweep_settings_tag(*, label_metric, match_tolerance_min, match_direction, al
         "label_strategy": str(label_strategy),
         "percentile_low": float(percentile_low),
         "percentile_high": float(percentile_high),
+        "include_clinic_sheet_ratings": bool(include_clinic_sheet_ratings),
     }
 
 
@@ -137,7 +149,8 @@ def sweep_settings_tag_from_request(request_data):
     return sweep_settings_tag(
         label_metric=sweep_metric_param(rd), match_tolerance_min=match_tolerance_param(rd),
         match_direction=sweep_match_direction(rd), allow_window_reuse=allow_window_reuse_param(rd),
-        label_strategy=strategy, percentile_low=low, percentile_high=high)
+        label_strategy=strategy, percentile_low=low, percentile_high=high,
+        include_clinic_sheet_ratings=include_clinic_sheet_ratings_param(rd))
 
 
 def metric_label(key):

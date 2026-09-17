@@ -494,3 +494,14 @@ def test_reference_with_no_in_force_uses_the_last_step_and_names_the_reason():
     epoch, info = CP.reference_epoch_for(_ep_frame(), None)
     assert epoch == 3.0 and info["source"] == "last_clinic_step"
     assert "was not available to reference to" in info["sentence"]
+
+
+def test_sheet_ratings_kind_matches_the_ingest():
+    """Decision 186: the Biomarkers heat maps read the ingested clinic steps under a kind name
+    spelled in their own module (Biomarkers may not import StimOptimizer). The two spellings must
+    stay one kind, or the switch would quietly read nothing."""
+    import os as _os
+    import re as _re
+    src = open(_os.path.join(_os.path.dirname(__file__), "..", "..", "Biomarkers", "bravo_service.py")).read()
+    m = _re.search(r'^CLINIC_SHEET_STEPS_KIND = "([^"]+)"', src, _re.M)     # read, not imported: Django
+    assert m and m.group(1) == CP.CLINIC_PAIN_KIND

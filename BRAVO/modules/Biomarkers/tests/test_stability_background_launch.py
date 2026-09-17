@@ -60,6 +60,17 @@ def _request_keys_read_by(fn):
     return keys
 
 
+def test_the_sheet_ratings_switch_is_in_the_whitelist_and_in_the_closed_loop_keys():
+    """Decision 186: the switch is in the sweep's key, so the background stability run and the
+    Closed-Loop page's grid request must carry it or they key themselves to a grid the page never
+    asks for -- the exact drift the whitelist test below exists to catch."""
+    assert "IncludeClinicSheetRatings" in bs.STABILITY_GRID_SETTING_KEYS
+    js_path = os.path.join(_BRAVO_ROOT, "..", "Client", "src", "views", "Reports", "ClosedLoopSim",
+                           "useBandSweepGrid.js")
+    if os.path.isfile(js_path):                  # the container mounts BRAVO/ alone; the host sees Client/
+        assert '"IncludeClinicSheetRatings"' in open(js_path).read()
+
+
 def test_the_setting_whitelist_covers_every_request_field_the_sweep_reads():
     """THE LOAD-BEARING TEST. Every setting `band_time_sweep_for_participant` and its four setting
     helpers read must either travel to the background run or be listed above as deliberately left
@@ -68,7 +79,8 @@ def test_the_setting_whitelist_covers_every_request_field_the_sweep_reads():
     """
     read = set()
     for fn in (bs.band_time_sweep_for_participant, bs._label_strategy_params,
-               bs._match_tolerance_param, bs._sweep_match_direction, bs._resolve_biomarker_metric):
+               bs._match_tolerance_param, bs._sweep_match_direction, bs._resolve_biomarker_metric,
+               bs._include_clinic_sheet_ratings_param):
         read |= _request_keys_read_by(fn)
 
     carried = set(bs.STABILITY_GRID_SETTING_KEYS)
@@ -85,7 +97,8 @@ def test_the_whitelist_carries_nothing_the_sweep_does_not_read():
     make two requests that are identical to the sweep look different to the background run."""
     read = set()
     for fn in (bs.band_time_sweep_for_participant, bs._label_strategy_params,
-               bs._match_tolerance_param, bs._sweep_match_direction, bs._resolve_biomarker_metric):
+               bs._match_tolerance_param, bs._sweep_match_direction, bs._resolve_biomarker_metric,
+               bs._include_clinic_sheet_ratings_param):
         read |= _request_keys_read_by(fn)
     extra = sorted(set(bs.STABILITY_GRID_SETTING_KEYS) - read)
     assert not extra, f"the background run carries {extra}, which the sweep never reads"

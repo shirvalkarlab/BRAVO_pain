@@ -141,4 +141,12 @@
   B3 (185): `DecodeCommon/stability_answer.py` one home, `attach_stored_stability_answers` on both sweep returns under
   the grid's own key, symbols + hover + caption on the grid; 3 container + 5 jest tests; live 132 points 28/232/4.
   Build main.b872af0d. Suites: see the commit.
+- Phase 8 (2026-09-16, night): B5 (186): `sheet_ratings.py`, `IncludeClinicSheetRatings` switch (off), v19; 5 container + 3 jest
+  tests; live off = 0 scientific diffs, on adds 235/145/87/71/64/61 NRS sheet ratings per contact. T1 (187): conceded;
+  `analytics.powerdomain` block deleted from `_compute_analytics` (112 lines); live 1,028,318 -> 939,233 fields, 89,085
+  only-before all under that key, 0 differing. Hover (188): backend `p_grid` (Pearson, scipy t) and `auc_p_grid`
+  (scipy `mannwhitneyu` asymptotic, vectorised per length), v20; hover "X ratings, q = Y" / "p = Y"; browser t-test and
+  incomplete-beta code deleted; panels read the grid. Live: 6 contacts x 198 cells, every p finite. Host 1335/2/0;
+  container 664/0 (one run with the live probe beside it tripped the timing-sensitive lock test, 663/1; alone 664/0).
+  Jest Biomarkers 34/34. Build main.7930421b, chunk 753.26f2d196.
 

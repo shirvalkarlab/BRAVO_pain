@@ -56,7 +56,7 @@ import { biomarkerHeatmapSlot, prefetchBiomarkerHeatmapMetric } from "views/Repo
 import PAL from "views/Reports/ClosedLoopSim/palette";
 import { BIN_HI, BIN_LO, BIN_HI_RGB, BIN_LO_RGB, divergingRgb, diverging } from "./binarizationModel";
 import { contactSortKey } from "./contactOrder";
-import { bestCellReadout, hoverCustomData, tierBullets, deviceSpectrumBullets, stabilityMark, stabilityBullet } from "./gridReadouts";
+import { bestCellReadout, cellNP, fmtP, hoverCustomData, tierBullets, deviceSpectrumBullets, stabilityMark, stabilityBullet, clinicSheetBullets } from "./gridReadouts";
 
 const num = (v, d = 3) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 
@@ -124,112 +124,15 @@ function bulletsFor(sw) {
       + "\u2014 a research finding, not a device-ready setting.",
     "The left grid ignores the binarization cuts (a continuous score has no split); the right grid "
       + "recomputes and flashes.",
-    "Clicking a cell shows a plain, uncorrected Pearson r/p and Welch t \u2014 not the grid's corrected numbers.",
+    "Clicking a cell shows its plain, uncorrected Pearson r/p and Mann-Whitney p \u2014 not the grid's corrected numbers.",
     ...notes.slice(3),
   ];
 }
 
-// ---------------------------------------------------------------------------------------------
-// STANDARD, UNCORRECTED PER-CELL STATISTICS for the two persistent side panels -- Pearson's r's
-// own parametric p-value, and a Welch two-sample t-test between the high/low groups. These are
-// NOT the grid's own permutation- and bootstrap-corrected, family-wise-adjusted statistics
-// (`best_correlation_rows`/`best_auc_rows`, computed only for each column's single best-of-ten-
-// lengths row) -- there is no such rigorous answer stored for an arbitrary cell, and computing one
-// would mean adding new backend permutation machinery. A plain, standard statistic computed from
-// the cell's own already-fetched (power, pain) pairs is what was asked for ("t-test if no other
-// exists"), and is labelled in the UI as exactly that rather than conflated with the grid's own
-// headline numbers.
-// ---------------------------------------------------------------------------------------------
-function pearsonR(xs, ys) {
-  const n = xs.length;
-  if (n < 3) return { r: null, n };
-  const mx = xs.reduce((s, v) => s + v, 0) / n;
-  const my = ys.reduce((s, v) => s + v, 0) / n;
-  let sxy = 0, sxx = 0, syy = 0;
-  for (let i = 0; i < n; i += 1) {
-    const dx = xs[i] - mx, dy = ys[i] - my;
-    sxy += dx * dy; sxx += dx * dx; syy += dy * dy;
-  }
-  const denom = Math.sqrt(sxx * syy);
-  return { r: denom > 0 ? sxy / denom : null, n };
-}
-// Log of the complete Gamma function (Lanczos approximation), used only through
-// `regularizedIncompleteBeta` below to get an EXACT two-tailed Student's-t p-value -- not a
-// normal-distribution approximation, which would be wrong at the small sample sizes a single
-// cell can have.
-function logGamma(x) {
-  const g = 7;
-  const c = [0.99999999999980993, 676.5203681218851, -1259.1392167224028,
-    771.32342877765313, -176.61502916214059, 12.507343278686905,
-    -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
-  if (x < 0.5) return Math.log(Math.PI / Math.sin(Math.PI * x)) - logGamma(1 - x);
-  const xx = x - 1;
-  let a = c[0];
-  const t = xx + g + 0.5;
-  for (let i = 1; i < g + 2; i += 1) a += c[i] / (xx + i);
-  return 0.5 * Math.log(2 * Math.PI) + (xx + 0.5) * Math.log(t) - t + Math.log(a);
-}
-// Continued-fraction evaluation for the regularized incomplete beta function (the standard
-// textbook algorithm), used only through `regularizedIncompleteBeta` immediately below.
-function betacf(x, a, b) {
-  const MAXIT = 200, EPS = 3e-14, FPMIN = 1e-300;
-  const qab = a + b, qap = a + 1, qam = a - 1;
-  let c = 1, d = 1 - (qab * x) / qap;
-  if (Math.abs(d) < FPMIN) d = FPMIN;
-  d = 1 / d;
-  let h = d;
-  for (let m = 1; m <= MAXIT; m += 1) {
-    const m2 = 2 * m;
-    let aa = (m * (b - m) * x) / ((qam + m2) * (a + m2));
-    d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN;
-    c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN;
-    d = 1 / d; h *= d * c;
-    aa = (-(a + m) * (qab + m) * x) / ((a + m2) * (qap + m2));
-    d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN;
-    c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN;
-    d = 1 / d;
-    const del = d * c; h *= del;
-    if (Math.abs(del - 1) < EPS) break;
-  }
-  return h;
-}
-// The regularized incomplete beta function I_x(a, b). Verified against known reference values
-// before use (t=2.228, df=10 -> p=0.0500; r=0.5, n=30 -> p=0.0049).
-function regularizedIncompleteBeta(x, a, b) {
-  if (x <= 0) return 0;
-  if (x >= 1) return 1;
-  const bt = Math.exp(logGamma(a + b) - logGamma(a) - logGamma(b)
-    + a * Math.log(x) + b * Math.log(1 - x));
-  return x < (a + 1) / (a + b + 2)
-    ? (bt * betacf(x, a, b)) / a
-    : 1 - (bt * betacf(1 - x, b, a)) / b;
-}
-// Two-tailed p-value for a Student's t statistic with `df` degrees of freedom (real-valued df is
-// fine -- Welch's t-test below produces a fractional one): p = I_{df/(df+t^2)}(df/2, 1/2).
-function tTestPValue(t, df) {
-  if (!Number.isFinite(t) || !Number.isFinite(df) || df <= 0) return null;
-  const x = df / (df + t * t);
-  return regularizedIncompleteBeta(x, df / 2, 0.5);
-}
-function meanOf(xs) { return xs.reduce((s, v) => s + v, 0) / xs.length; }
-function sampleVariance(xs, m) {
-  return xs.length > 1 ? xs.reduce((s, v) => s + (v - m) ** 2, 0) / (xs.length - 1) : 0;
-}
-// Welch's two-sample t-test (does not assume the two groups have equal variance -- the standard
-// general-purpose default) between the high- and low-pain groups' band-power values for one cell.
-function welchTTest(a, b) {
-  if (a.length < 2 || b.length < 2) return { t: null, df: null, p: null, n1: a.length, n2: b.length };
-  const ma = meanOf(a), mb = meanOf(b);
-  const va = sampleVariance(a, ma), vb = sampleVariance(b, mb);
-  const se2 = va / a.length + vb / b.length;
-  const t = se2 > 0 ? (ma - mb) / Math.sqrt(se2) : null;
-  const df = se2 > 0
-    ? (se2 * se2) / ((va * va) / (a.length * a.length * (a.length - 1))
-      + (vb * vb) / (b.length * b.length * (b.length - 1)))
-    : null;
-  const p = (t != null && df != null) ? tTestPValue(t, df) : null;
-  return { t, df, p, n1: a.length, n2: b.length, mean1: ma, mean2: mb };
-}
+// The two side panels print each cell's own uncorrected statistics -- Pearson r with its p, the
+// AUC with its Mann-Whitney p -- READ OFF THE GRID RESPONSE (`p_grid`, `auc_p_grid`, decision 188).
+// Nothing statistical is computed in the browser any more; the t-test and the incomplete-beta
+// machinery decision 87 wrote here are gone (the PI, 2026-09-16: "Get rid of the t-test code").
 
 /**
  * ONE HEAT MAP, IN PLOTLY. Row 0 is the shortest length of signal (top of the grid, matching the
@@ -622,6 +525,11 @@ function DeviceTierCaption({ ranges, sw }) {
 
 /** The symbols inside the circles (decision 185): one bullet, shown only once a stored stability
  * answer has reached at least one row -- a legend for symbols that are not drawn is noise. */
+/** What the heat maps pool (decision 186): at-home ratings only, or the sheets' scores too. */
+function ClinicSheetCaption({ sw }) {
+  return <CaptionBullets items={clinicSheetBullets(sw)} color="#8a5a00" />;
+}
+
 function StabilityCaption({ sw }) {
   const rows = (sw && sw.best_correlation_rows) || [];
   const any = rows.some((r) => stabilityMark(r.cross_setting_stability));
@@ -671,11 +579,11 @@ function ScatterStatsLine({ cell, pinnedCell, sw }) {
       </MDTypography>
     );
   }
-  const xs = cell.points.map((p) => p.power);
-  const ys = cell.points.map((p) => p.pain);
-  const { r, n } = pearsonR(xs, ys);
-  const t = (r != null && n > 2) ? r * Math.sqrt((n - 2) / (1 - r * r)) : null;
-  const p = t != null ? tTestPValue(t, n - 2) : null;
+  // The cell's own r, p and n off the grid response (decision 188: nothing statistical is
+  // computed in the browser; decision 66 proved the drill-down's r reproduces the grid's).
+  const r = sw && sw.correlation_grid && sw.correlation_grid[pinnedCell.row]
+    ? sw.correlation_grid[pinnedCell.row][pinnedCell.col] : null;
+  const { n, p } = cellNP(sw, "corr", pinnedCell.col, pinnedCell.row);
   // Review 2026-09-15, B1: the grid's OWN corrected statistic for this cell, printed beside the
   // plain one and labelled as a different thing. Only each column's best cell has one; for any
   // other cell the readout says so rather than leaving the reader to assume the plain r is it.
@@ -684,7 +592,7 @@ function ScatterStatsLine({ cell, pinnedCell, sw }) {
   return (
     <MDBox>
       <MDTypography variant="caption" color="dark" sx={{ fontSize: 15, display: "block", mb: 0.25 }}>
-        {`Pearson r = ${num(r, 3)}, p = ${p == null ? "—" : num(p, 4)}, n = ${n} (uncorrected)`}
+        {`Pearson r = ${num(r, 3)}, p = ${fmtP(p)}, n = ${n} (uncorrected)`}
       </MDTypography>
       {readout ? (
         <MDTypography variant="caption" sx={{ fontSize: 13, display: "block", mb: 0.5,
@@ -778,8 +686,8 @@ function PlotlyScatter({ divId, cell, pinnedCell, side, metricLabel }) {
   return <div id={divId} style={{ width: "100%", maxWidth: side, aspectRatio: "1 / 1" }} />;
 }
 
-/** Persistent panel next to the AUC grid: two violins (high/low pain) and a Welch two-sample
- * t-test between them, reported because no other per-cell comparison statistic is stored. */
+/** Persistent panel next to the AUC grid: two violins (high/low pain) and the cell's own AUC with
+ * its Mann-Whitney p and the two counts, read off the grid response (decision 188). */
 function ViolinPanel({ cell, pinnedCell, channelLabel, height, aucValue, sw }) {
   if (!pinnedCell) {
     return (
@@ -800,16 +708,14 @@ function ViolinPanel({ cell, pinnedCell, channelLabel, height, aucValue, sw }) {
   const pts = cell.points;
   const highVals = pts.filter((p) => p.label === "high").map((p) => p.power);
   const lowVals = pts.filter((p) => p.label === "low").map((p) => p.power);
-  const { t, df, p, n1, n2 } = welchTTest(highVals, lowVals);
+  const { p, nHigh, nLow } = cellNP(sw, "auc", pinnedCell.col, pinnedCell.row);
 
   return (
     <MDBox>
       {/* No title here -- it duplicated the scatter panel's own title exactly (both describe the
           same pinned cell); that one copy, above the scatter panel, is now the only one. */}
       <MDTypography variant="caption" color="dark" sx={{ fontSize: 15, display: "block", mb: 0.5 }}>
-        {`AUC = ${num(aucValue, 3)}, `}
-        {`Welch t(${num(df, 1)}) = ${num(t, 2)}, p = ${p == null ? "—" : num(p, 4)} `}
-        {`(high n=${n1}, low n=${n2})`}
+        {`AUC = ${num(aucValue, 3)}, p = ${fmtP(p)} (Mann-Whitney; high n=${nHigh}, low n=${nLow})`}
       </MDTypography>
       {/* The grid's own corrected statistic for this cell, the same small line in the same ink as
           beside the scatter (the PI, 2026-09-15); the plot below moves down by its height. */}
@@ -1132,6 +1038,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
                   {"Correlation with pain — depends only on matching"}
                 </MDTypography>
                 <DeviceSpectrumCaption sw={corrSw} />
+                <ClinicSheetCaption sw={corrSw} />
                 <DeviceTierCaption ranges={deviceRanges} sw={corrSw} />
                 <StabilityCaption sw={corrSw} />
               </Grid>

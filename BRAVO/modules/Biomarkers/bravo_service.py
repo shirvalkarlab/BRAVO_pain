@@ -41,6 +41,7 @@ from .routines import analytics
 from .routines import availability
 from .routines import band_results_tables
 from .routines import sweep_settings
+from .routines import sheet_ratings
 from .routines import local_time
 from .routines import streaming_psd
 
@@ -3464,7 +3465,7 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
     cluster scatter, and the streaming correlation spectrum). The independent pieces run
     concurrently; each is guarded so an analytics failure never breaks the main timeline response.
     """
-    result = {"timedomain": None, "powerdomain": None}
+    result = {"timedomain": None}   # "powerdomain" left this dict on 2026-09-16 (decision 187, note below)
 
     td = run.get("timedomain")
     if td is not None:
@@ -3499,118 +3500,14 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
         except Exception as e:
             result["timedomain"] = {"error": str(e)}
 
-    if chronic is not None and pro_df is not None and len(pro_df) > 0:
-        try:
-            # Reuse the branch's full-resolution cv_df if available (avoids a second KMeans +
-            # smoothing over 100k+ rows); fall back to building it when running analytics alone.
-            pr = run.get("powerdomain")
-            cv_df = pr.get("cv_df") if isinstance(pr, dict) and pr.get("cv_df") is not None else None
-            if cv_df is None:
-                cv_df = adapter.bravo_chronic_to_lfp_df(chronic, pro_df, label_metric=label_metric,
-                                                        kmeans_features=kmeans_features,
-                                                        label_strategy=label_strategy,
-                                                        low_pct=low_pct, high_pct=high_pct)
-            sw_kwargs = {"sliding": sliding}
-            if train_days is not None:
-                sw_kwargs["train_days"] = train_days
-            if step_days is not None:
-                sw_kwargs["step_days"] = step_days
-            result["powerdomain"] = _run_parallel({
-                "sliding_window": lambda: analytics.sliding_window_analytics(cv_df, **sw_kwargs),
-                "roc": lambda: analytics.roc_analysis(cv_df),
-                "lfp_distribution": lambda: analytics.lfp_distribution(cv_df),
-                "power_pain_scatter": lambda: analytics.power_pain_scatter(cv_df, label_metric),
-                "cluster_scatter": lambda: analytics.cluster_scatter(cv_df, kmeans_features=kmeans_features),
-                "pain_binarization": lambda: analytics.pain_binarization(
-                    cv_df, label_metric, kmeans_features=kmeans_features, pro_df=pro_df,
-                    strategy=label_strategy, low_pct=low_pct, high_pct=high_pct),
-            })
-            # Per-channel analytics (e.g. Left LFP vs Right LFP) — pipeline.run_powerdomain_branch
-            # already split the chronic input by ChannelNames[0]; here we run the same panel-driving
-            # analytics on each per-channel cv_df so the card can toggle between them.
-            per_ch = pr.get("per_channel") if isinstance(pr, dict) else None
-            if per_ch:
-                per_ch_analytics = {}
-                for ch_label, ch_data in per_ch.items():
-                    ch_cv = ch_data.get("cv_df")
-                    if ch_cv is None or len(ch_cv) == 0:
-                        continue
-                    ch_tasks = {
-                        "sliding_window": (lambda d=ch_cv: analytics.sliding_window_analytics(d, **sw_kwargs)),
-                        "roc": (lambda d=ch_cv: analytics.roc_analysis(d)),
-                        "lfp_distribution": (lambda d=ch_cv: analytics.lfp_distribution(d)),
-                        "power_pain_scatter": (lambda d=ch_cv: analytics.power_pain_scatter(d, label_metric)),
-                        # Per-(channel, frequency) decoding: ROC + Otsu + binarization split for EACH
-                        # sensing band present in this contact's frame (chronic + streaming pooled at
-                        # the same band, never across bands). Drives the frequency sub-selector and the
-                        # power-domain binarization preview.
-                        "frequency_decode": (lambda d=ch_cv: pipeline._decode_by_frequency(d, label_metric)),
-                    }
-                    per_ch_analytics[ch_label] = _run_parallel(ch_tasks)
-                    # Carry the channel summary alongside so the panel can display per-channel AUC.
-                    per_ch_analytics[ch_label]["summary"] = ch_data.get("summary") or {}
-                result["powerdomain"]["per_channel"] = per_ch_analytics
-            # Surface the chronic-trend sensing CENTER FREQUENCY per hemisphere (stamped on each
-            # chronic recording at decode time from the GROUP-level config; merged onto the loaded
-            # dict in _load_recordings). The chronic trend is a band-power-at-a-fixed-frequency
-            # series, so the report should state which frequency -- a different value than the
-            # streaming power-domain center frequencies in recorded_powers. Guarded so it never
-            # breaks the response; empty when no chronic recording carried a frequency.
-            if isinstance(result.get("powerdomain"), dict):
-                chronic_hz = {}
-                # Per-recording (start_time, hz, channel) tuples, grouped by hemisphere, so we can
-                # both (a) keep the latest hz per hemisphere (legacy chronic_center_hz) and (b) emit
-                # a TIME-ORDERED change timeline marking where the sensing center frequency or the
-                # source channel switches during the record — the frontend draws a dashed marker at
-                # each change so a mid-record reconfiguration is unmistakable.
-                by_hemi = {}
-                for c in (chronic or []):
-                    if not isinstance(c, dict) or c.get("Source") != "chronic":
-                        continue
-                    hz = c.get("CenterFrequencyHz")
-                    chans = c.get("ChannelNames") or []
-                    chan = str(chans[0]) if chans else ""
-                    hemi = chan.split(" ")[0] if chan else ""
-                    if hz is not None and hemi:
-                        chronic_hz[hemi] = hz
-                    if hemi:
-                        ts = adapter._to_datetime(c.get("StartTime"))
-                        by_hemi.setdefault(hemi, []).append(
-                            {"t": ts, "hz": hz, "channel": chan})
-                if chronic_hz:
-                    result["powerdomain"]["chronic_center_hz"] = chronic_hz
-                # Build the change timeline: within each hemisphere, sort by start time and keep only
-                # the points where (hz, channel) differs from the previous one (the first record is
-                # always emitted as the initial config). Each entry: {hemi, t (ISO), center_hz,
-                # channel, changed: ["frequency"|"channel"...]}. Empty when nothing changes.
-                changes = []
-                for hemi, recs in by_hemi.items():
-                    recs = [r for r in recs if r["t"] is not None and pd.notna(r["t"])]
-                    recs.sort(key=lambda r: r["t"])
-                    prev = None
-                    for r in recs:
-                        if prev is None:
-                            changes.append({"hemi": hemi, "t": r["t"].isoformat(),
-                                            "center_hz": r["hz"], "channel": r["channel"],
-                                            "changed": ["initial"]})
-                        else:
-                            diff = []
-                            if r["hz"] != prev["hz"]:
-                                diff.append("frequency")
-                            if r["channel"] != prev["channel"]:
-                                diff.append("channel")
-                            if diff:
-                                changes.append({"hemi": hemi, "t": r["t"].isoformat(),
-                                                "center_hz": r["hz"], "channel": r["channel"],
-                                                "changed": diff})
-                        prev = r
-                # Only surface the timeline if there is at least one real (post-initial) change —
-                # otherwise the single static config is already conveyed by chronic_center_hz.
-                if any(ch["changed"] != ["initial"] for ch in changes):
-                    changes.sort(key=lambda ch: ch["t"])
-                    result["powerdomain"]["sensing_config_changes"] = changes
-        except Exception as e:
-            result["powerdomain"] = {"error": str(e)}
+    # THE CHRONIC-DETECTOR ANALYTICS WERE DELETED HERE on 2026-09-16 (decision 187, the PI: "this
+    # spurious stuff ... you should delete"). `analytics.powerdomain` -- the ROC curve, the
+    # threshold, the sliding-window AUC, the power-against-pain scatter, the cluster scatter, the
+    # binarization block, the per-contact copies, the sensing-centre change list -- was computed on
+    # every Recompute and read by no panel since decision 174 removed the last one that drew it.
+    # The chronic-detector RESULT the page still shows (the timeline's "Power" lane with its
+    # threshold line, and the one-line summary) comes from `pipeline.run_powerdomain_branch`, not
+    # from here, and is untouched.
 
     return result
 
@@ -5567,6 +5464,28 @@ def attach_stored_stability_answers(resp, participant_uid):
     return resp
 
 
+#: The kind the clinic-sheet ingest writes (`StimOptimizer.clinic_pain.CLINIC_PAIN_KIND`), spelled
+#: here rather than imported: Biomarkers may not import StimOptimizer (the dependency runs the other
+#: way). `test_sheet_ratings_kind_matches_the_ingest` pins the two spellings equal.
+CLINIC_SHEET_STEPS_KIND = "clinic_pain_steps"
+
+
+def load_clinic_sheet_steps(participant_uid):
+    """The newest ingested clinic-and-home testing steps for this participant (decision 161's raw
+    kind), or None with a reason. A raw kind, so no consumer refusal applies."""
+    try:
+        payload, _stamp = _cache_store.load_newest(
+            CLINIC_SHEET_STEPS_KIND, participant_uid, consumer="biomarkers",
+            root=_SHARED_CACHE_DIR_OVERRIDE)
+    except Exception as exc:                                    # noqa: BLE001
+        _log.warning("biomarkers: the clinic-sheet steps could not be read for %s",
+                     participant_uid, exc_info=True)
+        return None, f"the clinic-sheet steps could not be read ({exc!r})"
+    if not isinstance(payload, dict) or payload.get("steps") is None:
+        return None, "no clinic sheets have been ingested for this participant yet"
+    return payload.get("steps"), None
+
+
 def load_stored_stability_grid(participant_uid, *, consumer="biomarkers"):
     """The newest stored stability grid for this participant, as
     `{(channel, centre_hz): raw_stim_result}`, or None. Returns the newest rather than a keyed
@@ -5638,6 +5557,7 @@ STABILITY_GRID_LAUNCH_UNDER_OVERRIDE_ROOT = False
 STABILITY_GRID_SETTING_KEYS = (
     "SweepMetric", "LabelMetric", "LabelStrategy", "PercentileLow", "PercentileHigh",
     "MatchToleranceMin", "AllowWindowReuse", "OutlierNMad", "OutlierScale", "MatchDirection",
+    "IncludeClinicSheetRatings",
 )
 
 
@@ -7556,7 +7476,7 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
                               pain_values, label_strategy, low_pct, high_pct,
                               outlier_n_mad, outlier_scale, metric_key, metric_label,
                               n_perm=None, n_boot=None, seed=0, match_direction="pro_first",
-                              region_map=None, participant_uid=None):
+                              region_map=None, participant_uid=None, from_clinic_sheet=None):
     """Run the sweep for every sensing contact pair that has a cache, one entry per pair.
 
     `participant_uid` selects WHOSE outlier ceilings apply (review B3): the ceiling table is keyed
@@ -7594,6 +7514,7 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
                 n_boot=(analytics.BAND_TIME_SWEEP_N_BOOT if n_boot is None else n_boot),
                 seed=seed, channel=raw_ch, metric_key=metric_key, metric_label=metric_label,
                 chunk_exclusion=chunk_excl, from_device_spectrum=from_device,
+                from_clinic_sheet=from_clinic_sheet,
                 power_feature=("band power in the device's own least-significant-bit units, "
                                "reached from the 250 samples-per-second voltage trace by the "
                                "validated transform, or from the device's own spectrum where no "
@@ -7713,6 +7634,7 @@ def _attach_grid_export_columns(participant_uid, sweeps, *, band_width_hz):
 # routines/sweep_settings.py so the Closed-Loop module can call it without Django. Deliberately
 # not the same helper as `_forecast_match_direction` below, which falls back to "prior".
 _sweep_match_direction = sweep_settings.sweep_match_direction
+_include_clinic_sheet_ratings_param = sweep_settings.include_clinic_sheet_ratings_param
 
 
 def _forecast_match_direction(request_data):
@@ -7824,6 +7746,30 @@ def band_time_sweep_for_participant(request_data):
     pro_times = np.asarray(pro_match[0], dtype=float)
     pain_values = np.asarray(pro_match[1], dtype=float)
 
+    # THE CLINIC AND AT-HOME SHEETS' SCORES AS EXTRA RATINGS (decision 186), behind a switch that
+    # is OFF by default. Merged BEFORE the key is built, because the merged series is what the
+    # grid is computed from, and reported on the response so the page can say how many of a
+    # cell's ratings came from a sheet. `sheet_ratings.py` says why this is a caveat.
+    include_sheets = _include_clinic_sheet_ratings_param(request_data)
+    from_clinic_sheet = None
+    clinic_sheet_block = {"included": bool(include_sheets), "n_available": 0, "n_added": 0,
+                          "sheet_column": None, "scale": None, "reason": None}
+    if include_sheets:
+        steps, why = load_clinic_sheet_steps(participant_uid)
+        col_scale = sheet_ratings.SHEET_COLUMN_FOR_METRIC.get(str(label_metric))
+        if col_scale is not None:
+            clinic_sheet_block["sheet_column"], clinic_sheet_block["scale"] = col_scale
+        if steps is None:
+            clinic_sheet_block["reason"] = why
+        elif col_scale is None:
+            clinic_sheet_block["reason"] = f"the sheets carry no column for {metric_label}"
+        else:
+            st, sv, _setting = sheet_ratings.sheet_ratings_for_metric(steps, label_metric)
+            clinic_sheet_block["n_available"] = int(st.size)
+            pro_times, pain_values, flags = sheet_ratings.merge_ratings(pro_times, pain_values, st, sv)
+            from_clinic_sheet = [bool(v) for v in flags]
+            clinic_sheet_block["n_added"] = int(st.size)
+
     # TRACK A STEP 6: THE RESULTS ARE WRITTEN BACK, AND THE KEY DECIDES WHETHER TO RECOMPUTE.
     # The key names the tile entry, the pain-report snapshot, the pain score, and every setting
     # the sweep ran under. A newly filed report changes the snapshot key, a new upload changes the
@@ -7837,7 +7783,8 @@ def band_time_sweep_for_participant(request_data):
         "label_strategy": label_strategy, "percentile_low": float(low_pct),
         "percentile_high": float(high_pct), "outlier_n_mad": float(outlier_n_mad),
         "outlier_scale": outlier_scale, "match_direction": match_direction,
-        "include_cross_setting_stability": bool(include_stability)}
+        "include_cross_setting_stability": bool(include_stability),
+        "include_clinic_sheet_ratings": bool(include_sheets)}
     sweep_sig, sweep_prov, tiles_sig = _band_sweep_signature(participant_uid, pro_df,
                                                              label_metric, sweep_settings)
     if sweep_sig is not None:
@@ -7895,7 +7842,13 @@ def band_time_sweep_for_participant(request_data):
         pain_values=pain_values, label_strategy=label_strategy, low_pct=low_pct,
         high_pct=high_pct, outlier_n_mad=outlier_n_mad, outlier_scale=outlier_scale,
         metric_key=label_metric, metric_label=metric_label, match_direction=match_direction,
-        region_map=_region_map(Participant, chan_order), participant_uid=participant_uid)
+        region_map=_region_map(Participant, chan_order), participant_uid=participant_uid,
+        from_clinic_sheet=from_clinic_sheet)
+    # The switch's own block on every contact pair's sweep too, because the heat maps' caption is
+    # drawn from the pair it shows (the same reason `display_short` sits on each pair).
+    for _sw in (sweeps or {}).values():
+        if isinstance(_sw, dict):
+            _sw["clinic_sheet_ratings"] = dict(clinic_sheet_block)
     wall = float(_time.perf_counter() - t0)
     if include_stability:
         _attach_grid_export_columns(participant_uid, sweeps,
@@ -7929,6 +7882,7 @@ def band_time_sweep_for_participant(request_data):
             "outlier_scale": outlier_scale,
             "sweep_metric": label_metric,
             "match_direction": match_direction,
+            "include_clinic_sheet_ratings": bool(include_sheets),
             "match_extent_sec_ignored": ("the top-of-page slider for how much recording goes into "
                                          "one measurement is not read here, because that quantity "
                                          "is the axis this section sweeps"),
@@ -7937,6 +7891,7 @@ def band_time_sweep_for_participant(request_data):
         "message": None,
         "served_from_store": False,
         "store_keys": None,
+        "clinic_sheet_ratings": clinic_sheet_block,
     }
     # Carried BEFORE the write, so the stored copy holds it too: anything derived from this grid
     # names the entry it came from by the sweep's own key, never by a key re-derived from the
@@ -8134,7 +8089,7 @@ sweep_settings_tag = sweep_settings.sweep_settings_tag                       # r
 sweep_settings_tag_from_request = sweep_settings.sweep_settings_tag_from_request
 
 
-_BAND_SWEEP_RULE_VERSION = "v18_headline_interval_block_bootstrap"
+_BAND_SWEEP_RULE_VERSION = "v20_cell_p_values"
 
 #: Response fields that are timings of the run that produced them, not results. They are not
 #: compared when a stored response is checked against a fresh one, and a served response keeps the
@@ -8224,7 +8179,8 @@ def _store_sweep_results(participant_uid, sig, prov, response, *, n_recordings=N
             label_metric=metric, match_tolerance_min=sa.get("match_tolerance_min"),
             match_direction=sa.get("match_direction"), allow_window_reuse=sa.get("allow_window_reuse"),
             label_strategy=sa.get("label_strategy"), percentile_low=sa.get("percentile_low"),
-            percentile_high=sa.get("percentile_high"))
+            percentile_high=sa.get("percentile_high"),
+            include_clinic_sheet_ratings=bool(sa.get("include_clinic_sheet_ratings", False)))
     except (TypeError, ValueError):                             # a response without the block
         tag = None
     common = dict(writer="biomarkers", trigger="band_time_sweep", provenance=prov,

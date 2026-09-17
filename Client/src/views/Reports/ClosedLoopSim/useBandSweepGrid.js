@@ -41,7 +41,7 @@ import { loadControls } from "views/Reports/Biomarkers/biomarkerStateStore";
 
 /** The request keys that decide which stored grid the Biomarkers page shows; nothing else. */
 export const GRID_SETTING_KEYS = ["LabelMetric", "MatchToleranceMin", "MatchDirection",
-  "AllowWindowReuse", "LabelStrategy", "PercentileLow", "PercentileHigh"];
+  "AllowWindowReuse", "LabelStrategy", "PercentileLow", "PercentileHigh", "IncludeClinicSheetRatings"];
 
 /** The Biomarkers page's persisted score and settings for this participant, as request keys. */
 export function biomarkerGridSettings(participantUid) {

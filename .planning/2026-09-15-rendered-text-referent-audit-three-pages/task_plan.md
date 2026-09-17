@@ -10,12 +10,13 @@ This is the class the PI caught twice on 2026-09-15 (decisions 172, 173) after t
 found its mirror image ("computed, stored, tested, not on the page", decision 167 §5).
 
 ## Next Step
-Nothing queued. Phases 1-7 complete (decisions 174-185). Left from the 2026-09-15 review, his picks: S3, T1, B5,
-S5-S7, C3-C7, T2, T3; decision 118's `max_per_rating` question; item 15's list (scroll-link, print stylesheet).
+Explain S5, S6, S7, C3, C4, C6, C7, T2, T3 of the 2026-09-15 review concisely (the PI's ask, 2026-09-16). Phases 1-8
+complete (decisions 174-188). Also left: decision 118's `max_per_rating` question; item 15's list (scroll-link, print
+stylesheet); the four zero-caller chronic-detector routines (decision 187), his call.
 Not code: the titration session (open item 30).
 
 ## Current Phase
-Phase 7
+Phase 8
 
 ### Phase 1: Review (the PI calls /swarm-review with findings.md §1)
 - [x] Rendered-text inventory per page: every string a card draws, its panel, the element beside it, its referent
@@ -86,3 +87,10 @@ Phase 7
 |-------|---------|------------|
 | Container suite 642/1 on the first run: the pin holding `_BAND_SWEEP_RULE_VERSION` still read v16 after the backend builder bumped to v17 | 1 | The pin moved to v17 (its purpose is to move with every deliberate bump); re-run PASS=643 FAIL=0 |
 | Item-3 fixture-state pin read `true` for the pre-fix fixture by design; the re-captured fixture made it fail | 1 | Flipped to `false` with the reason in its comment -- the intended visible change |
+
+### Phase 8: B5, T1 and the hover (the PI, 2026-09-16)
+- [x] B5: sheet scores in the heat maps behind a default-off switch, tests first, live counts per contact (decision 186)
+- [x] T1: conceded as a misinterpretation; the leftover chronic-detector analytics deleted, 89,085 fields, 0 differing (decision 187)
+- [x] Hover: "X ratings, q = Y" / "p = Y"; p-values on the backend (Pearson, scipy's Mann-Whitney, vectorised); browser t-test code deleted (decision 188)
+- [x] Both suites, rebuild, decision-log rows, one commit, push
+- **Status:** complete

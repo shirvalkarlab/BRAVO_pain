@@ -6,7 +6,7 @@
  * review measured on RCS08 (L 1-3+, 12.5 Hz, 300 s: r -0.534, interval -0.656 to -0.402, n 117,
  * q 0.0022) and the device ranges from the one home.
  */
-import { bestCellReadout, hoverCustomData, rowTier, tierBullets, deviceSpectrumBullets, secondsLabel, stabilityMark, stabilityBullet } from "./gridReadouts";
+import { bestCellReadout, hoverReadout, hoverCustomData, rowTier, tierBullets, deviceSpectrumBullets, secondsLabel, stabilityMark, stabilityBullet, clinicSheetBullets } from "./gridReadouts";
 
 // The block the sweep response carries (DecodeCommon.device_ranges.timing_ranges_for_page), as
 // corrected against the clinician tablet on 2026-09-15: onset (Dual) 0-30 s, not the FDA's 6 min.
@@ -72,13 +72,54 @@ describe("bestCellReadout (B1)", () => {
   });
 });
 
+describe("hoverReadout -- the hover's third line (the PI, 2026-09-16)", () => {
+  // His words: delete the current third line and replace it with "X ratings, q=Y" and that is all;
+  // X the number of samples, Y the q value; where no q exists, the raw p-value as "p = Y". The
+  // interval, the answer and the stability word stay on the panel lines beside the scatter and violin.
+  const withN = {
+    ...SW,
+    n_grid: Array.from({ length: 10 }, () => [40, 96, 50]),
+    p_grid: Array.from({ length: 10 }, () => [0.4, 0.0507, 0.2]),
+    auc_grid: Array.from({ length: 10 }, () => [0.5, 0.4, 0.3]),
+    auc_p_grid: Array.from({ length: 10 }, () => [1.0, 0.2, 0.0153]),
+    auc_n_high_grid: Array.from({ length: 10 }, () => [20, 30, 25]),
+    auc_n_low_grid: Array.from({ length: 10 }, () => [20, 30, 25]),
+  };
+  test("the column's best cell: its ratings count and its corrected q, nothing else", () => {
+    expect(hoverReadout(withN, "corr", 1, 9)).toBe("117 ratings, q = 0.0022");
+    expect(hoverReadout(withN, "auc", 2, 3)).toBe("174 ratings, q = 0.029");
+  });
+  test("any other cell: its own count and its own uncorrected p, both read off the response", () => {
+    // nothing is computed in the browser: `p_grid` (Pearson) and `auc_p_grid` (Mann-Whitney) come
+    // from the backend (decision 188)
+    expect(hoverReadout(withN, "corr", 1, 2)).toBe("96 ratings, p = 0.051");
+    expect(hoverReadout(withN, "auc", 2, 0)).toBe("50 ratings, p = 0.015");
+  });
+  test("a response without the p grids (older stored) prints the count alone", () => {
+    const noP = { ...withN, p_grid: undefined, auc_p_grid: undefined };
+    expect(hoverReadout(noP, "corr", 1, 2)).toBe("96 ratings");
+  });
+  test("a best cell whose q was not assessed falls back to its raw p", () => {
+    const noQ = { ...withN, best_correlation_rows: withN.best_correlation_rows.map((r) => ({ ...r, family_wise_q_8_to_30hz: null })) };
+    expect(hoverReadout(noQ, "corr", 1, 9)).toBe("117 ratings, p = 0.000999");
+  });
+  test("a cell with no count prints nothing rather than a dash", () => {
+    expect(hoverReadout(SW, "corr", 1, 2)).toBe("");
+  });
+  test("the cross-setting stability word is not on the hover (it is drawn as a symbol)", () => {
+    const stab = { ...withN, best_correlation_rows: withN.best_correlation_rows.map((r) => ({ ...r, cross_setting_stability: { answer: "behaves differently" } })) };
+    expect(hoverReadout(stab, "corr", 1, 9)).toBe("117 ratings, q = 0.0022");
+  });
+});
+
 describe("hoverCustomData (B1)", () => {
-  test("is a rows x columns grid of the same readouts, so the hover template can print them", () => {
-    const cd = hoverCustomData(SW, "corr");
+  test("is a rows x columns grid of the hover readouts, so the hover template can print them", () => {
+    const withN = { ...SW, n_grid: Array.from({ length: 10 }, () => [40, 96, 50]), p_grid: Array.from({ length: 10 }, () => [0.4, 0.0507, 0.2]) };
+    const cd = hoverCustomData(withN, "corr");
     expect(cd.length).toBe(10);
     expect(cd[9].length).toBe(3);
-    expect(cd[9][1]).toMatch(/^117 ratings/);
-    expect(cd[2][1]).toBe("best cell corrected (5m circled)");
+    expect(cd[9][1]).toBe("117 ratings, q = 0.0022");
+    expect(cd[2][1]).toBe("96 ratings, p = 0.051");
   });
 });
 
@@ -127,7 +168,7 @@ describe("cross-setting stability on the grid (B3, decision 185)", () => {
     best_correlation_rows: SW.best_correlation_rows.map((r) =>
       r.band_center_hz === 12.5 ? { ...r, cross_setting_stability: { answer, reason, from_store: answer !== "not tested" } } : r),
   });
-  test("the best cell's hover ends with the answer the Closed-Loop card gives", () => {
+  test("the best cell's panel line ends with the answer the Closed-Loop card gives", () => {
     const r = bestCellReadout(withStability("behaves differently", "the interaction test rejects"), "corr", 1, 9);
     expect(r.text).toBe("117 ratings · interval −0.66 to −0.40 · corrected q = 0.0022 · established · across settings: behaves differently");
   });
@@ -135,7 +176,7 @@ describe("cross-setting stability on the grid (B3, decision 185)", () => {
     const r = bestCellReadout(withStability("not tested", "the cross-setting stability answer has not been computed for this grid yet"), "corr", 1, 9);
     expect(r.text.endsWith("across settings: not yet computed")).toBe(true);
   });
-  test("a row carrying no answer at all leaves the hover as it was", () => {
+  test("a row carrying no answer at all leaves the panel line as it was", () => {
     expect(bestCellReadout(SW, "corr", 1, 9).text).toBe("117 ratings · interval −0.66 to −0.40 · corrected q = 0.0022 · established");
   });
   test("one symbol per answer, the Closed-Loop card's: tick, cross, amber disc, nothing", () => {
@@ -151,5 +192,30 @@ describe("cross-setting stability on the grid (B3, decision 185)", () => {
     expect(line).toMatch(/cross/);
     expect(line).toMatch(/amber/);
     expect(line.split(" ").length).toBeLessThanOrEqual(24);
+  });
+});
+
+describe("clinic-sheet ratings on the heat maps (B5, decision 186)", () => {
+  test("off: one bullet says the heat maps pool at-home ratings only", () => {
+    const b = clinicSheetBullets({ ...SW, clinic_sheet_ratings: { included: false, n_added: 0 } });
+    expect(b).toHaveLength(1);
+    expect(b[0]).toMatch(/at-home REDCap ratings only/);
+    expect(b[0]).toMatch(/switch/i);
+  });
+  test("on: the bullet counts the sheet ratings this contact pair uses and says the scale", () => {
+    const sw = { ...SW, clinic_sheet_ratings: { included: true, n_added: 152, sheet_column: "left_leg", scale: 10 },
+                 n_pain_reports_from_clinic_sheet: 83, n_pain_reports: 222 };
+    const b = clinicSheetBullets(sw);
+    expect(b[0]).toMatch(/83 of the 222/);
+    expect(b[0]).toMatch(/clinic or at-home testing sheets/);
+    expect(b[0]).toMatch(/times 10/);
+    b.forEach((line) => expect(line.split(" ").length).toBeLessThanOrEqual(30));
+  });
+  test("on for a score the sheets do not carry: the bullet says so and adds nothing", () => {
+    const b = clinicSheetBullets({ ...SW, clinic_sheet_ratings: { included: true, n_added: 0, reason: "the sheets carry no column for MPQ Sum" } });
+    expect(b[0]).toMatch(/no column for MPQ Sum/);
+  });
+  test("an older response without the block prints nothing", () => {
+    expect(clinicSheetBullets(SW)).toEqual([]);
   });
 });
