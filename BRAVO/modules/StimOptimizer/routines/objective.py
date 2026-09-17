@@ -369,6 +369,10 @@ def build_objective(epoch_stats: pd.DataFrame, *, incumbent_epoch, cfg=None,
             f"has at least one {item} report")
 
     d["J_pain"] = d[item].astype(float) - ref
+    # The rating at the setting in force, carried on every row so a reader of J can add it back
+    # and print the predicted rating in the participant's own units (the PI, 2026-09-17: absolute
+    # numbers on the current map, the colour scale centred on today's setting).
+    d["pain_reference"] = float(ref)
 
     if "se_severity" in d.columns:
         d["se_observed"] = d["se_severity"].notna()

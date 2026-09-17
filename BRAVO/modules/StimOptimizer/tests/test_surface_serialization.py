@@ -182,3 +182,28 @@ def test_d_the_full_two_stage_payload_carries_both_new_fields(stage1_two_rates):
     assert fitted and "surface" in fitted[0]
     assert "pooled_surfaces" in out["stage1"]
     assert out["stage1"]["pooled_surfaces"]
+
+
+# ---- the PI, 2026-09-17: absolute numbers on the current map, colour centred on today ----------
+def test_e_every_surface_carries_the_pain_rating_at_the_setting_in_force_so_the_page_can_print_absolute_values(stage1_two_rates):
+    """`mu` is the score RELATIVE to the setting in force (J = rating - rating at the incumbent +
+    side-effect cost). The page adds `pain_reference` back to print the predicted rating in the
+    participant's own 0-10 units and centres its colour scale on it; the fit itself is unchanged."""
+    s1 = stage1_two_rates
+    records = _rate_strata_records(s1)
+    fitted = [r for r in records if r["fitted"]]
+    surface = fitted[0]["surface"]
+    assert "pain_reference" in surface and "pain_item" in surface
+    D = s1.D
+    item = str(D["primary_item"].iloc[0])
+    inc = D.loc[D["epoch"].astype(float) == float(s1.frozen.incumbent_epoch)]
+    assert len(inc) == 1
+    assert surface["pain_item"] == item
+    assert surface["pain_reference"] == float(inc[item].iloc[0])
+    # and J_pain is exactly the rating minus that reference on every row
+    assert np.allclose(D[item].astype(float) - D["J_pain"].astype(float), surface["pain_reference"])
+    # the pooled reference surfaces carry the same number
+    pooled = BS._joint_pooled_surfaces(s1)
+    for stratum in pooled.values():
+        for rate_surface in stratum["surface_at_rate"].values():
+            assert rate_surface["pain_reference"] == surface["pain_reference"]

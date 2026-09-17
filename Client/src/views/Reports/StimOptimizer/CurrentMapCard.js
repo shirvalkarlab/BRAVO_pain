@@ -60,26 +60,42 @@ function CheckRow({ label, passes, detail }) {
 
 /** One (left-current, right-current) surface: the heatmap, the setting-in-force ×, the observed
  * points, and a ★ on the best cell when (and only when) that rate's own current is resolved. */
+/** The numbers the square prints (the PI, 2026-09-17: "an absolute score would be better").
+ *  `mu` is the score relative to the setting in force; adding `pain_reference` (the rating at that
+ *  setting, from the backend) back gives the predicted rating in the participant's own units,
+ *  plus the side-effect cost where one was reported. The colour range is symmetric about that
+ *  reference so yellow is always "today's value" and green/red always "better/worse than today";
+ *  the fit, the best cell and the three checks are unchanged (a constant per surface). A response
+ *  from before the reference existed still draws, as the relative score, and says so. */
+export function absoluteSurface(surface) {
+  const ref = (surface && surface.pain_reference != null && Number.isFinite(Number(surface.pain_reference)))
+    ? Number(surface.pain_reference) : null;
+  const offset = ref == null ? 0 : ref;
+  const z = (surface.mu || []).map((row, i) => row.map((v, j) => (
+    (v != null && surface.safe && surface.safe[i] && surface.safe[i][j]) ? v + offset : null)));
+  const finite = [];
+  z.forEach((row) => row.forEach((v) => { if (v != null) finite.push(v); }));
+  // Symmetric about the reference, wide enough to cover the surface: a range that merely
+  // covers the surface would put yellow somewhere other than today's value.
+  let half = finite.length ? Math.max(...finite.map((v) => Math.abs(v - offset))) : 1;
+  if (half < 0.05) half = 0.05;
+  const item = surface && surface.pain_item ? String(surface.pain_item).replace(/_/g, " ").replace(/ vas$/, " VAS") : "pain";
+  return {
+    z, zmid: offset, zmin: offset - half, zmax: offset + half, ref,
+    title: ref == null ? "score (lower is better)" : `predicted ${item} rating (+ side-effect cost)`,
+  };
+}
+
 function CurrentSurfaceHeatmap({ divId, surface, inForceLeft, inForceRight, starLeft, starRight,
   showStar, size = 400 }) {
   const figRef = useRef(null);
   const rows = surface ? surface.mu.length : 0;
   const cols = rows ? surface.mu[0].length : 0;
 
-  const { zmin, zmax, gridZ } = useMemo(() => {
-    if (!surface) return { zmin: -1, zmax: 1, gridZ: [] };
-    const finite = [];
-    surface.mu.forEach((row, i) => row.forEach((v, j) => {
-      if (v != null && surface.safe[i][j]) finite.push(v);
-    }));
-    // The colour range must COVER the surface and include 0 (the setting in force). A range
-    // symmetric about 0 clipped a surface sitting at +0.74 to one saturated colour (watched live,
-    // 2026-09-14). A flat surface then shows as one flat colour, which is the honest picture.
-    let lo = Math.min(0, ...finite);
-    let hi = Math.max(0, ...finite);
-    if (hi - lo < 0.1) { lo -= 0.05; hi += 0.05; }
-    const gz = surface.mu.map((row, i) => row.map((v, j) => (surface.safe[i][j] ? v : null)));
-    return { zmin: lo, zmax: hi, gridZ: gz };
+  const { zmin, zmax, zmid, gridZ, barTitle } = useMemo(() => {
+    if (!surface) return { zmin: -1, zmax: 1, zmid: 0, gridZ: [], barTitle: "" };
+    const a = absoluteSurface(surface);
+    return { zmin: a.zmin, zmax: a.zmax, zmid: a.zmid, gridZ: a.z, barTitle: a.title };
   }, [surface]);
 
   useEffect(() => {
@@ -92,14 +108,14 @@ function CurrentSurfaceHeatmap({ divId, surface, inForceLeft, inForceRight, star
       type: "heatmap", z: gridZ, x: surface.amps_mA, y: surface.amps_mA,
       // Explicit stops: "RdYlGn" is a plotly.PY name, not a plotly.JS one, and plotly.js silently
       // fell back to a red-to-grey scale that painted the BEST score red (watched live, 2026-09-14).
-      colorscale: [[0, "#1A9850"], [0.5, "#FEE08B"], [1, "#D73027"]], zmin, zmax,
+      colorscale: [[0, "#1A9850"], [0.5, "#FEE08B"], [1, "#D73027"]], zmin, zmax, zmid,
       // A short title on the side: the long two-line title this first shipped with was placed
       // ABOVE the bar, and Plotly's automatic margin then took 222 of the 340 px for it, leaving
       // the plot 70 px wide (measured live, 2026-09-14). The score's meaning is in the caption.
-      colorbar: { title: { text: "score (lower is better)", side: "right", font: { size: 10 } },
+      colorbar: { title: { text: barTitle, side: "right", font: { size: 10 } },
         thickness: 12, len: 0.9, tickfont: { size: 10 } },
       xgap: 1, ygap: 1,
-      hovertemplate: "left %{x:.2f} mA, right %{y:.2f} mA<br>score %{z:.3f}<extra></extra>",
+      hovertemplate: `left %{x:.2f} mA, right %{y:.2f} mA<br>${surface.pain_reference != null ? "predicted rating" : "score"} %{z:.2f}<extra></extra>`,
     });
     // Observed reports, sized by how many ratings they carry.
     const pts = surface.points || [];
@@ -141,7 +157,7 @@ function CurrentSurfaceHeatmap({ divId, surface, inForceLeft, inForceRight, star
     Plotly.react(divId, fig.traces, fig.layout,
       { displayModeBar: false, responsive: true, doubleClick: false });
     return undefined;
-  }, [divId, surface, gridZ, zmin, zmax, rows, cols, inForceLeft, inForceRight, starLeft, starRight,
+  }, [divId, surface, gridZ, zmin, zmax, zmid, barTitle, rows, cols, inForceLeft, inForceRight, starLeft, starRight,
     showStar, size]);
 
   useEffect(() => () => {
@@ -338,14 +354,15 @@ function ClinicStreamSection({ groups, inForceLeft, inForceRight, clinicStream, 
           {cs.note}
         </MDTypography>
       )}
-      {/* The zero point of this section's colour scale. The REDCap section's zero is the device's
-          setting in force; this one is too WHEN a clinic step exists at that rate and those pulse
-          widths, and otherwise it is the last clinic step -- said here so the two sections' zeros
-          are never read as the same thing when they are not. */}
+      {/* The centre (yellow) of this section's colour scale. The REDCap section's centre is the
+          device's setting in force; this one is too WHEN a clinic step exists at that rate and
+          those pulse widths, and otherwise it is the last clinic step -- said here so the two
+          sections' centres are never read as the same thing when they are not. The numbers
+          themselves are absolute either way (decision 192). */}
       {showDescriptions && cs.reference && cs.reference.sentence && (
         <MDTypography variant="caption" component="div" sx={{ ...SMALL, mb: 1,
           color: cs.reference.source === "last_clinic_step" ? PAL.warnText : undefined }}>
-          {`Zero on these colour scales: ${cs.reference.sentence}.`}
+          {`Yellow on these colour scales is the predicted rating at: ${cs.reference.sentence}.`}
         </MDTypography>
       )}
       <RateStrataGroups groups={groups} inForceLeft={inForceLeft} inForceRight={inForceRight}
@@ -421,9 +438,11 @@ export default function CurrentMapCard({ plan }) {
         {showDescriptions && (
         <MDTypography variant="caption" component="div" color="text" sx={{ fontSize: TYPE.body, mt: 0.5, mb: 1.5 }}>
           Each square below is one stimulation speed: the left current runs along the bottom, the
-          right current up the side, and the colour is the combined pain-and-side-effect score the
-          search is trying to make as small (as green) as possible -- zero, on the colour scale, is
-          the score AT the setting programmed today. A black × marks that setting; the dots are
+          right current up the side, and the colour is the predicted pain rating at that combination
+          (plus a fixed cost where a side effect was reported), which the search is trying to make
+          as small (as green) as possible. Yellow on the colour scale is the predicted rating at the
+          setting programmed today, so green is better than today and red worse; a black × marks
+          that setting; the dots are
           combinations this participant has actually been rated on, sized by how many ratings back
           them; a blue star appears only when the record can tell currents apart well enough to
           trust it, per the three checks printed beside each square.

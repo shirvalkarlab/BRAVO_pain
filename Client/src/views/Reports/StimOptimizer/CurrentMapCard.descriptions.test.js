@@ -63,3 +63,30 @@ describe("the card's prose folds behind one push-button", () => {
     expect(screen.getByText(/Where the two currents have been tried/)).toBeInTheDocument();
   });
 });
+
+describe("absolute numbers on the squares, colour centred on today (the PI, 2026-09-17)", () => {
+  const { absoluteSurface } = require("./CurrentMapCard");
+  it("adds the rating at the setting in force back to every cell and centres the scale on it", () => {
+    const s = { mu: [[0, -1.5], [2, 0.5]], safe: [[true, true], [true, false]], pain_reference: 5.25, pain_item: "left_leg_vas" };
+    const a = absoluteSurface(s);
+    expect(a.z).toEqual([[5.25, 3.75], [7.25, null]]);
+    expect(a.zmid).toBe(5.25);
+    expect(a.zmin).toBeLessThanOrEqual(3.75);
+    expect(a.zmax).toBeGreaterThanOrEqual(7.25);
+    expect(a.zmax - a.zmid).toBeCloseTo(a.zmid - a.zmin, 9);   // symmetric, so yellow IS today's value
+    expect(a.title).toMatch(/predicted .*rating/);
+    expect(a.title).not.toMatch(/score/);
+  });
+  it("an older response with no reference still draws, as the relative score it always was", () => {
+    const a = absoluteSurface({ mu: [[0, -1]], safe: [[true, true]] });
+    expect(a.z).toEqual([[0, -1]]);
+    expect(a.zmid).toBe(0);
+    expect(a.title).toBe("score (lower is better)");
+  });
+  it("the intro says yellow is today's predicted rating, not that zero is the score", () => {
+    rtlRender(wrap(<CurrentMapCard plan={plan} />));
+    fireEvent.click(screen.getByRole("button", { name: /Expand descriptions/ }));
+    expect(screen.getAllByText(/yellow/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText(/zero, on the colour scale/)).toBeNull();
+  });
+});

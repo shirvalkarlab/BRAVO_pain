@@ -505,6 +505,17 @@ def _round_grid(a, ndigits=4):
     return out
 
 
+def _pain_reference(s1) -> dict:
+    """`{"pain_reference", "pain_item"}` from the objective table Stage 1 fitted on: the mean
+    rating at the setting in force, which every `mu` is relative to, and the item's name. Both
+    absent (empty dict) on a result built before the column existed."""
+    D = getattr(s1, "D", None)
+    if D is None or "pain_reference" not in getattr(D, "columns", ()) or len(D) == 0:
+        return {}
+    item = str(D["primary_item"].iloc[0]) if "primary_item" in D.columns else None
+    return dict(pain_reference=float(D["pain_reference"].iloc[0]), pain_item=item)
+
+
 def _rate_stratum_surface(rs) -> dict | None:
     """The (amplitude-Left, amplitude-Right) surface for one FITTED `stage1_openloop.RateStratum`.
 
@@ -552,6 +563,8 @@ def _attach_rate_stratum_surfaces(records, s1):
               round(float(row["rate_hz"]), 6))
         surf = _rate_stratum_surface(lut.get(key))
         if surf is not None:
+            surf.update(_pain_reference(s1))
+        if surf is not None:
             row["surface"] = surf
     return records
 
@@ -574,7 +587,7 @@ def _joint_pooled_surfaces(s1) -> dict:
             safe3 = sl.grid.as_surface(np.asarray(sl.safe, float))[fi] > 0
             rates[f"{float(rate):g}"] = dict(
                 amps_mA=[round(float(v), 4) for v in np.asarray(sl.grid.amps_left, float)],
-                mu=_round_grid(mu3), sd=_round_grid(sd3),
+                mu=_round_grid(mu3), sd=_round_grid(sd3), **_pain_reference(s1),
                 safe=[[bool(v) for v in row] for row in safe3])
         out[key] = dict(pw_us_left=float(pwl), pw_us_right=float(pwr), surface_at_rate=rates)
     return out
