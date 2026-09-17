@@ -127,3 +127,36 @@ predicted (7 of 14, 11 of 18, 14 of 21).
 
 Probes: `_agent_bridge/_s6_age_fit.py`, `_d16_units.py`. Recommendation: drop the age term (it is inert) and, if
 drift is to be handled, do it as a time input to the model, fitted, not as a variance penalty.
+
+## S7 follow-up (2026-09-17, afternoon): the transient measured inside the long holds the record already has
+
+The PI: "the 60-second holds in the titration session would give that -- so measure that." 58 of the 96 settings
+were held 60 s or longer and 36 of them 90 s or longer, so both the first seconds and the last 30 s are inside one
+hold. For each such setting: the mean band power (24.5 Hz, time-domain route) over the first N seconds after the
+current moved, divided by the same setting's own last-30-s mean; pooled as a geometric mean; p from a one-sample
+t-test on the log ratio (probe `_agent_bridge/_s7_long_holds.py`).
+
+**All contacts and rates pooled, 56 settings held ≥ 60 s** (two of the 58 had fewer than 5 settled pieces):
+
+| first N s | ratio to the settled level | 95 % interval | p |
+|---|---|---|---|
+| 3 s | 0.979 | 0.903–1.062 | 0.62 |
+| 6 s | 0.992 | 0.936–1.051 | 0.79 |
+| 9 s | 0.990 | 0.937–1.045 | 0.71 |
+| 12 s | 0.990 | 0.940–1.044 | 0.72 |
+| 15 s | 0.984 | 0.934–1.037 | 0.55 |
+| 20 s | 1.013 | 0.960–1.070 | 0.64 |
+| 30 s | 1.016 | 0.968–1.066 | 0.53 |
+
+Per contact and rate (≥ 60 s): L 1-3+ 110 Hz (9 settings) 0.99–1.10, no p below 0.14; L 0-3+ 110 Hz (6) 0.90–0.99,
+no p below 0.29; R 0-3+ 110 Hz (21) 0.93–1.00, no p below 0.14; L 0-2+ 110 Hz (6) 1.04–1.07, no p below 0.32.
+The one exception: **R 0-3+ at 55 Hz, 4 settings from the single 2026-08-18 run**, where the first 3–15 s read
+0.79–0.87 of the settled level (p 0.00–0.09) -- one visit, four settings, not a finding by this project's own rule
+(never call a result established on one visit day). At ≥ 90 s (36 settings) the picture is the same: ratios 0.95–1.22,
+the only p under 0.05 being L 1-3+ 110 Hz at 9 s and 30 s in the direction of the early window being HIGHER (1.12–1.13).
+
+**Reading.** Inside the holds this record already has, the band power in the first 3 seconds after a current move
+is within 2 % of the level it holds 30–60 s later, with a 95 % interval of ±6–8 %. There is no transient to exclude
+at the 3 s resolution of the pieces: any settling happens inside the first piece. A margin of 0 s is the measured
+answer for this contact set at 110 Hz; the 55 Hz evidence is one visit and cannot decide it. The titration session
+(open item 30) would add 55 Hz holds at 60 s, which is where the record is thin.
