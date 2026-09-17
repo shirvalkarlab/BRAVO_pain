@@ -81,3 +81,49 @@ slope changes it causes come from losing 1–3 short-held settings, which is exa
 (the L 1-3+ 55 Hz slope +14 → +38 when one setting goes). An empirically motivated margin needs settings held long
 enough that the first N seconds and the last 30 s are both measurable in the same setting -- the titration session's
 60 s holds (open item 30) give that; today's record does not.
+
+## S6 follow-up (2026-09-17, afternoon): the age penalty -- log drift is not raw drift, and the term cannot be fitted
+
+**Two different quantities, two different units.** The age term acts on the PAIN RATING (0-10 after rescaling).
+Decision 16's "-0.078 per month in the logarithm" is BAND POWER on one contact -- a different quantity -- and a
+log slope is a proportional (multiplicative) change, which raw device-unit thresholds do not see the same way.
+Re-measured on the right-hemisphere chronic samples near 8.8 Hz (3,652 samples, 2025-08-27 to 2025-11-18 -- the
+only stretch the device recorded at that centre; the device's own centre moved on 2025-12-05, so the stretch
+decision 16 named is not in the chronic record at 8.8 Hz):
+- log slope **+0.206 per month (SE 0.016), i.e. +23 % per month multiplicative** -- clearly non-zero;
+- raw slope **+33,117 device units per month (SE 31,587)** -- not distinguishable from zero, because raw band
+  power is heavy-tailed: the October mean is 74,691 units against a median of 1,475 (spikes), the other months'
+  means 1,295-1,607 against medians 727-1,318. The log slope is driven by the proportional change of the bulk;
+  the raw slope is driven by a handful of spikes. A threshold in device units sits on the median, which moved
+  727 -> 805 -> 1,475 -> 1,318 over the four months.
+So decision 16's finding is real in its own units and says nothing about the pain rating's drift.
+
+**The rating itself does drift, in raw units.** Report-weighted straight line of the epoch-mean left-leg VAS on
+calendar time over 75 epochs and 11.5 months: **-1.48 VAS points per month (SE 0.34) = -0.15 per month on the 0-10
+scale**, about -1.7 points over the record. The longest-held settings: 55 Hz L 1.6 / R 1.2 mA held 43 days, mean
+60.3 (SD 14.3, n 105); the same setting 16 days, 57.9; L 3.5 / R 3.0 held 21 days, 56.5; L 4.5 / R 4.5 held 15 days, 46.1.
+
+**(b) fitting the age weight by hold-out.** Stage 1 fitted on the epochs older than a cutoff, the held-out newer
+epochs' ratings predicted at their own (rate, left, right, pulse widths), error on the 0-10 scale, report-weighted;
+`c_age` from 0 (off) to 4 (16 x today's); three cutoffs. Only held-out epochs at a fitted pulse-width pairing can be
+predicted (7 of 14, 11 of 18, 14 of 21).
+
+| held out | c_age 0 | 0.25 (today) | 4 | baseline: mean of all training epochs | baseline: mean of the last 90 training days |
+|---|---|---|---|---|---|
+| last 90 days (7 epochs) | RMSE 1.332, bias +1.20 | 1.332, +1.20 | 1.331, +1.20 | 1.544 | **0.920** |
+| last 120 days (11) | 1.403, +1.28 | 1.403, +1.28 | 1.403, +1.28 | 1.479 | 1.472 |
+| last 180 days (14) | 1.822, +1.73 | 1.822, +1.73 | 1.822, +1.73 | **1.468** | 1.588 |
+
+- **The age weight makes no measurable difference**: the error is identical to three decimals from "off" to sixteen
+  times today's value. The term adds at most 0.25 x (1.2 years)² = 0.36 to an observation's variance, and the fit is
+  dominated by the other terms and the model's own noise level, so it cannot be fitted from this record -- there is
+  nothing for it to explain.
+- **The model over-predicts recent pain by 1.2-1.7 points** (positive bias at every cutoff): her ratings have fallen
+  over the record and the model, anchored on the whole history, does not follow. An additive uncertainty on old
+  epochs cannot fix a bias -- it can only widen the interval. What would: a time term in the model (the "time-varying
+  kernel" the spec deferred) or a trend removed before fitting.
+- For the 90-day hold-out, the plain mean of the previous 90 days predicts better (0.92) than the fitted surface
+  (1.33): recency matters more on this record than the surface's shape does.
+
+Probes: `_agent_bridge/_s6_age_fit.py`, `_d16_units.py`. Recommendation: drop the age term (it is inert) and, if
+drift is to be handled, do it as a time input to the model, fitted, not as a variance penalty.

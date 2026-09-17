@@ -82,7 +82,9 @@ export function absoluteSurface(surface) {
   const item = surface && surface.pain_item ? String(surface.pain_item).replace(/_/g, " ").replace(/ vas$/, " VAS") : "pain";
   return {
     z, zmid: offset, zmin: offset - half, zmax: offset + half, ref,
-    title: ref == null ? "score (lower is better)" : `predicted ${item} rating (+ side-effect cost)`,
+    // Every item is put on the 0-10 reference before the fit (`objective.scale_factor`; a VAS is
+    // divided by ten), so the number printed is on that scale whatever the item's own range.
+    title: ref == null ? "score (lower is better)" : `predicted ${item} rating, 0-10 (+ side-effect cost)`,
   };
 }
 
