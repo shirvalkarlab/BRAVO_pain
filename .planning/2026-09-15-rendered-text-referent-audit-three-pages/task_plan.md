@@ -10,13 +10,13 @@ This is the class the PI caught twice on 2026-09-15 (decisions 172, 173) after t
 found its mirror image ("computed, stored, tested, not on the page", decision 167 §5).
 
 ## Next Step
-Explain S5, S6, S7, C3, C4, C6, C7, T2, T3 of the 2026-09-15 review concisely (the PI's ask, 2026-09-16). Phases 1-8
-complete (decisions 174-188). Also left: decision 118's `max_per_rating` question; item 15's list (scroll-link, print
-stylesheet); the four zero-caller chronic-detector routines (decision 187), his call.
+Nothing queued. Phases 1-9 complete (decisions 174-197). Left: C3, C4, C6, C7, T2, T3 of the 2026-09-15 review (explained,
+not built); pooling across pulse widths (decision 189's plan); decision 118's `max_per_rating` question; item 15's list
+(scroll-link, print stylesheet); the four zero-caller chronic-detector routines (decision 187), his call.
 Not code: the titration session (open item 30).
 
 ## Current Phase
-Phase 8
+Phase 9
 
 ### Phase 1: Review (the PI calls /swarm-review with findings.md §1)
 - [x] Rendered-text inventory per page: every string a card draws, its panel, the element beside it, its referent
@@ -93,4 +93,11 @@ Phase 8
 - [x] T1: conceded as a misinterpretation; the leftover chronic-detector analytics deleted, 89,085 fields, 0 differing (decision 187)
 - [x] Hover: "X ratings, q = Y" / "p = Y"; p-values on the backend (Pearson, scipy's Mann-Whitney, vectorised); browser t-test code deleted (decision 188)
 - [x] Both suites, rebuild, decision-log rows, one commit, push
+- **Status:** complete
+
+### Phase 9: The current map, S5-S7 and the run rule (the PI, 2026-09-17)
+- [x] S5 folded with the pairing line; absolute predicted ratings, colour centred on today (189, 192)
+- [x] S6 measured; the age penalty and the time input both removed on his ruling (190, 193, 194, 196)
+- [x] S7 measured on the record's long holds and the 2026-09-16 session: margin 0 s, no data excluded (191, 196)
+- [x] Runs accepted with the other side held at any current; the 2026-09-16 session enters every table (197)
 - **Status:** complete

@@ -536,11 +536,15 @@ class ThreeSourceComparison:
     bands_measuring_the_stimulator_hz: List[float] = field(default_factory=list)
     stimulator_landings_hz: List[float] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
+    #: The current the OTHER side was held at throughout this run (decision 197): 0 on the 2025
+    #: visits, the side's own current in force on a titration session run as decision 160 designed.
+    other_side_mA: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "label": self.label,
             "ramped_side": self.ramped_side,
+            "other_side_mA": self.other_side_mA,
             "sensing_contact": self.sensing_contact,
             "programmed_centre_hz": self.programmed_centre_hz,
             "stimulation_rate_hz": self.stimulation_rate_hz,
@@ -669,43 +673,55 @@ def find_single_side_runs_from_device(current_record, *, min_settings=3,
         if not settings:
             continue
 
-        def side_of(st):
-            if st["left_mA"] > 0 and st["right_mA"] == 0:
+        # THE RULE (decision 197, 2026-09-17, the PI: "accept ANY and all clinic and at home
+        # testing sessions ... any change in a setting on either side counts as a new setting").
+        # A SETTING is any stretch of constant current on both sides (a change on either side
+        # starts a new one -- that is what `settings` above holds). A RUN is a maximal stretch of
+        # consecutive settings in which ONE side's current moves and the OTHER side's stays
+        # exactly where it was -- at zero or at any other value; the setting the run starts from
+        # is its first point (the baseline, whatever moved into it), and a move on which both
+        # sides changed, or the held side changing, ends the run. Until this the other side had
+        # to be at ZERO, the shape of the 2025 visits; the titration session of decision 160 holds
+        # the other side at its own current in force, and the 2026-09-16 visit -- run exactly
+        # that way -- was invisible to every table built from here.
+        def moved(prev, cur):
+            dl = cur["left_mA"] != prev["left_mA"]
+            dr = cur["right_mA"] != prev["right_mA"]
+            if dl and not dr:
                 return "Left"
-            if st["right_mA"] > 0 and st["left_mA"] == 0:
+            if dr and not dl:
                 return "Right"
-            if st["left_mA"] == 0 and st["right_mA"] == 0:
-                return "both at zero"
-            return None
+            return None                                     # both moved, or neither
 
         i = 0
-        while i < len(settings):
-            side = side_of(settings[i])
-            if side in (None, "both at zero"):
+        while i + 1 < len(settings):
+            side = moved(settings[i], settings[i + 1])
+            if side is None:
                 i += 1
                 continue
-            j = i
-            while j + 1 < len(settings) and side_of(settings[j + 1]) == side:
+            j = i + 1
+            while j + 1 < len(settings) and moved(settings[j], settings[j + 1]) == side:
                 j += 1
-            lo = i - 1 if (i > 0 and side_of(settings[i - 1]) == "both at zero") else i
-            chunk = settings[lo:j + 1]
+            chunk = settings[i:j + 1]
             amp = np.array([(st["left_mA"] if side == "Left" else st["right_mA"])
                             for st in chunk], dtype=float)
-            if int((amp > 0).sum()) >= int(min_settings):
+            held = float(chunk[0]["right_mA"] if side == "Left" else chunk[0]["left_mA"])
+            if len(chunk) >= int(min_settings):
                 label = f"{side} run {len(runs) + 1}"
                 runs.append({
                     "side": side,
+                    "other_side_mA": held,
                     "steps": pd.DataFrame({
                         "t0": [st["t0"] for st in chunk],
                         "t_end": [st["t_end"] for st in chunk],
                         "current_mA": amp,
                         "block": [label] * len(chunk)}),
-                    "n_settings": int((amp > 0).sum()),
+                    "n_settings": int(len(chunk)),
                     "current_from_mA": _lowest_positive(amp),
                     "current_to_mA": float(np.nanmax(amp)),
                     "source_of_the_ladder": "the device's own per-sample current record",
                 })
-            i = j + 1
+            i = j
     return runs
 
 
@@ -909,7 +925,7 @@ def build_comparison(*, label, ramped_side, sensing_contact, steps, visit_date,
                      window_start_local, window_end_local,
                      tiles, device_band_power, stimulation_rate_hz,
                      window_s=within_visit.PRE_CHANGE_WINDOW_S,
-                     min_pieces=within_visit.MIN_CHUNKS_PRE_CHANGE):
+                     min_pieces=within_visit.MIN_CHUNKS_PRE_CHANGE, other_side_mA=0.0):
     """Compute all three panels for one run of rising current on one side.
 
     ``steps`` is a table of the stimulation settings in time order, with ``t0`` the moment each
@@ -970,6 +986,7 @@ def build_comparison(*, label, ramped_side, sensing_contact, steps, visit_date,
 
     out = ThreeSourceComparison(
         label=label, ramped_side=ramped_side, sensing_contact=sensing_contact,
+        other_side_mA=float(other_side_mA),
         programmed_centre_hz=(float(programmed) if programmed is not None else None),
         stimulation_rate_hz=(float(stimulation_rate_hz)
                              if stimulation_rate_hz is not None else None),
@@ -1115,6 +1132,7 @@ def comparison_rows(comparison: ThreeSourceComparison) -> List[Dict[str, Any]]:
             "run": comparison.label,
             "visit_date": comparison.visit_date,
             "ramped_side": comparison.ramped_side,
+            "other_side_mA": comparison.other_side_mA,
             "sensing_contact": comparison.sensing_contact,
             "stimulation_rate_hz": comparison.stimulation_rate_hz,
             "conversion_into_device_units": panel.conversion_into_device_units,
@@ -1284,8 +1302,9 @@ def build_for_participant(uid, *, max_runs=4, min_settings=3, loaded_sink=None):
         try:
             comp = build_comparison(
                 label=(f"{stamp:%Y-%m-%d %H:%M}, {run['side'].lower()} stimulator turned up, "
-                       f"other side at zero"),
+                       f"other side held at {run.get('other_side_mA', 0.0):g} mA"),
                 ramped_side=run["side"], sensing_contact=picked, steps=run["steps"],
+                other_side_mA=float(run.get("other_side_mA", 0.0)),
                 visit_date=f"{stamp:%Y-%m-%d}", window_start_local=f"{stamp:%Y-%m-%d %H:%M:%S}",
                 window_end_local=f"{stamp_end:%Y-%m-%d %H:%M:%S}",
                 tiles=cache[picked], device_band_power=device.get(picked),

@@ -313,7 +313,8 @@ def figure_text(ctx: FigureContext) -> FigureContext:
     # band the device was sensing is one of the marked ones. A reader must not have to guess whether
     # a missing clause means "checked and clean" or "not checked".
     ctx.headline = (f"{c.ramped_side} stimulator turned up "
-                    f"{c.current_from_mA:g} to {c.current_to_mA:g} mA with the other side at zero: "
+                    f"{c.current_from_mA:g} to {c.current_to_mA:g} mA with the other side held at "
+                    f"{float(getattr(c, 'other_side_mA', 0.0) or 0.0):g} mA: "
                     f"{_agreement_sentence(c)}")
     if on_stim:
         ctx.headline += (f", and the {band_phrase} band the device was sensing is one of the bands "
@@ -671,6 +672,7 @@ def context_payload(ctx: FigureContext) -> Dict[str, Any]:
     return {
         "label": c.label,
         "ramped_side": c.ramped_side,
+        "other_side_mA": float(getattr(c, "other_side_mA", 0.0) or 0.0),
         "sensing_contact": c.sensing_contact,
         "visit_date": c.visit_date,
         "window_start_local": c.window_start_local,

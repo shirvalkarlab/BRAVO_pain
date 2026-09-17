@@ -311,8 +311,10 @@ def test_the_device_route_refuses_a_window_in_which_its_own_record_shows_the_cur
         [s["why_not_used"] for s in refused]
 
 
-def test_a_run_of_rising_current_is_not_joined_across_a_fall_to_zero():
-    """When the current drops and rises again, that is two runs, and no window crosses the break."""
+def test_a_run_keeps_its_down_leg_and_its_return_to_zero_when_only_that_side_moved():
+    """Decision 197 (the PI, 2026-09-17: "accept ANY and all clinic and at home testing sessions").
+    Up, down to zero, up again -- one stimulator moving while the other stays put is ONE run;
+    the settled window is taken per setting, so nothing is carried across the fall."""
     record = {"blocks": [{
         "t": np.arange(0.0, 1200.0, 0.5),
         "mA": {"ONE_THREE_LEFT": _ladder(np.arange(0.0, 1200.0, 0.5),
@@ -321,13 +323,10 @@ def test_a_run_of_rising_current_is_not_joined_across_a_fall_to_zero():
                "ONE_THREE_RIGHT": np.zeros(2400)},
     }]}
     runs = TSR.find_single_side_runs_from_device(record, min_settings=2)
-    assert len(runs) == 2, [r["current_from_mA"] for r in runs]
-    for run in runs:
-        amp = run["steps"]["current_mA"].to_numpy(dtype=float)
-        rising = amp[amp > 0]
-        assert np.all(np.diff(rising) > 0), f"a run contains a fall: {amp}"
-    assert len(set(run["steps"]["block"].iloc[0] for run in runs)) == 2, (
-        "the two runs share a block label, so a window could be carried across the break")
+    assert len(runs) == 1 and runs[0]["side"] == "Left"
+    amp = runs[0]["steps"]["current_mA"].to_numpy(dtype=float)
+    assert list(amp) == pytest.approx([1.0, 2.0, 0.0, 1.0, 2.0, 3.0])
+    assert runs[0]["other_side_mA"] == 0.0
 
 
 def _ladder(t, points):
@@ -337,7 +336,7 @@ def _ladder(t, points):
     return out
 
 
-def test_both_sides_running_is_not_a_run_because_no_side_can_be_credited():
+def test_both_sides_moving_together_is_not_a_run_because_no_side_can_be_credited():
     record = {"blocks": [{
         "t": np.arange(0.0, 600.0, 0.5),
         "mA": {"ONE_THREE_LEFT": _ladder(np.arange(0.0, 600.0, 0.5),
@@ -346,6 +345,38 @@ def test_both_sides_running_is_not_a_run_because_no_side_can_be_credited():
                                           [(0, 1.0), (120, 2.0), (240, 3.0)])},
     }]}
     assert TSR.find_single_side_runs_from_device(record, min_settings=2) == []
+
+
+def test_one_side_stepped_while_the_other_is_held_at_a_nonzero_current_is_a_run_and_records_the_held_current():
+    """The titration session as decision 160 designed it and the 2026-09-16 visit ran it: the left
+    ladder with the RIGHT held at its own current in force (2.5 mA), then the right ladder with the
+    left held. Until decision 197 the finder required the other side at ZERO and saw neither."""
+    t = np.arange(0.0, 1500.0, 0.5)
+    left = _ladder(t, [(0, 0.5), (120, 1.0), (240, 1.5), (360, 2.0), (480, 2.5), (600, 2.5),
+                       (720, 2.5), (840, 2.5), (960, 2.5)])
+    right = _ladder(t, [(0, 2.5), (600, 0.0), (720, 0.5), (840, 1.0), (960, 1.5), (1080, 2.0)])
+    record = {"blocks": [{"t": t, "mA": {"ONE_THREE_LEFT": left, "ZERO_THREE_RIGHT": right}}]}
+    runs = TSR.find_single_side_runs_from_device(record, min_settings=3)
+    sides = [(r["side"], r["other_side_mA"], list(r["steps"]["current_mA"].round(2))) for r in runs]
+    assert sides[0] == ("Left", 2.5, [1.0, 1.5, 2.0, 2.5]), sides
+    # the right ladder starts from the setting the left ladder ended on (left 2.5, right 2.5):
+    # that setting is a point of both runs, each under its own held side
+    assert sides[1] == ("Right", 2.5, [2.5, 0.0, 0.5, 1.0, 1.5, 2.0]), sides
+    assert len(runs) == 2
+
+
+def test_the_run_is_cut_where_the_held_side_moves():
+    """The held side changing ends the run: the settings after it belong to the next run (or to
+    none), never to this one, because the constant background is what the attribution rests on."""
+    t = np.arange(0.0, 900.0, 0.5)
+    left = _ladder(t, [(0, 0.5), (120, 1.0), (240, 1.5), (360, 1.5), (480, 2.0), (600, 2.5), (720, 3.0)])
+    right = _ladder(t, [(0, 1.0), (360, 2.0)])
+    record = {"blocks": [{"t": t, "mA": {"ONE_THREE_LEFT": left, "ZERO_THREE_RIGHT": right}}]}
+    runs = TSR.find_single_side_runs_from_device(record, min_settings=2)
+    got = [(r["side"], r["other_side_mA"], list(r["steps"]["current_mA"].round(2))) for r in runs]
+    # the right's own move (1.0 -> 2.0 with the left held at 1.5) is a two-setting Right run of
+    # its own; the settings either side of it are two Left runs under two different held currents
+    assert got == [("Left", 1.0, [1.0, 1.5]), ("Right", 1.5, [1.0, 2.0]), ("Left", 2.0, [1.5, 2.0, 2.5, 3.0])], got
 
 
 def test_the_fine_increments_the_device_walks_through_are_one_setting_not_many():
