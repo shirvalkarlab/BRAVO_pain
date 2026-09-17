@@ -28,10 +28,11 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { Card, Grid, Table, TableBody, TableCell, TableHead, TableRow } from "@mui/material";
+import { Card, Grid, Icon, Table, TableBody, TableCell, TableHead, TableRow } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
+import MDButton from "components/MDButton";
 
 import Plotly from "plotly.js-dist";
 import { PlotlyRenderManager } from "graphing-utility/Plotly";
@@ -152,6 +153,19 @@ function CurrentSurfaceHeatmap({ divId, surface, inForceLeft, inForceRight, star
 }
 
 /** Group `rate_strata` rows by (pw_us_left, pw_us_right), rates ordered by n_epochs descending. */
+/** S5 (review 2026-09-15): one succinct line naming which pulse-width pairings each stream was
+ *  FITTED at, so "no current, both streams" is never read as two measurements of one setting.
+ *  Only strata with a surface count; the unfitted ones say "not enough data" on their own line. */
+export function pulseWidthPairingSentence(rateStrata, rateStrataClinic) {
+  const pairs = (rows) => new Set((rows || []).filter((r) => r && r.fitted)
+    .map((r) => `${Number(r.pw_us_left).toFixed(0)}/${Number(r.pw_us_right).toFixed(0)} \u00b5s`));
+  const a = pairs(rateStrata), b = pairs(rateStrataClinic);
+  const both = [...a].filter((k) => b.has(k)), onlyA = [...a].filter((k) => !b.has(k)), onlyB = [...b].filter((k) => !a.has(k));
+  const list = (xs) => (xs.length ? xs.join(", ") : "none");
+  return `Pulse-width pairings fitted: ${both.length ? `both streams ${list(both)}` : "none in both streams"}; `
+    + `REDCap only ${list(onlyA)}; sheets only ${list(onlyB)}.`;
+}
+
 function groupByPulseWidthPair(rateStrata) {
   const groups = new Map();
   (rateStrata || []).forEach((r) => {
@@ -170,7 +184,7 @@ function groupByPulseWidthPair(rateStrata) {
 /** One (pulse-width pair, rate) rendering pass -- shared by the REDCap stream and the clinic
  * stream below it. `pooledSurfaces` is `{}` for a stream that has none (the clinic stream does
  * not fit a pooled-across-rates surface), in which case the pooled fold is simply not drawn. */
-function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, idPrefix }) {
+function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, idPrefix, showDescriptions }) {
   const [poolOpen, setPoolOpen] = useState({});
   return groups.map((g) => (
     <MDBox key={g.key} sx={{ mt: 2.5, "&:first-of-type": { mt: 0 } }}>
@@ -245,12 +259,14 @@ function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, i
       {Object.keys(pooledSurfaces).length > 0 && (
         <Fold show="Pooled across rates — reference only" hide="Hide the pooled surface"
           onChange={(open) => setPoolOpen((s) => ({ ...s, [g.key]: open || s[g.key] }))}>
+          {showDescriptions && (
           <MDTypography variant="caption" component="div" color="text" sx={{ fontSize: TYPE.small, mb: 1 }}>
             The surface below pools every rate together through one shared, pinned rate axis.
             It is shown for reference only: reading a current off it draws confidence from
             OTHER rates, not the one being asked about, which is exactly why the honest
             surfaces above are fitted one rate at a time.
           </MDTypography>
+          )}
           {g.rows.map((r) => {
             const stratumKey = `${Number(g.pw_us_left).toString()}_${Number(g.pw_us_right).toString()}`;
             const rateKey = Number(r.rate_hz).toString();
@@ -283,7 +299,7 @@ function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, i
 /** The second, independent stream: rates and reports read from the lab's own clinic and
  * home-testing workbooks rather than from REDCap. Same fit, same checks, own section, own fold of
  * the visits that were ingested to build it -- never pooled with the REDCap stream above. */
-function ClinicStreamSection({ groups, inForceLeft, inForceRight, clinicStream }) {
+function ClinicStreamSection({ groups, inForceLeft, inForceRight, clinicStream, showDescriptions, pairingSentence }) {
   const cs = clinicStream || {};
   if (!cs.available || !groups.length) {
     return (
@@ -303,14 +319,21 @@ function ClinicStreamSection({ groups, inForceLeft, inForceRight, clinicStream }
       <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>
         From the clinic and home testing sheets (independent of REDCap)
       </MDTypography>
-      <MDTypography variant="caption" component="div" color="text" sx={{ fontSize: TYPE.body, mt: 0.5, mb: 1.5 }}>
+      {showDescriptions && (
+      <MDTypography variant="caption" component="div" color="text" sx={{ fontSize: TYPE.body, mt: 0.5, mb: 1 }}>
         {`These scores come from the lab's testing workbooks (${num(cs.n_files) ?? 0} files, `
           + `${num(cs.n_steps) ?? 0} steps, ${num(cs.n_with_pain) ?? 0} with a score, `
           + `${num(cs.n_unparsed_prose) ?? 0} prose notes not parsed), are on the same 0-10 scale `
           + "as the primary item, and are fitted separately -- never pooled -- with the REDCap "
           + "stream above."}
       </MDTypography>
-      {cs.note && (
+      )}
+      {showDescriptions && (
+      <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, mb: 1, fontWeight: 500 }}>
+        {pairingSentence}
+      </MDTypography>
+      )}
+      {showDescriptions && cs.note && (
         <MDTypography variant="caption" component="div" color="text" sx={{ ...SMALL, mb: 1 }}>
           {cs.note}
         </MDTypography>
@@ -319,14 +342,14 @@ function ClinicStreamSection({ groups, inForceLeft, inForceRight, clinicStream }
           setting in force; this one is too WHEN a clinic step exists at that rate and those pulse
           widths, and otherwise it is the last clinic step -- said here so the two sections' zeros
           are never read as the same thing when they are not. */}
-      {cs.reference && cs.reference.sentence && (
+      {showDescriptions && cs.reference && cs.reference.sentence && (
         <MDTypography variant="caption" component="div" sx={{ ...SMALL, mb: 1,
           color: cs.reference.source === "last_clinic_step" ? PAL.warnText : undefined }}>
           {`Zero on these colour scales: ${cs.reference.sentence}.`}
         </MDTypography>
       )}
       <RateStrataGroups groups={groups} inForceLeft={inForceLeft} inForceRight={inForceRight}
-        pooledSurfaces={{}} idPrefix="cms-clinic" />
+        pooledSurfaces={{}} idPrefix="cms-clinic" showDescriptions={showDescriptions} />
       <Fold show={`Ingested clinic and home-testing visits (${visits.length})`} hide="Hide the visit list"
         mt={1.5}>
         <MDBox sx={{ overflowX: "auto" }}>
@@ -381,6 +404,11 @@ export default function CurrentMapCard({ plan }) {
 
   const groups = useMemo(() => groupByPulseWidthPair(rateStrata), [rateStrata]);
   const clinicGroups = useMemo(() => groupByPulseWidthPair(rateStrataClinic), [rateStrataClinic]);
+  const pairingSentence = useMemo(() => pulseWidthPairingSentence(rateStrata, rateStrataClinic),
+    [rateStrata, rateStrataClinic]);
+  // The PI, 2026-09-17 (S5): every description on this card folds behind one push-button, off on
+  // every load; the squares, the per-rate lines and the three checks stay visible either way.
+  const [showDescriptions, setShowDescriptions] = useState(false);
 
   if (!rateStrata.length) return null;
 
@@ -390,6 +418,7 @@ export default function CurrentMapCard({ plan }) {
         <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>
           Where the two currents have been tried, and what the record says
         </MDTypography>
+        {showDescriptions && (
         <MDTypography variant="caption" component="div" color="text" sx={{ fontSize: TYPE.body, mt: 0.5, mb: 1.5 }}>
           Each square below is one stimulation speed: the left current runs along the bottom, the
           right current up the side, and the colour is the combined pain-and-side-effect score the
@@ -399,12 +428,24 @@ export default function CurrentMapCard({ plan }) {
           them; a blue star appears only when the record can tell currents apart well enough to
           trust it, per the three checks printed beside each square.
         </MDTypography>
+        )}
 
         <RateStrataGroups groups={groups} inForceLeft={inForceLeft} inForceRight={inForceRight}
-          pooledSurfaces={pooledSurfaces} idPrefix="cms" />
+          pooledSurfaces={pooledSurfaces} idPrefix="cms" showDescriptions={showDescriptions} />
 
         <ClinicStreamSection groups={clinicGroups} inForceLeft={inForceLeft} inForceRight={inForceRight}
-          clinicStream={stage1.clinic_stream} />
+          clinicStream={stage1.clinic_stream} showDescriptions={showDescriptions}
+          pairingSentence={pairingSentence} />
+
+        <MDBox mt={1.5} display="flex" justifyContent="flex-start">
+          <MDButton size="small" variant="outlined" color="dark"
+            onClick={() => setShowDescriptions((v) => !v)} aria-expanded={showDescriptions}
+            sx={{ textTransform: "none", fontSize: 12, py: 0.4, px: 1.25, minHeight: 0,
+              borderWidth: 1.5, boxShadow: "0 2px 0 #1A1A1A", "&:hover": { boxShadow: "0 1px 0 #1A1A1A" } }}>
+            <Icon sx={{ mr: 0.5, fontSize: "16px !important" }}>help_outline</Icon>
+            {showDescriptions ? "Collapse descriptions" : "Expand descriptions"}
+          </MDButton>
+        </MDBox>
       </MDBox>
     </Card>
   );
