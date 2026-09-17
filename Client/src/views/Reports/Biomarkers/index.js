@@ -10,11 +10,12 @@ import { useEffect, useMemo, useState, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { Card, Grid, Select, MenuItem, FormControl,
-  Slider, LinearProgress,
+  Slider, LinearProgress, Icon,
   ToggleButton, ToggleButtonGroup } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
+import MDButton from "components/MDButton";
 
 import BiomarkerTimeline from "./BiomarkerTimeline";
 import BiomarkerDataTimeline from "./BiomarkerDataTimeline";
@@ -163,6 +164,10 @@ function Biomarkers() {
   // ratings. OFF by default -- those scores were taken while current was being stepped on purpose.
   const [includeClinicSheetRatings, setIncludeClinicSheetRatings] = useState(
     P.includeClinicSheetRatings != null ? P.includeClinicSheetRatings : false);
+  // The PI, 2026-09-17: the binarization card's explanatory prose is folded away by default and
+  // opened all at once by one push-button at the card's bottom left. Not persisted: every load
+  // starts folded. Controls, values and counts stay visible either way.
+  const [showDescriptions, setShowDescriptions] = useState(false);
   // The timeline's per-pain-rating sensed-band-power circles (av.pro_lsb, BiomarkerDataTimeline.js)
   // are chosen by `availability.per_pro_lsb`'s own match window in SECONDS — separate from, and much
   // narrower than, the main match-tolerance slider (which is minutes, and governs the exploratory
@@ -656,6 +661,7 @@ function Biomarkers() {
                                   </MDBox>
                                 </MDBox>
                               ) : null}
+                              {showDescriptions && (
                               <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 13 }}>
                                 {strategy === "tertile"
                                   ? "Tertile uses fixed 33⅓ / 66⅔ cuts; samples between them are excluded. Move the range slider above the histogram to switch to adjustable percentile cuts."
@@ -665,6 +671,7 @@ function Biomarkers() {
                                       ? "Every sample is labeled at the median split (~50/50)."
                                       : "Legacy 2-cluster KMeans labeler."}
                               </MDTypography>
+                              )}
 
                               {/* PAIN-REPORT MATCHING — every remaining knob that decides which
                                   recording counts as evidence for which pain rating, grouped under
@@ -699,6 +706,7 @@ function Biomarkers() {
                                   <ToggleButton value="nearest" title="Pair each PSD with the nearest pain rating in either time direction (symmetric ± window)">Nearest (±window)</ToggleButton>
                                   <ToggleButton value="prior" title="Pair each PSD only with pain ratings recorded AFTER it (causal / closed-loop forecasting direction)">Prior (forecast)</ToggleButton>
                                 </ToggleButtonGroup>
+                                {showDescriptions && (
                                 <MDTypography variant="caption" color="dark" fontStyle="italic"
                                   sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
                                   {matchDirection === "pro_first"
@@ -707,6 +715,7 @@ function Biomarkers() {
                                     ? "Each PSD is paired with the closest pain rating in EITHER time direction (symmetric ± window). Cross-sectional association, not forecasting."
                                     : "Each PSD is paired only with pain ratings recorded AFTER it within the window (causal/forecasting direction). Use for closed-loop deployment."}
                                 </MDTypography>
+                                )}
                               </MDBox>
 
                               {/* Per-rating CAP (replaces the old all / one-per-rating toggle). */}
@@ -714,7 +723,7 @@ function Biomarkers() {
                                 <MDTypography variant="caption" fontWeight="bold" color="dark"
                                   sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
                                   {`Max LSB samples per pain rating (currently ${maxPerRating})`}
-                                  {maxPerRating > 1 && (
+                                  {showDescriptions && maxPerRating > 1 && (
                                     <span style={{ fontWeight: 400, fontSize: 11.5, color: "#6c757d", display: "block" }}>
                                       {"When > 1, the rating's LSB is the median over its samples within the rating-centred window."}
                                     </span>
@@ -737,6 +746,7 @@ function Biomarkers() {
                                     disabled={maxPerRating <= 1 || matchDirection === "pro_first"}
                                     onChange={(e, v) => setRefractoryMin(v)} />
                                 </MDBox>
+                                {showDescriptions && (
                                 <MDTypography variant="caption" color="dark" fontStyle="italic"
                                   sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
                                   {matchDirection === "pro_first"
@@ -752,6 +762,7 @@ function Biomarkers() {
                                       ? "The binary-classification AUC is still cross-validated with folds grouped by rating, so reused ratings can't inflate it; the AUC n is the count of independent ratings."
                                       : "Every sample is an independent (channel, rating) pair — no double-dipping."))}
                                 </MDTypography>
+                                )}
                               </MDBox>
 
                               {/* TD-signal-quantity slider + window-reuse toggle. Matching always runs
@@ -803,10 +814,12 @@ function Biomarkers() {
                                     <ToggleButton value="include" title="Also pool the clinic and at-home testing sheets' scores (0–10 verbal; times ten for the VAS scores). Those were taken while current was being stepped on purpose, one a minute inside a session, so treat the larger count with care">+ clinic titration sessions</ToggleButton>
                                   </ToggleButtonGroup>
                                 </MDBox>
+                                {showDescriptions && (
                                 <MDTypography variant="caption" color="dark" fontStyle="italic"
                                   sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
                                   {liveMatchCaption}
                                 </MDTypography>
+                                )}
                                 {data && data.live_match_stats && (
                                   <MDTypography variant="caption" color="text" display="block"
                                     sx={{ fontSize: 12, mt: 0.5 }}>
@@ -816,6 +829,19 @@ function Biomarkers() {
                                      + `${data.live_match_stats.n_td_used != null ? ` (${data.live_match_stats.n_td_used} TD tiles · ${data.live_match_stats.n_psd_used || 0} PSD events aggregated).` : "."}`}
                                   </MDTypography>
                                 )}
+                              </MDBox>
+
+                              {/* One push-button opens or folds every description on this card,
+                                  both columns (the PI, 2026-09-17: "way too much text"). */}
+                              <MDBox mt="auto" pt={1.5} display="flex" justifyContent="flex-start">
+                                <MDButton size="small" variant="outlined" color="dark"
+                                  onClick={() => setShowDescriptions((v) => !v)}
+                                  aria-expanded={showDescriptions}
+                                  sx={{ textTransform: "none", fontSize: 12, py: 0.4, px: 1.25, minHeight: 0,
+                                    borderWidth: 1.5, boxShadow: "0 2px 0 #1A1A1A", "&:hover": { boxShadow: "0 1px 0 #1A1A1A" } }}>
+                                  <Icon sx={{ mr: 0.5, fontSize: "16px !important" }}>help_outline</Icon>
+                                  {showDescriptions ? "Collapse descriptions" : "Expand descriptions"}
+                                </MDButton>
                               </MDBox>
 
                             </MDBox>
@@ -841,6 +867,7 @@ function Biomarkers() {
                                 setPercentileLow={setPercentileLow}
                                 setPercentileHigh={setPercentileHigh}
                                 setStrategy={setStrategy}
+                                showDescriptions={showDescriptions}
                               />
                             </MDBox>
                           </Grid>

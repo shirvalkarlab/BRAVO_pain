@@ -70,7 +70,8 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
                                metricLabel, metricKey, loading, totalReports,
                                matchTolerance, setMatchTolerance, matchDirty,
                                scanModel, matchedLoading,
-                               setPercentileLow, setPercentileHigh, setStrategy }) {
+                               setPercentileLow, setPercentileHigh, setStrategy,
+                               showDescriptions = false }) {
   const ref = useRef(null);
   const hasTolControl = typeof setMatchTolerance === "function";
 
@@ -566,7 +567,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
             : null}
         </MDTypography>
       ) : null}
-      {matchedMode ? (
+      {matchedMode ? (showDescriptions ? (
         <MDTypography variant="caption" color="text" sx={{ fontSize: 11, fontStyle: "italic", mb: 0.25, display: "block" }}>
           {dir === "pro_first"
             ? (`Matching is PRO-first: each pain rating claims up to ${(counts.max_per_rating || 3)} closest PSDs per channel within the match window. `
@@ -577,7 +578,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
           {"Pooled neural sources: TD streaming (250 Hz → 30 s Welch PSD), montage/survey PSD, and patient-event PSD. "}
           {"Band-power LSB appears on the timeline but is not a full-spectrum PSD, so it is not pooled here."}
         </MDTypography>
-      ) : (hasTolControl ? (
+      ) : null) : (hasTolControl ? (
         // WHY THIS IS THREE MESSAGES AND NOT ONE. The card falls back to the daily pain-report
         // distribution whenever no neural sample carries a pain label, and it used to explain that
         // fallback with a single sentence — "No PSD scan index available" — regardless of the
