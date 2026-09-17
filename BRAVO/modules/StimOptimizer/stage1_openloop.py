@@ -626,15 +626,27 @@ def _rate_stratum_resolution(rs: "RateStratum", joint_stratum: JointStratum, *,
     return dict(resolved=resolved, flat=flat, gain=gain, coverage=coverage, sentence=sentence)
 
 
+def _observed_inputs(sub, grid):
+    """The model's input rows for the epochs in ``sub``: the three settings, plus the epoch's
+    midpoint time when the grid carries a time axis."""
+    cols = ["freq_hz", "amp_mA_Left", "amp_mA_Right"]
+    if isinstance(grid, SUR.TimeAwareGrid):
+        cols.append("t_mid_months")
+    return sub[cols].to_numpy(float)
+
+
 def _fit_rate_stratum(pwl, pwr, rate, sub, *, amp_grid, sgp_left, sgp_right,
-                      fixed_length_scale, beta) -> RateStratum:
+                      fixed_length_scale, beta, time_grid=None) -> RateStratum:
     """Fit ONE (amplitude-Left, amplitude-Right) surface at a single rate. ``sub`` is already
     restricted to this (pulse-width pair, rate); the caller has already checked it clears
     ``RATE_STRATUM_MIN_EPOCHS``. ``sgp_left``/``sgp_right`` are the SAME shared, per-side safety
     models the enclosing :class:`JointStratum` fit was given -- one safety model per side, fitted
     once on the whole record, unchanged by this per-rate split."""
     grid = SUR.JointParameterGrid([rate], amp_grid, amp_grid)
-    Xobs = sub[["freq_hz", "amp_mA_Left", "amp_mA_Right"]].to_numpy(float)
+    if time_grid is not None:
+        grid = SUR.TimeAwareGrid(grid, t_obs_months=time_grid.t_obs_months,
+                                 t_now_months=time_grid.t_now)
+    Xobs = _observed_inputs(sub, grid)
     gp = SUR.ObjectiveGP(grid, fixed_length_scale=fixed_length_scale, random_state=0).fit(
         Xobs, sub["J"].to_numpy(float), sub["obs_var"].to_numpy(float))
     mu, sd = gp.predict_grid()
@@ -694,7 +706,7 @@ def _fit_joint_stratum(pwl, pwr, sub, *, grid, sgp_left, sgp_right, incumbent_xy
     computed by handing each 2-D ``SafetyGP`` the matching two columns of the 3-D grid, which
     ``SafetyGP.safe_mask``'s own ``X=`` argument already supports with no change to that class.
     """
-    Xobs = sub[["freq_hz", "amp_mA_Left", "amp_mA_Right"]].to_numpy(float)
+    Xobs = _observed_inputs(sub, grid)
     gp = SUR.ObjectiveGP(grid, fixed_length_scale=fixed_length_scale, random_state=0).fit(
         Xobs, sub["J"].to_numpy(float), sub["obs_var"].to_numpy(float))
     mu, sd = gp.predict_grid()
@@ -783,6 +795,9 @@ class Stage1Result:
     #: ``JointStratum.rate_strata`` and ``_pooled_slice_at_rate``. Empty when nothing was fitted
     #: at all.
     rate_summary: pd.DataFrame = field(default_factory=pd.DataFrame)
+    #: Decision 194: whether time was a model input, the reference time every surface is
+    #: predicted at, and the months the record spans.
+    rate_strata_time: dict = field(default_factory=dict)
 
     def slices_for(self, hemisphere: str) -> list:
         """Every fitted joint stratum. Kept for callers written against the pre-joint API: since
@@ -801,8 +816,15 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
               explore_outside_reason=None, explore_outside_by=None,
               explore_outside_requested=None,
               adaptive_min_rate_hz=ENV.MIN_RATE_HZ,
-              safety_ceiling_by_hemisphere=None, pooled_var_override=None) -> Stage1Result:
+              safety_ceiling_by_hemisphere=None, pooled_var_override=None,
+              time_input=True) -> Stage1Result:
     """Run the open-loop search JOINTLY over both stimulators and freeze one configuration.
+
+    ``time_input`` (decision 194, 2026-09-17): TIME -- months since the record began, at each
+    epoch's midpoint -- is a fourth input to every objective surface, with its own fitted length
+    scale, and every surface is the prediction at the PRESENT (the end of the newest epoch). This
+    replaced the noise model's age penalty, which a hold-out fit found inert. ``False`` restores
+    the time-blind fit, for measurement only.
 
     Parameters
     ----------
@@ -873,6 +895,21 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
     D = OBJ.build_objective(es, incumbent_epoch=float(incumbent_epoch),
                             cfg={"primary_item": primary_item} if primary_item else None,
                             pooled_var_override=pooled_var_override)
+    # TIME AS AN INPUT (decision 194): each epoch at its midpoint, in months since the record's
+    # first epoch began; "now" is the end of the newest epoch. Both on D so every fit below and
+    # every reader of D (the hold-out check, the response) see the same clock.
+    _t0 = pd.to_datetime(D["t0"], utc=True)
+    _t_start = _t0.min()
+    D["t_mid_months"] = ((_t0 - _t_start).dt.total_seconds() / 86400.0
+                         + D["dur_h"].astype(float) / 24.0 / 2.0) / 30.44
+    t_now_months = float((((_t0 - _t_start).dt.total_seconds() / 86400.0
+                           + D["dur_h"].astype(float) / 24.0) / 30.44).max())
+    reference_time_utc = (_t_start + pd.Timedelta(days=t_now_months * 30.44)).isoformat()
+    time_block = dict(enabled=bool(time_input), reference_time_utc=reference_time_utc,
+                      months_spanned=float(t_now_months),
+                      note=("time is a fitted input; every surface is the prediction at the reference time"
+                            if time_input else "time is not an input; the surface is the record's average"))
+
     inc_row = D.loc[D["epoch"].astype(float) == float(incumbent_epoch)].iloc[0]
     inc_rate = float(inc_row["freq_hz"])
     inc_amp_left = float(inc_row["amp_mA_Left"])
@@ -896,6 +933,9 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
     inc_pw_by_side = {"Left": inc_pw_left, "Right": inc_pw_right}
 
     grid = SUR.JointParameterGrid(freq_grid, amp_grid, amp_grid)
+    if time_input:
+        grid = SUR.TimeAwareGrid(grid, t_obs_months=D["t_mid_months"].to_numpy(float),
+                                 t_now_months=t_now_months)
     gx = grid.grid_X()
     safety_grid = SUR.ParameterGrid(freq_grid, amp_grid)
 
@@ -988,7 +1028,8 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
             try:
                 rs = _fit_rate_stratum(pwl, pwr, rate, subr, amp_grid=amp_grid,
                                        sgp_left=sgp_by_side["Left"], sgp_right=sgp_by_side["Right"],
-                                       fixed_length_scale=fixed_length_scale, beta=beta)
+                                       fixed_length_scale=fixed_length_scale, beta=beta,
+                                       time_grid=grid if time_input else None)
             except (ValueError, RuntimeError) as exc:
                 rate_strata[rate] = RateStratum(
                     pw_us_left=float(pwl), pw_us_right=float(pwr), rate_hz=rate,
@@ -1080,6 +1121,11 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
             pooled = _pooled_slice_at_rate(sl, rate)
             row = dict(pw_us_left=float(pwl), pw_us_right=float(pwr), rate_hz=float(rate),
                        fitted=bool(rs.fitted), n_epochs=int(rs.n_epochs),
+                       time_input=bool(time_input),
+                       time_length_scale_months=(float(rs.gp.time_length_scale_months)
+                                                 if rs.fitted and getattr(rs, "gp", None) is not None
+                                                 and rs.gp.time_length_scale_months is not None
+                                                 else float("nan")),
                        pooled_across_rates_mu_range=pooled["mu_range"],
                        pooled_across_rates_delivered_at_this_rate=pooled["delivered_at_this_rate"],
                        pooled_across_rates_note=pooled["note"])
@@ -1118,7 +1164,8 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
     rate_summary = pd.DataFrame(rate_rows)
 
     return Stage1Result(frozen=frozen, slices=slices, summary=summary, audit=audit,
-                        D=D, skipped=skipped, rate_summary=rate_summary)
+                        D=D, skipped=skipped, rate_summary=rate_summary,
+                        rate_strata_time=time_block)
 
 
 def _freeze_joint(slices: dict, inc_rate, inc_pw_by_side: dict, *, h_audit, gx, resolution_k,

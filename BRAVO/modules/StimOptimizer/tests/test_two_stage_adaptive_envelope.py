@@ -71,7 +71,16 @@ def _matrix(n_per_cell=11, pw_levels=(100.0, 140.0), rates=(40.0, 165.0), seed=0
                            back_vas=float(40.0 + 3.0 * rng.standard_normal()), back_vas_sd=8.0)
             rows.append(row)
     d = pd.DataFrame(rows)
-    d["t0"] = pd.date_range("2025-07-01", periods=len(d), freq="3D", tz="UTC")
+    # The two strata INTERLEAVED in time. Laid out one stratum after the other (as this fixture
+    # was until 2026-09-17), the 40 Hz block occupied the first half of the calendar and the
+    # 165 Hz block the second, so the planted 10-point benefit was indistinguishable from a
+    # drift over time -- and once time became a model input (decision 194) the fit rightly split
+    # the credit. A real record interleaves settings; so does this one now. The incumbent (the
+    # newest epoch) stays in the second stratum, as before, by giving it the last date.
+    dates = pd.date_range("2025-07-01", periods=len(d), freq="3D", tz="UTC")
+    order = np.random.default_rng(seed + 1000).permutation(len(d))
+    last = int(d.index[-1]); order = np.concatenate([order[order != last], [last]])
+    d["t0"] = dates[np.argsort(order)]
     if service:
         d["t_end"] = d["t0"] + pd.Timedelta(days=2)
         d.attrs[st.STORE_KEY_ATTR] = MATCHED_KEY

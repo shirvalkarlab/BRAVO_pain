@@ -137,15 +137,21 @@ All 35 historical epochs are used. None is discarded. Each enters as **one** obs
 PRO — at its (frequency, amplitude) cell, with an observation variance:
 
 ```
-sigma^2_obs = s^2/n  +  tau^2_dur  +  tau^2_age
+sigma^2_obs = s^2/n  +  tau^2_dur          (tau^2_age removed 2026-09-17, decision 194)
 ```
 
 - `s^2/n` — squared standard error of NRS within the epoch. For `n = 1` epochs, `s^2` is imputed as the
   pooled within-epoch variance across epochs with `n >= 3`.
 - `tau^2_dur` — inflation for short exposures, `c_dur * max(0, 1 - dur_h/168)^2`. An epoch shorter than
   a week has not reached steady state.
-- `tau^2_age` — inflation with observation age, `c_age * (age_days/365)^2`. This is the interim stand-in
-  for nonstationarity; the time-varying kernel is deferred (see README).
+- ~~`tau^2_age` — inflation with observation age, `c_age * (age_days/365)^2`. This is the interim stand-in
+  for nonstationarity; the time-varying kernel is deferred (see README).~~ **REMOVED 2026-09-17, decision 194.**
+  A hold-out fit on RCS08 found the term inert at every weight from 0 to 16x (decision 193). Drift is now a
+  FITTED TIME INPUT to the objective model: each epoch's midpoint, in months since the record began, is a
+  fourth input with its own ARD length scale (`surrogate.TimeAwareGrid`), and every surface is the prediction
+  at the present -- the end of the newest epoch. On RCS08 the fitted time scale is about 1.6-1.8 months on the
+  55 Hz strata (strong drift) and 70-90 months at 110 Hz (none detectable); the 90-day hold-out error fell from
+  1.33 to 0.69 points on the 0-10 scale and its over-prediction from +1.20 to +0.40.
 
 This is what "use all the data" means operationally: nothing is thrown away, and nothing is
 overtrusted. The dominant epoch contributes an observation with a very small variance; a single-report

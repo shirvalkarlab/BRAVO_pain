@@ -166,7 +166,88 @@ class JointParameterGrid:
         return (fi * len(self.amps_left) + ali) * len(self.amps_right) + ari
 
 
-def _make_kernel(n_dim, length_scale_bounds, nugget_bounds, fixed_length_scale=None):
+#: The shortest time length scale the model may fit, in months (decision 194). "Drift" means the
+#: rating changing over a month or more; variation faster than that between epochs is noise, and
+#: must stay with the settings axes and the nugget. Without this floor the marginal likelihood
+#: can drive the time scale down to the spacing between epochs, at which point time explains
+#: every observation on its own, the settings surface goes flat and the best cell is arbitrary
+#: (measured on the adaptive-envelope test fixture: a time scale of 0.35 months, the "best" cell
+#: at a rate that stratum never delivered).
+TIME_LENGTH_SCALE_FLOOR_MONTHS = 1.0
+
+
+class TimeAwareGrid:
+    """A search grid with TIME as one more model input (decision 194, 2026-09-17).
+
+    Wraps a :class:`JointParameterGrid` (or :class:`ParameterGrid`). The GP sees the base grid's
+    standardised settings axes plus one standardised time axis, in months since the record began,
+    with its own fitted ARD length scale -- so a rating that drifts over the year is explained by
+    time rather than smeared over the settings, and a short fitted time scale says the record is
+    non-stationary. The search grid itself (``grid_X``) carries NO time column: a prediction on it
+    is a prediction AT THE PRESENT (``t_now_months``, the end of the newest epoch), which is what
+    the current map draws. An input row given without a time column is likewise taken to be
+    "now"; a row with one is taken at that time, which is how the hold-out check asks the model
+    about the past.
+    """
+
+    def __init__(self, base, *, t_obs_months, t_now_months,
+                 min_length_scale_months=TIME_LENGTH_SCALE_FLOOR_MONTHS):
+        self.base = base
+        self.n_base = base.grid_X().shape[1]
+        self.min_length_scale_months = float(min_length_scale_months)
+        t = np.asarray(t_obs_months, float)
+        self.t_obs_months = t
+        self.t_loc = float(np.nanmean(t)) if t.size else 0.0
+        self.t_scale = float(max(np.nanstd(t), 1e-9)) if t.size else 1.0
+        self.t_now = float(t_now_months)
+
+    # ---- the base grid's own surface, untouched ----
+    def __len__(self): return len(self.base)
+    @property
+    def shape(self): return self.base.shape
+    def __getattr__(self, name):
+        # `freqs`, `amps_left`, `amps_right`, `raw`, ... belong to the base grid. Guarded so an
+        # instance being unpickled (no `base` yet) does not recurse.
+        if name == "base" or "base" not in self.__dict__:
+            raise AttributeError(name)
+        return getattr(self.base, name)
+    def grid_X(self): return self.base.grid_X()
+    def as_surface(self, values): return self.base.as_surface(values)
+    def snap(self, X): return self.base.snap(self._settings(X))
+    def index_of(self, X): return self.base.index_of(self._settings(X))
+
+    def _settings(self, X):
+        X = np.atleast_2d(np.asarray(X, float))
+        return X[:, :self.n_base]
+
+    def with_time(self, X):
+        """``X`` with a time column: the given one, or ``t_now`` where none was given."""
+        X = np.atleast_2d(np.asarray(X, float))
+        if X.shape[1] == self.n_base:
+            return np.column_stack([X, np.full(X.shape[0], self.t_now)])
+        if X.shape[1] == self.n_base + 1:
+            return X
+        raise ValueError(f"expected {self.n_base} settings columns, optionally followed by one "
+                         f"time column (months); got {X.shape[1]} columns")
+
+    def transform(self, X):
+        X = self.with_time(X)
+        Z = self.base.transform(X[:, :self.n_base])
+        return np.column_stack([Z, (X[:, -1] - self.t_loc) / self.t_scale])
+
+    def time_length_scale_months(self, standardised_length_scale):
+        """A fitted length scale on the standardised time axis, back in months."""
+        return float(standardised_length_scale) * self.t_scale
+
+    def time_length_scale_bounds(self, upper_standardised):
+        """The time axis's length-scale box on the standardised axis: the floor in months,
+        standardised, up to the same upper bound the settings axes use (never below it)."""
+        lo = self.min_length_scale_months / self.t_scale
+        return (lo, max(float(upper_standardised), lo * 1.001))
+
+
+def _make_kernel(n_dim, length_scale_bounds, nugget_bounds, fixed_length_scale=None,
+                 bounds_by_dim=None):
     """Matern-3/2 ARD kernel plus a white nugget.
 
     ``fixed_length_scale`` pins the length scales instead of fitting them. This exists because
@@ -187,6 +268,11 @@ def _make_kernel(n_dim, length_scale_bounds, nugget_bounds, fixed_length_scale=N
     means leave-one-out refits inherit the full-data hyperparameters instead of re-estimating
     them — see :meth:`ObjectiveGP.loo_predict`.
     """
+    # ``bounds_by_dim``: an optional per-dimension override of ``length_scale_bounds`` (a list
+    # with a (lo, hi) or None per dimension) -- the time axis's floor (TimeAwareGrid) uses it.
+    per_dim = list(bounds_by_dim) if bounds_by_dim is not None else [None] * n_dim
+    if fixed_length_scale is None and any(b is not None for b in per_dim):
+        fixed_length_scale = [None] * n_dim
     if fixed_length_scale is not None:
         spec = np.atleast_1d(np.asarray(fixed_length_scale, dtype=object))
         if spec.size == 1:
@@ -196,8 +282,9 @@ def _make_kernel(n_dim, length_scale_bounds, nugget_bounds, fixed_length_scale=N
         ls, bounds = [], []
         for k, v in enumerate(spec):
             if v is None:
-                ls.append(1.0)
-                bounds.append(tuple(length_scale_bounds))
+                b = tuple(per_dim[k]) if per_dim[k] is not None else tuple(length_scale_bounds)
+                ls.append(float(np.clip(1.0, b[0], b[1])))
+                bounds.append(b)
             else:
                 val = float(v)
                 ls.append(val)
@@ -250,19 +337,42 @@ class ObjectiveGP:
         if len(y) < 3:
             raise ValueError(f"need at least 3 observations to fit hyperparameters, got {len(y)}")
 
+        if isinstance(self.grid, TimeAwareGrid):
+            X = self.grid.with_time(X)
+        Z = self.grid.transform(X)
+        pins = self.fixed_length_scale
+        bounds_by_dim = None
+        if isinstance(self.grid, TimeAwareGrid):
+            if pins is not None and np.size(pins) == Z.shape[1] - 1:
+                pins = list(pins) + [None]          # the time axis is always fitted
+            bounds_by_dim = [None] * (Z.shape[1] - 1) + [
+                self.grid.time_length_scale_bounds(self.length_scale_bounds[1])]
+
         self._y_loc = float(y.mean())
         self._y_scale = float(max(y.std(ddof=0), 1e-9))
         yz = (y - self._y_loc) / self._y_scale
         alpha = y_var / self._y_scale ** 2  # same units as the standardised kernel diagonal
 
         self.gp_ = GaussianProcessRegressor(
-            kernel=_make_kernel(X.shape[1], self.length_scale_bounds, self.nugget_bounds,
-                                self.fixed_length_scale),
+            kernel=_make_kernel(Z.shape[1], self.length_scale_bounds, self.nugget_bounds, pins,
+                                bounds_by_dim=bounds_by_dim),
             alpha=alpha, normalize_y=False,
             n_restarts_optimizer=self.n_restarts, random_state=self.random_state,
-        ).fit(self.grid.transform(X), yz)
+        ).fit(Z, yz)
         self.X_, self.y_, self.y_var_ = X, y, y_var
         return self
+
+    @property
+    def time_length_scale_months(self):
+        """The fitted time length scale in months, or None when the grid has no time axis."""
+        self._check()
+        if not isinstance(self.grid, TimeAwareGrid):
+            return None
+        for k in (self.gp_.kernel_.k1, getattr(self.gp_.kernel_.k1, "k2", None)):
+            ls = getattr(k, "length_scale", None)
+            if ls is not None and np.size(ls) == self.grid.n_base + 1:
+                return self.grid.time_length_scale_months(np.asarray(ls, float)[-1])
+        return None
 
     def _check(self):
         if self.gp_ is None:
@@ -299,6 +409,8 @@ class ObjectiveGP:
         """
         self._check()
         X_new = np.atleast_2d(np.asarray(X_new, float))
+        if isinstance(self.grid, TimeAwareGrid):
+            X_new = self.grid.with_time(X_new)
         var_new = np.broadcast_to(np.asarray(var_new, float), (X_new.shape[0],)).copy()
         y_new = self.predict(X_new, return_std=False)
         X = np.vstack([self.X_, X_new])

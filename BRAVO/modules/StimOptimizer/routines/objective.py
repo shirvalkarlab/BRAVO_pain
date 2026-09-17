@@ -197,7 +197,9 @@ DEFAULTS = dict(
     metric="left_leg",
     washin_h=60.0 / 3600.0,   # 60 s: PI reports a rapid responder; see OBJECTIVE_SPEC amendments
     c_dur=0.25,        # variance inflation scale for short exposures
-    c_age=0.25,        # variance inflation scale for observation age
+    # `c_age` (0.25 x years², "the interim stand-in for nonstationarity") was removed on
+    # 2026-09-17, decision 194: a hold-out fit found it inert at every weight from 0 to 16x, and
+    # drift is now a fitted TIME INPUT to the objective model (stage1_openloop) instead.
     dur_ref_h=168.0,   # one week: exposures shorter than this have not reached steady state
     min_var=1e-3,      # numerical floor on observation variance
 )
@@ -283,10 +285,13 @@ def pooled_within_epoch_var(epoch_stats: pd.DataFrame, sd_col: str, n_col: str,
     return float(np.sum(dof * ok[sd_col].to_numpy(float) ** 2) / np.sum(dof))
 
 
-def observation_variance(n, sd, dur_h, age_days, *, pooled_var, cfg=None) -> np.ndarray:
+def observation_variance(n, sd, dur_h, *, pooled_var, cfg=None) -> np.ndarray:
     """Per-observation variance for the warm start (section 3).
 
-        sigma^2 = s^2/n + c_dur * max(0, 1 - dur/dur_ref)^2 + c_age * (age/365)^2
+        sigma^2 = s^2/n + c_dur * max(0, 1 - dur/dur_ref)^2
+
+    The age term this once carried is gone (decision 194); observation age enters the model as
+    a fitted time input, not as a variance penalty.
 
     This is the whole mechanism by which "use all the data" is made safe: a 155-report,
     85-day epoch and a 1-report, 26-hour epoch both enter the fit, weighted by how much
@@ -298,8 +303,7 @@ def observation_variance(n, sd, dur_h, age_days, *, pooled_var, cfg=None) -> np.
     s2 = np.where(np.isfinite(sd) & (n >= 2), sd ** 2, pooled_var)
     sem2 = s2 / np.maximum(n, 1.0)
     short = np.maximum(0.0, 1.0 - np.asarray(dur_h, float) / cfg["dur_ref_h"]) ** 2
-    aged = (np.asarray(age_days, float) / 365.0) ** 2
-    return np.maximum(sem2 + cfg["c_dur"] * short + cfg["c_age"] * aged, cfg["min_var"])
+    return np.maximum(sem2 + cfg["c_dur"] * short, cfg["min_var"])
 
 
 def build_objective(epoch_stats: pd.DataFrame, *, incumbent_epoch, cfg=None,
@@ -399,6 +403,5 @@ def build_objective(epoch_stats: pd.DataFrame, *, incumbent_epoch, cfg=None,
              else pooled_within_epoch_var(d, sd_col, "n"))
     d["pooled_within_var"] = pooled
     d["pooled_within_var_overridden"] = pooled_var_override is not None
-    d["obs_var"] = observation_variance(d["n"], d[sd_col], d["dur_h"], d["age_days"],
-                                        pooled_var=pooled, cfg=cfg)
+    d["obs_var"] = observation_variance(d["n"], d[sd_col], d["dur_h"], pooled_var=pooled, cfg=cfg)
     return d
