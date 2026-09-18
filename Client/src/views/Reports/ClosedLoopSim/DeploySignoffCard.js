@@ -279,7 +279,7 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
         {/* Above the title, because a reader who has already started reading the gate lines has
             passed the point where this would change what they do with the sheet. */}
         {staleNotice}
-        <MDBox display="flex" justifyContent="space-between" alignItems="center" mb={1}>
+        <MDBox display="flex" justifyContent="space-between" alignItems="center" mb={0.5}>
           <MDTypography variant="h5" sx={{ fontSize: 18 }}>Deploy-to-Percept review</MDTypography>
           {data ? (
             <MDBox className="cl-signoff-actions">
@@ -292,6 +292,15 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
             </MDBox>
           ) : null}
         </MDBox>
+
+        {/* THE STANDING OFF-LABEL LINE (C6 of the 2026-09-15 review, decision 200). Rules D01/D02
+            are deferred advisories (decision 148) and leave the "what would change this" panel on
+            the PI's ruling, so until now the phrase reached no rendered card and no printed sheet.
+            Printed in every state, above the review, because it is true whatever the review says. */}
+        <MDTypography variant="caption" component="div" className="cl-signoff-offlabel"
+          sx={{ fontSize: 11.5, color: PAL.warnText, mb: 1 }}>
+          Chronic pain is not an approved indication for this device; Adaptive Therapy is labelled for Parkinson&apos;s disease.
+        </MDTypography>
 
         {loading ? (
           <MDTypography variant="caption" sx={{ fontStyle: "italic", fontSize: 11 }}>

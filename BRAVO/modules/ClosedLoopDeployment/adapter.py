@@ -2214,12 +2214,39 @@ def _timing_runs_for_simulation(uid, hemisphere, device_facts):
                           "no record-derived recommendation is on file for this participant; the "
                           "same timing as \"as programmed today\" is used instead")
 
+    # WHICH OF THE RECOMMENDED VALUES THE RECORD CANNOT DECIDE (C3 of the 2026-09-15 review,
+    # decision 200): the recommendation table grades each field; the ones graded "Low" (the two
+    # transitions and the detection blanking on RCS08) went into the replay with no mention on
+    # the card's headline. The replay's own parameter names, in the replay's order, so the
+    # simulation payload can say "using three timing values the record cannot decide". What the
+    # device RUNS today is a measurement, not a recommendation: nothing to qualify.
+    low = [repl for repl, dev_key in _SIM_PARAM_FROM_TIMING_FIELD
+           if str(((rec_raw.get(dev_key) or {}).get("confidence") or "")).lower() == "low"]
     return {
         "programmed": {"label": "As programmed today", "params": programmed_params,
-                       "source": programmed_source},
+                       "source": programmed_source, "low_confidence_fields": [],
+                       "timing_qualifier": None},
         "recommended": {"label": "Record-derived recommendation", "params": recommended_params,
-                        "source": recommended_source},
+                        "source": recommended_source, "low_confidence_fields": low,
+                        "timing_qualifier": _timing_qualifier(low)},
     }
+
+
+_TIMING_FIELD_WORDS = {"averaging_ms": "averaging", "onset_ms": "onset",
+                       "detection_blanking_ms": "detection blanking",
+                       "transition_up_ms": "transition up", "transition_down_ms": "transition down"}
+_COUNT_WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five"}
+
+
+def _timing_qualifier(low_fields):
+    """The sentence the simulation card prepends to its headline when the recommended regime
+    rests on timing values the record could not decide, or None when it rests on none."""
+    if not low_fields:
+        return None
+    words = [_TIMING_FIELD_WORDS.get(f, f) for f in low_fields]
+    n = _COUNT_WORDS.get(len(words), str(len(words)))
+    return (f"using {n} timing value{'s' if len(words) != 1 else ''} the record cannot decide "
+            f"({', '.join(words)}; graded Low on the parameter card)")
 
 
 def write_simulation(participant, *, rep, build, candidate, hemisphere, power_scale, epochs,
@@ -2299,6 +2326,9 @@ def write_simulation(participant, *, rep, build, candidate, hemisphere, power_sc
         runs[_key]["timing_label"] = _meta["label"]
         runs[_key]["timing_source"] = _meta["source"]
         runs[_key]["timing_params_ms"] = dict(_replay.DEFAULT_PARAMS, **(_meta["params"] or {}))
+        # C3 (decision 200): which of this regime's timing values the record cannot decide
+        runs[_key]["timing_low_confidence_fields"] = list(_meta.get("low_confidence_fields") or [])
+        runs[_key]["timing_qualifier"] = _meta.get("timing_qualifier")
 
     payload = {"gates_nothing": True, "rule_version": _sim.RULE_VERSION,
               "timing_runs": runs, "primary_run": "recommended"}
@@ -3246,6 +3276,10 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                       "n_pairs": _sd.get("n_pairs"), "n_epochs": _sd.get("n_epochs"),
                       "n_dropped_same_minute": _sd.get("n_dropped_same_minute"),
                       "max_gap_hours": _sd.get("max_gap_hours"),
+                      # when the pairs were filed (C4, decision 200)
+                      "earliest_pair_utc": _sd.get("earliest_pair_utc"),
+                      "latest_pair_utc": _sd.get("latest_pair_utc"),
+                      "pair_span_days": _sd.get("pair_span_days"),
                       "label": _RC_LABELS.get(_item, _item),
                       "reason": _sd.get("reason"),
                       "verdict": None}
@@ -3378,9 +3412,17 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                 centre_hz=float(_c0_occ["center_hz"]), loaded=_3loaded, hemisphere=hemisphere,
                 epochs=eps)
             if not _occ_inputs.get("absent_reason") and len(_occ_inputs["t"]):
-                _occ_payload = _occ.threshold_occupancy(
+                # BOTH CLOCKS (T3, decision 200): the card's recommended averaging and the
+                # averaging the device runs today on this side, read off the newest session
+                # report's active sensing group (`dev["active_sensing_group_timing"]`).
+                _prog_t = (dev.get("active_sensing_group_timing") or {}) if isinstance(dev, dict) else {}
+                _prog_avg_ms = ((_prog_t.get(hemisphere) or {}).get("averaging_ms")
+                                if isinstance(_prog_t, dict) else None)
+                _prog_avg_s = (float(_prog_avg_ms) / 1000.0
+                               if _prog_avg_ms is not None and float(_prog_avg_ms) > 0 else None)
+                _occ_payload = _occ.threshold_occupancy_two_clocks(
                     _occ_inputs["t"], _occ_inputs["power"], upper=_up_occ, lower=_lo_occ,
-                    averaging_s=_avg_s_occ)
+                    averaging_s=_avg_s_occ, programmed_averaging_s=_prog_avg_s)
             else:
                 _occ_payload = {"available": False,
                                 "reason": (_occ_inputs.get("absent_reason")

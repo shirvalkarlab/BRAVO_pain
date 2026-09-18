@@ -189,6 +189,32 @@ def pooled_actuation_edge(pooled_row, *, scale="power_linear"):
         note += " Curvature could not be assessed on this many points."
     if n_visits and n_visits < 3:
         conf.append("few runs")
+    # PER RUN (T2 of the 2026-09-15 review, decision 200): the pooled slope is one number over
+    # every run; this says how many runs fall with current on their own, how many rise, and the
+    # two extremes, so a pooled sign carried by one steep run is visible as such. A stored row
+    # from before the field existed (POOLED_RULE_VERSION v4 and earlier) says so instead.
+    if r.get("n_runs_slope_negative") is None and r.get("n_runs_slope_positive") is None:
+        note += " PER RUN: per-run slopes not stored on this row (built before decision 200)."
+    else:
+        n_neg = int(r.get("n_runs_slope_negative") or 0)
+        n_pos = int(r.get("n_runs_slope_positive") or 0)
+        n_none = int(r.get("n_runs_without_slope") or 0)
+        n_all = n_neg + n_pos
+        note += (f" PER RUN: {n_neg} of {n_all} runs fall with current, {n_pos} rise"
+                 + (f" ({n_none} more held one current only)" if n_none else ""))
+        try:
+            import json as _json
+            runs = _json.loads(r.get("per_run_slopes_json") or "[]")
+        except Exception:                                   # noqa: BLE001 -- the counts suffice
+            runs = []
+        slopes = [float(x["slope_per_mA"]) for x in runs
+                  if x.get("slope_per_mA") is not None and np.isfinite(float(x["slope_per_mA"]))]
+        if slopes:
+            note += (f"; the runs' own slopes range from {min(slopes):+.1f} to {max(slopes):+.1f} "
+                     "device units per mA")
+        note += "."
+        if n_neg and n_pos:
+            conf.append("runs disagree")
     return _POOLED_E1(b, ci, p, n, unit, n_visits, scale, note=note, confounded_by=conf)
 
 

@@ -230,10 +230,44 @@ def pooled_shape_for_band(build, band_center_hz, sensing_contact, *, min_points=
             ys.append(y)
             vs.append(np.full(x.size, str(comp.label)))
     if not xs:
-        return within_visit.amplitude_response_shape_pooled(
+        out = within_visit.amplitude_response_shape_pooled(
             np.empty(0), np.empty(0), np.empty(0), min_points=min_points)
-    return within_visit.amplitude_response_shape_pooled(
+        return dict(out, **_per_run_slopes([], [], []))
+    out = within_visit.amplitude_response_shape_pooled(
         np.concatenate(xs), np.concatenate(ys), np.concatenate(vs), min_points=min_points)
+    return dict(out, **_per_run_slopes(xs, ys, [str(v[0]) for v in vs]))
+
+
+def _per_run_slopes(xs, ys, labels):
+    """EACH RUN'S OWN straight-line slope beside the pooled one (T2 of the 2026-09-15 review,
+    decision 200). The pooled model fits one shared slope with one intercept per run, so a reader
+    of the pooled number cannot tell whether every run agrees with it or one steep run carries
+    it -- decision 99 watched one point move from p = 0.29 to 0.03 as the record grew, and
+    decision 16 found a months-long settling transient. This is the plain least-squares slope of
+    settled power on current inside each run, in the device's own units per mA, with the run's
+    point count and current range; a run with fewer than two distinct currents has no slope and
+    is counted in ``n_runs_without_slope``. Nothing here changes the pooled fit.
+
+    Returns ``per_run_slopes`` (a list of dicts, run order preserved), ``n_runs_slope_negative``,
+    ``n_runs_slope_positive`` and ``n_runs_without_slope``."""
+    runs, neg, pos, none = [], 0, 0, 0
+    for x, y, label in zip(xs, ys, labels):
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        ok = np.isfinite(x) & np.isfinite(y)
+        x, y = x[ok], y[ok]
+        if x.size < 2 or np.unique(x).size < 2:
+            none += 1
+            continue
+        slope = float(np.polyfit(x, y, 1)[0])
+        runs.append({"run": str(label), "slope_per_mA": slope, "n": int(x.size),
+                     "amp_min_mA": float(x.min()), "amp_max_mA": float(x.max())})
+        if slope < 0:
+            neg += 1
+        elif slope > 0:
+            pos += 1
+    return {"per_run_slopes": runs, "n_runs_slope_negative": int(neg),
+            "n_runs_slope_positive": int(pos), "n_runs_without_slope": int(none)}
 
 
 def table_from_build(build, *, checked_lo_hz, checked_hi_hz, band_half_hz,
@@ -259,7 +293,7 @@ def table_from_build(build, *, checked_lo_hz, checked_hi_hz, band_half_hz,
 #: 4-run slice gives 6 across 1. Storing the table computed from the full build means the answer is
 #: the same on every request instead of depending on what happened to be cached.
 POOLED_KIND = "within_visit_pooled_shape"
-POOLED_RULE_VERSION = "v4_pooled_shape_any_held_side_post_ramp_margin_" + _post_ramp.version_tag()   # v4: decision 197   # v3: the margin, on or off (2026-09-12)
+POOLED_RULE_VERSION = "v5_pooled_shape_per_run_slopes_post_ramp_margin_" + _post_ramp.version_tag()   # v5: decision 200 (per-run slopes)   # v4: decision 197   # v3: the margin, on or off (2026-09-12)
 
 #: The fields carried per row. `post_peak` is deliberately absent: it is a nested structure rather
 #: than a scalar, no consumer reads it, and a table is the wrong shape to carry it in.
@@ -270,7 +304,11 @@ POOLED_FIELDS = ("pooled_direction", "pooled_slope_per_mA", "pooled_slope_stderr
                  # the closed-loop simulation can rebuild the fitted CURVE from the stored row
                  # (redesign decision 21) rather than only read where its peak is.
                  "quad_coef_per_mA2", "quad_lin_coef_per_mA", "quad_coef_stderr",
-                 "post_peak_slope_per_mA", "post_peak_intercept", "post_peak_n_points")
+                 "post_peak_slope_per_mA", "post_peak_intercept", "post_peak_n_points",
+                 # Since v5 (decision 200, T2): every run's own slope beside the pooled one, as a
+                 # JSON string (Parquet holds no list-of-dicts column), and the counts.
+                 "per_run_slopes_json", "n_runs_slope_negative", "n_runs_slope_positive",
+                 "n_runs_without_slope")
 
 
 def pooled_table_from_build(build, *, checked_lo_hz, checked_hi_hz, band_half_hz,
@@ -299,7 +337,8 @@ def pooled_table_from_build(build, *, checked_lo_hz, checked_hi_hz, band_half_hz
             pp = pooled.get("post_peak") or {}
             pooled = dict(pooled, post_peak_slope_per_mA=pp.get("slope_per_mA", float("nan")),
                           post_peak_intercept=pp.get("intercept", float("nan")),
-                          post_peak_n_points=pp.get("n_points", 0))
+                          post_peak_n_points=pp.get("n_points", 0),
+                          per_run_slopes_json=json.dumps(pooled.get("per_run_slopes") or []))
             row = {"sensing_contact": contact, "band_center_hz": float(centre)}
             row.update({k: pooled.get(k) for k in POOLED_FIELDS})
             rows.append(row)

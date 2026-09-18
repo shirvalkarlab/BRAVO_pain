@@ -156,3 +156,10 @@
 - GREEN: host 1353 passed / 2 skipped / 0 failed; container PASS=664 FAIL=0; jest under StimOptimizer 18 passed; frontend build clean (chunk 100.e12fdafa).
 - Live RCS08 before/after (`_agent_bridge/_d199_capture.py`, `_d199_diff.py`; only the stored response bypassed): 23,715 → 24,130 fields, 868 differing (2 timing), 62 only-before, 477 only-after, 0 differences outside the readiness table, the gate's band condition, the titration pick and the key. Usable 6 → 4 (R 1-3+ @110/@55, R 0-2+ Left @55, R 0-2+ @110), all on 26.5/27.5 Hz = stimulator harmonics.
 - Workers reloaded (`kill -HUP 1`, four fresh).
+
+## 2026-09-17 night (the PI: "do the c3 c4 etc"): decision 200
+- OrbStack found STOPPED (docker daemon unreachable, bridge heartbeat 3,373 s); `orb start`, three containers up, bridge alive in a minute.
+- RED: 9 pytest (`test_review_leftovers_c3_c4_c7_t2_t3.py`), 4 of 5 jest (`ReviewLeftovers.c3_c4_c6.test.js`; the fifth a green control).
+- GREEN: host 1362 / 2 / 0; container 664 / 0; jest ClosedLoopSim 47 passed + the known 2.
+- Live RCS08 (`_d200_capture.py`, `_d200_diff.py`): L 0-2+ 56,386 -> 56,428 fields, 16 differing (2 timing, 3 the range source, the rest rebuilt-table bookkeeping), 49 added; L 1-3+ 56,395 -> 56,438, 8 differing, 47 added; verdicts, thresholds, E1/E2 estimates identical. Device runs 3 s averaging on the Left today, so the two occupancy clocks agree.
+- Frontend chunk 576.9ecf18fe. Workers reloaded.

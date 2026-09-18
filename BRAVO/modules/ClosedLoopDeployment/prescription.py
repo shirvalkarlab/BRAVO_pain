@@ -736,6 +736,9 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
                     why="Inherits the upper capture amplitude (D28)."))
     F.append(Field_("Paused amplitude", cand.get("paused_amplitude_mA"), "mA",
                     "derived" if cand.get("paused_amplitude_mA") else "read_off_programmer",
+                    # The general amplitude envelope (C7 of the 2026-09-15 review, decision 200):
+                    # every other current row printed its range and this one printed none.
+                    range_=PA.ADAPTIVE_AMP_LIMIT_RANGE_MA, range_source=lim_src,
                     programmed=_prog("suspend_amplitude_mA"),
                     why="The amplitude delivered when the patient pauses Adaptive (D34). Not "
                         "derivable from the record; a clinical choice."))

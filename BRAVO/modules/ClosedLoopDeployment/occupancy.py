@@ -160,3 +160,50 @@ def threshold_occupancy(t, power, *, upper, lower, averaging_s,
         "distance_from_median": distance, "warning": warning,
         "min_between_frac": float(min_between_frac), "why": " ".join(parts),
     }
+
+
+def threshold_occupancy_two_clocks(t, power, *, upper, lower, averaging_s, programmed_averaging_s,
+                                   min_between_frac: float = MIN_BETWEEN_FRAC) -> Dict[str, Any]:
+    """The occupancy at the card's recommended averaging AND at the averaging the device runs
+    today (T3 of the 2026-09-15 review, decision 200).
+
+    Decision 153 measured that the fraction of readings between the pair and the off-centre
+    warning both flip between 3 s and 30 s on the same band, and the card said nothing about
+    the clock it was answered on. The payload is :func:`threshold_occupancy` at ``averaging_s``
+    (every field unchanged, so nothing that reads it moves), plus ``programmed_clock`` -- the
+    same check at ``programmed_averaging_s`` -- ``clocks_differ``, and a ``why`` that carries
+    both sentences when the two clocks differ. ``programmed_averaging_s`` ``None`` means the
+    device's programmed averaging is not known for this side, and the second block says so.
+    """
+    out = threshold_occupancy(t, power, upper=upper, lower=lower, averaging_s=averaging_s,
+                              min_between_frac=min_between_frac)
+    if programmed_averaging_s is None or not (float(programmed_averaging_s) > 0):
+        prog = {"available": False,
+                "reason": "the averaging the device runs today is not known for this side"}
+        differ = None
+    else:
+        prog = threshold_occupancy(t, power, upper=upper, lower=lower,
+                                   averaging_s=float(programmed_averaging_s),
+                                   min_between_frac=min_between_frac)
+        differ = bool(abs(float(programmed_averaging_s) - float(averaging_s or 0.0)) > 1e-9)
+    out = dict(out, programmed_clock=prog, clocks_differ=differ)
+    if not out.get("available") or not prog.get("available"):
+        return out
+    if not differ:
+        # Said rather than left silent, so a reader knows the second clock was checked and the
+        # answer above is the answer on the device's own clock too.
+        out["why"] = (out["why"] + f" The device runs this {float(out['averaging_s']):.0f} s "
+                      "averaging today, so the answer is the same on the device's own clock.")
+        return out
+    ps = float(prog["averaging_s"])
+    second = (f"At the {ps:.0f} s averaging the device runs today, {prog['n_readings']} averaged "
+              f"readings: {100 * prog['frac_above']:.1f}% above, {100 * prog['frac_between']:.1f}% "
+              f"between, {100 * prog['frac_below']:.1f}% below"
+              + (f"; the warning also fires on that clock" if prog["warning"] and out["warning"] else
+                 f"; the warning fires on that clock and not on the card's" if prog["warning"] else
+                 f"; the warning does not fire on that clock" if out["warning"] else
+                 f"; no warning on either clock")
+              + f" (median {prog['median_level']:.2f}, against {out['median_level']:.2f} at "
+              f"{float(out['averaging_s']):.0f} s).")
+    out["why"] = out["why"] + " " + second
+    return out

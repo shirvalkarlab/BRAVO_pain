@@ -100,6 +100,12 @@ def _f(v):
     return x if np.isfinite(x) else np.nan
 
 
+def _iso_utc(seconds):
+    """Seconds since the epoch as an ISO date-time in universal time (the ratings' own clock)."""
+    import datetime as _dt
+    return _dt.datetime.fromtimestamp(float(seconds), tz=_dt.timezone.utc).isoformat()
+
+
 def short_gap_pairwise_sd(rating_times_s, rating_values, epoch_starts_s, epoch_ends_s, *,
                           max_gap_hours=MAX_PAIR_GAP_HOURS, washin_s=60.0,
                           same_minute_s=SAME_MINUTE_SECONDS, min_pairs=MIN_PAIRS):
@@ -118,7 +124,13 @@ def short_gap_pairwise_sd(rating_times_s, rating_values, epoch_starts_s, epoch_e
     NaN, naming why).
     """
     out = dict(pooled_sd=np.nan, df=0, n_pairs=0, n_epochs=0, n_dropped_same_minute=0,
-               max_gap_hours=float(max_gap_hours), reason=None)
+               max_gap_hours=float(max_gap_hours), reason=None,
+               # WHEN the pairs were filed (C4 of the 2026-09-15 review, decision 200): the later
+               # rating of the earliest and of the latest qualifying pair, and the span between
+               # them in days. Twelve pairs inside one week and twelve spread over the record are
+               # not the same guarantee, and the card prints this beside the count.
+               earliest_pair_s=None, latest_pair_s=None, earliest_pair_utc=None,
+               latest_pair_utc=None, pair_span_days=None)
     t = np.asarray(rating_times_s, dtype=float)
     v = np.asarray(rating_values, dtype=float)
     if t.size == 0 or t.size != v.size:
@@ -138,7 +150,7 @@ def short_gap_pairwise_sd(rating_times_s, rating_values, epoch_starts_s, epoch_e
         out["reason"] = "no stretches of unchanged stimulation settings are available"
         return out
 
-    diffs, epochs_hit = [], set()
+    diffs, epochs_hit, pair_times = [], set(), []
     for i in range(starts.size):
         if not (np.isfinite(starts[i]) and np.isfinite(ends[i])):
             continue
@@ -159,12 +171,18 @@ def short_gap_pairwise_sd(rating_times_s, rating_values, epoch_starts_s, epoch_e
         close = gaps_h <= float(max_gap_hours)
         if close.any():
             diffs.extend((vi[1:] - vi[:-1])[close].tolist())
+            pair_times.extend(ti[1:][close].tolist())
             epochs_hit.add(i)
 
     n = len(diffs)
     out["n_pairs"] = n
     out["df"] = n
     out["n_epochs"] = len(epochs_hit)
+    if pair_times:
+        lo, hi = float(min(pair_times)), float(max(pair_times))
+        out["earliest_pair_s"], out["latest_pair_s"] = lo, hi
+        out["earliest_pair_utc"], out["latest_pair_utc"] = _iso_utc(lo), _iso_utc(hi)
+        out["pair_span_days"] = (hi - lo) / 86400.0
     if n < int(min_pairs):
         out["reason"] = (f"only {n} pair(s) of ratings filed within {max_gap_hours:g} h of each "
                          f"other under unchanged settings, below the {min_pairs} required")

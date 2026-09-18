@@ -44,6 +44,20 @@ function Fact({ label, value, strong }) {
   );
 }
 
+/**
+ * C4 (2026-09-15 review, decision 200): WHEN the pairs were filed, beside how many there are.
+ * Twelve pairs inside one week and twelve spread over ten months are not the same guarantee.
+ * The backend sends the later rating of the earliest and latest pair (`earliest_pair_utc`,
+ * `latest_pair_utc`) and the span in days; an older response without them prints nothing.
+ */
+function pairDates(it) {
+  const a = it && it.earliest_pair_utc, b = it && it.latest_pair_utc;
+  if (!a || !b) return "";
+  const day = (iso) => String(iso).slice(0, 10);
+  const span = isNum(it.pair_span_days) ? ` (${Math.round(Number(it.pair_span_days))} days apart)` : "";
+  return `, filed between ${day(a)} and ${day(b)}${span}`;
+}
+
 export default function ReliableChangePanel({ reliableChange }) {
   const rc = reliableChange || null;
   const items = useMemo(() => (rc && rc.items) || {}, [rc]);
@@ -90,7 +104,7 @@ export default function ReliableChangePanel({ reliableChange }) {
               : "—"} />
           <Fact label="Noise floor (spread of one rating)" value={`${fmtNum(it.pooled_sd, 3)} points`} />
           <Fact label="Built from"
-            value={`${it.n_pairs} pair${it.n_pairs === 1 ? "" : "s"} across ${it.n_epochs} stretch${it.n_epochs === 1 ? "" : "es"} of unchanged settings`} />
+            value={`${it.n_pairs} pair${it.n_pairs === 1 ? "" : "s"} across ${it.n_epochs} stretch${it.n_epochs === 1 ? "" : "es"} of unchanged settings${pairDates(it)}`} />
           {isNum(it.n_dropped_same_minute) && it.n_dropped_same_minute > 0 ? (
             <Fact label="Same-minute repeat entries set aside" value={String(it.n_dropped_same_minute)} />
           ) : null}

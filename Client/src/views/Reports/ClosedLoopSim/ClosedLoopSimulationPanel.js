@@ -55,7 +55,17 @@ function modelLabel(name) {
 }
 
 /** The sentence that states what the numbers show, built from them (never hardcoded). */
-function headline(sim) {
+export function headline(sim) {
+  const body = headlineBody(sim);
+  // C3 (2026-09-15 review, decision 200): the record-derived regime rests on timing values the
+  // parameter card grades Low (the two transitions and the detection blanking on RCS08); the
+  // backend names them per regime (`timing_qualifier`) and the headline says so first.
+  const q = sim && sim.timing_qualifier;
+  if (!body || !q) return body;
+  return `${q.charAt(0).toUpperCase()}${q.slice(1)}: ${body}`;
+}
+
+function headlineBody(sim) {
   if (!sim) return null;
   if (sim.refused) return "The simulation could not run on this record";
   const active = sim.models && sim.models[sim.active_model];
