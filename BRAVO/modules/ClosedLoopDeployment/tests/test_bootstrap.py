@@ -457,7 +457,8 @@ def test_a_few_cluster_edge_is_reported_rather_than_disqualified():
 def test_state_auc_resamples_reports_while_therapy_slope_uses_cluster_bootstrap():
     import pandas as pd
     e2 = E.state_edge(_toy_table(n_epochs=9), channel="CH", center_hz=20.5)
-    assert e2.n_clusters == 9 and "resampling whole pain reports" in e2.note
+    assert e2.n_clusters == 9 and e2.cluster_unit == "report_id"
+    assert "resampling whole pain report groups" in e2.note
     assert "area under the curve" in e2.scale
     dm = pd.DataFrame({"epoch": np.arange(10), "amp_mA_Left": np.linspace(1, 4, 10),
                        "nrs": 6 - 0.8 * np.linspace(1, 4, 10)

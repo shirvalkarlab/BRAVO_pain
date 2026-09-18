@@ -173,15 +173,27 @@ def _current_report_for_participant(request_data):
     from modules import AnalysisData
     from modules.StimOptimizer.bravo_service import _jsonable
     request = dict(request_data or {})
-    participant = models.Participant.find(uid=request.get("ParticipantId"))
+    base = {"available": False, "readiness": {"ready": False, "status": "research_only"}}
+    uid = request.get("ParticipantId")
+    participant = models.Participant.find(uid=uid) if uid else None
     if participant is None:
-        return {"available": False, "reason": "Participant not found"}
-    channel = request.get("Channel", "")
+        return {**base, "reason": "Participant not found"}
+    channel = request.get("Channel")
+    try:
+        center = float(request.get("CenterHz"))
+        width = float(request.get("BandWidthHz", 5))
+        washin = float(request.get("WashinMin", 1))
+        if any(isinstance(request.get(k), bool) for k in ("CenterHz", "BandWidthHz", "WashinMin")):
+            raise ValueError()
+        if not all(math.isfinite(v) for v in (center, width, washin)) or center <= 0 or width <= 0 or washin < 0:
+            raise ValueError()
+    except (ValueError, TypeError, OverflowError):
+        return {**base, "reason": "Choose a valid band and non-negative wash-in duration"}
+    if not isinstance(channel, str) or not channel:
+        return {**base, "reason": "Choose a channel"}
     sides = [side for side in ("Left", "Right") if side.lower() in channel.lower()]
-    center = float(request.get("CenterHz", 0))
-    width = float(request.get("BandWidthHz", 5))
-    if len(sides) != 1 or not all(math.isfinite(x) and x > 0 for x in (center, width)):
-        return {"available": False, "reason": "Choose one channel and a valid band"}
+    if len(sides) != 1:
+        return {**base, "reason": "The selected channel does not identify one hemisphere"}
     candidate = {"channel": channel, "center_hz": center, "band_width_hz": width,
                  "threshold_mode": request.get("ThresholdMode", "dual"),
                  "sensing_hemisphere": sides[0], "actuated_hemisphere": sides[0],

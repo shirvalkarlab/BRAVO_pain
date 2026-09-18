@@ -2648,10 +2648,16 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     # Participant-specific provenance and examples are maintained outside source control.
     _status = _cache_status_or_reason(participant)
 
-    psd, eps, dm = evidence_inputs_cached(participant, force_refresh=bool(force_refresh))
     from modules.Biomarkers import bravo_service as _canonical_biomarkers
     pros = _canonical_biomarkers._load_pros(rd, participant)
+    if pros is None or pros.empty:
+        return {"available": False, "reason": "No approved daily PRO records"}
     pros, outcome, _ = _canonical_biomarkers._resolve_biomarker_metric(rd, pros)
+    if outcome != (rd.get("LabelMetric") or "nrs") or outcome not in pros:
+        return {"available": False, "reason": "The selected outcome cannot be derived from the approved PRO records"}
+    psd, eps, dm = evidence_inputs_cached(participant, force_refresh=bool(force_refresh))
+    if eps is None or eps.empty:
+        return {"available": False, "reason": "No usable stimulation setting epochs"}
     if pros is not None and not pros.empty and eps is not None and not eps.empty:
         dm = _sa.attach_pros(eps, pros, _canonical_biomarkers._pro_times_utc_series(pros),
                              washin_min=float(rd.get("WashinMin", 1)), items=(outcome,))
@@ -2703,7 +2709,8 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
         _p = participant if hasattr(participant, "uid") else _m.Participant.find(uid=participant)
         from modules.AnalysisData import eligible_source_files
         _sfs = eligible_source_files(_p)
-        _imp = list(_m.Recording.find_all(source__in=_sfs, type="MedtronicDeviceImpedance"))
+        _imp = list(_canonical_biomarkers._eligible_recordings(
+            _p, source__in=_sfs, type="MedtronicDeviceImpedance", original__isnull=True))
         dev = _df.facts_for_participant(getattr(_p, "uid", participant), _imp,
                                         sensing_hemisphere=_sens_hemi,
                                         actuated_hemisphere=_act_hemi,
@@ -2711,7 +2718,7 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     except Exception as exc:                      # never let a fact lookup take down the report
         _log.warning("closed-loop report: device facts unavailable for %s",
                      getattr(participant, "uid", participant), exc_info=True)
-        dev = {"_provenance": {}, "_error": f"device facts unavailable: {exc!r}"}
+        raise RuntimeError("Canonical device evidence could not be loaded") from exc
 
     # RATE AND PULSE WIDTH THE DEVICE IS ACTUALLY PROGRAMMED AT, read from the exposure-epoch
     # table `eps` already loaded above (`evidence_inputs_cached`) rather than asked of the caller.

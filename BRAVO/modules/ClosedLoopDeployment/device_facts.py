@@ -408,7 +408,7 @@ def facts_for_participant(participant_uid, impedance_recordings=None, *,
         if _lt_side:
             out["lead_type"] = _lt_side
             prov["lead_type"] = f"measured: LeadModel {_lm_side} on the {hemisphere} lead"
-        elif imp.get("lead_type"):
+        elif not hemisphere and imp.get("lead_type"):
             out["lead_type"] = imp["lead_type"]
             prov["lead_type"] = f"measured: LeadModel {imp.get('lead_model')}"
         out["_impedance_status"] = imp.get("status_newest")

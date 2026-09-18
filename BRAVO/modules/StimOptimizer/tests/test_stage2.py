@@ -626,3 +626,29 @@ def test_explicit_side_request_keeps_its_own_frozen_rate(monkeypatch, requested_
     report = pipeline.run_two_stage_live(object(), hemisphere=requested_side, rate_hz=requested_rate)
     assert report.manifest["lfp_evidence"]["refusal_class"] == expected
     assert calls == ([110.0] if expected == "evidence_selected" else [])
+
+
+def test_supplied_design_is_reused_and_a_missing_side_is_not_licensed(monkeypatch):
+    from types import SimpleNamespace
+    from StimOptimizer import pipeline, adapter
+    design, selected = object(), object()
+    frozen = SimpleNamespace(settings=[SimpleNamespace(hemisphere=h, rate_hz=55.)
+                                       for h in ('Left', 'Right')])
+    def unexpected(*args, **kwargs):
+        pytest.fail('a supplied design must not be rebuilt')
+    monkeypatch.setattr(adapter, 'build_design_matrix', unexpected)
+    monkeypatch.setattr(pipeline, 'live_evidence', lambda *a, **kw: pipeline.LiveEvidence())
+    monkeypatch.setattr(pipeline, 'select_for_side', lambda ev, h, r, **kw:
+                        (selected, ('synthetic', h, r), 'available') if h == 'Left'
+                        else (None, None, 'no usable right-side recording'))
+    def run(actual_design, *, lfp, **kwargs):
+        assert actual_design is design
+        assert lfp(frozen) == {'Left': selected}
+        return SimpleNamespace(manifest={})
+    monkeypatch.setattr(pipeline, 'run_two_stage', run)
+    report = pipeline.run_two_stage_live(object(), design=design)
+    evidence = report.manifest['lfp_evidence']
+    assert evidence['refusal_class'] == 'evidence_missing_on_some_sides'
+    assert evidence['selected_by_side']['Left']['selected']
+    assert not evidence['selected_by_side']['Right']['selected']
+    assert evidence['selected_by_side']['Right']['selected_key'] is None

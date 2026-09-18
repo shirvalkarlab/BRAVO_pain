@@ -78,3 +78,40 @@ def test_waiter_propagates_caller_exception_without_second_yield(monkeypatch, se
         with locks.build_lock('key', ready=lambda: served, wait_s=0):
             raise ValueError('caller failed')
     assert (fake.store == {'key': 'other'}) if served else not fake.store
+
+
+def test_failed_write_removes_partial_temporary_file_and_preserves_committed_value(tmp_path, monkeypatch):
+    monkeypatch.setattr(ledger, 'ENABLED', False)
+    assert store.store('synthetic', 'p', ('v1',), {'value': 'accepted'}, writer='biomarkers', root=tmp_path)
+    def interrupted(path, *args):
+        from pathlib import Path
+        Path(path).write_bytes(b'partial')
+        raise OSError('synthetic disk failure')
+    monkeypatch.setattr(store, '_write_payload', interrupted)
+    assert not store.store('synthetic', 'p', ('v1',), {'value': 'incomplete'}, writer='biomarkers', root=tmp_path)
+    assert store.load('synthetic', 'p', ('v1',), root=tmp_path) == {'value': 'accepted'}
+    assert not list(tmp_path.rglob('*.tmp'))
+
+
+def test_disabled_cache_sweep_never_touches_disk(monkeypatch):
+    monkeypatch.setattr(store, 'ENABLED', False)
+    assert store._sweep_superseded('synthetic', 'p', 'unused') == 0
+
+
+def test_waiter_redis_failure_yields_one_fallback_and_preserves_other_owners_lock(monkeypatch):
+    fake = _FakeRedis({'key': 'other'})
+    original = fake.set
+    calls = []
+    def flaky(*args, **kwargs):
+        calls.append(1)
+        if len(calls) > 1:
+            raise ConnectionError('synthetic unavailable Redis')
+        return original(*args, **kwargs)
+    monkeypatch.setattr(fake, 'set', flaky)
+    monkeypatch.setattr(locks, 'CLIENT_FACTORY', lambda: fake)
+    with pytest.raises(ValueError, match='caller error'):
+        with locks.build_lock('key', wait_s=0) as outcome:
+            assert outcome.role == 'fallback'
+            assert 'redis failed while waiting' in outcome.reason
+            raise ValueError('caller error')
+    assert fake.store == {'key': 'other'}

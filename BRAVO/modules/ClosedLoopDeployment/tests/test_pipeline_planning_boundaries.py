@@ -104,21 +104,37 @@ def test_unknown_capture_limit_does_not_invent_a_titration_amplitude(planning):
 def test_input_memo_respects_refresh_changed_signature_and_bounded_eviction(monkeypatch):
     adapter.clear_inputs_cache()
     monkeypatch.setattr(adapter, "_INPUTS_MEMO_MAX", 1)
-    monkeypatch.setattr(adapter, "recording_set_signature", lambda participant: participant)
+    revision = {"first": 1, "second": 1}
+    monkeypatch.setattr(adapter, "recording_set_signature", lambda p: (p.uid, revision[p.uid]))
+    # This test isolates process memo behavior; shared-store contracts have their own tests.
+    monkeypatch.setattr(adapter, "_shared_load", lambda *a, **kw: None)
+    monkeypatch.setattr(adapter, "_shared_store", lambda *a, **kw: None)
+    monkeypatch.setattr(adapter, "_inputs_provenance", lambda *a: [])
+    stream = pd.DataFrame({"source": ["synthetic"]})
+    monkeypatch.setattr(optimizer_adapter, "settings_stream", lambda p: stream)
     calls = []
-    def evidence(participant):
-        calls.append(participant)
+    def evidence(participant, *, stream):
+        assert stream is expected_stream
+        calls.append(participant.uid)
         return pd.DataFrame({"value": [len(calls)]}), pd.DataFrame()
+    expected_stream = stream
+    def design(participant, *, stream):
+        assert stream is expected_stream
+        return pd.DataFrame()
     monkeypatch.setattr(optimizer_adapter, "evidence_inputs", evidence)
-    monkeypatch.setattr(optimizer_adapter, "build_design_matrix", lambda p: pd.DataFrame())
+    monkeypatch.setattr(optimizer_adapter, "build_design_matrix", design)
+    first, second = (SimpleNamespace(uid=name, name=name) for name in ("first", "second"))
     try:
-        original = adapter.evidence_inputs_cached("first")
-        assert adapter.evidence_inputs_cached("first") is original
-        refreshed = adapter.evidence_inputs_cached("first", force_refresh=True)
+        original = adapter.evidence_inputs_cached(first)
+        assert adapter.evidence_inputs_cached(first) is original
+        refreshed = adapter.evidence_inputs_cached(first, force_refresh=True)
         assert refreshed is not original
-        adapter.evidence_inputs_cached("second")
+        revision["first"] += 1
+        changed = adapter.evidence_inputs_cached(first)
+        assert changed is not refreshed
+        adapter.evidence_inputs_cached(second)
         assert adapter.inputs_cache_stats()["entries"] == 1
-        assert adapter.evidence_inputs_cached("first") is not refreshed
-        assert calls == ["first", "first", "second", "first"]
+        assert adapter.evidence_inputs_cached(first) is not changed
+        assert calls == ["first", "first", "first", "second", "first"]
     finally:
         adapter.clear_inputs_cache()

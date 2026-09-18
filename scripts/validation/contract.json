@@ -613,6 +613,15 @@
       "alternative_evidence": "Synthetic capture/pooled-slope and full portable regressions; explicit unassessed and warning states.",
       "owner": "Aditya BRAVO maintainer",
       "revisit": "Expand strict scope before substantive changes to other helpers."
+    },
+    {
+      "path": "BRAVO/modules/StimOptimizer/google_sheets_client.py",
+      "source_revision": "8146f069af94dd71a590c1bfa702165778fd53b8",
+      "reason": "Imported optional upstream Google export client; newly changed explicit destination configuration guards are strict function scope.",
+      "risk": "The remaining unchanged network client is not connected to an application endpoint or scheduled job and is not claimed fully branch tested.",
+      "alternative_evidence": "Synthetic missing and explicit destination tests; constructor refuses missing destination before importing or calling network clients.",
+      "owner": "Aditya BRAVO maintainer",
+      "revisit": "Require authenticated destination-specific acceptance before enabling this optional export client."
     }
   ]
 }

@@ -265,8 +265,7 @@ def _available_frequencies(cv_ch):
     out = []
     for hz in sorted(set(np.round(fhz[finite], 1))):
         m = finite & (np.round(fhz, 1) == hz)
-        if not m.any():
-            continue
+        # Each band comes from these same finite samples, so its mask is nonempty.
         labeled = m & np.isin(pl, (0.0, 1.0))
         days_all = day[m].dropna()
         days_lab = day[labeled].dropna()
@@ -309,8 +308,7 @@ def _decode_by_frequency(cv_ch, label_metric, *, min_labeled=8):
     out = {}
     for hz in sorted(set(np.round(fhz[finite], 1))):
         sub = cv_ch[np.round(fhz, 1) == hz]
-        if len(sub) == 0:
-            continue
+        # Unique finite bands are drawn from this frame, so each slice has samples.
         # Daily pain aggregation for the binarization preview (one row per CALIFORNIA calendar day
         # at this band -- the day rule the cut itself uses, review B1).
         day = _local_day(sub["timestamp"])
@@ -319,8 +317,7 @@ def _decode_by_frequency(cv_ch, label_metric, *, min_labeled=8):
         daily = []
         dser = pd.Series(pain, index=day)
         for d, grp in dser.groupby(level=0):
-            if d is None or pd.isna(d):
-                continue
+            # pandas groupby drops missing dates by default.
             vals = grp.to_numpy(dtype=float)
             vals = vals[np.isfinite(vals)]
             if vals.size == 0:
