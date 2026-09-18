@@ -138,3 +138,34 @@ def test_input_memo_respects_refresh_changed_signature_and_bounded_eviction(monk
         assert calls == ["first", "first", "first", "second", "first"]
     finally:
         adapter.clear_inputs_cache()
+
+
+@pytest.mark.parametrize('slope', [-0.5, 0.0, 0.5])
+def test_finite_pooled_response_is_primary_and_historical_edge_is_retained(planning, slope):
+    _, _, _, _, run = planning
+    report = run(pooled_e1={'pooled_slope_per_mA': slope, 'n': 12, 'n_visits': 3})
+    assert report.edges['E1'].estimate == slope
+    assert report.edges['E1'].n == 12
+    assert report.edges_historical['E1'].estimate is None
+    assert report.edges['E1'] is not report.edges_historical['E1']
+
+
+def test_measured_threshold_replacement_reaches_all_downstream_planning(planning):
+    _, original, _, calls, run = planning
+    measured = ThresholdPlan(upper=2.8, lower=1.2, capture_amp_low=1., capture_amp_high=3.)
+    def place(report, candidates):
+        assert report.threshold is original
+        assert candidates[0]['channel'] == 'CH'
+        return measured, {'available': True, 'source': 'synthetic measured record'}
+    report = run(place_thresholds=place)
+    assert report.threshold is measured
+    assert report.threshold_placement['source'] == 'synthetic measured record'
+    assert calls['prescription']['threshold_plan'] is measured
+
+
+def test_capture_warnings_are_reported_without_becoming_blockers(planning):
+    _, plan, _, _, run = planning
+    plan.warnings.append('synthetic pooled capture caveat')
+    report = run()
+    assert 'synthetic pooled capture caveat' in report.warnings
+    assert 'synthetic pooled capture caveat' not in report.blockers
