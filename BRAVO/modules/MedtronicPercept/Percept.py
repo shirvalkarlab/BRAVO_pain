@@ -20,8 +20,24 @@ import pandas as pd
 from scipy import optimize
 from cryptography.fernet import Fernet
 
-from modules.utility.PythonUtility import *
+from modules.utility.PythonUtility import listSort, rangeSelection, unwrap
 from modules.utility import SignalProcessingUtility as SPU
+
+def _copyStreamList(streams):
+    """Copy retained metadata but reuse raw samples until extractors consume them.
+
+    TimeDomainData and LfpData are read into fresh NumPy arrays and deleted from
+    each output stream. Avoid traversing those potentially large input lists;
+    retain deepcopy isolation for nested metadata that survives extraction.
+    """
+    if not isinstance(streams, list):
+        return copy.deepcopy(streams)
+    return [
+        {key: value if key in {"TimeDomainData", "LfpData"} else copy.deepcopy(value)
+         for key, value in stream.items()} if isinstance(stream, dict) else copy.deepcopy(stream)
+        for stream in streams
+    ]
+
 
 def formatLFPTrendTimestamp(dictionary):
     for key in list(dictionary.keys()):
@@ -1475,7 +1491,7 @@ def extractTimeDomainStreamingData(JSON, sourceData=dict()):
     Data = dict()
     if "BrainSenseTimeDomain" in JSON.keys():
         key = "BrainSenseTimeDomain"
-        Data["StreamingTD"] = copy.deepcopy(JSON[key])
+        Data["StreamingTD"] = _copyStreamList(JSON[key])
         for Stream in Data["StreamingTD"]:
             Stream["Sequences"] = np.array(text2num(Stream["GlobalSequences"].split(",")))
             Stream["PacketSizes"] = np.array(text2num(Stream["GlobalPacketSizes"].split(",")))
@@ -1600,7 +1616,7 @@ def extractPowerDomainStreamingData(JSON, sourceData=dict()):
     Data = dict()
     if "BrainSenseLfp" in JSON.keys():
         key = "BrainSenseLfp"
-        Data["StreamingPower"] = copy.deepcopy(JSON[key])
+        Data["StreamingPower"] = _copyStreamList(JSON[key])
         for Stream in Data["StreamingPower"]:
             Stream["Power"] = np.ndarray((len(Stream["LfpData"]), 2))
             Stream["Stimulation"] = np.ndarray((len(Stream["LfpData"]), 2))
@@ -1719,7 +1735,7 @@ def extractStreamingData(JSON, sourceData=dict()):
     Data = dict()
     if "BrainSenseTimeDomain" in JSON.keys():
         key = "BrainSenseTimeDomain"
-        Data["StreamingTD"] = copy.deepcopy(JSON[key])
+        Data["StreamingTD"] = _copyStreamList(JSON[key])
         for Stream in Data["StreamingTD"]:
             Stream["Sequences"] = np.array(text2num(Stream["GlobalSequences"].split(",")))
             Stream["PacketSizes"] = np.array(text2num(Stream["GlobalPacketSizes"].split(",")))
@@ -1750,7 +1766,7 @@ def extractStreamingData(JSON, sourceData=dict()):
             
     if "BrainSenseLfp" in JSON.keys():
         key = "BrainSenseLfp"
-        Data["StreamingPower"] = copy.deepcopy(JSON[key])
+        Data["StreamingPower"] = _copyStreamList(JSON[key])
         for Stream in Data["StreamingPower"]:
             Stream["Power"] = np.ndarray((len(Stream["LfpData"]), 2))
             Stream["Stimulation"] = np.ndarray((len(Stream["LfpData"]), 2))
@@ -1942,7 +1958,7 @@ def extractIndefiniteStreaming(JSON, sourceData=dict()):
     Data = dict()
     if "IndefiniteStreaming" in JSON.keys():
         key = "IndefiniteStreaming"
-        Data["IndefiniteStream"] = copy.deepcopy(JSON[key])
+        Data["IndefiniteStream"] = _copyStreamList(JSON[key])
         for Stream in Data["IndefiniteStream"]:
             Stream = processTimeDomainStreamFormatting(Stream)
 
@@ -1973,7 +1989,7 @@ def extractBrainSenseSurvey(JSON, sourceData=dict()):
     
     if "LfpMontageTimeDomain" in JSON.keys():
         key = "LfpMontageTimeDomain"
-        Data["MontagesTD"] = copy.deepcopy(JSON[key])
+        Data["MontagesTD"] = _copyStreamList(JSON[key])
         for Stream in Data["MontagesTD"]:
             Stream = processTimeDomainStreamFormatting(Stream)
             
@@ -2019,13 +2035,13 @@ def extractSignalCalibration(JSON, sourceData=dict()):
     Data = dict()
     if "SenseChannelTests" in JSON.keys():
         key = "SenseChannelTests"
-        Data["BaselineTD"] = copy.deepcopy(JSON[key])
+        Data["BaselineTD"] = _copyStreamList(JSON[key])
         for Stream in Data["BaselineTD"]:
             Stream = processTimeDomainStreamFormatting(Stream)
     
     if "CalibrationTests" in JSON.keys():
         key = "CalibrationTests"
-        Data["StimulationTD"] = copy.deepcopy(JSON[key])
+        Data["StimulationTD"] = _copyStreamList(JSON[key])
         for Stream in Data["StimulationTD"]:
             Stream = processTimeDomainStreamFormatting(Stream)
     

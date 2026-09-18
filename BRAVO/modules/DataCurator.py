@@ -125,6 +125,9 @@ def NeuroPacePersystDatDecoder(source_file, person=None):
     return True
 
 def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
+    import logging
+    from time import perf_counter as _perf_counter
+    _decode_started = _perf_counter()
     rawBytes = loadCacheFile(source_file)
     JSON = json.loads(rawBytes)
     reviewed_participant = person or (device.owner if device else None) or source_file.owner
@@ -156,7 +159,10 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
     from modules import PerceptClock, PerceptClockData
     PerceptClockData.stamp_source(source_file, JSON)
     patient_event_psds = PerceptClock.extract_event_recordings(JSON)
+    logging.getLogger(__name__).info("Decode stage=load_parse elapsed_seconds=%.3f", _perf_counter() - _decode_started)
+    _structural_started = _perf_counter()
     DatabaseEntries = decodeMedtronicJSON(JSON)
+    logging.getLogger(__name__).info("Decode stage=structure elapsed_seconds=%.3f", _perf_counter() - _structural_started)
     if reviewed_policy:
         removed = RCS08DataPolicy.filter_decoded_entries(DatabaseEntries)
         if removed:
@@ -170,7 +176,9 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
 
     # Process Patient/Device/Electrode Information for Storage and Query
     lock = FileLock(DATABASE_PATH + "ParticipantInfoLookup.lock")
+    _participant_lock_started = _perf_counter()
     with lock.acquire(timeout=180):
+        logging.getLogger(__name__).info("Decode stage=participant_lock_wait elapsed_seconds=%.3f", _perf_counter() - _participant_lock_started)
         if not device:
             device, device_created = models.DBSDevice.find_or_create(DatabaseEntries["SessionOverview"]["Device"]["SerialNumber"], 
                                                                      DatabaseEntries["SessionOverview"]["Device"]["ConnectedLeads"], 

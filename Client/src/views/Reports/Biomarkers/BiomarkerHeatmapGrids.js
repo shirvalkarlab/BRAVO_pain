@@ -7,12 +7,8 @@
  * pins a persistent scatter/violin panel beside each grid, and the sensing contact pair is chosen
  * from a strip of small thumbnail grids rather than a dropdown.
  *
- * WHY THIS COMPONENT FETCHES ON ITS OWN, ON MOUNT, RATHER THAN WAITING FOR A BUTTON. The PRD's
- * complaint was that the calibrated grid used to be gated behind the older full-spectrum scan
- * having already run. `requestParams` here is built by the parent from the LIVE top-of-page
- * controls (see `heatmapRequestParams` in index.js) rather than from the older routine's
- * click-triggered snapshot, so the very first render already has something to ask for and the
- * request fires without any button press.
+ * The grid uses the live page controls, but computation starts only when the reader presses
+ * Run band grid. Optional cross-setting stability is part of the request and cache identity.
  *
  * WHY THE TWO GRIDS ARE TRACKED AS TWO SEPARATE DISPLAYED RESULTS. The correlation grid depends
  * only on how pain reports are matched to recordings; the AUC grid depends on that AND on the
@@ -41,7 +37,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { Card, Grid, CircularProgress, Collapse, IconButton } from "@mui/material";
+import { Card, Grid, CircularProgress, Collapse, IconButton, Checkbox, FormControlLabel } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 
 import MDBox from "components/MDBox";
@@ -734,7 +730,7 @@ function ViolinPanel({ cell, pinnedCell, channelLabel, height, aucValue, sw }) {
 // path rather than accidentally falling into the catch-all branch that also happens to replace
 // both -- correct by construction rather than by coincidence of the fallback's own behaviour.
 const MATCH_SETTING_KEYS = ["MatchToleranceMin", "MatchDirection", "AllowWindowReuse", "LabelMetric",
-  "SweepMetric"];
+  "SweepMetric", "IncludeCrossSettingStability"];
 const BIN_SETTING_KEYS = ["LabelStrategy", "PercentileLow", "PercentileHigh"];
 
 function settingsSubset(params, keys) {
@@ -755,6 +751,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   // component's own selection drift from the page's.
   const metric = pageMetric || "nrs";
 
+  const [includeCrossSettingStability, setIncludeCrossSettingStability] = useState(false);
   const [channel, setChannel] = useState(null);
   const [corrResult, setCorrResult] = useState(null);   // what the correlation grid is drawn from
   const [aucResult, setAucResult] = useState(null);      // what the AUC grid is drawn from
@@ -782,9 +779,10 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   // shared slot, because `resultCache` holds exactly one entry per slot and marks it stale (not a
   // second entry) on a settings change -- one slot per metric is what lets six pain scores stay
   // simultaneously cached instead of each switch evicting the last one.
-  const cur = useMemo(() => ({ ...requestParams, SweepMetric: metric }),
+  const cur = useMemo(() => ({ ...requestParams, SweepMetric: metric,
+    IncludeCrossSettingStability: includeCrossSettingStability }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [reqKey, metric]);
+    [reqKey, metric, includeCrossSettingStability]);
   const cachedGrid = useCachedResult({
     moduleKey: biomarkerHeatmapSlot(metric),
     uid: participantUid,
@@ -793,13 +791,14 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
     autoFetch: false,
     identity: cur,
     fetcher: () => queryAnalysis("/api/queryBiomarkerAnalysis",
-      { ParticipantId: participantUid, ...requestParams, BandTimeSweep: "1", SweepMetric: metric })
+      { ParticipantId: participantUid, ...cur, BandTimeSweep: "1" })
       .then((response) => (response && response.data) || null),
   });
   useEffect(() => {
     setCorrResult(null); setAucResult(null); setPinnedCell(null); setPinnedCellData(null);
+    setHoveredCell(null);
     cellCacheRef.current = new Map(); prevSettingsRef.current = null;
-  }, [participantUid, reqKey, metric]);
+  }, [participantUid, reqKey, metric, includeCrossSettingStability]);
   const loading = cachedGrid.loading;
   const err = cachedGrid.err;
 
@@ -869,7 +868,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
     const key = `${ch}|${center}|${seconds}`;
     if (cellCacheRef.current.has(key)) return Promise.resolve(cellCacheRef.current.get(key));
     const body = {
-      ParticipantId: participantUid, ...requestParams, SweepMetric: metric,
+      ParticipantId: participantUid, ...cur,
       BandTimeSweepCell: "1", Channel: ch, BandCenterHz: center, IntegrationSeconds: seconds,
     };
     return queryAnalysis("/api/queryBiomarkerAnalysis", body).then((response) => {
@@ -936,6 +935,13 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
           <MDButton size="small" color="info" disabled={loading || !requestParams} onClick={cachedGrid.recompute}>Run band grid</MDButton>
           {loading ? <CircularProgress size={20} /> : null}
         </MDBox>
+        <FormControlLabel
+          control={<Checkbox checked={includeCrossSettingStability} disabled={loading}
+            onChange={(event) => setIncludeCrossSettingStability(event.target.checked)} />}
+          label="Include cross-setting stability" />
+        <MDTypography variant="caption" sx={{ display: "block" }}>
+          Adds stability estimates when you run the band grid.
+        </MDTypography>
         <MDBox display="flex" flexDirection="row" alignItems="center" flexWrap="wrap" gap={1.5} mt={1}>
           {/* The pain-score dropdown that used to live here is gone -- one consolidated dropdown
               now lives at the top of the page (index.js, below the binarization box) and drives

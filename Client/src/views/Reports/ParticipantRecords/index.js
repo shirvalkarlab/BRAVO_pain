@@ -42,6 +42,7 @@ import LoadingProgress from "components/LoadingProgress";
 
 // core components
 import RecordScoreTimeline from "./RecordScoreTimeline";
+import RecordCountBars from "./RecordCountBars";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
 
@@ -312,6 +313,7 @@ function ParticipantSurveyRecords() {
                   </Grid>}
                   {data.length > 0 ? (
                     <Grid item xs={12}>
+                      <RecordCountBars dataToRender={data} form={availableForms.active.Record}/>
                       <RecordScoreTimeline dataToRender={data} form={availableForms.active.Record} figureTitle={"RecordScoreTimeline"}/>
                     </Grid>
                   ) : (

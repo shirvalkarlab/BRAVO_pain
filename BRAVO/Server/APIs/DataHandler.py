@@ -20,6 +20,8 @@ Data Upload Handler Module
 
 import os
 import json
+import logging
+import time
 import traceback
 from copy import deepcopy
 import pickle
@@ -94,7 +96,9 @@ class DataUploadHandler(RestViews.APIView):
         if ".." in request.data["File"].name or os.path.sep in request.data["File"].name:
             return Response(status=400, data={"message": "Filename not Supported"})
         
+        _upload_started = time.perf_counter()
         rawBytes = request.data["File"].read()
+        logging.getLogger(__name__).info("Upload stage=read elapsed_seconds=%.3f", time.perf_counter() - _upload_started)
         metadata = {**{
             "UploadType": request.data["DataType"],
             "Institute": institute.pk,
@@ -102,9 +106,13 @@ class DataUploadHandler(RestViews.APIView):
             "UniqueHashed": hmac.new(HASH_KEY.encode("utf8"), rawBytes, hashlib.sha256).hexdigest()
         }, **json.loads(request.data["Metadata"])}
 
+        _cache_started = time.perf_counter()
         source_file = DataCurator.saveCacheFile(request.data["File"].name, metadata, rawBytes)
+        logging.getLogger(__name__).info("Upload stage=cache_write elapsed_seconds=%.3f", time.perf_counter() - _cache_started)
         lock = FileLock(DATABASE_PATH + "SourceFileDuplicateCheck.lock")
+        _dedup_lock_started = time.perf_counter()
         with lock.acquire(timeout=60):
+            logging.getLogger(__name__).info("Upload stage=dedup_lock_wait elapsed_seconds=%.3f", time.perf_counter() - _dedup_lock_started)
             if models.SourceFile.objects.exclude(pk=source_file.pk).filter(metadata__Institute=institute.pk, metadata__UniqueHashed=metadata["UniqueHashed"]).exists():
                 print("Duplicate File Found")
                 source_file.delete()

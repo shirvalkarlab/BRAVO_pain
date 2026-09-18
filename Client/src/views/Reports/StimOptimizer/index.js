@@ -1,3 +1,4 @@
+import CacheStatusLine from "../CacheStatusLine";
 /**
 =========================================================
 * UF BRAVO Platform -- Stimulation Parameter Optimizer (Shirvalkar Lab)
@@ -167,6 +168,7 @@ export default function StimOptimizer() {
               computed under the settings now on the page has to be readable before the verdict is
               read. Every panel below it is served from memory until it is pressed. */}
           <MDBox>
+            <CacheStatusLine status={data.cache_status} />
             <RecomputeBar
               title="stim parameter optimizer"
               stale={cached.stale}

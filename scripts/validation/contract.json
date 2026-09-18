@@ -233,6 +233,9 @@
       "BRAVO/modules/StimOptimizer/google_sheets_client.py": [
         "folder_id",
         "template_id"
+      ],
+      "BRAVO/modules/MedtronicPercept/Percept.py": [
+        "_copyStreamList"
       ]
     }
   },
@@ -292,7 +295,9 @@
       "Client/src/views/Reports/RedcapTimeline/MultimodalChart.js",
       "Client/src/views/Reports/RedcapTimeline/MultimodalSummary.js",
       "Client/src/views/Reports/RedcapTimeline/useOuraTimeline.js",
-      "Client/src/views/Reports/RedcapTimeline/ouraData.js"
+      "Client/src/views/Reports/RedcapTimeline/ouraData.js",
+      "Client/src/views/Reports/CacheStatusLine.js",
+      "Client/src/views/Reports/ParticipantRecords/RecordCountBars.js"
     ],
     "critical_functions": {
       "Client/src/views/Reports/ChronicTimeline/GenericTimeline.js": [

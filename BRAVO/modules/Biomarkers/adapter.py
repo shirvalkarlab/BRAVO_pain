@@ -269,17 +269,18 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
         amp = cdata[:, 1] if cdata.shape[1] > 1 else np.full(len(time), np.nan)
         chronic_ts = [_to_datetime(t) for t in time]
 
-        # Nearest-date PRO join (PROs are daily; chronic samples are ~10 min).
+        # Reduce each day/metric once, then broadcast to chronic samples. Use the
+        # existing Series.mean reduction (rather than groupby.mean) to preserve
+        # its floating-point and nullable-dtype behavior exactly.
+        if not chronic_ts:
+            return pd.DataFrame()
         pro_by_date = {d: g for d, g in df.groupby("_date")}
-        out_rows = []
-        for k, ts in enumerate(chronic_ts):
-            d = local_calendar_day(ts)
-            g = pro_by_date.get(d)
-            row = {"time": ts, "lfp": lfp[k], "stim_amplitude": amp[k]}
-            for m in metrics:
-                row[m] = (g[m].mean() if (g is not None and m in g.columns) else np.nan)
-            out_rows.append(row)
-        return pd.DataFrame(out_rows)
+        chronic_dates = local_calendar_day(chronic_ts)
+        out = pd.DataFrame({"time": chronic_ts, "lfp": lfp, "stim_amplitude": amp})
+        for m in metrics:
+            means = {d: g[m].mean() for d, g in pro_by_date.items() if m in g.columns}
+            out[m] = [means.get(d, np.nan) for d in chronic_dates]
+        return out
 
     else:
         raise ValueError('target must be "session" or "chronic"')

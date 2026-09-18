@@ -15,6 +15,7 @@ jest.mock("components/MDTypography", () => ({ children }) => <div>{children}</di
 jest.mock("components/MDButton", () => ({ children, onClick, disabled }) => <button onClick={onClick} disabled={disabled}>{children}</button>);
 
 const research = {
+  cache_status: { exists: true, last_built_utc: "2026-09-18T12:00:00Z", what_it_means: "approved inputs were assembled" },
   available: true, readiness: { ready: false, status: "research_only" }, licensed: false,
   verdict_detail: { device_eligible: true, all_edges_resolved: false },
   eligibility: { eligible: true, checked: 1, failures: [], unknowns: [] },
@@ -26,6 +27,8 @@ const research = {
 test("research-only report keeps all modes visible and planning unavailable even if rule checks pass", () => {
   render(<ResearchDeploymentPanels data={research} />);
   expect(screen.getByText("Closed-loop research review")).toBeTruthy();
+  expect(screen.getByText(/Stored results last built Fri, 18 Sep 2026 12:00:00 GMT/)).toBeTruthy();
+  expect(screen.getByText(/approved inputs were assembled/)).toBeTruthy();
   expect(screen.getByText("AUTHORIZATION REPORTED")).toBeTruthy(); // Unlit state is visible; selection tested below.
   expect(TRACKS.transcription.lit(research)).toBe(1);
   expect(screen.queryAllByRole("checkbox")).toHaveLength(0);

@@ -1,3 +1,4 @@
+import CacheStatusLine from "../CacheStatusLine";
 import BandStabilityPanel from "./BandStabilityPanel";
 import ReliableChangePanel from "./ReliableChangePanel";
 import ThreeSourceResponsePanel from "./ThreeSourceResponsePanel";
@@ -17,6 +18,7 @@ export default function ResearchDeploymentPanels({ data, bandCandidate }) {
   const [mode, setMode] = useState("dual");
   const report = { data, loading: false, err: null };
   return <MDBox sx={{ display: "grid", gap: 2, minWidth: 0, mt: 2 }}>
+    <CacheStatusLine status={data.cache_status} />
     <DeploymentDecisionHeader deploymentReport={report} bandCandidate={bandCandidate} />
     <MDBox id="cl-what-changes"><WhatWouldChangeThis report={report} /></MDBox>
     <MDBox id="cl-rules"><DeviceRuleLedger report={report} /></MDBox>
