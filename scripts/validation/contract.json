@@ -627,6 +627,15 @@
       "alternative_evidence": "Synthetic missing and explicit destination tests; constructor refuses missing destination before importing or calling network clients.",
       "owner": "Aditya BRAVO maintainer",
       "revisit": "Require authenticated destination-specific acceptance before enabling this optional export client."
+    },
+    {
+      "path": "BRAVO/modules/MedtronicPercept/Percept.py",
+      "source_revision": "67c4c6c6e5dffc573cd4c245eaeb40610a9300dc",
+      "reason": "Existing large decoder module; the new safe-copy helper is declared as strict function scope. The eight call-site substitutions preserve prior decoded outputs in independent deepcopy comparison fixtures. Unchanged decoder routines remain measured in the full-tree baseline.",
+      "risk": "Unchanged decoder routines are not claimed branch complete.",
+      "alternative_evidence": "All stream extractor families, packet gaps and retained metadata mutation are checked against prior deepcopy outputs; _copyStreamList requires 95 percent true branch coverage and currently achieves 100 percent.",
+      "owner": "Aditya BRAVO maintainer",
+      "revisit": "Expand strict function scope when modifying additional decoder decisions."
     }
   ]
 }
