@@ -2742,6 +2742,7 @@ def queryChronicTimeline(participant_uid, config):
     if models.SourceFile.include(owner=Participant, type="FitbitWebAPISource"):
         Data = FitbitDataManager.loadFitbitData(Participant)
         for key in Data.keys():
+            Data[key] = sorted(Data[key], key=lambda record: record["StartTime"])
             SingleTimePoint = False
             for i in range(len(Data[key])):
                 if len(Data[key][i]["Data"]) > 0:
@@ -2976,7 +2977,6 @@ def queryChronicTimelineData(participant_uid, data_ids, channel, config):
 
 def cachedChronicActivity(participant, devices, config):
     """Persist common neural derivation across workers and application restarts."""
-    from filelock import FileLock
     from modules import ReportCache
     revision = ReportCache.revision("neural-revision")
     stamp = {"Version": "channel-therapy-3-eligible-sources", "InputRevision": revision, "Config": {key: value for key, value in config.items() if key != "APIAccess"}}

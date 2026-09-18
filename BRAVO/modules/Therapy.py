@@ -28,9 +28,9 @@ import uuid
 from cryptography.fernet import Fernet
 
 from Server import models
+from modules import Database
 
 from openai import OpenAI
-import json
 
 if "GEMINI_API_KEY" in os.environ.keys() and os.environ.get("GEMINI_API_KEY") != "":
     openai_client = OpenAI(
@@ -89,7 +89,7 @@ def queryTherapyHistory(Participant):
 
         for i in range(len(DBSDeviceDict[key])):
             device = DBSDeviceDict[key][i]
-            SourceFiles = models.SourceFile.find_all(owner=Participant, metadata__Device=device.uid)
+            SourceFiles = models.SourceFile.find_all(owner=Participant, **Database.deviceMetadataLookup(device.uid))
             TherapyHistory["History"].extend([i.get_info() for i in models.ElectricalTherapy.find_all(therapy__source__in=SourceFiles)])
             DeviceTherapyModification["History"].extend([i.get_info() for i in models.TherapyModification.find_all(source__in=SourceFiles)])
 
@@ -177,7 +177,7 @@ def queryTherapyModification(Participant):
     DBSDevices = models.DBSDevice.find_all(owner=Participant)
     TherapyModifications = []
     for device in DBSDevices:
-        SourceFiles = models.SourceFile.find_all(owner=Participant, metadata__Device=device.uid)
+        SourceFiles = models.SourceFile.find_all(owner=Participant, **Database.deviceMetadataLookup(device.uid))
         TherapyModification = [{**i.get_info(), **{"Device": device.uid}} for i in models.TherapyModification.find_all(source__in=SourceFiles)]
         TherapyModifications.extend(TherapyModification)
     return TherapyModifications
@@ -186,7 +186,7 @@ def queryTherapyGroups(Participant):
     DBSDevices = models.DBSDevice.find_all(owner=Participant)
     TherapyGroups = []
     for device in DBSDevices:
-        SourceFiles = models.SourceFile.find_all(owner=Participant, metadata__Device=device.uid)
+        SourceFiles = models.SourceFile.find_all(owner=Participant, **Database.deviceMetadataLookup(device.uid))
         if len(SourceFiles) > 0:
             TherapyGroup = [{**i.get_info(), **{"Device": device.uid}} for i in models.ElectricalTherapy.find_all(therapy__source__in=SourceFiles)]
             TherapyGroups.extend(groupTherapySettings(TherapyGroup))
@@ -591,7 +591,7 @@ def findClosestAdaptiveTherapy(timestamp, ClosestTherapy):
     return None
 
 def checkDuplicate(device, electrode, therapy):
-    AllTherapies = models.Therapy.find_all(source__metadata__Device=device.uid, type=therapy["type"], date=therapy["date"])
+    AllTherapies = models.Therapy.find_all(**Database.deviceMetadataLookup(device.uid, prefix="source__metadata"), type=therapy["type"], date=therapy["date"])
     if len(AllTherapies) == 0:
         return False
     

@@ -191,6 +191,31 @@
       "BRAVO/modules/ClosedLoopDeployment/types.py": [
         "EdgeEstimate.sign",
         "EdgeEstimate.resolved"
+      ],
+      "BRAVO/modules/ExternalDevices/BRAVOfflineWinUI.py": [
+        "_mdatPackets",
+        "decodeMDATAuto",
+        "decodeMDATv3",
+        "_mdatSegment"
+      ],
+      "BRAVO/Server/APIs/DataHandler.py": [
+        "updateRecordingAlignment"
+      ],
+      "BRAVO/modules/Database.py": [
+        "deviceMetadataLookup"
+      ],
+      "BRAVO/modules/BIDSExport/Gather.py": [
+        "_subject_label",
+        "_dedupe_history",
+        "_clear_empty_history"
+      ],
+      "BRAVO/modules/BIDSExport/Convert.py": [
+        "_clamp_onset"
+      ],
+      "BRAVO/modules/DataCurator.py": [
+        "UFMDATv2Decoder",
+        "UFMDATv3Decoder",
+        "UFMDATAutoDecoder"
       ]
     }
   },
@@ -490,6 +515,60 @@
       "alternative_evidence": "Full closed-loop portable suite, malformed and nonfinite estimate coherence regressions, strict property branch coverage, and independent preservation review of the existing evidence rules.",
       "owner": "Aditya BRAVO maintainer",
       "revisit": "Expand strict scope before substantive changes to remaining helpers; do not import point-sign licensing or provisional verdict policy through this exception."
+    },
+    {
+      "path": "BRAVO/modules/ExternalDevices/BRAVOfflineWinUI.py",
+      "source_revision": "071b2ef10ae501935f9233135aa673ad0f9b1f80",
+      "reason": "Legacy BRAVO module with new supervised Fixel integration helpers declared separately as strict function scope; unchanged surrounding code remains measured in the full-tree baseline.",
+      "risk": "Legacy code outside declared helpers is not claimed branch-complete.",
+      "alternative_evidence": "Focused real-format/ORM fixtures, portable full gate and authenticated Aditya summary preservation checks; new helper scope requires95percent true branch coverage.",
+      "owner": "Aditya BRAVO maintainer",
+      "revisit": "Expand strict scope when changing additional consequential logic; retain whole-file measurement."
+    },
+    {
+      "path": "BRAVO/Server/APIs/DataHandler.py",
+      "source_revision": "071b2ef10ae501935f9233135aa673ad0f9b1f80",
+      "reason": "Legacy BRAVO module with new supervised Fixel integration helpers declared separately as strict function scope; unchanged surrounding code remains measured in the full-tree baseline.",
+      "risk": "Legacy code outside declared helpers is not claimed branch-complete.",
+      "alternative_evidence": "Focused real-format/ORM fixtures, portable full gate and authenticated Aditya summary preservation checks; new helper scope requires95percent true branch coverage.",
+      "owner": "Aditya BRAVO maintainer",
+      "revisit": "Expand strict scope when changing additional consequential logic; retain whole-file measurement."
+    },
+    {
+      "path": "BRAVO/modules/Database.py",
+      "source_revision": "071b2ef10ae501935f9233135aa673ad0f9b1f80",
+      "reason": "Legacy BRAVO module with new supervised Fixel integration helpers declared separately as strict function scope; unchanged surrounding code remains measured in the full-tree baseline.",
+      "risk": "Legacy code outside declared helpers is not claimed branch-complete.",
+      "alternative_evidence": "Focused real-format/ORM fixtures, portable full gate and authenticated Aditya summary preservation checks; new helper scope requires95percent true branch coverage.",
+      "owner": "Aditya BRAVO maintainer",
+      "revisit": "Expand strict scope when changing additional consequential logic; retain whole-file measurement."
+    },
+    {
+      "path": "BRAVO/modules/BIDSExport/Gather.py",
+      "source_revision": "071b2ef10ae501935f9233135aa673ad0f9b1f80",
+      "reason": "Legacy BRAVO module with new supervised Fixel integration helpers declared separately as strict function scope; unchanged surrounding code remains measured in the full-tree baseline.",
+      "risk": "Legacy code outside declared helpers is not claimed branch-complete.",
+      "alternative_evidence": "Focused real-format/ORM fixtures, portable full gate and authenticated Aditya summary preservation checks; new helper scope requires95percent true branch coverage.",
+      "owner": "Aditya BRAVO maintainer",
+      "revisit": "Expand strict scope when changing additional consequential logic; retain whole-file measurement."
+    },
+    {
+      "path": "BRAVO/modules/BIDSExport/Convert.py",
+      "source_revision": "071b2ef10ae501935f9233135aa673ad0f9b1f80",
+      "reason": "Legacy BRAVO module with new supervised Fixel integration helpers declared separately as strict function scope; unchanged surrounding code remains measured in the full-tree baseline.",
+      "risk": "Legacy code outside declared helpers is not claimed branch-complete.",
+      "alternative_evidence": "Focused real-format/ORM fixtures, portable full gate and authenticated Aditya summary preservation checks; new helper scope requires95percent true branch coverage.",
+      "owner": "Aditya BRAVO maintainer",
+      "revisit": "Expand strict scope when changing additional consequential logic; retain whole-file measurement."
+    },
+    {
+      "path": "BRAVO/modules/DataCurator.py",
+      "source_revision": "071b2ef10ae501935f9233135aa673ad0f9b1f80",
+      "reason": "Legacy BRAVO module with new supervised Fixel integration helpers declared separately as strict function scope; unchanged surrounding code remains measured in the full-tree baseline.",
+      "risk": "Legacy code outside declared helpers is not claimed branch-complete.",
+      "alternative_evidence": "Focused real-format/ORM fixtures, portable full gate and authenticated Aditya summary preservation checks; new helper scope requires95percent true branch coverage.",
+      "owner": "Aditya BRAVO maintainer",
+      "revisit": "Expand strict scope when changing additional consequential logic; retain whole-file measurement."
     }
   ]
 }

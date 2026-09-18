@@ -37,7 +37,7 @@ from Server import models
 from modules.NeuroPace.PersystDecoder import parsePersystRecording
 from modules.MedtronicPercept.Session import decodeMedtronicJSON
 from modules.ExternalDevices.DelsysTrigno import decodeMDATData, decodeHPFCSVData
-from modules.ExternalDevices.BRAVOfflineWinUI import decodeMDATv2
+from modules.ExternalDevices.BRAVOfflineWinUI import decodeMDATv2, decodeMDATv3, decodeMDATAuto
 from modules.ExternalDevices.MATLAB import decodeMATLABFile
 from modules.ExternalDevices.BRAVORecordingStructure import decodebdata
 from modules.AlphaOmega.MPX import extractAlphaOmegaRecordings
@@ -271,7 +271,7 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
     
     AllEntries = []
     for log in DatabaseEntries["TherapyChangeHistory"]:
-        if models.TherapyModification.include(date=log["date"], type=log["type"], source__metadata__Device=device.uid, owner=person):
+        if models.TherapyModification.include(date=log["date"], type=log["type"], **Database.deviceMetadataLookup(device.uid, prefix="source__metadata"), owner=person):
             continue
         AllEntries.append(models.TherapyModification(**log, source=source_file, owner=person))
     models.TherapyModification.objects.bulk_create(AllEntries)
@@ -688,9 +688,17 @@ def UFMDATDecoder(source_file, person):
     models.SourceFile.purge(type="CachedResult", date__lt=person.last_update, metadata__Participant=person.uid)
     return True
 
-def UFMDATv2Decoder(source_file, person):
+def UFMDATv3Decoder(source_file, person):
+    return UFMDATv2Decoder(source_file, person, decoder=decodeMDATv3)
+
+
+def UFMDATAutoDecoder(source_file, person):
+    return UFMDATv2Decoder(source_file, person, decoder=decodeMDATAuto)
+
+
+def UFMDATv2Decoder(source_file, person, decoder=decodeMDATv2):
     rawBytes = loadCacheFile(source_file)
-    TrignoData = decodeMDATv2(rawBytes)
+    TrignoData = decoder(rawBytes)
 
     def CommonName(nameList):
         commonNames = []
@@ -717,19 +725,14 @@ def UFMDATv2Decoder(source_file, person):
                 "ChannelNames": ProcessedData["ChannelNames"]
             }
         }, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__metadata__Uploader=source_file.metadata["Uploader"]):
-            recording.delete()
-            continue
-
         filename = DATABASE_PATH + "recordings" + os.path.sep + person.uid + os.path.sep + recording.uid + ".bdat"
         hashed = Database.saveSourceFile(ProcessedData, filename)
-        # TODO: Error handling
         if not hashed:
-            print("Hashing Failed for Data Storage")
-            print(recording.__dict__)
-            continue 
+            raise IOError("MDAT recording storage failed")
+        # Hash and participant identity are required: equal dates/channel names
+        # do not establish equal samples, especially across participants.
         if models.Recording.include(hashed=hashed, source__owner=person):
-            recording.delete()
+            os.remove(filename)
         else:
             recording.pointer = filename
             recording.hashed = hashed

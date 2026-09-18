@@ -36,6 +36,14 @@ DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
 FALLBACK_COMPRESSION_MAGIC = b"BRAVO_ZLIB_v1\0"
 
+def deviceMetadataLookup(device_uid, prefix="metadata"):
+    """Use JSON containment where supported, retaining SQLite compatibility."""
+    from django.db import connection
+    if connection.features.supports_json_field_contains:
+        return {prefix + "__contains": {"Device": device_uid}}
+    return {prefix + "__Device": device_uid}
+
+
 def retrieveProcessingSettings(config=dict()):
     options = {
         "TimeSeriesRecording": {
@@ -179,7 +187,7 @@ def extractParticipantContext(participant_uid, check_files=[], deidentified=Fals
 
     DBSDevices = models.DBSDevice.find_all(owner=Participant).prefetch_related("electrodes")
     for device in DBSDevices:
-        SourceFiles = models.SourceFile.find_all(owner=Participant, type="MedtronicJSON", metadata__Device=device.uid)
+        SourceFiles = models.SourceFile.find_all(owner=Participant, type="MedtronicJSON", **deviceMetadataLookup(device.uid))
         SourceFiles = sorted(SourceFiles, key=lambda x: -x.date)
 
         TherapyModificationList = list()
@@ -434,7 +442,7 @@ def assignSourceFile(old_device_uid, new_device_uid):
         if not new_device.electrodes.filter(uid=electrode.uid).exists():
             new_device.electrodes.add(electrode)
 
-    source_files = models.SourceFile.objects.filter(metadata__Device=old_device.uid).all()
+    source_files = models.SourceFile.objects.filter(**deviceMetadataLookup(old_device.uid)).all()
     for file in source_files:
         file.metadata["Device"] = new_device.uid
         file.save()
@@ -801,7 +809,7 @@ def delete_directory(path):
 
 def loadProcessedCollection(pointer, key):
     if not os.path.exists(pointer.replace(".bdat", ".zarr")):
-        raise Exception(f"Collection not found")
+        raise Exception("Collection not found")
     
     root = zarr.open(pointer.replace(".bdat", ".zarr"), mode="r")
     print(list(root.array_keys()))

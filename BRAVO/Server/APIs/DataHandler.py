@@ -40,6 +40,8 @@ from django.http import HttpResponse
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_protect, csrf_exempt
 from django.conf import settings
+from django.db import transaction
+import math
 
 from Server import models
 from modules.HelperFunctions import sanitize_input, get_or_none, current_time, json_compliant_handler
@@ -47,6 +49,26 @@ from modules import Database, DataCurator, DataAnalysis, ImageDatabase, Therapy
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
+
+def updateRecordingAlignment(recording, alignment, propagate=False):
+    """Align only synchronized siblings atomically; native recording clocks stay intact."""
+    alignment = float(alignment)
+    if not math.isfinite(alignment):
+        raise ValueError("Time alignment must be finite")
+    synchronized = ("SynchronizedMDAT", "CustomizedStreamingData",
+                    "CustomizedTimelineData", "ExternalSensorStreaming")
+    with transaction.atomic():
+        if propagate and recording.type in synchronized:
+            recordings = models.Recording.objects.filter(
+                source=recording.source, type__in=synchronized)
+        else:
+            recordings = models.Recording.objects.filter(pk=recording.pk)
+        recordings.update(adjusted_alignment=alignment)
+        recording.source.owner.last_update = models.current_time()
+        recording.source.owner.save(update_fields=["last_update"])
+        transaction.on_commit(lambda: Database.deleteCachedResult(
+            participant_uid=recording.source.owner.uid), robust=True)
+
 
 class DataUploadHandler(RestViews.APIView):
 
@@ -111,7 +133,7 @@ class DataUploadHandler(RestViews.APIView):
                     source_file.metadata = {**source_file.metadata, **{"device_location": "", "infer_from_device": True}}
                     DataCurator.AlphaOmegaMPXDecoder(source_file, person=source_file.owner, name=request.data["File"].name)
                 elif source_file.pointer.endswith(".mdat"):
-                    DataCurator.UFMDATv2Decoder(source_file, person=source_file.owner)
+                    DataCurator.UFMDATAutoDecoder(source_file, person=source_file.owner)
                 elif source_file.pointer.endswith(".mat"):
                     DataCurator.MATFileDecoder(source_file, person=source_file.owner)
                 else:
@@ -249,7 +271,7 @@ class DataUploadHandler(RestViews.APIView):
                 source_file.delete()
                 return Response(status=400, data={"message": str(e)})
 
-        elif request.data["DataType"] == "UFMDATv2":
+        elif request.data["DataType"] in ["UFMDATv2", "UFMDATv3"]:
             person = models.Participant.find(uid=request.data["ParticipantId"])
             if not person:
                 return Response(status=400, data={"message": "Participant not found."})
@@ -260,7 +282,8 @@ class DataUploadHandler(RestViews.APIView):
             source_file.save()
             
             try:
-                DataCurator.UFMDATv2Decoder(source_file, person)
+                decoder = DataCurator.UFMDATv3Decoder if request.data["DataType"] == "UFMDATv3" else DataCurator.UFMDATv2Decoder
+                decoder(source_file, person)
             except Exception as e:
                 print(request.data["File"].name)
                 print(traceback.format_exc())
@@ -609,7 +632,7 @@ class RecordingTimeShiftHandler(RestViews.APIView):
                 return Response(status=403)
             
             Recording = Analysis.recordings.filter(uid=request.data["RecordingId"]).first()
-            if not Recording.source.owner.uid == request.data["ParticipantId"]:
+            if not Recording or Recording.source.owner.uid != request.data["ParticipantId"]:
                 return Response(status=403)
             
             rel = models.RecordingRel.find(analysis=Analysis, recording=Recording)
@@ -617,8 +640,7 @@ class RecordingTimeShiftHandler(RestViews.APIView):
                 return Response(status=403)
             
             try:
-                Recording.adjusted_alignment = float(request.data["Alignment"])
-                Recording.save()
+                updateRecordingAlignment(Recording, request.data["Alignment"])
             except:
                 return Response(status=400, data={"message": "Time Alignment is not valid"})
 
@@ -627,12 +649,11 @@ class RecordingTimeShiftHandler(RestViews.APIView):
                 return Response(status=400, data={"message": "Malformed Input"})
             
             Recording = models.Recording.objects.filter(uid=request.data["RecordingId"]).first()
-            if not Recording.source.owner.uid == request.data["ParticipantId"]:
+            if not Recording or Recording.source.owner.uid != request.data["ParticipantId"]:
                 return Response(status=403)
             
             try:
-                Recording.adjusted_alignment = float(request.data["Alignment"])
-                Recording.save()
+                updateRecordingAlignment(Recording, request.data["Alignment"], propagate=True)
             except:
                 return Response(status=400, data={"message": "Time Alignment is not valid"})
 

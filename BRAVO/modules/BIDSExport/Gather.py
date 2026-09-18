@@ -295,13 +295,7 @@ def gather_session(source_file):
 
 
 def _subject_label(bids_root, participant_uid):
-    """Maps a BRAVO participant UID to a short sequential BIDS subject label
-    (sub-001, sub-002, ...) - the conventional look for a published BIDS
-    dataset, vs. the raw 32-char UID. The mapping is kept in a dotfile next
-    to the dataset (not part of the BIDS spec - ignored by BIDS parsers) so
-    the same participant always lands back on the same number across
-    re-exports, and new participants get the next free one. FileLock-guarded
-    since AsyncJob exports can run concurrently (same pattern as Database.py)."""
+    """Use four digits for new roots without renaming existing subject identities."""
     os.makedirs(bids_root, exist_ok=True)
     map_path = os.path.join(bids_root, ".bravo_subject_ids.json")
     with FileLock(map_path + ".lock", timeout=30):
@@ -309,11 +303,17 @@ def _subject_label(bids_root, participant_uid):
         if os.path.exists(map_path):
             with open(map_path) as fid:
                 mapping = json.load(fid)
+        # Legacy maps contain integers and represent three-digit labels. Store
+        # explicit labels going forward so padding is never inferred anew.
+        mapping = {uid: f"{label:03d}" if isinstance(label, int) else label
+                   for uid, label in mapping.items()}
         if participant_uid not in mapping:
-            mapping[participant_uid] = max(mapping.values(), default=0) + 1
-            with open(map_path, "w") as fid:
-                json.dump(mapping, fid, indent=2)
-        return f"{mapping[participant_uid]:03d}"
+            width = max((len(label) for label in mapping.values()), default=4)
+            number = max((int(label) for label in mapping.values()), default=0) + 1
+            mapping[participant_uid] = f"{number:0{width}d}"
+        with open(map_path, "w") as fid:
+            json.dump(mapping, fid, indent=2)
+        return mapping[participant_uid]
 
 
 def gather_and_convert(bids_root, source_file, subject=None, session="01"):
@@ -338,6 +338,42 @@ def _local_date_and_time(timestamp, timezone_offset):
         offset = datetime.timedelta(0)
     local = datetime.datetime.fromtimestamp(timestamp, tz=datetime.timezone.utc) + offset
     return local.strftime("%Y%m%d"), local.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _dedupe_history(records, seen, source_devices):
+    """Keep first reports, retaining all reporting sources in a provenance map."""
+    kept = []
+    for record in records:
+        source_id = record.get("source_id")
+        # Unknown device identity must not cause cross-source conflation.
+        identity = source_devices.get(source_id) or source_id
+        content = {key: value for key, value in record.items() if key != "source_id"}
+        key = hashlib.sha256(json.dumps([identity, content], sort_keys=True,
+                                      default=str).encode()).hexdigest()
+        if key not in seen:
+            seen[key] = {"record": content, "source_ids": []}
+            kept.append(record)
+        if source_id not in seen[key]["source_ids"]:
+            seen[key]["source_ids"].append(source_id)
+    return kept
+
+
+def _clear_empty_history(bids_root, subject, session, records):
+    """Remove only generated tables now empty after deduplication on re-export."""
+    from modules.BIDSExport.Convert import therapy_adaptive_dataframe
+    empty = {"TherapyHistory": not records["therapies"],
+             "TherapyAdaptive": therapy_adaptive_dataframe(records["therapies"], 0).empty,
+             "PatientEvents": not records["events"],
+             "Impedance": not records["impedance_measurements"]}
+    for task, is_empty in empty.items():
+        if not is_empty:
+            continue
+        base = os.path.join(bids_root, f"sub-{subject}", f"ses-{session}", "beh",
+                            f"sub-{subject}_ses-{session}_task-{task}_beh")
+        for extension in (".tsv", ".json"):
+            if os.path.exists(base + extension):
+                os.remove(base + extension)
+
 
 
 def gather_day(source_files):
@@ -520,13 +556,9 @@ def export_participant(participant_uid):
     exported = []
     session_rows = []
     device_rows = []
-    # Bounds each session's beh.tsv rows to [end of the previous session, end
-    # of this session] (see Convert.py's _clamp_onset()) - a device-reported
-    # "Past Therapy" readout gets re-included in every visit's upload, so
-    # without this a stale duplicate can land with a wildly-negative onset
-    # reaching back past the actual previous visit. None on the first
-    # iteration - there's no previous session to bound against, so the very
-    # first session's rows are left unclamped on the low end.
+    seen_history = {key: {} for key in ("therapies", "events", "impedance_measurements")}
+    source_devices = {source.uid: source.metadata.get("Device") for source in source_files}
+    # Session boundaries describe reporting visits, never rewrite physical event times.
     prev_session_end = None
     last_date_label, last_participant = None, None
     for date_label in sorted(set(by_day) | set(annotation_only_days)):
@@ -534,6 +566,9 @@ def export_participant(participant_uid):
         if date_label in by_day:
             day_source_files = by_day[date_label]
             kwargs = gather_day(day_source_files)
+            for key, seen in seen_history.items():
+                kwargs[key] = _dedupe_history(kwargs[key], seen, source_devices)
+            _clear_empty_history(bids_root, subject, date_label, kwargs)
             earliest = min(source_file.date for source_file in day_source_files)
             latest = max(source_file.date for source_file in day_source_files)
             timezone = day_source_files[0].metadata.get("Timezone")
@@ -586,8 +621,8 @@ def export_participant(participant_uid):
     # task-<FormName>_beh.tsv files, just added into the existing ses-<...>
     # folder (every other kwargs is None here, so convert_participant()'s
     # per-type `if X:` guards mean nothing else in that session gets
-    # touched/rewritten). Their `onset` still clamps to that session's own
-    # upper bound same as everything else - Convert.scale_form_dataframe()'s
+    # touched/rewritten). Their `onset` is relative to that session's
+    # reporting visit while preserving physical elapsed time - Convert.scale_form_dataframe()'s
     # Date column is what keeps the real completion date recoverable once
     # multiple real calendar dates share one session this way.
     if pending_scale_records and last_date_label is not None:
@@ -619,6 +654,12 @@ def export_participant(participant_uid):
             _, acq_time = _local_date_and_time(earliest, fallback_timezone)
             session_rows.append({"session_id": f"ses-{date_label}", "acq_time": acq_time, "timezone": fallback_timezone or "n/a", "session_type": "ScaleOnly"})
             device_rows.append({"session_id": f"ses-{date_label}"})
+
+    provenance_dir = os.path.join(bids_root, "sourcedata", "bravo")
+    os.makedirs(provenance_dir, exist_ok=True)
+    with open(os.path.join(provenance_dir, f"sub-{subject}_history_sources.json"), "w") as fid:
+        json.dump({"Description": "Repeated device reports grouped by device and identical content; all reporting source IDs retained",
+                   "records": seen_history}, fid, indent=2, default=str)
 
     write_sessions_tsv(bids_root, subject, session_rows)
     write_subject_devices(bids_root, subject, device_rows)

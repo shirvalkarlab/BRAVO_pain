@@ -1356,23 +1356,12 @@ def _pair(values, index, default="n/a"):
 
 
 def _clamp_onset(onset, onset_bounds):
-    """onset_bounds: (lower, upper), each independently optional (None =
-    unbounded on that side) - see Gather.export_participant()'s
-    prev_session_end/session_end. A device-reported "Past Therapy"/
-    impedance/event readout gets re-included in every visit's upload, so
-    without this a stale duplicate can land with a wildly-off onset
-    reaching back (or forward) past the actual adjacent visit. Only
-    per-visit point-in-time readouts get clamped (therapy, impedance,
-    events, annotations) - continuous device-timestamped trends
-    (ChronicLFP) aren't duplicated per-visit the same way, so they're left
-    alone."""
-    if onset_bounds is None:
-        return onset
-    lower, upper = onset_bounds
-    if upper is not None and onset > upper:
-        onset = upper
-    if lower is not None and onset < lower:
-        onset = lower
+    """Retain physical elapsed seconds, including events outside their reporting visit.
+
+    The historical name/signature is kept for callers. Visit bounds describe
+    the upload, not the event clock; clamping or logarithmic compression would
+    change scientific time. Repeated reports are deduplicated in Gather.
+    """
     return onset
 
 
@@ -1552,10 +1541,9 @@ def annotations_dataframe(annotations, session_start, onset_bounds=None, timezon
     the shape is identical - different provenance, different BIDS task
     name, so a consumer can tell them apart without inspecting trial_type.
 
-    onset_bounds clamps only `onset` (this row's position within this
-    session's file) - StartTimestamp/EndTimestamp stay the true absolute
-    time regardless, since those are meant to be ground truth, not scoped
-    to a session. StartTimestamp/EndTimestamp themselves stay UTC (no
+    onset is physical elapsed seconds from the reporting session start;
+    StartTimestamp/EndTimestamp preserve the corresponding absolute time.
+    Values outside the reporting visit are not compressed or clamped. StartTimestamp/EndTimestamp themselves stay UTC (no
     per-annotation timezone stored, see Gather.py's day-bucketing) -
     `timezone` is the session's own timezone (participant["timezone"], see
     convert_participant()), written alongside as a best-available
