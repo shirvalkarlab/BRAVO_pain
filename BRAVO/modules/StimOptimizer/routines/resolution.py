@@ -45,6 +45,9 @@ import math
 RESOLUTION_K = 1.0
 
 
+
+# Aditya canonical compatibility imports/constants.
+
 def sd_of_difference(sd_candidate, sd_incumbent) -> float:
     """Propagated standard deviation of (candidate - incumbent).
 
@@ -85,3 +88,6 @@ def is_resolved(gain, sd_candidate, sd_incumbent, k: float = RESOLUTION_K):
     if not math.isfinite(g):
         return None
     return bool(g > k * sd_diff)
+
+
+# Retained active Aditya interfaces.

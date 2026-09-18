@@ -14,7 +14,8 @@ Louie 2021 doi:10.1186/s12984-021-00873-9), and Matern-3/2 is the right smoothne
 for a response surface that is continuous but not analytic.
 
 Implementation note. scikit-learn's ``GaussianProcessRegressor`` is used rather than a
-torch-based stack. The grid is 228 cells, so the acquisition function is evaluated
+torch-based stack (the optional PyTorch/BoTorch twin, ``surrogate_torch.py``, and its ordinal
+safety model were deleted on 2026-09-12 as reached by nothing). The grid is 228 cells, so the acquisition function is evaluated
 exhaustively and no gradient-based acquisition optimizer is needed — this is what Sarikhani
 et al. did, and it makes the extra dependency pure cost inside a Django container.
 Per-observation noise variance enters through ``alpha``, which is how the heteroscedastic
@@ -30,6 +31,12 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
 
 from .objective import SE_THRESHOLD
+
+
+
+# Aditya canonical compatibility imports/constants.
+
+
 
 
 class ParameterGrid:
@@ -93,18 +100,69 @@ class ParameterGrid:
         return fi * len(self.amps) + ai
 
 
+class JointParameterGrid:
+    """The discrete (rate, amplitude-Left, amplitude-Right) search space, plus the transform the
+    GP sees, for a fit that models both stimulators AT ONCE (decision, 2026-09-14: "model the
+    left and right sides together because they're always on")."""
+
+    def __init__(self, freqs, amps_left, amps_right):
+        self.freqs = np.asarray(sorted(set(np.asarray(freqs, float))), float)
+        self.amps_left = np.asarray(sorted(set(np.asarray(amps_left, float))), float)
+        self.amps_right = np.asarray(sorted(set(np.asarray(amps_right, float))), float)
+        if self.freqs.min() <= 0:
+            raise ValueError("frequencies must be positive for a log2 axis")
+        FF, AL, AR = np.meshgrid(self.freqs, self.amps_left, self.amps_right, indexing="ij")
+        self.raw = np.column_stack([FF.ravel(), AL.ravel(), AR.ravel()])
+        lf = np.log2(self.freqs)
+        self._loc = np.array([lf.mean(), self.amps_left.mean(), self.amps_right.mean()])
+        self._scale = np.array([max(lf.std(), 1e-9), max(self.amps_left.std(), 1e-9),
+                                max(self.amps_right.std(), 1e-9)])
+
+    def __len__(self):
+        return self.raw.shape[0]
+
+    @property
+    def shape(self):
+        return (len(self.freqs), len(self.amps_left), len(self.amps_right))
+
+    def transform(self, X):
+        X = np.atleast_2d(np.asarray(X, float))
+        if X.shape[1] != 3:
+            raise ValueError("expected columns (freq_hz, amp_mA_Left, amp_mA_Right)")
+        if np.any(X[:, 0] <= 0):
+            raise ValueError("non-positive frequency cannot be placed on a log2 axis")
+        Z = np.column_stack([np.log2(X[:, 0]), X[:, 1], X[:, 2]])
+        return (Z - self._loc) / self._scale
+
+    def grid_X(self):
+        return self.raw.copy()
+
+    def as_surface(self, values):
+        """Reshape a per-cell vector into (n_freq, n_amp_left, n_amp_right)."""
+        v = np.asarray(values, float)
+        if v.size != len(self):
+            raise ValueError(f"expected {len(self)} values, got {v.size}")
+        return v.reshape(self.shape)
+
+    def snap(self, X):
+        """Snap arbitrary (freq, amp_left, amp_right) triples to their nearest grid cell."""
+        X = np.atleast_2d(np.asarray(X, float))
+        f = self.freqs[np.abs(X[:, [0]] - self.freqs).argmin(axis=1)]
+        al = self.amps_left[np.abs(X[:, [1]] - self.amps_left).argmin(axis=1)]
+        ar = self.amps_right[np.abs(X[:, [2]] - self.amps_right).argmin(axis=1)]
+        return np.column_stack([f, al, ar])
+
+    def index_of(self, X):
+        """Row indices into ``grid_X()`` for the nearest grid cell of each input."""
+        S = self.snap(X)
+        fi = np.abs(S[:, [0]] - self.freqs).argmin(axis=1)
+        ali = np.abs(S[:, [1]] - self.amps_left).argmin(axis=1)
+        ari = np.abs(S[:, [2]] - self.amps_right).argmin(axis=1)
+        return (fi * len(self.amps_left) + ali) * len(self.amps_right) + ari
+
+
 def _make_kernel(n_dim, length_scale_bounds, nugget_bounds, fixed_length_scale=None):
     """Matern-3/2 ARD kernel plus a white nugget.
-
-    ``fixed_length_scale`` pins the length scales instead of fitting them. This exists because
-    of a measured degeneracy in the RCS08 warm start: the marginal likelihood is essentially
-    flat in the FREQUENCY length scale (lml -48.14 at 0.02 versus -48.21 at 0.15 on the
-    standardised log2 axis), so maximum likelihood drives it to zero and the surrogate treats
-    every frequency as an independent block with no borrowing at all. That is a statement about
-    the historical design — frequency levels are separated in time, so between-frequency
-    contrasts absorb the temporal trend — not about the underlying physiology. When the data
-    cannot determine a hyperparameter, pinning it to a stated scientific assumption is more
-    honest than accepting the degenerate MLE. See OBJECTIVE_SPEC amendment 2026-08-29.
 
     Pinning is PER DIMENSION. Pass ``None`` in a slot to leave that dimension free, e.g.
     ``fixed_length_scale=[0.823, None]`` pins frequency and fits amplitude. A dimension is pinned
@@ -112,8 +170,7 @@ def _make_kernel(n_dim, length_scale_bounds, nugget_bounds, fixed_length_scale=N
     remaining dimensions, the signal variance and the nugget are still fitted by marginal
     likelihood. Passing a scalar or a fully-specified sequence pins every dimension, which also
     means leave-one-out refits inherit the full-data hyperparameters instead of re-estimating
-    them — see :meth:`ObjectiveGP.loo_predict`.
-    """
+    them — see :meth:`ObjectiveGP.loo_predict`."""
     if fixed_length_scale is not None:
         spec = np.atleast_1d(np.asarray(fixed_length_scale, dtype=object))
         if spec.size == 1:
@@ -436,8 +493,8 @@ class SafetyGP:
         aggressively, so Sarikhani et al. added a hard cap on how far the boundary may move in
         one step, keyed to the worst severity reported so far. Two independent brakes.
         """
-        caps = caps or {"none": 0.4, "mild": 0.2, "moderate": 0.0, "severe": 0.0}
-        key = str(worst_severity).strip().lower()
+        caps = caps or {"none": 0.4, "mild": 0.2, "mild_persistent": 0.1, "moderate": 0.0, "severe": 0.0}
+        key = str(worst_severity).strip().lower().replace(" ", "_").replace("-", "_")
         if key not in caps:
             raise ValueError(f"unknown severity {worst_severity!r}; expected {sorted(caps)}")
         mask = self.safe_mask(beta=beta)
@@ -445,3 +502,6 @@ class SafetyGP:
             return mask
         ceiling = float(prev_max_amp) + caps[key]
         return mask & (self.grid.grid_X()[:, 1] <= ceiling)
+
+
+# Retained active Aditya interfaces.

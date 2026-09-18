@@ -182,7 +182,7 @@ def test_era_and_cluster_are_populated_because_amplitude_is_confounded_with_time
 def test_unknown_channel_is_reported_not_silently_empty():
     ev, aud = EV.build_evidence(_psd(), _epochs(), channel="NOPE", hemisphere="Left",
                                 rate_hz=165.0, bands=[(20.0, 5.0)])
-    assert ev is None and "no PSD rows" in aud.reason_unusable
+    assert ev is None and "no rows of sensed signal" in aud.reason_unusable
 
 
 def test_build_all_keys_on_channel_hemisphere_rate_and_audits_unusable_cells():
@@ -428,7 +428,7 @@ def test_a_response_measured_above_the_hard_limit_is_not_deployable_evidence():
     flat 5 mA limit this now takes a 5.4 mA arm, where the energy model refused 4.8 mA at 165 Hz.
     """
     ev = {("ch", "Left", 165.0): _Ev([2.4, 5.4])}
-    screen, best = EV.screen_cells(ev, response_fn=_fn(True, 0.001), amp_ceiling=LIMIT)
+    screen, best = EV.screen_cells(ev, pain_positive_by_channel={ch: set(range(10, 28)) for ch, _, _ in ev}, response_fn=_fn(True, 0.001), amp_ceiling=LIMIT)
     assert best is None
     row = screen.iloc[0]
     assert row.n_responding == 18 and not row.deployable
@@ -437,10 +437,9 @@ def test_a_response_measured_above_the_hard_limit_is_not_deployable_evidence():
 
 
 def test_the_previously_energy_refused_cells_now_qualify():
-    """The concrete consequence on RCS08: 4.8 mA at 165 Hz and 4.0 mA at 110 Hz were refused by
-    the energy cap (3.35 and 3.18 mA). Under a flat 5 mA limit neither breaches."""
+    """Generic implementation; participant-specific examples are kept outside source control."""
     ev = {("a", "Left", 165.0): _Ev([1.6, 4.8]), ("b", "Left", 110.0): _Ev([1.0, 4.0])}
-    screen, best = EV.screen_cells(ev, response_fn=_fn(True, 0.001), amp_ceiling=LIMIT)
+    screen, best = EV.screen_cells(ev, pain_positive_by_channel={ch: set(range(10, 28)) for ch, _, _ in ev}, response_fn=_fn(True, 0.001), amp_ceiling=LIMIT)
     assert screen.within_amp_limit.all() and screen.deployable.all()
     assert best is not None
 
@@ -448,36 +447,36 @@ def test_the_previously_energy_refused_cells_now_qualify():
 def test_screen_cells_refuses_the_retracted_parameters():
     ev = {("ch", "Left", 55.0): _Ev([1.6, 4.0])}
     with pytest.raises(TypeError):
-        EV.screen_cells(ev, response_fn=_fn(True, 0.001), energy_budget={"Left": 1.0})
+        EV.screen_cells(ev, pain_positive_by_channel={ch: set(range(10, 28)) for ch, _, _ in ev}, response_fn=_fn(True, 0.001), energy_budget={"Left": 1.0})
 
 
 def test_an_in_budget_responding_cell_is_deployable_and_selected():
     ev = {("ch", "Left", 55.0): _Ev([1.6, 4.0])}
-    screen, best = EV.screen_cells(ev, response_fn=_fn(True, 0.001), amp_ceiling=LIMIT)
+    screen, best = EV.screen_cells(ev, pain_positive_by_channel={ch: set(range(10, 28)) for ch, _, _ in ev}, response_fn=_fn(True, 0.001), amp_ceiling=LIMIT)
     assert best == ("ch", "Left", 55.0)
     assert screen.iloc[0].deployable and screen.iloc[0].within_amp_limit
 
 
 def test_a_cell_whose_slope_dies_under_era_blocking_is_refused():
     ev = {("ch", "Left", 55.0): _Ev([1.6, 4.0])}
-    screen, best = EV.screen_cells(ev, response_fn=_fn(True, 0.40), amp_ceiling=LIMIT)
+    screen, best = EV.screen_cells(ev, pain_positive_by_channel={ch: set(range(10, 28)) for ch, _, _ in ev}, response_fn=_fn(True, 0.40), amp_ceiling=LIMIT)
     assert best is None
     assert "era-blocked slope" in screen.iloc[0].blocking_reasons
 
 
-def test_one_lucky_band_of_eighteen_is_not_a_finding():
-    """Overlapping bands move together, so the best of a correlated family is not evidence."""
+def test_one_band_with_both_negative_slope_and_positive_pain_qualifies():
+    """Decision 199 requires one qualifying band, with both independent relationships."""
     ev = {("ch", "Left", 55.0): _Ev([1.6, 4.0])}
     calls = {"n": 0}
 
     def one_only(power, amp, era=None, cluster=None):
         calls["n"] += 1
-        return _Res(calls["n"] == 1, 0.001, 1.2)
+        return _Res(calls["n"] == 1, 0.001, 1.2, slope=(-0.2 if calls["n"] == 1 else 0.2))
 
-    screen, best = EV.screen_cells(ev, response_fn=one_only, amp_ceiling=LIMIT)
-    assert best is None
+    screen, best = EV.screen_cells(ev, pain_positive_by_channel={ch: set(range(10, 28)) for ch, _, _ in ev}, response_fn=one_only, amp_ceiling=LIMIT)
+    assert best == ("ch", "Left", 55.0)
     assert screen.iloc[0].n_responding == 1
-    assert "correlated family" in screen.iloc[0].blocking_reasons
+    assert screen.iloc[0].n_qualifying == 1
 
 
 def test_a_failing_cell_is_never_selected_on_the_strength_of_its_separation():
@@ -485,7 +484,7 @@ def test_a_failing_cell_is_never_selected_on_the_strength_of_its_separation():
           ("ch", "Left", 55.0): _Ev([1.6, 4.0])}           # modest, within the limit
     def by_rate(power, amp, era=None, cluster=None):
         return _Res(True, 0.001, 9.9 if len(amp) and max(amp) > 5.0 else 0.6)
-    screen, best = EV.screen_cells(ev, response_fn=by_rate, amp_ceiling=LIMIT)
+    screen, best = EV.screen_cells(ev, pain_positive_by_channel={ch: set(range(10, 28)) for ch, _, _ in ev}, response_fn=by_rate, amp_ceiling=LIMIT)
     assert best == ("ch", "Left", 55.0)
 
 
@@ -513,37 +512,30 @@ def test_empty_evidence_screens_to_nothing_without_raising():
 
 # --- the era-blocked slope must point the RIGHT WAY, not merely be significant (2026-09-02) ------
 def test_a_significant_but_POSITIVE_adjusted_slope_is_refused():
-    """REGRESSION, and it changed a live verdict. screen_cells counted bands whose era-blocked
-    slope was significant and never checked its sign, which inverted the purpose of the condition:
-    a cell passed when its raw arm means fell while the confound-ADJUSTED relationship rose, i.e.
-    exactly when the apparent response was a time artifact. On RCS08 the cell the screen SELECTED
-    as best (ZERO_TWO_LEFT/Left/55 Hz) had all 18 bands significantly POSITIVE, median +0.4387.
-    """
+    """Generic implementation; participant-specific examples are kept outside source control."""
     ev = {("ch", "Left", 55.0): _Ev([1.6, 4.0])}
     screen, best = EV.screen_cells(
-        ev, response_fn=_fn(True, 0.001, slope=+0.44), amp_ceiling=LIMIT)
+        ev, pain_positive_by_channel={ch: set(range(10, 28)) for ch, _, _ in ev}, response_fn=_fn(True, 0.001, slope=+0.44), amp_ceiling=LIMIT)
     row = screen.iloc[0]
     assert row.n_responding == 18 and row.n_era_significant == 18
     assert row.n_era_negative_significant == 0
     assert not row.deployable and best is None
-    assert "NEGATIVE era-blocked slope" in row.blocking_reasons
-    assert "time artifact" in row.blocking_reasons
+    assert "negative era-blocked slope" in row.blocking_reasons
 
 
-def test_a_negative_adjusted_slope_in_a_majority_is_required_not_one_lucky_band():
-    """The correlated-family argument applies to the SIGN as well as to the responding fraction.
-    Applying it to one and not the other let a cell through on 3 of 18 negative bands with a
-    positive median slope."""
+def test_qualifying_bands_need_not_be_a_majority():
+    """Decision 199 uses the qualifying bands rather than an overlapping-band majority."""
     def mostly_positive(power, amp, era=None, cluster=None):
         mostly_positive.i += 1
         neg = mostly_positive.i <= 3            # only 3 of 18 bands negative
         return _Res(True, 0.001, 0.9, slope=(-0.2 if neg else +0.2))
     mostly_positive.i = 0
     ev = {("ch", "Left", 110.0): _Ev([2.5, 4.0])}
-    screen, best = EV.screen_cells(ev, response_fn=mostly_positive, amp_ceiling=LIMIT)
+    screen, best = EV.screen_cells(ev, pain_positive_by_channel={ch: set(range(10, 28)) for ch, _, _ in ev}, response_fn=mostly_positive, amp_ceiling=LIMIT)
     row = screen.iloc[0]
     assert row.n_era_negative_significant == 3 and row.n_bands == 18
-    assert not row.deployable and best is None
+    assert row.n_qualifying == 3
+    assert row.deployable and best == ("ch", "Left", 110.0)
 
 
 # --- closed-loop timing: the ramp is a knob, the averaging window must match the biomarker -------
@@ -559,8 +551,8 @@ def test_averaging_recommendation_tracks_the_biomarker_not_the_device_default():
     assert tp["device_default_averaging_ms"] == 1200.0
     assert tp["averaging_matches_biomarker"] is False
     assert any("factor of" in n for n in tp["notes"])
-    # the unpublished-range caveat must travel with the recommendation, not be assumed away
-    assert "averaging duration" in tp["ranges_unpublished"]
+    # Published device limits travel with the recommendation.
+    assert tp["averaging_range_ms"][0] <= tp["recommended_device_averaging_ms"] <= tp["averaging_range_ms"][1]
 
 
 def test_blanking_covers_the_ramp_plus_the_estimator_turnover():
@@ -729,15 +721,7 @@ def test_recent_eras_are_ordered_by_TIME_not_by_label():
 
 
 def test_an_era_with_one_amplitude_contributes_nothing_to_the_within_era_slope():
-    """Why restricting the window left the measured slope unchanged to four decimals.
-
-    An era carrying a SINGLE amplitude level is absorbed entirely by its own dummy in a model with
-    `C(era)`, so it supplies no within-era amplitude contrast and cannot move the slope. Dropping
-    such eras therefore changes n and the cluster count while leaving the estimate identical --
-    which is exactly what happened on RCS08 (-0.1222 log per mA at 8, 5 and 4 eras while n fell
-    from 361 to 328). Pinned because a future reader seeing an unchanged slope would reasonably
-    suspect the restriction was not being applied at all.
-    """
+    """Why restricting the window left the measured slope unchanged to four decimals."""
     import statsmodels.formula.api as smf
     rng = np.random.default_rng(3)
     # two eras with real within-era amplitude variation, plus two single-amplitude eras
@@ -755,3 +739,11 @@ def test_an_era_with_one_amplitude_contributes_nothing_to_the_within_era_slope()
                             data=df[df.era.isin(["A", "B"])]).fit().params["amp"])
     assert len(df[df.era.isin(["A", "B"])]) < len(df)          # rows really were dropped
     assert abs(full - trimmed) < 1e-9, (full, trimmed)
+
+
+def test_missing_pain_relationship_cannot_qualify_an_otherwise_responding_cell():
+    ev = {("ch", "Left", 55.0): _Ev([1.6, 4.0])}
+    screen, best = EV.screen_cells(ev, response_fn=_fn(True, .001), amp_ceiling=LIMIT)
+    assert best is None
+    assert not screen.iloc[0].deployable
+    assert screen.iloc[0].n_qualifying == 0

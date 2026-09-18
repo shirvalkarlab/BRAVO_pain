@@ -1,27 +1,9 @@
 """The clinic and at-home testing sheets: the finest stimulation record this study has.
 
-WHY THIS FILE EXISTS. Every amplitude-response estimate in this project was built on the Percept
-JSON settings reconstruction, and that reconstruction is blind to what happens inside a session.
-The device writes a settings snapshot at session boundaries, not when a clinician turns a knob, so
-its 6,605 rows for RCS08 collapse to 1,189 distinct timestamps and 123 exposure epochs whose median
-duration is 27.5 hours — 75 of the 123 run longer than a day and the longest spans 89 days. Inside
-those epochs the stream shows zero amplitude variation, which looks reassuring until you notice the
-reasoning is circular: the epochs are BUILT by detecting changes in that same stream, so they cannot
-contain one. What the flatness actually demonstrates is that a 27-hour epoch can sit on top of a
-clinic visit in which the amplitude was stepped thirty times, and the device export records none of
-it.
-
 The lab's own testing sheets do record it, at one-second resolution. They are therefore the
 canonical source for within-visit amplitude, in the same way that the JSON — not the printed session
 report — turned out to be canonical for chronic amplitude (see MEGA_HANDOFF on the dual-schema
 gotcha). This module holds the provenance, the parsing traps, and the exposure-window rule.
-
-WHAT WAS PARSED (2026-09-05). Google Drive folder "Pain Neuromodulation Lab Master Folder > RCS08 >
-Stage 2 > Clinic Testing": 32 files, of which 29 are testing workbooks and 3 are templates plus a
-Stage 1 streaming log. All 29 carry a "Stim Testing" tab. Result: 820 timestamped steps over 29
-visit dates from 2025-07-30 to 2026-09-02, 624 in clinic and 196 at home, with 40 distinct left and
-42 distinct right amplitude levels spanning 0.0-6.0 mA and ten stimulation rates. Against the
-chronic stream's 29 levels and 7 rates, that is a different order of resolution.
 
 FIVE PARSING TRAPS, every one of which has already produced a wrong number in this project.
 
@@ -64,11 +46,10 @@ FOUR RATES APPEAR IN THE SHEETS THAT THE DEVICE EXPORT NEVER RECORDED: 25, 85, 1
 against the chronic stream's 10, 55, 110, 125, 130, 145 and 165. The 100 Hz case is in the sheet
 itself, not a parser fault (July 2025 records 100.0 Hz for Right Groups C and D at 1.0 and 1.5 mA).
 UNRESOLVED and consequential: either those settings were delivered and the export missed them, or
-the sheets carry planned values that were never delivered. It cannot be settled from the sheets.
-"""
+the sheets carry planned values that were never delivered. It cannot be settled from the sheets."""
 import numpy as np
 
-from Biomarkers.routines.analytics import harmonic_landings_hz, DEVICE_TD_FS_HZ
+from modules.Biomarkers.routines.analytics import harmonic_landings_hz, DEVICE_TD_FS_HZ
 
 # -------------------------------------------------------------------------------------------------
 # THE EXPOSURE WINDOW
@@ -80,7 +61,7 @@ from Biomarkers.routines.analytics import harmonic_landings_hz, DEVICE_TD_FS_HZ
 #: than twice as long. Neither number alone is a safe exposure window, so take the intersection.
 USE_INTERSECTION_OF_NOMINAL_AND_OBSERVED = True
 
-#: The sheets' own warning, printed in the Stim Testing tab: "*NOTE STIM TAKES 30-45 s TO RAMP UP".
+# Participant-specific provenance and examples are maintained outside source control.
 RAMP_WARNING_S = 45.0
 
 #: MEASURED, 2026-09-05, and it contradicts the warning above for artifact-sensitive work. Aligning
@@ -114,6 +95,17 @@ ARTIFACT_STILL_RISING_AT_S = 150.0
 #: 30 s step contributes nothing once the ramp is removed.
 TOTAL_SETTLED_HOURS_AT_45S_RAMP = 16.2
 
+
+
+# Aditya canonical compatibility imports/constants.
+
+
+from modules.StimOptimizer.routines.within_visit import (        # noqa: E402  (re-export, not a cycle)
+    AMP_ARM_BIN_MA,
+    MIN_SETTLED_TILES,
+    amplitude_arm_bins,
+    step_settled_medians,
+)
 
 def settled_window(t0, nominal_s=None, observed_s=None, ramp_s=RAMP_WARNING_S):
     """The interval during which a step's programmed amplitude can be treated as delivered.
@@ -150,25 +142,7 @@ def amplitude_response_band_mask(rate_hz, centers_hz, *, tol_hz=BAND_HALF_HZ,
 
     WHY THIS IS EXCLUSIONARY HERE WHILE THE SAME LANDINGS ARE ONLY ADVISORY IN THE BIOMARKER SCAN.
     The two modules ask different questions of the same frequencies and the evidence points opposite
-    ways, so the difference is deliberate rather than an inconsistency:
-
-      * For the PAIN-biomarker question the landings are advisory. Tested on the RCS08 record
-        (2026-09-03), responding bands were not closer to the landings than non-responding ones — at
-        110 Hz, 4.52 Hz mean distance for responding against 3.90 Hz for non-responding, i.e.
-        slightly FARTHER — so aliasing did not explain the pain associations and bands are flagged
-        for review rather than removed.
-      * For the AMPLITUDE-RESPONSE question they are exclusionary. Measured 2026-09-05, during an
-        amplitude change the power rise is concentrated at the landings by a factor of roughly fifty
-        (0.81 log10 per 100 s at the stimulation frequency against -0.003 away from it), because the
-        stimulation artifact scales with the current being asked about. A slope estimated at a
-        landing is measuring the stimulator, not the brain.
-
-    IMPORTANT: this mask must be built PER RATE. Pooling rates defeats it — RCS08's ten rates put
-    landings roughly every 5 Hz across the 2.5-99.5 Hz axis, and with a 2.5 Hz tolerance that covers
-    the entire axis and discriminates nothing. Per rate the landings are sparse and specific:
-    55 Hz lands at 25, 30, 55 and 85 Hz; 110 Hz at 30, 50, 60 and 80 Hz; 165 Hz at 5, 75, 80, 85
-    and 90 Hz.
-    """
+    ways, so the difference is deliberate rather than an inconsistency:"""
     c = np.asarray(centers_hz, dtype=float)
     if rate_hz is None or not np.isfinite(rate_hz) or rate_hz <= 0:
         return np.ones(c.shape, dtype=bool)
@@ -264,46 +238,11 @@ MIN_VISITS_FOR_CLUSTER_ROBUST = 8
 #: described above used 4 and should not have; it is recorded here so the next run does not repeat
 #: it. Cells whose interval is narrower than this are degenerate rather than precise:
 DEGENERATE_CI_WIDTH_LOG10 = 0.005
+# Participant-specific provenance and examples are maintained outside source control.
 
 
-# =================================================================================================
-# THE WITHIN-VISIT AMPLITUDE-RESPONSE SCREEN
-# =================================================================================================
-# Promoted out of a scratch script on 2026-09-05, because it is the best-identified design in the
-# project and it existed only as a bridge file that the workspace sweep would have removed.
-#
-# WHY IT IS A DIFFERENT DESIGN RATHER THAN A RE-RUN. The chronic screen reads exposure epochs whose
-# amplitude is entangled with calendar time, so era blocking is the only defence against the
-# confound, and on RCS08 that defence fails in both directions: the full-record window fails on
-# capture DIRECTION in all 18 bands (the arms straddle two programming regimes, so power rises
-# across them) and the five-era window fails on capture SEPARATION in 14 of 18 (the amplitude range
-# collapses to 1.0 mA). Inside one clinic visit the rate, pulse width and contacts are fixed and the
-# whole ladder happens within hours, so there is no time confound to adjust for -- and the measured
-# within-visit amplitude span reaches 3.5 mA.
-#
-# Measured on RCS08 at 55 Hz: 229 steps with a settled window over 19 visits, of which 120 carried
-# streaming tiles, giving arms at 1.0 and 3.5 mA and median separation 0.53 to 0.89 per cell. So
-# separation stops being the binding constraint, which is what the design was for.
 
-# THE STEP/ARM PRIMITIVES LIVE IN StimOptimizer, NOT HERE, and are re-exported for callers that
-# already import this module. They were written here first and moved on 2026-09-05 once the
-# evidence BUILDER was added to StimOptimizer, because the dependency between the two packages runs
-# one way only — ClosedLoopDeployment imports StimOptimizer, never the reverse — and a builder in
-# StimOptimizer cannot reach back into this file. Re-exporting rather than copying, for the same
-# reason MIN_CAPTURE_SEPARATION_D is now imported rather than restated: two literals encoding one
-# rule is how that constant drifted to a factor of two apart.
-#
-# What stays HERE is `within_visit_band_scores`, because its harmonic-landing flag needs
-# `harmonic_landings_hz` from Biomarkers. Keeping that in this file is precisely what lets the
-# StimOptimizer side stay free of a Biomarkers import, which a test asserts.
-from StimOptimizer.routines.within_visit import (        # noqa: E402  (re-export, not a cycle)
-    AMP_ARM_BIN_MA,
-    MIN_SETTLED_TILES,
-    amplitude_arm_bins,
-    step_settled_medians,
-)
-
-
+# Retained active Aditya interfaces.
 def within_visit_band_scores(power_by_center, amp_mA, visits, *, response_fn,
                              rate_hz=None, bin_mA=AMP_ARM_BIN_MA):
     """Score every band's amplitude response on within-visit steps.
@@ -311,14 +250,7 @@ def within_visit_band_scores(power_by_center, amp_mA, visits, *, response_fn,
     ``power_by_center`` maps a band centre in Hz to one power value per step, ``visits`` supplies
     the era AND the cluster — the visit is the repeat unit here, because amplitude varies WITHIN a
     visit, which is precisely what the chronic epochs could not offer and what makes era blocking
-    informative rather than absorptive.
-
-    ``rate_hz``, when given, flags each band that contains a folded stimulation harmonic. The flag
-    is REPORTED AND NOT ACTED ON. Co-location with a landing is a coincidence until tested: on
-    RCS08 the two channels carrying responses at the 25 Hz landing move in OPPOSITE directions with
-    p below 1e-3, which an aliased harmonic cannot produce, since the landing is a property of the
-    stimulation and the sampling rate and is therefore identical on every sensing channel.
-    """
+    informative rather than absorptive."""
     amp = amplitude_arm_bins(amp_mA, bin_mA)
     vis = np.asarray(visits)
     landings = ([float(d["lands_at_hz"]) for d in harmonic_landings_hz(float(rate_hz), 5.0, 32.5)]

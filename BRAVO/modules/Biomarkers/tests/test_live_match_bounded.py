@@ -73,3 +73,25 @@ def test_scalar_psd_fallback_uses_all_events_when_td_is_invalid(monkeypatch, reu
     assert rows[0]['tier'] == av.PRO_LSB_TIER_BRIDGE
     assert rows[0]['n_psd_used'] == 2
     assert stats['n_pro_td'] == 0
+
+
+@pytest.mark.parametrize('reuse', [False, True])
+@pytest.mark.parametrize('direction', ['nearest', 'prior', 'pro_first'])
+@pytest.mark.parametrize('want_records', [False, True])
+def test_bounded_path_preserves_new_direction_and_stats_only(monkeypatch, reuse, direction, want_records):
+    cache = _cache()
+    pro = [T0 + 9, T0 + 70, T0 + 200, T0 + 800]
+    options = dict(tol_s=30, td_quantity_s=18, allow_window_reuse=reuse,
+                   match_direction=direction, want_records=want_records)
+    monkeypatch.setattr(av, '_LIVE_MATCH_TEMP_BUDGET', 2**60)
+    expected = av.live_lsb_spectrum_match(pro, copy.deepcopy(cache), **options)
+    monkeypatch.setattr(av, '_LIVE_MATCH_TEMP_BUDGET', 0)
+    def no_padding(*args, **kwargs):
+        raise AssertionError('bounded request allocated a padded selection')
+    monkeypatch.setattr(av, '_pad_windows_in_extent', no_padding)
+    monkeypatch.setattr(av, '_pad_owned_windows', no_padding)
+    if not want_records:
+        monkeypatch.setattr(np, 'nanmedian', lambda *args, **kwargs: pytest.fail('stats-only path computed unused medians'))
+    actual = av.live_lsb_spectrum_match(pro, cache, **options)
+    assert actual == expected
+    assert (actual[0] is not None) == want_records

@@ -124,6 +124,18 @@ class ResearchRequestTests(unittest.TestCase):
         self.assertEqual(third['code'], 'code-1')
         self.assertEqual(third['request'], {'ParticipantId': 'patient'})
 
+    def test_latest_sweep_controls_are_explicit_and_part_of_job_identity(self):
+        body = {"ParticipantId": "patient", "BandTimeSweep": True,
+                "IncludeCrossSettingStability": True, "IncludeClinicSheetRatings": False}
+        self.assertEqual(self.request(body, "queryBiomarkerAnalysis").status_code, 202)
+        first = copy.deepcopy(self.jobs.get_or_start.call_args.args[0])
+        self.assertEqual(first["request"], body)
+        body["IncludeClinicSheetRatings"] = True
+        self.assertEqual(self.request(body, "queryBiomarkerAnalysis").status_code, 202)
+        self.assertNotEqual(first, self.jobs.get_or_start.call_args.args[0])
+        body["IncludeCrossSettingStability"] = "unknown"
+        self.assertEqual(self.request(body, "queryBiomarkerAnalysis").status_code, 400)
+
     def test_success_uses_service_and_stamps_manifest(self):
         self.request()
         compute = self.jobs.get_or_start.call_args.args[1]

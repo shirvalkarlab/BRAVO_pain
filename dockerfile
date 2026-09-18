@@ -37,6 +37,9 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* && \
     pip3 install --break-system-packages --no-deps pymer4==0.8.2 seaborn==0.13.2
 
+# Upstream CacheStore uses Parquet; retain the existing scientific dependency layers.
+RUN pip3 install --break-system-packages --no-deps pyarrow==17.0.0
+
 FROM server-deps AS server
 
 COPY ./BRAVO .

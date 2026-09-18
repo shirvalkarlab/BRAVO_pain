@@ -10,7 +10,7 @@ import math
 from . import pipeline, device_facts, adapter, historical_configurations
 
 log = logging.getLogger(__name__)
-SOURCE_COMMIT = "d745360d898647048213c561d18e30e3064ad8e7"
+SOURCE_COMMIT = "8146f069af94dd71a590c1bfa702165778fd53b8"
 HISTORICAL_SOURCE_COMMIT = "8fbe11ba37e7d3788736af123974a3a754c6f7e0"
 MODE_SOURCE = "a59e6a2 (Prasad source declaration, 2026-09-03)"
 
@@ -40,7 +40,7 @@ def _historical_findings(context):
              "recomputed_here": False}]
 
 
-def run_for_participant(request_data):
+def legacy_research_for_participant(request_data):
     from Server import models
     from modules import AnalysisData
     from modules.StimOptimizer import adapter as evidence
@@ -165,3 +165,45 @@ def _review_disposition(report):
                                    edge.resolved for edge in report.edges.values()),
                                "coherent": None if report.coherence is None else report.coherence.coherent,
                                "blockers": list(report.blockers)}}
+
+
+def _current_report_for_participant(request_data):
+    """Build the current research report from server-selected canonical inputs."""
+    from Server import models
+    from modules import AnalysisData
+    from modules.StimOptimizer.bravo_service import _jsonable
+    request = dict(request_data or {})
+    participant = models.Participant.find(uid=request.get("ParticipantId"))
+    if participant is None:
+        return {"available": False, "reason": "Participant not found"}
+    channel = request.get("Channel", "")
+    sides = [side for side in ("Left", "Right") if side.lower() in channel.lower()]
+    center = float(request.get("CenterHz", 0))
+    width = float(request.get("BandWidthHz", 5))
+    if len(sides) != 1 or not all(math.isfinite(x) and x > 0 for x in (center, width)):
+        return {"available": False, "reason": "Choose one channel and a valid band"}
+    candidate = {"channel": channel, "center_hz": center, "band_width_hz": width,
+                 "threshold_mode": request.get("ThresholdMode", "dual"),
+                 "sensing_hemisphere": sides[0], "actuated_hemisphere": sides[0],
+                 "intent": "adaptive"}
+    request["_participant_context"] = participant_context(participant)
+    payload = adapter.report_for_participant(participant, request, candidates=[candidate],
+                                            hemisphere=sides[0], force_refresh=False)
+    payload["simulation_payload"] = adapter.closed_loop_simulation_for_participant(participant, candidate, hemisphere=sides[0])
+    payload["three_source_pooled"] = adapter.three_source_pooled_for_participant(participant)
+    payload.setdefault("manifest", {}).update({"source_commit": SOURCE_COMMIT,
+        "input_scope": "Approved source recordings, native source clocks and corrected canonical daily PROs",
+        "InputManifest": AnalysisData.input_manifest(participant),
+        "programmer_mode": participant_context(participant)})
+    payload["historical_findings"] = _historical_findings(participant_context(participant))
+    payload["readiness"] = {"ready": False, "status": "research_only",
+        "reason": "Retrospective analysis and simulation do not authorize programming a device."}
+    return _jsonable(payload)
+
+
+def run_for_participant(request_data):
+    try:
+        return _current_report_for_participant(request_data)
+    except Exception as exc:
+        log.exception("Closed-loop research analysis failed")
+        raise RuntimeError("The closed-loop research analysis could not be computed; retry the analysis.") from exc

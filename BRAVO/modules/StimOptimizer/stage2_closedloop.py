@@ -49,8 +49,8 @@ invites being read as a preference ordering and this one is not.
 
 Typical use::
 
-    from StimOptimizer import stage1_openloop as S1, stage2_closedloop as S2
-    from StimOptimizer.routines import stage_gate as GATE
+    from modules.StimOptimizer import stage1_openloop as S1, stage2_closedloop as S2
+    from modules.StimOptimizer.routines import stage_gate as GATE
 
     s1 = S1.run_stage1("rcs08_bo_design_matrix.csv", data_horizon="2026-08-12")
     gate = GATE.evaluate_gate(s1.frozen)                 # no LFP evidence -> will refuse
@@ -87,6 +87,20 @@ DEFAULT_BAND_WIDTHS_HZ = (4.0, 5.0, 6.0)
 #: one being chosen here, because that trade-off is a clinical judgement.
 DEFAULT_AMP_WINDOW_HALF_WIDTHS_MA = (0.5, 1.0)
 
+
+
+# Aditya canonical compatibility imports/constants.
+from dataclasses import dataclass, field
+
+import numpy as np
+
+import pandas as pd
+
+from .routines import lfp_response as LFP
+
+from .routines import percept_adaptive as PA
+
+from .routines import stage_gate as GATE
 
 @dataclass(frozen=True)
 class ClosedLoopPolicy:
@@ -209,10 +223,11 @@ def _amp_windows(setting, *, half_widths, ceiling_mA) -> list:
     """Candidate ``(min_mA, max_mA)`` adaptive limit pairs for one hemisphere.
 
     Always bounded by the DELIVERED envelope on that hemisphere and by the declared ceiling. The
-    envelope bound is not a formality: this record establishes that amplitude does not predict
-    side-effect severity, and only 5 of the 417 non-procedural rows with stimulation on sit above
-    4 mA, so amplitudes above what was delivered are UNKNOWN rather than safe. A pair that would
-    fall outside the envelope is dropped here rather than clipped into it.
+    envelope bound is not a formality: amplitudes above what was delivered are UNKNOWN rather than
+    safe, because nothing was observed there -- whatever the side-effect-versus-current statistic
+    of the day says (it is recomputed per request, `clinic_pain.amplitude_severity_evidence`, and
+    quoted by the gate; no number is typed here). A pair that would fall outside the envelope is
+    dropped here rather than clipped into it.
     """
     lo_env = float(setting.amp_delivered_min_mA)
     hi_env = min(float(setting.amp_delivered_max_mA), float(ceiling_mA))
@@ -283,24 +298,26 @@ def enumerate_candidates(frozen, *, lfp=None, hemispheres=None, modes=DEFAULT_MO
     """
     hemis = tuple(frozen.hemispheres) if hemispheres is None else tuple(hemispheres)
     accepted, rejected = [], []
-    # Response verdicts are cached per (band centre, width) because assess_response fits a
-    # regression and the same band is reused across every mode and amplitude window.
+    # Response verdicts are cached per (side, band centre, width) because assess_response fits a
+    # regression and the same band is reused across every mode and amplitude window. Per SIDE
+    # since 2026-09-12 (review S3): the evidence is each side's own, or none for a side without.
     resp_cache = {}
 
     for hemi in hemis:
         setting = frozen.setting(hemi)
         windows = _amp_windows(setting, half_widths=amp_window_half_widths, ceiling_mA=ceiling_mA)
+        lfp_h = GATE.evidence_for_side(lfp, hemi)
         for c in band_centers:
             for w in band_widths:
-                key = (round(float(c), 6), round(float(w), 6))
+                key = (str(hemi), round(float(c), 6), round(float(w), 6))
                 if key not in resp_cache:
                     r = None
-                    if lfp is not None:
-                        power = lfp.power_for(c, w)
+                    if lfp_h is not None:
+                        power = lfp_h.power_for(c, w)
                         if power is not None:
-                            r = LFP.assess_response(power, lfp.amplitude_mA, era=lfp.era,
-                                                    cluster=lfp.cluster,
-                                                    mode_requires=lfp.mode_requires,
+                            r = LFP.assess_response(power, lfp_h.amplitude_mA, era=lfp_h.era,
+                                                    cluster=lfp_h.cluster,
+                                                    mode_requires=lfp_h.mode_requires,
                                                     min_sep_d=min_sep_d)
                     resp_cache[key] = r
                 response = resp_cache[key]
@@ -448,3 +465,6 @@ def run_stage2(frozen, gate, *, lfp=None, rate_hz=None, pw_us=None, allow_gate_f
     return Stage2Result(started=True, frozen=frozen, gate=gate, policies=pol, rejected=rej,
                         refusal_reasons=[], ranking_basis=basis, ranking_assessed=assessed,
                         notes=notes)
+
+
+# Retained active Aditya interfaces.

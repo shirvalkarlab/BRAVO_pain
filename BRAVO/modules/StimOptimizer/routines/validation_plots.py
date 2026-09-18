@@ -21,6 +21,9 @@ _COMP = "#B0B0B0"       # precision-weighted-mean null
 _ALARM = "#C4451C"      # uniform reference
 
 
+
+# Aditya canonical compatibility imports/constants.
+
 def _style(mpl):
     mpl.rcParams.update({
         "figure.dpi": 300, "savefig.dpi": 300, "savefig.bbox": "tight",
@@ -112,3 +115,6 @@ def plot_pit_calibration(per_fold, verdict, path: str, *, data_horizon: str) -> 
     fig.savefig(path, bbox_inches="tight")
     plt.close(fig)
     return path
+
+
+# Retained active Aditya interfaces.

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Design mock-up generator: chronic + streaming LFP timeline laid out by RECORDING CONTACT.
+"""Design mock-up generator: chronic + streaming LFP timeline laid out by RECORDING CONTACT.
 
 WHAT THIS DEMONSTRATES (the design that motivated the BiomarkerTimeline rework):
   - The chronic 24/7 LFP is NOT a single fixed channel. Over time the Percept is reprogrammed to
@@ -16,16 +15,7 @@ WHAT THIS DEMONSTRATES (the design that motivated the BiomarkerTimeline rework):
     (p10-p90 of each brief recording). Streaming contact identity comes from TherapySnapshot.
   - Active-window shading tints each contact's row only where it was the programmed channel.
 
-Standalone REVIEW/DESIGN artifact rendered against the real RCS08 export set; reads the raw JSONs
-directly (not the DB) and writes an interactive Plotly HTML + a PNG. Reference for the component
-port in Client/src/views/Reports/Biomarkers/BiomarkerTimeline.js.
-
-Usage:
-    python3 build_contact_row_timeline_mock.py \
-        --jsons "/path/to/RCS008 jsons" --out ./optB_contact_rows
-
-Requires: plotly, kaleido==0.2.1 (PNG export uses the headless-Chromium flags set below), numpy.
-"""
+Requires: plotly, kaleido==0.2.1 (PNG export uses the headless-Chromium flags set below), numpy."""
 import os, sys, glob, json, argparse
 import numpy as np
 from datetime import datetime
@@ -62,6 +52,13 @@ CMAP_STREAM = {"ZERO_THREE": "0-3", "ONE_THREE": "1-3", "ZERO_TWO": "0-2",
 CORD = ["0-3", "1-3", "0-2", "0-1", "2-3", "1-2", "?"]
 SIX_H = 6 * 3600
 SENTINEL = 1e6  # LFP power is physically << 1e6; larger values are uint32 no-data sentinels.
+
+
+
+# Aditya canonical compatibility imports/constants.
+
+
+
 
 
 def snap(hz):
@@ -136,7 +133,7 @@ def contact_from_stream_sc(sc, hemi):
 
 
 def load_dataset(jsons_dir):
-    """Read every RCS08 JSON; return (sched, chronic, stream) keyed by hemisphere."""
+    """Generic implementation; participant-specific examples are kept outside source control."""
     files = sorted(glob.glob(os.path.join(jsons_dir, "*.json")) +
                    glob.glob(os.path.join(jsons_dir, "Stage 1", "*.json")))
     sched = {"Left": [], "Right": []}
@@ -459,3 +456,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# Retained active Aditya interfaces.

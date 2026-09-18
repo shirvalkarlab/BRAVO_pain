@@ -17,8 +17,7 @@ def test_settled_window_takes_the_intersection_of_nominal_and_observed():
 
 
 def test_a_thirty_second_step_has_no_settled_time_at_all():
-    """The consequence that drives protocol design: a 30 s step is entirely ramp, so all 169 of
-    RCS08's 30 s steps contribute nothing. Returns None rather than an inverted window."""
+    """Generic implementation; participant-specific examples are kept outside source control."""
     assert CS.settled_window(1000.0, 30.0, 200.0) is None
     assert CS.settled_window(1000.0, 45.0, 45.0) is None
 
@@ -41,9 +40,7 @@ def test_band_mask_drops_the_stimulation_frequency_and_its_aliases():
 
 
 def test_the_mask_must_be_built_per_rate_because_pooling_destroys_it():
-    """RCS08's ten rates put landings roughly every 5 Hz across the axis. With a 2.5 Hz tolerance
-    the union covers essentially everything, which is why this is applied per rate: pooling leaves
-    almost nothing and would silently discard the whole analysis."""
+    """Generic implementation; participant-specific examples are kept outside source control."""
     cen = np.arange(2.5, 100.0, 1.0)
     per_rate = CS.amplitude_response_band_mask(55.0, cen).sum()
     pooled = np.logical_and.reduce(
@@ -69,7 +66,7 @@ def test_the_mask_reuses_the_biomarker_helper_rather_than_reimplementing_it():
     later refactor that inlines the arithmetic here fails loudly."""
     import inspect
     src = inspect.getsource(CS)
-    assert "from Biomarkers.routines.analytics import harmonic_landings_hz" in src
+    assert "from modules.Biomarkers.routines.analytics import harmonic_landings_hz" in src
     assert "round(raw / fs)" not in src, "the folding arithmetic has been re-inlined"
 
 
@@ -94,23 +91,23 @@ def test_settled_medians_exclude_the_ramp_and_stop_at_the_window_end():
     transient the sheets warn about (and which the ramp analysis measured still rising at 150 s).
     """
     t, p = _tiles(n=200, step=1.0)
-    # one step starting at t=0 with a 100 s window: settled tiles are 45 <= dt < 100
+    # one step starting at t=0 with a 100 s window: settled tiles are 20 <= dt < 100
     p[:] = 1.0
-    p[(t >= 0) & (t < 45), :] = 99.0          # ramp tiles, must be excluded
+    p[(t >= 0) & (t < 20), :] = 99.0          # ramp tiles, must be excluded
     p[(t >= 100), :] = 77.0                   # past the window, must be excluded
     med, cnt, kept = CS.step_settled_medians([0.0], [100.0], t, p)
     assert kept.tolist() == [0]
-    assert cnt[0] == 55, cnt[0]               # 45..99 inclusive at 1 s spacing
+    assert cnt[0] == 80, cnt[0]               # 20..99 inclusive at 1 s spacing
     assert np.allclose(med, 1.0), med
 
 
 def test_a_step_with_too_few_settled_tiles_is_dropped_not_imputed():
     t, p = _tiles(n=200, step=1.0)
     # window only 1 s past the ramp -> a single settled tile, below MIN_SETTLED_TILES
-    med, cnt, kept = CS.step_settled_medians([0.0], [CS.RAMP_WARNING_S + 1.0], t, p)
+    med, cnt, kept = CS.step_settled_medians([0.0], [20.0 + 1.0], t, p)
     assert kept.size == 0 and med.shape[0] == 0
     # and a window entirely inside the ramp is dropped too
-    med2, _, kept2 = CS.step_settled_medians([0.0], [CS.RAMP_WARNING_S - 1.0], t, p)
+    med2, _, kept2 = CS.step_settled_medians([0.0], [20.0 - 1.0], t, p)
     assert kept2.size == 0 and med2.shape[0] == 0
 
 
@@ -177,11 +174,7 @@ def test_arm_bins_round_to_the_declared_width():
 
 
 def test_harmonic_landing_is_reported_but_never_acted_on():
-    """The PI's instruction, encoded: proximity to a folded harmonic is a flag on the row, not a
-    filter. On RCS08 the two channels responding at the 25 Hz landing move in OPPOSITE directions,
-    which an alias cannot produce, so a screen that dropped those bands would have discarded the
-    only coherent candidate in the record.
-    """
+    """Generic implementation; participant-specific examples are kept outside source control."""
     rng = np.random.default_rng(2)
     n = 60
     amp = np.repeat([1.0, 3.5], n // 2)

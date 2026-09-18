@@ -39,10 +39,7 @@ import math
 import numpy as np
 from scipy import optimize, stats
 
-if __package__.startswith("modules."):
-    from modules.StimOptimizer.routines import percept_adaptive
-else:  # Standalone source-package tests.
-    from StimOptimizer.routines import percept_adaptive
+from modules.StimOptimizer.routines import percept_adaptive
 
 from . import types
 
@@ -115,6 +112,12 @@ DEFAULT_RAMP_INTERVAL_S = 2.0
 # --------------------------------------------------------------------------------------------
 # Power
 # --------------------------------------------------------------------------------------------
+
+# Aditya canonical compatibility imports/constants.
+
+
+
+
 def paired_power(n_pairs, d, alpha=0.05, n_comparisons=1) -> float:
     """Power of a two-sided paired t-test at effect size ``d``, Bonferroni-corrected.
 
@@ -645,3 +648,6 @@ def _build_note(*, n_cand, cands, n_pairs, alpha, d_target, power, det_d, durati
         + ("; ..." if len(order_log) > 3 else "") + ".")
 
     return " ".join(parts)
+
+
+# Retained active Aditya interfaces.

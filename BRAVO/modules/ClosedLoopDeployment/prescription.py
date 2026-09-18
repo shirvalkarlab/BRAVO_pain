@@ -37,19 +37,21 @@ what a tremor burst does; Dual is built for one that drifts over minutes. That i
 argument for Dual on a pain biomarker whose validated integration window is about four seconds, and
 it is made in ``percept_adaptive.recommend_threshold_mode`` rather than here.
 
-WHAT REMAINS GENUINELY UNKNOWN, and is reported as such rather than filled in. The adjustable RANGES
-of Transition Up, Transition Down, Adaptive Startup Delay, Sensing Blanking Duration and Averaging
-Duration are not printed in any supplied Medtronic document — only the defaults are (WP p. 14). The
-onset ranges come from the ADAPT-PD methodology paper rather than the device labelling: 1.2-2 s in
-dual mode and 200-500 ms in single mode (Stanslaski et al. 2024). Every field below says which of
-those three situations it is in, because a recommendation that cannot be entered is worse than no
-recommendation: it wastes a programming visit.
+WHAT IS DOCUMENTED AND WHAT IS NOT (corrected 2026-09-13; the earlier text here said every range
+was unpublished). The FDA approval summary for BrainSense Adaptive (P960009/S478, Table 2, p. 8)
+prints the selection ranges: onset 0-6 min in Dual and 0-30 s in Single mode, transition up and
+down 250 ms-30 min each, thresholds 0.55-400 uVrms, amplitude limits 0-25.5 mA; the 2020 tip card
+prints the averaging duration's, 0-30 s. The ADAPT-PD trial's 1.2-2 s and 200-500 ms are what its
+clinicians SET, not the device's range. Two fields have no documented range anywhere found: the
+Adaptive Startup Delay and the Detection Blanking Duration; those are read off the Advanced
+Settings screen. The one home of these numbers is ``percept_adaptive.DOCUMENTED_RANGES``. Every
+field below says which situation it is in, because a recommendation that cannot be entered is
+worse than no recommendation: it wastes a programming visit.
 
 There is NO published resolution or step grid for these fields. An earlier reading of the parameter
 table mistook its Single Threshold column for a step size, which would have meant quantising every
 recommendation onto a grid; the table's four columns are Parameter, Dual, Single and Single Inverse,
-so no such grid exists in the supplied documents and nothing here rounds to one.
-"""
+so no such grid exists in the supplied documents and nothing here rounds to one."""
 from __future__ import annotations
 
 import math
@@ -58,16 +60,14 @@ from dataclasses import dataclass, field
 import numpy as np
 
 try:                                                    # pragma: no cover - import shim
-    from StimOptimizer.routines import percept_adaptive as PA
+    from modules.StimOptimizer.routines import percept_adaptive as PA
 except Exception:                                       # pragma: no cover
     PA = None
 
 
-#: Onset duration range in SINGLE threshold mode, from the ADAPT-PD methodology paper rather than
-#: the device labelling (Stanslaski et al. 2024). Recorded here because the dual-mode range was
-#: already encoded in percept_adaptive and its single-mode counterpart was not, which meant a
-#: single-mode recommendation had nothing to be clamped against.
-ONSET_RANGE_SINGLE_MS = (200.0, 500.0)
+#: Onset duration range in SINGLE threshold mode: 0-30 s (FDA Table 2). Read from the one home in
+#: percept_adaptive; the alias is kept because this module's tests and callers read it here.
+ONSET_RANGE_SINGLE_MS = PA.ONSET_RANGE_SINGLE_MS if PA is not None else (0.0, 30_000.0)
 
 #: How many averaging windows an excursion must persist before this module will treat it as a real
 #: state change when no measured latency is available. Declared by this module, not by Medtronic.
@@ -93,6 +93,11 @@ MAX_PLAUSIBLE_DT_S = 3600.0
 COVERAGE_IS_CONTINUOUS = 0.5
 
 
+
+# Aditya canonical compatibility imports/constants.
+
+
+
 def onset_windows(onset_ms, averaging_ms):
     """How many controller steps an excursion must persist for, and whether that filters anything.
 
@@ -105,22 +110,13 @@ def onset_windows(onset_ms, averaging_ms):
     window, and whatever protection the configuration has must come from the threshold separation
     instead.
 
-    That is not a hypothetical. The published onset range in dual mode is 1.2 to 2 s, so at any
-    averaging duration of 2 s or more the onset is inoperative at EVERY value the clinician can
-    choose. Matching the averaging duration to a biomarker validated on a 4096 ms window therefore
-    costs the onset filter entirely, and that trade is worth stating rather than discovering later:
-    the manufacturer's own defaults pair a 1200 ms onset with a 1200 ms averaging duration, which
-    is exactly one window, and only an onset at the top of its range with averaging left at the
-    1200 ms default gives two.
-
     WHAT IS NOT ESTABLISHED, and why this returns a caveat rather than a verdict. No supplied
     Medtronic document states whether the device counts the onset duration in averaging windows or
     in FFT updates, which arrive far more often (5 Hz in dual mode, so every 200 ms). If it counts
     FFT updates then a 2 s onset spans ten of them and does filter, even under a long averaging
     window. The reading used here — that the controller steps once per averaging window — is the
     one the defaults support, since the default onset and the default averaging duration are the
-    same 1200 ms, which would be a strange coincidence otherwise. It is a reading, not a citation.
-    """
+    same 1200 ms, which would be a strange coincidence otherwise. It is a reading, not a citation."""
     a = float(averaging_ms) / 1000.0
     if not (a > 0):
         raise ValueError(f"averaging duration must be positive, got {averaging_ms!r}")
@@ -160,6 +156,37 @@ class Field_:
     range_: tuple | None = None
     range_source: str | None = None
     why: str = ""
+    #: What the device is RUNNING for this field on the sensing side today, from the newest session
+    #: report's active sensing group (2026-09-13); None when the report does not carry it.
+    programmed: float | str | None = None
+    #: Confidence of a record-derived value (High / Medium / Low, from the synthesis table); None
+    #: for a default or a clinician's choice.
+    confidence: str | None = None
+    #: The confirmations-and-separation design rule's own sentence for this row (T3, 2026-09-13;
+    #: `design_rule_note`), on the Upper/Lower LFP threshold rows only; None everywhere else and
+    #: on those two rows until `attach_design_rule` has something to say. Kept as its own field,
+    #: not folded into `why`, so the interface can show it without the reader having to open the
+    #: "Why this value" reveal first.
+    design_rule_note: str | None = None
+    #: The threshold occupancy check's own sentence for this row (T4, 2026-09-13;
+    #: `occupancy_note`): where the participant's own averaged readings sit relative to this
+    #: pair, and whether the pair is a single threshold in all but name or sits well off the
+    #: level the signal occupies. Same rows, same reason, same always-visible placement as
+    #: `design_rule_note`.
+    occupancy_note: str | None = None
+    #: The start-of-stretch bias check's own sentence for this row (T6, 2026-09-13;
+    #: `startup_bias_note`), on the Adaptive startup delay row only: what this participant's own
+    #: recordings show about the first readings of a stretch, computed two ways because two of the
+    #: method contest's own entries (decision 150) disagreed and neither is corrected toward the
+    #: other. Same always-visible placement as `design_rule_note` and `occupancy_note`.
+    startup_bias_note: str | None = None
+    #: The block-bootstrap robustness check's own sentence (T5, 2026-09-13; `robustness_note`), on
+    #: the onset duration row(s) only: the 2.5th-97.5th percentile interval, over 200 resamples of
+    #: this participant's own recorded stretches, of the onset (and detection blanking, and
+    #: threshold gap) a designer replaying the real controller against this record would have
+    #: picked -- a range, not a single recommended number with an implied margin of error. Same
+    #: always-visible placement as the three notes above.
+    robustness_note: str | None = None
 
     #: WHY `status` ALONE IS NOT ENOUGH, and why two axes are derived from it below.
     #:
@@ -309,7 +336,9 @@ class Prescription:
     def as_rows(self):
         return [{"parameter": f.name, "value": f.value, "units": f.units, "status": f.status,
                  "device_default": f.default, "range": f.range_, "range_source": f.range_source,
-                 "why": f.why,
+                 "why": f.why, "programmed": f.programmed, "confidence": f.confidence,
+                 "design_rule_note": f.design_rule_note, "occupancy_note": f.occupancy_note,
+                 "startup_bias_note": f.startup_bias_note, "robustness_note": f.robustness_note,
                  # The two provenance axes, so the interface never has to re-derive them from the
                  # status string and cannot disagree with this module about what a status means.
                  "origin": f.origin, "confirm": f.confirm,
@@ -444,13 +473,17 @@ def prescribe_all_modes(**kw):
 
 
 def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_series=None,
-              t_s=None, dt_s=None, replay_result=None, measured_latency_s=None):
+              t_s=None, dt_s=None, replay_result=None, measured_latency_s=None,
+              record_timing=None, programmed_timing=None):
     """Assemble the full programmable prescription for one candidate, in one threshold mode.
 
     ``mode`` decides which fields exist; see the module docstring. ``threshold_plan`` supplies the
     captured thresholds and amplitudes. ``timing`` is the dict from
     ``percept_adaptive.timing_plan``. ``power_series`` is the observed band power used for the duty
-    cycle, on the same scale as the thresholds.
+    cycle, on the same scale as the thresholds. ``record_timing`` is what
+    ``timing_recommendation.for_participant`` returns (the participant's own measured timing, or
+    ``{}``); ``programmed_timing`` is the sensing side's entry of
+    ``device_facts.programmed_closed_loop_timing`` (what the device runs today, or ``{}``).
     """
     if PA is None:                                       # pragma: no cover
         raise RuntimeError("percept_adaptive is required for the device parameter table")
@@ -468,7 +501,18 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
     is_dual = (mode == PA.DUAL)
     T = timing or {}
     cand = candidate or {}
+    R = record_timing or {}
+    P = programmed_timing or {}
     F, unknowns = [], []
+
+    def _rec(key):
+        """(value_ms, why, confidence) from the record-derived table, or (None, None, None)."""
+        r = R.get(key) or {}
+        return r.get("value_ms"), r.get("why"), r.get("confidence")
+
+    def _prog(key):
+        v = P.get(key)
+        return None if v is None else v
 
     # --- sensing ---------------------------------------------------------------------------------
     F.append(Field_("Sensing channel", cand.get("channel"), "contacts", "derived",
@@ -488,12 +532,35 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
     tp = threshold_plan
     up = getattr(tp, "upper", None)
     lo = getattr(tp, "lower", None)
+    thr_src = (f"documented {PA.LFP_THRESHOLD_RANGE_UVRMS[0]:g}-{PA.LFP_THRESHOLD_RANGE_UVRMS[1]:g} "
+               f"uVrms on the programmer's own scale ({PA.RANGE_SOURCE_FDA}); the value here is in "
+               "the device's exported units, so the range is reported and not applied")
     if is_dual:
+        # Since decision 180 the pair may come from the record rather than the capture; the row
+        # says which, and a record-placed row names the value the tablet's capture would have used.
+        if getattr(tp, "placement_rule", "capture") == "record":
+            pl = getattr(tp, "placement", {}) or {}
+            cu, cl = getattr(tp, "capture_upper", None), getattr(tp, "capture_lower", None)
+            _how = (f"Placed from the record (decision 180): the participant's own median averaged "
+                    f"reading at {pl.get('averaging_s', 0):g} s ({pl.get('centre', 0):.2f} device units) "
+                    f"plus the noise-only design rule's minimum of +-{pl.get('half_separation', 0):g} "
+                    f"at the card's timing. ")
+            why_up = _how + (f"The tablet's own capture would place this at {cu:.2f} (the capture "
+                             f"mean at the LOWER amplitude, D24)." if cu is not None else
+                             "No capture pair is available for comparison.")
+            why_lo = (f"Placed from the record (decision 180): the median minus the same "
+                      f"+-{pl.get('half_separation', 0):g}. "
+                      + (f"The tablet's own capture would place this at {cl:.2f} (the capture mean "
+                         f"at the UPPER amplitude, D24)." if cl is not None else
+                         "No capture pair is available for comparison."))
+        else:
+            why_up = ("Placed at the capture mean measured at the LOWER amplitude. The naming is "
+                      "crossed on purpose (D24). Set manually in Dual mode.")
+            why_lo = "Placed at the capture mean measured at the UPPER amplitude (D24)."
         F.append(Field_("Upper LFP threshold", up, "LFP power", "derived",
-                        why="Placed at the capture mean measured at the LOWER amplitude. The "
-                            "naming is crossed on purpose (D24). Set manually in Dual mode."))
+                        range_source=thr_src, programmed=_prog("upper_threshold"), why=why_up))
         F.append(Field_("Lower LFP threshold", lo, "LFP power", "derived",
-                        why="Placed at the capture mean measured at the UPPER amplitude (D24)."))
+                        range_source=thr_src, programmed=_prog("lower_threshold"), why=why_lo))
     else:
         single = None
         if up is not None and lo is not None:
@@ -513,108 +580,153 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
                             "clinician to verify against the device rather than to enter."))
 
     # --- onset durations: TWO in dual, ONE in single ---------------------------------------------
-    rng = PA.ONSET_RANGE_DUAL_MS if is_dual else ONSET_RANGE_SINGLE_MS
-    src = ("ADAPT-PD methodology paper (Stanslaski et al. 2024), not the device labelling; "
-           "the labelling prints only the default")
-    # The principled starting point is the biomarker's own integration window, clamped into the
-    # published range. A band averaged over about four seconds cannot meaningfully confirm a state
-    # change faster than one averaging window, and the range's upper end is well below that, so in
-    # dual mode this clamps to the top of the range rather than landing inside it — which is itself
-    # worth seeing, and is stated in `why` rather than hidden by the clamp.
-    ideal_ms = 1000.0 * float(T.get("biomarker_averaging_window_s") or 0) or None
-    onset_ms = _clamp(ideal_ms, *rng) if ideal_ms else spec.onset_duration_ms
+    rng = PA.ONSET_RANGE_DUAL_MS if is_dual else PA.ONSET_RANGE_SINGLE_MS
+    # 2026-09-15: the tablet's 0-30 s on both Dual timers; the FDA summary's 0-6 min is a discrepancy
+    src = (f"selection range {PA.RANGE_SOURCE_TABLET}; the FDA summary "
+           f"({PA.RANGE_SOURCE_FDA}) prints 0-6 min for Dual, not applied")
+    # The value: the participant's own measured onset when the record has been measured
+    # (timing_recommendation); otherwise ONSET_SETTLE_WINDOWS times the biomarker's integration
+    # window, inside the documented range -- two averaging windows, the module's own settling
+    # convention, because one window is inoperative under this module's reading (onset_windows)
+    # and a state change cannot be confirmed faster than the averaging. 8192 ms sits inside both
+    # modes' ranges (corrected 2026-09-13: the earlier clamp against the ADAPT-PD trial's 1.2-2 s
+    # setting is gone, and that clamp is what used to make the onset inoperative at 4096 ms).
+    window_ms = 1000.0 * float(T.get("biomarker_averaging_window_s") or 0) or None
+    ideal_ms = ONSET_SETTLE_WINDOWS * window_ms if window_ms else None
+    derived_ms = _clamp(ideal_ms, *rng) if ideal_ms else spec.onset_duration_ms
     clamped = ideal_ms is not None and not (rng[0] <= ideal_ms <= rng[1])
     tail = ("" if not clamped else
             f" The biomarker's own integration window is {ideal_ms:.0f} ms, which is outside the "
-            f"published range, so this is clamped to the range end rather than to the window. A "
-            f"state change therefore cannot be confirmed within one averaging window, and brief "
-            f"excursions will be acted on sooner than the biomarker can resolve them.")
+            f"documented range, so this is clamped to the range end rather than to the window.")
+    rec_up, why_up, conf_up = _rec("onset_upper_ms")
+    rec_lo, why_lo, conf_lo = _rec("onset_lower_ms")
+    onset_ms = rec_up if rec_up is not None else derived_ms
+    onset_lower_ms = rec_lo if rec_lo is not None else onset_ms
     if is_dual:
         F.append(Field_("Upper onset duration", onset_ms, "ms", "derived",
                         default=spec.onset_duration_ms, range_=rng, range_source=src,
-                        why="How long the power must stay ABOVE the upper threshold before the "
-                            "amplitude starts to rise. Separately adjustable from the lower onset; "
-                            "the manufacturer's troubleshooting table directs the clinician to "
-                            "decrease this one while increasing the other when stimulation is "
-                            "transiently too low (D51)." + tail))
-        F.append(Field_("Lower onset duration", onset_ms, "ms", "derived",
+                        programmed=_prog("onset_upper_ms"), confidence=conf_up,
+                        why=("How long the power must stay ABOVE the upper threshold before the "
+                             "amplitude starts to rise. Separately adjustable from the lower onset; "
+                             "the manufacturer's troubleshooting table directs the clinician to "
+                             "decrease this one while increasing the other when stimulation is "
+                             "transiently too low (D51). ")
+                            + (why_up if rec_up is not None else
+                               f"Set to {ONSET_SETTLE_WINDOWS:g} times the biomarker's own "
+                               "integration window, so an excursion must persist for two averaging "
+                               "windows before it counts (one window is inoperative)." + tail)))
+        F.append(Field_("Lower onset duration", onset_lower_ms, "ms", "derived",
                         default=spec.onset_duration_ms, range_=rng, range_source=src,
-                        why="How long the power must stay BELOW the lower threshold before the "
-                            "amplitude starts to fall. Started symmetric with the upper onset "
-                            "because nothing in this participant's data argues for an asymmetry "
-                            "yet; asymmetry is the first lever to reach for if the delivered "
-                            "amplitude turns out transiently too low or too high (D51)." + tail))
+                        programmed=_prog("onset_lower_ms"), confidence=conf_lo,
+                        why=("How long the power must stay BELOW the lower threshold before the "
+                             "amplitude starts to fall. ")
+                            + (why_lo if rec_lo is not None else
+                               "Started symmetric with the upper onset because nothing in this "
+                               "participant's data argues for an asymmetry yet; asymmetry is the "
+                               "first lever to reach for if the delivered amplitude turns out "
+                               "transiently too low or too high (D51)." + tail)))
     else:
         F.append(Field_("Onset duration", onset_ms, "ms", "derived",
                         default=spec.onset_duration_ms, range_=rng, range_source=src,
-                        why="Single Threshold has one threshold and so one onset duration. Its "
-                            "range is 200-500 ms, an order of magnitude shorter than dual mode's, "
-                            "because the mode is built for a signal that changes within a second."
-                            + tail))
+                        programmed=_prog("onset_upper_ms"), confidence=conf_up,
+                        why=("Single Threshold has one threshold and so one onset duration. Its "
+                             "selection range is 0-30 s, the same as each Dual timer's on the "
+                             "tablet; the mode is built for a signal that changes within a second. ")
+                            + (why_up if rec_up is not None else tail)))
 
     # --- averaging, blanking -----------------------------------------------------------------
-    avg = T.get("recommended_device_averaging_ms") or spec.averaging_duration_ms
+    rec_avg, why_avg, conf_avg = _rec("averaging_ms")
+    avg = (rec_avg if rec_avg is not None else
+           (T.get("recommended_device_averaging_ms") or spec.averaging_duration_ms))
     F.append(Field_("Averaging duration", avg, "ms",
-                    "derived" if T.get("recommended_device_averaging_ms") else "device_default",
-                    default=spec.averaging_duration_ms, range_=None,
-                    range_source="range NOT published; only the default is (WP p. 14)",
-                    why="Matched to the window the biomarker was validated on, because the device "
-                        "averaging duration IS the feature definition: deploying the default "
-                        f"({spec.averaging_duration_ms:.0f} ms) deploys a different feature from "
-                        "the validated one. Whether the device reaches this value must be checked "
-                        "on the Advanced Settings screen, since the range is unpublished."))
-    F.append(Field_("Detection blanking duration", spec.detection_blanking_ms, "ms",
-                    "device_default", default=spec.detection_blanking_ms,
-                    range_source="range NOT published (WP p. 14)",
-                    why="Left at the default. D51 uses it as the remedy for repeated ramping to "
-                        "the upper limit straight after reaching the lower one, so it is a "
-                        "reactive lever rather than something to preset."))
+                    "derived" if (rec_avg is not None or T.get("recommended_device_averaging_ms"))
+                    else "device_default",
+                    default=spec.averaging_duration_ms, range_=PA.AVERAGING_RANGE_MS,
+                    range_source=f"documented range {PA.RANGE_SOURCE_TIP_CARD}",
+                    programmed=_prog("averaging_ms"), confidence=conf_avg,
+                    why=(why_avg if rec_avg is not None else
+                         "Matched to the window the biomarker was validated on, because the device "
+                         "averaging duration IS the feature definition: deploying the default "
+                         f"({spec.averaging_duration_ms:.0f} ms) deploys a different feature from "
+                         "the validated one.")))
+    rec_bl, why_bl, conf_bl = _rec("detection_blanking_ms")
+    F.append(Field_("Detection blanking duration",
+                    rec_bl if rec_bl is not None else spec.detection_blanking_ms, "ms",
+                    "derived" if rec_bl is not None else "device_default",
+                    default=spec.detection_blanking_ms,
+                    range_=PA.DETECTION_BLANKING_RANGE_MS,
+                    range_source=f"selection range {PA.RANGE_SOURCE_TABLET}; no document prints one",
+                    programmed=_prog("detection_blanking_ms"), confidence=conf_bl,
+                    why=(why_bl if rec_bl is not None else
+                         "Left at the default. D51 uses it as the remedy for repeated ramping to "
+                         "the upper limit straight after reaching the lower one, so it is a "
+                         "reactive lever rather than something to preset.")))
 
     # --- transitions ----------------------------------------------------------------------------
-    for nm, dflt, direction in (("Transition up duration", spec.transition_up_ms, "rise"),
-                                ("Transition down duration", spec.transition_down_ms, "fall")):
-        F.append(Field_(nm, dflt, "ms", "device_default", default=dflt,
-                        range_source="range NOT published (WP p. 14); read off Advanced Settings",
-                        why=f"How long the amplitude takes to {direction} across the full limit "
-                            f"range. Left at the device default because the range is unpublished "
-                            f"and no measurement in this participant's record constrains it. In "
-                            f"Dual mode the adjustment is incremental rather than a full ramp "
-                            f"between the limits (D22), so this sets a RATE, not a dwell time."))
-    unknowns.append("Transition Up and Transition Down adjustable ranges (WP p. 14 prints only "
-                    "the defaults) — read off the Advanced Settings screen")
+    tr_src = (f"selection range {PA.RANGE_SOURCE_WHITE_PAPER_P16}, confirmed on the tablet "
+              f"(2026-09-15); the FDA summary prints 250 ms-30 min")
+    for nm, key, dflt, direction in (
+            ("Transition up duration", "transition_up_ms", spec.transition_up_ms, "rise"),
+            ("Transition down duration", "transition_down_ms", spec.transition_down_ms, "fall")):
+        rec_tr, why_tr, conf_tr = _rec(key)
+        F.append(Field_(nm, rec_tr if rec_tr is not None else dflt, "ms",
+                        "derived" if rec_tr is not None else "device_default", default=dflt,
+                        range_=PA.TRANSITION_RANGE_MS, range_source=tr_src,
+                        programmed=_prog(key), confidence=conf_tr,
+                        why=(f"How long the amplitude takes to {direction} across the full limit "
+                             f"range. In Dual mode the adjustment is incremental rather than a "
+                             f"full ramp between the limits (D22), so this sets a RATE, not a "
+                             f"dwell time. ")
+                            + (why_tr if rec_tr is not None else
+                               "Left at the device default because no measurement in this "
+                               "participant's record constrains it.")))
 
     # --- adaptive startup delay -----------------------------------------------------------------
     # Derived rather than defaulted, because the document gives a mechanism even though it gives no
     # range: a transient jump to the upper limit immediately after resuming is fixed by increasing
-    # this delay (D51). The principled floor is therefore the time the band needs to settle before
-    # its value means anything, which is exactly the blanking floor timing_plan already computes
-    # from the ramp and the averaging window.
+    # this delay (D51). With a measured record the value is the record's; otherwise the principled
+    # floor is the time the band needs to settle before its value means anything, which is exactly
+    # the blanking floor timing_plan already computes from the ramp and the averaging window.
+    rec_sd, why_sd, conf_sd = _rec("adaptive_startup_delay_ms")
     settle_s = T.get("blank_after_step_s")
-    startup_ms = float(settle_s) * 1000.0 if settle_s else None
+    startup_ms = (rec_sd if rec_sd is not None else
+                  (float(settle_s) * 1000.0 if settle_s else None))
     F.append(Field_("Adaptive startup delay", startup_ms, "ms",
                     "derived" if startup_ms else "read_off_programmer",
-                    range_source="range NOT published (WP p. 14); read off Advanced Settings",
-                    why="Set to the same settling time used to blank the ramp transient, which is "
-                        "the ramp duration plus two averaging windows. The reasoning is the "
-                        "device's own: D51 fixes a transient jump to the upper limit immediately "
-                        "after resuming by increasing this delay, and the jump happens because the "
-                        "controller acts on a band value measured before the signal has settled. "
-                        "Whether the device accepts this value is unverified, because the range is "
-                        "not published."))
-    unknowns.append("Adaptive Startup Delay adjustable range — read off the Advanced Settings "
-                    "screen; the recommendation above is derived, not confirmed enterable")
+                    range_source="range NOT published in any source found (manuals, FDA summary, "
+                                 "papers, toolkits); read off Advanced Settings",
+                    programmed=_prog("adaptive_startup_delay_ms"), confidence=conf_sd,
+                    why=(why_sd if rec_sd is not None else
+                         "Set to the same settling time used to blank the ramp transient, which is "
+                         "the ramp duration plus two averaging windows. The reasoning is the "
+                         "device's own: D51 fixes a transient jump to the upper limit immediately "
+                         "after resuming by increasing this delay, and the jump happens because the "
+                         "controller acts on a band value measured before the signal has settled.")))
+    unknowns.append("Adaptive Startup Delay and Detection Blanking adjustable ranges: not "
+                    "documented in any source found (the FDA summary, both manuals, the papers, "
+                    "the open toolkits) -- read off the Advanced Settings screen; on this device "
+                    "the recommendation is derived, not confirmed enterable")
 
     # --- amplitude limits -----------------------------------------------------------------------
     a_lo = getattr(tp, "capture_amp_low", None)
     a_hi = getattr(tp, "capture_amp_high", None)
+    lim_src = f"documented range {PA.RANGE_SOURCE_FDA}"
     F.append(Field_("Adaptive amplitude limit, lower", a_lo, "mA", "derived",
+                    range_=PA.ADAPTIVE_AMP_LIMIT_RANGE_MA, range_source=lim_src,
+                    programmed=_prog("lower_limit_mA"),
                     why="Inherits the lower capture amplitude (D28), which makes the choice of "
                         "capture amplitudes a therapeutic decision and not only a measurement "
                         "one. Must be above zero (D07)."))
     F.append(Field_("Adaptive amplitude limit, upper", a_hi, "mA", "derived",
+                    range_=PA.ADAPTIVE_AMP_LIMIT_RANGE_MA, range_source=lim_src,
+                    programmed=_prog("upper_limit_mA"),
                     why="Inherits the upper capture amplitude (D28)."))
     F.append(Field_("Paused amplitude", cand.get("paused_amplitude_mA"), "mA",
                     "derived" if cand.get("paused_amplitude_mA") else "read_off_programmer",
+                    # The general amplitude envelope (C7 of the 2026-09-15 review, decision 200):
+                    # every other current row printed its range and this one printed none.
+                    range_=PA.ADAPTIVE_AMP_LIMIT_RANGE_MA, range_source=lim_src,
+                    programmed=_prog("suspend_amplitude_mA"),
                     why="The amplitude delivered when the patient pauses Adaptive (D34). Not "
                         "derivable from the record; a clinical choice."))
 
@@ -623,7 +735,8 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
     if power_series is not None and up is not None and lo is not None:
         duty = duty_cycle(power_series, upper=float(up), lower=float(lo), t_s=t_s, dt_s=dt_s,
                           averaging_ms=float(avg), upper_onset_ms=float(onset_ms),
-                          lower_onset_ms=float(onset_ms), is_dual=is_dual,
+                          lower_onset_ms=float(onset_lower_ms if is_dual else onset_ms),
+                          is_dual=is_dual,
                           replay_result=replay_result)
 
     # --- field-pair couplings ------------------------------------------------------------------
@@ -649,12 +762,13 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
                     f"against acting on one noisy window is the separation between the two "
                     f"thresholds."),
                 "resolution": (
-                    "The published onset range tops out at 2000 ms, so no value a clinician can "
-                    "enter makes the onset operative at an averaging duration of 2 s or more. "
-                    "Shortening the averaging duration would restore it, but the averaging "
-                    "duration is the feature definition: 4096 ms is the window every validated "
-                    "band was computed on, and changing it deploys a different feature from the "
-                    "validated one. This is a clinical trade rather than a setting to fix."),
+                    f"The onset range reaches {float(rng[1]) / 1000.0:g} s on the tablet "
+                    f"({PA.RANGE_SOURCE_TABLET}), so an onset of at least twice the averaging "
+                    f"duration -- {2.0 * float(_avg.value):.0f} ms here -- is two controller steps "
+                    "and does filter. The other way is to shorten the averaging duration, but the "
+                    "averaging duration is the feature definition: changing it deploys a "
+                    "different feature from the validated one. Which to move is a clinical "
+                    "trade rather than a setting to fix."),
                 "not_established": (
                     "No supplied Medtronic document states whether the device counts the onset "
                     "duration in averaging windows or in FFT updates, which arrive far more often "
@@ -699,8 +813,251 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
         couplings=couplings, not_applicable=na,
         note=("Every field carries its status: derived from this participant's data, left at the "
               "manufacturer's default, or flagged as needing to be read off the programmer because "
-              "its adjustable range is unpublished. No field is silently defaulted. There is no "
-              "published resolution grid for these values, so nothing here is rounded to one."))
+              "its adjustable range is unpublished. No field is silently defaulted. Where the "
+              "device's newest session report carries the value it runs today, that is printed "
+              "beside the recommendation. There is no published resolution grid for these values, "
+              "so nothing here is rounded to one."))
+
+
+# --- the confirmations-and-separation design rule (T3, 2026-09-13; design_rule.py) -------------
+def design_rule_note(design_rule_payload, *, upper, lower, averaging_ms, onset_ms):
+    """One sentence for the threshold rows: what a fitted noise-only model says the two
+    thresholds need to be apart from each other, at the averaging and onset duration actually
+    shown on this card, next to what they are apart today.
+
+    Returns ``None`` when there is nothing to say -- no table was passed, fitting it was refused,
+    or one of the four numbers needed is missing -- rather than a sentence that reads like a
+    finding when it is not one.
+    """
+    if not design_rule_payload or design_rule_payload.get("refused"):
+        return None
+    rows = design_rule_payload.get("table") or []
+    if upper is None or lower is None or averaging_ms is None or onset_ms is None:
+        return None
+    try:
+        from . import design_rule as _dr
+    except Exception:                                  # pragma: no cover - import shim
+        return None
+    row = _dr.lookup_min_separation(rows, averaging_ms=averaging_ms, onset_ms=onset_ms)
+    if row is None:
+        return None
+    stored_sep = abs(float(upper) - float(lower)) / 2.0
+    avg_s, ons_s = row["averaging_s"], row["onset_s"]
+    # The timing is spelled out ONLY when the rule was evaluated somewhere other than the card's
+    # own timing. This sentence sits directly above `occupancy_note`, which opens with the
+    # averaging duration in force; restating "3 s averaging / 30 s onset" here printed the same
+    # numbers on two stacked lines under one field (referent audit 2026-09-15, item 6).
+    at_this_timing = ("at the timing shown on this card" if row["exact_match"] else
+                      f"at the nearest evaluated timing, {avg_s:g} s averaging / {ons_s:g} s onset")
+    model = design_rule_payload.get("model", "a fitted noise model")
+    if row["min_separation"] is None:
+        return (f"Noise-only design rule (fitted on this participant's own recordings, {model}): "
+                f"no separation up to {SEPARATION_GRID_MAX:g} device units keeps noise-only "
+                f"threshold crossings at or below one an hour {at_this_timing}. The stored pair "
+                f"is +-{stored_sep:.1f} apart from its midpoint.")
+    return (f"Noise-only design rule (fitted on this participant's own recordings, {model}): the "
+           f"stored pair is +-{stored_sep:.1f} from its midpoint; the rule needs "
+           f"+-{row['min_separation']:g} {at_this_timing} to keep noise-only threshold crossings "
+           "at or below one an hour.")
+
+
+try:                                                    # pragma: no cover - import shim
+    from . import design_rule as _DR
+    SEPARATION_GRID_MAX = max(_DR.SEPARATION_GRID)
+except Exception:                                       # pragma: no cover
+    SEPARATION_GRID_MAX = 300.0
+
+
+def attach_design_rule(prescriptions, design_rule_payload, *, averaging_ms, onset_ms):
+    """Append `design_rule_note`'s sentence to the Upper/Lower LFP threshold fields' ``why`` text
+    of every mode in ``prescriptions["modes"]`` that has them (Dual Threshold; Single Threshold's
+    one threshold is device-computed, decision-9-style verify-only, and is left alone). Mutates
+    the `Field_` objects in place and returns ``prescriptions`` for convenience; a caller with
+    nothing to attach (``design_rule_payload`` is ``None`` or refused) gets the object back
+    unchanged, since `design_rule_note` itself returns ``None`` in that case.
+    """
+    if not prescriptions or not isinstance(prescriptions.get("modes"), dict):
+        return prescriptions
+    for presc in prescriptions["modes"].values():
+        fields = getattr(presc, "fields", None) or []
+        up_f = next((f for f in fields if f.name == "Upper LFP threshold"), None)
+        lo_f = next((f for f in fields if f.name == "Lower LFP threshold"), None)
+        if up_f is None or lo_f is None:
+            continue
+        note = design_rule_note(design_rule_payload, upper=up_f.value, lower=lo_f.value,
+                                averaging_ms=averaging_ms, onset_ms=onset_ms)
+        if note is None:
+            continue
+        up_f.design_rule_note = note
+        lo_f.design_rule_note = note
+    return prescriptions
+
+
+# --- the threshold occupancy check (T4, 2026-09-13; occupancy.py) ------------------------------
+def occupancy_note(occupancy_payload):
+    """The one sentence for the threshold rows from an ``occupancy.threshold_occupancy`` payload
+    (a plain dict), or ``None`` when there is nothing to report -- no candidate, no thresholds, or
+    too few averaged readings. The payload already carries the finished sentence under ``why``;
+    this function's only job is to say when there is nothing there, the same role
+    ``design_rule_note`` plays for its own payload.
+    """
+    if not occupancy_payload or not occupancy_payload.get("available"):
+        return None
+    return occupancy_payload.get("why")
+
+
+def attach_occupancy(prescriptions, occupancy_payload):
+    """Append ``occupancy_note``'s sentence to the Upper/Lower LFP threshold fields of every mode
+    in ``prescriptions["modes"]`` that has them -- the identical scope ``attach_design_rule`` uses
+    and for the identical reason: Single Threshold's one threshold is device-computed and
+    verify-only (decision 9), and is left alone. Mutates the ``Field_`` objects in place and
+    returns ``prescriptions`` for convenience.
+    """
+    if not prescriptions or not isinstance(prescriptions.get("modes"), dict):
+        return prescriptions
+    note = occupancy_note(occupancy_payload)
+    if note is None:
+        return prescriptions
+    for presc in prescriptions["modes"].values():
+        fields = getattr(presc, "fields", None) or []
+        up_f = next((f for f in fields if f.name == "Upper LFP threshold"), None)
+        lo_f = next((f for f in fields if f.name == "Lower LFP threshold"), None)
+        if up_f is None or lo_f is None:
+            continue
+        up_f.occupancy_note = note
+        lo_f.occupancy_note = note
+    return prescriptions
+
+
+# --- the start-of-stretch bias check (T6, 2026-09-13; startup_bias.py) -------------------------
+def startup_bias_note(startup_bias_payload):
+    """One sentence for the Adaptive startup delay row: what this participant's own recordings
+    show about the first readings of a stretch, computed two ways -- the method-contest entries
+    ``dwell_markov`` ("D") and ``nonlin_dyn`` ("E") disagreed on this (decision 150), and neither
+    is corrected toward the other here; see ``startup_bias.py``'s own module docstring for the
+    mechanism the disagreement traces to.
+
+    Returns ``None`` when there is nothing to say -- no payload, the fit was refused, or neither
+    method has a first-reading row to report -- rather than a sentence that reads like a finding
+    when it is not one.
+    """
+    if not startup_bias_payload or startup_bias_payload.get("refused"):
+        return None
+    d = startup_bias_payload.get("d_method") or {}
+    e = startup_bias_payload.get("e_method") or {}
+    parts = []
+    if d.get("available") and d.get("rows"):
+        r0 = d["rows"][0]
+        parts.append(
+            f"Method D (compacts each training stretch to the readings it actually measured; "
+            f"only stretches with more than {d.get('min_finite_readings', 20)} finite readings "
+            f"count): the first reading sits {r0['bias_in_sd']:+.3f} of this participant's own "
+            f"scatter from that stretch's own median (t={r0['t_stat']:.2f}, "
+            f"{r0['n_stretches']} stretches).")
+    if e.get("available") and e.get("rows") and e["rows"][0].get("bias_in_sd") is not None:
+        r0 = e["rows"][0]
+        parts.append(
+            f"Method E (reads the raw device-clock position; every training stretch that reaches "
+            f"it counts, no minimum length): the first reading sits {r0['bias_in_sd']:+.3f} of "
+            f"the scatter (z={r0['z']:.2f}, {r0['n_stretches']} stretches).")
+    if not parts:
+        return None
+    return ("Two ways of measuring the start of a recorded stretch, on this participant's own "
+           "training recordings (decision 150, T6): " + " ".join(parts) + " The two methods "
+           "disagree because they use different rules for which readings count as \"the first "
+           "reading\" and which stretches are long enough to include; neither is corrected "
+           "toward the other.")
+
+
+def attach_startup_bias(prescriptions, startup_bias_payload):
+    """Append ``startup_bias_note``'s sentence to the Adaptive startup delay field of every mode
+    in ``prescriptions["modes"]`` that has one. Mutates the ``Field_`` objects in place and
+    returns ``prescriptions`` for convenience; a caller with nothing to attach (``None`` or
+    refused) gets the object back unchanged, since ``startup_bias_note`` itself returns ``None``
+    in that case.
+    """
+    if not prescriptions or not isinstance(prescriptions.get("modes"), dict):
+        return prescriptions
+    note = startup_bias_note(startup_bias_payload)
+    if note is None:
+        return prescriptions
+    for presc in prescriptions["modes"].values():
+        fields = getattr(presc, "fields", None) or []
+        sd_f = next((f for f in fields if f.name == "Adaptive startup delay"), None)
+        if sd_f is None:
+            continue
+        sd_f.startup_bias_note = note
+    return prescriptions
+
+
+# --- the block-bootstrap robustness check (T5, 2026-09-13; robustness.py) ----------------------
+def robustness_note(robustness_payload):
+    """One sentence for the onset duration row(s): the 2.5th-97.5th percentile interval, over a
+    block bootstrap of this participant's own recorded stretches, of the onset a designer replaying
+    the real controller against this record would have picked -- with the threshold-gap and
+    detection-blanking intervals from the identical bootstrap alongside it.
+
+    Returns ``None`` when there is nothing to say -- no payload, the series was refused, or the
+    bootstrap found no feasible resample at all (``intervals["onset_s"]`` absent) -- rather than a
+    sentence that reads like a finding when it is not one, the same rule ``design_rule_note``,
+    ``occupancy_note`` and ``startup_bias_note`` each apply to their own payload.
+    """
+    if not robustness_payload or robustness_payload.get("refused"):
+        return None
+    intervals = robustness_payload.get("intervals") or {}
+    onset_i = intervals.get("onset_s")
+    if not onset_i:
+        return None
+    n_boot = robustness_payload.get("n_boot")
+    n_feasible = robustness_payload.get("n_feasible")
+    parts = [
+        f"Robustness (block bootstrap, {n_feasible} of {n_boot} resamples of this participant's "
+        f"own recorded stretches feasible, 2.5th-97.5th percentile): the onset duration a designer "
+        f"replaying the real Dual Threshold controller against this record would pick ranges from "
+        f"{onset_i['lower']:.0f} to {onset_i['upper']:.0f} s -- "
+        f"{onset_i['lower']:.0f}–{onset_i['upper']:.0f} s are one recommendation, not a "
+        "single number with an implied margin of error."
+    ]
+    # 2026-09-15: the tablet's Dual onset maximum is 30 s. The bootstrap grid searches to 120 s, so
+    # an interval can run past what a clinician can type; say so rather than recommend it.
+    onset_max_s = PA.ONSET_RANGE_DUAL_MS[1] / 1000.0
+    if float(onset_i["upper"]) > onset_max_s + 1e-9:
+        parts.append(f"Onsets above {onset_max_s:g} s cannot be entered on the tablet "
+                     f"({PA.RANGE_SOURCE_TABLET}), so only the part of this interval at or under "
+                     f"{onset_max_s:g} s is programmable"
+                     + (f"; its lower end, {onset_i['lower']:.0f} s, is." if float(onset_i["lower"]) <= onset_max_s
+                        else "; none of it is, and the replay's grid should be narrowed."))
+    bl_i = intervals.get("blanking_s")
+    if bl_i:
+        parts.append(f"Detection blanking ranges {bl_i['lower']:.0f}"
+                     f"–{bl_i['upper']:.0f} s over the same resamples.")
+    gap_i = intervals.get("gap_units")
+    if gap_i:
+        parts.append(f"The two thresholds the same search would place sit "
+                     f"{gap_i['lower']:.1f} to {gap_i['upper']:.1f} device units apart.")
+    return " ".join(parts)
+
+
+def attach_robustness(prescriptions, robustness_payload):
+    """Append ``robustness_note``'s sentence to every onset-duration field of every mode in
+    ``prescriptions["modes"]`` -- "Upper onset duration" and "Lower onset duration" in Dual mode,
+    "Onset duration" in Single mode, matched the same way the onset-inoperative coupling banner
+    already does (``"nset duration" in f.name``), because one bootstrap answer applies to whichever
+    onset field(s) the selected mode actually has. Mutates the ``Field_`` objects in place and
+    returns ``prescriptions`` for convenience; a caller with nothing to attach (``None`` or refused)
+    gets the object back unchanged, since ``robustness_note`` itself returns ``None`` in that case.
+    """
+    if not prescriptions or not isinstance(prescriptions.get("modes"), dict):
+        return prescriptions
+    note = robustness_note(robustness_payload)
+    if note is None:
+        return prescriptions
+    for presc in prescriptions["modes"].values():
+        fields = getattr(presc, "fields", None) or []
+        for f in fields:
+            if "nset duration" in f.name:
+                f.robustness_note = note
+    return prescriptions
 
 
 def duty_cycle(power_series, *, upper, lower, t_s=None, dt_s=None, averaging_ms=1200.0,
@@ -852,16 +1209,7 @@ def duty_cycle(power_series, *, upper, lower, t_s=None, dt_s=None, averaging_ms=
         d.stim_frac_at_lower = getattr(r, "frac_time_at_lower", None)
         if None not in (d.stim_frac_at_upper, d.stim_frac_at_lower):
             d.stim_frac_mid = float(max(0.0, 1.0 - d.stim_frac_at_upper - d.stim_frac_at_lower))
-        # `amplitude_mA`, NOT `state`. Fixed 2026-09-05. This block read `r.state`, which
-        # ReplayResult documents and populates as the CONTROL STATE — a list of the strings
-        # "below", "between" and "above" — while the amplitude trajectory lives in
-        # `amplitude_mA`. The consequence was not a wrong number but a crash:
-        # `np.asarray(state, float)` raises `ValueError: could not convert string to float:
-        # 'below'`, so any configuration whose replay returned a full trajectory took down the
-        # whole prescription. It went unnoticed because RCS08's record is fragmented enough to
-        # take the segment-aggregating path, which returns `state=None` and skipped this block
-        # silently — leaving mean_amplitude_mA, amplitude_duty and both stim_frac fields null on
-        # every live payload rather than raising anywhere a reader would see it.
+        # Participant-specific provenance and examples are maintained outside source control.
         amp = getattr(r, "amplitude_mA", None)
         d.max_time_at_upper_limit_s = getattr(r, "longest_run_at_upper_s", None)
         d.max_time_at_lower_limit_s = getattr(r, "longest_run_at_lower_s", None)
@@ -887,3 +1235,6 @@ def duty_cycle(power_series, *, upper, lower, t_s=None, dt_s=None, averaging_ms=
     d.predicted_failure_mode = _failure_mode(
         d.lfp_frac_above, d.lfp_frac_below, d.stim_frac_at_upper, d.stim_frac_at_lower)
     return d
+
+
+# Retained active Aditya interfaces.

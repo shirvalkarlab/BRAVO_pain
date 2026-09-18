@@ -17,6 +17,9 @@ None of these touch the verbatim notebook science; they wrap/annotate its output
 import numpy as np
 
 
+
+# Aditya canonical compatibility imports/constants.
+
 def bh_fdr(pvals):
     """Benjamini-Hochberg FDR q-values for a 1-D array of p-values (NaNs preserved as NaN).
 
@@ -223,6 +226,27 @@ def circular_block_indices(n, block, rng):
     return np.concatenate(blocks)[:n]
 
 
+def block_bootstrap_picks(n, block, n_boot, rng):
+    """``(n_boot, n)`` row indices for a bootstrap of a series of ``n`` observations in TIME ORDER.
+
+    ``block <= 1`` is the plain i.i.d. draw, ``rng.integers(0, n, size=(n_boot, n))`` -- the same
+    call, the same place in the generator's order, so a caller that used to make that draw itself
+    gets the identical resamples. ``block > 1`` is the circular moving-block bootstrap (Politis and
+    Romano): ``ceil(n / block)`` block starts drawn uniformly, each start followed by the next
+    ``block - 1`` observations modulo ``n``, truncated to ``n``. Neighbouring observations travel
+    together, so an interval built on the draw is as wide as serially dependent observations
+    warrant, instead of as narrow as ``n`` independent ones would be. The same draw
+    ``analytics._block_bootstrap_aucs`` has made over rating clusters since audit [16]."""
+    n, B = int(n), int(n_boot)
+    if block is None or int(block) <= 1:
+        return rng.integers(0, n, size=(B, n))
+    L = int(block)
+    n_blocks = int(np.ceil(n / L))
+    starts = rng.integers(0, n, size=(B, n_blocks))
+    idx = (starts[:, :, None] + np.arange(L)[None, None, :]) % n
+    return idx.reshape(B, -1)[:, :n]
+
+
 def permutation_null_resolution(n, block):
     """How well a permutation null of this shape can resolve a p-value.
 
@@ -425,14 +449,6 @@ def mad_outlier_flags(x, n_mad=None, scale="raw"):
 
     ``scale`` selects the space the rule is evaluated in, and it matters:
 
-    * ``"raw"`` — use for quantities that are already additive: dB/log power, z-scored features,
-      and bounded ordinal pain scores.
-    * ``"log"`` — use for MULTIPLICATIVE quantities on a linear axis, i.e. raw linear band power
-      and raw LSB. A symmetric window on such a feature is proportionally far tighter above the
-      median than below, so a raw-scale rule deletes the upper tail almost exclusively. Measured on
-      RCS08: the raw rule removed 3.71% one-sidedly vs 6.19% two-sidedly on the log scale, and the
-      SELECTED BAND changed as a result.
-
     Non-finite entries are never flagged (they are already absent from every statistic), so the
     returned count means genuine exclusions.
 
@@ -440,8 +456,7 @@ def mad_outlier_flags(x, n_mad=None, scale="raw"):
     flag everything that merely differs from the median, deleting all remaining variation. In that
     case nothing is flagged and ``info["skipped"]`` says why.
 
-    Returns ``(mask, info)`` with info = {n_finite, n_mad, scale, median, mad, n_removed, skipped}.
-    """
+    Returns ``(mask, info)`` with info = {n_finite, n_mad, scale, median, mad, n_removed, skipped}."""
     x = np.asarray(x, dtype=float)
     n_mad = float(MAD_N_DEFAULT if n_mad is None else n_mad)
     finite = np.isfinite(x)
@@ -479,3 +494,6 @@ def mad_keep_mask(x, n_mad=None, scale="raw"):
     x = np.asarray(x, dtype=float)
     mask, _ = mad_outlier_flags(x, n_mad=n_mad, scale=scale)
     return np.isfinite(x) & ~mask
+
+
+# Retained active Aditya interfaces.

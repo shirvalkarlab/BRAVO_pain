@@ -1,3 +1,4 @@
+import BiomarkerHeatmapGrids from "./BiomarkerHeatmapGrids";
 import { currentTargetText } from "utils/participantTargets";
 import { useAnalysisQuery } from "./queryAnalysis";
 /**
@@ -61,12 +62,7 @@ const DEFAULT_METRIC_OPTIONS = [
   { key: "composite_mpq_leftleg", label: "Composite (MPQ + Left Leg VAS)" },
 ];
 
-// How the continuous pain score is turned into the binary high/low pain_level the detector trains
-// on (sent as LabelStrategy). "tertile" (default) splits low/high and drops the ambiguous middle —
-// the cleanest detector target on RCS08; "median" keeps every day at a 50/50 split; "kmeans" is the
-// legacy 2-cluster notebook labeler. The cut is computed on the DAILY PRO distribution and
-// broadcast to samples, so recording density no longer biases the split.
-// See docs/binarization_recommendation_RCS08.md.
+// Participant-specific motivating examples are maintained outside source control.
 const DEFAULT_STRATEGY_OPTIONS = [
   { key: "tertile", label: "Tertile (low/high, drop middle)" },
   { key: "percentile", label: "Percentile (adjustable cuts)" },
@@ -115,15 +111,7 @@ function Biomarkers() {
   const [strategy, setStrategy] = useState(P.strategy || "tertile");   // binarization labeler (default tertile)
   const [percentileLow, setPercentileLow] = useState(P.percentileLow != null ? P.percentileLow : 33.3);   // tertile/percentile low cut
   const [percentileHigh, setPercentileHigh] = useState(P.percentileHigh != null ? P.percentileHigh : 66.7);  // tertile/percentile high cut
-  // PRO<->PSD match window (minutes): a streaming/PSD session is matched to the nearest pain
-  // report whose timestamp falls within ± this many minutes. Drives the matched-neural-sample
-  // counts (computed on the PSDs by the backend) and is a compute param, so changing it makes the
-  // view dirty (a recompute re-matches). Exploratory — default 15 min.
-  // Match window for PSD<->PRO pairing. Bumped from 15 to 60 min after the matching audit on RCS08:
-  // pain reports anchor neural data on a minutes-to-hours timescale, and the 15-min window dropped
-  // ~80% of the otherwise-usable PSDs. Combined with the new direction='pro_first' default, this
-  // lifts PRO coverage to 290/682 (42.5%) of the matched discovery pool (measured on RCS08, vas,
-  // pro_first, ±60 min — matching the offline validation pool; see FIXHANDOUT_pro_timezone_mismatch).
+// Participant-specific motivating examples are maintained outside source control.
   const [matchTolerance, setMatchTolerance] = useState(P.matchTolerance != null ? P.matchTolerance : 60);
   // Per-rating CAP for the exploratory scan (replaces the old all-vs-one-per-rating toggle, which
   // it subsumes): how many PSDs a single pain rating may absorb PER CHANNEL, and the refractory gap
@@ -994,6 +982,11 @@ function Biomarkers() {
                 </Grid>
               </Card>
             </Grid>
+
+            {requestParams && <Grid item xs={12}><BiomarkerHeatmapGrids
+              participantUid={participant_uid} requestParams={requestParams}
+              pageMetric={metric} availableMetrics={data?.available_metrics || DEFAULT_METRIC_OPTIONS}
+              metricLabel={metric} /></Grid>}
 
             {data && data.analytics ? (
               <BiomarkerAnalytics analytics={data.analytics} summary={data.summary}

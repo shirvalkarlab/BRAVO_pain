@@ -449,15 +449,16 @@ def test_a_few_cluster_edge_is_reported_rather_than_disqualified():
     e = E.actuation_edge(_toy_table(n_epochs=4, per_epoch=8), channel="CH", center_hz=20.5)
     assert e.estimate is not None and e.n_clusters == 4
     assert e.p == pytest.approx(2.0 / 16), "the enumerated floor at four clusters is 2/16"
-    assert e.ci is None and not e.resolved
+    assert e.ci is None and e.resolved and not e.statistically_established
     assert "UNBOUNDED" in e.note
     assert "FEW CLUSTERS" in e.note, "the historical marker stays, as information"
 
 
-def test_the_state_edge_and_therapy_edge_switch_on_the_same_condition():
+def test_state_auc_resamples_reports_while_therapy_slope_uses_cluster_bootstrap():
     import pandas as pd
     e2 = E.state_edge(_toy_table(n_epochs=9), channel="CH", center_hz=20.5)
-    assert e2.n_clusters == 9 and "WILD CLUSTER BOOTSTRAP-t" in e2.note
+    assert e2.n_clusters == 9 and "resampling whole pain reports" in e2.note
+    assert "area under the curve" in e2.scale
     dm = pd.DataFrame({"epoch": np.arange(10), "amp_mA_Left": np.linspace(1, 4, 10),
                        "nrs": 6 - 0.8 * np.linspace(1, 4, 10)
                               + np.random.default_rng(0).normal(0, 0.15, 10)})

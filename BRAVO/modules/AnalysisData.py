@@ -13,7 +13,7 @@ import pandas as pd
 from Server import models
 
 VERSION = "aditya-canonical-inputs-2"
-PRASAD_SOURCE = "d745360d898647048213c561d18e30e3064ad8e7"
+PRASAD_SOURCE = "8146f069af94dd71a590c1bfa702165778fd53b8"
 
 
 def _digest(value):

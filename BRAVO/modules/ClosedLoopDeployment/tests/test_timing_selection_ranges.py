@@ -1,10 +1,10 @@
-"""FDA SSED P960009/S478 Table 2 ranges, independently expressed in seconds here."""
+"""PI-confirmed tablet ranges, independently expressed in seconds; FDA discrepancy remains recorded."""
 import pytest
 
 from ClosedLoopDeployment import constraints as C
 
 
-@pytest.mark.parametrize('mode,maximum_s', [('dual', 360), ('single', 30)])
+@pytest.mark.parametrize('mode,maximum_s', [('dual', 30), ('single', 30)])
 @pytest.mark.parametrize('fraction,expected', [(-.01, False), (0, True), (.5, True), (1, True), (1.01, False)])
 def test_onset_selection_limits_not_trial_settings(mode, maximum_s, fraction, expected):
     onset_ms = maximum_s * fraction * 1000
@@ -15,7 +15,7 @@ def test_onset_selection_limits_not_trial_settings(mode, maximum_s, fraction, ex
 
 
 @pytest.mark.parametrize('key', ['transition_up_s', 'transition_down_s'])
-@pytest.mark.parametrize('value,expected', [(0, False), (.249, False), (.25, True), (4, True), (1800, True), (1800.001, False)])
+@pytest.mark.parametrize('value,expected', [(0, False), (.249, False), (.25, False), (1.999, False), (2, True), (4, True), (1800, True), (1800.001, False)])
 @pytest.mark.parametrize('mode', ['dual', 'single'])
 def test_both_transition_durations_use_seconds(key, value, expected, mode):
     assert C._p_d20({'threshold_mode': mode, 'declared_mode_timing': {key: value}}, {}) is expected
@@ -44,7 +44,7 @@ def test_sensing_only_inverse_has_no_therapy_onset_range():
     assert C._p_d21(c, {}) is None
 
 
-@pytest.mark.parametrize('key', ['averaging_ms_adaptive', 'detection_blanking_ms_adaptive', 'adaptive_startup_delay', 'fft_points', 'unrecognized'])
+@pytest.mark.parametrize('key', ['adaptive_startup_delay', 'fft_points', 'unrecognized'])
 def test_unverified_keys_never_turn_a_partial_check_into_a_pass(key):
     for declared in ({key: 30}, {'transition_up_s': 4, key: 30}, {key: 30, 'transition_up_s': 4}):
         assert C._p_d20({'threshold_mode': 'dual', 'declared_mode_timing': declared}, {}) is None
@@ -72,3 +72,9 @@ def test_evaluator_retains_advisory_severity_and_source_provenance():
     report = C.check_eligibility(c, {}, rules=rules)
     assert report.eligible and {x['rule_id'] for x in report.advisories} == {'D20', 'D21'}
     assert all(x['kind'] == 'advisory_failed' for x in report.advisories)
+
+
+@pytest.mark.parametrize('key', ['averaging_ms_adaptive', 'detection_blanking_ms_adaptive'])
+@pytest.mark.parametrize('value,expected', [(0, True), (30000, True), (30001, False), (None, None), (float('nan'), None)])
+def test_newly_documented_tablet_ranges_have_explicit_boundaries(key, value, expected):
+    assert C._p_d20({'threshold_mode': 'dual', 'declared_mode_timing': {key: value}}, {}) is expected

@@ -35,9 +35,9 @@ test('real cache hook keeps optimizer mount read-only, starts on click and cache
   SessionController.query.mockImplementation(url=>Promise.resolve(url==='/api/queryServerIdentity'?identity:
     url==='/api/queryStimOptimizer'?(++n===1?{status:202,headers:{'retry-after':'1'},data:{status:'running'}}:{status:200,data:payload}):{status:200,data:{}}));
   render(<View><StimOptimizer/></View>);
-  await waitFor(()=>expect(screen.getByRole('button',{name:'Start analysis'})).toBeTruthy());await settle();
+  expect(await screen.findByRole('button',{name:'Run optimizer'})).toBeTruthy();await settle();
   expect(scienceCalls('/api/queryStimOptimizer')).toHaveLength(0);
-  fireEvent.click(screen.getByRole('button',{name:'Start analysis'}));
+  fireEvent.click(screen.getByRole('button',{name:'Run optimizer'}));
   await waitFor(()=>expect(scienceCalls('/api/queryStimOptimizer')).toHaveLength(1));
   const body=scienceCalls('/api/queryStimOptimizer')[0][1];const {ParticipantId,...settings}=body;
   expect(settings).toMatchObject({Sites:['left_leg','back'],Hemispheres:['Left','Right'],WashinMin:1,NBatches:3,Q:4});
@@ -54,6 +54,8 @@ test.each([false,true])('real biomarker Compute uses committed current controls 
   expect(scienceCalls('/api/queryBiomarkerAnalysis')).toHaveLength(0);
   await waitFor(()=>expect(screen.getByRole('button',{name:/Start exploratory analysis/}).disabled).toBe(false));
   fireEvent.click(screen.getByRole('button',{name:/Start exploratory analysis/}));
+  // Only the deliberately unresolved identity case can assert that work is still blocked.
+  // eslint-disable-next-line jest/no-conditional-expect
   if(!saved){await settle();expect(scienceCalls('/api/queryBiomarkerAnalysis')).toHaveLength(0);await act(async()=>releaseIdentity(identity));}
   await waitFor(()=>expect(scienceCalls('/api/queryBiomarkerAnalysis')).toHaveLength(1));
   const body=scienceCalls('/api/queryBiomarkerAnalysis')[0][1];const {ParticipantId,...settings}=body;

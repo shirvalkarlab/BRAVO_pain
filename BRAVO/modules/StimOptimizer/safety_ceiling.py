@@ -1,0 +1,143 @@
+"""The safety model's amplitude ceiling: a value the PI states, per participant and per side.
+
+WHERE IT REACHES THE PAGE. Stim Optimizer page: the per-arm cards ("safe ceiling N mA", the amber
+"above the reachable safe ceiling" mark), the queue table's ``safe`` column, the blockers list,
+and, under "Two-stage plan", each side's safe-cell count and the gate's "under the ceiling" check.
+The ceiling and its provenance are in the response under ``arms.<arm>.safety_anchors`` and
+``two_stage.stage1.audit.per_hemisphere.<side>.safety_ceiling``.
+
+THE RESPONSE KEY. ``bravo_service._code_digest`` hashes every ``.py`` file in this package, this
+one included, so changing a number in the table changes the key and every stored response
+rebuilds once. That is deliberate: a ceiling edited here must never be served from a copy computed
+under the old one."""
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+from .routines import objective as OBJ
+
+#: THE ONE PLACE TO CHANGE A PARTICIPANT'S CEILING. Participant uid -> side -> current in mA.
+#: A side that is absent, or a participant that is absent, falls back to the module hard limit
+#: with a provenance that says so; nothing is invented.
+PI_STATED_CEILING_MA = {}  # Participant-specific values remain in private reviewed storage.
+
+#: What the table's numbers rest on, printed beside every ceiling the page shows.
+PI_STATED_PROVENANCE = ("stated by PI, 2026-09-14 (was 5.0 mA, stated 2026-09-02 as the hard "
+                        "limit and confirmed as the safety ceiling 2026-09-12)")
+FALLBACK_PROVENANCE = "module hard limit, no PI-stated ceiling for this participant"
+
+#: An epoch counts as TOLERATED (severity 0 at its setting) when this side's current was above zero
+#: and the setting was held at least this long. Shared by the flat fit and Stage 1 so the two
+#: fitters read one rule (until 2026-09-12 Stage 1 also counted epochs at 0 mA on this side as
+#: tolerated anchors at zero current, and the flat fit did not; the two safe sets therefore
+#: differed for the same side under the same anchors). Zero current on a side is a different
+#: therapeutic state, not the low end of that side's dose axis (OBJECTIVE_SPEC amendment
+#: 2026-08-29), so it says nothing about what that side tolerates.
+TOLERATED_RULE = ("epochs with this side's current above 0 mA held at least min_tolerated_h hours, "
+                  "and not reported moderate or severe")
+
+
+def ceiling_for(participant_uid, hemisphere):
+    """``(ceiling_mA, provenance)`` for one side of one participant.
+
+    A stated ceiling above the module hard limit is clamped to it, because the search grid stops
+    there (``plots.AMP_GRID``) and a cell above the grid cannot be scored; the provenance says the
+    clamp happened. ``None`` for the participant or the side means the fallback.
+    """
+    hard = float(OBJ.AMP_HARD_LIMIT_MA)
+    table = PI_STATED_CEILING_MA.get(str(participant_uid)) if participant_uid is not None else None
+    value = table.get(str(hemisphere)) if isinstance(table, dict) else None
+    if value is None:
+        return hard, FALLBACK_PROVENANCE
+    v = float(value)
+    if not np.isfinite(v) or v <= 0:
+        raise ValueError(f"a stated ceiling must be a positive current in mA, got {value!r} "
+                         f"for {participant_uid} {hemisphere}")
+    if v > hard + 1e-9:
+        return hard, (f"{PI_STATED_PROVENANCE}; the stated {v:g} mA is above the module hard "
+                      f"limit of {hard:g} mA and is clamped to it")
+    return v, PI_STATED_PROVENANCE
+
+
+def ceilings_by_hemisphere(participant_uid, hemispheres=("Left", "Right")):
+    """``{side: (ceiling_mA, provenance)}`` for every requested side; what the service passes to
+    both fitters so they seed from one source."""
+    return {str(h): ceiling_for(participant_uid, h) for h in hemispheres}
+
+
+def ceiling_anchors(ceiling_mA, freq_grid):
+    """The severity-3 seed: one ``(rate_hz, ceiling_mA)`` pair per stimulation rate on the grid.
+
+    The shape the safety model already expects from ``SafetyGP.seed_from_history`` -- an
+    ``(n, 2)`` array of (frequency, current) pairs -- so the model's own code is untouched. One
+    anchor per rate makes the ceiling a flat line across the rate axis, which is what a stated
+    "not above N mA on this side" means; a single anchor at one rate would let the GP's length
+    scale in frequency decide how far the statement reaches.
+    """
+    c = float(ceiling_mA)
+    return np.array([[float(f), c] for f in freq_grid], dtype=float).reshape(-1, 2)
+
+
+def _intolerable_mask(d) -> pd.Series:
+    """True where the epoch carries a REPORTED severity in ``objective.SE_HARD_REJECT``. Absent
+    column, None or NaN is False: an unreported side effect is not a reported one (the same
+    distinction ``objective.build_objective`` keeps with ``se_observed``)."""
+    if "se_severity" not in d.columns:
+        return pd.Series(False, index=d.index)
+    sev = d["se_severity"].map(lambda v: str(v).strip().lower() if isinstance(v, str) else None)
+    return sev.isin(OBJ.SE_HARD_REJECT).fillna(False).astype(bool)
+
+
+def tolerated_anchors(D, amp_col, *, min_tolerated_h):
+    """The severity-0 seed: every ``(rate, current)`` this side sustained, under ``TOLERATED_RULE``.
+
+    2026-09-15 (audit finding 5a): an epoch the clinic sheet scored moderate or severe is barred
+    from the pain fit (``objective.SE_HARD_REJECT``, J = +inf) and until today was STILL handed
+    here as a severity-0 anchor because only current and hold time were checked -- telling the
+    safety model the opposite of what was reported. A reported intolerable severity now excludes
+    the epoch. Nothing else changed: a frame without the column, an unreported epoch and a mild
+    one are tolerated exactly as before.
+    """
+    d = pd.DataFrame(D)
+    amp = pd.to_numeric(d[amp_col], errors="coerce")
+    dur = pd.to_numeric(d["dur_h"], errors="coerce")
+    keep = (amp > 0) & (dur >= float(min_tolerated_h)) & ~_intolerable_mask(d)
+    return d.loc[keep, ["freq_hz", amp_col]].to_numpy(float).reshape(-1, 2)
+
+
+def n_intolerable_excluded(D, amp_col, *, min_tolerated_h) -> int:
+    """How many epochs would have been tolerated anchors on current and hold time alone but were
+    kept out because their reported severity is moderate or severe -- for the report."""
+    d = pd.DataFrame(D)
+    amp = pd.to_numeric(d[amp_col], errors="coerce")
+    dur = pd.to_numeric(d["dur_h"], errors="coerce")
+    return int(((amp > 0) & (dur >= float(min_tolerated_h)) & _intolerable_mask(d)).sum())
+
+
+def safety_seed(D, amp_col, *, freq_grid, ceiling=None, min_tolerated_h=72.0):
+    """``(X, severity, severity_var, meta)`` for ``SafetyGP.fit``, the one call both fitters make.
+
+    ``ceiling`` is ``(ceiling_mA, provenance)`` from :func:`ceiling_for`; ``None`` means the
+    fallback. ``meta`` carries the ceiling, its provenance, the anchors as lists, and the counts,
+    so a report can print exactly what the safety model was told.
+    """
+    from .routines import surrogate as SUR
+
+    if ceiling is None:
+        ceiling = ceiling_for(None, None)
+    ceiling_mA, provenance = float(ceiling[0]), str(ceiling[1])
+    limits = ceiling_anchors(ceiling_mA, freq_grid)
+    deliv = tolerated_anchors(D, amp_col, min_tolerated_h=min_tolerated_h)
+    X, sev, var = SUR.SafetyGP.seed_from_history(deliv, limits)
+    meta = dict(
+        safety_ceiling_mA=ceiling_mA,
+        safety_ceiling_provenance=provenance,
+        safety_ceiling_anchors=[[float(a), float(b)] for a, b in limits],
+        n_safety_ceiling_anchors=int(len(limits)),
+        n_tolerated_anchors=int(len(deliv)),
+        n_intolerable_excluded=n_intolerable_excluded(D, amp_col, min_tolerated_h=min_tolerated_h),
+        tolerated_rule=TOLERATED_RULE,
+        min_tolerated_h=float(min_tolerated_h),
+    )
+    return X, sev, var, meta

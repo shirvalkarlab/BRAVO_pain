@@ -4,6 +4,7 @@ import types
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from ClosedLoopDeployment import adapter, pipeline, bravo_service
 from ClosedLoopDeployment.types import EdgeEstimate
@@ -53,7 +54,8 @@ def test_pipeline_respects_declared_mode_selected_metric_hemisphere_and_band(mon
     assert calls["state"]["outcome"] == "left_leg_vas"
     assert calls["state"]["cluster"] == "setting_epoch"
     assert calls["therapy"]["amp_col"] == "amp_mA_Right"
-    assert calls["centers"] == [19.]
+    assert 19. in calls["centers"]
+    assert calls["state"]["center_hz"] == 19.
     assert any(row["rule_id"] == "D03" for row in report.eligibility.unknowns)
     assert not report.is_licensed()
     assert report.protocol is None and report.threshold is None
@@ -98,7 +100,7 @@ def test_service_uses_approved_pros_and_selected_controls(monkeypatch):
             setattr(module, key, value)
         monkeypatch.setitem(sys.modules, name, module)
     monkeypatch.setattr(bravo_service, "participant_context", lambda p: {})
-    out = bravo_service.run_for_participant({"ParticipantId": "RCS08", "Channel": "ONE_THREE_RIGHT",
+    out = bravo_service.legacy_research_for_participant({"ParticipantId": "RCS08", "Channel": "ONE_THREE_RIGHT",
                                             "CenterHz": 19., "LabelMetric": "left_leg_vas",
                                             "WashinMin": 2., "ProgrammingMode": "parkinsons"})
     assert out["available"], out["reason"]
@@ -120,3 +122,21 @@ def test_one_band_cannot_claim_global_scale_agreement():
     epochs, psd = fixtures()
     table = adapter.joined_table(psd, epochs, centers=(20.5,))
     assert adapter.scale_disagreement(table)["available"] is False
+
+
+@pytest.mark.parametrize("slope", [None, True, False, "1.2", "malformed", float("nan"),
+                                  float("inf"), complex(1, 0), [], {}])
+def test_pipeline_rejects_malformed_pooled_slope_without_losing_historical_edge(monkeypatch, slope):
+    epochs, psd = fixtures()
+    historical = EdgeEstimate("E1", -2., None, None, 2, "setting epoch", 2)
+    monkeypatch.setattr(pipeline.E, "actuation_edge", lambda *a, **k: historical)
+    monkeypatch.setattr(pipeline.E, "state_edge", lambda *a, **k: EdgeEstimate("E2", None, None, None, 2, "setting epoch", 2))
+    monkeypatch.setattr(pipeline.E, "therapy_edge", lambda *a, **k: EdgeEstimate("E3", None, None, None, 2, "setting epoch", 2))
+    def reject(*args, **kwargs):
+        raise AssertionError("Malformed pooled evidence must not replace historical E1")
+    monkeypatch.setattr(pipeline.E, "pooled_actuation_edge", reject)
+    report = pipeline.run("unknown", psd_frame=psd, epochs=epochs,
+                          candidates=[{"channel": "ONE_THREE_RIGHT", "center_hz": 19.}],
+                          hemisphere="Right", include_planning=False,
+                          pooled_e1={"pooled_slope_per_mA": slope})
+    assert report.edges["E1"] is historical

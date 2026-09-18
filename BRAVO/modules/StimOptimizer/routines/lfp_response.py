@@ -59,6 +59,39 @@ MIN_CAPTURE_SEPARATION_D = 0.5
 #: Minimum rows per capture arm before an estimate is reported at all.
 MIN_ROWS_PER_ARM = 8
 
+# Participant-specific provenance and examples are maintained outside source control.
+USE_DESIGN_CACHE = True
+_DESIGN_CACHE_MAX = 64
+_DESIGN_CACHE: dict = {}
+
+
+
+# Aditya canonical compatibility imports/constants.
+
+
+
+def _design_key(rhs, df):
+    parts = [rhs, df["amp"].to_numpy(float).tobytes()]
+    if "era" in rhs:
+        parts.append(tuple(df["era"].tolist()))
+    return tuple(parts)
+
+
+def _ols_fit(formula, df, **fit_kw):
+    """`smf.ols(formula, data=df).fit(**fit_kw)`, with the right-hand side cached per cell."""
+    import statsmodels.api as sm
+    from patsy import NAAction, dmatrix
+    lhs, rhs = (s.strip() for s in formula.split("~", 1))
+    key = _design_key(rhs, df)
+    exog = _DESIGN_CACHE.get(key)
+    if exog is None:
+        exog = dmatrix(rhs, df, return_type="dataframe", NA_action=NAAction(on_NA="drop"))
+        if len(_DESIGN_CACHE) >= _DESIGN_CACHE_MAX:
+            _DESIGN_CACHE.pop(next(iter(_DESIGN_CACHE)))
+        _DESIGN_CACHE[key] = exog
+    endog = df[[lhs]]
+    return sm.OLS(endog, exog, missing="drop").fit(**fit_kw)
+
 
 @dataclass
 class ResponseResult:
@@ -75,7 +108,11 @@ class ResponseResult:
     power_high: float = float("nan")
     derived_threshold: float = float("nan")
     captures_inverted: bool | None = None
-    separation_d: float = float("nan")
+    separation_d: float = float("nan")        # device units — the scale the device thresholds in
+    #: The same quantity computed on the logarithm of power. This is what `separation_d` used to
+    #: hold before 2026-09-06. It is kept so the two scales can be compared on any record and so
+    #: the correction is auditable; nothing decides anything on it.
+    separation_d_on_log: float = float("nan")
     slope_log_per_mA: float = float("nan")
     slope_ci: tuple = (float("nan"), float("nan"))
     slope_p: float = float("nan")
@@ -89,7 +126,9 @@ class ResponseResult:
         verdict = "RESPONDS" if self.responds else "DOES NOT RESPOND"
         return (f"{verdict} — {self.reason} | captures {self.power_low:.4g} -> {self.power_high:.4g} "
                 f"device units at {self.amp_low_mA:.1f} -> {self.amp_high_mA:.1f} mA, "
-                f"separation d={self.separation_d:.2f}, era-adjusted log slope "
+                f"the two readings are {self.separation_d:.2f} scatter-widths apart in device "
+                f"units ({self.separation_d_on_log:.2f} if measured on the logarithm), "
+                f"era-adjusted log slope "
                 f"{self.slope_log_per_mA:+.4f}/mA (p={self.slope_p:.4g})")
 
 
@@ -180,10 +219,38 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
     thr = 0.75 * (P_hi - P_lo) + P_lo
 
     lg = np.log(p)
-    s_lo, s_hi = lg[m_lo], lg[m_hi]
-    pooled = np.sqrt(((s_lo.size - 1) * s_lo.var(ddof=1) + (s_hi.size - 1) * s_hi.var(ddof=1))
-                     / max(1, s_lo.size + s_hi.size - 2))
-    sep_d = float(abs(s_lo.mean() - s_hi.mean()) / pooled) if pooled > 0 else float("inf")
+
+    # HOW FAR APART THE TWO POWER MEASUREMENTS ARE, IN DEVICE UNITS. Corrected 2026-09-06 after the
+    # PI asked which units this used and suspected an error. He was right: until today this number
+    # was computed on np.log(p) while everything around it was in device units, and the two are not
+    # the same scale.
+    #
+    # WHY DEVICE UNITS ARE THE RIGHT SCALE HERE. The device puts its switching value BETWEEN the two
+    # measurements, at 0.75 of the way from the lower to the higher, and it does that arithmetic in
+    # its own units (manual p. 39: band power is the linear sum of squared magnitude, giving values
+    # of order 100-200). Whether the signal will actually spend reliable time on both sides of that
+    # switching value therefore depends on how much the readings scatter in DEVICE UNITS around it.
+    # A gap measured on the logarithm answers a different question, and because a logarithm squashes
+    # large values, two readings that look well separated on a log scale can overlap badly in the
+    # units the device works in, and the other way round.
+    #
+    # A CAVEAT RECORDED HONESTLY RATHER THAN HIDDEN. Band power is strongly right-skewed, so a
+    # standardised gap on the raw device scale is influenced more by the scatter of the
+    # higher-power group than a log-scale one would be. That is a real statistical cost and it is
+    # why the logarithm was used originally. It does not change the decision: the quantity this test
+    # is meant to protect is the placement of a switching value in device units, so device units are
+    # what it must be measured in. The log-scale number is kept alongside as
+    # `separation_d_on_log` so the two can always be compared and so the change is auditable.
+    def _standardised_gap(v_lo, v_hi):
+        pooled_sd = np.sqrt(((v_lo.size - 1) * v_lo.var(ddof=1)
+                             + (v_hi.size - 1) * v_hi.var(ddof=1))
+                            / max(1, v_lo.size + v_hi.size - 2))
+        if not np.isfinite(pooled_sd) or pooled_sd <= 0:
+            return float("inf")
+        return float(abs(v_lo.mean() - v_hi.mean()) / pooled_sd)
+
+    sep_d = _standardised_gap(p[m_lo], p[m_hi])                 # device units — the one that counts
+    sep_d_log = _standardised_gap(lg[m_lo], lg[m_hi])           # kept only for comparison
 
     expected_lower_at_high = (mode_requires == "suppression")
     observed_lower_at_high = P_hi < P_lo
@@ -199,7 +266,6 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
     try:
         import statsmodels.formula.api as smf
         df = pd.DataFrame({"logp": lg, "amp": a})
-        slope_unadj = float(smf.ols("logp ~ amp", data=df).fit().params["amp"])
         formula = "logp ~ amp"
         if era_v is not None and pd.Series(era_v).nunique() > 1:
             df["era"] = pd.Series(era_v).astype(str).values
@@ -209,7 +275,12 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
         if clus is not None and pd.Series(clus).nunique() > 1:
             df["clus"] = pd.Series(clus).values
             fit_kw = dict(cov_type="cluster", cov_kwds={"groups": df["clus"]})
-        res = smf.ols(formula, data=df).fit(**fit_kw)
+        if USE_DESIGN_CACHE:
+            slope_unadj = float(_ols_fit("logp ~ amp", df).params["amp"])
+            res = _ols_fit(formula, df, **fit_kw)
+        else:
+            slope_unadj = float(smf.ols("logp ~ amp", data=df).fit().params["amp"])
+            res = smf.ols(formula, data=df).fit(**fit_kw)
         slope = float(res.params["amp"])
         lo_ci, hi_ci = res.conf_int().loc["amp"]
         ci = (float(lo_ci), float(hi_ci))
@@ -246,6 +317,7 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
                           amp_low_mA=lo_a, amp_high_mA=hi_a,
                           power_low=P_lo, power_high=P_hi, derived_threshold=float(thr),
                           captures_inverted=inverted, separation_d=sep_d,
+                          separation_d_on_log=sep_d_log,
                           slope_log_per_mA=slope, slope_ci=ci, slope_p=pval,
                           slope_unadjusted=slope_unadj, n_eras=n_eras, notes=notes)
 
@@ -268,14 +340,16 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
 # apart and overlapping really would chatter. Loosening the floor to admit it would be loosening a
 # safety-relevant gate to accommodate an experimental design choice.
 #
-# WHAT IS ACTUALLY WRONG is that the module returns ONE refusal for two different situations:
+# WHAT WAS ACTUALLY WRONG is that the module returned ONE refusal for two different situations:
 # "this band does not respond to amplitude" and "this band may well respond, but the ladder was too
-# narrow to place a threshold on". Those have opposite remedies -- abandon the band, or widen the
-# ladder -- and the screen currently reports them identically. The helpers below separate them by
-# asking what span the OBSERVED slope would need in order to clear the floor. That converts
-# "refused: captures too close" into "refused: captures too close; at this slope the ladder would
-# need N mA", which is a protocol instruction rather than a dead end.
+# narrow to place a threshold on". Three helpers once sat here to separate them by asking what span
+# the OBSERVED slope would need in order to clear the floor (`expected_separation_d`,
+# `within_arm_sd_from_result`, `span_needed_for_separation`). They were reached by nothing in the
+# running platform and were deleted on the PI's decision of 2026-09-12 (review S14); the reasoning
+# above about the floor stands on its own and is why the floor still does not scale with the span.
 
+
+# Retained active Aditya interfaces.
 def expected_separation_d(slope_log_per_mA, amp_span_mA, within_arm_sd):
     """The standardised separation a given slope implies over a given amplitude span.
 

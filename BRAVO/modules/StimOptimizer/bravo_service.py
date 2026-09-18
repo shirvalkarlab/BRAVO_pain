@@ -11,30 +11,435 @@ HONESTY CONTRACT
 This module's whole point is that it must be able to say "the data do not support a
 recommendation". ``run_for_participant`` therefore always returns:
 
-* ``recommendation_supported`` — False unless at least one arm resolves its optimum against its own
-  posterior uncertainty. As of 2026-08-30 no RCS08 arm does.
-* ``arms[].optimum_resolved`` — per-arm version of the same test.
-* ``blockers`` — the reasons a recommendation is withheld, in plain language, so the UI shows them
-  next to the figures instead of the reader having to infer it from a chart.
-
 A caller that ignores those fields and reads ``opt_freq_hz``/``opt_amp_mA`` as a recommendation is
-misusing the module.
-"""
+misusing the module."""
 from __future__ import annotations
 
 import logging
+import os
 
 import numpy as np
 import pandas as pd
 
 from . import adapter
+from . import clinic_pain as CLPAIN
+from . import current_map_schedule as CMS
 from . import pipeline
+from . import safety_ceiling as SC
+from . import stage1_openloop as S1
 from .routines import plots as PLT
+
+# THE IMPORT ROOT DIFFERS BETWEEN THE TWO TEST RUNNERS, so both spellings are tried (see adapter).
+try:
+    from modules.CacheStore import provenance as _provenance
+    from modules.CacheStore import store as _cache_store
+except ImportError:                                   # pragma: no cover - depends on the runner
+    from modules.CacheStore import provenance as _provenance
+    from modules.CacheStore import store as _cache_store
 
 _log = logging.getLogger(__name__)
 
 DEFAULT_SITES = ("left_leg", "back")
 DEFAULT_HEMISPHERES = ("Left", "Right")
+
+# Participant-specific provenance and examples are maintained outside source control.
+BLAS_THREADS_ENV = "STIM_OPTIMIZER_BLAS_THREADS"
+
+
+
+# Aditya canonical compatibility imports/constants.
+
+
+
+
+
+
+def _blas_threads_capped():
+    """Context manager: the BLAS/LAPACK thread pool capped for the duration, or a no-op."""
+    import contextlib
+    raw = os.environ.get(BLAS_THREADS_ENV, "1").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 1
+    if n <= 0:
+        return contextlib.nullcontext()
+    try:
+        from threadpoolctl import threadpool_limits
+    except ImportError:                               # pragma: no cover - host runner
+        return contextlib.nullcontext()
+    return threadpool_limits(limits=n, user_api="blas")
+
+#: ==========================================================================================
+#: TRACK A STEP 8 — "Have Stim Optimizer read the store and write its outputs back".
+#:
+#: READS. The matched table comes through `adapter.build_design_matrix`, which asks the store as
+#: `stim_optimizer` (step 5). The amplitude effect on every band is read here as the NEWEST entry
+#: the closed-loop module wrote (step 7), again as `stim_optimizer`: that is the edge the
+#: provenance refusal exists for, and it is exercised on every request. The response says which
+#: tile entry that table describes and whether it is the current one, so a reader is never handed
+#: a verdict about an older recording set without being told.
+#:
+#: WRITES. Four products with the chain of everything they derived from: the summary per arm (an
+#: arm is one pain site on one brain side, fitted on its own), the
+#: exploration ladder (the queue), the batch, and the manifest with the blockers. And the response
+#: itself, served back when nothing feeding it has changed. A stored response whose chain contains
+#: this module's own ladder is REFUSED by the store; the refusal is reported in the response and
+#: the request computes fresh, because a page must not go blank over a loop in its inputs and a
+#: silent recompute would hide the loop.
+#:
+#: WHAT THE AMPLITUDE TABLE DOES NOT YET DO. It is read and reported. Feeding it into the
+#: exploration queue's arithmetic is a modelling decision (open item 3 in the decision log) and
+#: is not made here.
+#: ==========================================================================================
+RESPONSE_KIND = "stim_optimizer_response"
+SUMMARY_KIND = "stim_optimizer_summary"
+LADDER_KIND = "exploration_ladder"
+BATCH_KIND = "exploration_batch"
+MANIFEST_KIND = "stim_optimizer_manifest"
+AMPLITUDE_KIND = "amplitude_effect_by_band"
+GROUND_TRUTH_KIND = "ground_truth_verdict"
+_RULE_VERSION = "v1_four_outputs"
+
+#: Response fields that describe the run that produced the response, not its results.
+#: Tests point this at a directory of their own; passed through to the one store.
+_SHARED_CACHE_DIR_OVERRIDE = None
+
+
+def _tiles_key_for(participant):
+    """`(key, reason)`: the store key of the current tile entry, or None and why there is none."""
+    try:
+        try:
+            from modules.Biomarkers import bravo_service as _bsvc
+        except ImportError:
+            from modules.Biomarkers import bravo_service as _bsvc
+        uid = getattr(participant, "uid", participant)
+        sig = _bsvc._raw_lsb_shared_signature(uid, _bsvc._LSB_SPECTRUM_CENTERS)
+        if sig is None:
+            return None, "the participant has no tile entry to key on (no recordings on the server)"
+        return _cache_store.product_key(_bsvc._RAW_LSB_SHARED_KIND, uid, sig), None
+    except Exception as exc:                          # noqa: BLE001 — no server, no tile key
+        return None, f"the tile key could not be built: {exc!r}"
+
+
+def _code_digest():
+    """A digest of this module and its routines, so a change to the arithmetic changes the key.
+
+    The fitted surface depends on constants spread through `pipeline.py` and `routines/`; naming
+    each one in the key by hand is how a stale response gets served after someone edits a bound.
+    A deployment therefore invalidates every stored response, which decision 26 accepted for the
+    tile store for the same reason.
+    """
+    import glob
+    import hashlib
+    here = os.path.dirname(os.path.abspath(__file__))
+    files = sorted(glob.glob(os.path.join(here, "*.py"))
+                   + glob.glob(os.path.join(here, "routines", "*.py")))
+    h = hashlib.blake2b(digest_size=8)
+    for f in files:
+        h.update(os.path.relpath(f, here).encode())
+        with open(f, "rb") as fh:
+            h.update(fh.read())
+    return h.hexdigest()
+
+
+_CODE_DIGEST = _code_digest()
+
+
+def summarise_amplitude_effect(table, *, lo_hz, hi_hz):
+    """Per contact, side, rate and band inside the adaptive window: how many runs, how many
+    currents at most and over what range, whether any run showed a straight-line movement at
+    p < 0.05, whether curvature could be assessed. Counts, not adjectives.
+
+    `any_detectable_movement` has three values: True, movement was detected in at least one run;
+    False, a line was fitted in at least one run and none reached p < 0.05 across the currents
+    tested; None, no line could be fitted at all. A False is listed with the number and range of
+    currents and the smallest standard error of the slope, because "no movement was detectable"
+    is a statement about what those currents could show and not about the band.
+    """
+    empty = {"rows": [], "n_rows_read": 0, "n_rows_in_window": 0, "n_rows_not_grouped": 0,
+             "combinations_with_no_detectable_movement": [], "combinations_not_assessed": []}
+    if table is None or len(table) == 0:
+        return empty
+    t = table[(table["band_center_hz"] >= float(lo_hz)) & (table["band_center_hz"] <= float(hi_hz))]
+    keys = ["sensing_contact", "ramped_side", "stimulation_rate_hz", "band_center_hz"]
+    rows, no_movement, not_assessed = [], [], []
+    grouped = 0
+    for k, g in t.groupby(keys, sort=True):
+        grouped += len(g)
+        p = pd.to_numeric(g["slope_p"], errors="coerce")
+        se = pd.to_numeric(g.get("slope_stderr"), errors="coerce") if "slope_stderr" in g else None
+        fitted = int(p.notna().sum())
+        detectable = True if bool((p < 0.05).any()) else (False if fitted else None)
+        curv = bool(pd.to_numeric(g["p_curvature"], errors="coerce").notna().any())
+        row = {"sensing_contact": k[0], "ramped_side": k[1],
+               "stimulation_rate_hz": _jsonable(k[2]), "band_center_hz": float(k[3]),
+               "n_runs": int(len(g)), "n_runs_with_a_fitted_line": fitted,
+               "max_currents_tested": int(pd.to_numeric(g["n_currents_tested"]).max()),
+               "current_min_mA": _jsonable(pd.to_numeric(g["current_min_mA"]).min()),
+               "current_max_mA": _jsonable(pd.to_numeric(g["current_max_mA"]).max()),
+               "best_slope_p": _jsonable(p.min()),
+               "min_slope_stderr": _jsonable(se.min()) if se is not None else None,
+               "any_detectable_movement": detectable,
+               "any_curvature_assessed": curv,
+               "fold_range": [_jsonable(pd.to_numeric(g["fold_max_over_min"]).min()),
+                              _jsonable(pd.to_numeric(g["fold_max_over_min"]).max())],
+               "visits": sorted(set(map(str, g["visit_date"])))}
+        rows.append(row)
+        flagged = {k2: row[k2] for k2 in ("sensing_contact", "ramped_side", "stimulation_rate_hz",
+                                          "band_center_hz", "n_runs", "max_currents_tested",
+                                          "current_min_mA", "current_max_mA", "min_slope_stderr")}
+        if detectable is False and not curv:
+            no_movement.append(flagged)
+        elif detectable is None:
+            not_assessed.append(flagged)
+    return {"rows": rows, "n_rows_read": int(len(table)), "n_rows_in_window": int(len(t)),
+            # rows the grouping dropped because one of its four keys was missing
+            "n_rows_not_grouped": int(len(t) - grouped),
+            "combinations_with_no_detectable_movement": no_movement,
+            "combinations_not_assessed": not_assessed}
+
+
+def amplitude_effect_block(participant, *, tiles_key_now):
+    """Read the newest amplitude-effect table as Stim Optimizer and report it."""
+    from .routines import percept_adaptive as _pa
+    uid = str(getattr(participant, "uid", participant))
+    block = {"available": False, "read_as": "stim_optimizer", "store_key": None}
+    try:
+        table, stamp = _cache_store.load_newest(AMPLITUDE_KIND, uid, consumer="stim_optimizer",
+                                                root=_SHARED_CACHE_DIR_OVERRIDE)
+    except _provenance.SelfDerivedProduct as exc:
+        block["reason"] = f"refused by the store: {exc}"
+        block["refused"] = True
+        return block
+    except Exception as exc:                          # noqa: BLE001
+        block["reason"] = f"could not be read: {exc!r}"
+        return block
+    if table is None:
+        if stamp:
+            block["reason"] = (f"the newest amplitude-effect entry (written "
+                               f"{stamp.get('written_utc')}) could not be read and was discarded; "
+                               f"the closed-loop deployment page writes it again")
+        else:
+            block["reason"] = ("no amplitude-effect table has been written for this "
+                               "participant; the closed-loop deployment page writes it")
+        return block
+    chain = stamp.get("provenance") or []
+    tiles_in_chain = [c.get("key") for c in chain if c.get("kind") == "raw_lsb_tiles"]
+    lo, hi = _pa.ADAPTIVE_LFP_BAND_HZ
+    block.update({
+        "available": True,
+        "store_key": f"{AMPLITUDE_KIND}/{uid}/{stamp.get('signature_key')}",
+        "written_utc": stamp.get("written_utc"), "writer": stamp.get("writer"),
+        "provenance": chain,
+        "describes_current_recordings": (bool(tiles_key_now in tiles_in_chain)
+                                         if tiles_key_now and tiles_in_chain else None),
+        "adaptive_window_hz": [float(lo), float(hi)],
+        "summary": None,
+    })
+    try:
+        block["summary"] = summarise_amplitude_effect(table, lo_hz=lo, hi_hz=hi)
+    except Exception as exc:                          # noqa: BLE001
+        # The table is the closed-loop module's; a column it renamed must not take this request
+        # down, and must not be hidden either.
+        block["summary_error"] = f"the table could not be summarised: {exc!r}"
+    return block
+
+
+def ground_truth_block(participant, *, tiles_key_now):
+    """Read the newest ground-truth verdict (Track G step 2) as Stim Optimizer and report it.
+
+    This is the edge the provenance refusal was built for: the verdict is computed from
+    recordings whose settings Stim Optimizer's own ladder chose, so the store refuses a table
+    whose chain contains this module's output, and the refusal is reported rather than hidden.
+    The table is read and counted here; feeding it into the exploration arithmetic is a
+    modelling decision that is not made in this step.
+    """
+    uid = str(getattr(participant, "uid", participant))
+    block = {"available": False, "read_as": "stim_optimizer", "store_key": None}
+    try:
+        table, stamp = _cache_store.load_newest(GROUND_TRUTH_KIND, uid, consumer="stim_optimizer",
+                                                root=_SHARED_CACHE_DIR_OVERRIDE)
+    except _provenance.SelfDerivedProduct as exc:
+        block["reason"] = f"refused by the store: {exc}"
+        block["refused"] = True
+        return block
+    except Exception as exc:                          # noqa: BLE001
+        block["reason"] = f"could not be read: {exc!r}"
+        return block
+    if table is None:
+        block["reason"] = ("no ground-truth verdict has been written for this participant; the "
+                           "closed-loop deployment page writes it" if not stamp else
+                           "the newest ground-truth entry could not be read and was discarded")
+        return block
+    chain = stamp.get("provenance") or []
+    tiles_in_chain = [c.get("key") for c in chain if c.get("kind") == "raw_lsb_tiles"]
+    try:
+        routes = {str(k): int(v) for k, v in table["ground_truth_route"].value_counts().items()}
+        with_both = table.dropna(subset=["fold_device_over_voltage_trace"])
+        fold = with_both["fold_device_over_voltage_trace"].astype(float)
+        summary = {"n_rows": int(len(table)), "n_runs": int(table["run_label"].nunique()),
+                   "rows_by_route": routes,
+                   "device_spikes_excluded": int(table["device_spikes_excluded"].sum()),
+                   "rows_with_both_device_and_voltage_trace": int(len(with_both)),
+                   "fold_device_over_voltage_trace_min": _jsonable(fold.min()) if len(fold) else None,
+                   "fold_device_over_voltage_trace_max": _jsonable(fold.max()) if len(fold) else None}
+    except Exception as exc:                          # noqa: BLE001
+        summary = None
+        block["summary_error"] = f"the table could not be summarised: {exc!r}"
+    block.update({
+        "available": True,
+        "store_key": f"{GROUND_TRUTH_KIND}/{uid}/{stamp.get('signature_key')}",
+        "written_utc": stamp.get("written_utc"), "writer": stamp.get("writer"),
+        "provenance": chain,
+        "describes_current_recordings": (bool(tiles_key_now in tiles_in_chain)
+                                         if tiles_key_now and tiles_in_chain else None),
+        "summary": summary,
+    })
+    return block
+
+
+#: How many trailing elements of the response key describe the RESPONSE only and not the four
+#: tables (review S11, 2026-09-12, raised from 4): the deployable band range the evidence carries
+#: (two Biomarkers constants), the ClosedLoop flag (the readiness block only), the two-stage
+#: settings (the flag, the override reason AND the override's name, the explore-outside-the-
+#: adaptive-envelope override AND its name) and the figure backend. None of these changes the
+#: four tables, which come from the flat fit alone; keyed on them, two requests differing only
+#: in one of these would sweep each other's tables on every write.
+_RESPONSE_ONLY_KEY_TAIL = 10
+
+
+def _band_span_key_element():
+    """The deployable band range as a key element: the two Biomarkers constants the evidence
+    frame's centres depend on (`adapter.deployable_band_span`), which the code digest does not
+    cover because they live in another module (review S11). Their absence is itself a key
+    element, so a response computed without them is never served to a request that has them."""
+    try:
+        lo, hi = adapter.deployable_band_span()
+        return (float(lo), float(hi))
+    except Exception as exc:                              # noqa: BLE001 -- named, not hidden
+        return ("band span unavailable", type(exc).__name__)
+
+
+def _explore_outside_key_element(rd) -> str:
+    """The response-key element for the explore-outside-the-envelope override.
+
+    "absent" and "present but empty" produce different blocks (the second says the override was
+    ignored), so they must be different key elements, or a request naming the key with no reason
+    could be served a copy that never mentions it.
+    """
+    if TWO_STAGE_EXPLORE_OUTSIDE_KEY not in (rd or {}):
+        return "0:"
+    return "1:" + str((rd or {}).get(TWO_STAGE_EXPLORE_OUTSIDE_KEY) or "").strip()
+
+
+def _response_signature(uid, matched_key, tiles_key, amp_key, gt_key, request_data, sites, hemis,
+                        washin_min, backend, pain_key=None):
+    """The response key: every input and every setting the fitted result depends on, and the
+    response-only settings last, so `_products_signature` can drop them. `pain_key` is the
+    pain-relationship digest (`_pain_relationship_key`, decision 199): the readiness screen and
+    the gate read the stored Biomarkers grid, so a grid that changes which bands rise with pain
+    must not be served the old screen."""
+    rd = request_data or {}
+    return (RESPONSE_KIND, _RULE_VERSION, _CODE_DIGEST, str(uid), matched_key, tiles_key, amp_key,
+            gt_key, tuple(sites), tuple(hemis), float(washin_min),
+            int(rd.get("NBatches", 3)), int(rd.get("Q", 4)),
+            # ---- the response-only tail, `_RESPONSE_ONLY_KEY_TAIL` elements from here ----
+            _band_span_key_element(),
+            bool(rd.get("ClosedLoop", True)),
+            # The two-stage block is part of the stored response, so the flag and the override
+            # reason that shape it are in the key: a request without the flag is never served a
+            # copy that carries the block, and one with it is never served a copy without it.
+            # The NAMES travel too (review S11): the block prints them, so a second request with
+            # the same reason and a different name must not be served the first name.
+            bool(_two_stage_requested(rd)), str(rd.get(TWO_STAGE_OVERRIDE_REASON_KEY) or ""),
+            str(rd.get(TWO_STAGE_OVERRIDE_BY_KEY) or ""),
+            _explore_outside_key_element(rd),
+            str(rd.get(TWO_STAGE_EXPLORE_OUTSIDE_BY_KEY) or ""),
+            pain_key,
+            str(backend))
+
+
+def _products_signature(sig):
+    """The key of the four tables: the response key without the response-only tail.
+
+    The backend changes only whether figure JSON is in the response, the two-stage settings
+    change only whether the `two_stage` block is in it, the ClosedLoop flag only whether the
+    readiness block is, and the band range only what the evidence frame carries; none changes
+    the four tables. Keyed on them, two requests differing only in one of those would sweep
+    each other's tables on every write, since the store keeps one entry per kind and participant.
+    """
+    return tuple(sig[:-_RESPONSE_ONLY_KEY_TAIL])
+
+
+def _write_outputs(uid, sig, prov, rep, out):
+    """The four products and the response, through the store. Records what is present after."""
+    common = dict(writer="stim_optimizer", trigger="stim_optimizer_request", provenance=prov,
+                  root=_SHARED_CACHE_DIR_OVERRIDE)
+    # A stored entry the store REFUSED is still on disk under this key. Writing "if absent" would
+    # find it, write nothing, and leave every later request to be refused and recomputed again;
+    # so after a refusal the fresh, clean products replace it.
+    replace = bool(out["store"].get("refusal"))
+    out["store"]["replaced_refused_entry"] = replace
+    table_sig = _products_signature(sig)
+    ladder, batch = [], []
+    for label, arm in (getattr(rep, "arms", None) or {}).items():
+        for name, frame, target in (("queue", getattr(arm, "queue", None), ladder),
+                                    ("batch", getattr(arm, "batch", None), batch)):
+            if frame is None or len(frame) == 0:
+                continue
+            f = frame.reset_index(drop=True).copy()
+            # The pipeline's queue already carries its own `rank` (1 is the best cell); keep it
+            # rather than write a second one. On the live record the first version of this
+            # inserted `rank` unconditionally, pandas refused the duplicate, and nothing was
+            # written back at all.
+            if "rank" not in f.columns:
+                f.insert(0, "rank", range(1, len(f) + 1))
+            for name, value in (("hemisphere", str(getattr(arm, "hemisphere", ""))),
+                                ("site", str(getattr(arm, "site", ""))),
+                                ("arm", str(label))):
+                if name not in f.columns:
+                    f.insert(0, name, value)
+            target.append(f)
+    products = [
+        (SUMMARY_KIND, (getattr(rep, "summary", None)
+                        if getattr(rep, "summary", None) is not None and len(rep.summary)
+                        else None), None),
+        (LADDER_KIND, (pd.concat(ladder, ignore_index=True) if ladder else None), None),
+        (BATCH_KIND, (pd.concat(batch, ignore_index=True) if batch else None), None),
+        (MANIFEST_KIND, {"manifest": out.get("manifest"), "blockers": out.get("blockers"),
+                         "recommendation_supported": out.get("recommendation_supported"),
+                         "design_matrix": out.get("design_matrix")}, "pickle"),
+    ]
+
+    def put(kind, key, payload, fmt):
+        if replace:
+            _cache_store.store(kind, uid, key, payload, fmt=fmt, **common)
+        else:
+            _cache_store.store_if_absent(kind, uid, key, lambda p=payload: p, fmt=fmt, **common)
+        return _cache_store.read_stamp(kind, uid, key, root=_SHARED_CACHE_DIR_OVERRIDE) is not None
+
+    written = {}
+    for kind, payload, fmt in products:
+        if payload is None:
+            written[kind] = None
+            continue
+        try:
+            written[kind] = put(kind, table_sig, payload, fmt)
+        except Exception as exc:                      # noqa: BLE001
+            _log.warning("StimOptimizer: %s was not written back (%r)", kind, exc)
+            written[kind] = False
+    # `written` means present in the store under this request's key once the request is over.
+    # The response's own flag is set before the response is stored, because the stored copy
+    # cannot record the outcome of its own write; it is corrected in memory if the write fails.
+    written[RESPONSE_KIND] = True
+    out["store"]["written"] = dict(written)
+    try:
+        if not put(RESPONSE_KIND, sig, out, "pickle"):
+            out["store"]["written"][RESPONSE_KIND] = False
+    except Exception as exc:                          # noqa: BLE001
+        _log.warning("StimOptimizer: the response was not written back (%r)", exc)
+        out["store"]["written"][RESPONSE_KIND] = False
 
 
 def _jsonable(v):
@@ -68,6 +473,220 @@ def _frame_records(df, cols=None, limit=None):
     return [_jsonable(r) for r in d.to_dict("records")]
 
 
+#: ==========================================================================================
+#: THE RATE-STRATUM AND POOLED SURFACES (2026-09-14, following decisions 157/158).
+#:
+#: `two_stage.stage1.rate_strata` and `current_map_schedule` carry the NUMBERS decision 158's
+#: three-check honesty rule reads, but not the (left current, right current) surface those
+#: numbers describe -- so nothing could draw the heatmap the page needs to show WHY a rate reads
+#: flat, or WHERE the tried combinations sit. These two functions add it, read straight off the
+#: RateStratum/JointStratum objects Stage 1 already holds; no number here is recomputed.
+def _round_grid(a, ndigits=4):
+    """A 2-D array as a plain nested list, each finite value rounded, a non-finite value `None`
+    (never `NaN`, which is not valid JSON)."""
+    out = []
+    for row in np.asarray(a, float):
+        out.append([None if not np.isfinite(v) else round(float(v), ndigits) for v in row])
+    return out
+
+
+def _pain_reference(s1) -> dict:
+    """`{"pain_reference", "pain_item"}` from the objective table Stage 1 fitted on: the mean
+    rating at the setting in force, which every `mu` is relative to, and the item's name. Both
+    absent (empty dict) on a result built before the column existed."""
+    D = getattr(s1, "D", None)
+    if D is None or "pain_reference" not in getattr(D, "columns", ()) or len(D) == 0:
+        return {}
+    item = str(D["primary_item"].iloc[0]) if "primary_item" in D.columns else None
+    return dict(pain_reference=float(D["pain_reference"].iloc[0]), pain_item=item)
+
+
+def _rate_stratum_surface(rs) -> dict | None:
+    """The (amplitude-Left, amplitude-Right) surface for one FITTED `stage1_openloop.RateStratum`.
+
+    `mu[i][j]` / `sd[i][j]` / `safe[i][j]` are the posterior mean, its standard deviation, and
+    whether the cell clears the safety model, at `amps_mA[i]` on the left and `amps_mA[j]` on the
+    right -- both axes share the one grid the rate was fitted on
+    (`rs.grid.amps_left`, identical to `amps_right` since both sides are fit on
+    `stage1_openloop.JOINT_AMP_GRID`). `points` are the individual rated epochs the fit actually
+    regressed (`rs.meta["points"]`), never a grid cell -- the raw evidence a reader overlays ON
+    the surface.
+    """
+    if rs is None or not getattr(rs, "fitted", False) or rs.grid is None:
+        return None
+    amps = [round(float(v), 4) for v in np.asarray(rs.grid.amps_left, float)]
+    points = [dict(amp_left_mA=_jsonable(p.get("amp_left_mA")),
+                   amp_right_mA=_jsonable(p.get("amp_right_mA")),
+                   n_reports=_jsonable(p.get("n_reports")),
+                   J=_jsonable(p.get("J")), epoch=_jsonable(p.get("epoch")))
+             for p in ((rs.meta or {}).get("points") or [])]
+    return dict(amps_mA=amps, mu=_round_grid(rs.mu), sd=_round_grid(rs.sd),
+               safe=[[bool(v) for v in row] for row in np.asarray(rs.safe, bool)],
+               points=points)
+
+
+def _rate_stratum_lookup(s1) -> dict:
+    """`{(pw_us_left, pw_us_right, rate_hz), rounded: RateStratum}` over every joint stratum Stage
+    1 fitted, so a serialised `rate_strata` row can find its own raw object back."""
+    out = {}
+    for (pwl, pwr), sl in (getattr(s1, "slices", None) or {}).items():
+        for rate, rs in (getattr(sl, "rate_strata", None) or {}).items():
+            out[(round(float(pwl), 6), round(float(pwr), 6), round(float(rate), 6))] = rs
+    return out
+
+
+def _attach_rate_stratum_surfaces(records, s1):
+    """Add a `surface` key to every FITTED row of the already-serialised `rate_strata` records,
+    in place. An unfitted row (`fitted: False`) is left exactly as it was -- no `surface` key --
+    so the frontend's own presence check ("does this row carry a surface") is enough to tell a
+    fitted rate from one that never cleared the epoch floor."""
+    lut = _rate_stratum_lookup(s1)
+    for row in records:
+        if not row.get("fitted"):
+            continue
+        key = (round(float(row["pw_us_left"]), 6), round(float(row["pw_us_right"]), 6),
+              round(float(row["rate_hz"]), 6))
+        surf = _rate_stratum_surface(lut.get(key))
+        if surf is not None:
+            surf.update(_pain_reference(s1))
+        if surf is not None:
+            row["surface"] = surf
+    return records
+
+
+def _joint_pooled_surfaces(s1) -> dict:
+    """One entry per fitted (pulse-width-Left, pulse-width-Right) joint stratum:
+    `{"<pwl:g>_<pwr:g>": {pw_us_left, pw_us_right, surface_at_rate: {"<rate:g>": {amps_mA, mu, sd,
+    safe}}}}` -- the POOLED 3-input surface's own slice at each rate that stratum actually
+    delivered, for reference only (see `stage1_openloop.RateStratum`'s own docstring on why the
+    honest per-rate surface, not this one, decides a current). Built once per stratum rather than
+    once per rate-strata row, since every rate inside one stratum shares the one pooled fit."""
+    out = {}
+    for (pwl, pwr), sl in (getattr(s1, "slices", None) or {}).items():
+        key = f"{float(pwl):g}_{float(pwr):g}"
+        rates = {}
+        for rate in (getattr(sl, "rate_strata", None) or {}).keys():
+            fi = int(np.argmin(np.abs(np.asarray(sl.grid.freqs, float) - float(rate))))
+            mu3 = sl.grid.as_surface(sl.mu)[fi]
+            sd3 = sl.grid.as_surface(sl.sd)[fi]
+            safe3 = sl.grid.as_surface(np.asarray(sl.safe, float))[fi] > 0
+            rates[f"{float(rate):g}"] = dict(
+                amps_mA=[round(float(v), 4) for v in np.asarray(sl.grid.amps_left, float)],
+                mu=_round_grid(mu3), sd=_round_grid(sd3), **_pain_reference(s1),
+                safe=[[bool(v) for v in row] for row in safe3])
+        out[key] = dict(pw_us_left=float(pwl), pw_us_right=float(pwr), surface_at_rate=rates)
+    return out
+
+
+# Participant-specific provenance and examples are maintained outside source control.
+def sensing_display(channel) -> dict:
+    """`display_short` / `display_hemisphere` / `display_contacts` for a sensing contact pair,
+    from the Biomarkers formatter. Absent (None) when the formatter cannot be imported, never a
+    label invented here."""
+    try:
+        try:
+            from modules.Biomarkers.routines import analytics as _an
+        except ImportError:
+            from modules.Biomarkers.routines import analytics as _an
+        f = _an.format_channel(str(channel), region="")
+        return {"display_short": f["short"], "display_hemisphere": f["hemisphere"],
+                "display_contacts": f["contacts"]}
+    except Exception:                                     # noqa: BLE001 -- no label, not an error
+        return {"display_short": None, "display_hemisphere": None, "display_contacts": None}
+
+
+#: The cathode mark: a plain hyphen, exactly as the lab's own clinic sheets type it (read off the
+#: 2026-09-16 visit sheet, "L C+2- / R C+1-2-") -- never the superscript "⁻" this project used
+#: until that day (the PI: a typo, "all along").
+MINUS = "-"
+
+
+def stim_contacts_short(cathode, hemisphere) -> str | None:
+    """The programmed cathode contacts in the lab's and Medtronic's own form, read off the
+    2026-09-16 visit sheet: "L C+2-" for "2a-2b-2c" on the Left (monopolar: the case C is the
+    anode, contact 2 the cathode), "R C+1-2-" for "1a-1b-1c-2a-2b-2c" on the Right (double
+    monopolar), "L C+1a-1b-" when a ring is only partly used. None when nothing is recorded
+    ("none", empty, NaN)."""
+    if cathode is None:
+        return None
+    raw = str(cathode).strip()
+    if not raw or raw.lower() in ("none", "nan", "case"):
+        return None
+    side = "L" if str(hemisphere) == "Left" else ("R" if str(hemisphere) == "Right" else "")
+    segs = [t for t in raw.replace("+", "-").split("-") if t]
+    by_ring = {}
+    for t in segs:
+        digit = "".join(ch for ch in t if ch.isdigit())
+        letter = "".join(ch for ch in t if ch.isalpha()).lower()
+        by_ring.setdefault(digit, set()).add(letter)
+    parts = []
+    for digit in sorted(by_ring, key=lambda d: (d == "", d)):
+        letters = by_ring[digit]
+        if letters == {"a", "b", "c"} or letters == {""}:
+            parts.append(f"{digit}{MINUS}")
+        else:
+            parts.extend(f"{digit}{l}{MINUS}" for l in sorted(letters))
+    return f"{side} C+{''.join(parts)}".strip()
+
+
+def in_force_by_side(es, epochs=None) -> dict:
+    """The setting in force on EACH side: rate, that side's own pulse width and current, and its
+    programmed cathode contacts, with the epoch and the time it began. Empty when there is no
+    epoch; a side's value is None when its column is absent or empty, never the other side's.
+
+    READ FROM THE FULL EPOCH TABLE when one is given (review S7, 2026-09-12). ``es`` is the
+    matched table, which keeps only the epochs with at least one usable pain report, so its
+    newest epoch is the newest RATED setting -- and after a reprogramming, until the first
+    rating filed more than one minute later, that is the PREVIOUS setting, not the one the
+    device is on. ``epochs`` is ``adapter.exposure_epochs``'s output, every epoch rated or not;
+    its newest row is the setting in force. Each side's block then carries
+    ``has_ratings_yet`` (is that epoch in the matched table) and ``fitted_incumbent_epoch`` (the
+    newest rated epoch, which every surface's gain is referenced to, unchanged), and
+    ``differs_from_fitted_incumbent`` says when the two are not the same epoch. Without
+    ``epochs`` the matched table is read as before.
+    """
+    if es is None or len(es) == 0 or "t0" not in es.columns:
+        return {}
+    fitted = es.sort_values("t0").iloc[-1]
+    fitted_epoch = float(fitted["epoch"]) if "epoch" in es.columns else None
+    src = "matched table (newest rated epoch)"
+    row = fitted
+    if epochs is not None and len(epochs) and "t_start" in epochs.columns:
+        row = epochs.sort_values("t_start").iloc[-1]
+        src = "full epoch table (newest device setting, rated or not)"
+    rated = set(pd.to_numeric(es["epoch"], errors="coerce").dropna().astype(float)) \
+        if "epoch" in es.columns else set()
+    out = {}
+    for side in ("Left", "Right"):
+        def _col(name, r=row):
+            v = r.get(name) if hasattr(r, "get") else None
+            return None if v is None or (isinstance(v, float) and np.isnan(v)) else v
+        cath = _col(f"cathode_{side}")
+        epoch = _col("epoch")
+        has_ratings = (float(epoch) in rated) if epoch is not None else None
+        out[side] = {
+            "rate_hz": _jsonable(_col("freq_hz")),
+            "pulse_width_us": _jsonable(_col(f"pw_us_{side}")),
+            "amplitude_mA": _jsonable(_col(f"amp_mA_{side}")),
+            "contacts_raw": (None if cath is None else str(cath)),
+            "contacts_short": stim_contacts_short(cath, side),
+            "epoch": _jsonable(epoch),
+            "since_utc": _jsonable(_col("t_start") if _col("t_start") is not None else _col("t0")),
+            "source": src,
+            "has_ratings_yet": has_ratings,
+            "fitted_incumbent_epoch": _jsonable(fitted_epoch),
+            "differs_from_fitted_incumbent": (
+                bool(float(epoch) != float(fitted_epoch))
+                if epoch is not None and fitted_epoch is not None else None),
+            "note": (None if epoch is None or fitted_epoch is None or float(epoch) == float(fitted_epoch)
+                     else (f"the device has been on epoch {float(epoch):g} since "
+                           f"{_jsonable(_col('t_start'))}, but no pain rating has been filed under "
+                           f"it yet, so every surface's gain is still measured against epoch "
+                           f"{float(fitted_epoch):g}, the newest rated one")),
+        }
+    return out
+
+
 def design_matrix_summary(es: pd.DataFrame) -> dict:
     """What the warm start actually contains — shown above the figures so the reader sees the
     evidence base before any surface. Counts, not adjectives."""
@@ -94,7 +713,463 @@ def design_matrix_summary(es: pd.DataFrame) -> dict:
     return out
 
 
+# Participant-specific provenance and examples are maintained outside source control.
+TWO_STAGE_FLAG = "TwoStage"
+TWO_STAGE_OVERRIDE_REASON_KEY = "TwoStageOverrideReason"
+TWO_STAGE_OVERRIDE_BY_KEY = "TwoStageOverrideBy"
+#: THE ADAPTIVE ENVELOPE (2026-09-12, the PI: "don't recommend settings that adaptive cannot use
+#: unless there is a scientific or physiological reason"). Stage 1 now searches only settings the
+#: device's closed-loop mode can be programmed with (rate at or above the 55 Hz adaptive minimum,
+#: `routines/adaptive_envelope.py`) and reports what it excluded and why. These two keys are the
+#: exception the instruction allows: a NON-EMPTY reason under the first lifts the constraint and
+#: travels, with the name under the second, on the frozen configuration. The first key present
+#: with an empty reason changes nothing and the block says the override was ignored.
+TWO_STAGE_EXPLORE_OUTSIDE_KEY = "TwoStageExploreOutsideAdaptive"
+TWO_STAGE_EXPLORE_OUTSIDE_BY_KEY = "TwoStageExploreOutsideAdaptiveBy"
+TWO_STAGE_BACKEND = ("scikit-learn Gaussian process (StimOptimizer/routines/surrogate.py); "
+                     "PyTorch, GPyTorch and BoTorch are not used on this path -- the optional "
+                     "PyTorch backend was deleted on 2026-09-12 and no request can select it")
+
+
+def _two_stage_requested(request_data) -> bool:
+    v = (request_data or {}).get(TWO_STAGE_FLAG, False)
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "on")
+    return bool(v)
+
+
+def _two_stage_jsonable(v):
+    """`_jsonable`, extended for what the two-stage result objects carry: tables, dataclasses,
+    numpy scalars inside tuples used as dictionary keys, and sets."""
+    import dataclasses
+    if isinstance(v, pd.DataFrame):
+        return {"columns": [str(c) for c in v.columns],
+                "index": [_two_stage_jsonable(i) for i in v.index],
+                "records": [_two_stage_jsonable(r) for r in v.to_dict("records")]}
+    if dataclasses.is_dataclass(v) and not isinstance(v, type):
+        return {f.name: _two_stage_jsonable(getattr(v, f.name)) for f in dataclasses.fields(v)}
+    if isinstance(v, dict):
+        return {(("%g" % k) if isinstance(k, (float, np.floating)) else str(k)):
+                _two_stage_jsonable(x) for k, x in v.items()}
+    if isinstance(v, (set, frozenset)):
+        return [_two_stage_jsonable(x) for x in sorted(v, key=str)]
+    if isinstance(v, (list, tuple, np.ndarray, pd.Series)):
+        return [_two_stage_jsonable(x) for x in list(v)]
+    return _jsonable(v)
+
+
+def _frozen_joint_stratum(s1, frozen):
+    """The one `stage1_openloop.JointStratum` that the frozen configuration was chosen from, or
+    ``None`` when nothing was fitted (no adaptive-capable setting, or no strata at all)."""
+    if not frozen.settings:
+        return None
+    left = frozen.setting("Left") if any(s.hemisphere == "Left" for s in frozen.settings) else None
+    right = frozen.setting("Right") if any(s.hemisphere == "Right" for s in frozen.settings) else None
+    pwl = left.pw_us if left is not None else None
+    pwr = right.pw_us if right is not None else None
+    if pwl is None or pwr is None:
+        return None
+    return (s1.slices or {}).get((float(pwl), float(pwr)))
+
+
+def _joint_queue_frame(s1, frozen, limit=25):
+    """WHAT TO TEST NEXT: never-tested cells whose optimistic bound still beats the incumbent, on
+    the ONE joint stratum that was actually frozen -- the direct replacement for the old per-arm
+    "what to test at the next visit" table, now over (rate, amplitude-Left, amplitude-Right)
+    jointly rather than one side at a time.
+
+    Ordered by expected improvement exactly as `routines.acquisition.exploration_queue` orders it
+    (unchanged). Eligibility against the delivered-settings census -- whether a row is already on
+    the in-clinic testing schedule -- is NOT reproduced here: that annotation belongs to the flat,
+    per-arm pipeline's own `_queue_frame`, which cross-references a census this joint path does not
+    carry the same way, and building an equivalent joint version is future work, not silently
+    faked. This table therefore carries a `rank`, both currents, the predicted gain and its
+    uncertainty, and the expected improvement only.
+    """
+    sl = _frozen_joint_stratum(s1, frozen)
+    if sl is None or sl.queue is None or len(sl.queue) == 0:
+        return pd.DataFrame()
+    from .routines import acquisition as _ACQ
+    gx = sl.grid.grid_X()
+    idx = np.asarray(sl.queue, int)[:limit]
+    ei = _ACQ.expected_improvement(sl.mu[idx], sl.sd[idx], float(sl.incumbent_mu))
+    return pd.DataFrame({
+        "rank": np.arange(1, len(idx) + 1),
+        "freq_hz": gx[idx, 0], "amp_mA_left": gx[idx, 1], "amp_mA_right": gx[idx, 2],
+        "posterior_mean": sl.mu[idx], "posterior_sd": sl.sd[idx],
+        "expected_improvement": ei,
+        "prior_reports_at_this_cell": sl.n_reports[idx],
+    })
+
+
+def _joint_batch_frame(s1, frozen):
+    """The within-visit batch (``ACQ.select_batch_within_visit_joint``) for the ONE joint stratum
+    that was frozen, as a plain table."""
+    sl = _frozen_joint_stratum(s1, frozen)
+    if sl is None or not sl.batch:
+        return pd.DataFrame()
+    return pd.DataFrame([
+        dict(rank=i + 1, freq_hz=b.freq_hz, amp_mA_left=b.amp_mA_left, amp_mA_right=b.amp_mA_right,
+             posterior_mean=b.mu, posterior_sd=b.sd, acquisition=b.acq, reason=b.reason,
+             exploration_fraction=b.exploration_fraction)
+        for i, b in enumerate(sl.batch)])
+
+
+#: ==========================================================================================
+#: THE CLINIC-SHEET PAIN STREAM (2026-09-14). The PI's decision, verbatim: "Import all in-clinic
+#: AND at-home testing visits. Pull the in-clinic numbers separately (not in REDCap) as an
+#: independent data stream for system optimization (critical)." This fits the SAME per-rate
+#: (amplitude-Left, amplitude-Right) surfaces Stage 1 already fits on the REDCap stream, on the
+#: clinic-and-home testing workbooks alone -- never pooled with the REDCap stream, never changing
+#: the REDCap-based recommendation. See `StimOptimizer.clinic_pain`.
+def _side_effect_evidence_block(participant):
+    """`clinic_pain.amplitude_severity_evidence` on this participant's stored clinic steps, for
+    the closed-loop gate's over-envelope refusal (2026-09-15, the PI: "recompute always"). Never
+    raises: a failure comes back as a not-assessable answer naming the failure, so the gate still
+    says plainly that no statistic was available rather than quoting a stale one."""
+    try:
+        steps, _stamp, reason = CLPAIN.load_clinic_steps(participant, consumer="stim_optimizer",
+                                                          root=_SHARED_CACHE_DIR_OVERRIDE)
+        if steps is None or len(steps) == 0:
+            return dict(assessable=False, rho=None, p=None, n_scored_stim_on=0, n_above_4mA=0,
+                        reason=reason or "no clinic steps stored", sentence=None)
+        return CLPAIN.amplitude_severity_evidence(steps)
+    except Exception as exc:                                      # noqa: BLE001 -- adjunct block
+        _log.exception("StimOptimizer: the side-effect-versus-current statistic could not be computed")
+        return dict(assessable=False, rho=None, p=None, n_scored_stim_on=0, n_above_4mA=0,
+                    reason=f"could not be computed: {type(exc).__name__}: {exc}", sentence=None)
+
+
+def _clinic_stream_stage1_block(participant, *, hemispheres, safety_ceiling_by_hemisphere,
+                                redcap_pooled_var, in_force=None) -> dict:
+    """`{"rate_strata_clinic": [...], "clinic_stream": {...}}`. Never raises: a failure is
+    reported under `clinic_stream.reason` with `clinic_stream.available = False`."""
+    try:
+        fit = CLPAIN.fit_clinic_rate_strata(
+            participant, hemispheres=tuple(hemispheres),
+            safety_ceiling_by_hemisphere=safety_ceiling_by_hemisphere,
+            redcap_pooled_var=redcap_pooled_var, in_force=in_force,
+            root=_SHARED_CACHE_DIR_OVERRIDE)
+    except Exception as exc:                                      # noqa: BLE001 -- adjunct block
+        _log.exception("StimOptimizer: the clinic-sheet stream fit failed")
+        return {"rate_strata_clinic": [],
+               "clinic_stream": {"available": False,
+                                 "reason": f"the clinic-sheet fit could not run: "
+                                          f"{type(exc).__name__}: {exc}"}}
+    fit["visits"] = _clinic_stream_visits_summary(participant)
+    s1c = fit.pop("stage1_result", None)
+    if s1c is None or not fit.get("available"):
+        return {"rate_strata_clinic": [], "clinic_stream": fit}
+    rate_strata_clinic = _attach_rate_stratum_surfaces(
+        _frame_records(getattr(s1c, "rate_summary", None)), s1c)
+    for row in rate_strata_clinic:
+        row["source"] = "clinic_sheets"
+        row["n_visits"] = fit.get("n_files")
+        row["n_clinic"] = fit.get("n_clinic")
+        row["n_home"] = fit.get("n_home")
+    fit["strata_skipped"] = {str(k): str(v) for k, v in (s1c.skipped or {}).items()}
+    return {"rate_strata_clinic": rate_strata_clinic, "clinic_stream": fit}
+
+
+def _clinic_stream_visits_summary(participant) -> list:
+    """One row per visit date: setting, step/pain counts, rates and current ranges tried -- what
+    the page can list as "what was ingested" without re-reading the store's raw table."""
+    try:
+        steps, _stamp, reason = CLPAIN.load_clinic_steps(
+            participant, consumer="stim_optimizer", root=_SHARED_CACHE_DIR_OVERRIDE)
+    except Exception:                                             # noqa: BLE001
+        return []
+    if steps is None or len(steps) == 0:
+        return []
+    out = []
+    for (vdate, setting), sub in steps.groupby(["visit_date", "setting"]):
+        rates = sorted(float(r) for r in sub["freq_hz"].dropna().unique())
+        amps = pd.concat([sub["amp_mA_Left"], sub["amp_mA_Right"]]).dropna()
+        # Every row in the stored table already carries at least one pain score (that is what
+        # made it a step worth parsing), so "with pain" and "steps" are the same count here.
+        out.append(dict(
+            visit_date=str(vdate), setting=str(setting), n_steps=int(len(sub)),
+            n_with_pain=int(len(sub)), rates_hz=rates,
+            amp_mA_min=(float(amps.min()) if len(amps) else None),
+            amp_mA_max=(float(amps.max()) if len(amps) else None)))
+    out.sort(key=lambda r: r["visit_date"])
+    return out
+
+
+def _two_stage_payload(rep, *, inputs, seconds, in_force=None, clinic_block=None) -> dict:
+    """The `two_stage` block from a `pipeline.TwoStageReport`: Stage 1's frozen configuration,
+    the gate's verdict with each condition's reason and the evidence it read, Stage 2's output or
+    its refusal, and a provenance sentence per stage. Read from the report, never recomputed."""
+    s1, gate, s2, man = rep.stage1, rep.gate, rep.stage2, dict(rep.manifest or {})
+    frozen = s1.frozen
+    lfp = dict(man.get("lfp_evidence") or {})
+
+    settings = []
+    for s in frozen.settings:
+        settings.append({
+            "hemisphere": s.hemisphere,
+            "rate_hz": _jsonable(s.rate_hz),
+            "pulse_width_us": _jsonable(s.pw_us),
+            "amplitude_preferred_mA": _jsonable(s.amp_star_mA),
+            "amplitude_delivered_min_mA": _jsonable(s.amp_delivered_min_mA),
+            "amplitude_delivered_max_mA": _jsonable(s.amp_delivered_max_mA),
+            "n_epochs_fitted_on_the_chosen_stratum": _jsonable(s.n_epochs_fitted),
+            "rate_resolved": _jsonable(s.rate_resolved),
+            "pulse_width_resolved": _jsonable(s.pw_resolved),
+            "resolved": bool(s.resolved),
+            # The joint resolution's own numbers (2026-09-14): identical on both sides of one
+            # configuration, since there is one rate knob and one joint comparison against the
+            # incumbent now. Carried here so a reader (DecisionStrip.js) does not have to
+            # cross-reference the strata table to find the gain the verdict rests on.
+            "gain": _jsonable(getattr(s, "gain", float("nan"))),
+            "sd_of_difference": _jsonable(getattr(s, "sd_of_difference", float("nan"))),
+            "reasons": [str(r) for r in s.reasons],
+            "detail": _two_stage_jsonable(dict(s.detail or {})),
+        })
+    stage1 = {
+        "frozen_configuration": {
+            "settings": settings,
+            "primary_item": str(frozen.primary_item),
+            "incumbent_epoch": _jsonable(frozen.incumbent_epoch),
+            "incumbent_rate_hz": _jsonable(frozen.incumbent_rate_hz),
+            "incumbent_pulse_width_us": _jsonable(frozen.incumbent_pw_us),
+            # Each side's own pulse width in force, from its own column (review S1);
+            # `incumbent_pulse_width_us` above is the LEFT column's value, kept under its name.
+            "incumbent_pulse_width_us_by_side": _two_stage_jsonable(
+                dict(getattr(frozen, "incumbent_pw_us_by_side", None) or {})),
+            "data_horizon": str(frozen.data_horizon),
+            "washin_min": _jsonable(frozen.washin_min),
+            "n_epochs_total": _jsonable(frozen.n_epochs_total),
+            "resolved": bool(frozen.resolved),
+            "overridden": bool(frozen.overridden),
+            "override": _two_stage_jsonable(dict(frozen.override)) if frozen.override else None,
+            # The adaptive envelope (2026-09-12): whether the search was held to settings the
+            # closed-loop mode can use, what it excluded and why, and -- when lifted -- the stated
+            # reason and who gave it. Copied from Stage 1's own record; the per-side detail is
+            # under each setting's `detail.adaptive_envelope`.
+            "adaptive_envelope": _two_stage_jsonable(dict(getattr(frozen, "adaptive_envelope",
+                                                                  None) or {})),
+            # Stage 1 searches rate x pulse width x amplitude per side. The electrode contacts are
+            # not a searched dimension and the frozen configuration does not carry them; the
+            # sensing contact the gate's evidence came from is under `lfp_evidence.selected_key`.
+            "contacts": None,
+            "contacts_note": ("Stage 1 does not choose or freeze the stimulation contacts; it "
+                              "freezes the rate, the pulse width and the preferred amplitude on "
+                              "each side. The sensing contact behind the gate's LFP evidence is "
+                              "named in lfp_evidence.selected_key."),
+            # Each side's OWN setting in force (2026-09-12), read from the full epoch table
+            # (review S7): what the device is actually programmed to on each side, contacts
+            # included, whether or not a rating has been filed under it yet.
+            "in_force_by_side": dict(in_force or {}),
+        },
+        "strata": _frame_records(s1.summary),
+        # ONE ROW PER (pulse-width pair, rate) that was even attempted (2026-09-14): whether a
+        # per-rate current surface was fitted, its resolution verdict and numbers, and the
+        # pooled 3-input model's own slice at that rate for reference only. This is what
+        # actually decided the current under "frozen_configuration" above; see
+        # ``stage1_openloop.RateStratum``.
+        "rate_strata": _attach_rate_stratum_surfaces(
+            _frame_records(getattr(s1, "rate_summary", None)), s1),
+        # The POOLED 3-input surface's own slice at every rate a stratum delivered, once per
+        # (pulse-width-Left, pulse-width-Right) stratum -- reference only, never what a current is
+        # read off; see `_joint_pooled_surfaces` and `stage1_openloop.RateStratum`.
+        "pooled_surfaces": _joint_pooled_surfaces(s1),
+        "strata_skipped": {str(k): str(v) for k, v in (s1.skipped or {}).items()},
+        "audit": _two_stage_jsonable(dict(s1.audit or {})),
+        # WHAT TO TEST NEXT, from the JOINT stratum that was actually frozen (2026-09-14). There
+        # is one such stratum now, not one per side (rate is shared), so there is one queue and
+        # one batch rather than a per-arm pair. Never rate/amplitude combinations already
+        # delivered -- `ACQ.exploration_queue`'s own rule, unchanged.
+        "queue": _frame_records(_joint_queue_frame(s1, frozen)),
+        "batch": _frame_records(_joint_batch_frame(s1, frozen)),
+        "describe": frozen.describe(),
+        # THE CLINIC-SHEET PAIN STREAM (2026-09-14), independent of everything above: the SAME
+        # per-rate surface shape, fitted on the clinic-and-home testing workbooks alone. Never
+        # pooled with the REDCap-based `rate_strata`; see `_clinic_stream_stage1_block`.
+        "rate_strata_clinic": (clinic_block or {}).get("rate_strata_clinic", []),
+        "clinic_stream": (clinic_block or {}).get(
+            "clinic_stream", {"available": False, "reason": "not requested"}),
+    }
+
+    conditions = []
+    for c in gate.conditions:
+        conditions.append({"name": c.name, "verdict": c.verdict, "passed": _jsonable(c.passed),
+                           "overridden": bool(c.overridden), "detail": str(c.detail),
+                           "evidence": _two_stage_jsonable(dict(c.evidence or {}))})
+    gate_block = {
+        "passed": bool(gate.passed),
+        "verdict": gate.headline,
+        "n_conditions": len(gate.conditions),
+        "conditions": conditions,
+        "refusals": [{"condition": n, "reason": d} for n, d in gate.refusals()],
+        "failed": list(gate.failed_names()),
+        "not_assessed": list(gate.not_assessed_names()),
+        "describe": gate.describe(),
+    }
+
+    if s2.started:
+        stage2 = {
+            "started": True,
+            "n_valid_policies": int(s2.n_valid),
+            "n_rejected": int(len(s2.rejected)) if s2.rejected is not None else 0,
+            "policies": _frame_records(s2.policies),
+            "rejected": _frame_records(s2.rejected, limit=200),
+            "best": (_two_stage_jsonable(s2.best().to_dict()) if s2.best() is not None else None),
+            "ranking_basis": str(s2.ranking_basis),
+            "ranking_assessed": _jsonable(s2.ranking_assessed),
+            "notes": [str(n) for n in s2.notes],
+            "describe": s2.describe(),
+        }
+    else:
+        stage2 = {
+            "started": False,
+            "reason": ("the gate refused, so Stage 2 did not start; the refusals are listed "
+                       "under gate.refusals and repeated here"),
+            "refusal_reasons": [{"condition": n, "reason": d} for n, d in s2.refusal_reasons],
+            "notes": [str(n) for n in s2.notes],
+            "describe": s2.describe(),
+        }
+
+    sel = lfp.get("selected_key")
+    env = dict(getattr(frozen, "adaptive_envelope", None) or {})
+    env_sentence = ""
+    if env.get("statement"):
+        env_sentence = (f" The search was {env['statement']}"
+                        + (f"; {env.get('n_exclusions', 0)} exclusion(s) are listed under the "
+                           "frozen configuration" if env.get("constrained") else "")
+                        + "." + (f" NOTE: {env['override_ignored']}."
+                                 if env.get("override_ignored") else ""))
+    provenance = {
+        "stage1": (f"Stage 1 read the matched therapy-and-pain table this request loaded "
+                   f"({inputs.get('matched_table') or 'no store key'}): "
+                   f"{frozen.n_epochs_total} epochs, primary outcome {frozen.primary_item}, "
+                   f"incumbent epoch {frozen.incumbent_epoch:g} at "
+                   f"{frozen.incumbent_rate_hz:g} Hz; {len(s1.slices)} pulse-width strata fitted, "
+                   f"{len(s1.skipped or {})} skipped." + env_sentence),
+        "gate": (f"The gate read the frozen configuration from Stage 1 and LFP evidence built "
+                 f"from the tile cache ({inputs.get('tiles') or 'no store key'}) with the "
+                 f"settings stream ({inputs.get('settings_stream') or 'no store key'}), pinned to "
+                 f"the frozen rate {lfp.get('pinned_rate_hz')} Hz: "
+                 + (f"cell {tuple(sel)} was selected"
+                    if sel else f"no cell was selected ({lfp.get('refusal_class')})")
+                 + f"; {lfp.get('n_cells_screened', 0)} cells screened, "
+                   f"{lfp.get('n_cells_unbuildable', 0)} could not be built."),
+        "stage2": ("Stage 2 read the frozen configuration and the gate result"
+                   + (" and enumerated closed-loop policies on the selected LFP evidence."
+                      if s2.started else "; it did not start because the gate refused.")),
+    }
+
+    lfp_out = _two_stage_jsonable(lfp)
+    # The sensing contact the check read, in the page's form ("L 0⁻2⁺"), beside its raw key;
+    # and, per side (review S3), the contact each side's check read.
+    lfp_out["selected_display_short"] = (sensing_display(sel[0])["display_short"]
+                                         if sel and len(sel) else None)
+    for side, blk in (lfp_out.get("selected_by_side") or {}).items():
+        k = blk.get("selected_key") if isinstance(blk, dict) else None
+        if isinstance(blk, dict):
+            blk["selected_display_short"] = (sensing_display(k[0])["display_short"]
+                                             if k and len(k) else None)
+    return {
+        "requested": True,
+        "available": True,
+        "backend": TWO_STAGE_BACKEND,
+        "seconds": _jsonable(seconds),
+        "can_deploy_closed_loop": bool(rep.can_deploy_closed_loop()),
+        "stage1": stage1,
+        "gate": gate_block,
+        "lfp_evidence": lfp_out,
+        "stage2": stage2,
+        "manifest": _two_stage_jsonable({k: v for k, v in man.items() if k != "lfp_evidence"}),
+        "inputs": dict(inputs),
+        "provenance": provenance,
+        "describe": rep.describe(),
+    }
+
+
+def two_stage_block(participant, es, *, request_data, stream, washin_min, hemispheres, sites,
+                    data_horizon, inputs, in_force=None, evidence_inputs=None,
+                    safety_ceiling_by_hemisphere=None, pain_positive_by_channel=None) -> dict:
+    """Run the open-loop -> gate -> closed-loop path on this request's own inputs and report it.
+
+    Never raises into the response: a failure here is reported under `two_stage.reason` and the
+    open-loop optimizer's own result stands.
+    """
+    import time as _time
+    from .routines import objective as _obj
+
+    rd = request_data or {}
+    override_reason = rd.get(TWO_STAGE_OVERRIDE_REASON_KEY)
+    override_reason = str(override_reason).strip() if override_reason else None
+    # The explore-outside-the-adaptive-envelope override. `requested` is "the key is present",
+    # whatever it carries, so that a key with an empty reason is reported as ignored rather than
+    # treated as if it had never been sent.
+    explore_requested = TWO_STAGE_EXPLORE_OUTSIDE_KEY in rd
+    explore_reason = rd.get(TWO_STAGE_EXPLORE_OUTSIDE_KEY) if explore_requested else None
+    explore_reason = str(explore_reason).strip() if explore_reason else None
+    explore_by = (str(rd.get(TWO_STAGE_EXPLORE_OUTSIDE_BY_KEY)).strip()
+                  if explore_reason and rd.get(TWO_STAGE_EXPLORE_OUTSIDE_BY_KEY) else None)
+    t0 = _time.perf_counter()
+    # Recomputed from the clinic sheets on every request and handed to the gate, which quotes it
+    # (or says none was available) in an over-envelope refusal -- never a typed number.
+    side_effect_evidence = _side_effect_evidence_block(participant)
+    gate_kwargs = {"side_effect_evidence": side_effect_evidence}
+    if safety_ceiling_by_hemisphere:
+        gate_kwargs["ceiling_mA"] = safety_ceiling_by_hemisphere
+    try:
+        rep = pipeline.run_two_stage_live(
+            participant, design=es, stream=stream, request_data=request_data,
+            washin_min=float(washin_min), amp_ceiling=_obj.AMP_HARD_LIMIT_MA,
+            hemispheres=tuple(hemispheres), primary_item=str(tuple(sites)[0]),
+            data_horizon=data_horizon, evidence_inputs=evidence_inputs,
+            override_reason=override_reason,
+            override_by=(str(rd.get(TWO_STAGE_OVERRIDE_BY_KEY)) if override_reason
+                         and rd.get(TWO_STAGE_OVERRIDE_BY_KEY) else None),
+            explore_outside_adaptive_reason=explore_reason,
+            explore_outside_adaptive_by=explore_by,
+            explore_outside_adaptive_requested=explore_requested,
+            # The PI-stated ceiling per side (2026-09-12): the safety model's severity-3 seed
+            # in Stage 1, as in the flat fit, and the ceiling the gate checks the limits against.
+            stage1_kwargs=({"safety_ceiling_by_hemisphere": safety_ceiling_by_hemisphere}
+                           if safety_ceiling_by_hemisphere else None),
+            gate_kwargs=gate_kwargs,
+            # Which bands rise with pain per contact (decision 199): the screen that picks
+            # each side's cell and the gate that judges it read the same mapping.
+            pain_positive_by_channel=pain_positive_by_channel)
+    except Exception as exc:                          # noqa: BLE001 -- adjunct block
+        _log.exception("StimOptimizer: the two-stage path failed")
+        return {"requested": True, "available": False, "backend": TWO_STAGE_BACKEND,
+                "seconds": _jsonable(_time.perf_counter() - t0), "inputs": dict(inputs),
+                "reason": f"the two-stage path could not run: {type(exc).__name__}: {exc}"}
+    # The REDCap stream's own pooled within-setting variance, already computed inside Stage 1
+    # (`objective.build_objective`'s own `pooled_within_var` column) -- read back, not
+    # recomputed, and used ONLY as a fallback noise estimate for the clinic stream when the
+    # clinic stream cannot estimate its own (see `clinic_pain.fit_clinic_rate_strata`).
+    try:
+        _redcap_pooled_var = float(rep.stage1.D["pooled_within_var"].iloc[0])
+    except Exception:                                  # noqa: BLE001
+        _redcap_pooled_var = None
+    clinic_block = _clinic_stream_stage1_block(
+        participant, hemispheres=hemispheres,
+        safety_ceiling_by_hemisphere=safety_ceiling_by_hemisphere,
+        redcap_pooled_var=_redcap_pooled_var, in_force=in_force)
+    # The same answer the gate was given, beside the clinic stream it was computed from.
+    clinic_block.setdefault("clinic_stream", {})["side_effect_vs_current"] = _jsonable(
+        side_effect_evidence)
+    return _two_stage_payload(rep, inputs=inputs, seconds=_time.perf_counter() - t0,
+                              in_force=in_force, clinic_block=clinic_block)
+
+
 def run_for_participant(request_data: dict) -> dict:
+    """Build the design matrix from platform data, fit every arm, return a JSON-able payload."""
+    try:
+        with _blas_threads_capped():
+            return _run_for_participant(request_data)
+    except Exception as exc:
+        _log.exception("Stimulation research analysis failed")
+        raise RuntimeError("The stimulation research analysis could not be computed; retry the analysis.") from exc
+
+
+def _run_for_participant(request_data: dict) -> dict:
     """Build the design matrix from platform data, fit every arm, return a JSON-able payload.
 
     Request keys (all optional except ParticipantId):
@@ -104,6 +1179,21 @@ def run_for_participant(request_data: dict) -> dict:
       WashinMin      wash-in exclusion in MINUTES (default 1.0 — PI-declared for a rapid responder)
       Backend        "plotly" (default, returns figure JSON) or "none" (tables only, fast)
       NBatches, Q    forward-simulation depth for the trajectory panel
+      TwoStage       true runs the open-loop -> gate -> closed-loop path on the same inputs and
+                     attaches it under `two_stage`; absent or false (the default) leaves the
+                     response exactly as it was
+      TwoStageOverrideReason, TwoStageOverrideBy
+                     a clinician override of the gate's resolution condition, with the reason it
+                     requires (stage1_openloop.clinician_override); only read when TwoStage is on
+      TwoStageExploreOutsideAdaptive, TwoStageExploreOutsideAdaptiveBy
+                     by default Stage 1 recommends only settings the device's closed-loop mode
+                     can use (rate at or above the 55 Hz adaptive minimum) and lists what it
+                     excluded and why under two_stage.stage1.frozen_configuration
+                     .adaptive_envelope. A NON-EMPTY scientific or physiological reason under
+                     the first key lifts that constraint; the reason and the name under the
+                     second travel on the frozen configuration. The first key with an empty
+                     reason changes nothing and the block says the override was ignored. Only
+                     read when TwoStage is on; both are in the response key.
     """
     from Server import models
 
@@ -119,16 +1209,110 @@ def run_for_participant(request_data: dict) -> dict:
     hemis = tuple((request_data or {}).get("Hemispheres") or DEFAULT_HEMISPHERES)
     backend = str((request_data or {}).get("Backend", "plotly")).lower()
 
+    # Participant-specific provenance and examples are maintained outside source control.
     try:
-        _census = adapter.settings_stream(participant)
-        es = adapter.build_design_matrix(participant, request_data, washin_min=washin_min, stream=_census)
+        _stream = adapter.settings_stream(participant)
+    except Exception:                                     # noqa: BLE001 — falls back to per-consumer builds
+        _log.exception("StimOptimizer: settings stream unavailable; each consumer will build its own")
+        _stream = None
+
+    try:
+        es = adapter.build_design_matrix(participant, request_data, washin_min=washin_min,
+                                         stream=_stream)
     except Exception as e:
         _log.exception("StimOptimizer: design matrix build failed for %s", uid)
-        raise RuntimeError("The design matrix could not be computed; retry the analysis.") from e
+        raise RuntimeError("The approved stimulation design matrix could not be built; retry the analysis.") from e
     if es is None or len(es) == 0:
         return {"available": False,
                 "reason": "no exposure epochs carry usable pain reports for this participant",
                 "washin_min": washin_min}
+
+    # TRACK A STEP 8: READ THE STORE AS STIM OPTIMIZER, AND SERVE THE RESPONSE WHEN NOTHING CHANGED.
+    matched_key = getattr(es, "attrs", {}).get(_cache_store.STORE_KEY_ATTR)
+    tiles_key, tiles_reason = _tiles_key_for(participant)
+    stream_key = (getattr(_stream, "attrs", {}).get(_cache_store.STORE_KEY_ATTR)
+                  if _stream is not None else None)
+    amp_block = amplitude_effect_block(participant, tiles_key_now=tiles_key)
+    gt_block = ground_truth_block(participant, tiles_key_now=tiles_key)
+    # WHICH BANDS RISE WITH PAIN, per sensing contact, off the stored Biomarkers grid (decision
+    # 199): the second half of the readiness screen's and the gate's one-band rule. Read once
+    # here as this module's own consumer; its digest is in the response key.
+    _pain_by_channel, _pain_block = pain_relationship_block(uid)
+    store_block = {"response_key": None, "served_from_store": False, "written": None,
+                   "refusal": None, "reason": None,
+                   "inputs": {"matched_table": matched_key, "tiles": tiles_key,
+                              "amplitude_effect": amp_block.get("store_key"),
+                              "ground_truth_verdict": gt_block.get("store_key")}}
+    sig = prov = None
+    matched_stamp = _cache_store.stamp_for_key(matched_key, root=_SHARED_CACHE_DIR_OVERRIDE) \
+        if matched_key else None
+    if not matched_key:
+        store_block["reason"] = "the matched table carries no store key, so nothing is stored"
+    elif matched_stamp is None:
+        store_block["reason"] = ("the matched table's own entry could not be found in the store, "
+                                 "so its chain cannot be cited and nothing is stored")
+    elif not tiles_key:
+        store_block["reason"] = f"no tile key, so nothing is stored: {tiles_reason}"
+    elif stream_key is None:
+        # The queue's eligibility columns come from the settings census, which is this stream.
+        # A response computed without it is a degraded one and must not be served to a request
+        # that would have had the census.
+        store_block["reason"] = ("the settings stream was unavailable, so this response was "
+                                 "computed without the delivered-settings census and is not stored")
+    else:
+        sig = _response_signature(uid, matched_key, tiles_key, amp_block.get("store_key"),
+                                  gt_block.get("store_key"), request_data, sites, hemis,
+                                  washin_min, backend,
+                                  pain_key=_pain_relationship_key(_pain_by_channel, _pain_block))
+        store_block["response_key"] = _cache_store.product_key(RESPONSE_KIND, uid, sig)
+        try:
+            served = _cache_store.load(RESPONSE_KIND, uid, sig, consumer="stim_optimizer",
+                                       root=_SHARED_CACHE_DIR_OVERRIDE)
+        except _provenance.SelfDerivedProduct as exc:
+            served = None
+            store_block["refusal"] = str(exc)
+            _log.warning("StimOptimizer: the stored response was refused (%s); computing", exc)
+        except Exception as exc:                      # noqa: BLE001
+            served = None
+            _log.info("StimOptimizer: the stored response could not be read (%r)", exc)
+        if isinstance(served, dict):
+            served = dict(served)
+            # The store block describes THIS request, not the one that wrote the entry: a
+            # refusal, a write error or a reason recorded then would otherwise come back with
+            # every served copy as if it had happened again.
+            stored = dict(served.get("store") or {})
+            written = dict(stored.get("written") or {})
+            written[RESPONSE_KIND] = True         # it was just read back, so it is present
+            served["store"] = dict(store_block, served_from_store=True,
+                                   response_key=store_block["response_key"], written=written,
+                                   refusal=None, reason=None, replaced_refused_entry=False,
+                                   stored_utc=(_cache_store.read_stamp(
+                                       RESPONSE_KIND, uid, sig,
+                                       root=_SHARED_CACHE_DIR_OVERRIDE) or {}).get("written_utc"))
+            served["amplitude_effect"] = amp_block
+            served["ground_truth"] = gt_block
+            served["cache_status"] = _cache_status(uid, sig)
+            return served
+        # The chain of exactly the entries this request used: the matched table's own sidecar,
+        # found by the key the design matrix carries, and the amplitude table's sidecar as read
+        # above. Not "the newest of each kind", which is the same entry only until the next write.
+        entries = [_provenance.entry(matched_key, kind="therapy_pain_matched",
+                                     writer="stim_optimizer",
+                                     chain=matched_stamp.get("provenance") or []),
+                   _provenance.entry(tiles_key, kind="raw_lsb_tiles", writer="biomarkers")]
+        if amp_block.get("available"):
+            entries.append(_provenance.entry(amp_block["store_key"], kind=AMPLITUDE_KIND,
+                                             writer="closed_loop",
+                                             chain=amp_block.get("provenance") or []))
+        if gt_block.get("available"):
+            entries.append(_provenance.entry(gt_block["store_key"], kind=GROUND_TRUTH_KIND,
+                                             writer="closed_loop",
+                                             chain=gt_block.get("provenance") or []))
+        if _pain_block.get("store_key"):
+            entries.append(_provenance.entry(_pain_block["store_key"], kind="biomarker_band_sweep",
+                                             writer="biomarkers",
+                                             chain=_pain_block.get("provenance") or []))
+        prov = _provenance.flatten(entries)
 
     # The horizon must describe the DATA SPAN, not the last epoch's start. `t0` is when the final
     # setting began, which understates the span by however long that setting has been in force —
@@ -144,94 +1328,401 @@ def run_for_participant(request_data: dict) -> dict:
                    f"{last:%Y-%m-%d} ({int(len(es))} epochs, "
                    f"{int(pd.to_numeric(es.get('n'), errors='coerce').fillna(0).sum())} reports)")
 
+    # THE FLAT, PER-ARM PIPELINE (`pipeline.run`) IS NO LONGER CALLED FROM THIS REQUEST PATH
+    # (2026-09-14). The PI's instruction, verbatim: "Get rid of the whole arm strip and chart
+    # display. That arm thing doesn't make any sense and shouldn't belong there. Only keep the
+    # newer two-stage plan." The page no longer renders the per-arm strip, its chart, the 5
+    # per-arm figures or the per-arm "what to test next" queue that all read `arms` -- see
+    # `Client/src/views/Reports/StimOptimizer/index.js`. `pipeline.run`, `routines.plots`,
+    # `_arm_comparison` and `_blockers` are UNCHANGED and still fully tested
+    # (`tests/test_pipeline.py`); `pipeline.run` remains a valid, documented, independent entry
+    # point for anyone who wants the two independent per-hemisphere (frequency, amplitude)
+    # surfaces (its own module docstring is unchanged), it is simply not reachable from this page
+    # any more. The two-stage plan (`two_stage_block`, below) is unaffected: it has always run
+    # its own path (`pipeline.run_two_stage_live`), never through this call.
+    #
+    # THE SAFETY MODEL'S CEILING, stated by the PI per side (`safety_ceiling.py`, 2026-09-12):
+    # built once here and handed to Stage 1 (inside `two_stage_block`) and to the gate, so every
+    # safe set and the "under the ceiling" check read one source.
+    _ceilings = SC.ceilings_by_hemisphere(uid, hemis)
+    # Participant-specific provenance and examples are maintained outside source control.
+    _ev_inputs = None
+    if bool((request_data or {}).get("ClosedLoop", True)) or _two_stage_requested(request_data):
+        try:
+            _ev_inputs = adapter.evidence_inputs(participant, stream=_stream)
+        except Exception as exc:                          # noqa: BLE001 -- each consumer builds its own
+            # One line rather than a traceback: the consumer that then fails the same way logs
+            # its own traceback and reports the reason in the response.
+            _log.warning("StimOptimizer: the shared evidence inputs could not be built (%r); "
+                         "each consumer will build its own", exc)
+    # Participant-specific provenance and examples are maintained outside source control.
     try:
-        # Both objective epochs and delivered-queue eligibility use the same snapshot.
-        # Re-decoding the source JSON here would double cold latency and risk mixed inputs.
-        rep = pipeline.run(es, sites=sites, hemispheres=hemis, delivered_census=_census,
-                           outdir=None, render_figures=False,
-                           data_horizon=horizon, washin_min=washin_min,
-                           n_batches=int((request_data or {}).get("NBatches", 3)),
-                           q=int((request_data or {}).get("Q", 4)))
-    except Exception as e:
-        _log.exception("StimOptimizer: pipeline failed for %s", uid)
-        raise RuntimeError("The optimizer could not be computed; retry the analysis.") from e
-
-    arms = {}
-    for label, arm in (rep.arms or {}).items():
-        ctx = arm.ctx
-        m = dict(ctx.meta)
-        entry = {
-            "site": arm.site, "hemisphere": arm.hemisphere,
-            "n_epochs_fitted": _jsonable(m.get("n_epochs_fitted") or m.get("n_epochs")),
-            "incumbent_epoch": _jsonable(m.get("incumbent_epoch")),
-            "incumbent_xy": _jsonable(m.get("incumbent_xy")),
-            "incumbent_mu": _jsonable(m.get("incumbent_mu")),
-            # the incumbent's OWN uncertainty — the resolution gate compares the DIFFERENCE, so the
-            # UI must be able to show both sides of it rather than a band on the candidate alone
-            "incumbent_sd": _jsonable(m.get("incumbent_sd")),
-            "optimum": {"freq_hz": _jsonable(m.get("x_star", [None, None])[0]),
-                        "amp_mA": _jsonable(m.get("x_star", [None, None])[1]),
-                        "posterior_mean": _jsonable(m.get("mu_star")),
-                        "posterior_sd": _jsonable(m.get("sd_star"))},
-            "optimum_resolved": _jsonable(arm.surface_can_resolve_its_optimum())
-                                if hasattr(arm, "surface_can_resolve_its_optimum") else None,
-            "comparison": _arm_comparison(arm),
-            "kernel": _jsonable(m.get("kernel")),
-            # Use the canonical boolean. `safe_contiguous_ceiling` is a float (NaN when there is no
-            # ceiling), never None, so testing it against None was constant True and silently
-            # disabled the non-contiguous-safe-set blocker for every arm.
-            "safe_contiguous": _jsonable(m.get("safe_is_contiguous")),
-            "safe_contiguous_ceiling": _jsonable(m.get("safe_contiguous_ceiling")),
-            "queue": _frame_records(arm.queue, limit=25),
-            "batch": _frame_records(arm.batch),
-            "provenance": {"data_horizon": _jsonable(m.get("data_horizon")),
-                           "washin_min": _jsonable(m.get("washin_min")),
-                           "amp_col": _jsonable(m.get("amp_col"))},
-        }
-        if backend == "plotly":
-            try:
-                _fig = _plotly_figures(ctx)
-                entry["figures"] = _fig["figures"]
-                # Per-figure failures, keyed by the same name the page uses to look the figure up,
-                # so a panel can render the reason in place of the figure it expected. Distinct
-                # from `figures_error`, which means the whole attempt failed and there is nothing
-                # at all to draw — most often because plotly is missing from the image.
-                entry["figure_errors"] = _fig["figure_errors"]
-            except Exception as e:
-                entry["figures"] = {}
-                entry["figure_errors"] = {}
-                entry["figures_error"] = "Figures could not be prepared. Retry the analysis; diagnostic details are available in the server log."
-                _log.exception("StimOptimizer: figure preparation failed")
-        arms[label] = entry
-
-    supported = bool(rep.recommendation_is_supported()) if hasattr(rep, "recommendation_is_supported") else False
-    # Amplitude actually DELIVERED per hemisphere, so a blocker can tell a prediction inside the
-    # model's support from one beyond it.
-    observed_amp_range = {}
-    for hemi in ("Left", "Right"):
-        col = f"amp_mA_{hemi}"
-        if col in es.columns:
-            s = pd.to_numeric(es[col], errors="coerce").dropna()
-            if len(s):
-                observed_amp_range[hemi] = (float(s.min()), float(s.max()))
-    blockers = _blockers(rep, arms, observed_amp_range)
-    return {
+        _epochs_full = (_ev_inputs[1] if _ev_inputs is not None
+                        else (adapter.exposure_epochs(_stream) if _stream is not None else None))
+    except Exception as exc:                              # noqa: BLE001 -- fall back to the matched table
+        _log.warning("StimOptimizer: the full epoch table could not be built (%r)", exc)
+        _epochs_full = None
+    in_force = in_force_by_side(es, epochs=_epochs_full)
+    _screen_out = {}
+    out = {
         "available": True,
         "participant": uid,
         "design_matrix": design_matrix_summary(es),
-        "manifest": _jsonable(rep.manifest),
-        "summary": _frame_records(rep.summary),
-        "arms": arms,
-        "recommendation_supported": supported,
-        "blockers": blockers,
+        # Each side's own rate, pulse width, current and cathode contacts from the newest epoch
+        # (2026-09-12), so the page's decision strip reads them rather than the left side's twice.
+        "in_force_by_side": in_force,
+        # `manifest`, `summary`, `arms`, `recommendation_supported` and `blockers` came from the
+        # flat, per-arm pipeline (`pipeline.run`), which this request path no longer calls
+        # (2026-09-14: the arm strip and its chart are gone from the page). The two-stage plan
+        # under `two_stage`, below, is the page's only recommendation now.
         "washin_min": washin_min,
-        "closed_loop": closed_loop_readiness(participant, es, stream=_census,
+        "closed_loop": closed_loop_readiness(participant, es,
                                              include=bool((request_data or {})
-                                                          .get("ClosedLoop", True))),
+                                                          .get("ClosedLoop", True)),
+                                             inputs=_ev_inputs, screen_out=_screen_out,
+                                             ceilings=_ceilings,
+                                             pain_positive_by_channel=_pain_by_channel,
+                                             pain_block=_pain_block),
+        "amplitude_effect": amp_block,
+        "ground_truth": gt_block,
+        "store": store_block,
     }
+    # THE TWO-STAGE PATH, only when asked for. Attached before the write-back so the stored
+    # response carries it; the flag is in the response key, so a request without the flag is
+    # never served this copy.
+    if _two_stage_requested(request_data):
+        out["two_stage"] = two_stage_block(
+            participant, es, request_data=request_data, stream=_stream, washin_min=washin_min,
+            hemispheres=hemis, sites=sites, data_horizon=horizon,
+            inputs={"matched_table": matched_key, "tiles": tiles_key,
+                    "settings_stream": stream_key},
+            in_force=in_force, evidence_inputs=_ev_inputs,
+            safety_ceiling_by_hemisphere=_ceilings,
+            pain_positive_by_channel=_pain_by_channel)
+    # THE TITRATION SESSION TO RUN NEXT (2026-09-12 evening, the PI: "make #4 a feature of next
+    # stim opt recommendation combined with 30"): designed from this participant's own record,
+    # attached before the write-back so the stored response carries it. Never raises.
+    out["titration_plan"] = titration_plan_block(
+        participant, in_force=in_force, screen=_screen_out.get("screen"),
+        ceilings=_ceilings, hemispheres=hemis, es=es)
+    # THE JOINT CURRENT-MAP TITRATION SCHEDULE (2026-09-14, his instruction: "do (c) both and
+    # make a titration schedule to actually make these plots useful"). Computed on every request
+    # from inputs this request already holds; nothing is stored.
+    out["current_map_schedule"] = current_map_schedule_block(
+        participant, es=es, in_force=in_force, ceilings=_ceilings)
+    if sig is not None:
+        try:
+            # `rep` no longer exists on this path (the flat pipeline is not run here); every
+            # read of it inside `_write_outputs` already goes through `getattr(rep, ..., None)`,
+            # so `None` degrades exactly the way an empty `rep.arms`/`rep.summary` always did.
+            _write_outputs(str(uid), sig, prov, None, out)
+        except Exception as exc:                      # noqa: BLE001
+            # Say so in the response rather than only in the log: a request that silently
+            # stores nothing looks, from the page, exactly like one that stored everything.
+            _log.warning("StimOptimizer: the outputs were not written back (%r)", exc)
+            store_block["write_error"] = repr(exc)
+    out["cache_status"] = _cache_status(uid, sig)             # Track C step 4
+    return out
 
 
-def closed_loop_readiness(participant, es, *, include=True, stream=None) -> dict:
+_CACHE_STATUS_MEANING = ("the date this optimizer response was last computed and stored; a "
+                         "request with the same recordings, settings, pain reports and controls "
+                         "is served from it, and any change to those computes and stores it again")
+
+
+def _cache_status(uid, sig):
+    if sig is None:
+        return {"kind": RESPONSE_KIND, "exists": False, "last_built_utc": None,
+                "what_it_means": _CACHE_STATUS_MEANING,
+                "note": "this response is not stored (the store block says why)"}
+    return _cache_store.status_for_page(RESPONSE_KIND, str(uid), sig,
+                                        what_it_means=_CACHE_STATUS_MEANING,
+                                        root=_SHARED_CACHE_DIR_OVERRIDE)
+
+
+#: ==========================================================================================
+#: THE TITRATION SESSION TO RUN NEXT (open item 30 and decision 144, joined by the PI's decision
+#: of 2026-09-12 evening). `titration_plan.py` holds the arithmetic; this block gathers the
+#: inputs the request already holds -- each side's setting in force, the PI-stated ceiling, the
+#: readiness screen's per-side best contact -- and reads the two stored tables the Closed-Loop
+#: page writes (the pooled current-to-power table and the per-run points table) ONCE each, as
+#: `stim_optimizer`, so the sentence "no run holds 8 settled settings today" is derived from the
+#: record and not typed. On screen: Stim Optimizer page, "Titration session to run next".
+#: ==========================================================================================
+POOLED_KIND = "within_visit_pooled_shape"
+RUN_POINTS_KIND = "three_source_run_points"
+
+
+def _stored_table_as_stim_optimizer(kind, uid):
+    """`(frame or None, note)`: the newest stored entry of `kind`, read as stim_optimizer; a
+    refusal or a miss is a note, never an error."""
+    try:
+        table, stamp = _cache_store.load_newest(kind, uid, consumer="stim_optimizer",
+                                                root=_SHARED_CACHE_DIR_OVERRIDE)
+    except _provenance.SelfDerivedProduct as exc:
+        return None, f"{kind}: refused by the store: {exc}"
+    except Exception as exc:                          # noqa: BLE001
+        return None, f"{kind}: could not be read: {exc!r}"
+    if table is None:
+        return None, (f"{kind}: no entry is stored for this participant (the Closed-Loop page writes it)"
+                      if not stamp else f"{kind}: the newest entry could not be read")
+    if not isinstance(table, pd.DataFrame):
+        try:
+            table = pd.DataFrame(table)
+        except Exception:                             # noqa: BLE001
+            return None, f"{kind}: the stored payload is not a table"
+    return table, f"{kind}: read, {len(table)} rows, written {stamp.get('written_utc')}"
+
+
+def _best_contact_for_side(screen, side, rate_hz=None):
+    """The readiness screen's best cell for stimulation on `side`, as a dict with the page's
+    contact label: the screen's own ranking (`lfp_evidence.best_deployable`, ipsilateral first)
+    among deployable cells AT THE SESSION'S RATE when `rate_hz` is given -- the same selection
+    the two-stage gate makes per side (`pipeline.select_for_side`), because a response measured
+    at one rate says nothing about another -- else among deployable cells at any rate, named as
+    such; else the cell on that side with the most responding bands. None when the screen has no
+    cell for the side."""
+    if screen is None or len(screen) == 0 or "hemisphere" not in screen.columns:
+        return None, "the readiness screen has no cells"
+    from .routines import lfp_evidence as _ev
+    key = _ev.best_deployable(screen, hemisphere=side, rate_hz=rate_hz) if rate_hz is not None else None
+    how = None
+    if key is not None:
+        how = (f"the readiness screen's best deployable cell for this side at the session's rate, "
+               f"{float(rate_hz):g} Hz (lfp_evidence.best_deployable, the gate's own per-side pick)")
+    else:
+        key = _ev.best_deployable(screen, hemisphere=side)
+        if key is not None:
+            how = ("the readiness screen's best deployable cell for this side, at any rate "
+                   "(lfp_evidence.best_deployable)"
+                   + (f"; no cell on this side passed at the session's rate of {float(rate_hz):g} Hz, "
+                      f"so its evidence is from {float(key[2]):g} Hz" if rate_hz is not None else ""))
+    if key is not None:
+        rows = screen[(screen["channel"].astype(str) == str(key[0]))
+                      & (screen["hemisphere"].astype(str) == str(key[1]))
+                      & np.isclose(pd.to_numeric(screen["rate_hz"], errors="coerce"), float(key[2]))]
+    else:
+        rows = screen[screen["hemisphere"].astype(str) == str(side)]
+        if rows.empty:
+            return None, f"the readiness screen has no cell for {side} stimulation"
+        cols = [c for c in ("n_qualifying", "n_era_negative_significant", "n_responding",
+                            "median_separation_d") if c in rows.columns]
+        rows = rows.sort_values(cols, ascending=False).head(1) if cols else rows.head(1)
+        how = ("no cell for this side passed the readiness screen; the cell on this side with the "
+               "most bands falling with current")
+    r = rows.iloc[0]
+    rec = {k: _jsonable(r.get(k)) for k in ("channel", "hemisphere", "rate_hz", "n_bands", "n_responding",
+                                            "responding_fraction", "median_separation_d",
+                                            "laterality", "sensing_side", "deployable",
+                                            "n_era_negative_significant", "n_pain_positive",
+                                            "n_qualifying", "qualifying_centers_hz")}
+    rec.update(sensing_display(rec.get("channel")))
+    if str(rec.get("laterality")) == "contralateral" and "sensing_side" in screen.columns:
+        # The pick is a contact on the OTHER side (decision 143, S3): name the best contact on
+        # THIS side too, whatever it scored, so the clinician can weigh the extra device
+        # configuration a contralateral pairing needs against the evidence on the side itself.
+        own = screen[(screen["hemisphere"].astype(str) == str(side))
+                     & (screen["sensing_side"].astype(str) == str(side))]
+        if rate_hz is not None and "rate_hz" in own.columns:
+            at_rate = own[np.isclose(pd.to_numeric(own["rate_hz"], errors="coerce"), float(rate_hz))]
+            own = at_rate if len(at_rate) else own
+        if len(own):
+            cols = [c for c in ("deployable", "n_qualifying", "n_era_negative_significant",
+                                "n_responding", "median_separation_d") if c in own.columns]
+            o = own.sort_values(cols, ascending=False).iloc[0]
+            alt = {k: _jsonable(o.get(k)) for k in ("channel", "rate_hz", "n_bands", "n_responding",
+                                                    "n_qualifying", "qualifying_centers_hz",
+                                                    "deployable", "blocking_reasons")}
+            alt.update(sensing_display(alt.get("channel")))
+            rec["ipsilateral_alternative"] = alt
+    return rec, how
+
+
+#: ==========================================================================================
+#: THE JOINT CURRENT-TITRATION SCHEDULE (2026-09-14). His instruction, verbatim: "do (c) both and
+#: make a titration schedule to actually make these plots useful." The finding it answers: the
+#: pooled 3-input surface's own optimum at a thinly-sampled rate was noise (a 0.002-point "gain"
+#: against a 1.11-point spread), so the honest per-rate check in `stage1_openloop.py` often
+#: correctly reports "no current can be recommended" -- and this schedule is the sheet that fills
+#: in the record so that stops being the answer. See `current_map_schedule.py` for the arithmetic.
+#: ==========================================================================================
+def _schedule_safety_predicate(es, *, ceilings):
+    """A cheap `is_safe(left_mA, right_mA)` for the schedule: the two per-side `SafetyGP`s the
+    open-loop search already fits, built here directly from the request's own design matrix so
+    the schedule can be computed on every request, not only when `TwoStage` is asked for. Returns
+    `(predicate_or_None, note)`; a fit failure degrades to no safety restriction beyond each
+    side's own PI-stated ceiling, which the schedule always applies regardless."""
+    try:
+        from .routines import surrogate as _SUR
+        safety_grid = _SUR.ParameterGrid(PLT.FREQ_GRID, S1.JOINT_AMP_GRID)
+        sgp = {}
+        for side in ("Left", "Right"):
+            Xs, sev, sv, _meta = SC.safety_seed(
+                es, f"amp_mA_{side}", freq_grid=PLT.FREQ_GRID, ceiling=(ceilings or {}).get(side),
+                min_tolerated_h=S1.MIN_TOLERATED_H)
+            sgp[side] = _SUR.SafetyGP(safety_grid, random_state=0).fit(Xs, sev, sv)
+    except Exception as exc:                          # noqa: BLE001 -- degrade, never raise
+        _log.info("StimOptimizer: schedule safety model unavailable (%r); ceiling only", exc)
+        return None, f"the joint safety model could not be fitted ({exc!r}); only each side's own ceiling was applied"
+
+    def is_safe(left_mA, right_mA, *, rate_hz):
+        ok_l = bool(np.asarray(sgp["Left"].safe_mask(X=[[float(rate_hz), float(left_mA)]],
+                                                      beta=PLT.BETA))[0])
+        ok_r = bool(np.asarray(sgp["Right"].safe_mask(X=[[float(rate_hz), float(right_mA)]],
+                                                       beta=PLT.BETA))[0])
+        return ok_l and ok_r
+    return is_safe, "the joint safety model fitted from this participant's own settings history"
+
+
+def current_map_schedule_block(participant, *, es, in_force, ceilings) -> dict:
+    """The `current_map_schedule` response block, never raising."""
+    uid = str(getattr(participant, "uid", participant))
+    try:
+        left = dict((in_force or {}).get("Left") or {})
+        right = dict((in_force or {}).get("Right") or {})
+        rate_hz = left.get("rate_hz") if left.get("rate_hz") is not None else right.get("rate_hz")
+        pwl, pwr = left.get("pulse_width_us"), right.get("pulse_width_us")
+        if rate_hz is None or pwl is None or pwr is None:
+            return CMS.unavailable_schedule(
+                "the setting in force is not fully known (rate and both pulse widths are needed), "
+                "so no schedule can be designed")
+        cl = (ceilings or {}).get("Left"); cr = (ceilings or {}).get("Right")
+        ceiling_left = cl[0] if cl else None
+        ceiling_right = cr[0] if cr else None
+        stratum = pd.DataFrame()
+        if isinstance(es, pd.DataFrame) and len(es):
+            need = {"freq_hz", "pw_us_Left", "pw_us_Right", "amp_mA_Left", "amp_mA_Right", "n"}
+            if need.issubset(es.columns):
+                m = (np.isclose(pd.to_numeric(es["freq_hz"], errors="coerce"), float(rate_hz))
+                     & np.isclose(pd.to_numeric(es["pw_us_Left"], errors="coerce"), float(pwl))
+                     & np.isclose(pd.to_numeric(es["pw_us_Right"], errors="coerce"), float(pwr)))
+                stratum = es.loc[m]
+        is_safe_raw, safety_note = _schedule_safety_predicate(es, ceilings=ceilings)
+        is_safe = ((lambda l, r: is_safe_raw(l, r, rate_hz=rate_hz)) if is_safe_raw is not None
+                  else None)
+        block = CMS.build_schedule(
+            rate_hz=rate_hz, pw_us_left=pwl, pw_us_right=pwr,
+            ceiling_left_mA=ceiling_left, ceiling_right_mA=ceiling_right,
+            in_force_left_mA=left.get("amplitude_mA"), in_force_right_mA=right.get("amplitude_mA"),
+            existing_epochs_at_stratum=stratum, epochs_for_reporting_rate=es, is_safe=is_safe)
+        block["safety_model_note"] = safety_note
+        return _jsonable(block)
+    except Exception as exc:                          # noqa: BLE001 -- adjunct card
+        _log.exception("StimOptimizer: the current-map schedule could not be built for %s", uid)
+        return CMS.unavailable_schedule(f"the schedule could not be built: {exc}")
+
+
+def titration_plan_block(participant, *, in_force, screen, ceilings, hemispheres, es=None) -> dict:
+    """The `titration_plan` response block (`titration_plan.plan_for_sides`), never raising.
+
+    `es` (2026-09-14) is the request's own design matrix, used only to fit the joint safety model
+    the "joint corners" block is restricted to (the same builder `current_map_schedule_block`
+    already uses, `_schedule_safety_predicate`); `None` degrades to capping the corners at each
+    side's own ceiling with no further safety restriction, named as such.
+    """
+    from . import titration_plan as _tp
+    from .routines import percept_adaptive as _pa
+    uid = str(getattr(participant, "uid", participant))
+    try:
+        pooled, pooled_note = _stored_table_as_stim_optimizer(POOLED_KIND, uid)
+        runs, runs_note = _stored_table_as_stim_optimizer(RUN_POINTS_KIND, uid)
+        try:
+            from modules.ClosedLoopDeployment import post_ramp as _pr
+        except ImportError:
+            from modules.ClosedLoopDeployment import post_ramp as _pr
+        margin = _pr.margin_becomes_available(runs)
+        lo, hi = _pa.ADAPTIVE_LFP_BAND_HZ
+        sides = {}
+        for side in hemispheres:
+            side = str(side)
+            f = dict((in_force or {}).get(side) or {})
+            src = f.get("source") or "the settings stream"
+            since = f.get("since_utc")
+            in_force_src = (f"the setting in force on the {side} side, from the {src}"
+                            + (f", since {since}" if since else ""))
+            ceiling = (ceilings or {}).get(side)
+            if ceiling is None:
+                ceiling = SC.ceiling_for(uid, side)
+            contact, how = _best_contact_for_side(
+                screen, side, rate_hz=_tp.rate_to_hold(f.get("rate_hz"))["rate_hz"])
+            rec = _tp.record_today_for_contact(pooled, runs, (contact or {}).get("channel"),
+                                               lo_hz=lo, hi_hz=hi)
+            rec["pooled_table_note"] = pooled_note
+            rec["run_points_table_note"] = runs_note
+            sides[side] = dict(
+                rate_in_force_hz=f.get("rate_hz"), rate_source=in_force_src,
+                pulse_width_us=f.get("pulse_width_us"), pulse_width_source=in_force_src,
+                ceiling_mA=ceiling[0], ceiling_source=str(ceiling[1]),
+                contact=contact, contact_source=how, record_today=rec)
+        # THE JOINT CORNERS' SAFETY RESTRICTION (2026-09-14): the same per-side SafetyGP the home
+        # current-map schedule already fits, at the session's own rate (the higher of the two
+        # sides' held rates, so neither side's own adaptive minimum is understated). A fit
+        # failure degrades to capping only, never raises.
+        joint_is_safe = None
+        joint_safety_note = "no design matrix was supplied, so the joint corners are capped at each side's own ceiling only"
+        if isinstance(es, pd.DataFrame) and len(es):
+            rl = (sides.get("Left") or {}).get("rate_in_force_hz")
+            rr = (sides.get("Right") or {}).get("rate_in_force_hz")
+            rl2 = _tp.rate_to_hold(rl)["rate_hz"] if "Left" in sides else None
+            rr2 = _tp.rate_to_hold(rr)["rate_hz"] if "Right" in sides else None
+            session_rate = (max(rl2, rr2) if (rl2 is not None and rr2 is not None)
+                           else (rl2 if rl2 is not None else rr2))
+            if session_rate is not None:
+                is_safe_raw, joint_safety_note = _schedule_safety_predicate(es, ceilings=ceilings)
+                if is_safe_raw is not None:
+                    joint_is_safe = (lambda l, r, _f=is_safe_raw, _rt=session_rate:
+                                     _f(l, r, rate_hz=_rt))
+        block = _tp.plan_for_sides(sides, margin=margin, in_force=in_force,
+                                   joint_is_safe=joint_is_safe)
+        block["stored_tables"] = {"pooled": pooled_note, "run_points": runs_note}
+        block["joint_corners"]["safety_model_note"] = joint_safety_note
+        return _jsonable(block)
+    except Exception as exc:                          # noqa: BLE001 -- adjunct card
+        _log.exception("StimOptimizer: the titration plan could not be built for %s", uid)
+        return {"available": False, "reason": f"the titration plan could not be built: {exc}"}
+
+
+def pain_relationship_block(participant_uid):
+    """Which bands rise with pain on each sensing contact, off the stored Biomarkers grid
+    (decision 199). Returns ``(mapping, block)``: the mapping
+    ``routines.pain_relationship.pain_positive_centers_by_channel`` builds (or None when there
+    is no grid) and the page's block -- the summary plus the grid entry's own key and chain so
+    the response can cite it. Read as this module's own consumer ("stim_optimizer"), under the
+    default settings the daily precompute stores (the NRS score). Never raises."""
+    from .routines import pain_relationship as _pr
+    try:
+        try:
+            from modules.ClosedLoopDeployment import adapter as _cl
+        except ImportError:                                  # pragma: no cover -- host spelling
+            from modules.ClosedLoopDeployment import adapter as _cl
+        grid = _cl.band_sweep_grid_for_closed_loop(str(participant_uid), {},
+                                                    consumer="stim_optimizer")
+    except Exception as exc:                                 # noqa: BLE001 -- adjunct input
+        _log.warning("StimOptimizer: the Biomarkers grid could not be read for the pain "
+                     "relationship (%r)", exc)
+        grid = {"available": False, "reason": f"the Biomarkers grid could not be read: {exc!r}"}
+    block = _pr.summarise(grid)
+    for ch, v in (block.get("by_channel") or {}).items():
+        v.update(sensing_display(ch))              # the page's "R 1⁻3⁺" beside the raw key
+    stamp = (grid.get("stamp") or {}) if isinstance(grid, dict) else {}
+    block["store_key"] = stamp.get("signature_key")
+    block["provenance"] = list(stamp.get("provenance") or [])
+    return _pr.pain_positive_centers_by_channel(grid), block
+
+
+def _pain_relationship_key(mapping, block):
+    """The key element for the pain relationship: the grid entry's own key when it has one, else
+    the content itself, so the response is rebuilt exactly when the qualifying bands change."""
+    if block and block.get("store_key"):
+        return ("grid", str(block["store_key"]))
+    if mapping is None:
+        return None
+    return ("content", tuple((str(ch), tuple(sorted(float(c) for c in cs)))
+                             for ch, cs in sorted(mapping.items())))
+
+
+def closed_loop_readiness(participant, es, *, include=True, inputs=None, screen_out=None,
+                          ceilings=None, pain_positive_by_channel=None, pain_block=None) -> dict:
     """Whether the sensed LFP could drive Adaptive Therapy for this participant, and if not why.
 
     This is a DIFFERENT question from the open-loop optimizer above it, and the payload keeps them
@@ -250,37 +1741,126 @@ def closed_loop_readiness(participant, es, *, include=True, stream=None) -> dict
     if not include:
         return {"available": False, "reason": "not requested (ClosedLoop=false)"}
     try:
-        import numpy as _np
         from . import pipeline as _pl
         from .routines import objective as _obj, percept_adaptive as _pa
 
-        lo, hi = _pa.ADAPTIVE_LFP_BAND_HZ
-        bands = [(float(c), 5.0) for c in _np.arange(lo + 2.5, hi - 2.5 + 0.01, 1.0)]
-        le = _pl.live_evidence(participant, amp_ceiling=_obj.AMP_HARD_LIMIT_MA, bands=bands, stream=stream)
+        # ONE definition of the 18 bands (review S13, 2026-09-12): `bands=None` lets
+        # `lfp_evidence.build_evidence` take every stored band that fits inside the adaptive
+        # range, at the cache's own width, exactly as the two-stage path does. This used to
+        # build the list by hand at a hard-coded 5 Hz width, so a change of the cache's band
+        # width would have broken this panel while the two-stage path kept working.
+        # `inputs` is the (sensed frame, epochs) pair the request built once for both this
+        # screen and the two-stage path; None builds it here (2026-09-12).
+        le = _pl.live_evidence(participant, amp_ceiling=_obj.AMP_HARD_LIMIT_MA, bands=None,
+                               inputs=inputs, pain_positive_by_channel=pain_positive_by_channel)
         screen = le.screen if le.screen is not None else pd.DataFrame()
+        if screen_out is not None:
+            # The full screen frame for the titration plan (2026-09-12), which picks each side's
+            # best contact off it; handed back through the caller's own dict so the readiness
+            # payload itself is unchanged and the screen is built once.
+            screen_out["screen"] = screen
         n_deployable = 0 if screen.empty else int(screen["deployable"].sum())
+        # The contact pair in the page's form on every row and on the selected cell
+        # (2026-09-12): `display_short` "L 0⁻2⁺" beside the raw key, from the one formatter.
+        # Every cell with any half of the rule on it (decision 199): a qualifying band, a band
+        # falling with current, or a band responding on capture -- usable cells first, then by
+        # how many bands qualify, then by how many fall with current.
+        if not screen.empty:
+            keep = ((screen["n_qualifying"] > 0) | (screen["n_era_negative_significant"] > 0)
+                    | (screen["n_responding"] > 0))
+            shown = screen[keep].sort_values(
+                ["deployable", "n_qualifying", "n_era_negative_significant", "n_responding"],
+                ascending=False)
+        else:
+            shown = screen
+        cells = _frame_records(shown, limit=30)
+        from . import titration_plan as _tp
+        for c in cells:
+            c.update(sensing_display(c.get("channel")))
+            # Which qualifying bands sit on the stimulator's own harmonics at this cell's rate
+            # (the titration card's rule, decision 146: |250 - rate|, rate/2, rate/4, 3 rate/4,
+            # within 2.5 Hz). Information beside the row, not a condition of the rule: a band
+            # at 27.5 Hz under 55 Hz stimulation is half the rate, and a fall in it with
+            # current may be the stimulator, not the brain. His call whether it should refuse.
+            q = [float(x) for x in (c.get("qualifying_centers_hz") or [])]
+            try:
+                h = _tp.harmonic_avoidance(float(c["rate_hz"]), centres_hz=q) if q else None
+            except Exception:                              # noqa: BLE001 -- information only
+                h = None
+            c["qualifying_near_stim_harmonic_hz"] = list(h["avoid_hz"]) if h else []
+            c["qualifying_clear_of_stim_harmonics_hz"] = list(h["clear_hz"]) if h else list(q)
+            c["stim_harmonic_notes"] = dict(h["avoid_reasons"]) if h else {}
+        selected = None
+        if le.selected_key:
+            selected = {"channel": le.selected_key[0], "hemisphere": le.selected_key[1],
+                        "rate_hz": float(le.selected_key[2])}
+            selected.update(sensing_display(le.selected_key[0]))
         return {
             "available": True,
             "ready": bool(le.selected is not None),
             "verdict": le.describe(),
-            "selected": ({"channel": le.selected_key[0], "hemisphere": le.selected_key[1],
-                          "rate_hz": float(le.selected_key[2])} if le.selected_key else None),
+            "selected": selected,
             "n_cells_screened": int(len(screen)),
             "n_cells_deployable": n_deployable,
             "amp_hard_limit_mA": _jsonable(_obj.AMP_HARD_LIMIT_MA),
+            # Participant-specific provenance and examples are maintained outside source control.
+            "safe_ceiling_mA_by_side": ({h: _jsonable(v[0]) for h, v in (ceilings or {}).items()}
+                                        if ceilings else None),
             "adaptive_window_hz": list(_pa.ADAPTIVE_LFP_BAND_HZ),
             "min_adaptive_rate_hz": _jsonable(_pa.MIN_ADAPTIVE_RATE_HZ),
-            # Only the cells that responded at all: the full 50-row screen is mostly cells with no
+            # Only the cells with something on them: the full screen is mostly cells with no
             # response, which is not what a reader needs to see first.
-            "responding_cells": _frame_records(
-                screen[screen["n_responding"] > 0].sort_values("n_responding", ascending=False)
-                if not screen.empty else screen, limit=20),
+            "responding_cells": cells,
+            # The pain half of the rule, per contact, with the score and stamp of the grid it
+            # was read from (decision 199).
+            "pain_relationship": _jsonable(dict(pain_block or {})),
             "audit": _frame_records(le.audit, limit=100) if le.audit is not None else [],
         }
     except Exception as e:                                    # noqa: BLE001 — adjunct panel
         _log.exception("StimOptimizer: closed-loop readiness failed")
         return {"available": False,
                 "reason": f"closed-loop readiness could not be evaluated: {e}"}
+
+
+def _arm_comparison(arm):
+    """The candidate-versus-incumbent difference and its uncertainty, as the resolution rule sees it.
+
+    Serialised so the interface never reconstructs it. The resolution verdict is a statement about
+    `gain` against `k * sd_of_difference`, and a table that prints two posterior means and two
+    separate standard deviations asks the reader to combine four numbers in their head to see the
+    quantity the verdict is actually about.
+
+    `sd_of_difference` is sqrt(var1 + var2) without the joint covariance term, which the pipeline
+    documents: because nearby cells on a smooth kernel are positively correlated, dropping
+    `-2*cov` OVERSTATES the variance, so the rule is conservative — it can withhold a
+    recommendation it might have supported, but it cannot manufacture one.
+    """
+    import math
+
+    from .routines import resolution as _RES
+
+    m = getattr(arm, "meta", None) or {}
+    try:
+        gain = float(m.get("incumbent_mu")) - float(m.get("mu_star"))
+    except (TypeError, ValueError):
+        gain = None
+    # The same propagation the gate and the figure headline use, so the three cannot disagree.
+    sd_d = _RES.sd_of_difference(m.get("sd_star"), m.get("incumbent_sd"))
+    if not math.isfinite(sd_d) or sd_d <= 0:
+        sd_d = None
+    k = _RES.RESOLUTION_K
+    return {
+        "gain": _jsonable(gain),
+        "sd_of_difference": _jsonable(sd_d),
+        "k": k,
+        "margin": _jsonable(k * sd_d) if sd_d is not None else None,
+        "sign_convention": ("the objective is a pain score, so LOWER is better and a POSITIVE gain "
+                            "favours the candidate over the setting currently in force"),
+        "note": ("sd_of_difference is sqrt(sd_candidate^2 + sd_incumbent^2). The joint covariance "
+                 "term is omitted because the two cells are not predicted jointly; since nearby "
+                 "cells on a smooth kernel are positively correlated, omitting it overstates the "
+                 "variance and makes the resolution rule conservative rather than permissive."),
+    }
 
 
 def _blockers(rep, arms, observed_amp_range=None) -> list:
@@ -382,6 +1962,10 @@ def _blockers(rep, arms, observed_amp_range=None) -> list:
     return out
 
 
+#: The five figures the browser draws, in the order the page presents them. The order is not
+#: cosmetic and is documented in the figure-conventions skill: the posterior surface is the panel
+#: that answers the page's question — whether the predicted optimum is separated from the setting
+#: currently in force — and the four that follow are secondary to it.
 PLOTLY_FIGURES = (
     ("posterior_surface", "fig1_posterior_surface"),
     ("acquisition", "fig2_acquisition_decomposition"),
@@ -435,42 +2019,4 @@ def _plotly_figures(ctx) -> dict:
     return {"figures": out, "figure_errors": errors}
 
 
-def _arm_comparison(arm):
-    """The candidate-versus-incumbent difference and its uncertainty, as the resolution rule sees it.
-
-    Serialised so the interface never reconstructs it. The resolution verdict is a statement about
-    `gain` against `k * sd_of_difference`, and a table that prints two posterior means and two
-    separate standard deviations asks the reader to combine four numbers in their head to see the
-    quantity the verdict is actually about.
-
-    `sd_of_difference` is sqrt(var1 + var2) without the joint covariance term, which the pipeline
-    documents: because nearby cells on a smooth kernel are positively correlated, dropping
-    `-2*cov` OVERSTATES the variance, so the rule is conservative — it can withhold a
-    recommendation it might have supported, but it cannot manufacture one.
-    """
-    import math
-
-    from modules.StimOptimizer.routines import resolution as _RES
-
-    m = getattr(arm, "meta", None) or {}
-    try:
-        gain = float(m.get("incumbent_mu")) - float(m.get("mu_star"))
-    except (TypeError, ValueError):
-        gain = None
-    # The same propagation the gate and the figure headline use, so the three cannot disagree.
-    sd_d = _RES.sd_of_difference(m.get("sd_star"), m.get("incumbent_sd"))
-    if not math.isfinite(sd_d) or sd_d <= 0:
-        sd_d = None
-    k = _RES.RESOLUTION_K
-    return {
-        "gain": _jsonable(gain),
-        "sd_of_difference": _jsonable(sd_d),
-        "k": k,
-        "margin": _jsonable(k * sd_d) if sd_d is not None else None,
-        "sign_convention": ("the objective is a pain score, so LOWER is better and a POSITIVE gain "
-                            "favours the candidate over the setting currently in force"),
-        "note": ("sd_of_difference is sqrt(sd_candidate^2 + sd_incumbent^2). The joint covariance "
-                 "term is omitted because the two cells are not predicted jointly; since nearby "
-                 "cells on a smooth kernel are positively correlated, omitting it overstates the "
-                 "variance and makes the resolution rule conservative rather than permissive."),
-    }
+# Retained active Aditya interfaces.

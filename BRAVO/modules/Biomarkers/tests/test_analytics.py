@@ -199,10 +199,7 @@ def test_power_pain_scatter_corr_and_outlier_exclusion():
 
 
 def test_td_sliding_corr_grid_reaches_last_session_drops_corrupt_dates():
-    """Sliding-corr time-span fix: with a SKEWED session distribution (dense early block + sparse
-    recent tail, the RCS08 shape) plus one corrupt ~1677 StartTime, the window grid must (a) NOT be
-    anchored back to 1677 by the corrupt date and (b) still extend to within one window of the last
-    REAL recording — the bug the 5*MAD clip introduced (truncating the grid months early)."""
+    """Generic implementation; participant-specific examples are kept outside source control."""
     rng = np.random.default_rng(5)
     base = pd.Timestamp("2024-01-01")
     times = [base + pd.Timedelta(days=k * 0.33) for k in range(30)]      # dense early block
@@ -233,9 +230,7 @@ def test_power_center_freqs_standard_path():
 
 
 def test_power_center_freqs_direct_hemisphere_key():
-    """Streaming Power-Domain (BrainSenseLfp) TherapySnapshot stores FrequencyInHertz DIRECTLY on
-    the hemisphere dict (not inside a SensingSetup subdict) — the real RCS08 shape. Verified values
-    from RCS008 raw export: ZERO_THREE_LEFT @ 12.7 Hz, ZERO_TWO_RIGHT @ 13.67 Hz."""
+    """Generic implementation; participant-specific examples are kept outside source control."""
     rec = {"ChannelNames": ["ZERO_THREE_LEFT Power", "ZERO_TWO_RIGHT Power"],
            "Descriptor": {"Therapy": {
                "Left":  {"FrequencyInHertz": 12.7, "FrequencyIndex": 13,
@@ -768,10 +763,7 @@ def test_spectral_scan_emits_fdr_qs_and_summary():
     """Rigor pass: scan output exposes per-band q (rating-clustered logit + naive Pearson) and a
     family-level fdr_summary. Validates: keys exist; q is None exactly where p is None; q >= p for
     every finite pair (BH never makes a p smaller); summary counts agree with the per-band q masks."""
-    # Strong, isolated planted band — needs enough power that rating-clustered logit (not just
-    # naive Pearson) clears BH on a modest fixture. Real RCS08 data has hundreds of bands; this
-    # fixture has 96. The clustered-logit FDR threshold is therefore steeper here than on real
-    # data; the point of the test is to verify wiring, not detection sensitivity.
+    # Participant-specific provenance and examples are maintained outside source control.
     det = _planted_detail(center=17.5, beta=1.2, E=200)
     sc = analytics.spectral_feature_importance(det, strategy="tertile")
     # Per-channel arrays present and aligned
@@ -1541,10 +1533,7 @@ def test_assign_stim_eras_uses_locf_not_nocb():
 
 
 def test_pain_series_epochs_match_pro_match_arrays():
-    """pain_series and _pro_match_arrays must agree on PRO epoch seconds to the second — both read
-    the canonical UTC instant (ingestion-normalized _pro_time_utc, or the same localized parse as a
-    fallback). Guards the 7-8 h timezone smear (RCS08 live readout bug: 67/682 instead of 290/682).
-    FIXHANDOUT_pro_timezone_mismatch."""
+    """Generic implementation; participant-specific examples are kept outside source control."""
     import pandas as pd, numpy as np
     from modules.Biomarkers.routines import availability
     from modules.Biomarkers import bravo_service as bs
@@ -1665,7 +1654,7 @@ def test_deployment_summary_identity_is_json_serializable():
     class _FakeParticipantModel:           # stands in for models.Participant (not JSON-serializable)
         def __init__(self, uid): self.uid = uid
 
-    uid = "2e3c75c00d7f4f37b53a048d195f11da"
+    uid = "11111111111111111111111111111111"
     # BEFORE the fix: a model object in identity -> json.dumps raises TypeError (the live 500).
     bad_identity = {"participant": _FakeParticipantModel(uid), "contact": "ZERO_TWO_LEFT"}
     try:
@@ -1699,7 +1688,7 @@ def test_deployment_summary_real_payload_json_serializable():
         from Biomarkers import bravo_service as bs
     except Exception:
         return  # service/models not importable in this context -> nothing to integration-test
-    uid = "2e3c75c00d7f4f37b53a048d195f11da"  # RCS08 live uid
+    uid = "11111111111111111111111111111111"  # RCS08 live uid
     try:
         if models.Participant.find(uid=uid) is None:
             return  # participant not in this DB -> skip (no real payload to check)
@@ -1873,16 +1862,12 @@ def test_roc_small_sample_advisory_is_label_only():
 
 @_live_source_test
 def test_deployment_summary_carries_temporal_validity_block():
-    """Audit [23]: the deployment_summary device record must ALWAYS carry an explicit
-    `temporal_validity` block (forward_validation / threshold_drift / stim_state_portability), each
-    defaulting to 'not_assessed' so the exported JSON is unambiguous. Runs against the live RCS08
-    participant; skips cleanly when absent. Asserts presence + allowed enum values, not specific
-    verdicts (those depend on data)."""
+    """Generic implementation; participant-specific examples are kept outside source control."""
     import os, sys
     sys.path.insert(0, "/usr/src/BRAVO"); sys.path.insert(0, "/usr/src/BRAVO/modules")
     from modules.Biomarkers import bravo_service as bs
     from Server import models
-    uid = "2e3c75c00d7f4f37b53a048d195f11da"
+    uid = "11111111111111111111111111111111"
     if models.Participant.find(uid=uid) is None:
         return  # participant not in this DB — skip
     out = bs.deployment_summary({
@@ -2208,10 +2193,7 @@ def test_transform_centered_window_clip_dont_slide_contract():
 
 
 def test_transform_50pct_overlap_window_count_and_variance_only_shift():
-    """The deployed sweep slides the 1 s window at 0.5 s (50% overlap): 59 windows over a full 30 s vs
-    30 non-overlapping. Overlap changes only the number of windows the median is taken over (a variance
-    reduction), so on a stationary signal the band power barely moves — well under the 1.26× calibration
-    scatter (the live-RCS08 check measures the real-data shift; this pins the synthetic invariant)."""
+    """Generic implementation; participant-specific examples are kept outside source control."""
     sr = 250.0
     step = int(round(sr * analytics.TRANSFORM_STEP_SECONDS))     # 125 = 0.5 s
     win = int(round(sr * analytics.TRANSFORM_WIN_SECONDS))       # 250 = 1 s
@@ -2495,21 +2477,13 @@ if __name__ == "__main__":
 
 @_live_source_test
 def test_deployment_summary_survives_unestimable_power_requirement():
-    """Regression, 2026-08-30: `n_ratings_needed` is legitimately None when the power calculation
-    flags underpowering but cannot solve for the required N (an effect at chance has no finite N
-    reaching 80%). The old code did `power.get('n_ratings_needed', 0) - power.get('n_ratings_current', 0)`,
-    and `.get(key, default)` does NOT return the default for a key that is PRESENT with value None —
-    so this raised TypeError and took down the entire deployment_summary export for that
-    participant. Reached on live RCS08 data after an ingest, not by any synthetic fixture.
-
-    Asserts the summary still builds, and that the caveat says the requirement is not estimable
-    rather than inventing a shortfall number.
-    """
+    """Asserts the summary still builds, and that the caveat says the requirement is not estimable
+    rather than inventing a shortfall number."""
     import sys
     sys.path.insert(0, "/usr/src/BRAVO"); sys.path.insert(0, "/usr/src/BRAVO/modules")
     from modules.Biomarkers import bravo_service as bs
     from Server import models
-    uid = "2e3c75c00d7f4f37b53a048d195f11da"
+    uid = "11111111111111111111111111111111"
     if models.Participant.find(uid=uid) is None:
         return  # participant not in this DB — skip
 
@@ -2726,18 +2700,7 @@ def test_the_two_mad_helpers_have_opposite_polarity_and_must_not_be_confused():
 def test_conservative_gate_does_not_mirror_a_sub_chance_lower_bound():
     """REGRESSION, device-facing. auc_power used to compute a_lo = max(auc_lo, 1 - auc_lo), which
     mirrored a sub-chance CI lower bound up above 0.5 and destroyed the information the caller's
-    DE-FOLDED bootstrap CI exists to carry.
-
-    Two failures, both reproduced on live RCS08 data before the fix:
-      1. Silently inert. With the real bound auc_lo=0.3484 and auc=0.5036 the fold gave 0.6516,
-         which fails `a_lo <= auc` AND fails `a_lo <= 0.5`, so neither branch ran and
-         auc_lo/power_current_lo/n_ratings_needed_hi all returned None — the conservative gate
-         reported nothing at all.
-      2. FALSE PASS. At auc=0.85 with auc_lo=0.20 the fold returned 0.80, which satisfies
-         `a_lo <= auc`, so power was computed at a fabricated 'conservative' bound of 0.80 and the
-         status came back 'powered' — a band whose interval badly crosses chance reading as
-         deployable.
-    """
+    DE-FOLDED bootstrap CI exists to carry."""
     from modules.Biomarkers.routines import analytics as an
 
     # (2) the false pass: must now fail closed, not report 'powered'
@@ -2749,7 +2712,7 @@ def test_conservative_gate_does_not_mirror_a_sub_chance_lower_bound():
     assert r["n_ratings_needed_hi"] is None
     assert r["status"] != "powered", "a CI crossing chance must never read as powered"
 
-    # (1) the real RCS08 bound: the gate must now actually report instead of returning None
+    # Participant-specific provenance and examples are maintained outside source control.
     r = an.auc_power(0.5035714285714286, 25, 23, auc_lo=0.3483912803298396,
                      design_effect=1.4787476214475113)
     assert r["ci_crosses_chance"] is True
@@ -2870,10 +2833,17 @@ def test_all_deployment_binarizations_pass_rating_group():
     threshold_drift_by_week. A pseudoreplicated cut point defines the classes partly by how often a
     rating happened to be sampled."""
     from modules.Biomarkers.routines import analytics as an
-    src = open(an.__file__).read()
-    assert src.count("pain_cutoff=pain_cutoff, rating_group=rating_group") == 3
-    # and nothing in the deployment family still binarizes without it
-    assert "pain_cutoff=pain_cutoff)\n    m = np.isfinite(bp_log)" not in src
+    import ast
+    import inspect
+    # The new exported pain split is a fourth caller; unrelated additions must
+    # not break a global string count. Check the grouping contract per caller.
+    for name in ("deployment_roc", "deployment_forward_chaining", "threshold_drift_by_week", "_pain_split"):
+        tree = ast.parse(inspect.getsource(getattr(an, name)))
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name) and node.func.id == "_binarize_labels"]
+        assert calls, name
+        assert all(any(keyword.arg == "rating_group" for keyword in call.keywords)
+                   for call in calls), name
 
 
 # --- F13: the AUC estimand must be on the same unit as its interval (2026-09-02) ---------------
@@ -2902,7 +2872,7 @@ def test_deployment_reports_both_weightings_and_their_difference():
     sys.path.insert(0, "/usr/src/BRAVO"); sys.path.insert(0, "/usr/src/BRAVO/modules")
     from modules.Biomarkers import bravo_service as bs
     out = bs.band_deployment_roc({
-        "ParticipantId": "2e3c75c00d7f4f37b53a048d195f11da", "Channel": "ZERO_TWO_LEFT",
+        "ParticipantId": "11111111111111111111111111111111", "Channel": "ZERO_TWO_LEFT",
         "CenterHz": 20.0, "BandWidthHz": 5.0, "Metric": "nrs", "Strategy": "tertile",
         "MatchDirection": "prior"})
     d = out.get("deployment") or out.get("roc") or out
@@ -2934,7 +2904,7 @@ def test_exploration_publishes_an_outlier_sensitivity_block():
             for v in o[:3]:
                 yield from find(v, key, path)
 
-    r = bs.run_for_participant({"ParticipantId": "2e3c75c00d7f4f37b53a048d195f11da",
+    r = bs.run_for_participant({"ParticipantId": "11111111111111111111111111111111",
                                 "source": "timedomain", "LabelMetric": "nrs"})
     hits = list(find(r, "outlier_sensitivity"))
     assert hits, "no outlier_sensitivity block published"
@@ -3017,7 +2987,7 @@ def test_family_guard_passes_on_the_reconciled_left_leg_outcome():
             for v in o[:3]:
                 yield from find(v, key)
 
-    r = bs.run_for_participant({"ParticipantId": "2e3c75c00d7f4f37b53a048d195f11da",
+    r = bs.run_for_participant({"ParticipantId": "11111111111111111111111111111111",
                                 "source": "timedomain", "LabelMetric": "left_leg_vas"})
     hits = list(find(r, "perm_family_matches_selection"))
     assert hits, "the guard field is not published"

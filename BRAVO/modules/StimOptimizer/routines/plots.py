@@ -14,7 +14,7 @@ Re-runnability
 Everything is a pure function of the design-matrix CSV plus the declared parameters. A data
 refresh is::
 
-    from StimOptimizer.routines import plots
+    from modules.StimOptimizer.routines import plots
     plots.render_all("rcs08_bo_design_matrix.csv", outdir="figs",
                      # Pass the TRUE horizon of the matrix you are handing in. This example is
                      # illustrative only — do not copy the date. The module default is the string
@@ -49,6 +49,7 @@ import pandas as pd
 from . import acquisition as ACQ
 from . import objective as OBJ
 from . import surrogate as SUR
+from .. import safety_ceiling as SC
 from .preference import PreferenceGP
 
 # --- canonical configuration -------------------------------------------------------------
@@ -73,10 +74,7 @@ KAPPA = 2.0
 BETA = 2.0
 PREF_MARGIN = 0.15
 
-#: Programmed ``UpperLimitInMilliAmps`` anchors, (freq_hz, upper_mA), from the device JSONs.
-LIMIT_ANCHORS = np.array([[55., 2.0], [55., 1.8], [55., 1.9], [10., 1.9], [110., 4.0],
-                          [110., 3.2], [130., 3.2], [125., 2.5], [165., 2.5], [110., 2.2],
-                          [55., 1.6], [10., 2.0]])
+# Participant-specific provenance and examples are maintained outside source control.
 
 # Declared provenance. The CALLER should pass the true horizon; this default is deliberately
 # labelled as unset so a stale value can never be silently stamped onto a figure.
@@ -101,6 +99,22 @@ GOODNESS = "lower J = better"
 
 
 # --- context ------------------------------------------------------------------------------
+
+# Aditya canonical compatibility imports/constants.
+
+
+
+
+
+
+
+
+
+
+LIMIT_ANCHORS = np.array([[55., 2.0], [55., 1.8], [55., 1.9], [10., 1.9], [110., 4.0],
+                          [110., 3.2], [130., 3.2], [125., 2.5], [165., 2.5], [110., 2.2],
+                          [55., 1.6], [10., 2.0]])
+
 @dataclass
 class FigureContext:
     """Everything the five figures need, computed once."""
@@ -156,41 +170,12 @@ def _cell_edges(centres):
 def build_context(design_csv, *, freq_grid=FREQ_GRID, amp_grid=AMP_GRID,
                   incumbent_epoch=None, incumbent_xy=None,
                   fixed_length_scale=FIXED_LENGTH_SCALE, beta=BETA, kappa=KAPPA,
-                  limit_anchors=LIMIT_ANCHORS, pref_margin=PREF_MARGIN,
+                  safety_ceiling=None, pref_margin=PREF_MARGIN,
                   n_batches=3, q=4, min_tolerated_h=72.0,
                   data_horizon=DATA_HORIZON, washin_min=WASHIN_MIN,
                   hemisphere="Left", primary_item=None,
                   random_state=0) -> FigureContext:
-    """Fit every model the figures need from one design matrix.
-
-    Parameters
-    ----------
-    design_csv
-        Path to the epoch-level design matrix, or a DataFrame. Needs the columns
-        :func:`objective.build_objective` requires.
-    fixed_length_scale
-        Per-dimension length-scale pinning. The default ``(0.823, None)`` pins FREQUENCY at one
-        octave — it is not identifiable from this design (OBJECTIVE_SPEC amendment 2026-08-29) —
-        and leaves AMPLITUDE free to be fitted. Pinning both would make leave-one-out folds
-        inherit the full-data amplitude hyperparameter, which would invalidate any calibration
-        claim drawn from them.
-    data_horizon, washin_min
-        Declared provenance, stamped onto every figure. ``washin_min`` is the post-change
-        exclusion window that defines an epoch's report set; it is a protocol parameter, not a
-        modelling one, and the figures are only interpretable against a stated value.
-    hemisphere
-        ``"Left"`` or ``"Right"`` — which hemisphere's amplitude forms the second search
-        dimension, read from ``amp_mA_<hemisphere>``. The two hemispheres are fitted as SEPARATE
-        surfaces rather than as a joint 3-D surface, for the same reason the two pain sites are
-        separate optimizers: the two sides are usable on different epoch subsets, so a joint fit
-        would impose one shared length scale on two dimensions with different support. In the
-        RCS08 warm start the LEFT is the sparser side — above 0 mA on 59 of 86 epochs against 71
-        for the right — giving 54 fitted epochs on the left arm and 63 on the right. Run one
-        context per hemisphere and compare them side by side.
-    primary_item
-        Pain metric name passed through to :func:`objective.build_objective` (e.g. ``"left_leg"``,
-        ``"back"``). ``None`` uses the module default, which is the left leg.
-    """
+    """Fit every model the figures need from one design matrix."""
     es = pd.read_csv(design_csv) if not isinstance(design_csv, pd.DataFrame) else design_csv.copy()
     grid = SUR.ParameterGrid(freq_grid, amp_grid)
     gx = grid.grid_X()
@@ -236,9 +221,12 @@ def build_context(design_csv, *, freq_grid=FREQ_GRID, amp_grid=AMP_GRID,
     n_reports = np.zeros(len(grid))
     np.add.at(n_reports, grid.index_of(Xobs), fit["n"].to_numpy(float))
 
-    # safety GP, two-anchor seed (OBJECTIVE_SPEC amendment 2026-08-29)
-    deliv = D.loc[D["dur_h"] >= float(min_tolerated_h), ["freq_hz", amp_col]].to_numpy(float)
-    Xs, sev, sv = SUR.SafetyGP.seed_from_history(deliv, np.asarray(limit_anchors, float))
+    # safety GP, two-anchor seed (OBJECTIVE_SPEC amendment 2026-08-29): tolerated settings at
+    # severity 0 and the PI-stated ceiling at severity 3, from the ONE seed builder Stage 1 also
+    # calls (`safety_ceiling.safety_seed`, 2026-09-12).
+    Xs, sev, sv, seed_meta = SC.safety_seed(D, amp_col, freq_grid=freq_grid,
+                                            ceiling=safety_ceiling,
+                                            min_tolerated_h=min_tolerated_h)
     sgp = SUR.SafetyGP(grid, random_state=random_state).fit(Xs, sev, sv)
     smu, ssd = sgp.predict(gx)
     sub = smu + float(beta) * ssd
@@ -269,6 +257,8 @@ def build_context(design_csv, *, freq_grid=FREQ_GRID, amp_grid=AMP_GRID,
     band = (gx[:, 0] <= 55) & (gx[:, 1] > 1.8)
     meta = dict(
         hemisphere=str(hemisphere), amp_col=amp_col,
+        # What the safety model was told: the stated ceiling, its provenance, the anchors.
+        **seed_meta,
         primary_item=str(D["primary_item"].iloc[0]) if "primary_item" in D.columns else "unknown",
         data_horizon=str(data_horizon), washin_min=float(washin_min),
         beta=float(beta), kappa=float(kappa), q=int(q), n_batches=int(n_batches),
@@ -1323,3 +1313,6 @@ def render_all(design_csv, outdir=".", *, which=(1, 2, 3, 4, 5), dpi=200, html=T
     meta_path.write_text(json.dumps(ctx.meta, indent=2, sort_keys=True))
     paths.append(str(meta_path))
     return ctx, paths
+
+
+# Retained active Aditya interfaces.

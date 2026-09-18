@@ -17,7 +17,8 @@ ChronicBrainSense.py):
 Routine input contract (what streaming_psd expects per epoch; identical to dbs_io.Stream):
   {"stream_data": [<per-group (n_ch, n_samples) array>, ...],
    "channel_names": [[name, ...], ...],
-   "sample_rate": float}
+   "sample_rate": float,
+   "missing": <(n_samples,) 0/1 dropped-packet flag, or None>}
 """
 
 import datetime
@@ -26,13 +27,35 @@ import numpy as np
 import pandas as pd
 from scipy.signal import savgol_filter
 
-from .routines.availability import _missing_per_sample
-from .routines.local_time import local_calendar_day
+# Both spellings on purpose: the container's path root makes the package `modules.DecodeCommon`,
+# the host suite's root makes it `DecodeCommon` (same convention as routines/availability.py).
+try:
+    from modules.DecodeCommon.representation import missing_per_sample as _missing_per_sample
+    from modules.DecodeCommon import matching as _matching
+except ImportError:
+    from modules.DecodeCommon.representation import missing_per_sample as _missing_per_sample
+    from modules.DecodeCommon import matching as _matching
+
+# THE CALENDAR DAY IS THE CALIFORNIA DAY (review B1, 2026-09-12). Every instant in this file is
+# tz-naive UTC by the time a "day" is read from it, and UTC midnight is 4-5 pm in California, so
+# reading `.date()` off the instant filed every evening rating under the next day. One rule, one
+# module, imported here rather than from `bravo_service` (which needs Django to import).
+from .routines.local_time import local_calendar_day as _local_day
 
 
 # ---------------------------------------------------------------------------
 # 1) Recording reshape: BRAVO TimeDomain dict -> Stream-like epoch dict
 # ---------------------------------------------------------------------------
+
+# Aditya canonical compatibility imports/constants.
+
+
+
+
+from .routines.availability import _missing_per_sample
+
+from .routines.local_time import local_calendar_day
+
 def bravo_timedomain_to_streamdata(recording):
     """
     Convert one BRAVO TimeDomain recording dict into the per-epoch dict the streaming
@@ -518,8 +541,7 @@ def bravo_chronic_to_lfp_df(chronic, pro_df, *, label_metric="nrs", pain_cutoff=
                             label_strategy="kmeans", kmeans_features=("left_leg_vas", "mpq_sum"),
                             low_pct=33.3333, high_pct=66.6667, daily_broadcast=True,
                             timestamp_col="date_time_s1_daily", smooth_window=7):
-    """
-    Build the tidy `cv_df` the chronic threshold detector consumes from a BRAVO Chronic
+    """Build the tidy `cv_df` the chronic threshold detector consumes from a BRAVO Chronic
     recording (or list of them) + REDCap PROs.
 
     Returns DataFrame with columns:
@@ -530,28 +552,10 @@ def bravo_chronic_to_lfp_df(chronic, pro_df, *, label_metric="nrs", pain_cutoff=
         pain_level       : binary 0/1 pain label (1 = higher pain)
         <label_metric>   : the carried PRO metric value (nearest-date)
 
-    `label_strategy` selects how `pain_level` is built:
-      * "kmeans" (default, matches the source notebook): 2-cluster KMeans on
-        `kmeans_features` = [left_leg_vas, mpq_sum] via
-        threshold_biomarker.kmeans_pain_level -- the VERBATIM notebook labeler
-        (threshold_biomarker.ipynb cell 10). Requires those columns in `pro_df`. If they are
-        absent, this falls back to "cutoff" and emits a warning so a missing-column run never
-        silently produces garbage labels.
-      * "cutoff": transparent single-metric threshold `pain_level = label_metric >= pain_cutoff`
-        (default `pain_cutoff` = the metric's median). Simpler; use when you don't have the
-        two cluster features or want an explicit cutoff.
-      * "median": single-metric split at the metric's median (keeps every day; balanced ~50/50).
-      * "tertile" / "percentile": two-threshold split — days at/below `low_pct` -> 0 (low),
-        at/above `high_pct` -> 1 (high), the ambiguous middle -> NaN (excluded from training).
-        "tertile" defaults to 33.33/66.67; "percentile" uses the supplied `low_pct`/`high_pct`.
-        Dropping the middle gives the detector its cleanest target (best LFP separability in the
-        RCS08 study) at the cost of labeling fewer days. See docs/binarization_recommendation_RCS08.md.
-
     For every threshold labeler (`median`/`tertile`/`percentile`/`cutoff`) the boundary is computed
     on the DAILY metric distribution and broadcast to each sample (`daily_broadcast=True`), so the
     cut reflects pain across days rather than recording density. Set `daily_broadcast=False` to fit
-    the cut on the raw per-sample array (legacy behavior).
-    """
+    the cut on the raw per-sample array (legacy behavior)."""
     import warnings
 
     chronic = _concat_chronic(chronic)
@@ -697,3 +701,6 @@ def merge_timelines(td_timeline, chronic_timeline):
     merged = pd.merge_asof(left, right, on="time", direction="nearest",
                            tolerance=pd.Timedelta("1D"))
     return merged.reset_index(drop=True)
+
+
+# Retained active Aditya interfaces.

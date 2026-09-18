@@ -39,8 +39,11 @@ def _responding_lfp(n=120, low=1.0, high=3.0, suppression=0.9, band=(13.0, 17.0)
     mag = np.abs(rng.normal(1.0, 0.05, (n, freqs.size)))
     sel = (freqs >= band[0]) & (freqs <= band[1])
     mag[:, sel] *= (np.exp(-suppression * amp)[:, None] * 3.0)
-    return GATE.LfpEvidence(amplitude_mA=amp, magnitude=mag, freqs=freqs,
+    ev = GATE.LfpEvidence(amplitude_mA=amp, magnitude=mag, freqs=freqs,
                             era=np.tile(["a", "b"], n // 2), cluster=np.arange(n))
+    ev.channel = "synthetic_left"
+    ev.hemisphere = "Left"
+    return ev
 
 
 def _flat_lfp(n=120, seed=1):
@@ -201,7 +204,8 @@ def test_missing_lfp_evidence_is_not_assessed_and_still_blocks():
 
 
 def test_a_responding_band_passes_and_reports_its_separation():
-    g = GATE.evaluate_gate(_frozen(), lfp=_responding_lfp())
+    g = GATE.evaluate_gate(_frozen(), lfp=_responding_lfp(),
+                          pain_positive_by_channel={"synthetic_left": set(GATE.DEFAULT_BAND_CENTERS_HZ)})
     c = g.condition("adaptive_band_passes_lfp_response")
     assert c.passed is True
     assert c.evidence["n_passing"] >= 1
@@ -313,12 +317,7 @@ def test_omitting_selected_bands_leaves_the_original_four_condition_shape():
 
 
 def test_the_out_of_window_band_is_excluded_by_the_device_not_by_its_statistics():
-    """The 3.92 Hz band spans roughly 1.4-6.4 Hz at 5 Hz width, outside the 8-30 Hz window.
-
-    That exclusion holds whatever its p-value had turned out to be, and the gate must say so
-    rather than folding it in with the statistical refusal. Conflating the two would overstate the
-    case: the two RCS08 bands fail for genuinely different reasons.
-    """
+    """The 3.92 Hz band spans roughly 1.4-6.4 Hz at 5 Hz width, outside the 8-30 Hz window."""
     nrs = [b for b in GATE.RCS08_SELECTED_BANDS if b.outcome == "nrs"][0]
     lo, hi = nrs.band_hz
     assert lo == pytest.approx(1.4215, abs=1e-3)
@@ -464,7 +463,8 @@ def test_the_gate_can_pass_when_every_condition_is_met():
     """The gate must be capable of a yes, or a refusal carries no information."""
     cfg = S1.clinician_override(_frozen(_setting(rate_hz=130.0, amp_lo=1.0, amp_hi=4.0)),
                                 reason="not needed here but harmless")
-    g = GATE.evaluate_gate(cfg, lfp=_responding_lfp(), amp_limits={"Left": (1.5, 3.0)})
+    g = GATE.evaluate_gate(cfg, lfp=_responding_lfp(), amp_limits={"Left": (1.5, 3.0)},
+                          pain_positive_by_channel={"synthetic_left": set(GATE.DEFAULT_BAND_CENTERS_HZ)})
     assert g.passed is True, g.describe()
     assert g.refusals() == []
     assert "MAY START" in g.describe()

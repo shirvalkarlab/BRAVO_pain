@@ -43,6 +43,11 @@ from sklearn import metrics
 # VERBATIM from threshold_biomarker.ipynb (cell 13)
 # ============================================================================
 
+
+# Aditya canonical compatibility imports/constants.
+
+
+
 def otsu1d(histogram, hist_min, hist_max):
     if hist_min == None:
         hist_min = np.min(histogram)
@@ -164,26 +169,7 @@ def best_threshold_by_balanced_auc(true_labels, scores, thresholds):
 
     For a BINARY prediction, roc_auc_score(y, pred) == (sens + spec) / 2 (balanced accuracy), so the
     notebook's `a = max(auc, 1-auc)` over the grid is `max(ba, 1-ba)` where ba=(sens+spec)/2 — one
-    vectorized pass instead of 140 sklearn calls per window. Returns (best_thr, best_auc).
-
-    EQUIVALENCE (verified by test_best_threshold_balanced_auc_matches_reference):
-      * The BEST AUC value is identical to the original loop's to full float precision — 797 fuzz
-        cases with both pain classes present (NaN scores and heavy ties included; one-class folds are
-        skipped before this selector is ever called, exactly as the production code does). The
-        reported per-window sens/spec/acc/auc are therefore unchanged.
-      * The CHOSEN threshold AMONG EXACT AUC TIES is made deterministic here: np.argmax returns the
-        FIRST (lowest) threshold achieving the maximum balanced AUC. The original loop's choice among
-        ties depended on sklearn's internal AUC float-accumulation differing from (sens+spec)/2 at the
-        ~1e-16 level, which could flip the strict-greater `>` onto a later equally-optimal threshold —
-        an undocumented float-noise artifact, NOT a difference in the science. On real continuous LFP
-        data the AUC-maximizing threshold lands at a non-tied grid edge (observed on RCS08: per-window
-        thresholds at grid boundaries 60/192 where no AUC tie exists), so the deterministic choice
-        coincides with an AUC-optimal threshold there. The "first AUC-optimal threshold" rule is
-        reproducible run-to-run, which the original (sklearn-float-dependent) tie-break was not.
-      * Single-class-prediction thresholds (tp+fp == 0 or == n, i.e. the original's `cls.nunique() < 2`
-        skip) are masked out exactly as before. If no threshold yields a 2-class split, returns
-        (float(thresholds[0]), -1.0) — the untouched initial state.
-    """
+    vectorized pass instead of 140 sklearn calls per window. Returns (best_thr, best_auc)."""
     true_labels = np.asarray(true_labels).astype(int)
     scores = np.asarray(scores, dtype=float)
     thr = np.asarray(thresholds, dtype=float)
@@ -462,3 +448,6 @@ def kmeans_pain_level(pain_score_cluster, random_state=0):
         pain_level_all = 1 - pain_level_all
 
     return pain_level_all
+
+
+# Retained active Aditya interfaces.

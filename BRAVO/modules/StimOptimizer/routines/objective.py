@@ -18,20 +18,27 @@ import pandas as pd
 # Calibration statement (OBJECTIVE_SPEC 2.3): one mild side effect cancels exactly 1.0 NRS
 # point of benefit. Moderate and severe are HARD INFEASIBLE, not large finite penalties.
 #
+# "mild_persistent" (2026-09-15): the clinic sheet's own printed ladder is 0 none, 1 mild,
+# 2 mild persistent, 3 moderate, 4 avoid (`clinic_pain.SIDE_EFFECT_SEVERITY_LABEL`). Until this
+# date a sheet score of 2 was folded into "mild" and cost 1.0. The PI's ruling, his words: "yes
+# score 2 cost more" and, asked for the number, "2" -- so a persistent mild side effect cancels
+# exactly 2.0 NRS points. It stays FINITE on purpose: a large enough pain benefit can still
+# outbid it, which is what separates it from moderate, where nothing can.
+#
 # Sarikhani et al. could use a finite penalty of 4 to mean "always rejected" because their
 # tremor term was bounded to [-4, 4], so no efficacy gain could outweigh it. J_pain here is
 # baseline-subtracted NRS referenced to an incumbent at 7.28, so it is bounded below by -7.28:
 # a finite penalty of 4.0 would be beaten by any cell showing more than 4 NRS points of
 # improvement (7.3 -> 3.3, which is clinically conceivable). Encoding the trade-off as +inf is
 # the only way the stated guarantee is actually true.
-SE_LADDER = {"none": 0.0, "mild": 1.0, "moderate": np.inf, "severe": np.inf}
+SE_LADDER = {"none": 0.0, "mild": 1.0, "mild_persistent": 2.0, "moderate": np.inf, "severe": np.inf}
 
 # Severity labels that make a cell ineligible for selection outright. Infeasible cells are NOT
 # discarded: they are excluded from the objective surrogate's argmin (an intolerable setting
 # carries no useful information about where the pain optimum is) while still informing the
 # safety GP, which is how a constrained Bayesian optimizer is supposed to treat them.
 SE_HARD_REJECT = frozenset({"moderate", "severe"})
-SE_SEVERITY_RANK = {"none": 0, "mild": 1, "moderate": 2, "severe": 3}
+SE_SEVERITY_RANK = {"none": 0, "mild": 1, "mild_persistent": 2, "moderate": 3, "severe": 4}
 SE_THRESHOLD = 3.0  # severity scale value that defines the unsafe boundary
 
 # --- section 2.2: the pain metric is a CHOICE, and it is now an explicit one -------------
@@ -81,6 +88,12 @@ NATIVE_SCALE = {
     "right_foot_vas": 100.0, "pain_Right_Foot": 10.0,
     "vas": 100.0, "relief": 100.0, "mpq_sum": 45.0,
 }
+
+
+
+# Aditya canonical compatibility imports/constants.
+
+
 
 
 def scale_factor(col: str) -> float:
@@ -190,7 +203,9 @@ DEFAULTS = dict(
     metric="left_leg",
     washin_h=60.0 / 3600.0,   # 60 s: PI reports a rapid responder; see OBJECTIVE_SPEC amendments
     c_dur=0.25,        # variance inflation scale for short exposures
-    c_age=0.25,        # variance inflation scale for observation age
+    # `c_age` (0.25 x years², "the interim stand-in for nonstationarity") was removed on
+    # 2026-09-17, decision 194. The current joint model uses rate and both currents;
+    # it has neither an observation-age penalty nor a fitted time input.
     dur_ref_h=168.0,   # one week: exposures shorter than this have not reached steady state
     min_var=1e-3,      # numerical floor on observation variance
 )
@@ -200,7 +215,7 @@ def side_effect_penalty(severity) -> float:
     """Map a reported severity label (or NaN / None for unreported) to its NRS-point penalty."""
     if severity is None or (isinstance(severity, float) and np.isnan(severity)):
         return 0.0
-    key = str(severity).strip().lower()
+    key = str(severity).strip().lower().replace(" ", "_").replace("-", "_")
     if key not in SE_LADDER:
         raise ValueError(
             f"unknown side-effect severity {severity!r}; expected one of {sorted(SE_LADDER)}"
@@ -276,12 +291,16 @@ def pooled_within_epoch_var(epoch_stats: pd.DataFrame, sd_col: str, n_col: str,
     return float(np.sum(dof * ok[sd_col].to_numpy(float) ** 2) / np.sum(dof))
 
 
-def observation_variance(n, sd, dur_h, age_days, *, pooled_var, cfg=None) -> np.ndarray:
+def observation_variance(n, sd, dur_h, *, pooled_var, cfg=None) -> np.ndarray:
     """Per-observation variance for the warm start (section 3).
 
-        sigma^2 = s^2/n + c_dur * max(0, 1 - dur/dur_ref)^2 + c_age * (age/365)^2
+        sigma^2 = s^2/n + c_dur * max(0, 1 - dur/dur_ref)^2
 
-    This is the whole mechanism by which "use all the data" is made safe: a 155-report,
+    The age term this once carried is gone (decision 194). The current joint model does not
+    fit observation age as an input. These weights describe precision and duration, not
+    adjustment for temporal confounding.
+
+    For example, a 155-report,
     85-day epoch and a 1-report, 26-hour epoch both enter the fit, weighted by how much
     they can actually support.
     """
@@ -291,12 +310,11 @@ def observation_variance(n, sd, dur_h, age_days, *, pooled_var, cfg=None) -> np.
     s2 = np.where(np.isfinite(sd) & (n >= 2), sd ** 2, pooled_var)
     sem2 = s2 / np.maximum(n, 1.0)
     short = np.maximum(0.0, 1.0 - np.asarray(dur_h, float) / cfg["dur_ref_h"]) ** 2
-    aged = (np.asarray(age_days, float) / 365.0) ** 2
-    return np.maximum(sem2 + cfg["c_dur"] * short + cfg["c_age"] * aged, cfg["min_var"])
+    return np.maximum(sem2 + cfg["c_dur"] * short, cfg["min_var"])
 
 
 def build_objective(epoch_stats: pd.DataFrame, *, incumbent_epoch, cfg=None,
-                    reference_time=None) -> pd.DataFrame:
+                    reference_time=None, pooled_var_override=None) -> pd.DataFrame:
     """Assemble the epoch-level design table the surrogate consumes.
 
     Parameters
@@ -310,7 +328,19 @@ def build_objective(epoch_stats: pd.DataFrame, *, incumbent_epoch, cfg=None,
         Epoch id of the current chronic setting. J_pain is referenced to its mean, so
         J = 0 at the incumbent by construction and negative means better than status quo.
     reference_time
-        Timestamp against which observation age is measured; defaults to the latest ``t0``.
+        Timestamp for the descriptive ``age_days`` column; defaults to the latest ``t0``.
+        Observation age does not change the variance or enter the joint model.
+    pooled_var_override
+        ``None`` (the default) means the pooled within-epoch variance is estimated from
+        ``epoch_stats`` itself via ``pooled_within_epoch_var``, exactly as before this
+        parameter existed -- every existing caller is unaffected. When a frame has NO epoch
+        with at least ``min_n`` reports (a thin, independent stream such as the clinic-sheet
+        pain stream in ``StimOptimizer.clinic_pain``, where most settings were tried once),
+        that estimate cannot be formed and would raise; a caller who has a pooled variance
+        from elsewhere (e.g. the same participant's REDCap-based stream) may pass it here
+        instead, so a thin epoch table still gets a real (if imported) noise estimate rather
+        than failing outright. Never used silently: the caller decides, and states in its own
+        report which variance was actually used.
 
     Returns
     -------
@@ -341,11 +371,20 @@ def build_objective(epoch_stats: pd.DataFrame, *, incumbent_epoch, cfg=None,
     d["primary_scale_factor"] = sf
     ref = float(d.loc[d["epoch"] == incumbent_epoch, item].iloc[0])
     if not np.isfinite(ref):
+        # Review S10 (2026-09-12): with a NaN reference every J is NaN, every epoch reads
+        # infeasible, and the arm is skipped as "only 0 feasible epochs ... too few to fit a
+        # surface" -- a reason that says the record has no usable epochs when it has plenty and
+        # the incumbent simply was not rated on this item. Name the actual cause.
         raise ValueError(
-            f"incumbent epoch {incumbent_epoch!r} has no finite {item} rating; "
-            "the objective cannot be referenced to this epoch")
+            f"incumbent epoch {incumbent_epoch!r} has no finite {item} rating, so J cannot be "
+            "referenced to it; every other epoch's rating is unusable until the setting in force "
+            f"has at least one {item} report")
 
     d["J_pain"] = d[item].astype(float) - ref
+    # The rating at the setting in force, carried on every row so a reader of J can add it back
+    # and print the predicted rating in the participant's own units (the PI, 2026-09-17: absolute
+    # numbers on the current map, the colour scale centred on today's setting).
+    d["pain_reference"] = float(ref)
 
     if "se_severity" in d.columns:
         d["se_observed"] = d["se_severity"].notna()
@@ -368,8 +407,12 @@ def build_objective(epoch_stats: pd.DataFrame, *, incumbent_epoch, cfg=None,
     ref_t = pd.to_datetime(reference_time, utc=True) if reference_time is not None else t0.max()
     d["age_days"] = (ref_t - t0).dt.total_seconds() / 86400.0
 
-    pooled = pooled_within_epoch_var(d, sd_col, "n")
+    pooled = (float(pooled_var_override) if pooled_var_override is not None
+             else pooled_within_epoch_var(d, sd_col, "n"))
     d["pooled_within_var"] = pooled
-    d["obs_var"] = observation_variance(d["n"], d[sd_col], d["dur_h"], d["age_days"],
-                                        pooled_var=pooled, cfg=cfg)
+    d["pooled_within_var_overridden"] = pooled_var_override is not None
+    d["obs_var"] = observation_variance(d["n"], d[sd_col], d["dur_h"], pooled_var=pooled, cfg=cfg)
     return d
+
+
+# Retained active Aditya interfaces.

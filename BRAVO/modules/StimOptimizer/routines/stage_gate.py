@@ -46,8 +46,12 @@ THE FOUR CONDITIONS
     with its reason, and it is reported as an override and never as a pass.
 
 ``adaptive_band_passes_lfp_response``
-    A sensed band must exist that lies entirely inside 8-30 Hz AND responds to stimulation
-    amplitude. Both halves are necessary and they are independent. The range is the device's:
+    ON EACH FROZEN SIDE, a sensed band must exist that lies entirely inside 8-30 Hz AND falls
+    with stimulation current once the time confound is removed AND rises with pain on the stored
+    Biomarkers grid -- the readiness screen's own rule, one band suffices (decision 199,
+    2026-09-17; it replaced the two majority rules of review S4). Evidence from one side's
+    sensing contact licenses only that side (2026-09-12, review S3). Both halves
+    are necessary and they are independent. The range is the device's:
     Adaptive Therapy can only be driven by a band inside 8-30 Hz, and the wider 1-96 Hz range is
     Sensing Only, meaning the signal can be recorded but a change in it will not change stimulation.
     The response requirement is also the device's (manual p. 35: "Adaptive Therapy relies on LFP
@@ -62,15 +66,19 @@ THE FOUR CONDITIONS
     The adaptive amplitude limits are the range the device will move within, and they become the
     patient limits if the group is later switched from Adaptive to Sensing Only. They must sit under
     the declared 4.9 mA ceiling and inside the amplitude envelope actually delivered on that
-    hemisphere. The envelope requirement is doing real work rather than being a formality: this
-    record establishes that amplitude does NOT predict side-effect severity (Spearman rho = -0.013,
-    p = 0.79, n = 417 non-procedural steps with stimulation on), and only 5 of those rows sit above
-    4 mA. So above 4 mA is UNKNOWN rather than safe, and an adaptive limit above the delivered
-    maximum would hand the device authority to go somewhere no one has ever been.
+    hemisphere. The envelope requirement is doing real work rather than being a formality: above
+    the delivered maximum is UNKNOWN rather than safe, and an adaptive limit there would hand the
+    device authority to go somewhere no one has ever been. Whether reported side-effect severity
+    moves with current on this record is RECOMPUTED on every request from the clinic sheets'
+    numeric side-effect column (``clinic_pain.amplitude_severity_evidence``, passed in as
+    ``side_effect_evidence``) and quoted in the refusal, or the refusal says no such statistic is
+    available. (Until 2026-09-15 a fixed "rho = -0.013 over 417 steps" was typed here; it came
+    from a 2026-09-02 analysis whose labels were 96% uncoded and whose model was deleted in
+    decision 145. The PI's rule: "recompute always".)
 
 Typical use::
 
-    from StimOptimizer.routines import stage_gate as GATE
+    from modules.StimOptimizer.routines import stage_gate as GATE
     g = GATE.evaluate_gate(stage1_result.frozen)
     print(g.describe())
     if not g.passed:
@@ -120,6 +128,13 @@ SELECTION_ALPHA = 0.05
 #: well as its own permutation test, because the band was chosen from a family of candidates and the
 #: uncorrected p-value of a selected maximum is not a valid test of it.
 SELECTION_FDR_Q = 0.05
+
+
+
+# Aditya canonical compatibility imports/constants.
+
+
+
 
 
 @dataclass(frozen=True)
@@ -202,20 +217,7 @@ class ResponseSummary:
         return body + src
 
 
-#: The reconciled RCS08 biomarker plate, as handed over by the biomarker track on 2026-09-02 (audit
-#: item F8 part 2, commit 6001e00). Recorded here so this module, its tests and TWO_STAGE_DESIGN.md
-#: all cite ONE set of numbers instead of three drifting copies.
-#:
-#: PROVISIONAL. Three successive corrections have now moved this statistic, and these are the
-#: current best estimates rather than a settled result. They are the selection-corrected values:
-#: the permutation family was reconciled with the family the band was actually selected from, which
-#: moved ``nrs`` from 0.0500 to 0.0809 and ``left_leg_vas`` from 0.6074 to 0.4166. Neither observed
-#: correlation exceeds its own null 95th percentile.
-#:
-#: The two bands fail for INDEPENDENT reasons and conflating them would overstate the case. The
-#: 3.92 Hz band is excluded by a DEVICE constraint — at 5 Hz width it spans roughly 1.4-6.4 Hz,
-#: entirely outside the 8-30 Hz adaptive window — and that exclusion holds whatever its p-value had
-#: turned out to be. The 14.8 Hz band IS adaptive-capable and is excluded on its statistics alone.
+# Participant-specific provenance and examples are maintained outside source control.
 RCS08_SELECTED_BANDS = (
     SelectedBand(outcome="nrs", center_hz=3.9215, band_width_hz=DEFAULT_BAND_WIDTH_HZ,
                  r=-0.5303, perm_p=0.0809, fdr_q=None, exceeds_null_95th=False,
@@ -227,8 +229,7 @@ RCS08_SELECTED_BANDS = (
                             "selection-corrected from perm_p 0.6074"),
 )
 
-#: The LFP-response verdict already established on the real RCS08 record, supplied by the same
-#: hand-over. Reported by the gate with attribution; this module did not compute it.
+# Participant-specific provenance and examples are maintained outside source control.
 RCS08_RESPONSE_SUMMARY = ResponseSummary(
     responds=False, n_cells_suppressing=3, n_cells_total=15, one_sided_p=0.996,
     replication_note="the sole bilateral replication is at 165 Hz",
@@ -330,10 +331,26 @@ class GateResult:
     def not_assessed_names(self) -> list:
         return [c.name for c in self.conditions if c.passed is None]
 
+    @property
+    def headline(self) -> str:
+        """The one-line verdict, the only place its count is worded.
+
+        A condition that could not be assessed still refuses (decision 9: absence of evidence is
+        not permission), but it is not a condition that FAILED, and until 2026-09-15 this count
+        called it one -- "2 of 4 conditions block" for one failure and one not assessed, while the
+        Stim Optimizer card reading the same conditions said "1 of 4 checks block, 1 not assessed".
+        `describe()` and the response's `gate.verdict` (`bravo_service.two_stage_block`) both read
+        this; the response used to build its own copy, which is how one of the two stayed wrong.
+        """
+        if self.passed:
+            return "Stage 2 MAY START: every condition passed"
+        n_failed = len(self.failed_names())
+        n_unassessed = len(self.not_assessed_names())
+        return (f"Stage 2 MUST NOT START: {n_failed} of {len(self.conditions)} conditions block"
+                + (f", {n_unassessed} not assessed" if n_unassessed else ""))
+
     def describe(self) -> str:
-        head = ("GATE: Stage 2 MAY START — every condition passed" if self.passed
-                else f"GATE: Stage 2 MUST NOT START — {len(self.refusals())} of "
-                     f"{len(self.conditions)} conditions block")
+        head = "GATE: " + self.headline.replace(": ", " — ", 1)
         lines = [head]
         for c in self.conditions:
             lines.append(f"  [{c.verdict:12s}] {c.name}: {c.detail}")
@@ -350,6 +367,23 @@ def check_rate_floor(frozen, *, min_rate_hz=PA.MIN_ADAPTIVE_RATE_HZ) -> GateCond
         return GateCondition("rate_at_or_above_adaptive_minimum", None,
                              "no frozen setting to check: Stage 1 produced no hemisphere result",
                              evidence=dict(rates=rates))
+    # A NaN rate is Stage 1's honest "no adaptive-capable setting can be recommended from this
+    # record" (2026-09-12: every fitted stratum's safe cells lay below the adaptive minimum). It
+    # must FAIL here, not slip through: `nan < 55` is False, so without this check an absent rate
+    # would read as a rate at or above the minimum.
+    absent = {h: r for h, r in rates.items() if not np.isfinite(r)}
+    if absent:
+        return GateCondition(
+            "rate_at_or_above_adaptive_minimum", False,
+            "no adaptive-capable rate could be recommended on "
+            + ", ".join(sorted(absent))
+            + f": Stage 1 found no safe setting at or above the {float(min_rate_hz):g} Hz adaptive "
+              "minimum on any fitted pulse-width stratum, and did not carry a rate forward rather "
+              "than recommend one the closed-loop mode cannot use. The strata it excluded, and "
+              "what each would have recommended, are on the frozen configuration under "
+              "adaptive_envelope.",
+            evidence=dict(rates=rates, no_adaptive_capable_rate=sorted(absent),
+                          min_rate_hz=float(min_rate_hz)))
     below = {h: r for h, r in rates.items() if r < float(min_rate_hz)}
     if below:
         return GateCondition(
@@ -406,14 +440,7 @@ def check_openloop_resolved(frozen) -> GateCondition:
 
 
 def check_selected_band_in_adaptive_window(selected_bands) -> GateCondition:
-    """Does any SELECTED biomarker band lie entirely inside the 8-30 Hz adaptive window?
-
-    This is a pure DEVICE check and it is kept as its own condition precisely so that it cannot be
-    confused with the statistical one. A band outside the window is excluded whatever its p-value
-    turns out to be, and a band inside the window is admitted here whatever its p-value turns out to
-    be. Conflating the two reasons would overstate the case against a band that fails only one of
-    them, and on the current RCS08 plate the two bands fail for exactly these two different reasons.
-    """
+    """Does any SELECTED biomarker band lie entirely inside the 8-30 Hz adaptive window?"""
     if not selected_bands:
         return GateCondition("selected_band_inside_adaptive_window", None,
                              "no selected biomarker band was supplied, so whether any candidate is "
@@ -523,11 +550,110 @@ def check_selected_band_statistical_support(selected_bands, *, alpha=SELECTION_A
         evidence=ev)
 
 
+def verdict_row(center_hz, r) -> dict:
+    """One band's response verdict as numbers, for a page to draw rather than parse.
+
+    Added 2026-09-12 for the Stim Optimizer page redesign: the page drew the 18 band verdicts from
+    the sentences in ``evidence["verdicts"]`` (their prefix and nothing else), because every number
+    in them -- the two captured power readings, the currents they were read at, the standardised
+    separation and the era-adjusted slope -- was inside the sentence. This is the same
+    ``ResponseResult`` copied out field by field; the sentence stays beside it unchanged.
+    """
+    def _f(v):
+        try:
+            x = float(v)
+        except (TypeError, ValueError):
+            return None
+        return x if np.isfinite(x) else None
+    return {
+        "center_hz": float(center_hz),
+        "responds": (None if getattr(r, "responds", None) is None else bool(r.responds)),
+        "separation_d": _f(getattr(r, "separation_d", None)),
+        "separation_d_on_log": _f(getattr(r, "separation_d_on_log", None)),
+        "power_low": _f(getattr(r, "power_low", None)),
+        "power_high": _f(getattr(r, "power_high", None)),
+        "amp_low_mA": _f(getattr(r, "amp_low_mA", None)),
+        "amp_high_mA": _f(getattr(r, "amp_high_mA", None)),
+        "slope_log_per_mA": _f(getattr(r, "slope_log_per_mA", None)),
+        "slope_p": _f(getattr(r, "slope_p", None)),
+        "n_low": int(getattr(r, "n_low", 0) or 0),
+        "n_high": int(getattr(r, "n_high", 0) or 0),
+        "reason": str(getattr(r, "reason", "") or ""),
+        # The confound-adjusted half of "this band responds" (review S4, 2026-09-12): the
+        # era-blocked slope falls with current AND clears p < 0.05. The page draws both halves.
+        "era_negative_significant": _era_negative_significant(r),
+    }
+
+
+def _era_negative_significant(r) -> bool:
+    """`lfp_evidence.band_era_negative_significant`, imported lazily: lfp_evidence imports this
+    module at its top, so a top-level import the other way would be a cycle."""
+    from . import lfp_evidence as _EV
+    return bool(_EV.band_era_negative_significant(r))
+
+
+def evidence_by_side(lfp, frozen_sides) -> tuple:
+    """``(mapping {side: LfpEvidence}, note)`` for the gate's per-side response check (review S3).
+
+    Closed loop is configured per side -- each side senses on its own contact and moves its own
+    current -- so evidence licenses only the side it came from. ``lfp`` may be:
+
+    * a mapping ``{hemisphere: LfpEvidence}`` -- used as given;
+    * one ``LfpEvidence`` whose ``hemisphere`` is set -- attributed to that side only;
+    * one ``LfpEvidence`` with no ``hemisphere`` -- attributed to the only frozen side when the
+      configuration freezes exactly one, and to NO side when it freezes several, because an
+      untagged measurement cannot honestly be given to both;
+    * ``None`` -- no side has evidence.
+    """
+    sides = [str(h) for h in frozen_sides]
+    if lfp is None:
+        return {}, "no LFP evidence was supplied"
+    if isinstance(lfp, dict):
+        out = {str(k): v for k, v in lfp.items() if v is not None}
+        return out, "evidence supplied per side"
+    tag = getattr(lfp, "hemisphere", None)
+    if tag is not None:
+        return {str(tag): lfp}, f"one evidence object, tagged {tag}"
+    if len(sides) == 1:
+        return {sides[0]: lfp}, (f"one evidence object with no side named, attributed to the "
+                                 f"only frozen side ({sides[0]})")
+    return {}, (f"one evidence object with no side named, and the configuration freezes "
+                f"{len(sides)} sides ({', '.join(sides)}); it is attributed to none of them "
+                "rather than to both")
+
+
+def evidence_for_side(lfp, hemisphere):
+    """The evidence for one side out of whatever ``lfp`` is, or ``None`` (see `evidence_by_side`)."""
+    if lfp is None:
+        return None
+    if isinstance(lfp, dict):
+        return lfp.get(str(hemisphere))
+    tag = getattr(lfp, "hemisphere", None)
+    if tag is None or str(tag) == str(hemisphere):
+        return lfp
+    return None
+
+
 def check_adaptive_band(frozen, *, lfp=None, band_centers=DEFAULT_BAND_CENTERS_HZ,
                         band_width_hz=DEFAULT_BAND_WIDTH_HZ,
                         min_sep_d=LFP.MIN_CAPTURE_SEPARATION_D,
-                        response_summary=None) -> GateCondition:
-    """Does a sensed band exist inside 8-30 Hz that responds to stimulation amplitude?
+                        response_summary=None, pain_positive_by_channel=None,
+                        response_fn=None) -> GateCondition:
+    """Does EACH frozen side have a sensed band inside 8-30 Hz that falls with stimulation
+    current AND rises with pain (decision 199)?
+
+    ``pain_positive_by_channel`` maps each sensing channel to the band centres whose correlation
+    with pain is positive and established on the stored Biomarkers grid
+    (``routines.pain_relationship``); the side's evidence names its channel (``e.channel``). A
+    channel the mapping does not carry leaves the side NOT ASSESSED. ``response_fn`` defaults to
+    ``lfp_response.assess_response`` and is injectable for tests only.
+
+    Per side since 2026-09-12 (review S3): ``lfp`` may be one ``LfpEvidence`` (attributed to the
+    side its ``hemisphere`` names, or to the only frozen side when it names none) or a mapping
+    ``{hemisphere: LfpEvidence}``; the condition passes only when every frozen side passes, a side
+    with no evidence is NOT ASSESSED and blocks, and ``evidence["per_hemisphere"]`` carries each
+    side's own numbers. The per-side rule is the readiness screen's
+    (``lfp_evidence.cell_response_verdict``, review S4), so the two cannot disagree.
 
     Two independent requirements, checked in order. The device range comes first because it is a
     hard fact about the hardware and costs nothing to check: ``percept_adaptive.
@@ -583,75 +709,198 @@ def check_adaptive_band(frozen, *, lfp=None, band_centers=DEFAULT_BAND_CENTERS_H
             f"{PA.SENSING_ONLY_LFP_BAND_HZ[0]:g}-{PA.SENSING_ONLY_LFP_BAND_HZ[1]:g} Hz) but a "
             "change in it cannot drive stimulation on this device.", evidence=ev)
 
-    if lfp is None:
+    sides = [str(s.hemisphere) for s in getattr(frozen, "settings", ()) or ()]
+    by_side, attribution = evidence_by_side(lfp, sides)
+    ev["evidence_attribution"] = attribution
+    if lfp is None or not by_side:
+        why = ("NO LFP EVIDENCE was supplied" if lfp is None
+               else f"the LFP evidence could not be attributed to any frozen side ({attribution})")
+        ev["per_hemisphere"] = {h: dict(passed=None, n_tested=0, n_passing=0,
+                                        reason="no evidence for this side") for h in sides}
         return GateCondition(
             "adaptive_band_passes_lfp_response", None,
-            f"{len(capable)} candidate bands lie inside the adaptive range, but NO LFP EVIDENCE "
-            "was supplied, so whether any of them responds to stimulation amplitude is NOT "
-            "ASSESSED. Adaptive Therapy relies on that response (A610 manual p. 35), and it is a "
-            "different question from whether the band tracks pain: a band can correlate with pain "
-            "perfectly and still be useless as a control signal, because the controller acts on "
-            "the band and its only actuator is amplitude. Supply an LfpEvidence carrying LFP "
-            "magnitude or band power against the amplitude it was recorded at.", evidence=ev)
+            f"{len(capable)} candidate bands lie inside the adaptive range, but {why}, so "
+            "whether any of them responds to stimulation amplitude is NOT ASSESSED. Adaptive "
+            "Therapy relies on that response (A610 manual p. 35), and it is a different question "
+            "from whether the band tracks pain: a band can correlate with pain perfectly and "
+            "still be useless as a control signal, because the controller acts on the band and "
+            "its only actuator is amplitude. Supply an LfpEvidence carrying LFP magnitude or band "
+            "power against the amplitude it was recorded at, for each frozen side.", evidence=ev)
 
-    results, passing, not_assessed = {}, [], []
-    for c, _ in capable:
-        power = lfp.power_for(c, band_width_hz)
-        if power is None:
-            not_assessed.append(c)
+    # ONE SIDE AT A TIME (review S3, 2026-09-12). Until then the check ran once on one evidence
+    # object for a configuration that freezes a setting per side, so one sensing contact's
+    # response licensed closed loop on both sides. Each frozen side is now judged on its own
+    # evidence, by the SAME rule the readiness screen applies (decision 199): at least one band
+    # that falls with current once time is removed AND rises with pain on the Biomarkers grid.
+    from . import lfp_evidence as _EV        # lazy: lfp_evidence imports this module at its top
+    assess = response_fn if response_fn is not None else LFP.assess_response
+    per = {}
+    for h in sides:
+        e = by_side.get(h)
+        if e is None:
+            per[h] = dict(passed=None, n_tested=0, n_passing=0, passing_centers=[],
+                          n_power_unavailable=0, verdict_rows=[], verdicts={},
+                          reason="no evidence for this side")
             continue
-        r = LFP.assess_response(power, lfp.amplitude_mA, era=lfp.era, cluster=lfp.cluster,
-                                mode_requires=lfp.mode_requires, min_sep_d=min_sep_d)
-        results[float(c)] = r
-        if r.responds is True:
-            passing.append(float(c))
-    ev.update(n_tested=len(results), n_passing=len(passing), passing_centers=sorted(passing),
-              n_power_unavailable=len(not_assessed),
-              verdicts={k: v.describe() for k, v in results.items()})
+        results, passing, not_assessed = {}, [], []
+        for c, _ in capable:
+            power = e.power_for(c, band_width_hz)
+            if power is None:
+                not_assessed.append(c)
+                continue
+            if response_fn is None:
+                r = assess(power, e.amplitude_mA, era=e.era, cluster=e.cluster,
+                           mode_requires=e.mode_requires, min_sep_d=min_sep_d)
+            else:
+                r = assess(power, e.amplitude_mA, era=e.era, cluster=e.cluster)
+            results[float(c)] = r
+            if r.responds is True:
+                passing.append(float(c))
+        chan = getattr(e, "channel", None)
+        pain = ((pain_positive_by_channel or {}).get(str(chan))
+                if pain_positive_by_channel and chan is not None else None)
+        rule = _EV.cell_response_verdict(results, pain_positive_centers=pain)
+        block = dict(n_tested=len(results), n_passing=len(passing),
+                     passing_centers=sorted(passing), n_power_unavailable=len(not_assessed),
+                     n_era_negative_significant=int(rule["n_era_negative_significant"]),
+                     n_era_significant=int(rule["n_era_significant"]),
+                     n_pain_positive=rule["n_pain_positive"],
+                     n_qualifying=int(rule["n_qualifying"]),
+                     qualifying_centers_hz=list(rule["qualifying_centers_hz"]),
+                     pain_relationship_known=(rule["n_pain_positive"] is not None),
+                     rule_blocking_reasons=list(rule["blocking_reasons"]),
+                     verdicts={k: v.describe() for k, v in results.items()},
+                     verdict_rows=[verdict_row(k, v) for k, v in sorted(results.items())],
+                     sensing_channel=getattr(e, "channel", None),
+                     laterality=getattr(e, "laterality", None))
+        if not results:
+            block.update(passed=None, reason=(
+                f"{len(capable)} candidate bands lie inside the adaptive range but band power "
+                "could be computed for none of them from this side's evidence"))
+        elif all(r.responds is None for r in results.values()):
+            one = next(iter(results.values()))
+            block.update(passed=None, reason=(
+                f"all {len(results)} tested bands returned NOT ASSESSED rather than a verdict: "
+                f"the data cannot answer the question. First reason given: {one.reason}"))
+        elif rule["responds"] is True:
+            q = list(rule["qualifying_centers_hz"])
+            best = min(q, key=lambda c: -results[c].separation_d)
+            rb = results[best]
+            block.update(passed=True, best_center_hz=float(best), reason=(
+                f"{len(q)} of {len(results)} tested bands both fall with current once time is "
+                f"removed and rise with pain on the Biomarkers grid "
+                f"({', '.join(f'{c:g}' for c in q)} Hz); "
+                f"{rule['n_era_negative_significant']} fall with current, "
+                f"{rule['n_pain_positive']} rise with pain. Best separated qualifying band: "
+                f"centre {best:g} Hz, width {float(band_width_hz):g} Hz, era-blocked slope "
+                f"{float(rb.slope_log_per_mA):.3g} per mA (p = {float(rb.slope_p):.3g}), capture "
+                f"separation {float(rb.separation_d):.2f} SD"
+                + (" (the two captures alone do not separate it)" if rb.responds is not True
+                   else "")))
+        elif rule["responds"] is None:
+            block.update(passed=None, reason="; ".join(rule["blocking_reasons"]))
+        else:
+            block.update(passed=False, reason="; ".join(rule["blocking_reasons"]))
+            if passing:
+                block["best_center_hz"] = float(min(passing, key=lambda c: -results[c].separation_d))
+        per[h] = block
+    ev["per_hemisphere"] = per
+    ev["min_sep_d"] = float(min_sep_d)
 
-    if passing:
-        best = min(passing, key=lambda c: -results[c].separation_d)
-        r = results[best]
+    # The top-level counts describe ONE side, named in `top_level_side`, so a reader of the
+    # old keys is never handed a blend: the first frozen side with evidence, in the order the
+    # configuration lists them. Every side is under `per_hemisphere`.
+    top = next((h for h in sides if by_side.get(h) is not None), None)
+    if top is not None:
+        for k in ("n_tested", "n_passing", "passing_centers", "n_power_unavailable", "verdicts",
+                  "verdict_rows", "n_era_negative_significant", "n_pain_positive",
+                  "n_qualifying", "qualifying_centers_hz"):
+            ev[k] = per[top].get(k)
+        if per[top].get("best_center_hz") is not None:
+            ev["best_center_hz"] = per[top]["best_center_hz"]
+        ev["top_level_side"] = top
+
+    verdicts = {h: per[h].get("passed") for h in sides}
+    sentence = "; ".join(f"{h}: {'PASS' if v is True else ('FAIL' if v is False else 'NOT ASSESSED')}"
+                         f" — {per[h].get('reason')}" for h, v in verdicts.items())
+    if any(v is False for v in verdicts.values()):
         return GateCondition(
-            "adaptive_band_passes_lfp_response", True,
-            f"{len(passing)} of {len(results)} tested bands inside the adaptive range respond to "
-            f"stimulation amplitude. Best separated: centre {best:g} Hz, width "
-            f"{float(band_width_hz):g} Hz — {r.describe()}", evidence=ev)
-    if not results:
+            "adaptive_band_passes_lfp_response", False,
+            "the stimulation-response requirement FAILS on at least one frozen side, by the same "
+            "rule the readiness screen applies (at least one band must fall with current once "
+            f"time is removed AND rise with pain on the Biomarkers grid): {sentence}. A band that "
+            "does not move with amplitude gives the loop no authority, however well it tracks "
+            "pain; a band that falls with pain is the wrong sign for the device's control law.",
+            evidence=ev)
+    if any(v is None for v in verdicts.values()):
         return GateCondition(
             "adaptive_band_passes_lfp_response", None,
-            f"{len(capable)} candidate bands lie inside the adaptive range but band power could be "
-            f"computed for none of them from the supplied evidence, so the response requirement is "
-            "NOT ASSESSED.", evidence=ev)
-    if all(r.responds is None for r in results.values()):
-        one = next(iter(results.values()))
-        return GateCondition(
-            "adaptive_band_passes_lfp_response", None,
-            f"all {len(results)} tested bands returned NOT ASSESSED rather than a verdict: the "
-            f"data cannot answer the question. First reason given: {one.reason}", evidence=ev)
-    worst = min(results.values(), key=lambda r: (r.responds is not False, -r.separation_d
-                                                 if np.isfinite(r.separation_d) else 0.0))
+            "the stimulation-response requirement is NOT ASSESSED on at least one frozen side: "
+            f"{sentence}. One sensing contact's response licenses only its own side, so a side "
+            "with no evidence blocks.", evidence=ev)
     return GateCondition(
-        "adaptive_band_passes_lfp_response", False,
-        f"none of the {len(results)} tested bands inside the adaptive range passes the "
-        f"stimulation-response requirement. Representative verdict: {worst.describe()}. A band "
-        "that does not move with amplitude gives the loop no authority, however well it tracks "
-        "pain.", evidence=ev)
+        "adaptive_band_passes_lfp_response", True,
+        "every frozen side has a sensed band inside the adaptive range that falls with "
+        f"stimulation current and rises with pain, by the readiness screen's own rule: {sentence}",
+        evidence=ev)
 
 
-def check_amplitude_limits(frozen, *, amp_limits=None, ceiling_mA=AMP_CEILING_MA) -> GateCondition:
+def _ceiling_by_side(ceiling_mA, hemispheres):
+    """``(scalar_ceiling, by_side)`` from either one number or a per-side mapping.
+
+    ``ceiling_mA`` is a float (the module hard limit, the default) or a mapping ``{hemisphere:
+    (ceiling_mA, provenance)}`` / ``{hemisphere: ceiling_mA}`` from
+    ``safety_ceiling.ceilings_by_hemisphere`` (2026-09-12). ``scalar_ceiling`` is the smallest of
+    the sides' ceilings, for the one number the page's condition line prints; ``by_side`` maps each
+    hemisphere to ``{"ceiling_mA", "provenance"}`` and is ``None`` when a plain number was given.
+    """
+    if isinstance(ceiling_mA, dict):
+        by_side = {}
+        for h in hemispheres:
+            v = ceiling_mA.get(h)
+            if v is None:
+                v = (float(AMP_CEILING_MA), "module hard limit, no ceiling given for this side")
+            if isinstance(v, (tuple, list)):
+                by_side[h] = dict(ceiling_mA=float(v[0]), provenance=str(v[1]))
+            else:
+                by_side[h] = dict(ceiling_mA=float(v), provenance="caller-supplied")
+        scalar = min(v["ceiling_mA"] for v in by_side.values()) if by_side else float(AMP_CEILING_MA)
+        return scalar, by_side
+    return float(ceiling_mA), None
+
+
+def check_amplitude_limits(frozen, *, amp_limits=None, ceiling_mA=AMP_CEILING_MA,
+                           side_effect_evidence=None) -> GateCondition:
     """Adaptive amplitude limits must sit under the ceiling and inside the delivered envelope.
 
     ``amp_limits`` maps hemisphere to ``(min_mA, max_mA)``. When it is omitted the DELIVERED
     ENVELOPE is used, which passes the envelope test by construction; the detail string says so, so
     a reader is never left thinking a proposal was checked when a default was.
+
+    ``ceiling_mA`` is one number or a per-side mapping (see :func:`_ceiling_by_side`); with the
+    mapping each hemisphere's upper limit is checked against ITS OWN ceiling and the evidence
+    carries ``ceiling_by_side`` with the provenance of each.
+
+    ``side_effect_evidence`` is ``clinic_pain.amplitude_severity_evidence``'s answer for this
+    record (or ``None``): its ``sentence`` is quoted in an over-envelope refusal and the whole
+    dict is carried in the evidence under ``side_effect_vs_current``, so the page can show the
+    number the refusal rests on. No number is ever typed here.
     """
     problems, checked = [], {}
+    if side_effect_evidence is not None and side_effect_evidence.get("sentence"):
+        severity_sentence = ("On this record, " + str(side_effect_evidence["sentence"]) + ".")
+    else:
+        severity_sentence = ("There is no side-effect-versus-current statistic for this record "
+                             "(no scored clinic steps were supplied).")
     if not frozen.settings:
         return GateCondition("amplitude_limits_inside_envelope_and_under_ceiling", None,
                              "no frozen setting to check: Stage 1 produced no hemisphere result")
+    ceiling_scalar, by_side = _ceiling_by_side(ceiling_mA, [s.hemisphere for s in frozen.settings])
     defaulted = []
+    # Participant-specific provenance and examples are maintained outside source control.
+    history_above_ceiling = {}
     for s in frozen.settings:
+        ceil_h = by_side[s.hemisphere]["ceiling_mA"] if by_side else ceiling_scalar
         lo_env, hi_env = float(s.amp_delivered_min_mA), float(s.amp_delivered_max_mA)
         if amp_limits is not None and s.hemisphere in amp_limits:
             lo, hi = (float(v) for v in amp_limits[s.hemisphere])
@@ -667,17 +916,20 @@ def check_amplitude_limits(frozen, *, amp_limits=None, ceiling_mA=AMP_CEILING_MA
         if not hi > lo:
             problems.append(f"{s.hemisphere}: limits must satisfy max > min (got {lo:g}, {hi:g}); "
                             "the device needs a range to move within")
-        if hi > float(ceiling_mA) + 1e-9:
-            problems.append(f"{s.hemisphere}: upper limit {hi:g} mA exceeds the declared ceiling "
-                            f"of {float(ceiling_mA):g} mA")
+        if hi > ceil_h + 1e-9:
+            if s.hemisphere in defaulted:
+                history_above_ceiling[s.hemisphere] = dict(delivered_max_mA=float(hi),
+                                                           ceiling_mA=float(ceil_h))
+            else:
+                problems.append(f"{s.hemisphere}: upper limit {hi:g} mA exceeds the declared "
+                                f"ceiling of {ceil_h:g} mA")
         if np.isfinite(hi_env) and hi > hi_env + 1e-9:
             problems.append(
                 f"{s.hemisphere}: upper limit {hi:g} mA is above the highest amplitude ever "
-                f"delivered on this hemisphere ({hi_env:g} mA). This record establishes that "
-                "amplitude does NOT predict side-effect severity (Spearman rho = -0.013, p = 0.79 "
-                "over 417 non-procedural steps with stimulation on), and only 5 of those rows sit "
-                "above 4 mA, so amplitudes above the delivered maximum are UNKNOWN rather than "
-                "safe. Handing the device authority to go there is not supported by the data")
+                f"delivered on this hemisphere ({hi_env:g} mA). {severity_sentence} Amplitudes "
+                "above the delivered maximum are UNKNOWN rather than safe, whatever that "
+                "statistic says, because nothing was observed there. Handing the device authority "
+                "to go there is not supported by the data")
         if np.isfinite(lo_env) and lo < lo_env - 1e-9:
             problems.append(
                 f"{s.hemisphere}: lower limit {lo:g} mA is below the lowest amplitude delivered on "
@@ -687,17 +939,33 @@ def check_amplitude_limits(frozen, *, amp_limits=None, ceiling_mA=AMP_CEILING_MA
             f" NOTE: limits were not supplied for {', '.join(sorted(defaulted))} and were "
             "DEFAULTED to the delivered envelope, so the envelope test on those hemispheres is "
             "satisfied by construction rather than by a check on a proposal.")
+    # `defaulted` is in the evidence as well as in the sentence (2026-09-12), so a page can mark
+    # a limit that was never proposed without reading the sentence for the word.
+    evidence = dict(checked=checked, ceiling_mA=float(ceiling_scalar), defaulted=sorted(defaulted),
+                    history_above_ceiling=history_above_ceiling,
+                    side_effect_vs_current=(dict(side_effect_evidence)
+                                            if side_effect_evidence is not None else None))
+    if by_side is not None:
+        evidence["ceiling_by_side"] = by_side
+    history_note = "".join(
+        f" {h}: no limit was proposed, and the highest current the device has ever delivered on "
+        f"this side ({v['delivered_max_mA']:g} mA) is above today's ceiling ({v['ceiling_mA']:g} mA)"
+        " -- this is history, not a proposal; the check cannot be made until a limit at or under "
+        "the ceiling is proposed."
+        for h, v in sorted(history_above_ceiling.items()))
     if problems:
         return GateCondition("amplitude_limits_inside_envelope_and_under_ceiling", False,
-                             "; ".join(problems) + note,
-                             evidence=dict(checked=checked, ceiling_mA=float(ceiling_mA)))
+                             "; ".join(problems) + note + history_note, evidence=evidence)
+    if history_above_ceiling:
+        return GateCondition("amplitude_limits_inside_envelope_and_under_ceiling", None,
+                             "not assessed:" + history_note + note, evidence=evidence)
     return GateCondition(
         "amplitude_limits_inside_envelope_and_under_ceiling", True,
         "adaptive amplitude limits sit inside the delivered envelope and under the "
-        f"{float(ceiling_mA):g} mA ceiling on every hemisphere ("
+        f"{float(ceiling_scalar):g} mA ceiling on every hemisphere ("
         + "; ".join(f"{h} {v['amp_min_mA']:g}-{v['amp_max_mA']:g} mA"
                     for h, v in sorted(checked.items())) + ")." + note,
-        evidence=dict(checked=checked, ceiling_mA=float(ceiling_mA)))
+        evidence=evidence)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -708,7 +976,8 @@ def evaluate_gate(frozen, *, lfp=None, amp_limits=None, selected_bands=None,
                   band_centers=DEFAULT_BAND_CENTERS_HZ, band_width_hz=DEFAULT_BAND_WIDTH_HZ,
                   min_rate_hz=PA.MIN_ADAPTIVE_RATE_HZ, ceiling_mA=AMP_CEILING_MA,
                   min_sep_d=LFP.MIN_CAPTURE_SEPARATION_D, alpha=SELECTION_ALPHA,
-                  fdr_q=SELECTION_FDR_Q) -> GateResult:
+                  fdr_q=SELECTION_FDR_Q, side_effect_evidence=None,
+                  pain_positive_by_channel=None, response_fn=None) -> GateResult:
     """Evaluate every gate condition on a frozen configuration and return all four verdicts.
 
     Evaluation deliberately does NOT short-circuit. A clinician looking at a refusal needs the whole
@@ -755,7 +1024,13 @@ def evaluate_gate(frozen, *, lfp=None, amp_limits=None, selected_bands=None,
     conditions += [
         check_adaptive_band(frozen, lfp=lfp, band_centers=band_centers,
                             band_width_hz=band_width_hz, min_sep_d=min_sep_d,
-                            response_summary=response_summary),
-        check_amplitude_limits(frozen, amp_limits=amp_limits, ceiling_mA=ceiling_mA),
+                            response_summary=response_summary,
+                            pain_positive_by_channel=pain_positive_by_channel,
+                            response_fn=response_fn),
+        check_amplitude_limits(frozen, amp_limits=amp_limits, ceiling_mA=ceiling_mA,
+                               side_effect_evidence=side_effect_evidence),
     ]
     return GateResult(conditions=conditions, frozen=frozen)
+
+
+# Retained active Aditya interfaces.

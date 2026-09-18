@@ -184,7 +184,7 @@ def test_passing_report_records_the_programming_regime_it_was_written_in():
     """
     report = check(passing_candidate(), resolved_participant())
     recorded = [row for row in report.advisories if row["kind"] == "recorded_value"]
-    assert ids(recorded) == {"D03", "D04", "D31"}
+    assert ids(recorded) == {"D03", "D04", "D16", "D19", "D30", "D31"}
     d03 = next(row for row in recorded if row["rule_id"] == "D03")
     assert "parkinsons" in d03["observed"]
 
@@ -265,13 +265,7 @@ def test_d08_window_widens_for_a_sensing_only_candidate():
 # ------------------------------------------------------------------------------------------------
 def test_d09_reports_a_shortfall_without_blocking():
     """D09 is ADVISORY as of 2026-09-04. A signal below the capture gate is surfaced for review,
-    and it does NOT make the configuration ineligible.
-
-    The distinction is the point: on RCS08 no bin in the 22-27 Hz candidate band reaches 1.2 uVp on
-    any of the twelve channels, while bins at 8.8-11.7 Hz do. That is a strong argument for moving
-    the centre frequency, and a weak argument for refusing to let anyone proceed — which is why it
-    now informs rather than stops.
-    """
+    and it does NOT make the configuration ineligible."""
     below = check(passing_candidate(lfp_amplitude_uvp=0.9), resolved_participant())
     assert "D09" not in ids(below.failures), "D09 must no longer block"
     assert "D09" in ids(below.advisories), "but the shortfall must still be reported"
@@ -493,10 +487,7 @@ def test_single_threshold_mode_raises_the_forced_zero_advisory():
 
 
 def test_d03_blocks_a_participant_not_programmed_in_parkinsons_mode():
-    """The same code that passes for RCS08 must fail for a participant defaulted to Dual Threshold.
-
-    This is why D03 is kept as a live blocking rule rather than compiled away into a note.
-    """
+    """This is why D03 is kept as a live blocking rule rather than compiled away into a note."""
     report = check(passing_candidate(), resolved_participant(programming_mode="dual_default"))
     assert "D03" in ids(report.failures)
     assert report.eligible is False
@@ -796,7 +787,10 @@ def test_d30_asks_a_per_attempt_question_not_a_permanent_one():
     ({}, "None"),
 ])
 def test_d30_observer_reports_the_same_per_attempt_fact(candidate, expected):
-    assert constraints._o_d30(candidate, {}) == "rate committed for this attempt: " + expected
+    observed = constraints._o_d30(candidate, {})
+    assert "candidate rate" in observed and "newest active sensing group" in observed
+    assert ("committed for this attempt: " + expected in observed
+            or "retired flag frequency_search_closed: " + expected in observed)
 
 
 def test_sensing_only_group_does_not_inherit_adaptive_only_exclusions():

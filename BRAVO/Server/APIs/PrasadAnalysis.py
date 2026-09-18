@@ -22,7 +22,7 @@ from Server import models
 from modules import AnalysisData, Database
 from modules.HelperFunctions import json_compliant_handler
 
-# Research methods selectively integrated through Prasad commit d745360d.
+# Research methods selectively integrated through Prasad commit 8146f069.
 OPERATIONS = {
     "queryBiomarkerAnalysis": ("Biomarkers", "run_for_participant", ()),
     "queryDataAvailability": ("Biomarkers", "availability_for_participant", ()),
@@ -47,6 +47,7 @@ FORBIDDEN_INPUTS = {"ProcessedPRO", "RedcapFieldMap", "PtConfig", "RedcapRecordI
 def validated_controls(data, operation):
     data = dict(data)
     ranges = {
+        "BandCenterHz": (0, 125, False), "IntegrationSeconds": (0, 300, False),
         "CenterHz": (0, 125, False), "BandWidthHz": (0, 250, False),
         "PercentileLow": (0, 100, True), "PercentileHigh": (0, 100, True),
         "MaxPerRating": (1, 50, True), "RefractoryMin": (0, 720, True),
@@ -65,8 +66,8 @@ def validated_controls(data, operation):
         "Backend": {"plotly", "none"},
         "ThresholdMode": {"dual", "single", "singleinverse", "single_inverse", "single-inverse", "singlethreshold", "singlethresholdinverse"},
     }
-    boolean_keys = {"SlidingWindow", "UseLiveMatching", "AllowWindowReuse", "ClosedLoop"}
-    text_keys = {"ParticipantId", "Channel", "LabelMetric"}
+    boolean_keys = {"SlidingWindow", "UseLiveMatching", "AllowWindowReuse", "ClosedLoop", "TwoStage", "BandTimeSweep", "BandTimeSweepCell", "IncludeCrossSettingStability", "IncludeClinicSheetRatings"}
+    text_keys = {"ParticipantId", "Channel", "LabelMetric", "SweepMetric"}
     list_keys = {"Sites": {"left_leg", "back"}, "Hemispheres": {"Left", "Right"}}
     allowed = set(ranges) | set(enums) | boolean_keys | text_keys | set(list_keys) | {"ForceRefresh"}
     if set(data) - allowed:
@@ -189,7 +190,7 @@ def analysis_code_fingerprint():
              root / "MedtronicPercept/Percept.py",
              root / "MedtronicPercept/IndefiniteStream.py",
              root / "MedtronicPercept/BrainSenseStream.py"]
-    for package in ("Biomarkers", "StimOptimizer", "ClosedLoopDeployment"):
+    for package in ("Biomarkers", "StimOptimizer", "ClosedLoopDeployment", "DecodeCommon", "CacheStore"):
         paths.extend(sorted((root / package).rglob("*.py")))
     for path in paths:
         digest.update(str(path.relative_to(root.parent)).encode())
@@ -298,7 +299,9 @@ class ResearchAnalysis(APIView):
                 if AnalysisData.input_manifest(fresh)["fingerprint"] != manifest["fingerprint"]:
                     raise RuntimeError("Data changed before analysis; retry against the current snapshot")
                 service = importlib.import_module("modules." + package + ".bravo_service")
-                result = getattr(service, function)(arguments)
+                from modules.CacheStore.store import canonical_scope
+                with canonical_scope((str(participant.uid), manifest["fingerprint"], identity["code"])):
+                    result = getattr(service, function)(arguments)
                 if AnalysisData.input_manifest(fresh)["fingerprint"] != manifest["fingerprint"]:
                     raise RuntimeError("Data changed during analysis; retry against the current snapshot")
                 result = json_compliant_handler(result)

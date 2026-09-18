@@ -108,27 +108,33 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(second.nrs.iloc[0], 0)
 
     def test_service_reuses_same_settings_for_design_queue_and_readiness(self):
-        source = PATH.with_name("bravo_service.py")
-        tree = ast.parse(source.read_text())
-        node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "run_for_participant")
+        from modules.StimOptimizer import bravo_service as service
+        from Server import models
+        from contextlib import ExitStack
         stream = pd.DataFrame({"synthetic": [1]})
         epochs = pd.DataFrame({"n": [2]})
-        mocked_adapter = types.SimpleNamespace(settings_stream=Mock(return_value=stream), build_design_matrix=Mock(return_value=epochs))
-        pipeline = types.SimpleNamespace(run=Mock(return_value=types.SimpleNamespace(arms={}, manifest={}, summary=pd.DataFrame())))
-        readiness = Mock(return_value={"available": False})
-        context = dict(pd=pd, adapter=mocked_adapter, pipeline=pipeline, DEFAULT_SITES=("left_leg",), DEFAULT_HEMISPHERES=("Left",),
-                       _log=Mock(), design_matrix_summary=lambda es: {}, _jsonable=lambda value: value, _frame_records=lambda value: [],
-                       _blockers=lambda *a: [], closed_loop_readiness=readiness)
-        exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), "exec"), context)
-        server = types.ModuleType("Server")
-        server.models = types.SimpleNamespace(Participant=types.SimpleNamespace(find=lambda **kw: object()))
-        with patch.dict(sys.modules, {"Server": server}):
-            result = context["run_for_participant"]({"ParticipantId": "p", "Backend": "none"})
+        evidence = (pd.DataFrame(), epochs)
+        participant = types.SimpleNamespace(uid="p")
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(models.Participant, "find", return_value=participant))
+            loader = stack.enter_context(patch.object(service.adapter, "settings_stream", return_value=stream))
+            design = stack.enter_context(patch.object(service.adapter, "build_design_matrix", return_value=epochs))
+            inputs = stack.enter_context(patch.object(service.adapter, "evidence_inputs", return_value=evidence))
+            ready = stack.enter_context(patch.object(service, "closed_loop_readiness", return_value={}))
+            two = stack.enter_context(patch.object(service, "two_stage_block", return_value={"available": True}))
+            for name, result in [("_tiles_key_for", (None, "synthetic")), ("amplitude_effect_block", {}),
+                                 ("ground_truth_block", {}), ("pain_relationship_block", ({}, {})),
+                                 ("_cache_status", {}), ("titration_plan_block", {}), ("current_map_schedule_block", {}),
+                                 ("design_matrix_summary", {}), ("in_force_by_side", {})]:
+                stack.enter_context(patch.object(service, name, return_value=result))
+            result = service.run_for_participant({"ParticipantId": "p", "Backend": "none", "TwoStage": True})
         self.assertTrue(result["available"])
-        mocked_adapter.settings_stream.assert_called_once()
-        self.assertIs(mocked_adapter.build_design_matrix.call_args.kwargs["stream"], stream)
-        self.assertIs(pipeline.run.call_args.kwargs["delivered_census"], stream)
-        self.assertIs(readiness.call_args.kwargs["stream"], stream)
+        loader.assert_called_once()
+        self.assertIs(design.call_args.kwargs["stream"], stream)
+        self.assertIs(inputs.call_args.kwargs["stream"], stream)
+        self.assertIs(ready.call_args.kwargs["inputs"], evidence)
+        self.assertIs(two.call_args.kwargs["evidence_inputs"], evidence)
+        self.assertIs(two.call_args.kwargs["stream"], stream)
 
     def test_multiplayer_program_is_not_silently_first_program(self):
         group = {"ProgramSettings": {"LeftHemisphere": {"Programs": [{}, {}]}}}

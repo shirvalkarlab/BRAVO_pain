@@ -216,6 +216,23 @@
         "UFMDATv2Decoder",
         "UFMDATv3Decoder",
         "UFMDATAutoDecoder"
+      ],
+      "BRAVO/modules/CacheStore/store.py": [
+        "canonical_scope",
+        "root_dir",
+        "store",
+        "_sweep_superseded"
+      ],
+      "BRAVO/modules/CacheStore/locks.py": [
+        "build_lock"
+      ],
+      "BRAVO/modules/ClosedLoopDeployment/authority.py": [
+        "d26_capture_verdicts",
+        "_fmt_ci_p"
+      ],
+      "BRAVO/modules/StimOptimizer/google_sheets_client.py": [
+        "folder_id",
+        "template_id"
       ]
     }
   },
@@ -569,6 +586,33 @@
       "alternative_evidence": "Focused real-format/ORM fixtures, portable full gate and authenticated Aditya summary preservation checks; new helper scope requires95percent true branch coverage.",
       "owner": "Aditya BRAVO maintainer",
       "revisit": "Expand strict scope when changing additional consequential logic; retain whole-file measurement."
+    },
+    {
+      "path": "BRAVO/modules/CacheStore/store.py",
+      "source_revision": "8146f069af94dd71a590c1bfa702165778fd53b8",
+      "reason": "Reused upstream cache implementation; substantive canonical isolation and lock or atomic write adaptations are strict function scope.",
+      "risk": "Remaining unchanged upstream routines are measured legacy code, not claimed branch complete.",
+      "alternative_evidence": "Synthetic cache serialization and isolation regressions, full portable gate, authenticated request/cache checks.",
+      "owner": "Aditya BRAVO maintainer",
+      "revisit": "Expand strict scope before changing additional consequential behavior."
+    },
+    {
+      "path": "BRAVO/modules/CacheStore/locks.py",
+      "source_revision": "8146f069af94dd71a590c1bfa702165778fd53b8",
+      "reason": "Reused upstream cache implementation; substantive canonical isolation and lock or atomic write adaptations are strict function scope.",
+      "risk": "Remaining unchanged upstream routines are measured legacy code, not claimed branch complete.",
+      "alternative_evidence": "Synthetic cache serialization and isolation regressions, full portable gate, authenticated request/cache checks.",
+      "owner": "Aditya BRAVO maintainer",
+      "revisit": "Expand strict scope before changing additional consequential behavior."
+    },
+    {
+      "path": "BRAVO/modules/ClosedLoopDeployment/authority.py",
+      "source_revision": "8146f069af94dd71a590c1bfa702165778fd53b8",
+      "reason": "Reused Prasad capture and pooled-slope policy; newly adapted malformed and nonfinite evidence handling is strict function scope.",
+      "risk": "Remaining upstream routines are measured legacy code.",
+      "alternative_evidence": "Synthetic capture/pooled-slope and full portable regressions; explicit unassessed and warning states.",
+      "owner": "Aditya BRAVO maintainer",
+      "revisit": "Expand strict scope before substantive changes to other helpers."
     }
   ]
 }

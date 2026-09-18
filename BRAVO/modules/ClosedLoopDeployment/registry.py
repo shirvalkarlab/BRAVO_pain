@@ -23,6 +23,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+
+# Aditya canonical compatibility imports/constants.
+
+
+
+
 def _now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -101,3 +107,6 @@ class Registry:
         out["digest"] = _digest(self.entries)
         out["tampered"] = self.tampered
         return out
+
+
+# Retained active Aditya interfaces.

@@ -51,25 +51,7 @@ DUAL = "dual"
 SINGLE = "single"
 SINGLE_INVERSE = "single_inverse"
 
-# ---------------------------------------------------------------------------------------------
-# ELIGIBILITY: RCS08 IS PROGRAMMED IN PARKINSON'S MODE, SO THE FULL WORKFLOW IS AVAILABLE
-# ---------------------------------------------------------------------------------------------
-#: PI decision, 2026-09-03: this participant is programmed in Parkinson's mode, so the workflow
-#: restriction below does not bind and Adaptive Therapy can be enabled. The closed-loop deliverable
-#: is a PROGRAMMABLE configuration, not a prepared non-executable one.
-#:
-#: The restriction is retained here, quoted rather than paraphrased, because it still governs what a
-#: participant programmed in a non-Parkinson's mode could do, and because a future reader needs to
-#: know which of the two situations they are in. White paper (UC202012929dEN) p. 13:
-#:
-#:   "Non-Parkinson's patients are defaulted to the Dual Threshold mode for chronic sensing
-#:    capabilities and are not allowed to continue the workflow past the thresholds capture step."
-#:
-#: p. 9 adds that such patients "do not have the ability to choose the Threshold mode".
-#:
-#: Selecting Parkinson's mode is the PI's clinical and regulatory determination under their own
-#: protocol. It is recorded here as a configuration fact, not as anything this module validated, and
-#: nothing downstream should present it as an engineering conclusion.
+# Participant-specific provenance and examples are maintained outside source control.
 ADAPTIVE_ENABLE_REQUIRES_PD_INDICATION = False   # RCS08 is programmed in Parkinson's mode
 NON_PD_WORKFLOW_CEILING = "thresholds capture"   # applies only to a non-Parkinson's-mode participant
 
@@ -133,14 +115,94 @@ BIOMARKER_INTEGRATION_S = BIOMARKER_WELCH_NPERSEG / 250.0
 TITRATION_RAMP_RANGE_S = (0.5, 10.0)
 TITRATION_SETTLE_RANGE_S = (30.0, 45.0)
 
-#: Published adjustable range for the onset duration in Dual Threshold mode, from the ADAPT-PD
-#: methodology paper rather than the device labelling (`D21`, Stanslaski et al. 2024). Medtronic
-#: prints only the 1200 ms default. Ranges for averaging duration, detection blanking and the two
-#: transition durations are NOT published anywhere supplied and must be read off the Advanced
-#: Settings screens before any of the recommendations below can be programmed.
-ONSET_RANGE_DUAL_MS = (1200.0, 2000.0)
-UNPUBLISHED_RANGES = ("averaging duration", "detection blanking duration",
-                      "transition up duration", "transition down duration")
+#: THE DOCUMENTED SELECTION RANGES OF THE ADAPTIVE PARAMETERS -- ONE HOME (2026-09-13, decision
+#: 148 and its wiring). Until today this module carried the ADAPT-PD trial's onset setting
+#: (1.2-2 s) as if it were the device's range, and said the other ranges were unpublished. Neither
+#: was true. The FDA approval summary for BrainSense Adaptive (PMA P960009/S478, 20 Feb 2025,
+#: Table 2 "Key aDBS Configurable Parameters", p. 8 of 59) prints the selection range of the
+#: onset duration, the two transition durations, the two LFP thresholds and the two amplitude
+#: limits; the 2020 BrainSense tip card (p. 8) prints the averaging duration's. Two parameters
+#: still have NO documented range anywhere found (manuals, FDA, papers, the open toolkits): the
+#: adaptive startup delay and the detection blanking duration. Everything below is quoted from
+#: those sources and nothing is inferred; ``ClosedLoopDeployment.constraints`` (rules D20, D21)
+#: and ``ClosedLoopDeployment.prescription`` read these names rather than restating them.
+#:
+#: The ADAPT-PD trial's own settings are kept, LABELLED AS THE TRIAL'S, because they are the one
+#: published example of values clinicians actually used (Stanslaski et al. 2024, Methods).
+# THE RANGES AND THEIR SOURCES LIVE IN `DecodeCommon.device_ranges` since 2026-09-15 (review
+# finding B4), because the Biomarkers grid needs them and may not import this module. The names
+# below are kept for every reader in this module, constraints.py, prescription.py and timing_plan;
+# they are the same objects, pinned by `tests/test_device_ranges_one_home.py`.
+try:
+    from modules.DecodeCommon import device_ranges as _DR
+except ImportError:                                              # pragma: no cover
+    from modules.DecodeCommon import device_ranges as _DR
+RANGE_SOURCE_FDA = _DR.RANGE_SOURCE_FDA
+RANGE_SOURCE_TIP_CARD = _DR.RANGE_SOURCE_TIP_CARD
+RANGE_SOURCE_TABLET = _DR.RANGE_SOURCE_TABLET
+RANGE_SOURCE_WHITE_PAPER_P16 = _DR.RANGE_SOURCE_WHITE_PAPER_P16
+#: Onset duration: the tablet's 0-30 s on both Dual timers and in Single (2026-09-15); the FDA
+#: summary's "Dual Threshold - 0 to 6 min" is kept as ONSET_RANGE_DUAL_MS_FDA and never applied.
+ONSET_RANGE_DUAL_MS = _DR.ONSET_RANGE_DUAL_MS
+ONSET_RANGE_DUAL_MS_FDA = _DR.ONSET_RANGE_DUAL_MS_FDA
+ONSET_RANGE_SINGLE_MS = _DR.ONSET_RANGE_SINGLE_MS
+ONSET_RANGE_MS_BY_MODE = {DUAL: ONSET_RANGE_DUAL_MS, SINGLE: ONSET_RANGE_SINGLE_MS}
+#: Transition up and transition down: the white paper's p. 16 slider, 2.00 s to 30.00 min, which
+#: the tablet confirms; the FDA summary's "250ms-30 minutes" is kept as the FDA figure.
+TRANSITION_RANGE_MS = _DR.TRANSITION_RANGE_MS
+TRANSITION_RANGE_MS_FDA = _DR.TRANSITION_RANGE_MS_FDA
+#: Averaging duration: 0 to 30 s (tip card; confirmed on the tablet's adaptive setup screen).
+AVERAGING_RANGE_MS = _DR.AVERAGING_RANGE_MS
+#: Detection blanking: 0 to 30 s (tablet, 2026-09-15; no document prints a range).
+DETECTION_BLANKING_RANGE_MS = _DR.DETECTION_BLANKING_RANGE_MS
+#: The two LFP thresholds, each: 0.55 to 400 uVrms ON THE PROGRAMMER'S OWN SCALE. This project's
+#: thresholds are placed in the device's exported linear units, which are not uVrms, so this range
+#: is REPORTED beside a threshold and never applied to it numerically.
+LFP_THRESHOLD_RANGE_UVRMS = (0.55, 400.0)
+#: The adaptive amplitude limits, lower and upper, each: 0 to 25.5 mA.
+ADAPTIVE_AMP_LIMIT_RANGE_MA = (0.0, 25.5)
+#: What the ADAPT-PD trial let its clinicians set (Stanslaski et al. 2024) -- NOT a device range.
+ADAPT_PD_ONSET_RANGE_MS = {DUAL: (1200.0, 2000.0), SINGLE: (200.0, 500.0)}
+ADAPT_PD_TRANSITION_RANGE_MS = (60_000.0, 600_000.0)
+
+#: One table a page or a rule can print from. Keys are the plain names used on the parameter card.
+DOCUMENTED_RANGES = {
+    "onset duration (dual)": {"range": ONSET_RANGE_DUAL_MS, "units": "ms", "source": RANGE_SOURCE_TABLET},
+    "onset duration (single)": {"range": ONSET_RANGE_SINGLE_MS, "units": "ms", "source": RANGE_SOURCE_FDA + "; " + RANGE_SOURCE_TABLET},
+    "transition up duration": {"range": TRANSITION_RANGE_MS, "units": "ms", "source": RANGE_SOURCE_WHITE_PAPER_P16 + "; " + RANGE_SOURCE_TABLET},
+    "transition down duration": {"range": TRANSITION_RANGE_MS, "units": "ms", "source": RANGE_SOURCE_WHITE_PAPER_P16 + "; " + RANGE_SOURCE_TABLET},
+    "averaging duration": {"range": AVERAGING_RANGE_MS, "units": "ms", "source": RANGE_SOURCE_TIP_CARD + "; " + RANGE_SOURCE_TABLET},
+    "detection blanking duration": {"range": DETECTION_BLANKING_RANGE_MS, "units": "ms", "source": RANGE_SOURCE_TABLET},
+    "LFP threshold": {"range": LFP_THRESHOLD_RANGE_UVRMS, "units": "uVrms", "source": RANGE_SOURCE_FDA},
+    "adaptive amplitude limit": {"range": ADAPTIVE_AMP_LIMIT_RANGE_MA, "units": "mA", "source": RANGE_SOURCE_FDA},
+    "adaptive band centre": {"range": (8.0, 30.0), "units": "Hz", "source": RANGE_SOURCE_FDA + "; WP p. 14"},
+}
+# Participant-specific provenance and examples are maintained outside source control.
+UNPUBLISHED_RANGES = ("adaptive startup delay",)
+
+
+
+# Aditya canonical compatibility imports/constants.
+
+
+SINGLE_THRESHOLD_FRACTION = 0.75
+
+def documented_range_ms(name, mode=None):
+    """The documented (lo, hi) in milliseconds for a timing parameter, or None when none exists.
+
+    ``name`` is one of "onset", "transition_up", "transition_down", "averaging",
+    "detection_blanking", "adaptive_startup_delay"; ``mode`` picks the onset range.
+    """
+    key = str(name).lower()
+    if key.startswith("onset"):
+        return ONSET_RANGE_MS_BY_MODE.get(mode or DUAL)
+    if key.startswith("transition"):
+        return TRANSITION_RANGE_MS
+    if key.startswith("averaging"):
+        return AVERAGING_RANGE_MS
+    if key.startswith("detection_blanking"):
+        return DETECTION_BLANKING_RANGE_MS
+    return None
 
 
 #: Hemisphere coupling in Single Threshold mode (`D40`, A610 p. 39): "If both hemispheres have an
@@ -293,14 +355,20 @@ def timing_plan(*, mode=None, biomarker_integration_s=BIOMARKER_INTEGRATION_S,
     settle_s = ramp_clamped + settle_windows * (want_avg_ms / 1000.0)
 
     notes = []
+    avg_lo, avg_hi = AVERAGING_RANGE_MS
+    averaging_in_range = avg_lo <= want_avg_ms <= avg_hi
     if abs(want_avg_ms - dev_avg_ms) > 1.0:
         notes.append(
             f"device averaging duration defaults to {dev_avg_ms:.0f} ms but the biomarker was "
             f"validated on a {want_avg_ms:.0f} ms integration window, a factor of "
-            f"{want_avg_ms / dev_avg_ms:.1f}. The adjustable range is not published in any supplied "
-            "document, so whether the device can be set this long must be read off the Advanced "
-            "Settings screen. If it cannot, the deployed feature is NOT the validated feature and "
-            "the band should be revalidated at the achievable averaging duration.")
+            f"{want_avg_ms / dev_avg_ms:.1f}. The documented range is {avg_lo:g}-{avg_hi:g} ms "
+            f"({RANGE_SOURCE_TIP_CARD}), and {want_avg_ms:.0f} ms is "
+            f"{'inside' if averaging_in_range else 'OUTSIDE'} it. Deploying the default deploys a "
+            "different feature from the validated one.")
+    if not averaging_in_range:
+        notes.append(f"the biomarker's {want_avg_ms:.0f} ms window exceeds the documented averaging "
+                     f"range {avg_lo:g}-{avg_hi:g} ms; the band should be revalidated at the "
+                     "longest achievable averaging duration.")
     if ramp_clamped != chosen_ramp:
         notes.append(f"requested ramp {chosen_ramp:.2f} s clamped into the manufacturer's "
                      f"{lo:g}-{hi:g} s titration range (D50)")
@@ -308,7 +376,7 @@ def timing_plan(*, mode=None, biomarker_integration_s=BIOMARKER_INTEGRATION_S,
         notes.append("ramp is NOT empirically grounded: no biomarker response latency has been "
                      "measured. Run the D50 titration (0 mA for 45-60 s, then 0.1-0.5 mA steps, "
                      "streaming 30-45 s per step) and pass measured_latency_s.")
-    onset_lo, onset_hi = ONSET_RANGE_DUAL_MS
+    onset_lo, onset_hi = ONSET_RANGE_MS_BY_MODE.get(spec.mode, ONSET_RANGE_DUAL_MS)
     onset_ms = min(max(float(spec.onset_duration_ms or onset_lo), onset_lo), onset_hi)
 
     return {
@@ -324,11 +392,16 @@ def timing_plan(*, mode=None, biomarker_integration_s=BIOMARKER_INTEGRATION_S,
         "blank_after_step_s": round(settle_s, 3),
         "settle_windows": float(settle_windows),
         "onset_duration_ms": onset_ms,
-        "onset_range_ms": list(ONSET_RANGE_DUAL_MS),
+        "onset_range_ms": list(ONSET_RANGE_MS_BY_MODE.get(spec.mode, ONSET_RANGE_DUAL_MS)),
+        "averaging_range_ms": list(AVERAGING_RANGE_MS),
+        "averaging_in_documented_range": bool(averaging_in_range),
+        "transition_range_ms": list(TRANSITION_RANGE_MS),
         "detection_blanking_default_ms": spec.detection_blanking_ms,
         "transition_up_ms": spec.transition_up_ms,
         "transition_down_ms": spec.transition_down_ms,
         "ranges_unpublished": list(UNPUBLISHED_RANGES),
+        "range_sources": {"onset": RANGE_SOURCE_FDA, "transitions": RANGE_SOURCE_FDA,
+                          "averaging": RANGE_SOURCE_TIP_CARD},
         "notes": notes,
     }
 
@@ -514,29 +587,11 @@ MODES = {
                            "(e.g. gamma)"),
 }
 
-#: Fraction used by the device to derive a single threshold from two captured LFP values
-#: (white paper p. 15): "The generated single threshold value is based on 75% of the difference
-#: between the two captured values", i.e. threshold = frac * (upper - lower) + lower.
-SINGLE_THRESHOLD_FRACTION = 0.75
-
-
-def derive_single_threshold(lfp_lower, lfp_upper, frac=SINGLE_THRESHOLD_FRACTION):
-    """Reproduce the device's single-threshold calculation: ``frac * (upper - lower) + lower``.
-
-    This is NOT a free parameter of ours — it is what the device will compute from the two captured
-    LFP values, so any plan that proposes a single-threshold policy must predict the threshold this
-    way rather than choosing one. Raises on inverted captures, which the device also refuses: "it is
-    possible that the thresholds gathered by the system are either too close together or are
-    inverted. In this case, the A610 application will prompt the user to either ... recapture ... or
-    select the manual adjustment option." (p. 15)
-    """
-    lo, hi = float(lfp_lower), float(lfp_upper)
-    if not (hi > lo):
-        raise ValueError(
-            f"inverted or degenerate LFP captures (lower={lo!r}, upper={hi!r}). The device refuses "
-            "this and prompts for recapture or manual adjustment; a derived threshold from an "
-            "inverted pair is meaningless.")
-    return frac * (hi - lo) + lo
+# The device derives a single threshold from two captured LFP values as 75% of the difference plus
+# the lower value (white paper p. 15), and refuses inverted captures. A helper that reproduced that
+# arithmetic (`derive_single_threshold`, with `SINGLE_THRESHOLD_FRACTION = 0.75`) was reached by
+# nothing in the running platform and was deleted on the PI's decision of 2026-09-12 (review S14);
+# the device fact is kept here so nobody re-derives it as a free parameter.
 
 
 def band_is_adaptive_capable(center_hz, band_width_hz):
@@ -664,6 +719,34 @@ def validate_policy(policy):
                         "switched from Adaptive to Sensing Only.")
     elif not (float(a_hi) > float(a_lo)):
         problems.append(f"adaptive amplitude limits must satisfy max > min (got {a_lo}, {a_hi}).")
+    else:
+        lim_lo, lim_hi = ADAPTIVE_AMP_LIMIT_RANGE_MA
+        for nm, v in (("amp_min_mA", a_lo), ("amp_max_mA", a_hi)):
+            if not (lim_lo <= float(v) <= lim_hi):
+                problems.append(
+                    f"{nm} {float(v):g} mA is outside the documented adaptive amplitude limit "
+                    f"range {lim_lo:g}-{lim_hi:g} mA ({RANGE_SOURCE_FDA}).")
+
+    # The timing parameters, when the policy states them, must sit inside the DOCUMENTED selection
+    # range (2026-09-13). A value outside it cannot be entered on the tablet, so a plan carrying
+    # one wastes a programming visit. The two parameters with no documented range are not checked.
+    for key, rng, label in (
+            ("onset_ms", ONSET_RANGE_MS_BY_MODE.get(mode), "onset duration"),
+            ("transition_up_ms", TRANSITION_RANGE_MS, "transition up duration"),
+            ("transition_down_ms", TRANSITION_RANGE_MS, "transition down duration"),
+            ("averaging_ms", AVERAGING_RANGE_MS, "averaging duration")):
+        v = policy.get(key)
+        if v is None or rng is None:
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            problems.append(f"{key} must be a number of milliseconds, got {v!r}.")
+            continue
+        if not (rng[0] <= fv <= rng[1]):
+            src = RANGE_SOURCE_TIP_CARD if key == "averaging_ms" else RANGE_SOURCE_FDA
+            problems.append(f"{label} {fv:g} ms is outside the documented range "
+                            f"{rng[0]:g}-{rng[1]:g} ms ({src}).")
 
     paused = policy.get("paused_amp_mA")
     if paused is not None and a_lo is not None and a_hi is not None:
@@ -672,3 +755,23 @@ def validate_policy(policy):
                 f"paused amplitude {paused} mA lies outside the adaptive limits "
                 f"[{a_lo}, {a_hi}] mA.")
     return problems
+
+
+# Retained active Aditya interfaces.
+def derive_single_threshold(lfp_lower, lfp_upper, frac=SINGLE_THRESHOLD_FRACTION):
+    """Reproduce the device's single-threshold calculation: ``frac * (upper - lower) + lower``.
+
+    This is NOT a free parameter of ours — it is what the device will compute from the two captured
+    LFP values, so any plan that proposes a single-threshold policy must predict the threshold this
+    way rather than choosing one. Raises on inverted captures, which the device also refuses: "it is
+    possible that the thresholds gathered by the system are either too close together or are
+    inverted. In this case, the A610 application will prompt the user to either ... recapture ... or
+    select the manual adjustment option." (p. 15)
+    """
+    lo, hi = float(lfp_lower), float(lfp_upper)
+    if not (hi > lo):
+        raise ValueError(
+            f"inverted or degenerate LFP captures (lower={lo!r}, upper={hi!r}). The device refuses "
+            "this and prompts for recapture or manual adjustment; a derived threshold from an "
+            "inverted pair is meaningless.")
+    return frac * (hi - lo) + lo

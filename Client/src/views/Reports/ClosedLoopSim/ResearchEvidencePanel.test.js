@@ -11,7 +11,8 @@ jest.mock("database/session-control", () => ({ SessionController: {
 const mockQuery = jest.fn();
 mockQuery.cancel = jest.fn();
 jest.mock("../Biomarkers/queryAnalysis", () => ({ useAnalysisQuery: () => mockQuery }));
-jest.mock("@mui/material", () => ({ Card: ({ children }) => <div>{children}</div>,
+jest.mock("plotly.js-dist", () => ({ react: jest.fn(), purge: jest.fn() }));
+jest.mock("@mui/material", () => ({ ...jest.requireActual("@mui/material"), Card: ({ children }) => <div>{children}</div>,
   Grid: ({ children }) => <div>{children}</div>, Divider: () => <hr />, Icon: ({ children }) => <span>{children}</span> }));
 jest.mock("components/MDBox", () => ({ children }) => <div>{children}</div>);
 jest.mock("components/MDTypography", () => ({ children, role }) => <div role={role}>{children}</div>);
@@ -77,7 +78,7 @@ async function showReport(data) {
   const view = render(<ResearchEvidencePanel {...selected} />);
   await waitFor(() => expect(screen.getByRole("button").disabled).toBe(false));
   fireEvent.click(screen.getByRole("button"));
-  await waitFor(() => expect(screen.getByRole("status")).toBeTruthy());
+  expect(await screen.findByRole("status")).toBeTruthy();
   fireEvent.click(screen.getByText("Detailed numeric evidence and source provenance"));
   return view;
 }

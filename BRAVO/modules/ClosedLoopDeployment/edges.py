@@ -3,8 +3,13 @@
 The triangle is the module's whole argument. Closing the loop on a band requires all three of:
 
   E1  amplitude -> band power    the device can MOVE the signal (otherwise there is no control)
-  E2  band power -> pain         the signal TRACKS the patient (otherwise control is pointless)
+  E2  band power -> pain         the signal TELLS THE PATIENT'S HIGH PAIN FROM THEIR LOW PAIN
+                                 (otherwise control is pointless)
   E3  amplitude -> pain          the therapy WORKS (otherwise there is nothing to automate)
+
+E2 IS NOT A SLOPE. It used to be one. It is now how far this band's power gets above or below coin
+flipping at separating high-pain moments from low-pain ones, because the stimulator switches state
+when power crosses a value programmed into it and that is a yes-or-no decision. See ``state_edge``.
 
 and requires their signs to be mutually consistent, which is what consistency.py tests.
 
@@ -23,41 +28,366 @@ itself so that no panel can present it as a causal effect.
 """
 from __future__ import annotations
 
+import functools
 import numpy as np
 import pandas as pd
 
 from .types import EdgeEstimate
 
+# Review 2026-09-15, finding C1: every E1 says which of the two estimates it is (types.EdgeEstimate.source).
+_SCREENING_E1 = functools.partial(EdgeEstimate, "E1", source="screening_historical")
+_POOLED_E1 = functools.partial(EdgeEstimate, "E1", source="pooled_titration")
 
-#: The number of clusters at or above which the cluster-robust (CR0) variance estimator is used
-#: directly, and BELOW which inference is taken from the wild cluster bootstrap-t instead.
-#:
-#: This constant used to be a disqualification: any estimate with fewer clusters than this was
-#: flagged unreliable and could not be assessed. The diagnosis behind that flag is correct and is
-#: measured on this dataset. With few clusters CR0 is anti-conservative, meaning its intervals are
-#: too NARROW, so it manufactures resolution rather than losing it; on the RCS08 record, cells with
-#: three setting epochs reported all eighteen bands as resolved while the whole-epoch permutation on
-#: the same cells returned a family-wise p of 1.00. But the RCS08 record has a maximum of 35 setting
-#: epochs in any band-cell and a median of 7, so a floor of 40 disqualified every cell that exists
-#: and will ever exist here, which is a refusal wearing the clothes of a criterion.
-#:
-#: The threshold is therefore now a SWITCH between two estimators rather than a gate. Below it, the
-#: reported p-value and confidence interval come from the wild cluster bootstrap-t with Rademacher
-#: weights imposed under the null (Cameron, Gelbach and Miller 2008), which is the inference method
-#: with demonstrated size properties in the five-to-forty cluster range; the simulation in
-#: tests/test_bootstrap.py measures both estimators against a known null and records what each one
-#: actually does. The few-cluster condition is still reported on the estimate, but as information
-#: about which estimator produced the numbers, not as a reason to withhold them.
-#:
-#: The value 40 itself follows the conventional rule of thumb in the clustered-inference literature
-#: (Cameron and Miller 2015, "A Practitioner's Guide to Cluster-Robust Inference", section VI):
-#: there is no sharp cutoff, and 40 is the commonly cited point above which the asymptotic
-#: cluster-robust approximation is usually adequate. It is deliberately conservative, because using
-#: the bootstrap when it was not needed costs computer time, whereas using CR0 when it was not
-#: warranted costs a false claim about a patient's brain.
+
+# E2 inherits the biomarker page's AUC estimator and exported results. The existing
+# Aditya cluster-bootstrap interfaces below remain active for E1/E3 and their callers.
+# Keep this dependency one-way: Biomarkers must not import ClosedLoopDeployment.
+from modules.Biomarkers.routines.analytics import (      # noqa: F401  (re-exported on purpose)
+    band_pain_auc_from_table,
+    read_band_pain_auc_from_export,
+    BAND_PAIN_ESTABLISHED,
+    BAND_PAIN_NOT_RESOLVED,
+    BAND_PAIN_NOT_ASSESSED,
+)
+
+
+
+# Aditya canonical compatibility imports/constants.
+
+
+
 MIN_RELIABLE_CLUSTERS = 40
 
+MAX_ENUMERABLE_CLUSTERS = 12
 
+def actuation_edge(T, *, channel, center_hz, hemisphere="Left", scale="power_linear",
+                   n_boot=999, seed=0):
+    """E1: does band power move with programmed amplitude?
+
+    Cluster unit is the SETTING EPOCH. Every spectral sample recorded while one set of stimulation
+    parameters was in force is one observation of that setting, not many independent ones; treating
+    them as independent is the pseudoreplication the audit identified.
+
+    Estimated on the LINEAR power scale by default, because rule D11 records that the device
+    computes LFP power as a linear sum of squared magnitude, and an edge intended to predict device
+    behaviour should be on the device's own scale.
+    """
+    from .adapter import resolve_setting_column
+    amp_col = resolve_setting_column(T.columns if T is not None else [], "amp", hemisphere)
+    if amp_col is None:
+        return _SCREENING_E1(None, None, None, 0, "setting epoch", 0, scale,
+                            note=f"no amplitude column for the {hemisphere} hemisphere under any "
+                                 "known spelling; the joined table carried no delivered amplitude, "
+                                 "so an actuation slope cannot be formed")
+    need = {amp_col, scale, "setting_epoch", "channel", "center_hz"}
+    if T is None or T.empty or not need.issubset(T.columns):
+        return _SCREENING_E1(None, None, None, 0, "setting epoch", 0, scale,
+                            note=f"missing columns: {sorted(need - set(T.columns if T is not None else []))}")
+    d = T[(T.channel == channel) & (np.isclose(T.center_hz, center_hz))].copy()
+    d = d.dropna(subset=[amp_col, scale, "setting_epoch"])
+    d = d[d.setting_epoch >= 0]
+    if len(d) < 6:
+        return _SCREENING_E1(None, None, None, len(d), "setting epoch",
+                            int(d.setting_epoch.nunique()), scale, note="too few usable samples")
+    X = np.column_stack([np.ones(len(d)), pd.to_numeric(d[amp_col], errors="coerce").to_numpy()])
+    res, bse, nclu = _cluster_ols(d[scale].to_numpy(), X, d.setting_epoch.to_numpy())
+    if res is None:
+        return _SCREENING_E1(None, None, None, len(d), "setting epoch", nclu, scale,
+                            note="fewer than two setting epochs; a within-subject slope is not "
+                                 "identifiable from a single setting")
+    b = float(res.params[1]); se = float(bse[1])
+    p, ci = float(res.pvalues[1]), (b - 1.96 * se, b + 1.96 * se)
+    note = ("SCREENING STATISTIC ONLY. Amplitude is confounded with time in the historical record, "
+            "so this cannot be read as the causal effect of amplitude on power. Its purpose is to "
+            "choose what to titrate.")
+    conf = ["time", "impedance drift", "concurrent rate changes"]
+    if nclu < MIN_RELIABLE_CLUSTERS:
+        note += (f" FEW CLUSTERS: {nclu} setting epochs is below the {MIN_RELIABLE_CLUSTERS} at "
+                 "which the cluster-robust variance estimator has an asymptotic argument behind it. "
+                 "This is reported as information about which estimator was used, not as a reason "
+                 "to withhold the estimate. ")
+        conf.append("few clusters")
+        p, ci, boot_note, _ = _small_sample_inference(
+            d[scale].to_numpy(float), X, d.setting_epoch.to_numpy(), n_boot=n_boot, seed=seed)
+        note += boot_note
+    else:
+        note += (f" Inference is CR0 cluster-robust at the setting epoch on {nclu} clusters, which "
+                 f"is at or above the {MIN_RELIABLE_CLUSTERS}-cluster point where the asymptotic "
+                 "approximation is usually adequate.")
+    return _SCREENING_E1(b, ci, p, len(d), "setting epoch", nclu, scale,
+                        note=note, confounded_by=conf)
+
+
+def pooled_actuation_edge(pooled_row, *, scale="power_linear"):
+    """E1 from the STORED POOLED SLOPE: band power on current across every run of rising current
+    on this sensing contact, one baseline per run and one shared slope (decision 55), read from
+    the row `amplitude_effect.pooled_row` returns.
+
+    Chosen by the PI on 2026-09-11 (redesign decision 9, decision 124 in the log) over the
+    historical setting-epoch slope `actuation_edge` computes from months of chronic recording:
+    the pooled titration slope is the quantity the redesigned three-source panel draws, so the
+    triangle and the panel now read one number. The historical estimate is kept beside it in
+    the report (`edges_historical`) rather than discarded.
+
+    The curvature answer travels in the note as a CAVEAT: a bend detected across the tested
+    currents means a single slope is a poor description, and the note says so; a peak is named
+    only when the pooled model placed one inside the tested range. Nothing here fits anything.
+    """
+    r = pooled_row or {}
+    b = r.get("pooled_slope_per_mA")
+    se = r.get("pooled_slope_stderr")
+    p = r.get("pooled_slope_p")
+    n = int(r.get("n") or 0)
+    n_visits = int(r.get("n_visits") or 0)
+    unit = "run of rising current (one baseline each)"
+    if b is None or not np.isfinite(float(b)):
+        return _POOLED_E1(None, None, None, n, unit, n_visits, scale,
+                            note=("no pooled slope: " + str(r.get("verdict") or
+                                  "the pooled within-visit table has no assessed row for this "
+                                  "contact and band")))
+    b = float(b)
+    ci = ((b - 1.96 * float(se), b + 1.96 * float(se))
+          if se is not None and np.isfinite(float(se)) else None)
+    p = float(p) if p is not None and np.isfinite(float(p)) else None
+    note = (f"POOLED ACROSS {n_visits} RUNS OF RISING CURRENT on this contact, {n} settled "
+            "points, one baseline per run and one shared slope (decision 55), in the device's "
+            "own units per mA. This is the same row the three-source panel draws, chosen for the "
+            "triangle on 2026-09-11 in place of the historical setting-epoch slope, which is kept "
+            "in the report beside it.")
+    curves = bool(r.get("curves"))
+    pc = r.get("p_curvature")
+    conf = []
+    if curves:
+        note += (f" CURVATURE: a bend across the tested currents was detected (p = "
+                 f"{float(pc):.3f})" if pc is not None and np.isfinite(float(pc))
+                 else " CURVATURE: a bend across the tested currents was detected")
+        if r.get("peaks_inside") and r.get("peak_mA") is not None \
+                and np.isfinite(float(r.get("peak_mA"))):
+            note += f", with the peak near {float(r['peak_mA']):.1f} mA"
+        note += (", so one straight-line slope is a poor description of this band and the sign "
+                 "below is the average across the bend, not the direction past the peak.")
+        conf.append("curvature")
+    elif pc is not None and np.isfinite(float(pc)):
+        note += f" No bend was detected across the tested currents (curvature p = {float(pc):.3f})."
+    else:
+        note += " Curvature could not be assessed on this many points."
+    if n_visits and n_visits < 3:
+        conf.append("few runs")
+    # PER RUN (T2 of the 2026-09-15 review, decision 200): the pooled slope is one number over
+    # every run; this says how many runs fall with current on their own, how many rise, and the
+    # two extremes, so a pooled sign carried by one steep run is visible as such. A stored row
+    # from before the field existed (POOLED_RULE_VERSION v4 and earlier) says so instead.
+    if r.get("n_runs_slope_negative") is None and r.get("n_runs_slope_positive") is None:
+        note += " PER RUN: per-run slopes not stored on this row (built before decision 200)."
+    else:
+        n_neg = int(r.get("n_runs_slope_negative") or 0)
+        n_pos = int(r.get("n_runs_slope_positive") or 0)
+        n_none = int(r.get("n_runs_without_slope") or 0)
+        n_all = n_neg + n_pos
+        note += (f" PER RUN: {n_neg} of {n_all} runs fall with current, {n_pos} rise"
+                 + (f" ({n_none} more held one current only)" if n_none else ""))
+        try:
+            import json as _json
+            runs = _json.loads(r.get("per_run_slopes_json") or "[]")
+        except Exception:                                   # noqa: BLE001 -- the counts suffice
+            runs = []
+        slopes = [float(x["slope_per_mA"]) for x in runs
+                  if x.get("slope_per_mA") is not None and np.isfinite(float(x["slope_per_mA"]))]
+        if slopes:
+            note += (f"; the runs' own slopes range from {min(slopes):+.1f} to {max(slopes):+.1f} "
+                     "device units per mA")
+        note += "."
+        if n_neg and n_pos:
+            conf.append("runs disagree")
+    return _POOLED_E1(b, ci, p, n, unit, n_visits, scale, note=note, confounded_by=conf)
+
+
+#: What the E2 estimate is a number of, written on every E2 estimate this module produces.
+#:
+#: E2 no longer carries a slope. It carries how far this band's power gets above or below coin
+#: flipping at telling the patient's high-pain moments from the low-pain ones, which is why 0.5 has
+#: been subtracted; see ``state_edge`` for why that subtraction is what makes the rest of the
+#: module keep working correctly.
+E2_QUANTITY = ("how far above or below coin flipping this band's power gets at telling high-pain "
+               "moments from low-pain ones, as area under the curve minus 0.5")
+
+
+def state_edge(T, *, channel, center_hz, outcome="nrs", scale="power_linear",
+               cluster="report_id", n_boot=500, seed=0, strategy="tertile"):
+    """E2: how well does this band's power tell the patient's high pain from their low pain?
+
+    WHAT CHANGED AND WHY, because this is not the same quantity it used to be. This function used
+    to fit a straight line through band power against the pain score and report its slope. The PI
+    has rejected that and it has been deleted. The stimulator changes what it is doing when band
+    power crosses a value programmed into it, which is a yes-or-no decision about the state of the
+    brain signal, so the quantity that decides whether a band is worth driving that decision with
+    has to be a quantity about telling two states apart. That quantity is the area under the curve,
+    it is computed on the biomarker side, and this function reads it.
+
+    WHAT MAY BE HANDED IN as the first argument, either of two things:
+
+      * the exported table from ``Biomarkers.routines.analytics.band_pain_auc_export`` -- one row
+        per sensing contact pair per band centre. This is the table the PI asked the biomarker page
+        to produce and the closed-loop page to inherit, and handing it in is the intended route.
+      * this module's own table of spectral samples, one row per sample, with columns for the
+        channel, the band centre, the band power, the pain score and the pain report. The same
+        estimator is then run on those rows directly, through
+        ``Biomarkers.routines.analytics.band_pain_auc_from_table``.
+
+    Either way there is ONE estimator, on the biomarker side, so the deployment panel and the
+    biomarker page cannot print two different numbers for the same band. Which of the two routes
+    was taken is written on the note.
+
+    WHY 0.5 IS SUBTRACTED. The centered point sign says whether higher power predicts
+    higher pain; the centered interval lets ``statistically_established`` compare the AUC to
+    chance. Under the current PI policy, a finite nonzero point sign supplies ``resolved`` even
+    when its interval crosses chance, with statistical confidence carried as a caveat. A result
+    that was not assessed has no estimate and cannot supply a direction.
+    """
+    from_export = (T is not None and hasattr(T, "columns")
+                   and {"channel", "band_center_hz", "auc", "answer"}.issubset(set(T.columns)))
+    if from_export:
+        cluster = "report_id"
+        out = read_band_pain_auc_from_export(T, channel=channel, center_hz=center_hz)
+        route = ("read out of the table the biomarker page exported, which is the intended route: "
+                 "the number was computed once, on the biomarker side, and inherited here")
+    else:
+        out = band_pain_auc_from_table(T, channel=channel, center_hz=center_hz,
+                                       pain_column=outcome, power_column=scale,
+                                       group_column=cluster, strategy=strategy,
+                                       n_boot=n_boot, seed=seed)
+        route = ("computed by the biomarker page's own estimator, called here on this module's "
+                 "table of spectral samples because no exported table was handed in. The exported "
+                 "table is the intended route; this one runs the same estimator on the same rules")
+    n = int(out.get("n_spectral_samples") or 0)
+    n_reports = int(out.get("n_pain_reports") or 0)
+    split = out.get("pain_split_rule") or "the pain split was not recorded"
+    cluster_label = "pain report" if from_export or cluster == "report_id" else str(cluster).replace("_", " ")
+    if out.get("answer") == BAND_PAIN_NOT_ASSESSED:
+        note = (f"NOT ASSESSED, so there is no number here at all and this must not be read as a "
+                f"measurement showing that the band does not separate high pain from low pain. "
+                f"{out.get('why', '')}. This answer was {route}.")
+        return EdgeEstimate("E2", None, None, None, n, cluster, n_reports, E2_QUANTITY, note=note)
+    auc = out.get("auc")
+    lo, hi = out.get("auc_low"), out.get("auc_high")
+    est = (float(auc) - 0.5) if auc is not None else None
+    ci = ((float(lo) - 0.5, float(hi) - 0.5) if (lo is not None and hi is not None) else None)
+    raw_ci = (f"{float(lo):.3f} to {float(hi):.3f}" if (lo is not None and hi is not None)
+              else "no interval could be formed")
+    note = (
+        f"The number stored on this estimate is {('%.3f' % est) if est is not None else 'absent'}, "
+        f"which is the area under the curve minus 0.5. THE RAW AREA UNDER THE CURVE IS "
+        f"{('%.3f' % auc) if auc is not None else 'absent'} and its "
+        f"{100 * float(out.get('confidence_level') or 0.95):.0f}% interval is {raw_ci}; 0.5 is what "
+        f"coin flipping would give, and 0.5 was subtracted so that this module's existing test of "
+        f"whether an interval excludes zero becomes a test of whether it excludes coin flipping. "
+        f"Clustered on the {cluster_label}: {n_reports} {cluster_label} groups behind {n} spectral samples, "
+        f"and the confidence interval comes from resampling whole {cluster_label} groups rather "
+        f"than individual samples, preserving dependence within each group. "
+        f"How pain was split into high and low: {split}. What the power values are: "
+        f"{out.get('power_feature', 'not recorded')}. {out.get('why', '')}. This answer was "
+        f"{route}.")
+    return EdgeEstimate("E2", est, ci, out.get("p_two_sided"), n, cluster, n_reports,
+                        E2_QUANTITY, note=note)
+
+
+def therapy_edge(design_matrix, *, outcome="nrs", amp_col="amp_mA_Left", cluster="epoch",
+                 n_boot=999, seed=0):
+    """E3: does pain change with amplitude across settings?
+
+    Read from the exposure-epoch design matrix rather than the spectral table, because this edge
+    does not involve the brain signal at all. Era-blocking is the caller's responsibility; the note
+    records whether a block variable was supplied, since an unblocked estimate on this record is
+    dominated by the same amplitude-time confound that limits E1.
+    """
+    if design_matrix is None or len(design_matrix) == 0:
+        return EdgeEstimate("E3", None, None, None, 0, cluster, 0, "mA", note="no design matrix")
+    d = design_matrix.copy()
+    if amp_col not in d.columns or outcome not in d.columns:
+        return EdgeEstimate("E3", None, None, None, 0, cluster, 0, "mA",
+                            note=f"missing {amp_col!r} or {outcome!r}")
+    grp = cluster if cluster in d.columns else None
+    d = d.dropna(subset=[amp_col, outcome] + ([grp] if grp else []))
+    if len(d) < 6 or grp is None:
+        return EdgeEstimate("E3", None, None, None, len(d), cluster, 0, "mA",
+                            note="too few epochs, or no cluster column")
+    X = np.column_stack([np.ones(len(d)), d[amp_col].to_numpy(float)])
+    res, bse, nclu = _cluster_ols(d[outcome].to_numpy(float), X, d[grp].to_numpy())
+    if res is None:
+        return EdgeEstimate("E3", None, None, None, len(d), cluster, nclu, "mA",
+                            note="fewer than two epoch clusters")
+    b = float(res.params[1]); se = float(bse[1])
+    p, ci = float(res.pvalues[1]), (b - 1.96 * se, b + 1.96 * se)
+    note = ("unblocked unless the caller supplied an era-restricted matrix; on the historical "
+            "record an unblocked estimate carries the amplitude-time confound. ")
+    if nclu < MIN_RELIABLE_CLUSTERS:
+        note += f"FEW CLUSTERS: {nclu} epochs is below {MIN_RELIABLE_CLUSTERS}. "
+        p, ci, boot_note, _ = _small_sample_inference(
+            d[outcome].to_numpy(float), X, d[grp].to_numpy(), n_boot=n_boot, seed=seed)
+        note += boot_note
+    else:
+        note += (f"Inference is CR0 cluster-robust on {nclu} clusters, at or above the "
+                 f"{MIN_RELIABLE_CLUSTERS}-cluster point where that approximation is usually "
+                 "adequate.")
+    return EdgeEstimate("E3", b, ci, p, len(d), cluster, nclu, "mA", note=note,
+                        confounded_by=["time"])
+
+
+def max_statistic_permutation(T, *, channels, centers, amp_col="amp_mA_Left",
+                              scale="power_linear", n_perm=2000, seed=0):
+    """Family-wise corrected p for "does ANY band-cell respond to amplitude?".
+
+    Permutes amplitude BETWEEN SETTING EPOCHS, keeping every sample within an epoch together, and
+    records the largest absolute t statistic across all band-cells in each replicate. Comparing the
+    observed maximum against that distribution corrects for having scanned many cells without
+    assuming they are independent — which they are not, since neighbouring bands share spectral
+    bins and channels share a lead.
+
+    Permuting whole epochs rather than samples is the point: shuffling samples would break the
+    within-epoch dependence and produce a null that is far too narrow, which is the mechanism that
+    made earlier scans look significant.
+    """
+    if T is None or T.empty or amp_col not in T.columns:
+        return {"available": False, "reason": "no usable table"}
+    rng = np.random.default_rng(seed)
+    cells = [(c, f) for c in channels for f in centers]
+    base = T[T.setting_epoch >= 0].dropna(subset=[amp_col, scale, "setting_epoch"])
+    if base.empty:
+        return {"available": False, "reason": "no rows with an epoch and both variables"}
+    ep = base[["setting_epoch", amp_col]].drop_duplicates("setting_epoch").set_index("setting_epoch")[amp_col]
+    if ep.size < 3:
+        return {"available": False, "reason": f"only {ep.size} setting epochs; a permutation null "
+                                              "over epochs needs at least three"}
+
+    def _tmax(amp_map):
+        best = 0.0
+        for ch, fc in cells:
+            d = base[(base.channel == ch) & (np.isclose(base.center_hz, fc))]
+            if len(d) < 6 or d.setting_epoch.nunique() < 2:
+                continue
+            a = d.setting_epoch.map(amp_map).to_numpy(float)
+            X = np.column_stack([np.ones(len(d)), a])
+            res, bse, _ = _cluster_ols(d[scale].to_numpy(float), X, d.setting_epoch.to_numpy())
+            if res is None or not np.isfinite(bse[1]) or bse[1] == 0:
+                continue
+            best = max(best, abs(float(res.params[1]) / float(bse[1])))
+        return best
+
+    obs = _tmax(ep.to_dict())
+    vals = ep.to_numpy()
+    null = np.empty(n_perm, float)
+    for i in range(n_perm):
+        null[i] = _tmax(dict(zip(ep.index, rng.permutation(vals))))
+    p = float((1 + (null >= obs).sum()) / (1 + n_perm))
+    return {"available": True, "observed_max_t": obs, "p_fwer": p, "n_perm": int(n_perm),
+            "n_cells": len(cells), "n_epochs_permuted": int(ep.size),
+            "resolution": 1.0 / (1 + n_perm),
+            "note": ("amplitude permuted between whole setting epochs, preserving within-epoch "
+                     "dependence. Permuting individual samples would give a null that is far too "
+                     "narrow.")}
+
+
+# Retained active Aditya interfaces.
 def estimator_for(n_clusters):
     """Which inference estimator the reported interval and p-value came from.
 
@@ -95,22 +425,6 @@ def estimator_for(n_clusters):
                 f"exists at all."),
     }
 
-#: At or below this many clusters the whole Rademacher weight space is ENUMERATED rather than
-#: sampled, because there are only 2**G distinct sign vectors and sampling 999 of them would draw
-#: the same handful repeatedly while pretending to a resolution of one in a thousand. 2**12 = 4096,
-#: which is the point where enumeration stops being cheaper than the usual 999 replications.
-#:
-#: This is also the range in which a reader has to be TOLD that the p-value is coarse. Two of the
-#: 2**G sign vectors — all plus one and all minus one — reproduce the observed sample exactly under
-#: the imposed null, so the enumerated p-value can never fall below 2 / 2**G. At eight clusters
-#: that floor is 0.0078, at six it is 0.031, and at five it is 0.0625, which is ABOVE the
-#: conventional five percent: with five clusters and Rademacher weights no result can be called
-#: significant at the five percent level no matter how large the effect. That is a known and
-#: deliberate property of the method (Cameron, Gelbach and Miller 2008, section IV; Webb 2013
-#: proposes a six-point weight distribution specifically to relieve it), and it is reported on every
-#: result through the `enumerable`, `n_sign_vectors` and `p_resolution` fields rather than hidden.
-MAX_ENUMERABLE_CLUSTERS = 12
-
 
 def _cluster_ols(y, X, groups, *, names=None):
     """OLS with cluster-robust (CR0) standard errors. Returns (params, bse, n_clusters).
@@ -131,35 +445,6 @@ def _cluster_ols(y, X, groups, *, names=None):
     return res, np.asarray(res.bse, float), int(np.unique(g).size)
 
 
-# --------------------------------------------------------------------------------------------
-# The wild cluster bootstrap-t
-#
-# WHY THIS EXISTS. Everything in this module is estimated on a handful of clusters: a setting epoch
-# is a stretch during which the stimulation settings did not change, and RCS08 has at most 35 of
-# them in any band-cell and typically 7. Cluster-robust standard errors are consistent as the
-# NUMBER OF CLUSTERS grows, not as the number of observations grows, so at these cluster counts the
-# CR0 sandwich has no asymptotic argument behind it and is known to be biased downward. Adding more
-# spectral samples inside an epoch does not help, because those samples are not independent
-# observations of the amplitude-power relationship; only more epochs would help, and the historical
-# record contains the epochs it contains.
-#
-# The wild cluster bootstrap-t of Cameron, Gelbach and Miller (2008), "Bootstrap-Based Improvements
-# for Inference with Clustered Errors", Review of Economics and Statistics 90(3), is the standard
-# answer in this regime. Instead of trusting the sandwich to give the right standard error, it
-# builds the sampling distribution of the t STATISTIC itself by re-generating the outcome many
-# times under a null-imposed model, flipping the sign of each cluster's whole residual vector, and
-# recomputing the same t statistic each time. The observed t is then read against that distribution
-# rather than against a normal or t table. Because the statistic's own denominator is recomputed in
-# every replication, the method corrects for the downward bias of the denominator instead of
-# assuming it away.
-#
-# WHAT MUST NOT BE GOT WRONG. The sign is drawn ONCE PER CLUSTER and applied to every observation in
-# that cluster. Drawing a sign per observation destroys exactly the within-cluster dependence the
-# procedure exists to respect, and silently degrades the method to an ordinary residual bootstrap
-# whose intervals are as narrow as the ones being replaced. There is a test for this
-# (tests/test_bootstrap.py) that checks the weight structure directly rather than trusting the
-# output to look reasonable.
-# --------------------------------------------------------------------------------------------
 def _rademacher_weights(n_clusters, n_boot, seed):
     """Return (W, method, n_sign_vectors) where W has one row per replication and one column per
     CLUSTER, with entries +1 or -1.
@@ -417,28 +702,13 @@ def wild_cluster_bootstrap_ci(y, X, groups, *, coef_index=1, n_boot=999, seed=0,
     valid inference with the invalid interval it was brought in to replace, and a reader comparing
     the two would find the interval excluding zero while the p-value did not.
 
-    THE COST, SINCE THE ALTERNATIVE WAS TO SUBSTITUTE SOMETHING CHEAPER. Full inversion is done, not
-    approximated. It is affordable because the restricted residuals are affine in the candidate
-    value, so one set of replications serves the whole grid (see ``_BootstrapPlan``); the grid
-    therefore costs a few small matrix products per candidate instead of a full set of bootstrap
-    refits, and the endpoints are then refined by bisection to well past the precision anyone
-    reports. Measured on a band-cell of the size this module sees — of the order of seven hundred
-    spectral samples spread over eight to thirty-five setting epochs — a full inversion takes
-    between 30 and 75 milliseconds against 0.2 to 0.3 milliseconds for the CR0 fit it replaces, so
-    it is one to four hundred times the cost of the thing it replaces and still under a tenth of a
-    second per edge. Scanning the 324 era-stratified band-cells of the RCS08 record takes about
-    eleven seconds. The cost grows with the number of ROWS, not with the grid, so a cell with tens
-    of thousands of samples takes seconds rather than milliseconds; that is worth knowing before
-    calling this on a table that has not been reduced to band powers.
-
     The grid is centred on the point estimate, which is always inside the interval because the
     observed statistic is zero there and every replication ties with it. If the accepted set reaches
     the edge of the grid the grid is widened and retried; if it still reaches the edge, or if the
     achievable p-value floor is above ``alpha`` so that nothing can be rejected at all, the interval
     is UNBOUNDED and is reported as absent with the reason stated. An absent interval is not a
     failure of the computation, it is the honest answer when a five-cluster sign-flip distribution
-    cannot deliver a five percent test.
-    """
+    cannot deliver a five percent test."""
     plan = _BootstrapPlan(y, X, groups, coef_index=coef_index, n_boot=n_boot, seed=seed,
                           impose_null=True)
     out = {"available": False, "ci": None, "alpha": float(alpha), "reason": ""}
@@ -544,201 +814,3 @@ def _small_sample_inference(y, X, groups, *, coef_index=1, n_boot=999, seed=0, a
                  "values outside the reported interval; the interval given is the connected "
                  "component containing the point estimate.")
     return ci["p_at_null"], ci["ci"], note, ci
-
-
-def actuation_edge(T, *, channel, center_hz, hemisphere="Left", scale="power_linear",
-                   n_boot=999, seed=0):
-    """E1: does band power move with programmed amplitude?
-
-    Cluster unit is the SETTING EPOCH. Every spectral sample recorded while one set of stimulation
-    parameters was in force is one observation of that setting, not many independent ones; treating
-    them as independent is the pseudoreplication the audit identified.
-
-    Estimated on the LINEAR power scale by default, because rule D11 records that the device
-    computes LFP power as a linear sum of squared magnitude, and an edge intended to predict device
-    behaviour should be on the device's own scale.
-    """
-    from .adapter import resolve_setting_column
-    amp_col = resolve_setting_column(T.columns if T is not None else [], "amp", hemisphere)
-    if amp_col is None:
-        return EdgeEstimate("E1", None, None, None, 0, "setting epoch", 0, scale,
-                            note=f"no amplitude column for the {hemisphere} hemisphere under any "
-                                 "known spelling; the joined table carried no delivered amplitude, "
-                                 "so an actuation slope cannot be formed")
-    need = {amp_col, scale, "setting_epoch", "channel", "center_hz"}
-    if T is None or T.empty or not need.issubset(T.columns):
-        return EdgeEstimate("E1", None, None, None, 0, "setting epoch", 0, scale,
-                            note=f"missing columns: {sorted(need - set(T.columns if T is not None else []))}")
-    d = T[(T.channel == channel) & (np.isclose(T.center_hz, center_hz))].copy()
-    d = d.dropna(subset=[amp_col, scale, "setting_epoch"])
-    d = d[d.setting_epoch >= 0]
-    if len(d) < 6:
-        return EdgeEstimate("E1", None, None, None, len(d), "setting epoch",
-                            int(d.setting_epoch.nunique()), scale, note="too few usable samples")
-    X = np.column_stack([np.ones(len(d)), pd.to_numeric(d[amp_col], errors="coerce").to_numpy()])
-    res, bse, nclu = _cluster_ols(d[scale].to_numpy(), X, d.setting_epoch.to_numpy())
-    if res is None:
-        return EdgeEstimate("E1", None, None, None, len(d), "setting epoch", nclu, scale,
-                            note="fewer than two setting epochs; a within-subject slope is not "
-                                 "identifiable from a single setting")
-    b = float(res.params[1]); se = float(bse[1])
-    p, ci = float(res.pvalues[1]), (b - 1.96 * se, b + 1.96 * se)
-    note = ("SCREENING STATISTIC ONLY. Amplitude is confounded with time in the historical record, "
-            "so this cannot be read as the causal effect of amplitude on power. Its purpose is to "
-            "choose what to titrate.")
-    conf = ["time", "impedance drift", "concurrent rate changes"]
-    if nclu < MIN_RELIABLE_CLUSTERS:
-        note += (f" FEW CLUSTERS: {nclu} setting epochs is below the {MIN_RELIABLE_CLUSTERS} at "
-                 "which the cluster-robust variance estimator has an asymptotic argument behind it. "
-                 "This is reported as information about which estimator was used, not as a reason "
-                 "to withhold the estimate. ")
-        conf.append("few clusters")
-        p, ci, boot_note, _ = _small_sample_inference(
-            d[scale].to_numpy(float), X, d.setting_epoch.to_numpy(), n_boot=n_boot, seed=seed)
-        note += boot_note
-    else:
-        note += (f" Inference is CR0 cluster-robust at the setting epoch on {nclu} clusters, which "
-                 f"is at or above the {MIN_RELIABLE_CLUSTERS}-cluster point where the asymptotic "
-                 "approximation is usually adequate.")
-    return EdgeEstimate("E1", b, ci, p, len(d), "setting epoch", nclu, scale,
-                        note=note, confounded_by=conf)
-
-
-def state_edge(T, *, channel, center_hz, outcome="nrs", scale="power_linear",
-               cluster="report_id", n_boot=999, seed=0):
-    """E2: does the band track the patient's pain at fixed stimulation?
-
-    The caller supplies the outcome clustering unit. Individual reports and setting-epoch
-    aggregates are distinct units; repeated spectra within either unit are not independent PROs.
-    """
-    unit = {"report_id": "ratings", "setting_epoch": "setting epochs", "epoch": "setting epochs"}.get(cluster, f"{cluster} clusters")
-    need = {scale, outcome, "channel", "center_hz"}
-    if T is None or T.empty or not need.issubset(T.columns):
-        return EdgeEstimate("E2", None, None, None, 0, cluster, 0, scale,
-                            note=f"missing columns: {sorted(need - set(T.columns if T is not None else []))}")
-    d = T[(T.channel == channel) & (np.isclose(T.center_hz, center_hz))].copy()
-    grp = cluster if cluster in d.columns else None
-    if grp is None:
-        return EdgeEstimate("E2", None, None, None, len(d), cluster, 0, scale,
-                            note=f"no {cluster} column: the {unit} clustering unit is unavailable, and "
-                                 "estimating this edge without it would reproduce the "
-                                 "pseudoreplication the audit flagged")
-    d = d.dropna(subset=[scale, outcome, grp])
-    if len(d) < 6:
-        return EdgeEstimate("E2", None, None, None, len(d), cluster,
-                            int(d[grp].nunique()), scale, note="too few usable samples")
-    X = np.column_stack([np.ones(len(d)), d[scale].to_numpy(float)])
-    res, bse, nclu = _cluster_ols(d[outcome].to_numpy(float), X, d[grp].to_numpy())
-    if res is None:
-        return EdgeEstimate("E2", None, None, None, len(d), cluster, nclu, scale,
-                            note=f"fewer than two {unit}")
-    b = float(res.params[1]); se = float(bse[1])
-    p, ci = float(res.pvalues[1]), (b - 1.96 * se, b + 1.96 * se)
-    n2 = (f"Clustered by {unit}; repeated spectra within each {cluster} unit share "
-          "the same outcome contribution. ")
-    if nclu < MIN_RELIABLE_CLUSTERS:
-        n2 += (f"FEW CLUSTERS: {nclu} {unit} is below {MIN_RELIABLE_CLUSTERS}. ")
-        p, ci, boot_note, _ = _small_sample_inference(
-            d[outcome].to_numpy(float), X, d[grp].to_numpy(), n_boot=n_boot, seed=seed)
-        n2 += boot_note
-    else:
-        n2 += (f"Inference is CR0 cluster-robust on {nclu} clusters, at or above the "
-               f"{MIN_RELIABLE_CLUSTERS}-cluster point where that approximation is usually "
-               "adequate.")
-    return EdgeEstimate("E2", b, ci, p, len(d), cluster, nclu, scale, note=n2)
-
-
-def therapy_edge(design_matrix, *, outcome="nrs", amp_col="amp_mA_Left", cluster="epoch",
-                 n_boot=999, seed=0):
-    """E3: does pain change with amplitude across settings?
-
-    Read from the exposure-epoch design matrix rather than the spectral table, because this edge
-    does not involve the brain signal at all. Era-blocking is the caller's responsibility; the note
-    records whether a block variable was supplied, since an unblocked estimate on this record is
-    dominated by the same amplitude-time confound that limits E1.
-    """
-    if design_matrix is None or len(design_matrix) == 0:
-        return EdgeEstimate("E3", None, None, None, 0, cluster, 0, "mA", note="no design matrix")
-    d = design_matrix.copy()
-    if amp_col not in d.columns or outcome not in d.columns:
-        return EdgeEstimate("E3", None, None, None, 0, cluster, 0, "mA",
-                            note=f"missing {amp_col!r} or {outcome!r}")
-    grp = cluster if cluster in d.columns else None
-    d = d.dropna(subset=[amp_col, outcome] + ([grp] if grp else []))
-    if len(d) < 6 or grp is None:
-        return EdgeEstimate("E3", None, None, None, len(d), cluster, 0, "mA",
-                            note="too few epochs, or no cluster column")
-    X = np.column_stack([np.ones(len(d)), d[amp_col].to_numpy(float)])
-    res, bse, nclu = _cluster_ols(d[outcome].to_numpy(float), X, d[grp].to_numpy())
-    if res is None:
-        return EdgeEstimate("E3", None, None, None, len(d), cluster, nclu, "mA",
-                            note="fewer than two epoch clusters")
-    b = float(res.params[1]); se = float(bse[1])
-    p, ci = float(res.pvalues[1]), (b - 1.96 * se, b + 1.96 * se)
-    note = ("unblocked unless the caller supplied an era-restricted matrix; on the historical "
-            "record an unblocked estimate carries the amplitude-time confound. ")
-    if nclu < MIN_RELIABLE_CLUSTERS:
-        note += f"FEW CLUSTERS: {nclu} epochs is below {MIN_RELIABLE_CLUSTERS}. "
-        p, ci, boot_note, _ = _small_sample_inference(
-            d[outcome].to_numpy(float), X, d[grp].to_numpy(), n_boot=n_boot, seed=seed)
-        note += boot_note
-    else:
-        note += (f"Inference is CR0 cluster-robust on {nclu} clusters, at or above the "
-                 f"{MIN_RELIABLE_CLUSTERS}-cluster point where that approximation is usually "
-                 "adequate.")
-    return EdgeEstimate("E3", b, ci, p, len(d), cluster, nclu, "mA", note=note,
-                        confounded_by=["time"])
-
-
-def max_statistic_permutation(T, *, channels, centers, amp_col="amp_mA_Left",
-                              scale="power_linear", n_perm=2000, seed=0):
-    """Family-wise corrected p for "does ANY band-cell respond to amplitude?".
-
-    Permutes amplitude BETWEEN SETTING EPOCHS, keeping every sample within an epoch together, and
-    records the largest absolute t statistic across all band-cells in each replicate. Comparing the
-    observed maximum against that distribution corrects for having scanned many cells without
-    assuming they are independent — which they are not, since neighbouring bands share spectral
-    bins and channels share a lead.
-
-    Permuting whole epochs rather than samples is the point: shuffling samples would break the
-    within-epoch dependence and produce a null that is far too narrow, which is the mechanism that
-    made earlier scans look significant.
-    """
-    if T is None or T.empty or amp_col not in T.columns:
-        return {"available": False, "reason": "no usable table"}
-    rng = np.random.default_rng(seed)
-    cells = [(c, f) for c in channels for f in centers]
-    base = T[T.setting_epoch >= 0].dropna(subset=[amp_col, scale, "setting_epoch"])
-    if base.empty:
-        return {"available": False, "reason": "no rows with an epoch and both variables"}
-    ep = base[["setting_epoch", amp_col]].drop_duplicates("setting_epoch").set_index("setting_epoch")[amp_col]
-    if ep.size < 3:
-        return {"available": False, "reason": f"only {ep.size} setting epochs; a permutation null "
-                                              "over epochs needs at least three"}
-
-    def _tmax(amp_map):
-        best = 0.0
-        for ch, fc in cells:
-            d = base[(base.channel == ch) & (np.isclose(base.center_hz, fc))]
-            if len(d) < 6 or d.setting_epoch.nunique() < 2:
-                continue
-            a = d.setting_epoch.map(amp_map).to_numpy(float)
-            X = np.column_stack([np.ones(len(d)), a])
-            res, bse, _ = _cluster_ols(d[scale].to_numpy(float), X, d.setting_epoch.to_numpy())
-            if res is None or not np.isfinite(bse[1]) or bse[1] == 0:
-                continue
-            best = max(best, abs(float(res.params[1]) / float(bse[1])))
-        return best
-
-    obs = _tmax(ep.to_dict())
-    vals = ep.to_numpy()
-    null = np.empty(n_perm, float)
-    for i in range(n_perm):
-        null[i] = _tmax(dict(zip(ep.index, rng.permutation(vals))))
-    p = float((1 + (null >= obs).sum()) / (1 + n_perm))
-    return {"available": True, "observed_max_t": obs, "p_fwer": p, "n_perm": int(n_perm),
-            "n_cells": len(cells), "n_epochs_permuted": int(ep.size),
-            "resolution": 1.0 / (1 + n_perm),
-            "note": ("amplitude permuted between whole setting epochs, preserving within-epoch "
-                     "dependence. Permuting individual samples would give a null that is far too "
-                     "narrow.")}

@@ -1,4 +1,4 @@
-import {render,screen,fireEvent,act} from '@testing-library/react';
+import {render,screen,fireEvent} from '@testing-library/react';
 import {ThemeProvider} from '@mui/material/styles';
 import {PlatformContextProvider} from 'context';
 import theme from 'assets/theme';
@@ -29,19 +29,19 @@ test('biomarker compute keys the complete selected request and obtains payloads 
   expect(mockQuery.mock.calls.some(([url])=>url==='/api/queryBiomarkerAnalysis')).toBe(false);
   expect(screen.getByText('Observed calibration panel')).toBeTruthy();expect(screen.getByText('Model calibration panel')).toBeTruthy();
   fireEvent.click(screen.getByRole('button',{name:/Start exploratory analysis/}));
-  const options=useCachedResult.mock.calls.at(-1)[0];expect(options.enabled).toBe(true);expect(options.settings).toMatchObject({LabelMetric:'nrs',LabelStrategy:'tertile',MatchToleranceMin:60});
+  const options=useCachedResult.mock.calls.filter(([o])=>o.moduleKey===MODULES.biomarkers).at(-1)[0];expect(options.enabled).toBe(true);expect(options.settings).toMatchObject({LabelMetric:'nrs',LabelStrategy:'tertile',MatchToleranceMin:60});
   expect(mockCache.recompute).toHaveBeenCalledTimes(1);
   const payload={available:true,InputManifest:{revision:'clean-v3'}};mockQuery.mockResolvedValueOnce({status:200,data:payload});
   await expect(options.fetcher()).resolves.toBe(payload);
   expect(mockQuery).toHaveBeenLastCalledWith('/api/queryBiomarkerAnalysis',{ParticipantId:'synthetic-cache-participant',...options.settings});
-  await act(async()=>{});
+
 });
 
 test('optimizer cache keys explicit scientific parameters and uses the canonical completed-response query',async()=>{
   render(<View><StimOptimizer/></View>);
   const options=useCachedResult.mock.calls.at(-1)[0];
-  expect(options).toMatchObject({moduleKey:MODULES.stimOptimizer,uid:'synthetic-cache-participant',enabled:true,autoFetch:false,settings:{Sites:['left_leg','back'],Hemispheres:['Left','Right'],WashinMin:1,Backend:'plotly',NBatches:3,Q:4}});
-  expect(mockQuery).not.toHaveBeenCalled();fireEvent.click(screen.getByRole('button',{name:'Start analysis'}));
+  expect(options).toMatchObject({moduleKey:MODULES.stimOptimizer,uid:'synthetic-cache-participant',enabled:true,autoFetch:false,settings:{Sites:['left_leg','back'],Hemispheres:['Left','Right'],WashinMin:1,Backend:'none',NBatches:3,Q:4}});
+  expect(mockQuery).not.toHaveBeenCalled();fireEvent.click(screen.getByRole('button',{name:'Run optimizer'}));
   expect(mockCache.recompute).toHaveBeenCalledTimes(1);
   const data={available:true,arms:{},InputManifest:{revision:'clean-v4'}};mockQuery.mockResolvedValueOnce({status:200,data});
   await expect(options.fetcher()).resolves.toBe(data);
@@ -50,7 +50,7 @@ test('optimizer cache keys explicit scientific parameters and uses the canonical
 
 test('restoring saved biomarker controls does not automatically rebuild missing results',async()=>{
   localStorage.setItem('bravo.biomarkerControls.synthetic-cache-participant',JSON.stringify({schema:'biomarker_controls_v1',metric:'vas',requestParams:{LabelMetric:'vas',MatchToleranceMin:30}}));
-  render(<View><Biomarkers/></View>);await act(async()=>{});
+  render(<View><Biomarkers/></View>);
   expect(useCachedResult.mock.calls.at(-1)[0]).toMatchObject({enabled:true,autoFetch:false,settings:{LabelMetric:'vas',MatchToleranceMin:30}});
   expect(mockQuery.mock.calls.some(([url])=>url==='/api/queryBiomarkerAnalysis')).toBe(false);expect(mockCache.recompute).not.toHaveBeenCalled();
 });

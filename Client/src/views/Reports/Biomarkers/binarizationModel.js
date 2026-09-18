@@ -1,22 +1,4 @@
-/**
- * binarizationModel — single client-side source of truth for "which neural samples feed the
- * binarized biomarker at the current match window, and how each one is labeled."
- *
- * The backend's exploratory scan pools every full-spectrum PSD (TD streaming + montage/survey) on
- * the six main bipolar channels, matches each to the NEAREST continuous PRO within ±tolerance, and
- * binarizes the matched values (tertile / percentile / median / kmeans). The availability payload
- * now ships `psd_scan_index` — one {t, channel, source} per pooled PSD — so the frontend can
- * reproduce that match + binarization LIVE (no recompute) as the user drags the match-window slider
- * or changes the strategy. This module is that reproduction; it is verified to return counts
- * IDENTICAL to the backend `matched_sample_counts` (RCS08 @±15 min: 26 matched, 12 high / 14 low).
- *
- * Both the binarization-preview histogram (which samples feed binarization, at this window) and the
- * timeline color overlay (highlight the selected samples, dim the rest) consume one model instance.
- *
- * Okabe-Ito, colorblind-safe — MUST match BinarizationPreview / the histogram:
- *   HIGH = #D55E00 (vermillion), LOW = #0072B2 (blue), EXCLUDED middle = #7E8794 (grey).
- *   UNMATCHED / not-selected is rendered VERY light grey by the consumer (not a class here).
- */
+/* Participant-specific motivating examples are maintained outside source control. */
 
 export const BIN_HI = "#D55E00";   // high pain
 export const BIN_LO = "#0072B2";   // low pain
@@ -419,4 +401,27 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
                      : matchedValues.length)) / scanIndex.length) / 10 : 0,
     },
   };
+}
+
+export const BIN_HI_RGB = [213, 94, 0];
+export const BIN_LO_RGB = [0, 114, 178];
+
+// A diverging scale around the value that means "no relationship" for each quantity -- 0 for a
+// correlation, 0.5 (never 0) for an area under the curve. House rule: an AUC is never read against
+// zero. Moved here from BiomarkerHeatmapGrids on 2026-09-11 so the Closed-Loop page's band heat map
+// and the Biomarkers heat maps read ONE definition of the colour and cannot drift apart.
+export function divergingRgb(v, center, halfRange) {
+  const t = Math.max(-1, Math.min(1, (Number(v) - center) / halfRange));
+  const neg = BIN_LO_RGB;         // blue
+  const pos = BIN_HI_RGB;         // vermillion
+  const mid = [255, 255, 255];
+  const lerp = (a, b, k) => a + (b - a) * k;
+  return t < 0
+    ? [lerp(neg[0], mid[0], 1 + t), lerp(neg[1], mid[1], 1 + t), lerp(neg[2], mid[2], 1 + t)]
+    : [lerp(mid[0], pos[0], t), lerp(mid[1], pos[1], t), lerp(mid[2], pos[2], t)];
+}
+export function diverging(v, center, halfRange) {
+  if (v == null || !Number.isFinite(Number(v))) return "#e9e9e9";
+  const c = divergingRgb(v, center, halfRange);
+  return `rgb(${c.map((x) => Math.round(x)).join(",")})`;
 }

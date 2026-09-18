@@ -15,7 +15,7 @@ PA = pytest.importorskip("StimOptimizer.routines.percept_adaptive")
 
 
 def _plan():
-    """RCS08's real threshold placement, so the numbers under test are the shipping ones."""
+    """Generic implementation; participant-specific examples are kept outside source control."""
     return TY.ThresholdPlan(upper=0.3956, lower=0.182, capture_amp_low=1.4, capture_amp_high=4.8)
 
 
@@ -40,7 +40,7 @@ def test_origin_and_confirm_are_independent_axes_not_a_relabelled_status():
 
     avg = rows["Averaging duration"]
     assert avg["origin"] == "participant", "the module computed this from the integration window"
-    assert avg["confirm"] == "check_on_device", "its adjustable range is unpublished (WP p. 14)"
+    assert avg["confirm"] == "enterable", "averaging now has the confirmed 0-30 second range"
 
     # and the two axes are genuinely non-redundant across the table: at least one field pairs a
     # participant origin with a non-enterable confirm, which a single enum could not encode.
@@ -104,7 +104,8 @@ def test_the_inoperative_onset_is_reported_as_a_field_PAIR_not_as_a_row_property
     between two named fields with both their values.
     """
     pr = PR.prescribe(mode=PA.DUAL, threshold_plan=_plan(), candidate=_cand(),
-                      timing=PA.timing_plan(mode=PA.DUAL))
+                      timing=PA.timing_plan(mode=PA.DUAL),
+                      record_timing={"onset_upper_ms": {"value_ms": 4096., "why": "Synthetic one-window fixture"}})
     assert len(pr.couplings) == 1, "expected exactly the onset/averaging coupling"
     c = pr.couplings[0]
     assert len(c["fields"]) == 2 and len(c["values"]) == 2, "a coupling names BOTH fields"
@@ -129,11 +130,11 @@ def test_the_inoperative_onset_is_reported_as_a_field_PAIR_not_as_a_row_property
     # working. The onset is operative while the averaging duration is short relative to it, and
     # becomes inoperative at an integration window of about two seconds — which is the regime the
     # validated biomarker actually needs, at 4.096 s.
-    (0.25, 5, False),
-    (0.5, 3, False),
+    (0.25, 2, False),
+    (0.5, 2, False),
     (1.0, 2, False),
-    (2.0, 1, True),
-    (4.096, 1, True),
+    (2.0, 2, False),
+    (4.096, 2, False),
 ])
 def test_the_coupling_is_measured_from_the_chosen_pair_not_a_constant_warning(
         integration_s, expect_windows, expect_coupling):
@@ -161,24 +162,13 @@ def test_the_coupling_is_measured_from_the_chosen_pair_not_a_constant_warning(
         "the banner must track the measured conflict, not appear unconditionally")
 
 
-def test_the_onset_cannot_be_rescued_within_the_published_range_at_the_validated_window():
-    """The finding that makes the coupling a clinical trade rather than a setting to fix.
-
-    At the averaging duration the validated biomarker requires, NO onset value a clinician can
-    enter makes the onset operative, because the published dual-mode range has a ceiling. If a
-    future device document widens that range this test should fail and be revisited, which is the
-    point of pinning it.
-    """
+def test_confirmed_tablet_range_can_support_multiple_integration_windows():
     avg_ms = 4096.0
     lo, hi = PA.ONSET_RANGE_DUAL_MS
-    for onset in (lo, (lo + hi) / 2.0, hi):
-        assert PR.onset_windows(onset, avg_ms)["windows"] == 1, (
-            f"onset {onset} ms unexpectedly spans more than one {avg_ms} ms window")
-        assert PR.onset_windows(onset, avg_ms)["inoperative"] is True
-
-    # it is the CEILING that binds, not the arithmetic: an onset above the published range would
-    # work, which is why this is a range limitation rather than a property of the control law
-    assert PR.onset_windows(hi * 3.0, avg_ms)["inoperative"] is False
+    assert (lo, hi) == (0., 30000.)
+    assert PR.onset_windows(lo, avg_ms)["inoperative"] is True
+    assert PR.onset_windows(2 * avg_ms, avg_ms)["windows"] == 2
+    assert PR.onset_windows(hi, avg_ms)["inoperative"] is False
 
 
 # --- every mode, and the field sets genuinely differing -----------------------------------------
@@ -261,12 +251,7 @@ def test_duty_reads_the_amplitude_trajectory_not_the_control_state():
     ReplayResult documents and populates `state` as the CONTROL STATE — a list of the strings
     "below", "between", "above" — so `np.asarray(state, float)` raised
     `ValueError: could not convert string to float: 'below'` and took down the whole prescription
-    for any configuration whose replay returned a full trajectory.
-
-    It went unnoticed because RCS08's record is fragmented enough to take the segment-aggregating
-    path, which returns `state=None`; that skipped the block silently and left mean_amplitude_mA,
-    amplitude_duty and both stim_frac fields null on every live payload instead of raising.
-    """
+    for any configuration whose replay returned a full trajectory."""
     import numpy as np
     from ClosedLoopDeployment import replay as RP, prescription as PRx, types as TY
     p = np.concatenate([np.full(40, .05), np.full(120, .9), np.full(40, .05)])

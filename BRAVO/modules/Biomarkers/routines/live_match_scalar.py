@@ -6,10 +6,11 @@ are shared with the vectorized matcher through differential regression tests.
 """
 import numpy as np
 from . import analytics
-from .availability import PRO_LSB_TIER_TD, PRO_LSB_TIER_BRIDGE, _lsb_family_mat
+from .availability import PRO_LSB_TIER_TD, PRO_LSB_TIER_BRIDGE, _lsb_family_mat, _nearest_pro_idx
 
 def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=None,
-                            allow_window_reuse=False, extent_s=None, psd_tol_s=None):
+                            allow_window_reuse=False, extent_s=None, psd_tol_s=None,
+                            match_direction="nearest", want_records=True):
     """LIVE per-PRO LSB spectrum by matching PROs against the match-AGNOSTIC raw cache.
 
     Consumes one channel's `raw_lsb_spectrum_cache(...)` output and produces the SAME per-PRO
@@ -82,27 +83,18 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
     order = np.argsort(pro, kind="stable")
     pro_sorted = pro[order]
 
-    none_vec = [None] * nC
-    recs = [{"t": float(tp), "tier": None, "lsb": list(none_vec),
-             "calibrated": [False] * nC, "center_hz": [float(c) for c in centers],
-             "used_s": 0.0, "saturated": False, "reason": "", "n_td_used": 0, "n_psd_used": 0}
-            for tp in pro]
+    _prior_mode = str(match_direction or "nearest").lower() == "prior"
+    if want_records:
+        none_vec = [None] * nC
+        recs = [{"t": float(tp), "tier": None, "lsb": list(none_vec),
+                 "calibrated": [False] * nC, "center_hz": [float(c) for c in centers],
+                 "used_s": 0.0, "saturated": False, "reason": "", "n_td_used": 0, "n_psd_used": 0}
+                for tp in pro]
+    else:
+        recs = None
 
     def _nearest_pro(win_t, tol):
-        """Vectorized nearest-PRO index (orig order) per window time, -1 if beyond tol."""
-        if win_t.size == 0 or nP == 0:
-            return np.full(win_t.size, -1, dtype=int)
-        pos = np.searchsorted(pro_sorted, win_t)
-        left = np.clip(pos - 1, 0, nP - 1)
-        right = np.clip(pos, 0, nP - 1)
-        dl = np.abs(win_t - pro_sorted[left])
-        dr = np.abs(win_t - pro_sorted[right])
-        take_left = dl <= dr                       # tie -> earlier PRO (deterministic)
-        nn_sorted = np.where(take_left, left, right)
-        dist = np.where(take_left, dl, dr)
-        nn = order[nn_sorted]
-        nn[dist > tol] = -1
-        return nn
+        return _nearest_pro_idx(win_t, pro_sorted, order, nP, tol, prior=_prior_mode)
 
     def _windows_in_extent(win_t, valid_mask, tol):
         """REUSE mode: per-PRO list of window indices whose |t - pro_t| <= tol (a window may appear
@@ -120,7 +112,8 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
         wt_sorted = wt[wo]
         vi_sorted = vi[wo]
         lo_idx = np.searchsorted(wt_sorted, pro - tol, side="left")
-        hi_idx = np.searchsorted(wt_sorted, pro + tol, side="right")
+        hi_bound = pro if match_direction == "prior" else pro + tol
+        hi_idx = np.searchsorted(wt_sorted, hi_bound, side="right")
         for p in range(nP):
             a, b = int(lo_idx[p]), int(hi_idx[p])
             if b > a:
@@ -161,18 +154,19 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
             dt = np.abs(td_t[sel] - pro[p])
             keep = np.argsort(dt, kind="stable")[:td_n_epochs_cap]
             sel = sel[np.sort(keep)]                  # keep original tile order for a stable median
-        med = np.nanmedian(td_mat[sel], axis=0)
-        rec = recs[p]
-        rec["tier"] = PRO_LSB_TIER_TD
-        rec["lsb"] = [float(v) if np.isfinite(v) else None for v in med]
-        rec["calibrated"] = [bool(np.isfinite(v)) for v in med]   # TD k is band-agnostic-calibrated
-        rec["n_td_used"] = int(sel.size)
-        rec["used_s"] = float(sel.size * window_s)
-        rec["reason"] = ("live TD->LSB median over nearest %d of %d eligible tile(s) "
-                         "(<=%.0fs signal within +/-%.0fs tol, k=%.2f)"
-                         % (sel.size, (td_sel_by_pro[p].size if allow_window_reuse
-                                       else int((nn_td == p).sum())),
-                            td_quantity_s, tol_s, analytics.LSB_PER_UV2_TRANSFORM))
+        if want_records:
+            med = np.nanmedian(td_mat[sel], axis=0)
+            rec = recs[p]
+            rec["tier"] = PRO_LSB_TIER_TD
+            rec["lsb"] = [float(v) if np.isfinite(v) else None for v in med]
+            rec["calibrated"] = [bool(np.isfinite(v)) for v in med]   # TD k is band-agnostic-calibrated
+            rec["n_td_used"] = int(sel.size)
+            rec["used_s"] = float(sel.size * window_s)
+            rec["reason"] = ("live TD->LSB median over nearest %d of %d eligible tile(s) "
+                             "(<=%.0fs signal within +/-%.0fs tol, k=%.2f)"
+                             % (sel.size, (td_sel_by_pro[p].size if allow_window_reuse
+                                           else int((nn_td == p).sum())),
+                                td_quantity_s, tol_s, analytics.LSB_PER_UV2_TRANSFORM))
         td_tier_pro[p] = True
         n_td_used += int(sel.size)
 
@@ -194,25 +188,27 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
         n_psd_assigned = int((nn_psd >= 0).sum())
 
     n_psd_used = 0
+    n_pro_psd = 0
     for p in range(nP):
         if td_tier_pro[p]:
             continue                                  # TD preferred — PSD here stays unused
         sel = psd_sel_by_pro[p] if allow_window_reuse else np.where(nn_psd == p)[0]
         if sel.size == 0:
             continue
-        med = np.nanmedian(psd_mat[sel], axis=0)
-        rec = recs[p]
-        rec["tier"] = PRO_LSB_TIER_BRIDGE
-        rec["lsb"] = [float(v) if np.isfinite(v) else None for v in med]
-        rec["calibrated"] = [bool(np.isfinite(v) and cal_band[i]) for i, v in enumerate(med)]
-        rec["n_psd_used"] = int(sel.size)
-        rec["reason"] = ("live PSD->LSB median over %d event(s) within +/-%.0fs (k=%.2f); "
-                         "calibrated only in [%.1f,%.1f] Hz"
-                         % (sel.size, tol_s, analytics.LSB_PER_DEVICE_PSD, lo_hz, hi_hz))
+        n_pro_psd += 1
+        if want_records:
+            med = np.nanmedian(psd_mat[sel], axis=0)
+            rec = recs[p]
+            rec["tier"] = PRO_LSB_TIER_BRIDGE
+            rec["lsb"] = [float(v) if np.isfinite(v) else None for v in med]
+            rec["calibrated"] = [bool(np.isfinite(v) and cal_band[i]) for i, v in enumerate(med)]
+            rec["n_psd_used"] = int(sel.size)
+            rec["reason"] = ("live PSD->LSB median over %d event(s) within +/-%.0fs (k=%.2f); "
+                             "calibrated only in [%.1f,%.1f] Hz"
+                             % (sel.size, tol_s, analytics.LSB_PER_DEVICE_PSD, lo_hz, hi_hz))
         n_psd_used += int(sel.size)
 
     n_pro_td = int(td_tier_pro.sum())
-    n_pro_psd = int(sum(1 for r in recs if r["tier"] == PRO_LSB_TIER_BRIDGE))
     stats = {"n_pro": int(nP), "n_pro_td": n_pro_td, "n_pro_psd": n_pro_psd,
              "n_pro_unmatched": int(nP - n_pro_td - n_pro_psd),
              "n_td_windows": n_td_windows, "n_psd_windows": n_psd_windows,
@@ -221,5 +217,6 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
              "tol_s": tol_s, "td_quantity_s": td_quantity_s, "td_n_epochs_cap": int(td_n_epochs_cap),
              # legacy aliases kept so existing UI/echo readers don't KeyError:
              "extent_s": td_quantity_s, "psd_tol_s": tol_s,
-             "allow_window_reuse": bool(allow_window_reuse)}
+             "allow_window_reuse": bool(allow_window_reuse),
+             "match_direction": "prior" if _prior_mode else "prospective"}
     return recs, stats

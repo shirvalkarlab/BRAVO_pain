@@ -45,8 +45,11 @@ def _responding_lfp(n=120, seed=0):
     mag = np.abs(rng.normal(1.0, 0.05, (n, freqs.size)))
     sel = (freqs >= 13.0) & (freqs <= 17.0)
     mag[:, sel] *= (np.exp(-0.9 * amp)[:, None] * 3.0)
-    return GATE.LfpEvidence(amplitude_mA=amp, magnitude=mag, freqs=freqs,
+    evidence = GATE.LfpEvidence(amplitude_mA=amp, magnitude=mag, freqs=freqs,
                             era=np.tile(["a", "b"], n // 2), cluster=np.arange(n))
+    evidence.channel = "synthetic_left"
+    evidence.hemisphere = "Left"
+    return evidence
 
 
 @pytest.fixture
@@ -54,7 +57,8 @@ def passing_gate():
     """A configuration and gate that pass every condition, so Stage 2 actually runs."""
     cfg = _frozen(_setting(rate_hz=130.0, amp_lo=1.0, amp_hi=4.0))
     lfp = _responding_lfp()
-    g = GATE.evaluate_gate(cfg, lfp=lfp, amp_limits={"Left": (1.5, 3.0)})
+    g = GATE.evaluate_gate(cfg, lfp=lfp, amp_limits={"Left": (1.5, 3.0)},
+                           pain_positive_by_channel={"synthetic_left": set(np.arange(0., 101., .5))})
     assert g.passed, g.describe()
     return cfg, g, lfp
 
@@ -370,9 +374,7 @@ def test_the_two_stage_run_reports_honestly_that_it_cannot_proceed():
 
 
 def test_the_run_against_the_reconciled_biomarker_plate_refuses_for_three_stateable_reasons():
-    """End to end with the reconciled RCS08 plate and the historical LFP-response verdict.
-
-    The three reasons must be reported SEPARATELY, each with its number, so a reader can see which
+    """The three reasons must be reported SEPARATELY, each with its number, so a reader can see which
     condition binds:
 
     1. the only adaptive-capable selected band (14.817 Hz) is not statistically supported —
@@ -382,8 +384,7 @@ def test_the_run_against_the_reconciled_biomarker_plate_refuses_for_three_statea
     3. the LFP-response requirement fails on the historical record — 3 of 15 channel-by-rate cells
        suppress, one-sided binomial p = 0.996.
 
-    Refusing here is the correct behaviour and no threshold may be relaxed to change it.
-    """
+    Refusing here is the correct behaviour and no threshold may be relaxed to change it."""
     from StimOptimizer import pipeline
     rep = pipeline.run_two_stage(_rcs08_like(), data_horizon="test", washin_min=1.0,
                                  selected_bands=GATE.RCS08_SELECTED_BANDS,
@@ -474,13 +475,10 @@ def test_the_original_flat_entry_point_still_works():
 
 
 def _find_real_matrix():
-    """Locate the real RCS08 design matrix, or return ``None``.
-
-    The canonical copy of this file lives in the project's artifact store rather than in the
+    """The canonical copy of this file lives in the project's artifact store rather than in the
     repository, so it is usually absent from a checkout. ``STIMOPT_DESIGN_MATRIX`` lets a caller
     point at it; the test that needs it skips when it cannot be found, and the structural fixture
-    above covers the same behaviour unconditionally.
-    """
+    above covers the same behaviour unconditionally."""
     env = os.environ.get("STIMOPT_DESIGN_MATRIX")
     candidates = ([Path(env)] if env else []) + [
         Path(__file__).resolve().parents[1] / "data" / "rcs08_bo_design_matrix.csv",
@@ -567,17 +565,18 @@ def test_the_factory_may_refuse_by_returning_none_and_the_gate_then_blocks():
 @pytest.mark.parametrize('requested,rates,expected', [
     (165.0, (55.0,), 'requested_rate_mismatch'),
     (55.0, (55.0, 110.0), 'requested_rate_mismatch'),
-    (55.0, (), 'requested_rate_mismatch'),
+    (55.0, (), 'no_adaptive_capable_rate'),
     (float('nan'), (55.0,), 'requested_rate_mismatch'),
-    (None, (55.0, 110.0), 'frozen_rates_disagree'),
-    (None, (), 'frozen_rates_disagree'),
+    (None, (55.0, 110.0), 'evidence_selected'),
+    (None, (), 'no_adaptive_capable_rate'),
     (55.0, (55.0,), 'evidence_selected'),
     (None, (55.0,), 'evidence_selected'),
 ])
 def test_live_evidence_requires_the_actual_frozen_rate(monkeypatch, requested, rates, expected):
     from types import SimpleNamespace
     from StimOptimizer import pipeline, adapter
-    frozen = SimpleNamespace(settings=[SimpleNamespace(rate_hz=r) for r in rates])
+    frozen = SimpleNamespace(settings=[SimpleNamespace(rate_hz=r, hemisphere=h)
+                                       for h, r in zip(("Left", "Right"), rates)])
     selected = object()
     calls = []
     monkeypatch.setattr(adapter, 'build_design_matrix', lambda *a, **k: 'synthetic-design')
@@ -585,12 +584,45 @@ def test_live_evidence_requires_the_actual_frozen_rate(monkeypatch, requested, r
         calls.append(kwargs['rate_hz'])
         return pipeline.LiveEvidence(selected=selected, selected_key=('test', 'Left', 55.0))
     monkeypatch.setattr(pipeline, 'live_evidence', live)
+    monkeypatch.setattr(pipeline, 'select_for_side',
+                        lambda ev, h, r, **kw: (selected, ('test', h, r), 'synthetic selected'))
     def run(design, *, lfp, **kwargs):
         assert design == 'synthetic-design'
         evidence = lfp(frozen)
-        assert (evidence is selected) == (expected == 'evidence_selected')
+        if expected == 'evidence_selected':
+            assert evidence == {h: selected for h in ('Left', 'Right')[:len(rates)]}
+        else:
+            assert evidence is None
         return SimpleNamespace(manifest={})
     monkeypatch.setattr(pipeline, 'run_two_stage', run)
     report = pipeline.run_two_stage_live(object(), rate_hz=requested)
     assert report.manifest['lfp_evidence']['refusal_class'] == expected
-    assert calls == ([55.0] if expected == 'evidence_selected' else [])
+    assert calls == (sorted(set(rates)) if expected == 'evidence_selected' else [])
+
+
+@pytest.mark.parametrize("requested_side,requested_rate,expected", [
+    ("Right", 110.0, "evidence_selected"),
+    ("Right", 55.0, "requested_rate_mismatch"),
+    ("Both", None, "requested_hemisphere_missing"),
+])
+def test_explicit_side_request_keeps_its_own_frozen_rate(monkeypatch, requested_side, requested_rate, expected):
+    from types import SimpleNamespace
+    from StimOptimizer import pipeline, adapter
+    frozen = SimpleNamespace(settings=[SimpleNamespace(hemisphere="Left", rate_hz=55.0),
+                                       SimpleNamespace(hemisphere="Right", rate_hz=110.0)])
+    selected, calls = object(), []
+    monkeypatch.setattr(adapter, "build_design_matrix", lambda *a, **k: "design")
+    def live(*args, **kwargs):
+        calls.append(kwargs["rate_hz"])
+        return pipeline.LiveEvidence()
+    monkeypatch.setattr(pipeline, "live_evidence", live)
+    monkeypatch.setattr(pipeline, "select_for_side",
+                        lambda ev, h, r, **kw: (selected, ("test", h, r), "selected"))
+    def run(design, *, lfp, **kw):
+        result = lfp(frozen)
+        assert result == ({"Right": selected} if expected == "evidence_selected" else None)
+        return SimpleNamespace(manifest={})
+    monkeypatch.setattr(pipeline, "run_two_stage", run)
+    report = pipeline.run_two_stage_live(object(), hemisphere=requested_side, rate_hz=requested_rate)
+    assert report.manifest["lfp_evidence"]["refusal_class"] == expected
+    assert calls == ([110.0] if expected == "evidence_selected" else [])

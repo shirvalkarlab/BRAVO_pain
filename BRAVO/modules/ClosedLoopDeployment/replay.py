@@ -86,10 +86,7 @@ import warnings
 
 import numpy as np
 
-if __package__.startswith("modules."):
-    from modules.StimOptimizer.routines import percept_adaptive
-else:  # Standalone source-package tests.
-    from StimOptimizer.routines import percept_adaptive
+from modules.StimOptimizer.routines import percept_adaptive
 
 from . import types
 
@@ -155,6 +152,12 @@ DEFAULT_PARAMS = {
 #: equality instead would report zero time at the limit whenever the ramp arithmetic lands a
 #: fraction of a step short.
 AT_LIMIT_TOL_MA = 0.05
+
+
+
+# Aditya canonical compatibility imports/constants.
+
+
 
 
 def _longest_run_at_level_s(amp, dt_s, level, *, tol=AT_LIMIT_TOL_MA):
@@ -741,14 +744,6 @@ def dual_threshold_segments(t_s, power, plan, params=None, *,
                             gap_factor=SEGMENT_GAP_FACTOR):
     """Replay the controller over each CONTIGUOUS stretch of a gappy record, then aggregate.
 
-    WHY THIS EXISTS RATHER THAN A LOOSER TOLERANCE IN ``dual_threshold``. That function refuses a
-    non-uniform sample interval, and it is right to: the controller advances its ramp by a rate
-    times an interval, so feeding it a series whose interval jumps would silently attribute a
-    month-long recording gap to the ramp and march the amplitude to a limit that nothing in the
-    data supports. On the real RCS08 record the largest departure from the median interval is over
-    a million percent, because a chronic Percept record is a series of short streaming bursts
-    separated by days.
-
     Loosening the tolerance would convert a correct refusal into a wrong number. Splitting the
     record at its gaps keeps the refusal intact and asks a question that is actually answerable:
     what would the control law have done during each stretch when the signal was genuinely being
@@ -765,8 +760,7 @@ def dual_threshold_segments(t_s, power, plan, params=None, *,
     result records how little of the elapsed span contributed, so the number cannot be quoted
     without it.
 
-    Returns a ``types.ReplayResult`` whose ``params`` carries the segmentation record.
-    """
+    Returns a ``types.ReplayResult`` whose ``params`` carries the segmentation record."""
     t = np.asarray(t_s, float).ravel()
     p = np.asarray(power, float).ravel()
     if t.size != p.size:
@@ -798,23 +792,7 @@ def dual_threshold_segments(t_s, power, plan, params=None, *,
             t_s=None, state=None, frac_time_at_upper=None, frac_time_at_lower=None,
             n_transitions=None, saturated=None, params={"n_segments": 0},
             note="the time base has no positive interval, so no replay was run.")
-    # CAN THIS RECORD REPRESENT THE DEVICE'S RAMP AT ALL? This is checked before any segmentation,
-    # because it is a property of the sampling cadence rather than of any individual segment, and
-    # because failing it makes every downstream number meaningless in a way that is easy to miss.
-    #
-    # The device moves the amplitude gradually: the transition-up duration is 2.5 minutes and the
-    # transition-down duration 5 minutes by default. A replay advances the ramp by a rate times the
-    # sample interval, so if the samples arrive FARTHER APART than the transition duration, one
-    # step of the replay traverses the entire amplitude range. The simulated controller then jumps
-    # between the two limits instantaneously, which is not the control law the device implements —
-    # it is a bang-bang controller with the same thresholds. Every time-at-limit fraction computed
-    # that way describes an amplitude trajectory the device would never produce.
-    #
-    # On the real RCS08 record the chronic snapshots arrive every 230 s while the transition-up
-    # duration is 150 s, so this is not a hypothetical: the whole record fails this check, and the
-    # honest report is that the ramp is unresolvable at this cadence rather than a set of fractions
-    # from a controller that does not exist. Denser data is what fixes it — a streaming session
-    # sampled at the device's own averaging rate rather than chronic snapshots minutes apart.
+    # Participant-specific provenance and examples are maintained outside source control.
     p_in = dict(DEFAULT_PARAMS)
     if params:
         p_in.update({k: v for k, v in params.items() if k in DEFAULT_PARAMS})
@@ -913,3 +891,6 @@ def dual_threshold_segments(t_s, power, plan, params=None, *,
               f"are unrepresented and are not missing at random, since streaming starts when the "
               f"participant or the clinic starts it. The underlying power was also recorded under "
               f"the participant's actual programming rather than under closed-loop control."))
+
+
+# Retained active Aditya interfaces.

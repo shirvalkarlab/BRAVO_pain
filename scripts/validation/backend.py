@@ -52,7 +52,8 @@ with tempfile.TemporaryDirectory(prefix='bravo-validation-') as storage:
         import pytest
         test_paths = sys.argv[1:] or [
             'Server', 'modules/Biomarkers/tests', 'modules/StimOptimizer/tests',
-            'modules/ClosedLoopDeployment/tests', 'tests']
+            'modules/ClosedLoopDeployment/tests', 'modules/CacheStore/tests',
+            'modules/DecodeCommon/tests', 'tests']
         result = int(pytest.main([
             '-q', '-ra', '--durations=10', '--disable-warnings', '-p', 'no:cacheprovider',
             # Include Django's historical filename without mixing a directory

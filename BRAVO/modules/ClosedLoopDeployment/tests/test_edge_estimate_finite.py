@@ -42,21 +42,22 @@ def test_invalid_estimate_remains_unknown_through_real_coherence(estimate, posit
     ((.2,.8), True), ((-.8,-.2), True), ((-.2,.2), False),
     ((0.,.2), False), ((-.2,0.), False), ((0.,0.), False), (None,False),
 ])
-def test_finite_estimates_keep_existing_ci_excludes_zero_rule(estimate, sign, ci, resolved):
+def test_finite_estimates_use_point_direction_with_separate_interval_evidence(estimate, sign, ci, resolved):
     result = edge(estimate, ci)
     assert result.sign == sign
-    assert result.resolved is resolved
+    assert result.resolved is (sign != 0)
+    assert result.statistically_established is resolved
 
 
 @pytest.mark.parametrize('signs', list(itertools.product([-1,0,1], repeat=3)))
 def test_finite_sign_triangle_is_unchanged_including_zero(signs):
-    # A zero point estimate with a same-sign CI retains its prior behavior; no new
-    # scientific criterion requiring point/interval direction agreement is added.
+    # PI policy requires a nonzero point direction; interval evidence stays separate.
     edges = [edge(float(sign), (.2,.8), f'E{i+1}') for i,sign in enumerate(signs)]
-    expected = (signs[0]*signs[1]) == signs[2]
+    expected = None if 0 in signs else (signs[0]*signs[1]) == signs[2]
     assert signs_coherent(*edges) is expected
 
 
-def test_finite_estimate_with_crossing_interval_is_not_licensed():
+def test_finite_estimate_with_crossing_interval_has_provisional_direction():
     assert signs_coherent(edge(-.5, (-.8,-.2)), edge(.5, (-.2,.8)),
-                          edge(-.5, (-.8,-.2))) is None
+                          edge(-.5, (-.8,-.2))) is True
+    assert edge(.5, (-.2,.8)).statistically_established is False

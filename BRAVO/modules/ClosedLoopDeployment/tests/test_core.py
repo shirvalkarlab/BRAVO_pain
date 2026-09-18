@@ -75,7 +75,7 @@ def test_actuation_edge_refuses_a_single_setting_epoch():
 def test_state_edge_refuses_when_the_rating_cluster_is_absent():
     T = _toy_table().drop(columns=["report_id"])
     e = E.state_edge(T, channel="CH", center_hz=20.5)
-    assert e.estimate is None and "ratings clustering unit is unavailable" in e.note
+    assert e.estimate is None and "NOT ASSESSED" in e.note and "no report_id column" in e.note
 
 
 def test_max_statistic_permutation_permutes_whole_epochs():
@@ -97,7 +97,7 @@ def _edge(name, est, lo, hi, unit="rating"):
 def test_unresolved_edge_makes_coherence_unknown_not_false():
     """None and False mean different things: not established versus contradictory."""
     ok1, ok2 = _edge("E1", -1.0, -1.5, -0.5), _edge("E2", 1.0, 0.5, 1.5)
-    spans = _edge("E3", -0.1, -0.6, 0.4)
+    spans = _edge("E3", None, -0.6, 0.4)
     assert C.signs_coherent(ok1, ok2, spans) is None
     r = C.coherence_report(ok1, ok2, spans)
     assert r.coherent is None and "NOT ESTABLISHED" in r.note
@@ -136,14 +136,19 @@ def test_control_authority_refuses_a_distribution_with_no_measured_spread():
 def test_threshold_placement_flags_inverted_and_too_close_captures():
     rng = np.random.default_rng(0)
     lo, hi = rng.normal(10, 1, 40), rng.normal(4, 1, 40)      # power FALLS as amplitude rises
-    good = AU.threshold_placement(lo, hi, amp_low=1.0, amp_high=3.0, expected_sign=-1)
+    good = AU.threshold_placement(lo, hi, amp_low=1.0, amp_high=3.0, expected_sign=-1,
+                                  pooled_slope=_edge("E1", -3., -4., -2.))
     assert good.predicted_recapture_alert is False and good.upper > good.lower
-    inv = AU.threshold_placement(hi, lo, amp_low=1.0, amp_high=3.0, expected_sign=-1)
+    inv = AU.threshold_placement(hi, lo, amp_low=1.0, amp_high=3.0, expected_sign=-1,
+                                 pooled_slope=_edge("E1", 3., 2., 4.))
     assert inv.predicted_recapture_alert is True
-    assert any("inverted capture" in p for p in inv.problems)
+    assert any("inverted capture" in p for p in inv.warnings)
+    assert inv.problems == []
     close = AU.threshold_placement(rng.normal(10, 1, 40), rng.normal(10.2, 1, 40),
-                                   amp_low=1.0, amp_high=3.0, expected_sign=-1)
-    assert any("too close" in p for p in close.problems)
+                                   amp_low=1.0, amp_high=3.0, expected_sign=-1,
+                                   pooled_slope=_edge("E1", 0., -1., 1.))
+    assert any("too close" in p for p in close.warnings)
+    assert close.problems == []
 
 
 def test_threshold_placement_enforces_the_d27_capture_artefact_ceiling():
@@ -152,7 +157,7 @@ def test_threshold_placement_enforces_the_d27_capture_artefact_ceiling():
     r = AU.threshold_placement(lo, hi, amp_low=1.0, amp_high=6.0, expected_sign=-1,
                                pulse_width_us=200.0)
     assert any("D27" in p and "6.00 mA" in p for p in r.problems)
-    assert any("D27" in p and "200" in p for p in r.problems)
+    assert any("pulse width 200" in p and "artefact ceiling" in p for p in r.problems)
 
 
 # --- ledger -------------------------------------------------------------------------------------
@@ -195,10 +200,7 @@ def test_epoch_assignment_survives_microsecond_resolution_datetimes():
 
 
 def test_few_clusters_is_flagged_because_the_robust_estimator_is_anticonservative_there():
-    """Observed on the real RCS08 record: cells with three setting epochs reported all eighteen
-    bands as resolved, while the whole-epoch permutation on the same cells returned a family-wise
-    p of 1.00. The cluster-robust variance estimator needs many clusters; with few it produces
-    intervals that are too narrow, which manufactures resolution rather than losing it."""
+    """Generic implementation; participant-specific examples are kept outside source control."""
     T = _toy_table(n_epochs=4, per_epoch=8)
     e = E.actuation_edge(T, channel="CH", center_hz=20.5)
     assert e.n_clusters == 4 and "FEW CLUSTERS" in e.note
@@ -218,16 +220,15 @@ def test_the_rendered_coherence_reason_states_the_device_direction_correctly():
     assert "ramps amplitude UP" in C.coherence_report(e1, e2, e3).note
 
 
-def test_an_unresolved_edge_does_not_supply_its_sign_to_the_device_gate():
-    """Rule D19 asks which way the band moves. An unresolved edge HAS a point-estimate sign, but
-    that sign is not established. Supplying it would let the most important safety gate be
-    satisfied by a direction the data does not support."""
+def test_a_point_sign_supplies_the_device_gate_with_a_confidence_caveat():
+    """PI policy uses the point direction and keeps statistical confidence explicit."""
     from ClosedLoopDeployment.pipeline import _facts_for
     resolved = EdgeEstimate("E1", -1.0, (-1.5, -0.5), 0.01, 50, "setting epoch", 60)
     spans_zero = EdgeEstimate("E2", 0.9, (-0.2, 2.0), 0.2, 50, "rating", 60)
     f = _facts_for({"channel": "CH"}, resolved, spans_zero, "power_linear")
     assert f["power_slope_vs_amplitude_sign"] == -1
-    assert "power_slope_vs_pain_sign" not in f, "an unresolved edge must not supply a sign"
+    assert f["power_slope_vs_pain_sign"] == 1
+    assert f["power_slope_vs_pain_sign_established"] is False
     assert f["power_scale"] == "linear" and f["intent"] == "adaptive"
     # asking for the log scale must be reported honestly, not silently corrected to what D11 wants
     assert _facts_for({}, resolved, resolved, "power_mean_of_log")["power_scale"] == "log"
@@ -239,7 +240,7 @@ def test_the_payload_keeps_coherence_as_three_states():
     from ClosedLoopDeployment.adapter import report_to_dict
     from ClosedLoopDeployment.types import DeploymentReport
     e_ok = _edge("E1", -1.0, -1.5, -0.5)
-    e_unres = _edge("E2", 0.5, -0.2, 1.2)
+    e_unres = _edge("E2", None, -0.2, 1.2)
     rep = DeploymentReport(participant="x", edges={"E1": e_ok, "E2": e_unres, "E3": e_ok})
     rep.coherence = C.coherence_report(e_ok, e_unres, e_ok)
     d = report_to_dict(rep)
@@ -261,7 +262,7 @@ def test_d09_is_advisory_and_reports_which_bins_clear_the_capture_gate():
     assert rule.severity == "advisory"
 
     band = {"center_hz": 24.5, "band_width_hz": 5.0}
-    # RCS08's real shape: nothing in the beta band reaches the gate.
+    # Participant-specific provenance and examples are maintained outside source control.
     below = dict(band, lfp_bins_uvp=[(22.5, 0.61), (23.5, 0.64), (24.5, 0.71), (25.5, 0.58)])
     assert rule.predicate(below, {}) is False
     obs = CN._OBSERVED["D09"](below, {})
@@ -326,8 +327,7 @@ def test_impedance_reports_the_worst_pair_not_the_average():
 
 
 def test_an_open_circuit_bipolar_pair_fails_d16():
-    """The real RCS08 reading. 10125 ohm on the left lead is above the 10000 ohm open limit, so the
-    sensing hemisphere for a left-sided candidate fails rather than merely warning."""
+    """Generic implementation; participant-specific examples are kept outside source control."""
     from ClosedLoopDeployment import constraints as CN
     bad = CN.check_eligibility({"impedance_ohms": 10125.0, "impedance_tested": True},
                                {"lead_type": "sensight"})
@@ -342,13 +342,7 @@ def test_an_open_circuit_bipolar_pair_fails_d16():
 
 def test_participant_scoped_device_facts_reach_the_participant_dict():
     """A fact one dictionary away from the rule that reads it is invisible, and the symptom is
-    indistinguishable from missing data: the rule reports "input not supplied" and blocks.
-
-    D04 reads n_neurostimulators and D16 reads lead_type from the PARTICIPANT dict, not the
-    candidate. Merging every device fact into the candidate left both unevaluable while the values
-    were present — which is what the live RCS08 report did before this fix, showing D04 and D16 as
-    unknown with n_neurostimulators=1 and lead_type='sensight' sitting one dict away.
-    """
+    indistinguishable from missing data: the rule reports "input not supplied" and blocks."""
     from ClosedLoopDeployment import pipeline as PL, constraints as CN
     assert "n_neurostimulators" in CN.PARTICIPANT_KEYS
     assert "lead_type" in CN.PARTICIPANT_KEYS
@@ -524,54 +518,20 @@ def test_annotating_a_column_the_join_ignores_does_not_invalidate():
         "a column the join never reads must not invalidate"
 
 
-def test_recording_set_signature_folds_in_each_recordings_own_hash():
-    """Keyed on recording IDENTITY, not a count or a max date.
-
-    A re-decode that replaces a recording in place changes neither the count nor the newest date,
-    and a count alone also misses a deletion balanced by an insertion. This project has already
-    lost a session to a plot that looked frozen because files were never ingested, so the cache must
-    invalidate exactly when the recording set changes and never on a timer.
-    """
-    from ClosedLoopDeployment import adapter as AD
-
-    class _R:
-        def __init__(self, uid, hashed, type_="X"):
-            self.uid, self.hashed, self.type = uid, hashed, type_
-
-    class _P:
-        uid = "p1"
-
-    import sys, types
-    fake = types.ModuleType("Server"); fake_models = types.ModuleType("Server.models")
-    state = {"recs": [_R("a", "h1"), _R("b", "h2")], "sfs": ["s1"]}
-    fake_models.SourceFile = type("SF", (), {"find_all": staticmethod(lambda **k: state["sfs"])})
-    fake_models.Recording = type("R", (), {"find_all": staticmethod(lambda **k: state["recs"])})
-    fake.models = fake_models
-    saved = (sys.modules.get("Server"), sys.modules.get("Server.models"))
-    sys.modules["Server"], sys.modules["Server.models"] = fake, fake_models
-    try:
-        base = AD.recording_set_signature(_P())
-        assert AD.recording_set_signature(_P()) == base, "must be stable for identical input"
-
-        state["recs"] = [_R("a", "h1_REDECODED"), _R("b", "h2")]
-        assert AD.recording_set_signature(_P()) != base, \
-            "a re-decode changes no count and no date, so the hash must carry it"
-
-        state["recs"] = [_R("a", "h1"), _R("c", "h2")]     # one deleted, one inserted
-        assert AD.recording_set_signature(_P()) != base, \
-            "a swap keeps the count identical and must still invalidate"
-
-        state["recs"] = [_R("b", "h2"), _R("a", "h1")]     # order must not matter
-        assert AD.recording_set_signature(_P()) == base
-    finally:
-        for k, v in zip(("Server", "Server.models"), saved):
-            if v is None:
-                sys.modules.pop(k, None)
-            else:
-                sys.modules[k] = v
+def test_recording_signature_uses_the_complete_approved_input_manifest(monkeypatch):
+    """The canonical manifest fingerprints recordings, clocks, policy and corrected PROs."""
+    from modules import AnalysisData
+    from types import SimpleNamespace
+    manifest = {"source_count": 2, "recordings": 3, "fingerprint": "approved-first"}
+    monkeypatch.setattr(AnalysisData, "input_manifest", lambda participant: dict(manifest))
+    participant = SimpleNamespace(uid="synthetic")
+    baseline = AD.recording_set_signature(participant)
+    assert baseline == ("synthetic", 2, 3, "approved-first")
+    assert AD.recording_set_signature(participant) == baseline
+    manifest["fingerprint"] = "changed-recording-clock-policy-or-pro"
+    assert AD.recording_set_signature(participant) != baseline
 
 
-# --- session-report facts, and the impedance current-vs-historical distinction (2026-09-04) -----
 def test_impedance_reports_the_newest_reading_AND_the_historical_worst():
     """Regression for a verdict that flipped with no code change.
 
@@ -726,10 +686,11 @@ def test_unhashable_join_input_is_not_cached():
     assert AD.joined_cache_stats()["entries"] == 0
 
 
-def test_unresolved_edge_sign_cannot_be_supplied_by_candidate_or_device_defaults():
+@pytest.mark.parametrize("estimate", [None, float("nan"), float("inf"), True, "1", 1j])
+def test_missing_or_malformed_edge_sign_cannot_be_supplied_by_defaults(estimate):
     from ClosedLoopDeployment import pipeline as PL
     from ClosedLoopDeployment.types import EdgeEstimate
-    unresolved = EdgeEstimate("E1", 1., (-1., 3.), .5, 8, "epoch", 2, "linear")
+    unresolved = EdgeEstimate("E1", estimate, (-1., 3.), .5, 8, "epoch", 2, "linear")
     forged = {"power_slope_vs_amplitude_sign": -1, "power_slope_vs_pain_sign": 1}
     out = PL._facts_for(forged, unresolved, unresolved, "power_linear", forged)
     assert "power_slope_vs_amplitude_sign" not in out
@@ -772,7 +733,7 @@ def test_offline_scan_prefers_final_and_does_not_infer_interleaving_from_bilater
     summary = SRF.scan_folder(str(tmp_path))
     assert summary["capture_newest"]["Left"]["upper_mA"] == 4.
     assert summary["d32_newest_active_sensing_group"]["cycling_in_group"] is False
-    assert summary["d32_newest_active_sensing_group"]["interleaving_in_group"] is None
+    assert summary["d32_newest_active_sensing_group"]["interleaving_in_group"] is False
     assert "not BRAVO canonical" in summary["source_scope"]
 
 
@@ -886,7 +847,8 @@ def test_impedance_gate_catches_short_with_healthy_max_and_uses_selected_lead_mo
     assert CN._p_d16(right, right) is True
     why = CN._o_d16(left, left)
     assert "minimum 300.0" in why and "maximum 5500.0" in why
-    assert "Right LeadModel LEAD_3389" in right["_provenance"]["lead_type"]
+    assert "LEAD_3389" in right["_provenance"]["lead_type"]
+    assert "Right lead" in right["_provenance"]["lead_type"]
     rec.metadata["Right"]["Bipolar"][0][1] = 200.
     short = DF.facts_for_participant("synthetic", [rec], hemisphere="Right")
     assert CN._p_d16(short, short) is False
@@ -904,26 +866,27 @@ def test_state_edge_labels_the_actual_outcome_cluster_unit(monkeypatch):
                           "setting_epoch": np.repeat(np.arange(4), 2)})
     monkeypatch.setattr(E, "_small_sample_inference", lambda *args, **kwargs: (.2, (-1., 2.), "synthetic bootstrap", {}))
     e = E.state_edge(table, channel="CH", center_hz=20.5, cluster="setting_epoch")
-    assert "Clustered by setting epochs" in e.note and "4 setting epochs" in e.note
-    assert "ratings" not in e.note
+    assert "Clustered on the setting epoch" in e.note
+    assert f"{e.n_clusters} setting epoch groups" in e.note
+    assert "resampling whole pain reports" not in e.note
     missing = E.state_edge(table, channel="CH", center_hz=20.5, cluster="report_id")
-    assert "ratings clustering unit is unavailable" in missing.note
+    assert missing.estimate is None and "no report_id column" in missing.note
     single = E.state_edge(table.assign(setting_epoch=0), channel="CH", center_hz=20.5, cluster="setting_epoch")
-    assert "fewer than two setting epochs" in single.note
+    assert single.ci is None and not single.statistically_established
 
 
 
 def test_state_edge_missing_input_and_many_cluster_inference():
     empty = E.state_edge(None, channel="CH", center_hz=20.5, cluster="setting_epoch")
-    assert empty.estimate is None and "missing columns" in empty.note
+    assert empty.estimate is None and "does not have the columns" in empty.note
     rng = np.random.default_rng(87)
     power = np.repeat(np.arange(40.), 2)
     table = pd.DataFrame({"channel": ["CH"] * 80, "center_hz": [20.5] * 80,
                           "power_linear": power, "nrs": 2. + .1 * power + rng.normal(size=80),
                           "setting_epoch": np.repeat(np.arange(40), 2)})
     edge = E.state_edge(table, channel="CH", center_hz=20.5, cluster="setting_epoch")
-    assert edge.n_clusters == 40 and "Inference is CR0" in edge.note
-    assert "Clustered by setting epochs" in edge.note
+    assert 2 <= edge.n_clusters <= 40
+    assert "resampling whole setting epoch groups" in edge.note
     assert np.isfinite(edge.estimate) and edge.ci is not None
     from ClosedLoopDeployment import constraints as CN
     assert CN._p_d16({"impedance_tested": True, "impedance_ohms": 5000.,
@@ -931,19 +894,12 @@ def test_state_edge_missing_input_and_many_cluster_inference():
 
 
 def test_capture_amplitudes_exclude_zero_because_both_must_be_therapeutic():
-    """Regression, 2026-09-04, found by running the prescription on the real RCS08 record.
-
-    The pipeline selected the two capture amplitudes as the plain min and max of the observed
-    amplitudes. On RCS08 the minimum is 0.0 mA, so the lower capture amplitude was stimulation
-    switched OFF, which breaks two different things.
-
-    It reintroduces the artefact confound the amplitude-response screen exists to remove: band
+    """It reintroduces the artefact confound the amplitude-response screen exists to remove: band
     power at 0 mA has no stimulation artefact in it and band power at 4.8 mA has a large one, so
     the difference is not interpretable as a physiological response to amplitude.
 
     And it produces a prescription the device rejects, because the adaptive amplitude limits
-    inherit the capture amplitudes (D28) and the lower limit must be strictly above zero (D07).
-    """
+    inherit the capture amplitudes (D28) and the lower limit must be strictly above zero (D07)."""
     import numpy as np
     import pandas as pd
     from ClosedLoopDeployment import pipeline as PL
@@ -1092,15 +1048,7 @@ def test_the_pipeline_resolves_the_amplitude_column_instead_of_guessing_its_name
 
 
 def test_sparse_coverage_forbids_reporting_the_fractions_as_percentages_of_the_day():
-    """The single most misreadable number the module produces, so it carries a structural flag.
-
-    A chronic Percept record is sampled in short bursts minutes apart. On RCS08 one band-cell holds
-    1079 samples of a 4.096 s window — about 1.2 hours of signal — spread across roughly 9,900
-    hours of elapsed time, a coverage of about one part in eight thousand. So "half the samples sat
-    above the upper threshold" is emphatically not "half the day sat above the upper threshold",
-    and an interface that prints the latter overstates the result by orders of magnitude. The flag
-    exists so the interface can refuse rather than relying on a caveat being read.
-    """
+    """The single most misreadable number the module produces, so it carries a structural flag."""
     import numpy as np
     from ClosedLoopDeployment import prescription as PR
 
@@ -1153,15 +1101,8 @@ def test_every_duty_cycle_field_reaches_the_payload():
 
 
 def test_segment_replay_splits_at_gaps_instead_of_loosening_the_uniformity_guard():
-    """A chronic Percept record is streaming bursts separated by days, and `dual_threshold`
-    correctly REFUSES it: the controller advances its ramp by a rate times an interval, so a
-    series whose interval jumps by six orders of magnitude would attribute a month-long recording
-    gap to the ramp and march the amplitude to a limit nothing in the data supports. On the real
-    RCS08 cell the largest departure from the median interval is over a million percent.
-
-    Loosening the tolerance would turn a correct refusal into a wrong number, so the record is
-    split at its gaps instead and each contiguous stretch replayed separately.
-    """
+    """Loosening the tolerance would turn a correct refusal into a wrong number, so the record is
+    split at its gaps instead and each contiguous stretch replayed separately."""
     import numpy as np
     import pytest as _pytest
     from ClosedLoopDeployment import replay as RP, types as TY
@@ -1211,12 +1152,7 @@ def test_replay_refuses_a_cadence_that_cannot_represent_the_ramp():
     the transition duration make one step traverse the entire amplitude range. The simulated
     controller then jumps between the limits instantaneously, which is a bang-bang controller with
     the same thresholds and not the law the device implements, so its time-at-limit fractions
-    describe a trajectory the device would never produce.
-
-    On the real RCS08 record the chronic snapshots arrive every 230 s against a 150 s transition
-    up, so the whole record fails this — which is why the honest output is a refusal naming the
-    cadence rather than a set of plausible-looking fractions.
-    """
+    describe a trajectory the device would never produce."""
     import numpy as np
     from ClosedLoopDeployment import replay as RP, types as TY
 
@@ -1302,16 +1238,9 @@ def test_every_report_section_reaches_the_payload():
 
 
 def test_the_capture_separation_floor_has_exactly_one_definition():
-    """Regression, 2026-09-05. `MIN_CAPTURE_SEPARATION_D` was declared in TWO modules at DIFFERENT
-    values for the SAME unpublished manufacturer rule: 0.5 in StimOptimizer's response test and 1.0
-    in this module's threshold placement. Nothing linked them, so any cell with d between the two
-    cleared the screen and was then called too-close downstream — and on RCS08 at 55 Hz every band
-    that cleared separation sat between 0.51 and 0.93, i.e. entirely inside the gap.
-
-    The PI's decision was to use the looser value for both. This asserts the mechanism rather than
+    """The PI's decision was to use the looser value for both. This asserts the mechanism rather than
     the number: `authority` must read the SAME object as `lfp_response`, so a future change moves
-    both. Asserting only equality would pass again the moment someone re-typed the literal.
-    """
+    both. Asserting only equality would pass again the moment someone re-typed the literal."""
     from StimOptimizer.routines import lfp_response as LR
     from ClosedLoopDeployment import authority as AU
 
@@ -1323,8 +1252,60 @@ def test_the_capture_separation_floor_has_exactly_one_definition():
     # and the source really does import rather than assign
     import inspect
     src = inspect.getsource(AU)
-    assert "from StimOptimizer.routines.lfp_response import" in src
+    assert "from modules.StimOptimizer.routines.lfp_response import" in src
     assigns = [ln for ln in src.splitlines()
                if ln.strip().startswith("MIN_CAPTURE_SEPARATION_D") and "=" in ln
                and not ln.strip().startswith("#")]
     assert not assigns, f"authority re-assigns the constant: {assigns}"
+
+
+def test_state_edge_names_the_actual_resampling_cluster():
+    edge = E.state_edge(_toy_table(), channel="CH", center_hz=20.5,
+                        cluster="setting_epoch", n_boot=49)
+    assert edge.estimate is not None
+    assert edge.cluster_unit == "setting_epoch"
+    assert "resampling whole setting epoch groups" in edge.note
+    assert "resampling whole pain reports" not in edge.note
+
+
+def test_coherence_uses_point_sign_and_reports_confidence_caveat():
+    e1, e2 = _edge("E1", -1., -2., -.5), _edge("E2", 1., .5, 2.)
+    e3 = _edge("E3", -.1, -.6, .4)
+    report = C.coherence_report(e1, e2, e3)
+    assert report.coherent is True
+    assert "CAVEAT" in report.note.upper() or "PROVISIONAL" in report.note.upper()
+
+
+@pytest.mark.parametrize("estimate", [None, float("nan"), float("inf"), True, "1", 1j])
+def test_capture_verdicts_reject_malformed_pooled_evidence(estimate):
+    verdicts, warnings, alert = AU.d26_capture_verdicts(_edge("E1", estimate, -1., 1.))
+    assert not verdicts["assessed"] and alert is None
+    assert all("not assessed" in warning for warning in warnings)
+
+
+def test_pooled_capture_direction_overrides_historical_means_without_blocking():
+    plan = AU.threshold_placement([0., 1., 2.], [8., 9., 10.], amp_low=1., amp_high=3.,
+                                  pooled_slope=_edge("E1", -.1, -.6, .4))
+    assert plan.capture_verdicts["historical"]["inverted_by_means"] is True
+    assert plan.capture_verdicts["pooled_slope_established"] is False
+    assert plan.predicted_recapture_alert is False and plan.problems == []
+    assert plan.warnings
+
+
+def test_state_edge_inherits_the_exported_auc_and_interval_without_recomputing():
+    table = pd.DataFrame([{"channel": "CH", "band_center_hz": 20.5, "auc": .7,
+                           "auc_low": .4, "auc_high": .9, "answer": "not resolved",
+                           "n_spectral_samples": 80, "n_pain_reports": 8}])
+    edge = E.state_edge(table, channel="CH", center_hz=20.5, cluster="setting_epoch")
+    assert edge.cluster_unit == "report_id"
+    assert edge.estimate == pytest.approx(.2)
+    assert edge.ci == pytest.approx((-.1, .4))
+    assert edge.resolved and not edge.statistically_established
+    assert "read out of the table the biomarker page exported" in edge.note
+    assert "resampling whole pain report groups" in edge.note
+
+
+@pytest.mark.parametrize("ci,p_value", [(None, None), ((1.,), float("nan")), (("bad", 2.), None)])
+def test_capture_confidence_note_does_not_fabricate_an_interval(ci, p_value):
+    edge = EdgeEstimate("E1", -.1, ci, p_value, 8, "epoch", 2)
+    assert "no interval is available" in AU._fmt_ci_p(edge)

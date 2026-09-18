@@ -94,7 +94,9 @@ def test_failure_description_requires_corresponding_measured_fraction(above, bel
 def test_prescription_attaches_screening_duty_when_input_power_is_supplied():
     plan = TY.ThresholdPlan(upper=8., lower=2., capture_amp_low=1., capture_amp_high=3.)
     result = PR.prescribe(mode=PA.DUAL, threshold_plan=plan,
-                          power_series=[0., 5., 10.], timing=PA.timing_plan(mode=PA.DUAL))
+                          power_series=[0., 5., 10.], timing=PA.timing_plan(mode=PA.DUAL),
+                          record_timing={"onset_upper_ms": {"value_ms": 0., "why": "Synthetic immediate response"},
+                                         "onset_lower_ms": {"value_ms": 0., "why": "Synthetic immediate response"}})
     assert result.duty.lfp_frac_above == pytest.approx(1/3)
     assert result.duty.mean_amplitude_mA is None
     assert any("ACTUAL programming" in text for text in result.duty.caveats)

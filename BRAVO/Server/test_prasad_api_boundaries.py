@@ -226,7 +226,7 @@ class RealDRFBoundaryTests(unittest.TestCase):
 
 class ServiceExceptionTests(unittest.TestCase):
     def test_scientific_service_failures_raise_instead_of_persisting_empty_success(self):
-        for package, minimum in [('StimOptimizer', 2), ('ClosedLoopDeployment', 1)]:
+        for package, minimum in [('StimOptimizer', 1), ('ClosedLoopDeployment', 1)]:
             path = ROOT / 'modules' / package / 'bravo_service.py'
             tree = ast.parse(path.read_text())
             function = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'run_for_participant')

@@ -7,7 +7,8 @@ import ResearchDeploymentPanels from "./ResearchDeploymentPanels";
 import DutyCyclePanel from "./DutyCyclePanel";
 import StateTrack from "./StateTrack";
 
-jest.mock("@mui/material", () => ({ Card: ({ children }) => <div>{children}</div>,
+jest.mock("plotly.js-dist", () => ({ react: jest.fn(), purge: jest.fn() }));
+jest.mock("@mui/material", () => ({ ...jest.requireActual("@mui/material"), Card: ({ children }) => <div>{children}</div>,
   Grid: ({ children }) => <div>{children}</div>, Divider: () => <hr />, Icon: ({ children }) => <span>{children}</span> }));
 jest.mock("components/MDBox", () => ({ children }) => <div>{children}</div>);
 jest.mock("components/MDTypography", () => ({ children }) => <div>{children}</div>);
@@ -25,10 +26,10 @@ const research = {
 test("research-only report keeps all modes visible and planning unavailable even if rule checks pass", () => {
   render(<ResearchDeploymentPanels data={research} />);
   expect(screen.getByText("Closed-loop research review")).toBeTruthy();
-  expect(screen.queryByText("AUTHORIZATION REPORTED")).toBeTruthy(); // Unlit state is visible; selection tested below.
+  expect(screen.getByText("AUTHORIZATION REPORTED")).toBeTruthy(); // Unlit state is visible; selection tested below.
   expect(TRACKS.transcription.lit(research)).toBe(1);
   expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
-  expect(screen.queryByText(/0.0000  \[/)).toBeNull();
+  expect(screen.queryByText(/0.0000 {2}\[/)).toBeNull();
   expect(screen.queryByText(/limit unbounded/)).toBeNull();
   expect(screen.getByText("left_leg_vas")).toBeTruthy();
   for (const name of ["Single Threshold", "Single Threshold Inverse", "Dual Threshold"]) {

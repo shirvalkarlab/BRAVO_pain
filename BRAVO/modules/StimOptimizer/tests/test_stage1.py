@@ -19,12 +19,7 @@ from StimOptimizer import stage1_openloop as S1
 # ---------------------------------------------------------------------------------------------
 def _matrix(n_per_cell=10, pw_levels=(60.0, 140.0), rates=(55.0, 110.0), seed=0,
             aliased=False, effect=0.0):
-    """Design matrix with a controllable rate x pulse-width layout.
-
-    ``aliased=True`` gives each pulse width its OWN rate, which is the structure the real RCS08
-    record has and the structure under which a pulse-width contrast is not estimable. ``effect``
-    adds a pain benefit to the LAST pulse-width level so a resolvable case can be constructed.
-    """
+    """Design matrix with a controllable rate x pulse-width layout."""
     rng = np.random.default_rng(seed)
     rows = []
     ep = 0
@@ -52,14 +47,11 @@ def _matrix(n_per_cell=10, pw_levels=(60.0, 140.0), rates=(55.0, 110.0), seed=0,
 
 @pytest.fixture
 def rcs08_like():
-    """A matrix reproducing the structural features of the real RCS08 record.
-
-    Three of those features drive every honest refusal Stage 1 makes on the real data, so they are
+    """Three of those features drive every honest refusal Stage 1 makes on the real data, so they are
     reproduced deliberately rather than incidentally: pulse width is aliased with rate, so no rate
     was delivered at two adequately-sampled pulse widths; the incumbent is the most recent epoch and
     sits at one particular (rate, pulse width) pair; and at least one pulse-width stratum never
-    delivered the incumbent's rate at all.
-    """
+    delivered the incumbent's rate at all."""
     return _matrix(n_per_cell=11, pw_levels=(100.0, 140.0), rates=(55.0, 165.0), aliased=True)
 
 
@@ -110,8 +102,8 @@ def test_an_undersampled_stratum_is_skipped_with_its_reason_never_pooled():
     d = pd.concat([thin, extra], ignore_index=True)
     res = S1.run_stage1(d, hemispheres=("Left",), data_horizon="test", washin_min=1.0)
     assert 120.0 not in [pw for (_h, pw) in res.slices]
-    assert "Left__pw120" in res.skipped
-    assert "below the 8-epoch floor" in res.skipped["Left__pw120"]
+    assert "pwL120_pwR120" in res.skipped
+    assert "below the 8-epoch floor" in res.skipped["pwL120_pwR120"]
 
 
 def test_the_epoch_counts_are_internally_consistent():
@@ -129,13 +121,13 @@ def test_the_epoch_counts_are_internally_consistent():
     extra["pw_us_Left"] = 120.0
     d = pd.concat([thin, extra], ignore_index=True)
     res = S1.run_stage1(d, hemispheres=("Left",), data_horizon="test", washin_min=1.0)
-    a = res.audit["per_hemisphere"]["Left"]
-    per_stratum = {pw: s.n_epochs for (_h, pw), s in res.slices.items()}
-    skipped_epochs = sum(v for k, v in a["design"]["epochs_per_pw"].items()
-                         if float(k) not in per_stratum)
+    a = res.audit
+    per_stratum = {f"{pwl:g}_{pwr:g}": s.n_epochs for (pwl, pwr), s in res.slices.items()}
+    skipped_epochs = sum(v for k, v in a["design"]["epochs_per_pair"].items()
+                         if k not in per_stratum)
     assert sum(per_stratum.values()) == a["n_epochs_in_fitted_strata"]
     assert a["n_epochs_in_fitted_strata"] + skipped_epochs == a["n_epochs_eligible"]
-    assert sum(a["design"]["epochs_per_pw"].values()) == a["n_epochs_eligible"]
+    assert sum(a["design"]["epochs_per_pair"].values()) == a["n_epochs_eligible"]
     assert skipped_epochs == 2, "fixture must skip exactly the 2-epoch 120 us stratum"
     # and the frozen setting's count is ONE stratum's, never the hemisphere total
     assert res.frozen.setting("Left").n_epochs_fitted in per_stratum.values()
@@ -163,17 +155,14 @@ def test_pulse_width_is_reported_as_not_observed_when_the_column_is_absent(rcs08
 # The support gate on the resolution comparison — the module's most consequential correction
 # ---------------------------------------------------------------------------------------------
 def test_a_stratum_that_never_ran_the_incumbent_rate_reports_not_assessed_not_resolved():
-    """Regression, found by running the real RCS08 matrix on 2026-09-02.
-
-    J is zero at the incumbent BY CONSTRUCTION. A pulse-width stratum with no epoch at the
+    """J is zero at the incumbent BY CONSTRUCTION. A pulse-width stratum with no epoch at the
     incumbent's rate has no data near that cell, so its posterior there reverts towards the
     stratum's own mean. On the real matrix the 140 us stratum, which contains no 55 Hz epoch on
     either hemisphere, predicted J = +1.66 at the incumbent cell with SD 1.60 — a definitional zero
     reported as 1.66 points worse than it is — and against that fictitious baseline its own optimum
     showed a 2.28-point gain that passed the resolution criterion. The verdict was entirely an
     artefact of extrapolating into a rate the stratum never ran, so an unsupported comparison must
-    return None rather than a boolean.
-    """
+    return None rather than a boolean."""
     d = _matrix(n_per_cell=11, pw_levels=(100.0, 140.0), rates=(55.0, 165.0), aliased=True)
     res = S1.run_stage1(d, hemispheres=("Left",), data_horizon="test", washin_min=1.0)
     inc_rate = res.frozen.incumbent_rate_hz
@@ -277,7 +266,7 @@ def test_the_pulse_width_contrast_refuses_a_rank_deficient_design():
     """
     d = _matrix(n_per_cell=11, pw_levels=(100.0, 140.0), rates=(55.0, 165.0), aliased=True)
     res = S1.run_stage1(d, hemispheres=("Left",), data_horizon="test", washin_min=1.0)
-    c = res.audit["per_hemisphere"]["Left"]["contrast"]
+    c = S1.pulse_width_contrast(res.D.loc[res.D["feasible"]])
     assert c["estimable"] is False
     assert "rank deficient" in c["reason"]
     assert c["coefficients"] == {}
@@ -287,7 +276,7 @@ def test_the_pulse_width_contrast_is_estimable_on_a_crossed_design():
     d = _matrix(n_per_cell=12, pw_levels=(100.0, 140.0), rates=(55.0, 165.0), aliased=False,
                 effect=1.0)
     res = S1.run_stage1(d, hemispheres=("Left",), data_horizon="test", washin_min=1.0)
-    c = res.audit["per_hemisphere"]["Left"]["contrast"]
+    c = S1.pulse_width_contrast(res.D.loc[res.D["feasible"]])
     assert c["estimable"] is True, c["reason"]
     assert c["coefficients"], "a crossed design must yield at least one pulse-width coefficient"
     for lvl, v in c["coefficients"].items():
@@ -320,28 +309,17 @@ def test_undersampled_levels_are_excluded_from_the_contrast_and_the_exclusion_is
     assert 120.0 not in {float(k) for k in c["coefficients"]}
 
 
-def test_a_sign_disagreement_between_the_two_views_is_reported_as_a_reason():
-    """Observed on the real record's right hemisphere on 2026-09-02.
-
-    The stratified surrogate preferred 140 us while the rate-blocked, era-blocked,
-    precision-weighted regression on the same rows put 140 us +3.09 NRS points WORSE than the 100 us
-    reference (95% CI +0.31 to +5.87, p = 0.030). Reporting only the view that favours the proposal
-    is the failure mode this note exists to prevent, so the disagreement has to reach the reasons.
-    """
-    d = _matrix(n_per_cell=12, pw_levels=(100.0, 140.0), rates=(55.0, 165.0), aliased=False,
-                effect=-1.0)                          # make the LAST level worse, not better
-    res = S1.run_stage1(d, hemispheres=("Left",), data_horizon="test", washin_min=1.0)
-    c = res.audit["per_hemisphere"]["Left"]["contrast"]
-    if not c["estimable"]:
-        pytest.skip("fixture did not yield an estimable contrast")
-    s = res.frozen.setting("Left")
-    coef = c["coefficients"].get(f"{s.pw_us:g}")
-    joined = " ".join(s.reasons)
-    if coef is not None and coef["estimate"] > 0:
-        assert "DISAGREEMENT BETWEEN TWO VIEWS" in joined
-        assert "WORSE" in joined
-    else:
-        assert "DISAGREEMENT BETWEEN TWO VIEWS" not in joined
+def test_joint_pulse_width_pair_and_legacy_contrast_remain_auditable():
+    """The joint model reports pair strata; the retained contrast still detects worse pain."""
+    d = _matrix(n_per_cell=12, pw_levels=(100.0, 140.0), rates=(55.0, 165.0),
+                aliased=False, effect=-1.0)
+    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0)
+    c = S1.pulse_width_contrast(res.D.loc[res.D["feasible"]], reference_pw=100.0)
+    assert c["estimable"], c["reason"]
+    assert next(v["estimate"] for k, v in c["coefficients"].items() if float(k) == 140.0) > 0
+    left, right = res.frozen.setting("Left"), res.frozen.setting("Right")
+    assert (left.pw_us, right.pw_us) in res.slices
+    assert left.rate_hz == right.rate_hz
 
 
 def test_a_single_pulse_width_level_is_unidentifiable_not_null():

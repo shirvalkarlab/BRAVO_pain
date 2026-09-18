@@ -25,6 +25,10 @@ import numpy as np
 from .types import CoherenceReport
 
 
+
+# Aditya canonical compatibility imports/constants.
+
+
 def expected_pattern_for_dual_threshold():
     """The sign pattern a deployable Dual Threshold candidate must show, and why.
 
@@ -68,7 +72,13 @@ def signs_coherent(e1, e2, e3):
 
     Returning None rather than False matters: False would say the triangle is contradictory, which
     is a finding, whereas None says it has not been established, which is the honest state of an
-    interval that spans zero.
+    edge with no point estimate.
+
+    SINCE 2026-09-13 "resolved" is the POINT SIGN (PI rule: "established means mean only"). An
+    edge whose interval spans zero still has a sign here and enters the test; whether its interval
+    excludes zero travels as ``statistically_established`` and is written into the report's note
+    as a caveat (``coherence_report``), never into this answer. Until that date such an edge made
+    this function return None.
     """
     if not (e1.resolved and e2.resolved and e3.resolved):
         return None
@@ -105,10 +115,10 @@ def p_coherent(fit_edges, cluster_ids, *, n_boot=1000, seed=0):
     if usable == 0:
         return CoherenceReport(None, None, n_boot=0, note="no replicate produced three estimates")
     return CoherenceReport(coherent=None, p_coherent=hits / usable, n_boot=usable,
-                           note=("replicates in which all three edges resolved AND their signs "
-                                 "agreed, over replicates that produced three estimates. A "
-                                 "replicate with an unresolved edge counts against coherence, "
-                                 "because an unresolved edge cannot support the pattern."))
+                           note=("replicates in which all three edges had a point sign AND their "
+                                 "signs agreed, over replicates that produced three estimates. A "
+                                 "replicate with an edge that has no point estimate counts against "
+                                 "coherence, because such an edge cannot support the pattern."))
 
 
 def coherence_report(e1, e2, e3, *, p=None, n_boot=0):
@@ -122,14 +132,33 @@ def coherence_report(e1, e2, e3, *, p=None, n_boot=0):
                  "agree with the total effect, so at least one edge is wrong or the band does not "
                  "mediate the therapy.")
     elif ok is None:
-        note += (" NOT ESTABLISHED: at least one edge's interval spans zero, so the pattern is "
-                 "untested rather than refuted.")
+        note += (" NOT ESTABLISHED: at least one edge has no point estimate (or one of exactly "
+                 "zero), so it has no sign and the pattern is untested rather than refuted.")
     elif not matches_dual:
         note += (" Signs are internally consistent but do NOT match the pattern Dual Threshold "
                  "requires, so the candidate is coherent as physiology and still not deployable.")
+    # THE CAVEAT, never the verdict (PI rule 2026-09-13): name every edge whose interval spans
+    # zero, with its interval and p, so a reader of the note knows the pattern rests on point
+    # signs alone.
+    weak = [(k, v) for k, v in (("E1", e1), ("E2", e2), ("E3", e3))
+            if v.sign not in (None, 0) and not getattr(v, "statistically_established", False)]
+    if ok is not None and weak:
+        parts = []
+        for k, v in weak:
+            ci = getattr(v, "ci", None)
+            ci_txt = (f"interval {float(ci[0]):+.3g} to {float(ci[1]):+.3g}" if ci is not None
+                      else "no interval")
+            p_txt = f"p {float(v.p):.2f}" if getattr(v, "p", None) is not None else "no p-value"
+            parts.append(f"{k} ({ci_txt}, {p_txt})")
+        note += (f" PROVISIONAL: {len(weak)} of 3 intervals span zero -- {'; '.join(parts)} -- "
+                 "so the pattern rests on the point signs alone, by the PI's rule of 2026-09-13 "
+                 "(\"established means mean only\").")
     return CoherenceReport(coherent=(bool(ok) and bool(matches_dual)) if ok is not None else None,
                            p_coherent=p, n_boot=n_boot,
                            # Passed as mappings. `str(exp)` produced a Python repr that no
                            # JSON parser can read; see the note on the dataclass fields.
                            expected_pattern=dict(exp), observed_pattern=dict(obs),
                            cluster_unit=e2.cluster_unit, note=note)
+
+
+# Retained active Aditya interfaces.

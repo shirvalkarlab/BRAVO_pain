@@ -1,3 +1,7 @@
+import BandStabilityPanel from "./BandStabilityPanel";
+import ReliableChangePanel from "./ReliableChangePanel";
+import ThreeSourceResponsePanel from "./ThreeSourceResponsePanel";
+import ClosedLoopSimulationPanel from "./ClosedLoopSimulationPanel";
 /** Latest Prasad evidence views over the canonical, research-only BRAVO payload. */
 import { useState } from "react";
 import MDBox from "components/MDBox";
@@ -16,6 +20,12 @@ export default function ResearchDeploymentPanels({ data, bandCandidate }) {
     <DeploymentDecisionHeader deploymentReport={report} bandCandidate={bandCandidate} />
     <MDBox id="cl-what-changes"><WhatWouldChangeThis report={report} /></MDBox>
     <MDBox id="cl-rules"><DeviceRuleLedger report={report} /></MDBox>
+    <BandStabilityPanel stability={data.band_stability} />
+    <ReliableChangePanel reliableChange={data.reliable_change} />
+    <ThreeSourceResponsePanel pooled={{ data: data.three_source_pooled, loading: false }} report={report}
+      committed={bandCandidate} contactLabel={(channel) => String(channel || bandCandidate?.contact || "").replace(/_/g, " ")} />
+    <ClosedLoopSimulationPanel sim={{ data: data.simulation_payload, loading: false }}
+      hemisphere={data.manifest?.hemisphere} contactLabel={(channel) => String(channel || bandCandidate?.contact || "").replace(/_/g, " ")} bandCandidate={bandCandidate} />
     <MDBox id="cl-evidence"><EvidenceTrianglePanel report={report} /></MDBox>
     <MDBox id="cl-prescription"><PrescriptionPanel report={report} mode={mode} onMode={setMode} /></MDBox>
     <MDBox id="cl-duty"><DutyCyclePanel report={report} mode={mode} /></MDBox>

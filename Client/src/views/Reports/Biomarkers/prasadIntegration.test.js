@@ -5,7 +5,8 @@ import theme from 'assets/theme';
 import Plotly from 'plotly.js-dist';
 import {computeMatchedScanModel} from './binarizationModel';
 import {resolveStability,stabilityNumbers,ValidationReadout} from './BiomarkerAnalytics';
-import {resolutionOf,FigurePanel} from '../StimOptimizer';
+import {resolutionOf} from '../StimOptimizer';
+import {CurrentSurfaceHeatmap} from '../StimOptimizer/CurrentMapCard';
 import {commitBandCandidate,downloadBandCandidate} from '../ClosedLoopSim/bandCandidateStore';
 const mockQuery=jest.fn();
 jest.mock('./queryAnalysis',()=>({useAnalysisQuery:()=>mockQuery}));
@@ -13,8 +14,8 @@ jest.mock('../ClosedLoopSim/bandCandidateStore',()=>({commitBandCandidate:jest.f
 let mockWidth=390;
 jest.mock('plotly.js-dist',()=>({react:jest.fn(),purge:jest.fn()}));
 jest.mock('react-resize-detector',()=>({useResizeDetector:()=>({ref:require('react').useRef(null),width:mockWidth})}));
-function View(props){return <ThemeProvider theme={theme}><PlatformContextProvider initialStates={{darkMode:false}}><FigurePanel {...props}/></PlatformContextProvider></ThemeProvider>;}
-beforeEach(()=>{jest.clearAllMocks();mockWidth=390;});
+function View(props){return <ThemeProvider theme={theme}><PlatformContextProvider initialStates={{darkMode:false}}><CurrentSurfaceHeatmap {...props}/></PlatformContextProvider></ThemeProvider>;}
+beforeEach(()=>{jest.clearAllMocks();Plotly.react.mockReset();mockWidth=390;});
 
 test('missing matching inputs are unassessed, distinct from a measured zero-match result',()=>{
   const scanIndex=[{t:1000,channel:'LEFT',source:'td'}];
@@ -73,23 +74,29 @@ test('optimizer uses served three-state verdict and reports declared margin rath
   expect(resolutionOf({...legacy,optimum:{posterior_mean:1,posterior_sd:1e308}}).sdDiff).toBeNull();
 });
 
-test('optimizer figures preserve responsive adaptation and update without purging before final unmount',()=>{
-  const figure={data:[{type:'scatter',x:[1,2],y:[3,4]}],layout:{height:450,width:1000,xaxis:{title:'Time'},yaxis:{title:'Observed value'}}};
-  const view=render(<View title="Surface" blurb="Observed comparison" figure={figure} prominence="primary"/>);
-  const node=screen.getByRole('region',{name:'Surface'}).firstChild;
-  expect(node).toBe(Plotly.react.mock.calls.at(-1)[0]);expect(getComputedStyle(node).minWidth).toBe("0");
-  expect(Plotly.react.mock.calls.at(-1)[2].width).not.toBe(1000);expect(Plotly.react.mock.calls.at(-1)[2].height).toBeGreaterThanOrEqual(620);expect(Plotly.purge).not.toHaveBeenCalled();
-  mockWidth=1200;view.rerender(<View title="Surface" figure={{...figure,data:[{type:'scatter',x:[1,2],y:[5,6]}]}}/>);
-  expect(Plotly.react.mock.calls.at(-1)[1][0].y).toEqual([5,6]);expect(Plotly.purge).not.toHaveBeenCalled();
-  view.unmount();expect(Plotly.purge).toHaveBeenCalledWith(node);
+test('current maps adapt to container width and update without purging before final unmount',()=>{
+  const surface={mu:[[1,2],[3,4]],safe:[[true,true],[true,true]],amps_mA:[1,2],pain_reference:4};
+  const view=render(<View divId="synthetic-current" surface={surface} size={400}/>);
+  const node=screen.getByRole('img', {name:'Current map'});
+  expect(Plotly.react.mock.calls.at(-1)[0]).toBe('synthetic-current');
+  expect(Plotly.react.mock.calls.at(-1)[2].width).toBe(390);
+  expect(Plotly.react.mock.calls.at(-1)[3].responsive).toBe(true);
+  expect(getComputedStyle(node).minWidth).toBe('0');expect(Plotly.purge).not.toHaveBeenCalled();
+  mockWidth=300;view.rerender(<View divId="synthetic-current" surface={{...surface,mu:[[4,3],[2,1]]}}/>);
+  expect(Plotly.react.mock.calls.at(-1)[2].width).toBe(300);
+  expect(Plotly.react.mock.calls.at(-1)[1][0].z).toEqual([[8,7],[6,5]]);
+  expect(Plotly.purge).not.toHaveBeenCalled();view.unmount();expect(Plotly.purge).toHaveBeenCalledWith(node);
 });
 
-test('failed optimizer figure has an explicit error state; absent unrequested figure is quiet',()=>{
-  const view=render(<View title="Surface" error={{error_type:'ValueError',message:'Insufficient observations',builder:'example'}}/>);
-  expect(screen.getByText(/ValueError: Insufficient observations/)).toBeTruthy();expect(screen.getByText(/Builder: example/)).toBeTruthy();expect(Plotly.react).not.toHaveBeenCalled();
-  view.rerender(<View title="Surface" error={{}}/>);expect(screen.getByText(/Error: no message supplied/)).toBeTruthy();
-  view.rerender(<View title="Surface"/>);expect(screen.queryByText('Surface')).toBeNull();
+test('failed current map has an explicit sanitized error state and absent surface stays quiet',async()=>{
+  Plotly.react.mockRejectedValueOnce(new Error('private participant source'));
+  const view=render(<View divId="synthetic-error" surface={{mu:[[1]],safe:[[true]],amps_mA:[1]}}/>);
+  await waitFor(()=>expect(screen.getByRole('alert').textContent).toContain('could not be displayed'));
+  expect(screen.queryByText(/private participant/)).toBeNull();
+  view.rerender(<View divId="synthetic-error"/>);expect(screen.queryByRole('alert')).toBeNull();
+  expect(screen.queryByRole('img', {name:'Current map'})).toBeNull();
 });
+
 
 function Validation(props){return <ThemeProvider theme={theme}><PlatformContextProvider initialStates={{darkMode:false}}><ValidationReadout {...props}/></PlatformContextProvider></ThemeProvider>;}
 test('validation headline does not promote an inconclusive or dependent result to stable',()=>{

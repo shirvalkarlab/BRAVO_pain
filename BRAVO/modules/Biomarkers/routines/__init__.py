@@ -1,1 +1,1 @@
-"""Biomarker routines extracted/vendored from dbs_stage2_percept (science unchanged)."""
+"""Research package integrated from Prasad 8146f069; canonical modules namespace."""

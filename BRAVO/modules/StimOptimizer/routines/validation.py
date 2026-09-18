@@ -1,12 +1,6 @@
 """Phase 4 validation of the warm-start surrogate — one parameterised entry point.
 
-Everything in this module is a function of a design-matrix path plus an explicit
-``data_horizon``. Nothing is hard-coded to a particular vintage of the RCS08 record, so a data
-refresh regenerates every number, table and figure by re-pointing :func:`run_validation` at the
-new CSV. The horizon string is stamped onto every output file and into the report header, so a
-stale artifact can always be told apart from a fresh one.
-
-    from StimOptimizer.routines import validation as VAL
+    from modules.StimOptimizer.routines import validation as VAL
     res = VAL.run_validation(
         design_matrix_path="rcs08_bo_design_matrix.csv",
         per_report_path="rcs08_pro_epoch_assignment.csv",
@@ -26,8 +20,7 @@ Four steps, in the order the pre-registration requires:
 4. :func:`replay` — retrospective sample-efficiency replay against the visited cells as a
    lookup-table simulator, versus uniform random and an equal-interval sweep.
 
-The pass criterion in :data:`PASS_CRITERION` is pre-registered. Do not tune it to a result.
-"""
+The pass criterion in :data:`PASS_CRITERION` is pre-registered. Do not tune it to a result."""
 from __future__ import annotations
 
 import json
@@ -68,6 +61,17 @@ PASS_CRITERION = dict(
 
 
 # --- loading and warm-start fit -----------------------------------------------------------
+
+# Aditya canonical compatibility imports/constants.
+
+
+
+
+
+
+
+
+
 def load_design(path: str) -> pd.DataFrame:
     """Read an epoch-level design matrix and parse ``t0`` as UTC."""
     es = pd.read_csv(path)
@@ -622,3 +626,6 @@ def render_report(result: dict, per_fold: pd.DataFrame, queue: pd.DataFrame,
     """Markdown report. Import from :func:`run_validation`; not intended to be called alone."""
     from .validation_report import render
     return render(result, per_fold, queue, audit)
+
+
+# Retained active Aditya interfaces.

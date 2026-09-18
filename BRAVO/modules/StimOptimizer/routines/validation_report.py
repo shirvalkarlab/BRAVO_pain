@@ -13,6 +13,11 @@ import numpy as np
 import pandas as pd
 
 
+
+# Aditya canonical compatibility imports/constants.
+
+
+
 def _fmt(x, nd=3):
     if x is None:
         return "n/a"
@@ -386,3 +391,6 @@ def render(result: dict, per_fold: pd.DataFrame, queue: pd.DataFrame, audit: dic
       "data_horizon=..., washin_min=..., outdir=...)`.")
     A("")
     return "\n".join(L)
+
+
+# Retained active Aditya interfaces.

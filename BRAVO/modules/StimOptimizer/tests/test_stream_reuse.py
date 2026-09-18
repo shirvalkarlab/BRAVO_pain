@@ -131,7 +131,8 @@ def test_supplied_frame_keeps_washin_items_and_cached_psd_path(monkeypatch, stre
     monkeypatch.setattr(lfp_evidence, "frame_from_matrix", converter)
     sources = ["synthetic-source"]
     result_psd, epochs = adapter.evidence_inputs(
-        participant, force_refresh=True, sources=sources, stream=stream)
+        participant, force_refresh=True, sources=sources, stream=stream,
+        band_power=adapter.BAND_POWER_DECIBEL_DENSITY)
     assert result_psd is psd
     assert len(epochs) == 2
     biomarkers._cached_psd_matrix.assert_called_once_with("synthetic", force_refresh=True)

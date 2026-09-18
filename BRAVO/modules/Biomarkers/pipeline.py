@@ -40,14 +40,31 @@ from .routines import streaming_psd
 from .routines import threshold_biomarker
 from .routines import redcap_client
 from .routines import stats_utils
+from .routines.local_time import local_calendar_day as _local_day
 from .routines.analytics import format_channel
-from .routines.local_time import local_calendar_day
 from . import adapter
 
 # This module had no logging at all. The rating_group fallback below needs to be able to say
 # something when the session/epoch alignment it depends on does not hold, rather than failing
 # silently — or, as a first draft of that code did, raising NameError on `_log`.
 _log = logging.getLogger(__name__)
+
+
+
+# Aditya canonical compatibility imports/constants.
+
+
+
+
+
+
+
+
+
+
+
+
+from .routines.local_time import local_calendar_day
 
 
 def rating_group_from_identity(session_df, labels):
@@ -60,18 +77,9 @@ def rating_group_from_identity(session_df, labels):
     Returns an int array, one entry per epoch: a distinct code per distinct matched report, and -1
     for an epoch that has no matched report or no usable label.
 
-    WHY IDENTITY AND NOT VALUE. This used to reconstruct the grouping by searching ``pro_df`` for a
-    report whose VALUE equalled the session's label and taking the first hit. On an integer pain
-    scale that collapses every session sharing a score into ONE "rating": measured on RCS08, 72
-    genuinely distinct matched reports were represented as 7 groups under ``nrs``, because there were
-    only 7 distinct NRS values. That corrupted the cluster-robust logit p (7 clusters instead of 72,
-    far too few for sandwich variance) and — worse — made ``StratifiedGroupKFold``'s folds a function
-    of the outcome being predicted, holding whole pain levels out together.
-
     There is deliberately NO value-matching fallback. If the session/epoch alignment this depends on
     does not hold, the grouping is left unset and a warning is logged, because reverting to a
-    grouping that clusters on the outcome is worse than having no grouping at all.
-    """
+    grouping that clusters on the outcome is worse than having no grouping at all."""
     labels = np.asarray(labels, dtype=float)
     rating_group = np.full(len(labels), -1, dtype=int)
     has_col = "matched_pro_time" in getattr(session_df, "columns", ())
@@ -250,12 +258,15 @@ def _available_frequencies(cv_ch):
     finite = np.isfinite(fhz)
     if not finite.any():
         return []
-    day = local_calendar_day(df["timestamp"])
+    # "Day" is the CALIFORNIA calendar day of the UTC sample time, the same rule the chronic join
+    # and the pain cut use (review B1), so a day counted here is a day the detector labelled.
+    day = _local_day(df["timestamp"])
     pl = df["pain_level"].to_numpy(dtype=float) if "pain_level" in df.columns else np.full(len(df), np.nan)
     out = []
     for hz in sorted(set(np.round(fhz[finite], 1))):
         m = finite & (np.round(fhz, 1) == hz)
-        # hz came from this exact finite rounded-frequency set, so m is nonempty.
+        if not m.any():
+            continue
         labeled = m & np.isin(pl, (0.0, 1.0))
         days_all = day[m].dropna()
         days_lab = day[labeled].dropna()
@@ -298,15 +309,18 @@ def _decode_by_frequency(cv_ch, label_metric, *, min_labeled=8):
     out = {}
     for hz in sorted(set(np.round(fhz[finite], 1))):
         sub = cv_ch[np.round(fhz, 1) == hz]
-        # hz is one of this frame's observed rounded frequencies; sub is nonempty.
-        # Daily pain aggregation for the binarization preview (one row per calendar day at this band).
-        day = local_calendar_day(sub["timestamp"])
+        if len(sub) == 0:
+            continue
+        # Daily pain aggregation for the binarization preview (one row per CALIFORNIA calendar day
+        # at this band -- the day rule the cut itself uses, review B1).
+        day = _local_day(sub["timestamp"])
         pain = sub[label_metric].to_numpy(dtype=float) if label_metric in sub.columns else np.full(len(sub), np.nan)
         pl = sub["pain_level"].to_numpy(dtype=float) if "pain_level" in sub.columns else np.full(len(sub), np.nan)
         daily = []
         dser = pd.Series(pain, index=day)
         for d, grp in dser.groupby(level=0):
-            # groupby drops missing day keys; no missing date is rendered as a day.
+            if d is None or pd.isna(d):
+                continue
             vals = grp.to_numpy(dtype=float)
             vals = vals[np.isfinite(vals)]
             if vals.size == 0:
@@ -719,17 +733,6 @@ def _maxabs_corr(X, y, min_n=4):
 def _rating_level_perm_matrix(y, rating_group, n_perm, rng, block=None):
     """Circular-block permutation at the RATING level, broadcast back to epochs.
 
-    THE EXCHANGEABLE UNIT IS THE RATING, NOT THE EPOCH (audit F3). Several epochs are matched to one
-    pain report, so permuting the epoch-level label vector is not a valid null: it hands different
-    permuted labels to epochs that belong to the same report, and it splits one report's epochs
-    across permutation blocks. Both destroy the replication structure the real data has, which makes
-    the null too variable in the wrong direction and the resulting p too small. Measured on RCS08 at
-    the selected cell, the epoch-level null gave p = 0.0729 where the rating-level null gives 0.233.
-    Those two figures were measured BEFORE the permutation family was reconciled with the selection
-    grid (F8 part 2), so they describe a family that is no longer the one this function feeds. The
-    epoch-level comparison has NOT been re-measured on the reconciled family; the argument for
-    permuting ratings rather than epochs does not depend on the size of that particular gap.
-
     Construction: take one value per rating in time order, circular-block permute THAT vector (block
     length from the rating-level autocorrelation, so serial dependence between successive reports is
     preserved), then broadcast each permuted rating value back to every epoch sharing that report.
@@ -737,8 +740,7 @@ def _rating_level_perm_matrix(y, rating_group, n_perm, rng, block=None):
     Returns ``(Yp, info)`` with ``Yp`` of shape ``(n_perm, n_grouped_epochs)`` and ``info`` recording
     the grouped-row mask, the number of ratings and the block length. Callers MUST compute the
     observed statistic on the same ``info["rows"]`` subset, or the observed value and its null come
-    from different data (the same defect F8 flags elsewhere).
-    """
+    from different data (the same defect F8 flags elsewhere)."""
     y = np.asarray(y, dtype=float)
     g = np.asarray(rating_group, dtype=int)
     rows = np.isfinite(y) & (g >= 0)
@@ -818,15 +820,7 @@ def _selection_statistic(r_abs, n_eff, q_threshold):
 
     ``q_threshold`` must be the threshold ``select_biomarker_band`` actually screened at, which is
     why both take their default from ``BIOMARKER_FDR_Q``. Replaying the screen at a different
-    threshold admits a different set of survivors and so replays a different selection rule.
-
-    EVIDENCE THAT THE REPLAY IS FAITHFUL. Once the permutation family is built from the selection
-    grid (see the F8 part 2 block in ``_band_inference``), this function applied to the observed
-    family must return exactly the |r| that ``select_biomarker_band`` chose. Measured on RCS08 with
-    the live pipeline it does, to about 4e-13 for both outcome metrics: 0.5302802685841238 against
-    a selected r of -0.5302802685837144 for ``nrs``, and 0.6342879386047172 against -0.6342879386043144
-    for ``left_leg_vas``. That agreement is the check; before the family was reconciled it did not hold.
-    """
+    threshold admits a different set of survivors and so replays a different selection rule."""
     from scipy import stats as _st
     r_abs = np.asarray(r_abs, float)
     n_eff = np.asarray(n_eff, float)
@@ -1107,53 +1101,7 @@ def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_pe
         f_set_all = np.asarray(result["f_set"], dtype=float)
         keep_f = f_set_all < MAX_BIOMARKER_FREQ_HZ
 
-        # ------------------------------------------------------------------------------------
-        # F8 PART 2: BUILD THE PERMUTATION FAMILY OUT OF THE SELECTION GRID, NOT BESIDE IT.
-        #
-        # THE DEFECT. The previous version of this block subset the epochs to the label-valid rows
-        # FIRST and only then estimated the MAD outlier rule, once on the label and once per
-        # (channel, frequency) column. `pearson_corr_psd_label`, which produced the correlation
-        # grid the band is actually selected from, does the opposite: it estimates the same rule on
-        # the FULL epoch stack — every epoch, including those whose pain label is missing — and
-        # then applies label keep and column keep together as a per-cell mask. A robust centre and
-        # scale estimated from 294 rows is not the centre and scale estimated from 372 rows, so the
-        # two paths flagged different rows as outliers and therefore correlated different samples.
-        # The consequence is arithmetic, not statistical: measured on RCS08 for the left-leg
-        # outcome, the selected cell's |r| was 0.6343 on the selection grid while the permutation
-        # family's own observed maximum was 0.5743, and a value drawn from a family cannot exceed
-        # that family's maximum. While that held, no permutation p over the permuted family was a
-        # selection-corrected p for the reported cell, whichever statistic the null used.
-        #
-        # THE FIX, AND WHY THIS OPTION. Two repairs were available. One recomputes the permutation
-        # correlations on exactly the rows the selection grid used, leaving the reported band and
-        # its correlation untouched and changing only the null. The other recomputes the selection
-        # on the permutation's row set, which would change which band is reported to the clinician.
-        # This code takes the first. It is the cheaper of the two here because the divergence was
-        # never a disagreement about which rows are outliers in principle — both paths run the
-        # identical rule from `stats_utils.mad_keep_mask` — only about which sample the rule's
-        # centre and scale are estimated from, and the selection grid's choice (the full epoch
-        # stack) is the one the reported correlation, the FDR family and the displayed spectrum all
-        # already use. Recomputing the selection on the permutation's rows would have changed a
-        # published band and correlation in order to fix a defect in a p-value, which is the wrong
-        # direction of repair when the p-value is the thing that was computed on the wrong sample.
-        #
-        # HOW. Estimate both masks on the full epoch stack exactly as `pearson_corr_psd_label`
-        # does, blank feature outliers to NaN per column, and only THEN drop rows. Dropping rows
-        # afterwards is safe for the per-cell correlations because every row dropped here — label
-        # missing, or label MAD-flagged — is a row `pearson_corr_psd_label` excludes from every
-        # cell anyway, since its per-cell mask requires the label keep. The row drop is necessary
-        # because the vectorised null permutes only y and needs the column NaN masks to be
-        # invariant across permutations.
-        #
-        # WHAT THIS DOES NOT FIX. `_block_perm_maxcorr_pvalue` further restricts to rows carrying a
-        # pain-report identity, because the exchangeable unit of the null is the rating (F3) and a
-        # row with no report has no unit to permute. That restriction cannot be lifted without
-        # reverting to the epoch-level null, which was measured to be anti-conservative. On this
-        # cohort it removes nothing (every label-valid row carries a report identity), so the two
-        # families coincide; the count is published as `perm_rows_dropped_unrated` and the family
-        # guard below is a measurement, not an assumption, so a cohort where it removes rows will
-        # still be caught.
-        # ------------------------------------------------------------------------------------
+        # Participant-specific provenance and examples are maintained outside source control.
         _E = int(feat.shape[0])
         _Xall = feat[:, :, keep_f].reshape(_E, -1).copy()
         # Label keep-mask on the FULL label vector (`_mad_keep` already excludes non-finite), which
@@ -1357,7 +1305,7 @@ def run_powerdomain_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=N
     lfp_s = cv_df["LFP_smoothed"].to_numpy(dtype=float)
     timeline = pd.DataFrame({
         "time": pd.to_datetime(cv_df["timestamp"]),
-        "date": local_calendar_day(cv_df["timestamp"]),
+        "date": _local_day(cv_df["timestamp"]),   # California day (review B1)
         "powerdomain_biomarker_value": lfp_s,
         "powerdomain_lfp_raw": cv_df["LFP"].to_numpy(dtype=float),
         "powerdomain_threshold": thr,
@@ -1789,3 +1737,6 @@ def main(argv=None):
 
 if __name__ == "__main__":
     main()
+
+
+# Retained active Aditya interfaces.
