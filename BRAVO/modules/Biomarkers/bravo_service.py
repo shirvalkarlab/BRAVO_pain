@@ -6475,7 +6475,7 @@ def _modeled_lsb_threshold_estimate(thr_lsb, modeled_thr, n_modeled, center_hz, 
             "freq_extrapolated": fextrap,
             "validated_hz_range": [analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI],
             "note": note,
-            "method": "modeled from montage/survey LSB timeline (transform DSP × k=352.62)",
+            "method": f"modeled from montage/survey LSB timeline (transform DSP × k={analytics.LSB_PER_UV2_TRANSFORM:.2f})",
         }
     # The old TIER-2 (per-participant frozen model applied to the µV² cut-point) and TIER-3
     # (population constant k=269) were both REMOVED 2026-06-28. TIER-2 fed the deployment ROC cut-point
@@ -7160,7 +7160,7 @@ def deployment_summary(request_data):
             f"Forward validation not possible ({forward.get('reason', 'insufficient temporal span')}): "
             "every reported AUC is in-sample. Out-of-sample generalization is UNCONFIRMED.")
     if thr_lsb is None and thr_estimate is not None:
-        _src_phrase = ("read from the MODELED LSB timeline (montage/survey sweeps, transform×352.62)"
+        _src_phrase = (f"read from the MODELED LSB timeline (montage/survey sweeps, transform×{analytics.LSB_PER_UV2_TRANSFORM:.2f})"
                        if thr_estimate.get("tier") == "modeled_timeline"
                        else "MODELED from the physical µV² cut-point via the frozen PSD→LSB conversion")
         caveats.append(

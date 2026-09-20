@@ -308,12 +308,12 @@ its parents' errors.
 
 | Constant | Value | From | To | Recipe behind the input | Measured or composed |
 |---|---|---|---|---|---|
-| `LSB_PER_UV2_TRANSFORM`<br>`analytics.py:3439` | **352.62** | band power in microvolts squared | the device's own power units | the transform recipe, §7 | **MEASURED**, on 131 simultaneous paired blocks |
+| `LSB_PER_UV2_TRANSFORM`<br>`analytics.py:3439` | **349.10** (352.62 until decision 209, 2026-09-20) | band power in microvolts squared | the device's own power units | the transform recipe, §7 | **MEASURED**, on 131 simultaneous paired blocks |
 | `LSB_PER_UV2_DEVICE_PSD_TD_RATIO`<br>`analytics.py:3476` | **4.789** | transform band power | device-spectrum band power | both, on the same signal | **MEASURED**, geometric mean, r = 0.987, n = 10,476 |
-| `LSB_PER_DEVICE_PSD`<br>`analytics.py:3477` | **≈73.63** | the device's own onboard spectrum, summed in band | the device's own power units | `device_psd_band_power`, `analytics.py:3679` | **COMPOSED** — the code literally defines it as 352.62 ÷ 4.789 |
+| `LSB_PER_DEVICE_PSD`<br>`analytics.py:3477` | **≈72.90** (73.63 until decision 209) | the device's own onboard spectrum, summed in band | the device's own power units | `device_psd_band_power`, `analytics.py:3679` | **COMPOSED** — the code literally defines it as 352.62 ÷ 4.789 |
 | `MODELED_LSB_SIGMA_FOLD`<br>`analytics.py:3409` | **1.26** | — | — | — | the one-standard-deviation multiplicative spread on a modelled estimate |
 
-**The three constants are not independent.** 352.62 divided by 4.789 is 73.63 exactly, so the
+**The three constants are not independent.** 349.10 divided by 4.789 is 72.90 exactly, so the
 device-spectrum route is composed from the voltage-trace route rather than calibrated against the
 device separately. **It inherits both errors, and any agreement between those two routes is a
 check on the conversion rather than replication of a physiological effect.**
@@ -345,12 +345,12 @@ to 8 to 30 Hz and the checked span covers the actionable range almost exactly.
 
 The per-band feature is a **logarithm** of band power, so a multiplicative constant becomes an
 additive offset and **cancels inside a correlation and inside an area under the curve.** Those
-panels are numerically identical whether the constant is 269, 352.62 or 1. The constant matters
+panels are numerically identical whether the constant is 269, 349.10 or 1. The constant matters
 in exactly two places: **the absolute values displayed**, and **the deployable switching value.**
 
 **The scope limit on that argument, and it is a real one.** Cancellation holds only when every
 point in a single panel carries the **same** constant. A panel that pools the device's own
-readings, which carry no constant, with modelled points, which carry 352.62, has two subgroups on
+readings, which carry no constant, with modelled points, which carry 349.10, has two subgroups on
 different scales, and moving one subgroup's constant shifts it relative to the other by the
 logarithm of the ratio. **That can move both the correlation and the area under the curve.** The
 code keeps the two apart: modelled points are masked out of the deployable switching value and
@@ -393,17 +393,17 @@ Per one second of the voltage trace:
    centred on the pain report, **and takes the median of the per-window band powers.** Overlapping
    only reduces the spread of the estimate; it does not change what is being estimated, so it stays
    inside the same calibration. A mean across windows is available and is not what is deployed.
-7. **Multiply by 352.62.**
+7. **Multiply by 349.10** (the midpoint of the June and September refits, decision 209; 352.62 until 2026-09-20).
 
 **A terminology clash that will otherwise cost someone an afternoon.** A shorthand comment beside
 the constant describes this recipe as "mean-magnitude band power". **That phrase refers to step 6,
 the aggregation across windows, not to step 5, the aggregation across frequency bins.** Across the
 bins it is a sum. **Reading "mean" as the band-axis operation would average the roughly five
 in-band bins instead of summing them, leaving every value low by about the bin count, and then
-multiplying by 352.62 would not put it in the device's units.** Take the implementation and its
+multiplying by 349.10 would not put it in the device's units.** Take the implementation and its
 docstring as authoritative over the shorthand.
 
-**Use 352.62 exactly. Do not round it to 353, and do not substitute the stimulation-off variant
+**Use 349.10 exactly. Do not round it, and do not substitute the stimulation-off variant
 356.61**, which is recorded for provenance only and is not deployed.
 
 **A band named X Hz means X plus or minus 2.5 Hz, a total width of 5 Hz.** The stored grid is
@@ -444,7 +444,7 @@ observed over predicted, so it is always at least 1.0 and is symmetric: a two-fo
 and a two-fold under-prediction both score 2.0 and do not cancel. It is computable on a single fit
 with no cross-validation at all. Always write "median fold error" in full.
 
-**THE DIAGNOSTIC: if a pairing does not reproduce 352.62 with r = 0.9927, the pairing is wrong,
+**THE DIAGNOSTIC: if a pairing of the exports through 2026-06-24 does not reproduce 352.62 with r = 0.9927 under the reference recipe (`calibration.transform_k(..., gate=False, mad_rule=False)`), the pairing is wrong,
 not the recipe.** Non-coincident pairing, or pairing against the wrong device product, collapses
 the correlation to about **0.13**. This single check overturned an invented constant of about 215
 that had been measured by pairing rows between two representations of the signal; its median fold
@@ -504,7 +504,7 @@ uncalibrated recipe is expected, not a discovery.**
 
 | Recipe | Constant | Status today |
 |---|---|---|
-| Transform, all stimulation states | **352.62** | **live and primary** — `analytics.py:3439` |
+| Transform, all stimulation states | **349.10** (June 352.62, September 345.59, midpoint deployed; decision 209) | **live and primary** — `analytics.LSB_PER_UV2_TRANSFORM` |
 | Transform, stimulation off only | 356.61 | provenance only, never deployed |
 | Welch, 256 samples per segment | 270.22 | **REMOVED** from the code on 2026-06-28, commit `fa2c416` |
 | Welch, 250 samples per segment | 265.17 | never in the code |

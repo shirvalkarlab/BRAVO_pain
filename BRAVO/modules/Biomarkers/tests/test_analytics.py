@@ -1734,10 +1734,10 @@ def test_td_transform_band_power_reproduces_reference_dsp():
 
 
 def test_td_to_lsb_applies_transform_constant_and_guards():
-    """td_to_lsb == LSB_PER_UV2_TRANSFORM (352.62, NOT 269) × transform band power, with the 1 s
-    (one-window) minimum and non-positive guards returning NaN."""
+    """td_to_lsb == LSB_PER_UV2_TRANSFORM (349.10 since decision 209; 352.62 before; NOT 269) ×
+    transform band power, with the 1 s (one-window) minimum and non-positive guards returning NaN."""
     import math
-    assert abs(analytics.LSB_PER_UV2_TRANSFORM - 352.62) < 1e-9                 # transform route k
+    assert abs(analytics.LSB_PER_UV2_TRANSFORM - 349.10) < 1e-9                 # transform route k
     sr = 250.0
     t = np.arange(3000) / sr
     sig = 10 * np.sin(2 * np.pi * 20.0 * t)
@@ -1842,8 +1842,7 @@ def test_modeled_transform_point_stays_flagged_native_preferred():
     # exactly the modeled transform point, correctly flagged
     assert ser["source"][0] == "psd_modeled"
     assert bool(ser["modeled"][0]) is True
-    assert ser["method"][0].startswith("td_transform_x_k=")
-    assert "352.62" in ser["method"][0]
+    assert ser["method"][0] == f"td_transform_x_k={analytics.LSB_PER_UV2_TRANSFORM:.2f}"
     assert np.isfinite(ser["y"][0]) and ser["y"][0] > 0
 
     # (2) the deployment native-only mask keeps native when both exist on the same band
@@ -1902,7 +1901,7 @@ def test_bridge_constants_compose_from_transform_and_td_psd_ratio():
     assert abs(analytics.LSB_PER_UV2_DEVICE_PSD_TD_RATIO - 4.789) < 1e-9
     expect = analytics.LSB_PER_UV2_TRANSFORM / analytics.LSB_PER_UV2_DEVICE_PSD_TD_RATIO
     assert abs(analytics.LSB_PER_DEVICE_PSD - expect) < 1e-9
-    assert abs(analytics.LSB_PER_DEVICE_PSD - 73.63) < 0.01      # 352.62 / 4.789
+    assert abs(analytics.LSB_PER_DEVICE_PSD - 72.90) < 0.01      # 349.10 / 4.789 (decision 209)
     # the bridge constant is the device-PSD constant, NOT the TD transform constant
     assert analytics.LSB_PER_DEVICE_PSD != analytics.LSB_PER_UV2_TRANSFORM
 

@@ -16,7 +16,9 @@ bit. The blocks live in `data/calibration/<participant>_transform_blocks_<date>.
 block, de-identified (no report file name).
 
 THE CONSTANT is the median of the raw ratio LSB / uV^2 over the blocks -- a raw statistic; no
-logarithm enters it (the PI's rule of 2026-09-19, decision 202).
+logarithm enters it (the PI's rule of 2026-09-19, decision 202). THE DEPLOYED VALUE (decision 209,
+the PI, 2026-09-20) is the midpoint of the reference recipe on the June rows (352.62) and the adopted
+recipe on every row (345.59): 349.10, two decimals; `deployed_k_from_tables` recomputes it.
 
 THE REFERENCE RECIPE (the lab's, June 2026) keeps every block with at least 3 device readings and
 at least one 1 s window. On the 517 exports through 2026-06-24 it gives k = 352.62 (all-stim,
@@ -28,8 +30,8 @@ against 1,197 LSB and on its own pulls r from 0.99 to 0.82 without moving the me
   * a BLOCK GATE: at least 3 s of time domain (750 samples) and at least 6 device readings;
   * the platform's one OUTLIER RULE, 5 MAD on the raw ratio (`stats_utils.mad_outlier_flags`,
     decision 205), applied to the gated blocks.
-On the 583 exports through 2026-09-03 the adopted recipe gives 345.6 (all-stim, n = 133, r = 0.992)
-and 351.2 (stim-off, n = 98): within 2 percent of the deployed constant, which is therefore KEPT.
+On the 583 exports through 2026-09-03 the adopted recipe gives 345.59 (all-stim, n = 133, r = 0.992)
+and 351.2 (stim-off, n = 98).
 `test_transform_calibration_recipe.py` pins the anchor, the adopted numbers and the 2 percent.
 
 THE BRIDGE (PSD-only patient events). A montage survey records the same contact two ways at once:
@@ -39,8 +41,8 @@ composed bridge LSB per device-uV^2 is LSB_PER_UV2_TRANSFORM / K. The June deriv
 GEOMETRIC mean over 10,476 contact-band points in 5-45 Hz: 4.789, bridge 73.63 -- a log-space
 average. The adopted recipe (decision 208) is the raw median with the same 5-MAD rule, on every
 survey and contact at the validated 7.5-27.5 Hz centres (`data/calibration/<participant>_bridge_pairs_<date>.csv`):
-4.755 on 25,790 of 26,334 pairs through 2026-09-03, bridge 74.16, within 1 percent of the deployed
-constant, which is kept. Per contact pair the raw median runs 4.64-4.88 and per centre 4.69-4.89: one
+4.755 on 25,790 of 26,334 pairs through 2026-09-03, within 1 percent of the deployed ratio, which
+is kept; the composed bridge is DEPLOYED_K / 4.789 = 72.90. Per contact pair the raw median runs 4.64-4.88 and per centre 4.69-4.89: one
 constant, not a table.
 """
 import csv
@@ -55,7 +57,7 @@ _DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 
 #: The deployed constant. Defined in analytics as LSB_PER_UV2_TRANSFORM; repeated here so this
 #: module stays free of the analytics import and the test can assert the two agree.
-DEPLOYED_K = 352.62
+DEPLOYED_K = 349.10
 
 #: The deployed bridge ratio (analytics.LSB_PER_UV2_DEVICE_PSD_TD_RATIO), repeated for the same reason.
 DEPLOYED_BRIDGE_RATIO = 4.789
@@ -96,6 +98,16 @@ def load_blocks(participant, date=None):
                     row[k] = float("nan")
             rows.append(row)
     return rows
+
+
+def deployed_k_from_tables(participant, *, june_through="20260624"):
+    """The deployed constant recomputed from the tables: the midpoint, to two decimals, of the
+    reference recipe on the rows through `june_through` and the adopted recipe on every row."""
+    rows = load_blocks(participant)
+    june = transform_k([r for r in rows if r["report_date"] <= june_through], target="all",
+                       gate=False, mad_rule=False)["k"]
+    now = transform_k(rows, target="all")["k"]
+    return round((june + now) / 2.0, 2)
 
 
 def gate_blocks(rows, *, min_td_seconds=MIN_TD_SECONDS, min_lfp_points=MIN_LFP_POINTS):

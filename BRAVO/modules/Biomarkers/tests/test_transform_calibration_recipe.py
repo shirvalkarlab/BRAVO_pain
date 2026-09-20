@@ -14,8 +14,9 @@ exports through 2026-09-03), and `routines/calibration.py` applies the recipe to
   * the ADOPTED recipe is the reference recipe plus a block gate (at least 3 s of time domain and
     at least 6 device points) and the platform's one outlier rule, 5 MAD on the RAW ratio
     LSB / uV^2 (decision 205), and it must not take a logarithm anywhere;
-  * on every block through 2026-09-03 the adopted recipe lands within 2 percent of 352.62, which
-    is why the deployed constant is KEPT (the PI, 2026-09-20: "keep 352.62").
+  * the DEPLOYED constant is the midpoint of the June reference (352.62) and the September
+    adopted refit (345.59): 349.10 (the PI, 2026-09-20, decision 209: "take the median between two
+    values and use that transform value everywhere"); the composed bridge follows, 349.10 / 4.789.
 """
 import ast
 import csv
@@ -90,11 +91,20 @@ def test_a_single_short_block_is_what_the_gate_removes():
     assert all(r["n_td_samples"] >= 750 and r["n_lfp_points_all"] >= 6 for r in kept)
 
 
-def test_the_deployed_constant_is_kept_and_the_refit_does_not_contradict_it():
-    assert A.LSB_PER_UV2_TRANSFORM == 352.62
-    fit = C.transform_k(_blocks(), target="all")
-    assert abs(fit["k"] - A.LSB_PER_UV2_TRANSFORM) / A.LSB_PER_UV2_TRANSFORM < 0.02, fit["k"]
+def test_the_deployed_constant_is_the_midpoint_of_the_june_reference_and_the_september_refit():
+    """Decision 209: k = (352.6158 + 345.5870) / 2 = 349.1014, deployed as 349.10 (two decimals,
+    the precision the June constant carried). Both halves are recomputed here from the tables, so
+    a change to either table or either recipe shows up as a failure rather than a drift."""
+    rows = _blocks()
+    june = C.transform_k([r for r in rows if r["report_date"] <= "20260624"], target="all",
+                         gate=False, mad_rule=False)["k"]
+    sept = C.transform_k(rows, target="all")["k"]
+    assert round((june + sept) / 2.0, 2) == 349.10, (june, sept)
+    assert A.LSB_PER_UV2_TRANSFORM == 349.10
     assert C.DEPLOYED_K == A.LSB_PER_UV2_TRANSFORM
+    assert C.deployed_k_from_tables("RCS08") == 349.10
+    # the composed bridge moves with it: 349.10 / 4.789
+    assert round(A.LSB_PER_DEVICE_PSD, 2) == 72.90, A.LSB_PER_DEVICE_PSD
 
 
 def test_the_recipe_takes_no_logarithm_and_uses_the_platforms_one_outlier_rule():
@@ -131,15 +141,15 @@ def test_the_bridge_pairs_are_tracked_and_de_identified():
 def test_the_bridge_ratio_is_the_raw_median_with_the_five_mad_rule_and_the_bridge_is_kept():
     """The deployed ratio 4.789 was a geometric mean (a log-space average, June 2026, 5-45 Hz). The
     adopted recipe is the raw median of device / transform band power with the platform's 5-MAD
-    rule: 4.755 on every survey through 2026-09-03 in the validated 7.5-27.5 Hz range, composed
-    bridge 352.62 / 4.755 = 74.16 against the deployed 73.63, within 1 percent -- kept."""
+    rule: 4.755 on every survey through 2026-09-03 in the validated 7.5-27.5 Hz range; the ratio
+    4.789 is kept (within 1 percent). The composed bridge is the deployed k over that ratio."""
     fit = C.bridge_ratio(C.load_bridge_pairs("RCS08"))
     assert fit["n_pairs"] == 26334 and fit["n_flagged_by_rule"] == 544 and fit["n"] == 25790, fit
     assert round(fit["ratio"], 3) == 4.755, fit["ratio"]
     assert round(fit["ratio_before_rule"], 3) == 4.774, fit["ratio_before_rule"]
-    assert round(fit["bridge_lsb_per_device_uv2"], 2) == 74.16, fit["bridge_lsb_per_device_uv2"]
+    assert round(fit["bridge_lsb_per_device_uv2"], 2) == round(349.10 / 4.755, 2), fit["bridge_lsb_per_device_uv2"]
     assert fit["outlier_rule"] == "5 MAD on the raw ratio device / transform band power"
-    assert A.LSB_PER_UV2_DEVICE_PSD_TD_RATIO == 4.789 and round(A.LSB_PER_DEVICE_PSD, 2) == 73.63
+    assert A.LSB_PER_UV2_DEVICE_PSD_TD_RATIO == 4.789 and round(A.LSB_PER_DEVICE_PSD, 2) == 72.90
     assert abs(fit["ratio"] - A.LSB_PER_UV2_DEVICE_PSD_TD_RATIO) / A.LSB_PER_UV2_DEVICE_PSD_TD_RATIO < 0.01
     assert C.DEPLOYED_BRIDGE_RATIO == A.LSB_PER_UV2_DEVICE_PSD_TD_RATIO
 

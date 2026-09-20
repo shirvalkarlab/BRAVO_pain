@@ -232,7 +232,7 @@ def test_the_form_stores_no_calibration_constant():
     representation = _sys.modules[canon_channel.__module__]
     src = inspect.getsource(representation)
     body = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
-    for token in ("352.62", "73.63", "LSB_PER_UV2_TRANSFORM =", "LSB_PER_DEVICE_PSD ="):
+    for token in ("349.10", "352.62", "72.90", "73.63", "LSB_PER_UV2_TRANSFORM =", "LSB_PER_DEVICE_PSD ="):
         assert token not in body, "the canonical form must not carry %r" % token
 
 

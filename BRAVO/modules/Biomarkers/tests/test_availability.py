@@ -16,6 +16,7 @@ if str(_BRAVO_ROOT) not in sys.path:
     sys.path.insert(0, str(_BRAVO_ROOT))
 
 from modules.Biomarkers.routines import availability as av
+from modules.Biomarkers.routines import analytics
 
 T0 = datetime.datetime(2025, 8, 29, 12, 0, 0).timestamp()
 
@@ -209,8 +210,7 @@ def test_lsb_series_psd_modeled_tier_from_montage_td():
     assert "ZERO_THREE_LEFT" in out
     s = out["ZERO_THREE_LEFT"]
     assert s["source"] == ["psd_modeled"] and s["modeled"] == [True]
-    assert s["method"][0].startswith("td_transform_x_k=")
-    assert "352.62" in s["method"][0]
+    assert s["method"][0] == f"td_transform_x_k={analytics.LSB_PER_UV2_TRANSFORM:.2f}"
     # the lane's modeled LSB equals the shared PRIMARY helper applied to the same TD (whole-column,
     # the display-tier extent — no PRO centering here)
     expect = analytics.td_to_lsb(sig, fs, center)
@@ -372,7 +372,7 @@ def test_lsb_overview_modeled_tier_is_separate_hollow_layer():
         "center_hz": [12.7, 12.7, 12.7, 19.5],               # 19.5 is an exact Percept FFT bin
         "source": ["streaming", "streaming", "streaming", "psd_modeled"],
         "modeled": [False, False, False, True],
-        "method": [None, None, None, "td_transform_x_k=352.62"]}}
+        "method": [None, None, None, "td_transform_x_k=349.10"]}}
     ov = av.lsb_overview(lsb)
     d = ov["ZERO_THREE_LEFT"]
     # streaming session block holds ONLY the 3 native samples; the modeled point is excluded
@@ -380,7 +380,7 @@ def test_lsb_overview_modeled_tier_is_separate_hollow_layer():
     # modeled layer carries the one hollow point, with its (FFT-bin-snapped) center and method tag
     assert len(d["modeled"]) == 1
     assert d["modeled"][0]["y"] == 9000.0 and d["modeled"][0]["center_hz"] == 19.5
-    assert d["modeled"][0]["method"] == "td_transform_x_k=352.62"
+    assert d["modeled"][0]["method"] == "td_transform_x_k=349.10"
     # the native y-window is set by sensed samples only — the 9000 outlier does NOT widen it
     assert d["y_hi"] < 1000.0
 

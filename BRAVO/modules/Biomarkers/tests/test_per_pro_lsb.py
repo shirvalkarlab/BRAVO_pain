@@ -73,7 +73,7 @@ def test_montage_td_uses_transform_never_bridge():
     r = av.per_pro_lsb([_T0 + 20.0], None, ch, center,
                        td_recordings=[montage_td], event_psd_recordings=[ev])[0]
     assert r["tier"] == av.PRO_LSB_TIER_TD            # TD present -> transform, NOT bridge
-    assert "352.62" in r["reason"]
+    assert f"{analytics.LSB_PER_UV2_TRANSFORM:.2f}" in r["reason"]
 
 
 def test_bridge_only_inside_deployable_band():

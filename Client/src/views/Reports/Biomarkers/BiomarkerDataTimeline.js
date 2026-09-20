@@ -25,6 +25,8 @@ import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 
 import MDBox from "components/MDBox";
 
+import { routeLabel, modeledLegendName, kFromServed } from "./calibrationLabels";
+
 // Binarization color identity — MUST match the histogram / binarizationModel (Okabe-Ito).
 // excluded-middle is darkened to #5A6066 (was #7E8794) so "matched but dropped by the cut" is
 // categorically distinct from "never matched" and readable on white (design + eng review).
@@ -261,6 +263,8 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     // while zooming — vs tens of thousands of 2 Hz points. Returns:
     //   { chronic:{t:[],y:[],center_hz:[]}|null, sessions:[{t0,t1,med,lo,hi,center_hz,n}],
     //     y_lo, y_hi } | null
+    // Every modeled point the response carries, all channels, for the legend's constant names.
+    const allModeledPoints = [].concat(...Object.values(av.lsb_overview || {}).map((o) => (o && o.modeled) || []));
     const lsbFor = (ch) => {
       const ov = av.lsb_overview || {};
       const keys = Object.keys(ov).filter((k) => normalizeChannel(k) === ch);
@@ -278,7 +282,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         }
         (d.sessions || []).forEach((s) => sessions.push(s));
         // MODELED tier (psd_modeled): calibrated LSB via the transform DSP (survey/montage TD →
-        // td_to_lsb ×352.62) or the CS-3 PSD→LSB bridge (×73.63); each point's `method` names which.
+        // td_to_lsb × LSB_PER_UV2_TRANSFORM) or the CS-3 PSD→LSB bridge (× LSB_PER_DEVICE_PSD); each point's `method` names which.
         // Kept separate so it renders as a DISTINCT HOLLOW marker, never a sensed session block.
         (d.modeled || []).forEach((m) => modeled.push(m));
         if (Number.isFinite(d.y_lo)) yLo = Math.min(yLo, d.y_lo);
@@ -599,11 +603,11 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         // MODELED tier (psd_modeled): a calibrated-but-not-sensed LSB, drawn as DISTINCT HOLLOW
         // DIAMONDS so it is never read as a sensed value. Two DSP routes feed this tier and each point
         // carries its `method` string (availability.lsb_series):
-        //   td_transform_x_k=352.62  -> montage/survey 250 Hz TD through the PRIMARY transform DSP
-        //                               (analytics.td_to_lsb, k=352.62). NOT Welch256×269 (removed
+        //   td_transform_x_k=<k>     -> montage/survey 250 Hz TD through the PRIMARY transform DSP
+        //                               (analytics.td_to_lsb, k = LSB_PER_UV2_TRANSFORM). NOT Welch256×269 (removed
         //                               2026-06-27); the hover names the actual route from m.method.
-        //   event_psd_bridge_x_k=73.63 -> a PSD-only patient event with no TD, through the CS-3
-        //                               PSD->LSB bridge (analytics.device_psd_to_lsb, k≈73.63).
+        //   event_psd_bridge_x_k=<k> -> a PSD-only patient event with no TD, through the CS-3
+        //                               PSD->LSB bridge (analytics.device_psd_to_lsb, k = LSB_PER_DEVICE_PSD).
         // These modeled points are pooled into the binarization scan, so unlike the sensed band-power
         // LSB they CAN be assigned to a pain bin. In binarization mode we color each diamond by its
         // matched pain bin (via binOf on the point's own timestamp); unmatched modeled points stay
@@ -624,13 +628,8 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
             const b = binOf(ch, m.t);
             return (b === "high" || b === "low" || b === "excluded") ? BIN_COLORS[b] : DIM_GREY_FAINT;
           };
-          // Human label for the DSP route a modeled point came from, read from its `method` string.
-          const routeLabel = (method) => {
-            const s = String(method || "");
-            if (s.startsWith("td_transform")) return "transform DSP ×352.62";
-            if (s.startsWith("event_psd_bridge")) return "PSD→LSB bridge ×73.63";
-            return "modeled";
-          };
+          // Human label for the DSP route a modeled point came from, read from its `method` string
+          // (calibrationLabels.routeLabel: the constant is the one the server named, decision 209).
           Object.keys(byFreqM).forEach((key) => {
             const ms = byFreqM[key];
             const c = key === "na" ? null : Number(key);
@@ -701,8 +700,8 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       // the colored per-lane band-power time series above, so re-plotting it as a marker would
       // double-count the same measurement. Only the MODELED-at-rating values are shown, kept visually
       // separable by source:
-      //   td_transform -> HOLLOW CIRCLE   (rating-centered 30 s TD through td_to_lsb, k=352.62)
-      //   psd_bridge   -> HOLLOW DIAMOND  (PSD-only patient event through the CS-3 bridge, k≈73.63)
+      //   td_transform -> HOLLOW CIRCLE   (rating-centered 30 s TD through td_to_lsb, k = LSB_PER_UV2_TRANSFORM)
+      //   psd_bridge   -> HOLLOW DIAMOND  (PSD-only patient event through the CS-3 bridge, k = LSB_PER_DEVICE_PSD)
       // A saturated rating (TD window hit the ADC rail but a bridge value was still found) gets a red
       // outline. The y-scale is this lane's own robust min/max over the modeled per-rating LSB values
       // (independent of the band-power overview), registered for zoom-rescale like the other LSB layers.
@@ -719,7 +718,13 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         const regP = { BP_LO: PRO_LO, BP_HI: PRO_HI, full_lo: pLo, full_hi: pHi,
                        samples: [], traces: [], tickHiIdx: null, tickLoIdx: null };
         const TIER_SYMBOL = { td_transform: "circle-open", psd_bridge: "diamond-open" };
-        const TIER_LABEL = { td_transform: "transform DSP ×352.62", psd_bridge: "PSD→LSB bridge ×73.63" };
+        // The route label carries the constant the server named in the record's `reason`
+        // ("... (k=349.10)"), never a number typed here (decision 209).
+        const tierLabel = (tier, p) => {
+          const k = kFromServed(p && p.reason);
+          const base = tier === "td_transform" ? "transform DSP" : tier === "psd_bridge" ? "PSD→LSB bridge" : tier;
+          return k ? `${base} ×${k}` : base;
+        };
         const byTier = {};
         proPtsAll.forEach((p) => { (byTier[p.tier] = byTier[p.tier] || []).push(p); });
         Object.keys(byTier).forEach((tier) => {
@@ -741,7 +746,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
             x: ps.map((p) => D(p.t)), y: ps.map((p) => scP(p.lsb)),
             marker: { symbol: TIER_SYMBOL[tier] || "circle-open", size: ps.map((p) => (p.saturated ? 9 : 7)),
                       color: "rgba(0,0,0,0)", line: { color: lineCols, width: ps.map((p) => (p.saturated ? 2 : 1.4)) } },
-            customdata: ps.map((p) => [Math.round(p.lsb), fmtHz(p.center_hz), TIER_LABEL[tier] || tier,
+            customdata: ps.map((p) => [Math.round(p.lsb), fmtHz(p.center_hz), tierLabel(tier, p),
               p.saturated ? " · TD saturated" : "", binMode ? (binOf(ch, p.t) || "unmatched") : ""]),
             hovertemplate: `${prettyContact(labelFor(ch))} · per-rating modeled LSB · %{customdata[2]}%{customdata[3]}<br>`
               + `≈%{customdata[0]} LSB @ %{customdata[1]} Hz (modeled, not sensed)`
@@ -1039,11 +1044,12 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         name: "streaming LSB session · block  (lane color = sensing Hz; hover → detail)" });
       // CS-4 MODELED LSB (both the overview and per-rating layers share these two glyphs). One modeled
       // point per rating; SHAPE = DSP route, COLOR = sensing Hz (overview) / steel-blue (per-rating),
-      // red ring = TD saturated. ○ TD-transform (k=352.62) · ◇ PSD→LSB bridge (k≈73.63). (Previously
+      // red ring = TD saturated. ○ TD-transform · ◇ PSD→LSB bridge, each named with the constant the
+      // server wrote into the points (calibrationLabels.modeledLegendName, decision 209). (Previously
       // listed three times in stale green — collapsed to this single neutral, shape-accurate entry.)
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "circle-open", size: 11, color: "rgba(0,0,0,0)", line: { width: 1.5, color: PAL.proLsb } },
-        name: "modeled LSB  (○ TD-transform ×352.62 · ◇ PSD-bridge ×73.63; red ring = TD saturated)" });
+        name: modeledLegendName(allModeledPoints) });
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "square", size: 12, color: "#C9BBDF" },
         name: "raw TD coverage  (streaming + montage/survey sweep; zoom → waveform)" });

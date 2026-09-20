@@ -406,7 +406,7 @@ def test_no_new_scale_constant_exists_in_either_file():
     # may appear here, and neither may the factor of about 215 that was measured and withdrawn.
     for mod in (EV, AD):
         for value in plain_numbers(mod).values():
-            for forbidden in (352.62, 73.63123825433286, 215.0, 269.0, 100.0, 0.01):
+            for forbidden in (349.10, 352.62, 72.90, 73.63123825433286, 215.0, 269.0, 100.0, 0.01):
                 assert abs(value - forbidden) > 1e-6, (
                     f"{mod.__name__} holds {value}, which is the calibration number {forbidden}")
     assert not hasattr(EV, "DEVICE_UNITS_PER_INTEGRATED_BAND_POWER")

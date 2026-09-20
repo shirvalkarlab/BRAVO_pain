@@ -405,7 +405,7 @@ tests passing**. **It is untracked and nothing in the platform imports it yet.**
 
 What it does: groups decoded recordings by canonical channel **once**; holds the voltage-trace and
 device-spectrum routes separately with their provenance; **stores no calibration constant**, with a
-test asserting the source text contains neither 352.62 nor 73.63; and **holds no pain reports, so
+test asserting the source text contains none of the calibration constants (349.10, 352.62, 72.90, 73.63); and **holds no pain reports, so
 it never needs a freshness check.**
 
 Measured against the live path on captured inputs: **9.233 s → 0.551 s including the build, 16.75

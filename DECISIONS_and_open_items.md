@@ -13,7 +13,7 @@ decisions are appended to Part 3 here AND as a full row in the full log.
 **Signal, units, calibration**
 - Pain-report timestamps are California wall-clock; device times are UTC; convert before matching (2). The chronic detector joins on the California calendar day (142).
 - Windows with >10% zero-filled samples are dropped (4); this rule now reaches every routine (57-59).
-- 60 Hz notch off by default (13). Only the two 256-point FFT modes convert (14). Conversion from the voltage trace: the transform route at 352.62 (18); the composed constant is composed, never "measured" (33, house rules).
+- 60 Hz notch off by default (13). Only the two 256-point FFT modes convert (14). Conversion from the voltage trace: the transform route at 349.10 since 209 (352.62 from 18; recipe and blocks in `routines/calibration.py`, 208); the composed constant is composed, never "measured" (33, house rules).
 - Per-participant conversion model is a frozen stored asset with tiered fallback (11); 8.8 Hz R 0-3+ counts only from 2026-03-01 (16); no impedance term (17).
 - **Log power enters no calculation, anywhere** (PI, 2026-09-19; 202). The E1 path (202), the pooled full-spectrum path and the pain correlation (204), the outlier rule and cross-check (205), the aperiodic fit (206, deleted) are done. The frozen log-log model (`psd_lsb_model.py`) was explored (207) and the constant refit instead (208); the dashed panel still draws the v1 log-log asset, his call whether to retire it.
 - **Time is modelled nowhere**: drift is a current effect in a patient >3 years into disease; no age penalty, no time input (193-196).
@@ -96,7 +96,7 @@ Refs are commits or PRs; `→N` means superseded by N.
 15. Direct spectrum-to-device route; round trip adds nothing, 0.8% (`f915257`).
 16. 8.8 Hz R 0-3+ from 2026-03-01; earlier data sit in a settling transient (`e9d7a80`).
 17. Impedance term rejected, p 0.26 with grouping (`a9c3a01`).
-18. Transform route at 352.62 is the primary trace conversion (r 0.9927).
+18. Transform route at 352.62 is the primary trace conversion (r 0.9927) (→209: 349.10).
 19. Moving-block bootstrap, effective n, de-folded lower bound as gate.
 ~~20~~. →21. Cut-point converted through the frozen model: a units error (z-scored log fed as linear).
 21. Fallback models the device power line off the raw trace at the cut-point's own centre; never converts the switching value (`09798f7`).
@@ -287,7 +287,8 @@ Refs are commits or PRs; `→N` means superseded by N.
 205. The outlier rule and the heat map's logistic cross-check on raw power, 5 MAD unchanged; the log-scale option refused; one-sided trimming of a multiplicative feature accepted with the rule; chronic detector sample set and summary move (AUC 0.554 -> 0.555).
 206. The aperiodic (1/f) fit deleted with its `fooof` transform; reached by no page; the device cannot threshold a peak's prominence.
 207. Calibration exploration (no code): the frozen model's curvature is between-band gain pooled into one slope; within-band slopes about 1; raw fits agree with the median ratio; the frozen-model rewrite was scratched in favour of refitting the constant on the new data.
-208. k = 352.62 kept: the June anchor reproduced with the lab's benchmark (n 131, r 0.9927), extended to 2026-09-03 (n 133 gated, k 345.6, r 0.992); block gate (3 s, 6 readings) and 5-MAD ratio rule adopted; the bridge ratio 4.789 (a geomean) refit as the raw median 4.755, bridge 74.16, kept; recipe and de-identified blocks and pairs in the repository.
+208. The June anchor reproduced with the lab's benchmark (n 131, r 0.9927) and extended to 2026-09-03 (n 133 gated, k 345.59, r 0.992); block gate (3 s, 6 readings) and 5-MAD ratio rule adopted; bridge ratio 4.789 refit as raw median 4.755, kept; recipe and de-identified blocks and pairs in the repository.
+209. The transform constant is 349.10 everywhere, the midpoint of 352.62 and 345.59; composed bridge 72.90; page labels read the served constant; every calibrated number scales by 0.9900, verdicts unchanged; heat-map correlations move at most 0.044 through the ceiling exclusion.
 
 ---
 
