@@ -182,3 +182,10 @@
 - GREEN: host 1379 / 2 / 0 (was 1372); container 675 / 0 (was 664); 14 existing tests rewritten in raw power.
 - Live RCS08 (`_d204_capture.py` before204 on the stashed tree / after204, `_d204_diff.py`): Biomarkers response 952,637 fields both, 11,695 differing (10,672 the per-row r/p copies on 5,975 timeline rows, 1,000 the permutation null), chosen band unchanged (L 1-3+, 0.95 Hz), r −0.495 → −0.463, n 106 → 93 (the correlation's MAD rule on raw power; item 3). Stability grid 5,148 fields both, 1,914 differing, 10 of 132 verdicts moved (inconclusive 115→113, stable 1→2, stim-dependent 16→17).
 - Workers reloaded (four fresh). No Client/src change.
+
+## 2026-09-19 (the PI: "go on item 3, tests first; MAD threshold to MAD 5, if still exists"): decision 205
+- The threshold was already 5 MAD everywhere (`stats_utils.MAD_N_DEFAULT`, his consolidation of 2026-08-30); the change is the scale. Four rules took log10 first (scalar, keep-mask, vectorised sweep fallback, chronic per-recording filter) and the heat map's logistic cross-check fitted on log; all raw now, `"log"` refused, `OUTLIER_SCALE = "raw"`, `_BAND_SWEEP_RULE_VERSION` v21.
+- RED 8 of 9 (the 5-MAD pin passed already), GREEN 9 of 9; 4 tests rewritten; `OutlierScale` dropped from the background whitelist after the whitelist test caught it as dead weight.
+- Suites: host 1379 / 2 / 0; container 684 / 0 (was 675).
+- Live RCS08 (`_d205_capture.py`, `_d205_diff.py`): sweep 33,889 fields both, 219 differing (183 the cross-check blocks; grids 0 differing, the ceilings apply live). Biomarkers response: chronic detector sample set moves (L 0-2 4,555 → 4,683, L 0-3 4,748 → 4,580, L 1-3 4,853 → 4,790), AUC 0.5536 → 0.5554, threshold 90.8 → 99.0; time-domain band summary identical.
+- Workers reloaded (four fresh). No Client/src change.

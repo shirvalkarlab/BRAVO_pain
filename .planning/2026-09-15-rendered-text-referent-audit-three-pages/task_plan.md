@@ -5,13 +5,13 @@ Fix every on-screen sentence on the three pages that describes something no long
 fact inside one visual block, and pin each card with a fixture render test (decisions 172-174).
 
 ## Next Step
-Nothing queued; phases 1-10 complete (decisions 174-204; the last: no log power on the pooled spectra or
-the pain correlation). Waiting on the PI: the outlier fallback, the aperiodic fit, the frozen calibration
-model (202's list), pulse-width pooling (189), `max_per_rating` (118), the zero-caller chronic routines
-(187), item 15's niceties; not code: the titration session (open item 30).
+Nothing queued; phases 1-11 complete (decisions 174-205; the last: the outlier rule on raw power). Waiting
+on the PI: the aperiodic fit and the frozen calibration model (202's list), pulse-width pooling (189),
+`max_per_rating` (118), the zero-caller chronic routines (187), item 15's niceties; not code: the
+titration session (open item 30).
 
 ## Current Phase
-Phase 10
+Phase 11
 
 ### Phase 1: Review (the PI calls /swarm-review with findings.md §1)
 - [x] Rendered-text inventory per page: every string a card draws, its panel, the element beside it, its referent
@@ -102,4 +102,10 @@ Phase 10
 - [x] RED: 11 container tests, 5 StimOptimizer, 2 Closed-Loop; two fixtures of mine corrected and re-run RED
 - [x] Raw power in the matrix (`X`), key token, pooled detail, four readers, the two older frames; the pain correlation on raw
 - [x] GREEN: host 1379 / 2 / 0; container 675 / 0; live RCS08 before/after (decision 204); workers reloaded; push
+- **Status:** complete
+
+### Phase 11: Item 3, the outlier rule (the PI, 2026-09-19: "go on item 3, tests first; MAD threshold to MAD 5, if still exists")
+- [x] The threshold was already 5 MAD (`MAD_N_DEFAULT`); the change is the scale: raw everywhere, `"log"` refused
+- [x] RED 8 of 9 (`test_no_log_power_outlier_rule.py`), GREEN 9 of 9; 4 tests rewritten, 2 whitelist tests moved off `OutlierScale`
+- [x] Host 1379 / 2 / 0; container 684 / 0; live RCS08 before/after (decision 205); workers reloaded; push
 - **Status:** complete

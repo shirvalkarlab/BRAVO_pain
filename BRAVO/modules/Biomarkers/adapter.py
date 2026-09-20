@@ -368,11 +368,12 @@ def _concat_chronic(chronic, mad_k=None):
         # Explicit disable is mad_k=0 or mad_k=False.
         _mad_on = not (mad_k is False or (isinstance(mad_k, (int, float)) and float(mad_k) == 0.0))
         if _mad_on and d.ndim == 2 and d.shape[0] == t.shape[0] and t.shape[0] >= 3:
-            # LOG-scale rule: Data[:,0] is LINEAR LFP power, a multiplicative quantity, so a
-            # symmetric raw-scale MAD window would delete the upper tail almost exclusively. Same
-            # canonical threshold as everywhere else; only the space it is evaluated in differs.
+            # The rule runs on the raw LFP power (decision 205; until 2026-09-19 it ran on its
+            # log10, which trimmed both tails of a multiplicative quantity). Same canonical
+            # threshold as everywhere else, per recording so a low-scale source is not judged
+            # against a high-scale one.
             from .routines.stats_utils import mad_keep_mask as _mk
-            keep = _mk(d[:, 0], n_mad=mad_k, scale="log")   # per-recording (homogeneous scale)
+            keep = _mk(d[:, 0], n_mad=mad_k, scale="raw")   # per-recording (homogeneous scale)
             t, d = t[keep], d[keep]
         if t.size:
             times_list.append(t)

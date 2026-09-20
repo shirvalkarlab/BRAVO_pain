@@ -153,7 +153,7 @@ def test_vectorised_outlier_rule_matches_the_scalar_one():
     X[:, 5] = np.nan
     X[:3, 5] = [1.0, 2.0, 3.0]       # fewer than four usable values
     X[:, 6] = -np.abs(X[:, 6])       # nothing strictly positive
-    for scale in ("raw", "log"):
+    for scale in ("raw",):                      # the only scale since decision 205
         fast = A.mad_outlier_columns(X, n_mad=5.0, scale=scale)
         slow = np.column_stack([SU.mad_outlier_flags(X[:, c], n_mad=5.0, scale=scale)[0]
                                 for c in range(X.shape[1])])
@@ -162,10 +162,10 @@ def test_vectorised_outlier_rule_matches_the_scalar_one():
         assert not fast[:, 5].any(), "a column with too few values must have nothing flagged"
     # And it works on the three-dimensional stack the sweep actually hands it.
     stack = np.stack([X, X * 2.0, X * 3.0], axis=0)
-    got = A.mad_outlier_columns(stack, n_mad=5.0, scale="log")
+    got = A.mad_outlier_columns(stack, n_mad=5.0, scale="raw")
     assert got.shape == stack.shape
     for t in range(3):
-        assert np.array_equal(got[t], A.mad_outlier_columns(stack[t], n_mad=5.0, scale="log"))
+        assert np.array_equal(got[t], A.mad_outlier_columns(stack[t], n_mad=5.0, scale="raw"))
     print("OK the vectorised outlier rule is identical to the scalar one on every column, "
           "including the no-spread, too-few and non-positive cases")
 
@@ -189,7 +189,7 @@ def test_fitted_logistic_is_the_ordering_or_one_minus_it_on_every_cell():
     for s in A.BAND_TIME_SWEEP_SECONDS:
         X = power[float(s)]
         unfolded = A.rank_auc_columns(X, y)["auc"]
-        got = A.logistic_auc_columns_fitted(X, y, feature_scale="log")
+        got = A.logistic_auc_columns_fitted(X, y)
         fitted, slope = got["auc"], got["slope"]
         ok = np.isfinite(fitted) & np.isfinite(unfolded)
         n_cells += int(ok.sum())

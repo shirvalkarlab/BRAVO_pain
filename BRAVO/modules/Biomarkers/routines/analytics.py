@@ -632,15 +632,15 @@ OUTLIER_LABEL_SCALE = "raw"
 # uniform treatment of feature and label, matching what `streaming_psd._mad_keep` has always done.
 OUTLIER_INCLUDE_LABEL = True
 
-# SCALE ON WHICH THE RULE IS APPLIED. This is a real statistical decision, not a detail.
-# The LSB band-power feature is multiplicative and heavy-tailed (roughly 0.1 to 15000), so a
-# symmetric +/- MAD window on the RAW scale is far tighter above the median than below it in
-# proportional terms: it deletes the upper tail almost exclusively, which biases every downstream
-# statistic in a fixed direction. On the log scale the distribution is roughly symmetric, so the
-# rule removes genuine two-sided outliers. The exclusion is DETECTED on the log scale and then
-# applied to both the raw display feature and the log fit feature, so exactly one set of samples
-# is dropped everywhere. Set to "raw" only to reproduce a literal raw-scale reading.
-OUTLIER_SCALE = "log"
+# SCALE ON WHICH THE RULE IS APPLIED: the raw band power, and only that (decision 205, 2026-09-19,
+# on the PI's rule that log power enters no calculation). Until then it was "log": the band power
+# is multiplicative and heavy-tailed (roughly 0.1 to 15000), so a symmetric window on the raw
+# scale is proportionally far tighter above the median than below it and trims the upper tail
+# almost exclusively, where on the log scale the same rule trimmed both tails. That consequence
+# is accepted with the rule; the threshold stays at 5 MAD. The constant is kept because the page's
+# `OutlierScale` request field and the sweep's `outlier_scale` echo still name the scale; any other
+# value is refused by the rule itself.
+OUTLIER_SCALE = "raw"
 
 
 def apply_outlier_exclusion(arrays, detect_on, n_mad=OUTLIER_N_MAD, scale=OUTLIER_SCALE,
@@ -5469,7 +5469,7 @@ def mad_outlier_columns(X, n_mad=None, scale="raw"):
     deviation rule ``stats_utils.mad_outlier_flags`` applies to one column.
 
     THE RULE IS NOT RESTATED, IT IS VECTORISED. Every clause of the scalar function is reproduced
-    here: the logarithm first when ``scale`` is ``"log"``, the strict inequality, no consistency
+    here: the raw values as given (the log option went with decision 205), the strict inequality, no consistency
     rescaling of the deviation, non-finite entries never flagged, fewer than four usable entries in
     a column means nothing is flagged in it, and a column whose deviation comes out as zero (a
     majority of its entries sharing one value) has nothing flagged rather than everything. There is
@@ -5481,13 +5481,11 @@ def mad_outlier_columns(X, n_mad=None, scale="raw"):
     by columns); the rule is evaluated down the ROW axis in both cases. Returns a boolean mask the
     same shape as ``X``, True where the entry is an outlier.
     """
+    if str(scale) != "raw":
+        raise ValueError(f"the outlier rule runs on raw values only (decision 205); got scale={scale!r}")
     X = np.asarray(X, dtype=float)
     n = float(OUTLIER_N_MAD if n_mad is None else n_mad)
-    if str(scale) == "log":
-        with np.errstate(divide="ignore", invalid="ignore"):
-            V = np.log10(np.where(X > 0, X, np.nan))
-    else:
-        V = X
+    V = X
     ok = np.isfinite(V)
     row_axis = -2
     n_ok = ok.sum(axis=row_axis, keepdims=True)
@@ -5658,10 +5656,11 @@ def logistic_auc_columns_fitted(X, y_binary, feature_scale="raw", n_jobs=None):
     differ by orders of magnitude; a linear rescaling cannot change an area under the curve, which
     depends only on the order of the fitted scores.
 
-    ``feature_scale="log"`` fits on the base-ten logarithm of the band power. A logarithm is
-    increasing, so it cannot change the area under the curve of the band power itself; it changes
-    only whether the fitted STRAIGHT LINE points the same way as that ordering, which is the one
-    thing that decides whether the fitted number comes out folded or not.
+    ``feature_scale`` must be ``"raw"``: the fit is on the band power as given (decision 205; until
+    2026-09-19 the default was ``"log"``, the base-ten logarithm). A logarithm is increasing, so it
+    could not change the area under the curve of the band power itself; it changed only whether
+    the fitted STRAIGHT LINE pointed the same way as that ordering, which is the one thing that
+    decides whether the fitted number comes out folded or not.
 
     ``n_jobs`` fits the columns on that many worker threads, and it defaults to serial because
     threading is SLOWER at every shape this record produces. Measured 2026-09-12 in the server
@@ -5701,9 +5700,9 @@ def logistic_auc_columns_fitted(X, y_binary, feature_scale="raw", n_jobs=None):
     y = np.asarray(y_binary, dtype=np.float64)
     if X.ndim == 1:
         X = X[:, None]
-    if str(feature_scale) == "log":
-        with np.errstate(divide="ignore", invalid="ignore"):
-            X = np.log10(np.where(X > 0, X, np.nan))
+    if str(feature_scale) != "raw":
+        raise ValueError("the logistic fit runs on raw band power only (decision 205); "
+                         f"got feature_scale={feature_scale!r}")
     labelled = np.isfinite(y)
     C = X.shape[1]
 
@@ -6893,7 +6892,7 @@ def _auc_row_sentence(verdict, auc_value, lo, hi, delivered_s, n_windows, shuffl
     return f"an interval could not be formed, so nothing was established either way; {at}"
 
 
-def logistic_fit_crosscheck(X_by_time, y_binary, best_rows, *, feature_scale="log"):
+def logistic_fit_crosscheck(X_by_time, y_binary, best_rows, *, feature_scale="raw"):
     """Fit the real logistic regression at each band's WINNING cell and report whether its own area
     under the curve matches the ordering the grid was built from.
 
@@ -6937,19 +6936,14 @@ def logistic_fit_crosscheck(X_by_time, y_binary, best_rows, *, feature_scale="lo
         col = X[:, [int(c)]]
         got = logistic_auc_columns_fitted(col, y, feature_scale=feature_scale)
         fitted = float(got["auc"][0]) if np.isfinite(got["auc"][0]) else None
-        # COMPARED ON THE SAME ROWS THE FIT USED, which is not automatic. Fitting on the logarithm
-        # of the band power drops any row whose power is not strictly positive, and a Percept LSB
-        # band power can be exactly zero on an empty or saturated window. Comparing the fit against
-        # the grid's value, which was computed on the raw scale and so kept those rows, made the two
-        # differ by up to 0.032 on the live record purely because they were computed on different
-        # sets of pain reports. The ordering is therefore recomputed here on the same transformed
-        # column, and the number of rows the transform dropped is reported.
-        if str(feature_scale) == "log":
-            with np.errstate(divide="ignore", invalid="ignore"):
-                col_cmp = np.log10(np.where(col > 0, col, np.nan))
-        else:
-            col_cmp = col
-        n_dropped = int((np.isfinite(col) & ~np.isfinite(col_cmp)).sum())
+        # COMPARED ON THE SAME ROWS THE FIT USED. While the fit was on the logarithm (until
+        # decision 205) it dropped any row whose power was not strictly positive, which a Percept
+        # band power can be on an empty or saturated window, and the two numbers differed by up to
+        # 0.032 on the live record purely from different row sets. On raw power no row is dropped
+        # by a transform; the count is kept in the output so a reader sees a zero rather than a
+        # missing field.
+        col_cmp = col
+        n_dropped = 0
         unfolded_same_rows = float(rank_auc_columns(col_cmp, y)["auc"][0])
         folded = (float(max(unfolded_same_rows, 1.0 - unfolded_same_rows))
                   if np.isfinite(unfolded_same_rows) else float(max(float(a), 1.0 - float(a))))

@@ -444,15 +444,14 @@ def mad_outlier_flags(x, n_mad=None, scale="raw"):
     3.37 sigma on Gaussian data). The inequality is STRICT so this is the exact complement of
     :func:`mad_keep_mask` at every threshold, boundary included.
 
-    ``scale`` selects the space the rule is evaluated in, and it matters:
-
-    * ``"raw"`` — use for quantities that are already additive: dB/log power, z-scored features,
-      and bounded ordinal pain scores.
-    * ``"log"`` — use for MULTIPLICATIVE quantities on a linear axis, i.e. raw linear band power
-      and raw LSB. A symmetric window on such a feature is proportionally far tighter above the
-      median than below, so a raw-scale rule deletes the upper tail almost exclusively. Measured on
-      RCS08: the raw rule removed 3.71% one-sidedly vs 6.19% two-sidedly on the log scale, and the
-      SELECTED BAND changed as a result.
+    ``scale`` is accepted for the call sites that spell it out and must be ``"raw"``: the rule is
+    evaluated on the values as given. Until 2026-09-19 ``"log"`` evaluated it on ``log10`` of the
+    values, for multiplicative quantities such as raw band power, where a symmetric raw-scale
+    window is proportionally tighter above the median than below and so trims the upper tail
+    almost exclusively (measured on RCS08 then: 3.71% removed one-sidedly against 6.19% two-sidedly
+    on the log scale, and the selected band changed). The PI's rule of that day (decision 202: log
+    power enters no calculation; this site decision 205) removed the option; the threshold stays
+    at 5 MAD. Asking for ``"log"`` raises rather than silently running the raw rule.
 
     Non-finite entries are never flagged (they are already absent from every statistic), so the
     returned count means genuine exclusions.
@@ -463,23 +462,17 @@ def mad_outlier_flags(x, n_mad=None, scale="raw"):
 
     Returns ``(mask, info)`` with info = {n_finite, n_mad, scale, median, mad, n_removed, skipped}.
     """
+    if str(scale) != "raw":
+        raise ValueError(f"the outlier rule runs on raw values only (decision 205); got scale={scale!r}")
     x = np.asarray(x, dtype=float)
     n_mad = float(MAD_N_DEFAULT if n_mad is None else n_mad)
     finite = np.isfinite(x)
-    info = {"n_finite": int(finite.sum()), "n_mad": n_mad, "scale": str(scale),
+    info = {"n_finite": int(finite.sum()), "n_mad": n_mad, "scale": "raw",
             "median": None, "mad": None, "n_removed": 0, "skipped": None}
     if finite.sum() < 4:
         info["skipped"] = "fewer than 4 finite samples"
         return np.zeros_like(x, dtype=bool), info
-    if scale == "log":
-        with np.errstate(divide="ignore", invalid="ignore"):
-            v = np.log10(np.where(x > 0, x, np.nan))
-        finite = np.isfinite(v)
-        if finite.sum() < 4:
-            info["skipped"] = "fewer than 4 strictly-positive samples for the log-scale rule"
-            return np.zeros_like(x, dtype=bool), info
-    else:
-        v = x
+    v = x
     med = float(np.median(v[finite]))
     mad = float(np.median(np.abs(v[finite] - med)))
     info["median"], info["mad"] = med, mad

@@ -101,10 +101,8 @@ def _mad_keep(x, k=None):
     polarity convention; the PI consolidated the plate onto a single 5 MAD filter on 2026-08-30.
     ``k=None`` means the canonical threshold (stats_utils.MAD_N_DEFAULT).
 
-    Scale: the features reaching this function are post-daywise-normalization log/z quantities and
-    the label is a bounded ordinal score, so both are additive and the rule is applied on the raw
-    scale. Do NOT pass a raw-linear power/LSB feature here — that needs scale="log" (see
-    stats_utils.mad_outlier_flags).
+    Scale: the rule is applied on the values as given, raw power included (decision 205; the
+    log-scale option is gone, see stats_utils.mad_outlier_flags).
     """
     from .stats_utils import mad_keep_mask
     return mad_keep_mask(x, n_mad=k, scale="raw")

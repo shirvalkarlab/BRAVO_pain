@@ -125,7 +125,7 @@ def test_the_settings_carried_to_the_background_run_are_a_whitelist_and_exclude_
     """Two separate rules, both load-bearing. A command line shows up in the process list, so pain
     reports and a field map must never reach one; and the score is this command's own argument, so
     a score carried in as a setting would silently override `--metrics`."""
-    request = {"MatchToleranceMin": 30, "OutlierScale": "log",
+    request = {"MatchToleranceMin": 30, "OutlierNMad": 5.0,
                "SweepMetric": "mpq_sum", "LabelMetric": "vas",
                "ProcessedPRO": [{"nrs": 7}], "RedcapFieldMap": {"a": "b"},
                "SomethingNobodyKnows": "x"}
@@ -133,7 +133,7 @@ def test_the_settings_carried_to_the_background_run_are_a_whitelist_and_exclude_
     if argv is None:
         return
     sent = json.loads(argv[argv.index("--request-json") + 1])
-    assert sent == {"MatchToleranceMin": 30, "OutlierScale": "log"}, sent
+    assert sent == {"MatchToleranceMin": 30, "OutlierNMad": 5.0}, sent
     blob = " ".join(argv)
     for forbidden in ("ProcessedPRO", "RedcapFieldMap", "SweepMetric", "LabelMetric", "nrs\": 7"):
         assert forbidden not in blob, forbidden

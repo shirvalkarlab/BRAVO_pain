@@ -2240,21 +2240,21 @@ def test_nonfinite_never_counted_as_a_removal():
     assert info["n_removed"] == int(mask.sum())
 
 
-def test_log_scale_rule_is_two_sided_where_raw_is_not():
+def test_the_raw_scale_rule_is_one_sided_on_a_multiplicative_feature_and_that_is_accepted():
     """For a multiplicative quantity a symmetric raw-scale window is far tighter above the median
-    than below, so it deletes the upper tail almost exclusively. On the log scale the same rule is
-    two-sided. This is why OUTLIER_SCALE defaults to 'log'."""
+    than below, so it deletes the upper tail almost exclusively. Until 2026-09-19 that was the
+    reason OUTLIER_SCALE defaulted to 'log'; decision 205 removed the log option on the PI's rule
+    (log power enters no calculation) and this consequence is accepted with it. The fixture is the
+    one that used to demonstrate the log rule catching both tails."""
     from modules.Biomarkers.routines import analytics as an
     rng = np.random.default_rng(0)
     x = np.concatenate([10.0 ** rng.normal(0, 0.3, 200), [1e-6, 1e6]])   # lognormal + one each tail
     m_raw, _ = an.mad_outlier_flags(x, n_mad=5.0, scale="raw")
-    m_log, _ = an.mad_outlier_flags(x, n_mad=5.0, scale="log")
     med = np.median(x)
     # the raw rule catches the high extreme but misses the low one entirely
     assert m_raw[-1] and not m_raw[-2]
-    # the log rule catches BOTH extremes
-    assert m_log[-1] and m_log[-2]
     assert (m_raw & (x < med)).sum() == 0, "raw-scale removals are one-sided (high only)"
+    assert an.OUTLIER_SCALE == "raw"
 
 
 def test_the_two_mad_helpers_have_opposite_polarity_and_must_not_be_confused():

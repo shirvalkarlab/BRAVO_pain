@@ -3709,6 +3709,17 @@ def _int_param(request_data, key, *, default, lo=None, hi=None):
     return v
 
 
+
+def _outlier_scale_param(request_data):
+    """The scale the outlier rule runs on, from the request: always ``"raw"``.
+
+    The `OutlierScale` field is still accepted so an old page or a saved request does not fail,
+    but ``"log"`` is no longer honoured (decision 205, 2026-09-19: log power enters no calculation);
+    it falls back to the module's one scale rather than reaching a rule that would refuse it.
+    """
+    v = str((request_data or {}).get("OutlierScale") or analytics.OUTLIER_SCALE).lower()
+    return v if v == "raw" else analytics.OUTLIER_SCALE
+
 def _float_param(request_data, key, *, default, lo=None, hi=None):
     """Parse a float request param, clamped to [lo, hi]; missing/invalid -> default."""
     if key not in request_data:
@@ -4166,9 +4177,7 @@ def run_for_participant(request_data):
     # the switch for reproducing a pre-2026-08-30 number rather than editing the module.
     outlier_n_mad = _float_param(request_data, "OutlierNMad",
                                  default=float(analytics.OUTLIER_N_MAD), lo=0.0, hi=50.0)
-    outlier_scale = str(request_data.get("OutlierScale") or analytics.OUTLIER_SCALE).lower()
-    if outlier_scale not in ("log", "raw"):
-        outlier_scale = analytics.OUTLIER_SCALE
+    outlier_scale = _outlier_scale_param(request_data)
     # Three-way match direction (PSD<->PRO). See `_forecast_match_direction`'s own docstring for
     # the meaning of each value and why this reader defaults to "prior" where the sweep's own
     # `_sweep_match_direction` defaults to "pro_first".
@@ -5565,9 +5574,9 @@ STABILITY_GRID_LAUNCH_UNDER_OVERRIDE_ROOT = False
 #: looks up -- so the page would find nothing, start another run, and do it again on every load.
 STABILITY_GRID_SETTING_KEYS = (
     "SweepMetric", "LabelMetric", "LabelStrategy", "PercentileLow", "PercentileHigh",
-    "MatchToleranceMin", "AllowWindowReuse", "OutlierNMad", "OutlierScale", "MatchDirection",
+    "MatchToleranceMin", "AllowWindowReuse", "OutlierNMad", "MatchDirection",
     "IncludeClinicSheetRatings",
-)
+)   # `OutlierScale` left on 2026-09-19 (decision 205): the sweep no longer reads it, raw is the one scale
 
 
 def _stability_grid_launch_marker(sig):
@@ -7366,7 +7375,8 @@ def pain_scores_for_participant(request_data):
 # the same helper functions, so the sweep cannot be computed against a different match policy from
 # the panels above it: `MatchToleranceMin` (the eligibility radius), `AllowWindowReuse`,
 # `LabelStrategy` with `PercentileLow` / `PercentileHigh` (how high pain is separated from low),
-# `OutlierNMad` / `OutlierScale`, and `RedcapRecordId` / `ProcessedPRO` (which pain reports exist).
+# `OutlierNMad` (`OutlierScale` is accepted but always raw since decision 205), and `RedcapRecordId` /
+# `ProcessedPRO` (which pain reports exist).
 # The ONE control the section overrides is which pain score to use, because the PI asked for that
 # to be chosen inside the section; it is sent as `SweepMetric` and falls back to the page's own
 # `LabelMetric` when absent.
@@ -7726,9 +7736,7 @@ def band_time_sweep_for_participant(request_data):
         "1", "true", "yes", "on")
     outlier_n_mad = _float_param(request_data, "OutlierNMad",
                                  default=float(analytics.OUTLIER_N_MAD), lo=0.0, hi=50.0)
-    outlier_scale = str(request_data.get("OutlierScale") or analytics.OUTLIER_SCALE).lower()
-    if outlier_scale not in ("log", "raw"):
-        outlier_scale = analytics.OUTLIER_SCALE
+    outlier_scale = _outlier_scale_param(request_data)
     # The eligibility radius, in seconds. The main slider can be switched off, in which case the
     # longest length of signal in the sweep stands in for it so that a pain report is still matched
     # against nearby recording rather than against the whole record.
@@ -8000,9 +8008,7 @@ def band_time_sweep_cell_for_participant(request_data):
         "1", "true", "yes", "on")
     outlier_n_mad = _float_param(request_data, "OutlierNMad",
                                  default=float(analytics.OUTLIER_N_MAD), lo=0.0, hi=50.0)
-    outlier_scale = str(request_data.get("OutlierScale") or analytics.OUTLIER_SCALE).lower()
-    if outlier_scale not in ("log", "raw"):
-        outlier_scale = analytics.OUTLIER_SCALE
+    outlier_scale = _outlier_scale_param(request_data)
     tol_s = (float(match_tol_min) * 60.0 if match_tol_min
              else float(max(analytics.BAND_TIME_SWEEP_SECONDS)))
     match_direction = _sweep_match_direction(request_data)
@@ -8098,7 +8104,7 @@ sweep_settings_tag = sweep_settings.sweep_settings_tag                       # r
 sweep_settings_tag_from_request = sweep_settings.sweep_settings_tag_from_request
 
 
-_BAND_SWEEP_RULE_VERSION = "v20_cell_p_values"
+_BAND_SWEEP_RULE_VERSION = "v21_outlier_rule_and_crosscheck_on_raw_power"   # v20: cell p-values, decision 188
 
 #: Response fields that are timings of the run that produced them, not results. They are not
 #: compared when a stored response is checked against a fresh one, and a served response keeps the
