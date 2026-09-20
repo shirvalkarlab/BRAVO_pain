@@ -5,13 +5,13 @@ Fix every on-screen sentence on the three pages that describes something no long
 fact inside one visual block, and pin each card with a fixture render test (decisions 172-174).
 
 ## Next Step
-Nothing queued; phases 1-14 complete (decisions 174-211; the last two: the pain leg loosened to "supported",
-and the constant as the one median over every block, 345.59). Waiting on the PI: the dashed calibration panel
-(207), pulse-width pooling (189), `max_per_rating` (118), the zero-caller chronic routines (187), item 15's
+Nothing queued; phases 1-15 complete (decisions 174-212; the last: the Biomarkers calibration panel draws
+the calibration in effect from the recipe). Waiting on the PI: delete or keep the frozen v1 asset
+(`psd_lsb_model.py`, read by nothing), the left panel's log-log fit, pulse-width pooling (189), `max_per_rating` (118), the zero-caller chronic routines (187), item 15's
 niceties; not code: the titration session (open item 30).
 
 ## Current Phase
-Phase 14
+Phase 15
 
 ### Phase 1: Review (the PI calls /swarm-review with findings.md §1)
 - [x] Rendered-text inventory per page: every string a card draws, its panel, the element beside it, its referent
@@ -127,4 +127,11 @@ Phase 14
 - [x] The pain leg counts a band whose block-bootstrap interval lies wholly above zero; "established" reported beside it; 0 -> 11 usable cells on today's data (210)
 - [x] k = 345.59, the adopted recipe's median over every block; composed bridge 72.16; matched live proof on five products (211)
 - [x] Suites, jest, rebuild, workers reloaded, push
+- **Status:** complete
+
+### Phase 15: The calibration panel draws the calibration in effect (the PI, 2026-09-20)
+- [x] Backend tests RED then GREEN: `block_status`, `panel_payload`, `k_in_effect`, the frozen plot payload gone
+- [x] Endpoint repointed at the recipe; `CalibrationInEffectPanel.js` replaces `ConversionModelPanel.js`; left panel's in-effect line
+- [x] Jest 7 RED then GREEN on the served fixture; smoke test updated; suites 1381 / 2 / 0 and 702 / 0; rebuilt; workers reloaded
+- [x] Decision 212 in both logs; push
 - **Status:** complete

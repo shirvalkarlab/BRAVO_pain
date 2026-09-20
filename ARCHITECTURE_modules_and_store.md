@@ -510,7 +510,7 @@ and that the stale notice appears.
 | Where | Files |
 |---|---|
 | `Client/src/views/Reports/Biomarkers/` | `index.js` (state and the slider handlers), `BiomarkerAnalytics.js`, `BiomarkerDataTimeline.js` (which replaced the older `BiomarkerTimeline.js`), `BinarizationPreview.js`, `binarizationModel.js`, `PsdLsbPanel.js`, `SpectralFeatureImportance.js`, `BandTimeSweepPanel.js` |
-| `Client/src/views/Reports/ClosedLoopSim/` | `index.js`, `BandCandidateStore.js`, `DeploymentVerdictStrip.js`, `DeploymentRocPanel.js`, `DeploymentEvidencePanel.js`, `LsbPowerPanel.js`, `ConversionModelPanel.js`, `EraRefitPanel.js`, `DeploySignoffCard.js`, `ThreeSourceResponsePanel.js`, `palette.js`, `deployPrint.css` |
+| `Client/src/views/Reports/ClosedLoopSim/` | `index.js`, `BandCandidateStore.js`, `DeploymentVerdictStrip.js`, `DeploymentRocPanel.js`, `DeploymentEvidencePanel.js`, `LsbPowerPanel.js`, `CalibrationInEffectPanel (in `Biomarkers/`).js`, `EraRefitPanel.js`, `DeploySignoffCard.js`, `ThreeSourceResponsePanel.js`, `palette.js`, `deployPrint.css` |
 | Shared, and **the PI's own files — do not edit without asking** | `Client/src/database/resultCache.js`, `useCachedResult.js`, `RecomputeBar.js`, `views/Reports/moduleCacheKeys.js` |
 
 **The `CUTPOINT_TRACE = 2` constant in `DeploymentRocPanel.js` is the single source for the

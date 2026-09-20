@@ -28,7 +28,7 @@
  * `DeploymentDecisionHeader`, which keeps its sticky behaviour, its jump links and its print class
  * and drops its independently-computed verdict and its threshold cell. `DeploymentEvidencePanel` is
  * superseded by `DeviceRuleLedger` and `EvidenceTrianglePanel` between them. `PsdLsbPanel` and
- * `ConversionModelPanel` are not rendered on this route at all: the microvolt-to-least-significant-
+ * `CalibrationInEffectPanel` are not rendered on this route at all: the microvolt-to-least-significant-
  * bit conversion model and the power spectrum are methods artefacts whose reader is the analyst
  * before the visit, and the band has already been chosen and committed by the time anyone opens this
  * page. The raw BandCandidate JSON inspector is also gone, because a dump of an internal schema has

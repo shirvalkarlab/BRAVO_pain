@@ -29,11 +29,11 @@ import { PlatformContextProvider } from "context";
 import { invalidateAll, putResult, settingsKey } from "database/resultCache";
 import { CL } from "views/Reports/moduleCacheKeys";
 
-import ConversionModelPanel from "./ConversionModelPanel";
 import DeploymentRocPanel from "./DeploymentRocPanel";
 import EraRefitPanel from "./EraRefitPanel";
 import LsbPowerPanel from "./LsbPowerPanel";
 import PsdLsbPanel from "./PsdLsbPanel";
+import CalibrationInEffectPanel from "views/Reports/Biomarkers/CalibrationInEffectPanel";
 
 jest.mock("plotly.js-dist", () => ({
   react: jest.fn(), purge: jest.fn(), restyle: jest.fn(), relayout: jest.fn(), newPlot: jest.fn(),
@@ -75,8 +75,8 @@ const PANELS = [
     deploymentReport={{ data: null }} />, /LSB threshold/],
   ["PsdLsbPanel", <PsdLsbPanel participantUid={UID} bandCandidate={BC}
     requestParams={REQ} />, /device-LSB conversion/],
-  ["ConversionModelPanel", <ConversionModelPanel participantUid={UID} />,
-    /conversion model/],
+  ["CalibrationInEffectPanel", <CalibrationInEffectPanel participantUid={UID} />,
+    /Calibration in effect/],
 ];
 
 describe.each(PANELS)("%s", (name, element, heading) => {

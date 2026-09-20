@@ -3041,6 +3041,9 @@ def psd_lsb_conversion(psd_bandpower_uv2, device_lsb, *, n_boot=2000, seed=0):
         "k_lsb_per_uv2": k,
         "k_ci": k_ci,
         "uv2_per_lsb": float(1.0 / k) if k > 0 else None,
+        # the constant the platform converts with, so the page can draw it beside this band's own
+        # fit without a typed number (decision 212)
+        "k_in_effect": float(LSB_PER_UV2_TRANSFORM),
         "resid_log_sigma_fold": sigma_fold,
         "slope_consistent_with_unity": bool(slope_ci[0] <= 1.0 <= slope_ci[1]),
         "note": ("Proportional law LSB = k·µV²(band) from time-matched chronic streams. The free "

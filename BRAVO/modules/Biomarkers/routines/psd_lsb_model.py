@@ -199,27 +199,3 @@ def estimate_lsb(participant, channel, center_hz, psd_uv2):
 
     out["reason"] = f"channel {channel} has no fitted band and no pooled gain"
     return out
-
-
-def model_plot_payload(participant):
-    """Compact payload for the deployment-panel plots: per-channel common slope + per-band
-    intercept (gain anchor) + pooled k. Returns {available, participant, channels:[...]} so the
-    frontend can draw (1) gain-anchor-vs-frequency per channel and (2) the per-channel fit lines.
-    """
-    m = load_model(participant)
-    if m is None:
-        return {"available": False, "reason": f"no conversion model for {participant}"}
-    chans = []
-    for ch_key, ch in (m.get("channels") or {}).items():
-        bands = [{"center_hz": bd["center_hz"], "lsb_at_1uv2": bd["LSB_at_1uV2"],
-                  "intercept_a": bd["intercept_a"], "intercept_ci": bd.get("intercept_ci"),
-                  "n": bd.get("n")} for bd in (ch.get("bands") or [])]
-        chans.append({"channel": ch_key, "fittable": bool(ch.get("fittable")),
-                      "common_slope_b": ch.get("common_slope_b"), "r2": ch.get("r2"),
-                      "channel_pooled_k": ch.get("channel_pooled_k"),
-                      "n_clusters": ch.get("n_clusters"), "bands": bands,
-                      "scatter": ch.get("scatter") or []})
-    return {"available": True, "participant": _canon(participant),
-            "schema": m.get("schema"), "pipeline": m.get("pipeline"),
-            "special": (m.get("pipeline") or {}).get("special") if isinstance(m.get("pipeline"), dict) else None,
-            "channels": chans}

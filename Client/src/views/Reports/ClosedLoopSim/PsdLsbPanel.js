@@ -100,6 +100,13 @@ function PsdLsbPanel({ participantUid, bandCandidate, requestParams }) {
         line: { color: PAL.accent, width: 2 },
         hovertemplate: `LSB = ${fmt(k, 0)} x uV^2<extra></extra>`, showlegend: false },
     ];
+    // the constant the platform converts with (served as k_in_effect, decision 212), so the
+    // reader sees at once whether this band's own fit agrees with it
+    if (data.k_in_effect != null) {
+      traces.push({ x: gx, y: gx.map((x) => data.k_in_effect * x), type: "scatter", mode: "lines",
+        name: `in effect: LSB = ${fmt(data.k_in_effect, 2)} x uV^2`,
+        line: { color: "#222", width: 1.2, dash: "dash" }, hoverinfo: "name", showlegend: false });
+    }
     const layout = {
       margin: { l: 50, r: 12, t: 8, b: 40 }, height: 220,
       xaxis: { title: { text: "Offline PSD band power (uV^2)", font: { size: 10.5 } },
@@ -242,6 +249,12 @@ function PsdLsbPanel({ participantUid, bandCandidate, requestParams }) {
                 {`inverse: 1 LSB ≈ ${fmt(inv, 4)} µV²  ·  n=${data.n_pairs} pairs  ·  ρ=${fmt(data.spearman, 2)}`}
                 {sigma > 1.01 ? ` · 1σ scatter: ×${fmt(sigma, 2)}` : ""}
               </MDTypography>
+              {data.k_in_effect != null ? (
+                <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, color: "#555" }}>
+                  {`Platform constant in effect: 1 µV² = ${fmt(data.k_in_effect, 2)} LSB (dashed line below); `
+                    + `this band's own fit is ${fmt((k / data.k_in_effect) * 100, 0)}% of it.`}
+                </MDTypography>
+              ) : null}
             </MDBox>
 
             {/* 1b) RECORDING-MODALITY BREAKDOWN — chronic (10-min) vs streaming (3000 ms) are

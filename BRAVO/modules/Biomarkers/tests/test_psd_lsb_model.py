@@ -23,17 +23,6 @@ def test_model_loads_and_is_cached():
     assert not plm.has_model("FAKE99")
 
 
-def test_plot_payload_shape():
-    pp = plm.model_plot_payload(PART)
-    assert pp["available"]
-    fittable = [c for c in pp["channels"] if c["fittable"]]
-    assert len(fittable) >= 2                              # 0-3 Right, 0-3 Left
-    for c in fittable:
-        assert c["common_slope_b"] is not None and len(c["bands"]) >= 2
-        for bd in c["bands"]:
-            assert {"center_hz", "lsb_at_1uv2", "intercept_a", "n"} <= set(bd)
-
-
 def test_8p8hz_cut_is_current_config_not_changepoint_date():
     """Guard the deliberate 8.8 Hz restriction so a future edit doesn't 'fix' it.
 

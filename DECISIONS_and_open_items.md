@@ -15,7 +15,7 @@ decisions are appended to Part 3 here AND as a full row in the full log.
 - Windows with >10% zero-filled samples are dropped (4); this rule now reaches every routine (57-59).
 - 60 Hz notch off by default (13). Only the two 256-point FFT modes convert (14). Conversion from the voltage trace: the transform route at 349.10 since 209 (352.62 from 18; recipe and blocks in `routines/calibration.py`, 208); the composed constant is composed, never "measured" (33, house rules).
 - Per-participant conversion model is a frozen stored asset with tiered fallback (11); 8.8 Hz R 0-3+ counts only from 2026-03-01 (16); no impedance term (17).
-- **Log power enters no calculation, anywhere** (PI, 2026-09-19; 202). The E1 path (202), the pooled full-spectrum path and the pain correlation (204), the outlier rule and cross-check (205), the aperiodic fit (206, deleted) are done. The frozen log-log model (`psd_lsb_model.py`) was explored (207) and the constant refit instead (208); the dashed panel still draws the v1 log-log asset, his call whether to retire it.
+- **Log power enters no calculation, anywhere** (PI, 2026-09-19; 202). The E1 path (202), the pooled full-spectrum path and the pain correlation (204), the outlier rule and cross-check (205), the aperiodic fit (206, deleted) are done. The frozen log-log model (`psd_lsb_model.py`) was explored (207) and the constant refit instead (208); the Biomarkers page's calibration panel now draws the calibration in effect from the recipe (212), and the v1 asset is read by nothing on a page.
 - **Time is modelled nowhere**: drift is a current effect in a patient >3 years into disease; no age penalty, no time input (193-196).
 - Never say "spectrum" bare; name the quantity (115, house rules).
 
@@ -60,7 +60,7 @@ decisions are appended to Part 3 here AND as a full row in the full log.
 
 **On the PI**
 - **30. Titration session** designed so a response peak can be estimated: one rate, 0 to ceiling in 0.5 mA steps, ≥60 s a step, up then down, streaming, baseline and impedance before and after. The Stim Optimizer card "Titration session to run next" recommends it (146, 160). Code side waits on the data (T7, 156).
-- The frozen log-log model asset (`psd_lsb_model.py`, the dashed panel at the bottom of the Biomarkers page): explored in 207, superseded in substance by 208; retire the panel or rebuild it on per-band raw constants -- his call.
+- The frozen log-log model asset (`psd_lsb_model.py`, `data/psd_lsb_models/RCS08.json`): drawn by no page since 212 and read by no calculation since 2026-06-28; delete it or keep it as a record -- his call.
 - Pooling across pulse widths, option A behind a toggle (189's plan). `align_pros` `max_per_rating` cap (118). The four zero-caller chronic-detector routines (187). Apply the harmonic rule to the readiness screen or not (199).
 - Item 15 remainder: labelling and navigation niceties on the Closed-Loop page (scroll-link, print stylesheet).
 
@@ -291,6 +291,7 @@ Refs are commits or PRs; `→N` means superseded by N.
 ~~209~~. →211. The transform constant as the midpoint of 352.62 and 345.59, 349.10; composed bridge 72.90; page labels read the served constant; every calibrated number scales by 0.9900, verdicts unchanged; heat-map correlations move at most 0.044 through the ceiling exclusion.
 210. The one-band rule's pain leg loosened to "supported" (positive, block-bootstrap interval wholly above zero); "established" reported beside it; usable cells 0 -> 11 on today's data, L 0-3+ Left 125 Hz selected.
 211. The transform constant is 345.59 everywhere: the adopted recipe's one median over every block, not a midpoint of eras (209 superseded); composed bridge 72.16; every calibrated number scales by 0.9899, verdicts and the 11 usable cells unchanged.
+212. The Biomarkers page's bottom-right calibration panel draws the calibration in effect (the transform constant over every paired block with the recipe's gate and rule, the June reference from the same table, the bridge ratio per centre and contact pair, both constants read from the server) instead of the frozen June log-log model; raw axes; the committed band's own refit draws the constant beside its fit; no source file carries a constant.
 
 ---
 

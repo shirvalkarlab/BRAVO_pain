@@ -6384,18 +6384,16 @@ def band_psd_lsb_conversion(request_data):
 
 
 def psd_lsb_conversion_model(request_data):
-    """Return the FROZEN per-participant PSD->LSB conversion model + plot payload for the deployment
-    panel. Unlike band_psd_lsb_conversion (which refits one band live from time-matched streams),
-    this serves the reviewed, frozen model: per-channel common slope, per-frequency gain anchor
-    (intercept = LSB at 1 uV^2), pooled fallback gain, and the cluster scatter for each fittable
-    channel so the panel can draw (a) gain-anchor-vs-frequency per channel and (b) LSB-vs-PSD per
-    channel colored by frequency.
+    """The calibration IN EFFECT for the Biomarkers page's bottom-right panel (decision 212): every
+    paired streaming block with its status under the adopted recipe, the recipe's fit, the June
+    reference, the bridge ratio per centre and per contact pair, and the constants the platform
+    converts with, read from `analytics` (`routines/calibration.py` does the work). Until
+    2026-09-20 this served the frozen June log-log model's plot payload, a model no calculation
+    has read since 2026-06-28.
 
     Request: ParticipantId OR Participant (the participant CODE, e.g. RCS08).
-    Output: {available, participant, schema, pipeline, channels:[{channel, fittable, common_slope_b,
-             r2, channel_pooled_k, bands:[{center_hz, lsb_at_1uv2, intercept_a, intercept_ci, n}]}]}.
     """
-    from .routines import psd_lsb_model as _plm      # package-relative: works on both runners (B10)
+    from .routines import calibration as _cal
     participant = request_data.get("Participant") or request_data.get("ParticipantId")
     if not participant:
         return {"available": False, "reason": "Participant (code) required"}
@@ -6404,7 +6402,9 @@ def psd_lsb_conversion_model(request_data):
     P = models.Participant.find(uid=participant)
     if P is not None:
         code = getattr(P, "code", None) or getattr(P, "name", None) or participant
-    return _plm.model_plot_payload(code)
+    return _cal.panel_payload(code, deployed_k=analytics.LSB_PER_UV2_TRANSFORM,
+                              deployed_bridge_ratio=analytics.LSB_PER_UV2_DEVICE_PSD_TD_RATIO,
+                              deployed_bridge=analytics.LSB_PER_DEVICE_PSD)
 
 
 def _sensing_hz_for_pd(pd_rec, contact):

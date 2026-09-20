@@ -35,7 +35,7 @@ import { saveControls, loadControls } from "./biomarkerStateStore";
 // the clinician route. They are IMPORTED from their original location rather than copied, so there
 // remains one implementation of each and a fix applied there is a fix here. Editing those files is
 // out of scope for this page; only their placement and their framing change.
-import ConversionModelPanel from "views/Reports/ClosedLoopSim/ConversionModelPanel";
+import CalibrationInEffectPanel from "./CalibrationInEffectPanel";
 import PsdLsbPanel from "views/Reports/ClosedLoopSim/PsdLsbPanel";
 // The committed band candidate is the only source on this page of the channel and centre frequency
 // PsdLsbPanel needs. It is written to localStorage by the Closed-Loop Deployment page's "Choose a
@@ -1139,15 +1139,14 @@ function Biomarkers() {
                 question the clinician asks while programming: the deployment page now carries only
                 what has to be read at a visit.
 
-                The two are complementary and are deliberately framed against each other. The
-                left-hand panel fits a conversion from the participant's OWN paired recordings for
-                the band that has been committed, so it is an observed measurement and is drawn in
-                a solid frame. The right-hand panel serves the frozen per-participant model that
-                the threshold estimator falls back on when the device never sensed a band at all,
-                so every number in it is a MODELLED extrapolation and it is drawn in a dashed
-                frame. The dashed-versus-solid distinction is the deployment page's convention for
-                modelled against observed, applied here for the same reason: a reader should not
-                have to remember which of two adjacent conversion figures was measured. */}
+                The left-hand panel fits a conversion from the participant's OWN paired recordings
+                for the band that has been committed, and draws the platform's constant beside it.
+                The right-hand panel is the calibration IN EFFECT (decision 212): the transform
+                constant the platform converts with, the paired blocks it is the median over, and
+                the composed bridge for recordings that carry only the device's FFT snapshot. Until
+                2026-09-20 it drew a frozen June log-log model that no calculation had read since
+                June, in a dashed frame; both frames are solid now because both panels rest on this
+                participant's own paired recordings (the bridge's composition is said in the panel). */}
             <Grid item xs={12}>
               <MDBox px={2} pt={2}>
                 <MDTypography variant="h5" fontWeight="bold" sx={{ fontSize: 24, lineHeight: 1.3 }}>
@@ -1158,9 +1157,9 @@ function Biomarkers() {
                    + "least-significant-bit units. These two panels are how a band power measured "
                    + "offline is turned into a number that can be entered on the Percept RC, and "
                    + "they are placed here because that translation has to be settled before a "
-                   + "programming visit rather than during one. A solid frame marks a quantity "
-                   + "measured from this participant's own paired recordings; a dashed frame marks "
-                   + "a quantity produced by a model standing in for recordings that do not exist."}
+                   + "programming visit rather than during one. The right-hand panel is the "
+                   + "calibration in effect for every calibrated number on the platform; the "
+                   + "left-hand panel checks the committed band's own paired recordings against it."}
                 </MDTypography>
               </MDBox>
             </Grid>
@@ -1180,11 +1179,10 @@ function Biomarkers() {
                 <MDTypography variant="caption" color="dark"
                   sx={{ fontSize: 11.5, display: "block", mt: 0.5, fontStyle: "italic" }}>
                   {committedBand
-                    ? "Solid frame: fitted from this participant's own time-matched recordings of "
-                      + "the committed band."
-                    : "Solid frame: this panel fits from observed recordings, so it has nothing to "
-                      + "fit until a band is committed. Click a band in the scan above, then use "
-                      + "\u201CCommit this band\u201D in its validation readout."}
+                    ? "Fitted from this participant's own time-matched recordings of the committed "
+                      + "band; the dashed line is the platform's constant, from the panel on the right."
+                    : "This panel fits from observed recordings, so it has nothing to fit until a "
+                      + "band is committed on the Closed-Loop Deployment page's \u201CChoose a band\u201D card."}
                 </MDTypography>
               </MDBox>
             </Grid>
@@ -1192,20 +1190,15 @@ function Biomarkers() {
               <MDBox px={2} pb={1}>
                 <MDTypography variant="button" fontWeight="bold" color="dark"
                   sx={{ fontSize: 14, display: "block", mb: 0.5 }}>
-                  {"What conversion is assumed for a band the device never sensed?"}
+                  {"What constants turn a band power into device units today?"}
                 </MDTypography>
-                {/* Dashed frame: a MODELLED quantity. Nothing in this panel was measured at the
-                    band a reader may be considering; the gain there is read off a fitted trend
-                    across frequency, which is exactly the kind of number that should not be
-                    mistaken for an observation. */}
-                <MDBox sx={{ border: `2px dashed ${PAL.neutralBorder}`, borderRadius: 2, p: 0.75 }}>
-                  <ConversionModelPanel participantUid={participant_uid} />
+                <MDBox sx={{ border: `2px solid ${PAL.accentBorder}`, borderRadius: 2, p: 0.75 }}>
+                  <CalibrationInEffectPanel participantUid={participant_uid} />
                 </MDBox>
                 <MDTypography variant="caption" color="dark"
                   sx={{ fontSize: 11.5, display: "block", mt: 0.5, fontStyle: "italic" }}>
-                  {"Dashed frame: a frozen model, not a measurement. The gain at any particular "
-                   + "band is interpolated from the fitted trend across frequency, so it carries "
-                   + "the trend's assumptions as well as its uncertainty."}
+                  {"The transform constant is measured from this participant's own paired blocks; "
+                   + "the bridge is composed from it and the survey ratio, and the panel says so."}
                 </MDTypography>
               </MDBox>
             </Grid>

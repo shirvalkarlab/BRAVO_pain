@@ -119,6 +119,34 @@ def gate_blocks(rows, *, min_td_seconds=MIN_TD_SECONDS, min_lfp_points=MIN_LFP_P
     return out
 
 
+def block_status(rows, *, target="all", gate=True, mad_rule=True,
+                 min_td_seconds=MIN_TD_SECONDS, min_lfp_points=MIN_LFP_POINTS):
+    """One status per row, in the rows' order, under the recipe: "unusable" (no finite positive
+    pair), "gated" (fails the block gate), "flagged" (the 5-MAD rule on the raw ratio), "kept"."""
+    if target not in ("all", "off"):
+        raise ValueError(f"target must be 'all' or 'off', got {target!r}")
+    col = f"target_lsb_{target}"
+    status = []
+    for r in rows:
+        usable = (np.isfinite(r["existing_uv2"]) and r["existing_uv2"] > 0
+                  and np.isfinite(r[col]) and r[col] > 0)
+        if not usable:
+            status.append("unusable")
+        elif gate and not gate_blocks([r], min_td_seconds=min_td_seconds, min_lfp_points=min_lfp_points):
+            status.append("gated")
+        else:
+            status.append("kept")
+    if mad_rule:
+        idx = [i for i, st in enumerate(status) if st == "kept"]
+        if idx:
+            ratio = np.array([rows[i][col] / rows[i]["existing_uv2"] for i in idx], float)
+            flags, _info = mad_outlier_flags(ratio)
+            for i, f in zip(idx, flags):
+                if f:
+                    status[i] = "flagged"
+    return status
+
+
 def transform_k(rows, *, target="all", gate=True, mad_rule=True,
                 min_td_seconds=MIN_TD_SECONDS, min_lfp_points=MIN_LFP_POINTS):
     """The proportional constant k = median(LSB / uV^2) over the blocks, with its fit statistics.
@@ -128,21 +156,15 @@ def transform_k(rows, *, target="all", gate=True, mad_rule=True,
     Returns a dict: k, n, r (Pearson, raw scale), rmse_lsb, median_fold_error, n_before_gate,
     n_after_gate, n_flagged_by_rule, gate, outlier_rule, target.
     """
-    if target not in ("all", "off"):
-        raise ValueError(f"target must be 'all' or 'off', got {target!r}")
     col = f"target_lsb_{target}"
-    usable = [r for r in rows if np.isfinite(r["existing_uv2"]) and r["existing_uv2"] > 0
-              and np.isfinite(r[col]) and r[col] > 0]
-    n_before = len(usable)
-    kept = gate_blocks(usable, min_td_seconds=min_td_seconds, min_lfp_points=min_lfp_points) if gate else usable
+    status = block_status(rows, target=target, gate=gate, mad_rule=mad_rule,
+                          min_td_seconds=min_td_seconds, min_lfp_points=min_lfp_points)
+    n_before = sum(1 for st in status if st != "unusable")
+    n_flagged = sum(1 for st in status if st == "flagged")
+    kept = [r for r, st in zip(rows, status) if st == "kept"]
     P = np.array([r["existing_uv2"] for r in kept], float)
     L = np.array([r[col] for r in kept], float)
-    n_flagged = 0
-    if mad_rule and P.size:
-        flags, _info = mad_outlier_flags(L / P)
-        n_flagged = int(flags.sum())
-        P, L = P[~flags], L[~flags]
-    out = {"target": target, "n_before_gate": n_before, "n_after_gate": len(kept),
+    out = {"target": target, "n_before_gate": n_before, "n_after_gate": n_before - sum(1 for st in status if st == "gated"),
            "n_flagged_by_rule": n_flagged, "n": int(P.size),
            "gate": ({"min_td_seconds": float(min_td_seconds), "min_lfp_points": int(min_lfp_points)}
                     if gate else None),
@@ -207,3 +229,67 @@ def bridge_ratio(pairs, *, mad_rule=True, k_transform=DEPLOYED_K):
     out["ratio"] = float(np.median(ratio))
     out["bridge_lsb_per_device_uv2"] = float(k_transform / out["ratio"])
     return out
+
+
+# --- the Biomarkers page's calibration panel (decision 212) -------------------------------------
+
+JUNE_REFERENCE_LAST_DATE = "20260624"   #: the last export in the June derivation (decision 18)
+
+
+def _finite(x):
+    return float(x) if isinstance(x, (int, float, np.floating)) and np.isfinite(x) else None
+
+
+def _table_date(path):
+    stem = os.path.basename(path).rsplit(".", 1)[0]
+    return stem.rsplit("_", 1)[-1]
+
+
+def panel_payload(participant, *, deployed_k, deployed_bridge_ratio, deployed_bridge):
+    """Everything the page's calibration panel draws: every paired block with its status under the
+    adopted recipe, the recipe's fit, the June reference recomputed from the same table, the
+    bridge ratio overall and per centre / per contact pair, and the constants IN EFFECT, which the
+    caller reads from `analytics` (this module carries no analytics import on purpose)."""
+    try:
+        rows = load_blocks(participant)
+        pairs = load_bridge_pairs(participant)
+    except FileNotFoundError as e:
+        return {"available": False, "reason": str(e)}
+    status = block_status(rows, target="all")
+    fit = transform_k(rows, target="all")
+    june = transform_k([r for r in rows if r["report_date"] <= JUNE_REFERENCE_LAST_DATE],
+                       target="all", gate=False, mad_rule=False)
+    blocks = [{"uv2": _finite(r["existing_uv2"]), "lsb": _finite(r["target_lsb_all"]),
+               "side": r["side"], "channel": r["channel"], "center_hz": _finite(r["center_hz"]),
+               "date": r["report_date"], "timestamp": r["timestamp"],
+               "td_seconds": _finite(r["n_td_samples"] / (r["sample_rate_hz"] if np.isfinite(r["sample_rate_hz"]) and r["sample_rate_hz"] > 0 else 250.0)),
+               "n_lfp_points": _finite(r["n_lfp_points_all"]),
+               "median_ma": _finite(r["median_ma_all"]), "status": st}
+              for r, st in zip(rows, status)]
+    transform = dict(fit)
+    transform["k"] = _finite(fit["k"]); transform["r"] = _finite(fit["r"])
+    transform["rmse_lsb"] = _finite(fit["rmse_lsb"]); transform["median_fold_error"] = _finite(fit["median_fold_error"])
+    transform["blocks"] = blocks
+    transform["june_reference"] = {"k": _finite(june["k"]), "n": june["n"], "r": _finite(june["r"]),
+                                   "last_date": JUNE_REFERENCE_LAST_DATE}
+    br = bridge_ratio(pairs, k_transform=deployed_k)
+    bridge = {k: (_finite(v) if isinstance(v, float) else v) for k, v in br.items()}
+
+    def _group(key):
+        groups = {}
+        for p in pairs:
+            groups.setdefault(key(p), []).append(p)
+        return groups
+    bridge["per_centre"] = [{"center_hz": c, "ratio": _finite(bridge_ratio(g)["ratio"]), "n": bridge_ratio(g)["n"]}
+                            for c, g in sorted(_group(lambda p: p["center_hz"]).items())]
+    bridge["per_channel"] = [{"channel": ch, "ratio": _finite(bridge_ratio(g)["ratio"]), "n": bridge_ratio(g)["n"]}
+                             for ch, g in sorted(_group(lambda p: p["channel"]).items())]
+    bridge["per_channel_centre"] = [{"channel": ch, "center_hz": c, "ratio": _finite(bridge_ratio(g)["ratio"]),
+                                     "n": bridge_ratio(g)["n"]}
+                                    for (ch, c), g in sorted(_group(lambda p: (p["channel"], p["center_hz"])).items())]
+    bridge["n_surveys"] = len({p["survey_utc"] for p in pairs})
+    return {"available": True, "participant": str(participant).strip().upper(),
+            "table_date": _table_date(block_table_path(participant)),
+            "deployed": {"k": deployed_k, "bridge_ratio": deployed_bridge_ratio,
+                         "bridge_lsb_per_device_uv2": deployed_bridge},
+            "transform": transform, "bridge": bridge}
