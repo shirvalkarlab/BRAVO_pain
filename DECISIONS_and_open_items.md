@@ -25,7 +25,7 @@ decisions are appended to Part 3 here AND as a full row in the full log.
 - "Established" means the point sign; intervals and p stay as caveats; verdict flagged provisional when any interval spans zero (147). D19 passes on point signs (134); D26 capture checks read the pooled slope and WARN (139).
 - Family-wise correction on the grid: Benjamini-Hochberg over 22 centres per grid, no autocorrelation adjustment (63); the cell interval is a block bootstrap sized like the shuffle (183).
 - E1 (current-to-power) is the pooled titration slope, model B: one intercept per run, ramped side's current, single-side runs, other side held at ANY constant (126, 197, 198). Never pooled across visits at the per-run level (40); curvature tested pooled across visits, cluster-robust, before any switching value on a peaked band, and only on one side of the peak (55, 56, 124).
-- The one-band rule: a sensing contact and rate is usable when ONE band falls with current AND rises with pain on the stored Biomarkers grid; no majority rules (199). On RCS08 every qualifying band sits on a stimulator harmonic and L 1-3+ / L 0-2+ have no positive band — his to weigh.
+- The one-band rule: a sensing contact and rate is usable when ONE band falls with current AND rises with pain on the stored Biomarkers grid; no majority rules (199). "Rises with pain" means positive with the block-bootstrap interval wholly above zero (supported, 210); the grid's stricter "established" is shown beside it. On RCS08 every qualifying band sits on a stimulator harmonic and L 1-3+ / L 0-2+ have no positive band — his to weigh.
 - Honest current: a milliamp number is recommended only when three per-speed checks pass (not flat, beats today beyond scatter, ≥6 pairs each ≥5 ratings on ≥2 California days spanning ≥1 mA) (158, 184). Rate ≥55 Hz unless a stated reason (138). Left and right are modelled together (157).
 - Reliable change: short-gap (≤1 h) pairwise SD per score, same-minute repeats removed, stim-off pairs kept; a warning, never a blocker (104, 111, 112).
 - Post-move margin: 0 s by measurement; the 20 s switch stays OFF (144, 178-179, 191, 196).
@@ -96,7 +96,7 @@ Refs are commits or PRs; `→N` means superseded by N.
 15. Direct spectrum-to-device route; round trip adds nothing, 0.8% (`f915257`).
 16. 8.8 Hz R 0-3+ from 2026-03-01; earlier data sit in a settling transient (`e9d7a80`).
 17. Impedance term rejected, p 0.26 with grouping (`a9c3a01`).
-18. Transform route at 352.62 is the primary trace conversion (r 0.9927) (→209: 349.10).
+18. Transform route at 352.62 is the primary trace conversion (r 0.9927) (→209 →211: 345.59).
 19. Moving-block bootstrap, effective n, de-folded lower bound as gate.
 ~~20~~. →21. Cut-point converted through the frozen model: a units error (z-scored log fed as linear).
 21. Fallback models the device power line off the raw trace at the cut-point's own centre; never converts the switching value (`09798f7`).
@@ -288,7 +288,9 @@ Refs are commits or PRs; `→N` means superseded by N.
 206. The aperiodic (1/f) fit deleted with its `fooof` transform; reached by no page; the device cannot threshold a peak's prominence.
 207. Calibration exploration (no code): the frozen model's curvature is between-band gain pooled into one slope; within-band slopes about 1; raw fits agree with the median ratio; the frozen-model rewrite was scratched in favour of refitting the constant on the new data.
 208. The June anchor reproduced with the lab's benchmark (n 131, r 0.9927) and extended to 2026-09-03 (n 133 gated, k 345.59, r 0.992); block gate (3 s, 6 readings) and 5-MAD ratio rule adopted; bridge ratio 4.789 refit as raw median 4.755, kept; recipe and de-identified blocks and pairs in the repository.
-209. The transform constant is 349.10 everywhere, the midpoint of 352.62 and 345.59; composed bridge 72.90; page labels read the served constant; every calibrated number scales by 0.9900, verdicts unchanged; heat-map correlations move at most 0.044 through the ceiling exclusion.
+~~209~~. →211. The transform constant as the midpoint of 352.62 and 345.59, 349.10; composed bridge 72.90; page labels read the served constant; every calibrated number scales by 0.9900, verdicts unchanged; heat-map correlations move at most 0.044 through the ceiling exclusion.
+210. The one-band rule's pain leg loosened to "supported" (positive, block-bootstrap interval wholly above zero); "established" reported beside it; usable cells 0 -> 11 on today's data, L 0-3+ Left 125 Hz selected.
+211. The transform constant is 345.59 everywhere: the adopted recipe's one median over every block, not a midpoint of eras (209 superseded); composed bridge 72.16; every calibrated number scales by 0.9899, verdicts and the 11 usable cells unchanged.
 
 ---
 

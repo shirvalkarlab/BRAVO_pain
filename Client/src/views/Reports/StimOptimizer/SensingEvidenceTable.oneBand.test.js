@@ -32,14 +32,14 @@ const closedLoop = {
   selected: { channel: "ONE_THREE_RIGHT", hemisphere: "Right", rate_hz: 110, display_short: "R 1⁻3⁺" },
   amp_hard_limit_mA: 5, adaptive_window_hz: [8, 30], min_adaptive_rate_hz: 55,
   pain_relationship: { available: true, score: "nrs", score_label: "NRS (0–10)", stored_utc: "2026-09-17T21:10:55+00:00",
-    by_channel: { ONE_THREE_RIGHT: { centers_hz: [14.5, 23.5, 24.5, 25.5, 26.5, 27.5, 28.5, 29.5], n_established_positive: 8, n_established_negative: 0, n_positive_not_established: 0 },
-      ONE_THREE_LEFT: { centers_hz: [], n_established_positive: 0, n_established_negative: 16, n_positive_not_established: 0 } } },
+    by_channel: { ONE_THREE_RIGHT: { display_short: "R 1⁻3⁺", centers_hz: [14.5, 23.5, 24.5, 25.5, 26.5, 27.5, 28.5, 29.5], n_supported_positive: 8, n_established_positive: 5, supported_not_established_hz: [26.5, 27.5, 28.5], n_established_negative: 0, n_positive_not_supported: 0 },
+      ONE_THREE_LEFT: { display_short: "L 1⁻3⁺", centers_hz: [], n_supported_positive: 0, n_established_positive: 0, supported_not_established_hz: [], n_established_negative: 16, n_positive_not_supported: 0 } } },
   responding_cells: [
     cell(),
     cell({ channel: "ONE_THREE_LEFT", hemisphere: "Left", rate_hz: 55, n_responding: 0, n_era_negative_significant: 18,
       n_pain_positive: 0, n_qualifying: 0, qualifying_centers_hz: [], qualifying_near_stim_harmonic_hz: [], stim_harmonic_notes: {},
       deployable: false, display_short: "L 1⁻3⁺", display_hemisphere: "Left", display_contacts: "1⁻3⁺",
-      blocking_reasons: "no band on this contact has an established positive relationship with pain on the Biomarkers grid (power rising with pain), which the device's control polarity needs" }),
+      blocking_reasons: "no band on this contact has a supported positive relationship with pain on the Biomarkers grid (power rising with pain), which the device's control polarity needs" }),
   ],
 };
 
@@ -53,6 +53,15 @@ describe("SensingEvidenceTable under the one-band rule", () => {
     expect(t).toContain("26.5, 27.5 Hz");
     expect(t).toContain("6 of 18");                   // pain-positive bands on R 1-3+
     expect(t).toContain("0 of 18");                   // on L 1-3+
+  });
+
+  it("states the pain leg's rule as the interval above zero and reports the stricter count beside it (decision 210)", () => {
+    const { container } = rtlRender(wrap(<SensingEvidenceTable closedLoop={closedLoop} />));
+    const t = container.textContent;
+    expect(t).toMatch(/interval (lies )?wholly above zero/i);
+    expect(t).not.toMatch(/the grid calls it established\./);
+    expect(t).toContain("R 1⁻3⁺: 8 rise (5 of them established)");
+    expect(t).toContain("L 1⁻3⁺: 0 rise, 16 fall");
   });
 
   it("no longer says a majority is needed", () => {

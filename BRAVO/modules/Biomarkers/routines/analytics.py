@@ -2482,8 +2482,8 @@ COMPATIBLE_THRESHOLD_MODES = tuple(m for m, v in THRESHOLD_MODES.items()
 
 
 # ── TD→LSB conversion routes (PI decision 2026-06-27, HANDOFF_TD_LSB_calibration_2026-06-27.md) ──
-# The PRIMARY TD→LSB source of truth is the **transform route, k = LSB_PER_UV2_TRANSFORM = 349.10 (decision 209; 352.62 until 2026-09-20)**
-# (below); the PSD-only no-TD case uses the **device-PSD bridge, LSB_PER_DEVICE_PSD = 72.90** (CS-3,
+# The PRIMARY TD→LSB source of truth is the **transform route, k = LSB_PER_UV2_TRANSFORM = 345.59 (decision 211; 352.62 until 2026-09-20)**
+# (below); the PSD-only no-TD case uses the **device-PSD bridge, LSB_PER_DEVICE_PSD = 72.16** (CS-3,
 # below). The deployment fallback ladder anchors an offline-Welch µV² cut-point to LSB via the
 # per-participant frozen PSD→LSB model (psd_lsb_model.estimate_lsb), which is itself fit on the SAME
 # offline-Welch µV²→device-LSB mapping (RCS08.json), so the cut-point and the converter share units.
@@ -2515,11 +2515,12 @@ LSB_VALIDATED_HZ_HI = 28.3
 # THE RECIPE AND THE BLOCKS ARE IN THIS REPOSITORY (decision 208, 2026-09-20): `routines/calibration.py`
 # and `data/calibration/RCS08_transform_blocks_2026-09-03.csv`; the refit on every block through
 # 2026-09-03 with the adopted block gate and 5-MAD ratio rule gives 345.59 (n = 133, r = 0.992).
-# THE DEPLOYED CONSTANT IS THE MIDPOINT OF THE TWO, 349.10 (decision 209, the PI, 2026-09-20: "take the
-# median between two values and use that transform value everywhere"; `calibration.deployed_k_from_tables`
-# recomputes it from the tables and the test pins the two agree). This is the deployable + exploratory
-# TD→LSB constant. The stim-off variants (356.61 June; 351.2 September) are recorded for provenance
-# ONLY and are NOT deployed — use 349.10 exactly, do not round.
+# THE DEPLOYED CONSTANT IS THAT ONE MEDIAN OVER ALL OF THE DATA, 345.59 (decision 211, the PI, 2026-09-20:
+# "run the refit on the ... median of all of the data, rather than looking at two clusters"; decision 209
+# had deployed the midpoint of the June and September values, 349.10, for a few hours).
+# `calibration.deployed_k_from_tables` recomputes it from the table and the test pins the two agree.
+# This is the deployable + exploratory TD→LSB constant. The stim-off variant (351.2) is recorded for
+# provenance ONLY and is NOT deployed — use 345.59 exactly, do not round.
 # k is multiplicative on a LOG band-power feature, so within a SINGLE-SOURCE feature (every point
 # scaled by the same k) it CANCELS inside Pearson r / AUC — the correlation/AUC panels are identical
 # whether k is 269, 352.62, or 1. SCOPE: this holds only when the feature column is homogeneous in k.
@@ -2532,7 +2533,7 @@ LSB_VALIDATED_HZ_HI = 28.3
 # (a) the absolute LSB values displayed and (b) the deployable LSB threshold — which is why switching
 # the exploration TD path from welch256×269 to transform×352.62 moves the displayed scale to the
 # lab-consistent value WITHOUT moving any r/AUC result.
-LSB_PER_UV2_TRANSFORM = 349.10         # k, transform route — midpoint of the June and September refits (decision 209); PRIMARY TD→LSB
+LSB_PER_UV2_TRANSFORM = 345.59         # k, transform route — the adopted recipe's median over every block (decision 211); PRIMARY TD→LSB
 # Device adaptive-sensing ceiling. Distinct from LSB_VALIDATED_HZ_HI (28.3 Hz = where paired-block
 # CALIBRATION ground truth exists, used by the extrapolation guard _freq_extrapolated). 30 Hz is the
 # firmware HARD limit on where an adaptive sensing band can be placed: a deployable modeled LSB is
@@ -2572,9 +2573,9 @@ LSB_DEPLOYABLE_HZ_HI = 30.0
 # The 4.789 was a geometric mean (a log-space average). Refit 2026-09-20 as the raw median with the
 # 5-MAD ratio rule on 26,334 pairs through 2026-09-03 in 7.8-28 Hz: 4.755, within 1 percent, so the
 # ratio is KEPT (decision 208; recipe and pairs in `routines/calibration.py`, `data/calibration/`). The
-# composed bridge below moves with the transform constant: 349.10 / 4.789 = 72.90 since decision 209.
+# composed bridge below moves with the transform constant: 345.59 / 4.789 = 72.16 since decision 211.
 LSB_PER_UV2_DEVICE_PSD_TD_RATIO = 4.789   # K_TD_PSD: device-PSD band power / TD-transform band power
-LSB_PER_DEVICE_PSD = LSB_PER_UV2_TRANSFORM / LSB_PER_UV2_DEVICE_PSD_TD_RATIO  # K_PSD_LSB ≈ 72.90 (73.63 until decision 209)
+LSB_PER_DEVICE_PSD = LSB_PER_UV2_TRANSFORM / LSB_PER_UV2_DEVICE_PSD_TD_RATIO  # K_PSD_LSB ≈ 72.16 (73.63 until decision 209)
 
 
 def _freq_extrapolated(center_hz, lo=LSB_VALIDATED_HZ_LO, hi=LSB_VALIDATED_HZ_HI):
@@ -2754,7 +2755,7 @@ def transform_centered_window(samples_uv, fs, center_offset_s, *,
 
 def td_to_lsb(samples_uv, fs, center_hz, *, half_hz=2.5, k=LSB_PER_UV2_TRANSFORM, **win_kw):
     """PRIMARY TD→LSB: device power-domain LSB from a time-domain µV trace via the transform DSP ×
-    k (default LSB_PER_UV2_TRANSFORM = 349.10). One helper, one constant, used by both the Biomarker
+    k (default LSB_PER_UV2_TRANSFORM = 345.59). One helper, one constant, used by both the Biomarker
     exploration panels and the deployment modeled fallback. `win_kw` forwards win_samples/step_samples/
     agg to td_transform_band_power (pass step_samples for the 50%-overlap deployed sweep). Returns
     float LSB (or ndarray for a vector center); NaN where the band power is NaN/non-positive."""

@@ -233,14 +233,14 @@ Three ways to reach the same quantity, rendered side by side per band and per se
 
 | Source | What it is | Coverage |
 |---|---|---|
-| **The voltage trace, calibrated** | 250 samples per second, transform recipe, times 349.10 (decision 209) | all 98 bands, tens of thousands of windows |
+| **The voltage trace, calibrated** | 250 samples per second, transform recipe, times 345.59 (decision 211) | all 98 bands, tens of thousands of windows |
 | **The device's own spectrum, composed** | the onboard spectrum summed in band, times 73.63 | all 98 bands in principle; **zero windows in every rendered current ladder** |
 | **The device's own band power** | native device units, no conversion | **the single programmed band only**, a few hundred windows |
 
 **The five honesty constraints, all five accepted by the PI on 2026-09-06.**
 
 1. **The three sources are not independent.** The device computes its own reading on board from the
-   same signal the voltage trace records, and the composed constant is literally 349.10 ÷ 4.789 (decision 209). **So
+   same signal the voltage trace records, and the composed constant is literally 345.59 ÷ 4.789 (decision 211). **So
    agreement between them is a check on the conversion, never replication of a physiological
    effect.** Every figure says so.
 2. **The middle source is empty during current ladders, and that is a protocol fact.** The device

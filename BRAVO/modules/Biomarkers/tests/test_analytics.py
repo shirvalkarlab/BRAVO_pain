@@ -1734,10 +1734,10 @@ def test_td_transform_band_power_reproduces_reference_dsp():
 
 
 def test_td_to_lsb_applies_transform_constant_and_guards():
-    """td_to_lsb == LSB_PER_UV2_TRANSFORM (349.10 since decision 209; 352.62 before; NOT 269) ×
+    """td_to_lsb == LSB_PER_UV2_TRANSFORM (345.59 since decision 211; 349.10 for decision 209; 352.62 before; NOT 269) ×
     transform band power, with the 1 s (one-window) minimum and non-positive guards returning NaN."""
     import math
-    assert abs(analytics.LSB_PER_UV2_TRANSFORM - 349.10) < 1e-9                 # transform route k
+    assert abs(analytics.LSB_PER_UV2_TRANSFORM - 345.59) < 1e-9                 # transform route k
     sr = 250.0
     t = np.arange(3000) / sr
     sig = 10 * np.sin(2 * np.pi * 20.0 * t)
@@ -1901,7 +1901,7 @@ def test_bridge_constants_compose_from_transform_and_td_psd_ratio():
     assert abs(analytics.LSB_PER_UV2_DEVICE_PSD_TD_RATIO - 4.789) < 1e-9
     expect = analytics.LSB_PER_UV2_TRANSFORM / analytics.LSB_PER_UV2_DEVICE_PSD_TD_RATIO
     assert abs(analytics.LSB_PER_DEVICE_PSD - expect) < 1e-9
-    assert abs(analytics.LSB_PER_DEVICE_PSD - 72.90) < 0.01      # 349.10 / 4.789 (decision 209)
+    assert abs(analytics.LSB_PER_DEVICE_PSD - 72.16) < 0.01      # 345.59 / 4.789 (decision 211)
     # the bridge constant is the device-PSD constant, NOT the TD transform constant
     assert analytics.LSB_PER_DEVICE_PSD != analytics.LSB_PER_UV2_TRANSFORM
 

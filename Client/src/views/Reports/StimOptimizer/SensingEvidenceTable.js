@@ -77,7 +77,14 @@ export default function SensingEvidenceTable({ closedLoop }) {
   const sel = cl.selected || null;
   const pr = cl.pain_relationship || null;
   const painSummary = pr && pr.by_channel
-    ? Object.entries(pr.by_channel).map(([ch, v]) => `${contactLabel(v, ch)}: ${v.n_established_positive || 0} rise${v.n_established_negative ? `, ${v.n_established_negative} fall` : ""}`).join(" · ")
+    ? Object.entries(pr.by_channel).map(([ch, v]) => {
+      // Decision 210: the count that feeds the rule is the SUPPORTED one (interval wholly above
+      // zero); the stricter "established" count is shown beside it when it differs.
+      const rise = v.n_supported_positive != null ? v.n_supported_positive : (v.n_established_positive || 0);
+      const est = v.n_established_positive || 0;
+      const estNote = rise && est !== rise ? ` (${est} of them established)` : "";
+      return `${contactLabel(v, ch)}: ${rise} rise${estNote}${v.n_established_negative ? `, ${v.n_established_negative} fall` : ""}`;
+    }).join(" · ")
     : "";
   const nScreened = num(cl.n_cells_screened), nDeploy = num(cl.n_cells_deployable);
   const headline = nScreened
@@ -157,7 +164,7 @@ export default function SensingEvidenceTable({ closedLoop }) {
 
       {pr && pr.available && (
         <MDTypography variant="caption" component="div" sx={{ ...SMALL, fontSize: TYPE.body, mt: 0.8 }}>
-          {`Which bands rise with pain is read off the Biomarkers grid for the ${pr.score_label || pr.score || "pain"} score${pr.stored_utc ? `, built ${new Date(pr.stored_utc).toLocaleString()}` : ""}: a band counts when its correlation with pain is positive and the grid calls it established. ${painSummary}`}
+          {`Which bands rise with pain is read off the Biomarkers grid for the ${pr.score_label || pr.score || "pain"} score${pr.stored_utc ? `, built ${new Date(pr.stored_utc).toLocaleString()}` : ""}: a band counts when its correlation with pain is positive and its interval lies wholly above zero (supported); the stricter selection-aware bar the grid calls "established" is reported beside it, not required. ${painSummary}`}
         </MDTypography>
       )}
       {pr && pr.available === false && (

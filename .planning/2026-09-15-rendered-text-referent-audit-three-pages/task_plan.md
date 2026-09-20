@@ -5,12 +5,13 @@ Fix every on-screen sentence on the three pages that describes something no long
 fact inside one visual block, and pin each card with a fixture render test (decisions 172-174).
 
 ## Next Step
-Nothing queued; phases 1-12 complete (decisions 174-206; the last: the aperiodic fit deleted). Waiting on
-the PI: the frozen calibration model (202's last site), pulse-width pooling (189), `max_per_rating` (118),
-the zero-caller chronic routines (187), item 15's niceties; not code: the titration session (open item 30).
+Nothing queued; phases 1-14 complete (decisions 174-211; the last two: the pain leg loosened to "supported",
+and the constant as the one median over every block, 345.59). Waiting on the PI: the dashed calibration panel
+(207), pulse-width pooling (189), `max_per_rating` (118), the zero-caller chronic routines (187), item 15's
+niceties; not code: the titration session (open item 30).
 
 ## Current Phase
-Phase 12
+Phase 14
 
 ### Phase 1: Review (the PI calls /swarm-review with findings.md §1)
 - [x] Rendered-text inventory per page: every string a card draws, its panel, the element beside it, its referent
@@ -113,4 +114,17 @@ Phase 12
 - [x] Callers mapped: only the `fooof` transform, selectable by no page or request; the runner alone
 - [x] RED 3 of 3 (`test_no_aperiodic_fit.py`), function and branch and runner choice deleted, GREEN 3 of 3
 - [x] Host 1379 / 2 / 0; container 687 / 0; no live proof applies (zero callers); push
+- **Status:** complete
+
+### Phase 13: The calibration constant (the PI, 2026-09-20)
+- [x] Exploration on the frozen model, the live panel and the 129 blocks (207); the June anchor reproduced with the lab's benchmark and extended to 2026-09-03; recipe and blocks in the repository (208)
+- [x] Bridge ratio refit as a raw median (4.755, kept); the composed bridge follows the transform constant (208)
+- [x] k = 349.10 everywhere, tests first; page labels read the served constant; matched live proof after a confounded first pair (209)
+- [x] Suites, jest, rebuild, workers reloaded, push
+- **Status:** complete
+
+### Phase 14: The pain leg and the one-median constant (the PI, 2026-09-20)
+- [x] The pain leg counts a band whose block-bootstrap interval lies wholly above zero; "established" reported beside it; 0 -> 11 usable cells on today's data (210)
+- [x] k = 345.59, the adopted recipe's median over every block; composed bridge 72.16; matched live proof on five products (211)
+- [x] Suites, jest, rebuild, workers reloaded, push
 - **Status:** complete

@@ -14,9 +14,10 @@ exports through 2026-09-03), and `routines/calibration.py` applies the recipe to
   * the ADOPTED recipe is the reference recipe plus a block gate (at least 3 s of time domain and
     at least 6 device points) and the platform's one outlier rule, 5 MAD on the RAW ratio
     LSB / uV^2 (decision 205), and it must not take a logarithm anywhere;
-  * the DEPLOYED constant is the midpoint of the June reference (352.62) and the September
-    adopted refit (345.59): 349.10 (the PI, 2026-09-20, decision 209: "take the median between two
-    values and use that transform value everywhere"); the composed bridge follows, 349.10 / 4.789.
+  * the DEPLOYED constant is the adopted recipe on EVERY block, one median over all of the data
+    (the PI, 2026-09-20, decision 211: "run the refit on the ... median of all of the data, rather
+    than looking at two clusters"): 345.59; the composed bridge follows, 345.59 / 4.789. (Decision
+    209 briefly deployed the midpoint of the June and September values, 349.10.)
 """
 import ast
 import csv
@@ -91,20 +92,17 @@ def test_a_single_short_block_is_what_the_gate_removes():
     assert all(r["n_td_samples"] >= 750 and r["n_lfp_points_all"] >= 6 for r in kept)
 
 
-def test_the_deployed_constant_is_the_midpoint_of_the_june_reference_and_the_september_refit():
-    """Decision 209: k = (352.6158 + 345.5870) / 2 = 349.1014, deployed as 349.10 (two decimals,
-    the precision the June constant carried). Both halves are recomputed here from the tables, so
-    a change to either table or either recipe shows up as a failure rather than a drift."""
-    rows = _blocks()
-    june = C.transform_k([r for r in rows if r["report_date"] <= "20260624"], target="all",
-                         gate=False, mad_rule=False)["k"]
-    sept = C.transform_k(rows, target="all")["k"]
-    assert round((june + sept) / 2.0, 2) == 349.10, (june, sept)
-    assert A.LSB_PER_UV2_TRANSFORM == 349.10
+def test_the_deployed_constant_is_the_adopted_recipes_median_over_every_block():
+    """Decision 211: one median over all the data, 345.5870 deployed as 345.59 (two decimals, the
+    precision the June constant carried); no era split, no midpoint. Recomputed here from the
+    table, so a change to the table or the recipe shows up as a failure rather than a drift."""
+    fit = C.transform_k(_blocks(), target="all")
+    assert fit["n"] == 133 and round(fit["k"], 2) == 345.59, (fit["n"], fit["k"])
+    assert A.LSB_PER_UV2_TRANSFORM == 345.59
     assert C.DEPLOYED_K == A.LSB_PER_UV2_TRANSFORM
-    assert C.deployed_k_from_tables("RCS08") == 349.10
-    # the composed bridge moves with it: 349.10 / 4.789
-    assert round(A.LSB_PER_DEVICE_PSD, 2) == 72.90, A.LSB_PER_DEVICE_PSD
+    assert C.deployed_k_from_tables("RCS08") == 345.59
+    # the composed bridge moves with it: 345.59 / 4.789
+    assert round(A.LSB_PER_DEVICE_PSD, 2) == 72.16, A.LSB_PER_DEVICE_PSD
 
 
 def test_the_recipe_takes_no_logarithm_and_uses_the_platforms_one_outlier_rule():
@@ -147,9 +145,9 @@ def test_the_bridge_ratio_is_the_raw_median_with_the_five_mad_rule_and_the_bridg
     assert fit["n_pairs"] == 26334 and fit["n_flagged_by_rule"] == 544 and fit["n"] == 25790, fit
     assert round(fit["ratio"], 3) == 4.755, fit["ratio"]
     assert round(fit["ratio_before_rule"], 3) == 4.774, fit["ratio_before_rule"]
-    assert round(fit["bridge_lsb_per_device_uv2"], 2) == round(349.10 / 4.755, 2), fit["bridge_lsb_per_device_uv2"]
+    assert round(fit["bridge_lsb_per_device_uv2"], 2) == round(345.59 / 4.755, 2), fit["bridge_lsb_per_device_uv2"]
     assert fit["outlier_rule"] == "5 MAD on the raw ratio device / transform band power"
-    assert A.LSB_PER_UV2_DEVICE_PSD_TD_RATIO == 4.789 and round(A.LSB_PER_DEVICE_PSD, 2) == 72.90
+    assert A.LSB_PER_UV2_DEVICE_PSD_TD_RATIO == 4.789 and round(A.LSB_PER_DEVICE_PSD, 2) == 72.16
     assert abs(fit["ratio"] - A.LSB_PER_UV2_DEVICE_PSD_TD_RATIO) / A.LSB_PER_UV2_DEVICE_PSD_TD_RATIO < 0.01
     assert C.DEPLOYED_BRIDGE_RATIO == A.LSB_PER_UV2_DEVICE_PSD_TD_RATIO
 

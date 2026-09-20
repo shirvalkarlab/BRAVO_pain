@@ -95,7 +95,7 @@ def test_no_established_positive_pain_band_on_the_contact_refuses_and_says_so():
     row = screen.iloc[0]
     assert row.n_era_negative_significant == 18 and row.n_pain_positive == 0
     assert bool(row.deployable) is False and best is None
-    assert ("no band on this contact has an established positive relationship with pain"
+    assert ("no band on this contact has a supported positive relationship with pain"
             in row.blocking_reasons)
 
 
@@ -159,30 +159,57 @@ def test_ranking_prefers_more_qualifying_bands_then_separation():
 def _grid():
     """The shape `ClosedLoopDeployment.adapter.band_sweep_grid_for_closed_loop` returns."""
     def rows(spec):
-        return [dict(band_center_hz=c, pearson_r=r, family_wise_q_8_to_30hz=q, answer=a)
-                for c, r, q, a in spec]
+        # (centre, r, interval low, interval high, q, answer): the interval is the grid's own
+        # block-bootstrap interval on the best-of-lengths correlation (decision 183)
+        return [dict(band_center_hz=c, pearson_r=r, pearson_r_low=lo, pearson_r_high=hi,
+                     family_wise_q_8_to_30hz=q, answer=a) for c, r, lo, hi, q, a in spec]
     return {
         "available": True,
         "grid_settings": {"sweep_metric": "nrs", "metric_label": "NRS (0-10)",
                           "stored_utc": "2026-09-17T01:02:03Z"},
         "band_time_sweep": {
             "ONE_THREE_RIGHT": {"best_correlation_rows": rows([
-                (24.5, 0.43, 0.016, "established"), (25.5, 0.44, 0.016, "established"),
-                (14.5, 0.30, 0.124, "established"), (12.5, 0.10, 0.60, "not_resolved"),
-                (8.5, -0.20, 0.30, "not_resolved")])},
+                (24.5, 0.43, 0.23, 0.60, 0.016, "established"), (25.5, 0.44, 0.23, 0.60, 0.016, "established"),
+                (14.5, 0.30, 0.10, 0.48, 0.124, "established"),
+                # SUPPORTED: interval wholly above zero, but under the selection-aware shuffle bar
+                (26.5, 0.23, 0.05, 0.41, 0.62, "not_resolved"),
+                # positive point value whose interval includes zero: not supported
+                (12.5, 0.10, -0.06, 0.24, 0.60, "not_resolved"),
+                (8.5, -0.20, -0.36, -0.03, 0.30, "not_resolved")])},
             "ONE_THREE_LEFT": {"best_correlation_rows": rows([
-                (12.5, -0.47, 0.0017, "established"), (24.5, -0.10, 0.5, "not_resolved")])},
+                (12.5, -0.47, -0.62, -0.30, 0.0017, "established"), (24.5, -0.10, -0.26, 0.05, 0.5, "not_resolved")])},
             "ZERO_TWO_LEFT": {"best_correlation_rows": []},
         },
     }
 
 
-def test_pain_positive_centres_are_established_and_positive_only():
+def test_pain_positive_centres_are_positive_bands_whose_interval_lies_above_zero():
+    """Decision 210 (the PI, 2026-09-20: loosen the rule so the best-supported bands pass): a band
+    counts when its correlation is positive and its own block-bootstrap interval is wholly above
+    zero. Clearing the grid's extra selection-aware bar ("established") is reported, not required.
+    A positive point value whose interval includes zero still does not count."""
     by = PR.pain_positive_centers_by_channel(_grid())
-    assert by["ONE_THREE_RIGHT"] == frozenset({24.5, 25.5, 14.5})
-    assert by["ONE_THREE_LEFT"] == frozenset()          # a NEGATIVE established band does not count
+    assert by["ONE_THREE_RIGHT"] == frozenset({24.5, 25.5, 14.5, 26.5})
+    assert by["ONE_THREE_LEFT"] == frozenset()          # a NEGATIVE band does not count, established or not
     assert by["ZERO_TWO_LEFT"] == frozenset()
     assert "ZERO_THREE_LEFT" not in by                  # absent from the grid: unknown, not empty
+
+
+def test_the_stricter_reading_is_still_available_and_reported():
+    by = PR.pain_positive_centers_by_channel(_grid(), level=PR.ESTABLISHED)
+    assert by["ONE_THREE_RIGHT"] == frozenset({24.5, 25.5, 14.5})
+    s = PR.summarise(_grid())["by_channel"]["ONE_THREE_RIGHT"]
+    assert s["n_supported_positive"] == 4 and s["n_established_positive"] == 3
+    assert s["n_positive_not_supported"] == 1
+    assert s["supported_not_established_hz"] == [26.5]
+
+
+def test_a_row_without_an_interval_cannot_be_supported():
+    g = _grid()
+    for r in g["band_time_sweep"]["ONE_THREE_RIGHT"]["best_correlation_rows"]:
+        r.pop("pearson_r_low"); r.pop("pearson_r_high")
+    by = PR.pain_positive_centers_by_channel(g)
+    assert by["ONE_THREE_RIGHT"] == frozenset({24.5, 25.5, 14.5})   # only the established ones remain
 
 
 def test_an_unavailable_grid_gives_no_mapping():
@@ -194,11 +221,12 @@ def test_the_summary_names_the_score_the_stamp_and_every_contacts_bands():
     s = PR.summarise(_grid())
     assert s["available"] is True and s["score"] == "nrs" and s["score_label"] == "NRS (0-10)"
     assert s["stored_utc"] == "2026-09-17T01:02:03Z"
-    assert s["by_channel"]["ONE_THREE_RIGHT"]["centers_hz"] == [14.5, 24.5, 25.5]
+    assert s["by_channel"]["ONE_THREE_RIGHT"]["centers_hz"] == [14.5, 24.5, 25.5, 26.5]
     assert s["by_channel"]["ONE_THREE_RIGHT"]["n_established_positive"] == 3
-    assert s["by_channel"]["ONE_THREE_RIGHT"]["n_positive_not_established"] == 1
+    assert s["by_channel"]["ONE_THREE_RIGHT"]["n_supported_positive"] == 4
     assert s["by_channel"]["ONE_THREE_LEFT"]["n_established_negative"] == 1
     assert s["rule"].startswith("a band counts when")
+    assert "wholly above zero" in s["rule"] and "established" in s["rule"]
 
 
 # --- the gate applies the same rule and the same sentences --------------------------------------

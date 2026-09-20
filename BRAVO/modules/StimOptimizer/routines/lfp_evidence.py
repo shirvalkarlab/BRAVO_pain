@@ -1225,7 +1225,7 @@ def cell_response_verdict(results, *, pain_positive_centers) -> dict:
                      + (f"; {n_sig} of {n} are significant in the WRONG direction" if n_sig
                         else ""))
     if not pain_here:
-        fails.append("no band on this contact has an established positive relationship with "
+        fails.append("no band on this contact has a supported positive relationship with "
                      "pain on the Biomarkers grid (power rising with pain), which the device's "
                      "control polarity needs")
     if falling and pain_here and not qualifying:
