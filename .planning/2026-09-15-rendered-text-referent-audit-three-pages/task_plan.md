@@ -14,7 +14,7 @@ Nothing queued. Phases 1-9 complete (decisions 174-199; 199 on 2026-09-17: the o
 current AND rises with pain -- replaced the two majorities on the readiness screen and the gate; two things for
 the PI: L 1-3+ and the committed L 0-2+ have no established band whose power rises with pain, and every qualifying
 band on RCS08 sits on a stimulator harmonic; 200 on 2026-09-17: C3, C4, C6, C7, T2, T3 of the 2026-09-15 review
-built; 201 on 2026-09-19: C6 reversed on the PI's ruling). Left: pooling across pulse widths (decision 189's plan); decision 118's `max_per_rating` question; item 15's list
+built; 201 on 2026-09-19: C6 reversed on the PI's ruling; 202 on 2026-09-19: no log power on the E1 path -- the readiness slope, the amplitude-effect table, the joined table's log columns). **The PI's standing rule, 2026-09-19: log power enters no calculation anywhere**; the remaining sites (the stability test, the dB pain-correlation feature, the outlier fallback, the aperiodic fit, the frozen calibration model) are listed in decision 202 and are his call in that order. Left: pooling across pulse widths (decision 189's plan); decision 118's `max_per_rating` question; item 15's list
 (scroll-link, print stylesheet); the four zero-caller chronic-detector routines (decision 187), his call.
 Not code: the titration session (open item 30).
 

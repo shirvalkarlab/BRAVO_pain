@@ -168,3 +168,10 @@
 - Jest C6 test flipped to assert absence, RED (line rendered), then the line removed from `DeploySignoffCard.js`, GREEN; ClosedLoopSim 47 passed + the known 2.
 - Frontend rebuilt (chunk 576.fde69d26); "approved indication" in 0 chunks. No backend change; no suite run; no live proof applies.
 - T2 question (random intercept per run, shared slope) answered in chat from `within_visit.amplitude_response_shape_pooled`; no code changed for it.
+
+## 2026-09-19 (the PI: "go on 1, 2 and 8, tests first"): decision 202, no log power on the E1 path
+- Premise checked first: the pooled E1 slope was already raw (probe reproduced −7.904 on L 1-3+); the log sat in the readiness screen's era-blocked slope, the amplitude-effect table's slope, and two dead joined-table columns.
+- RED: 10 new tests (4 StimOptimizer, 6 ClosedLoopDeployment) failed on the old names/values; 13 existing tests rewritten in device units (gamma scatter, no log even in fixtures).
+- GREEN: host 1372 / 2 / 0; container 664 / 0. Two of my own slips on the way: the new rule version dropped the `post_ramp_margin` token decision 144's guard requires; the linear fixture let power go negative at the old log-scale noise -- both fixed and re-measured.
+- Live RCS08 (`_d199_capture.py`/`_d200_capture.py` before202/after202, `_d202_diff.py`): Closed-Loop verdict/E1/thresholds identical on both bands; Stim Optimizer usable cells 4 -> 6, gate verdict unchanged, every qualifying band still on a harmonic.
+- Workers reloaded. No Client/src change.

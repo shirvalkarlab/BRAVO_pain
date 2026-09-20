@@ -414,8 +414,9 @@ def amplitude_response_shape_pooled(amp_mA, power, visit, *, min_points=8):
     # The pooled straight-line slope and its cluster-robust significance -- computed here (not in
     # a second pass) because X1/beta1/V1 already exist for r2_linear above; this only reads what
     # was already fitted. Column 1 of X1 is the current itself (column 0 is the intercept, per
-    # `_design` above), so beta1[1] is the pooled slope in the same "log power per mA" units
-    # `amplitude_effect.py`'s own per-run slope uses.
+    # `_design` above), so beta1[1] is the pooled slope in DEVICE UNITS per mA -- this fit has
+    # always been on the raw band power; the comment here said "log power" until 2026-09-19, when
+    # decision 202 corrected it and moved the per-run table's own slope onto the same units.
     from scipy import stats as _st
     slope1 = float(beta1[1])
     se1 = float(np.sqrt(V1[1, 1])) if V1[1, 1] > 0 else float("nan")

@@ -327,7 +327,7 @@ def enumerate_candidates(frozen, *, lfp=None, hemispheres=None, modes=DEFAULT_MO
                                               else float("nan")),
                                 response_reason=(response.reason if response is not None
                                                  else "no LFP evidence supplied"),
-                                slope_log_per_mA=(float(response.slope_log_per_mA)
+                                slope_per_mA=(float(response.slope_per_mA)
                                                   if response is not None else float("nan")),
                                 slope_p=(float(response.slope_p) if response is not None
                                          else float("nan"))),
@@ -353,7 +353,7 @@ def _policy_frame(policies) -> pd.DataFrame:
             threshold_single=p.threshold_single,
             thresholds_determined=p.thresholds_determined,
             separation_d=p.evidence.get("separation_d", float("nan")),
-            slope_log_per_mA=p.evidence.get("slope_log_per_mA", float("nan")),
+            slope_per_mA=p.evidence.get("slope_per_mA", float("nan")),
             slope_p=p.evidence.get("slope_p", float("nan"))))
     return pd.DataFrame(rows)
 

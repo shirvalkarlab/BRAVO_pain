@@ -78,9 +78,14 @@ def _era(amp):
 
 
 def band_powers(log_psd, freqs, centers=DEFAULT_BAND_CENTERS_HZ, width=DEFAULT_BAND_WIDTH_HZ):
-    """Per-band power on both scales from one row's log spectrum.
+    """Per-band LINEAR power from one row's stored spectrum, a dict keyed by band centre.
 
-    Returns (linear, log_of_linear, mean_of_log), each a dict keyed by band centre.
+    The stored spectrum is in decibels (the assembled matrix's convention, set in
+    `streaming_psd.psd_rows_to_matrix`), so the bins are turned back into linear power first; that
+    undoing is the only place a logarithm appears here. Until 2026-09-19 this also returned a
+    decibel expression of the band power and the mean of the per-bin log values, and the joined
+    table carried both as columns read by nothing (rule D11 fixes the scale to linear); the PI's
+    rule of that day (decision 202) is that log power enters no calculation, so they are gone.
 
     ``linear`` is the arithmetic mean of the linear bin powers and is the device-comparable
     quantity (D11). ``log_of_linear`` is its decibel expression, which is a monotone relabelling of
@@ -93,19 +98,16 @@ def band_powers(log_psd, freqs, centers=DEFAULT_BAND_CENTERS_HZ, width=DEFAULT_B
     if lp.shape[0] != f.shape[0]:
         raise ValueError(f"log_psd has {lp.shape[0]} bins but freqs has {f.shape[0]}")
     lin_bins = np.power(10.0, lp / 10.0)
-    out_lin, out_log, out_mol = {}, {}, {}
+    out_lin = {}
     half = float(width) / 2.0
     for c in centers:
         m = (f >= c - half) & (f < c + half)
         if not m.any():
-            out_lin[c] = out_log[c] = out_mol[c] = np.nan
+            out_lin[c] = np.nan
             continue
-        with np.errstate(invalid="ignore", divide="ignore"):
-            lin = float(np.nanmean(lin_bins[m]))
-            out_lin[c] = lin
-            out_log[c] = 10.0 * np.log10(lin) if lin > 0 else np.nan
-            out_mol[c] = float(np.nanmean(lp[m]))
-    return out_lin, out_log, out_mol
+        with np.errstate(invalid="ignore"):
+            out_lin[c] = float(np.nanmean(lin_bins[m]))
+    return out_lin
 
 
 def _assign_epoch(t_epoch_s, epochs):
@@ -1144,7 +1146,7 @@ def joined_table(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_HZ,
     rows = []
     have_epochs = epochs is not None and len(epochs) > 0
     for i, (_, r) in enumerate(psd_frame.iterrows()):
-        lin, logl, mol = band_powers(r["log_psd"], r["freqs"], centers, width)
+        lin = band_powers(r["log_psd"], r["freqs"], centers, width)
         e = int(ep_idx[i])
         ctx = {}
         if have_epochs and e >= 0:
@@ -1166,8 +1168,7 @@ def joined_table(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_HZ,
             rows.append({
                 "t": float(r["t"]), "channel": r["channel"], "source": r.get("source"),
                 "setting_epoch": e, "center_hz": float(c), "band_width_hz": float(width),
-                "power_linear": lin[c], "power_log_of_linear": logl[c],
-                "power_mean_of_log": mol[c],
+                "power_linear": lin[c],
                 **ctx,
             })
     T = pd.DataFrame(rows)
@@ -1188,11 +1189,11 @@ def _joined_table_calibrated(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_
     """``joined_table`` for the calibrated frame: one row per (tile, band), power read from the
     band's own column rather than integrated from a spectrum.
 
-    THE THREE POWER SCALES. ``power_linear`` is the stored value itself, already the device's
-    linear band power (the quantity a switching value is typed in). ``power_log_of_linear`` is its
-    decibel expression. ``power_mean_of_log`` is NOT available from this frame: it is the mean of
-    the per-bin log spectrum inside the band, and the calibrated frame holds no per-bin spectrum,
-    so the column is present and empty rather than filled with a look-alike.
+    ONE POWER SCALE. ``power_linear`` is the stored value itself, already the device's linear band
+    power (the quantity a switching value is typed in). Until 2026-09-19 two log columns sat beside
+    it (a decibel expression, and an always-empty mean-of-log); rule D11 fixes the scale to linear,
+    nothing read them, and the PI's rule of that day (decision 202) is that log power enters no
+    calculation, so they are gone.
 
     THE TILE-QUALITY GATE. A tile the cache marked not usable, or railed, is left out, which is the
     same gate the other deployment panels apply to this frame before they read it.
@@ -1245,12 +1246,9 @@ def _joined_table_calibrated(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_
         if col not in f.columns:
             continue
         lin = pd.to_numeric(f[col], errors="coerce").to_numpy(dtype=float)
-        with np.errstate(invalid="ignore", divide="ignore"):
-            logl = np.where(lin > 0, 10.0 * np.log10(np.where(lin > 0, lin, 1.0)), np.nan)
         block = {"t": t, "channel": chan, "source": src, "setting_epoch": ep_idx,
                  "center_hz": np.full(len(f), float(c)), "band_width_hz": np.full(len(f), width),
-                 "power_linear": lin, "power_log_of_linear": logl,
-                 "power_mean_of_log": np.full(len(f), np.nan)}
+                 "power_linear": lin}
         nat = f"{_CAL_NATIVE_PREFIX}{float(c):g}"
         if nat in f.columns:
             block["device_native"] = f[nat].to_numpy(dtype=bool)
@@ -1274,35 +1272,11 @@ def _joined_table_calibrated(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_
     return T
 
 
-def scale_disagreement(T):
-    """How often the two power scales would pick a different winning band.
 
-    This answers hypothesis H4 of the module plan directly. It is a diagnostic, not a verdict: a
-    high disagreement rate does not say which scale is right, only that the choice is consequential
-    and must therefore be made deliberately rather than inherited from whichever pipeline ran first.
-    """
-    if T is None or T.empty:
-        return {"available": False, "reason": "empty table"}
-    g = T.dropna(subset=["power_linear", "power_mean_of_log"])
-    if g.empty:
-        return {"available": False, "reason": "no rows with both scales"}
-    win_lin = g.loc[g.groupby(["t", "channel"])["power_linear"].idxmax(), ["t", "channel", "center_hz"]]
-    win_mol = g.loc[g.groupby(["t", "channel"])["power_mean_of_log"].idxmax(), ["t", "channel", "center_hz"]]
-    m = win_lin.merge(win_mol, on=["t", "channel"], suffixes=("_lin", "_mol"))
-    if m.empty:
-        return {"available": False, "reason": "no comparable samples"}
-    disagree = float((m.center_hz_lin != m.center_hz_mol).mean())
-    return {"available": True, "n_samples": int(len(m)),
-            "disagreement_rate": disagree,
-            "median_abs_shift_hz": float((m.center_hz_lin - m.center_hz_mol).abs().median()),
-            "note": ("fraction of (time, channel) samples where the linear and mean-of-log scales "
-                     "pick a different peak band. The device uses the linear scale (D11); the "
-                     "biomarker pipeline validated on mean-of-log.")}
+# `scale_disagreement(T)` -- how often the linear and mean-of-log scales picked a different winning
+# band (hypothesis H4 of the module plan) -- stood here until 2026-09-19. It was computed on every
+# request and read by no panel; decision 202 removed the mean-of-log column it compared, so it went.
 
-
-# ---------------------------------------------------------------------------------------------
-# Phase 7 seam: live platform data -> a JSON-serialisable DeploymentReport for the interface
-# ---------------------------------------------------------------------------------------------
 def _num(x):
     """JSON-safe number. NaN and infinity are not valid JSON and silently become nulls or crash
     the serialiser depending on the encoder, so they are converted explicitly here rather than

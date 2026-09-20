@@ -8,16 +8,13 @@ from ClosedLoopDeployment.types import EdgeEstimate
 
 
 # --- Phase 0 ------------------------------------------------------------------------------------
-def test_linear_band_power_is_the_arithmetic_mean_not_the_exponentiated_mean_of_logs():
-    """The distinction that motivates carrying both scales. On a peaked band the arithmetic mean of
-    linear bin powers exceeds the geometric mean substantially, and rule D11 says the DEVICE uses
-    the linear one while the biomarker pipeline validated on mean-of-log."""
+def test_linear_band_power_is_the_arithmetic_mean_of_the_linear_bins():
+    """Rule D11: the DEVICE thresholds the linear band power, so that is the one value the table
+    carries (the decibel and mean-of-log companions left on 2026-09-19, decision 202)."""
     f = np.arange(8.0, 31.0, 1.0)
     lp = np.zeros(f.size)
     lp[(f >= 18) & (f < 23)] = [0.0, 10.0, 20.0, 10.0, 0.0]
-    lin, log_of_lin, mean_of_log = AD.band_powers(lp, f, centers=(20.5,), width=5.0)
-    assert log_of_lin[20.5] > mean_of_log[20.5] + 3.0, "the two scales must actually differ here"
-    # and the linear value really is the arithmetic mean of the linear bins
+    lin = AD.band_powers(lp, f, centers=(20.5,), width=5.0)
     m = (f >= 18.0) & (f < 23.0)
     assert lin[20.5] == pytest.approx(np.mean(np.power(10.0, lp[m] / 10.0)))
 
@@ -285,8 +282,9 @@ def test_an_unresolved_edge_supplies_its_point_sign_to_d19_and_is_flagged_as_not
     assert f["power_slope_vs_pain_ci"] == [-0.2, 2.0]
     assert f["power_slope_vs_pain_p"] == 0.2
     assert f["power_scale"] == "linear" and f["intent"] == "adaptive"
-    # asking for the log scale must be reported honestly, not silently corrected to what D11 wants
-    assert _facts_for({}, resolved, resolved, "power_mean_of_log")["power_scale"] == "log"
+    # A log scale can no longer be asked for at all: `pipeline.run` refuses it before any fact is
+    # built (decision 202), so the facts line is "linear" by construction rather than by report.
+    assert _facts_for({}, resolved, resolved, "power_linear")["power_scale"] == "linear"
 
 
 def test_the_payload_keeps_coherence_as_three_states():

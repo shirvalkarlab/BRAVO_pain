@@ -98,7 +98,7 @@ def _facts_for(candidate, e1, e2, power_scale, device_facts=None, threshold=None
     """
     f = dict(candidate or {})
     f.setdefault("intent", "adaptive")
-    f["power_scale"] = "linear" if power_scale == "power_linear" else "log"
+    f["power_scale"] = "linear"          # the only scale (D11; decision 202 removed the log columns)
     # One centre frequency and one threshold mode per report, so no pooling occurs by construction.
     f.setdefault("pooled_across_center_or_mode", False)
     # PI decision 2026-09-12: the point sign is supplied whenever the edge has one, and whether it
@@ -163,6 +163,11 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
     passed in rather than fetched here so this function stays testable without a database, and so
     the caller controls the expensive spectral assembly.
     """
+    if power_scale != "power_linear":
+        # The joined table carries linear power only (D11; decision 202 removed the log columns),
+        # so a request for any other scale cannot be answered and must not be answered on a look-alike.
+        raise ValueError(f"power_scale must be 'power_linear'; the device thresholds linear band "
+                         f"power and no other scale is computed (got {power_scale!r})")
     rep = DeploymentReport(participant=str(participant_uid))
     # If no separate pain frame was supplied but the design matrix already carries one rating per
     # exposure epoch, use it. Without this E2 silently has no outcome to regress on and reports
@@ -197,7 +202,6 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
         "n_table_rows": int(len(T)),
         "power_scale": power_scale, "washin_s": float(washin_s),
         "amp_limit_ma": float(amp_limit_ma), "hemisphere": hemisphere,
-        "scale_disagreement": adapter.scale_disagreement(T),
     }
     if T.empty:
         rep.blockers.append("no joined table could be built: the participant has no assembled "

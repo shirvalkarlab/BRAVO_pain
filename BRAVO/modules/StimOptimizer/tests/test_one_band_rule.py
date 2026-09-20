@@ -30,7 +30,7 @@ from StimOptimizer.routines import stage_gate as GATE
 # --- fixtures: a real ResponseResult per band, a stub evidence cell -------------------------------
 def _Res(responds, slope_p, sep_d, slope):
     return LR.ResponseResult(responds=responds, reason="fixture", direction_ok=responds,
-                             separation_d=sep_d, slope_log_per_mA=slope, slope_p=slope_p)
+                             separation_d=sep_d, slope_per_mA=slope, slope_p=slope_p)
 
 
 CENTRES = [float(c) for c in range(10, 28)]                # 18 bands, 10..27 Hz

@@ -30,8 +30,8 @@ one, which is why both a contrast and a separation measure are reported.
 
 Power is computed in the DEVICE's units for the capture contrast — the linear sum of squared
 magnitude over the band (manual p. 39), not log and not mean — because the threshold has to be
-expressed in those units. Inference is additionally run on the log scale, where a multiplicative
-quantity spanning orders of magnitude is better behaved.
+expressed in those units. Inference runs on those same units: the era-blocked slope is in device
+units per mA (decision 202, 2026-09-19; until then it was fitted on the logarithm).
 
 THE TIME CONFOUND IS NOT OPTIONAL HERE
 --------------------------------------
@@ -68,7 +68,7 @@ MIN_ROWS_PER_ARM = 8
 # every call, and on RCS08 that rebuilding was 10.4 s of the 19.4 s the 1,116 calls took in one
 # request. `_ols_fit` below builds the right-hand side once for a given (formula, amplitude, era)
 # and hands statsmodels the same two frames the formula interface would have handed it -- the
-# left-hand side as a one-column frame named `logp`, the right-hand side as the frame patsy builds
+# left-hand side as a one-column frame named `power`, the right-hand side as the frame patsy builds
 # with rows dropped on missing values, which is what `Model.from_formula` does -- so the fit sees
 # identical arrays and returns identical numbers. The frames are never mutated by the fit.
 #
@@ -119,11 +119,11 @@ class ResponseResult:
     derived_threshold: float = float("nan")
     captures_inverted: bool | None = None
     separation_d: float = float("nan")        # device units — the scale the device thresholds in
-    #: The same quantity computed on the logarithm of power. This is what `separation_d` used to
-    #: hold before 2026-09-06. It is kept so the two scales can be compared on any record and so
-    #: the correction is auditable; nothing decides anything on it.
-    separation_d_on_log: float = float("nan")
-    slope_log_per_mA: float = float("nan")
+    #: The era-blocked slope of band power on current, in DEVICE UNITS PER mA. Until 2026-09-19
+    #: (decision 202) it was fitted on the logarithm of power, beside a log-scale copy of the
+    #: separation kept "for comparison"; the PI's rule is that log power enters no calculation, so
+    #: both are gone and every number here is on the scale the device thresholds in.
+    slope_per_mA: float = float("nan")
     slope_ci: tuple = (float("nan"), float("nan"))
     slope_p: float = float("nan")
     slope_unadjusted: float = float("nan")
@@ -137,9 +137,8 @@ class ResponseResult:
         return (f"{verdict} — {self.reason} | captures {self.power_low:.4g} -> {self.power_high:.4g} "
                 f"device units at {self.amp_low_mA:.1f} -> {self.amp_high_mA:.1f} mA, "
                 f"the two readings are {self.separation_d:.2f} scatter-widths apart in device "
-                f"units ({self.separation_d_on_log:.2f} if measured on the logarithm), "
-                f"era-adjusted log slope "
-                f"{self.slope_log_per_mA:+.4f}/mA (p={self.slope_p:.4g})")
+                f"units, era-adjusted slope "
+                f"{self.slope_per_mA:+.4g} device units per mA (p={self.slope_p:.4g})")
 
 
 def device_band_power(psd_magnitude, freqs, center_hz, band_width_hz):
@@ -192,7 +191,7 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
     notes = []
     if (~np.isfinite(p)).any() or (p <= 0).any():
         notes.append(f"{int((~ok).sum())} rows dropped: non-finite or non-positive power "
-                     "(log-scale inference needs strictly positive power)")
+                     "(a zero device reading is a sentinel, not a measurement)")
     if ok.sum() < 2 * MIN_ROWS_PER_ARM:
         return ResponseResult(None, f"only {int(ok.sum())} usable rows; need at least "
                                     f"{2 * MIN_ROWS_PER_ARM}", notes=notes)
@@ -228,11 +227,9 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
     # The device derives its threshold from the two captures, ordered lower-amplitude first.
     thr = 0.75 * (P_hi - P_lo) + P_lo
 
-    lg = np.log(p)
-
     # HOW FAR APART THE TWO POWER MEASUREMENTS ARE, IN DEVICE UNITS. Corrected 2026-09-06 after the
     # PI asked which units this used and suspected an error. He was right: until today this number
-    # was computed on np.log(p) while everything around it was in device units, and the two are not
+    # was computed on the logarithm of power while everything around it was in device units, and the two are not
     # the same scale.
     #
     # WHY DEVICE UNITS ARE THE RIGHT SCALE HERE. The device puts its switching value BETWEEN the two
@@ -249,8 +246,8 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
     # higher-power group than a log-scale one would be. That is a real statistical cost and it is
     # why the logarithm was used originally. It does not change the decision: the quantity this test
     # is meant to protect is the placement of a switching value in device units, so device units are
-    # what it must be measured in. The log-scale number is kept alongside as
-    # `separation_d_on_log` so the two can always be compared and so the change is auditable.
+    # what it must be measured in. A log-scale copy was kept beside it "for comparison" until
+    # 2026-09-19; the PI's rule (decision 202) is that log power enters no calculation, so it is gone.
     def _standardised_gap(v_lo, v_hi):
         pooled_sd = np.sqrt(((v_lo.size - 1) * v_lo.var(ddof=1)
                              + (v_hi.size - 1) * v_hi.var(ddof=1))
@@ -260,7 +257,6 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
         return float(abs(v_lo.mean() - v_hi.mean()) / pooled_sd)
 
     sep_d = _standardised_gap(p[m_lo], p[m_hi])                 # device units — the one that counts
-    sep_d_log = _standardised_gap(lg[m_lo], lg[m_hi])           # kept only for comparison
 
     expected_lower_at_high = (mode_requires == "suppression")
     observed_lower_at_high = P_hi < P_lo
@@ -269,14 +265,16 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
     # the derived threshold would sit outside the range the signal moves through.
     inverted = not direction_ok
 
-    # --- era-blocked, cluster-robust slope on the log scale -----------------------------------
+    # --- era-blocked, cluster-robust slope, in device units per mA -----------------------------
+    # Fitted on the logarithm of power until 2026-09-19 (decision 202); now on the device's own
+    # units, so the slope is the number of device units the band moves per milliamp, era blocked.
     slope = ci = pval = np.nan
     slope_unadj = np.nan
     n_eras = 0
     try:
         import statsmodels.formula.api as smf
-        df = pd.DataFrame({"logp": lg, "amp": a})
-        formula = "logp ~ amp"
+        df = pd.DataFrame({"power": p, "amp": a})
+        formula = "power ~ amp"
         if era_v is not None and pd.Series(era_v).nunique() > 1:
             df["era"] = pd.Series(era_v).astype(str).values
             n_eras = int(df["era"].nunique())
@@ -286,10 +284,10 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
             df["clus"] = pd.Series(clus).values
             fit_kw = dict(cov_type="cluster", cov_kwds={"groups": df["clus"]})
         if USE_DESIGN_CACHE:
-            slope_unadj = float(_ols_fit("logp ~ amp", df).params["amp"])
+            slope_unadj = float(_ols_fit("power ~ amp", df).params["amp"])
             res = _ols_fit(formula, df, **fit_kw)
         else:
-            slope_unadj = float(smf.ols("logp ~ amp", data=df).fit().params["amp"])
+            slope_unadj = float(smf.ols("power ~ amp", data=df).fit().params["amp"])
             res = smf.ols(formula, data=df).fit(**fit_kw)
         slope = float(res.params["amp"])
         lo_ci, hi_ci = res.conf_int().loc["amp"]
@@ -327,8 +325,7 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
                           amp_low_mA=lo_a, amp_high_mA=hi_a,
                           power_low=P_lo, power_high=P_hi, derived_threshold=float(thr),
                           captures_inverted=inverted, separation_d=sep_d,
-                          separation_d_on_log=sep_d_log,
-                          slope_log_per_mA=slope, slope_ci=ci, slope_p=pval,
+                          slope_per_mA=slope, slope_ci=ci, slope_p=pval,
                           slope_unadjusted=slope_unadj, n_eras=n_eras, notes=notes)
 
 
@@ -337,7 +334,7 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
 # =================================================================================================
 # The open question recorded in MEGA_HANDOFF and the session handoff was whether
 # MIN_CAPTURE_SEPARATION_D = 0.5 is the right floor once the five-era window narrows the capture
-# contrast from 2.9 mA to 1.0 mA, since over 1 mA a slope of -0.13 log per mA cannot produce a large
+# contrast from 2.9 mA to 1.0 mA, since over 1 mA a small slope (the example then was -0.13 per mA on the log scale in use at the time) cannot produce a large
 # standardised separation however real it is. The tempting fix is to make the floor scale with the
 # span so a narrow ladder is not penalised.
 #

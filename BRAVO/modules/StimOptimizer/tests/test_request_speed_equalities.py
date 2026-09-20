@@ -123,10 +123,10 @@ def test_era_per_epoch_then_indexed_equals_era_per_tile_row_for_months_and_for_a
 def _cell(n_per=40, seed=0, n_eras=3):
     rng = np.random.default_rng(seed)
     amp = np.repeat([1.5, 2.5, 3.5], n_per)
-    logp = np.log(100.0) - 0.4 * (amp - 1.5) + rng.normal(0, 0.25, amp.size)
+    p = 100.0 - 40.0 * (amp - 1.5) + rng.normal(0, 25.0, amp.size)     # device units (decision 202)
     era = np.tile(np.array(["2025-11", "2025-12", "2026-01"][:n_eras]), int(np.ceil(amp.size / n_eras)))[:amp.size]
     clus = era
-    return np.exp(logp), amp, era, clus
+    return p, amp, era, clus
 
 
 def _fields(r):
@@ -170,7 +170,7 @@ def test_eighteen_bands_of_one_cell_share_one_design_matrix_and_still_agree():
     rng = np.random.default_rng(7)
     LR._DESIGN_CACHE.clear()
     for k in range(18):
-        p = np.exp(np.log(120.0 + k) - 0.3 * (a - 1.5) + rng.normal(0, 0.2, a.size))
+        p = (120.0 + k) - 30.0 * (a - 1.5) + rng.normal(0, 20.0, a.size)
         old, new, _ = _both_ways(p, a, era, clus)
         for f, v in _fields(old).items():
             assert _same(v, getattr(new, f)), (k, f)

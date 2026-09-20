@@ -245,7 +245,7 @@ class _Res:
     """
     def __init__(self, responds, slope_p, sep_d, slope=-0.2):
         self.responds, self.slope_p, self.separation_d = responds, slope_p, sep_d
-        self.slope_log_per_mA = slope
+        self.slope_per_mA = slope
 
 
 class _Ev:

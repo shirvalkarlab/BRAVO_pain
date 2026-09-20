@@ -583,12 +583,11 @@ def verdict_row(center_hz, r) -> dict:
         "center_hz": float(center_hz),
         "responds": (None if getattr(r, "responds", None) is None else bool(r.responds)),
         "separation_d": _f(getattr(r, "separation_d", None)),
-        "separation_d_on_log": _f(getattr(r, "separation_d_on_log", None)),
         "power_low": _f(getattr(r, "power_low", None)),
         "power_high": _f(getattr(r, "power_high", None)),
         "amp_low_mA": _f(getattr(r, "amp_low_mA", None)),
         "amp_high_mA": _f(getattr(r, "amp_high_mA", None)),
-        "slope_log_per_mA": _f(getattr(r, "slope_log_per_mA", None)),
+        "slope_per_mA": _f(getattr(r, "slope_per_mA", None)),      # device units per mA (decision 202)
         "slope_p": _f(getattr(r, "slope_p", None)),
         "n_low": int(getattr(r, "n_low", 0) or 0),
         "n_high": int(getattr(r, "n_high", 0) or 0),
@@ -807,7 +806,7 @@ def check_adaptive_band(frozen, *, lfp=None, band_centers=DEFAULT_BAND_CENTERS_H
                 f"{rule['n_era_negative_significant']} fall with current, "
                 f"{rule['n_pain_positive']} rise with pain. Best separated qualifying band: "
                 f"centre {best:g} Hz, width {float(band_width_hz):g} Hz, era-blocked slope "
-                f"{float(rb.slope_log_per_mA):.3g} per mA (p = {float(rb.slope_p):.3g}), capture "
+                f"{float(rb.slope_per_mA):.3g} device units per mA (p = {float(rb.slope_p):.3g}), capture "
                 f"separation {float(rb.separation_d):.2f} SD"
                 + (" (the two captures alone do not separate it)" if rb.responds is not True
                    else "")))

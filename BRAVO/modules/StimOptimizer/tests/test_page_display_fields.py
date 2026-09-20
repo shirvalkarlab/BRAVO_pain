@@ -90,14 +90,14 @@ def test_the_sensing_label_is_the_biomarkers_formatter_output_not_a_local_copy()
 def test_the_verdict_rows_equal_the_response_results_field_for_field():
     r = LFP.ResponseResult(responds=True, reason="x", n_low=3, n_high=4, amp_low_mA=1.5,
                            amp_high_mA=4.5, power_low=229.7, power_high=137.1,
-                           separation_d=1.83, separation_d_on_log=2.37, slope_log_per_mA=-0.3251,
+                           separation_d=1.83, slope_per_mA=-32.51,
                            slope_p=0.0)
     row = GATE.verdict_row(23.5, r)
     assert row["center_hz"] == 23.5 and row["responds"] is True
-    assert row["separation_d"] == 1.83 and row["separation_d_on_log"] == 2.37
+    assert row["separation_d"] == 1.83 and "separation_d_on_log" not in row
     assert row["power_low"] == 229.7 and row["power_high"] == 137.1
     assert row["amp_low_mA"] == 1.5 and row["amp_high_mA"] == 4.5
-    assert row["slope_log_per_mA"] == -0.3251 and row["slope_p"] == 0.0
+    assert row["slope_per_mA"] == -32.51 and row["slope_p"] == 0.0
     assert row["n_low"] == 3 and row["n_high"] == 4 and row["reason"] == "x"
     nan = LFP.ResponseResult(responds=None, reason="not assessed")
     row2 = GATE.verdict_row(10.5, nan)

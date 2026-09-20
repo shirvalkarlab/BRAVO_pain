@@ -64,7 +64,6 @@ def _toy_table(n_epochs=6, per_epoch=5, slope=-2.0, seed=0):
                          "amp_mA_Left": amp, "power_linear": lin,
                          # the manifest's scale check reads both scales; the pipeline is the
                          # thing under test, so the table carries what the real one carries
-                         "power_mean_of_log": float(np.log10(max(lin, 1e-6))),
                          "nrs": 5.0 + 0.5 * amp + rng.normal(0, 0.2), "report_id": f"r{k}"})
     return pd.DataFrame(rows)
 

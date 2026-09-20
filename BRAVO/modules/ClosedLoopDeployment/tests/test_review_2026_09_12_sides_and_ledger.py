@@ -34,7 +34,6 @@ def _two_sided_table(channel, n_epochs=8, per_epoch=6, right_slope=-40.0, seed=0
             rows.append({"t": float(k * 100), "channel": channel, "setting_epoch": k,
                          "center_hz": 24.5, "amp_mA_Left": amp_l, "amp_mA_Right": amp_r,
                          "power_linear": lin,
-                         "power_mean_of_log": float(np.log10(max(lin, 1e-6))),
                          "nrs": 8.0 - 0.6 * amp_r + rng.normal(0, 0.1), "report_id": f"r{k}"})
     return pd.DataFrame(rows)
 

@@ -104,13 +104,16 @@ def test_the_candidates_own_side_wins_over_the_default_when_the_request_names_no
     assert a.simulation_calls == ["Right"]
 
 
-def test_a_caller_supplied_hemisphere_and_scale_win_over_the_defaults(fake):
+def test_a_caller_supplied_hemisphere_wins_over_the_default_and_a_non_linear_scale_is_refused(fake):
     a = fake(result={"available": True})
-    svc.run_for_participant({"ParticipantId": "p1", "Hemisphere": "Right",
-                             "PowerScale": "power_mean_of_log"})
+    svc.run_for_participant({"ParticipantId": "p1", "Hemisphere": "Right"})
     call = a.calls[0]
     assert call["hemisphere"] == "Right"
-    assert call["power_scale"] == "power_mean_of_log"
+    assert call["power_scale"] == "power_linear"
+    # A log scale is refused with a plain reason before the adapter is reached (decision 202).
+    out = svc.run_for_participant({"ParticipantId": "p1", "PowerScale": "power_mean_of_log"})
+    assert out["available"] is False and "power_linear" in out["reason"]
+    assert len(a.calls) == 1
     # An explicit ``Hemisphere`` is passed through as given. (The adapter then prefers the
     # candidate's own side over it for the device facts and the pipeline -- pinned in test_core --
     # so this value is a fallback for a candidate that names no side, not an override.)

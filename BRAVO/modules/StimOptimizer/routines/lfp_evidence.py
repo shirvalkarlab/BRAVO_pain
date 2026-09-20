@@ -1163,7 +1163,7 @@ def band_era_negative_significant(r) -> bool:
     slope that has era removed must be negative and significant on its own.
     """
     return bool(np.isfinite(r.slope_p) and r.slope_p < 0.05
-                and np.isfinite(r.slope_log_per_mA) and r.slope_log_per_mA < 0)
+                and np.isfinite(r.slope_per_mA) and r.slope_per_mA < 0)
 
 
 def _centre_key(c) -> float:

@@ -13,8 +13,8 @@ WHAT IS COMPUTED PER RUN AND BAND, and why each column is there.
 * The number and range of currents actually tested, and how many pieces of recording stood
   behind each. The approved plan asks for these because the eight things that must never be
   claimed begin with concluding that a band does not respond from a narrow range of currents.
-* A straight-line slope of the logarithm of band power on current, with its standard error and
-  p-value from that one run's settings. The standard error is the honest statement of the smallest
+* A straight-line slope of band power on current, in device units per mA (decision 202; on the
+  logarithm until 2026-09-19), with its standard error and p-value from that one run's settings. The standard error is the honest statement of the smallest
   slope this run could have shown; a slope of about twice it would have been visible.
 * Curvature, from `within_visit.amplitude_response_shape`: whether the relationship rises and then
   falls, where the peak sits, and how much more a curve explains than a straight line. This is not
@@ -43,7 +43,7 @@ import pandas as pd
 KIND = "amplitude_effect_by_band"
 from . import post_ramp as _post_ramp
 
-RULE_VERSION = "v3_per_run_any_held_side_post_ramp_margin_" + _post_ramp.version_tag()   # v3: decision 197   # v2: the margin, on or off (2026-09-12)
+RULE_VERSION = "v4_slope_on_raw_device_power_post_ramp_margin_" + _post_ramp.version_tag()   # v4: decision 202 (the slope in device units, not log)   # v3: decision 197   # v2: the margin, on or off (2026-09-12)
 
 #: The source panel that feeds the table: the calibrated voltage-trace route, which covers every
 #: band. The device's own band power covers one band and its own spectrum is empty during ladders.
@@ -65,19 +65,21 @@ def _f(v):
     return x if np.isfinite(x) else np.nan
 
 
-def _slope(x, y_log):
-    """Straight line of log power on current: slope, intercept, standard error, p, r squared."""
+def _slope(x, y):
+    """Straight line of band power on current, in DEVICE UNITS per mA: slope, intercept, standard
+    error, p, r squared. Fitted on the logarithm of power until 2026-09-19 (decision 202; the PI's
+    rule is that log power enters no calculation)."""
     from scipy import stats
     if x.size < MIN_POINTS_SLOPE or np.unique(x).size < 2:
-        return dict(slope_log_per_mA=np.nan, slope_intercept=np.nan, slope_stderr=np.nan,
-                    slope_p=np.nan, r2_linear=np.nan, log_power_residual_sd=np.nan)
-    r = stats.linregress(x, y_log)
-    resid = y_log - (r.intercept + r.slope * x)
+        return dict(slope_per_mA=np.nan, slope_intercept=np.nan, slope_stderr=np.nan,
+                    slope_p=np.nan, r2_linear=np.nan, power_residual_sd=np.nan)
+    r = stats.linregress(x, y)
+    resid = y - (r.intercept + r.slope * x)
     dof = x.size - 2
-    return dict(slope_log_per_mA=float(r.slope), slope_intercept=float(r.intercept),
+    return dict(slope_per_mA=float(r.slope), slope_intercept=float(r.intercept),
                 slope_stderr=float(r.stderr), slope_p=float(r.pvalue),
                 r2_linear=float(r.rvalue ** 2),
-                log_power_residual_sd=(float(np.sqrt(np.sum(resid ** 2) / dof)) if dof > 0
+                power_residual_sd=(float(np.sqrt(np.sum(resid ** 2) / dof)) if dof > 0
                                        else np.nan))
 
 
@@ -172,10 +174,10 @@ def rows_for_comparison(comparison, *, checked_lo_hz, checked_hi_hz, band_half_h
         }
         row["fold_max_over_min"] = (row["power_at_max_current"] / row["power_at_min_current"]
                                     if n and row["power_at_min_current"] > 0 else np.nan)
-        row.update(_slope(x, np.log(yy)) if n else _slope(np.empty(0), np.empty(0)))
-        row["smallest_detectable_slope_log_per_mA"] = (
+        row.update(_slope(x, yy) if n else _slope(np.empty(0), np.empty(0)))
+        row["smallest_detectable_slope_per_mA"] = (
             2.0 * row["slope_stderr"] if np.isfinite(row["slope_stderr"]) else np.nan)
-        row["direction"] = _direction(row["slope_log_per_mA"], row["slope_p"])
+        row["direction"] = _direction(row["slope_per_mA"], row["slope_p"])
         # curvature, on the settled powers themselves, as the routine defines it
         if n >= 3:
             shape = within_visit.amplitude_response_shape(x, yy, min_points=min_points_curvature)

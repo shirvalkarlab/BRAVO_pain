@@ -89,6 +89,13 @@ def run_for_participant(request_data):
     participant_uid = (request_data or {}).get("ParticipantId")
     if not participant_uid:
         return {"available": False, "reason": "ParticipantId is required"}
+    scale = (request_data or {}).get("PowerScale", DEFAULT_POWER_SCALE)
+    if scale != DEFAULT_POWER_SCALE:
+        # Linear is the only scale (D11); the log columns left the joined table on 2026-09-19
+        # (decision 202). Refused here with a plain reason rather than as a logged exception.
+        return {"available": False,
+                "reason": (f"PowerScale must be {DEFAULT_POWER_SCALE!r}: the device thresholds linear "
+                           f"band power and no other scale is computed (got {scale!r})")}
 
     try:
         participant = _participant_or_none(participant_uid)

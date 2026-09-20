@@ -53,8 +53,7 @@ def test_power_is_read_from_the_bands_own_column_and_nothing_is_integrated():
     row = T[(T.channel == "ZERO_TWO_LEFT") & (T.center_hz == 26.5)].sort_values("t")
     src = f[f.channel == "ZERO_TWO_LEFT"].sort_values("t")
     assert np.array_equal(row["power_linear"].to_numpy(), src["band_lsb_26.5"].to_numpy())
-    assert np.allclose(row["power_log_of_linear"].to_numpy(), 10 * np.log10(src["band_lsb_26.5"].to_numpy()))
-    assert row["power_mean_of_log"].isna().all(), "no per-bin spectrum, so no mean of the log"
+    assert "power_log_of_linear" not in row.columns and "power_mean_of_log" not in row.columns  # decision 202
     assert (row["band_width_hz"] == 5.0).all() and (row["device_native"] == False).all()
     assert T.attrs["band_power_source"] == "calibrated"
 

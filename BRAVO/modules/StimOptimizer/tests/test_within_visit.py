@@ -116,7 +116,7 @@ def test_a_real_negative_slope_survives_the_builder():
         S, channel="ZERO_TWO_LEFT", hemisphere="Left", rate_hz=55.0,
         centers_hz=CEN, tile_t=tt, tile_power=tp)
     r = LR.assess_response(e.power_for(20.5, 5.0), e.amplitude_mA, era=e.era, cluster=e.cluster)
-    assert r.slope_log_per_mA < 0, r.slope_log_per_mA
+    assert r.slope_per_mA < 0, r.slope_per_mA
     assert r.direction_ok is True
     assert r.slope_p < 0.05
 
