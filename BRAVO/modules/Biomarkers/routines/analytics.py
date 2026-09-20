@@ -2811,32 +2811,28 @@ def device_psd_to_lsb(freq, magnitude, center_hz, *, half_hz=2.5, k=LSB_PER_DEVI
     return float(lsb[0]) if np.ndim(center_hz) == 0 else lsb
 
 
-def empirical_lsb_ratio(td_recs, pd_recs, sensing_hz_for_pd, *, adc_nv_per_lsb=ADC_NV_PER_LSB,
+def empirical_lsb_ratio(td_recs, pd_recs, sensing_hz_for_pd, *,
                         band_half_hz=2.5, stim_off_mA=0.1, pair_tol_s=5.0, min_secs=5.0):
-    """Measure the empirical µV²-per-LSB conversion from CONCURRENT on-demand streaming TD + device
-    PowerDomain LSB (DESIGN §4). For each BrainSense TD streaming session paired (within pair_tol_s)
-    to a PowerDomain session, compute the band-power in µV² from the raw 250 Hz TD (Welch, integrated
-    over the device's sensing band) and the median device LSB over the same window/channel at near-
-    zero stim, then take µV²/LSB per (session, channel).
+    """An independent cross-check of the transform constant from a DIFFERENT pairing than the
+    calibration recipe: each on-demand streaming voltage trace paired (within ``pair_tol_s``) with
+    a PowerDomain recording, the transform band power of the trace (uV^2, the platform's one
+    time-domain recipe, `td_transform_band_power`) against the median device band power (LSB) over
+    the same session and contact at near-zero stimulation, one ratio uV^2 / LSB per pair.
 
-    This is a CONFIDENCE-RATED FYI cross-check, NOT the deployable threshold. NOTE: a later paired-
-    block validation (BrainSenseLfp + BrainSenseTimeDomain on the SAME signal, 50 RCS08 stim-off
-    blocks) pinned the µV²↔LSB scatter far more tightly than the "~3×" caveat once suggested (R² 0.94,
-    CV fold-error 1.19×). The absolute ratio is still normalization-dependent, so the deployable
-    threshold remains percentile-anchored on the device's own Timeline LSB (see the service layer);
-    an offline µV² cut-point is translated to LSB only via the per-participant frozen PSD→LSB model
-    (psd_lsb_model.estimate_lsb) on bands the device never sensed natively. `sensing_hz_for_pd(pd_rec, contact)` resolves a PowerDomain
-    recording's sensing center frequency for a contact (the TD recording itself carries no Therapy
-    snapshot).
+    Until decision 214 (2026-09-20) this routine multiplied the stored samples by the ADC scale
+    (146 nV per count) as if they were counts -- every other route and the calibration recipe read
+    the same samples as microvolts -- and took a segment-averaged band power, so its ratio was 0.146 squared of
+    the platform's unit on a different recipe, and it was compared with a 0.01 "rule of thumb". Now
+    the samples are read as microvolts, the band power is the transform's, and the ratio is compared
+    with the constant in effect (1 / LSB_PER_UV2_TRANSFORM). It is still an FYI beside the
+    deployable threshold, which stays percentile-anchored on the device's own timeline.
 
-    Returns {available, n, median, iqr_lo, iqr_hi, cv, p10, p90, fold_off_rule, rule_of_thumb,
-             confidence, note} or {available: False, reason}.
+    `sensing_hz_for_pd(pd_rec, contact)` resolves a PowerDomain recording's sensing centre for a
+    contact (the streaming recording itself carries no Therapy snapshot).
+
+    Returns {available, n, median, iqr_lo, iqr_hi, cv, p10, p90, constant_in_effect_uv2_per_lsb,
+             fold_of_constant_in_effect, confidence, note} or {available: False, reason}.
     """
-    try:
-        from scipy import signal as _sig
-    except Exception as e:
-        return {"available": False, "reason": f"scipy unavailable: {e}"}
-
     def _epoch(r):
         st = r.get("StartTime")
         try:
@@ -2880,15 +2876,13 @@ def empirical_lsb_ratio(td_recs, pd_recs, sensing_hz_for_pd, *, adc_nv_per_lsb=A
                     break
             if hz is None:
                 continue
-            x = data[:, ci] * adc_nv_per_lsb / 1000.0    # device counts -> µV (nV/1000)
+            x = data[:, ci]                                 # microvolts, as the decoder stores them
             x = x[np.isfinite(x)]
             if len(x) < fs * min_secs:
                 continue
-            f, P = _sig.welch(x, fs=fs, nperseg=int(fs))   # µV²/Hz
-            bmask = (f >= hz - band_half_hz) & (f < hz + band_half_hz)
-            if not bmask.any():
+            uV2 = td_transform_band_power(x, fs, float(hz), half_hz=band_half_hz)
+            if not (np.isfinite(uV2) and uV2 > 0):
                 continue
-            uV2 = float(np.trapezoid(P[bmask], f[bmask]))  # µV² in band (np.trapz removed in numpy 2.0)
             for pr in pds:
                 pnames = pr.get("ChannelNames") or []
                 pdata = np.asarray(pr.get("Data"), dtype=float)
@@ -2913,7 +2907,7 @@ def empirical_lsb_ratio(td_recs, pd_recs, sensing_hz_for_pd, *, adc_nv_per_lsb=A
                 med_lsb = float(np.median(lsb[off]))
                 if med_lsb <= 0:
                     continue
-                ratio = uV2 / med_lsb
+                ratio = float(uV2) / med_lsb
                 if np.isfinite(ratio) and ratio > 0:
                     ratios.append(ratio)
                 break
@@ -2923,20 +2917,26 @@ def empirical_lsb_ratio(td_recs, pd_recs, sensing_hz_for_pd, *, adc_nv_per_lsb=A
     a = np.asarray(ratios, dtype=float)
     med = float(np.median(a))
     cv = float(np.std(a) / np.mean(a)) if np.mean(a) > 0 else None
-    fold = med / 0.01 if med > 0 else None
-    # Confidence: the §4 ceiling is ~3×; flag low whenever the spread or the rule-of-thumb
-    # divergence exceeds that, which on RCS08 it does (so this is honestly "low").
-    conf = "moderate"
-    if (cv is not None and cv > 0.5) or (fold is not None and (fold > 3.0 or fold < 1.0 / 3.0)):
+    in_effect = 1.0 / float(LSB_PER_UV2_TRANSFORM)
+    fold = med / in_effect
+    # "high" when this independent pairing lands within 25 percent of the constant in effect and the
+    # pairs agree with each other; "moderate" within a factor of three; "low" beyond that.
+    if cv is not None and cv <= 0.5 and 0.8 <= fold <= 1.25:
+        conf = "high"
+    elif 1.0 / 3.0 <= fold <= 3.0:
+        conf = "moderate"
+    else:
         conf = "low"
     return {
         "available": True, "n": int(len(a)),
         "median": med, "iqr_lo": float(np.percentile(a, 25)), "iqr_hi": float(np.percentile(a, 75)),
         "cv": cv, "p10": float(np.percentile(a, 10)), "p90": float(np.percentile(a, 90)),
-        "fold_off_rule": fold, "rule_of_thumb": 0.01, "confidence": conf,
-        "note": ("Empirical µV²/LSB from concurrent on-demand TD + device LSB at ~0 mA. FYI cross-"
-                 "check only — the deployable threshold is percentile-anchored on the device Timeline, "
-                 "not via this absolute conversion (normalization-dependent, trust to ~3×)."),
+        "constant_in_effect_uv2_per_lsb": in_effect, "fold_of_constant_in_effect": float(fold),
+        "confidence": conf,
+        "note": ("uV^2 per LSB from concurrent streaming voltage traces and device band power at "
+                 "about 0 mA: the transform band power of the trace against the device's own "
+                 "reading, an independent pairing from the calibration recipe's. FYI beside the "
+                 "deployable threshold, which stays percentile-anchored on the device's own timeline."),
     }
 
 

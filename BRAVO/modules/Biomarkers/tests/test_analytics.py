@@ -1019,40 +1019,61 @@ def test_auc_power_conservative_band_gates_on_ci_lower_bound():
     assert strong["more_data_needed"] is False
 
 
-def test_empirical_lsb_ratio_recovers_planted_ratio():
-    """empirical_lsb_ratio: planted concurrent TD (µV) + device LSB at a known ratio is recovered to
-    within the documented ~3× confidence band, and the result is flagged accordingly."""
+def _planted_td_and_device_pairs(k_lsb_per_uv2, *, n_sessions=12, seed=0):
+    """Concurrent voltage-trace recordings (in MICROVOLTS, as the decoder stores them) paired with
+    device band power planted at exactly k_lsb_per_uv2 times the TRANSFORM band power of the same
+    trace. The device row carries a Power column and a Stimulation column at 0 mA."""
     import numpy as _np
-    rng = _np.random.default_rng(0)
+    rng = _np.random.default_rng(seed)
     fs = 250.0; hz = 20.0; secs = 30
-    true_ratio = 0.0034            # µV² per LSB we plant
     td_recs, pd_recs = [], []
-    for k in range(12):
+    for k in range(n_sessions):
         t = _np.arange(int(fs * secs)) / fs
-        amp = 2.0 + 0.5 * k        # vary band amplitude across sessions
-        # narrowband signal at hz (µV), plus white noise; convert to device counts (µV -> /146nV*1000)
+        amp = 2.0 + 0.5 * k
         sig_uV = amp * _np.sin(2 * _np.pi * hz * t) + rng.normal(0, 0.3, t.size)
-        counts = sig_uV / (analytics.ADC_NV_PER_LSB / 1000.0)
         td_recs.append({"StartTime": 1000.0 + 100 * k, "SamplingRate": fs,
-                        "ChannelNames": ["ZERO_TWO_LEFT"], "Data": counts[:, None]})
-        # device LSB such that µV²_band / LSB ≈ true_ratio. Welch band power of a sine amp A ≈ A²/2.
-        uV2 = (amp ** 2) / 2.0
-        lsb_val = uV2 / true_ratio
+                        "ChannelNames": ["ZERO_TWO_LEFT"], "Data": sig_uV[:, None]})
+        uv2 = analytics.td_transform_band_power(sig_uV, fs, hz)
+        lsb_val = k_lsb_per_uv2 * uv2
         n_pd = 60
         pd_data = _np.column_stack([_np.full(n_pd, lsb_val) * (1 + rng.normal(0, 0.02, n_pd)),
-                                    _np.zeros(n_pd)])     # Power col, Stim col (0 mA)
+                                    _np.zeros(n_pd)])
         pd_recs.append({"StartTime": 1000.0 + 100 * k + 1, "SamplingRate": 2.0,
                         "ChannelNames": ["ZERO_TWO_LEFT Power", "ZERO_TWO_LEFT Stimulation"],
                         "Data": pd_data})
+    return td_recs, pd_recs, hz
 
-    def _hz(_pd_rec, _contact):
-        return hz
-    res = analytics.empirical_lsb_ratio(td_recs, pd_recs, _hz)
+
+def test_empirical_lsb_ratio_reads_the_stored_trace_as_microvolts_and_uses_the_transform():
+    """Decision 214: the cross-check on the Closed-Loop "LSB & power" card multiplied the stored
+    voltage trace by 0.146 as if it were ADC counts (every other route, and the calibration recipe
+    at r 0.99, reads the same samples as microvolts) and took a Welch band power, so its printed
+    ratio was 0.146 squared of the platform's unit and on a different recipe. Now: unscaled samples,
+    the transform band power, and the ratio compared with the constant in effect."""
+    td, pd, hz = _planted_td_and_device_pairs(analytics.LSB_PER_UV2_TRANSFORM)
+    res = analytics.empirical_lsb_ratio(td, pd, lambda _r, _c: hz)
     assert res["available"], res.get("reason")
     assert res["n"] >= 8
-    # recovered within ~3x of the planted ratio (the documented confidence ceiling)
-    assert (true_ratio / 3.0) <= res["median"] <= (true_ratio * 3.0), res["median"]
-    assert "confidence" in res and res["rule_of_thumb"] == 0.01
+    # 1 / k to within the 2 percent jitter planted on the device readings
+    assert abs(res["median"] * analytics.LSB_PER_UV2_TRANSFORM - 1.0) < 0.05, res["median"]
+    assert res["constant_in_effect_uv2_per_lsb"] == 1.0 / analytics.LSB_PER_UV2_TRANSFORM
+    assert abs(res["fold_of_constant_in_effect"] - 1.0) < 0.05
+    assert res["confidence"] == "high"
+    assert "rule_of_thumb" not in res and "fold_off_rule" not in res
+
+
+def test_empirical_lsb_ratio_grades_a_ratio_far_from_the_constant_low():
+    td, pd, hz = _planted_td_and_device_pairs(analytics.LSB_PER_UV2_TRANSFORM * 4.0)
+    res = analytics.empirical_lsb_ratio(td, pd, lambda _r, _c: hz)
+    assert res["available"] and abs(res["fold_of_constant_in_effect"] - 0.25) < 0.02
+    assert res["confidence"] == "low"
+
+
+def test_empirical_lsb_ratio_takes_no_adc_scale_and_no_welch():
+    import inspect
+    src = inspect.getsource(analytics.empirical_lsb_ratio)
+    assert "adc_nv_per_lsb" not in src and "welch" not in src.lower()
+    assert "td_transform_band_power" in src
 
 
 def test_empirical_lsb_ratio_needs_pairs():

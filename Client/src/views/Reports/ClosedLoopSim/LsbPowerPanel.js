@@ -525,7 +525,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
             {/* 3) µV²/LSB RATIO (FYI) */}
             <MDBox p={1} sx={{ backgroundColor: "#f7f7f8", borderRadius: "6px" }}>
               <MDTypography variant="caption" sx={{ fontSize: 9.5, fontWeight: "bold", color: "#999" }}>
-                EMPIRICAL µV²/LSB RATIO — FYI cross-check, not the deployable number
+                µV²/LSB FROM CONCURRENT STREAMING + DEVICE READINGS — an independent check of the constant in effect, not the deployable number
               </MDTypography>
               {lr && lr.available ? (
                 <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, mt: 0.2 }}>
@@ -534,7 +534,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
                     : (lr.confidence === "high" ? PAL.pass : PAL.warnText), fontWeight: "bold" }}>
                     {`(confidence: ${lr.confidence})`}
                   </span>
-                  {` · CV ${fmt(lr.cv)} · ${fmt(lr.fold_off_rule, 2)}× the 0.01 rule · n=${lr.n} paired sessions`}
+                  {` · CV ${fmt(lr.cv)} · ${fmt(lr.fold_of_constant_in_effect, 2)}× the constant in effect (1 µV² = ${fmt(1 / lr.constant_in_effect_uv2_per_lsb, 2)} LSB) · n=${lr.n} paired sessions`}
                 </MDTypography>
               ) : (
                 <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, mt: 0.2, color: "#777" }}>
