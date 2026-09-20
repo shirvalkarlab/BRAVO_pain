@@ -15,7 +15,7 @@ decisions are appended to Part 3 here AND as a full row in the full log.
 - Windows with >10% zero-filled samples are dropped (4); this rule now reaches every routine (57-59).
 - 60 Hz notch off by default (13). Only the two 256-point FFT modes convert (14). Conversion from the voltage trace: the transform route at 352.62 (18); the composed constant is composed, never "measured" (33, house rules).
 - Per-participant conversion model is a frozen stored asset with tiered fallback (11); 8.8 Hz R 0-3+ counts only from 2026-03-01 (16); no impedance term (17).
-- **Log power enters no calculation, anywhere** (PI, 2026-09-19; 202). The E1 path (202), the pooled full-spectrum path and the pain correlation (204), the outlier rule and cross-check (205) are done. Remaining log sites are his call in this order: the aperiodic fit (`remove_aperiodic`, the `fooof` transform), the frozen log-log calibration model (`psd_lsb_model.py`).
+- **Log power enters no calculation, anywhere** (PI, 2026-09-19; 202). The E1 path (202), the pooled full-spectrum path and the pain correlation (204), the outlier rule and cross-check (205), the aperiodic fit (206, deleted) are done. The one remaining log site is the frozen log-log calibration model (`psd_lsb_model.py`), his call.
 - **Time is modelled nowhere**: drift is a current effect in a patient >3 years into disease; no age penalty, no time input (193-196).
 - Never say "spectrum" bare; name the quantity (115, house rules).
 
@@ -60,7 +60,7 @@ decisions are appended to Part 3 here AND as a full row in the full log.
 
 **On the PI**
 - **30. Titration session** designed so a response peak can be estimated: one rate, 0 to ceiling in 0.5 mA steps, ≥60 s a step, up then down, streaming, baseline and impedance before and after. The Stim Optimizer card "Titration session to run next" recommends it (146, 160). Code side waits on the data (T7, 156).
-- Remaining log-power sites, in the order decision 202 lists them (the first three done by 204 and 205): the aperiodic fit, the frozen calibration model.
+- The last log-power site on decision 202's list: the frozen log-log calibration model (`psd_lsb_model.py`); it produces calibration constants, so it needs its own before/after on every calibrated number.
 - Pooling across pulse widths, option A behind a toggle (189's plan). `align_pros` `max_per_rating` cap (118). The four zero-caller chronic-detector routines (187). Apply the harmonic rule to the readiness screen or not (199).
 - Item 15 remainder: labelling and navigation niceties on the Closed-Loop page (scroll-link, print stylesheet).
 
@@ -285,6 +285,7 @@ Refs are commits or PRs; `→N` means superseded by N.
 203. Context compaction: this digest, the full log in `docs/`, shorter CLAUDE.md, house rules and store architecture; handoffs, worker reports, completed plans and generic rules deleted.
 204. No log power on the pooled full-spectrum path (the matrix stores raw power under `X`; the stability test, mixed model, per-era ROC and band feature read it raw) or in the pain correlation (`transform="raw"`); 10 of 132 stability verdicts moved, the chosen band unchanged; the correlation's MAD rule on raw power drops more samples (106 -> 93) -- item 3.
 205. The outlier rule and the heat map's logistic cross-check on raw power, 5 MAD unchanged; the log-scale option refused; one-sided trimming of a multiplicative feature accepted with the rule; chronic detector sample set and summary move (AUC 0.554 -> 0.555).
+206. The aperiodic (1/f) fit deleted with its `fooof` transform; reached by no page; the device cannot threshold a peak's prominence.
 
 ---
 

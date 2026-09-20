@@ -5,13 +5,12 @@ Fix every on-screen sentence on the three pages that describes something no long
 fact inside one visual block, and pin each card with a fixture render test (decisions 172-174).
 
 ## Next Step
-Nothing queued; phases 1-11 complete (decisions 174-205; the last: the outlier rule on raw power). Waiting
-on the PI: the aperiodic fit and the frozen calibration model (202's list), pulse-width pooling (189),
-`max_per_rating` (118), the zero-caller chronic routines (187), item 15's niceties; not code: the
-titration session (open item 30).
+Nothing queued; phases 1-12 complete (decisions 174-206; the last: the aperiodic fit deleted). Waiting on
+the PI: the frozen calibration model (202's last site), pulse-width pooling (189), `max_per_rating` (118),
+the zero-caller chronic routines (187), item 15's niceties; not code: the titration session (open item 30).
 
 ## Current Phase
-Phase 11
+Phase 12
 
 ### Phase 1: Review (the PI calls /swarm-review with findings.md §1)
 - [x] Rendered-text inventory per page: every string a card draws, its panel, the element beside it, its referent
@@ -108,4 +107,10 @@ Phase 11
 - [x] The threshold was already 5 MAD (`MAD_N_DEFAULT`); the change is the scale: raw everywhere, `"log"` refused
 - [x] RED 8 of 9 (`test_no_log_power_outlier_rule.py`), GREEN 9 of 9; 4 tests rewritten, 2 whitelist tests moved off `OutlierScale`
 - [x] Host 1379 / 2 / 0; container 684 / 0; live RCS08 before/after (decision 205); workers reloaded; push
+- **Status:** complete
+
+### Phase 12: Item 4, the aperiodic fit (the PI, 2026-09-19: "delete it, tests first")
+- [x] Callers mapped: only the `fooof` transform, selectable by no page or request; the runner alone
+- [x] RED 3 of 3 (`test_no_aperiodic_fit.py`), function and branch and runner choice deleted, GREEN 3 of 3
+- [x] Host 1379 / 2 / 0; container 687 / 0; no live proof applies (zero callers); push
 - **Status:** complete

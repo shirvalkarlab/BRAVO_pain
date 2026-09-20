@@ -1748,7 +1748,7 @@ def main(argv=None):
                     help="NPZ with key 'recordings' = list of BRAVO TimeDomain dicts (timedomain/both).")
     ap.add_argument("--chronic-npz",
                     help="NPZ with key 'chronic' = a Chronic recording dict or list (chronic/both).")
-    ap.add_argument("--transform", default="raw", choices=["raw", "relative_power", "fooof"])
+    ap.add_argument("--transform", default="raw", choices=["raw", "relative_power"])
     ap.add_argument("--label-metric", default="nrs")
     ap.add_argument("--label-strategy", choices=["kmeans", "cutoff"], default="kmeans",
                     help="Chronic pain_level labeler: 'kmeans' (notebook: clusters "

@@ -9,7 +9,7 @@ so BRAVO can run them on its decoded Percept recordings.
 
 What is verbatim vs. ported:
   * The PSD transform / correlation functions below (`_mad`, `normalize_psd_across_epochs`,
-    `pearson_corr_psd_label`, `zscore_per_freq`, `remove_aperiodic`, `relative_power`,
+    `pearson_corr_psd_label`, `zscore_per_freq`, `relative_power`,
     `align_and_standardize_label`) are copied BYTE-FOR-BYTE from the notebook (cell 19).
   * `welch_psd_for_instance` ports the signal-processing logic of notebook cell 8
     (Butterworth high-pass + Welch nperseg=1024 + interp to F_SET). The Welch parameters and
@@ -222,17 +222,15 @@ def pearson_corr_psd_label(psd_feat, label, mad_k=None, rating_group=None, retur
 
 
 # ------------------------------
-# 1) Log-transform + z-score (per channel & frequency across epochs), NaN-safe
+# 1) z-score (per channel & frequency across epochs), NaN-safe
 # ------------------------------
 def zscore_per_freq(psd, eps=1e-12):
     """
     psd: (E, C, F) non-negative power values (Nas allowed)
-    Returns: (E, C, F) log10 power, z-scored across epochs per (channel, freq).
+    Returns: (E, C, F) power, z-scored across epochs per (channel, freq) -- no logarithm.
              Ignores NaNs when computing mean/std.
     """
     psd = np.asarray(psd, dtype=float)
-    # logp = np.log10(psd + eps)
-
     # nanmean / nanstd across epochs (axis=0)
     mu = np.nanmean(psd, axis=0, keepdims=True)               # (1, C, F)
     sd = np.nanstd(psd, axis=0, keepdims=True) + 1e-12        # avoid /0
@@ -241,77 +239,9 @@ def zscore_per_freq(psd, eps=1e-12):
     return out  # NaNs propagate only where inputs are NaN or all-NaN along axis
 
 
-# ------------------------------
-# 2) Aperiodic (1/f) removal, NaN-safe
-#    - Tries specparam/FOOOF per spectrum with freq-masking
-#    - Falls back to log-log linear detrend with NaN masks
-# ------------------------------
-def remove_aperiodic(psd, freqs, use_specparam=True, aperiodic_mode="knee",
-                     peak_width_limits=(1, 12), max_n_peaks=6, eps=1e-12):
-    """
-    psd:   (E, C, F)
-    freqs: (F,)
-    Returns: (E, C, F) log10 residuals after aperiodic removal, NaN-safe.
-             If a spectrum has <2 valid points, residuals are NaN for that row.
-    """
-    psd = np.asarray(psd, dtype=float)
-    freqs = np.asarray(freqs, dtype=float)
-    if np.any(freqs <= 0):
-        raise ValueError("All freqs must be > 0 for log/aperiodic fitting.")
-
-    E, C, F = psd.shape
-    logp = np.log10(psd + eps)
-    residuals = np.full_like(logp, np.nan)  # initialize with NaN
-
-    # ---- Try specparam if available
-    if use_specparam:
-        try:
-            from specparam import SpectralModel
-            # Fit per (epoch, channel) to allow NaN-masking of freqs
-            for e in range(E):
-                for c in range(C):
-                    y = psd[e, c, :]
-                    valid = np.isfinite(y) & np.isfinite(freqs)
-                    if valid.sum() < 2:
-                        continue
-                    sm = SpectralModel(aperiodic_mode=aperiodic_mode,
-                                       peak_width_limits=peak_width_limits,
-                                       max_n_peaks=max_n_peaks,
-                                       verbose=False)
-                    # specparam wants linear power (no logs); it logs internally
-                    sm.fit(freqs[valid], y[valid])
-                    # Build aperiodic fit (in log10 units) on valid bins
-                    ap = sm.get_params('aperiodic_params')
-                    if aperiodic_mode == 'fixed':        # [offset, exponent]
-                        offset, exponent = ap
-                        ap_fit_valid = offset - exponent * np.log10(freqs[valid])
-                    else:                                 # 'knee': [offset, knee, exponent]
-                        offset, knee, exponent = ap
-                        ap_fit_valid = offset - np.log10(knee + freqs[valid]**exponent)
-                    # residuals (log10)
-                    residuals[e, c, valid] = np.log10(y[valid] + eps) - ap_fit_valid
-            return residuals
-        except Exception:
-            # Fall through to simple detrend
-            pass
-
-    # ---- Fallback: log-log linear fit per spectrum with NaN masks
-    lf = np.log10(freqs)
-    for e in range(E):
-        for c in range(C):
-            y = logp[e, c, :]                      # (F,)
-            valid = np.isfinite(y) & np.isfinite(lf)
-            if valid.sum() < 2:
-                continue
-            x = lf[valid]
-            X = np.vstack([np.ones_like(x), x]).T  # (n_valid, 2)
-            # Solve least squares on valid points
-            a, b = np.linalg.lstsq(X, y[valid], rcond=None)[0]
-            ap_fit = a + b * lf
-            residuals[e, c, valid] = y[valid] - (a + b * lf[valid])
-    return residuals
-
-
+# The aperiodic (1/f) fit that stood here (`remove_aperiodic`, a spectral-model library fit with a log-log fallback)
+# was deleted on 2026-09-19 (decision 206): log power enters no calculation, and nothing on any
+# page could select it.
 # ------------------------------
 # 3) Relative (fractional) power across frequency, NaN-safe
 # ------------------------------
@@ -1089,11 +1019,10 @@ def compute_psd_pain_correlation(streams, labels, chan_order, f_set=F_SET,
     chan_order : list[str]
         Canonical channel ordering.
     transform : str
-        "raw" (the spectrum as it is; the default and what the page uses), "relative_power"
-        (each bin as a share of the spectrum's total) or "fooof" (the residual after the aperiodic
-        fit, which is on the PI's list to rule on separately). The three logarithmic transforms
-        that existed until 2026-09-19 ("log", "log_zscore", "relative_power_log") are refused:
-        log power enters no calculation (decision 202; this site, decision 204).
+        "raw" (the spectrum as it is; the default and what the page uses) or "relative_power"
+        (each bin as a share of the spectrum's total). The three logarithmic transforms that
+        existed until 2026-09-19 ("log", "log_zscore", "relative_power_log") and the aperiodic-fit
+        residual ("fooof") are refused: log power enters no calculation (decisions 202, 204, 206).
 
     Returns
     -------
@@ -1132,14 +1061,13 @@ def compute_psd_pain_correlation(streams, labels, chan_order, f_set=F_SET,
 
     if transform == "raw":
         feature = psd_nz
-    elif transform == "fooof":
-        feature = remove_aperiodic(psd_nz, f_set)
     elif transform == "relative_power":
         feature = relative_power(psd_nz)
     else:
         raise ValueError(
-            "transform must be one of 'raw'|'relative_power'|'fooof' (the logarithmic transforms "
-            "were removed on 2026-09-19: log power enters no calculation, decision 204)"
+            "transform must be 'raw' or 'relative_power' (the logarithmic transforms and the "
+            "aperiodic fit were removed on 2026-09-19: log power enters no calculation, "
+            "decisions 204 and 206)"
         )
 
     corr, pval, _pextra = pearson_corr_psd_label(

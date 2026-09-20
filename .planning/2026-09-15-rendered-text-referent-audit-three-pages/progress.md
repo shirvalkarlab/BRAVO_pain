@@ -189,3 +189,7 @@
 - Suites: host 1379 / 2 / 0; container 684 / 0 (was 675).
 - Live RCS08 (`_d205_capture.py`, `_d205_diff.py`): sweep 33,889 fields both, 219 differing (183 the cross-check blocks; grids 0 differing, the ceilings apply live). Biomarkers response: chronic detector sample set moves (L 0-2 4,555 → 4,683, L 0-3 4,748 → 4,580, L 1-3 4,853 → 4,790), AUC 0.5536 → 0.5554, threshold 90.8 → 99.0; time-domain band summary identical.
 - Workers reloaded (four fresh). No Client/src change.
+
+## 2026-09-19 (the PI: "delete it, tests first"): decision 206, the aperiodic fit
+- `remove_aperiodic` reached by nothing but `transform="fooof"`, which no page or request could select; deleted with the branch and the runner's choice. RED 3 of 3, GREEN 3 of 3 (one reword of my own comment, which still named the library).
+- Suites: host 1379 / 2 / 0; container 687 / 0 (was 684). No live proof applies: zero callers, so no served field can change.
