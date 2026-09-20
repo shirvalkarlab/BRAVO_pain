@@ -3,7 +3,7 @@
 **This document replaces the architecture, cache, performance and file-map content of the mega
 handoff, the session handoffs and the module README.** Where those disagreed, the newer
 measurement was taken; each resolution is recorded in
-`.planning/2026-09-06-cache-store-and-record-consolidation/findings.md` §1.
+`docs/archive/2026-09-19/planning/2026-09-06-cache-store-and-record-consolidation/findings.md` §1.
 
 **Every measurement below was taken in the running container on this participant's own record, and
 every line citation was read from the working tree at commit `705bdb0`.** Timings are stated with

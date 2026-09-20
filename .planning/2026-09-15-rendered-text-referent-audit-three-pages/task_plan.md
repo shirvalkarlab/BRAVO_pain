@@ -1,22 +1,14 @@
 # Task Plan: Rendered-text and referent audit of the three pages
 
 ## Goal
-Find and fix, across the Biomarkers, Stim Optimizer and Closed-Loop Deployment pages, every piece of
-on-screen text that (a) describes something no longer on the page (a retired table, a dash marker, a
-length that was dropped, a range that was superseded, "check on device" where a range now exists), or
-(b) says a fact twice within one visual block (a count on two adjacent lines, a caveat in a caption and
-again in a drawer). Then pin the corrected pages with fixture render tests so the class cannot recur.
-This is the class the PI caught twice on 2026-09-15 (decisions 172, 173) after the earlier review had
-found its mirror image ("computed, stored, tested, not on the page", decision 167 §5).
+Fix every on-screen sentence on the three pages that describes something no longer there or repeats a
+fact inside one visual block, and pin each card with a fixture render test (decisions 172-174).
 
 ## Next Step
-Nothing queued. Phases 1-9 complete (decisions 174-199; 199 on 2026-09-17: the one-band rule -- falls with
-current AND rises with pain -- replaced the two majorities on the readiness screen and the gate; two things for
-the PI: L 1-3+ and the committed L 0-2+ have no established band whose power rises with pain, and every qualifying
-band on RCS08 sits on a stimulator harmonic; 200 on 2026-09-17: C3, C4, C6, C7, T2, T3 of the 2026-09-15 review
-built; 201 on 2026-09-19: C6 reversed on the PI's ruling; 202 on 2026-09-19: no log power on the E1 path -- the readiness slope, the amplitude-effect table, the joined table's log columns). **The PI's standing rule, 2026-09-19: log power enters no calculation anywhere**; the remaining sites (the stability test, the dB pain-correlation feature, the outlier fallback, the aperiodic fit, the frozen calibration model) are listed in decision 202 and are his call in that order. Left: pooling across pulse widths (decision 189's plan); decision 118's `max_per_rating` question; item 15's list
-(scroll-link, print stylesheet); the four zero-caller chronic-detector routines (decision 187), his call.
-Not code: the titration session (open item 30).
+Nothing queued; phases 1-9 complete (decisions 174-202; the last: no log power on the E1 path). Waiting
+on the PI: the remaining log-power sites (202), pulse-width pooling (189), `max_per_rating` (118), the
+zero-caller chronic routines (187), item 15's niceties; not code: the titration session (open item 30).
+Context compaction of the reference documents landed 2026-09-19 (decision 203).
 
 ## Current Phase
 Phase 9

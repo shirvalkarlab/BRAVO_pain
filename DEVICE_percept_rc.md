@@ -3,7 +3,7 @@
 **This document replaces the device sections of the mega handoff, the design ledger, the
 calibration handoff and the module README.** Where those four disagreed, the newer result was
 taken; the resolution of each disagreement is recorded in
-`.planning/2026-09-06-cache-store-and-record-consolidation/findings.md` §1.
+`docs/archive/2026-09-19/planning/2026-09-06-cache-store-and-record-consolidation/findings.md` §1.
 
 **Every constant below was read from the working tree at commit `705bdb0`, and the line number
 beside it is where it is defined today.** Line numbers drift with every edit. Search for the name

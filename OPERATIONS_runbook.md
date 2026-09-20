@@ -2,7 +2,7 @@
 
 **This document replaces §7 of the mega handoff and the operational sections of the session
 handoffs.** Where those disagreed, the newer test result was taken; each resolution is in
-`.planning/2026-09-06-cache-store-and-record-consolidation/findings.md` §1.
+`docs/archive/2026-09-19/planning/2026-09-06-cache-store-and-record-consolidation/findings.md` §1.
 
 **Every item here is a trap that has already been paid for. Do not rediscover them.**
 

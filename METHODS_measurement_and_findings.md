@@ -3,7 +3,7 @@
 **This document replaces the statistics, methods and results content of the mega handoff, the
 design ledger, the session handoffs, the audit reports and the two validation reports.** Where
 those disagreed, the newer result was taken; each resolution is recorded in
-`.planning/2026-09-06-cache-store-and-record-consolidation/findings.md` §1.
+`docs/archive/2026-09-19/planning/2026-09-06-cache-store-and-record-consolidation/findings.md` §1.
 
 **Two standing rules from the PI govern every statement in this document.**
 
