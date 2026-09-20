@@ -391,6 +391,8 @@ spectral_*.html
 spectral_importance*.html
 rcs08_*.png
 rcs08_*.csv
+# the de-identified calibration block tables are tracked (decision 208, 2026-09-20)
+!BRAVO/modules/Biomarkers/data/calibration/*.csv
 c2_*.png
 c2_*.csv
 sc[0-9]_*.png

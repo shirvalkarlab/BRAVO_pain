@@ -2511,9 +2511,13 @@ LSB_VALIDATED_HZ_HI = 28.3
 # ── transform route — PRIMARY TD→LSB source of truth (PI decision 2026-06-27) ─────────────────────
 # k for the percept-spectral-repro "transform" DSP (RC+S-Hann / 256-pt zero-padded FFT / peak-
 # amplitude / mean-magnitude band power), reproduced bit-for-bit on the user's Stage-1 RCS08 JSONs:
-# all-stim median k = 352.62, r = 0.9927, RMSE 60.6 LSB (see HANDOFF_TD_LSB_calibration_2026-06-27.md,
-# transform_3s_blocks.csv). This is the deployable + exploratory TD→LSB constant. The stim-off variant
-# (356.61) is recorded for provenance ONLY and is NOT deployed — use 352.62 exactly, do not round.
+# all-stim median k = 352.62, r = 0.9927, RMSE 60.6 LSB on the 131 paired blocks through 2026-06-24.
+# THE RECIPE AND THE BLOCKS ARE IN THIS REPOSITORY (decision 208, 2026-09-20): `routines/calibration.py`
+# and `data/calibration/RCS08_transform_blocks_2026-09-03.csv`; the refit on every block through
+# 2026-09-03 with the adopted block gate and 5-MAD ratio rule gives 345.6 (n = 133, r = 0.992), within
+# 2 percent, so the constant is KEPT. This is the deployable + exploratory TD→LSB constant. The stim-off
+# variant (356.61 June; 351.2 September) is recorded for provenance ONLY and is NOT deployed — use 352.62
+# exactly, do not round.
 # k is multiplicative on a LOG band-power feature, so within a SINGLE-SOURCE feature (every point
 # scaled by the same k) it CANCELS inside Pearson r / AUC — the correlation/AUC panels are identical
 # whether k is 269, 352.62, or 1. SCOPE: this holds only when the feature column is homogeneous in k.
@@ -2563,6 +2567,9 @@ LSB_DEPLOYABLE_HZ_HI = 30.0
 # Apply ONLY to PSD-only patient-triggered snapshot events. Montage/survey/snapshot products carry their
 # own TD and MUST use td_to_lsb (k=352.62) directly — they are this bridge's CALIBRATION SOURCE, never
 # a consumer of it. The event PSD must be negative-clamped (clamp_device_psd) before band-integration.
+# The 4.789 was a geometric mean (a log-space average). Refit 2026-09-20 as the raw median with the
+# 5-MAD ratio rule on 26,334 pairs through 2026-09-03 in 7.8-28 Hz: 4.755, bridge 74.16, within 1 percent,
+# so the constant is KEPT (decision 208; recipe and pairs in `routines/calibration.py`, `data/calibration/`).
 LSB_PER_UV2_DEVICE_PSD_TD_RATIO = 4.789   # K_TD_PSD: device-PSD band power / TD-transform band power
 LSB_PER_DEVICE_PSD = LSB_PER_UV2_TRANSFORM / LSB_PER_UV2_DEVICE_PSD_TD_RATIO  # K_PSD_LSB ≈ 73.63
 
