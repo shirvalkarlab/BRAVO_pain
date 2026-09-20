@@ -377,20 +377,18 @@ def test_roc_operating_point_is_youden_and_separates_classes():
     assert 100.0 < op2["threshold"] < 140.0, f"flipped threshold {op2['threshold']:.1f} off the raw scale"
 
 
-def _planted_detail(E=60, C=2, F=60, center=20.0, half=2.5, beta=0.4, seed=0, prelog=False):
-    """Synthetic td_detail with a planted band-power<->label correlation in channel 0."""
+def _planted_detail(E=60, C=2, F=60, center=20.0, half=2.5, beta=0.4, seed=0):
+    """Synthetic td_detail with a planted band-power<->label correlation in channel 0. Raw power:
+    since decision 204 a detail carries no `prelog` flag and no reader takes a logarithm."""
     rng = np.random.default_rng(seed)
     f = np.linspace(0.95, 100, F)
     labels = rng.normal(5, 2, E)
     psd = np.abs(rng.normal(1, 0.2, (E, C, F)))
     band = (f >= center - half) & (f <= center + half)
     psd[:, 0, band] *= (1 + beta * (labels - labels.mean())[:, None])
-    if prelog:
-        psd = 10.0 * np.log10(psd)
     return {"f_set": f, "psd": psd, "labels": labels,
             "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"],
-            "times": [f"2025-07-{1 + (i % 28):02d} 10:00:00" for i in range(E)],
-            "prelog": prelog}
+            "times": [f"2025-07-{1 + (i % 28):02d} 10:00:00" for i in range(E)]}
 
 
 def test_binarize_labels_tertile_excludes_middle():
@@ -438,12 +436,12 @@ def test_builder_no_device_psd_scale_in_detail():
     rng = np.random.default_rng(0)
     td_dens = np.abs(rng.normal(5.0, 0.3, (4, F))) + 1.0
     dev_dens = np.abs(rng.normal(2.0, 0.1, (3, F))) + 1.0
-    rows_log = np.vstack([10 * np.log10(td_dens), 10 * np.log10(dev_dens)])
+    rows = np.vstack([td_dens, dev_dens])                 # raw power (decision 204)
     channel = np.array(["ZERO_TWO_LEFT"] * 4 + ["ZERO_TWO_LEFT"] * 3, dtype=object)
     source = np.array(["TD streaming"] * 4 + ["Patient event"] * 3, dtype=object)
     t0 = 1_700_000_000.0
     t = t0 + np.arange(7) * 600.0
-    mat = {"f_set": f, "logX": rows_log, "t": t, "channel": channel, "source": source,
+    mat = {"f_set": f, "X": rows, "t": t, "channel": channel, "source": source,
            "dur": np.full(7, 30.0)}
     det = sp.build_pooled_detail_from_matrix(mat, np.array([]), np.array([]),
                                              aggregate="all", match_direction="pro_first")
@@ -525,7 +523,7 @@ def test_deployment_roc_bootstrap_defolded_null_ci_drops_below_chance():
     labels = rng.normal(5, 2, E)
     psd = _np.abs(rng.normal(1, 0.3, (E, C, F)))           # NO planted signal -> null band
     det = {"f_set": f, "psd": psd, "labels": labels,
-           "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False,
+           "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"],
            "times": [f"2025-07-{1 + (i % 28):02d} 10:00:00" for i in range(E)]}
     roc = analytics.deployment_roc(det, "ZERO_TWO_LEFT", 20.0, n_boot=500, seed=1)
     assert roc["available"] and roc["auc_lo"] is not None
@@ -548,7 +546,7 @@ def test_deployment_roc_bootstrap_defolded_null_ci_drops_below_chance():
     band = (f >= 17.5) & (f <= 22.5)
     psd2[:, 0, band] *= (1 + 0.8 * (labels2 - labels2.mean())[:, None])
     det2 = {"f_set": f, "psd": psd2, "labels": labels2,
-            "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False,
+            "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"],
             "times": [f"2025-07-{1 + (i % 28):02d} 10:00:00" for i in range(120)]}
     roc2 = analytics.deployment_roc(det2, "ZERO_TWO_LEFT", 20.0, n_boot=300, seed=1)
     assert roc2["auc_lo"] > 0.5, f"planted lower CI {roc2['auc_lo']} should stay above chance"
@@ -575,7 +573,7 @@ def _era_split_detail(E=240, beta=0.6, high_sign=1.0, seed=11):
     st = np.linspace(base, base + 90 * 86400, 9)
     sy = np.array([0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 3.0, 3.0, 3.0])
     det = {"f_set": f, "psd": psd, "labels": labels,
-           "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False, "times": times}
+           "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "times": times}
     return det, {"t": list(st), "y": list(sy)}
 
 
@@ -753,7 +751,7 @@ def _forward_detail(E=300, F=60, center=20.0, seed=0, weeks=12, beta=0.5, noise=
     sign = np.ones(E) if sign_fn is None else sign_fn(wk)
     psd[:, 0, band] *= (1 + (beta * sign * (labels - labels.mean()))[:, None])
     return {"f_set": f, "psd": psd, "labels": labels, "rating_group": np.arange(E),
-            "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False, "times": times}
+            "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "times": times}
 
 
 def test_freq_extrapolated_guard_agrees_with_frozen_model():
@@ -909,7 +907,7 @@ def test_deployment_roc_clustered_ci_wider_than_naive():
     band = (f >= 17.5) & (f <= 22.5)
     psd[:, 0, band] *= (1 + 0.10 * (labels - labels.mean())[:, None])
     det = {"f_set": f, "psd": psd, "labels": labels, "rating_group": rg,
-           "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False,
+           "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"],
            "times": [f"2025-07-{1 + (i % 28):02d} 10:00:00" for i in range(n_clu * per)]}
     roc = analytics.deployment_roc(det, "ZERO_TWO_LEFT", 20.0, n_boot=300, seed=2)
     # Tertile binarization drops the middle-third ratings, so the surviving clusters are fewer than
@@ -1084,7 +1082,7 @@ def test_deployment_roc_by_era_splits_eras():
     t_epoch = base + _np.sort(rng.uniform(0, 90 * 86400, E))
     times = [__import__("datetime").datetime.utcfromtimestamp(t).isoformat(sep=" ") for t in t_epoch]
     det = {"f_set": f, "psd": psd, "labels": labels,
-           "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False, "times": times}
+           "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "times": times}
     # stim: 0 mA for first third, 1.0 mA middle, 3.0 mA last third
     st = _np.linspace(base, base + 90 * 86400, 9)
     sy = _np.array([0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 3.0, 3.0, 3.0])
@@ -1434,7 +1432,7 @@ def test_roc_small_sample_advisory_is_label_only():
             day = 1 + (ci % 27)
             times += [f"2025-07-{day:02d} 10:00:00"] * reps
         return {"f_set": f, "psd": psd, "labels": labels, "rating_group": rating_group,
-                "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False, "times": times}
+                "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "times": times}
 
     floor = analytics.SMALL_SAMPLE_CLUSTER_FLOOR
     # Use a few-cluster and a many-cluster fixture. n_clusters is the post-binarization independent-
@@ -1569,7 +1567,7 @@ def test_deployment_roc_bca_fields_and_defold_guard_present():
     band = (f >= 17.5) & (f <= 22.5)
     psd[:, 0, band] *= (1 + 0.8 * (labels - labels.mean())[:, None])
     det = {"f_set": f, "psd": psd, "labels": labels,
-           "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False,
+           "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"],
            "times": [f"2025-07-{1 + (i % 28):02d} 10:00:00" for i in range(E)]}
     roc = analytics.deployment_roc(det, "ZERO_TWO_LEFT", 20.0, n_boot=500, seed=1)
     assert roc["available"]
@@ -1644,7 +1642,7 @@ def _drift_detail(E, weeks, drift_per_week=0.0, seed=1):
     times = [(t0 + _dt.timedelta(days=int(wkidx[i]) * 7 + (i % 5))).strftime("%Y-%m-%dT10:00:00")
              for i in range(E)]
     return {"f_set": f, "psd": psd, "labels": labels,
-            "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False, "times": times}
+            "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "times": times}
 
 
 def test_threshold_drift_stationary_is_stable():
@@ -2054,7 +2052,7 @@ def test_deployment_roc_ships_full_array_operating_points_table():
     band = (f >= 17.5) & (f <= 22.5)
     psd[:, 0, band] *= (1 + 0.7 * (labels - labels.mean())[:, None])   # planted band -> real ROC
     det = {"f_set": f, "psd": psd, "labels": labels,
-           "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False,
+           "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"],
            "times": [f"2025-07-{1 + (i % 28):02d} 10:00:00" for i in range(E)]}
     roc = analytics.deployment_roc(det, "ZERO_TWO_LEFT", 20.0, n_boot=200, max_points=20, seed=1)
     assert roc["available"]
@@ -2907,7 +2905,7 @@ def test_validation_mixed_model_excludes_the_first_three_weeks_and_says_so():
     psd = rng.normal(0.0, 1.0, size=(n, 1, nf))
     labels = rng.normal(5.0, 2.0, size=n)
     det = {"f_set": f, "psd": psd, "labels": labels, "chan_order": ["ZERO_TWO_LEFT"],
-           "times": times, "prelog": True}
+           "times": times}
 
     full = analytics.band_mixedmodel_inference(det, "ZERO_TWO_LEFT", 20.0, exclude_first_weeks=0)
     cut = analytics.band_mixedmodel_inference(det, "ZERO_TWO_LEFT", 20.0)

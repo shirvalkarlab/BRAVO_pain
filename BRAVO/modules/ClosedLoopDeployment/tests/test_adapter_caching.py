@@ -27,7 +27,7 @@ def _psd_frame(n=6):
     f_set = np.arange(8.0, 31.0, 1.0)
     return pd.DataFrame([
         {"t": float((t0 + pd.Timedelta(minutes=5 * k)).timestamp()), "channel": "ZERO_THREE_LEFT",
-         "source": "td", "log_psd": np.sin(f_set) + float(k), "freqs": f_set}
+         "source": "td", "psd": np.sin(f_set) + float(k), "freqs": f_set}
         for k in range(n)])
 
 
@@ -133,19 +133,19 @@ def test_a_column_of_arrays_is_hashed_over_its_bytes_and_not_given_up_on():
     the key in place of the numbers, and a re-decoded recording keeps its shape.
     """
     psd = _psd_frame()
-    fp = AD._frame_fingerprint(psd, ("t", "channel", "log_psd", "freqs"))
+    fp = AD._frame_fingerprint(psd, ("t", "channel", "psd", "freqs"))
     assert fp[0] == "hashed", "not 'degraded' — the array columns must really have been hashed"
     assert len(fp[2]) == 4
 
     changed = psd.copy()
-    changed.at[0, "log_psd"] = np.asarray(changed.at[0, "log_psd"], float) + 10.0
-    assert AD._frame_fingerprint(changed, ("t", "channel", "log_psd", "freqs")) != fp, \
+    changed.at[0, "psd"] = np.asarray(changed.at[0, "psd"], float) + 10.0
+    assert AD._frame_fingerprint(changed, ("t", "channel", "psd", "freqs")) != fp, \
         "a change in the spectra alone must move the key"
 
     # every value is hashed, not merely the first: change the LAST row only
     tail = psd.copy()
-    tail.at[len(tail) - 1, "log_psd"] = np.asarray(tail.at[len(tail) - 1, "log_psd"], float) + 3.0
-    assert AD._frame_fingerprint(tail, ("t", "channel", "log_psd", "freqs")) != fp
+    tail.at[len(tail) - 1, "psd"] = np.asarray(tail.at[len(tail) - 1, "psd"], float) + 3.0
+    assert AD._frame_fingerprint(tail, ("t", "channel", "psd", "freqs")) != fp
 
 
 def test_arrays_of_differing_lengths_are_still_hashed_value_by_value():
@@ -153,12 +153,12 @@ def test_arrays_of_differing_lengths_are_still_hashed_value_by_value():
     rather than skip them. A montage recording at a different sampling rate produces exactly this.
     """
     ragged = pd.DataFrame({"t": [1.0, 2.0],
-                           "log_psd": [np.arange(5.0), np.arange(9.0)]})
-    fp = AD._frame_fingerprint(ragged, ("t", "log_psd"))
+                           "psd": [np.arange(5.0), np.arange(9.0)]})
+    fp = AD._frame_fingerprint(ragged, ("t", "psd"))
     assert fp[0] == "hashed"
     moved = ragged.copy()
-    moved.at[1, "log_psd"] = np.arange(9.0) + 1.0
-    assert AD._frame_fingerprint(moved, ("t", "log_psd")) != fp
+    moved.at[1, "psd"] = np.arange(9.0) + 1.0
+    assert AD._frame_fingerprint(moved, ("t", "psd")) != fp
 
 
 def test_a_column_that_cannot_be_hashed_says_so_in_the_key_itself():

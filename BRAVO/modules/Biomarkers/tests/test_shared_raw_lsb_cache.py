@@ -594,13 +594,13 @@ def test_warming_reports_when_there_is_nothing_to_warm():
 def test_the_ingest_warm_also_warms_the_tiles():
     """`warm_psd_cache` is what ingestion calls, so the tiles have to be warmed from there."""
     with _Bench():
-        with mock.patch.object(B, "_cached_psd_matrix", return_value={"logX": []}) as psd, \
+        with mock.patch.object(B, "_cached_psd_matrix", return_value={"X": []}) as psd, \
              mock.patch.object(B, "warm_shared_raw_cache",
                                return_value={"status": "already_warm"}) as tiles:
             got = B.warm_psd_cache(UID)
         assert psd.call_count == 1
         assert tiles.call_count == 1 and tiles.call_args[0][0] == UID
-        assert got == {"logX": []}, "the spectra answer must be handed back unchanged"
+        assert got == {"X": []}, "the spectra answer must be handed back unchanged"
 
 
 def test_the_tiles_are_warmed_even_when_the_spectra_warm_fails():

@@ -175,3 +175,10 @@
 - GREEN: host 1372 / 2 / 0; container 664 / 0. Two of my own slips on the way: the new rule version dropped the `post_ramp_margin` token decision 144's guard requires; the linear fixture let power go negative at the old log-scale noise -- both fixed and re-measured.
 - Live RCS08 (`_d199_capture.py`/`_d200_capture.py` before202/after202, `_d202_diff.py`): Closed-Loop verdict/E1/thresholds identical on both bands; Stim Optimizer usable cells 4 -> 6, gate verdict unchanged, every qualifying band still on a harmonic.
 - Workers reloaded. No Client/src change.
+
+## 2026-09-19 (the PI: "go on the stability test, tests first, then db pain correlation tests"): decision 204
+- Map first: the stability test's log(2) margin is on the odds-ratio scale, not power; the log power sat in the assembled matrix (`logX`, decibels) that every pooled reader stands on, and in `compute_psd_pain_correlation(transform="log")`, live on every Recompute.
+- RED: 11 container tests (`test_no_log_power_pooled_spectra.py`), 5 StimOptimizer (`test_no_log_power_matrix_frame.py`), 2 Closed-Loop; two of my fixtures wrong first (four-bin minimum; a stream the Welch filter rejected, which passed one refusal test falsely), fixed and re-run RED.
+- GREEN: host 1379 / 2 / 0 (was 1372); container 675 / 0 (was 664); 14 existing tests rewritten in raw power.
+- Live RCS08 (`_d204_capture.py` before204 on the stashed tree / after204, `_d204_diff.py`): Biomarkers response 952,637 fields both, 11,695 differing (10,672 the per-row r/p copies on 5,975 timeline rows, 1,000 the permutation null), chosen band unchanged (L 1-3+, 0.95 Hz), r −0.495 → −0.463, n 106 → 93 (the correlation's MAD rule on raw power; item 3). Stability grid 5,148 fields both, 1,914 differing, 10 of 132 verdicts moved (inconclusive 115→113, stable 1→2, stim-dependent 16→17).
+- Workers reloaded (four fresh). No Client/src change.

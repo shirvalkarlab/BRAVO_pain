@@ -67,9 +67,9 @@ FREQS = np.arange(1.0, 41.0, 1.0)
 
 def _psd(n=40, t0=1_760_000_000):
     rng = np.random.default_rng(0)
-    log_psd = rng.normal(-1.0, 0.15, size=(n, FREQS.size))
+    psd = rng.gamma(40.0, 0.0025, size=(n, FREQS.size))     # raw power near 0.1 (decision 204)
     return pd.DataFrame({"t": np.arange(n) * 600 + t0, "channel": ["ZERO_TWO_LEFT"] * n,
-                         "log_psd": list(log_psd), "freqs": [FREQS] * n})
+                         "psd": list(psd), "freqs": [FREQS] * n})
 
 
 def _epochs(t0=1_760_000_000):
@@ -189,7 +189,7 @@ def _psd_production(epochs):
     n = len(ts)
     return pd.DataFrame({"t": np.array(ts, float), "channel": ["ZERO_TWO_LEFT"] * n,
                          "source": ["TD streaming"] * n,
-                         "log_psd": list(np.full((n, f.size), -1.0)), "freqs": [f] * n})
+                         "psd": list(np.full((n, f.size), 0.1)), "freqs": [f] * n})
 
 
 def test_build_evidence_accepts_the_adapters_real_column_names():
@@ -553,11 +553,11 @@ def test_timing_plan_follows_the_selected_mode():
 def _psd_eras(n=120, t0=1_700_000_000):
     """PSD rows spanning six calendar months, one channel."""
     rng = np.random.default_rng(7)
-    log_psd = rng.normal(-1.0, 0.10, size=(n, FREQS.size))
+    psd = rng.gamma(100.0, 0.001, size=(n, FREQS.size))     # raw power near 0.1 (decision 204)
     # thirty days apart so consecutive epochs land in distinct calendar months
     t = t0 + np.arange(n) * (30 * 86400 // 20)
     return pd.DataFrame({"t": t, "channel": ["ZERO_TWO_LEFT"] * n,
-                         "log_psd": list(log_psd), "freqs": [FREQS] * n})
+                         "psd": list(psd), "freqs": [FREQS] * n})
 
 
 def _epochs_eras(t0=1_700_000_000, labels=None, amps=None):

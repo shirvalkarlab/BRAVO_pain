@@ -77,27 +77,19 @@ def _era(amp):
     return "LOW" if amp <= ERA_LOW_MAX_MA else "HIGH"
 
 
-def band_powers(log_psd, freqs, centers=DEFAULT_BAND_CENTERS_HZ, width=DEFAULT_BAND_WIDTH_HZ):
-    """Per-band LINEAR power from one row's stored spectrum, a dict keyed by band centre.
+def band_powers(psd, freqs, centers=DEFAULT_BAND_CENTERS_HZ, width=DEFAULT_BAND_WIDTH_HZ):
+    """Per-band power from one row's stored spectrum, a dict keyed by band centre: the arithmetic
+    mean of the raw bin powers inside the band, the device-comparable quantity (rule D11).
 
-    The stored spectrum is in decibels (the assembled matrix's convention, set in
-    `streaming_psd.psd_rows_to_matrix`), so the bins are turned back into linear power first; that
-    undoing is the only place a logarithm appears here. Until 2026-09-19 this also returned a
-    decibel expression of the band power and the mean of the per-bin log values, and the joined
-    table carried both as columns read by nothing (rule D11 fixes the scale to linear); the PI's
-    rule of that day (decision 202) is that log power enters no calculation, so they are gone.
-
-    ``linear`` is the arithmetic mean of the linear bin powers and is the device-comparable
-    quantity (D11). ``log_of_linear`` is its decibel expression, which is a monotone relabelling of
-    the same ordering. ``mean_of_log`` is the quantity the biomarker pipeline used; it is the
-    geometric mean in disguise and can rank bands differently, which is why it is returned rather
-    than quietly replaced.
+    The stored spectrum is raw power (the assembled matrix's ``X``, decision 204). Until
+    2026-09-19 it was decibels and this function undid them first; the same day's earlier change
+    (decision 202) had already removed the decibel and mean-of-log companions the joined table
+    carried, read by nothing. Log power enters no calculation (the PI, 2026-09-19).
     """
-    lp = np.asarray(log_psd, dtype=float)
+    lin_bins = np.asarray(psd, dtype=float)
     f = np.asarray(freqs, dtype=float)
-    if lp.shape[0] != f.shape[0]:
-        raise ValueError(f"log_psd has {lp.shape[0]} bins but freqs has {f.shape[0]}")
-    lin_bins = np.power(10.0, lp / 10.0)
+    if lin_bins.shape[0] != f.shape[0]:
+        raise ValueError(f"psd has {lin_bins.shape[0]} bins but freqs has {f.shape[0]}")
     out_lin = {}
     half = float(width) / 2.0
     for c in centers:
@@ -215,7 +207,7 @@ def _frame_fingerprint(df, columns=(), *, either=(), at_least_one=(), also=()):
     code runs instead of never.
 
     THE ARRAY-VALUED COLUMN IS THE OTHER HALF OF THE DIFFICULTY. The spectral frame is one row per
-    sample and channel with a whole spectrum held as a numpy array in ``log_psd`` and its frequency
+    sample and channel with a whole spectrum held as a numpy array in ``psd`` and its frequency
     axis in ``freqs``. ``pandas.util.hash_pandas_object`` cannot hash a column whose values are
     arrays; it raises, and the first version answered that by giving up on the column, which put
     the frame's shape in the key in place of its contents. Array columns are therefore hashed over
@@ -319,7 +311,7 @@ _CAL_CENTER_RE = _re.compile(r"^" + _CAL_LSB_PREFIX + r"(-?\d+(?:\.\d+)?)$")
 def calibrated_centres(psd_frame):
     """The band centres a calibrated frame carries, read from its own column names.
 
-    An empty tuple means the frame is the older kind, one whole spectrum per row in ``log_psd``
+    An empty tuple means the frame is the older kind, one whole spectrum per row in ``psd``
     and ``freqs``. Since 2026-09-05 (`90eb109`) ``evidence_inputs`` returns the calibrated kind
     by default, and until this function existed the join and its fingerprint still assumed the
     older one, so the deployment report raised on every candidate and the page showed "the three
@@ -344,7 +336,7 @@ def _joined_signature(psd_frame, epochs, centers, width):
         psd_fp = _frame_fingerprint(psd_frame, ("t", "channel", "source", "band_half_hz") + power_cols,
                                     also=("tile_ok", "tile_saturated", "tile_window_s"))
     else:
-        psd_fp = _frame_fingerprint(psd_frame, ("t", "channel", "source", "log_psd", "freqs"))
+        psd_fp = _frame_fingerprint(psd_frame, ("t", "channel", "source", "psd", "freqs"))
     return (psd_fp,
             _frame_fingerprint(epochs, ("t_start", "t_end", "freq_hz"),
                                at_least_one=(("amp_mA_Left", "amp_Left",
@@ -1146,7 +1138,7 @@ def joined_table(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_HZ,
     rows = []
     have_epochs = epochs is not None and len(epochs) > 0
     for i, (_, r) in enumerate(psd_frame.iterrows()):
-        lin = band_powers(r["log_psd"], r["freqs"], centers, width)
+        lin = band_powers(r["psd"], r["freqs"], centers, width)
         e = int(ep_idx[i])
         ctx = {}
         if have_epochs and e >= 0:

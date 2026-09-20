@@ -1081,7 +1081,7 @@ def _cluster_robust_logit_p(x, y, groups=None):
 
 
 def outlier_report_for_feature(x, *, n_mad=None, context=""):
-    """Outlier REPORT (never a removal) for a device-facing log/dB band-power feature.
+    """Outlier REPORT (never a removal) for a device-facing band-power feature.
 
     Used by the deployment and threshold-detector readouts. The policy differs from the exploration
     scan on purpose: those readouts produce an OPERATING POINT the device will run against, and the
@@ -1090,9 +1090,9 @@ def outlier_report_for_feature(x, *, n_mad=None, context=""):
     and the caller decides whether any associational statistic is worth re-running without the
     flagged samples as a labelled sensitivity analysis.
 
-    ``x`` must ALREADY be on the log/dB scale (which is what every caller passes), so the rule is
-    applied with ``scale="raw"`` — that IS the log scale for band power. Passing a raw linear feature
-    here would apply a one-sided rule; use ``apply_outlier_exclusion`` with ``scale="log"`` for that.
+    ``x`` is the standardised raw band power the pooled detail holds (decision 204), so the rule is
+    applied with ``scale="raw"``: the feature is centred and can be negative, and log power enters
+    no calculation in any case.
     """
     x = np.asarray(x, dtype=float)
     n_mad = float(OUTLIER_N_MAD if n_mad is None else n_mad)
@@ -1100,7 +1100,7 @@ def outlier_report_for_feature(x, *, n_mad=None, context=""):
     n_fin = int(np.isfinite(x).sum())
     return mask, {
         "policy": "REPORTED, NOT REMOVED (operating point must reflect the full distribution)",
-        "rule": f"|x - median| >= {n_mad:g} x MAD on the log/dB band-power feature",
+        "rule": f"|x - median| >= {n_mad:g} x MAD on the standardised raw band-power feature",
         "n_mad": n_mad,
         "n_flagged": int(info["n_removed"]),
         "n_samples": n_fin,
@@ -1111,10 +1111,14 @@ def outlier_report_for_feature(x, *, n_mad=None, context=""):
 
 
 def _band_feature_from_detail(td_detail, channel_raw, center_hz, band_width_hz=5.0):
-    """Extract the per-sample log band-power feature + matched labels + rating clusters + times for
+    """Extract the per-sample band-power feature + matched labels + rating clusters + times for
     ONE (channel, band) from a pooled td_detail — the SAME feature definition the glmer uses.
 
-    Returns (bp_log (N,), labels (N,), rating_group (N,), times (N,)) restricted to finite-feature
+    The feature is the mean over the band of the detail's spectrum, which since decision 204
+    (2026-09-19) is raw power standardised within channel and source; no logarithm is taken here
+    or upstream. Until then the detail held decibels, or this function took them.
+
+    Returns (bp (N,), labels (N,), rating_group (N,), times (N,)) restricted to finite-feature
     rows, or None on any structural failure (channel/band not found). Caller binarizes labels.
     """
     if not td_detail:
@@ -1138,12 +1142,12 @@ def _band_feature_from_detail(td_detail, channel_raw, center_hz, band_width_hz=5
         return None
     with np.errstate(invalid="ignore", divide="ignore"):
         sub = np.nanmean(psd[:, ci, bmask], axis=1)
-        bp_log = sub if td_detail.get("prelog", False) else 10.0 * np.log10(np.where(sub > 0, sub, np.nan))
+        bp = sub          # raw band power, as the pooled detail holds it (decision 204: no logarithm)
     rg = (np.asarray(rating_group) if rating_group is not None
-          else np.arange(len(bp_log)))
+          else np.arange(len(bp)))
     tt = (np.asarray([str(t) for t in times]) if times is not None
-          else np.array([""] * len(bp_log)))
-    return bp_log, labels, rg, tt
+          else np.array([""] * len(bp)))
+    return bp, labels, rg, tt
 
 
 def _auto_block_len(cluster_series):
@@ -1378,7 +1382,7 @@ def _solve_roc_operating_point(fpr, tpr, thr_device, rule, prevalence, cost_rati
     (Youden J / max-F1 / cost-sensitive tangent), lifted server-side so it can run on the FULL,
     un-downsampled fpr/tpr/thr arrays. The browser previously re-solved on the DOWNSAMPLED curve, so
     its chosen vertex could differ slightly from the backend's own full-array Youden default and that
-    drift propagated to Phases C–E. `thr_device` is the oriented log-power threshold (rule: power >=
+    drift propagated to Phases C–E. `thr_device` is the oriented band-power threshold (rule: power >=
     thr) aligned index-for-index with fpr/tpr; the +inf/-inf sentinel vertex at the (0,0) corner is
     skipped. Strictly-greater keeps the first (lowest-index) maximizer so ties never flip.
 
@@ -1437,8 +1441,8 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
     per-rating random intercept), so the CI reflects the count of INDEPENDENT ratings, not raw
     samples.
 
-    The band feature is z-scored-log power oriented so AUC >= 0.5; the threshold scale returned is
-    the same oriented log-power feature the device sees (Phase C converts it to LSB). The operating
+    The band feature is standardised raw power oriented so AUC >= 0.5; the threshold scale returned
+    is the same oriented feature (Phase C converts it to LSB). The operating
     point defaults to Youden's J; the frontend re-solves F1 / cost-sensitive / net-benefit live from
     the returned (fpr, tpr, thr, prevalence).
 
@@ -1450,7 +1454,7 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
     feat = _band_feature_from_detail(td_detail, channel_raw, center_hz, band_width_hz)
     if feat is None:
         return {"available": False, "reason": f"channel {channel_raw} / band not found in detail"}
-    bp_log, labels, rating_group, _times = feat
+    bp, labels, rating_group, _times = feat
     # F12: the tertile cut must reference the UNIQUE-RATING distribution, not the per-sample
     # vector. Without rating_group the cut point is itself pseudoreplicated — a rating with many
     # matched PSD rows drags the percentile toward its own value, so "high pain" and "low pain" get
@@ -1458,10 +1462,10 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
     # the same omission was present in deployment_roc_by_era and threshold_drift_by_week.
     y_all = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
                              pain_cutoff=pain_cutoff, rating_group=rating_group)
-    m = np.isfinite(bp_log) & np.isfinite(y_all)
+    m = np.isfinite(bp) & np.isfinite(y_all)
     if m.sum() < 12 or len(np.unique(y_all[m])) < 2:
         return {"available": False, "reason": "too few matched high/low samples for an ROC"}
-    x = bp_log[m].astype(float)
+    x = bp[m].astype(float)
     y = y_all[m].astype(int)
     g = rating_group[m]
 
@@ -1505,7 +1509,7 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
     _null_ref_auc = None
     _auc_excess = None
     fpr, tpr, thr = metrics.roc_curve(y, use_score)
-    # Map decision thresholds back to the ORIGINAL oriented log-power scale (rule: power >= thr).
+    # Map decision thresholds back to the ORIGINAL oriented band-power scale (rule: power >= thr).
     thr_device = (-thr if flip else thr).astype(float)
 
     n_pos = int(np.sum(y == 1)); n_neg = int(np.sum(y == 0))
@@ -1534,7 +1538,7 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
     # times don't parse keep their natural (id) order, which for rating_group ids is already the
     # match order. The block bootstrap below preserves serial dependence across adjacent ratings.
     g_masked = g
-    t_rows = _times[m] if (_times is not None and len(_times) == len(bp_log)) else None
+    t_rows = _times[m] if (_times is not None and len(_times) == len(bp)) else None
     if t_rows is not None:
         cl_time = {}
         t_epoch = pd.to_datetime(pd.Series([str(s) for s in t_rows]), errors="coerce", utc=True)
@@ -1659,7 +1663,7 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
     # The single most direct view of WHY this band separates pain: the per-sample band-power feature
     # split by the binarized label. Drawn beneath the ROC with the cut-point threshold line on top,
     # it shows the clinician the overlap the AUC summarizes and where any threshold falls in it.
-    # Binned on `x` (= bp_log[m], the RAW oriented-log-power feature), the SAME scale the cut-point
+    # Binned on `x` (= bp[m], the oriented standardised raw band-power feature), the SAME scale the cut-point
     # threshold (thr_device / operating_point.threshold) lives on, so the threshold line maps directly
     # (Phase C percentile-anchors that same value to device LSB). Shared bin edges across both classes.
     feature_hist = None
@@ -1677,7 +1681,7 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
             "counts_low": [int(v) for v in c_lo],
             "n_high": int(np.sum(y == 1)), "n_low": int(np.sum(y == 0)),
             "x_min": x_lo, "x_max": x_hi,
-            "feature_units": "oriented log10 band power (same scale as the cut-point threshold)",
+            "feature_units": "oriented standardised raw band power (same scale as the cut-point threshold)",
         }
 
     # ---- OUTLIER HANDLING FOR A DEVICE-FACING READOUT (2026-08-30) ----------------------------
@@ -1696,10 +1700,9 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
     # is information about how much of the discrimination rests on tail samples — it is not a
     # licence to substitute the trimmed number.
     #
-    # NOTE ON SCALE: `x` here is ALREADY log/dB band power (10*log10), so the rule is applied with
-    # scale="raw" — that IS the log scale for this quantity. Passing scale="log" would take log10 of
-    # a dB value, which is negative for sub-unit powers and would silently drop those samples from
-    # the rule instead of testing them.
+    # NOTE ON SCALE: `x` here is the standardised raw band power the pooled detail holds (it can be
+    # negative), so the rule is applied with scale="raw"; a logarithm of it would be undefined for
+    # half the samples, and log power enters no calculation in any case (decision 204).
     _o_mask, _o_info = mad_outlier_flags(x, n_mad=OUTLIER_N_MAD, scale="raw")
     _sens = {"computed": False, "reason": None}
     if _o_info["n_removed"] > 0:
@@ -1720,7 +1723,7 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
         _sens["reason"] = "no samples met the outlier rule, so the analysis is identical to the headline"
     outlier_block = {
         "policy": "REPORTED, NOT REMOVED for the operating point",
-        "rule": (f"|x - median| >= {OUTLIER_N_MAD:g} x MAD on the log/dB band-power feature"),
+        "rule": (f"|x - median| >= {OUTLIER_N_MAD:g} x MAD on the standardised raw band-power feature"),
         "n_mad": float(OUTLIER_N_MAD),
         "n_flagged": int(_o_info["n_removed"]),
         "n_samples": int(x.size),
@@ -1795,7 +1798,7 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
         "operating_points": operating_points,
         "ci_method": (("moving-block bootstrap, BCa (de-folded; fixed orientation; block_len=%d)" % int(block_len))
                       if block_len > 1 else "rating-clustered bootstrap, BCa (de-folded; fixed orientation)"),
-        "feature_units": "oriented log10 band power (z-scored within channel/source on the detail); Phase C maps to LSB",
+        "feature_units": "oriented raw band power (standardised within channel/source on the detail); Phase C maps to LSB",
         "note": (f"Rating-clustered {'moving-block ' if block_len > 1 else ''}bootstrap, BCa interval "
                  f"({len(boot_aucs)}/{int(n_boot)} valid replicates over {n_clusters} independent "
                  f"ratings; CI suppressed below {int(BOOT_CI_VALID_FLOOR)}). The point AUC is oriented "
@@ -1936,7 +1939,7 @@ def deployment_roc_by_era(td_detail, channel_raw, center_hz, stim_series, *, ban
     feat = _band_feature_from_detail(td_detail, channel_raw, center_hz, band_width_hz)
     if feat is None:
         return {"available": False, "reason": f"channel {channel_raw} / band not found"}
-    bp_log, labels, rating_group, times = feat
+    bp, labels, rating_group, times = feat
     era = _assign_stim_eras(times, stim_series, off_max=off_max, low_max=low_max)
     if era is None:
         return {"available": False, "reason": "no usable stim series for era assignment"}
@@ -1954,7 +1957,7 @@ def deployment_roc_by_era(td_detail, channel_raw, center_hz, stim_series, *, ban
         above 0.5 and mis-read as "still portable". The fixed sign also puts every era's Youden
         threshold on one comparable scale, so cutpoint_spread is meaningful across eras.
         """
-        x = bp_log[mask]; yv = labels[mask]; gv = rating_group[mask]
+        x = bp[mask]; yv = labels[mask]; gv = rating_group[mask]
         y = _binarize_labels(yv, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
                              pain_cutoff=pain_cutoff)
         ok = np.isfinite(x) & np.isfinite(y)
@@ -2020,7 +2023,7 @@ def deployment_roc_by_era(td_detail, channel_raw, center_hz, stim_series, *, ban
                 "prevalence": float(np.mean(y == 1))}
 
     # Orient ONCE from the pooled fit, then refit every era under that fixed sign.
-    pooled = _roc_for(np.ones(len(bp_log), dtype=bool))
+    pooled = _roc_for(np.ones(len(bp), dtype=bool))
     pooled_flip = pooled.get("flip") if pooled.get("available") else None
     eras_out = {}
     for tag in ["OFF", "LOW", "HIGH"]:
@@ -2064,7 +2067,7 @@ def deployment_roc_by_era(td_detail, channel_raw, center_hz, stim_series, *, ban
     portable_by_ci = ((len(ov_vals) >= 1 and all(ov_vals) and not any_reversed)
                       if len(est) >= 2 else None)
 
-    _, _outl_era = outlier_report_for_feature(bp_log, context="deployment_roc_by_era")
+    _, _outl_era = outlier_report_for_feature(bp, context="deployment_roc_by_era")
     return {
         "available": True,
         "outliers": _outl_era,
@@ -2118,7 +2121,7 @@ def threshold_drift_by_week(td_detail, channel_raw, center_hz, *, band_width_hz=
     if feat is None:
         return {"available": False, "reason": f"channel {channel_raw} / band not found", "status": "not_assessed"}
     # No longer unused: the tertile cut below needs the rating identity (F12).
-    bp_log, labels, rating_group, times = feat
+    bp, labels, rating_group, times = feat
     # F12: the tertile cut must reference the UNIQUE-RATING distribution, not the per-sample
     # vector. Without rating_group the cut point is itself pseudoreplicated — a rating with many
     # matched PSD rows drags the percentile toward its own value, so "high pain" and "low pain" get
@@ -2126,12 +2129,12 @@ def threshold_drift_by_week(td_detail, channel_raw, center_hz, *, band_width_hz=
     # the same omission was present in deployment_roc_by_era and threshold_drift_by_week.
     y_all = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
                              pain_cutoff=pain_cutoff, rating_group=rating_group)
-    weeks_all = _elapsed_week_cluster(times, len(bp_log))
-    m = np.isfinite(bp_log) & np.isfinite(y_all) & (weeks_all >= 0)
+    weeks_all = _elapsed_week_cluster(times, len(bp))
+    m = np.isfinite(bp) & np.isfinite(y_all) & (weeks_all >= 0)
     if m.sum() < DRIFT_MIN_SAMPLES_PER_WEEK * 2 or len(np.unique(y_all[m])) < 2:
         return {"available": False, "reason": "too few matched samples for a drift assessment",
                 "status": "not_assessed"}
-    x = bp_log[m].astype(float)
+    x = bp[m].astype(float)
     y = y_all[m].astype(int)
     wk = weeks_all[m].astype(int)
 
@@ -2141,7 +2144,7 @@ def threshold_drift_by_week(td_detail, channel_raw, center_hz, *, band_width_hz=
     use = -x if flip else x
 
     def _youden_cut(uu, yy):
-        """Youden-J optimal cut-point on the oriented score; mapped back to the original log-power
+        """Youden-J optimal cut-point on the oriented score; mapped back to the original band-power
         scale (rule power >= thr). None when a class is absent."""
         if len(np.unique(yy)) < 2:
             return None
@@ -2194,7 +2197,7 @@ def threshold_drift_by_week(td_detail, channel_raw, center_hz, *, band_width_hz=
                    "weeks; consider periodic recalibration." if drift_flag else
                    "No significant calendar-time drift; the pooled cut-point is stationary over the "
                    "record.")
-    _, _outl_drift = outlier_report_for_feature(bp_log, context="threshold_drift_by_week")
+    _, _outl_drift = outlier_report_for_feature(bp, context="threshold_drift_by_week")
     return {"available": True, "status": status, "outliers": _outl_drift,
             "n_weeks_qualifying": int(n_weeks),
             "pooled_threshold": pooled_thr,
@@ -2204,7 +2207,7 @@ def threshold_drift_by_week(td_detail, channel_raw, center_hz, *, band_width_hz=
             "note": (f"Youden cut-point trend over {n_weeks} qualifying weeks "
                      f"(>= {DRIFT_MIN_SAMPLES_PER_WEEK} matched samples, both classes each). "
                      f"Slope {slope:+.3g}/week (p={slope_p:.3g}); total drift {total_drift:+.3g} over "
-                     f"{span:.0f} weeks on the oriented log-power scale. " + verdict_txt),
+                     f"{span:.0f} weeks on the oriented band-power scale. " + verdict_txt),
             }
 
 
@@ -2243,7 +2246,7 @@ def deployment_forward_chaining(td_detail, channel_raw, center_hz, *, band_width
     feat = _band_feature_from_detail(td_detail, channel_raw, center_hz, band_width_hz)
     if feat is None:
         return {"available": False, "reason": f"channel {channel_raw} / band not found in detail"}
-    bp_log, labels, rating_group, times = feat
+    bp, labels, rating_group, times = feat
     # F12: the tertile cut must reference the UNIQUE-RATING distribution, not the per-sample
     # vector. Without rating_group the cut point is itself pseudoreplicated — a rating with many
     # matched PSD rows drags the percentile toward its own value, so "high pain" and "low pain" get
@@ -2251,10 +2254,10 @@ def deployment_forward_chaining(td_detail, channel_raw, center_hz, *, band_width
     # the same omission was present in deployment_roc_by_era and threshold_drift_by_week.
     y_all = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
                              pain_cutoff=pain_cutoff, rating_group=rating_group)
-    m = np.isfinite(bp_log) & np.isfinite(y_all)
+    m = np.isfinite(bp) & np.isfinite(y_all)
     if m.sum() < 12 or len(np.unique(y_all[m])) < 2:
         return {"available": False, "reason": "too few matched high/low samples for forward-chaining"}
-    x = bp_log[m].astype(float)
+    x = bp[m].astype(float)
     y = y_all[m].astype(int)
     g = np.asarray(rating_group)[m]
     t = np.asarray(times)[m]
@@ -2394,7 +2397,7 @@ def deployment_forward_chaining(td_detail, channel_raw, center_hz, *, band_width
     reliable = bool(n_folds >= 2 and len(np.unique(oof_cluster)) >= int(min_train_clusters))
     beats_chance_forward = bool(held_out_auc_lo is not None and held_out_auc_lo > 0.5)
 
-    _, _outl_fc = outlier_report_for_feature(bp_log, context="deployment_forward_chaining")
+    _, _outl_fc = outlier_report_for_feature(bp, context="deployment_forward_chaining")
     return {
         "available": True, "outliers": _outl_fc,
         "n_folds": n_folds,
@@ -4538,12 +4541,9 @@ def _pooled_power_feature_name(td_detail):
     """
     if td_detail is None:
         return "unknown"
-    if td_detail.get("prelog", False):
-        return ("the average over the band of a logarithm of power that was already standardised "
-                "within each recording source before pooling; NOT the stimulator's own units, and "
-                "the stimulator's units cannot be recovered from it")
-    return ("ten times the base-ten logarithm of the average power over the band, computed here "
-            "from the linear power in the pooled spectra")
+    return ("the average over the band of raw power that was standardised within each recording "
+            "source before pooling; NOT the stimulator's own units, and the stimulator's units "
+            "cannot be recovered from it (no logarithm is taken anywhere on this path, decision 204)")
 
 
 def _sweep_contacts_and_bands(td_detail, channels, centers, band_width_hz):
@@ -4624,8 +4624,8 @@ def band_pain_auc_export(td_detail, *, channels=None, centers=None, band_width_h
 
     WHAT THE POWER IS. The band power here is whatever ``_band_feature_from_detail`` returns for the
     pooled spectra it is handed, which for the biomarker page's own pooled spectra is the average
-    over the band of a logarithm of power that has already been standardised within each recording
-    source so that recordings of different kinds can be pooled. That is NOT the stimulator's own
+    over the band of raw power that has already been standardised within each recording source so
+    that recordings of different kinds can be pooled (decision 204). That is NOT the stimulator's own
     units, and the stimulator's units cannot be recovered from it, because the standardising step
     threw the scale away. It does not matter for THIS table -- the value above depends only on the
     order of the power values, so any rescaling that keeps them in order gives the same answer --
@@ -4674,13 +4674,11 @@ def band_pain_correlation_export(td_detail, *, channels=None, centers=None, band
     every row, so the two tables can never be read against the wrong comparison.
 
     A CORRELATION DOES DEPEND ON THE POWER SCALE, so the ``power_feature`` column has to be read
-    before the number means anything. For the biomarker page's pooled spectra the power is a
-    logarithm that has been standardised within each recording source, which is what the page's own
-    plot draws. The extra ``pearson_r_after_undoing_the_logarithm`` column gives the same
-    correlation computed after undoing that logarithm, so a reader can see whether the answer turns
-    on the scale; that column is proportional to power rather than being in the stimulator's units,
-    because the standardising step threw the scale away and it cannot be recovered from these
-    spectra.
+    before the number means anything. For the biomarker page's pooled spectra the power is raw
+    power standardised within each recording source (decision 204). Until 2026-09-19 the pooled
+    spectra were decibels and this table carried four extra columns computed after undoing the
+    logarithm (``*_after_undoing_the_logarithm``); with no logarithm anywhere on the path there is
+    nothing to undo, and they are gone.
 
     Bands overlap heavily and no correction for having looked at many of them is applied; see
     ``band_pain_auc_export``.
@@ -4701,24 +4699,12 @@ def band_pain_correlation_export(td_detail, *, channels=None, centers=None, band
             continue
         row.update(band_pain_correlation(bp, labels, rg, times=times, n_boot=n_boot, seed=seed,
                                          alpha=alpha, power_feature=feat_name))
-        # The same correlation after undoing the logarithm, so a reader can see whether the answer
-        # turns on the scale the power is expressed in. Same resampling and same seed, so the only
-        # thing that differs between the two numbers is the scale.
-        undone = band_pain_correlation(10.0 ** (np.asarray(bp, dtype=float) / 10.0), labels, rg,
-                                       times=times, n_boot=n_boot, seed=seed, alpha=alpha,
-                                       power_feature=feat_name + ", with the logarithm undone")
-        row["pearson_r_after_undoing_the_logarithm"] = undone.get("pearson_r")
-        row["pearson_r_after_undoing_the_logarithm_low"] = undone.get("pearson_r_low")
-        row["pearson_r_after_undoing_the_logarithm_high"] = undone.get("pearson_r_high")
-        row["answer_after_undoing_the_logarithm"] = undone.get("answer")
         rows.append(row)
     return _order_export_columns(
         pd.DataFrame(rows),
         ["answer", "pearson_r", "pearson_r_low", "pearson_r_high", "no_relationship_value",
          "p_two_sided", "pearson_r_per_sample", "n_pain_reports", "n_spectral_samples",
-         "pain_split_rule", "pearson_r_after_undoing_the_logarithm",
-         "pearson_r_after_undoing_the_logarithm_low", "pearson_r_after_undoing_the_logarithm_high",
-         "answer_after_undoing_the_logarithm", "why"])
+         "pain_split_rule", "why"])
 
 
 def read_band_pain_auc_from_export(auc_table, *, channel, center_hz, tol_hz=0.01):
@@ -4793,12 +4779,12 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
         return {"available": False, "reason": "empty band"}
     with np.errstate(invalid="ignore", divide="ignore"):
         sub = np.nanmean(psd[:, ci, bmask], axis=1)
-        bp_log = sub if td_detail.get("prelog", False) else 10.0 * np.log10(np.where(sub > 0, sub, np.nan))
+        bp = sub          # raw band power, as the pooled detail holds it (decision 204: no logarithm)
     # PARITY (audit §6b): binarize on THIS CHANNEL's own labels, not the global pooled cut. The
     # offline validated set (phase2) cuts the tertile on labels restricted to the rows where this
     # channel's band power is finite; a global cut flips borderline samples high/low between the two
     # and changes n / OR / p. _binarize_labels with an explicit channel mask reproduces phase2.
-    chan_finite = np.isfinite(bp_log)
+    chan_finite = np.isfinite(bp)
 
     # THE DECLARED BURN-IN EXCLUSION (see VALIDATION_EXCLUDE_FIRST_WEEKS), applied HERE — before
     # binarization and before the z-score — and that ordering is a choice worth stating.
@@ -4813,7 +4799,7 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
     #
     # The window is anchored on the FIRST sample of the whole record, not on the first retained one,
     # so the exclusion cannot walk forward as data accumulates.
-    _cl_all = _elapsed_week_cluster(times, len(bp_log))
+    _cl_all = _elapsed_week_cluster(times, len(bp))
     n_weeks_before = int(len(np.unique(_cl_all[chan_finite & (_cl_all >= 0)])))
     burn_in = int(exclude_first_weeks or 0)
     if burn_in > 0:
@@ -4834,7 +4820,7 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
     # not the ISO-calendar-week string. Elapsed-week buckets that straddle a Monday split across two
     # ISO weeks (and vice versa), giving a different random-intercept structure -> different SE/p/CI.
     cl = _cl_all
-    m = np.isfinite(bp_log) & np.isfinite(y) & chan_finite
+    m = np.isfinite(bp) & np.isfinite(y) & chan_finite
     if m.sum() < 12 or len(np.unique(y[m])) < 2:
         return {"available": False,
                 "reason": ("too few matched samples for a mixed model"
@@ -4843,7 +4829,7 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
                 "excluded_first_weeks": burn_in,
                 "n_excluded_burn_in": n_dropped_burn_in}
     # PARITY (audit §6 minor): z-score with ddof=1 (phase2), matching the offline sample SD.
-    _bpm = bp_log[m]
+    _bpm = bp[m]
     _sd = np.nanstd(_bpm, ddof=1)
     df = pd.DataFrame({"pain_high": y[m].astype(int),
                        "band_power": (_bpm - np.nanmean(_bpm)) / (_sd if _sd and np.isfinite(_sd) else 1.0),
@@ -5219,10 +5205,10 @@ def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
         return {"available": False, "reason": "empty band"}
     with np.errstate(invalid="ignore", divide="ignore"):
         sub = np.nanmean(psd[:, ci, bmask], axis=1)
-        bp_log = sub if td_detail.get("prelog", False) else 10.0 * np.log10(np.where(sub > 0, sub, np.nan))
+        bp = sub          # raw band power, as the pooled detail holds it (decision 204: no logarithm)
     # PARITY (audit §6b): per-channel binarization (cut on this channel's own labels), matching the
     # offline phase2b stim-stability LRT. Shares the same basis as band_mixedmodel_inference.
-    chan_finite = np.isfinite(bp_log)
+    chan_finite = np.isfinite(bp)
     y = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
                          finite_mask=chan_finite)
     # Sample-time -> era via the SHARED nearest-time interpolation + bucketing (identical boundaries
@@ -5233,14 +5219,14 @@ def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
     era_none = np.array([e is None for e in era])
     # PARITY (audit §6a): random-intercept cluster = integer ELAPSED-week index (phase2b), not the
     # ISO-calendar-week string. -1 marks unparseable-time rows (dropped by the mask below).
-    cl = _elapsed_week_cluster(times, len(bp_log))
+    cl = _elapsed_week_cluster(times, len(bp))
     t_finite = cl >= 0
     # Drop unparseable-time / no-era rows from the LRT (do NOT relabel them OFF).
-    m = np.isfinite(bp_log) & np.isfinite(y) & t_finite & (~era_none)
+    m = np.isfinite(bp) & np.isfinite(y) & t_finite & (~era_none)
     if m.sum() < 20 or len(np.unique(y[m])) < 2 or len(np.unique(era[m])) < 2:
         return {"available": False, "reason": "too few samples / eras for an interaction test"}
     # PARITY (audit §6 minor): ddof=1 z-score (phase2b).
-    _bpm = bp_log[m]; _sd = np.nanstd(_bpm, ddof=1)
+    _bpm = bp[m]; _sd = np.nanstd(_bpm, ddof=1)
     df = pd.DataFrame({
         "pain_high": y[m].astype(int),
         "band_power": (_bpm - np.nanmean(_bpm)) / (_sd if _sd and np.isfinite(_sd) else 1.0),

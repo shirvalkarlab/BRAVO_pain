@@ -164,13 +164,13 @@ def test_the_evidence_says_where_each_number_came_from():
 
 
 def test_band_power_linear_is_still_there_for_its_other_callers():
-    """It stops being the route this module's evidence takes; it does not stop existing. Other
-    callers and its own decibel-convention test use it and it is a correct primitive.
+    """It stops being the route this module's evidence takes; it does not stop existing. Since
+    decision 204 it integrates raw power with nothing undone (the decibel convention went with the
+    decibels).
     """
     assert callable(EV.band_power_linear)
-    got = EV.band_power_linear(np.array([[np.log10(2.0), np.log10(8.0)]]),
-                               np.array([10.0, 11.0]), 10.5, 2.0, log_scale="log10")
-    assert got[0] == pytest.approx(10.0)
+    got = EV.band_power_linear(np.array([[2.0, 8.0]]), np.array([10.0, 11.0]), 10.5, 2.0)
+    assert got[0] == 10.0
 
 
 # =================================================================================================
@@ -411,9 +411,8 @@ def test_no_new_scale_constant_exists_in_either_file():
                     f"{mod.__name__} holds {value}, which is the calibration number {forbidden}")
     assert not hasattr(EV, "DEVICE_UNITS_PER_INTEGRATED_BAND_POWER")
 
-    # The decibel convention is a convention and not a calibration: ten is the base of the stored
-    # logarithm, not a factor anyone measured.
-    assert EV.LOG_SCALES == {"db10": 10.0, "log10": 1.0}
+    # The decibel convention table (LOG_SCALES) went with the decibels, decision 204.
+    assert not hasattr(EV, "LOG_SCALES")
 
 
 def test_the_calibration_numbers_are_only_ever_reached_through_the_cache():

@@ -42,7 +42,7 @@ def _epochs():
 
 def test_the_calibrated_frame_is_recognised_by_its_own_columns():
     assert AD.calibrated_centres(_cal_frame()) == CENTRES
-    assert AD.calibrated_centres(pd.DataFrame({"t": [1.0], "log_psd": [[1.0]], "freqs": [[1.0]]})) == ()
+    assert AD.calibrated_centres(pd.DataFrame({"t": [1.0], "psd": [[1.0]], "freqs": [[1.0]]})) == ()
     assert AD.calibrated_centres(None) == ()
 
 

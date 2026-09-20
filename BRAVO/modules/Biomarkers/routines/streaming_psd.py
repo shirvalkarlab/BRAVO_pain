@@ -714,12 +714,14 @@ def build_pooled_psd_detail(psd_rows, pro_times_s, pro_values, *, tolerance_min=
 
     Every full-spectrum source contributes rows; rows on the SAME bipolar channel pool together no
     matter which source they came from (streaming session, montage sweep, snapshot, patient event).
-    Each spectrum is interpolated onto a common `f_set`, taken to 10*log10, then Z-SCORED PER
+    Each spectrum is interpolated onto a common `f_set` and kept as RAW POWER, then Z-SCORED PER
     FREQUENCY WITHIN (channel, source) so heterogeneous units (uV^2 vs LSB vs FFT bins) become
     comparable before pooling (§8c "within-stream standardization removes the need for unit
     conversion to pool"). Pearson r and single-feature logistic AUC are invariant to this affine
     transform, so a single-source channel is unaffected; the standardization only matters where two
-    sources share a channel.
+    sources share a channel. Until 2026-09-19 the spectra were taken to decibels before the
+    standardisation; the PI's rule of that day (decision 202: log power enters no calculation)
+    removed that step (decision 204).
 
     Parameters
     ----------
@@ -736,8 +738,8 @@ def build_pooled_psd_detail(psd_rows, pro_times_s, pro_values, *, tolerance_min=
 
     Returns
     -------
-    dict shaped like compute_psd_pain_correlation's output, with `prelog=True`, channel axis = the
-    bipolar channels found, plus `pool_meta`.
+    dict shaped like compute_psd_pain_correlation's output, channel axis = the bipolar channels
+    found, plus `pool_meta`.
     """
     mat = psd_rows_to_matrix(psd_rows, f_set=f_set)
     if mat is None:
@@ -750,15 +752,22 @@ def psd_rows_to_matrix(psd_rows, *, f_set=F_SET):
     """Interpolate raw per-(recording, channel) spectra onto a common grid -> a CACHEABLE matrix.
 
     This is the expensive-to-recompute artifact (the upstream Welch/decode feeds it): a fixed-shape
-    (N, F) log-power matrix plus parallel channel/source/timestamp arrays. It depends ONLY on the
+    (N, F) matrix of RAW power plus parallel channel/source/timestamp arrays. It depends ONLY on the
     recordings — NOT on the match tolerance or the pain metric — so it can be computed once (eagerly,
     while the availability timeline loads) and reloaded on every subsequent compute.
 
+    THE FIELD IS `X`, NOT `logX`, ON PURPOSE (decision 204, 2026-09-19). Until then the matrix held
+    decibels under `logX`, and three consumers undid them (`10 ** (x / 10)`) or standardised them
+    as they were. The stored kind's key carries a power-scale token so no decibel entry is served
+    as raw power, and the field was renamed so a reader that still asks for `logX` fails with a
+    KeyError instead of reading raw power as decibels.
+
     `psd_rows`: list of {"channel", "source", "t": epoch_s, "freq", "power"}.
-    Returns {"logX": (N,F) float, "t": (N,), "channel": (N,) str, "source": (N,) str, "f_set": (F,)}.
+    Returns {"X": (N,F) float raw power, "t": (N,), "channel": (N,) str, "source": (N,) str,
+    "f_set": (F,)}.
     """
     f_set = np.asarray(f_set, dtype=float)
-    logs, ts, chs, srcs, durs = [], [], [], [], []
+    xs, ts, chs, srcs, durs = [], [], [], [], []
     for r in psd_rows or []:
         t = r.get("t")
         ch = r.get("channel")
@@ -769,15 +778,15 @@ def psd_rows_to_matrix(psd_rows, *, f_set=F_SET):
         ok = np.isfinite(fr) & np.isfinite(pw) & (pw > 0)
         if ok.sum() < 4:
             continue
-        logs.append(10.0 * np.log10(np.interp(f_set, fr[ok], pw[ok])))
+        xs.append(np.interp(f_set, fr[ok], pw[ok]))
         ts.append(float(t)); chs.append(str(ch)); srcs.append(str(r.get("source") or "?"))
         # Welch epoch length (s) for this PSD; NaN for sources without a time-domain epoch
         # (event/montage onboard PSDs). Carried so the report can show the TD epoch mean +/- SD.
         d = r.get("dur")
         durs.append(float(d) if d is not None else float("nan"))
-    if not logs:
+    if not xs:
         return None
-    return {"logX": np.vstack(logs), "t": np.asarray(ts, dtype=float),
+    return {"X": np.vstack(xs), "t": np.asarray(ts, dtype=float),
             "channel": np.asarray(chs, dtype=object), "source": np.asarray(srcs, dtype=object),
             "dur": np.asarray(durs, dtype=float), "f_set": f_set}
 
@@ -803,7 +812,7 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
     """
     f_set = np.asarray(mat["f_set"], dtype=float)
     F = f_set.size
-    X = np.asarray(mat["logX"], dtype=float)
+    X = np.asarray(mat["X"], dtype=float)          # raw power (decision 204); `logX` is gone
     t_arr = np.asarray(mat["t"], dtype=float)
     ch_arr = np.asarray(mat["channel"], dtype=object)
     src_arr = np.asarray(mat["source"], dtype=object)
@@ -1010,7 +1019,7 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
 
     return {
         "f_set": f_set,
-        "psd": psd_stack,                    # (N, C, F) — log + within-(channel,source) z-scored
+        "psd": psd_stack,                    # (N, C, F) — raw power, within-(channel,source) z-scored
         "feature": psd_stack,
         # Per-row source label ("TD streaming" | "Montage/survey" | "Patient event" | "Snapshot" |
         # "aggregated") and the row's channel.
@@ -1027,8 +1036,9 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
         "aggregate": aggregate,
         "chan_order": chan_order,
         "times": [_dt.datetime.utcfromtimestamp(float(t)).isoformat(sep=" ") for t in t_arr],
-        "prelog": True,                      # already log-scaled above: do NOT re-log
-        "transform": "log_zscore_within_channel_source",
+        # No `prelog` flag any more (decision 204): the detail is raw power standardised within
+        # channel and source, and every reader takes it as it is.
+        "transform": "raw_power_zscore_within_channel_source",
         "pool_meta": {
             "n_psds": int(N),
             "n_matched": int(matched_mask.sum()),
@@ -1053,7 +1063,7 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
 
 
 def compute_psd_pain_correlation(streams, labels, chan_order, f_set=F_SET,
-                                 transform="log", rating_group=None):
+                                 transform="raw", rating_group=None):
     """
     Orchestrates the streaming biomarker: build a per-epoch PSD stack, normalize, and
     correlate each (channel, frequency) feature against a pain label.
@@ -1081,8 +1091,11 @@ def compute_psd_pain_correlation(streams, labels, chan_order, f_set=F_SET,
     chan_order : list[str]
         Canonical channel ordering.
     transform : str
-        One of "log" (10*log10 PSD), "log_zscore", "fooof", "relative_power",
-        "relative_power_log". Selects which transformed feature feeds the correlation.
+        "raw" (the spectrum as it is; the default and what the page uses), "relative_power"
+        (each bin as a share of the spectrum's total) or "fooof" (the residual after the aperiodic
+        fit, which is on the PI's list to rule on separately). The three logarithmic transforms
+        that existed until 2026-09-19 ("log", "log_zscore", "relative_power_log") are refused:
+        log power enters no calculation (decision 202; this site, decision 204).
 
     Returns
     -------
@@ -1119,20 +1132,16 @@ def compute_psd_pain_correlation(streams, labels, chan_order, f_set=F_SET,
     psd_nz = psd.copy()
     psd_nz[psd_nz == 0] = np.nan  # cell 11: zeros -> NaN before transforms
 
-    if transform == "log":
-        feature = 10 * np.log10(psd_nz)
-    elif transform == "log_zscore":
-        feature = zscore_per_freq(10 * np.log10(psd_nz))
+    if transform == "raw":
+        feature = psd_nz
     elif transform == "fooof":
         feature = remove_aperiodic(psd_nz, f_set)
     elif transform == "relative_power":
         feature = relative_power(psd_nz)
-    elif transform == "relative_power_log":
-        feature = relative_power(10 * np.log10(psd_nz))
     else:
         raise ValueError(
-            "transform must be one of "
-            "'log'|'log_zscore'|'fooof'|'relative_power'|'relative_power_log'"
+            "transform must be one of 'raw'|'relative_power'|'fooof' (the logarithmic transforms "
+            "were removed on 2026-09-19: log power enters no calculation, decision 204)"
         )
 
     corr, pval, _pextra = pearson_corr_psd_label(

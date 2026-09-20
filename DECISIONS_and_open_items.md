@@ -15,7 +15,7 @@ decisions are appended to Part 3 here AND as a full row in the full log.
 - Windows with >10% zero-filled samples are dropped (4); this rule now reaches every routine (57-59).
 - 60 Hz notch off by default (13). Only the two 256-point FFT modes convert (14). Conversion from the voltage trace: the transform route at 352.62 (18); the composed constant is composed, never "measured" (33, house rules).
 - Per-participant conversion model is a frozen stored asset with tiered fallback (11); 8.8 Hz R 0-3+ counts only from 2026-03-01 (16); no impedance term (17).
-- **Log power enters no calculation, anywhere** (PI, 2026-09-19; 202). Remaining log sites are his call in this order: Biomarkers stability test, dB pain-correlation feature, outlier fallback, aperiodic fit, the frozen calibration model.
+- **Log power enters no calculation, anywhere** (PI, 2026-09-19; 202). The E1 path (202), the pooled full-spectrum path and the pain correlation (204) are done. Remaining log sites are his call in this order: the outlier fallback (`OUTLIER_SCALE`, `logistic_fit_crosscheck`, the correlation's own MAD rule now acting on skewed raw power), the aperiodic fit (`fooof`), the frozen calibration model.
 - **Time is modelled nowhere**: drift is a current effect in a patient >3 years into disease; no age penalty, no time input (193-196).
 - Never say "spectrum" bare; name the quantity (115, house rules).
 
@@ -60,7 +60,7 @@ decisions are appended to Part 3 here AND as a full row in the full log.
 
 **On the PI**
 - **30. Titration session** designed so a response peak can be estimated: one rate, 0 to ceiling in 0.5 mA steps, ≥60 s a step, up then down, streaming, baseline and impedance before and after. The Stim Optimizer card "Titration session to run next" recommends it (146, 160). Code side waits on the data (T7, 156).
-- Remaining log-power sites, in the order decision 202 lists them.
+- Remaining log-power sites, in the order decision 202 lists them (the first two done by 204).
 - Pooling across pulse widths, option A behind a toggle (189's plan). `align_pros` `max_per_rating` cap (118). The four zero-caller chronic-detector routines (187). Apply the harmonic rule to the readiness screen or not (199).
 - Item 15 remainder: labelling and navigation niceties on the Closed-Loop page (scroll-link, print stylesheet).
 
@@ -283,6 +283,7 @@ Refs are commits or PRs; `→N` means superseded by N.
 201. C6 off-label line removed.
 202. No log power on the E1 path; remaining sites listed for the PI.
 203. Context compaction: this digest, the full log in `docs/`, shorter CLAUDE.md, house rules and store architecture; handoffs, worker reports, completed plans and generic rules deleted.
+204. No log power on the pooled full-spectrum path (the matrix stores raw power under `X`; the stability test, mixed model, per-era ROC and band feature read it raw) or in the pain correlation (`transform="raw"`); 10 of 132 stability verdicts moved, the chosen band unchanged; the correlation's MAD rule on raw power drops more samples (106 -> 93) -- item 3.
 
 ---
 

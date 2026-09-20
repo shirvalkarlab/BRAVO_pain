@@ -124,7 +124,7 @@ def test_the_counts_survive_the_per_recording_file_and_the_rows_set_cache():
 
 
 def test_the_matrix_payload_carries_the_counts_and_the_page_reads_them_back():
-    mat = {"logX": np.zeros((2, 3)), "t": np.array([1.0, 2.0]), "channel": ["a", "b"],
+    mat = {"X": np.zeros((2, 3)), "t": np.array([1.0, 2.0]), "channel": ["a", "b"],
            "source": ["s", "s"], "f_set": np.array([1.0, 2.0, 3.0]), "dur": [1.0, 1.0]}
     q = {"n_centered_fell_back": 2, "n_skipped": 1, "n_recordings_without_counts": 5,
          "n_recordings_keyed_on_whole_set": 0}

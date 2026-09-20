@@ -8,15 +8,15 @@ from ClosedLoopDeployment.types import EdgeEstimate
 
 
 # --- Phase 0 ------------------------------------------------------------------------------------
-def test_linear_band_power_is_the_arithmetic_mean_of_the_linear_bins():
+def test_linear_band_power_is_the_arithmetic_mean_of_the_raw_bins():
     """Rule D11: the DEVICE thresholds the linear band power, so that is the one value the table
-    carries (the decibel and mean-of-log companions left on 2026-09-19, decision 202)."""
+    carries (the decibel and mean-of-log companions left on 2026-09-19, decision 202; the stored
+    spectrum itself became raw power the same day, decision 204)."""
     f = np.arange(8.0, 31.0, 1.0)
-    lp = np.zeros(f.size)
-    lp[(f >= 18) & (f < 23)] = [0.0, 10.0, 20.0, 10.0, 0.0]
-    lin = AD.band_powers(lp, f, centers=(20.5,), width=5.0)
-    m = (f >= 18.0) & (f < 23.0)
-    assert lin[20.5] == pytest.approx(np.mean(np.power(10.0, lp[m] / 10.0)))
+    bins = np.zeros(f.size)
+    bins[(f >= 18) & (f < 23)] = [1.0, 10.0, 100.0, 10.0, 1.0]
+    lin = AD.band_powers(bins, f, centers=(20.5,), width=5.0)
+    assert lin[20.5] == pytest.approx(122.0 / 5.0)
 
 
 def test_band_powers_rejects_a_mismatched_frequency_axis():
@@ -535,7 +535,7 @@ def _tiny_inputs():
     """A psd frame and epoch frame in the REAL shapes, which are not the obvious ones.
 
     The psd frame is one row per (sample, channel) as `lfp_evidence.frame_from_matrix` emits it:
-    `t` is EPOCH SECONDS as a float, and the whole spectrum lives in `log_psd` as a numpy array with
+    `t` is EPOCH SECONDS as a float, and the whole spectrum lives in `psd` as a numpy array with
     its axis in `freqs`. It is not long-per-frequency. The epoch frame keeps tz-aware Timestamps,
     because that is what `exposure_epochs` produces. Both mistakes were made while writing these
     tests and both failed loudly here but would have failed SILENTLY in the cache fingerprint.
@@ -546,7 +546,7 @@ def _tiny_inputs():
     for k in range(6):
         rows.append({"t": float((t0 + pd.Timedelta(minutes=5 * k)).timestamp()),
                      "channel": "CH", "source": "td",
-                     "log_psd": np.sin(f_set) + float(k), "freqs": f_set})
+                     "psd": np.sin(f_set) + float(k), "freqs": f_set})
     psd = pd.DataFrame(rows)
     eps = pd.DataFrame({"t_start": [t0], "t_end": [t0 + pd.Timedelta(hours=1)],
                         "amp_mA_Left": [2.0], "amp_mA_Right": [2.0], "freq_hz": [165.0],
@@ -557,7 +557,7 @@ def _tiny_inputs():
 def _bump_spectrum(psd, row=0, by=10.0):
     """Change the CONTENT of one spectrum, leaving every shape and timestamp identical."""
     out = psd.copy()
-    out.at[row, "log_psd"] = np.asarray(out.at[row, "log_psd"], float) + by
+    out.at[row, "psd"] = np.asarray(out.at[row, "psd"], float) + by
     return out
 
 
@@ -576,9 +576,9 @@ def test_fingerprint_tracks_array_valued_spectra_and_not_merely_the_timestamps()
     """
     from ClosedLoopDeployment import adapter as AD
     psd, _ = _tiny_inputs()
-    fp = AD._frame_fingerprint(psd, ("t", "channel", "source", "log_psd", "freqs"))
+    fp = AD._frame_fingerprint(psd, ("t", "channel", "source", "psd", "freqs"))
     assert fp[0] == "hashed", "array columns must be hashed, not degrade to shape_only"
-    bumped = AD._frame_fingerprint(_bump_spectrum(psd), ("t", "channel", "source", "log_psd", "freqs"))
+    bumped = AD._frame_fingerprint(_bump_spectrum(psd), ("t", "channel", "source", "psd", "freqs"))
     assert bumped != fp, "a spectral change MUST move the fingerprint"
 
     # the signature used by the cache must inherit that sensitivity
@@ -667,7 +667,7 @@ def test_fingerprint_says_when_it_could_not_hash_rather_than_degrading_silently(
     """
     from ClosedLoopDeployment import adapter as AD
     psd, _ = _tiny_inputs()
-    assert AD._frame_fingerprint(psd, ("t", "channel", "log_psd"))[0] == "hashed"
+    assert AD._frame_fingerprint(psd, ("t", "channel", "psd"))[0] == "hashed"
     assert AD._frame_fingerprint(None, ("x",)) == ("none",)
     with pytest.raises(AD.MissingFingerprintColumn):
         AD._frame_fingerprint(psd, ("nonexistent",))

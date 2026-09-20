@@ -5,13 +5,13 @@ Fix every on-screen sentence on the three pages that describes something no long
 fact inside one visual block, and pin each card with a fixture render test (decisions 172-174).
 
 ## Next Step
-Nothing queued; phases 1-9 complete (decisions 174-202; the last: no log power on the E1 path). Waiting
-on the PI: the remaining log-power sites (202), pulse-width pooling (189), `max_per_rating` (118), the
-zero-caller chronic routines (187), item 15's niceties; not code: the titration session (open item 30).
-Context compaction of the reference documents landed 2026-09-19 (decision 203).
+Nothing queued; phases 1-10 complete (decisions 174-204; the last: no log power on the pooled spectra or
+the pain correlation). Waiting on the PI: the outlier fallback, the aperiodic fit, the frozen calibration
+model (202's list), pulse-width pooling (189), `max_per_rating` (118), the zero-caller chronic routines
+(187), item 15's niceties; not code: the titration session (open item 30).
 
 ## Current Phase
-Phase 9
+Phase 10
 
 ### Phase 1: Review (the PI calls /swarm-review with findings.md §1)
 - [x] Rendered-text inventory per page: every string a card draws, its panel, the element beside it, its referent
@@ -95,4 +95,11 @@ Phase 9
 - [x] S6 measured; the age penalty and the time input both removed on his ruling (190, 193, 194, 196)
 - [x] S7 measured on the record's long holds and the 2026-09-16 session: margin 0 s, no data excluded (191, 196)
 - [x] Runs accepted with the other side held at any current; the 2026-09-16 session enters every table (197)
+- **Status:** complete
+
+### Phase 10: The next two log-power sites (the PI, 2026-09-19: "go on the stability test, tests first, then db pain correlation tests")
+- [x] Map first: the stability test's log(2) is an odds-ratio margin; the log power is the decibel matrix every pooled reader stands on
+- [x] RED: 11 container tests, 5 StimOptimizer, 2 Closed-Loop; two fixtures of mine corrected and re-run RED
+- [x] Raw power in the matrix (`X`), key token, pooled detail, four readers, the two older frames; the pain correlation on raw
+- [x] GREEN: host 1379 / 2 / 0; container 675 / 0; live RCS08 before/after (decision 204); workers reloaded; push
 - **Status:** complete

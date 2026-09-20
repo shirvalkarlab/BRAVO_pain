@@ -91,7 +91,7 @@ def rating_group_from_identity(session_df, labels):
     return rating_group
 
 # Per-source code versions; stamped into every output file. Bump when a source's math changes.
-STREAMING_CODE_VERSION = "streaming_psd-0.1.0"
+STREAMING_CODE_VERSION = "streaming_psd-0.2.0_raw_power"   # 0.1.0 correlated decibels; decision 204
 CHRONIC_CODE_VERSION = "chronic_threshold-0.1.0"
 
 
@@ -591,7 +591,7 @@ def select_biomarker_band(result, q_threshold=BIOMARKER_FDR_Q, ignore_band=None)
 # ---------------------------------------------------------------------------
 def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
                           label_metric="nrs", label_reduce="min",
-                          transform="log", stim_amplitudes=None,
+                          transform="raw", stim_amplitudes=None,
                           match_tolerance_min=None):
     """Time-domain (250 Hz streaming) PSD<->pain branch -> SourceRun with a td_* timeline.
 
@@ -1617,7 +1617,7 @@ run_chronic_branch = run_powerdomain_branch
 
 
 def run_biomarker(recordings, pro_df, chan_order, *, source="timedomain", chronic=None,
-                  align="session", label_metric="nrs", label_reduce="min", transform="log",
+                  align="session", label_metric="nrs", label_reduce="min", transform="raw",
                   pain_cutoff=None, label_strategy="kmeans",
                   kmeans_features=("left_leg_vas", "mpq_sum"),
                   low_pct=33.3333, high_pct=66.6667, daily_broadcast=True,
@@ -1676,7 +1676,7 @@ def run_biomarker(recordings, pro_df, chan_order, *, source="timedomain", chroni
 
 def run_streaming_biomarker(recordings, pro_df, chan_order, *, align="session",
                             label_metric="nrs", label_reduce="min",
-                            transform="log", chronic=None, stim_amplitudes=None):
+                            transform="raw", chronic=None, stim_amplitudes=None):
     """Back-compat shim -> run_biomarker(source="timedomain").
 
     Preserves the original return shape {"result", "band", "combined"} so existing callers
@@ -1748,7 +1748,7 @@ def main(argv=None):
                     help="NPZ with key 'recordings' = list of BRAVO TimeDomain dicts (timedomain/both).")
     ap.add_argument("--chronic-npz",
                     help="NPZ with key 'chronic' = a Chronic recording dict or list (chronic/both).")
-    ap.add_argument("--transform", default="log")
+    ap.add_argument("--transform", default="raw", choices=["raw", "relative_power", "fooof"])
     ap.add_argument("--label-metric", default="nrs")
     ap.add_argument("--label-strategy", choices=["kmeans", "cutoff"], default="kmeans",
                     help="Chronic pain_level labeler: 'kmeans' (notebook: clusters "

@@ -74,7 +74,7 @@ AVAILABILITY_PSD_TYPES = ["MedtronicBrainSenseSurvey", "MedtronicBaselineMontage
 #       ~−1 quantum); LFPMagnitude clamps those ≥0. Paired FFTBinData↔LFPMagnitude slope≈1, ratio≈1.04
 #       (≈ identity after clamping negatives to 0). The onboard-FFT band power sits ~6 dB (×4.79) above
 #       a Welch-of-time-domain band power on the same channel — a constant absorbed by the within-
-#       (channel, pooling_source) z-score in psd_rows_to_matrix for the SCAN, and applied explicitly as
+#       (channel, pooling_source) z-score in build_pooled_detail_from_matrix for the SCAN, and applied explicitly as
 #       the bridge constant for LSB (see CS-3 below). Montage/survey PSDs are the same LFPMagnitude unit.
 #
 #   (2) LSB ROUTE — decided by whether the product ALSO carries time-domain (TD). LSB lives only in the
@@ -1780,6 +1780,13 @@ _TD_CENTERED_VERSION = "v2_fallback"
 #     adapter, which already drops missing>0 samples).
 _TD_MISSING_VERSION = "v1_missing_aware"
 
+# The scale the assembled matrix's spectra are stored on. Folded into the matrix signature so an
+# entry assembled under one rule is never served under another: until 2026-09-19 every spectrum was
+# stored as decibels (`logX`); the PI's rule of that day (decision 202: log power enters no
+# calculation) put raw power in its place (`X`, decision 204). No re-Welch is needed for the bump --
+# the per-recording spectra are raw already -- so the first request after it reassembles in seconds.
+_MATRIX_POWER_SCALE_VERSION = "v2_raw_power"
+
 
 def _missing_time_vector(missing, nsamp):
     """Collapse a recording's `Missing` field to a per-sample (n_samples,) 0/1 flag, or None.
@@ -2691,6 +2698,8 @@ def _psd_matrix_signature_orm(participant_uid, pro_times=None):
     # Missing-aware TD Welch rejection is part of the matrix CONTENT (it decides which windows yield a
     # spectrum), and it runs in the first-window path too, so fold it in unconditionally.
     parts.append(f"td_missing:{_TD_MISSING_VERSION}")
+    # The power scale of the stored spectra is part of the matrix CONTENT (decision 204).
+    parts.append(f"power_scale:{_MATRIX_POWER_SCALE_VERSION}")
     # Rating-centered TD spectra depend on the PRO set, so it is part of the matrix CONTENT: fold the
     # PRO-set signature in (empty when pro_times is None -> the legacy first-window matrix key, fully
     # back-compatible). A PRO add/remove/shift changes this and re-Welch's the TD rows; montage/event
@@ -2752,7 +2761,7 @@ def _psd_matrix_payload(mat, quality=None):
     `quality` (review B6) adds the assembly's three quality counters as one-element integer
     arrays, so a matrix served from the store can still say how many recordings fell back to a
     session-start spectrum, how many were left out, and how many are unknown."""
-    out = dict(logX=mat["logX"], t=mat["t"],
+    out = dict(X=mat["X"], t=mat["t"],
               channel=np.asarray(mat["channel"], dtype=str),
               source=np.asarray(mat["source"], dtype=str), f_set=mat["f_set"])
     if mat.get("dur") is not None:
@@ -4806,7 +4815,7 @@ def _band_validation_setup(request_data):
         return {"available": False, "reason": f"no matchable PRO values for metric={label_metric}"}
 
     # Build the same pooled td_detail the scan uses so the band feature is defined identically.
-    # The assembled matrix is {logX (N,F), t (N,), channel (N,), source (N,), f_set (F,)} — there
+    # The assembled matrix is {X (N,F) raw power, t (N,), channel (N,), source (N,), f_set (F,)} — there
     # is no "rows" key (that was the pre-matrix row-list representation). Gate on the actual sample
     # count instead, or this bails "no PSD samples" on a perfectly valid cached matrix.
     # Pass the METRIC-AGNOSTIC PRO set so TD PSDs are rating-centered identically to the scan path AND
@@ -4817,7 +4826,7 @@ def _band_validation_setup(request_data):
     mat = _cached_psd_matrix(participant_uid, pro_times=_all_pro_times(pro_df),
         force_refresh=_force_refresh)
     if mat is None or np.asarray(mat.get("t")).size == 0 \
-            or np.asarray(mat.get("logX")).size == 0:
+            or np.asarray(mat.get("X")).size == 0:
         return {"available": False, "reason": "no PSD samples for this participant"}
     label_strategy, low_pct, high_pct = _label_strategy_params(request_data)
     match_tol_min = _match_tolerance_param(request_data)
@@ -5214,7 +5223,7 @@ STABILITY_GRID_KIND = "biomarker_band_stability_grid"
 
 #: Bump when anything about how a point's answer is computed changes, so an entry built under the
 #: old rule is never served as if it carried the new one.
-STABILITY_GRID_RULE_VERSION = "v2_stability_grid_sweep_key"
+STABILITY_GRID_RULE_VERSION = "v3_raw_power_feature"   # v2 read decibels off the pooled detail (decision 204)
 
 
 def _stability_grid_sig_tuple(sweep_key, *, band_width_hz, points):

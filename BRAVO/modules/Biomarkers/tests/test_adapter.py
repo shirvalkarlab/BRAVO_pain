@@ -85,7 +85,7 @@ def test_compute_psd_pain_correlation_runs():
     recs = [_make_recording(seed=k) for k in range(5)]
     streams = adapter.bravo_timedomain_recordings_to_streams(recs)
     labels = np.array([2.0, 4.0, 6.0, 8.0, 9.0])  # increasing pain
-    out = streaming_psd.compute_psd_pain_correlation(streams, labels, CHAN_ORDER, transform="log")
+    out = streaming_psd.compute_psd_pain_correlation(streams, labels, CHAN_ORDER)
     C, F = len(CHAN_ORDER), len(streaming_psd.F_SET)
     assert out["psd"].shape == (5, C, F)
     assert out["corr"].shape == (C, F)
@@ -132,7 +132,7 @@ def test_compute_psd_pain_correlation_rejects_a_mostly_missing_epoch():
     recs[2]["Missing"][: int(0.6 * n), :] = 1.0
     streams = adapter.bravo_timedomain_recordings_to_streams(recs)
     labels = np.array([2.0, 4.0, 6.0, 8.0, 9.0])
-    out = streaming_psd.compute_psd_pain_correlation(streams, labels, CHAN_ORDER, transform="log")
+    out = streaming_psd.compute_psd_pain_correlation(streams, labels, CHAN_ORDER)
     assert np.isnan(out["psd"][2]).all(), "a >10%-zero-filled epoch must be rejected, not pooled"
     for k in (0, 1, 3, 4):
         assert np.isfinite(out["psd"][k]).all()

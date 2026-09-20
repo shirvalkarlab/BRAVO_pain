@@ -87,12 +87,38 @@ def test_the_joined_table_carries_the_linear_power_only():
 
 def test_band_powers_returns_the_linear_band_power_alone():
     f = np.arange(8.0, 31.0, 1.0)
-    lp = np.zeros(f.size)
-    lin = AD.band_powers(lp, f, centers=(20.5,), width=5.0)
-    assert isinstance(lin, dict) and lin[20.5] == pytest.approx(1.0)
+    bins = np.full(f.size, 7.0)
+    lin = AD.band_powers(bins, f, centers=(20.5,), width=5.0)
+    assert isinstance(lin, dict) and lin[20.5] == 7.0
 
 
 def test_the_scale_disagreement_diagnostic_is_gone_and_the_only_scale_is_linear():
     assert not hasattr(AD, "scale_disagreement")
     with pytest.raises(ValueError):
         PL.run("u", power_scale="power_mean_of_log")
+
+
+# --- decision 204: the older spectrum frame holds raw power ---------------------------------------
+
+def test_band_powers_is_the_mean_of_the_raw_bins_with_nothing_undone():
+    """The older frame's spectrum (`frame_from_matrix`) is raw power since decision 204, so the
+    band mean is the plain mean of the bins: 1, 2, 3, 2, 1 over the band gives 1.8, not the mean of
+    10 ** (x / 10)."""
+    f = np.arange(8.0, 31.0, 1.0)
+    bins = np.zeros(f.size)
+    bins[(f >= 18) & (f < 23)] = [1.0, 2.0, 3.0, 2.0, 1.0]
+    lin = AD.band_powers(bins, f, centers=(20.5,), width=5.0)
+    assert lin[20.5] == 1.8, lin
+
+
+def test_the_older_frame_is_joined_on_its_psd_column_and_nothing_in_the_adapter_undoes_a_log():
+    src = inspect.getsource(AD)
+    assert "log_psd" not in src, "the adapter still names the retired decibel column"
+    for token in ("np.power(10.0", "10.0 **", "10 **", "np.log10("):
+        assert token not in src, token
+    t0 = pd.Timestamp("2026-01-01T00:00:00Z")
+    f_set = np.arange(8.0, 31.0, 1.0)
+    rows = [{"t": float((t0 + pd.Timedelta(minutes=5 * k)).timestamp()), "channel": "CH",
+             "source": "td", "psd": np.full(f_set.size, 2.0 + k), "freqs": f_set} for k in range(3)]
+    T = AD.joined_table(pd.DataFrame(rows), None, centers=(20.5,))
+    assert list(T["power_linear"]) == [2.0, 3.0, 4.0], list(T["power_linear"])

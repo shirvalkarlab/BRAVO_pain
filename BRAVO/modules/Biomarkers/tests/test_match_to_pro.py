@@ -144,7 +144,7 @@ def test_prior_no_lookahead_invariant_survives_full_pooled_pipeline():
     rng = np.random.default_rng(0)
     mat = {
         "f_set": f_set,
-        "logX": rng.normal(0.0, 1.0, size=(t.size, F)),
+        "X": rng.gamma(4.0, 25.0, size=(t.size, F)),   # raw power (decision 204)
         "t": t,
         "channel": ch,
         "source": np.array(["TD streaming"] * t.size, dtype=object),

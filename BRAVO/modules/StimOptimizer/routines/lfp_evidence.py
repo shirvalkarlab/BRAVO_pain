@@ -81,14 +81,10 @@ def _to_utc(values, *, unit="s"):
     return t
 
 
-#: How a stored log spectrum maps back to linear power. The BRAVO platform's assembled matrix holds
-#: ``logX = 10 * log10(power)`` — DECIBELS — set in ``streaming_psd.psd_rows_to_matrix``. Undoing it
-#: with ``10 ** logX`` instead of ``10 ** (logX / 10)`` is wrong by a factor of ten IN THE EXPONENT,
-#: which for a spectrum around -1 dB inflates band power by orders of magnitude while still
-#: returning finite, plausible-looking numbers. The convention is therefore named explicitly at every
-#: call site rather than assumed.
-LOG_SCALES = {"db10": 10.0, "log10": 1.0}
-DEFAULT_LOG_SCALE = "db10"
+# UNTIL 2026-09-19 a table here (``LOG_SCALES``) named how the assembled matrix's decibels were to be
+# undone, because getting the exponent wrong by a factor of ten returned plausible-looking numbers.
+# The matrix now holds raw power (``X``, decision 204, on the PI's rule that log power enters no
+# calculation), so there is nothing to undo and the table is gone.
 
 # =================================================================================================
 # PUTTING THIS MODULE'S BAND POWER ONTO THE DEVICE'S OWN NUMBER SCALE
@@ -97,8 +93,9 @@ DEFAULT_LOG_SCALE = "db10"
 # He was right. He said they "shouldn't span values of one to nine, they should be in the hundreds
 # minimum and often probably in the thousands", and as shipped they spanned about 0.04 to 27.
 #
-# ``band_power_linear`` below undoes the stored logarithm and integrates power density across the
-# band. Its own docstring says that gives the device's quantity "up to a fixed scale factor" -- and
+# ``band_power_linear`` below integrates the stored power density across the band (until decision
+# 204 it undid a stored logarithm first). Its own docstring says that gives the device's quantity
+# "up to a fixed scale factor" -- and
 # THAT FACTOR WAS NEVER APPLIED ANYWHERE. There was a constant for it,
 # ``ClosedLoopDeployment.constraints.LFP_POWER_LSB_TO_UV2 = 0.01``, but the only thing in the whole
 # repository that touched it was one test asserting its value; no production code multiplied by it.
@@ -196,30 +193,24 @@ DEFAULT_LOG_SCALE = "db10"
 # should compare a value from here against a threshold programmed in device units.
 
 
-def band_power_linear(log_psd, freqs, center_hz, width_hz, *, log_scale=DEFAULT_LOG_SCALE):
-    """Device-style band power from a LOG power spectrum: linearise, then integrate over the band.
+def band_power_linear(psd, freqs, center_hz, width_hz):
+    """Device-style band power from a raw power spectrum: integrate the density over the band.
 
     The device thresholds a linear sum of squared magnitude over the band, and power is proportional
-    to squared magnitude, so integrating linear power density gives the device's quantity up to a
-    fixed scale factor. The log must be undone BEFORE summing — summing logs is a product of powers,
-    not a sum.
-
-    ``log_scale`` names the stored convention: ``"db10"`` for ``10*log10(power)`` (what the BRAVO
-    assembled matrix stores) or ``"log10"`` for a plain base-10 log. Getting this wrong does not
-    raise; it silently rescales every band power, so it is a required piece of provenance rather
-    than a detail.
+    to squared magnitude, so integrating raw power density gives the device's quantity up to a
+    fixed scale factor. ``psd`` is one raw spectrum per row (the assembled matrix's ``X``); until
+    decision 204 (2026-09-19) it was decibels and this function undid them first, with a named
+    convention because the wrong exponent returned plausible numbers. Nothing is undone now.
 
     Returns one value per row, or ``None`` when the band lies outside the frequency axis, rather
     than integrating over whichever bins happen to be nearest.
     """
-    if log_scale not in LOG_SCALES:
-        raise ValueError(f"log_scale must be one of {sorted(LOG_SCALES)}, got {log_scale!r}")
     f = np.asarray(freqs, float)
     lo, hi = float(center_hz) - float(width_hz) / 2.0, float(center_hz) + float(width_hz) / 2.0
     sel = (f >= lo) & (f <= hi)
     if not sel.any():
         return None
-    lin = np.power(10.0, np.asarray(log_psd, float)[:, sel] / LOG_SCALES[log_scale])
+    lin = np.asarray(psd, float)[:, sel]
     df = float(np.median(np.diff(f))) if f.size > 1 else 1.0
     return np.nansum(lin, axis=1) * df
 
@@ -228,7 +219,7 @@ def frame_from_matrix(mat, *, sources=None):
     """The BRAVO assembled PSD matrix -> the row frame :func:`build_evidence` consumes.
 
     ``mat`` is what ``Biomarkers.bravo_service._cached_psd_matrix`` returns:
-    ``{"logX": (N,F), "t": (N,), "channel": (N,), "source": (N,), "f_set": (F,)}``. Note ``f_set`` is
+    ``{"X": (N,F) raw power, "t": (N,), "channel": (N,), "source": (N,), "f_set": (F,)}``. Note ``f_set`` is
     ONE shared frequency axis for every row, not a per-row array, so it is attached to each row here
     rather than being re-derived.
 
@@ -237,28 +228,30 @@ def frame_from_matrix(mat, *, sources=None):
     response test — the question is whether the band moves with amplitude, and a montage sweep
     observes that as validly as a streaming segment.
     """
-    need = {"logX", "t", "channel", "f_set"}
+    # ``X`` is raw power (decision 204). A matrix that still carries ``logX`` is an entry assembled
+    # under the old decibel rule and is refused here rather than read as raw power.
+    need = {"X", "t", "channel", "f_set"}
     missing = need - set(mat or {})
     if missing:
         raise KeyError(f"assembled matrix missing {sorted(missing)}; has {sorted((mat or {}))}")
-    logX = np.asarray(mat["logX"], float)
+    X = np.asarray(mat["X"], float)
     f_set = np.asarray(mat["f_set"], float)
-    if logX.shape[1] != f_set.size:
-        raise ValueError(f"logX has {logX.shape[1]} frequency columns but f_set has {f_set.size}")
-    src = np.asarray(mat.get("source", np.full(logX.shape[0], "?")), dtype=object)
-    keep = np.ones(logX.shape[0], bool) if sources is None else np.isin(src, list(sources))
+    if X.shape[1] != f_set.size:
+        raise ValueError(f"X has {X.shape[1]} frequency columns but f_set has {f_set.size}")
+    src = np.asarray(mat.get("source", np.full(X.shape[0], "?")), dtype=object)
+    keep = np.ones(X.shape[0], bool) if sources is None else np.isin(src, list(sources))
     return pd.DataFrame({"t": np.asarray(mat["t"], float)[keep],
                          "channel": np.asarray(mat["channel"], dtype=object)[keep],
                          "source": src[keep],
-                         "log_psd": list(logX[keep]),
+                         "psd": list(X[keep]),
                          "freqs": [f_set] * int(keep.sum())})
 
 
 # =================================================================================================
 # READING BAND POWER THAT IS ALREADY ON THE DEVICE'S NUMBER SCALE
 # =================================================================================================
-# WHAT CHANGED, 2026-09-06. Everything above this line builds band power by undoing the stored
-# logarithm of a power density and integrating it across the band. Nobody ever calibrated that
+# WHAT CHANGED, 2026-09-06. Everything above this line builds band power by integrating a stored
+# power density across the band (a stored logarithm, undone first, until decision 204). Nobody ever calibrated that
 # recipe, so the numbers it produced were proportional to the quantity the device works in but not
 # on the device's scale, and the long note above ``band_power_linear`` explains why inventing a
 # constant to bridge the gap was the wrong fix and was withdrawn.
@@ -931,7 +924,7 @@ def _prepare_channel(psd, epochs, *, channel, time_unit="s", native_tol_s=None):
 
 def build_evidence(psd, epochs, *, channel, hemisphere, rate_hz, bands=None,
                    require_stim_on=True, amp_col=None, era_col="visit", rate_col=None,
-                   time_unit="s", mode_requires=None, log_scale=DEFAULT_LOG_SCALE,
+                   time_unit="s", mode_requires=None,
                    recent_eras=RECENT_ERAS_FOR_RESPONSE, native_tol_s=None, _prepared=None):
     """One :class:`LfpEvidence` for a single (channel, hemisphere, rate), plus its audit.
 
@@ -950,8 +943,8 @@ def build_evidence(psd, epochs, *, channel, hemisphere, rate_hz, bands=None,
         dropped rather than used.
 
         THE OLDER ONE, still accepted. A frame with ``t`` (epoch seconds), ``channel``, and either a
-        ``log_psd`` matrix column or columns named by ``freqs``; band power is then built by undoing
-        the stored logarithm and integrating the density across the band. That quantity is
+        ``psd`` matrix column (raw power, decision 204) or columns named by ``freqs``; band power is
+        then built by integrating the density across the band. That quantity is
         proportional to the one the device works in but is NOT on the device's scale, so a value
         from it must never be compared against a threshold programmed in the device's units.
 
@@ -1121,15 +1114,15 @@ def build_evidence(psd, epochs, *, channel, hemisphere, rate_hz, bands=None,
     else:
         freqs = np.asarray(p["freqs"].iloc[0] if "freqs" in p.columns
                            else p.attrs.get("freqs"), float)
-        logm = np.vstack(p["log_psd"].to_numpy()) if p["log_psd"].dtype == object \
-            else np.asarray(p["log_psd"].tolist(), float)
+        pm = np.vstack(p["psd"].to_numpy()) if p["psd"].dtype == object \
+            else np.asarray(p["psd"].tolist(), float)
 
         if bands is None:
             centers = np.arange(np.ceil(lo_hz + 2.5), np.floor(hi_hz - 2.5) + 1e-9, 1.0)
             bands = [(float(c), 5.0) for c in centers]
 
         for c, w in bands:
-            v = band_power_linear(logm, freqs, c, w, log_scale=log_scale)
+            v = band_power_linear(pm, freqs, c, w)
             if v is not None:
                 bp[(round(float(c), 6), round(float(w), 6))] = v
         if not bp:
