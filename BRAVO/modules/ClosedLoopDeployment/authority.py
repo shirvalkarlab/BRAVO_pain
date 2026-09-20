@@ -15,7 +15,7 @@ and a too-close capture is a separation that is small relative to the noise. Pre
 therefore not speculation, it is arithmetic on numbers we have.
 
 WHICH NUMBERS, since 2026-09-12 (PI decision, "b and c"): the two D26 verdicts are judged on the
-POOLED TITRATION SLOPE -- band power on current across every run of rising current on the contact,
+POOLED TITRATION SLOPE -- band power on current across every run of stepped current (one side stepped up or down, the other held) on the contact,
 one baseline per run (decisions 55, 124, 126) -- and they WARN rather than block. The between-visit
 separation described in the first paragraph is still computed and reported, labelled as the
 comparison decision 124 distrusts, but it no longer decides either verdict. See
@@ -114,7 +114,7 @@ def d26_capture_verdicts(pooled_slope, *, expected_sign=-1, historical_d=None,
     sample recorded at the lowest therapeutic current on record against the mean at the highest,
     pooled over every visit and month. Decisions 124 and 126 had already ruled that comparison
     confounded by time and replaced it, as the report's current-to-power edge, with the pooled
-    slope across runs of rising current, one baseline per run (``edges.pooled_actuation_edge``).
+    slope across runs of stepped current, one baseline per run (``edges.pooled_actuation_edge``).
     On RCS08 at the committed band the two disagreed in sign: the between-visit means read power
     HIGHER at 4.8 mA than at 1.4 mA (196.1 against 190.9, an "inverted capture") while the pooled
     slope reads −4.45 device units per mA, the direction the control law needs. The verdicts now
@@ -169,7 +169,7 @@ def d26_capture_verdicts(pooled_slope, *, expected_sign=-1, historical_d=None,
                     + "; it is not the verdict.")
         inv = ("D26 inverted capture: not assessed -- no pooled titration slope is stored for this "
                "band, so whether power falls as current rises cannot be judged from the runs of "
-               "rising current." + tail)
+               "stepped current." + tail)
         close = ("D26 thresholds too close: not assessed -- no pooled titration slope is stored for "
                  "this band, so whether the signal's response to current can be told from no "
                  "response is unknown; the device may raise RECAPTURE THRESHOLDS." + tail)
@@ -321,7 +321,7 @@ def threshold_placement(power_low, power_high, *, amp_low, amp_high, expected_si
         control_authority=d, problems=problems, warnings=warnings, capture_verdicts=verdicts,
         note=("Thresholds are placed at the two capture means, as the device does. Since 2026-09-12 "
               "the two D26 verdicts (inverted capture, thresholds too close) are judged on the "
-              "pooled titration slope across runs of rising current, not on the between-visit "
+              "pooled titration slope across runs of stepped current (both legs), not on the between-visit "
               "comparison of the two capture means, and they warn rather than block. The "
               "separation criterion on that comparison is declared by this module, not published "
               "by the manufacturer, who describes the alert qualitatively as the signal being "

@@ -773,11 +773,49 @@ def rising_current_settings(current_mA, block=None, *, tol_mA=1e-9):
     return up_from_previous, up_to_next
 
 
+def changed_current_settings(current_mA, block=None, *, prev_current_mA=None, tol_mA=1e-9):
+    """Say, for each setting, whether the current CHANGED to reach it, and which way (decision 213,
+    the PI, 2026-09-20: "pool both legs into the slope because we want to model slope in both
+    directions").
+
+    The current before each setting is the previous setting in the same ``block``; when the caller
+    passes ``prev_current_mA`` (the device's own record of the current before the move that produced
+    each setting, which the run finder has), that is used instead, so the first setting of a
+    recording is judged like any other rather than refused for having nothing before it.
+
+    Returns three boolean arrays: ``changed`` (rose or fell by more than ``tol_mA``), ``rose``,
+    ``fell``; and a list of leg names per setting: "rising", "falling", "first" (nothing known
+    before it) or "unchanged".
+    """
+    a = np.asarray(current_mA, dtype=float)
+    n = a.size
+    b = np.zeros(n, dtype=object) if block is None else np.asarray(block, dtype=object)
+    if b.size != n:
+        raise ValueError(f"block has {b.size} entries but current_mA has {n}")
+    prev = np.full(n, np.nan)
+    for i in range(1, n):
+        if b[i] == b[i - 1]:
+            prev[i] = a[i - 1]
+    if prev_current_mA is not None:
+        given = np.asarray(prev_current_mA, dtype=float)
+        if given.size != n:
+            raise ValueError(f"prev_current_mA has {given.size} entries but current_mA has {n}")
+        prev = np.where(np.isfinite(given), given, prev)
+    tol = float(tol_mA)
+    known = np.isfinite(prev) & np.isfinite(a)
+    rose = known & ((a - prev) > tol)
+    fell = known & ((prev - a) > tol)
+    changed = rose | fell
+    leg = ["rising" if rose[i] else "falling" if fell[i] else "unchanged" if known[i] else "first"
+           for i in range(n)]
+    return changed, rose, fell, leg
+
+
 def mean_power_before_next_change(step_t0, current_mA, tile_t, tile_power, *,
                                   block=None, step_end_t=None,
                                   window_s=PRE_CHANGE_WINDOW_S,
                                   min_chunks=MIN_CHUNKS_PRE_CHANGE,
-                                  require_rise_into_setting=True,
+                                  require_change_into_setting=True, prev_current_mA=None,
                                   ramp_end_t=None, ramp_margin_s=RAMP_EXCLUDE_S):
     """One band-power vector per setting: the MEAN of the pieces in the last ``window_s`` seconds.
 
@@ -834,10 +872,13 @@ def mean_power_before_next_change(step_t0, current_mA, tile_t, tile_power, *,
         up to 75.0 s for one the device chose to deliver in 35 pieces.
     min_chunks
         How many pieces must be found in that window before an average is reported. Ten by default.
-    require_rise_into_setting
-        When True, which is the default, a setting is only measured if the current went UP to reach
-        it. Set it to False only to see what the looser rule would have given; the numbers it lets
-        through are mixtures of the setting and the higher current that preceded it.
+    require_change_into_setting, prev_current_mA
+        When True, which is the default, a setting is only measured if the current CHANGED to reach
+        it -- rose or fell (decision 213; until then only a rise counted and every down-leg step was
+        discarded). The window never reaches before the setting's own start, so a falling step's
+        number describes that step and not the higher current before it. ``prev_current_mA`` is the
+        device's own record of the current before each setting's move; with it the first setting of
+        a recording is measured too. Set the switch to False only to see what no rule would give.
 
     Returns ``(power, table)``. ``power`` is a ``(n_settings, n_bands)`` array whose refused rows
     are all missing. ``table`` is a ``pandas.DataFrame`` with one row per setting carrying the
@@ -871,6 +912,7 @@ def mean_power_before_next_change(step_t0, current_mA, tile_t, tile_power, *,
 
     n_bands = tp.shape[1]
     up_from_previous, up_to_next = rising_current_settings(amp, block)
+    changed_into, rose_into, fell_into, leg = changed_current_settings(amp, block, prev_current_mA=prev_current_mA)
     b = (np.zeros(n, dtype=object) if block is None else np.asarray(block, dtype=object))
 
     # When the caller did not say when each setting ended, a setting ends when the next one in the
@@ -912,9 +954,10 @@ def mean_power_before_next_change(step_t0, current_mA, tile_t, tile_power, *,
             sub = np.empty((0, n_bands))
 
         reason = ""
-        if require_rise_into_setting and not up_from_previous[i]:
-            reason = ("the current did not go up to reach this setting, so the 30 seconds would "
-                      "mix this setting with the higher or equal current before it")
+        if require_change_into_setting and not changed_into[i]:
+            reason = ("the current did not change to reach this setting"
+                      + (" (nothing is known about the current before it)" if leg[i] == "first"
+                         else ", so there is no move whose settled level this window would describe"))
         elif not np.isfinite(t_end[i]):
             reason = ("the moment the current was next changed is not known, so there is no "
                       "30 second window that is certain to sit inside this setting")
@@ -938,7 +981,9 @@ def mean_power_before_next_change(step_t0, current_mA, tile_t, tile_power, *,
             t_next_change_s=float(t_end[i]) if np.isfinite(t_end[i]) else np.nan,
             window_start_s=float(lo) if np.isfinite(lo) else np.nan,
             window_shortened_by_setting_start=bool(np.isfinite(t_end[i]) and want_lo < t0[i]),
-            current_rose_into_this_setting=bool(up_from_previous[i]),
+            current_rose_into_this_setting=bool(rose_into[i]),
+            current_fell_into_this_setting=bool(fell_into[i]),
+            leg=leg[i],
             next_change_is_a_further_rise=bool(up_to_next[i]),
             n_chunks_found=n_found,
             accepted=(not reason),

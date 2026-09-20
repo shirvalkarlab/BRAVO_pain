@@ -58,7 +58,7 @@ def test_the_amplitude_effect_table_slope_is_in_device_units_per_mA():
 
 
 def test_the_amplitude_effect_rule_version_moved_so_no_log_built_row_is_served():
-    assert AE.RULE_VERSION.startswith("v4_slope_on_raw_device_power_post_ramp_margin_"), AE.RULE_VERSION
+    assert AE.RULE_VERSION.startswith("v5_slope_on_raw_device_power_both_legs_post_ramp_margin_"), AE.RULE_VERSION
 
 
 def test_the_amplitude_effect_source_takes_no_logarithm_of_power():

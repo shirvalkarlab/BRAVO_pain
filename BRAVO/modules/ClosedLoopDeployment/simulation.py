@@ -74,7 +74,7 @@ MAX_TRAJECTORY_POINTS = 800
 _ABOVE, _BETWEEN, _BELOW, _NONE = 1, 0, -1, 2
 
 CAVEAT = ("The model of how this band's power responds to amplitude is a curve fitted to N settled "
-          "points across V runs of rising current on this contact; it has not been observed under "
+          "points across V runs of stepped current on this contact; it has not been observed under "
           "closed-loop control. The amplitude trajectory is what the device's control law does to "
           "that model, not a prediction of what the device would deliver.")
 
@@ -502,7 +502,7 @@ def resampled_curves(points_x, points_y, run_labels, *, n_resample=DEFAULT_N_RES
     runs = sorted(set(lab.tolist()))
     if len(runs) < MIN_RUNS_FOR_RESAMPLE:
         return {"curves": [], "n_runs": len(runs), "n_fitted": 0,
-                "reason": f"only {len(runs)} run(s) of rising current on this contact; at least "
+                "reason": f"only {len(runs)} run(s) of stepped current on this contact; at least "
                           f"{MIN_RUNS_FOR_RESAMPLE} are needed to resample runs"}
     rng = np.random.default_rng(seed)
     curves, n_fitted = [], 0

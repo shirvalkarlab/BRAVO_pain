@@ -27,7 +27,7 @@ def test_the_pooled_edge_carries_the_slope_its_interval_and_the_run_count():
     e = E.pooled_actuation_edge(_row(), scale="power_linear")
     assert e.name == "E1" and e.estimate == -3.6 and e.p == 0.01
     assert e.ci == (-3.6 - 1.96 * 1.2, -3.6 + 1.96 * 1.2)
-    assert e.n == 13 and e.n_clusters == 4 and "run of rising current" in e.cluster_unit
+    assert e.n == 13 and e.n_clusters == 4 and "run of stepped current" in e.cluster_unit
     assert e.sign == -1 and e.resolved is True
     assert "POOLED ACROSS 4 RUNS" in e.note and "No bend was detected" in e.note
     assert e.confounded_by == []
@@ -80,7 +80,7 @@ def _run_pipeline(monkeypatch, pooled_e1):
 def test_the_pipeline_uses_the_pooled_slope_and_keeps_the_historical_edge(monkeypatch):
     rep = _run_pipeline(monkeypatch, _row())
     assert rep.edges["E1"].estimate == -3.6
-    assert "run of rising current" in rep.edges["E1"].cluster_unit
+    assert "run of stepped current" in rep.edges["E1"].cluster_unit
     hist = rep.edges_historical["E1"]
     assert hist.cluster_unit == "setting epoch", "the setting-epoch estimate must be kept"
     assert hist.estimate is not None and hist.estimate != -3.6

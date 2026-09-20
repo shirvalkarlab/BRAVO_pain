@@ -4,7 +4,7 @@ evening: "make #4 a feature of next stim opt recommendation combined with 30").
 
 WHAT THIS IS FOR. Two things wait on the same session. (1) The pooled current-to-power slope
 that the Closed-Loop page's D19 rule and its evidence triangle read rests on 11-13 settled points
-across 3-4 runs of rising current on RCS08, at most 6 currents per run; a straight line through
+across 3-4 runs of stepped current on RCS08, at most 6 currents per run; a straight line through
 that few points can be flipped by removing two of them, which is exactly what the 20 s post-ramp
 margin did (decision 144), so the margin ships OFF (`ClosedLoopDeployment/post_ramp.py`). (2) No
 run in the record has the 8 settled settings the curvature test needs (decision 55,

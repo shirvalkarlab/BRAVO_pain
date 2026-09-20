@@ -638,7 +638,7 @@ def _br(text: str, width: int) -> str:
 def render_all(comparisons, outdir=".", *, prefix="three_source_response"):
     """Draw every comparison, save one picture each, and return the paths in the order drawn.
 
-    One picture per run of rising current, never two runs on one picture. Each run is a different
+    One picture per run of stepped current, never two runs on one picture. Each run is a different
     sensing contact at a different band, and stacking them would invite a reader to read across two
     measurements that have nothing in common but the date.
     """

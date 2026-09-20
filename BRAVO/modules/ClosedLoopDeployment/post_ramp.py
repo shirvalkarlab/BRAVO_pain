@@ -12,7 +12,7 @@ versions (`_off`) do not move. The history that follows is why it existed.
 Commit 790ed21 wrote a clip that keeps the first `within_visit.RAMP_EXCLUDE_S` (20 s) after a
 current move out of the settled window; nothing in production called it until 2026-09-12, when the
 code review's hazard 1 wired it into `three_source_response._tile_panel`. Measured the same day on
-RCS08 (decision 141 and 144): it drops one whole run of rising current and two more settled points,
+RCS08 (decision 141 and 144): it drops one whole run of stepped current and two more settled points,
 and on the band in the PI's browser, ONE_THREE_LEFT at 24.5 Hz, the pooled current-to-power slope
 goes from -3.79 device units per mA (13 points, 4 runs; interval spanning zero) to +17.31 (11
 points, 3 runs; interval +1.17 to +33.46, so "established") -- the wrong way for the control law,

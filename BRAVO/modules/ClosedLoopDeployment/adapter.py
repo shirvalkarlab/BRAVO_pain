@@ -1540,7 +1540,7 @@ def report_to_dict(rep):
     }
 
 
-#: How many of the newest runs of rising current the deployment page DRAWS. The amplitude-effect
+#: How many of the newest runs of stepped current the deployment page DRAWS. The amplitude-effect
 #: table is built from every run the device's record holds, not only these, because Stim
 #: Optimizer's question is which bands are still unresolved anywhere in the record.
 THREE_SOURCE_RUNS_ON_PAGE = 4
@@ -1605,7 +1605,7 @@ def write_ground_truth(participant, build, *, min_settings=3):
         from CacheStore import provenance as _prov
     if not build or not build.get("comparisons"):
         return {"written": False, "n_rows": 0, "n_runs": 0,
-                "reason": (build or {}).get("absent_reason") or "no run of rising current"}
+                "reason": (build or {}).get("absent_reason") or "no run of stepped current"}
     table = _gt.table_from_build(build)
     routes = ({str(k): int(v) for k, v in table["ground_truth_route"].value_counts().items()}
               if len(table) else {})
@@ -1694,7 +1694,7 @@ def write_amplitude_effect(participant, build, *, min_settings=3):
 
     if not build or not build.get("comparisons"):
         return {"written": False, "n_rows": 0, "n_runs": 0,
-                "reason": (build or {}).get("absent_reason") or "no run of rising current"}
+                "reason": (build or {}).get("absent_reason") or "no run of stepped current"}
     table = _amp.table_from_build(build, checked_lo_hz=_3src.CHECKED_LO_HZ,
                                   checked_hi_hz=_3src.CHECKED_HI_HZ,
                                   band_half_hz=_3src.BAND_HALF_HZ)
@@ -1763,7 +1763,7 @@ def write_pooled_shape(participant, build, *, is_every_run, min_points=None):
         return summary
     if not build or not build.get("comparisons"):
         summary["reason"] = ((build or {}).get("absent_reason")
-                             or "no run of rising current to pool")
+                             or "no run of stepped current to pool")
         return summary
 
     table = _amp.pooled_table_from_build(build, checked_lo_hz=_3src.CHECKED_LO_HZ,
@@ -1863,7 +1863,7 @@ def write_run_points(participant, build, *, is_every_run):
         return summary
     if not build or not build.get("comparisons"):
         summary["reason"] = ((build or {}).get("absent_reason")
-                             or "no run of rising current to store")
+                             or "no run of stepped current to store")
         return summary
 
     table = _rp.run_points_table_from_build(build)
@@ -2054,7 +2054,7 @@ def simulation_inputs_for_participant(uid, *, contact, centre_hz, hemisphere, ep
 
 
 def _run_windows_epoch_s(points, *, contact):
-    """(start, end) epoch seconds of every run of rising current on `contact`, from the STORED
+    """(start, end) epoch seconds of every run of stepped current on `contact`, from the STORED
     per-run points table (which always holds every run; the page's own build is truncated to
     four once the write-back entries exist, and an answer that depended on that would depend on
     cache state -- decision 103's own complaint). Local timestamps are America/Los_Angeles."""
@@ -2974,7 +2974,7 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     # THE THREE-SOURCE COMPARISON AND THE TWO TABLES IT WRITES COME BEFORE THE PIPELINE (review
     # C6, 2026-09-12). The pipeline's E1 and the two D26 verdicts read the stored pooled table
     # (``_pooled_e1`` below); until this move the request READ that table first and WROTE it
-    # afterwards, so on the first request after a new run of rising current landed (a clinic
+    # afterwards, so on the first request after a new run of stepped current landed (a clinic
     # visit) the triangle and the D26 warnings came from the previous table while the simulation
     # card, which reads the table after the write, used the new one -- two panels on one page
     # disagreeing about which table they read, and the page caches the whole answer until

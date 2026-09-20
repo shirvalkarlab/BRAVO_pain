@@ -220,33 +220,34 @@ def test_the_window_ends_where_the_next_setting_starts_and_never_reaches_past_it
 
 
 def test_a_current_that_drops_to_zero_and_climbs_again_does_not_carry_the_earlier_ladder_across():
-    # The PI's own example: 1, 2, 3, then 0, then 0.5 and 1.0 again. The 0 breaks the ladder, and
-    # the settings on either side of the break must not be measured as if the ladder continued.
+    # The PI's own example: 1, 2, 3, then 0, then 0.5 and 1.0 again. Every setting the current
+    # changed into is measured (decision 213, both legs), and each window lies inside its own
+    # setting, so nothing is carried across the drop: the 0.0 mA number describes 0.0 mA.
     t0, amp, rate = _ladder([1.0, 2.0, 3.0, 0.0, 0.5, 1.0, 1.5])
     tt, tp = _pieces(t0, amp)
-    _, T = WV.mean_power_before_next_change(t0, amp, tt, tp, block=rate)
+    P, T = WV.mean_power_before_next_change(t0, amp, tt, tp, block=rate)
     got = dict(zip(T.setting_index, T.accepted))
-    assert got[2] is True or bool(got[2])       # 3.0 mA was reached by a rise from 2.0
-    assert not bool(got[3])                     # 0.0 mA was reached by the current being switched off
+    assert bool(got[2]) and T.iloc[2]["leg"] == "rising"        # 3.0 mA, reached by a rise from 2.0
+    assert bool(got[3]) and T.iloc[3]["leg"] == "falling"       # 0.0 mA, reached by switching off
+    assert np.allclose(P[3, :], 100.0)                          # and it reads 0.0 mA, not 3.0
     assert bool(T.iloc[2].next_change_is_a_further_rise) is False   # what follows 3.0 is the drop
-    # 0.5 mA sits after the break. It is reached by a rise from zero, so the rule measures it, but
-    # the number describes 0.5 mA and NOT the 3.0 mA that ran before the break, because the window
-    # lies inside the 0.5 mA setting.
-    assert bool(got[4])
+    assert bool(got[4]) and T.iloc[4]["leg"] == "rising"
     assert np.isclose(T.iloc[4].window_start_s, t0[5] - WV.PRE_CHANGE_WINDOW_S)
     assert T.iloc[4].window_start_s > t0[3]
 
 
-def test_a_setting_reached_by_turning_the_current_down_is_refused_with_a_reason():
+def test_a_setting_reached_by_turning_the_current_down_is_measured_on_the_falling_leg():
+    """Until decision 213 a fall was refused ("did not go up"); the PI: pool both legs."""
     t0, amp, rate = _ladder([1.0, 3.0, 2.0, 2.5])
     tt, tp = _pieces(t0, amp)
-    _, T = WV.mean_power_before_next_change(t0, amp, tt, tp, block=rate)
+    P, T = WV.mean_power_before_next_change(t0, amp, tt, tp, block=rate)
     row = T.iloc[2]                              # 2.0 mA, arrived at by dropping from 3.0
-    assert not row.accepted
-    assert "did not go up" in row.refusal_reason
+    assert bool(row.accepted) and row["leg"] == "falling" and np.allclose(P[2, :], 120.0)
+    assert list(T["leg"]) == ["first", "rising", "falling", "rising"]
+    # the switch off shows what no rule at all would give: the first setting measured too
     loose = WV.mean_power_before_next_change(t0, amp, tt, tp, block=rate,
-                                             require_rise_into_setting=False)[1]
-    assert bool(loose.iloc[2].accepted)          # the looser rule lets it through, on request
+                                             require_change_into_setting=False)[1]
+    assert bool(loose.iloc[0].accepted)
 
 
 def test_fewer_than_ten_pieces_gets_no_number_and_reports_the_count_it_actually_found():
@@ -292,8 +293,8 @@ def test_two_stimulation_rates_are_never_treated_as_one_ladder():
     block = np.array([55.0, 55.0, 55.0, 10.0, 10.0, 10.0])
     tt, tp = _pieces(t0, amp)
     _, T = WV.mean_power_before_next_change(t0, amp, tt, tp, block=block)
-    assert not bool(T.iloc[3].accepted)          # 1.0 mA at 10 Hz does not rise from 3.0 mA at 55 Hz
-    assert "did not go up" in T.iloc[3].refusal_reason
+    assert not bool(T.iloc[3].accepted)          # 1.0 mA at 10 Hz is not reached from 3.0 mA at 55 Hz
+    assert T.iloc[3]["leg"] == "first" and "did not change" in T.iloc[3].refusal_reason
     assert not bool(T.iloc[2].accepted)          # 3.0 mA at 55 Hz has no next change at 55 Hz
     assert "not known" in T.iloc[2].refusal_reason
 

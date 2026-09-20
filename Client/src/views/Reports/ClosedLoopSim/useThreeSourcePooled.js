@@ -1,5 +1,5 @@
 /**
- * The pooled three-source view: every run of rising current on one side, grouped by the sensing
+ * The pooled three-source view: every run of stepped current on one side, grouped by the sensing
  * contact on that side, with the stored pooled slope per band centre (redesign decisions 5, 9, 10).
  *
  * FETCHED AFTER THE REPORT, NOT WITH IT. The PI's instruction, 2026-09-11: "prefetch the data after

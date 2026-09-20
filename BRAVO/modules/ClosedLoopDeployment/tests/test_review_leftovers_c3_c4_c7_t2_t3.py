@@ -96,7 +96,7 @@ def test_t2_the_stored_table_carries_the_per_run_slopes_as_json_and_the_counts()
     runs = json.loads(row["per_run_slopes_json"])
     assert [r["run"] for r in runs] == ["run A", "run B"] and all(r["slope_per_mA"] < 0 for r in runs)
     assert int(row["n_runs_slope_negative"]) == 2
-    assert AE.POOLED_RULE_VERSION.startswith("v5_")
+    assert AE.POOLED_RULE_VERSION.startswith("v6_")
 
 
 def test_t2_the_e1_note_reads_the_per_run_slopes_out():

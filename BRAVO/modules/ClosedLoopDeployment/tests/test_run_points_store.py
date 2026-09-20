@@ -29,7 +29,7 @@ def test_a_points_table_from_a_truncated_build_is_refused(monkeypatch):
 def test_a_build_with_no_runs_is_reported_not_stored():
     got = adapter.write_run_points(object(), {"comparisons": []}, is_every_run=True)
     assert got["written"] is False
-    assert "no run of rising current" in got["reason"]
+    assert "no run of stepped current" in got["reason"]
 
 
 def test_an_absent_reason_from_the_build_is_carried_through():

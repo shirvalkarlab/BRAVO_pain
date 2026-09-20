@@ -135,7 +135,7 @@ def actuation_edge(T, *, channel, center_hz, hemisphere="Left", scale="power_lin
 
 
 def pooled_actuation_edge(pooled_row, *, scale="power_linear"):
-    """E1 from the STORED POOLED SLOPE: band power on current across every run of rising current
+    """E1 from the STORED POOLED SLOPE: band power on current across every run of stepped current
     on this sensing contact, one baseline per run and one shared slope (decision 55), read from
     the row `amplitude_effect.pooled_row` returns.
 
@@ -155,7 +155,7 @@ def pooled_actuation_edge(pooled_row, *, scale="power_linear"):
     p = r.get("pooled_slope_p")
     n = int(r.get("n") or 0)
     n_visits = int(r.get("n_visits") or 0)
-    unit = "run of rising current (one baseline each)"
+    unit = "run of stepped current (one baseline each)"
     if b is None or not np.isfinite(float(b)):
         return _POOLED_E1(None, None, None, n, unit, n_visits, scale,
                             note=("no pooled slope: " + str(r.get("verdict") or
@@ -165,7 +165,7 @@ def pooled_actuation_edge(pooled_row, *, scale="power_linear"):
     ci = ((b - 1.96 * float(se), b + 1.96 * float(se))
           if se is not None and np.isfinite(float(se)) else None)
     p = float(p) if p is not None and np.isfinite(float(p)) else None
-    note = (f"POOLED ACROSS {n_visits} RUNS OF RISING CURRENT on this contact, {n} settled "
+    note = (f"POOLED ACROSS {n_visits} RUNS OF STEPPED CURRENT (one side stepped up or down, the other held; both legs since decision 213) on this contact, {n} settled "
             "points, one baseline per run and one shared slope (decision 55), in the device's "
             "own units per mA. This is the same row the three-source panel draws, chosen for the "
             "triangle on 2026-09-11 in place of the historical setting-epoch slope, which is kept "

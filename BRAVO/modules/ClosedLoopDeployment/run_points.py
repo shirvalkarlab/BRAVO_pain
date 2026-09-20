@@ -34,7 +34,7 @@ import pandas as pd
 KIND = "three_source_run_points"
 from . import post_ramp as _post_ramp
 
-RULE_VERSION = "v4_run_points_any_held_side_post_ramp_margin_" + _post_ramp.version_tag()   # v4: runs with the other side held at any current (decision 197)   # v3: the margin, on or off (2026-09-12)
+RULE_VERSION = "v5_run_points_both_legs_joined_recordings_post_ramp_margin_" + _post_ramp.version_tag()   # v4: runs with the other side held at any current (decision 197)   # v3: the margin, on or off (2026-09-12)
 
 # The three routes, by the names the comparison uses (three_source_response.SOURCE_*). Spelled here
 # rather than imported so a reader of a stored table can match them without the module.
@@ -189,7 +189,7 @@ def pooled_view_payload(points: Optional[pd.DataFrame], pooled: Optional[pd.Data
             "no stored per-run points yet; they are written the next time the comparison is built "
             "from every run")
         return out
-    out["from"] = "stored per-run points, every run of rising current on one side"
+    out["from"] = "stored per-run points, every run of stepped current on one side"
     df = points.copy()
     for side in ("Right", "Left"):
         sd = df[df["ramped_side"].astype(str).str.lower() == side.lower()]

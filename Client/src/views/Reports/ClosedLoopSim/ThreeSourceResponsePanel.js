@@ -284,7 +284,7 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
   if (!view) {
     let reason;
     if (pooled && pooled.err) reason = pooled.err;
-    else if (pooled && pooled.loading) reason = "gathering every run of rising current from the stored tables…";
+    else if (pooled && pooled.loading) reason = "gathering every run of stepped current from the stored tables…";
     else if (reportBlock && reportBlock.absent_reason) reason = reportBlock.absent_reason;
     else if (report && report.data) {
       reason = "the pooled view is fetched after the report; if it does not appear, the stored "
@@ -306,7 +306,7 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
       <Card><CardContent>
         <Typography variant="h6" gutterBottom>{title}</Typography>
         <Typography variant="body2" color="text.secondary">
-          {view.absent_reason || "no run of rising current on one side is stored for this participant"}
+          {view.absent_reason || "no run of stepped current on one side is stored for this participant"}
         </Typography>
       </CardContent></Card>
     );
