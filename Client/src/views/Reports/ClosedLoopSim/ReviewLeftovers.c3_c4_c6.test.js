@@ -2,7 +2,8 @@
  * The 2026-09-15 clinician review's leftovers on this page, built 2026-09-17 (decision 200):
  *   C3  the CL-DBS simulation headline says when it rests on timing values the record cannot decide;
  *   C4  the reliable-change card prints when its pairs were filed, beside the count;
- *   C6  the Deploy-to-Percept review carries the standing off-label line.
+ *   C6  the Deploy-to-Percept review carried a standing off-label line -- REMOVED 2026-09-19 on the PI's
+ *       ruling (research context; approved-indication constraints are not applied). The test now pins its absence.
  */
 import React from "react";
 import "@testing-library/jest-dom";
@@ -68,11 +69,11 @@ describe("C4: the reliable-change card prints when the pairs were filed", () => 
   });
 });
 
-describe("C6: the Deploy-to-Percept review carries the standing off-label line", () => {
-  it("prints it in every state, including before the summary has loaded", () => {
+describe("C6 (reversed 2026-09-19): the Deploy-to-Percept review carries NO off-label line", () => {
+  it("prints nothing about approved indications, in any state", () => {
     const { container } = rtlRender(wrap(
       <DeploySignoffCard participantUid="TEST01" bandCandidate={{ contact: "ZERO_TWO_LEFT", center_freq_hz: 24.5, bandwidth_hz: 5 }}
         requestParams={{}} cutpoint={null} summary={{ data: null, loading: true, err: null }} deploymentReport={null} />));
-    expect(container.textContent).toContain("Chronic pain is not an approved indication for this device; Adaptive Therapy is labelled for Parkinson's disease.");
+    expect(container.textContent).not.toMatch(/approved indication|labelled for Parkinson/);
   });
 });

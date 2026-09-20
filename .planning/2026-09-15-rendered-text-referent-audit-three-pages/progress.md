@@ -163,3 +163,8 @@
 - GREEN: host 1362 / 2 / 0; container 664 / 0; jest ClosedLoopSim 47 passed + the known 2.
 - Live RCS08 (`_d200_capture.py`, `_d200_diff.py`): L 0-2+ 56,386 -> 56,428 fields, 16 differing (2 timing, 3 the range source, the rest rebuilt-table bookkeeping), 49 added; L 1-3+ 56,395 -> 56,438, 8 differing, 47 added; verdicts, thresholds, E1/E2 estimates identical. Device runs 3 s averaging on the Left today, so the two occupancy clocks agree.
 - Frontend chunk 576.9ecf18fe. Workers reloaded.
+
+## 2026-09-19 (the PI: "Remove C6"): decision 201
+- Jest C6 test flipped to assert absence, RED (line rendered), then the line removed from `DeploySignoffCard.js`, GREEN; ClosedLoopSim 47 passed + the known 2.
+- Frontend rebuilt (chunk 576.fde69d26); "approved indication" in 0 chunks. No backend change; no suite run; no live proof applies.
+- T2 question (random intercept per run, shared slope) answered in chat from `within_visit.amplitude_response_shape_pooled`; no code changed for it.
