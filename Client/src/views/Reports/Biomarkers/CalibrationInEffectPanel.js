@@ -105,6 +105,15 @@ function CalibrationInEffectPanel({ participantUid }) {
     traces.push({ x: [0, xmax], y: [0, deployed.k * xmax], type: "scatter", mode: "lines",
       name: `in effect: LSB = ${fmt(deployed.k, 2)} × µV²`,
       line: { color: "#222", width: 1.5 }, hoverinfo: "name" });
+    // The 1-MAD band either side of the line (ruling C1): the same raw scatter the Closed-Loop
+    // page draws either side of a modelled threshold (ruling A2).
+    if (tr.scatter_mad != null) {
+      [[deployed.k - tr.scatter_mad, "−"], [deployed.k + tr.scatter_mad, "+"]].forEach(([kk, sign]) => {
+        traces.push({ x: [0, xmax], y: [0, kk * xmax], type: "scatter", mode: "lines",
+          name: `${sign}1 MAD of the ratio (${fmt(kk, 1)})`, showlegend: sign === "+",
+          line: { color: "#222", width: 1, dash: "dot" }, hoverinfo: "name" });
+      });
+    }
     const layout = {
       margin: { l: 56, r: 12, t: 8, b: 40 }, height: 260,
       xaxis: { title: { text: "band power from the voltage trace (µV²)", font: { size: 10.5 } },
@@ -192,6 +201,14 @@ function CalibrationInEffectPanel({ participantUid }) {
               <MDTypography variant="h5" sx={{ fontSize: 20, color: PAL.accent, lineHeight: 1.15 }}>
                 {`1 µV² = ${fmt(deployed.k, 2)} LSB`}
               </MDTypography>
+              {tr.k_interval ? (
+                <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, color: "#333" }}>
+                  {`95% interval ${fmt(tr.k_interval[0], 1)}–${fmt(tr.k_interval[1], 1)} (${tr.k_interval_method}); `
+                    + `1 MAD of the ratio is ${fmt(tr.scatter_mad, 1)} LSB per µV² (${fmt(100 * tr.scatter_mad_frac, 0)}% of the constant), `
+                    + "the dotted lines below. "
+                    + (tr.proportionality ? tr.proportionality.sentence : "")}
+                </MDTypography>
+              ) : null}
               <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, color: "#555" }}>
                 {`The median ratio over ${tr.n} blocks the device recorded both ways at once `
                   + `(r = ${fmt(tr.r, 2)}, typical miss ×${fmt(tr.median_fold_error, 2)}); `

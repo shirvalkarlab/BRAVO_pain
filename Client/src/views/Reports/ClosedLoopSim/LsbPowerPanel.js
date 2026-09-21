@@ -254,22 +254,22 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
     // Threshold marker with optional error bars
     if (hasLsb) {
       const isEstimated = tl.method && tl.method.includes("modeled");
-      // For estimated thresholds, propagate the k sigma; for anchored ones, no error
-      const sigma = (data && data.lsb_ratio && data.lsb_ratio.sigma_fold)
-        || (tm && tm.chosen && tm.chosen.sigma_fold) || null;
-      const errLo = (isEstimated && sigma) ? tl.upper_lsb - (tl.upper_lsb / sigma) : 0;
-      const errHi = (isEstimated && sigma) ? (tl.upper_lsb * sigma) - tl.upper_lsb : 0;
+      // For a MODELLED threshold the bar either side is the calibration blocks' own raw scatter,
+      // served as upper_lsb_lo / upper_lsb_hi (ruling A2, 2026-09-21); a measured one has no bar.
+      const hasBand = isEstimated && Number.isFinite(tl.upper_lsb_lo) && Number.isFinite(tl.upper_lsb_hi);
+      const errLo = hasBand ? tl.upper_lsb - tl.upper_lsb_lo : 0;
+      const errHi = hasBand ? tl.upper_lsb_hi - tl.upper_lsb : 0;
       traces.push({
         type: "scatter", mode: "markers", x: [tl.upper_lsb], y: ["Threshold"],
         marker: { color: PAL.accent, size: 14, symbol: "diamond",
           line: { color: "#fff", width: 2 } },
-        error_x: (isEstimated && sigma) ? {
+        error_x: hasBand ? {
           type: "data", symmetric: false,
           array: [errHi], arrayminus: [errLo],
           color: PAL.accent, thickness: 2, width: 6,
         } : undefined,
         hovertemplate: isEstimated
-          ? `Estimated: ${fmt(tl.upper_lsb, 0)} LSB (±1σ: ${fmt(tl.upper_lsb / sigma, 0)}–${fmt(tl.upper_lsb * sigma, 0)})<extra></extra>`
+          ? `Modelled: ${fmt(tl.upper_lsb, 0)} LSB${hasBand ? ` (band ${fmt(tl.upper_lsb_lo, 0)}–${fmt(tl.upper_lsb_hi, 0)})` : ""}<extra></extra>`
           : `Anchored: ${fmt(tl.upper_lsb, 0)} LSB (p${fmt(tl.percentile, 0)} of Timeline)<extra></extra>`,
         showlegend: false,
       });
@@ -431,7 +431,9 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
                   {`power ≈ ${fmt(tl.upper_lsb, 1)} LSB`}
                 </MDTypography>
                 <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 10, mt: 0.3 }}>
-                  {`±1σ ${fmt(tl.upper_lsb_lo, 1)}–${fmt(tl.upper_lsb_hi, 1)} LSB (${fmt(tl.sigma_fold, 2)}× fold)`
+                  {(Number.isFinite(tl.upper_lsb_lo) && Number.isFinite(tl.upper_lsb_hi)
+                      ? `band ${fmt(tl.upper_lsb_lo, 1)}–${fmt(tl.upper_lsb_hi, 1)} LSB (±${fmt(100 * (tl.scatter_frac || 0), 0)}%, the calibration ratio's 1 MAD over ${tl.scatter_n_blocks || 0} blocks)`
+                      : "no band: the calibration scatter is unknown for this participant")
                     + (tl.percentile != null ? ` · anchored at p${fmt(tl.percentile, 0)}` : "")
                     + (tl.n_modeled_points ? ` · ${tl.n_modeled_points} modeled in-band points` : "")}
                 </MDTypography>

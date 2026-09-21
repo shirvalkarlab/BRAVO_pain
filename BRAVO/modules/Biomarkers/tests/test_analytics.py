@@ -1077,29 +1077,39 @@ def test_modeled_lsb_threshold_fallback_ladder():
     the MODELED LSB instead of dead-ending at 'NO DEPLOYABLE LSB THRESHOLD'. Verifies:
       (1) a MEASURED native threshold always wins — the estimate is never consulted (returns None);
       (2) TIER 1 (modeled_timeline) reads the montage/survey LSB at the cut-point percentile;
-      (3) the ±1σ band is the modeled-LSB fold (MODELED_LSB_SIGMA_FOLD) either side;
+      (3) the band either side is the calibration blocks' own raw scatter (ruling A2, the PI,
+          2026-09-21): 1 MAD of the raw ratio over the kept blocks as a fraction of the constant,
+          passed in as `scatter`; no scatter known -> no band, and the note says so. The retired
+          model's log-space 1.26 (`MODELED_LSB_SIGMA_FOLD`) is gone;
       (4) FAIL-CLOSED: with no modeled timeline AND no frozen per-participant model (participant=None),
           the population-constant last resort having been retired 2026-06-28, the helper returns None
           (indeterminate) rather than a population-average guess — for ANY cut-point or center freq;
       (5) with neither modeled points nor a cut-point, the helper honestly returns None."""
     from modules.Biomarkers import bravo_service as bs
-    sigma = analytics.MODELED_LSB_SIGMA_FOLD     # ≈1.26
+    assert not hasattr(analytics, "MODELED_LSB_SIGMA_FOLD")
 
-    # Signature is now (thr_lsb, modeled_thr, n_modeled, center_hz, percentile): the cut-point is no
-    # longer passed — the caller models the LSB line off raw TD at the ROC band and passes the
-    # percentile-anchored value in as modeled_thr (the single units-consistent modeled tier).
+    # Signature: (thr_lsb, modeled_thr, n_modeled, center_hz, percentile, scatter=None): the caller
+    # models the LSB line off raw TD at the ROC band and passes the percentile-anchored value in as
+    # modeled_thr (the single units-consistent modeled tier).
 
     # (1) measured native threshold present -> estimate never built
     assert bs._modeled_lsb_threshold_estimate(123.0, 200.0, 12, 20.0, 70.0) is None
 
-    # (2)+(3) TIER 1: a modeled-timeline value present -> modeled_timeline tier, ±1σ band
-    r1 = bs._modeled_lsb_threshold_estimate(None, 210.0, 15, 20.0, 70.0)
+    # (2)+(3) TIER 1: a modeled-timeline value present -> modeled_timeline tier, the blocks' band
+    sc = {"frac": 0.05, "mad": 17.3, "n": 133, "rule": "1 MAD of the raw ratio LSB / uV^2 over the kept blocks"}
+    r1 = bs._modeled_lsb_threshold_estimate(None, 210.0, 15, 20.0, 70.0, scatter=sc)
     assert r1["tier"] == "modeled_timeline" and r1["estimated_upper_lsb"] == 210.0
-    assert abs(r1["estimated_upper_lsb_lo"] - round(210.0 / sigma, 1)) < 0.2
-    assert abs(r1["estimated_upper_lsb_hi"] - round(210.0 * sigma, 1)) < 0.2
+    assert r1["estimated_upper_lsb_lo"] == round(210.0 * 0.95, 1)
+    assert r1["estimated_upper_lsb_hi"] == round(210.0 * 1.05, 1)
+    assert r1["scatter_frac"] == 0.05 and r1["scatter_n_blocks"] == 133 and "sigma_fold" not in r1
+    assert "1 MAD" in r1["note"] and "133" in r1["note"]
     assert r1["freq_extrapolated"] is False        # 20 Hz is in the validated range
-    assert r1["k_effective"] == analytics.LSB_PER_UV2_TRANSFORM   # timeline runs transform×352.62
+    assert r1["k_effective"] == analytics.LSB_PER_UV2_TRANSFORM
     assert r1["slope_b"] is None                   # no proportional-fit slope applied at read time
+    # no scatter known -> the value alone, no band, and the note says why
+    r0 = bs._modeled_lsb_threshold_estimate(None, 210.0, 15, 20.0, 70.0)
+    assert r0["estimated_upper_lsb_lo"] is None and r0["estimated_upper_lsb_hi"] is None
+    assert r0["scatter_frac"] is None and "no calibration blocks" in r0["note"]
 
     # (4) FAIL-CLOSED: no modeled value (modeled_thr=None, e.g. no TD for the channel) -> indeterminate
     #     (None), regardless of whether the center is in/out of the validated range.
@@ -1673,8 +1683,8 @@ def test_transform_centered_window_clip_dont_slide_contract():
 def test_transform_50pct_overlap_window_count_and_variance_only_shift():
     """The deployed sweep slides the 1 s window at 0.5 s (50% overlap): 59 windows over a full 30 s vs
     30 non-overlapping. Overlap changes only the number of windows the median is taken over (a variance
-    reduction), so on a stationary signal the band power barely moves — well under the 1.26× calibration
-    scatter (the live-RCS08 check measures the real-data shift; this pins the synthetic invariant)."""
+    reduction), so on a stationary signal the band power barely moves: under 5% (the live-RCS08 check
+    measures the real-data shift; this pins the synthetic invariant)."""
     sr = 250.0
     step = int(round(sr * analytics.TRANSFORM_STEP_SECONDS))     # 125 = 0.5 s
     win = int(round(sr * analytics.TRANSFORM_WIN_SECONDS))       # 250 = 1 s
@@ -1686,7 +1696,7 @@ def test_transform_50pct_overlap_window_count_and_variance_only_shift():
     no = analytics.td_transform_band_power(sig, sr, 22.5)                       # non-overlap
     ov = analytics.td_transform_band_power(sig, sr, 22.5, step_samples=step)    # 50% overlap
     fold = max(no / ov, ov / no)
-    assert fold < analytics.MODELED_LSB_SIGMA_FOLD, fold       # « 1.26× scatter
+    assert fold < 1.05, fold
 
 
 def test_modeled_transform_point_stays_flagged_native_preferred():

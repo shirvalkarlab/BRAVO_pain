@@ -6151,7 +6151,27 @@ def _sensing_hz_for_pd(pd_rec, contact):
         return None
 
 
-def _modeled_lsb_threshold_estimate(thr_lsb, modeled_thr, n_modeled, center_hz, percentile):
+def _calibration_scatter(participant_uid):
+    """The calibration blocks' own raw scatter for the band either side of a MODELLED threshold
+    (ruling A2, the PI, 2026-09-21): {frac, mad, n, rule} from `calibration.transform_k` on this
+    participant's paired blocks, or None when the participant has no block table. Replaces the
+    deleted June model's fixed log-space 1.26 fold. Swallows its own errors: a missing scatter
+    costs the band, never the threshold."""
+    try:
+        from .routines import calibration as _cal
+        P = models.Participant.find(uid=participant_uid)
+        code = (getattr(P, "code", None) or getattr(P, "name", None) or participant_uid) if P is not None else participant_uid
+        fit = _cal.transform_k(_cal.load_blocks(code), target="all")
+        if not fit.get("scatter_mad_frac"):
+            return None
+        return {"frac": float(fit["scatter_mad_frac"]), "mad": float(fit["scatter_mad"]),
+                "n": int(fit["n"]), "rule": _cal.SCATTER_RULE}
+    except Exception as e:                                       # noqa: BLE001
+        _log.info("Biomarkers: no calibration scatter for %s (%s)", participant_uid, e)
+        return None
+
+
+def _modeled_lsb_threshold_estimate(thr_lsb, modeled_thr, n_modeled, center_hz, percentile, scatter=None):
     """Shared modeled-LSB fallback (audit: deployment_fallback).
 
     When the device never sensed THIS (channel, band) long enough to read a deployable threshold
@@ -6193,12 +6213,22 @@ def _modeled_lsb_threshold_estimate(thr_lsb, modeled_thr, n_modeled, center_hz, 
         if fextrap:
             note += (" EXTRAPOLATED: outside the validated %.1f–%.1f Hz range." % (
                 analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI))
-        sigma = analytics.MODELED_LSB_SIGMA_FOLD
+        # The band either side: the calibration blocks' own raw scatter (ruling A2), or no band.
+        if scatter and scatter.get("frac"):
+            frac = float(scatter["frac"])
+            lo, hi = round(modeled_thr * (1.0 - frac), 1), round(modeled_thr * (1.0 + frac), 1)
+            note += (" The band either side is %.0f%% of the value: %s (%d blocks)."
+                     % (100.0 * frac, scatter.get("rule", "the calibration scatter"), int(scatter.get("n") or 0)))
+        else:
+            frac = lo = hi = None
+            note += " No band is drawn: no calibration blocks for this participant, so the scatter is unknown."
         thr_estimate = {
             "estimated_upper_lsb": modeled_thr,
-            "estimated_upper_lsb_lo": round(modeled_thr / sigma, 1),
-            "estimated_upper_lsb_hi": round(modeled_thr * sigma, 1),
-            "sigma_fold": round(float(sigma), 3),
+            "estimated_upper_lsb_lo": lo,
+            "estimated_upper_lsb_hi": hi,
+            "scatter_frac": (round(frac, 4) if frac is not None else None),
+            "scatter_n_blocks": (int(scatter.get("n") or 0) if scatter else None),
+            "scatter_rule": (scatter.get("rule") if scatter else None),
             "tier": "modeled_timeline", "k_effective": analytics.LSB_PER_UV2_TRANSFORM,
             "slope_b": None, "model_center_hz": center_hz,
             "r2": None, "n_modeled_points": n_modeled,
@@ -6333,7 +6363,8 @@ def band_lsb_and_power(request_data):
         # never as a measured value (audit C8 fail-closed: a modeled value is for PLANNING, not a
         # measured prerequisite).
         thr_estimate = _modeled_lsb_threshold_estimate(
-            thr_lsb, modeled_thr, n_modeled, center_hz, percentile)
+            thr_lsb, modeled_thr, n_modeled, center_hz, percentile,
+            scatter=_calibration_scatter(core["participant_uid"]))
         n_band = int(band_lsb_vals.size) if band_lsb_vals is not None else 0
         if thr_estimate is not None:
             threshold_lsb = {
@@ -6343,7 +6374,9 @@ def band_lsb_and_power(request_data):
                 "upper_lsb": thr_estimate["estimated_upper_lsb"], "lower_lsb": None,
                 "upper_lsb_lo": thr_estimate["estimated_upper_lsb_lo"],
                 "upper_lsb_hi": thr_estimate["estimated_upper_lsb_hi"],
-                "sigma_fold": thr_estimate["sigma_fold"],
+                "scatter_frac": thr_estimate["scatter_frac"],
+                "scatter_n_blocks": thr_estimate["scatter_n_blocks"],
+                "scatter_rule": thr_estimate["scatter_rule"],
                 "percentile": (round(percentile, 1) if percentile is not None else None),
                 "n_timeline_samples": n_band,
                 "n_modeled_points": thr_estimate.get("n_modeled_points", n_modeled),
@@ -6615,7 +6648,8 @@ def deployment_summary(request_data):
     # have modeled LSB sources. Delegate to the SHARED ladder so this path can never drift from the
     # per-panel LSB readout (band_lsb_and_power) which calls the identical helper.
     thr_estimate = _modeled_lsb_threshold_estimate(
-        thr_lsb, modeled_thr, n_modeled, center_hz, percentile)
+        thr_lsb, modeled_thr, n_modeled, center_hz, percentile,
+        scatter=_calibration_scatter(core["participant_uid"]))
 
     # Native-vs-modeled cross-check: REMOVED 2026-06-28 with the k=269 population constant. It compared
     # the measured Timeline LSB against lsb_from_uv2(cutpoint, k=269); with k=269 retired there is no

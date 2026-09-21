@@ -2150,9 +2150,10 @@ COMPATIBLE_THRESHOLD_MODES = tuple(m for m, v in THRESHOLD_MODES.items()
 # threshold is now returned as indeterminate (fail-closed) rather than a population-average guess.
 # 146 nV/LSB (ADC_NV_PER_LSB) remains the exact time-domain count scale — a DISTINCT quantity from the
 # power-domain band-power LSB the conversion routes above produce.
-MODELED_LSB_SIGMA_FOLD = 1.26          # 1σ multiplicative scatter of the modeled-LSB conversion (±band
-                                       # on TIER-1/TIER-2 estimates; per-participant resid_log_sigma_fold
-                                       # overrides it when the frozen model carries one)
+# The band drawn either side of a MODELLED threshold used to be a fixed 1.26 fold here: the June
+# model's log-space scatter, kept after the model itself was deleted (218). Since 2026-09-21
+# (ruling A2) it is the calibration blocks' own raw scatter, read per participant from
+# `routines/calibration.py` (`SCATTER_RULE`); no constant lives here.
 # Frequency range over which the PSD→LSB gain is actually calibrated on RCS08 paired blocks.
 # Outside this range the conversion (whether the population k or a per-band model intercept) is an
 # UNTESTED EXTRAPOLATION — the device gain anchor is not band-flat (it falls ≈0.80 log10/decade

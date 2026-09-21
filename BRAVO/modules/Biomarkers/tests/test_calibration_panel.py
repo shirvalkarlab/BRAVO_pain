@@ -133,6 +133,46 @@ def test_the_committed_band_refit_and_its_log_log_fit_are_gone():
     assert "'queryPsdLsbConversion'" not in urls
 
 
+def test_the_recipe_reports_a_raw_interval_a_raw_scatter_band_and_a_raw_proportionality_check():
+    """The PI, 2026-09-21 (ruling C1): the constant's uncertainty in the same raw units, never a
+    log. A planted proportional law LSB = 300 * uV^2 with multiplicative scatter of about 5%:
+    the bootstrap interval on the median ratio covers 300, the 1-MAD band is a few percent of
+    the constant, and the ratio does not change with the power level (Spearman near 0, p large).
+    A planted law that BENDS (LSB grows as the square root of power) fails the check."""
+    rng = np.random.default_rng(3)
+    P = rng.gamma(2.0, 0.5, 120)
+    L = 300.0 * P * (1.0 + 0.05 * rng.standard_normal(120))
+    rows = [dict(existing_uv2=float(p), target_lsb_all=float(l), n_td_samples=2500.0, sample_rate_hz=250.0,
+                 n_lfp_points_all=10.0, n_lfp_points_off=10.0) for p, l in zip(P, L)]
+    fit = C.transform_k(rows, target="all")
+    lo, hi = fit["k_interval"]
+    assert lo < 300.0 < hi and hi - lo < 30.0, fit["k_interval"]
+    assert fit["k_interval_method"].startswith("bootstrap")
+    assert 0.0 < fit["scatter_mad"] < 0.10 * fit["k"]              # 1 MAD of the raw ratio, in LSB per uV^2
+    assert 0.0 < fit["scatter_mad_frac"] < 0.10
+    pr = fit["proportionality"]
+    assert set(pr) >= {"spearman_rho", "p", "n", "holds", "sentence"}
+    assert abs(pr["spearman_rho"]) < 0.25 and pr["p"] > 0.01 and pr["holds"] is True
+    assert "does not change with the power level" in pr["sentence"]
+    bent = [dict(r, target_lsb_all=float(300.0 * np.sqrt(r["existing_uv2"]))) for r in rows]
+    fb = C.transform_k(bent, target="all")
+    assert fb["proportionality"]["holds"] is False and fb["proportionality"]["p"] < 1e-6
+    assert "changes with the power level" in fb["proportionality"]["sentence"]
+    # too few blocks: the fields exist and say so, nothing raises
+    few = C.transform_k(rows[:2], target="all")
+    assert few["k_interval"] is None and few["proportionality"] is None
+
+
+def test_the_live_recipe_carries_the_raw_uncertainty_and_the_panel_payload_serves_it():
+    fit = C.transform_k(C.load_blocks("RCS08"), target="all")
+    assert fit["k_interval"] is not None and fit["k_interval"][0] < fit["k"] < fit["k_interval"][1]
+    assert fit["scatter_mad"] > 0 and fit["proportionality"]["n"] == fit["n"] == 133
+    t = _payload()["transform"]
+    for key in ("k_interval", "k_interval_method", "scatter_mad", "scatter_mad_frac", "proportionality"):
+        assert key in t, key
+    assert t["k_interval"] == [round(x, 6) for x in fit["k_interval"]] or t["k_interval"] == list(fit["k_interval"])
+
+
 if __name__ == "__main__":
     import traceback
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

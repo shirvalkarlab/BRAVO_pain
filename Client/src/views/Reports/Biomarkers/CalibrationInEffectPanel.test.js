@@ -62,6 +62,11 @@ describe("the calibration-in-effect panel, on the served RCS08 payload", () => {
     expect(text).toMatch(/1 µV² = 345\.59 LSB/);
     expect(text).toMatch(/133 blocks/);
     expect(text).toMatch(/r = 0\.99/);
+    // ruling C1 (the PI, 2026-09-21): the constant's uncertainty in raw units, from the payload
+    expect(text).toMatch(/95% interval 339\.4–350\.7/);
+    expect(text).toMatch(/1 MAD of the ratio is 18\.6 LSB per µV² \(5% of the constant\)/);
+    expect(text).toMatch(/does not change with the power level over the 133 kept blocks/);
+    expect(text).toMatch(/Spearman's rho -0\.02, p = 0\.78/);
     expect(text).toMatch(/at least 3 s of signal and 6 device readings/);
     expect(text).toMatch(/5 MAD/);
     // the June reference the table reproduces, and how many blocks are new since
@@ -86,6 +91,13 @@ describe("the calibration-in-effect panel, on the served RCS08 payload", () => {
         expect(layout[k].type).not.toBe("log");
       });
       expect(traces.length).toBeGreaterThan(0);
+    });
+    // the blocks figure draws the 1-MAD band either side of the line in effect
+    const [, blockTraces] = Plotly.react.mock.calls[0];
+    const band = blockTraces.filter((t) => /1 MAD/.test(t.name || ""));
+    expect(band.length).toBe(2);
+    band.forEach((t) => { expect(t.mode).toBe("lines"); expect(t.line.dash).toBe("dot"); });
+    [1, 2].forEach(() => {
     });
     // figure 1: the 170 blocks, kept blocks separated from gated and flagged ones, and the line
     const [, blockTraces] = Plotly.react.mock.calls[0];

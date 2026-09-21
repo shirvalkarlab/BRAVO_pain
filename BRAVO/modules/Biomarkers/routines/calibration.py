@@ -147,14 +147,27 @@ def block_status(rows, *, target="all", gate=True, mad_rule=True,
     return status
 
 
+#: The scatter of the calibration, in the constant's own units: 1 MAD of the raw ratio over the
+#: kept blocks. It is the band the Closed-Loop page draws either side of a MODELLED threshold
+#: (ruling A2, the PI, 2026-09-21), replacing the deleted June model's log-space 1.26 fold.
+SCATTER_RULE = "1 MAD of the raw ratio LSB / uV^2 over the kept blocks"
+N_BOOT = 2000
+PROPORTIONALITY_ALPHA = 0.01
+
+
 def transform_k(rows, *, target="all", gate=True, mad_rule=True,
-                min_td_seconds=MIN_TD_SECONDS, min_lfp_points=MIN_LFP_POINTS):
+                min_td_seconds=MIN_TD_SECONDS, min_lfp_points=MIN_LFP_POINTS, n_boot=N_BOOT):
     """The proportional constant k = median(LSB / uV^2) over the blocks, with its fit statistics.
 
     `target` is "all" (every device reading in the block) or "off" (stim-off readings only).
     `gate=False, mad_rule=False` is the lab's reference recipe; both on is the adopted one.
     Returns a dict: k, n, r (Pearson, raw scale), rmse_lsb, median_fold_error, n_before_gate,
-    n_after_gate, n_flagged_by_rule, gate, outlier_rule, target.
+    n_after_gate, n_flagged_by_rule, gate, outlier_rule, target, and (ruling C1, the PI,
+    2026-09-21, every one in raw units, never a log) k_interval (95% bootstrap interval on the
+    median ratio, `n_boot` resamples, seed 0), scatter_mad (1 MAD of the raw ratio over the kept
+    blocks, in LSB per uV^2) with scatter_mad_frac (the same as a fraction of k), and
+    proportionality (does the ratio change with the power level: Spearman's rho of the ratio
+    against uV^2 with its p; `holds` when p >= 0.01).
     """
     col = f"target_lsb_{target}"
     status = block_status(rows, target=target, gate=gate, mad_rule=mad_rule,
@@ -169,7 +182,9 @@ def transform_k(rows, *, target="all", gate=True, mad_rule=True,
            "gate": ({"min_td_seconds": float(min_td_seconds), "min_lfp_points": int(min_lfp_points)}
                     if gate else None),
            "outlier_rule": OUTLIER_RULE if mad_rule else None,
-           "k": None, "r": None, "rmse_lsb": None, "median_fold_error": None}
+           "k": None, "r": None, "rmse_lsb": None, "median_fold_error": None,
+           "k_interval": None, "k_interval_method": None, "scatter_mad": None,
+           "scatter_mad_frac": None, "scatter_rule": SCATTER_RULE, "proportionality": None}
     if P.size < 3:
         return out
     ratio = L / P
@@ -179,7 +194,37 @@ def transform_k(rows, *, target="all", gate=True, mad_rule=True,
     out["r"] = float(np.corrcoef(P, L)[0, 1])
     out["rmse_lsb"] = float(np.sqrt(np.mean((L - pred) ** 2)))
     out["median_fold_error"] = float(np.median(np.maximum(pred / L, L / pred)))
+    out.update(raw_uncertainty(P, L, n_boot=n_boot))
     return out
+
+
+def raw_uncertainty(P, L, *, n_boot=N_BOOT, seed=0):
+    """The constant's uncertainty from the kept pairs, in raw units (ruling C1): a 95% bootstrap
+    percentile interval on the median ratio, 1 MAD of the ratio, and whether the ratio changes
+    with the power level (Spearman's rho of ratio against uV^2). Every quantity is on the raw
+    ratio; no logarithm."""
+    from scipy import stats
+    P = np.asarray(P, float); L = np.asarray(L, float)
+    ratio = L / P
+    n = int(ratio.size)
+    k = float(np.median(ratio))
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, n, size=(int(n_boot), n))
+    meds = np.median(ratio[idx], axis=1)
+    lo, hi = (float(v) for v in np.percentile(meds, [2.5, 97.5]))
+    mad = float(np.median(np.abs(ratio - k)))
+    rho, p = stats.spearmanr(P, ratio)
+    rho = float(rho); p = float(p)
+    holds = bool(np.isfinite(p) and p >= PROPORTIONALITY_ALPHA)
+    sentence = (f"The ratio does not change with the power level over the {n} kept blocks "
+                f"(Spearman's rho {rho:+.2f}, p = {p:.2g}), so one constant fits."
+                if holds else
+                f"The ratio changes with the power level over the {n} kept blocks "
+                f"(Spearman's rho {rho:+.2f}, p = {p:.2g}): one constant does not describe every level.")
+    return {"k_interval": [lo, hi], "k_interval_method": f"bootstrap percentile, {int(n_boot)} resamples, seed {seed}",
+            "scatter_mad": mad, "scatter_mad_frac": (mad / k if k else None),
+            "proportionality": {"spearman_rho": rho, "p": p, "n": n, "holds": holds,
+                                "alpha": PROPORTIONALITY_ALPHA, "sentence": sentence}}
 
 
 def bridge_pairs_path(participant, date=None):
@@ -269,6 +314,11 @@ def panel_payload(participant, *, deployed_k, deployed_bridge_ratio, deployed_br
     transform = dict(fit)
     transform["k"] = _finite(fit["k"]); transform["r"] = _finite(fit["r"])
     transform["rmse_lsb"] = _finite(fit["rmse_lsb"]); transform["median_fold_error"] = _finite(fit["median_fold_error"])
+    transform["scatter_mad"] = _finite(fit["scatter_mad"]); transform["scatter_mad_frac"] = _finite(fit["scatter_mad_frac"])
+    transform["k_interval"] = [_finite(v) for v in fit["k_interval"]] if fit["k_interval"] else None
+    if fit["proportionality"]:
+        transform["proportionality"] = dict(fit["proportionality"], spearman_rho=_finite(fit["proportionality"]["spearman_rho"]),
+                                            p=_finite(fit["proportionality"]["p"]))
     transform["blocks"] = blocks
     transform["june_reference"] = {"k": _finite(june["k"]), "n": june["n"], "r": _finite(june["r"]),
                                    "last_date": JUNE_REFERENCE_LAST_DATE}
