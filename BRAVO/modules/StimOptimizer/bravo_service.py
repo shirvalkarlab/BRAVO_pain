@@ -1832,6 +1832,56 @@ def _pain_relationship_key(mapping, block):
                              for ch, cs in sorted(mapping.items())))
 
 
+def attach_harmonic_warnings(cells, *, selected=None) -> dict:
+    """Put the harmonic rule on every readiness row as a WARNING and summarise it for the screen
+    (the PI, 2026-09-21: a warning, not blocking).
+
+    Per row (decision 199's three fields kept by name): `qualifying_near_stim_harmonic_hz`,
+    `qualifying_clear_of_stim_harmonics_hz`, `stim_harmonic_notes`; new: `harmonic_only` (usable
+    and every qualifying band on a harmonic) and `harmonic_warning` (the sentence, else None),
+    `harmonic_note` (a clear band beside a harmonic one). `deployable` is read, never written.
+    Returns the screen's summary: how many usable cells rest on harmonic bands alone, which,
+    whether the selected best is one of them, and one sentence for the page when any do.
+    """
+    from . import titration_plan as _tp
+    only_cells, n_usable = [], 0
+    for c in cells:
+        q = [float(x) for x in (c.get("qualifying_centers_hz") or [])]
+        usable = c.get("deployable") is True
+        n_usable += int(usable)
+        try:
+            h = _tp.harmonic_warning(float(c.get("rate_hz")), q, usable=usable)
+        except Exception:                                  # noqa: BLE001 -- information only
+            h = {"near_hz": [], "clear_hz": list(q), "notes": {}, "only_through_harmonics": False,
+                 "warning": None, "note": None}
+        c["qualifying_near_stim_harmonic_hz"] = list(h["near_hz"])
+        c["qualifying_clear_of_stim_harmonics_hz"] = list(h["clear_hz"])
+        c["stim_harmonic_notes"] = dict(h["notes"])
+        c["harmonic_only"] = bool(h["only_through_harmonics"])
+        c["harmonic_warning"] = h["warning"]
+        c["harmonic_note"] = h["note"]
+        if h["only_through_harmonics"]:
+            only_cells.append({"channel": c.get("channel"), "hemisphere": c.get("hemisphere"),
+                               "rate_hz": _jsonable(c.get("rate_hz"))})
+    sel_only = False
+    if selected is not None:
+        sel_only = any(o["channel"] == selected.get("channel")
+                       and o["hemisphere"] == selected.get("hemisphere")
+                       and float(o["rate_hz"] or 0) == float(selected.get("rate_hz") or 0)
+                       for o in only_cells)
+    sentence = None
+    if only_cells:
+        sentence = (f"Warning: {len(only_cells)} of {n_usable} usable combination"
+                    f"{'s' if n_usable != 1 else ''} qualif{'y' if len(only_cells) != 1 else 'ies'} "
+                    f"only through bands on a stimulator harmonic, where a fall with current may be "
+                    f"the stimulator and not the brain"
+                    + (", and the best combination is one of them" if sel_only else "")
+                    + ". They stay usable: by the PI's ruling of 2026-09-21 this is a warning, not a refusal.")
+    return {"n_usable": int(n_usable), "n_usable_only_through_harmonics": len(only_cells),
+            "cells_only_through_harmonics": only_cells,
+            "selected_only_through_harmonics": bool(sel_only), "sentence": sentence}
+
+
 def closed_loop_readiness(participant, es, *, include=True, inputs=None, screen_out=None,
                           ceilings=None, pain_positive_by_channel=None, pain_block=None,
                           in_force=None) -> dict:
@@ -1889,27 +1939,19 @@ def closed_loop_readiness(participant, es, *, include=True, inputs=None, screen_
         else:
             shown = screen
         cells = _frame_records(shown, limit=30)
-        from . import titration_plan as _tp
         for c in cells:
             c.update(sensing_display(c.get("channel")))
-            # Which qualifying bands sit on the stimulator's own harmonics at this cell's rate
-            # (the titration card's rule, decision 146: |250 - rate|, rate/2, rate/4, 3 rate/4,
-            # within 2.5 Hz). Information beside the row, not a condition of the rule: a band
-            # at 27.5 Hz under 55 Hz stimulation is half the rate, and a fall in it with
-            # current may be the stimulator, not the brain. His call whether it should refuse.
-            q = [float(x) for x in (c.get("qualifying_centers_hz") or [])]
-            try:
-                h = _tp.harmonic_avoidance(float(c["rate_hz"]), centres_hz=q) if q else None
-            except Exception:                              # noqa: BLE001 -- information only
-                h = None
-            c["qualifying_near_stim_harmonic_hz"] = list(h["avoid_hz"]) if h else []
-            c["qualifying_clear_of_stim_harmonics_hz"] = list(h["clear_hz"]) if h else list(q)
-            c["stim_harmonic_notes"] = dict(h["avoid_reasons"]) if h else {}
         selected = None
         if le.selected_key:
             selected = {"channel": le.selected_key[0], "hemisphere": le.selected_key[1],
                         "rate_hz": float(le.selected_key[2])}
             selected.update(sensing_display(le.selected_key[0]))
+        # The harmonic rule as a warning on every row and on the screen (the PI, 2026-09-21):
+        # a usable cell whose qualifying bands ALL sit on a stimulator harmonic is flagged and
+        # counted; `deployable` is not touched.
+        harmonic = attach_harmonic_warnings(cells, selected=selected)
+        if selected is not None:
+            selected["harmonic_only"] = harmonic["selected_only_through_harmonics"]
         return {
             "available": True,
             "ready": bool(le.selected is not None),
@@ -1930,6 +1972,8 @@ def closed_loop_readiness(participant, es, *, include=True, inputs=None, screen_
             # Only the cells with something on them: the full screen is mostly cells with no
             # response, which is not what a reader needs to see first.
             "responding_cells": cells,
+            # The harmonic rule as a warning, never a refusal (the PI, 2026-09-21).
+            "harmonic_warning": harmonic,
             # The pain half of the rule, per contact, with the score and stamp of the grid it
             # was read from (decision 199).
             "pain_relationship": _jsonable(dict(pain_block or {})),

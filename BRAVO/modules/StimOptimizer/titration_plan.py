@@ -327,6 +327,44 @@ def harmonic_avoidance(rate_hz, *, centres_hz=CENTRES_HZ, half_width_hz=HARMONIC
 # ---------------------------------------------------------------------------------------------
 # what the record holds today on a contact, from the two stored tables
 # ---------------------------------------------------------------------------------------------
+
+def harmonic_warning(rate_hz, qualifying_centers_hz, *, usable) -> dict:
+    """The harmonic rule on the readiness screen as a WARNING, never a refusal (the PI,
+    2026-09-21: "put a warning for the harmonic rule, but don't make it blocking").
+
+    A qualifying band (falls with current, rises with pain; decision 199) that sits within
+    `HARMONIC_HALF_WIDTH_HZ` of a stimulator harmonic at this rate may be measuring the
+    stimulator rather than the brain. When a usable cell qualifies ONLY through such bands the
+    warning fires; when at least one qualifying band is clear of every harmonic it is a note;
+    a cell that is not usable gets the information and no warning. `usable` is read, never
+    returned: the caller's `deployable` is untouched by design.
+    """
+    q = [float(x) for x in (qualifying_centers_hz or [])]
+    if not q:
+        return {"near_hz": [], "clear_hz": [], "notes": {}, "only_through_harmonics": False,
+                "warning": None, "note": None}
+    h = harmonic_avoidance(float(rate_hz), centres_hz=q)
+    near, clear, notes = list(h["avoid_hz"]), list(h["clear_hz"]), dict(h["avoid_reasons"])
+    only = bool(usable) and bool(near) and not clear
+    fmt = lambda xs: ", ".join(f"{x:g}" for x in xs)  # noqa: E731
+    warning = note = None
+    if only:
+        warning = (f"Warning: this combination qualifies only through bands on a stimulator "
+                   f"harmonic at {float(rate_hz):g} Hz ({fmt(near)} Hz: "
+                   + "; ".join(notes[f"{x:g}"] for x in near)
+                   + "). A fall there with current may be the stimulator, not the brain. It stays "
+                   f"usable: by the PI's ruling of 2026-09-21 this is a warning, not a refusal.")
+    elif near and clear:
+        note = (f"{fmt(near)} Hz sits on a stimulator harmonic at {float(rate_hz):g} Hz; "
+                f"{fmt(clear)} Hz is clear, so the combination does not rest on the harmonic band alone.")
+    elif near:
+        # every qualifying band on a harmonic, but the cell is not usable for another reason
+        note = (f"every qualifying band ({fmt(near)} Hz) sits on a stimulator harmonic at "
+                f"{float(rate_hz):g} Hz; the combination is not usable for the reason given, so the "
+                f"harmonic warning does not apply to it today.")
+    return {"near_hz": near, "clear_hz": clear, "notes": notes, "only_through_harmonics": only,
+            "warning": warning, "note": note}
+
 def record_today_for_contact(pooled, run_points, channel, *, lo_hz=None, hi_hz=None) -> dict:
     """What the stored tables say the record holds for one sensing contact: the pooled table's
     largest point count over the band centres inside [lo_hz, hi_hz] with its run count and the

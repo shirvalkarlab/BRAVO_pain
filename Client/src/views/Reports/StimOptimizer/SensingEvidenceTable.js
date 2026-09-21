@@ -5,7 +5,10 @@
  * decision 199, 2026-09-17: one such band makes the combination usable), the currents tested,
  * the capture separation, and whether the combination is usable -- as numbers and symbols, the
  * reasons one click away. A qualifying band that sits on the stimulator's own harmonic at that
- * rate is marked, because a fall in it with current may be the stimulator and not the brain.
+ * rate is marked, because a fall in it with current may be the stimulator and not the brain;
+ * since 2026-09-21 (the PI's ruling) a usable row that rests on such bands ALONE carries a
+ * warning printed in full under the row, the screen prints one sentence counting those rows,
+ * and nothing about it blocks: the tick stays.
  *
  * Added 2026-09-12 (page redesign, phase 3). Replaces the "Closed-loop readiness (Adaptive
  * Therapy)" table, which printed the contact pair by its raw key ("ONE_THREE_LEFT" -- the contact
@@ -108,6 +111,13 @@ export default function SensingEvidenceTable({ closedLoop }) {
             : `Current limit ${fmtMa(cl.amp_hard_limit_mA)}.`}`}
       </MDTypography>
 
+      {cl.harmonic_warning && cl.harmonic_warning.sentence && (
+        <MDTypography variant="caption" component="div" data-testid="harmonic-screen-warning"
+          sx={{ ...SMALL, fontSize: TYPE.body, mt: 0.6, color: PAL.warnText, fontWeight: 600 }}>
+          {cl.harmonic_warning.sentence}
+        </MDTypography>
+      )}
+
       {rows.length > 0 && (
         <MDBox mt={1.5} sx={{ overflowX: "auto" }}>
           <MDBox sx={{ display: "grid", gridTemplateColumns: COLUMNS, columnGap: "12px", rowGap: "10px",
@@ -146,15 +156,26 @@ export default function SensingEvidenceTable({ closedLoop }) {
                 </MDBox>,
                 <span key={`${i}-f`} style={MONO}>{`${fmtMa(c.amp_low_mA).replace(" mA", "")}–${fmtMa(c.amp_high_mA)}`}</span>,
                 <span key={`${i}-g`} style={MONO}>{num(c.median_separation_d) === null ? "—" : num(c.median_separation_d).toFixed(2)}</span>,
-                <Tooltip key={`${i}-h`} title={usable ? "usable for closed loop" : "not usable for closed loop"}>
-                  <span style={{ display: "inline-flex" }}>{usable ? <TickGlyph label="usable" size={18} /> : <CrossGlyph label="not usable" size={18} />}</span>
-                </Tooltip>,
+                <MDBox key={`${i}-h`} sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}>
+                  <Tooltip title={usable ? "usable for closed loop" : "not usable for closed loop"}>
+                    <span style={{ display: "inline-flex" }}>{usable ? <TickGlyph label="usable" size={18} /> : <CrossGlyph label="not usable" size={18} />}</span>
+                  </Tooltip>
+                  {c.harmonic_only === true && (
+                    <span style={{ ...SMALL, color: PAL.warnText, fontWeight: 600, whiteSpace: "nowrap" }}>warning</span>
+                  )}
+                </MDBox>,
                 <MDBox key={`${i}-i`}>
+                  {c.harmonic_warning ? (
+                    <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, maxWidth: "70ch", color: PAL.warnText }}>{c.harmonic_warning}</MDTypography>
+                  ) : null}
+                  {c.harmonic_note ? (
+                    <MDTypography variant="caption" component="div" sx={{ ...SMALL, fontSize: TYPE.body, maxWidth: "70ch" }}>{c.harmonic_note}</MDTypography>
+                  ) : null}
                   {reason ? (
                     <SizedFold show="Reason" hide="Hide" dense mt={0}>
                       <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body, maxWidth: "70ch" }}>{reason}</MDTypography>
                     </SizedFold>
-                  ) : <span style={SMALL}>—</span>}
+                  ) : (!c.harmonic_warning && !c.harmonic_note ? <span style={SMALL}>—</span> : null)}
                 </MDBox>,
               ];
             })}
