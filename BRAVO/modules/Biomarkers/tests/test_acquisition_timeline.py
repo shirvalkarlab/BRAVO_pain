@@ -47,14 +47,18 @@ def test_the_acquisition_timeline_is_a_raw_kind_in_the_one_store():
     assert bs._ACQ_TIMELINE_KIND == "acquisition_timeline"
 
 
-def test_the_acquisition_build_carries_no_pain_field_and_the_full_run_build_still_does():
+def test_the_availability_build_carries_no_pain_field_and_the_compute_response_no_availability_block():
+    """The PI, 2026-09-21 (decision 226): the Compute response used to carry the whole timeline
+    payload again (2.7 s of 11-14 s, about 7 MB on RCS08) as a fallback for the two dedicated
+    endpoints; it no longer does, and the builder has no report-dependent path left."""
+    import inspect
     acq = bs._build_availability("NO-SUCH-PARTICIPANT", chronic_list=[], powerdomain_list=[], td_list=[],
-                                 pro_df=None, label_metric="nrs", region_map={}, psd_list=[],
-                                 acquisition_only=True)
+                                 region_map={}, psd_list=[])
     assert set(acq) >= ACQ_KEYS and not (set(acq) & PAIN_KEYS), sorted(acq)
-    full = bs._build_availability("NO-SUCH-PARTICIPANT", chronic_list=[], powerdomain_list=[], td_list=[],
-                                  pro_df=None, label_metric="nrs", region_map={}, psd_list=[])
-    assert set(full) >= ACQ_KEYS | PAIN_KEYS, sorted(full)
+    params = set(inspect.signature(bs._build_availability).parameters)
+    assert not (params & {"pro_df", "label_metric", "acquisition_only", "warm"}), sorted(params)
+    src = inspect.getsource(bs.run_for_participant)
+    assert "_build_availability" not in src and '"availability"' not in src
 
 
 def test_the_timeline_endpoint_reads_no_pain_report_and_takes_no_matching_tolerance():
@@ -99,6 +103,6 @@ def test_the_per_report_band_power_value_is_built_nowhere():
     src = inspect.getsource(bs._build_availability)
     assert "pro_lsb" not in src and "native_lsb_tolerance_s" not in src
     full = bs._build_availability("NO-SUCH-PARTICIPANT", chronic_list=[], powerdomain_list=[], td_list=[],
-                                  pro_df=None, label_metric="nrs", region_map={}, psd_list=[])
+                                  region_map={}, psd_list=[])
     assert "pro_lsb" not in full
     assert "native_lsb_tolerance_s" not in inspect.getsource(bs.run_for_participant)

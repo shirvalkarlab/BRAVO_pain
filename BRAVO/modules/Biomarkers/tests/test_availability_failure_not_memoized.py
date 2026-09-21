@@ -91,7 +91,7 @@ def _real_catch_all_payload(exc):
             raise exc
         bs._build_sensing_config_index = _boom
         return _REAL_BUILD(UID, chronic_list=[], powerdomain_list=[], td_list=[],
-                           pro_df=pd.DataFrame(), label_metric="nrs", region_map={}, psd_list=[])
+                           region_map={}, psd_list=[])
     finally:
         bs._build_sensing_config_index = saved
 

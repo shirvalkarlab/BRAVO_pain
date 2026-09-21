@@ -392,12 +392,10 @@ function Biomarkers() {
       .catch(() => setScanIndexData(null));
   }, [participant_uid, metric]);
 
-  // The object handed to the timeline: prefer the live availability payload; fall back to the
-  // availability embedded in a heavy compute result if the live fetch is unavailable.
-  const timelineData = (availData && availData.availability && availData.availability.records
-    && availData.availability.records.length > 0)
-    ? availData
-    : data;
+  // The object handed to the timeline: the acquisition-timeline endpoint's own payload. Until
+  // 2026-09-21 (decision 226) the Compute response carried a second copy of it as a fallback; a
+  // failed timeline request now shows as one instead of drawing from Compute.
+  const timelineData = availData;
 
   // The points array for the currently-selected pain metric, fed straight into the preview card.
   // The composite metric ("composite_mpq_leftleg") is NOT a raw PRO column returned by
@@ -477,8 +475,7 @@ function Biomarkers() {
   // histogram (which neural data is available to binarize, updating as the slider moves) AND the
   // timeline's binarization color overlay. Counts are verified identical to the backend
   // `matched_sample_counts`. Memoized so dragging an unrelated control doesn't rebuild it.
-  const scanIndex = (scanIndexData && scanIndexData.psd_scan_index)
-    || (data && data.availability && data.availability.psd_scan_index) || null;
+  const scanIndex = (scanIndexData && scanIndexData.psd_scan_index) || null;
   // Debounced copies of every slider-driven input to the heavy matched-scan recompute. The raw
   // states stay live everywhere else (slider thumbs, value labels, the binarization preview's
   // cut-lines and counts); only the expensive scanModel + timeline overlay wait for the drag to
@@ -585,9 +582,9 @@ function Biomarkers() {
                         scanModel={scanModel} colorMode={timelineColorMode}
                         setColorMode={setTimelineColorMode} />
                     </Grid>
-                  ) : (timelineData && timelineData.timeline && timelineData.timeline.length > 0 ? (
+                  ) : (data && data.timeline && data.timeline.length > 0 ? (
                     <Grid item xs={12}>
-                      <BiomarkerTimeline data={timelineData} figureTitle={"BiomarkerTimeline"} />
+                      <BiomarkerTimeline data={data} figureTitle={"BiomarkerTimeline"} />
                     </Grid>
                   ) : (
                     <Grid item xs={12}>

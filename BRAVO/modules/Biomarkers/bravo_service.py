@@ -3702,25 +3702,17 @@ def _window_params_body(request_data, sliding):
 
 
 def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_list,
-                        pro_df, label_metric, region_map, warm=False,
-                        psd_list=None, acquisition_only=False):
+                        region_map, psd_list=None):
     """Assemble the data-availability-timeline payload for the new BiomarkerDataTimeline component.
 
-    Reuses recordings already loaded for the decoder (td/chronic/powerdomain) and additionally loads
-    the PSD-bearing montage/survey products (which the decoder doesn't use). Returns:
-        {records, pain, stim, freq_bands, span}
-    where `records` are per-channel availability records, `pain`/`stim` are the shared-axis series,
+    Reuses recordings already loaded (td/chronic/powerdomain) and additionally loads the
+    PSD-bearing montage/survey products. Returns:
+        {records, stim, freq_bands, span, samples, lsb_overview, events, montage_events}
+    where `records` are per-channel availability records, `stim` is the shared-axis current series,
     `freq_bands` are the categorical legend bands actually present, and `span` is [min_t, max_t].
-    Guarded so any failure yields an empty payload rather than breaking the main timeline response.
-
-    `psd_list`, when the caller already loaded `AVAILABILITY_PSD_TYPES` for this exact
-    participant this request (run_for_participant does, for its own live-matching scan), is used
-    as-is instead of reloading -- one fewer disk-read/decompress/unpickle pass over the same files.
-    Left `None` (the default), this loads it itself exactly as before. Only this one load is reused
-    across the two call sites: the sensing-config index built a few lines below intentionally
-    differs between callers (this function always includes `powerdomain_list`;
-    run_for_participant's own scan index does not), so it is NOT threaded through here -- doing so
-    would change this function's own output instead of merely reusing already-equal work.
+    Guarded so any failure yields an empty payload rather than breaking the timeline response.
+    Its one caller since decision 226 is the acquisition-timeline endpoint; `psd_list` lets a
+    caller that already loaded `AVAILABILITY_PSD_TYPES` pass them in instead of reloading.
     """
     try:
         # td_list is a flat decoded list mixing BrainSenseTimeDomain + IndefiniteStream; the loader
@@ -3770,12 +3762,13 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
             records.sort(key=lambda x: (x["channel"], x["t_start"]))
         except Exception as e:
             _log.warning("Biomarkers: event PSD records failed (%s)", e)
-        # ACQUISITION ONLY (decision 216): the timeline's own build carries nothing derived from a
-        # pain report -- no pain series, no per-report matched values, no rating-centred sample
-        # index -- so it can be keyed on the recording set alone and never rebuilt for a report.
-        # The full-run path keeps the three pain-dependent blocks.
-        pain = ({"metric": label_metric, "t": [], "y": []} if acquisition_only
-                else availability.pain_series(pro_df, label_metric))
+        # ACQUISITION ONLY (decision 216): this build carries nothing derived from a pain report --
+        # no pain series, no per-report matched values, no rating-centred sample index -- so it is
+        # keyed on the recording set alone and never rebuilt for a report. The page reads the pain
+        # row from `/api/queryPainScores` and the sample index from `/api/queryPsdScanIndex`. Until
+        # 2026-09-21 the Compute response built this payload a second time, with those blocks, as a
+        # fallback for the two endpoints (2.7 s and about 7 MB per Compute on RCS08); decision 226
+        # removed it, so a failed timeline request now shows as one instead of drawing from Compute.
         stim = availability.stim_series(chronic_list)
         # REAL inline LSB: the actual per-sample band-power series (streaming ~2 Hz + chronic
         # ~10-min) per channel, each sample tagged with its sensing center freq, so the timeline
@@ -3829,7 +3822,7 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
                      if isinstance(r, dict)]
         montage_events = availability.event_markers(
             _load_montage_psd_events(participant_uid, dedup_times=psd_times))
-        ts = [r["t_start"] for r in records] + pain["t"] + stim["t"] \
+        ts = [r["t_start"] for r in records] + stim["t"] \
             + [e["t"] for e in events.get("events", [])] \
             + [e["t"] for e in montage_events.get("events", [])]
         span = [min(ts), max(ts)] if ts else []
@@ -3847,45 +3840,18 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         # Scan-sample index: the (t, channel, source) of every full-spectrum PSD the exploratory
         # scan pools (same `_MAIN_BIPOLAR` filter as `_assemble_psd_rows`), so the frontend can
         # replicate the nearest-PRO match + binarization LIVE as the match-window slider moves.
-        # PRO times (pain["t"], the finite-metric+time set, == the matrix's pm[0]) are passed so the
-        # TD-streaming index entries are RATING-CENTERED — one per PRO inside a session's coverage,
-        # stamped at the PRO's time — making the live count IDENTICAL to the rating-centered backend
-        # pool (a TD PRO inside coverage matches at offset 0 instead of "no neural match").
-        psd_scan_index = ([] if acquisition_only else
-                          _rating_centred_scan_index(participant_uid, td_all, psd_all, pain, _sensing_idx))
-
-        # Eagerly warm the rating-centered PSD matrix on the background pool, reusing the recordings
-        # already decoded here (td_all/psd_all carry "Data") so NO second .bdat decode happens — the
-        # fix for the "90% CPU across all cores / 45 s blank timeline" stall, where the warm used to
-        # re-decode every recording from the DB through its own 16-worker pool, duplicating this
-        # request's decode and starving the foreground render. Centered on the metric-agnostic PRO set
-        # (stable across metric switches) so the later scan/validation requests hit this exact entry.
-        # Only fired on the timeline (availability) path (warm=True); the full-run path skips it to
-        # avoid racing the scan that writes the same npz.
-        if warm:
-            try:
-                _warm_pro_t = _all_pro_times(pro_df)
-                if _warm_pro_t is not None and _warm_pro_t.size:
-                    _PSD_WARM_POOL.submit(warm_psd_cache, participant_uid, pro_times=_warm_pro_t,
-                                          decoded_td=list(td_all), decoded_psd=list(psd_all))
-            except Exception as e:
-                _log.warning("Biomarkers: PSD cache warm dispatch failed (%s)", e)
-
         out = {"records": records, "stim": stim, "freq_bands": bands,
                "span": span, "samples": samples, "lsb_overview": lsb_overview,
                "events": events, "montage_events": montage_events}
-        if not acquisition_only:
-            out.update({"pain": pain, "psd_scan_index": psd_scan_index})
         return out
     except Exception as e:
         _log.warning("Biomarkers: availability payload failed: %s", e, exc_info=True)
         # The empty payload is MARKED as a failure (review B2): `failed`/`failure` are what stop
         # `_availability_result_cached` from memoizing it and what let the page say "the build
         # failed" rather than "there are no recordings", which is a different fact.
-        return {"records": [], "pain": {"metric": label_metric, "t": [], "y": []},
-                "stim": {"t": [], "y": []}, "freq_bands": [], "span": [], "lsb_overview": {},
-                "events": {"events": [], "n": 0},
-                "montage_events": {"events": [], "n": 0}, "psd_scan_index": [],
+        return {"records": [], "stim": {"t": [], "y": []}, "freq_bands": [], "span": [],
+                "lsb_overview": {}, "events": {"events": [], "n": 0},
+                "montage_events": {"events": [], "n": 0},
                 "failed": True, "failure": repr(e)}
 
 
@@ -3950,8 +3916,7 @@ def availability_for_participant(request_data):
         # routine's input) is dispatched by the sample-index endpoint, which reads the reports.
         built = _build_availability(
             participant_uid, chronic_list=chronic_list, powerdomain_list=powerdomain_list,
-            td_list=td, pro_df=None, label_metric=None, region_map=region_map, warm=False,
-            acquisition_only=True)
+            td_list=td, region_map=region_map)
         return json_compliant_handler(built)
 
     def _build_or_load():
@@ -4235,10 +4200,7 @@ def run_for_participant(request_data):
     # metric-FILTERED PRO set — only ratings with a finite label_metric). So the cache MUST be built
     # from that exact array: _scan_pro_times = pro_match[0] — do not substitute pain["t"] (the
     # metric-AGNOSTIC set the timeline uses) here, or the index would point at the wrong PRO. The
-    # timeline's modeled markers build their OWN cache entry
-    # from pain["t"] in _build_availability under a DIFFERENT signature; the two entries agree on any
-    # shared PRO because the per-rating reader is deterministic in (pro_time, channel, recordings) — the
-    # numbers match by construction, NOT by sharing one memo slot. td_recordings = ALL TD-bearing
+    # td_recordings = ALL TD-bearing
     # products (streaming + montage/survey, 250 Hz); event_psd_blocks = PatientControllerEvent FFT only.
     if _scan_psd_list is None:     # the old loads, kept only for the alternating-round switch
         _scan_psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
@@ -4350,15 +4312,6 @@ def run_for_participant(request_data):
     # "what's set on the device now" against the data-derived recommendation, in the same LFP-power
     # units. Empty dict => no closed-loop program => the frontend draws no programmed line.
     out["programmed_thresholds"] = _programmed_adaptive_thresholds(Participant)
-    # Data-availability timeline payload (new BiomarkerDataTimeline component). Reuses the recordings
-    # already loaded for the decoder + montage/survey PSD products; real pain (REDCap) + stim
-    # (chronic per-sample mA) on the shared time axis. Guarded inside _build_availability.
-    out["availability"] = _build_availability(
-        participant_uid, chronic_list=chronic_list if source in ("powerdomain", "both") else [],
-        powerdomain_list=powerdomain_list, td_list=td, pro_df=pro_df,
-        label_metric=label_metric, region_map=region_map,
-        psd_list=_scan_psd_list)  # already loaded above for the live-matching scan; same
-                                  # participant, same AVAILABILITY_PSD_TYPES -- reuse, don't reload
     # Honesty flag (rigor fix #5): the power-domain detector currently pools all recorded power
     # channels into ONE threshold. If they span >1 anatomical target/hemisphere (e.g. Left GPi +
     # Right medial thalamus) and/or the raw 10-min Chronic vs per-session Power-Domain scales,
