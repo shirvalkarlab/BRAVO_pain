@@ -593,6 +593,12 @@ function ScatterStatsLine({ cell, pinnedCell, sw }) {
     <MDBox>
       <MDTypography variant="caption" color="dark" sx={{ fontSize: 15, display: "block", mb: 0.25 }}>
         {`Pearson r = ${num(r, 3)}, p = ${fmtP(p)}, n = ${n} (uncorrected)`}
+        {(() => {
+          // The scatter and the line below are fitted to these same n pairs; the clinic-sheet
+          // ratings among them (decision 186) are drawn hollow and counted here.
+          const nSheet = cell.points.filter((pt) => pt.from_clinic_sheet).length;
+          return nSheet ? <span style={{ fontSize: 12, color: "#6A6A6A" }}>{` · ${nSheet} of them clinic-sheet scores (hollow points)`}</span> : null;
+        })()}
       </MDTypography>
       {readout ? (
         <MDTypography variant="caption" sx={{ fontSize: 13, display: "block", mb: 0.5,
@@ -636,16 +642,24 @@ function PlotlyScatter({ divId, cell, pinnedCell, side, metricLabel }) {
 
     const colorFor = (label) => (label === "high" ? (PAL.fail || BIN_HI)
       : (label === "low" ? (PAL.accent || BIN_LO) : "#aaaaaa"));
+    // One trace per class and per source: a rating from the clinic or at-home sheets (decision
+    // 186, when the switch is on) is drawn hollow, so the reader sees which points the sheets
+    // added; the line below is fitted to every point, the same pairs the grid correlated.
     const groups = { high: [], low: [], other: [] };
     points.forEach((pt) => { (groups[pt.label] || groups.other).push(pt); });
     ["high", "low", "other"].forEach((label) => {
-      const pts = groups[label];
-      if (!pts.length) return;
-      fig.traces.push({
-        type: "scatter", mode: "markers", name: label === "high" ? "High pain" : "Low pain",
-        x: pts.map((pt) => pt.power), y: pts.map((pt) => pt.pain), showlegend: false,
-        marker: { size: 5, color: colorFor(label), opacity: 0.75 },
-        hovertemplate: "%{x:.0f} LSB, %{y:.1f}<extra></extra>",
+      [false, true].forEach((sheet) => {
+        const pts = groups[label].filter((pt) => !!pt.from_clinic_sheet === sheet);
+        if (!pts.length) return;
+        fig.traces.push({
+          type: "scatter", mode: "markers", showlegend: false,
+          name: `${label === "high" ? "High pain" : label === "low" ? "Low pain" : "Excluded"}${sheet ? ", clinic sheet" : ""}`,
+          x: pts.map((pt) => pt.power), y: pts.map((pt) => pt.pain),
+          marker: sheet
+            ? { size: 6, color: "rgba(0,0,0,0)", opacity: 0.9, line: { color: colorFor(label), width: 1.5 } }
+            : { size: 5, color: colorFor(label), opacity: 0.75 },
+          hovertemplate: `%{x:.0f} LSB, %{y:.1f}${sheet ? " (clinic sheet)" : ""}<extra></extra>`,
+        });
       });
     });
     fig.traces.push({

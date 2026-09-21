@@ -110,3 +110,61 @@ if __name__ == "__main__":
     test_the_cells_outlier_rule_matches_the_grids_own_rule()
     test_a_cell_with_no_outliers_keeps_every_finite_pair()
     print("All band-time-sweep-cell tests passed.")
+
+
+# ---------------------------------------------------------------------------------------------
+# THE PAIRS BEHIND A CELL ARE THE PAIRS THE GRID CORRELATED, clinic-sheet ratings included
+# (the PI, 2026-09-21: the pinned cell printed Pearson r = -0.033 while the fitted line rose).
+# The grid merges the clinic and at-home sheets' scores into the rating series when the switch
+# is on (decision 186); until this fix the drill-down never read the switch, so its scatter was
+# fitted to the chronic REDCap ratings alone: on RCS08 L 1-3+, 22.5 Hz, 45 s, 10-minute window,
+# reuse off, sheets on, the grid's r was -0.0329 on 172 ratings and the drill-down's +0.1039 on
+# 97. Live on the RCS08 record, so it carries the `live` mark and skips when the participant is
+# absent; pytest is imported only for the mark.
+# ---------------------------------------------------------------------------------------------
+import pytest                                                                     # noqa: E402
+
+live = pytest.mark.live
+
+
+@live
+def test_the_drill_down_returns_the_pairs_the_grid_correlated_sheet_ratings_included():
+    try:
+        from Server import models
+        from Biomarkers import bravo_service as bs
+    except Exception:
+        return
+    uid = "2e3c75c00d7f4f37b53a048d195f11da"
+    try:
+        if models.Participant.find(uid=uid) is None:
+            return
+    except Exception:
+        return
+    base = {"ParticipantId": uid, "SweepMetric": "left_leg_vas", "LabelMetric": "left_leg_vas",
+            "LabelStrategy": "tertile", "MatchToleranceMin": 10, "MatchDirection": "nearest",
+            "AllowWindowReuse": False, "IncludeClinicSheetRatings": True, "MaxPerRating": 3, "RefractoryMin": 2}
+    grid = bs.band_time_sweep_for_participant(dict(base))
+    g = (grid.get("band_time_sweep") or grid)["ONE_THREE_LEFT"]
+    centers = list(g["center_freqs_hz"]); secs = list(g["integration_seconds_delivered"])
+    col = centers.index(22.5); row = secs.index(45.0)
+    r_grid = float(g["correlation_grid"][row][col]); n_grid = int(g["n_grid"][row][col])
+    n_sheet_grid = int(g["clinic_sheet_n_grid"][row][col])
+    cell = bs.band_time_sweep_cell_for_participant(dict(base, BandTimeSweepCell="1", Channel="ONE_THREE_LEFT",
+                                                         BandCenterHz=22.5, IntegrationSeconds=45))["band_time_sweep_cell"]
+    pts = cell["points"]
+    assert len(pts) == n_grid, (len(pts), n_grid)
+    x = np.array([p["power"] for p in pts]); y = np.array([p["pain"] for p in pts])
+    r_pts = float(np.corrcoef(x, y)[0, 1])
+    assert abs(r_pts - r_grid) < 1e-9, (r_pts, r_grid)
+    assert sum(1 for p in pts if p["from_clinic_sheet"]) == n_sheet_grid
+    # the block counts the sheet ratings merged into the series (every one, matched or not), the
+    # same number the grid's own block reports; the per-cell count is the flagged points above
+    assert cell["clinic_sheet"]["included"] is True
+    assert cell["clinic_sheet"]["n_added"] == int(g["clinic_sheet_ratings"]["n_added"]) > n_sheet_grid
+    # and the least-squares line the page draws through these points has the sign of r
+    slope = np.polyfit(x, y, 1)[0]
+    assert np.sign(slope) == np.sign(r_grid)
+    # switch off: no sheet point, and the block says so
+    off = bs.band_time_sweep_cell_for_participant(dict(base, IncludeClinicSheetRatings=False, BandTimeSweepCell="1",
+                                                        Channel="ONE_THREE_LEFT", BandCenterHz=22.5, IntegrationSeconds=45))["band_time_sweep_cell"]
+    assert not any(p["from_clinic_sheet"] for p in off["points"]) and off["clinic_sheet"]["included"] is False

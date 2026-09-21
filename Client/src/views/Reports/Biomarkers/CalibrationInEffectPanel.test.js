@@ -92,15 +92,12 @@ describe("the calibration-in-effect panel, on the served RCS08 payload", () => {
       });
       expect(traces.length).toBeGreaterThan(0);
     });
-    // the blocks figure draws the 1-MAD band either side of the line in effect
+    // figure 1: the 170 blocks, kept blocks separated from gated and flagged ones, and the line
     const [, blockTraces] = Plotly.react.mock.calls[0];
+    // the 1-MAD band either side of the line in effect (ruling C1, 2026-09-21)
     const band = blockTraces.filter((t) => /1 MAD/.test(t.name || ""));
     expect(band.length).toBe(2);
     band.forEach((t) => { expect(t.mode).toBe("lines"); expect(t.line.dash).toBe("dot"); });
-    [1, 2].forEach(() => {
-    });
-    // figure 1: the 170 blocks, kept blocks separated from gated and flagged ones, and the line
-    const [, blockTraces] = Plotly.react.mock.calls[0];
     const nPoints = blockTraces.filter((t) => t.mode === "markers")
       .reduce((s, t) => s + t.x.length, 0);
     expect(nPoints).toBe(170);

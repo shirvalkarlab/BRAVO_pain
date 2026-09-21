@@ -7782,6 +7782,29 @@ def band_time_sweep_cell_for_participant(request_data):
         return dict(blank, message=(f"No pain report carries a finite {metric_label} score."))
     pro_times = np.asarray(pro_match[0], dtype=float)
     pain_values = np.asarray(pro_match[1], dtype=float)
+    # THE SAME RATING SERIES THE GRID CORRELATED: the clinic and at-home sheets' scores merged in
+    # when the switch is on (decision 186), exactly as `band_time_sweep_for_participant` does.
+    # Until 2026-09-21 this endpoint never read the switch, so with sheets on the scatter's
+    # points were the chronic REDCap ratings alone while the printed r was over the merged
+    # series: on RCS08 L 1-3+, 22.5 Hz, 45 s the grid's r was -0.033 on 172 ratings and the line
+    # drawn through 97 points rose (the PI caught it on the page). Each point now says where its
+    # rating came from, so the scatter can mark the sheet points.
+    include_sheets = _include_clinic_sheet_ratings_param(request_data)
+    from_clinic_sheet = np.zeros(pro_times.size, dtype=bool)
+    clinic_sheet_block = {"included": bool(include_sheets), "n_available": 0, "n_added": 0, "reason": None}
+    if include_sheets:
+        steps, why = load_clinic_sheet_steps(participant_uid)
+        col_scale = sheet_ratings.SHEET_COLUMN_FOR_METRIC.get(str(label_metric))
+        if steps is None:
+            clinic_sheet_block["reason"] = why
+        elif col_scale is None:
+            clinic_sheet_block["reason"] = f"the sheets carry no column for {metric_label}"
+        else:
+            st, sv, _setting = sheet_ratings.sheet_ratings_for_metric(steps, label_metric)
+            clinic_sheet_block["n_available"] = int(st.size)
+            pro_times, pain_values, flags = sheet_ratings.merge_ratings(pro_times, pain_values, st, sv)
+            from_clinic_sheet = np.asarray(flags, dtype=bool)
+            clinic_sheet_block["n_added"] = int(st.size)
 
     canon_channel = availability._canon_channel(channel)
     if canon_channel not in channels:
@@ -7828,10 +7851,12 @@ def band_time_sweep_cell_for_participant(request_data):
             continue
         yb = y_bin[i]
         label = "high" if yb == 1 else ("low" if yb == 0 else "excluded")
-        points.append({"pain": float(p), "power": float(v), "label": label})
+        points.append({"pain": float(p), "power": float(v), "label": label,
+                       "from_clinic_sheet": bool(from_clinic_sheet[i]) if i < from_clinic_sheet.size else False})
 
     return {
         "band_time_sweep_cell": {
+            "clinic_sheet": clinic_sheet_block,
             "channel": canon_channel,
             "band_center_hz": float(centers[0]),
             "integration_seconds": float(seconds),
