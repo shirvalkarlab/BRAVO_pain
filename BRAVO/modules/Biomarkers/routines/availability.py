@@ -29,17 +29,17 @@ from . import analytics
 # THE CANONICAL DECODED FORM (Track B). Both spellings on purpose: the container's path root makes
 # the package `modules.DecodeCommon`, the host suite's root makes it `DecodeCommon`.
 try:
-    from modules.DecodeCommon import (build_channel_index as _build_channel_index,
-                                      per_pro_lsb_indexed as _per_pro_lsb_indexed)
+    from modules.DecodeCommon import build_channel_index as _build_channel_index
 except ImportError:
-    from DecodeCommon import (build_channel_index as _build_channel_index,
-                              per_pro_lsb_indexed as _per_pro_lsb_indexed)
+    from DecodeCommon import build_channel_index as _build_channel_index
 
-#: THE SWITCH BETWEEN THE INDEXED READER AND THE REFERENCE SCAN. `per_pro_lsb` reads from a
-#: `ChannelIndex` prepared once per request when this is True, and runs its original per-call
-#: scan (`_per_pro_lsb_scan`) when it is False. The scans are kept, not deleted: they are the reference the indexed readers are
-#: proven equal to (DecodeCommon/tests), and flipping this in one process is how the equality proof
-#: on the live record alternates rounds honestly. If a served number is ever suspected, set this
+#: THE SWITCH BETWEEN THE INDEXED READERS AND THE REFERENCE SCANS. `lsb_series` and
+#: `native_lsb_by_channel` read from a `ChannelIndex` prepared once per request when this is True,
+#: and run their original per-call scans when it is False. The scans are kept, not deleted: they
+#: are the reference the indexed readers are proven equal to (DecodeCommon/tests), and flipping
+#: this in one process is how the equality proof on the live record alternates rounds honestly.
+#: (The per-report reader `per_pro_lsb`, the first user of this switch, was deleted on 2026-09-21,
+#: decision 224: nothing on any page read its answer.) If a served number is ever suspected, set this
 #: False and the page recomputes the old way with no deployment.
 USE_CHANNEL_INDEX = True
 
@@ -482,7 +482,7 @@ def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
     is the specification. Pass `index=` (from `channel_index`, built with `chronic_recordings=`
     and `powerdomain_recordings=`) when the caller already has one; without it, an index is built
     here from the two native-tier arguments. With `USE_CHANNEL_INDEX` False and no `index`, the
-    reference scan runs instead -- same rule as `per_pro_lsb`.
+    reference scan runs instead.
     """
     if index is None and not USE_CHANNEL_INDEX:
         return _lsb_series_scan(chronic_recordings, powerdomain_recordings, region_map=region_map,
@@ -857,7 +857,7 @@ def modeled_lsb_at_center(channel, center_hz, *, td_recordings=None, psd_recordi
 
     The TD tier (Track D step 1) reads from `channel_index` when `index=` is given or
     `USE_CHANNEL_INDEX` is True -- `td_recordings` is exactly the superset `channel_index` already
-    groups by channel for `per_pro_lsb`, so this tier reuses that grouping instead of its own
+    groups by channel, so this tier reuses that grouping instead of its own
     column scan. The PSD-only tier stays a direct scan of `psd_recordings` on BOTH paths: its
     record shape (`PSD`/`Frequencies` arrays keyed by `ChannelNames` row) does not match
     `channel_index.psd_by_channel`'s shape (flat per-event blocks the service assembles
@@ -1072,176 +1072,15 @@ PRO_LSB_SATURATION_UV = 4000.0
 PSD_SNAPSHOT_SECONDS = 30.0
 
 
-def _per_pro_lsb_scan(pro_times, native_lsb_series, channel, center_hz, *, band_half_hz=2.5,
-                td_recordings=None, event_psd_recordings=None,
-                native_tol_s=120.0, extent_s=None, max_missing_frac=0.10,
-                saturation_uv=PRO_LSB_SATURATION_UV):
-    """REFERENCE IMPLEMENTATION, kept for the equality check; `per_pro_lsb` is the entry point.
-
-    One LSB value per PRO for THIS channel/band, chosen by a strict source precedence (CS-4).
-
-    For each PRO timestamp, walk the precedence and stop at the first tier that yields a value:
-      (1) NATIVE device LSB  — if `native_lsb_series` (a channel's lsb_series entry, NATIVE samples
-          only) has a sensed in-band sample within `native_tol_s` of the rating. The band was actually
-          measured; nothing models better than that.
-      (2) DIRECT TD->LSB transform (k=352.62) — if ANY TD-bearing recording in `td_recordings`
-          (streaming / montage / survey / snapshot — all carry 250 Hz TD) overlaps the rating: cut the
-          rating-centered 30 s extent (analytics.transform_centered_window: clip-don't-slide, 1 s-min,
-          fail-closed >`max_missing_frac` Missing) and run analytics.td_to_lsb at 50 % overlap. A
-          saturated window (samples at the ADC rail) is flagged and skipped.
-      (3) PSD->LSB BRIDGE (CS-3) — ONLY if the coincident record is a PSD-only patient-triggered
-          snapshot event (`event_psd_recordings`, no TD): analytics.device_psd_to_lsb (k~=73.63).
-
-    Montage/survey TD NEVER uses the bridge — it carries TD and is served by tier 2 (the bridge is for
-    PSD-only events alone; montage/survey are the bridge's calibration source). The PSD bridge is honored
-    only inside [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI] (same gate as lsb_series' bridge tier).
-
-    Returns a list (PRO order) of dicts:
-        {"t": pro_epoch_s, "lsb": float|None, "tier": one of PRO_LSB_TIER_*|None,
-         "center_hz": hz, "used_s": float, "saturated": bool, "reason": str}
-    A PRO with no source in any tier returns lsb=None, tier=None (honestly unmatched).
-    """
-    if extent_s is None:
-        extent_s = analytics.TRANSFORM_CENTERED_EXTENT_SECONDS
-    half = float(band_half_hz)
-    lo_hz = float(analytics.LSB_VALIDATED_HZ_LO)
-    hi_hz = float(analytics.LSB_DEPLOYABLE_HZ_HI)
-    # Canonicalize the target channel ONCE so all three tiers match on the same key: tier 2 already
-    # canonicalizes each recording's raw ring/sweep name (_canon_channel below), so the native series,
-    # the TD recordings, and the event records are all compared in canonical form regardless of whether
-    # the caller passed a raw ring name or a canonical one.
-    channel = _canon_channel(channel)
-
-    # --- pre-index NATIVE in-band sensed samples for this channel (tier 1) ---
-    nat_t = np.empty(0); nat_y = np.empty(0)
-    if native_lsb_series is not None:
-        y = np.asarray(native_lsb_series.get("y"), dtype=float)
-        hz = np.asarray(native_lsb_series.get("center_hz"), dtype=float)
-        modeled = native_lsb_series.get("modeled") or []
-        # FAIL CLOSED: the native tier must NEVER promote a CS-1/CS-3 modeled ESTIMATE to a measured
-        # value. If the `modeled` array is missing or misaligned we cannot certify any point native, so
-        # treat every point as modeled (is_modeled=True) and let the lower tiers serve the PRO instead.
-        is_modeled = (np.array([bool(m) for m in modeled], dtype=bool)
-                      if len(modeled) == y.size else np.ones(y.size, bool))
-        t = np.asarray(native_lsb_series.get("t"), dtype=float)
-        # band edges INCLUSIVE on both sides, matching the DSP band-power mask (a native sample exactly
-        # at center+half is in-band on the modeling side, so it must be in-band for selection too).
-        band = (np.isfinite(y) & np.isfinite(hz) & ~is_modeled
-                & (hz >= center_hz - half) & (hz <= center_hz + half))
-        nat_t = t[band]; nat_y = y[band]
-
-    # --- prep TD recordings ONCE for tier 2 (PERF): a recording's Data->float column, t0, dur, fs, and
-    # missing vector are PRO-independent, so materialize them a single time here instead of re-converting
-    # per PRO. Keep ONLY recordings that carry this channel; sort by t0 so the PRO scan can stop early.
-    td_prepped = []   # [{t0, t1, fs, col, miss, step}]
-    for r in (td_recordings or []):
-        if not isinstance(r, dict):
-            continue
-        names = list(r.get("ChannelNames") or [])
-        ci = next((i for i, n in enumerate(names) if _canon_channel(n) == channel), None)
-        if ci is None:
-            continue
-        data = np.asarray(r.get("Data"), dtype=float)
-        if data.ndim != 2:
-            continue
-        if data.shape[0] == len(names) and data.shape[1] != len(names):
-            data = data.T  # -> (n_samples, n_ch)
-        fs = float(r.get("SamplingRate") or 250.0) or 250.0
-        t0 = _to_epoch(r.get("StartTime"))
-        if t0 is None or ci >= data.shape[1]:
-            continue
-        nsamp = data.shape[0]
-        dur_s = nsamp / fs if fs > 0 else 0.0
-        td_prepped.append({
-            "t0": t0, "t1": t0 + dur_s, "fs": fs,
-            "col": data[:, ci], "miss": _missing_per_sample(r.get("Missing"), nsamp),
-            "step": int(round(fs * analytics.TRANSFORM_STEP_SECONDS))})
-    td_prepped.sort(key=lambda d: d["t0"])
-    td_t0 = np.array([d["t0"] for d in td_prepped], dtype=float)   # sorted; for searchsorted
-
-    out = []
-    for tp in np.asarray(pro_times, dtype=float):
-        rec = {"t": float(tp), "lsb": None, "tier": None, "center_hz": float(center_hz),
-               "used_s": 0.0, "saturated": False, "reason": ""}
-
-        # (1) NATIVE
-        if nat_t.size:
-            d = np.abs(nat_t - tp)
-            j = int(np.argmin(d))
-            if d[j] <= native_tol_s:
-                rec.update(lsb=float(nat_y[j]), tier=PRO_LSB_TIER_NATIVE, reason="device-sensed in band")
-                out.append(rec); continue
-
-        # (2) DIRECT TD->LSB — the rating must fall inside a TD recording's real coverage. Only
-        # recordings with t0 <= tp can cover the PRO; searchsorted skips the rest (sorted by t0).
-        matched_td = False
-        hi = int(np.searchsorted(td_t0, tp, side="right")) if td_t0.size else 0
-        for pr in td_prepped[:hi]:
-            if not (pr["t0"] <= tp <= pr["t1"]):
-                continue
-            fs = pr["fs"]
-            slice_uv, used_s = analytics.transform_centered_window(
-                pr["col"], fs, tp - pr["t0"], extent_s=extent_s, missing=pr["miss"],
-                max_missing_frac=max_missing_frac)
-            if slice_uv is None:
-                continue
-            # saturation QC: any sample at/over the ADC rail -> clipped window, skip (flag it)
-            if np.nanmax(np.abs(slice_uv)) >= saturation_uv:
-                rec["saturated"] = True
-                rec["reason"] = "TD window saturated (ADC rail)"
-                continue
-            lsb = analytics.td_to_lsb(slice_uv, fs, float(center_hz), half_hz=half,
-                                      step_samples=pr["step"])
-            if lsb is None or not np.isfinite(lsb) or lsb <= 0:
-                continue
-            # A clean conversion here OVERRIDES any saturated flag a PRIOR overlapping recording's
-            # railed window may have set — the PRO is served by THIS recording, so its trust label
-            # must reflect THIS recording, not a discarded earlier one.
-            rec.update(lsb=float(lsb), tier=PRO_LSB_TIER_TD, used_s=float(used_s), saturated=False,
-                       reason="direct TD->LSB transform (k=%.2f)" % analytics.LSB_PER_UV2_TRANSFORM)
-            matched_td = True
-            break
-        if matched_td:
-            out.append(rec); continue
-
-        # (3) PSD->LSB BRIDGE — only a PSD-only patient event, only inside the deployable band.
-        # NOTE: if tier 2 matched a TD recording but every overlapping window was SATURATED (matched_td
-        # stayed False, rec["saturated"]=True), we DO fall through to the bridge here. A clean coincident
-        # device-FFT reading is a better estimate than a clipped TD window (whose band power is
-        # harmonic-contaminated and was discarded). The saturated flag stays set, so the frontend can
-        # still annotate that the rating's TD was clipped even though a bridge value was used.
-        if lo_hz <= float(center_hz) <= hi_hz:
-            best = None
-            for ev in (event_psd_recordings or []):
-                if not isinstance(ev, dict) or _canon_channel(ev.get("channel")) != channel:
-                    continue
-                te = _to_epoch(ev.get("t"))
-                if te is None or abs(te - tp) > native_tol_s:
-                    continue
-                if best is None or abs(te - tp) < abs(best[0] - tp):
-                    best = (te, ev)
-            if best is not None:
-                ev = best[1]
-                lsb = analytics.device_psd_to_lsb(ev.get("freq"), ev.get("power"), float(center_hz),
-                                                  half_hz=half)
-                if lsb is not None and np.isfinite(lsb) and lsb > 0:
-                    rec.update(lsb=float(lsb), tier=PRO_LSB_TIER_BRIDGE,
-                               reason="PSD-only event bridge (k=%.2f)" % analytics.LSB_PER_DEVICE_PSD)
-                    out.append(rec); continue
-
-        rec["reason"] = rec["reason"] or "no source in any tier"
-        out.append(rec)
-    return out
-
-
-# `_per_pro_lsb_spectrum_scan` and `per_pro_lsb_spectrum` -- the SAME rule as `_per_pro_lsb_scan` /
-# `per_pro_lsb` evaluated at MANY band centres for one pain rating, returning one list of LSB
-# band-power values per rating -- were DELETED on 2026-09-10 at the PI's direction (decision 115).
-# Nothing on any page had read them since 2026-06-28, when matching against the 3 s tile cache
-# (`live_lsb_spectrum_match`) replaced the live per-rating computation; their only callers were
-# tests. Measured before deletion on RCS08: for every rating served from the voltage trace or the
-# PSD bridge, the many-centre list's entry at the contact's own centre equalled the timeline
-# circle bit for bit, 240 of 240 -- so nothing that is drawn depended on them.
+# TWO PER-REPORT READERS USED TO LIVE HERE. `per_pro_lsb` (one band-power value per pain report
+# for one band, by the strict source rule native > time-domain transform > device-FFT bridge; its
+# reference scan `_per_pro_lsb_scan` and its indexed copy `DecodeCommon.per_pro_lsb_indexed`) was
+# deleted on 2026-09-21 at the PI's direction (decision 224): its only page, the timeline's
+# per-report circles, went with decision 216, and the Compute response's unread copy of its
+# answer went the same day. Its many-centre twin (`per_pro_lsb_spectrum`) went on 2026-09-10
+# (decision 115). The tier names and the saturation rail below stay: `live_lsb_spectrum_match`,
+# the tile-cache matcher that replaced the live per-rating computation on 2026-06-28, tags its
+# records with them.
 
 
 def channel_index(td_recordings=None, event_psd_recordings=None, *,
@@ -1266,34 +1105,6 @@ def channel_index(td_recordings=None, event_psd_recordings=None, *,
                                 step_seconds=analytics.TRANSFORM_STEP_SECONDS,
                                 chronic_recordings=chronic_recordings,
                                 powerdomain_recordings=powerdomain_recordings)
-
-
-def per_pro_lsb(pro_times, native_lsb_series, channel, center_hz, *, band_half_hz=2.5,
-                td_recordings=None, event_psd_recordings=None,
-                native_tol_s=120.0, extent_s=None, max_missing_frac=0.10,
-                saturation_uv=PRO_LSB_SATURATION_UV, index=None):
-    """One LSB value per PRO for THIS channel/band, chosen by a strict source precedence (CS-4).
-
-    Same contract, same rule, same record fields as `_per_pro_lsb_scan`, whose docstring is the
-    specification. Pass `index=` (from `channel_index`) when the caller serves several channels
-    from the same recordings, so the form is built once rather than once per channel; without
-    it the form is built here from `td_recordings` and `event_psd_recordings`. With
-    `USE_CHANNEL_INDEX` False and no `index`, the reference scan runs instead.
-    """
-    if index is None and not USE_CHANNEL_INDEX:
-        return _per_pro_lsb_scan(pro_times, native_lsb_series, channel, center_hz,
-                                 band_half_hz=band_half_hz, td_recordings=td_recordings,
-                                 event_psd_recordings=event_psd_recordings,
-                                 native_tol_s=native_tol_s, extent_s=extent_s,
-                                 max_missing_frac=max_missing_frac, saturation_uv=saturation_uv)
-    if index is None:
-        index = channel_index(td_recordings, event_psd_recordings)
-    return _per_pro_lsb_indexed(pro_times, native_lsb_series, channel, center_hz,
-                                index=index, analytics=analytics, band_half_hz=band_half_hz,
-                                native_tol_s=native_tol_s, extent_s=extent_s,
-                                max_missing_frac=max_missing_frac, saturation_uv=saturation_uv,
-                                tier_native=PRO_LSB_TIER_NATIVE, tier_td=PRO_LSB_TIER_TD,
-                                tier_bridge=PRO_LSB_TIER_BRIDGE)
 
 
 # Map a TD recording's `product` key (TYPE_MAP, e.g. "streaming_td"/"indefinite"/"montage_td") to the
@@ -1342,8 +1153,8 @@ def raw_lsb_spectrum_cache(channel, centers_hz, *, band_half_hz=2.5,
         `calibrated` is True only inside [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI]; outside is
         exploratory (computed and flagged), the bridge contract the per-rating readers use.
 
-    Parameters mirror per_pro_lsb (same recording dict schema, same constants) MINUS pro_times
-    and extent_s — there is no rating and no extent at cache-build time.
+    Same recording dict schema and constants as the per-recording readers above; no pro_times and
+    no extent_s, because there is no rating and no extent at cache-build time.
 
     Returns a dict (zero-length axes, never None, when a family is empty so the [W × C] shape holds):
         {"channel": canon, "centers_hz": [C floats], "window_s": float, "band_half_hz": float,
