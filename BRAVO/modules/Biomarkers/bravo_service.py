@@ -4268,7 +4268,11 @@ def run_for_participant(request_data):
     train_days, step_days, sliding, window_months, window_step_months = _window_params(request_data)
     rb_kwargs = {"sliding": sliding, "label_strategy": label_strategy,
                  "low_pct": low_pct, "high_pct": high_pct,
-                 "match_tolerance_min": match_tol_min}
+                 "match_tolerance_min": match_tol_min,
+                 # the Binarization card's cap, gap and direction reach the session matcher too
+                 # (the PI, 2026-09-21): one rule for every matcher on the page
+                 "max_per_rating": max_per_rating, "refractory_min": refractory_min,
+                 "match_direction": match_direction}
     if train_days is not None:
         rb_kwargs["train_days"] = train_days
     if step_days is not None:

@@ -17,7 +17,7 @@ const wrap = (ui) => (
   </ThemeProvider>
 );
 
-const WARNING = "Warning: 19 of 46 matched pain reports are claimed by more than one recording session (66 sessions; at most 7 per report). No cap is applied, by the PI's ruling of 2026-09-21; the correlation's p-value is grouped on the report, so a shared report counts once there.";
+const WARNING = "Warning: 19 of 46 matched pain reports are claimed by more than one recording session (66 sessions; at most 7 per report). within the cap of 3 sessions per report set on this page. The correlation's p-value is grouped on the report, so a shared report counts once there.";
 
 describe("ReportSharingNote", () => {
   it("prints the warning in full when reports are shared", () => {

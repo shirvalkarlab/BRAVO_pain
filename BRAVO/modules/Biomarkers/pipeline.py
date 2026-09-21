@@ -592,7 +592,8 @@ def select_biomarker_band(result, q_threshold=BIOMARKER_FDR_Q, ignore_band=None)
 def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
                           label_metric="nrs", label_reduce="min",
                           transform="raw", stim_amplitudes=None,
-                          match_tolerance_min=None):
+                          match_tolerance_min=None, max_per_rating=None, refractory_min=0.0,
+                          match_direction="nearest"):
     """Time-domain (250 Hz streaming) PSD<->pain branch -> SourceRun with a td_* timeline.
 
     `align` is accepted for signature back-compat but no longer changes the timeline: the
@@ -613,6 +614,9 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
         pro_df, target="session", recordings=recordings,
         metrics=metrics, stim_amplitudes=stim_amplitudes,
         match_tolerance_min=match_tolerance_min,
+        # the page's own matching settings, applied to sessions per report (the PI, 2026-09-21)
+        max_per_rating=max_per_rating, refractory_min=refractory_min,
+        match_direction=match_direction,
     )
     label_col = f"{label_metric}_{label_reduce}"
     labels = session_df[label_col].to_numpy(dtype=float)
@@ -1635,7 +1639,8 @@ def run_biomarker(recordings, pro_df, chan_order, *, source="timedomain", chroni
                   kmeans_features=("left_leg_vas", "mpq_sum"),
                   low_pct=33.3333, high_pct=66.6667, daily_broadcast=True,
                   thresholds=None, train_days=7, gap_days=1, test_days=2,
-                  stim_amplitudes=None, sliding=True, match_tolerance_min=None):
+                  stim_amplitudes=None, sliding=True, match_tolerance_min=None,
+                  max_per_rating=None, refractory_min=0.0, match_direction="nearest"):
     """
     Run biomarker identification with a selectable data source.
 
@@ -1659,7 +1664,9 @@ def run_biomarker(recordings, pro_df, chan_order, *, source="timedomain", chroni
         return run_timedomain_branch(recordings, pro_df, chan_order, align=align,
                                      label_metric=label_metric, label_reduce=label_reduce,
                                      transform=transform, stim_amplitudes=stim_amplitudes,
-                                     match_tolerance_min=match_tolerance_min)
+                                     match_tolerance_min=match_tolerance_min,
+                                     max_per_rating=max_per_rating, refractory_min=refractory_min,
+                                     match_direction=match_direction)
 
     def _power():
         return run_powerdomain_branch(pro_df, chronic=chronic, label_metric=label_metric,

@@ -105,20 +105,24 @@ def _to_datetime(value):
 # ---------------------------------------------------------------------------
 # 3) PRO alignment to the stim/LFP timeline
 # ---------------------------------------------------------------------------
-def report_sharing(rating_cluster_id, *, mode) -> dict:
-    """How many pain reports the session matcher let more than one session claim, as a WARNING.
+def report_sharing(rating_cluster_id, *, mode, cap_per_report=None, n_dropped_by_cap=0) -> dict:
+    """How many pain reports the session matcher let more than one session claim, as a WARNING,
+    under the cap the page sets.
 
-    The PI, 2026-09-21, on decision 118's open question: no cap on sessions per report is
-    applied (`max_per_rating=None` stays; the correlation downstream groups on the report's
-    identity, so the sharing is accounted for there), and the sharing is counted and said out
-    loud. Decision 118 measured it on RCS08 at a 15-minute window: 19 of 46 matched reports
-    claimed by more than one session, at most 7. `rating_cluster_id` is the shared matcher's
-    per-session report index (-1 unmatched). `mode="same_day"` is the legacy path, where the
-    sessions of one day share that day's aggregate by design: counted as nothing, no warning.
+    Decision 118 measured the sharing on RCS08 (15-minute window: 19 of 46 matched reports claimed
+    by more than one session, at most 7) and left the cap open. Decision 221 counted it and warned.
+    The PI, 2026-09-21: the page shows a cap of 3 samples per rating and no window reuse, so a
+    warning saying "no cap is applied" is an error. Now the same cap applies here
+    (`cap_per_report`, the page's MaxPerRating: the nearest sessions per report, the refractory
+    gap between kept ones), the warning names it, and `n_dropped_by_cap` says how many sessions
+    it removed. The correlation downstream still groups on the report's identity, so a shared
+    report counts once there. `rating_cluster_id` is the shared matcher's per-session report index
+    (-1 unmatched). `mode="same_day"` is the legacy path, where the sessions of one day share that
+    day's aggregate by design: counted as nothing, no warning.
     """
-    out = {"mode": mode, "cap_per_report": None, "n_sessions_matched": 0, "n_reports_matched": 0,
-           "n_reports_shared": 0, "n_sessions_on_shared_reports": 0, "max_sessions_per_report": 0,
-           "warning": None}
+    out = {"mode": mode, "cap_per_report": cap_per_report, "n_dropped_by_cap": int(n_dropped_by_cap or 0),
+           "n_sessions_matched": 0, "n_reports_matched": 0, "n_reports_shared": 0,
+           "n_sessions_on_shared_reports": 0, "max_sessions_per_report": 0, "warning": None}
     if mode != "time_window" or rating_cluster_id is None:
         return out
     ids = np.asarray(rating_cluster_id, dtype=int)
@@ -131,20 +135,30 @@ def report_sharing(rating_cluster_id, *, mode) -> dict:
                 "n_reports_shared": int(shared.size), "n_sessions_on_shared_reports": int(shared.sum()),
                 "max_sessions_per_report": int(counts.max())})
     if shared.size:
+        cap_txt = (f"within the cap of {int(cap_per_report)} sessions per report set on this page"
+                   if cap_per_report else "with no cap on sessions per report")
         out["warning"] = (
             f"Warning: {int(shared.size)} of {int(counts.size)} matched pain reports are claimed by more "
             f"than one recording session ({int(shared.sum())} sessions; at most {int(counts.max())} per "
-            f"report). No cap is applied, by the PI's ruling of 2026-09-21; the correlation's p-value is "
-            f"grouped on the report, so a shared report counts once there.")
+            f"report), {cap_txt}. The correlation's p-value is grouped on the report, so a shared report "
+            f"counts once there.")
     return out
 
 
 def align_pros(pro_df, *, target, recordings=None, chronic=None,
                metrics=("nrs", "vas", "mpq_sum"),
                timestamp_col="date_time_s1_daily",
-               stim_amplitudes=None, match_tolerance_min=None):
+               stim_amplitudes=None, match_tolerance_min=None,
+               max_per_rating=None, refractory_min=0.0, match_direction="nearest"):
     """
     Align REDCap PRO rows to the decoded timeline.
+
+    `max_per_rating`, `refractory_min` and `match_direction` (the PI, 2026-09-21) are the
+    Binarization card's own matching settings, applied here to sessions per report exactly as the
+    card applies them to neural samples per rating: at most `max_per_rating` sessions per report,
+    the nearest first, none within `refractory_min` minutes of one already kept, in the page's
+    direction ("nearest", "prior", "pro_first"). `max_per_rating=None` keeps the uncapped
+    behaviour for callers that ask for it.
 
     Parameters
     ----------
@@ -239,9 +253,12 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
             pro_times_s = (pro_ns_i64 - ref_ns) / 1e9
             session_times_s = np.where(session_ns_i64 == np.iinfo(np.int64).min, np.nan,
                                        (session_ns_i64 - ref_ns) / 1e9)
+            _dir = str(match_direction or "nearest").lower()
             match = _matching.matched_samples(
                 session_times_s, session_times_s, pro_times_s, np.zeros(len(valid)),
-                tolerance_min=tol, direction="nearest", max_per_rating=None)
+                tolerance_min=tol, direction=_dir,
+                max_per_rating=(int(max_per_rating) if max_per_rating else None),
+                refractory_min=float(refractory_min or 0.0))
             rows = []
             for i, rec in enumerate(recordings):
                 ts = session_ts[i]
@@ -275,7 +292,10 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
                     row["stim_amplitude"] = _session_stim_amplitude(rec)
                 rows.append(row)
             out = pd.DataFrame(rows)
-            out.attrs["report_sharing"] = report_sharing(match["rating_cluster_id"], mode="time_window")
+            out.attrs["report_sharing"] = report_sharing(
+                match["rating_cluster_id"], mode="time_window",
+                cap_per_report=(int(max_per_rating) if max_per_rating else None),
+                n_dropped_by_cap=int(match.get("n_dropped_by_cap", 0) or 0))
             return out
 
         # Legacy same-calendar-day mean/min (match_tolerance_min is None).

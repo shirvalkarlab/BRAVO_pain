@@ -72,7 +72,7 @@ describe("reportCoverage", () => {
     expect(el).not.toBeNull();
     const bold = el.querySelector("b");
     expect(bold.textContent).toBe("1 of 5 Left Leg VAS reports have a neural sample within ±2 min; 2 within ±10 min; 3 within ±60 min.");
-    expect(el.textContent).toContain("Only the first group can enter the grid at this window; matching from before the report only keeps 1 of them.");
+    expect(el.textContent.trim()).toBe(bold.textContent);   // the bold clause alone (the PI, 2026-09-21)
     // the sentence sits above the match-window control
     const all = container.textContent;
     expect(all.indexOf("reports have a neural sample")).toBeLessThan(all.indexOf("Match window"));

@@ -1096,39 +1096,50 @@ def test_min_pairs_floor_is_the_correlation_routines_own_floor():
         assert bool(got) is want_finite, (n_finite, corr[0, 0])
 
 
-def test_align_pros_counts_reports_claimed_by_more_than_one_session_and_applies_no_cap():
-    """The PI, 2026-09-21, on decision 118's open question: the matcher keeps NO cap on how many
-    sessions one pain report may serve (`max_per_rating=None` stays), and the sharing becomes a
-    WARNING. `align_pros` counts it on the frame's `attrs["report_sharing"]`: how many matched
-    reports are claimed by more than one session, how many sessions those are, the largest
-    claim, and the sentence the page prints. The correlation downstream groups on the report's
-    identity, so the sharing is accounted for there, and the sentence says so."""
+def test_align_pros_applies_the_pages_per_report_cap_and_reports_the_sharing_left():
+    """The PI, 2026-09-21: the page says a cap of 3 samples per rating and no window reuse, so a
+    warning reading "no cap is applied" is an error. The session matcher now takes the same cap
+    the Binarization card applies (`max_per_rating`, nearest sessions first, `refractory_min`
+    between kept ones) and the same direction; `attrs["report_sharing"]` names the cap in force
+    and counts the sharing that remains under it."""
     import datetime as _dt
     base = _dt.datetime(2026, 3, 1, 12, 0, 0)
     pro = pd.DataFrame({"date_time_s1_daily": [base, base + _dt.timedelta(days=1)], "nrs": [7.0, 4.0]})
-    # three sessions within an hour of the first report, one near the second, one unmatched
-    recs = [{"StartTime": base + _dt.timedelta(minutes=m)} for m in (-20, 5, 30)]
+    # four sessions within an hour of the first report, one near the second, one unmatched
+    recs = [{"StartTime": base + _dt.timedelta(minutes=m)} for m in (-20, 5, 30, 50)]
     recs += [{"StartTime": base + _dt.timedelta(days=1, minutes=2)},
              {"StartTime": base + _dt.timedelta(days=5)}]
+    # cap 3, no refractory: the first report keeps its 3 nearest sessions (5, -20, 30 min), drops 50
     sdf = adapter.align_pros(pro, target="session", recordings=recs, metrics=("nrs",),
-                             match_tolerance_min=60.0)
-    assert sdf["matched"].tolist() == [True, True, True, True, False]
+                             match_tolerance_min=60.0, max_per_rating=3, refractory_min=0.0)
+    assert sdf["matched"].tolist() == [True, True, True, False, True, False]
     sh = sdf.attrs["report_sharing"]
-    assert sh["mode"] == "time_window"
-    assert sh["cap_per_report"] is None                    # no cap, by the PI's ruling
-    assert sh["n_sessions_matched"] == 4
-    assert sh["n_reports_matched"] == 2
-    assert sh["n_reports_shared"] == 1                     # the first report, claimed three times
-    assert sh["n_sessions_on_shared_reports"] == 3
-    assert sh["max_sessions_per_report"] == 3
+    assert sh["mode"] == "time_window" and sh["cap_per_report"] == 3
+    assert sh["n_sessions_matched"] == 4 and sh["n_reports_matched"] == 2
+    assert sh["n_reports_shared"] == 1 and sh["n_sessions_on_shared_reports"] == 3
+    assert sh["max_sessions_per_report"] == 3 and sh["n_dropped_by_cap"] == 1
     w = sh["warning"]
-    assert "1 of 2" in w and "3" in w and "no cap" in w.lower()
-    assert "grouped on the report" in w or "groups on the report" in w
-    # no sharing: no warning, the counts still there
-    one = adapter.align_pros(pro, target="session", recordings=recs[1:2] + recs[3:4], metrics=("nrs",),
-                             match_tolerance_min=60.0)
+    assert "1 of 2" in w and "3 sessions" in w and "cap of 3" in w
+    assert "no cap" not in w.lower()
+    assert "grouped on the report" in w
+    # cap 1: one session per report, nothing shared, no warning
+    one = adapter.align_pros(pro, target="session", recordings=recs, metrics=("nrs",),
+                             match_tolerance_min=60.0, max_per_rating=1, refractory_min=0.0)
+    assert one["matched"].tolist() == [False, True, False, False, True, False]
     assert one.attrs["report_sharing"]["n_reports_shared"] == 0
     assert one.attrs["report_sharing"]["warning"] is None
+    assert one.attrs["report_sharing"]["n_dropped_by_cap"] == 3
+    # the refractory gap: cap 3, 30-minute gap keeps +5 (nearest), drops -20 and +30 (both 25 min
+    # from it), keeps +50 (45 min from it)
+    gap = adapter.align_pros(pro, target="session", recordings=recs, metrics=("nrs",),
+                             match_tolerance_min=60.0, max_per_rating=3, refractory_min=30.0)
+    assert gap["matched"].tolist() == [False, True, False, True, True, False]
+    assert gap.attrs["report_sharing"]["n_dropped_by_cap"] == 2
+    # the prior direction: only sessions BEFORE the report count
+    prior = adapter.align_pros(pro, target="session", recordings=recs, metrics=("nrs",),
+                               match_tolerance_min=60.0, max_per_rating=3, refractory_min=0.0,
+                               match_direction="prior")
+    assert prior["matched"].tolist() == [True, False, False, False, False, False]
     # the same-day path: sessions on one day share the day's aggregate by design, not by matching
     day = adapter.align_pros(pro, target="session", recordings=recs, metrics=("nrs",))
     assert day.attrs["report_sharing"]["mode"] == "same_day"
@@ -1140,7 +1151,7 @@ def test_the_time_domain_summary_carries_the_report_sharing_warning():
     so the module response (`summary.timedomain.report_sharing`) can print it."""
     assert callable(getattr(pipeline, "report_sharing_for_summary", None))
     sdf = pd.DataFrame({"session_start": [], "session_date": []})
-    sdf.attrs["report_sharing"] = {"mode": "time_window", "cap_per_report": None, "n_sessions_matched": 4,
+    sdf.attrs["report_sharing"] = {"mode": "time_window", "cap_per_report": 3, "n_sessions_matched": 4,
                                    "n_reports_matched": 2, "n_reports_shared": 1,
                                    "n_sessions_on_shared_reports": 3, "max_sessions_per_report": 3,
                                    "warning": "W"}
