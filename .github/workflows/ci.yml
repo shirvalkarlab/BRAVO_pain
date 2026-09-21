@@ -44,7 +44,9 @@ jobs:
         # The versions below are copied from BRAVO/requirements.txt. Two lines are left out on
         # purpose -- pymer4 (needs R + rpy2, apt-installed at the OS level in the real container)
         # and mysqlclient (needs libmysqlclient's headers to build) -- because the four packages
-        # this job tests never import either, as verified above.
+        # this job tests never import either, as verified above. The three Google packages are
+        # the ones StimOptimizer/tests/test_google_sheets_credentials.py imports; their absence
+        # kept this job red from 2026-09-16 to 2026-09-20 (34 runs) on two tests.
         run: |
           python -m pip install --upgrade pip
           pip install \
@@ -52,6 +54,7 @@ jobs:
             numpy==2.1.3 scipy==1.14.1 scikit-learn==1.5.2 statsmodels==0.14.6 pandas==2.2.3 \
             requests==2.32.3 pymysql==1.1.1 psutil==7.0.0 pywavelets==1.8.0 filelock==3.16.1 \
             plotly==7.0.0 pyarrow==17.0.0 \
+            google-api-python-client==2.149.0 google-auth==2.35.0 google-auth-httplib2==0.2.0 \
             pytest pytest-xdist
 
       - name: Run the host suite
