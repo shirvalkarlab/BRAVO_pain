@@ -27,7 +27,7 @@ import BinarizationPreview from "./BinarizationPreview";
 // than deleted (CLAUDE.md §2 principle 4 warns against deleting something that still works), but
 // no longer imported here now that the interactive version carries its job plus the drill-down.
 import BiomarkerHeatmapGrids from "./BiomarkerHeatmapGrids";
-import { computeMatchedScanModel } from "./binarizationModel";
+import { reportCoverage, computeMatchedScanModel } from "./binarizationModel";
 import { saveControls, loadControls } from "./biomarkerStateStore";
 
 // TWO PANELS RELOCATED FROM THE CLOSED-LOOP DEPLOYMENT PAGE (CLD_REDESIGN_PLAN.md item 11).
@@ -511,6 +511,11 @@ function Biomarkers() {
     });
   }, [scanIndex, painSeriesLive, matchToleranceD, strategy, percentileLowD, percentileHighD,
       maxPerRatingD, refractoryMinD, matchDirection, allowWindowReuse]);
+  // The coverage sentence at the top of the Binarization card (the PI, 2026-09-21): follows the
+  // window slider live, from the same two inputs the model reads.
+  const reportCoverageLive = useMemo(
+    () => reportCoverage({ scanIndex, painSeries: painSeriesLive, toleranceMin: matchTolerance }),
+    [scanIndex, painSeriesLive, matchTolerance]);
 
   // TRACK A, TASK A1: THE CALIBRATED GRID'S OWN REQUEST, BUILT FROM THE LIVE CONTROLS.
   //
@@ -874,6 +879,8 @@ function Biomarkers() {
                                 setPercentileHigh={setPercentileHigh}
                                 setStrategy={setStrategy}
                                 showDescriptions={showDescriptions}
+                                coverage={reportCoverageLive}
+                                matchDirection={matchDirection}
                               />
                             </MDBox>
                           </Grid>

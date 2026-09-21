@@ -137,6 +137,52 @@ function classify(v, cuts) {
  *     counts: {n_sessions, n_matched, n_high, n_low, n_excluded_middle, tolerance_min,
  *              median_abs_offset_min} }
  */
+/**
+ * The coverage sentence's numbers (the PI, 2026-09-21): how many DISTINCT pain reports have ANY
+ * neural sample (voltage-trace tile, montage FFT or patient-event FFT, on any contact pair) within
+ * the match window, and within two fixed wider windows (±10 and ±60 min), either direction; plus
+ * how many of the in-window reports have a sample BEFORE them, which is what the "prior" direction
+ * keeps. Counted, not matched: no cap, no claiming, so a report counts once however many samples
+ * sit near it. Null when either input is missing.
+ */
+export function reportCoverage({ scanIndex, painSeries, toleranceMin }) {
+  if (!Array.isArray(scanIndex) || !scanIndex.length) return null;
+  if (!painSeries || !Array.isArray(painSeries.t) || !painSeries.t.length) return null;
+  const pro = painSeries.t
+    .map((t, i) => ({ t, v: painSeries.y ? painSeries.y[i] : 0 }))
+    .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.v))
+    .map((p) => p.t)
+    .sort((a, b) => a - b);
+  if (!pro.length) return null;
+  const st = scanIndex.map((e) => Number(e && e.t)).filter(Number.isFinite).sort((a, b) => a - b);
+  // for each report, the nearest sample before it and after it (seconds; Infinity when none)
+  const before = new Array(pro.length).fill(Infinity);
+  const after = new Array(pro.length).fill(Infinity);
+  let j = 0;
+  for (let k = 0; k < pro.length; k++) {
+    while (j < st.length && st[j] <= pro[k]) j++;
+    if (j > 0) before[k] = pro[k] - st[j - 1];
+    if (j < st.length) after[k] = st[j] - pro[k];
+  }
+  const within = (minutes, priorOnly = false) => {
+    const s = minutes * 60;
+    let n = 0;
+    for (let k = 0; k < pro.length; k++) {
+      if (before[k] <= s || (!priorOnly && after[k] <= s)) n++;
+    }
+    return n;
+  };
+  const tol = Number(toleranceMin) > 0 ? Number(toleranceMin) : 0;
+  return {
+    n_reports: pro.length,
+    tolerance_min: tol,
+    n_within_window: within(tol),
+    n_within_10: within(10),
+    n_within_60: within(60),
+    n_within_window_prior: within(tol, true),
+  };
+}
+
 export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
                                           strategy, percentileLow, percentileHigh,
                                           maxPerRating = 3, refractoryMin = 2,

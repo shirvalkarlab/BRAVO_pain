@@ -71,7 +71,8 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
                                matchTolerance, setMatchTolerance, matchDirty,
                                scanModel, matchedLoading,
                                setPercentileLow, setPercentileHigh, setStrategy,
-                               showDescriptions = false }) {
+                               showDescriptions = false,
+                               coverage = null, matchDirection = "prior" }) {
   const ref = useRef(null);
   const hasTolControl = typeof setMatchTolerance === "function";
 
@@ -488,6 +489,21 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
           {headerCaption}
         </MDTypography>
       </MDBox>
+
+      {/* THE COVERAGE SENTENCE (the PI, 2026-09-21): what the window admits and what it leaves out,
+          in one bold line above the control that sets it. The counts follow the slider live. */}
+      {coverage && coverage.n_reports > 0 ? (
+        <MDTypography variant="caption" color="dark" component="div" data-testid="report-coverage"
+                      sx={{ fontSize: 13, mb: 0.75, lineHeight: 1.45 }} aria-live="polite">
+          <b>{`${coverage.n_within_window.toLocaleString()} of ${coverage.n_reports.toLocaleString()} ${metricLabel || "pain"} reports have a neural sample within ±${coverage.tolerance_min} min; ${coverage.n_within_10.toLocaleString()} within ±10 min; ${coverage.n_within_60.toLocaleString()} within ±60 min.`}</b>
+          <span style={{ color: "#555" }}>
+            {` Only the first group can enter the grid at this window`}
+            {matchDirection === "prior"
+              ? `; matching from before the report only keeps ${coverage.n_within_window_prior.toLocaleString()} of them.`
+              : "."}
+          </span>
+        </MDTypography>
+      ) : null}
 
       {/* PRO<->PSD match-window control (minutes). ABOVE the histogram: it sets which neural samples
           carry a pain label at all — and therefore the high/low counts shown below. In matched mode
