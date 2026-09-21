@@ -140,7 +140,9 @@ export default function DashboardOverview() {
 
   useEffect(() => {
     const filterTimer = setTimeout(() => {
-      if (availableParticipants.length == 0) return;
+      // The list starts as `false` until the participants arrive; spreading it threw
+      // "is not iterable" on every first render (2022-09 to 2026-09-21). Nothing to filter yet.
+      if (!Array.isArray(availableParticipants) || availableParticipants.length === 0) return;
       
       if (filterOptions.value) {
         const options = filterOptions.value.split(" ");
