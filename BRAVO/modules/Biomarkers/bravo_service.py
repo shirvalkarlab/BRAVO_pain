@@ -6520,7 +6520,7 @@ def _modeled_lsb_threshold_estimate(thr_lsb, modeled_thr, n_modeled, center_hz, 
     # for a sensed value.
     if thr_lsb is None and modeled_thr is not None:
         # Shared definition of "outside the validated calibration range" — the SAME predicate the
-        # frozen per-band model uses (analytics._freq_extrapolated mirrors psd_lsb_model._freq_extrapolated,
+        # frozen per-band model uses (analytics._freq_extrapolated, once mirrored by the frozen model deleted 2026-09-21,
         # asserted equal by test), so the sign-off card's extrapolation warning is consistent across tiers.
         fextrap = analytics._freq_extrapolated(center_hz)
         note = ("Device never sensed this band; threshold read from the MODELED LSB timeline — the "
@@ -6548,7 +6548,7 @@ def _modeled_lsb_threshold_estimate(thr_lsb, modeled_thr, n_modeled, center_hz, 
     # The old TIER-2 (per-participant frozen model applied to the µV² cut-point) and TIER-3
     # (population constant k=269) were both REMOVED 2026-06-28. TIER-2 fed the deployment ROC cut-point
     # — a within-(channel,source) z-scored log-power feature (dimensionless, frequently negative) —
-    # into psd_lsb_model.estimate_lsb, which expects a LINEAR µV² band power: a negative z clipped to
+    # into the frozen model's estimate_lsb (deleted 2026-09-21), which expected a LINEAR µV² band power: a negative z clipped to
     # 1e-12 (LSB≈0) and a positive z was silently misread as µV². The units-correct replacement is the
     # single modeled tier above: model the LSB line off the RAW TD the ROC was built from, at the ROC's
     # OWN band center (transform ×352.62 over streaming + montage TD; bridge ≈73.63 for PSD-only

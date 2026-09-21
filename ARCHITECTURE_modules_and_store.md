@@ -470,10 +470,9 @@ Consequences:
 - `routines/stats_utils.py` — the autocorrelation, the reference distribution, the block length,
   and `bh_fdr`.
 - `routines/redcap_client.py` — the pain-report fetch, vendored.
-- `routines/psd_lsb_model.py` — the frozen per-participant conversion model.
 - `bravo_service.py` — the endpoint, the store implementation, the matching wiring, the sweep
   entry point `band_time_sweep_for_participant:6188`, and the warm entry `warm_psd_cache:2269`.
-- `data/psd_lsb_models/RCS08.json` — the frozen asset.
+- (the frozen per-participant conversion model and its asset were deleted 2026-09-21; `DEVICE_percept_rc.md` §10 keeps its numbers)
 - `pipeline.py` — the older branch that owns the entangled spectrum-and-correlation pass.
 
 **Closed-loop module** — `BRAVO/modules/ClosedLoopDeployment/`: `adapter.py` (the second store

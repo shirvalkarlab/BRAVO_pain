@@ -1,7 +1,7 @@
 """Review B10 (2026-09-12): no function in `bravo_service` imports a sibling by the bare
 container-only spelling (`from modules.Biomarkers.routines import ...`). The file already imports
 `availability` at module level under the package-relative spelling that works on both runners;
-the four function-local copies of the bare spelling are gone, and `psd_lsb_model` is imported
+the four function-local copies of the bare spelling are gone, and the frozen model (deleted 2026-09-21) was imported
 package-relative. Read off the source so the next copy fails a test rather than a runner."""
 import inspect
 

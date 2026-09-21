@@ -3,7 +3,7 @@ recipe and the tables in `routines/calibration.py`, not the frozen June log-log 
 the PI, 2026-09-20: "update the Biomarkers page frontend so the bottom calibration plots use the
 latest calibration constants").
 
-Until now `/api/queryPsdLsbConversionModel` served `psd_lsb_model.model_plot_payload`: the v1 asset's
+Until now `/api/queryPsdLsbConversionModel` served the frozen June model's plot payload: the v1 asset's
 per-band gain anchors (LSB at 1 uV^2, fitted on log10 power, decisions 11 and 18) and per-channel
 slopes 0.85 / 0.52 -- numbers that are neither the constant the platform converts with (345.59 since
 decision 211) nor derived on raw power, and a model no calculation has read since the fallback was
@@ -23,7 +23,6 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from Biomarkers.routines import analytics as A  # noqa: E402
 from Biomarkers.routines import calibration as C  # noqa: E402
-from Biomarkers.routines import psd_lsb_model as plm  # noqa: E402
 
 
 def _payload():
@@ -98,11 +97,27 @@ def test_the_payload_is_json_and_takes_no_logarithm():
     assert "log10" not in src and "np.log" not in src
 
 
-def test_the_frozen_model_no_longer_serves_a_plot_payload():
-    """`estimate_lsb` and `load_model` stay (decision 11's asset; read by no calculation since
-    2026-06-28); the plot payload the old panel drew is gone with the panel."""
-    assert not hasattr(plm, "model_plot_payload")
-    assert callable(plm.estimate_lsb) and callable(plm.load_model)
+def test_the_frozen_june_model_is_gone():
+    """The PI, 2026-09-21: delete the frozen June log-log model. Drawn by no page since decision
+    212, read by no calculation since 2026-06-28. The module, its asset folder and its test are
+    gone; nothing under Biomarkers imports it; the extrapolation guard keeps its own range."""
+    import importlib
+    import os
+    root = os.path.join(os.path.dirname(__file__), "..")
+    assert not os.path.exists(os.path.join(root, "routines", "psd_lsb" + "_model.py"))
+    assert not os.path.exists(os.path.join(root, "data", "psd_lsb" + "_models"))
+    assert not os.path.exists(os.path.join(root, "tests", "test_psd_lsb" + "_model.py"))
+    try:
+        importlib.import_module("Biomarkers.routines.psd_lsb" + "_model")
+    except ImportError:
+        pass
+    else:
+        raise AssertionError("the frozen model module still imports")
+    for dirpath, _, files in os.walk(root):
+        for f in files:
+            if f.endswith(".py"):
+                src = open(os.path.join(dirpath, f)).read()
+                assert ("psd_lsb" + "_model") not in src, os.path.join(dirpath, f)
 
 
 def test_the_committed_band_refit_names_the_constant_in_effect_beside_its_own():

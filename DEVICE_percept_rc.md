@@ -678,9 +678,11 @@ era? — and should be tested rather than assumed.**
 
 ## 10. The frozen per-participant conversion model — keep these numbers verbatim
 
-`BRAVO/modules/Biomarkers/data/psd_lsb_models/RCS08.json`, schema `psd_lsb_conversion/v1`,
-generated 2026-06-25. **It is a frozen asset: loaded, never refitted on request**, so the reviewed
-cleaning decisions stay fixed. **These figures are marked sacred in the archived record and are
+**Deleted from the repository on 2026-09-21 by the PI's ruling** (module `psd_lsb_model.py`, asset
+`data/psd_lsb_models/RCS08.json`, its test): drawn by no page since decision 212, read by no
+calculation since 2026-06-28. This section is now the record of what it held; the file itself is in
+git history before commit of 2026-09-21. It was schema `psd_lsb_conversion/v1`, generated 2026-06-25,
+**a frozen asset: loaded, never refitted on request**, so the reviewed cleaning decisions stayed fixed. **These figures are marked sacred in the archived record and are
 reproduced here unchanged.**
 
 **Form, per channel:** the base-ten logarithm of the device reading equals a per-frequency

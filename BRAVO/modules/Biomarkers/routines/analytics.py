@@ -2485,7 +2485,7 @@ COMPATIBLE_THRESHOLD_MODES = tuple(m for m, v in THRESHOLD_MODES.items()
 # The PRIMARY TD→LSB source of truth is the **transform route, k = LSB_PER_UV2_TRANSFORM = 345.59 (decision 211; 352.62 until 2026-09-20)**
 # (below); the PSD-only no-TD case uses the **device-PSD bridge, LSB_PER_DEVICE_PSD = 72.16** (CS-3,
 # below). The deployment fallback ladder anchors an offline-Welch µV² cut-point to LSB via the
-# per-participant frozen PSD→LSB model (psd_lsb_model.estimate_lsb), which is itself fit on the SAME
+# per-participant frozen PSD→LSB model (deleted 2026-09-21), which was itself fit on the SAME
 # offline-Welch µV²→device-LSB mapping (RCS08.json), so the cut-point and the converter share units.
 #
 # REMOVED 2026-06-28: the standalone Welch-256 population constant k=269 (LSB_PER_UV2_VALIDATED /
@@ -2581,9 +2581,8 @@ LSB_PER_DEVICE_PSD = LSB_PER_UV2_TRANSFORM / LSB_PER_UV2_DEVICE_PSD_TD_RATIO  # 
 def _freq_extrapolated(center_hz, lo=LSB_VALIDATED_HZ_LO, hi=LSB_VALIDATED_HZ_HI):
     """True iff center_hz is outside the validated [7.8, 28.3] Hz calibration range (None -> False).
 
-    Mirrors psd_lsb_model._freq_extrapolated so the deployment fallback and the frozen per-band model
-    share ONE definition of "outside the calibrated range". Kept module-local (vs imported) to avoid
-    a routines->routines import cycle; the two constants are asserted equal by test.
+    The frozen per-band model that once shared this definition was deleted on 2026-09-21 (the PI's
+    ruling); this guard is now the one definition of "outside the calibrated range".
     """
     try:
         c = float(center_hz)

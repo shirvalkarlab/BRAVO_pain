@@ -60,7 +60,6 @@ decisions are appended to Part 3 here AND as a full row in the full log.
 
 **On the PI**
 - **30. Titration session**: RUN on 2026-09-16, both sides (the PI, 2026-09-20; 213): the record holds 8 settled currents on the left ladder and 10 on the right. The 20 s margin switch stays OFF by his ruling (217). Closed.
-- The frozen log-log model asset (`psd_lsb_model.py`, `data/psd_lsb_models/RCS08.json`): drawn by no page since 212 and read by no calculation since 2026-06-28; delete it or keep it as a record -- his call.
 - Pooling across pulse widths, option A behind a toggle (189's plan). `align_pros` `max_per_rating` cap (118). The four zero-caller chronic-detector routines (187). Apply the harmonic rule to the readiness screen or not (199).
 - Item 15 remainder: labelling and navigation niceties on the Closed-Loop page (scroll-link, print stylesheet).
 

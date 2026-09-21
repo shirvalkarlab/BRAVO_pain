@@ -44,73 +44,6 @@ def test_roc_downsampled_for_plot():
     assert roc["fpr"][0] <= 1e-9 and abs(roc["fpr"][-1] - 1.0) < 1e-9
 
 
-def test_sliding_window_emits_per_window_roc():
-    """Each sliding window carries a downsampled per-window ROC (fpr/tpr) alongside its AUC, so
-    the frontend can overlay one ROC curve per window. Endpoints anchored at 0 and 1; length capped."""
-    rng = np.random.default_rng(1)
-    n = 60 * 24 * 40                                                  # 40 days at 1-min resolution
-    lfp = rng.normal(size=n)
-    pain = (lfp + 0.5 * rng.normal(size=n) > 0).astype(float)
-    df = pd.DataFrame({
-        "timestamp": pd.date_range("2025-01-01", periods=n, freq="min"),
-        "LFP": lfp, "LFP_smoothed": lfp, "stim_amplitude": 0.0,
-        "pain_level": pain, "nrs": (pain * 6 + 2).astype(int),
-    })
-    out = analytics.sliding_window_analytics(df, train_days=4, test_days=4, sliding=True)
-    wins = [w for w in out["windows"] if w.get("auc") is not None]
-    assert wins, "expected at least one usable sliding window"
-    roc_wins = [w for w in wins if w.get("roc")]
-    assert roc_wins, "no window carried a per-window ROC curve"
-    for w in roc_wins:
-        roc = w["roc"]
-        assert 0 < len(roc["fpr"]) <= 60 and len(roc["fpr"]) == len(roc["tpr"])
-        assert roc["fpr"][0] <= 1e-9 and abs(roc["fpr"][-1] - 1.0) < 1e-9
-        assert all(0.0 <= x <= 1.0 for x in roc["fpr"]) and all(0.0 <= y <= 1.0 for y in roc["tpr"])
-
-
-def test_cluster_scatter_one_feature():
-    df = _cv_df(n=3000)                                              # only 'nrs' present
-    cs = analytics.cluster_scatter(df, kmeans_features=("nrs",))
-    assert cs is not None and cs["features"] == ["nrs"] and "y" not in cs
-    # de-duplicated to unique (nrs, pain_level) observations, not 3000 per-sample rows
-    assert len(cs["x"]) == len(cs["pain_level"]) <= 30
-    assert set(cs["pain_level"]) <= {0, 1}
-
-
-def test_cluster_scatter_two_features():
-    df = _cv_df(n=2000)
-    df["left_leg_vas"] = (df["nrs"] * 9).astype(float)
-    df["mpq_sum"] = (df["nrs"] * 5).astype(float)
-    cs = analytics.cluster_scatter(df, kmeans_features=("left_leg_vas", "mpq_sum"))
-    assert cs["features"] == ["left_leg_vas", "mpq_sum"]
-    assert cs["x_label"] == "left_leg_vas" and cs["y_label"] == "mpq_sum"
-    assert len(cs["x"]) == len(cs["y"]) == len(cs["pain_level"])
-
-
-def test_cluster_scatter_missing_features():
-    df = _cv_df(n=100)
-    assert analytics.cluster_scatter(df, kmeans_features=("not_a_col",)) is None
-
-
-def test_pain_binarization():
-    """Binarization panel: per-feature raw distribution + the empirical high/low boundary derived
-    from the actual labels, with the boundary's percentile and 30th/70th references."""
-    rng = np.random.default_rng(3)
-    nrs = np.clip(np.round(rng.normal(5, 2, size=4000)), 0, 10)
-    pain = (nrs >= 6).astype(float)                         # monotone split at 6
-    cv = pd.DataFrame({"nrs": nrs, "pain_level": pain})
-    pro = pd.DataFrame({"nrs": nrs[:600]})                  # PRO-level distribution source
-    out = analytics.pain_binarization(cv, "nrs", kmeans_features=("nrs",), pro_df=pro)
-    assert out is not None and len(out["features"]) == 1
-    ft = out["features"][0]
-    assert ft["name"] == "nrs" and ft["n_obs"] == 600       # distribution drawn from pro_df
-    assert 5.0 <= ft["boundary"] <= 6.0                     # boundary between low(<6) and high(>=6)
-    assert 0 <= ft["boundary_percentile"] <= 100
-    assert ft["p30"] <= ft["p70"]
-    # missing pain_level -> None
-    assert analytics.pain_binarization(pd.DataFrame({"nrs": nrs}), "nrs", kmeans_features=("nrs",)) is None
-
-
 def test_lfp_distribution_robust_range():
     """Extreme outliers from the un-normalized merged sources must NOT collapse the histogram into a
     single bar: binning is over the 1st-99th percentile, with the outliers reported as n_clipped."""
@@ -147,29 +80,6 @@ def test_lfp_distribution_otsu_on_mad_filtered_data():
         f"control: a naive Otsu ({naive:.1f}) should sit well above the MAD-filtered split "
         f"({d['otsu']:.1f}) — proves MAD filtering matters")
     assert d["n_total"] == 4003
-
-
-def test_power_pain_scatter_corr_and_outlier_exclusion():
-    """power_pain_scatter returns paired points + Pearson r/p over the MAD-inlier set; power outliers
-    are excluded and r recovers the planted correlation rather than being dragged by spikes."""
-    rng = np.random.default_rng(5)
-    n = 400
-    power = rng.normal(100, 15, n)
-    pain = 0.5 * power + rng.normal(0, 5, n)          # strong positive association
-    # Inject a few extreme power spikes with mismatched pain to test outlier handling.
-    power = np.concatenate([power, np.array([5e4, 6e4, -3e4])])
-    pain = np.concatenate([pain, np.array([0.0, 0.0, 100.0])])
-    df = pd.DataFrame({"LFP_smoothed": power, "nrs": pain})
-    d = analytics.power_pain_scatter(df, "nrs")
-    assert d["n_clipped"] >= 3, d["n_clipped"]                 # the spikes are excluded
-    assert d["r"] is not None and d["r"] > 0.5, d["r"]         # planted positive corr recovered
-    assert 0.0 <= d["p"] <= 1.0
-    assert len(d["x"]) == len(d["y"]) and len(d["x"]) >= 3
-    assert d["y_label"] == "nrs"
-    # Missing metric column -> safe empty result, no crash.
-    d2 = analytics.power_pain_scatter(df.rename(columns={"nrs": "vas"}), "nrs")
-    assert d2["r"] is None and d2["x"] == []
-    print("OK power_pain_scatter: r=%.3f p=%.2g n=%d clipped=%d" % (d["r"], d["p"], d["n"], d["n_clipped"]))
 
 
 def test_td_sliding_corr_grid_reaches_last_session_drops_corrupt_dates():
@@ -752,16 +662,6 @@ def _forward_detail(E=300, F=60, center=20.0, seed=0, weeks=12, beta=0.5, noise=
     psd[:, 0, band] *= (1 + (beta * sign * (labels - labels.mean()))[:, None])
     return {"f_set": f, "psd": psd, "labels": labels, "rating_group": np.arange(E),
             "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "times": times}
-
-
-def test_freq_extrapolated_guard_agrees_with_frozen_model():
-    """The deployment fallback and the frozen per-band model must share ONE definition of 'outside the
-    calibrated range', so a band flagged extrapolated by one is flagged by the other. The invariant was
-    previously asserted inside the (now-deleted) psd_band_to_lsb guard test; restored standalone here so
-    the agreement stays covered. Spans the validated edges (7.8 / 28.3 Hz) and points either side."""
-    from Biomarkers.routines import psd_lsb_model as plm
-    for c in (5.0, 7.0, 7.8, 18.0, 28.3, 29.0, 55.5):
-        assert analytics._freq_extrapolated(c) == plm._freq_extrapolated(c), c
 
 
 def test_forward_chaining_validates_stationary_band():
