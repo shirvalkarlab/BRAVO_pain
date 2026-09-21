@@ -105,6 +105,40 @@ def _to_datetime(value):
 # ---------------------------------------------------------------------------
 # 3) PRO alignment to the stim/LFP timeline
 # ---------------------------------------------------------------------------
+def report_sharing(rating_cluster_id, *, mode) -> dict:
+    """How many pain reports the session matcher let more than one session claim, as a WARNING.
+
+    The PI, 2026-09-21, on decision 118's open question: no cap on sessions per report is
+    applied (`max_per_rating=None` stays; the correlation downstream groups on the report's
+    identity, so the sharing is accounted for there), and the sharing is counted and said out
+    loud. Decision 118 measured it on RCS08 at a 15-minute window: 19 of 46 matched reports
+    claimed by more than one session, at most 7. `rating_cluster_id` is the shared matcher's
+    per-session report index (-1 unmatched). `mode="same_day"` is the legacy path, where the
+    sessions of one day share that day's aggregate by design: counted as nothing, no warning.
+    """
+    out = {"mode": mode, "cap_per_report": None, "n_sessions_matched": 0, "n_reports_matched": 0,
+           "n_reports_shared": 0, "n_sessions_on_shared_reports": 0, "max_sessions_per_report": 0,
+           "warning": None}
+    if mode != "time_window" or rating_cluster_id is None:
+        return out
+    ids = np.asarray(rating_cluster_id, dtype=int)
+    ids = ids[ids >= 0]
+    if ids.size == 0:
+        return out
+    _, counts = np.unique(ids, return_counts=True)
+    shared = counts[counts > 1]
+    out.update({"n_sessions_matched": int(ids.size), "n_reports_matched": int(counts.size),
+                "n_reports_shared": int(shared.size), "n_sessions_on_shared_reports": int(shared.sum()),
+                "max_sessions_per_report": int(counts.max())})
+    if shared.size:
+        out["warning"] = (
+            f"Warning: {int(shared.size)} of {int(counts.size)} matched pain reports are claimed by more "
+            f"than one recording session ({int(shared.sum())} sessions; at most {int(counts.max())} per "
+            f"report). No cap is applied, by the PI's ruling of 2026-09-21; the correlation's p-value is "
+            f"grouped on the report, so a shared report counts once there.")
+    return out
+
+
 def align_pros(pro_df, *, target, recordings=None, chronic=None,
                metrics=("nrs", "vas", "mpq_sum"),
                timestamp_col="date_time_s1_daily",
@@ -240,7 +274,9 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
                 else:
                     row["stim_amplitude"] = _session_stim_amplitude(rec)
                 rows.append(row)
-            return pd.DataFrame(rows)
+            out = pd.DataFrame(rows)
+            out.attrs["report_sharing"] = report_sharing(match["rating_cluster_id"], mode="time_window")
+            return out
 
         # Legacy same-calendar-day mean/min (match_tolerance_min is None).
         rows = []
@@ -268,7 +304,9 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
             else:
                 row["stim_amplitude"] = _session_stim_amplitude(rec)
             rows.append(row)
-        return pd.DataFrame(rows)
+        out = pd.DataFrame(rows)
+        out.attrs["report_sharing"] = report_sharing(None, mode="same_day")
+        return out
 
     elif target == "chronic":
         if chronic is None:

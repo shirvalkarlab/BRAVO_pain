@@ -654,7 +654,9 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
             if col in session_df.columns:
                 timeline[f"td_{col}"] = session_df[col].to_numpy()
 
-    summary = {"band": band}
+    summary = {"band": band,
+               # the matcher's shared-report count, a warning and never a cap (the PI, 2026-09-21)
+               "report_sharing": report_sharing_for_summary(session_df)}
     if band is not None:
         c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig = band
         ch = format_channel(result["chan_order"][c_idx])
@@ -695,6 +697,17 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
     
     return {"source": "timedomain", "code_version": STREAMING_CODE_VERSION,
             "timeline": timeline, "detail": result, "summary": summary}
+
+
+def report_sharing_for_summary(session_df):
+    """The matcher's shared-report count off the aligned frame's `attrs`, for the time-domain
+    summary the module response carries (`summary.timedomain.report_sharing`); None when the
+    frame carries none (an empty or foreign frame)."""
+    try:
+        sh = getattr(session_df, "attrs", {}).get("report_sharing")
+    except Exception:                                      # noqa: BLE001
+        sh = None
+    return dict(sh) if isinstance(sh, dict) else None
 
 
 def _maxabs_corr(X, y, min_n=4):

@@ -18,6 +18,7 @@ import MDTypography from "components/MDTypography";
 import MDButton from "components/MDButton";
 
 import BiomarkerTimeline from "./BiomarkerTimeline";
+import ReportSharingNote from "./ReportSharingNote";
 import BiomarkerDataTimeline from "./BiomarkerDataTimeline";
 import BiomarkerAnalytics from "./BiomarkerAnalytics";
 import BinarizationPreview from "./BinarizationPreview";
@@ -1019,6 +1020,7 @@ function Biomarkers() {
                               .find((m) => m.key === data.label_metric) || {}).label || data.label_metric}
                           </MDTypography>
                         ) : null}
+                        <ReportSharingNote summary={data.summary} />
                         {data.label_strategy ? (
                           <MDTypography variant="caption" color="dark" display="block">
                             {"Binarized by: "}

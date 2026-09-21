@@ -1094,3 +1094,56 @@ def test_min_pairs_floor_is_the_correlation_routines_own_floor():
         corr, _pval = streaming_psd.pearson_corr_psd_label(feat, lab)
         got = np.isfinite(corr[0, 0])
         assert bool(got) is want_finite, (n_finite, corr[0, 0])
+
+
+def test_align_pros_counts_reports_claimed_by_more_than_one_session_and_applies_no_cap():
+    """The PI, 2026-09-21, on decision 118's open question: the matcher keeps NO cap on how many
+    sessions one pain report may serve (`max_per_rating=None` stays), and the sharing becomes a
+    WARNING. `align_pros` counts it on the frame's `attrs["report_sharing"]`: how many matched
+    reports are claimed by more than one session, how many sessions those are, the largest
+    claim, and the sentence the page prints. The correlation downstream groups on the report's
+    identity, so the sharing is accounted for there, and the sentence says so."""
+    import datetime as _dt
+    base = _dt.datetime(2026, 3, 1, 12, 0, 0)
+    pro = pd.DataFrame({"date_time_s1_daily": [base, base + _dt.timedelta(days=1)], "nrs": [7.0, 4.0]})
+    # three sessions within an hour of the first report, one near the second, one unmatched
+    recs = [{"StartTime": base + _dt.timedelta(minutes=m)} for m in (-20, 5, 30)]
+    recs += [{"StartTime": base + _dt.timedelta(days=1, minutes=2)},
+             {"StartTime": base + _dt.timedelta(days=5)}]
+    sdf = adapter.align_pros(pro, target="session", recordings=recs, metrics=("nrs",),
+                             match_tolerance_min=60.0)
+    assert sdf["matched"].tolist() == [True, True, True, True, False]
+    sh = sdf.attrs["report_sharing"]
+    assert sh["mode"] == "time_window"
+    assert sh["cap_per_report"] is None                    # no cap, by the PI's ruling
+    assert sh["n_sessions_matched"] == 4
+    assert sh["n_reports_matched"] == 2
+    assert sh["n_reports_shared"] == 1                     # the first report, claimed three times
+    assert sh["n_sessions_on_shared_reports"] == 3
+    assert sh["max_sessions_per_report"] == 3
+    w = sh["warning"]
+    assert "1 of 2" in w and "3" in w and "no cap" in w.lower()
+    assert "grouped on the report" in w or "groups on the report" in w
+    # no sharing: no warning, the counts still there
+    one = adapter.align_pros(pro, target="session", recordings=recs[1:2] + recs[3:4], metrics=("nrs",),
+                             match_tolerance_min=60.0)
+    assert one.attrs["report_sharing"]["n_reports_shared"] == 0
+    assert one.attrs["report_sharing"]["warning"] is None
+    # the same-day path: sessions on one day share the day's aggregate by design, not by matching
+    day = adapter.align_pros(pro, target="session", recordings=recs, metrics=("nrs",))
+    assert day.attrs["report_sharing"]["mode"] == "same_day"
+    assert day.attrs["report_sharing"]["warning"] is None
+
+
+def test_the_time_domain_summary_carries_the_report_sharing_warning():
+    """`pipeline.run_timedomain_branch` copies the matcher's count onto `summary["report_sharing"]`
+    so the module response (`summary.timedomain.report_sharing`) can print it."""
+    assert callable(getattr(pipeline, "report_sharing_for_summary", None))
+    sdf = pd.DataFrame({"session_start": [], "session_date": []})
+    sdf.attrs["report_sharing"] = {"mode": "time_window", "cap_per_report": None, "n_sessions_matched": 4,
+                                   "n_reports_matched": 2, "n_reports_shared": 1,
+                                   "n_sessions_on_shared_reports": 3, "max_sessions_per_report": 3,
+                                   "warning": "W"}
+    out = pipeline.report_sharing_for_summary(sdf)
+    assert out["warning"] == "W" and out["n_reports_shared"] == 1
+    assert pipeline.report_sharing_for_summary(pd.DataFrame()) is None
