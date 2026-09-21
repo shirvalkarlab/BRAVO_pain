@@ -1266,7 +1266,43 @@ def _laterality(channel, hemisphere) -> str:
     return "ipsilateral" if side == str(hemisphere) else "contralateral"
 
 
-def screen_cells(evidence, *, response_fn, pain_positive_by_channel=None, amp_ceiling=None):
+_RING_WORDS = {"ZERO": 0, "ONE": 1, "TWO": 2, "THREE": 3}
+
+
+def sensing_pair_rings(channel):
+    """The two ring numbers of a bipolar sensing channel name (``ZERO_TWO_LEFT`` -> (0, 2)), or
+    None when the name does not carry two ring words."""
+    words = [w for w in str(channel or "").upper().split("_") if w in _RING_WORDS]
+    if len(words) != 2:
+        return None
+    a, b = _RING_WORDS[words[0]], _RING_WORDS[words[1]]
+    return (min(a, b), max(a, b))
+
+
+def flanking_pair(stim_rings):
+    """The one sensing pair the device allows for a set of stimulating rings on a lead: the two
+    contacts immediately flanking them -- (1, 3) for contact 2, (0, 2) for contact 1, (0, 3) for
+    contacts 1 and 2 together; None for contact 0 or 3 (nothing flanks them), an empty set, or a
+    non-contiguous set (decision 217; the three configurations per lead of the BrainSense tip
+    card p. 7-8 and the white paper p. 8)."""
+    rings = sorted({int(r) for r in (stim_rings or set())})
+    if not rings or rings != list(range(rings[0], rings[-1] + 1)):
+        return None
+    lo, hi = rings[0] - 1, rings[-1] + 1
+    return (lo, hi) if 0 <= lo and hi <= 3 else None
+
+
+def pair_flanks_stimulation(channel, stim_rings):
+    """Is this sensing pair the one the device allows with these stimulating rings on its lead?
+    None when the pair cannot be read or no stimulating ring is given."""
+    pair = sensing_pair_rings(channel)
+    if pair is None or not stim_rings:
+        return None
+    return pair == flanking_pair(stim_rings)
+
+
+def screen_cells(evidence, *, response_fn, pain_positive_by_channel=None, amp_ceiling=None,
+                 stim_rings_by_side=None):
     """Which cells carry evidence that could actually license a closed-loop deployment.
 
     The rule is :func:`cell_response_verdict` (decision 199): at least one band that falls with
@@ -1277,6 +1313,12 @@ def screen_cells(evidence, *, response_fn, pain_positive_by_channel=None, amp_ce
 
     ``amp_ceiling`` optionally refuses a cell whose contrast reaches above the declared hard limit
     (:data:`objective.AMP_HARD_LIMIT_MA`). Left as ``None`` no amplitude condition is applied.
+
+    ``stim_rings_by_side`` maps each lead ("Left", "Right") to the set of ring numbers it
+    stimulates on today (from the cathode in force). A cell whose sensing pair is not the pair
+    immediately FLANKING its own lead's stimulating contact is refused (decision 217: the device
+    offers three configurations per lead -- stimulate on 1 and sense 0-2, on 2 and sense 1-3, on
+    1 and 2 and sense 0-3); a lead with no ring given applies no rule and the row says so.
 
     RETRACTION, 2026-09-02: a third condition used to refuse any cell whose high amplitude arm
     exceeded an ENERGY-MATCHED ceiling scaling as sqrt(55/f). The PI has rejected the premise that
@@ -1331,6 +1373,22 @@ def screen_cells(evidence, *, response_fn, pain_positive_by_channel=None, amp_ce
         within_limit = bool(np.isfinite(amp_hi) and amp_hi <= cap + 1e-9)
 
         fails = list(v["blocking_reasons"])
+        sensing_side = _sensing_side(ch)
+        rings = (stim_rings_by_side or {}).get(sensing_side) if stim_rings_by_side else None
+        flanks = pair_flanks_stimulation(ch, rings) if rings else None
+        if flanks is False:
+            pair = sensing_pair_rings(ch)
+            allowed = flanking_pair(rings)
+            stim_txt = " and ".join(str(r) for r in sorted(rings))
+            if allowed is None:
+                fails.insert(0, f"the {sensing_side.lower()} lead is stimulating on contact {stim_txt}, "
+                                f"and no sensing pair flanks that contact; the device offers no sensing "
+                                f"configuration on this lead (contralateral sensing is the alternative)")
+            else:
+                fails.insert(0, f"the {sensing_side.lower()} lead is stimulating on contact {stim_txt}, so "
+                                f"the only sensing pair the device allows is {allowed[0]}-{allowed[1]} "
+                                f"(the contacts immediately above and below it); this pair is "
+                                f"{pair[0]}-{pair[1]}")
         if not within_limit:
             fails.insert(0, f"high arm {amp_hi:.1f} mA exceeds the {cap:.1f} mA hard limit, "
                             "so the response was measured outside the programmable envelope")
@@ -1350,6 +1408,7 @@ def screen_cells(evidence, *, response_fn, pain_positive_by_channel=None, amp_ce
                          laterality=_laterality(ch, hemi),
                          amp_limit_mA=(round(cap, 2) if np.isfinite(cap) else None),
                          within_amp_limit=within_limit,
+                         sensing_pair_flanks_stimulation=flanks,
                          deployable=(v["responds"] is True and not fails),
                          blocking_reasons="; ".join(fails)))
     screen = pd.DataFrame(rows)

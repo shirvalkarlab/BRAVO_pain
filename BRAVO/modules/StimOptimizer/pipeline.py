@@ -391,6 +391,7 @@ class LiveEvidence:
 def live_evidence(participant, *, amp_ceiling=None,
                   channel=None, hemisphere=None, rate_hz=None, bands=None,
                   force_refresh=None, inputs=None, pain_positive_by_channel=None,
+                  stim_rings_by_side=None,
                   **build_kwargs) -> LiveEvidence:
     """Build, screen and select LFP evidence for a participant from platform data.
 
@@ -423,7 +424,8 @@ def live_evidence(participant, *, amp_ceiling=None,
         bands=bands, inputs=inputs, **build_kwargs)
 
     screen, best = EV.screen_cells(ev, response_fn=LR.assess_response, amp_ceiling=amp_ceiling,
-                                   pain_positive_by_channel=pain_positive_by_channel)
+                                   pain_positive_by_channel=pain_positive_by_channel,
+                                   stim_rings_by_side=stim_rings_by_side)
     if hemisphere is not None and rate_hz is not None:
         sel, note = EV.select_for(ev, rate_hz=rate_hz, hemisphere=hemisphere, channel=channel)
         key = None if sel is None else next(
@@ -652,7 +654,8 @@ def _render(ctx, label, outdir, backend, dpi):
 def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemisphere=None,
                        rate_hz=None, bands=None, force_refresh=None, request_data=None,
                        washin_min=1.0, design=None, stream=None, evidence_inputs=None,
-                       pain_positive_by_channel=None, **two_stage_kwargs) -> TwoStageReport:
+                       pain_positive_by_channel=None, stim_rings_by_side=None,
+                       **two_stage_kwargs) -> TwoStageReport:
     """Run the staged pipeline on a PARTICIPANT, with the LFP evidence built from real recordings.
 
     WHY THIS EXISTS. The handoff carried "STILL NOT BUILT: Stage 2 does not yet CALL lfp_evidence on
@@ -745,7 +748,8 @@ def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemispher
                                        hemisphere=None, rate_hz=r, bands=bands,
                                        force_refresh=force_refresh, stream=stream,
                                        inputs=evidence_inputs,
-                                       pain_positive_by_channel=pain_positive_by_channel)
+                                       pain_positive_by_channel=pain_positive_by_channel,
+                                       stim_rings_by_side=stim_rings_by_side)
         per, chosen = {}, {}
         for h in sides:
             sel, key, note = select_for_side(by_rate[pins[h]], h, pins[h], channel=channel)

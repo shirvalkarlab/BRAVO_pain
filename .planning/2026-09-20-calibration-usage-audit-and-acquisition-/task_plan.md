@@ -6,11 +6,10 @@ the right way; every stored time-domain or device-FFT value is LSB before storag
 drops pain-report matching for a fast acquisition timeline. Fix confirmed errors test-first, one at a time.
 
 ## Next Step
-His order (2026-09-20): 0a/0b (213), 1 (214), 2 (215), 3 (216) DONE. Next: 4 the sandwich rule on the
-screen; 5 flip the 20 s margin switch.
+All five done (213-217). Nothing queued. For the PI: the clinic implication of 217 (L 0-3+ needs L C+1-2-); the stale-constant comments (audit A item 6); audit B's per-recording tile value (not built).
 
 ## Current Phase
-Phase 2
+Phase 3
 
 ### Phase 1: Audits (two read-only sub-agents)
 - [x] A: every reader of `LSB_PER_UV2_TRANSFORM` / `LSB_PER_DEVICE_PSD` / the frozen model traced; input unit and scale stated; TD route uses the transform, device-FFT route the bridge; stale literals and contradicting comments listed
@@ -21,9 +20,9 @@ Phase 2
 - [x] 0a/0b: join recordings across a short restart; both legs measured; leg tagged; rule versions bumped; live proof; decision 213
 - [x] 1: the 0.146-scaled cross-check on the Closed-Loop "LSB & power" card -- decision 214; the independent pairing gives 0.98× the constant
 - [x] 2: the constants and a rule version in the Closed-Loop `inputs` key -- decision 215; the stale entry was live
-- [ ] 4: the sandwich rule on the readiness screen (a pair containing the stimulating contact is never offered)
-- [ ] 5: `USE_POST_RAMP_MARGIN` ON, with the 9/16 session as the evidence
-- **Status:** in_progress
+- [x] 4: the flanking-pair rule on the readiness screen, per lead from the cathode in force -- decision 217; usable 11 -> 0
+- [x] 5: the margin switch STAYS OFF by the PI's ruling (use as much data as we can); recorded in 217, no code flip
+- **Status:** complete
 
 ### Phase 3: Acquisition timeline (the PI: "go all")
 - [x] Endpoint keyed on the recording set and the constants; the raw kind `acquisition_timeline`; the sample index on its own endpoint

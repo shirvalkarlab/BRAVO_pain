@@ -666,6 +666,31 @@ def stim_contacts_short(cathode, hemisphere) -> str | None:
     return f"{side} C+{''.join(parts)}".strip()
 
 
+def stim_rings(cathode) -> set:
+    """The ring numbers a programmed cathode stimulates on: "2a-2b-2c" -> {2},
+    "1a-1b-1c-2a-2b-2c" -> {1, 2}; empty for none / blank / NaN."""
+    if cathode is None:
+        return set()
+    raw = str(cathode).strip()
+    if not raw or raw.lower() in ("none", "nan", "case"):
+        return set()
+    out = set()
+    for t in raw.replace("+", "-").split("-"):
+        digit = "".join(ch for ch in t if ch.isdigit())
+        if digit:
+            out.add(int(digit))
+    return out
+
+
+def stim_rings_by_side(in_force) -> dict:
+    """{"Left": {rings}, "Right": {rings}} from `in_force_by_side`'s answer (its `contacts_raw`)."""
+    out = {}
+    for side in ("Left", "Right"):
+        row = (in_force or {}).get(side) or {}
+        out[side] = stim_rings(row.get("contacts_raw"))
+    return out
+
+
 def in_force_by_side(es, epochs=None) -> dict:
     """The setting in force on EACH side: rate, that side's own pulse width and current, and its
     programmed cathode contacts, with the epoch and the time it began. Empty when there is no
@@ -1196,7 +1221,10 @@ def two_stage_block(participant, es, *, request_data, stream, washin_min, hemisp
             gate_kwargs=gate_kwargs,
             # Which bands rise with pain per contact (decision 199): the screen that picks
             # each side's cell and the gate that judges it read the same mapping.
-            pain_positive_by_channel=pain_positive_by_channel)
+            pain_positive_by_channel=pain_positive_by_channel,
+            # The sandwich rule (decision 217): the ring each lead stimulates on today, so the
+            # screen never offers a sensing pair that contains it.
+            stim_rings_by_side=stim_rings_by_side(in_force))
     except Exception as exc:                          # noqa: BLE001 -- adjunct block
         _log.exception("StimOptimizer: the two-stage path failed")
         return {"requested": True, "available": False, "backend": TWO_STAGE_BACKEND,
@@ -1465,7 +1493,7 @@ def _run_for_participant(request_data: dict) -> dict:
                                              inputs=_ev_inputs, screen_out=_screen_out,
                                              ceilings=_ceilings,
                                              pain_positive_by_channel=_pain_by_channel,
-                                             pain_block=_pain_block),
+                                             pain_block=_pain_block, in_force=in_force),
         "amplitude_effect": amp_block,
         "ground_truth": gt_block,
         "store": store_block,
@@ -1805,7 +1833,8 @@ def _pain_relationship_key(mapping, block):
 
 
 def closed_loop_readiness(participant, es, *, include=True, inputs=None, screen_out=None,
-                          ceilings=None, pain_positive_by_channel=None, pain_block=None) -> dict:
+                          ceilings=None, pain_positive_by_channel=None, pain_block=None,
+                          in_force=None) -> dict:
     """Whether the sensed LFP could drive Adaptive Therapy for this participant, and if not why.
 
     This is a DIFFERENT question from the open-loop optimizer above it, and the payload keeps them
@@ -1835,7 +1864,10 @@ def closed_loop_readiness(participant, es, *, include=True, inputs=None, screen_
         # `inputs` is the (sensed frame, epochs) pair the request built once for both this
         # screen and the two-stage path; None builds it here (2026-09-12).
         le = _pl.live_evidence(participant, amp_ceiling=_obj.AMP_HARD_LIMIT_MA, bands=None,
-                               inputs=inputs, pain_positive_by_channel=pain_positive_by_channel)
+                               inputs=inputs, pain_positive_by_channel=pain_positive_by_channel,
+                               # the sandwich rule (decision 217): the ring each lead stimulates
+                               # on today, from the settings in force
+                               stim_rings_by_side=stim_rings_by_side(in_force) if in_force else None)
         screen = le.screen if le.screen is not None else pd.DataFrame()
         if screen_out is not None:
             # The full screen frame for the titration plan (2026-09-12), which picks each side's
