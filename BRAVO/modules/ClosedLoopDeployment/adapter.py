@@ -778,6 +778,25 @@ def recording_set_signature(participant):
             _hashlib.blake2b(blob, digest_size=16).hexdigest())
 
 
+#: The `inputs` entry's own rule version (decision 215). Bump it when what the entry holds changes
+#: for a reason no recording and no constant would show.
+_INPUTS_RULE_VERSION = "v2_inputs_keyed_on_constants"
+
+
+def inputs_signature(participant):
+    """The key of the `inputs` store entry: the recording set, the calibration constants in
+    effect and this entry's rule version (decision 215).
+
+    The entry's evidence frame carries `band_lsb_<centre>` columns read from the tiles, which are
+    keyed on the constants (decision 25); until 2026-09-20 this entry was keyed on the recording
+    set alone, so a constant change (decisions 209, 211) left an entry on disk serving LSB computed
+    under the old constant until a recording was added or removed.
+    """
+    from Biomarkers.routines import analytics as _an
+    return (recording_set_signature(participant), _INPUTS_RULE_VERSION,
+            float(_an.LSB_PER_UV2_TRANSFORM), float(_an.LSB_PER_DEVICE_PSD))
+
+
 def evidence_inputs_cached(participant, *, force_refresh=False):
     """``StimOptimizer.evidence_inputs`` and ``build_design_matrix``, memoised together.
 
@@ -790,7 +809,7 @@ def evidence_inputs_cached(participant, *, force_refresh=False):
     cache imposes.
     """
     from StimOptimizer import adapter as _sa
-    sig = recording_set_signature(participant)
+    sig = inputs_signature(participant)
     # The real participant identity, passed to the store (decision 85) so its own eviction step
     # (`_sweep_superseded`) can tell this participant's stale "inputs" entries apart from every
     # OTHER participant's -- passing `None` here, as every call site used to, put every

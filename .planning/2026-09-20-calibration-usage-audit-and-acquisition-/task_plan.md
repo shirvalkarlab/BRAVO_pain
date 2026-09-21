@@ -6,7 +6,7 @@ the right way; every stored time-domain or device-FFT value is LSB before storag
 drops pain-report matching for a fast acquisition timeline. Fix confirmed errors test-first, one at a time.
 
 ## Next Step
-His order (2026-09-20): 0a/0b DONE (213), item 1 DONE (214). Next: 2 the constants in the Closed-Loop `inputs` key; 3 the acquisition timeline; 4 the sandwich rule on the
+His order (2026-09-20): 0a/0b (213), 1 (214), 2 (215) DONE. Next: 4 the sandwich rule on the
 screen; 5 flip the 20 s margin switch.
 
 ## Current Phase
@@ -20,7 +20,7 @@ Phase 2
 ### Phase 2: Verify and fix (his order, test-first, one commit each)
 - [x] 0a/0b: join recordings across a short restart; both legs measured; leg tagged; rule versions bumped; live proof; decision 213
 - [x] 1: the 0.146-scaled cross-check on the Closed-Loop "LSB & power" card -- decision 214; the independent pairing gives 0.98× the constant
-- [ ] 2: the constants and a rule version in the Closed-Loop `inputs` key
+- [x] 2: the constants and a rule version in the Closed-Loop `inputs` key -- decision 215; the stale entry was live
 - [ ] 4: the sandwich rule on the readiness screen (a pair containing the stimulating contact is never offered)
 - [ ] 5: `USE_POST_RAMP_MARGIN` ON, with the 9/16 session as the evidence
 - **Status:** in_progress
