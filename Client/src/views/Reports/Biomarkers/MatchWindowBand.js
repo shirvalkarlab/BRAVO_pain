@@ -117,17 +117,17 @@ export default function MatchWindowBand({
           </MDTypography>
           <ToggleButtonGroup value={matchDirection} exclusive size="small" aria-label="Match direction"
                              onChange={(e, v) => { if (v) setMatchDirection(v); }} sx={TOGGLE_SX}>
-            <ToggleButton value="pro_first" title="Walk the pain reports; each claims its closest neural samples on either side, up to the cap per rating">Report-first</ToggleButton>
-            <ToggleButton value="nearest" title="Walk the neural samples; each pairs with the nearest pain report on either side">Nearest, either side</ToggleButton>
-            <ToggleButton value="prior" title="Walk the neural samples; each pairs only with a pain report recorded after it (the closed-loop direction)">Before the report</ToggleButton>
+            <ToggleButton value="pro_first" title="Walk the pain reports; each claims its closest neural samples on either side, up to the cap per rating">Report-first matching</ToggleButton>
+            <ToggleButton value="nearest" title="Walk the neural samples; each pairs with the nearest pain report on either side">Neural-first matching</ToggleButton>
+            <ToggleButton value="prior" title="Walk the neural samples; each pairs only with a pain report recorded after it (the closed-loop direction)">Neural-first, pre-report</ToggleButton>
           </ToggleButtonGroup>
           {showDescriptions ? (
             <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
               {matchDirection === "pro_first"
-                ? "Walks the pain reports and gives each its closest neural samples on either side of it, up to the cap per rating and per contact pair. The most reports enter, which suits asking whether a band tracks pain at all."
+                ? "The reports choose, in time order. Each pain report takes up to the cap of unclaimed neural samples per contact pair, the closest ones, on either side of it. A sample already taken by an earlier report is not taken again, and a sample whose nearest report is already full can be taken by another report inside the window; the gap rule is not used. The most reports enter, which suits asking whether a band tracks pain at all."
                 : matchDirection === "nearest"
-                  ? "Walks the neural samples and pairs each with the nearest pain report on either side. Association at the same time, not forecasting."
-                  : "Walks the neural samples and pairs each only with a pain report recorded after it. The direction a closed loop works in: the signal comes first, the rating follows. Samples recorded after their nearest report are left out, which is why this setting keeps fewer."}
+                  ? "The samples choose. Every neural sample is handed to its nearest pain report on either side; then each report keeps only its closest samples per contact pair up to the cap, with the gap rule between them, and every sample over the cap is dropped, not passed to the next-nearest report. Association at the same time, not forecasting."
+                  : "The samples choose, one side only. Every neural sample is handed to the nearest pain report recorded after it; the cap and the gap rule then apply as under Neural-first matching. The direction a closed loop works in: the signal comes first, the rating follows. Samples recorded after their nearest report are left out, which is why this setting keeps fewer."}
             </MDTypography>
           ) : null}
         </Grid>

@@ -1,8 +1,7 @@
 /**
  * The timing histogram at the top of the Binarization card (the PI, 2026-09-21, option C): when
- * each neural sample falls relative to the nearest pain report, one translucent series per source
- * OVERLAID (not stacked), so the three sources read through each other the way the offline figure
- * did; the x-axis follows the match-window slider and shows 25% more on each side, greyed, so a
+ * each neural sample falls relative to the nearest pain report, one series per source STACKED
+ * (the PI, 2026-09-21, after seeing the overlaid version), in the offline figure's colours; the x-axis follows the match-window slider and shows 25% more on each side, greyed, so a
  * reader sees what the window leaves out; the direction toggle greys the side it excludes. Zoom and
  * pan are Plotly's own; a constant uirevision keeps them across slider drags.
  *
@@ -34,17 +33,17 @@ export default function TimingHistogram({ scanIndex, painSeries, windowMin, matc
     for (const s of SOURCE_SERIES) {
       const ser = data.series[s.key];
       traces.push({ type: "bar", name: s.name, x: data.centers, y: ser.outside, width: w,
-        marker: { color: TAIL_GREY }, opacity: 0.55, showlegend: false,
+        marker: { color: TAIL_GREY }, opacity: 0.8, showlegend: false,
         hovertemplate: `%{y} ${s.name} samples, outside the window<br>%{x:.2f} min<extra></extra>` });
     }
     for (const s of SOURCE_SERIES) {
       const ser = data.series[s.key];
       traces.push({ type: "bar", name: s.name, x: data.centers, y: ser.inside, width: w,
-        marker: { color: s.color, line: { color: s.color, width: 0.5 } }, opacity: 0.6,
+        marker: { color: s.color, line: { color: s.color, width: 0.5 } }, opacity: 0.85,
         hovertemplate: `%{y} ${s.name} samples<br>%{x:.2f} min<extra></extra>` });
     }
     const layout = {
-      barmode: "overlay", bargap: 0.05,
+      barmode: "stack", bargap: 0.05,
       margin: { l: 48, r: 12, t: 6, b: 46 },
       paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
       font: { size: 12, color: INK },
@@ -75,7 +74,7 @@ export default function TimingHistogram({ scanIndex, painSeries, windowMin, matc
 
   const dirText = data.priorOnly ? " on the side before the report" : "";
   const reportFirstNote = String(matchDirection || "").toLowerCase() === "pro_first"
-    ? " Under Report-first a sample whose nearest report has already reached its cap can be paired with another report inside the window; the histogram places every sample by its nearest report."
+    ? " Under Report-first matching a sample whose nearest report has already reached its cap can be paired with another report inside the window; the histogram places every sample by its nearest report."
     : "";
   return (
     <MDBox display="flex" flexDirection="column" gap={0.5}>

@@ -1,7 +1,7 @@
 /**
  * The timing histogram at the top of the Binarization card (the PI, 2026-09-21, option C): when each
  * neural sample falls relative to the nearest pain report, one translucent series per source
- * overlaid (the offline figure's look), the x-axis following the match-window slider with 25% extra
+ * stacked in the offline figure's colours, the x-axis following the match-window slider with 25% extra
  * shown greyed on each side, and the direction toggle deciding which side is in colour.
  */
 import "@testing-library/jest-dom";
@@ -86,12 +86,12 @@ describe("TimingHistogram", () => {
     rtlRender(wrap(<TimingHistogram scanIndex={scanIndex} painSeries={painSeries} windowMin={2} matchDirection="nearest" metricLabel="Left Leg VAS" />));
     const last = Plotly.__calls[Plotly.__calls.length - 1];
     expect(last).toBeDefined();
-    expect(last.layout.barmode).toBe("overlay");
+    expect(last.layout.barmode).toBe("stack");
     expect(last.layout.xaxis.range).toEqual([-2.5, 2.5]);
     const names = last.traces.map((t) => t.name);
     expect(names).toEqual(expect.arrayContaining(["time-domain signal", "patient-event FFT", "montage FFT"]));
     const coloured = last.traces.filter((t) => t.showlegend !== false);
-    expect(coloured.every((t) => t.opacity === 0.6)).toBe(true);
+    expect(coloured.every((t) => t.opacity === 0.85)).toBe(true);
     expect(last.layout.shapes.some((s) => s.type === "rect" && s.x0 === -2 && s.x1 === 2)).toBe(true);
     expect(typeof last.layout.uirevision).toBe("string");
   });

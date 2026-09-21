@@ -77,10 +77,10 @@ describe("reportCoverage", () => {
     expect(all.indexOf("Split into high and low pain")).toBeLessThan(all.indexOf("Match direction"));
     expect(all).toContain("Low ≤ 33ᵗʰ pct");
     expect(all).toContain("High ≥ 67ᵗʰ pct");
-    for (const label of ["Report-first", "Nearest, either side", "Before the report"]) {
+    for (const label of ["Report-first matching", "Neural-first matching", "Neural-first, pre-report"]) {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
-    expect(screen.getByRole("button", { name: "Before the report" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Neural-first, pre-report" })).toHaveAttribute("aria-pressed", "true");
     expect(container.querySelector('[data-testid="timing-histogram"]')).not.toBeNull();
     expect(all).toContain("samples inside ±2 min on the side before the report");
   });
