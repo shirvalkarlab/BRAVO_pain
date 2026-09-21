@@ -5,13 +5,14 @@
  * and the pain series the card already holds, so it follows the slider live.
  */
 import "@testing-library/jest-dom";
-import { render as rtlRender } from "@testing-library/react";
+import { render as rtlRender, screen } from "@testing-library/react";
 import { ThemeProvider } from "@mui/material/styles";
 import theme from "assets/theme";
 import { PlatformContextProvider } from "context";
 
 import { reportCoverage, computeMatchedScanModel } from "./binarizationModel";
 import BinarizationPreview from "./BinarizationPreview";
+import MatchWindowBand from "./MatchWindowBand";
 
 jest.mock("plotly.js-dist", () => {
   const noop = () => {};
@@ -59,22 +60,41 @@ describe("reportCoverage", () => {
     expect(reportCoverage({ scanIndex, painSeries: null, toleranceMin: 2 })).toBeNull();
   });
 
-  it("the card prints the sentence in bold at the top, with the metric named and the prior-only count", () => {
-    const scanModel = computeMatchedScanModel({ scanIndex, painSeries, toleranceMin: 2, strategy: "median",
-      percentileLow: 33, percentileHigh: 67, matchDirection: "prior" });
+  it("the card's top band prints the sentence in bold above the match window, the split and the direction", () => {
     const { container } = rtlRender(wrap(
-      <BinarizationPreview points={[]} strategy="median" percentileLow={33} percentileHigh={67}
-        metricLabel="Left Leg VAS" metricKey="left_leg_vas" totalReports={5} loading={false}
-        matchTolerance={2} setMatchTolerance={() => {}} scanModel={scanModel} matchedLoading={false}
-        matchDirty={false} setPercentileLow={() => {}} setPercentileHigh={() => {}} setStrategy={() => {}}
-        showDescriptions={false} matchDirection="prior" coverage={reportCoverage({ scanIndex, painSeries, toleranceMin: 2 })} />));
+      <MatchWindowBand coverage={reportCoverage({ scanIndex, painSeries, toleranceMin: 2 })} metricLabel="Left Leg VAS"
+        matchTolerance={2} setMatchTolerance={() => {}} strategy="tertile" setStrategy={() => {}}
+        strategyOptions={[{ key: "tertile", label: "Tertile (low/high, drop middle)" }]} percentileLow={33} percentileHigh={67}
+        matchDirection="prior" setMatchDirection={() => {}} scanIndex={scanIndex} painSeries={painSeries} />));
     const el = container.querySelector('[data-testid="report-coverage"]');
     expect(el).not.toBeNull();
     const bold = el.querySelector("b");
     expect(bold.textContent).toBe("1 of 5 Left Leg VAS reports have a neural sample within ±2 min; 2 within ±10 min; 3 within ±60 min.");
     expect(el.textContent.trim()).toBe(bold.textContent);   // the bold clause alone (the PI, 2026-09-21)
-    // the sentence sits above the match-window control
     const all = container.textContent;
     expect(all.indexOf("reports have a neural sample")).toBeLessThan(all.indexOf("Match window"));
+    expect(all.indexOf("Match window")).toBeLessThan(all.indexOf("Split into high and low pain"));
+    expect(all.indexOf("Split into high and low pain")).toBeLessThan(all.indexOf("Match direction"));
+    expect(all).toContain("Low ≤ 33ᵗʰ pct");
+    expect(all).toContain("High ≥ 67ᵗʰ pct");
+    for (const label of ["Report-first", "Nearest, either side", "Before the report"]) {
+      expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
+    }
+    expect(screen.getByRole("button", { name: "Before the report" })).toHaveAttribute("aria-pressed", "true");
+    expect(container.querySelector('[data-testid="timing-histogram"]')).not.toBeNull();
+    expect(all).toContain("samples inside ±2 min on the side before the report");
+  });
+
+  it("the preview no longer carries the sentence or the window control (they live in the band)", () => {
+    const scanModel = computeMatchedScanModel({ scanIndex, painSeries, toleranceMin: 2, strategy: "median",
+      percentileLow: 33, percentileHigh: 67, matchDirection: "prior" });
+    const { container } = rtlRender(wrap(
+      <BinarizationPreview points={[]} strategy="median" percentileLow={33} percentileHigh={67}
+        metricLabel="Left Leg VAS" metricKey="left_leg_vas" totalReports={5} loading={false}
+        matchTolerance={2} scanModel={scanModel} matchedLoading={false}
+        matchDirty={false} setPercentileLow={() => {}} setPercentileHigh={() => {}} setStrategy={() => {}}
+        showDescriptions={false} />));
+    expect(container.querySelector('[data-testid="report-coverage"]')).toBeNull();
+    expect(container.textContent).not.toContain("Match window");
   });
 });

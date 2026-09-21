@@ -25,7 +25,6 @@
 import { useMemo, useEffect, useRef } from "react";
 import Plotly from "plotly.js-dist";
 import Slider from "@mui/material/Slider";
-import TextField from "@mui/material/TextField";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -68,13 +67,14 @@ function binWidthForMetric(metricKey, vmin, vmax) {
 
 function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percentileHigh,
                                metricLabel, metricKey, loading, totalReports,
-                               matchTolerance, setMatchTolerance, matchDirty,
+                               matchTolerance, matchDirty,
                                scanModel, matchedLoading,
                                setPercentileLow, setPercentileHigh, setStrategy,
-                               showDescriptions = false,
-                               coverage = null, matchDirection = "prior" }) {
+                               showDescriptions = false }) {
   const ref = useRef(null);
-  const hasTolControl = typeof setMatchTolerance === "function";
+  // The match-window control itself moved to the card's top band (MatchWindowBand, option C); this
+  // panel only needs to know whether a window is in force to explain an empty match.
+  const hasTolControl = Number.isFinite(Number(matchTolerance)) && Number(matchTolerance) > 0;
 
   // Aggregate the raw PRO reports to ONE value per calendar day — the legacy daily-mode fallback.
   const dayAgg = useMemo(() => {
@@ -489,41 +489,6 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
           {headerCaption}
         </MDTypography>
       </MDBox>
-
-      {/* THE COVERAGE SENTENCE (the PI, 2026-09-21): what the window admits and what it leaves out,
-          in one bold line above the control that sets it. The counts follow the slider live. */}
-      {coverage && coverage.n_reports > 0 ? (
-        <MDTypography variant="caption" color="dark" component="div" data-testid="report-coverage"
-                      sx={{ fontSize: 13, mb: 0.75, lineHeight: 1.45 }} aria-live="polite">
-          <b>{`${coverage.n_within_window.toLocaleString()} of ${coverage.n_reports.toLocaleString()} ${metricLabel || "pain"} reports have a neural sample within ±${coverage.tolerance_min} min; ${coverage.n_within_10.toLocaleString()} within ±10 min; ${coverage.n_within_60.toLocaleString()} within ±60 min.`}</b>
-        </MDTypography>
-      ) : null}
-
-      {/* PRO<->PSD match-window control (minutes). ABOVE the histogram: it sets which neural samples
-          carry a pain label at all — and therefore the high/low counts shown below. In matched mode
-          the histogram updates LIVE as this moves (no recompute needed). */}
-      {hasTolControl ? (
-        <MDBox display="flex" flexDirection="row" alignItems="center" gap={1.25} mb={0.5}
-               sx={{ px: 0.5, py: 0.5, borderRadius: 1, backgroundColor: "#F4F6F8" }}>
-          <MDTypography variant="caption" fontWeight="bold" color="dark" sx={{ fontSize: 12, whiteSpace: "nowrap" }}>
-            {"Match window ± "}
-          </MDTypography>
-          <Slider
-            value={Math.min(Number(matchTolerance) || 0, 240)} min={1} max={240} step={1}
-            valueLabelDisplay="auto" size="small" sx={{ flex: 1, mx: 0.5 }}
-            onChange={(e, v) => setMatchTolerance(v)}
-          />
-          <TextField
-            value={matchTolerance} type="number" size="small" variant="outlined"
-            onChange={(e) => {
-              const v = parseFloat(e.target.value);
-              if (Number.isFinite(v) && v > 0) setMatchTolerance(v);
-            }}
-            inputProps={{ min: 1, max: 240, step: 1, style: { width: 52, padding: "4px 6px", fontSize: 13 } }}
-          />
-          <MDTypography variant="caption" color="dark" sx={{ fontSize: 12 }}>{"min"}</MDTypography>
-        </MDBox>
-      ) : null}
 
       {/* Matched neural-sample readout — PRO-first leads the headline (units of independence),
           PSD coverage carries the supporting numbers; in PSD-first modes the order flips. The

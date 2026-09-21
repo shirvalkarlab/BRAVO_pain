@@ -22,6 +22,7 @@ import ReportSharingNote from "./ReportSharingNote";
 import BiomarkerDataTimeline from "./BiomarkerDataTimeline";
 import BiomarkerAnalytics from "./BiomarkerAnalytics";
 import BinarizationPreview from "./BinarizationPreview";
+import MatchWindowBand from "./MatchWindowBand";
 // BandTimeSweepPanel (the older, non-interactive tables-and-server-figures rendering of this
 // same grid) is superseded on this page by BiomarkerHeatmapGrids below -- kept as a file rather
 // than deleted (CLAUDE.md §2 principle 4 warns against deleting something that still works), but
@@ -169,14 +170,6 @@ function Biomarkers() {
   // opened all at once by one push-button at the card's bottom left. Not persisted: every load
   // starts folded. Controls, values and counts stay visible either way.
   const [showDescriptions, setShowDescriptions] = useState(false);
-  // The timeline's per-pain-rating sensed-band-power circles (av.pro_lsb, BiomarkerDataTimeline.js)
-  // are chosen by `availability.per_pro_lsb`'s own match window in SECONDS — separate from, and much
-  // narrower than, the main match-tolerance slider (which is minutes, and governs the exploratory
-  // scan/compute below, not the timeline). This was a hardcoded 120 s with no request path at all
-  // until the backend wiring above; default kept at the historical 120 s so nothing already drawn
-  // moves until this slider is touched.
-  // Declared here (rather than beside the other debounced copies below) because the always-on
-  // data-availability fetch effect, which needs it, runs earlier in this component than that block.
   // Timeline color mode: "multimodal" colors the neural lanes by sensing center frequency (the data
   // view); "binarization" recolors every modality LIVE by its high/low/excluded pain label at the
   // current match window (matched-and-included = vermillion/blue, everything else dimmed light grey),
@@ -269,14 +262,11 @@ function Biomarkers() {
   //  • main match-tolerance slider = eligibility radius (how FAR from a rating a window may be);
   //  • TD-signal slider (matchExtentSec) = how MUCH of the nearest time-domain signal to use.
   const tdEpochs = Math.max(1, Math.round(matchExtentSec / 3));
-  const reuseNote = allowWindowReuse
-    ? "Window reuse is ON: a window may serve several overlapping ratings, raising n at the cost of independence."
-    : "No LSB window is shared between ratings, so each rating is one independent observation of the cache.";
   const liveMatchCaption =
-    `PSD-bridge LSB for a rating = median over every device-PSD event within the main match tolerance `
-    + `(\u00b1${matchTolerance} min). Time-domain LSB = median over the nearest ${tdEpochs} of the 3 s `
-    + `tiles (\u2248${matchExtentSec} s of signal) within that same tolerance — the TD slider sets how `
-    + `much signal to use, not how far to search. ` + reuseNote;
+    `A rating's device-FFT value is the median over every device FFT snapshot within the match window `
+    + `(\u00b1${matchTolerance} min). Its time-domain value is the median over the nearest ${tdEpochs} of the 3 s `
+    + `tiles (\u2248${matchExtentSec} s of signal) within that same window: this slider sets how much signal `
+    + `is used, not how far to search.`;
 
   useEffect(() => {
     if (!participant_uid) {
@@ -621,169 +611,96 @@ function Biomarkers() {
                     </Grid>
                   ) : null}
 
-                  {/* Controls row: LEFT box = pain metric + binarization selector + sliders
-                                   RIGHT box = live binarization preview histogram
-                      Thick black border wraps both panels. Renders on every tab.               */}
+                  {/* THE BINARIZATION CARD, option C (the PI, 2026-09-21). Top band, full width:
+                      the coverage sentence, the three live settings (match window, split, direction)
+                      and the timing histogram they redraw. Below it two columns: LEFT the settings
+                      sent on Compute, stacked in one style; RIGHT the binarization preview, kept as
+                      it was. Thick black border wraps the card. Renders on every tab. */}
                   <Grid item xs={12}>
                     <MDBox px={2} pb={1.5}>
                       <Card sx={{ border: "2.5px solid #1A1A1A", boxShadow: "none", borderRadius: 2 }}>
+                        <MatchWindowBand
+                          coverage={reportCoverageLive}
+                          metricLabel={previewMetricLabel}
+                          matchTolerance={matchTolerance}
+                          setMatchTolerance={setMatchTolerance}
+                          strategy={strategy}
+                          setStrategy={setStrategy}
+                          strategyOptions={(data && data.available_strategies) || DEFAULT_STRATEGY_OPTIONS}
+                          percentileLow={percentileLow}
+                          percentileHigh={percentileHigh}
+                          matchDirection={matchDirection}
+                          setMatchDirection={setMatchDirection}
+                          scanIndex={scanIndex}
+                          painSeries={painSeriesLive}
+                          showDescriptions={showDescriptions}
+                        />
                         <Grid container sx={{ minHeight: 480 }}>
 
-                          {/* LEFT: pain metric dropdown + binarization dropdown + sliders */}
+                          {/* LEFT: the settings sent on Compute. Each block is a bold 14 px label, its
+                              control, and (when the descriptions are open) one italic sentence. */}
                           <Grid item xs={12} md={5}
                             sx={{ borderRight: { md: "1.5px solid #1A1A1A" }, borderBottom: { xs: "1.5px solid #1A1A1A", md: "none" } }}>
-                            <MDBox p={2} display="flex" flexDirection="column" gap={1.5}>
-                              <MDBox>
-                                <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 17 }}>
-                                  {"Binarization — defines the high vs low pain classifier boundary"}
-                                </MDTypography>
-                                <FormControl fullWidth size="medium" sx={{ mt: 0.5 }}>
-                                  <Select
-                                    value={strategy}
-                                    onChange={(e) => setStrategy(e.target.value)}
-                                    sx={{ fontSize: 16, fontWeight: 500 }}
-                                  >
-                                    {((data && data.available_strategies) || DEFAULT_STRATEGY_OPTIONS).map((s) => (
-                                      <MenuItem key={s.key} value={s.key} sx={{ fontSize: 16 }}>{s.label}</MenuItem>
-                                    ))}
-                                  </Select>
-                                </FormControl>
-                              </MDBox>
-                              {strategy === "tertile" || strategy === "percentile" ? (
-                                // Cut percentiles are set by the two-handle range slider above the
-                                // histogram (right panel). These chips are the live readout of the
-                                // current low/high cut — one control, so plot and readout can't drift.
-                                <MDBox display="flex" flexDirection="row" alignItems="center" gap={2}>
-                                  <MDBox display="flex" flexDirection="row" alignItems="baseline" gap={0.75}>
-                                    <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ fontSize: 13 }}>
-                                      {"Low pain ≤"}
-                                    </MDTypography>
-                                    <MDTypography variant="button" fontWeight="bold" sx={{ fontSize: 15, color: "#0072B2" }}>
-                                      {`${(strategy === "tertile" ? 33.3 : percentileLow).toFixed(0)}ᵗʰ pct`}
-                                    </MDTypography>
-                                  </MDBox>
-                                  <MDBox display="flex" flexDirection="row" alignItems="baseline" gap={0.75}>
-                                    <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ fontSize: 13 }}>
-                                      {"High pain ≥"}
-                                    </MDTypography>
-                                    <MDTypography variant="button" fontWeight="bold" sx={{ fontSize: 15, color: "#D55E00" }}>
-                                      {`${(strategy === "tertile" ? 66.7 : percentileHigh).toFixed(0)}ᵗʰ pct`}
-                                    </MDTypography>
-                                  </MDBox>
-                                </MDBox>
-                              ) : null}
-                              {showDescriptions && (
-                              <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 13 }}>
-                                {strategy === "tertile"
-                                  ? "Tertile uses fixed 33⅓ / 66⅔ cuts; samples between them are excluded. Move the range slider above the histogram to switch to adjustable percentile cuts."
-                                  : strategy === "percentile"
-                                    ? "Set the cuts with the two-handle range slider above the histogram; samples between the handles are excluded from training."
-                                    : strategy === "median"
-                                      ? "Every sample is labeled at the median split (~50/50)."
-                                      : "Legacy 2-cluster KMeans labeler."}
-                              </MDTypography>
-                              )}
-
-                              {/* PAIN-REPORT MATCHING — every remaining knob that decides which
-                                  recording counts as evidence for which pain rating, grouped under
-                                  one heading because they all govern the same question and none of
-                                  them recolors anything live on screen the way the main match-
-                                  tolerance slider does (that one stays in the histogram panel to the
-                                  right, directly above the histogram it recolors — see its own note
-                                  below). Every knob here is sent on every Compute press
-                                  (matchDirection, maxPerRating, refractoryMin, matchExtentSec,
-                                  allowWindowReuse). The timeline's circles follow the main
-                                  match-tolerance slider as well, live, since 2026-09-10 (decision
-                                  120); they used to have a second slider of their own here. */}
+                            <MDBox p={2} display="flex" flexDirection="column" gap={2}>
                               <MDTypography variant="button" fontWeight="bold" color="dark"
-                                sx={{ fontSize: 15, display: "block", mt: 2 }}>
-                                {"Pain-report matching — which recording counts as evidence for a rating"}
+                                sx={{ fontSize: 16, display: "block" }}>
+                                {"Pain-report matching — sent when you press Compute"}
                               </MDTypography>
 
-                              {/* Match direction: pro_first (PRO-anchored, default) vs nearest (PSD-first
-                                  symmetric) vs prior (PSD-first forecasting). */}
-                              <MDBox mt={1.5}>
+                              {/* The cap per rating, and the minimum gap between the samples it keeps. */}
+                              <MDBox>
                                 <MDTypography variant="caption" fontWeight="bold" color="dark"
-                                  sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
-                                  Match direction
-                                </MDTypography>
-                                <ToggleButtonGroup
-                                  value={matchDirection} exclusive size="small"
-                                  aria-label="Match direction"
-                                  onChange={(e, v) => { if (v) setMatchDirection(v); }}
-                                  sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontSize: 12, py: 0.4, px: 1 } }}
-                                >
-                                  <ToggleButton value="pro_first" title="Walk pain ratings; claim up to N closest PSDs per channel each (maximizes discovery coverage)">PRO-first (discovery)</ToggleButton>
-                                  <ToggleButton value="nearest" title="Pair each PSD with the nearest pain rating in either time direction (symmetric ± window)">Nearest (±window)</ToggleButton>
-                                  <ToggleButton value="prior" title="Pair each PSD only with pain ratings recorded AFTER it (causal / closed-loop forecasting direction)">Prior (forecast)</ToggleButton>
-                                </ToggleButtonGroup>
-                                {showDescriptions && (
-                                <MDTypography variant="caption" color="dark" fontStyle="italic"
-                                  sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
-                                  {matchDirection === "pro_first"
-                                    ? "Walks pain ratings (the unit of independence) and claims up to N closest PSDs PER CHANNEL each, within the window. Maximizes the number of ratings that contribute to discovery — the right framing when 'does this band track pain?' is the question."
-                                    : matchDirection === "nearest"
-                                    ? "Each PSD is paired with the closest pain rating in EITHER time direction (symmetric ± window). Cross-sectional association, not forecasting."
-                                    : "Each PSD is paired only with pain ratings recorded AFTER it within the window (causal/forecasting direction). Use for closed-loop deployment."}
-                                </MDTypography>
-                                )}
-                              </MDBox>
-
-                              {/* Per-rating CAP (replaces the old all / one-per-rating toggle). */}
-                              <MDBox mt={1.5}>
-                                <MDTypography variant="caption" fontWeight="bold" color="dark"
-                                  sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
-                                  {`Max LSB samples per pain rating (currently ${maxPerRating})`}
-                                  {showDescriptions && maxPerRating > 1 && (
-                                    <span style={{ fontWeight: 400, fontSize: 11.5, color: "#6c757d", display: "block" }}>
-                                      {"When > 1, the rating's LSB is the median over its samples within the rating-centred window."}
-                                    </span>
-                                  )}
+                                  sx={{ fontSize: 14, display: "block", mb: 0.25 }}>
+                                  {`Max LSB samples per pain rating: ${maxPerRating}`}
                                 </MDTypography>
                                 <MDBox px={0.5}>
                                   <Slider
                                     value={maxPerRating} min={1} max={10} step={1}
                                     marks valueLabelDisplay="auto" size="small"
+                                    aria-label="max LSB samples per pain rating"
                                     onChange={(e, v) => setMaxPerRating(v)} />
                                 </MDBox>
+                                {showDescriptions && (
+                                <MDTypography variant="caption" color="dark" fontStyle="italic"
+                                  sx={{ fontSize: 13, display: "block" }}>
+                                  {maxPerRating > 1
+                                    ? `Each rating keeps at most ${maxPerRating} neural samples per contact pair, the closest ones${matchDirection === "prior" ? " recorded before it" : ""}; its value is the median over them. The classifier's cross-validation folds are grouped by rating, so a rating with several samples still counts once.`
+                                    : "Each rating keeps its one closest neural sample per contact pair, so every sample is an independent rating."}
+                                </MDTypography>
+                                )}
+                              </MDBox>
+
+                              <MDBox>
                                 <MDTypography variant="caption" fontWeight="bold" color="dark"
-                                  sx={{ fontSize: 13, display: "block", mb: 0.5, mt: 0.5 }}>
-                                  {`Minimum gap between selected LSBs (${refractoryMin} min)`}
+                                  sx={{ fontSize: 14, display: "block", mb: 0.25 }}>
+                                  {`Minimum gap between the samples one rating keeps: ${refractoryMin} min`}
                                 </MDTypography>
                                 <MDBox px={0.5}>
                                   <Slider
                                     value={refractoryMin} min={0} max={30} step={1}
                                     valueLabelDisplay="auto" size="small"
+                                    aria-label="minimum gap between kept samples (minutes)"
                                     disabled={maxPerRating <= 1 || matchDirection === "pro_first"}
                                     onChange={(e, v) => setRefractoryMin(v)} />
                                 </MDBox>
                                 {showDescriptions && (
                                 <MDTypography variant="caption" color="dark" fontStyle="italic"
-                                  sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
+                                  sx={{ fontSize: 13, display: "block" }}>
                                   {matchDirection === "pro_first"
-                                    ? "Refractory gap does not apply in PRO-first matching: each PSD is claimed by at most one rating, so a streaming burst can't double-count regardless of the gap. Switch to Nearest or Prior to enforce a minimum spacing between kept PSDs."
-                                    : (`Each pain rating keeps at most ${maxPerRating} PSD${maxPerRating > 1 ? "s" : ""} per channel — `
-                                   + (matchDirection === "prior"
-                                      ? "the ones recorded closest in time BEFORE the rating (forecasting direction)"
-                                      : "the ones closest in time to the rating (either direction)")
-                                   + (maxPerRating > 1
-                                      ? `, and no two kept PSDs within ${refractoryMin} min of each other, so a streaming burst around one survey can't dominate. `
-                                      : " — i.e. one independent sample per rating. ")
-                                   + (maxPerRating > 1
-                                      ? "The binary-classification AUC is still cross-validated with folds grouped by rating, so reused ratings can't inflate it; the AUC n is the count of independent ratings."
-                                      : "Every sample is an independent (channel, rating) pair — no double-dipping."))}
+                                    ? "Not used under Report-first matching: there each neural sample is claimed by at most one rating, so a burst of samples around one report cannot count twice."
+                                    : maxPerRating <= 1
+                                    ? "Not used while one sample per rating is kept."
+                                    : `No two samples kept for one rating may sit within ${refractoryMin} min of each other, so a burst of samples around one report cannot dominate its value.`}
                                 </MDTypography>
                                 )}
                               </MDBox>
 
-                              {/* TD-signal-quantity slider + window-reuse toggle. Matching always runs
-                                  against the pre-computed raw 3 s-tile LSB cache; the MAIN match-tolerance
-                                  slider (above) sets eligibility for both modalities, this slider sets how
-                                  much of the nearest time-domain signal each rating aggregates. */}
-                              <MDBox mt={1.5}>
+                              {/* How much time-domain signal each rating aggregates. The match window
+                                  (top band) sets how far to search; this sets how much to use. */}
+                              <MDBox>
                                 <MDTypography variant="caption" fontWeight="bold" color="dark"
-                                  sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
-                                  {`Time-domain signal per rating (${matchExtentSec} s \u2248 nearest ${Math.max(1, Math.round(matchExtentSec / 3))} of the 3 s tiles)`}
+                                  sx={{ fontSize: 14, display: "block", mb: 0.25 }}>
+                                  {`Time-domain signal per rating: ${matchExtentSec} s (the nearest ${Math.max(1, Math.round(matchExtentSec / 3))} of the 3 s tiles)`}
                                 </MDTypography>
                                 <MDBox px={0.5}>
                                   <Slider
@@ -792,63 +709,82 @@ function Biomarkers() {
                                     aria-label="time-domain signal per rating (seconds)"
                                     onChange={(e, v) => setMatchExtentSec(v)} />
                                 </MDBox>
-                                <MDBox sx={{ display: "flex", alignItems: "center", gap: 1, mt: 1 }}>
-                                  <MDTypography variant="caption" fontWeight="bold" color="dark"
-                                    sx={{ fontSize: 13 }}>
-                                    {"Window reuse"}
-                                  </MDTypography>
-                                  <ToggleButtonGroup
-                                    value={allowWindowReuse ? "reuse" : "strict"} exclusive size="small"
-                                    aria-label="window reuse mode"
-                                    onChange={(e, v) => { if (v) setAllowWindowReuse(v === "reuse"); }}
-                                    sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontSize: 12, py: 0.3, px: 1 } }}
-                                  >
-                                    <ToggleButton value="strict" title="Each raw window is assigned to its nearest rating only — one window, one rating (independent observations)">No reuse</ToggleButton>
-                                    <ToggleButton value="reuse" title="Each raw window (per modality) is assigned to every rating whose match tolerance covers it — larger n, but ratings sharing a window are no longer independent">Allow reuse</ToggleButton>
-                                  </ToggleButtonGroup>
-                                </MDBox>
-                                {/* Decision 186: the clinic and at-home sheets' scores as extra ratings
-                                    for the heat maps (NRS as scored; the VAS scores times ten). Off by
-                                    default; the heat maps' caption says which way it is set. */}
-                                <MDBox sx={{ display: "flex", alignItems: "center", gap: 1, mt: 1 }}>
-                                  <MDTypography variant="caption" fontWeight="bold" color="dark"
-                                    sx={{ fontSize: 13 }}>
-                                    {"Clinic sheet scores"}
-                                  </MDTypography>
-                                  <ToggleButtonGroup
-                                    value={includeClinicSheetRatings ? "include" : "exclude"} exclusive size="small"
-                                    aria-label="clinic sheet scores in the heat maps"
-                                    onChange={(e, v) => { if (v) setIncludeClinicSheetRatings(v === "include"); }}
-                                    sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontSize: 12, py: 0.3, px: 1 } }}
-                                  >
-                                    <ToggleButton value="exclude" title="The heat maps pool the chronic REDCap ratings only">Chronic REDCap only</ToggleButton>
-                                    <ToggleButton value="include" title="Also pool the clinic and at-home testing sheets' scores (0–10 verbal; times ten for the VAS scores). Those were taken while current was being stepped on purpose, one a minute inside a session, so treat the larger count with care">+ clinic titration sessions</ToggleButton>
-                                  </ToggleButtonGroup>
-                                </MDBox>
                                 {showDescriptions && (
                                 <MDTypography variant="caption" color="dark" fontStyle="italic"
-                                  sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
+                                  sx={{ fontSize: 13, display: "block" }}>
                                   {liveMatchCaption}
                                 </MDTypography>
                                 )}
-                                {data && data.live_match_stats && (
-                                  <MDTypography variant="caption" color="text" display="block"
-                                    sx={{ fontSize: 12, mt: 0.5 }}>
-                                    {`Last computed: matched ${data.live_match_stats.n_pro_td || 0} ratings to time-domain LSB · `
-                                     + `${data.live_match_stats.n_pro_psd || 0} to PSD LSB`
-                                     + `${data.live_match_stats.n_pro_unmatched != null ? ` · ${data.live_match_stats.n_pro_unmatched} with no LSB in window` : ""}`
-                                     + `${data.live_match_stats.n_td_used != null ? ` (${data.live_match_stats.n_td_used} TD tiles · ${data.live_match_stats.n_psd_used || 0} PSD events aggregated).` : "."}`}
-                                  </MDTypography>
+                              </MDBox>
+
+                              <MDBox>
+                                <MDTypography variant="caption" fontWeight="bold" color="dark"
+                                  sx={{ fontSize: 14, display: "block", mb: 0.5 }}>
+                                  {"Window reuse"}
+                                </MDTypography>
+                                <ToggleButtonGroup
+                                  value={allowWindowReuse ? "reuse" : "none"} exclusive size="small"
+                                  aria-label="window reuse mode"
+                                  onChange={(e, v) => { if (v) setAllowWindowReuse(v === "reuse"); }}
+                                  sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontSize: 13, py: 0.5, px: 1.25 } }}
+                                >
+                                  <ToggleButton value="none" title="Each stretch of signal serves its nearest rating only, so every rating is an independent observation">None</ToggleButton>
+                                  <ToggleButton value="reuse" title="Each stretch of signal serves every rating whose match window covers it: more ratings, but ratings that share signal are no longer independent">Allow reuse</ToggleButton>
+                                </ToggleButtonGroup>
+                                {showDescriptions && (
+                                <MDTypography variant="caption" color="dark" fontStyle="italic"
+                                  sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
+                                  {allowWindowReuse
+                                    ? "One stretch of signal may serve several ratings whose windows overlap it: more ratings enter, but those ratings are no longer independent of each other."
+                                    : "No stretch of signal serves more than one rating, so each rating is one independent observation."}
+                                </MDTypography>
                                 )}
                               </MDBox>
 
+                              {/* Decision 186: the clinic and at-home sheets' scores as extra ratings
+                                  for the heat maps (NRS as scored; the VAS scores times ten). Off by
+                                  default; the heat maps' caption says which way it is set. */}
+                              <MDBox>
+                                <MDTypography variant="caption" fontWeight="bold" color="dark"
+                                  sx={{ fontSize: 14, display: "block", mb: 0.5 }}>
+                                  {"Clinic sheet scores"}
+                                </MDTypography>
+                                <ToggleButtonGroup
+                                  value={includeClinicSheetRatings ? "include" : "exclude"} exclusive size="small"
+                                  aria-label="clinic sheet scores in the heat maps"
+                                  onChange={(e, v) => { if (v) setIncludeClinicSheetRatings(v === "include"); }}
+                                  sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontSize: 13, py: 0.5, px: 1.25 } }}
+                                >
+                                  <ToggleButton value="exclude" title="The heat maps pool the chronic REDCap ratings only">Chronic REDCap only</ToggleButton>
+                                  <ToggleButton value="include" title="Also pool the clinic and at-home testing sheets' scores (0–10 verbal; times ten for the VAS scores). Those were taken while current was being stepped on purpose, one a minute inside a session, so treat the larger count with care">+ clinic titration sessions</ToggleButton>
+                                </ToggleButtonGroup>
+                                {showDescriptions && (
+                                <MDTypography variant="caption" color="dark" fontStyle="italic"
+                                  sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
+                                  {includeClinicSheetRatings
+                                    ? "The heat maps also pool the clinic and at-home sheets' scores (0–10 as scored; the VAS scores times ten). Those were taken one a minute while current was stepped on purpose, so the larger count is not more independent evidence."
+                                    : "The heat maps pool the chronic REDCap ratings only."}
+                                </MDTypography>
+                                )}
+                              </MDBox>
+
+                              {data && data.live_match_stats && (
+                                <MDTypography variant="caption" color="text" display="block"
+                                  sx={{ fontSize: 13 }}>
+                                  {`Last computed: ${data.live_match_stats.n_pro_td || 0} ratings matched to the time-domain signal, `
+                                   + `${data.live_match_stats.n_pro_psd || 0} to a device FFT snapshot`
+                                   + `${data.live_match_stats.n_pro_unmatched != null ? `, ${data.live_match_stats.n_pro_unmatched} with nothing in the window` : ""}`
+                                   + `${data.live_match_stats.n_td_used != null ? ` (${data.live_match_stats.n_td_used} 3 s tiles and ${data.live_match_stats.n_psd_used || 0} snapshots used).` : "."}`}
+                                </MDTypography>
+                              )}
+
                               {/* One push-button opens or folds every description on this card,
-                                  both columns (the PI, 2026-09-17: "way too much text"). */}
-                              <MDBox mt="auto" pt={1.5} display="flex" justifyContent="flex-start">
+                                  the band and both columns (the PI, 2026-09-17: "way too much text"). */}
+                              <MDBox mt="auto" pt={0.5} display="flex" justifyContent="flex-start">
                                 <MDButton size="small" variant="outlined" color="dark"
                                   onClick={() => setShowDescriptions((v) => !v)}
                                   aria-expanded={showDescriptions}
-                                  sx={{ textTransform: "none", fontSize: 12, py: 0.4, px: 1.25, minHeight: 0,
+                                  sx={{ textTransform: "none", fontSize: 13, py: 0.5, px: 1.5, minHeight: 0,
                                     borderWidth: 1.5, boxShadow: "0 2px 0 #1A1A1A", "&:hover": { boxShadow: "0 1px 0 #1A1A1A" } }}>
                                   <Icon sx={{ mr: 0.5, fontSize: "16px !important" }}>help_outline</Icon>
                                   {showDescriptions ? "Collapse descriptions" : "Expand descriptions"}
@@ -858,7 +794,7 @@ function Biomarkers() {
                             </MDBox>
                           </Grid>
 
-                          {/* RIGHT: live binarization preview histogram */}
+                          {/* RIGHT: the binarization preview, unchanged (the PI, 2026-09-21). */}
                           <Grid item xs={12} md={7}>
                             <MDBox p={1.5} sx={{ height: "100%" }}>
                               <BinarizationPreview
@@ -871,7 +807,6 @@ function Biomarkers() {
                                 totalReports={painScores && Number.isFinite(painScores.n_reports) ? painScores.n_reports : null}
                                 loading={painLoading}
                                 matchTolerance={matchTolerance}
-                                setMatchTolerance={setMatchTolerance}
                                 scanModel={scanModel}
                                 matchedLoading={availLoading}
                                 matchDirty={dirty}
@@ -879,8 +814,6 @@ function Biomarkers() {
                                 setPercentileHigh={setPercentileHigh}
                                 setStrategy={setStrategy}
                                 showDescriptions={showDescriptions}
-                                coverage={reportCoverageLive}
-                                matchDirection={matchDirection}
                               />
                             </MDBox>
                           </Grid>

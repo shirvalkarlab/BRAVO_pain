@@ -21,7 +21,7 @@ from Biomarkers.routines import analytics  # noqa: E402
 from CacheStore import provenance  # noqa: E402
 
 ACQ_KEYS = {"records", "stim", "freq_bands", "span", "samples", "lsb_overview", "events", "montage_events"}
-PAIN_KEYS = {"pain", "pro_lsb", "psd_scan_index"}
+PAIN_KEYS = {"pain", "psd_scan_index"}
 
 
 def test_the_timeline_key_carries_the_recording_set_the_constants_and_a_rule_version_and_no_report():
@@ -85,3 +85,20 @@ if __name__ == "__main__":
         except Exception:                                  # noqa: BLE001
             print(f"FAIL {fn.__name__}"); traceback.print_exc()
     print(f"\n{passed}/{len(fns)} passed")
+
+
+def test_the_per_report_band_power_value_is_built_nowhere():
+    """Backend review (the PI, 2026-09-21). The Compute response used to carry, inside its
+    `availability` block, one band-power value per pain report per channel (`pro_lsb`: 30 channels,
+    18,330 points, 2.5 MB, 0.35 s on RCS08) chosen at a match window the request could not set
+    (`_native_lsb_tolerance_param` substituted the page's window, 60 min by default). No page read
+    it under any fallback, so the helper, the parameter and the response field are gone."""
+    import inspect
+    assert not hasattr(bs, "_pro_lsb_by_channel")
+    assert not hasattr(bs, "_native_lsb_tolerance_param")
+    src = inspect.getsource(bs._build_availability)
+    assert "pro_lsb" not in src and "native_lsb_tolerance_s" not in src
+    full = bs._build_availability("NO-SUCH-PARTICIPANT", chronic_list=[], powerdomain_list=[], td_list=[],
+                                  pro_df=None, label_metric="nrs", region_map={}, psd_list=[])
+    assert "pro_lsb" not in full
+    assert "native_lsb_tolerance_s" not in inspect.getsource(bs.run_for_participant)

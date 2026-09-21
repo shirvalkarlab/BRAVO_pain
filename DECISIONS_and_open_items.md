@@ -50,7 +50,7 @@ decisions are appended to Part 3 here AND as a full row in the full log.
 
 **Process**
 - Commit identity: Prasad Shirvalkar, `prasad.shirvalkar@ucsf.edu`, inline `-c` (49). Default branch `PS_closedloop_deployment`; `v3.1.0` is a label (177). No worktrees: the container mounts only the main checkout (102, 177).
-- Written record: superseded documents go to `docs/archive/<date>/` by `git mv`, never deleted; no suite count in any document (34). Plan kept with planning-with-files, inject-smart, committed (36).
+- Written record: superseded documents go to `docs/archive/<date>/` by `git mv`, never deleted; no suite count in any document (34). Plan kept with planning-with-files, inject-smart, committed (36); autonomous mode with attestation allowed per plan, gated mode never (223).
 - Only code changes are open items; clinic notes live separately (open items, 2026-09-10).
 - Every check ships with its live proof: field count and difference count, never a tolerance; alternating timings; the first live run of step 8 wrote nothing while every test passed (41).
 
@@ -307,3 +307,5 @@ PRs #3-#8 built the engine, figures, audit, validation; #9 (`39dfb2f`, 2026-06-2
 220. The harmonic rule on the readiness screen is a warning, never a refusal: a usable cell resting on harmonic bands alone is flagged and its sentence printed; `deployable` never written; on RCS08 today 0 usable so none fires.
 221. The session matcher keeps no cap per report; the sharing is counted and warned about (RCS08, 60 min: 41 of 76 matched reports shared, at most 24 sessions); 0 fields differing.
 222. Pooling across pulse widths (189's option A) behind the current-map card's toggle, default separate: one surface per speed over every pairing, pulse widths as inputs, read at the pairing in force; on RCS08 coverage passes at 55 and 110 Hz where the separate fits could not, every pooled surface reads flat, nothing resolves; separate rows untouched.
+223. Amends 36: `.mode` may carry `inject-smart autonomous`; the plan is attested at init and re-attested after every edit; `gate` stays off.
+224. The Binarization card laid out as option C (the PI, 2026-09-21): a top band with the coverage sentence, the match window, the split rule and the match direction, and a timing histogram (each neural sample's signed minutes to its nearest report, one translucent series per source overlaid, the window's 25% tails and any side the direction excludes in grey); the left column restyled, the preview untouched. Backend review: the Compute response's unread per-report band-power value (2.5 MB, 0.35 s) and its 60-minute tolerance helper deleted, 0 of 249,322 fields differing. Report-first stays two-sided; only "Before the report" is one-sided.

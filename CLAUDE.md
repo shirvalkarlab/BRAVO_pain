@@ -131,8 +131,10 @@ appear nowhere else in the file). Verify after editing:
 `sh ~/.claude/plugins/cache/planning-with-files/planning-with-files/3.16.1/scripts/check-complete.sh`.
 
 **Choices for this project (decision 36):** planning files committed; legacy mode with
-`inject-smart` in `.planning/<plan-id>/.mode`; no attestation, no autonomous or gated mode (the PI
-decides when work stops). A new independent task gets its own plan via `/pwf "<name>"`. Rules the
+`inject-smart` in `.planning/<plan-id>/.mode`; autonomous mode with attestation is allowed per plan
+(decision 223); never gated (the PI decides when work stops). After any edit to `task_plan.md` in an
+autonomous plan, run `attest-plan.sh` again or the hooks stop injecting it. A new independent task
+gets its own plan via `/pwf "<name>"`. Rules the
 skill imposes and this project wanted anyway: re-read the plan before any decision; log every
 error; never repeat a failed action unchanged; after three failed attempts stop and ask.
 
@@ -178,6 +180,9 @@ path needs `git add -f`.
 `/security-auditor` (patient information and the REDCap credential), `/ui-ux-designer`,
 `/code-check` (read §2 principle 4 first), `/land-the-plane` (its push step is already answered),
 `/tailor` (it will find no linter and a three-job CI; that is accurate), `/swarm-*` orchestrators.
+**Switched off 2026-09-20** in `.claude/settings.local.json` (`skillOverrides`), unused in 36 sessions: architect,
+builder, code-check, qa-engineer, security-auditor, tailor, ui-ux-designer and the nine nested groups
+(architecture, core-engineering, operations, product, security); delete the override line to bring one back.
 
 **Project-specific plugin skills exist and load by name:** `bravo-session-rules` (its description
 still tells sessions to update `MEGA_HANDOFF.md`, archived since 2026-09-07 — ignore that line),

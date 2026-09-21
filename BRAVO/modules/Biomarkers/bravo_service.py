@@ -720,59 +720,6 @@ def _montage_psd_lsb_blocks(participant_uid, montage_recordings=None):
     return blocks
 
 
-def _pro_lsb_by_channel(pro_times, lsb, td_recordings, event_psd_blocks,
-                        sensing_hz_by_channel, *, native_tol_s=120.0):
-    """One per-PRO LSB selection series per channel for the timeline (CS-4 consumer of per_pro_lsb).
-
-    For each channel that has a resolvable sensing center, run availability.per_pro_lsb over the PRO
-    timestamps with the SAME inputs the inline lsb_series uses:
-      * native_lsb_series = that channel's lsb_series entry (NATIVE samples are selected inside
-        per_pro_lsb via its modeled-mask, so the modeled/bridge points in the series are ignored for
-        the native tier and only the sensed samples can win tier 1);
-      * td_recordings = TD-bearing recordings (streaming + montage/survey, all 250 Hz TD) for tier 2;
-      * event_psd_recordings = the CS-3 PSD-only event blocks for tier 3.
-
-    The per-channel center is the configured sensing center (sensing_hz_by_channel, canonical key),
-    falling back to the channel's own series center_hz (first finite). Channels with no center resolve
-    to nothing (the band is undefined). Returns { raw_channel: [ {t,lsb,tier,center_hz,used_s,
-    saturated,reason}, ... ] } — one entry per PRO, in PRO order; empty dict when there are no PROs.
-    """
-    out = {}
-    pt = np.asarray([] if pro_times is None else pro_times, dtype=float)
-    if pt.size == 0:
-        return out
-    sensing_hz_by_channel = sensing_hz_by_channel or {}
-    # ONE canonical form for every channel's call (Track B step 2): the recordings are grouped by
-    # channel and their start times parsed once here, not once per channel and per pain report.
-    index = (availability.channel_index(td_recordings, event_psd_blocks)
-             if availability.USE_CHANNEL_INDEX else None)
-    for raw_ch, series in (lsb or {}).items():
-        key = availability._canon_channel(raw_ch)
-        # ONE center per channel — the configured sensing center (deployment 'one band' semantics).
-        # CAVEAT: if a channel's sensing band was RETUNED over the implant, native samples recorded at
-        # an earlier band fall outside [center±half] and silently demote to TD/bridge/None for PROs near
-        # that period. The per-PRO center_hz is returned in the payload so this is auditable downstream.
-        # `is not None` (not `or`) so a stored 0.0 Hz doesn't silently fall through to the series center.
-        center = sensing_hz_by_channel.get(key)
-        if center is None:
-            center = sensing_hz_by_channel.get(raw_ch)
-        if center is None:
-            # fall back to the first finite center the inline series carries for this channel
-            for hz in (series.get("center_hz") or []):
-                if hz is not None and np.isfinite(hz) and float(hz) > 0:
-                    center = float(hz); break
-        if center is None or not np.isfinite(center) or float(center) <= 0:
-            continue
-        try:
-            out[raw_ch] = availability.per_pro_lsb(
-                pt, series, key, float(center), native_tol_s=native_tol_s,
-                td_recordings=td_recordings, event_psd_recordings=event_psd_blocks, index=index)
-        except Exception as e:
-            _log.warning("Biomarkers: per-PRO LSB failed for %s (%s)", raw_ch, e)
-    return out
-
-
-# Default band-center grid for the shared per-pair LSB spectrum: full 0-100 Hz on the half-integer
 # grid at 1 Hz step; callers can request a different grid (e.g. the timeline's exact sensing center)
 # from the SAME builder, so a timeline marker and a spectral point at one center are identical.
 _LSB_SPECTRUM_CENTERS = tuple(float(c) for c in np.arange(2.5, 100.0, 1.0))
@@ -3735,22 +3682,16 @@ def _float_param(request_data, key, *, default, lo=None, hi=None):
     return v
 
 
-def _native_lsb_tolerance_param(request_data):
-    """The timeline circles' match window, in seconds: THE MAIN MATCH TOLERANCE, converted.
-
-    `availability.per_pro_lsb`'s own tolerance -- how far from a pain report's timestamp a
-    device-sensed reading may sit and still set that rating's timeline circle. Until 2026-09-10 this
-    was its own request field (`NativeLsbToleranceSec`, default 120 s) behind its own slider on the
-    page, "Timeline's own match window", so the circles and everything else on the page paired
-    ratings with recordings under two different windows. The PI removed the second control
-    (decision 120): the circles now follow the one match-tolerance slider on the histogram card,
-    read here as `MatchToleranceMin` and turned into seconds. A request with matching disabled
-    (a zero or negative tolerance) or with no tolerance at all gets the slider's own default.
-    """
-    tol_min = _match_tolerance_param(request_data)
-    if tol_min is None or tol_min <= 0:
-        tol_min = DEFAULT_MATCH_TOLERANCE_MIN
-    return float(tol_min) * 60.0
+def _per_rating_cap_params(request_data):
+    """The Binarization card's cap and gap, read once for every endpoint that matches samples to
+    ratings: how many neural samples one pain rating may keep per contact pair (`MaxPerRating`,
+    1..50, default 3; 1 is one sample per rating) and the minimum gap in minutes between the
+    samples it keeps (`RefractoryMin`, 0..720, default 2), so a burst of samples around one report
+    cannot count several times. Two endpoints used to parse these separately with the same
+    defaults written twice (backend review, 2026-09-21)."""
+    max_per_rating = _int_param(request_data, "MaxPerRating", default=3, lo=1, hi=50)
+    refractory_min = _float_param(request_data, "RefractoryMin", default=2.0, lo=0.0, hi=720.0)
+    return max_per_rating, refractory_min
 
 
 def _window_params_body(request_data, sliding):
@@ -3761,7 +3702,7 @@ def _window_params_body(request_data, sliding):
 
 
 def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_list,
-                        pro_df, label_metric, region_map, warm=False, native_lsb_tolerance_s=120.0,
+                        pro_df, label_metric, region_map, warm=False,
                         psd_list=None, acquisition_only=False):
     """Assemble the data-availability-timeline payload for the new BiomarkerDataTimeline component.
 
@@ -3865,16 +3806,6 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         # Compact the per-sample LSB into render-cheap geometry (chronic line + per-session blocks)
         # so the calendar-scale timeline stays responsive while zooming; the frontend draws this.
         lsb_overview = availability.lsb_overview(lsb)
-        # CS-4 per-PRO LSB SELECTION: one LSB per pain rating per channel, chosen by the strict source
-        # precedence (native sensed > direct TD->LSB transform > PSD-only-event bridge), each tagged
-        # with its tier + saturation flag so the timeline can colour each rating's biomarker point by
-        # trust. TD-bearing recordings for tier 2 = streaming TD (td_list) + montage/survey TD
-        # (psd_list, all 250 Hz TD); the PSD-only event bridge is tier 3 (event_psd_blocks).
-        _pro_t_lsb = np.asarray(pain.get("t") or [], dtype=float) if isinstance(pain, dict) else None
-        pro_lsb = _pro_lsb_by_channel(
-            _pro_t_lsb, lsb, list(td_list or []) + list(psd_list or []),
-            event_psd_blocks, sensing_hz, native_tol_s=native_lsb_tolerance_s
-        ) if (not acquisition_only and _pro_t_lsb is not None and _pro_t_lsb.size) else {}
         bands = availability.present_freq_bands(records)
         # Patient-triggered events. _load_patient_events returns BOTH the labeled button presses
         # (category=DISPLAY_PATIENT_EVENT) AND the auto 'Streaming' LFP snapshots
@@ -3944,7 +3875,7 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
                "span": span, "samples": samples, "lsb_overview": lsb_overview,
                "events": events, "montage_events": montage_events}
         if not acquisition_only:
-            out.update({"pain": pain, "pro_lsb": pro_lsb, "psd_scan_index": psd_scan_index})
+            out.update({"pain": pain, "psd_scan_index": psd_scan_index})
         return out
     except Exception as e:
         _log.warning("Biomarkers: availability payload failed: %s", e, exc_info=True)
@@ -3953,7 +3884,6 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         # failed" rather than "there are no recordings", which is a different fact.
         return {"records": [], "pain": {"metric": label_metric, "t": [], "y": []},
                 "stim": {"t": [], "y": []}, "freq_bands": [], "span": [], "lsb_overview": {},
-                "pro_lsb": {},
                 "events": {"events": [], "n": 0},
                 "montage_events": {"events": [], "n": 0}, "psd_scan_index": [],
                 "failed": True, "failure": repr(e)}
@@ -4232,14 +4162,7 @@ def run_for_participant(request_data):
     pro_df, label_metric, kmeans_features = _resolve_biomarker_metric(request_data, pro_df)
     label_strategy, low_pct, high_pct = _label_strategy_params(request_data)
     match_tol_min = _match_tolerance_param(request_data)
-    native_lsb_tolerance_s = _native_lsb_tolerance_param(request_data)
-    # Per-rating CAP for the exploratory scan: how many PSDs one pain rating may absorb per channel,
-    # and the refractory gap (min) enforced among the kept set, so a streaming BURST around one survey
-    # can't double-count. `MaxPerRating` (>=1) and `RefractoryMin` (>=0) come from the frontend.
-    # max_per_rating=1 reduces to the old "one per rating" behavior (the single nearest-prior PSD).
-    # Match direction defaults to "prior" (forecasting: the PSD must precede the rating).
-    max_per_rating = _int_param(request_data, "MaxPerRating", default=3, lo=1, hi=50)
-    refractory_min = _float_param(request_data, "RefractoryMin", default=2.0, lo=0.0, hi=720.0)
+    max_per_rating, refractory_min = _per_rating_cap_params(request_data)
     # Outlier exclusion (PI, 2026-08-30). Defaults come from the analytics module, so the rule is ON
     # unless a caller deliberately disables it. `OutlierNMad = 0` disables removal entirely, which is
     # the switch for reproducing a pre-2026-08-30 number rather than editing the module.
@@ -4397,7 +4320,6 @@ def run_for_participant(request_data):
     out["refractory_min"] = refractory_min
     out["match_direction"] = match_direction
     out["match_extent_s"] = float(match_extent_s)
-    out["native_lsb_tolerance_s"] = float(native_lsb_tolerance_s)
     out["allow_window_reuse"] = bool(allow_window_reuse)
     if live_match_stats is not None:
         # Pooled independence stats across channels: with live matching every PRO contributes ONE LSB
@@ -4435,7 +4357,6 @@ def run_for_participant(request_data):
         participant_uid, chronic_list=chronic_list if source in ("powerdomain", "both") else [],
         powerdomain_list=powerdomain_list, td_list=td, pro_df=pro_df,
         label_metric=label_metric, region_map=region_map,
-        native_lsb_tolerance_s=native_lsb_tolerance_s,
         psd_list=_scan_psd_list)  # already loaded above for the live-matching scan; same
                                   # participant, same AVAILABILITY_PSD_TYPES -- reuse, don't reload
     # Honesty flag (rigor fix #5): the power-domain detector currently pools all recorded power
@@ -4911,8 +4832,7 @@ def _band_validation_setup(request_data):
         return {"available": False, "reason": "no PSD samples for this participant"}
     label_strategy, low_pct, high_pct = _label_strategy_params(request_data)
     match_tol_min = _match_tolerance_param(request_data)
-    max_per_rating = _int_param(request_data, "MaxPerRating", default=3, lo=1, hi=50)
-    refractory_min = _float_param(request_data, "RefractoryMin", default=2.0, lo=0.0, hi=720.0)
+    max_per_rating, refractory_min = _per_rating_cap_params(request_data)
     # Three-way match direction (PSD<->PRO); see `_forecast_match_direction`'s own docstring.
     match_direction = _forecast_match_direction(request_data)
     from .routines import streaming_psd as sp
