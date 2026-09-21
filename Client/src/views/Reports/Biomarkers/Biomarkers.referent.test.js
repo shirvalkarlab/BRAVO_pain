@@ -57,7 +57,7 @@ jest.mock("graphing-utility/Plotly", () => ({
   // it reads back before handing them to the (mocked) Plotly.react.
   PlotlyRenderManager: class {
     constructor() { this.traces = []; this.layout = {}; }
-    subplots() {} clearData() {} render() {} setLayoutProps() {} setXlabel() {} setYlabel() {}
+    subplots() {} clearData() {} render() {} setLayoutProps() {} setXlabel() {} setYlabel() {} purge() {}
   },
 }));
 jest.mock("database/session-control", () => ({ SessionController: { query: jest.fn() } }));
@@ -91,9 +91,13 @@ beforeEach(() => {
     { why: "referent test" });
 });
 
-async function renderGrid() {
+async function renderGrid({ participantUid = UID } = {}) {
+  if (participantUid !== UID) {
+    putResult(biomarkerHeatmapSlot(METRIC), participantUid, settingsKey({ ...REQ, SweepMetric: METRIC }), sweep,
+      { why: "referent test, another participant" });
+  }
   const utils = rtlRender(wrap(
-    <BiomarkerHeatmapGrids participantUid={UID} requestParams={REQ} availableMetrics={METRICS}
+    <BiomarkerHeatmapGrids participantUid={participantUid} requestParams={REQ} availableMetrics={METRICS}
       pageMetric={METRIC} metricLabel="NRS (0–10)" onOpenInClosedLoop={() => {}} />,
   ));
   // The first channel of the response (R 0⁻3⁺, the contact with 358 snapshot-served reports) is
@@ -127,6 +131,30 @@ describe("the calibrated heat-map card (BiomarkerHeatmapGrids)", () => {
       .map((el) => el.textContent);
     expect(bullets.length).toBeGreaterThan(0);
     expect(bullets.filter((b) => /answered from|FFT snapshots/.test(b))).toEqual([]);
+  });
+
+  it("the L 1-3+ search summary heads the drawer in bold for RCS08, with its settings, and for no other participant", async () => {
+    const { container } = await renderGrid();
+    fireEvent.click(screen.getByText(/^How to read this$/));
+    const lines = Array.from(container.querySelectorAll('[data-testid="l13-search-line"]')).map((el) => el.textContent);
+    expect(lines.length).toBe(5);
+    expect(lines[0]).toMatch(/252 settings/);
+    expect(lines[0]).toMatch(/windows 2, 5, 10, 20, 30, 60, 120 min/);
+    expect(lines[1]).toMatch(/0 positive rows with q < 0\.05 out of 5,544/);
+    expect(lines[2]).toMatch(/24\.5 Hz at 60 s, 120-min window, Neural-first pre-report: r 0\.33 \(0\.17 to 0\.48\), n 59, q 0\.23/);
+    expect(lines[3]).toMatch(/1,545 rows with q < 0\.05 on the negative side/);
+    container.querySelectorAll('[data-testid="l13-search-line"]').forEach((el) => {
+      expect(getComputedStyle(el).fontWeight).toBe("700");
+    });
+    // the first drawer bullet is the search, before the backend's own notes
+    const all = Array.from(container.querySelectorAll("*"))
+      .filter((el) => el.children.length === 0 && /^• /.test(el.textContent || "")).map((el) => el.textContent);
+    expect(all[0]).toMatch(/Exploratory search, 2026-09-21/);
+    // another participant sees none of it
+    container.ownerDocument.body.innerHTML = "";
+    const other = await renderGrid({ participantUid: "0000000000000000000000000000dead" });
+    fireEvent.click(screen.getByText(/^How to read this$/));
+    expect(other.container.querySelectorAll('[data-testid="l13-search-line"]').length).toBe(0);
   });
 
   it("item 3, the other half: the orange caption still prints the snapshot count, exactly once on the card", async () => {

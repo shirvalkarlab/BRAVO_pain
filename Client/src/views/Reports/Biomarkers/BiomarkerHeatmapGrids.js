@@ -113,6 +113,25 @@ function heatmapHeight(rows) {
  * outliers, the shuffled reference, the split rule). Only `corrSw.notes` is read -- `aucSw.notes`
  * is never different (both grids share one per-channel sweep response), so reading both and
  * concatenating them, as this drawer used to, only doubled every bullet for no reason. */
+// THE L 1-3+ SEARCH (the PI, 2026-09-21): a one-off exploratory search over every setting of the
+// matching knobs on RCS08's L 1-3+ (the one left-side pair the sensing rule allows), Left Leg VAS,
+// the page's own grid routine with its full shuffles and resamples (the table is in the scratch
+// area, `_l13_search_left_leg_vas.csv`). Its headline lines are printed in bold at the top of the
+// "How to read this" drawer, for RCS08 only: they are a finding about one record, not a rule.
+export const L13_SEARCH_UID = "2e3c75c00d7f4f37b53a048d195f11da";
+export const L13_SEARCH_LINES = [
+  "Exploratory search, 2026-09-21, L 1\u207b3\u207a on Left Leg VAS: 252 settings (windows 2, 5, 10, 20, 30, 60, 120 min; "
+    + "Report-first, Neural-first, Neural-first pre-report; cap 1, 3, 10 per rating; reuse on/off; clinic sheets on/off).",
+  "No band rises with pain past the 22-band correction under any setting: 0 positive rows with q < 0.05 out of 5,544.",
+  "Sheets off (REDCap only): the only cell to reach the grid\u2019s \u201cestablished\u201d verdict is 24.5 Hz at 60 s, "
+    + "120-min window, Neural-first pre-report: r 0.33 (0.17 to 0.48), n 59, q 0.23. 21.5\u201325.5 Hz (mostly 23.5) "
+    + "come out \u201csupported\u201d in 1\u20138 settings per window, the same count the negative side reaches by chance.",
+  "Sheets on (+ clinic titration scores): the positive cluster vanishes and 11\u201322 of 22 bands per setting fall with pain, "
+    + "1,545 rows with q < 0.05 on the negative side, all with the sheets in. The titration scores carry a strong "
+    + "negative pain\u2013power relationship that the chronic record does not.",
+  "Read as a lead for the next titration session (24.5 Hz, 60 s), not a band to program.",
+];
+
 function bulletsFor(sw) {
   // Concise since 2026-09-15 (the PI). The backend's own notes are already short; the three
   // display-only bullets say one thing each; the snapshot bullet is gone from here because the
@@ -1122,6 +1141,12 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
                       (tile rounding, cell independence, outliers, the shuffled reference, the split
                       rule) last. The old fourth static bullet ("0.5 means... not 0") is deleted
                       outright -- it restated the backend's own second note nearly verbatim. */}
+                  {participantUid === L13_SEARCH_UID ? L13_SEARCH_LINES.map((n, i) => (
+                    <MDTypography key={`l13-${i}`} variant="caption" color="dark" data-testid="l13-search-line"
+                      sx={{ fontSize: 17, display: "block", mb: 0.5, lineHeight: 1.4, fontWeight: 700 }}>
+                      {`• ${n}`}
+                    </MDTypography>
+                  )) : null}
                   {bulletsFor(corrSw).map((n, i) => (
                     <MDTypography key={i} variant="caption" color="dark"
                       sx={{ fontSize: 17, display: "block", mb: 0.5, lineHeight: 1.4 }}>
