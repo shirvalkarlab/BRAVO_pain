@@ -1,4 +1,5 @@
-"""The transform-route calibration recipe: how k = 352.62 LSB per uV^2 was derived, and how it is
+"""The transform-route calibration recipe: how the June constant (352.62 LSB per uV^2) was derived, how
+the constant in effect (`DEPLOYED_K`, refit on the same recipe, decision 211) follows it, and how it is
 refit (decision 208, 2026-09-20).
 
 THE PAIRS. A BrainSense streaming session records the same signal two ways at once: the device's

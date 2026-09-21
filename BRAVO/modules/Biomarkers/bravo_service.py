@@ -79,7 +79,7 @@ AVAILABILITY_PSD_TYPES = ["MedtronicBrainSenseSurvey", "MedtronicBaselineMontage
 #
 #   (2) LSB ROUTE — decided by whether the product ALSO carries time-domain (TD). LSB lives only in the
 #       PROGRAMMED products (on-demand BrainSenseLfp streaming + Timeline). A product WITH TD gets LSB
-#       from the direct, validated TD→LSB transform (analytics.td_to_lsb, k=352.62). A PSD-ONLY product
+#       from the direct, validated TD→LSB transform (analytics.td_to_lsb, k = the transform constant in effect). A PSD-ONLY product
 #       (patient-triggered snapshot events) has no TD, so it gets LSB only via the PSD→LSB BRIDGE (CS-3):
 #       the montage TD↔PSD law composed with the TD→LSB transform. Montage/survey products are the
 #       bridge's CALIBRATION SOURCE — never a consumer of it.
@@ -120,7 +120,7 @@ PSD_SOURCE_TAXONOMY = {
         "origin": "Automatic ~20 s montage sweep (full-band PSD over reference montage)",
         "units": "device LFPMagnitude (linear µV) + carries 250 Hz TD",
         "has_td": True, "has_psd": True, "has_lsb": False,
-        "lsb_route": "td_transform",               # has TD → direct k=352.62; bridge CALIBRATION source
+        "lsb_route": "td_transform",               # has TD → the direct transform route; bridge CALIBRATION source
         "pooling_source": MONTAGE_PSD_SOURCE, "display": DISPLAY_MONTAGE_SNAPSHOT,
     },
 }
@@ -620,7 +620,7 @@ def _event_psd_lsb_blocks(participant_uid, sensing_hz_by_channel=None, sensing_i
       - the contact's configured sensing center (sensing_hz_by_channel) when known — so the modeled
         event LSB lands on the SAME band the device would deploy; else
       - the event spectrum's own in-[LO,DEPLOYABLE_HI] peak frequency (device acts in that band).
-    availability.lsb_series applies analytics.device_psd_to_lsb (k~=73.63) and keeps the result inside
+    availability.lsb_series applies analytics.device_psd_to_lsb (the composed bridge constant) and keeps the result inside
     [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI]; blocks whose center can't be resolved are dropped there.
 
     Args:
@@ -668,12 +668,12 @@ def _montage_psd_lsb_blocks(participant_uid, montage_recordings=None):
     Each MedtronicBrainSenseSurvey / Montage recording carries, in
     `Descriptor.MedtronicPSD`, a per-contact device-onboard PSD spectrum
     (`LFPFrequency` [Hz] + `LFPMagnitude` [linear µV], 100 points), alongside its
-    raw 250 Hz TD. The TD already feeds the transform route (k=352.62); this surfaces
+    raw 250 Hz TD. The TD already feeds the transform route (the constant in effect); this surfaces
     the device PSD as a SEPARATE psd_bridge window so a montage contributes LSB even
     when its TD tile fails the cache quality gate (too short / saturated / >max_missing).
 
     Calibration: LFPMagnitude is the SAME linear-µV onboard-FFT unit as the
-    patient-event FFTBinData, so the SAME bridge constant LSB_PER_DEVICE_PSD≈73.63
+    patient-event FFTBinData, so the SAME bridge constant LSB_PER_DEVICE_PSD
     applies (paired same-recording validation: device-PSD LSB / TD-transform LSB
     median 0.993, IQR [0.966,1.020] in 8–30 Hz). Each MedtronicPSD entry is mapped to
     its canonical channel via SensingElectrodes (+ Hemisphere); ring pairs go through
@@ -3777,7 +3777,7 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         # modeled source — it sweeps ALL bipolar contacts STIM-OFF, carries raw 250 Hz TD (in
         # Recording["Data"]) AND the device's own per-contact peak frequency (Descriptor.MedtronicPSD),
         # but produces NO native device LSB scalar. So those contacts have no LSB point without this:
-        # convert via the transform DSP -> td_to_lsb (k=352.62, CS-1 2026-06-27; was Welch-256 ->
+        # convert via the transform DSP -> td_to_lsb (the transform constant in effect, CS-1 2026-06-27; was Welch-256 ->
         # psd_band_to_lsb k=269) at each contact's configured sensing center (falling back to the
         # device peak). `psd_list` is the montage/survey products
         # (MedtronicBrainSenseSurvey + Baseline/Stimulation montages), all carrying TD. Tagged
@@ -6183,8 +6183,8 @@ def _modeled_lsb_threshold_estimate(thr_lsb, modeled_thr, n_modeled, center_hz, 
     between the per-panel LSB readout (band_lsb_and_power) and the one-shot sign-off (deployment_summary).
 
     SINGLE modeled tier (`modeled_timeline`): the caller models the LSB line off the RAW µV TD the ROC
-    was built from, AT the ROC's own band center (availability.modeled_lsb_at_center — transform ×352.62
-    / bridge ≈73.63), and passes the percentile-anchored value in as `modeled_thr`. This is units-
+    was built from, AT the ROC's own band center (availability.modeled_lsb_at_center — the transform constant
+    / the composed bridge, both in effect), and passes the percentile-anchored value in as `modeled_thr`. This is units-
     consistent (no µV²↔LSB conversion of the z-scored cut-point) and covers any band the ROC can score.
       (The old TIER-2 frozen-model-on-µV²-cut-point and TIER-3 population-constant k=269 tiers were both
        retired 2026-06-28: when there is no TD/PSD for the channel `modeled_thr` is None and the modeled
@@ -6195,7 +6195,7 @@ def _modeled_lsb_threshold_estimate(thr_lsb, modeled_thr, n_modeled, center_hz, 
     thr_estimate = None
     # TIER 1 of the fallback ladder: the MODELED-LSB Timeline (psd_modeled). When the device never
     # sensed this band natively but the montage-survey sweeps DID give us calibrated modeled LSB
-    # points in-band (transform×352.62 — the hollow diamonds on the timeline), read the threshold off
+    # points in-band (the transform route — the hollow diamonds on the timeline), read the threshold off
     # those at the same percentile, the SAME way the native path reads it. This is the closest thing
     # to a measured threshold for an unsensed band — a real per-contact LSB time series — so it
     # outranks the µV²-cut-point model below. Flagged modeled so the sign-off card never mistakes it
@@ -6243,7 +6243,7 @@ def _modeled_lsb_threshold_estimate(thr_lsb, modeled_thr, n_modeled, center_hz, 
     # into the frozen model's estimate_lsb (deleted 2026-09-21), which expected a LINEAR µV² band power: a negative z clipped to
     # 1e-12 (LSB≈0) and a positive z was silently misread as µV². The units-correct replacement is the
     # single modeled tier above: model the LSB line off the RAW TD the ROC was built from, at the ROC's
-    # OWN band center (transform ×352.62 over streaming + montage TD; bridge ≈73.63 for PSD-only
+    # OWN band center (the transform route over streaming + montage TD; the bridge for PSD-only
     # events), then anchor by RANK (percentile) exactly like the native path — no µV²↔LSB conversion of
     # the cut-point. When there is genuinely no TD/PSD for the channel the modeled tier yields < 8
     # in-band points and `modeled_thr` stays None -> thr_estimate stays None (fail-closed), rather than
@@ -6292,7 +6292,7 @@ def band_lsb_and_power(request_data):
             percentile = float((bp <= float(cutpoint)).mean() * 100.0)
 
     # ---- device Timeline LSB for this channel, restricted to this band's sensing ----
-    # Include the montage-survey TD so the MODELED LSB tier (psd_modeled, transform×352.62 — the same
+    # Include the montage-survey TD so the MODELED LSB tier (psd_modeled, the transform route — the same
     # hollow-diamond series the timeline draws) is available as a fallback when the device never
     # sensed THIS band natively. Mirrors deployment_summary and the timeline caller so this panel
     # sees exactly the modeled points the clinician sees on the timeline.
@@ -6325,7 +6325,7 @@ def band_lsb_and_power(request_data):
         band_lsb_vals = y[bmask & ~is_modeled]
         n_native = int(band_lsb_vals.size)
     # MODELED in-band points: model the LSB line off the RAW µV TD the ROC was built from, AT THE ROC's
-    # own band center (transform ×352.62 over the montage/survey TD; bridge ≈73.63 for PSD-only events),
+    # own band center (the transform route over the montage/survey TD; the bridge for PSD-only events),
     # then anchor by percentile like native. Universal — covers any band the ROC can score, not only the
     # montage's configured sensing bands — and units-consistent (replaces the retired µV²-cut-point
     # estimate_lsb fallback, removed 2026-06-28). `td_for_modeled` is ALL raw-µV TD (streaming +
@@ -6355,8 +6355,8 @@ def band_lsb_and_power(request_data):
         }
     else:
         # No native threshold: default to the MODELED LSB estimate via the shared fallback ladder
-        # (single modeled tier: LSB line modeled off the raw TD at the ROC band — transform ×352.62 /
-        # bridge ≈73.63 — then percentile-anchored; population-constant k=269 tier retired 2026-06-28,
+        # (single modeled tier: LSB line modeled off the raw TD at the ROC band — the transform route /
+        # the bridge, both at the constants in effect — then percentile-anchored; population-constant k=269 tier retired 2026-06-28,
         # so an uncovered band is fail-closed). The IDENTICAL helper deployment_summary uses, so the
         # per-panel number can never drift from the sign-off card.
         # Flagged estimated=True so the frontend renders it with its ESTIMATED tier + ±1σ band and
@@ -6600,7 +6600,7 @@ def deployment_summary(request_data):
         bp = np.asarray(feat[0], dtype=float); bp = bp[np.isfinite(bp)]
         if bp.size:
             percentile = float((bp <= float(cutpoint)).mean() * 100.0)
-    # Include the montage-survey TD so the MODELED LSB tier (psd_modeled, transform×352.62 — the same
+    # Include the montage-survey TD so the MODELED LSB tier (psd_modeled, the transform route — the same
     # hollow-diamond series the timeline draws) is available as a fallback when the device never
     # sensed THIS band natively. Mirrors the timeline caller so the deployment fallback sees exactly
     # the modeled points the clinician sees on the timeline.
@@ -6631,7 +6631,7 @@ def deployment_summary(request_data):
         if vals.size >= 20 and percentile is not None:
             thr_lsb = round(float(np.percentile(vals, percentile)), 1)
     # MODELED points in-band: model the LSB line off the RAW µV TD the ROC was built from, AT THE ROC's
-    # own band center (transform ×352.62 over the montage/survey TD; bridge ≈73.63 for PSD-only events),
+    # own band center (the transform route over the montage/survey TD; the bridge for PSD-only events),
     # then anchor by percentile like native. Universal across any band the ROC can score and units-
     # consistent (replaces the retired µV²-cut-point estimate_lsb fallback, removed 2026-06-28).
     # `td_for_modeled` is ALL raw-µV TD (streaming + montage/survey); chronic/powerdomain are

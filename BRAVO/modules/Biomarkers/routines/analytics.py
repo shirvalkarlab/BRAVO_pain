@@ -633,107 +633,6 @@ def _binarize_labels(values, strategy="tertile", low_pct=33.3333, high_pct=66.66
 # Deleted on the PI's decision (review finding B8).
 
 
-def _cv_logistic_auc(x, y, n_splits=5, seed=0, groups=None):
-    """Cross-validated logistic-regression AUC for a SINGLE feature `x` against binary `y`.
-
-    Out-of-fold predicted probabilities -> one ROC-AUC over all held-out samples (so each sample is
-    scored by a model that did not see it). Oriented to >= 0.5 (max(auc, 1-auc)) because the
-    feature's sign vs pain is itself part of the exploration. Returns (auc, n_used). NaN when a
-    class is missing or too few samples to split.
-
-    `groups` (optional, same length as x/y): a per-sample cluster id (the matched PRO/rating). When
-    given, folds are split with StratifiedGroupKFold so all samples sharing a rating stay on the
-    same side of every train/test split — the predictive analog of a per-rating random intercept.
-    This removes the optimism that double-dipping injects when many neural samples share one rating
-    (a plain StratifiedKFold would leak a rating's near-duplicate samples across folds and inflate
-    the AUC). `n_used` is then reported as the number of independent groups, not raw samples."""
-    from sklearn.linear_model import LogisticRegression
-    from sklearn.model_selection import StratifiedKFold, StratifiedGroupKFold
-    from sklearn.metrics import roc_auc_score
-    x = np.asarray(x, dtype=float)
-    y = np.asarray(y, dtype=float)
-    g = np.asarray(groups) if groups is not None else None
-    m = np.isfinite(x) & np.isfinite(y)
-    if g is not None:
-        m = m & (g >= 0)
-    x, y = x[m], y[m]
-    g = g[m] if g is not None else None
-    n = x.size
-    if n < 8 or len(np.unique(y)) < 2:
-        return np.nan, int(n)
-    pos, neg = int((y == 1).sum()), int((y == 0).sum())
-    # n_used reported as independent units: groups when grouping, else samples.
-    n_units = int(np.unique(g).size) if g is not None else n
-    X = x.reshape(-1, 1)
-    oof = np.full(n, np.nan)
-    if g is not None:
-        # Need >=2 groups per class to form grouped folds without a rating crossing the split.
-        n_grp = int(np.unique(g).size)
-        # groups-per-class count
-        gpos = int(np.unique(g[y == 1]).size); gneg = int(np.unique(g[y == 0]).size)
-        k = int(min(n_splits, gpos, gneg))
-        if k < 2:
-            return np.nan, n_units
-        splitter = StratifiedGroupKFold(n_splits=k, shuffle=True, random_state=seed)
-        split_iter = splitter.split(X, y, groups=g)
-    else:
-        k = int(min(n_splits, pos, neg))
-        if k < 2:
-            return np.nan, int(n)
-        splitter = StratifiedKFold(n_splits=k, shuffle=True, random_state=seed)
-        split_iter = splitter.split(X, y)
-    for tr, te in split_iter:
-        if len(np.unique(y[tr])) < 2:
-            continue
-        clf = LogisticRegression(max_iter=200)
-        clf.fit(X[tr], y[tr])
-        oof[te] = clf.predict_proba(X[te])[:, 1]
-    ok = np.isfinite(oof)
-    if ok.sum() < 4 or len(np.unique(y[ok])) < 2:
-        return np.nan, n_units
-    auc = float(roc_auc_score(y[ok], oof[ok]))
-    return max(auc, 1.0 - auc), n_units
-
-
-def _cluster_robust_logit_p(x, y, groups=None):
-    """Two-sided Wald p-value for the band-power coefficient in a single-feature logistic fit.
-
-    When `groups` is given (the matched pain rating per sample), the standard error is cluster-robust
-    (sandwich estimator clustered on rating) — the inference companion to the rating-grouped AUC: it
-    models each rating as a cluster so repeated PSDs sharing one rating don't shrink the SE and
-    fabricate significance. This is the rating-as-random-effect p the binary classification reports.
-    Without groups it's the ordinary logistic Wald p. Returns (p, n_used, n_clusters) — NaN p when
-    the fit can't run (a class missing, separation, or too few samples)."""
-    import numpy as _np
-    x = _np.asarray(x, dtype=float); y = _np.asarray(y, dtype=float)
-    g = _np.asarray(groups) if groups is not None else None
-    m = _np.isfinite(x) & _np.isfinite(y)
-    if g is not None:
-        m = m & (g >= 0)
-    x, y = x[m], y[m]
-    g = g[m] if g is not None else None
-    n = x.size
-    if n < 8 or len(_np.unique(y)) < 2:
-        return _np.nan, int(n), 0
-    if _np.nanstd(x) <= 0:
-        return _np.nan, int(n), (int(_np.unique(g).size) if g is not None else 0)
-    n_clusters = int(_np.unique(g).size) if g is not None else 0
-    try:
-        import statsmodels.api as sm
-        X = sm.add_constant(x)
-        if g is not None and n_clusters >= 2:
-            res = sm.GLM(y, X, family=sm.families.Binomial()).fit(
-                cov_type="cluster", cov_kwds={"groups": g})
-        else:
-            res = sm.GLM(y, X, family=sm.families.Binomial()).fit()
-        p = float(res.pvalues[1])
-        if not _np.isfinite(p):
-            return _np.nan, int(n), n_clusters
-        return p, int(n), n_clusters
-    except Exception:
-        return _np.nan, int(n), n_clusters
-
-
 def outlier_report_for_feature(x, *, n_mad=None, context=""):
     """Outlier REPORT (never a removal) for a device-facing band-power feature.
 
@@ -2178,15 +2077,15 @@ LSB_VALIDATED_HZ_HI = 28.3
 # provenance ONLY and is NOT deployed — use 345.59 exactly, do not round.
 # k is multiplicative on a LOG band-power feature, so within a SINGLE-SOURCE feature (every point
 # scaled by the same k) it CANCELS inside Pearson r / AUC — the correlation/AUC panels are identical
-# whether k is 269, 352.62, or 1. SCOPE: this holds only when the feature column is homogeneous in k.
+# whether k is 269, the transform constant, or 1. SCOPE: this holds only when the feature column is homogeneous in k.
 # It does NOT hold for a feature that POOLS native device LSB (raw units, no k) with modeled points
-# (k=352.62) on the same axis — there, raising modeled k from 269→352.62 shifts only the modeled
-# subset by +log(352.62/269)≈+0.272 relative to native, which CAN move r/AUC. The native-preferred
+# (the transform constant) on the same axis — there, raising modeled k from 269 to the transform constant shifts only the modeled
+# subset relative to native (a fixed ratio), which CAN move r/AUC. The native-preferred
 # masking (is_modeled) keeps modeled points out of the deployable threshold and the measured-r path, so
 # no mixed feature reaches a correlation; test_k_cancels_in_correlation_and_auc pins the single-source
 # case and test_modeled_excluded_from_native_correlation_path pins the segregation. k matters only for
 # (a) the absolute LSB values displayed and (b) the deployable LSB threshold — which is why switching
-# the exploration TD path from welch256×269 to transform×352.62 moves the displayed scale to the
+# the exploration TD path from welch256×269 to the transform route moves the displayed scale to the
 # lab-consistent value WITHOUT moving any r/AUC result.
 LSB_PER_UV2_TRANSFORM = 345.59         # k, transform route — the adopted recipe's median over every block (decision 211); PRIMARY TD→LSB
 # Device adaptive-sensing ceiling. Distinct from LSB_VALIDATED_HZ_HI (28.3 Hz = where paired-block
@@ -2217,13 +2116,14 @@ LSB_DEPLOYABLE_HZ_HI = 30.0
 #      proportional to the TD-transform band power: PSD_bp = K_TD_PSD · TD_bp, K_TD_PSD = 4.789
 #      (geomean, 95% CI [4.772, 4.806]; slope 1.022, r=0.987; offset 6.80 dB ≈ the onboard-FFT-vs-Welch
 #      ~6 dB note; per-contact K 4.73–4.87, fold 1.22× < the 1.26× calibration scatter).
-#   3. COMPOSE: TD→LSB is LSB = LSB_PER_UV2_TRANSFORM · TD_bp (= 352.62 · TD_bp). Substituting
-#      TD_bp = PSD_bp / K_TD_PSD gives LSB = (352.62 / 4.789) · PSD_bp = K_PSD_LSB · PSD_bp.
+#   3. COMPOSE: TD→LSB is LSB = LSB_PER_UV2_TRANSFORM · TD_bp. Substituting
+#      TD_bp = PSD_bp / K_TD_PSD gives LSB = (LSB_PER_UV2_TRANSFORM / K_TD_PSD) · PSD_bp = K_PSD_LSB · PSD_bp
+#      (the numbers in effect are read from the two constants above, never written here).
 # End-to-end check on montage (LSB via this bridge vs direct TD→LSB): geomean fold 1.000 (unbiased),
 # scatter 1.21×, r=0.987. The bridge reproduces the direct transform to within calibration scatter.
 #
 # Apply ONLY to PSD-only patient-triggered snapshot events. Montage/survey/snapshot products carry their
-# own TD and MUST use td_to_lsb (k=352.62) directly — they are this bridge's CALIBRATION SOURCE, never
+# own TD and MUST use td_to_lsb (the constant in effect) directly — they are this bridge's CALIBRATION SOURCE, never
 # a consumer of it. The event PSD must be negative-clamped (clamp_device_psd) before band-integration.
 # The 4.789 was a geometric mean (a log-space average). Refit 2026-09-20 as the raw median with the
 # 5-MAD ratio rule on 26,334 pairs through 2026-09-03 in 7.8-28 Hz: 4.755, within 1 percent, so the
@@ -2297,7 +2197,7 @@ def td_transform_band_power(samples_uv, fs, center_hz, *, half_hz=2.5,
         Window length / hop in SAMPLES. Defaults: win = round(fs*TRANSFORM_WIN_SECONDS) (=250 @ 250
         Hz), step = win (non-overlapping). Pass step = round(fs*TRANSFORM_STEP_SECONDS) for 50% overlap.
     n_fft : int, default 256
-        Zero-pad / FFT length. The k=352.62 calibration assumes 256.
+        Zero-pad / FFT length. The transform calibration assumes 256.
     maxf : float, default 96.68
         Keep only FFT bins ≤ maxf (the repo's percept_frequency_bins ceiling).
     agg : {"median","mean","none"}, default "median"
@@ -2358,7 +2258,7 @@ def td_transform_band_power(samples_uv, fs, center_hz, *, half_hz=2.5,
 TRANSFORM_CENTERED_EXTENT_SECONDS = 30.0   # rating-centered TD extent fed to the per-PRO LSB sweep
 # Tile width for the match-AGNOSTIC raw LSB cache (availability.raw_lsb_spectrum_cache). The whole
 # recording is sliced into fixed RAW_LSB_WINDOW_SECONDS non-overlapping tiles, INDEPENDENT of any PRO;
-# each tile's LSB is the validated 1 s-Hann/256-FFT transform (k=352.62) median across its internal
+# each tile's LSB is the validated 1 s-Hann/256-FFT transform (the constant in effect) median across its internal
 # 50%-overlap sub-windows. Matching (median of the tiles falling inside a rating-centered extent) is
 # done LIVE downstream, not baked into this cache. 3 s holds ~5 sub-windows per tile.
 RAW_LSB_WINDOW_SECONDS = 3.0
@@ -2455,7 +2355,7 @@ def device_psd_band_power(freq, magnitude, center_hz, *, half_hz=2.5):
 def device_psd_to_lsb(freq, magnitude, center_hz, *, half_hz=2.5, k=LSB_PER_DEVICE_PSD):
     """PSD→LSB BRIDGE (CS-3): device power-domain LSB from a PSD-ONLY patient-triggered snapshot event's
     onboard-FFT magnitude spectrum (Frequency + FFTBinData), via device_psd_band_power × k
-    (default LSB_PER_DEVICE_PSD ≈ 73.63 = LSB_PER_UV2_TRANSFORM / LSB_PER_UV2_DEVICE_PSD_TD_RATIO).
+    (default LSB_PER_DEVICE_PSD = LSB_PER_UV2_TRANSFORM / LSB_PER_UV2_DEVICE_PSD_TD_RATIO, the values in effect).
 
     Use ONLY for PSD-only patient events (no TD). Montage/survey/snapshot products carry TD → td_to_lsb.
     Returns float LSB (or ndarray for a vector center); NaN where band power is NaN/non-positive."""

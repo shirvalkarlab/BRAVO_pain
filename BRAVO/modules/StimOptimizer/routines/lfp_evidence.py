@@ -111,7 +111,7 @@ def _to_utc(values, *, unit="s"):
 # about. So applying it corrects the displayed scale and the threshold arithmetic while leaving every
 # slope sign, p-value and verdict in this module untouched.
 #
-# WHY NOT THE LAB'S EXISTING CONSTANTS. ``LSB_PER_UV2_TRANSFORM = 352.62`` is calibrated for a
+# WHY NOT THE LAB'S EXISTING CONSTANTS. ``LSB_PER_UV2_TRANSFORM`` (the transform constant in effect) is calibrated for a
 # DIFFERENT signal-processing recipe -- its note names it precisely: "RC+S-Hann / 256-pt zero-padded
 # FFT / peak-amplitude / mean-magnitude band power", reproduced bit-for-bit. This module does
 # something else: it exponentiates a dB10 power DENSITY and integrates it over the band. A different
@@ -156,7 +156,7 @@ def _to_utc(values, *, unit="s"):
 #
 # FIRST, A WRITTEN DECISION FORBIDS IT. That handoff records, as an architecture decision of the PI
 # dated 2026-06-27 and marked "no open option": the deployable source of truth for band power in the
-# device's units is the TD transform route with k = 352.62, and it is "the PRIMARY way LSB is
+# device's units is the TD transform route with the constant in effect, and it is "the PRIMARY way LSB is
 # computed for both the exploratory panels and the deployment fallback -- NOT a second DSP to
 # maintain". It names both consumers explicitly, and one of them is this module. The whole purpose
 # of that decision was to REMOVE a split in which one path silently used a different recipe and a
@@ -184,7 +184,7 @@ def _to_utc(values, *, unit="s"):
 # it as "One helper, one constant, used by both the Biomarker exploration panels and the deployment
 # modeled fallback": ``Biomarkers.routines.analytics.td_to_lsb``, which applies the transform recipe
 # (mean-detrend, rcs-Hann taper, zero-pad to 256, real FFT, peak scale, sum of squared magnitude over
-# the band) and multiplies by 352.62. The 3-second tiles held in the Biomarkers raw cache are that
+# the band) and multiplies by the transform constant in effect. The 3-second tiles held in the Biomarkers raw cache are that
 # same quantity already computed, which is why the platform's own pages read in the hundreds to
 # thousands while this module read in single digits.
 #

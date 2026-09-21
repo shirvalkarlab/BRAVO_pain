@@ -762,8 +762,8 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
     # Per-row source tag (unchanged z-score machinery uses src_arr directly; the short
     # _lsb_tier tag is kept so callers can label rows as td/survey/patient_event in the UI).
     # NOTE: the old Welch-density × k=269 / device-FFT rescale path was REMOVED 2026-06-27 (PI).
-    # Per-band LSB now comes from the shared per-pair cache (CS-1…CS-4 routes, k=352.62 transform /
-    # k≈73.63 bridge) via availability.live_lsb_spectrum_match, not from this routine.
+    # Per-band LSB now comes from the shared per-pair cache (CS-1…CS-4 routes, the transform constant /
+    # the composed bridge, both in effect) via availability.live_lsb_spectrum_match, not from this routine.
     # psd_abs_uv2_per_hz and device_psd_scale_by_channel are no longer emitted from this function.
     src_str = np.array([str(s) for s in src_arr]) if src_arr.size else np.zeros(0, dtype=object)
     _is_td = np.isin(src_str, ("TD streaming", "Montage/survey")) if src_str.size else np.zeros(0, bool)

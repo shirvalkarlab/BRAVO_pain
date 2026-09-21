@@ -609,7 +609,7 @@ def _lsb_series_scan(chronic_recordings, powerdomain_recordings, region_map=None
       * MODELED LSB (fallback — the band has a spectrum but NO native device LSB):
         - Montage survey TD (`montage_td_recordings`, stim-off, all contacts): the timeline's
           ``psd_modeled`` tier. Convert the 250 Hz TD to LSB via the PRIMARY transform route
-          (analytics.td_to_lsb = transform DSP x LSB_PER_UV2_TRANSFORM=352.62; PI 2026-06-27,
+          (analytics.td_to_lsb = transform DSP x LSB_PER_UV2_TRANSFORM, the constant in effect; PI 2026-06-27,
           superseding the old welch256 x269 path) so survey contacts that the device never produced an
           LSB scalar for still get a calibrated LSB point on the trace. NEVER preferred over native
           LSB; the tier enum stays source="psd_modeled" (downstream native-preferred masking keys on
@@ -618,9 +618,9 @@ def _lsb_series_scan(chronic_recordings, powerdomain_recordings, region_map=None
         - Patient-triggered snapshot events (`event_psd_recordings`, PSD-ONLY — no TD): the CS-3
           PSD->LSB BRIDGE. These device onboard-FFT snapshots (FFTBinData) have a spectrum but NO time
           domain, so the direct transform cannot run; convert the device-PSD band power to LSB via
-          analytics.device_psd_to_lsb (LSB_PER_DEVICE_PSD ~= 73.63 = k=352.62 / the montage TD<->PSD
+          analytics.device_psd_to_lsb (LSB_PER_DEVICE_PSD = LSB_PER_UV2_TRANSFORM / the montage TD<->PSD
           ratio 4.79). Same psd_modeled tier + modeled=True flag (never preferred over native, never
-          deployable); the DSP route is recorded in `method` as event_psd_bridge_x_k=73.63. Restricted
+          deployable); the DSP route is recorded in `method` as event_psd_bridge_x_k=<the bridge constant in effect>. Restricted
           to [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI] -- the bridge is only honored where a deployable
           band can sit. Montage/survey products are NOT routed here (they carry TD -> the modeled tier
           above); the bridge is for the PSD-only events that are otherwise LSB-less.
@@ -748,10 +748,10 @@ def _lsb_series_scan(chronic_recordings, powerdomain_recordings, region_map=None
         for i in np.where(~bad)[0]:
             _push(key, float(tarr[i]), col[i], _hz_at(float(tarr[i])), "chronic")
 
-    # --- MODELED tier (fallback): montage survey TD -> transform DSP -> td_to_lsb (k=352.62) ---
+    # --- MODELED tier (fallback): montage survey TD -> transform DSP -> td_to_lsb (the constant in effect) ---
     # Survey contacts carry a full-spectrum TD but NO native device LSB scalar, so without this they
     # would have no LSB point at all. We convert via the PRIMARY TD->LSB route (the percept-spectral-
-    # repro transform x LSB_PER_UV2_TRANSFORM=352.62; PI 2026-06-27) so the timeline can show a
+    # repro transform x LSB_PER_UV2_TRANSFORM; PI 2026-06-27) so the timeline can show a
     # calibrated (modeled) LSB for every sensed band, distinctly marked. Only contacts that already
     # have NO native LSB sample get a modeled point per record (native is always preferred): if a
     # contact has any streaming/chronic LSB we still ADD the modeled survey point (different time), but
@@ -797,7 +797,7 @@ def _lsb_series_scan(chronic_recordings, powerdomain_recordings, region_map=None
             if center is None or not np.isfinite(center) or float(center) <= 0:
                 continue
             # PRIMARY TD->LSB: transform DSP (median over 1 s rcs-Hann/256-pt windows across the whole
-            # survey) x k=352.62. The survey is stamped at one StartTime (no PRO centering here), so the
+            # survey) x the transform constant in effect. The survey is stamped at one StartTime (no PRO centering here), so the
             # whole column is the analysis extent — the direct transform analog of the old whole-column
             # Welch. Range/fft guards live downstream on the deployable threshold, not on this display
             # point (the exploration timeline is not band-restricted; k cancels in r/AUC).
@@ -806,14 +806,14 @@ def _lsb_series_scan(chronic_recordings, powerdomain_recordings, region_map=None
                 continue
             # source stays the "psd_modeled" TIER enum (the native-preferred masking at the y-window
             # scaler + the deployment threshold + the frontend all key on it); the DSP ROUTE that
-            # produced the value is recorded in `method` (now transform x352.62, was welch256 x269).
+            # produced the value is recorded in `method` (now the transform route, was welch256 x269).
             _push(key, t0, lsb, center, "psd_modeled",
                   modeled=True, method=f"td_transform_x_k={analytics.LSB_PER_UV2_TRANSFORM:.2f}")
 
     # --- MODELED tier (CS-3 PSD->LSB BRIDGE): PSD-ONLY patient-triggered snapshot events ---
     # These events carry a device onboard-FFT spectrum (FFTBinData) but NO time domain, so they cannot
     # use the direct transform. Convert the device-PSD band power to LSB via the bridge constant
-    # (device_psd_to_lsb, k ~= 73.63). Same psd_modeled tier + modeled=True (never preferred over native,
+    # (device_psd_to_lsb, the composed bridge constant). Same psd_modeled tier + modeled=True (never preferred over native,
     # never deployable). Restricted to [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI]: outside that band a
     # deployable adaptive band cannot sit, and the bridge has no calibrated meaning there, so we drop the
     # point rather than show an LSB the device could never act on. Montage/survey products are NOT here —
@@ -940,13 +940,13 @@ def _modeled_lsb_at_center_scan(channel, center_hz, *, td_recordings=None, psd_r
         the montage/survey sweeps (all 250 Hz TD), the same superset the exploration timeline pools.
         ONLY columns whose ChannelName
         canonicalizes to `channel` are converted, via the PRIMARY transform route
-        analytics.td_to_lsb(col, fs, center_hz) (×LSB_PER_UV2_TRANSFORM = 352.62). Power-domain records
+        analytics.td_to_lsb(col, fs, center_hz) (×LSB_PER_UV2_TRANSFORM, the constant in effect). Power-domain records
         (SamplingRate ≤ 0, e.g. ChronicBrainSense) and unnamed/extra columns are skipped — they are not
         raw TD. Because the center is the deployment band (not the montage's configured sensing band),
         this yields a modeled point at ANY band the ROC can score, including bands the montage never
         swept (8.8/40/55 Hz).
       * psd_recordings  — PSD-only events (onboard FFT, no TD). The matching channel's spectrum is
-        converted with the bridge route analytics.device_psd_to_lsb (×LSB_PER_DEVICE_PSD ≈ 73.63),
+        converted with the bridge route analytics.device_psd_to_lsb (×LSB_PER_DEVICE_PSD, the composed bridge),
         gated to the deployable band like the timeline's bridge tier.
 
     Returns a 1-D float array of in-band modeled LSB values for `channel` (may be empty). The caller
@@ -966,7 +966,7 @@ def _modeled_lsb_at_center_scan(channel, center_hz, *, td_recordings=None, psd_r
     target = _canon_channel(channel)
     vals = []
 
-    # --- TD tier: transform route (×352.62) at the deployment center, off montage/survey TD ---
+    # --- TD tier: transform route (the constant in effect) at the deployment center, off montage/survey TD ---
     # Convert ONLY columns whose ChannelName canonicalizes to `target`, mirroring the reference
     # lsb_series montage tier (iterate over names; ignore extra/unnamed columns). An unnamed column is
     # NEVER converted as `target` — that would let a malformed packet (Data columns > ChannelNames) or a
@@ -1006,7 +1006,7 @@ def _modeled_lsb_at_center_scan(channel, center_hz, *, td_recordings=None, psd_r
             if lsb is not None and np.isfinite(lsb) and lsb > 0:
                 vals.append(float(lsb))
 
-    # --- PSD-only tier: bridge route (≈73.63), deployable-band gated, for events with no TD ---
+    # --- PSD-only tier: bridge route (the composed bridge constant), deployable-band gated, for events with no TD ---
     if analytics.LSB_VALIDATED_HZ_LO <= float(cz) <= analytics.LSB_DEPLOYABLE_HZ_HI:
         for r in (psd_recordings or []):
             if not isinstance(r, dict):
@@ -1057,7 +1057,7 @@ def _missing_per_sample(missing, nsamp):
 # Per-PRO LSB selection tiers (in strict precedence order). The frontend keys on these to colour /
 # annotate each PRO's biomarker point by how trustworthy its LSB is.
 PRO_LSB_TIER_NATIVE = "native"        # device actually sensed this band near the rating (preferred)
-PRO_LSB_TIER_TD = "td_transform"      # a TD-bearing recording overlapped the rating -> direct k=352.62
+PRO_LSB_TIER_TD = "td_transform"      # a TD-bearing recording overlapped the rating -> the direct transform route
 PRO_LSB_TIER_BRIDGE = "psd_bridge"    # PSD-only patient event coincided -> CS-3 bridge (last resort)
 
 # ADC rail for the Percept TD (±, in µV). A 1 s window whose samples touch the rail is saturated /
@@ -1139,17 +1139,17 @@ def raw_lsb_spectrum_cache(channel, centers_hz, *, band_half_hz=2.5,
     Two window families, kept SEPARATE by source so a downstream matcher can prefer TD over PSD inside
     a match window and so the no-reuse-across-PROs rule can be applied per individual vector:
 
-      * TD-derived (tier td_transform, k=LSB_PER_UV2_TRANSFORM=352.62): each TD recording is cut into
+      * TD-derived (tier td_transform, k=LSB_PER_UV2_TRANSFORM, the constant in effect): each TD recording is cut into
         consecutive `window_s` tiles indexed by WALL-CLOCK SAMPLE position (so a tile's timestamp is
         correct even when the trace has dropped/NaN samples — unlike the finite-sample-space window
         axis of td_transform_band_power(agg="none")). Within each tile the VALIDATED transform runs at
         its native 1 s rcs-Hann / 256-FFT, 50 % overlap, median across the (~5 for a 3 s tile) internal
-        sub-windows, × 352.62. A tile with < 1 s finite signal, or more than `max_missing_frac` non-
+        sub-windows, × the transform constant. A tile with < 1 s finite signal, or more than `max_missing_frac` non-
         finite samples, or any sample at the ADC rail (≥ saturation_uv), emits an all-NaN row flagged
         (`saturated` / insufficient) rather than a misleading value.
 
-      * PSD-derived (tier psd_bridge, k=LSB_PER_DEVICE_PSD≈73.63): each PSD-only event is ONE window at
-        its own onboard-FFT timestamp, device_psd_band_power over all centers × 73.63. Per-band
+      * PSD-derived (tier psd_bridge, k=LSB_PER_DEVICE_PSD, the composed bridge): each PSD-only event is ONE window at
+        its own onboard-FFT timestamp, device_psd_band_power over all centers × the bridge constant. Per-band
         `calibrated` is True only inside [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI]; outside is
         exploratory (computed and flagged), the bridge contract the per-rating readers use.
 
@@ -1262,7 +1262,7 @@ def raw_lsb_spectrum_cache(channel, centers_hz, *, band_half_hz=2.5,
         psd_out["source"].append(str(ev.get("source") or "PSD event"))
 
     # ---- Montage/survey device-PSD windows (one per MedtronicPSD snapshot) ------------------------
-    # Same device-onboard-FFT unit and bridge constant (k=LSB_PER_DEVICE_PSD≈73.63) as the patient-
+    # Same device-onboard-FFT unit and bridge constant (k=LSB_PER_DEVICE_PSD) as the patient-
     # event PSD above — validated paired same-recording vs the TD transform (ratio ≈0.99 in 8–30 Hz).
     # Folded into the SAME psd family so a montage whose TD tile fails the quality gate still emits a
     # bridge LSB window. Kept here (not merged into event_psd_recordings) only so the caller can pass
@@ -2001,7 +2001,7 @@ def lsb_overview(lsb, *, session_gap_s=1800.0, chronic_max_points=1500):
                     sample count, and the session's sensing center frequency (for the categorical
                     color). ~one block per recording instead of hundreds of points.
 
-    A third, MODELED layer carries the psd_modeled tier (survey-TD -> transform DSP -> k=352.62) as discrete
+    A third, MODELED layer carries the psd_modeled tier (survey-TD -> transform DSP -> the transform constant in effect) as discrete
     points the frontend draws with a DISTINCT HOLLOW marker — never as a native session block, so a
     calibrated estimate is never read as a sensed LSB. Modeled points are excluded from the streaming
     session blocks and from the chronic line.

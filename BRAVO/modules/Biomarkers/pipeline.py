@@ -683,10 +683,10 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
     # distinct pain VALUES (single digits) rather than the number of matched reports (dozens).
     #
     # Two consequences, both on the panel's *rigorous* statistics:
-    #   * `_cluster_robust_logit_p` clustered on a handful of clusters instead of dozens. Sandwich
+    #   * the cluster-robust logistic p (a helper since deleted, 2026-09-21) clustered on a handful of clusters instead of dozens. Sandwich
     #     variance with that few clusters is unreliable, and it is the p-value the plate presents as
     #     the pseudoreplication-corrected headline (the ringed survivors).
-    #   * `_cv_logistic_auc`'s StratifiedGroupKFold grouped on those same collapsed groups — i.e.
+    #   * the cross-validated logistic AUC's (also deleted) StratifiedGroupKFold grouped on those same collapsed groups — i.e.
     #     the CV folds were defined BY THE OUTCOME, so whole pain levels were held out together.
     #     Grouping on the value of the thing you are predicting is not a defensible fold structure.
     #

@@ -167,7 +167,7 @@ GENERAL_ENVELOPE = {
 #: ``StimOptimizer.routines.lfp_evidence.DEVICE_UNITS_PER_INTEGRATED_BAND_POWER``. That one was
 #: measured on RCS08's own paired recordings in 2026-09-06 and its provenance, its agreement across
 #: two independent references, and the two electrodes where it is NOT trustworthy are all written
-#: out at the top of that module. The lab's third constant, ``LSB_PER_UV2_TRANSFORM = 352.62``, is a
+#: out at the top of that module. The lab's third constant, ``LSB_PER_UV2_TRANSFORM`` (the transform constant in effect), is a
 #: fourth quantity again -- calibrated for the Hann-windowed 256-point zero-padded transform route,
 #: not for integrating a power density.
 LFP_POWER_LSB_TO_UV2 = 0.01
