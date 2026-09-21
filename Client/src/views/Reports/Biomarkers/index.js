@@ -38,12 +38,6 @@ import { saveControls, loadControls } from "./biomarkerStateStore";
 // remains one implementation of each and a fix applied there is a fix here. Editing those files is
 // out of scope for this page; only their placement and their framing change.
 import CalibrationInEffectPanel from "./CalibrationInEffectPanel";
-import PsdLsbPanel from "views/Reports/ClosedLoopSim/PsdLsbPanel";
-// The committed band candidate is the only source on this page of the channel and centre frequency
-// PsdLsbPanel needs. It is written to localStorage by the Closed-Loop Deployment page's "Choose a
-// band" card (decision 122) and only READ here. (Until decision 80 this page had its own commit
-// button, inside BiomarkerAnalytics; it is gone.)
-import { loadBandCandidate } from "views/Reports/ClosedLoopSim/bandCandidateStore";
 // Semantic colour roles, defined once in the deployment module and imported so the two pages agree.
 import PAL from "views/Reports/ClosedLoopSim/palette";
 
@@ -203,17 +197,6 @@ function Biomarkers() {
   const [availData, setAvailData] = useState(null);
   const [availLoading, setAvailLoading] = useState(false);
 
-  // The band candidate committed for THIS participant, if any: the envelope the Closed-Loop
-  // Deployment page's "Choose a band" card writes to localStorage, carrying the contact, centre
-  // frequency and bandwidth that the relocated PsdLsbPanel needs in order to fit a conversion for
-  // the band on screen. It is read here rather than inside the panel because localStorage is not
-  // observable from React; the value is re-read on a participant change. Nothing on THIS page
-  // commits a band any more (decision 80), so there is no commit handler to re-read it after.
-  const [committedBand, setCommittedBand] = useState(null);
-  useEffect(() => {
-    const env = loadBandCandidate(participant_uid);
-    setCommittedBand((env && env.band_candidate) || null);
-  }, [participant_uid]);
 
   const snapshot = () => ({
     source, LabelMetric: metric, LabelStrategy: strategy,
@@ -1083,14 +1066,14 @@ function Biomarkers() {
                 question the clinician asks while programming: the deployment page now carries only
                 what has to be read at a visit.
 
-                The left-hand panel fits a conversion from the participant's OWN paired recordings
-                for the band that has been committed, and draws the platform's constant beside it.
-                The right-hand panel is the calibration IN EFFECT (decision 212): the transform
-                constant the platform converts with, the paired blocks it is the median over, and
-                the composed bridge for recordings that carry only the device's FFT snapshot. Until
-                2026-09-20 it drew a frozen June log-log model that no calculation had read since
-                June, in a dashed frame; both frames are solid now because both panels rest on this
-                participant's own paired recordings (the bridge's composition is said in the panel). */}
+                One panel (the PI, 2026-09-21): the calibration IN EFFECT (decision 212), the
+                transform constant the platform converts with, the paired blocks it is the median
+                over, and the composed bridge for recordings that carry only the device's FFT
+                snapshot. Until 2026-09-21 a second panel on the left refitted the committed band's
+                own constant from Welch band power, in log space, and printed it as a percentage of
+                the constant in effect; two recipes, one percentage, and the same blocks: deleted as
+                redundant. Until 2026-09-20 this panel drew a frozen June log-log model that no
+                calculation had read since June. */}
             <Grid item xs={12}>
               <MDBox px={2} pt={2}>
                 <MDTypography variant="h5" fontWeight="bold" sx={{ fontSize: 24, lineHeight: 1.3 }}>
@@ -1098,39 +1081,16 @@ function Biomarkers() {
                 </MDTypography>
                 <MDTypography variant="body2" color="dark" sx={{ fontSize: 13.5 }}>
                   {"The exploration above works in physical units; the device works in its own "
-                   + "least-significant-bit units. These two panels are how a band power measured "
-                   + "offline is turned into a number that can be entered on the Percept RC, and "
-                   + "they are placed here because that translation has to be settled before a "
-                   + "programming visit rather than during one. The right-hand panel is the "
-                   + "calibration in effect for every calibrated number on the platform; the "
-                   + "left-hand panel checks the committed band's own paired recordings against it."}
+                   + "least-significant-bit units. This panel is how a band power measured offline "
+                   + "is turned into a number that can be entered on the Percept RC, and it is "
+                   + "placed here because that translation has to be settled before a programming "
+                   + "visit rather than during one. It is the calibration in effect for every "
+                   + "calibrated number on the platform, fitted from this participant's own paired "
+                   + "recordings."}
                 </MDTypography>
               </MDBox>
             </Grid>
-            <Grid item xs={12} lg={6}>
-              <MDBox px={2} pb={1}>
-                <MDTypography variant="button" fontWeight="bold" color="dark"
-                  sx={{ fontSize: 14, display: "block", mb: 0.5 }}>
-                  {"Does the committed band convert to device units, and is the conversion linear?"}
-                </MDTypography>
-                {/* Solid frame: an OBSERVED quantity. The panel pairs offline PSD epochs with the
-                    device's own LSB recordings for this band and fits the proportional law, and it
-                    reports its own falsification check on that law's slope. */}
-                <MDBox sx={{ border: `2px solid ${PAL.accentBorder}`, borderRadius: 2, p: 0.75 }}>
-                  <PsdLsbPanel participantUid={participant_uid} bandCandidate={committedBand}
-                    requestParams={requestParams} />
-                </MDBox>
-                <MDTypography variant="caption" color="dark"
-                  sx={{ fontSize: 11.5, display: "block", mt: 0.5, fontStyle: "italic" }}>
-                  {committedBand
-                    ? "Fitted from this participant's own time-matched recordings of the committed "
-                      + "band; the dashed line is the platform's constant, from the panel on the right."
-                    : "This panel fits from observed recordings, so it has nothing to fit until a "
-                      + "band is committed on the Closed-Loop Deployment page's \u201CChoose a band\u201D card."}
-                </MDTypography>
-              </MDBox>
-            </Grid>
-            <Grid item xs={12} lg={6}>
+            <Grid item xs={12}>
               <MDBox px={2} pb={1}>
                 <MDTypography variant="button" fontWeight="bold" color="dark"
                   sx={{ fontSize: 14, display: "block", mb: 0.5 }}>

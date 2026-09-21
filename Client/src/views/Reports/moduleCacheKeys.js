@@ -51,7 +51,6 @@ export const CL = {
   roc: `${MODULES.closedLoop}/roc`,
   era: `${MODULES.closedLoop}/era`,
   lsbPower: `${MODULES.closedLoop}/lsbPower`,
-  psdLsb: `${MODULES.closedLoop}/psdLsb`,
   conversionModel: `${MODULES.closedLoop}/conversionModel`,
   // The pooled three-source view (every visit's points, by side), fetched AFTER the report has
   // arrived so the first figures are never behind it (the PI, 2026-09-11: "prefetch the data

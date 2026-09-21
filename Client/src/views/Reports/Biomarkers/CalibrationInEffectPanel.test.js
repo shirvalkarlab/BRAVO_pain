@@ -26,7 +26,6 @@ import { invalidateAll, putResult, settingsKey } from "database/resultCache";
 import { CL } from "views/Reports/moduleCacheKeys";
 
 import CalibrationInEffectPanel from "./CalibrationInEffectPanel";
-import PsdLsbPanel from "views/Reports/ClosedLoopSim/PsdLsbPanel";
 import payload from "./__fixtures__/rcs08_calibration_in_effect.json";
 
 jest.mock("plotly.js-dist", () => ({
@@ -121,31 +120,19 @@ test("with no payload the panel prints the server's reason and no number", async
   expect(document.body.textContent).not.toMatch(/\d{3}\.\d{2}/);
 });
 
-describe("the committed band's own refit (bottom-left) draws the constant in effect beside its own", () => {
-  const BC = { contact: "ZERO_THREE_LEFT", center_freq_hz: 9.77, bandwidth_hz: 5.0 };
-  const REQ = { LabelMetric: "nrs" };
-  const served = {
-    available: true, n_pairs: 40, spearman: 0.9, k_lsb_per_uv2: 300.0, uv2_per_lsb: 1 / 300.0,
-    k_in_effect: payload.deployed.k, resid_log_sigma_fold: 1.2, loglog_slope: 0.98,
-    loglog_slope_ci: [0.9, 1.05], slope_consistent_with_unity: true,
-    scatter: { psd_uv2: [0.5, 1, 2, 4], lsb: [150, 300, 600, 1200] },
-    center_hz_mode: "fixed 9.77 Hz", band_width_hz: 5.0,
-  };
-  test("prints the served constant and draws its line", async () => {
-    putResult(CL.psdLsb, UID, settingsKey({ Channel: BC.contact, CenterHz: 9.77, BandWidthHz: 5.0,
-      MatchWindowH: 1.0, ...REQ }), served);
-    render(wrap(<PsdLsbPanel participantUid={UID} bandCandidate={BC} requestParams={REQ} />));
-    expect(await screen.findByText(/1 µV² ≈ 300 LSB/)).toBeInTheDocument();
-    expect(document.body.textContent).toMatch(/in effect: 1 µV² = 345\.59 LSB/);
-    const [, traces] = Plotly.react.mock.calls[0];
-    expect(traces.some((t) => t.mode === "lines" && /in effect/.test(t.name || t.hovertemplate || ""))).toBe(true);
+describe("the committed band's own refit panel is gone (the PI, 2026-09-21: redundant with this one)", () => {
+  test("no source, no cache slot, no request to its endpoint", () => {
+    const fs = require("fs");
+    expect(fs.existsSync(path.join(__dirname, "..", "ClosedLoopSim", "PsdLsbPanel.js"))).toBe(false);
+    expect(CL.psdLsb).toBeUndefined();
+    const page = fs.readFileSync(path.join(__dirname, "index.js"), "utf8");
+    expect(page).not.toMatch(/PsdLsbPanel|queryPsdLsbConversion\b|loadBandCandidate/);
   });
 });
 
 describe("neither component source carries a calibration constant", () => {
   const here = path.join(__dirname, "CalibrationInEffectPanel.js");
-  const left = path.join(__dirname, "..", "ClosedLoopSim", "PsdLsbPanel.js");
-  test.each([["CalibrationInEffectPanel.js", here], ["PsdLsbPanel.js", left]])("%s", (_n, file) => {
+  test.each([["CalibrationInEffectPanel.js", here]])("%s", (_n, file) => {
     const code = fs.readFileSync(file, "utf8").split("\n").filter((l) => !/^\s*(\/\/|\*)/.test(l)).join("\n");
     ["345.59", "349.10", "352.62", "72.16", "72.90", "73.63", "4.789", "4.755"].forEach((tok) => {
       expect(code).not.toContain(tok);

@@ -582,49 +582,6 @@ def test_deployment_summary_gate_states_and_necessary_blocking():
     assert all(g["pass"] for g in gates if g["necessary"]) is True
 
 
-def test_psd_lsb_conversion_recovers_planted_proportional_constant():
-    """A planted linear gain LSB = k0*P (with multiplicative noise) is recovered: the proportional
-    constant k lands near k0 and the free log-log slope's 95% CI includes 1.0 (audit C10 / PSD->LSB)."""
-    rng = np.random.default_rng(3)
-    n = 1200
-    # offline band power spanning ~3 decades, log-uniform
-    P = 10.0 ** rng.uniform(-1.0, 2.0, n)
-    k0 = 80.0
-    # device LSB = k0 * P * lognormal(sigma) — a linear gain with ~x2 multiplicative scatter
-    L = k0 * P * np.exp(rng.normal(0.0, np.log(2.0), n))
-    out = analytics.psd_lsb_conversion(P, L, n_boot=500, seed=0)
-    assert out["available"] is True
-    assert out["n_pairs"] == n
-    # constant within 25% of planted
-    assert 0.75 * k0 <= out["k_lsb_per_uv2"] <= 1.25 * k0, out["k_lsb_per_uv2"]
-    # free slope ~1 and CI includes unity (the linear-gain falsification check passes)
-    assert 0.9 <= out["loglog_slope"] <= 1.1, out["loglog_slope"]
-    assert out["slope_consistent_with_unity"] is True
-    assert out["k_ci"][0] <= out["k_lsb_per_uv2"] <= out["k_ci"][1]
-    # inverse is the reciprocal
-    assert abs(out["uv2_per_lsb"] - 1.0 / out["k_lsb_per_uv2"]) < 1e-9
-
-
-def test_psd_lsb_conversion_flags_nonlinear_slope():
-    """When the device value is NOT a linear gain on the offline band (here LSB ~ sqrt(P), slope 0.5),
-    the falsification check fails: the free log-log slope's CI excludes 1.0."""
-    rng = np.random.default_rng(7)
-    n = 800
-    P = 10.0 ** rng.uniform(-1.0, 2.0, n)
-    L = 50.0 * np.sqrt(P) * np.exp(rng.normal(0.0, 0.2, n))   # slope ~0.5, not proportional
-    out = analytics.psd_lsb_conversion(P, L, n_boot=300, seed=0)
-    assert out["available"] is True
-    assert out["loglog_slope"] < 0.8, out["loglog_slope"]
-    assert out["slope_consistent_with_unity"] is False
-
-
-def test_psd_lsb_conversion_guards_small_n():
-    """Fewer than 20 usable pairs -> not available, with the pair count surfaced."""
-    out = analytics.psd_lsb_conversion(np.array([1.0, 2.0, 3.0]), np.array([10.0, 20.0, 30.0]))
-    assert out["available"] is False
-    assert out["n_pairs"] == 3
-
-
 def test_band_power_notched_default_no_mains_removal():
     """The Percept is implanted and battery-powered: there is NO mains coupling, so the default band
     integral must NOT remove any 60 Hz content (removing it would delete real neural power). A spike at
@@ -759,9 +716,6 @@ if __name__ == "__main__":
     test_deployment_roc_by_era_noisy_dip_is_not_a_confident_reversal()
     test_deployment_roc_by_era_portable_when_eras_agree()
     test_deployment_summary_gate_states_and_necessary_blocking()
-    test_psd_lsb_conversion_recovers_planted_proportional_constant()
-    test_psd_lsb_conversion_flags_nonlinear_slope()
-    test_psd_lsb_conversion_guards_small_n()
     test_band_power_notched_default_no_mains_removal()
     test_freq_extrapolated_guard_agrees_with_frozen_model()
     test_forward_chaining_validates_stationary_band()

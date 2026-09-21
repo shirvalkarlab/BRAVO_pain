@@ -120,14 +120,17 @@ def test_the_frozen_june_model_is_gone():
                 assert ("psd_lsb" + "_model") not in src, os.path.join(dirpath, f)
 
 
-def test_the_committed_band_refit_names_the_constant_in_effect_beside_its_own():
-    """The bottom-left panel (the committed band's own refit) reports `k_in_effect` so the page
-    can draw the constant the platform converts with beside the band's own fit, from the server."""
-    rng = np.random.default_rng(0)
-    P = rng.gamma(2.0, 0.5, 60)
-    L = 340.0 * P * rng.gamma(50.0, 1 / 50.0, 60)
-    out = A.psd_lsb_conversion(P, L, n_boot=50)
-    assert out["k_in_effect"] == A.LSB_PER_UV2_TRANSFORM
+def test_the_committed_band_refit_and_its_log_log_fit_are_gone():
+    """The PI, 2026-09-21: the bottom-left refit panel was redundant with the calibration-in-effect
+    panel and its fit ran in log space (the free log-log slope, the log-residual scatter). The
+    endpoint, the service function and the analytics routine are deleted with it."""
+    import os as _os
+    assert not hasattr(A, "psd_lsb_conversion")
+    root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    svc = open(_os.path.join(root, "Biomarkers", "bravo_service.py")).read()
+    assert "def band_psd_lsb_conversion" not in svc
+    urls = open(_os.path.join(_os.path.dirname(root), "Server", "APIs", "urls.py")).read()
+    assert "'queryPsdLsbConversion'" not in urls
 
 
 if __name__ == "__main__":
