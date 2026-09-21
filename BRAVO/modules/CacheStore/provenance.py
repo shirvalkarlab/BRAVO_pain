@@ -69,7 +69,8 @@ MODULES = ("biomarkers", "closed_loop", "stim_optimizer")
 #: verbatim -- the stimulation settings and verbal pain scores a clinician or the patient recorded
 #: at the time, with no module's choice in between. See `StimOptimizer.clinic_pain`.
 RAW_KINDS = ("raw_lsb_tiles", "redcap_reports", "therapy_settings", "therapy_pain_matched",
-            "biomarker_psd_matrix", "session_report_summary", "clinic_pain_steps")
+            "biomarker_psd_matrix", "session_report_summary", "clinic_pain_steps",
+            "acquisition_timeline")
 
 
 def module_of(key):

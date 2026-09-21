@@ -115,9 +115,11 @@ def test_the_timeline_result_key_carries_the_recording_set():
     the source, since calling the endpoint needs a participant, REDCap and the recordings. A key
     without it would serve yesterday's timeline even though the three loaders below it had moved."""
     src = inspect.getsource(bs.availability_for_participant)
-    key_lines = [ln for ln in src.splitlines() if "cache_key = (" in ln]
+    key_lines = [ln for ln in src.splitlines() if "cache_key = " in ln]
     assert len(key_lines) == 1, key_lines
-    assert "recording_set" in key_lines[0], key_lines[0]
+    # since decision 216 the key is composed by `_acquisition_timeline_key(recording_set)`:
+    # the recording set, the calibration constants and a rule version, and nothing else
+    assert "_acquisition_timeline_key(recording_set)" in key_lines[0], key_lines[0]
     assert "_recording_set_identity(participant_uid)" in src
     # and the recordings memo is handed the same identity rather than computing it twice
     assert "_availability_recordings_cached(" in src and "recording_set=recording_set" in src

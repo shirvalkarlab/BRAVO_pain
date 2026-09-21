@@ -54,8 +54,8 @@ delegations of a few lines; their event counters are bound by reference to the s
    `test_provenance_cycle.py` proves it by writing three real products through the real store
    (ladder, biomarker result from it, verdict from that) and asking for the verdict as Stim
    Optimizer; its control is the same verdict from device recordings only, which IS released
-   (decision 31). Raw kinds (tiles, pain reports, therapy settings, the assembled spectrum matrix)
-   are exempt, named in `provenance.RAW_KINDS`; `therapy_pain_matched` is raw-derived because its
+   (decision 31). Raw kinds (tiles, pain reports, therapy settings, the assembled spectrum matrix, the
+   acquisition timeline) are exempt, named in `provenance.RAW_KINDS`; `therapy_pain_matched` is raw-derived because its
    join embodies no choice (decision 37).
 
 ## 4. Mechanics

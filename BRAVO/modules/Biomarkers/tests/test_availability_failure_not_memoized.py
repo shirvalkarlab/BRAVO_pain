@@ -67,6 +67,10 @@ class _Stubs:
             return self.build_fn(self.n_builds)
         bs._build_availability = _build
         bs._AVAILABILITY_RESULT_MEMO.clear()
+        # The endpoint writes the one store since decision 216. Off for the test, so a stub
+        # participant's payload never lands in the production root (decisions 96, 116, 129).
+        self._store_enabled = bs._cache_store.ENABLED
+        bs._cache_store.ENABLED = False
         return self
 
     def __exit__(self, *exc):
@@ -74,6 +78,7 @@ class _Stubs:
             setattr(bs, n, v)
         bs.models.Participant.find = self._saved_find
         bs._AVAILABILITY_RESULT_MEMO.clear()
+        bs._cache_store.ENABLED = self._store_enabled
         return False
 
 

@@ -375,26 +375,31 @@ function Biomarkers() {
       .catch(() => { setPainLoading(false); /* preview is optional — degrade silently */ });
   }, [participant_uid]);
 
-  // Fetch the data-availability payload per participant (lightweight, no biomarker compute), so the
-  // timeline renders immediately on page load. Also refetches when the main match-tolerance slider
-  // settles: the timeline's per-rating circles (av.pro_lsb) are paired with recordings under THAT
-  // window -- the one slider on the page, on the histogram card. Until 2026-09-10 the circles had a
-  // second slider of their own ("Timeline's own match window", seconds, default 120 s), so the
-  // circles and everything else paired under two different windows; the PI removed it (decision
-  // 120). The tolerance is the only matching control this lightweight endpoint reads, because it
-  // is the one that changes what the timeline itself draws; the rest take effect on Compute.
+
+  // THE ACQUISITION TIMELINE (decision 216): the participant and nothing else. The endpoint carries
+  // nothing derived from a pain report, so it never refetches for a new report or a slider; the
+  // per-report circles it used to draw (decision 120's window, then the histogram's) are gone.
   useEffect(() => {
     if (!participant_uid) return;
     setAvailLoading(true);
-    SessionController.query("/api/queryDataAvailability", {
-      ParticipantId: participant_uid, MatchToleranceMin: matchToleranceD,
-    })
+    SessionController.query("/api/queryDataAvailability", { ParticipantId: participant_uid })
       .then((response) => {
         setAvailData(response.data);
         setAvailLoading(false);
       })
       .catch(() => { setAvailLoading(false); /* timeline is optional — degrade silently */ });
-  }, [participant_uid, matchToleranceD]);
+  }, [participant_uid]);
+
+  // THE RATING-CENTRED SAMPLE INDEX, its own small fetch (decision 216): what the Binarization
+  // card below the timeline and the timeline's binarization colour mode read. Keyed on the server
+  // by the recording set and the report digest; refetched here when the metric changes.
+  const [scanIndexData, setScanIndexData] = useState(null);
+  useEffect(() => {
+    if (!participant_uid) return;
+    SessionController.query("/api/queryPsdScanIndex", { ParticipantId: participant_uid, LabelMetric: metric })
+      .then((response) => setScanIndexData((response && response.data) || null))
+      .catch(() => setScanIndexData(null));
+  }, [participant_uid, metric]);
 
   // The object handed to the timeline: prefer the live availability payload; fall back to the
   // availability embedded in a heavy compute result if the live fetch is unavailable.
@@ -481,7 +486,7 @@ function Biomarkers() {
   // histogram (which neural data is available to binarize, updating as the slider moves) AND the
   // timeline's binarization color overlay. Counts are verified identical to the backend
   // `matched_sample_counts`. Memoized so dragging an unrelated control doesn't rebuild it.
-  const scanIndex = (timelineData && timelineData.availability && timelineData.availability.psd_scan_index)
+  const scanIndex = (scanIndexData && scanIndexData.psd_scan_index)
     || (data && data.availability && data.availability.psd_scan_index) || null;
   // Debounced copies of every slider-driven input to the heavy matched-scan recompute. The raw
   // states stay live everywhere else (slider thumbs, value labels, the binarization preview's

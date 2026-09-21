@@ -92,6 +92,7 @@ urlpatterns = [
     path('queryDeploymentSummary', DataAnalysis.QueryDeploymentSummary.as_view()),
     path('queryPainScores', DataAnalysis.QueryPainScores.as_view()),
     path('queryDataAvailability', DataAnalysis.QueryDataAvailability.as_view()),
+    path('queryPsdScanIndex', DataAnalysis.QueryPsdScanIndex.as_view()),
     path('queryTimeseriesAnalysis', DataAnalysis.QueryTimeseriesAnalysis.as_view()),
     path('queryBurstAnalysis', DataAnalysis.QueryBurstAnalysis.as_view()),
 
