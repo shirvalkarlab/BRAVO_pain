@@ -310,46 +310,6 @@ def test_run_chronic_threshold_no_sliding():
     assert out["std_thr_sens"] == 0.0
 
 
-def test_sliding_window_analytics_no_sliding():
-    """sliding=False -> a single all-data window entry (flagged), vs many entries when sliding on.
-
-    Return shape is now `{windows: [...], summary: {...}}` so the panel can caption coverage.
-    """
-    cv = _make_cv_df()
-    full = analytics.sliding_window_analytics(cv, sliding=True)
-    one = analytics.sliding_window_analytics(cv, sliding=False)
-    assert set(one.keys()) >= {"windows", "summary"}
-    assert len(one["windows"]) == 1 and one["windows"][0].get("all_data") is True
-    assert one["windows"][0]["threshold"] is not None
-    assert one["summary"]["n_total"] == 1
-    assert len(full["windows"]) > 1   # sliding produces many windows on the same data
-    assert full["summary"]["n_total"] >= len(full["windows"])
-
-
-def test_sliding_window_skips_one_class_test_folds():
-    """When a tertile-labeled test fold has only one class, the window is expanded; if it still
-    has one class after expansion, it's SKIPPED (not a half-NaN row) and counted in summary."""
-    # 30 days, label_metric alternates blocks; tertile-style binarization (NaN middle on day 15)
-    rng = np.random.default_rng(0)
-    days = pd.date_range("2025-01-01", periods=30, freq="D")
-    rows = []
-    for i, d in enumerate(days):
-        label = 0.0 if i < 14 else (np.nan if i == 14 else 1.0)
-        for k in range(20):
-            rows.append({"timestamp": d + pd.Timedelta(minutes=10 * k),
-                         "LFP_smoothed": float(rng.normal(100 + 20 * (label if np.isfinite(label) else 0.5), 5)),
-                         "pain_level": label})
-    cv = pd.DataFrame(rows)
-    out = analytics.sliding_window_analytics(cv, train_days=7, gap_days=1, test_days=2,
-                                             step_days=1, sliding=True, max_test_days=4)
-    # No half-NaN rows leak out: every returned window has a defined AUC.
-    assert all(w["auc"] is not None for w in out["windows"])
-    # Summary counts what was skipped.
-    assert out["summary"]["n_total"] >= len(out["windows"])
-    assert out["summary"]["n_skipped_test_one_class"] >= 0
-    assert out["summary"]["max_test_days"] == 4
-
-
 def test_td_sliding_corr_spectrum_matches_scipy():
     """The fully-vectorized sliding R-vs-frequency heatmap must equal scipy.stats.pearsonr computed
     the naive way for each (window, channel, freq) — proving the W@X matmul math is correct."""
@@ -462,37 +422,6 @@ def test_concat_chronic_mad_is_per_recording_not_global():
     assert 9000.0 not in set(adapter._concat_chronic(rec_s)["Data"][:, 0])
     # mad_k=0 disables rejection -> the spike survives. (None now means CANONICAL, not off.)
     assert 9000.0 in set(adapter._concat_chronic(rec_s, mad_k=0)["Data"][:, 0])
-
-
-def test_sliding_window_test_fold_expansion_fires_and_categorizes_skips():
-    """The test-fold expansion must actually FIRE (a window's test_days_used grows beyond the
-    requested test_days when the short window is single-class) and skips must be CATEGORIZED into
-    one-class vs no-data with the summary counts reconciling to n_total. Every returned window has a
-    defined AUC (no half-NaN rows leak out)."""
-    days = pd.date_range("2025-01-01", periods=40, freq="D")
-    rows = []
-    for i, d in enumerate(days):
-        if i < 20:
-            lab = float(i % 2)            # alternating classes -> usable training
-        elif i < 28:
-            lab = 0.0                     # homogeneous block -> short test fold is single-class
-        else:
-            lab = 1.0                     # class flips -> expansion reaches both classes
-        for k in range(15):
-            rows.append({"timestamp": d + pd.Timedelta(minutes=5 * k),
-                         "LFP_smoothed": 100 + 30 * lab + np.random.default_rng(i * 15 + k).normal(0, 2),
-                         "pain_level": lab})
-    cv = pd.DataFrame(rows)
-    out = analytics.sliding_window_analytics(cv, train_days=10, gap_days=1, test_days=2,
-                                             step_days=1, sliding=True, max_test_days=8)
-    used = [w["test_days_used"] for w in out["windows"]]
-    assert any(u > 2 for u in used), "expansion never fired (no test_days_used grew past test_days)"
-    assert all(u <= 8 for u in used)                              # never exceeds max_test_days
-    assert all(w["auc"] is not None for w in out["windows"])      # no half-NaN rows
-    s = out["summary"]
-    assert s["n_skipped_test_one_class"] >= 1                     # at least one genuine one-class skip
-    assert s["n_total"] == len(out["windows"]) + s["n_skipped_test_one_class"] + s["n_skipped_no_data"]
-    assert s["max_test_days"] == 8 and s["test_days"] == 2
 
 
 def test_decimate_for_plot_thins_only():

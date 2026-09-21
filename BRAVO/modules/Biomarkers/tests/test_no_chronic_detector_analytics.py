@@ -33,6 +33,21 @@ def test_compute_analytics_no_longer_builds_a_powerdomain_block():
         assert not re.search(r"\b%s\s*\(" % name, code), f"{name} is called again inside _compute_analytics"
 
 
+def test_the_four_zero_caller_routines_are_deleted():
+    """The PI, 2026-09-21: the chronic-detector routines with no caller are deleted. After decision
+    187 four of the six had no production caller (`sliding_window_analytics` and its only helper
+    `_all_data_window`, `power_pain_scatter`, `cluster_scatter`, `pain_binarization`); `roc_analysis`
+    and `lfp_distribution` keep one caller each in the pipeline and stay."""
+    asrc = open(os.path.join(os.path.dirname(__file__), "..", "routines", "analytics.py")).read()
+    tree = ast.parse(asrc)
+    names = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
+    for gone in ("sliding_window_analytics", "_all_data_window", "power_pain_scatter",
+                 "cluster_scatter", "pain_binarization"):
+        assert gone not in names, f"{gone} is still defined"
+    for kept in ("roc_analysis", "lfp_distribution"):
+        assert kept in names, f"{kept} was deleted but the pipeline calls it"
+
+
 def test_the_timeline_power_lane_still_has_its_own_source():
     """The deletion must not have taken the pipeline branch the timeline's Power lane reads."""
     src = open(_SRC).read()
