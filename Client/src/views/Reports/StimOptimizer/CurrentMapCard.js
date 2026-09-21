@@ -17,6 +17,13 @@
  * -- is folded, closed by default, and labelled reference only: the caveat is that it borrows its
  * apparent precision from every OTHER rate through the fit's shared, pinned rate axis.
  *
+ * POOLED ACROSS PULSE WIDTHS (decision 189's option A, the PI's ruling of 2026-09-21): the
+ * response also carries `two_stage.stage1.pulse_width_pooling.rate_strata_pooled`, one row per
+ * stimulation speed fitted over EVERY pulse-width pairing with the two pulse widths as inputs and
+ * read at the pairing in force. A push-button beside "Expand descriptions" swaps the REDCap
+ * groups below for that one pooled group; the separate fit is what loads. The clinic stream is
+ * never pooled either way.
+ *
  * SECOND SECTION, added 2026-09-14 (decision 160/161): the identical (left current, right current)
  * surface fitted a second time, from the clinic-and-home testing workbooks read directly off the
  * lab's own file share rather than from REDCap (`two_stage.stage1.rate_strata_clinic`, the same
@@ -208,8 +215,15 @@ function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, i
     <MDBox key={g.key} sx={{ mt: 2.5, "&:first-of-type": { mt: 0 } }}>
       <MDTypography variant="caption" fontWeight="medium" component="div"
         sx={{ fontSize: TYPE.num, mb: 0.5 }}>
-        {`left pulse width ${fmtUs(g.pw_us_left)} · right pulse width ${fmtUs(g.pw_us_right)}`}
+        {g.pooled
+          ? `pooled over ${g.n_pairings} pulse-width pairing${g.n_pairings === 1 ? "" : "s"}, read at left ${fmtUs(g.pw_us_left)} / right ${fmtUs(g.pw_us_right)}`
+          : `left pulse width ${fmtUs(g.pw_us_left)} · right pulse width ${fmtUs(g.pw_us_right)}`}
       </MDTypography>
+      {g.pooled && (
+        <MDTypography variant="caption" component="div" sx={{ ...SMALL, fontSize: TYPE.body, mb: 0.6 }}>
+          {`Pairings pooled: ${g.pairingsText}. Assumes the current-to-pain shape is shared across pairings; the coverage check counts current pairs across them.`}
+        </MDTypography>
+      )}
 
       {g.rows.map((r) => {
         const divId = `${idPrefix}-surface-${g.key}-${r.rate_hz}`;
@@ -409,10 +423,37 @@ function ClinicStreamSection({ groups, inForceLeft, inForceRight, clinicStream, 
   );
 }
 
+/** The pooled-over-pulse-widths rows as ONE group at the pairing in force (decision 189's
+ *  option A), in the shape `RateStrataGroups` draws; the pairings each rate pooled are named
+ *  from the fitted rows. */
+function pooledGroup(pooling) {
+  const rows = (pooling && Array.isArray(pooling.rate_strata_pooled)) ? pooling.rate_strata_pooled : [];
+  if (!pooling || pooling.available !== true || !rows.length) return null;
+  const inForce = pooling.in_force_pairing || {};
+  const fitted = rows.filter((r) => r && r.fitted && Array.isArray(r.pairings) && r.pairings.length);
+  const byPair = new Map();
+  fitted.forEach((r) => r.pairings.forEach((p) => {
+    const k = `${Number(p.pw_us_left).toFixed(0)}/${Number(p.pw_us_right).toFixed(0)}\u202f\u00b5s`;
+    byPair.set(k, (byPair.get(k) || 0) + (num(p.n_epochs) || 0));
+  }));
+  const nPairings = Math.max(0, ...rows.map((r) => num(r.n_pairings_pooled) || 0));
+  const pairingsText = byPair.size
+    ? Array.from(byPair.entries()).map(([k, n]) => `${k} (${n} epoch${n === 1 ? "" : "s"})`).join(", ")
+    : "none fitted";
+  const sorted = rows.slice().sort((a, b) => (num(b.n_epochs) || 0) - (num(a.n_epochs) || 0));
+  return { key: "pooled", pooled: true, pw_us_left: inForce.pw_us_left, pw_us_right: inForce.pw_us_right,
+    n_pairings: nPairings, pairingsText, rows: sorted };
+}
+
 export default function CurrentMapCard({ plan }) {
   const stage1 = (plan && plan.stage1) || {};
   const rawRateStrata = stage1.rate_strata;
   const rateStrata = useMemo(() => (Array.isArray(rawRateStrata) ? rawRateStrata : []), [rawRateStrata]);
+  const pooling = stage1.pulse_width_pooling || null;
+  const pooled = useMemo(() => pooledGroup(pooling), [pooling]);
+  // Decision 189's option A behind a toggle (the PI, 2026-09-21): the separate fit loads;
+  // one click shows the fit pooled over pulse widths, a second brings the separate one back.
+  const [poolPulseWidths, setPoolPulseWidths] = useState(false);
   const rawRateStrataClinic = stage1.rate_strata_clinic;
   const rateStrataClinic = useMemo(() => (Array.isArray(rawRateStrataClinic) ? rawRateStrataClinic : []),
     [rawRateStrataClinic]);
@@ -451,14 +492,35 @@ export default function CurrentMapCard({ plan }) {
         </MDTypography>
         )}
 
-        <RateStrataGroups groups={groups} inForceLeft={inForceLeft} inForceRight={inForceRight}
-          pooledSurfaces={pooledSurfaces} idPrefix="cms" showDescriptions={showDescriptions} />
+        {showDescriptions && pooling && pooling.available === false && (
+          <MDTypography variant="caption" component="div" sx={{ ...SMALL, fontSize: TYPE.body, mb: 1 }}>
+            {`Pooling across pulse widths is not available on this record: ${pooling.reason || "no reason given"}.`}
+          </MDTypography>
+        )}
+        {showDescriptions && poolPulseWidths && pooling && pooling.note && (
+          <MDTypography variant="caption" component="div" color="text" sx={{ fontSize: TYPE.body, mb: 1 }}>
+            {pooling.note}
+          </MDTypography>
+        )}
+        <RateStrataGroups groups={poolPulseWidths && pooled ? [pooled] : groups}
+          inForceLeft={inForceLeft} inForceRight={inForceRight}
+          pooledSurfaces={poolPulseWidths && pooled ? {} : pooledSurfaces}
+          idPrefix={poolPulseWidths && pooled ? "cms-pw" : "cms"} showDescriptions={showDescriptions} />
 
         <ClinicStreamSection groups={clinicGroups} inForceLeft={inForceLeft} inForceRight={inForceRight}
           clinicStream={stage1.clinic_stream} showDescriptions={showDescriptions}
           pairingSentence={pairingSentence} />
 
-        <MDBox mt={1.5} display="flex" justifyContent="flex-start">
+        <MDBox mt={1.5} display="flex" justifyContent="flex-start" gap={1} flexWrap="wrap">
+          {pooled && (
+            <MDButton size="small" variant="outlined" color="dark"
+              onClick={() => setPoolPulseWidths((v) => !v)} aria-pressed={poolPulseWidths}
+              sx={{ textTransform: "none", fontSize: 12, py: 0.4, px: 1.25, minHeight: 0,
+                borderWidth: 1.5, boxShadow: "0 2px 0 #1A1A1A", "&:hover": { boxShadow: "0 1px 0 #1A1A1A" } }}>
+              <Icon sx={{ mr: 0.5, fontSize: "16px !important" }}>{poolPulseWidths ? "call_split" : "merge_type"}</Icon>
+              {poolPulseWidths ? "Keep pulse widths separate" : "Pool pulse widths"}
+            </MDButton>
+          )}
           <MDButton size="small" variant="outlined" color="dark"
             onClick={() => setShowDescriptions((v) => !v)} aria-expanded={showDescriptions}
             sx={{ textTransform: "none", fontSize: 12, py: 0.4, px: 1.25, minHeight: 0,

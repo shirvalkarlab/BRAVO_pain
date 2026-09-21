@@ -166,6 +166,84 @@ class JointParameterGrid:
         return (fi * len(self.amps_left) + ali) * len(self.amps_right) + ari
 
 
+class PooledPulseWidthGrid:
+    """The (rate, amplitude-Left, amplitude-Right, pulse-width-Left, pulse-width-Right) input
+    space for ONE rate's surface fitted over EVERY pulse-width pairing at once, read at the pairing
+    in force (decision 189's option A, built 2026-09-21 by the PI's ruling).
+
+    The prediction grid is the (amplitude-Left, amplitude-Right) plane at `pw_left_at` /
+    `pw_right_at`; the rate column is constant. The two pulse-width axes are standardised on the
+    LEVELS the record delivered (`pw_left_levels` / `pw_right_levels`), with the scatter floored
+    at one microsecond so a side with a single level does not divide by zero: it then sits at 0
+    on its axis and the kernel treats it as constant. The rate axis is the same log2 axis as
+    :class:`JointParameterGrid`, standardised on itself (one rate: always 0).
+    """
+
+    def __init__(self, rate_hz, amps_left, amps_right, *, pw_left_levels, pw_right_levels,
+                 pw_left_at, pw_right_at):
+        self.freqs = np.asarray([float(rate_hz)], float)
+        if self.freqs.min() <= 0:
+            raise ValueError("the rate must be positive for a log2 axis")
+        self.amps_left = np.asarray(sorted(set(np.asarray(amps_left, float))), float)
+        self.amps_right = np.asarray(sorted(set(np.asarray(amps_right, float))), float)
+        self.pw_left_levels = np.asarray(sorted(set(np.asarray(pw_left_levels, float))), float)
+        self.pw_right_levels = np.asarray(sorted(set(np.asarray(pw_right_levels, float))), float)
+        self.pw_left_at = float(pw_left_at)
+        self.pw_right_at = float(pw_right_at)
+        AL, AR = np.meshgrid(self.amps_left, self.amps_right, indexing="ij")
+        n = AL.size
+        self.raw = np.column_stack([np.full(n, self.freqs[0]), AL.ravel(), AR.ravel(),
+                                    np.full(n, self.pw_left_at), np.full(n, self.pw_right_at)])
+        lf = np.log2(self.freqs)
+        self._loc = np.array([lf.mean(), self.amps_left.mean(), self.amps_right.mean(),
+                              self.pw_left_levels.mean(), self.pw_right_levels.mean()])
+        self._scale = np.array([max(lf.std(), 1e-9), max(self.amps_left.std(), 1e-9),
+                                max(self.amps_right.std(), 1e-9),
+                                max(self.pw_left_levels.std(), 1.0),
+                                max(self.pw_right_levels.std(), 1.0)])
+
+    def __len__(self):
+        return self.raw.shape[0]
+
+    @property
+    def shape(self):
+        return (1, len(self.amps_left), len(self.amps_right))
+
+    def transform(self, X):
+        X = np.atleast_2d(np.asarray(X, float))
+        if X.shape[1] != 5:
+            raise ValueError("expected columns (freq_hz, amp_mA_Left, amp_mA_Right, pw_us_Left, pw_us_Right)")
+        if np.any(X[:, 0] <= 0):
+            raise ValueError("non-positive frequency cannot be placed on a log2 axis")
+        Z = np.column_stack([np.log2(X[:, 0]), X[:, 1], X[:, 2], X[:, 3], X[:, 4]])
+        return (Z - self._loc) / self._scale
+
+    def grid_X(self):
+        return self.raw.copy()
+
+    def as_surface(self, values):
+        """Reshape a per-cell vector into (1, n_amp_left, n_amp_right), like the joint grid."""
+        v = np.asarray(values, float)
+        if v.size != len(self):
+            raise ValueError(f"expected {len(self)} values, got {v.size}")
+        return v.reshape(self.shape)
+
+    def snap(self, X):
+        X = np.atleast_2d(np.asarray(X, float))
+        al = self.amps_left[np.abs(X[:, [1]] - self.amps_left).argmin(axis=1)]
+        ar = self.amps_right[np.abs(X[:, [2]] - self.amps_right).argmin(axis=1)]
+        return np.column_stack([np.full(len(X), self.freqs[0]), al, ar,
+                                np.full(len(X), self.pw_left_at), np.full(len(X), self.pw_right_at)])
+
+    def index_of(self, X):
+        """Row indices into ``grid_X()`` for the nearest (amplitude-Left, amplitude-Right) cell of
+        each input; the pulse widths do not enter, every cell sits at the pairing in force."""
+        S = self.snap(X)
+        ali = np.abs(S[:, [1]] - self.amps_left).argmin(axis=1)
+        ari = np.abs(S[:, [2]] - self.amps_right).argmin(axis=1)
+        return ali * len(self.amps_right) + ari
+
+
 def _make_kernel(n_dim, length_scale_bounds, nugget_bounds, fixed_length_scale=None):
     """Matern-3/2 ARD kernel plus a white nugget.
 

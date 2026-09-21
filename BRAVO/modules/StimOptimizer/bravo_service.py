@@ -573,6 +573,54 @@ def _attach_rate_stratum_surfaces(records, s1):
     return records
 
 
+def _pooled_rate_stratum_surface(rs) -> dict | None:
+    """`_rate_stratum_surface` for a POOLED-over-pulse-widths RateStratum: the same shape, and
+    every point also carries the pulse-width pairing it was rated under."""
+    surf = _rate_stratum_surface(rs)
+    if surf is None:
+        return None
+    pts = (rs.meta or {}).get("points") or []
+    for out_p, p in zip(surf["points"], pts):
+        out_p["pw_us_left"] = _jsonable(p.get("pw_us_left"))
+        out_p["pw_us_right"] = _jsonable(p.get("pw_us_right"))
+    return surf
+
+
+def _pulse_width_pooling_block(s1) -> dict:
+    """Decision 189's option A behind the page toggle (the PI, 2026-09-21): one surface per rate
+    pooled over every pulse-width pairing, read at the pairing in force, beside the separate
+    per-pairing fit the page draws by default. `rate_strata_pooled` has the same row shape as
+    `rate_strata` plus `pooled_pulse_widths`, `n_pairings_pooled`, `pairings` and, on a fitted
+    row, a `surface` whose points name their pairing."""
+    audit = dict((getattr(s1, "audit", None) or {}).get("pulse_width_pooling") or {})
+    note = ("Pooling fits one surface per stimulation speed over every pulse-width pairing, with "
+            "the two pulse widths as inputs, and reads it at the pairing in force: more ratings per "
+            "fit, and the coverage check counts current pairs across pairings, which is why it "
+            "resolves more often. It assumes the current-to-pain shape is shared across pairings. "
+            "The separate fit is the default; the toggle shows the pooled one.")
+    if not audit.get("computed"):
+        return dict(available=False, default="separate", reason=audit.get("reason"), note=note,
+                    in_force_pairing=None, rate_strata_pooled=[])
+    rows = _frame_records(getattr(s1, "pooled_rate_summary", None))
+    strata = getattr(s1, "pooled_rate_strata", None) or {}
+    for row in rows:
+        rs = strata.get(float(row["rate_hz"]))
+        if rs is None:
+            rs = next((v for k, v in strata.items() if abs(float(k) - float(row["rate_hz"])) < 1e-6), None)
+        pairings = sorted(((rs.meta or {}).get("pairings") or []) if rs is not None else [],
+                          key=lambda p: (p["pw_us_left"], p["pw_us_right"]))
+        row["pairings"] = [{k: _jsonable(v) for k, v in p.items()} for p in pairings]
+        if row.get("fitted") and rs is not None:
+            surf = _pooled_rate_stratum_surface(rs)
+            if surf is not None:
+                surf.update(_pain_reference(s1))
+                row["surface"] = surf
+    return dict(available=True, default="separate", note=note,
+                in_force_pairing=dict(audit.get("in_force_pairing") or {}),
+                n_rates=audit.get("n_rates"), n_rates_fitted=audit.get("n_rates_fitted"),
+                rate_strata_pooled=rows)
+
+
 def _joint_pooled_surfaces(s1) -> dict:
     """One entry per fitted (pulse-width-Left, pulse-width-Right) joint stratum:
     `{"<pwl:g>_<pwr:g>": {pw_us_left, pw_us_right, surface_at_rate: {"<rate:g>": {amps_mA, mu, sd,
@@ -1061,6 +1109,9 @@ def _two_stage_payload(rep, *, inputs, seconds, in_force=None, clinic_block=None
         # (pulse-width-Left, pulse-width-Right) stratum -- reference only, never what a current is
         # read off; see `_joint_pooled_surfaces` and `stage1_openloop.RateStratum`.
         "pooled_surfaces": _joint_pooled_surfaces(s1),
+        # POOLED ACROSS PULSE WIDTHS, behind the page's toggle (decision 189's option A; the PI,
+        # 2026-09-21): the same per-rate rows and surfaces, one per rate at the pairing in force.
+        "pulse_width_pooling": _pulse_width_pooling_block(s1),
         "strata_skipped": {str(k): str(v) for k, v in (s1.skipped or {}).items()},
         "audit": _two_stage_jsonable(dict(s1.audit or {})),
         # WHAT TO TEST NEXT, from the JOINT stratum that was actually frozen (2026-09-14). There

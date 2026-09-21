@@ -599,8 +599,12 @@ def _rate_stratum_resolution(rs: "RateStratum", joint_stratum: JointStratum, *,
             reasons.append(f"the fitted surface varies by {rng:.3f} across the whole grid against "
                            f"a typical uncertainty of {med_sd:.3f}")
     if gain["passes"] is None:
-        reasons.append("this pulse-width pair never ran the setting currently in force, so there "
-                       "is nothing to compare a gain against")
+        if (rs.meta or {}).get("pooled_pulse_widths"):
+            reasons.append(f"{rs.rate_hz:g} Hz is not the rate in force, so the surface pooled "
+                           "over pulse widths has nothing to compare a gain against")
+        else:
+            reasons.append("this pulse-width pair never ran the setting currently in force, so there "
+                           "is nothing to compare a gain against")
     elif not gain["passes"]:
         reasons.append(f"the best cell's predicted improvement, {gain['gain']:+.3f}, does not "
                        f"clear the uncertainty in that difference, {gain['sd_diff']:.3f}")
@@ -668,6 +672,79 @@ def _fit_rate_stratum(pwl, pwr, rate, sub, *, amp_grid, sgp_left, sgp_right,
         mu_star=float(mu[i_star]), sd_star=float(sd[i_star]),
         n_reports_total=float(sub["n"].sum()), coverage=coverage,
         meta=dict(kernel=gp.hyperparameters["kernel"], n_safe=int(safe.sum()), points=points))
+
+
+@dataclass
+class _PooledIncumbent:
+    """What the per-rate POOLED surface says at the setting in force, for the gain check of
+    :func:`_rate_stratum_resolution`: the pooled model predicts the incumbent cell itself (at the
+    pairing in force), but only when this rate IS the rate in force -- a pooled fit at another
+    rate has nothing to compare a gain against, and says so."""
+    incumbent_mu: float = float("nan")
+    incumbent_sd: float = float("nan")
+    incumbent_rate_supported: bool = False
+
+
+def _fit_pooled_rate_stratum(rate, sub, *, pwl_col, pwr_col, pw_in_force, amp_grid, sgp_left,
+                             sgp_right, fixed_length_scale, beta) -> RateStratum:
+    """Fit ONE (amplitude-Left, amplitude-Right) surface at a single rate over EVERY pulse-width
+    pairing the record delivered at that rate, with the two pulse widths as two more inputs, and
+    read it at the pairing in force (decision 189's option A; the PI, 2026-09-21). ``sub`` is
+    every feasible epoch at this rate, whatever its pairing; the caller has checked it clears
+    ``RATE_STRATUM_MIN_EPOCHS``. The safety models are the same shared per-side ones."""
+    pwl_at, pwr_at = float(pw_in_force[0]), float(pw_in_force[1])
+    grid = SUR.PooledPulseWidthGrid(
+        rate, amp_grid, amp_grid,
+        pw_left_levels=sub[pwl_col].astype(float).unique(),
+        pw_right_levels=sub[pwr_col].astype(float).unique(),
+        pw_left_at=pwl_at, pw_right_at=pwr_at)
+    Xobs = sub[["freq_hz", "amp_mA_Left", "amp_mA_Right", pwl_col, pwr_col]].to_numpy(float)
+    # the rate axis keeps its pin; the two currents and the two pulse widths are fitted
+    fls = None
+    if fixed_length_scale is not None:
+        spec = list(np.atleast_1d(np.asarray(fixed_length_scale, dtype=object)))
+        fls = (spec[0] if len(spec) else None, None, None, None, None)
+    gp = SUR.ObjectiveGP(grid, fixed_length_scale=fls, random_state=0).fit(
+        Xobs, sub["J"].to_numpy(float), sub["obs_var"].to_numpy(float))
+    mu, sd = gp.predict_grid()
+    gx = grid.grid_X()
+    safe = (np.asarray(sgp_left.safe_mask(X=gx[:, [0, 1]], beta=beta), bool)
+            & np.asarray(sgp_right.safe_mask(X=gx[:, [0, 2]], beta=beta), bool))
+    n_reports = np.zeros(len(grid))
+    np.add.at(n_reports, grid.index_of(Xobs), sub["n"].to_numpy(float))
+    i_star = int(np.argmin(np.where(safe, mu, np.inf)))
+    coverage = current_coverage(sub)           # pairs counted across every pairing (decision 189)
+    points = [dict(amp_left_mA=float(r["amp_mA_Left"]), amp_right_mA=float(r["amp_mA_Right"]),
+                   n_reports=float(r["n"]), J=float(r["J"]), epoch=float(r["epoch"]),
+                   pw_us_left=float(r[pwl_col]), pw_us_right=float(r[pwr_col]))
+              for _, r in sub.iterrows()]
+    pairings = [dict(pw_us_left=float(pl), pw_us_right=float(pr), n_epochs=int(len(g)),
+                     n_reports=float(g["n"].sum()))
+                for (pl, pr), g in sub.groupby([sub[pwl_col].astype(float), sub[pwr_col].astype(float)])]
+    return RateStratum(
+        pw_us_left=pwl_at, pw_us_right=pwr_at, rate_hz=float(rate),
+        n_epochs=int(len(sub)), fitted=True, grid=grid, gp=gp,
+        mu=grid.as_surface(mu)[0], sd=grid.as_surface(sd)[0],
+        safe=grid.as_surface(safe.astype(float))[0] > 0,
+        n_reports=grid.as_surface(n_reports)[0],
+        x_star=(float(gx[i_star, 1]), float(gx[i_star, 2])),
+        mu_star=float(mu[i_star]), sd_star=float(sd[i_star]),
+        n_reports_total=float(sub["n"].sum()), coverage=coverage,
+        meta=dict(kernel=gp.hyperparameters["kernel"], n_safe=int(safe.sum()), points=points,
+                  pooled_pulse_widths=True, pairings=pairings, n_pairings=len(pairings)))
+
+
+def _pooled_incumbent(rs: RateStratum, incumbent_xyz, pw_in_force) -> _PooledIncumbent:
+    """The pooled per-rate model's own prediction at the setting in force, when this rate is the
+    rate in force; otherwise not supported."""
+    inc_rate, inc_al, inc_ar = incumbent_xyz
+    if abs(float(rs.rate_hz) - float(inc_rate)) > 1e-6 or rs.gp is None:
+        return _PooledIncumbent()
+    X = np.array([[float(inc_rate), float(inc_al), float(inc_ar),
+                   float(pw_in_force[0]), float(pw_in_force[1])]])
+    m, s = rs.gp.predict(X)
+    return _PooledIncumbent(incumbent_mu=float(np.ravel(m)[0]), incumbent_sd=float(np.ravel(s)[0]),
+                            incumbent_rate_supported=True)
 
 
 def _pooled_slice_at_rate(sl: JointStratum, rate_hz: float) -> dict:
@@ -788,6 +865,12 @@ class Stage1Result:
     #: ``JointStratum.rate_strata`` and ``_pooled_slice_at_rate``. Empty when nothing was fitted
     #: at all.
     rate_summary: pd.DataFrame = field(default_factory=pd.DataFrame)
+    #: Decision 189's option A (the PI, 2026-09-21): one surface per rate pooled over every
+    #: pulse-width pairing, read at the pairing in force -- ``{rate_hz: RateStratum}`` and one row
+    #: per rate in the same shape as ``rate_summary`` plus the pooling columns. Empty when pooling
+    #: was off or could not run (``audit["pulse_width_pooling"]`` says why).
+    pooled_rate_strata: dict = field(default_factory=dict)
+    pooled_rate_summary: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     def slices_for(self, hemisphere: str) -> list:
         """Every fitted joint stratum. Kept for callers written against the pre-joint API: since
@@ -806,7 +889,8 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
               explore_outside_reason=None, explore_outside_by=None,
               explore_outside_requested=None,
               adaptive_min_rate_hz=ENV.MIN_RATE_HZ,
-              safety_ceiling_by_hemisphere=None, pooled_var_override=None) -> Stage1Result:
+              safety_ceiling_by_hemisphere=None, pooled_var_override=None,
+              pool_pulse_widths=True) -> Stage1Result:
     """Run the open-loop search JOINTLY over both stimulators and freeze one configuration.
 
     NO TIME TERM, on the PI's ruling (decision 196, 2026-09-17): this participant has had the
@@ -849,6 +933,12 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
         ``{hemisphere: (ceiling_mA, provenance)}`` from ``safety_ceiling.ceilings_by_hemisphere``:
         the current above which each side is not acceptable, stated by the PI, the severity-3 seed
         of that side's OWN safety model (still fitted per side; see the module docstring).
+    pool_pulse_widths
+        Also fit, beside the per-pairing strata, ONE surface per rate over every pulse-width
+        pairing with the two pulse widths as inputs, read at the pairing in force (decision 189's
+        option A; the PI, 2026-09-21). Reported under ``.pooled_rate_strata`` /
+        ``.pooled_rate_summary``; nothing above changes. The page draws the separate fit by
+        default and the pooled one on a toggle.
     pooled_var_override
         Passed straight to ``objective.build_objective``; see its own docstring. ``None`` (the
         default) is the original behaviour. Exists for a thin, independent design matrix (e.g. the
@@ -1094,9 +1184,77 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
                        pooled_across_rates_mu_range=pooled["mu_range"],
                        pooled_across_rates_delivered_at_this_rate=pooled["delivered_at_this_rate"],
                        pooled_across_rates_note=pooled["note"])
-            if rs.fitted:
-                res = rs.resolution or {}
-                row.update(
+            row.update(_rate_row_numbers(rs))
+            rate_rows.append(row)
+    rate_summary = pd.DataFrame(rate_rows)
+
+    # --- POOLED ACROSS PULSE WIDTHS (decision 189's option A; the PI, 2026-09-21): one surface
+    # per rate over every pairing, the two pulse widths as inputs, read at the pairing in force.
+    # Added beside the per-pairing fits above, which are untouched.
+    pooled_rate_strata, pooled_rows = {}, []
+    pw_in_force = (inc_pw_left, inc_pw_right)
+    if not pool_pulse_widths:
+        pooling_audit = dict(computed=False, default="separate", reason="pooling not requested")
+    elif inc_pw_left is None or inc_pw_right is None:
+        pooling_audit = dict(computed=False, default="separate",
+                             reason="the pulse-width pairing in force is not known, so a pooled "
+                                    "surface has no pairing to be read at")
+    elif not len(fit):
+        pooling_audit = dict(computed=False, default="separate", reason="no feasible epochs")
+    else:
+        for rate, subr in fit.groupby("freq_hz"):
+            rate = float(rate)
+            n_r = int(len(subr))
+            if n_r < int(RATE_STRATUM_MIN_EPOCHS):
+                rs = RateStratum(pw_us_left=float(inc_pw_left), pw_us_right=float(inc_pw_right),
+                                 rate_hz=rate, n_epochs=n_r, fitted=False,
+                                 reason=f"{n_r} epochs over every pulse-width pairing, below the "
+                                        f"{int(RATE_STRATUM_MIN_EPOCHS)}-epoch floor",
+                                 meta=dict(pooled_pulse_widths=True, pairings=[], n_pairings=int(
+                                     subr.groupby([subr[pwl_col].astype(float),
+                                                   subr[pwr_col].astype(float)]).ngroups)))
+            else:
+                try:
+                    rs = _fit_pooled_rate_stratum(
+                        rate, subr, pwl_col=pwl_col, pwr_col=pwr_col, pw_in_force=pw_in_force,
+                        amp_grid=amp_grid, sgp_left=sgp_by_side["Left"],
+                        sgp_right=sgp_by_side["Right"], fixed_length_scale=fixed_length_scale,
+                        beta=beta)
+                    rs.resolution = _rate_stratum_resolution(
+                        rs, _pooled_incumbent(rs, incumbent_xyz, pw_in_force),
+                        resolution_k=resolution_k)
+                except (ValueError, RuntimeError) as exc:
+                    rs = RateStratum(pw_us_left=float(inc_pw_left), pw_us_right=float(inc_pw_right),
+                                     rate_hz=rate, n_epochs=n_r, fitted=False,
+                                     reason=f"{type(exc).__name__}: {exc}",
+                                     meta=dict(pooled_pulse_widths=True, pairings=[], n_pairings=0))
+            pooled_rate_strata[rate] = rs
+            row = dict(pw_us_left=float(inc_pw_left), pw_us_right=float(inc_pw_right), rate_hz=rate,
+                       fitted=bool(rs.fitted), n_epochs=int(rs.n_epochs),
+                       pooled_pulse_widths=True,
+                       n_pairings_pooled=int((rs.meta or {}).get("n_pairings", 0)))
+            row.update(_rate_row_numbers(rs))
+            pooled_rows.append(row)
+        pooling_audit = dict(computed=True, default="separate",
+                             in_force_pairing=dict(pw_us_left=float(inc_pw_left),
+                                                   pw_us_right=float(inc_pw_right)),
+                             n_rates=len(pooled_rate_strata),
+                             n_rates_fitted=int(sum(1 for r in pooled_rate_strata.values() if r.fitted)))
+    audit["pulse_width_pooling"] = pooling_audit
+    pooled_rate_summary = pd.DataFrame(pooled_rows).sort_values("rate_hz").reset_index(drop=True) \
+        if pooled_rows else pd.DataFrame()
+
+    return Stage1Result(frozen=frozen, slices=slices, summary=summary, audit=audit,
+                        D=D, skipped=skipped, rate_summary=rate_summary,
+                        pooled_rate_strata=pooled_rate_strata, pooled_rate_summary=pooled_rate_summary)
+
+
+def _rate_row_numbers(rs: RateStratum) -> dict:
+    """The numbers of one per-rate row of the rate table, fitted or not (shared by the separate
+    and the pooled tables so the two cannot drift)."""
+    if rs.fitted:
+        res = rs.resolution or {}
+        return dict(
                     n_reports=float(rs.n_reports_total),
                     amp_mA_left=rs.x_star[0], amp_mA_right=rs.x_star[1],
                     posterior_mean=rs.mu_star, posterior_sd=rs.sd_star,
@@ -1116,8 +1274,7 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
                     coverage_min_days_over_pairs=res.get("coverage", {}).get("min_days_over_pairs"),
                     coverage_days_per_pair_required=res.get("coverage", {}).get("days_per_pair_required"),
                     sentence=res.get("sentence"), reason=None)
-            else:
-                row.update(n_reports=float("nan"), amp_mA_left=float("nan"),
+    return dict(n_reports=float("nan"), amp_mA_left=float("nan"),
                           amp_mA_right=float("nan"), posterior_mean=float("nan"),
                           posterior_sd=float("nan"), resolved=False, flat_range=float("nan"),
                           flat_median_sd=float("nan"), flat_passes=None, gain=float("nan"),
@@ -1125,11 +1282,6 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
                           coverage_n_pairs=0, coverage_span_left_mA=float("nan"),
                           coverage_span_right_mA=float("nan"), coverage_passes=False,
                           sentence=None, reason=str(rs.reason))
-            rate_rows.append(row)
-    rate_summary = pd.DataFrame(rate_rows)
-
-    return Stage1Result(frozen=frozen, slices=slices, summary=summary, audit=audit,
-                        D=D, skipped=skipped, rate_summary=rate_summary)
 
 
 def _freeze_joint(slices: dict, inc_rate, inc_pw_by_side: dict, *, h_audit, gx, resolution_k,
