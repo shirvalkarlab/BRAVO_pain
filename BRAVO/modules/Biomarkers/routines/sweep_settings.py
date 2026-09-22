@@ -117,6 +117,16 @@ def sweep_metric_param(request_data):
     return metric
 
 
+def adjust_for_stim_current_param(request_data):
+    """Whether the grid also reports each cell's correlation with the stimulation current taken out.
+
+    OFF unless the request says otherwise (the PI, 2026-09-22: the adjusted grid sits behind a
+    switch, the plain grid the default). The adjusted value never selects a band or moves a verdict;
+    it is reported beside the plain one, descriptively.
+    """
+    return str((request_data or {}).get("AdjustForStimCurrent", "")).lower() in ("1", "true", "yes", "on")
+
+
 def sweep_settings_tag(*, label_metric, match_tolerance_min, match_direction, allow_window_reuse,
                        label_strategy, percentile_low, percentile_high,
                        include_clinic_sheet_ratings=False):

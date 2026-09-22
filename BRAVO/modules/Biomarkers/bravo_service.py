@@ -41,6 +41,7 @@ from .routines import analytics
 from .routines import availability
 from .routines import band_results_tables
 from .routines import sweep_settings
+from .routines import stim_current
 from .routines import sheet_ratings
 from .routines import local_time
 from .routines import streaming_psd
@@ -7259,7 +7260,8 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
                               pain_values, label_strategy, low_pct, high_pct,
                               outlier_n_mad, outlier_scale, metric_key, metric_label,
                               n_perm=None, n_boot=None, seed=0, match_direction="pro_first",
-                              region_map=None, participant_uid=None, from_clinic_sheet=None):
+                              region_map=None, participant_uid=None, from_clinic_sheet=None,
+                              adjust_for_stim_current=False):
     """Run the sweep for every sensing contact pair that has a cache, one entry per pair.
 
     `participant_uid` selects WHOSE outlier ceilings apply (review B3): the ceiling table is keyed
@@ -7289,6 +7291,15 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
                 allow_window_reuse=allow_window_reuse, match_direction=match_direction,
                 channel=raw_ch, participant_uid=participant_uid)
             match_s = _time.perf_counter() - t0
+            # The switch (decision 233, the PI's ruling of 2026-09-22). When it is on, every cell of
+            # THIS pair's grid also gets its correlation with the stimulation current in force on
+            # THIS pair's own side taken out of it -- the covariate is one current per pain report,
+            # read from the dated settings the device's own files carry (`stim_current`). The plain
+            # grid is unchanged and still selects every band; the adjusted value is descriptive.
+            cov_values, cov_block = (None, None)
+            if adjust_for_stim_current:
+                cov_values, cov_block = stim_current.current_in_force_for_reports(
+                    participant_uid, pro_times, channel=raw_ch)
             sweep = analytics.band_time_sweep_from_power(
                 power, pain_values, center_freqs_hz=centers,
                 strategy=label_strategy, low_pct=low_pct, high_pct=high_pct,
@@ -7298,10 +7309,14 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
                 seed=seed, channel=raw_ch, metric_key=metric_key, metric_label=metric_label,
                 chunk_exclusion=chunk_excl, from_device_spectrum=from_device,
                 from_clinic_sheet=from_clinic_sheet,
+                covariate=cov_values,
+                covariate_label=(stim_current.CURRENT_LABEL if cov_values is not None else None),
                 power_feature=("band power in the device's own least-significant-bit units, "
                                "reached from the 250 samples-per-second voltage trace by the "
                                "validated transform, or from the device's own spectrum where no "
                                "voltage trace was in range"))
+            if cov_block is not None:
+                sweep["stim_current_covariate"] = dict(cov_block)
             _fmt = analytics.format_channel(raw_ch, region=(region_map or {}).get(raw_ch))
             sweep["display_short"] = _fmt["short"]        # e.g. "L 0⁻2⁺"
             sweep["display_region"] = _fmt["region"]       # e.g. "Left GPi", "" if unknown
@@ -7532,6 +7547,7 @@ def band_time_sweep_for_participant(request_data):
     # grid is computed from, and reported on the response so the page can say how many of a
     # cell's ratings came from a sheet. `sheet_ratings.py` says why this is a caveat.
     include_sheets = _include_clinic_sheet_ratings_param(request_data)
+    adjust_current = _adjust_for_stim_current_param(request_data)
     from_clinic_sheet = None
     clinic_sheet_block = {"included": bool(include_sheets), "n_available": 0, "n_added": 0,
                           "sheet_column": None, "scale": None, "reason": None}
@@ -7565,7 +7581,12 @@ def band_time_sweep_for_participant(request_data):
         "percentile_high": float(high_pct), "outlier_n_mad": float(outlier_n_mad),
         "outlier_scale": outlier_scale, "match_direction": match_direction,
         "include_cross_setting_stability": bool(include_stability),
-        "include_clinic_sheet_ratings": bool(include_sheets)}
+        "include_clinic_sheet_ratings": bool(include_sheets),
+        # In the KEY, not in the cross-page settings tag (decision 131's contract is untouched): a
+        # grid built with the switch off is byte-identical to one built before the switch existed,
+        # so those entries stay valid and are still served; a request with the switch on cannot be
+        # answered from one of them, because this makes its key a different key.
+        "adjust_for_stim_current": bool(adjust_current)}
     sweep_sig, sweep_prov, tiles_sig = _band_sweep_signature(participant_uid, pro_df,
                                                              label_metric, sweep_settings)
     if sweep_sig is not None:
@@ -7624,7 +7645,7 @@ def band_time_sweep_for_participant(request_data):
         high_pct=high_pct, outlier_n_mad=outlier_n_mad, outlier_scale=outlier_scale,
         metric_key=label_metric, metric_label=metric_label, match_direction=match_direction,
         region_map=_region_map(Participant, chan_order), participant_uid=participant_uid,
-        from_clinic_sheet=from_clinic_sheet)
+        from_clinic_sheet=from_clinic_sheet, adjust_for_stim_current=adjust_current)
     # The switch's own block on every contact pair's sweep too, because the heat maps' caption is
     # drawn from the pair it shows (the same reason `display_short` sits on each pair).
     for _sw in (sweeps or {}).values():
@@ -7664,6 +7685,7 @@ def band_time_sweep_for_participant(request_data):
             "sweep_metric": label_metric,
             "match_direction": match_direction,
             "include_clinic_sheet_ratings": bool(include_sheets),
+            "adjust_for_stim_current": bool(adjust_current),
             "match_extent_sec_ignored": ("the top-of-page slider for how much recording goes into "
                                          "one measurement is not read here, because that quantity "
                                          "is the axis this section sweeps"),
@@ -7889,6 +7911,7 @@ def band_time_sweep_cell_for_participant(request_data):
 _BAND_SWEEP_RESPONSE_KIND = "biomarker_band_sweep"
 
 
+_adjust_for_stim_current_param = sweep_settings.adjust_for_stim_current_param  # the switch (decision 233)
 sweep_settings_tag = sweep_settings.sweep_settings_tag                       # routines/sweep_settings.py
 sweep_settings_tag_from_request = sweep_settings.sweep_settings_tag_from_request
 

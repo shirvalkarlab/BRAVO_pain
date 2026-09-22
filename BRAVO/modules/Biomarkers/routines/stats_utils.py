@@ -8,6 +8,7 @@ small, pure, unit-testable functions used to make the inferential claims honest:
   * fisher_z_ci       — confidence interval for a Pearson r (Fisher z-transform).
   * effective_n       — autocorrelation-adjusted effective sample size (serial dependence).
   * partial_corr      — correlation of x,y after regressing out a covariate (e.g. stim amplitude).
+  * partial_corr_columns — the same, for every column of a matrix, each on its own usable rows.
   * block_perm_pvalue — circular-block permutation p-value (preserves temporal autocorrelation).
   * balanced_metrics  — balanced accuracy + prevalence/chance baseline for an imbalanced test set.
 
@@ -104,6 +105,36 @@ def partial_corr(x, y, covar):
     if np.std(xr) <= 1e-10 * (np.std(x[m]) + 1e-300) or np.std(yr) <= 1e-10 * (np.std(y[m]) + 1e-300):
         return np.nan
     return float(np.corrcoef(xr, yr)[0, 1])
+
+
+def partial_corr_columns(X, y, covar):
+    """`partial_corr` for EVERY column of a band-power matrix at once, column by column.
+
+    ``X`` is one row per pain report and one column per band; ``y`` is one pain score per report;
+    ``covar`` is one covariate value per report (on this page, the stimulation current in force when
+    the report was filed). Each column is adjusted and correlated on its OWN usable rows -- the rows
+    where that band, the pain score and the covariate are all present -- so a band with more missing
+    signal is not cut down to another band's sample, exactly as `pearson_r_columns` does for the
+    plain correlation.
+
+    Returns ``{"r": (C,), "n": (C,)}``. A column that cannot be adjusted (fewer than four usable
+    rows, no spread left in the covariate, or a band that is itself almost a straight line in the
+    covariate) comes back non-finite rather than as a number, the same refusal `partial_corr` makes.
+    """
+    X = np.asarray(X, dtype=float)
+    y = np.asarray(y, dtype=float)
+    c = np.asarray(covar, dtype=float)
+    if X.ndim == 1:
+        X = X[:, None]
+    C = X.shape[1]
+    r = np.full(C, np.nan, dtype=float)
+    n = np.zeros(C, dtype=int)
+    base = np.isfinite(y) & np.isfinite(c)
+    for j in range(C):
+        m = base & np.isfinite(X[:, j])
+        n[j] = int(m.sum())
+        r[j] = partial_corr(X[m, j], y[m], c[m])
+    return {"r": r, "n": n}
 
 
 def _residualize(v, covar):

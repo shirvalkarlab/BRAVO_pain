@@ -369,6 +369,7 @@ def lfp_distribution(cv_df, bins=40):
 from .stats_utils import MAD_N_DEFAULT as OUTLIER_N_MAD  # noqa: E402  (5.0)
 from .stats_utils import mad_outlier_flags  # noqa: E402  (True == outlier; see stats_utils)
 from .stats_utils import block_bootstrap_picks  # noqa: E402  (decision 183: the headline interval)
+from .stats_utils import partial_corr_columns  # noqa: E402  (the current-adjusted value beside the plain one)
 
 # Scale for the pain LABEL. Pain scores are bounded ordinal scales, not multiplicative quantities,
 # so the rule is applied to them directly rather than in log space.
@@ -5523,7 +5524,8 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
                                seed=0, power_feature="band power", channel=None,
                                metric_key=None, metric_label=None,
                                tile_seconds=None, requested_seconds=None, chunk_exclusion=None,
-                               from_device_spectrum=None, from_clinic_sheet=None):
+                               from_device_spectrum=None, from_clinic_sheet=None,
+                               covariate=None, covariate_label=None):
     """The whole grid: for every band centre and every length of signal averaged into one
     measurement, how well that band's power tracks the chosen pain score.
 
@@ -5543,6 +5545,17 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
     length of signal that produced it, the count behind it, an interval, and the selection-aware
     reference described in the section note above. The area-under-the-curve rows are referenced to
     0.5 throughout and carry ``no_relationship_value`` saying so.
+
+    ``covariate`` is one value per pain report -- on this page, the stimulation current in force
+    when the report was filed -- and when it is given every cell gains a SECOND correlation, with
+    that quantity taken out of both the band power and the pain score
+    (``adjusted_correlation_grid``, and ``pearson_r_adjusted`` on each selected row). It is reported
+    beside the plain correlation and does nothing else: **the plain value still selects the band,
+    carries the interval and sets the verdict** (the PI, 2026-09-22: "supported" does not require a
+    band to stay positive once the current in force is partialled out, "but this should be reported
+    descriptively"). A covariate that is absent, constant, or usable on too few reports is refused
+    with a reason under ``covariate_adjustment`` rather than published as an adjustment that found
+    nothing -- those are different answers.
     """
     rng = np.random.default_rng(int(seed))
     tile_s = float(sweep_tile_seconds() if tile_seconds is None else tile_seconds)
@@ -5612,6 +5625,34 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         corr[t] = got["r"]
         corr_n[t] = got["n"]
 
+    # ---- the same correlation with a covariate taken out of it, when one is supplied -----------
+    cov = None if covariate is None else np.asarray(covariate, dtype=float)
+    cov_block = {"applied": False, "label": (str(covariate_label) if covariate_label else None),
+                 "n_with_covariate": 0, "n_distinct_values": 0, "reason": None}
+    corr_adj = corr_adj_n = None
+    if cov is not None:
+        if cov.size != P:
+            cov_block["reason"] = (f"the covariate has {int(cov.size)} values for {int(P)} pain "
+                                   "reports, so it cannot be lined up with them")
+        else:
+            cov_finite = np.isfinite(cov)
+            cov_block["n_with_covariate"] = int(cov_finite.sum())
+            cov_block["n_distinct_values"] = int(np.unique(np.round(cov[cov_finite], 6)).size)
+            if cov_block["n_with_covariate"] < 4:
+                cov_block["reason"] = ("no usable value of the covariate on enough pain reports to "
+                                       "take it out of anything")
+            elif cov_block["n_distinct_values"] < 2:
+                cov_block["reason"] = ("the covariate is constant across these pain reports, so "
+                                       "there is nothing to take out")
+            else:
+                corr_adj = np.full((T, C), np.nan)
+                corr_adj_n = np.zeros((T, C), dtype=int)
+                for t_cov in range(T):
+                    got_adj = partial_corr_columns(X[t_cov], pain, cov)
+                    corr_adj[t_cov] = got_adj["r"]
+                    corr_adj_n[t_cov] = got_adj["n"]
+                cov_block["applied"] = True
+
     # ---- the classification half: split the pain scores once, then rank ------------------------
     y_bin, split_why, low_cut, high_cut = _pain_split(
         pain, strategy=strategy, low_pct=low_pct, high_pct=high_pct, pain_cutoff=pain_cutoff)
@@ -5671,7 +5712,9 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
     best_corr_rows = _best_rows_correlation(
         corr, corr_n, X, pain, centers, kept_req, delivered, tiles, corr_null,
         band_width_hz=band_width_hz, n_boot=int(n_boot), rng=rng,
-        power_feature=power_feature, channel=channel)
+        power_feature=power_feature, channel=channel,
+        corr_adjusted=corr_adj, corr_adjusted_n=corr_adj_n,
+        covariate_label=cov_block.get("label"))
     best_auc_rows = _best_rows_auc(
         auc, auc_pos, auc_neg, X, y_bin, centers, kept_req, delivered, tiles, auc_null,
         band_width_hz=band_width_hz, n_boot=int(n_boot), rng=rng,
@@ -5736,6 +5779,12 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         "integration_seconds_delivered": delivered,
         "integration_tiles": tiles,
         "correlation_grid": [[_f(v) for v in row] for row in corr],
+        # The same grid with the covariate taken out: present only when one was supplied AND could
+        # be used. `covariate_adjustment` says which, and why not when not.
+        **({"adjusted_correlation_grid": [[_f(v) for v in row] for row in corr_adj],
+            "adjusted_correlation_n_grid": [[int(v) for v in row] for row in corr_adj_n]}
+           if corr_adj is not None else {}),
+        "covariate_adjustment": cov_block,
         "auc_grid": [[_f(v) for v in row] for row in auc],
         "auc_direction_folded_grid": [[_f(v) for v in row] for row in auc_folded],
         "n_grid": [[int(v) for v in row] for row in corr_n],
@@ -6103,7 +6152,8 @@ def _interval_block_length(y_used):
 
 
 def _best_rows_correlation(corr, corr_n, X, pain, centers, requested, delivered, tiles, null,
-                           *, band_width_hz, n_boot, rng, power_feature, channel):
+                           *, band_width_hz, n_boot, rng, power_feature, channel,
+                           corr_adjusted=None, corr_adjusted_n=None, covariate_label=None):
     """One row per band centre: the strongest correlation any length of signal produced for that
     band, which length produced it, and how to read it.
 
@@ -6177,9 +6227,24 @@ def _best_rows_correlation(corr, corr_n, X, pain, centers, requested, delivered,
                 shuf_p99 = float(np.percentile(colshuf, 99))
                 p_sel = float((int((colshuf >= abs(r_obs)).sum()) + 1) / (colshuf.size + 1))
         row = dict(header)
+        # The same cell's correlation with the covariate taken out, when one was supplied. It rides
+        # BESIDE the plain value: the length of signal was chosen on the plain value, the interval
+        # and the verdict are the plain value's, and this number changes none of them (decision 233).
+        if corr_adjusted is not None:
+            r_adj = float(corr_adjusted[t, c])
+            row_adj = {
+                "pearson_r_adjusted": (r_adj if np.isfinite(r_adj) else None),
+                "pearson_r_adjustment": (float(r_adj - r_obs) if np.isfinite(r_adj) else None),
+                "pearson_r_adjusted_n": (int(corr_adjusted_n[t, c]) if corr_adjusted_n is not None
+                                         else None),
+                "pearson_r_adjusted_covariate": (str(covariate_label) if covariate_label else None),
+            }
+        else:
+            row_adj = {}
         row.update({
             "pearson_r": r_obs,
             "pearson_r_abs": float(abs(r_obs)),
+            **row_adj,
             "direction": ("band power rises as pain rises" if r_obs > 0
                           else "band power falls as pain rises"),
             "no_relationship_value": CORRELATION_NO_RELATIONSHIP,
