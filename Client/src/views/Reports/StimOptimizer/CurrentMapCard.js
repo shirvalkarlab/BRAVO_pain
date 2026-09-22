@@ -445,6 +445,19 @@ function pooledGroup(pooling) {
     n_pairings: nPairings, pairingsText, rows: sorted };
 }
 
+//: Across the whole record higher current and lower pain do go together (Left Leg VAS averages 58
+//: at 0 mA and 46-53 between 3.0 and 4.8 mA), and out of sample that association does not hold: a
+//: model given only the current in force separates a high rating from a low one no better than
+//: chance. Measured 2026-09-22 on 611 ratings, folds separated in time so a day cannot train on
+//: itself. The card has to say so, because it is the one that draws pain against current.
+export const CURRENT_PAIN_CAVEAT =
+  "Higher current and lower pain go together across this record, and that does not hold up out of "
+  + "sample: given only the current in force, a model tells a high rating from a low one no better "
+  + "than chance (area under the curve 0.41 on the left current alone, 0.49 on both sides, against "
+  + "0.57 for shuffled data, over 611 ratings with the folds separated in time). Read the squares as "
+  + "where the currents have been tried and what was rated there \u2014 not evidence that raising "
+  + "the current lowers this patient\u2019s pain.";
+
 export default function CurrentMapCard({ plan }) {
   const stage1 = (plan && plan.stage1) || {};
   const rawRateStrata = stage1.rate_strata;
@@ -477,6 +490,13 @@ export default function CurrentMapCard({ plan }) {
       <MDBox p={2}>
         <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>
           Where the two currents have been tried, and what the record says
+        </MDTypography>
+        {/* The card draws pain against the two currents, so it is where a reader could take the
+            pooled association for a dose effect. Measured 2026-09-22: it does not survive being
+            asked to predict. In the open, never behind the descriptions button (panel B, item 8). */}
+        <MDTypography variant="caption" component="div" data-testid="current-pain-caveat"
+          sx={{ fontSize: TYPE.body, mt: 0.5, color: "#8a5a00" }}>
+          {CURRENT_PAIN_CAVEAT}
         </MDTypography>
         {showDescriptions && (
         <MDTypography variant="caption" component="div" color="text" sx={{ fontSize: TYPE.body, mt: 0.5, mb: 1.5 }}>

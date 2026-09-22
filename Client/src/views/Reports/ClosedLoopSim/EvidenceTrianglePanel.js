@@ -198,6 +198,28 @@ function TriangleGraph({ edges }) {
  * One signed axis for one edge. Zero sits at the same horizontal position in every row, which is
  * the only thing shared between the three rows; the scale is per row because the units are.
  */
+// THE CURRENT IN FORCE, NOT YET TAKEN OUT OF THIS EDGE (decision 234, the PI's ruling of
+// 2026-09-22). The band-power-to-pain edge is estimated with no term for the stimulation current
+// that was running when each rating was filed. On this participant's LEFT lead that matters and is
+// measured: taking the current out shrinks every positive reading in the band family below, so the
+// sign this edge shows rests partly on the current. Scoped deliberately -- the left lead, and the
+// centres the measurement covered -- because a caveat that fires everywhere teaches a reader to
+// ignore it. It comes out when the edge itself is re-estimated with the current taken out.
+export const CURRENT_CONFOUND_HZ = [21.5, 27.5];
+export const CURRENT_CONFOUND_NOTE =
+  "Measured 2026-09-22, on this participant\u2019s left lead: taking the stimulation current in "
+  + "force at each rating out of both the band power and the pain score shrinks every positive "
+  + "reading in this band family \u2014 on L 0\u207b3\u207a, 22.5\u201327.5 Hz, +0.08 to +0.20 "
+  + "becomes +0.01 to +0.12 against NRS; on L 1\u207b3\u207a the negative readings strengthen. "
+  + "This edge is not adjusted for it yet, so read its sign as resting partly on the current.";
+
+export function currentConfoundApplies(candidate) {
+  const ch = String((candidate || {}).channel || "").toUpperCase();
+  const hz = Number((candidate || {}).center_hz);
+  if (!/LEFT$/.test(ch) || !Number.isFinite(hz)) return false;
+  return hz >= CURRENT_CONFOUND_HZ[0] && hz <= CURRENT_CONFOUND_HZ[1];
+}
+
 function EdgeAxis({ k, e }) {
   const W = 340;
   const H = 58;
@@ -374,6 +396,13 @@ function CoherenceReading({ coherence, edges }) {
   });
   const r = coherenceReading(observed, expected);
 
+  // Split the module's own note at its own word: everything from "PROVISIONAL:" on is the caveat
+  // about the verdict, and is shown in the open; the rest is method and stays in the fold.
+  const noteText = coherence.note || "";
+  const cut = noteText.search(/PROVISIONAL\s*:/i);
+  const provisionalHalf = cut >= 0 ? noteText.slice(cut).trim() : null;
+  const restOfNote = cut >= 0 ? noteText.slice(0, cut).trim() : (noteText || null);
+
   const word = (s) => (s == null ? "not reported" : Number(s) > 0 ? "positive (+)" : "negative (\u2212)");
 
   return (
@@ -455,12 +484,20 @@ function CoherenceReading({ coherence, edges }) {
         ) : null}
       </MDBox>
 
-      {/* The module's own note (it names the control-law page citation) and the bootstrap
-          probability, folded since 2026-09-11. */}
+      {/* The module's own note carries two different things. The sentence that says the pattern
+          rests on the point signs alone, because intervals span zero, is the reader's caveat about
+          the verdict itself, and it now reads IN THE OPEN (panel D, 2026-09-22); the rest -- the
+          control-law citation and the method -- stays folded, as it has since 2026-09-11. */}
+      {provisionalHalf ? (
+        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11, mt: 0.8,
+          color: "#8a5a00", fontWeight: "bold" }}>
+          {provisionalHalf}
+        </MDTypography>
+      ) : null}
       <Fold show="How the sign agreement was tested" hide="Hide" mt={0.8} dense>
-        {coherence.note ? (
+        {restOfNote ? (
           <MDTypography variant="caption" sx={{ display: "block", fontSize: 11, color: "#4A4A4A" }}>
-            {coherence.note}
+            {restOfNote}
           </MDTypography>
         ) : null}
         <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mt: 0.4,
@@ -478,6 +515,9 @@ function CoherenceReading({ coherence, edges }) {
 
 export default function EvidenceTrianglePanel({ report }) {
   const { data, loading, err } = report || { data: null, loading: false, err: null };
+  // Which band this report is about, for the scope of the caveat below the second edge.
+  const candidate = ((data || {}).candidates || [])[0] || null;
+  const showCurrentConfound = currentConfoundApplies(candidate);
 
   if (loading) {
     return (
@@ -518,7 +558,17 @@ export default function EvidenceTrianglePanel({ report }) {
             <TriangleGraph edges={edges} />
           </Grid>
           <Grid item xs={12} md={7}>
-            {["E1", "E2", "E3"].map((k) => <EdgeAxis key={k} k={k} e={edges[k]} />)}
+            {["E1", "E2", "E3"].map((k) => (
+              <MDBox key={k}>
+                <EdgeAxis k={k} e={edges[k]} />
+                {k === "E2" && showCurrentConfound ? (
+                  <MDTypography variant="caption" data-testid="e2-current-confound"
+                    sx={{ display: "block", fontSize: 10.5, mb: 0.8, color: "#8a5a00" }}>
+                    {CURRENT_CONFOUND_NOTE}
+                  </MDTypography>
+                ) : null}
+              </MDBox>
+            ))}
           </Grid>
         </Grid>
         {/* The two drawing conventions, folded since 2026-09-11. */}

@@ -137,12 +137,27 @@ describe("the calibrated heat-map card (BiomarkerHeatmapGrids)", () => {
     const { container } = await renderGrid();
     fireEvent.click(screen.getByText(/^How to read this$/));
     const lines = Array.from(container.querySelectorAll('[data-testid="l13-search-line"]')).map((el) => el.textContent);
-    expect(lines.length).toBe(5);
+    expect(lines.length).toBe(6);
     expect(lines[0]).toMatch(/252 settings/);
     expect(lines[0]).toMatch(/windows 2, 5, 10, 20, 30, 60, 120 min/);
     expect(lines[1]).toMatch(/0 positive rows with q < 0\.05 out of 5,544/);
     expect(lines[2]).toMatch(/24\.5 Hz at 60 s, 120-min window, Neural-first pre-report: r 0\.33 \(0\.17 to 0\.48\), n 59, q 0\.23/);
     expect(lines[3]).toMatch(/1,545 rows with q < 0\.05 on the negative side/);
+    // A-5 (the panel's item 5, the PI's clinician stand-in): the two tests are told apart in
+    // adjoining sentences, so the reader never sees "0 rows clear q < 0.05" beside a cell called
+    // "established" with a q of 0.23 and has to work out that they are different tests.
+    const text = lines.join(" ");
+    expect(text).toMatch(/q is the p-value after correcting for having looked at all 22 bands/i);
+    expect(text).toMatch(/“established” is that cell’s own test/i);
+    expect(text).toMatch(/does not clear the 22-band correction/i);
+    // every term the lines use is said in plain words at least once
+    expect(text).toMatch(/reuse on\/off \(whether one stretch of recording may answer more than one report\)/i);
+    // the pair the whole search covers is named in the line that states the negative result
+    expect(lines[1]).toMatch(/L 1\u207b3\u207a|L 1⁻3⁺/);
+    // A-1's measurement is stated here, on both left pairs, with the switch named
+    expect(text).toMatch(/current in force/i);
+    expect(text).toMatch(/\+0\.08 to \+0\.20 .*\+0\.01 to \+0\.12|\+0\.01 to \+0\.12/);
+    expect(text).toMatch(/L 0⁻3⁺|L 0\u207b3\u207a/);
     container.querySelectorAll('[data-testid="l13-search-line"]').forEach((el) => {
       expect(getComputedStyle(el).fontWeight).toBe("700");
     });

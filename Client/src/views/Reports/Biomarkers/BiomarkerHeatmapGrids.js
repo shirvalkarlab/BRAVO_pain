@@ -120,15 +120,29 @@ function heatmapHeight(rows) {
 // "How to read this" drawer, for RCS08 only: they are a finding about one record, not a rule.
 export const L13_SEARCH_UID = "2e3c75c00d7f4f37b53a048d195f11da";
 export const L13_SEARCH_LINES = [
-  "Exploratory search, 2026-09-21, L 1\u207b3\u207a on Left Leg VAS: 252 settings (windows 2, 5, 10, 20, 30, 60, 120 min; "
-    + "Report-first, Neural-first, Neural-first pre-report; cap 1, 3, 10 per rating; reuse on/off; clinic sheets on/off).",
-  "No band rises with pain past the 22-band correction under any setting: 0 positive rows with q < 0.05 out of 5,544.",
-  "Sheets off (REDCap only): the only cell to reach the grid\u2019s \u201cestablished\u201d verdict is 24.5 Hz at 60 s, "
-    + "120-min window, Neural-first pre-report: r 0.33 (0.17 to 0.48), n 59, q 0.23. 21.5\u201325.5 Hz (mostly 23.5) "
-    + "come out \u201csupported\u201d in 1\u20138 settings per window, the same count the negative side reaches by chance.",
-  "Sheets on (+ clinic titration scores): the positive cluster vanishes and 11\u201322 of 22 bands per setting fall with pain, "
-    + "1,545 rows with q < 0.05 on the negative side, all with the sheets in. The titration scores carry a strong "
-    + "negative pain\u2013power relationship that the chronic record does not.",
+  "Exploratory search, 2026-09-21, L 1\u207b3\u207a on Left Leg VAS: 252 settings \u2014 windows 2, 5, 10, 20, 30, 60, "
+    + "120 min; Report-first, Neural-first and Neural-first pre-report (which end of the pair is chosen first, and "
+    + "whether only recording BEFORE the report may answer it); cap 1, 3, 10 per rating (how many stretches of "
+    + "recording one report may claim); reuse on/off (whether one stretch of recording may answer more than one "
+    + "report); clinic sheets on/off.",
+  "No band on L 1\u207b3\u207a rises with pain past the correction under any of them: 0 positive rows with q < 0.05 "
+    + "out of 5,544. Here q is the p-value after correcting for having looked at all 22 bands; a cell with q above "
+    + "0.05 has not cleared that correction, whatever its own numbers say.",
+  "Sheets off (REDCap only): the one cell to reach the grid\u2019s \u201cestablished\u201d verdict is 24.5 Hz at 60 s, "
+    + "120-min window, Neural-first pre-report: r 0.33 (0.17 to 0.48), n 59, q 0.23. Those are two different tests and "
+    + "this cell passes only the first: \u201cestablished\u201d is that cell\u2019s own test (its interval clears zero "
+    + "and it beats the shuffled best of nine lengths), while q 0.23 means it does not clear the 22-band correction. "
+    + "21.5\u201325.5 Hz (mostly 23.5) come out \u201csupported\u201d in 1\u20138 settings per window, the same count "
+    + "the negative side reaches by chance.",
+  "Sheets on (+ clinic titration scores): the positive cluster vanishes and 11\u201322 of 22 bands per setting fall "
+    + "with pain, 1,545 rows with q < 0.05 on the negative side, all with the sheets in. The titration scores carry a "
+    + "strong negative pain\u2013power relationship that the chronic record does not.",
+  "The current in force explains much of what is left (2026-09-22). With the stimulation current running at each "
+    + "report taken out of both the band power and the score \u2014 the \u201cadjust for the current in force\u201d "
+    + "switch \u2014 every positive reading on the left shrinks: on L 0\u207b3\u207a, the pair the exploratory ladder "
+    + "will sense, 22.5\u201327.5 Hz goes from +0.08 to +0.20 down to +0.01 to +0.12 against NRS, and on L 1\u207b3\u207a "
+    + "the negative readings get stronger (\u22120.13 to \u22120.18 becomes \u22120.23 to \u22120.28). The plain value "
+    + "still selects every band and sets every verdict; the adjusted one is reported beside it.",
   "Read as a lead for the next titration session (24.5 Hz, 60 s), not a band to program.",
 ];
 
