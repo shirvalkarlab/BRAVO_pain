@@ -724,7 +724,7 @@ def test_the_acute_pain_holds_are_off_on_off_with_a_rating_every_minute_and_the_
     assert TP.acute_pain_holds(None)["holds"] == []
 
 
-def test_the_configuration_plan_names_the_contacts_the_pair_the_rate_of_the_cell_and_the_stop_rule():
+def test_the_configuration_plan_names_the_contacts_the_pair_the_rate_in_force_and_the_stop_rule():
     es = _epochs_with_cathodes()
     contact = {"channel": "ZERO_THREE_LEFT", "display_short": "L 0⁻3⁺", "rate_hz": 125.0,
                "qualifying_centers_hz": [24.5, 25.5, 26.5, 27.5], "n_qualifying": 4, "n_bands": 18,
@@ -736,15 +736,34 @@ def test_the_configuration_plan_names_the_contacts_the_pair_the_rate_of_the_cell
                               in_force_rings={2}, other_side_contacts="R C+1-2-", other_side_pw=150.0,
                               rate_in_force_hz=55.0)
     assert p["stimulation"]["contacts_short"] == "L C+1-2-"
-    assert p["rate_in_force_hz"] == 55.0 and any("in force today: 55 Hz" in c for c in p["conditions"])
+    assert p["rate_in_force_hz"] == 55.0
+    # the condition a clinician reads: the session's rate is the one in force, the bands were found
+    # at another rate, and the band that lands on a harmonic at this rate is named there too
+    _rate_cond = next(c for c in p["conditions"] if c.startswith("rate "))
+    assert _rate_cond.startswith("rate 55 Hz, the rate in force")
+    assert "found at 125 Hz" in _rate_cond
+    assert "25.5, 26.5 and 27.5 Hz" in _rate_cond and "leaving 24.5 Hz clear" in _rate_cond
     assert p["stimulation"]["rings"] == [1, 2] and p["stimulation"]["in_force_rings"] == [2]
     assert p["stimulation"]["differs_from_in_force"] is True
     assert p["sensing_pair"]["channel"] == "ZERO_THREE_LEFT" and "flank" in p["sensing_pair"]["why"]
-    assert p["rate_hz"] == 125.0 and "cell" in p["sources"]["rate_hz"]
-    # the pain-positive bands of that cell are the ones to watch, and at 125 Hz they are clear
+    # THE RATE IS THE ONE IN FORCE (the PI, 2026-09-22, ruling 3; decision 233), not the rate of the
+    # cell where the bands were found. The cell's rate is reported beside it so the difference is
+    # visible: the bands were found at 125 Hz and the session runs at 55 Hz.
+    assert p["rate_hz"] == 55.0 and "in force" in p["sources"]["rate_hz"]
+    assert p["cell_rate_hz"] == 125.0
+    # The consequence, stated and never hidden (decision 220: a warning, never a refusal). At 55 Hz
+    # the half-rate harmonic is 27.5 Hz, and a band is 5 Hz wide, so the harmonic falls INSIDE three
+    # of the four watched bands -- 25.5, 26.5 and 27.5 -- and only 24.5 Hz stays clear. (A first
+    # draft of this test asserted 27.5 Hz alone, comparing centres to the harmonic and forgetting the
+    # band's own width; the code was right and the assertion was wrong.)
     assert p["bands"]["watch_hz"] == [24.5, 25.5, 26.5, 27.5]
-    assert all(c in p["bands"]["clear_hz"] for c in p["bands"]["watch_hz"])
-    assert p["bands"]["watch_clear"] is True
+    assert p["bands"]["watch_clear"] is False
+    assert p["bands"]["watch_on_harmonic_hz"] == [25.5, 26.5, 27.5]
+    assert p["bands"]["watch_clear_hz"] == [24.5]
+    assert 24.5 in p["bands"]["clear_hz"]
+    why = p["bands"]["watch_why"]
+    assert "half-rate harmonic (27.5 Hz)" in why and "25.5, 26.5 and 27.5 Hz" in why
+    assert "24.5 Hz as clear" in why
     # first exposure: 0 mA only in the record -> the stop rule is printed and the ladder starts at 0
     assert p["first_exposure"]["ever_powered"] is False
     assert "side-effect score of 2" in p["first_exposure"]["stop_rule"]
@@ -757,7 +776,7 @@ def test_the_configuration_plan_names_the_contacts_the_pair_the_rate_of_the_cell
     lad_rows = [r for r in rows if r["block"] == "exploratory_left_ladder"]
     hold_rows = [r for r in rows if r["block"] == "exploratory_left_holds"]
     assert len(lad_rows) == 2 * p["ladder"]["n_steps"] and len(hold_rows) == 3
-    assert lad_rows[0]["Contacts"] == "L C+1-2- / R C+1-2-" and lad_rows[0]["Rate (Hz)"] == 125.0
+    assert lad_rows[0]["Contacts"] == "L C+1-2- / R C+1-2-" and lad_rows[0]["Rate (Hz)"] == 55.0
     assert lad_rows[0]["Amp (mA)"] == "L 0 / R 2.5"
     assert hold_rows[1]["Amp (mA)"] == "L 4.5 / R 2.5" and hold_rows[1]["Duration (s)"] == 300.0
     assert hold_rows[1]["General Notes / Pt Verbal Notes"] and "every minute" in hold_rows[1]["General Notes / Pt Verbal Notes"]

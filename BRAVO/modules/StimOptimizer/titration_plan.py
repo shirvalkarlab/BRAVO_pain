@@ -849,6 +849,16 @@ def _hold_row(step, block, *, contacts, amp, rate_hz, pw, minutes, note) -> dict
     return row
 
 
+def _and_list(items) -> str:
+    """"a", "a and b", "a, b and c" -- so a sentence naming bands reads as a sentence."""
+    xs = [str(x) for x in items]
+    if not xs:
+        return ""
+    if len(xs) == 1:
+        return xs[0]
+    return ", ".join(xs[:-1]) + " and " + xs[-1]
+
+
 def configuration_plan(side, *, rings, contact, rate_source, pulse_width_us, pulse_width_source,
                        ceiling_mA, ceiling_source, exposure, held_other_side_mA,
                        held_other_side_source, in_force_rings=None, other_side_contacts=None,
@@ -862,8 +872,17 @@ def configuration_plan(side, *, rings, contact, rate_source, pulse_width_us, pul
     in_force_rings = {int(r) for r in (in_force_rings or ())}
     contacts_short = _rings_label(side, rings)
     c = dict(contact or {})
-    rate = rate_to_hold(c.get("rate_hz"), min_rate_hz=min_rate_hz)
-    rate["rate_in_force_hz"] = _f(rate_in_force_hz)          # the side's setting today, not the cell's rate
+    # THE SESSION RUNS AT THE RATE IN FORCE (the PI, 2026-09-22, ruling 3; decision 233), not at the
+    # rate of the cell where the pain-positive bands were found. Until that ruling the cell's rate
+    # was held, because at 55 Hz the half-rate harmonic lands on one of the watched bands; his call
+    # is to stimulate at 55 Hz and read that band with the harmonic stated. The cell's own rate is
+    # reported beside it (`cell_rate_hz`) so the difference is never silent.
+    rate = rate_to_hold(rate_in_force_hz, min_rate_hz=min_rate_hz)
+    rate["cell_rate_hz"] = _f(c.get("rate_hz"))
+    if rate["cell_rate_hz"] is not None and abs(rate["cell_rate_hz"] - rate["rate_hz"]) > 1e-9:
+        rate["why"] += (f"; the bands this session watches were found at {rate['cell_rate_hz']:g} Hz "
+                        f"on the stored grid, and the session runs at {rate['rate_hz']:g} Hz by the "
+                        f"PI's ruling of 2026-09-22")
     lad = ladder(ceiling_mA)
     hold = hold_per_step()
     timing = step_timing(test=hold)
@@ -872,10 +891,35 @@ def configuration_plan(side, *, rings, contact, rate_source, pulse_width_us, pul
     clear = {float(v) for v in bands.get("clear_hz") or []}
     bands["watch_hz"] = watch
     bands["watch_clear"] = bool(watch) and all(v in clear for v in watch)
-    bands["watch_why"] = (f"the {len(watch)} band centre(s) that rise with pain on {c.get('display_short') or c.get('channel')} "
-                          f"at {rate['rate_hz']:g} Hz on the stored grid, the ones this session watches for a fall "
-                          f"with current" + ("; all clear of the stimulator's harmonics at this rate" if bands["watch_clear"]
-                                             else "; NOT all clear of the harmonics at this rate, read those with care"))
+    # WHICH of the watched bands sits on a harmonic, not merely that one does: the clinician needs to
+    # know which reading to discount at the ladder, and at the rate in force that is the whole point
+    # of the ruling. Named, never refused (decision 220).
+    on_harm = [v for v in watch if v not in clear]
+    bands["watch_on_harmonic_hz"] = on_harm
+    bands["watch_clear_hz"] = [v for v in watch if v in clear]
+    _harms = bands.get("harmonics_hz") or {}
+    def _nearest_harmonic(v):
+        if not _harms:
+            return None, None
+        k = min(_harms, key=lambda kk: abs(float(_harms[kk]) - v))
+        return k.replace("_", "-"), float(_harms[k])
+    _pieces = []
+    for _k in sorted({_nearest_harmonic(v)[0] for v in on_harm if _nearest_harmonic(v)[0]}):
+        _hz = _harms.get(_k.replace("-", "_"))
+        _members = [v for v in on_harm if _nearest_harmonic(v)[0] == _k]
+        _pieces.append(f"the {_k} harmonic ({_hz:g} Hz) lies inside the {2 * HARMONIC_HALF_WIDTH_HZ:g} Hz "
+                       f"width of " + _and_list([f"{v:g}" for v in _members]) + " Hz")
+    bands["watch_why"] = (
+        f"the {len(watch)} band centre(s) that rise with pain on "
+        f"{c.get('display_short') or c.get('channel')} on the stored grid"
+        + (f" (found at {rate['cell_rate_hz']:g} Hz)" if _f(rate.get("cell_rate_hz")) is not None else "")
+        + f", the ones this session watches for a fall with current at {rate['rate_hz']:g} Hz")
+    bands["watch_why"] += (
+        "; all of them clear of the stimulator's harmonics at this rate" if bands["watch_clear"]
+        else (f"; at {rate['rate_hz']:g} Hz " + "; ".join(_pieces)
+              + ", so read those as possibly the stimulator rather than the brain"
+              + (", and " + _and_list([f"{v:g}" for v in bands["watch_clear_hz"]]) + " Hz as clear"
+                 if bands["watch_clear_hz"] else ", and none of the watched bands is clear")))
     ex = dict(exposure or {})
     first = {"ever_powered": ex.get("ever_powered"), "sentence": ex.get("sentence"),
              "stop_rule": FIRST_EXPOSURE_STOP_RULE,
@@ -918,8 +962,14 @@ def configuration_plan(side, *, rings, contact, rate_source, pulse_width_us, pul
     conditions = [
         f"stimulate on {contacts_short}: the device allows sensing on {c.get('display_short') or c.get('channel')} "
         f"only while the contacts it flanks stimulate together (decision 217)",
-        f"rate {rate['rate_hz']:g} Hz, the rate of the cell where the bands that rise with pain were found"
-        + (f" (in force today: {rate['rate_in_force_hz']:g} Hz)" if _f(rate.get('rate_in_force_hz')) not in (None, rate['rate_hz']) else ""),
+        f"rate {rate['rate_hz']:g} Hz, the rate in force on this side today (the PI, 2026-09-22)"
+        + (f"; the bands it watches were found at {rate['cell_rate_hz']:g} Hz on the stored grid"
+           if _f(rate.get("cell_rate_hz")) not in (None, rate["rate_hz"]) else "")
+        + (f", and at {rate['rate_hz']:g} Hz the stimulator's own harmonics fall inside "
+           + _and_list([f"{v:g}" for v in (bands.get("watch_on_harmonic_hz") or [])]) + " Hz"
+           + (", leaving " + _and_list([f"{v:g}" for v in (bands.get("watch_clear_hz") or [])])
+              + " Hz clear" if (bands.get("watch_clear_hz") or []) else ", leaving none of them clear")
+           if (bands.get("watch_on_harmonic_hz") or []) else ""),
         "streaming on for the whole session on the sensing pair, so the voltage trace exists for every step and every hold",
         FIRST_EXPOSURE_STOP_RULE,
         "each ladder step is two clinic-sheet rows: a ramp row then a test row, 2 min a step; a pain rating at the end of every test row",
@@ -932,7 +982,9 @@ def configuration_plan(side, *, rings, contact, rate_source, pulse_width_us, pul
         "stimulation": (f"the inverse of the sensing rule (decision 217): {c.get('display_short') or c.get('channel')} "
                         f"needs stimulation on rings {sorted(rings)}; in force today: rings {sorted(in_force_rings) or 'none'}"),
         "sensing_pair": "the readiness screen's best cell for this side (bravo_service._best_contact_for_side)",
-        "rate_hz": (f"{rate_source}; lifted to the adaptive minimum ({min_rate_hz:g} Hz)" if rate["lifted"] else str(rate_source)),
+        "rate_hz": ("the rate in force on this side today (the PI, 2026-09-22), "
+                    + (f"lifted to the adaptive minimum ({min_rate_hz:g} Hz)" if rate["lifted"]
+                       else f"held for the whole session; the watched bands come from {rate_source}")),
         "pulse_width_us": str(pulse_width_source),
         "ceiling_mA": str(ceiling_source),
         "first_exposure": "the epoch table (adapter.build_design_matrix), cathode per side per epoch; decisions 164 and 165 for the stop rule",
@@ -955,7 +1007,10 @@ def configuration_plan(side, *, rings, contact, rate_source, pulse_width_us, pul
                                  f"({', '.join(str(r) for r in sorted(rings))}) stimulate together")},
         "contact": {k: c.get(k) for k in ("channel", "display_short", "rate_hz", "n_qualifying", "n_bands",
                                           "n_responding", "n_pain_positive", "qualifying_centers_hz", "deployable")},
-        "rate_hz": rate["rate_hz"], "rate_in_force_hz": rate["rate_in_force_hz"], "rate_lifted": rate["lifted"],
+        "rate_hz": rate["rate_hz"], "rate_in_force_hz": rate["rate_in_force_hz"],
+        # the rate of the cell where the watched bands were found, beside the rate the session runs
+        # at, so a reader never has to assume they are the same (decision 233, ruling 3)
+        "cell_rate_hz": rate.get("cell_rate_hz"), "rate_lifted": rate["lifted"],
         "rate_why": rate["why"], "pulse_width_us": pw, "ceiling_mA": _f(ceiling_mA),
         "held_other_side": {"current_mA": held_mA, "source": held_src},
         "first_exposure": first, "ladder": lad, "hold": hold, "step_timing": timing, "bands": bands,
