@@ -589,7 +589,7 @@ def current_coverage(sub, *, min_pairs=CURRENT_COVERAGE_MIN_PAIRS,
     (``days_known`` False): a yes must not be built from near-duplicate ratings.
     """
     d = pd.DataFrame(sub)
-    blank = dict(n_pairs=0, n_pairs_required=int(min_pairs),
+    blank = dict(pairs=[], n_pairs=0, n_pairs_required=int(min_pairs),
                  reports_per_pair_required=float(min_reports_per_pair),
                  days_per_pair_required=int(min_days_per_pair), days_known=False,
                  min_days_over_pairs=None, n_pairs_enough_reports=0,
@@ -624,6 +624,21 @@ def current_coverage(sub, *, min_pairs=CURRENT_COVERAGE_MIN_PAIRS,
     enough_reports = g.loc[g["n"] >= float(min_reports_per_pair)]
     qual = enough_reports.loc[enough_reports["days"] >= float(min_days_per_pair)] if days_known \
         else enough_reports.iloc[0:0]
+    # THE PAIR TABLE, kept rather than thrown away (the PI, 2026-09-22, ruling 5). Saying "coverage
+    # fails" without saying which pairs are short, and short of WHAT, leaves a clinician to guess
+    # what a visit should deliver; a pair short of ratings and a pair short of days need different
+    # things from that visit.
+    pairs = []
+    for _, row in g.sort_values(["amp_mA_Left", "amp_mA_Right"]).iterrows():
+        short = []
+        if float(row["n"]) < float(min_reports_per_pair):
+            short.append("ratings")
+        if not days_known or float(row["days"]) < float(min_days_per_pair):
+            short.append("days")
+        pairs.append({"amp_mA_Left": float(row["amp_mA_Left"]),
+                      "amp_mA_Right": float(row["amp_mA_Right"]),
+                      "n_reports": float(row["n"]), "n_days": (float(row["days"]) if days_known else None),
+                      "qualifies": not short, "short_of": short})
     n_pairs = int(len(qual))
     span_left = float(qual["amp_mA_Left"].max() - qual["amp_mA_Left"].min()) if n_pairs else 0.0
     span_right = float(qual["amp_mA_Right"].max() - qual["amp_mA_Right"].min()) if n_pairs else 0.0
@@ -636,7 +651,153 @@ def current_coverage(sub, *, min_pairs=CURRENT_COVERAGE_MIN_PAIRS,
                                      (int(enough_reports["days"].min()) if len(enough_reports) and days_known else None)),
                 n_pairs_enough_reports=int(len(enough_reports)),
                 span_left_mA=span_left, span_right_mA=span_right,
-                span_required_mA=float(min_span_mA), passes=passes)
+                span_required_mA=float(min_span_mA), passes=passes, pairs=pairs)
+
+
+def coverage_gap(coverage, *, ceiling_mA=None, held_right_mA=None, step_mA=0.5,
+                 stepped_side="Left") -> dict:
+    """Which (left, right) current pairs a visit would have to deliver for coverage to pass.
+
+    The coverage check counts distinct current pairs that each carry enough ratings on enough
+    separate days, and refuses a milliamp number until there are enough of them spanning enough
+    milliamps ON BOTH SIDES (decisions 158, 184). This turns that refusal into an instruction: how
+    many pairs are missing, which ones to run, and what each needs from the visit.
+
+    **A one-sided ladder cannot close this gap by itself.** Stepping one current with the other held
+    leaves the held side's span at zero, and the rule asks for a range on both, which is what the
+    joint corners of the session plan exist for (decision 160). So when the other side has not
+    moved, some of the pairs named here move it, and the sentence says why.
+    """
+    cov = dict(coverage or {})
+    pairs = list(cov.get("pairs") or [])
+    have = {(round(float(p["amp_mA_Left"]), 3), round(float(p["amp_mA_Right"]), 3)) for p in pairs}
+    qualifying = [p for p in pairs if p.get("qualifies")]
+    need = max(0, int(cov.get("n_pairs_required", 0)) - int(cov.get("n_pairs", 0)))
+    span_needed = float(cov.get("span_required_mA", 1.0))
+    ceil = {k: float(v) for k, v in (ceiling_mA or {}).items()}
+    other_side = "Right" if str(stepped_side) == "Left" else "Left"
+    top = float(ceil.get(str(stepped_side), 4.5))
+    top_other = float(ceil.get(other_side, 4.5))
+    held = (float(held_right_mA) if held_right_mA is not None
+            else (float(qualifying[0]["amp_mA_Right"]) if qualifying else 0.0))
+    span_stepped = float(cov.get("span_left_mA", 0.0) if stepped_side == "Left"
+                         else cov.get("span_right_mA", 0.0))
+    span_other = float(cov.get("span_right_mA", 0.0) if stepped_side == "Left"
+                       else cov.get("span_left_mA", 0.0))
+    out = {"n_pairs_missing": need, "pairs_to_add": [], "ceiling_mA": ceil,
+           "held_side_mA": held, "stepped_side": str(stepped_side),
+           "span_short_on": [s for s, v in ((str(stepped_side), span_stepped), (other_side, span_other))
+                             if v < span_needed],
+           "what_each_pair_needs": (f"at least {cov.get('reports_per_pair_required', 5):g} ratings "
+                                    f"at that setting, on at least "
+                                    f"{cov.get('days_per_pair_required', 2):g} different days"),
+           "why": ""}
+    if need == 0 and not out["span_short_on"]:
+        out["why"] = ("this stratum already has the pairs the rule asks for, spanning enough current "
+                      "on both sides; nothing is missing from its coverage")
+        out["pairs_to_top_up"] = []
+        out["cheapest_way"] = "nothing: this stratum's coverage already passes"
+        return out
+
+    def _grid(hi):
+        return [round(x, 3) for x in np.arange(0.0, float(hi) + 1e-9, float(step_mA))]
+
+    # FIRST, THE CHEAPEST THING A VISIT CAN DO: top up a pair the record already has. On the real
+    # record most settings were delivered once, so the sixth qualifying pair is far more likely to
+    # come from repeating a near-miss than from a setting nobody has tried -- and the two ask
+    # different things of a visit (more ratings at that setting, or that setting on another day).
+    top_ups = []
+    for pr in pairs:
+        if pr.get("qualifies"):
+            continue
+        need_r = max(0.0, float(cov.get("reports_per_pair_required", 5)) - float(pr.get("n_reports") or 0))
+        days = pr.get("n_days")
+        need_d = (max(0.0, float(cov.get("days_per_pair_required", 2)) - float(days))
+                  if days is not None else None)
+        if (pr.get("amp_mA_Left") > float(ceil.get("Left", 4.5)) + 1e-9
+                or pr.get("amp_mA_Right") > float(ceil.get("Right", 4.5)) + 1e-9):
+            continue
+        top_ups.append({"amp_mA_Left": float(pr["amp_mA_Left"]), "amp_mA_Right": float(pr["amp_mA_Right"]),
+                        "n_reports": float(pr.get("n_reports") or 0), "n_days": days,
+                        "needs_more_ratings": need_r, "needs_more_days": need_d,
+                        "effort": (need_r or 0) + 2.0 * (need_d or 0)})
+    top_ups.sort(key=lambda d: (d["effort"], -d["n_reports"]))
+    out["pairs_to_top_up"] = top_ups[:max(need, 0) + 2]
+
+    proposals = []
+    # Then, pairs that widen the side being stepped, with the other side where it is held.
+    lo_have = min((x for x, _ in have), default=None) if stepped_side == "Left" else \
+              min((y for _, y in have), default=None)
+    cands = [x for x in _grid(top)
+             if ((round(x, 3), round(held, 3)) if stepped_side == "Left"
+                 else (round(held, 3), round(x, 3))) not in have]
+    if lo_have is not None:
+        cands.sort(key=lambda x: (-abs(x - lo_have), x))
+    for x in cands:
+        proposals.append((x, held) if stepped_side == "Left" else (held, x))
+
+    # Then, when the OTHER side has not moved far enough, pairs that move it -- the joint corners.
+    if span_other < span_needed:
+        alt = round(min(top_other, held + span_needed), 3)
+        if abs(alt - held) < span_needed - 1e-9:
+            alt = round(max(0.0, held - span_needed), 3)
+        corner_x = sorted({x for x, _ in have} if stepped_side == "Left" else {y for _, y in have})
+        corner_x = corner_x[:2] or [0.0, min(top, span_needed)]
+        for x in corner_x:
+            pair = (x, alt) if stepped_side == "Left" else (alt, x)
+            if pair not in have:
+                proposals.insert(0, pair)                # first: without them nothing can pass
+
+    seen, picked = set(), []
+    for pair in proposals:
+        key = (round(pair[0], 3), round(pair[1], 3))
+        if key in seen or key in have:
+            continue
+        if key[0] > float(ceil.get("Left", 4.5)) + 1e-9 or key[1] > float(ceil.get("Right", 4.5)) + 1e-9:
+            continue
+        seen.add(key)
+        picked.append(key)
+        if len(picked) >= max(need, 0) + (2 if span_other < span_needed else 0):
+            break
+    out["pairs_to_add"] = [{"amp_mA_Left": a, "amp_mA_Right": b} for a, b in sorted(picked)]
+
+    # How the gap can actually be closed, cheapest first, said as one instruction.
+    ready = out.get("pairs_to_top_up") or []
+    if need and ready:
+        out["cheapest_way"] = (
+            "repeat " + ", ".join(
+                f"L{d['amp_mA_Left']:g}/R{d['amp_mA_Right']:g} ("
+                + " and ".join(filter(None, [
+                    f"{d['needs_more_ratings']:.0f} more rating{'s' if d['needs_more_ratings'] != 1 else ''}"
+                    if d["needs_more_ratings"] else None,
+                    f"on {d['needs_more_days']:.0f} more day{'s' if d['needs_more_days'] != 1 else ''}"
+                    if d["needs_more_days"] else None])) + ")"
+                for d in ready[:max(need, 1)])
+            + " -- settings the record already has, which need topping up rather than a new pair")
+    elif need:
+        out["cheapest_way"] = ("no setting already on the record is close enough to top up; the pairs "
+                               "above are new settings")
+    else:
+        out["cheapest_way"] = "nothing: this stratum's coverage already passes"
+
+    bits = []
+    if need:
+        bits.append(f"{need} more current pair{'s' if need != 1 else ''} carrying enough ratings on "
+                    f"enough days")
+    if span_other < span_needed:
+        bits.append(f"a range of at least {span_needed:g} mA on the {other_side} side too, which a "
+                    f"ladder that holds it still cannot give -- the pairs above that move it are the "
+                    f"joint corners")
+    if span_stepped < span_needed:
+        bits.append(f"a range of at least {span_needed:g} mA on the {stepped_side} side")
+    out["why"] = "this stratum needs " + "; and ".join(bits) if bits else ""
+    if len(out["pairs_to_add"]) < need and not (out.get("pairs_to_top_up") or []):
+        out["why"] += (f". Only {len(out['pairs_to_add'])} of them are available under the ceiling "
+                       f"({top:g} mA on the {stepped_side} side), so one visit cannot close the gap")
+    elif len(out["pairs_to_add"]) < need:
+        out["why"] += (f". Every new pair at the held current is already on the record, so the gap "
+                       f"closes by topping those up rather than by a setting nobody has tried")
+    return out
 
 
 def _rate_stratum_resolution(rs: "RateStratum", joint_stratum: JointStratum, *,
