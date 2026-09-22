@@ -11,6 +11,8 @@ small, pure, unit-testable functions used to make the inferential claims honest:
   * partial_corr_columns — the same, for every column of a matrix, each on its own usable rows.
   * block_perm_pvalue — circular-block permutation p-value (preserves temporal autocorrelation).
   * balanced_metrics  — balanced accuracy + prevalence/chance baseline for an imbalanced test set.
+  * purged_time_blocked_folds — held-out blocks of time with the neighbouring rows embargoed.
+  * confound_gate     — one association reported plainly and with a third quantity taken out.
 
 None of these touch the verbatim notebook science; they wrap/annotate its outputs.
 """
@@ -524,3 +526,133 @@ def mad_keep_mask(x, n_mad=None, scale="raw"):
     x = np.asarray(x, dtype=float)
     mask, _ = mad_outlier_flags(x, n_mad=n_mad, scale=scale)
     return np.isfinite(x) & ~mask
+
+
+# =================================================================================================
+# The two guards every offline model on this record has to pass through (decision 240).
+#
+# Panel B of the 2026-09-22 review named the two ways a model fitted on this participant can score
+# well while carrying no fact about the brain: the pain scores resemble their neighbours in time, and
+# the stimulation current moves the band power and the pain together. Both guards live here rather
+# than inside any one model, so a new model cannot be written without them.
+# =================================================================================================
+
+def purged_time_blocked_folds(n, *, y=None, n_folds=5, embargo=None):
+    """Held-out blocks of TIME, with the rows either side of each block removed from training.
+
+    Cross-validation assumes the held-out rows are new. Pain ratings filed minutes apart are very
+    nearly the same measurement, so a fold trained on the rows next to its test block has already
+    seen most of the answer; the skill that comes back is the series' own persistence, and it looks
+    exactly like a working model.
+
+    So: the test rows are a contiguous stretch of time (never a random scatter of rows), and every
+    training row within ``embargo`` rows of that stretch is dropped.
+
+    **The gap is measured, not chosen.** With ``embargo=None`` it is the series' own decorrelation
+    timescale, ``block_length_for(y)`` -- the same estimator the permutation nulls already use, so
+    one number governs both and neither can drift from the other. A fixed gap typed into the code
+    would be a guess about a quantity the data can state.
+
+    ``y`` is the series whose dependence is being guarded against, usually the label. Returns a list
+    of ``(train_index, test_index)`` arrays, one per fold, in time order; every row is in exactly one
+    test block, and the training sets are smaller than the complement by the embargoed rows.
+    """
+    n = int(n)
+    if n <= 0:
+        return []
+    n_folds = max(1, int(n_folds))
+    if embargo is None:
+        embargo = block_length_for(np.asarray(y, dtype=float), n) if y is not None else 1
+    embargo = max(0, int(embargo))
+    order = np.arange(n)
+    out = []
+    for block in np.array_split(order, min(n_folds, n)):
+        if block.size == 0:
+            continue
+        lo, hi = int(block[0]) - embargo, int(block[-1]) + embargo
+        train = order[(order < lo) | (order > hi)]
+        out.append((train, block))
+    return out
+
+
+def confound_gate(x, y, covar, *, label="the covariate", n_boot=1000, seed=0):
+    """One candidate association, reported plainly AND with a third quantity taken out of it.
+
+    Both numbers, both intervals, always -- never the adjusted value alone. A reader shown only the
+    adjusted number cannot see how much the adjustment did, and a reader shown only the plain one
+    cannot see whether there was anything there besides ``covar``. On this record ``covar`` is the
+    stimulation current in force, which moves the band power and the pain together (decisions 232,
+    234), and the PI's ruling of 2026-09-22 is that the adjusted value is reported descriptively and
+    refuses nothing.
+
+    ``survives`` is ``True`` when the adjusted interval lies wholly one side of zero, ``False`` when
+    it spans zero, and ``None`` when the adjustment could not be made at all -- a covariate that
+    never moves, too few usable rows, or a candidate that is itself almost a straight line in the
+    covariate. That third state is not a pass and not a failure, and it is never silently a pass.
+    """
+    rng = np.random.default_rng(int(seed))
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    c = np.asarray(covar, dtype=float)
+    m = np.isfinite(x) & np.isfinite(y) & np.isfinite(c)
+    out = {"label": str(label), "n": int(m.sum()), "r": None, "r_ci": (None, None),
+           "r_adjusted": None, "r_adjusted_ci": (None, None), "drop": None,
+           "survives": None, "reason": None, "verdict": None}
+    if m.sum() < 4:
+        out["reason"] = (f"only {int(m.sum())} rows carry the candidate, the outcome and "
+                         f"{label} together, which is too few to correlate")
+        out["verdict"] = f"cannot be judged: {out['reason']}"
+        return out
+    xm, ym, cm = x[m], y[m], c[m]
+    if np.std(xm) == 0 or np.std(ym) == 0:
+        out["reason"] = "the candidate or the outcome never moves across these rows"
+        out["verdict"] = f"cannot be judged: {out['reason']}"
+        return out
+
+    out["r"] = float(np.corrcoef(xm, ym)[0, 1])
+    n = xm.size
+
+    def _boot(fn):
+        vals = []
+        for _ in range(int(n_boot)):
+            i = rng.integers(0, n, size=n)
+            v = fn(i)
+            if v is not None and np.isfinite(v):
+                vals.append(float(v))
+        if len(vals) < max(20, int(n_boot) // 10):
+            return (None, None)
+        return (float(np.percentile(vals, 2.5)), float(np.percentile(vals, 97.5)))
+
+    out["r_ci"] = _boot(lambda i: (np.corrcoef(xm[i], ym[i])[0, 1]
+                                   if np.std(xm[i]) > 0 and np.std(ym[i]) > 0 else np.nan))
+
+    if np.std(cm) == 0:
+        out["reason"] = (f"{label} is constant across these rows, so there is nothing to take out; "
+                         f"the plain value stands unadjusted")
+        out["verdict"] = f"cannot be judged against {label}: {out['reason']}"
+        return out
+
+    adj = partial_corr(xm, ym, cm)
+    if adj is None or not np.isfinite(adj):
+        out["reason"] = (f"the candidate is almost a straight line in {label} across these rows, so "
+                         f"taking it out leaves too little to correlate -- read that as the finding")
+        out["verdict"] = f"cannot be judged against {label}: {out['reason']}"
+        return out
+
+    out["r_adjusted"] = float(adj)
+    out["r_adjusted_ci"] = _boot(lambda i: partial_corr(xm[i], ym[i], cm[i]))
+    out["drop"] = float(abs(out["r"]) - abs(out["r_adjusted"]))
+    lo, hi = out["r_adjusted_ci"]
+    if lo is None or hi is None:
+        out["reason"] = f"the adjusted value could not be given an interval on {out['n']} rows"
+        out["verdict"] = f"cannot be judged against {label}: {out['reason']}"
+        return out
+    out["survives"] = bool(lo * hi > 0)
+    if out["survives"]:
+        out["verdict"] = (f"survives {label}: {out['r']:+.3f} plainly, {out['r_adjusted']:+.3f} with "
+                          f"{label} taken out ({lo:+.3f} to {hi:+.3f}, {out['n']} rows)")
+    else:
+        out["verdict"] = (f"does not survive {label}: {out['r']:+.3f} plainly, "
+                          f"{out['r_adjusted']:+.3f} with {label} taken out, whose interval "
+                          f"({lo:+.3f} to {hi:+.3f}, {out['n']} rows) covers zero")
+    return out
