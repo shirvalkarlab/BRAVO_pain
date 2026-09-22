@@ -39,14 +39,16 @@ import { TRACKS } from "./stateTracks";
 import { fmtHz } from "./deployFormat";
 
 // Jump targets, set as `id` on the Grid items in index.js. The order is the reading order of the
-// clinician route, so the links double as a table of contents for the page.
-const JUMPS = [
+// clinician route, so the links double as a table of contents for the page. Exported so
+// DeploymentJumpLinks.order.test.js can hold that claim to the page's own order: this list is a
+// second copy of an order index.js already carries, and it had drifted.
+export const JUMPS = [
   { id: "cl-what-changes", label: "What would change this" },
   { id: "cl-rules", label: "Device rules" },
   { id: "cl-evidence", label: "Evidence triangle" },
   { id: "cl-prescription", label: "Parameters" },
+  { id: "cl-signoff", label: "Sign-off" },
   { id: "cl-simulation", label: "CL-DBS simulations" },
-  { id: "cl-signoff", label: "Sign-off \u2193" },
 ];
 
 function jumpTo(id) {
