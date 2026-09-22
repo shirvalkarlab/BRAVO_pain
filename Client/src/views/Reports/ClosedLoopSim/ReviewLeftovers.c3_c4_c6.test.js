@@ -13,7 +13,6 @@ import { ThemeProvider } from "@mui/material/styles";
 import theme from "assets/theme";
 import { PlatformContextProvider } from "context";
 
-import ReliableChangePanel from "./ReliableChangePanel";
 import DeploySignoffCard from "./DeploySignoffCard";
 import { headline } from "./ClosedLoopSimulationPanel";
 import payload from "./__fixtures__/rcs08_deployment_payload_2026-09-15.json";
@@ -47,25 +46,6 @@ describe("C3: the simulation headline names the timing values the record cannot 
     const h = headline({ ...run, timing_low_confidence_fields: [], timing_qualifier: null });
     expect(h.startsWith("Closing the loop moves")).toBe(true);
     expect(h).not.toMatch(/cannot decide/);
-  });
-});
-
-describe("C4: the reliable-change card prints when the pairs were filed", () => {
-  const rc = JSON.parse(JSON.stringify(payload.reliable_change));
-  const first = Object.keys(rc.items).find((k) => Number.isFinite(Number(rc.items[k].pooled_sd)));
-  rc.items[first].earliest_pair_utc = "2025-07-23T18:04:00+00:00";
-  rc.items[first].latest_pair_utc = "2026-04-27T21:40:00+00:00";
-  rc.items[first].pair_span_days = 278.15;
-  it("prints the first and last pair's dates and the span beside the count", () => {
-    const { container } = rtlRender(wrap(<ReliableChangePanel reliableChange={rc} />));
-    const text = container.textContent;
-    expect(text).toMatch(/\d+ pairs? across \d+ stretch(es)? of unchanged settings/);
-    expect(text).toContain("filed between 2025-07-23 and 2026-04-27 (278 days apart)");
-  });
-  it("prints no dates when the item carries none (an older response)", () => {
-    const bare = JSON.parse(JSON.stringify(payload.reliable_change));
-    const { container } = rtlRender(wrap(<ReliableChangePanel reliableChange={bare} />));
-    expect(container.textContent).not.toMatch(/filed between/);
   });
 });
 

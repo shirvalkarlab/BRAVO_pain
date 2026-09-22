@@ -7,8 +7,8 @@
  * THE DEFECT CLASS. A sentence on a card can say a number the data no longer carry (the sweep tries
  * nine lengths since decision 170; two strings on this page still typed "10"/"ten"), or say one fact
  * three times in one glance (the provisional count in the sticky header), or carry a hand-written
- * explanation beside a field the backend already explains (`reliable_change.what_it_means`, read by
- * nothing). None of these throws, none fails a suite, and every one was on screen. The tests here
+ * explanation beside a field the backend already explains (the reliable-change card's, since
+ * deleted with the index on 2026-09-22, decision 231). None of these throws, none fails a suite, and every one was on screen. The tests here
  * were written RED against the current components and are meant to go green only when the
  * component (or, for item 6, the backend and its re-captured fixture) is fixed -- never by editing
  * an assertion to match the page.
@@ -25,7 +25,6 @@ import { PlatformContextProvider } from "context";
 
 import BandSweepGridPanel from "./BandSweepGridPanel";
 import DeploymentDecisionHeader from "./DeploymentDecisionHeader";
-import ReliableChangePanel from "./ReliableChangePanel";
 import WhatWouldChangeThis from "./WhatWouldChangeThis";
 import ProvisionalNote from "./ProvisionalNote";
 import PrescriptionPanel from "./PrescriptionPanel";
@@ -58,7 +57,6 @@ describe("the dated fixture is the state these assertions were written against",
     const sw = payload.band_sweep_grid.band_time_sweep.ONE_THREE_LEFT;
     expect(new Set(sw.best_auc_rows.map((r) => r.chosen_as_best_of_n_windows))).toEqual(new Set([9]));
     expect(new Set(sw.best_correlation_rows.map((r) => r.chosen_as_best_of_n_windows))).toEqual(new Set([9]));
-    expect(typeof payload.reliable_change.what_it_means).toBe("string");
     const dual = payload.prescriptions.modes.dual.fields;
     const upper = dual.find((f) => f.parameter === "Upper LFP threshold");
     expect(upper.design_rule_note).toMatch(/^Noise-only design rule/);
@@ -118,30 +116,6 @@ describe("the sticky verdict header (DeploymentDecisionHeader)", () => {
     expect(container.querySelectorAll(".cl-provisional")).toHaveLength(2);
     // RED today: three.
     expect(countOf(container.textContent, "of 3 intervals span zero")).toBeLessThanOrEqual(2);
-  });
-});
-
-describe("the reliable-change card (ReliableChangePanel)", () => {
-  // Item 11, BND-4. The backend sends `reliable_change.what_it_means`; the card's "How this is
-  // measured" fold prints its own hand-written sentence instead and reads the field from nowhere.
-  // Two copies of one explanation drift; the card must print the backend's and drop its own.
-  const HARD_CODED = "Noise is measured from pairs of ratings filed within";
-
-  it("item 11: the fold prints the fixture's what_it_means and not the component's own sentence", () => {
-    const { container } = render(<ReliableChangePanel reliableChange={payload.reliable_change} />);
-    fireEvent.click(screen.getByText(/How this is measured/));
-    const text = container.textContent;
-    expect(text).toContain(payload.reliable_change.what_it_means.slice(0, 60));
-    expect(text).not.toContain(HARD_CODED);
-  });
-
-  it("still prints the threshold, the noise floor and the pair count in the open (decision 111)", () => {
-    // A pin, green today: the fix to the fold must not move any value out of the open.
-    const { container } = render(<ReliableChangePanel reliableChange={payload.reliable_change} />);
-    const text = container.textContent;
-    expect(text).toMatch(/Smallest change this patient's own noise cannot explain/);
-    expect(text).toMatch(/\d+ pairs? across \d+ stretch(es)? of unchanged settings/);
-    expect(text).toMatch(/Warns; blocks nothing\./);
   });
 });
 

@@ -432,13 +432,6 @@ except ImportError:                                   # pragma: no cover - depen
 #: than resolved here, so there is still only one resolver.
 _SHARED_CACHE_DIR_OVERRIDE = None
 
-#: Plain names for the pain-score items the reliable-change block reports, so the page's selector
-#: can show words rather than keys. Kept beside the block that uses them.
-_RC_LABELS = {
-    "nrs": "NRS (0-10)", "vas": "Overall VAS", "left_leg_vas": "Left Leg VAS",
-    "back_vas": "Back VAS", "mpq_sum": "MPQ Sum", "relief": "Relief (%)",
-}
-
 #: Refuse to write an entry larger than this. Tests lower it to check the refusal.
 _SHARED_CACHE_MAX_BYTES = _cache_store.MAX_BYTES_DEFAULT
 
@@ -3206,109 +3199,6 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     # TRACK D: the grid computed once, at the top of this function -- see the note there on why it
     # runs before either early return, and `band_sweep_grid_for_closed_loop` above for the design.
     out["band_sweep_grid"] = _grid_export
-
-    # ---------------------------------------------------------------------------------------------
-    # HOW BIG A PAIN CHANGE HAS TO BE, FOR THIS PARTICIPANT, BEFORE IT CAN BE TOLD FROM THEIR OWN
-    # NOISE (decision 75). A WARNING, NEVER A BLOCKER.
-    #
-    # Farrar's ~2 points on the 0-10 scale is a GROUP number: the smallest average change patients
-    # themselves called "much improved". It says nothing about how noisy one person's own ratings
-    # are day to day, and this participant's own floor could sit above OR below it. Only their own
-    # repeated ratings under an unchanged setting can say which, which is what this estimates.
-    #
-    # IT GATES NOTHING AND MUST NOT HOLD ANYTHING UP. `gates_nothing` says so in the payload, no
-    # verdict reads it, and when the floor cannot be estimated the block says why and every other
-    # analysis on this page carries on untouched. Decision 75 measured that RCS08 has no epoch with
-    # two or more ratings under one unchanged setting, so "not assessed" is the expected answer
-    # today -- **this waits on visits, not on code, and it fills itself in when the ratings arrive.**
-    #
-    # A change SMALLER than the floor is not "no change". It is a change this participant's own
-    # noise could produce with nothing therapeutic happening, so it must not on its own be read as
-    # evidence the therapy worked.
-    try:
-        from . import reliable_change as _rc
-        from StimOptimizer.adapter import PRO_ITEMS as _PRO_ITEMS
-        # `dm`, NOT `eps`. `evidence_inputs_cached` returns both, and only one of them carries pain
-        # ratings: `eps` is the settings-epoch frame (amp, cathode, rate, pulse width, t_start) with
-        # no rating columns at all, while `dm` is `attach_pros`'s output, one row per epoch with a
-        # mean, an SD and a count per pain item. A first draft of this block passed `eps`, which
-        # made every item report "no ratings were matched to any epoch" -- an answer that looks like
-        # the expected "not enough history yet" and would have stayed that way FOREVER, including
-        # after the ratings this check waits for arrived. Caught by noticing that every item said
-        # the same thing when decision 75 had measured that one of them did have ratings.
-        # THE RAW RATINGS, with their times, because the short-gap estimator (decision 111) needs
-        # consecutive individual ratings and not `dm`'s per-epoch summaries. Loaded the exact way
-        # `build_design_matrix` loads them, through the Biomarkers service, which this module may
-        # import (never the reverse). This is one extra pain-report fetch per report; the reports
-        # are fetched fresh on every request anyway (decision 22), and it costs well under a second.
-        try:
-            from modules.Biomarkers import bravo_service as _bs
-        except ImportError:                                # pragma: no cover - depends on the runner
-            from Biomarkers import bravo_service as _bs
-        _pro = _bs._load_pros(dict(request_data or {}), participant)
-        _pro_t = (pd.to_datetime(_bs._pro_times_utc_series(_pro), utc=True)
-                  .astype("int64").to_numpy(dtype=float) / 1e9) if _pro is not None else np.array([])
-        _ep_start = (pd.to_datetime(eps["t_start"], utc=True).astype("int64").to_numpy(dtype=float) / 1e9
-                     if eps is not None and "t_start" in eps.columns else np.array([]))
-        _ep_end = (pd.to_datetime(eps["t_end"], utc=True).astype("int64").to_numpy(dtype=float) / 1e9
-                   if eps is not None and "t_end" in eps.columns else np.array([]))
-        _rc_items, _rc_assessed = {}, 0
-        for _item in _PRO_ITEMS:
-            _vals = (pd.to_numeric(_pro[_item], errors="coerce").to_numpy(dtype=float)
-                     if _pro is not None and _item in _pro.columns else np.array([]))
-            _sd = _rc.short_gap_pairwise_sd(_pro_t, _vals, _ep_start, _ep_end)
-            _entry = {"pooled_sd": _sd.get("pooled_sd"), "df": _sd.get("df"),
-                      "n_pairs": _sd.get("n_pairs"), "n_epochs": _sd.get("n_epochs"),
-                      "n_dropped_same_minute": _sd.get("n_dropped_same_minute"),
-                      "max_gap_hours": _sd.get("max_gap_hours"),
-                      # when the pairs were filed (C4, decision 200)
-                      "earliest_pair_utc": _sd.get("earliest_pair_utc"),
-                      "latest_pair_utc": _sd.get("latest_pair_utc"),
-                      "pair_span_days": _sd.get("pair_span_days"),
-                      "label": _RC_LABELS.get(_item, _item),
-                      "reason": _sd.get("reason"),
-                      "verdict": None}
-            # The verdict function is applied to a REAL pair when one exists: the highest and lowest
-            # epoch means this participant has actually shown under unchanged settings. That asks
-            # whether the largest pain difference in their own record clears their own noise floor,
-            # which is the question the floor exists to answer.
-            if _sd.get("pooled_sd") == _sd.get("pooled_sd") and dm is not None and len(dm):
-                try:
-                    _col = dm[_item].astype(float).dropna() if _item in dm.columns else None
-                    if _col is not None and len(_col) >= 2:
-                        _entry["verdict"] = _rc.reliable_change_verdict(
-                            float(_col.max()), float(_col.min()), _sd)
-                        _entry["pair"] = ("the highest and lowest epoch means this participant has "
-                                          "shown under unchanged settings")
-                        _rc_assessed += 1
-                except Exception:                      # noqa: BLE001 - one item never breaks the rest
-                    _log.warning("closed-loop report: the reliable-change verdict raised for %s "
-                                 "on %s", getattr(participant, "uid", participant), _item,
-                                 exc_info=True)
-            _rc_items[_item] = _entry
-        out["reliable_change"] = {
-            "gates_nothing": True,
-            "items": _rc_items,
-            "n_items_assessed": _rc_assessed,
-            "population_bar": {"points": _rc.FARRAR_MCID_POINTS,
-                               "fraction": _rc.FARRAR_MCID_FRACTION,
-                               "source": "Farrar et al. 2001, a group-derived benchmark"},
-            "max_gap_hours": _rc.MAX_PAIR_GAP_HOURS,
-            "items_order": list(_PRO_ITEMS),
-            "what_it_means": _rc.what_it_means(),
-            "note": (None if _rc_assessed else
-                     "not assessed for any pain score yet: this participant has too few pairs of "
-                     f"ratings filed within {_rc.MAX_PAIR_GAP_HOURS:g} hour(s) of each other under "
-                     "one unchanged stimulation setting to estimate their own noise. This waits on "
-                     "ratings rather than on code, and fills in on its own once they exist. "
-                     "Nothing on this page is held up by it."),
-        }
-    except Exception as _exc:                          # never let this take down the whole report
-        _log.warning("closed-loop report: the reliable-change floor could not be estimated for %s",
-                     getattr(participant, "uid", participant), exc_info=True)
-        out["reliable_change"] = {
-            "gates_nothing": True, "items": {}, "n_items_assessed": 0,
-            "note": f"the reliable-change floor could not be estimated: {_exc!r}"}
 
     # THE CLOSED-LOOP SIMULATION, run for the first candidate and stored under its own key; the
     # page fetches the payload after its first figures are up. Its inputs are the 3 s tiles, the

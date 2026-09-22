@@ -32,7 +32,6 @@ import { CL } from "views/Reports/moduleCacheKeys";
 import DeploymentRocPanel from "./DeploymentRocPanel";
 import EraRefitPanel from "./EraRefitPanel";
 import LsbPowerPanel from "./LsbPowerPanel";
-import PsdLsbPanel from "./PsdLsbPanel";
 import CalibrationInEffectPanel from "views/Reports/Biomarkers/CalibrationInEffectPanel";
 
 jest.mock("plotly.js-dist", () => ({
@@ -73,8 +72,6 @@ const PANELS = [
   ["LsbPowerPanel", <LsbPowerPanel participantUid={UID} bandCandidate={BC} requestParams={REQ}
     cutpoint={{ threshold: 1.5, matchDir: "prior" }} onLsbThreshold={() => {}}
     deploymentReport={{ data: null }} />, /LSB threshold/],
-  ["PsdLsbPanel", <PsdLsbPanel participantUid={UID} bandCandidate={BC}
-    requestParams={REQ} />, /device-LSB conversion/],
   ["CalibrationInEffectPanel", <CalibrationInEffectPanel participantUid={UID} />,
     /Calibration in effect/],
 ];

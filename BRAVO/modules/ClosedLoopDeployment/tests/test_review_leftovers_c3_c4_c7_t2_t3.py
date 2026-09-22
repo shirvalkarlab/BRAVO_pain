@@ -2,7 +2,7 @@
 "do the c3 c4 etc" (decision 200):
 
 C3  the simulation names the timing values the record cannot decide;
-C4  the reliable-change items carry the dates of their earliest and latest pair;
+C4  (the reliable-change index was deleted on 2026-09-22, decision 231; its test went with it)
 C7  the paused-amplitude row carries the general amplitude range;
 T2  the pooled current-to-power row carries every run's own slope beside the pooled one, and
     E1's note reads them out;
@@ -21,34 +21,12 @@ from ClosedLoopDeployment import amplitude_effect as AE
 from ClosedLoopDeployment import edges as ED
 from ClosedLoopDeployment import occupancy as OC
 from ClosedLoopDeployment import prescription as PR
-from ClosedLoopDeployment import reliable_change as RC
 from ClosedLoopDeployment import simulation as SIM
 from ClosedLoopDeployment import timing_recommendation as TR
 from ClosedLoopDeployment.tests.test_amplitude_effect import _build, _comparison, _panel, CENTRES
 from ClosedLoopDeployment.tests.test_prescription_modes import _cand, _plan
 
 PA = pytest.importorskip("StimOptimizer.routines.percept_adaptive")
-
-
-# --- C4 ---------------------------------------------------------------------------------------
-def test_c4_reliable_change_items_carry_the_dates_of_the_earliest_and_latest_pair():
-    h = 3600.0
-    day = 86400.0
-    t0 = 1_700_000_000.0
-    # one stretch of unchanged settings, three ratings close together at the start and two a
-    # week later; the qualifying pairs are (0.5 h, 1.0 h) at the start and (7 d, 7 d + 0.5 h)
-    t = np.array([t0 + 0.5 * h, t0 + 1.0 * h, t0 + 5 * h, t0 + 7 * day, t0 + 7 * day + 0.5 * h])
-    v = np.array([8.0, 9.0, 8.0, 7.0, 8.0])
-    out = RC.short_gap_pairwise_sd(t, v, np.array([t0]), np.array([t0 + 10 * day]), min_pairs=2)
-    assert out["n_pairs"] == 2
-    assert out["earliest_pair_s"] == pytest.approx(t0 + 1.0 * h)       # the later rating of the pair
-    assert out["latest_pair_s"] == pytest.approx(t0 + 7 * day + 0.5 * h)
-    assert out["earliest_pair_utc"].startswith("2023-11-14")
-    assert out["latest_pair_utc"].startswith("2023-11-21")
-    assert out["pair_span_days"] == pytest.approx(7.0 - 1.0 / 48.0, abs=1e-6)
-    none = RC.short_gap_pairwise_sd(np.array([t0]), np.array([8.0]), np.array([t0]), np.array([t0 + day]))
-    assert none["earliest_pair_s"] is None and none["earliest_pair_utc"] is None
-    assert none["pair_span_days"] is None
 
 
 # --- C7 ---------------------------------------------------------------------------------------
