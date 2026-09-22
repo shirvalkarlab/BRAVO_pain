@@ -487,6 +487,90 @@ class RateStratum:
     meta: dict = field(default_factory=dict)
 
 
+#: The consequence of the pre-registered calibration check, as the PI ruled it on 2026-09-22
+#: (ruling 6 of decision 233): a WARNING. `OBJECTIVE_SPEC.md` §6 pre-registered "any single failure
+#: -> surrogate may not select settings"; that consequence is NOT adopted. The check is computed
+#: where the surface is fitted, travels with the stratum, and refuses nothing.
+CALIBRATION_CONSEQUENCE = ("a warning, never blocking (the PI, 2026-09-22): a failed check refuses "
+                           "nothing and changes no recommendation; it says the surface has not been "
+                           "shown to predict a stretch of time it did not see")
+
+
+def _fold_labels_by_time(sub, *, n_blocks=3):
+    """Block-of-time labels for the leave-one-block-out fold: the epochs in time order, cut into
+    `n_blocks` contiguous blocks. Time is used HERE only to hold a stretch out and predict it, which
+    is a check on the fit; nothing about time enters the model (decisions 193-196)."""
+    n = len(sub)
+    if n < 2:
+        return np.zeros(n, dtype=int)
+    order = np.argsort(pd.to_datetime(sub["t0"]).to_numpy()) if "t0" in sub.columns else np.arange(n)
+    lab = np.zeros(n, dtype=int)
+    edges = np.array_split(order, max(1, int(n_blocks)))
+    for i, idx in enumerate(edges):
+        lab[idx] = i
+    return lab
+
+
+def _one_calibration_fold(gp, y, v, groups, *, name):
+    """One fold structure's answer: does the surface beat a precision-weighted mean of the training
+    fold, and do its intervals cover what they claim? ``None`` where a fold cannot be trained on --
+    which is an answer, and not the same answer as a failure."""
+    out = {"n_predicted": 0, "n_folds": int(np.unique(groups).size), "mae_gp": None,
+           "mae_baseline": None, "mae_ratio": None, "coverage95": None, "reason": None}
+    if np.unique(groups).size < 2:
+        out["reason"] = (f"not computable: the {name} fold has only one group, so there is nothing "
+                         f"to hold out")
+        return out, None
+    mu, sd = gp.loo_predict(groups=groups)
+    ok = np.isfinite(mu)
+    out["n_predicted"] = int(ok.sum())
+    if out["n_predicted"] < 3:
+        out["reason"] = (f"not computable: only {out['n_predicted']} of {len(y)} epochs could be "
+                         f"predicted from the other {name} folds (a fold needs three to train on)")
+        return out, None
+    base = []
+    for g in np.unique(groups):
+        te, tr = groups == g, groups != g
+        w = 1.0 / np.maximum(v[tr], 1e-12)
+        base.append(np.full(int(te.sum()), float(np.sum(w * y[tr]) / np.sum(w))))
+    base = np.concatenate([b for b in base])
+    order = np.concatenate([np.flatnonzero(groups == g) for g in np.unique(groups)])
+    base_full = np.full(len(y), np.nan)
+    base_full[order] = base
+    mae_gp = float(np.mean(np.abs(mu[ok] - y[ok])))
+    mae_base = float(np.mean(np.abs(base_full[ok] - y[ok])))
+    tot = np.sqrt(np.maximum(sd[ok] ** 2 + v[ok], 1e-12))
+    out.update(mae_gp=mae_gp, mae_baseline=mae_base,
+               mae_ratio=(mae_gp / mae_base if mae_base > 0 else None),
+               coverage95=float(np.mean(np.abs(mu[ok] - y[ok]) <= 1.96 * tot)))
+    return out, out["mae_ratio"]
+
+
+def stratum_calibration(gp, sub, *, mae_ratio_max=0.90, coverage_min=0.85, coverage_max=1.00):
+    """The three pre-registered criteria of `OBJECTIVE_SPEC.md` §6, on ONE fitted surface.
+
+    Returns the two folds' numbers, each criterion as True, False or **None for "not computable"**,
+    and the consequence in words. It decides nothing: see :data:`CALIBRATION_CONSEQUENCE`.
+    """
+    y = np.asarray(gp.y_, float)
+    v = np.asarray(gp.y_var_, float)
+    loeo, r1 = _one_calibration_fold(gp, y, v, np.arange(len(y)), name="leave-one-epoch-out")
+    loera, r2 = _one_calibration_fold(gp, y, v, _fold_labels_by_time(sub), name="leave-one-block-out")
+    def _skill(r):
+        return None if r is None else bool(r <= mae_ratio_max)
+    cov = [c["coverage95"] for c in (loeo, loera) if c["coverage95"] is not None]
+    c3 = (None if not cov else bool(all(coverage_min <= x <= coverage_max for x in cov)))
+    checks = {"C1_loeo_skill": _skill(r1), "C2_loera_skill": _skill(r2), "C3_calibration": c3}
+    decided = [v2 for v2 in checks.values() if v2 is not None]
+    return {"checks": checks, "summary": {"loeo": loeo, "loera": loera},
+            "passes": (bool(all(decided)) if decided else None),
+            "n_not_computable": int(sum(1 for v2 in checks.values() if v2 is None)),
+            "criterion": {"mae_ratio_max": float(mae_ratio_max),
+                          "coverage_min": float(coverage_min), "coverage_max": float(coverage_max),
+                          "baseline": "a precision-weighted mean of the training fold"},
+            "blocking": False, "consequence": CALIBRATION_CONSEQUENCE}
+
+
 def current_coverage(sub, *, min_pairs=CURRENT_COVERAGE_MIN_PAIRS,
                      min_reports_per_pair=CURRENT_COVERAGE_MIN_REPORTS_PER_PAIR,
                      min_span_mA=CURRENT_COVERAGE_MIN_SPAN_MA,
@@ -636,7 +720,7 @@ def _observed_inputs(sub, grid):
 
 
 def _fit_rate_stratum(pwl, pwr, rate, sub, *, amp_grid, sgp_left, sgp_right,
-                      fixed_length_scale, beta) -> RateStratum:
+                      fixed_length_scale, beta, calibration_check=True) -> RateStratum:
     """Fit ONE (amplitude-Left, amplitude-Right) surface at a single rate. ``sub`` is already
     restricted to this (pulse-width pair, rate); the caller has already checked it clears
     ``RATE_STRATUM_MIN_EPOCHS``. ``sgp_left``/``sgp_right`` are the SAME shared, per-side safety
@@ -671,7 +755,10 @@ def _fit_rate_stratum(pwl, pwr, rate, sub, *, amp_grid, sgp_left, sgp_right,
         x_star=(float(gx[i_star, 1]), float(gx[i_star, 2])),
         mu_star=float(mu[i_star]), sd_star=float(sd[i_star]),
         n_reports_total=float(sub["n"].sum()), coverage=coverage,
-        meta=dict(kernel=gp.hyperparameters["kernel"], n_safe=int(safe.sum()), points=points))
+        meta=dict(kernel=gp.hyperparameters["kernel"], n_safe=int(safe.sum()), points=points,
+                  # The pre-registered check, computed where the surface is fitted and carried with
+                  # it. A warning; it refuses nothing (the PI, 2026-09-22).
+                  **({"calibration": stratum_calibration(gp, sub)} if calibration_check else {})))
 
 
 @dataclass
@@ -885,7 +972,7 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
               min_tolerated_h=MIN_TOLERATED_H,
               min_stratum_epochs=PW_STRATUM_MIN_EPOCHS, q=4, eta=1.0,
               incumbent_epoch=None, data_horizon=PLT.DATA_HORIZON, washin_min=PLT.WASHIN_MIN,
-              resolution_k=RESOLUTION_K,
+              resolution_k=RESOLUTION_K, calibration_check=True,
               explore_outside_reason=None, explore_outside_by=None,
               explore_outside_requested=None,
               adaptive_min_rate_hz=ENV.MIN_RATE_HZ,
@@ -1089,7 +1176,8 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
             try:
                 rs = _fit_rate_stratum(pwl, pwr, rate, subr, amp_grid=amp_grid,
                                        sgp_left=sgp_by_side["Left"], sgp_right=sgp_by_side["Right"],
-                                       fixed_length_scale=fixed_length_scale, beta=beta)
+                                       fixed_length_scale=fixed_length_scale, beta=beta,
+                                       calibration_check=bool(calibration_check))
             except (ValueError, RuntimeError) as exc:
                 rate_strata[rate] = RateStratum(
                     pw_us_left=float(pwl), pw_us_right=float(pwr), rate_hz=rate,

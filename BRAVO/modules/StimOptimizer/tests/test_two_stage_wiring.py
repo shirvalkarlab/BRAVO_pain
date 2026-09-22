@@ -317,6 +317,17 @@ def test_the_block_equals_a_direct_call_of_run_two_stage_live_field_for_field(be
                                    clinic_block=clinic_block)
     a, b = _flatten(two), _flatten(direct)
     a.pop("seconds"); b.pop("seconds")
+    # The service layer adds exactly two things the payload builder cannot: which site is the
+    # primary one, and a Stage 1 fit for each OTHER site the request asked for (the PI, 2026-09-22,
+    # ruling 4). `_two_stage_payload` serialises ONE report and has no request and no design matrix,
+    # so those belong here; every other field must still match it exactly, which is what this test
+    # is for. The added keys are named rather than filtered by prefix, so a third one cannot appear
+    # unnoticed.
+    added = sorted(k for k in set(a) - set(b))
+    assert all(k == "stage1.primary_item" or k.startswith("parallel_sites.") for k in added), added
+    assert "stage1.primary_item" in added and any(k.startswith("parallel_sites.back.") for k in added)
+    for k in added:
+        a.pop(k)
     assert set(a) == set(b), (set(a) ^ set(b))
     differing = [k for k in a if not _same(a[k], b[k])]
     assert differing == [], differing[:20]
@@ -378,3 +389,34 @@ def test_a_flag_on_response_is_served_from_the_store_with_its_block_and_a_flag_o
     off = BS.run_for_participant(dict(REQ))
     assert "two_stage" not in off
     assert off["store"]["response_key"] != first["store"]["response_key"]
+
+# ---------------------------------------------------------------------------------------------
+# the second pain site gets its own Stage 1 (the PI, 2026-09-22, ruling 4 of decision 233)
+# ---------------------------------------------------------------------------------------------
+def test_a_second_site_gets_its_own_stage_one_fit_and_the_gate_stays_on_the_first(bench, shared_stage1):
+    """`OBJECTIVE_SPEC` (2026-08-30) records the PI's direction that the back warrants a separate
+    parallel optimizer, and the page has been asking for two sites ever since while the server
+    optimised only the first -- silently, with nothing on the page saying so. The second site now
+    gets its OWN Stage 1 fit, reported beside the first; the gate, Stage 2 and the closed-loop
+    question stay on the primary site, because those are about one biomarker on one lead."""
+    out = BS.run_for_participant(dict(REQ_FLAG, Sites=["left_leg", "back"]))
+    two = out["two_stage"]
+    par = two["parallel_sites"]
+    assert list(par) == ["back"], "one block per site beyond the primary, named by the site"
+    b = par["back"]
+    assert b["primary_item"] == "back" and b["available"] is True
+    # it is a REAL fit of that site, not a copy of the first: the two disagree somewhere
+    assert b["stage1"]["rate_strata"], "the second site's own per-rate rows"
+    first = two["stage1"]["rate_strata"]
+    assert [r.get("posterior_mean") for r in b["stage1"]["rate_strata"]] \
+        != [r.get("posterior_mean") for r in first], "a parallel fit that equals the first is not a fit"
+    # what it does NOT do, said on the block itself
+    assert "gate" not in b and "stage2" not in b
+    assert "primary site" in b["scope"] and "left_leg" in b["scope"]
+    assert two["stage1"].get("primary_item") in (None, "left_leg")
+
+
+def test_one_site_asked_for_means_no_parallel_block_at_all(bench, shared_stage1):
+    out = BS.run_for_participant(dict(REQ_FLAG, Sites=["left_leg"]))
+    assert out["two_stage"]["parallel_sites"] == {}
+

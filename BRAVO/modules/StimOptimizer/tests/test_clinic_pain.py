@@ -506,3 +506,43 @@ def test_sheet_ratings_kind_matches_the_ingest():
     m = _re.search(r'^CLINIC_SHEET_STEPS_KIND = "([^"]+)"', src, _re.M)     # read, not imported: Django
     assert m and m.group(1) == CP.CLINIC_PAIN_KIND
 
+# ---------------------------------------------------------------------------------------------
+# the clinic fit follows the SITE it is asked for (the PI, 2026-09-22, ruling 4 of decision 233)
+# ---------------------------------------------------------------------------------------------
+def test_the_clinic_fit_asks_stage_one_for_the_site_it_was_given_not_always_the_left_leg(monkeypatch):
+    """Until 2026-09-22 `fit_clinic_rate_strata` hard-coded `primary_item="left_leg"` where it calls
+    Stage 1, so a request for another site came back with the LEFT LEG's numbers under that site's
+    label -- the wrong-key defect CLAUDE.md rule 11 exists for, found by running the back site and
+    the left leg and seeing identical output. The epoch frame is site-agnostic (it carries every
+    site's column and its SD), so the site is decided at the fit, and that is what this pins."""
+    steps = pd.DataFrame([
+        dict(visit_date="v1", setting="clinic", file="f", sha256="x", t_local=None,
+             t_utc=pd.Timestamp("2026-01-01", tz="UTC") + pd.Timedelta(hours=i),
+             amp_mA_Left=float(a), amp_mA_Right=1.0, freq_hz=55.0, pw_us_Left=60.0,
+             pw_us_Right=160.0, contacts_raw="c", duration_s=60.0, side_effect_score=np.nan,
+             overall=np.nan, head=np.nan, back=float(9 - i), left_leg=float(i),
+             left_foot=np.nan, right_leg=np.nan, right_foot=np.nan, notes=None, row_index=i)
+        for i, a in enumerate([0.0, 1.0, 2.0, 3.0])
+    ])
+    # the frame carries both sites, with different scores, so a fit that follows the site cannot
+    # produce the same answer for the two
+    ep = CP.epoch_frame_from_steps(steps)
+    assert list(ep["pain_Left_Leg"]) != list(ep["pain_Back"])
+
+    seen = []
+    from StimOptimizer import stage1_openloop as S1
+
+    def _capture(frame, **kw):
+        seen.append(kw.get("primary_item"))
+        raise RuntimeError("stopped: the call is what this test is about")
+
+    monkeypatch.setattr(S1, "run_stage1", _capture)
+    monkeypatch.setattr(CP, "load_clinic_steps",
+                        lambda *a, **k: (steps, {"signature_key": "k"}, None))
+    got = CP.fit_clinic_rate_strata("uid", primary_item="back")
+    assert seen == ["back"], f"the fit must ask Stage 1 for the site it was given, asked for {seen}"
+    assert got["available"] is False and "stopped" in (got["reason"] or "")
+
+    seen.clear()
+    CP.fit_clinic_rate_strata("uid")                       # the default is unchanged
+    assert seen == ["left_leg"]

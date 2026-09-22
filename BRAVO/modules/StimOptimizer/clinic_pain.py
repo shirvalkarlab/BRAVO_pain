@@ -779,7 +779,7 @@ def _rating_days(t_utc) -> tuple:
     return tuple(sorted({d.isoformat() for d in days if d is not None and not pd.isna(d)}))
 
 
-def epoch_frame_from_steps(steps: pd.DataFrame, *, primary_item="left_leg") -> pd.DataFrame:
+def epoch_frame_from_steps(steps: pd.DataFrame) -> pd.DataFrame:
     """One row per DISTINCT (rate, amp-Left, amp-Right, pw-Left, pw-Right) setting actually
     observed in the clinic stream -- "each sheet step is one epoch" in the sense that this frame
     is built at the clinic visit's own grain rather than aggregated into REDCap-style multi-day
@@ -1023,10 +1023,13 @@ def reference_epoch_for(ep: pd.DataFrame, in_force: dict | None) -> tuple:
 
 def fit_clinic_rate_strata(participant, *, hemispheres=("Left", "Right"),
                            safety_ceiling_by_hemisphere=None, redcap_pooled_var=None,
-                           in_force=None, root=None) -> dict:
+                           in_force=None, root=None, primary_item="left_leg") -> dict:
     """Fit the SAME per-rate (amp-Left, amp-Right) surfaces `stage1_openloop.run_stage1` fits on
     the REDCap stream, on the clinic stream alone. Never raises: a failure comes back as
     ``{"available": False, "reason": ...}``.
+
+    ``primary_item`` is the pain site the fit is FOR, and it reaches Stage 1 rather than being
+    assumed: the epoch frame carries every site, so nothing about the frame says which one is meant.
 
     THIS NEVER POOLS with the REDCap-based fit and never changes the REDCap-based recommendation:
     it is a second, independent read of the same question, exactly as asked for. Whether to pool
@@ -1040,7 +1043,10 @@ def fit_clinic_rate_strata(participant, *, hemispheres=("Left", "Right"),
         return dict(available=False, reason=reason or "no clinic steps stored", n_files=0,
                    n_steps=0, n_with_pain=0, n_unparsed_prose=0, visit_dates=[], store_key=None)
 
-    ep = epoch_frame_from_steps(steps, primary_item="left_leg")
+    # SITE-AGNOSTIC on purpose: the frame carries every pain site's mean and SD, and which one
+    # the fit is FOR is decided at the fit below. This call used to pass a `primary_item` the
+    # function never read, which is what made the hard-coded site downstream easy to miss.
+    ep = epoch_frame_from_steps(steps)
     n_files = int(steps["file"].nunique())
     visit_dates = sorted(str(v) for v in steps["visit_date"].dropna().unique())
     n_clinic = int((steps["setting"] == "clinic").sum())
@@ -1082,7 +1088,10 @@ def fit_clinic_rate_strata(participant, *, hemispheres=("Left", "Right"),
                    "variance; a nominal value of 1.0 NRS^2 was used so the fit could still run")
 
     try:
-        s1 = S1.run_stage1(ep, hemispheres=hemispheres, primary_item="left_leg",
+        # The site the CALLER asked for (the PI, 2026-09-22, ruling 4). Hard-coded to the left leg
+        # until then, so a request for the back was answered with the left leg's numbers under the
+        # back's label -- measured on RCS08, where the two came back identical.
+        s1 = S1.run_stage1(ep, hemispheres=hemispheres, primary_item=str(primary_item),
                           safety_ceiling_by_hemisphere=safety_ceiling_by_hemisphere,
                           pooled_var_override=pooled_var_used,
                           min_tolerated_h=CLINIC_MIN_TOLERATED_H,

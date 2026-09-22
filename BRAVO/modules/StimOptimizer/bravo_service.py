@@ -565,11 +565,19 @@ def _attach_rate_stratum_surfaces(records, s1):
             continue
         key = (round(float(row["pw_us_left"]), 6), round(float(row["pw_us_right"]), 6),
               round(float(row["rate_hz"]), 6))
-        surf = _rate_stratum_surface(lut.get(key))
+        raw = lut.get(key)
+        surf = _rate_stratum_surface(raw)
         if surf is not None:
             surf.update(_pain_reference(s1))
         if surf is not None:
             row["surface"] = surf
+        # The pre-registered calibration check, computed where the surface was fitted and carried on
+        # the stratum object (`stage1_openloop.stratum_calibration`). The rows here are built from
+        # the summary FRAME, which has no column for it, so without this the check would be computed
+        # and shown nowhere -- the failure this module's own review named as its root cause.
+        cal = (getattr(raw, "meta", None) or {}).get("calibration") if raw is not None else None
+        if cal is not None:
+            row["calibration"] = _two_stage_jsonable(cal)
     return records
 
 
@@ -1224,6 +1232,71 @@ def _two_stage_payload(rep, *, inputs, seconds, in_force=None, clinic_block=None
     }
 
 
+def _parallel_site_block(es, site, *, hemispheres, safety_ceiling_by_hemisphere, washin_min,
+                         data_horizon, primary_site, participant=None, in_force=None,
+                         redcap_pooled_var=None) -> dict:
+    """ONE more pain site's own Stage 1, fitted beside the primary site's (the PI, 2026-09-22).
+
+    `OBJECTIVE_SPEC.md`'s amendment of 2026-08-30 records his direction that the left leg is the
+    critical site and the back warrants a SEPARATE PARALLEL OPTIMIZER. The page has asked for two
+    sites since then while the server optimised the first and dropped the rest without saying so.
+
+    What this is: the same open-loop search, on the same epochs, scored against another site's own
+    pain column. What this is NOT: a second gate, a second Stage 2, or a second closed-loop answer.
+    Those ask whether ONE biomarker on ONE lead may drive the device, which is not a per-site
+    question, so they stay on the primary site and this block says so in `scope`.
+    """
+    from . import stage1_openloop as _S1
+    out = {"primary_item": str(site), "available": False, "reason": None,
+           "scope": (f"an open-loop search for {site} on the same epochs, reported beside the "
+                     f"primary site ({primary_site}); the gate, Stage 2 and the closed-loop "
+                     f"question are the primary site's and are not repeated here")}
+    try:
+        s1 = _S1.run_stage1(es, hemispheres=tuple(hemispheres), primary_item=str(site),
+                            safety_ceiling_by_hemisphere=safety_ceiling_by_hemisphere,
+                            washin_min=float(washin_min), data_horizon=data_horizon)
+    except Exception as exc:                                    # noqa: BLE001 -- adjunct block
+        _log.warning("StimOptimizer: the parallel Stage 1 for %s failed", site, exc_info=True)
+        out["reason"] = f"the parallel fit for {site} could not run: {type(exc).__name__}: {exc}"
+        return out
+    # A SMALLER summary than the primary site's on purpose: this block exists to say what the open
+    # loop makes of another site, not to be a second copy of the page. The primary site's own
+    # `frozen_configuration` keeps every field it always had.
+    _fz = getattr(s1, "frozen", None)
+    out.update(available=True, stage1={
+        "frozen_configuration": {
+            "settings": [{"hemisphere": s.hemisphere, "rate_hz": _jsonable(s.rate_hz),
+                          "pulse_width_us": _jsonable(s.pw_us),
+                          "amplitude_preferred_mA": _jsonable(s.amp_star_mA),
+                          "rate_resolved": _jsonable(s.rate_resolved),
+                          "pulse_width_resolved": _jsonable(s.pw_resolved)}
+                         for s in (getattr(_fz, "settings", None) or [])],
+            "n_epochs_total": _jsonable(getattr(_fz, "n_epochs_total", None)),
+        },
+        "rate_strata": _attach_rate_stratum_surfaces(
+            _frame_records(getattr(s1, "rate_summary", None)), s1),
+        "strata_skipped": {str(k): str(v) for k, v in (s1.skipped or {}).items()},
+        "audit": _two_stage_jsonable(dict(s1.audit or {})),
+    })
+    # The clinic stream for THIS site too, now that the clinic fit follows the site it is asked for
+    # (decision 233's ruling 4 required that fix first; see `clinic_pain.fit_clinic_rate_strata`).
+    if participant is not None:
+        try:
+            clinic = CLPAIN.fit_clinic_rate_strata(
+                participant, hemispheres=tuple(hemispheres),
+                safety_ceiling_by_hemisphere=safety_ceiling_by_hemisphere,
+                redcap_pooled_var=redcap_pooled_var, in_force=in_force,
+                root=_SHARED_CACHE_DIR_OVERRIDE, primary_item=str(site))
+            c1 = clinic.pop("stage1_result", None)
+            out["clinic_stream"] = _two_stage_jsonable(clinic)
+            out["rate_strata_clinic"] = _attach_rate_stratum_surfaces(
+                _frame_records(getattr(c1, "rate_summary", None)), c1) if c1 is not None else []
+        except Exception as exc:                                # noqa: BLE001
+            _log.warning("StimOptimizer: the parallel clinic fit for %s failed", site, exc_info=True)
+            out["clinic_stream"] = {"available": False, "reason": f"{type(exc).__name__}: {exc}"}
+    return out
+
+
 def two_stage_block(participant, es, *, request_data, stream, washin_min, hemispheres, sites,
                     data_horizon, inputs, in_force=None, evidence_inputs=None,
                     safety_ceiling_by_hemisphere=None, pain_positive_by_channel=None) -> dict:
@@ -1296,8 +1369,22 @@ def two_stage_block(participant, es, *, request_data, stream, washin_min, hemisp
     # The same answer the gate was given, beside the clinic stream it was computed from.
     clinic_block.setdefault("clinic_stream", {})["side_effect_vs_current"] = _jsonable(
         side_effect_evidence)
-    return _two_stage_payload(rep, inputs=inputs, seconds=_time.perf_counter() - t0,
-                              in_force=in_force, clinic_block=clinic_block)
+    payload = _two_stage_payload(rep, inputs=inputs, seconds=_time.perf_counter() - t0,
+                                 in_force=in_force, clinic_block=clinic_block)
+    # EVERY SITE THE REQUEST ASKED FOR, not only the first (the PI, 2026-09-22, ruling 4). The first
+    # is the primary site and owns the gate and Stage 2; each of the others gets its own open-loop
+    # fit here, so a page that asks for two sites is answered for two.
+    site_list = [str(s) for s in (sites or ())]
+    payload.setdefault("stage1", {})["primary_item"] = site_list[0] if site_list else None
+    payload["parallel_sites"] = {}
+    for _site in site_list[1:]:
+        payload["parallel_sites"][_site] = _parallel_site_block(
+            es, _site, hemispheres=hemispheres,
+            safety_ceiling_by_hemisphere=safety_ceiling_by_hemisphere,
+            washin_min=washin_min, data_horizon=data_horizon,
+            primary_site=(site_list[0] if site_list else None), participant=participant,
+            in_force=in_force, redcap_pooled_var=_redcap_pooled_var)
+    return payload
 
 
 def run_for_participant(request_data: dict) -> dict:
