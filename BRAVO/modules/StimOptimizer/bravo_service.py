@@ -1834,8 +1834,35 @@ def titration_plan_block(participant, *, in_force, screen, ceilings, hemispheres
                 if is_safe_raw is not None:
                     joint_is_safe = (lambda l, r, _f=is_safe_raw, _rt=session_rate:
                                      _f(l, r, rate_hz=_rt))
+        # THE EXPLORATORY LADDER (the PI, 2026-09-21): for a side whose best sensing pair needs
+        # stimulating contacts other than the ones in force (decision 217's rule inverted), a
+        # second ladder at that configuration, at the rate of the cell where its pain-positive
+        # bands were found, with the record's exposure to it and the acute-pain holds.
+        proposed = {}
+        rings_in_force = stim_rings_by_side(in_force)
+        for side, kw in sides.items():
+            contact = kw.get("contact") or {}
+            need = _tp.stim_rings_for_sensing_pair(contact.get("channel")) if contact else None
+            have = rings_in_force.get(side) or set()
+            if need and need != have:
+                f = dict((in_force or {}).get(side) or {})
+                proposed[side] = dict(
+                    rings=need, contact=contact,
+                    rate_source=(f"the readiness screen's cell for {contact.get('display_short') or contact.get('channel')}: "
+                                 f"the rate its bands that rise with pain were found at"),
+                    pulse_width_us=kw.get("pulse_width_us"), pulse_width_source=kw.get("pulse_width_source"),
+                    ceiling_mA=kw.get("ceiling_mA"), ceiling_source=kw.get("ceiling_source"),
+                    exposure=_tp.configuration_exposure(es, side, need),
+                    held_other_side_mA=None, held_other_side_source=None, in_force_rings=have,
+                    rate_in_force_hz=kw.get("rate_in_force_hz"))
+                o = "Right" if side == "Left" else "Left"
+                of = dict((in_force or {}).get(o) or {})
+                if of.get("amplitude_mA") is not None:
+                    proposed[side]["held_other_side_mA"] = of["amplitude_mA"]
+                    proposed[side]["held_other_side_source"] = (f"the {o} side's own setting in force today "
+                                                                f"({of.get('source') or 'the settings stream'})")
         block = _tp.plan_for_sides(sides, margin=margin, in_force=in_force,
-                                   joint_is_safe=joint_is_safe)
+                                   joint_is_safe=joint_is_safe, proposed=proposed)
         block["stored_tables"] = {"pooled": pooled_note, "run_points": runs_note}
         block["joint_corners"]["safety_model_note"] = joint_safety_note
         return _jsonable(block)

@@ -31,7 +31,7 @@
  * (`SHEET_EXPORT_SETUP_NOTE`, kept identical to `google_sheets_client.SETUP_NOTE`) is shown
  * underneath, since the download itself carries no JSON body to read a note from.
  */
-import { useState } from "react";
+import React, { useState } from "react";
 import { Button, Card, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip } from "@mui/material";
 
 import MDBox from "components/MDBox";
@@ -67,6 +67,9 @@ function filenameFromDisposition(disposition, fallback) {
 }
 
 export const TITRATION_CARD_TITLE = "Titration session to run next";
+/** The exploratory ladder's own heading (the PI, 2026-09-21): a second ladder for the stimulation
+ *  configuration the readiness screen's best sensing pair needs, when it is not the one in force. */
+export const EXPLORATORY_TITLE = "Exploratory ladder for the pair the screen prefers";
 
 /** The soonest Wednesday on or after today, as "YYYY-MM-DD" for a `<input type="date">`. */
 function nextWednesdayISO() {
@@ -323,6 +326,91 @@ function SideColumn({ side, plan }) {
   );
 }
 
+/** One proposed configuration's plan (`titration_plan.proposed[side]`): the contacts to stimulate
+ *  and why, the pair and rate they serve, what the record holds for that configuration, the two
+ *  answers the session is built for, the ladder, the holds, and the conditions. */
+function ProposedColumn({ p }) {
+  if (!p) return null;
+  const st = p.stimulation || {};
+  const sp = p.sensing_pair || {};
+  const c = p.contact || {};
+  const fe = p.first_exposure || {};
+  const lad = p.ladder || {};
+  const holds = p.acute_pain_holds || {};
+  const bands = p.bands || {};
+  const src = p.sources || {};
+  const other = p.side === "Left" ? "right" : "left";
+  const watch = Array.isArray(bands.watch_hz) ? bands.watch_hz.map((v) => Number(v)).join(", ") : "";
+  return (
+    <MDBox>
+      <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>{`${p.side}: stimulate ${st.contacts_short || "—"}`}</MDTypography>
+      <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, lineHeight: 1.4, mt: 0.4 }}>
+        {p.purpose}
+      </MDTypography>
+      <Row label="stimulate on" sub={sp.why ? `${sp.display_short || sp.channel}: ${sp.why}` : null}>
+        <span style={VALUE}>{st.contacts_short || "—"}</span>
+        {st.differs_from_in_force && (
+          <span style={{ ...SMALL, marginLeft: 8, color: PAL.warnText }}>
+            {`(in force today: rings ${(st.in_force_rings || []).join(", ") || "none"})`}
+          </span>
+        )}
+      </Row>
+      <Row label="record from" sub={num(c.n_qualifying) !== null
+        ? `${c.n_qualifying} of ${num(c.n_bands) ?? "—"} bands rise with pain on this pair at ${fmtHz(c.rate_hz)}; ${num(c.n_responding) ?? 0} fall with current (none can, until this configuration has carried current)`
+        : null}>
+        <span style={VALUE}>{sp.display_short || sp.channel || "—"}</span>
+      </Row>
+      <Row label="rate" sub={src.rate_hz || null}>
+        <span style={VALUE}>{fmtHz(p.rate_hz)}</span>
+        {num(p.rate_in_force_hz) !== null && num(p.rate_in_force_hz) !== num(p.rate_hz) && (
+          <span style={{ ...SMALL, marginLeft: 8, color: PAL.warnText }}>{`(in force today: ${fmtHz(p.rate_in_force_hz)})`}</span>
+        )}
+      </Row>
+      <Row label="pulse width"><span style={VALUE}>{fmtUs(p.pulse_width_us)}</span></Row>
+      <Row label="ceiling"><span style={VALUE}>{fmtMa(p.ceiling_mA)}</span></Row>
+      <Row label="watch" sub={bands.watch_why || null}>
+        <span style={VALUE_SMALL}>{watch ? `${watch} Hz` : "—"}</span>
+      </Row>
+      <Row label="the record today" sub={fe.why || null}>
+        <span style={{ ...SMALL, color: fe.ever_powered === false ? PAL.warnText : "#1A1A1A" }}>{fe.sentence || "—"}</span>
+      </Row>
+      <Row label="stop rule"><span style={{ fontSize: TYPE.body }}>{fe.stop_rule || "—"}</span></Row>
+      <Row label="ladder (part A)" sub={lad.why || null}>
+        <span style={{ ...VALUE_SMALL, whiteSpace: "normal" }}>{lad.compact || "—"}</span>
+        {num(lad.n_steps) !== null && (
+          <span style={{ ...SMALL, marginLeft: 8 }}>{`${lad.n_steps} steps, ${lad.n_distinct_currents} distinct currents`}</span>
+        )}
+      </Row>
+      <Row label="holds (part B)" sub={holds.why || null}>
+        <span style={{ ...VALUE_SMALL, whiteSpace: "normal" }}>
+          {(holds.holds || []).length
+            ? `${holds.holds.map((h) => h.state).join(" / ")}: ${holds.holds.map((h) => fmtMa(h.current_mA)).join(", ")}, ${num(holds.minutes_each)} min each, a rating every ${num(holds.rating_every_minutes)} min, the patient blind to the current`
+            : "—"}
+        </span>
+      </Row>
+      <Row label="the other side">
+        <span style={{ fontSize: TYPE.body }}>{`${other} side held at ${fmtMa(p.held_other_side && p.held_other_side.current_mA)}`}</span>
+      </Row>
+      <Row label="time">
+        <span style={{ fontSize: TYPE.body }}>{num((p.session_time || {}).total_minutes) != null ? `~${Math.round(num(p.session_time.total_minutes))} min on its own (${(p.session_time || {}).why || ""})` : "—"}</span>
+      </Row>
+      <MDBox mt={0.6}>
+        <MDTypography variant="caption" sx={LABEL}>during the session</MDTypography>
+        <MDBox component="ul" sx={{ m: 0, mt: 0.3, pl: 2.2 }}>
+          {(p.conditions || []).map((t, i) => (
+            <li key={i} style={{ fontSize: TYPE.body, lineHeight: 1.35 }}>{t}</li>
+          ))}
+        </MDBox>
+      </MDBox>
+      <Fold show="Why this design" hide="Hide" mt={0.6}>
+        <MDBox component="dl" sx={{ m: 0, "& dt": { ...HEAD, mt: 0.6 }, "& dd": { m: 0, fontSize: TYPE.small, lineHeight: 1.35, color: "#3E3E3E" } }}>
+          {Object.entries(src).map(([k, v]) => (<React.Fragment key={k}><dt>{k.replace(/_/g, " ")}</dt><dd>{v}</dd></React.Fragment>))}
+        </MDBox>
+      </Fold>
+    </MDBox>
+  );
+}
+
 export default function TitrationSessionCard({ plan, participantUid }) {
   const [sessionDate, setSessionDate] = useState(nextWednesdayISO);
   // status: "idle" | "working" | "error" | "xlsx" | "drive"
@@ -393,6 +481,8 @@ export default function TitrationSessionCard({ plan, participantUid }) {
   const rightRows = sheetRows.filter((r) => r.block === "right_ladder");
   const jointRows = sheetRows.filter((r) => r.block === "joint_corners");
   const jc = plan.joint_corners || {};
+  const proposed = plan.proposed || {};
+  const proposedSides = Object.keys(proposed).filter((k) => proposed[k]);
 
   return (
     <Card>
@@ -467,6 +557,18 @@ export default function TitrationSessionCard({ plan, participantUid }) {
               <SideColumn side="Right" plan={right} />
             </MDBox>
 
+            {proposedSides.length > 0 && (
+              <MDBox mt={1.5} sx={{ border: `2px solid ${PAL.accentBorder}`, borderRadius: 2, p: 1.5 }}>
+                <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>{EXPLORATORY_TITLE}</MDTypography>
+                <MDTypography variant="caption" component="div" sx={{ ...SMALL, mb: 0.5 }}>
+                  {"The readiness screen's best sensing pair on this side needs stimulating contacts other than the ones in force (the device allows a pair only while the contacts it flanks stimulate, decision 217). This ladder runs that configuration: part A for how the band power moves with current, part B for what the current does to pain over minutes. A separate visit, or the end of the ordinary session; its rows are at the end of the sheet."}
+                </MDTypography>
+                <MDBox sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: proposedSides.length > 1 ? "1fr 1fr" : "1fr" }, columnGap: "28px", rowGap: "16px" }}>
+                  {proposedSides.map((side) => <ProposedColumn key={side} p={proposed[side]} />)}
+                </MDBox>
+              </MDBox>
+            )}
+
             <MDBox mt={1.5} sx={{ borderTop: `1px solid ${PAL.neutralBorder}`, pt: 1 }}>
               <MDTypography variant="caption" component="div" fontWeight="medium" sx={{ fontSize: TYPE.num }}>
                 The clinic sheet
@@ -491,6 +593,16 @@ export default function TitrationSessionCard({ plan, participantUid }) {
                 title={`Joint corners (optional, ${jointRows.length ? Math.round(jointRows.length / 2) : 0} points)`}
                 caption={jc.why ? `${jc.why}; not run if the visit is short on time.` : "not run if the visit is short on time."}
                 rows={jointRows} columns={sheetColumns} />
+              {proposedSides.map((side) => {
+                const p = proposed[side];
+                const rows = sheetRows.filter((r) => String(r.block).startsWith(`exploratory_${side.toLowerCase()}`));
+                return (
+                  <SheetTable key={`expl-${side}`}
+                    title={`Exploratory ladder — ${(p.stimulation || {}).contacts_short || side} (${rows.filter((r) => r.row_kind === "ramp").length} steps, then ${rows.filter((r) => r.row_kind === "hold").length} holds)`}
+                    caption={`Part A: 0 mA to ${fmtMa(p.ceiling_mA)} in ${num(plan.step_mA) ?? 0.5} mA steps at ${fmtHz(p.rate_hz)}, stopped at the first side-effect score of 2, back down in ${num(plan.down_step_mA) ?? 1.0} mA drops; part B: three ${num((p.acute_pain_holds || {}).minutes_each) ?? 5} min holds, off / on / off, a rating every minute; the ${side === "Left" ? "right" : "left"} side held at ${fmtMa(p.held_other_side && p.held_other_side.current_mA)}.`}
+                    rows={rows} columns={sheetColumns} />
+                );
+              })}
               {plan.sheet_source && (
                 <MDTypography variant="caption" component="div" color="text" sx={{ ...SMALL, mt: 1 }}>
                   {`sheet template: ${plan.sheet_source}`}

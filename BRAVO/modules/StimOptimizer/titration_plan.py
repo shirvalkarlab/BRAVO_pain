@@ -709,7 +709,266 @@ def _yield_sentence(n_points, n_up, rec, margin) -> str:
     return f"{today}; {session}; {m}."
 
 
-def plan_for_sides(sides_inputs, *, margin, in_force=None, joint_is_safe=None) -> dict:
+
+# ---------------------------------------------------------------------------------------------
+# THE EXPLORATORY LADDER for a stimulation configuration the sensing rule requires and the
+# record has never powered (the PI, 2026-09-21: "create the titration ladder (left C positive,
+# one minus, two minus) in a way that will be very helpful for deciding how the biomarker moves
+# and its acute effect on pain"). The readiness screen's best left sensing pair is L 0-3+, which
+# the device allows only while contacts 1 and 2 stimulate together (decision 217); on RCS08 that
+# configuration was programmed for three months of 2025 at 0.0 mA and never carried current.
+# Two things the session has to answer, in two parts: (A) how the band power on the sensing pair
+# moves with current -- the same 0.5 mA up / 1.0 mA down ladder as the ordinary session, at the
+# RATE of the cell where the pain-positive bands were found, with the first-exposure stop rule;
+# (B) what the current does to pain over minutes -- three timed holds, off / on / off, a rating
+# every minute, the patient not told the current, the biomarker still streaming.
+# ---------------------------------------------------------------------------------------------
+#: The three holds of part B: minutes each, and how often a rating is taken.
+HOLD_MINUTES_EACH = 5.0
+HOLD_RATING_EVERY_MIN = 1.0
+#: The first-exposure stop rule (decision 165: a side-effect score of 2 is its own rung, cost 2.0;
+#: decision 164: moderate or severe steps never seed "tolerated").
+FIRST_EXPOSURE_STOP_RULE = ("stop the up leg at the first step with a side-effect score of 2 or "
+                            "more (decision 165); the last step below it is the top current the "
+                            "patient tolerated, and the down leg and the holds start from there")
+
+
+def stim_rings_for_sensing_pair(channel):
+    """The stimulating rings a sensing pair REQUIRES: the inverse of the flanking rule
+    (`lfp_evidence.flanking_pair`, decision 217). (0, 3) needs {1, 2}; (0, 2) needs {1}; (1, 3)
+    needs {2}; a pair with nothing between its contacts, or a name that is not a pair, gives None."""
+    from .routines.lfp_evidence import sensing_pair_rings
+    pair = sensing_pair_rings(channel)
+    if pair is None:
+        return None
+    lo, hi = pair
+    inner = set(range(lo + 1, hi))
+    return inner or None
+
+
+def _rings_label(side, rings) -> str:
+    s = "L" if str(side) == "Left" else "R"
+    return f"{s} C+" + "".join(f"{r}-" for r in sorted(int(r) for r in rings or ()))
+
+
+def configuration_exposure(es, side, rings) -> dict:
+    """What the record holds for THIS stimulation configuration on THIS side, read from the
+    epoch table (`adapter.build_design_matrix`'s frame: one row per unbroken setting, its cathode
+    per side, its hours and the pain reports inside it): epochs, hours, the currents it carried,
+    the reports, and whether it ever carried current at all."""
+    from .bravo_service import stim_rings
+    want = {int(r) for r in (rings or ())}
+    col_c, col_a = f"cathode_{side}", f"amp_mA_{side}"
+    out = {"side": str(side), "rings": sorted(want), "epochs": 0, "hours": 0.0, "reports": 0,
+           "amp_min_mA": None, "amp_max_mA": None, "first": None, "last": None, "ever_powered": None,
+           "sentence": ""}
+    label = _rings_label(side, want)
+    if es is None or len(es) == 0 or col_c not in getattr(es, "columns", []):
+        out["sentence"] = f"no epoch table was supplied, so the record for {label} is unknown"
+        return out
+    from .bravo_service import stim_contacts_short
+    mask = np.array([stim_rings(c) == want for c in es[col_c]], dtype=bool)
+    sub = es.loc[mask]
+    out["epochs"] = int(len(sub))
+    if not len(sub):
+        out["ever_powered"] = False
+        out["sentence"] = f"{label} has never been programmed on this side: no epoch in the record"
+        return out
+    # an epoch on a PART of a ring (one segment, "1a-2a") stimulates the same rings but not the
+    # whole contact; it is counted, and said separately, so a one-day segment trial does not
+    # read as the full configuration having carried current
+    labels = [stim_contacts_short(c, side) for c in sub[col_c]]
+    partial = np.array([any(ch.isalpha() for ch in (l or "").split("C+")[-1]) for l in labels], dtype=bool)
+    amps = pd.to_numeric(sub[col_a], errors="coerce")
+    full_amps = amps[~partial]
+    out["epochs_full_rings"] = int((~partial).sum()); out["epochs_partial_rings"] = int(partial.sum())
+    out["amp_max_full_rings_mA"] = _f(np.nanmax(full_amps)) if full_amps.notna().any() else None
+    out["partial_sentence"] = None
+    if partial.any():
+        ps = sub.loc[partial]
+        out["partial_sentence"] = (f"{_n(int(partial.sum()), 'epoch')} on part of a ring only ({', '.join(sorted(set(l for l, q in zip(labels, partial) if q)))}) "
+                                   f"carried up to {np.nanmax(amps[partial]):g} mA for "
+                                   f"{float(np.nansum(pd.to_numeric(ps.get('dur_h'), errors='coerce'))):.0f} h with "
+                                   f"{int(np.nansum(pd.to_numeric(ps.get('n'), errors='coerce')))} report(s)")
+    out["hours"] = float(np.nansum(pd.to_numeric(sub.get("dur_h"), errors="coerce"))) if "dur_h" in sub else 0.0
+    out["reports"] = int(np.nansum(pd.to_numeric(sub.get("n"), errors="coerce"))) if "n" in sub else 0
+    out["amp_min_mA"] = _f(np.nanmin(amps)) if amps.notna().any() else None
+    out["amp_max_mA"] = _f(np.nanmax(amps)) if amps.notna().any() else None
+    t0 = pd.to_datetime(sub["t0"], utc=True, errors="coerce") if "t0" in sub else None
+    if t0 is not None and t0.notna().any():
+        out["first"] = str(t0.min().date()); out["last"] = str(t0.max().date())
+    # "ever powered" means the FULL rings carried current; a segment trial is said beside it
+    out["ever_powered"] = bool(out["amp_max_full_rings_mA"] is not None and out["amp_max_full_rings_mA"] > 0)
+    span = f"{out['first']} to {out['last']}" if out["first"] else "undated"
+    if out["ever_powered"]:
+        out["sentence"] = (f"{label} carried up to {out['amp_max_full_rings_mA']:g} mA over "
+                           f"{_n(out['epochs_full_rings'], 'epoch')}, {out['hours']:.0f} h, {span}, with "
+                           f"{_n(out['reports'], 'pain report')} inside")
+    else:
+        out["sentence"] = (f"{label} was programmed for {_n(out['epochs_full_rings'], 'epoch')}, "
+                           f"{span}, at 0.0 mA only: the full rings have never carried current, so nothing in the "
+                           f"record says what this configuration does to the band power or to pain")
+    if out["partial_sentence"]:
+        out["sentence"] += f"; {out['partial_sentence']}"
+    return out
+
+
+def acute_pain_holds(top_mA, *, minutes_each=HOLD_MINUTES_EACH,
+                     rating_every_min=HOLD_RATING_EVERY_MIN) -> dict:
+    """Part B: three timed holds, off / on / off, at the top current the patient tolerated on the
+    day (planned here as the ladder's top; the sheet is corrected on the day), a pain rating every
+    minute, the patient not told the current. The biomarker reads in a 60 s test row; a change in
+    pain needs minutes, and a washout after it is what makes the change believable."""
+    top = _f(top_mA)
+    if top is None or top <= 0:
+        return {"holds": [], "minutes_each": float(minutes_each), "rating_every_minutes": float(rating_every_min),
+                "ratings_per_hold": 0, "total_minutes": 0.0, "blind": True,
+                "why": "no top current, so no holds can be written"}
+    per = int(round(float(minutes_each) / float(rating_every_min)))
+    holds = [{"order": 1, "state": "off", "current_mA": 0.0, "minutes": float(minutes_each)},
+             {"order": 2, "state": "on", "current_mA": top, "minutes": float(minutes_each)},
+             {"order": 3, "state": "off", "current_mA": 0.0, "minutes": float(minutes_each)}]
+    return {"holds": holds, "minutes_each": float(minutes_each),
+            "rating_every_minutes": float(rating_every_min), "ratings_per_hold": per,
+            "total_minutes": float(minutes_each) * 3.0, "blind": True,
+            "why": (f"three holds of {minutes_each:g} min, off then on then off, the on hold at the "
+                    f"top current the patient tolerated on the day (planned at {top:g} mA, the "
+                    f"ladder's top); a rating every {rating_every_min:g} min ({per} per hold, {3 * per} "
+                    f"in all); the patient is kept blind to the current so the ratings answer the "
+                    f"current and not the announcement; streaming stays on, so the band power on "
+                    f"the sensing pair is read through every hold")}
+
+
+def _hold_row(step, block, *, contacts, amp, rate_hz, pw, minutes, note) -> dict:
+    row = {c: None for c in SHEET_COLUMNS}
+    row.update({"Contacts": contacts, "Amp (mA)": amp,
+                "Rate (Hz)": (None if rate_hz is None else round(float(rate_hz), 3)),
+                "PW (µs)": pw, "Duration (s)": float(minutes) * 60.0,
+                "General Notes / Pt Verbal Notes": note})
+    row["block"] = str(block); row["step"] = int(step); row["row_kind"] = "hold"
+    return row
+
+
+def configuration_plan(side, *, rings, contact, rate_source, pulse_width_us, pulse_width_source,
+                       ceiling_mA, ceiling_source, exposure, held_other_side_mA,
+                       held_other_side_source, in_force_rings=None, other_side_contacts=None,
+                       other_side_pw=None, rate_in_force_hz=None, min_rate_hz=PA.MIN_ADAPTIVE_RATE_HZ,
+                       start_step=1) -> dict:
+    """The exploratory ladder for one side at a stimulation configuration (`rings`) other than the
+    one in force, built for the sensing pair `contact` (a readiness-screen cell: `channel`,
+    `rate_hz`, `qualifying_centers_hz`, ...). Every field beside its source, as in `side_plan`."""
+    side = str(side)
+    rings = {int(r) for r in (rings or ())}
+    in_force_rings = {int(r) for r in (in_force_rings or ())}
+    contacts_short = _rings_label(side, rings)
+    c = dict(contact or {})
+    rate = rate_to_hold(c.get("rate_hz"), min_rate_hz=min_rate_hz)
+    rate["rate_in_force_hz"] = _f(rate_in_force_hz)          # the side's setting today, not the cell's rate
+    lad = ladder(ceiling_mA)
+    hold = hold_per_step()
+    timing = step_timing(test=hold)
+    watch = sorted(float(v) for v in (c.get("qualifying_centers_hz") or []) if _f(v) is not None)
+    bands = harmonic_avoidance(rate["rate_hz"])
+    clear = {float(v) for v in bands.get("clear_hz") or []}
+    bands["watch_hz"] = watch
+    bands["watch_clear"] = bool(watch) and all(v in clear for v in watch)
+    bands["watch_why"] = (f"the {len(watch)} band centre(s) that rise with pain on {c.get('display_short') or c.get('channel')} "
+                          f"at {rate['rate_hz']:g} Hz on the stored grid, the ones this session watches for a fall "
+                          f"with current" + ("; all clear of the stimulator's harmonics at this rate" if bands["watch_clear"]
+                                             else "; NOT all clear of the harmonics at this rate, read those with care"))
+    ex = dict(exposure or {})
+    first = {"ever_powered": ex.get("ever_powered"), "sentence": ex.get("sentence"),
+             "stop_rule": FIRST_EXPOSURE_STOP_RULE,
+             "why": ("this configuration has never carried current on this side, so the up leg is a "
+                     "first exposure: every step is a side-effect check before it is a measurement"
+                     if ex.get("ever_powered") is False else
+                     "this configuration has carried current before; the stop rule still applies")}
+    holds = acute_pain_holds(lad.get("top_mA"))
+    held_mA = _f(held_other_side_mA)
+    held_src = str(held_other_side_source) if held_other_side_source else "no reading for the other side"
+    other = "Right" if side == "Left" else "Left"
+    pw = _f(pulse_width_us)
+    # the sheet rows: part A, two rows a step; part B, one row a hold
+    rows = []
+    contacts_pair = _bilateral_str(_strip_side_prefix(contacts_short) if side == "Left" else _strip_side_prefix(other_side_contacts),
+                                   _strip_side_prefix(other_side_contacts) if side == "Left" else _strip_side_prefix(contacts_short))
+    pw_pair = _bilateral(pw if side == "Left" else other_side_pw, other_side_pw if side == "Left" else pw)
+    step = int(start_step)
+    block_l = f"exploratory_{side.lower()}_ladder"; block_h = f"exploratory_{side.lower()}_holds"
+    for cur in lad["steps_mA"]:
+        amp = _bilateral(cur if side == "Left" else held_mA, held_mA if side == "Left" else cur)
+        rows.extend(_sheet_row_pair(step, block_l, contacts=contacts_pair, amp=amp, rate_hz=rate["rate_hz"],
+                                    pw=pw_pair, timing=timing))
+        step += 1
+    for h in holds["holds"]:
+        amp = _bilateral(h["current_mA"] if side == "Left" else held_mA, held_mA if side == "Left" else h["current_mA"])
+        every = ("every minute" if float(holds["rating_every_minutes"]) == 1.0
+                 else f"every {holds['rating_every_minutes']:g} min")
+        note = (f"hold {h['order']} of 3, stimulation {h['state']}: a pain rating {every} "
+                f"({holds['ratings_per_hold']} in all), the patient "
+                f"not told the current" + ("; the on hold is at the top current tolerated on the day"
+                                            if h["state"] == "on" else ""))
+        rows.append(_hold_row(step, block_h, contacts=contacts_pair, amp=amp, rate_hz=rate["rate_hz"],
+                              pw=pw_pair, minutes=h["minutes"], note=note))
+        step += 1
+    sess = session_time_estimate(int(lad["n_steps"]))
+    sess["holds_minutes"] = holds["total_minutes"]
+    sess["total_minutes"] = float(sess["total_minutes"]) + float(holds["total_minutes"])
+    sess["why"] = sess["why"] + f"; plus the three holds, {holds['total_minutes']:g} min"
+    conditions = [
+        f"stimulate on {contacts_short}: the device allows sensing on {c.get('display_short') or c.get('channel')} "
+        f"only while the contacts it flanks stimulate together (decision 217)",
+        f"rate {rate['rate_hz']:g} Hz, the rate of the cell where the bands that rise with pain were found"
+        + (f" (in force today: {rate['rate_in_force_hz']:g} Hz)" if _f(rate.get('rate_in_force_hz')) not in (None, rate['rate_hz']) else ""),
+        "streaming on for the whole session on the sensing pair, so the voltage trace exists for every step and every hold",
+        FIRST_EXPOSURE_STOP_RULE,
+        "each ladder step is two clinic-sheet rows: a ramp row then a test row, 2 min a step; a pain rating at the end of every test row",
+        f"then three {holds['minutes_each']:g}-minute holds, off / on / off, a rating every {holds['rating_every_minutes']:g} min, the patient blind to the current",
+        f"the {other} side is HELD at its own current in force ({held_src})",
+        "an off-stimulation baseline before the first step and after the last hold; an impedance test before and after at a fixed measurement current (decision 133)",
+        "note the wall-clock time of each change on the clinic sheet",
+    ]
+    sources = {
+        "stimulation": (f"the inverse of the sensing rule (decision 217): {c.get('display_short') or c.get('channel')} "
+                        f"needs stimulation on rings {sorted(rings)}; in force today: rings {sorted(in_force_rings) or 'none'}"),
+        "sensing_pair": "the readiness screen's best cell for this side (bravo_service._best_contact_for_side)",
+        "rate_hz": (f"{rate_source}; lifted to the adaptive minimum ({min_rate_hz:g} Hz)" if rate["lifted"] else str(rate_source)),
+        "pulse_width_us": str(pulse_width_source),
+        "ceiling_mA": str(ceiling_source),
+        "first_exposure": "the epoch table (adapter.build_design_matrix), cathode per side per epoch; decisions 164 and 165 for the stop rule",
+        "ladder": (f"0 mA up to the ceiling in {STEP_MA:g} mA steps, then down in {DOWN_STEP_MA:g} mA drops "
+                   f"(the PI's ruling, 2026-09-14), stopped early by the first-exposure rule"),
+        "hold": (f"within_visit.PRE_CHANGE_WINDOW_S ({SETTLED_WINDOW_S:g} s) + RAMP_EXCLUDE_S ({POST_RAMP_MARGIN_S:g} s) + {SLACK_S:g} s slack"),
+        "acute_pain_holds": (f"{HOLD_MINUTES_EACH:g} min each, a rating every {HOLD_RATING_EVERY_MIN:g} min, off / on / off "
+                             f"(the PI's ask of 2026-09-21: the acute effect on pain)"),
+        "bands": f"{CENTRES_SOURCE}; the cell's own bands that rise with pain; harmonics of {rate['rate_hz']:g} Hz ±{HARMONIC_HALF_WIDTH_HZ:g} Hz",
+        "held_other_side": held_src,
+        "conditions": "decisions 133, 164, 165, 217; the PI's ruling of 2026-09-14 on the two-row step; the PI's ask of 2026-09-21",
+    }
+    return {
+        "side": side,
+        "stimulation": {"contacts_short": contacts_short, "rings": sorted(rings),
+                        "in_force_rings": sorted(in_force_rings),
+                        "differs_from_in_force": rings != in_force_rings},
+        "sensing_pair": {"channel": c.get("channel"), "display_short": c.get("display_short"),
+                         "why": (f"the device allows this pair only while the contacts it flanks "
+                                 f"({', '.join(str(r) for r in sorted(rings))}) stimulate together")},
+        "contact": {k: c.get(k) for k in ("channel", "display_short", "rate_hz", "n_qualifying", "n_bands",
+                                          "n_responding", "n_pain_positive", "qualifying_centers_hz", "deployable")},
+        "rate_hz": rate["rate_hz"], "rate_in_force_hz": rate["rate_in_force_hz"], "rate_lifted": rate["lifted"],
+        "rate_why": rate["why"], "pulse_width_us": pw, "ceiling_mA": _f(ceiling_mA),
+        "held_other_side": {"current_mA": held_mA, "source": held_src},
+        "first_exposure": first, "ladder": lad, "hold": hold, "step_timing": timing, "bands": bands,
+        "acute_pain_holds": holds, "conditions": conditions, "sheet_rows": rows,
+        "session_time": sess, "sources": sources,
+        "purpose": (f"Two answers from one visit: (A) how the band power on {c.get('display_short') or c.get('channel')} "
+                    f"at {', '.join(f'{v:g}' for v in watch) or 'the watched centres'} Hz moves with current on "
+                    f"{contacts_short}, from the ladder's settled steps; (B) whether pain changes over minutes "
+                    f"when that current is switched on and off, from the three blind holds."),
+    }
+
+
+def plan_for_sides(sides_inputs, *, margin, in_force=None, joint_is_safe=None, proposed=None) -> dict:
     """`{side: side_plan(...)}` for every side in `sides_inputs` (a mapping side -> kwargs for
     :func:`side_plan` minus `side`, `margin`, `held_other_side_mA`, `held_other_side_source`),
     plus the shared margin block, the optional joint-corners block, and the flat `sheet_rows`
@@ -750,4 +1009,16 @@ def plan_for_sides(sides_inputs, *, margin, in_force=None, joint_is_safe=None) -
                                          timing=out["step_timing"])
     n_steps_total = sum(1 for r in out["sheet_rows"] if r.get("row_kind") == "ramp")
     out["session_time"] = session_time_estimate(n_steps_total)
+    # THE EXPLORATORY LADDER(S) (2026-09-21): one per side whose best sensing pair needs a
+    # stimulation configuration other than the one in force; its rows go after the others.
+    out["proposed"] = {}
+    for side, kw in (proposed or {}).items():
+        side = str(side)
+        o = other_side.get(side)
+        of = dict(in_force.get(o) or {}) if o else {}
+        last_step = max([int(r.get("step") or 0) for r in out["sheet_rows"]] + [0])
+        p = configuration_plan(side, other_side_contacts=of.get("contacts_short"),
+                               other_side_pw=of.get("pulse_width_us"), start_step=last_step + 1, **kw)
+        out["proposed"][side] = p
+        out["sheet_rows"].extend(p["sheet_rows"])
     return out

@@ -602,8 +602,21 @@ def test_the_response_carries_a_titration_plan_for_both_sides_with_every_source_
     n_left = tp["sides"]["Left"]["ladder"]["n_steps"]
     n_right = tp["sides"]["Right"]["ladder"]["n_steps"]
     n_joint = len(tp["joint_corners"]["points"])
-    assert len(tp["sheet_rows"]) == 2 * (n_left + n_right + n_joint)
+    base_rows = [r for r in tp["sheet_rows"] if not str(r["block"]).startswith("exploratory")]
+    assert len(base_rows) == 2 * (n_left + n_right + n_joint)
     assert tp["session_time"]["n_steps_total"] == n_left + n_right + n_joint
+    # THE EXPLORATORY LADDER (2026-09-21): the Right side's best pair is R 0-3+, which needs
+    # stimulation on rings 1 and 2, while the bench's Right side stimulates on ring 1 alone; the
+    # Left side's best pair (L 1-3+) needs ring 2, which is in force, so no proposal there.
+    assert set(tp["proposed"]) == {"Right"}
+    pr = tp["proposed"]["Right"]
+    assert pr["stimulation"]["contacts_short"] == "R C+1-2-" and pr["stimulation"]["in_force_rings"] == [1]
+    assert pr["sensing_pair"]["channel"] == "ZERO_THREE_RIGHT" and pr["rate_hz"] == 55.0
+    assert pr["first_exposure"]["ever_powered"] is False and "never" in pr["first_exposure"]["sentence"]
+    assert pr["held_other_side"]["current_mA"] is not None
+    expl = [r for r in tp["sheet_rows"] if str(r["block"]).startswith("exploratory_right")]
+    assert len(expl) == 2 * pr["ladder"]["n_steps"] + 3
+    assert expl[0]["Contacts"].endswith("/ R C+1-2-")
     assert tp["session_time"]["total_minutes"] > tp["session_time"]["steps_minutes"]
     # JSON-safe: no numpy scalars anywhere
     def walk(o):
@@ -648,3 +661,132 @@ def test_the_plan_is_in_the_stored_response_and_a_readiness_failure_does_not_rem
     assert tp["sides"]["Left"]["ladder"]["n_steps"] == 16
     # a single side means no joint corners rows in the flat sheet
     assert all(r["block"] != "joint_corners" for r in tp["sheet_rows"])
+
+
+# ---------------------------------------------------------------------------------------------
+# THE EXPLORATORY LADDER FOR A STIMULATION CONFIGURATION THE RECORD HAS NEVER POWERED
+# (the PI, 2026-09-21: "create the titration ladder (left C positive, one minus, two minus) in a
+# way that will be very helpful for deciding how the biomarker moves and its acute effect on
+# pain"). The readiness screen's best left sensing pair is L 0-3+, which the device allows only
+# while contacts 1 and 2 stimulate together (decision 217); on RCS08 that configuration was
+# programmed for three months in 2025 at 0.0 mA and has never carried current.
+# ---------------------------------------------------------------------------------------------
+def _epochs_with_cathodes():
+    """A small epoch table in the design matrix's own columns: contact 2 alone at several
+    currents (today's configuration), contacts 1+2 together at 0 mA only (the 2025 record)."""
+    rows = []
+    t = pd.Timestamp("2025-07-18", tz="UTC")
+    for k, (cath, amp, n) in enumerate([("1a-1b-1c-2a-2b-2c", 0.0, 40), ("1a-1b-1c-2a-2b-2c", 0.0, 62),
+                                         ("2a-2b-2c", 1.6, 73), ("2a-2b-2c", 4.0, 43), ("2a-2b-2c", 3.5, 24),
+                                         ("1a-2a", 1.0, 1)]):
+        rows.append(dict(epoch=float(k), t0=t + pd.Timedelta(days=30 * k), dur_h=100.0 + k, freq_hz=55.0,
+                         amp_mA_Left=amp, amp_mA_Right=2.5, pw_us_Left=100.0, pw_us_Right=150.0,
+                         cathode_Left=cath, cathode_Right="1a-1b-1c-2a-2b-2c", n=n, left_leg_vas=50.0))
+    return pd.DataFrame(rows)
+
+
+def test_the_stimulating_rings_a_sensing_pair_requires_are_the_inverse_of_the_flanking_rule():
+    assert TP.stim_rings_for_sensing_pair("ZERO_THREE_LEFT") == {1, 2}
+    assert TP.stim_rings_for_sensing_pair("ZERO_TWO_LEFT") == {1}
+    assert TP.stim_rings_for_sensing_pair("ONE_THREE_RIGHT") == {2}
+    assert TP.stim_rings_for_sensing_pair("ZERO_ONE_LEFT") is None        # nothing sits between 0 and 1
+    assert TP.stim_rings_for_sensing_pair("nonsense") is None
+    from StimOptimizer.routines import lfp_evidence as LE
+    for ch in ("ZERO_THREE_LEFT", "ZERO_TWO_LEFT", "ONE_THREE_LEFT"):
+        assert LE.flanking_pair(TP.stim_rings_for_sensing_pair(ch)) == LE.sensing_pair_rings(ch)
+
+
+def test_a_configurations_exposure_is_read_from_the_epoch_table_and_says_when_it_never_carried_current():
+    es = _epochs_with_cathodes()
+    ex = TP.configuration_exposure(es, "Left", {1, 2})
+    # the two full-ring epochs at 0 mA, and one day on one segment of each ring at 1.0 mA (the
+    # RCS08 record of 2025-11-12): counted, said separately, and not "powered"
+    assert ex["epochs"] == 3 and ex["epochs_full_rings"] == 2 and ex["epochs_partial_rings"] == 1
+    assert ex["reports"] == 103 and ex["hours"] == 306.0
+    assert ex["amp_max_full_rings_mA"] == 0.0 and ex["amp_max_mA"] == 1.0 and ex["ever_powered"] is False
+    assert ex["first"].startswith("2025-07-18") and ex["last"].startswith("2025-12-15")
+    assert "never carried current" in ex["sentence"] and "0.0 mA" in ex["sentence"]
+    assert "L C+1a-2a-" in ex["sentence"] and "1 mA" in ex["sentence"]
+    ex2 = TP.configuration_exposure(es, "Left", {2})
+    assert ex2["epochs"] == 3 and ex2["amp_max_mA"] == 4.0 and ex2["ever_powered"] is True
+    assert TP.configuration_exposure(es, "Left", {3})["epochs"] == 0
+    assert TP.configuration_exposure(None, "Left", {1, 2})["epochs"] == 0
+
+
+def test_the_acute_pain_holds_are_off_on_off_with_a_rating_every_minute_and_the_patient_blind():
+    h = TP.acute_pain_holds(3.5)
+    assert [x["current_mA"] for x in h["holds"]] == [0.0, 3.5, 0.0]
+    assert [x["state"] for x in h["holds"]] == ["off", "on", "off"]
+    assert all(x["minutes"] == 5.0 for x in h["holds"]) and h["rating_every_minutes"] == 1.0
+    assert h["ratings_per_hold"] == 5 and h["total_minutes"] == 15.0
+    assert h["blind"] is True and "blind" in h["why"].lower()
+    assert "top current the patient tolerated" in h["why"]
+    assert TP.acute_pain_holds(None)["holds"] == []
+
+
+def test_the_configuration_plan_names_the_contacts_the_pair_the_rate_of_the_cell_and_the_stop_rule():
+    es = _epochs_with_cathodes()
+    contact = {"channel": "ZERO_THREE_LEFT", "display_short": "L 0⁻3⁺", "rate_hz": 125.0,
+               "qualifying_centers_hz": [24.5, 25.5, 26.5, 27.5], "n_qualifying": 4, "n_bands": 18,
+               "n_responding": 0, "deployable": False}
+    p = TP.configuration_plan("Left", rings={1, 2}, contact=contact, rate_source="the readiness screen's cell",
+                              pulse_width_us=100.0, pulse_width_source="in force", ceiling_mA=4.5,
+                              ceiling_source="the PI", exposure=TP.configuration_exposure(es, "Left", {1, 2}),
+                              held_other_side_mA=2.5, held_other_side_source="the Right side in force",
+                              in_force_rings={2}, other_side_contacts="R C+1-2-", other_side_pw=150.0,
+                              rate_in_force_hz=55.0)
+    assert p["stimulation"]["contacts_short"] == "L C+1-2-"
+    assert p["rate_in_force_hz"] == 55.0 and any("in force today: 55 Hz" in c for c in p["conditions"])
+    assert p["stimulation"]["rings"] == [1, 2] and p["stimulation"]["in_force_rings"] == [2]
+    assert p["stimulation"]["differs_from_in_force"] is True
+    assert p["sensing_pair"]["channel"] == "ZERO_THREE_LEFT" and "flank" in p["sensing_pair"]["why"]
+    assert p["rate_hz"] == 125.0 and "cell" in p["sources"]["rate_hz"]
+    # the pain-positive bands of that cell are the ones to watch, and at 125 Hz they are clear
+    assert p["bands"]["watch_hz"] == [24.5, 25.5, 26.5, 27.5]
+    assert all(c in p["bands"]["clear_hz"] for c in p["bands"]["watch_hz"])
+    assert p["bands"]["watch_clear"] is True
+    # first exposure: 0 mA only in the record -> the stop rule is printed and the ladder starts at 0
+    assert p["first_exposure"]["ever_powered"] is False
+    assert "side-effect score of 2" in p["first_exposure"]["stop_rule"]
+    assert p["ladder"]["steps_mA"][0] == 0.0 and p["ladder"]["top_mA"] == 4.5
+    # the acute holds use the ladder's top as the planned "on" current, to be replaced by the top
+    # tolerated current on the day
+    assert [x["current_mA"] for x in p["acute_pain_holds"]["holds"]] == [0.0, 4.5, 0.0]
+    # rows for the sheet: the ladder's two rows per step, then one row per hold, all L C+1-2-
+    rows = p["sheet_rows"]
+    lad_rows = [r for r in rows if r["block"] == "exploratory_left_ladder"]
+    hold_rows = [r for r in rows if r["block"] == "exploratory_left_holds"]
+    assert len(lad_rows) == 2 * p["ladder"]["n_steps"] and len(hold_rows) == 3
+    assert lad_rows[0]["Contacts"] == "L C+1-2- / R C+1-2-" and lad_rows[0]["Rate (Hz)"] == 125.0
+    assert lad_rows[0]["Amp (mA)"] == "L 0 / R 2.5"
+    assert hold_rows[1]["Amp (mA)"] == "L 4.5 / R 2.5" and hold_rows[1]["Duration (s)"] == 300.0
+    assert hold_rows[1]["General Notes / Pt Verbal Notes"] and "every minute" in hold_rows[1]["General Notes / Pt Verbal Notes"]
+    assert p["session_time"]["total_minutes"] > p["session_time"]["steps_minutes"]
+    assert any("blind" in c.lower() for c in p["conditions"])
+    for k, v in p["sources"].items():
+        assert isinstance(v, str) and v, k
+
+
+def test_plan_for_sides_carries_the_proposed_ladder_and_its_rows_after_the_others():
+    margin = PR.margin_becomes_available(None)
+    es = _epochs_with_cathodes()
+    contact = {"channel": "ZERO_THREE_LEFT", "display_short": "L 0⁻3⁺", "rate_hz": 125.0,
+               "qualifying_centers_hz": [24.5], "n_qualifying": 1, "n_bands": 18, "n_responding": 0, "deployable": False}
+    proposed = {"Left": dict(rings={1, 2}, contact=contact, rate_source="cell", pulse_width_us=100.0,
+                             pulse_width_source="in force", ceiling_mA=4.5, ceiling_source="the PI",
+                             exposure=TP.configuration_exposure(es, "Left", {1, 2}), held_other_side_mA=2.5,
+                             held_other_side_source="the Right side", in_force_rings={2})}
+    in_force = {"Left": {"contacts_short": "L C+2-", "pulse_width_us": 100.0},
+                "Right": {"contacts_short": "R C+1-2-", "pulse_width_us": 150.0}}
+    out = TP.plan_for_sides({"Left": _side(), "Right": _side()}, margin=margin, in_force=in_force, proposed=proposed)
+    assert set(out["proposed"]) == {"Left"}
+    assert out["proposed"]["Left"]["stimulation"]["contacts_short"] == "L C+1-2-"
+    blocks = [r["block"] for r in out["sheet_rows"]]
+    assert blocks.index("exploratory_left_ladder") > blocks.index("joint_corners")
+    assert blocks[-1] == "exploratory_left_holds"
+    # the proposed rows number on from the last step of the others
+    steps = [r["step"] for r in out["sheet_rows"] if r["row_kind"] == "ramp"]
+    assert steps == sorted(steps) and len(set(steps)) == len(steps)
+    # without a proposal nothing changes in the flat rows
+    out0 = TP.plan_for_sides({"Left": _side(), "Right": _side()}, margin=margin, in_force=in_force)
+    assert out0["proposed"] == {} and not any(r["block"].startswith("exploratory") for r in out0["sheet_rows"])
