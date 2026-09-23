@@ -7,3 +7,7 @@
 - Live RCS08: proposed Left, L C+1-2- for L 0-3+, 125 Hz (in force 55), pw 100, ceiling 4.5, right held 2.5 mA, watch 24.5-27.5 Hz clear, 15 ladder steps + 3 holds, 51 min; sheet rows 68 -> 101.
 ## 2026-09-22
 - Field diff before/after: 8,821 common, 8 differing (bookkeeping), 1,630 added, 2 removed. Decision 230 written. Committed and pushed at the PI's request while the research workers run; the live watch of the card waits on his login.
+
+- 2026-09-22 step 6 (outside this plan, decision 240): the embargoed time-blocked folds, the current-confound gate and the pre-build diagnostic; container 679 -> 691 / 0, host 1429 / 2 / 0; commit 881d665f.
+
+- 2026-09-22 decision 241: the covariate shape (line, curve, three kernels, per setting) in both guards; container 691 -> 702 / 0, host 1429 / 2 / 0.

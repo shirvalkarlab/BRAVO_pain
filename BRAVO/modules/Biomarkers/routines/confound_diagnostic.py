@@ -36,6 +36,15 @@ from . import stats_utils as _su
 #: forty-row record leave eight rows a fold before the embargo takes its share.
 MIN_ROWS = 40
 
+#: The shape the covariate is allowed to take when it is removed from each band. A straight line
+#: cannot remove an effect that turns over, and on this record the stimulation current may: measured
+#: 2026-09-22, a 3-knot spline explains 29.4% of pain's scatter on the left sensing pair against
+#: 25.7% for a straight line and puts the lowest pain at 3.21 mA rather than at the top of the range.
+#: The spline is the cheapest shape that can turn over at all, which is why it is the default and a
+#: kernel is not: the three kernels spend 4 to 6 degrees of freedom on 53 reports and do not agree
+#: with each other about where the turn is (decision 241).
+DEFAULT_SHAPE = "spline"
+
 #: Ridge strength for the linear model read across every band at once. Small records with dozens of
 #: correlated bands overfit instantly without one; this is a plain regularised least squares on
 #: standardised features, fitted inside each training fold, chosen because a reader can follow it.
@@ -77,23 +86,17 @@ def _ridge_fit_predict(Xtr, ytr, Xte):
     return np.column_stack([np.ones(len(Xte)), Xte]) @ beta
 
 
-def _residualise_on_train(Xtr, Xte, ctr, cte):
-    """Take the covariate out of every column, with the straight line fitted on the TRAINING rows
-    only and applied to the held-out ones. Fitting it on all the rows would let the held-out rows
-    influence their own adjustment, which is the leak this whole module exists to avoid."""
-    if np.std(ctr) == 0:
-        return Xtr, Xte
-    Atr = np.column_stack([np.ones(len(ctr)), ctr])
-    Ate = np.column_stack([np.ones(len(cte)), cte])
-    beta, *_ = np.linalg.lstsq(Atr, Xtr, rcond=None)
-    return Xtr - Atr @ beta, Xte - Ate @ beta
-
-
-def all_bands_auc(X, y, *, folds, covar=None, label="every band"):
+def all_bands_auc(X, y, *, folds, covar=None, shape=DEFAULT_SHAPE, label="every band"):
     """One out-of-fold score for a model reading every column of ``X`` at once.
 
-    With ``covar``, the covariate is taken out of every column first, fitted inside each training
-    fold. Returns ``{"auc", "n_scored", "n_features", "folded": False, "label", "reason"}``.
+    With ``covar``, the covariate is taken out of every column first, with the removal FITTED INSIDE
+    EACH TRAINING FOLD and applied to the held-out rows -- fitting it on all the rows would let a
+    held-out row influence its own adjustment, which is the leak this whole module exists to avoid.
+    ``shape`` is how the covariate is allowed to act (`stats_utils.COVARIATE_SHAPES`): a straight
+    line cannot remove an effect that turns over, and a stimulation current can.
+
+    Returns ``{"auc", "n_scored", "n_features", "folded": False, "label", "shape",
+    "covariate_effective_df", "reason"}``.
     """
     X = np.asarray(X, dtype=float)
     y = np.asarray(y, dtype=float)
@@ -101,7 +104,8 @@ def all_bands_auc(X, y, *, folds, covar=None, label="every band"):
         X = X[:, None]
     c = None if covar is None else np.asarray(covar, dtype=float)
     out = {"auc": None, "n_scored": 0, "n_features": int(X.shape[1]), "folded": False,
-           "label": str(label), "reason": None}
+           "label": str(label), "reason": None, "shape": None, "covariate_effective_df": None,
+           "shape_note": None}
     usable = np.isfinite(X).all(axis=1) & np.isfinite(y)
     if c is not None:
         usable &= np.isfinite(c)
@@ -109,6 +113,18 @@ def all_bands_auc(X, y, *, folds, covar=None, label="every band"):
         out["reason"] = (f"too few rows carry a pain score and every band together "
                          f"({int(usable.sum())}, and {MIN_ROWS} are needed to hold blocks out)")
         return out
+    sh = None
+    if c is not None:
+        sh = _su.CovariateShape(c[usable], shape=shape)
+        out["shape"], out["shape_note"] = sh.shape, sh.reason
+        out["covariate_effective_df"] = float(sh.effective_df)
+        if not sh.usable:
+            out["reason"] = sh.reason
+            return out
+        # The shape is built on the usable rows, so the fold indices have to speak in those terms.
+        position = np.full(len(y), -1, dtype=int)
+        position[np.where(usable)[0]] = np.arange(int(usable.sum()))
+        Xu = X[usable]
     score = np.full(len(y), np.nan)
     need = max(8, X.shape[1] + 2)
     for tr, te in folds:
@@ -117,8 +133,8 @@ def all_bands_auc(X, y, *, folds, covar=None, label="every band"):
         if tr.size < need or te.size == 0:
             continue
         Xtr, Xte = X[tr], X[te]
-        if c is not None:
-            Xtr, Xte = _residualise_on_train(Xtr, Xte, c[tr], c[te])
+        if sh is not None:
+            Xtr, Xte = sh.train_test_residuals(Xu, position[tr], position[te])
         try:
             score[te] = _ridge_fit_predict(Xtr, y[tr], Xte)
         except np.linalg.LinAlgError:
@@ -145,7 +161,7 @@ def all_bands_auc(X, y, *, folds, covar=None, label="every band"):
 
 
 def pre_build_diagnostic(X, y_binary, current, *, band_labels=None, n_folds=5, embargo=None,
-                         n_perm=200, seed=0):
+                         shape=DEFAULT_SHAPE, n_perm=200, seed=0):
     """The whole check, as one answer a reader can follow top to bottom.
 
     ``X`` is one row per pain report and one column per band (both sides together); ``y_binary`` is
@@ -163,9 +179,16 @@ def pre_build_diagnostic(X, y_binary, current, *, band_labels=None, n_folds=5, e
     embargo = int(embargo)
     folds = _su.purged_time_blocked_folds(n, y=y, n_folds=n_folds, embargo=embargo)
 
-    alone = all_bands_auc(c[:, None], y, folds=folds, label="the stimulation current alone")
+    # The current alone is read under the SAME shape the removal uses, so the floor a decoder has
+    # to beat is not an easier floor than the adjustment assumes. `feature_columns` turns the shape
+    # into columns: the basis itself for a line, a curve or one level per setting, and one bump per
+    # delivered setting for a kernel.
+    shape_of_current = _su.CovariateShape(c, shape=shape)
+    alone = all_bands_auc(shape_of_current.feature_columns() if shape_of_current.usable
+                          else c[:, None], y, folds=folds,
+                          label="the stimulation current alone")
     plain = all_bands_auc(X, y, folds=folds, label="every band")
-    adjusted = all_bands_auc(X, y, folds=folds, covar=c,
+    adjusted = all_bands_auc(X, y, folds=folds, covar=c, shape=shape,
                              label="every band with the stimulation current taken out")
 
     # The null: rotate the label, keeping its own persistence, and refit everything each time. A
@@ -192,6 +215,15 @@ def pre_build_diagnostic(X, y_binary, current, *, band_labels=None, n_folds=5, e
     out = {"current_alone": alone, "bands_plain": plain, "bands_adjusted": adjusted, "null": null,
            "n_rows": int(n), "n_bands": int(X.shape[1]), "n_folds": int(n_folds),
            "embargo_rows": embargo, "held_out_in_blocks_of_time": True,
+           "covariate_shape": adjusted.get("shape") or shape_of_current.shape,
+           "covariate_effective_df": (adjusted.get("covariate_effective_df")
+                                      if adjusted.get("covariate_effective_df") is not None
+                                      else float(shape_of_current.effective_df)),
+           "covariate_shape_note": adjusted.get("shape_note") or shape_of_current.reason,
+           "covariate_shape_in_words": _su._shape_in_words(
+               adjusted.get("shape") or shape_of_current.shape,
+               adjusted.get("covariate_effective_df")),
+           "covariate_length_scale": shape_of_current.length_scale,
            "band_labels": list(band_labels) if band_labels is not None else None,
            "why": ("how much of what a decoder could learn here is the stimulation current: the "
                    "label read from the current alone, from every band, and from every band with "
@@ -216,7 +248,8 @@ def _verdict(d):
     if adj["auc"] is None:
         bits.append(f"and the adjusted reading could not be made ({adj['reason']})")
         return "; ".join(bits)
-    bits.append(f"with the current taken out of every band it scores {adj['auc']:.3f}")
+    bits.append(f"with the current taken out of every band {d.get('covariate_shape_in_words')} it "
+                f"scores {adj['auc']:.3f}")
     inside_null = null["p95"] is not None and adj["auc"] <= null["p95"]
     if inside_null:
         bits.append("which the null covers, so what a decoder would find here does not survive the "

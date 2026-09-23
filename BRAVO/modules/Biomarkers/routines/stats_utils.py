@@ -8,6 +8,7 @@ small, pure, unit-testable functions used to make the inferential claims honest:
   * fisher_z_ci       — confidence interval for a Pearson r (Fisher z-transform).
   * effective_n       — autocorrelation-adjusted effective sample size (serial dependence).
   * partial_corr      — correlation of x,y after regressing out a covariate (e.g. stim amplitude).
+  * CovariateShape    — the shape that covariate is allowed to have: line, curve or kernel.
   * partial_corr_columns — the same, for every column of a matrix, each on its own usable rows.
   * block_perm_pvalue — circular-block permutation p-value (preserves temporal autocorrelation).
   * balanced_metrics  — balanced accuracy + prevalence/chance baseline for an imbalanced test set.
@@ -90,18 +91,29 @@ def effective_n(x, y):
     return float(np.clip(n * factor, 2, n))
 
 
-def partial_corr(x, y, covar):
-    """Pearson correlation of x and y after linearly regressing each on `covar` (e.g. stim
-    amplitude) — the stim-adjusted association. Returns nan if degenerate. Rows with any NaN are
-    dropped pairwise."""
+def partial_corr(x, y, covar, shape="line"):
+    """Pearson correlation of x and y after regressing each on `covar` (e.g. stim amplitude) — the
+    stim-adjusted association. Returns nan if degenerate. Rows with any NaN are dropped pairwise.
+
+    `shape` is how the covariate is allowed to act: `"line"` (the default, and what every existing
+    caller gets, so no published number moves) or any other of :data:`COVARIATE_SHAPES` — a squared
+    term, a 3-knot spline, one of three kernels, or one level per delivered setting. A straight line
+    cannot remove a covariate effect that turns over, and what it leaves behind looks like a
+    relationship between x and y (decision 241)."""
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
     c = np.asarray(covar, dtype=float)
     m = np.isfinite(x) & np.isfinite(y) & np.isfinite(c)
     if m.sum() < 4 or np.std(c[m]) == 0:
         return np.nan
-    xr = _residualize(x[m], c[m])
-    yr = _residualize(y[m], c[m])
+    if shape == "line":
+        xr = _residualize(x[m], c[m])
+        yr = _residualize(y[m], c[m])
+    else:
+        sh = CovariateShape(c[m], shape=shape)
+        if not sh.usable:
+            return np.nan
+        xr, yr = sh.residuals(x[m]), sh.residuals(y[m])
     # Relative tolerance so NEAR-collinearity (x or y almost a linear function of covar) returns NaN
     # consistently with exact collinearity, instead of a spurious correlation of tiny residuals.
     if np.std(xr) <= 1e-10 * (np.std(x[m]) + 1e-300) or np.std(yr) <= 1e-10 * (np.std(y[m]) + 1e-300):
@@ -109,7 +121,7 @@ def partial_corr(x, y, covar):
     return float(np.corrcoef(xr, yr)[0, 1])
 
 
-def partial_corr_columns(X, y, covar):
+def partial_corr_columns(X, y, covar, shape="line"):
     """`partial_corr` for EVERY column of a band-power matrix at once, column by column.
 
     ``X`` is one row per pain report and one column per band; ``y`` is one pain score per report;
@@ -135,7 +147,7 @@ def partial_corr_columns(X, y, covar):
     for j in range(C):
         m = base & np.isfinite(X[:, j])
         n[j] = int(m.sum())
-        r[j] = partial_corr(X[m, j], y[m], c[m])
+        r[j] = partial_corr(X[m, j], y[m], c[m], shape=shape)
     return {"r": r, "n": n}
 
 
@@ -528,6 +540,226 @@ def mad_keep_mask(x, n_mad=None, scale="raw"):
     return np.isfinite(x) & ~mask
 
 
+
+
+# =================================================================================================
+# THE SHAPE A COVARIATE IS ALLOWED TO HAVE (decision 241; the PI, 2026-09-22).
+#
+# Taking the stimulation current out of something meant, until now, fitting a STRAIGHT LINE in the
+# current and subtracting it. He asked whether that masks a real effect, because a stimulation
+# current can help up to a point and worsen above it. It can, both ways round: a curved current
+# effect survives a straight-line removal as a leftover curve, which anything tracking distance from
+# the best current then correlates with; and a candidate whose own relationship curves reads near
+# zero. So the shape is a choice, it is named on every answer, and the flexibility it spends is
+# reported beside it -- because a flexible shape on a short record absorbs the slow drift of the
+# record itself along with the dose.
+#
+# MEASURED ON THE LIVE RECORD BEFORE CHOOSING THE DEFAULT (RCS08, L 1-3+, 53 reports, 11 delivered
+# currents, 2026-09-22): a straight line explains 25.7% of pain's scatter and is still falling at the
+# highest current tested; two degrees of freedom -- a squared term, or this spline -- explain 29-31%
+# and put the lowest pain at 3.1-3.2 mA; the squared-exponential, Matern 3/2 and rational-quadratic
+# kernels, given 4-6 degrees of freedom, explain 37-43% and move the lowest pain to 1.8-1.9 mA,
+# chasing two ratings at 1.6 mA. The flexible shapes do not agree with each other about where the
+# turn is, so the default is the cheapest shape that can turn over at all.
+# =================================================================================================
+
+#: Every shape a covariate may take. `line` is what the older helpers still default to, so nothing
+#: already published moves; `spline` is what the two guards default to.
+COVARIATE_SHAPES = ("line", "quadratic", "spline", "squared_exponential", "matern32",
+                    "rational_quadratic", "per_setting")
+
+#: Ridge on the kernel fits. Kernel ridge with no penalty interpolates every point and removes
+#: everything, including the candidate.
+KERNEL_RIDGE = 0.1
+
+#: Below this many distinct covariate values a shape that needs knots cannot be built. Three knots
+#: need three distinct places to put them and something either side.
+MIN_DISTINCT_FOR_SPLINE = 4
+
+
+def _rcs_columns(x, knots):
+    """Natural (restricted) cubic spline, 3 knots, in Harrell's form: two columns, straight outside
+    the outer knots. The standard dose-response shape in clinical work, and the cheapest one that
+    can turn over."""
+    k = np.asarray(knots, dtype=float)
+    denom = (k[-1] - k[0]) ** 2
+    def cube(u, kk):
+        return np.maximum(u - kk, 0.0) ** 3
+    cols = [x]
+    for j in range(len(k) - 2):
+        cols.append((cube(x, k[j])
+                     - cube(x, k[-2]) * (k[-1] - k[j]) / (k[-1] - k[-2])
+                     + cube(x, k[-1]) * (k[-2] - k[j]) / (k[-1] - k[-2])) / denom)
+    return np.column_stack(cols)
+
+
+def _kernel_matrix(a, b, shape, ell):
+    d = np.abs(np.asarray(a, float)[:, None] - np.asarray(b, float)[None, :])
+    if shape == "squared_exponential":                   # smooth, one length scale
+        return np.exp(-0.5 * (d / ell) ** 2)
+    if shape == "matern32":                              # rougher: one derivative, follows kinks
+        s = d * np.sqrt(3.0) / ell
+        return (1.0 + s) * np.exp(-s)
+    if shape == "rational_quadratic":                    # a mixture of length scales at once
+        return (1.0 + (d ** 2) / (2.0 * ell ** 2)) ** (-1.0)
+    raise ValueError(shape)
+
+
+class CovariateShape:
+    """One covariate, and the shape it is allowed to take when it is removed from something else.
+
+    ``shape`` is one of :data:`COVARIATE_SHAPES`. The object reports what it actually built
+    (``shape``), why it is not what was asked for where that happens (``reason``), how much
+    flexibility it spends (``effective_df`` -- 1 for a straight line, the trace of the smoother for
+    a kernel), and, for a kernel, the length scale it chose and why (``length_scale``, ``why``).
+
+    Two ways to use it. :meth:`residuals` takes the shape out using every row, which is what an
+    in-sample correlation wants. :meth:`train_test_residuals` fits it on the training rows and
+    applies it to the held-out ones, which is the only correct thing to do inside a fold -- fitting
+    the removal on all the rows lets a held-out row influence its own adjustment.
+    """
+
+    def __init__(self, covar, shape="line", *, length_scale=None, ridge=KERNEL_RIDGE):
+        if shape not in COVARIATE_SHAPES:
+            raise ValueError(f"unknown covariate shape {shape!r}; the shapes are "
+                             f"{', '.join(COVARIATE_SHAPES)} (line, quadratic, spline, three "
+                             f"kernels, or one level per delivered setting)")
+        self.asked_for = str(shape)
+        self.shape = str(shape)
+        self.reason = None
+        self.why = None
+        self.length_scale = None
+        self.ridge = float(ridge)
+        self.c = np.asarray(covar, dtype=float)
+        finite = self.c[np.isfinite(self.c)]
+        self.levels = sorted(set(np.round(finite, 6).tolist()))
+        self.usable = True
+        if finite.size < 4 or len(self.levels) < 2:
+            self.usable = False
+            self.reason = ("the covariate is constant across these rows, so there is nothing to "
+                           "take out" if len(self.levels) < 2 else
+                           f"only {finite.size} rows carry the covariate")
+            self.effective_df = 0.0
+            self._design = None
+            return
+        # ---- fall back where a shape cannot be built on this many distinct values ----
+        if self.shape in ("spline",) and len(self.levels) < MIN_DISTINCT_FOR_SPLINE:
+            self.reason = (f"a 3-knot spline needs {MIN_DISTINCT_FOR_SPLINE} distinct covariate "
+                           f"values and this record has {len(self.levels)} "
+                           f"({'two' if len(self.levels) == 2 else str(len(self.levels))}), so a "
+                           f"straight line was used instead")
+            self.shape = "line"
+        if self.shape == "quadratic" and len(self.levels) < 3:
+            self.reason = (f"a squared term needs 3 distinct covariate values and this record has "
+                           f"{len(self.levels)}, so a straight line was used instead")
+            self.shape = "line"
+        if self.shape == "per_setting" and len(self.levels) > max(2, finite.size // 4):
+            self.reason = (f"one level per setting would spend {len(self.levels) - 1} degrees of "
+                           f"freedom on {finite.size} rows, more than a quarter of them, so a "
+                           f"3-knot spline was used instead")
+            self.shape = "spline" if len(self.levels) >= MIN_DISTINCT_FOR_SPLINE else "line"
+        # ---- build it ----
+        if self.shape in ("squared_exponential", "matern32", "rational_quadratic"):
+            if length_scale is None:
+                lv = np.asarray(self.levels, dtype=float)
+                gaps = np.abs(lv[:, None] - lv[None, :])[np.triu_indices(lv.size, 1)]
+                length_scale = float(np.median(gaps)) if gaps.size else 1.0
+                self.why = (f"length scale {length_scale:.2f}, the median distance between the "
+                            f"{len(self.levels)} delivered settings")
+            else:
+                self.why = f"length scale {float(length_scale):.2f}, given by the caller"
+            if not np.isfinite(length_scale) or length_scale <= 0:
+                self.reason = "the delivered settings give no usable length scale, so a straight line was used instead"
+                self.shape = "line"
+            else:
+                self.length_scale = float(length_scale)
+        self._design = self._build_design(self.c)
+        self.effective_df = self._effective_df()
+
+    # -- construction ---------------------------------------------------------------------------
+    def _build_design(self, c):
+        """The columns a least-squares fit uses, WITHOUT the intercept. None for the kernels, whose
+        fit depends on which rows are training rows."""
+        if self.shape == "line":
+            return c[:, None]
+        if self.shape == "quadratic":
+            return np.column_stack([c, c ** 2])
+        if self.shape == "spline":
+            knots = np.quantile(np.asarray(self.levels, float), [0.10, 0.50, 0.90])
+            self._knots = knots
+            return _rcs_columns(c, knots)
+        if self.shape == "per_setting":
+            return np.column_stack([(np.round(c, 6) == a).astype(float) for a in self.levels[1:]])
+        return None                                       # a kernel
+
+    def _effective_df(self):
+        if not self.usable:
+            return 0.0
+        if self._design is not None:
+            return float(self._design.shape[1])
+        K = _kernel_matrix(self.c, self.c, self.shape, self.length_scale)
+        n = K.shape[0]
+        return float(np.trace(np.linalg.solve(K + self.ridge * np.eye(n), K)))
+
+    # -- use ------------------------------------------------------------------------------------
+    def residuals(self, values):
+        """What is left of ``values`` once this shape of the covariate is taken out, using all rows."""
+        V = np.asarray(values, dtype=float)
+        flat = V.ndim == 1
+        V2 = V[:, None] if flat else V
+        if not self.usable:
+            return V
+        if self._design is not None:
+            A = np.column_stack([np.ones(len(self.c)), self._design])
+            beta, *_ = np.linalg.lstsq(A, V2, rcond=None)
+            out = V2 - A @ beta
+        else:
+            K = _kernel_matrix(self.c, self.c, self.shape, self.length_scale)
+            mu = V2.mean(axis=0)
+            W = np.linalg.solve(K + self.ridge * np.eye(K.shape[0]), V2 - mu)
+            out = (V2 - mu) - K @ W
+        return out[:, 0] if flat else out
+
+    def train_test_residuals(self, values, train_idx, test_idx):
+        """The same removal, fitted on the training rows and applied to the held-out ones."""
+        V = np.asarray(values, dtype=float)
+        flat = V.ndim == 1
+        V2 = V[:, None] if flat else V
+        tr = np.asarray(train_idx, dtype=int)
+        te = np.asarray(test_idx, dtype=int)
+        if not self.usable:
+            return (V[tr], V[te])
+        if self._design is not None:
+            Atr = np.column_stack([np.ones(tr.size), self._design[tr]])
+            Ate = np.column_stack([np.ones(te.size), self._design[te]])
+            beta, *_ = np.linalg.lstsq(Atr, V2[tr], rcond=None)
+            rtr, rte = V2[tr] - Atr @ beta, V2[te] - Ate @ beta
+        else:
+            Ktr = _kernel_matrix(self.c[tr], self.c[tr], self.shape, self.length_scale)
+            Kte = _kernel_matrix(self.c[te], self.c[tr], self.shape, self.length_scale)
+            mu = V2[tr].mean(axis=0)
+            W = np.linalg.solve(Ktr + self.ridge * np.eye(tr.size), V2[tr] - mu)
+            rtr, rte = (V2[tr] - mu) - Ktr @ W, (V2[te] - mu) - Kte @ W
+        return (rtr[:, 0], rte[:, 0]) if flat else (rtr, rte)
+
+    def feature_columns(self):
+        """This shape as COLUMNS, for when the covariate is the thing being read rather than the
+        thing being removed. A line, a curve or one level per setting is already a set of columns;
+        a kernel becomes one bump per delivered setting, which is the same function written as a
+        basis, so the covariate is read exactly as flexibly as it is removed."""
+        if not self.usable:
+            return self.c[:, None]
+        if self._design is not None:
+            return self._design
+        return _kernel_matrix(self.c, np.asarray(self.levels, dtype=float), self.shape,
+                              self.length_scale)
+
+    def describe(self):
+        """The shape, its cost and any fallback, as a block a page or a report can print."""
+        return {"shape": self.shape, "asked_for": self.asked_for, "usable": bool(self.usable),
+                "effective_df": float(self.effective_df), "length_scale": self.length_scale,
+                "n_settings": len(self.levels), "reason": self.reason, "why": self.why}
+
 # =================================================================================================
 # The two guards every offline model on this record has to pass through (decision 240).
 #
@@ -575,7 +807,21 @@ def purged_time_blocked_folds(n, *, y=None, n_folds=5, embargo=None):
     return out
 
 
-def confound_gate(x, y, covar, *, label="the covariate", n_boot=1000, seed=0):
+def _shape_in_words(shape, effective_df=None):
+    """How a shape reads in a sentence, with what it cost, for a reader who is not reading code."""
+    words = {"line": "as a straight line", "quadratic": "as a curve with a squared term",
+             "spline": "as a curve (a 3-knot spline, which can turn over)",
+             "squared_exponential": "as a smooth curve of any shape (squared-exponential kernel)",
+             "matern32": "as a curve that can kink (Matern 3/2 kernel)",
+             "rational_quadratic": "as a curve mixing scales (rational-quadratic kernel)",
+             "per_setting": "as one level per delivered setting, with no shape assumed"}
+    base = words.get(str(shape), f"as {shape}")
+    if effective_df is None:
+        return base
+    return f"{base}, spending {float(effective_df):.1f} degrees of freedom"
+
+
+def confound_gate(x, y, covar, *, label="the covariate", shape="spline", n_boot=1000, seed=0):
     """One candidate association, reported plainly AND with a third quantity taken out of it.
 
     Both numbers, both intervals, always -- never the adjusted value alone. A reader shown only the
@@ -584,6 +830,12 @@ def confound_gate(x, y, covar, *, label="the covariate", n_boot=1000, seed=0):
     stimulation current in force, which moves the band power and the pain together (decisions 232,
     234), and the PI's ruling of 2026-09-22 is that the adjusted value is reported descriptively and
     refuses nothing.
+
+    ``shape`` is how the covariate is allowed to act (:data:`COVARIATE_SHAPES`). It defaults to the
+    3-knot spline rather than a straight line, because a stimulation current can help up to a point
+    and worsen above it, and a straight-line removal leaves that curve behind for the candidate to
+    correlate with; the shape and the flexibility it spent are reported on the answer, and
+    ``shape="line"`` gives the older behaviour.
 
     ``survives`` is ``True`` when the adjusted interval lies wholly one side of zero, ``False`` when
     it spans zero, and ``None`` when the adjustment could not be made at all -- a covariate that
@@ -597,7 +849,8 @@ def confound_gate(x, y, covar, *, label="the covariate", n_boot=1000, seed=0):
     m = np.isfinite(x) & np.isfinite(y) & np.isfinite(c)
     out = {"label": str(label), "n": int(m.sum()), "r": None, "r_ci": (None, None),
            "r_adjusted": None, "r_adjusted_ci": (None, None), "drop": None,
-           "survives": None, "reason": None, "verdict": None}
+           "survives": None, "reason": None, "verdict": None,
+           "shape": str(shape), "effective_df": None, "shape_note": None}
     if m.sum() < 4:
         out["reason"] = (f"only {int(m.sum())} rows carry the candidate, the outcome and "
                          f"{label} together, which is too few to correlate")
@@ -632,7 +885,9 @@ def confound_gate(x, y, covar, *, label="the covariate", n_boot=1000, seed=0):
         out["verdict"] = f"cannot be judged against {label}: {out['reason']}"
         return out
 
-    adj = partial_corr(xm, ym, cm)
+    sh = CovariateShape(cm, shape=shape)
+    out["shape"], out["effective_df"], out["shape_note"] = sh.shape, sh.effective_df, sh.reason
+    adj = partial_corr(xm, ym, cm, shape=sh.shape)
     if adj is None or not np.isfinite(adj):
         out["reason"] = (f"the candidate is almost a straight line in {label} across these rows, so "
                          f"taking it out leaves too little to correlate -- read that as the finding")
@@ -640,7 +895,7 @@ def confound_gate(x, y, covar, *, label="the covariate", n_boot=1000, seed=0):
         return out
 
     out["r_adjusted"] = float(adj)
-    out["r_adjusted_ci"] = _boot(lambda i: partial_corr(xm[i], ym[i], cm[i]))
+    out["r_adjusted_ci"] = _boot(lambda i: partial_corr(xm[i], ym[i], cm[i], shape=sh.shape))
     out["drop"] = float(abs(out["r"]) - abs(out["r_adjusted"]))
     lo, hi = out["r_adjusted_ci"]
     if lo is None or hi is None:
@@ -648,11 +903,12 @@ def confound_gate(x, y, covar, *, label="the covariate", n_boot=1000, seed=0):
         out["verdict"] = f"cannot be judged against {label}: {out['reason']}"
         return out
     out["survives"] = bool(lo * hi > 0)
+    how = _shape_in_words(out["shape"], out["effective_df"])
     if out["survives"]:
         out["verdict"] = (f"survives {label}: {out['r']:+.3f} plainly, {out['r_adjusted']:+.3f} with "
-                          f"{label} taken out ({lo:+.3f} to {hi:+.3f}, {out['n']} rows)")
+                          f"{label} taken out {how} ({lo:+.3f} to {hi:+.3f}, {out['n']} rows)")
     else:
         out["verdict"] = (f"does not survive {label}: {out['r']:+.3f} plainly, "
-                          f"{out['r_adjusted']:+.3f} with {label} taken out, whose interval "
+                          f"{out['r_adjusted']:+.3f} with {label} taken out {how}, whose interval "
                           f"({lo:+.3f} to {hi:+.3f}, {out['n']} rows) covers zero")
     return out
