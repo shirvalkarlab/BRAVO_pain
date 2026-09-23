@@ -80,21 +80,7 @@ import useClosedLoopSimulation from "./useClosedLoopSimulation";
 import PAL from "./palette";
 import Fold from "./Fold";
 import "./deployPrint.css";
-
-// Reconstruct the discovery request knobs (metric + binarization + match tolerance) from a
-// committed candidate's label provenance, so the deployment ROC defines the band feature with the
-// SAME binarization the candidate was validated under.
-function requestParamsFromCandidate(bc) {
-  const lbl = (bc && bc.label) || {};
-  const bin = lbl.binarization || {};
-  const rp = {};
-  if (lbl.pro_metric) rp.LabelMetric = lbl.pro_metric;
-  if (bin.strategy) rp.LabelStrategy = bin.strategy;
-  if (bin.low_pct != null) rp.PercentileLow = bin.low_pct;
-  if (bin.high_pct != null) rp.PercentileHigh = bin.high_pct;
-  if (lbl.match_tolerance_min != null) rp.MatchToleranceMin = lbl.match_tolerance_min;
-  return rp;
-}
+import requestParamsFromCandidate from "./candidateRequestParams";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "not reported"
   : Number(v).toFixed(d));
