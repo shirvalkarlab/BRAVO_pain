@@ -84,6 +84,7 @@ urlpatterns = [
     path('exportTitrationSheet', DataAnalysis.ExportTitrationSheet.as_view()),
     path('queryServerIdentity', DataAnalysis.QueryServerIdentity.as_view()),
     path('queryClosedLoopDeployment', DataAnalysis.QueryClosedLoopDeployment.as_view()),
+    path('queryClosedLoopChosenBand', DataAnalysis.QueryClosedLoopChosenBand.as_view()),
     path('queryDeploymentROC', DataAnalysis.QueryDeploymentROC.as_view()),
     path('queryLsbPower', DataAnalysis.QueryLsbPower.as_view()),
     path('queryPsdLsbConversionModel', DataAnalysis.QueryPsdLsbConversionModel.as_view()),

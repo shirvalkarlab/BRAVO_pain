@@ -847,6 +847,55 @@ class QueryClosedLoopDeployment(RestViews.APIView):
         return Response(status=200, data=Analysis)
 
 
+class QueryClosedLoopChosenBand(RestViews.APIView):
+    """
+    API View for the band chosen on the Closed-Loop page, recorded on the server (the PI's ruling 8,
+    decision 233). Until 2026-09-23 the choice lived only in the browser that made it.
+
+    One endpoint, three actions. ``read`` returns the band chosen now (or none) with the last rows
+    of the history; ``choose`` records a new choice; ``clear`` records that none is chosen. The
+    record is append-only (``modules.ClosedLoopDeployment.chosen_band``): nothing is rewritten, the
+    current band is the newest row, and every row names who made it. A save that did not land says
+    so (``saved`` False with a reason), so the page can say the choice lives in this browser only.
+
+    **URL:** ``/queryClosedLoopChosenBand``  **Methods:** POST
+
+    **Request Parameters:** ParticipantId, Action ("read", "choose" or "clear"); for "choose",
+    BandCandidate, Source ("grid", "upload" or "browser_storage") and, for "browser_storage" only,
+    CommittedAt (when the band was chosen in the browser).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "Action"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                        study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        from modules.ClosedLoopDeployment import chosen_band
+        uid = str(request.data["ParticipantId"])
+        action = request.data.get("Action")
+        who = getattr(request.user, "email", None) or str(request.user)
+        if action == "read":
+            out = chosen_band.current(uid)
+            out["history"] = chosen_band.history(uid, limit=20)
+        elif action == "choose":
+            out = chosen_band.choose(uid, request.data.get("BandCandidate"), chosen_by=who,
+                                     source=request.data.get("Source"),
+                                     committed_at=request.data.get("CommittedAt"))
+        elif action == "clear":
+            out = chosen_band.clear(uid, chosen_by=who)
+        else:
+            return Response(status=400, data={"message": "Action must be read, choose or clear"})
+        return Response(status=200, data=json_compliant_handler(out))
+
+
 class QueryDeploymentROC(RestViews.APIView):
     """
     API View that computes the rating-clustered deployment ROC + cut-point table for ONE committed

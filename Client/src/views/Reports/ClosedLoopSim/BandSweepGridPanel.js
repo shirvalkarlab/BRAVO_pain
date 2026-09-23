@@ -48,7 +48,7 @@ import { orderContacts } from "views/Reports/Biomarkers/contactOrder";
 import PAL from "./palette";
 import { TickGlyph, CrossGlyph, AmberGlyph, NotTestedGlyph } from "./glyphs";
 import { fmtHz, fmtNum } from "./deployFormat";
-import { commitBandCandidate } from "./bandCandidateStore";
+import { recordChosenBand } from "./bandCandidateStore";
 
 /** One channel's rows, correlation and AUC merged by band centre so one row = one grid point. */
 function mergedRows(sweepForChannel) {
@@ -187,6 +187,7 @@ export function gridSettingsLine(gs) {
     : "same-day match");
   parts.push(DIRECTION_TEXT[gs.match_direction] || `${gs.match_direction || "?"} match`);
   if (gs.allow_window_reuse) parts.push("windows reused");
+  if (gs.include_clinic_sheet_ratings) parts.push("clinic-sheet ratings included");
   const lo = gs.percentile_low != null ? fmtNum(gs.percentile_low, 0) : "?";
   const hi = gs.percentile_high != null ? fmtNum(gs.percentile_high, 0) : "?";
   const split = { tertile: `tertile split ${lo}/${hi} %`, percentile: `percentile split ${lo}/${hi} %`,
@@ -219,7 +220,8 @@ const HEAD = { fontSize: 10, fontWeight: 700, letterSpacing: 0.4, color: "#8A8A8
   textTransform: "uppercase", lineHeight: 1.2, textAlign: "center", paddingBottom: 4 };
 const CELL_H = 19;
 
-export default function BandSweepGridPanel({ grid, participantUid, committed, onCandidateChosen }) {
+export default function BandSweepGridPanel({ grid, participantUid, committed, onCandidateChosen,
+  onChoiceRecorded }) {
   // Memoised, because a fresh `{}` on every render (when there is no grid yet) would make every
   // memo below it recompute on every render.
   const sweeps = useMemo(() => (grid && grid.band_time_sweep) || {}, [grid]);
@@ -262,7 +264,12 @@ export default function BandSweepGridPanel({ grid, participantUid, committed, on
 
   const choose = (row) => {
     const hemisphere = sideOf(channel);
-    commitBandCandidate(participantUid, {
+    // Written to this browser at once (so the page moves on the click) and recorded on the server
+    // (the PI's ruling 8); the promise reports whether the server took it. `grid_settings` is the
+    // server's own tag of the grid the band was picked from, carried so the sign-off sheet can say
+    // which grid that was (panel D item 8). It reaches no request: the report is built from named
+    // fields of the band, never from the band object whole.
+    const recorded = recordChosenBand(participantUid, {
       contact: channel,
       contact_label: labelOf(channel),
       center_freq_hz: row.band_center_hz,
@@ -271,7 +278,9 @@ export default function BandSweepGridPanel({ grid, participantUid, committed, on
       threshold_mode: "dual",
       schema_version: "bandcandidate_v1",
       label: {},
-    });
+      grid_settings: (grid && grid.grid_settings) || null,
+    }, "grid");
+    if (onChoiceRecorded) recorded.then(onChoiceRecorded);
     if (onCandidateChosen) {
       onCandidateChosen({ channel, centerHz: row.band_center_hz, bandWidthHz,
         sensingHemisphere: hemisphere });

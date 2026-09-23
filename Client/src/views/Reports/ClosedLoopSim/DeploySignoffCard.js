@@ -17,6 +17,7 @@ import useDeploymentSummary from "./useDeploymentSummary";
 import { captureFigureSnapshots } from "./figureSnapshots";
 import PAL from "./palette";
 import ProvisionalNote from "./ProvisionalNote";
+import { gridSettingsLine } from "./BandSweepGridPanel";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 
@@ -126,8 +127,42 @@ function KV({ k, v }) {
   );
 }
 
+/**
+ * THE BAND SIGNED FOR, read from the chosen band itself (panel D item 8, with the PI's ruling 8;
+ * 2026-09-23). The "DEVICE TARGET" block beside it comes from the deployment summary, whose pain
+ * score and split are rebuilt from the band's label, and a band chosen on the grid carries an empty
+ * label; so this block is the one that says which band was chosen, when, by whom, whether the
+ * server holds that record, and which grid it was picked from.
+ */
+export function ChosenBandBlock({ bandCandidate, chosenBand, bandRecord }) {
+  const bc = bandCandidate || {};
+  if (!bc.contact) return null;
+  const name = `${bc.contact_label || bc.contact} at ${fmt(bc.center_freq_hz, 1)} Hz`;
+  const when = chosenBand && chosenBand.committed_at
+    ? new Date(chosenBand.committed_at).toLocaleString() : null;
+  const who = bandRecord && bandRecord.chosenBy;
+  const held = !bandRecord ? "where it is held has not been checked yet"
+    : bandRecord.where === "server" ? "recorded on the server"
+      : `held in this browser only (${bandRecord.reason || "the server did not record it"})`;
+  const grid = gridSettingsLine(bc.grid_settings);
+  return (
+    <MDBox mt={1.2}>
+      <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: "#999" }}>
+        THE BAND SIGNED FOR
+      </MDTypography>
+      <KV k="Band" v={name} />
+      <KV k="Chosen" v={bandRecord && bandRecord.source === "browser_storage"
+        ? `${when || "time not recorded"}, chosen in a browser before the server kept a record; `
+          + `carried over to the server${who ? ` by ${who}` : ""}`
+        : `${when || "time not recorded"}${who ? `, by ${who}` : ""}; ${held}`} />
+      <KV k="Picked from the grid" v={grid || "not recorded with this band (chosen before "
+        + "2026-09-23, or loaded from a file)"} />
+    </MDBox>
+  );
+}
+
 function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpoint, summary,
-                             deploymentReport }) {
+                             deploymentReport, chosenBand, bandRecord }) {
   // THE DEVICE ANSWER, read from the deployment report rather than from the statistical summary.
   //
   // This card used to print `power ≥ N LSB` at twenty-four-point type inside a PRINTABLE sign-off
@@ -238,6 +273,10 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
     const snap = await takeSnapshots();
     const blob = new Blob([JSON.stringify({ schema_version: "deploy_signoff_v1",
       generated_at: new Date().toISOString(), operating_point: opProvenance, summary: data,
+      // Which band this record signs, as chosen, and where that choice is held (panel D item 8).
+      chosen_band: { band_candidate: bandCandidate || null,
+        committed_at: (chosenBand && chosenBand.committed_at) || null,
+        record: bandRecord || null },
       // Carried in the FILE, not only on the screen. An export is the most durable form this
       // record takes and the least likely to be read next to the page that produced it, so a
       // consumer parsing it must be able to see that the analysis predates the current settings.
@@ -419,6 +458,8 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                     <KV k="Polarity / suggested mode" v={`${dc.polarity} / ${dc.suggested_mode || "—"}`} />
                   </>
                 ) : null}
+                <ChosenBandBlock bandCandidate={bandCandidate} chosenBand={chosenBand}
+                  bandRecord={bandRecord} />
 
                 {/* WHERE THE VALUES TO TRANSCRIBE LIVE. This block used to print the threshold
                     itself at twenty-four-point type. It now points at the prescription panel

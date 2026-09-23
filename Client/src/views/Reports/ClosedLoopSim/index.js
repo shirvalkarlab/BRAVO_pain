@@ -56,7 +56,8 @@ import CacheStatusLine from "views/Reports/CacheStatusLine";
 import { recomputeClosedLoop } from "views/Reports/moduleCacheKeys";
 
 import {
-  loadBandCandidate, clearBandCandidate, parseUploadedCandidate, commitBandCandidate,
+  loadBandCandidate, parseUploadedCandidate, syncChosenBand, recordChosenBand, recordClearedBand,
+  chosenBandRecordText,
 } from "./bandCandidateStore";
 import DeploymentRocPanel from "./DeploymentRocPanel";
 import LsbPowerPanel from "./LsbPowerPanel";
@@ -315,6 +316,22 @@ function BandCandidateIdentity({ bc, envelope }) {
   );
 }
 
+/**
+ * Where the chosen band is held, in one line under the page title (the PI's ruling 8). A band held
+ * in this browser only is said so in the warning colour, with the reason, because nobody opening
+ * this page elsewhere would see it. The wording lives in `bandCandidateStore.chosenBandRecordText`.
+ */
+function ChosenBandRecordLine({ status, hasBand }) {
+  const text = chosenBandRecordText(status, hasBand);
+  if (!text) return null;
+  return (
+    <MDTypography variant="caption" display="block" sx={{ fontSize: 10.8,
+      color: status.where === "browser" ? PAL.warnText : "#8A8A8A" }}>
+      {text}
+    </MDTypography>
+  );
+}
+
 function ClosedLoopSim() {
   const navigate = useNavigate();
   const { participant_uid } = useParams();
@@ -325,6 +342,8 @@ function ClosedLoopSim() {
   const retained = readViewState(participant_uid);
 
   const [envelope, setEnvelope] = useState(null);   // {band_candidate, participant_uid, committed_at}
+  // Where the chosen band is held: on the server's record, or in this browser only (with why).
+  const [bandRecord, setBandRecord] = useState(null);
   const [cutpoint, setCutpoint] = useState(retained.cutpoint || null);   // chosen operating point, lifted from the ROC
   // The resolved device-LSB threshold, lifted from the LSB panel so the ROC's feature histogram can
   // annotate its cut line with the same value.
@@ -356,8 +375,20 @@ function ClosedLoopSim() {
   }, [participant_uid, cutpoint, thresholdMode, showAnalyst, lsbThreshold]);
 
   useEffect(() => {
-    if (!participant_uid) { navigate("/database", { replace: false }); return; }
-    setEnvelope(loadBandCandidate(participant_uid));
+    if (!participant_uid) { navigate("/database", { replace: false }); return undefined; }
+    // This browser's copy first, so the page draws at once; then the server's record, which wins
+    // (the PI's ruling 8). The envelope is replaced only when the server's band differs, so a
+    // matching answer does not hand every panel a new object and refire its fetch.
+    const local = loadBandCandidate(participant_uid);
+    setEnvelope(local);
+    let alive = true;
+    syncChosenBand(participant_uid).then(({ envelope: server, status }) => {
+      if (!alive) return;
+      setBandRecord(status);
+      const same = (a, b) => JSON.stringify(a && a.band_candidate) === JSON.stringify(b && b.band_candidate);
+      if (!same(server, local)) setEnvelope(server);
+    });
+    return () => { alive = false; };
   }, [participant_uid, navigate]);
 
   // Tag <body> while this view is mounted so the print stylesheet can scope its "hide everything
@@ -484,7 +515,8 @@ function ClosedLoopSim() {
     reader.onload = () => {
       const parsed = parseUploadedCandidate(String(reader.result));
       if (parsed && parsed.band_candidate) {
-        commitBandCandidate(participant_uid, parsed.band_candidate);
+        recordChosenBand(participant_uid, parsed.band_candidate, "upload")
+          .then(({ status }) => setBandRecord(status));
         setEnvelope(loadBandCandidate(participant_uid));
       }
     };
@@ -506,6 +538,7 @@ function ClosedLoopSim() {
                     {"May this configuration be programmed onto the Percept, and if so what should "
                       + "be entered?"}
                   </MDTypography>
+                  <ChosenBandRecordLine status={bandRecord} hasBand={!!bc} />
                 </MDBox>
                 <MDBox display="flex" gap={1} alignItems="center">
                   <input ref={fileRef} type="file" accept="application/json,.json"
@@ -516,7 +549,10 @@ function ClosedLoopSim() {
                   </MDButton>
                   {bc ? (
                     <MDButton size="small" variant="text" color="secondary"
-                      onClick={() => { clearBandCandidate(participant_uid); setEnvelope(null); }}>
+                      onClick={() => {
+                        recordClearedBand(participant_uid).then(({ status }) => setBandRecord(status));
+                        setEnvelope(null);
+                      }}>
                       Clear
                     </MDButton>
                   ) : null}
@@ -539,6 +575,7 @@ function ClosedLoopSim() {
               participantUid={participant_uid}
               committed={bc ? { contact: bc.contact, centerHz: bc.center_freq_hz } : null}
               onCandidateChosen={() => setEnvelope(loadBandCandidate(participant_uid))}
+              onChoiceRecorded={({ status }) => setBandRecord(status)}
             />
           </Grid>
 
@@ -716,7 +753,8 @@ function ClosedLoopSim() {
               <Grid item xs={12} id="cl-signoff">
                 <DeploySignoffCard participantUid={participant_uid} bandCandidate={bc}
                   requestParams={requestParams} cutpoint={cutpoint} summary={summary}
-                  deploymentReport={deploymentReport} />
+                  deploymentReport={deploymentReport} chosenBand={envelope}
+                  bandRecord={bandRecord} />
               </Grid>
 
               {/* CL-DBS SIMULATIONS, last, after the sign-off card (the PI, 2026-09-11: "add new
