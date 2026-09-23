@@ -1021,6 +1021,63 @@ def reference_epoch_for(ep: pd.DataFrame, in_force: dict | None) -> tuple:
     return info["epoch"], info
 
 
+def next_session_coverage(ep, in_force, *, ceiling_mA=None) -> dict:
+    """What the next clinic session must deliver for the current map to be able to recommend a
+    current, on the PI's ruling 5 (decision 233): the session runs at the rate and pulse-width
+    pairing in force, and its ratings are MERGED with the earlier clinic record at that rate for the
+    analysis -- the pairing holding the most clinic epochs there, other than the one in force (on
+    RCS08, 60/160 us). Decision 239 measured this merge live and no response carried it: the clinic
+    stream is fitted with the pairings separate, and the page's pooling toggle pools every pairing.
+
+    The coverage check (`stage1_openloop.current_coverage`) and the gap (`coverage_gap`, the safe
+    ceiling, the side not stepped held at its current in force) on the merged epochs. Never raises;
+    ``available`` False with a reason when there is no setting in force or no epoch at its rate.
+    """
+    from . import stage1_openloop as S1                  # local, as in the fit below
+    def _f(side, key):
+        try:
+            v = (in_force or {}).get(side, {}).get(key)
+            return float(v) if v is not None and np.isfinite(float(v)) else None
+        except (TypeError, ValueError):
+            return None
+    rate = _f("Left", "rate_hz") or _f("Right", "rate_hz")
+    pwl, pwr = _f("Left", "pulse_width_us"), _f("Right", "pulse_width_us")
+    if rate is None or pwl is None or pwr is None:
+        return {"available": False, "reason": "the setting in force (rate and both pulse widths) is not known"}
+    d = pd.DataFrame(ep)
+    if d.empty:
+        return {"available": False, "reason": "no clinic epochs"}
+    at_rate = d[d["freq_hz"].astype(float).round(3) == round(rate, 3)]
+    if at_rate.empty:
+        return {"available": False, "reason": f"no clinic epoch at the rate in force ({rate:g} Hz)"}
+    pair = list(zip(at_rate["pw_us_Left"].astype(float).round(1), at_rate["pw_us_Right"].astype(float).round(1)))
+    counts = pd.Series(pair).value_counts()
+    others = [k for k in counts.index if k != (round(pwl, 1), round(pwr, 1))]
+    record = others[0] if others else None
+    keep = {(round(pwl, 1), round(pwr, 1))} | ({record} if record else set())
+    sub = at_rate[[k in keep for k in pair]]
+    cov = S1.current_coverage(sub)
+    gap = S1._next_visit_gap(cov, ceiling_mA=ceiling_mA,
+                             held_mA={"Left": _f("Left", "amplitude_mA"), "Right": _f("Right", "amplitude_mA")})
+    merged = [{"pw_us_left": float(a), "pw_us_right": float(b), "n_epochs": int(counts.get((a, b), 0)),
+               "in_force": (a, b) == (round(pwl, 1), round(pwr, 1))}
+              for a, b in sorted(keep, key=lambda k: (k != (round(pwl, 1), round(pwr, 1)), k))]
+    if record:
+        sentence = (f"The PI's ruling 5: the next session runs at {rate:g} Hz at the pairing in force "
+                    f"({pwl:g}/{pwr:g} \u00b5s) and its ratings are merged with the clinic record at "
+                    f"{record[0]:g}/{record[1]:g} \u00b5s. Merged, {cov['n_pairs']} of "
+                    f"{cov['n_pairs_required']} current pairs qualify"
+                    + ("; coverage passes." if cov.get("passes") else "."))
+    else:
+        sentence = (f"The PI's ruling 5 merges the next session with the clinic record at {rate:g} Hz, "
+                    f"but there is no earlier record there at another pairing; the pairing in force "
+                    f"({pwl:g}/{pwr:g} \u00b5s) alone has {cov['n_pairs']} of {cov['n_pairs_required']} "
+                    f"qualifying current pairs.")
+    return {"available": True, "rate_hz": float(rate), "pairings_merged": merged,
+            "n_epochs": int(len(sub)), "coverage": {k: v for k, v in cov.items() if k != "pairs"},
+            "gap": gap, "sentence": sentence}
+
+
 def fit_clinic_rate_strata(participant, *, hemispheres=("Left", "Right"),
                            safety_ceiling_by_hemisphere=None, redcap_pooled_var=None,
                            in_force=None, root=None, primary_item="left_leg") -> dict:
@@ -1104,5 +1161,11 @@ def fit_clinic_rate_strata(participant, *, hemispheres=("Left", "Right"),
     base.update(n_epochs=int(len(ep)), pooled_var=pooled_var_used, pooled_var_source=pooled_source,
                note=note, incumbent_epoch=float(s1.frozen.incumbent_epoch),
                incumbent_rate_hz=float(s1.frozen.incumbent_rate_hz),
-               reference=reference)
+               reference=reference,
+               # The PI's ruling 5 (decision 233): what the next session must deliver, merged with
+               # the clinic record at the rate in force (2026-09-23; decision 239 measured it).
+               next_session_coverage=next_session_coverage(
+                   ep, in_force, ceiling_mA=({h: float(v[0]) for h, v in
+                                              (safety_ceiling_by_hemisphere or {}).items()
+                                              if v and v[0] is not None} or None)))
     return dict(base, stage1_result=s1)

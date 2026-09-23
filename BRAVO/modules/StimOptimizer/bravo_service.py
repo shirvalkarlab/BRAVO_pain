@@ -1068,7 +1068,11 @@ def _clinic_stream_stage1_block(participant, *, hemispheres, safety_ceiling_by_h
         row["n_clinic"] = fit.get("n_clinic")
         row["n_home"] = fit.get("n_home")
     fit["strata_skipped"] = {str(k): str(v) for k, v in (s1c.skipped or {}).items()}
-    return {"rate_strata_clinic": rate_strata_clinic, "clinic_stream": fit}
+    # The clinic stream's own fit pooled over pulse widths (2026-09-23): the fitting routine has
+    # always built it (pooling is on by default there) and nothing carried it, so the page's pooling
+    # toggle swapped the REDCap section only.
+    return {"rate_strata_clinic": rate_strata_clinic, "clinic_stream": fit,
+            "pulse_width_pooling_clinic": _pulse_width_pooling_block(s1c)}
 
 
 def _clinic_stream_visits_summary(participant) -> list:
@@ -1192,6 +1196,9 @@ def _two_stage_payload(rep, *, inputs, seconds, in_force=None, clinic_block=None
         "rate_strata_clinic": (clinic_block or {}).get("rate_strata_clinic", []),
         "clinic_stream": (clinic_block or {}).get(
             "clinic_stream", {"available": False, "reason": "not requested"}),
+        "pulse_width_pooling_clinic": (clinic_block or {}).get(
+            "pulse_width_pooling_clinic", {"available": False, "reason": "not requested",
+                                           "rate_strata_pooled": []}),
     }
 
     conditions = []
@@ -1348,6 +1355,8 @@ def _parallel_site_block(es, site, *, hemispheres, safety_ceiling_by_hemisphere,
             out["clinic_stream"] = _two_stage_jsonable(clinic)
             out["rate_strata_clinic"] = _attach_rate_stratum_surfaces(
                 _frame_records(getattr(c1, "rate_summary", None)), c1) if c1 is not None else []
+            out["pulse_width_pooling_clinic"] = (_pulse_width_pooling_block(c1) if c1 is not None
+                                                 else {"available": False, "rate_strata_pooled": []})
         except Exception as exc:                                # noqa: BLE001
             _log.warning("StimOptimizer: the parallel clinic fit for %s failed", site, exc_info=True)
             out["clinic_stream"] = {"available": False, "reason": f"{type(exc).__name__}: {exc}"}

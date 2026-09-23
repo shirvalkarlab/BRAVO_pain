@@ -348,7 +348,8 @@ function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, i
 /** The second, independent stream: rates and reports read from the lab's own clinic and
  * home-testing workbooks rather than from REDCap. Same fit, same checks, own section, own fold of
  * the visits that were ingested to build it -- never pooled with the REDCap stream above. */
-function ClinicStreamSection({ groups, inForceLeft, inForceRight, clinicStream, showDescriptions, pairingSentence }) {
+function ClinicStreamSection({ groups, inForceLeft, inForceRight, clinicStream, showDescriptions, pairingSentence,
+  pooledWanted = false, pooledUnavailableReason = null }) {
   const cs = clinicStream || {};
   if (!cs.available || !groups.length) {
     return (
@@ -398,8 +399,28 @@ function ClinicStreamSection({ groups, inForceLeft, inForceRight, clinicStream, 
           {`Yellow on these colour scales is the predicted rating at: ${cs.reference.sentence}.`}
         </MDTypography>
       )}
+      {/* THE PI'S RULING 5, IN THE OPEN (decision 233; on the page 2026-09-23): the next session
+          runs at the pairing in force and its ratings are merged with the earlier clinic record at
+          that rate, so what THAT merged stratum still needs is what the visit must deliver --
+          decision 239's measurement, which no response carried until now. */}
+      {cs.next_session_coverage && cs.next_session_coverage.available && (
+        <MDTypography variant="caption" component="div" data-testid="clinic-next-session"
+          sx={{ fontSize: TYPE.body, mt: 0.6, mb: 1, color: PAL.warnText }}>
+          {`${cs.next_session_coverage.sentence} `}
+          {cs.next_session_coverage.gap && cs.next_session_coverage.gap.cheapest_way
+            && !(cs.next_session_coverage.coverage || {}).passes
+            ? `What the next session must deliver: ${String(cs.next_session_coverage.gap.cheapest_way).replace(/ -- /g, " \u2014 ")}.`
+            : ""}
+        </MDTypography>
+      )}
+      {pooledWanted && pooledUnavailableReason && (
+        <MDTypography variant="caption" component="div" sx={{ ...SMALL, mb: 1 }}>
+          {`Clinic sheets: pooling across pulse widths is not available (${pooledUnavailableReason}), so the separate fits are shown.`}
+        </MDTypography>
+      )}
       <RateStrataGroups groups={groups} inForceLeft={inForceLeft} inForceRight={inForceRight}
-        pooledSurfaces={{}} idPrefix="cms-clinic" showDescriptions={showDescriptions} />
+        pooledSurfaces={{}} idPrefix={pooledWanted && !pooledUnavailableReason ? "cms-clinic-pw" : "cms-clinic"}
+        showDescriptions={showDescriptions} />
       <Fold show={`Ingested clinic and home-testing visits (${visits.length})`} hide="Hide the visit list"
         mt={1.5}>
         <MDBox sx={{ overflowX: "auto" }}>
@@ -481,6 +502,9 @@ export default function CurrentMapCard({ plan }) {
   const rateStrata = useMemo(() => (Array.isArray(rawRateStrata) ? rawRateStrata : []), [rawRateStrata]);
   const pooling = stage1.pulse_width_pooling || null;
   const pooled = useMemo(() => pooledGroup(pooling), [pooling]);
+  // The clinic stream's own pooled fit (carried since 2026-09-23), swapped in by the same toggle.
+  const poolingClinic = stage1.pulse_width_pooling_clinic || null;
+  const pooledClinic = useMemo(() => pooledGroup(poolingClinic), [poolingClinic]);
   // Decision 189's option A behind a toggle (the PI, 2026-09-21): the separate fit loads;
   // one click shows the fit pooled over pulse widths, a second brings the separate one back.
   const [poolPulseWidths, setPoolPulseWidths] = useState(false);
@@ -546,9 +570,12 @@ export default function CurrentMapCard({ plan }) {
           pooledSurfaces={poolPulseWidths && pooled ? {} : pooledSurfaces}
           idPrefix={poolPulseWidths && pooled ? "cms-pw" : "cms"} showDescriptions={showDescriptions} />
 
-        <ClinicStreamSection groups={clinicGroups} inForceLeft={inForceLeft} inForceRight={inForceRight}
+        <ClinicStreamSection groups={poolPulseWidths && pooledClinic ? [pooledClinic] : clinicGroups}
+          inForceLeft={inForceLeft} inForceRight={inForceRight}
           clinicStream={stage1.clinic_stream} showDescriptions={showDescriptions}
-          pairingSentence={pairingSentence} />
+          pairingSentence={pairingSentence} pooledWanted={poolPulseWidths}
+          pooledUnavailableReason={pooledClinic ? null
+            : ((poolingClinic && poolingClinic.reason) || "no pooled clinic fit on this response")} />
 
         <MDBox mt={1.5} display="flex" justifyContent="flex-start" gap={1} flexWrap="wrap">
           {pooled && (
