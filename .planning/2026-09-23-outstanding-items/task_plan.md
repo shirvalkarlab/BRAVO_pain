@@ -6,7 +6,7 @@ order"): stability column, ruling 8 with the sign-off identity, the parameter-ca
 two stale page tests, the next-visit list on the titration card, then the two diagnostics.
 
 ## Next Step
-Phase 5: B-3, level shifts in the chronic 10-minute log at dated events.
+Phase 5: C-3, thin data at the edges or the wrong shape, for the calibration failure.
 
 ## Phases
 
@@ -31,7 +31,7 @@ Phase 5: B-3, level shifts in the chronic 10-minute log at dated events.
 - **Status:** complete
 
 ### Phase 5: The two diagnostics
-- [ ] B-3: level shifts in the chronic 10-minute log at dated events
+- [x] B-3: level shifts in the chronic log at held left-side changes; 4 of 21 readable (decision 252)
 - [ ] C-3: thin data at the edges or the wrong shape, for the calibration failure
 - **Status:** in_progress
 
