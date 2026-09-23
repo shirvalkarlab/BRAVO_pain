@@ -7,8 +7,7 @@ and reports the band-power-to-pain reading with the stimulation current taken ou
 one (panel D items 1, 2, 3, 5, 4).
 
 ## Next Step
-The live before-and-after on RCS08, which this session could not run: no container, no database, no
-bridge. It is the one thing owed.
+Step 8 of the build order (the Stim Optimizer page), on the PI's go-ahead.
 
 ### Phase 1: Backend (items 3, 5, 4)
 - [x] Item 4: `band_pain_auc_from_table(covariate_column=)`, the partial correlation beside it,
@@ -33,8 +32,10 @@ bridge. It is the one thing owed.
 - [x] Host suite; jest on this page; the estimator's cost and the plain answer's field count on a
       constructed table of the live record's shape
 - [x] Decision 242 in the digest and the full log
-- [ ] The live before-and-after on RCS08 (needs the container; not available in this session)
-- **Status:** in_progress
+- [x] The live before-and-after on RCS08, run on the PI's machine: L 60,189 fields in common,
+      5 differing (3 timing, 2 notes that only gain a sentence), 47 added, 0 removed; R 60,203 /
+      5 / 44 / 0; about +10 s per report build; container 702 / 0, host 1450 / 2 / 0; workers reloaded
+- **Status:** complete
 
 ## Decisions Made
 | Decision | Rationale |

@@ -22,3 +22,8 @@
 - Bundle rebuilt and the four new sentences found in chunk 732.487c2ca2 by their own string literals.
 - OWED: the live before-and-after on RCS08. The payload gains `caveats` and `edges.E2.adjusted`,
   the coherence note gains one sentence, and nothing else should move.
+
+- 2026-09-22, the PI's machine: the live before-and-after run and recorded in decision 242. Both
+  sides lose nothing and change no number; the new reading on the left is 0.469 against 0.559, and
+  0.552 on its own sample, so taking the current out is what moves it. Container 702 / 0 (first run
+  on this code), host 1450 / 2 / 0, jest 61 / 63 (the known pair).
