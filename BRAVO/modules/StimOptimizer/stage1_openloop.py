@@ -512,17 +512,18 @@ def _fold_labels_by_time(sub, *, n_blocks=3):
     return lab
 
 
-def _one_calibration_fold(gp, y, v, groups, *, name):
+def _one_calibration_fold(gp, y, v, groups, *, name, pred=None):
     """One fold structure's answer: does the surface beat a precision-weighted mean of the training
     fold, and do its intervals cover what they claim? ``None`` where a fold cannot be trained on --
-    which is an answer, and not the same answer as a failure."""
+    which is an answer, and not the same answer as a failure. ``pred`` is the fold's held-out
+    ``(mu, sd)`` when the caller already has them (the diagnosis shares them; 2026-09-23)."""
     out = {"n_predicted": 0, "n_folds": int(np.unique(groups).size), "mae_gp": None,
            "mae_baseline": None, "mae_ratio": None, "coverage95": None, "reason": None}
     if np.unique(groups).size < 2:
         out["reason"] = (f"not computable: the {name} fold has only one group, so there is nothing "
                          f"to hold out")
         return out, None
-    mu, sd = gp.loo_predict(groups=groups)
+    mu, sd = pred if pred is not None else gp.loo_predict(groups=groups)
     ok = np.isfinite(mu)
     out["n_predicted"] = int(ok.sum())
     if out["n_predicted"] < 3:
@@ -547,6 +548,106 @@ def _one_calibration_fold(gp, y, v, groups, *, name):
     return out, out["mae_ratio"]
 
 
+#: The diagnosis's two cut-offs, stated rather than tuned: the calibration check's own coverage
+#: floor, and "more than half of the miss is shared by whole blocks" for movement between them.
+DIAGNOSIS_BETWEEN_SHARE_MIN = 0.5
+DIAGNOSIS_P_MAX = 0.05
+
+
+def _reference_setting(sub, blocks):
+    """Pain at the setting delivered most often in this stratum, per block of time, and whether it
+    moved between blocks beyond the ratings' own noise (a precision-weighted heterogeneity test).
+    No model choice can explain a movement here away: the setting did not change."""
+    from scipy import stats as _st
+    d = pd.DataFrame(sub).reset_index(drop=True)
+    if d.empty or not {"amp_mA_Left", "amp_mA_Right", "J", "obs_var"}.issubset(d.columns):
+        return {"setting": None, "moved": None, "p": None, "by_block": [],
+                "reason": "no per-epoch pain values to compare"}
+    key = list(zip(d["amp_mA_Left"].astype(float).round(3), d["amp_mA_Right"].astype(float).round(3)))
+    counts = pd.Series(key).value_counts()
+    top = counts.index[0]
+    at = np.array([k == top for k in key])
+    rows = []
+    for b in np.unique(blocks):
+        m = at & (np.asarray(blocks) == b)
+        if not m.any():
+            continue
+        w = 1.0 / np.maximum(d.loc[m, "obs_var"].to_numpy(float), 1e-12)
+        mean = float(np.sum(w * d.loc[m, "J"].to_numpy(float)) / np.sum(w))
+        rows.append({"block": int(b), "n_epochs": int(m.sum()), "mean_pain": mean,
+                     "se": float(1.0 / np.sqrt(np.sum(w))), "_w": float(np.sum(w))})
+    out = {"setting": {"amp_mA_Left": float(top[0]), "amp_mA_Right": float(top[1])},
+           "n_epochs": int(at.sum()), "by_block": [{k: v for k, v in r.items() if k != "_w"} for r in rows]}
+    if len(rows) < 2:
+        out.update(moved=None, p=None,
+                   reason="the setting delivered most often appears in fewer than two blocks of time")
+        return out
+    W = np.array([r["_w"] for r in rows]); M = np.array([r["mean_pain"] for r in rows])
+    grand = float(np.sum(W * M) / np.sum(W))
+    q = float(np.sum(W * (M - grand) ** 2))
+    p = float(_st.chi2.sf(q, len(rows) - 1))
+    out.update(moved=bool(p < DIAGNOSIS_P_MAX), p=p, q=q, reason=None)
+    return out
+
+
+def calibration_diagnosis(gp, sub, *, pred=None, coverage_min=0.85, mae_ratio_max=0.90):
+    """WHY a surface fails its calibration check (panel C item 3), on the leave-one-block-out fold.
+
+    Each held-out error in units of the model's own stated uncertainty, z = (observed - predicted) /
+    sqrt(predicted variance + rating noise), is split into the part its whole block shares (sum over
+    blocks of n x mean z squared) and the rest. Named, in this order:
+
+    * intervals that cover (coverage at or above the check's floor): "calibrated" when the surface
+      also beats the training-fold mean, else "honest but uninformative: thin data" -- the case a
+      boundary-avoiding kernel could help;
+    * intervals that miss, mostly by whole blocks (more than half of the sum of z squared shared by
+      blocks, and the shared part beyond chance): "moves between blocks of time" -- no kernel helps,
+      the surface itself changed (decisions 193-196 decline to model time; this names it, it does
+      not model it);
+    * intervals that miss within blocks: "too confident within blocks: the shape or the noise model".
+
+    Beside it, ``reference_setting``: did pain at the setting delivered most often move between the
+    blocks? A warning like the check itself; it refuses nothing.
+    """
+    from scipy import stats as _st
+    y = np.asarray(gp.y_, float)
+    v = np.asarray(gp.y_var_, float)
+    blocks = _fold_labels_by_time(sub)
+    out = {"verdict": None, "reason": None, "n_blocks": int(np.unique(blocks).size),
+           "coverage95": None, "mae_ratio": None, "between_block_share": None,
+           "between_block_p": None, "mean_z_by_block": [], "median_sd_over_spread": None,
+           "reference_setting": _reference_setting(sub, blocks), "blocking": False}
+    if np.unique(blocks).size < 2:
+        out["reason"] = "not computable: fewer than two blocks of time to hold out"
+        return out
+    mu, sd = pred if pred is not None else gp.loo_predict(groups=blocks)
+    ok = np.isfinite(mu) & np.isfinite(sd)
+    if np.unique(blocks[ok]).size < 2 or ok.sum() < 3:
+        out["reason"] = "not computable: fewer than two blocks of time could be predicted"
+        return out
+    fold, ratio = _one_calibration_fold(gp, y, v, blocks, name="leave-one-block-out", pred=(mu, sd))
+    z = (y[ok] - mu[ok]) / np.sqrt(np.maximum(sd[ok] ** 2 + v[ok], 1e-12))
+    bk = blocks[ok]
+    means = [(int(b), int((bk == b).sum()), float(np.mean(z[bk == b]))) for b in np.unique(bk)]
+    between = float(sum(n * m * m for _b, n, m in means))
+    total = float(np.sum(z ** 2))
+    share = between / total if total > 0 else 0.0
+    p_between = float(_st.chi2.sf(between, len(means)))
+    spread = float(np.std(y[ok]))
+    out.update(coverage95=fold["coverage95"], mae_ratio=ratio, between_block_share=share,
+               between_block_p=p_between,
+               mean_z_by_block=[{"block": b, "n": n, "mean_z": m} for b, n, m in means],
+               median_sd_over_spread=(float(np.median(sd[ok])) / spread if spread > 0 else None))
+    if fold["coverage95"] is not None and fold["coverage95"] >= coverage_min:
+        out["verdict"] = ("calibrated" if ratio is not None and ratio <= mae_ratio_max
+                          else "honest but uninformative: thin data")
+    elif share > DIAGNOSIS_BETWEEN_SHARE_MIN and p_between < DIAGNOSIS_P_MAX:
+        out["verdict"] = "moves between blocks of time"
+    else:
+        out["verdict"] = "too confident within blocks: the shape or the noise model"
+    return out
+
+
 def stratum_calibration(gp, sub, *, mae_ratio_max=0.90, coverage_min=0.85, coverage_max=1.00):
     """The three pre-registered criteria of `OBJECTIVE_SPEC.md` §6, on ONE fitted surface.
 
@@ -556,7 +657,11 @@ def stratum_calibration(gp, sub, *, mae_ratio_max=0.90, coverage_min=0.85, cover
     y = np.asarray(gp.y_, float)
     v = np.asarray(gp.y_var_, float)
     loeo, r1 = _one_calibration_fold(gp, y, v, np.arange(len(y)), name="leave-one-epoch-out")
-    loera, r2 = _one_calibration_fold(gp, y, v, _fold_labels_by_time(sub), name="leave-one-block-out")
+    _blocks = _fold_labels_by_time(sub)
+    # The block fold's held-out predictions, made ONCE and shared with the diagnosis below, so the
+    # check's numbers are the ones it always gave and no surface is refitted twice.
+    _pred = gp.loo_predict(groups=_blocks) if np.unique(_blocks).size >= 2 else None
+    loera, r2 = _one_calibration_fold(gp, y, v, _blocks, name="leave-one-block-out", pred=_pred)
     def _skill(r):
         return None if r is None else bool(r <= mae_ratio_max)
     cov = [c["coverage95"] for c in (loeo, loera) if c["coverage95"] is not None]
@@ -569,7 +674,10 @@ def stratum_calibration(gp, sub, *, mae_ratio_max=0.90, coverage_min=0.85, cover
             "criterion": {"mae_ratio_max": float(mae_ratio_max),
                           "coverage_min": float(coverage_min), "coverage_max": float(coverage_max),
                           "baseline": "a precision-weighted mean of the training fold"},
-            "blocking": False, "consequence": CALIBRATION_CONSEQUENCE}
+            "blocking": False, "consequence": CALIBRATION_CONSEQUENCE,
+            # WHY it fails, when it does (panel C item 3; 2026-09-23): see `calibration_diagnosis`.
+            "diagnosis": calibration_diagnosis(gp, sub, pred=_pred, coverage_min=coverage_min,
+                                               mae_ratio_max=mae_ratio_max)}
 
 
 def current_coverage(sub, *, min_pairs=CURRENT_COVERAGE_MIN_PAIRS,

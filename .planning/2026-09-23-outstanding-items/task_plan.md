@@ -6,7 +6,7 @@ order"): stability column, ruling 8 with the sign-off identity, the parameter-ca
 two stale page tests, the next-visit list on the titration card, then the two diagnostics.
 
 ## Next Step
-Phase 5: C-3, thin data at the edges or the wrong shape, for the calibration failure.
+None: every item of the 2026-09-23 audit is built; what comes next is the PI's to choose.
 
 ## Phases
 
@@ -32,8 +32,8 @@ Phase 5: C-3, thin data at the edges or the wrong shape, for the calibration fai
 
 ### Phase 5: The two diagnostics
 - [x] B-3: level shifts in the chronic log at held left-side changes; 4 of 21 readable (decision 252)
-- [ ] C-3: thin data at the edges or the wrong shape, for the calibration failure
-- **Status:** in_progress
+- [x] C-3: the main 55 Hz surface moves between blocks of time; the rest thin data; no kernel (decision 253)
+- **Status:** complete
 
 ## Decisions Made
 | Decision | Rationale |
