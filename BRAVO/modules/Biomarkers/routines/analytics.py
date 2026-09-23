@@ -3997,7 +3997,8 @@ def band_pain_correlation(power, pain_labels, report_group, *, times=None, n_boo
 def band_pain_auc_from_table(table, *, channel, center_hz, pain_column="nrs",
                              power_column="power_linear", group_column="report_id",
                              time_column=None, strategy="tertile", low_pct=33.3333,
-                             high_pct=66.6667, pain_cutoff=None, n_boot=500, seed=0, alpha=0.05):
+                             high_pct=66.6667, pain_cutoff=None, n_boot=500, seed=0, alpha=0.05,
+                             covariate_column=None, covariate_shape="line"):
     """``band_pain_auc`` for a caller that already holds a tidy table of spectral samples.
 
     The closed-loop module builds its own table, one row per spectral sample, with columns for the
@@ -4005,6 +4006,22 @@ def band_pain_auc_from_table(table, *, channel, center_hz, pain_column="nrs",
     the sample belongs to. This pulls out the rows for one channel and one band centre and hands
     them to the same estimator the exported tables use, so the closed-loop page and the biomarker
     page cannot print two different numbers for the same band.
+
+    ``covariate_column`` NAMES A THIRD QUANTITY TO TAKE OUT OF THE BAND POWER, and today the only
+    caller that uses it names the stimulation current in force when each sample was recorded. It is
+    off by default, and when it is off this function returns exactly what it always returned, field
+    for field. When it is on, the plain answer is computed on the same rows as ever and a SECOND
+    answer is added under ``covariate_adjusted``, computed on the rows that also carry the
+    covariate: the band power with the covariate removed from it, the pain scores untouched, and
+    the partial correlation beside it, each with an interval that resamples whole pain reports.
+    ``covariate_shape`` is how the covariate is allowed to act (``stats_utils.CovariateShape``); it
+    is a straight line by default so that nothing this project has already published moves
+    (decision 241).
+
+    WHY THE PLAIN ANSWER IS COMPUTED ON ITS OWN ROWS. Dropping the rows with no covariate before
+    the plain answer would silently change a published number whenever the current is missing for
+    part of the record. The two answers therefore state their own sample sizes and are not to be
+    read as being on identical rows.
     """
     need = {power_column, pain_column, "channel", "center_hz"}
     have = set(table.columns) if table is not None else set()
@@ -4028,10 +4045,155 @@ def band_pain_auc_from_table(table, *, channel, center_hz, pain_column="nrs",
             "once the rows missing the band power, the pain score or the pain report are dropped",
             auc=None, no_relationship_value=0.5, power_feature=str(power_column))
     times = (d[time_column].to_numpy() if (time_column and time_column in d.columns) else None)
-    return band_pain_auc(d[power_column].to_numpy(float), d[pain_column].to_numpy(float),
-                         d[group_column].to_numpy(), times=times, strategy=strategy,
-                         low_pct=low_pct, high_pct=high_pct, pain_cutoff=pain_cutoff,
-                         n_boot=n_boot, seed=seed, alpha=alpha, power_feature=str(power_column))
+    out = band_pain_auc(d[power_column].to_numpy(float), d[pain_column].to_numpy(float),
+                        d[group_column].to_numpy(), times=times, strategy=strategy,
+                        low_pct=low_pct, high_pct=high_pct, pain_cutoff=pain_cutoff,
+                        n_boot=n_boot, seed=seed, alpha=alpha, power_feature=str(power_column))
+    if covariate_column is not None:
+        out["covariate_adjusted"] = _band_pain_auc_with_covariate_removed(
+            table[(table.channel == channel) & (np.isclose(table.center_hz, center_hz))],
+            covariate_column=str(covariate_column), shape=str(covariate_shape),
+            pain_column=pain_column, power_column=power_column, group_column=group_column,
+            time_column=time_column, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
+            pain_cutoff=pain_cutoff, n_boot=n_boot, seed=seed, alpha=alpha)
+    return out
+
+
+def _blank_covariate_answer(column, why, **extra):
+    """The adjusted answer for a case where the adjustment could not honestly be made.
+
+    Every number is None and the reason is in words, because a zero here would read as "the band
+    says nothing once the current is out", which is a measurement, and no measurement was made.
+    """
+    out = {"available": False, "adjusted_for": str(column), "why": why,
+           "auc": None, "auc_low": None, "auc_high": None, "p_two_sided": None,
+           "partial_r": None, "partial_r_low": None, "partial_r_high": None,
+           "r_power_vs_covariate": None, "nearly_the_covariate": False,
+           "n_spectral_samples": 0, "n_pain_reports": 0,
+           "resampling_unit": "one pain report", "shape": None, "answer": None}
+    out.update(extra)
+    return out
+
+
+def _band_pain_auc_with_covariate_removed(d, *, covariate_column, shape, pain_column, power_column,
+                                          group_column, time_column, strategy, low_pct, high_pct,
+                                          pain_cutoff, n_boot, seed, alpha):
+    """The same estimator again, on band power with a third quantity taken out of it.
+
+    WHAT IS REMOVED AND FROM WHAT. The covariate is removed from the BAND POWER only; the pain
+    scores are left exactly as they came, and the high-or-low split is made from them as usual. On
+    the closed-loop page that means: does this band still tell high pain from low pain once the
+    part of its power that the stimulation current explains has been subtracted?
+
+    THE PARTIAL CORRELATION IS REPORTED BESIDE IT, on the same rows, because it is the quantity the
+    grid page reports (decision 234) and a reader comparing the two pages must not be given two
+    different adjusted quantities without being told they are different.
+
+    BOTH INTERVALS RESAMPLE WHOLE PAIN REPORTS. Many spectral samples share one pain report and
+    therefore share its score exactly; resampling samples would count one day of pain many times.
+    """
+    from .stats_utils import CovariateShape, NEARLY_THE_COVARIATE_R2, _residualize, partial_corr
+    if d is None or covariate_column not in getattr(d, "columns", []):
+        return _blank_covariate_answer(
+            covariate_column,
+            f"the table has no {covariate_column} column, so there is nothing to take out. This "
+            "says the value was not available, not that the band survives the adjustment")
+    dd = d.dropna(subset=[power_column, pain_column, group_column, covariate_column])
+    x = dd[power_column].to_numpy(float)
+    cov = dd[covariate_column].to_numpy(float)
+    pain = dd[pain_column].to_numpy(float)
+    groups = dd[group_column].to_numpy()
+    n_rep = int(len(np.unique(groups))) if groups.size else 0
+    if x.size < 4 or n_rep < 2:
+        return _blank_covariate_answer(
+            covariate_column,
+            f"only {x.size} samples over {n_rep} pain reports carry the band power, the pain score "
+            f"and {covariate_column} together, which is too few to adjust anything",
+            n_spectral_samples=int(x.size), n_pain_reports=n_rep)
+    if np.std(cov) == 0:
+        return _blank_covariate_answer(
+            covariate_column,
+            f"{covariate_column} is constant at {float(cov[0]):g} across every one of these "
+            f"{x.size} samples, so there is nothing to take out",
+            n_spectral_samples=int(x.size), n_pain_reports=n_rep)
+    r_xc = float(np.corrcoef(x, cov)[0, 1]) if np.std(x) > 0 else np.nan
+    if np.isfinite(r_xc) and r_xc ** 2 >= NEARLY_THE_COVARIATE_R2:
+        return _blank_covariate_answer(
+            covariate_column,
+            f"this band's power moves almost exactly with {covariate_column} on these samples "
+            f"(correlation {r_xc:+.3f}, {100 * r_xc ** 2:.0f}% of its movement), so taking it out "
+            f"leaves too little to tell anything apart. Read that as the finding: the band IS the "
+            f"current here",
+            n_spectral_samples=int(x.size), n_pain_reports=n_rep,
+            r_power_vs_covariate=r_xc, nearly_the_covariate=True)
+    if shape == "line":
+        resid = _residualize(x, cov)
+        edf = 1
+    else:
+        sh = CovariateShape(cov, shape=shape)
+        if not sh.usable:
+            return _blank_covariate_answer(
+                covariate_column,
+                f"the covariate could not be given the shape asked for ({shape}): "
+                f"{sh.reason or sh.why}",
+                n_spectral_samples=int(x.size), n_pain_reports=n_rep,
+                r_power_vs_covariate=r_xc, shape=shape)
+        resid = sh.residuals(x)
+        edf = getattr(sh, "effective_df", None)
+    if np.std(resid) <= 1e-10 * (np.std(x) + 1e-300):
+        return _blank_covariate_answer(
+            covariate_column,
+            f"nothing is left of this band's power once {covariate_column} is removed from it",
+            n_spectral_samples=int(x.size), n_pain_reports=n_rep,
+            r_power_vs_covariate=r_xc, shape=shape)
+    times = (dd[time_column].to_numpy() if (time_column and time_column in dd.columns) else None)
+    adj = band_pain_auc(resid, pain, groups, times=times, strategy=strategy, low_pct=low_pct,
+                        high_pct=high_pct, pain_cutoff=pain_cutoff, n_boot=n_boot, seed=seed,
+                        alpha=alpha,
+                        power_feature=f"{power_column} with {covariate_column} removed from it")
+    pr = partial_corr(x, pain, cov, shape=shape)
+    pr = float(pr) if pr is not None and np.isfinite(pr) else None
+    pr_lo, pr_hi = _partial_corr_report_bootstrap(
+        x, pain, cov, groups, shape=shape, n_boot=n_boot, seed=seed, alpha=alpha)
+    return {
+        "available": adj.get("auc") is not None,
+        "adjusted_for": str(covariate_column),
+        "shape": str(shape),
+        "flexibility_spent": edf,
+        "auc": adj.get("auc"), "auc_low": adj.get("auc_low"), "auc_high": adj.get("auc_high"),
+        "p_two_sided": adj.get("p_two_sided"),
+        "answer": adj.get("answer"),
+        "partial_r": pr, "partial_r_low": pr_lo, "partial_r_high": pr_hi,
+        "r_power_vs_covariate": r_xc, "nearly_the_covariate": False,
+        "n_spectral_samples": int(adj.get("n_spectral_samples") or 0),
+        "n_pain_reports": int(adj.get("n_pain_reports") or 0),
+        "resampling_unit": "one pain report",
+        "why": (f"the band power with {covariate_column} removed from it as a "
+                f"{'straight line' if shape == 'line' else shape}, the pain scores untouched. "
+                f"{adj.get('why', '')}"),
+    }
+
+
+def _partial_corr_report_bootstrap(x, y, cov, groups, *, shape, n_boot, seed, alpha):
+    """Interval on the partial correlation, resampling WHOLE PAIN REPORTS with replacement."""
+    from .stats_utils import partial_corr
+    ids = np.unique(groups)
+    if ids.size < 2:
+        return (None, None)
+    index_of = {g: np.where(groups == g)[0] for g in ids}
+    rng = np.random.default_rng(int(seed))
+    vals = []
+    for _ in range(int(n_boot)):
+        pick = rng.choice(ids, size=ids.size, replace=True)
+        rows = np.concatenate([index_of[g] for g in pick])
+        r = partial_corr(x[rows], y[rows], cov[rows], shape=shape)
+        if r is not None and np.isfinite(r):
+            vals.append(float(r))
+    if len(vals) < BOOT_CI_VALID_FLOOR:
+        return (None, None)
+    v = np.asarray(vals, dtype=float)
+    return (float(np.percentile(v, 100.0 * alpha / 2.0)),
+            float(np.percentile(v, 100.0 * (1.0 - alpha / 2.0))))
 
 
 def _pooled_power_feature_name(td_detail):

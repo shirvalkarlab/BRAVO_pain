@@ -169,6 +169,11 @@ export default function DeploymentDecisionHeader({ bandCandidate, summary, deplo
   // blockers into here. Shown beside the verdict in the warn colour so a reader still sees them.
   const warnings = ((rep && rep.verdict_detail) || {}).warnings || [];
   const el = (rep && rep.eligibility) || null;
+  // HOW MANY THINGS THIS PAGE CANNOT PUT AN INTERVAL ON (panel D item 3, 2026-09-22). The list
+  // itself is on the sign-off sheet, which is where a reader has time for it; the count belongs up
+  // here, because a reader who never scrolls that far should still know there are some.
+  const caveats = (rep && Array.isArray(rep.caveats)) ? rep.caveats : [];
+  const nHighCaveats = caveats.filter((c) => c && c.severity === "high").length;
 
   return (
     // `cl-verdict-strip` is the class the print stylesheet re-shows, so the printed record still
@@ -248,6 +253,21 @@ export default function DeploymentDecisionHeader({ bandCandidate, summary, deplo
                   + " device rule table and the evidence triangle."}
           </MDTypography>
         </MDBox>
+
+        {/* The caveat count. One line, with the worst-ranked ones called out, and it says where
+            the list itself is. It states a count of numbers, never a judgement about them. */}
+        {caveats.length > 0 ? (
+          <MDBox mt={0.6}>
+            <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5,
+              color: "#4A4A4A" }}>
+              {`${caveats.length} numbers or findings on this page are qualified`
+                + `${nHighCaveats ? `, ${nHighCaveats} of them seriously` : ""}`
+                + " — numbers printed without an uncertainty interval, warnings that change"
+                + " no verdict, and what the verdict itself rests on. Every one is listed on the"
+                + " sign-off sheet at the foot of this page."}
+            </MDTypography>
+          </MDBox>
+        ) : null}
 
         {/* The module's own blocker sentences, verbatim. These are the shortest statement of why
             the device refuses, and they are written by the rule table rather than by this page. */}

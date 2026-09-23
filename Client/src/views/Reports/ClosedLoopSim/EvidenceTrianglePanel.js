@@ -213,6 +213,51 @@ export const CURRENT_CONFOUND_NOTE =
   + "becomes +0.01 to +0.12 against NRS; on L 1\u207b3\u207a the negative readings strengthen. "
   + "This edge is not adjusted for it yet, so read its sign as resting partly on the current.";
 
+/**
+ * The same edge read again with the stimulation current taken out of the band power.
+ *
+ * WHY IT SITS HERE AND NOT BEHIND A SWITCH. The interim sentence above could only say that the
+ * current had not been taken out and quote what that did to a different page's numbers. This is
+ * the measurement itself, on this band, from this report (panel D item 4, 2026-09-22). It is
+ * printed as a comparison and never as a replacement: the plain reading above resolves the edge,
+ * carries the interval the verdict reads, and sets the verdict (the PI, 2026-09-22).
+ *
+ * A refusal prints its reason. "Could not be made" and "made, and came out at coin flipping" are
+ * different findings, and this project has confused an absent measurement for a negative one
+ * before.
+ */
+function AdjustedEdgeLine({ adjusted }) {
+  const a = adjusted || null;
+  if (!a) return null;
+  const n = (v, d = 3) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v).toFixed(d));
+  const what = a.adjusted_for ? `the stimulation current in force (${a.adjusted_for})` : "the stimulation current in force";
+  if (!a.available || n(a.auc) == null) {
+    return (
+      <MDTypography variant="caption" data-testid="e2-adjusted"
+        sx={{ display: "block", fontSize: 10.5, mb: 0.8, color: "#8a5a00" }}>
+        {`Read again with ${what} taken out of the band power: that reading could not be made `
+          + `here — ${a.why || "no reason was recorded"}. That is a measurement that is `
+          + "absent, not one that came out at chance."}
+      </MDTypography>
+    );
+  }
+  const span = (n(a.auc_low) && n(a.auc_high)) ? `, interval ${n(a.auc_low)} to ${n(a.auc_high)}` : "";
+  const reports = a.n_pain_reports ? `, over ${a.n_pain_reports} pain reports` : "";
+  const pr = n(a.partial_r) != null
+    ? ` The correlation between this band's power and pain with the same quantity taken out is `
+      + `${Number(a.partial_r) >= 0 ? "+" : ""}${n(a.partial_r)}.`
+    : "";
+  return (
+    <MDTypography variant="caption" data-testid="e2-adjusted"
+      sx={{ display: "block", fontSize: 10.5, mb: 0.8, color: "#8a5a00" }}>
+      {`Read again with ${what} taken out of the band power and the pain scores left as they came: `
+        + `${n(a.auc)}${span}${reports}, against 0.5 for coin flipping.${pr} `
+        + "This second reading describes the first one and does not replace it: the number above "
+        + "is what resolves this edge and sets the verdict."}
+    </MDTypography>
+  );
+}
+
 export function currentConfoundApplies(candidate) {
   const ch = String((candidate || {}).channel || "").toUpperCase();
   const hz = Number((candidate || {}).center_hz);
@@ -561,7 +606,13 @@ export default function EvidenceTrianglePanel({ report }) {
             {["E1", "E2", "E3"].map((k) => (
               <MDBox key={k}>
                 <EdgeAxis k={k} e={edges[k]} />
-                {k === "E2" && showCurrentConfound ? (
+                {/* The measurement, when the report carries it; the interim sentence only while
+                    it does not, so the page never says "not adjusted for it yet" beside a number
+                    that has been adjusted. */}
+                {k === "E2" && edges.E2 && edges.E2.adjusted ? (
+                  <AdjustedEdgeLine adjusted={edges.E2.adjusted} />
+                ) : null}
+                {k === "E2" && showCurrentConfound && !(edges.E2 && edges.E2.adjusted) ? (
                   <MDTypography variant="caption" data-testid="e2-current-confound"
                     sx={{ display: "block", fontSize: 10.5, mb: 0.8, color: "#8a5a00" }}>
                     {CURRENT_CONFOUND_NOTE}

@@ -229,7 +229,8 @@ E2_QUANTITY = ("how far above or below coin flipping this band's power gets at t
 
 
 def state_edge(T, *, channel, center_hz, outcome="nrs", scale="power_linear",
-               cluster="report_id", n_boot=500, seed=0, strategy="tertile"):
+               cluster="report_id", n_boot=500, seed=0, strategy="tertile",
+               adjust_for_column=None, adjust_shape="line"):
     """E2: how well does this band's power tell the patient's high pain from their low pain?
 
     WHAT CHANGED AND WHY, because this is not the same quantity it used to be. This function used
@@ -265,6 +266,15 @@ def state_edge(T, *, channel, center_hz, outcome="nrs", scale="power_linear",
     and its raw interval are written out in full on the note, so nothing is hidden by the shift.
     ``scale`` names the quantity, so no reader can mistake it for a slope.
 
+    ``adjust_for_column`` NAMES A COLUMN OF THE PER-SAMPLE TABLE TO TAKE OUT OF THE BAND POWER
+    before the same estimator is run a second time, and on this page that column is the stimulation
+    current in force when the sample was recorded (panel D item 4, 2026-09-22). It is off by
+    default; when it is on, the second reading lands on ``EdgeEstimate.adjusted`` and NOWHERE else,
+    because the plain reading is what selects the band, resolves the edge and sets the verdict (the
+    PI, 2026-09-22). The adjustment needs one current value per spectral sample, which only this
+    module's own table carries, so the exported-table route says it cannot make it rather than
+    returning a number that was never computed.
+
     THE THREE-WAY ANSWER SURVIVES THE PACKING, and that is the delicate part. The biomarker side
     says "established", "not resolved" or "not assessed" in words. An ``EdgeEstimate`` carries the
     same distinction in its fields rather than in a word: a band that was never assessed has no
@@ -276,15 +286,38 @@ def state_edge(T, *, channel, center_hz, outcome="nrs", scale="power_linear",
     """
     from_export = (T is not None and hasattr(T, "columns")
                    and {"channel", "band_center_hz", "auc", "answer"}.issubset(set(T.columns)))
+    adjusted = None
     if from_export:
         out = read_band_pain_auc_from_export(T, channel=channel, center_hz=center_hz)
         route = ("read out of the table the biomarker page exported, which is the intended route: "
                  "the number was computed once, on the biomarker side, and inherited here")
+        if adjust_for_column is not None:
+            adjusted = {
+                "available": False, "adjusted_for": str(adjust_for_column),
+                "estimate": None, "auc": None, "auc_low": None, "auc_high": None,
+                "partial_r": None,
+                "why": (f"this reading came from the exported table, which holds one row per band "
+                        f"and no {adjust_for_column} value per spectral sample, so there is "
+                        f"nothing to take out here. The adjustment can only be made where the "
+                        f"per-sample table is"),
+            }
     else:
         out = band_pain_auc_from_table(T, channel=channel, center_hz=center_hz,
                                        pain_column=outcome, power_column=scale,
                                        group_column=cluster, strategy=strategy,
-                                       n_boot=n_boot, seed=seed)
+                                       n_boot=n_boot, seed=seed,
+                                       covariate_column=adjust_for_column,
+                                       covariate_shape=adjust_shape)
+        if adjust_for_column is not None:
+            adjusted = dict(out.pop("covariate_adjusted", None) or {})
+            # SHIFTED BY 0.5 EXACTLY AS E2'S OWN ESTIMATE IS, for the same reason: on this module's
+            # estimates "the interval excludes zero" has to keep meaning "beats coin flipping", and
+            # a reader comparing the plain number with this one must not be comparing two scales.
+            _a = adjusted.get("auc")
+            adjusted["estimate"] = (float(_a) - 0.5) if _a is not None else None
+            _lo, _hi = adjusted.get("auc_low"), adjusted.get("auc_high")
+            adjusted["ci"] = ([float(_lo) - 0.5, float(_hi) - 0.5]
+                              if (_lo is not None and _hi is not None) else None)
         route = ("computed by the biomarker page's own estimator, called here on this module's "
                  "table of spectral samples because no exported table was handed in. The exported "
                  "table is the intended route; this one runs the same estimator on the same rules")
@@ -295,7 +328,8 @@ def state_edge(T, *, channel, center_hz, outcome="nrs", scale="power_linear",
         note = (f"NOT ASSESSED, so there is no number here at all and this must not be read as a "
                 f"measurement showing that the band does not separate high pain from low pain. "
                 f"{out.get('why', '')}. This answer was {route}.")
-        return EdgeEstimate("E2", None, None, None, n, cluster, n_reports, E2_QUANTITY, note=note)
+        return EdgeEstimate("E2", None, None, None, n, cluster, n_reports, E2_QUANTITY, note=note,
+                            adjusted=adjusted)
     auc = out.get("auc")
     lo, hi = out.get("auc_low"), out.get("auc_high")
     est = (float(auc) - 0.5) if auc is not None else None
@@ -315,8 +349,31 @@ def state_edge(T, *, channel, center_hz, outcome="nrs", scale="power_linear",
         f"exactly. How pain was split into high and low: {split}. What the power values are: "
         f"{out.get('power_feature', 'not recorded')}. {out.get('why', '')}. This answer was "
         f"{route}.")
+    # THE SECOND READING IS SAID ON THE NOTE, not only carried in a field, because the note is what
+    # the page prints when a reader opens the edge. It is stated as a comparison and never as a
+    # replacement: the number above is the one that resolves this edge.
+    if adjusted:
+        if adjusted.get("available") and adjusted.get("auc") is not None:
+            _alo, _ahi = adjusted.get("auc_low"), adjusted.get("auc_high")
+            _aci = (f"{float(_alo):.3f} to {float(_ahi):.3f}"
+                    if (_alo is not None and _ahi is not None) else "no interval could be formed")
+            _pr = adjusted.get("partial_r")
+            note += (
+                f" READ AGAIN WITH {adjusted['adjusted_for']} TAKEN OUT of the band power and the "
+                f"pain scores left as they came: the area under the curve is "
+                f"{float(adjusted['auc']):.3f}, interval {_aci}, over "
+                f"{adjusted.get('n_pain_reports', 0)} pain reports"
+                + (f"; the correlation between band power and pain with the same quantity taken "
+                   f"out is {float(_pr):+.3f}" if _pr is not None else "")
+                + ". This second reading describes the first one and does not replace it: the "
+                  "plain reading above is what resolves this edge and sets the verdict (the PI, "
+                  "2026-09-22).")
+        else:
+            note += (f" THE READING WITH {adjusted.get('adjusted_for')} TAKEN OUT COULD NOT BE "
+                     f"MADE: {adjusted.get('why', 'no reason was recorded')}. That is an absent "
+                     f"measurement, not a finding of no effect.")
     return EdgeEstimate("E2", est, ci, out.get("p_two_sided"), n, cluster, n_reports,
-                        E2_QUANTITY, note=note)
+                        E2_QUANTITY, note=note, adjusted=adjusted)
 
 
 def therapy_edge(design_matrix, *, outcome="nrs", amp_col="amp_mA_Left", cluster="epoch",

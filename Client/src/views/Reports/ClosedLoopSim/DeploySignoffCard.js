@@ -74,6 +74,49 @@ function EvidenceVerdictLine({ rep }) {
   );
 }
 
+/**
+ * The deployment report's caveats, ranked, each naming the card it is about.
+ *
+ * WHY AN EMPTY LIST STILL PRINTS A SENTENCE. A heading with nothing under it reads as a card that
+ * failed to load. "No caveats were assembled for this report" is a different statement from "this
+ * report has nothing to qualify", and saying which is which on a signed sheet is the point.
+ */
+const CAVEAT_INK = { high: PAL.fail, medium: PAL.warnText, low: PAL.neutral };
+
+function ReportCaveats({ caveats }) {
+  const rows = Array.isArray(caveats) ? caveats : null;
+  if (!rows || rows.length === 0) {
+    return (
+      <MDTypography variant="caption" display="block" sx={{ fontSize: 10, color: "#777", mt: 0.4 }}>
+        {rows
+          ? "This report lists no caveats of its own. Every number it prints carries an "
+            + "uncertainty interval, and no warning is outstanding."
+          : "No caveats reached this sheet from the deployment report. That is a missing list, "
+            + "not a report with nothing to qualify."}
+      </MDTypography>
+    );
+  }
+  return (
+    <MDBox mt={0.5}>
+      {rows.map((c, i) => (
+        <MDBox key={`cav${i}`} display="flex" alignItems="flex-start" mb={0.45}>
+          <MDTypography variant="caption" sx={{ fontSize: 8.5, fontWeight: "bold",
+            letterSpacing: 0.3, color: CAVEAT_INK[c.severity] || PAL.neutral, mt: 0.15,
+            minWidth: "44px" }}>
+            {String(c.severity || "").toUpperCase()}
+          </MDTypography>
+          <MDTypography variant="caption" sx={{ fontSize: 10, color: "#3A3A3A", flex: "1 1 auto" }}>
+            {c.text}
+            {c.card ? (
+              <i style={{ color: "#888" }}>{`  (${c.card})`}</i>
+            ) : null}
+          </MDTypography>
+        </MDBox>
+      ))}
+    </MDBox>
+  );
+}
+
 function KV({ k, v }) {
   return (
     <MDBox display="flex" justifyContent="space-between" py={0.25}>
@@ -344,7 +387,14 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                 {data.n_necessary != null
                   ? `, of which ${data.n_necessary_passed} of ${data.n_necessary} required` : ""}
                 {nIndet ? `, ${nIndet} not tested` : ""}
-                {`. Summary verdict: ${data.verdict}. Match direction: ${data.match_direction}.`}
+                {/* THE SECOND VERDICT SENTENCE IS GONE (panel D item 1, 2026-09-22). This line used
+                    to end "Summary verdict: <word>", a verdict from the older statistical-gate
+                    endpoint, printed a few lines above the deployment report's own verdict and in
+                    the same words. Two verdicts on one signed sheet, answering two different
+                    questions -- does this band discriminate, and may this configuration be
+                    programmed -- is an invitation to read whichever one is more favourable. The
+                    gate counts and the gate rows stay, as the checklist they are. */}
+                {`. Match direction: ${data.match_direction}.`}
                 {summaryReady
                   ? " The summary's own required gates all passed, which is a statement about "
                     + "discrimination and not about whether the device will accept the "
@@ -484,6 +534,21 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                 <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.warnText }}>
                   CAVEATS
                 </MDTypography>
+                {/* THE DEPLOYMENT REPORT'S OWN CAVEATS (panel D item 3, 2026-09-22): every number
+                    this page prints without an uncertainty interval, the warnings that change no
+                    verdict, and the point-sign caveat on the verdict itself -- each with the card
+                    it sits on, so a reader can go and look at the number rather than take the
+                    sentence on trust. They are ranked, worst first, and they are assembled per
+                    request from the payload rather than stored, so they cannot go stale against
+                    the report they describe. The list below them is the older statistical-gate
+                    endpoint's own caveats, kept and labelled as coming from elsewhere. */}
+                <ReportCaveats caveats={_rep && _rep.available ? _rep.caveats : null} />
+                {(data.caveats || []).length > 0 ? (
+                  <MDTypography variant="caption" display="block"
+                    sx={{ fontSize: 9.5, fontWeight: "bold", color: "#999", mt: 0.8 }}>
+                    FROM THE SEPARATE STATISTICAL SUMMARY
+                  </MDTypography>
+                ) : null}
                 <MDBox component="ul" sx={{ pl: 2, mt: 0.5, mb: 0 }}>
                   {(data.caveats || []).map((c, i) => (
                     <MDTypography key={i} component="li" variant="caption"

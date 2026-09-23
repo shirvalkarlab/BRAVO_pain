@@ -90,6 +90,14 @@ class EdgeEstimate:
     #: baseline each (decision 126). A page must draw the two differently; before this field it
     #: could only tell them apart by reading the prose in ``note``. None on E2 and E3.
     source: str | None = None
+    #: THE SAME EDGE READ AGAIN WITH A THIRD QUANTITY TAKEN OUT, or None when nobody asked for it
+    #: (panel D item 4, 2026-09-22). On E2 today that quantity is the stimulation current in force
+    #: when each sample was recorded: every band on this participant's left lead that rises with
+    #: pain also rests on that current, and the page had no number for it. It is a SEPARATE field
+    #: rather than a second estimate because it must never select a band, resolve an edge or move
+    #: a verdict -- the plain reading does all three, by the PI's ruling of 2026-09-22 (decision
+    #: 233, answer 2). Added with a default, so a caller that predates it is unaffected.
+    adjusted: dict | None = None
 
     @property
     def sign(self) -> int | None:

@@ -20,6 +20,14 @@ None of these touch the verbatim notebook science; they wrap/annotate its output
 
 import numpy as np
 
+#: WHEN TAKING A COVARIATE OUT OF A SERIES LEAVES NOTHING WORTH CORRELATING. If this much of a
+#: series' movement is the covariate itself, the residual is noise and any correlation computed on
+#: it is a number made of what the fit could not explain. The honest answer is then "this series is
+#: almost exactly the covariate here", which is itself a strong finding, not a missing one.
+#: Decision 237 set the value at 0.98 for the titration ladder's reading and this is its one home,
+#: so the ladder's rule and E2's rule cannot drift apart.
+NEARLY_THE_COVARIATE_R2 = 0.98
+
 
 def bh_fdr(pvals):
     """Benjamini-Hochberg FDR q-values for a 1-D array of p-values (NaNs preserved as NaN).

@@ -117,6 +117,58 @@ def p_coherent(fit_edges, cluster_ids, *, n_boot=1000, seed=0):
                                  "coherence, because such an edge cannot support the pattern."))
 
 
+#: The marker that says this note already carries the stability answer. Appending is idempotent
+#: because the adapter appends after serialisation and a payload can be rebuilt from a stored
+#: report: a reader must never see the sentence twice.
+_STABILITY_MARKER = "DOES THIS BAND MEAN THE SAME THING ABOUT PAIN AT EVERY STIMULATION CURRENT?"
+
+#: What each of the four answers means for a reader of the coherence note. The wording is the
+#: stability card's own (``BandStabilityPanel``), so the note and the card cannot say different
+#: things about one answer.
+_STABILITY_GLOSS = {
+    "behaves the same": ("any remaining change with stimulation is smaller than the change we "
+                         "said in advance would matter, so the sign pattern above is about a band "
+                         "whose meaning holds still"),
+    "behaves differently": ("the band's relationship to pain demonstrably CHANGES with the "
+                            "stimulation, so the sign pattern above is about a band whose meaning "
+                            "moves as soon as the loop starts moving the current. This blocks "
+                            "nothing today and is the PI's to rule on"),
+    "cannot tell": ("the data cannot separate a steady band from one that changes. That is not a "
+                    "pass: the sign pattern above has not been shown to hold at every current the "
+                    "loop would visit"),
+    "not tested": ("the test could not be run, so nothing is known either way and the sign "
+                   "pattern above has not been shown to hold at every current"),
+}
+
+
+def note_with_stability(note, stability):
+    """Add the band-stability answer to a coherence note, once.
+
+    WHY THIS IS A SEPARATE FUNCTION AND NOT AN ARGUMENT OF ``coherence_report``. The stability
+    answer is assembled in ``adapter.report_for_participant``, after the pipeline has already built
+    the coherence note; ``pipeline.run`` could not fill such an argument and it would sit unread on
+    every call. An unread parameter is exactly what hid the clinic-stream site defect (decision
+    238), so the wording lives here, in one place, and the caller that HAS the answer appends it.
+
+    ``stability`` is ``stability.BandStabilityFinding.as_payload()`` or None.
+    """
+    base = str(note or "")
+    if _STABILITY_MARKER in base:
+        return base
+    answer = (stability or {}).get("answer") or "not tested"
+    gloss = _STABILITY_GLOSS.get(answer, _STABILITY_GLOSS["not tested"])
+    reason = (stability or {}).get("reason")
+    # The answer is printed in the stability card's own spelling, lower case and all, so a reader
+    # holding both can see they are the same four words and not two vocabularies.
+    tail = f" {_STABILITY_MARKER} The answer is \"{answer}\": {gloss}."
+    if reason:
+        tail += f" What that rests on: {reason}."
+    if not stability:
+        tail += (" No stability answer reached this report at all, which is why it reads as not "
+                 "tested.")
+    return base + tail
+
+
 def coherence_report(e1, e2, e3, *, p=None, n_boot=0):
     exp = expected_pattern_for_dual_threshold()
     obs = {k: v.sign for k, v in (("E1", e1), ("E2", e2), ("E3", e3))}

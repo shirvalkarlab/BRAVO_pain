@@ -1294,20 +1294,26 @@ def _num(x):
     return f if np.isfinite(f) else None
 
 
+def _json_safe(x):
+    """Every number through ``_num``, strings and booleans as they are, nested to any depth.
+
+    One converter for every nested payload this module serialises, so a NaN cannot reach the
+    browser down one path while being converted down another.
+    """
+    if x is None or isinstance(x, (bool, str)):
+        return x
+    if isinstance(x, (list, tuple)):
+        return [_json_safe(i) for i in x]
+    if isinstance(x, dict):
+        return {str(k): _json_safe(i) for k, i in x.items()}
+    return _num(x)
+
+
 def _capture_verdicts_to_dict(v):
-    """JSON-safe copy of ``ThresholdPlan.capture_verdicts`` (``authority.d26_capture_verdicts``):
-    every number through ``_num``, strings and booleans as they are, nested one level."""
+    """JSON-safe copy of ``ThresholdPlan.capture_verdicts`` (``authority.d26_capture_verdicts``)."""
     if not v:
         return None
-    def _leaf(x):
-        if x is None or isinstance(x, (bool, str)):
-            return x
-        if isinstance(x, (list, tuple)):
-            return [_leaf(i) for i in x]
-        if isinstance(x, dict):
-            return {str(k): _leaf(i) for k, i in x.items()}
-        return _num(x)
-    return _leaf(dict(v))
+    return _json_safe(dict(v))
 
 
 def report_to_dict(rep):
@@ -1400,6 +1406,10 @@ def report_to_dict(rep):
             # comment was wrong twice over: the constant had stopped being a disqualification floor
             # and become a choice between two estimators.
             "inference": _edges.estimator_for(e.n_clusters),
+            # THE SAME EDGE WITH A THIRD QUANTITY TAKEN OUT, or absent when nobody asked (panel D
+            # item 4). On E2 that quantity is the stimulation current in force. Descriptive: the
+            # page prints it beside the plain reading and no gate reads it.
+            "adjusted": _json_safe(getattr(e, "adjusted", None)),
         } for k, e in (rep.edges or {}).items()},
         # The estimate E1 replaced (the historical setting-epoch slope), kept for the record.
         "edges_historical": {k: {
@@ -1550,6 +1560,141 @@ def report_to_dict(rep):
         "manifest": rep.manifest,
         "candidates": rep.candidates,
     }
+
+
+#: Which card on the page each caveat belongs to, so a reader can go and look at the number rather
+#: than take the sentence on trust. These are the page's own card names, in its own words.
+CAVEAT_CARDS = {
+    "verdict": "the verdict header",
+    "evidence": "the evidence triangle",
+    "thresholds": "the parameters to transcribe",
+    "timing": "the parameters to transcribe",
+    "simulation": "the closed-loop simulations",
+    "stability": "does this band mean the same thing at every current",
+}
+
+
+def caveats_for_report(payload):
+    """Every caveat on one served report, as one flat list of {severity, text, card}.
+
+    WHY THIS EXISTS (panel D item 3, 2026-09-22). This page prints numbers of two kinds: ones with
+    an uncertainty interval and ones without. Nothing on the page said which was which, so a
+    threshold placed from a median and a discrimination value with a bootstrap interval were read
+    with the same confidence. The list names every number that carries no interval today, beside
+    the warnings the report already holds and the point-sign caveat on the verdict itself.
+
+    IT IS ASSEMBLED PER REQUEST AND STORED NOWHERE. Nothing here is a new measurement: every entry
+    restates something the payload already carries, so a stored copy could only go stale. It is
+    also NOT another stage of the argument -- it gates nothing and refuses nothing.
+
+    ``severity`` is "high" for something that changes what the answer means, "medium" for a number
+    a clinician would transcribe that has no interval, and "low" for a number that qualifies one
+    panel only.
+    """
+    if not payload or not isinstance(payload, dict) or payload.get("available") is not True:
+        return []
+    rows = []
+    vd = payload.get("verdict_detail") or {}
+
+    # 1. THE REPORT'S OWN WARNINGS, word for word. Today these are the two D26 capture verdicts.
+    for w in (vd.get("warnings") or []):
+        if isinstance(w, str) and w.strip():
+            rows.append({"severity": "high", "text": w.strip(), "card": CAVEAT_CARDS["thresholds"]})
+    for w in ((payload.get("threshold") or {}).get("warnings") or []):
+        if isinstance(w, str) and w.strip() and w.strip() not in [r["text"] for r in rows]:
+            rows.append({"severity": "high", "text": w.strip(), "card": CAVEAT_CARDS["thresholds"]})
+
+    # 2. THE VERDICT RESTS ON POINT SIGNS. The PI's rule of 2026-09-13 licenses a verdict on the
+    #    sign of each point estimate; which intervals span zero is the caveat, and it belongs on
+    #    the printed record beside the word a clinician reads.
+    if vd.get("provisional") is True:
+        names = [str(e) for e in (vd.get("unestablished_edges") or [])]
+        which = (", ".join(names[:-1]) + " and " + names[-1]) if len(names) > 1 else "".join(names)
+        rows.append({
+            "severity": "high",
+            "text": (f"The verdict rests on the point signs alone: the interval spans zero on "
+                     f"{which or 'at least one edge'} ({vd.get('n_edges_unestablished')} of "
+                     f"{vd.get('n_edges')}). A point sign is a direction, not an established "
+                     f"effect."),
+            "card": CAVEAT_CARDS["evidence"]})
+
+    # 3. THE BAND-POWER-TO-PAIN READING AND THE CURRENT IN FORCE (panel D item 4). Printed whether
+    #    the second reading could be made or not, because "it could not be made" is itself a
+    #    caveat on the first one.
+    e2 = ((payload.get("edges") or {}).get("E2") or {})
+    adj = e2.get("adjusted") or None
+    if adj:
+        if adj.get("available") and adj.get("auc") is not None:
+            lo, hi = adj.get("auc_low"), adj.get("auc_high")
+            span = (f", interval {float(lo):.3f} to {float(hi):.3f}"
+                    if (lo is not None and hi is not None) else "")
+            rows.append({
+                "severity": "medium",
+                "text": (f"How well this band tells high pain from low pain is reported without "
+                         f"the stimulation current taken out of it. Read again with the current "
+                         f"in force ({adj.get('adjusted_for')}) removed from the band power, it "
+                         f"is {float(adj['auc']):.3f}{span}, against 0.5 for coin flipping."),
+                "card": CAVEAT_CARDS["evidence"]})
+        else:
+            rows.append({
+                "severity": "medium",
+                "text": (f"How well this band tells high pain from low pain carries no term for "
+                         f"the stimulation current in force, and the reading with the current "
+                         f"taken out could not be made here: {adj.get('why', 'no reason recorded')}."),
+                "card": CAVEAT_CARDS["evidence"]})
+
+    # 4. THE NUMBERS WITH NO INTERVAL. Each is named with its value, so the sentence can be checked
+    #    against the card rather than believed.
+    thr = payload.get("threshold") or {}
+    if thr.get("upper") is not None or thr.get("lower") is not None:
+        rows.append({
+            "severity": "medium",
+            "text": (f"The two switching values the device would use "
+                     f"({thr.get('lower')} and {thr.get('upper')} in the stimulator's own units) "
+                     f"are a median reading plus or minus a fixed minimum, and carry no interval. "
+                     f"How far they would move on a different day is not shown."),
+            "card": CAVEAT_CARDS["thresholds"]})
+        rows.append({
+            "severity": "medium",
+            "text": ("The smallest gap the design rule allows between those two values is a fixed "
+                     "number from a simulation, not a measurement on this patient, and carries no "
+                     "interval."),
+            "card": CAVEAT_CARDS["thresholds"]})
+    presc = payload.get("prescription") or {}
+    if presc.get("fields"):
+        rows.append({
+            "severity": "medium",
+            "text": ("The timing values to transcribe (how long the device averages, how long it "
+                     "waits before switching, how long it holds after a switch) carry a word for "
+                     "how confident we are and no interval."),
+            "card": CAVEAT_CARDS["timing"]})
+
+    # 5. THE SIMULATION'S FRACTIONS. Only the run-resampled model carries an interval; the other
+    #    models' fractions are single numbers and are drawn identically, which invites a reader to
+    #    treat them alike.
+    sim = payload.get("closed_loop_simulation") or {}
+    models = (sim.get("models") or {}) if isinstance(sim, dict) else {}
+    if models:
+        rows.append({
+            "severity": "low",
+            "text": ("In the closed-loop simulations only M3 resamples whole runs and so carries "
+                     "an interval; the fractions of time the other models spend at each limit are "
+                     "single numbers with none."),
+            "card": CAVEAT_CARDS["simulation"]})
+
+    # 6. THE STABILITY ANSWER, when it is anything other than a demonstrated pass.
+    stab = payload.get("band_stability") or {}
+    if stab.get("answer") and stab.get("answer") != "behaves the same":
+        rows.append({
+            "severity": "high" if stab.get("answer") == "behaves differently" else "medium",
+            "text": (f"Whether this band means the same thing about pain at every stimulation "
+                     f"current: {stab.get('answer')}. "
+                     f"{stab.get('reason') or ''}").strip(),
+            "card": CAVEAT_CARDS["stability"]})
+
+    order = {"high": 0, "medium": 1, "low": 2}
+    rows.sort(key=lambda r: order.get(r["severity"], 3))
+    return rows
 
 
 #: How many of the newest runs of stepped current the deployment page DRAWS. The amplitude-effect
@@ -3183,6 +3328,15 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                                                           band_width_hz=_bw)
             out["band_stability"] = _finding.as_payload()
             out["band_stability_summary"] = _stab.summarise([_finding])
+            # AND SAID INSIDE THE COHERENCE NOTE (panel D item 5, 2026-09-22). The note is where a
+            # reader is told what the three edges together do and do not show; leaving the
+            # stability answer out of it let a coherent sign pattern read as a settled finding
+            # about a band whose meaning had never been shown to hold still. The wording has one
+            # home, in `consistency.note_with_stability`, and appending is idempotent.
+            if isinstance(out.get("coherence"), dict):
+                from . import consistency as _consistency
+                out["coherence"]["note"] = _consistency.note_with_stability(
+                    out["coherence"].get("note"), out["band_stability"])
     except Exception as _exc:                      # never let this take down the whole report
         # Say WHY it is missing. A key that is simply absent reads on the page as "does not apply",
         # and this check being unavailable is not the same as it not applying.
@@ -3195,6 +3349,12 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
             "blocking_status": _stab_err.BLOCKING_STATUS,
             "answers_possible": list(_stab_err.ANSWERS),
         }
+        # The note says "not tested" too, for the same reason the payload does: a coherence note
+        # that is silent about stability reads as though stability had been shown.
+        if isinstance(out.get("coherence"), dict):
+            from . import consistency as _consistency_err
+            out["coherence"]["note"] = _consistency_err.note_with_stability(
+                out["coherence"].get("note"), out["band_stability"])
 
     # TRACK D: the grid computed once, at the top of this function -- see the note there on why it
     # runs before either early return, and `band_sweep_grid_for_closed_loop` above for the design.
@@ -3507,6 +3667,18 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                                        "routes": {}, "store_key": None,
                                        "reason": f"the ground-truth verdict could not be "
                                                  f"written: {_exc!r}"}
+
+    # THE CAVEATS LIST, assembled last because it reads what every block above wrote (panel D item
+    # 3). It is not another stage of the argument: it restates what the payload already carries,
+    # gates nothing, and is stored nowhere, so it cannot go stale against the report it describes.
+    try:
+        out["caveats"] = caveats_for_report(out)
+    except Exception as _exc:                          # noqa: BLE001
+        _log.warning("closed-loop report: the caveats list could not be assembled for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
+        out["caveats"] = [{"severity": "high", "card": "the verdict header",
+                           "text": f"The list of caveats could not be assembled: {_exc!r}. Read "
+                                   f"that as one missing list, not as a report with no caveats."}]
 
     out["cache_status"] = _status                              # Track C step 4
     return out

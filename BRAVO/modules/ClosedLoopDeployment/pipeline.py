@@ -237,7 +237,18 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
         rep.edges_historical = {"E1": e1}
         e1 = E.pooled_actuation_edge(pooled_e1, scale=power_scale)
         pooled_edge = e1
-    e2 = E.state_edge(T, channel=ch, center_hz=fc, scale=power_scale)
+    # E2 IS ALSO READ WITH THE CURRENT IN FORCE TAKEN OUT OF THE BAND POWER (panel D item 4,
+    # 2026-09-22). Every band on this participant's left lead that rises with pain also rests on
+    # the current the stimulator was delivering (decision 232), and this page carried only a
+    # warning about that in words (decision 235). The second reading rides on the edge's `adjusted`
+    # field and is descriptive: it never resolves the edge, selects a band or moves a verdict (the
+    # PI, 2026-09-22, decision 233 answer 2). The column is the one E1 and E3 read on the same
+    # side, so all three edges are about the same stimulator.
+    _e2_amp_col = adapter.canonical_amp_col(hemisphere)
+    if _e2_amp_col not in T.columns:
+        _e2_amp_col = adapter.resolve_setting_column(T.columns, "amp", hemisphere)
+    e2 = E.state_edge(T, channel=ch, center_hz=fc, scale=power_scale,
+                      adjust_for_column=_e2_amp_col)
     # E3 ON THE ACTUATED SIDE'S CURRENT (review C1). ``therapy_edge`` defaults to the left column;
     # the design matrix carries one amplitude column per side, and the side the loop would drive
     # is the one whose current is regressed on pain.

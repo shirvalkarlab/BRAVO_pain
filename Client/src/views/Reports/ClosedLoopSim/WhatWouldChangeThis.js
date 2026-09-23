@@ -90,6 +90,47 @@ function buildItems(data) {
     });
   });
 
+  // DOES THE BAND MEAN THE SAME THING ABOUT PAIN AT EVERY STIMULATION CURRENT? (Panel D item 2,
+  // 2026-09-22.) The answer was computed, drawn on its own card, and left out of the one band on
+  // this page that tells a reader what to do next. It sits between the device rules and the
+  // evidence findings because it is neither: a band whose meaning moves with the current is not a
+  // rule violation and it is not a weak estimate, it is a band that damages the signal it steers
+  // by the moment the loop starts. The wording is the stability card's own, so the two cannot say
+  // different things, and no row is added when the band was shown to behave the same.
+  const st = data.band_stability || null;
+  const stAnswer = st && st.answer;
+  if (stAnswer && stAnswer !== "behaves the same") {
+    const differs = stAnswer === "behaves differently";
+    const notTested = stAnswer === "not tested";
+    items.push({
+      key: "band-stability",
+      rank: 4.5,
+      ink: differs ? PAL.fail : PAL.warnText,
+      actor: differs
+        ? "band selection — not more measurement"
+        : "measurement — more stimulation states",
+      // The answer is quoted in the card's own four words, whichever it is, so a reader holding
+      // both is reading one vocabulary.
+      title: `Whether this band means the same thing about pain at every stimulation current: `
+        + `"${stAnswer}"`,
+      page: null,
+      clears: differs
+        ? "More data would not change this: the band's relationship to pain was shown to change "
+          + "with the stimulation, so the loop would damage the signal it steers by. What would "
+          + "change it is a different band. This blocks nothing today and is the PI's to rule on."
+        : notTested
+          ? "The test could not be run at all, so nothing is known either way. Recordings at more "
+            + "than one stimulation setting on this band are what would let it run."
+          : "This is not a pass. The data cannot yet separate a band that holds still from one "
+            + "that changes; recordings at more stimulation currents, on this band, are what "
+            + "would settle it.",
+      observed: st.band_center_hz != null
+        ? `${st.band_center_hz} Hz${st.electrode ? ` on ${st.electrode}` : ""}`
+        : null,
+      why: st.reason || null,
+    });
+  }
+
   // The evidence side. Ranked below the device rules because a device refusal makes today's
   // evidence question moot, and the two are cleared by different work in any case.
   const co = data.coherence;

@@ -34,7 +34,10 @@ MIN_RAMP_STEPS = 6
 #: When this much of a band's movement across the ladder is the current itself, taking the current
 #: out leaves almost nothing to correlate and the adjusted value is noise dressed as a number. Say
 #: so instead: "this band is nearly the current itself here" is the finding, and it is a strong one.
-NEARLY_THE_CURRENT_R2 = 0.98
+#: Read from ``stats_utils`` rather than retyped, because the Closed-Loop page's band-power-to-pain
+#: reading applies the same rule and two copies of one number drift apart (this project's cache had
+#: two copies of one size limit that differed by a factor of four).
+NEARLY_THE_CURRENT_R2 = _su.NEARLY_THE_COVARIATE_R2
 
 #: Resamples behind every interval here. The unit resampled is the STEP for the ramp and the RATING
 #: for the holds, because those are what the visit actually delivered independently of each other.
