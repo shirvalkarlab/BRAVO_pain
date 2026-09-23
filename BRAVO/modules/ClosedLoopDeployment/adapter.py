@@ -523,8 +523,11 @@ STABILITY_GRID_KIND = "biomarker_band_stability_grid"
 #: The request keys that decide WHICH stored grid the Biomarkers page shows: the pain score and
 #: the matching and split settings. The Closed-Loop page sends the same ones (read from the
 #: Biomarkers page's own persisted controls), and nothing else from the request reaches the sweep.
+#: The clinic-sheet switch (decision 186) was missing until 2026-09-23: the page sent it and this
+#: list dropped it, so with sheets on the Biomarkers page this card read the sheets-off grid.
 GRID_SETTING_KEYS = ("SweepMetric", "LabelMetric", "MatchToleranceMin", "MatchDirection",
-                     "AllowWindowReuse", "LabelStrategy", "PercentileLow", "PercentileHigh")
+                     "AllowWindowReuse", "LabelStrategy", "PercentileLow", "PercentileHigh",
+                     "IncludeClinicSheetRatings")
 
 
 def _build_grid_through_biomarkers(participant_uid, rd):
@@ -675,11 +678,23 @@ def band_sweep_grid_for_closed_loop(participant_uid, request_data=None, *, consu
     # `test_track_d_grid_stability_translation.py` asserts it still equals
     # `bravo_service.STABILITY_GRID_KIND`, so the two are pinned by a test instead of by an import
     # this module cannot afford to make.
+    #
+    # THE ANSWER FOR THIS GRID, NOT THE NEWEST ONE (2026-09-23). The stability answer depends on the
+    # pain score the grid was built for (on RCS08, 3,123 of 5,148 stored values differ between the
+    # NRS grid's answer and the Left Leg VAS grid's), and the store keeps one answer per grid. This
+    # used to read the newest answer of any grid, so the card could print another score's answer
+    # beside its own grid. Each answer's sidecar names its grid's key, and the grid read above
+    # carries that same key, so the match is exact; no match means "not tested", never a borrowed
+    # answer. An answer written before its sidecar named a grid is never matched.
     stored_stability = {}
+    _grid_key = str(((payload or {}).get("sweep_key") or {}).get("signature_key") or "")
     try:
-        _payload, _ = _cache_store.load_newest(
-            STABILITY_GRID_KIND, participant_uid, consumer=str(consumer),
-            root=_SHARED_CACHE_DIR_OVERRIDE)
+        _payload = None
+        if _grid_key:
+            _payload, _ = _cache_store.load_newest(
+                STABILITY_GRID_KIND, participant_uid, consumer=str(consumer),
+                root=_SHARED_CACHE_DIR_OVERRIDE,
+                match=lambda meta: (meta.get("extra") or {}).get("sweep_key") == _grid_key)
         for _flat, _value in ((_payload or {}).get("points") or {}).items():
             _ch, _, _centre = str(_flat).rpartition("|")
             try:

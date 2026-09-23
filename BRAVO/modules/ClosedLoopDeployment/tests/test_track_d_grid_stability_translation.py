@@ -54,7 +54,7 @@ def sandbox():
 
 
 def _write_real_band_sweep_entry(*, stability_raw=None, sig=("sweep", 1), center_hz=12.5,
-                                 request=None, tagged=True):
+                                 request=None, tagged=True, sweep_key=None):
     """Mirrors `Biomarkers.bravo_service._band_sweep_signature`'s real chain shape: flattened from
     the raw tile entry and the raw pain-report snapshot, nothing else -- and, since decision 131,
     the sidecar tag of the settings the grid was built under (`extra["sweep_settings"]`), which is
@@ -82,6 +82,9 @@ def _write_real_band_sweep_entry(*, stability_raw=None, sig=("sweep", 1), center
             }
         },
     }
+    if sweep_key is not None:
+        # The block the real sweep stores with its grid (`sweep_key_block`), naming the grid's own key.
+        payload["sweep_key"] = {"signature_key": sweep_key, "provenance": []}
     extra = ({"sweep_settings": sweep_settings.sweep_settings_tag_from_request(request or {}),
               "metric_label": "NRS (0–10)"} if tagged else None)
     st.store("biomarker_band_sweep", UID, sig, payload, writer="biomarkers",
@@ -235,3 +238,72 @@ def test_the_stability_grid_kind_matches_the_name_biomarkers_actually_writes():
     assert found.group(1) == adapter.STABILITY_GRID_KIND, (
         f"the writer's kind is {found.group(1)!r} but this module reads "
         f"{adapter.STABILITY_GRID_KIND!r} -- the stored stability grid would never be found")
+
+
+# --------------------------------------------------------------------------------------------
+# The stability column reads the answer for ITS OWN grid (2026-09-23)
+# --------------------------------------------------------------------------------------------
+
+def _raw(verdict, lrt_p, lo, hi):
+    return {"available": True, "lrt_p": lrt_p,
+            "equivalence": {"verdict": verdict, "margin_log_or": _MARGIN,
+                            "max_abs_diff_log_or": max(abs(lo), abs(hi)), "ci": [lo, hi],
+                            "n_eras_compared": 3, "reason": "fixture"},
+            "n": 240, "n_clusters": 9, "era_counts": {"OFF": 40, "LOW": 100, "HIGH": 100}}
+
+
+def _write_stability_entry(grid_key, raw, *, center_hz=12.5, tagged=True):
+    """One stored stability answer, as `compute_and_store_stability_grid` writes it: filed under a
+    key built on the grid's key, and naming that grid in its sidecar (`extra["sweep_key"]`)."""
+    sig = (adapter.STABILITY_GRID_KIND, "v", grid_key, 5.0, (("ONE_THREE_LEFT", float(center_hz)),))
+    st.store(adapter.STABILITY_GRID_KIND, UID, sig,
+             {"points": {f"ONE_THREE_LEFT|{center_hz:g}": raw}},
+             writer="biomarkers", trigger="stability_grid", provenance=[],
+             extra=({"sweep_key": grid_key} if tagged else None))
+
+
+def test_the_stability_column_reads_the_answer_for_its_own_grid_not_the_newest(sandbox):
+    """Found live on 2026-09-23. The stability answer depends on the pain score the grid was built
+    for (on RCS08, 3,123 of 5,148 stored values differ between the NRS grid's answer and the Left
+    Leg VAS grid's), and the store now keeps one answer per grid. This card read the NEWEST answer
+    whatever grid it belonged to, so it could print another pain score's answer beside its own
+    grid. It must read the answer filed for the grid it shows, even when another is newer."""
+    _write_real_band_sweep_entry(sweep_key="grid-shown")
+    _write_stability_entry("grid-shown", _raw("stable", 0.72, -0.10, 0.30))
+    _write_stability_entry("grid-other-score", _raw("inconclusive", 0.01, -0.52, 0.89))
+    got = adapter.band_sweep_grid_for_closed_loop(UID)
+    row = got["band_time_sweep"]["ONE_THREE_LEFT"]["best_correlation_rows"][0]
+    assert row["cross_setting_stability"]["answer"] == "behaves the same", (
+        "the card printed the newest stored answer, which belongs to another grid")
+    assert got["cross_setting_stability_from_store"] == 2
+
+
+def test_with_no_answer_for_its_own_grid_the_column_says_not_tested_rather_than_borrowing(sandbox):
+    """Only another grid's answer is stored, or one written before the sidecar named its grid:
+    the rows carry no stability answer (the card's "not tested"), never a borrowed one."""
+    _write_real_band_sweep_entry(sweep_key="grid-shown")
+    _write_stability_entry("grid-other-score", _raw("stable", 0.72, -0.10, 0.30))
+    _write_stability_entry("grid-shown", _raw("stable", 0.72, -0.10, 0.30), tagged=False)
+    got = adapter.band_sweep_grid_for_closed_loop(UID)
+    row = got["band_time_sweep"]["ONE_THREE_LEFT"]["best_correlation_rows"][0]
+    assert "cross_setting_stability" not in row
+    assert got["cross_setting_stability_from_store"] == 0
+
+
+def test_the_card_reads_the_grid_with_the_clinic_sheet_switch_the_biomarkers_page_used(sandbox):
+    """Found live on 2026-09-23 while proving the stability fix above. The Closed-Loop page sends
+    the Biomarkers page's clinic-sheet switch with the grid settings (`useBandSweepGrid.js`), but
+    the server's list of settings it passes on left it out, so with sheets ON on the Biomarkers
+    page this card matched the sheets-OFF grid -- a different set of ratings, and not the grid the
+    Biomarkers page shows (decision 131). Two grids stored, same score, the switch differing: the
+    card must read the one the request names, in either direction."""
+    off = {"SweepMetric": "left_leg_vas", "LabelMetric": "left_leg_vas"}
+    on = dict(off, IncludeClinicSheetRatings="1")
+    _write_real_band_sweep_entry(sig=("sweep", "sheets-on"), request=on, center_hz=22.5)
+    _write_real_band_sweep_entry(sig=("sweep", "sheets-off"), request=off, center_hz=12.5)
+    got = adapter.band_sweep_grid_for_closed_loop(UID, on)
+    assert got["grid_settings"]["include_clinic_sheet_ratings"] is True
+    assert got["band_time_sweep"]["ONE_THREE_LEFT"]["best_correlation_rows"][0]["band_center_hz"] == 22.5, (
+        "the card read the sheets-off grid while the request asked for sheets on")
+    got_off = adapter.band_sweep_grid_for_closed_loop(UID, off)
+    assert got_off["band_time_sweep"]["ONE_THREE_LEFT"]["best_correlation_rows"][0]["band_center_hz"] == 12.5

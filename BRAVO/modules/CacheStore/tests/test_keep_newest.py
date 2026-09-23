@@ -171,3 +171,29 @@ def test_the_stim_optimizer_response_keeps_both_page_requests():
         st.store(kind, UID, sig_two, {"which": "two_stage"}, writer="stim_optimizer", provenance=[])
         assert st.load(kind, UID, sig_plain)["which"] == "plain"
         assert st.load(kind, UID, sig_two)["which"] == "two_stage"
+
+
+def test_the_stability_answer_keeps_one_entry_per_grid_it_answers():
+    """Found live on 2026-09-23: the heat maps' stability column read "not tested" on all 132 rows
+    of every grid, while the background log said "stored 132 of 132 points" dozens of times that
+    day. The stability answer is filed under the key of the grid it answers (the grid's own key is
+    part of it), so each grid -- each pain score, at the reader's settings and at the daily
+    defaults -- is its own entry of this kind. Under the default of one, every run deleted the run
+    before it: one entry was left on disk, filed under whichever grid ran last, and every other
+    grid, the page's own among them, found nothing. The decision-107 failure a fourth time.
+
+    So the stability kind keeps as many entries as the grid kind it answers, and twelve answers
+    written in turn all read back. The kind name is spelled out because the constant that holds it
+    (`Biomarkers.bravo_service.STABILITY_GRID_KIND`) lives in a module that needs Django."""
+    kind = "biomarker_band_stability_grid"
+    assert st.KEEP_NEWEST_BY_KIND.get(kind, 1) >= st.KEEP_NEWEST_BY_KIND[KIND], (
+        "one stability answer per grid needs at least as many entries as there are grids")
+    grid_keys = [f"grid-{m}-{s}" for s in ("reader", "daily")
+                 for m in ("nrs", "vas", "left_leg_vas", "back_vas", "mpq_sum", "composite")]
+    with _Sandbox():
+        sigs = {}
+        for g in grid_keys:
+            sigs[g] = (kind, "v1", UID, g, 5.0, "points-132")
+            st.store(kind, UID, sigs[g], {"points": [g]}, writer="biomarkers", provenance=[])
+        lost = [g for g in grid_keys if st.load(kind, UID, sigs[g], consumer="biomarkers") is None]
+    assert not lost, f"these grids' stability answers were evicted by later runs: {lost}"

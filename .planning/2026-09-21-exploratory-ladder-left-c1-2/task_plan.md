@@ -4,7 +4,7 @@
 The Stim Optimizer's titration card carries a second ladder for the stimulation configuration the readiness screen's best left sensing pair requires (L 0-3+ needs stimulation on contacts 1 and 2, never yet powered): rate from that cell, its pain-positive bands to watch, a first-exposure stop rule, the up/down ladder for the biomarker's slope, and three timed on/off holds with a rating every minute for the acute pain effect; its rows go into the clinic sheet.
 
 ## Next Step
-Watch the card live on the Stim Optimizer page once the PI has logged in to the browser pane (the only unticked step); everything else is built, proven and committed.
+None: every step is built, proven, committed and watched live.
 
 ## Current Phase
 Phase 3
@@ -16,8 +16,8 @@ Phase 3
 
 ### Phase 2: Page
 - [x] The card's new section (four jest tests RED then GREEN); bundle rebuilt (chunk 100.18f67798); workers reloaded
-- [ ] Watched live (the pane came back logged out after the session restart; waits on the PI's login)
-- **Status:** in_progress
+- [x] Watched live on 2026-09-22, in the browser check that found the three fixes of decision 247
+- **Status:** complete
 
 ### Phase 3: Proof and record
 - [x] Live response before/after: 8,821 fields in common, 8 differing (all store and cache bookkeeping), 1,630 added (904 under `titration_plan.proposed.Left`, 33 sheet rows x 22 columns), 2 removed (bookkeeping); host 1424 / 2 / 0, container 673 / 0; decision 230; pushed

@@ -5300,10 +5300,11 @@ def compute_and_store_stability_grid(participant_uid, *, request_data=None, work
 
     # A HALF-FINISHED RUN MUST NOT REPLACE A COMPLETE ANSWER. The batch policy carries on past a
     # point that raises but stops after three in a row, so a grid can come back holding points it
-    # never attempted. The store keeps ONE current entry per participant per kind, replaced whole --
-    # so writing a stopped-early grid over a good one would not narrow the column, it would destroy
-    # the previous answer outright, and the page would show "not yet computed" on rows that had a
-    # real answer an hour ago. The next scheduled run tries again from scratch.
+    # never attempted. This was written when the store kept ONE entry of this kind per participant,
+    # replaced whole -- so writing a stopped-early grid over a good one would have destroyed the
+    # previous answer outright. The kind keeps twelve since 2026-09-23 (one per grid; the limit of
+    # one had been deleting every grid's answer but the last), and the rule still refuses a partial
+    # write whenever any complete answer is stored. The next scheduled run tries again from scratch.
     out["attempted"] = len(grid)
     out["stopped_early"] = bool(len(grid) < len(points))
     if out["stopped_early"]:
@@ -5335,9 +5336,13 @@ def compute_and_store_stability_grid(participant_uid, *, request_data=None, work
     }
     out["n_available"] = int(sum(1 for v in grid.values() if (v or {}).get("available")))
     try:
+        # `extra` names the grid this answer is for, so a reader on another page that holds the
+        # grid but cannot rebuild this key (the Closed-Loop card) can find the answer for THAT
+        # grid rather than the newest one: the answer depends on the grid's pain score, and the
+        # kind keeps one entry per grid (2026-09-23).
         _cache_store.store(STABILITY_GRID_KIND, participant_uid, sig, payload,
                            writer="biomarkers", trigger="stability_grid", provenance=prov,
-                           root=_SHARED_CACHE_DIR_OVERRIDE)
+                           root=_SHARED_CACHE_DIR_OVERRIDE, extra={"sweep_key": str(sweep_key)})
         out["stored"] = True
     except Exception as exc:                                     # noqa: BLE001
         # A failed write is reported, never swallowed into a success: a caller that believes the

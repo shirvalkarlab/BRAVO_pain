@@ -584,6 +584,13 @@ KEEP_NEWEST_BY_KIND = {
     # other every day -- noon ingest evicted the page's, the next Recompute reassembled (the
     # decision-51 per-recording loop plus a store write) and evicted the ingest's. Two keeps both.
     "biomarker_psd_matrix": 2,
+    # The heat maps' stability column is filed under the key of the grid it answers, so there is
+    # one entry per grid and it needs the grid kinds' twelve. Under a limit of one every background
+    # run deleted the one before it (found live 2026-09-23: "stored 132 of 132 points" dozens of
+    # times in the log, one entry on disk, and every other grid -- the page's own among them --
+    # reading "not tested" on all 132 rows). The decision-107 lesson a fourth time. 0.13 MB an
+    # entry, so about 1.6 MB a participant.
+    "biomarker_band_stability_grid": 12,
 }
 
 
