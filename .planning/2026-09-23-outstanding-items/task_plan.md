@@ -6,7 +6,7 @@ order"): stability column, ruling 8 with the sign-off identity, the parameter-ca
 two stale page tests, the next-visit list on the titration card, then the two diagnostics.
 
 ## Next Step
-Phase 4: put `coverage_gap` (decision 239) on the Stim Optimizer response and the titration card.
+Phase 5: B-3, level shifts in the chronic 10-minute log at dated events.
 
 ## Phases
 
@@ -27,13 +27,13 @@ Phase 4: put `coverage_gap` (decision 239) on the Stim Optimizer response and th
 - **Status:** complete
 
 ### Phase 4: What the next visit must deliver, on the page
-- [ ] `coverage_gap` (decision 239) on the Stim Optimizer response and the titration card
-- **Status:** in_progress
+- [x] `coverage_gap` on every failing per-rate row and on the current-map card (decision 251)
+- **Status:** complete
 
 ### Phase 5: The two diagnostics
 - [ ] B-3: level shifts in the chronic 10-minute log at dated events
 - [ ] C-3: thin data at the edges or the wrong shape, for the calibration failure
-- **Status:** pending
+- **Status:** in_progress
 
 ## Decisions Made
 | Decision | Rationale |

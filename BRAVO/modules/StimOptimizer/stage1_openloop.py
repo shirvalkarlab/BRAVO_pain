@@ -1425,6 +1425,11 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
     # --- the per-rate table (2026-09-14): one row per (pulse-width pair, rate) that was even
     # attempted, fitted or not, with the pooled 3-input model's own slice at that rate alongside
     # it for reference. See ``JointStratum.rate_strata``.
+    # The safe ceiling and the setting in force, for the next-visit gap on each row.
+    _gap_kw = dict(
+        ceiling_mA=({h: float(v[0]) for h, v in (safety_ceiling_by_hemisphere or {}).items()
+                     if v and v[0] is not None} or None),
+        held_mA={"Left": inc_amp_left, "Right": inc_amp_right})
     rate_rows = []
     for (pwl, pwr), sl in slices.items():
         for rate, rs in (sl.rate_strata or {}).items():
@@ -1434,7 +1439,7 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
                        pooled_across_rates_mu_range=pooled["mu_range"],
                        pooled_across_rates_delivered_at_this_rate=pooled["delivered_at_this_rate"],
                        pooled_across_rates_note=pooled["note"])
-            row.update(_rate_row_numbers(rs))
+            row.update(_rate_row_numbers(rs, **_gap_kw))
             rate_rows.append(row)
     rate_summary = pd.DataFrame(rate_rows)
 
@@ -1483,7 +1488,7 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
                        fitted=bool(rs.fitted), n_epochs=int(rs.n_epochs),
                        pooled_pulse_widths=True,
                        n_pairings_pooled=int((rs.meta or {}).get("n_pairings", 0)))
-            row.update(_rate_row_numbers(rs))
+            row.update(_rate_row_numbers(rs, **_gap_kw))
             pooled_rows.append(row)
         pooling_audit = dict(computed=True, default="separate",
                              in_force_pairing=dict(pw_us_left=float(inc_pw_left),
@@ -1525,9 +1530,32 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
                         pooled_rate_strata=pooled_rate_strata, pooled_rate_summary=pooled_rate_summary)
 
 
-def _rate_row_numbers(rs: RateStratum) -> dict:
+def _next_visit_gap(coverage, *, ceiling_mA=None, held_mA=None):
+    """What a visit would have to deliver for this row's coverage to pass (decision 239), or None
+    when it already passes. Steps the left side and holds the right at its setting in force, unless
+    the left already spans enough and the right does not; the pairs that move the held side are the
+    joint corners either way."""
+    cov = dict(coverage or {})
+    if not cov or cov.get("passes"):
+        return None
+    need = float(cov.get("span_required_mA", 1.0))
+    stepped = ("Right" if float(cov.get("span_left_mA") or 0.0) >= need
+               and float(cov.get("span_right_mA") or 0.0) < need else "Left")
+    other = "Right" if stepped == "Left" else "Left"
+    held = (held_mA or {}).get(other)
+    return coverage_gap(cov, ceiling_mA=ceiling_mA,
+                        held_right_mA=(float(held) if held is not None else None),
+                        stepped_side=stepped)
+
+
+def _rate_row_numbers(rs: RateStratum, *, ceiling_mA=None, held_mA=None) -> dict:
     """The numbers of one per-rate row of the rate table, fitted or not (shared by the separate
-    and the pooled tables so the two cannot drift)."""
+    and the pooled tables so the two cannot drift).
+
+    ``coverage_gap`` (2026-09-23): when the coverage check fails, what the next visit must deliver
+    for it to pass -- the pairs to top up or add, under the safe ceiling ``ceiling_mA`` (per side),
+    with the side not being stepped held at ``held_mA`` (its setting in force). Built in decision
+    239 and reached by nothing until now."""
     if rs.fitted:
         res = rs.resolution or {}
         return dict(
@@ -1549,6 +1577,8 @@ def _rate_row_numbers(rs: RateStratum) -> dict:
                     # days any qualifying pair has, and how many the rule needs
                     coverage_min_days_over_pairs=res.get("coverage", {}).get("min_days_over_pairs"),
                     coverage_days_per_pair_required=res.get("coverage", {}).get("days_per_pair_required"),
+                    coverage_gap=_next_visit_gap(res.get("coverage"), ceiling_mA=ceiling_mA,
+                                                 held_mA=held_mA),
                     sentence=res.get("sentence"), reason=None)
     return dict(n_reports=float("nan"), amp_mA_left=float("nan"),
                           amp_mA_right=float("nan"), posterior_mean=float("nan"),
@@ -1557,7 +1587,7 @@ def _rate_row_numbers(rs: RateStratum) -> dict:
                           gain_sd_of_difference=float("nan"), gain_passes=None,
                           coverage_n_pairs=0, coverage_span_left_mA=float("nan"),
                           coverage_span_right_mA=float("nan"), coverage_passes=False,
-                          sentence=None, reason=str(rs.reason))
+                          coverage_gap=None, sentence=None, reason=str(rs.reason))
 
 
 def _freeze_joint(slices: dict, inc_rate, inc_pw_by_side: dict, *, h_audit, gx, resolution_k,

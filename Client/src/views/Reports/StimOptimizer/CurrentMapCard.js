@@ -272,6 +272,23 @@ function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, i
                   detail={`${num(r.coverage_n_pairs) ?? 0} pairs, `
                     + `${num(r.coverage_span_left_mA) != null ? num(r.coverage_span_left_mA).toFixed(1) : "0.0"} mA left / `
                     + `${num(r.coverage_span_right_mA) != null ? num(r.coverage_span_right_mA).toFixed(1) : "0.0"} mA right span`} />
+                {/* WHAT THE NEXT VISIT MUST DELIVER (decision 239, on the page 2026-09-23): the
+                    server names the current pairs to repeat or add for this check to pass, the
+                    cheapest first, under the safe ceiling. In the open, because it is the one line
+                    on the card a clinician can act on at the next visit. */}
+                {r.coverage_passes !== true && r.coverage_gap && r.coverage_gap.cheapest_way ? (
+                  <MDTypography variant="caption" component="div"
+                    sx={{ ...SMALL, mt: 0.6, color: PAL.warnText }}>
+                    {`What the next visit must deliver: ${String(r.coverage_gap.cheapest_way).replace(/ -- /g, " — ")}. `}
+                    {r.coverage_gap.why ? `${String(r.coverage_gap.why).replace(/ -- /g, " — ")}. ` : ""}
+                    {r.coverage_gap.what_each_pair_needs
+                      ? `Each pair needs ${r.coverage_gap.what_each_pair_needs}. ` : ""}
+                    {(r.coverage_gap.pairs_to_add || []).length
+                      ? `New settings that would also count: ${r.coverage_gap.pairs_to_add
+                        .map((q) => `L${num(q.amp_mA_Left)}/R${num(q.amp_mA_Right)}`).join(", ")}.`
+                      : ""}
+                  </MDTypography>
+                ) : null}
                 {r.sentence && (
                   <MDTypography variant="caption" component="div" color="text"
                     sx={{ ...SMALL, mt: 0.8 }}>

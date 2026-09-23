@@ -130,3 +130,60 @@ def test_the_gap_never_proposes_a_current_above_the_ceiling():
 
 if __name__ == "__main__":                              # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# -------------------------------------------------------------------------------------------------
+# On the response (2026-09-23). Until now `coverage_gap` was built, tested and reached by nothing:
+# no response carried it and no card printed it. Each per-rate row whose coverage fails now carries
+# the gap beside the coverage numbers the current-map card already prints, with the PI-stated safe
+# ceiling and the other side held at its setting in force.
+# -------------------------------------------------------------------------------------------------
+
+def _row_for(cov, **kw):
+    rs = S1.RateStratum(pw_us_left=100.0, pw_us_right=150.0, rate_hz=55.0, n_epochs=12, fitted=True,
+                        x_star=(3.0, 2.5), mu_star=5.0, sd_star=0.5, n_reports_total=40.0,
+                        coverage=cov, resolution={"resolved": False, "coverage": cov,
+                                                  "flat": {}, "gain": {}, "sentence": "s"})
+    return S1._rate_row_numbers(rs, **kw)
+
+
+def test_a_row_whose_coverage_fails_carries_what_the_next_visit_must_deliver():
+    # the two qualifying pairs span only 0.5 mA on the left, so the left is the side to step
+    cov = S1.current_coverage(_epochs([(0.0, 2.5, 6, 2), (0.5, 2.5, 6, 2), (3.0, 2.5, 4, 1)]))
+    assert cov["passes"] is False
+    row = _row_for(cov, ceiling_mA={"Left": 4.5, "Right": 4.5}, held_mA={"Left": 3.0, "Right": 2.5})
+    gap = row["coverage_gap"]
+    assert gap["stepped_side"] == "Left"
+    assert gap["n_pairs_missing"] == cov["n_pairs_required"] - cov["n_pairs"]
+    assert gap["cheapest_way"].startswith("repeat L3/R2.5")          # the near-miss, topped up
+    assert gap["ceiling_mA"] == {"Left": 4.5, "Right": 4.5}
+    assert gap["held_side_mA"] == 2.5, "the held side stays at its setting in force"
+    for p in gap["pairs_to_add"]:
+        assert p["amp_mA_Left"] <= 4.5 and p["amp_mA_Right"] <= 4.5
+
+
+def test_when_the_left_already_spans_enough_the_right_is_stepped_and_the_left_held():
+    cov = S1.current_coverage(_epochs([(0.0, 2.5, 6, 2), (1.0, 2.5, 6, 2)]))
+    gap = _row_for(cov, ceiling_mA={"Left": 4.5, "Right": 4.5},
+                   held_mA={"Left": 3.0, "Right": 2.5})["coverage_gap"]
+    assert gap["stepped_side"] == "Right"
+    assert gap["held_side_mA"] == 3.0
+
+
+def test_the_ceiling_passed_in_is_the_one_obeyed():
+    cov = S1.current_coverage(_epochs([(0.0, 2.5, 6, 2), (1.0, 2.5, 6, 2)]))
+    row = _row_for(cov, ceiling_mA={"Left": 2.0, "Right": 4.5}, held_mA={"Left": 1.0, "Right": 2.5})
+    for p in row["coverage_gap"]["pairs_to_add"]:
+        assert p["amp_mA_Left"] <= 2.0
+
+
+def test_a_row_that_passes_or_was_not_fitted_carries_no_gap():
+    rows = []
+    for d in range(6):
+        rows.append((float(d) * 0.5, 1.0 + (d % 3) * 0.75, 6, 2))
+    cov = S1.current_coverage(_epochs(rows))
+    assert cov["passes"] is True, cov
+    assert _row_for(cov)["coverage_gap"] is None
+    unfitted = S1.RateStratum(pw_us_left=100.0, pw_us_right=150.0, rate_hz=55.0, n_epochs=2,
+                              fitted=False, reason="too few epochs")
+    assert S1._rate_row_numbers(unfitted)["coverage_gap"] is None
