@@ -50,6 +50,16 @@ function rowIndexOf(sw, seconds) {
   return delivered.findIndex((d) => Math.abs(Number(d) - Number(seconds)) < 1e-6);
 }
 
+/** "117 ratings", or "117 ratings (about 98 independent)" when the row carries the effective count
+ *  (panel A item 4, 2026-09-22: ratings filed close together are worth fewer independent
+ *  observations than their number; the backend's `stats_utils.effective_n` on the pairs the cell
+ *  correlated). A row without the field prints exactly what it always did. */
+function ratingsPhrase(row) {
+  const n = Number(row.n_pain_reports);
+  const e = row.n_pain_reports_effective == null ? NaN : Number(row.n_pain_reports_effective);
+  return Number.isFinite(e) ? `${n} ratings (about ${Math.round(e)} independent)` : `${n} ratings`;
+}
+
 /** The corrected statistics for one cell, or the sentence that says why there are none. */
 export function bestCellReadout(sw, kind, colIndex, rowIndex, { includeN = true } = {}) {
   const best = bestRowFor(sw, kind, colIndex);
@@ -61,7 +71,7 @@ export function bestCellReadout(sw, kind, colIndex, rowIndex, { includeN = true 
   }
   // `includeN`: the hover carries the count (nothing else on a hover does); the panel lines beside
   // the scatter and the violin leave it out, since the plain line above them already has it.
-  const parts = includeN ? [`${Number(best.n_pain_reports)} ratings`] : [];
+  const parts = includeN ? [ratingsPhrase(best)] : [];
   if (kind !== "auc" && best.pearson_r_low != null && best.pearson_r_high != null) {
     parts.push(`interval ${fmtSigned(best.pearson_r_low)} to ${fmtSigned(best.pearson_r_high)}`);
   }
@@ -116,12 +126,12 @@ export function hoverReadout(sw, kind, colIndex, rowIndex) {
   const best = bestRowFor(sw, kind, colIndex);
   const isBest = best && rowIndexOf(sw, best.integration_seconds_delivered) === rowIndex;
   if (isBest) {
-    const n = Number(best.n_pain_reports);
+    const n = ratingsPhrase(best);
     // `Number(null)` is 0, which would print "q = 0.0" for a q that was never assessed.
     const q = best.family_wise_q_8_to_30hz == null ? NaN : Number(best.family_wise_q_8_to_30hz);
-    if (Number.isFinite(q)) return `${n} ratings, q = ${fmtQ(q)}`;
+    if (Number.isFinite(q)) return `${n}, q = ${fmtQ(q)}`;
     const p = best.p_selection_aware == null ? NaN : Number(best.p_selection_aware);
-    return Number.isFinite(p) ? `${n} ratings, p = ${fmtP(p)}` : `${n} ratings`;
+    return Number.isFinite(p) ? `${n}, p = ${fmtP(p)}` : n;
   }
   const { n, p } = cellNP(sw, kind, colIndex, rowIndex);
   if (!(n > 0)) return "";

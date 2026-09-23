@@ -1446,17 +1446,9 @@ def report_to_dict(rep):
             # page prints it beside the plain reading and no gate reads it.
             "adjusted": _json_safe(getattr(e, "adjusted", None)),
         } for k, e in (rep.edges or {}).items()},
-        # The estimate E1 replaced (the historical setting-epoch slope), kept for the record.
-        "edges_historical": {k: {
-            "name": e.name, "estimate": _num(e.estimate),
-            "ci": None if e.ci is None else [_num(e.ci[0]), _num(e.ci[1])],
-            "p": _num(e.p), "n": int(e.n), "cluster_unit": e.cluster_unit,
-            "n_clusters": int(e.n_clusters), "scale": e.scale, "sign": e.sign,
-            "resolved": e.resolved,
-            "statistically_established": bool(getattr(e, "statistically_established", False)),
-            "note": e.note, "confounded_by": list(e.confounded_by),
-            "source": getattr(e, "source", None),
-        } for k, e in (getattr(rep, "edges_historical", None) or {}).items()},
+        # `edges_historical` (the setting-epoch E1 the pooled slope replaced, decision 126) LEFT THE
+        # RESPONSE on 2026-09-23 (panel D item 10): no page, module or server read it. It stays on
+        # the report object, `rep.edges_historical`, and E1 still names which estimate it is.
         "coherence": None if rep.coherence is None else {
             "coherent": rep.coherence.coherent, "p_coherent": _num(rep.coherence.p_coherent),
             "expected_pattern": rep.coherence.expected_pattern,
@@ -1476,23 +1468,10 @@ def report_to_dict(rep):
         # trajectory is what the control law would have done to a power series recorded under the
         # participant's actual programming, which is not a forecast of what the device would
         # deliver once the loop is closed.
-        # The titration protocol. Also unserialised until 2026-09-04, so a session plan the
-        # pipeline had generated could not be shown. The power figures are carried because a plan
-        # whose detectable effect size is implausibly large is a plan not worth running, and the
-        # clinician is the person who can judge that; the seed is carried so a plan can be
-        # regenerated identically, which is what makes the randomised order auditable rather than
-        # merely random.
-        "protocol": None if rep.protocol is None else {
-            "steps": list(rep.protocol.steps or []),
-            "n_steps": len(rep.protocol.steps or []),
-            "n_pairs": rep.protocol.n_pairs,
-            "alpha": rep.protocol.alpha,
-            "power": rep.protocol.power,
-            "detectable_d": rep.protocol.detectable_d,
-            "duration_min": rep.protocol.duration_min,
-            "seed": rep.protocol.seed,
-            "note": rep.protocol.note,
-        },
+        # `protocol` LEFT THE RESPONSE on 2026-09-23 (panel D item 10): a titration-session plan
+        # built from the two capture currents that no page read -- the page's titration plan is
+        # the Stim Optimizer's card (decisions 146, 160, 230, 236). The plan is still built on
+        # the report (`rep.protocol`, which can add a blocker if it fails) and keeps its tests.
         "replay": None if rep.replay is None else {
             "frac_time_at_upper": rep.replay.frac_time_at_upper,
             "frac_time_at_lower": rep.replay.frac_time_at_lower,
@@ -1532,11 +1511,10 @@ def report_to_dict(rep):
                         "lfp_frac_above", "lfp_frac_between", "lfp_frac_below",
                         "stim_frac_at_upper", "stim_frac_at_lower", "stim_frac_mid",
                         "mean_amplitude_mA", "amplitude_duty", "transitions_per_hour",
-                        "qualified_transitions", "unqualified_excursions", "hours_observed",
+                        "hours_observed",
                         "hours_of_signal", "coverage_frac", "fractions_are_of_observed_samples",
                         "onset_windows_upper", "onset_windows_lower", "onset_inoperative",
-                        "max_time_at_upper_limit_s", "max_time_at_lower_limit_s",
-                        "predicted_failure_mode")} | {
+                        "max_time_at_upper_limit_s", "max_time_at_lower_limit_s")} | {
                     "caveats": list(pr.duty.caveats or [])},
             } for m, pr in (rep.prescriptions.get("modes") or {}).items()},
         },
@@ -1554,7 +1532,7 @@ def report_to_dict(rep):
                     "lfp_frac_above", "lfp_frac_between", "lfp_frac_below",
                     "stim_frac_at_upper", "stim_frac_at_lower", "stim_frac_mid",
                     "mean_amplitude_mA", "amplitude_duty", "transitions_per_hour",
-                    "qualified_transitions", "unqualified_excursions", "hours_observed",
+                    "hours_observed",
                     # Coverage travels with the fractions or they will be misread. Omitting these
                     # three from this tuple already happened once: the caveat text carried the
                     # numbers while the fields serialised as null, so an interface reading the
@@ -1564,8 +1542,7 @@ def report_to_dict(rep):
                     "onset_windows_upper", "onset_windows_lower", "onset_inoperative",
                     # The longest CONTINUOUS excursion at each limit, which the fractions above
                     # cannot express and which is the number a clinician needs before consenting.
-                    "max_time_at_upper_limit_s", "max_time_at_lower_limit_s",
-                    "predicted_failure_mode")} | {
+                    "max_time_at_upper_limit_s", "max_time_at_lower_limit_s")} | {
                 "caveats": list(rep.prescription.duty.caveats or [])},
         },
         # Decision 180: what the record-based placement did (`_place_thresholds_from_record`, handed

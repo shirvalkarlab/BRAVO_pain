@@ -137,12 +137,18 @@ describe("the calibrated heat-map card (BiomarkerHeatmapGrids)", () => {
     const { container } = await renderGrid();
     fireEvent.click(screen.getByText(/^How to read this$/));
     const lines = Array.from(container.querySelectorAll('[data-testid="l13-search-line"]')).map((el) => el.textContent);
-    expect(lines.length).toBe(6);
+    expect(lines.length).toBe(7);
     expect(lines[0]).toMatch(/252 settings/);
     expect(lines[0]).toMatch(/windows 2, 5, 10, 20, 30, 60, 120 min/);
     expect(lines[1]).toMatch(/0 positive rows with q < 0\.05 out of 5,544/);
-    expect(lines[2]).toMatch(/24\.5 Hz at 60 s, 120-min window, Neural-first pre-report: r 0\.33 \(0\.17 to 0\.48\), n 59, q 0\.23/);
-    expect(lines[3]).toMatch(/1,545 rows with q < 0\.05 on the negative side/);
+    // Panel A item 2 (2026-09-22): the whole search's answer, as the measured proxy, beside the
+    // per-setting one -- and saying what it is not.
+    expect(lines[2]).toMatch(/6 of the 252 settings/);
+    expect(lines[2]).toMatch(/about 106/);
+    expect(lines[2]).toMatch(/4\.1% of cells .* against the 5%/);
+    expect(lines[2]).toMatch(/not a calibrated p-value for the search as a whole/);
+    expect(lines[3]).toMatch(/24\.5 Hz at 60 s, 120-min window, Neural-first pre-report: r 0\.33 \(0\.17 to 0\.48\), n 59, q 0\.23/);
+    expect(lines[4]).toMatch(/1,545 rows with q < 0\.05 on the negative side/);
     // A-5 (the panel's item 5, the PI's clinician stand-in): the two tests are told apart in
     // adjoining sentences, so the reader never sees "0 rows clear q < 0.05" beside a cell called
     // "established" with a q of 0.23 and has to work out that they are different tests.

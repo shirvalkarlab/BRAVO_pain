@@ -1096,8 +1096,13 @@ def test_every_duty_cycle_field_reaches_the_payload():
     # omission on its first run. A test that cries wolf gets disabled, so the pattern matches the
     # identifiers the codebase actually uses.
     emitted = set(re.findall(r'"([A-Za-z_]+)"', block))
-    missing = declared - emitted
+    # WITHHELD ON PURPOSE (panel D item 10, 2026-09-23): no page, module or server read these three,
+    # so they left the served response; the DutyCycle still computes them and its own tests pin
+    # them. Named here with the reason, so withholding stays a decision rather than an oversight.
+    WITHHELD = {"predicted_failure_mode", "qualified_transitions", "unqualified_excursions"}
+    missing = declared - emitted - WITHHELD
     assert not missing, f"DutyCycle fields never serialised to the payload: {sorted(missing)}"
+    assert not (WITHHELD & emitted), f"withheld fields came back: {sorted(WITHHELD & emitted)}"
 
 
 def test_segment_replay_splits_at_gaps_instead_of_loosening_the_uniformity_guard():
@@ -1205,7 +1210,10 @@ def test_every_report_section_reaches_the_payload():
 
     # `candidates` and `manifest` are diagnostics rather than sections; `participant` is echoed at
     # the top level rather than nested. Everything else must appear as a payload key.
-    WITHHELD = {"candidates", "manifest", "participant", "blockers"}
+    # `protocol` and `edges_historical` (panel D item 10, 2026-09-23): no page, module or server read
+    # either on the response, so they left it; both stay on the report object with their own tests
+    # (`test_unread_fields_leave_the_response.py`, `test_pooled_e1.py`).
+    WITHHELD = {"candidates", "manifest", "participant", "blockers", "protocol", "edges_historical"}
 
     src = open(AD.__file__).read()
     i = src.index("def report_to_dict(rep)")
@@ -1234,8 +1242,10 @@ def test_every_report_section_reaches_the_payload():
         # field absent by decision is listed with its reason, and a field absent by oversight fails
         # the test. `amplitude_mA` was found by the recursion on its first run.
         ReplayResult: {"t_s", "state", "amplitude_mA"},
-        # Rendered through as_rows() rather than field by field.
-        Protocol: set(),
+        # The whole Protocol left the served response on 2026-09-23 (panel D item 10): no page,
+        # module or server read it. Withheld by decision, every field named, so the guard still
+        # fails if any one of them comes back half-serialised.
+        Protocol: {f.name for f in dataclasses.fields(Protocol)},
         EligibilityReport: set(),
         CoherenceReport: set(),
         ThresholdPlan: set(),

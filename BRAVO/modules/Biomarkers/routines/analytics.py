@@ -370,6 +370,7 @@ from .stats_utils import MAD_N_DEFAULT as OUTLIER_N_MAD  # noqa: E402  (5.0)
 from .stats_utils import mad_outlier_flags  # noqa: E402  (True == outlier; see stats_utils)
 from .stats_utils import block_bootstrap_picks  # noqa: E402  (decision 183: the headline interval)
 from .stats_utils import partial_corr_columns  # noqa: E402  (the current-adjusted value beside the plain one)
+from .stats_utils import effective_n as _effective_n  # noqa: E402  (the effective count on each grid cell)
 
 # Scale for the pain LABEL. Pain scores are bounded ordinal scales, not multiplicative quantities,
 # so the rule is applied to them directly rather than in log space.
@@ -5972,6 +5973,12 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         "n_pain_reports_from_clinic_sheet": n_sheet_reports,
         "device_spectrum_axis_note": DEVICE_SPECTRUM_AXIS_NOTE,
         "best_correlation_rows": best_corr_rows,
+        # Does the shuffle null run on the family the circled cells were chosen from? Measured on
+        # every build, for both grids (panel A item 3; `RECONCILIATION_F8.md` on the older search).
+        "null_family_reconciliation": {
+            "correlation": _null_family_reconciliation(np.abs(corr), corr_null),
+            "auc": _null_family_reconciliation(np.abs(auc - AUC_NO_DISCRIMINATION), auc_null),
+        },
         "best_auc_rows": best_auc_rows,
         "logistic_fit_crosscheck": crosscheck,
         "correlation_no_relationship_value": CORRELATION_NO_RELATIONSHIP,
@@ -6065,25 +6072,47 @@ def _best_of_windows_null_correlation(X, pain, *, n_perm, rng):
         filled.append(np.where(Mt, Xu[t], 0.0))
     rhs_masks = np.concatenate([m.astype(np.float64) for m in masks], axis=1)   # (nP, T*C)
     rhs = np.concatenate([rhs_masks] + filled, axis=1)                          # (nP, 2*T*C)
-    g_lin = Yp @ rhs                                                            # (S, 2*T*C)
-    g_sq = (Yp * Yp) @ rhs_masks                                                # (S, T*C)
-    for t in range(T):
-        M = masks[t]                                                     # (nP, C)
-        Xf = filled[t]
-        n = M.sum(axis=0).astype(np.float64)                             # (C,)
-        sx = Xf.sum(axis=0)
-        sxx = (Xf * Xf).sum(axis=0)
-        sy = g_lin[:, t * C:(t + 1) * C]                                 # (S, C)
-        syy = g_sq[:, t * C:(t + 1) * C]
-        sxy = g_lin[:, (T + t) * C:(T + t + 1) * C]
-        with np.errstate(invalid="ignore", divide="ignore"):
-            cxy = sxy - sx[None, :] * sy / n[None, :]
-            cxx = (sxx - sx * sx / n)[None, :]
-            cyy = syy - sy * sy / n[None, :]
-            r = cxy / np.sqrt(cxx * cyy)
-        r = np.abs(np.where(np.isfinite(r), r, 0.0))
-        r[:, n < 3] = 0.0
-        best = np.maximum(best, r)
+
+    def _abs_r_by_length(Yrows, sink):
+        """|r| at every length for each row of pain scores in `Yrows`, handed to `sink(t, r, ok)`
+        one length at a time. ONE definition of the family, used for the shuffles and for the
+        unshuffled scores alike (panel A item 3), so the check below compares the grid with the
+        family the shuffles actually ran on and not with a second copy of it."""
+        g_lin = Yrows @ rhs                                                     # (S, 2*T*C)
+        g_sq = (Yrows * Yrows) @ rhs_masks                                      # (S, T*C)
+        for t in range(T):
+            M = masks[t]                                                 # (nP, C)
+            Xf = filled[t]
+            n = M.sum(axis=0).astype(np.float64)                         # (C,)
+            sx = Xf.sum(axis=0)
+            sxx = (Xf * Xf).sum(axis=0)
+            sy = g_lin[:, t * C:(t + 1) * C]                             # (S, C)
+            syy = g_sq[:, t * C:(t + 1) * C]
+            sxy = g_lin[:, (T + t) * C:(T + t + 1) * C]
+            with np.errstate(invalid="ignore", divide="ignore"):
+                cxy = sxy - sx[None, :] * sy / n[None, :]
+                cxx = (sxx - sx * sx / n)[None, :]
+                cyy = syy - sy * sy / n[None, :]
+                r = cxy / np.sqrt(cxx * cyy)
+            ok = np.isfinite(r) & (n >= 3)[None, :]
+            r = np.abs(np.where(np.isfinite(r), r, 0.0))
+            r[:, n < 3] = 0.0
+            sink(t, r, ok)
+
+    def _into_best(t, r, ok):
+        np.maximum(best, r, out=best)
+
+    _abs_r_by_length(Yp, _into_best)
+    # THE SAME ARITHMETIC ON THE UNSHUFFLED SCORES: the family the null actually ran on, for
+    # `_null_family_reconciliation` to compare with the grid cell for cell. One extra row of work.
+    observed = np.zeros((T, C), dtype=np.float64)
+    in_family = np.zeros((T, C), dtype=bool)
+
+    def _into_observed(t, r, ok):
+        observed[t] = r[0]
+        in_family[t] = ok[0]
+
+    _abs_r_by_length(yu[None, :], _into_observed)
     flat = best[np.isfinite(best)]
     _, p_floor, _ = permutation_null_resolution(nP, block)
     return {
@@ -6093,6 +6122,8 @@ def _best_of_windows_null_correlation(X, pain, *, n_perm, rng):
         "n_used": int(S),
         "p_resolution": (float(p_floor) if p_floor is not None else None),
         "best_by_shuffle": best,
+        "observed_abs_by_length": observed,
+        "in_family": in_family,
     }
 
 
@@ -6137,19 +6168,37 @@ def _best_of_windows_null_auc(X, y_binary, *, n_perm, rng):
         oks.append(ok_t)
         rank_blocks.append(np.where(ok_t, average_ranks_columns(Xl[t]), 0.0))   # (nL, C)
     rhs = np.concatenate([o.astype(np.float64) for o in oks] + rank_blocks, axis=1)
-    g = Yp @ rhs                                                         # (S, 2*T*C)
-    for t in range(T):
-        ok = oks[t]
-        n_pos = g[:, t * C:(t + 1) * C]                                  # (S, C)
-        n_all = ok.sum(axis=0).astype(np.float64)[None, :]
-        n_neg = n_all - n_pos
-        rank_sum_pos = g[:, (T + t) * C:(T + t + 1) * C]                 # (S, C)
-        with np.errstate(invalid="ignore", divide="ignore"):
-            u = rank_sum_pos - n_pos * (n_pos + 1.0) / 2.0
-            a = u / (n_pos * n_neg)
-        d = np.abs(np.where(np.isfinite(a), a, AUC_NO_DISCRIMINATION) - AUC_NO_DISCRIMINATION)
-        d[(n_pos < 1) | (n_neg < 1)] = 0.0
-        best = np.maximum(best, d)
+
+    def _abs_d_by_length(Yrows, sink):
+        """|AUC - 0.5| at every length for each row of labels, one definition for the shuffles and
+        the unshuffled labels alike (panel A item 3; see the correlation reference above)."""
+        g = Yrows @ rhs                                                  # (S, 2*T*C)
+        for t in range(T):
+            ok = oks[t]
+            n_pos = g[:, t * C:(t + 1) * C]                              # (S, C)
+            n_all = ok.sum(axis=0).astype(np.float64)[None, :]
+            n_neg = n_all - n_pos
+            rank_sum_pos = g[:, (T + t) * C:(T + t + 1) * C]             # (S, C)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                u = rank_sum_pos - n_pos * (n_pos + 1.0) / 2.0
+                a = u / (n_pos * n_neg)
+            admitted = np.isfinite(a) & (n_pos >= 1) & (n_neg >= 1)
+            d = np.abs(np.where(np.isfinite(a), a, AUC_NO_DISCRIMINATION) - AUC_NO_DISCRIMINATION)
+            d[(n_pos < 1) | (n_neg < 1)] = 0.0
+            sink(t, d, admitted)
+
+    def _into_best(t, d, ok):
+        np.maximum(best, d, out=best)
+
+    _abs_d_by_length(Yp, _into_best)
+    observed = np.zeros((T, C), dtype=np.float64)
+    in_family = np.zeros((T, C), dtype=bool)
+
+    def _into_observed(t, d, ok):
+        observed[t] = d[0]
+        in_family[t] = ok[0]
+
+    _abs_d_by_length(yl[None, :], _into_observed)
     flat = best[np.isfinite(best)]
     return {
         "p95": (float(np.percentile(flat, 95)) if flat.size else None),
@@ -6157,7 +6206,63 @@ def _best_of_windows_null_auc(X, y_binary, *, n_perm, rng):
         "block_length": block,
         "n_used": int(S),
         "best_by_shuffle": best,
+        "observed_abs_by_length": observed,
+        "in_family": in_family,
     }
+
+
+#: The largest cell-for-cell disagreement between the grid and the null's own family that still
+#: counts as the same family: floating-point noise, the tolerance `RECONCILIATION_F8.md` measured
+#: (6.63e-13 and 5.00e-13) with room for a different linear-algebra build.
+NULL_FAMILY_TOLERANCE = 1e-9
+
+
+def _null_family_reconciliation(grid_abs, null):
+    """Is the family the shuffle null ran on the family the best cells were chosen from? (Panel A
+    item 3; the older search's F8 check, `RECONCILIATION_F8.md`, on the grid's own path.)
+
+    ``grid_abs`` is the grid's own magnitude per (length, band): |r| for the correlation grid,
+    |AUC - 0.5| for the area-under-the-curve grid. ``null`` is what the null function returned,
+    carrying ``observed_abs_by_length`` (its arithmetic on the UNshuffled scores) and ``in_family``
+    (the cells it admitted). Returns the older search's own field names:
+
+      * ``perm_family_max_abs_dev_from_corr`` -- the largest disagreement over cells both hold;
+      * ``perm_family_cells_in_selection_only`` (and its largest magnitude) -- cells the grid could
+        circle that the null never admitted, so no shuffle ever competed with them;
+      * ``perm_family_cells_in_permutation_only`` -- cells the null admitted that the grid lacks;
+      * ``perm_family_reconciled`` -- True when the disagreement is floating-point noise AND no cell
+        is selectable outside the null; None when there was no null to check.
+
+    A measurement, never a gate: nothing reads it to refuse anything.
+    """
+    obs = None if not null else null.get("observed_abs_by_length")
+    fam = None if not null else null.get("in_family")
+    if obs is None or fam is None:
+        return {"perm_family_reconciled": None, "perm_family_max_abs_dev_from_corr": None,
+                "perm_family_cells_compared": 0, "perm_family_cells_in_selection_only": None,
+                "perm_family_cells_in_selection_only_max_abs_r": None,
+                "perm_family_cells_in_permutation_only": None,
+                "why": "no shuffle null was computed for this grid, so there is nothing to check"}
+    g = np.asarray(grid_abs, dtype=np.float64)
+    obs = np.asarray(obs, dtype=np.float64)
+    fam = np.asarray(fam, dtype=bool)
+    in_grid = np.isfinite(g)
+    both = in_grid & fam
+    sel_only = in_grid & ~fam
+    perm_only = fam & ~in_grid
+    dev = float(np.max(np.abs(g[both] - obs[both]))) if both.any() else None
+    sel_max = float(np.max(g[sel_only])) if sel_only.any() else None
+    ok = bool(dev is not None and dev <= NULL_FAMILY_TOLERANCE and not sel_only.any())
+    return {"perm_family_reconciled": ok, "perm_family_max_abs_dev_from_corr": dev,
+            "perm_family_cells_compared": int(both.sum()),
+            "perm_family_cells_in_selection_only": int(sel_only.sum()),
+            "perm_family_cells_in_selection_only_max_abs_r": sel_max,
+            "perm_family_cells_in_permutation_only": int(perm_only.sum()),
+            "why": ("the shuffle null ran on the same family the circled cells were chosen from"
+                    if ok else
+                    "the shuffle null did NOT run on exactly the family the circled cells were "
+                    "chosen from, so the corrected p and q on those cells are not selection-corrected "
+                    "for them; the numbers beside this say by how much")}
 
 
 #: The sentence that goes in the panel itself, not only in a caption. The PI's requirement: a reader
@@ -6414,6 +6519,12 @@ def _best_rows_correlation(corr, corr_n, X, pain, centers, requested, delivered,
             "integration_seconds_delivered": float(delivered[t]),
             "integration_tiles": int(tiles[t]),
             "n_pain_reports": n_obs,
+            # THE EFFECTIVE COUNT beside the raw one (panel A item 4, 2026-09-22): ratings filed
+            # close together, and band power that drifts slowly, are worth fewer independent
+            # observations than their number. `stats_utils.effective_n` (lag-1 Bartlett) on the
+            # pairs this cell correlated, in report order. Printed, never read by a verdict.
+            "n_pain_reports_effective": (round(float(_effective_n(x[m], y[m])), 1)
+                                         if int(m.sum()) >= 3 else None),
             "pearson_r_low": boot_lo,
             "pearson_r_high": boot_hi,
             "interval_block_length": boot_block,

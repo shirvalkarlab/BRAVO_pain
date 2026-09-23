@@ -102,8 +102,9 @@ def test_the_logistic_cross_check_fits_on_raw_power_and_refuses_the_log_scale():
 
 def test_the_sweep_rule_version_moved_off_the_log_fallback():
     from modules.Biomarkers import bravo_service as bs
-    assert bs._BAND_SWEEP_RULE_VERSION == "v21_outlier_rule_and_crosscheck_on_raw_power", \
-        bs._BAND_SWEEP_RULE_VERSION
+    # At least v21, the version that moved off the log fallback; a later bump (v22, 2026-09-23)
+    # still moved off it.
+    assert int(bs._BAND_SWEEP_RULE_VERSION.split("_")[0][1:]) >= 21, bs._BAND_SWEEP_RULE_VERSION
 
 
 def _log_calls(fn_node):

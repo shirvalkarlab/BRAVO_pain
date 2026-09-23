@@ -7916,7 +7916,7 @@ sweep_settings_tag = sweep_settings.sweep_settings_tag                       # r
 sweep_settings_tag_from_request = sweep_settings.sweep_settings_tag_from_request
 
 
-_BAND_SWEEP_RULE_VERSION = "v21_outlier_rule_and_crosscheck_on_raw_power"   # v20: cell p-values, decision 188
+_BAND_SWEEP_RULE_VERSION = "v22_effective_count_on_each_cell"   # v21: outlier rule on raw power; v20: cell p-values, decision 188
 
 #: Response fields that are timings of the run that produced them, not results. They are not
 #: compared when a stored response is checked against a fresh one, and a served response keeps the

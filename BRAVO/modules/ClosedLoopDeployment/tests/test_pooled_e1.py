@@ -109,11 +109,12 @@ def test_e1_from_a_stored_slope_names_itself_the_pooled_titration_slope(monkeypa
 
 
 def test_the_response_carries_the_source_of_every_edge(monkeypatch):
-    """The page reads the dict, not the dataclass: `source` has to survive serialisation, on the
-    live edge and on the historical one kept beside it."""
+    """The page reads the dict, not the dataclass: `source` has to survive serialisation on the live
+    edge. The historical edge kept beside it stays on the report object only since 2026-09-23 (panel
+    D item 10: nothing read it on the response); `test_unread_fields_leave_the_response.py` pins that."""
     rep = _run_pipeline(monkeypatch, _row())
     d = AD.report_to_dict(rep)
     assert d["edges"]["E1"]["source"] == "pooled_titration"
-    assert d["edges_historical"]["E1"]["source"] == "screening_historical"
+    assert rep.edges_historical["E1"].source == "screening_historical"
     # E2 and E3 are neither: they carry the key so a reader never has to guess whether it exists
     assert "source" in d["edges"]["E2"] and d["edges"]["E2"]["source"] is None

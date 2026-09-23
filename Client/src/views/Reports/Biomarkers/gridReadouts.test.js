@@ -219,3 +219,25 @@ describe("clinic-sheet ratings on the heat maps (B5, decision 186)", () => {
     expect(clinicSheetBullets(SW)).toEqual([]);
   });
 });
+
+describe("the effective count beside the raw count (panel A item 4, 2026-09-22)", () => {
+  // Ratings filed close together, and band power that drifts slowly, are worth fewer independent
+  // observations than their number. The backend puts `n_pain_reports_effective` on each column's
+  // best row; the readouts print it inside the ratings part, and nowhere a response lacks it.
+  const withEff = JSON.parse(JSON.stringify(SW));
+  withEff.best_correlation_rows[0].n_pain_reports_effective = 98.4;
+  withEff.n_grid = Array.from({ length: 10 }, () => [40, 96, 50]);
+  withEff.p_grid = Array.from({ length: 10 }, () => [0.4, 0.0507, 0.2]);
+
+  test("the hover on the best cell names about how many ratings are independent", () => {
+    expect(hoverReadout(withEff, "corr", 1, 9)).toBe("117 ratings (about 98 independent), q = 0.0022");
+  });
+  test("the panel line names it too", () => {
+    expect(bestCellReadout(withEff, "corr", 1, 9).text).toMatch(/^117 ratings \(about 98 independent\) · interval/);
+  });
+  test("a best row without the field, and any other cell, print exactly what they did", () => {
+    expect(hoverReadout(withEff, "auc", 2, 3)).toMatch(/^174 ratings, q = /);
+    expect(hoverReadout(withEff, "corr", 1, 2)).toBe("96 ratings, p = 0.051");
+    expect(bestCellReadout(SW, "corr", 1, 9).text).toMatch(/^117 ratings · interval/);
+  });
+});

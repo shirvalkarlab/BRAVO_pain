@@ -26,4 +26,6 @@ def test_the_request_function_attaches_the_block_under_device_timing_ranges():
 
 
 def test_the_rule_version_moved_so_a_stored_grid_without_the_block_is_never_served():
-    assert BS._BAND_SWEEP_RULE_VERSION == "v21_outlier_rule_and_crosscheck_on_raw_power"   # decision 205
+    # At least v21 (decision 205). Pinned as "no older than", not equality, so a later bump (v22,
+    # the effective count on each cell, 2026-09-23) does not have to edit this test.
+    assert int(BS._BAND_SWEEP_RULE_VERSION.split("_")[0][1:]) >= 21, BS._BAND_SWEEP_RULE_VERSION

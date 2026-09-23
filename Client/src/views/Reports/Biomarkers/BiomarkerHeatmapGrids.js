@@ -128,6 +128,16 @@ export const L13_SEARCH_LINES = [
   "No band on L 1\u207b3\u207a rises with pain past the correction under any of them: 0 positive rows with q < 0.05 "
     + "out of 5,544. Here q is the p-value after correcting for having looked at all 22 bands; a cell with q above "
     + "0.05 has not cleared that correction, whatever its own numbers say.",
+  // THE WHOLE SEARCH'S ANSWER (panel A item 2, 2026-09-22): the measured proxy, published once,
+  // beside the per-setting line above. The full shuffle of the whole 252-setting search is not run
+  // (about 33 min per shuffle); it is built only if a cell ever clears the per-setting bar and a
+  // calibrated family-wide p is wanted.
+  "Taken as a whole: a positive cell with p < 0.05 turned up in 6 of the 252 settings, where about 106 would "
+    + "if the settings were independent tests of 22 bands each (they are not: neighbouring settings share most of "
+    + "their data, so the true expected count is lower, but not near 6). With the sheets off, 4.1% of cells fall "
+    + "under p 0.05 against the 5% chance alone gives; with them on, 61% do, every one on the negative side. The "
+    + "search finds fewer positive cells than chance would. This is a count, not a calibrated p-value for the "
+    + "search as a whole.",
   "Sheets off (REDCap only): the one cell to reach the grid\u2019s \u201cestablished\u201d verdict is 24.5 Hz at 60 s, "
     + "120-min window, Neural-first pre-report: r 0.33 (0.17 to 0.48), n 59, q 0.23. Those are two different tests and "
     + "this cell passes only the first: \u201cestablished\u201d is that cell\u2019s own test (its interval clears zero "
