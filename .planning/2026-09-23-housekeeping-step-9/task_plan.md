@@ -6,10 +6,7 @@ own reconciliation check, the time-of-day diagnostic, the whole-search paragraph
 wording, and the Closed-Loop response's unread fields (A-4, A-3, A-9, A-2, B-6, D-10).
 
 ## Next Step
-On the PI's machine: the live before-and-after on RCS08 (Closed-Loop: three field groups removed,
-nothing else moves; Biomarkers grid: rule v22 rebuilds, each circled cell gains its effective count,
-each grid gains `null_family_reconciliation`, nothing else moves), the container suite, and the
-time-of-day script run once and its table recorded.
+None: the panels' build order is finished; what comes next is the PI's to choose.
 
 ### Phase 1: Backend
 - [x] D-10: `protocol`, `edges_historical` and three duty-cycle fields leave the Closed-Loop response (3 tests, RED first)
@@ -27,8 +24,11 @@ time-of-day script run once and its table recorded.
 
 ### Phase 3: Proof and record
 - [x] Host suite; Biomarkers tests runnable here (same 28 environment failures before and after); jest
-- [ ] The live proof, the container suite and the time-of-day table (the PI's machine)
-- **Status:** in_progress
+- [x] The live proof on the PI's machine: Closed-Loop 1,299 fields removed per side, all in the
+      three named groups; grid 216 added, 0 correlation values moved, the stability column
+      awaiting its rebuild under the new key; the time-of-day table recorded in decision 246;
+      container 709 / 0, host 1475 / 2 / 0
+- **Status:** complete
 
 ## Decisions Made
 | Decision | Rationale |

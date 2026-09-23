@@ -5,9 +5,7 @@ The Stim Optimizer page reads in the order a decision is made, says what its num
 names what only research reaches (panel C items 5, 6, 4, 7, 8).
 
 ## Next Step
-The live before-and-after on RCS08 from a session with the server: the response gains
-`closed_loop.sensing_rule`, `closed_loop.pain_relationship.still_positive_without_current`,
-`two_stage.stage1.audit.resolution_exposure` and `.frequency_length_scale`, and nothing else moves.
+None: the panels' build order is finished; what comes next is the PI's to choose.
 
 ### Phase 1: Backend
 - [x] Item 4: `resolution.exposure`, on `stage1.audit.resolution_exposure` (5 tests, RED first)
@@ -25,8 +23,10 @@ The live before-and-after on RCS08 from a session with the server: the response 
 
 ### Phase 3: Proof and record
 - [x] Host suite; jest on the page; decision 243
-- [ ] The live before-and-after on RCS08 (needs the container)
-- **Status:** in_progress
+- [x] The live before-and-after on RCS08, on the PI's machine: main request 10,788 fields in
+      common, 1 differing (the response key, which carries the module's code digest), 82 added,
+      0 removed; two-stage request 39,694 / 2 / 102 / 0; no build-time cost; container 709 / 0
+- **Status:** complete
 
 ## Decisions Made
 | Decision | Rationale |

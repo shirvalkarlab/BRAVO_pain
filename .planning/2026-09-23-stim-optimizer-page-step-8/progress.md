@@ -9,3 +9,7 @@
   page's 10 suites. The container suite cannot run in this session.
 - Bundle rebuilt: chunk 100.ce250192 carries every new sentence the page itself prints.
 - OWED: the live before-and-after on RCS08 (four fields added, nothing else moving).
+
+- 2026-09-22, the PI's machine: the live before-and-after recorded in decision 243. The four named
+  blocks arrive (and the same two audit blocks inside the back site's fit); nothing is removed; the
+  response key changed because the module's code is in it, not because of the adjusted grid.
