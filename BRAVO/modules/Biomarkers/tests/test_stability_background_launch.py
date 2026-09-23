@@ -412,6 +412,45 @@ def test_a_run_that_stopped_early_keeps_the_previous_answer_instead_of_replacing
         bs._SHARED_CACHE_DIR_OVERRIDE = was_override
 
 
+def test_a_stopped_early_run_is_kept_from_replacing_its_OWN_grids_answer_not_another_grids():
+    """Since 2026-09-23 the store keeps one stability answer per grid (decision 248). The guard
+    above asked for the NEWEST answer of any grid, so once any other grid had one, every stopped-
+    early run for a grid with none of its own was thrown away and its rows read "not tested" --
+    where, with nothing complete of its own to protect, it had always been written. The guard now
+    asks for this grid's own answer."""
+    from CacheStore import store as cs
+    was_override = bs._SHARED_CACHE_DIR_OVERRIDE
+    tmp = tempfile.mkdtemp(prefix="stability_partial_other_")
+    real_sweep = bs.band_time_sweep_for_participant
+    real_grid = bs.stability_grid_for_participant
+    try:
+        bs._SHARED_CACHE_DIR_OVERRIDE = tmp
+        points = [("L", 8.5), ("L", 9.5), ("L", 10.5), ("L", 11.5)]
+        # ANOTHER grid's complete answer is stored
+        other = bs._stability_grid_sig_tuple("sweepkeyother", band_width_hz=5.0, points=points)
+        assert cs.store(bs.STABILITY_GRID_KIND, "abc", other,
+                        {"points": {f"L|{f:g}": {"available": True, "lrt_p": 0.1} for _, f in points}},
+                        writer="biomarkers", trigger="test", provenance=[], root=tmp)
+        bs.band_time_sweep_for_participant = lambda req: {
+            "band_time_sweep": {"L": {"center_freqs_hz": [f for _, f in points]}},
+            "band_width_hz": 5.0, "label_metric": "vas",
+            "sweep_key": {"signature_key": "sweepkeymine", "provenance": []}}
+        bs.stability_grid_for_participant = lambda uid, pts, **kw: {
+            ("L", 8.5): {"available": True, "lrt_p": 0.2},
+            ("L", 9.5): {"available": False, "reason": "raised"}}
+        out = bs.compute_and_store_stability_grid("abc", force=True)
+        assert out["stopped_early"] is True
+        assert out["stored"] is True, f"another grid's answer blocked this grid's partial one: {out['reason']}"
+        mine = bs._stability_grid_sig_tuple("sweepkeymine", band_width_hz=5.0, points=points)
+        back = cs.load(bs.STABILITY_GRID_KIND, "abc", mine, consumer="biomarkers", root=tmp)
+        assert back is not None and len(back["points"]) == 2
+        assert cs.load(bs.STABILITY_GRID_KIND, "abc", other, consumer="biomarkers", root=tmp) is not None
+    finally:
+        bs.band_time_sweep_for_participant = real_sweep
+        bs.stability_grid_for_participant = real_grid
+        bs._SHARED_CACHE_DIR_OVERRIDE = was_override
+
+
 if __name__ == "__main__":
     _fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     _passed = _failed = 0

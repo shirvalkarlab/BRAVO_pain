@@ -6,7 +6,7 @@ order"): stability column, ruling 8 with the sign-off identity, the parameter-ca
 two stale page tests, the next-visit list on the titration card, then the two diagnostics.
 
 ## Next Step
-None: every item of the 2026-09-23 audit is built; what comes next is the PI's to choose.
+Push, then watch the first CI run with jest in it.
 
 ## Phases
 
@@ -34,6 +34,14 @@ None: every item of the 2026-09-23 audit is built; what comes next is the PI's t
 - [x] B-3: level shifts in the chronic log at held left-side changes; 4 of 21 readable (decision 252)
 - [x] C-3: the main 55 Hz surface moves between blocks of time; the rest thin data; no kernel (decision 253)
 - **Status:** complete
+
+### Phase 6: Overnight, the PI's instruction of 2026-09-23 ("solve everything you can without my decisions")
+- [x] Chosen band cleared on the page (recorded 09:34 UTC); both merged remote branches deleted
+- [x] A grid-chosen band carries its grid's pain score, split and window to the summary (decision 254)
+- [x] Clinic pooled fit behind the toggle; ruling 5's merge on the page; 239 corrected to 3 of 6 (decision 255)
+- [x] CI runs jest; CLAUDE.md says so (decision 257; first CI run to watch)
+- [x] The stopped-early rule looks up its own grid's answer (decision 256)
+- **Status:** in_progress
 
 ## Decisions Made
 | Decision | Rationale |

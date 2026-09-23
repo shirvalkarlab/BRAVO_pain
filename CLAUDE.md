@@ -51,9 +51,10 @@ lint or type check passed would be claiming something that cannot have run.
 
 **CI** (`.github/workflows/ci.yml`) runs on every push to `PS_closedloop_deployment`, `v3.1.0` or
 `development` and on every pull request: the host suite (without the `store` and `live` markers),
-the frontend build, and a `gitleaks` secret scan (known false positives are fingerprinted in
+the frontend build, the page tests (jest, since 2026-09-23: the two known-failing page tests were
+repaired in decision 250) and a `gitleaks` secret scan (known false positives are fingerprinted in
 `.gitleaksignore`; add a fingerprint rather than loosen the scan). **CI does not run the container
-suite** (needs MySQL, Redis, R, rpy2) **or jest** (two known-failing page tests, decision 147).
+suite** (needs MySQL, Redis, R, rpy2).
 
 ---
 

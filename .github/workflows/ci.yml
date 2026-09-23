@@ -1,7 +1,7 @@
 name: CI
 
 # What this does and does not cover, stated plainly (CLAUDE.md's own rule: an accurate gap beats a
-# silent one). Two of this project's three real test surfaces run here:
+# silent one). Three of this project's four real test surfaces run here:
 #
 #   - the HOST suite: ClosedLoopDeployment, StimOptimizer, CacheStore, DecodeCommon (pytest).
 #     Verified directly before this file was written: a plain `pip install` of the packages below,
@@ -11,15 +11,17 @@ name: CI
 #     live MySQL connection, so leaving those out is not a shortcut, it is what the import graph
 #     already is.
 #   - the frontend build (`Client/`), the same command CLAUDE.md's Quick Reference gives.
+#   - the page tests (`npm test`, Jest), added 2026-09-23 once the last two known-failing page
+#     tests were repaired (decision 250): 226 of 226 across 34 suites at that point.
 #
 #   NOT covered: the CONTAINER suite (Biomarkers + CacheStore + DecodeCommon, run inside the
 #   `bravo-server` OrbStack container against MySQL/Redis/R/rpy2/pymer4 and, for the `live` marker,
 #   the real participant record) -- reproducing that here would mean standing up MySQL, Redis, an R
 #   toolchain and rpy2/pymer4 in the runner, which is real infrastructure work, not "simple." It
 #   stays a manual step (`_agent_bridge/run_tests.py` in the live container) until someone decides
-#   to build that. `npm test` (Jest) is also deliberately not run: this repository already carries
-#   known-failing page-level tests (decision 147) unrelated to any specific change, and a CI step
-#   that starts red teaches everyone to ignore it.
+#   to build that. Until 2026-09-23 `npm test` (Jest) was left out too, because two page tests
+#   had been failing since 2026-09-11 (decision 147) and a step that starts red teaches everyone
+#   to ignore it; both were repaired in decision 250, so it runs now.
 #
 # There is still no linter or type checker configured for this project (CLAUDE.md says so on
 # purpose), so this file adds none.
@@ -82,6 +84,12 @@ jobs:
       - name: Install dependencies
         working-directory: Client
         run: npm ci
+
+      - name: Page tests
+        # Every jest suite under Client/src, once, no watcher. CI=true is what makes react-scripts
+        # run them once and exit non-zero on a failure.
+        working-directory: Client
+        run: CI=true npx react-scripts test --watchAll=false
 
       - name: Build
         # The exact command from CLAUDE.md's Quick Reference: CI=false so react-scripts treats a

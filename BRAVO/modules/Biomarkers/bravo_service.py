@@ -5302,16 +5302,15 @@ def compute_and_store_stability_grid(participant_uid, *, request_data=None, work
     # point that raises but stops after three in a row, so a grid can come back holding points it
     # never attempted. This was written when the store kept ONE entry of this kind per participant,
     # replaced whole -- so writing a stopped-early grid over a good one would have destroyed the
-    # previous answer outright. The kind keeps twelve since 2026-09-23 (one per grid; the limit of
-    # one had been deleting every grid's answer but the last), and the rule still refuses a partial
-    # write whenever any complete answer is stored. The next scheduled run tries again from scratch.
+    # previous answer outright. The kind keeps one entry per grid since 2026-09-23 (decision 248),
+    # so the answer to protect is THIS grid's own: asking for the newest of any grid threw away
+    # every partial run for a grid with none of its own. The next scheduled run tries again.
     out["attempted"] = len(grid)
     out["stopped_early"] = bool(len(grid) < len(points))
     if out["stopped_early"]:
         try:
-            previous, _prev_stamp = _cache_store.load_newest(
-                STABILITY_GRID_KIND, participant_uid, consumer="biomarkers",
-                root=_SHARED_CACHE_DIR_OVERRIDE)
+            previous = _cache_store.load(STABILITY_GRID_KIND, participant_uid, sig,
+                                         consumer="biomarkers", root=_SHARED_CACHE_DIR_OVERRIDE)
         except Exception:                                        # noqa: BLE001
             previous = None
         if isinstance(previous, dict) and previous.get("points"):
