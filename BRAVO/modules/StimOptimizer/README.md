@@ -35,7 +35,7 @@ with the greps named here before trusting it; the page changes.
 | the two-stage path (`stage1_openloop.py`, `stage2_closedloop.py`, the readiness screen in `bravo_service.py`, `titration_plan.py`) | **yes** -- every card on the page reads it |
 | the flat per-arm pipeline's arms (`pipeline.run`'s per-site, per-side surfaces and their queues) | **no** -- the page passes `arms={{}}` to `DecisionStrip`, so nothing per-arm is drawn; `grep -n "arms=" Client/src/views/Reports/StimOptimizer/index.js` |
 | the figures (`routines/plots.py`) and the preference model (`routines/preference.py`, used only by the figures) | **no** -- the page asks for `Backend: "none"`, which returns tables only; the figures are built only when a caller asks for `Backend: "plotly"`, and no page does |
-| the stopping rule (`acquisition.check_stopping`) | **computed, not read** -- it runs on every fitted pulse-width surface and its `stop` / `stop_binding` fields reach the response, but no card reads them. (Panel C listed it as unreached; it is not -- it runs on the live path.) |
+| the stopping rule (`acquisition.check_stopping`) | **yes, since 2026-09-23** -- it runs on every fitted pulse-width surface, and the decision strip prints its answer per side ("When to stop searching"). On RCS08 it reads "not assessable" everywhere: its plateau half needs a history of completed batches and this platform proposes batches without running them in turn (`NO_HISTORY_BINDING`). Until that date it was computed and read by no card; panel C had listed it as unreached, which was never true. |
 
 ## Sign conventions, because they differ between models
 

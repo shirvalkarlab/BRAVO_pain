@@ -95,6 +95,29 @@ function sideRows(arms, plan, inForce) {
   return sides;
 }
 
+/**
+ * The search's own stopping rule for one side, in words (the PI, 2026-09-23: show its result; until
+ * then it was computed on every request, serialised as `stop` / `stop_binding` / `queue_size` on the
+ * stratum, and read by no card). Three answers:
+ *   - stop: the best has stopped improving AND no untried combination still looks worth trying;
+ *   - keep searching: untried combinations still look worth trying (the count is `queue_size`);
+ *   - not assessable: the "has the best stopped improving" half needs a history of completed
+ *     batches, and this platform proposes batches without running them in turn, so there is none
+ *     (`routines.acquisition.NO_HISTORY_BINDING`). Said as that, never as a "no".
+ */
+export function stoppingLine(side, st) {
+  if (!st || st.stop_binding === undefined) return null;
+  const n = num(st.queue_size);
+  const worth = n === null ? "" : ` ${Math.round(n).toLocaleString("en-US")} untried combination${n === 1 ? "" : "s"} still ${n === 1 ? "looks" : "look"} worth trying`;
+  if (st.stop === true) {
+    return `${side}: stop — the best has stopped improving and no untried combination still looks worth trying`;
+  }
+  if (/not assessable/i.test(String(st.stop_binding || ""))) {
+    return `${side}: not assessable — no batch of suggested settings has been run and rated in turn, so there is no history to tell whether the best has stopped improving;${worth}`;
+  }
+  return `${side}: keep searching —${worth}`;
+}
+
 /** A side's three-state verdict, read exactly as the row's glyph reads it. */
 function sideResolved(r) {
   const st = r.stratum, s = r.s;
@@ -250,6 +273,14 @@ export default function DecisionStrip({ arms, plan, planLoading, planErr, inForc
       <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 1.2 }}>
         Pain objective: lower is better; a positive gain favours the preferred setting.
       </MDTypography>
+      {/* When to stop searching, per side: the search's own stopping rule, shown (the PI,
+          2026-09-23). Absent from a response that predates the fields. */}
+      {rows.some((r) => stoppingLine(r.side, r.stratum)) ? (
+        <MDTypography variant="caption" component="div" data-testid="stopping-rule"
+          sx={{ ...SMALL, mt: 0.6 }}>
+          {`When to stop searching, the search's own rule: ${rows.map((r) => stoppingLine(r.side, r.stratum)).filter(Boolean).join(". ")}.`}
+        </MDTypography>
+      ) : null}
       {/* How many times the "proven better" comparison ran, and what one standard deviation
           exposes across them (panel C item 4). The server's own sentence, printed as it comes;
           it changes nothing and is absent from a response that predates it. */}

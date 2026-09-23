@@ -44,10 +44,13 @@ describe("the pulse-width pairing sentence (S5)", () => {
   });
 });
 
-describe("the card's prose folds behind one push-button", () => {
-  it("shows no description on load, and every description after one click", () => {
+describe("the card's prose folds behind one push-button, except the legend", () => {
+  // THE LEGEND IS OPEN ON LOAD (the PI, 2026-09-23, amending his S5 ruling of 2026-09-17 for this
+  // one paragraph; panel C item 5, report C §5.3): what the colours, the cross, the dots and the
+  // star mean is needed to read the squares at all. Every other description stays folded.
+  it("shows the legend on load and no other description, and every description after one click", () => {
     rtlRender(wrap(<CurrentMapCard plan={plan} />));
-    expect(screen.queryByText(/Each square below is one stimulation speed/)).toBeNull();
+    expect(screen.getByText(/Each square below is one stimulation speed/)).toBeInTheDocument();
     expect(screen.queryByText(/Pulse-width pairings fitted:/)).toBeNull();
     expect(screen.queryByText(/These scores come from the lab's testing workbooks/)).toBeNull();
     const btn = screen.getByRole("button", { name: /Expand descriptions/ });

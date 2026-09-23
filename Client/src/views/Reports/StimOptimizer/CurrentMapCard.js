@@ -481,6 +481,9 @@ export default function CurrentMapCard({ plan }) {
     [rateStrata, rateStrataClinic]);
   // The PI, 2026-09-17 (S5): every description on this card folds behind one push-button, off on
   // every load; the squares, the per-rate lines and the three checks stay visible either way.
+  // AMENDED by him on 2026-09-23 for ONE paragraph: the legend (what the colours, the cross, the
+  // dots and the star mean) is open on load, because the squares cannot be read without it (panel
+  // C item 5, report C §5.3). Every other description still folds.
   const [showDescriptions, setShowDescriptions] = useState(false);
 
   if (!rateStrata.length) return null;
@@ -498,8 +501,8 @@ export default function CurrentMapCard({ plan }) {
           sx={{ fontSize: TYPE.body, mt: 0.5, color: "#8a5a00" }}>
           {CURRENT_PAIN_CAVEAT}
         </MDTypography>
-        {showDescriptions && (
-        <MDTypography variant="caption" component="div" color="text" sx={{ fontSize: TYPE.body, mt: 0.5, mb: 1.5 }}>
+        <MDTypography variant="caption" component="div" color="text" data-testid="current-map-legend"
+          sx={{ fontSize: TYPE.body, mt: 0.5, mb: 1.5 }}>
           Each square below is one stimulation speed: the left current runs along the bottom, the
           right current up the side, and the colour is the predicted pain rating at that combination
           (plus a fixed cost where a side effect was reported), which the search is trying to make
@@ -510,7 +513,6 @@ export default function CurrentMapCard({ plan }) {
           them; a blue star appears only when the record can tell currents apart well enough to
           trust it, per the three checks printed beside each square.
         </MDTypography>
-        )}
 
         {showDescriptions && pooling && pooling.available === false && (
           <MDTypography variant="caption" component="div" sx={{ ...SMALL, fontSize: TYPE.body, mb: 1 }}>

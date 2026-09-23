@@ -158,3 +158,32 @@ describe("the readiness table", () => {
     expect(container.textContent).not.toMatch(/a positive, established correlation with the pain score/);
   });
 });
+
+// --- 6. the search's own stopping rule, shown (the PI, 2026-09-23) -------------------------------
+describe("the decision strip shows the search's stopping rule per side", () => {
+  it("says it cannot be assessed on this record, and why, with the combinations still worth trying", () => {
+    const { container } = rtlRender(wrap(
+      <DecisionStrip arms={{}} plan={response.two_stage} inForce={response.in_force_by_side} />));
+    const text = container.textContent;
+    expect(text).toMatch(/When to stop searching/);
+    expect(text).toMatch(/Left: not assessable/);
+    expect(text).toMatch(/no batch of suggested settings has been run and rated in turn/);
+    expect(text).toMatch(/3,184 untried combinations still look worth trying/);
+  });
+
+  it("says stop when the rule says stop", () => {
+    const plan = clone(response.two_stage);
+    plan.stage1.strata.forEach((s) => { s.stop = true; s.stop_binding = "plateau and coverage"; s.queue_size = 0; });
+    const { container } = rtlRender(wrap(
+      <DecisionStrip arms={{}} plan={plan} inForce={response.in_force_by_side} />));
+    expect(container.textContent).toMatch(/Left: stop/);
+  });
+
+  it("says keep going when combinations are still worth trying and there is a history", () => {
+    const plan = clone(response.two_stage);
+    plan.stage1.strata.forEach((s) => { s.stop = false; s.stop_binding = "coverage"; s.queue_size = 12; });
+    const { container } = rtlRender(wrap(
+      <DecisionStrip arms={{}} plan={plan} inForce={response.in_force_by_side} />));
+    expect(container.textContent).toMatch(/Left: keep searching — 12 untried combinations still look worth trying/);
+  });
+});
