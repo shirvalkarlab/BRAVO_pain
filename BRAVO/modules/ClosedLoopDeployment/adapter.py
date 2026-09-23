@@ -1659,10 +1659,20 @@ def caveats_for_report(payload):
     #    against the card rather than believed.
     thr = payload.get("threshold") or {}
     if thr.get("upper") is not None or thr.get("lower") is not None:
+        # FOUR DECIMALS, as the parameter card prints the same two values (`fmtPower` in
+        # deployFormat.js). This line printed the raw float -- "172.2737406083742" on the signed
+        # sheet (the PI, 2026-09-22) -- so one number read two ways on one page.
+        def _as_card(v):
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                return str(v)
+            return f"{f:.4f}" if np.isfinite(f) else str(v)
         rows.append({
             "severity": "medium",
             "text": (f"The two switching values the device would use "
-                     f"({thr.get('lower')} and {thr.get('upper')} in the stimulator's own units) "
+                     f"({_as_card(thr.get('lower'))} and {_as_card(thr.get('upper'))} in the "
+                     f"stimulator's own units) "
                      f"are a median reading plus or minus a fixed minimum, and carry no interval. "
                      f"How far they would move on a different day is not shown."),
             "card": CAVEAT_CARDS["thresholds"]})
@@ -2893,9 +2903,11 @@ def programmed_settings_from_epochs(eps, hemisphere):
     hemisphere whose pulse-width column the table does not carry all return an empty dict, never a
     guessed number. A ``None``-valued fact must stay ``None``.
 
-    Returns a dict with up to three keys: ``rate_hz``, ``pulse_width_us``, and ``_provenance`` (one
-    sentence naming the epoch and when it started, for the caller to attach to whichever of the two
-    facts it actually filled in).
+    Returns a dict with up to five keys: ``rate_hz``, ``pulse_width_us``, the lead's stimulating
+    ring numbers ``stim_rings_on_sensing_lead`` and its programmed cathode as written
+    ``stim_contacts_on_sensing_lead`` (both for device rule D52), and ``_provenance`` (one sentence
+    naming the epoch and when it started, for the caller to attach to whichever facts it actually
+    filled in).
     """
     out = {}
     if hemisphere not in ("Left", "Right"):
@@ -2920,6 +2932,22 @@ def programmed_settings_from_epochs(eps, hemisphere):
     pw = row.get(pw_col) if pw_col in row.index else None
     if pw is not None and not pd.isna(pw):
         out["pulse_width_us"] = float(pw)
+    # THE CONTACTS THIS LEAD STIMULATES ON (the PI, 2026-09-22; device rule D52). The device allows
+    # sensing only on the pair immediately flanking the stimulating contacts (decision 217), and this
+    # page said "the device permits this configuration" for a pair the contacts in force do not
+    # allow, because nothing here read them. Parsed by the Stim Optimizer's own `stim_rings`, the one
+    # parser the readiness card uses; a row with no cathode gives no contacts, never a guess.
+    cath_col = f"cathode_{hemisphere}"
+    cath = row.get(cath_col) if cath_col in row.index else None
+    if cath is not None and not pd.isna(cath) and str(cath).strip():
+        try:
+            from modules.StimOptimizer import bravo_service as _sosvc
+        except ImportError:                                  # host suite: BRAVO/modules is the root
+            from StimOptimizer import bravo_service as _sosvc
+        rings = sorted(_sosvc.stim_rings(cath))
+        if rings:
+            out["stim_rings_on_sensing_lead"] = rings
+            out["stim_contacts_on_sensing_lead"] = str(cath)
 
     if out:
         when = row.get("t_start")

@@ -1,4 +1,4 @@
-"""The Percept device rule table (D01-D51) and the eligibility evaluator that reads it.
+"""The Percept device rule table (D01-D52) and the eligibility evaluator that reads it.
 
 WHAT THIS FILE IS FOR
 =====================
@@ -426,6 +426,13 @@ PARTICIPANT_KEYS = {
     "brainsense_max_pulse_width_us": "D31.",
     "lead_type": "D16. '1x4' or 'sensight'; decides the short-circuit limit.",
     "dual_lead_implant": "D39. Contralateral sensing is documented for dual lead implants only.",
+    "stim_rings_on_sensing_lead": "D52. The ring numbers the sensing lead stimulates on now, read off "
+                                  "the settings row in force (`adapter.programmed_settings_from_"
+                                  "epochs`). Listed here or the pipeline never routes it to the rule, "
+                                  "which then reads 'not supplied' and blocks (found live, "
+                                  "2026-09-22).",
+    "stim_contacts_on_sensing_lead": "D52. The same lead's programmed cathode as written, for the "
+                                     "report's observed line.",
     "adaptive_configured_both_hemispheres": "D40.",
     "accepts_cross_hemisphere_coupling": "D40.",
     "can_operate_neurostimulator": "D05.",
@@ -1191,6 +1198,46 @@ def _p_d39(candidate, participant):
     return bool(dual and acknowledged)
 
 
+def _flanking_helpers():
+    """Decision 217's rule, from its one home (the Stim Optimizer's `lfp_evidence` helpers that the
+    readiness card uses), imported at call time under both spellings so this table stays importable
+    without the analysis modules loaded."""
+    try:
+        from modules.StimOptimizer.routines import lfp_evidence as _le
+        from modules.StimOptimizer import titration_plan as _tp
+    except ImportError:                                      # host suite: BRAVO/modules is the root
+        from StimOptimizer.routines import lfp_evidence as _le
+        from StimOptimizer import titration_plan as _tp
+    return _le, _tp
+
+
+def _channel_side(channel):
+    up = str(channel or "").upper()
+    return "left" if up.endswith("_LEFT") else ("right" if up.endswith("_RIGHT") else None)
+
+
+def _p_d52(candidate, participant):
+    """The sensing pair must be the one the device allows with the contacts that stimulate now.
+
+    While a lead stimulates, BrainSense senses only on the two contacts immediately flanking the
+    stimulating contact(s) (decision 217). The contacts come from the settings row in force for the
+    sensing lead (`adapter.programmed_settings_from_epochs`); with no contacts on record, an
+    unreadable pair, or a channel on a different lead from the stated sensing side, the rule is not
+    determinable -- never a pass.
+    """
+    channel = candidate.get("channel") if isinstance(candidate, dict) else None
+    rings = (participant or {}).get("stim_rings_on_sensing_lead") if isinstance(participant, dict) else None
+    if not channel or not rings:
+        return None
+    le, _tp = _flanking_helpers()
+    if le.sensing_pair_rings(channel) is None:
+        return None
+    side, sens = _channel_side(channel), _text(candidate, "sensing_hemisphere")
+    if side and sens in ("left", "right") and side != sens:
+        return None
+    return bool(le.pair_flanks_stimulation(channel, {int(r) for r in rings}))
+
+
 def _p_d40(candidate, participant):
     """In Single Threshold mode with both hemispheres configured, either hemisphere drives therapy.
 
@@ -1529,6 +1576,35 @@ def _o_d44(c, p):
     return f"rate {c.get('rate_hz')!r} Hz against a soft floor of {LOW_RATE_SOFT_FLOOR_HZ} Hz"
 
 
+def _o_d52(c, p):
+    """Which pair, which contacts stimulate, the pair they allow, and what the chosen pair needs."""
+    channel = c.get("channel")
+    rings = sorted(int(r) for r in (p.get("stim_rings_on_sensing_lead") or []))
+    le, tp = _flanking_helpers()
+    pair = le.sensing_pair_rings(channel)
+    if pair is None or not rings:
+        return (f"sensing channel {channel!r}; stimulating contacts on this lead "
+                f"{p.get('stim_contacts_on_sensing_lead')!r} -- not enough to apply the rule")
+
+    def contacts(xs):
+        xs = sorted(xs)
+        return (f"contact {xs[0]}" if len(xs) == 1
+                else "contacts " + ", ".join(str(x) for x in xs[:-1]) + f" and {xs[-1]}")
+
+    allowed = le.flanking_pair(set(rings))
+    allowed_s = f"{allowed[0]}-{allowed[1]}" if allowed else "no pair (an end contact is stimulating)"
+    pair_s = f"{pair[0]}-{pair[1]}"
+    head = (f"sensing on {pair_s}; this lead stimulates on {contacts(rings)} (programmed cathode "
+            f"{p.get('stim_contacts_on_sensing_lead')}), where the device allows sensing on "
+            f"{allowed_s} only")
+    if allowed == pair:
+        return head + ", which is this pair"
+    need = tp.stim_rings_for_sensing_pair(channel)
+    tail = (f"; sensing on {pair_s} needs stimulation on {contacts(need)}" if need
+            else f"; no stimulating contact lets the device sense on {pair_s}")
+    return head + tail
+
+
 #: Rule identifier to observed-value function. A rule absent from this mapping simply has no
 #: observed line in the report, which is the right outcome for the narrative rules.
 _OBSERVED = {
@@ -1536,7 +1612,7 @@ _OBSERVED = {
     "D10": _o_d10, "D11": _o_d11, "D12": _o_d12, "D13": _o_d13, "D15": _o_d15, "D16": _o_d16,
     "D17": _o_d17, "D18": _o_d18, "D19": _o_d19, "D24": _o_d24, "D26": _o_d26, "D27": _o_d27, "D28": _o_d28,
     "D30": _o_d30, "D31": _o_d31, "D32": _o_d32, "D34": _o_d34, "D38": _o_d38, "D39": _o_d39,
-    "D40": _o_d40, "D44": _o_d44,
+    "D40": _o_d40, "D44": _o_d44, "D52": _o_d52,
 }
 
 #: Rules whose observed value is recorded on the report even when the rule PASSES.
@@ -1551,7 +1627,9 @@ _OBSERVED = {
 #: which signs the data has not established rather than vanish from the ledger; and D30's pass is
 #: DERIVED from the device's active sensing group, so the reader must see which group and which rate
 #: the candidate was matched against.
-_RECORD_VALUE_ON_PASS = ("D03", "D04", "D16", "D19", "D30", "D31")
+#: D52 joined on 2026-09-22 for D30's reason: its pass is derived from the contacts programmed on
+#: the device, so the reader must see which contacts and which pair it was checked against.
+_RECORD_VALUE_ON_PASS = ("D03", "D04", "D16", "D19", "D30", "D31", "D52")
 
 
 # ------------------------------------------------------------------------------------------------
@@ -2467,6 +2545,25 @@ RULES = (
             "and below thresholds."
         ),
         predicate=None,
+    ),
+    types.DeviceConstraint(
+        rule_id="D52",
+        title="The sensing pair must flank the contacts that stimulate",
+        source="A610 + WP + BrainSense Tip Cards", page="A610 p. 36; WP p. 8; Tip Cards pp. 7-8",
+        severity="blocking",
+        human_text=(
+            "While a lead stimulates, BrainSense can sense only on the two contacts immediately "
+            "flanking the stimulating contact or contacts: stimulating on contact 1 allows sensing "
+            "on 0-2, on contact 2 allows 1-3, on contacts 1 and 2 together allows 0-3, and "
+            "stimulating on an end contact (0 or 3) allows no sensing pair on that lead. So a band "
+            "can drive adaptive therapy only on the pair the contacts in force allow; any other "
+            "pair needs the stimulating contacts changed first, which is a programming decision "
+            "of its own and not a detail of this configuration. The contacts are read from the "
+            "settings in force on the sensing lead. The Stim Optimizer's readiness card applies "
+            "the same rule (decision 217); this page did not until 2026-09-22, and said the "
+            "device permitted L 0-2+ while the left lead stimulated on contact 2."
+        ),
+        predicate=_p_d52,
     ),
 )
 

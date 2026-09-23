@@ -94,6 +94,11 @@ def resolved_participant(**overrides):
         "dual_lead_implant": True,
         "adaptive_configured_both_hemispheres": False,
         "can_operate_neurostimulator": True,
+        # D52 (2026-09-22, decision 247): the sensing lead's stimulating contacts, read off the
+        # settings in force. The fixture candidate senses on R 0-3+, which the device allows only
+        # while contacts 1 and 2 stimulate together -- as RCS08's right lead does.
+        "stim_rings_on_sensing_lead": [1, 2],
+        "stim_contacts_on_sensing_lead": "1a-1b-1c-2a-2b-2c",
     }
     participant.update(overrides)
     return participant
@@ -121,11 +126,16 @@ def ids(rows):
 # ------------------------------------------------------------------------------------------------
 # The table itself.
 # ------------------------------------------------------------------------------------------------
-def test_table_encodes_all_fifty_one_rules_exactly_once():
-    """D01 to D51 with no gaps and no duplicates, because a skipped rule is an invisible rule."""
+def test_table_encodes_all_fifty_two_rules_exactly_once():
+    """D01 to D52 with no gaps and no duplicates, because a skipped rule is an invisible rule.
+
+    Was fifty-one until 2026-09-22, when D52 (the sensing pair must flank the stimulating contacts,
+    decision 247) joined at the PI's request after the page said the device permitted L 0-2+ while
+    the left lead stimulated on contact 2. The name moved with the table on purpose: a test named
+    for fifty-one rules over a table of fifty-two would assert something untrue."""
     got = [rule.rule_id for rule in constraints.RULES]
-    assert got == [f"D{n:02d}" for n in range(1, 52)]
-    assert len(set(got)) == 51
+    assert got == [f"D{n:02d}" for n in range(1, 53)]
+    assert len(set(got)) == 52
 
 
 def test_every_rule_carries_its_citation_and_a_plain_english_reason():
@@ -139,7 +149,11 @@ def test_every_rule_carries_its_citation_and_a_plain_english_reason():
 
 
 def test_severity_counts_are_the_documented_split():
-    """20 blocking, 29 advisory, 2 unknown. The two unknowns are the point of the split.
+    """21 blocking, 29 advisory, 2 unknown. The two unknowns are the point of the split.
+
+    Was 20/29/2 until 2026-09-22, when D52 joined as blocking (decision 247): a configuration whose
+    sensing pair the stimulating contacts do not allow cannot be programmed, so it is a refusal,
+    not advice.
 
     Was 21/28/2 until 2026-09-04, when D09 was moved from blocking to advisory on PI decision. The
     guide RECOMMENDS the 1.2 uVp amplitude and states it two ways (1.2 against 1.1) without
@@ -148,7 +162,7 @@ def test_severity_counts_are_the_documented_split():
     check that the change was deliberate and recorded.
     """
     counts = constraints.severity_counts()
-    assert counts == {"blocking": 20, "advisory": 29, "unknown": 2}
+    assert counts == {"blocking": 21, "advisory": 29, "unknown": 2}
     unknown_ids = {rule.rule_id for rule in constraints.RULES if rule.severity == "unknown"}
     assert unknown_ids == {"D04", "D31"}
 
@@ -172,7 +186,7 @@ def test_fully_declared_candidate_is_eligible():
     assert report.failures == [], [r["rule_id"] for r in report.failures]
     assert report.unknowns == [], [r["rule_id"] for r in report.unknowns]
     assert report.eligible is True
-    assert report.checked == 51
+    assert report.checked == 52
     assert isinstance(report, types.EligibilityReport)
 
 
@@ -190,7 +204,9 @@ def test_passing_report_records_the_programming_regime_it_was_written_in():
     # D19 and D30 joined on 2026-09-12: D19 now passes on a POINT sign (PI decision), so its pass
     # must show which signs are not established; D30's pass is derived from the device's active
     # sensing group, so its pass must show which group and rate it was matched against.
-    assert ids(recorded) == {"D03", "D04", "D16", "D19", "D30", "D31"}
+    # D52 joined on 2026-09-22 for D30's reason: its pass is derived from the contacts programmed on
+    # the device, so it must show which contacts and which pair it was checked against.
+    assert ids(recorded) == {"D03", "D04", "D16", "D19", "D30", "D31", "D52"}
     d03 = next(row for row in recorded if row["rule_id"] == "D03")
     assert "parkinsons" in d03["observed"]
 
@@ -328,7 +344,7 @@ def test_the_remaining_unknown_blocks_on_the_record_as_it_stands():
     assert ids(report.unknowns) == {"D04"}
     assert all(row["kind"] == "value_not_read_off_programmer" for row in report.unknowns)
     assert report.eligible is False
-    assert report.checked == 51
+    assert report.checked == 52
 
 
 def test_the_two_unknowns_are_distinguishable_from_an_undeclared_input():
@@ -381,9 +397,9 @@ def test_empty_inputs_produce_no_passes_at_all():
     """
     report = check({}, {})
     assert report.failures == []
-    assert len(report.unknowns) == 22          # 20 blocking + 2 unknown (D09 now advisory)
+    assert len(report.unknowns) == 23          # 21 blocking + 2 unknown (D09 advisory; D52 blocking)
     assert len(report.advisories) == 29        # 28 + D09, softened 2026-09-04
-    assert report.checked == 51
+    assert report.checked == 52
     assert report.eligible is False
 
 
@@ -437,7 +453,7 @@ def test_check_eligibility_returns_every_failure_rather_than_the_first():
                 "D19", "D27", "D30", "D32", "D34"}
     assert expected.issubset(ids(report.failures))
     assert len(report.failures) >= len(expected)
-    assert report.checked == 51                # nothing was skipped on the way past the failures
+    assert report.checked == 52                # nothing was skipped on the way past the failures
     assert report.eligible is False
     assert "NOT eligible" in report.summary()
 

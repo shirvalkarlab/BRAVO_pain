@@ -290,8 +290,14 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
     // the 22 centres to label all of them without the text overlapping).
     const xTickVals = centers.filter((c, i) => i % 3 === 0);
     const xTickText = xTickVals.map((c) => Number(c).toFixed(0));
+    // NO `width` HERE (2026-09-22, found watching the page live). A fixed width stops Plotly's
+    // responsive resize from shrinking the figure to its box: the box measured 527 pixels, the
+    // figure was drawn at 750, and the 223 extra pixels spilled right -- invisible until a cell was
+    // picked, when the side panel covered them and took the columns from about 25 Hz up with it,
+    // and cut the hover label off mid-word. Left unset, Plotly draws at the box's width; `width`
+    // stays below as the box's own upper limit, so a wide screen draws it no larger than before.
     fig.setLayoutProps({
-      height, width, margin: { l: 46, r: 8, t: 8, b: 40 },
+      height, margin: { l: 46, r: 8, t: 8, b: 40 },
       // No gridlines (the cell borders via xgap/ygap already separate the cells), no axis line,
       // no tick marks (`ticks: ""`) on either axis -- floating labels only. The x-axis also
       // replaces Plotly's own automatic tick choice with an explicit array so it labels a real
