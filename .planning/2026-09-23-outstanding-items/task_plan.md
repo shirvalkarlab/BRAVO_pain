@@ -6,7 +6,7 @@ order"): stability column, ruling 8 with the sign-off identity, the parameter-ca
 two stale page tests, the next-visit list on the titration card, then the two diagnostics.
 
 ## Next Step
-Phase 3: the parameter card's one heading (D-7) and the two stale Closed-Loop page tests.
+Phase 4: put `coverage_gap` (decision 239) on the Stim Optimizer response and the titration card.
 
 ## Phases
 
@@ -22,13 +22,13 @@ Phase 3: the parameter card's one heading (D-7) and the two stale Closed-Loop pa
 - **Status:** complete
 
 ### Phase 3: Page wording and test debt
-- [ ] D-7: one heading over the parameter card's four provenance notes
-- [ ] The two stale Closed-Loop page tests updated to the page's current wording
-- **Status:** in_progress
+- [x] D-7: one heading per row, counting that row's notes (no row carries four) (decision 250)
+- [x] The two stale Closed-Loop page tests updated; jest 226 / 226 (decision 250)
+- **Status:** complete
 
 ### Phase 4: What the next visit must deliver, on the page
 - [ ] `coverage_gap` (decision 239) on the Stim Optimizer response and the titration card
-- **Status:** pending
+- **Status:** in_progress
 
 ### Phase 5: The two diagnostics
 - [ ] B-3: level shifts in the chronic 10-minute log at dated events

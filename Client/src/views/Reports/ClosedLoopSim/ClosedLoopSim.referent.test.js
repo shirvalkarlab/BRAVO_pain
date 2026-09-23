@@ -177,3 +177,20 @@ describe("Deploy-to-Percept review (the sign-off sheet) and its provisional box"
     expect(src).toMatch(/<ProvisionalNote[^>]*headline=\{false\}/);
   });
 });
+
+describe("Full parameter recommendation, the checks under a number (panel D item 7)", () => {
+  // The design-rule, occupancy, start-of-stretch and robustness notes were printed one after
+  // another with nothing saying they are separate checks, each measured on this participant's own
+  // record, rather than one argument in steps. The panel asked for one heading, "Four independent
+  // checks on this number"; on the record no row carries four (the threshold rows carry two, the
+  // onset and start-up rows one each), so the heading counts the notes on its own row.
+  it("heads each row's notes with how many separate checks they are", () => {
+    const { container } = render(<PrescriptionPanel report={report} mode="dual" onMode={() => {}} />);
+    const text = container.textContent;
+    expect(text.match(/Two separate checks on this number, each measured on this participant's own record/g) || [])
+      .toHaveLength(2);
+    expect(text.match(/A check on this number, measured on this participant's own record/g) || [])
+      .toHaveLength(3);
+    expect(text).not.toMatch(/Four independent checks/);
+  });
+});

@@ -41,6 +41,16 @@ import Fold from "./Fold";
 import ProvisionalNote from "./ProvisionalNote";
 import { MODE_LABEL, MODE_ORDER, fmtFieldValue } from "./deployFormat";
 
+/** The heading over a row's check notes, counted on that row; null when the row carries none. */
+const CHECK_NOTE_KEYS = ["design_rule_note", "occupancy_note", "startup_bias_note", "robustness_note"];
+const COUNT_WORD = { 2: "Two", 3: "Three", 4: "Four" };
+export function checksHeading(field) {
+  const n = CHECK_NOTE_KEYS.filter((k) => field && field[k]).length;
+  if (!n) return null;
+  return n === 1 ? "A check on this number, measured on this participant's own record:"
+    : `${COUNT_WORD[n]} separate checks on this number, each measured on this participant's own record:`;
+}
+
 /** What the reader is being asked to do with a row, keyed on the payload's `confirm` axis. */
 const CONFIRM_COPY = {
   enterable: {
@@ -238,6 +248,17 @@ function FieldRow({ f, index, ticked, onTick, readBackEnabled }) {
           <MDTypography variant="caption" sx={{ display: "block", fontSize: 10,
             fontWeight: 600, color: "#6A6A6A" }}>
             {`confidence ${f.confidence} (measured on this participant's record)`}
+          </MDTypography>
+        ) : null}
+        {/* ONE HEADING OVER THE NOTES BELOW (panel D item 7, 2026-09-23). Up to four notes follow,
+            each a separate check measured on this participant's own record, and printed one after
+            another with nothing saying so they read as one argument in steps. The heading counts
+            the notes on THIS row: the panel's "Four independent checks" would be untrue on every
+            row of the record (the threshold rows carry two, the onset and start-up rows one). */}
+        {checksHeading(f) ? (
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10, mt: 0.3,
+            fontWeight: 600, color: "#6A6A6A" }}>
+            {checksHeading(f)}
           </MDTypography>
         ) : null}
         {/* The confirmations-and-separation design rule (T3, 2026-09-13): a fitted noise-only

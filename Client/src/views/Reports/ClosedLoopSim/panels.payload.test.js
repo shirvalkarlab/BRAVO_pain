@@ -188,11 +188,18 @@ describe("the evidence panel separates the two coherence questions", () => {
       .toBeInTheDocument();
   });
 
-  it("lights the NOT COHERENT cell and still draws the NOT ESTABLISHED cell", () => {
+  // The cells were renamed on 2026-09-11 at the PI's request (COHERENT / NOT COHERENT became
+  // SIGNS AGREE / SIGNS DISAGREE, `stateTracks.js`), and this test kept the old words and failed
+  // from then until 2026-09-23. It also only ever checked that the words were drawn, not which cell
+  // was lit; only the lit cell prints its explanation, so that is now checked too.
+  it("lights the SIGNS DISAGREE cell and still draws the other two", () => {
     render(<EvidenceTrianglePanel report={report} />);
-    expect(screen.getByText("NOT COHERENT")).toBeInTheDocument();
+    expect(screen.getByText("SIGNS DISAGREE")).toBeInTheDocument();
+    expect(screen.getByText("SIGNS AGREE")).toBeInTheDocument();
     expect(screen.getByText("NOT ESTABLISHED")).toBeInTheDocument();
-    expect(screen.getByText("COHERENT")).toBeInTheDocument();
+    expect(screen.getByText(/The three edge signs do not match the pattern the selected control law requires/))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/^The three edge signs match the pattern/)).toBeNull();
   });
 
   it("prints each edge's own estimator sentence and no cluster-count asterisk", () => {
@@ -232,8 +239,10 @@ describe("the what-would-change band ranks the outstanding work and names its ow
     const { container } = render(<WhatWouldChangeThis report={report} />);
 
     expect(container.textContent).toMatch(/D19 is violated/);
-    expect(container.textContent).toMatch(/1 of them can be resolved at the programmer/);
-    expect(container.textContent).toMatch(/3 cannot be resolved there at all/);
+    // The count line's wording moved ("1 of them can be resolved at the programmer ... 3 cannot be
+    // resolved there at all" became the line below); the counts it states are the same.
+    expect(container.textContent).toMatch(/1 resolvable at the programmer/);
+    expect(container.textContent).toMatch(/3 need a change to the analysis/);
     // The coherence row must name band selection rather than more measurement, because on this
     // payload the three edges agree with each other.
     expect(container.textContent)
