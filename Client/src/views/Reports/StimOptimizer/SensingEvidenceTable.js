@@ -33,6 +33,9 @@ import { contactSortKey } from "views/Reports/Biomarkers/contactOrder";
 
 import { num, fmtHz, fmtMa, contactLabel } from "./stimFormat";
 import { TYPE, HEAD, SMALL, SizedFold } from "./typeScale";
+// The checks card this table's evidence feeds, named by its own title constant so the link
+// cannot drift from the card it points to.
+import { TWO_STAGE_CARD_TITLE } from "./TwoStagePlanCard";
 
 const MONO = { fontFamily: PAL.mono, fontSize: TYPE.body, color: "#1A1A1A", whiteSpace: "nowrap" };
 
@@ -62,6 +65,42 @@ const countText = (n, of) => {
 const COLUMNS = "108px 64px 76px minmax(90px, 1fr) 76px minmax(90px, 1fr) 76px minmax(150px, 1.2fr) 150px 120px 36px minmax(120px, 1.1fr)";
 const HEADERS = ["sensing contact", "stim side", "rate", "falls with current (time removed)", "", "rises with pain (Biomarkers grid)", "",
   "both: the bands that qualify", "currents tested", "Separation (SD)", "", "why not"];
+
+const signed = (v) => {
+  const x = num(v);
+  return x === null ? "—" : `${x >= 0 ? "+" : "−"}${Math.abs(x).toFixed(3)}`;
+};
+
+/**
+ * For every band that rises with pain on a contact: is it still positive once the stimulation
+ * current in force is taken out? (Panel C item 6; the PI, 2026-09-22, decision 233 answer 2: shown
+ * beside the plain answer, never re-selecting a band.) The adjusted POINT value only -- the grid
+ * carries no interval on it -- read from a stored current-adjusted grid, which this page never
+ * builds; when none is stored, the reason is printed instead.
+ */
+function StillPositiveLines({ still, labelFor }) {
+  if (!still) return null;
+  if (!still.available) {
+    return (
+      <MDTypography variant="caption" component="div" data-testid="still-positive"
+        sx={{ ...SMALL, fontSize: TYPE.body, mt: 0.6 }}>
+        {`Whether each band that rises with pain is still positive with the current taken out: not assessed: ${still.reason || "no current-adjusted grid is stored"}.`}
+      </MDTypography>
+    );
+  }
+  const lines = Object.entries(still.by_channel || {})
+    .filter(([, rows]) => Array.isArray(rows) && rows.length)
+    .map(([ch, rows]) => `${labelFor(ch)}: ${rows.map((r) => (r.answer === "not assessed"
+      ? `${Number(r.center_hz)} Hz not assessed`
+      : `${Number(r.center_hz)} Hz ${r.answer} (${signed(r.pearson_r)} → ${signed(r.pearson_r_adjusted)})`)).join(", ")}`);
+  return (
+    <MDBox mt={0.6} data-testid="still-positive">
+      <MDTypography variant="caption" component="div" sx={{ ...SMALL, fontSize: TYPE.body }}>
+        {`Still positive with the current taken out, per band that rises with pain (plain correlation → with the current in force taken out; the adjusted point value only, no interval, and it moves no verdict): ${lines.length ? lines.join(" · ") : "no band rises with pain on any contact"}.`}
+      </MDTypography>
+    </MDBox>
+  );
+}
 
 export default function SensingEvidenceTable({ closedLoop }) {
   const cl = closedLoop || {};
@@ -93,8 +132,23 @@ export default function SensingEvidenceTable({ closedLoop }) {
   const headline = nScreened
     ? `${nDeploy === null ? "—" : Math.round(nDeploy)} of ${Math.round(nScreened)} contact-and-rate combinations usable for closed loop`
     : "no combinations screened — usability not yet assessed";
+  const rule = cl.sensing_rule || null;
+  const labelFor = (ch) => {
+    const v = (pr && pr.by_channel && pr.by_channel[ch]) || null;
+    return v ? contactLabel(v, ch) : ch;
+  };
   return (
     <MDBox>
+      {/* The device's sensing rule FIRST, with the count it explains (decision 217; panel C item
+          5, report C §5.3). It applies to every row at once, and it used to be printed only row
+          by row under "why not", so a count that read differently on an earlier visit read zero
+          with no reason in sight. */}
+      {rule && rule.sentence ? (
+        <MDTypography variant="caption" component="div" data-testid="sensing-rule-first"
+          sx={{ fontSize: TYPE.body, fontWeight: 600, color: "#1A1A1A", mb: 0.6 }}>
+          {rule.sentence}
+        </MDTypography>
+      ) : null}
       <MDBox display="flex" alignItems="center" gap={1} flexWrap="wrap">
         {nScreened ? (cl.ready ? <TickGlyph label="a usable combination exists" size={20} /> : <CrossGlyph label="no usable combination" size={20} />) : null}
         <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>{headline}</MDTypography>
@@ -104,6 +158,10 @@ export default function SensingEvidenceTable({ closedLoop }) {
           </MDTypography>
         )}
       </MDBox>
+      {/* The two readiness cards stay two cards (panel C item 5), each pointing at the other. */}
+      <MDTypography variant="caption" component="div" sx={{ ...SMALL, fontSize: TYPE.body, mt: 0.4 }}>
+        {`This table is the evidence. Whether closed loop may start is decided by the four checks in the card "${TWO_STAGE_CARD_TITLE}" at the foot of this page; one of them reads the best row here.`}
+      </MDTypography>
       <MDTypography variant="caption" component="div" sx={{ ...SMALL, fontSize: TYPE.body, mt: 0.4 }}>
         {`Adaptive mode can use a band inside ${(cl.adaptive_window_hz || []).map((v) => Number(v)).join("–")} Hz at a rate of at least ${fmtHz(cl.min_adaptive_rate_hz)}; its only lever is current, so a band must move with current, which is a different question from whether it tracks pain. ${
           cl.safe_ceiling_mA_by_side
@@ -188,6 +246,9 @@ export default function SensingEvidenceTable({ closedLoop }) {
           {`Which bands rise with pain is read off the Biomarkers grid for the ${pr.score_label || pr.score || "pain"} score${pr.stored_utc ? `, built ${new Date(pr.stored_utc).toLocaleString()}` : ""}: a band counts when its correlation with pain is positive and its interval lies wholly above zero (supported); the stricter selection-aware bar the grid calls "established" is reported beside it, not required. ${painSummary}`}
         </MDTypography>
       )}
+      {pr && pr.available && (
+        <StillPositiveLines still={pr.still_positive_without_current} labelFor={labelFor} />
+      )}
       {pr && pr.available === false && (
         <MDTypography variant="caption" component="div" sx={{ ...SMALL, fontSize: TYPE.body, mt: 0.8, color: PAL.warnText }}>
           {`Which bands rise with pain is not known: ${pr.reason || "no stored Biomarkers grid"}. Without it no combination can be called usable.`}
@@ -196,7 +257,7 @@ export default function SensingEvidenceTable({ closedLoop }) {
 
       <SizedFold show="What 'usable' requires, and why the current limit is flat" hide="Hide">
         <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body }}>
-          {`A combination is usable when at least ONE band both falls with current once the time confound is removed (a significant negative slope of band power on current, with the clinic-visit blocks removed) and rises with pain on the Biomarkers grid (a positive, established correlation with the pain score) — the device's fixed control polarity: more current, less power, less pain — and the currents tested sit at or below the flat ${fmtMa(cl.amp_hard_limit_mA)} limit. One band is enough (the PI's ruling of 2026-09-17, decision 199; until then half the bands had to respond). A qualifying band that sits within 2.5 Hz of the stimulator's own harmonics at that rate (|250 − rate|, half, a quarter and three quarters of the rate) is marked, not refused. The current limit is PI-declared and was established by testing at 165 Hz; it does not vary with rate or pulse width. Separation is the gap between the two measured power levels, in units of their own scatter (standard deviations), reported for information.`}
+          {`A combination is usable when at least ONE band both falls with current once the time confound is removed (a significant negative slope of band power on current, with the clinic-visit blocks removed) and rises with pain on the Biomarkers grid (a positive correlation with the pain score whose interval lies wholly above zero, decision 210), on the one sensing pair the device allows while today's contacts stimulate (the two contacts flanking them, decision 217) — the device's fixed control polarity: more current, less power, less pain — and the currents tested sit at or below the flat ${fmtMa(cl.amp_hard_limit_mA)} limit. One band is enough (the PI's ruling of 2026-09-17, decision 199; until then half the bands had to respond). A qualifying band that sits within 2.5 Hz of the stimulator's own harmonics at that rate (|250 − rate|, half, a quarter and three quarters of the rate) is marked, not refused. The current limit is PI-declared and was established by testing at 165 Hz; it does not vary with rate or pulse width. Separation is the gap between the two measured power levels, in units of their own scatter (standard deviations), reported for information.`}
         </MDTypography>
       </SizedFold>
     </MDBox>

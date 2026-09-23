@@ -32,7 +32,9 @@ const NOTE = { ...SMALL, whiteSpace: "nowrap" };
 export const CHECK_LABELS = {
   rate_at_or_above_adaptive_minimum: "Rate at or above the adaptive minimum",
   openloop_choice_resolved: "Rate and pulse width resolved against their own uncertainty",
-  adaptive_band_passes_lfp_response: "A sensed band inside 8–30 Hz responds to stimulation current",
+  // Plain words first, the mechanism after (panel C item 5; report C §5.3; the house rule: say what
+  // it does, then name it). The 8–30 Hz range stays, in brackets, for whoever needs it.
+  adaptive_band_passes_lfp_response: "Does a usable recording site's power change with current? (a band inside 8–30 Hz)",
   amplitude_limits_inside_envelope_and_under_ceiling: "Closed-loop current limits inside the delivered range and under the ceiling",
 };
 
@@ -281,6 +283,14 @@ export default function ClosedLoopChecks({ plan }) {
         {conditions.length ? (passed ? <TickGlyph label="may start" size={20} /> : <CrossGlyph label="may not start" size={20} />) : null}
         <MDTypography variant="h6" sx={{ fontSize: TYPE.section, color }}>{headline}</MDTypography>
       </MDBox>
+      {/* The two readiness cards stay two cards (panel C item 5, the clinician's correction of the
+          report's merge), each pointing at the other: this one decides, the table holds the
+          evidence one of these checks reads. */}
+      <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, mt: 0.4, color: "#4A4A4A" }}>
+        These four checks decide whether closed loop may start on the frozen setting. The
+        per-contact evidence behind the recording-site check is the readiness table at the top of
+        this page.
+      </MDTypography>
       {/* Two columns: the check (symbol, name, folded sentence) and its evidence. */}
       <MDBox mt={1.5} sx={{ display: "grid", gridTemplateColumns: "minmax(300px, 1fr) minmax(360px, 1.5fr)",
         columnGap: "28px", rowGap: "22px", alignItems: "start" }}>

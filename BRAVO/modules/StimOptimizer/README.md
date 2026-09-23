@@ -17,12 +17,25 @@ with reasons.
 | `routines/surrogate.py` | `ParameterGrid`, `ObjectiveGP` (fixed-noise), `SafetyGP` (monotone prior mean) |
 | `routines/preference.py` | `PreferenceGP` (pairwise probit, Laplace posterior) |
 | `routines/acquisition.py` | EI / GP-UCB, safe set, batch selection, dual stopping rule |
-| `tests/` | 35 regression tests; `pytest BRAVO/modules/StimOptimizer` |
+| `tests/` | the host suite's Stim Optimizer tests; run them as `CLAUDE.md` §1 says (no count is kept here, decision 34) |
 
-Library mode only: no Django endpoint and no React view yet, the same staging the Biomarkers module
-used. No torch dependency — the search grid is 396 cells, so the acquisition function is evaluated
-exhaustively as Sarikhani et al. did, and scikit-learn's `GaussianProcessRegressor` covers the
-Matern-3/2 ARD kernel with per-observation noise variance.
+The module is served by `/api/queryStimOptimizer` (`bravo_service.py`) and drawn by the Stim Optimizer
+page (`Client/src/views/Reports/StimOptimizer/`). No torch dependency — the search grid is small
+enough that the acquisition function is evaluated exhaustively as Sarikhani et al. did, and
+scikit-learn's `GaussianProcessRegressor` covers the Matern-3/2 ARD kernel with per-observation noise
+variance.
+
+## What the page reaches, and what only research reaches (checked 2026-09-23)
+
+Panel C of 2026-09-22 (item 8) asked for this so nobody reads unreached code as live. Re-check it
+with the greps named here before trusting it; the page changes.
+
+| code | reached by the page? |
+|---|---|
+| the two-stage path (`stage1_openloop.py`, `stage2_closedloop.py`, the readiness screen in `bravo_service.py`, `titration_plan.py`) | **yes** -- every card on the page reads it |
+| the flat per-arm pipeline's arms (`pipeline.run`'s per-site, per-side surfaces and their queues) | **no** -- the page passes `arms={{}}` to `DecisionStrip`, so nothing per-arm is drawn; `grep -n "arms=" Client/src/views/Reports/StimOptimizer/index.js` |
+| the figures (`routines/plots.py`) and the preference model (`routines/preference.py`, used only by the figures) | **no** -- the page asks for `Backend: "none"`, which returns tables only; the figures are built only when a caller asks for `Backend: "plotly"`, and no page does |
+| the stopping rule (`acquisition.check_stopping`) | **computed, not read** -- it runs on every fitted pulse-width surface and its `stop` / `stop_binding` fields reach the response, but no card reads them. (Panel C listed it as unreached; it is not -- it runs on the live path.) |
 
 ## Sign conventions, because they differ between models
 
@@ -45,12 +58,14 @@ beta = 2.0 (the default) and 1.70 mA at beta = 3.0.
 
 **Every model in this module assumes a static response surface. Chronic DBS does not have one.**
 
-The interim mitigation is in place and is deliberately weak: `objective.observation_variance`
-inflates each historical observation's variance with its age,
-`tau^2_age = c_age * (age_days/365)^2`, so a 2025 epoch is trusted less than a 2026 one. That
-down-weights stale evidence but it does not *track* drift — the surrogate still has one time-invariant
-mean function, so a setting whose true effect has changed will be modelled as noisy rather than as
-having moved.
+**Time is modelled nowhere, by the PI's ruling (decisions 193-196).** An age term that inflated each
+old observation's variance (`c_age`) was tried as an interim stand-in and removed: it was inert on
+this record and not supported, and in a patient more than three years into the disease the drift
+that matters is treated as an effect of current, not of time. (This paragraph said until
+2026-09-23 that the age term was "in place"; it had been removed from `routines/objective.py`, whose
+own comment records it.) What the page now reports instead is that the fitted surface fails the
+pre-registered held-out check by blocks of time (decision 238): the non-stationarity is diagnosed
+and shown, not modelled.
 
 What is not implemented:
 
@@ -66,6 +81,8 @@ Neither has prospective chronic human validation in the literature, so this is a
 than an implementation backlog item. Given that this platform already holds months of continuous
 sensing plus a year of dated PROs, it is also the place where a contribution is available.
 
+A time-varying kernel would reverse decisions 193-196 and was not adopted by the review panel of
+2026-09-22; what follows is kept as the literature's route, for if that ruling ever changes.
 Concrete first step when this is picked up: add a forgetting factor to the objective kernel — either
 an explicit `exp(-|t_i - t_j|/tau)` product term, or a spectral-mixture component for the circadian
 period — and validate it the way Phase 4 validates the static model, by leave-one-era-out prediction.

@@ -115,6 +115,7 @@ import numpy as np
 import pandas as pd
 
 from .routines.resolution import RESOLUTION_K as _RES_K
+from .routines.resolution import exposure as _resolution_exposure
 from .routines import acquisition as ACQ
 from .routines import adaptive_envelope as ENV
 from .routines import objective as OBJ
@@ -1490,6 +1491,32 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
                              n_rates=len(pooled_rate_strata),
                              n_rates_fitted=int(sum(1 for r in pooled_rate_strata.values() if r.fitted)))
     audit["pulse_width_pooling"] = pooling_audit
+    # HOW MANY TIMES THE "PROVEN BETTER" COMPARISON RAN (panel C item 4, 2026-09-22): every fitted
+    # per-rate surface whose gain check could be formed, per-pairing and pooled alike. Visibility
+    # only -- the rule, its multiple and its verdicts are untouched.
+    _formed = 0
+    _all = [rs for sl in slices.values() for rs in (sl.rate_strata or {}).values()]
+    _all += list(pooled_rate_strata.values())
+    for _rs in _all:
+        _g = ((_rs.resolution or {}).get("gain") or {}) if _rs.fitted else {}
+        if _g.get("passes") is not None:
+            _formed += 1
+    audit["resolution_exposure"] = _resolution_exposure(_formed, k=resolution_k)
+    # THE RATE LENGTH SCALE IS AN ASSUMPTION, SAID WHERE THE RESPONSE CAN CARRY IT (panel C item 7;
+    # `OBJECTIVE_SPEC.md`, amendment of 2026-09-23). Read off the argument this run actually used.
+    _fls = list(fixed_length_scale) if fixed_length_scale is not None else [None]
+    _rate_ls = _fls[0] if _fls else None
+    audit["frequency_length_scale"] = dict(
+        value=(float(_rate_ls) if _rate_ls is not None else None),
+        pinned=_rate_ls is not None,
+        axis="stimulation rate, standardised log2 axis",
+        acts_on=("the joint (rate, left current, right current) surface of each pulse-width "
+                 "pairing; the per-rate current surfaces have no rate axis and do not use it"),
+        why=("a stated assumption, not an estimate: the profiled likelihood is bimodal, 0.219 "
+             "(rates nearly independent) against 2.562 (borrowing across every rate), the first "
+             "preferred by 2.789 nats; the short mode reflects rates being tried in different "
+             "periods, not the physiology (OBJECTIVE_SPEC.md, 2026-09-23)")
+        if _rate_ls is not None else "the rate length scale was fitted on this run, not pinned")
     pooled_rate_summary = pd.DataFrame(pooled_rows).sort_values("rate_hz").reset_index(drop=True) \
         if pooled_rows else pd.DataFrame()
 

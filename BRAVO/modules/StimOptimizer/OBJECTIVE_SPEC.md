@@ -697,3 +697,36 @@ Note this makes limited use of duration as a tolerability surrogate, which secti
 off-by-default. The restriction is retained for the *objective*; for the safety seed a 72 h minimum
 is required and the anchors carry deliberately large variances. Seeds are dropped as soon as
 prospective severity reports exist.
+
+### 2026-09-23 — the frequency pin is a stated assumption, and the evidence for it is bimodal, not flat
+
+Panel C of 2026-09-22 (item 7) asked that the one-octave pin be written here as a stated assumption
+with the evidence that made it one, and reported where the page can see it.
+
+**The assumption.** Across stimulation rates the objective surface is assumed to vary smoothly on the
+scale of **one octave**: the rate length scale is **0.823** on the standardised log2 rate axis, fixed,
+not estimated. Every other length scale, the signal variance and the noise are fitted.
+
+**Where it acts, and where it does not.** It acts only where rate is an input: the joint
+(rate, left current, right current) surface of each pulse-width pairing
+(`stage1_openloop.JOINT_FIXED_LENGTH_SCALE`) and the older two-dimensional figure surrogate
+(`routines.plots.FIXED_LENGTH_SCALE`). The per-rate current surfaces the current-map card draws have
+no rate axis, so the pin does not reach them, and no current the page could ever recommend rests on it.
+
+**The evidence, which is stronger than "the likelihood is flat".** The 2026-08-29 amendment above
+said the likelihood was flat in this length scale. `BOTORCH_REFACTOR.md` later profiled it properly
+(the other hyperparameters re-optimised at each value): the surface is **bimodal**. It has one mode
+at **0.219**, where each rate is treated as nearly independent of its neighbours, and one at **2.562**,
+where the model borrows across the whole rate range. The first is preferred by **2.789 nats**
+(-100.305 against -103.094). The pinned 0.823 sits in the valley between them. It is 1.39 nats worse
+than the short mode and 1.40 nats better than the long one. A log-normal prior does not settle it:
+at BoTorch's default scale it reproduces the near-independent answer, and at a scale tight enough to
+reach the smooth answer it reports the prior's own number back.
+
+**Why a pin and not either mode.** The short mode is a property of the design, not of the physiology:
+rates were tried in different periods, so contrasts between rates absorb the drift over time and
+look like unrelated noise (the 2026-08-29 amendment). The long mode borrows across rates the
+record cannot support. Neither estimate is honest here, so the value is declared as an assumption
+and reported as one, rather than presented as an estimate or as a prior. It is printed on the
+Stage 1 audit (`stage1.audit.frequency_length_scale`) so a reader of the response sees it without
+reading code.

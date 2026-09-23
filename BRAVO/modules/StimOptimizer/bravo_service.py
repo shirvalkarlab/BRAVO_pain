@@ -747,6 +747,63 @@ def stim_rings_by_side(in_force) -> dict:
     return out
 
 
+_RING_NAMES = ("ZERO", "ONE", "TWO", "THREE")
+
+
+def sensing_rule_block(rings_by_side, *, cells, n_screened, n_usable) -> dict:
+    """The device's sensing rule (decision 217) stated ONCE for the whole readiness screen, with
+    the count it explains (panel C item 5; report C §5.3).
+
+    Per lead: the rings it stimulates on today, the one sensing pair the device then allows (the
+    two contacts immediately flanking them, `lfp_evidence.flanking_pair`), that pair's channel name
+    and page label, and how many screened rows on that pair are usable. A lead with no setting in
+    force applies no rule and says so; a lead stimulating on an end contact allows no pair.
+    """
+    from .routines import lfp_evidence as _le
+    by_side, named = {}, []
+    for side in ("Left", "Right"):
+        rings = sorted(int(r) for r in ((rings_by_side or {}).get(side) or set()))
+        row = {"stim_rings": rings, "rule_applied": bool(rings), "allowed_pair": None,
+               "allowed_channel": None, "allowed_display": None, "n_usable_on_allowed_pair": 0,
+               "why": None}
+        if not rings:
+            row["why"] = "no stimulating contact is recorded in force on this lead, so no rule is applied"
+        else:
+            pair = _le.flanking_pair(set(rings))
+            if pair is None:
+                row["why"] = (f"this lead stimulates on contact(s) {', '.join(map(str, rings))}, "
+                              f"which nothing flanks on both sides, so the device allows no "
+                              f"sensing pair on it")
+            else:
+                ch = f"{_RING_NAMES[pair[0]]}_{_RING_NAMES[pair[1]]}_{side.upper()}"
+                row.update(allowed_pair=[int(pair[0]), int(pair[1])], allowed_channel=ch,
+                           allowed_display=sensing_display(ch).get("display_short") or ch)
+                row["n_usable_on_allowed_pair"] = int(sum(
+                    1 for c in (cells or ()) if str(c.get("channel")) == ch
+                    and c.get("deployable") is True))
+                row["why"] = (f"stimulating on contact(s) {', '.join(map(str, rings))}, the device "
+                              f"senses only on the two contacts flanking them")
+                named.append(row)
+        by_side[side] = row
+    n_s = int(n_screened or 0)
+    n_u = int(n_usable or 0)
+    if named:
+        pairs = " and ".join(r["allowed_display"] for r in named)
+        usable_named = [r for r in named if r["n_usable_on_allowed_pair"] > 0]
+        if not usable_named:
+            which = ("neither has a usable band" if len(named) == 2 else "it has no usable band")
+        else:
+            which = " and ".join(f"{r['allowed_display']} has {r['n_usable_on_allowed_pair']} usable"
+                                 for r in usable_named)
+        sentence = (f"While today's contacts are stimulating, the device allows one sensing pair per "
+                    f"lead: {pairs}. {which[0].upper() + which[1:]}, so {n_u} of {n_s} "
+                    f"contact-and-rate combinations are usable for closed loop.")
+    else:
+        sentence = (f"No sensing pair is allowed by today's stimulating contacts on either lead, so "
+                    f"{n_u} of {n_s} combinations are usable for closed loop.")
+    return {"by_side": by_side, "sentence": sentence, "decision": 217}
+
+
 def in_force_by_side(es, epochs=None) -> dict:
     """The setting in force on EACH side: rate, that side's own pulse width and current, and its
     programmed cathode contacts, with the epoch and the time it began. Empty when there is no
@@ -1983,6 +2040,24 @@ def pain_relationship_block(participant_uid):
     stamp = (grid.get("stamp") or {}) if isinstance(grid, dict) else {}
     block["store_key"] = stamp.get("signature_key")
     block["provenance"] = list(stamp.get("provenance") or [])
+    # STILL POSITIVE ONCE THE CURRENT IN FORCE IS TAKEN OUT? (panel C item 6; the PI, 2026-09-22,
+    # decision 233 answer 2: reported beside the plain answer, never re-selecting a band.) Read
+    # from a STORED adjusted grid only; this request never builds one.
+    try:
+        adj = _cl.stored_current_adjusted_grid(str(participant_uid), {}, consumer="stim_optimizer")
+    except Exception as exc:                                 # noqa: BLE001 -- adjunct input
+        adj = {"available": False, "reason": f"the current-adjusted grid could not be read: {exc!r}"}
+    try:
+        still = _pr.still_positive_without_current(grid, adj if adj.get("available") else None)
+    except Exception as exc:                                 # noqa: BLE001 -- information only
+        still = {"available": False, "by_channel": {}, "note": _pr.STILL_POSITIVE_NOTE,
+                 "reason": f"could not be assessed: {exc!r}"}
+    if not adj.get("available") and adj.get("reason"):
+        still["reason"] = adj.get("reason")
+    adj_stamp = (adj.get("stamp") or {}) if adj.get("available") else {}
+    still["store_key"] = adj_stamp.get("signature_key")
+    still["stored_utc"] = adj_stamp.get("written_utc")
+    block["still_positive_without_current"] = still
     return _pr.pain_positive_centers_by_channel(grid), block
 
 
@@ -1990,6 +2065,12 @@ def _pain_relationship_key(mapping, block):
     """The key element for the pain relationship: the grid entry's own key when it has one, else
     the content itself, so the response is rebuilt exactly when the qualifying bands change."""
     if block and block.get("store_key"):
+        # The current-adjusted grid's key rides beside the plain one (panel C item 6), so a
+        # response stored before an adjusted grid existed is rebuilt once one does, instead of
+        # serving "not assessed" for ever. A block with no adjusted grid keys exactly as before.
+        adj_key = ((block.get("still_positive_without_current") or {}).get("store_key"))
+        if adj_key:
+            return ("grid", str(block["store_key"]), "adjusted", str(adj_key))
         return ("grid", str(block["store_key"]))
     if mapping is None:
         return None
@@ -2142,6 +2223,15 @@ def closed_loop_readiness(participant, es, *, include=True, inputs=None, screen_
             # The pain half of the rule, per contact, with the score and stamp of the grid it
             # was read from (decision 199).
             "pain_relationship": _jsonable(dict(pain_block or {})),
+            # The device's sensing rule, stated once for the screen with the count it explains
+            # (decision 217; panel C item 5): the card's first sentence. Counted over the whole
+            # screen, not the rows shown.
+            "sensing_rule": _jsonable(sensing_rule_block(
+                stim_rings_by_side(in_force) if in_force else {},
+                cells=([{"channel": r.get("channel"), "deployable": bool(r.get("deployable"))}
+                        for r in screen[["channel", "deployable"]].to_dict("records")]
+                       if not screen.empty else []),
+                n_screened=int(len(screen)), n_usable=n_deployable)),
             "audit": _frame_records(le.audit, limit=100) if le.audit is not None else [],
         }
     except Exception as e:                                    # noqa: BLE001 — adjunct panel

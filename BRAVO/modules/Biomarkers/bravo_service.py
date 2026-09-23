@@ -8012,7 +8012,13 @@ def _store_sweep_results(participant_uid, sig, prov, response, *, n_recordings=N
         tag = None
     common = dict(writer="biomarkers", trigger="band_time_sweep", provenance=prov,
                   n_recordings=n_recordings, root=_SHARED_CACHE_DIR_OVERRIDE,
-                  extra={"sweep_settings": tag, "metric_label": response.get("metric_label")})
+                  extra={"sweep_settings": tag, "metric_label": response.get("metric_label"),
+                         # Whether this grid was built with the current taken out (decision 234's
+                         # switch). The switch is in the KEY but not in the cross-page TAG, so a
+                         # reader matching on the tag cannot tell the two grids apart without it;
+                         # the Stim Optimizer's readiness table finds the adjusted one by this flag
+                         # (panel C item 6). Descriptive only: no reader selects a band by it.
+                         "adjust_for_stim_current": bool(sa.get("adjust_for_stim_current", False))})
     try:
         corr = band_results_tables.correlation_table(sweeps, metric_key=metric)
         disc = band_results_tables.discrimination_table(sweeps, metric_key=metric)

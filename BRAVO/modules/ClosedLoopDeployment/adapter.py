@@ -538,6 +538,41 @@ def _build_grid_through_biomarkers(participant_uid, rd):
                                                      BandTimeSweep="1"))
 
 
+def stored_current_adjusted_grid(participant_uid, request_data=None, *, consumer="closed_loop"):
+    """The newest stored grid built WITH the current taken out, under the request's settings, or
+    ``{"available": False, "reason": ...}``. READ-ONLY: it never builds (panel C item 6).
+
+    The switch (decision 234) is in the grid's store key but not in its cross-page settings tag, so
+    `band_sweep_grid_for_closed_loop` cannot tell the two apart. The sidecar records the switch
+    since 2026-09-23 (`extra["adjust_for_stim_current"]`); a grid stored before that date carries
+    no flag and is read as plain here, which can only under-report, never mislabel.
+    """
+    rd = {k: v for k, v in (request_data or {}).items() if k in GRID_SETTING_KEYS}
+    try:
+        try:
+            from Biomarkers.routines import sweep_settings as _sweep_settings
+        except ImportError:                                      # pragma: no cover
+            from modules.Biomarkers.routines import sweep_settings as _sweep_settings
+        want = _sweep_settings.sweep_settings_tag_from_request(rd)
+        payload, stamp = _cache_store.load_newest(
+            "biomarker_band_sweep", participant_uid, consumer=str(consumer),
+            root=_SHARED_CACHE_DIR_OVERRIDE,
+            match=lambda meta: ((meta.get("extra") or {}).get("sweep_settings") == want
+                                and (meta.get("extra") or {}).get("adjust_for_stim_current") is True))
+    except Exception as exc:                                     # noqa: BLE001
+        _log.warning("reading the stored current-adjusted grid raised for %s", participant_uid,
+                     exc_info=True)
+        return {"available": False, "reason": f"reading the current-adjusted grid raised {exc!r}"}
+    if payload is None:
+        return {"available": False,
+                "reason": ("no grid with the stimulation current taken out is stored under these "
+                           "settings; the Biomarkers page's switch builds one")}
+    out = dict(payload)
+    out["available"] = True
+    out["stamp"] = dict(stamp or {})
+    return out
+
+
 def band_sweep_grid_for_closed_loop(participant_uid, request_data=None, *, consumer="closed_loop"):
     """The calibrated grid the Biomarkers page shows under the SAME pain score and matching and
     split settings, as `consumer="closed_loop"` (or the `consumer` given: the Stim Optimizer reads

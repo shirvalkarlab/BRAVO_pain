@@ -95,6 +95,41 @@ function sideRows(arms, plan, inForce) {
   return sides;
 }
 
+/** A side's three-state verdict, read exactly as the row's glyph reads it. */
+function sideResolved(r) {
+  const st = r.stratum, s = r.s;
+  if (st) return st.optimum_resolved === true ? true : (st.optimum_resolved === false ? false : null);
+  if (s) return s.resolved === true ? true : (s.resolved === false ? false : null);
+  return null;
+}
+
+/**
+ * The decision card's title, COMPUTED from the per-side verdicts in the same render (panel C item
+ * 5; report C §5.3; the figure convention that a headline states what the data show). It used to
+ * read "What the joint search prefers, per side", a description of the method rather than the
+ * answer. Three states, never two: a side whose comparison could not be formed is not "not
+ * proven", and the title does not say it is.
+ */
+export function decisionHeadline(plan, inForce) {
+  const rows = sideRows({}, plan, inForce).filter((r) => r.s || r.stratum);
+  if (!rows.length) return "What the joint search prefers, per side";
+  const v = rows.map((r) => ({ side: r.side, res: sideResolved(r) }));
+  const yes = v.filter((x) => x.res === true).map((x) => x.side);
+  const no = v.filter((x) => x.res === false).map((x) => x.side);
+  const unformed = v.filter((x) => x.res === null).map((x) => x.side);
+  if (yes.length === v.length) {
+    return v.length === 1 ? `${yes[0]} has a setting proven better than today's`
+      : "Both sides have a setting proven better than today's";
+  }
+  if (!yes.length && unformed.length === v.length) {
+    return "No side's preferred setting could be compared with today's";
+  }
+  if (!yes.length) return "No side has a setting proven better than today's";
+  const rest = v.filter((x) => x.res !== true).map((x) => (x.res === null
+    ? `${x.side} could not be compared` : `${x.side} does not`));
+  return `${yes.join(" and ")} has a setting proven better than today's; ${rest.join("; ")}`;
+}
+
 // The columns: side | programmed now | arrow | search prefers | change | gain bar | gain | verdict.
 // The gain has a cell of its own, wide enough for "+0.00 pts ± 0.85" at 14 px in the tabular
 // font, and the bar sits in its own cell before it, so the value can never wrap beside the bar.
@@ -106,8 +141,17 @@ export default function DecisionStrip({ arms, plan, planLoading, planErr, inForc
     const g = num(r.stratum && r.stratum.gain), sd = num(r.stratum && r.stratum.sd_of_difference);
     return g === null ? 0 : Math.ceil(Math.abs(g) + (sd || 0));
   }));
+  const exposure = (((plan && plan.stage1) || {}).audit || {}).resolution_exposure || null;
   return (
     <MDBox>
+      {/* "Resolved" defined ONCE, where it is first used on the page (panel C item 5; report C
+          §5.3). The same word, with the same meaning, recurs in the verdict glyphs below and in
+          the closed-loop checks; it used to be defined only in this card's footer. */}
+      <MDTypography variant="caption" component="div" sx={{ ...SMALL, mb: 1 }}>
+        Resolved means the predicted gain over the setting in force is larger than 1 standard
+        deviation of that difference; not resolved means it was measured and is smaller; not
+        determinable means the difference could not be formed at all.
+      </MDTypography>
       <MDBox sx={{ overflowX: "auto" }}>
         <MDBox sx={{ display: "grid", gridTemplateColumns: COLUMNS,
           columnGap: "14px", rowGap: "14px", alignItems: "center" }}>
@@ -204,9 +248,17 @@ export default function DecisionStrip({ arms, plan, planLoading, planErr, inForc
         </MDBox>
       </MDBox>
       <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 1.2 }}>
-        Pain objective: lower is better; a positive gain favours the preferred setting. Resolved
-        means the gain is larger than 1 standard deviation of the difference itself.
+        Pain objective: lower is better; a positive gain favours the preferred setting.
       </MDTypography>
+      {/* How many times the "proven better" comparison ran, and what one standard deviation
+          exposes across them (panel C item 4). The server's own sentence, printed as it comes;
+          it changes nothing and is absent from a response that predates it. */}
+      {exposure && exposure.sentence ? (
+        <MDTypography variant="caption" component="div" data-testid="resolution-exposure"
+          sx={{ ...SMALL, mt: 0.6 }}>
+          {exposure.sentence}
+        </MDTypography>
+      ) : null}
       {rows.some((r) => r.s && Array.isArray(r.s.reasons) && r.s.reasons.length) && (
         <SizedFold show={`Why each side reads as it does (${rows.reduce((n, r) => n + ((r.s && r.s.reasons) || []).length, 0)} reasons from the search)`}
           hide="Hide the reasons">

@@ -85,3 +85,40 @@ def is_resolved(gain, sd_candidate, sd_incumbent, k: float = RESOLUTION_K):
     if not math.isfinite(g):
         return None
     return bool(g > k * sd_diff)
+
+
+def exposure(n_tests: int, k: float = RESOLUTION_K) -> dict:
+    """How often the gain test would pass BY LUCK, given how many times it ran (panel C item 4).
+
+    On a comparison where the candidate is truly no better than the setting in force, the gain
+    exceeds ``k`` standard deviations of the difference with the upper-tail probability of a normal
+    curve beyond ``k`` -- 0.159 at ``k = 1``. Over ``n_tests`` such comparisons, the chance that at
+    least one passes by luck is ``1 - (1 - p) ** n_tests`` if they were independent.
+
+    Both numbers are UPPER BOUNDS on a false recommendation, and the sentence says so: a rate is
+    recommended only when the surface is also not flat and the current coverage also passes, and
+    comparisons that share data are positively dependent, which lowers the chance of at least one
+    false pass below the independent figure. Visibility only: nothing here changes the rule.
+
+    ``n_tests`` counts only comparisons that could be FORMED (a gain check that returned True or
+    False). A stratum whose comparison could not be formed was not a test and cannot pass by luck.
+    """
+    n = int(max(0, n_tests))
+    p = 0.5 * math.erfc(float(k) / math.sqrt(2.0))
+    if n == 0:
+        return {"n_tests": 0, "k": float(k), "false_pass_rate_per_test": p,
+                "chance_of_at_least_one_false_pass": None,
+                "sentence": ("No comparison against the setting in force could be formed on this "
+                             "record, so the rule has not yet been exposed to a chance pass.")}
+    fam = 1.0 - (1.0 - p) ** n
+    return {"n_tests": n, "k": float(k), "false_pass_rate_per_test": p,
+            "chance_of_at_least_one_false_pass": fam,
+            "sentence": (f"The \"proven better than today's setting\" comparison ran {n} "
+                         f"time{'s' if n != 1 else ''} on this record, once per rate and pulse-width "
+                         f"pairing it could be formed for. At {float(k):g} standard deviation, one "
+                         f"comparison where nothing is truly better passes by luck about "
+                         f"{100 * p:.0f}% of the time, so across all {n} the chance of at least one "
+                         f"lucky pass is at most about {100 * fam:.0f}%. That is an upper bound -- a "
+                         f"current also needs a surface that is not flat and enough current "
+                         f"combinations tried -- and this number changes nothing: it is reported, "
+                         f"not corrected for.")}

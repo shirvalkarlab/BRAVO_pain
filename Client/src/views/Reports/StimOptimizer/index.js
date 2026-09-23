@@ -57,11 +57,11 @@ import TitrationSessionCard from "./TitrationSessionCard";
 // The decision strip: the setting programmed now beside the setting the joint search prefers,
 // per side, with the gain drawn against its own uncertainty (2026-09-12, the page redesign,
 // phase 1; unaffected by the 2026-09-14 joint redesign -- it already reads the two-stage plan).
-import DecisionStrip from "./DecisionStrip";
+import DecisionStrip, { decisionHeadline } from "./DecisionStrip";
 // The sensing evidence behind closed-loop readiness, contacts in Medtronic form, reasons folded
 // (redesign phase 3).
 import SensingEvidenceTable from "./SensingEvidenceTable";
-import { TYPE, HEAD } from "./typeScale";
+import { TYPE } from "./typeScale";
 import PAL from "views/Reports/ClosedLoopSim/palette";
 
 /**
@@ -174,21 +174,16 @@ export default function StimOptimizer() {
             <CacheStatusLine status={data ? data.cache_status : null} />
           </MDBox>
 
-          {/* ---------- the decision: the setting in force beside the joint search's own
-              preference, per side (redesign phase 1, 2026-09-12; unchanged by the joint
-              redesign -- it already reads the two-stage plan, not the removed arms) ---------- */}
-          <Card>
-            <MDBox p={2}>
-              <MDTypography variant="h6" sx={{ fontSize: TYPE.headline, mb: 1 }}>
-                What the joint search prefers, per side
-              </MDTypography>
-              <DecisionStrip arms={{}} plan={twoStage.data} planLoading={twoStage.loading}
-                planErr={twoStage.err} inForce={data.in_force_by_side || null} />
-            </MDBox>
-          </Card>
+          {/* THE ORDER, 2026-09-23 (panel C item 5; report C §5.2 with the panel's two corrections):
+              whether closed loop is possible today first, then what the open-loop search prefers,
+              then the record behind that preference, then the next session that would fill it in,
+              then the plan closed loop would start from; the evidence base is a one-line footer
+              because no decision on the page reads it. The two readiness cards stay TWO cards --
+              this table and the four checks inside the plan card -- each pointing at the other
+              (the clinician's correction of the report's proposed merge). */}
 
-          {/* ---------- the sensing evidence behind closed-loop readiness ----------
-              A DIFFERENT question from the strip above it: the optimizer asks which setting
+          {/* ---------- 1. the sensing evidence behind closed-loop readiness ----------
+              A DIFFERENT question from the decision below it: the optimizer asks which setting
               relieves pain best; this asks whether any sensed band moves with stimulation current,
               which is the only lever adaptive mode has. The per-row reasons stay, folded, because a
               refusal for want of data and a refusal on a measured negative are different clinical
@@ -201,48 +196,46 @@ export default function StimOptimizer() {
             </Card>
           )}
 
-          {/* ---------- evidence base, one row of counts ---------- */}
+          {/* ---------- 2. the decision: the setting in force beside the joint search's own
+              preference, per side. The title is COMPUTED from the per-side verdicts in the same
+              render (report C §5.3), never a fixed description of the method. ---------- */}
           <Card>
             <MDBox p={2}>
-              <MDBox display="flex" alignItems="baseline" gap={1} flexWrap="wrap">
-                <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>Evidence base</MDTypography>
-                <MDTypography variant="caption" sx={{ fontSize: TYPE.small, color: PAL.neutral }}>
-                  a stretch is one continuous exposure to one setting; reports inside the wash-in are excluded
-                </MDTypography>
-              </MDBox>
-              <MDBox mt={1.2} display="flex" columnGap={4} rowGap={1.5} flexWrap="wrap">
-                {[
-                  ["stretches of unchanged settings", dm.n_epochs],
-                  ["pain reports used", dm.n_reports],
-                  ["first to last", `${dm.t_first ? String(dm.t_first).slice(0, 10) : "—"} → ${dm.t_last ? String(dm.t_last).slice(0, 10) : "—"}`],
-                  ["wash-in", data.washin_min != null ? `${data.washin_min} min` : "—"],
-                  ["left currents delivered", dm.amp_mA_Left_range ? `${Number(dm.amp_mA_Left_range[0]).toFixed(1)}–${Number(dm.amp_mA_Left_range[1]).toFixed(1)} mA` : "—"],
-                  ["right currents delivered", dm.amp_mA_Right_range ? `${Number(dm.amp_mA_Right_range[0]).toFixed(1)}–${Number(dm.amp_mA_Right_range[1]).toFixed(1)} mA` : "—"],
-                ].map(([k, v]) => (
-                  <MDBox key={k}>
-                    <MDTypography variant="caption" component="div" sx={HEAD}>{k}</MDTypography>
-                    <MDTypography variant="h6" sx={{ fontSize: TYPE.numLarge, fontFamily: PAL.mono, whiteSpace: "nowrap" }}>{v === null || v === undefined ? "—" : v}</MDTypography>
-                  </MDBox>
-                ))}
-              </MDBox>
+              <MDTypography variant="h6" sx={{ fontSize: TYPE.headline, mb: 1 }}>
+                {decisionHeadline(twoStage.data, data.in_force_by_side || null)}
+              </MDTypography>
+              <DecisionStrip arms={{}} plan={twoStage.data} planLoading={twoStage.loading}
+                planErr={twoStage.err} inForce={data.in_force_by_side || null} />
             </MDBox>
           </Card>
 
-          {/* ---------- the titration session to run next (PI, 2026-09-12 evening) ---------- */}
+          {/* ---------- 3. where the two currents have been tried (decision 158), the evidence
+              behind the decision above and behind the plan card's own current (or its absence) */}
+          {twoStage.data && <CurrentMapCard plan={twoStage.data} />}
+
+          {/* ---------- 4. the next steps, kept as two cards and placed together: the session to
+              run in clinic (PI, 2026-09-12) and the home schedule that fills the record in ---------- */}
           {data.titration_plan && (
             <TitrationSessionCard plan={data.titration_plan} participantUid={participant_uid} />
           )}
-
-          {/* ---------- where the two currents have been tried, and the home schedule to fill
-              the record in (decision 158, 2026-09-14) -- placed directly above the two-stage
-              plan card, since it is the evidence behind that card's own current recommendation
-              (or the lack of one). ---------- */}
-          {twoStage.data && <CurrentMapCard plan={twoStage.data} />}
           {data.current_map_schedule && <CurrentMapScheduleCard schedule={data.current_map_schedule} />}
 
-          {/* ---------- the two-stage plan: the joint open-loop search, the gate, and closed
-              loop -- the ONLY recommendation this page makes (PI, 2026-09-14) ---------- */}
+          {/* ---------- 5. the two-stage plan: the joint open-loop search, the four checks that
+              decide whether closed loop may start, and closed loop -- the ONLY recommendation this
+              page makes (PI, 2026-09-14) ---------- */}
           <TwoStagePlanCard plan={twoStage.data} loading={twoStage.loading} err={twoStage.err} />
+
+          {/* ---------- 6. the evidence base, one line (report C §5.2: no decision reads it) ---------- */}
+          <MDBox px={1} data-testid="evidence-base-footer">
+            <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.small, color: PAL.neutral }}>
+              {`Evidence base: ${dm.n_epochs ?? "—"} stretches of unchanged settings · ${dm.n_reports ?? "—"} pain reports used · `
+                + `${dm.t_first ? String(dm.t_first).slice(0, 10) : "—"} → ${dm.t_last ? String(dm.t_last).slice(0, 10) : "—"} · `
+                + `wash-in ${data.washin_min != null ? `${data.washin_min} min` : "—"} · `
+                + `left currents delivered ${dm.amp_mA_Left_range ? `${Number(dm.amp_mA_Left_range[0]).toFixed(1)}–${Number(dm.amp_mA_Left_range[1]).toFixed(1)} mA` : "—"} · `
+                + `right ${dm.amp_mA_Right_range ? `${Number(dm.amp_mA_Right_range[0]).toFixed(1)}–${Number(dm.amp_mA_Right_range[1]).toFixed(1)} mA` : "—"}. `
+                + "A stretch is one continuous exposure to one setting; reports inside the wash-in are excluded."}
+            </MDTypography>
+          </MDBox>
         </MDBox>
       </MDBox>
     </DatabaseLayout>

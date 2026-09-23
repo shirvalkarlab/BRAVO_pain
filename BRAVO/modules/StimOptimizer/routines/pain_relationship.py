@@ -119,3 +119,70 @@ def summarise(grid) -> dict:
     return {"available": True, "score": gs.get("sweep_metric"),
             "score_label": gs.get("metric_label"), "stored_utc": gs.get("stored_utc"),
             "built_now": bool(gs.get("built_now")), "rule": RULE, "by_channel": per}
+
+
+#: How closely the plain correlation under the adjusted grid must equal the plain grid's own before
+#: the adjusted value is read against it. The two grids are built by one routine from one record, so
+#: on the same record they agree to the last digit; anything larger means different ratings or
+#: recordings went in, and the adjusted number belongs to a different record.
+SAME_RECORD_TOL = 1e-9
+
+STILL_POSITIVE_NOTE = (
+    "Beside each band that rises with pain: whether its correlation with pain is still positive once "
+    "the stimulation current in force at each rating is taken out of both the band power and the "
+    "pain score (a straight line, decision 234). This is the adjusted POINT value only -- the grid "
+    "carries no interval on it -- and it moves no verdict: the plain value decides which bands "
+    "count (the PI, 2026-09-22, decision 233 answer 2).")
+
+
+def still_positive_without_current(grid, adjusted_grid) -> dict:
+    """For every band that rises with pain on ``grid``, whether it still does on ``adjusted_grid``.
+
+    Returns ``{"available", "reason", "note", "by_channel": {channel: [row, ...]}}``, each row
+    ``{"center_hz", "pearson_r", "pearson_r_adjusted", "answer", "why"}`` with ``answer`` one of
+    "yes", "no" or "not assessed". The qualifying bands are the PLAIN grid's (decision 233): the
+    adjusted grid is read, never used to choose.
+    """
+    by = pain_positive_centers_by_channel(grid)
+    if by is None:
+        return {"available": False, "note": STILL_POSITIVE_NOTE, "by_channel": {},
+                "reason": "no stored Biomarkers grid, so no band rises with pain to ask about"}
+    adj_ok = (isinstance(adjusted_grid, dict) and adjusted_grid.get("available") is not False
+              and bool(adjusted_grid.get("band_time_sweep")))
+    reason = None if adj_ok else (
+        "no current-adjusted grid is stored under these settings. Turning on the Biomarkers "
+        "page's switch for taking the stimulation current out builds and stores one; this page "
+        "reads it and never builds it")
+    out = {}
+    for ch, centres in by.items():
+        plain_rows = {_finite(r.get("band_center_hz")): r for r in _rows(grid, ch)}
+        adj_rows = ({_finite(r.get("band_center_hz")): r for r in _rows(adjusted_grid, ch)}
+                    if adj_ok else {})
+        rows = []
+        for c in sorted(centres):
+            p = plain_rows.get(c) or {}
+            a = adj_rows.get(c)
+            r_plain = _finite(p.get("pearson_r"))
+            row = {"center_hz": c, "pearson_r": r_plain, "pearson_r_adjusted": None,
+                   "answer": "not assessed", "why": None}
+            if not adj_ok:
+                row["why"] = reason
+            elif a is None:
+                row["why"] = "the stored current-adjusted grid has no row for this band"
+            elif (r_plain is None or _finite(a.get("pearson_r")) is None
+                  or abs(_finite(a.get("pearson_r")) - r_plain) > SAME_RECORD_TOL):
+                row["why"] = ("the stored current-adjusted grid was built on a different record "
+                              f"(its plain value here is {a.get('pearson_r')}, this page's is "
+                              f"{r_plain}), so its adjusted value is not read against this one")
+            elif _finite(a.get("pearson_r_adjusted")) is None:
+                row["why"] = ("the adjustment could not be made for this band (the grid says why "
+                              "under its covariate block)")
+            else:
+                ra = _finite(a.get("pearson_r_adjusted"))
+                row["pearson_r_adjusted"] = ra
+                row["answer"] = "yes" if ra > 0 else "no"
+                row["why"] = (f"{r_plain:+.3f} plainly, {ra:+.3f} with the current taken out")
+            rows.append(row)
+        out[str(ch)] = rows
+    return {"available": bool(adj_ok), "reason": reason, "note": STILL_POSITIVE_NOTE,
+            "by_channel": out}
