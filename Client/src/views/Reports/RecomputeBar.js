@@ -44,7 +44,9 @@ export default function RecomputeBar({
   title, stale, staleReasons, computedAt, loading, onRecompute, notKept, extra,
 }) {
   const reasons = staleReasons || [];
-  const ink = loading ? PAL.neutral : stale ? PAL.warnText : PAL.neutral;
+  // Text ink, sized and darkened for legibility (the PI, 2026-09-24, lifting rule 7 for this
+  // change): the neutral chart grey is too faint for words, so the resting state uses #5E5E5E.
+  const ink = stale && !loading ? PAL.warnText : "#5E5E5E";
   const fill = stale && !loading ? PAL.warnFill : "transparent";
   const border = loading ? PAL.neutral : stale ? PAL.warnText : "#ddd";
 
@@ -55,13 +57,13 @@ export default function RecomputeBar({
     }}>
       <MDBox flex="1 1 auto">
         <MDTypography variant="caption" sx={{
-          fontSize: 9.5, fontWeight: "bold", letterSpacing: 0.4, color: ink,
+          fontSize: 12, fontWeight: "bold", letterSpacing: 0.4, color: ink,
         }}>
           {loading ? "RECOMPUTING" : stale ? "SHOWING THE LAST COMPLETED RUN" : "UP TO DATE"}
           {title ? ` \u00B7 ${String(title).toUpperCase()}` : ""}
         </MDTypography>
 
-        <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, color: "#555" }}>
+        <MDTypography variant="caption" display="block" sx={{ fontSize: 13, color: "#555" }}>
           {loading
             ? "Running the analysis against the current settings."
             : computedAt
@@ -74,7 +76,7 @@ export default function RecomputeBar({
           <MDBox mt={0.6} component="ul" sx={{ pl: 2.2, my: 0 }}>
             {reasons.map((r) => (
               <MDTypography key={r} component="li" variant="caption" display="list-item"
-                sx={{ fontSize: 10, color: PAL.warnText }}>
+                sx={{ fontSize: 12.5, color: PAL.warnText }}>
                 {r}
               </MDTypography>
             ))}
@@ -83,7 +85,7 @@ export default function RecomputeBar({
 
         {notKept ? (
           <MDTypography variant="caption" display="block"
-            sx={{ fontSize: 9.5, color: PAL.warnText, mt: 0.4 }}>
+            sx={{ fontSize: 12, color: PAL.warnText, mt: 0.4 }}>
             {`This result was not kept in memory: ${notKept}`}
           </MDTypography>
         ) : null}

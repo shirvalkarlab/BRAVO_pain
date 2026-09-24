@@ -217,7 +217,7 @@ From the PI and from failures already paid for.
    refusal cannot fire, and Stim Optimizer would confirm its own exploration policy while the
    record looks like converging evidence.
 7. **Do not edit `Client/src/database/resultCache.js`, `useCachedResult.js` or `RecomputeBar.js`**
-   (the PI's; lifted once, decision 54).
+   (the PI's; lifted once each for decisions 54 and 259, the latter only to enlarge the recompute bar's text).
 8. **Plan approval is not execution authority.** He gives an explicit go-ahead before implementation.
 9. **Push and identity are answered (2026-09-07):** push this branch's work; identity
    `git -c user.name="Prasad Shirvalkar" -c user.email="prasad.shirvalkar@ucsf.edu"` on every commit

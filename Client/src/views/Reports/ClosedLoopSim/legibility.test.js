@@ -15,7 +15,9 @@ import path from "path";
 const DIRS = ["ClosedLoopSim", "StimOptimizer"].map((d) => path.join(__dirname, "..", d));
 const FILES = DIRS.flatMap((d) => fs.readdirSync(d)
   .filter((f) => f.endsWith(".js") && !f.endsWith(".test.js"))
-  .map((f) => path.join(d, f)));
+  .map((f) => path.join(d, f)))
+  // the recompute bar both pages show (the PI lifted rule 7 for it on 2026-09-24)
+  .concat([path.join(__dirname, "..", "RecomputeBar.js")]);
 const LIGHT_GREYS = ["#777", "#888", "#8A8A8A", "#999", "#999999", "#9A9A9A"];
 
 test("no text or figure font on either page is set below 11 px", () => {
