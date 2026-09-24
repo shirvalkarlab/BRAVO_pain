@@ -141,7 +141,10 @@ def test_the_matrix_store_key_names_the_power_scale_so_no_decibel_entry_is_serve
     fn = _function_nodes(_SERVICE, {"_psd_matrix_signature_orm"})["_psd_matrix_signature_orm"]
     used = any(isinstance(n, ast.Name) and n.id == "_MATRIX_POWER_SCALE_VERSION" for n in ast.walk(fn))
     assert used, "the matrix signature does not fold the power-scale version in"
-    assert bs.STABILITY_GRID_RULE_VERSION == "v3_raw_power_feature", bs.STABILITY_GRID_RULE_VERSION
+    # every version from raw power on (v3); v4 (2026-09-24) added the clinic-sheet switch to the
+    # shared setup and is raw power too -- what must never come back is the decibel rule before v3
+    assert bs.STABILITY_GRID_RULE_VERSION in ("v3_raw_power_feature", "v4_sheet_ratings_in_setup"), \
+        bs.STABILITY_GRID_RULE_VERSION
 
 
 # --- 2. the pain correlation ---------------------------------------------------------------------

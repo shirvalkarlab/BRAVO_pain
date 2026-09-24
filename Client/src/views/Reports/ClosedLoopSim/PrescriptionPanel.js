@@ -164,8 +164,8 @@ function FieldRow({ f, index, ticked, onTick, readBackEnabled }) {
         <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: 600, color: "#2A2A2A" }}>
           {f.parameter}
         </MDTypography>
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 10,
-          color: origin.bar ? "#5A5A5A" : "#8A8A8A" }}>
+        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11,
+          color: origin.bar ? "#5A5A5A" : "#5E5E5E" }}>
           {origin.label}
         </MDTypography>
       </MDBox>
@@ -178,7 +178,7 @@ function FieldRow({ f, index, ticked, onTick, readBackEnabled }) {
         {mustChoose && value == null ? (
           <>
             <BlankEntry />
-            <MDTypography variant="caption" sx={{ display: "block", fontSize: 10,
+            <MDTypography variant="caption" sx={{ display: "block", fontSize: 11,
               color: PAL.warnText, fontWeight: 600 }}>
               to be chosen
             </MDTypography>
@@ -190,14 +190,14 @@ function FieldRow({ f, index, ticked, onTick, readBackEnabled }) {
               {value == null ? "not reported" : value}
             </MDTypography>
             {f.enter_as ? (
-              <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5,
+              <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
                 fontFamily: PAL.mono, fontWeight: 700, color: PAL.warnText }}>
                 {`enter as ${f.enter_as}`}
               </MDTypography>
             ) : null}
             {f.device_default != null && String(f.device_default) !== String(f.value) ? (
-              <MDTypography variant="caption" sx={{ display: "block", fontSize: 9.5,
-                color: "#8A8A8A" }}>
+              <MDTypography variant="caption" sx={{ display: "block", fontSize: 11,
+                color: "#5E5E5E" }}>
                 {`default ${f.device_default}`}
               </MDTypography>
             ) : null}
@@ -206,7 +206,7 @@ function FieldRow({ f, index, ticked, onTick, readBackEnabled }) {
                 already matches the recommendation reads "programmed today" too and the reader
                 knows nothing needs entering. */}
             {f.programmed != null ? (
-              <MDTypography variant="caption" sx={{ display: "block", fontSize: 9.5,
+              <MDTypography variant="caption" sx={{ display: "block", fontSize: 11,
                 fontFamily: PAL.mono, fontWeight: 600,
                 color: String(f.programmed) === String(f.value) ? "#3A7D44" : "#8A5A00" }}>
                 {`programmed today ${f.programmed}`}
@@ -227,25 +227,25 @@ function FieldRow({ f, index, ticked, onTick, readBackEnabled }) {
 
       {/* 5 — what to do, and the qualifiers that must never be separated from the number. */}
       <MDBox flex="1 1 230px" pl={0.5}>
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 10,
+        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11,
           fontWeight: "bold", letterSpacing: 0.3,
           color: computed ? PAL.warnText : confirm.ink }}>
           {computed ? "THE DEVICE COMPUTES THIS \u2014 DO NOT TYPE IT" : confirm.label}
         </MDTypography>
         {f.range_source ? (
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5,
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
             color: /NOT published/i.test(f.range_source) ? PAL.warnText : "#6A6A6A" }}>
             {f.range_source}
           </MDTypography>
         ) : null}
         {f.range && f.range.length === 2 ? (
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5,
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
             fontFamily: PAL.mono, color: "#6A6A6A" }}>
             {`documented range ${f.range[0]} to ${f.range[1]}`}
           </MDTypography>
         ) : null}
         {f.confidence ? (
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10,
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11,
             fontWeight: 600, color: "#6A6A6A" }}>
             {`confidence ${f.confidence} (measured on this participant's record)`}
           </MDTypography>
@@ -256,7 +256,7 @@ function FieldRow({ f, index, ticked, onTick, readBackEnabled }) {
             the notes on THIS row: the panel's "Four independent checks" would be untrue on every
             row of the record (the threshold rows carry two, the onset and start-up rows one). */}
         {checksHeading(f) ? (
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10, mt: 0.3,
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11, mt: 0.3,
             fontWeight: 600, color: "#6A6A6A" }}>
             {checksHeading(f)}
           </MDTypography>
@@ -266,7 +266,7 @@ function FieldRow({ f, index, ticked, onTick, readBackEnabled }) {
             on this card, printed beside the thresholds themselves rather than folded into the
             "Why this value" reveal, since it is a design constraint and not only a justification. */}
         {f.design_rule_note ? (
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mt: 0.2,
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, mt: 0.2,
             color: PAL.warnText }}>
             {f.design_rule_note}
           </MDTypography>
@@ -276,7 +276,7 @@ function FieldRow({ f, index, ticked, onTick, readBackEnabled }) {
             same reason the design-rule note above is -- it is a fact about this configuration on
             this record, not only a justification behind the "Why this value" reveal. */}
         {f.occupancy_note ? (
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mt: 0.2,
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, mt: 0.2,
             color: PAL.warnText }}>
             {f.occupancy_note}
           </MDTypography>
@@ -286,7 +286,7 @@ function FieldRow({ f, index, ticked, onTick, readBackEnabled }) {
             of the method contest's own entries disagreed (decision 150) -- printed beside the
             Adaptive startup delay row itself for the same reason the two notes above are. */}
         {f.startup_bias_note ? (
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mt: 0.2,
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, mt: 0.2,
             color: PAL.warnText }}>
             {f.startup_bias_note}
           </MDTypography>
@@ -297,13 +297,13 @@ function FieldRow({ f, index, ticked, onTick, readBackEnabled }) {
             the three notes above are: it is a fact about this configuration on this record, not
             only a justification behind the "Why this value" reveal. */}
         {f.robustness_note ? (
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mt: 0.2,
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, mt: 0.2,
             color: PAL.warnText }}>
             {f.robustness_note}
           </MDTypography>
         ) : null}
         {confirm.detail ? (
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5,
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
             color: "#5A5A5A" }}>
             {confirm.detail}
           </MDTypography>
@@ -311,12 +311,12 @@ function FieldRow({ f, index, ticked, onTick, readBackEnabled }) {
         {f.why ? (
           <>
             <MDTypography variant="caption" onClick={() => setOpenWhy((o) => !o)}
-              sx={{ fontSize: 10.5, color: PAL.accent, cursor: "pointer", display: "block",
+              sx={{ fontSize: 11.5, color: PAL.accent, cursor: "pointer", display: "block",
                 "&:hover": { textDecoration: "underline" } }}>
               {openWhy ? "Hide why this value" : "Why this value"}
             </MDTypography>
             {openWhy ? (
-              <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mt: 0.2,
+              <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, mt: 0.2,
                 pl: 0.8, borderLeft: "2px solid rgba(0,0,0,0.12)", color: "#3A3A3A" }}>
                 {f.why}
               </MDTypography>
@@ -328,7 +328,7 @@ function FieldRow({ f, index, ticked, onTick, readBackEnabled }) {
       {/* 6 — the row number, so a reader can keep their place in a sixteen-row table and so the
              field count in the banner can be checked against the last number in the column. */}
       <MDBox flex="0 0 26px" sx={{ textAlign: "right" }}>
-        <MDTypography variant="caption" sx={{ fontSize: 9.5, fontFamily: PAL.mono,
+        <MDTypography variant="caption" sx={{ fontSize: 11, fontFamily: PAL.mono,
           color: "#B0B0B0" }}>
           {index + 1}
         </MDTypography>
@@ -364,7 +364,7 @@ function CouplingBanner({ c, duty }) {
   return (
     <MDBox mt={1} p={1.2} sx={{ borderRadius: "4px", backgroundColor: PAL.warnFill,
       border: `1px solid ${PAL.warnBorder}` }}>
-      <MDTypography variant="caption" sx={{ display: "block", fontSize: 10, fontWeight: "bold",
+      <MDTypography variant="caption" sx={{ display: "block", fontSize: 11, fontWeight: "bold",
         letterSpacing: 0.4, color: PAL.warnText }}>
         {`TWO FIELDS INTERACT \u2014 ${String(c.severity || "noted").toUpperCase()}`}
       </MDTypography>
@@ -398,7 +398,7 @@ function CouplingBanner({ c, duty }) {
           them, and a reader deciding whether to act on it needs to know which of the two it is. */}
       {c.not_established ? (
         <MDBox mt={0.6} pl={1} sx={{ borderLeft: `3px solid ${PAL.neutral}` }}>
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10,
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11,
             fontWeight: "bold", letterSpacing: 0.3, color: PAL.neutral }}>
             NOT ESTABLISHED BY ANY SUPPLIED DOCUMENT
           </MDTypography>
@@ -417,8 +417,8 @@ function ModeToggle({ modes, mode, onMode, recommended, recommendation }) {
   return (
     <MDBox display="flex" flexDirection="row" gap={2} flexWrap="wrap" alignItems="flex-start">
       <MDBox flex="0 0 auto">
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 10, fontWeight: "bold",
-          letterSpacing: 0.4, color: "#8A8A8A", mb: 0.4 }}>
+        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11, fontWeight: "bold",
+          letterSpacing: 0.4, color: "#5E5E5E", mb: 0.4 }}>
           THRESHOLD MODE — YOUR SELECTION
         </MDTypography>
         <MDBox display="flex" flexDirection="row" gap={0.6} flexWrap="wrap">
@@ -434,7 +434,7 @@ function ModeToggle({ modes, mode, onMode, recommended, recommendation }) {
             );
           })}
         </MDBox>
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, color: "#7A7A7A",
+        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#7A7A7A",
           mt: 0.4 }}>
           Selecting a mode changes which fields exist, not only their values, so the table below is
           rebuilt and any read-back ticks are cleared.
@@ -443,7 +443,7 @@ function ModeToggle({ modes, mode, onMode, recommended, recommendation }) {
 
       <MDBox flex="1 1 320px" p={1} sx={{ backgroundColor: PAL.accentFill, borderRadius: "4px",
         border: `1px solid ${PAL.accentBorder}` }}>
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 10, fontWeight: "bold",
+        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11, fontWeight: "bold",
           letterSpacing: 0.4, color: PAL.accent }}>
           {`THE MODULE RECOMMENDS ${String(MODE_LABEL[recommended] || recommended || "no mode")
             .toUpperCase()}`}
@@ -455,21 +455,21 @@ function ModeToggle({ modes, mode, onMode, recommended, recommendation }) {
           </MDTypography>
         ) : null}
         {recommendation && recommendation.timescale_measured === false ? (
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mt: 0.3,
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, mt: 0.3,
             color: PAL.warnText }}>
             No biomarker timescale has been measured for this participant, so the recommendation
             rests on the nature of the outcome rather than on this person's data.
           </MDTypography>
         ) : null}
         {mode && recommended && mode !== recommended ? (
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mt: 0.3,
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, mt: 0.3,
             color: PAL.warnText, fontWeight: 600 }}>
             {`You are looking at ${MODE_LABEL[mode] || mode}, which is not the recommended mode. `
               + "The recommendation above is unchanged and your selection will not be reset."}
           </MDTypography>
         ) : null}
         {recommendation && (recommendation.problems || []).length > 0 ? (
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mt: 0.3,
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, mt: 0.3,
             color: PAL.fail }}>
             {`Problems with the recommended mode: ${recommendation.problems.join("; ")}.`}
           </MDTypography>
@@ -585,7 +585,7 @@ export default function PrescriptionPanel({ report, mode, onMode }) {
           // Single Threshold Inverse. Not an empty table and never presented as programmable.
           <MDBox p={1.2} sx={{ backgroundColor: PAL.neutralFill, borderRadius: "4px",
             border: `1px solid ${PAL.neutralBorder}` }}>
-            <MDTypography variant="caption" sx={{ display: "block", fontSize: 10,
+            <MDTypography variant="caption" sx={{ display: "block", fontSize: 11,
               fontWeight: "bold", letterSpacing: 0.4, color: PAL.neutral }}>
               {`${String(MODE_LABEL[activeMode] || activeMode).toUpperCase()} `
                 + "\u2014 NOTHING TO TRANSCRIBE"}
@@ -600,7 +600,7 @@ export default function PrescriptionPanel({ report, mode, onMode }) {
           // a planning view. No value appears anywhere in this branch.
           <MDBox p={1.4} sx={{ backgroundColor: PAL.failFill, borderRadius: "4px",
             border: `1px solid ${PAL.failBorder}` }}>
-            <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5,
+            <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
               fontWeight: "bold", letterSpacing: 0.4, color: PAL.fail }}>
               {`${fields.length} PARAMETER VALUES WITHHELD`}
             </MDTypography>
@@ -622,7 +622,7 @@ export default function PrescriptionPanel({ report, mode, onMode }) {
                 sx={{ textTransform: "none", fontSize: 11.5 }}>
                 {`Open a read-only planning view of all ${fields.length} values`}
               </MDButton>
-              <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5,
+              <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
                 color: "#6A6A6A", mt: 0.4 }}>
                 The planning view is watermarked, its read-back checklist is disabled, and it is
                 excluded from the printed sign-off record. It is for deciding what to do next, not
@@ -688,8 +688,8 @@ export default function PrescriptionPanel({ report, mode, onMode }) {
                   .map(([flex, h], i) => (
                     <MDBox key={`ph${i}`} flex={flex.indexOf(" ") > 0 ? flex : `0 0 ${flex}`}
                       sx={{ textAlign: i === 2 ? "right" : "left" }}>
-                      <MDTypography variant="caption" sx={{ fontSize: 9.5, fontWeight: "bold",
-                        letterSpacing: 0.3, color: "#8A8A8A" }}>
+                      <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold",
+                        letterSpacing: 0.3, color: "#5E5E5E" }}>
                         {h.toUpperCase()}
                       </MDTypography>
                     </MDBox>
@@ -715,27 +715,27 @@ export default function PrescriptionPanel({ report, mode, onMode }) {
                 modes rendered as the same table with different numbers would hide the fact that
                 the field SET differs. */}
             <MDBox mt={1.4}>
-              <MDTypography variant="caption" sx={{ display: "block", fontSize: 10,
+              <MDTypography variant="caption" sx={{ display: "block", fontSize: 11,
                 fontWeight: "bold", letterSpacing: 0.4, color: PAL.neutral }}>
                 {`NOT APPLICABLE IN ${String(MODE_LABEL[activeMode] || activeMode).toUpperCase()}`
                   + ` \u00B7 ${notApplicable.length}`}
               </MDTypography>
               {notApplicable.length === 0 ? (
                 <MDTypography variant="caption" sx={{ display: "block", fontSize: 11,
-                  color: "#8A8A8A" }}>
+                  color: "#5E5E5E" }}>
                   No field from another mode is excluded in this one.
                 </MDTypography>
               ) : notApplicable.map((f) => (
                 <MDBox key={`na-${f.parameter}`} display="flex" flexDirection="row" py={0.35}
                   sx={{ borderTop: "1px solid rgba(0,0,0,0.06)" }}>
                   <MDBox flex="1 1 220px">
-                    <MDTypography variant="caption" sx={{ fontSize: 11.5, color: "#9A9A9A",
+                    <MDTypography variant="caption" sx={{ fontSize: 11.5, color: "#6E6E6E",
                       textDecoration: "line-through" }}>
                       {`${f.parameter}${f.units ? ` (${f.units})` : ""}`}
                     </MDTypography>
                   </MDBox>
                   <MDBox flex="2 1 380px">
-                    <MDTypography variant="caption" sx={{ fontSize: 10.5, color: "#6A6A6A" }}>
+                    <MDTypography variant="caption" sx={{ fontSize: 11.5, color: "#6A6A6A" }}>
                       {f.why}
                     </MDTypography>
                   </MDBox>
@@ -749,7 +749,7 @@ export default function PrescriptionPanel({ report, mode, onMode }) {
         {unknowns.length > 0 ? (
           <MDBox mt={1.4} p={1} sx={{ backgroundColor: PAL.warnFill, borderRadius: "4px",
             border: `1px solid ${PAL.warnBorder}` }}>
-            <MDTypography variant="caption" sx={{ display: "block", fontSize: 10,
+            <MDTypography variant="caption" sx={{ display: "block", fontSize: 11,
               fontWeight: "bold", letterSpacing: 0.4, color: PAL.warnText }}>
               {`${unknowns.length} THING${unknowns.length === 1 ? "" : "S"} THE RECORD CANNOT `
                 + "SETTLE ABOUT THESE FIELDS"}
@@ -773,12 +773,12 @@ export default function PrescriptionPanel({ report, mode, onMode }) {
             here is therefore a reading aid and not a claim about what the device accepts. */}
         <Fold show="How the values were derived and are displayed" hide="Hide" mt={0.5} dense>
           {m.note && !cannotDrive ? (
-            <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mb: 0.5,
+            <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, mb: 0.5,
               color: "#6A6A6A" }}>
               {m.note}
             </MDTypography>
           ) : null}
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, color: "#6A6A6A" }}>
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#6A6A6A" }}>
             Amplitudes are shown to two decimal places always, durations as whole milliseconds, and
             band-power thresholds to four decimal places. The four-place display is a reading aid:
             the module deliberately does not round these values, because no supplied document

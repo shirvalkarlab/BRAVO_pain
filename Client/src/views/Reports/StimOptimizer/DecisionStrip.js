@@ -58,9 +58,9 @@ function Setting({ rate, pw, amp, missingPw, missingAmp }) {
   return (
     <>
       <span style={VALUE}>
-        {fmtHz(rate)}<span style={{ color: "#9A9A9A" }}> · </span>
-        {missingPw ? <span style={{ color: "#9A9A9A" }}>— µs</span> : fmtUs(pw)}
-        {!missingAmp && <><span style={{ color: "#9A9A9A" }}> · </span>{fmtMa(amp)}</>}
+        {fmtHz(rate)}<span style={{ color: "#6E6E6E" }}> · </span>
+        {missingPw ? <span style={{ color: "#6E6E6E" }}>— µs</span> : fmtUs(pw)}
+        {!missingAmp && <><span style={{ color: "#6E6E6E" }}> · </span>{fmtMa(amp)}</>}
       </span>
       {missingAmp && (
         <MDTypography variant="caption" component="div"
@@ -215,7 +215,7 @@ export default function DecisionStrip({ arms, plan, planLoading, planErr, inForc
                   </MDTypography>
                 )}
               </MDBox>,
-              <span key={`${r.side}-c`} style={{ color: "#9A9A9A", fontSize: 20, textAlign: "center" }}>→</span>,
+              <span key={`${r.side}-c`} style={{ color: "#6E6E6E", fontSize: 20, textAlign: "center" }}>→</span>,
               <MDBox key={`${r.side}-d`}>
                 {planLoading && !s ? (
                   <MDBox display="flex" alignItems="center" gap={1}>

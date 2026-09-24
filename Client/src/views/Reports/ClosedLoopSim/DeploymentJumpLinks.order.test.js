@@ -51,4 +51,11 @@ describe("the Closed-Loop page's jump links are a table of contents", () => {
     const last = JUMPS[JUMPS.length - 1];
     labelsWithArrow.forEach((j) => expect(j.id).toBe(last.id));
   });
+
+  it("the sign-off card is the last card on the page, and the last link (the PI, 2026-09-24)", () => {
+    // The thing a clinician signs comes after everything it summarises, the simulations included.
+    const onPage = idsInPageOrder();
+    expect(onPage[onPage.length - 1]).toBe("cl-signoff");
+    expect(JUMPS[JUMPS.length - 1].id).toBe("cl-signoff");
+  });
 });

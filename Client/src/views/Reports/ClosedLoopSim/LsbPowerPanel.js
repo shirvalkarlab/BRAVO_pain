@@ -157,19 +157,19 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
     const annotations = [
       { x: nMax * 1.02, y: tgt * 100, xanchor: "right", yanchor: "bottom",
         text: `${(tgt * 100).toFixed(0)}% target`, showarrow: false,
-        font: { size: 9, color: PAL.pass } },
+        font: { size: 11, color: PAL.pass } },
       // Static "now" annotation so the current marker is self-identifying in a printout / grayscale
       // (audit C7), not only on hover.
       { x: pw.n_ratings_current, y: pw.power_current * 100, xanchor: "center", yanchor: "top",
         yshift: -6, text: `now: ${pw.n_ratings_current}`, showarrow: false,
-        font: { size: 8.5, color: curTextColor } },
+        font: { size: 11, color: curTextColor } },
     ];
     // audit C4: label the conservative (CI-lower-bound) end of the power band.
     if (hasBand) {
       annotations.push({ x: pw.n_ratings_current, y: pw.power_current_lo * 100,
         xanchor: "left", yanchor: "top", xshift: 8,
         text: `CI-low: ${Math.round(pw.power_current_lo * 100)}%`, showarrow: false,
-        font: { size: 8, color: PAL.warnText } });
+        font: { size: 11, color: PAL.warnText } });
     }
     // needed-N marker (only when more data is needed and the number is known). Audit C5: place it at
     // the CURVE's own power at n_need (linear-interpolate the existing curve array) — NOT on the 80%
@@ -197,7 +197,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
         showlegend: false });
       annotations.push({ x: nNeed, y: yNeed * 100, xanchor: "center", yanchor: "bottom",
         yshift: 6, text: `need: ${nNeed}`, showarrow: false,
-        font: { size: 8.5, color: PAL.neutral } });
+        font: { size: 11, color: PAL.neutral } });
     }
     // Audit [19]: when the effective n is discounted for serial autocorrelation (design_effect > 1),
     // say so on the figure and clarify the x-axis is REAL ratings collected (power is evaluated at the
@@ -207,14 +207,14 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
     if (deff > 1.0) {
       annotations.push({ x: nMax * 0.5, y: 8, xanchor: "center", yanchor: "bottom",
         text: `effective N discounted ×${(1 / deff).toFixed(2)} (autocorrelation, DEFF ${deff.toFixed(2)})`,
-        showarrow: false, font: { size: 8, color: PAL.warnText } });
+        showarrow: false, font: { size: 11, color: PAL.warnText } });
     }
     const layout = {
       margin: { l: 44, r: 12, t: 8, b: 36 }, height: 170,
-      xaxis: { title: { text: xTitle, font: { size: 10.5 } },
-        zeroline: false, tickfont: { size: 9.5 }, range: [0, nMax * 1.02] },
-      yaxis: { title: { text: "Detection power for AUC > 0.5 (%)", font: { size: 10 } },
-        range: [0, 102], zeroline: false, tickfont: { size: 9.5 }, dtick: 25 },
+      xaxis: { title: { text: xTitle, font: { size: 11 } },
+        zeroline: false, tickfont: { size: 11 }, range: [0, nMax * 1.02] },
+      yaxis: { title: { text: "Detection power for AUC > 0.5 (%)", font: { size: 11 } },
+        range: [0, 102], zeroline: false, tickfont: { size: 11 }, dtick: 25 },
       shapes: [
         // 80% target line
         { type: "line", x0: 0, x1: nMax * 1.02, y0: tgt * 100, y1: tgt * 100,
@@ -284,7 +284,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
           symbol: ["line-ns", "line-ns", "line-ns"],
           line: { width: 2, color: PAL.neutral } },
         text: [`p10`, `median`, `p90`], textposition: "top center",
-        textfont: { size: 7.5, color: PAL.neutral },
+        textfont: { size: 11, color: PAL.neutral },
         hovertemplate: "%{x:.0f} LSB<extra></extra>", showlegend: false,
       });
       // Range bar
@@ -303,12 +303,12 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
 
     const layout = {
       margin: { l: 60, r: 10, t: 6, b: modeNote ? 28 : 10 }, height: modeNote ? 110 : 85,
-      xaxis: { title: { text: "Device LFP power (LSB)", font: { size: 9 } },
-        tickfont: { size: 8.5 }, zeroline: false },
-      yaxis: { tickfont: { size: 9 }, fixedrange: true },
+      xaxis: { title: { text: "Device LFP power (LSB)", font: { size: 11 } },
+        tickfont: { size: 11 }, zeroline: false },
+      yaxis: { tickfont: { size: 11 }, fixedrange: true },
       annotations: modeNote ? [{
         xref: "paper", yref: "paper", x: 0, y: -0.38, xanchor: "left", yanchor: "top",
-        text: modeNote, showarrow: false, font: { size: 8, color: noteColor }, align: "left",
+        text: modeNote, showarrow: false, font: { size: 11, color: noteColor }, align: "left",
       }] : [],
     };
     Plotly.react(gd, traces, layout, { displayModeBar: false, responsive: true });
@@ -339,17 +339,17 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
             sx={{ backgroundColor: cutDegenerate ? PAL.warnFill : "#f2f5f7",
               borderRadius: "6px", border: `1px solid ${cutDegenerate ? PAL.warnBorder : "#dde3e7"}` }}>
             <MDBox px={0.8} py={0.2} sx={{ backgroundColor: cutDegenerate ? PAL.warnText : PAL.accent,
-              color: "#fff", borderRadius: "4px", fontSize: 9.5, fontWeight: "bold" }}>
+              color: "#fff", borderRadius: "4px", fontSize: 11, fontWeight: "bold" }}>
               {`${(cutpoint.rule || "youden").toUpperCase()} cut-point`}
             </MDBox>
-            <MDTypography variant="caption" sx={{ fontSize: 10.5 }}>
+            <MDTypography variant="caption" sx={{ fontSize: 11.5 }}>
               {`sens ${fmt(cutpoint.sensitivity)} · spec ${fmt(cutpoint.specificity)}`}
             </MDTypography>
-            <MDTypography variant="caption" sx={{ fontSize: 10.5, color: "#777" }}>
+            <MDTypography variant="caption" sx={{ fontSize: 11.5, color: "#5E5E5E" }}>
               {`power ≥ ${fmt(cutThr, 3)} (log-power)`}
             </MDTypography>
             {tl && tl.available && tl.upper_lsb != null ? (
-              <MDTypography variant="caption" sx={{ fontSize: 10.5, fontWeight: "bold",
+              <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold",
                 color: tl.estimated ? PAL.warnText : PAL.accent }}>
                 {`→ ${tl.estimated ? "≈" : "≥"} ${fmt(tl.upper_lsb, 1)} LSB${tl.estimated ? " (est.)" : ""}`}
               </MDTypography>
@@ -389,7 +389,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
             {tl && tl.available && !tl.estimated ? (
               <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: PAL.accentFill, borderRadius: "6px",
                 border: `1px solid ${PAL.accentBorder}` }}>
-                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold",
+                <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold",
                   color: deviceBlocks ? PAL.warnText : PAL.accent }}>
                   {deviceBlocks
                     ? "WHERE THE PERCENTILE FALLS (device LSB) — NOT A VALUE TO PROGRAM"
@@ -401,19 +401,19 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
                 </MDTypography>
                 {deviceBlocks ? (
                   <MDTypography variant="caption" display="block"
-                    sx={{ fontSize: 9.5, color: PAL.warnText, mt: 0.3 }}>
+                    sx={{ fontSize: 11, color: PAL.warnText, mt: 0.3 }}>
                     The device does not currently permit this configuration, so this is a
                     measurement of where the percentile sits and not a setting to enter. The
                     comparison operator is shown as an equals sign for the same reason: a
                     greater-than-or-equal sign reads as a rule to apply.
                   </MDTypography>
                 ) : null}
-                <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 10, mt: 0.3 }}>
+                <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 11, mt: 0.3 }}>
                   {`p${fmt(tl.percentile, 0)} of the device's own Timeline band power · `
                     + `${tl.n_timeline_samples} in-band samples · device LSB p10/median/p90 `
                     + `${fmt(tl.device_lsb_p10, 0)} / ${fmt(tl.device_lsb_median, 0)} / ${fmt(tl.device_lsb_p90, 0)}`}
                 </MDTypography>
-                <MDTypography variant="caption" display="block" sx={{ fontSize: 9.5, color: "#777", mt: 0.4 }}>
+                <MDTypography variant="caption" display="block" sx={{ fontSize: 11, color: "#5E5E5E", mt: 0.4 }}>
                   Percentile-anchored on the device Timeline — no µV²↔LSB conversion needed.
                 </MDTypography>
               </MDBox>
@@ -424,27 +424,27 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
                  the LSB default the panel now produces instead of "NO DEPLOYABLE LSB THRESHOLD". */
               <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: PAL.warnFill, borderRadius: "6px",
                 border: `1px solid ${PAL.warnBorder}` }}>
-                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.warnText }}>
+                <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: PAL.warnText }}>
                   {`ESTIMATED LSB THRESHOLD — ${TIER_LABEL[tl.tier] || "modeled"}${tl.freq_extrapolated ? " · EXTRAPOLATED" : ""}`}
                 </MDTypography>
                 <MDTypography variant="h4" sx={{ fontSize: 26, color: PAL.warnText, lineHeight: 1.1 }}>
                   {`power ≈ ${fmt(tl.upper_lsb, 1)} LSB`}
                 </MDTypography>
-                <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 10, mt: 0.3 }}>
+                <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 11, mt: 0.3 }}>
                   {(Number.isFinite(tl.upper_lsb_lo) && Number.isFinite(tl.upper_lsb_hi)
                       ? `band ${fmt(tl.upper_lsb_lo, 1)}–${fmt(tl.upper_lsb_hi, 1)} LSB (±${fmt(100 * (tl.scatter_frac || 0), 0)}%, the calibration ratio's 1 MAD over ${tl.scatter_n_blocks || 0} blocks)`
                       : "no band: the calibration scatter is unknown for this participant")
                     + (tl.percentile != null ? ` · anchored at p${fmt(tl.percentile, 0)}` : "")
                     + (tl.n_modeled_points ? ` · ${tl.n_modeled_points} modeled in-band points` : "")}
                 </MDTypography>
-                <MDTypography variant="caption" display="block" sx={{ fontSize: 9.5, color: "#777", mt: 0.4 }}>
+                <MDTypography variant="caption" display="block" sx={{ fontSize: 11, color: "#5E5E5E", mt: 0.4 }}>
                   {tl.note || "Modeled estimate — device never sensed this band. Confirm live on the device Timeline before deploying."}
                 </MDTypography>
               </MDBox>
             ) : (
               <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: PAL.warnFill, borderRadius: "6px",
                 border: `1px solid ${PAL.warnBorder}` }}>
-                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.warnText }}>
+                <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: PAL.warnText }}>
                   NO DEPLOYABLE LSB THRESHOLD
                 </MDTypography>
                 <MDTypography variant="caption" display="block" sx={{ fontSize: 11, mt: 0.3 }}>
@@ -468,7 +468,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
             {rvp && rvp.available ? (
               <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: PAL.neutralFill || "#6C757D12",
                 borderRadius: "6px", border: `1px solid ${PAL.neutralBorder || "#6C757D44"}` }}>
-                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.neutral }}>
+                <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: PAL.neutral }}>
                   {`RECOMMENDED vs PROGRAMMED · ${rvp.hemisphere || ""} hemisphere`}
                 </MDTypography>
                 <MDTypography variant="caption" display="block" sx={{ fontSize: 12, mt: 0.3 }}>
@@ -485,13 +485,13 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
                           : "no change from the programmed value"}`}
                   </MDTypography>
                 ) : null}
-                <MDTypography variant="caption" display="block" sx={{ fontSize: 9.5, color: "#777", mt: 0.4 }}>
+                <MDTypography variant="caption" display="block" sx={{ fontSize: 11, color: "#5E5E5E", mt: 0.4 }}>
                   {`Programmed ${rvp.programmed_status || "adaptive"}${rvp.programmed_date ? ` · ${String(rvp.programmed_date).slice(0, 10)}` : ""} · same device LFP-power units.`}
                 </MDTypography>
               </MDBox>
             ) : rvp && rvp.programmed_upper_lsb != null ? (
               <MDBox p={1.0} mb={1.2} sx={{ backgroundColor: PAL.neutralFill || "#6C757D12", borderRadius: "6px" }}>
-                <MDTypography variant="caption" sx={{ fontSize: 10.5, color: PAL.neutral }}>
+                <MDTypography variant="caption" sx={{ fontSize: 11.5, color: PAL.neutral }}>
                   {`Device currently programmed at ${fmt(rvp.programmed_upper_lsb, 1)} LSB `
                     + `(${rvp.hemisphere || ""}); no deployable recommendation to compare yet.`}
                 </MDTypography>
@@ -501,7 +501,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
             {/* 2) POWER / SAMPLE-SIZE — a power-vs-N sufficiency curve instead of three numbers. */}
             {pw && pw.available ? (
               <MDBox mb={1.2}>
-                <MDTypography variant="caption" sx={{ fontSize: 9.5, color: "#999", fontWeight: "bold" }}>
+                <MDTypography variant="caption" sx={{ fontSize: 11, color: "#5E5E5E", fontWeight: "bold" }}>
                   POWER vs SAMPLE SIZE
                   <span style={{ fontWeight: "normal", color: pw.power_current >= 0.8 ? PAL.pass : PAL.warnText }}>
                     {`  —  now ${fmt(pw.power_current * 100, 0)}% at ${pw.n_ratings_current} ratings`}
@@ -511,7 +511,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
                 <div ref={pwRef}
                   style={{ width: "100%", display: pw.curve ? "block" : "none" }} />
                 <MDTypography variant="caption" display="block" color="text"
-                  sx={{ fontSize: 9.5, mt: 0.2, textAlign: "center",
+                  sx={{ fontSize: 11, mt: 0.2, textAlign: "center",
                     color: pw.more_data_needed ? PAL.warnText : PAL.pass, fontWeight: "bold" }}>
                   {pw.more_data_needed
                     ? `Underpowered: ~${(pw.n_ratings_needed - pw.n_ratings_current)} more independent pain ratings needed for 80% power.`
@@ -519,18 +519,18 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
                 </MDTypography>
               </MDBox>
             ) : (
-              <MDTypography variant="caption" color="text" sx={{ fontSize: 10 }}>
+              <MDTypography variant="caption" color="text" sx={{ fontSize: 11 }}>
                 {`Power: ${(pw && pw.reason) || "unavailable"}.`}
               </MDTypography>
             )}
 
             {/* 3) µV²/LSB RATIO (FYI) */}
             <MDBox p={1} sx={{ backgroundColor: "#f7f7f8", borderRadius: "6px" }}>
-              <MDTypography variant="caption" sx={{ fontSize: 9.5, fontWeight: "bold", color: "#999" }}>
+              <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: "#5E5E5E" }}>
                 µV²/LSB FROM CONCURRENT STREAMING + DEVICE READINGS — an independent check of the constant in effect, not the deployable number
               </MDTypography>
               {lr && lr.available ? (
-                <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, mt: 0.2 }}>
+                <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5, mt: 0.2 }}>
                   {`median ${lr.median.toExponential(2)} µV²/LSB `}
                   <span style={{ color: lr.confidence === "low" ? PAL.fail
                     : (lr.confidence === "high" ? PAL.pass : PAL.warnText), fontWeight: "bold" }}>
@@ -539,7 +539,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
                   {` · CV ${fmt(lr.cv)} · ${fmt(lr.fold_of_constant_in_effect, 2)}× the constant in effect (1 µV² = ${fmt(1 / lr.constant_in_effect_uv2_per_lsb, 2)} LSB) · n=${lr.n} paired sessions`}
                 </MDTypography>
               ) : (
-                <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, mt: 0.2, color: "#777" }}>
+                <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5, mt: 0.2, color: "#5E5E5E" }}>
                   {(lr && lr.reason) || "unavailable"}
                 </MDTypography>
               )}

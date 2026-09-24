@@ -62,12 +62,12 @@ function threeColumnLayout(headings, xTitle, yTitle) {
     const x0 = k * (w + gap);
     const ax = k === 0 ? "" : String(k + 1);
     layout[`xaxis${ax}`] = {
-      domain: [x0, x0 + w], anchor: `y${ax}`, title: { text: xTitle, font: { size: 10 } },
-      gridcolor: GRID_INK, zeroline: false, tickfont: { size: 10 },
+      domain: [x0, x0 + w], anchor: `y${ax}`, title: { text: xTitle, font: { size: 11 } },
+      gridcolor: GRID_INK, zeroline: false, tickfont: { size: 11 },
     };
     layout[`yaxis${ax}`] = {
       domain: [0, 1], anchor: `x${ax}`, gridcolor: GRID_INK, zeroline: false,
-      tickfont: { size: 10 }, title: k === 0 ? { text: yTitle, font: { size: 10 } } : undefined,
+      tickfont: { size: 11 }, title: k === 0 ? { text: yTitle, font: { size: 11 } } : undefined,
     };
     layout.annotations.push({
       text: `<b>${h}</b>`, x: x0, y: 1.13, xref: "paper", yref: "paper", showarrow: false,
@@ -259,10 +259,10 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
       margin: { l: 62, r: 16, t: 10, b: 46 }, height: 240, plot_bgcolor: "white",
       paper_bgcolor: "white", showlegend: false, font: { size: 11 }, hovermode: "closest",
       uirevision: "three-source-pooled-slopes", shapes,
-      xaxis: { title: { text: "Band centre (Hz)", font: { size: 10 } }, gridcolor: GRID_INK,
-        range: [SPECTRUM_LO_HZ - 0.6, SPECTRUM_HI_HZ + 0.6], zeroline: false, tickfont: { size: 10 } },
-      yaxis: { title: { text: "Pooled slope (device units per mA)", font: { size: 10 } },
-        gridcolor: GRID_INK, zeroline: true, zerolinecolor: "#999", tickfont: { size: 10 } },
+      xaxis: { title: { text: "Band centre (Hz)", font: { size: 11 } }, gridcolor: GRID_INK,
+        range: [SPECTRUM_LO_HZ - 0.6, SPECTRUM_HI_HZ + 0.6], zeroline: false, tickfont: { size: 11 } },
+      yaxis: { title: { text: "Pooled slope (device units per mA)", font: { size: 11 } },
+        gridcolor: GRID_INK, zeroline: true, zerolinecolor: "#5E5E5E", tickfont: { size: 11 } },
       annotations: xs.length ? [] : [{ text: "<i>no pooled slope is stored for this contact yet</i>",
         x: 0.5, y: 0.55, xref: "paper", yref: "paper", showarrow: false,
         font: { size: 11, color: NEUTRAL_INK } }],
@@ -405,7 +405,7 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
           sx={{ color: PAL.accent, cursor: "pointer", background: "none", border: 0, padding: 0,
             fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 0.5,
             "&:hover": { textDecoration: "underline" } }}>
-          <span aria-hidden="true" style={{ fontSize: 9, display: "inline-block",
+          <span aria-hidden="true" style={{ fontSize: 11, display: "inline-block",
             transform: showSpectrum ? "rotate(90deg)" : "none" }}>▶</span>
           {showSpectrum ? "Hide the other bands"
             : `Show the pooled slope at every band from ${fmtHz(SPECTRUM_LO_HZ)} to ${fmtHz(SPECTRUM_HI_HZ)} Hz`}

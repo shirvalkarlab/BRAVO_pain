@@ -226,9 +226,9 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
       title: { text: `AUC = ${fmt(roc.auc)}${ciTxt}${bootTxt}${smallTxt}`, font: { size: 13 } },
       margin: { l: 46, r: 12, t: 32, b: 42 }, height: 320,
       xaxis: { title: { text: "False positive rate", font: { size: 11 } }, range: [-0.02, 1.02],
-        zeroline: false, tickfont: { size: 10 } },
+        zeroline: false, tickfont: { size: 11 } },
       yaxis: { title: { text: "True positive rate", font: { size: 11 } }, range: [-0.02, 1.02],
-        zeroline: false, tickfont: { size: 10 } },
+        zeroline: false, tickfont: { size: 11 } },
       annotations: [],
     };
     Plotly.react(ref.current, traces, layout, PAL.MODEBAR);
@@ -299,12 +299,12 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
     const layout = {
       barmode: "overlay", bargap: 0.04,
       margin: { l: 46, r: 12, t: 8, b: 38 }, height: 168,
-      xaxis: { title: { text: "Oriented band power (standardized, cut-point scale)", font: { size: 10.5 } },
-        zeroline: false, tickfont: { size: 9.5 },
+      xaxis: { title: { text: "Oriented band power (standardized, cut-point scale)", font: { size: 11 } },
+        zeroline: false, tickfont: { size: 11 },
         range: [fh.x_min - binW, fh.x_max + binW] },
-      yaxis: { title: { text: "samples", font: { size: 10 } }, zeroline: false,
-        tickfont: { size: 9.5 } },
-      legend: { orientation: "h", x: 0, y: 1.16, font: { size: 9.5 } },
+      yaxis: { title: { text: "samples", font: { size: 11 } }, zeroline: false,
+        tickfont: { size: 11 } },
+      legend: { orientation: "h", x: 0, y: 1.16, font: { size: 11 } },
       shapes: [], annotations: [],
     };
     Plotly.react(gd, traces, layout, PAL.MODEBAR);
@@ -330,7 +330,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
           line: { color: lineColor, width: 2, dash: "dash" } }],
         annotations: [{ x: opThr, y: 1, yref: "paper", yanchor: "bottom",
           text: `cut ≥ ${fmt(opThr)}${lsbTxt}`, showarrow: false, align: "center",
-          font: { size: 9.5, color: lineColor },
+          font: { size: 11, color: lineColor },
           xanchor: opThr > (fh.x_min + fh.x_max) / 2 ? "right" : "left" }],
       });
     } else {
@@ -392,10 +392,10 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
         font: { size: 11.5 },
       },
       margin: { l: 46, r: 12, t: 26, b: 36 }, height: 188,
-      xaxis: { title: { text: "Test fold — elapsed week (train = all earlier weeks)", font: { size: 10 } },
-        zeroline: false, tickfont: { size: 9.5 }, range: [xlo, xhi] },
-      yaxis: { title: { text: "held-out AUC", font: { size: 10 } }, zeroline: false,
-        tickfont: { size: 9.5 }, range: [-0.02, 1.02] },
+      xaxis: { title: { text: "Test fold — elapsed week (train = all earlier weeks)", font: { size: 11 } },
+        zeroline: false, tickfont: { size: 11 }, range: [xlo, xhi] },
+      yaxis: { title: { text: "held-out AUC", font: { size: 11 } }, zeroline: false,
+        tickfont: { size: 11 }, range: [-0.02, 1.02] },
     };
     Plotly.react(gd, traces, layout, PAL.MODEBAR);
   }, [forward]);  // eslint-disable-line react-hooks/exhaustive-deps
@@ -420,10 +420,10 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
           <ToggleButtonGroup size="small" exclusive value={matchDir}
             onChange={(e, v) => { if (v) setMatchDir(v); }}
             title="Forecasting predicts the NEXT rating from neural data recorded before it (the causal, deployable question). Concurrent pairs each rating with the same-window recording (exploratory). Switching does not refit on its own — the curve already computed stays on screen and is marked, and Recompute refits it.">
-            <ToggleButton value="prior" sx={{ fontSize: 10, textTransform: "none", py: 0.2 }}>
+            <ToggleButton value="prior" sx={{ fontSize: 11, textTransform: "none", py: 0.2 }}>
               Forecasting (deploy default)
             </ToggleButton>
-            <ToggleButton value="pro_first" sx={{ fontSize: 10, textTransform: "none", py: 0.2 }}>
+            <ToggleButton value="pro_first" sx={{ fontSize: 11, textTransform: "none", py: 0.2 }}>
               Concurrent (exploratory)
             </ToggleButton>
           </ToggleButtonGroup>
@@ -465,7 +465,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
             not assessable. This is the out-of-sample number to weight, beside the optimistic in-sample one. */}
         {forward && forward.available && forward.held_out_auc != null ? (
           <MDTypography variant="caption" display="block" sx={{
-            fontSize: 10.5, mt: 0.3,
+            fontSize: 11.5, mt: 0.3,
             color: forward.beats_chance_forward ? PAL.pass : PAL.warnText }}>
             {forward.beats_chance_forward
               ? `Forward-validated: held-out AUC ${fmt(forward.held_out_auc)} clears chance across ${forward.n_folds} weekly folds (forward optimism ${fmt(forward.optimism)}). This is the out-of-sample number to weight.`
@@ -474,7 +474,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
                 : `Forward UNDERPOWERED: held-out AUC ${fmt(forward.held_out_auc)} holds near in-sample ${fmt(forward.in_sample_auc)} but its CI does not yet exclude chance — more weeks of ratings needed.`)}
           </MDTypography>
         ) : (forward && !forward.available ? (
-          <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, mt: 0.3, color: PAL.warnText }}>
+          <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5, mt: 0.3, color: PAL.warnText }}>
             {`Forward validation not assessable (${forward.reason || "insufficient temporal span"}): every AUC above is in-sample.`}
           </MDTypography>
         ) : null)}
@@ -483,7 +483,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
           <>
             <Grid container spacing={1.5} alignItems="center" mt={0.2}>
               <Grid item xs={12} md={7}>
-                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: "#999" }}>
+                <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: "#5E5E5E" }}>
                   CUT-POINT RULE
                 </MDTypography>
                 {/* 'net benefit' removed: its objective equals prevalence x the cost objective, so it
@@ -495,23 +495,23 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
                     ["f1", "Favor detection (F1)", "rewards catching pain; shifts with prevalence, can allow many false triggers"],
                     ["cost", "Cost-weighted", "tune the miss-vs-false-trigger trade-off with the slider"]].map(([k, lbl, tip]) => (
                     <ToggleButton key={k} value={k} title={tip}
-                      sx={{ fontSize: 9.5, textTransform: "none", py: 0.2, px: 0.8 }}>{lbl}</ToggleButton>
+                      sx={{ fontSize: 11, textTransform: "none", py: 0.2, px: 0.8 }}>{lbl}</ToggleButton>
                   ))}
                 </ToggleButtonGroup>
               </Grid>
               {rule === "cost" ? (
                 <Grid item xs={12} md={5}>
-                  <MDTypography variant="caption" sx={{ fontSize: 9.5, color: "#777" }}>
+                  <MDTypography variant="caption" sx={{ fontSize: 11, color: "#5E5E5E" }}>
                     {`FP:FN cost = ${costRatio.toFixed(2)} : 1`}
                   </MDTypography>
                   <Slider size="small" min={-3} max={3} step={0.25} value={logCost}
                     onChange={(e, v) => setLogCost(v)} sx={{ mt: -0.5 }}
                     aria-label="false-trigger to missed-pain cost ratio" />
                   <MDBox display="flex" justifyContent="space-between" sx={{ mt: -0.8 }}>
-                    <MDTypography variant="caption" sx={{ fontSize: 8.5, color: "#999" }}>
+                    <MDTypography variant="caption" sx={{ fontSize: 11, color: "#5E5E5E" }}>
                       ← fewer false triggers
                     </MDTypography>
-                    <MDTypography variant="caption" sx={{ fontSize: 8.5, color: "#999" }}>
+                    <MDTypography variant="caption" sx={{ fontSize: 11, color: "#5E5E5E" }}>
                       catch more pain →
                     </MDTypography>
                   </MDBox>
@@ -530,15 +530,15 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
                 ) : null}
                 <MDTypography variant="caption" sx={{ fontSize: 11.5 }}>
                   <b>Cut-point ({op.rule}):</b>{` power ≥ ${fmt(op.threshold, 3)} `}
-                  <span style={{ color: "#777" }}>(oriented log-power units → device LSB in the next panel)</span>
+                  <span style={{ color: "#5E5E5E" }}>(oriented log-power units → device LSB in the next panel)</span>
                 </MDTypography>
                 <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5, mt: 0.2 }}>
                   <b>Sensitivity {fmt(op.sensitivity)}</b> (catches high-pain) · <b>Specificity {fmt(op.specificity)}</b> (avoids false triggers)
                 </MDTypography>
-                <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 9.5, mt: 0.3, fontStyle: "italic" }}>
+                <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 11, mt: 0.3, fontStyle: "italic" }}>
                   Operating point chosen on these data — sensitivity/specificity are optimistic; expect lower accuracy on new ratings.
                 </MDTypography>
-                <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 10, mt: 0.3 }}>
+                <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 11, mt: 0.3 }}>
                   {`${roc.n_samples} samples · ${roc.n_clusters} independent PRO clusters in time `
                     + `occurring >= ${env.refractory_min != null ? fmt(env.refractory_min, 0) : "?"} mins apart · `
                     + `prevalence ${fmt(roc.prevalence)} · ${roc.n_boot_ok} bootstrap replicates · `

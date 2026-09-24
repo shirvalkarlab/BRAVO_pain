@@ -6,7 +6,7 @@ order"): stability column, ruling 8 with the sign-off identity, the parameter-ca
 two stale page tests, the next-visit list on the titration card, then the two diagnostics.
 
 ## Next Step
-Push, then watch the first CI run with jest in it.
+None: the 2026-09-24 rulings are built and pushed.
 
 ## Phases
 
@@ -41,7 +41,14 @@ Push, then watch the first CI run with jest in it.
 - [x] Clinic pooled fit behind the toggle; ruling 5's merge on the page; 239 corrected to 3 of 6 (decision 255)
 - [x] CI runs jest; CLAUDE.md says so (decision 257; first CI run to watch)
 - [x] The stopped-early rule looks up its own grid's answer (decision 256)
-- **Status:** in_progress
+- **Status:** complete
+
+### Phase 7: The PI's rulings of 2026-09-24
+- [x] The sign-off card is the last card; jump links follow (decision 258)
+- [x] Clinic epochs count only the fitted site's ratings; back fit keeps back-only settings (258)
+- [x] Red-outlined button for the sheet ratings in the summary; one merge helper (258)
+- [x] Legibility floor on both pages, measured live; suites 1523/2/0, 713/0 (258)
+- **Status:** complete
 
 ## Decisions Made
 | Decision | Rationale |

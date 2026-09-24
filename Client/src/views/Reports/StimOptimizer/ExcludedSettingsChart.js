@@ -129,7 +129,7 @@ function SidePanel({ side, exclusions, strata, minRate, width }) {
       {pts.filter((p) => p.kind === "stratum").map((p, i) => (
         <g key={`s${i}`}>
           <circle cx={xi(p.rate)} cy={y(p.y)} r="3.5" fill="#B8B8B8" />
-          <text x={xi(p.rate) + 9} y={y(p.y) + 4} fontSize={TYPE.axis} fill="#8A8A8A">{p.pw != null ? `${p.pw.toFixed(0)} µs` : ""}</text>
+          <text x={xi(p.rate) + 9} y={y(p.y) + 4} fontSize={TYPE.axis} fill="#5E5E5E">{p.pw != null ? `${p.pw.toFixed(0)} µs` : ""}</text>
         </g>
       ))}
       {/* the arrow from excluded to chosen */}

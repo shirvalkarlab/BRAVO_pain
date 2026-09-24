@@ -30,3 +30,10 @@ export default function requestParamsFromCandidate(bc) {
   if (tol != null) rp.MatchToleranceMin = tol;
   return rp;
 }
+
+/** The summary's request settings: the band's own, plus the clinic-sheet switch when it is on
+ *  (the PI, 2026-09-24). Only "1" is ever sent; off sends nothing, as before the button existed. */
+export function summaryRequestParams(bc, includeClinicSheets) {
+  const rp = requestParamsFromCandidate(bc);
+  return includeClinicSheets ? { ...rp, IncludeClinicSheetRatings: "1" } : rp;
+}

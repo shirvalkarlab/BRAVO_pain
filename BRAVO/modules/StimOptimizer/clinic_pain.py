@@ -779,6 +779,32 @@ def _rating_days(t_utc) -> tuple:
     return tuple(sorted({d.isoformat() for d in days if d is not None and not pd.isna(d)}))
 
 
+#: The clinic sheets' pain sites and the column each becomes on the epoch frame (the "overall" item
+#: is the NRS). One home, read by the frame builder and by `epochs_for_item`.
+ITEM_COL = {"overall": "pain_Overall", "head": "pain_Head", "back": "pain_Back",
+            "left_leg": "pain_Left_Leg", "left_foot": "pain_Left_Foot",
+            "right_leg": "pain_Right_Leg", "right_foot": "pain_Right_Foot"}
+
+
+def epochs_for_item(ep: pd.DataFrame, item: str) -> pd.DataFrame:
+    """The epoch frame narrowed to ONE pain site (the PI, 2026-09-24): only the settings that carry
+    that site's score, each counting only the ratings of that site (``n``) and the days they were
+    filed on (``rating_days``); the step count stays as ``n_steps``. A step that scored the back and
+    not the leg is not a leg rating, and counting it as one inflated the coverage check (decision
+    255: 36 of 70 epochs in decision 239's merge had no leg score at all)."""
+    col = ITEM_COL.get(str(item))
+    if ep is None or len(ep) == 0 or col is None or col not in ep.columns:
+        return pd.DataFrame(columns=list(ep.columns) if ep is not None else [])
+    d = ep[ep[col].notna()].copy()
+    if f"n_{col}" in d.columns:
+        d["n_steps"] = d["n"]
+        d["n"] = d[f"n_{col}"].astype(int)
+        d["rating_days"] = d[f"rating_days_{col}"]
+        d["n_rating_days"] = d["rating_days"].apply(len)
+        d = d[d["n"] > 0]
+    return d.reset_index(drop=True)
+
+
 def epoch_frame_from_steps(steps: pd.DataFrame) -> pd.DataFrame:
     """One row per DISTINCT (rate, amp-Left, amp-Right, pw-Left, pw-Right) setting actually
     observed in the clinic stream -- "each sheet step is one epoch" in the sense that this frame
@@ -811,9 +837,7 @@ def epoch_frame_from_steps(steps: pd.DataFrame) -> pd.DataFrame:
     for c in key_cols:
         d[f"_k_{c}"] = d[c].round(_SETTING_NDIGITS)
 
-    item_col = {"overall": "pain_Overall", "head": "pain_Head", "back": "pain_Back",
-               "left_leg": "pain_Left_Leg", "left_foot": "pain_Left_Foot",
-               "right_leg": "pain_Right_Leg", "right_foot": "pain_Right_Foot"}
+    item_col = ITEM_COL
 
     rows = []
     for i, (key, sub) in enumerate(d.groupby([f"_k_{c}" for c in key_cols], dropna=False)):
@@ -837,6 +861,9 @@ def epoch_frame_from_steps(steps: pd.DataFrame) -> pd.DataFrame:
             vals = sub[site].dropna().astype(float)
             row[col] = float(vals.mean()) if len(vals) else float("nan")
             row[f"{col}_sd"] = float(vals.std(ddof=1)) if len(vals) >= 2 else float("nan")
+            # per site: how many steps at this setting scored it, and on which days (2026-09-24)
+            row[f"n_{col}"] = int(len(vals))
+            row[f"rating_days_{col}"] = _rating_days(sub.loc[sub[site].notna(), "t_utc"])
         se = sub["side_effect_score"].dropna()
         if len(se):
             worst = int(round(float(se.max())))
@@ -1117,19 +1144,24 @@ def fit_clinic_rate_strata(participant, *, hemispheres=("Left", "Right"),
                visit_dates=visit_dates, n_clinic=n_clinic, n_home=n_home,
                store_key=(stamp or {}).get("signature_key") if isinstance(stamp, dict) else None)
 
-    if len(ep) == 0 or "pain_Left_Leg" not in ep.columns or ep["pain_Left_Leg"].notna().sum() < 2:
+    # THE SITE BEING FITTED, AND ONLY ITS RATINGS (the PI, 2026-09-24). This kept the Left Leg's
+    # settings whatever site was asked for, and counted every step at a setting as a rating of it.
+    col = ITEM_COL.get(str(primary_item))
+    if col is None:
+        base.update(available=False, reason=f"no clinic-sheet column for the pain site {primary_item!r}")
+        return base
+    if len(ep) == 0 or col not in ep.columns or ep[col].notna().sum() < 2:
         base.update(available=False,
-                   reason="fewer than two Left Leg pain readings with a usable setting could be "
-                          "built from the stored clinic steps")
+                   reason=f"fewer than two {primary_item} ({col}) pain readings with a usable "
+                          "setting could be built from the stored clinic steps")
         return base
 
-    ep = ep.dropna(subset=["pain_Left_Leg", "pain_Left_Leg_sd"], how="all")
-    ep = ep[ep["pain_Left_Leg"].notna()].reset_index(drop=True)
+    ep = epochs_for_item(ep, primary_item)
     ep["epoch"] = np.arange(len(ep), dtype=float)
     ref_epoch, reference = reference_epoch_for(ep, in_force)
 
     try:
-        own_pooled = OBJ.pooled_within_epoch_var(ep, "pain_Left_Leg_sd", "n", min_n=3)
+        own_pooled = OBJ.pooled_within_epoch_var(ep, f"{col}_sd", "n", min_n=3)
         pooled_var_used, pooled_source = own_pooled, "clinic_own"
         note = (f"the clinic stream's own pooled within-setting variance "
                f"({own_pooled:.4f}) was estimable and used")

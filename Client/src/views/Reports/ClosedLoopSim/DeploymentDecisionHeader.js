@@ -47,8 +47,8 @@ export const JUMPS = [
   { id: "cl-rules", label: "Device rules" },
   { id: "cl-evidence", label: "Evidence triangle" },
   { id: "cl-prescription", label: "Parameters" },
-  { id: "cl-signoff", label: "Sign-off" },
   { id: "cl-simulation", label: "CL-DBS simulations" },
+  { id: "cl-signoff", label: "Sign-off" },
 ];
 
 function jumpTo(id) {
@@ -198,7 +198,7 @@ export default function DeploymentDecisionHeader({ bandCandidate, summary, deplo
               color: "#4A4A4A" }}>
               {loading ? "\u00A0" : v.body}
             </MDTypography>
-            <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mt: 0.4,
+            <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, mt: 0.4,
               color: "#7A7A7A" }}>
               {`${bc.contact_label || bc.contact || "band"} at `
                 + `${fmtHz(bc.center_freq_hz) || "an unspecified"} Hz`
@@ -213,7 +213,7 @@ export default function DeploymentDecisionHeader({ bandCandidate, summary, deplo
             flex="0 0 auto" alignItems="flex-end">
             {JUMPS.map((j) => (
               <MDTypography key={j.id} variant="caption" onClick={() => jumpTo(j.id)}
-                sx={{ fontSize: 10.5, color: PAL.accent, cursor: "pointer", whiteSpace: "nowrap",
+                sx={{ fontSize: 11.5, color: PAL.accent, cursor: "pointer", whiteSpace: "nowrap",
                   "&:hover": { textDecoration: "underline" } }}>
                 {j.label}
               </MDTypography>
@@ -234,8 +234,8 @@ export default function DeploymentDecisionHeader({ bandCandidate, summary, deplo
             come from the OTHER endpoint and they are not a permission to program; saying so here is
             the whole reason they were demoted out of the headline. */}
         <MDBox mt={0.8} pt={0.6} sx={{ borderTop: "1px solid rgba(0,0,0,0.10)" }}>
-          <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold",
-            letterSpacing: 0.4, color: "#8A8A8A" }}>
+          <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold",
+            letterSpacing: 0.4, color: "#5E5E5E" }}>
             STATISTICAL GATES, FROM THE SEPARATE DEPLOYMENT SUMMARY — EVIDENCE, NOT PERMISSION
           </MDTypography>
           <MDTypography variant="caption" sx={{ display: "block", fontSize: 11, color: "#4A4A4A" }}>
@@ -260,7 +260,7 @@ export default function DeploymentDecisionHeader({ bandCandidate, summary, deplo
             the list itself is. It states a count of numbers, never a judgement about them. */}
         {caveats.length > 0 ? (
           <MDBox mt={0.6}>
-            <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5,
+            <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
               color: "#4A4A4A" }}>
               {`${caveats.length} numbers or findings on this page are qualified`
                 + `${nHighCaveats ? `, ${nHighCaveats} of them seriously` : ""}`
@@ -276,7 +276,7 @@ export default function DeploymentDecisionHeader({ bandCandidate, summary, deplo
         {blockers.length > 0 ? (
           <MDBox mt={0.8} p={1} sx={{ backgroundColor: PAL.failFill, borderRadius: "4px",
             border: `1px solid ${PAL.failBorder}` }}>
-            <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold",
+            <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold",
               letterSpacing: 0.4, color: PAL.fail }}>
               {`WHY THE DEVICE REFUSES \u2014 ${blockers.length} `
                 + `${blockers.length === 1 ? "STATEMENT" : "STATEMENTS"} FROM THE RULE TABLE`}
@@ -296,7 +296,7 @@ export default function DeploymentDecisionHeader({ bandCandidate, summary, deplo
         {warnings.length > 0 ? (
           <MDBox mt={0.8} p={1} sx={{ backgroundColor: PAL.warnFill || "#FFF7E6", borderRadius: "4px",
             border: `1px solid ${PAL.warnBorder || PAL.warn}` }}>
-            <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold",
+            <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold",
               letterSpacing: 0.4, color: PAL.warn }}>
               {`WARNINGS THAT CHANGE NO VERDICT — ${warnings.length} `
                 + `${warnings.length === 1 ? "STATEMENT" : "STATEMENTS"} FROM THE CAPTURE CHECKS`}

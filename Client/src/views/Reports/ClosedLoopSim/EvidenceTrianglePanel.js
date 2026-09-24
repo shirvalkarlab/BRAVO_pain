@@ -234,7 +234,7 @@ function AdjustedEdgeLine({ adjusted }) {
   if (!a.available || n(a.auc) == null) {
     return (
       <MDTypography variant="caption" data-testid="e2-adjusted"
-        sx={{ display: "block", fontSize: 10.5, mb: 0.8, color: "#8a5a00" }}>
+        sx={{ display: "block", fontSize: 11.5, mb: 0.8, color: "#8a5a00" }}>
         {`Read again with ${what} taken out of the band power: that reading could not be made `
           + `here — ${a.why || "no reason was recorded"}. That is a measurement that is `
           + "absent, not one that came out at chance."}
@@ -249,7 +249,7 @@ function AdjustedEdgeLine({ adjusted }) {
     : "";
   return (
     <MDTypography variant="caption" data-testid="e2-adjusted"
-      sx={{ display: "block", fontSize: 10.5, mb: 0.8, color: "#8a5a00" }}>
+      sx={{ display: "block", fontSize: 11.5, mb: 0.8, color: "#8a5a00" }}>
       {`Read again with ${what} taken out of the band power and the pain scores left as they came: `
         + `${n(a.auc)}${span}${reports}, against 0.5 for coin flipping.${pr} `
         + "This second reading describes the first one and does not replace it: the number above "
@@ -309,13 +309,13 @@ function EdgeAxis({ k, e }) {
         <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: ink }}>
           {k}
         </MDTypography>
-        <MDTypography variant="caption" sx={{ fontSize: 10.5, color: "#4A4A4A" }}>
+        <MDTypography variant="caption" sx={{ fontSize: 11.5, color: "#4A4A4A" }}>
           {`${meta.from} \u2192 ${meta.to} \u00B7 ${meta.question}`}
         </MDTypography>
         {/* Numbers, not adjectives (PI rule 2026-09-13): the sign, then whether the interval
             excludes zero. "sign − (interval spans zero)" is a direction with a caveat; "no point
             estimate" is no direction at all. */}
-        <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold",
+        <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold",
           color: resolved ? (established ? PAL.accent : PAL.warnText) : PAL.neutral,
           letterSpacing: 0.3 }}>
           {resolved
@@ -371,12 +371,12 @@ function EdgeAxis({ k, e }) {
         <text x={x0} y={12} fontSize="9" fill="#7A7A7A">{meta.units}</text>
       </svg>
 
-      <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5,
+      <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
         fontFamily: PAL.mono, color: "#2A2A2A" }}>
         {readout}
       </MDTypography>
       {e ? (
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, color: "#4A4A4A" }}>
+        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#4A4A4A" }}>
           {/* Since 2026-09-11 E1 is the pooled titration slope (decision 9), whose unit is a run of
               stepped current (up or down) rather than a setting epoch; the sentence follows the unit. */}
           {/^run of (rising|stepped) current/.test(e.cluster_unit || "")
@@ -393,13 +393,13 @@ function EdgeAxis({ k, e }) {
           reconstructed. It names the estimator and the cluster count. Folded since 2026-09-11. */}
       {e && e.note ? (
         <Fold show="How this edge was estimated" hide="Hide" mt={0.2} dense>
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, color: "#6A6A6A" }}>
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#6A6A6A" }}>
             {e.note}
           </MDTypography>
         </Fold>
       ) : null}
       {e && e.confounded_by && e.confounded_by.length > 0 ? (
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5,
+        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
           color: PAL.warnText }}>
           {`Confounded by: ${e.confounded_by.join(", ")}.`}
         </MDTypography>
@@ -457,8 +457,8 @@ function CoherenceReading({ coherence, edges }) {
         {[["18%", "edge"], ["30%", "sign observed"], ["30%", "sign the control law needs"],
           ["22%", ""]].map(([w, h]) => (
             <MDBox key={`h${w}${h}`} width={w}>
-              <MDTypography variant="caption" sx={{ fontSize: 9.5, fontWeight: "bold",
-                letterSpacing: 0.3, color: "#8A8A8A" }}>{h.toUpperCase()}</MDTypography>
+              <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold",
+                letterSpacing: 0.3, color: "#5E5E5E" }}>{h.toUpperCase()}</MDTypography>
             </MDBox>
         ))}
       </MDBox>
@@ -481,7 +481,7 @@ function CoherenceReading({ coherence, edges }) {
                 color: "#2A2A2A" }}>{word(expected[k])}</MDTypography>
             </MDBox>
             <MDBox width="22%">
-              <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold",
+              <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold",
                 color: bad ? PAL.fail : PAL.pass }}>
                 {observed[k] == null || expected[k] == null ? "" : bad ? "OPPOSITE" : "AS NEEDED"}
               </MDTypography>
@@ -545,8 +545,8 @@ function CoherenceReading({ coherence, edges }) {
             {restOfNote}
           </MDTypography>
         ) : null}
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, mt: 0.4,
-          color: "#8A8A8A" }}>
+        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, mt: 0.4,
+          color: "#5E5E5E" }}>
           {coherence.p_coherent != null
             ? `Bootstrap probability that the sign pattern holds: ${fmtNum(coherence.p_coherent, 3)}`
               + `${coherence.n_boot ? `, from ${coherence.n_boot} replications.` : "."}`
@@ -614,7 +614,7 @@ export default function EvidenceTrianglePanel({ report }) {
                 ) : null}
                 {k === "E2" && showCurrentConfound && !(edges.E2 && edges.E2.adjusted) ? (
                   <MDTypography variant="caption" data-testid="e2-current-confound"
-                    sx={{ display: "block", fontSize: 10.5, mb: 0.8, color: "#8a5a00" }}>
+                    sx={{ display: "block", fontSize: 11.5, mb: 0.8, color: "#8a5a00" }}>
                     {CURRENT_CONFOUND_NOTE}
                   </MDTypography>
                 ) : null}
@@ -624,7 +624,7 @@ export default function EvidenceTrianglePanel({ report }) {
         </Grid>
         {/* The two drawing conventions, folded since 2026-09-11. */}
         <Fold show="How to read the picture" hide="Hide" dense>
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, color: "#8A8A8A" }}>
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#5E5E5E" }}>
             A solid line with an arrowhead is an edge whose direction the data established. A
             dotted line with a hollow diamond is an edge that was estimated and whose direction
             the data did not establish; it is drawn at full weight because it is present and

@@ -31,7 +31,7 @@ export function GainBar({ gain, sd, halfRange, width = 220 }) {
   if (g === null) {
     return (
       <svg width={W} height={H} role="img" aria-label="no gain could be formed">
-        <line x1={x(0)} x2={x(0)} y1={3} y2={H - AXIS - 3} stroke="#9A9A9A" strokeWidth="1" />
+        <line x1={x(0)} x2={x(0)} y1={3} y2={H - AXIS - 3} stroke="#6E6E6E" strokeWidth="1" />
         <text x={x(0) + 6} y={mid + 4} fontSize={TYPE.axis} fill="#7A7A7A">no difference formed</text>
       </svg>
     );

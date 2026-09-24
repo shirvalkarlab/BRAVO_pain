@@ -40,8 +40,8 @@ export default function StateTrack({ track, data, showBlurb = true, dense = fals
   return (
     <MDBox>
       {track.label ? (
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 10,
-          fontWeight: "bold", letterSpacing: 0.4, color: "#8A8A8A", mb: 0.5 }}>
+        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11,
+          fontWeight: "bold", letterSpacing: 0.4, color: "#5E5E5E", mb: 0.5 }}>
           {track.label.toUpperCase()}
         </MDTypography>
       ) : null}
@@ -63,7 +63,7 @@ export default function StateTrack({ track, data, showBlurb = true, dense = fals
                 fontWeight: on ? 700 : 500,
                 letterSpacing: 0.3,
                 lineHeight: 1.2,
-                color: on ? ON_INK(c.role) : "#9A9A9A",
+                color: on ? ON_INK(c.role) : "#6E6E6E",
               }}>
                 {c.label}
               </MDTypography>

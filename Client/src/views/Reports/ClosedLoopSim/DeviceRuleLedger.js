@@ -128,7 +128,7 @@ function RuleRow({ row, state, ink, copy, actor }) {
           {row.why ? (
             <>
               <MDTypography variant="caption" onClick={() => setOpen((o) => !o)}
-                sx={{ fontSize: 10.5, color: PAL.accent, cursor: "pointer", display: "block",
+                sx={{ fontSize: 11.5, color: PAL.accent, cursor: "pointer", display: "block",
                   mt: 0.2, "&:hover": { textDecoration: "underline" } }}>
                 {open ? "Hide the rule's own wording" : "Read the rule's own wording"}
               </MDTypography>
@@ -145,7 +145,7 @@ function RuleRow({ row, state, ink, copy, actor }) {
         </MDBox>
         {actor ? (
           <MDBox flex="0 0 auto" pl={1} sx={{ maxWidth: 190, textAlign: "right" }}>
-            <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold",
+            <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold",
               letterSpacing: 0.3, color: ink }}>
               {actor.toUpperCase()}
             </MDTypography>
@@ -166,7 +166,7 @@ function BucketHead({ state, title, count, note }) {
         {`${title.toUpperCase()} \u00B7 ${count}`}
       </MDTypography>
       {note ? (
-        <MDTypography variant="caption" sx={{ fontSize: 10.5, color: "#8A8A8A" }}>
+        <MDTypography variant="caption" sx={{ fontSize: 11.5, color: "#5E5E5E" }}>
           {note}
         </MDTypography>
       ) : null}
@@ -182,7 +182,7 @@ function CollapsedGroup({ rows, state, title, note }) {
       <BucketHead state={state} title={title} count={rows.length} note={note} />
       {rows.length > 0 ? (
         <MDTypography variant="caption" onClick={() => setOpen((o) => !o)}
-          sx={{ fontSize: 10.5, color: PAL.accent, cursor: "pointer", display: "block", ml: 2.8,
+          sx={{ fontSize: 11.5, color: PAL.accent, cursor: "pointer", display: "block", ml: 2.8,
             "&:hover": { textDecoration: "underline" } }}>
           {open ? "Collapse these rules"
             : `Show these ${rows.length} rules (${rows.map((r) => r.rule_id).join(", ")})`}
@@ -274,7 +274,7 @@ export default function DeviceRuleLedger({ report }) {
         <MDBox display="flex" alignItems="baseline" gap={1} flexWrap="wrap">
           <MDTypography variant="h6" sx={{ fontSize: 15 }}>Device rules</MDTypography>
           {el.checked != null ? (
-            <MDTypography variant="caption" sx={{ fontSize: 11, color: "#8A8A8A" }}>
+            <MDTypography variant="caption" sx={{ fontSize: 11, color: "#5E5E5E" }}>
               {`${el.checked} checked`}
             </MDTypography>
           ) : null}
@@ -312,7 +312,7 @@ export default function DeviceRuleLedger({ report }) {
 
         <Fold show={`Show all ${el.checked != null ? el.checked : ""} rules by outcome`.replace("  ", " ")}
           hide="Hide the rules" mt={1}>
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, color: "#8A8A8A",
+        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#5E5E5E",
           mt: 0.3 }}>
           Each row carries the rule identifier and the document page it was read from, so a finding
           can be checked against the source rather than taken on trust. The label on the right of a
@@ -333,7 +333,7 @@ export default function DeviceRuleLedger({ report }) {
           const u = unevaluableFor(g.kind);
           return (
             <MDBox key={`uk-${g.kind}`} mt={0.6} ml={0.4}>
-              <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5,
+              <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
                 fontWeight: "bold", color: PAL.warnText }}>
                 {`${g.rows.length} ${g.rows.length === 1 ? "rule" : "rules"} \u2014 ${u.copy}`}
               </MDTypography>

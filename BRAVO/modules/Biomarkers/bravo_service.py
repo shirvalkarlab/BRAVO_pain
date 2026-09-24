@@ -4768,6 +4768,13 @@ def _band_validation_setup(request_data):
     pm = _pro_match_arrays(pro_df, label_metric)
     if pm is None:
         return {"available": False, "reason": f"no matchable PRO values for metric={label_metric}"}
+    # THE CLINIC-SHEET RATINGS, WHEN THE REQUEST ASKS FOR THEM (the PI, 2026-09-24: the Closed-Loop
+    # page's button). The grid and its drill-down have merged them since decisions 186 and 228;
+    # this setup -- behind the deployment summary, its ROC and the stability grid -- read REDCap
+    # only. Same helper, so the three cannot drift; off by default, and then nothing changes.
+    _t, _v, _flags, sheet_block = _merge_clinic_sheet_ratings(
+        participant_uid, label_metric, str(label_metric), pm[0], pm[1], request_data)
+    pm = (_t, _v)
 
     # Build the same pooled td_detail the scan uses so the band feature is defined identically.
     # The assembled matrix is {X (N,F) raw power, t (N,), channel (N,), source (N,), f_set (F,)} — there
@@ -4824,6 +4831,7 @@ def _band_validation_setup(request_data):
         "pm": pm,
         "pooled": pooled,
         "stim_series": stim,
+        "clinic_sheet_ratings": sheet_block,
     }
 
 
@@ -4892,6 +4900,7 @@ def _validate_band_core(request_data):
         "pm": setup["pm"],
         "pooled": pooled,
         "stim_series": stim,
+        "clinic_sheet_ratings": setup.get("clinic_sheet_ratings"),
         "glmer": glmer,
         "stim": hetero,
         "verdict": _band_decide_verdict(glmer, hetero),
@@ -5177,7 +5186,9 @@ STABILITY_GRID_KIND = "biomarker_band_stability_grid"
 
 #: Bump when anything about how a point's answer is computed changes, so an entry built under the
 #: old rule is never served as if it carried the new one.
-STABILITY_GRID_RULE_VERSION = "v3_raw_power_feature"   # v2 read decibels off the pooled detail (decision 204)
+# v2 read decibels off the pooled detail (decision 204); v3 raw power; v4 (2026-09-24) the shared
+# setup honours the clinic-sheet switch, so a sheets-on grid's answers are rebuilt with the sheets.
+STABILITY_GRID_RULE_VERSION = "v4_sheet_ratings_in_setup"
 
 
 def _stability_grid_sig_tuple(sweep_key, *, band_width_hz, points):
@@ -5452,6 +5463,42 @@ def load_clinic_sheet_steps(participant_uid):
         return None, "no clinic sheets have been ingested for this participant yet"
     return payload.get("steps"), None
 
+
+
+def _merge_clinic_sheet_ratings(participant_uid, label_metric, metric_label, pro_times, pain_values,
+                                request_data):
+    """The clinic and at-home sheets' scores merged into the pain ratings, when the request's switch
+    is on (decision 186) -- the ONE copy the heat-map grid, its drill-down (decision 228) and the
+    shared band setup behind the deployment summary (the PI, 2026-09-24) all call. Only sheet steps
+    that carry the chosen score's own column are merged (`sheet_ratings.sheet_ratings_for_metric`).
+
+    Returns ``(times, values, from_sheet_flags, block)``; with the switch off the ratings come back
+    unchanged and every flag False. ``block`` says whether the sheets were included, how many were
+    available and added, the sheet column and scale, and why not when they could not be.
+    """
+    pro_times = np.asarray(pro_times, dtype=float)
+    pain_values = np.asarray(pain_values, dtype=float)
+    include = _include_clinic_sheet_ratings_param(request_data)
+    flags = np.zeros(pro_times.size, dtype=bool)
+    block = {"included": bool(include), "n_available": 0, "n_added": 0,
+             "sheet_column": None, "scale": None, "reason": None}
+    if not include:
+        return pro_times, pain_values, flags, block
+    steps, why = load_clinic_sheet_steps(participant_uid)
+    col_scale = sheet_ratings.SHEET_COLUMN_FOR_METRIC.get(str(label_metric))
+    if col_scale is not None:
+        block["sheet_column"], block["scale"] = col_scale
+    if steps is None:
+        block["reason"] = why
+    elif col_scale is None:
+        block["reason"] = f"the sheets carry no column for {metric_label}"
+    else:
+        st, sv, _setting = sheet_ratings.sheet_ratings_for_metric(steps, label_metric)
+        block["n_available"] = int(st.size)
+        pro_times, pain_values, flags = sheet_ratings.merge_ratings(pro_times, pain_values, st, sv)
+        flags = np.asarray(flags, dtype=bool)
+        block["n_added"] = int(st.size)
+    return pro_times, pain_values, flags, block
 
 def load_stored_stability_grid(participant_uid, *, consumer="biomarkers"):
     """The newest stored stability grid for this participant, as
@@ -6957,6 +7004,8 @@ def deployment_summary(request_data):
             "band_lo_hz": _ff(center_hz - half), "band_hi_hz": _ff(center_hz + half),
             "snapped_center_freq_hz": _ff(snapped),
             "pro_metric": core["label_metric"], "binarization": core["label_strategy"],
+            # whether the clinic-sheet ratings were merged in, and how many (the PI, 2026-09-24)
+            "clinic_sheet_ratings": core.get("clinic_sheet_ratings"),
         },
         "device_control": {
             "adaptive_valid": adaptive_valid, "polarity": polarity,
@@ -7552,24 +7601,11 @@ def band_time_sweep_for_participant(request_data):
     # cell's ratings came from a sheet. `sheet_ratings.py` says why this is a caveat.
     include_sheets = _include_clinic_sheet_ratings_param(request_data)
     adjust_current = _adjust_for_stim_current_param(request_data)
-    from_clinic_sheet = None
-    clinic_sheet_block = {"included": bool(include_sheets), "n_available": 0, "n_added": 0,
-                          "sheet_column": None, "scale": None, "reason": None}
-    if include_sheets:
-        steps, why = load_clinic_sheet_steps(participant_uid)
-        col_scale = sheet_ratings.SHEET_COLUMN_FOR_METRIC.get(str(label_metric))
-        if col_scale is not None:
-            clinic_sheet_block["sheet_column"], clinic_sheet_block["scale"] = col_scale
-        if steps is None:
-            clinic_sheet_block["reason"] = why
-        elif col_scale is None:
-            clinic_sheet_block["reason"] = f"the sheets carry no column for {metric_label}"
-        else:
-            st, sv, _setting = sheet_ratings.sheet_ratings_for_metric(steps, label_metric)
-            clinic_sheet_block["n_available"] = int(st.size)
-            pro_times, pain_values, flags = sheet_ratings.merge_ratings(pro_times, pain_values, st, sv)
-            from_clinic_sheet = [bool(v) for v in flags]
-            clinic_sheet_block["n_added"] = int(st.size)
+    pro_times, pain_values, _flags, clinic_sheet_block = _merge_clinic_sheet_ratings(
+        participant_uid, label_metric, metric_label, pro_times, pain_values, request_data)
+    # a list exactly when the sheets were read and carry this score, as before the helper existed
+    from_clinic_sheet = ([bool(v) for v in _flags]
+                         if include_sheets and clinic_sheet_block["reason"] is None else None)
 
     # TRACK A STEP 6: THE RESULTS ARE WRITTEN BACK, AND THE KEY DECIDES WHETHER TO RECOMPUTE.
     # The key names the tile entry, the pain-report snapshot, the pain score, and every setting
@@ -7815,22 +7851,9 @@ def band_time_sweep_cell_for_participant(request_data):
     # series: on RCS08 L 1-3+, 22.5 Hz, 45 s the grid's r was -0.033 on 172 ratings and the line
     # drawn through 97 points rose (the PI caught it on the page). Each point now says where its
     # rating came from, so the scatter can mark the sheet points.
-    include_sheets = _include_clinic_sheet_ratings_param(request_data)
-    from_clinic_sheet = np.zeros(pro_times.size, dtype=bool)
-    clinic_sheet_block = {"included": bool(include_sheets), "n_available": 0, "n_added": 0, "reason": None}
-    if include_sheets:
-        steps, why = load_clinic_sheet_steps(participant_uid)
-        col_scale = sheet_ratings.SHEET_COLUMN_FOR_METRIC.get(str(label_metric))
-        if steps is None:
-            clinic_sheet_block["reason"] = why
-        elif col_scale is None:
-            clinic_sheet_block["reason"] = f"the sheets carry no column for {metric_label}"
-        else:
-            st, sv, _setting = sheet_ratings.sheet_ratings_for_metric(steps, label_metric)
-            clinic_sheet_block["n_available"] = int(st.size)
-            pro_times, pain_values, flags = sheet_ratings.merge_ratings(pro_times, pain_values, st, sv)
-            from_clinic_sheet = np.asarray(flags, dtype=bool)
-            clinic_sheet_block["n_added"] = int(st.size)
+    pro_times, pain_values, from_clinic_sheet, clinic_sheet_block = _merge_clinic_sheet_ratings(
+        participant_uid, label_metric, metric_label, pro_times, pain_values, request_data)
+    clinic_sheet_block = {k: clinic_sheet_block[k] for k in ("included", "n_available", "n_added", "reason")}
 
     canon_channel = availability._canon_channel(channel)
     if canon_channel not in channels:

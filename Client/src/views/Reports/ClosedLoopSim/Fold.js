@@ -36,7 +36,7 @@ export default function Fold({ show, hide, defaultOpen = false, children, mt = 0
           fontFamily: "inherit", "&:hover": { textDecoration: "underline" },
           "&:focus-visible": { outline: `2px solid ${PAL.accent}`, outlineOffset: 2,
             borderRadius: "3px" } }}>
-        <span aria-hidden="true" style={{ display: "inline-block", fontSize: 9,
+        <span aria-hidden="true" style={{ display: "inline-block", fontSize: 11,
           transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
         {open ? (hide || "Hide") : show}
       </MDTypography>

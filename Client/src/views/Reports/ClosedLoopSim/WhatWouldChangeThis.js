@@ -269,7 +269,7 @@ function Item({ item, n }) {
           {item.clears}
         </MDTypography>
         {item.observed ? (
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5,
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
             fontFamily: PAL.mono, color: "#5A5A5A", mt: 0.2 }}>
             {`observed: ${item.observed}`}
           </MDTypography>
@@ -277,7 +277,7 @@ function Item({ item, n }) {
         {item.why ? (
           <>
             <MDTypography variant="caption" onClick={() => setOpen((o) => !o)}
-              sx={{ fontSize: 10.5, color: PAL.accent, cursor: "pointer", display: "block",
+              sx={{ fontSize: 11.5, color: PAL.accent, cursor: "pointer", display: "block",
                 "&:hover": { textDecoration: "underline" } }}>
               {open ? "Hide the module's own wording" : "Read the module's own wording"}
             </MDTypography>
@@ -291,7 +291,7 @@ function Item({ item, n }) {
         ) : null}
       </MDBox>
       <MDBox flex="0 0 auto" pl={1} sx={{ maxWidth: 210, textAlign: "right" }}>
-        <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", letterSpacing: 0.3,
+        <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", letterSpacing: 0.3,
           color: item.ink }}>
           {item.actor.toUpperCase()}
         </MDTypography>

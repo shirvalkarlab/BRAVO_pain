@@ -80,7 +80,9 @@ import useClosedLoopSimulation from "./useClosedLoopSimulation";
 import PAL from "./palette";
 import Fold from "./Fold";
 import "./deployPrint.css";
-import requestParamsFromCandidate from "./candidateRequestParams";
+import LegibleText from "views/Reports/legibleText";
+import { summaryRequestParams } from "./candidateRequestParams";
+import ClinicSheetsSummaryButton, { loadSummarySheets, saveSummarySheets } from "./ClinicSheetsSummaryButton";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "not reported"
   : Number(v).toFixed(d));
@@ -197,13 +199,13 @@ function BandCandidateIdentity({ bc, envelope }) {
             sx={{ height: 20, fontSize: 11 }} />
           {bc.adaptive_valid
             ? <Chip size="small" label="inside the adaptive band (8–30 Hz)"
-                sx={{ height: 20, fontSize: 10.5, backgroundColor: PAL.pass, color: "white" }} />
+                sx={{ height: 20, fontSize: 11.5, backgroundColor: PAL.pass, color: "white" }} />
             : <Chip size="small" label="outside the adaptive band"
-                sx={{ height: 20, fontSize: 10.5, backgroundColor: PAL.warn,
+                sx={{ height: 20, fontSize: 11.5, backgroundColor: PAL.warn,
                   color: PAL.onWarn }} />}
         </MDBox>
         <Fold show="What the badge means" hide="Hide" mt={0} dense>
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, color: "#8A8A8A",
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#5E5E5E",
             mb: 1 }}>
             The badge above is the discovery-stage verdict this band was committed with. It is a
             different quantity from the reconciled verdict at the top of the page, which is about
@@ -213,8 +215,8 @@ function BandCandidateIdentity({ bc, envelope }) {
 
         <Grid container spacing={3}>
           <Grid item xs={12} md={6}>
-            <MDTypography variant="caption" sx={{ fontSize: 10.5, fontWeight: "bold",
-              letterSpacing: 0.4, color: "#999" }}>DEVICE IDENTITY</MDTypography>
+            <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold",
+              letterSpacing: 0.4, color: "#5E5E5E" }}>DEVICE IDENTITY</MDTypography>
             <MDBox mt={0.6}>
               <KV label="Hemisphere">{bc.hemisphere || "not reported"}</KV>
               <KV label="Contact (sensing)">{bc.contact || "not reported"}</KV>
@@ -234,8 +236,8 @@ function BandCandidateIdentity({ bc, envelope }) {
             {/* ALWAYS SHOWN. This block used to sit behind a "show the discovery-stage
                 statistics" toggle, collapsed by default. The PI on 2026-09-10: "there's no point
                 in hiding it ever." A number a reader cannot see cannot be checked. */}
-            <MDTypography variant="caption" sx={{ fontSize: 10.5, fontWeight: "bold",
-              letterSpacing: 0.4, color: "#999" }}>DISCOVERY-STAGE STATISTICS</MDTypography>
+            <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold",
+              letterSpacing: 0.4, color: "#5E5E5E" }}>DISCOVERY-STAGE STATISTICS</MDTypography>
             {(
               <MDBox mt={0.6}>
                 <KV label="Odds ratio (per 1 SD)">
@@ -282,7 +284,7 @@ function BandCandidateIdentity({ bc, envelope }) {
 
         {(!bc.adaptive_valid || bc.suggested_mode == null) && bc.suggested_mode_reason ? (
           <MDBox mt={1} p={1} sx={{ backgroundColor: PAL.warnFill, borderRadius: "6px" }}>
-            <MDTypography variant="caption" sx={{ fontSize: 10.8, color: PAL.warnText }}>
+            <MDTypography variant="caption" sx={{ fontSize: 11.5, color: PAL.warnText }}>
               {`Deployment note: ${bc.suggested_mode_reason}.`}
               {bc.adaptive_valid_reason ? ` ${bc.adaptive_valid_reason}.` : ""}
             </MDTypography>
@@ -290,7 +292,7 @@ function BandCandidateIdentity({ bc, envelope }) {
         ) : null}
 
         <MDBox mt={1}>
-          <MDTypography variant="caption" color="text" sx={{ fontSize: 10.3, fontStyle: "italic" }}>
+          <MDTypography variant="caption" color="text" sx={{ fontSize: 11.5, fontStyle: "italic" }}>
             {prov.selection_biased ? "Selection-biased pool \u2014 " : ""}
             {prov.selection_note || ""}
             {envelope && envelope.committed_at
@@ -311,8 +313,8 @@ function ChosenBandRecordLine({ status, hasBand }) {
   const text = chosenBandRecordText(status, hasBand);
   if (!text) return null;
   return (
-    <MDTypography variant="caption" display="block" sx={{ fontSize: 10.8,
-      color: status.where === "browser" ? PAL.warnText : "#8A8A8A" }}>
+    <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5,
+      color: status.where === "browser" ? PAL.warnText : "#5E5E5E" }}>
       {text}
     </MDTypography>
   );
@@ -330,6 +332,11 @@ function ClosedLoopSim() {
   const [envelope, setEnvelope] = useState(null);   // {band_candidate, participant_uid, committed_at}
   // Where the chosen band is held: on the server's record, or in this browser only (with why).
   const [bandRecord, setBandRecord] = useState(null);
+  // The clinic-sheet ratings in the deployment summary, or not (the PI, 2026-09-24): off by default,
+  // remembered per participant in this browser.
+  const [includeSheets, setIncludeSheets] = useState(() => loadSummarySheets(participant_uid));
+  const onToggleSheets = (on) => { setIncludeSheets(on); saveSummarySheets(participant_uid, on); };
+  useEffect(() => { setIncludeSheets(loadSummarySheets(participant_uid)); }, [participant_uid]);
   const [cutpoint, setCutpoint] = useState(retained.cutpoint || null);   // chosen operating point, lifted from the ROC
   // The resolved device-LSB threshold, lifted from the LSB panel so the ROC's feature histogram can
   // annotate its cut line with the same value.
@@ -391,7 +398,7 @@ function ClosedLoopSim() {
   // produced a fresh object identity on every parent re-render, which is listed in every panel's
   // fetch-effect dependencies — so any child state change re-created it and re-fired every panel's
   // fetch, collapsing all figures into their loading state at once.
-  const requestParams = useMemo(() => requestParamsFromCandidate(bc), [bc]);
+  const requestParams = useMemo(() => summaryRequestParams(bc, includeSheets), [bc, includeSheets]);
 
   // ONE deployment-summary fetch for the whole page. Each call runs a mixed-effects fit through
   // rpy2's embedded R, which is single-threaded per worker, so duplicate concurrent calls starve
@@ -512,6 +519,7 @@ function ClosedLoopSim() {
 
   return (
     <DatabaseLayout>
+      <LegibleText>
       <MDBox pt={3}>
         <Grid container spacing={2}>
           <Grid item xs={12}>
@@ -526,7 +534,8 @@ function ClosedLoopSim() {
                   </MDTypography>
                   <ChosenBandRecordLine status={bandRecord} hasBand={!!bc} />
                 </MDBox>
-                <MDBox display="flex" gap={1} alignItems="center">
+                <MDBox display="flex" gap={1} alignItems="center" flexWrap="wrap">
+                  <ClinicSheetsSummaryButton on={includeSheets} onToggle={onToggleSheets} />
                   <input ref={fileRef} type="file" accept="application/json,.json"
                     style={{ display: "none" }} onChange={onUpload} />
                   <MDButton size="small" variant="outlined" color="info"
@@ -569,7 +578,7 @@ function ClosedLoopSim() {
             <Grid item xs={12}>
               <Card sx={{ width: "100%" }}>
                 <MDBox p={3} textAlign="center">
-                  <MDTypography variant="h6" sx={{ fontSize: 15, color: "#777" }}>
+                  <MDTypography variant="h6" sx={{ fontSize: 15, color: "#5E5E5E" }}>
                     No band has been committed for this participant yet
                   </MDTypography>
                   <MDTypography variant="caption" color="text" display="block" mt={1}
@@ -734,17 +743,9 @@ function ClosedLoopSim() {
                   contactLabel={contactLabel} />
               </Grid>
 
-              {/* The printable record. It keeps the gate checklist and loses its own headline
-                  verdict and its own threshold cell, so the page cannot contain two answers. */}
-              <Grid item xs={12} id="cl-signoff">
-                <DeploySignoffCard participantUid={participant_uid} bandCandidate={bc}
-                  requestParams={requestParams} cutpoint={cutpoint} summary={summary}
-                  deploymentReport={deploymentReport} chosenBand={envelope}
-                  bandRecord={bandRecord} />
-              </Grid>
-
-              {/* CL-DBS SIMULATIONS, last, after the sign-off card (the PI, 2026-09-11: "add new
-                  card at bottom after deployment"). The controller run over this participant's
+              {/* CL-DBS SIMULATIONS, above the sign-off card (the PI, 2026-09-11: "add new card at
+                  bottom after deployment"; moved above the sign-off on his ruling of 2026-09-24).
+                  The controller run over this participant's
                   own recorded band power three ways: replayed as recorded (M0), with the loop
                   closed through the fitted response (M1, or M2 once a bend is established), and
                   with runs resampled for an interval (M3). Fetched after the report, which is what
@@ -754,10 +755,21 @@ function ClosedLoopSim() {
                   hemisphere={deploymentReport?.data?.manifest?.hemisphere}
                   contactLabel={contactLabel} bandCandidate={bc} />
               </Grid>
+
+              {/* THE SIGN-OFF CARD, LAST (the PI, 2026-09-24): the printable record a clinician signs
+                  comes after everything it summarises. It keeps the gate checklist and loses its
+                  own headline verdict and threshold cell, so the page cannot contain two answers. */}
+              <Grid item xs={12} id="cl-signoff">
+                <DeploySignoffCard participantUid={participant_uid} bandCandidate={bc}
+                  requestParams={requestParams} cutpoint={cutpoint} summary={summary}
+                  deploymentReport={deploymentReport} chosenBand={envelope}
+                  bandRecord={bandRecord} />
+              </Grid>
             </>
           )}
         </Grid>
       </MDBox>
+      </LegibleText>
     </DatabaseLayout>
   );
 }

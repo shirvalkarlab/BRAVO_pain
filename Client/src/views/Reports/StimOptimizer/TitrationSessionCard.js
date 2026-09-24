@@ -218,7 +218,7 @@ function BandStrip({ bands }) {
         return (
           <span key={x} title={`${x} Hz: ${reason}`}
             style={{ fontFamily: PAL.mono, fontSize: TYPE.num, whiteSpace: "nowrap",
-              color: out ? "#9A9A9A" : "#1A1A1A", textDecoration: out ? "line-through" : "none" }}>
+              color: out ? "#6E6E6E" : "#1A1A1A", textDecoration: out ? "line-through" : "none" }}>
             {x}
           </span>
         );

@@ -47,7 +47,7 @@ const FILL_WRONG = "rgba(230,159,0,0.25)";
 const FILL_FITTED = "rgba(108,117,125,0.10)";
 const FONT = { family: "Helvetica, Arial, sans-serif", size: 11, color: "#222" };
 const AXIS = { showgrid: false, zeroline: false, showline: true, linecolor: "#444", linewidth: 1,
-  ticks: "outside", ticklen: 3, tickcolor: "#444", tickfont: { size: 10 } };
+  ticks: "outside", ticklen: 3, tickcolor: "#444", tickfont: { size: 11 } };
 
 function modelLabel(name) {
   return { M0: "M0 · replay, power as recorded", M1: "M1 · loop closed, straight-line response",
@@ -121,7 +121,7 @@ function drawTrajectory(gd, sim, hemisphere) {
   const layout = {
     margin: { l: 58, r: 14, t: 8, b: 40 }, height: 380, font: FONT, hovermode: "x unified",
     uirevision: "cl-sim-traj", showlegend: true,
-    legend: { orientation: "h", y: 1.02, yanchor: "bottom", x: 0, font: { size: 10 } },
+    legend: { orientation: "h", y: 1.02, yanchor: "bottom", x: 0, font: { size: 11 } },
     xaxis: { ...AXIS, title: { text: "Minutes from the start of the stretch", standoff: 6 }, domain: [0, 1] },
     yaxis: { ...AXIS, domain: [0.56, 1], title: { text: `${hemisphere || ""} amplitude (mA)`.trim(), standoff: 8 },
       range: [P.amp_low_mA - 0.05 * (P.amp_high_mA - P.amp_low_mA), P.amp_high_mA + 0.05 * (P.amp_high_mA - P.amp_low_mA)] },
@@ -129,10 +129,10 @@ function drawTrajectory(gd, sim, hemisphere) {
     shapes: [hline(P.amp_low_mA, "y", "solid"), hline(P.amp_high_mA, "y", "solid"),
       hline(P.lower, "y2", "dash"), hline(P.upper, "y2", "dash")],
     annotations: [
-      { xref: "paper", x: 1, yref: "y", y: P.amp_high_mA, text: "upper limit", showarrow: false, xanchor: "right", yanchor: "bottom", font: { size: 9, color: "#444" } },
-      { xref: "paper", x: 1, yref: "y", y: P.amp_low_mA, text: "lower limit", showarrow: false, xanchor: "right", yanchor: "top", font: { size: 9, color: "#444" } },
-      { xref: "paper", x: 1, yref: "y2", y: P.upper, text: "upper threshold", showarrow: false, xanchor: "right", yanchor: "bottom", font: { size: 9, color: "#444" } },
-      { xref: "paper", x: 1, yref: "y2", y: P.lower, text: "lower threshold", showarrow: false, xanchor: "right", yanchor: "top", font: { size: 9, color: "#444" } },
+      { xref: "paper", x: 1, yref: "y", y: P.amp_high_mA, text: "upper limit", showarrow: false, xanchor: "right", yanchor: "bottom", font: { size: 11, color: "#444" } },
+      { xref: "paper", x: 1, yref: "y", y: P.amp_low_mA, text: "lower limit", showarrow: false, xanchor: "right", yanchor: "top", font: { size: 11, color: "#444" } },
+      { xref: "paper", x: 1, yref: "y2", y: P.upper, text: "upper threshold", showarrow: false, xanchor: "right", yanchor: "bottom", font: { size: 11, color: "#444" } },
+      { xref: "paper", x: 1, yref: "y2", y: P.lower, text: "lower threshold", showarrow: false, xanchor: "right", yanchor: "top", font: { size: 11, color: "#444" } },
     ],
   };
   Plotly.react(gd, traces, layout, PAL.MODEBAR);
@@ -175,12 +175,12 @@ function drawComparison(gd, sim) {
     uirevision: "cl-sim-compare", showlegend: false,
     yaxis: { ...AXIS, showline: false, ticks: "", categoryorder: "array",
       categoryarray: [...labels, "state changes per hour", "longest stretch at the upper limit"].reverse(),
-      tickfont: { size: 10.5 } },
+      tickfont: { size: 11 } },
     xaxis: { ...AXIS, domain: [0, 0.56], title: { text: "% of controller steps", standoff: 4 }, rangemode: "tozero" },
     xaxis2: { ...AXIS, domain: [0.62, 0.79], title: { text: "per hour", standoff: 4 }, rangemode: "tozero" },
     xaxis3: { ...AXIS, domain: [0.85, 1], title: { text: "minutes", standoff: 4 }, rangemode: "tozero" },
     annotations: [
-      { xref: "paper", yref: "paper", x: 0, y: 1.06, xanchor: "left", showarrow: false, font: { size: 10 },
+      { xref: "paper", yref: "paper", x: 0, y: 1.06, xanchor: "left", showarrow: false, font: { size: 11 },
         text: `<span style="color:${INK_M0}">○ M0 replay</span>   <span style="color:${INK_ACTIVE}">● ${act} loop closed</span>`
           + (sim.models.M3 ? `   <span style="color:${INK_ACTIVE}">— M3 interval, ${sim.models.M3.n_replicates} resampled runs</span>` : "") },
     ],
@@ -236,7 +236,7 @@ function drawDistributionAndCurve(gd, sim) {
       shapes.push({ type: "rect", xref: "x2", yref: "paper", x0: a, x1: b, y0: 0, y1: 1, fillcolor: FILL_WRONG,
         line: { width: 0 }, layer: "below" });
       annotations.push({ xref: "x2", yref: "paper", x: 0.5 * (a + b), y: 0.96, text: "power rises with current: positive feedback",
-        showarrow: false, font: { size: 9, color: PAL.warnText } });
+        showarrow: false, font: { size: 11, color: PAL.warnText } });
     }
     if (isNum(curve.peak_mA)) {
       shapes.push({ type: "line", xref: "x2", yref: "paper", x0: curve.peak_mA, x1: curve.peak_mA, y0: 0, y1: 1,
@@ -244,7 +244,7 @@ function drawDistributionAndCurve(gd, sim) {
     }
   } else {
     annotations.push({ xref: "x2 domain", yref: "y2 domain", x: 0.5, y: 0.5, showarrow: false,
-      font: { size: 10.5, color: PAL.neutral }, text: "no response curve stored yet" });
+      font: { size: 11, color: PAL.neutral }, text: "no response curve stored yet" });
   }
   const layout = {
     margin: { l: 52, r: 12, t: 24, b: 38 }, height: 230, font: FONT, uirevision: "cl-sim-dist", showlegend: false,
@@ -254,9 +254,9 @@ function drawDistributionAndCurve(gd, sim) {
     yaxis2: { ...AXIS, anchor: "x2", title: { text: "Power change from the lower limit", standoff: 6 } },
     shapes, annotations: [
       ...annotations,
-      { xref: "paper", yref: "paper", x: 0, y: 1.08, xanchor: "left", showarrow: false, font: { size: 10 },
+      { xref: "paper", yref: "paper", x: 0, y: 1.08, xanchor: "left", showarrow: false, font: { size: 11 },
         text: `<span style="color:${INK_M0}">- - M0</span>  <span style="color:${INK_ACTIVE}">— ${act}</span>  where the amplitude sits` },
-      { xref: "paper", yref: "paper", x: 0.56, y: 1.08, xanchor: "left", showarrow: false, font: { size: 10 },
+      { xref: "paper", yref: "paper", x: 0.56, y: 1.08, xanchor: "left", showarrow: false, font: { size: 11 },
         text: `the response the loop is closed through${curve && curve.kind !== "none" ? " (grey: currents the fit rests on)" : ""}` },
     ],
   };

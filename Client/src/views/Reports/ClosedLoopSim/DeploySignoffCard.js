@@ -44,19 +44,19 @@ function GateRow({ gate }) {
         <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold", color: s.color }}>
           {gate.label}
           {gate.necessary ? (
-            <span style={{ fontSize: 8.5, fontWeight: "bold", color: PAL.neutral,
+            <span style={{ fontSize: 11, fontWeight: "bold", color: PAL.neutral,
               marginLeft: 6, verticalAlign: "middle", letterSpacing: "0.04em" }}>
               REQUIRED
             </span>
           ) : null}
           {state === "indeterminate" ? (
-            <span style={{ fontSize: 8.5, fontWeight: "bold", color: PAL.indeterminate,
+            <span style={{ fontSize: 11, fontWeight: "bold", color: PAL.indeterminate,
               marginLeft: 6, verticalAlign: "middle", letterSpacing: "0.04em" }}>
               NOT TESTED
             </span>
           ) : null}
         </MDTypography>
-        <MDTypography variant="caption" display="block" sx={{ fontSize: 10, color: "#777" }}>
+        <MDTypography variant="caption" display="block" sx={{ fontSize: 11, color: "#5E5E5E" }}>
           {gate.detail}
         </MDTypography>
       </MDBox>
@@ -88,7 +88,7 @@ function ReportCaveats({ caveats }) {
   const rows = Array.isArray(caveats) ? caveats : null;
   if (!rows || rows.length === 0) {
     return (
-      <MDTypography variant="caption" display="block" sx={{ fontSize: 10, color: "#777", mt: 0.4 }}>
+      <MDTypography variant="caption" display="block" sx={{ fontSize: 11, color: "#5E5E5E", mt: 0.4 }}>
         {rows
           ? "This report lists no caveats of its own. Every number it prints carries an "
             + "uncertainty interval, and no warning is outstanding."
@@ -101,15 +101,15 @@ function ReportCaveats({ caveats }) {
     <MDBox mt={0.5}>
       {rows.map((c, i) => (
         <MDBox key={`cav${i}`} display="flex" alignItems="flex-start" mb={0.45}>
-          <MDTypography variant="caption" sx={{ fontSize: 8.5, fontWeight: "bold",
+          <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold",
             letterSpacing: 0.3, color: CAVEAT_INK[c.severity] || PAL.neutral, mt: 0.15,
             minWidth: "44px" }}>
             {String(c.severity || "").toUpperCase()}
           </MDTypography>
-          <MDTypography variant="caption" sx={{ fontSize: 10, color: "#3A3A3A", flex: "1 1 auto" }}>
+          <MDTypography variant="caption" sx={{ fontSize: 11, color: "#3A3A3A", flex: "1 1 auto" }}>
             {c.text}
             {c.card ? (
-              <i style={{ color: "#888" }}>{`  (${c.card})`}</i>
+              <i style={{ color: "#5E5E5E" }}>{`  (${c.card})`}</i>
             ) : null}
           </MDTypography>
         </MDBox>
@@ -121,8 +121,8 @@ function ReportCaveats({ caveats }) {
 function KV({ k, v }) {
   return (
     <MDBox display="flex" justifyContent="space-between" py={0.25}>
-      <MDTypography variant="caption" sx={{ fontSize: 10.5, color: "#999" }}>{k}</MDTypography>
-      <MDTypography variant="caption" sx={{ fontSize: 10.5, fontWeight: "bold", textAlign: "right" }}>{v}</MDTypography>
+      <MDTypography variant="caption" sx={{ fontSize: 11.5, color: "#5E5E5E" }}>{k}</MDTypography>
+      <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold", textAlign: "right" }}>{v}</MDTypography>
     </MDBox>
   );
 }
@@ -134,6 +134,15 @@ function KV({ k, v }) {
  * label; so this block is the one that says which band was chosen, when, by whom, whether the
  * server holds that record, and which grid it was picked from.
  */
+/** Which ratings the summary used (the PI, 2026-09-24), in words: REDCap alone, or with the clinic
+ *  sheets and how many, or the sheets asked for and why none could be added. */
+export function ratingsUsedText(block) {
+  const b = block || {};
+  if (!b.included) return "REDCap reports only (clinic-sheet ratings off)";
+  if (b.reason) return `REDCap reports only: the clinic sheets were asked for, but ${b.reason}`;
+  return `REDCap reports plus ${b.n_added} clinic-sheet rating${b.n_added === 1 ? "" : "s"}`;
+}
+
 export function ChosenBandBlock({ bandCandidate, chosenBand, bandRecord }) {
   const bc = bandCandidate || {};
   if (!bc.contact) return null;
@@ -147,7 +156,7 @@ export function ChosenBandBlock({ bandCandidate, chosenBand, bandRecord }) {
   const grid = gridSettingsLine(bc.grid_settings);
   return (
     <MDBox mt={1.2}>
-      <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: "#999" }}>
+      <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: "#5E5E5E" }}>
         THE BAND SIGNED FOR
       </MDTypography>
       <KV k="Band" v={name} />
@@ -329,11 +338,11 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
     <MDBox className="cl-signoff-stale" mb={1} p={1}
       sx={{ borderRadius: "4px", backgroundColor: PAL.warnFill, border: `1px solid ${PAL.warnText}` }}>
       <MDTypography variant="caption" sx={{
-        fontSize: 10, fontWeight: "bold", letterSpacing: 0.3, color: PAL.warnText,
+        fontSize: 11, fontWeight: "bold", letterSpacing: 0.3, color: PAL.warnText,
       }}>
         THIS RECORD DESCRIBES AN EARLIER ANALYSIS
       </MDTypography>
-      <MDTypography variant="caption" display="block" sx={{ fontSize: 9.5, color: PAL.warnText }}>
+      <MDTypography variant="caption" display="block" sx={{ fontSize: 11, color: PAL.warnText }}>
         {computedAt
           ? `The analysis below was computed at ${new Date(computedAt).toLocaleString()} and the `
             + "settings on the page have changed since. Press Recompute before signing or "
@@ -345,7 +354,7 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
         <MDBox component="ul" sx={{ pl: 2, my: 0.3 }}>
           {staleWhy.map((r) => (
             <MDTypography key={r} component="li" variant="caption" display="list-item"
-              sx={{ fontSize: 9, color: PAL.warnText }}>
+              sx={{ fontSize: 11, color: PAL.warnText }}>
               {r}
             </MDTypography>
           ))}
@@ -401,7 +410,7 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                 statistical gate counts stay, labelled as evidence. */}
             <MDBox p={1} mb={1.5} sx={{ borderRadius: "6px",
               backgroundColor: deviceOk ? PAL.passFill : PAL.warnFill }}>
-              <MDTypography variant="caption" sx={{ display: "block", fontSize: 10,
+              <MDTypography variant="caption" sx={{ display: "block", fontSize: 11,
                 fontWeight: "bold", letterSpacing: 0.4,
                 color: deviceOk ? PAL.pass : PAL.warnText }}>
                 THE VERDICT FOR THIS RECORD IS THE RECONCILED HEADER AT THE TOP OF THIS SHEET
@@ -419,7 +428,7 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                       + `${_nUnknown ? `, ${_nUnknown} that could not be evaluated` : ""}. `
                       + "This sheet is not a record of an authorised setting."}
               </MDTypography>
-              <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5,
+              <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5,
                 color: "#666", mt: 0.3 }}>
                 {`Statistical gates, as evidence rather than as permission: `
                   + `${data.n_gates_passed} of ${data.n_gates} passed`}
@@ -445,7 +454,7 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
             <Grid container spacing={2}>
               {/* LEFT: identity + threshold + evidence */}
               <Grid item xs={12} md={6}>
-                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: "#999" }}>
+                <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: "#5E5E5E" }}>
                   DEVICE TARGET
                 </MDTypography>
                 {id ? (
@@ -455,6 +464,7 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                     <KV k="Band" v={`${fmt(id.band_lo_hz, 1)}–${fmt(id.band_hi_hz, 1)} Hz`} />
                     <KV k="Center (FFT-snapped)" v={`${fmt(id.center_freq_hz, 1)} → ${fmt(id.snapped_center_freq_hz, 2)} Hz`} />
                     <KV k="PRO metric / binarization" v={`${id.pro_metric} / ${id.binarization}`} />
+                    <KV k="Pain ratings used" v={ratingsUsedText(id.clinic_sheet_ratings)} />
                     <KV k="Polarity / suggested mode" v={`${dc.polarity} / ${dc.suggested_mode || "—"}`} />
                   </>
                 ) : null}
@@ -474,7 +484,7 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                 <MDBox mt={1.2} p={1.2} sx={{ borderRadius: "6px",
                   backgroundColor: PAL.neutralFill,
                   border: `1px solid ${PAL.neutralBorder}` }}>
-                  <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold",
+                  <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold",
                     letterSpacing: 0.4, color: PAL.neutral }}>
                     VALUES TO TRANSCRIBE
                   </MDTypography>
@@ -507,24 +517,24 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                   <MDBox mt={1.2} p={1.0} sx={{ borderRadius: "6px",
                     backgroundColor: dc.ramp.posture === "conservative" ? PAL.warnFill : PAL.passFill,
                     border: `1px solid ${dc.ramp.posture === "conservative" ? PAL.warnBorder : (PAL.passBorder || "#009E7344")}` }}>
-                    <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold",
+                    <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold",
                       color: dc.ramp.posture === "conservative" ? PAL.warnText : PAL.pass }}>
                       {`RAMP GUIDANCE — ${String(dc.ramp.posture).toUpperCase()} (advisory)`}
                     </MDTypography>
-                    <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 10.5, mt: 0.3 }}>
+                    <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 11.5, mt: 0.3 }}>
                       {dc.ramp.transition_note}
                     </MDTypography>
-                    <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 10, mt: 0.3 }}>
+                    <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 11, mt: 0.3 }}>
                       {`Ramp up: ${dc.ramp.ramp_up_hint}. Ramp down: ${dc.ramp.ramp_down_hint}.`}
                     </MDTypography>
-                    <MDTypography variant="caption" display="block" sx={{ fontSize: 9, color: "#777", mt: 0.3, fontStyle: "italic" }}>
+                    <MDTypography variant="caption" display="block" sx={{ fontSize: 11, color: "#5E5E5E", mt: 0.3, fontStyle: "italic" }}>
                       {dc.ramp.reason}
                     </MDTypography>
                   </MDBox>
                 ) : null}
 
                 <MDBox mt={1.2}>
-                  <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: "#999" }}>
+                  <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: "#5E5E5E" }}>
                     EVIDENCE
                   </MDTypography>
                   {ev ? (
@@ -565,14 +575,14 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
 
               {/* RIGHT: gates + caveats */}
               <Grid item xs={12} md={6}>
-                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: "#999" }}>
+                <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: "#5E5E5E" }}>
                   DEPLOYMENT GATES
                 </MDTypography>
                 <MDBox mb={1.2}>
                   {(data.gates || []).map((g) => <GateRow key={g.key} gate={g} />)}
                 </MDBox>
 
-                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.warnText }}>
+                <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: PAL.warnText }}>
                   CAVEATS
                 </MDTypography>
                 {/* THE DEPLOYMENT REPORT'S OWN CAVEATS (panel D item 3, 2026-09-22): every number
@@ -586,14 +596,14 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                 <ReportCaveats caveats={_rep && _rep.available ? _rep.caveats : null} />
                 {(data.caveats || []).length > 0 ? (
                   <MDTypography variant="caption" display="block"
-                    sx={{ fontSize: 9.5, fontWeight: "bold", color: "#999", mt: 0.8 }}>
+                    sx={{ fontSize: 11, fontWeight: "bold", color: "#5E5E5E", mt: 0.8 }}>
                     FROM THE SEPARATE STATISTICAL SUMMARY
                   </MDTypography>
                 ) : null}
                 <MDBox component="ul" sx={{ pl: 2, mt: 0.5, mb: 0 }}>
                   {(data.caveats || []).map((c, i) => (
                     <MDTypography key={i} component="li" variant="caption"
-                      sx={{ fontSize: 10, color: "#555", display: "list-item", mb: 0.3 }}>
+                      sx={{ fontSize: 11, color: "#555", display: "list-item", mb: 0.3 }}>
                       {c}
                     </MDTypography>
                   ))}
@@ -607,18 +617,18 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                 section whose figure was not on the page is named as missing rather than left out. */}
             {snapshots ? (
               <MDBox className="cl-signoff-figures" mt={2} pt={1.5} sx={{ borderTop: "1px solid #e0e0e0" }}>
-                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: "#999" }}>
+                <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: "#5E5E5E" }}>
                   FIGURES AS DRAWN WHEN THIS RECORD WAS MADE
                   {snapshots.captured_at ? ` — ${new Date(snapshots.captured_at).toLocaleString()}` : ""}
                 </MDTypography>
                 {snapshots.error ? (
-                  <MDTypography variant="caption" display="block" sx={{ fontSize: 10, color: PAL.fail }}>
+                  <MDTypography variant="caption" display="block" sx={{ fontSize: 11, color: PAL.fail }}>
                     {snapshots.error}
                   </MDTypography>
                 ) : null}
                 {snapshots.figures.map((f) => (
                   <MDBox key={`${f.section_id}-${f.index}`} mt={1} sx={{ pageBreakInside: "avoid" }}>
-                    <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, fontWeight: "bold" }}>
+                    <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5, fontWeight: "bold" }}>
                       {f.n_in_section > 1 ? `${f.title} (${f.index} of ${f.n_in_section})` : f.title}
                     </MDTypography>
                     {/* Shown at the figure's own on-screen size. The PNG carries two pixels per
@@ -631,12 +641,12 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                 ))}
                 {snapshots.missing.length ? (
                   <MDBox mt={1}>
-                    <MDTypography variant="caption" display="block" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.warnText }}>
+                    <MDTypography variant="caption" display="block" sx={{ fontSize: 11, fontWeight: "bold", color: PAL.warnText }}>
                       NOT ON THIS RECORD
                     </MDTypography>
                     {snapshots.missing.map((m) => (
                       <MDTypography key={m.section_id + m.reason} variant="caption" display="block"
-                        sx={{ fontSize: 10, color: PAL.warnText }}>
+                        sx={{ fontSize: 11, color: PAL.warnText }}>
                         {`${m.title}: ${m.reason}`}
                       </MDTypography>
                     ))}

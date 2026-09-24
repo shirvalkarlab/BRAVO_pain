@@ -53,7 +53,7 @@ const CHECK_MARK = "✓";
 const CROSS_MARK = "✗";
 
 function CheckRow({ label, passes, detail }) {
-  const color = passes === true ? "#1B7A3D" : (passes === false ? PAL.warnText : "#8A8A8A");
+  const color = passes === true ? "#1B7A3D" : (passes === false ? PAL.warnText : "#5E5E5E");
   const mark = passes === true ? CHECK_MARK : (passes === false ? CROSS_MARK : "—");
   return (
     <MDBox display="flex" alignItems="baseline" gap={0.8} sx={{ mt: 0.3 }}>
@@ -121,8 +121,8 @@ function CurrentSurfaceHeatmap({ divId, surface, inForceLeft, inForceRight, star
       // A short title on the side: the long two-line title this first shipped with was placed
       // ABOVE the bar, and Plotly's automatic margin then took 222 of the 340 px for it, leaving
       // the plot 70 px wide (measured live, 2026-09-14). The score's meaning is in the caption.
-      colorbar: { title: { text: barTitle, side: "right", font: { size: 10 } },
-        thickness: 12, len: 0.9, tickfont: { size: 10 } },
+      colorbar: { title: { text: barTitle, side: "right", font: { size: 11 } },
+        thickness: 12, len: 0.9, tickfont: { size: 11 } },
       xgap: 1, ygap: 1,
       hovertemplate: `left %{x:.2f} mA, right %{y:.2f} mA<br>${surface.pain_reference != null ? "predicted rating" : "score"} %{z:.2f}<extra></extra>`,
     });

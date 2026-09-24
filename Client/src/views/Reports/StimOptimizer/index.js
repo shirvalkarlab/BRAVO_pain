@@ -26,6 +26,7 @@
 * the two-stage plan card, and the titration-session card.
 */
 
+import LegibleText from "views/Reports/legibleText";
 import { useParams } from "react-router-dom";
 
 import { Card } from "@mui/material";
@@ -154,6 +155,7 @@ export default function StimOptimizer() {
 
   return (
     <DatabaseLayout>
+      <LegibleText>
       <MDBox pt={3}>
         <MDBox display="grid" sx={{ rowGap: "16px" }}>
 
@@ -238,6 +240,7 @@ export default function StimOptimizer() {
           </MDBox>
         </MDBox>
       </MDBox>
+      </LegibleText>
     </DatabaseLayout>
   );
 }

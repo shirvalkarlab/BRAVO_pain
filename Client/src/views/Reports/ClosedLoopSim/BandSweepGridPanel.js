@@ -112,7 +112,7 @@ function countWord(n) {
 
 /** Near-black on a pale cell, white on a saturated one, so the value reads on every fill. */
 function inkFor(v, center, half) {
-  if (v == null || !Number.isFinite(Number(v))) return "#9A9A9A";
+  if (v == null || !Number.isFinite(Number(v))) return "#6E6E6E";   // the placeholder where a cell has no value: text, so legible (2026-09-24)
   const [r, g, b] = divergingRgb(v, center, half);
   const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
   return luminance > 0.62 ? "#1A1A1A" : "#FFFFFF";
@@ -161,11 +161,11 @@ function ScaleBar({ center, half, lo, mid, hi }) {
   const stops = [-1, -0.5, 0, 0.5, 1].map((t) => diverging(center + t * half, center, half));
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-      <span style={{ fontFamily: PAL.mono, fontSize: 10 }}>{lo}</span>
+      <span style={{ fontFamily: PAL.mono, fontSize: 11 }}>{lo}</span>
       <span style={{ display: "inline-block", width: 72, height: 9, borderRadius: 2,
         background: `linear-gradient(90deg, ${stops.join(", ")})` }} />
-      <span style={{ fontFamily: PAL.mono, fontSize: 10 }}>{hi}</span>
-      <span style={{ color: "#8A8A8A", fontSize: 10 }}>{`(${mid} = no relationship)`}</span>
+      <span style={{ fontFamily: PAL.mono, fontSize: 11 }}>{hi}</span>
+      <span style={{ color: "#5E5E5E", fontSize: 11 }}>{`(${mid} = no relationship)`}</span>
     </span>
   );
 }
@@ -209,14 +209,14 @@ function SettingsFinePrint({ gs }) {
   if (!line) return null;
   const built = gridBuiltText(gs);
   return (
-    <MDTypography variant="caption" sx={{ fontSize: 10, color: "#8A8A8A", textAlign: "right",
+    <MDTypography variant="caption" sx={{ fontSize: 11, color: "#5E5E5E", textAlign: "right",
       lineHeight: 1.35, maxWidth: "62ch" }}>
       {line}{built ? <><br />{built}</> : null}
     </MDTypography>
   );
 }
 
-const HEAD = { fontSize: 10, fontWeight: 700, letterSpacing: 0.4, color: "#8A8A8A",
+const HEAD = { fontSize: 11, fontWeight: 700, letterSpacing: 0.4, color: "#5E5E5E",
   textTransform: "uppercase", lineHeight: 1.2, textAlign: "center", paddingBottom: 4 };
 const CELL_H = 19;
 
@@ -353,20 +353,20 @@ export default function BandSweepGridPanel({ grid, participantUid, committed, on
           const id = `cl-band-${String(channel)}-${row.band_center_hz}`;
           return [
             <MDTypography key={`${id}-lab`} variant="caption" component="label" htmlFor={id}
-              sx={{ textAlign: "right", fontFamily: PAL.mono, fontSize: 10.5, paddingRight: "4px",
+              sx={{ textAlign: "right", fontFamily: PAL.mono, fontSize: 11.5, paddingRight: "4px",
                 color: on ? PAL.accent : "#6A6A6A", fontWeight: on ? 700 : 400, cursor: "pointer" }}>
               {`${fmtHz(row.band_center_hz)} Hz`}
             </MDTypography>,
             <div key={`${id}-r`} title={corrTip(row)} style={{ height: CELL_H, borderRadius: 2,
               background: diverging(row.pearson_r, 0, 1), display: "flex", alignItems: "center",
-              justifyContent: "center", fontFamily: PAL.mono, fontSize: 10.5,
+              justifyContent: "center", fontFamily: PAL.mono, fontSize: 11.5,
               color: inkFor(row.pearson_r, 0, 1), outline: on ? `2px solid ${PAL.accent}` : "none",
               outlineOffset: -1 }}>
               {row.pearson_r == null ? "" : fmtNum(row.pearson_r, 2)}
             </div>,
             <div key={`${id}-a`} title={aucTip(row)} style={{ height: CELL_H, borderRadius: 2,
               background: diverging(row.auc, 0.5, 0.5), display: "flex", alignItems: "center",
-              justifyContent: "center", fontFamily: PAL.mono, fontSize: 10.5,
+              justifyContent: "center", fontFamily: PAL.mono, fontSize: 11.5,
               color: inkFor(row.auc, 0.5, 0.5), outline: on ? `2px solid ${PAL.accent}` : "none",
               outlineOffset: -1 }}>
               {row.auc == null ? "" : fmtNum(row.auc, 2)}
@@ -388,7 +388,7 @@ export default function BandSweepGridPanel({ grid, participantUid, committed, on
       </MDBox>
 
       <MDBox display="flex" gap={2} flexWrap="wrap" alignItems="center" mt={1.25}
-        sx={{ fontSize: 10.5, color: "#6A6A6A" }}>
+        sx={{ fontSize: 11.5, color: "#6A6A6A" }}>
         <ScaleBar center={0} half={1} lo="−1" mid="0" hi="+1" />
         <ScaleBar center={0.5} half={0.5} lo="0" mid="0.5" hi="1" />
         <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>

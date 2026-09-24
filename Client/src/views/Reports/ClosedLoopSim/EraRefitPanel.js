@@ -152,7 +152,7 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
       });
       annotations.push({ x: pooled.auc_hi, y: yHi, xref: "x", yref: "y", yanchor: "bottom",
         xanchor: "left", text: "shaded = pooled 95% CI", showarrow: false,
-        font: { size: 8.5, color: PAL.accent } });
+        font: { size: 11, color: PAL.accent } });
     }
     // (1) chance line at AUC = 0.5.
     traces.push({
@@ -188,7 +188,7 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
         if (reversed) {
           annotations.push({ x: r.era.auc, y, xref: "x", yref: "y", yanchor: "bottom",
             xanchor: "center", text: "reversed", showarrow: false,
-            font: { size: 8.5, color: PAL.fail }, yshift: 8 });
+            font: { size: 11, color: PAL.fail }, yshift: 8 });
         }
       } else {
         // Non-estimable era (audit C7): do NOT place a glyph on the chance line — that reads as
@@ -196,7 +196,7 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
         // scale, so the row stays visible without encoding absence as a meaningful AUC value.
         annotations.push({ x: xLeft, y, xref: "x", yref: "y", xanchor: "left", yanchor: "middle",
           text: "n/a (insufficient samples)", showarrow: false,
-          font: { size: 9, color: PAL.neutral, style: "italic" } });
+          font: { size: 11, color: PAL.neutral, style: "italic" } });
       }
     });
 
@@ -208,9 +208,9 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
     const layout = {
       margin: { l: 64, r: 14, t: 10, b: 40 }, height: 220,
       xaxis: { title: { text: "AUC (95% clustered-bootstrap CI)", font: { size: 11 } },
-        range: [xLeft, 1.02], zeroline: false, tickfont: { size: 10 }, dtick: 0.1 },
+        range: [xLeft, 1.02], zeroline: false, tickfont: { size: 11 }, dtick: 0.1 },
       yaxis: { tickmode: "array", tickvals: rows.map((_, i) => yOf(i)), ticktext: tickText,
-        range: [yLo, yHi], tickfont: { size: 10.5 }, automargin: true },
+        range: [yLo, yHi], tickfont: { size: 11 }, automargin: true },
       annotations, showlegend: false,
     };
     Plotly.react(ref.current, traces, layout, PAL.MODEBAR);
@@ -251,7 +251,7 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
                 </MDTypography>
               </MDBox>
             ) : null}
-            <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 9, mt: 0.6 }}>
+            <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 11, mt: 0.6 }}>
               {`Eras: OFF < ${data.thresholds_mA.off_max} mA · LOW ≤ ${data.thresholds_mA.low_max} mA · HIGH above. `
                 + "Same era boundaries as the stim-stability LRT."}
             </MDTypography>

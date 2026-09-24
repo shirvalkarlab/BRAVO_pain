@@ -40,7 +40,7 @@ export default function PanelStaleNote({ stale, staleReasons, loading, onRecompu
       <MDBox flex="1 1 auto">
         {stale ? (
           <MDTypography variant="caption" display="block"
-            sx={{ fontSize: 10, color: PAL.warnText }}>
+            sx={{ fontSize: 11, color: PAL.warnText }}>
             {"This figure is the last completed run for this panel. "}
             {reasons.length
               ? reasons.join(" ")
@@ -49,7 +49,7 @@ export default function PanelStaleNote({ stale, staleReasons, loading, onRecompu
         ) : null}
         {notKept ? (
           <MDTypography variant="caption" display="block"
-            sx={{ fontSize: 9.5, color: PAL.warnText }}>
+            sx={{ fontSize: 11, color: PAL.warnText }}>
             {`This panel's result was not kept in memory: ${notKept}`}
           </MDTypography>
         ) : null}
@@ -57,7 +57,7 @@ export default function PanelStaleNote({ stale, staleReasons, loading, onRecompu
       {stale && onRecompute ? (
         <MDBox flex="0 0 auto">
           <MDButton size="small" variant="text" color="warning" onClick={onRecompute}
-            sx={{ textTransform: "none", fontSize: 10.5, minHeight: 0, py: 0.2 }}>
+            sx={{ textTransform: "none", fontSize: 11.5, minHeight: 0, py: 0.2 }}>
             Recompute this panel
           </MDButton>
         </MDBox>
