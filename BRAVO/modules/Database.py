@@ -184,6 +184,14 @@ def extractParticipantInformation(participant_uid, deidentified=False):
 
     return ParticipantInfo
 
+def _already_on_tablet(source, check_files):
+    """Whether the tablet already holds this session file. A file with no `hashed_id` cannot be in the
+    tablet's list; reading it with [] raised KeyError and stopped the whole context for RCS08
+    (2026-09-25)."""
+    hashed = (getattr(source, "metadata", None) or {}).get("hashed_id")
+    return hashed is not None and hashed in check_files
+
+
 def extractParticipantContext(participant_uid, check_files=[], deidentified=False):
     Participant = models.Participant.find(uid=participant_uid)
     ParticipantContext = list()
@@ -207,7 +215,7 @@ def extractParticipantContext(participant_uid, check_files=[], deidentified=Fals
 
         for n in range(len(SourceFiles)):
             source = SourceFiles[n]
-            if source.metadata["hashed_id"] in check_files:
+            if _already_on_tablet(source, check_files):
                 Context = {
                     "Id": source.uid, "OnlineFile": True, "HashedId": source.metadata["hashed_id"],
                 }
