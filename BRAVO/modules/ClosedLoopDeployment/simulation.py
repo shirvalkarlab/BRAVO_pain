@@ -36,6 +36,7 @@ It gates nothing. `gates_nothing` is on every payload and no verdict on the page
 """
 from __future__ import annotations
 
+import logging
 import math
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -111,6 +112,295 @@ def _bank_dg(bank, x):
     d_quad = np.where(has_post & (x > np.where(has_post, bank["peak"], 0.0)),
                       np.where(has_post, bank["post"], 0.0), d_quad)
     return np.where(bank["kind"] == 0, 0.0, np.where(bank["kind"] == 1, bank["slope"], d_quad))
+
+
+# --------------------------------------------------------------------------------------------
+# The controller loop itself, one time step at a time, K replicates at once
+# --------------------------------------------------------------------------------------------
+def _run_controller_loop_numpy(bank, p, a_obs, alpha, dt, upper, lower, amp_low, amp_high,
+                               amp_init, rate_up, rate_down, onset_steps, blank_steps,
+                               target_hi, target_lo):
+    """Step the Dual Threshold controller once per sample, K replicates in lockstep: the plant
+    (`_bank_g`, decision 15's offset formulation), the onset run, the detection blanking, the ramp
+    rate. `_run_controller_loop_kernel` performs the SAME operations in the SAME order, replicate
+    by replicate, compiled with numba (speed-up item 4, decision 269's pattern); see
+    `_run_controller_loop` for the choice and `tests/test_simulation_compiled_controller.py` for
+    the equality proof. Unlike the design rule's filter, nothing here sums across replicates
+    inside the loop, so no pairwise-summation kernel is needed to match: every step is elementwise,
+    and an elementwise numpy operation gives the identical bit pattern as the same arithmetic run
+    one replicate at a time, because IEEE 754 gives every element its own, independent result."""
+    K = bank["K"]
+    n = int(p.size)
+    amp = np.full(K, float(amp_init))
+    delta = np.zeros(K)
+    adopted = np.full(K, _BETWEEN, dtype=int)
+    pending = np.full(K, _NONE, dtype=int)
+    pending_run = np.zeros(K, dtype=int)
+    blank_left = np.zeros(K, dtype=int)
+    n_trans = np.zeros(K, dtype=int)
+    n_onset_supp = np.zeros(K, dtype=int)
+    n_blank_supp = np.zeros(K, dtype=int)
+    wrong_side_steps = np.zeros(K, dtype=int)
+    n_missing = 0
+
+    amp_out = np.empty((K, n))
+    p_out = np.empty((K, n))
+    state_out = np.empty((K, n), dtype=int)
+
+    for i in range(n):
+        pi = p[i]
+        if math.isnan(pi):
+            # A missing estimate is not a crossing: hold, as the replay does, and hold delta too.
+            n_missing += 1
+            pending[:] = _NONE
+            pending_run[:] = 0
+            blank_left = np.maximum(blank_left - 1, 0)
+            state_out[:, i] = adopted
+            amp_out[:, i] = amp
+            p_out[:, i] = np.nan
+            continue
+
+        ao = a_obs[i] if np.isfinite(a_obs[i]) else amp
+        target_delta = _bank_g(bank, amp) - _bank_g(bank, ao)
+        delta = delta + (target_delta - delta) * alpha
+        p_sim = pi + delta
+        raw = np.where(p_sim > upper, _ABOVE, np.where(p_sim < lower, _BELOW, _BETWEEN))
+
+        same = raw == adopted
+        pending = np.where(same, _NONE, pending)
+        pending_run = np.where(same, 0, pending_run)
+        cont = (~same) & (pending == raw)
+        pending_run = np.where(cont, pending_run + 1, pending_run)
+        fresh = (~same) & (~cont)
+        pending = np.where(fresh, raw, pending)
+        pending_run = np.where(fresh, 1, pending_run)
+        ready = (~same) & (pending_run >= onset_steps)
+        blocked = ready & (blank_left > 0)
+        adopt = ready & ~blocked
+        n_blank_supp += blocked.astype(int)
+        n_onset_supp += ((~same) & (~ready)).astype(int)
+        adopted = np.where(adopt, raw, adopted)
+        n_trans += adopt.astype(int)
+        blank_left = np.where(adopt, blank_steps, blank_left)
+        pending = np.where(adopt, _NONE, pending)
+        pending_run = np.where(adopt, 0, pending_run)
+        blank_left = np.maximum(blank_left - 1, 0)
+
+        target = np.where(adopted == _ABOVE, target_hi, np.where(adopted == _BELOW, target_lo, amp))
+        step = np.clip(target - amp, -rate_down * dt, rate_up * dt)
+        amp = np.clip(amp + step, amp_low, amp_high)
+
+        wrong_side_steps += (_bank_dg(bank, amp) > 0).astype(int)
+        state_out[:, i] = adopted
+        amp_out[:, i] = amp
+        p_out[:, i] = p_sim
+
+    return amp_out, p_out, state_out, n_trans, n_onset_supp, n_blank_supp, wrong_side_steps, n_missing
+
+
+# SPEED-UP ITEM 4 (the PI, 2026-09-25; `artifacts/research_2026-09-25_options/06_remaining_speed_ups.md`
+# #4; decision 269's pattern applied here). The loop above does about 15 small array operations per
+# sample, all of them ELEMENTWISE across the K replicates: unlike the design rule's filter, nothing
+# here sums across replicates inside the loop, so an elementwise numpy operation and the same
+# arithmetic run one replicate at a time in a scalar loop give the identical bit pattern -- no
+# pairwise-sum kernel is needed to match a numpy reduction, because there is no reduction inside
+# this loop (the reductions over time -- frac_time_above, mean_amplitude_mA and the rest -- run in
+# plain numpy AFTER the loop, on the arrays it filled, unchanged, so they inherit numpy's own
+# reduction order automatically). The compiled loop below performs the SAME operations in the SAME
+# order, replicate by replicate; `tests/test_simulation_compiled_controller.py` holds it equal to
+# the numpy loop on constructed series exercising every curve kind (none, linear, the quadratic
+# both sides of its peak), gaps in the power and the amplitude, and every controller branch (onset
+# suppression, blanking, both transition directions), and holds `simulate_series` and `run_models`
+# equal too. `COMPILED_CONTROLLER = False` forces the numpy loop. NO ON-DISK CACHE, as decision 269
+# ruled for the design rule's filter (a cached recursive function crashed the process under the
+# server's libraries); this loop is not recursive, but the choice is kept the same here rather than
+# assumed safe for an untested case. Each worker compiles once, on its first simulation.
+try:
+    from numba import njit as _njit
+    # numba logs its own type checking at DEBUG, and the server logs at DEBUG (decision 269: 38,760
+    # lines on the design rule's first fit); this is the same process-wide logger the design rule
+    # quiets, so the call here is a no-op once that module has run and the one that matters if this
+    # module compiles first.
+    logging.getLogger("numba").setLevel(logging.WARNING)
+
+    @_njit(cache=False)
+    def _run_controller_loop_kernel(kind, slope, a_coef, b_coef, peak, post, p, a_obs, alpha, dt,
+                                    upper, lower, amp_low, amp_high, amp_init, rate_up, rate_down,
+                                    onset_steps, blank_steps, target_hi, target_lo):
+        K = slope.size
+        n = p.size
+        amp = np.full(K, amp_init)
+        delta = np.zeros(K)
+        adopted = np.full(K, _BETWEEN, dtype=np.int64)
+        pending = np.full(K, _NONE, dtype=np.int64)
+        pending_run = np.zeros(K, dtype=np.int64)
+        blank_left = np.zeros(K, dtype=np.int64)
+        n_trans = np.zeros(K, dtype=np.int64)
+        n_onset_supp = np.zeros(K, dtype=np.int64)
+        n_blank_supp = np.zeros(K, dtype=np.int64)
+        wrong_side_steps = np.zeros(K, dtype=np.int64)
+        n_missing = 0
+
+        amp_out = np.empty((K, n))
+        p_out = np.empty((K, n))
+        state_out = np.empty((K, n), dtype=np.int64)
+
+        has_post = np.zeros(K, dtype=np.bool_)
+        peak0 = np.zeros(K)
+        post0 = np.zeros(K)
+        gp = np.zeros(K)
+        for k in range(K):
+            hp = np.isfinite(peak[k]) and np.isfinite(post[k])
+            has_post[k] = hp
+            pk = peak[k] if hp else 0.0
+            peak0[k] = pk
+            po = post[k] if hp else 0.0
+            post0[k] = po
+            gp[k] = a_coef[k] * pk * pk + b_coef[k] * pk
+
+        for i in range(n):
+            pi = p[i]
+            if np.isnan(pi):
+                # A missing estimate is not a crossing: hold, as the replay does, and hold delta too.
+                n_missing += 1
+                for k in range(K):
+                    pending[k] = _NONE
+                    pending_run[k] = 0
+                    bl = blank_left[k] - 1
+                    blank_left[k] = bl if bl > 0 else 0
+                    state_out[k, i] = adopted[k]
+                    amp_out[k, i] = amp[k]
+                    p_out[k, i] = np.nan
+                continue
+
+            a_i = a_obs[i]
+            a_finite = np.isfinite(a_i)
+            for k in range(K):
+                amp_k = amp[k]
+                ao_k = a_i if a_finite else amp_k
+
+                if kind[k] == 0:
+                    g_amp = 0.0
+                elif kind[k] == 1:
+                    g_amp = slope[k] * amp_k
+                else:
+                    g_amp = a_coef[k] * amp_k * amp_k + b_coef[k] * amp_k
+                    if has_post[k] and amp_k > peak0[k]:
+                        g_amp = gp[k] + post0[k] * (amp_k - peak0[k])
+
+                if kind[k] == 0:
+                    g_ao = 0.0
+                elif kind[k] == 1:
+                    g_ao = slope[k] * ao_k
+                else:
+                    g_ao = a_coef[k] * ao_k * ao_k + b_coef[k] * ao_k
+                    if has_post[k] and ao_k > peak0[k]:
+                        g_ao = gp[k] + post0[k] * (ao_k - peak0[k])
+
+                target_delta = g_amp - g_ao
+                delta_k = delta[k] + (target_delta - delta[k]) * alpha[k]
+                delta[k] = delta_k
+                p_sim_k = pi + delta_k
+
+                if p_sim_k > upper:
+                    raw = _ABOVE
+                elif p_sim_k < lower:
+                    raw = _BELOW
+                else:
+                    raw = _BETWEEN
+
+                adopted_k = adopted[k]
+                same = raw == adopted_k
+                pend = _NONE if same else pending[k]
+                prun = 0 if same else pending_run[k]
+                cont = (not same) and (pend == raw)
+                prun = (prun + 1) if cont else prun
+                fresh = (not same) and (not cont)
+                pend = raw if fresh else pend
+                prun = 1 if fresh else prun
+                ready = (not same) and (prun >= onset_steps)
+                blocked = ready and (blank_left[k] > 0)
+                adopt = ready and (not blocked)
+                if blocked:
+                    n_blank_supp[k] += 1
+                if (not same) and (not ready):
+                    n_onset_supp[k] += 1
+                new_adopted = raw if adopt else adopted_k
+                if adopt:
+                    n_trans[k] += 1
+                bl = blank_steps if adopt else blank_left[k]
+                pend = _NONE if adopt else pend
+                prun = 0 if adopt else prun
+                bl = bl - 1
+                bl = bl if bl > 0 else 0
+
+                pending[k] = pend
+                pending_run[k] = prun
+                blank_left[k] = bl
+                adopted[k] = new_adopted
+
+                if new_adopted == _ABOVE:
+                    target_k = target_hi
+                elif new_adopted == _BELOW:
+                    target_k = target_lo
+                else:
+                    target_k = amp_k
+                step_k = target_k - amp_k
+                lo_c = -rate_down * dt
+                hi_c = rate_up * dt
+                if step_k < lo_c:
+                    step_k = lo_c
+                elif step_k > hi_c:
+                    step_k = hi_c
+                new_amp_k = amp_k + step_k
+                if new_amp_k < amp_low:
+                    new_amp_k = amp_low
+                elif new_amp_k > amp_high:
+                    new_amp_k = amp_high
+                amp[k] = new_amp_k
+
+                if kind[k] == 0:
+                    dg_k = 0.0
+                elif kind[k] == 1:
+                    dg_k = slope[k]
+                else:
+                    dg_k = 2.0 * a_coef[k] * new_amp_k + b_coef[k]
+                    if has_post[k] and new_amp_k > peak0[k]:
+                        dg_k = post0[k]
+                if dg_k > 0:
+                    wrong_side_steps[k] += 1
+
+                state_out[k, i] = new_adopted
+                amp_out[k, i] = new_amp_k
+                p_out[k, i] = p_sim_k
+
+        return amp_out, p_out, state_out, n_trans, n_onset_supp, n_blank_supp, wrong_side_steps, n_missing
+
+    COMPILED_CONTROLLER = True
+except Exception:                                        # noqa: BLE001 -- no numba: the numpy loop
+    COMPILED_CONTROLLER = False
+
+
+def _run_controller_loop(bank, p, a_obs, alpha, dt, upper, lower, amp_low, amp_high, amp_init,
+                         rate_up, rate_down, onset_steps, blank_steps, target_hi, target_lo):
+    """Run the controller loop, compiled when numba is installed and as the numpy loop otherwise,
+    with the same answer either way (decision 269's pattern)."""
+    if COMPILED_CONTROLLER:
+        return _run_controller_loop_kernel(
+            np.ascontiguousarray(bank["kind"], dtype=np.int64),
+            np.ascontiguousarray(bank["slope"], dtype=float),
+            np.ascontiguousarray(bank["a"], dtype=float),
+            np.ascontiguousarray(bank["b"], dtype=float),
+            np.ascontiguousarray(bank["peak"], dtype=float),
+            np.ascontiguousarray(bank["post"], dtype=float),
+            np.ascontiguousarray(p, dtype=float), np.ascontiguousarray(a_obs, dtype=float),
+            np.ascontiguousarray(alpha, dtype=float),
+            float(dt), float(upper), float(lower), float(amp_low), float(amp_high),
+            float(amp_init), float(rate_up), float(rate_down), int(onset_steps), int(blank_steps),
+            float(target_hi), float(target_lo))
+    return _run_controller_loop_numpy(bank, p, a_obs, alpha, dt, upper, lower, amp_low, amp_high,
+                                      amp_init, rate_up, rate_down, onset_steps, blank_steps,
+                                      target_hi, target_lo)
 
 
 # --------------------------------------------------------------------------------------------
@@ -196,72 +486,13 @@ def simulate_series(t_s, power, amp_obs, plan, curves: Sequence[ResponseCurve], 
     K, n = bank["K"], int(p.size)
     tau = np.broadcast_to(np.asarray(tau_s, dtype=float), (K,)).astype(float)
     alpha = np.where(tau > 0, 1.0 - np.exp(-dt / np.where(tau > 0, tau, 1.0)), 1.0)
-
-    amp = np.full(K, amp_init)
-    delta = np.zeros(K)
-    adopted = np.full(K, _BETWEEN, dtype=int)
-    pending = np.full(K, _NONE, dtype=int)
-    pending_run = np.zeros(K, dtype=int)
-    blank_left = np.zeros(K, dtype=int)
-    n_trans = np.zeros(K, dtype=int)
-    n_onset_supp = np.zeros(K, dtype=int)
-    n_blank_supp = np.zeros(K, dtype=int)
-    wrong_side_steps = np.zeros(K, dtype=int)
-    n_missing = 0
-
-    amp_out = np.empty((K, n))
-    p_out = np.empty((K, n))
-    state_out = np.empty((K, n), dtype=int)
     target_hi = amp_high if action == "increase" else amp_low
     target_lo = amp_low if action == "increase" else amp_high
 
-    for i in range(n):
-        pi = p[i]
-        if math.isnan(pi):
-            # A missing estimate is not a crossing: hold, as the replay does, and hold delta too.
-            n_missing += 1
-            pending[:] = _NONE
-            pending_run[:] = 0
-            blank_left = np.maximum(blank_left - 1, 0)
-            state_out[:, i] = adopted
-            amp_out[:, i] = amp
-            p_out[:, i] = np.nan
-            continue
-
-        ao = a_obs[i] if np.isfinite(a_obs[i]) else amp
-        target_delta = _bank_g(bank, amp) - _bank_g(bank, ao)
-        delta = delta + (target_delta - delta) * alpha
-        p_sim = pi + delta
-        raw = np.where(p_sim > upper, _ABOVE, np.where(p_sim < lower, _BELOW, _BETWEEN))
-
-        same = raw == adopted
-        pending = np.where(same, _NONE, pending)
-        pending_run = np.where(same, 0, pending_run)
-        cont = (~same) & (pending == raw)
-        pending_run = np.where(cont, pending_run + 1, pending_run)
-        fresh = (~same) & (~cont)
-        pending = np.where(fresh, raw, pending)
-        pending_run = np.where(fresh, 1, pending_run)
-        ready = (~same) & (pending_run >= onset_steps)
-        blocked = ready & (blank_left > 0)
-        adopt = ready & ~blocked
-        n_blank_supp += blocked.astype(int)
-        n_onset_supp += ((~same) & (~ready)).astype(int)
-        adopted = np.where(adopt, raw, adopted)
-        n_trans += adopt.astype(int)
-        blank_left = np.where(adopt, blank_steps, blank_left)
-        pending = np.where(adopt, _NONE, pending)
-        pending_run = np.where(adopt, 0, pending_run)
-        blank_left = np.maximum(blank_left - 1, 0)
-
-        target = np.where(adopted == _ABOVE, target_hi, np.where(adopted == _BELOW, target_lo, amp))
-        step = np.clip(target - amp, -rate_down * dt, rate_up * dt)
-        amp = np.clip(amp + step, amp_low, amp_high)
-
-        wrong_side_steps += (_bank_dg(bank, amp) > 0).astype(int)
-        state_out[:, i] = adopted
-        amp_out[:, i] = amp
-        p_out[:, i] = p_sim
+    (amp_out, p_out, state_out, n_trans, n_onset_supp, n_blank_supp, wrong_side_steps,
+     n_missing) = _run_controller_loop(bank, p, a_obs, alpha, dt, upper, lower, amp_low, amp_high,
+                                       amp_init, rate_up, rate_down, onset_steps, blank_steps,
+                                       target_hi, target_lo)
 
     tol = float(p_in["amp_at_limit_tol_mA"])
     at_high = np.mean(np.abs(amp_out - amp_high) <= tol, axis=1)

@@ -38,6 +38,32 @@ def test_era_cuts_match_the_biomarker_module_and_reject_nan():
     assert AD._era(float("nan")) is None and AD._era(None) is None
 
 
+def test_era_column_matches_era_row_by_row_including_the_boundaries_and_nan():
+    """Speed-up proposal 5: the whole-column ``_era_column`` must decide every value exactly as the
+    one-at-a-time ``_era`` did, including both boundary currents (0.1 and 1.5 mA, where ``_era``'s
+    own '<' and '<=' comparisons could easily be transcribed the wrong way round) and non-finite
+    input, before it is allowed to replace the row-by-row loop anywhere."""
+    amps = np.array([-1.0, 0.0, AD.ERA_OFF_MAX_MA - 1e-9, AD.ERA_OFF_MAX_MA,
+                     AD.ERA_OFF_MAX_MA + 1e-9, 0.8, AD.ERA_LOW_MAX_MA - 1e-9, AD.ERA_LOW_MAX_MA,
+                     AD.ERA_LOW_MAX_MA + 1e-9, 3.0, np.nan, np.inf, -np.inf])
+    want = [AD._era(x) for x in amps]
+    got = AD._era_column(amps)
+    assert list(got) == want
+    # Object dtype with real ``None`` (never NaN) at every missing slot, so a reader who writes
+    # ``col.isna()`` or ``col == "OFF"`` downstream sees what the row-by-row version always gave it.
+    assert got.dtype == object
+    for x, g in zip(want, got):
+        if x is None:
+            assert g is None
+        else:
+            assert g == x
+
+
+def test_era_column_on_an_all_missing_or_empty_column():
+    assert list(AD._era_column(np.array([np.nan, np.nan]))) == [None, None]
+    assert list(AD._era_column(np.array([], dtype=float))) == []
+
+
 def _toy_table(n_epochs=6, per_epoch=5, slope=-2.0, seed=0):
     rng = np.random.default_rng(seed)
     rows = []

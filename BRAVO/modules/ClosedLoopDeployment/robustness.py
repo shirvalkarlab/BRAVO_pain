@@ -162,6 +162,148 @@ StretchTuple = Tuple[np.ndarray, np.ndarray, np.ndarray]
 _ABOVE, _BETWEEN, _BELOW = 1, 0, -1
 
 
+# SPEED-UP PROPOSAL 7 (`artifacts/research_2026-09-25_options/06_remaining_speed_ups.md`; DRNUMBA,
+# the PI's numba go-ahead of 2026-09-25, decision 269's pattern). ``run_stretch`` below is the one
+# per-reading Python loop this file has (see the module docstring): one stretch's own controller
+# state, replayed once per training stretch (248 stretches, 1.38-1.54 s on a first request,
+# profiled 2026-09-25), never once per bootstrap replicate. Unlike ``design_rule.py``'s filters,
+# NOTHING here is summed ACROSS configurations inside the loop -- every one of the K configurations
+# is an independent scalar time series, so the compiled loop below needs no ``_pairwise_sum``: each
+# config's own running counts and sums are unaffected by the order the K configs are visited in.
+try:
+    from numba import njit as _njit
+    import logging as _logging
+    # Same reason as decision 269's block in ``design_rule.py``: numba logs its own type checking
+    # at DEBUG, and the server logs at DEBUG.
+    _logging.getLogger("numba").setLevel(_logging.WARNING)
+
+    @_njit(cache=False)
+    def _run_stretch_kernel(p, upper, lower, onset_steps, blank_steps, rate_up, rate_down,
+                            amp_low, amp_high, amp_init, tol, dt):
+        """One scalar power series ``p``, replayed once for every one of the K configurations named
+        by ``upper``/``lower``/... Mirrors ``_run_stretch_numpy`` operation for operation, in the
+        same order; see that function's own body for the numpy reference each line below matches."""
+        n = p.size
+        K = upper.size
+        amp = np.full(K, amp_init)
+        prev_amp = np.zeros(K)
+        adopted = np.zeros(K, dtype=np.int64)              # _BETWEEN
+        pending = np.full(K, 2, dtype=np.int64)            # 2 == "no pending state" sentinel
+        pending_run = np.zeros(K, dtype=np.int64)
+        blank_left = np.zeros(K, dtype=np.int64)
+        n_trans = np.zeros(K, dtype=np.int64)
+        n_onset_supp = np.zeros(K, dtype=np.int64)
+        n_blank_supp = np.zeros(K, dtype=np.int64)
+        n_rev_onset = np.zeros(K, dtype=np.int64)
+        n_adopts = np.zeros(K, dtype=np.int64)
+        last_adopt_i = np.zeros(K, dtype=np.int64)
+        state_before_last = np.zeros(K, dtype=np.int64)   # _BETWEEN
+        sum_at_hi = np.zeros(K)
+        sum_at_lo = np.zeros(K)
+        sum_amp = np.zeros(K)
+        sum_above = np.zeros(K)
+        sum_below = np.zeros(K)
+        sum_between = np.zeros(K)
+        travel = np.zeros(K)
+        n_missing = 0
+
+        for i in range(n):
+            pi = p[i]
+            missing = np.isnan(pi)
+            if missing:
+                n_missing += 1
+            for k in range(K):
+                if missing:
+                    pending[k] = 2
+                    pending_run[k] = 0
+                    bl = blank_left[k] - 1
+                    blank_left[k] = bl if bl > 0 else 0
+                else:
+                    if pi > upper[k]:
+                        raw = 1
+                    elif pi < lower[k]:
+                        raw = -1
+                    else:
+                        raw = 0
+                    same = (raw == adopted[k])
+                    if same:
+                        pending[k] = 2
+                        pending_run[k] = 0
+                    else:
+                        if pending[k] == raw:
+                            pending_run[k] = pending_run[k] + 1
+                        else:
+                            pending[k] = raw
+                            pending_run[k] = 1
+                    ready = (not same) and (pending_run[k] >= onset_steps[k])
+                    blocked = ready and (blank_left[k] > 0)
+                    adopt = ready and (not blocked)
+                    if blocked:
+                        n_blank_supp[k] += 1
+                    if (not same) and (not ready):
+                        n_onset_supp[k] += 1
+                    if adopt:
+                        rev = (n_adopts[k] >= 1) and (raw == state_before_last[k]) and \
+                            ((i - last_adopt_i[k]) <= onset_steps[k])
+                        if rev:
+                            n_rev_onset[k] += 1
+                        state_before_last[k] = adopted[k]
+                        last_adopt_i[k] = i
+                        if i > 0:
+                            n_adopts[k] += 1
+                        adopted[k] = raw
+                        n_trans[k] += 1
+                        blank_left[k] = blank_steps[k]
+                        pending[k] = 2
+                        pending_run[k] = 0
+                    bl = blank_left[k] - 1
+                    blank_left[k] = bl if bl > 0 else 0
+
+                    if adopted[k] == 1:
+                        target = amp_high
+                    elif adopted[k] == -1:
+                        target = amp_low
+                    else:
+                        target = amp[k]
+                    step = target - amp[k]
+                    smin = -rate_down[k] * dt
+                    smax = rate_up[k] * dt
+                    s1 = step if step > smin else smin     # np.clip: maximum then minimum
+                    stepc = s1 if s1 < smax else smax
+                    a1 = amp[k] + stepc
+                    a2 = a1 if a1 > amp_low else amp_low
+                    amp[k] = a2 if a2 < amp_high else amp_high
+
+                if i > 0:
+                    d = amp[k] - prev_amp[k]
+                    travel[k] += d if d >= 0.0 else -d
+                prev_amp[k] = amp[k]
+                d_hi = amp[k] - amp_high
+                if d_hi < 0.0:
+                    d_hi = -d_hi
+                if d_hi <= tol:
+                    sum_at_hi[k] += 1.0
+                d_lo = amp[k] - amp_low
+                if d_lo < 0.0:
+                    d_lo = -d_lo
+                if d_lo <= tol:
+                    sum_at_lo[k] += 1.0
+                sum_amp[k] += amp[k]
+                if adopted[k] == 1:
+                    sum_above[k] += 1.0
+                elif adopted[k] == -1:
+                    sum_below[k] += 1.0
+                else:
+                    sum_between[k] += 1.0
+
+        return (n_missing, n_trans, n_onset_supp, n_blank_supp, n_rev_onset, sum_at_hi, sum_at_lo,
+               sum_amp, sum_above, sum_below, sum_between, travel)
+
+    COMPILED_REPLAY = True
+except Exception:                                         # noqa: BLE001 -- no numba: the numpy loop
+    COMPILED_REPLAY = False
+
+
 # =================================================================================================
 # THE CONFIGURATION-VECTORISED REPLAY (ported unchanged from ``fastreplay.py``)
 # =================================================================================================
@@ -193,7 +335,13 @@ def run_stretch(p, dt, upper, lower, onset_ms, blanking_ms, up_ms, down_ms, amp_
     the K configurations (``amp = np.full(K, amp_init)``, ``adopted = np.full(K, _BETWEEN)``) --
     this is the property the rest of this file's speed depends on: one stretch's outcome never
     depends on any other stretch's.
+
+    Run as a compiled loop (`_run_stretch_kernel`) when numba is installed and as the numpy loop
+    (`_run_stretch_numpy`) otherwise, with the same answer either way (DRNUMBA, 2026-09-25,
+    decision 269's pattern; see the ``COMPILED_REPLAY`` block above this function for why no
+    per-step reduction across configurations is needed here, unlike ``design_rule.py``'s filters).
     """
+    p = np.asarray(p, dtype=float)
     upper = np.asarray(upper, float)
     lower = np.asarray(lower, float)
     K = upper.size
@@ -207,7 +355,31 @@ def run_stretch(p, dt, upper, lower, onset_ms, blanking_ms, up_ms, down_ms, amp_
     if amp_init is None:
         amp_init = 0.5 * (float(amp_low) + float(amp_high))
     amp_init = min(max(float(amp_init), float(amp_low)), float(amp_high))
+    up_hi = float(amp_high)
+    up_lo = float(amp_low)
 
+    if COMPILED_REPLAY:
+        (n_missing, n_trans, n_onset_supp, n_blank_supp, n_rev_onset, sum_at_hi, sum_at_lo,
+         sum_amp, sum_above, sum_below, sum_between, travel) = _run_stretch_kernel(
+            np.ascontiguousarray(p), upper, lower, onset_steps.astype(np.int64),
+            blank_steps.astype(np.int64), rate_up, rate_down, up_lo, up_hi, float(amp_init),
+            float(tol), float(dt))
+        return {"n_steps": int(p.size), "dt": dt, "n_missing": int(n_missing),
+                "onset_steps": onset_steps, "n_transitions": n_trans,
+                "n_onset_suppressed": n_onset_supp, "n_blank_suppressed": n_blank_supp,
+                "reversals_within_one_onset": n_rev_onset, "sum_at_upper": sum_at_hi,
+                "sum_at_lower": sum_at_lo, "sum_amp": sum_amp, "sum_above": sum_above,
+                "sum_below": sum_below, "sum_between": sum_between, "travel": travel}
+    return _run_stretch_numpy(p, dt, upper, lower, onset_steps, blank_steps, rate_up, rate_down,
+                              K, amp_init, tol, up_lo, up_hi)
+
+
+def _run_stretch_numpy(p, dt, upper, lower, onset_steps, blank_steps, rate_up, rate_down, K,
+                       amp_init, tol, up_lo, up_hi) -> Dict[str, Any]:
+    """The numpy loop `run_stretch` dispatches to when numba is unavailable: the reference
+    ``fastreplay.run_stretch`` computation, unchanged, given the same prepared arrays
+    (`onset_steps`, `blank_steps`, `rate_up`, `rate_down`, `amp_init`, `tol`) `run_stretch` itself
+    now builds once and passes to whichever loop runs."""
     n = int(p.size)
     amp = np.full(K, amp_init)
     adopted = np.full(K, _BETWEEN, dtype=int)
@@ -233,8 +405,6 @@ def run_stretch(p, dt, upper, lower, onset_ms, blanking_ms, up_ms, down_ms, amp_
     prev_amp = None
     n_missing = 0
 
-    up_hi = float(amp_high)
-    up_lo = float(amp_low)
     for i in range(n):
         pi = p[i]
         if math.isnan(pi):

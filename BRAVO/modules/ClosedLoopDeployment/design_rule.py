@@ -190,6 +190,19 @@ def build_panel(stretches: Sequence[Tuple[np.ndarray, np.ndarray, np.ndarray]],
 
 
 def filter_1state(Y: np.ndarray, *, phi: float, m: float, q: float, r0: float) -> Dict[str, Any]:
+    """The plain local level (see `_filter_1state_numpy`), run as a compiled loop when numba is
+    installed and as the numpy loop otherwise, with the same answer either way (SPEED-UP ITEM 6,
+    the PI, 2026-09-25, decision 269's pattern)."""
+    if COMPILED_FILTER:
+        Yc = np.ascontiguousarray(Y, dtype=float)
+        ll, n_used = _filter_1state_kernel(Yc, np.isfinite(Yc), float(phi), float(m), float(q),
+                                           float(r0), LOG2PI)
+        return {"loglik": float(ll), "n": int(n_used)}
+    return _filter_1state_numpy(Y, phi=phi, m=m, q=q, r0=r0)
+
+
+def _filter_1state_numpy(Y: np.ndarray, *, phi: float, m: float, q: float,
+                         r0: float) -> Dict[str, Any]:
     """The plain local level: ``level_t = m + phi*(level_{t-1} - m) + w`` (w ~ N(0, q)),
     ``y_t = level_t + e`` (e ~ N(0, r0)). Started at the first reading of every row; the
     log-likelihood is summed from the second reading of every row onward, matching the contest's
@@ -237,8 +250,13 @@ def filter_2comp(Y: np.ndarray, *, phi_s: float, phi_f: float, q_s: float, q_f: 
 #   * each step's terms are summed in numpy's own order -- pairwise over the whole row, 8 running sums
 #     for a block of up to 128, halves split at a multiple of 8 above that (checked against np.sum
 #     on 3,000 arrays, 0 differing); a plain left-to-right sum would NOT match.
-# `tests/test_design_rule_compiled_filter.py` holds the two loops equal. COMPILED_FILTER False forces
-# the numpy loop (the proof compares the two). NO ON-DISK CACHE: the summation calls itself, and a
+# SPEED-UP ITEM 6 (the PI, 2026-09-25; `artifacts/research_2026-09-25_options/06_remaining_speed_ups.md`
+# proposal 6): `filter_1state` (the plain local level the L1 fallback fits, 92 calls, 26 ms each on
+# RCS08) gets the identical treatment below, `_filter_1state_kernel`, reusing this same `_pairwise_sum`
+# for its per-step sum over stretches -- the same argument applies unchanged, one state per stretch
+# instead of two.
+# `tests/test_design_rule_compiled_filter.py` holds the two loops equal for both filters. COMPILED_FILTER
+# False forces the numpy loop (the proof compares the two). NO ON-DISK CACHE: the summation calls itself, and a
 # cached recursive function crashed the process when loaded under the server's libraries (measured
 # 2026-09-25: segmentation fault from the cache, none when compiled in the process); each worker
 # compiles once on its first fit, about a second.
@@ -323,6 +341,37 @@ try:
                 p11[i] = p11p - k1 * a1
                 p12[i] = p12p - k1 * a2
                 p22[i] = p22p - k2 * a2
+            ll += _pairwise_sum(term, 0, s)
+        return ll, n_used
+
+    @_njit(cache=False)
+    def _filter_1state_kernel(Y, ok, phi, m, q, r0, log2pi):
+        # SPEED-UP ITEM 6 (the PI, 2026-09-25). The same pattern as `_filter_2comp_kernel` above,
+        # one state per stretch instead of two: started at the raw first reading of every row
+        # (even where it is NaN, exactly as the numpy loop's `Y[:, 0].copy()`), the per-step sum
+        # over stretches taken by the same `_pairwise_sum` in the same order.
+        s, l = Y.shape
+        x = np.empty(s)
+        for i in range(s):
+            x[i] = Y[i, 0]
+        p = np.full(s, r0)
+        phi2 = phi * phi
+        term = np.empty(s)
+        ll = 0.0
+        n_used = 0
+        for t in range(1, l):
+            for i in range(s):
+                xp = m + phi * (x[i] - m)
+                pp = phi2 * p[i] + q
+                f = pp + r0
+                mt = ok[i, t]
+                v = (Y[i, t] - xp) if mt else 0.0
+                term[i] = (-0.5 * (log2pi + _math.log(f) + v * v / f)) if mt else 0.0
+                if mt:
+                    n_used += 1
+                k = (pp / f) if mt else 0.0
+                x[i] = xp + k * v
+                p[i] = ((1.0 - k) * pp) if mt else pp
             ll += _pairwise_sum(term, 0, s)
         return ll, n_used
 

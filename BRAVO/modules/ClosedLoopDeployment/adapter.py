@@ -77,6 +77,32 @@ def _era(amp):
     return "LOW" if amp <= ERA_LOW_MAX_MA else "HIGH"
 
 
+def _era_column(amp):
+    """``_era``, decided for a whole column of currents in one pass instead of once per row.
+
+    Speed-up proposal 5 of ``artifacts/research_2026-09-25_options/06_remaining_speed_ups.md``:
+    the joined table called ``_era`` about 11 million times (10,996,416 on RCS08) building the
+    ``era_Left`` / ``era_Right`` columns, one Python call per row. Every row is decided by the same
+    two comparisons against the same two constants (``ERA_OFF_MAX_MA``, ``ERA_LOW_MAX_MA``), so this
+    does the three comparisons once over the whole numeric array instead.
+
+    ``amp`` must already be numeric (the callers pass it through ``pd.to_numeric(..., errors="coerce")``
+    first, exactly as the row-by-row version did). Returns a plain object array holding the same three
+    strings ``_era`` returns, and ``None`` -- never NaN -- wherever ``_era`` would have returned
+    ``None`` (missing, or non-finite). An object array is used on purpose rather than a pandas
+    ``Categorical`` or a string dtype, so a downstream comparison such as ``T["era_Left"] == "OFF"``
+    or ``... is None`` behaves exactly as it did when the column was built from a Python list of
+    ``_era`` results.
+    """
+    a = np.asarray(amp, dtype=float)
+    out = np.full(a.shape, None, dtype=object)
+    finite = np.isfinite(a)
+    out[finite & (a < ERA_OFF_MAX_MA)] = "OFF"
+    out[finite & (a >= ERA_OFF_MAX_MA) & (a <= ERA_LOW_MAX_MA)] = "LOW"
+    out[finite & (a > ERA_LOW_MAX_MA)] = "HIGH"
+    return out
+
+
 def band_powers(psd, freqs, centers=DEFAULT_BAND_CENTERS_HZ, width=DEFAULT_BAND_WIDTH_HZ):
     """Per-band power from one row's stored spectrum, a dict keyed by band centre: the arithmetic
     mean of the raw bin powers inside the band, the device-comparable quantity (rule D11).
@@ -1279,7 +1305,7 @@ def joined_table(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_HZ,
     for h in ("Left", "Right"):
         c = canonical_amp_col(h)
         if c in T.columns:
-            T[f"era_{h}"] = [_era(x) for x in pd.to_numeric(T[c], errors="coerce")]
+            T[f"era_{h}"] = _era_column(pd.to_numeric(T[c], errors="coerce").to_numpy(dtype=float))
     if pro_frame is not None and len(pro_frame) and "epoch" in pro_frame.columns:
         keep = [c for c in ("epoch", "report_id", "nrs", "vas") if c in pro_frame.columns]
         T = T.merge(pro_frame[keep].rename(columns={"epoch": "setting_epoch"}),
@@ -1364,7 +1390,7 @@ def _joined_table_calibrated(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_
     for h in ("Left", "Right"):
         c = canonical_amp_col(h)
         if c in T.columns:
-            T[f"era_{h}"] = [_era(x) for x in pd.to_numeric(T[c], errors="coerce")]
+            T[f"era_{h}"] = _era_column(pd.to_numeric(T[c], errors="coerce").to_numpy(dtype=float))
     if pro_frame is not None and len(pro_frame) and "epoch" in pro_frame.columns:
         keep_cols = [c for c in ("epoch", "report_id", "nrs", "vas") if c in pro_frame.columns]
         T = T.merge(pro_frame[keep_cols].rename(columns={"epoch": "setting_epoch"}),
