@@ -19,6 +19,9 @@ LIT = {
                 "research_2026-09-24_4_zero_mA_period_as_a_test.md"),
     "rtm": ("Literature: regression to the mean and decision 253's swing",
             "research_2026-09-25_options/01_regression_to_the_mean.md"),
+    "critique": ("Critique: the day-to-day correlation of ratings (M2) and the electrical-artifact "
+                "alternative (M1)", "research_2026-09-25_options/08_critique_science.md"),
+    "revised_plan": ("The revised plan: items A4 and A5", "research_2026-09-25_options/11_REVISED_PLAN.md"),
 }
 
 
@@ -78,4 +81,22 @@ ANALYSES = {
               "record -- or looks like the group's own shared background pattern; descriptive, it never "
               "selects a setting."),
         literature=_lit("rtm")),
+    "rating_persistence": dict(
+        page="stim_optimizer", order=5,
+        title="Day-to-day correlation of the pain ratings",
+        what=("For each pain score: the correlation of daily mean ratings at lags 1 to 7 days, the "
+              "effective number of independent days (the same lag-1 correction this project already "
+              "uses for a band-power correlation) for the 0 mA stretch of 2025-07-16 to 08-22 and for "
+              "all the data we have, and the next-visit protocol's 52-98 independent-day target "
+              "restated as calendar days at that effective rate."),
+        literature=_lit("critique", "revised_plan")),
+    "stepped_current_all_bands": dict(
+        page="stim_optimizer", order=6,
+        title="Stepped current and bands with no plausible pain relationship",
+        what=("On the stored titration-ladder points: does settled band power change with current as "
+              "much in bands far from any plausible pain relationship (below 12 Hz, above 32 Hz) as in "
+              "the pain-linked 21.5-27.5 Hz family, per recording route and sensing pair -- an "
+              "electrical explanation of decision 229's clinic-sheet effect would predict a ratio near "
+              "1, a pain-specific family a ratio well under 1."),
+        literature=_lit("critique", "revised_plan")),
 }

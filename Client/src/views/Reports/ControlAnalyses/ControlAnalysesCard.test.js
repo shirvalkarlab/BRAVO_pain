@@ -187,4 +187,87 @@ describe("the control analyses card", () => {
     fireEvent.change(screen.getByLabelText("Control analysis"), { target: { value: "time_of_day" } });
     expect(screen.getByText(/Not run yet for this participant/)).toBeTruthy();
   });
+
+  it("draws the day-to-day rating correlation and report 02's targets restated as calendar days, marks in hex, no text under 11 px", () => {
+    const target = (name, independent, ratio) => ({ name, independent_days: independent, calendar_days: independent / ratio });
+    const payload = { analyses: [{ key: "rating_persistence", title: "Day-to-day correlation of the pain ratings",
+      what: "For each pain score.", literature: LIT, n_runs: 1,
+      snapshot: { run_at: "2026-09-25T13:00:00Z", data_from: "2025-07-16", data_through: "2026-09-24",
+        settings: {}, reading: ["vas (300 ratings, 200 days): a day's mean rating correlates with the next day's at +0.50."],
+        result: { rows: [
+          { score: "vas", n_ratings: 300, n_days: 200, effective_days: 90.0, ratio: 0.45,
+            lags: [1, 2, 3, 4, 5, 6, 7].map((k) => ({ lag_days: k, r: 0.5 / k, n_pairs: 199 })),
+            calendar_days_needed: [target("one band, tested alone", 52, 0.45), target("the four pre-registered bands", 73, 0.45), target("a fresh 22-band discovery pass", 98, 0.45)],
+            zero_ma: { label: "both off, 2025-07-16 to 2025-08-22", n_days: 25, effective_days: 15.0, ratio: 0.6,
+              calendar_days_needed: [target("one band, tested alone", 52, 0.6), target("the four pre-registered bands", 73, 0.6), target("a fresh 22-band discovery pass", 98, 0.6)] } },
+          { score: "nrs", n_ratings: 250, n_days: 180, effective_days: 120.0, ratio: 0.67,
+            lags: [1, 2, 3, 4, 5, 6, 7].map((k) => ({ lag_days: k, r: 0.3 / k, n_pairs: 179 })),
+            calendar_days_needed: [target("one band, tested alone", 52, 0.67), target("the four pre-registered bands", 73, 0.67), target("a fresh 22-band discovery pass", 98, 0.67)],
+            zero_ma: null },
+        ] } } }] };
+    const { container } = render(<ControlAnalysesCard payload={payload} />);
+    expect(screen.getByText(/correlates with the next day's at \+0\.50/)).toBeTruthy();
+    const fig = screen.getByTestId("figure-rating_persistence");
+    const table = screen.getByTestId("rating-persistence-targets");
+    expect(table.textContent).toMatch(/one band, tested alone/);
+    expect(table.textContent).toMatch(/116/);            // 52 / 0.45 rounded
+    expect(table.textContent).toMatch(/87/);             // 52 / 0.6 rounded
+    fireEvent.change(screen.getByLabelText("Pain score"), { target: { value: "nrs" } });
+    expect(screen.getByTestId("rating-persistence-targets").textContent).not.toMatch(/both off, 2025-07-16/);
+    const marks = [...fig.querySelectorAll("circle, line, polyline")];
+    expect(marks.length).toBeGreaterThan(0);
+    marks.forEach((m) => {
+      const a = m.tagName === "circle" ? "fill" : "stroke";
+      expect(m.getAttribute(a)).toMatch(/^#[0-9A-Fa-f]{3,8}$/);
+    });
+    [...fig.querySelectorAll("text")].forEach((t) => expect(Number(t.getAttribute("font-size"))).toBeGreaterThanOrEqual(11));
+    [...container.querySelectorAll("[style]")].forEach((el) => {
+      const fs = el.style && el.style.fontSize;
+      if (fs) expect(parseFloat(fs)).toBeGreaterThanOrEqual(11);
+    });
+    expect(container.textContent).not.toMatch(/undefined|NaN/);
+  });
+
+  it("draws the stepped-current-and-far-bands check per route and sensing pair, marks in hex, no text under 11 px", () => {
+    const band = (centre, group, slope) => ({ route: "time domain voltage trace", pair: "ONE_THREE_LEFT",
+      centre_hz: centre, group, n: 20, n_runs: 5, baseline: 100, slope_per_mA: slope * 100,
+      relative_slope_per_mA: slope, lo: slope - 0.02, hi: slope + 0.02 });
+    const payload = { analyses: [{ key: "stepped_current_all_bands", title: "Stepped current and bands with no plausible pain relationship",
+      what: "On the stored titration-ladder points.", literature: LIT, n_runs: 1,
+      snapshot: { run_at: "2026-09-25T14:00:00Z", data_from: "2025-07-16", data_through: "2026-09-24",
+        settings: {}, reading: ["time domain voltage trace, ONE_THREE_LEFT: ratio 0.90."],
+        result: {
+          bands: [band(5.5, "far", 0.09), band(24.5, "family", 0.10), band(26.5, "family", 0.11), band(45.5, "far", 0.08)],
+          ratios: [{ route: "time domain voltage trace", pair: "ONE_THREE_LEFT", n_family_bands: 2, n_far_bands: 2,
+            family_median_abs_relative_slope: 0.105, far_median_abs_relative_slope: 0.085, far_over_family_ratio: 0.81 }],
+        } } }] };
+    const { container } = render(<ControlAnalysesCard payload={payload} />);
+    const fig = screen.getByTestId("figure-stepped_current_all_bands");
+    expect(fig.textContent).toMatch(/L 1-3/);
+    expect(fig.textContent).toMatch(/ratio \(far over family\) 0\.81/);
+    const table = screen.getByTestId("stepped-current-ratios");
+    expect(table.textContent).toMatch(/0\.81/);
+    const marks = [...fig.querySelectorAll("circle, line, polyline")];
+    expect(marks.length).toBeGreaterThan(0);
+    marks.forEach((m) => {
+      const a = m.tagName === "circle" ? "fill" : "stroke";
+      expect(m.getAttribute(a)).toMatch(/^#[0-9A-Fa-f]{3,8}$/);
+    });
+    [...fig.querySelectorAll("text")].forEach((t) => expect(Number(t.getAttribute("font-size"))).toBeGreaterThanOrEqual(11));
+    [...container.querySelectorAll("[style]")].forEach((el) => {
+      const fs = el.style && el.style.fontSize;
+      if (fs) expect(parseFloat(fs)).toBeGreaterThanOrEqual(11);
+    });
+    expect(container.textContent).not.toMatch(/undefined|NaN/);
+  });
+
+  it("says there are no stored titration-ladder points rather than drawing an empty figure", () => {
+    const payload = { analyses: [{ key: "stepped_current_all_bands", title: "Stepped current and bands with no plausible pain relationship",
+      what: "On the stored titration-ladder points.", literature: LIT, n_runs: 1,
+      snapshot: { run_at: "2026-09-25T14:00:00Z", data_from: "2025-07-16", data_through: "2026-09-24",
+        settings: {}, reading: ["No stored titration-ladder points for this participant."],
+        result: { bands: [], ratios: [] } } }] };
+    render(<ControlAnalysesCard payload={payload} />);
+    expect(screen.getByTestId("figure-stepped_current_all_bands").textContent).toMatch(/No stored titration-ladder points/);
+  });
 });

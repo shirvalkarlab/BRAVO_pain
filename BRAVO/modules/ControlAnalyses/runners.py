@@ -740,6 +740,70 @@ def _regression_to_mean_reading(diag):
 
 
 # ------------------------------------------------------------------------------------------------
+# A4. day-to-day correlation of the pain ratings
+# ------------------------------------------------------------------------------------------------
+
+RATING_PERSISTENCE_METRICS = ("nrs", "vas", "left_leg_vas", "back_vas", "mpq_sum")
+
+
+def run_rating_persistence(uid, *, metrics=RATING_PERSISTENCE_METRICS, save=True):
+    from . import rating_persistence as RP
+    stream = _stream(uid)
+    both_off = sorted((s for s in stretches(stream) if s["kind"] == "both off"), key=lambda s: s["start_s"])
+    zero = both_off[0] if both_off else None
+    rows = []
+    for metric in metrics:
+        t, v, mname = _ratings(uid, metric)
+        if t.size == 0:
+            rows.append(dict(score=mname, n_ratings=0, n_days=0, lags=[], effective_days=None,
+                             ratio=None, calendar_days_needed=[], zero_ma=None))
+            continue
+        _days_all, daily_all = RP.daily_mean_series(_ca_days(t), v)
+        row = RP.score_summary(mname, t.size, daily_all)
+        row["zero_ma"] = None
+        if zero is not None:
+            m = (t >= zero["start_s"]) & (t < zero["end_s"])
+            if m.any():
+                _days_z, daily_z = RP.daily_mean_series(_ca_days(t[m]), v[m])
+                row["zero_ma"] = RP.score_summary(mname, int(m.sum()), daily_z, label=zero["label"])
+        rows.append(row)
+    reading = RP.reading(rows)
+    settings = dict(scores=list(metrics), lags_days=list(RP.LAGS_DAYS),
+                    zero_ma_stretch=(zero["label"] if zero else None),
+                    independent_days_needed=RP.INDEPENDENT_DAYS_NEEDED,
+                    original_report="research_2026-09-25_options/02_next_clinic_visit_protocol.md, "
+                                    "'Sample size and power from the record's own numbers'",
+                    effective_days="Bretherton/Bartlett lag-1 correction (Biomarkers.stats_utils.effective_n), "
+                                  "a daily-mean series against its own later self")
+    return _finish(uid, "rating_persistence", dict(rows=rows), settings, reading, save)
+
+
+# ------------------------------------------------------------------------------------------------
+# A5. stepped current and bands with no plausible pain relationship
+# ------------------------------------------------------------------------------------------------
+
+def run_stepped_current_all_bands(uid, *, n_boot=2000, save=True):
+    from . import stepped_current_bands as EA
+    from modules.CacheStore import store as CS
+    rp, _stamp = CS.load_newest("three_source_run_points", uid, consumer="stim_optimizer")
+    d = EA.usable_rows(rp)
+    bands, ratios = EA.per_route_pair(d, n_boot=n_boot) if len(d) else ([], [])
+    reading = (EA.reading(ratios) if ratios else
+              ["No stored titration-ladder points for this participant; open the Stim Optimizer "
+               "page's readiness screen once to build them."])
+    result = dict(bands=bands, ratios=ratios, n_rows_used=int(len(d)),
+                 n_rows_total=int(len(rp)) if rp is not None else 0)
+    settings = dict(family_hz=[EA.FAMILY_LO_HZ, EA.FAMILY_HI_HZ], far_below_hz=EA.FAR_BELOW_HZ,
+                    far_above_hz=EA.FAR_ABOVE_HZ, model="one intercept per ladder run, straight-line "
+                    "current term (decisions 126, 198)", relative_to="the band's own mean settled power "
+                    "(a fraction per mA, never a log -- decisions 193-196, 202)",
+                    interval="95%, resampling whole ladder runs", n_boot=n_boot,
+                    excludes="bands the comparison itself flags as reading the stimulator, and any "
+                            "row the comparison refused (why_not_used)")
+    return _finish(uid, "stepped_current_all_bands", result, settings, reading, save)
+
+
+# ------------------------------------------------------------------------------------------------
 
 def _finish(uid, key, result, settings, reading, save):
     from modules.DecodeCommon import data_start as DS
@@ -756,4 +820,6 @@ def _finish(uid, key, result, settings, reading, save):
 RUNNERS = {"zero_ma_within_stretch": run_zero_ma, "current_explains": run_current_explains,
            "current_with_memory": run_current_with_memory, "time_of_day": run_time_of_day,
            "onoff_switches": run_onoff_switches, "carry_over_ladder": run_carry_over,
-           "regression_to_mean": run_regression_to_mean}
+           "regression_to_mean": run_regression_to_mean,
+           "rating_persistence": run_rating_persistence,
+           "stepped_current_all_bands": run_stepped_current_all_bands}

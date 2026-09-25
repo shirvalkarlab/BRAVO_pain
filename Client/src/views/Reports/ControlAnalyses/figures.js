@@ -409,6 +409,159 @@ export function CarryOverFigure({ result }) {
   );
 }
 
+/** A4: day-to-day correlation of the pain ratings, and report 02's visit-count target restated as
+ * calendar days once that correlation is taken out (critique finding M2). Per score: the
+ * correlation of daily mean ratings at lags 1-7 days, the effective (independent) day count for
+ * all the data we have and for the 0 mA stretch where one exists, and the 52/73/98
+ * independent-day targets from report 02, each restated as calendar days at the observed rate.
+ * Descriptive: corrects a planning number only. */
+export function RatingPersistenceFigure({ result }) {
+  const rows = (result && result.rows) || [];
+  const scores = rows.map((r) => r.score);
+  const [score, setScore] = useState(scores.includes("vas") ? "vas" : scores[0]);
+  const r = rows.find((x) => x.score === score) || { lags: [] };
+  const lags = r.lags || [];
+  const f = frame([0.4, 7.6], [-1, 1], 220);
+  const targetsAll = r.calendar_days_needed || [];
+  const targetsZero = (r.zero_ma && r.zero_ma.calendar_days_needed) || [];
+  const targetRows = targetsAll.length ? targetsAll : targetsZero;
+  return (
+    <div data-testid="figure-rating_persistence" style={{ fontSize: 12.5, color: TXT }}>
+      {scores.length > 1 && (
+        <select aria-label="Pain score" value={score} onChange={(e) => setScore(e.target.value)} style={SELECT}>
+          {scores.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+      )}
+      {lags.length > 0 ? (
+        <>
+          <svg viewBox={`0 0 ${W} ${f.h}`} width="100%" role="img"
+            aria-label="Day-to-day correlation of daily mean ratings at each lag">
+            <Axes f={f} xticks={lags.map((l) => [l.lag_days, `${l.lag_days} d`])} yticks={[-1, -0.5, 0, 0.5, 1]}
+              xlab="lag (calendar days)" ylab="correlation" />
+            <polyline fill="none" stroke={INK[0]} strokeWidth={2}
+              points={lags.filter((l) => l.r != null).map((l) => `${f.X(l.lag_days)},${f.Y(l.r)}`).join(" ")} />
+            {lags.map((l) => l.r != null && <circle key={l.lag_days} cx={f.X(l.lag_days)} cy={f.Y(l.r)} r={4} fill={INK[0]} />)}
+          </svg>
+          <div style={{ fontSize: 12, color: SUB }}>
+            {`${r.score} (${r.n_ratings} ratings, ${r.n_days} days). `}
+            {r.effective_days != null && `${r.effective_days.toFixed(1)} of those days count as independent (${Math.round(100 * r.ratio)}%).`}
+          </div>
+        </>
+      ) : (
+        <div style={{ fontSize: 12.5, color: SUB }}>{"Too few days with a rating to read."}</div>
+      )}
+      {r.zero_ma && r.zero_ma.effective_days != null && (
+        <div style={{ fontSize: 12.5, color: TXT, marginTop: 6 }}>
+          {`0 mA stretch (${r.zero_ma.label}, ${r.zero_ma.n_days} days): ${r.zero_ma.effective_days.toFixed(1)} independent days (${Math.round(100 * r.zero_ma.ratio)}%).`}
+        </div>
+      )}
+      {targetRows.length > 0 && (
+        <table data-testid="rating-persistence-targets" style={{ borderCollapse: "collapse", marginTop: 10 }}>
+          <thead><tr>{["Report 02's target", "Independent days", "Calendar days here (all data)", "Calendar days here (0 mA stretch)"].map((h) => (
+            <th key={h} style={HEADC}>{h}</th>))}</tr></thead>
+          <tbody>{targetRows.map((t, i) => (
+            <tr key={t.name}>
+              <td style={CELL}>{t.name}</td>
+              <td style={CELL}>{t.independent_days}</td>
+              <td style={CELL}>{targetsAll[i] && targetsAll[i].calendar_days != null ? Math.round(targetsAll[i].calendar_days) : "–"}</td>
+              <td style={CELL}>{targetsZero[i] && targetsZero[i].calendar_days != null ? Math.round(targetsZero[i].calendar_days) : "–"}</td>
+            </tr>))}</tbody>
+        </table>
+      )}
+      <div style={{ fontSize: 12, color: SUB, marginTop: 4 }}>
+        {"Descriptive: corrects a planning number only; recommends no visit count and blocks nothing."}
+      </div>
+    </div>
+  );
+}
+
+/** A5: does settled band power change with current as much in bands with no plausible pain
+ * relationship (below 12 Hz, above 32 Hz) as in the pain-linked family (21.5-27.5 Hz)? (critique
+ * finding M1.) Per recording route and sensing pair: each band's change per mA (relative to its
+ * own settled power), and the ratio of the far bands' typical change to the family's -- near 1 is
+ * what an electrical effect of stepping the current would predict, well under 1 is what a
+ * pain-specific family would. Descriptive: never selects a band. */
+const GROUP_INK = { family: OI.blue, far: OI.vermillion };
+export function SteppedCurrentAllBandsFigure({ result }) {
+  const bands = (result && result.bands) || [];
+  const ratios = (result && result.ratios) || [];
+  const keyOf = (b) => `${b.route}||${b.pair}`;
+  const combos = Array.from(new Set(bands.map(keyOf)));
+  const [combo, setCombo] = useState(combos[0]);
+  const rows = bands.filter((b) => keyOf(b) === combo);
+  const centres = rows.map((b) => b.centre_hz);
+  const vals = rows.flatMap((b) => [b.relative_slope_per_mA, b.lo, b.hi].filter((v) => v != null));
+  const ymax = Math.max(0.05, ...vals.map((v) => Math.abs(v)));
+  const f = centres.length
+    ? frame([Math.min(...centres) - 2, Math.max(...centres) + 2], [-ymax, ymax], 230)
+    : frame([0, 1], [-1, 1], 230);
+  const current = ratios.find((r) => `${r.route}||${r.pair}` === combo);
+  return (
+    <div data-testid="figure-stepped_current_all_bands" style={{ fontSize: 12.5, color: TXT }}>
+      {combos.length > 1 && (
+        <select aria-label="Route and sensing pair" value={combo} onChange={(e) => setCombo(e.target.value)} style={SELECT}>
+          {combos.map((c) => {
+            const [route, pair] = c.split("||");
+            return <option key={c} value={c}>{`${route}, ${pairName(pair)}`}</option>;
+          })}
+        </select>
+      )}
+      {rows.length > 0 ? (
+        <>
+          <svg viewBox={`0 0 ${W} ${f.h}`} width="100%" role="img"
+            aria-label="Change in settled band power per mA, relative to the band's own settled power">
+            <Axes f={f} xticks={[10, 20, 30, 40, 50].map((v) => [v, v])} yticks={[-ymax, 0, ymax].map((v) => Math.round(v * 1000) / 1000)}
+              xlab="band centre (Hz)" ylab="change per mA (fraction of band power)" />
+            {rows.map((b) => {
+              const grp = b.group === "family" || b.group === "far" ? b.group : null;
+              const col = grp ? GROUP_INK[grp] : OI.gray;
+              return (
+                <g key={b.centre_hz}>
+                  {b.lo != null && b.hi != null && (
+                    <line x1={f.X(b.centre_hz)} x2={f.X(b.centre_hz)} y1={f.Y(b.lo)} y2={f.Y(b.hi)} stroke={col} strokeWidth={1.6} />
+                  )}
+                  {b.relative_slope_per_mA != null && <circle cx={f.X(b.centre_hz)} cy={f.Y(b.relative_slope_per_mA)} r={4} fill={col} />}
+                </g>
+              );
+            })}
+          </svg>
+          <div style={{ fontSize: 12, color: SUB }}>
+            <span style={{ marginRight: 14 }}><span style={{ color: GROUP_INK.family, fontSize: 14 }}>{"●"}</span>{" 21.5–27.5 Hz family"}</span>
+            <span style={{ marginRight: 14 }}><span style={{ color: GROUP_INK.far, fontSize: 14 }}>{"●"}</span>{" far bands (< 12 Hz or > 32 Hz)"}</span>
+            <span>{"Lines: 95% intervals resampling whole ladder runs."}</span>
+          </div>
+        </>
+      ) : (
+        <div style={{ fontSize: 12.5, color: SUB }}>{"No stored titration-ladder points for this participant."}</div>
+      )}
+      {current && current.far_over_family_ratio != null && (
+        <div style={{ fontSize: 12.5, color: TXT, marginTop: 6 }}>
+          {`Family ${(100 * current.family_median_abs_relative_slope).toFixed(1)}% per mA at the median band; `}
+          {`far bands ${(100 * current.far_median_abs_relative_slope).toFixed(1)}%; `}
+          {`ratio (far over family) ${current.far_over_family_ratio.toFixed(2)}.`}
+        </div>
+      )}
+      {ratios.length > 0 && (
+        <table data-testid="stepped-current-ratios" style={{ borderCollapse: "collapse", marginTop: 10 }}>
+          <thead><tr>{["Route", "Sensing pair", "Family bands", "Far bands", "Family change/mA", "Far change/mA", "Ratio (far / family)"].map((h) => (
+            <th key={h} style={HEADC}>{h}</th>))}</tr></thead>
+          <tbody>{ratios.map((r) => (
+            <tr key={`${r.route}${r.pair}`}>
+              <td style={CELL}>{r.route}</td><td style={CELL}>{pairName(r.pair)}</td>
+              <td style={CELL}>{r.n_family_bands}</td><td style={CELL}>{r.n_far_bands}</td>
+              <td style={CELL}>{r.family_median_abs_relative_slope != null ? `${(100 * r.family_median_abs_relative_slope).toFixed(1)}%` : "–"}</td>
+              <td style={CELL}>{r.far_median_abs_relative_slope != null ? `${(100 * r.far_median_abs_relative_slope).toFixed(1)}%` : "–"}</td>
+              <td style={CELL}>{r.far_over_family_ratio != null ? r.far_over_family_ratio.toFixed(2) : "–"}</td>
+            </tr>))}</tbody>
+        </table>
+      )}
+      <div style={{ fontSize: 12, color: SUB, marginTop: 4 }}>
+        {"A ratio near 1 is what an electrical effect of stepping the current would predict; well under 1 is what a family specific to pain would. Descriptive: never selects a band."}
+      </div>
+    </div>
+  );
+}
+
 export const FIGURES = {
   zero_ma_within_stretch: ZeroMaFigure,
   current_explains: CurrentExplainsFigure,
@@ -417,4 +570,6 @@ export const FIGURES = {
   onoff_switches: OnOffFigure,
   carry_over_ladder: CarryOverFigure,
   regression_to_mean: RegressionToMeanFigure,
+  rating_persistence: RatingPersistenceFigure,
+  stepped_current_all_bands: SteppedCurrentAllBandsFigure,
 };
