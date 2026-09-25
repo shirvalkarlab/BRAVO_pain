@@ -460,8 +460,12 @@ def estimate_response_latency(times_s, band_power, amp_mA, *, step_index=None, f
 
 #: Adaptive Therapy can be driven by a band in this range only. Outside it, sensing is possible but
 #: therapy cannot respond. White paper p. 14 parameter table, "LFP Frequency Range":
-#: "8-30Hz (Adaptive) / 1-96Hz (Sensing Only)".
-ADAPTIVE_LFP_BAND_HZ = (8.0, 30.0)
+#: "8-30Hz (Adaptive) / 1-96Hz (Sensing Only)". THE OBJECT LIVES IN `DecodeCommon.device_ranges`
+#: since 2026-09-25 (item P-15), the same one home as the timing ranges above: the name stays here
+#: for every reader in this module, `constraints.py`, `prescription.py` and the Biomarkers module's
+#: `bravo_service.ADAPTIVE_LO_HZ`/`ADAPTIVE_HI_HZ` and `analytics.BAND_TIME_SWEEP_CENTER_LO_HZ`/
+#: `_HI_HZ`, which now bind to the same tuple; pinned by `tests/test_device_ranges_one_home.py`.
+ADAPTIVE_LFP_BAND_HZ = _DR.ADAPTIVE_LFP_BAND_HZ
 #: The wider range available when only recording.
 SENSING_ONLY_LFP_BAND_HZ = (1.0, 96.0)
 

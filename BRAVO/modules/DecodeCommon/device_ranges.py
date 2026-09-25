@@ -63,6 +63,17 @@ SENSING_BLANKING_RANGE_US_TABLET = (0.0, 2_280.0)
 #: The two selectable high-pass corners (D13).
 HIGHPASS_OPTIONS_HZ = (1.0, 10.0)
 
+#: Adaptive Therapy can be driven by a band inside this range only; outside it, sensing is possible
+#: but a change in the signal cannot change stimulation. White paper p. 14 parameter table, "LFP
+#: Frequency Range": "8-30Hz (Adaptive) / 1-96Hz (Sensing Only)" (D08; also quoted in
+#: `StimOptimizer/routines/percept_adaptive.py`, decision 32). Moved here 2026-09-25 (item P-15):
+#: it had been typed separately as `StimOptimizer.routines.percept_adaptive.ADAPTIVE_LFP_BAND_HZ`,
+#: `Biomarkers.bravo_service.ADAPTIVE_LO_HZ`/`ADAPTIVE_HI_HZ` and
+#: `Biomarkers.routines.analytics.BAND_TIME_SWEEP_CENTER_LO_HZ`/`_HI_HZ`; those names stay for
+#: every existing reader and are now bound to this one tuple, pinned by
+#: `StimOptimizer/tests/test_device_ranges_one_home.py`.
+ADAPTIVE_LFP_BAND_HZ = (8.0, 30.0)
+
 #: One device decision: an averaging window plus an onset hold, in milliseconds.
 HOLD_HORIZON_MS = AVERAGING_RANGE_MS[1] + ONSET_RANGE_DUAL_MS[1]
 

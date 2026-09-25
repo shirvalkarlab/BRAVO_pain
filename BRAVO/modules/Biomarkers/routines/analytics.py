@@ -1378,19 +1378,26 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
 #: help the odds ratio, which is what keeps it out of the selective-inference problem the fourteen
 #: finding audit was about.
 #:
-#: MEASURED EFFECT ON RCS08, 2026-09-05: this exclusion currently removes NOTHING from any fit, and
-#: the reason is structural rather than incidental. **No pain rating exists before week 5.** The
-#: fit-population census by elapsed week is {5: 6, 7: 2, 9: 2, 10: 3, 11: 5, ...} with weeks 0 to 4
-#: empty, so the window ends two weeks before the first usable sample. 22 samples in weeks 0-2 do
-#: carry finite band power, but 0 of them carry a pain label.
+#: MEASURED EFFECT ON RCS08, 2026-09-05, NOW SUPERSEDED. The paragraph below this one said the
+#: exclusion removed nothing, because no pain rating existed before week 5 on the record as it was
+#: read then. That record ran back to the device's first snapshot in the bench, months before the
+#: device was implanted. Decision 260 (2026-09-24) cut every view at the implant date instead
+#: (2025-07-16), so week 0 is now the first week the patient carried the device, and pain ratings
+#: exist from that first week on. The exclusion is no longer a no-op.
 #:
-#: This was verified under FOUR binarization schemes, because an earlier explanation of mine was
-#: wrong. I first attributed the no-op to the tertile split discarding the middle third, and the PI
-#: correctly objected that a median split excludes nothing and the burn-in samples would then
-#: enter. They do not: under median and under fixed cutoffs at 5 and at 6 the fit population rises
-#: from 84 to 94 samples, yet weeks 0-2 still contribute zero, because the missing thing is the
-#: LABEL and not the class assignment. So the guard is correct and the objection is answered by the
-#: data rather than by the tertile rule.
+#: RE-MEASURED 2026-09-25, on the band decisions 242 and 273 use, L 1-3+ (channel ONE_THREE_LEFT)
+#: at 24.5 Hz, at the daily-default settings (pain score NRS, tertile split, 60-minute match
+#: window). Without the exclusion the fit population is 482 samples over 42 weekly eras; with it,
+#: 469 samples over 40 eras. Weeks 0-2 hold 232 pooled samples on this channel and band, of which 41
+#: carry finite band power, 72 carry a finite pain label, and 13 — in 2 of those eras — carry both;
+#: those 13 are what the exclusion drops. The odds ratio with the exclusion is 0.809 (95% CI
+#: 0.570-1.148, p=0.235, the number decisions 242 and 273 rest on). Asking the same model to fit
+#: without the exclusion does not just move that number: lme4 reports "failed to converge" and
+#: "nearly unidentifiable: very large eigenvalue" and returns an odds ratio of 0.793 with a 95% CI
+#: of 0.7920-0.7944, a width of 0.0024 — the same variance-collapse signature the OPEN DECISION
+#: paragraph below already warns about for a further, data-anchored window on a different band.
+#: Dropping the exclusion here trades a wide, honest interval for a degenerate one; it is not a
+#: reason to drop it.
 #:
 #: OPEN DECISION, deliberately not taken here. The window above is IMPLANT-anchored: three weeks
 #: from the first sample of the record. A DATA-anchored window — three weeks from the first sample
@@ -5111,9 +5118,18 @@ _N_LENGTHS_WORD = _lengths_word(len(BAND_TIME_SWEEP_SECONDS))
 
 #: The span of band centres the sweep covers, in hertz. The firmware can only place an adaptive
 #: sensing band between 8 and 30 Hz (design ledger section 1), so a centre outside this span could
-#: not be acted on from this page even if it tracked pain perfectly.
-BAND_TIME_SWEEP_CENTER_LO_HZ = 8.0
-BAND_TIME_SWEEP_CENTER_HI_HZ = 30.0
+#: not be acted on from this page even if it tracked pain perfectly. Read from
+#: `DecodeCommon.device_ranges.ADAPTIVE_LFP_BAND_HZ` since 2026-09-25 (item P-15), the one home for
+#: this range, also read by `bravo_service.ADAPTIVE_LO_HZ`/`ADAPTIVE_HI_HZ` and
+#: `StimOptimizer.routines.percept_adaptive.ADAPTIVE_LFP_BAND_HZ`; pinned by
+#: `StimOptimizer/tests/test_device_ranges_one_home.py`. Both import spellings on purpose (the
+#: container's path root makes the package `modules.DecodeCommon`, the host's makes it
+#: `DecodeCommon`).
+try:
+    from modules.DecodeCommon import device_ranges as _device_ranges
+except ImportError:                                               # pragma: no cover
+    from DecodeCommon import device_ranges as _device_ranges
+BAND_TIME_SWEEP_CENTER_LO_HZ, BAND_TIME_SWEEP_CENTER_HI_HZ = _device_ranges.ADAPTIVE_LFP_BAND_HZ
 
 #: The width of every band in the sweep, in hertz. The device's own band is about this wide.
 BAND_TIME_SWEEP_WIDTH_HZ = 5.0

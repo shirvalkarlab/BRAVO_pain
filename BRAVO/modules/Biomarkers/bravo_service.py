@@ -1792,7 +1792,22 @@ _TD_CENTERED_VERSION = "v2_fallback"
 #   v1_missing_aware: reject Welch windows whose Missing fraction exceeds WELCH_MAX_MISSING_FRAC, so
 #     FixBreaking concatenation zero-fill no longer biases the TD PSD (parity with the PowerDomain
 #     adapter, which already drops missing>0 samples).
-_TD_MISSING_VERSION = "v1_missing_aware"
+#
+# The name used to be typed by hand, with no tie to the limit it describes (`streaming_psd.
+# WELCH_MAX_MISSING_FRAC`, 10%): a future change to that limit would have kept serving PSDs built
+# under the old one forever, because nothing would tell this key to move (P-05, 2026-09-25).
+# `_td_missing_version_for` builds the name from the limit itself; at today's 10% it reproduces the
+# literal string above -- every file already on disk is filed under it, so this change alone
+# rebuilds nothing -- and any OTHER limit produces a different, self-describing name.
+def _td_missing_version_for(max_missing_frac):
+    pct = float(max_missing_frac) * 100.0
+    if abs(pct - 10.0) < 1e-9:
+        return "v1_missing_aware"
+    pct_str = f"{pct:g}".replace(".", "p")
+    return f"v1_missing_aware_{pct_str}pct"
+
+
+_TD_MISSING_VERSION = _td_missing_version_for(streaming_psd.WELCH_MAX_MISSING_FRAC)
 
 # The scale the assembled matrix's spectra are stored on. Folded into the matrix signature so an
 # entry assembled under one rule is never served under another: until 2026-09-19 every spectrum was
@@ -1835,37 +1850,6 @@ _canon_channel = availability._canon_channel
 _PSD_WARM_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="psd-warm")
 
 
-def _assemble_psd_rows(participant_uid, td_list, psd_list):
-    """Gather EVERY full-spectrum PSD for the main bipolar channels, one row per (recording, channel).
-
-    Two full-spectrum sources carry the main bipolar pairs:
-      * TD streaming (BrainSenseTimeDomain + IndefiniteStream): raw 250 Hz time domain -> Welch PSD.
-      * Montage/survey (Survey + Baseline + Stim Montages): also raw time domain -> Welch PSD; these
-        sweep all six bipolar pairs.
-    (NeuralActivitySnapshot and patient-event PSDs use reference-montage / per-hemisphere identities
-    that don't correspond to a single bipolar pair, so they're excluded from the per-channel scan —
-    they remain timeline markers.)
-
-    Returns a list of {"channel", "source", "t": epoch_s, "freq", "power"} — the input to
-    `streaming_psd.psd_rows_to_matrix`. The Welch transform here is the expensive part that the
-    cache exists to avoid repeating.
-    """
-    from .routines import streaming_psd as _sp
-    rows = []
-    _welch_rows_into(rows, td_list, "TD streaming", _sp)
-    _welch_rows_into(rows, psd_list, "Montage/survey", _sp)
-    # Patient-event PSDs (ORM metadata, no decode) — assigned to their real bipolar channel via
-    # the active-sensing resolver. Index built from td_list only (single-channel BrainSense
-    # streaming records); psd_list is montage/survey sweeps that sense ALL pairs simultaneously
-    # and would be excluded by _build_sensing_config_index's single-channel guard anyway.
-    try:
-        _ev_idx = _build_sensing_config_index(list(td_list or []))
-        rows.extend(_event_psd_rows(participant_uid, sensing_index=_ev_idx))
-    except Exception:
-        pass
-    return rows
-
-
 #: The two quality counters `_welch_rows_into` keeps (review B6): how many recordings whose
 #: rating-centred spectrum RAISED and were given a session-start spectrum instead, and how many
 #: were DROPPED because their first-window spectrum raised. Both used to happen in silence.
@@ -1888,9 +1872,10 @@ def _welch_rows_into(rows, recs, source_label, _sp, pro_times=None, counts=None)
     per-recording cache. Each is now logged with its traceback and counted; the counts travel
     with the cached rows to the matrix payload and to `run_for_participant`'s `cache` block.
 
-    Single source of truth for the row schema: BOTH the legacy whole-participant assembly
-    (`_assemble_psd_rows`) and the per-recording cache (`_recording_psd_rows`) build rows through
-    here, so a matrix assembled from the cache is byte-identical to one assembled the old way.
+    Single source of truth for the row schema: every assembly path -- the per-recording cache
+    (`_recording_psd_rows`) and, before it, the uncached whole-participant scan (`_assemble_psd_rows`,
+    zero production callers by decision 71, deleted P-06 2026-09-25) -- built rows through here, so a
+    matrix assembled from the cache is byte-identical to one assembled the old way.
 
     `pro_times` : array-like of PRO timestamps (UTC epoch s) or None.
         When None (default — preserves the legacy behavior and every existing test): each recording
@@ -2012,7 +1997,7 @@ def _psd_sample_index(td_list, psd_list, pro_times=None):
     """Lightweight index of the scan's pooled-PSD samples: one entry per (recording, channel) the
     full-spectrum scan would include, WITHOUT the expensive Welch transform.
 
-    Uses the IDENTICAL channel filter as `_assemble_psd_rows` (membership in `_MAIN_BIPOLAR`, same
+    Uses the IDENTICAL channel filter as `_welch_rows_into` (membership in `_MAIN_BIPOLAR`, same
     source labels), so the set of (t, channel, source) entries here equals the rows that feed the
     pooled PSD matrix — modulo the rare degenerate spectrum Welch drops (<4 finite bins), which
     effectively never occurs on real recordings. This lets the frontend replicate the backend's
@@ -2376,6 +2361,98 @@ def _recording_psd_cache_path(rec_uid, rec_hash, pro_sig=""):
                         f"{rec_uid}_{h}_w{w}_{_CHANNEL_CANON_VERSION}_{_TD_MISSING_VERSION}{p}.npz")
 
 
+#: Matches everything in a per-recording PSD file's name after the Welch-window token
+#: (`_w<seconds>_`) and before `.npz` -- the part `_recording_psd_cache_path` builds from
+#: `_CHANNEL_CANON_VERSION`, `_TD_MISSING_VERSION` and, for a rating-centred entry, the PRO-set
+#: signature and `_TD_CENTERED_VERSION`. This is what identifies a file's naming GENERATION.
+_PSD_ROWS_SUFFIX_RE = re.compile(r"_w[0-9p]+_(.+)\.npz$")
+
+#: The PRO-set signature inside a rating-centred suffix (`_p<12 hex chars>_`) is a content hash,
+#: unique per report set, and carries no information about which NAMING RULE built the file -- so
+#: it is collapsed to one placeholder before generations are counted, or every report set a
+#: participant has ever had would form its own single-file "generation".
+_PSD_ROWS_PRO_SIG_RE = re.compile(r"(_p)[0-9a-fA-F]+(_)")
+
+
+def psd_rows_cache_generation_report():
+    """READ-ONLY dry run (P-07, 2026-09-25): count the per-recording PSD files already on disk
+    (`_psd_rows_cache_dir`) by naming GENERATION and total bytes. Deletes nothing.
+
+    Every time `_CHANNEL_CANON_VERSION`, `_TD_MISSING_VERSION` or `_TD_CENTERED_VERSION` is bumped,
+    the files an OLDER value named are left behind: `_recording_psd_cache_path` never builds that
+    name again, so nothing ever reads them, and nothing in this module sweeps this directory (only
+    the separate rows-SET cache is swept, by `_sweep_old_rows_cache` -- a different, much smaller
+    cache of assembled recording SETS, not these per-recording files). This function only counts
+    what generation each file belongs to and how many bytes it holds; a caller decides separately,
+    on its own authority, whether anything should ever be deleted.
+
+    Returns
+        {"total_files": int, "total_bytes": int,
+         "current_generation": {"suffix": str, "files": int, "bytes": int} or None,
+         "other_generations": [{"suffix": str, "files": int, "bytes": int}, ...],  # bytes desc
+         "unparsed": {"files": int, "bytes": int}}
+
+    `suffix` is the canonicalized naming-generation string (the PRO-set hash, if any, replaced by
+    the literal placeholder "<sig>"). "current_generation" is the one `_recording_psd_cache_path`
+    would build TODAY (any PRO-set signature); "other_generations" are every generation that no
+    longer matches -- their files are dead weight the live code will never open again. "unparsed"
+    counts files whose name does not match the expected `..._w<seconds>_...npz` shape at all (an
+    even older naming rule, or something else entirely); they are counted, never touched.
+    """
+    d = _psd_rows_cache_dir()
+    try:
+        names = os.listdir(d)
+    except Exception as e:
+        _log.warning("Biomarkers: could not list the per-recording PSD cache directory (%s)", e)
+        return {"total_files": 0, "total_bytes": 0, "current_generation": None,
+                "other_generations": [], "unparsed": {"files": 0, "bytes": 0}}
+
+    current_bare = f"{_CHANNEL_CANON_VERSION}_{_TD_MISSING_VERSION}"
+
+    total_files = 0
+    total_bytes = 0
+    by_suffix = {}          # canonical suffix -> [n_files, n_bytes]
+    unparsed_files = 0
+    unparsed_bytes = 0
+    for name in sorted(names):
+        # `.tmp.npz` is an in-flight write (`_save_recording_psd_rows`'s temp file), not a finished
+        # cache entry; skip it so a dry run never counts (or a later caller never deletes) a file
+        # another request is mid-way through writing.
+        if not name.endswith(".npz") or name.endswith(".tmp.npz"):
+            continue
+        path = os.path.join(d, name)
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            continue
+        total_files += 1
+        total_bytes += size
+        m = _PSD_ROWS_SUFFIX_RE.search(name)
+        if not m:
+            unparsed_files += 1
+            unparsed_bytes += size
+            continue
+        suffix = _PSD_ROWS_PRO_SIG_RE.sub(r"\1<sig>\2", m.group(1))
+        entry = by_suffix.setdefault(suffix, [0, 0])
+        entry[0] += 1
+        entry[1] += size
+
+    current = {"suffix": current_bare, "files": 0, "bytes": 0}
+    others = []
+    for suffix, (n, b) in by_suffix.items():
+        if suffix == current_bare or suffix.startswith(current_bare + "_p<sig>_"):
+            current["files"] += n
+            current["bytes"] += b
+        else:
+            others.append({"suffix": suffix, "files": n, "bytes": b})
+    others.sort(key=lambda row: row["bytes"], reverse=True)
+    if current["files"] == 0:
+        current = None
+    return {"total_files": total_files, "total_bytes": total_bytes,
+            "current_generation": current, "other_generations": others,
+            "unparsed": {"files": unparsed_files, "bytes": unparsed_bytes}}
+
+
 def _save_recording_psd_rows(path, rows, counts=None):
     """Persist one recording's PSD rows (the per-channel spectra) to a compact .npz.
 
@@ -2437,7 +2514,7 @@ def _recording_rows_for_psd(participant_uid):
     just the identity columns needed to consult the per-recording cache — NO .bdat decode.
 
     Returns [{"rec": <Recording>, "uid": str, "hash": str, "source": str}], where `source` is the
-    SAME label `_assemble_psd_rows` uses ("TD streaming" / "Montage/survey"), so cache hits and the
+    SAME label `_welch_rows_into` uses ("TD streaming" / "Montage/survey"), so cache hits and the
     freshly-Welch'd rows carry identical source strings.
     """
     Participant = models.Participant.find(uid=participant_uid)
@@ -2475,8 +2552,9 @@ def _assemble_psd_rows_cached(participant_uid, pro_times=None, force_recompute=F
 
     This is the load-skipping fast path behind `_cached_psd_matrix`: a participant whose recordings
     are all cached pays zero .bdat decodes (the ~190 s cold load disappears); a partially-warm
-    participant pays only for the new files. The resulting rows are identical to
-    `_assemble_psd_rows(td_list, psd_list)` because both go through `_welch_rows_into`.
+    participant pays only for the new files. The resulting rows are identical to a full
+    `_welch_rows_into` scan of every recording, since every row -- cached or freshly Welch'd --
+    is built through that one function.
 
     `pro_times`: when provided, TD-streaming recordings emit RATING-CENTERED rows (one per
     overlapping PRO, see `_welch_rows_into`); their cache entries are keyed by the PRO-set signature
@@ -2972,15 +3050,30 @@ def _programmed_adaptive_thresholds(participant):
     if participant is None:
         return {}
     try:
-        from Server.models.Therapy import ElectricalTherapy
+        from Server.models.Therapy import ElectricalTherapy, ElectricalStimulation
         from Server.models import SourceFile
+        from django.db.models import Prefetch
     except Exception:
         return {}
     try:
         source_files = list(SourceFile.find_all(owner=participant))
         if not source_files:
             return {}
-        groups = list(ElectricalTherapy.find_all(therapy__source__in=source_files))
+        # `ElectricalTherapy.find_all` already prefetches `stimulation_settings` and
+        # `adaptive_settings`, but NOT each stimulation setting's own `electrode` FK -- so
+        # `_hemi_of_group` below, which reads `st.get_info()` -> `self.electrode.get_info()` for
+        # every stimulation setting, issued one extra database query per therapy group (P-08,
+        # 2026-09-25). Prefetching the electrode alongside the stimulation settings folds that
+        # into the same batch instead of `find_all`'s own query plan.
+        groups = list(
+            ElectricalTherapy.objects.select_related("therapy")
+            .filter(therapy__source__in=source_files)
+            .prefetch_related(
+                Prefetch("stimulation_settings",
+                         queryset=ElectricalStimulation.objects.select_related("electrode")),
+                "adaptive_settings",
+            )
+        )
     except Exception:
         return {}
 
@@ -3919,7 +4012,7 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
                 ch, td_recs=td_all, psd_recs=psd_all,
                 chronic_recs=chronic_list, powerdomain_recs=powerdomain_list)
         # Scan-sample index: the (t, channel, source) of every full-spectrum PSD the exploratory
-        # scan pools (same `_MAIN_BIPOLAR` filter as `_assemble_psd_rows`), so the frontend can
+        # scan pools (same `_MAIN_BIPOLAR` filter as `_welch_rows_into`), so the frontend can
         # replicate the nearest-PRO match + binarization LIVE as the match-window slider moves.
         out = {"records": records, "stim": stim, "freq_bands": bands,
                "span": span, "samples": samples, "lsb_overview": lsb_overview,
@@ -5975,8 +6068,18 @@ def compute_and_store_band_sweep(participant_uid, metric, request_data=None):
 
 
 # --- Percept RC device-mapping constants (DESIGN_biomarker_pipeline_v2 §1) ----------------------
-ADAPTIVE_LO_HZ = 8.0    # Percept PD-mode adaptive sensing floor
-ADAPTIVE_HI_HZ = 30.0   # Percept PD-mode adaptive sensing ceiling
+# ADAPTIVE_LO_HZ/ADAPTIVE_HI_HZ read `DecodeCommon.device_ranges.ADAPTIVE_LFP_BAND_HZ` since
+# 2026-09-25 (item P-15): the one home for the device's 8-30 Hz adaptive-sensing range, also read
+# by `StimOptimizer.routines.percept_adaptive.ADAPTIVE_LFP_BAND_HZ` and
+# `analytics.BAND_TIME_SWEEP_CENTER_LO_HZ`/`_HI_HZ`; pinned by
+# `StimOptimizer/tests/test_device_ranges_one_home.py`. Both import spellings on purpose (the
+# container's path root makes the package `modules.DecodeCommon`, the host's makes it
+# `DecodeCommon`).
+try:
+    from modules.DecodeCommon import device_ranges as _device_ranges
+except ImportError:                                              # pragma: no cover
+    from DecodeCommon import device_ranges as _device_ranges
+ADAPTIVE_LO_HZ, ADAPTIVE_HI_HZ = _device_ranges.ADAPTIVE_LFP_BAND_HZ
 # Empirical LFP-Power LSB <-> µV² rule of thumb (Medtronic) and measured RCS08 ratio (§4). The
 # measured constant is normalization-dependent — trusted no better than ~3×; Phase C measures it
 # per overlapping session and flags divergence. Carried here only as the schema default.

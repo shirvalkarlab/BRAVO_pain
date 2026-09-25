@@ -682,46 +682,17 @@ def test_forward_chaining_guards_single_week():
 
 
 if __name__ == "__main__":
-    test_otsu_matches_canonical_convention()
-    test_roc_operating_point_is_youden_and_separates_classes()
-    test_roc_downsampled_for_plot()
-    test_sliding_window_emits_per_window_roc()
-    test_cluster_scatter_one_feature()
-    test_cluster_scatter_two_features()
-    test_cluster_scatter_missing_features()
-    test_pain_binarization()
-    test_lfp_distribution_robust_range()
-    test_lfp_distribution_otsu_on_mad_filtered_data()
-    test_power_pain_scatter_corr_and_outlier_exclusion()
-    test_td_sliding_corr_grid_reaches_last_session_drops_corrupt_dates()
-    test_power_center_freqs_standard_path()
-    test_power_center_freqs_direct_hemisphere_key()
-    test_power_center_freqs_nested_recordingconfig()
-    test_power_center_freqs_missing_is_safe()
-    test_chronic_center_freqs_group_level()
-    test_chronic_center_freqs_active_group_wins()
-    test_chronic_center_freqs_missing_is_safe()
-    test_binarize_labels_tertile_excludes_middle()
-    test_builder_no_device_psd_scale_in_detail()
-    test_band_stim_stability_shape_and_no_stim_degrades()
-    test_band_mixedmodel_inference_emits_or_ci()
-    test_deployment_roc_recovers_planted_band()
-    test_deployment_roc_clustered_ci_wider_than_naive()
-    test_deployment_roc_feature_hist_shape_and_counts()
-    test_auc_power_curve_monotone_and_crosses_target()
-    test_auc_power_monotone_and_sample_size()
-    test_auc_power_conservative_band_gates_on_ci_lower_bound()
-    test_deployment_roc_bootstrap_defolded_null_ci_drops_below_chance()
-    test_deployment_roc_by_era_pooled_orientation_surfaces_reversal()
-    test_deployment_roc_by_era_noisy_dip_is_not_a_confident_reversal()
-    test_deployment_roc_by_era_portable_when_eras_agree()
-    test_deployment_summary_gate_states_and_necessary_blocking()
-    test_band_power_notched_default_no_mains_removal()
-    test_freq_extrapolated_guard_agrees_with_frozen_model()
-    test_forward_chaining_validates_stationary_band()
-    test_forward_chaining_null_band_does_not_beat_chance_forward()
-    test_forward_chaining_catches_sign_reversal_over_time()
-    test_forward_chaining_guards_single_week()
+    # Ad-hoc local run of the tests defined ABOVE this point (the container harness globs test_*
+    # itself; this block is for a quick `python test_analytics.py`, which this file's own docstring
+    # still documents). The hard-coded name list here had rotted silently: it called a test that was
+    # never defined (`test_sliding_window_emits_per_window_roc` and five others alongside it) and one
+    # deleted with the June calibration model (`test_freq_extrapolated_guard_agrees_with_frozen_model`,
+    # decision 218) -- neither caught because nothing calls this block except a human invoking the
+    # file directly (P-09, 2026-09-25). Discovering the names from `globals()` means a renamed or
+    # deleted test cannot leave a stale call behind here again.
+    for _name in sorted(globals()):
+        if _name.startswith("test_") and callable(globals()[_name]):
+            globals()[_name]()
     print("All analytics tests passed.")
 
 
