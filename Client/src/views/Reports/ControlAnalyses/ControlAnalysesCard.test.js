@@ -131,6 +131,57 @@ describe("the control analyses card", () => {
     expect(container.textContent).not.toMatch(/undefined|NaN/);
   });
 
+  it("draws the regression-to-mean check with its block averages and comparisons, marks in hex colours, no text under 11 px", () => {
+    const payload = { analyses: [{ key: "regression_to_mean", title: "Regression to the mean at one setting",
+      what: "At the setting delivered most often in one rate/pulse-width group.", literature: LIT, n_runs: 1,
+      snapshot: { run_at: "2026-09-25T12:00:00Z", data_from: "2025-07-16", data_through: "2026-09-24",
+        settings: { target_stratum: { freq_hz: 55, pw_us_Left: 60, pw_us_Right: 160 } },
+        reading: ["Target setting 1.6/1.2 mA (8 of 19 setting-periods in this group): block 0: +1.51 (n 3, se 0.12); block 1: +0.53 (n 3, se 0.24); block 2: -0.06 (n 2, se 1.50)."],
+        result: {
+          setting: { amp_mA_Left: 1.6, amp_mA_Right: 1.2 }, n_target: 8, n_other: 11, n_blocks: 3,
+          target: { by_block: [{ block: 0, n: 3, mean: 1.51, se: 0.12 }, { block: 1, n: 3, mean: 0.53, se: 0.24 }, { block: 2, n: 2, mean: -0.06, se: 1.5 }],
+            heterogeneity: { q: 30.2, p: 0.0006, grand_mean: 0.8, df: 2, reason: null },
+            trend: { slope: -0.79, intercept: 1.4, reason: null } },
+          other: { by_block: [{ block: 0, n: 4, mean: 0.9, se: 0.3 }, { block: 1, n: 4, mean: 0.6, se: 0.3 }, { block: 2, n: 3, mean: 0.5, se: 0.4 }],
+            heterogeneity: { q: 1.1, p: 0.58, grand_mean: 0.67, df: 2, reason: null },
+            trend: { slope: -0.2, intercept: 0.9, reason: null } },
+          internal_comparison: { p_two_sided: 0.02, p_same_direction: 0.015, n_valid: 75000, n_total: 75582, q_real: 30.2, trend_real: -0.79, floor: "< 1.3e-05" },
+          outside_comparison: { n_windows: 85, fraction_ge: 0.08, window_size: 8, q_real: 30.2 },
+          extremity: { value: 3.4, block1_mean: 1.51, block1_se: 0.12, record_mean: 0.6, reason: null },
+        } } }] };
+    const { container } = render(<ControlAnalysesCard payload={payload} />);
+    const fig = screen.getByTestId("figure-regression_to_mean");
+    expect(fig.textContent).toMatch(/1\.6\/1\.2 mA/);
+    expect(fig.textContent).toMatch(/2\.0% of splits/);
+    const table = screen.getByTestId("regression-to-mean-comparisons");
+    expect(table.textContent).toMatch(/8\.0% of runs elsewhere/);
+    expect(table.textContent).toMatch(/\+3\.4 standard errors/);
+    const marks = [...fig.querySelectorAll("circle, line, polyline")];
+    expect(marks.length).toBeGreaterThan(0);
+    marks.forEach((m) => {
+      const a = m.tagName === "circle" ? "fill" : "stroke";
+      expect(m.getAttribute(a)).toMatch(/^#[0-9A-Fa-f]{3,8}$/);
+    });
+    [...fig.querySelectorAll("text")].forEach((t) => {
+      expect(Number(t.getAttribute("font-size"))).toBeGreaterThanOrEqual(11);
+    });
+    [...container.querySelectorAll("[style]")].forEach((el) => {
+      const fs = el.style && el.style.fontSize;
+      if (fs) expect(parseFloat(fs)).toBeGreaterThanOrEqual(11);
+    });
+    expect(container.textContent).not.toMatch(/undefined|NaN/);
+  });
+
+  it("says the regression-to-mean check has nothing to read when no setting-periods matched", () => {
+    const payload = { analyses: [{ key: "regression_to_mean", title: "Regression to the mean at one setting",
+      what: "At the setting delivered most often.", literature: LIT, n_runs: 1,
+      snapshot: { run_at: "2026-09-25T12:00:00Z", data_from: "2025-07-16", data_through: "2026-09-24",
+        settings: {}, reading: ["No setting-periods matched the target group; nothing to read."],
+        result: { setting: null, reason: "no setting-periods matched the target group" } } }] };
+    render(<ControlAnalysesCard payload={payload} />);
+    expect(screen.getByTestId("figure-regression_to_mean").textContent).toMatch(/no setting-periods matched/i);
+  });
+
   it("says an analysis has not been run yet rather than drawing nothing", () => {
     render(<ControlAnalysesCard payload={PAYLOAD} />);
     fireEvent.change(screen.getByLabelText("Control analysis"), { target: { value: "time_of_day" } });

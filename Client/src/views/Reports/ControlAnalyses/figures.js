@@ -190,6 +190,97 @@ export function CurrentMemoryFigure({ result }) {
 
 const CELL = { padding: "2px 10px 2px 0", whiteSpace: "nowrap" };
 const HEADC = { ...CELL, textAlign: "left", color: SUB, fontWeight: 500 };
+const signedN = (v, d = 1) => (v == null ? "–" : `${v >= 0 ? "+" : ""}${v.toFixed(d)}`);
+
+/** 7. Regression to the mean at one setting (decision 253): the setting delivered most often in
+ * one rate/pulse-width group, its own block averages against every other setting in the same
+ * group, and whether the swing stands out from every other way of splitting the same
+ * setting-periods (internal) or from any similar run elsewhere in the record (outside).
+ * Descriptive: it never selects a setting. */
+export function RegressionToMeanFigure({ result }) {
+  const setting = (result && result.setting) || {};
+  const target = (result && result.target) || { by_block: [] };
+  const other = (result && result.other) || { by_block: [] };
+  const internal = (result && result.internal_comparison) || {};
+  const outside = (result && result.outside_comparison) || {};
+  const extremity = (result && result.extremity) || {};
+  const nBlocks = (result && result.n_blocks) || 3;
+  const blocks = Array.from({ length: nBlocks }, (_, i) => i);
+  if (!result || setting.amp_mA_Left == null) {
+    return (
+      <div data-testid="figure-regression_to_mean" style={{ fontSize: 12.5, color: SUB }}>
+        {(result && result.reason) || "Nothing to read yet."}
+      </div>
+    );
+  }
+  const allMeans = [...(target.by_block || []), ...(other.by_block || [])].map((r) => r.mean);
+  const ymax = Math.max(1, ...allMeans.map((v) => Math.abs(v)));
+  const f = frame([-0.4, nBlocks - 0.6], [-ymax, ymax], 220);
+  const yt = Array.from(new Set([-ymax, 0, ymax].map((v) => Math.round(v * 10) / 10)));
+  const series = [
+    ["target", `${setting.amp_mA_Left}/${setting.amp_mA_Right} mA (${result.n_target || 0} setting-periods)`, OI.blue, target],
+    ["other", `every other setting in this group (${result.n_other || 0})`, OI.vermillion, other],
+  ];
+  return (
+    <div data-testid="figure-regression_to_mean" style={{ fontSize: 12.5, color: TXT }}>
+      <svg viewBox={`0 0 ${W} ${f.h}`} width="100%" role="img"
+        aria-label="Block averages of the target setting against every other setting in the same group">
+        <Axes f={f} xticks={blocks.map((b) => [b, `block ${b + 1}`])} yticks={yt}
+          xlab="time block" ylab="pain relative to today (J)" />
+        {series.map(([key, , col, g], k) => (
+          <g key={key}>
+            {(g.by_block || []).map((r) => {
+              const x = f.X(r.block) + (k - 0.5) * 8;
+              return (
+                <g key={`${key}-${r.block}`}>
+                  {Number.isFinite(r.se) && (
+                    <line x1={x} x2={x} y1={f.Y(r.mean - r.se)} y2={f.Y(r.mean + r.se)} stroke={col} strokeWidth={1.6} />
+                  )}
+                  <circle cx={x} cy={f.Y(r.mean)} r={4.5} fill={col} />
+                </g>
+              );
+            })}
+          </g>
+        ))}
+      </svg>
+      <div style={{ fontSize: 12, color: SUB }}>
+        {series.map(([key, lab, col]) => (
+          <span key={key} style={{ marginRight: 14 }}><span style={{ color: col, fontSize: 14 }}>{"●"}</span>{` ${lab}`}</span>
+        ))}
+        <span>{"Lines: ± 1 standard error, weighted by each setting-period's own rating noise."}</span>
+      </div>
+      <table data-testid="regression-to-mean-comparisons" style={{ borderCollapse: "collapse", marginTop: 10 }}>
+        <thead><tr>{["Comparison", "Reads", "Usable"].map((h) => <th key={h} style={HEADC}>{h}</th>)}</tr></thead>
+        <tbody>
+          <tr>
+            <td style={CELL}>{"Internal: specific to this current pair?"}</td>
+            <td style={CELL}>{internal.p_two_sided != null
+              ? `${(internal.p_two_sided * 100).toFixed(1)}% of splits match or exceed it (same direction ${(internal.p_same_direction * 100).toFixed(1)}%)`
+              : (internal.reason || "not computable")}</td>
+            <td style={CELL}>{internal.n_valid != null ? `${internal.n_valid} of ${internal.n_total} splits` : "–"}</td>
+          </tr>
+          <tr>
+            <td style={CELL}>{"Outside: common anywhere in the record?"}</td>
+            <td style={CELL}>{outside.fraction_ge != null
+              ? `${(outside.fraction_ge * 100).toFixed(1)}% of runs elsewhere match or exceed it`
+              : "not computable"}</td>
+            <td style={CELL}>{outside.n_windows ? `${outside.n_windows} overlapping runs of ${outside.window_size}` : "–"}</td>
+          </tr>
+          <tr>
+            <td style={CELL}>{"Extremity: how unusual was block 1?"}</td>
+            <td style={CELL}>{extremity.value != null
+              ? `${signedN(extremity.value)} standard errors from the record's own long-run average`
+              : (extremity.reason || "not computable")}</td>
+            <td style={CELL}>{"–"}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div style={{ fontSize: 12, color: SUB, marginTop: 4 }}>
+        {"Descriptive: never selects a setting or blocks a recommendation. The outside runs overlap heavily and are not independent looks."}
+      </div>
+    </div>
+  );
+}
 
 /** 3. Time of day and weekends: per sensing pair, how many bands carry a daily cycle or a weekend
  * difference; and pain at weekends against weekdays within the week. */
@@ -325,4 +416,5 @@ export const FIGURES = {
   current_with_memory: CurrentMemoryFigure,
   onoff_switches: OnOffFigure,
   carry_over_ladder: CarryOverFigure,
+  regression_to_mean: RegressionToMeanFigure,
 };

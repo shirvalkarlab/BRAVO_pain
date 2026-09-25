@@ -275,6 +275,12 @@ def run_current_explains(uid, *, lengths=(30.0, 60.0), tol_min=60.0, n_perm=200,
             row.update(current_alone=d["current_alone"]["auc"], bands=d["bands_plain"]["auc"],
                        bands_without_current=d["bands_adjusted"]["auc"], null_p50=d["null"]["p50"],
                        null_p95=d["null"]["p95"], p=d["bands_plain"].get("p_value"),
+                       # The adjusted reading's OWN honest reference: a null that rotates the label
+                       # and refits the SAME current-removed pipeline (`confound_diagnostic`,
+                       # 2026-09-25) -- not the plain reading's null decision 262's "p 0.04" used.
+                       bands_without_current_p=d["bands_adjusted"].get("p_value"),
+                       bands_without_current_null_p50=d.get("null_adjusted", {}).get("p50"),
+                       bands_without_current_null_p95=d.get("null_adjusted", {}).get("p95"),
                        shape=d["covariate_shape_in_words"], verdict=d["verdict"])
             rows.append(row)
     reading = []
@@ -282,13 +288,22 @@ def run_current_explains(uid, *, lengths=(30.0, 60.0), tol_min=60.0, n_perm=200,
         if r.get("bands") is None:
             continue
         outside = r["bands_without_current"] is not None and r["null_p95"] is not None and r["bands_without_current"] > r["null_p95"]
-        reading.append(f"{pair_name(r['pair'])}, {r['seconds']:g} s ({r['n']} ratings): current alone {r['current_alone']:.3f}, "
-                       f"every band {r['bands']:.3f}, bands without the current {r['bands_without_current']:.3f} "
-                       f"({'outside' if outside else 'inside'} the shuffled-data 95th, {r['null_p95']:.3f}).")
+        line = (f"{pair_name(r['pair'])}, {r['seconds']:g} s ({r['n']} ratings): current alone {r['current_alone']:.3f}, "
+               f"every band {r['bands']:.3f}, bands without the current {r['bands_without_current']:.3f} "
+               f"({'outside' if outside else 'inside'} the shuffled-data 95th, {r['null_p95']:.3f})")
+        if r.get("bands_without_current_p") is not None:
+            line += (f"; its own honest reference (a null that rotates the label and refits the SAME "
+                    f"current-removed pipeline) gives p {r['bands_without_current_p']:.3f}")
+        reading.append(line + ".")
     reading.append("Replaces decision 240's figures, which matched ratings within 60 seconds instead of 60 minutes.")
+    reading.append("Corrects decision 262's 'p 0.04' for the reading with the current taken out, which was "
+                   "read off the plain reading's null; see settings for the honest reference used here.")
     settings = dict(score=metric, split=f"{strategy} {low:g}/{high:g}", match_window_min=tol_min,
                     lengths_s=list(lengths), shuffles=n_perm,
-                    held_out="blocks of time with the neighbouring rows dropped (decision 240)")
+                    held_out="blocks of time with the neighbouring rows dropped (decision 240)",
+                    bands_without_current_p=("a null that rotates the pain label and refits the SAME "
+                                             "adjusted (current-taken-out) pipeline on each rotation -- "
+                                             "not the plain reading's null decision 262 used"))
     return _finish(uid, "current_explains", dict(rows=rows), settings, reading, save)
 
 
@@ -625,6 +640,106 @@ def _carry_over_reading(pain, holds, ladder):
 
 
 # ------------------------------------------------------------------------------------------------
+# 7. regression to the mean at one setting
+# ------------------------------------------------------------------------------------------------
+
+#: The one rate/pulse-width group decision 253 flagged; the specification's own recommendation is
+#: to run this first on that group, and generalise to every group later "if it proves useful"
+#: (`artifacts/research_2026-09-25_options/01_regression_to_the_mean.md`).
+REGRESSION_TO_MEAN_TARGET_STRATUM = dict(freq_hz=55.0, pw_us_Left=60.0, pw_us_Right=160.0)
+
+
+def _objective_table(uid, *, primary_item="left_leg"):
+    """The whole record's per-setting-period table (`t0`, `J`, `obs_var`, the rate and pulse
+    widths, `feasible`), built with the SAME defaults `StimOptimizer.stage1_openloop.run_stage1`
+    uses (the latest epoch by `t0` as the incumbent, no pooled-variance override), so the target
+    stratum read from it below is the same rows that produced decision 253's own numbers."""
+    from modules.StimOptimizer import adapter as AD
+    from modules.StimOptimizer.routines import objective as OBJ
+    BS = _bs()
+    P = BS.models.Participant.find(uid=uid)
+    es = AD.build_design_matrix(P, {"ParticipantId": uid}, washin_min=1.0)
+    incumbent_epoch = float(es.sort_values("t0")["epoch"].iloc[-1])
+    D = OBJ.build_objective(es, incumbent_epoch=incumbent_epoch, cfg={"primary_item": primary_item})
+    D = D.loc[D["feasible"]].copy()
+    D["t0_s"] = (pd.to_datetime(D["t0"], utc=True).astype("int64") // 10**9).astype(float)
+    return D
+
+
+def run_regression_to_mean(uid, *, primary_item="left_leg",
+                           target_stratum=None, save=True):
+    from . import regression_to_mean as RM
+    target = dict(target_stratum or REGRESSION_TO_MEAN_TARGET_STRATUM)
+    D = _objective_table(uid, primary_item=primary_item)
+    cols = ["t0_s", "amp_mA_Left", "amp_mA_Right", "J", "obs_var"]
+    full = D[["t0_s", "J", "obs_var"]].rename(columns={"t0_s": "t0"})
+    match = np.ones(len(D), dtype=bool)
+    for col, val in target.items():
+        match &= np.isclose(pd.to_numeric(D[col], errors="coerce").to_numpy(float), float(val))
+    sub = D.loc[match, cols].rename(columns={"t0_s": "t0"})
+    if sub.empty:
+        result = {"setting": None, "reason": f"no setting-periods at {target}"}
+        reading = [f"No setting-periods matched the target group {target}; nothing to read."]
+    else:
+        result = RM.diagnosis(sub, full)
+        reading = _regression_to_mean_reading(result)
+    settings = dict(
+        primary_item=primary_item, target_stratum=target,
+        blocks="the same 3 time blocks decision 253's own calibration diagnosis uses (equal counts, time order)",
+        weights="inverse of each setting-period's own rating noise (obs_var), decision 253's own weights",
+        internal_comparison=("exact enumeration of every way to split this stratum's own setting-periods "
+                             "into a group this size and the rest -- no random sampling"),
+        outside_comparison="every run of setting-periods this size, adjacent in time, across the whole record")
+    return _finish(uid, "regression_to_mean", result, settings, reading, save)
+
+
+def _fmt_block_row(r):
+    return f"block {r['block'] + 1}: {r['mean']:+.2f} (n {r['n']}, se {r['se']:.2f})"     # 1-3, as the figure
+
+
+def _regression_to_mean_reading(diag):
+    if diag.get("setting") is None:
+        return [diag.get("reason", "not computable")]
+    setting, t, o = diag["setting"], diag["target"], diag["other"]
+    s5, s6, s7 = diag["internal_comparison"], diag["outside_comparison"], diag["extremity"]
+    out = [f"Target setting {setting['amp_mA_Left']:g}/{setting['amp_mA_Right']:g} mA "
+          f"({diag['n_target']} of {diag['n_target'] + diag['n_other']} setting-periods in this group): "
+          + "; ".join(_fmt_block_row(r) for r in t["by_block"]) + "."]
+    if t["heterogeneity"]["p"] is not None:
+        line = f"Heterogeneity across blocks: Q {t['heterogeneity']['q']:.2f}, p {t['heterogeneity']['p']:.2g}"
+        if t["trend"]["slope"] is not None:
+            line += f"; trend {t['trend']['slope']:+.2f} per block"
+        out.append(line + ".")
+    else:
+        out.append(f"Heterogeneity across blocks: {t['heterogeneity']['reason']}.")
+    if s5.get("p_two_sided") is not None:
+        out.append(
+            "Internal comparison (is this specific to the current pair, or the whole group over the same "
+            f"calendar weeks?): a randomly chosen group of {diag['n_target']} of the same "
+            f"{diag['n_target'] + diag['n_other']} setting-periods matches or exceeds this swing in "
+            f"{s5['p_two_sided'] * 100:.1f}% of {s5['n_valid']} usable splits of {s5['n_total']} "
+            f"({s5['floor']} is the smallest this can read), and falls at least as far in the same "
+            f"direction in {s5['p_same_direction'] * 100:.1f}%.")
+    else:
+        out.append(f"Internal comparison: {s5.get('reason', 'not computable')}.")
+    if s6.get("fraction_ge") is not None:
+        out.append(
+            "Outside comparison (is a swing this size common anywhere in the record?): "
+            f"{s6['fraction_ge'] * 100:.1f}% of {s6['n_windows']} overlapping runs of {s6['window_size']} "
+            "setting-periods elsewhere in the record show a swing at least this large (these runs overlap "
+            "heavily and are not independent looks).")
+    else:
+        out.append("Outside comparison: not computable (no background record of setting-periods).")
+    if s7.get("value") is not None:
+        out.append(f"Block 1 sat {s7['value']:+.1f} standard errors from the whole record's own long-run "
+                   f"average ({s7['block1_mean']:+.2f} against {s7['record_mean']:+.2f}); the more extreme "
+                   "this is, the more reversion regression to the mean predicts on its own.")
+    out.append("Descriptive only: reports whether this looks like the group's own background pattern or "
+               "something unusual about this current pair; never selects a setting or blocks a recommendation.")
+    return out
+
+
+# ------------------------------------------------------------------------------------------------
 
 def _finish(uid, key, result, settings, reading, save):
     from modules.DecodeCommon import data_start as DS
@@ -640,4 +755,5 @@ def _finish(uid, key, result, settings, reading, save):
 
 RUNNERS = {"zero_ma_within_stretch": run_zero_ma, "current_explains": run_current_explains,
            "current_with_memory": run_current_with_memory, "time_of_day": run_time_of_day,
-           "onoff_switches": run_onoff_switches, "carry_over_ladder": run_carry_over}
+           "onoff_switches": run_onoff_switches, "carry_over_ladder": run_carry_over,
+           "regression_to_mean": run_regression_to_mean}

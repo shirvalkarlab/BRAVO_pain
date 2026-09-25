@@ -194,25 +194,53 @@ def pre_build_diagnostic(X, y_binary, current, *, band_labels=None, n_folds=5, e
     # The null: rotate the label, keeping its own persistence, and refit everything each time. A
     # model's out-of-sample score is not centred on 0.5 when the label drifts, so the null is the
     # only honest reference -- this is the same rotation the single-band screens already use.
+    #
+    # THE ADJUSTED READING GETS ITS OWN NULL (2026-09-25). Comparing the ADJUSTED (current-taken-
+    # out) AUC against the PLAIN reading's null asks the wrong question: the adjusted pipeline is a
+    # different, usually weaker fit (fewer effective degrees of freedom once the covariate is
+    # removed), so its null sits somewhere else. Decision 262's "p 0.04" for the adjusted reading on
+    # L 1-3+ at 60 s was read off the plain null -- the only one this function built at the time
+    # (`_agent_bridge/_probe_confound_live.py` never built a second one). The honest reference
+    # rotates the label and refits the SAME adjusted pipeline (covariate taken out the same way) on
+    # each rotation, reusing the same rotation draws so the extra cost is one more fit per draw.
     null = {"p50": None, "p95": None, "n_perm": 0, "block": embargo}
+    null_adjusted = {"p50": None, "p95": None, "n_perm": 0, "block": embargo, "reason": None}
     p_value = None
+    adjusted_p_value = None
     if plain["auc"] is not None and int(n_perm) > 0:
         rng = np.random.default_rng(int(seed))
         block = _su.block_length_for(y, n)
         idx = _su.circular_block_perm_matrix(n, block, int(n_perm), rng)
-        vals = []
+        want_adjusted_null = adjusted["auc"] is not None
+        vals, vals_adj = [], []
         for row in idx:
             got = all_bands_auc(X, y[row], folds=folds)
             if got["auc"] is not None:
                 vals.append(float(got["auc"]))
+            if want_adjusted_null:
+                got_adj = all_bands_auc(X, y[row], folds=folds, covar=c, shape=shape)
+                if got_adj["auc"] is not None:
+                    vals_adj.append(float(got_adj["auc"]))
         if vals:
             vals = np.asarray(vals, float)
             null = {"p50": float(np.percentile(vals, 50)), "p95": float(np.percentile(vals, 95)),
                     "n_perm": int(vals.size), "block": int(block)}
             p_value = float((int((vals >= plain["auc"]).sum()) + 1) / (vals.size + 1))
+        if want_adjusted_null and vals_adj:
+            vals_adj = np.asarray(vals_adj, float)
+            null_adjusted = {"p50": float(np.percentile(vals_adj, 50)),
+                             "p95": float(np.percentile(vals_adj, 95)),
+                             "n_perm": int(vals_adj.size), "block": int(block), "reason": None}
+            adjusted_p_value = float((int((vals_adj >= adjusted["auc"]).sum()) + 1) / (vals_adj.size + 1))
+        elif want_adjusted_null:
+            null_adjusted["reason"] = "no rotation could be refit with the current taken out"
+    elif adjusted["auc"] is None:
+        null_adjusted["reason"] = adjusted.get("reason")
     plain["p_value"] = p_value
+    adjusted["p_value"] = adjusted_p_value
 
     out = {"current_alone": alone, "bands_plain": plain, "bands_adjusted": adjusted, "null": null,
+           "null_adjusted": null_adjusted,
            "n_rows": int(n), "n_bands": int(X.shape[1]), "n_folds": int(n_folds),
            "embargo_rows": embargo, "held_out_in_blocks_of_time": True,
            "covariate_shape": adjusted.get("shape") or shape_of_current.shape,

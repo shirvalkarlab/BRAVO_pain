@@ -123,6 +123,30 @@ def test_an_out_of_sample_score_below_chance_is_reported_as_it_is_and_never_fold
     print(f"OK a model trained on the wrong half reports {got['auc']:.3f}, not its mirror")
 
 
+def test_the_adjusted_reading_gets_its_own_null_that_refits_the_adjusted_pipeline():
+    """Decision 262's 'p 0.04' for the reading with the current taken out was read off the PLAIN
+    reading's null -- the only one this function built at the time. An honest reference rotates the
+    label and refits the SAME adjusted (current-removed) pipeline on each rotation, which is a
+    different, usually weaker fit than the plain one, so its null is not the plain null."""
+    X, y, cur = _record(kind="bands_carry_pain")
+    got = CD.pre_build_diagnostic(X, y, cur, n_perm=100)
+    assert got["bands_adjusted"]["p_value"] is not None
+    assert got["null_adjusted"]["p50"] is not None and got["null_adjusted"]["n_perm"] > 0
+    assert got["null_adjusted"]["p50"] != got["null"]["p50"], (
+        "the adjusted null must come from refitting the adjusted pipeline, not be a copy of the plain null")
+    assert got["bands_adjusted"]["p_value"] < 0.05, "a real signal should look significant on its own null"
+    print(f"OK adjusted null: p50 {got['null_adjusted']['p50']:.3f} (plain null p50 "
+          f"{got['null']['p50']:.3f}), adjusted p {got['bands_adjusted']['p_value']:.3f}")
+
+
+def test_the_adjusted_null_is_none_when_the_adjusted_reading_itself_could_not_be_made():
+    X, y, cur = _record(n=20)
+    got = CD.pre_build_diagnostic(X, y, cur, n_perm=10)
+    assert got["bands_adjusted"]["auc"] is None
+    assert got["bands_adjusted"]["p_value"] is None
+    assert got["null_adjusted"]["p50"] is None
+
+
 def test_too_few_rows_is_a_reason_rather_than_a_number():
     X, y, cur = _record(n=20)
     got = CD.pre_build_diagnostic(X, y, cur, n_perm=10)
@@ -137,5 +161,7 @@ if __name__ == "__main__":
     test_noise_reads_as_noise_against_a_null_that_keeps_pain_s_own_persistence()
     test_the_folds_are_the_embargoed_ones_and_the_gap_is_the_label_s_own_timescale()
     test_an_out_of_sample_score_below_chance_is_reported_as_it_is_and_never_folded()
+    test_the_adjusted_reading_gets_its_own_null_that_refits_the_adjusted_pipeline()
+    test_the_adjusted_null_is_none_when_the_adjusted_reading_itself_could_not_be_made()
     test_too_few_rows_is_a_reason_rather_than_a_number()
     print("All confound-diagnostic tests passed.")

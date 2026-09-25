@@ -17,6 +17,8 @@ LIT = {
                   "research_2026-09-24_3_tonic_current_and_single_threshold.md"),
     "zero_ma": ("Literature: the 0 mA period as a test",
                 "research_2026-09-24_4_zero_mA_period_as_a_test.md"),
+    "rtm": ("Literature: regression to the mean and decision 253's swing",
+            "research_2026-09-25_options/01_regression_to_the_mean.md"),
 }
 
 
@@ -67,4 +69,13 @@ ANALYSES = {
               "over the visit by which leg came first. Also: pain rated twice at one held setting, and the "
               "settled band power of the stored titration ladders on both legs."),
         literature=_lit("synthesis", "washin")),
+    "regression_to_mean": dict(
+        page="stim_optimizer", order=4,
+        title="Regression to the mean at one setting",
+        what=("At the setting delivered most often in one rate/pulse-width group (decision 253), whether "
+              "its block-to-block swing is specific to that current pair -- checked against every other "
+              "way of splitting the same setting-periods, and against similar runs anywhere else in the "
+              "record -- or looks like the group's own shared background pattern; descriptive, it never "
+              "selects a setting."),
+        literature=_lit("rtm")),
 }
