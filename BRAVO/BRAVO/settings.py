@@ -132,6 +132,14 @@ MIDDLEWARE = [
 ROOT_URLCONF = 'BRAVO.urls'
 STATIC_ROOT = '/static/'
 STATIC_URL = '/resources/'
+# This project keeps no static assets of its own (the frontend is the separately-built React
+# bundle nginx serves directly; Django's own admin/DRF static files come from those apps' own
+# packages regardless of this list). The folder below is an extra STATICFILES_DIRS location that
+# has never held anything, so `python3 manage.py check` raised staticfiles.W004 ("the directory
+# ... does not exist") on a fresh checkout or image (pending item P-21, 2026-09-25). Ensuring it
+# exists, the same way the data-server folders above are ensured, silences the warning without
+# changing what is served.
+os.makedirs(os.path.join(BASE_DIR, 'static'), exist_ok=True)
 STATICFILES_DIRS = [
     os.path.join(BASE_DIR, 'static'),
 ]

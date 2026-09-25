@@ -17,7 +17,9 @@ statsmodels==0.14.6
 # Logistic mixed-effects (glmer via R lme4) for the exploratory band inference. pymer4 0.8.2 is
 # the lightweight branch (needs only lme4/lmerTest/emmeans + seaborn; NOT the 0.9 easystats/report
 # stack). rpy2 must come from the system package (apt python3-rpy2) — the PyPI sdist fails to link
-# its C extension in this image. R + r-cran-lme4/lmertest/emmeans are installed at the OS level.
+# its C extension in this image. R + r-cran-lme4/lmertest/emmeans are installed at the OS level,
+# in the two Dockerfiles at the repository root (pinned there to the running server container's
+# own versions, 2026-09-25, pending item P-17: the image previously installed no R at all).
 pymer4==0.8.2
 seaborn==0.13.2
 pandas==2.2.3

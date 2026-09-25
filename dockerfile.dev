@@ -5,9 +5,22 @@ ENV DATASERVER_PATH=/usr/src/BRAVO/BRAVOStorage/
 WORKDIR /usr/src/BRAVO
 
 # System packages (cached unless this layer changes).
+# R and the three R packages the mixed-effects fits need (pymer4/rpy2's `glmer`, the heat maps'
+# stability test) are in this same layer: read off the running server container 2026-09-25
+# (pending item P-17 -- this image previously installed no R at all, so a rebuild would have
+# silently lost those fits). rpy2 comes from the apt package, not pip (`requirements.txt` explains
+# why: the PyPI sdist fails to link its C extension in this image). Versions pinned to what is
+# live; if the exact build has aged out of the Ubuntu 24.04 (noble) archive, install the closest
+# available version and update this comment and requirements.txt's dated note.
 RUN mkdir -p BRAVOStorage && \
     apt-get update && \
-    apt-get install pkg-config python3 python3-pip libjpeg-dev libjpeg8-dev libpng-dev libmysqlclient-dev -y
+    apt-get install pkg-config python3 python3-pip libjpeg-dev libjpeg8-dev libpng-dev libmysqlclient-dev \
+        r-base-core=4.3.3-2build2 \
+        r-cran-lme4=1.1-35.1-4 \
+        r-cran-lmertest=3.1-3-2 \
+        r-cran-emmeans=1.10.0+dfsg-1 \
+        python3-rpy2=3.5.15-1 \
+        -y
 
 # Python dependencies FIRST, keyed only on requirements.txt, so app-code/frontend changes
 # do NOT bust the (slow) pip layer -- subsequent rebuilds are seconds, not ~10 minutes.
