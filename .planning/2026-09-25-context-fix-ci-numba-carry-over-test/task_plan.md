@@ -5,7 +5,7 @@ Items 1-3 done (270-272). Now: every pending and ongoing item worked by agents (
 /swarm-execute), RCSchronicpain's open items included, handoff leftovers turned into a to-do list.
 
 ## Next Step
-Handoff scan to finish; wave 2 speed-ups running; then the revised plan (critiques are in).
+Wait for the PI's answers (revised plan section 5; Lane 0 items 0.1-0.3). Open: P-03 two parts, P-20 pickles, P-07 count.
 
 ## Current Phase
 Phase 5
@@ -31,21 +31,22 @@ Phase 5
 - [x] Seven option agents launched; six reports in, the MATLAB one sent to the PI outside the repo
 - [x] Synthesis across the seven (00_SYNTHESIS.md)
 - [x] Adversarial critique: science, feasibility, rulings and language (08-10)
-- [ ] Revised plan with likely problems named; published
-- **Status:** in_progress
+- [x] Revised plan with likely problems named (11_REVISED_PLAN.md, committed)
+- **Status:** complete
 
 ### Phase 5: Swarm wave 1 (no PI ruling needed)
-- [ ] Handoff scan: pending items from every earlier handoff, checked against the record, as a to-do list
+- [x] Handoff scan: pending items from every earlier handoff, checked against the record, as a to-do list
 - [x] RCSchronicpain: pre-merge checks (3 token-shaped values tracked; real dates) and the two plots recoloured, uncommitted
 - [x] Regression-to-the-mean check saved (275); the adjusted reading's own shuffle (276)
 - [x] Stale pain ratings in the Closed-Loop saved inputs: latent, fixed (273); numba log noise (274)
 - [x] Suites, bundle, record, commit and push (5f3fd835, 68074101, 0812eacf)
-- **Status:** in_progress
+- **Status:** complete
 
 ### Phase 6: Swarm wave 2
-- [ ] Stale numbers and stale open items in the record corrected (report 5, the handoff scan)
-- [ ] Speed-ups 1 and 2 from report 6 (agent running), each with its proof
-- **Status:** in_progress
+- [x] Stale numbers and stale open items corrected (280)
+- [x] Harmonic one home, speed-ups, sheet parser (277-281)
+- [x] Revised plan run by workflow, verified, committed (282-288)
+- **Status:** complete
 
 ## Decisions Made
 | Decision | Rationale |
