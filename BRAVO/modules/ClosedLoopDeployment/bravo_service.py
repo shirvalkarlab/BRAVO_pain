@@ -76,7 +76,29 @@ def _participant_or_none(participant_uid):
     return models.Participant.find(uid=participant_uid)
 
 
+def _request_scope():
+    """The Biomarkers module's within-request scope (pain reports, recordings, tile key fetched once
+    per request; speed-up item 4, 2026-09-25), or no scope where that module cannot be imported."""
+    import contextlib
+    try:
+        from modules.Biomarkers import bravo_service as _bs
+    except ImportError:
+        try:
+            from Biomarkers import bravo_service as _bs
+        except Exception:                                  # noqa: BLE001 -- host runner, no Django
+            return contextlib.nullcontext()
+    except Exception:                                      # noqa: BLE001
+        return contextlib.nullcontext()
+    return _bs.pro_request_scope()
+
+
 def run_for_participant(request_data):
+    """Build the Closed-Loop Deployment report for one participant, inside one request scope."""
+    with _request_scope():
+        return _run_for_participant(request_data)
+
+
+def _run_for_participant(request_data):
     """Build the Closed-Loop Deployment report for one participant. Never raises.
 
     Inputs, from `request_data`: `ParticipantId` (required), `Candidates` (list of dicts carrying at

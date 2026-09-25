@@ -1460,8 +1460,24 @@ def run_for_participant(request_data: dict) -> dict:
     its duration (see `BLAS_THREADS_ENV` above), which changes no number and, measured on RCS08,
     removes most of the time the arm fits and the closed-loop screen spent waiting on threads.
     """
-    with _blas_threads_capped():
+    with _blas_threads_capped(), _request_scope():
         return _run_for_participant(request_data)
+
+
+def _request_scope():
+    """The Biomarkers module's within-request scope (pain reports, recordings, tile key fetched once
+    per request; speed-up item 4, 2026-09-25), or no scope where that module cannot be imported."""
+    import contextlib
+    try:
+        from modules.Biomarkers import bravo_service as _bs
+    except ImportError:
+        try:
+            from Biomarkers import bravo_service as _bs
+        except Exception:                                  # noqa: BLE001 -- host runner, no Django
+            return contextlib.nullcontext()
+    except Exception:                                      # noqa: BLE001
+        return contextlib.nullcontext()
+    return _bs.pro_request_scope()
 
 
 def _run_for_participant(request_data: dict) -> dict:

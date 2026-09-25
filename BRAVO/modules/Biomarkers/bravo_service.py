@@ -420,7 +420,13 @@ def _trim_chronic_before(loaded, start_s):
 
 
 def _load_recordings(participant_uid, types):
-    """Return a list of loaded recording dicts for a participant, for the given DB types."""
+    """Return a list of loaded recording dicts for a participant, for the given DB types. Decoded
+    once per request (`_request_memo`)."""
+    return _request_memo(("recordings", str(participant_uid), tuple(types)),
+                         lambda: _load_recordings_uncached(participant_uid, types))
+
+
+def _load_recordings_uncached(participant_uid, types):
     Participant = models.Participant.find(uid=participant_uid)
     if not Participant:
         return []
@@ -1248,6 +1254,12 @@ def _raw_lsb_constants_block():
 
 
 def _raw_lsb_recording_identity(participant_uid):
+    """The tile rows' digest, built once per request (`_request_memo`); see the function below."""
+    return _request_memo(("tile_rows", str(participant_uid)),
+                         lambda: _raw_lsb_recording_identity_uncached(participant_uid))
+
+
+def _raw_lsb_recording_identity_uncached(participant_uid):
     """Identity AND content of every database row that feeds the tiles, with no file decoded.
 
     WHY THIS IS A SEPARATE KEY FROM `_lsb_spectrum_signature`. That signature is built from the
@@ -3236,6 +3248,22 @@ def pro_request_scope():
         yield _PRO_REQUEST_CACHE.get()
     finally:
         _PRO_REQUEST_CACHE.reset(token)
+
+
+def _request_memo(key, compute):
+    """`compute()` once per request (speed-up item 4, 2026-09-25): inside `pro_request_scope` the
+    answer is kept in the same within-request dict as the pain reports, so it cannot outlive the
+    request; outside a request it is computed every time. A list comes back as a fresh list, so a
+    caller that appends to its copy changes no one else's. For the tile key and the decoded
+    recordings, which one Closed-Loop request asked for 15 and 9 times on RCS08."""
+    cache = _PRO_REQUEST_CACHE.get()
+    if cache is None:
+        return compute()
+    k = ("__request_memo__",) + tuple(key)
+    if k not in cache:
+        cache[k] = compute()
+    got = cache[k]
+    return list(got) if isinstance(got, list) else got
 
 
 def _pro_scoped(fn):

@@ -5,10 +5,10 @@ The five speed-ups the grant session handed over (the PI: "go on all"), each its
 live equality proof (field count, 0 differing) and alternating timings.
 
 ## Next Step
-Item 2/4: time the Closed-Loop request with store writes going to a scratch root, to see which duplicates are real.
+Item 5: profile the E2-with-current-removed step; decide whether an exact speed-up exists.
 
 ## Current Phase
-Phase 2
+Phase 3
 
 ## Phases
 
@@ -20,14 +20,14 @@ Phase 2
 - **Status:** complete
 
 ### Phase 2: Items 2 and 4, duplicate work inside one Closed-Loop request
-- [ ] Time the request with writes to a scratch store root (live-like), count the duplicates
-- [ ] Remove the real duplicates (tile key, recordings, REDCap) within one request
-- [ ] Proof and commit
-- **Status:** in_progress
+- [x] Time the request with writes to a scratch store root (live-like), count the duplicates
+- [x] Remove the real duplicates (tile key, recordings, REDCap) within one request
+- [x] Proof and commit (decision 267; item 2 was the probe's blocked writes)
+- **Status:** complete
 
 ### Phase 3: Item 5, the E2 bootstrap vectorized
 - [ ] Batched partial correlations, bit-for-bit or a stated reason
-- **Status:** pending
+- **Status:** in_progress
 
 ### Phase 4: Item 3, the design-rule fit
 - [ ] Vectorize the filter inside `fit_design_model`
