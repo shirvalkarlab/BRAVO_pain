@@ -87,3 +87,27 @@ def clamp_changes(times_s, start_s):
         keep[last] = True
         new[last] = float(start_s)
     return keep, new
+
+
+def trim_segment(time_s, data, start_s, *, time_axis):
+    """One recording's samples from the start on: ``(time, data)`` with every sample before the
+    start removed along ``time_axis`` of ``data``, or ``None`` when nothing is left. With no start
+    both come back unchanged. For the chronic log's files (time on axis 0) and the chronic view's
+    segments (time on axis 1) alike."""
+    t = np.asarray(time_s, dtype=float)
+    keep = keep_from(t, start_s)
+    if keep.all():
+        return time_s, data
+    if not keep.any():
+        return None
+    d = np.asarray(data)
+    return t[keep], np.compress(keep, d, axis=time_axis)
+
+
+def listed_date(date_s, start_s, *, spans_start=False):
+    """How a row dated ``date_s`` is listed: its own date when on or after the start, the start
+    when it began before and runs past it (a chronic file spanning the implant), None (not listed)
+    when it lies wholly before it."""
+    if not start_s or start_s <= 0 or date_s is None or not float(date_s) < float(start_s):
+        return date_s
+    return float(start_s) if spans_start else None

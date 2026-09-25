@@ -27,6 +27,7 @@ import numpy as np
 import datetime
 
 from Server import models
+from modules.DecodeCommon import data_start as _data_start
 from modules.MedtronicPercept import BrainSenseStream
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
@@ -193,7 +194,8 @@ def extractParticipantContext(participant_uid, check_files=[], deidentified=Fals
         SourceFiles = sorted(SourceFiles, key=lambda x: -x.date)
 
         TherapyModificationList = list()
-        TherapyModifications = models.TherapyModification.find_all(source__in=SourceFiles)
+        TherapyModifications = [m for m in models.TherapyModification.find_all(source__in=SourceFiles)
+                                if _data_start.listed_date(m.date, _data_start.data_start_s(Participant)) is not None]
         for modification in TherapyModifications:
             TherapyModificationList.append({
                 "Name": "",
@@ -357,6 +359,11 @@ def extractParticipantContext(participant_uid, check_files=[], deidentified=Fals
             Recordings = models.Recording.find_all(source=source, type__in=["MedtronicChronicBrainSense"])
             for recording in Recordings:
                 Data = loadSourceFile(recording.pointer, recording.hashed)
+                # From the implant date on (2026-09-24): a chronic file's samples before it are cut.
+                _cut = _data_start.trim_segment(Data["Time"], Data["Data"], _data_start.data_start_s(Participant), time_axis=0)
+                if _cut is None:
+                    continue
+                Data = {**Data, "Time": _cut[0], "Data": _cut[1]}
                 Context["ChronicBrainSense"].append({
                     "Id": recording.uid,
                     "Name": recording.name,
@@ -499,6 +506,9 @@ def listRecordings(participant_uid):
     SourceFiles = models.SourceFile.find_all(owner=Participant)
     DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
     Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HPFCSV", "AOMPX"])
+    # From the implant date on (2026-09-24); none of these types runs across it.
+    _start = _data_start.data_start_s(Participant)
+    Recordings = [r for r in Recordings if _data_start.listed_date(r.date, _start) is not None]
     
     AllRecordings = []
     for recording in Recordings:

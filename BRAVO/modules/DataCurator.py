@@ -35,6 +35,7 @@ import blosc2
 from filelock import Timeout, FileLock
 
 from Server import models
+from modules.DecodeCommon import data_start as _data_start
 from modules.NeuroPace.PersystDecoder import parsePersystRecording
 from modules.MedtronicPercept.Session import decodeMedtronicJSON
 from modules.ExternalDevices.DelsysTrigno import decodeMDATData, decodeHPFCSVData
@@ -1266,6 +1267,25 @@ def ImportBRAVOStructure(source_file):
     
     return participant
 
+def _chronic_export_from_start(recording, start_s):
+    """A chronic file that runs past the implant date, re-encoded with its samples before it cut:
+    ``(bytes, hash)`` in the store's own encoding, or ``(None, None)`` when nothing is left."""
+    Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+    cut = _data_start.trim_segment(Data["Time"], Data["Data"], start_s, time_axis=0)
+    if cut is None:
+        return None, None
+    Data = {**Data, "Time": cut[0], "Data": cut[1]}
+    os.makedirs(DATABASE_PATH + "exports", exist_ok=True)
+    temp = DATABASE_PATH + "exports" + os.path.sep + recording.uid + ".trimmed.bdat"
+    hashed = Database.saveSourceFile(Data, temp)
+    try:
+        return Database.loadSourceBinary(temp), hashed
+    finally:
+        for f in (temp, temp + ".lock"):
+            if os.path.exists(f):
+                os.remove(f)
+
+
 def ExportBRAVOStructure(participant, deidentified=False, password="BRAVOExportv2"):
     rawBytes = b"BRAVO Export"
     hashed_key = hashlib.sha256(password.encode("utf-8")).digest()
@@ -1420,7 +1440,11 @@ def ExportBRAVOStructure(participant, deidentified=False, password="BRAVOExportv
         fid.write(headerContent)
         fid.write(exportContent)
 
-    events = models.TherapyModification.find_all(owner=participant)
+    # From the implant date on (the PI, 2026-09-24): rows dated before it are the device before it
+    # went in and are left out of the export; a chronic file that runs past it is exported trimmed.
+    DataStart = _data_start.data_start_s(participant)
+    events = [e for e in models.TherapyModification.find_all(owner=participant)
+              if _data_start.listed_date(e.date, DataStart) is not None]
     for event in events:
         EventInfo = {
             "uid": event.uid,
@@ -1438,7 +1462,8 @@ def ExportBRAVOStructure(participant, deidentified=False, password="BRAVOExportv
         fid.write(headerContent)
         fid.write(exportContent)
 
-    events = models.Annotation.find_all(owner=participant)
+    events = [e for e in models.Annotation.find_all(owner=participant)
+              if _data_start.listed_date(e.date, DataStart) is not None]
     for event in events:
         EventInfo = {
             "uid": event.uid,
@@ -1456,7 +1481,8 @@ def ExportBRAVOStructure(participant, deidentified=False, password="BRAVOExportv
         fid.write(exportContent)
 
     for source in sources:
-        events = models.DBSEvent.find_all(source=source)
+        events = [e for e in models.DBSEvent.find_all(source=source)
+                  if _data_start.listed_date(e.date, DataStart) is not None]
         for event in events:
             EventInfo = {
                 "uid": event.uid,
@@ -1474,6 +1500,13 @@ def ExportBRAVOStructure(participant, deidentified=False, password="BRAVOExportv
 
         recordings = models.Recording.find_all(source=source)
         for recording in recordings:
+            TrimmedBytes = None
+            if _data_start.listed_date(recording.date, DataStart) is None:
+                if recording.type != "MedtronicChronicBrainSense" or recording.pointer == "":
+                    continue
+                TrimmedBytes, TrimmedHash = _chronic_export_from_start(recording, DataStart)
+                if TrimmedBytes is None:
+                    continue
             RecordingInfo = {
                 "uid": recording.uid,
                 "name": recording.name,
@@ -1485,6 +1518,9 @@ def ExportBRAVOStructure(participant, deidentified=False, password="BRAVOExportv
                 "source": source.uid,
             }
             
+            if TrimmedBytes is not None:
+                RecordingInfo["date"] = float(DataStart)
+                RecordingInfo["hashed"] = TrimmedHash
             headerContent = b"XXXXRECD"
             exportContent = createExportContent(json.dumps(RecordingInfo), FernetEncoder)
             headerContent += len(exportContent).to_bytes(4, "little")
@@ -1493,13 +1529,14 @@ def ExportBRAVOStructure(participant, deidentified=False, password="BRAVOExportv
 
             if recording.pointer == "":
                 continue
-            data = Database.loadSourceBinary(recording.pointer)
+            data = TrimmedBytes if TrimmedBytes is not None else Database.loadSourceBinary(recording.pointer)
             headerContent = b"XXXXRAWD"
             headerContent += len(data).to_bytes(4, "little")
             fid.write(headerContent)
             fid.write(data)
 
-        therapies = models.Therapy.find_all(source=source)
+        therapies = [t for t in models.Therapy.find_all(source=source)
+                     if _data_start.listed_date(t.date, DataStart) is not None]
         for therapy in therapies:
             TherapyInfo = {
                 "uid": therapy.uid,

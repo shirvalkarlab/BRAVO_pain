@@ -292,3 +292,18 @@ def activity_cache_is_current(recording, participant):
     no start and is stale: it holds the bench samples and outlier fixes computed with them."""
     md = getattr(recording, "metadata", None) or {}
     return md.get("DataStartS") == _data_start.data_start_s(participant)
+
+
+def trim_activity_from(activity, start_s):
+    """Chronic-view segments (time on axis 1 of `Data`) from the implant date on; a segment wholly
+    before it is dropped. Used where a saved segment list is read rather than rebuilt."""
+    out = []
+    for seg in activity or []:
+        cut = _data_start.trim_segment(seg["Time"], seg["Data"], start_s, time_axis=1)
+        if cut is None:
+            continue
+        if cut[0] is seg["Time"]:
+            out.append(seg)
+        else:
+            out.append({**seg, "Time": list(cut[0]), "Data": cut[1]})
+    return out

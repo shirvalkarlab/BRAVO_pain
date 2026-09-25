@@ -81,8 +81,15 @@ def queryAllRecordings(participant_uid, request_type=None):
         Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicChronicBrainSense", "MedtronicBrainSenseSurvey", "MedtronicBaselineMontages", "MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HPFCSV", "AOMPX", "MATFile", "SynchronizedMDAT"])
         
         Overview["Recordings"] = []
+        DataStart = _data_start.data_start_s(Participant)
         for recording in Recordings:
             Description = recording.get_info()
+            Listed = _listed_date(recording, DataStart)
+            if Listed is None:
+                continue
+            if Listed != recording.date:
+                Description["Date"] = Listed
+                Description["TrimmedAtImplantDate"] = True
             if recording.type == "MedtronicBrainSenseTimeDomain" or recording.type == "MedtronicIndefiniteStream":
                 for device in DBSDevices:
                     if device["Id"] == recording.source.metadata["Device"]:
@@ -381,7 +388,10 @@ def queryCustomizedAnalysis(participant_uid, analysis):
     Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicChronicNeuralActivity", "MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HPFCSV", "AOMPX", "MATFile"])
     
     Overview["Recordings"] = []
+    DataStart = _data_start.data_start_s(Participant)
     for recording in Recordings:
+        if _listed_date(recording, DataStart) is None:
+            continue
         Description = recording.get_info()
         if recording.type == "MedtronicBrainSenseTimeDomain" or recording.type == "MedtronicIndefiniteStream":
             for device in DBSDevices:
@@ -433,15 +443,26 @@ def processCustomizedPipeline(analysis):
         source = models.SourceFile(name=analysis.uid, type="CustomizedPipelineSource", owner=Participant)
         source.save()
     
+    DataStart = _data_start.data_start_s(Participant)
     for i in range(len(analysis.metadata["Nodes"])):
         Input = analysis.metadata["Nodes"][i][0]
-        recording = models.Recording.find(type="CustomAnalysis_"+Input["type"], metadata={ "RecordingList": [input["Id"] for input in Input["data"]], }, source=source)
+        RecordingList = [input["Id"] for input in Input["data"]]
+        # A cached input built before the implant-date cutoff (2026-09-24) carries no start: it
+        # holds the bench samples, so it is deleted and rebuilt from the implant date on.
+        for stale in models.Recording.find_all(type="CustomAnalysis_"+Input["type"], source=source):
+            md = stale.metadata or {}
+            if md.get("RecordingList") == RecordingList and md.get("DataStartS") != DataStart:
+                stale.delete()
+        recording = models.Recording.find(type="CustomAnalysis_"+Input["type"], metadata={ "RecordingList": RecordingList, "DataStartS": DataStart }, source=source)
         if not recording:
             ProcessedData = []
-            recordings = models.Recording.find_all(uid__in=[input["Id"] for input in Input["data"]])
+            recordings = models.Recording.find_all(uid__in=RecordingList)
             for recording in recordings:
+                if _listed_date(recording, DataStart) is None:
+                    continue
                 Data = Database.loadSourceFile(recording.pointer, recording.hashed)
                 if recording.type == "MedtronicChronicNeuralActivity":
+                    Data = ChronicBrainSense.trim_activity_from(Data, DataStart)
                     for j in range(len(Data)):
                         StructuredData = ChronicBrainSense.revertChronicActivityFormat(Data[j])
                         for input in Input["data"]:
@@ -455,7 +476,7 @@ def processCustomizedPipeline(analysis):
                     ProcessedData.append(Data)
             
             recording = models.Recording(name=Input["name"], type="CustomAnalysis_"+Input["type"], metadata={
-                "RecordingList": [input["Id"] for input in Input["data"]],
+                "RecordingList": RecordingList, "DataStartS": DataStart,
             }, source=source)
             filename = DATABASE_PATH + "recordings" + os.path.sep + source.owner.uid + os.path.sep + recording.uid + ".bdat"
             hashed = Database.saveSourceFile({
@@ -3173,3 +3194,15 @@ def _current_chronic_activity(Participant):
         Database.deleteCachedResult(Participant.uid, url="/queryChronicNeuralActivity")
         return None
     return Recording
+
+
+def _listed_date(recording, DataStart):
+    """The date a recording row is listed under from the implant date on (2026-09-24): its own,
+    the implant date for a chronic file that runs past it, or None for a row wholly before it."""
+    if _data_start.listed_date(recording.date, DataStart) is not None:
+        return recording.date
+    spans = False
+    if recording.type == "MedtronicChronicBrainSense" and recording.pointer:
+        Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+        spans = bool(_data_start.keep_from(Data["Time"], DataStart).any())
+    return _data_start.listed_date(recording.date, DataStart, spans_start=spans)

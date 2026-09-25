@@ -36,3 +36,22 @@ def test_clamping_with_no_start_or_nothing_before_it_changes_nothing():
     for start in (DS.NO_START, IMPLANT):
         keep, new = DS.clamp_changes(t, start)
         assert keep.all() and (new == t).all()
+
+
+def test_a_segment_is_cut_on_its_time_axis_and_one_wholly_before_is_gone():
+    t = np.array([IMPLANT - 10.0, IMPLANT + 10.0, IMPLANT + 20.0])
+    rows = np.arange(6.0).reshape(3, 2)                      # time on axis 0 (a chronic file)
+    tt, dd = DS.trim_segment(t, rows, IMPLANT, time_axis=0)
+    assert tt.tolist() == [IMPLANT + 10.0, IMPLANT + 20.0] and dd.tolist() == [[2.0, 3.0], [4.0, 5.0]]
+    cols = rows.T                                            # time on axis 1 (a chronic-view segment)
+    tt, dd = DS.trim_segment(t, cols, IMPLANT, time_axis=1)
+    assert dd.tolist() == [[2.0, 4.0], [3.0, 5.0]]
+    assert DS.trim_segment(t[:1], rows[:1], IMPLANT, time_axis=0) is None
+    assert DS.trim_segment(t, rows, DS.NO_START, time_axis=0)[1] is rows
+
+
+def test_a_listed_row_before_the_start_goes_unless_it_runs_past_it():
+    assert DS.listed_date(IMPLANT + 5.0, IMPLANT) == IMPLANT + 5.0
+    assert DS.listed_date(IMPLANT - 5.0, IMPLANT) is None
+    assert DS.listed_date(IMPLANT - 5.0, IMPLANT, spans_start=True) == IMPLANT
+    assert DS.listed_date(IMPLANT - 5.0, DS.NO_START) == IMPLANT - 5.0
