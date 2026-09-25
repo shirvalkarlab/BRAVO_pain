@@ -82,6 +82,22 @@ const ANSWERS = [
 
 const isNum = (v) => v != null && Number.isFinite(Number(v));
 
+/**
+ * When the recordings and settings behind this answer were put together (audit item P-03: "the
+ * stability result does not say when it was measured"). This test is refit on every request from
+ * the same recordings, therapy settings and pain reports the rest of the report reads, so the date
+ * that matters is the one already on the report's own freshness line (`cache_status`,
+ * `CacheStatusLine.js`) rather than a second, separately-tracked timestamp for this one card. A
+ * missing or unreadable status prints nothing here, the same rule `CacheStatusLine` follows: silence
+ * about freshness must never be dressed up as a real date.
+ */
+function whenBuilt(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
 /** One of the four answers, filled in when it is the one that happened and greyed when it is not. */
 function AnswerRow({ answer, lit }) {
   return (
@@ -130,7 +146,7 @@ function Fact({ label, value }) {
   );
 }
 
-export default function BandStabilityPanel({ stability }) {
+export default function BandStabilityPanel({ stability, cacheStatus }) {
   const s = stability || null;
   const answer = s && s.answer ? s.answer : "not tested";
 
@@ -140,6 +156,10 @@ export default function BandStabilityPanel({ stability }) {
     ? `${fmtNum(s.band_center_hz, 1)} Hz centre, ${fmtNum(s.band_width_hz, 1)} Hz wide` +
       (s.electrode ? `, on ${s.electrode}` : "")
     : "no band assessed";
+
+  // WHEN, audit item P-03. Only printed once the test actually ran: a "not tested" answer has no
+  // record to date, and dating it would read as though something had been measured.
+  const builtWhen = (s && s.test_ran && cacheStatus) ? whenBuilt(cacheStatus.last_built_utc) : null;
 
   const perState = (s && s.measurements_per_state) || {};
   const stateCounts = Object.keys(perState)
@@ -159,6 +179,12 @@ export default function BandStabilityPanel({ stability }) {
       <MDTypography variant="caption" sx={{ color: "#4A4A4A" }}>
         {bandPhrase}
       </MDTypography>
+      {builtWhen ? (
+        <MDTypography variant="caption" display="block" sx={{ color: "#4A4A4A", fontStyle: "italic" }}>
+          {`Based on the recordings, settings and pain reports assembled ${builtWhen}; this test is `
+            + "refit fresh every time this page is read."}
+        </MDTypography>
+      ) : null}
 
       <MDBox mt={1.5} mb={1.25}>
         {ANSWERS.map((a) => (

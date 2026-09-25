@@ -644,7 +644,8 @@ function ClosedLoopSim() {
                   one. The panel handles a null value and renders an honest empty state. */}
               <Grid item xs={12} id="cl-stability">
                 <BandStabilityPanel stability={deploymentReport?.data?.band_stability
-                  || deploymentReport?.band_stability} />
+                  || deploymentReport?.band_stability}
+                  cacheStatus={deploymentReport?.data?.cache_status} />
               </Grid>
 
               {/* BAND 4 — the transcription surface. Withholds its values while the device verdict
