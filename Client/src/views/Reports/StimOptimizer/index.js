@@ -64,6 +64,7 @@ import DecisionStrip, { decisionHeadline } from "./DecisionStrip";
 import SensingEvidenceTable from "./SensingEvidenceTable";
 import { TYPE } from "./typeScale";
 import PAL from "views/Reports/ClosedLoopSim/palette";
+import { ControlAnalysesSection } from "views/Reports/ControlAnalyses/ControlAnalysesCard";
 
 /**
  * THE REQUEST THIS VIEW SENDS, WRITTEN OUT IN FULL RATHER THAN LEFT TO THE SERVER'S DEFAULTS.
@@ -238,6 +239,10 @@ export default function StimOptimizer() {
                 + "A stretch is one continuous exposure to one setting; reports inside the wash-in are excluded."}
             </MDTypography>
           </MDBox>
+
+          {/* ---------- 7. control analyses: saved, dated checks run offline (the PI, 2026-09-24);
+              they feed nothing above ---------- */}
+          <ControlAnalysesSection participantUid={participant_uid} page="stim_optimizer" />
         </MDBox>
       </MDBox>
       </LegibleText>

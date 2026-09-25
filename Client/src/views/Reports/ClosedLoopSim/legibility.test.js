@@ -12,7 +12,7 @@
 import fs from "fs";
 import path from "path";
 
-const DIRS = ["ClosedLoopSim", "StimOptimizer"].map((d) => path.join(__dirname, "..", d));
+const DIRS = ["ClosedLoopSim", "StimOptimizer", "ControlAnalyses"].map((d) => path.join(__dirname, "..", d));
 const FILES = DIRS.flatMap((d) => fs.readdirSync(d)
   .filter((f) => f.endsWith(".js") && !f.endsWith(".test.js"))
   .map((f) => path.join(d, f)))

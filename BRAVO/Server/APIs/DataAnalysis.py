@@ -896,6 +896,39 @@ class QueryClosedLoopChosenBand(RestViews.APIView):
         return Response(status=200, data=json_compliant_handler(out))
 
 
+class QueryControlAnalyses(RestViews.APIView):
+    """
+    API View for the saved control analyses a page shows (the PI, 2026-09-24): for one page, every
+    analysis it lists, each with its newest saved run (or none yet), how many runs are kept, what it
+    does and its literature. Reads saved files only; a run is started offline
+    (`python3 -m modules.ControlAnalyses.run`), never by a request.
+
+    **URL:** ``/queryControlAnalyses``  **Methods:** POST
+
+    **Request Parameters:** ParticipantId, Page ("biomarkers" or "stim_optimizer").
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "Page"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                        study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        from modules.ControlAnalyses import registry, snapshots
+        page = request.data.get("Page")
+        if page not in registry.PAGES:
+            return Response(status=400, data={"message": "Page must be one of " + ", ".join(registry.PAGES)})
+        out = snapshots.page_payload(str(request.data["ParticipantId"]), page)
+        return Response(status=200, data=json_compliant_handler(out))
+
+
 class QueryDeploymentROC(RestViews.APIView):
     """
     API View that computes the rating-clustered deployment ROC + cut-point table for ONE committed

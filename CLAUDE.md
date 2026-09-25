@@ -24,14 +24,15 @@ before relying on any of it. The plan is tracked with the `planning-with-files` 
 # Never quote a count without a run behind it. Preferred: both at once in one bridge job:
 bash BRAVO/_agent_bridge/run_both_suites.sh          # see memory: run-both-suites-in-parallel
 
-# container: Biomarkers + CacheStore + DecodeCommon. No pytest there; tests use plain assert.
+# container: Biomarkers + CacheStore + DecodeCommon + ControlAnalyses. No pytest there; plain assert.
 python3 BRAVO/_agent_bridge/bridge_client.py --cwd /usr/src/BRAVO --timeout 900 --wait 900 \
   "python3 _agent_bridge/run_tests.py"
 
-# host: ClosedLoopDeployment + StimOptimizer + CacheStore + DecodeCommon, with pytest.
-# CacheStore and DecodeCommon run on BOTH runners on purpose, so their tests take no arguments.
+# host: ClosedLoopDeployment + StimOptimizer + CacheStore + DecodeCommon + ControlAnalyses, pytest.
+# CacheStore, DecodeCommon and ControlAnalyses run on BOTH runners, so their tests take no arguments.
 cd BRAVO/modules && PYTHONPATH=. python -B -m pytest \
-  ClosedLoopDeployment/tests StimOptimizer/tests CacheStore/tests DecodeCommon/tests -q -W ignore
+  ClosedLoopDeployment/tests StimOptimizer/tests CacheStore/tests DecodeCommon/tests \
+  ControlAnalyses/tests -q -W ignore
 
 # anything inside the live server container; --status is the heartbeat (a stall needs a restart)
 python3 BRAVO/_agent_bridge/bridge_client.py --cwd /usr/src/BRAVO --timeout N --wait M "<cmd>"

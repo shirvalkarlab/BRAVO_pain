@@ -31,7 +31,7 @@
 cd /usr/src/BRAVO || exit 1
 mkdir -p _agent_bridge/_suite_logs
 LOGS=_agent_bridge/_suite_logs
-HOST_TESTS="ClosedLoopDeployment/tests StimOptimizer/tests CacheStore/tests DecodeCommon/tests"
+HOST_TESTS="ClosedLoopDeployment/tests StimOptimizer/tests CacheStore/tests DecodeCommon/tests ControlAnalyses/tests"
 HOST_OPTS="-q -W ignore -p no:cacheprovider"
 T0=$(date +%s)
 

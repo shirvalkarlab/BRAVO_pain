@@ -39,7 +39,7 @@ importlib.reload(analytics)
 #
 # So a green run here is NOT a green run of the whole platform. Report both counts, each from its
 # own command, and never carry either number from a document.
-PACKAGES = ["Biomarkers", "CacheStore", "DecodeCommon"]
+PACKAGES = ["Biomarkers", "CacheStore", "DecodeCommon", "ControlAnalyses"]
 
 files=[]
 for _pkg in PACKAGES:

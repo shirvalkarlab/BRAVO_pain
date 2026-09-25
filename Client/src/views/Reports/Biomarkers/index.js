@@ -51,6 +51,7 @@ import { usePlatformContext, setContextState } from "context.js";
 import RecomputeBar from "views/Reports/RecomputeBar";
 import CacheStatusLine from "views/Reports/CacheStatusLine";
 import { recomputeSlots, biomarkerHeatmapSlot } from "views/Reports/moduleCacheKeys";
+import { ControlAnalysesSection } from "views/Reports/ControlAnalyses/ControlAnalysesCard";
 
 // Pain metric the LFP biomarker is computed against (sent as LabelMetric). Used until the server
 // echoes its own `available_metrics` list. The composite blends MPQ sum + left-leg VAS.
@@ -1104,6 +1105,13 @@ function Biomarkers() {
                   {"The transform constant is measured from this participant's own paired blocks; "
                    + "the bridge is composed from it and the survey ratio, and the panel says so."}
                 </MDTypography>
+              </MDBox>
+            </Grid>
+            {/* Control analyses: saved, dated checks run offline (the PI, 2026-09-24); they feed
+                nothing on this page. */}
+            <Grid item xs={12}>
+              <MDBox px={2} pb={2}>
+                <ControlAnalysesSection participantUid={participant_uid} page="biomarkers" />
               </MDBox>
             </Grid>
           </Grid>

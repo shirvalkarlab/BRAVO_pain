@@ -3,7 +3,7 @@ name: CI
 # What this does and does not cover, stated plainly (CLAUDE.md's own rule: an accurate gap beats a
 # silent one). Three of this project's four real test surfaces run here:
 #
-#   - the HOST suite: ClosedLoopDeployment, StimOptimizer, CacheStore, DecodeCommon (pytest).
+#   - the HOST suite: ClosedLoopDeployment, StimOptimizer, CacheStore, DecodeCommon, ControlAnalyses (pytest).
 #     Verified directly before this file was written: a plain `pip install` of the packages below,
 #     on Python 3.12 (matching the live container's 3.12.3), runs it clean with no database, no
 #     Redis and no R -- 1185 passed, 3 skipped, 0 failed. None of those four packages import
@@ -33,7 +33,7 @@ on:
 
 jobs:
   host-tests:
-    name: Host test suite (ClosedLoopDeployment, StimOptimizer, CacheStore, DecodeCommon)
+    name: Host test suite (ClosedLoopDeployment, StimOptimizer, CacheStore, DecodeCommon, ControlAnalyses)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -66,7 +66,7 @@ jobs:
         working-directory: BRAVO/modules
         run: |
           PYTHONPATH=. python -B -m pytest \
-            ClosedLoopDeployment/tests StimOptimizer/tests CacheStore/tests DecodeCommon/tests \
+            ClosedLoopDeployment/tests StimOptimizer/tests CacheStore/tests DecodeCommon/tests ControlAnalyses/tests \
             -q -W ignore -m "not store and not live"
 
   frontend-build:

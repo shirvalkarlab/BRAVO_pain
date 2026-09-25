@@ -51,80 +51,16 @@ except ImportError:                                            # host spelling
     from Biomarkers.routines import stats_utils as SU
 
 UID = "2e3c75c00d7f4f37b53a048d195f11da"                       # RCS08, de-identified
-CENTRES_HZ = [8.5 + i for i in range(22)]                      # the heat maps' 22 centres
-BAND_WIDTH_HZ = 5.0
-CA = ZoneInfo("America/Los_Angeles")
-N_BOOT = 1000
-N_SHUFFLE = 200
-
-
-def band_power(X, f_set, centre, width=BAND_WIDTH_HZ):
-    f = np.asarray(f_set, dtype=float)
-    m = (f >= centre - width / 2) & (f <= centre + width / 2)
-    if not m.any():
-        return np.full(X.shape[0], np.nan)
-    with np.errstate(invalid="ignore"):
-        return np.nanmean(np.asarray(X, dtype=float)[:, m], axis=1)
-
-
-def _cycle_r(power, hour):
-    """Multiple correlation of power with a once-a-day cycle (cos and sin of the hour), and the hour
-    the fitted cycle peaks at."""
-    a = 2 * np.pi * np.asarray(hour, float) / 24.0
-    A = np.column_stack([np.ones_like(a), np.cos(a), np.sin(a)])
-    beta, *_ = np.linalg.lstsq(A, power, rcond=None)
-    fit = A @ beta
-    ss_tot = float(np.sum((power - power.mean()) ** 2))
-    if ss_tot <= 0:
-        return np.nan, np.nan
-    r2 = max(0.0, 1.0 - float(np.sum((power - fit) ** 2)) / ss_tot)
-    peak = (np.degrees(np.arctan2(beta[2], beta[1])) % 360.0) / 15.0
-    return float(np.sqrt(r2)), float(peak)
-
-
-def _pb_r(power, weekend):
-    w = np.asarray(weekend, float)
-    if np.std(w) == 0 or np.std(power) == 0:
-        return np.nan
-    return float(np.corrcoef(power, w)[0, 1])
-
-
-def one_band(power, hour, weekend, rng):
-    """R for the daily cycle and r for weekend, each with a block-bootstrap interval, over the
-    recordings in time order; and the shuffle reference for R."""
-    ok = np.isfinite(power) & np.isfinite(hour)
-    p, h, w = power[ok], hour[ok], weekend[ok]
-    n = int(p.size)
-    if n < 20:
-        return {"n": n, "why": "fewer than 20 recordings carry this band"}
-    block = int(SU.block_length_for(p, n))
-    picks = SU.block_bootstrap_picks(n, block, N_BOOT, rng)
-    R, peak = _cycle_r(p, h)
-    r_w = _pb_r(p, w)
-    Rb = np.array([_cycle_r(p[i], h[i])[0] for i in picks])
-    wb = np.array([_pb_r(p[i], w[i]) for i in picks])
-    Rnull = np.array([_cycle_r(p, rng.permutation(h))[0] for _ in range(N_SHUFFLE)])
-    q = lambda v: (float(np.nanpercentile(v, 2.5)), float(np.nanpercentile(v, 97.5)))
-    return {"n": n, "block": block, "R_daily": R, "R_daily_ci": q(Rb), "R_daily_peak_hour": peak,
-            "R_daily_shuffle_p95": float(np.nanpercentile(Rnull, 95)),
-            "r_weekend": r_w, "r_weekend_ci": q(wb), "why": None}
-
-
-def run(X, t, channel, f_set, *, rng):
-    t = np.asarray(t, float)
-    local = [datetime.fromtimestamp(v, tz=timezone.utc).astimezone(CA) for v in t]
-    hour = np.array([d.hour + d.minute / 60.0 for d in local])
-    weekend = np.array([1.0 if d.weekday() >= 5 else 0.0 for d in local])
-    order = np.argsort(t)
-    rows = []
-    for ch in sorted(set(np.asarray(channel, str))):
-        m = np.asarray(channel, str)[order] == ch
-        idx = order[m]
-        for c in CENTRES_HZ:
-            bp = band_power(np.asarray(X)[idx], f_set, c)
-            res = one_band(bp, hour[idx], weekend[idx], rng)
-            rows.append({"channel": ch, "centre_hz": c, **res})
-    return rows
+# The check itself lives in the package since 2026-09-24 (one copy, read by the saved control
+# analysis and by this script).
+try:
+    from modules.ControlAnalyses.time_of_day import (CENTRES_HZ, BAND_WIDTH_HZ, CA, N_BOOT, N_SHUFFLE,
+                                                     band_power, one_band, cycle_r as _cycle_r,
+                                                     weekend_r as _pb_r, rows_for as run)
+except ImportError:                                            # host spelling
+    from ControlAnalyses.time_of_day import (CENTRES_HZ, BAND_WIDTH_HZ, CA, N_BOOT, N_SHUFFLE,
+                                             band_power, one_band, cycle_r as _cycle_r,
+                                             weekend_r as _pb_r, rows_for as run)
 
 
 def print_table(rows):
