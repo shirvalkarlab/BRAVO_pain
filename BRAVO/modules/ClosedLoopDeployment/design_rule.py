@@ -216,6 +216,120 @@ def filter_1state(Y: np.ndarray, *, phi: float, m: float, q: float, r0: float) -
 
 def filter_2comp(Y: np.ndarray, *, phi_s: float, phi_f: float, q_s: float, q_f: float, m: float,
                  r0: float) -> Dict[str, Any]:
+    """The two-component filter (see `_filter_2comp_numpy`), run as a compiled loop when numba is
+    installed and as the numpy loop otherwise, with the same answer either way (decision 269)."""
+    if COMPILED_FILTER:
+        Yc = np.ascontiguousarray(Y, dtype=float)
+        vs = q_s / max(1e-12, 1.0 - phi_s * phi_s)
+        vf = q_f / max(1e-12, 1.0 - phi_f * phi_f)
+        ll, n_used = _filter_2comp_kernel(Yc, np.isfinite(Yc), float(phi_s), float(phi_f), float(q_s),
+                                          float(q_f), float(m), float(r0), float(vs), float(vf), LOG2PI)
+        return {"loglik": float(ll), "n": int(n_used)}
+    return _filter_2comp_numpy(Y, phi_s=phi_s, phi_f=phi_f, q_s=q_s, q_f=q_f, m=m, r0=r0)
+
+
+# SPEED-UP ITEM 3 (the PI, 2026-09-25: "add numba and do option 1"). The numpy loop below does about
+# 30 small array operations per time step; on RCS08 (349 stretches x 1,499 steps) a call took 29 ms,
+# nearly all of it numpy's per-call overhead, and a fit makes about 1,600 calls. The compiled loop
+# performs the SAME operations on each stretch in the SAME order, so every number is the same:
+#   * add, subtract, multiply and divide are exactly rounded, whichever code runs them;
+#   * the log is the same library function numpy calls here (checked on 2,000 arrays, 0 differing);
+#   * each step's terms are summed in numpy's own order -- pairwise over the whole row, 8 running sums
+#     for a block of up to 128, halves split at a multiple of 8 above that (checked against np.sum
+#     on 3,000 arrays, 0 differing); a plain left-to-right sum would NOT match.
+# `tests/test_design_rule_compiled_filter.py` holds the two loops equal. COMPILED_FILTER False forces
+# the numpy loop (the proof compares the two). NO ON-DISK CACHE: the summation calls itself, and a
+# cached recursive function crashed the process when loaded under the server's libraries (measured
+# 2026-09-25: segmentation fault from the cache, none when compiled in the process); each worker
+# compiles once on its first fit, about a second.
+try:
+    import math as _math
+    from numba import njit as _njit
+
+    @_njit(cache=False)
+    def _pairwise_sum(a, lo, n):                      # numpy's DOUBLE_pairwise_sum, stride 1
+        if n < 8:
+            res = 0.0
+            for i in range(n):
+                res += a[lo + i]
+            return res
+        elif n <= 128:
+            r0 = a[lo]; r1 = a[lo + 1]; r2 = a[lo + 2]; r3 = a[lo + 3]
+            r4 = a[lo + 4]; r5 = a[lo + 5]; r6 = a[lo + 6]; r7 = a[lo + 7]
+            i = 8
+            while i < n - (n % 8):
+                r0 += a[lo + i]; r1 += a[lo + i + 1]; r2 += a[lo + i + 2]; r3 += a[lo + i + 3]
+                r4 += a[lo + i + 4]; r5 += a[lo + i + 5]; r6 += a[lo + i + 6]; r7 += a[lo + i + 7]
+                i += 8
+            res = ((r0 + r1) + (r2 + r3)) + ((r4 + r5) + (r6 + r7))
+            while i < n:
+                res += a[lo + i]
+                i += 1
+            return res
+        else:
+            n2 = n // 2
+            n2 -= n2 % 8
+            return _pairwise_sum(a, lo, n2) + _pairwise_sum(a, lo + n2, n - n2)
+
+    @_njit(cache=False)
+    def _filter_2comp_kernel(Y, ok, phi_s, phi_f, q_s, q_f, m, r0, vs, vf, log2pi):
+        s, l = Y.shape
+        xs = np.zeros(s); xf = np.zeros(s)
+        p11 = np.empty(s); p22 = np.empty(s); p12 = np.zeros(s)
+        for i in range(s):
+            p11[i] = vs
+            p22[i] = vf
+        for i in range(s):                               # step 0, unmasked, as the numpy loop
+            f0 = p11[i] + 2.0 * p12[i] + p22[i] + r0
+            v0 = Y[i, 0] - m
+            k1 = (p11[i] + p12[i]) / f0
+            k2 = (p12[i] + p22[i]) / f0
+            xs[i] = xs[i] + k1 * v0
+            xf[i] = xf[i] + k2 * v0
+            a1 = p11[i] + p12[i]
+            a2 = p12[i] + p22[i]
+            p11[i] = p11[i] - k1 * a1
+            p12[i] = p12[i] - k1 * a2
+            p22[i] = p22[i] - k2 * a2
+        ps2 = phi_s * phi_s
+        psf = phi_s * phi_f
+        pf2 = phi_f * phi_f
+        term = np.empty(s)
+        ll = 0.0
+        n_used = 0
+        for t in range(1, l):
+            for i in range(s):
+                xsp = phi_s * xs[i]
+                xfp = phi_f * xf[i]
+                p11p = ps2 * p11[i] + q_s
+                p12p = psf * p12[i]
+                p22p = pf2 * p22[i] + q_f
+                xp = m + xsp + xfp
+                f = p11p + 2.0 * p12p + p22p + r0
+                mt = ok[i, t]
+                v = (Y[i, t] - xp) if mt else 0.0
+                term[i] = (-0.5 * (log2pi + _math.log(f) + v * v / f)) if mt else 0.0
+                if mt:
+                    n_used += 1
+                a1 = p11p + p12p
+                a2 = p12p + p22p
+                k1 = (a1 / f) if mt else 0.0
+                k2 = (a2 / f) if mt else 0.0
+                xs[i] = xsp + k1 * v
+                xf[i] = xfp + k2 * v
+                p11[i] = p11p - k1 * a1
+                p12[i] = p12p - k1 * a2
+                p22[i] = p22p - k2 * a2
+            ll += _pairwise_sum(term, 0, s)
+        return ll, n_used
+
+    COMPILED_FILTER = True
+except Exception:                                        # noqa: BLE001 -- no numba: the numpy loop
+    COMPILED_FILTER = False
+
+
+def _filter_2comp_numpy(Y: np.ndarray, *, phi_s: float, phi_f: float, q_s: float, q_f: float, m: float,
+                        r0: float) -> Dict[str, Any]:
     """A slow component plus a faster, decaying component plus measurement wobble:
     ``y_t = m + slow_t + fast_t + e_t``. Covariance carried as three scalars, vectorised over
     stretches -- the contest's own `filter_2comp`, with the amplitude- and level-dependent

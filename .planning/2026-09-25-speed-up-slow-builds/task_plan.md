@@ -5,7 +5,7 @@ The five speed-ups the grant session handed over (the PI: "go on all"), each its
 live equality proof (field count, 0 differing) and alternating timings.
 
 ## Next Step
-None: items 1, 2, 4, 5 committed; item 3 waits on the PI (a compiled dependency, or accept changed digits).
+None: all five items done (decisions 266-269).
 
 ## Current Phase
 Phase 4
@@ -32,7 +32,7 @@ Phase 4
 ### Phase 4: Item 3, the design-rule fit
 - [x] Measured: 29 ms a filter call, about 1,600 calls a fit; numpy dispatch-bound (30 small ops a step)
 - [x] Candidate (shared covariance recursion) not exact: stretches have gaps; 0 of 60 draws identical
-- [ ] Blocked on the PI: an exact 10x needs a compiled loop (numba or C) that reproduces numpy's log and summation; none installed
+- [x] The PI: add numba. Compiled filter, exact (decision 269): fit 26.0 -> 4.0 s, identical
 - **Status:** complete
 
 ## Decisions Made
@@ -44,3 +44,4 @@ Phase 4
 | Error | Attempt | Resolution |
 |-------|---------|------------|
 | batched tiles differed in the container, not on the Mac | 1 | the FFT's row grouping; one call per piece keeps the grouping |
+| compiled filter segfaulted under Django | 1 | numba's on-disk cache of a recursive function; cache off |
