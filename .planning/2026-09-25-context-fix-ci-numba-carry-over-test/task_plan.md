@@ -5,7 +5,7 @@ Items 1-3 done (270-272). Now: every pending and ongoing item worked by agents (
 /swarm-execute), RCSchronicpain's open items included, handoff leftovers turned into a to-do list.
 
 ## Next Step
-Wave 1 running (handoff scan, RCS items, regression-to-the-mean + reproducible p); then critique.
+Handoff scan to finish; wave 2 speed-ups running; then the revised plan (critiques are in).
 
 ## Current Phase
 Phase 5
@@ -29,23 +29,23 @@ Phase 5
 
 ### Phase 4: Options researched, synthesised, critiqued (the PI's pasted instructions)
 - [x] Seven option agents launched; six reports in, the MATLAB one sent to the PI outside the repo
-- [ ] Synthesis across the seven (agent running)
-- [ ] Adversarial critique (1-3 agents)
+- [x] Synthesis across the seven (00_SYNTHESIS.md)
+- [x] Adversarial critique: science, feasibility, rulings and language (08-10)
 - [ ] Revised plan with likely problems named; published
 - **Status:** in_progress
 
 ### Phase 5: Swarm wave 1 (no PI ruling needed)
 - [ ] Handoff scan: pending items from every earlier handoff, checked against the record, as a to-do list
-- [ ] RCSchronicpain: pre-merge checks (no merge, no push), the two plots coloured by condition
-- [ ] Regression-to-the-mean check as a saved control analysis (report 1's specification)
-- [ ] Decision 262's "p 0.04" made reproducible by the saved analysis
-- [ ] Suites, bundle, record, commit and push for each BRAVO change
+- [x] RCSchronicpain: pre-merge checks (3 token-shaped values tracked; real dates) and the two plots recoloured, uncommitted
+- [x] Regression-to-the-mean check saved (275); the adjusted reading's own shuffle (276)
+- [x] Stale pain ratings in the Closed-Loop saved inputs: latent, fixed (273); numba log noise (274)
+- [x] Suites, bundle, record, commit and push (5f3fd835, 68074101, 0812eacf)
 - **Status:** in_progress
 
 ### Phase 6: Swarm wave 2
 - [ ] Stale numbers and stale open items in the record corrected (report 5, the handoff scan)
-- [ ] Speed-ups from report 6 that keep every value identical, each with its proof
-- **Status:** pending
+- [ ] Speed-ups 1 and 2 from report 6 (agent running), each with its proof
+- **Status:** in_progress
 
 ## Decisions Made
 | Decision | Rationale |

@@ -170,6 +170,26 @@ export function ChosenBandBlock({ bandCandidate, chosenBand, bandRecord }) {
   );
 }
 
+/** P-04, 2026-09-25: the mixed-effects check leaves out the first weeks of the whole record, counted
+ * from the first recorded sample (near implant), NOT from each setting change and not from the first
+ * usable rating (`Biomarkers.routines.analytics.VALIDATION_EXCLUDE_FIRST_WEEKS`'s own comment).
+ * Printed only once the backend sends the count, so an older cached response prints nothing rather
+ * than a zero. Its own component because the card is large enough that one more branch inside it
+ * trips the installed hooks lint rule's path counting. */
+function BurnInNote({ ev }) {
+  if (!ev || !ev.excluded_first_weeks) return null;
+  const weeks = ev.excluded_first_weeks;
+  const n = ev.n_excluded_burn_in != null ? ev.n_excluded_burn_in : 0;
+  return (
+    <MDTypography variant="caption" display="block" sx={{ fontSize: 11, color: "#5E5E5E", mt: 0.3 }}>
+      {`The check above leaves out the first ${weeks} week${weeks === 1 ? "" : "s"} of the whole record, `
+        + "counted from the first recorded sample (not from each setting change), because the signal is "
+        + `still settling after implant (impedance and recovery from surgery) (${n} `
+        + `rating${n === 1 ? "" : "s"} excluded).`}
+    </MDTypography>
+  );
+}
+
 function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpoint, summary,
                              deploymentReport, chosenBand, bandRecord }) {
   // THE DEVICE ANSWER, read from the deployment report rather than from the statistical summary.
@@ -563,6 +583,7 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                       <KV k="Odds ratio (95% CI)" v={`${fmt(ev.odds_ratio)} (${fmt(ev.or_ci_low)}–${fmt(ev.or_ci_high)})${ev.credible_ci ? " ✓" : ""}`} />
                       <KV k="Mixed-effects p" v={ev.p_glmer != null ? ev.p_glmer.toExponential(2) : "—"} />
                       <KV k="Matched samples / ratings" v={`${ev.n_matched_samples ?? "—"} / ${ev.n_clusters ?? "—"}`} />
+                      <BurnInNote ev={ev} />
                       {pw && pw.available ? (
                         <KV k="Power (vs AUC 0.5)" v={pw.more_data_needed
                           ? `${fmt(pw.power_current * 100, 0)}% · need ${pw.n_ratings_needed} ratings`

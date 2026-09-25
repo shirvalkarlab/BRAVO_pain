@@ -148,6 +148,13 @@ The other five pairs stay inside their nulls (R 0-3+, 459 reports: bands 0.445, 
 left and the bands carry something the current does not explain at 60 s -- p 0.04, uncorrected for
 the 12 pair-and-length combinations tried.
 
+**Corrected 2026-09-25.** That "p 0.04" was read against the plain reading's shuffled-data range,
+not a shuffle of the current-taken-out reading itself. Decision 276 built that shuffle: it gives
+p 0.030 at 60 s (187 ratings) and 0.035 at 30 s (201), and once corrected for the 12 combinations
+tried (Benjamini-Hochberg, as this project corrects its 22-band grids) both L 1-3+ readings are
+about 0.21 -- roughly even odds, not the 1-in-25 "p 0.04" suggests. Read as a lead, not a finding.
+See decision 276.
+
 ### 4d. Stimulation history (time constant tau; 5 held-out blocks of time, neighbours dropped)
 
 | tau | NRS, held-out R2 (777 ratings) | change in error vs tau 0 | Left Leg VAS, held-out R2 (612) |

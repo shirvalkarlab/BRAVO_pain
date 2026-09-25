@@ -6,6 +6,8 @@
 
 A note on words used here, matching this project's house rules: "threshold" below always means the device's own switching value — the power level at which the Percept RC's adaptive engine changes the current. It never means a statistical cutoff. "Band" means a roughly 5 Hz-wide slice of the power spectrum. "Entrainment" means the brain's electrical rhythm getting pulled into step with the stimulator's own pulse rate, rather than running at its own pace.
 
+> **Corrected 2026-09-25.** Item 1 under "Testable predictions" (line 93) cites decision 240's "best case 0.701 against a 95th-percentile null of 0.713" as the current state of that check. That number came from a matching-window bug (ratings paired within 60 seconds, not the page's real 60-minute window). Decision 262(c) reruns it correctly: at 60 s of signal on L 1-3+, every band reads 0.743 against a null 95th of 0.673; with the stimulation current taken out, 0.683, just outside that range. Decision 276 found that the "p 0.04" first reported for that 0.683 reading was read against the wrong reading's shuffle; its own shuffle gives p 0.030 at 60 s and 0.035 at 30 s, about 0.21 once corrected for the 12 combinations tried — a lead, not a finding. See decisions 262, 276.
+
 ---
 
 ## Bottom line

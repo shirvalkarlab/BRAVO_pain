@@ -509,7 +509,7 @@ uncalibrated recipe is expected, not a discovery.**
 | Welch, 256 samples per segment | 270.22 | **REMOVED** from the code on 2026-06-28, commit `fa2c416` |
 | Welch, 250 samples per segment | 265.17 | never in the code |
 | Per-window 3-second variant | 326 | not deployed; r on logarithms 0.82, median fold error 1.36 |
-| The device's own onboard spectrum | **73.63** | **live** — composed, `analytics.py:3477` |
+| The device's own onboard spectrum | **≈72.16** (73.63 until 2026-09-20; decision 211) | **live** — composed, `analytics.py:3477` |
 
 **About the removal, because an archived document still describes the removed constant as
 current.** `LSB_PER_UV2_VALIDATED = 269` was the Welch-256 constant. It was demoted to a
@@ -517,7 +517,7 @@ spectrum-to-device-units backup and then **deleted outright on 2026-06-28**, tog
 helpers `psd_band_to_lsb` and `welch256_density`. Verified this session: `analytics.py:3401-3403`
 carries only a comment recording the removal, and no definition survives anywhere.
 **The archived calibration handoff's §3.2 describes a Welch-256 backup that no longer exists.**
-The surviving backup is the device-spectrum route at 73.63.
+The surviving backup is the device-spectrum route, now ≈72.16 (73.63 until 2026-09-20; decision 211).
 
 **The deployment fallback also changed, and the reason is a units error worth remembering.** An
 earlier design converted the switching value through a frozen per-participant model. **That was

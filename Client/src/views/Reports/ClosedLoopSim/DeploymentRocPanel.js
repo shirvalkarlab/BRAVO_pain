@@ -530,7 +530,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
                 ) : null}
                 <MDTypography variant="caption" sx={{ fontSize: 11.5 }}>
                   <b>Cut-point ({op.rule}):</b>{` power ≥ ${fmt(op.threshold, 3)} `}
-                  <span style={{ color: "#5E5E5E" }}>(oriented log-power units → device LSB in the next panel)</span>
+                  <span style={{ color: "#5E5E5E" }}>(oriented, standardized band power units → device LSB in the next panel)</span>
                 </MDTypography>
                 <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5, mt: 0.2 }}>
                   <b>Sensitivity {fmt(op.sensitivity)}</b> (catches high-pain) · <b>Specificity {fmt(op.specificity)}</b> (avoids false triggers)
