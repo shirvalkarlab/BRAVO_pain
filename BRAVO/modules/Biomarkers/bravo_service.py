@@ -44,6 +44,7 @@ from .routines import sweep_settings
 from .routines import stim_current
 from .routines import sheet_ratings
 from .routines import local_time
+from modules.DecodeCommon import data_start as _data_start
 from .routines import streaming_psd
 
 _log = logging.getLogger(__name__)
@@ -366,8 +367,56 @@ def _recording_set_identity(participant_uid):
     SourceFiles = models.SourceFile.find_all(owner=Participant)
     rows = models.Recording.find_all(source__in=SourceFiles).values_list("uid", "hashed", "type")
     ident = sorted((str(u), str(h), str(t)) for u, h, t in rows)
-    blob = "|".join("~".join(t) for t in ident).encode("utf8")
-    return (str(participant_uid), len(ident), hashlib.blake2b(blob, digest_size=16).hexdigest())
+    return (str(participant_uid), len(ident),
+            _identity_digest(ident, _data_start.data_start_s(participant_uid)))
+
+
+def _identity_digest(ident, start_s):
+    """The digest `_recording_set_identity` returns, over the sorted rows AND the participant's
+    data start (the implant date, 2026-09-24): the loader trims every chronic log to that start, so
+    a change of start changes what the memos hold with no change to any row."""
+    import hashlib
+    blob = ("|".join("~".join(t) for t in ident) + "|start=%r" % float(start_s or 0.0)).encode("utf8")
+    return hashlib.blake2b(blob, digest_size=16).hexdigest()
+
+
+def _patient_event_rows(SourceFiles, participant_uid):
+    """The participant's patient-controller event rows from the implant date on (the PI,
+    2026-09-24): on RCS08, events from 2025-06-18 to 07-16 are the device before it went in.
+    One query for every reader, so no reader can keep the bench events."""
+    q = dict(source__in=SourceFiles, type=PATIENT_EVENT_TYPE)
+    start = _data_start.data_start_s(participant_uid)
+    if start > 0:
+        q["date__gte"] = float(start)
+    return models.Recording.find_all(**q)
+
+
+def _trim_chronic_before(loaded, start_s):
+    """Drop every chronic band-power sample dated before the implant date, in place of the decoded
+    dicts (the PI, 2026-09-24). A chronic file is one row that can span the implant date (RCS08's
+    first runs 2025-06-18 onward), so rows cannot be dropped whole: the samples are. Arrays the
+    length of the dict's `Time` are cut with it; a dict left with no samples is dropped."""
+    if not start_s or float(start_s) <= 0:
+        return loaded
+    out = []
+    for d in loaded:
+        if d.get("RecordingType") not in CHRONIC_TYPES or "Time" not in d:
+            out.append(d)
+            continue
+        t = np.asarray(d["Time"], dtype=float)
+        keep = _data_start.keep_from(t, start_s)
+        if keep.all():
+            out.append(d)
+            continue
+        if not keep.any():
+            continue
+        n = t.shape[0]
+        for k, v in list(d.items()):
+            if isinstance(v, (list, np.ndarray)) and len(v) == n and k != "ChannelNames":
+                arr = np.asarray(v)
+                d[k] = arr[keep] if isinstance(v, np.ndarray) else list(arr[keep])
+        out.append(d)
+    return out
 
 
 def _load_recordings(participant_uid, types):
@@ -437,7 +486,7 @@ def _load_recordings(participant_uid, types):
                 loaded.extend([d for d in data if isinstance(d, dict)])
             elif isinstance(data, dict):
                 loaded.append(data)
-    return loaded
+    return _trim_chronic_before(loaded, _data_start.data_start_s(participant_uid))
 
 
 def _load_patient_events(participant_uid):
@@ -465,7 +514,7 @@ def _load_patient_events(participant_uid):
     SourceFiles = models.SourceFile.find_all(owner=Participant)
     if not SourceFiles:
         return []
-    rows = list(models.Recording.find_all(source__in=SourceFiles, type=PATIENT_EVENT_TYPE))
+    rows = list(_patient_event_rows(SourceFiles, participant_uid))
     out = []
     for r in rows:
         name = getattr(r, "name", "") or ""
@@ -536,7 +585,7 @@ def _event_psd_rows(participant_uid, sensing_index=None):
     if not SourceFiles:
         return []
     rows = []
-    for r in models.Recording.find_all(source__in=SourceFiles, type=PATIENT_EVENT_TYPE):
+    for r in _patient_event_rows(SourceFiles, participant_uid):
         md = getattr(r, "metadata", None)
         if not isinstance(md, dict):
             continue
@@ -584,7 +633,7 @@ def _event_psd_index(participant_uid, sensing_index=None):
     if not SourceFiles:
         return []
     out = []
-    for r in models.Recording.find_all(source__in=SourceFiles, type=PATIENT_EVENT_TYPE):
+    for r in _patient_event_rows(SourceFiles, participant_uid):
         md = getattr(r, "metadata", None)
         if not isinstance(md, dict):
             continue
@@ -1238,6 +1287,11 @@ def _raw_lsb_recording_identity(participant_uid):
         return None
     types = list(TIMEDOMAIN_TYPES) + list(AVAILABILITY_PSD_TYPES) + [PATIENT_EVENT_TYPE]
     rows = list(models.Recording.find_all(source__in=SourceFiles, type__in=types))
+    # Patient events before the implant date are the device on the bench, not the patient (the PI,
+    # 2026-09-24); the tiles leave them out, so the key does too.
+    _start = _data_start.data_start_s(participant_uid)
+    rows = [r for r in rows if not (str(getattr(r, "type", "")) == PATIENT_EVENT_TYPE
+                                    and not _data_start.keep_from([getattr(r, "date", np.nan)], _start)[0])]
     if not rows:
         return None
     parts = []
@@ -2661,8 +2715,7 @@ def _psd_matrix_signature_orm(participant_uid, pro_times=None):
         Participant = models.Participant.find(uid=participant_uid)
         SourceFiles = models.SourceFile.find_all(owner=Participant) if Participant else []
         ev_parts = sorted(f"event:{getattr(r, 'uid', '')}:{str(getattr(r, 'hashed', '') or '')[:16]}"
-                          for r in models.Recording.find_all(source__in=SourceFiles,
-                                                             type=PATIENT_EVENT_TYPE)) if SourceFiles else []
+                          for r in _patient_event_rows(SourceFiles, participant_uid)) if SourceFiles else []
         parts = parts + ev_parts
     except Exception as ex:
         _log.warning("Biomarkers: event signature component failed (%s); cache may miss new events", ex)

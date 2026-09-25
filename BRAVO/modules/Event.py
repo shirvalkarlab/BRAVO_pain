@@ -24,6 +24,7 @@ import shutil
 from filelock import Timeout, FileLock
 
 from Server import models
+from modules.DecodeCommon import data_start as _data_start
 from modules.MedtronicPercept import BrainSenseStream
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
@@ -64,6 +65,10 @@ def queryDBSEvents(participant_uid, type=None, source_files=[], start_time=0, du
     if start_time > 0 and duration > 0:
         QueryDict["date__gte"] = start_time
         QueryDict["date__lte"] = start_time+duration
+    # From the implant date on (the PI, 2026-09-24): events before it are the device on the bench.
+    DataStart = _data_start.data_start_s(participant_uid)
+    if DataStart > 0:
+        QueryDict["date__gte"] = max(float(QueryDict.get("date__gte", 0)), DataStart)
     
     return [i.get_info(data=data) for i in models.DBSEvent.find_all(**QueryDict)]
         

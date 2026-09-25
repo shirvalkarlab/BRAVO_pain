@@ -59,3 +59,9 @@ def test_evidence_inputs_cached_stores_and_reads_under_the_inputs_signature(live
     AD.evidence_inputs_cached("PARTICIPANT", force_refresh=True)
     assert seen["store_sig"] == AD.inputs_signature("PARTICIPANT")
     assert seen["store_sig"] != AD.recording_set_signature("PARTICIPANT")
+
+
+def test_the_inputs_entry_rebuilds_once_the_settings_stream_starts_at_implant():
+    """The entry holds settings read from the stream, whose rule changed on 2026-09-24 (it starts at
+    the implant date) while no recording and no constant did; its own version must move too."""
+    assert "implant" in AD._INPUTS_RULE_VERSION

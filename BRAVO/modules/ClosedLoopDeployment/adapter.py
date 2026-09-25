@@ -823,7 +823,8 @@ def recording_set_signature(participant):
 
 #: The `inputs` entry's own rule version (decision 215). Bump it when what the entry holds changes
 #: for a reason no recording and no constant would show.
-_INPUTS_RULE_VERSION = "v2_inputs_keyed_on_constants"
+#: v3 (2026-09-24): the settings stream the entry reads now starts at the implant date.
+_INPUTS_RULE_VERSION = "v3_inputs_settings_from_implant_date"
 
 
 def inputs_signature(participant):

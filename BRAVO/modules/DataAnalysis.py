@@ -37,6 +37,7 @@ import modules.utility.SignalProcessingUtility as SPU
 from modules.utility.PythonUtility import rangeSelection, uniqueList, uniqueListOfDicts
 from modules import Database, Therapy, Event
 from modules.MedtronicPercept import BrainSenseStream, ChronicBrainSense, BrainSenseEvent, Percept
+from modules.DecodeCommon import data_start as _data_start
 from modules.Resources.ProcessingTemplates import ProcessingNodes
 from modules.Fitbit import DataManager as FitbitDataManager
 from modules.OURA import DataManager as OuraDataManager
@@ -2340,14 +2341,15 @@ def queryChronicTimeline(participant_uid, config):
             ChronicTimeline.append(Activity)
 
     if models.Recording.include(source__in=SourceFiles, type__in=["MedtronicChronicBrainSense"]):
-        Recording = models.Recording.find(type="MedtronicChronicNeuralActivity", source__owner=Participant)
+        Recording = _current_chronic_activity(Participant)
         if not Recording:
             Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicChronicBrainSense"])
             Activity = ChronicBrainSense.extractChronicNeuralActivity(Participant, DBSDevices, Recordings, config)
             Activity = uniqueListOfDicts(Activity, ["Device", "TherapyStartTime", "ChannelNames", "Time"])
             source = models.SourceFile(name="ChronicNeuralActivitySource", type="ChronicNeuralActivitySource", owner=Participant)
             source.save()
-            Recording = models.Recording(name="ChronicNeuralActivity", type="MedtronicChronicNeuralActivity", source=source)
+            Recording = models.Recording(name="ChronicNeuralActivity", type="MedtronicChronicNeuralActivity", source=source,
+                                         metadata={"DataStartS": _data_start.data_start_s(Participant)})
             Recording.pointer = DATABASE_PATH + "recordings" + os.path.sep + Recording.source.owner.uid + os.path.sep + Recording.uid + ".bdat"
             Recording.hashed = Database.saveSourceFile(Activity, Recording.pointer)
             Recording.save()
@@ -2743,7 +2745,7 @@ def queryChronicNeuralActivity(participant_uid, config):
     
     if models.Recording.include(source__in=SourceFiles, type__in=["MedtronicChronicBrainSense"]):
         ChronicNeuralActivity["AnalysisType"] = "MedtronicChronicBrainSense"
-        Recording = models.Recording.find(type="MedtronicChronicNeuralActivity", source__owner=Participant)
+        Recording = _current_chronic_activity(Participant)
         if not Recording:
             Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicChronicBrainSense"])
             Activity = ChronicBrainSense.extractChronicNeuralActivity(Participant, DBSDevices, Recordings, config)
@@ -2752,7 +2754,8 @@ def queryChronicNeuralActivity(participant_uid, config):
 
             source = models.SourceFile(name="ChronicNeuralActivitySource", type="ChronicNeuralActivitySource", owner=Participant)
             source.save()
-            recording = models.Recording(name="ChronicNeuralActivity", type="MedtronicChronicNeuralActivity", source=source)
+            recording = models.Recording(name="ChronicNeuralActivity", type="MedtronicChronicNeuralActivity", source=source,
+                                         metadata={"DataStartS": _data_start.data_start_s(Participant)})
             recording.pointer = DATABASE_PATH + "recordings" + os.path.sep + recording.source.owner.uid + os.path.sep + recording.uid + ".bdat"
             recording.hashed = Database.saveSourceFile(Activity, recording.pointer)
             recording.save()
@@ -3158,3 +3161,15 @@ def extractMedtronicPowerBands(participant_uid, recording_type, recording_uids=N
                 Recordings.append(RecordingInfo)
         
         return {"Recordings": Recordings, "PowerBands": PowerBands_Threshold}
+
+def _current_chronic_activity(Participant):
+    """The saved chronic-activity recording, or None when there is none or it was built from a
+    different data start than the participant's implant date (2026-09-24). A stale one is deleted
+    with the cached page result, exactly as the existing DeleteCache request does, so the caller
+    rebuilds it from the implant date on."""
+    Recording = models.Recording.find(type="MedtronicChronicNeuralActivity", source__owner=Participant)
+    if Recording and not ChronicBrainSense.activity_cache_is_current(Recording, Participant):
+        Recording.delete()
+        Database.deleteCachedResult(Participant.uid, url="/queryChronicNeuralActivity")
+        return None
+    return Recording

@@ -85,13 +85,52 @@ def settings_stream_for(participant_uid):
     t, amp = t[keep], amp[keep]
     hemi = df["hemi"][keep].astype(str)
     order = np.argsort(t.astype("int64").to_numpy())
-    return {
+    out = {
         "t_s": (t.astype("int64").to_numpy(dtype=float) / 1e9)[order],
         "hemi": hemi.to_numpy(dtype=object)[order],
         "amp_mA": amp.to_numpy(dtype=float)[order],
         "store_key": (stamp or {}).get("signature_key") if isinstance(stamp, dict) else None,
         "n_rows": int(keep.sum()),
     }
+    try:
+        from modules.DecodeCommon import data_start as _ds
+    except ImportError:                                      # pragma: no cover - host spelling
+        from DecodeCommon import data_start as _ds
+    return from_data_start(out, _ds.data_start_s(participant_uid))
+
+
+def from_data_start(stream, start_s):
+    """The stream from the implant date on (the PI, 2026-09-24), per side: changes before it go,
+    except the last, which is the setting in force at implant and is moved to it. The stored stream
+    already does this from rule v3; this is here too because this module reads the NEWEST stored
+    stream of any rule, which can be an older one until it is rebuilt."""
+    if stream is None or not start_s or float(start_s) <= 0:
+        return stream
+    try:
+        from modules.DecodeCommon import data_start as _ds
+    except ImportError:                                      # pragma: no cover - host spelling
+        from DecodeCommon import data_start as _ds
+    t = np.asarray(stream["t_s"], dtype=float).copy()
+    hemi = np.asarray(stream["hemi"], dtype=object)
+    keep = np.ones(t.shape, dtype=bool)
+    for h in set(hemi.tolist()):
+        idx = np.flatnonzero(hemi == h)
+        # rows at the same last pre-start time are all kept (session and history can coincide)
+        k, new = _ds.clamp_changes(t[idx], start_s)
+        before = t[idx] < float(start_s)
+        if before.any():
+            last_t = t[idx][before].max()
+            k = k | (t[idx] == last_t)
+            new = np.where(t[idx] == last_t, float(start_s), new)
+        keep[idx] = k
+        t[idx] = new
+    order = np.argsort(t[keep], kind="stable")
+    out = dict(stream)
+    out["t_s"] = t[keep][order]
+    out["hemi"] = hemi[keep][order]
+    out["amp_mA"] = np.asarray(stream["amp_mA"], dtype=float)[keep][order]
+    out["n_rows"] = int(keep.sum())
+    return out
 
 
 def current_in_force_at(times_s, stream, *, hemisphere):

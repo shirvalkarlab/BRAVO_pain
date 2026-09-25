@@ -28,6 +28,7 @@ import uuid
 from cryptography.fernet import Fernet
 
 from Server import models
+from modules.DecodeCommon import data_start as _data_start
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
@@ -82,6 +83,11 @@ def queryTherapyHistory(Participant):
             TherapyHistory["History"].extend([i.get_info() for i in models.ElectricalTherapy.find_all(therapy__source__in=SourceFiles)])
             DeviceTherapyModification["History"].extend([i.get_info() for i in models.TherapyModification.find_all(source__in=SourceFiles)])
 
+        # From the implant date on (the PI, 2026-09-24): therapy snapshots dated before it are the
+        # device before it went in (RCS08: four 'Past Therapy' snapshots, January-April 2025).
+        TherapyHistory["History"], DeviceTherapyModification["History"] = therapy_from_data_start(
+            TherapyHistory["History"], DeviceTherapyModification["History"],
+            _data_start.data_start_s(Participant))
         DeviceTherapyModification["History"].sort(key=lambda x: x["Date"])
         TherapyHistory["History"] = [i for i in TherapyHistory["History"] if (i["Type"] in ["Pre-visit Therapy", "Post-visit Therapy", "Past Therapy"])]
         TherapyHistory["History"].sort(key=lambda x: x["Date"])
@@ -154,6 +160,30 @@ def queryTherapyHistory(Participant):
                                                     break
 
     return {"TherapyModification": TherapyModifications, "TherapyDevices": TherapyDevices, "TherapyConfiguration": TherapyHistories, "TherapyTimeline": TherapyTimeline}
+
+def therapy_from_data_start(configurations, modifications, start_s):
+    """Therapy records from the implant date on (the PI, 2026-09-24; `DecodeCommon.data_start`).
+
+    A therapy snapshot dated before the start is dropped. Group changes are settings that hold until
+    the next change, so the last group change before the start is kept and moved to it (the group
+    in force when the device went in) and every earlier one is dropped; other modification records
+    before the start are dropped. With no start, both lists come back unchanged.
+    """
+    if not start_s or float(start_s) <= 0:
+        return configurations, modifications
+    start = float(start_s)
+    configurations = [c for c in configurations if not float(c.get("Date") or 0) < start]
+    changes = [m for m in modifications if m.get("Type") == "TherapyChangeGroup"
+               and float(m.get("Date") or 0) < start]
+    last = max(changes, key=lambda m: float(m.get("Date") or 0)) if changes else None
+    kept = []
+    for m in modifications:
+        if not float(m.get("Date") or 0) < start:
+            kept.append(m)
+        elif m is last:
+            kept.append({**m, "Date": start})
+    return configurations, kept
+
 
 def createTherapyTimeline(TherapyHistory):
     AllSessionDates = []

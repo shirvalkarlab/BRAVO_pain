@@ -49,6 +49,7 @@ def test_the_rule_is_the_closed_loop_modules_not_a_copy():
 
 
 def test_the_stream_rule_version_was_bumped_for_the_new_column():
-    assert AD._THERAPY_SETTINGS_RULE_VERSION == "v2_active_groups_limit_kind"
+    # v2 added the column; any later version (v3 starts the stream at implant, 2026-09-24) keeps it
+    assert not AD._THERAPY_SETTINGS_RULE_VERSION.startswith("v1")
     import inspect
     assert '"upper_is_patient_limit"' in inspect.getsource(AD._build_settings_stream)

@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 
 from modules import Therapy, Database
+from modules.DecodeCommon import data_start as _data_start
 from modules.utility.PythonUtility import rangeSelection
 
 key = os.environ.get('DATASERVER_ENCRYPTION')
@@ -105,6 +106,7 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
 
     TherapyHistory = Therapy.queryTherapyHistory(participant)
     TherapyTimeline = Therapy.createTherapyTimeline(TherapyHistory)
+    DataStart = _data_start.data_start_s(participant)
 
     Sources = []
     for i in range(len(recordings)):
@@ -136,6 +138,14 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
                 continue
             
             Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+            # From the implant date on (the PI, 2026-09-24): a chronic file is one row that can
+            # span the implant date, so its SAMPLES before it are cut, not the row.
+            _keep = _data_start.keep_from(Data["Time"], DataStart)
+            if not _keep.all():
+                Data = {**Data, "Time": np.asarray(Data["Time"])[_keep],
+                        "Data": np.asarray(Data["Data"])[_keep, :]}
+                if len(Data["Time"]) == 0:
+                    continue
             for i in range(len(Timestamps)):
                 DataSelected = (Data["Time"] > Timestamps[i])
                 if i < len(Timestamps) - 1:
@@ -275,3 +285,10 @@ def revertChronicActivityFormat(data):
     Recording["StartTime"] = Recording["Time"][0]
     Recording["Duration"] = Recording["Time"][-1] - Recording["Time"][0]
     return Recording
+
+def activity_cache_is_current(recording, participant):
+    """Whether a saved MedtronicChronicNeuralActivity recording was built from the participant's
+    current data start (the implant date, 2026-09-24). One built before the cutoff existed carries
+    no start and is stale: it holds the bench samples and outlier fixes computed with them."""
+    md = getattr(recording, "metadata", None) or {}
+    return md.get("DataStartS") == _data_start.data_start_s(participant)

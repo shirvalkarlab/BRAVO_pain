@@ -60,9 +60,11 @@ import pandas as pd
 try:
     from modules.CacheStore import provenance as _provenance
     from modules.CacheStore import store as _cache_store
+    from modules.DecodeCommon import data_start as _data_start
 except ImportError:                                   # pragma: no cover - depends on the runner
     from CacheStore import provenance as _provenance
     from CacheStore import store as _cache_store
+    from DecodeCommon import data_start as _data_start
 
 _log = logging.getLogger(__name__)
 
@@ -94,7 +96,9 @@ THERAPY_PAIN_MATCHED_KIND = "therapy_pain_matched"
 #: programmed upper limit is a patient limit (a clinician's ceiling) or the adaptive amplitude
 #: limit of a group running adaptive therapy (decision 136). A stream stored under v1 lacks the
 #: column and is rebuilt once (about 33 s on RCS08).
-_THERAPY_SETTINGS_RULE_VERSION = "v2_active_groups_limit_kind"
+#: v3 (2026-09-24, the PI): the stream starts at the device's implant date (`apply_data_start`);
+#: on RCS08 its first rows had been four January-April 2025 snapshots the patient never received.
+_THERAPY_SETTINGS_RULE_VERSION = "v3_active_groups_from_implant_date"
 _THERAPY_PAIN_MATCHED_RULE_VERSION = "v1_epoch_means"
 
 #: The frame attribute under which a table carries the key of the store entry it came from, so a
@@ -226,7 +230,8 @@ def source_file_signature(participant, *, source_types=_JSON_SOURCE_TYPES):
     blob = "|".join("~".join(r) for r in rows).encode("utf8")
     return (THERAPY_SETTINGS_KIND, _THERAPY_SETTINGS_RULE_VERSION, _participant_uid(participant),
             tuple(source_types) if source_types else None, len(rows),
-            _hashlib.blake2b(blob, digest_size=16).hexdigest())
+            _hashlib.blake2b(blob, digest_size=16).hexdigest(),
+            float(_data_start.data_start_s(participant)))
 
 
 def settings_stream(participant, *, source_types=_JSON_SOURCE_TYPES) -> pd.DataFrame:
@@ -308,8 +313,37 @@ def _build_settings_stream(participant, *, source_types=_JSON_SOURCE_TYPES) -> p
     else:
         out = pd.DataFrame(recs).dropna(subset=["t", "amp", "rate"])
         out = out.sort_values("t").reset_index(drop=True)
+        out = apply_data_start(out, _data_start.data_start_s(participant))
     out.attrs[UNREADABLE_ATTR] = int(n_failed)
     return out
+
+
+def apply_data_start(stream: pd.DataFrame, start_s) -> pd.DataFrame:
+    """The stream from the participant's implant date on (the PI, 2026-09-24; `DecodeCommon.data_start`).
+
+    A setting holds until the next change, so per side the rows at the LAST timestamp before the
+    start are kept and moved to the start -- the setting in force when the device went in -- and
+    every earlier row is dropped. On RCS08 that drops four January-April 2025 snapshots the patient
+    never received and starts the stream on 2025-07-16 at the setting then in force. With no start,
+    the stream is returned unchanged.
+    """
+    if stream is None or len(stream) == 0 or not start_s or float(start_s) <= 0:
+        return stream
+    start = pd.Timestamp(float(start_s), unit="s", tz="UTC")
+    t = pd.to_datetime(stream["t"], utc=True)
+    before = t < start
+    if not before.any():
+        return stream
+    keep = ~before
+    moved = pd.Series(False, index=stream.index)
+    for _hemi, idx in stream.index[before].to_series().groupby(stream.loc[before, "hemi"]):
+        last_t = t.loc[idx].max()
+        at_last = idx[t.loc[idx] == last_t]
+        keep.loc[at_last] = True
+        moved.loc[at_last] = True
+    out = stream.loc[keep].copy()
+    out.loc[moved.loc[keep], "t"] = start
+    return out.sort_values("t", kind="stable").reset_index(drop=True)
 
 
 #: The columns that every settings stream must carry. ``settings_stream`` always returns a frame
