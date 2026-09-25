@@ -713,7 +713,11 @@ def current_coverage(sub, *, min_pairs=CURRENT_COVERAGE_MIN_PAIRS,
     d = d.assign(amp_mA_Left=pd.to_numeric(d["amp_mA_Left"], errors="coerce").round(3),
                  amp_mA_Right=pd.to_numeric(d["amp_mA_Right"], errors="coerce").round(3),
                  n=pd.to_numeric(d["n"], errors="coerce").fillna(0.0),
-                 _days=[tuple(v) if isinstance(v, (list, tuple, set, frozenset)) else () for v in obs],
+                 # np.ndarray too: a matched table read back from the store (Parquet) carries each
+                 # epoch's days as an array; missing it counted a served table's days as a SUM of
+                 # per-epoch counts or as none (found 2026-09-24, decision 260).
+                 _days=[tuple(v) if isinstance(v, (list, tuple, set, frozenset, np.ndarray)) else ()
+                        for v in obs],
                  _planned=planned.fillna(0.0))
 
     def _n_days(g):
