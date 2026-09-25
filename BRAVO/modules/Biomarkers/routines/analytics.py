@@ -4213,21 +4213,36 @@ def _band_pain_auc_with_covariate_removed(d, *, covariate_column, shape, pain_co
     }
 
 
-def _partial_corr_report_bootstrap(x, y, cov, groups, *, shape, n_boot, seed, alpha):
-    """Interval on the partial correlation, resampling WHOLE PAIN REPORTS with replacement."""
+def _partial_corr_report_bootstrap(x, y, cov, groups, *, shape, n_boot, seed, alpha, blas_threads=1):
+    """Interval on the partial correlation, resampling WHOLE PAIN REPORTS with replacement.
+
+    The fits run on `blas_threads` linear-algebra threads (speed-up item 5, 2026-09-25): a
+    two-column least-squares fit on tens of thousands of rows is faster on one thread than spread
+    over the container's 16 (40 fits: 0.03 s against 0.36 s on RCS08), and the coefficients were
+    identical at 1, 2, 4, 8 and 16 threads; `tests/test_partial_corr_bootstrap_threads.py` holds the
+    interval to the same values either way. None leaves the thread count as it is."""
     from .stats_utils import partial_corr
+    import contextlib
     ids = np.unique(groups)
     if ids.size < 2:
         return (None, None)
     index_of = {g: np.where(groups == g)[0] for g in ids}
     rng = np.random.default_rng(int(seed))
     vals = []
-    for _ in range(int(n_boot)):
-        pick = rng.choice(ids, size=ids.size, replace=True)
-        rows = np.concatenate([index_of[g] for g in pick])
-        r = partial_corr(x[rows], y[rows], cov[rows], shape=shape)
-        if r is not None and np.isfinite(r):
-            vals.append(float(r))
+    cap = contextlib.nullcontext()
+    if blas_threads is not None:
+        try:
+            from threadpoolctl import threadpool_limits
+            cap = threadpool_limits(int(blas_threads), user_api="blas")
+        except Exception:                                      # noqa: BLE001 -- no threadpoolctl: as before
+            cap = contextlib.nullcontext()
+    with cap:
+        for _ in range(int(n_boot)):
+            pick = rng.choice(ids, size=ids.size, replace=True)
+            rows = np.concatenate([index_of[g] for g in pick])
+            r = partial_corr(x[rows], y[rows], cov[rows], shape=shape)
+            if r is not None and np.isfinite(r):
+                vals.append(float(r))
     if len(vals) < BOOT_CI_VALID_FLOOR:
         return (None, None)
     v = np.asarray(vals, dtype=float)

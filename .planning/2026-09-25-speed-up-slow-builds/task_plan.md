@@ -5,10 +5,10 @@ The five speed-ups the grant session handed over (the PI: "go on all"), each its
 live equality proof (field count, 0 differing) and alternating timings.
 
 ## Next Step
-Item 5: profile the E2-with-current-removed step; decide whether an exact speed-up exists.
+Item 3: test an exact faster filter on the captured panel, bit for bit, before touching the fit.
 
 ## Current Phase
-Phase 3
+Phase 4
 
 ## Phases
 
@@ -26,12 +26,12 @@ Phase 3
 - **Status:** complete
 
 ### Phase 3: Item 5, the E2 bootstrap vectorized
-- [ ] Batched partial correlations, bit-for-bit or a stated reason
-- **Status:** in_progress
+- [x] One BLAS thread for the bootstrap's fits (decision 268); batching changes arithmetic
+- **Status:** complete
 
 ### Phase 4: Item 3, the design-rule fit
-- [ ] Vectorize the filter inside `fit_design_model`
-- **Status:** pending
+- [ ] An exact faster filter (panel 349 x 1,499; every stretch observed at 1 step)
+- **Status:** in_progress
 
 ## Decisions Made
 | Decision | Rationale |
