@@ -59,4 +59,12 @@ ANALYSES = {
         title="Pain around each on/off switch",
         what="Daily mean pain in windows before and after each time a side was switched on or off; descriptive.",
         literature=_lit("synthesis", "washin", "state")),
+    "carry_over_ladder": dict(
+        page="stim_optimizer", order=3,
+        title="Up the ladder and down (carry-over)",
+        what=("Pain at one current reached by a rise and by a fall within one clinic visit, everything "
+              "else unchanged, from the clinic and at-home testing sheets; told apart from pain drifting "
+              "over the visit by which leg came first. Also: pain rated twice at one held setting, and the "
+              "settled band power of the stored titration ladders on both legs."),
+        literature=_lit("synthesis", "washin")),
 }

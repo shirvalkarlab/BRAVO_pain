@@ -242,10 +242,87 @@ export function OnOffFigure({ result }) {
   );
 }
 
+/** 6. Up the ladder and down: pain on the way down minus on the way up at each current, per side;
+ * filled where the fall came after the rise, hollow where it came first; the held re-ratings; the
+ * ladders' settled band power. */
+const SIDE_INK = { Left: OI.blue, Right: OI.vermillion };
+const signed = (v, d = 2) => (v == null ? "\u2013" : `${v >= 0 ? "+" : ""}${v.toFixed(d)}`);
+const ORDER_WORDS = {
+  "one order": "Every fall came after its rise, so carry-over cannot be told apart from pain drifting over the visit.",
+};
+
+export function CarryOverFigure({ result }) {
+  const pain = (result && result.pain) || [];
+  const holds = (result && result.holds) || [];
+  const ladder = (result && result.ladder) || [];
+  const items = pain.map((p) => p.item);
+  const [item, setItem] = useState(items.includes("overall") ? "overall" : items[0]);
+  const p = pain.find((x) => x.item === item) || { by_current: [], by_side: {}, summary: {} };
+  const pts = p.by_current || [];
+  const ymax = Math.max(2, ...pts.map((r) => Math.abs(r.diff)));
+  const xmax = Math.max(4.5, ...pts.map((r) => r.current_mA));
+  const f = frame([-0.2, xmax + 0.3], [-ymax, ymax], 230);
+  const yt = [-ymax, 0, ymax].map((v) => Math.round(v * 10) / 10);
+  const xt = Array.from({ length: Math.floor(xmax) + 1 }, (_, i) => [i, `${i}`]);
+  const sides = Object.entries(p.by_side || {});
+  const headline = ORDER_WORDS[p.verdict] || (p.sentence ? `${p.sentence[0].toUpperCase()}${p.sentence.slice(1)}.` : "");
+  return (
+    <div data-testid="figure-carry_over_ladder" style={{ fontSize: 12.5, color: TXT }}>
+      {items.length > 1 && (
+        <select aria-label="Pain site" value={item} onChange={(e) => setItem(e.target.value)} style={SELECT}>
+          {pain.map((x) => <option key={x.item} value={x.item}>{x.words}</option>)}
+        </select>
+      )}
+      <div style={{ padding: "4px 0" }}>
+        {pts.length ? `${headline}${sides.length ? ` By side: ${sides.map(([sd, x]) => `${sd.toLowerCase()} ${signed(x.mean)} (${x.n_pairs} currents)`).join(", ")}.` : ""}`
+          : `No current was rated for ${p.words || item} on both the way up and the way down within one visit.`}
+      </div>
+      {pts.length > 0 && (
+        <svg viewBox={`0 0 ${W} ${f.h}`} width="100%" role="img" aria-label="Pain on the way down minus on the way up, at each current">
+          <Axes f={f} xticks={xt} yticks={Array.from(new Set(yt))} xlab="current on the side that was stepped (mA)"
+            ylab="down minus up (points of pain)" />
+          {pts.map((r, i) => (
+            <circle key={i} cx={f.X(r.current_mA)} cy={f.Y(r.diff)} r={5.5}
+              fill={r.falling_first ? "#FFFFFF" : SIDE_INK[r.side] || INK[0]} stroke={SIDE_INK[r.side] || INK[0]} strokeWidth={2} />
+          ))}
+        </svg>
+      )}
+      {pts.length > 0 && (
+        <div style={{ fontSize: 12, color: SUB }}>
+          {Object.entries(SIDE_INK).map(([sd, c]) => <span key={sd} style={{ marginRight: 14 }}><span style={{ color: c, fontSize: 14 }}>{"\u25CF"}</span>{` ${sd.toLowerCase()} side stepped`}</span>)}
+          <span>{"filled: the fall came after the rise; hollow: the fall came first. Below zero: less pain on the way down."}</span>
+        </div>
+      )}
+      <table data-testid="carry-over-holds" style={{ borderCollapse: "collapse", marginTop: 10 }}>
+        <thead><tr>{["Pain site", "Stimulation", "Rated twice at one setting", "Median minutes apart", "Second minus first", "95% interval", "Lower / higher / same"].map((h) => <th key={h} style={HEADC}>{h}</th>)}</tr></thead>
+        <tbody>{holds.filter((h) => h.n_pairs).map((h) => (
+          <tr key={`${h.item}${h.on}`}><td style={CELL}>{h.words}</td><td style={CELL}>{h.on ? "on" : "off"}</td>
+            <td style={CELL}>{`${h.n_pairs} times, ${h.n_visits} visits`}</td>
+            <td style={CELL}>{h.minutes_median == null ? "\u2013" : h.minutes_median.toFixed(0)}</td>
+            <td style={CELL}>{signed(h.mean)}</td>
+            <td style={CELL}>{h.lo == null ? "\u2013" : `${signed(h.lo)} to ${signed(h.hi)}`}</td>
+            <td style={CELL}>{`${h.n_lower} / ${h.n_higher} / ${h.n_same}`}</td></tr>))}</tbody>
+      </table>
+      {ladder.length > 0 && (
+        <table data-testid="carry-over-ladder-power" style={{ borderCollapse: "collapse", marginTop: 10 }}>
+          <thead><tr>{["Settled band power, route", "Sensing pair", "Ladder runs", "Bands (8.5\u201329.5 Hz)", "Median band, down against up", "Higher / lower", "Order"].map((h) => <th key={h} style={HEADC}>{h}</th>)}</tr></thead>
+          <tbody>{ladder.map((L) => (
+            <tr key={`${L.source}${L.pair}`}><td style={CELL}>{L.source}</td><td style={CELL}>{pairName(L.pair)}</td>
+              <td style={CELL}>{L.n_runs}</td><td style={CELL}>{L.n_bands}</td>
+              <td style={CELL}>{L.median_over_bands == null ? "\u2013" : `${signed(100 * L.median_over_bands, 1)}%`}</td>
+              <td style={CELL}>{`${L.bands_higher} / ${L.bands_lower}`}</td>
+              <td style={CELL}>{L.verdict === "one order" ? "every fall after its rise" : "both orders"}</td></tr>))}</tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 export const FIGURES = {
   zero_ma_within_stretch: ZeroMaFigure,
   current_explains: CurrentExplainsFigure,
   time_of_day: TimeOfDayFigure,
   current_with_memory: CurrentMemoryFigure,
   onoff_switches: OnOffFigure,
+  carry_over_ladder: CarryOverFigure,
 };

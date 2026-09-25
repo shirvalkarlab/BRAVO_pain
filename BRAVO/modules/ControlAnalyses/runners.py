@@ -483,6 +483,148 @@ def run_onoff_switches(uid, *, metric="nrs", save=True):
 
 
 # ------------------------------------------------------------------------------------------------
+# 6. up the ladder and down: carry-over
+# ------------------------------------------------------------------------------------------------
+
+def _clinic_steps_frame(uid):
+    """The clinic sheets' steps (both clinic and at-home sheets) from the implant date on, in the
+    shape `carry_over.step_frame` reads."""
+    from modules.DecodeCommon import data_start as DS
+    from modules.StimOptimizer import clinic_pain as CP
+    from . import carry_over as CO
+    steps, _stamp, why = CP.load_clinic_steps(uid, consumer="stim_optimizer")
+    if steps is None or len(steps) == 0:
+        raise RuntimeError(why or "no clinic-sheet steps are stored for this participant")
+    t = pd.to_datetime(steps["t_utc"], utc=True, errors="coerce")
+    t_s = (t.astype("int64") // 10**9).astype(float).where(t.notna(), np.nan).to_numpy()
+    start = DS.data_start_s(uid)
+    visit_t = pd.Series(t_s).groupby(steps["visit_date"].to_numpy()).transform("max").to_numpy()
+    keep = ~np.isfinite(visit_t) | (visit_t >= (start or -np.inf))
+
+    def num(c):
+        return pd.to_numeric(steps[c], errors="coerce")
+
+    def g(v):
+        return "nan" if not np.isfinite(v) else f"{v:g}"
+
+    cfg = [f"{g(r)}|{g(pl)}|{g(pr)}|{c}" for r, pl, pr, c in
+           zip(num("freq_hz"), num("pw_us_Left"), num("pw_us_Right"), steps["contacts_raw"].fillna(""))]
+    d = pd.DataFrame(dict(visit=steps["visit_date"].astype(str), setting=steps["setting"].astype(str),
+                          t_s=t_s, row_index=num("row_index"), amp_L=num("amp_mA_Left"),
+                          amp_R=num("amp_mA_Right"), cfg=cfg))
+    for item in CO.ITEMS:
+        d[item] = num(item)
+    return d[keep].reset_index(drop=True)
+
+
+def _by_current(pairs):
+    """Aggregates only (no single rating is saved): per side, current and order, the number of
+    pairs and the mean readings."""
+    if pairs is None or len(pairs) == 0:
+        return []
+    out = []
+    for (side, cur, first), g in pairs.groupby(["side", "current_mA", "falling_first"]):
+        out.append(dict(side=side, current_mA=float(cur), falling_first=bool(first), n_pairs=int(len(g)),
+                        n_visits=int(g["visit"].nunique()), rising=float(g["rising"].mean()),
+                        falling=float(g["falling"].mean()), diff=float(g["diff"].mean()),
+                        minutes_apart=float(g["minutes_apart"].median())))
+    return out
+
+
+def run_carry_over(uid, *, n_boot=2000, save=True):
+    from . import carry_over as CO
+    from modules.CacheStore import store as CS
+    long = CO.step_frame(_clinic_steps_frame(uid))
+    n_visits = int(long["visit"].nunique())
+    pain, holds = [], []
+    for item in CO.ITEMS:
+        pairs = CO.leg_pairs(long, item)
+        s = CO.by_order(pairs, n_boot=n_boot)
+        kind, sentence = CO.order_reading(s)
+        clinic = pairs[pairs["setting"] == "clinic"] if len(pairs) else pairs
+        by_side = {side: CO.paired_summary(g["diff"], g["visit"], n_boot=n_boot)
+                   for side, g in (pairs.groupby("side") if len(pairs) else [])}
+        pain.append(dict(item=item, words=CO.ITEM_WORDS[item], summary=s, verdict=kind, sentence=sentence,
+                         by_side=by_side, clinic_only=CO.by_order(clinic, n_boot=n_boot),
+                         by_current=_by_current(pairs),
+                         settings_seen=int(len(pairs)), visits_with_pairs=int(pairs["visit"].nunique()) if len(pairs) else 0))
+        h = CO.held_changes(long, item)
+        for on in (True, False):
+            hh = h[h["on"] == on] if len(h) else h
+            summ = CO.paired_summary(hh["change"], hh["visit"], n_boot=n_boot) if len(hh) else CO.paired_summary([], [])
+            summ.update(item=item, words=CO.ITEM_WORDS[item], on=on,
+                        minutes_median=float(hh["minutes"].median()) if len(hh) else None)
+            holds.append(summ)
+    rp, _stamp = CS.load_newest("three_source_run_points", uid, consumer="stim_optimizer")
+    lp = CO.ladder_pairs(rp)
+    if len(lp):                                   # the page's 22 band centres (decision 32)
+        lp = lp[(lp["band_centre_hz"] >= 8.5 - 1e-9) & (lp["band_centre_hz"] <= 29.5 + 1e-9)]
+    ladder = []
+    if len(lp):
+        for (src, ch), g in lp.groupby(["source", "sensing_contact"], sort=False):
+            s = CO.by_order(g.assign(diff=g["relative_diff"], visit=g["run"]), n_boot=n_boot)
+            bands = []
+            for c, gb in g.groupby("band_centre_hz"):
+                bs = CO.paired_summary(gb["relative_diff"], gb["run"], n_boot=n_boot)
+                bands.append(dict(centre=float(c), mean=bs["mean"], lo=bs["lo"], hi=bs["hi"],
+                                  n_pairs=bs["n_pairs"], n_runs=bs["n_visits"]))
+            means = np.array([b["mean"] for b in bands], float)
+            ladder.append(dict(source=src, pair=ch, summary=s, verdict=CO.order_reading(s)[0],
+                               n_runs=int(g["run"].nunique()), n_bands=int(g["band_centre_hz"].nunique()),
+                               bands_lower=int((means < 0).sum()), bands_higher=int((means > 0).sum()),
+                               median_over_bands=float(np.median(means)) if means.size else None,
+                               bands=bands))
+    reading = _carry_over_reading(pain, holds, ladder)
+    result = dict(pain=pain, holds=holds, ladder=ladder, n_visits=n_visits)
+    settings = dict(sheets="the clinic and at-home testing sheets, from the implant date on",
+                    pairs=("a current reached by a rise and by a fall within one visit, on one side, with the "
+                           "rate, pulse widths, contacts and the other side's current unchanged"),
+                    reading_per_step="the last rating of the site while the setting was held",
+                    interval="95%, resampling whole visits (runs for the ladder points)", n_boot=n_boot,
+                    p="sign flips of whole visits",
+                    ladder="settled band power from the stored ladder points (decision 213), falling / rising - 1")
+    return _finish(uid, "carry_over_ladder", result, settings, reading, save)
+
+
+def _fmt_ci(s, fmt="+.2f"):
+    if s.get("lo") is None:
+        return "no interval"
+    return f"{format(s['lo'], fmt)} to {format(s['hi'], fmt)}"
+
+
+def _carry_over_reading(pain, holds, ladder):
+    out = []
+    for p in pain:
+        s = p["summary"]
+        a, b = s["falling after rising"], s["falling before rising"]
+        if not s["all"]["n_pairs"]:
+            out.append(f"{p['words']}: no current was rated on both legs of one visit.")
+            continue
+        line = (f"{p['words']}: {s['all']['n_pairs']} currents rated on both legs, {s['all']['n_visits']} visits; "
+                f"pain on the way down minus on the way up {s['all']['mean']:+.2f} ({_fmt_ci(s['all'])}). ")
+        if len(p["by_side"]) > 1:
+            line += "By side: " + ", ".join(f"{side.lower()} {x['mean']:+.2f} ({x['n_pairs']} currents)"
+                                            for side, x in p["by_side"].items()) + ". "
+        for name, x in (("Fall after the rise", a), ("Fall before the rise", b)):
+            line += (f"{name}: {x['mean']:+.2f} ({x['n_pairs']} pairs, {_fmt_ci(x)}). " if x["n_pairs"]
+                     else f"{name}: none. ")
+        out.append(line + p["sentence"][0].upper() + p["sentence"][1:] + ".")
+    for h in holds:
+        if h["n_pairs"]:
+            out.append(f"{h['words']}, held at one setting with stimulation {'on' if h['on'] else 'off'} and rated again "
+                       f"(median {h['minutes_median']:.0f} min later, {h['n_pairs']} times on {h['n_visits']} visits): "
+                       f"{h['mean']:+.2f} ({_fmt_ci(h)}); lower {h['n_lower']}, higher {h['n_higher']}, the same {h['n_same']}.")
+    for L in ladder:
+        s = L["summary"]["all"]
+        out.append(f"Settled band power, {L['source']}, {pair_name(L['pair'])} ({L['n_runs']} ladder run(s), "
+                   f"{L['n_bands']} bands of 8.5-29.5 Hz): on the way down {100 * L['median_over_bands']:+.1f}% against "
+                   f"the way up at the median band, higher in {L['bands_higher']} bands and lower in {L['bands_lower']}; "
+                   + ("every fall came after its rise." if not s.get("n_pairs") or not L["summary"]["falling before rising"]["n_pairs"]
+                      else "falls came both before and after their rises."))
+    return out
+
+
+# ------------------------------------------------------------------------------------------------
 
 def _finish(uid, key, result, settings, reading, save):
     from modules.DecodeCommon import data_start as DS
@@ -498,4 +640,4 @@ def _finish(uid, key, result, settings, reading, save):
 
 RUNNERS = {"zero_ma_within_stretch": run_zero_ma, "current_explains": run_current_explains,
            "current_with_memory": run_current_with_memory, "time_of_day": run_time_of_day,
-           "onoff_switches": run_onoff_switches}
+           "onoff_switches": run_onoff_switches, "carry_over_ladder": run_carry_over}
