@@ -5,7 +5,7 @@ The five speed-ups the grant session handed over (the PI: "go on all"), each its
 live equality proof (field count, 0 differing) and alternating timings.
 
 ## Next Step
-Item 3: test an exact faster filter on the captured panel, bit for bit, before touching the fit.
+None: items 1, 2, 4, 5 committed; item 3 waits on the PI (a compiled dependency, or accept changed digits).
 
 ## Current Phase
 Phase 4
@@ -30,8 +30,10 @@ Phase 4
 - **Status:** complete
 
 ### Phase 4: Item 3, the design-rule fit
-- [ ] An exact faster filter (panel 349 x 1,499; every stretch observed at 1 step)
-- **Status:** in_progress
+- [x] Measured: 29 ms a filter call, about 1,600 calls a fit; numpy dispatch-bound (30 small ops a step)
+- [x] Candidate (shared covariance recursion) not exact: stretches have gaps; 0 of 60 draws identical
+- [ ] Blocked on the PI: an exact 10x needs a compiled loop (numba or C) that reproduces numpy's log and summation; none installed
+- **Status:** complete
 
 ## Decisions Made
 | Decision | Rationale |
