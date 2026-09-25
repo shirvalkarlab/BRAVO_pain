@@ -113,6 +113,77 @@ def test_bilateral_amp_forms_keep_left_before_the_separator(tmp_path, i, amp_cel
 
 
 # =====================================================================================
+# A written correction in parentheses ("L 100 (did 110 accidentally) / R 150", the real cell
+# G16 of the 2026-09-02 in-clinic workbook) must yield the DELIVERED value, not the pre-parenthesis
+# planned one, and must not be silently dropped (P-13).
+# =====================================================================================
+
+def test_a_pw_correction_in_parentheses_gives_the_delivered_left_value(tmp_path):
+    rows = [
+        {"Group": "A", "Contacts": "1+2-9-10-", "Amp (mA)": "3.5/3.0", "Rate (Hz)": 55.0,
+         "PW (µs)": "L 100 (did 110 accidentally) / R 150", "Duration (s)": 120.0,
+         "Timestamp": datetime.time(12, 23, 6), "Overall": 5.0},
+    ]
+    path = _write_generic_workbook(tmp_path / "wb_pw_correction.xlsx", rows)
+    df, counts = _parse(path)
+    assert len(df) == 1
+    row = df.iloc[0]
+    # the patient actually received 110 us on the left, not the planned 100
+    assert row["pw_us_Left"] == 110.0
+    assert row["pw_us_Right"] == 150.0
+
+
+def test_an_amp_correction_in_parentheses_gives_the_delivered_right_value(tmp_path):
+    rows = [
+        {"Group": "A", "Contacts": "1+2-9-10-", "Amp (mA)": "L 1.0 / R 2.0 (actually 2.5)",
+         "Rate (Hz)": 55.0, "PW (µs)": "60/150", "Duration (s)": 120.0,
+         "Timestamp": datetime.time(12, 0, 0), "Overall": 5.0},
+    ]
+    path = _write_generic_workbook(tmp_path / "wb_amp_correction.xlsx", rows)
+    df, counts = _parse(path)
+    assert len(df) == 1
+    row = df.iloc[0]
+    assert row["amp_mA_Left"] == 1.0
+    assert row["amp_mA_Right"] == 2.5
+
+
+def test_a_correction_worded_should_be_is_also_read(tmp_path):
+    rows = [
+        {"Group": "A", "Contacts": "1+2-9-10-", "Amp (mA)": "L 0.5 (typo, should be 1.5) / R 1.0",
+         "Rate (Hz)": 55.0, "PW (µs)": "60/150", "Duration (s)": 120.0,
+         "Timestamp": datetime.time(12, 0, 0), "Overall": 5.0},
+    ]
+    path = _write_generic_workbook(tmp_path / "wb_amp_shouldbe.xlsx", rows)
+    df, counts = _parse(path)
+    assert len(df) == 1
+    row = df.iloc[0]
+    assert row["amp_mA_Left"] == 1.5
+    assert row["amp_mA_Right"] == 1.0
+
+
+def test_an_adapting_range_cell_is_not_mistaken_for_a_correction(tmp_path):
+    """"Adapting (0 to1.6 & 0 to 1.2)" -- a real cell (RCS08, April 2026 in-clinic sheet) -- names
+    an adaptive stimulation RANGE, not a left/right pair. The "&" and "/" that can appear inside
+    such a parenthetical are not the bilateral separator, and must not be read as one: an earlier
+    version of the P-13 fix split on them and invented an amplitude (0.0) that was never in the
+    cell. The whole cell has no usable single value and must stay unparsed, exactly as before the
+    fix (regression test, found live on RCS08 rather than in a unit test)."""
+    rows = [
+        {"Group": "A", "Contacts": "1+2-9-10-", "Amp (mA)": "Adapting (0 to1.6 & 0 to 1.2)",
+         "Rate (Hz)": 55.0, "PW (µs)": "60/150", "Duration (s)": 120.0,
+         "Timestamp": datetime.time(12, 0, 0), "Overall": 5.0},
+        {"Group": "A", "Contacts": "1+2-9-10-", "Amp (mA)": "Adapting (1.8/1.2)",
+         "Rate (Hz)": 55.0, "PW (µs)": "60/150", "Duration (s)": 120.0,
+         "Timestamp": datetime.time(12, 5, 0), "Overall": 6.0},
+    ]
+    path = _write_generic_workbook(tmp_path / "wb_adapting.xlsx", rows)
+    df, counts = _parse(path)
+    # neither row ever set a real amplitude, so neither carries a pain score with a setting
+    assert len(df) == 0
+    assert counts.n_skipped_no_setting == 2
+
+
+# =====================================================================================
 # The "Timastamp" / "PW (ms)" header typos, tolerated rather than corrected upstream.
 # =====================================================================================
 

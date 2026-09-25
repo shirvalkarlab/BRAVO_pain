@@ -83,7 +83,9 @@ CLINIC_PAIN_KIND = "clinic_pain_steps"
 #: Bumped whenever the parsing rule changes, so a stored entry built under an older rule is never
 #: served as if it were built under this one (the same discipline every other rule version in this
 #: project follows, e.g. `Biomarkers.bravo_service._BAND_SWEEP_RULE_VERSION`).
-_RULE_VERSION = "v1_clinic_pain_2026-09-14"
+#: v2 (2026-09-25, P-13): a written correction in parentheses ("L 100 (did 110 accidentally) / R
+#: 150") now yields the delivered number instead of silently dropping the whole cell.
+_RULE_VERSION = "v2_clinic_pain_2026-09-25"
 
 #: The seven pain-site fields this module reports, in the order the task and the sheets themselves
 #: use. `overall` also catches the two 2025 workbooks' "Verbal" column and July 2025's "Current
@@ -323,6 +325,63 @@ def _f(v):
     return x if np.isfinite(x) else None
 
 
+#: A written correction inside one side's own cell text, e.g. "L 100 (did 110 accidentally) / R
+#: 150" -- the real cell G16 of the 2026-09-02 in-clinic workbook (P-13). The number that follows
+#: one of these words INSIDE the parentheses is what was actually delivered; the number before the
+#: parentheses is the plan, not the delivery, and must not be the one carried forward.
+_CORRECTION_NUM_RE = re.compile(
+    r"(?:did|actually|meant|correct(?:ed|ion)?|should\s+(?:be|have\s+been)|really|instead)"
+    r"\D{0,15}?([\-0-9.]+)", re.I)
+_PAREN_RE = re.compile(r"\(([^)]*)\)")
+_LEADING_SIDE_LETTER_RE = re.compile(r"^\s*[LR]\s*", re.I)
+
+
+def _find_sep_outside_parens(s, sep):
+    """The index of the first ``sep`` character in ``s`` that is NOT inside a "(...)" span, or
+    -1 if none. A separator inside parentheses is part of a note, not the L/R divider -- e.g. an
+    "Adapting" cell's range "Adapting (0 to 1.6 & 0 to 1.2)" carries an "&" that describes ONE
+    side's own adaptive range, not a second, right-hemisphere value. Splitting on it blindly (as
+    an earlier version of the P-13 fix did) invented amplitudes that were never in the cell."""
+    depth = 0
+    for i, ch in enumerate(s):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif ch == sep and depth == 0:
+            return i
+    return -1
+
+
+def _resolve_side_fragment(fragment):
+    """One side's raw cell fragment (may carry a leading "L "/"R " label and/or a parenthetical
+    note) -> the number string actually delivered, or ``None``.
+
+    A correction named inside the parentheses (see `_CORRECTION_NUM_RE`) wins over the number
+    written before it -- that is the whole point of the note. A parenthetical with no correction
+    wording (a plain aside) is dropped and the stated number is kept, and the number must be the
+    FIRST thing left once the label and the note are gone (`re.match`, not `re.search`), so a
+    fragment that is prose with a stray digit in it (an "Adapting (...)" cell with no top-level
+    separator, see `_find_sep_outside_parens`) resolves to ``None`` rather than to whatever digit
+    happens to appear in it. Without the parenthetical handling a cell like "L 100 (did 110
+    accidentally) / R 150" fails `float()` outright: BOTH sides came back as ``None`` and the
+    caller (`_assign_pw_sides` / `_assign_amp_sides`) silently kept whatever setting was already in
+    force, discarding both the stated AND the delivered value with no sign anything was lost.
+    """
+    if fragment is None:
+        return None
+    frag = str(fragment)
+    note = _PAREN_RE.search(frag)
+    if note:
+        corrected = _CORRECTION_NUM_RE.search(note.group(1))
+        if corrected:
+            return corrected.group(1)
+        frag = frag[:note.start()] + frag[note.end():]
+    frag = _LEADING_SIDE_LETTER_RE.sub("", frag.strip()).strip()
+    m = re.match(r"[\-0-9.]+", frag)
+    return m.group(0) if m else None
+
+
 def _side_markers(text) -> tuple:
     """Whether ``text`` names the left hemisphere, the right, both (or neither)."""
     if not text:
@@ -337,7 +396,11 @@ def _split_bilateral(raw):
     """``(left_raw, right_raw, mode)``. LEFT IS ALWAYS BEFORE THE SEPARATOR (clinic_steps.py trap
     4, the PI's 2026-09-05 ruling), for both the "/" and the "&" forms. A bare scalar is returned
     on both sides under mode ``"scalar"``; the caller resolves which side(s) it really belongs to
-    from the contacts field via `_side_markers`."""
+    from the contacts field via `_side_markers`.
+
+    A side may carry a written correction in parentheses (P-13; `_resolve_side_fragment`), so each
+    fragment is resolved through it before it is returned -- the value handed back is always what
+    was delivered, never a stated-then-retracted plan."""
     if raw is None:
         return (None, None, "none")
     if isinstance(raw, (int, float)) and not isinstance(raw, bool):
@@ -349,12 +412,15 @@ def _split_bilateral(raw):
     if m:
         return (m.group(1), m.group(2), "lr_labeled")
     for sep in ("/", "&"):
-        if sep in s:
-            parts = s.split(sep, 1)
-            if len(parts) == 2:
-                return (parts[0].strip(), parts[1].strip(), "pair")
+        i = _find_sep_outside_parens(s, sep)
+        if i >= 0:
+            left_frag, right_frag = s[:i], s[i + 1:]
+            return (_resolve_side_fragment(left_frag), _resolve_side_fragment(right_frag), "pair")
     if _PLAIN_NUM.match(s):
         return (s, s, "scalar")
+    resolved = _resolve_side_fragment(s)
+    if resolved is not None and _PLAIN_NUM.match(resolved):
+        return (resolved, resolved, "scalar")
     return (None, None, "unparsed")
 
 
