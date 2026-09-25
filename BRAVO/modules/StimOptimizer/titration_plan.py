@@ -295,7 +295,8 @@ def session_time_estimate(n_steps_total, *, step_minutes=2.0,
 
 
 # ---------------------------------------------------------------------------------------------
-# the band centres to analyse and to avoid
+# the band centres to analyse, and which of them carry a stimulator harmonic (advisory: every
+# centre below is still analysed; a flagged one is never dropped, decision 220)
 # ---------------------------------------------------------------------------------------------
 #: How many whole multiples of the rate `harmonic_avoidance` folds through the device's 250 Hz
 #: sampling before it stops looking. 8 covers every multiple that can land inside or near the

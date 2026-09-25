@@ -9,8 +9,10 @@
  * (`StimOptimizer/titration_plan.py` through `bravo_service.titration_plan_block`); nothing is
  * derived on the page. Two columns, Left | Right; numbers where numbers exist (rate, pulse width,
  * ceiling, the ladder as "0 → 0.5 → … → 5.0 → … → 0 mA", the hold, the contact in Medtronic
- * notation); the 22 band centres as a strip, clear ones in ink and the ones within 2.5 Hz of a
- * harmonic of the rate struck; the reasons folded under "Why this design". One line at the
+ * notation); the 22 band centres as a strip, all of them analysed, clear ones in ink and the ones
+ * within 2.5 Hz of a harmonic of the rate flagged and greyed -- flagged, never dropped: the PI's
+ * advisory ruling of 2026-09-06 and decision 220 (a warning, not a refusal); the reasons folded
+ * under "Why this design". One line at the
  * bottom says what the record holds on that contact today against what the session yields, and
  * whether the margin can be switched on. The page's type scale (typeScale.js) and formatters
  * (stimFormat.js) are used throughout; nothing under 11 px.
@@ -205,26 +207,28 @@ function Row({ label, children, sub }) {
   );
 }
 
-/** The 22 centres as a strip: a clear centre in ink, an avoided one struck through and greyed. */
+/** The 22 centres as a strip, every one of them analysed: a clear centre in ink, one carrying a
+ *  stimulator harmonic flagged and greyed. Flagged is advisory only (the PI, 2026-09-06; decision
+ *  220): it is never dropped from the analysis, so nothing here is struck through. */
 function BandStrip({ bands }) {
   if (!bands || !Array.isArray(bands.centres_hz)) return <span style={SMALL}>—</span>;
-  const avoid = new Set((bands.avoid_hz || []).map((v) => Number(v)));
+  const flagged = new Set((bands.avoid_hz || []).map((v) => Number(v)));
   return (
     <MDBox sx={{ display: "flex", flexWrap: "wrap", gap: "4px 6px", alignItems: "baseline" }}>
       {bands.centres_hz.map((c) => {
         const x = Number(c);
-        const out = avoid.has(x);
-        const reason = out ? (bands.avoid_reasons || {})[String(x)] || "" : "clear";
+        const isFlagged = flagged.has(x);
+        const reason = isFlagged ? (bands.avoid_reasons || {})[String(x)] || "" : "clear of every stimulator harmonic";
         return (
           <span key={x} title={`${x} Hz: ${reason}`}
             style={{ fontFamily: PAL.mono, fontSize: TYPE.num, whiteSpace: "nowrap",
-              color: out ? "#6E6E6E" : "#1A1A1A", textDecoration: out ? "line-through" : "none" }}>
+              color: isFlagged ? "#6E6E6E" : "#1A1A1A" }}>
             {x}
           </span>
         );
       })}
       <span style={{ ...SMALL, marginLeft: 6 }}>
-        {`Hz · ${bands.n_clear ?? "—"} clear, ${bands.n_avoid ?? "—"} struck`}
+        {`Hz · ${bands.n_clear ?? "—"} clear, ${bands.n_avoid ?? "—"} flagged (analysed either way)`}
       </span>
     </MDBox>
   );
@@ -302,7 +306,7 @@ function SideColumn({ side, plan }) {
           </span>
         ) : <span style={{ ...VALUE, color: PAL.neutral }}>—</span>}
       </Row>
-      <Row label="analyse at" sub={harmonicsText ? `the stimulator shows up at ${harmonicsText}; a centre within ±${num((plan.bands || {}).half_width_hz) ?? "—"} Hz of one is struck` : null}>
+      <Row label="analyse at" sub={harmonicsText ? `the stimulator shows up at ${harmonicsText}; a centre within ±${num((plan.bands || {}).half_width_hz) ?? "—"} Hz of one carries a folded multiple of the stimulation rate and is flagged, not dropped -- every centre above is still analysed (advisory, the PI, 2026-09-06)` : null}>
         <BandStrip bands={plan.bands} />
       </Row>
       <MDBox mt={0.6}>
