@@ -687,6 +687,69 @@ def test_annotating_a_column_the_join_ignores_does_not_invalidate():
         "a column the join never reads must not invalidate"
 
 
+class _FakeRecordingQuerySet:
+    """Stands in for `Recording.objects.filter(...)`: only `.values_list()` is used by the
+    function under test, over whatever `recs_holder()` returns AT CALL TIME (a plain list captured
+    once would miss the test's later reassignments of `state["recs"]`)."""
+    def __init__(self, recs_holder):
+        self._recs_holder = recs_holder
+
+    def values_list(self, *fields):
+        return [tuple(getattr(r, f) for f in fields) for r in self._recs_holder()]
+
+
+class _FakeRecordingManager:
+    def __init__(self, recs_holder):
+        self._recs_holder = recs_holder
+
+    def filter(self, **kwargs):
+        return _FakeRecordingQuerySet(self._recs_holder)
+
+
+def _install_fake_server_models(state):
+    """Inject a fake `Server`/`Server.models` exposing exactly what `recording_set_signature` reads
+    (`SourceFile.find_all`, `Recording.objects.filter(...).values_list(...)`), and a fake
+    `Biomarkers`/`Biomarkers.bravo_service` whose `_request_memo` is a no-op passthrough.
+
+    THE SECOND FAKE MATTERS. `recording_set_signature` now also reaches for the within-request memo
+    Biomarkers' `bravo_service` module keeps (decision 267's `_request_memo`), which is the ONLY
+    Django-coupled file in that package: without this second fake, the fake `Server.models` above
+    would be visible to a REAL import of `Biomarkers.bravo_service` (it also does
+    `from Server import models`), pulling in that whole package's cascade of imports as a side
+    effect of a ClosedLoopDeployment test. The fake here is deterministic and inert instead: no
+    request is open, so a memo would not fire anyway, and `compute()` runs every time -- exactly
+    what an unmemoised call did before proposal 1.
+
+    Returns the tuple to restore afterwards.
+    """
+    import sys, types
+    fake_server = types.ModuleType("Server")
+    fake_models = types.ModuleType("Server.models")
+    fake_models.SourceFile = type("SF", (), {"find_all": staticmethod(lambda **k: state["sfs"])})
+    fake_models.Recording = type("R", (), {"objects": _FakeRecordingManager(lambda: state["recs"])})
+    fake_server.models = fake_models
+
+    fake_bio_pkg = types.ModuleType("Biomarkers")
+    fake_bio_svc = types.ModuleType("Biomarkers.bravo_service")
+    fake_bio_svc._request_memo = staticmethod(lambda key, compute: compute())
+    fake_bio_pkg.bravo_service = fake_bio_svc
+
+    names = ("Server", "Server.models", "Biomarkers", "Biomarkers.bravo_service")
+    saved = {n: sys.modules.get(n) for n in names}
+    sys.modules["Server"], sys.modules["Server.models"] = fake_server, fake_models
+    sys.modules["Biomarkers"], sys.modules["Biomarkers.bravo_service"] = fake_bio_pkg, fake_bio_svc
+    return saved
+
+
+def _restore_fake_server_models(saved):
+    import sys
+    for k, v in saved.items():
+        if v is None:
+            sys.modules.pop(k, None)
+        else:
+            sys.modules[k] = v
+
+
 def test_recording_set_signature_folds_in_each_recordings_own_hash():
     """Keyed on recording IDENTITY, not a count or a max date.
 
@@ -694,6 +757,10 @@ def test_recording_set_signature_folds_in_each_recordings_own_hash():
     and a count alone also misses a deletion balanced by an insertion. This project has already
     lost a session to a plot that looked frozen because files were never ingested, so the cache must
     invalidate exactly when the recording set changes and never on a timer.
+
+    Reads only `uid`, `hashed` and `type` (`Recording.objects.filter(...).values_list(...)`), not
+    whole Recording objects joined to their source files (proposal 1, 2026-09-25): measured live on
+    RCS08, the lean query gives the identical answer 38 times faster.
     """
     from ClosedLoopDeployment import adapter as AD
 
@@ -704,14 +771,8 @@ def test_recording_set_signature_folds_in_each_recordings_own_hash():
     class _P:
         uid = "p1"
 
-    import sys, types
-    fake = types.ModuleType("Server"); fake_models = types.ModuleType("Server.models")
     state = {"recs": [_R("a", "h1"), _R("b", "h2")], "sfs": ["s1"]}
-    fake_models.SourceFile = type("SF", (), {"find_all": staticmethod(lambda **k: state["sfs"])})
-    fake_models.Recording = type("R", (), {"find_all": staticmethod(lambda **k: state["recs"])})
-    fake.models = fake_models
-    saved = (sys.modules.get("Server"), sys.modules.get("Server.models"))
-    sys.modules["Server"], sys.modules["Server.models"] = fake, fake_models
+    saved = _install_fake_server_models(state)
     try:
         base = AD.recording_set_signature(_P())
         assert AD.recording_set_signature(_P()) == base, "must be stable for identical input"
@@ -727,7 +788,81 @@ def test_recording_set_signature_folds_in_each_recordings_own_hash():
         state["recs"] = [_R("b", "h2"), _R("a", "h1")]     # order must not matter
         assert AD.recording_set_signature(_P()) == base
     finally:
-        for k, v in zip(("Server", "Server.models"), saved):
+        _restore_fake_server_models(saved)
+
+
+def test_recording_set_signature_computed_once_per_request():
+    """Proposal 1 (2026-09-25): a request that asks 10-14 times must query the database once.
+
+    The within-request memo (decision 267's `_request_memo`, kept by Biomarkers' `bravo_service`)
+    is faked here with a real call counter, so the test does not need Django. A recording that
+    arrives while a memo is in force must not be seen until the memo is cleared -- the same rule
+    `pro_request_scope` enforces for pain reports -- and a call with NO memo in force (outside any
+    request) must always see the database fresh.
+    """
+    import sys, types
+    from ClosedLoopDeployment import adapter as AD
+
+    class _R:
+        def __init__(self, uid, hashed, type_="X"):
+            self.uid, self.hashed, self.type = uid, hashed, type_
+
+    class _P:
+        uid = "p1"
+
+    calls = {"n": 0}
+    state = {"recs": [_R("a", "h1")], "sfs": ["s1"]}
+
+    class _CountingQuerySet(_FakeRecordingQuerySet):
+        def values_list(self, *fields):
+            calls["n"] += 1
+            return super().values_list(*fields)
+
+    fake_server = types.ModuleType("Server")
+    fake_models = types.ModuleType("Server.models")
+    fake_models.SourceFile = type("SF", (), {"find_all": staticmethod(lambda **k: state["sfs"])})
+    fake_models.Recording = type("R", (), {
+        "objects": type("Mgr", (), {
+            "filter": staticmethod(lambda **k: _CountingQuerySet(lambda: state["recs"]))})()})
+    fake_server.models = fake_models
+
+    request_cache = {}                                      # None means "no request scope open"
+
+    def _fake_request_memo(key, compute):
+        if request_cache is None:
+            return compute()
+        k = tuple(key)
+        if k not in request_cache:
+            request_cache[k] = compute()
+        return request_cache[k]
+
+    fake_bio_pkg = types.ModuleType("Biomarkers")
+    fake_bio_svc = types.ModuleType("Biomarkers.bravo_service")
+    fake_bio_svc._request_memo = _fake_request_memo
+    fake_bio_pkg.bravo_service = fake_bio_svc
+
+    names = ("Server", "Server.models", "Biomarkers", "Biomarkers.bravo_service")
+    saved = {n: sys.modules.get(n) for n in names}
+    sys.modules["Server"], sys.modules["Server.models"] = fake_server, fake_models
+    sys.modules["Biomarkers"], sys.modules["Biomarkers.bravo_service"] = fake_bio_pkg, fake_bio_svc
+    try:
+        first = AD.recording_set_signature(_P())
+        assert calls["n"] == 1
+        second = AD.recording_set_signature(_P())
+        assert calls["n"] == 1, "a second ask inside the same request must not query again"
+        assert second == first
+
+        state["recs"] = [_R("a", "h1"), _R("b", "h2")]      # a recording arrives mid-"request"
+        third = AD.recording_set_signature(_P())
+        assert calls["n"] == 1, "the memo must still answer without a new query"
+        assert third == first, "the new recording must not be seen until the memo is cleared"
+
+        request_cache.clear()                               # the request ends; a new one begins
+        fourth = AD.recording_set_signature(_P())
+        assert calls["n"] == 2
+        assert fourth != first, "the next request must see the new recording"
+    finally:
+        for k, v in saved.items():
             if v is None:
                 sys.modules.pop(k, None)
             else:

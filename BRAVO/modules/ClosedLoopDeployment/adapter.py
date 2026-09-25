@@ -804,21 +804,54 @@ def clear_shared_cache():
 
 
 
+def _once_per_request(key, compute):
+    """`compute()` once per request, through the within-request memo Biomarkers' `bravo_service`
+    module already keeps for the tile key and the decoded recordings (decision 267's
+    `_request_memo`) -- the same scope `ClosedLoopDeployment.bravo_service.run_for_participant`
+    opens around every request. Computed fresh wherever that scope cannot be reached: the host test
+    suite has no `Server` package at all, so `Biomarkers.bravo_service` (the only Django-coupled
+    file in that package) fails to import before anything Django-specific runs; and a caller outside
+    any request has opened no scope, in which case `_request_memo` itself falls through to
+    `compute()`. Any other failure reaching the memo is treated the same way, rather than as a
+    reason to fail the caller -- a speed-up must never be able to break a page.
+    """
+    try:
+        from Biomarkers import bravo_service as _bsvc
+    except ImportError:                                          # pragma: no cover
+        try:
+            from modules.Biomarkers import bravo_service as _bsvc
+        except Exception:                                        # noqa: BLE001 -- no Django here
+            return compute()
+    except Exception:                                             # noqa: BLE001
+        return compute()
+    return _bsvc._request_memo(key, compute)
+
+
 def recording_set_signature(participant):
     """Identity of every recording that feeds the inputs, so a new ingest invalidates the cache.
 
     Folds in each recording's own uid and content hash rather than a count or a max date: a
     re-decode that replaces a recording in place changes neither of those, and a count alone would
     also miss a deletion balanced by an insertion.
+
+    Reads only the three columns the signature needs (`uid`, `hashed`, `type`) rather than whole
+    Recording objects joined to their source files, and is computed once per request
+    (`_once_per_request`): one Closed-Loop request asked for this 10 to 14 times (proposal 1,
+    2026-09-25). Measured live on RCS08: the lean query gives the identical answer, about 38 times
+    faster (0.017 s against 0.41-0.64 s).
     """
-    from Server import models as _m
-    sfs = list(_m.SourceFile.find_all(owner=participant))
-    recs = list(_m.Recording.find_all(source__in=sfs))
-    ident = sorted((str(getattr(r, "uid", "")), str(getattr(r, "hashed", "")),
-                    str(getattr(r, "type", ""))) for r in recs)
-    blob = "|".join("~".join(t) for t in ident).encode("utf8")
-    return (str(getattr(participant, "uid", participant)), len(sfs), len(recs),
-            _hashlib.blake2b(blob, digest_size=16).hexdigest())
+    puid = str(getattr(participant, "uid", participant))
+
+    def _compute():
+        from Server import models as _m
+        sfs = list(_m.SourceFile.find_all(owner=participant))
+        rows = list(_m.Recording.objects.filter(source__in=sfs)
+                    .values_list("uid", "hashed", "type"))
+        ident = sorted((str(u), str(h), str(t)) for (u, h, t) in rows)
+        blob = "|".join("~".join(t) for t in ident).encode("utf8")
+        return (puid, len(sfs), len(rows), _hashlib.blake2b(blob, digest_size=16).hexdigest())
+
+    return _once_per_request(("cl_recording_set_signature", puid), _compute)
 
 
 #: The `inputs` entry's own rule version (decision 215). Bump it when what the entry holds changes
