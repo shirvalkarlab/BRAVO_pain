@@ -1117,6 +1117,77 @@ TD_PRODUCT_SOURCE_LABEL = {
 }
 
 
+#: Pieces transformed per batch (bounds memory: 4096 pieces x ~5 sub-windows x 256 points).
+_TILE_BATCH = 4096
+
+
+def _td_tiles_batched(td_out, col, miss, fs, t0, src, centers, *, window_s, half, max_missing_frac,
+                      saturation_uv):
+    """One recording's 3 s tiles appended to `td_out`, exactly as the piece-at-a-time loop made them
+    (speed-up item 1, 2026-09-25; `tests/test_tiles_batched.py` keeps that loop as its reference).
+
+    The gates -- enough finite signal, no sample at the rail, missing packets within the limit -- are
+    computed for every piece at once; the pieces that pass and are whole and all-finite (almost all
+    of them) are transformed together (`analytics.td_transform_band_power_batch`); the rest take the
+    single call as before. The rows keep their form: a list per piece, None where there is no value.
+    """
+    nsamp = col.shape[0]
+    nC = centers.size
+    win_tile = int(round(fs * window_s))
+    step_sub = int(round(fs * analytics.TRANSFORM_STEP_SECONDS))
+    min_finite = int(round(fs * analytics.TRANSFORM_WIN_SECONDS))
+    if win_tile <= 0 or nsamp == 0:
+        return
+    starts = np.arange(0, nsamp, win_tile)
+    ends = np.minimum(starts + win_tile, nsamp)
+    length = ends - starts
+    fin = np.isfinite(col)
+    n_fin = np.add.reduceat(fin.astype(np.int64), starts)
+    absval = np.where(fin, np.abs(np.where(fin, col, 0.0)), -np.inf)
+    peak = np.maximum.reduceat(absval, starts)
+    exact_miss = miss is not None and miss.size and (miss.dtype == bool or np.issubdtype(miss.dtype, np.integer))
+    scored = n_fin >= min_finite
+    saturated = scored & (peak >= saturation_uv)
+    passes = np.zeros(starts.size, dtype=bool)
+    for i in np.flatnonzero(scored & ~saturated):
+        if miss is not None and miss.size and not exact_miss:
+            seg_miss = miss[starts[i]:ends[i]]
+            miss_frac = float(np.mean(seg_miss)) if seg_miss.size else 1.0 - n_fin[i] / max(length[i], 1)
+        elif miss is not None and miss.size:
+            seg_miss = miss[starts[i]:ends[i]]
+            miss_frac = (float(np.sum(seg_miss, dtype=np.int64)) / seg_miss.size if seg_miss.size
+                         else 1.0 - n_fin[i] / max(length[i], 1))
+        else:
+            miss_frac = 1.0 - int(n_fin[i]) / max(int(length[i]), 1)
+        passes[i] = miss_frac <= max_missing_frac
+    lsb = np.full((starts.size, nC), np.nan)
+    whole = passes & (length == win_tile) & (n_fin == win_tile)
+    idx = np.flatnonzero(whole)
+    for b in range(0, idx.size, _TILE_BATCH):
+        part = idx[b:b + _TILE_BATCH]
+        segs = col[starts[part][:, None] + np.arange(win_tile)[None, :]]
+        lsb[part] = analytics.td_transform_band_power_batch(segs, fs, centers, half_hz=half,
+                                                            step_samples=step_sub)
+    for i in np.flatnonzero(passes & ~whole):
+        lsb[i] = np.atleast_1d(analytics.td_transform_band_power(
+            col[starts[i]:ends[i]], fs, centers, half_hz=half, step_samples=step_sub, agg="median"))
+    lsb = np.where(np.isfinite(lsb) & (lsb > 0), analytics.LSB_PER_UV2_TRANSFORM * lsb, np.nan)
+    good = np.isfinite(lsb)
+    rows = lsb.tolist()
+    for i, j in zip(*np.nonzero(~good & passes[:, None])):
+        rows[i][j] = None
+    for i in np.flatnonzero(~passes):
+        rows[i] = [None] * nC
+    ok = passes & good.any(axis=1)
+    for i in range(starts.size):
+        td_out["t"].append(float(t0 + ((int(starts[i]) + int(ends[i])) / 2.0) / fs))
+        td_out["lsb"].append(rows[i])
+        td_out["saturated"].append(bool(saturated[i]))
+        td_out["source"].append(src)
+        td_out["n_finite_s"].append(round(int(n_fin[i]) / fs, 3))
+        td_out["ok"].append(bool(ok[i]))
+
+
 def raw_lsb_spectrum_cache(channel, centers_hz, *, band_half_hz=2.5,
                            td_recordings=None, event_psd_recordings=None,
                            montage_psd_recordings=None,
@@ -1207,44 +1278,9 @@ def raw_lsb_spectrum_cache(channel, centers_hz, *, band_half_hz=2.5,
             yield col, _missing_per_sample(r.get("Missing"), col.shape[0]), fs, t0, r.get("product")
 
     for col, miss, fs, t0, product in _prepared_traces():
-        nsamp = col.shape[0]
-        src = TD_PRODUCT_SOURCE_LABEL.get(product, product or "time-domain")
-        win_tile = int(round(fs * window_s))
-        step_sub = int(round(fs * analytics.TRANSFORM_STEP_SECONDS))   # 50% overlap sub-window hop
-        min_finite = int(round(fs * analytics.TRANSFORM_WIN_SECONDS))  # ≥1 sub-window (1 s) to score
-        if win_tile <= 0:
-            continue
-        # Non-overlapping tiles by RAW sample index. A trailing partial tile is kept only if it can
-        # still hold ≥1 transform sub-window; shorter remainders are dropped (no valid LSB).
-        for start in range(0, nsamp, win_tile):
-            end = min(start + win_tile, nsamp)
-            seg = col[start:end]
-            seg_miss = miss[start:end] if miss is not None else None
-            fin = np.isfinite(seg)
-            n_fin = int(fin.sum())
-            t_center = t0 + ((start + end) / 2.0) / fs
-            # Default: a NaN row we will overwrite on success. Keeps Wt aligned with the tile grid.
-            row = [None] * nC
-            saturated = False
-            ok = False
-            if n_fin >= min_finite:
-                miss_frac = (float(np.mean(seg_miss)) if seg_miss is not None and seg_miss.size
-                             else 1.0 - n_fin / max(seg.size, 1))
-                if np.nanmax(np.abs(seg)) >= saturation_uv:
-                    saturated = True
-                elif miss_frac <= max_missing_frac:
-                    bp = np.atleast_1d(analytics.td_transform_band_power(
-                        seg, fs, centers, half_hz=half, step_samples=step_sub, agg="median"))
-                    lsb = np.where(np.isfinite(bp) & (bp > 0),
-                                   analytics.LSB_PER_UV2_TRANSFORM * bp, np.nan)
-                    row = [float(v) if np.isfinite(v) else None for v in lsb]
-                    ok = any(v is not None for v in row)
-            td_out["t"].append(float(t_center))
-            td_out["lsb"].append(row)
-            td_out["saturated"].append(bool(saturated))
-            td_out["source"].append(src)
-            td_out["n_finite_s"].append(round(n_fin / fs, 3))
-            td_out["ok"].append(bool(ok))
+        _td_tiles_batched(td_out, col, miss, fs, t0, TD_PRODUCT_SOURCE_LABEL.get(product, product or "time-domain"),
+                          centers, window_s=window_s, half=half, max_missing_frac=max_missing_frac,
+                          saturation_uv=saturation_uv)
 
     # ---- PSD-derived windows (one per event) ------------------------------------------------------
     for ev in (event_psd_recordings or []):

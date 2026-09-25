@@ -2257,6 +2257,44 @@ def td_transform_band_power(samples_uv, fs, center_hz, *, half_hz=2.5,
     return float(out[0]) if scalar_in else out
 
 
+def td_transform_band_power_batch(segments_uv, fs, center_hz, *, half_hz=2.5, step_samples=None,
+                                  n_fft=TRANSFORM_N_FFT, maxf=TRANSFORM_MAX_FREQ_HZ):
+    """`td_transform_band_power(..., agg="median")` for MANY equal-length, all-finite traces at once:
+    `segments_uv` is (P, n); returns (P, C). Row p equals the single call on segment p bit for bit
+    (speed-up item 1, 2026-09-25): the windowing, detrend, taper, band sums and median run over every
+    window of every segment together, but the FFT is still called ONCE PER SEGMENT on that segment's
+    own windows. The container's FFT library does rows in pairs and a leftover row alone, and rounds
+    the two ways differently in the last digit, so which rows share a call changes the answer; one
+    call per segment keeps the grouping of the single call exactly. The caller guarantees every
+    sample is finite and n >= one sub-window; anything else takes the single call.
+    """
+    S = np.asarray(segments_uv, dtype=float)
+    centers = np.atleast_1d(np.asarray(center_hz, dtype=float))
+    P, n = S.shape
+    fs = float(fs)
+    win = int(round(fs * TRANSFORM_WIN_SECONDS))
+    step = int(step_samples) if step_samples else win
+    starts = np.arange(0, n - win + 1, step)
+    W = starts.size
+    M = S[:, starts[:, None] + np.arange(win)[None, :]].reshape(P * W, win)
+    M = M - M.mean(axis=1, keepdims=True)
+    buf = np.zeros((P * W, n_fft), dtype=float)
+    buf[:, :win] = M * _rcs_hann(win)[None, :]
+    F = np.empty((P * W, n_fft // 2 + 1), dtype=complex)
+    for p in range(P):
+        F[p * W:(p + 1) * W] = np.fft.rfft(buf[p * W:(p + 1) * W], n=n_fft, axis=-1)
+    mag = 2.0 * np.abs(F) / n_fft
+    freqs = np.round(np.arange(n_fft // 2 + 1) * fs / n_fft, 2)
+    if maxf is not None:
+        keep = freqs <= float(maxf) + 1e-9
+        mag = mag[:, keep]; freqs = freqs[keep]
+    p2 = mag ** 2
+    band = ((freqs[None, :] >= centers[:, None] - half_hz) &
+            (freqs[None, :] <= centers[:, None] + half_hz)).astype(float)
+    pw = (p2 @ band.T).reshape(P, W, centers.size)
+    return np.median(pw, axis=1)
+
+
 TRANSFORM_CENTERED_EXTENT_SECONDS = 30.0   # rating-centered TD extent fed to the per-PRO LSB sweep
 # Tile width for the match-AGNOSTIC raw LSB cache (availability.raw_lsb_spectrum_cache). The whole
 # recording is sliced into fixed RAW_LSB_WINDOW_SECONDS non-overlapping tiles, INDEPENDENT of any PRO;
