@@ -270,7 +270,43 @@ def test_resolution_propagates_both_standard_deviations():
     assert borderline.resolves_its_optimum() is False       # clears 0.5 but not 0.707
     clear = stratum_with(-2.0, 0.5, 0.0, 0.5)
     assert clear.resolves_its_optimum() is True
-    assert stratum_with(-1.0, 0.0, 0.0, 0.0).resolves_its_optimum() is False   # degenerate variance
+    # A degenerate (zero) standard deviation of the difference means the comparison could not be
+    # FORMED at all -- not the same statement as a measured "no" (routines.resolution.is_resolved's
+    # own three-state contract, house rule 2 principle: never collapse "not assessed" into "no").
+    # Before 2026-09-25 this dataclass carried its own copy of the arithmetic and read `False` here,
+    # contradicting that contract; it now delegates to the shared function and reads `None`.
+    assert stratum_with(-1.0, 0.0, 0.0, 0.0).resolves_its_optimum() is None    # degenerate variance
+    assert stratum_with(-1.0, 0.0, 0.0, 0.0).sd_of_difference() == pytest.approx(0.0)
+
+
+def test_resolution_delegates_to_the_one_shared_definition():
+    """Guards against the exact multi-copy drift ``routines/resolution.py`` was built on 2026-09-04
+    to rule out (that module's own docstring): ``JointStratum``'s resolution arithmetic must be the
+    shared ``routines.resolution`` functions, not a second, independently maintained copy that could
+    silently stop matching them if the shared rule is ever tightened (e.g. to add the covariance
+    term the shared module's docstring names as a documented next step)."""
+    from StimOptimizer.routines import resolution as RES
+
+    def stratum_with(mu_star, sd_star, inc_mu, inc_sd):
+        return S1.JointStratum(
+            pw_us_left=60.0, pw_us_right=60.0, n_epochs=20, grid=None, gp=None,
+            mu=np.zeros(1), sd=np.ones(1), safe=np.ones(1, bool), i_star=0,
+            x_star=(110.0, 2.0, 2.0), mu_star=mu_star, sd_star=sd_star,
+            incumbent_mu=inc_mu, incumbent_sd=inc_sd, n_reports=np.zeros(1),
+            queue=np.array([], int), stopping=None, incumbent_rate_supported=True)
+
+    for mu_star, sd_star, inc_mu, inc_sd in (
+            (-0.60, 0.5, 0.0, 0.5), (-2.0, 0.5, 0.0, 0.5), (-1.0, 0.0, 0.0, 0.0),
+            (-1.0, float("nan"), 0.0, 0.3), (0.3, 0.2, 0.0, 0.4)):
+        sl = stratum_with(mu_star, sd_star, inc_mu, inc_sd)
+        expected_sd_diff = RES.sd_of_difference(sd_star, inc_sd)
+        got_sd_diff = sl.sd_of_difference()
+        if np.isnan(expected_sd_diff):
+            assert np.isnan(got_sd_diff)
+        else:
+            assert got_sd_diff == pytest.approx(expected_sd_diff)
+        assert sl.resolves_its_optimum() == RES.is_resolved(
+            sl.gain_over_incumbent(), sd_star, inc_sd, S1.RESOLUTION_K)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -538,6 +574,27 @@ def test_rate_stratum_gain_not_assessed_when_the_stratum_never_ran_the_incumbent
     assert res["gain"]["passes"] is None
     assert res["resolved"] is False
     assert "never ran the setting currently in force" in res["sentence"]
+
+
+def test_rate_stratum_gain_not_assessed_when_the_difference_is_degenerate():
+    """A DIFFERENT reason the gain check can read 'not assessed': the incumbent rate WAS delivered
+    (``incumbent_rate_supported=True``, unlike the previous test), but the propagated standard
+    deviation of (candidate - incumbent) is itself zero, so the comparison could not be FORMED at
+    all -- not the same statement as a measured 'no'. Before 2026-09-25 this function's own copy of
+    the arithmetic collapsed this into ``passes=False`` (a value near-impossible on a real GP fit,
+    but the two-line contradiction with ``routines.resolution``'s documented three-state contract
+    was live in this exact function regardless); it now delegates to that shared function and reads
+    ``None``, distinguished in the sentence from the 'never ran the incumbent rate' case."""
+    joint = _stub_joint_stratum(incumbent_rate_supported=True, incumbent_mu=0.0, incumbent_sd=0.0)
+    surf = _stub_rate_stratum(
+        mu=[[-3.0, -1.0], [1.0, 0.5]], sd=[[0.3, 0.3], [0.3, 0.3]],
+        safe=[[True, True], [True, True]], mu_star=-3.0, sd_star=0.0, coverage=_GOOD_COVERAGE)
+    res = S1._rate_stratum_resolution(surf, joint, resolution_k=S1.RESOLUTION_K)
+    assert res["gain"]["passes"] is None
+    assert res["gain"]["sd_diff"] == pytest.approx(0.0)
+    assert res["resolved"] is False
+    assert "zero or not finite" in res["sentence"]
+    assert "never ran the setting currently in force" not in res["sentence"]
 
 
 # ---------------------------------------------------------------------------------------------

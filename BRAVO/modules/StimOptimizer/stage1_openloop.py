@@ -116,6 +116,8 @@ import pandas as pd
 
 from .routines.resolution import RESOLUTION_K as _RES_K
 from .routines.resolution import exposure as _resolution_exposure
+from .routines.resolution import is_resolved as _RES_is_resolved
+from .routines.resolution import sd_of_difference as _RES_sd_of_difference
 from .routines import acquisition as ACQ
 from .routines import adaptive_envelope as ENV
 from .routines import objective as OBJ
@@ -427,25 +429,44 @@ class JointStratum:
         return float(self.incumbent_mu) - float(self.mu_star)
 
     def sd_of_difference(self) -> float:
-        return float(np.sqrt(float(self.sd_star) ** 2 + float(self.incumbent_sd) ** 2))
+        """Propagated standard deviation of (optimum - incumbent). Delegates to the one shared
+        definition, ``routines.resolution.sd_of_difference`` (2026-09-25): this dataclass used to
+        carry its own copy of the arithmetic, which is exactly the multi-copy drift
+        ``routines/resolution.py`` was built on 2026-09-04 to rule out (see that module's
+        docstring). The covariance term between the two predicted cells is still not carried; see
+        that module's "THE COVARIANCE TERM IS DELIBERATELY OMITTED" section for why that is the
+        conservative direction, not an oversight."""
+        return _RES_sd_of_difference(self.sd_star, self.incumbent_sd)
 
     def resolves_its_optimum(self, k: float = RESOLUTION_K) -> bool | None:
         """Does this stratum's optimum beat the setting in force by more than the uncertainty in
-        that difference? ``None`` means the question cannot be put to this stratum.
+        that difference? Delegates to ``routines.resolution.is_resolved`` (2026-09-25), the same
+        shared rule ``pipeline.py`` and ``bravo_service.py`` already call, so all four call sites
+        move together if the rule is ever tightened (see that module's docstring history).
 
-        Identical reasoning to the module's pre-joint criterion: ``J`` is zero at the incumbent by
-        construction, so a stratum that never delivered the incumbent's RATE has no data anywhere
-        near that cell and its posterior there is an extrapolation across the PINNED frequency
-        length scale, not a measurement. Support is required on the rate axis specifically for
-        that reason; the two amplitude length scales are fitted, so extrapolating across current is
-        not treated the same way.
+        Two DIFFERENT reasons this returns ``None`` ("not assessed", never collapsed into a
+        measured "no"):
+
+        (1) ``incumbent_rate_supported`` is ``False``: ``J`` is zero at the incumbent by
+            construction, so a stratum that never delivered the incumbent's RATE has no data
+            anywhere near that cell and its posterior there is an extrapolation across the PINNED
+            frequency length scale, not a measurement. Support is required on the rate axis
+            specifically for that reason; the two amplitude length scales are fitted, so
+            extrapolating across current is not treated the same way. Checked here, before the
+            shared rule, because it is business logic the shared, dependency-free leaf module has
+            no way to know.
+        (2) the propagated standard deviation of the difference is itself zero or not finite (a
+            degenerate posterior): ``routines.resolution.is_resolved`` returns ``None`` for this
+            too, since the comparison could not be FORMED at all -- a fit that needs repairing, not
+            a measured "no" that more exposure could change. Before 2026-09-25 this dataclass's own
+            copy of the arithmetic collapsed that case into ``False``, contradicting the shared
+            module's own documented three-state contract; ``test_stage1.py`` pinned the
+            contradiction (a stratum with zero candidate AND zero incumbent SD read ``False``) and
+            is corrected alongside this fix.
         """
         if not self.incumbent_rate_supported:
             return None
-        sd_diff = self.sd_of_difference()
-        if not np.isfinite(sd_diff) or sd_diff <= 0:
-            return False
-        return bool(self.gain_over_incumbent() > float(k) * sd_diff)
+        return _RES_is_resolved(self.gain_over_incumbent(), self.sd_star, self.incumbent_sd, k)
 
 
 @dataclass
@@ -926,6 +947,13 @@ def _rate_stratum_resolution(rs: "RateStratum", joint_stratum: JointStratum, *,
     this rate's own, never-borrowed ``mu_star``/``sd_star``. That is the fix: the question of
     whether a comparison against the incumbent is even meaningful stays where it always was; the
     number being compared is no longer allowed to be drawn from other rates.
+
+    The gain check itself is ``routines.resolution.sd_of_difference``/``is_resolved`` (2026-09-25),
+    the same shared rule :meth:`JointStratum.resolves_its_optimum` calls -- this function used to
+    carry its own hand-written copy of the arithmetic, which both duplicated the shared module and
+    silently collapsed a degenerate (zero or non-finite) standard deviation of the difference into
+    ``False`` rather than the shared module's ``None`` ("not assessed"); see that module's
+    docstring and ``is_resolved``'s own docstring for why the three states are not interchangeable.
     """
     if rs.safe is not None and np.asarray(rs.safe).any():
         mu_safe = np.asarray(rs.mu)[np.asarray(rs.safe)]
@@ -942,8 +970,8 @@ def _rate_stratum_resolution(rs: "RateStratum", joint_stratum: JointStratum, *,
         gain = dict(gain=float("nan"), sd_diff=float("nan"), passes=None)
     else:
         g = float(joint_stratum.incumbent_mu) - float(rs.mu_star)
-        sdd = float(np.sqrt(float(rs.sd_star) ** 2 + float(joint_stratum.incumbent_sd) ** 2))
-        g_passes = bool(np.isfinite(sdd) and sdd > 0 and g > float(resolution_k) * sdd)
+        sdd = _RES_sd_of_difference(rs.sd_star, joint_stratum.incumbent_sd)
+        g_passes = _RES_is_resolved(g, rs.sd_star, joint_stratum.incumbent_sd, resolution_k)
         gain = dict(gain=g, sd_diff=sdd, passes=g_passes)
 
     coverage = dict(rs.coverage or {})
@@ -956,13 +984,17 @@ def _rate_stratum_resolution(rs: "RateStratum", joint_stratum: JointStratum, *,
         else:
             reasons.append(f"the fitted surface varies by {rng:.3f} across the whole grid against "
                            f"a typical uncertainty of {med_sd:.3f}")
-    if gain["passes"] is None:
+    if gain["passes"] is None and not joint_stratum.incumbent_rate_supported:
         if (rs.meta or {}).get("pooled_pulse_widths"):
             reasons.append(f"{rs.rate_hz:g} Hz is not the rate in force, so the surface pooled "
                            "over pulse widths has nothing to compare a gain against")
         else:
             reasons.append("this pulse-width pair never ran the setting currently in force, so there "
                            "is nothing to compare a gain against")
+    elif gain["passes"] is None:
+        reasons.append("the standard deviation of the difference against the setting in force is "
+                       "zero or not finite, so no gain could be compared at all -- the fit needs "
+                       "repair here, not more exposure")
     elif not gain["passes"]:
         reasons.append(f"the best cell's predicted improvement, {gain['gain']:+.3f}, does not "
                        f"clear the uncertainty in that difference, {gain['sd_diff']:.3f}")
