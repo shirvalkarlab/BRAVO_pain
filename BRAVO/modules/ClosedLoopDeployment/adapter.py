@@ -824,7 +824,9 @@ def recording_set_signature(participant):
 #: The `inputs` entry's own rule version (decision 215). Bump it when what the entry holds changes
 #: for a reason no recording and no constant would show.
 #: v3 (2026-09-24): the settings stream the entry reads now starts at the implant date.
-_INPUTS_RULE_VERSION = "v3_inputs_settings_from_implant_date"
+#: v4 (2026-09-25): the entry holds the settings stream in place of the design matrix, so no pain
+#: rating is saved under a key that a new report cannot move (CLAUDE.md section 8 rule 5).
+_INPUTS_RULE_VERSION = "v4_inputs_settings_from_implant_date_no_pain_ratings"
 
 
 def inputs_signature(participant):
@@ -842,11 +844,17 @@ def inputs_signature(participant):
 
 
 def evidence_inputs_cached(participant, *, force_refresh=False):
-    """``StimOptimizer.evidence_inputs`` and ``build_design_matrix``, memoised together.
+    """``StimOptimizer.evidence_inputs`` memoised with the settings stream, and ``build_design_matrix``
+    made fresh from them on every call.
 
-    Returns ``(psd_frame, epochs, design_matrix)``. The two calls are cached as one entry because
-    every consumer needs all three and they share the same invalidation condition, so splitting
-    them would double the signature cost for no benefit.
+    Returns ``(psd_frame, epochs, design_matrix)``. WHAT IS SAVED IS RECORDING-DERIVED ONLY: the
+    evidence frame, the exposure epochs and the settings stream, under the recording set, the
+    constants and a rule version. The design matrix carries the pain ratings (``nrs``, ``vas``, ...),
+    so it is NOT saved here: saved under this key, a report filed without a new recording would be
+    served stale with no visible symptom (CLAUDE.md section 8 rule 5; found 2026-09-25, when the
+    saved and a fresh build still agreed). It is built on each call from the saved stream through
+    ``build_design_matrix``, whose own saved table is keyed on the settings AND the pain-report
+    snapshot, so an unchanged record costs a store read and a new report rebuilds only the match.
 
     Callers must treat the returned frames as READ-ONLY, or copy before mutating: they are the same
     objects handed to every other caller. That is the same contract the Biomarkers assembled-matrix
@@ -865,15 +873,17 @@ def evidence_inputs_cached(participant, *, force_refresh=False):
     if not force_refresh:
         with _INPUTS_MEMO_LOCK:
             hit = _INPUTS_MEMO.get(sig)
+        if hit is None:
+            # Nothing in this process's memory, so ask whether another worker process already built
+            # it. This is the step that makes the build happen once per participant rather than
+            # once per worker per restart.
+            shared = _shared_load("inputs", sig, participant_uid=pid, consumer="closed_loop")
+            if shared is not None:
+                _remember_inputs(sig, shared)
+                hit = shared
         if hit is not None:
-            return hit
-        # Nothing in this process's memory, so ask whether another worker process already built
-        # it. This is the step that makes the build happen once per participant rather than once
-        # per worker per restart.
-        shared = _shared_load("inputs", sig, participant_uid=pid, consumer="closed_loop")
-        if shared is not None:
-            _remember_inputs(sig, shared)
-            return shared
+            psd, eps, stream = hit
+            return psd, eps, _sa.build_design_matrix(participant, stream=stream)
     # READ, DECRYPT AND PARSE THE PARTICIPANT'S STORED PERCEPT FILES ONCE, NOT TWICE. Both of the
     # two calls below need the same dated settings stream, and until this line existed each of them
     # built its own copy of it. That meant opening, decrypting and parsing the same 568 stored files
@@ -901,18 +911,17 @@ def evidence_inputs_cached(participant, *, force_refresh=False):
     # otherwise alters the frame before using it; both only read from it.
     stream = _sa.settings_stream(participant)
     psd, eps = _sa.evidence_inputs(participant, stream=stream)
-    dm = _sa.build_design_matrix(participant, stream=stream)
-    out = (psd, eps, dm)
+    out = (psd, eps, stream)
     _remember_inputs(sig, out)
     _shared_store("inputs", sig, out, participant_uid=pid,
-                  provenance=_inputs_provenance(participant, stream, dm))
-    return out
+                  provenance=_inputs_provenance(participant, stream, None))
+    return psd, eps, _sa.build_design_matrix(participant, stream=stream)
 
 
 def _inputs_provenance(participant, stream, dm):
     """The chain for the `inputs` bundle: the settings stream's entry, the matched table's entry
-    with its own chain (which names the pain-report snapshot), and the tile entry the sensed
-    frame was read from. Each is cited only when its key is known; a frame built without the
+    with its own chain when a design matrix is passed (since rule v4 the bundle holds none, so
+    none is cited), and the tile entry the sensed frame was read from. Each is cited only when its key is known; a frame built without the
     store has no key and is simply not cited, and the tile key is skipped when the recordings
     identity cannot be built."""
     try:
@@ -1154,7 +1163,12 @@ def joined_table_cached(psd_frame, epochs, *, centers=None, width=DEFAULT_BAND_W
     Biomarkers assembled-matrix cache already imposes.
     """
     cen = tuple(DEFAULT_BAND_CENTERS_HZ if centers is None else centers)
-    sig = _joined_signature(psd_frame, epochs, cen, width)
+    # The pain frame merged into the table is part of its label (2026-09-25): left out, a memo hit
+    # handed back the ratings of whichever request built the entry first.
+    pro = kwargs.get("pro_frame")
+    pro_fp = None if pro is None else _frame_fingerprint(
+        pro, ("epoch",), also=("report_id", "nrs", "vas"))
+    sig = (_joined_signature(psd_frame, epochs, cen, width), pro_fp)
     if not force_refresh:
         with _JOINED_MEMO_LOCK:
             hit = _JOINED_MEMO.get(sig)
