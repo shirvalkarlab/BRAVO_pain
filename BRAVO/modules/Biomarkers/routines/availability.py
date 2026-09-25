@@ -1573,6 +1573,57 @@ def _nearest_pro_idx(win_t, pro_sorted, order, nP, tol, prior=False):
     return nn
 
 
+def _whole_matrix_nanmedian(values, keep):
+    """`np.nanmedian(np.where(keep, values, np.nan), axis=1)`, bit for bit, without numpy's own
+    per-row `apply_along_axis` fallback.
+
+    WHY THIS EXISTS (proposal 3, 2026-09-25). A median does not depend on the order the values are
+    visited in, so it can be read off a full sort of each row instead. `np.sort` on a whole 2D array
+    is one vectorised call; `np.nanmedian(..., axis=1)` is not -- numpy's own implementation, once
+    an axis is given on an array with more than one dimension, calls `np.apply_along_axis` under the
+    hood, which runs its inner function once per row IN PYTHON. Measured live on RCS08's heat-map
+    grid: 923,076 such row-by-row calls and 1,284,219 discarded `RuntimeWarning`s, 7.4 of the grid's
+    about 13.8 seconds. The two call sites here (the voltage-trace branch and the device-spectrum
+    branch) call this once per band per length, exactly as before -- only the reduction itself
+    changes.
+
+    HOW IT STAYS EXACT. `np.sort` places every NaN after every real number (finite or infinite), for
+    a float array, so the finite-or-infinite values of a row sort to its front in the same order
+    `numpy`'s own `_remove_nan_1d` + `median` would select them from (that helper strips only NaN,
+    NOT infinity, so an infinite reading is a real value that can win a median -- and this function
+    counts it as one: `~np.isnan`, never `np.isfinite`). Counting the non-NaN entries per row (`n`)
+    and reading positions `(n - 1) // 2` and `n // 2` reproduces numpy's own even/odd index choice
+    exactly (numpy's `_median` uses the identical two positions for its partition). Averaging those
+    two values with a plain `(lo + hi) / 2` is the same single addition and the same division by two
+    `np.mean` of a two-element array would perform, in the same order, so it is bit-identical --
+    including the case numpy's own docstring for `nanmedian` warns about, `(inf + -inf) / 2 = nan`.
+    A row with no non-NaN entry (`n == 0`) is NaN, exactly as `nanmedian` returns for an all-NaN
+    slice (with the same `RuntimeWarning`, silenced here as the callers always silenced it).
+    """
+    masked = np.where(keep, values, np.nan)
+    nR, width = masked.shape
+    out = np.full(nR, np.nan, dtype=float)
+    if nR == 0 or width == 0:
+        return out
+    s = np.sort(masked, axis=1)                        # NaN sorts last for a float array
+    n = np.sum(~np.isnan(s), axis=1)
+    has = n > 0
+    if not has.any():
+        return out
+    n_h = n[has]
+    lo = (n_h - 1) // 2
+    hi = n_h // 2
+    s_h = s[has]
+    rows = np.arange(s_h.shape[0])
+    with warnings.catch_warnings():
+        # An infinite reading straddling the middle of an even-count row (its opposite-signed
+        # partner also infinite) adds to NaN, same as `np.mean` would warn about; silenced here as
+        # the old `nanmedian` call's own warnings always were.
+        warnings.simplefilter("ignore", RuntimeWarning)
+        out[has] = (s_h[rows, lo] + s_h[rows, hi]) / 2.0
+    return out
+
+
 def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, centers_hz,
                                     band_ceilings, allow_window_reuse=False,
                                     match_direction="nearest"):
@@ -1689,10 +1740,7 @@ def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, c
             g, r, v = good[:, :width], rank[:, :width], vals[:, :width]
             for s, cap in zip(lengths, caps):
                 keep = g & (r <= cap)
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore", RuntimeWarning)
-                    out[s][:, j] = np.where(td_tier, np.nanmedian(np.where(keep, v, np.nan), axis=1),
-                                            np.nan)
+                out[s][:, j] = np.where(td_tier, _whole_matrix_nanmedian(v, keep), np.nan)
                 # Only cells the EXCLUSION left short, never cells that were always going to be
                 # short because the rating has little recording near it -- that is pre-existing and
                 # counting it here would blame this rule for it. The comparison is therefore
@@ -1752,9 +1800,7 @@ def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, c
                 for s, need in zip(lengths, psd_caps):
                     keep = pgood & (prank <= need)
                     enough = keep.sum(axis=1) >= need
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("ignore", RuntimeWarning)
-                        pmed = np.nanmedian(np.where(keep, pv, np.nan), axis=1)
+                    pmed = _whole_matrix_nanmedian(pv, keep)
                     row_take = take & enough
                     out[s][row_take, j] = pmed[row_take]
                     psd_filled[s] |= row_take
