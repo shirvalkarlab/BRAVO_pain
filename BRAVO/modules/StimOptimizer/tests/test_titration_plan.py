@@ -119,39 +119,64 @@ def test_the_22_centres_are_8_5_to_29_5_hz():
 
 
 def test_harmonic_avoidance_at_55_hz():
+    """Found 2026-09-25: the old code folded only |250 - rate| (195 Hz at 55 Hz, nowhere near the
+    grid) and missed every higher multiple. `analytics.harmonic_landings_hz` folds the fourth
+    multiple (220 Hz) to 30 Hz and the fifth (275 Hz) to 25 Hz, both of which land inside or right
+    at the edge of the 8.5-29.5 Hz grid -- so 25 Hz now also catches 24.5 Hz, the band decision 236
+    called "the one clean band to watch"."""
     h = TP.harmonic_avoidance(55.0)
-    assert h["harmonics_hz"] == {"folded_about_250_hz": 195.0, "half_rate": 27.5,
+    assert h["harmonics_hz"] == {"multiple_4": 30.0, "multiple_5": 25.0, "half_rate": 27.5,
                                  "quarter_rate": 13.75, "three_quarters_rate": 41.25}
-    # 13.75 +/- 2.5 -> 11.25..16.25 catches 11.5, 12.5, 13.5, 14.5, 15.5; 27.5 +/- 2.5 -> 25..30
-    # catches 25.5, 26.5, 27.5, 28.5, 29.5; 195 and 41.25 are outside the grid.
-    assert h["avoid_hz"] == [11.5, 12.5, 13.5, 14.5, 15.5, 25.5, 26.5, 27.5, 28.5, 29.5]
-    assert h["clear_hz"] == [8.5, 9.5, 10.5, 16.5, 17.5, 18.5, 19.5, 20.5, 21.5, 22.5, 23.5, 24.5]
-    assert h["n_clear"] == 12 and h["n_avoid"] == 10
+    assert h["harmonic_names"]["multiple_5"] == ("the fifth multiple of the rate folded by the "
+                                                 "device's 250 Hz sampling")
+    assert h["harmonic_names"]["multiple_4"] == ("the fourth multiple of the rate folded by the "
+                                                 "device's 250 Hz sampling")
+    # 13.75 +/- 2.5 -> 11.25..16.25 catches 11.5, 12.5, 13.5, 14.5, 15.5; 25 +/- 2.5 -> 22.5..27.5
+    # catches 22.5, 23.5, 24.5, 25.5, 26.5, 27.5; 27.5 +/- 2.5 -> 25..30 catches 25.5-29.5; 30 +/-
+    # 2.5 -> 27.5..32.5 catches 27.5, 28.5, 29.5; 41.25 is outside the grid.
+    assert h["avoid_hz"] == [11.5, 12.5, 13.5, 14.5, 15.5, 22.5, 23.5, 24.5, 25.5, 26.5, 27.5, 28.5, 29.5]
+    assert h["clear_hz"] == [8.5, 9.5, 10.5, 16.5, 17.5, 18.5, 19.5, 20.5, 21.5]
+    assert h["n_clear"] == 9 and h["n_avoid"] == 13
     assert "13.75 Hz" in h["avoid_reasons"]["13.5"] and "quarter" in h["avoid_reasons"]["13.5"]
     assert "27.5 Hz" in h["avoid_reasons"]["29.5"] and "half" in h["avoid_reasons"]["29.5"]
+    assert "25 Hz" in h["avoid_reasons"]["24.5"] and "fifth multiple" in h["avoid_reasons"]["24.5"]
+    # the PI's own correction, 2026-09-06: never claim the band MEASURES the stimulator, only that
+    # it carries a folded multiple and needs care -- the old (buggy) wording is gone
+    assert "of one of those measures the stimulator" not in h["why"]
+    assert "the PI, 2026-09-06" in h["why"]
 
 
 def test_harmonic_avoidance_at_110_hz():
+    """Found 2026-09-25: the seventh multiple (770 Hz) folds to 20 Hz, newly avoided; the second
+    (220 Hz) folds to 30 Hz, which only reaches 29.5 Hz, already avoided through the quarter rate."""
     h = TP.harmonic_avoidance(110.0)
-    assert h["harmonics_hz"] == {"folded_about_250_hz": 140.0, "half_rate": 55.0,
+    assert h["harmonics_hz"] == {"multiple_2": 30.0, "multiple_7": 20.0, "half_rate": 55.0,
                                  "quarter_rate": 27.5, "three_quarters_rate": 82.5}
-    assert h["avoid_hz"] == [25.5, 26.5, 27.5, 28.5, 29.5]
-    assert h["n_clear"] == 17
+    assert h["avoid_hz"] == [17.5, 18.5, 19.5, 20.5, 21.5, 22.5, 25.5, 26.5, 27.5, 28.5, 29.5]
+    assert h["n_clear"] == 11
     assert h["clear_hz"][0] == 8.5 and h["clear_hz"][-1] == 24.5
 
 
-def test_harmonic_avoidance_at_145_hz_leaves_every_centre_clear():
+def test_harmonic_avoidance_at_145_hz_now_finds_two_landings_inside_the_grid():
+    """Found 2026-09-25: this rate used to pass as leaving every centre clear -- a symptom of the
+    same bug, since the fifth multiple (725 Hz) folds to 25 Hz and the seventh (1015 Hz) to 15 Hz,
+    both inside the grid."""
     h = TP.harmonic_avoidance(145.0)
-    assert h["harmonics_hz"] == {"folded_about_250_hz": 105.0, "half_rate": 72.5,
+    assert h["harmonics_hz"] == {"multiple_5": 25.0, "multiple_7": 15.0, "half_rate": 72.5,
                                  "quarter_rate": 36.25, "three_quarters_rate": 108.75}
-    assert h["avoid_hz"] == [] and h["n_clear"] == 22
+    assert h["avoid_hz"] == [12.5, 13.5, 14.5, 15.5, 16.5, 17.5, 22.5, 23.5, 24.5, 25.5, 26.5, 27.5]
+    assert h["n_clear"] == 10 and h["n_avoid"] == 12
 
 
 def test_a_candidate_centre_is_judged_the_same_way():
+    # 24.5 Hz is no longer clear at 55 Hz after the fix (it now catches the fifth-multiple landing
+    # at 25 Hz); 20.5 Hz stays genuinely clear.
     h = TP.harmonic_avoidance(55.0, candidate_center_hz=24.5)
-    assert h["candidate_clear"] is True and "clear" in h["candidate_note"]
-    h2 = TP.harmonic_avoidance(55.0, candidate_center_hz=27.5)
-    assert h2["candidate_clear"] is False and "27.5 Hz" in h2["candidate_note"]
+    assert h["candidate_clear"] is False and "25 Hz" in h["candidate_note"]
+    h2 = TP.harmonic_avoidance(55.0, candidate_center_hz=20.5)
+    assert h2["candidate_clear"] is True and "clear" in h2["candidate_note"]
+    h3 = TP.harmonic_avoidance(55.0, candidate_center_hz=27.5)
+    assert h3["candidate_clear"] is False and "27.5 Hz" in h3["candidate_note"]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -577,7 +602,10 @@ def test_the_response_carries_a_titration_plan_for_both_sides_with_every_source_
         assert "no PI-stated ceiling" in p["sources"]["ceiling_mA"]
         assert p["ladder"]["n_steps"] == 16 and p["hold"]["seconds"] == 60.0
         assert p["step_timing"]["total_s"] == 120.0
-        assert p["bands"]["avoid_hz"] == [11.5, 12.5, 13.5, 14.5, 15.5, 25.5, 26.5, 27.5, 28.5, 29.5]
+        # found 2026-09-25: 22.5-24.5 Hz are newly avoided too (the fifth multiple of 55 Hz folds
+        # to 25 Hz, which harmonic_avoidance used to miss)
+        assert p["bands"]["avoid_hz"] == [11.5, 12.5, 13.5, 14.5, 15.5, 22.5, 23.5, 24.5, 25.5, 26.5,
+                                          27.5, 28.5, 29.5]
         for k, v in p["sources"].items():
             assert isinstance(v, str) and v.strip(), (side, k)
         assert "setting in force on the" in p["sources"]["rate_hz"]
@@ -738,11 +766,15 @@ def test_the_configuration_plan_names_the_contacts_the_pair_the_rate_in_force_an
     assert p["stimulation"]["contacts_short"] == "L C+1-2-"
     assert p["rate_in_force_hz"] == 55.0
     # the condition a clinician reads: the session's rate is the one in force, the bands were found
-    # at another rate, and the band that lands on a harmonic at this rate is named there too
+    # at another rate, and the bands that land on a harmonic at this rate are named there too
     _rate_cond = next(c for c in p["conditions"] if c.startswith("rate "))
     assert _rate_cond.startswith("rate 55 Hz, the rate in force")
     assert "found at 125 Hz" in _rate_cond
-    assert "25.5, 26.5 and 27.5 Hz" in _rate_cond and "leaving 24.5 Hz clear" in _rate_cond
+    # FOUND 2026-09-25: harmonic_avoidance used to fold only |250 - rate| and missed the fifth
+    # multiple of 55 Hz (275 Hz, folding to 25 Hz), which sits close enough to pull 24.5 Hz onto a
+    # harmonic too -- the band this test, and decision 236, once called "the one clean band to
+    # watch." With the fix ALL FOUR watched bands land on a harmonic; none is clear.
+    assert "24.5, 25.5, 26.5 and 27.5 Hz" in _rate_cond and "leaving none of them clear" in _rate_cond
     assert p["stimulation"]["rings"] == [1, 2] and p["stimulation"]["in_force_rings"] == [2]
     assert p["stimulation"]["differs_from_in_force"] is True
     assert p["sensing_pair"]["channel"] == "ZERO_THREE_LEFT" and "flank" in p["sensing_pair"]["why"]
@@ -752,18 +784,20 @@ def test_the_configuration_plan_names_the_contacts_the_pair_the_rate_in_force_an
     assert p["rate_hz"] == 55.0 and "in force" in p["sources"]["rate_hz"]
     assert p["cell_rate_hz"] == 125.0
     # The consequence, stated and never hidden (decision 220: a warning, never a refusal). At 55 Hz
-    # the half-rate harmonic is 27.5 Hz, and a band is 5 Hz wide, so the harmonic falls INSIDE three
-    # of the four watched bands -- 25.5, 26.5 and 27.5 -- and only 24.5 Hz stays clear. (A first
-    # draft of this test asserted 27.5 Hz alone, comparing centres to the harmonic and forgetting the
-    # band's own width; the code was right and the assertion was wrong.)
+    # a band is 5 Hz wide and the fixed harmonic-landing computation now places TWO landings inside
+    # the watched range -- the fifth multiple of the rate (folded to 25 Hz) and half the rate
+    # (27.5 Hz) -- between them covering all four watched bands, 24.5 through 27.5 Hz.
     assert p["bands"]["watch_hz"] == [24.5, 25.5, 26.5, 27.5]
     assert p["bands"]["watch_clear"] is False
-    assert p["bands"]["watch_on_harmonic_hz"] == [25.5, 26.5, 27.5]
-    assert p["bands"]["watch_clear_hz"] == [24.5]
-    assert 24.5 in p["bands"]["clear_hz"]
+    assert p["bands"]["watch_on_harmonic_hz"] == [24.5, 25.5, 26.5, 27.5]
+    assert p["bands"]["watch_clear_hz"] == []
+    assert 24.5 not in p["bands"]["clear_hz"]
     why = p["bands"]["watch_why"]
-    assert "half-rate harmonic (27.5 Hz)" in why and "25.5, 26.5 and 27.5 Hz" in why
-    assert "24.5 Hz as clear" in why
+    assert "27.5 Hz (half the rate)" in why and "26.5 and 27.5 Hz" in why
+    assert "25 Hz (the fifth multiple of the rate folded by the device's 250 Hz sampling)" in why
+    assert "24.5 and 25.5 Hz" in why
+    assert "none of the watched bands is clear" in why
+    assert "measures the stimulator" not in why and "measuring the stimulator" not in why
     # first exposure: 0 mA only in the record -> the stop rule is printed and the ladder starts at 0
     assert p["first_exposure"]["ever_powered"] is False
     assert "side-effect score of 2" in p["first_exposure"]["stop_rule"]

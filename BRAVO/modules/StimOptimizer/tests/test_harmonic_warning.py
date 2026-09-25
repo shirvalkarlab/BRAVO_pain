@@ -1,12 +1,20 @@
 """The harmonic rule on the readiness screen is a WARNING, never a refusal (the PI, 2026-09-21:
 "put a warning for the harmonic rule, but don't make it blocking").
 
-Decision 199 left the titration card's harmonic rule (a band centre within 2.5 Hz of |250 - rate|,
-rate/2, rate/4 or 3 rate/4 measures the stimulator, not the brain; decision 146) as information
-beside each row and asked the PI whether the screen should apply it. His ruling: warn. So a row
-that is usable ONLY through qualifying bands sitting on a stimulator harmonic carries a warning
-sentence and a flag, the screen's summary counts such rows and says whether the selected best is
-one of them, and `deployable` is never changed by any of it.
+Decision 199 left the titration card's harmonic rule (a band centre within 2.5 Hz of a folded
+multiple of the rate, or its 1/2, 1/4 or 3/4 sub-harmonic, carries a folded multiple of the
+stimulation rate -- advisory, never a claim that the band measures the stimulator rather than the
+brain, the PI's correction of 2026-09-06; decision 146) as information beside each row and asked
+the PI whether the screen should apply it. His ruling: warn. So a row that is usable ONLY through
+qualifying bands sitting on a stimulator harmonic carries a warning sentence and a flag, the
+screen's summary counts such rows and says whether the selected best is one of them, and
+`deployable` is never changed by any of it.
+
+FIXED 2026-09-25: `harmonic_avoidance` (`titration_plan.py`, which this all rests on) used to fold
+only |250 - rate|, missing every higher multiple of the rate; it now calls
+`Biomarkers.routines.analytics.harmonic_landings_hz`, one home for the fold. The examples below use
+20.5 Hz where they once used 24.5 Hz, because 24.5 Hz now correctly catches 55 Hz's and 145 Hz's
+fifth-multiple landing (folded to 25 Hz) and is no longer a clear band at either rate.
 """
 import ast
 import inspect
@@ -28,11 +36,13 @@ def test_usable_only_through_harmonic_bands_is_a_warning_not_a_refusal():
 
 
 def test_a_clear_band_beside_a_harmonic_one_is_a_note_not_a_warning():
-    h = TP.harmonic_warning(55.0, [24.5, 27.5], usable=True)
+    # 24.5 Hz was the example used here before 2026-09-25: the fix means it now catches the fifth
+    # multiple of 55 Hz (folded to 25 Hz), so it is no longer clear; 20.5 Hz genuinely is.
+    h = TP.harmonic_warning(55.0, [20.5, 27.5], usable=True)
     assert h["only_through_harmonics"] is False
-    assert h["near_hz"] == [27.5] and h["clear_hz"] == [24.5]
+    assert h["near_hz"] == [27.5] and h["clear_hz"] == [20.5]
     assert h["warning"] is None
-    assert "24.5" in h["note"] and "clear" in h["note"]
+    assert "20.5" in h["note"] and "clear" in h["note"]
 
 
 def test_a_cell_that_is_not_usable_gets_no_warning_and_no_false_clear_band():
@@ -46,24 +56,29 @@ def test_a_cell_that_is_not_usable_gets_no_warning_and_no_false_clear_band():
     assert "every qualifying band" in h["note"] and "27.5" in h["note"] and "not usable" in h["note"]
 
 
-def test_no_qualifying_band_and_a_rate_with_every_centre_clear_give_nothing():
+def test_no_qualifying_band_and_two_genuinely_clear_centres_give_nothing():
+    # 145 Hz is no longer harmonic-free everywhere after the 2026-09-25 fix (its fifth and seventh
+    # multiples fold to 25 and 15 Hz), so this uses two centres that stay clear at that rate.
     assert TP.harmonic_warning(55.0, [], usable=True)["warning"] is None
-    h = TP.harmonic_warning(145.0, [24.5, 27.5], usable=True)
+    h = TP.harmonic_warning(145.0, [20.5, 21.5], usable=True)
     assert h["near_hz"] == [] and h["only_through_harmonics"] is False and h["warning"] is None
 
 
 def test_the_row_fields_and_the_screen_summary():
+    # 20.5 Hz replaces the 24.5 Hz this test used before 2026-09-25: the fix means 24.5 Hz now
+    # catches 55 Hz's and 145 Hz's fifth-multiple landing (folded to 25 Hz), so it is no longer a
+    # clear band at either rate; 20.5 Hz genuinely is clear at both.
     cells = [
         {"rate_hz": 55.0, "qualifying_centers_hz": [27.5], "deployable": True, "channel": "A", "hemisphere": "Left"},
-        {"rate_hz": 55.0, "qualifying_centers_hz": [24.5, 27.5], "deployable": True, "channel": "B"},
+        {"rate_hz": 55.0, "qualifying_centers_hz": [20.5, 27.5], "deployable": True, "channel": "B"},
         {"rate_hz": 110.0, "qualifying_centers_hz": [27.5], "deployable": False, "channel": "C"},
-        {"rate_hz": 145.0, "qualifying_centers_hz": [24.5], "deployable": True, "channel": "D"},
+        {"rate_hz": 145.0, "qualifying_centers_hz": [20.5], "deployable": True, "channel": "D"},
     ]
     summary = BS.attach_harmonic_warnings(cells, selected={"channel": "A", "hemisphere": "Left", "rate_hz": 55.0})
     by = {c["channel"]: c for c in cells}
     # the row fields decision 199 added are unchanged in name and meaning
     assert by["A"]["qualifying_near_stim_harmonic_hz"] == [27.5]
-    assert by["B"]["qualifying_clear_of_stim_harmonics_hz"] == [24.5]
+    assert by["B"]["qualifying_clear_of_stim_harmonics_hz"] == [20.5]
     assert by["C"]["qualifying_near_stim_harmonic_hz"] == [27.5]      # 110/4
     # the new flag and sentence
     assert by["A"]["harmonic_only"] is True and by["A"]["harmonic_warning"]
@@ -82,7 +97,7 @@ def test_the_row_fields_and_the_screen_summary():
 
 
 def test_the_summary_is_quiet_when_no_usable_cell_depends_on_a_harmonic():
-    cells = [{"rate_hz": 145.0, "qualifying_centers_hz": [24.5], "deployable": True, "channel": "D"}]
+    cells = [{"rate_hz": 145.0, "qualifying_centers_hz": [20.5], "deployable": True, "channel": "D"}]
     summary = BS.attach_harmonic_warnings(cells, selected=None)
     assert summary["n_usable_only_through_harmonics"] == 0 and summary["sentence"] is None
     assert summary["selected_only_through_harmonics"] is False

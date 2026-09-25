@@ -244,9 +244,17 @@ function SideColumn({ side, plan }) {
   const hold = plan.hold || {};
   const src = plan.sources || {};
   const rec = (plan.yield || {}).record_today || {};
+  // `harmonics_hz` carries the two sub-harmonics (half_rate, quarter_rate, three_quarters_rate)
+  // plus however many whole-multiple landings fold into range at this rate (multiple_4,
+  // multiple_5, ...); read every value present rather than a fixed key list, so a rate whose
+  // folded landings differ from 55 Hz's still shows all of them (found 2026-09-25).
   const harm = (plan.bands || {}).harmonics_hz || {};
-  const harmonicsText = ["folded_about_250_hz", "half_rate", "quarter_rate", "three_quarters_rate"]
-    .map((k) => (num(harm[k]) === null ? null : `${num(harm[k])} Hz`)).filter(Boolean).join(", ");
+  const harmonicsText = Object.values(harm)
+    .map((v) => num(v))
+    .filter((v) => v !== null)
+    .sort((a, b) => a - b)
+    .map((v) => `${v} Hz`)
+    .join(", ");
   return (
     <MDBox>
       <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>{side}</MDTypography>

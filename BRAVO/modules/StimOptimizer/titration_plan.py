@@ -62,10 +62,12 @@ from .routines import within_visit as WV
 CENTRES_HZ = tuple(float(c) for c in np.arange(8.5, 30.0, 1.0))
 CENTRES_SOURCE = "the 22 calibrated-grid centres, 8.5-29.5 Hz (decision 32)"
 
-#: A band centre this close to a harmonic of the stimulation rate is not analysed: the band is
-#: measuring the stimulator, not the brain. 2.5 Hz is half the 5 Hz band width the stored tables
-#: use (`clinic_steps.BAND_HALF_HZ`), so a centre inside this distance has the harmonic inside its
-#: own band.
+#: A band centre this close to a harmonic of the stimulation rate carries a folded multiple of the
+#: stimulation rate -- ADVISORY, not a refusal (the PI, 2026-09-06 correction, kept verbatim in
+#: `Biomarkers.routines.analytics.harmonic_landings_hz`'s own docstring): that does NOT mean the
+#: band is measuring the stimulator rather than the brain, only that its response to current needs
+#: care. 2.5 Hz is half the 5 Hz band width the stored tables use (`clinic_steps.BAND_HALF_HZ`), so
+#: a centre inside this distance has the harmonic inside its own band.
 HARMONIC_HALF_WIDTH_HZ = 2.5
 
 #: The current step of the ladder GOING UP (mA). Research synthesis §1 / open item 30.
@@ -127,6 +129,17 @@ def _f(v):
     except (TypeError, ValueError):
         return None
     return x if math.isfinite(x) else None
+
+
+_ORDINAL_WORDS = {1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth", 6: "sixth",
+                  7: "seventh", 8: "eighth", 9: "ninth", 10: "tenth"}
+
+
+def _ordinal(k) -> str:
+    """1 -> "first", ..., 8 -> "eighth" (harmonic_avoidance's own `max_harmonic` default); a k
+    outside the named range falls back to "12th" rather than raising."""
+    k = int(k)
+    return _ORDINAL_WORDS.get(k, f"{k}th")
 
 
 def _n(count, noun):
@@ -284,42 +297,86 @@ def session_time_estimate(n_steps_total, *, step_minutes=2.0,
 # ---------------------------------------------------------------------------------------------
 # the band centres to analyse and to avoid
 # ---------------------------------------------------------------------------------------------
+#: How many whole multiples of the rate `harmonic_avoidance` folds through the device's 250 Hz
+#: sampling before it stops looking. 8 covers every multiple that can land inside or near the
+#: 8.5-29.5 Hz grid for every rate the device accepts (55-160 Hz); found 2026-09-25 (this module's
+#: own default before that day folded no multiple at all, see `harmonic_avoidance`'s docstring).
+MAX_HARMONIC_MULTIPLE = 8
+
+
 def harmonic_avoidance(rate_hz, *, centres_hz=CENTRES_HZ, half_width_hz=HARMONIC_HALF_WIDTH_HZ,
-                       candidate_center_hz=None) -> dict:
-    """Which of the 22 centres are clear of the stimulation rate's harmonics at `rate_hz`, and
-    which are within `half_width_hz` of one. The harmonics: |250 - rate| (the rate folded about
-    the device's 250 Hz sampling rate), and the rate's 1/2, 1/4 and 3/4 sub-harmonics (research
-    synthesis §1; decision 124). `candidate_center_hz`, when known, is judged the same way and
-    reported on its own."""
+                       candidate_center_hz=None, max_harmonic=MAX_HARMONIC_MULTIPLE) -> dict:
+    """Which of the 22 centres carry a folded multiple of the stimulation rate at `rate_hz`, and
+    which are clear. ADVISORY, NEVER A REFUSAL, and the sense is the PI's own correction of
+    2026-09-06 (kept verbatim in `Biomarkers.routines.analytics.harmonic_landings_hz`'s docstring):
+    a band that carries a folded multiple of the stimulation rate is NOT thereby measuring the
+    stimulator rather than the brain. What it means is narrower: take care reading that band's
+    response to current, because a stimulation artefact could in principle land there too.
+
+    THE LANDINGS COME FROM ONE HOME, `analytics.harmonic_landings_hz` -- found 2026-09-25: this
+    function used to fold only |250 - rate| itself (the rate's own first image about the device's
+    250 Hz sampling), missing every higher multiple. At 55 Hz the fifth multiple, 275 Hz, folds to
+    25 Hz and the fourth, 220 Hz, folds to 30 Hz; neither was caught before, and 25 Hz sits close
+    enough to pull 24.5 Hz -- the band decision 236 called "the one clean band to watch" -- onto a
+    harmonic too. Every whole multiple of the rate up to `max_harmonic` is folded here, over a
+    window widened by `half_width_hz` on each side of `centres_hz` so a landing just outside the
+    grid still catches an edge centre (55 Hz's 30 Hz landing sits half a Hz past the grid's own
+    29.5 Hz top and still reaches it). Each landing is named by what it is: "the fifth multiple of
+    the rate folded by the device's 250 Hz sampling."
+
+    THE SUB-HARMONICS ARE KEPT AS BEFORE: half, a quarter and three quarters of the rate (research
+    synthesis §1; decision 124). They are not folded multiples of the rate, so
+    `harmonic_landings_hz` does not compute them; this function adds them itself, unconditionally,
+    as it always has.
+
+    `candidate_center_hz`, when known, is judged the same way and reported on its own.
+    """
+    try:
+        from modules.Biomarkers.routines import analytics as _an
+    except ImportError:
+        from Biomarkers.routines import analytics as _an
     r = float(rate_hz)
-    harmonics = {"folded_about_250_hz": abs(250.0 - r), "half_rate": r / 2.0,
-                 "quarter_rate": r / 4.0, "three_quarters_rate": 3.0 * r / 4.0}
-    names = {"folded_about_250_hz": "|250 − rate|", "half_rate": "half the rate",
-             "quarter_rate": "a quarter of the rate", "three_quarters_rate": "three quarters of the rate"}
+    hw = float(half_width_hz)
+    cs = [float(c) for c in centres_hz]
+    lo = (min(cs) - hw) if cs else -hw
+    hi = (max(cs) + hw) if cs else hw
+    landings = _an.harmonic_landings_hz(r, lo, hi, max_harmonic=int(max_harmonic))
+    harmonics, names = {}, {}
+    for land in landings:
+        k = int(land["harmonic"])
+        key = f"multiple_{k}"
+        harmonics[key] = float(land["lands_at_hz"])
+        names[key] = f"the {_ordinal(k)} multiple of the rate folded by the device's 250 Hz sampling"
+    harmonics["half_rate"], names["half_rate"] = r / 2.0, "half the rate"
+    harmonics["quarter_rate"], names["quarter_rate"] = r / 4.0, "a quarter of the rate"
+    harmonics["three_quarters_rate"], names["three_quarters_rate"] = 3.0 * r / 4.0, "three quarters of the rate"
     clear, avoid, reasons = [], [], {}
-    for c in centres_hz:
-        hits = [(k, h) for k, h in harmonics.items() if abs(float(c) - h) <= float(half_width_hz) + 1e-9]
+    for c in cs:
+        hits = [(k, h) for k, h in harmonics.items() if abs(c - h) <= hw + 1e-9]
         if hits:
-            avoid.append(float(c))
-            reasons[f"{float(c):g}"] = "; ".join(
-                f"within {half_width_hz:g} Hz of {h:g} Hz ({names[k]})" for k, h in hits)
+            avoid.append(c)
+            reasons[f"{c:g}"] = "; ".join(
+                f"within {hw:g} Hz of {h:g} Hz ({names[k]})" for k, h in hits)
         else:
-            clear.append(float(c))
-    out = {"rate_hz": r, "harmonics_hz": harmonics, "half_width_hz": float(half_width_hz),
-           "centres_hz": [float(c) for c in centres_hz], "clear_hz": clear, "avoid_hz": avoid,
+            clear.append(c)
+    landing_desc = _and_list([f"{h:g} Hz ({names[k]})"
+                             for k, h in sorted(harmonics.items(), key=lambda kv: kv[1])])
+    out = {"rate_hz": r, "harmonics_hz": harmonics, "harmonic_names": names, "half_width_hz": hw,
+           "centres_hz": cs, "clear_hz": clear, "avoid_hz": avoid,
            "avoid_reasons": reasons, "n_clear": len(clear), "n_avoid": len(avoid),
-           "why": (f"at {r:g} Hz the stimulator shows up at {harmonics['folded_about_250_hz']:g}, "
-                   f"{harmonics['half_rate']:g}, {harmonics['quarter_rate']:g} and "
-                   f"{harmonics['three_quarters_rate']:g} Hz; a band centre within "
-                   f"{half_width_hz:g} Hz of one of those measures the stimulator, not the brain")}
+           "why": (f"at {r:g} Hz the stimulation rate lands at " + landing_desc + f"; a band centre "
+                   f"within {hw:g} Hz of one of those carries a folded multiple of the stimulation "
+                   f"rate. That is advisory, not a refusal (the PI, 2026-09-06): it does not mean "
+                   f"the band measures the stimulator rather than the brain, only that its response "
+                   f"to current needs care")}
     cc = _f(candidate_center_hz)
     if cc is not None:
-        hits = [(k, h) for k, h in harmonics.items() if abs(cc - h) <= float(half_width_hz) + 1e-9]
+        hits = [(k, h) for k, h in harmonics.items() if abs(cc - h) <= hw + 1e-9]
         out["candidate_center_hz"] = cc
         out["candidate_clear"] = not hits
         out["candidate_note"] = (f"{cc:g} Hz is clear of every harmonic" if not hits else
                                  f"{cc:g} Hz is " + "; ".join(
-                                     f"within {half_width_hz:g} Hz of {h:g} Hz ({names[k]})"
+                                     f"within {hw:g} Hz of {h:g} Hz ({names[k]})"
                                      for k, h in hits))
     return out
 
@@ -658,8 +715,10 @@ def side_plan(side, *, rate_in_force_hz, rate_source, pulse_width_us, pulse_widt
                  f"({POST_RAMP_MARGIN_S:g} s, decisions 141 and 144) + {SLACK_S:g} s slack; pieces of "
                  f"within_visit.CHUNK_S ({PIECE_S:g} s), within_visit.MIN_CHUNKS_PRE_CHANGE "
                  f"({MIN_PIECES_PER_SETTING}) required"),
-        "bands": (f"{CENTRES_SOURCE}; harmonics |250 − rate|, rate/2, rate/4, 3·rate/4 (research "
-                  f"synthesis §1); ±{HARMONIC_HALF_WIDTH_HZ:g} Hz"),
+        "bands": (f"{CENTRES_SOURCE}; harmonics from every whole multiple of the rate folded by the "
+                  f"device's 250 Hz sampling (Biomarkers.routines.analytics.harmonic_landings_hz), "
+                  f"plus rate/2, rate/4 and 3·rate/4 (research synthesis §1; decision 124); "
+                  f"±{HARMONIC_HALF_WIDTH_HZ:g} Hz, advisory (the PI, 2026-09-06)"),
         "yield.settled_points_from_session": "the ladder's step count (one settled point per step)",
         "yield.record_today": ("the stored pooled current-to-power table (within_visit_pooled_shape) and "
                                "the stored per-run points table (three_source_run_points), both "
@@ -898,16 +957,18 @@ def configuration_plan(side, *, rings, contact, rate_source, pulse_width_us, pul
     bands["watch_on_harmonic_hz"] = on_harm
     bands["watch_clear_hz"] = [v for v in watch if v in clear]
     _harms = bands.get("harmonics_hz") or {}
+    _names_map = bands.get("harmonic_names") or {}
     def _nearest_harmonic(v):
         if not _harms:
             return None, None
         k = min(_harms, key=lambda kk: abs(float(_harms[kk]) - v))
-        return k.replace("_", "-"), float(_harms[k])
+        return k, float(_harms[k])
     _pieces = []
     for _k in sorted({_nearest_harmonic(v)[0] for v in on_harm if _nearest_harmonic(v)[0]}):
-        _hz = _harms.get(_k.replace("-", "_"))
+        _hz = _harms.get(_k)
+        _label = _names_map.get(_k, _k.replace("_", "-"))
         _members = [v for v in on_harm if _nearest_harmonic(v)[0] == _k]
-        _pieces.append(f"the {_k} harmonic ({_hz:g} Hz) lies inside the {2 * HARMONIC_HALF_WIDTH_HZ:g} Hz "
+        _pieces.append(f"{_hz:g} Hz ({_label}) lies inside the {2 * HARMONIC_HALF_WIDTH_HZ:g} Hz "
                        f"width of " + _and_list([f"{v:g}" for v in _members]) + " Hz")
     bands["watch_why"] = (
         f"the {len(watch)} band centre(s) that rise with pain on "
@@ -915,9 +976,11 @@ def configuration_plan(side, *, rings, contact, rate_source, pulse_width_us, pul
         + (f" (found at {rate['cell_rate_hz']:g} Hz)" if _f(rate.get("cell_rate_hz")) is not None else "")
         + f", the ones this session watches for a fall with current at {rate['rate_hz']:g} Hz")
     bands["watch_why"] += (
-        "; all of them clear of the stimulator's harmonics at this rate" if bands["watch_clear"]
+        "; all of them clear of the stimulation rate's folded landings at this rate" if bands["watch_clear"]
         else (f"; at {rate['rate_hz']:g} Hz " + "; ".join(_pieces)
-              + ", so read those as possibly the stimulator rather than the brain"
+              + ", so those bands carry a folded multiple of the stimulation rate -- advisory, not a "
+                "refusal (the PI, 2026-09-06): take care with their response to current, it does not "
+                "mean they measure the stimulator rather than the brain"
               + (", and " + _and_list([f"{v:g}" for v in bands["watch_clear_hz"]]) + " Hz as clear"
                  if bands["watch_clear_hz"] else ", and none of the watched bands is clear")))
     ex = dict(exposure or {})
