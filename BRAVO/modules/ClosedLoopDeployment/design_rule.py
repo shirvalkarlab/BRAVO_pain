@@ -245,6 +245,9 @@ def filter_2comp(Y: np.ndarray, *, phi_s: float, phi_f: float, q_s: float, q_f: 
 try:
     import math as _math
     from numba import njit as _njit
+    # numba logs its own type checking at DEBUG, and the server logs at DEBUG: the first fit in each
+    # worker wrote 38,760 lines of it (measured 2026-09-25). Its warnings and errors still show.
+    logging.getLogger("numba").setLevel(logging.WARNING)
 
     @_njit(cache=False)
     def _pairwise_sum(a, lo, n):                      # numpy's DOUBLE_pairwise_sum, stride 1

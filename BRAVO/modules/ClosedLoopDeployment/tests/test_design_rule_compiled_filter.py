@@ -55,3 +55,16 @@ def test_the_whole_fit_is_the_same_with_the_compiled_filter():
     finally:
         DR.COMPILED_FILTER = saved
     assert repr(fast) == repr(slow)
+
+
+def test_compiling_the_filter_logs_nothing_below_a_warning():
+    """numba logs its own type checking at DEBUG (38,760 lines on the first fit, 2026-09-25), and the
+    server logs at DEBUG, so every worker's first design-rule fit flooded its log."""
+    import logging
+    root = logging.getLogger()
+    before = root.level
+    root.setLevel(logging.DEBUG)                 # what the server's logging configuration does
+    try:
+        assert logging.getLogger("numba").getEffectiveLevel() >= logging.WARNING
+    finally:
+        root.setLevel(before)
