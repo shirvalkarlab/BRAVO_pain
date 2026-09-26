@@ -13,7 +13,9 @@ Coded by www.creative-tim.com
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-// Material Dashboard 2 React Helper Functions
+// Card padding 24 px (SPEC.md section 2.5), from the spacing tokens.
+import { LAYOUT, SPACE } from "assets/theme/base/tokens";
+
 import pxToRem from "assets/theme/functions/pxToRem";
 
 const cardContent = {
@@ -21,7 +23,7 @@ const cardContent = {
     root: {
       marginTop: 0,
       marginBottom: 0,
-      padding: `${pxToRem(8)} ${pxToRem(24)} ${pxToRem(24)}`,
+      padding: `${pxToRem(SPACE.xs)} ${pxToRem(LAYOUT.cardPadding)} ${pxToRem(LAYOUT.cardPadding)}`,
     },
   },
 };

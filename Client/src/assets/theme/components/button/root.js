@@ -13,31 +13,34 @@ Coded by www.creative-tim.com
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-// Material Dashboard 2 React Base Styles
-import typography from "assets/theme/base/typography";
-import borders from "assets/theme/base/borders";
+// App shell (SPEC.md section 4 rule 6, 2026-09-26): buttons are 36 px tall, 14 px, weight 600,
+// sentence case with no letter-spacing, 4 px corners and no shadow. Values from the tokens.
+import { TYPE, WEIGHT, FONT_FAMILY, RADIUS, SPACE, SHADOW } from "assets/theme/base/tokens";
 
-// Material Dashboard 2 React Helper Functions
 import pxToRem from "assets/theme/functions/pxToRem";
 
-const { fontWeightBold, size } = typography;
-const { borderRadius } = borders;
+export const BUTTON_HEIGHT = { small: 32, medium: 36, large: 40 };
 
 const root = {
   display: "inline-flex",
   justifyContent: "center",
   alignItems: "center",
-  fontSize: size.xs,
-  fontWeight: fontWeightBold,
-  borderRadius: borderRadius.lg,
-  padding: `${pxToRem(6.302)} ${pxToRem(16.604)}`,
-  lineHeight: 1.4,
+  fontFamily: FONT_FAMILY,
+  fontSize: pxToRem(TYPE.body.fontSize),
+  fontWeight: WEIGHT.strong,
+  borderRadius: pxToRem(RADIUS.sm),
+  padding: `${pxToRem(SPACE.xxs)} ${pxToRem(SPACE.sm)}`,
+  lineHeight: TYPE.body.lineHeight,
+  letterSpacing: 0,
   textAlign: "center",
-  textTransform: "uppercase",
+  textTransform: "none",
   userSelect: "none",
-  backgroundSize: "150% !important",
-  backgroundPositionX: "25% !important",
-  transition: "all 150ms ease-in",
+  boxShadow: SHADOW.none,
+  transition: "background-color 150ms ease-in, border-color 150ms ease-in",
+
+  "&:hover, &:focus, &:active": {
+    boxShadow: SHADOW.none,
+  },
 
   "&:disabled": {
     pointerEvent: "none",
@@ -45,8 +48,8 @@ const root = {
   },
 
   "& .material-icons": {
-    fontSize: pxToRem(15),
-    marginTop: pxToRem(-2),
+    fontSize: pxToRem(TYPE.lead.fontSize),
+    marginTop: 0,
   },
 };
 

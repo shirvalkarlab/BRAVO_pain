@@ -12,51 +12,44 @@ Coded by www.creative-tim.com
 
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
-function navbar(theme, ownerState) {
-  const { palette, boxShadows, functions, transitions, breakpoints, borders } = theme;
-  const { transparentNavbar, absolute, light, darkMode } = ownerState;
+// The top bar (SPEC.md section 2.5, 2026-09-26): the page background, one hairline beneath it,
+// no shadow, no blur, square corners; text in the title ink. Dark mode is not supported on this
+// pass (section 2.6), so the "darkMode" and "light" flags no longer change the colours.
+import { T, SHADOW, SPACE } from "assets/theme/base/tokens";
 
-  const { dark, white, text, transparent, background } = palette;
-  const { navbarBoxShadow } = boxShadows;
-  const { rgba, pxToRem } = functions;
-  const { borderRadius } = borders;
+function navbar(theme, ownerState) {
+  const { functions, transitions, breakpoints } = theme;
+  const { absolute } = ownerState;
+  const { pxToRem } = functions;
 
   return {
-    boxShadow: transparentNavbar || absolute ? "none" : navbarBoxShadow,
-    backdropFilter: transparentNavbar || absolute ? "none" : `saturate(200%) blur(${pxToRem(30)})`,
-    backgroundColor:
-      transparentNavbar || absolute
-        ? `${transparent.main} !important`
-        : rgba(darkMode ? background.default : white.main, 0.8),
-
-    color: () => {
-      let color;
-
-      if (light) {
-        color = white.main;
-      } else if (transparentNavbar) {
-        color = text.main;
-      } else {
-        color = dark.main;
-      }
-
-      return color;
-    },
-    top: absolute ? 0 : pxToRem(12),
-    minHeight: pxToRem(75),
+    boxShadow: SHADOW.none,
+    backdropFilter: "none",
+    backgroundColor: absolute ? "transparent !important" : T.page,
+    borderBottom: absolute ? "none" : `1px solid ${T.rule}`,
+    color: T.ink,
+    top: 0,
+    minHeight: pxToRem(SPACE.xl + SPACE.xs),
     display: "grid",
     alignItems: "center",
-    borderRadius: borderRadius.xl,
-    paddingTop: pxToRem(8),
-    paddingBottom: pxToRem(8),
-    paddingRight: absolute ? pxToRem(8) : 0,
-    paddingLeft: absolute ? pxToRem(16) : 0,
+    borderRadius: 0,
+    marginBottom: pxToRem(SPACE.md),
+    paddingTop: pxToRem(SPACE.xs),
+    paddingBottom: pxToRem(SPACE.xs),
+    paddingRight: absolute ? pxToRem(SPACE.xs) : 0,
+    paddingLeft: absolute ? pxToRem(SPACE.sm) : 0,
 
     "& > *": {
       transition: transitions.create("all", {
         easing: transitions.easing.easeInOut,
         duration: transitions.duration.standard,
       }),
+    },
+
+    // The page heading the breadcrumbs draw is shown in sentence case, as its label is written.
+    "& .MuiTypography-root": {
+      textTransform: "none",
+      letterSpacing: 0,
     },
 
     "& .MuiToolbar-root": {
@@ -66,7 +59,7 @@ function navbar(theme, ownerState) {
 
       [breakpoints.up("sm")]: {
         minHeight: "auto",
-        padding: `${pxToRem(4)} ${pxToRem(16)}`,
+        padding: `${pxToRem(SPACE.xxs)} 0`,
       },
     },
   };
@@ -106,6 +99,7 @@ const navbarRow = ({ breakpoints }, { isMini }) => ({
 
 const navbarIconButton = ({ typography: { size }, breakpoints }) => ({
   px: 1,
+  color: T.ink3,
 
   "& .material-icons, .material-icons-round": {
     fontSize: `${size.xl} !important`,

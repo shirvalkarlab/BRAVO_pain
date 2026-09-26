@@ -13,68 +13,69 @@ Coded by www.creative-tim.com
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-// Material Dashboard 2 React Base Styles
-import colors from "assets/theme/base/colors";
-import typography from "assets/theme/base/typography";
+// Outlined buttons are the secondary button (SPEC.md section 4 rule 6): white, a 1 px border in
+// the caption grey, text in the title ink. An outlined primary button keeps the accent for its
+// border and text (6.67:1 on white).
+import { T, TYPE, SPACE } from "assets/theme/base/tokens";
+import { BUTTON_HEIGHT } from "assets/theme/components/button/root";
 
-// Material Dashboard 2 React Helper Functions
 import pxToRem from "assets/theme/functions/pxToRem";
 
-const { transparent, light, info, secondary } = colors;
-const { size } = typography;
+const iconSize = (px) => ({
+  "& .material-icon, .material-icons-round, svg": {
+    fontSize: `${pxToRem(px)} !important`,
+  },
+});
 
 const outlined = {
   base: {
-    minHeight: pxToRem(40),
-    color: light.main,
-    borderColor: light.main,
-    padding: `${pxToRem(10)} ${pxToRem(24)}`,
+    minHeight: pxToRem(BUTTON_HEIGHT.medium),
+    backgroundColor: T.surface,
+    color: T.ink,
+    borderColor: T.ink3,
+    padding: `${pxToRem(SPACE.xxs)} ${pxToRem(SPACE.sm)}`,
 
     "&:hover": {
-      opacity: 0.75,
-      backgroundColor: transparent.main,
+      backgroundColor: T.fillMuted,
+      borderColor: T.ink3,
     },
 
-    "& .material-icon, .material-icons-round, svg": {
-      fontSize: `${pxToRem(16)} !important`,
-    },
+    ...iconSize(TYPE.lead.fontSize),
   },
 
   small: {
-    minHeight: pxToRem(32),
-    padding: `${pxToRem(6)} ${pxToRem(16)}`,
-    fontSize: size.xs,
-
-    "& .material-icon, .material-icons-round, svg": {
-      fontSize: `${pxToRem(12)} !important`,
-    },
+    minHeight: pxToRem(BUTTON_HEIGHT.small),
+    padding: `${pxToRem(SPACE.xxs)} ${pxToRem(SPACE.xs)}`,
+    fontSize: pxToRem(TYPE.caption.fontSize),
+    ...iconSize(TYPE.caption.fontSize),
   },
 
   large: {
-    minHeight: pxToRem(47),
-    padding: `${pxToRem(12)} ${pxToRem(28)}`,
-    fontSize: size.sm,
-
-    "& .material-icon, .material-icons-round, svg": {
-      fontSize: `${pxToRem(22)} !important`,
-    },
+    minHeight: pxToRem(BUTTON_HEIGHT.large),
+    padding: `${pxToRem(SPACE.xs)} ${pxToRem(SPACE.md)}`,
+    fontSize: pxToRem(TYPE.lead.fontSize),
+    ...iconSize(TYPE.title.fontSize),
   },
 
   primary: {
-    backgroundColor: transparent.main,
-    borderColor: info.main,
+    backgroundColor: T.surface,
+    color: T.accent,
+    borderColor: T.accent,
 
     "&:hover": {
-      backgroundColor: transparent.main,
+      backgroundColor: T.accentTint,
+      borderColor: T.accent,
     },
   },
 
   secondary: {
-    backgroundColor: transparent.main,
-    borderColor: secondary.main,
+    backgroundColor: T.surface,
+    color: T.ink,
+    borderColor: T.ink3,
 
     "&:hover": {
-      backgroundColor: transparent.main,
+      backgroundColor: T.fillMuted,
+      borderColor: T.ink3,
     },
   },
 };

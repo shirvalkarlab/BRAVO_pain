@@ -40,13 +40,9 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
   const itemParentName = items[1];
   const itemName = items[items.length - 1];
 
-  let textColor = "white";
-
-  if (transparentSidenav || (whiteSidenav && !darkMode)) {
-    textColor = "dark";
-  } else if (whiteSidenav && darkMode) {
-    textColor = "inherit";
-  }
+  // The sidebar is white in every state (SPEC.md section 2.5, 2026-09-26): group headings are
+  // drawn in the caption grey ("text", 6.48:1 on white) and the product name in the title ink.
+  const textColor = "text";
 
   const closeSidenav = () => setContextState(dispatch, "hideSidenav", true);
 
@@ -160,10 +156,10 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
           color={textColor}
           display="block"
           variant="caption"
-          fontWeight="bold"
-          textTransform="uppercase"
+          fontWeight="medium"
+          textTransform="none"
           pl={3}
-          mt={2}
+          mt={3}
           mb={1}
           ml={1}
         >
@@ -174,10 +170,7 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
       returnValue = (
         <Divider
           key={key}
-          light={
-            (!darkMode && !whiteSidenav && !transparentSidenav) ||
-            (darkMode && !transparentSidenav && whiteSidenav)
-          }
+          light={false}
         />
       );
     }
@@ -218,24 +211,18 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
             width={!brandName && "100%"}
             sx={(theme) => sidenavLogoLabel(theme, { miniSidenav })}
           >
-            <MDTypography component="h6" variant="button" fontWeight="medium" color={textColor}>
+            <MDTypography component="h6" variant="button" fontWeight="medium" color="dark">
               {brandName}
             </MDTypography>
           </MDBox>
         </MDBox>
       </MDBox>
       <Divider
-        light={
-          (!darkMode && !whiteSidenav && !transparentSidenav) ||
-          (darkMode && !transparentSidenav && whiteSidenav)
-        }
+        light={false}
       />
       <List>{allRoutes}</List>
       <Divider
-        light={
-          (!darkMode && !whiteSidenav && !transparentSidenav) ||
-          (darkMode && !transparentSidenav && whiteSidenav)
-        }
+        light={false}
       />
       {routes[reportName] ? (
         <List key={reportName}>{routes[reportName].children.map(({ key, name, title, icon, route }) => {
@@ -253,10 +240,10 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
                 color={textColor}
                 display="block"
                 variant="caption"
-                fontWeight="bold"
-                textTransform="uppercase"
+                fontWeight="medium"
+                textTransform="none"
                 pl={3}
-                mt={2}
+                mt={3}
                 mb={1}
                 ml={1}
               >

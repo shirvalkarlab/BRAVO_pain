@@ -13,22 +13,29 @@ Coded by www.creative-tim.com
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-// Material Dashboard 2 React base styles
-import colors from "assets/theme/base/colors";
-import typography from "assets/theme/base/typography";
+// Breadcrumbs: 14 px, sentence case, in the caption grey (6.48:1 on the page background). The
+// crumbs are drawn at full opacity so none falls under 4.5:1; the component's own half-opacity
+// setting is overridden here, where the theme can reach it.
+import { T, TYPE } from "assets/theme/base/tokens";
 
-const { grey } = colors;
-const { size } = typography;
+import pxToRem from "assets/theme/functions/pxToRem";
 
 const breadcrumbs = {
   styleOverrides: {
     li: {
       lineHeight: 0,
+
+      "& .MuiTypography-root": {
+        color: `${T.ink3} !important`,
+        opacity: "1 !important",
+        textTransform: "none !important",
+        fontSize: `${pxToRem(TYPE.body.fontSize)} !important`,
+      },
     },
 
     separator: {
-      fontSize: size.sm,
-      color: grey[600],
+      fontSize: pxToRem(TYPE.body.fontSize),
+      color: `${T.ink3} !important`,
     },
   },
 };

@@ -13,26 +13,21 @@ Coded by www.creative-tim.com
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-// Material Dashboard 2 React base styles
-import colors from "assets/theme/base/colors";
-import borders from "assets/theme/base/borders";
-import boxShadows from "assets/theme/base/boxShadows";
+// Tabs as a quiet segmented control (SPEC.md sections 2.3 and 5.2): a muted band with 4 px
+// corners; the selected tab is a white segment outlined in the accent blue, its text in the
+// accent (see tab.js). No shadow.
+import { T, RADIUS, SPACE, SHADOW } from "assets/theme/base/tokens";
 
-// Material Dashboard 2 React helper functions
 import pxToRem from "assets/theme/functions/pxToRem";
-
-const { grey, white } = colors;
-const { borderRadius } = borders;
-const { tabsBoxShadow } = boxShadows;
 
 const tabs = {
   styleOverrides: {
     root: {
       position: "relative",
-      backgroundColor: grey[100],
-      borderRadius: borderRadius.xl,
+      backgroundColor: T.fillMuted,
+      borderRadius: pxToRem(RADIUS.sm),
       minHeight: "unset",
-      padding: pxToRem(4),
+      padding: pxToRem(SPACE.xxs),
     },
 
     flexContainer: {
@@ -54,10 +49,12 @@ const tabs = {
 
     indicator: {
       height: "100%",
-      borderRadius: borderRadius.lg,
-      backgroundColor: white.main,
-      boxShadow: tabsBoxShadow.indicator,
-      transition: "all 500ms ease",
+      boxSizing: "border-box",
+      borderRadius: pxToRem(RADIUS.sm),
+      backgroundColor: T.surface,
+      border: `1px solid ${T.accent}`,
+      boxShadow: SHADOW.none,
+      transition: "all 300ms ease",
     },
   },
 };

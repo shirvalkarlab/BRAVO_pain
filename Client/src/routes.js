@@ -374,11 +374,11 @@ const routes = {
   },
   "CustomizedAnalysis": {
     icon: <MdBuildCircle />,
-    name: "Customized Analysis",
+    name: "Choosing stimulation settings",
     children: [
       {
         key: "CustomizedAnalysis",
-        name: "Customized Analysis",
+        name: "Choosing stimulation settings",
         title: true,
         hide: true
       },
@@ -401,21 +401,21 @@ const routes = {
       },
       {
         key: "biomarkers",
-        name: "Biomarker Exploration",
+        name: "Which brain signal tracks pain",
         icon: <TimelineIcon />,
         route: "/reports/biomarkers/:participant_uid",
         component: <Biomarkers />,
       },
       {
         key: "stimOptimizer",
-        name: "Open-Loop Stim Optimizer",
+        name: "Which current to try next",
         icon: <TimelineIcon />,
         route: "/reports/stim-optimizer/:participant_uid",
         component: <StimOptimizer />,
       },
       {
         key: "closedLoopSim",
-        name: "Closed-Loop Deployment",
+        name: "Closed-loop settings to program",
         icon: <MdBuildCircle />,
         route: "/reports/closed-loop/:participant_uid",
         component: <ClosedLoopSim />,

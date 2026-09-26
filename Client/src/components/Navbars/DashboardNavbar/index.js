@@ -58,6 +58,7 @@ import { usePlatformContext, setContextState } from "context";
 import { dictionary } from "assets/translation";
 import { SessionController } from "database/session-control";
 import MDTypography from "components/MDTypography";
+import { T, SPACE, MIN_TEXT_PX } from "assets/theme/base/tokens";
 
 function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
   const navigate = useNavigate();
@@ -202,14 +203,14 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
     >
       <Link to="/profile">
         <MenuItem>
-          <FaUser fontSize={10} style={{paddingRight: 15}} />
+          <FaUser fontSize={MIN_TEXT_PX} style={{paddingRight: SPACE.xs}} />
           <MDTypography variant="button" fontWeight="regular" color="text">
             {"Profile"}
           </MDTypography>
         </MenuItem>
       </Link>
       <MenuItem onClick={() => logoutUser()}>
-        <FaArrowRightFromBracket fontSize={10} style={{paddingRight: 15}} />
+        <FaArrowRightFromBracket fontSize={MIN_TEXT_PX} style={{paddingRight: SPACE.xs}} />
         <MDTypography variant="button" fontWeight="regular" color="text">
           {dictionary.SimplifiedNavbar.Logout[language]}
         </MDTypography>
@@ -282,16 +283,9 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
   };
 
   // Styles for the navbar icons
-  const iconsStyle = ({ palette: { dark, white, text }, functions: { rgba } }) => ({
-    color: () => {
-      let colorValue = light || darkMode ? white.main : dark.main;
-
-      if (transparentNavbar && !light) {
-        colorValue = darkMode ? rgba(text.main, 0.6) : text.main;
-      }
-
-      return colorValue;
-    },
+  // Icons in the caption grey (6.48:1 on the page background); the bar has one light look.
+  const iconsStyle = () => ({
+    color: T.ink3,
   });
 
   return (

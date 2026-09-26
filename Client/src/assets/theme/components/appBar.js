@@ -13,6 +13,9 @@ Coded by www.creative-tim.com
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
+// The navigation bar carries no shadow (SPEC.md section 2.5).
+import { SHADOW } from "assets/theme/base/tokens";
+
 const appBar = {
   defaultProps: {
     color: "transparent",
@@ -20,7 +23,7 @@ const appBar = {
 
   styleOverrides: {
     root: {
-      boxShadow: "none",
+      boxShadow: SHADOW.none,
     },
   },
 };

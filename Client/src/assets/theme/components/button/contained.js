@@ -13,79 +13,76 @@ Coded by www.creative-tim.com
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-// Material Dashboard 2 React Base Styles
-import colors from "assets/theme/base/colors";
-import typography from "assets/theme/base/typography";
+// Contained buttons (SPEC.md section 4 rule 6): the one primary button per card is filled with
+// the accent blue and carries white text (6.67:1). Every other contained button reads as a
+// secondary button: white, a 1 px border in the caption grey, text in the title ink.
+import { T, TYPE, SPACE } from "assets/theme/base/tokens";
+import { BUTTON_HEIGHT } from "assets/theme/components/button/root";
 
-// Material Dashboard 2 React Helper Functions
 import pxToRem from "assets/theme/functions/pxToRem";
 
-const { white, text, info, secondary } = colors;
-const { size } = typography;
+const secondaryLook = {
+  backgroundColor: T.surface,
+  color: T.ink,
+  border: `1px solid ${T.ink3}`,
+
+  "&:hover": {
+    backgroundColor: T.fillMuted,
+  },
+
+  "&:focus:not(:hover)": {
+    backgroundColor: T.surface,
+  },
+};
+
+const iconSize = (px) => ({
+  "& .material-icon, .material-icons-round, svg": {
+    fontSize: `${pxToRem(px)} !important`,
+  },
+});
 
 const contained = {
   base: {
-    backgroundColor: white.main,
-    minHeight: pxToRem(40),
-    color: text.main,
-    padding: `${pxToRem(10)} ${pxToRem(24)}`,
-
-    "&:hover": {
-      backgroundColor: white.main,
-    },
+    ...secondaryLook,
+    minHeight: pxToRem(BUTTON_HEIGHT.medium),
+    padding: `${pxToRem(SPACE.xxs)} ${pxToRem(SPACE.sm)}`,
 
     "&:active, &:active:focus, &:active:hover": {
-      opacity: 0.85,
+      opacity: 0.9,
     },
 
-    "& .material-icon, .material-icons-round, svg": {
-      fontSize: `${pxToRem(16)} !important`,
-    },
+    ...iconSize(TYPE.lead.fontSize),
   },
 
   small: {
-    minHeight: pxToRem(32),
-    padding: `${pxToRem(6)} ${pxToRem(16)}`,
-    fontSize: size.xs,
-
-    "& .material-icon, .material-icons-round, svg": {
-      fontSize: `${pxToRem(12)} !important`,
-    },
+    minHeight: pxToRem(BUTTON_HEIGHT.small),
+    padding: `${pxToRem(SPACE.xxs)} ${pxToRem(SPACE.xs)}`,
+    fontSize: pxToRem(TYPE.caption.fontSize),
+    ...iconSize(TYPE.caption.fontSize),
   },
 
   large: {
-    minHeight: pxToRem(47),
-    padding: `${pxToRem(12)} ${pxToRem(28)}`,
-    fontSize: size.sm,
-
-    "& .material-icon, .material-icons-round, svg": {
-      fontSize: `${pxToRem(22)} !important`,
-    },
+    minHeight: pxToRem(BUTTON_HEIGHT.large),
+    padding: `${pxToRem(SPACE.xs)} ${pxToRem(SPACE.md)}`,
+    fontSize: pxToRem(TYPE.lead.fontSize),
+    ...iconSize(TYPE.title.fontSize),
   },
 
   primary: {
-    backgroundColor: info.main,
+    backgroundColor: T.accent,
+    color: T.onFill,
+    border: `1px solid ${T.accent}`,
 
     "&:hover": {
-      backgroundColor: info.main,
+      backgroundColor: T.accent,
     },
 
     "&:focus:not(:hover)": {
-      backgroundColor: info.focus,
+      backgroundColor: T.accent,
     },
   },
 
-  secondary: {
-    backgroundColor: secondary.main,
-
-    "&:hover": {
-      backgroundColor: secondary.main,
-    },
-
-    "&:focus:not(:hover)": {
-      backgroundColor: secondary.focus,
-    },
-  },
+  secondary: secondaryLook,
 };
 
 export default contained;

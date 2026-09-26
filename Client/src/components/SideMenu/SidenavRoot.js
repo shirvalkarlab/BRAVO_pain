@@ -13,43 +13,39 @@ Coded by www.creative-tim.com
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-// @mui material components
+// The sidebar drawer (SPEC.md section 2.5, 2026-09-26): white, one hairline on its right edge,
+// no shadow and no gradient, the full height of the window. The open, mini and hidden states
+// and their transitions are unchanged. Dark mode is not supported on this pass (section 2.6).
 import Drawer from "@mui/material/Drawer";
 import { styled } from "@mui/material/styles";
 
+import { T, SHADOW } from "assets/theme/base/tokens";
+import { SIDENAV_WIDTH } from "assets/theme/components/sidenav";
+
+export const SIDENAV_MINI_WIDTH = 96;
+
 export default styled(Drawer)(({ theme, ownerState }) => {
-  const { palette, boxShadows, transitions, breakpoints, functions } = theme;
-  const { transparentSidenav, whiteSidenav, hideSidenav, showSidenav, miniSidenav, darkMode } = ownerState;
+  const { transitions, breakpoints, functions } = theme;
+  const { hideSidenav, showSidenav, miniSidenav } = ownerState;
+  const { pxToRem } = functions;
 
-  const sidebarWidth = 250;
-  const { transparent, gradients, white, background } = palette;
-  const { xxl } = boxShadows;
-  const { pxToRem, linearGradient } = functions;
-
-  let backgroundValue = darkMode
-    ? background.sidenav
-    : linearGradient(gradients.dark.main, gradients.dark.state);
-
-  if (transparentSidenav) {
-    backgroundValue = transparent.main;
-  } else if (whiteSidenav) {
-    backgroundValue = white.main;
-  }
+  const surface = {
+    background: T.surface,
+    borderRight: `1px solid ${T.rule}`,
+    boxShadow: SHADOW.none,
+  };
 
   // styles for the sidenav when miniSidenav={false}
   const drawerOpenStyles = () => ({
-    background: backgroundValue,
+    ...surface,
     transform: "translateX(0)",
     transition: transitions.create("transform", {
       easing: transitions.easing.sharp,
       duration: transitions.duration.shorter,
     }),
-
     [breakpoints.up("xl")]: {
-      boxShadow: transparentSidenav ? "none" : xxl,
-      marginBottom: transparentSidenav ? 0 : "inherit",
       left: "0",
-      width: sidebarWidth,
+      width: pxToRem(SIDENAV_WIDTH),
       transform: "translateX(0)",
       transition: transitions.create(["width", "background-color"], {
         easing: transitions.easing.sharp,
@@ -60,18 +56,15 @@ export default styled(Drawer)(({ theme, ownerState }) => {
 
   // styles for the sidenav when miniSidenav={true}
   const drawerCloseStyles = () => ({
-    background: backgroundValue,
+    ...surface,
     transform: `translateX(${pxToRem(-320)})`,
     transition: transitions.create("transform", {
       easing: transitions.easing.sharp,
       duration: transitions.duration.shorter,
     }),
-
     [breakpoints.up("xl")]: {
-      boxShadow: transparentSidenav ? "none" : xxl,
-      marginBottom: transparentSidenav ? 0 : "inherit",
       left: "0",
-      width: pxToRem(96),
+      width: pxToRem(SIDENAV_MINI_WIDTH),
       overflowX: "hidden",
       transform: "translateX(0)",
       transition: transitions.create(["width", "background-color"], {
@@ -83,7 +76,7 @@ export default styled(Drawer)(({ theme, ownerState }) => {
 
   // styles for the sidenav when hideSidenav={true}
   const drawerHideStyles = () => ({
-    background: backgroundValue,
+    ...surface,
     transform: `translateX(${pxToRem(-320)})`,
     transition: transitions.create("transform", {
       easing: transitions.easing.sharp,
@@ -93,9 +86,8 @@ export default styled(Drawer)(({ theme, ownerState }) => {
 
   return {
     "& .MuiDrawer-paper": {
-      boxShadow: xxl,
+      boxShadow: SHADOW.none,
       border: "none",
-
       ...(hideSidenav ? drawerHideStyles() : (miniSidenav && !showSidenav ? drawerCloseStyles() : drawerOpenStyles())),
     },
   };
