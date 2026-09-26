@@ -13,8 +13,9 @@
 > ("90-min wait"): 130 minutes at 0 mA, 10 counted ratings from minute 90 to 126 and 6 uncounted
 > ones inside the wait, **180 minutes door to door, exactly at the limit**. At home the patient can
 > end a hold with their own remote by selecting the setting in force ("Patient remote reverts"),
-> which needs the in-force setting kept as its own group (§6.2); whether this patient's remote can
-> select groups is **the one question left, for Medtronic** (§11). Every answer is listed in §11
+> which needs the in-force setting kept as its own group (§6.2); **she has a remote that switches
+> between groups of stimulation settings** (your answer, 2026-09-26), so nothing is left open for
+> Medtronic. Every answer is listed in §11
 > with where it was applied. Earlier answers that stand: ethics coverage of the stimulation-off
 > block ("Stim off is OK, it's in our protocol") and of the multi-day home sequence ("yes multi day
 > home seq ok"); the home holds, left 3, 4, 3, 2, 3 mA, 3-4 days each, the 2 mA hold only if 1.5 and
@@ -97,7 +98,7 @@ nothing).
 | **0.3(d)** Can the rate change on one side alone? | **Answered (2026-09-26): no** ("No, shared"). The rate is shared by both sides. The settings history agrees: the two sides carried the same rate in all but 1 of 3,344 rows aligned in time (read 2026-09-25; that one row was not examined) | Visit 1 changes the rate on both sides together, as drafted. **A left-only rate repeat is not possible**; every rate swap moves both sides, and each side is still read on its own |
 | **0.3(a)** Does Single Threshold Inverse change the delivered current? | **Answered by you (2026-09-26): no, it only senses** ("Only senses"): it records and logs the band without changing the delivered current, as `DEVICE_percept_rc.md` §2 states from the white paper's Table 1. This is your statement, not a Medtronic document: the feasibility critique (09) found outside descriptions that call it an active mode, and no Medtronic reply is on file | Unchanged: the chronic log is not re-pointed in this plan. It stays on L 1-3+ at 23.44 Hz and the home sequence reads it as it is. Re-pointing it (for example to 24.5 Hz) becomes an option for a later plan, not this one |
 | **0.3(c)** Can the home controller trigger more than the 10-minute chronic log? | Open; not put to you this round | Not needed: the home sequence uses the ratings and the chronic log as they are today |
-| **Can the patient's own remote select the in-force group?** (new, from your answer "Patient remote reverts") | **Open, for Medtronic.** `DEVICE_percept_rc.md` says nothing about what the patient's remote can change. The one printed statement on this machine is a 2020 sensing tip card for the earlier Percept PC: "Patient Control is limited to stimulation amplitude (not PW or Rate)" (quoted in `artifacts/research_2026-09-13_percept_adaptive_parameter_ranges_MANUALS.md`). It says nothing about choosing a group | The home rescue plan of §6.2 is set up so either answer works: the in-force setting kept as its own group; if the remote cannot select it, the fallback in §6.2 |
+| **Can the patient's own remote select the in-force group?** (new, from your answer "Patient remote reverts") | **Answered by you (2026-09-26): yes** ("she has the remote to switch between different groups of stimulation settings") | The home rescue plan of §6.2 runs as drafted: the in-force setting kept as its own group, selected from her remote. Checked on the tablet at at-home session 1: the chronic log carries on across a change of group (§6.2) |
 
 Also agreed in advance with the clinical team, not improvised on the day (your answers of
 2026-09-26): the stop rules of §6; a second person for ratings during Visit 1 ("Yes"; §6.3); for
@@ -552,16 +553,12 @@ needs on the device, set up at at-home sessions 1 and 3 (the rows of §9.4 say i
    select it, before the research coordinator leaves.
 3. A check that the hold group's left current stays under the 4.5 mA ceiling (4.0 mA at most).
 
-**What this rests on, and the one question left.** `DEVICE_percept_rc.md` says nothing about what
-the patient's remote can change. The one printed statement on this machine is a 2020 sensing tip
-card for the earlier Percept PC: "Patient Control is limited to stimulation amplitude (not PW or
-Rate)" (BrainSense Tip Cards p. 9, quoted in
-`artifacts/research_2026-09-13_percept_adaptive_parameter_ranges_MANUALS.md`), which says nothing
-about choosing a group. **So whether this patient's remote can select a group, with sensing on, is
-the one question left for Medtronic (§11)**; the tablet at session 1 can also show it. If it cannot,
-the fallback is the amplitude control that tip card describes: the left patient limits set so the
-patient can step the left current back to 3.0 mA from the hold's current, which needs the step size
-and the limits the tablet allows, also undocumented here. Either way a return shows in the device's
+**What this rests on.** She has a remote that switches between groups of stimulation settings (your
+answer of 2026-09-26), so the return needs no further device question. It is the same remote-control phone she
+already uses every day: every patient-event PSD snapshot on file (not the montages) was taken from it
+(your note, 2026-09-26). One thing is checked on the
+tablet at at-home session 1 before the coordinator leaves: that the chronic log carries on unchanged
+across a change of group (the same sensing pair and band in both groups). A return shows in the device's
 own record, the chronic log's delivered current at each 10-minute point (`AmplitudeInMilliAmps`,
 `DEVICE_percept_rc.md` §3) and, if it records a change made from the remote, the group history
 (`GroupHistory`), so the analysis ends that hold at the time the
@@ -999,16 +996,14 @@ clinical team, and to four more asked after you raised the visit limit; each app
     with their own remote, then calls. Set up as two groups, the in-force group unchanged and a hold
     group for holds 2 and 4, at at-home sessions 1 and 3. Applied in §2, §6.2, §9.4.
 
+13. **Whether her remote can select a group.** "Yes, she has the remote to switch between different
+    groups of stimulation settings." The home rescue plan runs as drafted; §6.2's amplitude-control
+    fallback is dropped. Applied in the summary, §2, §6.2.
+
 **Still open**
 
-- **For Medtronic, the one question left: can this patient's own remote select a group (the
-  in-force group, while the hold group is running), with BrainSense sensing on, and does the chronic
-  log carry on unchanged across a change of group?** `DEVICE_percept_rc.md` says nothing about the
-  patient's remote; the one printed statement on this machine, a 2020 tip card for the earlier
-  Percept PC, says patient control is limited to amplitude and says nothing about groups. The tablet
-  at at-home session 1 can show it too. If the answer is no, §6.2's fallback (the patient's own
-  amplitude control, with limits set so the left can return to 3.0 mA) needs its step size and limits
-  confirmed instead.
+- Nothing for Medtronic. One check on the tablet at at-home session 1: the chronic log carries on
+  unchanged across a change of group (§6.2).
 - Not put to you this round and not needed by this plan: item 0.3(c), whether the home controller can
   trigger more than the 10-minute chronic log (§2).
 
