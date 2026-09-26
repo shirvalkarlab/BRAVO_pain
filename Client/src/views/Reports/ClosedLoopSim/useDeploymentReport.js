@@ -36,12 +36,16 @@ export function reportSide({ bandCandidate, hemisphere }) {
   return hemisphere || bc.sensingHemisphere || "Left";
 }
 
-export function deploymentReportBody({ participantUid, bandCandidate, hemisphere, powerScale }) {
+export function deploymentReportBody({ participantUid, bandCandidate, hemisphere, powerScale,
+  painScore }) {
   const bc = bandCandidate || {};
   const side = reportSide({ bandCandidate, hemisphere });
   return {
     ParticipantId: participantUid,
     Hemisphere: side,
+    // The pain score every band-to-pain reading on the report is computed on (the PI, 2026-09-25
+    // night), from the page's dropdown. In the body, so it is in the cached answer's key too.
+    PainScore: painScore || "nrs",
     // The device thresholds a LINEAR sum of squared magnitude (rule D11), so the linear scale is
     // the one that describes what the device will actually do. The log scale remains a valid
     // statistical description and is not what should drive a threshold.
@@ -85,10 +89,11 @@ function reportSettings(body) {
 }
 
 export default function useDeploymentReport({ participantUid, bandCandidate, hemisphere,
-  powerScale, enabled = true }) {
+  powerScale, painScore, enabled = true }) {
   const channel = bandCandidate && bandCandidate.channel;
   const centerHz = bandCandidate && bandCandidate.centerHz;
-  const body = deploymentReportBody({ participantUid, bandCandidate, hemisphere, powerScale });
+  const body = deploymentReportBody({ participantUid, bandCandidate, hemisphere, powerScale,
+    painScore });
 
   const cached = useCachedResult({
     moduleKey: CL.report,

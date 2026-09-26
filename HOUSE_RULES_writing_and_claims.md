@@ -54,7 +54,7 @@ record, direction, and every hyphenated compound ("step-median unit", "tile-leve
 | equality proof | a check that every number came out the same as before |
 | contact, R 0⁻3⁺ | the pair of electrode contacts the signal was recorded from, named in full |
 | compute (noun) | work, or computing time |
-| spectrum, spectral (bare) | **never**: name the quantity: the device's own FFT snapshot; the PSD computed from the voltage trace; PSD-derived LSB; time-domain-derived LSB; a direct LSB recording |
+| spectrum, spectral (bare) | **never**: say **PSD** for the device's own 30 s snapshot and **TD** for band power from the time-domain recording (the PI, 2026-09-25: one vocabulary); PSD-derived LSB; TD-derived LSB; a direct LSB recording |
 
 Two habits: say the number and its meaning in one breath ("reading the saved answer took 2.9 s;
 working it out again took 10.4"), and when a function, file or setting must be named, say what it

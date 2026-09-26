@@ -804,6 +804,268 @@ def run_stepped_current_all_bands(uid, *, n_boot=2000, save=True):
 
 
 # ------------------------------------------------------------------------------------------------
+# 10. the research band detector, two versions (the PI's rulings 5a-5c, 2026-09-25)
+# ------------------------------------------------------------------------------------------------
+
+#: The lengths of signal the research version reads: the two decision 276 read, so its adjusted
+#: reading can be set beside that one. A stated family, not a search (report 04, section 5.1).
+BAND_DETECTOR_LENGTHS_S = (30.0, 60.0)
+
+#: The clinic-sheet switch's two positions, in the order the card reads them (ruling 5a): the
+#: REDCap ratings alone by default; merged with the sheet ratings only when the page's switch is on.
+SHEETS_SWITCH = (("off", False), ("on", True))
+
+
+def _allowed_pairs(uid):
+    """The sensing pair the device allows on each lead with the contacts in force (decision 217),
+    and the rate in force there, from the newest row of the settings stream per side. Read with the
+    Stim Optimizer's own two helpers (`stim_rings`, `lfp_evidence.flanking_pair`) -- one home."""
+    from modules.CacheStore import store as CS
+    from modules.StimOptimizer.bravo_service import stim_rings
+    from modules.StimOptimizer.routines import lfp_evidence as LE
+    names = ("ZERO", "ONE", "TWO", "THREE")
+    df, _stamp = CS.load_newest("therapy_settings", uid, consumer="biomarkers")
+    out = {}
+    for side in ("Left", "Right"):
+        d = df[df["hemi"].astype(str) == side].sort_values("t") if df is not None else None
+        if d is None or not len(d):
+            out[side] = dict(channel=None, why="no setting on record for this lead")
+            continue
+        last = d.iloc[-1]
+        rings = stim_rings(last.get("cathode"))
+        pair = LE.flanking_pair(rings)
+        rate = pd.to_numeric(pd.Series([last.get("rate")]), errors="coerce").iloc[0]
+        out[side] = dict(channel=(f"{names[pair[0]]}_{names[pair[1]]}_{side.upper()}" if pair else None),
+                         stim_contacts=sorted(int(r) for r in rings),
+                         rate_hz=(float(rate) if np.isfinite(rate) else None),
+                         since=_iso(pd.Timestamp(last["t"]).timestamp()),
+                         why=(None if pair else "nothing flanks the stimulating contacts on this lead"))
+    return out
+
+
+def _detector_ratings(uid, include_sheets):
+    """The page's default pain score from the implant date on (REDCap), and -- only when
+    ``include_sheets`` -- the clinic and at-home sheet ratings merged in by the page's own helper
+    (decision 258's `_merge_clinic_sheet_ratings`, the switch the heat maps and the deployment
+    summary use). Returns (times, values, from_sheet, metric, label, sheet block)."""
+    from modules.DecodeCommon import data_start as DS
+    BS = _bs()
+    t, v, metric = _ratings(uid, BS.DEFAULT_BIOMARKER_METRIC)
+    label = next((m["label"] for m in BS.BIOMARKER_METRICS if m["key"] == metric), metric)
+    t, v, flags, block = BS._merge_clinic_sheet_ratings(
+        uid, metric, label, t, v, {"IncludeClinicSheetRatings": bool(include_sheets)})
+    t, v, flags = np.asarray(t, float), np.asarray(v, float), np.asarray(flags, bool)
+    keep = DS.keep_from(t, DS.data_start_s(uid)) & np.isfinite(v)
+    o = np.argsort(t[keep], kind="stable")
+    block = dict(block, n_dropped_before_implant=int((~DS.keep_from(t, DS.data_start_s(uid))).sum()))
+    return t[keep][o], v[keep][o], flags[keep][o], metric, label, block
+
+
+def _detector_setup(uid, pairs):
+    BS = _bs()
+    td, psd_list, events, montage, chan_order, channels = BS._recordings_setup_cached(uid)
+    raw_by_ch = BS._raw_lsb_cache_cached(uid, channels, list(td or []) + list(psd_list or []),
+                                         events, montage_psd_blocks=montage)
+    allowed = _allowed_pairs(uid)
+    if pairs is None:
+        pairs = [a["channel"] for a in allowed.values() if a.get("channel")]
+    pairs = [ch for ch in pairs if (raw_by_ch or {}).get(ch)]
+    return raw_by_ch, allowed, pairs
+
+
+def run_band_detector_research(uid, *, lengths=BAND_DETECTOR_LENGTHS_S, tol_min=60.0, n_perm=200,
+                               n_boot=2000, pairs=None, save=True):
+    """The research version (ruling 5b: pain kept as a number), on the sensing pairs the device
+    allows today unless ``pairs`` names others, at each length, for both positions of the
+    clinic-sheet switch (ruling 5a). `band_detector` holds the statistics."""
+    from . import band_detector as BD
+    from modules.Biomarkers.routines import stim_current as SC
+    BS = _bs()
+    pairs_given = pairs
+    raw_by_ch, allowed, pairs = _detector_setup(uid, pairs)
+    direction = BS._sweep_match_direction({})
+    modes, reading_by_switch = {}, {}
+    for pos, sheets in SHEETS_SWITCH:
+        t, v, flags, metric, label, sblock = _detector_ratings(uid, sheets)
+        days = _ca_days(t)
+        rows = []
+        for ch in pairs:
+            cache = raw_by_ch[ch]
+            cur, cblock = SC.current_in_force_for_reports(uid, t, channel=ch)
+            cur = np.asarray(cur, float)
+            for secs in lengths:
+                power, _st, centers, *_ = BS._band_time_sweep_power_by_seconds(
+                    t, cache, None, tol_s=tol_min * 60.0, allow_window_reuse=False,
+                    match_direction=direction, channel=ch, participant_uid=uid, seconds=[secs])
+                X = np.asarray(power[secs], float)
+                d = BD.research_reading(X, v, cur, days, n_perm=n_perm, n_boot=n_boot)
+                usable = np.flatnonzero(np.isfinite(X).all(axis=1) & np.isfinite(v) & np.isfinite(cur))
+                run = usable[BD.longest_same_current_run(cur[usable])] if usable.size else usable
+                same = dict(current_mA=(float(cur[run[0]]) if run.size else None),
+                            **({"from": _iso(t[run[0]]), "to": _iso(t[run[-1]])} if run.size else {}),
+                            reading=(BD.research_reading(X[run], v[run], None, days[run], adjust=False,
+                                                         n_perm=n_perm, n_boot=n_boot)
+                                     if run.size else None))
+                rows.append(dict(pair=ch, seconds=float(secs), centres_hz=[float(c) for c in centers],
+                                 n_from_sheets=int(flags[usable].sum()) if usable.size else 0,
+                                 current=dict(cblock), reading=d, same_current=same))
+        BD.add_q([r["reading"].get("bands") or {} for r in rows], "p", "q")
+        BD.add_q([r["reading"].get("bands_without_current") or {} for r in rows], "p", "q")
+        modes[pos] = dict(score=metric, score_label=label, sheets=sblock, n_ratings=int(t.size),
+                          n_from_sheets=int(flags.sum()), rows=rows)
+        reading_by_switch[pos] = (
+            [f"Pain score: {label}; {'REDCap ratings plus ' + str(int(flags.sum())) + ' clinic-sheet ratings' if sheets else 'REDCap ratings only'}."]
+            + BD.research_sentences(rows, pair_name))
+    notes = ["q corrects each reading for the sensing pairs and lengths read together (Benjamini-Hochberg).",
+             "Descriptive: nothing here selects a band, moves a verdict or reaches a recommendation."]
+    reading_by_switch = {k: v + notes for k, v in reading_by_switch.items()}
+    reading = reading_by_switch["off"]
+    result = dict(modes=modes, reading_by_sheets_switch=reading_by_switch, allowed_pairs=allowed)
+    settings = dict(version="research: pain kept as a number (ruling 5b)", lengths_s=list(lengths),
+                    match_window_min=tol_min, match_direction=direction, window_reuse=False,
+                    model="ridge regression over every band of one sensing pair (confound_diagnostic's own)",
+                    score="held-out rank correlation between prediction and rating, taken within each "
+                          "held-out block (pooled across blocks, drift in pain reads as a backwards band), "
+                          "never folded; held-out R-squared beside it, against the training rows' own mean",
+                    held_out="5 blocks of time, the neighbouring ratings dropped (decision 240)",
+                    current_taken_out="a 3-knot spline of the current in force on the pair's own side, "
+                                      "out of the bands and the pain, fitted on the training rows (decision 241)",
+                    interval="95%, resampling whole California days of the held-out ratings",
+                    p=f"{n_perm} rotations of the ratings in time, the same pipeline refitted each time, "
+                      "the observed order excluded; the adjusted reading against its own rotations",
+                    correction="Benjamini-Hochberg over the pairs and lengths",
+                    pairs=("the pair the device allows on each lead with today's contacts (decision 217)"
+                           if pairs_given is None else "as given"),
+                    power="raw band power, never log (decision 202)",
+                    clinic_sheets=("off: REDCap only; on: merged by the page's own helper (ruling 5a, "
+                                   "decision 258); the card shows the run matching the page's switch"))
+    return _finish(uid, "band_detector_research", result, settings, reading, save)
+
+
+def _device_timing(uid):
+    """The device timing the device-shaped version builds in: the values placed from this
+    participant's record (decisions 150, 169) and their ranges from their one home (decision 168)."""
+    from modules.ClosedLoopDeployment import timing_recommendation as TR
+    from modules.DecodeCommon import device_ranges as DR
+    placed = {k: v["value_ms"] for k, v in TR.for_participant(uid).items()}
+    ranges = {"averaging_ms": DR.AVERAGING_RANGE_MS, "onset_upper_ms": DR.ONSET_RANGE_DUAL_MS,
+              "onset_lower_ms": DR.ONSET_RANGE_DUAL_MS, "transition_up_ms": DR.TRANSITION_RANGE_MS,
+              "transition_down_ms": DR.TRANSITION_RANGE_MS,
+              "detection_blanking_ms": DR.DETECTION_BLANKING_RANGE_MS}
+    return placed, ranges, TR.RECORD_DERIVED_PROVENANCE
+
+
+def run_band_detector_device(uid, *, tol_min=60.0, n_perm=200, n_boot=2000, pairs=None, save=True):
+    """The device-shaped version (ruling 5b: two pain groups, the area under the curve from a
+    logistic regression on band power; ruling 5c: the device's own timing from the start), one band
+    at a time on the sensing pairs the device allows today, for both positions of the clinic-sheet
+    switch (ruling 5a)."""
+    from . import band_detector as BD
+    from modules.Biomarkers.routines import analytics, availability, stim_current as SC
+    BS = _bs()
+    placed, ranges, provenance = _device_timing(uid)
+    need = ("averaging_ms", "onset_upper_ms", "onset_lower_ms", "adaptive_startup_delay_ms")
+    missing = [k for k in need if k not in placed]
+    outside = BD.check_timing(placed, ranges)
+    raw_by_ch, allowed, pairs = _detector_setup(uid, pairs)
+    direction = BS._sweep_match_direction({})
+    strategy, low_pct, high_pct = BS._label_strategy_params({})
+    onset_ms = max(placed.get("onset_upper_ms", 0.0), placed.get("onset_lower_ms", 0.0))
+    modes, reading_by_switch = {}, {}
+    for pos, sheets in SHEETS_SWITCH:
+        t, v, flags, metric, label, sblock = _detector_ratings(uid, sheets)
+        days = _ca_days(t)
+        y01 = np.asarray(analytics._binarize_labels(v, strategy=strategy, low_pct=low_pct,
+                                                    high_pct=high_pct), float)
+        out_pairs = []
+        for ch in pairs:
+            entry = dict(pair=ch)
+            if missing or outside:
+                entry["reason"] = ("no device timing has been placed from this participant's record"
+                                   if missing else f"a placed timing value is outside the device's range: {outside}")
+                out_pairs.append(entry)
+                continue
+            cache = raw_by_ch[ch]
+            td = cache.get("td") or {}
+            cache_c = np.asarray(cache.get("centers_hz") or [], float)
+            centres = analytics.sweep_center_freqs(cache_c)
+            col = np.asarray([int(np.argmin(np.abs(cache_c - c))) for c in centres], int)
+            mat = availability._lsb_family_mat(td, cache_c.size)
+            lo, hi, mid, st, info = BD.device_windows(
+                np.asarray(td.get("t") or [], float), np.asarray(td.get("ok") or [], bool), mat[:, col], t,
+                piece_s=float(cache.get("window_s") or 3.0), averaging_s=placed["averaging_ms"] / 1000.0,
+                onset_s=onset_ms / 1000.0, startup_s=placed["adaptive_startup_delay_ms"] / 1000.0,
+                tol_s=tol_min * 60.0, direction=direction)
+            cur, cblock = SC.current_in_force_for_reports(uid, t, channel=ch)
+            cur = np.asarray(cur, float)
+            side = SC.hemisphere_of_channel(ch)
+            rate = (allowed.get(side) or {}).get("rate_hz")
+            half = float(cache.get("band_half_hz") or 2.5)
+            landings = analytics.harmonic_landings_hz(rate, 0.0, 125.0) if rate else []
+            bands = []
+            for j, c in enumerate(centres):
+                here = [L for L in landings if abs(L["lands_at_hz"] - float(c)) <= half + 1e-9]
+                d = BD.device_reading(lo[:, j], hi[:, j], mid[:, j], y01, cur, days, n_perm=n_perm,
+                                      n_boot=n_boot, seed=j)
+                bands.append(dict(centre_hz=float(c), reading=d,
+                                  carries_folded_multiple=bool(here),
+                                  folded_multiples=[f"{L['harmonic']} x {rate:g} Hz lands at {L['lands_at_hz']:g} Hz"
+                                                    for L in here]))
+            BD.add_q([b["reading"].get("band") or {} for b in bands], "p", "q")
+            BD.add_q([b["reading"].get("band_without_current") or {} for b in bands], "p", "q")
+            use = np.isfinite(st) & np.isfinite(y01)
+            entry.update(bands=bands, timing_windows=info, rate_in_force_hz=rate, current=dict(cblock),
+                         n_ratings_with_reading=int(np.isfinite(st).sum()),
+                         n_in_two_groups_with_reading=int(use.sum()),
+                         n_from_sheets=int(flags[use].sum()))
+            out_pairs.append(entry)
+        modes[pos] = dict(score=metric, score_label=label, sheets=sblock, n_ratings=int(t.size),
+                          n_from_sheets=int(flags.sum()), pairs=out_pairs,
+                          split=f"{strategy} {low_pct:g}/{high_pct:g}")
+        reading_by_switch[pos] = (
+            [f"Pain score: {label}, split {strategy} (the middle dropped); "
+             f"{'REDCap ratings plus ' + str(int(flags.sum())) + ' clinic-sheet ratings' if sheets else 'REDCap ratings only'}."]
+            + BD.device_sentences(out_pairs, pair_name))
+    timing_words = (f"averaging {placed.get('averaging_ms', float('nan')) / 1000:g} s, onset "
+                    f"{onset_ms / 1000:g} s, start-up delay {placed.get('adaptive_startup_delay_ms', float('nan')) / 1000:g} s")
+    notes = [f"Device timing built in: {timing_words}, placed from this participant's record "
+             "(decisions 150, 169) and inside the device's ranges (decision 168). Blanking and the ramp "
+             "times act only after a switch and are not applied to a reading at one moment.",
+             "q corrects for the 22 bands of one pair (Benjamini-Hochberg). Descriptive: nothing here selects "
+             "a band or reaches a recommendation."]
+    reading_by_switch = {k: v + notes for k, v in reading_by_switch.items()}
+    reading = reading_by_switch["off"]
+    result = dict(modes=modes, reading_by_sheets_switch=reading_by_switch, allowed_pairs=allowed,
+                  timing=dict(placed_ms=placed, ranges_ms={k: list(v) for k, v in ranges.items()},
+                              outside_range=outside, missing=missing, provenance=provenance,
+                              applied=["averaging", "onset", "start-up delay"],
+                              not_applied=dict(blanking="acts only after a switch",
+                                               transitions="the ramp of the current after a switch")))
+    settings = dict(version="device-shaped: one band, two pain groups, logistic regression (ruling 5b), "
+                            "the device's own timing from the start (ruling 5c)",
+                    timing=timing_words, split=f"{strategy} {low_pct:g}/{high_pct:g}, the page's own",
+                    reading_at_a_rating=("the onset window of 3-second averaged readings the device would "
+                                         "have decided on: its lowest reading for a band that rises with "
+                                         "pain, its highest for one that falls, the direction learned on the "
+                                         "training blocks"),
+                    match_window_min=tol_min, match_direction=direction,
+                    model="logistic regression of the two pain groups on the band's reading; the area "
+                          "under the curve over the pairs of ratings inside one held-out block",
+                    held_out="5 blocks of time, the neighbouring ratings dropped (decision 240)",
+                    current_taken_out="a 3-knot spline of the current in force on the pair's own side, "
+                                      "out of the band's readings, fitted on the training rows (decision 241)",
+                    interval="95%, resampling whole California days of the held-out ratings",
+                    p=f"{n_perm} rotations of the pain groups in time, refitted, the observed order excluded",
+                    correction="Benjamini-Hochberg over the 22 bands of one pair",
+                    power="raw band power, never log (decision 202); no outlier ceiling (the device has none); "
+                          "pieces failing the platform's own gates end a run",
+                    folded_multiples="advisory only: a band carrying a folded multiple of the rate in force is flagged, never dropped",
+                    clinic_sheets=("off: REDCap only; on: merged by the page's own helper (ruling 5a, "
+                                   "decision 258); the card shows the run matching the page's switch"))
+    return _finish(uid, "band_detector_device", result, settings, reading, save)
+
+
+# ------------------------------------------------------------------------------------------------
 
 def _finish(uid, key, result, settings, reading, save):
     from modules.DecodeCommon import data_start as DS
@@ -822,4 +1084,6 @@ RUNNERS = {"zero_ma_within_stretch": run_zero_ma, "current_explains": run_curren
            "onoff_switches": run_onoff_switches, "carry_over_ladder": run_carry_over,
            "regression_to_mean": run_regression_to_mean,
            "rating_persistence": run_rating_persistence,
-           "stepped_current_all_bands": run_stepped_current_all_bands}
+           "stepped_current_all_bands": run_stepped_current_all_bands,
+           "band_detector_research": run_band_detector_research,
+           "band_detector_device": run_band_detector_device}

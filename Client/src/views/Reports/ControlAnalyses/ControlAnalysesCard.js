@@ -25,13 +25,29 @@ function stamp(snap, nRuns) {
   return `Run ${day} on data ${span} · ${nRuns} run${nRuns === 1 ? "" : "s"} kept`;
 }
 
-export default function ControlAnalysesCard({ payload }) {
+/** A run saved for both positions of the page's clinic-sheet switch (the band detector, the PI's
+ * ruling 5a of 2026-09-25) carries `reading_by_sheets_switch`; the card then shows ONLY the position
+ * the page's switch is in, and says which. Every other run reads as before. */
+function linesFor(snap, clinicSheets) {
+  const bySwitch = snap && snap.result && snap.result.reading_by_sheets_switch;
+  if (!bySwitch) return { lines: (snap && snap.reading) || [], note: null };
+  const pos = clinicSheets ? "on" : "off";
+  return {
+    lines: bySwitch[pos] || [],
+    note: clinicSheets
+      ? "Showing the run with the clinic-sheet ratings merged in, because the page's clinic-sheet switch is on."
+      : "Showing the run on REDCap ratings only; the clinic-sheet ratings enter only when the page's clinic-sheet switch is on.",
+  };
+}
+
+export default function ControlAnalysesCard({ payload, clinicSheets }) {
   const analyses = (payload && payload.analyses) || [];
   const [key, setKey] = useState(analyses.length ? analyses[0].key : null);
   if (!analyses.length) return null;
   const a = analyses.find((x) => x.key === key) || analyses[0];
   const snap = a.snapshot;
   const Figure = FIGURES[a.key];
+  const { lines, note } = linesFor(snap, clinicSheets);
   return (
     <Card>
       <MDBox p={2} data-testid="control-analyses-card">
@@ -52,9 +68,12 @@ export default function ControlAnalysesCard({ payload }) {
         ) : (
           <>
             <MDTypography variant="caption" component="div" sx={{ fontSize: 12.5, color: SUB, mt: 0.75 }}>{stamp(snap, a.n_runs)}</MDTypography>
-            {Figure && <MDBox mt={1}><Figure result={snap.result} /></MDBox>}
+            {note && (
+              <MDTypography variant="caption" component="div" sx={{ fontSize: 12.5, color: SUB, mt: 0.5 }}>{note}</MDTypography>
+            )}
+            {Figure && <MDBox mt={1}><Figure result={snap.result} clinicSheets={Boolean(clinicSheets)} /></MDBox>}
             <MDBox component="ul" sx={{ pl: 2.5, mt: 1, mb: 0 }}>
-              {(snap.reading || []).map((line) => (
+              {lines.map((line) => (
                 <MDTypography key={line} component="li" variant="caption" display="list-item" sx={{ fontSize: 13, color: "#1A1A1A" }}>{line}</MDTypography>
               ))}
             </MDBox>
@@ -72,12 +91,12 @@ export default function ControlAnalysesCard({ payload }) {
   );
 }
 
-ControlAnalysesCard.propTypes = { payload: PropTypes.shape({ analyses: PropTypes.array }) };
-ControlAnalysesCard.defaultProps = { payload: null };
+ControlAnalysesCard.propTypes = { payload: PropTypes.shape({ analyses: PropTypes.array }), clinicSheets: PropTypes.bool };
+ControlAnalysesCard.defaultProps = { payload: null, clinicSheets: false };
 
 /** Fetches the page's saved control analyses once per participant and draws the card; a failed
  * request says so in one line rather than hiding the section. */
-export function ControlAnalysesSection({ participantUid, page }) {
+export function ControlAnalysesSection({ participantUid, page, clinicSheets }) {
   const [state, setState] = useState({ payload: null, err: null });
   useEffect(() => {
     let live = true;
@@ -94,8 +113,8 @@ export function ControlAnalysesSection({ participantUid, page }) {
       </MDTypography>
     );
   }
-  return <ControlAnalysesCard payload={state.payload} />;
+  return <ControlAnalysesCard payload={state.payload} clinicSheets={clinicSheets} />;
 }
 
-ControlAnalysesSection.propTypes = { participantUid: PropTypes.string, page: PropTypes.string.isRequired };
-ControlAnalysesSection.defaultProps = { participantUid: null };
+ControlAnalysesSection.propTypes = { participantUid: PropTypes.string, page: PropTypes.string.isRequired, clinicSheets: PropTypes.bool };
+ControlAnalysesSection.defaultProps = { participantUid: null, clinicSheets: false };

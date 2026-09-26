@@ -46,7 +46,8 @@ import { PlotlyRenderManager } from "graphing-utility/Plotly";
 import Fold from "views/Reports/ClosedLoopSim/Fold";
 import PAL from "views/Reports/ClosedLoopSim/palette";
 
-import { num, fmtHz, fmtUs } from "./stimFormat";
+import { num, fmtHz, fmtUs, fmtMa } from "./stimFormat";
+import { BlockOfTimeMark, BlockOfTimeFootnote, blockOfTimeState, notCheckedText } from "./blockOfTime";
 import { TYPE, HEAD, SMALL } from "./typeScale";
 
 const CHECK_MARK = "✓";
@@ -251,7 +252,13 @@ function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, i
               </Grid>
               <Grid item xs={12} sm>
                 <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, mb: 0.6 }}>
-                  {r.resolved ? "a current CAN be recommended at this speed." : "no current can be recommended at this speed yet."}
+                  {r.resolved ? (
+                    <>
+                      {`a current CAN be recommended at this speed: left ${fmtMa(r.amp_mA_left)}, right ${fmtMa(r.amp_mA_right)}`}
+                      {blockOfTimeState(r) === "moves" && <BlockOfTimeMark />}
+                      {notCheckedText(r) ? ` (${notCheckedText(r)}).` : "."}
+                    </>
+                  ) : "no current can be recommended at this speed yet."}
                 </MDTypography>
                 {/* `flat_passes` is the BACKEND's own check that the surface VARIES enough
                     to mean something (it is NOT flat), so a tick here means "not flat,
@@ -529,6 +536,13 @@ export default function CurrentMapCard({ plan }) {
 
   if (!rateStrata.length) return null;
 
+  // Decision 253's block-of-time check beside each recommended current on the card (the PI,
+  // 2026-09-25): ONE note for the card, printed when any row now drawn carries the dagger.
+  const shownRows = [...(poolPulseWidths && pooled ? [pooled] : groups),
+    ...(poolPulseWidths && pooledClinic ? [pooledClinic] : clinicGroups)]
+    .flatMap((g) => g.rows || []);
+  const anyMoves = shownRows.some((r) => r && r.fitted && r.resolved === true && blockOfTimeState(r) === "moves");
+
   return (
     <Card>
       <MDBox p={2}>
@@ -576,6 +590,8 @@ export default function CurrentMapCard({ plan }) {
           pairingSentence={pairingSentence} pooledWanted={poolPulseWidths}
           pooledUnavailableReason={pooledClinic ? null
             : ((poolingClinic && poolingClinic.reason) || "no pooled clinic fit on this response")} />
+
+        <BlockOfTimeFootnote show={anyMoves} />
 
         <MDBox mt={1.5} display="flex" justifyContent="flex-start" gap={1} flexWrap="wrap">
           {pooled && (

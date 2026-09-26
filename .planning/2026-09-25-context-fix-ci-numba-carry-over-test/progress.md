@@ -37,3 +37,4 @@
 |-------|------------|
 | the bridge queued jobs behind the speed-up agent's probes | waited for each outbox file before relying on it |
 | first logging test passed without the fix (pytest logs at WARNING) | set root to DEBUG as the server does; RED, then fix |
+- 2026-09-25 night: built, uncommitted (all commits held until the tile fix lands): P-03 (a, b), P-20 re-save + version test, Q4 dagger + pooled-fit checks, Q10 per-file settings history, band detector 5a-c, TD/PSD heat-map line + page vocabulary, protocol revision, calibration figures moved, 18 June mock-ups staged for removal. Found: short shared tile copy (findings.md).

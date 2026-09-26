@@ -2,7 +2,8 @@
  * binarizationModel — single client-side source of truth for "which neural samples feed the
  * binarized biomarker at the current match window, and how each one is labeled."
  *
- * The backend's exploratory scan pools every full-spectrum PSD (TD streaming + montage/survey) on
+ * The backend's exploratory scan pools every all-band sample (TD from streaming and from montage/survey
+ * recordings, plus the patient-event PSDs) on
  * the six main bipolar channels, matches each to the NEAREST continuous PRO within ±tolerance, and
  * binarizes the matched values (tertile / percentile / median / kmeans). The availability payload
  * now ships `psd_scan_index` — one {t, channel, source} per pooled PSD — so the frontend can
@@ -139,7 +140,7 @@ function classify(v, cuts) {
  */
 /**
  * The coverage sentence's numbers (the PI, 2026-09-21): how many DISTINCT pain reports have ANY
- * neural sample (voltage-trace tile, montage FFT or patient-event FFT, on any contact pair) within
+ * neural sample (TD from a streaming or montage recording, or a patient-event PSD, on any contact pair) within
  * the match window, and within two fixed wider windows (±10 and ±60 min), either direction; plus
  * how many of the in-window reports have a sample BEFORE them, which is what the "prior" direction
  * keeps. Counted, not matched: no cap, no claiming, so a report counts once however many samples
@@ -210,10 +211,10 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
     matchable: false,
     unmatchableReason: reason,
     counts: { n_sessions: 0, n_matched: 0, n_high: 0, n_low: 0, n_excluded_middle: 0,
-              n_matched_td: 0, n_matched_montage: 0,
-              by_source: { low: { td: 0, montage: 0, lsb: 0 },
-                           high: { td: 0, montage: 0, lsb: 0 },
-                           excluded: { td: 0, montage: 0, lsb: 0 } },
+              n_matched_td: 0, n_matched_td_montage: 0, n_matched_event: 0, n_matched_other: 0,
+              by_source: { low: { td: 0, td_montage: 0, event: 0, other: 0, lsb: 0 },
+                           high: { td: 0, td_montage: 0, event: 0, other: 0, lsb: 0 },
+                           excluded: { td: 0, td_montage: 0, event: 0, other: 0, lsb: 0 } },
               tolerance_min: toleranceMin, median_abs_offset_min: null },
   });
   if (!Array.isArray(scanIndex) || !scanIndex.length) return emptyWith("no_scan_index");
@@ -383,29 +384,34 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
   const cuts = computeCuts(matchedValues, strategy, percentileLow, percentileHigh);
 
   // 2nd pass: assign each sample its bin + build the (channel,t) lookup for the timeline.
-  // Also tally matched samples by SOURCE (TD streaming vs montage/survey), since most of the pool
-  // is TD streaming, not montage PSDs — the readout breaks the count down so "neural samples" is
-  // not misread as "PSDs".
+  // Also tally matched samples by SOURCE, in the page's two groups: TD (streaming AND montage/survey
+  // recordings -- every montage sample in this index is Welch over the recording's own time-domain
+  // signal, so it is TD, the PI 2026-09-26) and PSD (the device's own patient-event snapshots).
   const samples = [];
   const binByKey = new Map();
-  let nHigh = 0, nLow = 0, nMid = 0, nMatchedTd = 0, nMatchedMontage = 0, nMatchedEvent = 0;
+  let nHigh = 0, nLow = 0, nMid = 0, nMatchedTd = 0, nMatchedTdMontage = 0, nMatchedEvent = 0;
+  let nMatchedOther = 0;
   // Per-group (low/excluded/high) modality breakdown for the in-plot detail boxes. The backend
   // `_psd_sample_index` stamps four `source` labels (bravo_service.py): time-domain streams are
-  // "BrainSense streaming" or "Indefinite stream", montage/survey is "Montage", and imported
-  // event-marker PSDs are "Patient event". srcBucket MUST key on those exact strings — an earlier
-  // version matched the substring "td", which NONE of them contain, so every time-domain sample
-  // fell through to the montage bucket and the hover's "TD" figure always read 0. LSB (band power)
-  // is NOT pooled here — its slot stays 0 (renderer shows "n/a").
-  const bySrc = { low: { td: 0, montage: 0, event: 0, lsb: 0 },
-                  high: { td: 0, montage: 0, event: 0, lsb: 0 },
-                  excluded: { td: 0, montage: 0, event: 0, lsb: 0 } };
+  // "BrainSense streaming" or "Indefinite stream", montage/survey is "Montage" (Welch over the
+  // recording's own time-domain signal, so TD), and imported event-marker PSDs are "Patient event".
+  // srcBucket MUST key on those exact strings — an earlier version matched the substring "td", which
+  // NONE of them contain, so every time-domain sample fell through to the montage bucket and the
+  // hover's "TD" figure always read 0. `td` is the WHOLE TD group (streaming + montage) and
+  // `td_montage` the montage part of it; until 2026-09-26 the montage was a separate bucket shown as
+  // "PSD (montage)". A label the server does not write lands in `other`, counted in neither group.
+  // LSB (band power) is NOT pooled here — its slot stays 0 (renderer shows "n/a").
+  const bySrc = { low: { td: 0, td_montage: 0, event: 0, other: 0, lsb: 0 },
+                  high: { td: 0, td_montage: 0, event: 0, other: 0, lsb: 0 },
+                  excluded: { td: 0, td_montage: 0, event: 0, other: 0, lsb: 0 } };
   const srcBucket = (src) => {
     const s = String(src || "").toLowerCase();
     // Time domain: BrainSense streaming + Indefinite stream (both are raw 250 Hz TD). Keep the
     // legacy "td" / "stream" / "indefinite" tokens so any older label still maps correctly.
     if (s.indexOf("td") >= 0 || s.indexOf("stream") >= 0 || s.indexOf("indefinite") >= 0) return "td";
+    if (s.indexOf("montage") >= 0 || s.indexOf("survey") >= 0) return "td_montage";
     if (s.indexOf("event") >= 0) return "event";
-    return "montage";   // "Montage" / "Montage PSD" / survey
+    return "other";
   };
   for (const s of obs) {
     let bin;
@@ -414,8 +420,14 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
       bin = classify(s.v, cuts);
       if (bin === "high") nHigh++; else if (bin === "low") nLow++; else nMid++;
       const srcKey = srcBucket(s.source);
-      if (srcKey === "td") nMatchedTd++; else if (srcKey === "event") nMatchedEvent++; else nMatchedMontage++;
-      if (bySrc[bin]) bySrc[bin][srcKey] += 1;   // bin is high|low|excluded (matched-only branch)
+      if (srcKey === "td") nMatchedTd++;
+      else if (srcKey === "td_montage") { nMatchedTd++; nMatchedTdMontage++; }
+      else if (srcKey === "event") nMatchedEvent++;
+      else nMatchedOther++;
+      if (bySrc[bin]) {                          // bin is high|low|excluded (matched-only branch)
+        if (srcKey === "td_montage") { bySrc[bin].td += 1; bySrc[bin].td_montage += 1; }
+        else bySrc[bin][srcKey] += 1;
+      }
     }
     samples.push({ ...s, bin });
     // Collision-proof key set: `Math.round(s.t)` buckets samples to the integer second, and >=2
@@ -448,8 +460,9 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
       n_matched: matchedValues.length,
       n_high: nHigh, n_low: nLow,
       n_excluded_middle: (strategy === "tertile" || strategy === "percentile") ? nMid : 0,
-      n_matched_td: nMatchedTd, n_matched_montage: nMatchedMontage,
-      n_matched_event: nMatchedEvent,
+      // n_matched_td is the whole TD group (streaming + montage); n_matched_td_montage its montage part.
+      n_matched_td: nMatchedTd, n_matched_td_montage: nMatchedTdMontage,
+      n_matched_event: nMatchedEvent, n_matched_other: nMatchedOther,
       by_source: bySrc,
       tolerance_min: toleranceMin,
       median_abs_offset_min: medianOffset,

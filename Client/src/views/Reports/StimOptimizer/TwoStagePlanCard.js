@@ -40,6 +40,24 @@ import { TYPE, HEAD, SizedFold as Fold } from "./typeScale";
 
 export const TWO_STAGE_CARD_TITLE = "Closed loop: may it start on the frozen setting?";
 
+//: The folded table's "best left / right current" is read from ONE fit per pulse-width pairing
+//: pooled across every stimulation rate (reference only; the page's recommended current is read
+//: from each rate's own map, `stage1_openloop._freeze_joint`). Decision 253's block-of-time check is
+//: NOT run on that fit, on purpose (2026-09-25, the PI's "deal with the Q4 edge cases"): it holds
+//: one stretch of time out and predicts it from the rest, and rates are tried in different periods,
+//: so a stretch held out is also a set of rates held out and a miss cannot be told apart from a
+//: rate the fit had not learnt. Measured on RCS08: in the REDCap fit at 60/160 us, the one behind
+//: 1.5 / 1.0 mA at 55 Hz, the first of its three stretches holds every epoch at 10 and 165 Hz and
+//: the other two hold 55 Hz alone; in the clinic stream's 60/60 us fit the three stretches share
+//: one rate between them. So the table says the currents are not checked, and why, and no dagger.
+export const ACROSS_RATES_NOT_CHECKED =
+  "The best currents in this table are read from one fit per pulse-width pairing pooled across every "
+  + "stimulation rate, for reference, and are not checked for movement between blocks of time. That "
+  + "check holds one stretch of time out and predicts it from the rest; because rates are tried in "
+  + "different periods, a stretch held out of this fit is also a set of rates held out, and a miss "
+  + "could not be told apart from a rate the fit had not learnt. The current this page recommends is "
+  + "read from each rate's own map, which is checked (the current map card).";
+
 const fmt = (v, d = 1) => (num(v) === null ? "—" : num(v).toFixed(d));
 const cell = (v) => {
   if (v === null || v === undefined) return "—";
@@ -263,6 +281,9 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
                 <MDBox mt={0.8}>
                   <MDTypography variant="caption" fontWeight="medium" component="div" sx={{ fontSize: TYPE.num }}>
                     The fit for each pulse width and side
+                  </MDTypography>
+                  <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.small, mt: 0.3 }}>
+                    {ACROSS_RATES_NOT_CHECKED}
                   </MDTypography>
                   <RecordTable rows={strata} columns={STRATA_COLUMNS} limit={20} />
                 </MDBox>

@@ -41,7 +41,7 @@ import MDTypography from "components/MDTypography";
 
 import PAL from "./palette";
 import Fold from "./Fold";
-import { fmtNum, fmtP } from "./deployFormat";
+import { fmtNum, fmtOddsRatioWithInterval, fmtP } from "./deployFormat";
 
 /**
  * The four answers, in a fixed order, with the colour and the plain-English gloss for each.
@@ -146,7 +146,7 @@ function Fact({ label, value }) {
   );
 }
 
-export default function BandStabilityPanel({ stability, cacheStatus }) {
+export default function BandStabilityPanel({ stability, cacheStatus, painScore }) {
   const s = stability || null;
   const answer = s && s.answer ? s.answer : "not tested";
 
@@ -167,6 +167,22 @@ export default function BandStabilityPanel({ stability, cacheStatus }) {
     .map((k) => `${k}: ${perState[k]}`)
     .join("  \u00b7  ");
 
+  // THE ODDS RATIO IN EACH STIMULATION STATE, WITH ITS INTERVAL (P-03, June audit item [0]). The
+  // numbers stay in the open (Fold's rule: values never folded). Printed only when the test ran.
+  const perStateOr = (s && s.test_ran && s.odds_ratio_per_state) || {};
+  const orLines = Object.keys(perStateOr).map((k) => {
+    const v = perStateOr[k] || {};
+    return `${k}: ${fmtOddsRatioWithInterval(v.odds_ratio, v.low, v.high)}`
+      + (isNum(v.n) ? `, ${v.n} measurements` : "");
+  });
+  // ONE PAIN REPORT, ONE STATE (P-03, June audit item [22]). Said when the answer carries the
+  // count, including when it is zero; an answer from before the rule carries none and says nothing.
+  const nSplit = s && s.test_ran ? s.n_reports_split_across_states : null;
+  const splitLine = !isNum(nSplit) ? null
+    : Number(nSplit) === 0 ? "No pain report had samples on both sides of a change of current."
+      : `${nSplit} pain report${Number(nSplit) === 1 ? "" : "s"} had samples recorded on both sides `
+        + "of a change of current; each is counted once, in the state of its first sample.";
+
   const interval = (s && Array.isArray(s.difference_interval) && s.difference_interval.length === 2)
     ? `${fmtNum(s.difference_interval[0], 2)} to ${fmtNum(s.difference_interval[1], 2)}`
     : null;
@@ -179,6 +195,13 @@ export default function BandStabilityPanel({ stability, cacheStatus }) {
       <MDTypography variant="caption" sx={{ color: "#4A4A4A" }}>
         {bandPhrase}
       </MDTypography>
+      {painScore && painScore.key ? (
+        <MDTypography variant="caption" display="block" data-testid="stability-pain-score"
+          sx={{ color: "#1A1A1A" }}>
+          {`Pain read as ${painScore.label || painScore.key} (the pain score chosen at the top of `
+            + "the page)."}
+        </MDTypography>
+      ) : null}
       {builtWhen ? (
         <MDTypography variant="caption" display="block" sx={{ color: "#4A4A4A", fontStyle: "italic" }}>
           {`Based on the recordings, settings and pain reports assembled ${builtWhen}; this test is `
@@ -209,6 +232,31 @@ export default function BandStabilityPanel({ stability, cacheStatus }) {
           >
             {s.reason}
           </MDTypography>
+        </MDBox>
+      ) : null}
+
+      {orLines.length ? (
+        <MDBox mb={1.25}>
+          <MDTypography variant="caption" display="block" fontWeight="medium"
+            sx={{ color: "#1A1A1A", lineHeight: 1.35 }}>
+            Odds ratio per standard deviation of band power, in each stimulation state
+          </MDTypography>
+          {orLines.map((line) => (
+            <MDTypography key={line} variant="caption" display="block"
+              sx={{ color: "#1A1A1A", lineHeight: 1.35 }}>
+              {line}
+            </MDTypography>
+          ))}
+          {s.odds_ratio_interval_method ? (
+            <MDTypography variant="caption" display="block" sx={{ color: "#4A4A4A", lineHeight: 1.35 }}>
+              {s.odds_ratio_interval_method}
+            </MDTypography>
+          ) : null}
+          {splitLine ? (
+            <MDTypography variant="caption" display="block" sx={{ color: "#4A4A4A", lineHeight: 1.35 }}>
+              {splitLine}
+            </MDTypography>
+          ) : null}
         </MDBox>
       ) : null}
 

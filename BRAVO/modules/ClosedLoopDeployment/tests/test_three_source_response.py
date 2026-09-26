@@ -109,7 +109,7 @@ def test_a_route_with_no_recording_does_not_borrow_from_the_others():
     comp = _build(tiles=_tiles(td_value=100.0, psd_value=None))
     psd = _panel(comp, TSR.SOURCE_DEVICE_SPECTRUM)
     assert psd.settled_power == [], "the absent route produced values from somewhere"
-    assert psd.absent_reason and "spectra" in psd.absent_reason
+    assert psd.absent_reason and "PSD snapshots" in psd.absent_reason
     assert _panel(comp, TSR.SOURCE_TIME_DOMAIN).settled_power, "the present route lost its values"
 
 

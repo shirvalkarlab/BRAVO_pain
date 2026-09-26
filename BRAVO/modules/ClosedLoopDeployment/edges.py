@@ -297,7 +297,7 @@ def state_edge(T, *, channel, center_hz, outcome="nrs", scale="power_linear",
                 "estimate": None, "auc": None, "auc_low": None, "auc_high": None,
                 "partial_r": None,
                 "why": (f"this reading came from the exported table, which holds one row per band "
-                        f"and no {adjust_for_column} value per spectral sample, so there is "
+                        f"and no {adjust_for_column} value per TD and PSD band-power sample, so there is "
                         f"nothing to take out here. The adjustment can only be made where the "
                         f"per-sample table is"),
             }
@@ -319,7 +319,7 @@ def state_edge(T, *, channel, center_hz, outcome="nrs", scale="power_linear",
             adjusted["ci"] = ([float(_lo) - 0.5, float(_hi) - 0.5]
                               if (_lo is not None and _hi is not None) else None)
         route = ("computed by the biomarker page's own estimator, called here on this module's "
-                 "table of spectral samples because no exported table was handed in. The exported "
+                 "table of TD and PSD band-power samples because no exported table was handed in. The exported "
                  "table is the intended route; this one runs the same estimator on the same rules")
     n = int(out.get("n_spectral_samples") or 0)
     n_reports = int(out.get("n_pain_reports") or 0)
@@ -343,7 +343,7 @@ def state_edge(T, *, channel, center_hz, outcome="nrs", scale="power_linear",
         f"{100 * float(out.get('confidence_level') or 0.95):.0f}% interval is {raw_ci}; 0.5 is what "
         f"coin flipping would give, and 0.5 was subtracted so that this module's existing test of "
         f"whether an interval excludes zero becomes a test of whether it excludes coin flipping. "
-        f"Clustered on the pain report: {n_reports} pain reports behind {n} spectral samples, and "
+        f"Clustered on the pain report: {n_reports} pain reports behind {n} TD and PSD band-power samples, and "
         f"the confidence interval comes from resampling whole pain reports rather than individual "
         f"samples, because many samples can share one pain report and therefore share its score "
         f"exactly. How pain was split into high and low: {split}. What the power values are: "

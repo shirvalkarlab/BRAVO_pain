@@ -468,7 +468,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         tdHx.push(D(ts + durS / 2));
         tdHy.push(yb + 0.15 * lh);
         tdHc.push([fmtHoverDate(ts), fmtHoverTime(ts), fmtDur(r.dur_s),
-                   isMontageTd ? "montage / survey sweep (stim-off)" : "streaming"]);
+                   isMontageTd ? "montage: survey sweep, stimulation off" : "streaming"]);
       });
       if (tdHx.length) {
         // Invisible markers span the FULL block height band so the hover triggers anywhere over the
@@ -477,7 +477,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         // streaming TD from the montage/survey TD coverage now drawn from the same lane.
         traces.push({ type: "scattergl", mode: "markers", x: tdHx, y: tdHy,
           marker: { size: 18, color: "rgba(0,0,0,0)" }, customdata: tdHc,
-          hovertemplate: `${prettyContact(labelFor(ch))} · time-domain %{customdata[3]}<br>`
+          hovertemplate: `${prettyContact(labelFor(ch))} · TD (%{customdata[3]})<br>`
             + `%{customdata[0]} · started %{customdata[1]}<br>`
             + `duration %{customdata[2]}<extra></extra>`,
           showlegend: false });
@@ -683,7 +683,10 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
           font: { size: 9.5, color: "#9AA0A6" } });
       }
 
-      // (c) PSD ticks (montage/survey) — these ARE pooled into the binarization scan. In
+      // (c) Top-of-lane ticks: one per montage/survey recording (TD: the page reads each through its
+      // own time-domain signal, and the binarization colour below is that TD sample's bin -- the
+      // PI, 2026-09-26; until then these were labelled PSD) and one per imported patient-event
+      // snapshot (PSD, teal). Both ARE pooled into the binarization scan. In
       // binarization mode each tick is colored by its matched pain bin (and a bit larger/taller so
       // the selected spectra read clearly); in-scan-but-unmatched ticks dim. Ticks that are NOT in
       // the scan at all (not poolable) are hidden in binarization mode — they can never be colored,
@@ -703,15 +706,19 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         // visible against the neutral-grey montage/survey ticks; binarization mode colors both by bin.
         const colors = psd.map((r) => (!binMode && isEvent(r) ? "#3B8A8F" : tickColor(r)));
         const sizes = colors.map((c, i) => (binMode && c !== DIM_GREY ? 11 : (isEvent(psd[i]) ? 6 : 7)));
-        // Hover label: for imported event-marker PSDs show the marker's own NAME (e.g. "Streaming",
-        // "Higher Pain"); for ordinary snapshots show the product.
-        const tickLabel = (r) => (isEvent(r) ? `${r.event_name || "Event"} (event PSD)` : r.product);
+        // Hover: an imported event-marker snapshot is PSD and shows the marker's own NAME (e.g.
+        // "Streaming", "Higher Pain"); a montage/survey recording is TD (montage) and shows which
+        // kind of recording it is (the raw product keys `survey_psd` / `montage_psd` are not printed).
+        const MONTAGE_KIND = { survey_psd: "survey recording", montage_psd: "montage recording" };
+        const tickLabel = (r) => (isEvent(r)
+          ? `PSD<br>${r.event_name || "Event"} (patient event)`
+          : `TD (montage)<br>${MONTAGE_KIND[r.product] || "montage or survey recording"}`);
         traces.push({ type: "scattergl", mode: "markers",
           x: psd.map((r) => D(tEpoch(r.t_start))), y: psd.map(() => yb + 0.93 * lh),
           marker: { symbol: "line-ns-open", size: sizes,
                     color: colors, line: { width: binMode ? 2.0 : 1.2 } },
           customdata: psd.map((r) => tickLabel(r)),
-          hovertemplate: `PSD snapshot<br>%{x}<br>%{customdata}<extra></extra>`, showlegend: false });
+          hovertemplate: `%{customdata}<br>%{x}<extra></extra>`, showlegend: false });
       }
 
       // (d) lane label — ALWAYS bold AND always dark ink, so every contact (committed or
@@ -770,10 +777,13 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         `${streamingCount ? ` · ${streamingCount} streaming` : ""}</span>` : ""}`,
       showarrow: false, xanchor: "right", font: { size: 24, color: "#555" } });
 
-    // ---- montage-PSD events: NeuralActivitySnapshot montage sweeps NOT already shown as a
+    // ---- montage snapshots: NeuralActivitySnapshot montage sweeps NOT already shown as a
     // montage/survey PSD recording (de-duplicated server-side). Rendered as small grey ticks along
     // the BOTTOM of the event strip so they read as "extra montage spectra captured here" without
-    // competing with the colored patient-annotation diamonds above them.
+    // competing with the colored patient-annotation diamonds above them. TD, not PSD (2026-09-26):
+    // a NeuralActivitySnapshot is the platform's own spectrum worked out from the montage's
+    // time-domain signal (DataAnalysis.processNeuralActivitySnapshot -> handlePowerSpectralEstimation),
+    // not the device's.
     const mWrap = av.montage_events || { events: [] };
     const mList = (mWrap.events || []).filter((e) => e && Number.isFinite(e.t));
     if (mList.length) {
@@ -783,8 +793,8 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         customdata: mList.map((e) => [
           e.peak_hz == null ? "n/a" : fmtHz(e.peak_hz),
           e.n_chan == null ? "?" : e.n_chan]),
-        hovertemplate: "montage PSD · %{x}<br>peak %{customdata[0]} Hz · %{customdata[1]} ch<extra></extra>",
-        name: "montage PSD", showlegend: false });
+        hovertemplate: "TD (montage) · %{x}<br>peak %{customdata[0]} Hz · %{customdata[1]} ch<extra></extra>",
+        name: "TD (montage)", showlegend: false });
     }
 
     // ---- pain row: dots + medium-alpha overlay line, with y-axis ticks -----------------------
@@ -939,15 +949,16 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       // legend uses a neutral grey rather than a fixed hue that no rendered trace actually uses. (Was
       // LSB_GREEN #2CA02C — removed: no LSB trace is drawn green, it only appeared in this legend.)
       const LANE_NEUTRAL = DIM_GREY;
-      // PSD tick glyphs — TWO distinct sources that previously both read as "montage PSD":
-      //  • grey ticks = montage/survey + NeuralActivitySnapshot device PSDs (carry their own TD)
-      //  • teal ticks = patient-triggered EVENT PSDs (incl. the auto 'Streaming' snapshots), PSD-only
+      // Tick glyphs — TWO distinct sources:
+      //  • grey ticks = montage/survey recordings and NeuralActivitySnapshot montage sweeps: TD (the
+      //    page reads each through its time-domain signal; until 2026-09-26 this entry called them PSD)
+      //  • teal ticks = patient-triggered EVENT snapshots (incl. the auto 'Streaming' ones): PSD, no TD
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "line-ns-open", size: 10, color: "#9AA0A6", line: { width: 1.4 } },
-        name: "montage PSD  (survey sweep + montage snapshot; hover → spectrum)" });
+        name: "TD (montage): one tick per montage or survey recording  (hover → which)" });
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "line-ns-open", size: 10, color: "#3B8A8F", line: { width: 1.4 } },
-        name: "streaming / event PSD  (patient-triggered LFP snapshot; PSD-only)" });
+        name: "PSD (the device's 30 s snapshot): patient event  (incl. the automatic 'Streaming' ones; no TD)" });
       // Patient-event diamonds (the EVENTS row) — one filled diamond per LABELED press, colored by
       // label. Add an explicit glyph so the row is documented (the per-label colors stay in the row).
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",

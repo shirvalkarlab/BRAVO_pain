@@ -1,3 +1,5 @@
+import { DEFAULT_PAIN_SCORE, PAIN_SCORE_OPTIONS } from "views/Reports/painScores";
+
 /**
  * The discovery request settings a committed band was chosen under, for the deployment summary and
  * the panels that share its request (moved here from `index.js` on 2026-09-23 so it can be tested).
@@ -31,9 +33,25 @@ export default function requestParamsFromCandidate(bc) {
   return rp;
 }
 
+/**
+ * The pain score the page's dropdown starts on (the PI, 2026-09-25 night): the one the band was
+ * chosen under -- its label's, else its grid's (decision 254) -- or NRS when it carries none, with
+ * `fromBand: false` so the page can say NRS was used for want of one.
+ */
+export function bandPainScore(bc) {
+  const lbl = (bc && bc.label) || {};
+  const gs = (bc && bc.grid_settings) || {};
+  const key = lbl.pro_metric || gs.sweep_metric;
+  const known = PAIN_SCORE_OPTIONS.some((m) => m.key === key);
+  return known ? { key, fromBand: true } : { key: DEFAULT_PAIN_SCORE, fromBand: false };
+}
+
 /** The summary's request settings: the band's own, plus the clinic-sheet switch when it is on
- *  (the PI, 2026-09-24). Only "1" is ever sent; off sends nothing, as before the button existed. */
-export function summaryRequestParams(bc, includeClinicSheets) {
+ *  (the PI, 2026-09-24). Only "1" is ever sent; off sends nothing, as before the button existed.
+ *  `painScore`, the page's dropdown (2026-09-25 night), overrides the band's own pain score, so the
+ *  deployment ROC, the mixed model and the other panels sharing this request follow it. */
+export function summaryRequestParams(bc, includeClinicSheets, painScore) {
   const rp = requestParamsFromCandidate(bc);
+  if (painScore) rp.LabelMetric = painScore;
   return includeClinicSheets ? { ...rp, IncludeClinicSheetRatings: "1" } : rp;
 }

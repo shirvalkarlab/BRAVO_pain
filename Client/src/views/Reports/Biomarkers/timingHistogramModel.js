@@ -9,21 +9,30 @@
  */
 
 /** The three sources the sample index carries, in legend order, with the offline figure's colours
- *  (matplotlib's default cycle: green for the time-domain signal, orange for the patient-event FFT, blue
- *  for the montage FFT) so the page's histogram matches the one the PI read first. */
+ *  (matplotlib's default cycle: green for the streaming TD, blue for the montage, orange for the
+ *  patient-event PSD) so the page's histogram matches the one the PI read first. The names follow
+ *  the PI's one vocabulary for the page (2026-09-25): TD for band power worked out from a
+ *  time-domain recording, PSD for the device's own 30 s snapshot; the caption under the legend
+ *  defines both. A MONTAGE OR SURVEY SAMPLE IS TD (2026-09-26): the sample index's "Montage" rows
+ *  are Welch over the recording's own time-domain signal (`_psd_sample_index` / `_welch_rows_into`
+ *  in Biomarkers/bravo_service.py), so it sits in the TD group, beside streaming, as "TD (montage)".
+ *  Until then it was drawn as "PSD (montage)". */
 export const SOURCE_SERIES = [
-  { key: "trace", name: "time-domain signal", color: "#2CA02C" },
-  { key: "event", name: "patient-event FFT", color: "#FF7F0E" },
-  { key: "montage", name: "montage FFT", color: "#1F77B4" },
+  { key: "trace", name: "TD (streaming)", color: "#2CA02C" },
+  { key: "td_montage", name: "TD (montage)", color: "#1F77B4" },
+  { key: "event", name: "PSD (patient event)", color: "#FF7F0E" },
 ];
 export const TAIL_GREY = "#B0B7BC";
 
-/** Which series a sample index entry's `source` belongs to: the same buckets the card's model uses. */
+/** Which series a sample index entry's `source` belongs to: the same buckets the card's model uses.
+ *  The server writes four labels ("BrainSense streaming", "Indefinite stream", "Montage",
+ *  "Patient event"); a label it does not write belongs to no series and is not drawn. */
 export function seriesOf(source) {
   const s = String(source || "").toLowerCase();
   if (s.indexOf("td") >= 0 || s.indexOf("stream") >= 0 || s.indexOf("indefinite") >= 0) return "trace";
+  if (s.indexOf("montage") >= 0 || s.indexOf("survey") >= 0) return "td_montage";
   if (s.indexOf("event") >= 0) return "event";
-  return "montage";
+  return "other";
 }
 
 /** Signed minutes from each sample to its nearest report: sample time minus report time, so a

@@ -176,13 +176,13 @@ function BiomarkerTimeline({ data, height }) {
       // carries an above-cap band, don't print a misleading >50 Hz frequency in the title.
       const fhz = b && typeof b[4] === "number" ? b[4] : null;
       const title = (fhz != null && fhz < 50)
-        ? `Time-domain biomarker — ${fhz.toFixed(1)} Hz`
-        : "Time-domain biomarker (PSD)";
+        ? `Time domain (TD) biomarker — ${fhz.toFixed(1)} Hz`
+        : "Time domain (TD) biomarker";
       rows.push({
         title,
-        unit: "PSD power",
+        unit: "TD band power",
         hemi: null,
-        traces: [{ name: "PSD biomarker", y: col("td_biomarker_value"), color: C.td }],
+        traces: [{ name: "TD biomarker", y: col("td_biomarker_value"), color: C.td }],
       });
     }
     // POWER-DOMAIN ROWS. Each sensing contact gets its OWN row (no cross-channel pooling — you

@@ -1074,7 +1074,7 @@ def build_comparison(*, label, ramped_side, sensing_contact, steps, visit_date,
         SOURCE_DEVICE_SPECTRUM, psd.get("t", []), psd.get("lsb", np.empty((0, centres.size))), None,
         centres, steps, band_index=j, programmed_centre_hz=programmed, usable_band_mask=usable,
         window_s=window_s, min_pieces=min_pieces, run_window=run_window,
-        absent_when_empty=("the device produced none of its own spectra during this run of rising "
+        absent_when_empty=("the device produced none of its own PSD snapshots during this run of rising "
                            "current. It computes one only when the patient presses the button or "
                            "when a contact survey is run with the stimulation off, and neither "
                            "happened here")))

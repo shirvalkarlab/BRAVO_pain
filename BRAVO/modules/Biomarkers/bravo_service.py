@@ -42,6 +42,7 @@ from .routines import availability
 from .routines import band_results_tables
 from .routines import sweep_settings
 from .routines import stim_current
+from .routines import deployment_current
 from .routines import sheet_ratings
 from .routines import local_time
 from modules.DecodeCommon import data_start as _data_start
@@ -1055,18 +1056,34 @@ def _lsb_spectrum_signature(participant_uid, pro_times, td_recordings, event_psd
                 n = np.asarray(freq).size
             else:
                 n = 0
-            h.update(f"{st}|{names}|{n};".encode())
+            # The label a tile carries and the band a device PSD is read at are built from these
+            # (decision 289), so two lists that differ only there are two input sets.
+            h.update(f"{st}|{names}|{n}|{r.get('product')}|{r.get('RecordingType')}|"
+                     f"{r.get('center_hz')}|{r.get('source')};".encode())
     h.update(np.asarray(centers, dtype=float).tobytes())
     return h.hexdigest()[:16]
 
 
 def _stamp_td_product(td_recordings):
-    """Tag each decoded TD recording dict with a `product` key (streaming_td / indefinite) IN PLACE so
+    """Tag each decoded TD recording dict with a `product` key (streaming_td / indefinite / montage_td) IN PLACE so
     the raw cache can label its window source (TD_PRODUCT_SOURCE_LABEL). Decoded payloads carry the
     indefinite/streaming discriminator (`Source`=='indefinite' or an `IndefiniteStream` flag) but no
-    `product`; montage/survey TD passed in separately is tagged montage_td. Idempotent."""
+    `product`; montage/survey TD passed in separately is tagged montage_td. Idempotent.
+
+    A SURVEY OR MONTAGE RECORDING IS NEVER LABELLED STREAMING (decision 289). Callers hand the tile
+    builder the time-domain recordings and the survey/montage recordings in one list, and one route
+    stamped the whole list while the others stamped the time-domain part only, so the same survey
+    tile was labelled "BrainSense streaming" or "time-domain" depending on which page had run first
+    in that worker, and the saved copy carried whichever. Decision 289 left them unstamped, so their
+    pieces fell back to "time-domain"; since 2026-09-26 (the PI: "call the Montage recordings
+    Montage") every route stamps them `montage_td`, which the label table reads as "Montage". The
+    pieces are still cut from the recording's time-domain signal and still sit in the tiles'
+    time-domain family: the label is the only thing that changed, and no reader groups by it."""
     for r in (td_recordings or []):
         if not isinstance(r, dict) or r.get("product"):
+            continue
+        if r.get("RecordingType") in AVAILABILITY_PSD_TYPES:
+            r["product"] = "montage_td"
             continue
         if r.get("RecordingType") == "MedtronicIndefiniteStream" or r.get("Source") == "indefinite" or r.get("IndefiniteStream"):
             r["product"] = "indefinite"
@@ -1118,7 +1135,12 @@ _RAW_LSB_SHARED_KIND = "raw_lsb_tiles"
 #: do not capture — the tiling itself, the quality gate, the channel assignment. This module also
 #: carries `_CHANNEL_CANON_VERSION`, `_TD_CENTERED_VERSION` and `_TD_MISSING_VERSION` for the
 #: per-recording spectrum files for the same reason.
-_RAW_LSB_RULE_VERSION = "v1_tiles"
+# v2 (2026-09-25, decision 289): one input set for every caller (the saved copy is written and read
+# only for it), survey/montage recordings never labelled streaming, and nothing before the implant
+# date -- the implant date is in the key beside this.
+# v3 (2026-09-26): a survey or montage recording's 3 s pieces are labelled "Montage" instead of the
+# fallback "time-domain"; every value is unchanged, the saved copy rebuilds to carry the label.
+_RAW_LSB_RULE_VERSION = "v3_montage_pieces_labelled_montage"
 
 #: ===========================================================================================
 #: THE STORE ITSELF NOW LIVES IN ONE PLACE: `modules/CacheStore/store.py`.
@@ -1340,8 +1362,11 @@ def _raw_lsb_shared_signature(participant_uid, centers, *, identity=None):
         return None
     cen = np.asarray(centers, dtype=float)
     import hashlib
+    # THE IMPLANT DATE (decision 289): tiles and device PSDs before it are cut at the build, so a
+    # change of start changes the product with no change to any row.
     return (ident, hashlib.sha1(cen.tobytes()).hexdigest()[:16], int(cen.size),
-            _raw_lsb_constants_block())
+            _raw_lsb_constants_block(),
+            ("data_start", float(_data_start.data_start_s(participant_uid) or 0.0)))
 
 
 # Which fields of a window family are stored in which shape. Storing the per-window rows as one
@@ -1462,6 +1487,9 @@ def _raw_lsb_cache_cached(participant_uid, channels, td_recordings, event_psd_bl
     """
     if not channels:
         return {}
+    # The time-domain recordings are labelled here, whoever the caller is, so the labels in the
+    # product never depend on which page happened to stamp the list first (decision 289).
+    _stamp_td_product(td_recordings)
     # reuse the recording-identity signature with an EMPTY pro set so the key is PRO-independent.
     sig = _lsb_spectrum_signature(participant_uid, np.asarray([], dtype=float),
                                   td_recordings, event_psd_blocks, centers,
@@ -1474,6 +1502,20 @@ def _raw_lsb_cache_cached(participant_uid, channels, td_recordings, event_psd_bl
     # `shared_sig` lets a caller that has already built the tile key (the sweep does, for its
     # own key) hand it in rather than have the recording rows enumerated and hashed a second time.
     if not (use_shared_cache and shared_cache_dir() is not None):
+        shared_sig = None
+    elif not _is_the_one_input_set(participant_uid, sig, centers):
+        # ONE SAVED COPY, ONE INPUT SET (decision 289). The saved copy's key names the
+        # participant's rows, every constant and the implant date, which is everything that
+        # decides the tiles WHEN the caller hands in the one input set every page uses. A caller
+        # that hands in anything else -- the Stim Optimizer used to pass the time-domain
+        # recordings alone -- would otherwise read the copy built from the full set, or write a
+        # short one for everyone: on RCS08 on 2026-09-25 it wrote 293,108 tiles where the full set
+        # is 303,321. Such a caller builds in memory and neither reads nor writes the copy.
+        with _RAW_LSB_INPUT_EVENTS_LOCK:
+            _RAW_LSB_INPUT_EVENTS["not_the_one_input_set"] += 1
+        _log.warning("Biomarkers: a tile request for %s did not hand in the one input set every "
+                     "page uses; built in memory, the saved copy neither read nor written",
+                     participant_uid)
         shared_sig = None
     elif shared_sig is None:
         try:
@@ -1547,12 +1589,13 @@ def _build_raw_lsb_cache(participant_uid, channels, td_recordings, event_psd_blo
     # resolving the column and converting every recording to float once per channel.
     index = (availability.channel_index(td_recordings, None)
              if availability.USE_CHANNEL_INDEX else None)
+    start_s = _data_start.data_start_s(participant_uid)
     for raw_ch in channels:
         key = availability._canon_channel(raw_ch)
         try:
-            out[raw_ch] = availability.raw_lsb_spectrum_cache(
+            out[raw_ch] = _cut_before_start(availability.raw_lsb_spectrum_cache(
                 key, cen, td_recordings=td_recordings, event_psd_recordings=event_psd_blocks,
-                montage_psd_recordings=montage_psd_blocks, index=index)
+                montage_psd_recordings=montage_psd_blocks, index=index), start_s)
         except Exception as e:
             _log.warning("Biomarkers: raw LSB cache failed for %s (%s)", raw_ch, e)
     remembered = _remember_raw_lsb_cache(sig, out)
@@ -1567,6 +1610,103 @@ def _build_raw_lsb_cache(participant_uid, channels, td_recordings, event_psd_blo
             _log.info("Biomarkers: the tiles could not be put in shareable shape (%r); they stay "
                       "in this process's memory only", exc)
     return out
+
+
+#: How often a tile request handed in something other than the one input set (decision 289).
+_RAW_LSB_INPUT_EVENTS = {"not_the_one_input_set": 0}
+_RAW_LSB_INPUT_EVENTS_LOCK = threading.Lock()
+
+#: The one input set's own digest, per recording set and band-centre grid, so it is worked out
+#: once per worker per ingest rather than on every request.
+_CANONICAL_TILE_DIGEST_MEMO = {}
+_CANONICAL_TILE_DIGEST_MEMO_LOCK = threading.Lock()
+
+
+def _raw_lsb_canonical_inputs(participant_uid):
+    """The one input set the tiles are built from, for every page (decision 289):
+    ``(channels, recordings, patient_event_blocks, montage_blocks)``.
+
+    The recordings are the time-domain streams AND the survey/montage recordings (their raw trace
+    is cut into tiles too); the patient-event device PSDs are assigned to a sensing pair through
+    the sensing index; the montage device PSDs come from the survey/montage list. All of it comes
+    from `_recordings_setup_cached`, which the heat maps and the control analyses already read.
+    """
+    td, psd_list, event_blocks, montage_blocks, _order, channels = \
+        _recordings_setup_cached(participant_uid)
+    return (list(channels or []), list(td or []) + list(psd_list or []), event_blocks,
+            montage_blocks)
+
+
+def _raw_lsb_cache_canonical(participant_uid, *, centers=_LSB_SPECTRUM_CENTERS,
+                             use_shared_cache=True):
+    """The tiles for one participant, asked for with the one input set. Every module that wants
+    the tiles and does not already hold the setup asks through this (the Stim Optimizer since
+    decision 289), so no page can assemble a different list."""
+    channels, recordings, event_blocks, montage_blocks = _raw_lsb_canonical_inputs(participant_uid)
+    if not channels:
+        return {}
+    return _raw_lsb_cache_cached(participant_uid, channels, recordings, event_blocks,
+                                 montage_psd_blocks=montage_blocks, centers=centers,
+                                 use_shared_cache=use_shared_cache)
+
+
+def _is_the_one_input_set(participant_uid, sig, centers):
+    """Whether a tile request's own input digest (`sig`, `_lsb_spectrum_signature` of what the
+    caller handed in) is the digest of the one input set. False when the set cannot be read,
+    so a failure costs a build in memory, never a wrong saved copy."""
+    try:
+        channels, recordings, event_blocks, montage_blocks = \
+            _raw_lsb_canonical_inputs(participant_uid)
+        _stamp_td_product(recordings)
+        memo_key = (_recording_set_identity(participant_uid),
+                    np.asarray(centers, dtype=float).tobytes())
+        with _CANONICAL_TILE_DIGEST_MEMO_LOCK:
+            canonical = _CANONICAL_TILE_DIGEST_MEMO.get(memo_key)
+        if canonical is None:
+            canonical = _lsb_spectrum_signature(participant_uid, np.asarray([], dtype=float),
+                                                recordings, event_blocks, centers,
+                                                montage_psd_blocks=montage_blocks) + "|raw"
+            with _CANONICAL_TILE_DIGEST_MEMO_LOCK:
+                if len(_CANONICAL_TILE_DIGEST_MEMO) >= 8:
+                    _CANONICAL_TILE_DIGEST_MEMO.pop(next(iter(_CANONICAL_TILE_DIGEST_MEMO)))
+                _CANONICAL_TILE_DIGEST_MEMO[memo_key] = canonical
+        return canonical == sig
+    except Exception as exc:                                     # noqa: BLE001
+        _log.warning("Biomarkers: could not read the one tile input set for %s (%r); this "
+                     "request builds in memory", participant_uid, exc)
+        return False
+
+
+#: Per-window fields of each family, cut together by `_cut_before_start`.
+_RAW_LSB_TD_WINDOW_FIELDS = ("t", "lsb", "saturated", "source", "n_finite_s", "ok")
+_RAW_LSB_PSD_WINDOW_FIELDS = ("t", "lsb", "calibrated", "source")
+
+
+def _cut_before_start(entry, start_s):
+    """One pair's tiles with nothing from before the implant date (the PI, 2026-09-25; decisions
+    260 and 263). A 3-second piece is dropped when its FIRST sample is before the start (its stored
+    time is its middle), so a recording that spans the start keeps only the pieces wholly after
+    it; a device PSD is dropped when its time is before the start. The TD recordings, the
+    survey/montage recordings and the montage PSDs are not cut where they are loaded (only the
+    chronic logs and the patient events are), so the cut is made here, on the product, whoever
+    the caller. No start means nothing is cut."""
+    if not isinstance(entry, dict) or not start_s or float(start_s) <= 0:
+        return entry
+    half = float(entry.get("window_s") or analytics.RAW_LSB_WINDOW_SECONDS) / 2.0
+    for fam, fields, lead in (("td", _RAW_LSB_TD_WINDOW_FIELDS, half),
+                              ("psd", _RAW_LSB_PSD_WINDOW_FIELDS, 0.0)):
+        f = entry.get(fam)
+        if not isinstance(f, dict) or not f.get("t"):
+            continue
+        keep = _data_start.keep_from(np.asarray(f["t"], dtype=float) - lead, start_s)
+        if keep.all():
+            continue
+        for k in fields:
+            if k in f and f[k] is not None:
+                f[k] = [v for v, kp in zip(f[k], keep) if kp]
+    entry["n_td_windows"] = len((entry.get("td") or {}).get("t") or [])
+    entry["n_psd_windows"] = len((entry.get("psd") or {}).get("t") or [])
+    return entry
 
 
 def _remember_raw_lsb_cache(sig, out):
@@ -1635,19 +1775,11 @@ def warm_shared_raw_cache(participant_uid, *, centers=_LSB_SPECTRUM_CENTERS):
         if path is not None and os.path.exists(path):
             return done("already_warm", path=path)
 
-        td = _load_recordings(participant_uid, TIMEDOMAIN_TYPES)
-        psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
-        channels = list(dict.fromkeys(availability._canon_channel(c)
-                                      for c in (_derive_chan_order(td) or [])))
+        # The one input set every page uses (decision 289), not a second copy of its recipe.
+        channels, _recs, _ev, _mt = _raw_lsb_canonical_inputs(participant_uid)
         if not channels:
             return done("nothing_to_build")
-        sensing_idx = _build_sensing_config_index(list(td or []))
-        event_blocks = _event_psd_lsb_blocks(participant_uid, sensing_index=sensing_idx)
-        montage_blocks = _montage_psd_lsb_blocks(participant_uid, montage_recordings=psd_list)
-        _stamp_td_product(list(td or []))
-        _raw_lsb_cache_cached(participant_uid, channels,
-                              list(td or []) + list(psd_list or []), event_blocks,
-                              montage_psd_blocks=montage_blocks, centers=centers)
+        _raw_lsb_cache_canonical(participant_uid, centers=centers)
         landed = bool(path is not None and os.path.exists(path))
         return done("built", path=path, file_written=landed, channels=channels)
     except Exception as exc:
@@ -5361,8 +5493,11 @@ STABILITY_GRID_KIND = "biomarker_band_stability_grid"
 #: Bump when anything about how a point's answer is computed changes, so an entry built under the
 #: old rule is never served as if it carried the new one.
 # v2 read decibels off the pooled detail (decision 204); v3 raw power; v4 (2026-09-24) the shared
-# setup honours the clinic-sheet switch, so a sheets-on grid's answers are rebuilt with the sheets.
-STABILITY_GRID_RULE_VERSION = "v4_sheet_ratings_in_setup"
+# setup honours the clinic-sheet switch, so a sheets-on grid's answers are rebuilt with the sheets;
+# v5 (2026-09-25, P-03) one pain report counted in one stimulation state and one week, and each
+# state's odds ratio carries its interval; v6 (2026-09-25 night) the per-state standard errors,
+# and so the "behaves the same" check, are clustered on the pain report.
+STABILITY_GRID_RULE_VERSION = "v6_se_clustered_on_report"
 
 
 def _stability_grid_sig_tuple(sweep_key, *, band_width_hz, points):
@@ -5523,10 +5658,13 @@ def compute_and_store_stability_grid(participant_uid, *, request_data=None, work
         # `extra` names the grid this answer is for, so a reader on another page that holds the
         # grid but cannot rebuild this key (the Closed-Loop card) can find the answer for THAT
         # grid rather than the newest one: the answer depends on the grid's pain score, and the
-        # kind keeps one entry per grid (2026-09-23).
+        # kind keeps one entry per grid (2026-09-23). It names the rule too (2026-09-25), so that
+        # reader can refuse an answer computed under a rule no longer in force without opening it.
         _cache_store.store(STABILITY_GRID_KIND, participant_uid, sig, payload,
                            writer="biomarkers", trigger="stability_grid", provenance=prov,
-                           root=_SHARED_CACHE_DIR_OVERRIDE, extra={"sweep_key": str(sweep_key)})
+                           root=_SHARED_CACHE_DIR_OVERRIDE,
+                           extra={"sweep_key": str(sweep_key),
+                                  "rule_version": STABILITY_GRID_RULE_VERSION})
         out["stored"] = True
     except Exception as exc:                                     # noqa: BLE001
         # A failed write is reported, never swallowed into a success: a caller that believes the
@@ -6781,6 +6919,26 @@ def band_deployment_roc_by_era(request_data):
     }
 
 
+def _summary_auc_current_removed(core, roc, n_boot):
+    """The deployment summary's area under the curve read again with the stimulation current in
+    force at each sample taken out of the band power (`routines/deployment_current.py`), on the
+    summary's own samples, split and direction, the clinic-sheet ratings included exactly when the
+    summary includes them. Never raises: a failure is a refusal in words, logged, and the plain
+    summary is unaffected."""
+    try:
+        stream = stim_current.settings_stream_for(core["participant_uid"])
+        return deployment_current.auc_with_current_taken_out(
+            core["pooled"], core["channel"], core["center_hz"],
+            band_width_hz=core["band_width_hz"], strategy=core["label_strategy"],
+            low_pct=core["low_pct"], high_pct=core["high_pct"], settings_stream=stream,
+            plain_roc=roc, n_boot=n_boot, seed=0,
+            settings_store_key=(stream or {}).get("store_key"))
+    except Exception as exc:                                     # noqa: BLE001
+        _log.warning("Biomarkers: the summary's reading with the current taken out raised for %s",
+                     core.get("participant_uid"), exc_info=True)
+        return deployment_current._refused(f"the reading could not be made: it raised {exc!r}")
+
+
 def deployment_summary(request_data):
     """Phase E: one authoritative Deploy-to-Percept review payload for a committed band.
 
@@ -6821,6 +6979,10 @@ def deployment_summary(request_data):
         pooled, channel, center_hz, band_width_hz=band_width_hz,
         strategy=core["label_strategy"], low_pct=core["low_pct"], high_pct=core["high_pct"],
         n_boot=n_boot)
+    # THE SAME NUMBER WITH THE STIMULATION CURRENT TAKEN OUT, printed beside the plain one (the PI,
+    # 2026-09-25, answer 6). Same samples, same split, same direction; descriptive only, so it is
+    # read by no gate, caveat or verdict below.
+    auc_current_removed = _summary_auc_current_removed(core, roc, n_boot)
     # Audit [18]: per-week threshold-drift diagnostic. Does the optimal Youden cut-point move
     # systematically over calendar time? A single fixed device threshold fit on all data would be
     # miscalibrated in later weeks if so. Fail-closed to 'not_assessed' when too few weeks qualify.
@@ -7228,6 +7390,8 @@ def deployment_summary(request_data):
             "p_glmer": _ff(g.get("p")), "n_matched_samples": g.get("n"),
             "n_clusters": roc.get("n_clusters") if roc.get("available") else None,
             "operating_point": roc.get("operating_point") if roc.get("available") else None,
+            # the area under the curve above, read again with the current taken out (answer 6)
+            "auc_current_removed": auc_current_removed,
         },
         "power": power,
         # Forward / out-of-sample validation (audit C2): the held-out AUC + CI shown beside the
@@ -8048,7 +8212,7 @@ def band_time_sweep_cell_for_participant(request_data):
                                       event_blocks, montage_psd_blocks=montage_blocks)
     raw_cache = raw_by_ch.get(canon_channel)
     if not raw_cache:
-        return dict(blank, message=f"No cached spectra for sensing contact pair {channel}.")
+        return dict(blank, message=f"No cached TD and PSD band power for sensing contact pair {channel}.")
 
     power, _stats, centers, _col, chunk_excl, _from_device = _band_time_sweep_power_by_seconds(
         pro_times, raw_cache, center_hz, tol_s=tol_s, allow_window_reuse=allow_window_reuse,
@@ -8127,7 +8291,7 @@ sweep_settings_tag = sweep_settings.sweep_settings_tag                       # r
 sweep_settings_tag_from_request = sweep_settings.sweep_settings_tag_from_request
 
 
-_BAND_SWEEP_RULE_VERSION = "v22_effective_count_on_each_cell"   # v21: outlier rule on raw power; v20: cell p-values, decision 188
+_BAND_SWEEP_RULE_VERSION = "v23_correlation_by_recording_source"   # v22: effective count on each cell; v21: outlier rule on raw power; v20: cell p-values, decision 188
 
 #: Response fields that are timings of the run that produced them, not results. They are not
 #: compared when a stored response is checked against a fresh one, and a served response keeps the

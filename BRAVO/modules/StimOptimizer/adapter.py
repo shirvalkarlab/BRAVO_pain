@@ -275,38 +275,164 @@ def settings_stream(participant, *, source_types=_JSON_SOURCE_TYPES) -> pd.DataF
     return got
 
 
-def _build_settings_stream(participant, *, source_types=_JSON_SOURCE_TYPES) -> pd.DataFrame:
-    """Parse the stored Percept files into the settings stream. The store is not consulted here."""
-    from Server import models
-    from modules import DataCurator
-
-    sfs = list(models.SourceFile.objects.filter(owner=participant))
-    recs, n_read, n_failed = [], 0, 0
-    for sf in sfs:
-        if source_types and getattr(sf, "type", None) not in source_types:
+def _rows_from_session(d) -> list:
+    """The settings rows ONE decrypted session file contributes, in the order the builder has
+    always made them: the active groups of its end-of-session state, then those of each dated
+    snapshot. A pure function of the file's content, which is what lets the rows be kept per file
+    (`THERAPY_SETTINGS_BY_FILE_KIND`)."""
+    recs = []
+    t_session = pd.to_datetime(d.get("SessionDate"), errors="coerce", utc=True)
+    for g in ((d.get("Groups") or {}).get("Final") or []):
+        if not g.get("ActiveGroup"):
             continue
-        try:
-            d = json.loads(DataCurator.loadCacheFile(sf))
-            n_read += 1
-        except Exception as e:                      # encrypted-cache miss, non-JSON, pointer moved
-            n_failed += 1
-            _log.debug("StimOptimizer: could not read SourceFile %s (%s)", getattr(sf, "uid", "?"), e)
-            continue
-        t_session = pd.to_datetime(d.get("SessionDate"), errors="coerce", utc=True)
-        for g in ((d.get("Groups") or {}).get("Final") or []):
+        for tag, s in group_settings(g).items():
+            recs.append(dict(t=t_session, src="session", hemi=tag, **s))
+    for snap in (d.get("GroupHistory") or []):
+        ts = pd.to_datetime(snap.get("SessionDate"), errors="coerce", utc=True)
+        for g in (snap.get("Groups") or []):
             if not g.get("ActiveGroup"):
                 continue
             for tag, s in group_settings(g).items():
-                recs.append(dict(t=t_session, src="session", hemi=tag, **s))
-        for snap in (d.get("GroupHistory") or []):
-            ts = pd.to_datetime(snap.get("SessionDate"), errors="coerce", utc=True)
-            for g in (snap.get("Groups") or []):
-                if not g.get("ActiveGroup"):
-                    continue
-                for tag, s in group_settings(g).items():
-                    recs.append(dict(t=ts, src="history", hemi=tag, **s))
+                recs.append(dict(t=ts, src="history", hemi=tag, **s))
+    return recs
+
+
+# --------------------------------------------------------------------------------------------------
+# the per-file settings history: each stored file parsed once (the PI's yes, 2026-09-25)
+# --------------------------------------------------------------------------------------------------
+#: The rows each stored session file contributed to the settings stream, kept in the one store so
+#: that a new file costs one parse instead of all of them. Measured on RCS08 on 2026-09-25 before
+#: building it: a cold build of the stream decrypts 582 files (4.1 GB of JSON text) and takes 34.4 s,
+#: of which reading, checking, decompressing, decrypting and parsing the files is all but 0.7 s --
+#: JSON parsing 18.7 s, decryption 11.9 s, file reads 5.9 s -- and the frame, sort and implant-date
+#: cut 0.01 s. Every new session file used to repeat all of it.
+#:
+#: WHAT THE ENTRY IS. A mapping from each file's identity -- its uid and the content hash the
+#: database holds for it, never its name, which can carry a patient's name -- to the list of row
+#: dicts `_rows_from_session` made from it, pickled whole. The hash is the HMAC the loader checks
+#: on every read, so a row list filed under it describes exactly the bytes that would be decrypted.
+#: A file that could not be read is never in it: a build with an unreadable file writes no entry,
+#: so the next build tries that file again rather than remembering it as "no rows". A file that
+#: parsed to no rows IS in it, as an empty list.
+#:
+#: HOW IT IS READ. The newest entry for the participant whose parsing rule matches is the donor;
+#: every file whose identity it holds is reused, the rest are decrypted and parsed, and the rows are
+#: assembled in the database's file order, then framed, dropped, sorted and cut at the implant date
+#: exactly as before. So the list handed to the frame is the same list of equal dicts in the same
+#: order, and the (unstable) sort sees the same input.
+#:
+#: WHY RAW. Like `therapy_settings`, it records what the device was programmed to deliver, parsed
+#: from the device's own files with no module's choice in between; it is the same product before
+#: its rows are pooled. Nothing reads it as evidence and nothing cites it.
+#:
+#: ONE ENTRY PER PARTICIPANT (the store's default), replaced whole on each new file set: the donor
+#: is always the previous entry, and an older one could only hold files the newer one also holds.
+THERAPY_SETTINGS_BY_FILE_KIND = "therapy_settings_by_file"
+_THERAPY_SETTINGS_BY_FILE_RULE_VERSION = "v1_rows_per_source_file"
+
+_PARSE_DIGEST = None
+
+
+def _settings_parse_digest():
+    """A digest of the code that turns one file into rows, and of the pandas version that parses
+    its dates, so a change to either reuses nothing (decision 41's code digest, narrowed to the
+    parse). Includes decision 136's limit rule, which lives in the closed-loop module; when that
+    rule cannot be imported the rows differ (the limit reads None), so the digest says so."""
+    global _PARSE_DIGEST
+    if _PARSE_DIGEST is None:
+        import inspect
+        parts = [_THERAPY_SETTINGS_BY_FILE_RULE_VERSION, "pandas " + pd.__version__]
+        for fn in (_rows_from_session, group_settings, contact_label,
+                   _sensing_upper_is_patient_limit):
+            parts.append(inspect.getsource(fn))
+        try:
+            try:
+                from modules.ClosedLoopDeployment import session_report_facts as _srf
+            except ImportError:
+                from ClosedLoopDeployment import session_report_facts as _srf
+            parts.append(inspect.getsource(_srf._patient_limits_configured))
+        except Exception:                             # noqa: BLE001 -- the rule could not be read
+            parts.append("decision 136's limit rule unavailable")
+        _PARSE_DIGEST = _hashlib.blake2b("\n".join(parts).encode("utf8"),
+                                         digest_size=16).hexdigest()
+    return _PARSE_DIGEST
+
+
+def _file_identity(sf):
+    """A stored file's identity from its database row: uid and content hash, never its name."""
+    return f"{getattr(sf, 'uid', '')}~{getattr(sf, 'hashed', '')}"
+
+
+def _rows_by_file_signature(participant, source_types, idents, parse_digest):
+    blob = "|".join(sorted(idents)).encode("utf8")
+    return (THERAPY_SETTINGS_BY_FILE_KIND, _THERAPY_SETTINGS_BY_FILE_RULE_VERSION, parse_digest,
+            _participant_uid(participant), tuple(source_types) if source_types else None,
+            len(idents), _hashlib.blake2b(blob, digest_size=16).hexdigest())
+
+
+def _rows_by_file_donor(participant, source_types, parse_digest):
+    """`(rows_by_identity, signature_key)` of the newest per-file entry written under this parsing
+    rule, or `({}, None)`. A half-written entry has no sidecar and is never seen; an entry whose
+    payload cannot be read is discarded by the store and reads as none."""
+    want = list(source_types or ())
+
+    def match(meta):
+        extra = meta.get("extra") or {}
+        return extra.get("parse_digest") == parse_digest and extra.get("source_types") == want
+    try:
+        got, stamp = _cache_store.load_newest(THERAPY_SETTINGS_BY_FILE_KIND,
+                                              _participant_uid(participant),
+                                              root=_SHARED_CACHE_DIR_OVERRIDE, match=match)
+    except Exception as exc:                          # noqa: BLE001 -- a donor is an optimisation
+        _log.info("StimOptimizer: per-file settings rows unreadable, parsing every file (%r)", exc)
+        return {}, None
+    if not isinstance(got, dict):
+        return {}, None
+    return got, (stamp or {}).get("signature_key")
+
+
+def _build_settings_stream(participant, *, source_types=_JSON_SOURCE_TYPES) -> pd.DataFrame:
+    """Parse the stored Percept files into the settings stream. The `therapy_settings` entry is
+    not consulted here; the per-file rows (`THERAPY_SETTINGS_BY_FILE_KIND`) are, so only files not
+    seen before are decrypted and parsed."""
+    from Server import models
+    from modules import DataCurator
+
+    sfs = [sf for sf in models.SourceFile.objects.filter(owner=participant)
+           if not (source_types and getattr(sf, "type", None) not in source_types)]
+    parse_digest = _settings_parse_digest()
+    known, donor_key = _rows_by_file_donor(participant, source_types, parse_digest)
+    recs, rows_by_file, n_read, n_failed, n_parsed = [], {}, 0, 0, 0
+    for sf in sfs:
+        ident = _file_identity(sf)
+        rows = known.get(ident)
+        if rows is None:
+            try:
+                d = json.loads(DataCurator.loadCacheFile(sf))
+            except Exception as e:                  # encrypted-cache miss, non-JSON, pointer moved
+                n_failed += 1
+                _log.debug("StimOptimizer: could not read SourceFile %s (%s)",
+                           getattr(sf, "uid", "?"), e)
+                continue
+            rows = _rows_from_session(d)
+            n_parsed += 1
+        n_read += 1
+        rows_by_file[ident] = rows
+        recs.extend(rows)
     if n_failed:
         _log.info("StimOptimizer: read %d source files, %d unreadable", n_read, n_failed)
+    else:
+        # THE KEY DECIDES WHETHER TO WRITE: the same file set under the same rule is already on
+        # disk and is left byte-identical. Never written with an unreadable file (see above).
+        sig = _rows_by_file_signature(participant, source_types, list(rows_by_file), parse_digest)
+        if rows_by_file and _cache_store.signature_key(sig) != donor_key:
+            _cache_store.store(
+                THERAPY_SETTINGS_BY_FILE_KIND, _participant_uid(participant), sig, rows_by_file,
+                writer="stim_optimizer", trigger="settings_stream", provenance=[],
+                n_recordings=len(rows_by_file),
+                extra={"source_types": list(source_types or ()), "parse_digest": parse_digest,
+                       "n_parsed_this_build": int(n_parsed)},
+                root=_SHARED_CACHE_DIR_OVERRIDE)
     if not recs:
         out = pd.DataFrame(columns=["t", "src", "hemi", "amp", "pw", "rate", "upper",
                                     "upper_is_patient_limit", "cathode", "schema"])
@@ -566,18 +692,18 @@ def _calibrated_lsb_cache(uid, _bs):
     for a service that cannot supply any is the same answer as for a participant who has none, and
     it is the answer those tests already expect. A service that DOES offer the cache and then fails
     is a real failure and is left to raise.
+
+    THE SAME REQUEST EVERY OTHER PAGE MAKES (decision 289). The saved tiles are shared by every
+    page. This function used to assemble its own inputs -- the time-domain recordings only, without
+    the survey/montage recordings, and the patient-event PSDs assigned to a sensing pair without
+    the sensing index (730 of 4,512 kept on RCS08) -- and when the Stim Optimizer was the first page
+    to build after an ingest, it wrote that short copy for everyone (2026-09-25 20:03 UTC: 293,108
+    tiles where the full set is 303,321). It now asks through the Biomarkers module's one request
+    and never assembles the list itself.
     """
-    needed = ("_load_recordings", "TIMEDOMAIN_TYPES", "_derive_chan_order",
-              "_raw_lsb_cache_cached", "_event_psd_lsb_blocks", "_montage_psd_lsb_blocks")
-    if any(not hasattr(_bs, name) for name in needed):
+    if not hasattr(_bs, "_raw_lsb_cache_canonical"):
         return {}
-    td = _bs._load_recordings(uid, _bs.TIMEDOMAIN_TYPES)
-    channels = _bs._derive_chan_order(td)
-    if not channels:
-        return {}
-    return _bs._raw_lsb_cache_cached(
-        uid, channels, td, _bs._event_psd_lsb_blocks(uid),
-        montage_psd_blocks=_bs._montage_psd_lsb_blocks(uid))
+    return _bs._raw_lsb_cache_canonical(uid)
 
 
 def _deployable_band_span(_bs):

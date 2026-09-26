@@ -68,9 +68,12 @@ MODULES = ("biomarkers", "closed_loop", "stim_optimizer")
 #: `clinic_pain_steps` (2026-09-14) is the lab's own clinic-and-home testing workbooks, parsed
 #: verbatim -- the stimulation settings and verbal pain scores a clinician or the patient recorded
 #: at the time, with no module's choice in between. See `StimOptimizer.clinic_pain`.
-RAW_KINDS = ("raw_lsb_tiles", "redcap_reports", "therapy_settings", "therapy_pain_matched",
-            "biomarker_psd_matrix", "session_report_summary", "clinic_pain_steps",
-            "acquisition_timeline")
+#: `therapy_settings_by_file` (2026-09-25) is `therapy_settings` before its rows are pooled: the
+#: rows each stored session file contributed, kept so a new file costs one parse. Parsed from the
+#: device's own files by the same parser, with no module's choice in between; nothing cites it.
+RAW_KINDS = ("raw_lsb_tiles", "redcap_reports", "therapy_settings", "therapy_settings_by_file",
+             "therapy_pain_matched", "biomarker_psd_matrix", "session_report_summary",
+             "clinic_pain_steps", "acquisition_timeline")
 
 
 def module_of(key):
@@ -95,6 +98,7 @@ _WRITER_BY_KIND = {
     "biomarker_band_sweep": "biomarkers",
     "redcap_reports": "biomarkers",
     "therapy_settings": "stim_optimizer",
+    "therapy_settings_by_file": "stim_optimizer",
     "therapy_pain_matched": "stim_optimizer",
     "inputs": "closed_loop",
     "response": "closed_loop",

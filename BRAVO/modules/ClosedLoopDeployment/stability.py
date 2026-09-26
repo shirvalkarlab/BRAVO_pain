@@ -141,6 +141,19 @@ class BandStabilityFinding:
     #: folds back into the recording, where power is partly the stimulator's own artifact.
     rate_moved_with_current: bool | None = None
     distance_to_nearest_artifact_hz: float | None = None
+    #: The odds ratio (per standard deviation of band power) in each stimulation state, with its 95%
+    #: interval and the measurements behind it (P-03, June audit item [0]; the PI approved it
+    #: 2026-09-25). Keyed by the same three state names as `measurements_per_state`; each value is
+    #: {odds_ratio, low, high, n}, None where the Biomarkers test could not estimate it. Answers
+    #: stored before the interval existed carry None bounds, never a made-up interval.
+    odds_ratio_per_state: dict = field(default_factory=dict)
+    #: How those intervals were made, in the Biomarkers test's own words.
+    odds_ratio_interval_method: str | None = None
+    #: How many pain reports had samples recorded under two stimulation states, or in two elapsed
+    #: weeks, before each report was counted in one (P-03, June audit item [22]). None when the
+    #: answer predates the rule.
+    n_reports_split_across_states: int | None = None
+    n_reports_split_across_weeks: int | None = None
     #: Recorded on the finding rather than assumed by the reader; see BLOCKING_STATUS.
     blocking_status: str = BLOCKING_STATUS
 
@@ -193,6 +206,10 @@ class BandStabilityFinding:
             "measurements_per_state": dict(self.measurements_per_state or {}),
             "rate_moved_with_current": self.rate_moved_with_current,
             "distance_to_nearest_artifact_hz": self.distance_to_nearest_artifact_hz,
+            "odds_ratio_per_state": {k: dict(v) for k, v in (self.odds_ratio_per_state or {}).items()},
+            "odds_ratio_interval_method": self.odds_ratio_interval_method,
+            "n_reports_split_across_states": self.n_reports_split_across_states,
+            "n_reports_split_across_weeks": self.n_reports_split_across_weeks,
             "blocking_status": self.blocking_status,
             "answers_possible": list(ANSWERS),
         }
@@ -244,6 +261,19 @@ def finding_from_stability_result(result, electrode, center_hz, *, band_width_hz
 
     rate = result.get("rate") or {}
     counts = result.get("era_counts") or {}
+    ors = result.get("or_by_era") or {}
+    cis = result.get("or_by_era_ci") or {}
+    n_reports = result.get("or_by_era_n_reports") or {}
+    one_block = result.get("one_block_per_report") or {}
+
+    def _state(tag):
+        ci = cis.get(tag)
+        ok = isinstance(ci, (list, tuple)) and len(ci) == 2
+        # `n_reports`: the pain reports the interval rests on, since its standard error is
+        # clustered on the report (2026-09-25 night); None on an answer stored before that.
+        return {"odds_ratio": ors.get(tag), "low": ci[0] if ok else None,
+                "high": ci[1] if ok else None, "n": counts.get(tag),
+                "n_reports": n_reports.get(tag)}
     return BandStabilityFinding(
         electrode=str(electrode),
         band_center_hz=float(center_hz),
@@ -267,6 +297,11 @@ def finding_from_stability_result(result, electrode, center_hz, *, band_width_hz
                                  if rate.get("available") else None),
         distance_to_nearest_artifact_hz=(rate.get("band_near_harmonic_hz")
                                          if rate.get("available") else None),
+        odds_ratio_per_state={"stimulation off": _state("OFF"), "low current": _state("LOW"),
+                              "high current": _state("HIGH")},
+        odds_ratio_interval_method=result.get("or_by_era_interval"),
+        n_reports_split_across_states=one_block.get("n_reports_split_across_states"),
+        n_reports_split_across_weeks=one_block.get("n_reports_split_across_weeks"),
     )
 
 

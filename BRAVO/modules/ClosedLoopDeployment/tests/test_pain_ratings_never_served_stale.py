@@ -48,7 +48,7 @@ def test_the_design_matrix_is_not_part_of_what_is_saved_under_the_recording_key(
 
 def test_the_joined_table_memo_tells_two_pain_frames_apart():
     psd, eps = _psd_frame(), _epoch_frame()
-    p1 = pd.DataFrame({"epoch": [0.0], "report_id": ["1"], "nrs": [7.0], "vas": [70.0]})
+    p1 = pd.DataFrame({"epoch": [1.0], "report_id": ["1"], "nrs": [7.0], "vas": [70.0]})
     p2 = p1.assign(nrs=[2.0])
     t1 = AD.joined_table_cached(psd, eps, pro_frame=p1)
     t2 = AD.joined_table_cached(psd, eps, pro_frame=p2)

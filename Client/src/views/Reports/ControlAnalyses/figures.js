@@ -562,6 +562,123 @@ export function SteppedCurrentAllBandsFigure({ result }) {
   );
 }
 
+/** Band detector, research version (the PI's ruling 5b, 2026-09-25): per sensing pair and length of
+ * signal, pain predicted as a number out of sample -- the held-out rank correlation (0 is chance, never
+ * folded) of the current alone, every band, and every band with the current taken out, each with its
+ * 95% interval; the black bar is the rotated ratings' 95th percentile for every band. Draws the run
+ * matching the page's clinic-sheet switch (ruling 5a). */
+export function BandDetectorResearchFigure({ result, clinicSheets }) {
+  const mode = (result && result.modes && result.modes[clinicSheets ? "on" : "off"]) || {};
+  const rows = (mode.rows || []).filter((r) => r.reading && r.reading.bands && r.reading.bands.rho != null);
+  const keys = [["current_alone", "current alone", OI.gray, -9], ["bands", "every band", OI.blue, 0],
+    ["bands_without_current", "every band, current taken out", OI.vermillion, 9]];
+  if (!rows.length) {
+    return <div data-testid="figure-band_detector_research" style={{ fontSize: 12.5, color: SUB }}>{"No sensing pair could be read."}</div>;
+  }
+  const ml = 200; const rowH = 36;
+  const h = 24 + rows.length * rowH + 40;
+  const f = frame([-0.6, 0.8], [0, 1], h, ml, 14, 24, 38);
+  const y = (i) => 24 + i * rowH + rowH / 2;
+  return (
+    <div data-testid="figure-band_detector_research">
+      <svg viewBox={`0 0 ${W} ${h}`} width="100%" role="img" aria-label="Held-out rank correlation of pain with its prediction, per sensing pair and length">
+        {[-0.4, -0.2, 0, 0.2, 0.4, 0.6].map((v) => (
+          <g key={v}><line x1={f.X(v)} x2={f.X(v)} y1={18} y2={h - 38} stroke={v === 0 ? "#6E6E6E" : "#E4E4E4"} strokeWidth={v === 0 ? 1.4 : 1} />
+            <text x={f.X(v)} y={h - 22} fontSize={11} textAnchor="middle" fill={SUB}>{v}</text></g>
+        ))}
+        <text x={(W + ml) / 2} y={h - 6} fontSize={11} textAnchor="middle" fill={SUB}>{"held-out rank correlation of pain with its prediction (0 is chance)"}</text>
+        {rows.map((r, i) => {
+          const d = r.reading;
+          return (
+            <g key={`${r.pair}-${r.seconds}`}>
+              <text x={ml - 6} y={y(i) + 4} fontSize={12} textAnchor="end" fill={TXT}>{`${pairName(r.pair)}, ${r.seconds} s (${d.n})`}</text>
+              {d.bands.null_p95 != null && <line x1={f.X(d.bands.null_p95)} x2={f.X(d.bands.null_p95)} y1={y(i) - 13} y2={y(i) + 13} stroke={TXT} strokeWidth={2} />}
+              {keys.map(([k, , col, dy]) => {
+                const b = d[k];
+                if (!b || b.rho == null) return null;
+                const lo = b.lo == null ? b.rho : Math.max(-0.6, b.lo);
+                const hi = b.hi == null ? b.rho : Math.min(0.8, b.hi);
+                return (
+                  <g key={k}>
+                    <line x1={f.X(lo)} x2={f.X(hi)} y1={y(i) + dy} y2={y(i) + dy} stroke={col} strokeWidth={1.6} />
+                    <circle cx={f.X(Math.max(-0.6, Math.min(0.8, b.rho)))} cy={y(i) + dy} r={4.5}
+                      fill={b.q != null && b.q < 0.05 ? col : "#FFFFFF"} stroke={col} strokeWidth={1.6} />
+                  </g>
+                );
+              })}
+            </g>
+          );
+        })}
+      </svg>
+      <div style={{ fontSize: 12, color: SUB }}>
+        {keys.map(([k, lab, col]) => (
+          <span key={k} style={{ marginRight: 14, whiteSpace: "nowrap" }}><span style={{ color: col, fontSize: 14 }}>{"\u25CF"}</span>{` ${lab}`}</span>
+        ))}
+        <span>{"| lines: 95% intervals resampling whole days; filled: q < 0.05; black bar: the rotated ratings' 95th percentile"}</span>
+      </div>
+    </div>
+  );
+}
+
+/** Band detector, device-shaped version (the PI's rulings 5b and 5c, 2026-09-25): per sensing pair,
+ * one band at a time, the area under the curve of a held-out logistic regression of the two pain
+ * groups on the band's reading at the device's own timing (0.5 is chance), plainly and with the
+ * current taken out, each with its 95% interval; filled where q < 0.05 over the pair's 22 bands; the
+ * dashed line is the current alone; a tick under a band marks a folded multiple of the rate in force
+ * (advisory). Draws the run matching the page's clinic-sheet switch (ruling 5a). */
+function DevicePanel({ p }) {
+  const bands = (p.bands || []).filter((b) => b.reading && b.reading.band && b.reading.band.auc != null);
+  const h = 230;
+  const f = frame([8, 30.5], [0.2, 1.0], h, 52, 14, 22, 38);
+  const first = bands.length ? bands[0].reading : {};
+  const alone = first.current_alone && first.current_alone.auc;
+  const series = [["band", OI.blue, -0.18], ["band_without_current", OI.vermillion, 0.18]];
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ fontSize: 12.5, color: TXT }}>{`${pairName(p.pair)} (${first.n != null ? first.n : 0} ratings in the two pain groups with a device-timed reading)`}</div>
+      <svg viewBox={`0 0 ${W} ${h}`} width="100%" role="img" aria-label={`Area under the curve per band, ${pairName(p.pair)}`}>
+        <Axes f={f} xticks={[[10, "10"], [15, "15"], [20, "20"], [25, "25"], [30, "30"]]} yticks={[0.2, 0.4, 0.6, 0.8, 1.0]}
+          xlab="band centre (Hz)" ylab="area under the curve" />
+        <line x1={f.ml} x2={W - f.mr} y1={f.Y(0.5)} y2={f.Y(0.5)} stroke="#6E6E6E" strokeWidth={1.4} />
+        {alone != null && <line x1={f.ml} x2={W - f.mr} y1={f.Y(alone)} y2={f.Y(alone)} stroke={OI.gray} strokeWidth={1.4} strokeDasharray="5 4" />}
+        {bands.map((b) => (
+          <g key={b.centre_hz} data-band={b.centre_hz}>
+            {b.carries_folded_multiple && <line x1={f.X(b.centre_hz)} x2={f.X(b.centre_hz)} y1={f.Y(0.2) - 6} y2={f.Y(0.2)} stroke={TXT} strokeWidth={1.4} />}
+            {series.map(([k, col, dx]) => {
+              const r = b.reading[k];
+              if (!r || r.auc == null) return null;
+              const cx = f.X(b.centre_hz + dx);
+              return (
+                <g key={k}>
+                  {r.lo != null && <line x1={cx} x2={cx} y1={f.Y(Math.max(0.2, r.lo))} y2={f.Y(Math.min(1.0, r.hi))} stroke={col} strokeWidth={1.4} />}
+                  <circle cx={cx} cy={f.Y(Math.max(0.2, Math.min(1.0, r.auc)))} r={3.6}
+                    fill={r.q != null && r.q < 0.05 ? col : "#FFFFFF"} stroke={col} strokeWidth={1.4} />
+                </g>
+              );
+            })}
+          </g>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+export function BandDetectorDeviceFigure({ result, clinicSheets }) {
+  const mode = (result && result.modes && result.modes[clinicSheets ? "on" : "off"]) || {};
+  const pairs = (mode.pairs || []).filter((p) => (p.bands || []).length);
+  return (
+    <div data-testid="figure-band_detector_device">
+      {pairs.length ? pairs.map((p) => <DevicePanel key={p.pair} p={p} />)
+        : <div style={{ fontSize: 12.5, color: SUB }}>{"No sensing pair could be read."}</div>}
+      <div style={{ fontSize: 12, color: SUB }}>
+        <span style={{ marginRight: 14, whiteSpace: "nowrap" }}><span style={{ color: OI.blue, fontSize: 14 }}>{"\u25CF"}</span>{" the band"}</span>
+        <span style={{ marginRight: 14, whiteSpace: "nowrap" }}><span style={{ color: OI.vermillion, fontSize: 14 }}>{"\u25CF"}</span>{" the band, current taken out"}</span>
+        <span>{"| lines: 95% intervals resampling whole days; filled: q < 0.05 over the pair's bands; dashed: the current alone; tick under a band: it carries a folded multiple of the rate in force (advisory)"}</span>
+      </div>
+    </div>
+  );
+}
+
 export const FIGURES = {
   zero_ma_within_stretch: ZeroMaFigure,
   current_explains: CurrentExplainsFigure,
@@ -572,4 +689,6 @@ export const FIGURES = {
   regression_to_mean: RegressionToMeanFigure,
   rating_persistence: RatingPersistenceFigure,
   stepped_current_all_bands: SteppedCurrentAllBandsFigure,
+  band_detector_research: BandDetectorResearchFigure,
+  band_detector_device: BandDetectorDeviceFigure,
 };

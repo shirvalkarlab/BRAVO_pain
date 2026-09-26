@@ -79,9 +79,12 @@ import useThreeSourcePooled from "./useThreeSourcePooled";
 import useClosedLoopSimulation from "./useClosedLoopSimulation";
 import PAL from "./palette";
 import Fold from "./Fold";
+import { fmtOddsRatioWithInterval } from "./deployFormat";
 import "./deployPrint.css";
 import LegibleText from "views/Reports/legibleText";
-import { summaryRequestParams } from "./candidateRequestParams";
+import { bandPainScore, summaryRequestParams } from "./candidateRequestParams";
+import PainScoreSelect from "./PainScoreSelect";
+import { PAIN_SCORE_OPTIONS } from "views/Reports/painScores";
 import ClinicSheetsSummaryButton, { loadSummarySheets, saveSummarySheets } from "./ClinicSheetsSummaryButton";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "not reported"
@@ -264,11 +267,18 @@ function BandCandidateIdentity({ bc, envelope }) {
                   {ev.stim_lrt_p != null
                     ? ` (likelihood-ratio test p = ${fmtP(ev.stim_lrt_p)})` : ""}
                 </KV>
-                <KV label="Odds ratio per era">
+                {/* P-03 (June audit item [0]): each state's odds ratio beside its interval. This
+                    row reads the band file; a band chosen on the grid carries none (nothing has
+                    filled it since decision 145), so it says where this band's own are printed. */}
+                <KV label="Odds ratio per stimulation state (off, low, high current)">
                   {ev.or_by_era
-                    ? ["OFF", "LOW", "HIGH"].map((t) => `${t}: ${fmt(ev.or_by_era[t])}`)
-                      .join("  \u00B7  ")
-                    : "not reported"}
+                    ? ["OFF", "LOW", "HIGH"].map((t) => {
+                      const ci = ev.or_by_era_ci && ev.or_by_era_ci[t];
+                      return `${t}: ${fmtOddsRatioWithInterval(ev.or_by_era[t],
+                        ci ? ci[0] : null, ci ? ci[1] : null)}`;
+                    }).join("  \u00B7  ")
+                    : "not in the band file; this band's own, with intervals, are on the "
+                      + "stability card above"}
                 </KV>
                 <KV label="Label and join">
                   {`${lbl.pro_metric || "not reported"} \u00B7 `
@@ -394,11 +404,21 @@ function ClosedLoopSim() {
 
   const bc = envelope && envelope.band_candidate;
 
+  // THE PAIN SCORE EVERY BAND-TO-PAIN READING ON THIS PAGE IS COMPUTED ON (the PI, 2026-09-25
+  // night). Starts on the band's own (its grid's, decision 254), NRS when it carries none; a choice
+  // made here holds until another band is chosen.
+  const bandDefaultPain = useMemo(() => bandPainScore(bc), [bc]);
+  const [painScoreChoice, setPainScoreChoice] = useState(null);
+  const bandIdentity = bc ? `${bc.contact}|${bc.center_freq_hz}|${bandDefaultPain.key}` : "";
+  useEffect(() => { setPainScoreChoice(null); }, [bandIdentity]);
+  const painScore = painScoreChoice || bandDefaultPain.key;
+
   // Derive the discovery request knobs ONCE per committed candidate. Building this inline in JSX
   // produced a fresh object identity on every parent re-render, which is listed in every panel's
   // fetch-effect dependencies — so any child state change re-created it and re-fired every panel's
   // fetch, collapsing all figures into their loading state at once.
-  const requestParams = useMemo(() => summaryRequestParams(bc, includeSheets), [bc, includeSheets]);
+  const requestParams = useMemo(() => summaryRequestParams(bc, includeSheets, painScore),
+    [bc, includeSheets, painScore]);
 
   // ONE deployment-summary fetch for the whole page. Each call runs a mixed-effects fit through
   // rpy2's embedded R, which is single-threaded per worker, so duplicate concurrent calls starve
@@ -432,6 +452,7 @@ function ClosedLoopSim() {
   const deploymentReport = useDeploymentReport({
     participantUid: participant_uid,
     bandCandidate: reportCandidate,
+    painScore,
   });
 
   // TRACK D: fetched independently of any committed candidate -- see useBandSweepGrid.js for why
@@ -535,6 +556,12 @@ function ClosedLoopSim() {
                   <ChosenBandRecordLine status={bandRecord} hasBand={!!bc} />
                 </MDBox>
                 <MDBox display="flex" gap={1} alignItems="center" flexWrap="wrap">
+                  {bc ? (
+                    <PainScoreSelect value={painScore} bandDefault={bandDefaultPain}
+                      options={(bandSweepGrid.grid && bandSweepGrid.grid.available_metrics)
+                        || PAIN_SCORE_OPTIONS}
+                      onChange={setPainScoreChoice} />
+                  ) : null}
                   <ClinicSheetsSummaryButton on={includeSheets} onToggle={onToggleSheets} />
                   <input ref={fileRef} type="file" accept="application/json,.json"
                     style={{ display: "none" }} onChange={onUpload} />
@@ -645,7 +672,8 @@ function ClosedLoopSim() {
               <Grid item xs={12} id="cl-stability">
                 <BandStabilityPanel stability={deploymentReport?.data?.band_stability
                   || deploymentReport?.band_stability}
-                  cacheStatus={deploymentReport?.data?.cache_status} />
+                  cacheStatus={deploymentReport?.data?.cache_status}
+                  painScore={deploymentReport?.data?.pain_score} />
               </Grid>
 
               {/* BAND 4 — the transcription surface. Withholds its values while the device verdict

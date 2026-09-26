@@ -56,7 +56,7 @@ import { biomarkerHeatmapSlot, prefetchBiomarkerHeatmapMetric } from "views/Repo
 import PAL from "views/Reports/ClosedLoopSim/palette";
 import { BIN_HI, BIN_LO, BIN_HI_RGB, BIN_LO_RGB, divergingRgb, diverging } from "./binarizationModel";
 import { contactSortKey } from "./contactOrder";
-import { bestCellReadout, cellNP, fmtP, hoverCustomData, tierBullets, deviceSpectrumBullets, stabilityMark, stabilityBullet, clinicSheetBullets } from "./gridReadouts";
+import { bestCellReadout, cellNP, fmtP, hoverCustomData, tierBullets, deviceSpectrumBullets, stabilityMark, stabilityBullet, clinicSheetBullets, sourceSplitLine } from "./gridReadouts";
 
 const num = (v, d = 3) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 
@@ -156,7 +156,7 @@ export const L13_SEARCH_LINES = [
   "Read as a lead for the next titration session (24.5 Hz, 60 s), not a band to program.",
 ];
 
-function bulletsFor(sw) {
+export function bulletsFor(sw) {
   // Concise since 2026-09-15 (the PI). The backend's own notes are already short; the three
   // display-only bullets say one thing each; the snapshot bullet is gone from here because the
   // orange caption above the grid already carries it (say a small point once).
@@ -168,6 +168,11 @@ function bulletsFor(sw) {
     "The left grid ignores the binarization cuts (a continuous score has no split); the right grid "
       + "recomputes and flashes.",
     "Clicking a cell shows its plain, uncorrected Pearson r/p and Mann-Whitney p \u2014 not the grid's corrected numbers.",
+    // P-19 (the PI, 2026-09-25): the two sources, named here once in full and TD / PSD everywhere else.
+    "Each rating's band power comes from the time domain (TD) recording, in 3 s pieces, whenever any "
+      + "falls in the match window, and otherwise from PSD (the device's 30 s snapshot). The line above "
+      + "the scatter gives the clicked cell's correlation on its TD values alone and on its PSD values "
+      + "alone; it describes the cell and changes no selection or verdict.",
     ...notes.slice(3),
   ];
 }
@@ -613,7 +618,7 @@ function PanelTitle({ pinnedCell, channelLabel }) {
  * The big pinned-cell title (`PanelTitle`) moves out further still, up to sit beside the contact
  * strip (see the main render below) so its own bottom edge lines up with the strip's.
  */
-function ScatterStatsLine({ cell, pinnedCell, sw }) {
+export function ScatterStatsLine({ cell, pinnedCell, sw }) {
   if (!pinnedCell) {
     return (
       <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
@@ -655,6 +660,18 @@ function ScatterStatsLine({ cell, pinnedCell, sw }) {
           {readout.text}
         </MDTypography>
       ) : null}
+      {/* P-19 (the PI, 2026-09-25): the cell's correlation on its TD reports alone and on its PSD
+          reports alone, one line of text above the scatter, off the grid response. Never in the
+          hover, never a figure; nothing for a stored grid built before the split. */}
+      {(() => {
+        const line = sourceSplitLine(sw, pinnedCell.col, pinnedCell.row);
+        return line ? (
+          <MDTypography variant="caption" color="dark" data-testid="source-split-line"
+            sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
+            {line}
+          </MDTypography>
+        ) : null;
+      })()}
     </MDBox>
   );
 }

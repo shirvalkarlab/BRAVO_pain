@@ -47,6 +47,19 @@ def test_the_inputs_key_still_moves_with_the_recording_set_and_carries_a_rule_ve
     assert str(float(analytics.LSB_PER_DEVICE_PSD)) in flat
 
 
+def test_the_inputs_key_moves_when_the_tile_entry_moves(monkeypatch):
+    """Decision 289. The entry's band-power columns are read from the saved tiles, and on
+    2026-09-25 the saved tiles were a short copy (293,108 tiles where the full set is 303,321)
+    written by the Stim Optimizer. The tile key now changes when the tiles would come out
+    differently (the one input set, the implant date); this entry has to follow it, or a frame
+    built from the short copy would outlive the fix until the next recording."""
+    monkeypatch.setattr(AD, "recording_set_signature", lambda p: ("P", 1, 1, "a fixed hash"))
+    monkeypatch.setattr(AD, "_tiles_key_for", lambda p: "raw_lsb_tiles.P.one")
+    k1 = AD.inputs_signature("P")
+    monkeypatch.setattr(AD, "_tiles_key_for", lambda p: "raw_lsb_tiles.P.two")
+    assert AD.inputs_signature("P") != k1
+
+
 def test_evidence_inputs_cached_stores_and_reads_under_the_inputs_signature(live_inputs, monkeypatch):
     """The store call and the memo use the composed key, not the bare recording signature."""
     seen = {}

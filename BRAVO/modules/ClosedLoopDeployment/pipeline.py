@@ -149,8 +149,13 @@ def _facts_for(candidate, e1, e2, power_scale, device_facts=None, threshold=None
 def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro_frame=None,
         candidates=(), washin_s=60.0, amp_limit_ma=5.0, power_scale="power_linear",
         hemisphere="Left", strict=True, n_boot=500, seed=0, device_facts=None,
-        pooled_e1=None, place_thresholds=None):
+        pooled_e1=None, place_thresholds=None, pain_score="nrs"):
     """Build the deployment report for one participant.
+
+    ``pain_score`` (the PI, 2026-09-25 night): the pain-score column the band-to-pain reading (E2)
+    and the current-to-pain reading (E3) are computed on, one of the Biomarkers heat maps' choices
+    (``adapter.PAIN_SCORE_KEYS``). NRS by default, which is what both edges read before the page's
+    dropdown existed. It is named on the manifest.
 
     ``place_thresholds`` (decision 180): a callable ``(rep, candidates) -> (plan, placement)``
     invoked right after the capture rule has placed ``rep.threshold`` and BEFORE the eligibility
@@ -173,7 +178,8 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
     # exposure epoch, use it. Without this E2 silently has no outcome to regress on and reports
     # itself unestimable, which reads like a data problem when it is only a wiring one.
     if pro_frame is None and design_matrix is not None and len(design_matrix):
-        cols = [c for c in ("epoch", "nrs", "vas") if c in design_matrix.columns]
+        cols = [c for c in dict.fromkeys(("epoch", "nrs", "vas", pain_score))
+                if c in design_matrix.columns]
         if "epoch" in cols and len(cols) > 1:
             pro_frame = design_matrix[cols].copy()
             pro_frame["report_id"] = pro_frame["epoch"].astype(str)
@@ -202,10 +208,11 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
         "n_table_rows": int(len(T)),
         "power_scale": power_scale, "washin_s": float(washin_s),
         "amp_limit_ma": float(amp_limit_ma), "hemisphere": hemisphere,
+        "pain_score": pain_score,
     }
     if T.empty:
         rep.blockers.append("no joined table could be built: the participant has no assembled "
-                            "spectra, or none of them fall inside a known setting epoch")
+                            "TD and PSD band power, or none of them fall inside a known setting epoch")
         return rep
 
     cand = list(candidates) or []
@@ -247,7 +254,7 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
     _e2_amp_col = adapter.canonical_amp_col(hemisphere)
     if _e2_amp_col not in T.columns:
         _e2_amp_col = adapter.resolve_setting_column(T.columns, "amp", hemisphere)
-    e2 = E.state_edge(T, channel=ch, center_hz=fc, scale=power_scale,
+    e2 = E.state_edge(T, channel=ch, center_hz=fc, outcome=pain_score, scale=power_scale,
                       adjust_for_column=_e2_amp_col)
     # E3 ON THE ACTUATED SIDE'S CURRENT (review C1). ``therapy_edge`` defaults to the left column;
     # the design matrix carries one amplitude column per side, and the side the loop would drive
@@ -256,8 +263,8 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
     if design_matrix is not None and hasattr(design_matrix, "columns"):
         _e3_col = (adapter.resolve_setting_column(design_matrix.columns, "amp", hemisphere)
                    or adapter.canonical_amp_col(hemisphere))
-    e3 = (E.therapy_edge(design_matrix, amp_col=_e3_col) if _e3_col
-          else E.therapy_edge(design_matrix))
+    e3 = (E.therapy_edge(design_matrix, outcome=pain_score, amp_col=_e3_col) if _e3_col
+          else E.therapy_edge(design_matrix, outcome=pain_score))
     rep.edges = {"E1": e1, "E2": e2, "E3": e3}
     rep.coherence = C.coherence_report(e1, e2, e3)
 

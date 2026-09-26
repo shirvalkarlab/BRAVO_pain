@@ -116,7 +116,7 @@ function CalibrationInEffectPanel({ participantUid }) {
     }
     const layout = {
       margin: { l: 56, r: 12, t: 8, b: 40 }, height: 260,
-      xaxis: { title: { text: "band power from the voltage trace (µV²)", font: { size: 10.5 } },
+      xaxis: { title: { text: "TD band power (µV²)", font: { size: 10.5 } },
         rangemode: "tozero", zeroline: false, tickfont: { size: 9.5 } },
       yaxis: { title: { text: "device band power (LSB)", font: { size: 10.5 } },
         rangemode: "tozero", zeroline: false, tickfont: { size: 9.5 } },
@@ -152,7 +152,7 @@ function CalibrationInEffectPanel({ participantUid }) {
     const layout = {
       margin: { l: 56, r: 12, t: 8, b: 40 }, height: 220,
       xaxis: { title: { text: "band centre (Hz)", font: { size: 10.5 } }, tickfont: { size: 9.5 } },
-      yaxis: { title: { text: "device FFT ÷ transform band power", font: { size: 10.5 } },
+      yaxis: { title: { text: "PSD band power ÷ TD band power", font: { size: 10.5 } },
         rangemode: "tozero", zeroline: false, tickfont: { size: 9.5 } },
       legend: { font: { size: 9 }, orientation: "h", y: -0.28, x: 0 },
     };
@@ -196,7 +196,7 @@ function CalibrationInEffectPanel({ participantUid }) {
             <MDBox mt={1.2} p={1.2} sx={{ backgroundColor: PAL.accentFill, borderRadius: "6px",
               border: `1px solid ${PAL.accentBorder}` }}>
               <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.accent }}>
-                VOLTAGE TRACE → DEVICE UNITS (measured)
+                Time domain (TD) → device units: the transform constant (measured)
               </MDTypography>
               <MDTypography variant="h5" sx={{ fontSize: 20, color: PAL.accent, lineHeight: 1.15 }}>
                 {`1 µV² = ${fmt(deployed.k, 2)} LSB`}
@@ -226,7 +226,7 @@ function CalibrationInEffectPanel({ participantUid }) {
             </MDBox>
             <MDBox mt={1}>
               <MDTypography variant="caption" sx={{ fontSize: 10.5, fontWeight: "bold", color: "#555" }}>
-                Every paired block, device LSB against band power from the voltage trace; hollow = left out
+                Every paired block, device LSB against TD band power; hollow = left out
               </MDTypography>
               <div ref={blocksRef} style={{ width: "100%" }} />
             </MDBox>
@@ -235,14 +235,14 @@ function CalibrationInEffectPanel({ participantUid }) {
             <MDBox mt={1.2} p={1.2} sx={{ backgroundColor: PAL.neutralFill || "#f4f4f4", borderRadius: "6px",
               border: `1px solid ${PAL.neutralBorder}` }}>
               <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: "#555" }}>
-                DEVICE FFT SNAPSHOT → DEVICE UNITS (composed)
+                PSD (the device's 30 s snapshot) → device units: the bridge constant (composed)
               </MDTypography>
               <MDTypography variant="h5" sx={{ fontSize: 20, color: "#444", lineHeight: 1.15 }}>
                 {`1 device-µV² = ${fmt(deployed.bridge_lsb_per_device_uv2, 2)} LSB`}
               </MDTypography>
               <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, color: "#555" }}>
                 {`Composed, not measured: ${fmt(deployed.k, 2)} ÷ ${fmt(deployed.bridge_ratio, 3)}, the ratio in effect between the `
-                  + `device's onboard-FFT band power and the transform's on the same survey and contact. `
+                  + `PSD band power and TD band power on the same survey and contact. `
                   + `Refit on ${br.n_surveys} surveys, ${br.n} of ${br.n_pairs} contact-and-centre pairs after the same 5 MAD rule: `
                   + `${fmt(br.ratio, 3)}, within 1 percent of the ratio in effect, and flat across centres and contact pairs.`}
               </MDTypography>
@@ -255,8 +255,8 @@ function CalibrationInEffectPanel({ participantUid }) {
             </MDBox>
 
             <MDTypography variant="caption" display="block" sx={{ fontSize: 9.5, color: "#666", mt: 0.8 }}>
-              {`Where these are used: the Biomarkers timeline's modeled points (○ voltage trace × ${fmt(deployed.k, 2)}, `
-                + `◇ FFT snapshot × ${fmt(deployed.bridge_lsb_per_device_uv2, 2)}); the Closed-Loop page's threshold for a band the device `
+              {`Where these are used: the Biomarkers timeline's modeled points (○ TD × ${fmt(deployed.k, 2)}, `
+                + `◇ PSD × ${fmt(deployed.bridge_lsb_per_device_uv2, 2)}); the Closed-Loop page's threshold for a band the device `
                 + "never sensed, and its three-source response panel. The Stim Optimizer reads device-native "
                 + "power and needs neither."}
             </MDTypography>

@@ -34,7 +34,87 @@ import pandas as pd
 
 from ClosedLoopDeployment import edges as _edges
 
+try:                                                    # host runner: BRAVO/modules is the root
+    from Biomarkers.routines import sweep_settings as _sweep_settings
+except ImportError:                                     # pragma: no cover - container spelling
+    from modules.Biomarkers.routines import sweep_settings as _sweep_settings
+
 _log = _logging.getLogger(__name__)
+
+#: THE PAIN SCORES THIS PAGE CAN BE COMPUTED ON: the Biomarkers heat maps' own list, read from its
+#: one home (`sweep_settings.BIOMARKER_METRICS`), never copied (the PI, 2026-09-25 night: nothing on
+#: the Closed-Loop page is computed on NRS alone). NRS stays the default for a request that names
+#: none, which is what every request sent before the dropdown existed.
+PAIN_SCORE_KEYS = tuple(m["key"] for m in _sweep_settings.BIOMARKER_METRICS)
+PAIN_SCORE_LABELS = {m["key"]: m["label"] for m in _sweep_settings.BIOMARKER_METRICS}
+DEFAULT_PAIN_SCORE = _sweep_settings.DEFAULT_BIOMARKER_METRIC
+
+
+def pain_score_from_request(request_data):
+    """The pain score the report is computed on, from the request's ``PainScore``.
+
+    Returns ``{key, label, requested, fell_back_to_nrs, reason}``: a key outside the heat maps' list
+    is refused by name and NRS used, and a request that names none says so, so the page can print
+    which score it is looking at rather than assume."""
+    requested = (request_data or {}).get("PainScore")
+    if requested in PAIN_SCORE_LABELS:
+        return {"key": requested, "label": PAIN_SCORE_LABELS[requested], "requested": requested,
+                "fell_back_to_nrs": False, "reason": None}
+    reason = ("no pain score was sent with the request, so NRS was used" if not requested else
+              f"the pain score {requested!r} is not one of the heat maps' choices "
+              f"({', '.join(PAIN_SCORE_KEYS)}), so NRS was used")
+    return {"key": DEFAULT_PAIN_SCORE, "label": PAIN_SCORE_LABELS[DEFAULT_PAIN_SCORE],
+            "requested": requested, "fell_back_to_nrs": True, "reason": reason}
+
+
+def stability_request_body(participant_uid, channel, center_hz, band_width_hz, *, pain_score):
+    """The request the stability card sends the Biomarkers test: the band, and the pain score as
+    that module's own ``LabelMetric``, so the per-state odds ratios are on the chosen score."""
+    return {"ParticipantId": participant_uid, "Channel": channel, "CenterHz": float(center_hz),
+            "BandWidthHz": float(band_width_hz), "LabelMetric": pain_score}
+
+
+def design_matrix_with_pain_score(participant, design_matrix, epochs, pain_score):
+    """The per-setting design matrix with a column for ``pain_score``, and a note when one cannot be
+    made (None otherwise).
+
+    The design matrix carries the reported scores (``nrs``, ``vas``, ``left_leg_vas``,
+    ``back_vas``, ``mpq_sum``) but not the composite, which the Biomarkers module blends per pain
+    report (each part put in units of its own scatter, the parts present averaged). For the
+    composite that blend is done by the Biomarkers module's own function on the same reports, and
+    the per-report values are averaged per setting by the same rule as every other score
+    (``StimOptimizer.adapter.attach_pros``, the same wash-in minutes). Built per request and never
+    saved: it is a pain rating (CLAUDE.md section 8 rule 5).
+    """
+    if design_matrix is None or not len(design_matrix) or pain_score in design_matrix.columns:
+        return design_matrix, None
+    if pain_score != _sweep_settings.COMPOSITE_METRIC:
+        return design_matrix, (f"the settings table carries no {pain_score!r} ratings, so no "
+                               f"reading on that score could be made")
+    try:
+        from modules.Biomarkers import bravo_service as _bs
+    except ImportError:                                   # pragma: no cover - host spelling
+        from Biomarkers import bravo_service as _bs
+    try:
+        from StimOptimizer import adapter as _sa
+    except ImportError:                                   # pragma: no cover
+        from modules.StimOptimizer import adapter as _sa
+    pro_df = _bs._load_pros({}, participant)
+    if pro_df is None or not len(pro_df):
+        return design_matrix, "no pain reports could be read for the composite"
+    blended, metric, _parts = _bs._resolve_biomarker_metric({"LabelMetric": pain_score}, pro_df)
+    if metric != pain_score:
+        return design_matrix, ("the composite could not be formed: neither of its parts varies "
+                               "in the reports")
+    washin = (_sa.build_design_matrix.__kwdefaults__ or {}).get("washin_min", 1.0)
+    per_setting = _sa.attach_pros(epochs, blended, _bs._pro_times_utc_series(blended),
+                                  washin_min=washin, items=(pain_score,))
+    if per_setting is None or not len(per_setting):
+        return design_matrix, "no pain report fell inside a setting for the composite"
+    cols = ["epoch", pain_score, f"{pain_score}_sd", f"{pain_score}_n"]
+    out = design_matrix.merge(per_setting[[c for c in cols if c in per_setting.columns]],
+                              on="epoch", how="left")
+    return out, None
 
 #: The scanned band centres and width used throughout this project.
 DEFAULT_BAND_CENTERS_HZ = tuple(float(x) for x in np.arange(10.5, 28.0, 1.0))
@@ -545,6 +625,15 @@ def _shared_store(kind, signature, payload, *, participant_uid=None, provenance=
 #: `bravo_service.STABILITY_GRID_KIND`, so a rename on that side fails loudly here.
 STABILITY_GRID_KIND = "biomarker_band_stability_grid"
 
+#: The rule the stored stability answers are computed under, `Biomarkers.bravo_service`'s
+#: `STABILITY_GRID_RULE_VERSION`, duplicated for the same reason as the kind name and pinned by the
+#: same kind of source-reading test (`test_the_stability_rule_version_matches_the_one_biomarkers_
+#: writes`). The card reads an answer only when it was computed under this rule (2026-09-25): the
+#: Biomarkers page keys its answers on the rule, and this card, which matches on the grid alone,
+#: went on printing the previous rule's answers after P-03 moved it.
+#: v6 (2026-09-25 night): the per-state standard errors are clustered on the pain report.
+STABILITY_GRID_RULE_VERSION = "v6_se_clustered_on_report"
+
 
 #: The request keys that decide WHICH stored grid the Biomarkers page shows: the pain score and
 #: the matching and split settings. The Closed-Loop page sends the same ones (read from the
@@ -712,15 +801,32 @@ def band_sweep_grid_for_closed_loop(participant_uid, request_data=None, *, consu
     # beside its own grid. Each answer's sidecar names its grid's key, and the grid read above
     # carries that same key, so the match is exact; no match means "not tested", never a borrowed
     # answer. An answer written before its sidecar named a grid is never matched.
+    #
+    # AND ONLY AN ANSWER COMPUTED UNDER THE RULE IN FORCE (2026-09-25). The Biomarkers page files
+    # each answer under the stability rule it was computed with, so a new rule is a new key there;
+    # this card matched on the grid alone and went on printing the previous rule's answers until the
+    # background job rebuilt them (found when P-03 moved the rule to one pain report per block).
+    # Two passes: an answer whose sidecar names the rule in force first; failing that, one whose
+    # sidecar names no rule (every answer written before this date), accepted only when the rule
+    # its own payload carries is the one in force. The Biomarkers side finds those older answers by
+    # their exact key and will not rewrite them, so refusing them outright would leave the card on
+    # "not tested" until the rule next moves. Any other rule reads "not tested", never borrowed.
     stored_stability = {}
     _grid_key = str(((payload or {}).get("sweep_key") or {}).get("signature_key") or "")
     try:
         _payload = None
         if _grid_key:
-            _payload, _ = _cache_store.load_newest(
-                STABILITY_GRID_KIND, participant_uid, consumer=str(consumer),
-                root=_SHARED_CACHE_DIR_OVERRIDE,
-                match=lambda meta: (meta.get("extra") or {}).get("sweep_key") == _grid_key)
+            for _sidecar_rule in (STABILITY_GRID_RULE_VERSION, None):
+                _payload, _ = _cache_store.load_newest(
+                    STABILITY_GRID_KIND, participant_uid, consumer=str(consumer),
+                    root=_SHARED_CACHE_DIR_OVERRIDE,
+                    match=lambda meta, _r=_sidecar_rule: (
+                        (meta.get("extra") or {}).get("sweep_key") == _grid_key
+                        and (meta.get("extra") or {}).get("rule_version") == _r))
+                if _payload is not None:
+                    break
+            if (_payload or {}).get("rule_version") != STABILITY_GRID_RULE_VERSION:
+                _payload = None
         for _flat, _value in ((_payload or {}).get("points") or {}).items():
             _ch, _, _centre = str(_flat).rpartition("|")
             try:
@@ -898,8 +1004,12 @@ def inputs_signature(participant):
     under the old constant until a recording was added or removed.
     """
     from Biomarkers.routines import analytics as _an
+    # THE TILE ENTRY'S OWN KEY TOO (decision 289): the frame is read from the saved tiles, and the
+    # tiles can change with no recording and no constant moving (the one input set; the implant
+    # date). None where no server can be asked, as before.
     return (recording_set_signature(participant), _INPUTS_RULE_VERSION,
-            float(_an.LSB_PER_UV2_TRANSFORM), float(_an.LSB_PER_DEVICE_PSD))
+            float(_an.LSB_PER_UV2_TRANSFORM), float(_an.LSB_PER_DEVICE_PSD),
+            _tiles_key_for(participant))
 
 
 def evidence_inputs_cached(participant, *, force_refresh=False):
@@ -1226,7 +1336,7 @@ def joined_table_cached(psd_frame, epochs, *, centers=None, width=DEFAULT_BAND_W
     # handed back the ratings of whichever request built the entry first.
     pro = kwargs.get("pro_frame")
     pro_fp = None if pro is None else _frame_fingerprint(
-        pro, ("epoch",), also=("report_id", "nrs", "vas"))
+        pro, ("epoch",), also=("report_id",) + PAIN_SCORE_KEYS)
     sig = (_joined_signature(psd_frame, epochs, cen, width), pro_fp)
     if not force_refresh:
         with _JOINED_MEMO_LOCK:
@@ -1251,6 +1361,40 @@ def joined_cache_stats():
 def clear_joined_cache():
     with _JOINED_MEMO_LOCK:
         _JOINED_MEMO.clear()
+
+
+def _attach_setting_pain(T, pro_frame):
+    """The per-setting pain ratings onto every chunk, matched on the chunk's OWN setting.
+
+    ``pro_frame`` is filed under the settings table's own number, ``epoch``, which
+    `StimOptimizer.adapter.exposure_epochs` counts from 1; each chunk carries that number from its
+    own setting (the ``epoch`` column of the setting context). ``setting_epoch`` is something else:
+    the setting's POSITION in the table, counted from 0, which the regressions use only to group
+    chunks. Until 2026-09-25 the ratings were matched on ``setting_epoch``, so every chunk carried
+    the ratings of the setting BEFORE its own -- on RCS08, L 1-3+ at 24.5 Hz, 42,568 of 42,568 rated
+    chunks, checked against the recording and report times. Only E2 (band power against pain) and
+    its current-removed reading read these columns.
+
+    A chunk outside every setting, or whose setting was never rated, carries no rating. A settings
+    table with no ``epoch`` number gives nothing to match on, so no rating is attached rather than
+    one guessed from a position.
+    """
+    if pro_frame is None or not len(pro_frame) or "epoch" not in pro_frame.columns:
+        return T
+    if "epoch" not in T.columns:
+        _log.warning("ClosedLoopDeployment: the settings table carries no setting number, so no "
+                     "pain rating was attached to the joined table")
+        return T
+    keep = [c for c in ("epoch", "report_id") + PAIN_SCORE_KEYS if c in pro_frame.columns]
+    pain = pro_frame[keep].copy()
+    pain["epoch"] = pd.to_numeric(pain["epoch"], errors="coerce").astype(float)
+    n = len(T)
+    T = T.assign(epoch=pd.to_numeric(T["epoch"], errors="coerce").astype(float)).merge(
+        pain, on="epoch", how="left")
+    if len(T) != n:
+        raise ValueError(f"the pain frame names a setting more than once: {n} chunks became "
+                         f"{len(T)} when the ratings were attached")
+    return T
 
 
 def joined_table(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_HZ,
@@ -1306,11 +1450,7 @@ def joined_table(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_HZ,
         c = canonical_amp_col(h)
         if c in T.columns:
             T[f"era_{h}"] = _era_column(pd.to_numeric(T[c], errors="coerce").to_numpy(dtype=float))
-    if pro_frame is not None and len(pro_frame) and "epoch" in pro_frame.columns:
-        keep = [c for c in ("epoch", "report_id", "nrs", "vas") if c in pro_frame.columns]
-        T = T.merge(pro_frame[keep].rename(columns={"epoch": "setting_epoch"}),
-                    on="setting_epoch", how="left")
-    return T
+    return _attach_setting_pain(T, pro_frame)
 
 
 def _joined_table_calibrated(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_HZ, pro_frame=None):
@@ -1391,10 +1531,7 @@ def _joined_table_calibrated(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_
         c = canonical_amp_col(h)
         if c in T.columns:
             T[f"era_{h}"] = _era_column(pd.to_numeric(T[c], errors="coerce").to_numpy(dtype=float))
-    if pro_frame is not None and len(pro_frame) and "epoch" in pro_frame.columns:
-        keep_cols = [c for c in ("epoch", "report_id", "nrs", "vas") if c in pro_frame.columns]
-        T = T.merge(pro_frame[keep_cols].rename(columns={"epoch": "setting_epoch"}),
-                    on="setting_epoch", how="left")
+    T = _attach_setting_pain(T, pro_frame)
     T.attrs["rows_dropped_by_tile_gate"] = n_dropped
     T.attrs["band_power_source"] = "calibrated"
     return T
@@ -3135,10 +3272,25 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     psd, eps, dm = evidence_inputs_cached(participant, force_refresh=bool(force_refresh))
     if psd is None:
         return {"available": False,
-                "reason": "this participant has no assembled spectra, so no control signal can be "
+                "reason": "this participant has no assembled TD and PSD band power, so no control signal can be "
                           "evaluated. Sensing recordings must be ingested first.",
                 "band_sweep_grid": _grid_export,
                 "cache_status": _status}
+
+    # THE PAIN SCORE EVERY BAND-TO-PAIN READING ON THE PAGE IS COMPUTED ON (the PI, 2026-09-25
+    # night): E2 and E3, the stability card and its per-state odds ratios. Chosen on the page,
+    # sent as `PainScore`; the ratings are joined here, per request, and never into the saved
+    # `inputs` entry, whose key takes no pain score (decision 273).
+    _pain = pain_score_from_request(rd)
+    _dm_note = None
+    try:
+        dm, _dm_note = design_matrix_with_pain_score(participant, dm, eps, _pain["key"])
+    except Exception as _dm_exc:                       # noqa: BLE001 -- the edge says it is missing
+        _log.warning("closed-loop report: the %s ratings could not be joined for %s",
+                     _pain["key"], getattr(participant, "uid", participant), exc_info=True)
+        _dm_note = f"the {_pain['label']} ratings could not be joined: {_dm_exc!r}"
+    if _dm_note:
+        _pain = dict(_pain, not_available=_dm_note)
 
     cands = candidates or rd.get("Candidates") or []
     if not cands:
@@ -3389,8 +3541,9 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     rep = _pl.run(getattr(participant, "uid", participant), psd_frame=psd, epochs=eps,
                   design_matrix=dm, candidates=cands, hemisphere=hemisphere,
                   power_scale=power_scale, device_facts=dev, pooled_e1=_pooled_e1,
-                  place_thresholds=_place)
+                  place_thresholds=_place, pain_score=_pain["key"])
     out = report_to_dict(rep)
+    out["pain_score"] = _pain
     out.update(_pre)                     # the three-source and table payloads built above
     out["device_facts"] = {k: v for k, v in dev.items() if not k.startswith("_")}
     out["device_facts_provenance"] = dev.get("_provenance", {})
@@ -3445,10 +3598,9 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
         _ch, _fc = _first.get("channel"), _first.get("center_hz")
         if _ch is not None and _fc is not None:
             _bw = float(_first.get("band_width_hz", 5.0))
-            _core = _bsvc._validate_band_core({
-                "ParticipantId": getattr(participant, "uid", participant),
-                "Channel": _ch, "CenterHz": float(_fc), "BandWidthHz": _bw,
-            })
+            _core = _bsvc._validate_band_core(stability_request_body(
+                getattr(participant, "uid", participant), _ch, float(_fc), _bw,
+                pain_score=_pain["key"]))
             _raw = (_core.get("stim") or {}) if _core.get("available") else {
                 "available": False,
                 "reason": (_core.get("reason") or "the biomarkers path returned nothing usable"),

@@ -120,6 +120,12 @@ class _Bench:
         self.rows = _rows() if rows is None else rows
         self.dir = None
         self._saved = None
+        # THE ONE INPUT SET every page asks for (`_recordings_setup_cached` on the live server).
+        # None means the same stand-ins `build()` passes by default; a test that gives a caller a
+        # different set sets these to say what the canonical set is.
+        self.canonical_td = None
+        self.canonical_events = None
+        self.canonical_montage = None
 
     def __enter__(self):
         self.dir = tempfile.mkdtemp(prefix="bravo_shared_tiles_")
@@ -127,17 +133,22 @@ class _Bench:
                        dict(B._RAW_LSB_CACHE_MEMO))
         B._SHARED_CACHE_DIR_OVERRIDE = self.dir
         B._RAW_LSB_CACHE_MEMO.clear()
+        getattr(B, "_CANONICAL_TILE_DIGEST_MEMO", {}).clear()
         for k in B._SHARED_CACHE_EVENTS:
             B._SHARED_CACHE_EVENTS[k] = 0
         self._patch = mock.patch.object(B, "_raw_lsb_recording_identity", self._identity)
         self._patch.start()
+        self._patch_setup = mock.patch.object(B, "_recordings_setup_cached", self._setup)
+        self._patch_setup.start()
         return self
 
     def __exit__(self, *exc):
+        self._patch_setup.stop()
         self._patch.stop()
         B._SHARED_CACHE_DIR_OVERRIDE = self._saved[0]
         B._SHARED_CACHE_EVENTS.clear(); B._SHARED_CACHE_EVENTS.update(self._saved[1])
         B._RAW_LSB_CACHE_MEMO.clear(); B._RAW_LSB_CACHE_MEMO.update(self._saved[2])
+        getattr(B, "_CANONICAL_TILE_DIGEST_MEMO", {}).clear()
         shutil.rmtree(self.dir, ignore_errors=True)
         return False
 
@@ -159,6 +170,16 @@ class _Bench:
         for s in sorted(parts):
             h.update(s.encode("utf8", "replace")); h.update(b"\x00")
         return (str(participant_uid), 1, len(self.rows), h.hexdigest()[:20])
+
+    def _setup(self, participant_uid, td=None, recording_set=None):
+        """The canonical input set, in the shape `_recordings_setup_cached` returns it:
+        (td, survey/montage recordings, patient-event PSD blocks, montage PSD blocks, channel order,
+        channels). The survey/montage recordings are carried inside `td` by the tests that need
+        them, so the second element is always empty here."""
+        td = [_td_recording()] if self.canonical_td is None else self.canonical_td
+        ev = _event_blocks() if self.canonical_events is None else self.canonical_events
+        mt = [] if self.canonical_montage is None else self.canonical_montage
+        return (td, [], ev, mt, ["ZERO_THREE_LEFT"], ["ZERO_THREE_LEFT"])
 
     def files(self):
         # ASK THE STORE where it put things rather than assuming the override root is the
@@ -567,8 +588,11 @@ def test_warming_is_a_no_op_when_the_file_is_already_there():
 def test_warming_never_raises_when_the_work_fails():
     """An ingest must not fail because a cache could not be warmed."""
     with _Bench() as bench:
-        with mock.patch.object(B, "_load_recordings",
-                               side_effect=RuntimeError("the stored file could not be read")):
+        # The warm reads the recordings through the one input set every page uses (decision
+        # 289), so the failure is put there as well as in the loader underneath it.
+        boom = RuntimeError("the stored file could not be read")
+        with mock.patch.object(B, "_load_recordings", side_effect=boom), \
+             mock.patch.object(B, "_recordings_setup_cached", side_effect=boom):
             got = B.warm_shared_raw_cache(UID, centers=CENTERS)
         assert got["status"] == "failed", got
         assert "could not be read" in got["error"]
@@ -583,7 +607,9 @@ def test_warming_reports_when_there_is_nothing_to_warm():
         for p in patches:
             p.start()
         try:
-            with mock.patch.object(B, "_derive_chan_order", return_value=[]):
+            with mock.patch.object(B, "_derive_chan_order", return_value=[]), \
+                 mock.patch.object(B, "_recordings_setup_cached",
+                                   return_value=([], [], [], [], [], [])):
                 got = B.warm_shared_raw_cache(UID, centers=CENTERS)
         finally:
             for p in patches:
@@ -664,6 +690,281 @@ def test_the_reported_numbers_describe_what_the_files_did():
         assert stats["events"]["writes"] == 1 and stats["events"]["hits"] == 1
         assert B.clear_shared_cache() == 1
         assert B.shared_cache_stats()["entries"] == 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# ONE INPUT SET, AND NOTHING FROM BEFORE THE IMPLANT DATE (decision 289, 2026-09-25)
+#
+# The saved copy is shared by every page, and until now its key named the participant's database
+# rows and every constant but not WHICH recordings the caller handed in. The Stim Optimizer asked
+# with the time-domain recordings only and patient events assigned without the sensing index, so
+# whichever page built first after the daily ingest wrote the copy everyone read: on RCS08 on
+# 2026-09-25 20:03 UTC the Stim Optimizer wrote 293,108 tiles where the full set is 303,321, and
+# the heat maps' matched ratings on L 1-3+ fell from 201 to 161 (30 s of signal).
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+def _full_td():
+    return [_td_recording(), _td_recording(t0=1_700_000_100.0, seed=1)]
+
+
+def _saved_copy(bench):
+    """The saved copy under the tile key every page files it under, unpacked; None if absent."""
+    stored = B._shared_load(B._RAW_LSB_SHARED_KIND, UID, B._raw_lsb_shared_signature(UID, CENTERS))
+    return None if stored is None else B._raw_lsb_unpack(stored)
+
+
+def _n_tiles(cache):
+    e = cache["ZERO_THREE_LEFT"]
+    return len(e["td"]["t"]), len(e["psd"]["t"])
+
+
+def _call(td, events, *, fresh_process=True, use_shared_cache=True):
+    if fresh_process:
+        B._RAW_LSB_CACHE_MEMO.clear()
+    return B._raw_lsb_cache_cached(UID, ["ZERO_THREE_LEFT"], td, events, montage_psd_blocks=[],
+                                   centers=CENTERS, use_shared_cache=use_shared_cache)
+
+
+def test_a_caller_with_fewer_recordings_writes_no_saved_copy_and_the_full_caller_then_builds():
+    """The short caller builds first: it must write nothing, so the full caller builds the full
+    copy rather than reading a short one."""
+    with _Bench() as bench:
+        bench.canonical_td, bench.canonical_events = _full_td(), _event_blocks(n=3)
+        short = _call([_td_recording()], _event_blocks(n=1))
+        assert _n_tiles(short) == (20, 1), _n_tiles(short)
+        assert bench.files() == [], "a caller that is not the one input set must write nothing"
+        with mock.patch.object(AV, "raw_lsb_spectrum_cache",
+                               wraps=AV.raw_lsb_spectrum_cache) as spy:
+            full = _call(_full_td(), _event_blocks(n=3))
+            assert spy.call_count == 1, "the full caller must build, not read the short copy"
+        assert _n_tiles(full) == (40, 3), _n_tiles(full)
+        saved = _saved_copy(bench)
+        assert saved is not None and _n_tiles(saved) == (40, 3)
+        scratch = _call(_full_td(), _event_blocks(n=3), use_shared_cache=False)
+        compared, different = _families_equal(saved, scratch)
+        assert compared > 100 and different == 0, (compared, different)
+
+
+def test_a_caller_with_fewer_recordings_never_reads_the_full_saved_copy():
+    """The full caller builds first: a later short caller must build its own and leave the saved
+    copy exactly as it was."""
+    with _Bench() as bench:
+        bench.canonical_td, bench.canonical_events = _full_td(), _event_blocks(n=3)
+        _call(_full_td(), _event_blocks(n=3))
+        before = {f: open(bench.file_path(f), "rb").read() for f in bench.files()}
+        assert len(before) == 1
+        with mock.patch.object(AV, "raw_lsb_spectrum_cache",
+                               wraps=AV.raw_lsb_spectrum_cache) as spy:
+            short = _call([_td_recording()], _event_blocks(n=1))
+            assert spy.call_count == 1, "a different input set must build, never read the copy"
+        assert _n_tiles(short) == (20, 1), _n_tiles(short)
+        after = {f: open(bench.file_path(f), "rb").read() for f in bench.files()}
+        assert after == before, "the short caller must not touch the saved copy"
+
+
+def test_whichever_caller_builds_first_the_saved_copy_is_the_full_one():
+    for order in (("short", "full"), ("full", "short")):
+        with _Bench() as bench:
+            bench.canonical_td, bench.canonical_events = _full_td(), _event_blocks(n=3)
+            for who in order:
+                if who == "short":
+                    _call([_td_recording()], _event_blocks(n=1))
+                else:
+                    _call(_full_td(), _event_blocks(n=3))
+            saved = _saved_copy(bench)
+            assert saved is not None and _n_tiles(saved) == (40, 3), (order, saved and _n_tiles(saved))
+
+
+def test_patient_events_assigned_differently_are_a_different_input_set():
+    """The same number of events on another sensing pair (what leaving out the sensing index does)
+    must not share the copy either: the channel each block is filed under is part of the check."""
+    with _Bench() as bench:
+        bench.canonical_events = _event_blocks(n=3)
+        moved = [dict(b, channel="ZERO_TWO_LEFT") for b in _event_blocks(n=3)]
+        _call([_td_recording()], moved)
+        assert bench.files() == []
+
+
+def test_the_canonical_request_hands_the_tile_builder_exactly_the_one_input_set():
+    """`_raw_lsb_cache_canonical` is how the Stim Optimizer now asks: it must pass the setup's own
+    recordings, patient-event blocks, montage blocks and channels, as the heat maps do."""
+    with _Bench() as bench:
+        bench.canonical_td, bench.canonical_events = _full_td(), _event_blocks(n=3)
+        bench.canonical_montage = [dict(_event_block(), source="Montage PSD")]
+        td, psd, ev, mt, _order, chans = B._recordings_setup_cached(UID)
+        with mock.patch.object(B, "_raw_lsb_cache_cached", return_value={"x": 1}) as spy:
+            assert B._raw_lsb_cache_canonical(UID, centers=CENTERS) == {"x": 1}
+        a, k = spy.call_args
+        assert a[0] == UID and list(a[1]) == list(chans)
+        assert [id(r) for r in a[2]] == [id(r) for r in list(td) + list(psd)]
+        assert a[3] is ev and k["montage_psd_blocks"] is mt and k["centers"] == CENTERS
+
+
+def test_stamping_the_time_domain_recordings_does_not_depend_on_which_page_ran_first():
+    """A survey or montage recording is never labelled a streaming recording, and a recording list
+    stamped by one route before the tiles are built gives the same tiles as an unstamped one."""
+    survey = _td_recording(t0=1_700_000_200.0, seed=3)
+    survey.pop("product")
+    survey["RecordingType"] = "MedtronicBrainSenseSurvey"
+    B._stamp_td_product([survey])
+    # never streaming; since 2026-09-26 (the PI: "call the Montage recordings Montage") it is
+    # stamped with the label table's own montage entry, the same on every route
+    assert survey.get("product") == "montage_td", "a survey recording must not be stamped as streaming"
+    plain = _td_recording(seed=4)
+    plain.pop("product")
+    stamped = dict(plain)
+    B._stamp_td_product([stamped])
+    with _Bench():
+        a = _call([dict(plain)], _event_blocks(), use_shared_cache=False)
+        b = _call([stamped], _event_blocks(), use_shared_cache=False)
+        assert a["ZERO_THREE_LEFT"]["td"]["source"] == b["ZERO_THREE_LEFT"]["td"]["source"]
+        compared, different = _families_equal(a, b)
+        assert compared > 50 and different == 0, (compared, different)
+
+
+# ---- the implant date (the PI, 2026-09-25; decisions 260 and 263) --------------------------------
+_START = 1_700_000_030.0
+
+
+def _pre_implant_inputs():
+    """A recording that spans the start, one wholly before it, a survey recording before it, two
+    patient-event PSDs (one before, one after) and two montage PSDs (one before, one after)."""
+    spans = _td_recording(t0=1_700_000_000.0, seconds=60.0, seed=5)
+    before = _td_recording(t0=1_699_990_000.0, seconds=30.0, seed=6)
+    survey = _td_recording(t0=1_699_999_000.0, seconds=30.0, seed=7)
+    survey.pop("product")
+    survey["RecordingType"] = "MedtronicBrainSenseSurvey"
+    events = [_event_block(t=1_700_000_010.0), _event_block(t=1_700_000_040.0)]
+    montage = [dict(_event_block(t=1_699_999_000.0), source="Montage PSD"),
+               dict(_event_block(t=1_700_000_050.0), source="Montage PSD")]
+    return [spans, before, survey], events, montage
+
+
+def _assert_nothing_before_start(cache, where):
+    e = cache["ZERO_THREE_LEFT"]
+    t = np.asarray(e["td"]["t"], dtype=float)
+    first_sample = t - float(e["window_s"]) / 2.0
+    assert t.size > 0, f"{where}: the part of the spanning recording after the start must stay"
+    assert (first_sample >= _START).all(), (where, float(first_sample.min()) - _START)
+    p = np.asarray(e["psd"]["t"], dtype=float)
+    assert p.size == 2 and (p >= _START).all(), (where, p.tolist())
+    assert e["n_td_windows"] == t.size and e["n_psd_windows"] == p.size
+
+
+def test_nothing_before_the_implant_date_enters_the_tiles_whichever_caller_builds_first():
+    td, ev, mt = _pre_implant_inputs()
+    for first in ("canonical", "direct"):
+        with _Bench() as bench, \
+             mock.patch.object(B._data_start, "data_start_s", return_value=_START):
+            bench.canonical_td, bench.canonical_events, bench.canonical_montage = td, ev, mt
+            B._RAW_LSB_CACHE_MEMO.clear()
+            for who in ((first, "direct" if first == "canonical" else "canonical")):
+                B._RAW_LSB_CACHE_MEMO.clear()
+                if who == "canonical":
+                    got = B._raw_lsb_cache_canonical(UID, centers=CENTERS)
+                else:
+                    got = B._raw_lsb_cache_cached(UID, ["ZERO_THREE_LEFT"], list(td), ev,
+                                                  montage_psd_blocks=mt, centers=CENTERS)
+                _assert_nothing_before_start(got, f"{first} first, {who}")
+            saved = _saved_copy(bench)
+            assert saved is not None
+            _assert_nothing_before_start(saved, f"{first} first, the saved copy")
+            scratch = B._raw_lsb_cache_cached(UID, ["ZERO_THREE_LEFT"], list(td), ev,
+                                              montage_psd_blocks=mt, centers=CENTERS,
+                                              use_shared_cache=False)
+            compared, different = _families_equal(saved, scratch)
+            assert compared > 50 and different == 0, (compared, different)
+
+
+def test_a_changed_implant_date_misses_the_file():
+    with _Bench():
+        with mock.patch.object(B._data_start, "data_start_s", return_value=0.0):
+            a = B._raw_lsb_shared_signature(UID, CENTERS)
+        with mock.patch.object(B._data_start, "data_start_s", return_value=_START):
+            b = B._raw_lsb_shared_signature(UID, CENTERS)
+        assert a != b
+
+
+# ---- a survey or montage recording's 3 s pieces are labelled "Montage" (the PI, 2026-09-26) ------
+# They are cut from the recording's time-domain signal, so they are TD pieces: they stay in the
+# tiles' time-domain family, the matcher reads them as TD, and no number moves. Only the label
+# changes, from the fallback "time-domain" (the recording carried no product after decision 289)
+# to the label table's own entry for them.
+_SURVEY_T0 = 1_700_000_200.0
+
+
+def _survey_recording(rtype="MedtronicBrainSenseSurvey", seed=3):
+    """30 s of survey/montage time-domain signal, as `_recordings_setup_cached` hands it over:
+    a RecordingType and no product."""
+    r = _td_recording(t0=_SURVEY_T0, seconds=30.0, seed=seed)
+    r.pop("product")
+    r["RecordingType"] = rtype
+    return r
+
+
+def _in_survey(entry):
+    t = np.asarray(entry["td"]["t"], dtype=float)
+    return (t >= _SURVEY_T0) & (t <= _SURVEY_T0 + 30.0)
+
+
+def test_every_survey_or_montage_type_is_stamped_montage_and_never_streaming():
+    for rtype in B.AVAILABILITY_PSD_TYPES:
+        r = _survey_recording(rtype=rtype)
+        B._stamp_td_product([r])
+        assert r.get("product") == "montage_td", (rtype, r.get("product"))
+    stream, indefinite = _td_recording(), _td_recording()
+    stream.pop("product"); indefinite.pop("product")
+    indefinite["RecordingType"] = "MedtronicIndefiniteStream"
+    B._stamp_td_product([stream, indefinite])
+    assert (stream["product"], indefinite["product"]) == ("streaming_td", "indefinite")
+
+
+def test_a_montage_recordings_pieces_read_montage_and_stay_in_the_time_domain_family():
+    with _Bench():
+        got = _call([_td_recording(), _survey_recording()], _event_blocks(),
+                    use_shared_cache=False)
+    e = got["ZERO_THREE_LEFT"]
+    src = list(e["td"]["source"])
+    inside = _in_survey(e)
+    assert int(inside.sum()) == 10, int(inside.sum())
+    assert {src[i] for i in np.flatnonzero(inside)} == {"Montage"}
+    assert {src[i] for i in np.flatnonzero(~inside)} == {"BrainSense streaming"}
+    assert "time-domain" not in src
+    # the device-PSD family is untouched: the three patient-event PSDs and nothing else
+    assert e["n_psd_windows"] == 3 and "Montage" not in set(e["psd"]["source"])
+
+
+def test_the_relabel_moves_no_value_and_changes_only_the_montage_pieces_label():
+    """The old label reproduced by handing the survey in with the fallback as its product, against
+    the new: every field equal but the TD label, which differs at exactly the survey's pieces; and
+    the matcher gives every rating the same tier and the same values from both."""
+    old = _survey_recording(); old["product"] = "time-domain"
+    with _Bench():
+        a = _call([_td_recording(), old], _event_blocks(), use_shared_cache=False)
+        b = _call([_td_recording(), _survey_recording()], _event_blocks(), use_shared_cache=False)
+    ea, eb = a["ZERO_THREE_LEFT"], b["ZERO_THREE_LEFT"]
+    sa, sb = list(ea["td"]["source"]), list(eb["td"]["source"])
+    assert len(sa) == len(sb)
+    moved = [i for i in range(len(sa)) if sa[i] != sb[i]]
+    assert moved == list(np.flatnonzero(_in_survey(eb))), moved
+    assert {sa[i] for i in moved} == {"time-domain"} and {sb[i] for i in moved} == {"Montage"}
+    relabelled = dict(ea, td=dict(ea["td"], source=sb))
+    compared, different = _families_equal({"ZERO_THREE_LEFT": relabelled}, b)
+    assert compared > 100 and different == 0, (compared, different)
+    pro = np.asarray([1_700_000_006.0, _SURVEY_T0 + 15.0, 1_700_000_140.0], dtype=float)
+    ra, sta = AV.live_lsb_spectrum_match(pro, ea, tol_s=60.0, td_quantity_s=30.0)
+    rb, stb = AV.live_lsb_spectrum_match(pro, eb, tol_s=60.0, td_quantity_s=30.0)
+    assert repr(sta) == repr(stb)
+    assert [r["tier"] for r in ra] == [r["tier"] for r in rb]
+    assert ra[1]["tier"] == AV.PRO_LSB_TIER_TD, "a rating inside the survey is read from its TD"
+    for x, y in zip(ra, rb):
+        vx = np.asarray([np.nan if v is None else v for v in x["lsb"]], dtype=float)
+        vy = np.asarray([np.nan if v is None else v for v in y["lsb"]], dtype=float)
+        assert np.array_equal(vx, vy, equal_nan=True)
+
+
+def test_the_tile_rule_version_moved_so_the_saved_copy_rebuilds_with_the_label():
+    assert B._RAW_LSB_RULE_VERSION != "v2_one_input_set_from_implant"
+    assert "montage" in B._RAW_LSB_RULE_VERSION.lower()
 
 
 if __name__ == "__main__":

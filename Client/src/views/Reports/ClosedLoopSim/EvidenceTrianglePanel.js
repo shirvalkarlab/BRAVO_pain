@@ -597,6 +597,13 @@ export default function EvidenceTrianglePanel({ report }) {
           Current to band power, band power to pain, current to pain: three measured links, and
           whether their signs agree with each other and with the control law.
         </MDTypography>
+        {data.pain_score && data.pain_score.key ? (
+          <MDTypography variant="caption" data-testid="triangle-pain-score"
+            sx={{ display: "block", fontSize: 11.5, color: "#1A1A1A" }}>
+            {`Pain is read as ${data.pain_score.label || data.pain_score.key} in both links that `
+              + "involve pain (the pain score chosen at the top of the page)."}
+          </MDTypography>
+        ) : null}
 
         <Grid container spacing={2} mt={0.5}>
           <Grid item xs={12} md={5}>

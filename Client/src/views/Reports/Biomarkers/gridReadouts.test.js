@@ -6,7 +6,7 @@
  * review measured on RCS08 (L 1-3+, 12.5 Hz, 300 s: r -0.534, interval -0.656 to -0.402, n 117,
  * q 0.0022) and the device ranges from the one home.
  */
-import { bestCellReadout, hoverReadout, hoverCustomData, rowTier, tierBullets, deviceSpectrumBullets, secondsLabel, stabilityMark, stabilityBullet, clinicSheetBullets } from "./gridReadouts";
+import { bestCellReadout, hoverReadout, hoverCustomData, rowTier, tierBullets, deviceSpectrumBullets, secondsLabel, stabilityMark, stabilityBullet, clinicSheetBullets, sourceSplitLine } from "./gridReadouts";
 
 // The block the sweep response carries (DecodeCommon.device_ranges.timing_ranges_for_page), as
 // corrected against the clinician tablet on 2026-09-15: onset (Dual) 0-30 s, not the FDA's 6 min.
@@ -154,7 +154,8 @@ describe("deviceSpectrumBullets", () => {
     const sw = { n_pain_reports_from_device_spectrum: 358, device_spectrum_total_grid: [[451, 451], [451, 451]] };
     const b = deviceSpectrumBullets(sw);
     expect(b).toEqual([
-      "358 of 451 matched reports (79%) had no voltage trace in the match window and were read from the device's 30 s FFT snapshots: a row of N s uses the nearest ceil(N/30) snapshots, or nothing.",
+      // The PI's vocabulary on the heat maps (2026-09-25): TD and PSD, one word each, everywhere.
+      "358 of 451 matched reports (79%) had no TD in the match window and were read from PSD: a row of N s uses the nearest ceil(N/30) PSDs, or nothing.",
       "Matching here uses the histogram card's tolerance.",
     ]);
     expect(deviceSpectrumBullets({ n_pain_reports_from_device_spectrum: 0 })).toEqual([]);
@@ -239,5 +240,39 @@ describe("the effective count beside the raw count (panel A item 4, 2026-09-22)"
     expect(hoverReadout(withEff, "auc", 2, 3)).toMatch(/^174 ratings, q = /);
     expect(hoverReadout(withEff, "corr", 1, 2)).toBe("96 ratings, p = 0.051");
     expect(bestCellReadout(SW, "corr", 1, 9).text).toMatch(/^117 ratings · interval/);
+  });
+});
+
+// P-19 (the PI, 2026-09-25): each cell's correlation on its TD reports alone and on its PSD reports
+// alone, as ONE line of text above the scatter -- never in the hover, never a figure. The numbers
+// are the live RCS08 cell the P-19 analysis measured (L 1-3+, 24.5 Hz, 30 s, NRS, daily defaults).
+describe("the TD / PSD line above the scatter (P-19)", () => {
+  const split = {
+    available: true, min_reports: 8,
+    td: { r_grid: [[-0.1, -0.0512]], n_grid: [[70, 76]], r_low_grid: [[-0.3, -0.2311]], r_high_grid: [[0.1, 0.1204]] },
+    psd: { r_grid: [[-0.2, -0.3698]], n_grid: [[5, 86]], r_low_grid: [[null, -0.5611]], r_high_grid: [[null, -0.1893]] },
+  };
+  const sw = { center_freqs_hz: [23.5, 24.5], correlation_by_recording_source: split };
+  test("both sources, each with its interval and count, in the PI's words", () => {
+    expect(sourceSplitLine(sw, 1, 0)).toBe(
+      "TD values: r \u22120.05 (\u22120.23 to +0.12), 76 reports \u00b7 PSD values: r \u22120.37 (\u22120.56 to \u22120.19), 86 reports");
+  });
+  test("a source under the minimum reads 'too few reports' with its count", () => {
+    expect(sourceSplitLine(sw, 0, 0)).toBe(
+      "TD values: r \u22120.10 (\u22120.30 to +0.10), 70 reports \u00b7 PSD values: too few reports (5)");
+  });
+  test("no line from a response without the split, or one that could not make it", () => {
+    expect(sourceSplitLine({ center_freqs_hz: [24.5] }, 0, 0)).toBeNull();
+    expect(sourceSplitLine({ correlation_by_recording_source: { available: false, reason: "x" } }, 0, 0)).toBeNull();
+    expect(sourceSplitLine(null, 0, 0)).toBeNull();
+  });
+  test("the hover carries no source text (the PI: the hover stays as it is)", () => {
+    const full = { ...SW, correlation_by_recording_source: { available: true, min_reports: 8,
+      td: { r_grid: SW.correlation_grid, n_grid: SW.correlation_grid.map((r) => r.map(() => 50)),
+        r_low_grid: SW.correlation_grid, r_high_grid: SW.correlation_grid },
+      psd: { r_grid: SW.correlation_grid, n_grid: SW.correlation_grid.map((r) => r.map(() => 50)),
+        r_low_grid: SW.correlation_grid, r_high_grid: SW.correlation_grid } } };
+    expect(hoverCustomData(full, "corr")).toEqual(hoverCustomData(SW, "corr"));
+    hoverCustomData(full, "corr").flat().forEach((h) => expect(h).not.toMatch(/TD|PSD/));
   });
 });

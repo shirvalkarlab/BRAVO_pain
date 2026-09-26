@@ -81,7 +81,7 @@ export default function TimingHistogram({ scanIndex, painSeries, windowMin, matc
       <div ref={ref} style={{ width: "100%", height }} data-testid="timing-histogram" />
       <MDTypography variant="caption" color="dark" sx={{ fontSize: 12.5 }} aria-live="polite">
         {offsets.length
-          ? `${data.nInside.toLocaleString()} samples inside ±${data.windowMin} min${dirText}; ${data.nTails.toLocaleString()} in the greyed tails (to ±${data.limMin} min). Grey also marks any side the direction setting excludes. A time-domain sample whose report falls inside its recording is stamped at the report's own time, so it sits at 0.${reportFirstNote}`
+          ? `Sources: time domain (TD), band power from up to 30 s of a streaming or a montage recording around the rating; PSD (the device's 30 s snapshot), from a patient event. ${data.nInside.toLocaleString()} samples inside ±${data.windowMin} min${dirText}; ${data.nTails.toLocaleString()} in the greyed tails (to ±${data.limMin} min). Grey also marks any side the direction setting excludes. A TD sample whose report falls inside its recording is stamped at the report's own time, so it sits at 0.${reportFirstNote}`
           : "No neural samples to place against the pain reports yet."}
       </MDTypography>
     </MDBox>

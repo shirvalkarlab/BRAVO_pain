@@ -198,9 +198,11 @@ those two.**
 - **The pain-report timestamp is California local wall-clock time, not universal time.** Always
   convert through `bravo_service._pro_timestamps_utc`. Device start times are already universal.
   **Parsing the report as universal smears every match by seven to eight hours.**
-- **Classifier version skew is a correctness risk.** The container has sklearn 1.5.2 while some
-  stored classifiers were fitted under 1.6.1. **Loading across that skew can silently mis-predict.**
-  Re-validate before trusting one.
+- **Classifier version skew is a correctness risk.** The beta-peak detector's two saved classifiers
+  were fitted under sklearn 1.6.1 and loaded under the pinned 1.5.2. On 2026-09-25 they gave the same
+  predictions under both versions (0 of 109,794 values differing) and were re-saved under 1.5.2;
+  a DecodeCommon test fails if the pinned version moves without re-saving them. **After any change
+  of the sklearn pin, compare predictions across the two versions before re-saving.**
 - **The Redis client must be constructed with protocol version 2**, because the running Redis
   predates version 6 and rejects the newer handshake. Otherwise every call fails with "unknown
   command HELLO".

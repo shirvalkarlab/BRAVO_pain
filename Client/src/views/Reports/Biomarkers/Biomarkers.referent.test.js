@@ -186,8 +186,9 @@ describe("the calibrated heat-map card (BiomarkerHeatmapGrids)", () => {
     const items = Array.from(container.querySelectorAll("li")).map((el) => el.textContent);
     expect(items).toContain(expected[0]);
     // The fact survives, and survives ONCE: RED today (3) because the drawer's bullet names the
-    // snapshots twice more on its own.
-    expect(countOf(container.textContent, "FFT snapshots")).toBe(1);
+    // snapshots twice more on its own. Counted on the caption's own words since the heat maps took
+    // the PI's vocabulary (2026-09-25: TD and PSD), which renamed "FFT snapshots" to "PSD".
+    expect(countOf(container.textContent, "were read from PSD")).toBe(1);
   });
 
   it("the drawer's first note speaks of the circled cell and nine lengths (decision 172), a pin", async () => {

@@ -623,6 +623,12 @@ def _pulse_width_pooling_block(s1) -> dict:
             if surf is not None:
                 surf.update(_pain_reference(s1))
                 row["surface"] = surf
+            # Decision 253's check on this pooled map (2026-09-25), carried like the per-pairing
+            # rows' (`_attach_rate_stratum_surfaces`): computed on the fitted object, copied here
+            # because the rows are built from the summary frame, which has no column for it.
+            cal = (rs.meta or {}).get("calibration")
+            if cal is not None:
+                row["calibration"] = _two_stage_jsonable(cal)
     return dict(available=True, default="separate", note=note,
                 in_force_pairing=dict(audit.get("in_force_pairing") or {}),
                 n_rates=audit.get("n_rates"), n_rates_fitted=audit.get("n_rates_fitted"),

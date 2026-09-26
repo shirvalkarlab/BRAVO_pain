@@ -1442,6 +1442,86 @@ def _elapsed_week_cluster(times, n):
     return np.where(nat, -1, wk.astype(int)).astype(int)
 
 
+def _times_epoch_s(times):
+    """Per-sample UTC epoch seconds (NaN where unparseable), parsed exactly as the two block helpers
+    above and below parse them."""
+    t_dt = pd.to_datetime(pd.Series([str(t) for t in times]), errors="coerce", format="ISO8601")
+    te = t_dt.to_numpy().astype("datetime64[ns]").astype("int64") / 1e9
+    return np.where(t_dt.isna().to_numpy(), np.nan, te)
+
+
+def _one_block_per_report(blocks, rating_group, t_epoch, *, invalid=None):
+    """ONE PAIN REPORT, ONE BLOCK (June audit item [22], P-03; the PI approved it 2026-09-25).
+
+    Several neural samples are matched to one pain report, and every sample used to be given its
+    own block -- its own stimulation state (the current in force when it was recorded) or its own
+    elapsed week -- so a report whose samples straddled a change of current or a week boundary was
+    counted in two blocks at once: in the stability test's comparison of states, in the per-state
+    odds ratios and ROC, and in the mixed model's weekly grouping.
+
+    Every sample of one report now takes the block of that report's EARLIEST matched sample (by
+    time). That is the rule `deployment_forward_chaining` already used for weeks ("Assign each
+    rating cluster to ONE week (its earliest)"), so there is one rule, not two. A report that never
+    straddled a boundary is untouched, so each sample of it keeps the state its own recording time
+    gives it (the physically right state for band power, `_assign_stim_eras`).
+
+    `blocks` is the per-sample block (a state tag, or an integer week); `invalid` is the value that
+    means "no block" (None for states, -1 for weeks) and is never copied or overwritten; a sample
+    with `rating_group` below 0 (matched to no report) is left alone. Call it on the rows that
+    enter the analysis, so the earliest sample is one the analysis actually uses.
+
+    Returns ``(new_blocks, info)``; ``info`` counts the reports seen, the reports that were split,
+    and the samples whose block changed.
+    """
+    b = np.asarray(blocks, dtype=object if (invalid is None) else None).copy()
+    rg = np.asarray(rating_group)
+    t = np.asarray(t_epoch, dtype=float)
+    if invalid is None:
+        valid = np.array([x is not None for x in b], dtype=bool)
+    else:
+        valid = b != invalid
+    use = valid & (rg >= 0) & np.isfinite(t)
+    n_reports = n_split = n_moved = 0
+    if use.any():
+        idx = np.flatnonzero(use)
+        order = idx[np.lexsort((t[idx], rg[idx]))]           # by report, then by time
+        g = rg[order]
+        starts = np.flatnonzero(np.r_[True, g[1:] != g[:-1]])
+        ends = np.r_[starts[1:], g.size]
+        for s, e in zip(starts, ends):
+            rows = order[s:e]
+            n_reports += 1
+            first = b[rows[0]]
+            differs = b[rows] != first
+            if np.any(differs):
+                n_split += 1
+                n_moved += int(np.count_nonzero(differs))
+                b[rows] = first
+    return b, {"n_reports": int(n_reports), "n_reports_split": int(n_split),
+               "n_samples_moved": int(n_moved)}
+
+
+#: How `_one_block_per_report` decides, in the words every output carries beside its counts.
+ONE_BLOCK_PER_REPORT_RULE = (
+    "every sample matched to one pain report is counted in the block (stimulation state, or elapsed "
+    "week) of that report's earliest matched sample; a report whose samples never straddled a "
+    "boundary is unchanged")
+
+
+def _one_block_summary(*, states=None, weeks=None):
+    """The block a reader of an output sees: how many reports straddled a boundary before each was
+    put in one block, per kind of block this output groups by, and the rule."""
+    out = {"rule": ONE_BLOCK_PER_REPORT_RULE}
+    if states is not None:
+        out["n_reports_split_across_states"] = int(states["n_reports_split"])
+        out["n_samples_moved_between_states"] = int(states["n_samples_moved"])
+    if weeks is not None:
+        out["n_reports_split_across_weeks"] = int(weeks["n_reports_split"])
+        out["n_samples_moved_between_weeks"] = int(weeks["n_samples_moved"])
+    out["n_samples_moved"] = int(sum(v for k, v in out.items() if k.startswith("n_samples_moved_")))
+    return out
+
+
 def _assign_stim_eras(times, stim_series, off_max=0.1, low_max=1.5):
     """Map per-sample times to a stim era (OFF/LOW/HIGH) by carrying the stim trajectory forward
     (LOCF) onto each sample. Returns an object-array of era tags aligned to `times`, or None when
@@ -1505,6 +1585,13 @@ def deployment_roc_by_era(td_detail, channel_raw, center_hz, stim_series, *, ban
     era = _assign_stim_eras(times, stim_series, off_max=off_max, low_max=low_max)
     if era is None:
         return {"available": False, "reason": "no usable stim series for era assignment"}
+    # One pain report, one state (P-03, audit [22]): a rating is the bootstrap's unit here, so it
+    # must sit in one state's ROC, not in two. Decided on the rows this band can use.
+    _fin = np.isfinite(bp) & np.isfinite(labels)
+    era_fin, _one_state = _one_block_per_report(era[_fin], np.asarray(rating_group)[_fin],
+                                                _times_epoch_s(times)[_fin])
+    era = np.asarray(era, dtype=object).copy()
+    era[_fin] = era_fin
 
     from sklearn import metrics
 
@@ -1639,6 +1726,7 @@ def deployment_roc_by_era(td_detail, channel_raw, center_hz, stim_series, *, ban
         "ci_overlaps_pooled": ci_overlaps_pooled,
         "portable_by_ci": portable_by_ci,
         "era_counts": {t: int(np.sum(era == t)) for t in ["OFF", "LOW", "HIGH"]},
+        "one_block_per_report": _one_block_summary(states=_one_state),
         "thresholds_mA": {"off_max": off_max, "low_max": low_max},
         "n_eras_estimable": int(sum(1 for t in ["OFF", "LOW", "HIGH"] if eras_out[t].get("available"))),
         "note": ("Per-era refit of the deployment ROC + Youden cut-point, all oriented to the POOLED "
@@ -1693,6 +1781,11 @@ def threshold_drift_by_week(td_detail, channel_raw, center_hz, *, band_width_hz=
                              pain_cutoff=pain_cutoff, rating_group=rating_group)
     weeks_all = _elapsed_week_cluster(times, len(bp))
     m = np.isfinite(bp) & np.isfinite(y_all) & (weeks_all >= 0)
+    # One pain report, one week (P-03, audit [22]), on the rows this check uses.
+    _wk_m, _one_week = _one_block_per_report(weeks_all[m], np.asarray(rating_group)[m],
+                                             _times_epoch_s(times)[m], invalid=-1)
+    weeks_all = weeks_all.copy()
+    weeks_all[m] = _wk_m.astype(int)
     if m.sum() < DRIFT_MIN_SAMPLES_PER_WEEK * 2 or len(np.unique(y_all[m])) < 2:
         return {"available": False, "reason": "too few matched samples for a drift assessment",
                 "status": "not_assessed"}
@@ -1741,6 +1834,7 @@ def threshold_drift_by_week(td_detail, channel_raw, center_hz, *, band_width_hz=
                 "n_weeks_qualifying": int(n_weeks), "pooled_threshold": pooled_thr,
                 "weekly": weekly, "slope_per_week": None, "slope_p": None, "total_drift": None,
                 "drift_flag": False,
+                "one_block_per_report": _one_block_summary(weeks=_one_week),
                 "note": (f"Only {n_weeks} week(s) had >= {DRIFT_MIN_SAMPLES_PER_WEEK} matched samples "
                          f"with both classes (need >= {DRIFT_MIN_WEEKS}); calendar-time drift not "
                          f"assessed.")}
@@ -1766,6 +1860,7 @@ def threshold_drift_by_week(td_detail, channel_raw, center_hz, *, band_width_hz=
             "slope_per_week": slope, "slope_p": slope_p, "total_drift": total_drift,
             "week_span": span, "drift_flag": drift_flag,
             "weekly": weekly,
+            "one_block_per_report": _one_block_summary(weeks=_one_week),
             "note": (f"Youden cut-point trend over {n_weeks} qualifying weeks "
                      f"(>= {DRIFT_MIN_SAMPLES_PER_WEEK} matched samples, both classes each). "
                      f"Slope {slope:+.3g}/week (p={slope_p:.3g}); total drift {total_drift:+.3g} over "
@@ -3805,8 +3900,8 @@ def band_pain_auc(power, pain_labels, report_group, *, times=None, strategy="ter
                                   **base)
     if report_group is None:
         return _blank_band_answer(
-            "the pain report identifiers were not supplied, so every spectral sample would have to "
-            "be counted as its own independent observation of this patient's pain. That is the "
+            "the pain report identifiers were not supplied, so every sample of TD and PSD band power "
+            "would have to be counted as its own independent observation of this patient's pain. That is the "
             "pseudoreplication this project's audit was called to find, and it makes a band look "
             "more convincing than the data can support, so no number is computed here",
             n_samples=int(x.size), **base)
@@ -3821,8 +3916,8 @@ def band_pain_auc(power, pain_labels, report_group, *, times=None, strategy="ter
     n_ok = int(m.sum())
     if n_ok == 0:
         return _blank_band_answer(
-            "no spectral sample had both a usable band power value and a pain score on one side of "
-            "the high-or-low split", **base)
+            "no sample of TD and PSD band power had both a usable value and a pain score on one "
+            "side of the high-or-low split", **base)
     xs = x[m]
     ys = y_all[m].astype(int)
     gs = rg[m]
@@ -3961,8 +4056,8 @@ def band_pain_correlation(power, pain_labels, report_group, *, times=None, n_boo
                                   **base)
     if report_group is None:
         return _blank_band_answer(
-            "the pain report identifiers were not supplied, so every spectral sample would have to "
-            "be counted as its own independent observation of this patient's pain. That is the "
+            "the pain report identifiers were not supplied, so every sample of TD and PSD band power "
+            "would have to be counted as its own independent observation of this patient's pain. That is the "
             "pseudoreplication this project's audit was called to find, and it makes a band look "
             "more convincing than the data can support, so no number is computed here",
             n_samples=int(x.size), **base)
@@ -3971,8 +4066,8 @@ def band_pain_correlation(power, pain_labels, report_group, *, times=None, n_boo
     n_ok = int(m.sum())
     if n_ok < 3:
         return _blank_band_answer(
-            f"only {n_ok} spectral samples had both a usable band power value and a matched pain "
-            "score, and a correlation needs at least three",
+            f"only {n_ok} samples of TD and PSD band power had both a usable value and a matched "
+            "pain score, and a correlation needs at least three",
             n_samples=n_ok, n_reports=(int(len(np.unique(rg[m]))) if n_ok else 0), **base)
     xs = x[m]
     ys = lab[m]
@@ -4079,8 +4174,8 @@ def band_pain_auc_from_table(table, *, channel, center_hz, pain_column="nrs",
     if group_column not in d.columns:
         return _blank_band_answer(
             f"no {group_column} column: the grouping that makes each pain report count once is not "
-            "there, and computing this without it would treat every spectral sample as an "
-            "independent observation of the patient's pain, which is the pseudoreplication this "
+            "there, and computing this without it would treat every sample of TD and PSD band "
+            "power as an independent observation of the patient's pain, which is the pseudoreplication this "
             "project's audit was called to find",
             n_samples=int(len(d)), auc=None, no_relationship_value=0.5,
             power_feature=str(power_column))
@@ -4372,7 +4467,7 @@ def band_pain_auc_export(td_detail, *, channels=None, centers=None, band_width_h
         if bp is None:
             row.update(_blank_band_answer(
                 f"contact pair {ch}, or the band centred on {fc:g} Hz, is not present in the "
-                "pooled spectra handed in", auc=None, no_relationship_value=0.5,
+                "pooled TD and PSD band power handed in", auc=None, no_relationship_value=0.5,
                 power_feature=feat_name))
         else:
             row.update(band_pain_auc(bp, labels, rg, times=times, strategy=strategy,
@@ -4418,7 +4513,7 @@ def band_pain_correlation_export(td_detail, *, channels=None, centers=None, band
         if bp is None:
             row.update(_blank_band_answer(
                 f"contact pair {ch}, or the band centred on {fc:g} Hz, is not present in the "
-                "pooled spectra handed in", pearson_r=None, no_relationship_value=0.0,
+                "pooled TD and PSD band power handed in", pearson_r=None, no_relationship_value=0.0,
                 power_feature=feat_name))
             rows.append(row)
             continue
@@ -4525,6 +4620,17 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
     # The window is anchored on the FIRST sample of the whole record, not on the first retained one,
     # so the exclusion cannot walk forward as data accumulates.
     _cl_all = _elapsed_week_cluster(times, len(bp))
+    # ONE PAIN REPORT, ONE WEEK (P-03, audit [22]): the random intercept groups by week, and a
+    # report whose samples straddled a week boundary sat in two groups. Decided on this channel's
+    # rows before the burn-in, so the burn-in drops a report whole or not at all.
+    _rg_all = td_detail.get("rating_group")
+    _one_week = {"n_reports": 0, "n_reports_split": 0, "n_samples_moved": 0}
+    if _rg_all is not None and len(_rg_all) == len(bp) and times is not None:
+        _cm = chan_finite & np.isfinite(labels) & (_cl_all >= 0)
+        _wk_cm, _one_week = _one_block_per_report(_cl_all[_cm], np.asarray(_rg_all)[_cm],
+                                                  _times_epoch_s(times)[_cm], invalid=-1)
+        _cl_all = _cl_all.copy()
+        _cl_all[_cm] = _wk_cm.astype(int)
     n_weeks_before = int(len(np.unique(_cl_all[chan_finite & (_cl_all >= 0)])))
     burn_in = int(exclude_first_weeks or 0)
     if burn_in > 0:
@@ -4600,6 +4706,7 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
                 "excluded_first_weeks": burn_in,
                 "n_excluded_burn_in": n_dropped_burn_in,
                 "n_weeks_before_exclusion": n_weeks_before,
+                "one_block_per_report": _one_block_summary(weeks=_one_week),
                 "coef": _f(est), "odds_ratio": None,
                 "or_lo": None, "or_hi": None,
                 "z": None, "p": None,
@@ -4631,6 +4738,7 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
                 "excluded_first_weeks": burn_in,
                 "n_excluded_burn_in": n_dropped_burn_in,
                 "n_weeks_before_exclusion": n_weeks_before,
+                "one_block_per_report": _one_block_summary(weeks=_one_week),
             "coef": _f(est), "odds_ratio": _f(odds),
             "or_lo": _f(or_lo) if or_lo is not None else None,
             "or_hi": _f(or_hi) if or_hi is not None else None,
@@ -4646,6 +4754,21 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
 #: odds before we call the biomarker stim-dependent". This is a DECLARED judgement, not an estimate;
 #: it is stated here so it can be argued with rather than buried in a p-value.
 STABILITY_EQUIVALENCE_MARGIN_LOG_OR = float(np.log(2.0))
+
+#: How the interval on each stimulation state's odds ratio is made (P-03, audit [0]), carried on the
+#: output beside the intervals so it is quoted with them.
+OR_BY_ERA_INTERVAL = (
+    "95% intervals: 1.96 standard errors either side of each state's log odds ratio (a Wald "
+    "interval), the standard errors clustered on the pain report, so each rating counts once "
+    "however many samples it was matched to (the CR1 sandwich estimator, with its small-sample "
+    "factor). The check of whether the band behaves the same in every state reads the same "
+    "standard errors.")
+#: The same, for a result built without a pain-report identifier (none of the page's routes).
+OR_BY_ERA_INTERVAL_UNCLUSTERED = (
+    "95% intervals from the same fit that gives each state's odds ratio: 1.96 of the fit's own "
+    "standard errors either side, on the log scale (a Wald interval). No pain-report identifier "
+    "reached this fit, so it counts every sample as independent; several samples come from one "
+    "pain report, so these intervals are narrower than the data justify.")
 
 #: Percept time-domain sampling rate, used to place stimulation harmonics in the scanned spectrum.
 DEVICE_TD_FS_HZ = 250.0
@@ -4736,9 +4859,37 @@ def harmonic_landings_hz(rate_hz, f_lo, f_hi, *, fs=DEVICE_TD_FS_HZ, max_harmoni
     return out
 
 
-def _era_slope_table(df, era_col="stim_era", x="band_power", y="pain_high", min_n=6):
-    """Per-era logistic slope on `x` with its standard error, for the equivalence test."""
+#: How each stimulation state's standard error is made, in the words every slope entry carries.
+SE_CLUSTERED_ON_REPORT = (
+    "clustered on the pain report (CR1: the sandwich estimator summing each report's score over "
+    "its samples, times G/(G-1) x (N-1)/(N-K) for G reports, N samples, K = 2 coefficients)")
+SE_NOT_CLUSTERED = ("not clustered: no pain-report identifier reached the fit, so every sample "
+                    "was counted as independent")
+
+
+def _era_slope_table(df, era_col="stim_era", x="band_power", y="pain_high", min_n=6,
+                     group_col=None):
+    """Per-era logistic slope on `x` with its standard error, for the equivalence test and for
+    each state's odds-ratio interval.
+
+    THE STANDARD ERROR IS CLUSTERED ON THE PAIN REPORT when `group_col` names the report of each
+    sample (the PI, 2026-09-25 night, the P-03 follow-up). Several samples are matched to one pain
+    report and carry its rating; counted as independent, a report matched to ten samples counted
+    ten times and the interval was narrower than the data justify. The estimator is CR1 -- the
+    sandwich of the fit's own information matrix around the summed per-report score products,
+    times G/(G-1) x (N-1)/(N-K) -- which is statsmodels' `cov_type="cluster"` with its default
+    small-sample correction (Stata's): CR0 alone is biased low with tens of clusters, which is
+    what one stimulation state holds here. The interval stays a normal (Wald) one, 1.96 standard
+    errors, as the equivalence check's 90% interval stays normal. The slope itself is the plain
+    fit's, unchanged. A state resting on fewer than two reports has no clustered standard error
+    and is left out (None), never given the unclustered one.
+
+    Since each report is counted in one state (`_one_block_per_report`), no report contributes to
+    two states' fits, so the equivalence check's sqrt(se_a^2 + se_b^2) for a difference stays
+    right: the states are independent sets of reports.
+    """
     import statsmodels.api as sm
+    grouped = group_col is not None and group_col in df.columns
     out = {}
     for tag in list(df[era_col].cat.categories) if hasattr(df[era_col], "cat") else sorted(df[era_col].unique()):
         sub = df[df[era_col] == tag]
@@ -4747,9 +4898,24 @@ def _era_slope_table(df, era_col="stim_era", x="band_power", y="pain_high", min_
             continue
         try:
             X = sm.add_constant(sub[x].to_numpy())
-            r = sm.GLM(sub[y].to_numpy(), X, family=sm.families.Binomial()).fit()
-            b, se = float(r.params[1]), float(r.bse[1])
-            out[str(tag)] = ({"slope_log_or": b, "se": se, "n": int(len(sub))}
+            yv = sub[y].to_numpy()
+            r = sm.GLM(yv, X, family=sm.families.Binomial()).fit()
+            b, se_plain = float(r.params[1]), float(r.bse[1])
+            n_reports = None
+            if grouped:
+                g = pd.factorize(sub[group_col], sort=True)[0]
+                n_reports = int(np.unique(g).size)
+                if n_reports < 2:
+                    out[str(tag)] = None
+                    continue
+                rc = sm.GLM(yv, X, family=sm.families.Binomial()).fit(
+                    cov_type="cluster", cov_kwds={"groups": g, "use_correction": True})
+                se = float(rc.bse[1])
+            else:
+                se = se_plain
+            out[str(tag)] = ({"slope_log_or": b, "se": se, "se_unclustered": se_plain,
+                              "n": int(len(sub)), "n_reports": n_reports,
+                              "se_method": SE_CLUSTERED_ON_REPORT if grouped else SE_NOT_CLUSTERED}
                              if np.isfinite(b) and np.isfinite(se) else None)
         except Exception:
             out[str(tag)] = None
@@ -4948,6 +5114,18 @@ def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
     t_finite = cl >= 0
     # Drop unparseable-time / no-era rows from the LRT (do NOT relabel them OFF).
     m = np.isfinite(bp) & np.isfinite(y) & t_finite & (~era_none)
+    # ONE PAIN REPORT, ONE STATE AND ONE WEEK (P-03, audit [22]): a report whose samples straddled
+    # a change of current, or a week boundary, was counted in two states, or in two of the random
+    # intercept's weeks. Decided on the rows the test uses.
+    _rg_all = td_detail.get("rating_group")
+    _one_state = _one_week = {"n_reports": 0, "n_reports_split": 0, "n_samples_moved": 0}
+    if _rg_all is not None and len(_rg_all) == len(bp) and m.any():
+        _rgm = np.asarray(_rg_all)[m]
+        _tm = _times_epoch_s(times)[m]
+        _era_m, _one_state = _one_block_per_report(era[m], _rgm, _tm)
+        _cl_m, _one_week = _one_block_per_report(cl[m], _rgm, _tm, invalid=-1)
+        era = np.asarray(era, dtype=object).copy(); era[m] = _era_m
+        cl = cl.copy(); cl[m] = _cl_m.astype(int)
     if m.sum() < 20 or len(np.unique(y[m])) < 2 or len(np.unique(era[m])) < 2:
         return {"available": False, "reason": "too few samples / eras for an interaction test"}
     # PARITY (audit §6 minor): ddof=1 z-score (phase2b).
@@ -4958,6 +5136,13 @@ def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
         "stim_era": pd.Categorical(era[m], categories=["OFF", "LOW", "HIGH"]),
         "cluster": cl[m],
     })
+    # THE PAIN REPORT OF EACH SAMPLE, for standard errors clustered on it (the PI, 2026-09-25
+    # night). A sample matched to no report (rating_group below 0) is its own group.
+    _report_col = None
+    if _rg_all is not None and len(_rg_all) == len(bp):
+        _rgm_all = np.asarray(_rg_all)[m].astype(np.int64)
+        df["report"] = np.where(_rgm_all >= 0, _rgm_all, -(np.arange(_rgm_all.size) + 1))
+        _report_col = "report"
     n_clusters = int(df["cluster"].nunique())
     re_term = "+ (1|cluster)" if n_clusters > 1 else ""
     formula_red = f"pain_high ~ band_power + stim_era {re_term}"
@@ -4981,10 +5166,21 @@ def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
     except Exception as e:
         return {"available": False, "reason": f"LRT failed: {e}"}
     # Per-era ORs via simple per-era GLM (no random intercept — each era is one block already).
+    # EACH WITH ITS 95% INTERVAL (P-03, audit [0]; the PI approved it 2026-09-25): the Wald
+    # interval exp(coefficient -/+ 1.96 standard errors). The standard error is CLUSTERED ON THE
+    # PAIN REPORT (the PI, 2026-09-25 night): `_era_slope_table` fits the same model and returns
+    # that error, and the equivalence verdict below reads the same table, so the interval printed
+    # and the "behaves the same" check rest on one standard error. The odds ratio itself is this
+    # loop's plain fit, as before.
+    _z975 = 1.959963984540054
+    slope_tbl = _era_slope_table(df, group_col=_report_col)
     try:
         import statsmodels.api as sm
-        or_by_era = {}
+        or_by_era, or_by_era_ci, or_by_era_n_reports = {}, {}, {}
         for tag in ["OFF", "LOW", "HIGH"]:
+            or_by_era_ci[tag] = None
+            _sl = slope_tbl.get(tag)
+            or_by_era_n_reports[tag] = (_sl or {}).get("n_reports")
             sub = df[df["stim_era"] == tag]
             if len(sub) < 6 or sub["pain_high"].nunique() < 2:
                 or_by_era[tag] = None; continue
@@ -4992,10 +5188,17 @@ def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
             try:
                 res = sm.GLM(sub["pain_high"].to_numpy(), X, family=sm.families.Binomial()).fit()
                 or_by_era[tag] = float(np.exp(res.params[1])) if np.isfinite(res.params[1]) else None
+                _b = float(res.params[1])
+                _se = float(_sl["se"]) if _sl else float("nan")
+                if or_by_era[tag] is not None and np.isfinite(_se):
+                    or_by_era_ci[tag] = [float(np.exp(_b - _z975 * _se)),
+                                         float(np.exp(_b + _z975 * _se))]
             except Exception:
                 or_by_era[tag] = None
     except Exception:
         or_by_era = {"OFF": None, "LOW": None, "HIGH": None}
+        or_by_era_ci = {"OFF": None, "LOW": None, "HIGH": None}
+        or_by_era_n_reports = {"OFF": None, "LOW": None, "HIGH": None}
     # --- rate as a covariate, and the equivalence verdict (2026-09-03) -----------------------
     rate_vals = _locf_values(times, rate_series)[m] if rate_series else np.full(int(m.sum()), np.nan)
     rate_info = {"available": False, "reason": "no rate series supplied"}
@@ -5029,7 +5232,6 @@ def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
             "harmonic_landings": landings,
             "band_near_harmonic_hz": (_f(near) if near is not None else None),
         }
-    slope_tbl = _era_slope_table(df)
     equiv = stability_equivalence(slope_tbl, p_lrt, margin=equivalence_margin_log_or)
     return {
         "available": True, "model": "band x stim_era LRT (glmer logistic, lme4 via pymer4)",
@@ -5047,6 +5249,11 @@ def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
         # We carry the raw p here; the calling endpoint can FDR if it's running across many bands.
         "stim_stable": (np.isfinite(p_lrt) and p_lrt >= 0.05),
         "or_by_era": {k: (_f(v) if v is not None else None) for k, v in or_by_era.items()},
+        "or_by_era_ci": {k: ([_f(v[0]), _f(v[1])] if v is not None else None)
+                         for k, v in or_by_era_ci.items()},
+        "or_by_era_interval": (OR_BY_ERA_INTERVAL if _report_col else OR_BY_ERA_INTERVAL_UNCLUSTERED),
+        "or_by_era_n_reports": or_by_era_n_reports,
+        "one_block_per_report": _one_block_summary(states=_one_state, weeks=_one_week),
         "era_counts": {tag: int((df["stim_era"] == tag).sum()) for tag in ["OFF", "LOW", "HIGH"]},
         "thresholds_mA": {"off_max": off_max, "low_max": low_max},
     }
@@ -5514,6 +5721,9 @@ def _sweep_blank(reason, *, n_reports=0):
         "clinic_sheet_n_grid": [],
         "clinic_sheet_n_grid_auc": [],
         "n_pain_reports_from_clinic_sheet": None,
+        "correlation_by_recording_source": {
+            "available": False, "reason": "the grid could not be computed",
+            "min_reports": SOURCE_SPLIT_MIN_REPORTS, "is": SOURCE_SPLIT_IS},
         "best_correlation_rows": [],
         "best_auc_rows": [],
         "notes": [],
@@ -5637,6 +5847,96 @@ DEVICE_SPECTRUM_AXIS_NOTE = (
     "own FFT snapshots instead. Each snapshot covers 30 s, so a row of N seconds takes the nearest "
     "ceil(N / 30) snapshots within the window, and a report without that many contributes nothing "
     "to that row -- which is why the taller rows can hold fewer reports than the short ones.")
+
+
+#: P-19 (the PI's ruling of 2026-09-25). A source's own correlation is printed with its interval only
+#: from this many reports up -- the same minimum the headline interval needs (`_best_rows_correlation`).
+SOURCE_SPLIT_MIN_REPORTS = 8
+
+#: What the split is, in the words the response carries beside it (the PI's vocabulary: TD and PSD).
+SOURCE_SPLIT_IS = (
+    "the same Pearson correlation as the cell, on the same band-power values after the same outlier "
+    "rule and the same matching, computed on the reports whose band power came from TD (the "
+    "time-domain recording in 3 s pieces, used whenever any falls in the match window) alone, and on "
+    "those whose band power came from PSD (the device's 30 s snapshots, used only when no TD does) "
+    "alone; each with the cell's own interval method. Descriptive: it selects no band, sets no "
+    "interval, q or verdict, and draws nothing.")
+
+
+def _block_boot_r_interval(x, y, *, n_boot, rng):
+    """The headline interval's method (`_best_rows_correlation`) on one set of pairs: whole reports
+    resampled in blocks sized by the p-value's rule on these reports' own ratings, the middle 95%.
+    Returns `(low, high)`, both None under `SOURCE_SPLIT_MIN_REPORTS` pairs or too few usable draws."""
+    if x.size < SOURCE_SPLIT_MIN_REPORTS:
+        return None, None
+    block = _interval_block_length(y)
+    picks = block_bootstrap_picks(x.size, block, int(n_boot), rng)
+    xb = x[picks]
+    yb = y[picks]
+    # The same subtractions, products and row sums as the headline interval, written in place with
+    # one reused buffer, as `_best_rows_correlation` does; the order of every addition is unchanged.
+    with np.errstate(invalid="ignore", divide="ignore"):
+        xb -= xb.mean(axis=1, keepdims=True)
+        yb -= yb.mean(axis=1, keepdims=True)
+        prod = xb * yb
+        sxy = prod.sum(axis=1)
+        np.multiply(xb, xb, out=prod)
+        sxx = prod.sum(axis=1)
+        np.multiply(yb, yb, out=prod)
+        syy = prod.sum(axis=1)
+        rb = sxy / np.sqrt(sxx * syy)
+    lo, hi, _ = _percentile_interval(rb)
+    return lo, hi
+
+
+def _correlation_by_recording_source(X, pain, from_device_spectrum, *, n_boot, seed):
+    """Every cell's correlation on its TD-read reports alone and on its PSD-read reports alone
+    (handoff item P-19; the PI, 2026-09-25: "describe a heat map split by recording source" in text,
+    never a separate figure).
+
+    `X` is the (lengths, reports, bands) matrix the cell itself was computed from, AFTER the outlier
+    rule, so the two counts add up to the cell's own count; `from_device_spectrum` is the matcher's
+    per-report flag (True: PSD). The correlation is `pearson_r_columns`, the cell's own routine. The
+    interval is the headline cell's method, each source of each cell drawing from ITS OWN generator
+    seeded from the sweep's seed plus the band column (the P-19 analysis's own draw, so its numbers
+    reproduce bit for bit, and one source's interval never depends on the other's), so the shared
+    generator behind the grid's shuffles and intervals is never touched and no existing number can
+    move. Descriptive only: nothing reads it to select, correct or judge.
+    """
+    flags = list(from_device_spectrum or [])
+    T, P, C = X.shape
+    if len(flags) != P:
+        return {"available": False,
+                "reason": ("which source each pain report's band power came from was not handed "
+                           "in, so the grid cannot be split by source"),
+                "min_reports": SOURCE_SPLIT_MIN_REPORTS, "is": SOURCE_SPLIT_IS}
+    psd = np.asarray([bool(v) for v in flags], dtype=bool)
+    y = np.asarray(pain, dtype=np.float64)
+    groups = (("td", ~psd), ("psd", psd))
+    out = {k: {"r_grid": np.full((T, C), np.nan), "n_grid": np.zeros((T, C), dtype=int),
+               "r_low_grid": [[None] * C for _ in range(T)],
+               "r_high_grid": [[None] * C for _ in range(T)]} for k, _ in groups}
+    for key, grp in groups:
+        for t in range(T):
+            got = pearson_r_columns(X[t][grp], y[grp])
+            out[key]["r_grid"][t] = got["r"]
+            out[key]["n_grid"][t] = got["n"]
+    for c in range(C):
+        for t in range(T):
+            x = X[t, :, c]
+            for key, grp in groups:
+                m = grp & np.isfinite(x) & np.isfinite(y)
+                idx = np.flatnonzero(m)
+                lo, hi = _block_boot_r_interval(x[idx], y[idx], n_boot=n_boot,
+                                                rng=np.random.default_rng(int(seed) + c))
+                out[key]["r_low_grid"][t][c] = lo
+                out[key]["r_high_grid"][t][c] = hi
+    return {"available": True, "reason": None,
+            "min_reports": SOURCE_SPLIT_MIN_REPORTS, "is": SOURCE_SPLIT_IS,
+            **{k: {"r_grid": [[_f(v) for v in row] for row in out[k]["r_grid"]],
+                   "n_grid": [[int(v) for v in row] for row in out[k]["n_grid"]],
+                   "r_low_grid": out[k]["r_low_grid"],
+                   "r_high_grid": out[k]["r_high_grid"]} for k, _ in groups}}
 
 
 def _device_spectrum_cell_counts(X, pain, from_device_spectrum):
@@ -5797,7 +6097,8 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
     n_reports_in = int(pain.size)
     if centers.size == 0:
         return _sweep_blank("no band centre inside the range asked for is present in the cached "
-                            "spectra, so there is nothing to sweep", n_reports=n_reports_in)
+                            "TD and PSD band power, so there is nothing to sweep",
+                            n_reports=n_reports_in)
     if n_reports_in == 0:
         return _sweep_blank("no pain reports were handed in, so there is nothing to correlate the "
                             "band power against")
@@ -5982,6 +6283,10 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
     for _r in best_auc_rows:
         _r.pop("_grid_time_index", None)
         _r.pop("_grid_center_index", None)
+    # P-19: each cell on its TD-read and PSD-read reports alone. After every use of the shared
+    # generator, and on its own generators, so no number above can move.
+    by_source = _correlation_by_recording_source(X, pain, from_device_spectrum,
+                                                 n_boot=int(n_boot), seed=int(seed))
     notes = _sweep_notes(kept_req, delivered, tiles, tile_s, T, C, n_mad, o_scale, n_excluded,
                          int(n_perm), split_why, crosscheck, outlier_rule=outlier_rule)
     # The snapshot count and share are NOT appended to `notes`. They travel as the
@@ -6041,6 +6346,7 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         "clinic_sheet_n_grid_auc": [[int(v) for v in row] for row in sheet_n_auc],
         "n_pain_reports_from_clinic_sheet": n_sheet_reports,
         "device_spectrum_axis_note": DEVICE_SPECTRUM_AXIS_NOTE,
+        "correlation_by_recording_source": by_source,
         "best_correlation_rows": best_corr_rows,
         # Does the shuffle null run on the family the circled cells were chosen from? Measured on
         # every build, for both grids (panel A item 3; `RECONCILIATION_F8.md` on the older search).

@@ -14,17 +14,20 @@ export function kFromServed(text) {
   return m ? m[1] : null;
 }
 
-/** "transform DSP ×349.10" / "PSD→LSB bridge ×72.90" / "modeled"; no number when none was served. */
+/** "TD, transform constant ×345.59" / "PSD, bridge constant ×72.16" / "modeled"; no number when none
+ *  was served. TD and PSD are the page's one vocabulary for the two sources (the PI, 2026-09-25):
+ *  TD for the time-domain recording, PSD for the device's 30 s snapshot. */
 export function routeLabel(method) {
   const s = String(method || "");
   const k = kFromServed(s);
   const suffix = k ? ` ×${k}` : "";
-  if (s.startsWith("td_transform")) return `transform DSP${suffix}`;
-  if (s.startsWith("event_psd_bridge")) return `PSD→LSB bridge${suffix}`;
+  if (s.startsWith("td_transform")) return `TD, transform constant${suffix}`;
+  if (s.startsWith("event_psd_bridge")) return `PSD, bridge constant${suffix}`;
   return "modeled";
 }
 
-/** The legend entry for the modeled-LSB glyphs, naming the constants actually seen in the data. */
+/** The legend entry for the modeled-LSB glyphs, naming the constants actually seen in the data. It is
+ *  the timeline legend's first entry that says TD, so it defines the term. */
 export function modeledLegendName(points) {
   let kTd = null; let kBridge = null;
   (points || []).forEach((p) => {
@@ -34,5 +37,5 @@ export function modeledLegendName(points) {
   });
   const td = kTd ? ` ×${kTd}` : "";
   const br = kBridge ? ` ×${kBridge}` : "";
-  return `modeled LSB  (○ TD-transform${td} · ◇ PSD-bridge${br}; red ring = TD saturated)`;
+  return `modeled LSB  (○ time domain (TD), transform constant${td} · ◇ PSD, bridge constant${br}; red ring = TD saturated)`;
 }

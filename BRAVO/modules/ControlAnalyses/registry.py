@@ -22,6 +22,10 @@ LIT = {
     "critique": ("Critique: the day-to-day correlation of ratings (M2) and the electrical-artifact "
                 "alternative (M1)", "research_2026-09-25_options/08_critique_science.md"),
     "revised_plan": ("The revised plan: items A4 and A5", "research_2026-09-25_options/11_REVISED_PLAN.md"),
+    "band_detector": ("Report: the research band detector and its three choices",
+                      "research_2026-09-25_options/04_band_detector.md"),
+    "rulings_0925": ("The PI's rulings of 2026-09-25 (answers 5a-5c)",
+                     "research_2026-09-25_options/11_REVISED_PLAN.md"),
 }
 
 
@@ -52,6 +56,29 @@ ANALYSES = {
         what=("Whether band power follows the California clock or the weekend, per sensing pair and "
               "band, and how much the weekend moves the band-to-pain correlation."),
         literature=_lit("synthesis", "state")),
+    "band_detector_research": dict(
+        page="biomarkers", order=4,
+        title="Band detector, research version (pain as a number)",
+        what=("Every band of one sensing pair read together (a ridge regression), predicting the pain "
+              "score itself on held-out blocks of time with the neighbouring ratings dropped; scored by "
+              "the rank correlation between prediction and rating within each held-out block (0 is chance, "
+              "never folded), plainly "
+              "and with the stimulation current taken out of the bands and the pain as a curve; the "
+              "current alone beside it; and every band inside the longest run at one unchanged current. "
+              "The page's 60-minute matching. REDCap ratings only, unless the page's clinic-sheet "
+              "switch is on, which shows the run with the sheet ratings merged in."),
+        literature=_lit("band_detector", "rulings_0925")),
+    "band_detector_device": dict(
+        page="biomarkers", order=5,
+        title="Band detector, device-shaped version (one band, two pain groups)",
+        what=("What the device could read: one band at a time, pain split into two groups by the page's "
+              "own split, the area under the curve from a logistic regression of the two groups on band "
+              "power fitted on held-out blocks of time, scored within each block; the band power at the device's own timing "
+              "(3-second averaged readings, held for the onset time, the start-up delay skipped), "
+              "plainly and with the current taken out as a curve; q corrects for the 22 bands of a "
+              "pair. REDCap ratings only, unless the page's clinic-sheet switch is on, which shows the "
+              "run with the sheet ratings merged in."),
+        literature=_lit("band_detector", "rulings_0925")),
     "current_with_memory": dict(
         page="stim_optimizer", order=1,
         title="A current with memory (wash-in)",

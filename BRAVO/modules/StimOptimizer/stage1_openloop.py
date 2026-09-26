@@ -575,16 +575,25 @@ DIAGNOSIS_BETWEEN_SHARE_MIN = 0.5
 DIAGNOSIS_P_MAX = 0.05
 
 
-def _reference_setting(sub, blocks):
+#: What "one setting" is for :func:`_reference_setting`. On a per-pairing map the rate and both pulse
+#: widths are fixed, so the two currents name the setting; a map pooled across pulse widths passes
+#: the pulse-width columns too (2026-09-25), so one current pair delivered at two pairings is two
+#: settings and never run together.
+REFERENCE_SETTING_COLS = ("amp_mA_Left", "amp_mA_Right")
+
+
+def _reference_setting(sub, blocks, *, setting_cols=REFERENCE_SETTING_COLS):
     """Pain at the setting delivered most often in this stratum, per block of time, and whether it
     moved between blocks beyond the ratings' own noise (a precision-weighted heterogeneity test).
-    No model choice can explain a movement here away: the setting did not change."""
+    No model choice can explain a movement here away: the setting did not change. ``setting_cols``
+    names what one setting is (:data:`REFERENCE_SETTING_COLS`)."""
     from scipy import stats as _st
+    cols = list(setting_cols)
     d = pd.DataFrame(sub).reset_index(drop=True)
-    if d.empty or not {"amp_mA_Left", "amp_mA_Right", "J", "obs_var"}.issubset(d.columns):
+    if d.empty or not {*cols, "J", "obs_var"}.issubset(d.columns):
         return {"setting": None, "moved": None, "p": None, "by_block": [],
                 "reason": "no per-epoch pain values to compare"}
-    key = list(zip(d["amp_mA_Left"].astype(float).round(3), d["amp_mA_Right"].astype(float).round(3)))
+    key = list(zip(*(d[c].astype(float).round(3) for c in cols)))
     counts = pd.Series(key).value_counts()
     top = counts.index[0]
     at = np.array([k == top for k in key])
@@ -597,7 +606,7 @@ def _reference_setting(sub, blocks):
         mean = float(np.sum(w * d.loc[m, "J"].to_numpy(float)) / np.sum(w))
         rows.append({"block": int(b), "n_epochs": int(m.sum()), "mean_pain": mean,
                      "se": float(1.0 / np.sqrt(np.sum(w))), "_w": float(np.sum(w))})
-    out = {"setting": {"amp_mA_Left": float(top[0]), "amp_mA_Right": float(top[1])},
+    out = {"setting": {c: float(v) for c, v in zip(cols, top)},
            "n_epochs": int(at.sum()), "by_block": [{k: v for k, v in r.items() if k != "_w"} for r in rows]}
     if len(rows) < 2:
         out.update(moved=None, p=None,
@@ -611,7 +620,8 @@ def _reference_setting(sub, blocks):
     return out
 
 
-def calibration_diagnosis(gp, sub, *, pred=None, coverage_min=0.85, mae_ratio_max=0.90):
+def calibration_diagnosis(gp, sub, *, pred=None, coverage_min=0.85, mae_ratio_max=0.90,
+                          setting_cols=REFERENCE_SETTING_COLS):
     """WHY a surface fails its calibration check (panel C item 3), on the leave-one-block-out fold.
 
     Each held-out error in units of the model's own stated uncertainty, z = (observed - predicted) /
@@ -628,7 +638,8 @@ def calibration_diagnosis(gp, sub, *, pred=None, coverage_min=0.85, mae_ratio_ma
     * intervals that miss within blocks: "too confident within blocks: the shape or the noise model".
 
     Beside it, ``reference_setting``: did pain at the setting delivered most often move between the
-    blocks? A warning like the check itself; it refuses nothing.
+    blocks? A warning like the check itself; it refuses nothing. ``setting_cols`` says what one
+    setting is on this map (:data:`REFERENCE_SETTING_COLS`).
     """
     from scipy import stats as _st
     y = np.asarray(gp.y_, float)
@@ -637,7 +648,8 @@ def calibration_diagnosis(gp, sub, *, pred=None, coverage_min=0.85, mae_ratio_ma
     out = {"verdict": None, "reason": None, "n_blocks": int(np.unique(blocks).size),
            "coverage95": None, "mae_ratio": None, "between_block_share": None,
            "between_block_p": None, "mean_z_by_block": [], "median_sd_over_spread": None,
-           "reference_setting": _reference_setting(sub, blocks), "blocking": False}
+           "reference_setting": _reference_setting(sub, blocks, setting_cols=setting_cols),
+           "blocking": False}
     if np.unique(blocks).size < 2:
         out["reason"] = "not computable: fewer than two blocks of time to hold out"
         return out
@@ -669,19 +681,33 @@ def calibration_diagnosis(gp, sub, *, pred=None, coverage_min=0.85, mae_ratio_ma
     return out
 
 
-def stratum_calibration(gp, sub, *, mae_ratio_max=0.90, coverage_min=0.85, coverage_max=1.00):
+def stratum_calibration(gp, sub, *, mae_ratio_max=0.90, coverage_min=0.85, coverage_max=1.00,
+                        setting_cols=REFERENCE_SETTING_COLS):
     """The three pre-registered criteria of `OBJECTIVE_SPEC.md` §6, on ONE fitted surface.
 
     Returns the two folds' numbers, each criterion as True, False or **None for "not computable"**,
     and the consequence in words. It decides nothing: see :data:`CALIBRATION_CONSEQUENCE`.
+
+    Each fold refits the surface on its training rows (`ObjectiveGP.loo_predict`); the folds are
+    refitted in worker processes, bit for bit the serial answer (2026-09-25), which is what lets
+    the leave-one-epoch-out fold run on the largest pooled maps too.
     """
     y = np.asarray(gp.y_, float)
     v = np.asarray(gp.y_var_, float)
-    loeo, r1 = _one_calibration_fold(gp, y, v, np.arange(len(y)), name="leave-one-epoch-out")
     _blocks = _fold_labels_by_time(sub)
-    # The block fold's held-out predictions, made ONCE and shared with the diagnosis below, so the
-    # check's numbers are the ones it always gave and no surface is refitted twice.
-    _pred = gp.loo_predict(groups=_blocks) if np.unique(_blocks).size >= 2 else None
+    _two_blocks = np.unique(_blocks).size >= 2
+    # Both folds' held-out predictions in ONE dispatch to the worker processes (2026-09-25); the
+    # block fold's are shared with the diagnosis below, so no surface is refitted twice. A stand-in
+    # surface with only `loo_predict` (the tests' fakes) is asked fold by fold, as before.
+    _many = getattr(gp, "loo_predict_many", None)
+    if _many is not None:
+        _preds = _many([np.arange(len(y))] + ([_blocks] if _two_blocks else []))
+        _epoch_pred, _pred = _preds[0], (_preds[1] if _two_blocks else None)
+    else:
+        _epoch_pred = None
+        _pred = gp.loo_predict(groups=_blocks) if _two_blocks else None
+    loeo, r1 = _one_calibration_fold(gp, y, v, np.arange(len(y)), name="leave-one-epoch-out",
+                                     pred=_epoch_pred)
     loera, r2 = _one_calibration_fold(gp, y, v, _blocks, name="leave-one-block-out", pred=_pred)
     def _skill(r):
         return None if r is None else bool(r <= mae_ratio_max)
@@ -698,7 +724,8 @@ def stratum_calibration(gp, sub, *, mae_ratio_max=0.90, coverage_min=0.85, cover
             "blocking": False, "consequence": CALIBRATION_CONSEQUENCE,
             # WHY it fails, when it does (panel C item 3; 2026-09-23): see `calibration_diagnosis`.
             "diagnosis": calibration_diagnosis(gp, sub, pred=_pred, coverage_min=coverage_min,
-                                               mae_ratio_max=mae_ratio_max)}
+                                               mae_ratio_max=mae_ratio_max,
+                                               setting_cols=setting_cols)}
 
 
 def current_coverage(sub, *, min_pairs=CURRENT_COVERAGE_MIN_PAIRS,
@@ -1079,12 +1106,21 @@ class _PooledIncumbent:
 
 
 def _fit_pooled_rate_stratum(rate, sub, *, pwl_col, pwr_col, pw_in_force, amp_grid, sgp_left,
-                             sgp_right, fixed_length_scale, beta) -> RateStratum:
+                             sgp_right, fixed_length_scale, beta,
+                             calibration_check=True) -> RateStratum:
     """Fit ONE (amplitude-Left, amplitude-Right) surface at a single rate over EVERY pulse-width
     pairing the record delivered at that rate, with the two pulse widths as two more inputs, and
     read it at the pairing in force (decision 189's option A; the PI, 2026-09-21). ``sub`` is
     every feasible epoch at this rate, whatever its pairing; the caller has checked it clears
-    ``RATE_STRATUM_MIN_EPOCHS``. The safety models are the same shared per-side ones."""
+    ``RATE_STRATUM_MIN_EPOCHS``. The safety models are the same shared per-side ones.
+
+    ``calibration_check`` (2026-09-25, the PI's "deal with the Q4 edge cases"): the SAME
+    pre-registered check and block-of-time diagnosis the per-pairing maps carry
+    (:func:`stratum_calibration`), run on this pooled map where it is fitted, so a current read
+    from it can be marked like any other. "The setting delivered most often" is a whole setting
+    here, pulse widths included. Both folds are computed, the leave-one-epoch-out one included
+    (left out at first for its cost; its folds now run in worker processes, 2026-09-25); the mark
+    reads the block-of-time diagnosis. A warning; it refuses nothing and moves no value."""
     pwl_at, pwr_at = float(pw_in_force[0]), float(pw_in_force[1])
     grid = SUR.PooledPulseWidthGrid(
         rate, amp_grid, amp_grid,
@@ -1124,7 +1160,10 @@ def _fit_pooled_rate_stratum(rate, sub, *, pwl_col, pwr_col, pw_in_force, amp_gr
         mu_star=float(mu[i_star]), sd_star=float(sd[i_star]),
         n_reports_total=float(sub["n"].sum()), coverage=coverage,
         meta=dict(kernel=gp.hyperparameters["kernel"], n_safe=int(safe.sum()), points=points,
-                  pooled_pulse_widths=True, pairings=pairings, n_pairings=len(pairings)))
+                  pooled_pulse_widths=True, pairings=pairings, n_pairings=len(pairings),
+                  **({"calibration": stratum_calibration(
+                      gp, sub, setting_cols=("amp_mA_Left", "amp_mA_Right", pwl_col, pwr_col))}
+                     if calibration_check else {})))
 
 
 def _pooled_incumbent(rs: RateStratum, incumbent_xyz, pw_in_force) -> _PooledIncumbent:
@@ -1618,7 +1657,7 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
                         rate, subr, pwl_col=pwl_col, pwr_col=pwr_col, pw_in_force=pw_in_force,
                         amp_grid=amp_grid, sgp_left=sgp_by_side["Left"],
                         sgp_right=sgp_by_side["Right"], fixed_length_scale=fixed_length_scale,
-                        beta=beta)
+                        beta=beta, calibration_check=bool(calibration_check))
                     rs.resolution = _rate_stratum_resolution(
                         rs, _pooled_incumbent(rs, incumbent_xyz, pw_in_force),
                         resolution_k=resolution_k)

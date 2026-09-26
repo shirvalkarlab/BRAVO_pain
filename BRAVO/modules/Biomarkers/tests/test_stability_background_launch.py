@@ -451,6 +451,38 @@ def test_a_stopped_early_run_is_kept_from_replacing_its_OWN_grids_answer_not_ano
         bs._SHARED_CACHE_DIR_OVERRIDE = was_override
 
 
+
+def test_the_stored_answer_names_its_grid_and_its_rule_in_its_sidecar():
+    """The Closed-Loop card cannot rebuild this answer's key (it has no Django), so it finds the
+    answer by what the sidecar says it is for: the grid's key since 2026-09-23 and, since
+    2026-09-25, the stability rule it was computed under. Without the rule it could only read the
+    payload's own `rule_version` after loading, and an older rule's answer written last would
+    shadow the current one."""
+    from CacheStore import store as cs
+    was_override = bs._SHARED_CACHE_DIR_OVERRIDE
+    tmp = tempfile.mkdtemp(prefix="stability_sidecar_rule_")
+    real_sweep = bs.band_time_sweep_for_participant
+    real_grid = bs.stability_grid_for_participant
+    try:
+        bs._SHARED_CACHE_DIR_OVERRIDE = tmp
+        points = [("L", 8.5), ("L", 9.5)]
+        bs.band_time_sweep_for_participant = lambda req: {
+            "band_time_sweep": {"L": {"center_freqs_hz": [f for _, f in points]}},
+            "band_width_hz": 5.0, "label_metric": "nrs",
+            "sweep_key": {"signature_key": "sweepkeyrule", "provenance": []}}
+        bs.stability_grid_for_participant = lambda uid, pts, **kw: {
+            p: {"available": True, "lrt_p": 0.3} for p in points}
+        out = bs.compute_and_store_stability_grid("abc", force=True)
+        assert out["stored"] is True, out["reason"]
+        stamp = cs.newest_stamp(bs.STABILITY_GRID_KIND, "abc", root=tmp)
+        extra = (stamp or {}).get("extra") or {}
+        assert extra.get("sweep_key") == "sweepkeyrule", extra
+        assert extra.get("rule_version") == bs.STABILITY_GRID_RULE_VERSION, extra
+    finally:
+        bs.band_time_sweep_for_participant = real_sweep
+        bs.stability_grid_for_participant = real_grid
+        bs._SHARED_CACHE_DIR_OVERRIDE = was_override
+
 if __name__ == "__main__":
     _fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     _passed = _failed = 0

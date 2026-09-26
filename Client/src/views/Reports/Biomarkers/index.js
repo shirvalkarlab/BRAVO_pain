@@ -52,17 +52,12 @@ import RecomputeBar from "views/Reports/RecomputeBar";
 import CacheStatusLine from "views/Reports/CacheStatusLine";
 import { recomputeSlots, biomarkerHeatmapSlot } from "views/Reports/moduleCacheKeys";
 import { ControlAnalysesSection } from "views/Reports/ControlAnalyses/ControlAnalysesCard";
+import { PAIN_SCORE_OPTIONS } from "views/Reports/painScores";
 
 // Pain metric the LFP biomarker is computed against (sent as LabelMetric). Used until the server
-// echoes its own `available_metrics` list. The composite blends MPQ sum + left-leg VAS.
-const DEFAULT_METRIC_OPTIONS = [
-  { key: "nrs", label: "NRS (0–10)" },
-  { key: "vas", label: "Overall VAS" },
-  { key: "left_leg_vas", label: "Left Leg VAS" },
-  { key: "back_vas", label: "Back VAS" },
-  { key: "mpq_sum", label: "MPQ Sum" },
-  { key: "composite_mpq_leftleg", label: "Composite (MPQ + Left Leg VAS)" },
-];
+// echoes its own `available_metrics` list. The composite blends MPQ sum + left-leg VAS. One list
+// for this page and the Closed-Loop page's pain-score dropdown (2026-09-25 night).
+const DEFAULT_METRIC_OPTIONS = PAIN_SCORE_OPTIONS;
 
 // How the continuous pain score is turned into the binary high/low pain_level the detector trains
 // on (sent as LabelStrategy). "tertile" (default) splits low/high and drops the ambiguous middle —
@@ -247,9 +242,9 @@ function Biomarkers() {
   //  • TD-signal slider (matchExtentSec) = how MUCH of the nearest time-domain signal to use.
   const tdEpochs = Math.max(1, Math.round(matchExtentSec / 3));
   const liveMatchCaption =
-    `A rating's device-FFT value is the median over every device FFT snapshot within the match window `
-    + `(\u00b1${matchTolerance} min). Its time-domain value is the median over the nearest ${tdEpochs} of the 3 s `
-    + `tiles (\u2248${matchExtentSec} s of signal) within that same window: this slider sets how much signal `
+    `A rating's PSD value is the median over every PSD within the match window `
+    + `(\u00b1${matchTolerance} min). Its TD value is the median over the nearest ${tdEpochs} of the 3 s `
+    + `pieces (\u2248${matchExtentSec} s of signal) within that same window: this slider sets how much signal `
     + `is used, not how far to search.`;
 
   useEffect(() => {
@@ -585,7 +580,7 @@ function Biomarkers() {
                     <Grid item xs={12}>
                       <MDBox px={2} pb={1}>
                         <MDTypography variant="button" fontWeight="medium" color="dark" display="block" mb={0.5}>
-                          {"Computing time-domain + power-domain biomarker on full-resolution data — this can take ~10–40 s…"}
+                          {"Computing time domain (TD) + power-domain biomarker on full-resolution data — this can take ~10–40 s…"}
                         </MDTypography>
                         <LinearProgress color="error" />
                       </MDBox>
@@ -681,13 +676,13 @@ function Biomarkers() {
                               <MDBox>
                                 <MDTypography variant="caption" fontWeight="bold" color="dark"
                                   sx={{ fontSize: 14, display: "block", mb: 0.25 }}>
-                                  {`Time-domain signal per rating: ${matchExtentSec} s (the nearest ${Math.max(1, Math.round(matchExtentSec / 3))} of the 3 s tiles)`}
+                                  {`TD signal per rating: ${matchExtentSec} s (the nearest ${Math.max(1, Math.round(matchExtentSec / 3))} of the 3 s pieces)`}
                                 </MDTypography>
                                 <MDBox px={0.5}>
                                   <Slider
                                     value={matchExtentSec} min={3} max={300} step={3}
                                     valueLabelDisplay="auto" size="small"
-                                    aria-label="time-domain signal per rating (seconds)"
+                                    aria-label="TD signal per rating (seconds)"
                                     onChange={(e, v) => setMatchExtentSec(v)} />
                                 </MDBox>
                                 {showDescriptions && (
@@ -752,10 +747,10 @@ function Biomarkers() {
                               {data && data.live_match_stats && (
                                 <MDTypography variant="caption" color="text" display="block"
                                   sx={{ fontSize: 13 }}>
-                                  {`Last computed: ${data.live_match_stats.n_pro_td || 0} ratings matched to the time-domain signal, `
-                                   + `${data.live_match_stats.n_pro_psd || 0} to a device FFT snapshot`
+                                  {`Last computed: ${data.live_match_stats.n_pro_td || 0} ratings matched to TD, `
+                                   + `${data.live_match_stats.n_pro_psd || 0} to a PSD`
                                    + `${data.live_match_stats.n_pro_unmatched != null ? `, ${data.live_match_stats.n_pro_unmatched} with nothing in the window` : ""}`
-                                   + `${data.live_match_stats.n_td_used != null ? ` (${data.live_match_stats.n_td_used} 3 s tiles and ${data.live_match_stats.n_psd_used || 0} snapshots used).` : "."}`}
+                                   + `${data.live_match_stats.n_td_used != null ? ` (${data.live_match_stats.n_td_used} 3 s TD pieces and ${data.live_match_stats.n_psd_used || 0} PSDs used).` : "."}`}
                                 </MDTypography>
                               )}
 
@@ -912,7 +907,7 @@ function Biomarkers() {
                       <MDBox p={2}>
                         <MDTypography variant="button" color="dark">
                           {"Pick a pain metric and binarization above — the timeline and binarization preview are already live. Click "}
-                          <strong>Recompute</strong>{" above to run the full-spectrum scan."}
+                          <strong>Recompute</strong>{" above to run the all-band scan."}
                         </MDTypography>
                       </MDBox>
                     </Grid>
@@ -1111,7 +1106,7 @@ function Biomarkers() {
                 nothing on this page. */}
             <Grid item xs={12}>
               <MDBox px={2} pb={2}>
-                <ControlAnalysesSection participantUid={participant_uid} page="biomarkers" />
+                <ControlAnalysesSection participantUid={participant_uid} page="biomarkers" clinicSheets={includeClinicSheetRatings} />
               </MDBox>
             </Grid>
           </Grid>

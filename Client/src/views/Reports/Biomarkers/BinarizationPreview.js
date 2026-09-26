@@ -186,25 +186,26 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
     const centers = cnt.map((_, i) => (edges[i] + edges[i + 1]) / 2);
 
     // Per-bar provenance for the hover (matched mode only). Re-bin the matched samples into the SAME
-    // edges and, per bar, tally: distinct calendar days, the TIME-DOMAIN source split (BrainSense /
-    // Indefinite), and the PSD-origin split (Montage / Patient-trigger / other). The scan pools full-
-    // spectrum PSDs whose ORIGIN is either Welch'd-from-raw-TD (BrainSense/Indefinite streaming) or a
-    // native device PSD (Montage Welch, Patient-event onboard FFT) — so the two groups below are
-    // "derived from time-domain" vs "native PSD", which is the provenance the hover surfaces.
+    // edges and, per bar, tally: distinct calendar days, the TD split (BrainSense / Indefinite /
+    // Montage) and the PSD split (Patient-trigger / other). Every sample the scan pools is either
+    // Welch'd from a recording's own time-domain signal (BrainSense and Indefinite streaming AND the
+    // montage/survey recordings -- a montage row is Welch over the recording's `Data`) or the device's
+    // own patient-event snapshot -- so the two groups below are TD vs PSD. Until 2026-09-26 the
+    // montage sat under PSD here; it is TD (the PI).
     const binOf = (v) => { let i = 0; while (i < nBins - 1 && v >= edges[i + 1]) i += 1; return i; };
     const srcGroup = (src) => {
       const s = String(src || "").toLowerCase();
       if (s.indexOf("brainsense") >= 0 || (s.indexOf("td") >= 0 && s.indexOf("stream") >= 0)) return ["td", "BrainSense"];
       if (s.indexOf("indefinite") >= 0) return ["td", "Indefinite"];
-      if (s.indexOf("montage") >= 0 || s.indexOf("survey") >= 0) return ["psd", "Montage"];
+      if (s.indexOf("montage") >= 0 || s.indexOf("survey") >= 0) return ["td", "Montage"];
       if (s.indexOf("patient") >= 0 || s.indexOf("event") >= 0) return ["psd", "Patient-trigger"];
       return ["psd", "Other"];
     };
     const barProv = matchedMode
       ? (() => {
           const z = () => ({ days: new Set(),
-                             td: { BrainSense: 0, Indefinite: 0 },
-                             psd: { Montage: 0, "Patient-trigger": 0, Other: 0 } });
+                             td: { BrainSense: 0, Indefinite: 0, Montage: 0 },
+                             psd: { "Patient-trigger": 0, Other: 0 } });
           const acc = Array.from({ length: nBins }, z);
           for (const s of (scanModel.samples || [])) {
             if (s.v == null || !Number.isFinite(s.v) || s.bin === "unmatched") continue;
@@ -254,15 +255,15 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
     // feeds binarization); in daily mode it is calendar days + the raw reports they carry.
     //
     // In matched mode each badge also shows the per-group MODALITY breakdown across the THREE sources
-    // pooled into the scan: TD streaming, montage/survey PSD, and Patient-event PSD (the imported
-    // event markers, incl. Streaming). Band-power LSB is NOT pooled into the binarization scan, so it
+    // pooled into the scan, in the page's two groups: TD (streaming and montage/survey recordings,
+    // the montage part named inside it) and PSD (the imported patient-event markers, incl. Streaming). Band-power LSB is NOT pooled into the binarization scan, so it
     // is intentionally absent here (not a source the scan uses) — see the caption note. The badges are
     // floated into y-axis HEADROOM (the matched-mode yaxis range is extended below) so they sit ABOVE
     // the tallest bar and never overlap the histogram.
     const yMax = cnt.length ? Math.max(1, ...cnt) : 1;
     const bySrc = (matchedMode && counts && counts.by_source) ? counts.by_source : null;
     const srcLine = (g) => g
-      ? `${(g.td || 0).toLocaleString()} TD · ${(g.montage || 0).toLocaleString()} montage · ${(g.event || 0).toLocaleString()} event`
+      ? `${(g.td || 0).toLocaleString()} TD (${(g.td_montage || 0).toLocaleString()} montage) · ${(g.event || 0).toLocaleString()} PSD (patient event)`
       : null;
     const badge = (xRel, yRel, color, label, primary, secondary) => ({
       xref: "paper", yref: "paper", x: xRel, y: yRel, xanchor: "center", yanchor: "top",
@@ -289,7 +290,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
         })()
       : { low: 0, high: 0, excluded: 0 };
     const proFirst = matchedMode && dir === "pro_first";
-    const psdLine = (n) => `${(n || 0).toLocaleString()} PSD${n === 1 ? "" : "s"}`;
+    const psdLine = (n) => `${(n || 0).toLocaleString()} neural sample${n === 1 ? "" : "s"}`;
     const proLine = (n) => `${(n || 0).toLocaleString()} pain rating${n === 1 ? "" : "s"}`;
     const lowTxt = matchedMode
       ? (proFirst
@@ -330,7 +331,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
     const hoverUnit = matchedMode ? "samples" : "days";
     // Hover: in matched mode, lead with the calendar-day count for the bar (the unit the reviewer
     // cares about — how many DAYS contribute), then the time-domain source split (BrainSense /
-    // Indefinite) and the PSD-origin split (Montage / Patient-trigger / other). customdata carries
+    // Indefinite / Montage) and the PSD split (Patient-trigger / other). customdata carries
     // the pre-rendered breakdown lines so the hovertemplate stays declarative.
     const className = (c) => (cuts.kind === "two-cut")
       ? (c <= cuts.lowCut ? "Low pain" : (c >= cuts.highCut ? "High pain" : "Excluded (mid)"))
@@ -345,8 +346,8 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
       const customdata = centers.map((c, i) => {
         const p = barProv[i];
         const nDays = p ? p.days.size : 0;
-        const tdN = p ? (p.td.BrainSense + p.td.Indefinite) : 0;
-        const psdN = p ? (p.psd.Montage + p.psd["Patient-trigger"] + p.psd.Other) : 0;
+        const tdN = p ? (p.td.BrainSense + p.td.Indefinite + p.td.Montage) : 0;
+        const psdN = p ? (p.psd["Patient-trigger"] + p.psd.Other) : 0;
         return [
           nDays.toLocaleString(),                          // 0: distinct days (pinned on top)
           className(c),                                    // 1: class label
@@ -361,7 +362,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
         hovertemplate:
           "<b>%{customdata[0]} days</b> · %{y:,} samples<br>"
           + `${metricLabel || "pain"} ≈ %{x:.1f}  ·  %{customdata[1]}<br>`
-          + "<span style='color:#555'>Time-domain (%{customdata[2]}):</span> %{customdata[3]}<br>"
+          + "<span style='color:#555'>TD (%{customdata[2]}):</span> %{customdata[3]}<br>"
           + "<span style='color:#555'>PSD (%{customdata[4]}):</span> %{customdata[5]}"
           + "<extra></extra>",
       }];
@@ -492,7 +493,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
 
       {/* Matched neural-sample readout — PRO-first leads the headline (units of independence),
           PSD coverage carries the supporting numbers; in PSD-first modes the order flips. The
-          pool is mostly TD-streaming (not montage PSDs), so the count is broken down by source and
+          pool is mostly TD (streaming and montage recordings), so the count is broken down by source and
           uses the modality-neutral noun "neural samples". aria-live announces updates to readers. */}
       {matchedMode && su ? (
         <MDTypography variant="caption" color="dark" sx={{ fontSize: 12, mb: 0.25 }}
@@ -505,7 +506,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
               {` paired with neural data within ±${matchTolerance} min`}
               {Number.isFinite(counts.median_abs_offset_min)
                 ? `, median match offset ${counts.median_abs_offset_min.toFixed(1)} min${rangeTxt}` : ""}
-              {`. Each paired rating carries ${su.psd_per_pro_mean} PSDs on average (median ${su.psd_per_pro_median}, max ${su.psd_per_pro_max}; cap ${(counts.max_per_rating || 3)}/channel).`}
+              {`. Each paired rating carries ${su.psd_per_pro_mean} neural samples on average (median ${su.psd_per_pro_median}, max ${su.psd_per_pro_max}; cap ${(counts.max_per_rating || 3)}/channel).`}
             </>
           ) : (
             <>
@@ -515,7 +516,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
               {` paired with a pain report within ±${matchTolerance} min`}
               {Number.isFinite(counts.median_abs_offset_min)
                 ? `, median offset ${counts.median_abs_offset_min.toFixed(1)} min` : ""}
-              {`. ${(su.n_pro_used || 0).toLocaleString()} of ${(su.n_pro_total || 0).toLocaleString()} pain reports (${su.pct_pro_used}%) received at least one PSD`}
+              {`. ${(su.n_pro_used || 0).toLocaleString()} of ${(su.n_pro_total || 0).toLocaleString()} pain reports (${su.pct_pro_used}%) received at least one neural sample`}
               {su.n_pro_reused ? `; ${su.n_pro_reused} received >1.` : "."}
             </>
           )}
@@ -532,26 +533,26 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
           {counts.n_excluded_middle
             ? <span style={{ color: MID }}>{` / ${counts.n_excluded_middle.toLocaleString()} mid-range (excluded)`}</span>
             : null}
-          {(counts.n_matched_td != null && counts.n_matched_montage != null && counts.n_matched > 0)
+          {(counts.n_matched_td != null && counts.n_matched_td_montage != null && counts.n_matched > 0)
             ? <span style={{ color: "#777" }}>
-                {`  · sources: ${counts.n_matched_td.toLocaleString()} TD streaming, ${counts.n_matched_montage.toLocaleString()} montage PSD, ${(counts.n_matched_event || 0).toLocaleString()} event PSD`}
+                {`  · sources: ${counts.n_matched_td.toLocaleString()} TD (${(counts.n_matched_td - counts.n_matched_td_montage).toLocaleString()} streaming, ${counts.n_matched_td_montage.toLocaleString()} montage), ${(counts.n_matched_event || 0).toLocaleString()} PSD (patient event)`}
               </span>
             : null}
           {counts.n_capped_dropped
-            ? <span style={{ color: "#777" }}>{` · ${counts.n_capped_dropped} PSDs over the per-rating cap`}</span>
+            ? <span style={{ color: "#777" }}>{` · ${counts.n_capped_dropped} neural samples over the per-rating cap`}</span>
             : null}
         </MDTypography>
       ) : null}
       {matchedMode ? (showDescriptions ? (
         <MDTypography variant="caption" color="text" sx={{ fontSize: 11, fontStyle: "italic", mb: 0.25, display: "block" }}>
           {dir === "pro_first"
-            ? (`Matching is PRO-first: each pain rating claims up to ${(counts.max_per_rating || 3)} closest PSDs per channel within the match window. `
-               + `A PSD already claimed by an earlier rating is not re-claimed. This maximizes the number of independent pain ratings that contribute to discovery. `)
+            ? (`Matching is PRO-first: each pain rating claims up to ${(counts.max_per_rating || 3)} closest neural samples per channel within the match window. `
+               + `A neural sample already claimed by an earlier rating is not re-claimed. This maximizes the number of independent pain ratings that contribute to discovery. `)
             : dir === "nearest"
-            ? (`Matching is PSD-first (symmetric ±${matchTolerance} min): each PSD is paired with the closest pain rating in either time direction, then a per-(channel, rating) cap of ${(counts.max_per_rating || 3)} keeps the closest PSDs to each rating. Cross-sectional association, not forecasting. `)
-            : (`Matching is PSD-first (forecasting): each PSD is paired with the nearest pain rating RECORDED AFTER it within ±${matchTolerance} min, capped at ${(counts.max_per_rating || 3)} per channel per rating. Causal direction; preferred for closed-loop deployment, conservative for discovery. `)}
-          {"Pooled neural sources: TD streaming (250 Hz → 30 s Welch PSD), montage/survey PSD, and patient-event PSD. "}
-          {"Band-power LSB appears on the timeline but is not a full-spectrum PSD, so it is not pooled here."}
+            ? (`Matching is neural-first (symmetric ±${matchTolerance} min): each neural sample is paired with the closest pain rating in either time direction, then a per-(channel, rating) cap of ${(counts.max_per_rating || 3)} keeps the closest neural samples to each rating. Cross-sectional association, not forecasting. `)
+            : (`Matching is neural-first (forecasting): each neural sample is paired with the nearest pain rating RECORDED AFTER it within ±${matchTolerance} min, capped at ${(counts.max_per_rating || 3)} per channel per rating. Causal direction; preferred for closed-loop deployment, conservative for discovery. `)}
+          {"Pooled neural sources: TD (250 Hz, band power estimated over 30 s by Welch's method) from streaming recordings and from montage and survey recordings, and PSD from patient events. "}
+          {"Band-power LSB appears on the timeline but covers one band, not every frequency, so it is not pooled here."}
         </MDTypography>
       ) : null) : (hasTolControl ? (
         // WHY THIS IS THREE MESSAGES AND NOT ONE. The card falls back to the daily pain-report

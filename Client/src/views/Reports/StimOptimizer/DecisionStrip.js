@@ -40,6 +40,7 @@ import { GainBar, VerdictGlyph } from "./GainBar";
 import { TYPE, HEAD, SMALL, SizedFold } from "./typeScale";
 
 import { num, fmtMa, fmtHz, fmtUs, fmtPts, fmtDelta, contactLabel } from "./stimFormat";
+import { BlockOfTimeMark, BlockOfTimeFootnote, blockOfTimeState, notCheckedText, rateRowForSetting } from "./blockOfTime";
 
 const VALUE = { fontFamily: PAL.mono, fontSize: TYPE.numLarge, color: "#1A1A1A", whiteSpace: "nowrap" };
 const DELTA = { fontFamily: PAL.mono, fontSize: TYPE.num, color: "#1A1A1A", whiteSpace: "nowrap" };
@@ -51,7 +52,7 @@ const NW = { whiteSpace: "nowrap" };
  * rule could not clear a current for it, so `amp` arrives as `null` on purpose, not as a gap in
  * the data. Printing a bare "—" there reads as missing data; the sentence says what actually
  * happened instead (never "NaN mA", never "None"). */
-function Setting({ rate, pw, amp, missingPw, missingAmp }) {
+function Setting({ rate, pw, amp, missingPw, missingAmp, ampMoves = false }) {
   // The no-current sentence is a block of its own UNDER the rate and pulse width, not a third
   // item inside the no-wrap value span: inside it, the sentence ran on across the "change" and
   // "gain" columns (watched on the live page, 2026-09-15).
@@ -60,7 +61,7 @@ function Setting({ rate, pw, amp, missingPw, missingAmp }) {
       <span style={VALUE}>
         {fmtHz(rate)}<span style={{ color: "#6E6E6E" }}> · </span>
         {missingPw ? <span style={{ color: "#6E6E6E" }}>— µs</span> : fmtUs(pw)}
-        {!missingAmp && <><span style={{ color: "#6E6E6E" }}> · </span>{fmtMa(amp)}</>}
+        {!missingAmp && <><span style={{ color: "#6E6E6E" }}> · </span>{fmtMa(amp)}{ampMoves && <BlockOfTimeMark />}</>}
       </span>
       {missingAmp && (
         <MDTypography variant="caption" component="div"
@@ -165,6 +166,14 @@ export default function DecisionStrip({ arms, plan, planLoading, planErr, inForc
     return g === null ? 0 : Math.ceil(Math.abs(g) + (sd || 0));
   }));
   const exposure = (((plan && plan.stage1) || {}).audit || {}).resolution_exposure || null;
+  // Decision 253's check on the pain map each side's recommended current is read from (the PI,
+  // 2026-09-25): a dagger beside the current when that map moves between blocks of time, "not
+  // checked" when the response carries no check for it, nothing when it was checked and holds.
+  const timeState = (r) => (r.s && num(r.s.amplitude_preferred_mA) !== null
+    ? blockOfTimeState(rateRowForSetting(plan, r.s)) : null);
+  const timeNotChecked = (r) => (r.s && num(r.s.amplitude_preferred_mA) !== null
+    ? notCheckedText(rateRowForSetting(plan, r.s)) : null);
+  const anyMoves = rows.some((r) => timeState(r) === "moves");
   return (
     <MDBox>
       {/* "Resolved" defined ONCE, where it is first used on the page (panel C item 5; report C
@@ -230,10 +239,15 @@ export default function DecisionStrip({ arms, plan, planLoading, planErr, inForc
                       no rate adaptive mode can use
                     </MDTypography>
                   ) : <Setting rate={prefRate} pw={prefPw} amp={prefAmp} missingPw={prefPw === null}
-                         missingAmp={prefAmp === null} />
+                         missingAmp={prefAmp === null} ampMoves={timeState(r) === "moves"} />
                 ) : (
                   <MDTypography variant="caption" sx={SMALL}>{planErr ? `plan unavailable: ${planErr}` : "—"}</MDTypography>
                 ))}
+                {timeNotChecked(r) && (
+                  <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.2 }}>
+                    {`current ${timeNotChecked(r)}`}
+                  </MDTypography>
+                )}
                 {s && (
                   <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.3 }}>
                     {dMin !== null && dMax !== null
@@ -273,6 +287,7 @@ export default function DecisionStrip({ arms, plan, planLoading, planErr, inForc
       <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 1.2 }}>
         Pain objective: lower is better; a positive gain favours the preferred setting.
       </MDTypography>
+      <BlockOfTimeFootnote show={anyMoves} />
       {/* When to stop searching, per side: the search's own stopping rule, shown (the PI,
           2026-09-23). Absent from a response that predates the fields. */}
       {rows.some((r) => stoppingLine(r.side, r.stratum)) ? (

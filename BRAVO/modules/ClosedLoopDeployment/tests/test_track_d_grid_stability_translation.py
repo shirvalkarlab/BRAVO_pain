@@ -252,14 +252,23 @@ def _raw(verdict, lrt_p, lo, hi):
             "n": 240, "n_clusters": 9, "era_counts": {"OFF": 40, "LOW": 100, "HIGH": 100}}
 
 
-def _write_stability_entry(grid_key, raw, *, center_hz=12.5, tagged=True):
+def _write_stability_entry(grid_key, raw, *, center_hz=12.5, tagged=True, rule_version=None,
+                           rule_in_sidecar=True):
     """One stored stability answer, as `compute_and_store_stability_grid` writes it: filed under a
-    key built on the grid's key, and naming that grid in its sidecar (`extra["sweep_key"]`)."""
-    sig = (adapter.STABILITY_GRID_KIND, "v", grid_key, 5.0, (("ONE_THREE_LEFT", float(center_hz)),))
+    key built on the grid's key, carrying the rule it was computed under in its payload
+    (`rule_version`, as the real writer has always done), and naming that grid -- and, since
+    2026-09-25, that rule -- in its sidecar (`extra`). `rule_in_sidecar=False` writes an answer from
+    before the sidecar named its rule; `rule_version` defaults to the rule in force."""
+    rule = adapter.STABILITY_GRID_RULE_VERSION if rule_version is None else rule_version
+    sig = (adapter.STABILITY_GRID_KIND, rule, grid_key, 5.0, (("ONE_THREE_LEFT", float(center_hz)),))
+    extra = None
+    if tagged:
+        extra = {"sweep_key": grid_key}
+        if rule_in_sidecar:
+            extra["rule_version"] = rule
     st.store(adapter.STABILITY_GRID_KIND, UID, sig,
-             {"points": {f"ONE_THREE_LEFT|{center_hz:g}": raw}},
-             writer="biomarkers", trigger="stability_grid", provenance=[],
-             extra=({"sweep_key": grid_key} if tagged else None))
+             {"rule_version": rule, "points": {f"ONE_THREE_LEFT|{center_hz:g}": raw}},
+             writer="biomarkers", trigger="stability_grid", provenance=[], extra=extra)
 
 
 def test_the_stability_column_reads_the_answer_for_its_own_grid_not_the_newest(sandbox):
@@ -307,3 +316,70 @@ def test_the_card_reads_the_grid_with_the_clinic_sheet_switch_the_biomarkers_pag
         "the card read the sheets-off grid while the request asked for sheets on")
     got_off = adapter.band_sweep_grid_for_closed_loop(UID, off)
     assert got_off["band_time_sweep"]["ONE_THREE_LEFT"]["best_correlation_rows"][0]["band_center_hz"] == 12.5
+
+
+# --------------------------------------------------------------------------------------------
+# The stability column reads only an answer computed under the rule in force (2026-09-25)
+# --------------------------------------------------------------------------------------------
+
+_OLD_RULE = "v4_sheet_ratings_in_setup"
+
+
+def test_the_stability_rule_version_matches_the_one_biomarkers_writes():
+    """`adapter.STABILITY_GRID_RULE_VERSION` duplicates `Biomarkers.bravo_service`'s, for the same
+    reason the kind name is duplicated (importing that module needs Django). Read out of the source,
+    so a bump on the Biomarkers side that is not made here fails in this suite rather than leaving
+    the card reading every answer as "not tested", or an older rule's answer as current."""
+    import pathlib
+    import re
+
+    src = (pathlib.Path(__file__).resolve().parents[2] / "Biomarkers" / "bravo_service.py").read_text()
+    found = re.search(r'^STABILITY_GRID_RULE_VERSION\s*=\s*"([^"]+)"', src, re.MULTILINE)
+    assert found, "bravo_service no longer defines STABILITY_GRID_RULE_VERSION at module level"
+    assert found.group(1) == adapter.STABILITY_GRID_RULE_VERSION, (
+        f"the writer's rule is {found.group(1)!r} but this module expects "
+        f"{adapter.STABILITY_GRID_RULE_VERSION!r}")
+
+
+def test_an_answer_computed_under_an_older_stability_rule_reads_not_tested(sandbox):
+    """Found by the P-03 work on 2026-09-25. The stability rule moved (one pain report counted in one
+    stimulation state, `v5_one_block_per_report`), and the Biomarkers page keys its answers on the
+    rule, but this card matched on the grid's key alone, so it kept printing the old rule's answers
+    until the background job rebuilt them. An answer from an older rule is never served: the row
+    reads "not tested"."""
+    _write_real_band_sweep_entry(sweep_key="grid-shown")
+    _write_stability_entry("grid-shown", _raw("stable", 0.72, -0.10, 0.30),
+                           rule_version=_OLD_RULE, rule_in_sidecar=False)
+    got = adapter.band_sweep_grid_for_closed_loop(UID)
+    row = got["band_time_sweep"]["ONE_THREE_LEFT"]["best_correlation_rows"][0]
+    assert "cross_setting_stability" not in row, (
+        "the card printed an answer computed under an older stability rule")
+    assert got["cross_setting_stability_from_store"] == 0
+
+
+def test_the_current_rules_answer_is_read_even_when_an_older_rules_answer_is_newer(sandbox):
+    """Both rules' answers stored for the same grid, the older rule's written LAST (an old worker
+    finishing after the new one, say): the card reads the answer under the rule in force."""
+    _write_real_band_sweep_entry(sweep_key="grid-shown")
+    _write_stability_entry("grid-shown", _raw("stable", 0.72, -0.10, 0.30))
+    import time as _t
+    _t.sleep(0.01)
+    _write_stability_entry("grid-shown", _raw("inconclusive", 0.01, -0.52, 0.89),
+                           rule_version=_OLD_RULE)
+    got = adapter.band_sweep_grid_for_closed_loop(UID)
+    row = got["band_time_sweep"]["ONE_THREE_LEFT"]["best_correlation_rows"][0]
+    assert row["cross_setting_stability"]["answer"] == "behaves the same", (
+        "the card read the older rule's answer because it was written last")
+
+
+def test_an_answer_under_the_current_rule_written_before_the_sidecar_named_its_rule_is_still_read(sandbox):
+    """Answers written under the rule in force before 2026-09-25 name their grid in the sidecar but
+    not their rule. The Biomarkers side finds them by their exact key and will not rewrite them, so
+    refusing them here would leave the card on "not tested" until the rule next moves. They are
+    read by the rule their payload carries."""
+    _write_real_band_sweep_entry(sweep_key="grid-shown")
+    _write_stability_entry("grid-shown", _raw("stable", 0.72, -0.10, 0.30), rule_in_sidecar=False)
+    got = adapter.band_sweep_grid_for_closed_loop(UID)
+    row = got["band_time_sweep"]["ONE_THREE_LEFT"]["best_correlation_rows"][0]
+    assert row["cross_setting_stability"]["answer"] == "behaves the same"
+    assert got["cross_setting_stability_from_store"] == 2

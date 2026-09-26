@@ -448,6 +448,8 @@ def _fake_service(cache, *, offer_cache=True, channels=(CHANNEL,)):
         m._event_psd_lsb_blocks = lambda uid: []
         m._montage_psd_lsb_blocks = lambda uid: []
         m._raw_lsb_cache_cached = (lambda uid, chans, td, ev, montage_psd_blocks=None, **kw: cache)
+        # the one request every page makes (decision 289); no channels means no tiles
+        m._raw_lsb_cache_canonical = (lambda uid, **kw: cache if channels else {})
     return m
 
 
@@ -494,6 +496,24 @@ def test_evidence_inputs_still_returns_a_frame_and_the_epochs(monkeypatch):
     assert len(epochs) == 2
     assert EV._cal_center_columns(frame), "the frame carries no calibrated band power"
     assert set(frame["family"]) == {EV.FAMILY_TIME_DOMAIN}
+
+
+def test_the_stim_optimizer_asks_for_the_tiles_exactly_as_every_other_page_does(monkeypatch):
+    """Decision 289. The saved tiles are shared by every page. The Stim Optimizer used to ask for
+    them with its own inputs -- the time-domain recordings only, patient events assigned without
+    the sensing index -- and when it built first after an ingest it wrote a short copy everyone
+    read (RCS08, 2026-09-25: 293,108 tiles where the full set is 303,321). It must now ask through
+    the one request the Biomarkers module defines, and never assemble the inputs itself."""
+    calls = []
+    svc = _fake_service(_plain_cache())
+    own = svc._raw_lsb_cache_cached
+    svc._raw_lsb_cache_cached = lambda *a, **k: calls.append(("its own inputs",)) or own(*a, **k)
+    svc._raw_lsb_cache_canonical = (lambda uid, **kw: calls.append(("the one request", uid, kw))
+                                    or _plain_cache())
+    _install(monkeypatch, svc)
+    frame, _epochs = AD.evidence_inputs("PARTICIPANT", stream=_stream())
+    assert calls == [("the one request", "PARTICIPANT", {})], calls
+    assert frame is not None and len(frame)
 
 
 def test_a_participant_with_no_sensing_gets_none_rather_than_an_exception(monkeypatch):

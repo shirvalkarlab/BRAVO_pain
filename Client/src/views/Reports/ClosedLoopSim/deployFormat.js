@@ -73,6 +73,17 @@ export function fmtNum(v, d = 3) {
 }
 
 /**
+ * One odds ratio with its 95% interval beside it (P-03, June audit item [0]). An odds ratio stored
+ * before its interval existed says so rather than printing the number alone as if it had none to
+ * give; one the test could not estimate says that, never "1.00" or a blank.
+ */
+export function fmtOddsRatioWithInterval(or, lo, hi) {
+  if (!isNum(or)) return "could not be estimated";
+  if (!isNum(lo) || !isNum(hi)) return `${Number(or).toFixed(2)} (no interval stored with it)`;
+  return `${Number(or).toFixed(2)} (95% interval ${Number(lo).toFixed(2)} to ${Number(hi).toFixed(2)})`;
+}
+
+/**
  * A proportion rendered as a percentage. Callers on the duty-cycle panel must supply their own
  * wording for WHAT the percentage is a fraction of; this function deliberately returns only the
  * number and the per-cent sign, because the one error the duty panel exists to prevent is a

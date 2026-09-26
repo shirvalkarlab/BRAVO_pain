@@ -199,7 +199,9 @@ export function tierBullets(ranges, secondsList) {
   return out;
 }
 
-/** The snapshot-served share, as two short bullets, or nothing when no report was served that way. */
+/** The PSD share, as two short bullets, or nothing when no report was read that way. The two
+ *  sources are named in the PI's words on every part of the heat maps (2026-09-25): TD for band
+ *  power from the time-domain recording, PSD for the device's own 30 s snapshots. */
 export function deviceSpectrumBullets(sw) {
   const n = sw && Number(sw.n_pain_reports_from_device_spectrum);
   if (!n) return [];
@@ -207,8 +209,8 @@ export function deviceSpectrumBullets(sw) {
   const share = tot > 0 ? ` (${Math.round((100 * n) / tot)}%)` : "";
   const ofTot = tot > 0 ? ` of ${tot}` : "";
   return [
-    `${n}${ofTot} matched reports${share} had no voltage trace in the match window and were read from the device's `
-      + "30 s FFT snapshots: a row of N s uses the nearest ceil(N/30) snapshots, or nothing.",
+    `${n}${ofTot} matched reports${share} had no TD in the match window and were read from PSD: `
+      + "a row of N s uses the nearest ceil(N/30) PSDs, or nothing.",
     "Matching here uses the histogram card's tolerance.",
   ];
 }
@@ -232,3 +234,39 @@ export function clinicSheetBullets(sw) {
   return [`${head} are the clinic titration sessions' scores, ${scale}, taken while current was being stepped.`];
 }
 
+
+/** "+0.12" / "\u22120.31" / "0.00": a correlation with its sign always written. */
+function fmtR(v) {
+  const n = Number(v);
+  if (v == null || !Number.isFinite(n)) return "\u2014";
+  const a = Math.abs(n).toFixed(2);
+  if (a === "0.00") return a;
+  return `${n < 0 ? "\u2212" : "+"}${a}`;
+}
+
+/** P-19 (the PI, 2026-09-25: a heat map split by recording source, as text only). One line for the
+ *  pinned cell, printed above the scatter: the same correlation on the reports whose band power
+ *  came from TD alone and on those from PSD alone, each with its interval and count, read off the
+ *  grid response (`correlation_by_recording_source`, computed on the server with the cell's own
+ *  routine, interval method, outlier rule and matching). A source under the server's minimum reads
+ *  "too few reports". Null for a stored grid built before the split, or one that could not make it,
+ *  so nothing is printed rather than a guess. It selects no band and changes no verdict. */
+export function sourceSplitLine(sw, colIndex, rowIndex) {
+  const split = sw && sw.correlation_by_recording_source;
+  if (!split || !split.available) return null;
+  const min = Number(split.min_reports) || 8;
+  const at = (g) => { const row = (g && g[rowIndex]) || []; const v = row[colIndex]; return v == null ? null : Number(v); };
+  const part = (name, src) => {
+    if (!src) return null;
+    const n = at(src.n_grid);
+    if (n == null || !Number.isFinite(n)) return null;
+    if (n < min) return `${name} values: too few reports (${n})`;
+    const r = at(src.r_grid);
+    const lo = at(src.r_low_grid);
+    const hi = at(src.r_high_grid);
+    const iv = (lo != null && hi != null) ? ` (${fmtR(lo)} to ${fmtR(hi)})` : "";
+    return `${name} values: r ${fmtR(r)}${iv}, ${n} reports`;
+  };
+  const parts = [part("TD", split.td), part("PSD", split.psd)].filter(Boolean);
+  return parts.length ? parts.join(" \u00b7 ") : null;
+}

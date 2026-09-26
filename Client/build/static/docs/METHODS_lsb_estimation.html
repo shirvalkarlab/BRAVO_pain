@@ -62,7 +62,7 @@ li { margin: 4px 0; }
 
 <p>This <strong>independently reproduces the design ledger's empirical 0.0034 µV²/LSB to within 9%</strong>, and is</p>
 <p>0.37× the Medtronic 0.01-µV²/LSB rule of thumb. The slope 0.835 matches the frozen PSD→LSB model's 0.85</p>
-<p>for this channel. Figure: <code>rcs08_td_lsb_calibration.png</code>. Data: <code>td_lsb_calib.csv</code>.</p>
+<p>for this channel. Figure: <code>docs/exported_artifacts/rcs08_td_lsb_calibration.png</code>. Data: <code>td_lsb_calib.csv</code>.</p>
 
 <h2>3. PSD → LSB, and the back-translation question</h2>
 
@@ -71,7 +71,7 @@ li { margin: 4px 0; }
 <p>add or remove band-power information. Tested directly on all 113 blocks: band power from a</p>
 <p><strong>phase-randomized TD reconstruction</strong> matched the direct PSD integral to within <strong>0.8%</strong> (median ratio</p>
 <p>1.008, r = 0.999). **Conclusion: the direct PSD→LSB integrate-then-scale is sufficient and rigorous;</p>
-<p>back-translation is unnecessary.** Figure: <code>rcs08_psd_lsb_backtranslation.png</code>. Data:</p>
+<p>back-translation is unnecessary.** Figure: <code>docs/exported_artifacts/rcs08_psd_lsb_backtranslation.png</code>. Data:</p>
 <p><code>psd_backtranslation.csv</code>.</p>
 
 <p>Because the PSD here is the TD's own Welch spectrum, the PSD→LSB estimator is numerically the same fit</p>

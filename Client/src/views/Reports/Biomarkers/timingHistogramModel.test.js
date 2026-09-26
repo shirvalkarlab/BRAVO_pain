@@ -43,7 +43,7 @@ describe("sampleOffsetsMin", () => {
   it("gives each sample its signed minutes to the nearest report, negative before", () => {
     const off = sampleOffsetsMin(scanIndex, painSeries);
     expect(off.map((o) => o.dtMin)).toEqual([-0.5, 1.5, 1, 2.5, -2, 60]);
-    expect(off.map((o) => o.series)).toEqual(["trace", "trace", "event", "event", "montage", "montage"]);
+    expect(off.map((o) => o.series)).toEqual(["trace", "trace", "event", "event", "td_montage", "td_montage"]);
   });
 });
 
@@ -57,8 +57,8 @@ describe("timingHistogramData", () => {
     expect(sum(d.series.trace.inside)).toBe(2);
     expect(sum(d.series.event.inside)).toBe(1);
     expect(sum(d.series.event.outside)).toBe(1);      // the 2.5-min sample sits in the tail
-    expect(sum(d.series.montage.inside)).toBe(1);     // exactly at the edge counts inside
-    expect(sum(d.series.montage.outside)).toBe(0);    // the 60-min sample is off the axis
+    expect(sum(d.series.td_montage.inside)).toBe(1);     // exactly at the edge counts inside
+    expect(sum(d.series.td_montage.outside)).toBe(0);    // the 60-min sample is off the axis
     expect(d.nInside).toBe(4);
     expect(d.nTails).toBe(1);
   });
@@ -69,14 +69,14 @@ describe("timingHistogramData", () => {
     expect(sum(d.series.trace.inside)).toBe(1);       // -0.5 min
     expect(sum(d.series.trace.outside)).toBe(1);      // +1.5 min, after: greyed
     expect(sum(d.series.event.inside)).toBe(0);
-    expect(sum(d.series.montage.inside)).toBe(1);
+    expect(sum(d.series.td_montage.inside)).toBe(1);
     expect(d.nInside).toBe(2);
   });
 
   it("returns an empty shape without inputs", () => {
     const d = timingHistogramData([], { windowMin: 2, matchDirection: "nearest" });
     expect(d.nInside).toBe(0);
-    expect(SOURCE_SERIES.map((s) => s.key)).toEqual(["trace", "event", "montage"]);
+    expect(SOURCE_SERIES.map((s) => s.key)).toEqual(["trace", "td_montage", "event"]);
   });
 });
 
@@ -89,7 +89,9 @@ describe("TimingHistogram", () => {
     expect(last.layout.barmode).toBe("stack");
     expect(last.layout.xaxis.range).toEqual([-2.5, 2.5]);
     const names = last.traces.map((t) => t.name);
-    expect(names).toEqual(expect.arrayContaining(["time-domain signal", "patient-event FFT", "montage FFT"]));
+    // TD and PSD, the PI's one vocabulary for the two sources (2026-09-25); a montage is TD (2026-09-26)
+    expect(names).toEqual(expect.arrayContaining(["TD (streaming)", "TD (montage)", "PSD (patient event)"]));
+    expect(names).not.toContain("PSD (montage)");
     const coloured = last.traces.filter((t) => t.showlegend !== false);
     expect(coloured.every((t) => t.opacity === 0.85)).toBe(true);
     expect(last.layout.shapes.some((s) => s.type === "rect" && s.x0 === -2 && s.x1 === 2)).toBe(true);

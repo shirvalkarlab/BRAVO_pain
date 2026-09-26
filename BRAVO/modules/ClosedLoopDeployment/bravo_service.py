@@ -102,7 +102,9 @@ def _run_for_participant(request_data):
     """Build the Closed-Loop Deployment report for one participant. Never raises.
 
     Inputs, from `request_data`: `ParticipantId` (required), `Candidates` (list of dicts carrying at
-    least `channel` and `center_hz`), optional `Hemisphere` and `PowerScale`.
+    least `channel` and `center_hz`), optional `Hemisphere` and `PowerScale`, and `PainScore` (one
+    of the Biomarkers heat maps' pain scores; every band-to-pain reading on the report is computed
+    on it, NRS when none is sent, and the response's `pain_score` says which was used).
 
     Output: the adapter's report dict, which always carries `available` and, when that is False, a
     `reason`. A report built for a real participant also carries `cache_status`, so the page can

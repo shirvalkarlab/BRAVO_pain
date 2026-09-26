@@ -26,11 +26,66 @@ the same (standardised) units as the values on the kernel diagonal.
 """
 from __future__ import annotations
 
+import contextlib
+import logging
+import os
+
 import numpy as np
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
 
 from .objective import SE_THRESHOLD
+
+_log = logging.getLogger(__name__)
+
+#: ==========================================================================================
+#: THE HELD-OUT FOLDS OF THE CALIBRATION CHECK, REFITTED SIDE BY SIDE (the PI, 2026-09-25: "there's
+#: no reason it should take five minutes ... vectorize it!").
+#:
+#: `ObjectiveGP.loo_predict` refits the pain map once per held-out fold, re-estimating its
+#: hyperparameters from the same twelve seeded restarts each time. The analytic leave-one-out
+#: shortcut would reuse the full-data hyperparameters -- a different method (the held-out rows
+#: would inform the length scales), so it is not used. Nor can the refit's own arithmetic be
+#: batched: a fold's optimiser path depends on its own rows. What CAN change without changing a
+#: number is where each fold is computed: every fold is a pure function of its training rows
+#: (the restarts are seeded afresh inside each fit), so the folds run in worker processes, each
+#: with its linear-algebra pool at one thread, which is what the Stim Optimizer request already
+#: runs at (decision 140) and was checked bit for bit against sixteen threads (2026-09-25, ten
+#: refits of RCS08's largest pooled map: 0 values differing).
+#:
+#: `STIM_OPTIMIZER_LOO_JOBS` sets how many worker processes: "1" (or "0") refits serially, in the
+#: calling process, as before this change. The workers are joblib's reusable pool (kept alive
+#: between requests, closed after five idle minutes). Where no process pool can be started (a
+#: sandbox without POSIX semaphores, a daemon process), the folds are refitted serially and the
+#: answer is the same.
+#: ==========================================================================================
+LOO_JOBS_ENV = "STIM_OPTIMIZER_LOO_JOBS"
+LOO_DEFAULT_JOBS = max(1, min(15, (os.cpu_count() or 2) - 1))
+
+
+def _loo_n_jobs() -> int:
+    """How many worker processes the held-out folds are refitted in (1: serially, in-process)."""
+    raw = os.environ.get(LOO_JOBS_ENV, "").strip()
+    try:
+        n = int(raw) if raw else LOO_DEFAULT_JOBS
+    except ValueError:
+        n = LOO_DEFAULT_JOBS
+    return max(1, n)
+
+
+def _one_blas_thread():
+    try:
+        from threadpoolctl import threadpool_limits
+    except ImportError:                               # pragma: no cover - threadpoolctl ships with sklearn
+        return contextlib.nullcontext()
+    return threadpool_limits(limits=1, user_api="blas")
+
+
+def _refit_fold(proto, X_tr, y_tr, v_tr, X_te):
+    """One held-out fold in a worker process: the unfitted clone refitted on the training rows,
+    predicting the held-out rows, at one linear-algebra thread."""
+    with _one_blas_thread():
+        return proto._clone().fit(X_tr, y_tr, v_tr).predict(X_te)
 
 
 class ParameterGrid:
@@ -393,26 +448,58 @@ class ObjectiveGP:
         out.X_, out.y_, out.y_var_ = X, y, v
         return out
 
-    def loo_predict(self, groups=None):
+    def loo_predict(self, groups=None, n_jobs=None):
         """Leave-one-out (or leave-one-group-out) predictions for calibration checking.
 
         Refits from scratch on each fold, so hyperparameters are re-estimated on the training
         fold only. That is slower than the analytic LOO shortcut but it is the honest thing to
         report: the shortcut leaks the held-out point into the hyperparameters.
+
+        The folds are refitted in worker processes when ``n_jobs`` (default: ``_loo_n_jobs()``,
+        see ``LOO_JOBS_ENV``) is above one and there are two or more folds to fit; the answer is
+        the serial one bit for bit (``tests/test_loo_parallel_folds.py``).
         """
+        return self.loo_predict_many([groups], n_jobs=n_jobs)[0]
+
+    def loo_predict_many(self, groupings, n_jobs=None):
+        """:meth:`loo_predict` for several fold structures at once (``None`` in the list means one
+        row per fold), returning one ``(mu, sd)`` per structure. Every fold of every structure is
+        handed to the worker processes in ONE dispatch, so a calibration check's two folds (one
+        epoch at a time, and blocks of time) wait for each other once rather than twice."""
         self._check()
         n = len(self.y_)
-        groups = np.arange(n) if groups is None else np.asarray(groups)
-        mu = np.full(n, np.nan)
-        sd = np.full(n, np.nan)
-        for g in np.unique(groups):
-            te = groups == g
-            tr = ~te
-            if tr.sum() < 3:
-                continue
-            m = self._clone().fit(self.X_[tr], self.y_[tr], self.y_var_[tr])
-            mu[te], sd[te] = m.predict(self.X_[te])
-        return mu, sd
+        folds, results = [], []
+        for s, groups in enumerate(groupings):
+            groups = np.arange(n) if groups is None else np.asarray(groups)
+            results.append((np.full(n, np.nan), np.full(n, np.nan)))
+            for g in np.unique(groups):
+                te = groups == g
+                tr = ~te
+                if tr.sum() < 3:
+                    continue
+                folds.append((s, te, tr))
+        k = _loo_n_jobs() if n_jobs is None else max(1, int(n_jobs))
+        out = None
+        if k > 1 and len(folds) > 1:
+            try:
+                from joblib import Parallel, delayed
+                proto = self._clone()
+                out = Parallel(n_jobs=k, backend="loky")(
+                    delayed(_refit_fold)(proto, self.X_[tr], self.y_[tr], self.y_var_[tr],
+                                         self.X_[te])
+                    for _s, te, tr in folds)
+            except Exception as exc:                  # no process pool here: refit serially
+                _log.warning("held-out folds refitted serially: the worker processes failed (%s: %s)",
+                             type(exc).__name__, exc)
+                out = None
+        if out is None:
+            out = []
+            for _s, te, tr in folds:
+                m = self._clone().fit(self.X_[tr], self.y_[tr], self.y_var_[tr])
+                out.append(m.predict(self.X_[te]))
+        for (s, te, _tr), (m_te, s_te) in zip(folds, out):
+            results[s][0][te], results[s][1][te] = m_te, s_te
+        return results
 
 
 class _MonotoneMean:

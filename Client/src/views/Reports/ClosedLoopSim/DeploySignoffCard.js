@@ -18,6 +18,7 @@ import { captureFigureSnapshots } from "./figureSnapshots";
 import PAL from "./palette";
 import ProvisionalNote from "./ProvisionalNote";
 import { gridSettingsLine } from "./BandSweepGridPanel";
+import { painScoreLabel } from "views/Reports/painScores";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 
@@ -143,6 +144,20 @@ export function ratingsUsedText(block) {
   return `REDCap reports plus ${b.n_added} clinic-sheet rating${b.n_added === 1 ? "" : "s"}`;
 }
 
+/** Which pain score every band-to-pain reading on the page used (the PI, 2026-09-25 night): the
+ *  deployment report's own record of it, beside the summary's; if the two ever differ the sheet
+ *  says so in capitals rather than printing one of them. */
+export function painScoreUsedText(reportPain, summaryMetric) {
+  if (!reportPain || !reportPain.key) return "not recorded on the deployment report";
+  if (summaryMetric && summaryMetric !== reportPain.key) {
+    return `NOT THE SAME: the evidence and stability readings used ${painScoreLabel(reportPain.key)}, `
+      + `the deployment summary ${painScoreLabel(summaryMetric)}`;
+  }
+  const label = reportPain.label || painScoreLabel(reportPain.key);
+  const why = reportPain.fell_back_to_nrs && reportPain.reason ? ` (${reportPain.reason})` : "";
+  return `${label}, for every band-to-pain reading on this page${why}`;
+}
+
 export function ChosenBandBlock({ bandCandidate, chosenBand, bandRecord }) {
   const bc = bandCandidate || {};
   if (!bc.contact) return null;
@@ -187,6 +202,48 @@ function BurnInNote({ ev }) {
         + `still settling after implant (impedance and recovery from surgery) (${n} `
         + `rating${n === 1 ? "" : "s"} excluded).`}
     </MDTypography>
+  );
+}
+
+/** The PI, 2026-09-25 (answer 6): the area under the curve above, read again with the stimulation
+ * current in force at each sample taken out of the band power (Biomarkers
+ * `routines/deployment_current.py`), printed on the line under the plain number. Descriptive only:
+ * the plain number sets every gate. A refusal prints its reason, never a number; an older response
+ * that does not carry the reading prints nothing. Its own component for the same lint reason as
+ * BurnInNote. */
+function CurrentRemovedAuc({ ev }) {
+  const a = ev && ev.auc_current_removed;
+  if (!a) return null;
+  const k = "Deployment AUC — with the stimulation current taken out";
+  const note = { fontSize: 11, color: "#5E5E5E", mt: 0.3 };
+  if (!a.available || a.auc == null) {
+    return (
+      <>
+        <KV k={k} v="not computed" />
+        <MDTypography variant="caption" display="block" sx={note}>
+          {`Not computed: ${a.why || "no reason was recorded"}. That is an absent measurement, not a finding.`}
+        </MDTypography>
+      </>
+    );
+  }
+  const same = a.plain_on_same_samples;
+  const n0 = a.n_samples_without_current || 0;
+  return (
+    <>
+      <KV k={k} v={`${fmt(a.auc)} (${fmt(a.auc_low)}–${fmt(a.auc_high)})`} />
+      <MDTypography variant="caption" display="block" sx={note}>
+        {`The same samples and the same high-or-low split, with the ${a.hemisphere || ""} current in `
+          + `force at each sample taken out of the band power as ${a.shape_words || "a straight line"}, `
+          + "in the same direction as the plain number (below 0.5 would mean the direction reversed). "
+          + (same && same.auc != null
+            ? `On the ${a.n_spectral_samples} samples from ${a.n_pain_reports} pain reports it rests on, `
+              + `the plain reading on those same samples is ${fmt(same.auc)} (${fmt(same.auc_low)}–`
+              + `${fmt(same.auc_high)}). `
+            : "")
+          + (n0 > 0 ? `${n0} sample${n0 === 1 ? "" : "s"} recorded before the first dated setting have no current. ` : "")
+          + "Descriptive only: the plain reading above sets every gate and the verdict."}
+      </MDTypography>
+    </>
   );
 }
 
@@ -485,6 +542,8 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                     <KV k="Center (FFT-snapped)" v={`${fmt(id.center_freq_hz, 1)} → ${fmt(id.snapped_center_freq_hz, 2)} Hz`} />
                     <KV k="PRO metric / binarization" v={`${id.pro_metric} / ${id.binarization}`} />
                     <KV k="Pain ratings used" v={ratingsUsedText(id.clinic_sheet_ratings)} />
+                    <KV k="Pain score used"
+                      v={painScoreUsedText(_rep && _rep.pain_score, id.pro_metric)} />
                     <KV k="Polarity / suggested mode" v={`${dc.polarity} / ${dc.suggested_mode || "—"}`} />
                   </>
                 ) : null}
@@ -560,6 +619,7 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                   {ev ? (
                     <>
                       <KV k="Deployment AUC — in-sample (95% clustered-bootstrap CI)" v={`${fmt(ev.auc)} (${fmt(ev.auc_lo)}–${fmt(ev.auc_hi)})`} />
+                      <CurrentRemovedAuc ev={ev} />
                       {/* Audit C2: the held-out (train-past → test-future) AUC shown BESIDE the
                           in-sample number, so the forward optimism is visible at sign-off. Color the
                           held-out value by whether its CI clears chance (green) or not (warn). */}
