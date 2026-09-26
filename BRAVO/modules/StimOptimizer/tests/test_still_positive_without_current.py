@@ -144,7 +144,9 @@ def _write(sig, grid, *, adjusted, request=None):
     st.store("raw_lsb_tiles", UID, ("tiles", 1), {"tiles": [[0.0]]}, writer="biomarkers")
     chain = prov.flatten([prov.entry(tiles_key, kind="raw_lsb_tiles", writer="biomarkers")])
     extra = {"sweep_settings": sweep_settings.sweep_settings_tag_from_request(request or {}),
-             "adjust_for_stim_current": bool(adjusted)}
+             "adjust_for_stim_current": bool(adjusted),
+             # the rule in force on the sidecar, as the Biomarkers writer stamps it (decision 317)
+             "rule_version": sweep_settings.GRID_RULE_VERSION}
     assert st.store("biomarker_band_sweep", UID, sig, grid, writer="biomarkers",
                     trigger="band_time_sweep", provenance=chain, fmt="pickle", extra=extra)
 

@@ -34,6 +34,23 @@ STABILITY_GRID_KIND = "biomarker_band_stability_grid"
 # and so the "behaves the same" check, are clustered on the pain report.
 STABILITY_GRID_RULE_VERSION = "v6_se_clustered_on_report"
 
+# THE STORED HEAT-MAP GRID ITSELF: its kind name and the rule it is built under. ONE HOME since
+# decision 317 (2026-09-26), for the same reason as the stability grid's above: the Biomarkers
+# writer (`bravo_service._BAND_SWEEP_RESPONSE_KIND`, `_BAND_SWEEP_RULE_VERSION`) and the other
+# pages' readers (`ClosedLoopDeployment/adapter.py`: the "Choose a band" card and the Stim
+# Optimizer's readiness table) both need them, and the readers cannot import `bravo_service`.
+# Bump the rule when anything about how a grid's numbers are computed changes, so a grid built under
+# the old rule is never served as if it carried the new one -- by the Biomarkers page (the rule is in
+# its key) or by another page (the rule is on the sidecar, `grid_written_under_rule_in_force`).
+# v24: every chance test is every other rotation once (decision 315); v23: correlation by recording
+# source; v22: effective count on each cell; v21: outlier rule on raw power; v20: cell p-values,
+# decision 188.
+GRID_KIND = "biomarker_band_sweep"
+GRID_RULE_VERSION = "v24_exact_rotation_null"
+# The two raw inputs every grid names in its chain, in the order its key carries them: the saved
+# 3-second tiles (`bravo_service._RAW_LSB_SHARED_KIND`) and the pain-report snapshot.
+GRID_INPUT_KINDS = ("raw_lsb_tiles", "redcap_reports")
+
 # Pain-score choices the page offers. `key` must be a column in the tidy report table (the
 # composite is synthesised at analysis time from its two parts).
 BIOMARKER_METRICS = [
@@ -180,3 +197,83 @@ def sweep_settings_tag_from_request(request_data):
 
 def metric_label(key):
     return next((m["label"] for m in BIOMARKER_METRICS if m["key"] == key), str(key))
+
+
+def grid_signature(participant_uid, tiles_key, report_key, label_metric, settings, *,
+                   rule_version=GRID_RULE_VERSION):
+    """The store signature of one heat-map grid: the ONE assembly of its key (decision 317).
+
+    `bravo_service._band_sweep_signature` builds every grid's key through this, and
+    `grid_written_under_rule_in_force` rebuilds a key through it to recognise a grid written before
+    sidecars named their rule, so the two cannot drift apart. `settings` is the dict of every
+    setting the sweep ran under (`band_time_sweep_for_participant`'s `sweep_settings`). The imports
+    are deferred so reading the settings tag never pays for the arithmetic module.
+    """
+    from . import analytics, band_results_tables
+    return (GRID_KIND, str(rule_version), band_results_tables.RULE_VERSION,
+            str(participant_uid), tiles_key, report_key, str(label_metric),
+            tuple(sorted((k, v) for k, v in settings.items())),
+            tuple(float(s) for s in analytics.BAND_TIME_SWEEP_SECONDS),
+            float(analytics.BAND_TIME_SWEEP_WIDTH_HZ),
+            float(analytics.BAND_TIME_SWEEP_CENTER_LO_HZ),
+            float(analytics.BAND_TIME_SWEEP_CENTER_HI_HZ),
+            int(analytics.BAND_TIME_SWEEP_N_PERM), int(analytics.BAND_TIME_SWEEP_N_BOOT), 0)
+
+
+def _key_settings_from_sidecar(extra):
+    """The settings dict of a grid's key, rebuilt from what its sidecar records: the settings tag
+    and the current-adjustment switch. Three settings are not on the sidecar and are taken at the
+    values every page sends, which are the parsers' defaults: the outlier rule's multiple and scale,
+    and the inline stability column (off). A grid built with any other value gets a different key
+    and is not recognised -- a reader can only under-report, never serve an unknown rule."""
+    from . import analytics
+    tag = extra.get("sweep_settings") or {}
+    tol_min = tag.get("match_tolerance_min")
+    return {
+        "eligibility_radius_seconds": (float(tol_min) * 60.0 if tol_min
+                                       else float(max(analytics.BAND_TIME_SWEEP_SECONDS))),
+        "allow_window_reuse": bool(tag.get("allow_window_reuse")),
+        "label_strategy": tag.get("label_strategy"),
+        "percentile_low": float(tag.get("percentile_low")),
+        "percentile_high": float(tag.get("percentile_high")),
+        "outlier_n_mad": float(analytics.OUTLIER_N_MAD),
+        "outlier_scale": analytics.OUTLIER_SCALE,
+        "match_direction": tag.get("match_direction"),
+        "include_cross_setting_stability": False,
+        "include_clinic_sheet_ratings": bool(tag.get("include_clinic_sheet_ratings")),
+        "adjust_for_stim_current": bool(extra.get("adjust_for_stim_current", False)),
+    }
+
+
+def grid_written_under_rule_in_force(meta):
+    """Whether the stored grid this sidecar describes was written under `GRID_RULE_VERSION`.
+
+    WHY (decision 317, 2026-09-26). The rule is inside a grid's key, which is a hash, so the
+    Biomarkers page never serves an older-rule grid; but the Closed-Loop card and the Stim Optimizer
+    find a grid by its settings tag, and went on serving a grid built under an older rule under any
+    settings the Biomarkers page had not rebuilt -- the fault decision 293(b) fixed for the stability
+    answers. A sidecar written since then names its rule (`extra["rule_version"]`) and is read by it.
+    One written before names none: its key is rebuilt from what the sidecar records (its two inputs'
+    keys, its settings tag, its switch) under the rule in force, and it counts only if the rebuilt
+    key is its own. Anything that cannot be rebuilt counts as not in force. Never raises.
+    """
+    try:
+        meta = meta or {}
+        extra = meta.get("extra") or {}
+        if "rule_version" in extra:
+            return extra.get("rule_version") == GRID_RULE_VERSION
+        inputs = {p.get("kind"): p.get("key") for p in (meta.get("provenance") or [])
+                  if isinstance(p, dict)}
+        tiles_key, report_key = (inputs.get(k) for k in GRID_INPUT_KINDS)
+        tag = extra.get("sweep_settings") or {}
+        if not (tiles_key and report_key and tag.get("sweep_metric") and meta.get("signature_key")):
+            return False
+        try:
+            from modules.CacheStore import store as _store
+        except ImportError:                                     # host suite: modules/ is the root
+            from CacheStore import store as _store
+        sig = grid_signature(meta.get("participant_uid"), tiles_key, report_key,
+                             tag["sweep_metric"], _key_settings_from_sidecar(extra))
+        return _store.signature_key(sig) == meta.get("signature_key")
+    except Exception:                                           # noqa: BLE001
+        return False

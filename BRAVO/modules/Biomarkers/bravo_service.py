@@ -8395,7 +8395,7 @@ def band_time_sweep_cell_for_participant(request_data):
 #: may read them. `consumer="biomarkers"` is passed on the read anyway, because the refusal must
 #: be exercised on every live read path or it protects nothing.
 #: ==========================================================================================
-_BAND_SWEEP_RESPONSE_KIND = "biomarker_band_sweep"
+_BAND_SWEEP_RESPONSE_KIND = sweep_settings.GRID_KIND           # routines/sweep_settings.py, one home (decision 317)
 
 
 _adjust_for_stim_current_param = sweep_settings.adjust_for_stim_current_param  # the switch (decision 233)
@@ -8403,7 +8403,9 @@ sweep_settings_tag = sweep_settings.sweep_settings_tag                       # r
 sweep_settings_tag_from_request = sweep_settings.sweep_settings_tag_from_request
 
 
-_BAND_SWEEP_RULE_VERSION = "v24_exact_rotation_null"   # v24: every chance test is every other rotation once (decision 315); v23: correlation by recording source; v22: effective count on each cell; v21: outlier rule on raw power; v20: cell p-values, decision 188
+# The grid rule, from its one home (decision 317): the other pages' readers match a stored grid
+# on it, so its string and its history live in `routines/sweep_settings.py`.
+_BAND_SWEEP_RULE_VERSION = sweep_settings.GRID_RULE_VERSION
 
 #: Response fields that are timings of the run that produced them, not results. They are not
 #: compared when a stored response is checked against a fresh one, and a served response keeps the
@@ -8427,13 +8429,10 @@ def _band_sweep_signature(participant_uid, pro_df, label_metric, settings):
     if tiles_sig is None or not report_key:
         return None, None, tiles_sig
     tiles_key = _cache_store.product_key(_RAW_LSB_SHARED_KIND, participant_uid, tiles_sig)
-    sig = (_BAND_SWEEP_RESPONSE_KIND, _BAND_SWEEP_RULE_VERSION, band_results_tables.RULE_VERSION,
-           str(participant_uid), tiles_key, report_key, str(label_metric),
-           tuple(sorted((k, v) for k, v in settings.items())),
-           tuple(float(s) for s in analytics.BAND_TIME_SWEEP_SECONDS),
-           float(analytics.BAND_TIME_SWEEP_WIDTH_HZ),
-           float(analytics.BAND_TIME_SWEEP_CENTER_LO_HZ), float(analytics.BAND_TIME_SWEEP_CENTER_HI_HZ),
-           int(analytics.BAND_TIME_SWEEP_N_PERM), int(analytics.BAND_TIME_SWEEP_N_BOOT), 0)
+    # The key's one assembly (decision 317): the other pages' readers rebuild it through the same
+    # function to recognise a grid whose sidecar was written before sidecars named their rule.
+    sig = sweep_settings.grid_signature(participant_uid, tiles_key, report_key, label_metric,
+                                        settings, rule_version=_BAND_SWEEP_RULE_VERSION)
     try:
         from modules.CacheStore import provenance as _prov
     except ImportError:                                         # pragma: no cover
@@ -8500,6 +8499,10 @@ def _store_sweep_results(participant_uid, sig, prov, response, *, n_recordings=N
     common = dict(writer="biomarkers", trigger="band_time_sweep", provenance=prov,
                   n_recordings=n_recordings, root=_SHARED_CACHE_DIR_OVERRIDE,
                   extra={"sweep_settings": tag, "metric_label": response.get("metric_label"),
+                         # The rule this grid was built under (decision 317). It is in the KEY
+                         # too, but a key is a hash: the other pages find a grid by its tag and
+                         # serve it only when this names the rule in force.
+                         "rule_version": _BAND_SWEEP_RULE_VERSION,
                          # Whether this grid was built with the current taken out (decision 234's
                          # switch). The switch is in the KEY but not in the cross-page TAG, so a
                          # reader matching on the tag cannot tell the two grids apart without it;

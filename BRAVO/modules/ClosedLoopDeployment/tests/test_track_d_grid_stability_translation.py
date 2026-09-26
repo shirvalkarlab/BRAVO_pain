@@ -86,7 +86,9 @@ def _write_real_band_sweep_entry(*, stability_raw=None, sig=("sweep", 1), center
         # The block the real sweep stores with its grid (`sweep_key_block`), naming the grid's own key.
         payload["sweep_key"] = {"signature_key": sweep_key, "provenance": []}
     extra = ({"sweep_settings": sweep_settings.sweep_settings_tag_from_request(request or {}),
-              "metric_label": "NRS (0–10)"} if tagged else None)
+              "metric_label": "NRS (0–10)",
+              # the rule in force on the sidecar, as the Biomarkers writer stamps it (decision 317)
+              "rule_version": sweep_settings.GRID_RULE_VERSION} if tagged else None)
     st.store("biomarker_band_sweep", UID, sig, payload, writer="biomarkers",
              trigger="band_time_sweep", provenance=chain, fmt="pickle", extra=extra)
     return sig

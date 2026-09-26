@@ -666,11 +666,13 @@ def stored_current_adjusted_grid(participant_uid, request_data=None, *, consumer
         except ImportError:                                      # pragma: no cover
             from modules.Biomarkers.routines import sweep_settings as _sweep_settings
         want = _sweep_settings.sweep_settings_tag_from_request(rd)
+        # Only a grid written under the grid rule in force (decision 317), as below.
         payload, stamp = _cache_store.load_newest(
-            "biomarker_band_sweep", participant_uid, consumer=str(consumer),
+            _sweep_settings.GRID_KIND, participant_uid, consumer=str(consumer),
             root=_SHARED_CACHE_DIR_OVERRIDE,
             match=lambda meta: ((meta.get("extra") or {}).get("sweep_settings") == want
-                                and (meta.get("extra") or {}).get("adjust_for_stim_current") is True))
+                                and (meta.get("extra") or {}).get("adjust_for_stim_current") is True
+                                and _sweep_settings.grid_written_under_rule_in_force(meta)))
     except Exception as exc:                                     # noqa: BLE001
         _log.warning("reading the stored current-adjusted grid raised for %s", participant_uid,
                      exc_info=True)
@@ -722,12 +724,18 @@ def band_sweep_grid_for_closed_loop(participant_uid, request_data=None, *, consu
         _log.warning("closed-loop: the grid settings could not be resolved", exc_info=True)
         return {"available": False, "reason": f"the grid settings could not be resolved: {exc!r}"}
 
+    # AND ONLY A GRID WRITTEN UNDER THE GRID RULE IN FORCE (decision 317, 2026-09-26). The rule is
+    # inside the grid's key, so the Biomarkers page never serves an older-rule grid, but this reader
+    # matches on the tag and went on serving one under any settings that page had not rebuilt (the
+    # stability answers' fault, fixed for them in decision 293(b)). An older-rule grid is treated
+    # exactly as no grid: the build below, which writes one under the rule in force.
     def _matches(meta):
-        return ((meta.get("extra") or {}).get("sweep_settings") or None) == want
+        return (((meta.get("extra") or {}).get("sweep_settings") or None) == want
+                and _sweep_settings.grid_written_under_rule_in_force(meta))
 
     def _read():
         return _cache_store.load_newest(
-            "biomarker_band_sweep", participant_uid, consumer=str(consumer),
+            _sweep_settings.GRID_KIND, participant_uid, consumer=str(consumer),
             root=_SHARED_CACHE_DIR_OVERRIDE, match=_matches)
 
     built_now = False

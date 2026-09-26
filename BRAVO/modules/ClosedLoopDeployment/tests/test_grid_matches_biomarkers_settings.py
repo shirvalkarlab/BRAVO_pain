@@ -64,7 +64,9 @@ def _write(sig, r, *, request=None, tagged=True):
                    "band_width_hz": 5.0,
                    "best_correlation_rows": [{"band_center_hz": 12.5, "r": r}],
                    "best_auc_rows": [{"band_center_hz": 12.5, "auc": 0.5 + r}]}}}
-    extra = ({"sweep_settings": sweep_settings.sweep_settings_tag_from_request(request or {})}
+    # the rule in force on the sidecar, as the Biomarkers writer stamps it (decision 317)
+    extra = ({"sweep_settings": sweep_settings.sweep_settings_tag_from_request(request or {}),
+              "rule_version": sweep_settings.GRID_RULE_VERSION}
              if tagged else None)
     assert st.store("biomarker_band_sweep", UID, sig, payload, writer="biomarkers",
                     trigger="band_time_sweep", provenance=chain, fmt="pickle", extra=extra)
