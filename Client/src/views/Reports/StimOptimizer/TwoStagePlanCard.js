@@ -80,7 +80,7 @@ function RecordTable({ rows, columns, limit = 12 }) {
   if (!rows || !rows.length) return null;
   const present = columns.filter(([k]) => rows.some((r) => r && r[k] !== undefined));
   return (
-    <MDBox sx={{ overflowX: "auto" }}>
+    <MDBox data-scroll-x="" sx={{ overflowX: "auto", maxWidth: "100%" }}>
       <Table size="small" sx={{ mt: 0.5 }}>
         <TableHead sx={{ display: "table-header-group", p: 0 }}>
           <TableRow>
@@ -173,7 +173,7 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
               computing the two-stage plan (about a minute the first time; a few seconds afterwards)&hellip;
             </MDTypography>
             <Placeholder width={220} height={16} mt={16} />
-            <MDBox mt={2} sx={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(300px, 1.5fr)",
+            <MDBox mt={2} sx={{ display: "grid", gridTemplateColumns: { xs: "minmax(0, 1fr)", sm: "minmax(0, 1fr) minmax(0, 1.5fr)" },
               columnGap: "32px", rowGap: "24px", alignItems: "start" }}>
               {[0, 1, 2, 3].map((i) => [
                 <MDBox key={`${i}-l`} display="flex" alignItems="flex-start" gap={1}>

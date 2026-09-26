@@ -324,7 +324,7 @@ export default function SensingEvidenceTable({ closedLoop }) {
       )}
 
       {rows.length > 0 && (
-        <MDBox mt={2} sx={{ overflowX: "auto" }}>
+        <MDBox mt={2} data-scroll-x="" sx={{ overflowX: "auto", maxWidth: "100%" }}>
           {openRows.length > 0 ? openRows.map((c, i) => <ReadinessBlock key={i} c={c} allowed={split ? true : null} />) : (
             <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2 }}>
               {`Nothing was screened on ${allowedNames.join(" or ")}.`}

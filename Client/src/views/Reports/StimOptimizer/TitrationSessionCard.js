@@ -132,7 +132,7 @@ function SheetTable({ title, caption, rows, columns }) {
           {caption}
         </MDTypography>
       )}
-      <MDBox sx={{ overflowX: "auto" }}>
+      <MDBox data-scroll-x="" sx={{ overflowX: "auto", maxWidth: "100%" }}>
         <Table size="small">
           <TableHead sx={{ display: "table-header-group", p: 0 }}>
             <TableRow>
@@ -226,10 +226,10 @@ const VALUE_SMALL = { ...MONO, fontSize: TYPE.num };
 /** One label + value row of a side's column. */
 function Row({ label, children, sub }) {
   return (
-    <MDBox sx={{ display: "grid", gridTemplateColumns: "minmax(88px, 0.45fr) 1fr", columnGap: "12px",
+    <MDBox sx={{ display: "grid", gridTemplateColumns: "minmax(88px, 0.45fr) minmax(0, 1fr)", columnGap: "12px",
       alignItems: "baseline", py: 0.4 }}>
       <MDTypography variant="caption" sx={LABEL}>{label}</MDTypography>
-      <MDBox>
+      <MDBox sx={{ minWidth: 0 }}>
         <div>{children}</div>
         {sub ? <MDTypography variant="caption" component="div" sx={SMALL}>{sub}</MDTypography> : null}
       </MDBox>
@@ -288,7 +288,7 @@ function SideColumn({ side, plan, shared = [], todayShared = false }) {
   const hold = plan.hold || {};
   const rec = (plan.yield || {}).record_today || {};
   return (
-    <MDBox>
+    <MDBox sx={{ minWidth: 0 }}>
       <MDTypography variant="h6" component="h3" sx={HEADING}>{side}</MDTypography>
       <Row label="Rate">
         <span style={VALUE}>{fmtHz(plan.rate_hz)}</span>
@@ -416,7 +416,7 @@ function ProposedColumn({ p }) {
   const other = p.side === "Left" ? "right" : "left";
   const watch = Array.isArray(bands.watch_hz) ? bands.watch_hz.map((v) => Number(v)).join(", ") : "";
   return (
-    <MDBox>
+    <MDBox sx={{ minWidth: 0 }}>
       <MDTypography variant="h6" component="h3" sx={HEADING}>{`${p.side}: stimulate ${st.contacts_short || EMPTY}`}</MDTypography>
       <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, lineHeight: 1.57, color: T.ink2, mt: 0.5, maxWidth: "68ch" }}>
         {p.purpose}
@@ -652,7 +652,7 @@ export default function TitrationSessionCard({ plan, participantUid, homeSchedul
           <>
             <SessionHeaderStrip plan={plan} />
 
-            <MDBox mt={3} sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" }, columnGap: "48px", rowGap: "24px" }}>
+            <MDBox mt={3} sx={{ display: "grid", gridTemplateColumns: { xs: "minmax(0, 1fr)", md: "repeat(2, minmax(0, 1fr))" }, columnGap: "48px", rowGap: "24px" }}>
               <SideColumn side="Left" plan={left} shared={shared} todayShared={todayShared} />
               <SideColumn side="Right" plan={right} shared={shared} todayShared={todayShared} />
             </MDBox>
@@ -686,7 +686,7 @@ export default function TitrationSessionCard({ plan, participantUid, homeSchedul
                 <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2, mb: 1, mt: 0.5, maxWidth: "68ch" }}>
                   {"The readiness check's best sensing pair on this side needs other stimulating contacts than today's; this ladder runs them. A separate visit, or the end of the ordinary session; its rows are at the end of the sheet."}
                 </MDTypography>
-                <MDBox sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: proposedSides.length > 1 ? "1fr 1fr" : "1fr" }, columnGap: "48px", rowGap: "24px" }}>
+                <MDBox sx={{ display: "grid", gridTemplateColumns: { xs: "minmax(0, 1fr)", md: proposedSides.length > 1 ? "repeat(2, minmax(0, 1fr))" : "minmax(0, 1fr)" }, columnGap: "48px", rowGap: "24px" }}>
                   {proposedSides.map((side) => <ProposedColumn key={side} p={proposed[side]} />)}
                 </MDBox>
               </MDBox>

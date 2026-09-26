@@ -236,7 +236,7 @@ function SideBlock({ r, plan, planLoading, planErr, halfRange, timeState, timeNo
       </MDTypography>
       {/* The Today | Suggested | Difference table scrolls inside its own wrapper when the card is
           narrower than its columns (a phone), so the page never scrolls sideways (SPEC 2.5). */}
-      <MDBox data-compare-scroll="" sx={{ overflowX: "auto", maxWidth: "100%" }}>
+      <MDBox data-compare-scroll="" data-scroll-x="" sx={{ overflowX: "auto", maxWidth: "100%" }}>
         <MDBox mt={1} sx={{ display: "grid", gridTemplateColumns: COMPARE, columnGap: "12px", alignItems: "baseline" }}>
           <span />
           <MDTypography variant="caption" sx={{ ...HEAD, pb: 0.5 }}>Today</MDTypography>

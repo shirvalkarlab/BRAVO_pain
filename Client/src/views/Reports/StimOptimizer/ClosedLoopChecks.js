@@ -321,12 +321,12 @@ export default function ClosedLoopChecks({ plan }) {
           here to the readiness table is gone (the design review of 2026-09-26): it said nothing
           but where another card is. */}
       {/* Two columns: the check (symbol, name, folded sentence) and its evidence. */}
-      <MDBox mt={2} sx={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(300px, 1.5fr)",
+      <MDBox mt={2} sx={{ display: "grid", gridTemplateColumns: { xs: "minmax(0, 1fr)", sm: "minmax(0, 1fr) minmax(0, 1.5fr)" },
         columnGap: "32px", rowGap: "24px", alignItems: "start" }}>
         {conditions.map((c, i) => {
           const st = verdictState(c);
           return [
-            <MDBox key={`${i}-l`} display="flex" alignItems="flex-start" gap={1}>
+            <MDBox key={`${i}-l`} display="flex" alignItems="flex-start" gap={1} sx={{ minWidth: 0 }}>
               <MDBox pt={0.2} sx={{ flex: "0 0 auto" }}><Glyph state={st} name={c.name} /></MDBox>
               <MDBox>
                 <MDTypography variant="caption" component="div" title={c.name}
@@ -341,7 +341,7 @@ export default function ClosedLoopChecks({ plan }) {
                 </SizedFold>
               </MDBox>
             </MDBox>,
-            <MDBox key={`${i}-n`} pt={0.2}><Numbers c={c} lfp={c.name === "adaptive_band_passes_lfp_response" ? lfp : null} /></MDBox>,
+            <MDBox key={`${i}-n`} pt={0.2} sx={{ minWidth: 0 }}><Numbers c={c} lfp={c.name === "adaptive_band_passes_lfp_response" ? lfp : null} /></MDBox>,
           ];
         })}
       </MDBox>

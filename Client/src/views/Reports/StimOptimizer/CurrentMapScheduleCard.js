@@ -106,7 +106,7 @@ export function HomeScheduleSection({ schedule }) {
           </MDTypography>
         )}
 
-        <MDBox sx={{ overflowX: "auto", mt: 1.5 }}>
+        <MDBox data-scroll-x="" sx={{ overflowX: "auto", maxWidth: "100%", mt: 1.5 }}>
           <Table size="small">
             <TableHead sx={{ display: "table-header-group", p: 0 }}>
               <TableRow>

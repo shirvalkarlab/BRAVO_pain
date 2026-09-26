@@ -529,7 +529,7 @@ function ClinicStreamSection({ groups, inForceLeft, inForceRight, clinicStream, 
         showDescriptions={showDescriptions} half={half} ceiling={ceiling} />
       <SizedFold show={`Clinic and home-testing visits read (${visits.length})`} hide="Hide the visit list"
         mt={1.5}>
-        <MDBox sx={{ overflowX: "auto" }}>
+        <MDBox data-scroll-x="" sx={{ overflowX: "auto", maxWidth: "100%" }}>
           <Table size="small">
             <TableHead sx={{ display: "table-header-group", p: 0 }}>
               <TableRow>
