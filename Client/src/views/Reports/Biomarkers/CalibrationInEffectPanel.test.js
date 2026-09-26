@@ -82,15 +82,18 @@ describe("the calibration-in-effect panel, on the served RCS08 payload", () => {
     expect(text).toMatch(/Closed-Loop/);
   });
 
-  test("draws both figures on raw axes, never a logarithmic one", async () => {
+  test("draws both figures on raw axes, never a logarithmic one, with the restored toolbar", async () => {
     render(wrap(<CalibrationInEffectPanel participantUid={UID} />));
     await screen.findByText(/Calibration in effect/);
     expect(Plotly.react).toHaveBeenCalledTimes(2);
-    Plotly.react.mock.calls.forEach(([, traces, layout]) => {
+    Plotly.react.mock.calls.forEach(([, traces, layout, config]) => {
       Object.keys(layout).filter((k) => /^[xy]axis/.test(k)).forEach((k) => {
         expect(layout[k].type).not.toBe("log");
       });
       expect(traces.length).toBeGreaterThan(0);
+      // the PI, 2026-09-26: toolbar restored so reviewers can save figures for the deployment record
+      expect(config.displayModeBar).not.toBe(false);
+      expect(config.toImageButtonOptions.format).toBe("png");
     });
     // figure 1: the 170 blocks, kept blocks separated from gated and flagged ones, and the line
     const [, blockTraces] = Plotly.react.mock.calls[0];

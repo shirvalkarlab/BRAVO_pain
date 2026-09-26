@@ -300,7 +300,9 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
         text: modeNote, showarrow: false, font: { size: PAL.fs.caption, color: noteColor }, align: "left",
       }] : [],
     });
-    Plotly.react(gd, traces, layout, PAL.MODEBAR);
+    // This gauge has never carried a toolbar (unlike the power curve above it): it is read-only,
+    // not a value to program (decision 302), so there is nothing on it a reviewer needs to export.
+    Plotly.react(gd, traces, layout, { displayModeBar: false, responsive: true });
   }, [data, tl]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => () => {

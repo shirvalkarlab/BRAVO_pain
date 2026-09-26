@@ -47,8 +47,28 @@ export const PLOTLY_LAYOUT = {
   yaxis: AXIS,
 };
 
-/** No zoom toolbar, no logo; the figure follows its container's width. */
+/** No zoom toolbar, no logo; the figure follows its container's width. Kept off for the figures
+ * that have never carried a toolbar (the Biomarkers heat maps since decision 88; the current map;
+ * the binarization preview). */
 export const PLOTLY_CONFIG = { displayModeBar: false, responsive: true, displaylogo: false };
+
+/**
+ * The zoom/pan/save-as-PNG toolbar the redesign of 2026-09-26 took off every figure that had it,
+ * with no way for a reviewer to save one for the deployment record; the PI put it back the same
+ * day on the figures that had it before (the ROC curve, the per-state refit, statistical power,
+ * the simulation, the three-source response, the sliding-correlation heat map, the band-time
+ * sweep, the calibration panel). Shown on hover so it does not sit on the canvas otherwise; the
+ * PNG export is a crisp 2x render for slides. Figures that never had a toolbar stay on
+ * `PLOTLY_CONFIG` above.
+ */
+export const PLOTLY_CONFIG_WITH_TOOLBAR = {
+  responsive: true,
+  displaylogo: false,
+  displayModeBar: "hover",
+  modeBarButtonsToRemove: ["lasso2d", "select2d", "autoScale2d", "toggleSpikelines",
+    "hoverClosestCartesian", "hoverCompareCartesian"],
+  toImageButtonOptions: { format: "png", scale: 2 },
+};
 
 // Reference lines: chance, zero, the safe ceiling. Always labelled at the line's end.
 export const REF_LINE = { color: T.graphic, width: 1, dash: "dash" };

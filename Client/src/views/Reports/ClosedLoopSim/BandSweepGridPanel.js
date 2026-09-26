@@ -145,8 +145,10 @@ function inkFor(v, lo, hi) {
   return luminance > 0.55 ? PAL.ink : PAL.onFill;
 }
 
-/** "p 0.002 after allowing for all 22 bands tested", from the corrected q the server sends. */
-const allowanceWords = (q, n = 22) => (q != null ? `p ${fmtNum(q, 3)} after allowing for all ${n} bands tested` : null);
+/** "q 0.002 (p corrected for testing 22 bands)": the number the server sends
+ *  (`family_wise_q_8_to_30hz`) is a Benjamini-Hochberg q, not a p -- the PI, 2026-09-26: printing
+ *  it as "p" is a mislabel. Exported for its own test. */
+export const allowanceWords = (q, n = 22) => (q != null ? `q ${fmtNum(q, 3)} (p corrected for testing ${n} bands)` : null);
 
 /** A mark drawn by SHAPE only, in the ink (SPEC section 3.2): no green, no red. */
 function ShapeMark({ glyph, label }) {
@@ -166,8 +168,8 @@ function FamilyWiseMark({ significant, q }) {
   }
   return (
     <Tooltip title={significant
-      ? `still clear after allowing for the 22 bands tested${words ? ` (${words})` : ""}`
-      : `not clear after allowing for the 22 bands tested${words ? ` (${words})` : ""}: still selectable; this is a label, not a check that can refuse`}>
+      ? `still clear after allowing for the 22 bands tested${words ? `: ${words}` : ""}`
+      : `not clear after allowing for the 22 bands tested${words ? `: ${words}` : ""}; still selectable; this is a label, not a check that can refuse`}>
       <span>{significant ? <ShapeMark glyph="✓" label="still clear after allowing for 22 bands" />
         : <ShapeMark glyph="–" label="not clear after allowing for 22 bands" />}</span>
     </Tooltip>

@@ -18,14 +18,20 @@
  * onset, not average; beyond that nothing on the device reaches it. On RCS08 the strongest cells
  * sit at 5 min, which is beyond.
  *
- * Wording (the redesign of 2026-09-26, SPEC.md section 6): "q" is said as "p ... after allowing for
- * 22 bands" (the p-value corrected for having tested all 22 band centres), and a cell's own p as
- * "for this square alone". The numbers and their rounding are unchanged.
+ * Wording (the PI, 2026-09-26: printing the corrected q as "p" is a mislabel -- a q and a p are
+ * different numbers). The value the server sends as `family_wise_q_8_to_30hz` is a
+ * Benjamini-Hochberg q, corrected for testing every one of the 22 band centres; it is now printed
+ * as "q 0.002 (p corrected for testing 22 bands)", never as "p". A cell's own uncorrected p is
+ * still printed as "p ... for this square alone". The numbers and their rounding are unchanged.
  */
 import { T } from "assets/theme/base/tokens";
 
-/** How the corrected statistic is named everywhere on the heat maps. */
-export const ALLOWANCE = "after allowing for 22 bands";
+/** "q 0.002 (p corrected for testing 22 bands)" -- never "p" for a corrected q (the PI,
+ *  2026-09-26: a q and a p are different numbers). 22 is the fixed row count the heat maps have
+ *  always drawn, the same source `ALLOWANCE` named before this rewording. */
+function qWords(q, n = 22) {
+  return `q ${fmtQ(q)} (p corrected for testing ${n} bands)`;
+}
 
 /** "9s", "1m" -- the delivered length of signal a row holds. */
 export function secondsLabel(s) {
@@ -83,7 +89,7 @@ export function bestCellReadout(sw, kind, colIndex, rowIndex, { includeN = true 
   if (kind !== "auc" && best.pearson_r_low != null && best.pearson_r_high != null) {
     parts.push(`interval ${fmtSigned(best.pearson_r_low)} to ${fmtSigned(best.pearson_r_high)}`);
   }
-  parts.push(`p ${fmtQ(best.family_wise_q_8_to_30hz)} ${ALLOWANCE}`);
+  parts.push(qWords(best.family_wise_q_8_to_30hz));
   parts.push(String(best.answer || "").replace(/_/g, " ") || "not resolved");
   // B3 (decision 185): the cross-setting stability answer, the same words the Closed-Loop card's
   // "Choose a band" column prints, read off the row the backend attached it to. A row with no
@@ -138,7 +144,7 @@ export function hoverReadout(sw, kind, colIndex, rowIndex) {
     const n = ratingsPhrase(best);
     // `Number(null)` is 0, which would print "q = 0.0" for a q that was never assessed.
     const q = best.family_wise_q_8_to_30hz == null ? NaN : Number(best.family_wise_q_8_to_30hz);
-    if (Number.isFinite(q)) return `${n} \u00b7 p ${fmtQ(q)} ${ALLOWANCE}`;
+    if (Number.isFinite(q)) return `${n} \u00b7 ${qWords(q)}`;
     const p = best.p_selection_aware == null ? NaN : Number(best.p_selection_aware);
     return Number.isFinite(p) ? `${n} \u00b7 p ${fmtP(p)}, not allowing for the 22 bands` : n;
   }

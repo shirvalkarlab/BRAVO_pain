@@ -162,3 +162,19 @@ sandwich still resolves more current-to-power cells than flipping (24 against 17
 one dominant group are the same count and still cannot be judged by any method; the cause is still
 the six values in the one stimulation-off stretch. §4.1 reads no recording and stands. Nothing on
 any page moves.
+
+## Addition, 2026-09-26 (decision 323): R 0-3+, the missing pair
+
+Decision 319 removed the samples-by-samples matrix, so the same script (`_P12v2_two_methods_rcs08.py
+ZERO_THREE_RIGHT`) ran on R 0-3+ in 63 s on the full tiles; summarised by `_P12v3_right.py`.
+
+- Current-to-power: 18 cells, 72,111 samples, 92 groups, 8.4 effective groups. Intervals excluding
+  zero: sandwich 10, flipping 11, drop-one 10. Flipping's interval 1.24 to 1.41 times the
+  sandwich's (median 1.35).
+- Band power to pain: 18 cells, 70,264 samples, 84 groups, effective groups 2.1 to 13.7 (median
+  8.2); no cell has one group holding 90% or more of the variance. Sandwich 7, flipping 3,
+  drop-one 5. Width ratio 1.10 to 9.05 (median 1.44).
+
+On this pair flipping resolves one more current-to-power cell than the sandwich, the reverse of the
+other five pairs (17 against 24). On band power to pain the sandwich resolves more, as on the other
+pairs. §1 and §6 stand; nothing on any page moves.

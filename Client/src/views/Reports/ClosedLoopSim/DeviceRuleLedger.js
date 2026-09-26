@@ -227,11 +227,17 @@ export default function DeviceRuleLedger({ report }) {
     g.rows.push(u);
   });
 
-  // THE THREE COUNTS, always in the open (SPEC 2026-09-26 section 5.2 item 4): "Refuses (n) ·
-  // Could not check (n) · Allowed (n)". "Allowed" is the rules that passed: those not reported for
-  // any reason (counted, not listed, by the server) plus the pinned values, which passed too.
-  const nAllowed = satisfied == null ? null : satisfied + recorded.length;
-  const nNotes = deferred.length + advFailed.length + recorded.length + advNotDeterminable.length
+  // THE FIVE COUNTS, always in the open, and made to ADD UP to the total checked (the PI,
+  // 2026-09-26: Refuses + Could not check + Allowed had stopped summing to the total once any
+  // deferred or advisory row existed, because those lived only inside the closed fold below).
+  // "Allowed" means only rules that were satisfied with nothing to report; a rule that passed but
+  // was pinned for its recorded value gets its own "Pinned" count rather than being folded into
+  // Allowed; every remaining non-blocking row (deferred, a recommendation not met, one with no
+  // automatic check, one whose inputs were absent, or an unrecognised kind) is "Notes". These are
+  // the same rows the fold below lists one by one; this is only their count, named once each.
+  const nAllowed = satisfied;
+  const nPinned = recorded.length;
+  const nNotes = deferred.length + advFailed.length + advNotDeterminable.length
     + advNoPredicate.length + advOther.length;
 
   return (
@@ -252,7 +258,15 @@ export default function DeviceRuleLedger({ report }) {
           <span aria-hidden="true" style={{ marginRight: 4 }}>{STATE.pass.glyph}</span>
           {`Allowed (${nAllowed == null ? "not derivable" : nAllowed})`}
         </span>
-        {el.checked != null ? <span style={{ color: PAL.ink3 }}>{` of ${el.checked} rules`}</span> : null}
+        {" · "}
+        <span style={{ color: PAL.ink3 }}>
+          {`Passed, value shown (${nPinned})`}
+        </span>
+        {" · "}
+        <span style={{ color: PAL.ink3 }}>
+          {`Notes, not blocking (${nNotes})`}
+        </span>
+        {el.checked != null ? <span style={{ color: PAL.ink3 }}>{` of ${el.checked} rules checked`}</span> : null}
       </MDTypography>
       <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, mt: 1, maxWidth: "68ch" }}>
         {el.summary || "no summary reported"}
@@ -297,7 +311,8 @@ export default function DeviceRuleLedger({ report }) {
         </MDBox>
       ) : null}
 
-      <Fold show={`Notes, not blocking (${nNotes} rules: counted under another rule, recommendations, values that matter)`}
+      <Fold show={`Notes and pinned values, not blocking (${nNotes} notes: counted under another rule, `
+        + `recommendations; ${nPinned} pinned: passed, shown because the value matters)`}
         hide="Hide the notes" mt={2}>
         <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, maxWidth: "68ch" }}>
           Each row carries the rule identifier and the document page it was read from, so a finding

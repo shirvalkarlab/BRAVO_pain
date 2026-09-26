@@ -35,7 +35,7 @@ import { CL, recomputeSlots } from "views/Reports/moduleCacheKeys";
 import PanelStaleNote from "views/Reports/ClosedLoopSim/PanelStaleNote";
 import { T, TYPE } from "assets/theme/base/tokens";
 import { SIDE } from "assets/theme/base/dataColors";
-import { plotlyLayout, PLOTLY_CONFIG, directLabel } from "views/Reports/figureStyle";
+import { plotlyLayout, PLOTLY_CONFIG_WITH_TOOLBAR, directLabel } from "views/Reports/figureStyle";
 
 import Fold from "./Fold";
 
@@ -129,7 +129,7 @@ function CalibrationInEffectPanel({ participantUid }) {
       yaxis: { title: { text: "device band power (LSB)" }, rangemode: "tozero" },
       annotations,
     });
-    Plotly.react(gd, traces, layout, PLOTLY_CONFIG);
+    Plotly.react(gd, traces, layout, PLOTLY_CONFIG_WITH_TOOLBAR);
   }, [data]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- (2) the bridge ratio per band centre, the ratio in effect as a line ----
@@ -163,7 +163,7 @@ function CalibrationInEffectPanel({ participantUid }) {
       yaxis: { title: { text: "PSD band power ÷ TD band power" }, rangemode: "tozero" },
       annotations: [directLabel(xEnd, deployed.bridge_ratio, `in effect ${fmt(deployed.bridge_ratio, 3)}`, T.ink3)],
     });
-    Plotly.react(gd, traces, layout, PLOTLY_CONFIG);
+    Plotly.react(gd, traces, layout, PLOTLY_CONFIG_WITH_TOOLBAR);
   }, [data]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => () => {

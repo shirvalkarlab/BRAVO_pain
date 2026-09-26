@@ -16,7 +16,7 @@ import TimingHistogram from "./TimingHistogram";
 jest.mock("plotly.js-dist", () => {
   const noop = () => {};
   const calls = [];
-  const react = (el, traces, layout) => { calls.push({ traces, layout }); return Promise.resolve(); };
+  const react = (el, traces, layout, config) => { calls.push({ traces, layout, config }); return Promise.resolve(); };
   return { react, purge: noop, restyle: noop, relayout: noop, newPlot: noop, __calls: calls };
 });
 // eslint-disable-next-line import/first
@@ -96,6 +96,18 @@ describe("TimingHistogram", () => {
     expect(coloured.every((t) => t.opacity === 0.85)).toBe(true);
     expect(last.layout.shapes.some((s) => s.type === "rect" && s.x0 === -2 && s.x1 === 2)).toBe(true);
     expect(typeof last.layout.uirevision).toBe("string");
+  });
+
+  // The PI, 2026-09-26: toolbar restored so reviewers can save figures for the deployment record.
+  // This figure's own toolbar (present since before the redesign) offers zoom and pan but never
+  // offered a save-as-PNG button on this one -- it stays that way, restored to its own old shape.
+  it("keeps its own toolbar: zoom and pan visible, no save-as-PNG button", () => {
+    Plotly.__calls.length = 0;
+    rtlRender(wrap(<TimingHistogram scanIndex={scanIndex} painSeries={painSeries} windowMin={2} matchDirection="nearest" metricLabel="Left Leg VAS" />));
+    const last = Plotly.__calls[Plotly.__calls.length - 1];
+    expect(last.config.displayModeBar).not.toBe(false);
+    expect(last.config.displaylogo).toBe(false);
+    expect(last.config.modeBarButtonsToRemove).toContain("toImage");
   });
 
   it("prints the counts in words under the figure", () => {

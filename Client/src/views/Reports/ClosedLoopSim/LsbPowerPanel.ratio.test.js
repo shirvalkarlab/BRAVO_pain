@@ -20,6 +20,8 @@ import LsbPowerPanel from "./LsbPowerPanel";
 jest.mock("plotly.js-dist", () => ({
   react: jest.fn(), purge: jest.fn(), restyle: jest.fn(), relayout: jest.fn(), newPlot: jest.fn(),
 }));
+// eslint-disable-next-line import/first
+import Plotly from "plotly.js-dist";
 jest.mock("database/session-control", () => ({ SessionController: { query: jest.fn() } }));
 // eslint-disable-next-line import/first
 import { SessionController } from "database/session-control";
@@ -37,6 +39,7 @@ beforeEach(() => {
   invalidateAll("test setup");
   SessionController.query.mockReset();
   SessionController.query.mockImplementation(() => Promise.resolve({ data: { boot_token: "boot-1" } }));
+  Plotly.react.mockReset();
 });
 
 test("the ratio line names the constant in effect from the payload and not a rule of thumb", async () => {
@@ -59,6 +62,38 @@ test("the ratio line names the constant in effect from the payload and not a rul
   expect(text).toMatch(/1\.08× the constant in effect \(1 µV² = 345\.59 LSB\)/);
   expect(text).toMatch(/independent check of the constant in effect/);
   expect(text).not.toMatch(/0\.01 rule|rule of thumb/);
+});
+
+// The PI, 2026-09-26: the toolbar restored so reviewers can save figures for the deployment
+// record -- but only on the figure that had one at commit d54bc614 (the power-vs-sample-size
+// curve); the switching-point/device-readings gauge below it never carried a toolbar and stays off.
+test("the power-vs-sample-size curve has the restored toolbar; the switching-point gauge stays off", async () => {
+  putResult(CL.lsbPower, UID, settingsKey({ Channel: BC.contact, CenterHz: 24.5, BandWidthHz: 5.0,
+    MatchDirection: "prior", Cutpoint: 1.5, ...REQ }), {
+    available: true,
+    lsb_ratio: { available: false, reason: "none in this test" },
+    threshold_lsb: { available: true, upper_lsb: 141.7, estimated: false, method: "anchored",
+      percentile: 62, device_lsb_p10: 40, device_lsb_median: 90, device_lsb_p90: 200 },
+    power: { available: true, curve: { n: [10, 20, 40, 80], power: [0.2, 0.4, 0.7, 0.9] },
+      target_power: 0.80, more_data_needed: true, n_ratings_current: 30, power_current: 0.5,
+      n_ratings_needed: 60, design_effect: 1.0 },
+    threshold_modes: null,
+  });
+  render(wrap(<LsbPowerPanel participantUid={UID} bandCandidate={BC} requestParams={REQ}
+    cutpoint={{ threshold: 1.5, matchDir: "prior" }} onLsbThreshold={() => {}} />));
+  await screen.findByText(/Where does the switching point sit in the device/);
+  expect(Plotly.react).toHaveBeenCalled();
+  const calls = Plotly.react.mock.calls;
+  // the power curve names its y-axis "chance of detecting a real link with pain (%)"
+  const powerCall = calls.find(([, , layout]) => /chance of detecting a real link/.test(
+    (layout.yaxis && layout.yaxis.title && layout.yaxis.title.text) || ""));
+  expect(powerCall).toBeDefined();
+  expect(powerCall[3].displayModeBar).not.toBe(false);
+  // the switching-point gauge names its x-axis "band power (device units, LSB)"
+  const gaugeCall = calls.find(([, , layout]) => /band power \(device units, LSB\)/.test(
+    (layout.xaxis && layout.xaxis.title && layout.xaxis.title.text) || ""));
+  expect(gaugeCall).toBeDefined();
+  expect(gaugeCall[3].displayModeBar).toBe(false);
 });
 
 test("the card source carries no calibration constant", () => {

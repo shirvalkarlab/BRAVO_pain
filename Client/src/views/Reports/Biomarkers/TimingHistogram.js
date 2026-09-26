@@ -14,14 +14,15 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import { T, TYPE } from "assets/theme/base/tokens";
-import { plotlyLayout, PLOTLY_CONFIG, REF_LINE } from "views/Reports/figureStyle";
+import { plotlyLayout, REF_LINE } from "views/Reports/figureStyle";
 
 import { SOURCE_SERIES, TAIL_GREY, sampleOffsetsMin, timingHistogramData } from "./timingHistogramModel";
 
-// 2026-09-26 redesign (SPEC.md section 3): the shared figure defaults, no gridlines and no zoom
-// toolbar; the window is a pale band, the report's own time a solid ink line, the window's edges
-// dashed reference lines. The series are named in a key under the figure, in ink beside a colour
-// swatch, rather than in a legend box on the canvas.
+// 2026-09-26 redesign (SPEC.md section 3): the shared figure defaults, no gridlines; the window
+// is a pale band, the report's own time a solid ink line, the window's edges dashed reference
+// lines. The series are named in a key under the figure, in ink beside a colour swatch, rather
+// than in a legend box on the canvas. The zoom/pan toolbar this figure carried before the
+// redesign, briefly taken off by it, was restored by the PI the same day.
 
 export default function TimingHistogram({ scanIndex, painSeries, windowMin, matchDirection, metricLabel, height = 260 }) {
   const ref = useRef(null);
@@ -63,7 +64,10 @@ export default function TimingHistogram({ scanIndex, painSeries, windowMin, matc
       ],
       uirevision: "timing-histogram",
     });
-    Plotly.react(ref.current, traces, layout, PLOTLY_CONFIG);
+    // This figure has carried a zoom/pan toolbar since before the redesign (no save-as-PNG button
+    // on it); the PI restored it 2026-09-26 to its own old shape after the redesign took it off.
+    Plotly.react(ref.current, traces, layout, { displaylogo: false, responsive: true,
+      modeBarButtonsToRemove: ["select2d", "lasso2d", "toImage"] });
   }, [offsets, data, metricLabel]);
 
   // Purge on unmount only (never in a per-run cleanup): see BinarizationPreview's own note.

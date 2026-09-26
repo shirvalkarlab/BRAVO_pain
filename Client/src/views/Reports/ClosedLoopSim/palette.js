@@ -22,7 +22,7 @@
  */
 import { T, FONT_FAMILY, TYPE } from "assets/theme/base/tokens";
 import { CATEGORICAL, SIDE, PAIN, CONTEXT, SEQUENTIAL, DIVERGING as DIV } from "assets/theme/base/dataColors";
-import { PLOTLY_CONFIG } from "views/Reports/figureStyle";
+import { PLOTLY_CONFIG_WITH_TOOLBAR } from "views/Reports/figureStyle";
 
 export { T } from "assets/theme/base/tokens";
 export { SIDE, PAIN, CONTEXT, DIVERGING, TEXT_VARIANT } from "assets/theme/base/dataColors";
@@ -111,8 +111,9 @@ export const PAL = {
   // One face everywhere; digits line up through tabular figures
   mono: FONT_FAMILY,
 
-  // Plotly: no toolbar (SPEC section 3)
-  MODEBAR: PLOTLY_CONFIG,
+  // Plotly: the save-as-PNG/zoom/pan toolbar, restored by the PI on 2026-09-26 so reviewers can
+  // save a figure for the deployment record (the redesign of SPEC section 3 had taken it off).
+  MODEBAR: PLOTLY_CONFIG_WITH_TOOLBAR,
 };
 
 // The five type sizes in px (SPEC section 2.4); no other size is used on the page.

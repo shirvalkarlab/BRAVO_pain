@@ -3,8 +3,8 @@
  * (SPEC.md section 3): all text 12 px, the zoom toolbar off, no legend box, no gridlines.
  */
 import {
-  PLOTLY_LAYOUT, PLOTLY_CONFIG, SVG_TEXT, FONT_FAMILY, REF_LINE, CEILING_LINE, directLabel,
-  plotlyLayout,
+  PLOTLY_LAYOUT, PLOTLY_CONFIG, PLOTLY_CONFIG_WITH_TOOLBAR, SVG_TEXT, FONT_FAMILY, REF_LINE,
+  CEILING_LINE, directLabel, plotlyLayout,
 } from "views/Reports/figureStyle";
 import { T, contrastRatio } from "assets/theme/base/tokens";
 
@@ -20,9 +20,25 @@ describe("figure defaults", () => {
     expect(directLabel(1, 2, "today").font.size).toBe(12);
   });
 
-  test("the zoom toolbar and the logo are off", () => {
+  test("the zoom toolbar and the logo are off, on the figures that never had a toolbar", () => {
     expect(PLOTLY_CONFIG.displayModeBar).toBe(false);
     expect(PLOTLY_CONFIG.displaylogo).toBe(false);
+  });
+
+  // the PI, 2026-09-26: toolbar restored so reviewers can save figures for the deployment record
+  test("the restored toolbar shows save-as-PNG, zoom and pan, on hover, with no logo", () => {
+    expect(PLOTLY_CONFIG_WITH_TOOLBAR.displayModeBar).toBe("hover");
+    expect(PLOTLY_CONFIG_WITH_TOOLBAR.displaylogo).toBe(false);
+    expect(PLOTLY_CONFIG_WITH_TOOLBAR.toImageButtonOptions.format).toBe("png");
+    // zoom and pan are Plotly's default buttons; only the ones never used here are removed
+    ["zoom2d", "pan2d", "zoomIn2d", "zoomOut2d", "autoScale2d", "resetScale2d", "toImage"]
+      .forEach((b) => {
+        if (b === "autoScale2d") {
+          expect(PLOTLY_CONFIG_WITH_TOOLBAR.modeBarButtonsToRemove).toContain(b);
+        } else {
+          expect(PLOTLY_CONFIG_WITH_TOOLBAR.modeBarButtonsToRemove).not.toContain(b);
+        }
+      });
   });
 
   test("no legend box and no gridlines", () => {

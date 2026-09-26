@@ -23,10 +23,13 @@ import MDTypography from "components/MDTypography";
 
 import { T, TYPE, CARD } from "assets/theme/base/tokens";
 import { DIVERGING, RANGE } from "assets/theme/base/dataColors";
-import { plotlyLayout, PLOTLY_CONFIG, FIGURE_TEXT_PX } from "views/Reports/figureStyle";
+import { plotlyLayout, PLOTLY_CONFIG_WITH_TOOLBAR, FIGURE_TEXT_PX } from "views/Reports/figureStyle";
 
 // The shared figure defaults (the redesign of 2026-09-26, SPEC.md section 3): one typeface at
-// 12 px, no gridlines, no legend box, no zoom toolbar. An axis title given as a string is wrapped.
+// 12 px, no gridlines, no legend box. The zoom/pan/save-as-PNG toolbar, which this figure has
+// carried since before the redesign, was restored by the PI the same day it was taken off, so a
+// reviewer can still save this figure for the deployment record. An axis title given as a string
+// is wrapped.
 const axisTitle = (t) => (typeof t === "string" ? { text: t } : (t || {}));
 
 /**
@@ -73,7 +76,7 @@ function Fig({ traces, layout = {}, height = 320 }) {
       uirevision: "biomarker-analytics-figure",
       ...withTitles,
     });
-    Plotly.react(ref.current, traces, base, PLOTLY_CONFIG);
+    Plotly.react(ref.current, traces, base, PLOTLY_CONFIG_WITH_TOOLBAR);
     // No cleanup here on purpose: see the note above the component. Purging on each redraw is what
     // was throwing away the reader's zoom, pan and legend state.
   }, [traces, layout, height]);
