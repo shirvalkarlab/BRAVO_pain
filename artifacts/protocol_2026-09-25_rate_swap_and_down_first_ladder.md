@@ -1,29 +1,33 @@
-# Next visits, draft protocol: the rate swap, a ladder that steps down first, the options for a stimulation-off block, and a home hold-and-return sequence
+# Next visits, draft protocol: the rate swap, a ladder that steps down first, a stimulation-off visit, and a home hold-and-return sequence
 
 > Draft for the PI (Prasad Shirvalkar), first written 2026-09-25, revised 2026-09-25 with your
-> rulings of that day, and **revised 2026-09-26: 2-hour visit limit.** Your ruling: "max visit is
-> 2 hrs", door to door, counting the setup before the patient's first rated minute and the export
-> and comfort check after. The draft before this revision planned one visit of 334 minutes in the
-> chair (about 6 h 10 min of clinic time); it is now split. **Visit 1** (§6) holds the rate swap and
-> the ladder and takes 98 minutes door to door (120 with the conditional second rate-swap cycle).
-> **The stimulation-off block cannot fit a 2-hour visit as designed** (its counted readings start
-> 90 minutes after switching off), so §6.1 lays out four options with their numbers; **choosing
-> among them is the one question left for you** (§11). Your answers of 2026-09-26, each applied
-> here: ethics coverage of the multi-day home sequence confirmed ("yes multi day home seq ok"); the
-> home holds approved as proposed (left 3, 4, 3, 2, 3 mA, 3-4 days each, the 2 mA hold only if the
-> ladder showed the lower currents were tolerated); the ladder starts with a rise to 3.5 mA ("sure
-> start with ladder to 3.5"); the patient files the REDCap survey at every rating in any
-> stimulation-off block ("yes files redcap on off blocks"); the first exposure to 60 Hz is covered
-> ("60 hz ok"). Rulings of 2026-09-25 that stand: the ladder at 55 Hz with the rate swap first
-> (answer 9; ruling 233(3)); stimulation off covered by the research protocol ("Stim off is OK, it's
-> in our protocol"); the rate changes without stopping BrainSense streaming (Lane 0 item 0.3(d),
-> first half); the ladder keeps 1 mA steps (your ruling of 2026-09-14, decision 160); a second
-> rate-swap cycle only if really needed. **Nothing is scheduled and nothing here is an instruction
-> to program anything.** Lane C of `artifacts/research_2026-09-25_options/11_REVISED_PLAN.md`, with
-> every accepted critique folded in (`08_critique_science.md` M3; `09_critique_feasibility.md` on
-> staff time, discard windows, the 29.5-30 Hz band, open-label wording, prerequisites 0.2 and 0.3,
-> and stating the likely outcome of the off block beside its burden), decision 277 (the one harmonic
-> check), and the off block and home sequence of the options report
+> rulings of that day, **revised 2026-09-26 for the 2-hour visit limit, and again the same day with
+> your choice of the stimulation-off option and your acceptance of the 2 mA hold's condition.** Your
+> ruling: "max visit is 2 hrs", door to door, counting the setup before the patient's first rated
+> minute and the export and comfort check after. The draft before this revision planned one visit of
+> 334 minutes in the chair (about 6 h 10 min of clinic time); it is now split. **Visit 1** (§6)
+> holds the rate swap and the ladder and takes 98 minutes door to door (120 with the conditional
+> second rate-swap cycle). The stimulation-off block could not keep its 90-minute wait inside 2
+> hours; **you chose option (c), a shorter wait inside one 2-hour visit ("stim off -c yes")**, and
+> **Visit 2** (§6.1) is that visit: a 30-minute wait, 10 ratings after it, 120 minutes door to door.
+> **Every question for you is now answered**; what remains is for Medtronic or the clinical team
+> (§11). Your answers of 2026-09-26, each applied here: ethics coverage of the multi-day home
+> sequence confirmed ("yes multi day home seq ok"); the home holds approved as proposed (left 3, 4,
+> 3, 2, 3 mA, 3-4 days each, the 2 mA hold only if the ladder showed the lower currents were
+> tolerated), and that condition written as "1.5 and 2.5 mA both tolerated on both legs of the Visit
+> 1 ladder" accepted; the ladder starts with a rise to 3.5 mA ("sure start with ladder to 3.5"); the
+> patient files the REDCap survey at every rating in any stimulation-off block ("yes files redcap on
+> off blocks"); the first exposure to 60 Hz is covered ("60 hz ok"). Rulings of 2026-09-25 that
+> stand: the ladder at 55 Hz with the rate swap first (answer 9; ruling 233(3)); stimulation off
+> covered by the research protocol ("Stim off is OK, it's in our protocol"); the rate changes
+> without stopping BrainSense streaming (Lane 0 item 0.3(d), first half); the ladder keeps 1 mA
+> steps (your ruling of 2026-09-14, decision 160); a second rate-swap cycle only if really needed.
+> **Nothing is scheduled and nothing here is an instruction to program anything.** Lane C of
+> `artifacts/research_2026-09-25_options/11_REVISED_PLAN.md`, with every accepted critique folded in
+> (`08_critique_science.md` M3; `09_critique_feasibility.md` on staff time, discard windows, the
+> 29.5-30 Hz band, open-label wording, prerequisites 0.2 and 0.3, and stating the likely outcome of
+> the off block beside its burden), decision 277 (the one harmonic check), and the off block and
+> home sequence of the options report
 > `artifacts/research_2026-09-25_options/02_next_clinic_visit_protocol.md` (report 02). Every number
 > below is quoted from a decision with its number or from report 02, or was computed for this draft
 > by a read-only script whose name is given; none is carried forward from a document without being
@@ -40,7 +44,7 @@ disbelief (your correction of 2026-09-06); it does not say the band measures the
 reading assumes otherwise. A **hold** is a stretch of days on one unchanged setting. **Door to door**
 is the patient's whole visit, from the start of setup to the end of the export. **The wait** is how
 long after stimulation is switched off before a rating counts in the main reading of an off block
-(90 minutes in report 02's design).
+(90 minutes in report 02's design; 30 minutes in Visit 2, by your choice).
 
 ---
 
@@ -61,7 +65,8 @@ long after stimulation is switched off before a rating counts in the main readin
    matched to a recording taken within minutes of it?** In the one stretch with both sides at 0 mA
    (2025-07-16 to 08-22), L 1-3+ at 21.5 and 22.5 Hz rose with the 0-100 pain scale (+0.38 and
    +0.34, decision 264(1)), but the ratings and recordings were matched only by day, typically 5.1
-   hours apart (report 02). **Which visit, and whether at all, depends on the option chosen in §6.1.**
+   hours apart (report 02). **Visit 2** (§6.1), after a 30-minute wait by your choice: it describes
+   the first hour off, not the settled off state.
 4. **Does a current's effect on pain linger for days?** A current with memory never predicted pain
    better than the current in force (decision 262(b)), but the currents on file were rarely held and
    then returned to, which is the one pattern that would show a short memory (report 02). The home
@@ -79,18 +84,18 @@ nothing).
 
 | Item (numbering from the revised plan's Lane 0) | State on 2026-09-26 | What the visits do meanwhile |
 |---|---|---|
-| **0.2** Research-ethics coverage, **for a stimulation-off block in clinic** | **Answered** (2026-09-25): "Stim off is OK, it's in our protocol" | Options (a) and (c) of §6.1 need nothing more |
+| **0.2** Research-ethics coverage, **for a stimulation-off block in clinic** | **Answered** (2026-09-25): "Stim off is OK, it's in our protocol" | Visit 2 (option (c), §6.1) needs nothing more |
 | **0.2**, **for the multi-day home sequence** | **Answered** (2026-09-26): "yes multi day home seq ok" | The home sequence starts at the end of Visit 1 (§6.2) |
-| **0.2**, **for a stimulation-off period at home** (option (b) of §6.1) | **Covered only if both answers above apply together**: the protocol's stimulation-off clause is not limited to supervised clinic time, and the home-sequence coverage extends to a hold at 0 mA. Neither answer names an unsupervised off period at home in words | Only option (b) depends on it; confirm with the option choice |
+| **0.2**, **for a stimulation-off period at home** (option (b) of §6.1) | **Covered only if both answers above apply together**: the protocol's stimulation-off clause is not limited to supervised clinic time, and the home-sequence coverage extends to a hold at 0 mA. Neither answer names an unsupervised off period at home in words | Not needed: option (b) was not chosen (§6.1) |
 | **0.2**, **for the rate change to 60 Hz** | **Answered** (2026-09-26): "60 hz ok". 60 Hz has never been programmed on this patient (the rates in the device's settings history are 10, 55, 110, 125, 130, 145 and 165 Hz; read 2026-09-25) | The rate swap is in Visit 1 |
 | **0.3(b)** Does a rate-only change dip the delivered current? | Open. Nothing in this project measures it: the ramp times in `DEVICE_percept_rc.md` §9 are for current steps only | The minute after each rate change is discarded, and extended until the tablet shows the current back at its setting, with that time written on the sheet (built into the change rows of §9). An extension also rules out the second cycle at Visit 1 (§5) |
 | **0.3(d)** Can the rate change without stopping BrainSense streaming? | **Answered: yes** (2026-09-25). Streaming runs through both rate changes with no restart planned around them | — |
 | **0.3(d)** Can the rate change on one side alone? | Open. The two sides have carried the same rate in all but 1 of 3,344 settings rows aligned in time (device settings history, read 2026-09-25) | Not needed here: Visit 1 changes the rate on both sides together. It matters only for a later left-only repeat |
-| **0.3(a)** Does Single Threshold Inverse change the delivered current? | Open | Not needed: the chronic log is not re-pointed. It stays as it is today, on L 1-3+ at 23.44 Hz, and the home sequence and option (b) read it as it is |
+| **0.3(a)** Does Single Threshold Inverse change the delivered current? | Open | Not needed: the chronic log is not re-pointed. It stays as it is today, on L 1-3+ at 23.44 Hz, and the home sequence reads it as it is |
 | **0.3(c)** Can the home controller trigger more than the 10-minute chronic log? | Open | Not needed: the home sequence uses the ratings and the chronic log as they are today |
 
 Also agreed in advance with the clinical team, not improvised on the day: the stop rules of §6,
-a second person for ratings during Visit 1 (§6.3), and, for whichever off-block option is chosen, a
+a second person for ratings during Visit 1 (§6.3), and, for Visit 2's off block, a
 fresh clinical review and the pain or distress level at which stimulation is restored at once
 (report 02: the only earlier stretch at 0 mA had 81% of its ratings at 8 or 9 out of 10).
 
@@ -286,7 +291,7 @@ own better.
 With the second cycle: 85 in the chair, **120 door to door, exactly at the limit**, which is why §5
 adds the clock condition. 24 ratings (34 with the second cycle). Visit 1 has no stimulation-off block
 and so no REDCap survey at its ratings; the 22 spare minutes are too few for an off block (about
-20 minutes at 0 mA, one rating, nothing near the 90-minute wait).
+20 minutes at 0 mA, one rating, shorter than even Visit 2's 30-minute wait).
 
 **Discard windows.** The minute of each rate change is discarded (critique 09 asked for 30-60 s;
 this takes the upper end, and the sheets' own note says current takes 30-45 s to arrive). If the
@@ -306,32 +311,92 @@ may feel each change of current at home.
 **Stop rules, agreed before the visit.** 60 Hz is a first exposure for this patient. A side-effect
 score of 2 or more (0-4, decision 165; the first-exposure stop rule of decision 230) at 60 Hz means
 return to 55 Hz and end the rate swap there. The ladder's lowest step is 0.5 mA on the left for two
-minutes; if a step is not tolerated the ladder turns back up from the current reached. In any off
-block, the pain or distress level at which stimulation is restored at once is agreed with the
+minutes; if a step is not tolerated the ladder turns back up from the current reached. In Visit 2's
+off block, the pain or distress level at which stimulation is restored at once is agreed with the
 clinical team before the visit (report 02), and the patient's own request is always enough. Any pain
 or distress the patient or clinician judges too much ends the visit and restores the settings in
 force at once.
 
-### 6.1 The stimulation-off block: four options, not chosen here
+### 6.1 Visit 2: the stimulation-off block, option (c), 120 minutes door to door
 
-**Why the design of 2026-09-25 cannot fit.** It set both sides to 0 mA for 4 h 34 min, with a rating
+Your choice of 2026-09-26 ("stim off -c yes"): a shorter wait than 90 minutes, inside one 2-hour
+visit. Rows in §9.3.
+
+**Said first, because it governs every reading of this visit.** The record does not support a wait
+shorter than 90 minutes, because nothing measured here covers minutes 15 to 90 after a switch-off,
+so this visit's readings describe the first hour off, and a flat result cannot be told apart from
+relief that has not yet worn off; you chose this knowing that.
+
+**Why the 90-minute design could not fit.** It set both sides to 0 mA for 4 h 34 min, with a rating
 every 20 minutes and a 2-minute streamed recording after each, and counted only the ratings from
-minute 90 on (10 pairs from minute 90 to 270), because relief can linger after stimulation stops: a
-median of 5 hours before pain returned after spinal cord stimulation was switched off (Meier et al.
-2024), up to about 4 hours for the slowest Parkinson's signs after brain stimulation was switched off
-(Temperli et al. 2003) (report 02). A 2-hour visit, less the 20-minute setup, the 15-minute export,
-the minute to switch off, the impedance test, the restore and the 10-minute comfort check, leaves
-**at most about 70 minutes at 0 mA. Every counted reading of that design falls after the visit has
-ended.**
+minute 90 on, because relief can linger after stimulation stops: a median of 5 hours before pain
+returned after spinal cord stimulation was switched off (Meier et al. 2024), up to about 4 hours for
+the slowest Parkinson's signs after brain stimulation was switched off (Temperli et al. 2003)
+(report 02). A 2-hour visit, less the 20-minute setup, the 15-minute export, the two setup rows, the
+minute to switch off, the impedance test, the restore and the 10-minute comfort check, leaves
+**70 minutes at 0 mA**.
 
-**The REDCap survey (your answer of 2026-09-26) applies to every option.** At each rating in an off
-block the patient gives the sheet's three 0-10 scores and then files the REDCap survey, so the block
-reads the same 0-100 scale as the 2025 reading (which rose with that scale and was not detectable with
-the 0-10 score, decision 262(a)). This draft allows 2 minutes per rating for the two together, one
-more than the sheet alone.
+**The wait: 30 minutes.** Option (c) was put to you with a 30-minute wait; it is about twice the
+14 minutes over which the record shows pain not rising after a switch-off (decision 272), and every
+4 minutes added to it costs one counted rating. The trade, on the rating clock below:
 
-**What the record says about the wait (for option (c)).** Three measurements in this project bear on
-it, and none covers the window the wait is for:
+| Wait (min) | 20 | **30** | 40 | 50 | 60 | 90 |
+|---|---|---|---|---|---|---|
+| Ratings after the wait, within the 70 minutes off | 12 | **10** | 7 | 5 | 3 | 0 |
+
+**The rating clock.** Each rating takes 2 minutes (the sheet's three 0-10 scores, then the REDCap
+survey; your answer of 2026-09-26) and is followed by a 2-minute streamed recording, so the
+tightest clock is one rating every 4 minutes, back to back. From minute 30 that places ratings at
+minutes 30, 34, 38, 42, 46, 50, 54, 58, 62 and 66: **10 ratings after the wait**, the last
+recording ending at minute 70. Two more ratings sit inside the wait, at minutes 6 and 18, each
+labelled with its minutes since 0 mA and **not counted**: they cost no counted rating, they give the
+start of the time course, and the one at minute 18 falls just past the 14 minutes decision 272
+covered. **12 ratings at 0 mA in all, each with the REDCap survey and its own recording.** If the
+patient or the clinical team finds back-to-back ratings too much, a 5-minute clock (a minute's pause
+after each recording) gives 8 ratings after the wait instead of 10.
+
+| Door to door (min) | Chair (min) | Minutes since 0 mA | Part | Setting | Ratings |
+|---|---|---|---|---|---|
+| 0-20 | — | — | Setup: settings check on the tablet, review of the stop rules and the agreed stop level, connect | as in force | — |
+| 20-21 | 0-1 | — | Start streaming, confirm the settings in force, change nothing | L 3 / R 2.5 mA, 55 Hz | — |
+| 21-22 | 1-2 | — | Streaming running; at the home sequence's follow-up, hold 5 is rated here (sheet only) | as in force | (1 at the follow-up) |
+| 22-23 | 2-3 | — | Both sides to 0 mA; the time the later side reaches 0 mA is minute 0 | L 0 / R 0 mA | — |
+| 23-29 | 3-9 | 0-6 | Wait | 0 mA | — |
+| 29-33 | 9-13 | 6-10 | Rating (sheet, then REDCap), then a 2-minute recording; **not counted** | 0 mA | 1 |
+| 33-41 | 13-21 | 10-18 | Wait | 0 mA | — |
+| 41-45 | 21-25 | 18-22 | Rating, then a recording; **not counted** | 0 mA | 1 |
+| 45-53 | 25-33 | 22-30 | Wait; **the wait ends at minute 30** | 0 mA | — |
+| 53-93 | 33-73 | 30-70 | **Counted: 10 ratings, one every 4 minutes (at 30, 34, ..., 66), each followed by its 2-minute recording** | 0 mA | 10 |
+| 93-94 | 73-74 | 70-71 | Impedance test at a fixed measurement current (decision 133) | — | — |
+| 94-95 | 74-75 | — | Restore the settings in force; stop streaming | L 3 / R 2.5 mA, 55 Hz | — |
+| 95-105 | 75-85 | — | Comfort check; rating at its minute 10 (sheet only); start the export | as in force | 1 |
+| 105-120 | — | — | Export the session files, upload the sheet | — | — |
+
+**Length.** 85 minutes in the chair, **120 door to door, no minute to spare**: each extra minute of
+setup or export comes off the end of the counted ratings, one rating for every 4 minutes. 70
+minutes at 0 mA. 13 rating rows on the sheet (12 at 0 mA and 1 back on stimulation), plus hold 5's
+rating at the follow-up. One person for the whole visit, about 2.0 person-hours, with a clinician
+reachable for the stop level.
+
+**What it can answer.** How pain (0-10 and 0-100) and band power in all 22 bands on L 1-3+ and
+R 0-3+ move over the first 70 minutes after switching off from a current held for 3 to 4 days,
+every point labelled with its minutes since 0 mA; and, on the 10 ratings after the wait, each
+matched to a recording taken in the 2 minutes after it, the rank correlation of pain with band power,
+including L 1-3+ at 21.5 and 22.5 Hz, the bands of the 2025 reading. That reading matched ratings to
+recordings only by day, typically 5.1 hours apart (report 02); here they are minutes apart.
+
+**What it cannot.** A settled-off reading (the sentence at the head of this section). A p-value on
+the band-against-pain reading: rotating 10 ratings in time gives a smallest possible p of 0.1. And
+the 10 ratings span 36 minutes of one visit, so pain may move little across them; a
+correlation needs pain to vary.
+
+**The REDCap survey (your answer of 2026-09-26).** At each rating at 0 mA the patient gives the
+sheet's three 0-10 scores and then files the REDCap survey, so the block reads the same 0-100 scale as
+the 2025 reading (which rose with that scale and was not detectable with the 0-10 score, decision
+262(a)).
+
+**What the record says about the wait.** Three measurements in this project bear on it, and none
+covers the window the wait is for:
 
 - The clinic ladders' carry-over model (`StimOptimizer/OBJECTIVE_SPEC.md`, 2026-08-30): an effect
   that builds while a current is delivered and fades after, with the fading time tried from 1.2
@@ -346,28 +411,19 @@ it, and none covers the window the wait is for:
   predicted pain better than the current in force; up to about 3 days it was no worse. That cannot
   tell a memory of 0 from one of an hour or two.
 
-**So the record does not support a shorter wait.** It shows no carry-over between clinic steps and no
-rise in pain within about 14 minutes of going off, and it says nothing about minutes 15 to 90 after a
-switch-off from a current held for days, which is exactly the span the 90-minute wait was set to
-cover. A shorter wait can be chosen as a ruling; it cannot be justified from the record. Option (a)
-would itself measure the first 70 minutes, which is what a later ruling on the wait would need.
+So a 30-minute wait is a ruling, not a finding. Visit 2's own readings from minute 6 to minute 66
+will be the first measurement of part of that span, which is what any later ruling on the wait
+would rest on.
 
-**The chronic log keeps logging at 0 mA** (for option (b)). Counted for this revision by
-`BRAVO/_agent_bridge/_protocol_offlog_probe.py` (read-only, counts only, 2026-09-26): the left chronic
-log holds 9,593 readings taken with the delivered current at 0 mA, on 76 days; in the 2025-07-16 to
-08-22 stretch, 1,394 of the left log's 1,739 readings and 3,409 of the right log's 3,902 were at
-0 mA. Each side logs one band, one reading every 10 minutes: the left today on L 1-3+ at 23.44 Hz.
+**Where it goes.** At the home sequence's follow-up, after hold 5 has been rated, so the switch-off
+comes after 3 to 4 days at the left 3.0 mA in force: the case the record has never measured. Not
+inside the home sequence, since a day at 0 mA would break a hold.
 
-| Option | Time at 0 mA and readings | What it can answer | What it cannot | Staff time | Needs from you or ethics |
-|---|---|---|---|---|---|
-| **(a) A shorter off block in its own 2-hour visit** (rows in §9.3) | About 70 minutes at 0 mA. A rating (sheet and REDCap) every 20 minutes from minute 6, each followed by a 2-minute streamed recording: **4 pairs, at minutes 6, 26, 46 and 66; 0 at or after minute 90.** A 10-minute clock gives 7 pairs, also none after minute 90. Streaming may run through the whole 70 minutes instead | How pain (0-10 and 0-100) and band power in all 22 bands on L 1-3+ and R 0-3+ move over the first hour after switching off, each point labelled with its minutes since 0 mA: the part of the time course the wait was set to skip, and the measurement a later ruling on the wait would rest on. Repeated at k visits, 4k early pairs | The design's main reading: no rating after minute 90, so a flat pain or band reading cannot be told apart from relief that has not yet worn off. No band-against-pain statement: 4 points carry no correlation worth reading (rotating 4 ratings gives a smallest possible p of 0.25) | One person for the whole 120 minutes (the ratings every 20 minutes included), **about 2.0 person-hours**; a clinician reachable for the stop level | Nothing new: in-clinic stimulation off is covered. The clinical review and stop level of §2 |
-| **(b) Off started at the end of a visit and continued at home**, or started at a home session | In clinic, as (a) but without restoring: about 80 minutes at 0 mA before the patient leaves (no impedance test, restore or comfort check in clinic), 4 streamed pairs at minutes 6-66. At home, a REDCap survey (0-10 and 0-100 scales) every 20 minutes from minute 90 to 270: **10 ratings in the counted window, each within 5 minutes of a chronic-log reading on each side.** Then stimulation back on at about minute 270 | The settled-off reading the design wanted, on pain in both scales, from minute 90 to 270, against the chronic log's band on each side, with the first 70-80 minutes streamed in clinic; pain and chronic band power against minutes since 0 mA over 4½ hours | The all-band reading after minute 90: no streaming at home unless a team member stays with the tablet (then the staff time returns to about 4½ hours). The 2025 reading's named bands: the chronic log reads one band a side, the left at 23.44 Hz, not 21.5 and 22.5 Hz. Travel between clinic and home falls around minutes 80-90 | About 2.0 person-hours in clinic, then someone on call for about 3.2 hours (minute 80 to 270), then either a phone call while the patient switches stimulation back on or a home visit with the tablet (about 30 minutes plus travel); the impedance test waits for the next visit | Ethics: covered only if both of your answers apply together (§2); neither names an off period at home in words, so confirm with the choice. A safety and rescue plan agreed with the clinical team: the stop level, who the patient calls, **how stimulation goes back on at once** (the patient's own programmer, if the clinician has enabled switching therapy on and off on it, which nothing in this project records, or a team visit, with a named fallback), who checks it is back on, and how the patient travels home while off |
-| **(c) A shorter wait than 90 minutes** (combined with (a)) | As (a); the counted readings start earlier. With a 30-minute wait: 2 counted pairs (minutes 46 and 66) on the 20-minute clock, 4 (36, 46, 56, 66) on the 10-minute clock | The same as (a), with the later pairs read as "off" by ruling | Not supported by the record (above): minutes 15-90 after a switch-off from a held current have never been measured here, and report 02's sources put the lingering at hours. A band-against-pain reading on 2-4 pairs means nothing on its own | As (a), about 2.0 person-hours | A ruling from you that a shorter wait is acceptable, knowing it is a choice, not a finding |
-| **(d) Drop the off block from this round** | None | Nothing new on question 3. The 2025 reading stays a day-matched lead (75 ratings on 25 days, typically 5.1 hours from their recordings, report 02); the current-removed readings already built (decisions 234, 240-242, 276) stay the only route | Whether the left bands track pain with no current, matched in minutes | None | Nothing |
+**Considered and not chosen** (the numbers of the 2026-09-26 draft):
 
-**Where an off block would go.** Not inside the home sequence, since a day at 0 mA would break a hold.
-The natural place is the home sequence's follow-up visit, after hold 5 has been rated: the follow-up's
-rating can be taken in the off visit's second setup row, so option (a) needs no extra minute there.
+- **(a)** The same 70 minutes at 0 mA with the 90-minute wait kept: 4 ratings (minutes 6, 26, 46, 66), none after the wait, so a description of the first hour only.
+- **(b)** Off started in clinic and continued at home to minute 270: 10 ratings after minute 90 against the chronic log's one band a side (it keeps logging at 0 mA: 9,593 left readings on 76 days), at the cost of about 3.2 hours on call, a rescue plan for switching stimulation back on at home, and ethics coverage no answer names in words.
+- **(d)** No off block this round: nothing new on question 3; the 2025 day-matched reading stays the only zero-current lead.
 
 ### 6.2 The home hold-and-return sequence (open-label; ethics confirmed 2026-09-26)
 
@@ -394,7 +450,7 @@ file could not resolve. **Why 1 mA either way:** the ladder's own step, which ke
 tolerated in that day's ladder". The ladder you then approved (starting with a rise to 3.5 mA) steps
 through 2.5, 1.5 and 0.5 mA and **never delivers 2.0 mA**. This draft writes the condition as: 1.5
 and 2.5 mA both tolerated on both legs of the Visit 1 ladder (they bracket 2.0 mA), and the patient
-agrees. Confirm the wording (§11).
+agrees. **Accepted (2026-09-26).**
 
 **How each change is made.** By the study team, in person, with the clinician's programming tablet,
 at an at-home session written on an at-home testing sheet, as the lab already does (the 30 sheets on
@@ -423,8 +479,7 @@ patient calls, and that any hold can be ended early by returning to 3.0 mA.
 |---|---|---|---|---|
 | **Visit 1** (rate swap, ladder) | **98 min** | 98 min | setup, streaming start, rate swap and ladder: 20 + 50 = 70 min | **about 2.8 person-hours** |
 | Visit 1 with the second cycle | 120 min | 120 min | 92 min | about 3.5 person-hours |
-| Off block, option (a) or (c) | 120 min | 120 min (ratings included) | not needed | about 2.0 person-hours, a clinician reachable |
-| Off block, option (b) | 120 min in clinic, then about 3.2 hours at home | 120 min, then on call | not needed | about 2.0 person-hours plus about 3.2 hours on call, plus a home visit if the patient cannot switch stimulation back on |
+| **Visit 2** (the off block, option (c)) | **120 min** | 120 min (ratings included) | not needed | **about 2.0 person-hours**, a clinician reachable |
 | Each of the four at-home sessions | not a visit; about 47 min if held in clinic | the whole session | not needed | under 1 person-hour each, travel not counted |
 
 The draft before this revision, one visit of 334 minutes in the chair, came to about 6 h 10 min of
@@ -520,18 +575,19 @@ L 3.5, L 2.5 and L 1.5 mA and 1 at L 0.5 mA with the right at 2.5.
 7. **The ladder:** as §7, at 1.5 and 2.5 mA reported beside the 2026-09-16 ladder's numbers at the
    same currents; the two 3.5 mA readings beside each other.
 
-**The off block, if one is chosen (§6.1)**
+**The off block (Visit 2, §6.1)**
 
-8. **Pain and band power against minutes since 0 mA**, every point, so a fade after stopping
-   stimulation shows as a trend; pain on both the 0-10 and the REDCap 0-100 scales. Descriptive. For
-   option (a) this is the whole reading.
-9. **Band against pain, only for option (b)**, on the counted ratings from minute 90: the rank
-   correlation of the REDCap 0-100 scale and of the 0-10 score with the chronic log's band on each
-   side, each rating matched to the nearest chronic reading (within 5 minutes), with the count. No
-   p-value: 10 ratings 20 minutes apart on one day cannot carry one (rotating 10 ratings in time, the
-   project's way of seeing what happens by chance, gives a smallest possible p of 0.1). The 2025
-   reading's two bands, L 1-3+ at 21.5 and 22.5 Hz, cannot be read at home; the streamed pairs of the
-   first 70-80 minutes give them for the early part only.
+8. **Pain and band power against minutes since 0 mA**, every point, the 2 ratings inside the wait
+   included, so a fade after stopping stimulation shows as a trend; pain on both the 0-10 and the
+   REDCap 0-100 scales; all 22 bands on L 1-3+ and R 0-3+ from the 2-minute recording after each
+   rating. Descriptive.
+9. **Band against pain on the 10 ratings after the wait** (minutes 30 to 66): the rank correlation
+   of the REDCap 0-100 scale and of the 0-10 score with each band's power in the recording taken in
+   the 2 minutes after each rating, L 1-3+ at 21.5 and 22.5 Hz (the 2025 reading's bands) named
+   first, each side read on its own, with the count. No p-value: 10 ratings 4 minutes apart on one
+   day cannot carry one (rotating 10 ratings in time, the project's way of seeing what happens by
+   chance, gives a smallest possible p of 0.1). Read with the sentence at the head of §6.1: a flat
+   result cannot be told apart from relief that has not worn off.
 10. **The same bands with the current on**, read from the stored grid with the current taken out
     (decision 234), beside items 8 and 9 (report 02).
 
@@ -559,7 +615,7 @@ header row 11, data from row 12). Contacts, current and pulse width are written 
 left-then-right form (`L C+2- / R C+1-2-`, `L 3 / R 2.5`, `L 100 / R 150`, decision 181; trap 4 of
 `clinic_steps.py`). Settings are written on the rows where they change; the lab's reader carries them
 forward to the rows below, as it does for the two-row steps today. In Visit 1 a row is one minute.
-In the off-block visit a row is a rating (120 s: the sheet's scores, then the REDCap survey), a
+In Visit 2 a row is a rating (120 s: the sheet's scores, then the REDCap survey), a
 recording (120 s) or a wait, its length in the Duration column. **Left blank for the day:** Group,
 sEEG Contacts, Threshold, Side Effect? (write any side effect and its 0-4 score), Timestamp (write
 the time as each row begins), Movement/Change point, and the seven pain columns (on rows whose note
@@ -576,8 +632,13 @@ container:
   L 3.5, L 2.5 and L 1.5 mA and 1 at L 0.5 mA with the right at 2.5 mA, every one at L 100 / R 150 µs.
 - **Visit 1 with the second cycle inserted: 34 placed, 34 read, 0 dropped**; 17 at 55 Hz L 3 / R 2.5 mA
   and 10 at 60 Hz, the rest unchanged.
-- **The option (a) off-block visit: 5 placed, 5 read, 0 dropped**: 4 with both sides at 0 mA and 1 at
-  L 3 / R 2.5 mA. The REDCap instruction on its rating rows is not mistaken for a written score.
+- **Visit 2, the off block (option (c)), rerun 2026-09-26 after the rows were regenerated: 13 rating
+  rows placed, 13 read, 0 dropped, 0 flagged as unparsed prose, 0 skipped for a missing setting**:
+  12 with both sides at 0 mA and 1 at L 3 / R 2.5 mA (the rating after stimulation is back on). The
+  REDCap instruction and the counted / not-counted words on its rating rows are not mistaken for a
+  written score. The reader reads all 12 off ratings alike, as both sides at 0 mA; which 10 count is
+  decided in the analysis, from the time written on each row against the time of 0 mA. The same run
+  read Visit 1, the second cycle and the home sheets exactly as above.
 - **The home sheets: 5 placed, 5 read, 0 dropped** (3 at L 3, 1 at L 4, 1 at L 2 mA).
 
 ### 9.1 Visit 1 (55 rows, 63 minutes in the chair, 98 door to door)
@@ -671,11 +732,10 @@ Group,Contacts,sEEG Contacts,Amp (mA),Rate (Hz),PW (µs),Threshold,Duration (s),
 ,,,,,,,60,,,,"Block A3, 55 Hz, minute 10 of 10. Pain rating now: Overall, Back, Left Leg. END OF THE SECOND CYCLE; go to the ladder.",,,,,,,
 ```
 
-### 9.3 The off-block visit, only if option (a) or (c) is chosen (19 rows, 85 minutes in the chair, 120 door to door)
+### 9.3 Visit 2, the off block, option (c) (34 rows, 85 minutes in the chair, 120 door to door)
 
 At the home sequence's follow-up, the second row ("Streaming running") is also where hold 5 is rated.
-For option (c) the rows are the same; only which ratings count changes. For option (b) the rows stop
-before the impedance test, and the safety plan takes over.
+The 2 ratings inside the wait say "not counted" on their rows; the 10 from minute 30 say "Counted".
 
 ```csv
 Group,Contacts,sEEG Contacts,Amp (mA),Rate (Hz),PW (µs),Threshold,Duration (s),Side Effect?,Timestamp,Movement/Change point,General Notes / Pt Verbal Notes,Overall,Head,Back,Left Leg,Left Foot,Right Leg,Right Foot
@@ -683,16 +743,31 @@ Group,Contacts,sEEG Contacts,Amp (mA),Rate (Hz),PW (µs),Threshold,Duration (s),
 ,,,,,,,60,,,,Streaming running; patient seated and still. Not analysed.,,,,,,,
 ,L C+2- / R C+1-2-,,L 0 / R 0,55,L 100 / R 150,,60,,,,Set BOTH sides to 0 mA: the stimulation-off block begins. Write the time each side reaches 0 mA; the later of the two is minute 0 of the block. Stop rules of section 6 apply throughout. Not analysed.,,,,,,,
 ,,,,,,,360,,,,"Off block, minutes 0 to 6: wait. No rating.",,,,,,,
-,,,,,,,120,,,,"Off block, minute 6. Pain rating now: Overall, Back, Left Leg on the sheet (0-10), then the patient files the REDCap survey (its 0-100 scales); write the time it is submitted. Minutes since 0 mA are the reading's label; none of this block reaches minute 90.",,,,,,,
+,,,,,,,120,,,,"Off block, minute 6. Pain rating now: Overall, Back, Left Leg on the sheet (0-10), then the patient files the REDCap survey (its 0-100 scales); write the time it is submitted. Inside the 30-minute wait: labelled with its minutes since 0 mA, not counted.",,,,,,,
 ,,,,,,,120,,,,"Off block, minute 8: start a 2-minute BrainSense streaming recording on L 1-3+ and R 0-3+; write its start time. No rating.",,,,,,,
-,,,,,,,960,,,,"Off block, minutes 10 to 26: wait. No rating.",,,,,,,
-,,,,,,,120,,,,"Off block, minute 26. Pain rating now: Overall, Back, Left Leg on the sheet (0-10), then the patient files the REDCap survey (its 0-100 scales); write the time it is submitted. Minutes since 0 mA are the reading's label; none of this block reaches minute 90.",,,,,,,
-,,,,,,,120,,,,"Off block, minute 28: start a 2-minute BrainSense streaming recording on L 1-3+ and R 0-3+; write its start time. No rating.",,,,,,,
-,,,,,,,960,,,,"Off block, minutes 30 to 46: wait. No rating.",,,,,,,
-,,,,,,,120,,,,"Off block, minute 46. Pain rating now: Overall, Back, Left Leg on the sheet (0-10), then the patient files the REDCap survey (its 0-100 scales); write the time it is submitted. Minutes since 0 mA are the reading's label; none of this block reaches minute 90.",,,,,,,
+,,,,,,,480,,,,"Off block, minutes 10 to 18: wait. No rating.",,,,,,,
+,,,,,,,120,,,,"Off block, minute 18. Pain rating now: Overall, Back, Left Leg on the sheet (0-10), then the patient files the REDCap survey (its 0-100 scales); write the time it is submitted. Inside the 30-minute wait: labelled with its minutes since 0 mA, not counted.",,,,,,,
+,,,,,,,120,,,,"Off block, minute 20: start a 2-minute BrainSense streaming recording on L 1-3+ and R 0-3+; write its start time. No rating.",,,,,,,
+,,,,,,,480,,,,"Off block, minutes 22 to 30: wait. No rating. The wait ends at minute 30.",,,,,,,
+,,,,,,,120,,,,"Off block, minute 30. Pain rating now: Overall, Back, Left Leg on the sheet (0-10), then the patient files the REDCap survey (its 0-100 scales); write the time it is submitted. Counted: after the 30-minute wait.",,,,,,,
+,,,,,,,120,,,,"Off block, minute 32: start a 2-minute BrainSense streaming recording on L 1-3+ and R 0-3+; write its start time. No rating.",,,,,,,
+,,,,,,,120,,,,"Off block, minute 34. Pain rating now: Overall, Back, Left Leg on the sheet (0-10), then the patient files the REDCap survey (its 0-100 scales); write the time it is submitted. Counted: after the 30-minute wait.",,,,,,,
+,,,,,,,120,,,,"Off block, minute 36: start a 2-minute BrainSense streaming recording on L 1-3+ and R 0-3+; write its start time. No rating.",,,,,,,
+,,,,,,,120,,,,"Off block, minute 38. Pain rating now: Overall, Back, Left Leg on the sheet (0-10), then the patient files the REDCap survey (its 0-100 scales); write the time it is submitted. Counted: after the 30-minute wait.",,,,,,,
+,,,,,,,120,,,,"Off block, minute 40: start a 2-minute BrainSense streaming recording on L 1-3+ and R 0-3+; write its start time. No rating.",,,,,,,
+,,,,,,,120,,,,"Off block, minute 42. Pain rating now: Overall, Back, Left Leg on the sheet (0-10), then the patient files the REDCap survey (its 0-100 scales); write the time it is submitted. Counted: after the 30-minute wait.",,,,,,,
+,,,,,,,120,,,,"Off block, minute 44: start a 2-minute BrainSense streaming recording on L 1-3+ and R 0-3+; write its start time. No rating.",,,,,,,
+,,,,,,,120,,,,"Off block, minute 46. Pain rating now: Overall, Back, Left Leg on the sheet (0-10), then the patient files the REDCap survey (its 0-100 scales); write the time it is submitted. Counted: after the 30-minute wait.",,,,,,,
 ,,,,,,,120,,,,"Off block, minute 48: start a 2-minute BrainSense streaming recording on L 1-3+ and R 0-3+; write its start time. No rating.",,,,,,,
-,,,,,,,960,,,,"Off block, minutes 50 to 66: wait. No rating.",,,,,,,
-,,,,,,,120,,,,"Off block, minute 66. Pain rating now: Overall, Back, Left Leg on the sheet (0-10), then the patient files the REDCap survey (its 0-100 scales); write the time it is submitted. Minutes since 0 mA are the reading's label; none of this block reaches minute 90.",,,,,,,
+,,,,,,,120,,,,"Off block, minute 50. Pain rating now: Overall, Back, Left Leg on the sheet (0-10), then the patient files the REDCap survey (its 0-100 scales); write the time it is submitted. Counted: after the 30-minute wait.",,,,,,,
+,,,,,,,120,,,,"Off block, minute 52: start a 2-minute BrainSense streaming recording on L 1-3+ and R 0-3+; write its start time. No rating.",,,,,,,
+,,,,,,,120,,,,"Off block, minute 54. Pain rating now: Overall, Back, Left Leg on the sheet (0-10), then the patient files the REDCap survey (its 0-100 scales); write the time it is submitted. Counted: after the 30-minute wait.",,,,,,,
+,,,,,,,120,,,,"Off block, minute 56: start a 2-minute BrainSense streaming recording on L 1-3+ and R 0-3+; write its start time. No rating.",,,,,,,
+,,,,,,,120,,,,"Off block, minute 58. Pain rating now: Overall, Back, Left Leg on the sheet (0-10), then the patient files the REDCap survey (its 0-100 scales); write the time it is submitted. Counted: after the 30-minute wait.",,,,,,,
+,,,,,,,120,,,,"Off block, minute 60: start a 2-minute BrainSense streaming recording on L 1-3+ and R 0-3+; write its start time. No rating.",,,,,,,
+,,,,,,,120,,,,"Off block, minute 62. Pain rating now: Overall, Back, Left Leg on the sheet (0-10), then the patient files the REDCap survey (its 0-100 scales); write the time it is submitted. Counted: after the 30-minute wait.",,,,,,,
+,,,,,,,120,,,,"Off block, minute 64: start a 2-minute BrainSense streaming recording on L 1-3+ and R 0-3+; write its start time. No rating.",,,,,,,
+,,,,,,,120,,,,"Off block, minute 66. Pain rating now: Overall, Back, Left Leg on the sheet (0-10), then the patient files the REDCap survey (its 0-100 scales); write the time it is submitted. Counted: after the 30-minute wait.",,,,,,,
 ,,,,,,,120,,,,"Off block, minute 68: start a 2-minute BrainSense streaming recording on L 1-3+ and R 0-3+; write its start time. No rating.",,,,,,,
 ,,,,,,,60,,,,"Off block, minute 70: impedance test at a fixed measurement current (decision 133). No rating.",,,,,,,
 ,L C+2- / R C+1-2-,,L 3 / R 2.5,55,L 100 / R 150,,60,,,,"Restore the settings in force (L 3 / R 2.5 mA, 55 Hz, L 100 / R 150 us); write the time each side is back at its current. End of the off block. Stop streaming.",,,,,,,
@@ -726,13 +801,13 @@ Group,Contacts,sEEG Contacts,Amp (mA),Rate (Hz),PW (µs),Threshold,Duration (s),
 - One visit day is one day. A shift in the rate swap is a lead to repeat at a later visit, in the
   reverse order (60-55-60); no shift is the detectable change of §5 and a reason to repeat longer.
 - The rate swap says whether power follows the rate. It says nothing about whether any band tracks
-  pain; that question stays with the off block, if one is chosen, and with the current-removal work
+  pain; that question stays with Visit 2's off block and with the current-removal work
   already built (decisions 234, 240-242).
-- An off block inside a 2-hour visit (options (a), (c)) reaches no rating after minute 90; it can
-  describe the first hour after switching off, not the settled off state. Option (b) gives 10
-  counted ratings on one day against one chronic band a side; it can show the sign and rough size of
-  the zero-current reading when ratings and band power are minutes apart, not confirm it (decision
-  282: 52 to 132 calendar days).
+- Visit 2 reaches no rating after minute 66 off. Its 10 counted ratings follow a 30-minute wait the
+  record does not support, so it describes the first hour off, not the settled off state, and a flat
+  result cannot be told apart from relief that has not worn off. Its 10 pairs on one day can show the
+  sign and rough size of a zero-current reading matched in minutes, not confirm it (decision 282:
+  52 to 132 calendar days).
 - The ladder gives two pairs on one day. It can show which way the order effect points; it cannot
   size carry-over.
 - The home sequence is one pass: two comparisons at the same current (holds 1 and 3, holds 3 and 5),
@@ -748,8 +823,8 @@ Group,Contacts,sEEG Contacts,Amp (mA),Rate (Hz),PW (µs),Threshold,Duration (s),
 
 **Answered by you on 2026-09-26, and applied above**
 
-- The 2-hour visit limit, door to door ("max visit is 2 hrs"): Visit 1 is 98 minutes; §6.1 for the
-  off block.
+- The 2-hour visit limit, door to door ("max visit is 2 hrs"): Visit 1 is 98 minutes, Visit 2
+  (the off block, §6.1) 120.
 - Research-ethics coverage of the multi-day home sequence ("yes multi day home seq ok"): the sequence
   starts at the end of Visit 1.
 - The home holds' currents, left 3, 4, 3, 2, 3 mA, 3-4 days each, approved as proposed.
@@ -757,33 +832,33 @@ Group,Contacts,sEEG Contacts,Amp (mA),Rate (Hz),PW (µs),Threshold,Duration (s),
   2.5, 3.5, 3.0 mA (§7).
 - The REDCap survey at every rating of any stimulation-off block ("yes files redcap on off blocks").
 - Coverage for the first exposure to 60 Hz ("60 hz ok").
+- **The stimulation-off block: option (c)**, a shorter wait than 90 minutes inside one 2-hour visit
+  ("stim off -c yes"): Visit 2 (§6.1), a 30-minute wait, 10 ratings after it, 120 minutes door to
+  door; options (a), (b) and (d) kept in §6.1 as considered and not chosen.
+- **The 2 mA home hold's condition**, "1.5 and 2.5 mA both tolerated on both legs of the Visit 1
+  ladder" (that ladder never delivers 2.0 mA), accepted (§6.2).
 
-**Still open for you**
-
-1. **Which off-block option, (a), (b), (c) or (d)** (§6.1). If (b), also confirm that the
-   stimulation-off clause and the home-sequence coverage together cover an off period at home (§2).
-2. **One wording to confirm, a consequence of two of your answers:** the 2 mA home hold's condition
-   now reads "1.5 and 2.5 mA both tolerated on both legs of the Visit 1 ladder", since that ladder no
-   longer delivers 2.0 mA (§6.2).
+**Still open for you: nothing.**
 
 **For Medtronic or the clinical team**
 
-3. **Item 0.3(b)**: does a rate-only change dip the delivered current? The discard rule covers it
+1. **Item 0.3(b)**: does a rate-only change dip the delivered current? The discard rule covers it
    either way; an extended discard rules out the second cycle at Visit 1.
-4. **Item 0.3(d), second half**: can the rate change on one side alone? Not needed for Visit 1.
-5. **Item 0.3(a)**: does Single Threshold Inverse change the delivered current? Needed only to
+2. **Item 0.3(d), second half**: can the rate change on one side alone? Not needed for Visit 1.
+3. **Item 0.3(a)**: does Single Threshold Inverse change the delivered current? Needed only to
    re-point the home chronic log; without it the log stays as it is.
-6. **Can the first cycle's recording be taken off the tablet and analysed while the patient is still
+4. **Can the first cycle's recording be taken off the tablet and analysed while the patient is still
    in the chair?** If not, the second-cycle rule is applied afterwards and a needed second cycle goes
    to a later visit (§5).
-7. **For any off block**: the stop level and a fresh clinical review. **For option (b)**: the safety
-   and rescue plan, including whether the patient's own programmer can switch therapy back on and how
-   the patient travels home while off.
-8. **For the home sequence**: its safety and rescue plan, and who makes the four at-home sessions.
-9. **A second person for ratings** during Visit 1.
-10. **The setup and export allowances** (20 and 15 minutes) are this draft's; if the lab's are
-    longer, Visit 1's 22 spare minutes absorb it without the second cycle, and the second cycle then
-    moves to a later visit.
+5. **For Visit 2's off block**: the stop level, a fresh clinical review, and whether the patient can
+   manage 12 surveys in 70 minutes, the last 10 back to back (if not, the 5-minute clock of §6.1: 8
+   ratings after the wait).
+6. **For the home sequence**: its safety and rescue plan, and who makes the four at-home sessions.
+7. **A second person for ratings** during Visit 1.
+8. **The setup and export allowances** (20 and 15 minutes) are this draft's; if the lab's are
+   longer, Visit 1's 22 spare minutes absorb it without the second cycle, and the second cycle then
+   moves to a later visit. Visit 2 has no spare minute: each extra minute of setup or export comes off
+   the end of the counted ratings, one rating for every 4 minutes.
 
 ## 12. Sources
 
@@ -800,9 +875,9 @@ Group,Contacts,sEEG Contacts,Amp (mA),Rate (Hz),PW (µs),Threshold,Duration (s),
   `BRAVO/_agent_bridge/_rateswap_mdc.py` (2026-09-25: the scatter of §5 and the change per
   milliamp), `BRAVO/_agent_bridge/_rateswap_settings.py` (2026-09-25: the settings in force, the rates
   in the settings history, the one row of 3,344 with different rates on the two sides),
-  `BRAVO/_agent_bridge/_protocol_offlog_probe.py` (2026-09-26: the chronic log at 0 mA, §6.1),
+  `BRAVO/_agent_bridge/_protocol_offlog_probe.py` (2026-09-26: the chronic log at 0 mA, for option (b) of §6.1, not chosen),
   `BRAVO/_agent_bridge/_protocol_rows_gen.py` (the rows of §9, their minutes and rating counts,
-  rewritten 2026-09-26) and `BRAVO/_agent_bridge/_protocol_sheet_check.py` (the reader check of §9,
+  rewritten 2026-09-26, and its off-block rows again the same day for option (c)) and `BRAVO/_agent_bridge/_protocol_sheet_check.py` (the reader check of §9,
   run 2026-09-26). The harmonic table of §4 was run on the host from `StimOptimizer.titration_plan`
   with no data. The detectable changes of the second-cycle rule and the ladder's 55% were computed by
   hand from §5's scatter with the same normal-approximation method as the table.
