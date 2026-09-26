@@ -13,14 +13,19 @@ Coded by www.creative-tim.com
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-// Material Dashboard 2 React Base Styles
-import colors from "assets/theme/base/colors";
-
-const { info, dark } = colors;
+// Values come from the design tokens (SPEC.md section 2, 2026-09-26): the page background,
+// body text in ink2, one typeface, and tabular figures so mA and device-unit columns line up.
+import { T, FONT_FAMILY } from "assets/theme/base/tokens";
 
 const globals = {
   html: {
     scrollBehavior: "smooth",
+  },
+  body: {
+    backgroundColor: T.page,
+    color: T.ink2,
+    fontFamily: FONT_FAMILY,
+    fontVariantNumeric: "tabular-nums",
   },
   "*, *::before, *::after": {
     margin: 0,
@@ -30,11 +35,11 @@ const globals = {
     textDecoration: "none !important",
   },
   "a.link, .link, a.link:link, .link:link, a.link:visited, .link:visited": {
-    color: `${dark.main} !important`,
+    color: `${T.ink} !important`,
     transition: "color 150ms ease-in !important",
   },
   "a.link:hover, .link:hover, a.link:focus, .link:focus": {
-    color: `${info.main} !important`,
+    color: `${T.accent} !important`,
   },
 };
 

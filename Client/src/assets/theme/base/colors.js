@@ -13,14 +13,20 @@ Coded by www.creative-tim.com
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
+// Values come from the design tokens (tokens.js, SPEC section 2); the key names are the
+// Material Dashboard names the rest of the application imports, kept so nothing breaks.
+import { T } from "assets/theme/base/tokens";
+
+const flat = (c) => ({ main: c, state: c });
+
 const colors = {
   background: {
-    default: "#f0f2f5",
+    default: T.page,
   },
 
   text: {
-    main: "#7b809a",
-    focus: "#7b809a",
+    main: T.ink3,
+    focus: T.ink2,
   },
 
   transparent: {
@@ -28,8 +34,8 @@ const colors = {
   },
 
   white: {
-    main: "#ffffff",
-    focus: "#ffffff",
+    main: T.surface,
+    focus: T.surface,
   },
 
   black: {
@@ -39,218 +45,111 @@ const colors = {
   },
 
   primary: {
-    main: "#e91e63",
-    focus: "#e91e63",
+    main: T.accent,
+    focus: T.accent,
   },
 
   secondary: {
-    main: "#7b809a",
-    focus: "#8f93a9",
+    main: T.ink3,
+    focus: T.ink2,
   },
 
   info: {
-    main: "#1A73E8",
-    focus: "#1662C4",
+    main: T.accent,
+    focus: T.accent,
   },
 
   success: {
-    main: "#4CAF50",
-    focus: "#67bb6a",
+    main: T.bluishGreenText,
+    focus: T.bluishGreenText,
   },
 
   warning: {
-    main: "#fb8c00",
-    focus: "#fc9d26",
+    main: T.caution,
+    focus: T.caution,
   },
 
   error: {
-    main: "#F44335",
-    focus: "#f65f53",
+    main: T.refused,
+    focus: T.refused,
   },
 
   light: {
-    main: "#f0f2f5",
-    focus: "#f0f2f5",
+    main: T.fillMuted,
+    focus: T.fillMuted,
   },
 
   dark: {
-    main: "#344767",
-    focus: "#2c3c58",
+    main: T.ink,
+    focus: T.ink2,
   },
 
   grey: {
-    100: "#f8f9fa",
-    200: "#f0f2f5",
-    300: "#dee2e6",
-    400: "#ced4da",
-    500: "#adb5bd",
-    600: "#6c757d",
-    700: "#495057",
-    800: "#343a40",
-    900: "#212529",
+    100: T.page,
+    200: T.fillMuted,
+    300: T.rule,
+    400: "#BDBDBA",
+    500: T.graphic,
+    600: T.ink3,
+    700: T.ink2,
+    800: "#2A2A2A",
+    900: T.ink,
   },
 
+  // Flat fills: the minimalist design draws no gradients, so each pair is one colour.
   gradients: {
-    primary: {
-      main: "#EC407A",
-      state: "#D81B60",
-    },
-
-    secondary: {
-      main: "#747b8a",
-      state: "#495361",
-    },
-
-    info: {
-      main: "#49a3f1",
-      state: "#1A73E8",
-    },
-
-    success: {
-      main: "#66BB6A",
-      state: "#43A047",
-    },
-
-    warning: {
-      main: "#FFA726",
-      state: "#FB8C00",
-    },
-
-    error: {
-      main: "#EF5350",
-      state: "#E53935",
-    },
-
-    light: {
-      main: "#EBEFF4",
-      state: "#CED4DA",
-    },
-
-    dark: {
-      main: "#42424a",
-      state: "#191919",
-    },
+    primary: flat(T.accent),
+    secondary: flat(T.ink3),
+    info: flat(T.accent),
+    success: flat(T.bluishGreenText),
+    warning: flat(T.caution),
+    error: flat(T.refused),
+    light: flat(T.fillMuted),
+    dark: flat(T.ink),
   },
 
   socialMediaColors: {
-    facebook: {
-      main: "#3b5998",
-      dark: "#344e86",
-    },
-
-    twitter: {
-      main: "#55acee",
-      dark: "#3ea1ec",
-    },
-
-    instagram: {
-      main: "#125688",
-      dark: "#0e456d",
-    },
-
-    linkedin: {
-      main: "#0077b5",
-      dark: "#00669c",
-    },
-
-    pinterest: {
-      main: "#cc2127",
-      dark: "#b21d22",
-    },
-
-    youtube: {
-      main: "#e52d27",
-      dark: "#d41f1a",
-    },
-
-    vimeo: {
-      main: "#1ab7ea",
-      dark: "#13a3d2",
-    },
-
-    slack: {
-      main: "#3aaf85",
-      dark: "#329874",
-    },
-
-    dribbble: {
-      main: "#ea4c89",
-      dark: "#e73177",
-    },
-
-    github: {
-      main: "#24292e",
-      dark: "#171a1d",
-    },
-
-    reddit: {
-      main: "#ff4500",
-      dark: "#e03d00",
-    },
-
-    tumblr: {
-      main: "#35465c",
-      dark: "#2a3749",
-    },
+    facebook: { main: "#3b5998", dark: "#344e86" },
+    twitter: { main: "#55acee", dark: "#3ea1ec" },
+    instagram: { main: "#125688", dark: "#0e456d" },
+    linkedin: { main: "#0077b5", dark: "#00669c" },
+    pinterest: { main: "#cc2127", dark: "#b21d22" },
+    youtube: { main: "#e52d27", dark: "#d41f1a" },
+    vimeo: { main: "#1ab7ea", dark: "#13a3d2" },
+    slack: { main: "#3aaf85", dark: "#329874" },
+    dribbble: { main: "#ea4c89", dark: "#e73177" },
+    github: { main: "#24292e", dark: "#171a1d" },
+    reddit: { main: "#ff4500", dark: "#e03d00" },
+    tumblr: { main: "#35465c", dark: "#2a3749" },
   },
 
+  // Badge text is always a text-safe ink on its own tint.
   badgeColors: {
-    primary: {
-      background: "#f8b3ca",
-      text: "#cc084b",
-    },
-
-    secondary: {
-      background: "#d7d9e1",
-      text: "#6c757d",
-    },
-
-    info: {
-      background: "#aecef7",
-      text: "#095bc6",
-    },
-
-    success: {
-      background: "#bce2be",
-      text: "#339537",
-    },
-
-    warning: {
-      background: "#ffd59f",
-      text: "#c87000",
-    },
-
-    error: {
-      background: "#fcd3d0",
-      text: "#f61200",
-    },
-
-    light: {
-      background: "#ffffff",
-      text: "#c7d3de",
-    },
-
-    dark: {
-      background: "#8097bf",
-      text: "#1e2e4a",
-    },
+    primary: { background: T.accentTint, text: T.accent },
+    secondary: { background: T.fillMuted, text: T.ink3 },
+    info: { background: T.accentTint, text: T.accent },
+    success: { background: T.fillMuted, text: T.bluishGreenText },
+    warning: { background: T.cautionTint, text: T.caution },
+    error: { background: T.refusedTint, text: T.refused },
+    light: { background: T.surface, text: T.ink3 },
+    dark: { background: T.fillMuted, text: T.ink },
   },
 
   coloredShadows: {
-    primary: "#e91e62",
-    secondary: "#110e0e",
-    info: "#00bbd4",
-    success: "#4caf4f",
-    warning: "#ff9900",
-    error: "#f44336",
-    light: "#adb5bd",
-    dark: "#404040",
+    primary: T.accent,
+    secondary: T.ink3,
+    info: T.accent,
+    success: T.bluishGreenText,
+    warning: T.caution,
+    error: T.refused,
+    light: T.rule,
+    dark: T.ink,
   },
 
-  inputBorderColor: "#d2d6da",
+  inputBorderColor: T.graphic, // 3.45:1, meets the 3:1 minimum for a control's outline
 
   tabs: {
-    indicator: { boxShadow: "#ddd" },
+    indicator: { boxShadow: "transparent" },
   },
 };
 

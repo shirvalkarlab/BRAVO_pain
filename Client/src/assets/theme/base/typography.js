@@ -13,167 +13,80 @@ Coded by www.creative-tim.com
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-// Material Dashboard 2 React Base Styles
-import colors from "assets/theme/base/colors";
+// Values come from the design tokens (SPEC.md section 2.4, 2026-09-26): one face (IBM Plex
+// Sans), weights 400 and 600, five sizes (12, 14, 16, 18, 22 px), sentence case everywhere.
+// Removed as below the 11 px floor or outside the scale: fontSizeXXS (10.4 px), d1-d6 and
+// fontWeightLighter. fontWeightLight is kept as a name because components import it; it now
+// draws at 400, since no light weight is loaded.
+import { T, TYPE, WEIGHT, FONT_FAMILY } from "assets/theme/base/tokens";
 
 // Material Dashboard 2 React Helper Functions
 import pxToRem from "assets/theme/functions/pxToRem";
 
-const { dark } = colors;
-
 const baseProperties = {
-  fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif',
-  fontWeightLighter: 100,
-  fontWeightLight: 300,
-  fontWeightRegular: 400,
-  fontWeightMedium: 600,
-  fontWeightBold: 700,
-  fontSizeXXS: pxToRem(10.4),
-  fontSizeXS: pxToRem(12),
-  fontSizeSM: pxToRem(14),
-  fontSizeMD: pxToRem(16),
-  fontSizeLG: pxToRem(18),
-  fontSizeXL: pxToRem(20),
-  fontSize2XL: pxToRem(24),
-  fontSize3XL: pxToRem(30),
+  fontFamily: FONT_FAMILY,
+  fontWeightLight: WEIGHT.regular,
+  fontWeightRegular: WEIGHT.regular,
+  fontWeightMedium: WEIGHT.strong,
+  fontWeightBold: WEIGHT.strong,
+  fontSizeXS: pxToRem(TYPE.caption.fontSize),
+  fontSizeSM: pxToRem(TYPE.body.fontSize),
+  fontSizeMD: pxToRem(TYPE.lead.fontSize),
+  fontSizeLG: pxToRem(TYPE.title.fontSize),
+  fontSizeXL: pxToRem(TYPE.answer.fontSize),
+  fontSize2XL: pxToRem(TYPE.answer.fontSize),
+  fontSize3XL: pxToRem(TYPE.answer.fontSize),
 };
 
-const baseHeadingProperties = {
-  fontFamily: baseProperties.fontFamily,
-  color: dark.main,
-  fontWeight: baseProperties.fontWeightBold,
-};
+const lineHeightOf = (role) => parseFloat(role.lineHeight) / role.fontSize;
 
-const baseDisplayProperties = {
+const heading = (role) => ({
   fontFamily: baseProperties.fontFamily,
-  color: dark.main,
-  fontWeight: baseProperties.fontWeightLight,
-  lineHeight: 1.2,
-};
+  color: T.ink,
+  fontWeight: WEIGHT.strong,
+  fontSize: pxToRem(role.fontSize),
+  lineHeight: lineHeightOf(role),
+  letterSpacing: 0,
+  textTransform: "none",
+});
+
+const text = (role, weight = WEIGHT.regular) => ({
+  fontFamily: baseProperties.fontFamily,
+  fontSize: pxToRem(role.fontSize),
+  fontWeight: weight,
+  lineHeight: lineHeightOf(role),
+  letterSpacing: 0,
+  textTransform: "none",
+});
 
 const typography = {
   fontFamily: baseProperties.fontFamily,
-  fontWeightLighter: baseProperties.fontWeightLighter,
   fontWeightLight: baseProperties.fontWeightLight,
   fontWeightRegular: baseProperties.fontWeightRegular,
   fontWeightMedium: baseProperties.fontWeightMedium,
   fontWeightBold: baseProperties.fontWeightBold,
 
-  h1: {
-    fontSize: pxToRem(48),
-    lineHeight: 1.25,
-    ...baseHeadingProperties,
-  },
+  // The page answer
+  h1: heading(TYPE.answer),
+  h2: heading(TYPE.answer),
+  h3: heading(TYPE.answer),
+  // A section title, written as a question
+  h4: heading(TYPE.title),
+  h5: heading(TYPE.title),
+  // A lead answer
+  h6: heading(TYPE.lead),
 
-  h2: {
-    fontSize: pxToRem(36),
-    lineHeight: 1.3,
-    ...baseHeadingProperties,
-  },
-
-  h3: {
-    fontSize: pxToRem(30),
-    lineHeight: 1.375,
-    ...baseHeadingProperties,
-  },
-
-  h4: {
-    fontSize: pxToRem(24),
-    lineHeight: 1.375,
-    ...baseHeadingProperties,
-  },
-
-  h5: {
-    fontSize: pxToRem(20),
-    lineHeight: 1.375,
-    ...baseHeadingProperties,
-  },
-
-  h6: {
-    fontSize: pxToRem(16),
-    lineHeight: 1.625,
-    ...baseHeadingProperties,
-  },
-
-  subtitle1: {
-    fontFamily: baseProperties.fontFamily,
-    fontSize: baseProperties.fontSizeXL,
-    fontWeight: baseProperties.fontWeightLight,
-    lineHeight: 1.625,
-  },
-
-  subtitle2: {
-    fontFamily: baseProperties.fontFamily,
-    fontSize: baseProperties.fontSizeMD,
-    fontWeight: baseProperties.fontWeightLight,
-    lineHeight: 1.6,
-  },
-
-  body1: {
-    fontFamily: baseProperties.fontFamily,
-    fontSize: baseProperties.fontSizeXL,
-    fontWeight: baseProperties.fontWeightRegular,
-    lineHeight: 1.625,
-  },
-
-  body2: {
-    fontFamily: baseProperties.fontFamily,
-    fontSize: baseProperties.fontSizeMD,
-    fontWeight: baseProperties.fontWeightLight,
-    lineHeight: 1.6,
-  },
-
-  button: {
-    fontFamily: baseProperties.fontFamily,
-    fontSize: baseProperties.fontSizeSM,
-    fontWeight: baseProperties.fontWeightLight,
-    lineHeight: 1.5,
-    textTransform: "uppercase",
-  },
-
-  caption: {
-    fontFamily: baseProperties.fontFamily,
-    fontSize: baseProperties.fontSizeXS,
-    fontWeight: baseProperties.fontWeightLight,
-    lineHeight: 1.25,
-  },
-
-  overline: {
-    fontFamily: baseProperties.fontFamily,
-  },
-
-  d1: {
-    fontSize: pxToRem(80),
-    ...baseDisplayProperties,
-  },
-
-  d2: {
-    fontSize: pxToRem(72),
-    ...baseDisplayProperties,
-  },
-
-  d3: {
-    fontSize: pxToRem(64),
-    ...baseDisplayProperties,
-  },
-
-  d4: {
-    fontSize: pxToRem(56),
-    ...baseDisplayProperties,
-  },
-
-  d5: {
-    fontSize: pxToRem(48),
-    ...baseDisplayProperties,
-  },
-
-  d6: {
-    fontSize: pxToRem(40),
-    ...baseDisplayProperties,
-  },
+  subtitle1: text(TYPE.lead),
+  subtitle2: text(TYPE.body),
+  body1: text(TYPE.body),
+  body2: text(TYPE.body),
+  button: text(TYPE.body, WEIGHT.strong),
+  caption: text(TYPE.caption),
+  overline: text(TYPE.caption),
 
   size: {
-    xxs: baseProperties.fontSizeXXS,
+    // "xxs" is kept as a name (MDBadge reads it) but no longer draws below the minimum: 12 px.
+    xxs: baseProperties.fontSizeXS,
     xs: baseProperties.fontSizeXS,
     sm: baseProperties.fontSizeSM,
     md: baseProperties.fontSizeMD,
