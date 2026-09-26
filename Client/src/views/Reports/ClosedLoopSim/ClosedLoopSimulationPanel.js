@@ -260,7 +260,7 @@ function drawDistributionAndCurve(gd, sim) {
       const [a, b] = sim.wrong_side.range_mA;
       shapes.push({ type: "rect", xref: "x2", yref: "paper", x0: a, x1: b, y0: 0, y1: 1, fillcolor: FILL_WRONG,
         line: { width: 0 }, layer: "below" });
-      annotations.push({ xref: "x2", yref: "paper", x: 0.5 * (a + b), y: 0.96, text: "power rises with current: positive feedback",
+      annotations.push({ xref: "x2", yref: "paper", x: 0.5 * (a + b), y: 0.96, text: "▲ power rises with current: positive feedback",
         showarrow: false, font: { size: PAL.fs.caption, color: PAL.warnText } });
     }
     if (isNum(curve.peak_mA)) {

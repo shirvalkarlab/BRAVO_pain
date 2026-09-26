@@ -145,7 +145,7 @@ function Row({ f, index, ticked, onTick, readBackEnabled }) {
           {f.ceiling_note ? (
             <MDTypography variant="caption" data-ceiling-note=""
               sx={{ display: "block", fontSize: PAL.fs.body, fontWeight: 600, color: PAL.warnText, lineHeight: 1.3 }}>
-              {f.ceiling_note}
+              <span aria-hidden="true" style={{ marginRight: 6 }}>▲</span>{f.ceiling_note}
             </MDTypography>
           ) : null}
         </>
@@ -266,7 +266,7 @@ export default function ParameterTable({ report, mode, onMode }) {
               <MDBox display="flex" justifyContent="space-between" alignItems="center" gap={1} mb={0.6}
                 p={0.8} sx={{ border: `2px dashed ${PAL.warnBorder}`, borderRadius: "4px" }}>
                 <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.warnText }}>
-                  {`PLANNING ONLY. ${unevaluated ? "The device rules have not been evaluated"
+                  <span aria-hidden="true" style={{ marginRight: 6 }}>▲</span>{`PLANNING ONLY. ${unevaluated ? "The device rules have not been evaluated"
                     : "The device refuses this configuration"}; do not program these.`}
                 </MDTypography>
                 <MDButton size="small" variant="text" color="secondary" onClick={() => setPlanningFor(null)}
@@ -309,6 +309,7 @@ export default function ParameterTable({ report, mode, onMode }) {
           {readBackEnabled ? (
             <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.body, mt: 0.6, fontWeight: 600,
               color: nTicked === fields.length ? PAL.passText : PAL.warnText }}>
+              {nTicked === fields.length ? null : <span aria-hidden="true" style={{ marginRight: 6 }}>▲</span>}
               {`${nTicked} of ${fields.length} read back off the programmer. Tick a box only when the `
                 + "A610 itself displays that value."}
             </MDTypography>
@@ -321,9 +322,13 @@ export default function ParameterTable({ report, mode, onMode }) {
 
 /** One label and its sentence, for the details list. */
 function Note({ children, ink = PAL.ink2, mt = 0.2 }) {
+  // The caution ink always comes with its ▲ (SPEC 2.3; TASTE_AUDIT.md D12): added here unless the
+  // note's own text already starts with it.
+  const needsMark = ink === PAL.warnText && !(typeof children === "string" && /^\s*\u25B2/.test(children));
   return (
     <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.body, color: ink, mt }}>
-      {children}
+      {needsMark ? <span aria-hidden="true" style={{ marginRight: 6 }}>{"\u25B2"}</span> : null}
+      {needsMark ? <span>{children}</span> : children}
     </MDTypography>
   );
 }

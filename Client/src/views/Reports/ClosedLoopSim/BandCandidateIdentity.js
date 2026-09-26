@@ -109,7 +109,7 @@ export default function BandCandidateIdentity({ bc, envelope }) {
               <KV label="Polarity">{bc.polarity || "not reported"}</KV>
               <KV label="Suggested mode">
                 {bc.suggested_mode
-                  || <span style={{ color: PAL.warnText }}>none suggested — see the note</span>}
+                  || <span style={{ color: PAL.warnText }}><span aria-hidden="true" style={{ marginRight: 6 }}>▲</span>none suggested — see the note</span>}
               </KV>
             </MDBox>
           </Grid>

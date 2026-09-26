@@ -200,7 +200,7 @@ function Numbers({ c, lfp }) {
                     {sel && sel.selected
                       ? <>read on <span style={{ whiteSpace: "nowrap" }}>{contactLabel({ display_short: sel.selected_display_short }, k ? k[0] : null)}</span>
                         {sel.pinned_rate_hz != null ? <> at <span style={{ whiteSpace: "nowrap" }}>{fmtHz(sel.pinned_rate_hz)}</span></> : null}
-                        {b.laterality === "contralateral" ? <span style={{ color: T.caution }}> · a contact on the other side (none on this side passed)</span> : null}</>
+                        {b.laterality === "contralateral" ? <span style={{ color: T.caution }}> · <span aria-hidden="true">▲ </span>a contact on the other side (none on this side passed)</span> : null}</>
                       : (b.reason || (sel && sel.selection_note) || "no sensing contact could be used on this side")}
                   </MDTypography>
                 </MDBox>
@@ -271,7 +271,7 @@ function Numbers({ c, lfp }) {
               4.8 mA as the plan asking for an unsafe current. */}
           {Object.entries(ev.history_above_ceiling || {}).map(([h, v]) => (
             <span key={h} style={{ ...NOTE, whiteSpace: "normal", color: T.caution, flexBasis: "100%" }}>
-              {`${h[0]}: ${fmtMa(v.delivered_max_mA)} delivered in the past is above today's ${fmtMa(v.ceiling_mA)} ceiling — history, not a proposal; no limit has been proposed yet`}
+              <span aria-hidden="true">▲ </span>{`${h[0]}: ${fmtMa(v.delivered_max_mA)} delivered in the past is above today's ${fmtMa(v.ceiling_mA)} ceiling — history, not a proposal; no limit has been proposed yet`}
             </span>
           ))}
           {/* Review 2026-09-15, S2: the side-effect-versus-current statistic the gate recomputes on
@@ -332,7 +332,7 @@ export default function ClosedLoopChecks({ plan }) {
                 <MDTypography variant="caption" component="div" title={c.name}
                   sx={{ fontSize: TYPE.body, fontWeight: WEIGHT.strong, color: T.ink, lineHeight: 1.5 }}>
                   {CHECK_LABELS[c.name] || String(c.name || "").replace(/_/g, " ")}
-                  {c.overridden ? <span style={{ color: T.caution, marginLeft: 6 }}>[overridden]</span> : null}
+                  {c.overridden ? <span style={{ color: T.caution, marginLeft: 6 }}><span aria-hidden="true">▲ </span>[overridden]</span> : null}
                 </MDTypography>
                 <SizedFold show="The check, in one sentence" hide="Hide" dense mt={0.3}>
                   <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2 }}>

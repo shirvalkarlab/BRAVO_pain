@@ -154,14 +154,14 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
       // Static "now" annotation so the current marker is self-identifying in a printout / grayscale
       // (audit C7), not only on hover.
       { x: pw.n_ratings_current, y: pw.power_current * 100, xanchor: "center", yanchor: "top",
-        yshift: -6, text: `now: ${pw.n_ratings_current}`, showarrow: false,
+        yshift: -6, text: `${sufficient ? "" : "▲ "}now: ${pw.n_ratings_current}`, showarrow: false,
         font: { size: PAL.fs.caption, color: curTextColor } },
     ];
     // audit C4: label the conservative (CI-lower-bound) end of the power band.
     if (hasBand) {
       annotations.push({ x: pw.n_ratings_current, y: pw.power_current_lo * 100,
         xanchor: "left", yanchor: "top", xshift: 8,
-        text: `lower end of range: ${Math.round(pw.power_current_lo * 100)}%`, showarrow: false,
+        text: `▲ lower end of range: ${Math.round(pw.power_current_lo * 100)}%`, showarrow: false,
         font: { size: PAL.fs.caption, color: PAL.warnText } });
     }
     // needed-N marker (only when more data is needed and the number is known). Audit C5: place it at
@@ -199,7 +199,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
     const xTitle = deff > 1.0 ? "pain ratings collected" : "independent pain ratings";
     if (deff > 1.0) {
       annotations.push({ x: nMax * 0.5, y: 8, xanchor: "center", yanchor: "bottom",
-        text: `counted as about ${(100 / deff).toFixed(0)}% as many independent ratings, because neighbouring ratings resemble each other`,
+        text: `▲ counted as about ${(100 / deff).toFixed(0)}% as many independent ratings, because neighbouring ratings resemble each other`,
         showarrow: false, font: { size: PAL.fs.caption, color: PAL.warnText } });
     }
     const layout = plotlyLayout({
@@ -334,6 +334,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
             {tl && tl.available && tl.upper_lsb != null ? (
               <b style={{ fontWeight: 600, color: tl.estimated ? PAL.warnText : PAL.ink }}>
                 {` → ${tl.estimated ? "≈" : "="} ${fmt(tl.upper_lsb, 1)} LSB${tl.estimated ? " (estimated)" : ""}`}
+                {tl.estimated ? <span aria-hidden="true" style={{ marginLeft: 6 }}>▲</span> : null}
               </b>
             ) : null}
           </MDTypography>
@@ -454,6 +455,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
                 <MDTypography display="block" sx={{ ...TYPE.body, color: PAL.ink2, mt: 0.5 }}>
                   {`median ${lr.median.toExponential(2)} µV²/LSB `}
                   <span style={{ color: lr.confidence === "high" ? PAL.ink : PAL.warnText, fontWeight: 600 }}>
+                    {lr.confidence === "high" ? null : <span aria-hidden="true" style={{ marginRight: 4 }}>▲</span>}
                     {`(confidence: ${lr.confidence})`}
                   </span>
                   {` · spread ${fmt(lr.cv)} of the median · ${fmt(lr.fold_of_constant_in_effect, 2)}× the constant in effect (1 µV² = ${fmt(1 / lr.constant_in_effect_uv2_per_lsb, 2)} LSB) · ${lr.n} paired sessions`}

@@ -294,7 +294,7 @@ function SideColumn({ side, plan, shared = [], todayShared = false }) {
         <span style={VALUE}>{fmtHz(plan.rate_hz)}</span>
         {plan.rate_lifted && num(plan.rate_in_force_hz) !== null && (
           <span style={{ ...SMALL, marginLeft: 8, color: T.caution }}>
-            {`(in force: ${fmtHz(plan.rate_in_force_hz)})`}
+            <span aria-hidden="true">▲ </span>{`(in force: ${fmtHz(plan.rate_in_force_hz)})`}
           </span>
         )}
       </Row>
@@ -321,7 +321,7 @@ function SideColumn({ side, plan, shared = [], todayShared = false }) {
       <Row label="Record from">
         {c ? (
           <span>
-            <span style={{ ...VALUE, color: c.on_other_side ? T.caution : VALUE.color }}>{contactLabel(c)}</span>
+            <span style={{ ...VALUE, color: c.on_other_side ? T.caution : VALUE.color }}>{c.on_other_side ? <span aria-hidden="true">▲ </span> : null}{contactLabel(c)}</span>
             {num(c.n_qualifying) !== null && (
               <span style={{ ...SMALL, marginLeft: 8 }}>
                 {`${c.n_qualifying} of ${num(c.n_bands) === null ? "—" : c.n_bands} bands both fall with current and rise with pain at ${fmtHz(c.rate_hz)}${Array.isArray(c.qualifying_centers_hz) && c.qualifying_centers_hz.length ? ` (${c.qualifying_centers_hz.map((v) => Number(v)).join(", ")} Hz)` : ""}${c.deployable ? "" : " · did not pass the readiness check"}`}
@@ -425,7 +425,7 @@ function ProposedColumn({ p }) {
         <span style={VALUE}>{st.contacts_short || EMPTY}</span>
         {st.differs_from_in_force && (
           <span style={{ ...SMALL, marginLeft: 8, color: T.caution }}>
-            {`(in force today: rings ${(st.in_force_rings || []).join(", ") || "none"})`}
+            <span aria-hidden="true">▲ </span>{`(in force today: rings ${(st.in_force_rings || []).join(", ") || "none"})`}
           </span>
         )}
       </Row>
@@ -435,7 +435,7 @@ function ProposedColumn({ p }) {
       <Row label="Rate">
         <span style={VALUE}>{fmtHz(p.rate_hz)}</span>
         {num(p.rate_in_force_hz) !== null && num(p.rate_in_force_hz) !== num(p.rate_hz) && (
-          <span style={{ ...SMALL, marginLeft: 8, color: T.caution }}>{`(in force today: ${fmtHz(p.rate_in_force_hz)})`}</span>
+          <span style={{ ...SMALL, marginLeft: 8, color: T.caution }}><span aria-hidden="true">▲ </span>{`(in force today: ${fmtHz(p.rate_in_force_hz)})`}</span>
         )}
       </Row>
       <Row label="Pulse width"><span style={VALUE}>{fmtUs(p.pulse_width_us)}</span></Row>
@@ -443,7 +443,7 @@ function ProposedColumn({ p }) {
         <span style={VALUE_SMALL}>{watch ? `${watch} Hz` : EMPTY}</span>
       </Row>
       <Row label="The record today">
-        <span style={{ fontSize: TYPE.body, color: fe.ever_powered === false ? T.caution : T.ink }}>{fe.sentence || EMPTY}</span>
+        <span style={{ fontSize: TYPE.body, color: fe.ever_powered === false ? T.caution : T.ink }}>{fe.ever_powered === false ? <span aria-hidden="true">▲ </span> : null}{fe.sentence || EMPTY}</span>
       </Row>
       <Row label="Stop rule"><span style={{ fontSize: TYPE.body, color: T.ink }}>{fe.stop_rule || EMPTY}</span></Row>
       <Row label="Ladder (part A)">
@@ -461,7 +461,7 @@ function ProposedColumn({ p }) {
       </Row>
       <Row label="The other side"
         sub={p.held_other_side && p.held_other_side.above_ceiling && p.held_other_side.note
-          ? <span style={{ color: T.caution }}>{String(p.held_other_side.note).replace(/ -- /g, " — ")}</span> : null}>
+          ? <span style={{ color: T.caution }}><span aria-hidden="true">▲ </span>{String(p.held_other_side.note).replace(/ -- /g, " — ")}</span> : null}>
         <span style={{ fontSize: TYPE.body, color: T.ink }}>{`${other} side held at ${fmtMa(p.held_other_side && p.held_other_side.current_mA)}`}</span>
       </Row>
       <Row label="Time">

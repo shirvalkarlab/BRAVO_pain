@@ -50,6 +50,7 @@ export default function PanelStaleNote({ stale, staleReasons, loading, onRecompu
         {notKept ? (
           <MDTypography variant="caption" display="block"
             sx={{ fontSize: PAL.fs.body, color: PAL.warnText }}>
+            <span aria-hidden="true" style={{ marginRight: 6 }}>▲</span>
             {`This panel's result was not kept in memory: ${notKept}`}
           </MDTypography>
         ) : null}

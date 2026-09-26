@@ -83,6 +83,7 @@ function RuleRow({ row, state, ink, copy, actor }) {
         <MDBox flex="0 0 auto"><RuleGlyph state={state} /></MDBox>
         <MDBox flex="1 1 auto">
           <MDTypography variant="caption" sx={{ ...TYPE.body, color: PAL.ink }}>
+            {ink === PAL.warnText ? <span aria-hidden="true" style={{ marginRight: 4, color: ink }}>▲</span> : null}
             <b style={{ fontWeight: 600, color: ink }}>{row.rule_id}</b>
             {"  "}{row.title || "untitled rule"}
             {row.page ? <i style={{ color: PAL.ink3 }}>{`  (${row.page}`}

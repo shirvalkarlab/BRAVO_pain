@@ -18,6 +18,7 @@ export default function ReportSharingNote({ summary }) {
   return (
     <MDTypography variant="caption" component="div" data-testid="report-sharing-warning"
       sx={{ color: PAL.warnText, fontStyle: "italic", display: "block", mt: 0.25 }}>
+      <span aria-hidden="true" style={{ marginRight: 6 }}>▲</span>
       {sh.warning}
     </MDTypography>
   );

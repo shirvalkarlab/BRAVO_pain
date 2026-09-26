@@ -198,7 +198,7 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
           <>
             {frozen.overridden && (
               <MDTypography variant="caption" sx={{ color: T.caution, fontSize: TYPE.body }} component="div" mt={0.5}>
-                {`A clinician override was recorded with the request`
+                <span aria-hidden="true">▲ </span>{`A clinician override was recorded with the request`
                   + (frozen.override && frozen.override.reason ? `: ${frozen.override.reason}` : ".")
                   + (frozen.override && frozen.override.by ? ` (${frozen.override.by})` : "")}
               </MDTypography>
@@ -221,7 +221,7 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
                   <ExcludedSettingsChart envelope={envelope} strata={strata} />
                   {envelope.override_ignored && (
                     <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.small, color: T.caution }}>
-                      {String(envelope.override_ignored)}
+                      <span aria-hidden="true">▲ </span>{String(envelope.override_ignored)}
                     </MDTypography>
                   )}
                 </Fold>

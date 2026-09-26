@@ -135,7 +135,7 @@ function ReadinessBlock({ c, allowed }) {
         <span style={{ ...MONO, fontWeight: num(c.n_qualifying) ? WEIGHT.strong : WEIGHT.regular, whiteSpace: "normal" }}>{hzList(c.qualifying_centers_hz)}</span>
         {harmonicNote && (
           <Tooltip title={harmonicNote}>
-            <span style={{ ...SMALL, color: T.caution }}> (carries a folded multiple of the rate)</span>
+            <span style={{ ...SMALL, color: T.caution }}> <span aria-hidden="true">▲ </span>(carries a folded multiple of the rate)</span>
           </Tooltip>
         )}
         {"."}
@@ -188,7 +188,7 @@ function ReadinessGrid({ rows, allowed }) {
                 <span style={{ ...MONO, fontWeight: num(c.n_qualifying) ? WEIGHT.strong : WEIGHT.regular, whiteSpace: "normal" }}>{hzList(c.qualifying_centers_hz)}</span>
                 {harmonicNote && (
                   <Tooltip title={harmonicNote}>
-                    <span style={{ ...SMALL, color: T.caution }}>carries a folded multiple of the rate</span>
+                    <span style={{ ...SMALL, color: T.caution }}><span aria-hidden="true">▲ </span>carries a folded multiple of the rate</span>
                   </Tooltip>
                 )}
               </MDBox>
@@ -197,7 +197,7 @@ function ReadinessGrid({ rows, allowed }) {
               <MDBox sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}>
                 <UsableMark usable={usable} refusedByDevice={allowed === false} />
                 {c.harmonic_only === true && (
-                  <span style={{ ...SMALL, color: T.caution, fontWeight: WEIGHT.strong, whiteSpace: "nowrap" }}>warning</span>
+                  <span style={{ ...SMALL, color: T.caution, fontWeight: WEIGHT.strong, whiteSpace: "nowrap" }}><span aria-hidden="true">▲ </span>warning</span>
                 )}
               </MDBox>
               {under ? <MDBox sx={{ gridColumn: "1 / -1", mt: -0.4, pl: 1 }}><UnderRow c={c} /></MDBox> : null}

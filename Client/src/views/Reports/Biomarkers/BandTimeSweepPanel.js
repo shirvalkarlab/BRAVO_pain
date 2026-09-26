@@ -106,7 +106,7 @@ function BestTable({ rows, kind, nullValue }) {
           <tr>
             {head.map((h) => (
               <th key={h} style={{ textAlign: "left", padding: "3px 6px", borderBottom: `1px solid ${PAL.rule}`,
-                fontWeight: 700, whiteSpace: "nowrap" }}>{h}</th>
+                fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
             ))}
           </tr>
         </thead>

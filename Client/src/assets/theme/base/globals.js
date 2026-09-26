@@ -26,7 +26,7 @@ Coded by www.creative-tim.com
 //  C5  prose breaks lines "pretty" (no lone last word);
 //  C8  the icon font classes, now that Material Icons is self-hosted (assets/theme/fonts.js)
 //      instead of loaded from Google, whose stylesheet used to define them.
-import { T, FONT_FAMILY, FOCUS_RING, REDUCED_MOTION } from "assets/theme/base/tokens";
+import { T, FONT_FAMILY, FOCUS_RING, REDUCED_MOTION, WEIGHT } from "assets/theme/base/tokens";
 
 /** The class a jump-link row (or a single jump link) carries to keep its links un-underlined. */
 export const JUMP_ROW_CLASS = "paper-jump-row";
@@ -68,6 +68,8 @@ const globals = {
   "p, li, dd, figcaption": {
     textWrap: "pretty",
   },
+  // D6: one face in two weights. A <b> or <strong> would otherwise ask the browser for 700.
+  "b, strong": { fontWeight: WEIGHT.strong },
 
   // C1: the focus ring, keyboard only.
   ":focus-visible": { ...FOCUS_RING },

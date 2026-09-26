@@ -269,6 +269,7 @@ function Item({ item, n }) {
         <MDTypography variant="caption" sx={{ ...TYPE.body, fontWeight: 600, color: item.ink }}>
           {/* Red means the device refuses, and red always comes with its cross (SPEC 2.3). */}
           {item.ink === PAL.failText ? <span aria-hidden="true" style={{ marginRight: 2 }}>{"\u2715"}</span> : null}
+          {item.ink === PAL.warnText ? <span aria-hidden="true" style={{ marginRight: 2 }}>{"\u25B2"}</span> : null}
           {n}
         </MDTypography>
       </MDBox>

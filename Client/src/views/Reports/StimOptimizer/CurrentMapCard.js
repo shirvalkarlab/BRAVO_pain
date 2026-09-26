@@ -326,13 +326,13 @@ function SquareWithChecks({ r, g, idPrefix, inForceLeft, inForceRight, half, cei
       {r.coverage_passes !== true && r.coverage_gap && r.coverage_gap.cheapest_way ? (
         <MDBox mt={0.75}>
           <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.small, lineHeight: 1.5, color: T.caution }}>
-            {`What the next visit must deliver: ${String(r.coverage_gap.cheapest_way).replace(/ -- /g, " — ")}. `}
+            <span aria-hidden="true">▲ </span>{`What the next visit must deliver: ${String(r.coverage_gap.cheapest_way).replace(/ -- /g, " — ")}. `}
           </MDTypography>
           {/* the side not stepped is held at its ceiling when its current in force is above it,
               and the pairs above are built at that current */}
           {r.coverage_gap.held_side_note ? (
             <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.small, lineHeight: 1.5, color: T.caution }}>
-              {`${String(r.coverage_gap.held_side_note).replace(/ -- /g, " — ")}.`}
+              <span aria-hidden="true">▲ </span>{`${String(r.coverage_gap.held_side_note).replace(/ -- /g, " — ")}.`}
             </MDTypography>
           ) : null}
           {(r.coverage_gap.why || r.coverage_gap.what_each_pair_needs || (r.coverage_gap.pairs_to_add || []).length) ? (
@@ -502,6 +502,7 @@ function ClinicStreamSection({ groups, inForceLeft, inForceRight, clinicStream, 
       {showDescriptions && cs.reference && cs.reference.sentence && (
         <MDTypography variant="caption" component="div" sx={{ ...SMALL, mb: 1,
           color: cs.reference.source === "last_clinic_step" ? T.caution : T.ink3 }}>
+          {cs.reference.source === "last_clinic_step" ? <span aria-hidden="true">▲ </span> : null}
           {`Light grey on these colour scales is the predicted rating at: ${cs.reference.sentence}.`}
         </MDTypography>
       )}

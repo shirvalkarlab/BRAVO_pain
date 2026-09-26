@@ -108,6 +108,7 @@ function ReportCaveats({ caveats }) {
         <MDBox key={`cav${i}`} display="flex" alignItems="flex-start" mb={0.45}>
           <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: CAVEAT_INK[c.severity] || PAL.neutral, mt: 0.15,
             minWidth: "44px" }}>
+            {CAVEAT_INK[c.severity] === PAL.warnText ? <span aria-hidden="true" style={{ marginRight: 4 }}>▲</span> : null}
             {String(c.severity || "").charAt(0).toUpperCase() + String(c.severity || "").slice(1)}
           </MDTypography>
           <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, color: PAL.ink2, flex: "1 1 auto" }}>
@@ -342,6 +343,7 @@ export function StaleNotice({ inputsStale, computedAt, staleWhy }) {
     <MDBox className="cl-signoff-stale" mb={1} p={1}
       sx={{ borderRadius: "4px", backgroundColor: PAL.warnFill, border: `1px solid ${PAL.warnText}` }}>
       <MDTypography variant="caption" display="block" sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.warnText }}>
+        <span aria-hidden="true" style={{ marginRight: 6 }}>▲</span>
         {computedAt
           ? `This record describes the analysis of ${new Date(computedAt).toLocaleString()}; the `
             + "settings have changed since. Press Recompute before signing."
@@ -383,7 +385,7 @@ export function SnapshotFigures({ snapshots }) {
       {snapshots.missing.length ? (
         <MDBox mt={1}>
           <MDTypography variant="caption" display="block" sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.warnText }}>
-            Not on this record
+            <span aria-hidden="true" style={{ marginRight: 6 }}>▲</span>Not on this record
           </MDTypography>
           {snapshots.missing.map((m) => (
             <MDTypography key={m.section_id + m.reason} variant="caption" display="block"
@@ -472,6 +474,7 @@ function SignoffRecord({ bandCandidate, summary, deploymentReport, chosenBand, b
             <MDBox mt={1.2}>
               <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, fontWeight: 600,
                 color: dc.ramp.posture === "conservative" ? PAL.warnText : PAL.passText }}>
+                {dc.ramp.posture === "conservative" ? <span aria-hidden="true" style={{ marginRight: 6 }}>▲</span> : null}
                 {`Ramp guidance, ${String(dc.ramp.posture)} (advisory)`}
               </MDTypography>
               <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: PAL.fs.body, mt: 0.3 }}>
@@ -534,7 +537,7 @@ function SignoffRecord({ bandCandidate, summary, deploymentReport, chosenBand, b
           </MDBox>
 
           <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.warnText }}>
-            Caveats
+            <span aria-hidden="true" style={{ marginRight: 6 }}>▲</span>Caveats
           </MDTypography>
           {/* The deployment report's own caveats (panel D item 3), ranked, each naming its card;
               then the older statistical endpoint's own, labelled as coming from elsewhere. */}

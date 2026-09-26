@@ -193,7 +193,7 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
         });
         if (reversed) {
           annotations.push({ x: r.era.auc, y, xref: "x", yref: "y", yanchor: "bottom",
-            xanchor: "center", text: "reversed", showarrow: false,
+            xanchor: "center", text: "▲ reversed", showarrow: false,
             font: { size: PAL.fs.caption, color: PAL.warnText }, yshift: 8 });
         }
       } else {
