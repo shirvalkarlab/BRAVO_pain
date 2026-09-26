@@ -1,4 +1,4 @@
-import { DEFAULT_PAIN_SCORE, PAIN_SCORE_OPTIONS } from "views/Reports/painScores";
+import { DEFAULT_PAIN_SCORE, PAIN_SCORE_OPTIONS, painScoreLabel } from "views/Reports/painScores";
 
 /**
  * The discovery request settings a committed band was chosen under, for the deployment summary and
@@ -92,19 +92,72 @@ export function reportIsForBand(data, bc, kind = "report") {
     && Math.abs(Number(got.hz) - Number(bc.center_freq_hz)) < 1e-6;
 }
 
-/** The hook's result unchanged when it is about `bc`; otherwise the same result with no data, an
- *  `err` saying why, and `bandMismatch` naming the chosen band and the band it was computed for. */
-export function withheldIfOtherBand(result, bc, kind = "report") {
+/**
+ * ONE PAIN SCORE AND ONE CLINIC-SHEET SETTING ON THE WHOLE PAGE (decision 307; the live bug of
+ * 2026-09-26, the same class as the band). After the dropdown moved from Left Leg VAS to NRS, and
+ * before Recompute, the decision card kept the Left Leg VAS verdict and values under a dropdown
+ * reading NRS. `want` is the page's current choice: `painScore` (the report's `pain_score.key`, the
+ * summary's `identity.pro_metric`) and `includeSheets` (the summary's
+ * `identity.clinic_sheet_ratings.included`; the report takes no clinic-sheet switch). A result that
+ * does not say what it was computed on is not contradicted, as before.
+ */
+function computedSettings(data, kind) {
+  if (!data) return {};
+  if (kind === "summary") {
+    const id = data.identity || {};
+    const cs = id.clinic_sheet_ratings;
+    return { pain: id.pro_metric || null,
+      sheets: cs && typeof cs.included === "boolean" ? cs.included : null };
+  }
+  return { pain: (data.pain_score && data.pain_score.key) || null, sheets: null };
+}
+
+const sheetsWords = (on) => (on ? "clinic-sheet ratings included" : "REDCap ratings only");
+
+/** `{what, chosen, computedFor}` for the first setting `data` was computed on that differs from
+ *  `want`, or null. */
+export function settingsMismatch(data, want, kind = "report") {
+  if (!data || !want) return null;
+  const got = computedSettings(data, kind);
+  if (want.painScore && got.pain && String(got.pain) !== String(want.painScore)) {
+    return { what: "pain score", chosen: painScoreLabel(want.painScore),
+      computedFor: (kind === "report" && data.pain_score && data.pain_score.label)
+        || painScoreLabel(got.pain) };
+  }
+  if (typeof want.includeSheets === "boolean" && got.sheets != null
+    && got.sheets !== want.includeSheets) {
+    return { what: "clinic-sheet setting", chosen: sheetsWords(want.includeSheets),
+      computedFor: sheetsWords(got.sheets) };
+  }
+  return null;
+}
+
+/** The hook's result unchanged when it is about `bc` (and, when `want` is given, on the page's
+ *  current pain score and clinic-sheet setting); otherwise the same result with no data, an `err`
+ *  saying why, and `bandMismatch` naming what differs (`what`), the page's choice and what the
+ *  result was computed for. A different band is named before a different score. */
+export function withheldIfOtherBand(result, bc, kind = "report", want = null) {
   const data = result && result.data;
-  if (!data || reportIsForBand(data, bc, kind)) return result;
-  const got = computedBand(data, kind);
-  const chosen = bandText(bc.contact, bc.center_freq_hz, bc.contact_label);
-  const computedFor = bandText(got.contact, got.hz);
+  if (!data) return result;
+  if (!reportIsForBand(data, bc, kind)) {
+    const got = computedBand(data, kind);
+    const chosen = bandText(bc.contact, bc.center_freq_hz, bc.contact_label);
+    const computedFor = bandText(got.contact, got.hz);
+    return {
+      ...result,
+      data: null,
+      stale: true,
+      err: `the analysis on screen is for ${computedFor}, not the chosen band; press Recompute`,
+      bandMismatch: { what: "band", chosen, computedFor },
+    };
+  }
+  const mis = settingsMismatch(data, want, kind);
+  if (!mis) return result;
   return {
     ...result,
     data: null,
     stale: true,
-    err: `the analysis on screen is for ${computedFor}, not the chosen band; press Recompute`,
-    bandMismatch: { chosen, computedFor },
+    err: `the analysis on screen is for ${mis.computedFor}, not the chosen ${mis.what}; press Recompute`,
+    bandMismatch: mis,
   };
 }

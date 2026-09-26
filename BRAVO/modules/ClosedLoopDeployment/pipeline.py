@@ -340,6 +340,13 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
                 except Exception as _pex:              # noqa: BLE001 - the capture pair stands
                     rep.threshold_placement = {"available": False,
                                                "reason": f"placement failed: {_pex!r}"}
+            # THE SAFE CEILING (decision 306): the adaptive limits the card recommends and the
+            # replay, the simulation and the titration ladder run with are the capture currents
+            # held at or below the PI-stated ceiling for the stimulated side, read from its one
+            # home (StimOptimizer/safety_ceiling.py). The measured capture currents stay on the
+            # plan as measured, because the thresholds above were read at them.
+            from . import safe_current as _safe
+            rep.threshold = _safe.apply_to_plan(rep.threshold, participant_uid, hemisphere)
         elif np.isfinite(lo_a) and np.isfinite(hi_a):
             # ONE therapeutic current on record (review C12, 2026-09-12). The two capture
             # amplitudes must differ (D24: the thresholds are read at a low and a high current),
@@ -454,8 +461,8 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
             # testing between them is testing the range the loop will actually operate over.
             _cand = list(cand or [])
             if rep.threshold is not None:
-                _lo = getattr(rep.threshold, "capture_amp_low", None)
-                _hi = getattr(rep.threshold, "capture_amp_high", None)
+                # the capped limits (decision 306): a ladder never tests above the safe ceiling
+                _lo, _hi = rep.threshold.amplitude_limits()
                 if _lo is not None and _hi is not None:
                     # Each arm needs its OWN label. The protocol groups differences by label and
                     # refuses duplicates, correctly: two arms sharing a label would be pooled into

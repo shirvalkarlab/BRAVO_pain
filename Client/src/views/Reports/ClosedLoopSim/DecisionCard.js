@@ -185,8 +185,8 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
   const status = mismatch
     ? { key: "other_band", ink: PAL.warnText, icon: "sync_problem",
       headline: `Recompute: the analysis shown is for ${mismatch.computedFor}`,
-      sub: `The chosen band is ${mismatch.chosen}. Nothing on this page describes it until the `
-        + "analysis is recomputed." }
+      sub: `The chosen ${mismatch.what || "band"} is ${mismatch.chosen}. Nothing on this page `
+        + "describes it until the analysis is recomputed." }
     : decisionStatus(rep);
   const allowedAndSupported = status.key === "supported" || status.key === "supported_provisional";
   const red = deviceBullets(rep);

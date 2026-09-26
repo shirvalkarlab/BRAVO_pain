@@ -222,6 +222,26 @@ class ThresholdPlan:
     capture_lower: float | None = None
     placement: dict = field(default_factory=dict)
     placement_note: str = ""
+    #: THE ADAPTIVE AMPLITUDE LIMITS THE CARD RECOMMENDS AND THE CONTROLLER RUNS WITH (decision
+    #: 306). The limits inherit the capture currents (D28), each held at or below the participant's
+    #: PI-stated safe ceiling for the stimulated side (``StimOptimizer/safety_ceiling.py``, the one
+    #: home; applied by ``safe_current.apply_to_plan``). ``capture_amp_low``/``capture_amp_high``
+    #: stay the currents the band power was MEASURED at, because the thresholds were read there.
+    #: None means no ceiling has been applied; read the pair through :meth:`amplitude_limits`.
+    amp_limit_low: float | None = None
+    amp_limit_high: float | None = None
+    safety_ceiling_mA: float | None = None
+    safety_ceiling_provenance: str = ""
+    #: One plain sentence per limit when the ceiling lowered it, else None.
+    amp_limit_low_note: str | None = None
+    amp_limit_high_note: str | None = None
+
+    def amplitude_limits(self):
+        """``(low, high)``: the adaptive amplitude limits to program and to replay -- the capped
+        limits when a ceiling was applied, otherwise the two capture currents."""
+        lo = self.capture_amp_low if self.amp_limit_low is None else self.amp_limit_low
+        hi = self.capture_amp_high if self.amp_limit_high is None else self.amp_limit_high
+        return lo, hi
 
 
 @dataclass

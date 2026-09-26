@@ -281,8 +281,10 @@ function ClosedLoopSim() {
   // hand can still be the previous band's. Every card below reads these two, never the raw hooks,
   // and a result computed for another band reaches them as "not computed for this band" with both
   // bands named, instead of the old band's verdict under the new band's name.
-  const report = withheldIfOtherBand(deploymentReport, bc);
-  const summaryForBand = withheldIfOtherBand(summary, bc, "summary");
+  // The same for the page's pain score and clinic-sheet switch (decision 307): a result computed on
+  // another score, or with the switch the other way, is withheld and named until Recompute.
+  const report = withheldIfOtherBand(deploymentReport, bc, "report", { painScore });
+  const summaryForBand = withheldIfOtherBand(summary, bc, "summary", { painScore, includeSheets });
 
   // TRACK D: fetched independently of any committed candidate -- see useBandSweepGrid.js for why
   // gating this on useDeploymentReport's own enabled condition would make it unreachable from the

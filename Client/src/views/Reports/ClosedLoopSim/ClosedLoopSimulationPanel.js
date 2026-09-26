@@ -49,6 +49,16 @@ const FONT = { family: "Helvetica, Arial, sans-serif", size: 11, color: "#222" }
 const AXIS = { showgrid: false, zeroline: false, showline: true, linecolor: "#444", linewidth: 1,
   ticks: "outside", ticklen: 3, tickcolor: "#444", tickfont: { size: 11 } };
 
+/**
+ * The words after the controller's limits (decision 306). The simulation runs between the limits
+ * the decision card recommends: the capture currents, each held at or below the participant's safe
+ * ceiling; `amp_limit_note` is the server's sentence when the ceiling lowered one of them. A stored
+ * simulation from before the ceiling carries no such field and reads as before.
+ */
+export function limitsSourceWords(P) {
+  return P && P.amp_limit_note ? "the capture range, capped at the safe ceiling" : "the capture range, held";
+}
+
 function modelLabel(name) {
   return { M0: "M0 · replay, power as recorded", M1: "M1 · loop closed, straight-line response",
     M2: "M2 · loop closed, peaked response" }[name] || name;
@@ -443,7 +453,8 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
           <Line>{`settling time τ = ${fmtNum(st.tau_s, 1)} s · ${st.source || ""}`}</Line>
           <Line>{`series: ${inp.n_pieces} three-second pieces on ${inp.contact} at ${fmtNum(inp.centre_used_hz, 1)} Hz · ${inp.n_unusable_pieces} unusable (held as missing) · ${inp.n_dropped_no_amplitude} dropped for no known amplitude · amplitude from the device's own record for ${inp.n_from_device_current}, from the settings history for ${inp.n_from_epochs}`}</Line>
           <Line>{`record: ${rec.n_segments} stretches, ${rec.n_segments_used} run, ${rec.n_segments_skipped} shorter than 3 steps · ${rec.n_cells_without_a_piece} device-clock cells without a piece (held), ${rec.n_cells_merging_pieces} merging two · ${fmtNum(rec.hours_of_signal, 2)} h of signal across ${fmtNum((rec.span_s || 0) / 86400, 0)} days (coverage ${fmtPct(rec.coverage_frac, 3)})`}</Line>
-          <Line>{`controller: thresholds ${fmtNum(P.lower, 1)} / ${fmtNum(P.upper, 1)} device units · limits ${fmtNum(P.amp_low_mA, 2)}–${fmtNum(P.amp_high_mA, 2)} mA (the capture range, held) · ramp ${fmtNum(P.ramp_up_mA_per_s, 4)} mA/s up, ${fmtNum(P.ramp_down_mA_per_s, 4)} down · step ${fmtNum(P.dt_controller_s, 1)} s · onset ${P.onset_steps} step(s), blanking ${P.blanking_steps}`}</Line>
+          <Line>{`controller: thresholds ${fmtNum(P.lower, 1)} / ${fmtNum(P.upper, 1)} device units · limits ${fmtNum(P.amp_low_mA, 2)}–${fmtNum(P.amp_high_mA, 2)} mA (${limitsSourceWords(P)}) · ramp ${fmtNum(P.ramp_up_mA_per_s, 4)} mA/s up, ${fmtNum(P.ramp_down_mA_per_s, 4)} down · step ${fmtNum(P.dt_controller_s, 1)} s · onset ${P.onset_steps} step(s), blanking ${P.blanking_steps}`}</Line>
+          {P.amp_limit_note ? <Line>{P.amp_limit_note}</Line> : null}
           <Line>{`M3: ${rs.n_fitted || 0} of ${rs.n_resample || 0} refits on ${rs.n_runs || 0} runs resampled with replacement${rs.reason ? ` · ${rs.reason}` : ""}`}</Line>
           <Caption>{run.caveat}</Caption>
           <Caption>Dashed frame: every number here is modelled, not measured. It gates nothing.</Caption>

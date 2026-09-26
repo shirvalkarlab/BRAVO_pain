@@ -455,8 +455,15 @@ def simulate_series(t_s, power, amp_obs, plan, curves: Sequence[ResponseCurve], 
     if upper is None or lower is None or not (float(upper) > float(lower)):
         raise ValueError(f"the ThresholdPlan has no usable thresholds (upper={upper!r}, lower={lower!r})")
     upper, lower = float(upper), float(lower)
-    amp_low = plan.capture_amp_low if p_in["amp_low_mA"] is None else p_in["amp_low_mA"]
-    amp_high = plan.capture_amp_high if p_in["amp_high_mA"] is None else p_in["amp_high_mA"]
+    # The limits the card recommends, capped at the participant's safe ceiling (decision 306).
+    _lim_low, _lim_high = _replay._plan_limits(plan)
+    amp_low = _lim_low if p_in["amp_low_mA"] is None else p_in["amp_low_mA"]
+    amp_high = _lim_high if p_in["amp_high_mA"] is None else p_in["amp_high_mA"]
+    # the plan's own sentence(s) when the ceiling lowered a limit this run uses (the card prints it)
+    _notes = [n for n, used in ((getattr(plan, "amp_limit_low_note", None), p_in["amp_low_mA"] is None),
+                                (getattr(plan, "amp_limit_high_note", None), p_in["amp_high_mA"] is None))
+              if n and used]
+    amp_limit_note = " ".join(_notes) or None
     if amp_low is None or amp_high is None or not (float(amp_high) > float(amp_low)):
         raise ValueError(f"no usable amplitude limits (low={amp_low!r}, high={amp_high!r})")
     amp_low, amp_high = float(amp_low), float(amp_high)
@@ -521,7 +528,7 @@ def simulate_series(t_s, power, amp_obs, plan, curves: Sequence[ResponseCurve], 
                    "dt_controller_s": float(dt), "samples_per_averaging_window": int(n_per),
                    "onset_steps": int(onset_steps), "blanking_steps": int(blank_steps),
                    "ramp_up_mA_per_s": rate_up, "ramp_down_mA_per_s": rate_down,
-                   "tau_s": float(tau[0]) if K else None},
+                   "tau_s": float(tau[0]) if K else None, "amp_limit_note": amp_limit_note},
     }
 
 

@@ -73,6 +73,8 @@ try:                                                    # pragma: no cover - imp
 except Exception:                                       # pragma: no cover
     PA = None
 
+from . import safe_current as _SAFE
+
 
 #: Onset duration range in SINGLE threshold mode: 0-30 s (FDA Table 2). Read from the one home in
 #: percept_adaptive; the alias is kept because this module's tests and callers read it here.
@@ -200,6 +202,10 @@ class Field_:
     #: picked -- a range, not a single recommended number with an implied margin of error. Same
     #: always-visible placement as the three notes above.
     robustness_note: str | None = None
+    #: One plain sentence when the PI-stated safe ceiling lowered this row's current (decision 306:
+    #: "Capped at the 4.5 mA safe ceiling; the highest current measured was 4.8 mA."), on the
+    #: current rows only; None when nothing was capped.
+    ceiling_note: str | None = None
 
     #: WHY `status` ALONE IS NOT ENOUGH, and why two axes are derived from it below.
     #:
@@ -352,6 +358,7 @@ class Prescription:
                  "why": f.why, "programmed": f.programmed, "confidence": f.confidence,
                  "design_rule_note": f.design_rule_note, "occupancy_note": f.occupancy_note,
                  "startup_bias_note": f.startup_bias_note, "robustness_note": f.robustness_note,
+                 "ceiling_note": f.ceiling_note,
                  # The two provenance axes, so the interface never has to re-derive them from the
                  # status string and cannot disagree with this module about what a status means.
                  "origin": f.origin, "confirm": f.confirm,
@@ -721,25 +728,38 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
                     "the recommendation is derived, not confirmed enterable")
 
     # --- amplitude limits -----------------------------------------------------------------------
-    a_lo = getattr(tp, "capture_amp_low", None)
-    a_hi = getattr(tp, "capture_amp_high", None)
+    # Every current on this card is at or below the participant's PI-stated safe ceiling for the
+    # stimulated side (decision 306): the limits are the capture currents CAPPED by
+    # `safe_current.apply_to_plan` (the pipeline applies it; a plan that never met a ceiling is held
+    # to the module hard limit here, so this table cannot print a current above it either way).
+    tp_lim = _SAFE.ensure_applied(tp) if tp is not None else None
+    a_lo, a_hi = tp_lim.amplitude_limits() if tp_lim is not None else (None, None)
     lim_src = f"documented range {PA.RANGE_SOURCE_FDA}"
     F.append(Field_("Adaptive amplitude limit, lower", a_lo, "mA", "derived",
                     range_=PA.ADAPTIVE_AMP_LIMIT_RANGE_MA, range_source=lim_src,
                     programmed=_prog("lower_limit_mA"),
+                    ceiling_note=getattr(tp_lim, "amp_limit_low_note", None),
                     why="Inherits the lower capture amplitude (D28), which makes the choice of "
                         "capture amplitudes a therapeutic decision and not only a measurement "
                         "one. Must be above zero (D07)."))
     F.append(Field_("Adaptive amplitude limit, upper", a_hi, "mA", "derived",
                     range_=PA.ADAPTIVE_AMP_LIMIT_RANGE_MA, range_source=lim_src,
                     programmed=_prog("upper_limit_mA"),
+                    ceiling_note=getattr(tp_lim, "amp_limit_high_note", None),
                     why="Inherits the upper capture amplitude (D28)."))
-    F.append(Field_("Paused amplitude", cand.get("paused_amplitude_mA"), "mA",
-                    "derived" if cand.get("paused_amplitude_mA") else "read_off_programmer",
+    paused = cand.get("paused_amplitude_mA")
+    paused_note = None
+    if paused is not None and tp_lim is not None:
+        paused, paused_note = _SAFE.cap(paused, tp_lim.safety_ceiling_mA,
+                                        tp_lim.safety_ceiling_provenance,
+                                        was="the stated paused amplitude")
+    F.append(Field_("Paused amplitude", paused, "mA",
+                    "derived" if paused else "read_off_programmer",
                     # The general amplitude envelope (C7 of the 2026-09-15 review, decision 200):
                     # every other current row printed its range and this one printed none.
                     range_=PA.ADAPTIVE_AMP_LIMIT_RANGE_MA, range_source=lim_src,
                     programmed=_prog("suspend_amplitude_mA"),
+                    ceiling_note=paused_note,
                     why="The amplitude delivered when the patient pauses Adaptive (D34). Not "
                         "derivable from the record; a clinical choice."))
 

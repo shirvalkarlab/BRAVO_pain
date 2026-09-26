@@ -1779,6 +1779,14 @@ def report_to_dict(rep):
             "control_authority": _num(rep.threshold.control_authority),
             "capture_amp_low": _num(rep.threshold.capture_amp_low),
             "capture_amp_high": _num(rep.threshold.capture_amp_high),
+            # Decision 306: the adaptive limits the card recommends -- the capture currents held at
+            # or below the PI-stated safe ceiling for the stimulated side -- and that ceiling.
+            "amp_limit_low": _num(rep.threshold.amplitude_limits()[0]),
+            "amp_limit_high": _num(rep.threshold.amplitude_limits()[1]),
+            "safety_ceiling_mA": _num(getattr(rep.threshold, "safety_ceiling_mA", None)),
+            "safety_ceiling_provenance": getattr(rep.threshold, "safety_ceiling_provenance", "") or None,
+            "amp_limit_low_note": getattr(rep.threshold, "amp_limit_low_note", None),
+            "amp_limit_high_note": getattr(rep.threshold, "amp_limit_high_note", None),
             "frac_time_below": _num(rep.threshold.frac_time_below),
             "frac_time_between": _num(rep.threshold.frac_time_between),
             "frac_time_above": _num(rep.threshold.frac_time_above),
@@ -2583,8 +2591,10 @@ def simulation_signature(participant, *, tiles_key, contact, centre_hz, hemisphe
             str(getattr(participant, "uid", participant)), tiles_key,
             recording_set_signature(participant), str(contact), round(float(centre_hz), 3),
             str(hemisphere), str(power_scale),
+            # the LIMITS the controller runs with -- the capture currents held at or below the
+            # safe ceiling (decision 306) -- so a capped plan never serves a replay run to 4.8 mA
             tuple(None if v is None else round(float(v), 6)
-                  for v in (plan.upper, plan.lower, plan.capture_amp_low, plan.capture_amp_high)),
+                  for v in (plan.upper, plan.lower, *plan.amplitude_limits())),
             int(n_resample), int(seed))
 
 
@@ -2705,7 +2715,7 @@ def write_simulation(participant, *, rep, build, candidate, hemisphere, power_sc
     if plan is None or plan.upper is None or plan.lower is None:
         summary["reason"] = "no thresholds were placed for this candidate, so there is no controller to run"
         return summary
-    if plan.capture_amp_low is None or plan.capture_amp_high is None:
+    if None in plan.amplitude_limits():
         summary["reason"] = "the plan has no capture amplitude range, which the limits are held to"
         return summary
     contact = (candidate or {}).get("channel")
@@ -3051,9 +3061,11 @@ def write_robustness(participant, *, candidate, hemisphere, threshold_plan, load
         summary["reason"] = ("no thresholds were placed for this candidate, so there is nothing "
                              "for a robustness bootstrap to be measured against")
         return summary
-    if plan.capture_amp_low is None or plan.capture_amp_high is None:
+    if None in plan.amplitude_limits():
         summary["reason"] = "the plan has no capture amplitude range, which the replay is held to"
         return summary
+    # the limits the replay is held to: the capture currents capped at the safe ceiling (306)
+    _amp_lo, _amp_hi = plan.amplitude_limits()
     contact = (candidate or {}).get("channel")
     centre = (candidate or {}).get("center_hz")
     if contact is None or centre is None:
@@ -3067,8 +3079,8 @@ def write_robustness(participant, *, candidate, hemisphere, threshold_plan, load
     uid = str(getattr(participant, "uid", participant))
     sig = robustness_signature(participant, tiles_key=tiles_key, contact=contact,
                                centre_hz=centre, hemisphere=hemisphere, upper=plan.upper,
-                               lower=plan.lower, amp_low=plan.capture_amp_low,
-                               amp_high=plan.capture_amp_high, n_boot=n_boot, seed=seed)
+                               lower=plan.lower, amp_low=_amp_lo,
+                               amp_high=_amp_hi, n_boot=n_boot, seed=seed)
     summary["store_key"] = _cache_store.product_key(_rb.KIND, uid, sig)
     if _cache_store.read_stamp(_rb.KIND, uid, sig, root=_SHARED_CACHE_DIR_OVERRIDE) is not None:
         summary["written"] = True
@@ -3084,8 +3096,8 @@ def write_robustness(participant, *, candidate, hemisphere, threshold_plan, load
         return summary
     payload = _rb.robustness_for_series(inputs["t"], inputs["power"], inputs["amp_obs"],
                                         upper=plan.upper, lower=plan.lower,
-                                        amp_low=plan.capture_amp_low,
-                                        amp_high=plan.capture_amp_high, n_boot=n_boot, seed=seed)
+                                        amp_low=_amp_lo,
+                                        amp_high=_amp_hi, n_boot=n_boot, seed=seed)
     payload["candidate"] = {"channel": str(contact), "center_hz": float(centre),
                             "hemisphere": str(hemisphere)}
     payload["seconds"] = _time.perf_counter() - t0

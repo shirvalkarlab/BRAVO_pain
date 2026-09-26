@@ -21,6 +21,10 @@
  * THE READ-BACK BOX IS IN THE LEFTMOST COLUMN and attests to what the programmer now DISPLAYS, which
  * catches a field that silently clamped or rounded a value.
  *
+ * A CURRENT THE SAFE CEILING LOWERED SAYS SO ON ITS OWN ROW (decision 306): the server caps every
+ * current it recommends at the participant's PI-stated ceiling and sends one sentence
+ * (`ceiling_note`), printed under the parameter's name, never behind a fold.
+ *
  * UNITS HAVE THEIR OWN COLUMN, so "1.50 mA" cannot be read as "150 mA"; values are monospaced and
  * right-aligned so decimal points line up.
  *
@@ -103,7 +107,7 @@ function Row({ f, index, ticked, onTick, readBackEnabled }) {
     <MDBox flex={COLS[i][0]} sx={{ px: 0.5, ...sx }}>{children}</MDBox>
   );
   return (
-    <MDBox display="flex" flexDirection="row" alignItems="baseline" py={0.45}
+    <MDBox display="flex" flexDirection="row" alignItems="baseline" py={0.45} data-param-row=""
       sx={{ borderTop: index === 0 ? "none" : "1px solid rgba(0,0,0,0.07)" }}>
       {cell(0, (
         <input type="checkbox" checked={!!ticked} disabled={!readBackEnabled}
@@ -114,9 +118,19 @@ function Row({ f, index, ticked, onTick, readBackEnabled }) {
             opacity: readBackEnabled ? 1 : 0.45 }} />
       ))}
       {cell(1, (
-        <MDTypography variant="caption" sx={{ fontSize: 12.5, fontWeight: 600, color: "#1A1A1A" }}>
-          {f.parameter}
-        </MDTypography>
+        <>
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 12.5, fontWeight: 600, color: "#1A1A1A" }}>
+            {f.parameter}
+          </MDTypography>
+          {/* Decision 306: the server lowered this current to the participant's safe ceiling; the
+              sentence sits on the row, in the open, so the value is never read without it. */}
+          {f.ceiling_note ? (
+            <MDTypography variant="caption" data-ceiling-note=""
+              sx={{ display: "block", fontSize: 11.5, fontWeight: 600, color: PAL.warnText, lineHeight: 1.3 }}>
+              {f.ceiling_note}
+            </MDTypography>
+          ) : null}
+        </>
       ))}
       {cell(2, mustChoose && value == null ? (
         <MDTypography variant="caption" sx={{ fontSize: 12, color: PAL.warnText, fontWeight: 600 }}>
@@ -366,6 +380,7 @@ export function ParameterDetails({ report, mode }) {
                 + (f.device_default != null && String(f.device_default) !== String(f.value)
                   ? `; manufacturer default ${f.device_default}` : "")}
             </MDTypography>
+            {f.ceiling_note ? <Note ink={PAL.warnText}>{f.ceiling_note}</Note> : null}
             {f.range_source ? <Note ink={/NOT published/i.test(f.range_source) ? PAL.warnText : "#4A4A4A"}>{f.range_source}</Note> : null}
             {f.range && f.range.length === 2 ? <Note>{`Documented range ${f.range[0]} to ${f.range[1]}.`}</Note> : null}
             {f.confidence ? <Note>{`Confidence ${f.confidence} (measured on this participant's record).`}</Note> : null}

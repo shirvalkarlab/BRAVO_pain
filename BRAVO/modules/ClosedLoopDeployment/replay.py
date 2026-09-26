@@ -334,6 +334,15 @@ def _average_to_device_grid(t, p, dt, averaging_s):
 # --------------------------------------------------------------------------------------------
 # The controller
 # --------------------------------------------------------------------------------------------
+def _plan_limits(plan):
+    """``(low, high)`` from ``plan.amplitude_limits()`` when the plan has it, else the two capture
+    currents (a duck-typed plan from a caller outside this package)."""
+    f = getattr(plan, "amplitude_limits", None)
+    if callable(f):
+        return f()
+    return getattr(plan, "capture_amp_low", None), getattr(plan, "capture_amp_high", None)
+
+
 def dual_threshold(power_series, plan, params=None) -> types.ReplayResult:
     """Simulate the Dual Threshold controller over an observed band-power series.
 
@@ -343,7 +352,8 @@ def dual_threshold(power_series, plan, params=None) -> types.ReplayResult:
 
     ``plan`` is a :class:`types.ThresholdPlan`. Its ``upper`` and ``lower`` are the LFP power
     thresholds. Its ``capture_amp_low`` and ``capture_amp_high`` are used as the adaptive amplitude
-    limits unless ``params`` overrides them, which is discussed below.
+    limits unless ``params`` overrides them, which is discussed below -- each held at or below the
+    participant's safe ceiling when one was applied (``plan.amplitude_limits()``, decision 306).
 
     ``params`` overrides any of :data:`DEFAULT_PARAMS`, plus ``dt_s`` when the series has no time
     base. The resolved parameters are echoed on the result so a trajectory can always be traced back
@@ -408,10 +418,14 @@ def dual_threshold(power_series, plan, params=None) -> types.ReplayResult:
     # ---- amplitude limits -------------------------------------------------------------------
     amp_low = p_in["amp_low_mA"]
     amp_high = p_in["amp_high_mA"]
+    # The limits the card recommends: the capture currents held at or below the participant's safe
+    # ceiling (decision 306; `ThresholdPlan.amplitude_limits`), so the replay never commands a
+    # current the card would not let a clinician program.
+    _lim_low, _lim_high = _plan_limits(plan)
     if amp_low is None:
-        amp_low = plan.capture_amp_low
+        amp_low = _lim_low
     if amp_high is None:
-        amp_high = plan.capture_amp_high
+        amp_high = _lim_high
     if amp_low is None or amp_high is None:
         raise ValueError(
             "no adaptive amplitude limits are available: the ThresholdPlan carries "
@@ -898,8 +912,11 @@ def dual_threshold_segments(t_s, power, plan, params=None, *,
                 "median_interval_s": med, "span_s": span,
                 "coverage_frac": (observed / span) if span > 0 else None,
                 "ramp_resolvable": True, "transition_up_s": ramp_up_s,
-                "amp_low_mA": getattr(plan, "capture_amp_low", None),
-                "amp_high_mA": getattr(plan, "capture_amp_high", None)},
+                # the limits the segments ran between: the capped pair (decision 306)
+                "amp_low_mA": ((params or {}).get("amp_low_mA") if (params or {}).get("amp_low_mA")
+                               is not None else _plan_limits(plan)[0]),
+                "amp_high_mA": ((params or {}).get("amp_high_mA") if (params or {}).get("amp_high_mA")
+                                is not None else _plan_limits(plan)[1])},
         note=(f"Aggregated over {n_used} contiguous segments ({skipped} skipped for holding fewer "
               f"than {min_segment_steps} steps), weighted by the number of controller steps in "
               f"each. The record was split at gaps larger than {gap_factor:g} times the median "

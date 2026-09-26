@@ -291,9 +291,14 @@ export default function BandSweepGridPanel({ grid, participantUid, committed, on
   const leftTabs = channels.filter((ch) => sideOf(ch) === "Left");
   const rightTabs = channels.filter((ch) => sideOf(ch) === "Right");
   const otherTabs = channels.filter((ch) => sideOf(ch) !== "Left" && sideOf(ch) !== "Right");
+  // Each tab's accessible name is its pair AND its region (decision 307): the region alone, from the
+  // hover title, read "Left GPi" three times and "Right VIM" three times to a screen reader.
+  const regionOf = (ch) => (sw && sweeps[ch] && sweeps[ch].display_region) || null;
   const tab = (ch) => (
     <Chip key={ch} label={labelOf(ch)} size="small" onClick={() => setActiveChannel(ch)}
-      title={sw && sweeps[ch] && sweeps[ch].display_region ? sweeps[ch].display_region : undefined}
+      title={regionOf(ch) || undefined}
+      aria-label={regionOf(ch) ? `${labelOf(ch)}, ${regionOf(ch)}` : labelOf(ch)}
+      aria-pressed={ch === channel}
       sx={{
         fontWeight: ch === channel ? 700 : 400, fontSize: 12,
         backgroundColor: ch === channel ? PAL.accentFill : "transparent",
