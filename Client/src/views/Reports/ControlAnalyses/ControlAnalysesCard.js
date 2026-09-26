@@ -1,20 +1,26 @@
 /**
- * Control analyses: saved, dated results of checks run offline on this participant's record (the
- * PI, 2026-09-24), one dropdown per page. The card draws what the server saved and nothing more; a
+ * Checks against chance and against the current, run offline (the "control analyses"): saved,
+ * dated results of checks run offline on this participant's record (the PI, 2026-09-24), one
+ * dropdown per page. Restyled 2026-09-26 for the minimalist redesign (SPEC.md, WP4): shared tokens,
+ * one outlined select, the reading in body text, no literal colour or size of its own. The card draws what the server saved and nothing more; a
  * new run adds a result and keeps the old ones, and nothing here is recomputed on a page load.
  */
 import React, { useEffect, useState } from "react";
 import PropTypes from "prop-types";
 
 import Card from "@mui/material/Card";
+import Select from "@mui/material/Select";
 import MDBox from "components/MDBox";
-import MDTypography from "components/MDTypography";
 import { SessionController } from "database/session-control";
+import { T, TYPE, SPACE, CARD, LAYOUT } from "assets/theme/base/tokens";
 
 import { FIGURES } from "./figures";
 
 const ENDPOINT = "/api/queryControlAnalyses";
-const SUB = "#5E5E5E";
+const SELECT_ID = "control-analysis-select";
+
+/** The card's title, in the spec's words for "Control analyses" (SPEC.md section 6). */
+export const CARD_TITLE = "Checks against chance and against the current (run offline)";
 
 function stamp(snap, nRuns) {
   const when = snap.run_at ? new Date(snap.run_at) : null;
@@ -35,10 +41,13 @@ function linesFor(snap, clinicSheets) {
   return {
     lines: bySwitch[pos] || [],
     note: clinicSheets
-      ? "Showing the run with the clinic-sheet ratings merged in, because the page's clinic-sheet switch is on."
-      : "Showing the run on REDCap ratings only; the clinic-sheet ratings enter only when the page's clinic-sheet switch is on.",
+      ? "Showing the run with the clinic-sheet ratings merged in, because this page's clinic-sheet switch is on."
+      : "Showing the run on the home pain surveys alone (REDCap ratings only); the clinic-sheet ratings enter only when this page's clinic-sheet switch is on.",
   };
 }
+
+const CAPTION = { ...TYPE.caption, color: T.ink3, margin: 0 };
+const PROSE = { maxWidth: LAYOUT.proseMax };
 
 export default function ControlAnalysesCard({ payload, clinicSheets }) {
   const analyses = (payload && payload.analyses) || [];
@@ -49,43 +58,52 @@ export default function ControlAnalysesCard({ payload, clinicSheets }) {
   const Figure = FIGURES[a.key];
   const { lines, note } = linesFor(snap, clinicSheets);
   return (
-    <Card>
-      <MDBox p={2} data-testid="control-analyses-card">
-        <MDTypography variant="h6" sx={{ fontSize: 17, mb: 0.25 }}>{"Control analyses"}</MDTypography>
-        <MDTypography variant="caption" component="div" sx={{ fontSize: 12.5, color: SUB, mb: 1 }}>
-          {"Saved, dated results of checks run offline on this participant's record. This card feeds no recommendation, and nothing here is recomputed when the page loads."}
-        </MDTypography>
-        <label htmlFor="control-analysis-select" style={{ fontSize: 13, color: SUB, marginRight: 8 }}>{"Control analysis"}</label>
-        <select id="control-analysis-select" value={a.key} onChange={(e) => setKey(e.target.value)}
-          style={{ fontSize: 14, padding: "4px 8px", maxWidth: "100%" }}>
-          {analyses.map((x) => <option key={x.key} value={x.key}>{x.title}{x.snapshot ? "" : " (not run yet)"}</option>)}
-        </select>
-        <MDTypography variant="caption" component="div" sx={{ fontSize: 13, color: "#1A1A1A", mt: 1 }}>{a.what}</MDTypography>
+    <Card sx={{ ...CARD }}>
+      <MDBox p={3} data-testid="control-analyses-card" sx={{ fontFamily: "inherit" }}>
+        <h3 style={{ ...TYPE.title, color: T.ink, margin: 0 }}>{CARD_TITLE}</h3>
+        <p style={{ ...TYPE.body, ...PROSE, color: T.ink2, margin: `${SPACE.xs}px 0 ${SPACE.sm}px` }}>
+          {"Saved, dated results of checks run offline on this participant's data. This card feeds no recommendation, and nothing here is worked out again when the page loads."}
+        </p>
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: SPACE.xs }}>
+          <label htmlFor={SELECT_ID} style={{ ...TYPE.body, color: T.ink2 }}>{"Which check"}</label>
+          <Select native size="small" value={a.key} onChange={(e) => setKey(e.target.value)}
+            inputProps={{ id: SELECT_ID }}
+            sx={{ ...TYPE.body, color: T.ink, background: T.surface, maxWidth: "100%", minWidth: 280,
+              "& select": { ...TYPE.body, color: T.ink, py: 0.75 } }}>
+            {analyses.map((x) => <option key={x.key} value={x.key}>{x.title}{x.snapshot ? "" : " (not run yet)"}</option>)}
+          </Select>
+        </div>
+        <p style={{ ...TYPE.lead, ...PROSE, color: T.ink, margin: `${SPACE.sm}px 0 0` }}>{a.what}</p>
         {!snap ? (
-          <MDTypography variant="caption" component="div" sx={{ fontSize: 13, color: SUB, mt: 1 }}>
+          <p style={{ ...TYPE.body, ...PROSE, color: T.ink2, margin: `${SPACE.xs}px 0 0` }}>
             {"Not run yet for this participant. A run is started offline and saved; it then appears here with its date."}
-          </MDTypography>
+          </p>
         ) : (
           <>
-            <MDTypography variant="caption" component="div" sx={{ fontSize: 12.5, color: SUB, mt: 0.75 }}>{stamp(snap, a.n_runs)}</MDTypography>
-            {note && (
-              <MDTypography variant="caption" component="div" sx={{ fontSize: 12.5, color: SUB, mt: 0.5 }}>{note}</MDTypography>
+            <p style={{ ...CAPTION, marginTop: SPACE.xs }}>{stamp(snap, a.n_runs)}</p>
+            {note && <p style={{ ...CAPTION, ...PROSE, marginTop: SPACE.xxs }}>{note}</p>}
+            {Figure && (
+              <div style={{ marginTop: SPACE.sm }}>
+                <Figure result={snap.result} clinicSheets={Boolean(clinicSheets)} />
+              </div>
             )}
-            {Figure && <MDBox mt={1}><Figure result={snap.result} clinicSheets={Boolean(clinicSheets)} /></MDBox>}
-            <MDBox component="ul" sx={{ pl: 2.5, mt: 1, mb: 0 }}>
-              {lines.map((line) => (
-                <MDTypography key={line} component="li" variant="caption" display="list-item" sx={{ fontSize: 13, color: "#1A1A1A" }}>{line}</MDTypography>
-              ))}
-            </MDBox>
+            {lines.length > 0 && (
+              <ul style={{ ...TYPE.body, ...PROSE, color: T.ink2, margin: `${SPACE.sm}px 0 0`, paddingLeft: SPACE.md }}>
+                {lines.map((line) => <li key={line}>{line}</li>)}
+              </ul>
+            )}
           </>
         )}
-        <MDBox mt={1}>
-          {(a.literature || []).map((l) => (
-            <MDTypography key={l.url} variant="caption" component="div" sx={{ fontSize: 12.5 }}>
-              <a href={l.url} target="_blank" rel="noopener noreferrer">{l.label}</a>
-            </MDTypography>
-          ))}
-        </MDBox>
+        {(a.literature || []).length > 0 && (
+          <div style={{ marginTop: SPACE.sm }}>
+            <p style={CAPTION}>{"Background reading"}</p>
+            {(a.literature || []).map((l) => (
+              <div key={l.url} style={{ ...TYPE.body }}>
+                <a href={l.url} target="_blank" rel="noopener noreferrer" style={{ color: T.accent }}>{l.label}</a>
+              </div>
+            ))}
+          </div>
+        )}
       </MDBox>
     </Card>
   );
@@ -108,9 +126,9 @@ export function ControlAnalysesSection({ participantUid, page, clinicSheets }) {
   }, [participantUid, page]);
   if (state.err) {
     return (
-      <MDTypography variant="caption" component="div" sx={{ fontSize: 12.5, color: SUB, px: 1 }}>
-        {`Control analyses could not be read: ${state.err}`}
-      </MDTypography>
+      <p style={{ ...TYPE.body, color: T.ink2, margin: 0, padding: `0 ${SPACE.xs}px` }}>
+        {`The saved checks could not be read: ${state.err}`}
+      </p>
     );
   }
   return <ControlAnalysesCard payload={state.payload} clinicSheets={clinicSheets} />;

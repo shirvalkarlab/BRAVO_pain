@@ -81,7 +81,7 @@ describe("the band detector on the control-analysis card", () => {
 
   it("draws the device-shaped version per band with its interval, and follows the switch", () => {
     const { rerender } = render(<ControlAnalysesCard payload={PAYLOAD} clinicSheets={false} />);
-    fireEvent.change(screen.getByLabelText("Control analysis"), { target: { value: "band_detector_device" } });
+    fireEvent.change(screen.getByLabelText("Which check"), { target: { value: "band_detector_device" } });
     const fig = screen.getByTestId("figure-band_detector_device");
     expect(fig.querySelectorAll("[data-band]").length).toBe(2);
     expect(screen.getByText(/DEVICE REDCAP LINE/)).toBeTruthy();
@@ -98,7 +98,7 @@ describe("the band detector on the control-analysis card", () => {
 
   it("draws every mark of both figures in a real colour", () => {
     const { container } = render(<ControlAnalysesCard payload={PAYLOAD} clinicSheets={false} />);
-    fireEvent.change(screen.getByLabelText("Control analysis"), { target: { value: "band_detector_device" } });
+    fireEvent.change(screen.getByLabelText("Which check"), { target: { value: "band_detector_device" } });
     const marks = container.querySelectorAll("circle, line, rect, path");
     expect(marks.length).toBeGreaterThan(0);
     marks.forEach((m) => {

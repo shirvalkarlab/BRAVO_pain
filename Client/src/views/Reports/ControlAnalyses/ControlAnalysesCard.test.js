@@ -71,7 +71,7 @@ describe("the control analyses card", () => {
 
   it("switches to another analysis from the dropdown", () => {
     render(<ControlAnalysesCard payload={PAYLOAD} />);
-    fireEvent.change(screen.getByLabelText("Control analysis"), { target: { value: "current_explains" } });
+    fireEvent.change(screen.getByLabelText("Which check"), { target: { value: "current_explains" } });
     expect(screen.getByTestId("figure-current_explains")).toBeTruthy();
     expect(screen.getByText(/bands without the current 0.683/)).toBeTruthy();
   });
@@ -184,7 +184,7 @@ describe("the control analyses card", () => {
 
   it("says an analysis has not been run yet rather than drawing nothing", () => {
     render(<ControlAnalysesCard payload={PAYLOAD} />);
-    fireEvent.change(screen.getByLabelText("Control analysis"), { target: { value: "time_of_day" } });
+    fireEvent.change(screen.getByLabelText("Which check"), { target: { value: "time_of_day" } });
     expect(screen.getByText(/Not run yet for this participant/)).toBeTruthy();
   });
 
