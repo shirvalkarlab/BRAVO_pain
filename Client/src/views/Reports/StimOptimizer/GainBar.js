@@ -11,64 +11,64 @@
  * and "not proven" since the design review of 2026-09-26: the page's headline already said "proven
  * better" for what the strip called "resolved", two names for one thing.
  *
- * Resized 2026-09-12 (PI's review of the page): 220 x 40 px, the axis labels at 11 px in a band
- * of their own under the bar, so no label sits on the bar or the zero line. The axis text is #5E5E5E
- * (6.4:1 on white) since 2026-09-26; it was #7A7A7A, 4.29:1, under the 4.5:1 minimum.
+ * Redrawn 2026-09-26 for the minimalist redesign (SPEC.md section 5.3, §1): the interval in the
+ * graphic grey, the point in the accent blue, the ends labelled in words, "worse" on the left and
+ * "better" on the right (a positive gain favours the suggested setting), the unit "pain points".
+ * Every text is 12 px in the lightest allowed grey; the verdict is a glyph with its words:
+ * ✓ proven better, ▲ not proven, ○ not determinable.
  */
 import MDBox from "components/MDBox";
 
-import PAL from "views/Reports/ClosedLoopSim/palette";
-import { TickGlyph, AmberGlyph, NotTestedGlyph } from "views/Reports/ClosedLoopSim/glyphs";
+import { SVG_TEXT } from "views/Reports/figureStyle";
 
 import { num } from "./stimFormat";
-import { TYPE } from "./typeScale";
+import { T, TYPE, WEIGHT, Mark } from "./typeScale";
 
-/** The gain and its one-standard-deviation band on a shared axis, 220 x 40 px by default. */
+/** The gain and its one-standard-deviation band on a shared axis, 220 x 46 px by default. */
 export function GainBar({ gain, sd, halfRange, width = 220 }) {
-  const W = width, H = 40, PAD = 10, AXIS = 14; // AXIS: the band under the bar that holds the labels
+  const W = width, H = 46, PAD = 12, AXIS = 18; // AXIS: the band under the bar that holds the labels
   const mid = (H - AXIS) / 2;
   const g = num(gain), s = num(sd);
   const half = halfRange || 2;
   const x = (v) => PAD + ((v + half) / (2 * half)) * (W - 2 * PAD);
   const clamp = (v) => Math.max(-half, Math.min(half, v));
+  const text = { ...SVG_TEXT };
   if (g === null) {
     return (
       <svg width={W} height={H} role="img" aria-label="no gain could be formed">
-        <line x1={x(0)} x2={x(0)} y1={3} y2={H - AXIS - 3} stroke="#6E6E6E" strokeWidth="1" />
-        <text x={x(0) + 6} y={mid + 4} fontSize={TYPE.axis} fill="#5E5E5E">no difference formed</text>
+        <line x1={x(0)} x2={x(0)} y1={3} y2={H - AXIS - 3} stroke={T.graphic} strokeWidth="1" />
+        <text x={x(0) + 6} y={mid + 4} {...text}>no difference formed</text>
       </svg>
     );
   }
   const lo = s === null ? g : g - s, hi = s === null ? g : g + s;
   return (
     <svg width={W} height={H} role="img"
-      aria-label={`gain ${g.toFixed(2)} points, one standard deviation ${s === null ? "unknown" : s.toFixed(2)}`}>
-      <line x1={x(-half)} x2={x(half)} y1={mid} y2={mid} stroke="#E0E0E0" strokeWidth="1" />
-      <line x1={x(0)} x2={x(0)} y1={3} y2={H - AXIS - 3} stroke="#6A6A6A" strokeWidth="1" />
+      aria-label={`gain ${g.toFixed(2)} pain points, one standard deviation ${s === null ? "unknown" : s.toFixed(2)}; left is worse than today, right is better`}>
+      <line x1={x(0)} x2={x(0)} y1={3} y2={H - AXIS - 3} stroke={T.graphic} strokeWidth="1" strokeDasharray="3 3" />
       {s !== null && (
-        <rect x={x(clamp(lo))} y={mid - 6} width={Math.max(1, x(clamp(hi)) - x(clamp(lo)))} height={12}
-          fill={PAL.neutralFill} stroke={PAL.neutralBorder} />
+        <line x1={x(clamp(lo))} x2={x(clamp(hi))} y1={mid} y2={mid} stroke={T.graphic} strokeWidth="2" />
       )}
-      <circle cx={x(clamp(g))} cy={mid} r={5} fill={PAL.accent} />
-      <text x={x(-half)} y={H - 2} fontSize={TYPE.axis} fill="#5E5E5E">{`−${half}`}</text>
-      <text x={x(0)} y={H - 2} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="middle">0</text>
-      <text x={x(half)} y={H - 2} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="end">{`+${half}`}</text>
+      <circle cx={x(clamp(g))} cy={mid} r={5} fill={T.accent} />
+      <text x={x(-half)} y={H - 3} {...text}>{`← worse`}</text>
+      <text x={x(0)} y={H - 3} {...text} textAnchor="middle">0</text>
+      <text x={x(half)} y={H - 3} {...text} textAnchor="end">{`better →`}</text>
     </svg>
   );
 }
 
 export function VerdictGlyph({ resolved, size = TYPE.body }) {
-  const text = { fontSize: size, fontWeight: 600, whiteSpace: "nowrap" };
+  const text = { fontSize: size, fontWeight: WEIGHT.strong, whiteSpace: "nowrap" };
   if (resolved === true) return (
     <MDBox display="inline-flex" alignItems="center" gap={0.6}>
-      <TickGlyph label="proven better" size={16} /><span style={{ ...text, color: PAL.passText || PAL.pass }}>proven better</span>
+      <Mark state="pass" label="proven better" /><span style={{ ...text, color: T.ink }}>proven better</span>
     </MDBox>);
   if (resolved === false) return (
     <MDBox display="inline-flex" alignItems="center" gap={0.6}>
-      <AmberGlyph label="not proven" size={16} /><span style={{ ...text, color: PAL.warnText }}>not proven</span>
+      <Mark state="caution" label="not proven" /><span style={{ ...text, color: T.caution }}>not proven</span>
     </MDBox>);
   return (
     <MDBox display="inline-flex" alignItems="center" gap={0.6}>
-      <NotTestedGlyph label="not determinable" size={16} /><span style={{ ...text, color: PAL.neutral }}>not determinable</span>
+      <Mark state="notChecked" label="not determinable" /><span style={{ ...text, color: T.notChecked }}>not determinable</span>
     </MDBox>);
 }

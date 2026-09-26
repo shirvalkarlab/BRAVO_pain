@@ -21,18 +21,22 @@
  * sentence pointing at the readiness table is gone (it pointed and said nothing else); the band
  * chart folds under its own check; "resolved" is "proven better"; "adaptive" is "closed loop";
  * "once time is removed" says what is removed, the differences between clinic visits.
+ *
+ * THE MINIMALIST REDESIGN OF 2026-09-26 (SPEC.md sections 2.3 and 5.3, §3): each check carries its
+ * glyph -- ✓ passes (ink), ✕ blocks (red), ○ could not be checked (grey, counted apart, never a
+ * pass) -- and, inside the choice check, ▲ for "not proven" (measured, too small to call). Colours
+ * and sizes come from the shared tokens; the check's sentence folds under its name.
  */
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
-import PAL from "views/Reports/ClosedLoopSim/palette";
-import { TickGlyph, CrossGlyph, AmberGlyph, NotTestedGlyph } from "views/Reports/ClosedLoopSim/glyphs";
+import { SVG_TEXT } from "views/Reports/figureStyle";
 
 import BandResponseStrip from "./BandResponseStrip";
 import { num, fmtHz, fmtMa, fmtOf, contactLabel } from "./stimFormat";
-import { TYPE, SMALL, SizedFold } from "./typeScale";
+import { T, TYPE, SMALL, MONO as MONO_BASE, WEIGHT, Mark, SizedFold } from "./typeScale";
 
-const MONO = { fontFamily: PAL.mono, fontSize: TYPE.num, color: "#1A1A1A" };
+const MONO = { ...MONO_BASE, whiteSpace: "normal" };
 const NOTE = { ...SMALL, whiteSpace: "nowrap" };
 
 /** Plain-language names for the four conditions (their code names are in the tooltip). */
@@ -52,18 +56,18 @@ export function verdictState(c) {
   return null;
 }
 function Glyph({ state }) {
-  if (state === true) return <TickGlyph label="passes" size={18} />;
-  if (state === false) return <CrossGlyph label="fails" size={18} />;
-  return <NotTestedGlyph label="not assessed" size={18} />;
+  if (state === true) return <Mark state="pass" label="passes" size={TYPE.lead} />;
+  if (state === false) return <Mark state="refused" label="fails" size={TYPE.lead} />;
+  return <Mark state="notChecked" label="not assessed" size={TYPE.lead} />;
 }
 function Sub({ ok, text }) {
   // A per-side sub-answer inside a check: resolved = tick, not resolved = amber (measured and too
   // small to call, never the failure ink), unknown = dashed.
   return (
     <MDBox display="inline-flex" alignItems="center" gap={0.6} mr={2}>
-      {ok === true ? <TickGlyph label="proven better" size={14} />
-        : (ok === false ? <AmberGlyph label="not proven" size={14} /> : <NotTestedGlyph label="not assessed" size={14} />)}
-      <span style={{ fontSize: TYPE.body, color: "#1A1A1A", whiteSpace: "nowrap" }}>{text}</span>
+      {ok === true ? <Mark state="pass" label="proven better" />
+        : (ok === false ? <Mark state="caution" label="not proven" /> : <Mark state="notChecked" label="not assessed" />)}
+      <span style={{ fontSize: TYPE.body, color: T.ink, whiteSpace: "nowrap" }}>{text}</span>
     </MDBox>
   );
 }
@@ -72,9 +76,9 @@ function SubLegend() {
   const item = { display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" };
   return (
     <MDBox display="flex" flexWrap="wrap" columnGap={2} rowGap={0.4} mt={0.6} sx={SMALL}>
-      <span style={item}><TickGlyph label="" size={13} /> proven better: the gain exceeds its own uncertainty</span>
-      <span style={item}><AmberGlyph label="" size={13} /> not proven: measured, too small to call</span>
-      <span style={item}><NotTestedGlyph label="" size={13} /> not assessed: the comparison could not be formed</span>
+      <span style={item}><Mark state="pass" label="" size={TYPE.small} /> proven better: the gain exceeds its own uncertainty</span>
+      <span style={item}><Mark state="caution" label="" size={TYPE.small} /> not proven: measured, too small to call</span>
+      <span style={item}><Mark state="notChecked" label="" size={TYPE.small} /> not assessed: the comparison could not be formed</span>
     </MDBox>
   );
 }
@@ -88,16 +92,16 @@ function BandTicks({ verdicts, best }) {
   const x = (c) => PAD + ((c - lo) / (hi - lo)) * (W - 2 * PAD);
   return (
     <svg width={W} height={H} role="img" aria-label="which band centres respond">
-      <line x1={x(lo)} x2={x(hi)} y1={H - 18} y2={H - 18} stroke="#D8D8D8" />
-      {[8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30].map((t) => (
-        <text key={t} x={x(t)} y={H - 3} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="middle">{t}</text>
+      <line x1={x(lo)} x2={x(hi)} y1={H - 18} y2={H - 18} stroke={T.graphic} />
+      {[10, 15, 20, 25, 30].map((t) => (
+        <text key={t} x={x(t)} y={H - 3} {...SVG_TEXT} textAnchor="middle">{t}</text>
       ))}
       {keys.map((c) => {
         const responds = String(verdicts[c] || verdicts[String(c)] || "").toUpperCase().startsWith("RESPONDS");
         const isBest = best != null && Math.abs(Number(best) - c) < 1e-9;
         return responds
-          ? <circle key={c} cx={x(c)} cy={H - 30} r={isBest ? 6 : 4} fill={PAL.pass} stroke={isBest ? "#1A1A1A" : "none"} strokeWidth="1.2" />
-          : <rect key={c} x={x(c) - 4} y={H - 34} width={8} height={8} fill={PAL.fail} />;
+          ? <circle key={c} cx={x(c)} cy={H - 30} r={isBest ? 6 : 4} fill={T.ink} stroke={isBest ? T.surface : "none"} strokeWidth="1" />
+          : <circle key={c} cx={x(c)} cy={H - 30} r={4} fill={T.surface} stroke={T.graphic} strokeWidth="1.5" />;
       })}
     </svg>
   );
@@ -125,7 +129,7 @@ function Numbers({ c, lfp }) {
           <MDBox display="flex" flexWrap="wrap" alignItems="center" rowGap={0.6}>
             {["Left", "Right"].filter((h) => per[h]).map((h) => (
               <MDBox key={h} display="inline-flex" alignItems="center" mr={3}>
-                <span style={{ ...MONO, fontWeight: 600, marginRight: 10 }}>{h[0]}</span>
+                <span style={{ ...MONO, fontWeight: WEIGHT.strong, marginRight: 10 }}>{h[0]}</span>
                 <Sub ok={per[h].rate_resolved === true ? true : (per[h].rate_resolved === false ? false : null)} text="rate" />
                 <Sub ok={per[h].pw_resolved === true ? true : (per[h].pw_resolved === false ? false : null)} text="pulse width" />
               </MDBox>
@@ -161,7 +165,7 @@ function Numbers({ c, lfp }) {
               return (
                 <MDBox key={h} mb={1.2}>
                   <MDBox display="flex" alignItems="baseline" columnGap={1.5} flexWrap="wrap">
-                    <span style={{ ...MONO, fontWeight: 600 }}>{h[0]}</span>
+                    <span style={{ ...MONO, fontWeight: WEIGHT.strong }}>{h[0]}</span>
                     <span style={{ ...MONO, whiteSpace: "nowrap" }}>
                       {b.n_tested
                         ? `${fmtOf(b.n_era_negative_significant, b.n_tested)} fall with current (clinic-visit differences removed) · ${b.n_pain_positive == null ? "rise with pain: not known" : `${fmtOf(b.n_pain_positive, b.n_tested)} rise with pain`} · ${fmtOf(b.n_qualifying, b.n_tested)} do both${Array.isArray(b.qualifying_centers_hz) && b.qualifying_centers_hz.length ? ` (${b.qualifying_centers_hz.map((v) => Number(v)).join(", ")} Hz)` : ""}`
@@ -183,7 +187,7 @@ function Numbers({ c, lfp }) {
                     {sel && sel.selected
                       ? <>read on <span style={{ whiteSpace: "nowrap" }}>{contactLabel({ display_short: sel.selected_display_short }, k ? k[0] : null)}</span>
                         {sel.pinned_rate_hz != null ? <> at <span style={{ whiteSpace: "nowrap" }}>{fmtHz(sel.pinned_rate_hz)}</span></> : null}
-                        {b.laterality === "contralateral" ? <span style={{ color: PAL.warnText }}> · a contact on the other side (none on this side passed)</span> : null}</>
+                        {b.laterality === "contralateral" ? <span style={{ color: T.caution }}> · a contact on the other side (none on this side passed)</span> : null}</>
                       : (b.reason || (sel && sel.selection_note) || "no sensing contact could be used on this side")}
                   </MDTypography>
                 </MDBox>
@@ -253,7 +257,7 @@ function Numbers({ c, lfp }) {
               returns "not assessed" and names both numbers here; a reader must not take the
               4.8 mA as the plan asking for an unsafe current. */}
           {Object.entries(ev.history_above_ceiling || {}).map(([h, v]) => (
-            <span key={h} style={{ ...NOTE, color: PAL.warnText, flexBasis: "100%" }}>
+            <span key={h} style={{ ...NOTE, whiteSpace: "normal", color: T.caution, flexBasis: "100%" }}>
               {`${h[0]}: ${fmtMa(v.delivered_max_mA)} delivered in the past is above today's ${fmtMa(v.ceiling_mA)} ceiling — history, not a proposal; no limit has been proposed yet`}
             </span>
           ))}
@@ -261,7 +265,7 @@ function Numbers({ c, lfp }) {
               every request (decision 166), printed with its n whether the check passes or fails,
               so "does not move with current" is never read without the 15 rows behind it. */}
           {ev.side_effect_vs_current && (
-            <span style={{ ...NOTE, flexBasis: "100%" }}>
+            <span style={{ ...NOTE, whiteSpace: "normal", flexBasis: "100%" }}>
               {ev.side_effect_vs_current.sentence
                 ? `Side effects versus current: ${ev.side_effect_vs_current.sentence}`
                 : `Side effects versus current: not assessable${ev.side_effect_vs_current.reason ? ` (${ev.side_effect_vs_current.reason})` : ""}`}
@@ -283,8 +287,8 @@ export default function ClosedLoopChecks({ plan }) {
   const nNot = Array.isArray(gate.not_assessed) ? gate.not_assessed.length : conditions.filter((c) => verdictState(c) === null).length;
   const n = num(gate.n_conditions) ?? conditions.length;
   const passed = gate.passed === true;
-  // Text inks of the pass and fail roles (4.5:1 or more on white); the fill inks read 3.4 and 3.9:1.
-  const color = passed ? (PAL.passText || PAL.pass) : (conditions.length ? (PAL.failText || PAL.fail) : PAL.neutral);
+  // The answer in ink when it passes, in red with ✕ when a check blocks, grey when nothing ran.
+  const color = passed ? T.ink : (conditions.length ? T.refused : T.notChecked);
   // The card's title asks "Closed loop: may it start on the frozen setting?"; the headline answers
   // it. The page's status line says "closed loop cannot start" in words; this says why, in counts.
   const headline = !conditions.length
@@ -295,15 +299,15 @@ export default function ClosedLoopChecks({ plan }) {
   return (
     <MDBox>
       <MDBox display="flex" alignItems="center" gap={1}>
-        {conditions.length ? (passed ? <TickGlyph label="may start" size={20} /> : <CrossGlyph label="may not start" size={20} />) : null}
-        <MDTypography variant="h6" sx={{ fontSize: TYPE.section, color }}>{headline}</MDTypography>
+        {conditions.length ? (passed ? <Mark state="pass" label="may start" size={TYPE.lead} /> : <Mark state="refused" label="may not start" size={TYPE.lead} />) : null}
+        <MDTypography variant="h6" component="p" sx={{ fontSize: TYPE.lead, fontWeight: WEIGHT.strong, color, m: 0 }}>{headline}</MDTypography>
       </MDBox>
       {/* The two readiness cards stay two cards (panel C item 5). The sentence that pointed from
           here to the readiness table is gone (the design review of 2026-09-26): it said nothing
           but where another card is. */}
       {/* Two columns: the check (symbol, name, folded sentence) and its evidence. */}
-      <MDBox mt={1.5} sx={{ display: "grid", gridTemplateColumns: "minmax(300px, 1fr) minmax(360px, 1.5fr)",
-        columnGap: "28px", rowGap: "22px", alignItems: "start" }}>
+      <MDBox mt={2} sx={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(300px, 1.5fr)",
+        columnGap: "32px", rowGap: "24px", alignItems: "start" }}>
         {conditions.map((c, i) => {
           const st = verdictState(c);
           return [
@@ -311,12 +315,12 @@ export default function ClosedLoopChecks({ plan }) {
               <MDBox pt={0.2} sx={{ flex: "0 0 auto" }}><Glyph state={st} /></MDBox>
               <MDBox>
                 <MDTypography variant="caption" component="div" title={c.name}
-                  sx={{ fontSize: TYPE.num, fontWeight: 700, color: "#2A2A2A", lineHeight: 1.35 }}>
+                  sx={{ fontSize: TYPE.body, fontWeight: WEIGHT.strong, color: T.ink, lineHeight: 1.5 }}>
                   {CHECK_LABELS[c.name] || String(c.name || "").replace(/_/g, " ")}
-                  {c.overridden ? <span style={{ color: PAL.warnText, marginLeft: 6 }}>[overridden]</span> : null}
+                  {c.overridden ? <span style={{ color: T.caution, marginLeft: 6 }}>[overridden]</span> : null}
                 </MDTypography>
-                <SizedFold show="Sentence" hide="Hide" dense mt={0.3}>
-                  <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body }}>
+                <SizedFold show="The check, in one sentence" hide="Hide" dense mt={0.3}>
+                  <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2 }}>
                     {c.detail || "no reason was returned"}
                   </MDTypography>
                 </SizedFold>

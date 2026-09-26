@@ -55,7 +55,7 @@ describe("the current-map card says the current-and-pain association does not ho
   it("does not hide it behind the descriptions button", () => {
     rtlRender(wrap(<CurrentMapCard plan={plan} />));
     // the button is there and still closed; the caveat is readable anyway
-    expect(screen.getByText(/description/i)).toBeTruthy();
+    expect(screen.getByText(/Show explanations/i)).toBeTruthy();   // PIN CHANGED 2026-09-26: the control reads "Show explanations" (SPEC.md section 5.3)
     expect(screen.getByTestId("current-pain-caveat")).toBeVisible();
   });
 });

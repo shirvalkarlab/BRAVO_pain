@@ -35,12 +35,12 @@ const plan = response.two_stage;
 describe("the pulse-width pairing sentence (S5)", () => {
   it("names the pairings fitted in both streams and in one only, from the fitted strata", () => {
     const s = pulseWidthPairingSentence(plan.stage1.rate_strata, plan.stage1.rate_strata_clinic);
-    expect(s).toBe("Pulse-width pairings fitted: both streams 60/160 µs; REDCap only 140/180 µs; sheets only 100/100 µs.");
+    expect(s).toBe("Pulse-width pairings fitted: both streams 60/160 µs; home surveys only 140/180 µs; clinic sheets only 100/100 µs.");   // PIN CHANGED 2026-09-26: "REDCap" is "home surveys" in page text (SPEC.md section 6)
   });
   it("says so when the two streams share no pairing", () => {
     const s = pulseWidthPairingSentence(
       [{ pw_us_left: 60, pw_us_right: 160, fitted: true }], [{ pw_us_left: 100, pw_us_right: 100, fitted: true }]);
-    expect(s).toBe("Pulse-width pairings fitted: none in both streams; REDCap only 60/160 µs; sheets only 100/100 µs.");
+    expect(s).toBe("Pulse-width pairings fitted: none in both streams; home surveys only 60/160 µs; clinic sheets only 100/100 µs.");   // PIN CHANGED 2026-09-26, as above
   });
 });
 
@@ -53,18 +53,18 @@ describe("the card's prose folds behind one push-button, except the legend", () 
     expect(screen.getByText(/Each square below is one stimulation rate/)).toBeInTheDocument(); // PIN CHANGED 2026-09-26 (the design review, the PI's "yes to all six"): "rate", never "speed"
     expect(screen.queryByText(/Pulse-width pairings fitted:/)).toBeNull();
     expect(screen.queryByText(/These scores come from the lab's testing workbooks/)).toBeNull();
-    const btn = screen.getByRole("button", { name: /Expand descriptions/ });
+    const btn = screen.getByRole("button", { name: /Show explanations/ });   // PIN CHANGED 2026-09-26: the control is the text link "Show explanations" (SPEC.md section 5.3)
     fireEvent.click(btn);
     expect(screen.getByText(/Each square below is one stimulation rate/)).toBeInTheDocument(); // PIN CHANGED 2026-09-26 (the design review, the PI's "yes to all six"): "rate", never "speed"
     expect(screen.getByText(/Pulse-width pairings fitted: both streams 60\/160 µs/)).toBeInTheDocument();
     expect(screen.getByText(/These scores come from the lab's testing workbooks/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Collapse descriptions/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Hide explanations/ })).toBeInTheDocument();   // PIN CHANGED 2026-09-26, as above
   });
   it("keeps the values visible while folded: the per-rate lines and the three checks", () => {
     rtlRender(wrap(<CurrentMapCard plan={plan} />));
     // PIN CHANGED 2026-09-26 (the design review, the PI's "yes to all six"): "stretches", never "epochs"
     expect(screen.getAllByText(/stretches · \d+ reports/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/Where the two currents have been tried/)).toBeInTheDocument();
+    expect(screen.getByText(/Where have currents been tried, and what does the fit predict\?/)).toBeInTheDocument();   // PIN CHANGED 2026-09-26: the title is the section question (SPEC.md section 5.3)
   });
 });
 
@@ -91,7 +91,7 @@ describe("absolute numbers on the squares, colour centred on today (the PI, 2026
   // midpoint that means "today" is light grey, not yellow.
   it("the intro says light grey is today's predicted rating, not that zero is the score", () => {
     rtlRender(wrap(<CurrentMapCard plan={plan} />));
-    fireEvent.click(screen.getByRole("button", { name: /Expand descriptions/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Show explanations/ }));   // PIN CHANGED 2026-09-26, as above
     expect(screen.getAllByText(/light grey is the predicted rating at the setting programmed today/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText(/zero, on the colour scale/)).toBeNull();
   });

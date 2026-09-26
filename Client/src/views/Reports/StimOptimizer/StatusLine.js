@@ -26,28 +26,39 @@
  *   - decision 253's check on that same map: "moves between blocks of time" becomes a yellow
  *     bullet carrying decision 294's dagger, with the dagger's note in the fold.
  * A field the response does not carry produces no bullet: nothing is invented.
+ *
+ * THE MINIMALIST REDESIGN OF 2026-09-26 (SPEC.md sections 2.3, 4 and 5.3): three states, never two.
+ * A check that blocks is red with ✕; a caution (more data needed, a map that moves over time) is
+ * amber with ▲; a check that could not run is grey with ○ -- it still blocks, but it is counted
+ * apart and never drawn as a pass. At most five items are shown: every ✕ and ▲ first, then the ○
+ * items, and when these would overflow they are counted in one item ("3 checks not run"), each
+ * named in the fold underneath. The glyph key reads "✕ blocks · ▲ needs more data or caution ·
+ * ○ not checked".
  */
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import { num, fmtHz } from "./stimFormat";
-import { TYPE, SMALL, SizedFold } from "./typeScale";
+import { T, TYPE, WEIGHT, STATE, SizedFold } from "./typeScale";
 import { sideVerdicts } from "./DecisionStrip";
 import { verdictState } from "./ClosedLoopChecks";
 import {
   BLOCK_OF_TIME_NOTE, BLOCK_OF_TIME_SYMBOL, blockOfTimeState, rateRowForSetting,
 } from "./blockOfTime";
 
-/** The glyph each kind of bullet carries beside its colour. */
-export const STATUS_GLYPH = { red: "●", yellow: "▲" };
+/** The glyph each kind of item carries beside its colour: red blocks, yellow is a caution, grey
+ *  could not be checked. */
+export const STATUS_GLYPH = { red: STATE.refused.glyph, yellow: STATE.caution.glyph, grey: STATE.notChecked.glyph };
 
-/** Pale fill, glyph ink and the word a screen reader hears, per kind (minimalist-ui's muted tag
- *  pairs: the glyph measures 6.3:1 on its red fill and 4.6:1 on its yellow one; the words are
- *  near-black). */
+/** The token state, and the word a screen reader hears, per kind. */
 const KIND = {
-  red: { fill: "#FDEBEC", ink: "#9F2F2D", word: "blocked" },
-  yellow: { fill: "#FBF3DB", ink: "#956400", word: "not evaluated" },
+  red: { state: STATE.refused, word: "blocked" },
+  yellow: { state: STATE.caution, word: "caution" },
+  grey: { state: STATE.notChecked, word: "not checked" },
 };
+
+/** At most this many items in the open (SPEC.md section 4, rule 1). */
+export const MAX_ITEMS = 5;
 
 /** Short names, five words or fewer, for a check that blocks and one that was not assessed. */
 const RED_NAME = {
@@ -59,7 +70,7 @@ const RED_NAME = {
   adaptive_band_passes_lfp_response: () => "No band moves with current",
   amplitude_limits_inside_envelope_and_under_ceiling: () => "Current limits above ceiling",
 };
-const YELLOW_NAME = {
+const GREY_NAME = {
   rate_at_or_above_adaptive_minimum: () => "Rate check not assessed",
   openloop_choice_resolved: () => "Setting comparison not assessed",
   adaptive_band_passes_lfp_response: () => "Band response not assessed",
@@ -118,7 +129,7 @@ export function statusSummary(data, plan) {
   conditions.forEach((c) => {
     const st = verdictState(c);
     if (st === false && RED_NAME[c.name]) add("red", RED_NAME[c.name](c), c.detail);
-    if (st === null && YELLOW_NAME[c.name]) add("yellow", YELLOW_NAME[c.name](c), c.detail);
+    if (st === null && GREY_NAME[c.name]) add("grey", GREY_NAME[c.name](c), c.detail);
   });
   // A pulse-width choice never put to the data, on every side.
   const choice = conditions.find((c) => c && c.name === "openloop_choice_resolved");
@@ -128,7 +139,7 @@ export function statusSummary(data, plan) {
     if (sides.length && sides.every((p) => p.pw_resolved === null || p.pw_resolved === undefined)) {
       const why = sides.flatMap((p) => (Array.isArray(p.reasons) ? p.reasons : []))
         .find((t) => /pulse-width choice is NOT ASSESSED/i.test(String(t)));
-      add("yellow", "Pulse width not assessed", why || null);
+      add("grey", "Pulse width not assessed", why || null);
     }
   }
 
@@ -150,53 +161,92 @@ export function statusSummary(data, plan) {
     add("yellow", "Pain map moves over time", BLOCK_OF_TIME_NOTE, { dagger: true });
   }
 
-  // Red first, each kind in the order found.
-  const ordered = [...bullets.filter((b) => b.kind === "red"), ...bullets.filter((b) => b.kind === "yellow")];
+  // Red first, then yellow, then grey, each kind in the order found.
+  const ordered = ["red", "yellow", "grey"].flatMap((k) => bullets.filter((b) => b.kind === k));
   return { headline, bullets: ordered };
+}
+
+/**
+ * The items drawn in the open: every red and yellow one, then the grey ones while there is room;
+ * when the grey ones would overflow, one item counts them ("3 checks not run"). Nothing is
+ * dropped: each is named in the fold underneath.
+ */
+export function shownItems(bullets, max = MAX_ITEMS) {
+  const strong = bullets.filter((b) => b.kind !== "grey");
+  const grey = bullets.filter((b) => b.kind === "grey");
+  const room = Math.max(0, max - strong.length);
+  if (grey.length <= room) return [...strong, ...grey];
+  const keep = Math.max(0, room - 1);
+  const rest = grey.slice(keep);
+  return [...strong, ...grey.slice(0, keep),
+    { kind: "grey", text: `${rest.length} checks not run`, detail: null, counted: rest.map((b) => b.text) }];
 }
 
 function Bullet({ b }) {
   const k = KIND[b.kind];
+  const label = b.counted ? `${b.text}: ${b.counted.join(", ")}` : b.text;
   return (
-    <MDBox component="li" data-testid="status-bullet" data-kind={b.kind} aria-label={`${k.word}: ${b.text}`}
-      sx={{ display: "inline-flex", alignItems: "center", gap: 0.7, px: 1, py: 0.4, borderRadius: "4px",
-        backgroundColor: k.fill, listStyle: "none" }}>
-      <span data-testid="status-glyph" aria-hidden="true" style={{ color: k.ink, fontSize: 13, lineHeight: 1 }}>
+    <MDBox component="li" data-testid="status-bullet" data-kind={b.kind} aria-label={`${k.word}: ${label}`}
+      sx={{ display: "inline-flex", alignItems: "baseline", gap: 0.75, listStyle: "none" }}>
+      <span data-testid="status-glyph" aria-hidden="true"
+        style={{ color: k.state.ink, fontSize: TYPE.body, fontWeight: WEIGHT.strong, lineHeight: 1 }}>
         {STATUS_GLYPH[b.kind]}
       </span>
-      <span data-testid="status-text" style={{ color: "#1A1A1A", fontSize: TYPE.body, fontWeight: 600, whiteSpace: "nowrap" }}>
+      <span data-testid="status-text" style={{ color: k.state.ink, fontSize: TYPE.body,
+        fontWeight: b.kind === "grey" ? WEIGHT.regular : WEIGHT.strong, whiteSpace: "nowrap" }}>
         {b.text}
-        {b.dagger ? <sup style={{ color: k.ink, fontWeight: 700, marginLeft: 2 }}>{BLOCK_OF_TIME_SYMBOL}</sup> : null}
+        {b.dagger ? <sup style={{ fontWeight: WEIGHT.strong, marginLeft: 2 }}>{BLOCK_OF_TIME_SYMBOL}</sup> : null}
       </span>
     </MDBox>
   );
 }
 
-export default function StatusLine({ data, plan, planLoading = false }) {
+/** The one-line key of the three glyphs. */
+function GlyphKey() {
+  return (
+    <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.small, color: T.ink3, mt: 1 }}>
+      {["red", "yellow", "grey"].map((k, i) => (
+        <span key={k}>
+          {i > 0 ? " · " : ""}
+          <span aria-hidden="true" style={{ color: KIND[k].state.ink }}>{STATUS_GLYPH[k]}</span>
+          {` ${{ red: "blocks", yellow: "needs more data or caution", grey: "not checked" }[k]}`}
+        </span>
+      ))}
+    </MDTypography>
+  );
+}
+
+/** The status sentence alone, for the page head (22 px, the page's answer). */
+export function StatusSentence({ data, plan, planLoading = false }) {
   const s = statusSummary(data, plan);
+  return planLoading && !plan ? "Comparing with today's setting; the plan is still being computed." : s.headline;
+}
+
+/** The status list, its key and the fold naming what each item rests on. */
+export default function StatusLine({ data, plan, planLoading = false, showHeadline = true }) {
+  const s = statusSummary(data, plan);
+  const items = shownItems(s.bullets);
   const withDetail = s.bullets.filter((b) => b.detail);
   return (
     <MDBox data-testid="status-line">
-      <MDTypography variant="h6" component="div" sx={{ fontSize: TYPE.headline, color: "#1A1A1A", lineHeight: 1.3 }}>
-        {planLoading && !plan ? "Comparing with today's setting; the plan is still being computed." : s.headline}
-      </MDTypography>
-      {s.bullets.length > 0 && (
-        <MDBox component="ul" sx={{ display: "flex", flexWrap: "wrap", gap: "8px", m: 0, mt: 1, p: 0 }}>
-          {s.bullets.map((b) => <Bullet key={b.text} b={b} />)}
-        </MDBox>
-      )}
-      {s.bullets.length > 0 && (
-        <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.6 }}>
-          <span aria-hidden="true" style={{ color: KIND.red.ink }}>{STATUS_GLYPH.red}</span> blocks closed loop
-          {"   "}
-          <span aria-hidden="true" style={{ color: KIND.yellow.ink, marginLeft: 10 }}>{STATUS_GLYPH.yellow}</span> not evaluated
+      {showHeadline && (
+        <MDTypography variant="h6" component="p" role="status"
+          sx={{ fontSize: TYPE.headline, lineHeight: "29px", fontWeight: WEIGHT.strong, color: T.ink, m: 0 }}>
+          {planLoading && !plan ? "Comparing with today's setting; the plan is still being computed." : s.headline}
         </MDTypography>
       )}
+      {items.length > 0 && (
+        <MDBox component="ul" aria-label="Status"
+          sx={{ display: "flex", flexWrap: "wrap", columnGap: "24px", rowGap: "8px", m: 0, mt: 1.5, p: 0 }}>
+          {items.map((b) => <Bullet key={b.text} b={b} />)}
+        </MDBox>
+      )}
+      {items.length > 0 && <GlyphKey />}
       {withDetail.length > 0 && (
         <SizedFold show="What each item rests on" hide="Hide">
           <MDBox component="dl" data-testid="status-details"
-            sx={{ m: 0, "& dt": { fontSize: TYPE.small, fontWeight: 700, color: "#1A1A1A", mt: 0.6 },
-              "& dd": { m: 0, fontSize: TYPE.small, lineHeight: 1.4, color: "#3E3E3E" } }}>
+            sx={{ m: 0, "& dt": { fontSize: TYPE.body, fontWeight: WEIGHT.strong, color: T.ink, mt: 1 },
+              "& dd": { m: 0, fontSize: TYPE.body, lineHeight: 1.57, color: T.ink2 } }}>
             {withDetail.map((b) => (
               <MDBox key={b.text}>
                 <dt>{`${STATUS_GLYPH[b.kind]} ${b.text}${b.dagger ? ` ${BLOCK_OF_TIME_SYMBOL}` : ""}`}</dt>

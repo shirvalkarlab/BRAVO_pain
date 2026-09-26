@@ -54,7 +54,7 @@ describe("the titration card: the held side above its ceiling", () => {
   it("prints the held current at the ceiling and the server's sentence saying why", () => {
     rtlRender(wrap(<TitrationSessionCard plan={heldAbove(plan)} participantUid={UID} />));
     const t = document.body.textContent;
-    expect(t).toMatch(/left's ladder holds right at4\.5[\s ]mA/);
+    expect(t).toMatch(/left's ladder holds right at4\.5[\s ]mA/i);   // PIN CHANGED 2026-09-26: the header labels are sentence case (SPEC.md section 2.4); the current is unchanged
     expect(t).toContain("Held at the ceiling: the Right side's current in force, 4.8 mA, is above today's safe ceiling");
     expect(t).toContain("not at the current in force — set it to 4.5 mA before the first step");
     expect(t).not.toContain("in force -- set");

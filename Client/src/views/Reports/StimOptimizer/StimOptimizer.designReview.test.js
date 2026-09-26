@@ -93,8 +93,12 @@ function visibleText(root) {
 const countOf = (text, re) => (text.match(new RegExp(re.source, `${re.flags.replace("g", "")}g`)) || []).length;
 const words = (s) => (String(s).trim().match(/\S+/g) || []).length;
 
-const cardWithTitle = (container, title) => Array.from(container.querySelectorAll(".MuiCard-root"))
+// CHANGED 2026-09-26 (SPEC.md section 5.3): the page's sections are <section> cards built from the
+// shared paper components, not MUI cards; a section is found the same way, by its title's text.
+const CARD_SELECTOR = "section[data-paper='section'], .MuiCard-root";
+const cardWithTitle = (container, title) => Array.from(container.querySelectorAll(CARD_SELECTOR))
   .find((c) => c.textContent.includes(title));
+const NEXT_VISIT = "What must the next visit deliver?";
 
 // ---------------------------------------------------------------------------------------------
 describe("1. the status line", () => {
@@ -103,17 +107,19 @@ describe("1. the status line", () => {
     expect(s.headline).toBe("Keep today's setting on both sides; closed loop cannot start.");
   });
 
-  it("lists the device's refusals and the blocking checks in red, the unevaluated evidence in yellow", () => {
+  // PIN CHANGED 2026-09-26 (SPEC.md section 2.3): a check that could not run is its own state,
+  // grey ○, counted apart from a caution; it is never drawn as a pass.
+  it("lists the refusals and blocking checks in red, the cautions in yellow, the checks not run in grey", () => {
     const s = statusSummary(newResponse, newResponse.two_stage);
-    const red = s.bullets.filter((b) => b.kind === "red").map((b) => b.text);
-    const yellow = s.bullets.filter((b) => b.kind === "yellow").map((b) => b.text);
-    expect(red).toEqual(["No usable sensing pair", "Setting not proven better"]);
-    expect(yellow).toEqual(expect.arrayContaining([
-      "Band response not assessed", "Current limits not proposed", "Pulse width not assessed",
-      "Next visit: 4 pairs short", "Pain map moves over time"]));
-    // red before yellow
+    const of = (k) => s.bullets.filter((b) => b.kind === k).map((b) => b.text);
+    expect(of("red")).toEqual(["No usable sensing pair", "Setting not proven better"]);
+    expect(of("yellow")).toEqual(["Next visit: 4 pairs short", "Pain map moves over time"]);
+    expect(of("grey")).toEqual(expect.arrayContaining([
+      "Band response not assessed", "Current limits not proposed", "Pulse width not assessed"]));
+    // red, then yellow, then grey
     const kinds = s.bullets.map((b) => b.kind);
     expect(kinds.indexOf("yellow")).toBeGreaterThan(kinds.lastIndexOf("red"));
+    expect(kinds.indexOf("grey")).toBeGreaterThan(kinds.lastIndexOf("yellow"));
   });
 
   it("reads the older response without the fields it predates, and invents no bullet", () => {
@@ -123,20 +129,29 @@ describe("1. the status line", () => {
       ["Setting not proven better", "Current limits not proposed", "Pulse width not assessed"]);
   });
 
-  it("every bullet is five words or fewer and carries a glyph as well as a colour", () => {
+  // PIN CHANGED 2026-09-26 (SPEC.md sections 2.3 and 4): three states, not two -- ✕ blocks (red),
+  // ▲ needs more data or caution (amber), ○ not checked (grey) -- and at most five items in the
+  // open, the not-checked ones counted in one item when they would overflow. Nothing is dropped:
+  // every item is still named, and the counted ones are in the item's own accessible name.
+  it("at most five items, each five words or fewer and carrying a glyph as well as a colour", () => {
     const { container } = renderPage(newResponse);
     const bullets = container.querySelectorAll('[data-testid="status-bullet"]');
-    expect(bullets.length).toBe(7);
+    expect(bullets.length).toBe(5);
+    const WORD = { red: /^blocked: /, yellow: /^caution: /, grey: /^not checked: / };
     bullets.forEach((b) => {
       const kind = b.getAttribute("data-kind");
       const glyph = b.querySelector('[data-testid="status-glyph"]');
       expect(glyph.textContent).toBe(STATUS_GLYPH[kind]);
       const label = b.querySelector('[data-testid="status-text"]').textContent.replace("†", "");
       expect(words(label)).toBeLessThanOrEqual(5);
-      expect(b.getAttribute("aria-label")).toMatch(kind === "red" ? /^blocked: / : /^not evaluated: /);
+      expect(b.getAttribute("aria-label")).toMatch(WORD[kind]);
     });
-    expect(STATUS_GLYPH.red).toBe("●");
+    const counted = Array.from(bullets).find((b) => /checks not run/.test(b.textContent));
+    expect(counted.getAttribute("aria-label")).toBe(
+      "not checked: 3 checks not run: Band response not assessed, Current limits not proposed, Pulse width not assessed");
+    expect(STATUS_GLYPH.red).toBe("✕");
     expect(STATUS_GLYPH.yellow).toBe("▲");
+    expect(STATUS_GLYPH.grey).toBe("○");
   });
 
   it("keeps the decision-294 dagger on its bullet, and its note in the folded detail", () => {
@@ -149,11 +164,14 @@ describe("1. the status line", () => {
     expect(isFolded(detail)).toBe(true);
   });
 
-  it("sits above the readiness card and below the recompute bar", () => {
+  // PIN CHANGED 2026-09-26 (SPEC.md section 1, principle 1): the page opens with its answer, so
+  // the status sentence comes before the recompute bar (the bar itself is unchanged).
+  it("opens the page, above the recompute bar and the readiness card", () => {
     const { container } = renderPage(newResponse);
     const t = container.textContent;
     const status = t.indexOf("Keep today's setting on both sides");
-    expect(status).toBeGreaterThan(t.indexOf("recompute bar"));
+    expect(status).toBeGreaterThan(-1);
+    expect(status).toBeLessThan(t.indexOf("recompute bar"));
     expect(status).toBeLessThan(t.indexOf("contact-and-rate combinations usable for closed loop"));
   });
 });
@@ -188,7 +206,7 @@ describe("2. folds closed on load", () => {
   });
 
   it("the clinic-sheet table and the home schedule, both inside the next-visit card", () => {
-    const card = cardWithTitle(container, "Titration session to run next");
+    const card = cardWithTitle(container, NEXT_VISIT);
     const sheet = byTestId("clinic-sheet-tables");
     const home = byTestId("home-schedule");
     expect(card.contains(sheet)).toBe(true);
@@ -196,8 +214,8 @@ describe("2. folds closed on load", () => {
     expect(isFolded(sheet)).toBe(true);
     expect(isFolded(home.querySelector("table"))).toBe(true);
     // the home schedule is no longer a card of its own
-    const titled = Array.from(container.querySelectorAll(".MuiCard-root"))
-      .filter((c) => c.textContent.includes("Home programming schedule"));
+    const titled = Array.from(container.querySelectorAll(CARD_SELECTOR))
+      .filter((c) => c.textContent.includes("Home programming schedule"));   // (CARD_SELECTOR below)
     expect(titled).toHaveLength(1);
     expect(titled[0]).toBe(card);
   });
@@ -231,7 +249,7 @@ describe("3. nothing said twice in the open", () => {
       const VALUE = /ceiling\s*(?:[LR]\s*)?\d|\d\s?mA ceiling/i;
       const { container } = renderPage(fx);
       const v = visibleText(container);
-      const next = visibleText(cardWithTitle(container, "Titration session to run next"));
+      const next = visibleText(cardWithTitle(container, NEXT_VISIT));
       expect(countOf(next, VALUE)).toBe(1);
       // the only other open statement is the check's history line (decision 168, kept open)
       const others = countOf(v, VALUE) - 1;

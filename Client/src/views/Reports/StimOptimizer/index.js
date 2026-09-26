@@ -31,49 +31,77 @@
 * bar folds (this page wraps it; RecomputeBar.js and CacheStatusLine.js are not edited); the home
 * schedule is a section of the next-visit card (amends the two-cards ruling of 2026-09-12); the
 * control analyses fold; the loading message is one line.
+*
+* THE MINIMALIST REDESIGN OF 2026-09-26 (`artifacts/design_2026-09-26_minimalist_redesign/SPEC.md`
+* section 5.3): the page opens with its answer. The title is its question ("Should today's setting
+* change, and can closed loop start?"); one grey line names the pain score; the status sentence;
+* the status list (✕ blocks, ▲ needs more data or caution, ○ not checked, at most five items); the
+* safe current ceiling, read from the response and never typed here; a slim contents row. Then the
+* recompute bar (the PI's file, unchanged) and four sections, each a question: is any setting proven
+* better than today's; where have currents been tried; can closed loop start; what must the next
+* visit deliver. The evidence base is a quiet footer; the research checks fold. Colours, sizes and
+* spacing come from the shared tokens; the page no longer borrows the Closed-Loop page's palette.
 */
 
-import LegibleText from "views/Reports/legibleText";
 import { useParams } from "react-router-dom";
-
-import { Card } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
-import MDAlert from "components/MDAlert";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
 import { SessionController } from "database/session-control";
 import { MODULES } from "database/resultCache";
 import { useCachedResult } from "database/useCachedResult";
 
+import { LAYOUT } from "assets/theme/base/tokens";
 import RecomputeBar from "views/Reports/RecomputeBar";
 import CacheStatusLine from "views/Reports/CacheStatusLine";
 import { recomputeSlots, STIM_OPTIMIZER_SLOTS } from "views/Reports/moduleCacheKeys";
+import Section from "views/Reports/paper/Section";
+import CeilingLine from "views/Reports/paper/CeilingLine";
+import { painScoreLabel } from "views/Reports/painScores";
 // The two-stage plan (open loop, then the check that decides whether closed loop may start, then
 // closed loop) is a second request to the same endpoint, fetched after this page's own response
 // has arrived and cached in its own slot; see useTwoStagePlan.js for why.
 import useTwoStagePlan from "./useTwoStagePlan";
 import TwoStagePlanCard from "./TwoStagePlanCard";
-// The (left current, right current) surface behind decision 158's honest-current rule, and the
-// home titration schedule that fills the record in where that rule fails (2026-09-14).
+// The (left current, right current) surface behind the honest-current rule, and the home
+// titration schedule that fills the record in where that rule fails (2026-09-14).
 import CurrentMapCard from "./CurrentMapCard";
 import CurrentMapScheduleCard from "./CurrentMapScheduleCard";
-// The titration session to run next (2026-09-12 evening: open item 30 and the 20 s post-ramp
-// margin of decision 144, joined as one recommendation), read from `data.titration_plan`.
+// The titration session to run next, read from `data.titration_plan`.
 import TitrationSessionCard from "./TitrationSessionCard";
-// The decision strip: the setting programmed now beside the setting the joint search prefers,
-// per side, with the gain drawn against its own uncertainty (2026-09-12, the page redesign,
-// phase 1; unaffected by the 2026-09-14 joint redesign -- it already reads the two-stage plan).
+// The decision: the setting programmed now beside the setting the joint search suggests, per side,
+// with the gain drawn against its own uncertainty.
 import DecisionStrip, { decisionHeadline } from "./DecisionStrip";
-// The sensing evidence behind closed-loop readiness, contacts in Medtronic form, reasons folded
-// (redesign phase 3).
+// The sensing evidence behind closed-loop readiness.
 import SensingEvidenceTable from "./SensingEvidenceTable";
-import { TYPE, SizedFold } from "./typeScale";
-// The page's status line: one sentence, red and yellow bullets, the detail folded (2026-09-26).
-import StatusLine from "./StatusLine";
-import PAL from "views/Reports/ClosedLoopSim/palette";
+import { T, TYPE, WEIGHT, SizedFold } from "./typeScale";
+// The page's status sentence and list: the answer, then why, in ✕ ▲ ○ items of five words or fewer.
+import StatusLine, { StatusSentence } from "./StatusLine";
+import { ceilingFromResponse } from "./ceiling";
 import { ControlAnalysesSection } from "views/Reports/ControlAnalyses/ControlAnalysesCard";
+
+/** The page's question, its title (SPEC.md section 5.3). */
+export const PAGE_QUESTION = "Should today's setting change, and can closed loop start?";
+
+/** The slim contents row under the status list (SPEC.md section 4, rule 7). */
+const CONTENTS = [
+  ["decision", "Proven better?"],
+  ["current-map", "Currents tried"],
+  ["closed-loop", "Closed loop"],
+  ["next-visit", "Next visit"],
+];
+
+/** The pain score the decision is fitted on, as the page's own label ("Left Leg VAS"). */
+function primaryPainScore(plan) {
+  const st = (plan && plan.stage1) || {};
+  const key = (st.frozen_configuration || {}).primary_item || ((plan && plan.manifest) || {}).primary_item
+    || st.primary_item || null;
+  if (!key) return null;
+  const k = String(key);
+  return painScoreLabel(/_vas$/.test(k) || k === "nrs" || k === "vas" ? k : `${k}_vas`);
+}
 
 /**
  * THE REQUEST THIS VIEW SENDS, WRITTEN OUT IN FULL RATHER THAN LEFT TO THE SERVER'S DEFAULTS.
@@ -135,9 +163,8 @@ export default function StimOptimizer() {
     return (
       <DatabaseLayout>
         <MDBox pt={3} display="flex" alignItems="center" justifyContent="center" gap={2}>
-          {/* One line (the design review of 2026-09-26): it was a 55-word paragraph. */}
-          <MDTypography variant="body2">
-            Loading the settings history and the readiness screen, about 10 s (longer after an ingest).
+          <MDTypography variant="body2" sx={{ fontSize: TYPE.body, color: T.ink2 }}>
+            Loading the settings history and the readiness check, about 10 s (longer after an ingest).
           </MDTypography>
         </MDBox>
       </DatabaseLayout>
@@ -147,140 +174,128 @@ export default function StimOptimizer() {
   if (errorText || !data || data.available === false) {
     return (
       <DatabaseLayout>
-        <MDBox pt={3}>
-          <MDAlert color="warning" dismissible={false}>
-            <MDTypography variant="body2" color="white">
-              No parameter surface could be built.{" "}
-              {errorText || data?.reason || "This participant has no stretches of unchanged settings carrying pain reports."}
-            </MDTypography>
-          </MDAlert>
+        <MDBox pt={3} sx={{ maxWidth: LAYOUT.contentMax, mx: "auto" }}>
+          <MDTypography variant="body2" component="p" sx={{ fontSize: TYPE.lead, color: T.ink }}>
+            {"○ No parameter surface could be built. "}
+            {errorText || data?.reason || "This participant has no stretches of unchanged settings carrying pain reports."}
+          </MDTypography>
         </MDBox>
       </DatabaseLayout>
     );
   }
 
   const dm = data.design_matrix || {};
+  const ceiling = ceilingFromResponse(data, twoStage.data);
+  const painScore = primaryPainScore(twoStage.data);
 
   return (
     <DatabaseLayout>
-      <LegibleText>
-      <MDBox pt={3}>
-        <MDBox display="grid" sx={{ rowGap: "16px" }}>
+      <MDBox pt={3} pb={8} sx={{ maxWidth: LAYOUT.contentMax, mx: "auto", color: T.ink2 }}>
 
-          {/* The Recompute control comes before the verdict, because whether the verdict was
-              computed under the settings now on the page has to be readable before the verdict is
-              read. Every panel below it is served from memory until it is pressed. */}
-          <MDBox>
-            <RecomputeBar
-              title="stim parameter optimizer"
-              stale={cached.stale}
-              staleReasons={cached.staleReasons}
-              computedAt={cached.computedAt}
-              loading={cached.loading}
-              notKept={cached.notKept}
-              // Both slots: the page's own response and the two-stage plan fetched after it.
-              onRecompute={() => recomputeSlots(participant_uid, STIM_OPTIMIZER_SLOTS)}
-            />
-            {/* When the stored results were built: one click away (the design review of
-                2026-09-26, §4.5, the PI's approval). The line itself is unchanged and shared. */}
-            {data && data.cache_status ? (
-              <MDBox px={1}>
-                <SizedFold show="When the stored results were built" hide="Hide" dense mt={0.2}>
-                  <MDBox data-testid="cache-status-fold-body">
-                    <CacheStatusLine status={data.cache_status} />
-                  </MDBox>
-                </SizedFold>
-              </MDBox>
-            ) : null}
-          </MDBox>
-
-          {/* ---------- 0. the status line: the page's answer in one sentence, and why, in red
-              and yellow bullets of five words or fewer; the detail folded (2026-09-26) ---------- */}
-          <Card>
-            <MDBox p={2}>
-              <StatusLine data={data} plan={twoStage.data} planLoading={twoStage.loading} />
-            </MDBox>
-          </Card>
-
-          {/* THE ORDER, 2026-09-23 (panel C item 5; report C §5.2 with the panel's two corrections):
-              whether closed loop is possible today first, then what the open-loop search prefers,
-              then the record behind that preference, then the next session that would fill it in,
-              then the plan closed loop would start from; the evidence base is a one-line footer
-              because no decision on the page reads it. The two readiness cards stay TWO cards --
-              this table and the four checks inside the plan card -- each pointing at the other
-              (the clinician's correction of the report's proposed merge). */}
-
-          {/* ---------- 1. the sensing evidence behind closed-loop readiness ----------
-              A DIFFERENT question from the decision below it: the optimizer asks which setting
-              relieves pain best; this asks whether any sensed band moves with stimulation current,
-              which is the only lever adaptive mode has. The per-row reasons stay, folded, because a
-              refusal for want of data and a refusal on a measured negative are different clinical
-              conclusions. */}
-          {data.closed_loop && (
-            <Card>
-              <MDBox p={2}>
-                <SensingEvidenceTable closedLoop={data.closed_loop} />
-              </MDBox>
-            </Card>
-          )}
-
-          {/* ---------- 2. the decision: the setting in force beside the joint search's own
-              preference, per side. The title is COMPUTED from the per-side verdicts in the same
-              render (report C §5.3), never a fixed description of the method. ---------- */}
-          <Card>
-            <MDBox p={2}>
-              <MDTypography variant="h6" sx={{ fontSize: TYPE.headline, mb: 1 }}>
-                {decisionHeadline(twoStage.data, data.in_force_by_side || null)}
-              </MDTypography>
-              <DecisionStrip arms={{}} plan={twoStage.data} planLoading={twoStage.loading}
-                planErr={twoStage.err} inForce={data.in_force_by_side || null} />
-            </MDBox>
-          </Card>
-
-          {/* ---------- 3. where the two currents have been tried (decision 158), the evidence
-              behind the decision above and behind the plan card's own current (or its absence) */}
-          {twoStage.data && <CurrentMapCard plan={twoStage.data} />}
-
-          {/* ---------- 4. the next steps, ONE card since 2026-09-26: the session to run in clinic,
-              and inside it, as its second fold, the home schedule that fills the record in (the PI
-              amended his two-cards ruling of 2026-09-12 in the design review) ---------- */}
-          {data.titration_plan && (
-            <TitrationSessionCard plan={data.titration_plan} participantUid={participant_uid}
-              homeSchedule={data.current_map_schedule || null} />
-          )}
-          {/* No titration plan on the response: the home schedule still shows, as its own card. */}
-          {!data.titration_plan && data.current_map_schedule && (
-            <CurrentMapScheduleCard schedule={data.current_map_schedule} />
-          )}
-
-          {/* ---------- 5. the two-stage plan: the joint open-loop search, the four checks that
-              decide whether closed loop may start, and closed loop -- the ONLY recommendation this
-              page makes (PI, 2026-09-14) ---------- */}
-          <TwoStagePlanCard plan={twoStage.data} loading={twoStage.loading} err={twoStage.err} />
-
-          {/* ---------- 6. the evidence base, one line (report C §5.2: no decision reads it) ---------- */}
-          <MDBox px={1} data-testid="evidence-base-footer">
-            <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.small, color: PAL.neutral }}>
-              {`Evidence base: ${dm.n_epochs ?? "—"} stretches of unchanged settings · ${dm.n_reports ?? "—"} pain reports used · `
-                + `${dm.t_first ? String(dm.t_first).slice(0, 10) : "—"} → ${dm.t_last ? String(dm.t_last).slice(0, 10) : "—"} · `
-                + `wash-in ${data.washin_min != null ? `${data.washin_min} min` : "—"} · `
-                + `left currents delivered ${dm.amp_mA_Left_range ? `${Number(dm.amp_mA_Left_range[0]).toFixed(1)}–${Number(dm.amp_mA_Left_range[1]).toFixed(1)} mA` : "—"} · `
-                + `right ${dm.amp_mA_Right_range ? `${Number(dm.amp_mA_Right_range[0]).toFixed(1)}–${Number(dm.amp_mA_Right_range[1]).toFixed(1)} mA` : "—"}. `
-                + "A stretch is one continuous exposure to one setting; reports inside the wash-in are excluded."}
+        {/* ---------- how the page opens (SPEC.md section 4, rule 1): the question, the pain score,
+            the answer, why (at most five items, each with its glyph), the safe ceiling read from
+            the response, and the contents row. Nothing in the head is folded. ---------- */}
+        <MDBox component="header" data-testid="page-head" sx={{ mb: 4 }}>
+          <MDTypography variant="h1" sx={{ fontSize: TYPE.section, lineHeight: "25px", fontWeight: WEIGHT.strong, color: T.ink, m: 0 }}>
+            {PAGE_QUESTION}
+          </MDTypography>
+          {painScore ? (
+            <MDTypography component="p" sx={{ fontSize: TYPE.small, lineHeight: "18px", color: T.ink3, mt: 0.5, mb: 0 }}>
+              {`pain score ${painScore}`}
             </MDTypography>
+          ) : null}
+          <MDTypography component="p" role="status" data-testid="status-sentence"
+            sx={{ fontSize: TYPE.headline, lineHeight: "29px", fontWeight: WEIGHT.strong, color: T.ink, mt: 2, mb: 0 }}>
+            <StatusSentence data={data} plan={twoStage.data} planLoading={twoStage.loading} />
+          </MDTypography>
+          <StatusLine data={data} plan={twoStage.data} planLoading={twoStage.loading} showHeadline={false} />
+          <MDBox mt={1.5}>
+            <CeilingLine leftMa={ceiling.leftMa} rightMa={ceiling.rightMa} />
           </MDBox>
-
-          {/* ---------- 7. control analyses: saved, dated checks run offline (the PI, 2026-09-24);
-              they feed nothing above ---------- */}
-          {/* Folded by default (the design review of 2026-09-26, S8); still mounted, so it loads. */}
-          <MDBox px={1}>
-            <SizedFold show="Research checks, saved offline (control analyses)" hide="Hide the research checks">
-              <ControlAnalysesSection participantUid={participant_uid} page="stim_optimizer" />
-            </SizedFold>
+          <MDBox component="nav" aria-label="Contents" mt={2}
+            sx={{ display: "flex", flexWrap: "wrap", columnGap: "16px", rowGap: "4px", fontSize: TYPE.body }}>
+            {CONTENTS.map(([id, label], i) => (
+              <span key={id}>
+                {i > 0 ? <span aria-hidden="true" style={{ color: T.ink3, marginRight: 16 }}>·</span> : null}
+                <a href={`#${id}`} style={{ color: T.accent, textDecoration: "none" }}>{label}</a>
+              </span>
+            ))}
           </MDBox>
         </MDBox>
+
+        {/* The Recompute control (the PI's own file, unchanged): every section below is served from
+            memory until it is pressed. When the stored results were built: one click away. */}
+        <MDBox mb={4}>
+          <RecomputeBar
+            title="stim parameter optimizer"
+            stale={cached.stale}
+            staleReasons={cached.staleReasons}
+            computedAt={cached.computedAt}
+            loading={cached.loading}
+            notKept={cached.notKept}
+            // Both slots: the page's own response and the two-stage plan fetched after it.
+            onRecompute={() => recomputeSlots(participant_uid, STIM_OPTIMIZER_SLOTS)}
+          />
+          {data && data.cache_status ? (
+            <SizedFold show="When the stored results were built" hide="Hide" dense mt={0.5}>
+              <MDBox data-testid="cache-status-fold-body">
+                <CacheStatusLine status={data.cache_status} />
+              </MDBox>
+            </SizedFold>
+          ) : null}
+        </MDBox>
+
+        {/* ---------- 1. is any setting proven better than today's? The answer is COMPUTED from the
+            per-side verdicts in the same render, never a fixed description of the method. -------- */}
+        <Section id="decision" question="Is any setting proven better than today's?"
+          answer={`${decisionHeadline(twoStage.data, data.in_force_by_side || null)}.`}>
+          <DecisionStrip arms={{}} plan={twoStage.data} planLoading={twoStage.loading}
+            planErr={twoStage.err} inForce={data.in_force_by_side || null} />
+        </Section>
+
+        {/* ---------- 2. where have currents been tried, and what does the fit predict? ---------- */}
+        {twoStage.data && <CurrentMapCard plan={twoStage.data} />}
+
+        {/* ---------- 3. can closed loop start? The allowed sensing pairs as sentence blocks, the
+            other combinations folded, then the four checks and what closed loop ruled out. ---------- */}
+        <Section id="closed-loop" question="Can closed loop start?">
+          {data.closed_loop && <SensingEvidenceTable closedLoop={data.closed_loop} />}
+          <MDBox mt={3}>
+            <TwoStagePlanCard plan={twoStage.data} loading={twoStage.loading} err={twoStage.err} />
+          </MDBox>
+        </Section>
+
+        {/* ---------- 4. what must the next visit deliver? The session to run in clinic, and the
+            home schedule inside it (the PI amended his two-cards ruling on 2026-09-26). ---------- */}
+        {data.titration_plan && (
+          <TitrationSessionCard plan={data.titration_plan} participantUid={participant_uid}
+            homeSchedule={data.current_map_schedule || null} />
+        )}
+        {/* No titration plan on the response: the home schedule still shows, as its own section. */}
+        {!data.titration_plan && data.current_map_schedule && (
+          <Section id="next-visit" question="What must the next visit deliver?">
+            <CurrentMapScheduleCard schedule={data.current_map_schedule} />
+          </Section>
+        )}
+
+        {/* ---------- the evidence base, a quiet footer (no decision on the page reads it) ---------- */}
+        <MDBox data-testid="evidence-base-footer" mt={2}>
+          <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.small, lineHeight: "18px", color: T.ink3 }}>
+            {`Evidence base: ${dm.n_epochs ?? "—"} stretches of unchanged settings · ${dm.n_reports ?? "—"} pain reports used · `
+              + `${dm.t_first ? String(dm.t_first).slice(0, 10) : "—"} → ${dm.t_last ? String(dm.t_last).slice(0, 10) : "—"} · `
+              + `ratings in the first ${data.washin_min != null ? `${data.washin_min} min` : "—"} after a setting change left out · `
+              + `left currents delivered ${dm.amp_mA_Left_range ? `${Number(dm.amp_mA_Left_range[0]).toFixed(1)}–${Number(dm.amp_mA_Left_range[1]).toFixed(1)} mA` : "—"} · `
+              + `right ${dm.amp_mA_Right_range ? `${Number(dm.amp_mA_Right_range[0]).toFixed(1)}–${Number(dm.amp_mA_Right_range[1]).toFixed(1)} mA` : "—"} (history, not a proposal). `
+              + "A stretch is one continuous exposure to one setting."}
+          </MDTypography>
+        </MDBox>
+
+        {/* ---------- the research checks: saved, dated, run offline; they feed nothing above.
+            Folded, still mounted, so it loads. ---------- */}
+        <SizedFold show="Checks against chance and against the current (run offline)" hide="Hide the research checks" mt={3}>
+          <ControlAnalysesSection participantUid={participant_uid} page="stim_optimizer" />
+        </SizedFold>
       </MDBox>
-      </LegibleText>
     </DatabaseLayout>
   );
 }

@@ -12,19 +12,25 @@
  * ruling of 2026-09-12 in the design review): `HomeScheduleSection` prints its heading and one line
  * in the open and folds the rest (the table, the reasons, what the record already holds). The
  * ceiling is not repeated here; the next-visit card's header states it once.
+ *
+ * THE MINIMALIST REDESIGN OF 2026-09-26 (SPEC.md section 5.3, §4): the schedule is a part of the
+ * next-visit section below a hairline, its heading a 14 px sub-heading; the "In force, above
+ * today's ceiling" line stays in the open in the refusal red with ✕; the table's headers are
+ * sentence case; a safe step is ✓ in ink and an unsafe one ✕ in red. Colours and sizes from the
+ * shared tokens.
  */
-import { Card, Table, TableBody, TableCell, TableHead, TableRow } from "@mui/material";
+import { Table, TableBody, TableCell, TableHead, TableRow } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
-import PAL from "views/Reports/ClosedLoopSim/palette";
-
 import { num, fmtHz, fmtUs, fmtMa } from "./stimFormat";
-import { TYPE, HEAD, SMALL, SizedFold } from "./typeScale";
+import { CARD } from "assets/theme/base/tokens";
+
+import { T, TYPE, HEAD, SMALL, MONO, SUBHEAD, WEIGHT, HAIRLINE, SizedFold } from "./typeScale";
 
 const CHECK_MARK = "✓";
-const CROSS_MARK = "✗";
+const CROSS_MARK = "✕";
 
 function daysWord(n) {
   const v = Math.round(num(n) ?? 0);
@@ -38,9 +44,9 @@ export function HomeScheduleSection({ schedule }) {
   if (!schedule) return null;
   if (!schedule.available) {
     return (
-      <MDBox mt={2} pt={1.5} data-testid="home-schedule" sx={{ borderTop: `1px solid ${PAL.neutralBorder}` }}>
-        <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>{HOME_SCHEDULE_TITLE}</MDTypography>
-        <MDTypography variant="caption" component="div" color="text" sx={{ fontSize: TYPE.body, mt: 0.6 }}>
+      <MDBox mt={2} pt={1.5} data-testid="home-schedule" sx={{ borderTop: HAIRLINE }}>
+        <MDTypography variant="h6" component="h3" sx={SUBHEAD}>{HOME_SCHEDULE_TITLE}</MDTypography>
+        <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2, mt: 0.6 }}>
           {schedule.reason || "no schedule could be built from this record."}
         </MDTypography>
       </MDBox>
@@ -55,46 +61,47 @@ export function HomeScheduleSection({ schedule }) {
   // The setting in force when it is above today's ceiling (2026-09-26): history, drawn and labelled,
   // never a numbered step (the server keeps it out of `steps` and says so in `why`).
   const inForce = schedule.in_force && schedule.in_force.above_ceiling === true ? schedule.in_force : null;
-  const HISTORY_INK = "#5E5E5E";
+  const HISTORY_INK = T.ink3;
 
   return (
-    <MDBox mt={2} pt={1.5} data-testid="home-schedule" sx={{ borderTop: `1px solid ${PAL.neutralBorder}` }}>
-      <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>{HOME_SCHEDULE_TITLE}</MDTypography>
+    <MDBox mt={2} pt={1.5} data-testid="home-schedule" sx={{ borderTop: HAIRLINE }}>
+      <MDTypography variant="h6" component="h3" sx={SUBHEAD}>{HOME_SCHEDULE_TITLE}</MDTypography>
       <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, mt: 0.4 }}>
-        <span style={{ fontFamily: PAL.mono }}>
+        <span style={{ ...MONO, whiteSpace: "normal" }}>
           {`${fmtHz(schedule.rate_hz)} · left ${fmtUs(schedule.pulse_width_us_left)} / right ${fmtUs(schedule.pulse_width_us_right)} · ${steps.length} step${steps.length === 1 ? "" : "s"} over ${daysWord(schedule.total_days)}`}
         </span>
         {wtb.note ? (
-          <span style={{ display: "block", fontWeight: 500, marginTop: 2,
-            color: wtb.resolution_coverage_would_pass ? "#1B7A3D" : PAL.warnText }}>{wtb.note}</span>
+          <span style={{ display: "block", marginTop: 2,
+            color: wtb.resolution_coverage_would_pass ? T.ink : T.caution }}>
+            {`${wtb.resolution_coverage_would_pass ? "✓" : "▲"} ${wtb.note}`}</span>
         ) : null}
       </MDTypography>
       {inForce && (
         <MDTypography variant="caption" component="div" data-testid="home-schedule-in-force"
           sx={{ fontSize: TYPE.body, mt: 0.4, color: HISTORY_INK }}>
-          <span style={{ fontWeight: 700, color: PAL.warnText }}>
-            {`In force, above today's ceiling: ${fmtMa(inForce.amp_left_mA)} left / ${fmtMa(inForce.amp_right_mA)} right`}
+          <span style={{ fontWeight: WEIGHT.strong, color: T.refused }}>
+            {`✕ In force, above today's ceiling: ${fmtMa(inForce.amp_left_mA)} left / ${fmtMa(inForce.amp_right_mA)} right`}
           </span>
-          {` -- ${inForce.why || "history, never offered as a step to hold"}.`}
+          {` — ${inForce.why || "history, never offered as a step to hold"}.`}
         </MDTypography>
       )}
 
       <SizedFold show={`Show the schedule (${steps.length} steps) and why`} hide="Hide the schedule">
-        <MDTypography variant="caption" component="div" color="text" sx={{ fontSize: TYPE.body }}>
+        <MDTypography variant="caption" component="div" sx={{ color: T.ink2, fontSize: TYPE.body }}>
           {schedule.why_pulse_widths}
         </MDTypography>
         {hold.why && (
-          <MDTypography variant="caption" component="div" color="text" sx={{ fontSize: TYPE.body, mt: 0.6 }}>
+          <MDTypography variant="caption" component="div" sx={{ color: T.ink2, fontSize: TYPE.body, mt: 0.6 }}>
             {`How long to hold each step: ${hold.why}`}
           </MDTypography>
         )}
         {rpd.note && (
-          <MDTypography variant="caption" component="div" color="text" sx={{ fontSize: TYPE.small, mt: 0.3 }}>
+          <MDTypography variant="caption" component="div" sx={{ color: T.ink3, fontSize: TYPE.small, mt: 0.3 }}>
             {`Reporting rate this schedule is sized on: ${rpd.note}`}
           </MDTypography>
         )}
         {schedule.safety_model_note && (
-          <MDTypography variant="caption" component="div" color="text" sx={{ fontSize: TYPE.small, mt: 0.3 }}>
+          <MDTypography variant="caption" component="div" sx={{ color: T.ink3, fontSize: TYPE.small, mt: 0.3 }}>
             {schedule.safety_model_note}
           </MDTypography>
         )}
@@ -103,7 +110,7 @@ export function HomeScheduleSection({ schedule }) {
           <Table size="small">
             <TableHead sx={{ display: "table-header-group", p: 0 }}>
               <TableRow>
-                {["step", "left current", "right current", "days", "target reports", "why", "safe"].map((h) => (
+                {["Step", "Left current", "Right current", "Days", "Target reports", "Why", "Safe"].map((h) => (
                   <TableCell key={h} sx={{ py: 0.6 }}>
                     <MDTypography variant="caption" sx={HEAD}>{h}</MDTypography>
                   </TableCell>
@@ -114,49 +121,49 @@ export function HomeScheduleSection({ schedule }) {
               {inForce && (
                 <TableRow data-testid="home-schedule-in-force-row">
                   <TableCell sx={{ py: 0.5 }}>
-                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, fontFamily: PAL.mono, color: HISTORY_INK }}>—</MDTypography>
+                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, ...MONO, color: HISTORY_INK }}>—</MDTypography>
                   </TableCell>
                   <TableCell sx={{ py: 0.5 }}>
-                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, fontFamily: PAL.mono, whiteSpace: "nowrap", color: HISTORY_INK }}>{fmtMa(inForce.amp_left_mA)}</MDTypography>
+                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, ...MONO, whiteSpace: "nowrap", color: HISTORY_INK }}>{fmtMa(inForce.amp_left_mA)}</MDTypography>
                   </TableCell>
                   <TableCell sx={{ py: 0.5 }}>
-                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, fontFamily: PAL.mono, whiteSpace: "nowrap", color: HISTORY_INK }}>{fmtMa(inForce.amp_right_mA)}</MDTypography>
+                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, ...MONO, whiteSpace: "nowrap", color: HISTORY_INK }}>{fmtMa(inForce.amp_right_mA)}</MDTypography>
                   </TableCell>
                   <TableCell sx={{ py: 0.5 }} colSpan={2}>
                     <MDTypography variant="caption" sx={{ fontSize: TYPE.small, color: HISTORY_INK }}>not a step</MDTypography>
                   </TableCell>
                   <TableCell sx={{ py: 0.5, maxWidth: 360 }}>
                     <MDTypography variant="caption" sx={{ fontSize: TYPE.small, color: HISTORY_INK }}>
-                      {`${inForce.label || "in force, above today's ceiling"} -- history, never offered as a step to hold`}
+                      {`${inForce.label || "in force, above today's ceiling"} — history, never offered as a step to hold`}
                     </MDTypography>
                   </TableCell>
                   <TableCell sx={{ py: 0.5 }}>
-                    <span style={{ color: PAL.warnText, fontWeight: 700 }}>above ceiling</span>
+                    <span style={{ color: T.refused, fontWeight: WEIGHT.strong, whiteSpace: "nowrap" }}>✕ above ceiling</span>
                   </TableCell>
                 </TableRow>
               )}
               {steps.map((st, i) => (
                 <TableRow key={i}>
                   <TableCell sx={{ py: 0.5 }}>
-                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, fontFamily: PAL.mono }}>{st.step}</MDTypography>
+                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, ...MONO }}>{st.step}</MDTypography>
                   </TableCell>
                   <TableCell sx={{ py: 0.5 }}>
-                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, fontFamily: PAL.mono, whiteSpace: "nowrap" }}>{fmtMa(st.amp_left_mA)}</MDTypography>
+                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, ...MONO, whiteSpace: "nowrap" }}>{fmtMa(st.amp_left_mA)}</MDTypography>
                   </TableCell>
                   <TableCell sx={{ py: 0.5 }}>
-                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, fontFamily: PAL.mono, whiteSpace: "nowrap" }}>{fmtMa(st.amp_right_mA)}</MDTypography>
+                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, ...MONO, whiteSpace: "nowrap" }}>{fmtMa(st.amp_right_mA)}</MDTypography>
                   </TableCell>
                   <TableCell sx={{ py: 0.5 }}>
-                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, fontFamily: PAL.mono }}>{daysWord(st.planned_days)}</MDTypography>
+                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, ...MONO }}>{daysWord(st.planned_days)}</MDTypography>
                   </TableCell>
                   <TableCell sx={{ py: 0.5 }}>
-                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, fontFamily: PAL.mono }}>{num(st.target_reports) ?? "—"}</MDTypography>
+                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, ...MONO }}>{num(st.target_reports) ?? "—"}</MDTypography>
                   </TableCell>
                   <TableCell sx={{ py: 0.5, maxWidth: 360 }}>
                     <MDTypography variant="caption" sx={{ fontSize: TYPE.small }}>{st.why}</MDTypography>
                   </TableCell>
                   <TableCell sx={{ py: 0.5 }}>
-                    <span style={{ color: st.in_safe_set === false ? PAL.warnText : "#1B7A3D", fontWeight: 700 }}>
+                    <span style={{ color: st.in_safe_set === false ? T.refused : T.ink, fontWeight: WEIGHT.strong }}>
                       {st.in_safe_set === false ? CROSS_MARK : CHECK_MARK}
                     </span>
                   </TableCell>
@@ -167,30 +174,30 @@ export function HomeScheduleSection({ schedule }) {
         </MDBox>
 
         <MDBox mt={2}>
-          <MDTypography variant="caption" fontWeight="medium" component="div" sx={{ fontSize: TYPE.num }}>
+          <MDTypography variant="caption" component="div" sx={SUBHEAD}>
             What is already in the record today
           </MDTypography>
           <MDBox display="flex" columnGap={4} rowGap={0.6} flexWrap="wrap" mt={0.5}>
             {[
-              ["design points considered", num(rt.n_design_points_considered) ?? 0],
-              ["excluded, unsafe", num(rt.n_excluded_unsafe) ?? 0],
-              ["already covered", num(rt.n_already_covered) ?? 0],
-              ["remaining to run", num(rt.n_remaining_to_run) ?? 0],
-              ["stretches already at these pulse widths", num(rt.n_existing_epochs_at_this_stratum) ?? 0],
+              ["Design points considered", num(rt.n_design_points_considered) ?? 0],
+              ["Excluded, unsafe", num(rt.n_excluded_unsafe) ?? 0],
+              ["Already covered", num(rt.n_already_covered) ?? 0],
+              ["Remaining to run", num(rt.n_remaining_to_run) ?? 0],
+              ["Stretches already at these pulse widths", num(rt.n_existing_epochs_at_this_stratum) ?? 0],
             ].map(([k, v]) => (
               <MDBox key={k}>
                 <MDTypography variant="caption" component="div" sx={HEAD}>{k}</MDTypography>
-                <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.num, fontFamily: PAL.mono }}>{v}</MDTypography>
+                <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.num, ...MONO }}>{v}</MDTypography>
               </MDBox>
             ))}
           </MDBox>
           {Array.isArray(rt.excluded_unsafe) && rt.excluded_unsafe.length > 0 && (
-            <MDTypography variant="caption" component="div" color="text" sx={{ fontSize: TYPE.small, mt: 0.6 }}>
+            <MDTypography variant="caption" component="div" sx={{ color: T.ink3, fontSize: TYPE.small, mt: 0.6 }}>
               {`Excluded as unsafe: ${rt.excluded_unsafe.map((q) => `${fmtMa(q.amp_left_mA)} / ${fmtMa(q.amp_right_mA)}`).join(", ")}`}
             </MDTypography>
           )}
           {Array.isArray(rt.already_covered) && rt.already_covered.length > 0 && (
-            <MDTypography variant="caption" component="div" color="text" sx={{ ...SMALL, fontSize: TYPE.small, mt: 0.3 }}>
+            <MDTypography variant="caption" component="div" sx={{ ...SMALL, fontSize: TYPE.small, mt: 0.3 }}>
               {`Already covered, not repeated: ${rt.already_covered.map((q) => `${fmtMa(q.amp_left_mA)} / ${fmtMa(q.amp_right_mA)}`).join(", ")}`}
             </MDTypography>
           )}
@@ -205,10 +212,8 @@ export function HomeScheduleSection({ schedule }) {
 export default function CurrentMapScheduleCard({ schedule }) {
   if (!schedule) return null;
   return (
-    <Card>
-      <MDBox p={2}>
-        <HomeScheduleSection schedule={schedule} />
-      </MDBox>
-    </Card>
+    <MDBox sx={{ ...CARD, p: 3 }}>
+      <HomeScheduleSection schedule={schedule} />
+    </MDBox>
   );
 }

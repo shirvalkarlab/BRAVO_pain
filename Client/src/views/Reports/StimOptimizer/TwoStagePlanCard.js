@@ -30,20 +30,23 @@
  * loop started (its "Nothing was drawn up: N checks above block" restated the checks); the
  * override note and the notes from the closed-loop step move into the "How this was arrived at"
  * fold; the sentence pointing at the titration card is gone.
+ *
+ * THE MINIMALIST REDESIGN OF 2026-09-26 (SPEC.md section 5.3, §3): no longer a card of its own. It
+ * is the second part of the page's "Can closed loop start?" section, below the readiness blocks and
+ * a hairline, so there is no card inside a card; its heading is the plain question "Can closed loop
+ * start on the rate and pulse width locked in beforehand?". Colours and sizes from the shared tokens.
  */
-import { Card, CircularProgress, Table, TableBody, TableCell, TableHead, TableRow } from "@mui/material";
+import { CircularProgress, Table, TableBody, TableCell, TableHead, TableRow } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
-import PAL from "views/Reports/ClosedLoopSim/palette";
-
 import ClosedLoopChecks from "./ClosedLoopChecks";
 import ExcludedSettingsChart, { ExcludedSettingsSummary } from "./ExcludedSettingsChart";
 import { num } from "./stimFormat";
-import { TYPE, HEAD, SizedFold as Fold } from "./typeScale";
+import { T, TYPE, HEAD, MONO, SUBHEAD, HAIRLINE, SizedFold as Fold } from "./typeScale";
 
-export const TWO_STAGE_CARD_TITLE = "Closed loop: may it start on the frozen setting?";
+export const TWO_STAGE_CARD_TITLE = "Can closed loop start on the rate and pulse width locked in beforehand?";
 
 //: The folded table's "best left / right current" is read from ONE fit per pulse-width pairing
 //: pooled across every stimulation rate (reference only; the page's recommended current is read
@@ -92,7 +95,7 @@ function RecordTable({ rows, columns, limit = 12 }) {
             <TableRow key={i}>
               {present.map(([k]) => (
                 <TableCell key={k} sx={{ py: 0.5 }}>
-                  <MDTypography variant="caption" sx={{ fontSize: TYPE.body, fontFamily: PAL.mono, whiteSpace: "nowrap" }}>{cell(r[k])}</MDTypography>
+                  <MDTypography variant="caption" sx={{ ...MONO, fontSize: TYPE.body }}>{cell(r[k])}</MDTypography>
                 </TableCell>
               ))}
             </TableRow>
@@ -100,7 +103,7 @@ function RecordTable({ rows, columns, limit = 12 }) {
         </TableBody>
       </Table>
       {rows.length > limit && (
-        <MDTypography variant="caption" color="text" sx={{ fontSize: TYPE.small }}>
+        <MDTypography variant="caption" sx={{ fontSize: TYPE.small, color: T.ink3 }}>
           {`${limit} of ${rows.length} rows shown.`}
         </MDTypography>
       )}
@@ -113,13 +116,13 @@ function RecordTable({ rows, columns, limit = 12 }) {
 // need no change), so this table de-duplicates by `joint_stratum_key` before rendering -- see
 // `dedupeJointStrata` below.
 const STRATA_COLUMNS = [
-  ["pw_us_left", "left pulse width (µs)"], ["pw_us_right", "right pulse width (µs)"],
-  ["n_epochs", "stretches fitted"], ["n_reports", "pain reports"],
-  ["opt_rate_hz", "best rate (Hz)"],
+  ["pw_us_left", "Left pulse width (µs)"], ["pw_us_right", "Right pulse width (µs)"],
+  ["n_epochs", "Stretches fitted"], ["n_reports", "Pain reports"],
+  ["opt_rate_hz", "Best rate (Hz)"],
   ["opt_amp_mA_left", "best left current (mA)"], ["opt_amp_mA_right", "best right current (mA)"],
-  ["gain", "predicted gain (pts)"], ["sd_of_difference", "1 SD of that gain (pts)"],
-  ["optimum_resolved", "proven better"], ["incumbent_rate_supported", "rate in force was delivered here"],
-  ["optimum_rate_supported", "best rate was delivered here"],
+  ["gain", "Predicted gain (pts)"], ["sd_of_difference", "1 SD of that gain (pts)"],
+  ["optimum_resolved", "Proven better"], ["incumbent_rate_supported", "Rate in force was delivered here"],
+  ["optimum_rate_supported", "Best rate was delivered here"],
 ];
 
 /** One row per joint stratum: the backend's `strata` list carries two rows per fitted stratum (a
@@ -138,12 +141,12 @@ function dedupeJointStrata(strata) {
 }
 
 const POLICY_COLUMNS = [
-  ["hemisphere", "side"], ["mode", "mode"], ["center_hz", "band centre (Hz)"],
-  ["band_lo_hz", "band from (Hz)"], ["band_hi_hz", "band to (Hz)"],
+  ["hemisphere", "Side"], ["mode", "Mode"], ["center_hz", "Band centre (Hz)"],
+  ["band_lo_hz", "Band from (Hz)"], ["band_hi_hz", "Band to (Hz)"],
   ["amp_min_mA", "lowest current (mA)"], ["amp_max_mA", "highest current (mA)"],
-  ["rate_hz", "rate (Hz)"], ["pw_us", "pulse width (µs)"],
-  ["threshold_lower", "lower switching value"], ["threshold_upper", "upper switching value"],
-  ["threshold_single", "single switching value"], ["thresholds_determined", "switching values set"],
+  ["rate_hz", "Rate (Hz)"], ["pw_us", "Pulse width (µs)"],
+  ["threshold_lower", "Lower switching value"], ["threshold_upper", "Upper switching value"],
+  ["threshold_single", "Single switching value"], ["thresholds_determined", "Switching values set"],
 ];
 
 export default function TwoStagePlanCard({ plan, loading, err }) {
@@ -158,23 +161,22 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
   const queue = Array.isArray(stage1.queue) ? stage1.queue : [];
 
   return (
-    <Card>
-      <MDBox p={2}>
-        <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>{TWO_STAGE_CARD_TITLE}</MDTypography>
+    <MDBox data-testid="two-stage-plan" sx={{ borderTop: HAIRLINE, pt: 3 }}>
+        <MDTypography variant="h6" component="h3" sx={{ ...SUBHEAD, fontSize: TYPE.lead }}>{TWO_STAGE_CARD_TITLE}</MDTypography>
 
         {loading && (
           <MDBox mt={1.5} display="flex" alignItems="center" gap={1.5}>
             <CircularProgress size={18} />
-            <MDTypography variant="caption" color="text" sx={{ fontSize: TYPE.body }}>
+            <MDTypography variant="caption" sx={{ fontSize: TYPE.body, color: T.ink2 }}>
               computing the two-stage plan (about a minute the first time; a few seconds afterwards)&hellip;
             </MDTypography>
           </MDBox>
         )}
 
         {!loading && err && (
-          <MDBox mt={1.5} p={1} sx={{ borderRadius: "6px", border: `1px solid ${PAL.warn}`, backgroundColor: "#fdf6e7" }}>
-            <MDTypography variant="caption" sx={{ color: PAL.warnText, fontSize: TYPE.body }} component="div">
-              {`The plan is not available: ${err}`}
+          <MDBox mt={1.5}>
+            <MDTypography variant="caption" sx={{ color: T.notChecked, fontSize: TYPE.body }} component="div">
+              {`○ The plan is not available: ${err}`}
             </MDTypography>
           </MDBox>
         )}
@@ -182,7 +184,7 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
         {!loading && !err && plan && (
           <>
             {frozen.overridden && (
-              <MDTypography variant="caption" sx={{ color: PAL.warnText, fontSize: TYPE.body }} component="div" mt={0.5}>
+              <MDTypography variant="caption" sx={{ color: T.caution, fontSize: TYPE.body }} component="div" mt={0.5}>
                 {`A clinician override was recorded with the request`
                   + (frozen.override && frozen.override.reason ? `: ${frozen.override.reason}` : ".")
                   + (frozen.override && frozen.override.by ? ` (${frozen.override.by})` : "")}
@@ -198,14 +200,14 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
                 (the design review of 2026-09-26, S5) ---------- */}
             {(envelope.statement || envelope.n_exclusions != null) && (
               <MDBox mt={3}>
-                <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>What closed loop ruled out</MDTypography>
+                <MDTypography variant="h6" component="h3" sx={SUBHEAD}>What closed loop ruled out</MDTypography>
                 <MDBox mt={0.6}>
                   <ExcludedSettingsSummary envelope={envelope} />
                 </MDBox>
                 <Fold show="Show the ruled-out settings, drawn" hide="Hide the drawing" dense mt={0.4}>
                   <ExcludedSettingsChart envelope={envelope} strata={strata} />
                   {envelope.override_ignored && (
-                    <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.small, color: PAL.warnText }}>
+                    <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.small, color: T.caution }}>
                       {String(envelope.override_ignored)}
                     </MDTypography>
                   )}
@@ -218,8 +220,8 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
                 restated the checks above it. ---------- */}
             {stage2.started && (
               <MDBox mt={3}>
-                <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>What closed loop would do</MDTypography>
-                <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body }}>
+                <MDTypography variant="h6" component="h3" sx={SUBHEAD}>What closed loop would do</MDTypography>
+                <MDTypography variant="caption" component="div" sx={{ color: T.ink2, fontSize: TYPE.body }}>
                   {`${stage2.n_valid_policies != null ? stage2.n_valid_policies : policies.length} closed-loop `
                     + `settings could be drawn up`
                     + (stage2.n_rejected != null ? `; ${stage2.n_rejected} were rejected` : "")
@@ -229,7 +231,7 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
                 </MDTypography>
                 <RecordTable rows={policies} columns={POLICY_COLUMNS} limit={10} />
                 {policies.length === 0 && (
-                  <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body }}>
+                  <MDTypography variant="caption" component="div" sx={{ color: T.ink2, fontSize: TYPE.body }}>
                     Closed loop started but returned no settings.
                   </MDTypography>
                 )}
@@ -250,36 +252,36 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
             <Fold show="How this was arrived at (what each step read, and the fit for each pulse width and side)"
               hide="Hide how this was arrived at">
               {["stage1", "gate", "stage2"].filter((k) => provenance[k]).map((k) => (
-                <MDTypography key={k} variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body, mb: 0.6 }}>
+                <MDTypography key={k} variant="caption" component="div" sx={{ color: T.ink2, fontSize: TYPE.body, mb: 0.6 }}>
                   {String(provenance[k])}
                 </MDTypography>
               ))}
               {Array.isArray(stage2.notes) && stage2.notes.length > 0 && (
-                <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body, mb: 0.6 }}>
+                <MDTypography variant="caption" component="div" sx={{ color: T.ink2, fontSize: TYPE.body, mb: 0.6 }}>
                   {`Notes from the closed-loop step: ${stage2.notes.map((n) => String(n)).join(" ")}`}
                 </MDTypography>
               )}
               {queue.length > 0 && (
-                <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body, mb: 0.6 }}>
+                <MDTypography variant="caption" component="div" sx={{ color: T.ink2, fontSize: TYPE.body, mb: 0.6 }}>
                   {`The joint search's ${queue.length} untested cells are on the response and are not a second in-clinic plan.`}
                 </MDTypography>
               )}
-              <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body, mb: 0.6 }}>
+              <MDTypography variant="caption" component="div" sx={{ color: T.ink2, fontSize: TYPE.body, mb: 0.6 }}>
                 An override with a stated reason can be sent with the request; there is no control
                 for it here yet.
               </MDTypography>
               {(plan.backend || plan.seconds != null) && (
-                <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body, mb: 0.6 }}>
+                <MDTypography variant="caption" component="div" sx={{ color: T.ink2, fontSize: TYPE.body, mb: 0.6 }}>
                   {plan.backend ? `Fitted with: ${plan.backend}. ` : ""}
                   {plan.seconds != null ? `The plan took ${fmt(plan.seconds, 1)} s of the request.` : ""}
                 </MDTypography>
               )}
               {strata.length > 0 && (
                 <MDBox mt={0.8}>
-                  <MDTypography variant="caption" fontWeight="medium" component="div" sx={{ fontSize: TYPE.num }}>
+                  <MDTypography variant="caption" component="div" sx={SUBHEAD}>
                     The fit for each pulse width and side
                   </MDTypography>
-                  <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.small, mt: 0.3 }}>
+                  <MDTypography variant="caption" component="div" sx={{ color: T.ink3, fontSize: TYPE.small, mt: 0.3 }}>
                     {ACROSS_RATES_NOT_CHECKED}
                   </MDTypography>
                   <RecordTable rows={strata} columns={STRATA_COLUMNS} limit={20} />
@@ -287,13 +289,13 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
               )}
               {Object.keys(skipped).length > 0 && (
                 <MDBox mt={0.8}>
-                  <MDTypography variant="caption" fontWeight="medium" component="div" sx={{ fontSize: TYPE.num }}>
+                  <MDTypography variant="caption" component="div" sx={SUBHEAD}>
                     Combinations that could not be fitted
                   </MDTypography>
                   <MDBox component="ul" sx={{ m: 0, pl: 2.5 }}>
                     {Object.entries(skipped).map(([k, v]) => (
                       <li key={k}>
-                        <MDTypography variant="caption" color="text" sx={{ fontSize: TYPE.body }}>
+                        <MDTypography variant="caption" sx={{ fontSize: TYPE.body, color: T.ink2 }}>
                           {`${String(k).replace("__pw", " at ").replace(/_/g, " ")} µs: ${String(v)}`}
                         </MDTypography>
                       </li>
@@ -304,7 +306,6 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
             </Fold>
           </>
         )}
-      </MDBox>
-    </Card>
+    </MDBox>
   );
 }

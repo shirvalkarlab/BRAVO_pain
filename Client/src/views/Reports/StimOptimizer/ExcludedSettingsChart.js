@@ -24,24 +24,27 @@
  * joined to its point by a leader line, so the two can never overlap whatever the data. A legend
  * beneath says what each mark means.
  *
- * 2026-09-26 (the design review): axis text #5E5E5E (6.4:1; it was #7A7A7A, 4.29:1), and "closed
+ * 2026-09-26 (the design review): axis text in the lightest allowed grey (6.4:1), and "closed
  * loop" for what this page also called "adaptive mode", one name for one thing. The chart itself
  * folds under its one-line summary on the closed-loop card (TwoStagePlanCard.js).
  */
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
-import PAL from "views/Reports/ClosedLoopSim/palette";
+import { SVG_TEXT } from "views/Reports/figureStyle";
 
 import { num } from "./stimFormat";
-import { TYPE, SMALL } from "./typeScale";
+import { T, TYPE, SMALL, WEIGHT } from "./typeScale";
 
 /** The optimiser's rate grid (`StimOptimizer/routines/plots.py`, `FREQ_GRID`), in Hz. */
 const RATE_GRID = [10, 20, 30, 40, 55, 70, 85, 110, 125, 130, 145, 165];
 const lf = (f) => Math.log2(f);
 
-/** Words in the fail role: the text ink (6.1:1 on white), not the fill ink (3.9:1). */
-const FAIL_TEXT = PAL.failText || "#A84300";
+/** Red means the device refuses (SPEC.md section 2.3): the rates closed loop cannot run, drawn
+ *  and named in the refusal ink; the ruled-out point is an open red ring, the chosen one a solid
+ *  ink dot; each pulse-width group's own best cell is a small grey mark for context. */
+const FAIL_TEXT = T.refused;
+const CONTEXT_MARK = T.graphic;
 
 const fmtPts = (v) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(2)} pts`;
 const fmtMa = (v) => (v != null ? `${v.toFixed(1)} mA` : "— mA");
@@ -90,13 +93,13 @@ function SidePanel({ side, exclusions, strata, minRate, width }) {
   );
   return (
     <svg width={W} height={H} role="img" aria-label={`${side} side: the excluded and the chosen setting`}>
-      <text x={4} y={ROW1} fontSize={TYPE.body} fontWeight="700" fill="#2A2A2A">{side}</text>
+      <text x={4} y={ROW1} {...SVG_TEXT} fontSize={TYPE.body} fontWeight={WEIGHT.strong} fill={T.ink}>{side}</text>
       {/* excluded region: rates below the adaptive minimum, the line named once at its top */}
       {minX !== null && (
         <>
-          <rect x={L} y={T} width={Math.max(0, minX - L)} height={H - T - B} fill={PAL.failFill} />
-          <line x1={minX} x2={minX} y1={ROW3 + 4} y2={H - B} stroke={PAL.fail} strokeWidth="1.4" strokeDasharray="4 3" />
-          <text x={minX + 5} y={ROW3} fontSize={TYPE.axis} fill={FAIL_TEXT}>{`closed-loop minimum ${minRate} Hz`}</text>
+          <rect x={L} y={T} width={Math.max(0, minX - L)} height={H - T - B} fill={T.refusedTint} />
+          <line x1={minX} x2={minX} y1={ROW3 + 4} y2={H - B} stroke={T.refused} strokeWidth="1.4" strokeDasharray="4 3" />
+          <text x={minX + 5} y={ROW3} {...SVG_TEXT} fill={FAIL_TEXT}>{`✕ closed-loop minimum ${minRate} Hz`}</text>
         </>
       )}
       {/* the two settings, named above the plot on rows of their own and joined to their points:
@@ -104,52 +107,52 @@ function SidePanel({ side, exclusions, strata, minRate, width }) {
           right, so the two labels cannot overlap whatever the data */}
       {ex && (
         <>
-          {leader(L + 4, ROW1 + 3, xi(ex.rate), y(ex.y) - 8, PAL.fail)}
-          <text x={L} y={ROW1} fontSize={TYPE.small} fill={FAIL_TEXT} fontWeight="600">
-            {`ruled out: ${ex.rate} Hz · ${fmtMa(ex.amp)} · ${fmtPts(ex.y)}`}
+          {leader(L + 4, ROW1 + 3, xi(ex.rate), y(ex.y) - 8, T.refused)}
+          <text x={L} y={ROW1} {...SVG_TEXT} fill={FAIL_TEXT} fontWeight={WEIGHT.strong}>
+            {`✕ ruled out: ${ex.rate} Hz · ${fmtMa(ex.amp)} · ${fmtPts(ex.y)}`}
           </text>
         </>
       )}
       {ch && (
         <>
-          {leader(W - R - 4, ROW2 + 3, xi(ch.rate), y(ch.y) - 8, PAL.accent)}
-          <text x={W - R} y={ROW2} fontSize={TYPE.small} fill={PAL.accent} fontWeight="600" textAnchor="end">
+          {leader(W - R - 4, ROW2 + 3, xi(ch.rate), y(ch.y) - 8, T.ink)}
+          <text x={W - R} y={ROW2} {...SVG_TEXT} fill={T.ink} fontWeight={WEIGHT.strong} textAnchor="end">
             {`chosen: ${ch.rate} Hz · ${fmtMa(ch.amp)} · ${fmtPts(ch.y)}`}
           </text>
         </>
       )}
       {/* zero = the setting in force; the y axis */}
-      <line x1={L} x2={W - R} y1={y(0)} y2={y(0)} stroke="#6A6A6A" strokeWidth="1" />
-      <line x1={L} x2={L} y1={T} y2={H - B} stroke="#D8D8D8" />
-      <text x={L - 8} y={T + 4} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="end">{`+${yMax.toFixed(1)}`}</text>
-      <text x={L - 8} y={y(0) + 4} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="end">0</text>
-      <text x={L - 8} y={H - B} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="end">{`−${yMax.toFixed(1)}`}</text>
-      <text x={14} y={(T + H - B) / 2} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="middle"
+      <line x1={L} x2={W - R} y1={y(0)} y2={y(0)} stroke={T.graphic} strokeWidth="1" />
+      <line x1={L} x2={L} y1={T} y2={H - B} stroke={T.graphic} />
+      <text x={L - 8} y={T + 4} {...SVG_TEXT} textAnchor="end">{`+${yMax.toFixed(1)}`}</text>
+      <text x={L - 8} y={y(0) + 4} {...SVG_TEXT} textAnchor="end">0</text>
+      <text x={L - 8} y={H - B} {...SVG_TEXT} textAnchor="end">{`−${yMax.toFixed(1)}`}</text>
+      <text x={14} y={(T + H - B) / 2} {...SVG_TEXT} textAnchor="middle"
         transform={`rotate(-90 14 ${(T + H - B) / 2})`}>predicted pain (pts)</text>
       {/* rate axis, one equal slot per grid rate */}
-      <line x1={L} x2={W - R} y1={H - B} y2={H - B} stroke="#D8D8D8" />
+      <line x1={L} x2={W - R} y1={H - B} y2={H - B} stroke={T.graphic} />
       {rates.map((f) => (
-        <text key={f} x={xi(f)} y={H - B + 16} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="middle">{f}</text>
+        <text key={f} x={xi(f)} y={H - B + 16} {...SVG_TEXT} textAnchor="middle">{f}</text>
       ))}
-      <text x={(L + W - R) / 2} y={H - 4} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="middle">stimulation rate (Hz)</text>
+      <text x={(L + W - R) / 2} y={H - 4} {...SVG_TEXT} textAnchor="middle">stimulation rate (Hz)</text>
       {/* each pulse-width group's own best cell, small grey, its pulse width beside it */}
       {pts.filter((p) => p.kind === "stratum").map((p, i) => (
         <g key={`s${i}`}>
-          <circle cx={xi(p.rate)} cy={y(p.y)} r="3.5" fill="#B8B8B8" />
-          <text x={xi(p.rate) + 9} y={y(p.y) + 4} fontSize={TYPE.axis} fill="#5E5E5E">{p.pw != null ? `${p.pw.toFixed(0)} µs` : ""}</text>
+          <circle cx={xi(p.rate)} cy={y(p.y)} r="3.5" fill={CONTEXT_MARK} />
+          <text x={xi(p.rate) + 9} y={y(p.y) + 4} {...SVG_TEXT}>{p.pw != null ? `${p.pw.toFixed(0)} µs` : ""}</text>
         </g>
       ))}
       {/* the arrow from excluded to chosen */}
       {ex && ch && (
-        <line x1={xi(ex.rate)} y1={y(ex.y)} x2={xi(ch.rate)} y2={y(ch.y)} stroke="#4A4A4A" strokeWidth="1.2" markerEnd={`url(#arrow-${side})`} />
+        <line x1={xi(ex.rate)} y1={y(ex.y)} x2={xi(ch.rate)} y2={y(ch.y)} stroke={T.ink2} strokeWidth="1.2" markerEnd={`url(#arrow-${side})`} />
       )}
       <defs>
         <marker id={`arrow-${side}`} markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-          <path d="M0,0 L8,4 L0,8 z" fill="#4A4A4A" />
+          <path d="M0,0 L8,4 L0,8 z" fill={T.ink2} />
         </marker>
       </defs>
-      {ex && <circle cx={xi(ex.rate)} cy={y(ex.y)} r="6.5" fill="none" stroke={PAL.fail} strokeWidth="2" />}
-      {ch && <circle cx={xi(ch.rate)} cy={y(ch.y)} r="6.5" fill={PAL.accent} />}
+      {ex && <circle cx={xi(ex.rate)} cy={y(ex.y)} r="6.5" fill="none" stroke={T.refused} strokeWidth="2" />}
+      {ch && <circle cx={xi(ch.rate)} cy={y(ch.y)} r="6.5" fill={T.ink} />}
     </svg>
   );
 }
@@ -159,11 +162,11 @@ function Legend() {
   const sw = (children) => <svg width="16" height="14" aria-hidden="true">{children}</svg>;
   return (
     <MDBox display="flex" flexWrap="wrap" columnGap={2.5} rowGap={0.5} mt={0.8} sx={SMALL}>
-      <span style={item}>{sw(<circle cx="8" cy="7" r="5" fill="none" stroke={PAL.fail} strokeWidth="2" />)} ruled out: the unconstrained search&apos;s preference, below the closed-loop minimum</span>
-      <span style={item}>{sw(<circle cx="8" cy="7" r="5" fill={PAL.accent} />)} chosen: the best setting closed loop can use</span>
-      <span style={item}>{sw(<circle cx="8" cy="7" r="3.5" fill="#B8B8B8" />)} each pulse-width group&apos;s own best cell</span>
-      <span style={item}>{sw(<rect x="1" y="1" width="14" height="12" fill={PAL.failFill} stroke={PAL.fail} strokeDasharray="2 2" />)} rates closed loop cannot run</span>
-      <span style={item}>{sw(<line x1="1" x2="15" y1="7" y2="7" stroke="#6A6A6A" />)} 0 = the setting in force; predicted pain in points, lower is better</span>
+      <span style={item}>{sw(<circle cx="8" cy="7" r="5" fill="none" stroke={T.refused} strokeWidth="2" />)} ruled out: the unconstrained search&apos;s preference, below the closed-loop minimum</span>
+      <span style={item}>{sw(<circle cx="8" cy="7" r="5" fill={T.ink} />)} chosen: the best setting closed loop can use</span>
+      <span style={item}>{sw(<circle cx="8" cy="7" r="3.5" fill={CONTEXT_MARK} />)} each pulse-width group&apos;s own best cell</span>
+      <span style={item}>{sw(<rect x="1" y="1" width="14" height="12" fill={T.refusedTint} stroke={T.refused} strokeDasharray="2 2" />)} rates closed loop cannot run</span>
+      <span style={item}>{sw(<line x1="1" x2="15" y1="7" y2="7" stroke={T.graphic} />)} 0 = the setting in force; predicted pain in points, lower is better</span>
     </MDBox>
   );
 }
@@ -173,7 +176,7 @@ export function ExcludedSettingsSummary({ envelope }) {
   const env = envelope || {};
   const excludedRates = Array.isArray(env.grid_rates_excluded) ? env.grid_rates_excluded : [];
   return (
-    <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: "#2A2A2A" }}>
+    <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2 }}>
       {`${num(env.n_exclusions) ?? 0} setting${num(env.n_exclusions) === 1 ? "" : "s"} ruled out because closed loop cannot run below ${env.min_rate_hz != null ? `${env.min_rate_hz} Hz` : "its minimum rate"}`}
       {excludedRates.length ? ` · grid rates ${excludedRates.map((r) => Number(r)).join(", ")} Hz excluded` : ""}
     </MDTypography>

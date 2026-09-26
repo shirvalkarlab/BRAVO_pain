@@ -28,7 +28,7 @@ describe("the table of fits pooled across rates", () => {
     const { container } = rtlRender(wrap(<TwoStagePlanCard plan={response.two_stage} loading={false} err={null} />));
     const t = container.textContent;
     expect(t).toContain("The fit for each pulse width and side");
-    expect(t).toContain("best left current (mA)");
+    expect(t).toMatch(/best left current \(mA\)/i);   // PIN CHANGED 2026-09-26: headers are sentence case (SPEC.md section 7, WP5)
     expect(ACROSS_RATES_NOT_CHECKED).toMatch(/not checked for movement between blocks of time/);
     expect(ACROSS_RATES_NOT_CHECKED).toMatch(/pooled across every stimulation rate/);
     expect(ACROSS_RATES_NOT_CHECKED).toMatch(/rate the fit had not learnt/);

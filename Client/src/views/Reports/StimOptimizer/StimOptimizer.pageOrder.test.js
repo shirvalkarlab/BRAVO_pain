@@ -1,7 +1,9 @@
 /**
- * The Stim Optimizer page's order (panel C item 5; report C §5.2 with the panel's two corrections):
- * readiness, then the decision, then the current map, then the next session and its home schedule
- * together, then the plan card with its four checks; the evidence base as a one-line footer.
+ * The Stim Optimizer page's order. ORDER CHANGED 2026-09-26 by the minimalist redesign (SPEC.md
+ * section 5.3), which amends panel C item 5: the page opens with its answer, then four sections
+ * written as questions -- is any setting proven better (the decision), where have currents been
+ * tried (the current map), can closed loop start (the readiness blocks, then the four checks), what
+ * must the next visit deliver -- and the evidence base as a one-line footer.
  *
  * The page is rendered whole against the RCS08 fixture, with its two data requests answered from
  * that fixture, and the order is read off the rendered text -- the order a reader meets the cards
@@ -29,7 +31,7 @@ jest.mock("plotly.js-dist", () => ({
 // The current map is drawn with Plotly through the project's graphing utility, which jsdom cannot
 // host. Its drawing is not what this test is about -- its place on the page is -- so it stands in
 // as its own title, which is what the order is read from.
-jest.mock("./CurrentMapCard", () => () => <div>Where the two currents have been tried, and what the record says</div>);
+jest.mock("./CurrentMapCard", () => () => <div>Where have currents been tried, and what does the fit predict?</div>);
 jest.mock("views/Reports/RecomputeBar", () => () => <div>recompute bar</div>);
 jest.mock("views/Reports/CacheStatusLine", () => () => null);
 // The page's own response and the two-stage plan, both from the fixture. The hook is the PI's
@@ -56,7 +58,8 @@ const wrap = (ui) => (
 );
 
 describe("the page's order", () => {
-  it("meets the reader in the order the panel adopted", () => {
+  // PIN CHANGED 2026-09-26 (SPEC.md section 5.3): the order is the four sections' order.
+  it("meets the reader in the order of the four questions", () => {
     const { container } = rtlRender(wrap(<StimOptimizer />));
     const text = container.textContent;
     const at = (needle) => {
@@ -64,17 +67,19 @@ describe("the page's order", () => {
       if (i < 0) throw new Error(`not on the page: ${needle}`);
       return i;
     };
-    const readiness = at("contact-and-rate combinations usable for closed loop");
+    const status = at("Keep today's setting on both sides; closed loop cannot start.");
     const decision = at("No side has a setting proven better than today's");
-    const map = at("Where the two currents have been tried");
-    // The plan card's title also appears earlier, inside the readiness table's pointer to it, so
-    // the card itself is its LAST occurrence.
-    const checks = text.lastIndexOf("Closed loop: may it start on the frozen setting?");
+    const map = at("Where have currents been tried");
+    const readiness = at("contact-and-rate combinations usable for closed loop");
+    const checks = text.lastIndexOf("Can closed loop start on the rate and pulse width locked in beforehand?");
+    const next = at("What must the next visit deliver?");
     const footer = at("Evidence base:");
-    expect(readiness).toBeLessThan(decision);
+    expect(status).toBeLessThan(decision);
     expect(decision).toBeLessThan(map);
-    expect(map).toBeLessThan(checks);
-    expect(checks).toBeLessThan(footer);
+    expect(map).toBeLessThan(readiness);
+    expect(readiness).toBeLessThan(checks);
+    expect(checks).toBeLessThan(next);
+    expect(next).toBeLessThan(footer);
   });
 
   it("no longer prints the method-describing title", () => {

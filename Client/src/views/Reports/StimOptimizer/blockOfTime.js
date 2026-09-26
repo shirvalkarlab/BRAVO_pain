@@ -27,10 +27,8 @@
  */
 import MDTypography from "components/MDTypography";
 
-import PAL from "views/Reports/ClosedLoopSim/palette";
-
 import { num } from "./stimFormat";
-import { TYPE, SMALL } from "./typeScale";
+import { T, TYPE, SMALL, WEIGHT } from "./typeScale";
 
 /** Decision 253's own label for a map whose held-out misses are shared by whole blocks of time. */
 export const BLOCK_OF_TIME_VERDICT = "moves between blocks of time";
@@ -95,7 +93,7 @@ export function BlockOfTimeMark() {
   return (
     <sup data-testid="block-of-time-mark" title="its pain map moves between blocks of time; see the note on this card"
       aria-label="its pain map moves between blocks of time; see the note on this card"
-      style={{ fontSize: TYPE.small, color: PAL.warnText, fontWeight: 700, marginLeft: 2 }}>
+      style={{ fontSize: TYPE.small, color: T.caution, fontWeight: WEIGHT.strong, marginLeft: 2 }}>
       {BLOCK_OF_TIME_SYMBOL}
     </sup>
   );
@@ -106,7 +104,7 @@ export function BlockOfTimeFootnote({ show }) {
   if (!show) return null;
   return (
     <MDTypography variant="caption" component="div" data-testid="block-of-time-footnote"
-      sx={{ ...SMALL, mt: 1 }}>
+      sx={{ ...SMALL, mt: 1.5, maxWidth: "68ch" }}>
       {BLOCK_OF_TIME_NOTE}
     </MDTypography>
   );

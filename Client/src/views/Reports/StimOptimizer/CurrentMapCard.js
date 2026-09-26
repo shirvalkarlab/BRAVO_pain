@@ -44,47 +44,59 @@
  *   - the rates too thin to fit print ONE line per pulse-width pairing ("Not drawn, too few
  *     stretches (minimum 8): 10 Hz (2), 165 Hz (2)"), not a line per rate;
  *   - "stretches of unchanged settings", never "epochs"; "rate", never "speed".
+ *
+ * THE MINIMALIST REDESIGN OF 2026-09-26 (SPEC.md section 5.3, §2): the card is the page section
+ * "Where have currents been tried, and what does the fit predict?". Small multiples, one row per
+ * stream (the home pain surveys; the clinic sheets), squares of about 240 px, with ONE shared colour
+ * range and ONE colour key for the whole card: each square is coloured by its predicted rating minus
+ * today's, on the nine-stop blue - light grey - orange scale, so the same colour means the same
+ * change in every square. The safe ceiling is a dashed red line labelled "safe ceiling" with its
+ * value, with a light fill beyond it; "today ×" and "best ★" are labelled on the square. Three
+ * one-line checks under each square (✓ passes, ▲ fails, ○ not assessed). The out-of-sample caveat
+ * is one ▲ sentence in the open, its numbers in a fold that stays mounted. "Pulse widths: separate
+ * | pooled" is a segmented control in the section header, beside a "Show explanations" text link.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
 
-import { Card, Grid, Icon, Table, TableBody, TableCell, TableHead, TableRow } from "@mui/material";
+import { useEffect, useMemo, useState } from "react";
+
+import { Table, TableBody, TableCell, TableHead, TableRow } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
-import MDButton from "components/MDButton";
 
 import Plotly from "plotly.js-dist";
-import { PlotlyRenderManager } from "graphing-utility/Plotly";
-import Fold from "views/Reports/ClosedLoopSim/Fold";
-import PAL from "views/Reports/ClosedLoopSim/palette";
+
+import { DIVERGING } from "assets/theme/base/dataColors";
+import { plotlyLayout, PLOTLY_CONFIG, CEILING_LINE, FONT_FAMILY, FIGURE_TEXT_PX } from "views/Reports/figureStyle";
+import Section from "views/Reports/paper/Section";
+import ColorKey from "views/Reports/paper/ColorKey";
 
 import { num, fmtHz, fmtUs, fmtMa } from "./stimFormat";
 import { BlockOfTimeMark, BlockOfTimeFootnote, blockOfTimeState, notCheckedText } from "./blockOfTime";
-import { TYPE, HEAD, SMALL, SizedFold } from "./typeScale";
-
-const CHECK_MARK = "✓";
-const CROSS_MARK = "✗";
+import { T, TYPE, HEAD, SMALL, MONO, SUBHEAD, WEIGHT, HAIRLINE, Mark, SizedFold } from "./typeScale";
+import { ceilingFromPlan } from "./ceiling";
 
 /** The squares' colour scale: blue (lower predicted pain than today) through a neutral light grey
- *  (today's predicted rating) to orange (higher). The Okabe-Ito blue and vermillion the Biomarkers
- *  heat maps use (`BIN_LO` / `BIN_HI`), which a red-green colour-blind reader can tell apart. */
-export const CURRENT_MAP_COLORSCALE = [[0, "#0072B2"], [0.5, "#E4E4E4"], [1, "#D55E00"]];
+ *  (today's predicted rating) to orange (higher), the shared nine-stop diverging scale, which a
+ *  red-green colour-blind reader can tell apart. */
+export const CURRENT_MAP_COLORSCALE = DIVERGING;
+
+/** The size of one square, in px (SPEC.md section 5.3: about 240). */
+const SQUARE = 240;
 
 function CheckRow({ label, passes, detail }) {
-  const color = passes === true ? "#1B7A3D" : (passes === false ? PAL.warnText : "#5E5E5E");
-  const mark = passes === true ? CHECK_MARK : (passes === false ? CROSS_MARK : "—");
+  const state = passes === true ? "pass" : (passes === false ? "caution" : "notChecked");
+  const word = passes === true ? "passes" : (passes === false ? "does not pass" : "not assessed");
   return (
-    <MDBox display="flex" alignItems="baseline" gap={0.8} sx={{ mt: 0.3 }}>
-      <span style={{ color, fontWeight: 700, fontSize: TYPE.body, minWidth: 14 }}>{mark}</span>
-      <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body }}>
-        <span style={{ fontWeight: 600 }}>{label}</span>{detail ? ` — ${detail}` : ""}
+    <MDBox display="flex" alignItems="baseline" gap={0.75} sx={{ mt: 0.5 }}>
+      <Mark state={state} label={word} />
+      <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.small, lineHeight: 1.5, color: T.ink2 }}>
+        <span style={{ fontWeight: WEIGHT.strong, color: T.ink }}>{label}</span>{detail ? ` — ${detail}` : ""}
       </MDTypography>
     </MDBox>
   );
 }
 
-/** One (left-current, right-current) surface: the heatmap, the setting-in-force ×, the observed
- * points, and a ★ on the best cell when (and only when) that rate's own current is resolved. */
 /** The numbers the square prints (the PI, 2026-09-17: "an absolute score would be better").
  *  `mu` is the score relative to the setting in force; adding `pain_reference` (the rating at that
  *  setting, from the backend) back gives the predicted rating in the participant's own units,
@@ -113,91 +125,112 @@ export function absoluteSurface(surface) {
   };
 }
 
+/** Half the width of the card's one colour range: the largest |predicted - today's| on any square
+ *  the card draws (SPEC.md section 3.1). */
+function sharedHalfRange(surfaces) {
+  let half = 0.05;
+  surfaces.forEach((sf) => {
+    if (!sf) return;
+    const a = absoluteSurface(sf);
+    half = Math.max(half, a.zmax - a.zmid);
+  });
+  return half;
+}
+
+const labelFont = (color = T.ink) => ({ family: FONT_FAMILY, size: FIGURE_TEXT_PX, color });
+
 function CurrentSurfaceHeatmap({ divId, surface, inForceLeft, inForceRight, starLeft, starRight,
-  showStar, size = 400 }) {
-  const figRef = useRef(null);
+  showStar, half, ceiling, size = SQUARE }) {
+  const a = useMemo(() => (surface ? absoluteSurface(surface) : null), [surface]);
   const rows = surface ? surface.mu.length : 0;
   const cols = rows ? surface.mu[0].length : 0;
 
-  const { zmin, zmax, zmid, gridZ, barTitle } = useMemo(() => {
-    if (!surface) return { zmin: -1, zmax: 1, zmid: 0, gridZ: [], barTitle: "" };
-    const a = absoluteSurface(surface);
-    return { zmin: a.zmin, zmax: a.zmax, zmid: a.zmid, gridZ: a.z, barTitle: a.title };
-  }, [surface]);
-
   useEffect(() => {
-    if (!surface || !rows || !cols) return undefined;
-    if (!figRef.current) figRef.current = new PlotlyRenderManager(divId, "en");
-    const fig = figRef.current;
-    fig.clearData();
-    fig.subplots(1, 1, { sharex: false, sharey: false });
-    fig.traces.push({
-      type: "heatmap", z: gridZ, x: surface.amps_mA, y: surface.amps_mA,
+    if (!surface || !a || !rows || !cols) return undefined;
+    const h = half || (a.zmax - a.zmid);
+    const traces = [{
+      type: "heatmap", z: a.z, x: surface.amps_mA, y: surface.amps_mA,
       // Explicit stops, never a named scale: "RdYlGn" is a plotly.PY name, not a plotly.JS one, and
       // plotly.js silently fell back to a red-to-grey scale that painted the BEST score red (watched
-      // live, 2026-09-14). Blue-grey-orange since 2026-09-26 (see CURRENT_MAP_COLORSCALE).
-      colorscale: CURRENT_MAP_COLORSCALE, zmin, zmax, zmid,
-      // A short title on the side: the long two-line title this first shipped with was placed
-      // ABOVE the bar, and Plotly's automatic margin then took 222 of the 340 px for it, leaving
-      // the plot 70 px wide (measured live, 2026-09-14). The score's meaning is in the caption.
-      colorbar: { title: { text: barTitle, side: "right", font: { size: 11 } },
-        thickness: 12, len: 0.9, tickfont: { size: 11 } },
-      xgap: 1, ygap: 1,
+      // live, 2026-09-14). One range for the whole card, centred on each square's own today.
+      colorscale: CURRENT_MAP_COLORSCALE, zmin: a.zmid - h, zmax: a.zmid + h, zmid: a.zmid,
+      showscale: false, xgap: 1, ygap: 1,
       hovertemplate: `left %{x:.2f} mA, right %{y:.2f} mA<br>${surface.pain_reference != null ? "predicted rating" : "score"} %{z:.2f}<extra></extra>`,
-    });
+    }];
     // Observed reports, sized by how many ratings they carry.
     const pts = surface.points || [];
-    fig.traces.push({
+    traces.push({
       type: "scatter", mode: "markers", showlegend: false,
       x: pts.map((p) => p.amp_left_mA), y: pts.map((p) => p.amp_right_mA),
-      marker: { size: pts.map((p) => 6 + 2.2 * Math.sqrt(Math.max(1, p.n_reports || 1))),
-        color: "rgba(20,20,20,0.75)", line: { width: 1, color: "#FFFFFF" } },
+      marker: { size: pts.map((p) => 4 + 1.6 * Math.sqrt(Math.max(1, p.n_reports || 1))),
+        color: T.ink, opacity: 0.75, line: { width: 1, color: T.surface } },
       hovertemplate: pts.map((p) => `stretch ${p.epoch}: ${p.n_reports} report(s)<br>`
         + `${p.amp_left_mA.toFixed(2)} / ${p.amp_right_mA.toFixed(2)} mA<extra></extra>`),
     });
-    // The setting in force, ×.
+    const annotations = [];
+    const shapes = [];
+    // The setting in force, ×, labelled directly.
     if (inForceLeft != null && inForceRight != null) {
-      fig.traces.push({
+      traces.push({
         type: "scatter", mode: "markers", showlegend: false,
         x: [inForceLeft], y: [inForceRight],
-        marker: { symbol: "x-thin", size: 18, color: "#1A1A1A", line: { width: 3, color: "#1A1A1A" } },
+        marker: { symbol: "x-thin", size: 14, color: T.ink, line: { width: 2.5, color: T.ink } },
         hovertemplate: `setting in force: ${inForceLeft.toFixed(2)} / ${inForceRight.toFixed(2)} mA<extra></extra>`,
       });
+      annotations.push({ x: inForceLeft, y: inForceRight, text: "today ×", xanchor: "left", yanchor: "bottom",
+        xshift: 6, yshift: 2, showarrow: false, font: labelFont(), bgcolor: T.surface });
     }
     // The best cell, only when the rate's own current is resolved (decision 158's rule).
     if (showStar && starLeft != null && starRight != null) {
-      fig.traces.push({
+      traces.push({
         type: "scatter", mode: "markers", showlegend: false,
         x: [starLeft], y: [starRight],
         // White with a dark edge: the best cell is the lowest predicted pain, which is blue.
-        marker: { symbol: "star", size: 20, color: "#FFFFFF", line: { width: 1.5, color: "#1A1A1A" } },
+        marker: { symbol: "star", size: 16, color: T.surface, line: { width: 1.5, color: T.ink } },
         hovertemplate: `best cell: ${starLeft.toFixed(2)} / ${starRight.toFixed(2)} mA<extra></extra>`,
       });
+      annotations.push({ x: starLeft, y: starRight, text: "best ★", xanchor: "left", yanchor: "top",
+        xshift: 6, yshift: -2, showarrow: false, font: labelFont(), bgcolor: T.surface });
     }
-    fig.setLayoutProps({
-      height: size, width: size, margin: { l: 46, r: 20, t: 8, b: 40 },
-      xaxis: { showgrid: false, zeroline: false, range: [-0.15, 5.15] },
-      yaxis: { showgrid: false, zeroline: false, range: [-0.15, 5.15] },
-      hovermode: "closest",
+    // The safe ceiling, per side: dashed red, labelled, a light fill beyond it (SPEC.md 5.3, §2).
+    const AX_MAX = 5.15;
+    const lc = num(ceiling && ceiling.leftMa), rc = num(ceiling && ceiling.rightMa);
+    if (lc !== null && lc < AX_MAX) {
+      shapes.push({ type: "rect", xref: "x", yref: "y", x0: lc, x1: AX_MAX, y0: -0.15, y1: AX_MAX,
+        fillcolor: T.fillMuted, opacity: 0.7, line: { width: 0 }, layer: "above" });
+      shapes.push({ type: "line", xref: "x", yref: "y", x0: lc, x1: lc, y0: -0.15, y1: AX_MAX,
+        line: { color: CEILING_LINE.color, width: CEILING_LINE.width, dash: CEILING_LINE.dash }, layer: "above" });
+      annotations.push({ x: lc, y: AX_MAX, xref: "x", yref: "y", text: `safe ceiling ${lc} mA`, textangle: -90,
+        xanchor: "right", yanchor: "top", xshift: -2, showarrow: false, font: labelFont(T.refused) });
+    }
+    if (rc !== null && rc < AX_MAX) {
+      shapes.push({ type: "rect", xref: "x", yref: "y", x0: -0.15, x1: AX_MAX, y0: rc, y1: AX_MAX,
+        fillcolor: T.fillMuted, opacity: 0.7, line: { width: 0 }, layer: "above" });
+      shapes.push({ type: "line", xref: "x", yref: "y", x0: -0.15, x1: AX_MAX, y0: rc, y1: rc,
+        line: { color: CEILING_LINE.color, width: CEILING_LINE.width, dash: CEILING_LINE.dash }, layer: "above" });
+      annotations.push({ x: -0.15, y: rc, xref: "x", yref: "y", text: `safe ceiling ${rc} mA`,
+        xanchor: "left", yanchor: "bottom", yshift: 1, showarrow: false, font: labelFont(T.refused) });
+    }
+    const layout = plotlyLayout({
+      height: size, width: size, margin: { l: 44, r: 8, t: 8, b: 40 },
+      xaxis: { range: [-0.15, AX_MAX], title: { text: "Left current (mA)" } },
+      yaxis: { range: [-0.15, AX_MAX], title: { text: "Right current (mA)" } },
+      hovermode: "closest", shapes, annotations,
     });
-    fig.setXlabel("Left current (mA)", { fontSize: 11 });
-    fig.setYlabel("Right current (mA)", { fontSize: 11 });
-    fig.render();
-    Plotly.react(divId, fig.traces, fig.layout,
-      { displayModeBar: false, responsive: true, doubleClick: false });
+    Plotly.react(divId, traces, layout, { ...PLOTLY_CONFIG, doubleClick: false });
     return undefined;
-  }, [divId, surface, gridZ, zmin, zmax, zmid, barTitle, rows, cols, inForceLeft, inForceRight, starLeft, starRight,
-    showStar, size]);
+  }, [divId, surface, a, rows, cols, inForceLeft, inForceRight, starLeft, starRight, showStar, half,
+    ceiling, size]);
 
+  // Purge on unmount only (a cleanup that runs on every redraw would tear the figure down).
   useEffect(() => () => {
-    if (figRef.current && document.getElementById(divId)) figRef.current.purge();
+    if (document.getElementById(divId) && Plotly.purge) Plotly.purge(divId);
   }, [divId]);
 
   if (!surface) return null;
   return <div id={divId} style={{ width: size, height: size }} />;
 }
 
-/** Group `rate_strata` rows by (pw_us_left, pw_us_right), rates ordered by n_epochs descending. */
 /** The minimum number of stretches a rate needs before it is fitted, read from the server's own
  *  reason ("... below the minimum of 8 ..." or, from an older server, "... 8-epoch floor"). */
 function minStretches(rows) {
@@ -218,15 +251,15 @@ function unfittedLine(rows) {
 }
 /** S5 (review 2026-09-15): one succinct line naming which pulse-width pairings each stream was
  *  FITTED at, so "no current, both streams" is never read as two measurements of one setting.
- *  Only strata with a surface count; the unfitted ones say "not enough data" on their own line. */
+ *  Only strata with a surface count. */
 export function pulseWidthPairingSentence(rateStrata, rateStrataClinic) {
   const pairs = (rows) => new Set((rows || []).filter((r) => r && r.fitted)
-    .map((r) => `${Number(r.pw_us_left).toFixed(0)}/${Number(r.pw_us_right).toFixed(0)} \u00b5s`));
+    .map((r) => `${Number(r.pw_us_left).toFixed(0)}/${Number(r.pw_us_right).toFixed(0)} µs`));
   const a = pairs(rateStrata), b = pairs(rateStrataClinic);
   const both = [...a].filter((k) => b.has(k)), onlyA = [...a].filter((k) => !b.has(k)), onlyB = [...b].filter((k) => !a.has(k));
   const list = (xs) => (xs.length ? xs.join(", ") : "none");
   return `Pulse-width pairings fitted: ${both.length ? `both streams ${list(both)}` : "none in both streams"}; `
-    + `REDCap only ${list(onlyA)}; sheets only ${list(onlyB)}.`;
+    + `home surveys only ${list(onlyA)}; clinic sheets only ${list(onlyB)}.`;
 }
 
 function groupByPulseWidthPair(rateStrata) {
@@ -244,10 +277,96 @@ function groupByPulseWidthPair(rateStrata) {
   return out;
 }
 
-/** One (pulse-width pair, rate) rendering pass -- shared by the REDCap stream and the clinic
+/** One square with its label above and its three checks under it. */
+function SquareWithChecks({ r, g, idPrefix, inForceLeft, inForceRight, half, ceiling }) {
+  const divId = `${idPrefix}-surface-${g.key}-${r.rate_hz}`;
+  return (
+    <MDBox sx={{ width: SQUARE + 40, maxWidth: "100%" }}>
+      <MDTypography variant="caption" component="div" sx={{ ...SUBHEAD, mb: 0.5 }}>
+        {fmtHz(r.rate_hz)}
+        <span style={{ ...SMALL, fontWeight: WEIGHT.regular, marginLeft: 8 }}>
+          {`left ${fmtUs(g.pw_us_left)} / right ${fmtUs(g.pw_us_right)} · `
+            + `${num(r.n_epochs) ?? 0} stretches · ${Math.round(num(r.n_reports) || 0)} reports`}
+        </span>
+      </MDTypography>
+      <CurrentSurfaceHeatmap divId={divId} surface={r.surface}
+        inForceLeft={inForceLeft} inForceRight={inForceRight}
+        starLeft={num(r.amp_mA_left)} starRight={num(r.amp_mA_right)}
+        showStar={r.resolved === true} half={half} ceiling={ceiling} />
+      {/* The verdict is printed only when a current CAN be recommended; otherwise the three checks
+          below say why not (the design review of 2026-09-26). */}
+      {r.resolved ? (
+        <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink, mt: 0.5 }}>
+          {`a current CAN be recommended at this rate: left ${fmtMa(r.amp_mA_left)}, right ${fmtMa(r.amp_mA_right)}`}
+          {blockOfTimeState(r) === "moves" && <BlockOfTimeMark />}
+          {notCheckedText(r) ? ` (${notCheckedText(r)}).` : "."}
+        </MDTypography>
+      ) : null}
+      {/* `flat_passes` is the BACKEND's own check that the surface VARIES enough to mean something
+          (it is NOT flat), so a tick here means "the predictions do differ", read in the same
+          "good = passed" direction as the other two rows. */}
+      <CheckRow label="Do the predictions differ across currents by more than their own uncertainty?"
+        passes={r.flat_passes}
+        detail={num(r.flat_range) != null && num(r.flat_median_sd) != null
+          ? `they vary by ${num(r.flat_range).toFixed(3)} against a typical uncertainty of ${num(r.flat_median_sd).toFixed(3)}`
+          : "not assessable"} />
+      <CheckRow label="Better than today's setting?"
+        passes={r.gain_passes}
+        detail={num(r.gain) != null && num(r.gain_sd_of_difference) != null
+          ? `${num(r.gain) >= 0 ? "+" : "−"}${Math.abs(num(r.gain)).toFixed(3)} against ${num(r.gain_sd_of_difference).toFixed(3)}`
+          : "no comparison available"} />
+      <CheckRow label="Enough combinations tried?"
+        passes={r.coverage_passes}
+        detail={`${num(r.coverage_n_pairs) ?? 0} pairs, `
+          + `${num(r.coverage_span_left_mA) != null ? num(r.coverage_span_left_mA).toFixed(1) : "0.0"} mA left / `
+          + `${num(r.coverage_span_right_mA) != null ? num(r.coverage_span_right_mA).toFixed(1) : "0.0"} mA right range`} />
+      {/* WHAT THE NEXT VISIT MUST DELIVER (on the page since 2026-09-23): the server names the
+          current pairs to repeat or add for this check to pass, the cheapest first, under the safe
+          ceiling. In the open; why, what each pair needs and the new settings fold under it. */}
+      {r.coverage_passes !== true && r.coverage_gap && r.coverage_gap.cheapest_way ? (
+        <MDBox mt={0.75}>
+          <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.small, lineHeight: 1.5, color: T.caution }}>
+            {`What the next visit must deliver: ${String(r.coverage_gap.cheapest_way).replace(/ -- /g, " — ")}. `}
+          </MDTypography>
+          {/* the side not stepped is held at its ceiling when its current in force is above it,
+              and the pairs above are built at that current */}
+          {r.coverage_gap.held_side_note ? (
+            <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.small, lineHeight: 1.5, color: T.caution }}>
+              {`${String(r.coverage_gap.held_side_note).replace(/ -- /g, " — ")}.`}
+            </MDTypography>
+          ) : null}
+          {(r.coverage_gap.why || r.coverage_gap.what_each_pair_needs || (r.coverage_gap.pairs_to_add || []).length) ? (
+            <SizedFold show="Why, and other settings that would count" hide="Hide" dense mt={0.25}>
+              <MDTypography variant="caption" component="div" sx={{ ...SMALL }}>
+                {r.coverage_gap.why ? `${String(r.coverage_gap.why).replace(/ -- /g, " — ")}. ` : ""}
+                {r.coverage_gap.what_each_pair_needs
+                  ? `Each pair needs ${r.coverage_gap.what_each_pair_needs}. ` : ""}
+                {(r.coverage_gap.pairs_to_add || []).length
+                  ? `New settings that would also count: ${r.coverage_gap.pairs_to_add
+                    .map((q) => `L${num(q.amp_mA_Left)}/R${num(q.amp_mA_Right)}`).join(", ")}.`
+                  : ""}
+              </MDTypography>
+            </SizedFold>
+          ) : null}
+        </MDBox>
+      ) : null}
+      {/* The server's closing sentence restates the three checks above it: folded. */}
+      {r.sentence && (
+        <SizedFold show="The three checks, in one sentence" hide="Hide" dense mt={0.25}>
+          <MDTypography variant="caption" component="div" sx={{ ...SMALL }}>
+            {String(r.sentence)}
+          </MDTypography>
+        </SizedFold>
+      )}
+    </MDBox>
+  );
+}
+
+/** One (pulse-width pair, rate) rendering pass -- shared by the home-survey stream and the clinic
  * stream below it. `pooledSurfaces` is `{}` for a stream that has none (the clinic stream does
  * not fit a pooled-across-rates surface), in which case the pooled fold is simply not drawn. */
-function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, idPrefix, showDescriptions }) {
+function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, idPrefix, showDescriptions,
+  half, ceiling }) {
   const [poolOpen, setPoolOpen] = useState({});
   return groups.map((g) => {
     const unfitted = g.rows.filter((r) => !r.fitted);
@@ -258,138 +377,49 @@ function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, i
     // A pairing with nothing fitted is one line, heading and all.
     if (!fitted.length && !g.pooled) {
       return (
-        <MDTypography key={g.key} variant="caption" component="div" color="text" data-testid="unfitted-rates"
-          sx={{ fontSize: TYPE.body, mt: 1 }}>
-          <span style={{ fontWeight: 600 }}>{head}</span>{` — ${unfittedLine(unfitted)}`}
+        <MDTypography key={g.key} variant="caption" component="div" data-testid="unfitted-rates"
+          sx={{ fontSize: TYPE.body, color: T.ink2, mt: 1 }}>
+          <span style={{ fontWeight: WEIGHT.strong, color: T.ink }}>{head}</span>{` — ${unfittedLine(unfitted)}`}
         </MDTypography>
       );
     }
     return (
-    <MDBox key={g.key} sx={{ mt: 2.5, "&:first-of-type": { mt: 0 } }}>
-      <MDTypography variant="caption" fontWeight="medium" component="div"
-        sx={{ fontSize: TYPE.num, mb: 0.5 }}>
+    <MDBox key={g.key} sx={{ mt: 3, "&:first-of-type": { mt: 1 } }}>
+      <MDTypography variant="caption" component="div" sx={{ ...SUBHEAD, mb: 1 }}>
         {head}
       </MDTypography>
       {g.pooled && (
-        <MDTypography variant="caption" component="div" sx={{ ...SMALL, fontSize: TYPE.body, mb: 0.6 }}>
+        <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2, mb: 1 }}>
           {`Pairings pooled: ${g.pairingsText}. Assumes the current-to-pain shape is shared across pairings; the coverage check counts current pairs across them.`}
         </MDTypography>
       )}
 
-      {fitted.map((r) => {
-        const divId = `${idPrefix}-surface-${g.key}-${r.rate_hz}`;
-        return (
-          <MDBox key={divId} sx={{ mt: 1, mb: 2 }}>
-            <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, mb: 0.6 }}>
-              {`${fmtHz(r.rate_hz)} · left ${fmtUs(g.pw_us_left)} / right ${fmtUs(g.pw_us_right)} · `
-                + `${num(r.n_epochs) ?? 0} stretches · ${Math.round(num(r.n_reports) || 0)} reports`}
-            </MDTypography>
-            <Grid container spacing={2}>
-              <Grid item xs={12} sm="auto">
-                <CurrentSurfaceHeatmap divId={divId} surface={r.surface}
-                  inForceLeft={inForceLeft} inForceRight={inForceRight}
-                  starLeft={num(r.amp_mA_left)} starRight={num(r.amp_mA_right)}
-                  showStar={r.resolved === true} />
-              </Grid>
-              <Grid item xs={12} sm>
-                {/* The verdict is printed only when a current CAN be recommended; otherwise the
-                    three checks below say why not, and the strip at the top says it once for the
-                    page (the design review of 2026-09-26). */}
-                {r.resolved ? (
-                  <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, mb: 0.6 }}>
-                    {`a current CAN be recommended at this rate: left ${fmtMa(r.amp_mA_left)}, right ${fmtMa(r.amp_mA_right)}`}
-                    {blockOfTimeState(r) === "moves" && <BlockOfTimeMark />}
-                    {notCheckedText(r) ? ` (${notCheckedText(r)}).` : "."}
-                  </MDTypography>
-                ) : null}
-                {/* `flat_passes` is the BACKEND's own check that the surface VARIES enough
-                    to mean something (it is NOT flat), so a tick here means "not flat,
-                    this check passed" -- read in the same "good = passed" direction as the
-                    other two rows below, and not negated here. */}
-                <CheckRow label="Surface flat?"
-                  passes={r.flat_passes}
-                  detail={num(r.flat_range) != null && num(r.flat_median_sd) != null
-                    ? `varies by ${num(r.flat_range).toFixed(3)} against a typical uncertainty of ${num(r.flat_median_sd).toFixed(3)}`
-                    : "not assessable"} />
-                <CheckRow label="Beats the setting in force?"
-                  passes={r.gain_passes}
-                  detail={num(r.gain) != null && num(r.gain_sd_of_difference) != null
-                    ? `${num(r.gain) >= 0 ? "+" : "−"}${Math.abs(num(r.gain)).toFixed(3)} against ${num(r.gain_sd_of_difference).toFixed(3)}`
-                    : "no comparison available"} />
-                <CheckRow label="Enough combinations tried?"
-                  passes={r.coverage_passes}
-                  detail={`${num(r.coverage_n_pairs) ?? 0} pairs, `
-                    + `${num(r.coverage_span_left_mA) != null ? num(r.coverage_span_left_mA).toFixed(1) : "0.0"} mA left / `
-                    + `${num(r.coverage_span_right_mA) != null ? num(r.coverage_span_right_mA).toFixed(1) : "0.0"} mA right span`} />
-                {/* WHAT THE NEXT VISIT MUST DELIVER (decision 239, on the page 2026-09-23): the
-                    server names the current pairs to repeat or add for this check to pass, the
-                    cheapest first, under the safe ceiling. In the open, because it is the one line
-                    on the card a clinician can act on at the next visit. */}
-                {/* The cheapest way stays open (decision 251); why, what each pair needs and the
-                    new settings that would also count fold under it (2026-09-26). */}
-                {r.coverage_passes !== true && r.coverage_gap && r.coverage_gap.cheapest_way ? (
-                  <MDBox mt={0.6}>
-                    <MDTypography variant="caption" component="div" sx={{ ...SMALL, color: PAL.warnText }}>
-                      {`What the next visit must deliver: ${String(r.coverage_gap.cheapest_way).replace(/ -- /g, " — ")}. `}
-                    </MDTypography>
-                    {/* the side not stepped is held at its ceiling when its current in force is above
-                        it (decision 308), and the pairs above are built at that current */}
-                    {r.coverage_gap.held_side_note ? (
-                      <MDTypography variant="caption" component="div" sx={{ ...SMALL, color: PAL.warnText }}>
-                        {`${String(r.coverage_gap.held_side_note).replace(/ -- /g, " — ")}.`}
-                      </MDTypography>
-                    ) : null}
-                    {(r.coverage_gap.why || r.coverage_gap.what_each_pair_needs || (r.coverage_gap.pairs_to_add || []).length) ? (
-                      <SizedFold show="Why, and the new settings that would also count" hide="Hide" dense mt={0.2}>
-                        <MDTypography variant="caption" component="div" sx={{ ...SMALL }}>
-                          {r.coverage_gap.why ? `${String(r.coverage_gap.why).replace(/ -- /g, " — ")}. ` : ""}
-                          {r.coverage_gap.what_each_pair_needs
-                            ? `Each pair needs ${r.coverage_gap.what_each_pair_needs}. ` : ""}
-                          {(r.coverage_gap.pairs_to_add || []).length
-                            ? `New settings that would also count: ${r.coverage_gap.pairs_to_add
-                              .map((q) => `L${num(q.amp_mA_Left)}/R${num(q.amp_mA_Right)}`).join(", ")}.`
-                            : ""}
-                        </MDTypography>
-                      </SizedFold>
-                    ) : null}
-                  </MDBox>
-                ) : null}
-                {/* The server's closing sentence restates the three checks above it: folded. */}
-                {r.sentence && (
-                  <SizedFold show="The three checks, in one sentence" hide="Hide" dense mt={0.6}>
-                    <MDTypography variant="caption" component="div" color="text" sx={{ ...SMALL }}>
-                      {String(r.sentence)}
-                    </MDTypography>
-                  </SizedFold>
-                )}
-              </Grid>
-            </Grid>
-          </MDBox>
-        );
-      })}
+      <MDBox sx={{ display: "flex", flexWrap: "wrap", columnGap: "32px", rowGap: "24px" }}>
+        {fitted.map((r) => (
+          <SquareWithChecks key={`${idPrefix}-${g.key}-${r.rate_hz}`} r={r} g={g} idPrefix={idPrefix}
+            inForceLeft={inForceLeft} inForceRight={inForceRight} half={half} ceiling={ceiling} />
+        ))}
+      </MDBox>
 
       {unfitted.length > 0 && (
-        <MDTypography variant="caption" component="div" color="text" data-testid="unfitted-rates"
-          sx={{ fontSize: TYPE.body, mt: 1, mb: 1 }}>
+        <MDTypography variant="caption" component="div" data-testid="unfitted-rates"
+          sx={{ fontSize: TYPE.body, color: T.ink2, mt: 1.5, mb: 1 }}>
           {unfittedLine(unfitted)}
         </MDTypography>
       )}
 
-      {/* Note the flat-surface check reads a `flat` PASS as "the surface is NOT flat" --
-          CheckRow above negates `flat_passes` so its tick/cross reads the same direction as
-          the other two ("passing" = good), matching the label "Surface flat?" answered "no". */}
-
       {Object.keys(pooledSurfaces).length > 0 && (
-        <Fold show="Pooled across rates — reference only" hide="Hide the pooled surface"
+        <SizedFold show="Pooled across rates — reference only" hide="Hide the pooled surface"
           onChange={(open) => setPoolOpen((s) => ({ ...s, [g.key]: open || s[g.key] }))}>
           {showDescriptions && (
-          <MDTypography variant="caption" component="div" color="text" sx={{ fontSize: TYPE.small, mb: 1 }}>
+          <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2, mb: 1, maxWidth: "68ch" }}>
             The surface below pools every rate together through one shared, pinned rate axis.
             It is shown for reference only: reading a current off it draws confidence from
-            OTHER rates, not the one being asked about, which is exactly why the honest
-            surfaces above are fitted one rate at a time.
+            OTHER rates, not the one being asked about, which is exactly why the surfaces above
+            are fitted one rate at a time.
           </MDTypography>
           )}
+          <MDBox sx={{ display: "flex", flexWrap: "wrap", columnGap: "32px", rowGap: "16px" }}>
           {g.rows.map((r) => {
             const stratumKey = `${Number(g.pw_us_left).toString()}_${Number(g.pw_us_right).toString()}`;
             const rateKey = Number(r.rate_hz).toString();
@@ -398,22 +428,23 @@ function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, i
             const divId = `${idPrefix}-pooled-${g.key}-${r.rate_hz}`;
             if (!pooledSurface) return null;
             return (
-              <MDBox key={divId} sx={{ mt: 1, mb: 1.5 }}>
-                <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, mb: 0.4 }}>
+              <MDBox key={divId} sx={{ width: SQUARE, maxWidth: "100%" }}>
+                <MDTypography variant="caption" component="div" sx={{ ...SUBHEAD, mb: 0.5 }}>
                   {fmtHz(r.rate_hz)}
                 </MDTypography>
                 {poolOpen[g.key] && (
                   <CurrentSurfaceHeatmap divId={divId} surface={pooledSurface}
                     inForceLeft={inForceLeft} inForceRight={inForceRight}
-                    starLeft={null} starRight={null} showStar={false} size={220} />
+                    starLeft={null} starRight={null} showStar={false} half={null} ceiling={ceiling} size={SQUARE} />
                 )}
-                <MDTypography variant="caption" component="div" color="text" sx={{ ...SMALL, mt: 0.4 }}>
+                <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.5 }}>
                   {String(r.pooled_across_rates_note || "")}
                 </MDTypography>
               </MDBox>
             );
           })}
-        </Fold>
+          </MDBox>
+        </SizedFold>
       )}
     </MDBox>
     );
@@ -421,18 +452,21 @@ function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, i
 }
 
 /** The second, independent stream: rates and reports read from the lab's own clinic and
- * home-testing workbooks rather than from REDCap. Same fit, same checks, own section, own fold of
- * the visits that were ingested to build it -- never pooled with the REDCap stream above. */
+ * home-testing workbooks rather than from the home pain surveys. Same fit, same checks, own row,
+ * own fold of the visits that were ingested to build it -- never pooled with the surveys. */
 function ClinicStreamSection({ groups, inForceLeft, inForceRight, clinicStream, showDescriptions, pairingSentence,
-  pooledWanted = false, pooledUnavailableReason = null }) {
+  pooledWanted = false, pooledUnavailableReason = null, half, ceiling }) {
   const cs = clinicStream || {};
+  const heading = (
+    <MDTypography variant="h6" component="h3" sx={{ ...SUBHEAD, fontSize: TYPE.lead }}>
+      From the clinic testing sheets (separate from the home pain surveys)
+    </MDTypography>
+  );
   if (!cs.available || !groups.length) {
     return (
-      <MDBox sx={{ mt: 3, pt: 2, borderTop: `1px solid ${PAL.neutralBorder}` }}>
-        <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>
-          From the clinic and home testing sheets (independent of REDCap)
-        </MDTypography>
-        <MDTypography variant="caption" component="div" color="text" sx={{ fontSize: TYPE.body, mt: 0.6 }}>
+      <MDBox sx={{ mt: 4, pt: 3, borderTop: HAIRLINE }}>
+        {heading}
+        <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2, mt: 0.5 }}>
           {cs.note || "no clinic or home-testing workbooks could be read for this participant."}
         </MDTypography>
       </MDBox>
@@ -440,51 +474,47 @@ function ClinicStreamSection({ groups, inForceLeft, inForceRight, clinicStream, 
   }
   const visits = Array.isArray(cs.visits) ? cs.visits : [];
   return (
-    <MDBox sx={{ mt: 3, pt: 2, borderTop: `1px solid ${PAL.neutralBorder}` }}>
-      <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>
-        From the clinic and home testing sheets (independent of REDCap)
-      </MDTypography>
+    <MDBox sx={{ mt: 4, pt: 3, borderTop: HAIRLINE }}>
+      {heading}
       {showDescriptions && (
-      <MDTypography variant="caption" component="div" color="text" sx={{ fontSize: TYPE.body, mt: 0.5, mb: 1 }}>
+      <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2, mt: 0.5, mb: 1, maxWidth: "68ch" }}>
         {`These scores come from the lab's testing workbooks (${num(cs.n_files) ?? 0} files, `
           + `${num(cs.n_steps) ?? 0} steps, ${num(cs.n_with_pain) ?? 0} with a score, `
-          + `${num(cs.n_unparsed_prose) ?? 0} prose notes not parsed), are on the same 0-10 scale `
-          + "as the primary item, and are fitted separately -- never pooled -- with the REDCap "
-          + "stream above."}
+          + `${num(cs.n_unparsed_prose) ?? 0} written notes not read), are on the same 0-10 scale `
+          + "as the primary pain score, and are fitted separately, never pooled, with the home "
+          + "pain surveys above."}
       </MDTypography>
       )}
       {showDescriptions && (
-      <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, mb: 1, fontWeight: 500 }}>
+      <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink, mb: 1 }}>
         {pairingSentence}
       </MDTypography>
       )}
       {showDescriptions && cs.note && (
-        <MDTypography variant="caption" component="div" color="text" sx={{ ...SMALL, mb: 1 }}>
+        <MDTypography variant="caption" component="div" sx={{ ...SMALL, mb: 1 }}>
           {cs.note}
         </MDTypography>
       )}
-      {/* The centre (yellow) of this section's colour scale. The REDCap section's centre is the
+      {/* The centre (light grey) of this section's colour scale. The survey section's centre is the
           device's setting in force; this one is too WHEN a clinic step exists at that rate and
           those pulse widths, and otherwise it is the last clinic step -- said here so the two
-          sections' centres are never read as the same thing when they are not. The numbers
-          themselves are absolute either way (decision 192). */}
+          sections' centres are never read as the same thing when they are not. */}
       {showDescriptions && cs.reference && cs.reference.sentence && (
         <MDTypography variant="caption" component="div" sx={{ ...SMALL, mb: 1,
-          color: cs.reference.source === "last_clinic_step" ? PAL.warnText : undefined }}>
+          color: cs.reference.source === "last_clinic_step" ? T.caution : T.ink3 }}>
           {`Light grey on these colour scales is the predicted rating at: ${cs.reference.sentence}.`}
         </MDTypography>
       )}
-      {/* THE PI'S RULING 5, IN THE OPEN (decision 233; on the page 2026-09-23): the next session
-          runs at the pairing in force and its ratings are merged with the earlier clinic record at
-          that rate, so what THAT merged stratum still needs is what the visit must deliver --
-          decision 239's measurement, which no response carried until now. */}
+      {/* THE PI'S RULING 5, IN THE OPEN (on the page 2026-09-23): the next session runs at the
+          pairing in force and its ratings are merged with the earlier clinic record at that rate,
+          so what THAT merged group still needs is what the visit must deliver. */}
       {cs.next_session_coverage && cs.next_session_coverage.available && (
         <MDTypography variant="caption" component="div" data-testid="clinic-next-session"
-          sx={{ fontSize: TYPE.body, mt: 0.6, mb: 1, color: PAL.warnText }}>
-          {`${cs.next_session_coverage.sentence} `}
+          sx={{ fontSize: TYPE.body, mt: 1, mb: 1, color: T.caution, maxWidth: "80ch" }}>
+          {`▲ ${cs.next_session_coverage.sentence} `}
           {cs.next_session_coverage.gap && cs.next_session_coverage.gap.cheapest_way
             && !(cs.next_session_coverage.coverage || {}).passes
-            ? `What the next session must deliver: ${String(cs.next_session_coverage.gap.cheapest_way).replace(/ -- /g, " \u2014 ")}.`
+            ? `What the next session must deliver: ${String(cs.next_session_coverage.gap.cheapest_way).replace(/ -- /g, " — ")}.`
             : ""}
         </MDTypography>
       )}
@@ -495,15 +525,15 @@ function ClinicStreamSection({ groups, inForceLeft, inForceRight, clinicStream, 
       )}
       <RateStrataGroups groups={groups} inForceLeft={inForceLeft} inForceRight={inForceRight}
         pooledSurfaces={{}} idPrefix={pooledWanted && !pooledUnavailableReason ? "cms-clinic-pw" : "cms-clinic"}
-        showDescriptions={showDescriptions} />
-      <Fold show={`Ingested clinic and home-testing visits (${visits.length})`} hide="Hide the visit list"
+        showDescriptions={showDescriptions} half={half} ceiling={ceiling} />
+      <SizedFold show={`Clinic and home-testing visits read (${visits.length})`} hide="Hide the visit list"
         mt={1.5}>
         <MDBox sx={{ overflowX: "auto" }}>
           <Table size="small">
             <TableHead sx={{ display: "table-header-group", p: 0 }}>
               <TableRow>
-                {["visit", "setting", "steps", "steps with a score"].map((h) => (
-                  <TableCell key={h} sx={{ py: 0.5 }}>
+                {["Visit", "Where", "Steps", "Steps with a score"].map((h) => (
+                  <TableCell key={h} sx={{ py: 0.5, backgroundColor: T.fillMuted }}>
                     <MDTypography variant="caption" sx={HEAD}>{h}</MDTypography>
                   </TableCell>
                 ))}
@@ -513,32 +543,31 @@ function ClinicStreamSection({ groups, inForceLeft, inForceRight, clinicStream, 
               {visits.map((v, i) => (
                 <TableRow key={i}>
                   <TableCell sx={{ py: 0.4 }}>
-                    <MDTypography variant="caption" sx={{ fontSize: TYPE.small }}>{v.visit_date}</MDTypography>
+                    <MDTypography variant="caption" sx={{ ...MONO, fontSize: TYPE.small }}>{v.visit_date}</MDTypography>
                   </TableCell>
                   <TableCell sx={{ py: 0.4 }}>
-                    <MDTypography variant="caption" sx={{ fontSize: TYPE.small, textTransform: "capitalize" }}>
-                      {v.setting === "home" ? "at home" : "in clinic"}
+                    <MDTypography variant="caption" sx={{ fontSize: TYPE.small, color: T.ink }}>
+                      {v.setting === "home" ? "At home" : "In clinic"}
                     </MDTypography>
                   </TableCell>
                   <TableCell sx={{ py: 0.4 }}>
-                    <MDTypography variant="caption" sx={{ fontSize: TYPE.small, fontFamily: PAL.mono }}>{num(v.n_steps) ?? "—"}</MDTypography>
+                    <MDTypography variant="caption" sx={{ ...MONO, fontSize: TYPE.small }}>{num(v.n_steps) ?? "—"}</MDTypography>
                   </TableCell>
                   <TableCell sx={{ py: 0.4 }}>
-                    <MDTypography variant="caption" sx={{ fontSize: TYPE.small, fontFamily: PAL.mono }}>{num(v.n_with_pain) ?? "—"}</MDTypography>
+                    <MDTypography variant="caption" sx={{ ...MONO, fontSize: TYPE.small }}>{num(v.n_with_pain) ?? "—"}</MDTypography>
                   </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         </MDBox>
-      </Fold>
+      </SizedFold>
     </MDBox>
   );
 }
 
-/** The pooled-over-pulse-widths rows as ONE group at the pairing in force (decision 189's
- *  option A), in the shape `RateStrataGroups` draws; the pairings each rate pooled are named
- *  from the fitted rows. */
+/** The pooled-over-pulse-widths rows as ONE group at the pairing in force, in the shape
+ *  `RateStrataGroups` draws; the pairings each rate pooled are named from the fitted rows. */
 function pooledGroup(pooling) {
   const rows = (pooling && Array.isArray(pooling.rate_strata_pooled)) ? pooling.rate_strata_pooled : [];
   if (!pooling || pooling.available !== true || !rows.length) return null;
@@ -546,7 +575,7 @@ function pooledGroup(pooling) {
   const fitted = rows.filter((r) => r && r.fitted && Array.isArray(r.pairings) && r.pairings.length);
   const byPair = new Map();
   fitted.forEach((r) => r.pairings.forEach((p) => {
-    const k = `${Number(p.pw_us_left).toFixed(0)}/${Number(p.pw_us_right).toFixed(0)}\u202f\u00b5s`;
+    const k = `${Number(p.pw_us_left).toFixed(0)}/${Number(p.pw_us_right).toFixed(0)} µs`;
     byPair.set(k, (byPair.get(k) || 0) + (num(p.n_epochs) || 0));
   }));
   const nPairings = Math.max(0, ...rows.map((r) => num(r.n_pairings_pooled) || 0));
@@ -568,8 +597,36 @@ export const CURRENT_PAIN_CAVEAT =
   + "sample: given only the current in force, a model tells a high rating from a low one no better "
   + "than chance (area under the curve 0.41 on the left current alone, 0.49 on both sides, against "
   + "0.57 for shuffled data, over 611 ratings with the folds separated in time). Read the squares as "
-  + "where the currents have been tried and what was rated there \u2014 not evidence that raising "
-  + "the current lowers this patient\u2019s pain.";
+  + "where the currents have been tried and what was rated there — not evidence that raising "
+  + "the current lowers this patient’s pain.";
+
+/** The caveat as ONE sentence in the open (SPEC.md section 5.3, §2); its numbers in the fold. */
+const CURRENT_PAIN_CAVEAT_SHORT =
+  "Higher current and lower pain go together in this record, but that does not hold up when "
+  + "predicting weeks the model was not fitted on: read the squares as where currents have been "
+  + "tried, not evidence that raising the current lowers this patient’s pain.";
+
+/** The segmented control "Pulse widths: separate | pooled". Each half is a button that says what
+ *  it does, so a screen reader hears "Keep pulse widths separate" or "Pool pulse widths". */
+function PulseWidthToggle({ pooled, onChange }) {
+  const seg = (active) => ({
+    fontSize: TYPE.body, fontFamily: "inherit", lineHeight: "20px", padding: "6px 12px",
+    border: `1px solid ${active ? T.accent : T.ink3}`, cursor: "pointer",
+    background: active ? T.accent : T.surface, color: active ? T.onFill : T.ink,
+    fontWeight: active ? WEIGHT.strong : WEIGHT.regular,
+  });
+  return (
+    <MDBox display="inline-flex" alignItems="center" gap={1}>
+      <span style={{ fontSize: TYPE.body, color: T.ink2 }}>Pulse widths:</span>
+      <MDBox display="inline-flex" role="group" aria-label="Pulse widths">
+        <button type="button" aria-label="Keep pulse widths separate" aria-pressed={!pooled}
+          onClick={() => onChange(false)} style={{ ...seg(!pooled), borderRadius: "4px 0 0 4px" }}>separate</button>
+        <button type="button" aria-label="Pool pulse widths" aria-pressed={pooled}
+          onClick={() => onChange(true)} style={{ ...seg(pooled), borderRadius: "0 4px 4px 0", borderLeft: 0 }}>pooled</button>
+      </MDBox>
+    </MDBox>
+  );
+}
 
 export default function CurrentMapCard({ plan }) {
   const stage1 = (plan && plan.stage1) || {};
@@ -580,8 +637,7 @@ export default function CurrentMapCard({ plan }) {
   // The clinic stream's own pooled fit (carried since 2026-09-23), swapped in by the same toggle.
   const poolingClinic = stage1.pulse_width_pooling_clinic || null;
   const pooledClinic = useMemo(() => pooledGroup(poolingClinic), [poolingClinic]);
-  // Decision 189's option A behind a toggle (the PI, 2026-09-21): the separate fit loads;
-  // one click shows the fit pooled over pulse widths, a second brings the separate one back.
+  // Pooling across pulse widths behind a toggle (the PI, 2026-09-21): the separate fit loads.
   const [poolPulseWidths, setPoolPulseWidths] = useState(false);
   const rawRateStrataClinic = stage1.rate_strata_clinic;
   const rateStrataClinic = useMemo(() => (Array.isArray(rawRateStrataClinic) ? rawRateStrataClinic : []),
@@ -590,96 +646,111 @@ export default function CurrentMapCard({ plan }) {
   const inForceBySide = (stage1.frozen_configuration || {}).in_force_by_side || {};
   const inForceLeft = num(inForceBySide.Left && inForceBySide.Left.amplitude_mA);
   const inForceRight = num(inForceBySide.Right && inForceBySide.Right.amplitude_mA);
+  const ceiling = useMemo(() => ceilingFromPlan(plan), [plan]);
 
   const groups = useMemo(() => groupByPulseWidthPair(rateStrata), [rateStrata]);
   const clinicGroups = useMemo(() => groupByPulseWidthPair(rateStrataClinic), [rateStrataClinic]);
   const pairingSentence = useMemo(() => pulseWidthPairingSentence(rateStrata, rateStrataClinic),
     [rateStrata, rateStrataClinic]);
-  // The PI, 2026-09-17 (S5): every description on this card folds behind one push-button, off on
-  // every load; the squares, the per-rate lines and the three checks stay visible either way.
-  // AMENDED by him on 2026-09-23 for ONE paragraph: the legend (what the colours, the cross, the
-  // dots and the star mean) is open on load, because the squares cannot be read without it (panel
-  // C item 5, report C §5.3). Every other description still folds.
+  // The PI, 2026-09-17 (S5): every explanation on this card folds behind one control, off on every
+  // load; the squares, the per-rate lines and the three checks stay visible either way. AMENDED by
+  // him on 2026-09-23 for ONE paragraph: the legend is open on load.
   const [showDescriptions, setShowDescriptions] = useState(false);
+
+  const surveyGroups = poolPulseWidths && pooled ? [pooled] : groups;
+  const sheetGroups = poolPulseWidths && pooledClinic ? [pooledClinic] : clinicGroups;
+  const shownRows = [...surveyGroups, ...sheetGroups].flatMap((g) => g.rows || []);
+  const half = useMemo(() => sharedHalfRange(shownRows.filter((r) => r && r.fitted).map((r) => r.surface)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [poolPulseWidths, rateStrata, rateStrataClinic, pooled, pooledClinic]);
 
   if (!rateStrata.length) return null;
 
-  // Decision 253's block-of-time check beside each recommended current on the card (the PI,
-  // 2026-09-25): ONE note for the card, printed when any row now drawn carries the dagger.
-  const shownRows = [...(poolPulseWidths && pooled ? [pooled] : groups),
-    ...(poolPulseWidths && pooledClinic ? [pooledClinic] : clinicGroups)]
-    .flatMap((g) => g.rows || []);
+  // Decision 253's block-of-time check beside each recommended current on the card: ONE note for
+  // the card, printed when any row now drawn carries the dagger.
   const anyMoves = shownRows.some((r) => r && r.fitted && r.resolved === true && blockOfTimeState(r) === "moves");
+  const fittedRows = shownRows.filter((r) => r && r.fitted);
+  const nRecommend = fittedRows.filter((r) => r.resolved === true).length;
+  const answer = !fittedRows.length
+    ? "No pain map could be drawn: no rate has enough stretches of unchanged settings."
+    : (nRecommend === 0
+      ? `None of the ${fittedRows.length} pain maps drawn can tell currents apart well enough to recommend one; the checks under each square say why.`
+      : `${nRecommend} of the ${fittedRows.length} pain maps drawn can recommend a current, marked best ★.`);
+
+  const actions = (
+    <MDBox display="flex" alignItems="center" columnGap={2} rowGap={1} flexWrap="wrap">
+      {pooled && <PulseWidthToggle pooled={poolPulseWidths} onChange={setPoolPulseWidths} />}
+      <button type="button" onClick={() => setShowDescriptions((v) => !v)} aria-expanded={showDescriptions}
+        style={{ fontSize: TYPE.body, fontFamily: "inherit", color: T.accent, background: "none", border: 0,
+          padding: 0, cursor: "pointer", textDecoration: "underline" }}>
+        {showDescriptions ? "Hide explanations" : "Show explanations"}
+      </button>
+    </MDBox>
+  );
 
   return (
-    <Card>
-      <MDBox p={2}>
-        <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>
-          Where the two currents have been tried, and what the record says
-        </MDTypography>
+    <Section id="current-map" question="Where have currents been tried, and what does the fit predict?"
+      answer={answer} actions={actions}>
         {/* The card draws pain against the two currents, so it is where a reader could take the
             pooled association for a dose effect. Measured 2026-09-22: it does not survive being
-            asked to predict. In the open, never behind the descriptions button (panel B, item 8). */}
-        <MDTypography variant="caption" component="div" data-testid="current-pain-caveat"
-          sx={{ fontSize: TYPE.body, mt: 0.5, color: "#8a5a00" }}>
-          {CURRENT_PAIN_CAVEAT}
-        </MDTypography>
-        <MDTypography variant="caption" component="div" color="text" data-testid="current-map-legend"
-          sx={{ fontSize: TYPE.body, mt: 0.5, mb: 1.5 }}>
+            asked to predict. One sentence in the open, its numbers one click away (mounted). */}
+        <MDBox data-testid="current-pain-caveat">
+          <MDTypography variant="caption" component="div"
+            sx={{ fontSize: TYPE.body, color: T.caution, maxWidth: "80ch" }}>
+            {`▲ ${CURRENT_PAIN_CAVEAT_SHORT}`}
+          </MDTypography>
+          <SizedFold show="The numbers behind this" hide="Hide the numbers" dense mt={0.5}>
+            <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2, maxWidth: "80ch" }}>
+              {CURRENT_PAIN_CAVEAT}
+            </MDTypography>
+          </SizedFold>
+        </MDBox>
+        <MDTypography variant="caption" component="div" data-testid="current-map-legend"
+          sx={{ fontSize: TYPE.body, color: T.ink2, mt: 2, mb: 1.5, maxWidth: "80ch" }}>
           Each square below is one stimulation rate: the left current runs along the bottom, the
           right current up the side, and the colour is the predicted pain rating at that combination
           (plus a fixed cost where a side effect was reported), which the search is trying to make
           as small as possible. Light grey is the predicted rating at the setting programmed today,
-          so blue is better than today and orange worse, deeper the further from today; a black ×
-          marks that setting; the dots are combinations this participant has actually been rated
-          on, sized by how many ratings back them; a white star appears only when the record can
-          tell currents apart well enough to trust it, per the three checks printed beside each
-          square.
+          so blue is better than today and orange worse, deeper the further from today, on one
+          scale for every square; &quot;today ×&quot; marks that setting; the dots are combinations
+          this participant has actually been rated on, sized by how many ratings back them;
+          &quot;best ★&quot; appears only when the record can tell currents apart well enough to trust
+          it, per the three checks printed under each square. The dashed line labelled &quot;safe
+          ceiling&quot; marks the safe current ceiling; nothing beyond it is offered.
         </MDTypography>
+        <ColorKey scale={CURRENT_MAP_COLORSCALE} range={[-Number(half.toFixed(2)), Number(half.toFixed(2))]}
+          title="Predicted rating minus today's, on the 0-10 scale (same for every square)"
+          lowLabel="better than today" midLabel="today" highLabel="worse than today" width={360} />
 
         {showDescriptions && pooling && pooling.available === false && (
-          <MDTypography variant="caption" component="div" sx={{ ...SMALL, fontSize: TYPE.body, mb: 1 }}>
+          <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2, mt: 1.5 }}>
             {`Pooling across pulse widths is not available on this record: ${pooling.reason || "no reason given"}.`}
           </MDTypography>
         )}
         {showDescriptions && poolPulseWidths && pooling && pooling.note && (
-          <MDTypography variant="caption" component="div" color="text" sx={{ fontSize: TYPE.body, mb: 1 }}>
+          <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2, mt: 1.5 }}>
             {pooling.note}
           </MDTypography>
         )}
-        <RateStrataGroups groups={poolPulseWidths && pooled ? [pooled] : groups}
+
+        <MDTypography variant="h6" component="h3" sx={{ ...SUBHEAD, fontSize: TYPE.lead, mt: 3 }}>
+          From the home pain surveys
+        </MDTypography>
+        <RateStrataGroups groups={surveyGroups}
           inForceLeft={inForceLeft} inForceRight={inForceRight}
           pooledSurfaces={poolPulseWidths && pooled ? {} : pooledSurfaces}
-          idPrefix={poolPulseWidths && pooled ? "cms-pw" : "cms"} showDescriptions={showDescriptions} />
+          idPrefix={poolPulseWidths && pooled ? "cms-pw" : "cms"} showDescriptions={showDescriptions}
+          half={half} ceiling={ceiling} />
 
-        <ClinicStreamSection groups={poolPulseWidths && pooledClinic ? [pooledClinic] : clinicGroups}
+        <ClinicStreamSection groups={sheetGroups}
           inForceLeft={inForceLeft} inForceRight={inForceRight}
           clinicStream={stage1.clinic_stream} showDescriptions={showDescriptions}
           pairingSentence={pairingSentence} pooledWanted={poolPulseWidths}
           pooledUnavailableReason={pooledClinic ? null
-            : ((poolingClinic && poolingClinic.reason) || "no pooled clinic fit on this response")} />
+            : ((poolingClinic && poolingClinic.reason) || "no pooled clinic fit on this response")}
+          half={half} ceiling={ceiling} />
 
         <BlockOfTimeFootnote show={anyMoves} />
-
-        <MDBox mt={1.5} display="flex" justifyContent="flex-start" gap={1} flexWrap="wrap">
-          {pooled && (
-            <MDButton size="small" variant="outlined" color="dark"
-              onClick={() => setPoolPulseWidths((v) => !v)} aria-pressed={poolPulseWidths}
-              sx={{ textTransform: "none", fontSize: 12, py: 0.4, px: 1.25, minHeight: 0,
-                borderWidth: 1.5, boxShadow: "0 2px 0 #1A1A1A", "&:hover": { boxShadow: "0 1px 0 #1A1A1A" } }}>
-              <Icon sx={{ mr: 0.5, fontSize: "16px !important" }}>{poolPulseWidths ? "call_split" : "merge_type"}</Icon>
-              {poolPulseWidths ? "Keep pulse widths separate" : "Pool pulse widths"}
-            </MDButton>
-          )}
-          <MDButton size="small" variant="outlined" color="dark"
-            onClick={() => setShowDescriptions((v) => !v)} aria-expanded={showDescriptions}
-            sx={{ textTransform: "none", fontSize: 12, py: 0.4, px: 1.25, minHeight: 0,
-              borderWidth: 1.5, boxShadow: "0 2px 0 #1A1A1A", "&:hover": { boxShadow: "0 1px 0 #1A1A1A" } }}>
-            <Icon sx={{ mr: 0.5, fontSize: "16px !important" }}>help_outline</Icon>
-            {showDescriptions ? "Collapse descriptions" : "Expand descriptions"}
-          </MDButton>
-        </MDBox>
-      </MDBox>
-    </Card>
+    </Section>
   );
 }

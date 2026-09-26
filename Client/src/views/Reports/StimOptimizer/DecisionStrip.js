@@ -36,43 +36,33 @@
  *   - "no current can be recommended" is ONE sentence under the rows, not one per side;
  *   - the columns fit a laptop's card (about 860 px at their minimum, was about 1,330 px): the gain
  *     bar sits under the gain's number, in the same cell.
+ *
+ * THE MINIMALIST REDESIGN OF 2026-09-26 (SPEC.md section 5.3, §1): per side, an aligned comparison
+ * Today | Suggested | Difference with one row each for rate, pulse width and current, a zero
+ * difference reading "same"; the gain as a sentence, then the gain bar (the interval in grey, the
+ * point in the accent blue, "worse" and "better" at its ends, in pain points). Colours and sizes
+ * come from the shared tokens; the verdict carries its glyph (✓ ▲ ○) as well as its words.
  */
 import { CircularProgress, Tooltip } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
-import PAL from "views/Reports/ClosedLoopSim/palette";
-import { AmberGlyph } from "views/Reports/ClosedLoopSim/glyphs";
-
 import { GainBar, VerdictGlyph } from "./GainBar";
-import { TYPE, HEAD, SMALL, SizedFold } from "./typeScale";
+import { T, TYPE, HEAD, SMALL, MONO, SUBHEAD, WEIGHT, HAIRLINE, Mark, SizedFold } from "./typeScale";
 
 import { num, fmtMa, fmtHz, fmtUs, fmtPts, fmtDelta, contactLabel } from "./stimFormat";
 import { BlockOfTimeMark, BlockOfTimeFootnote, blockOfTimeState, notCheckedText, rateRowForSetting } from "./blockOfTime";
 
-const VALUE = { fontFamily: PAL.mono, fontSize: TYPE.numLarge, color: "#1A1A1A", whiteSpace: "nowrap" };
-const DELTA = { fontFamily: PAL.mono, fontSize: TYPE.num, color: "#1A1A1A", whiteSpace: "nowrap" };
-const GAIN = { fontFamily: PAL.mono, fontSize: TYPE.num, color: "#1A1A1A", whiteSpace: "nowrap" };
+const VALUE = { ...MONO, fontSize: TYPE.num };
 const NW = { whiteSpace: "nowrap" };
 
-/** A setting as one line of digits with units: "55 Hz · 100 µs · 3.0 mA". `missingAmp` is the
- * decision-158 case -- a rate (and usually a pulse width) WAS chosen, but the three-check honest
- * rule could not clear a current for it, so `amp` arrives as `null` on purpose, not as a gap in
- * the data. Printing a bare "—" there reads as missing data, so the current's place says "no
- * current" (never "NaN mA", never "None"), and ONE sentence under the rows says why for every side
- * at once (the design review of 2026-09-26: it used to be a sentence per side). */
-function Setting({ rate, pw, amp, missingPw, missingAmp, ampMoves = false }) {
-  return (
-    <span style={VALUE}>
-      {fmtHz(rate)}<span style={{ color: "#6E6E6E" }}> · </span>
-      {missingPw ? <span style={{ color: "#6E6E6E" }}>— µs</span> : fmtUs(pw)}
-      <span style={{ color: "#6E6E6E" }}> · </span>
-      {missingAmp
-        ? <span style={{ fontFamily: "inherit", fontSize: TYPE.body, fontWeight: 600, color: PAL.warnText }}>no current</span>
-        : <>{fmtMa(amp)}{ampMoves && <BlockOfTimeMark />}</>}
-    </span>
-  );
+/** A difference in one unit, "same" when there is none (SPEC.md section 5.3). */
+function diffText(v, unit, d) {
+  const x = num(v);
+  if (x === null) return "—";
+  if (Math.abs(x) < 1e-9) return "same";
+  return fmtDelta(x, unit, d);
 }
 
 function sideRows(arms, plan, inForce) {
@@ -161,7 +151,7 @@ export function sideVerdicts(plan, inForce) {
 
 export function decisionHeadline(plan, inForce) {
   const v = sideVerdicts(plan, inForce);
-  if (!v.length) return "What the joint search prefers, per side";
+  if (!v.length) return "Suggested setting, per side (one closed loop could use)";
   const yes = v.filter((x) => x.res === true).map((x) => x.side);
   const no = v.filter((x) => x.res === false).map((x) => x.side);
   const unformed = v.filter((x) => x.res === null).map((x) => x.side);
@@ -178,12 +168,119 @@ export function decisionHeadline(plan, inForce) {
   return `${yes.join(" and ")} has a setting proven better than today's; ${rest.join("; ")}`;
 }
 
-// The columns: side | programmed now | arrow | search prefers | change | gain (the number, the bar
-// under it) | verdict. The gain's number cannot wrap ("+0.00 pts ± 0.85" at 14 px in the tabular
-// font is about 150 px) and its bar sits UNDER it in the same cell (2026-09-26): side by side,
-// the two fixed cells made the strip about 1,330 px wide and it scrolled sideways on a laptop.
-const COLUMNS = "48px minmax(170px, 1.2fr) 20px minmax(170px, 1.2fr) minmax(80px, 0.6fr) minmax(170px, 1fr) minmax(120px, 0.8fr)";
-const GAIN_BAR_WIDTH = 170;
+// Two side blocks next to each other on a wide card, one above the other on a narrow one.
+const SIDES_GRID = "repeat(auto-fit, minmax(320px, 1fr))";
+const COMPARE = "minmax(96px, 0.9fr) minmax(80px, 1fr) minmax(96px, 1.1fr) minmax(72px, 0.8fr)";
+const GAIN_BAR_WIDTH = 240;
+
+/** One side: the aligned comparison, the lines under it, the gain as a sentence and its bar. */
+function SideBlock({ r, plan, planLoading, planErr, halfRange, timeState, timeNotChecked }) {
+  const s = r.s;
+  const st = r.stratum;
+  const prefRate = num(s && s.rate_hz), prefPw = num(s && s.pulse_width_us),
+    prefAmp = num(s && s.amplitude_preferred_mA);
+  const dMax = num(s && s.amplitude_delivered_max_mA), dMin = num(s && s.amplitude_delivered_min_mA);
+  const aboveDelivered = prefAmp !== null && dMax !== null && prefAmp > dMax + 1e-9;
+  const gain = num(st && st.gain), sd = num(st && st.sd_of_difference);
+  const resolved = st ? (st.optimum_resolved === true ? true : (st.optimum_resolved === false ? false : null))
+    : (s ? (s.resolved === true ? true : null) : null);
+  const nFit = num(s && s.n_epochs_fitted_on_the_chosen_stratum);
+  const cellLine = { borderTop: HAIRLINE, py: 0.75 };
+  const suggested = (row) => {
+    if (planLoading && !s) return row === "rate" ? (
+      <MDBox display="flex" alignItems="center" gap={1}>
+        <CircularProgress size={14} />
+        <span style={SMALL}>computing (about a minute the first time)</span>
+      </MDBox>) : null;
+    if (!s) return row === "rate" ? <span style={SMALL}>{planErr ? `plan unavailable: ${planErr}` : "—"}</span> : null;
+    if (prefRate === null) return row === "rate"
+      ? <span style={{ fontSize: TYPE.body, fontWeight: WEIGHT.strong, color: T.caution }}>no rate closed loop can use</span> : null;
+    if (row === "rate") return <span style={VALUE}>{fmtHz(prefRate)}</span>;
+    if (row === "pw") return <span style={VALUE}>{prefPw === null ? "— µs" : fmtUs(prefPw)}</span>;
+    return prefAmp === null
+      ? <span style={{ fontSize: TYPE.body, fontWeight: WEIGHT.strong, color: T.caution }}>no current</span>
+      : <span style={VALUE}>{fmtMa(prefAmp)}{timeState(r) === "moves" && <BlockOfTimeMark />}</span>;
+  };
+  const difference = (row) => {
+    if (!s || prefRate === null) return <span style={VALUE}>—</span>;
+    if (row === "rate") return <span style={VALUE}>{diffText(prefRate - (r.nowRate ?? prefRate), "Hz", 0)}</span>;
+    if (row === "pw") return <span style={VALUE}>{r.nowPw === null || prefPw === null ? "—" : diffText(prefPw - r.nowPw, "µs", 0)}</span>;
+    return (
+      <MDBox display="inline-flex" alignItems="center" gap={0.6}>
+        <span style={VALUE}>{prefAmp === null || r.nowAmp === null ? "—" : diffText(prefAmp - r.nowAmp, "mA", 1)}</span>
+        {aboveDelivered && (
+          <Tooltip title={`the suggested ${fmtMa(prefAmp)} is above the ${fmtMa(dMax)} ever delivered on this side, so it is a guess beyond any current this side has received`}>
+            <span><Mark state="caution" label="above the highest current ever delivered on this side" /></span>
+          </Tooltip>
+        )}
+      </MDBox>
+    );
+  };
+  const rows = [
+    ["rate", "Rate", <span key="t" style={VALUE}>{fmtHz(r.nowRate)}</span>],
+    ["pw", "Pulse width", <span key="t" style={VALUE}>{r.nowPw === null ? "— µs" : fmtUs(r.nowPw)}</span>],
+    ["amp", "Current", <span key="t" style={VALUE}>{fmtMa(r.nowAmp)}</span>],
+  ];
+  return (
+    <MDBox data-testid="decision-side" data-side={r.side}>
+      <MDTypography component="div" sx={SUBHEAD}>
+        {r.side}
+        <span style={{ ...SMALL, fontWeight: WEIGHT.regular, marginLeft: 8 }}>
+          {r.contacts ? <>contacts <span style={NW}>{r.contacts}</span></> : "contacts: not in the response"}
+        </span>
+      </MDTypography>
+      <MDBox mt={1} sx={{ display: "grid", gridTemplateColumns: COMPARE, columnGap: "12px", alignItems: "baseline" }}>
+        <span />
+        <MDTypography variant="caption" sx={{ ...HEAD, pb: 0.5 }}>Today</MDTypography>
+        <MDTypography variant="caption" sx={{ ...HEAD, pb: 0.5 }}>Suggested</MDTypography>
+        <MDTypography variant="caption" sx={{ ...HEAD, pb: 0.5 }}>Difference</MDTypography>
+        {rows.map(([key, label, today]) => [
+          <MDBox key={`${key}-l`} sx={cellLine}><span style={{ fontSize: TYPE.body, color: T.ink2 }}>{label}</span></MDBox>,
+          <MDBox key={`${key}-t`} sx={cellLine}>{today}</MDBox>,
+          <MDBox key={`${key}-s`} sx={cellLine}>{suggested(key)}</MDBox>,
+          <MDBox key={`${key}-d`} sx={cellLine}>{difference(key)}</MDBox>,
+        ])}
+      </MDBox>
+      {r.nowPw === null && (
+        <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.5 }}>
+          pulse width in force: not in the response for this side
+        </MDTypography>
+      )}
+      {/* Review S7 (2026-09-12): the setting in force is the newest DEVICE setting, rated or not;
+          when no rating has been filed under it yet the gains are still measured against the
+          newest RATED setting, and the side says so. */}
+      {r.inf && r.inf.has_ratings_yet === false && (
+        <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.5, color: T.caution }}>
+          {`▲ no pain rating filed under this setting yet · gains are measured against the newest rated setting${num(r.inf.fitted_incumbent_epoch) !== null ? ` (stretch ${Math.round(num(r.inf.fitted_incumbent_epoch))})` : ""}`}
+        </MDTypography>
+      )}
+      {timeNotChecked(r) && (
+        <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.5 }}>
+          {`current ${timeNotChecked(r)}`}
+        </MDTypography>
+      )}
+      {s && (dMin !== null || nFit !== null) && (
+        <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.5 }}>
+          {dMin !== null && dMax !== null
+            ? <>delivered so far <span style={NW}>{`${dMin.toFixed(1)}–${dMax.toFixed(1)} mA`}</span></> : ""}
+          {nFit !== null
+            ? <>{dMin !== null && dMax !== null ? " · " : ""}fitted on <span style={NW}>{`${Math.round(nFit)} stretches`}</span> of unchanged settings</> : ""}
+        </MDTypography>
+      )}
+      <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2, mt: 1.5, maxWidth: "68ch" }}>
+        {gain === null
+          ? "Predicted change in pain against today's setting: no difference could be formed."
+          : <>Predicted change in pain against today&apos;s setting:{" "}
+            <span style={{ ...VALUE, fontWeight: WEIGHT.strong }}>{fmtPts(gain).replace(/ pts$/, " pain points")}</span>
+            {sd === null ? "." : <>, with an uncertainty of <span style={VALUE}>{`± ${sd.toFixed(2)}`}</span> (1 standard deviation).</>}</>}
+      </MDTypography>
+      <MDBox mt={0.5} display="flex" alignItems="center" columnGap={2} rowGap={0.5} flexWrap="wrap">
+        <GainBar gain={gain} sd={sd} halfRange={halfRange} width={GAIN_BAR_WIDTH} />
+        <VerdictGlyph resolved={resolved} />
+      </MDBox>
+    </MDBox>
+  );
+}
 
 export default function DecisionStrip({ arms, plan, planLoading, planErr, inForce }) {
   const rows = sideRows(arms, plan, inForce);
@@ -205,113 +302,20 @@ export default function DecisionStrip({ arms, plan, planLoading, planErr, inForc
   const stopping = stoppingText(rows);
   return (
     <MDBox>
-      <MDBox sx={{ overflowX: "auto" }}>
-        <MDBox sx={{ display: "grid", gridTemplateColumns: COLUMNS,
-          columnGap: "14px", rowGap: "14px", alignItems: "center" }}>
-          <span />
-          <MDTypography variant="caption" sx={HEAD}>programmed now</MDTypography>
-          <span />
-          <MDTypography variant="caption" sx={HEAD}>search prefers (usable in closed loop)</MDTypography>
-          <MDTypography variant="caption" sx={HEAD}>change</MDTypography>
-          <MDTypography variant="caption" sx={HEAD}>gain over the setting in force ± 1 SD</MDTypography>
-          <MDTypography variant="caption" sx={HEAD}>verdict</MDTypography>
-
-          {rows.map((r) => {
-            const s = r.s;
-            const st = r.stratum;
-            const prefRate = num(s && s.rate_hz), prefPw = num(s && s.pulse_width_us),
-              prefAmp = num(s && s.amplitude_preferred_mA);
-            const dMax = num(s && s.amplitude_delivered_max_mA), dMin = num(s && s.amplitude_delivered_min_mA);
-            const aboveDelivered = prefAmp !== null && dMax !== null && prefAmp > dMax + 1e-9;
-            const gain = num(st && st.gain), sd = num(st && st.sd_of_difference);
-            const resolved = st ? (st.optimum_resolved === true ? true : (st.optimum_resolved === false ? false : null))
-              : (s ? (s.resolved === true ? true : null) : null);
-            const nFit = num(s && s.n_epochs_fitted_on_the_chosen_stratum);
-            return [
-              <MDTypography key={`${r.side}-a`} variant="button" fontWeight="medium" sx={{ fontSize: TYPE.num }}>{r.side}</MDTypography>,
-              <MDBox key={`${r.side}-b`}>
-                <Setting rate={r.nowRate} pw={r.nowPw} amp={r.nowAmp} missingPw={r.nowPw === null} />
-                <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.3 }}>
-                  {r.contacts ? <>contacts <span style={NW}>{r.contacts}</span></> : "contacts: not in the response"}
-                  {r.nowPw === null ? " · pulse width: not in the response for this side" : ""}
-                </MDTypography>
-                {/* Review S7 (2026-09-12): the setting in force is the newest DEVICE setting, rated
-                    or not; when no rating has been filed under it yet the gains on this row are
-                    still measured against the newest RATED setting, and the row says so. */}
-                {r.inf && r.inf.has_ratings_yet === false && (
-                  <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.2, color: PAL.warnText }}>
-                    {`no pain rating filed under this setting yet · gains below are measured against the newest rated setting${num(r.inf.fitted_incumbent_epoch) !== null ? ` (stretch ${Math.round(num(r.inf.fitted_incumbent_epoch))})` : ""}`}
-                  </MDTypography>
-                )}
-              </MDBox>,
-              <span key={`${r.side}-c`} style={{ color: "#6E6E6E", fontSize: 20, textAlign: "center" }}>→</span>,
-              <MDBox key={`${r.side}-d`}>
-                {planLoading && !s ? (
-                  <MDBox display="flex" alignItems="center" gap={1}>
-                    <CircularProgress size={14} />
-                    <MDTypography variant="caption" sx={SMALL}>
-                      computing the two-stage plan (about a minute the first time; a few seconds afterwards)
-                    </MDTypography>
-                  </MDBox>
-                ) : (s ? (
-                  prefRate === null ? (
-                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, color: PAL.warnText, fontWeight: 600 }}>
-                      no rate closed loop can use
-                    </MDTypography>
-                  ) : <Setting rate={prefRate} pw={prefPw} amp={prefAmp} missingPw={prefPw === null}
-                         missingAmp={prefAmp === null} ampMoves={timeState(r) === "moves"} />
-                ) : (
-                  <MDTypography variant="caption" sx={SMALL}>{planErr ? `plan unavailable: ${planErr}` : "—"}</MDTypography>
-                ))}
-                {timeNotChecked(r) && (
-                  <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.2 }}>
-                    {`current ${timeNotChecked(r)}`}
-                  </MDTypography>
-                )}
-                {s && (
-                  <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.3 }}>
-                    {dMin !== null && dMax !== null
-                      ? <>delivered so far <span style={NW}>{`${dMin.toFixed(1)}–${dMax.toFixed(1)} mA`}</span></> : ""}
-                    {nFit !== null
-                      ? <>{dMin !== null && dMax !== null ? " · " : ""}fitted on <span style={NW}>{`${Math.round(nFit)} stretches`}</span> of unchanged settings</> : ""}
-                  </MDTypography>
-                )}
-              </MDBox>,
-              <MDBox key={`${r.side}-e`}>
-                {s && prefRate !== null ? (
-                  <MDBox sx={{ ...DELTA, lineHeight: 1.5 }}>
-                    <div>{fmtDelta(prefRate - (r.nowRate ?? prefRate), "Hz", 0)}</div>
-                    <div>{r.nowPw === null || prefPw === null ? "— µs" : fmtDelta(prefPw - r.nowPw, "µs", 0)}</div>
-                    <MDBox display="flex" alignItems="center" gap={0.6}>
-                      <span>{prefAmp === null || r.nowAmp === null ? "— mA" : fmtDelta(prefAmp - r.nowAmp, "mA", 1)}</span>
-                      {aboveDelivered && (
-                        <Tooltip title={`the preferred ${fmtMa(prefAmp)} is above the ${fmtMa(dMax)} ever delivered on this side, so it is an extrapolation`}>
-                          <span><AmberGlyph label="above the highest current ever delivered on this side" size={14} /></span>
-                        </Tooltip>
-                      )}
-                    </MDBox>
-                  </MDBox>
-                ) : <MDTypography variant="caption" sx={SMALL}>—</MDTypography>}
-              </MDBox>,
-              <MDBox key={`${r.side}-f`}>
-                <span style={GAIN}>
-                  {gain === null ? "—" : `${fmtPts(gain)}${sd === null ? "" : ` ± ${sd.toFixed(2)}`}`}
-                </span>
-                <MDBox mt={0.3}><GainBar gain={gain} sd={sd} halfRange={halfRange} width={GAIN_BAR_WIDTH} /></MDBox>
-              </MDBox>,
-              <MDBox key={`${r.side}-h`}><VerdictGlyph resolved={resolved} /></MDBox>,
-            ];
-          })}
-        </MDBox>
+      <MDBox sx={{ display: "grid", gridTemplateColumns: SIDES_GRID, columnGap: "48px", rowGap: "32px" }}>
+        {rows.map((r) => (
+          <SideBlock key={r.side} r={r} plan={plan} planLoading={planLoading} planErr={planErr}
+            halfRange={halfRange} timeState={timeState} timeNotChecked={timeNotChecked} />
+        ))}
       </MDBox>
       {noCurrent.length > 0 && (
         <MDTypography variant="caption" component="div" data-testid="no-current-sentence"
-          sx={{ fontSize: TYPE.body, fontWeight: 600, color: PAL.warnText, mt: 1.2 }}>
-          {`No current can be recommended from this record on ${noCurrent.join(" or ")}; the current map shows which of its three checks fail.`}
+          sx={{ fontSize: TYPE.body, fontWeight: WEIGHT.strong, color: T.caution, mt: 2 }}>
+          {`▲ No current can be recommended from this record on ${noCurrent.join(" or ")}; the current map below shows which of its three checks fail.`}
         </MDTypography>
       )}
-      <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 1.2 }}>
-        Pain objective: lower is better; a positive gain favours the preferred setting.
+      <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 1.5 }}>
+        Pain points: lower is better; a positive change favours the suggested setting.
       </MDTypography>
       <BlockOfTimeFootnote show={anyMoves} />
       {/* ONE fold for three things the PI placed in the open in decisions 243(b), 243(d) and
@@ -319,34 +323,34 @@ export default function DecisionStrip({ arms, plan, planLoading, planErr, inForc
           means, how many times that comparison ran and what 1 SD exposes across them (the
           server's own sentence), and the search's own stopping rule. */}
       <SizedFold show="What “proven better” means, and when to stop searching" hide="Hide">
-        <MDTypography variant="caption" component="div" sx={{ ...SMALL, fontSize: TYPE.body }}>
-          Proven better means the predicted gain over the setting in force is larger than 1 standard
-          deviation of that difference; not proven means it was measured and is smaller; not
+        <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2 }}>
+          Proven better means the predicted change in pain against today's setting is larger than 1
+          standard deviation of that difference; not proven means it was measured and is smaller; not
           determinable means the difference could not be formed at all.
         </MDTypography>
         {exposure && exposure.sentence ? (
           <MDTypography variant="caption" component="div" data-testid="resolution-exposure"
-            sx={{ ...SMALL, fontSize: TYPE.body, mt: 0.6 }}>
+            sx={{ fontSize: TYPE.body, color: T.ink2, mt: 1 }}>
             {exposure.sentence}
           </MDTypography>
         ) : null}
         {/* Absent from a response that predates the fields. */}
         {stopping ? (
           <MDTypography variant="caption" component="div" data-testid="stopping-rule"
-            sx={{ ...SMALL, fontSize: TYPE.body, mt: 0.6 }}>
+            sx={{ fontSize: TYPE.body, color: T.ink2, mt: 1 }}>
             {`When to stop searching, the search's own rule: ${stopping}.`}
           </MDTypography>
         ) : null}
       </SizedFold>
       {rows.some((r) => r.s && Array.isArray(r.s.reasons) && r.s.reasons.length) && (
         <SizedFold show={`Why each side reads as it does (${rows.reduce((n, r) => n + ((r.s && r.s.reasons) || []).length, 0)} reasons from the search)`}
-          hide="Hide the reasons">
+          hide="Hide the reasons" mt={0.5}>
           {rows.map((r) => (r.s && Array.isArray(r.s.reasons) && r.s.reasons.length) ? (
-            <MDBox key={r.side} mt={0.6}>
-              <MDTypography variant="caption" fontWeight="medium" component="div" sx={{ fontSize: TYPE.body }}>{r.side}</MDTypography>
+            <MDBox key={r.side} mt={1}>
+              <MDTypography variant="caption" component="div" sx={SUBHEAD}>{r.side}</MDTypography>
               <MDBox component="ul" sx={{ m: 0, pl: 2.5 }}>
                 {r.s.reasons.map((t, i) => (
-                  <li key={i}><MDTypography variant="caption" color="text" sx={{ fontSize: TYPE.body }}>{String(t)}</MDTypography></li>
+                  <li key={i}><MDTypography variant="caption" sx={{ fontSize: TYPE.body, color: T.ink2 }}>{String(t)}</MDTypography></li>
                 ))}
               </MDBox>
             </MDBox>

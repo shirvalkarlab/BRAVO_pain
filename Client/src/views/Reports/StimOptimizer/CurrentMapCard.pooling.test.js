@@ -92,7 +92,7 @@ describe("CurrentMapCard: pooling across pulse widths behind a toggle", () => {
       reason: "the pulse-width pairing in force is not known", rate_strata_pooled: [] } } };
     rtlRender(wrap(<CurrentMapCard plan={plan2} />));
     expect(screen.queryByRole("button", { name: /Pool pulse widths/ })).toBeNull();
-    fireEvent.click(screen.getAllByRole("button", { name: /Expand descriptions/ })[1]);
+    fireEvent.click(screen.getAllByRole("button", { name: /Show explanations/ })[1]);   // PIN CHANGED 2026-09-26: "Show explanations" (SPEC.md section 5.3)
     expect(document.body.textContent).toContain("the pulse-width pairing in force is not known");
   });
 });

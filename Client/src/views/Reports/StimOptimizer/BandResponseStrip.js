@@ -22,17 +22,24 @@
  * A SHAPE PER STATE, NOT COLOUR ALONE (the design review of 2026-09-26, S9; WCAG 1.4.1): a band that
  * does both is a solid bar; direction alone is a hatched bar; a band that does not respond is an
  * open bar, outline only; a band that could not be measured is a dashed open circle. The four are
- * named in a key under the chart. The axis text is #5E5E5E (6.4:1; it was #7A7A7A, 4.29:1), and
+ * named in a key under the chart. The axis text is the lightest allowed grey (6.4:1), and
  * "separation (SD)" is said in the house words: the gap between the two measured power levels, in
  * units of their own scatter.
  */
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
-import PAL from "views/Reports/ClosedLoopSim/palette";
+import { SVG_TEXT } from "views/Reports/figureStyle";
 
 import { num } from "./stimFormat";
-import { TYPE, SMALL } from "./typeScale";
+import { T, TYPE, SMALL, MONO, WEIGHT } from "./typeScale";
+
+// Marks, not text: a band that responds is solid ink; direction alone is hatched in the caution
+// amber; no response is an open grey outline; not measurable is a dashed grey circle. Every state
+// has its own shape, so none is told apart by colour alone.
+const SOLID = T.ink2;
+const HATCH = T.caution;
+const OPEN = T.graphic;
 
 /** What each bar shape means, one swatch each, so no state is told apart by colour alone. */
 function BandStateKey({ showDirection }) {
@@ -40,12 +47,12 @@ function BandStateKey({ showDirection }) {
   const sw = (children) => <svg width="14" height="14" aria-hidden="true">{children}</svg>;
   return (
     <MDBox display="flex" flexWrap="wrap" columnGap={2} rowGap={0.3} sx={SMALL}>
-      <span style={item}>{sw(<rect x="2" y="1" width="10" height="12" fill={PAL.pass} />)} solid: responds by its two readings and falls with current after removing differences between clinic visits</span>
+      <span style={item}>{sw(<rect x="2" y="1" width="10" height="12" fill={SOLID} />)} solid: responds by its two readings and falls with current after removing differences between clinic visits</span>
       {showDirection && (
-        <span style={item}>{sw(<><rect x="2" y="1" width="10" height="12" fill="#FFFFFF" stroke={PAL.warn} strokeWidth="1" /><path d="M2,6 L7,1 M2,11 L12,1 M5,13 L12,6" stroke={PAL.warn} strokeWidth="1.6" /></>)} hatched: direction alone</span>
+        <span style={item}>{sw(<><rect x="2" y="1" width="10" height="12" fill={T.surface} stroke={HATCH} strokeWidth="1" /><path d="M2,6 L7,1 M2,11 L12,1 M5,13 L12,6" stroke={HATCH} strokeWidth="1.6" /></>)} hatched: direction alone</span>
       )}
-      <span style={item}>{sw(<rect x="2.75" y="1.75" width="8.5" height="10.5" fill="#FFFFFF" stroke={PAL.fail} strokeWidth="1.5" />)} open: does not respond</span>
-      <span style={item}>{sw(<circle cx="7" cy="7" r="3.5" fill="none" stroke={PAL.neutral} strokeDasharray="2 2" />)} dashed circle: not measurable</span>
+      <span style={item}>{sw(<rect x="2.75" y="1.75" width="8.5" height="10.5" fill={T.surface} stroke={OPEN} strokeWidth="1.5" />)} open: does not respond</span>
+      <span style={item}>{sw(<circle cx="7" cy="7" r="3.5" fill="none" stroke={OPEN} strokeDasharray="2 2" />)} dashed circle: not measurable</span>
     </MDBox>
   );
 }
@@ -78,64 +85,64 @@ export default function BandResponseStrip({ rows, minSep, best, width = 520 }) {
       <svg width={W} height={H} role="img" aria-label="gap between the two power levels per band centre, against the required minimum">
         <defs>
           <pattern id="band-direction-only" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-            <rect width="5" height="5" fill="#FFFFFF" />
-            <line x1="0" y1="0" x2="0" y2="5" stroke={PAL.warn} strokeWidth="3" />
+            <rect width="5" height="5" fill={T.surface} />
+            <line x1="0" y1="0" x2="0" y2="5" stroke={HATCH} strokeWidth="3" />
           </pattern>
         </defs>
         {/* y axis */}
-        <line x1={L} x2={L} y1={T} y2={y(0)} stroke="#D8D8D8" />
-        <line x1={L} x2={W - R} y1={y(0)} y2={y(0)} stroke="#D8D8D8" />
-        <text x={L - 6} y={y(0) + 4} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="end">0</text>
-        <text x={L - 6} y={y(dMax / 2) + 4} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="end">{(dMax / 2).toFixed(1)}</text>
-        <text x={L - 6} y={T + 4} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="end">{dMax.toFixed(1)}</text>
-        <text x={12} y={(T + y(0)) / 2} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="middle"
+        <line x1={L} x2={L} y1={T} y2={y(0)} stroke={T.graphic} />
+        <line x1={L} x2={W - R} y1={y(0)} y2={y(0)} stroke={T.graphic} />
+        <text x={L - 6} y={y(0) + 4} {...SVG_TEXT} textAnchor="end">0</text>
+        <text x={L - 6} y={y(dMax / 2) + 4} {...SVG_TEXT} textAnchor="end">{(dMax / 2).toFixed(1)}</text>
+        <text x={L - 6} y={T + 4} {...SVG_TEXT} textAnchor="end">{dMax.toFixed(1)}</text>
+        <text x={12} y={(T + y(0)) / 2} {...SVG_TEXT} textAnchor="middle"
           transform={`rotate(-90 12 ${(T + y(0)) / 2})`}>gap (scatter units)</text>
         {/* the required minimum, labelled in the right margin so it never crosses a bar */}
         {num(minSep) !== null && (
           <>
-            <line x1={L} x2={W - R} y1={y(num(minSep))} y2={y(num(minSep))} stroke="#4A4A4A" strokeWidth="1" strokeDasharray="4 3" />
-            <text x={W - R + 6} y={y(num(minSep)) + 4} fontSize={TYPE.axis} fill="#4A4A4A">{`required ≥ ${num(minSep).toFixed(2)}`}</text>
+            <line x1={L} x2={W - R} y1={y(num(minSep))} y2={y(num(minSep))} stroke={T.ink2} strokeWidth="1" strokeDasharray="4 3" />
+            <text x={W - R + 6} y={y(num(minSep)) + 4} {...SVG_TEXT} fill={T.ink2}>{`required ≥ ${num(minSep).toFixed(2)}`}</text>
           </>
         )}
         {/* x axis */}
-        {[8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30].map((t) => (
-          <text key={t} x={x(t)} y={H - B + 16} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="middle">{t}</text>
+        {[10, 15, 20, 25, 30].map((t) => (
+          <text key={t} x={x(t)} y={H - B + 16} {...SVG_TEXT} textAnchor="middle">{t}</text>
         ))}
-        <text x={(L + W - R) / 2} y={H - 4} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="middle">band centre (Hz)</text>
+        <text x={(L + W - R) / 2} y={H - 4} {...SVG_TEXT} textAnchor="middle">band centre (Hz)</text>
         {list.map((r) => {
           const c = num(r.center_hz), d = num(r.separation_d);
           if (d === null) {
-            return <circle key={c} cx={x(c)} cy={y(0) - 5} r="3.5" fill="none" stroke={PAL.neutral} strokeDasharray="2 2" />;
+            return <circle key={c} cx={x(c)} cy={y(0) - 5} r="3.5" fill="none" stroke={OPEN} strokeDasharray="2 2" />;
           }
           const both = r.responds === true && r.era_negative_significant === true;
           const directionOnly = r.responds === true && r.era_negative_significant === false;
           const top = y(Math.min(d, dMax));
           const h = Math.max(0.5, y(0) - top);
           // solid: both halves; hatched: direction alone; open outline: does not respond
-          if (both) return <rect key={c} x={x(c) - bw / 2} y={top} width={bw} height={h} fill={PAL.pass} rx="1" data-state="both" />;
+          if (both) return <rect key={c} x={x(c) - bw / 2} y={top} width={bw} height={h} fill={SOLID} rx="1" data-state="both" />;
           if (directionOnly) {
             return <rect key={c} x={x(c) - bw / 2} y={top} width={bw} height={h} fill="url(#band-direction-only)"
-              stroke={PAL.warn} strokeWidth="1" rx="1" data-state="direction-only" />;
+              stroke={HATCH} strokeWidth="1" rx="1" data-state="direction-only" />;
           }
           return (
             <rect key={c} x={x(c) - bw / 2 + 0.75} y={top + 0.75} width={Math.max(0.5, bw - 1.5)} height={Math.max(0.5, h - 1.5)}
-              fill="#FFFFFF" stroke={r.responds === false ? PAL.fail : PAL.neutral} strokeWidth="1.5" rx="1"
+              fill={T.surface} stroke={OPEN} strokeWidth="1.5" rx="1"
               data-state={r.responds === false ? "no-response" : "unknown"} />
           );
         })}
         {/* the best bar's value, above the bar */}
         {bestRow && bestD !== null && (
-          <text x={x(num(bestRow.center_hz))} y={y(Math.min(bestD, dMax)) - 5} fontSize={TYPE.axis} fontWeight="600"
-            fill="#1A1A1A" textAnchor="middle" stroke="#FFFFFF" strokeWidth="3" paintOrder="stroke">{bestD.toFixed(2)}</text>
+          <text x={x(num(bestRow.center_hz))} y={y(Math.min(bestD, dMax)) - 5} {...SVG_TEXT} fontWeight={WEIGHT.strong}
+            fill={T.ink} textAnchor="middle" stroke={T.surface} strokeWidth="3" paintOrder="stroke">{bestD.toFixed(2)}</text>
         )}
       </svg>
       {caption && (
-        <MDTypography variant="caption" component="div" sx={{ ...SMALL, color: "#1A1A1A", fontFamily: PAL.mono }}>
+        <MDTypography variant="caption" component="div" sx={{ ...SMALL, ...MONO, fontSize: TYPE.small, whiteSpace: "normal" }}>
           {caption}
         </MDTypography>
       )}
       <BandStateKey showDirection={list.some((r) => r.era_negative_significant != null)} />
-      <MDTypography variant="caption" component="div" sx={{ ...SMALL, color: "#5E5E5E" }}>
+      <MDTypography variant="caption" component="div" sx={{ ...SMALL }}>
         Bar height: the gap between the two measured power levels, in units of their own scatter.
       </MDTypography>
     </MDBox>
