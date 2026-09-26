@@ -71,18 +71,19 @@ def test_research_keeps_a_real_band_once_the_current_is_out():
 
 def test_the_adjusted_reading_is_judged_against_its_own_rotations():
     # decision 276: the reading with the current taken out gets a null that refits THAT pipeline on
-    # each rotation, never the plain reading's null. One rotation, so its score is the null median.
+    # each rotation, never the plain reading's null. Since decision 314 the null is every other
+    # rotation once, so the whole null is compared.
     SU = BD.SU
-    X, y, c, d = _record(signal=0.8, confound=1.5, seed=7)
+    X, y, c, d = _record(n=90, signal=0.8, confound=1.5, seed=7)
     r = BD.research_reading(X, y, c, d, n_perm=1, n_boot=50, seed=3)
-    rot = BD.rotations(len(y), SU.block_length_for(y, len(y)), 1, np.random.default_rng(3))
+    rot = BD.rotations(len(y), 1, np.random.default_rng(3))
     folds, _e = BD._rows_and_folds(y, 5, None)
     sh = SU.CovariateShape(c, shape=BD.DEFAULT_SHAPE)
-    own = BD._research_score(X, y[rot[0]], folds, sh)[0]
-    plain = BD._research_score(X, y[rot[0]], folds)[0]
-    assert abs(own - plain) > 1e-6
-    assert abs(r["bands_without_current"]["null_p50"] - own) < 1e-12
-    assert abs(r["bands"]["null_p50"] - plain) < 1e-12
+    own = [BD._research_score(X, y[q], folds, sh)[0] for q in rot]
+    plain = [BD._research_score(X, y[q], folds)[0] for q in rot]
+    assert max(abs(a - b) for a, b in zip(own, plain)) > 1e-6
+    assert abs(r["bands_without_current"]["null_p50"] - float(np.percentile(own, 50))) < 1e-12
+    assert abs(r["bands"]["null_p50"] - float(np.percentile(plain, 50))) < 1e-12
 
 
 def test_research_score_is_never_folded():
@@ -252,10 +253,70 @@ def test_longest_same_current_run():
     assert BD.longest_same_current_run(c).tolist() == [2, 3, 4]
 
 
-def test_rotations_never_include_the_observed_order():
-    rot = BD.rotations(120, 1, 60, np.random.default_rng(0))       # seed 0 draws shift 0 three times
-    assert rot.shape == (60, 120)
+def test_the_rotation_p_is_exact_under_a_true_null():
+    """Decision 314 (following 310). The ratings rotate as a whole, so only n orders exist, the
+    observed one among them. The old null drew 1,000 of the other
+    n - 1 WITH replacement and left the identity out, so a reading that beat every other rotation
+    read 1/1,001 where the rotation test can only say 1/n: under a true null at 40 ratings p <= 0.01
+    happened about 3% of the time. Every other rotation once, the observed order counted once by the
+    +1, gives the exact rotation p, whose smallest value is 1/40: p <= 0.01 never happens."""
+    n, draws, sims = 40, 1000, 1500
+    rng = np.random.default_rng(314)
+    small = 0
+    for _ in range(sims):
+        x, y = rng.normal(size=n), rng.normal(size=n)
+        rot = BD.rotations(n, draws, rng)
+        xc = x - x.mean()
+        yc = y[rot] - y[rot].mean(axis=1, keepdims=True)
+        null = (yc @ xc) / (np.sqrt((yc * yc).sum(axis=1)) * np.sqrt(xc @ xc))
+        p = BD._rotation_p(float(np.corrcoef(x, y)[0, 1]), null)[0]
+        small += p <= 0.01
+    assert small / sims <= 0.01, small / sims
+
+
+def test_a_whole_series_rotates_through_every_other_order_once():
+    rot = BD.rotations(120, 60, np.random.default_rng(0))          # 60 asks for draws; all 119 exist
+    assert rot.shape == (119, 120)
     assert not any(np.array_equal(r, np.arange(120)) for r in rot)
+    assert sorted(int(r[0]) for r in rot) == list(range(1, 120))   # each shift exactly once
+    assert all(np.array_equal(r, np.roll(np.arange(120), -int(r[0]))) for r in rot)
+
+
+def test_the_research_reading_reports_its_exact_rotation_p():
+    X, y, c, d = _record(n=90, signal=3.0, seed=11)
+    r = BD.research_reading(X, y, c, d, n_perm=20, n_boot=50, adjust=False)
+    b = r["bands"]
+    assert b["n_rotations"] == 89 and b["null"] == "exact: every other rotation once"
+    assert abs(b["p"] - 1 / 90) < 1e-15                              # beats all 89: the smallest p
+
+
+def _ar(rng, n, r):
+    e = rng.normal(size=n)
+    x = np.zeros(n)
+    x[0] = e[0]
+    for t in range(1, n):
+        x[t] = r * x[t - 1] + np.sqrt(1 - r * r) * e[t]
+    return x
+
+
+def test_persistent_pain_and_an_unrelated_persistent_band_read_p_at_its_level():
+    """Decision 314. Where pain is persistent the shared helper picks a block length above 1 and
+    SHUFFLES blocks after a shift, which breaks pain's persistence at every block edge; with a band
+    that is persistent too, the shuffled correlations are narrower than the real chance spread and
+    p comes out too small (measured 2026-09-26, 3,000 records at 200 ratings and lag-1 correlation
+    0.75: p <= 0.05 in 10.4% of records). Every rotation keeps pain's whole persistence and reads
+    p <= 0.05 in 4.9%. So the detector rotates, whatever the block length."""
+    n, sims = 200, 1500
+    rng = np.random.default_rng(3141)
+    small = 0
+    for _ in range(sims):
+        y, x = _ar(rng, n, 0.75), _ar(rng, n, 0.75)
+        rot = BD.rotations(n, 200, rng)
+        xc = x - x.mean()
+        yc = y[rot] - y[rot].mean(axis=1, keepdims=True)
+        null = (yc @ xc) / (np.sqrt((yc * yc).sum(axis=1)) * np.sqrt(xc @ xc))
+        small += BD._rotation_p(float(np.corrcoef(x, y)[0, 1]), null)[0] <= 0.05
+    assert small / sims <= 0.07, small / sims
 
 
 def test_q_values_over_one_family():

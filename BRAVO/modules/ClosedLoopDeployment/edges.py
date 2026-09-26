@@ -63,6 +63,7 @@ from Biomarkers.routines.analytics import (      # noqa: F401  (re-exported on p
     estimator_for,
     band_pain_auc_from_table,
     read_band_pain_auc_from_export,
+    _covariate_words,
     BAND_PAIN_ESTABLISHED,
     BAND_PAIN_NOT_RESOLVED,
     BAND_PAIN_NOT_ASSESSED,
@@ -297,9 +298,9 @@ def state_edge(T, *, channel, center_hz, outcome="nrs", scale="power_linear",
                 "estimate": None, "auc": None, "auc_low": None, "auc_high": None,
                 "partial_r": None,
                 "why": (f"this reading came from the exported table, which holds one row per band "
-                        f"and no {adjust_for_column} value per TD and PSD band-power sample, so there is "
-                        f"nothing to take out here. The adjustment can only be made where the "
-                        f"per-sample table is"),
+                        f"and no value of {_covariate_words(adjust_for_column)[0]} per TD and PSD "
+                        f"band-power sample, so there is nothing to take out here. The adjustment "
+                        f"can only be made where the per-sample table is"),
             }
     else:
         out = band_pain_auc_from_table(T, channel=channel, center_hz=center_hz,
@@ -321,6 +322,10 @@ def state_edge(T, *, channel, center_hz, outcome="nrs", scale="power_linear",
         route = ("computed by the biomarker page's own estimator, called here on this module's "
                  "table of TD and PSD band-power samples because no exported table was handed in. The exported "
                  "table is the intended route; this one runs the same estimator on the same rules")
+    if adjusted is not None:
+        # The column stays on the answer as `adjusted_for`; the words every sentence prints (and the
+        # page prints) are the estimator's own (decision 313's table), never the column (decision 314).
+        adjusted["adjusted_for_words"] = _covariate_words(adjusted.get("adjusted_for"))[0]
     n = int(out.get("n_spectral_samples") or 0)
     n_reports = int(out.get("n_pain_reports") or 0)
     split = out.get("pain_split_rule") or "the pain split was not recorded"
@@ -359,7 +364,7 @@ def state_edge(T, *, channel, center_hz, outcome="nrs", scale="power_linear",
                     if (_alo is not None and _ahi is not None) else "no interval could be formed")
             _pr = adjusted.get("partial_r")
             note += (
-                f" READ AGAIN WITH {adjusted['adjusted_for']} TAKEN OUT of the band power and the "
+                f" READ AGAIN WITH {adjusted['adjusted_for_words']} TAKEN OUT of the band power and the "
                 f"pain scores left as they came: the area under the curve is "
                 f"{float(adjusted['auc']):.3f}, interval {_aci}, over "
                 f"{adjusted.get('n_pain_reports', 0)} pain reports"
@@ -369,7 +374,7 @@ def state_edge(T, *, channel, center_hz, outcome="nrs", scale="power_linear",
                   "plain reading above is what resolves this edge and sets the verdict (the PI, "
                   "2026-09-22).")
         else:
-            note += (f" THE READING WITH {adjusted.get('adjusted_for')} TAKEN OUT COULD NOT BE "
+            note += (f" THE READING WITH {adjusted['adjusted_for_words']} TAKEN OUT COULD NOT BE "
                      f"MADE: {adjusted.get('why', 'no reason was recorded')}. That is an absent "
                      f"measurement, not a finding of no effect.")
     return EdgeEstimate("E2", est, ci, out.get("p_two_sided"), n, cluster, n_reports,

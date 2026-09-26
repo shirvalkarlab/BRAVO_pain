@@ -102,14 +102,18 @@ export function ZeroMaFigure({ result }) {
   );
 }
 
-/** 2. What the current explains: per pair and length, the current alone, every band, bands without the current, and the shuffled-data 95th. */
+/** 2. What the current explains: per pair and length, the current alone, every band and bands without the
+ * current, each reading against its OWN shuffled-data 95th (decision 314): every band against the plain
+ * rotations, the bands without the current against the rotations refitted with the current taken out
+ * (decision 276); the current alone has no null. A bar is drawn in its reading's colour on its reading's row. */
 export function CurrentExplainsFigure({ result }) {
   const rows = ((result && result.rows) || []).filter((r) => r.bands != null);
-  const h = 30 + rows.length * 26 + 40;
+  const rowH = 32;
+  const h = 30 + rows.length * rowH + 40;
   const f = frame([0.3, 0.95], [0, 1], h, 190, 14, 24, 38);
-  const y = (i) => 24 + i * 26 + 13;
-  const keys = [["current_alone", "current alone", OI.gray], ["bands", "every band", OI.blue],
-    ["bands_without_current", "bands without the current", OI.vermillion]];
+  const y = (i) => 24 + i * rowH + rowH / 2;
+  const keys = [["current_alone", "current alone", OI.gray, -9, null], ["bands", "every band", OI.blue, 0, "null_p95"],
+    ["bands_without_current", "bands without the current", OI.vermillion, 9, "bands_without_current_null_p95"]];
   return (
     <div data-testid="figure-current_explains">
       <svg viewBox={`0 0 ${W} ${h}`} width="100%" role="img" aria-label="Out-of-sample score of the current and the bands per sensing pair">
@@ -121,18 +125,21 @@ export function CurrentExplainsFigure({ result }) {
         {rows.map((r, i) => (
           <g key={`${r.pair}-${r.seconds}`}>
             <text x={184} y={y(i) + 4} fontSize={12} textAnchor="end" fill={TXT}>{`${pairName(r.pair)}, ${r.seconds} s (${r.n})`}</text>
-            {r.null_p95 != null && <line x1={f.X(r.null_p95)} x2={f.X(r.null_p95)} y1={y(i) - 9} y2={y(i) + 9} stroke={TXT} strokeWidth={2} />}
-            {keys.map(([k, , col]) => r[k] != null && (
-              <circle key={k} cx={f.X(r[k])} cy={y(i)} r={4.5} fill={col} />
+            {keys.map(([k, , col, dy, nk]) => nk && r[k] != null && r[nk] != null && (
+              <line key={`null-${k}`} data-null-for={k} data-null-value={String(r[nk])} x1={f.X(r[nk])} x2={f.X(r[nk])}
+                y1={y(i) + dy - 5} y2={y(i) + dy + 5} stroke={col} strokeWidth={2.4} />
+            ))}
+            {keys.map(([k, , col, dy]) => r[k] != null && (
+              <circle key={k} data-reading={k} cx={f.X(r[k])} cy={y(i) + dy} r={4} fill={col} />
             ))}
           </g>
         ))}
       </svg>
       <div style={{ fontSize: 12, color: SUB }}>
         {keys.map(([k, lab, col]) => (
-          <span key={k} style={{ marginRight: 14, whiteSpace: "nowrap" }}><span style={{ color: col, fontSize: 14 }}>{"●"}</span>{` ${lab}`}</span>
+          <span key={k} style={{ marginRight: 14, whiteSpace: "nowrap" }}><span style={{ color: col, fontSize: 14 }}>{"\u25CF"}</span>{` ${lab}`}</span>
         ))}
-        <span>{"| the 95th percentile of shuffled data that keeps pain's own persistence"}</span>
+        <span>{"| bar beside a dot, in its colour: the 95th percentile of its own shuffled data (pain's persistence kept; the current alone has none)"}</span>
       </div>
     </div>
   );
@@ -565,7 +572,8 @@ export function SteppedCurrentAllBandsFigure({ result }) {
 /** Band detector, research version (the PI's ruling 5b, 2026-09-25): per sensing pair and length of
  * signal, pain predicted as a number out of sample -- the held-out rank correlation (0 is chance, never
  * folded) of the current alone, every band, and every band with the current taken out, each with its
- * 95% interval; the black bar is the rotated ratings' 95th percentile for every band. Draws the run
+ * 95% interval; each band reading has a short bar at its OWN rotated ratings' 95th percentile, the
+ * current-taken-out one against rotations refitted with the current taken out (decision 314). Draws the run
  * matching the page's clinic-sheet switch (ruling 5a). */
 export function BandDetectorResearchFigure({ result, clinicSheets }) {
   const mode = (result && result.modes && result.modes[clinicSheets ? "on" : "off"]) || {};
@@ -592,7 +600,13 @@ export function BandDetectorResearchFigure({ result, clinicSheets }) {
           return (
             <g key={`${r.pair}-${r.seconds}`}>
               <text x={ml - 6} y={y(i) + 4} fontSize={12} textAnchor="end" fill={TXT}>{`${pairName(r.pair)}, ${r.seconds} s (${d.n})`}</text>
-              {d.bands.null_p95 != null && <line x1={f.X(d.bands.null_p95)} x2={f.X(d.bands.null_p95)} y1={y(i) - 13} y2={y(i) + 13} stroke={TXT} strokeWidth={2} />}
+              {keys.map(([k, , col, dy]) => {
+                const b = d[k];
+                if (k === "current_alone" || !b || b.rho == null || b.null_p95 == null) return null;
+                const v = Math.max(-0.6, Math.min(0.8, b.null_p95));
+                return <line key={`null-${k}`} data-null-for={k} data-null-value={String(b.null_p95)} x1={f.X(v)} x2={f.X(v)}
+                  y1={y(i) + dy - 5} y2={y(i) + dy + 5} stroke={col} strokeWidth={2.4} />;
+              })}
               {keys.map(([k, , col, dy]) => {
                 const b = d[k];
                 if (!b || b.rho == null) return null;
@@ -614,7 +628,7 @@ export function BandDetectorResearchFigure({ result, clinicSheets }) {
         {keys.map(([k, lab, col]) => (
           <span key={k} style={{ marginRight: 14, whiteSpace: "nowrap" }}><span style={{ color: col, fontSize: 14 }}>{"\u25CF"}</span>{` ${lab}`}</span>
         ))}
-        <span>{"| lines: 95% intervals resampling whole days; filled: q < 0.05; black bar: the rotated ratings' 95th percentile"}</span>
+        <span>{"| lines: 95% intervals resampling whole days; filled: q < 0.05; short bar beside a dot, in its colour: the 95th percentile of its own rotated ratings (the current taken out on each rotation for the vermillion one; the current alone has none)"}</span>
       </div>
     </div>
   );

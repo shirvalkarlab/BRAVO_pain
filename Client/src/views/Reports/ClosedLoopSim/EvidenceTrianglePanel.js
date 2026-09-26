@@ -234,7 +234,9 @@ function AdjustedEdgeLine({ adjusted }) {
   const a = adjusted || null;
   if (!a) return null;
   const n = (v, d = 3) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v).toFixed(d));
-  const what = a.adjusted_for ? `the stimulation current in force (${a.adjusted_for})` : "the stimulation current in force";
+  // The current in the server's words, never its column (decision 314): an answer saved before the
+  // words were sent reads "the stimulation current in force".
+  const what = `${a.adjusted_for_words || "the stimulation current"} in force`;
   if (!a.available || n(a.auc) == null) {
     return (
       <MDTypography variant="caption" data-testid="e2-adjusted"

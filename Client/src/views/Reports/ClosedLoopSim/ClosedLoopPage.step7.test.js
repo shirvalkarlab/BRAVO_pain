@@ -184,9 +184,9 @@ describe("the band-power-to-pain edge carries the reading with the current taken
   it("says why it could not be made rather than showing nothing", () => {
     const { container } = rtlRender(wrap(<EvidenceTrianglePanel report={withAdjusted({
       available: false, adjusted_for: "amp_mA_Left",
-      why: "this band's power moves almost exactly with amp_mA_Left on these samples",
+      why: "this band's power moves almost exactly with the left stimulation current on these samples",
     })} />));
-    expect(container.textContent).toMatch(/almost exactly with amp_mA_Left/);
+    expect(container.textContent).toMatch(/almost exactly with the left stimulation current/);
   });
 
   it("falls back to the interim sentence when no second reading was asked for", () => {

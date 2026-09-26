@@ -941,8 +941,9 @@ def run_band_detector_research(uid, *, lengths=BAND_DETECTOR_LENGTHS_S, tol_min=
                     current_taken_out="a 3-knot spline of the current in force on the pair's own side, "
                                       "out of the bands and the pain, fitted on the training rows (decision 241)",
                     interval="95%, resampling whole California days of the held-out ratings",
-                    p=f"{n_perm} rotations of the ratings in time, the same pipeline refitted each time, "
-                      "the observed order excluded; the adjusted reading against its own rotations",
+                    p=("every other rotation of the ratings in time once, the same pipeline refitted each "
+                       "time, the observed order counted once: the exact rotation p, smallest 1/n; the "
+                       "adjusted reading against its own rotations (decisions 276, 314)"),
                     correction="Benjamini-Hochberg over the pairs and lengths",
                     pairs=("the pair the device allows on each lead with today's contacts (decision 217)"
                            if pairs_given is None else "as given"),
@@ -1065,7 +1066,8 @@ def run_band_detector_device(uid, *, tol_min=60.0, n_perm=200, n_boot=2000, pair
                     current_taken_out="a 3-knot spline of the current in force on the pair's own side, "
                                       "out of the band's readings, fitted on the training rows (decision 241)",
                     interval="95%, resampling whole California days of the held-out ratings",
-                    p=f"{n_perm} rotations of the pain groups in time, refitted, the observed order excluded",
+                    p=("every other rotation of the pain groups in time once, refitted each time, the "
+                       "observed order counted once: the exact rotation p, smallest 1/n (decision 314)"),
                     correction="Benjamini-Hochberg over the 22 bands of one pair",
                     power="raw band power, never log (decision 202); no outlier ceiling (the device has none); "
                           "pieces failing the platform's own gates end a run",

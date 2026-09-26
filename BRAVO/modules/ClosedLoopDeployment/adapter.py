@@ -1918,6 +1918,10 @@ def caveats_for_report(payload):
     e2 = ((payload.get("edges") or {}).get("E2") or {})
     adj = e2.get("adjusted") or None
     if adj:
+        # The current in words, never its column (decision 314); an answer saved before the words
+        # were carried gets them from the estimator's own table (decision 313).
+        from Biomarkers.routines.analytics import _covariate_words
+        cur_words = adj.get("adjusted_for_words") or _covariate_words(adj.get("adjusted_for"))[0]
         if adj.get("available") and adj.get("auc") is not None:
             lo, hi = adj.get("auc_low"), adj.get("auc_high")
             span = (f", interval {float(lo):.3f} to {float(hi):.3f}"
@@ -1925,8 +1929,8 @@ def caveats_for_report(payload):
             rows.append({
                 "severity": "medium",
                 "text": (f"How well this band tells high pain from low pain is reported without "
-                         f"the stimulation current taken out of it. Read again with the current "
-                         f"in force ({adj.get('adjusted_for')}) removed from the band power, it "
+                         f"the stimulation current taken out of it. Read again with {cur_words} "
+                         f"in force removed from the band power, it "
                          f"is {float(adj['auc']):.3f}{span}, against 0.5 for coin flipping."),
                 "card": CAVEAT_CARDS["evidence"]})
         else:
