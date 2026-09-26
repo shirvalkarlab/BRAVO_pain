@@ -554,7 +554,7 @@ needs on the device, set up at at-home sessions 1 and 3 (the rows of §9.4 say i
 3. A check that the hold group's left current stays under the 4.5 mA ceiling (4.0 mA at most).
 
 **What this rests on.** She has a remote that switches between groups of stimulation settings (your
-answer of 2026-09-26), so the return needs no further device question. It is the same remote-control phone she
+answer of 2026-09-26), so the return needs no further device question. It is the same Samsung remote-control phone she
 already uses every day: every patient-event PSD snapshot on file (not the montages) was taken from it
 (your note, 2026-09-26). One thing is checked on the
 tablet at at-home session 1 before the coordinator leaves: that the chronic log carries on unchanged
