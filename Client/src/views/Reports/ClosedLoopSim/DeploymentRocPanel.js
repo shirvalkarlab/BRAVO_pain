@@ -25,10 +25,10 @@ import { CL, recomputeSlots } from "views/Reports/moduleCacheKeys";
 import PanelStaleNote from "./PanelStaleNote";
 import PAL from "./palette";
 import RocCurrentRemovedLine from "./RocCurrentRemovedLine";
-import { TYPE, CARD, STATE } from "assets/theme/base/tokens";
+import { TYPE, WRAP, CARD, STATE } from "assets/theme/base/tokens";
 import { plotlyLayout, REF_LINE, directLabel } from "views/Reports/figureStyle";
 
-const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
+const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "not reported" : Number(v).toFixed(d));
 
 // Audit C9: the cut-point marker lives at a FIXED trace index so effect (B) can move it in place via
 // Plotly.restyle without rebuilding the curve (the no-reset discipline). That index was hardcoded as
@@ -265,7 +265,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
       const labelTextColor = PAL.onFill;
       Plotly.relayout(gd, { annotations: [{
         x: op.fpr, y: op.tpr, xref: "x", yref: "y",
-        text: `<b>power ≥ ${fmt(op.threshold)}</b>`, showarrow: true, arrowhead: 0,
+        text: `power ≥ ${fmt(op.threshold)}`, showarrow: true, arrowhead: 0,
         arrowcolor: mColor, ax, ay, font: { size: PAL.fs.caption, color: labelTextColor },
         bgcolor: mColor, bordercolor: mColor, borderpad: 3,
         xanchor: nearRight ? "right" : "left", yanchor: nearTop ? "top" : "bottom",
@@ -384,7 +384,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
         line: { color: PAL.series, width: 1.5 }, showlegend: false,
         marker: { color: PAL.series, symbol: symbols, size: 9, line: { color: PAL.series, width: 1.5 } },
         customdata: folds.map((f) => [f.n_train_clusters, f.n_test_clusters,
-          f.sens == null ? "—" : fmt(f.sens), f.spec == null ? "—" : fmt(f.spec)]),
+          f.sens == null ? "not reported" : fmt(f.sens), f.spec == null ? "not reported" : fmt(f.spec)]),
         hovertemplate: "week %{x} · on that week, not fitted on it: %{y:.2f}<br>trained on %{customdata[0]} / tested on %{customdata[1]} separate groups of ratings"
           + "<br>high-pain moments caught %{customdata[2]} · low-pain moments left alone %{customdata[3]}<extra></extra>" },
     ];
@@ -412,7 +412,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
     <Card sx={{ ...CARD, width: "100%" }}>
       <MDBox p={3}>
         <MDBox display="flex" justifyContent="space-between" alignItems="baseline" mb={1} flexWrap="wrap" gap={1}>
-          <MDTypography component="h3" sx={{ ...TYPE.title, color: PAL.ink }}>
+          <MDTypography component="h3" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>
             Where does the switching point sit?
           </MDTypography>
           {/* Match direction changes which neural samples are paired with which pain rating, so it
@@ -424,10 +424,10 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
           <ToggleButtonGroup size="small" exclusive value={matchDir}
             onChange={(e, v) => { if (v) setMatchDir(v); }}
             title="Each recording picks the next report after it: the question the device faces, and the default. Each report picks its nearest recordings: exploratory. Switching does not refit on its own; the curve already computed stays on screen and is marked, and Recompute refits it.">
-            <ToggleButton value="prior" sx={{ ...TYPE.body, textTransform: "none", py: 0.5 }}>
+            <ToggleButton value="prior" sx={{ ...TYPE.body, textTransform: "none", py: 0.5, borderColor: PAL.graphic }}>
               Next report after each recording (default)
             </ToggleButton>
-            <ToggleButton value="pro_first" sx={{ ...TYPE.body, textTransform: "none", py: 0.5 }}>
+            <ToggleButton value="pro_first" sx={{ ...TYPE.body, textTransform: "none", py: 0.5, borderColor: PAL.graphic }}>
               Nearest recordings to each report
             </ToggleButton>
           </ToggleButtonGroup>
@@ -517,7 +517,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
                     ["f1", "Favour catching pain", "rewards catching high pain; moves with the share of high-pain reports and can switch often when it should not (the F1 rule)"],
                     ["cost", "Weighted", "set the cost of a needless switch against a missed high-pain moment with the slider"]].map(([k, lbl, tip]) => (
                     <ToggleButton key={k} value={k} title={tip}
-                      sx={{ ...TYPE.body, textTransform: "none", py: 0.5, px: 1 }}>{lbl}</ToggleButton>
+                      sx={{ ...TYPE.body, textTransform: "none", py: 0.5, px: 1, borderColor: PAL.graphic }}>{lbl}</ToggleButton>
                   ))}
                 </ToggleButtonGroup>
               </Grid>

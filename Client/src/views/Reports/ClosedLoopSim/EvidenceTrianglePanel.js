@@ -66,7 +66,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import PAL from "./palette";
-import { TYPE, CARD, STATE } from "assets/theme/base/tokens";
+import { TYPE, WRAP, CARD, STATE } from "assets/theme/base/tokens";
 import { SVG_TEXT } from "views/Reports/figureStyle";
 import StateTrack from "./StateTrack";
 import Fold from "./Fold";
@@ -489,7 +489,7 @@ export default function EvidenceTrianglePanel({ report }) {
   const candidate = ((data || {}).candidates || [])[0] || null;
   const showCurrentConfound = currentConfoundApplies(candidate);
   const title = (
-    <MDTypography component="h2" sx={{ ...TYPE.title, color: PAL.ink }}>
+    <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>
       Does the evidence hang together?
     </MDTypography>
   );

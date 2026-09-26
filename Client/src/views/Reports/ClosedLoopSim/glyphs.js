@@ -13,6 +13,7 @@
  * it is the absence of a comparison rather than an inconclusive one.
  */
 import PAL from "./palette";
+import { STATE } from "assets/theme/base/tokens";
 
 export const GLYPH = 15;
 
@@ -28,7 +29,9 @@ export function TickGlyph({ label, size = GLYPH }) {
 export function CrossGlyph({ label, size = GLYPH }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" role="img" aria-label={label}>
-      <rect width="16" height="16" rx="2" fill={PAL.fail} />
+      {/* Ink, not red: "fails / different" is a statistical answer, and red is only for a device
+          refusal or a value above the safe ceiling (the PI, 2026-09-26, TASTE_AUDIT.md D14). */}
+      <rect width="16" height="16" rx="2" fill={STATE.blocked.ink} />
       <path d="M4.5 4.5 L11.5 11.5 M11.5 4.5 L4.5 11.5" stroke={PAL.surface} strokeWidth="1.9"
         strokeLinecap="round" />
     </svg>

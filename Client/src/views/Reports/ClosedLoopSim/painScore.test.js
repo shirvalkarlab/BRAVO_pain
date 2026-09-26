@@ -71,7 +71,7 @@ test("the sign-off sheet says which pain score every band-to-pain reading used",
     reason: "no pain score was sent with the request, so NRS was used" }, "nrs"))
     .toBe("NRS (0–10), for every band-to-pain reading on this page (no pain score was sent with the request, so NRS was used)");
   expect(painScoreUsedText({ key: "left_leg_vas", label: "Left Leg VAS" }, "nrs"))
-    .toBe("NOT THE SAME: the evidence and stability readings used Left Leg VAS, the deployment summary NRS (0–10)");
+    .toBe("Not the same: the evidence and stability readings used Left Leg VAS, the deployment summary NRS (0–10)");
   expect(painScoreUsedText(null, "nrs")).toBe("not recorded on the deployment report");
 });
 

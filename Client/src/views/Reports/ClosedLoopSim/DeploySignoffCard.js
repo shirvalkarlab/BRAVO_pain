@@ -22,7 +22,7 @@ import ProvisionalNote from "./ProvisionalNote";
 import { gridSettingsLine } from "./BandSweepGridPanel";
 import { painScoreLabel } from "views/Reports/painScores";
 
-const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
+const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "not reported" : Number(v).toFixed(d));
 
 function GateRow({ gate }) {
   // Tri-state gate (audit C8): pass / fail / indeterminate. Each state carries BOTH a CVD-safe color
@@ -153,7 +153,7 @@ export function ratingsUsedText(block) {
 export function painScoreUsedText(reportPain, summaryMetric) {
   if (!reportPain || !reportPain.key) return "not recorded on the deployment report";
   if (summaryMetric && summaryMetric !== reportPain.key) {
-    return `NOT THE SAME: the evidence and stability readings used ${painScoreLabel(reportPain.key)}, `
+    return `Not the same: the evidence and stability readings used ${painScoreLabel(reportPain.key)}, `
       + `the deployment summary ${painScoreLabel(summaryMetric)}`;
   }
   const label = reportPain.label || painScoreLabel(reportPain.key);
@@ -449,14 +449,14 @@ function SignoffRecord({ bandCandidate, summary, deploymentReport, chosenBand, b
           </MDTypography>
           {id ? (
             <>
-              <KV k="Contact" v={`${id.contact} (${id.hemisphere || "—"})`} />
-              <KV k="Region" v={id.region || "—"} />
+              <KV k="Contact" v={`${id.contact} (${id.hemisphere || "side not given"})`} />
+              <KV k="Region" v={id.region || "not given"} />
               <KV k="Band" v={`${fmt(id.band_lo_hz, 1)}–${fmt(id.band_hi_hz, 1)} Hz`} />
               <KV k="Centre (moved to the nearest band the device computes)" v={`${fmt(id.center_freq_hz, 1)} → ${fmt(id.snapped_center_freq_hz, 2)} Hz`} />
               <KV k="Pain score / high-low split" v={`${id.pro_metric} / ${id.binarization}`} />
               <KV k="Pain ratings used" v={ratingsUsedText(id.clinic_sheet_ratings)} />
               <KV k="Pain score used" v={painScoreUsedText(_rep && _rep.pain_score, id.pro_metric)} />
-              <KV k="Polarity / suggested mode" v={`${dc.polarity} / ${dc.suggested_mode || "—"}`} />
+              <KV k="Polarity / suggested mode" v={`${dc.polarity} / ${dc.suggested_mode || "not given"}`} />
             </>
           ) : null}
           <ChosenBandBlock bandCandidate={bandCandidate} chosenBand={chosenBand} bandRecord={bandRecord} />
@@ -496,7 +496,7 @@ function SignoffRecord({ bandCandidate, summary, deploymentReport, chosenBand, b
                 <CurrentRemovedAuc ev={ev} />
                 {fwd && fwd.available && fwd.held_out_auc != null ? (
                   <KV
-                    k={`The same, tested on each later week after training on the weeks before (${fwd.n_folds ?? "—"} weeks)`}
+                    k={`The same, tested on each later week after training on the weeks before (${fwd.n_folds ?? "not reported"} weeks)`}
                     v={
                       <span style={{ color: fwd.beats_chance_forward ? PAL.passText : PAL.warnText, fontWeight: 600 }}>
                         {`${fmt(fwd.held_out_auc)} (${fmt(fwd.held_out_auc_lo)}–${fmt(fwd.held_out_auc_hi)})`}
@@ -512,8 +512,8 @@ function SignoffRecord({ bandCandidate, summary, deploymentReport, chosenBand, b
                   } />
                 )}
                 <KV k="Odds ratio (95% range)" v={`${fmt(ev.odds_ratio)} (${fmt(ev.or_ci_low)}–${fmt(ev.or_ci_high)})${ev.credible_ci ? " ✓" : ""}`} />
-                <KV k="p from the mixed-effects model (ratings grouped in time)" v={ev.p_glmer != null ? ev.p_glmer.toExponential(2) : "—"} />
-                <KV k="Matched band-power readings / ratings" v={`${ev.n_matched_samples ?? "—"} / ${ev.n_clusters ?? "—"}`} />
+                <KV k="p from the mixed-effects model (ratings grouped in time)" v={ev.p_glmer != null ? ev.p_glmer.toExponential(2) : "not reported"} />
+                <KV k="Matched band-power readings / ratings" v={`${ev.n_matched_samples ?? "not reported"} / ${ev.n_clusters ?? "not reported"}`} />
                 <BurnInNote ev={ev} />
                 {pw && pw.available ? (
                   <KV k="Chance of detecting a real link with pain" v={pw.more_data_needed

@@ -42,7 +42,7 @@ import { Card, Tooltip } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
-import { TYPE, CARD } from "assets/theme/base/tokens";
+import { TYPE, WRAP, CARD } from "assets/theme/base/tokens";
 import { DIVERGING, RANGE } from "assets/theme/base/dataColors";
 import ColorKey from "views/Reports/paper/ColorKey";
 import { orderContacts } from "views/Reports/Biomarkers/contactOrder";
@@ -268,7 +268,7 @@ export default function BandSweepGridPanel({ grid, participantUid, committed, on
   if (!grid || grid.available === false) {
     return (
       <Card sx={{ ...CARD, p: 3 }}>
-        <MDTypography component="h2" sx={{ ...TYPE.title, color: PAL.ink }}>Which band?</MDTypography>
+        <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Which band?</MDTypography>
         <MDTypography sx={{ ...TYPE.lead, color: PAL.ink, mt: 1 }}>
           {(grid && grid.reason) || "no calibrated grid is available for this participant yet."}
           {" "}Open the Biomarkers page first, then return here.
@@ -371,7 +371,7 @@ export default function BandSweepGridPanel({ grid, participantUid, committed, on
 
   return (
     <Card sx={{ ...CARD, p: 3 }}>
-      <MDTypography component="h2" sx={{ ...TYPE.title, color: PAL.ink }}>Which band?</MDTypography>
+      <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Which band?</MDTypography>
       <MDTypography sx={{ ...TYPE.lead, color: PAL.ink, mt: 1, maxWidth: "68ch" }}>{answer}</MDTypography>
       {!grid.cross_setting_stability_included ? (
         <MDTypography sx={{ ...TYPE.body, color: PAL.warnText, mt: 1 }}>

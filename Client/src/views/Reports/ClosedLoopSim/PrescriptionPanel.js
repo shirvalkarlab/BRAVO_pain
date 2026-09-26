@@ -97,6 +97,21 @@ export function prescriptionState(report, mode) {
 const COLS = [["0 0 30px", ""], ["1 1 170px", "Parameter"], ["0 0 112px", "Value"],
   ["0 0 62px", "Units"], ["0 0 118px", "Programmed today"], ["1 1 150px", "Action"]];
 
+/**
+ * "Programmed today", printed with the SAME formatter as the "Value" column (TASTE_AUDIT.md C10,
+ * 2026-09-26): one row once read "30 000" in one column and "30000" in the other for the same kind
+ * of number. The value is unchanged; only how it is shown. A number the server sends as a string
+ * ("30000") is read as that number; any other text is printed as sent.
+ */
+export function fmtProgrammed(f) {
+  if (!f || f.programmed == null) return null;
+  const raw = f.programmed;
+  const asNumber = typeof raw === "string" && raw.trim() !== "" && Number.isFinite(Number(raw))
+    ? Number(raw) : raw;
+  const shown = fmtFieldValue({ units: f.units, value: asNumber });
+  return shown == null ? String(raw) : shown;
+}
+
 /** The table's narrowest readable width; below it the table scrolls inside its card. */
 export const TABLE_MIN_WIDTH = 640;
 
@@ -104,8 +119,8 @@ function Row({ f, index, ticked, onTick, readBackEnabled }) {
   const value = fmtFieldValue(f);
   const action = ACTION[f.confirm] || ACTION.enterable;
   const mustChoose = f.confirm === "must_choose" || (value == null && f.confirm !== "not_applicable");
-  const prog = f.programmed != null ? String(f.programmed) : null;
-  const same = prog != null && value != null && Number(prog) === Number(f.value);
+  const prog = fmtProgrammed(f);
+  const same = prog != null && value != null && Number(f.programmed) === Number(f.value);
   const cell = (i, children, sx = {}) => (
     <MDBox flex={COLS[i][0]} sx={{ px: 0.5, ...sx }}>{children}</MDBox>
   );

@@ -10,7 +10,7 @@ import PropTypes from "prop-types";
 import MDTypography from "components/MDTypography";
 import PAL from "./palette";
 
-const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
+const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "not reported" : Number(v).toFixed(d));
 const NOTE = { fontSize: PAL.fs.body, color: PAL.ink2, mt: 1, display: "block", maxWidth: "68ch" };
 
 export default function RocCurrentRemovedLine({ plainAuc, adjusted }) {

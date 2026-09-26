@@ -25,10 +25,10 @@ import { useCachedResult } from "database/useCachedResult";
 import { CL, recomputeSlots } from "views/Reports/moduleCacheKeys";
 import PanelStaleNote from "./PanelStaleNote";
 import PAL from "./palette";
-import { TYPE, CARD, STATE } from "assets/theme/base/tokens";
+import { TYPE, WRAP, CARD, STATE } from "assets/theme/base/tokens";
 import { plotlyLayout, REF_LINE } from "views/Reports/figureStyle";
 
-const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
+const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "not reported" : Number(v).toFixed(d));
 
 // Human labels for the modeled-LSB fallback tiers (backend _modeled_lsb_threshold_estimate). Ordered
 // best→coarsest: a real per-contact modeled timeline, then the per-participant frozen conversion. The
@@ -314,7 +314,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
   return (
     <Card sx={{ ...CARD, width: "100%" }}>
       <MDBox p={3}>
-        <MDTypography component="h3" sx={{ ...TYPE.title, color: PAL.ink, mb: 1 }}>
+        <MDTypography component="h3" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink, mb: 1 }}>
           Where does the switching point sit in the device&apos;s own units?
         </MDTypography>
         <MDTypography sx={{ ...TYPE.caption, color: PAL.ink3, mb: 1 }}>
@@ -370,7 +370,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
             {tl && tl.available && !tl.estimated ? (
               <MDBox mb={2}>
                 {head("Where the switching point sits in the device's own readings (not a value to program)")}
-                <MDTypography sx={{ ...TYPE.answer, color: PAL.ink, mt: 0.5 }}>
+                <MDTypography sx={{ ...TYPE.answer, ...WRAP.balance, color: PAL.ink, mt: 0.5 }}>
                   {`percentile ${fmt(tl.percentile, 0)} = ${fmt(tl.upper_lsb, 1)} LSB`}
                 </MDTypography>
                 <MDTypography display="block" sx={{ ...TYPE.body, color: PAL.ink2, mt: 0.5 }}>
@@ -387,7 +387,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
                   <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.caution.glyph}</span>
                   {`Estimated: where the switching point would sit (not a value to program), ${TIER_LABEL[tl.tier] || "modelled"}${tl.freq_extrapolated ? ", beyond the bands measured" : ""}`}
                 </MDTypography>
-                <MDTypography sx={{ ...TYPE.answer, color: PAL.warnText, mt: 0.5 }}>
+                <MDTypography sx={{ ...TYPE.answer, ...WRAP.balance, color: PAL.warnText, mt: 0.5 }}>
                   {`power ≈ ${fmt(tl.upper_lsb, 1)} LSB`}
                 </MDTypography>
                 <MDTypography display="block" sx={{ ...TYPE.body, color: PAL.ink2, mt: 0.5 }}>

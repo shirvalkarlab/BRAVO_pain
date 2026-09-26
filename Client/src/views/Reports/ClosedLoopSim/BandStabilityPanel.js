@@ -40,7 +40,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import PAL from "./palette";
-import { TYPE, CARD, STATE } from "assets/theme/base/tokens";
+import { TYPE, WRAP, CARD, STATE } from "assets/theme/base/tokens";
 import Fold from "./Fold";
 import { fmtNum, fmtOddsRatioWithInterval, fmtP } from "./deployFormat";
 
@@ -185,7 +185,7 @@ export default function BandStabilityPanel({ stability, cacheStatus, painScore }
 
   return (
     <Card sx={{ ...CARD, p: 3, height: "100%" }}>
-      <MDTypography component="h2" sx={{ ...TYPE.title, color: PAL.ink }}>
+      <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>
         Does the band mean the same at every stimulation state?
       </MDTypography>
       <MDTypography data-testid="stability-answer" sx={{ ...TYPE.lead, color: PAL.ink, mt: 1, maxWidth: "68ch" }}>

@@ -6,12 +6,13 @@
  * no longer draws a card of its own, because a card inside the decision card's fold would be a card
  * inside a card. A band chosen on the grid carries no discovery statistics, and the rows say so.
  */
-import { Chip, Grid } from "@mui/material";
+import { Grid } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import PAL from "./palette";
+import { TYPE, STATE } from "assets/theme/base/tokens";
 import { fmtOddsRatioWithInterval } from "./deployFormat";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "not reported"
@@ -19,20 +20,17 @@ const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "not repor
 const fmtP = (p) => (p == null || !Number.isFinite(Number(p)) ? "not reported"
   : Number(p) < 0.001 ? Number(p).toExponential(1) : Number(p).toFixed(3));
 
-// Verdict badge color for the committed candidate's own discovery-stage verdict, which is a
-// different quantity from anything on the reconciled header and is labelled as such below.
-function verdictColor(verdict) {
+/**
+ * The committed candidate's own discovery-stage verdict, as plain text with its glyph, never as a
+ * coloured tag (TASTE_AUDIT.md D5, 2026-09-26: no pastel or red tags). It is a different quantity
+ * from anything on the reconciled header and is labelled as such below. A failed or stim-dependent
+ * verdict is evidence, not a device refusal, so it is the caution ink with ▲, never red.
+ */
+export function verdictState(verdict) {
   const v = verdict || "";
-  if (/VALIDATED \(stim-stable\)/.test(v)) return PAL.ink;
-  if (/VALIDATED \(stim-dependent\)/.test(v)) return PAL.warn;
-  if (/failed/.test(v)) return PAL.warnText;   // evidence, not a device refusal: never red
-  return PAL.neutral;
-}
-
-// White text on the warn fill measures 2.25:1, which is below every WCAG threshold, so the badge
-// text colour adapts to its fill: near-black on the amber, white on the others.
-function verdictTextColor(verdict) {
-  return PAL.onFill;
+  if (/VALIDATED \(stim-stable\)/.test(v)) return STATE.pass;
+  if (/VALIDATED \(stim-dependent\)/.test(v) || /failed/.test(v)) return STATE.caution;
+  return STATE.notChecked;
 }
 
 // A labeled key/value row used across the identity block.
@@ -68,26 +66,31 @@ export default function BandCandidateIdentity({ bc, envelope }) {
     <MDBox className="cl-band-identity">
       <MDBox>
         <MDBox display="flex" alignItems="center" gap={1.2} mb={1} flexWrap="wrap">
-          <MDBox px={1.4} py={0.4} sx={{ backgroundColor: verdictColor(bc.verdict),
-            color: verdictTextColor(bc.verdict),
-            borderRadius: "4px", fontSize: PAL.fs.caption, fontWeight: 600 }}>
+          <MDTypography component="span" data-discovery-verdict=""
+            sx={{ ...TYPE.body, fontWeight: 600, color: verdictState(bc.verdict).ink }}>
+            <span aria-hidden="true" style={{ marginRight: 6 }}>{verdictState(bc.verdict).glyph}</span>
             {bc.verdict || "no discovery verdict"}
-          </MDBox>
+          </MDTypography>
           <MDTypography sx={{ fontSize: PAL.fs.lead, fontWeight: 600, color: PAL.ink }}>
             {`${bc.contact_label || bc.contact || "band"} at ${fmt(bc.center_freq_hz, 1)} Hz`}
           </MDTypography>
-          <Chip size="small" label={lbl.pro_metric_label || lbl.pro_metric || "metric"}
-            sx={{ height: 24, fontSize: PAL.fs.caption }} />
-          {bc.adaptive_valid
-            ? <Chip size="small" label="inside the adaptive band (8–30 Hz)"
-                sx={{ height: 24, fontSize: PAL.fs.caption, backgroundColor: PAL.fillMuted, color: PAL.ink }} />
-            : <Chip size="small" label="outside the adaptive band"
-                sx={{ height: 24, fontSize: PAL.fs.caption, backgroundColor: PAL.warnFill,
-                  color: PAL.warnText }} />}
+          <MDTypography component="span" sx={{ ...TYPE.body, color: PAL.ink3 }}>
+            {lbl.pro_metric_label || lbl.pro_metric || "metric"}
+          </MDTypography>
+          {bc.adaptive_valid ? (
+            <MDTypography component="span" sx={{ ...TYPE.body, color: PAL.ink }}>
+              inside the adaptive band (8–30 Hz)
+            </MDTypography>
+          ) : (
+            <MDTypography component="span" sx={{ ...TYPE.body, color: STATE.caution.ink }}>
+              <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.caution.glyph}</span>
+              outside the adaptive band
+            </MDTypography>
+          )}
         </MDBox>
         <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.caption, color: PAL.ink3,
           mb: 1 }}>
-          The badge is the verdict this band was chosen with, when it was found. It is a different
+          The first verdict here is the one this band was chosen with, when it was found. It is a different
           quantity from the verdict at the top of the page, which is about whether the device will
           accept the configuration and whether the evidence supports it.
         </MDTypography>

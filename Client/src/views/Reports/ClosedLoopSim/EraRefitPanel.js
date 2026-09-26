@@ -24,10 +24,10 @@ import { useCachedResult } from "database/useCachedResult";
 import { CL, recomputeSlots } from "views/Reports/moduleCacheKeys";
 import PanelStaleNote from "./PanelStaleNote";
 import PAL from "./palette";
-import { TYPE, CARD, STATE } from "assets/theme/base/tokens";
+import { TYPE, WRAP, CARD, STATE } from "assets/theme/base/tokens";
 import { plotlyLayout, REF_LINE } from "views/Reports/figureStyle";
 
-const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
+const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "not reported" : Number(v).toFixed(d));
 
 // Forest-plot row order, top-to-bottom: stim eras low→high, then a separator, then Pooled at the
 // bottom as the reference series the per-era points are judged against.
@@ -101,7 +101,7 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
     } else if (data.any_reversed) {
       // The worst closed-loop failure: the band's direction CONFIDENTLY flips under stim — an era's
       // ENTIRE 95% CI sits below chance, not just its point estimate. Hard fragile.
-      verdict = { state: "caution", text: `The link reverses under stimulation: in at least one state the whole 95% range sits below 0.5, the opposite way to all states together. A device set on the all-states switching point would adjust the WRONG way in that state, so this band should not drive closed-loop stimulation with a fixed direction.${lrtNote}` };
+      verdict = { state: "caution", text: `The link reverses under stimulation: in at least one state the whole 95% range sits below 0.5, the opposite way to all states together. A device set on the all-states switching point would adjust the wrong way in that state, so this band should not drive closed-loop stimulation with a fixed direction.${lrtNote}` };
     } else if (lrt.available && lrt.stim_stable === false) {
       verdict = { state: "caution", text: `The link differs between stimulation states (p ${fmt(lrt.lrt_p, 3)}): how well the band predicts pain depends on the state, so the same switching point may not hold once stimulation changes.${spreadNote}` };
     } else if (data.portable_by_ci === false) {
@@ -186,9 +186,9 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
             symbol: reversed ? "x" : (r.tag === "Pooled" ? "diamond" : "circle"),
             line: { color: PAL.surface, width: 1.5 } },
           hovertemplate: `${STATE_WORDS[r.tag] || r.tag}: tells high pain from low %{x:.2f}`
-            + (reversed ? " (REVERSED against all states together)" : "")
+            + (reversed ? " (reversed against all states together)" : "")
             + (r.era.auc_lo != null ? `<br>95% range ${fmt(r.era.auc_lo)} to ${fmt(r.era.auc_hi)}` : "")
-            + `<br>${r.era.n_clusters ?? "—"} ratings · share of high-pain reports ${fmt(r.era.prevalence)}<extra></extra>`,
+            + `<br>${r.era.n_clusters ?? "not reported"} ratings · share of high-pain reports ${fmt(r.era.prevalence)}<extra></extra>`,
           showlegend: false,
         });
         if (reversed) {
@@ -229,7 +229,7 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
   return (
     <Card sx={{ ...CARD, width: "100%" }}>
       <MDBox p={3}>
-        <MDTypography component="h3" sx={{ ...TYPE.title, color: PAL.ink, mb: 1 }}>
+        <MDTypography component="h3" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink, mb: 1 }}>
           Does the switching point hold at every stimulation state?
         </MDTypography>
         <PanelStaleNote stale={cached.stale} staleReasons={cached.staleReasons}

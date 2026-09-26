@@ -40,7 +40,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import PAL from "./palette";
-import { TYPE, CARD, STATE } from "assets/theme/base/tokens";
+import { TYPE, WRAP, CARD, STATE } from "assets/theme/base/tokens";
 import Fold from "./Fold";
 import { unevaluableFor } from "./deployFormat";
 
@@ -174,7 +174,7 @@ export default function DeviceRuleLedger({ report }) {
   if (loading) {
     return (
       <Card sx={{ ...CARD, p: 3 }}>
-        <MDTypography component="h2" sx={{ ...TYPE.title, color: PAL.ink }}>Does the device allow it?</MDTypography>
+        <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Does the device allow it?</MDTypography>
         <MDTypography sx={{ ...TYPE.lead, color: PAL.ink2, mt: 1 }}>Checking the device's rules…</MDTypography>
       </Card>
     );
@@ -182,7 +182,7 @@ export default function DeviceRuleLedger({ report }) {
   if (!data || !data.eligibility) {
     return (
       <Card sx={{ ...CARD, p: 3 }}>
-        <MDTypography component="h2" sx={{ ...TYPE.title, color: PAL.ink }}>Does the device allow it?</MDTypography>
+        <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Does the device allow it?</MDTypography>
         <MDTypography sx={{ ...TYPE.lead, color: PAL.ink2, mt: 1, maxWidth: "68ch" }}>
           {`The device's rules have not been checked for this configuration${err ? ` (${err})` : ""}. `}
           They are checked for one sensing contact pair at one band, not for a participant, so a band
@@ -235,7 +235,7 @@ export default function DeviceRuleLedger({ report }) {
 
   return (
     <Card sx={{ ...CARD, p: 3 }}>
-      <MDTypography component="h2" sx={{ ...TYPE.title, color: PAL.ink }}>Does the device allow it?</MDTypography>
+      <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Does the device allow it?</MDTypography>
       <MDTypography data-testid="rule-counts" sx={{ ...TYPE.lead, color: PAL.ink, mt: 1 }}>
         <span style={{ color: failures.length ? PAL.failText : PAL.ink }}>
           <span aria-hidden="true" style={{ marginRight: 4 }}>{STATE.refused.glyph}</span>

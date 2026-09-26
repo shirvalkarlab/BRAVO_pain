@@ -82,8 +82,8 @@ import useBandSweepGrid from "./useBandSweepGrid";
 import useThreeSourcePooled from "./useThreeSourcePooled";
 import useClosedLoopSimulation from "./useClosedLoopSimulation";
 import PAL from "./palette";
-import { TYPE, CARD, LAYOUT } from "assets/theme/base/tokens";
-import { contextLine } from "views/Reports/paper/PageHead";
+import { TYPE, WRAP, CARD, LAYOUT } from "assets/theme/base/tokens";
+import PageHead from "views/Reports/paper/PageHead";
 import CeilingLine from "views/Reports/paper/CeilingLine";
 import { useStudyCode } from "views/Reports/paper/studyCode";
 import "./deployPrint.css";
@@ -161,6 +161,12 @@ function ChosenBandRecordLine({ status, hasBand }) {
 
 /** The page's question, its title (SPEC 2026-09-26 section 5.2). */
 export const PAGE_QUESTION = "Can this setting be programmed, and what do I enter?";
+
+/**
+ * The browser tab's title (TASTE_AUDIT.md C7; SPEC section 6's naming table): the page's job in a
+ * few words, set by `paper/PageHead` while the page is shown.
+ */
+export const DOCUMENT_TITLE = "Closed-loop settings to program";
 
 /**
  * The safe current ceiling line, READ FROM THE SERVER (decision 306 sends the ceiling for the
@@ -420,15 +426,8 @@ function ClosedLoopSim() {
         {/* THE HEAD (SPEC 2026-09-26 section 4 rule 1): the title as a question, one grey line,
             the ceiling line read from the server, then the controls in one row. The verdict is
             the decision card's status line, directly below. */}
-        <MDBox component="header" mb={3}>
-          <MDTypography component="h1" sx={{ ...TYPE.title, m: 0, color: PAL.ink }}>
-            {PAGE_QUESTION}
-          </MDTypography>
-          {participantCode || painLabel ? (
-            <MDTypography data-testid="context-line" sx={{ ...TYPE.caption, color: PAL.ink3, mt: 0.5 }}>
-              {contextLine(participantCode, painLabel)}
-            </MDTypography>
-          ) : null}
+        <PageHead title={PAGE_QUESTION} participant={participantCode} painScore={painLabel}
+          documentTitle={DOCUMENT_TITLE}>
           <ChosenBandRecordLine status={bandRecord} hasBand={!!bc} />
           {bc ? (
             <MDBox mt={1}>
@@ -475,7 +474,7 @@ function ClosedLoopSim() {
             </MDBox>
           </MDBox>
           {bc ? <ContentsRow /> : null}
-        </MDBox>
+        </PageHead>
 
         {bc ? (
           <>
@@ -495,7 +494,7 @@ function ClosedLoopSim() {
             {/* THE DECISION CARD (decision 302; SPEC 2026-09-26 section 5.2): the verdict, red and
                 caution bullets worded as the rule table words them, the values to enter only when
                 the device allows them, "Sign and print", and one Details fold. */}
-            <MDBox id="cl-decision" mb={4}>
+            <MDBox id="cl-decision" mb={8}>
               <DecisionCard participantUid={participant_uid} bandCandidate={bc} summary={summaryForBand}
                 deploymentReport={report} chosenBand={envelope} bandRecord={bandRecord}
                 cutpoint={cutpoint} mode={thresholdMode} onMode={setThresholdMode}
@@ -507,7 +506,7 @@ function ClosedLoopSim() {
         {/* SECTION 1, "Which band?" Rendered whether or not a band is chosen: the grid is how a
             first band gets chosen, so it must be reachable exactly when none exists yet. Picking
             a row commits a band through the same store the file path uses (bandCandidateStore). */}
-        <MDBox id="cl-grid" mb={4}>
+        <MDBox id="cl-grid" mb={8}>
           <BandSweepGridPanel
             grid={bandSweepGrid.grid}
             participantUid={participant_uid}
@@ -519,7 +518,7 @@ function ClosedLoopSim() {
 
         {!bc ? (
           <Card sx={{ ...CARD, p: 3 }}>
-            <MDTypography component="h2" sx={{ ...TYPE.title, color: PAL.ink }}>
+            <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>
               No band has been chosen for this participant yet
             </MDTypography>
             <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, mt: 1, maxWidth: "68ch" }}>
@@ -541,19 +540,19 @@ function ClosedLoopSim() {
             {/* SECTION 2, "Does the device allow it?" Before the evidence, because on a device
                 that acts on its own, whether a configuration is PERMITTED comes before how well it
                 scores. */}
-            <MDBox id="cl-rules" mb={4}>
+            <MDBox id="cl-rules" mb={8}>
               <DeviceRuleLedger report={report} />
             </MDBox>
 
             {/* SECTION 3, "Does the evidence hang together?" */}
-            <MDBox id="cl-evidence" mb={4}>
+            <MDBox id="cl-evidence" mb={8}>
               <EvidenceTrianglePanel report={report} />
             </MDBox>
 
             {/* SECTION 4, "Does the band mean the same at every stimulation state?" It qualifies the
                 relationship section 3 draws: a band whose meaning shifts with the current is a
                 different problem from one whose relationship is simply weak. */}
-            <MDBox id="cl-stability" mb={4}>
+            <MDBox id="cl-stability" mb={8}>
               <BandStabilityPanel stability={report?.data?.band_stability}
                 cacheStatus={report?.data?.cache_status}
                 painScore={report?.data?.pain_score} />
@@ -567,7 +566,7 @@ function ClosedLoopSim() {
                 the right width). The three switching-point panels are mounted on the fold's first
                 opening, as before, because they send their own requests. */}
             <Card id="cl-background" sx={{ ...CARD, p: 3 }}>
-              <MDTypography component="h2" sx={{ ...TYPE.title, color: PAL.ink }}>Background</MDTypography>
+              <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Background</MDTypography>
               <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, mt: 1, maxWidth: "68ch" }}>
                 {"Checks for the analyst before the visit. Nothing here changes the answer above."}
               </MDTypography>

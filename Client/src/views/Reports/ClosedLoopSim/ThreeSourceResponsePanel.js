@@ -35,7 +35,7 @@ import {
 import { PAL, OKABE_ITO } from "./palette";
 import { fmtHz, fmtNum, fmtP } from "./deployFormat";
 import Fold from "./Fold";
-import { TYPE, CARD } from "assets/theme/base/tokens";
+import { TYPE, WRAP, CARD } from "assets/theme/base/tokens";
 import { plotlyLayout } from "views/Reports/figureStyle";
 
 /** One colour per route, matching the static picture in the report exactly. */
@@ -293,7 +293,7 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
     } else reason = "waiting for the report";
     return (
       <Card sx={CARD}><CardContent sx={{ p: 3 }}>
-        <Typography component="h3" sx={{ ...TYPE.title, color: PAL.ink, mb: 1 }}>{title}</Typography>
+        <Typography component="h3" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink, mb: 1 }}>{title}</Typography>
         <Typography sx={{ ...TYPE.body, color: PAL.ink2, mb: 1 }}>{reason}</Typography>
         <Typography sx={{ ...TYPE.caption, color: PAL.ink3 }}>
           This panel is informative only. It does not gate anything, and no verdict on this page
@@ -305,7 +305,7 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
   if (!sides.length) {
     return (
       <Card sx={CARD}><CardContent sx={{ p: 3 }}>
-        <Typography component="h3" sx={{ ...TYPE.title, color: PAL.ink, mb: 1 }}>{title}</Typography>
+        <Typography component="h3" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink, mb: 1 }}>{title}</Typography>
         <Typography sx={{ ...TYPE.body, color: PAL.ink2 }}>
           {view.absent_reason || "no run of stepped current on one side is stored for this participant"}
         </Typography>
@@ -344,13 +344,13 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
   return (
     <Card sx={CARD}>
       <CardContent sx={{ p: 3 }}>
-        <Typography component="h3" sx={{ ...TYPE.title, color: PAL.ink, mb: 1 }}>{title}</Typography>
+        <Typography component="h3" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink, mb: 1 }}>{title}</Typography>
 
         <ToggleButtonGroup size="small" exclusive value={side} sx={{ mb: 1, flexWrap: "wrap" }}
           onChange={(_e, v) => { if (v != null) setSidePick(v); }}>
           {sides.map((s) => (
             <ToggleButton key={s.ramped_side} value={s.ramped_side}
-              sx={{ textTransform: "none", ...TYPE.body }}>
+              sx={{ textTransform: "none", ...TYPE.body, borderColor: PAL.graphic }}>
               {`${s.ramped_side} side turned up · all visits together, `
                 + `${s.contacts.reduce((n, c) => n + c.n_runs, 0)} runs`}
             </ToggleButton>
@@ -366,7 +366,7 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
                 label={`${label(c.sensing_contact)} · ${c.n_runs} run${c.n_runs === 1 ? "" : "s"}`}
                 sx={{ ...TYPE.body, fontWeight: c.sensing_contact === contact ? 600 : 400,
                   backgroundColor: c.sensing_contact === contact ? PAL.accentFill : "transparent",
-                  border: `1px solid ${c.sensing_contact === contact ? PAL.accentBorder : PAL.neutralBorder}` }} />
+                  border: `1px solid ${c.sensing_contact === contact ? PAL.accent : PAL.graphic}` }} />
             ))}
           </Stack>
         ) : null}

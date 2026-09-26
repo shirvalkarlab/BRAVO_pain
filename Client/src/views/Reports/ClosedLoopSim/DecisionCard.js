@@ -37,7 +37,7 @@ import MDTypography from "components/MDTypography";
 import MDButton from "components/MDButton";
 
 import PAL from "./palette";
-import { TYPE, STATE, decisionBar } from "assets/theme/base/tokens";
+import { TYPE, WRAP, STATE, decisionBar } from "assets/theme/base/tokens";
 import Fold from "./Fold";
 import { TRACKS } from "./stateTracks";
 import { provisionalCaveat } from "./ProvisionalNote";
@@ -45,6 +45,7 @@ import { fmtHz } from "./deployFormat";
 import ParameterTable, { ParameterDetails } from "./PrescriptionPanel";
 import SignoffRecord, { useSignoffActions, StaleNotice, SnapshotFigures } from "./DeploySignoffCard";
 import WhatWouldChangeThis from "./WhatWouldChangeThis";
+import { JUMP_ROW_CLASS } from "views/Reports/paper/links";
 import BandCandidateIdentity from "./BandCandidateIdentity";
 
 // Jump targets, set as `id` on the Grid items in index.js, in the order the page draws them.
@@ -147,10 +148,14 @@ function Bullets({ items, cls, ink, glyph, label }) {
   );
 }
 
-/** The contents row: the page's jump links, in one slim row under the head, never in a card. */
+/**
+ * The contents row: the page's jump links, in one slim row under the head, never in a card. It
+ * carries the shared jump-row class, so the global rule that underlines links inside sentences
+ * leaves it alone (TASTE_AUDIT.md C3), and it has no "·" between links, only space (C11).
+ */
 export function ContentsRow() {
   return (
-    <MDBox component="nav" className="cl-jumps" aria-label="On this page" display="flex"
+    <MDBox component="nav" className={`cl-jumps ${JUMP_ROW_CLASS}`} aria-label="On this page" display="flex"
       flexWrap="wrap" columnGap={3} rowGap={0.5} mt={2} pt={1.5}
       sx={{ borderTop: `1px solid ${PAL.rule}` }}>
       {JUMPS.map((j) => (
@@ -243,7 +248,7 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
         {eyebrow ? (
           <MDTypography sx={{ ...TYPE.caption, color: PAL.ink3 }}>{eyebrow}</MDTypography>
         ) : null}
-        <MDTypography component="h2" sx={{ ...TYPE.answer, color: status.ink, mt: 0.5 }}>
+        <MDTypography component="h2" sx={{ ...TYPE.answer, ...WRAP.balance, color: status.ink, mt: 0.5 }}>
           {loading ? "Evaluating the device rules and the evidence…" : (
             <>
               <span aria-hidden="true" style={{ marginRight: 8 }}>{status.glyph}</span>
@@ -298,14 +303,17 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
               needs reading, and a reader's own toggle survives every other re-render. */}
           <Fold key={status.key} show={detailsLabel} hide="Hide details" defaultOpen={!allowedAndSupported}>
             <WhatWouldChangeThis report={deploymentReport} bare />
-            {/* The module's blocker sentences, verbatim. Its warnings (today the two D26 capture
+            {/* The module's blocker sentences, verbatim, in ink with ✕: they are the analysis's own
+                reasons it could not go on (no thresholds placed, a step that failed), not the device
+                refusing, and red is only for a device refusal or a value above the safe ceiling
+                (the PI, 2026-09-26, TASTE_AUDIT.md D14). Its warnings (today the two D26 capture
                 checks) are not repeated here: they are the first entries of the caveats list in the
                 sign-off record below, and the D26 row above quotes them too. */}
             {blockers.length ? (
               <Section title="The rule table's own sentences">
                 {blockers.map((b) => (
-                  <MDTypography key={b} sx={{ ...TYPE.body, display: "block", color: PAL.failText, mt: 0.5 }}>
-                    <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.refused.glyph}</span>
+                  <MDTypography key={b} data-blocker="" sx={{ ...TYPE.body, display: "block", color: STATE.blocked.ink, mt: 0.5 }}>
+                    <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.blocked.glyph}</span>
                     {b}
                   </MDTypography>
                 ))}

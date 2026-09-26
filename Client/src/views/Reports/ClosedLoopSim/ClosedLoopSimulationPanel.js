@@ -36,7 +36,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import { PAL } from "./palette";
-import { TYPE, CARD } from "assets/theme/base/tokens";
+import { TYPE, WRAP, CARD } from "assets/theme/base/tokens";
 import { plotlyLayout, directLabel } from "views/Reports/figureStyle";
 import { fmtNum, fmtPct } from "./deployFormat";
 import Fold from "./Fold";
@@ -369,7 +369,7 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
 
   if (loading && !data) {
     return (<Card sx={{ ...CARD, border: `1px dashed ${PAL.graphic}` }}><MDBox p={3}>
-      <MDTypography component="h3" sx={{ ...TYPE.title, color: PAL.ink }}>{title}</MDTypography>
+      <MDTypography component="h3" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>{title}</MDTypography>
       <Caption>Fetching the stored simulation…</Caption>
     </MDBox></Card>);
   }
@@ -385,7 +385,7 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
 
   if (!data || !hasAnyRun) {
     return (<Card sx={{ ...CARD, border: `1px dashed ${PAL.graphic}` }}><MDBox p={3}>
-      <MDTypography component="h3" sx={{ ...TYPE.title, color: PAL.ink }}>{title}</MDTypography>
+      <MDTypography component="h3" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>{title}</MDTypography>
       <MDTypography sx={{ ...TYPE.lead, display: "block", color: PAL.ink, mt: 1 }}>
         No simulation is stored for this configuration yet
       </MDTypography>
@@ -407,7 +407,7 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
   return (
     <Card sx={{ ...CARD, width: "100%", border: `1px dashed ${PAL.graphic}` }}>
       <MDBox p={3}>
-        <MDTypography component="h3" sx={{ ...TYPE.title, color: PAL.ink }}>{title}</MDTypography>
+        <MDTypography component="h3" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>{title}</MDTypography>
         {label ? <MDTypography sx={{ ...TYPE.caption, color: PAL.ink3 }}>{label}</MDTypography> : null}
         <MDTypography sx={{ ...TYPE.lead, display: "block", color: PAL.ink, mt: 1, maxWidth: "68ch" }}>
           {headline(run)}
@@ -444,8 +444,8 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
               + `${rec.n_segments_used} stretches; `
               + (run.models.M3 ? `the bar is the 2.5–97.5 % range across ${rs.n_fitted || 0} refits on resampled runs. `
                 : `no interval is drawn${rs.reason ? ` (${rs.reason})` : ""}. `)
-              + `Closing the loop changes time at the upper limit by ${isNum(diff.frac_time_at_upper) ? `${(100 * diff.frac_time_at_upper).toFixed(1)} points` : "—"} `
-              + `and state changes by ${isNum(diff.transitions_per_hour) ? `${diff.transitions_per_hour.toFixed(0)} per hour` : "—"}.`}
+              + `Closing the loop changes time at the upper limit by ${isNum(diff.frac_time_at_upper) ? `${(100 * diff.frac_time_at_upper).toFixed(1)} points` : "not reported"} `
+              + `and state changes by ${isNum(diff.transitions_per_hour) ? `${diff.transitions_per_hour.toFixed(0)} per hour` : "not reported"}.`}
           </Caption>
         </MDBox>
 
