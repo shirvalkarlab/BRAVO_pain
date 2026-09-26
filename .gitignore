@@ -411,3 +411,7 @@ handoff_*.png
 
 # Local MCP tool configuration for this machine (npx servers); not project code.
 /.mcp.json
+
+# planning-with-files per-session runtime state (not the plan)
+.planning/*/.nonce
+.planning/*/.stop_blocks
