@@ -25,7 +25,6 @@
 import { useEffect, useRef } from "react";
 import Plotly from "plotly.js-dist";
 
-import { Card } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
@@ -34,15 +33,15 @@ import { useCachedResult } from "database/useCachedResult";
 
 import { CL, recomputeSlots } from "views/Reports/moduleCacheKeys";
 import PanelStaleNote from "views/Reports/ClosedLoopSim/PanelStaleNote";
-import { T, TYPE, CARD } from "assets/theme/base/tokens";
+import { T, TYPE } from "assets/theme/base/tokens";
 import { SIDE } from "assets/theme/base/dataColors";
 import { plotlyLayout, PLOTLY_CONFIG, directLabel } from "views/Reports/figureStyle";
 
 import Fold from "./Fold";
 
-const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
+const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "not given" : Number(v).toFixed(d));
 const isoDate = (yyyymmdd) => (yyyymmdd && yyyymmdd.length === 8
-  ? `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}` : yyyymmdd || "—");
+  ? `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}` : yyyymmdd || "not given");
 
 // The sensing pair in the clinic's own notation, with the side spelled out.
 const contactLabel = (ch) => (ch || "")
@@ -187,8 +186,11 @@ function CalibrationInEffectPanel({ participantUid }) {
   const LINE = { ...TYPE.body, color: SUB, display: "block" };
   const HEAD = { ...TYPE.body, fontWeight: 600, color: T.ink, display: "block" };
   return (
-    <Card sx={{ ...CARD, height: "100%" }}>
-      <MDBox p={3}>
+    // A plain row of the page's Background group, not a card (taste audit C12, 2026-09-26): a
+    // hairline above it separates it from the row before; nothing boxes it.
+    <MDBox component="section" data-paper="background-row"
+      sx={{ borderTop: `1px solid ${T.rule}`, pt: 3 }}>
+      <MDBox>
         <MDTypography component="h3" sx={{ ...TYPE.title, color: T.ink, m: 0 }}>
           Calibration in effect: µV² to device units
         </MDTypography>
@@ -289,7 +291,7 @@ function CalibrationInEffectPanel({ participantUid }) {
           </>
         ) : null}
       </MDBox>
-    </Card>
+    </MDBox>
   );
 }
 

@@ -41,7 +41,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { Card, Grid, CircularProgress } from "@mui/material";
+import { Grid } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -52,16 +52,18 @@ import { PlotlyRenderManager } from "graphing-utility/Plotly";
 import { SessionController } from "database/session-control";
 import { useCachedResult } from "database/useCachedResult";
 import { biomarkerHeatmapSlot, prefetchBiomarkerHeatmapMetric } from "views/Reports/moduleCacheKeys";
-import { T, TYPE, CARD, LAYOUT } from "assets/theme/base/tokens";
+import { T, TYPE, LAYOUT } from "assets/theme/base/tokens";
 import { DIVERGING, RANGE, textInk } from "assets/theme/base/dataColors";
 import { PLOTLY_LAYOUT, PLOTLY_CONFIG, FONT_FAMILY, FIGURE_TEXT_PX, directLabel, mergeDeep } from "views/Reports/figureStyle";
 import ColorKey from "views/Reports/paper/ColorKey";
 import Fold from "./Fold";
+import GridSkeleton from "./GridSkeleton";
+import Section from "views/Reports/paper/Section";
 import { BIN_HI, BIN_LO, BIN_HI_RGB, BIN_LO_RGB, BIN_MID, diverging } from "./binarizationModel";
 import { contactSortKey } from "./contactOrder";
 import { bestCellReadout, cellNP, fmtP, hoverCustomData, tierBullets, deviceSpectrumBullets, stabilityMark, stabilityBullet, clinicSheetBullets, sourceSplitLine } from "./gridReadouts";
 
-const num = (v, d = 3) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
+const num = (v, d = 3) => (v == null || !Number.isFinite(Number(v)) ? "not given" : Number(v).toFixed(d));
 
 // COLOUR (the redesign of 2026-09-26, SPEC.md section 3.1): the one nine-stop diverging scale
 // (dataColors.DIVERGING, blue -> light grey -> vermillion) on FIXED symmetric ranges: a correlation
@@ -1225,16 +1227,17 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   );
   const subhead = { ...TYPE.body, fontWeight: 600, color: T.ink, display: "block", mb: 1, mt: 0 };
 
+  // The shared section (taste audit C6, 2026-09-26): the question as its title, the rest as its
+  // body. While a grid is being worked out there is no spinner (C2): with a grid already on screen
+  // the waiting words sit beside the title; with none, still grey blocks shaped like the grid.
+  const waitingWords = "Computing the calibrated grid…";
   return (
-    <Card sx={{ ...CARD, width: "100%" }}>
-      <MDBox p={3}>
-        <MDBox display="flex" flexDirection="row" justifyContent="space-between" alignItems="baseline"
-          flexWrap="wrap" gap={2}>
-          <MDTypography component="h2" sx={{ ...TYPE.title, color: T.ink, m: 0 }}>
-            {"Does band power rise or fall with pain?"}
-          </MDTypography>
-          {loading ? <CircularProgress size={20} /> : null}
-        </MDBox>
+    <Section id="biomarker-heat-maps" question="Does band power rise or fall with pain?"
+      actions={loading && corrSw && aucSw ? (
+        <MDTypography component="span" role="status" sx={{ ...TYPE.caption, color: T.ink3 }}>
+          {waitingWords}
+        </MDTypography>
+      ) : null}>
 
         {err ? (
           <MDTypography component="p" sx={{ ...TYPE.body, display: "block", mt: 1,
@@ -1364,11 +1367,10 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
           <MDTypography component="p"
             sx={{ ...TYPE.body, color: T.ink3, display: "block", mt: 1 }}>
             {corrResult ? "No band centre produced a grid for this contact pair."
-              : "Computing the calibrated grid…"}
+              : waitingWords}
           </MDTypography>
-        ) : null)}
-      </MDBox>
-    </Card>
+        ) : <GridSkeleton words={waitingWords} shape="heatmaps" />)}
+    </Section>
   );
 }
 

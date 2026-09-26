@@ -78,7 +78,11 @@ export default function TimingHistogram({ scanIndex, painSeries, windowMin, matc
     : "";
   return (
     <MDBox display="flex" flexDirection="column" gap={0.5}>
-      <div ref={ref} style={{ width: "100%", height }} data-testid="timing-histogram" />
+      {/* With nothing to place, the figure's space collapses to the one sentence below (taste
+          audit C2, 2026-09-26); the div stays mounted, at no height, for Plotly. */}
+      <div ref={ref} style={{ width: "100%", height: offsets.length ? height : 0 }}
+        data-testid="timing-histogram" data-empty={offsets.length ? "false" : "true"} />
+      {offsets.length ? (
       <MDBox component="p" m={0} sx={{ ...TYPE.caption, color: T.ink }}>
         {SOURCE_SERIES.map((s, i) => (
           <span key={s.key}>
@@ -93,10 +97,12 @@ export default function TimingHistogram({ scanIndex, painSeries, windowMin, matc
           background: TAIL_GREY, verticalAlign: "baseline" }} />
         {"outside the window"}
       </MDBox>
-      <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink3 }} aria-live="polite">
+      ) : null}
+      <MDTypography variant="caption" sx={{ ...(offsets.length ? TYPE.caption : TYPE.body), color: T.ink3 }}
+        aria-live="polite" data-testid="timing-histogram-caption">
         {offsets.length
           ? `Sources: time domain (TD), band power from up to 30 s of a streaming or a montage recording around the rating; PSD (the device's 30 s snapshot), from a patient event. ${data.nInside.toLocaleString()} samples inside ±${data.windowMin} min${dirText}; ${data.nTails.toLocaleString()} in the greyed tails (to ±${data.limMin} min). Grey also marks any side the direction setting excludes. A TD sample whose report falls inside its recording is stamped at the report's own time, so it sits at 0.${reportFirstNote}`
-          : "No band-power readings to place against the pain reports yet."}
+          : "No band-power readings to place against the pain reports yet; this histogram appears once the recordings and the pain reports have both loaded."}
       </MDTypography>
     </MDBox>
   );

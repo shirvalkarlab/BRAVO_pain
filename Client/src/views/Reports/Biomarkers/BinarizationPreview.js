@@ -140,6 +140,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
 
   const vals = matchedMode ? scanModel.matchedValues : dailyVals;
   const cuts = matchedMode ? matchedCuts : dailyCuts;
+  const hasFigure = vals.length > 0;
 
   // Legacy day/sample class counts (daily mode only).
   const dailyStats = useMemo(() => {
@@ -307,18 +308,18 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
     const proLine = (n) => `${(n || 0).toLocaleString()} pain rating${n === 1 ? "" : "s"}`;
     const lowTxt = matchedMode
       ? (proFirst
-          ? [proLine(proIdxByBin.low), `${psdLine(counts.n_low)} · ${srcLine(bySrc && bySrc.low) || "—"}`]
-          : [psdLine(counts.n_low), `${proLine(proIdxByBin.low)} · ${srcLine(bySrc && bySrc.low) || "—"}`])
+          ? [proLine(proIdxByBin.low), `${psdLine(counts.n_low)} · ${srcLine(bySrc && bySrc.low) || "no sources"}`]
+          : [psdLine(counts.n_low), `${proLine(proIdxByBin.low)} · ${srcLine(bySrc && bySrc.low) || "no sources"}`])
       : [`${dailyStats.nLowDays.toLocaleString()} days`, `${dailyStats.nLowSamp.toLocaleString()} samples`];
     const highTxt = matchedMode
       ? (proFirst
-          ? [proLine(proIdxByBin.high), `${psdLine(counts.n_high)} · ${srcLine(bySrc && bySrc.high) || "—"}`]
-          : [psdLine(counts.n_high), `${proLine(proIdxByBin.high)} · ${srcLine(bySrc && bySrc.high) || "—"}`])
+          ? [proLine(proIdxByBin.high), `${psdLine(counts.n_high)} · ${srcLine(bySrc && bySrc.high) || "no sources"}`]
+          : [psdLine(counts.n_high), `${proLine(proIdxByBin.high)} · ${srcLine(bySrc && bySrc.high) || "no sources"}`])
       : [`${dailyStats.nHighDays.toLocaleString()} days`, `${dailyStats.nHighSamp.toLocaleString()} samples`];
     const midTxt = matchedMode
       ? (proFirst
-          ? [proLine(proIdxByBin.excluded), `${psdLine(counts.n_excluded_middle)} · ${srcLine(bySrc && bySrc.excluded) || "—"}`]
-          : [psdLine(counts.n_excluded_middle), `${proLine(proIdxByBin.excluded)} · ${srcLine(bySrc && bySrc.excluded) || "—"}`])
+          ? [proLine(proIdxByBin.excluded), `${psdLine(counts.n_excluded_middle)} · ${srcLine(bySrc && bySrc.excluded) || "no sources"}`]
+          : [psdLine(counts.n_excluded_middle), `${proLine(proIdxByBin.excluded)} · ${srcLine(bySrc && bySrc.excluded) || "no sources"}`])
       : [`${dailyStats.nMidDays.toLocaleString()} days`, `${dailyStats.nMidSamp.toLocaleString()} samples`];
     if (cuts.kind === "two-cut") {
       if (matchedMode) {
@@ -354,7 +355,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
       const fmtGrp = (obj) => {
         const parts = Object.entries(obj).filter(([, n]) => n > 0)
           .map(([k, n]) => `${k} ${n.toLocaleString()}`);
-        return parts.length ? parts.join(" · ") : "—";
+        return parts.length ? parts.join(" · ") : "none";
       };
       const customdata = centers.map((c, i) => {
         const p = barProv[i];
@@ -364,8 +365,8 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
         return [
           nDays.toLocaleString(),                          // 0: distinct days (pinned on top)
           className(c),                                    // 1: class label
-          tdN.toLocaleString(), p ? fmtGrp(p.td) : "—",    // 2,3: TD total + split
-          psdN.toLocaleString(), p ? fmtGrp(p.psd) : "—",  // 4,5: PSD total + split
+          tdN.toLocaleString(), p ? fmtGrp(p.td) : "not given",    // 2,3: TD total + split
+          psdN.toLocaleString(), p ? fmtGrp(p.psd) : "not given",  // 4,5: PSD total + split
         ];
       });
       traces = [{
@@ -485,7 +486,10 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
   })();
 
   return (
-    <MDBox display="flex" flexDirection="column" sx={{ width: "100%", height: "100%", minHeight: 440 }}>
+    // With nothing to draw, the reserved figure space collapses to one sentence saying what would
+    // fill it (taste audit C2, 2026-09-26); the plot div stays mounted, at no height, for Plotly.
+    <MDBox display="flex" flexDirection="column"
+      sx={{ width: "100%", height: hasFigure ? "100%" : "auto", minHeight: hasFigure ? 440 : 0 }}>
       <MDBox display="flex" flexDirection="row" justifyContent="space-between" alignItems="baseline" mb={0.25}>
         <MDTypography component="h3" sx={{ ...TYPE.body, fontWeight: 600, color: T.ink, m: 0 }}>
           {matchedMode ? "Readings available to split into high and low pain" : "Preview of the high / low pain split"}
@@ -516,7 +520,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
             <>
               <b>{`${(counts.n_matched ?? 0).toLocaleString()}`}</b>
               {` of ${(counts.n_sessions ?? 0).toLocaleString()} band-power readings `}
-              <b>{`(${counts.pct_psd_used != null ? counts.pct_psd_used + "%" : "—"})`}</b>
+              <b>{`(${counts.pct_psd_used != null ? counts.pct_psd_used + "%" : "not given"})`}</b>
               {` paired with a pain report within ±${matchTolerance} min`}
               {Number.isFinite(counts.median_abs_offset_min)
                 ? `, median offset ${counts.median_abs_offset_min.toFixed(1)} min` : ""}
@@ -588,7 +592,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
           single source of truth for the cut points (the in-plot lines are display-only). Shown in
           two-cut percentile/tertile mode when the parent supplies the setters. Dragging promotes a
           tertile preset to "percentile" (same as the old slider onChange) so the custom cuts persist. */}
-      {(cuts.kind === "two-cut" && setPercentileLow && setPercentileHigh) ? (
+      {(hasFigure && cuts.kind === "two-cut" && setPercentileLow && setPercentileHigh) ? (
         <MDBox sx={{ px: 1, pt: 0.5, pb: 0.25 }}>
           <MDBox display="flex" flexDirection="row" justifyContent="space-between" alignItems="baseline">
             <MDTypography variant="caption" sx={{ ...TYPE.caption, fontWeight: 600, color: LO_TEXT }}>
@@ -634,10 +638,20 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
         </MDBox>
       ) : null}
 
-      <div ref={ref} style={{ flex: 1, width: "100%", minHeight: 340 }} />
-      <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink3, textAlign: "center" }}>
-        {footerCaption}
-      </MDTypography>
+      <div ref={ref} data-testid="split-figure" data-empty={hasFigure ? "false" : "true"}
+        style={hasFigure ? { flex: 1, width: "100%", minHeight: 340 } : { width: "100%", height: 0 }} />
+      {hasFigure ? (
+        <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink3, textAlign: "center" }}>
+          {footerCaption}
+        </MDTypography>
+      ) : (
+        <MDTypography component="p" data-testid="split-empty"
+          sx={{ ...TYPE.body, color: T.ink3, m: 0, mt: 0.5 }}>
+          {(loading || matchedLoading)
+            ? "The histogram of the high and low pain split appears here once the pain reports have loaded."
+            : `The histogram of the high and low pain split appears here once there are ${scoreName} reports to split.`}
+        </MDTypography>
+      )}
     </MDBox>
   );
 }

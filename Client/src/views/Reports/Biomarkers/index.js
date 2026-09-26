@@ -13,7 +13,7 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
-import { Card, Grid, Select, MenuItem, FormControl,
+import { Grid, Select, MenuItem, FormControl,
   Slider, LinearProgress,
   ToggleButton, ToggleButtonGroup } from "@mui/material";
 
@@ -43,8 +43,10 @@ import { saveControls, loadControls } from "./biomarkerStateStore";
 // out of scope for this page; only their placement and their framing change.
 import CalibrationInEffectPanel from "./CalibrationInEffectPanel";
 // Colours, type sizes and card style: the shared tokens (the redesign of 2026-09-26).
-import { T, TYPE, CARD, LAYOUT } from "assets/theme/base/tokens";
+import { T, TYPE, LAYOUT } from "assets/theme/base/tokens";
 import PageHead from "views/Reports/paper/PageHead";
+import Section from "views/Reports/paper/Section";
+import useDocumentTitle from "views/Reports/paper/useDocumentTitle";
 import { useStudyCode } from "views/Reports/paper/studyCode";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
@@ -65,9 +67,9 @@ import { PAIN_SCORE_OPTIONS } from "views/Reports/painScores";
 // for this page and the Closed-Loop page's pain-score dropdown (2026-09-25 night).
 const DEFAULT_METRIC_OPTIONS = PAIN_SCORE_OPTIONS;
 
-// A section card (SPEC.md section 2.5): white, a 1 px hairline border, no shadow, 24 px padding,
-// 32 px between cards; never a card inside a card.
-const SECTION_SX = { ...CARD, width: "100%", p: 3 };
+// The page's sections are the shared `paper/Section` (taste audit C6, 2026-09-26): white, a 1 px
+// hairline border, no shadow, 24 px padding; never a card inside a card. The Background heading
+// keeps this title style, and its items are plain rows under it, not cards (C12).
 const SECTION_TITLE_SX = { ...TYPE.title, color: T.ink, m: 0 };
 const LABEL_SX = { ...TYPE.body, fontWeight: 600, color: T.ink, display: "block", mb: 0.25 };
 const NOTE_SX = { ...TYPE.caption, color: T.ink3, display: "block" };
@@ -102,8 +104,12 @@ function useDebounced(value, delay = 250) {
   return debounced;
 }
 
+/** The browser tab says the page's question (taste audit C7, 2026-09-26). */
+export const DOCUMENT_TITLE = "Which brain signal tracks pain";
+
 function Biomarkers() {
   const navigate = useNavigate();
+  useDocumentTitle(DOCUMENT_TITLE);
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
   const { participant_uid } = useParams();
@@ -651,10 +657,11 @@ function Biomarkers() {
       {alert}
       <DatabaseLayout>
         <MDBox pt={3} sx={{ maxWidth: LAYOUT.contentMax, mx: "auto", color: T.ink2 }}>
-          <Grid container spacing={4}>
+          {/* 64 px between sections (SPEC 2.5, the PI's D13): each paper/Section carries its own 64 px below it, so the rows add no gap of their own; the head and the recompute bar carry theirs. */}
+          <Grid container columnSpacing={4} rowSpacing={0}>
             {/* ── HOW THE PAGE OPENS (SPEC.md section 4 rule 1): the question, the pain score it
                 is read on; the status sentence is the heat maps' own answer, read off the grid. */}
-            <Grid item xs={12}>
+            <Grid item xs={12} sx={{ mb: 4 }}>
               <MDBox data-testid="grid-status">
                 <PageHead title="Which brain signal tracks pain?"
                   participant={participantCode}
@@ -692,7 +699,7 @@ function Biomarkers() {
             {/* The Recompute control (the PI's own RecomputeBar.js, unchanged), and under it ONE fold
                 for what only a developer reads: when the stored results were last built and whether
                 this browser keeps the view in memory (decision 304). */}
-            <Grid item xs={12}>
+            <Grid item xs={12} sx={{ mb: 8 }}>
               <RecomputeBar
                 title="pain biomarker exploration"
                 stale={!!(cached.stale || controlsDrifted)}
@@ -765,11 +772,8 @@ function Biomarkers() {
                 one fold whose row names them, the rest under "More options"; then the preview of the
                 high / low split. No box inside this card (decision 304). */}
             <Grid item xs={12}>
-              <Card sx={SECTION_SX}>
-                <MDTypography component="h2" sx={SECTION_TITLE_SX}>
-                  {"How are reports paired with recordings?"}
-                </MDTypography>
-                <MDBox mt={1}>
+              <Section id="biomarker-pairing" question="How are reports paired with recordings?">
+                <MDBox>
                   <MatchWindowBand
                     coverage={reportCoverageLive}
                     metricLabel={previewMetricLabel}
@@ -809,18 +813,15 @@ function Biomarkers() {
                     setStrategy={setStrategy}
                   />
                 </MDBox>
-              </Card>
+              </Section>
             </Grid>
 
             {/* ── §3 "What was recorded, and when?" (SPEC.md section 5.1 item 4): the acquisition
                 timeline (always shown; decision 216). The pain row follows the selector live. Falls
                 back to the older timeline only when no availability payload came back at all. */}
             <Grid item xs={12}>
-              <Card sx={SECTION_SX}>
-                <MDTypography component="h2" sx={SECTION_TITLE_SX}>
-                  {"What was recorded, and when?"}
-                </MDTypography>
-                <MDBox mt={2}>
+              <Section id="biomarker-timeline" question="What was recorded, and when?">
+                <MDBox>
                   {timelineData && timelineData.availability && timelineData.availability.records
                         && timelineData.availability.records.length > 0 ? (
                     <BiomarkerDataTimeline data={timelineData} painOverride={painSeriesLive}
@@ -835,7 +836,7 @@ function Biomarkers() {
                     </MDTypography>
                   ))}
                 </MDBox>
-              </Card>
+              </Section>
             </Grid>
 
             {/* ── BACKGROUND (SPEC.md section 5.1 item 5): the older all-band scan's state and
@@ -930,19 +931,20 @@ function Biomarkers() {
 
               {/* DEVICE-SCALE CALIBRATION (decision 212): the panel states the two constants in one
                   open line and folds how they were fitted. The page adds no prose of its own. */}
-              <MDBox mt={3} data-testid="calibration-section">
+              <MDBox mt={4} data-testid="calibration-section">
                 <CalibrationInEffectPanel participantUid={participant_uid} />
               </MDBox>
 
               {/* Control analyses: saved, dated checks run offline (the PI, 2026-09-24); they feed
                   nothing on this page. Folded, still mounted, so it loads. */}
-              <MDBox mt={3} pb={2}>
+              <MDBox mt={4} pt={3} pb={2} data-paper="background-row"
+                sx={{ borderTop: `1px solid ${T.rule}` }}>
                 {/* The spec's plain title (SPEC 2026-09-26 section 6, "Control analyses"), set by
                     WP7 with the pin in `foldedDeveloperLines.source.test.js`. */}
                 <Fold show="Checks against chance and against the current (run offline)"
                   inside="saved research checks; nothing on this page reads them"
                   hide="Hide the checks against chance and against the current">
-                  <ControlAnalysesSection participantUid={participant_uid} page="biomarkers" clinicSheets={includeClinicSheetRatings} />
+                  <ControlAnalysesSection participantUid={participant_uid} page="biomarkers" clinicSheets={includeClinicSheetRatings} plain />
                 </Fold>
               </MDBox>
             </Grid>

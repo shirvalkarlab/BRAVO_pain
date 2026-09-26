@@ -271,3 +271,17 @@ describe("the control analyses card", () => {
     expect(screen.getByTestId("figure-stepped_current_all_bands").textContent).toMatch(/No stored titration-ladder points/);
   });
 });
+
+describe("plain: a row of a page's Background group (taste audit C12, 2026-09-26)", () => {
+  test("drawn plain, the same content sits in no card", () => {
+    const { container } = render(<ControlAnalysesCard payload={PAYLOAD} plain />);
+    expect(container.querySelector(".MuiCard-root")).toBeNull();
+    expect(container.querySelector("[data-paper='background-row']")).not.toBeNull();
+    expect(screen.getByText(/^Run .*2026.* on data 2025-07-16 to 2026-09-23/)).toBeTruthy();
+  });
+
+  test("without it the card is drawn as before", () => {
+    const { container } = render(<ControlAnalysesCard payload={PAYLOAD} />);
+    expect(container.querySelector(".MuiCard-root")).not.toBeNull();
+  });
+});

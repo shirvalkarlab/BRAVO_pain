@@ -126,7 +126,7 @@ const fmtHoverDate = (epoch_s) => toDate(epoch_s).toLocaleDateString("en-US",
 const fmtHoverTime = (epoch_s) => toDate(epoch_s).toLocaleTimeString("en-US",
   { hour: "2-digit", minute: "2-digit" });
 const fmtDur = (s) => {
-  if (s == null || !Number.isFinite(s) || s <= 0) return "—";
+  if (s == null || !Number.isFinite(s) || s <= 0) return "not given";
   if (s < 90) return `${Math.round(s)} s`;
   if (s < 5400) return `${(s / 60).toFixed(1)} min`;      // < 90 min
   if (s < 172800) return `${(s / 3600).toFixed(1)} h`;    // < 2 days

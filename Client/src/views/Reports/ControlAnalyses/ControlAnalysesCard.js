@@ -27,7 +27,7 @@ function stamp(snap, nRuns) {
   const day = when && !Number.isNaN(when.getTime())
     ? when.toLocaleString([], { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
     : String(snap.run_at || "");
-  const span = `${snap.data_from || "—"} to ${snap.data_through || "—"}`;
+  const span = `${snap.data_from || "a start not given"} to ${snap.data_through || "an end not given"}`;
   return `Run ${day} on data ${span} · ${nRuns} run${nRuns === 1 ? "" : "s"} kept`;
 }
 
@@ -49,7 +49,9 @@ function linesFor(snap, clinicSheets) {
 const CAPTION = { ...TYPE.caption, color: T.ink3, margin: 0 };
 const PROSE = { maxWidth: LAYOUT.proseMax };
 
-export default function ControlAnalysesCard({ payload, clinicSheets }) {
+/** `plain`: drawn as a plain row of a page's Background group, with no card around it (taste audit
+ * C12, 2026-09-26; the Biomarkers page). Without it the card is drawn as before. */
+export default function ControlAnalysesCard({ payload, clinicSheets, plain }) {
   const analyses = (payload && payload.analyses) || [];
   const [key, setKey] = useState(analyses.length ? analyses[0].key : null);
   if (!analyses.length) return null;
@@ -57,9 +59,11 @@ export default function ControlAnalysesCard({ payload, clinicSheets }) {
   const snap = a.snapshot;
   const Figure = FIGURES[a.key];
   const { lines, note } = linesFor(snap, clinicSheets);
+  const Frame = plain ? PlainFrame : CardFrame;
   return (
-    <Card sx={{ ...CARD }}>
-      <MDBox p={3} data-testid="control-analyses-card" sx={{ fontFamily: "inherit" }}>
+    <Frame>
+      <MDBox p={plain ? 0 : 3} data-testid="control-analyses-card" data-plain={plain ? "true" : "false"}
+        sx={{ fontFamily: "inherit" }}>
         <h3 style={{ ...TYPE.title, color: T.ink, margin: 0 }}>{CARD_TITLE}</h3>
         <p style={{ ...TYPE.body, ...PROSE, color: T.ink2, margin: `${SPACE.xs}px 0 ${SPACE.sm}px` }}>
           {"Saved, dated results of checks run offline on this participant's data. This card feeds no recommendation, and nothing here is worked out again when the page loads."}
@@ -105,16 +109,21 @@ export default function ControlAnalysesCard({ payload, clinicSheets }) {
           </div>
         )}
       </MDBox>
-    </Card>
+    </Frame>
   );
 }
 
-ControlAnalysesCard.propTypes = { payload: PropTypes.shape({ analyses: PropTypes.array }), clinicSheets: PropTypes.bool };
-ControlAnalysesCard.defaultProps = { payload: null, clinicSheets: false };
+// eslint-disable-next-line react/prop-types
+function CardFrame({ children }) { return <Card sx={{ ...CARD }}>{children}</Card>; }
+// eslint-disable-next-line react/prop-types
+function PlainFrame({ children }) { return <div data-paper="background-row">{children}</div>; }
+
+ControlAnalysesCard.propTypes = { payload: PropTypes.shape({ analyses: PropTypes.array }), clinicSheets: PropTypes.bool, plain: PropTypes.bool };
+ControlAnalysesCard.defaultProps = { payload: null, clinicSheets: false, plain: false };
 
 /** Fetches the page's saved control analyses once per participant and draws the card; a failed
  * request says so in one line rather than hiding the section. */
-export function ControlAnalysesSection({ participantUid, page, clinicSheets }) {
+export function ControlAnalysesSection({ participantUid, page, clinicSheets, plain }) {
   const [state, setState] = useState({ payload: null, err: null });
   useEffect(() => {
     let live = true;
@@ -131,8 +140,8 @@ export function ControlAnalysesSection({ participantUid, page, clinicSheets }) {
       </p>
     );
   }
-  return <ControlAnalysesCard payload={state.payload} clinicSheets={clinicSheets} />;
+  return <ControlAnalysesCard payload={state.payload} clinicSheets={clinicSheets} plain={plain} />;
 }
 
-ControlAnalysesSection.propTypes = { participantUid: PropTypes.string, page: PropTypes.string.isRequired, clinicSheets: PropTypes.bool };
-ControlAnalysesSection.defaultProps = { participantUid: null, clinicSheets: false };
+ControlAnalysesSection.propTypes = { participantUid: PropTypes.string, page: PropTypes.string.isRequired, clinicSheets: PropTypes.bool, plain: PropTypes.bool };
+ControlAnalysesSection.defaultProps = { participantUid: null, clinicSheets: false, plain: false };

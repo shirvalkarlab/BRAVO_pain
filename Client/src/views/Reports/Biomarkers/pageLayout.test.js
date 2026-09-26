@@ -89,10 +89,12 @@ function printable(src) {
   const jsx = (code.match(/>([^<>{}]*[A-Za-z][^<>{}]*)</g) || []).map((s) => s.slice(1, -1));
   return lits.concat(jsx);
 }
-/** What a reader sees: everything outside a closed fold. */
+/** What a reader sees: everything outside a closed fold. The page's folds are the shared
+ * `paper/Fold` since 2026-09-26 (taste audit C6), which hides closed content with the `hidden`
+ * attribute; an MUI Collapse left closed anywhere is removed too. */
 function visibleText(node) {
   const c = node.cloneNode(true);
-  c.querySelectorAll(".MuiCollapse-hidden").forEach((n) => n.remove());
+  c.querySelectorAll(".MuiCollapse-hidden, [hidden]").forEach((n) => n.remove());
   return c.textContent;
 }
 const countOf = (text, re) => (text.match(new RegExp(re.source, `${re.flags.replace("g", "")}g`)) || []).length;
@@ -295,5 +297,20 @@ describe("8. TD says which TD", () => {
   });
   test("the heat maps: 3 s pieces", () => {
     expect(printable(read("BiomarkerHeatmapGrids.js")).join(" ")).toMatch(/TD\) recording, in 3 s pieces/);
+  });
+});
+
+describe("9. the browser tab and the Background rows (taste audit C7 and C12, 2026-09-26)", () => {
+  test("the browser tab says the page's question", async () => {
+    await renderPage();
+    // the shared hook (paper/useDocumentTitle) may append the application's name after the question
+    expect(document.title).toMatch(/^Which brain signal tracks pain( - |$)/);
+  });
+
+  test("the calibration in effect is a plain row under the Background heading, not a card", async () => {
+    const { container } = await renderPage();
+    const section = container.querySelector("[data-testid='calibration-section']");
+    expect(section.querySelector(".MuiCard-root")).toBeNull();
+    expect(section.querySelector("[data-paper='background-row']")).not.toBeNull();
   });
 });

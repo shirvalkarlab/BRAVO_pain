@@ -302,7 +302,7 @@ export function CurrentMemoryFigure({ result }) {
                 const moves = d && d.verdict === "moves between blocks of time";
                 return (
                   <td key={t} style={{ ...CELL, textAlign: "center", color: moves ? T.caution : T.ink3 }}>
-                    {d ? (moves ? `${GLYPH.caution} moves` : "–") : ""}
+                    {d ? (moves ? `${GLYPH.caution} moves` : "does not move") : "not given"}
                   </td>
                 );
               })}</tr>))}</tbody>
@@ -317,7 +317,7 @@ export function CurrentMemoryFigure({ result }) {
   );
 }
 
-const signedN = (v, d = 1) => (v == null ? "–" : `${v >= 0 ? "+" : ""}${v.toFixed(d)}`);
+const signedN = (v, d = 1) => (v == null ? "not given" : `${v >= 0 ? "+" : ""}${v.toFixed(d)}`);
 
 /** 7. Regression to the mean at one setting (decision 253): the setting delivered most often in
  * one rate/pulse-width group, its own block averages against every other setting in the same
@@ -385,21 +385,21 @@ export function RegressionToMeanFigure({ result }) {
             <td style={CELL}>{internal.p_two_sided != null
               ? `${(internal.p_two_sided * 100).toFixed(1)}% of splits match or exceed it (same direction ${(internal.p_same_direction * 100).toFixed(1)}%)`
               : (internal.reason || "not computable")}</td>
-            <td style={CELL}>{internal.n_valid != null ? `${internal.n_valid} of ${internal.n_total} splits` : "–"}</td>
+            <td style={CELL}>{internal.n_valid != null ? `${internal.n_valid} of ${internal.n_total} splits` : "not given"}</td>
           </tr>
           <tr>
             <td style={CELL}>{"Is a swing this size common anywhere in all the data?"}</td>
             <td style={CELL}>{outside.fraction_ge != null
               ? `${(outside.fraction_ge * 100).toFixed(1)}% of runs elsewhere match or exceed it`
               : "not computable"}</td>
-            <td style={CELL}>{outside.n_windows ? `${outside.n_windows} overlapping runs of ${outside.window_size}` : "–"}</td>
+            <td style={CELL}>{outside.n_windows ? `${outside.n_windows} overlapping runs of ${outside.window_size}` : "not given"}</td>
           </tr>
           <tr>
             <td style={CELL}>{"How unusual was block 1?"}</td>
             <td style={CELL}>{extremity.value != null
               ? `${signedN(extremity.value)} standard errors from the long-run average of all the data`
               : (extremity.reason || "not computable")}</td>
-            <td style={CELL}>{"–"}</td>
+            <td style={CELL}>{"not given"}</td>
           </tr>
         </tbody>
       </table>
@@ -424,7 +424,7 @@ export function TimeOfDayFigure({ result }) {
         <tbody>{pairs.map((ch) => {
           const first = bands.find((b) => b.channel === ch && !b.why);
           return (
-            <tr key={ch}><td style={CELL}>{pairName(ch)}</td><td style={CELL}>{first ? first.n : "–"}</td>
+            <tr key={ch}><td style={CELL}>{pairName(ch)}</td><td style={CELL}>{first ? first.n : "not given"}</td>
               <td style={CELL}>{`${count(ch, (b) => b.R_daily_ci[0] > b.R_daily_shuffle_p95)} of 22`}</td>
               <td style={CELL}>{count(ch, (b) => b.r_weekend_ci[0] > 0)}</td>
               <td style={CELL}>{count(ch, (b) => b.r_weekend_ci[1] < 0)}</td></tr>
@@ -446,7 +446,7 @@ export function TimeOfDayFigure({ result }) {
 export function OnOffFigure({ result }) {
   const rows = (result && result.switches) || [];
   const windows = rows.length ? rows[0].after.map((w) => w.days) : [];
-  const cell = (w) => (w && w.mean != null ? `${w.mean.toFixed(2)} (${w.n})` : "–");
+  const cell = (w) => (w && w.mean != null ? `${w.mean.toFixed(2)} (${w.n})` : "not given");
   return (
     <div data-testid="figure-onoff_switches" style={{ ...BODY, color: T.ink }}>
       <table style={{ ...TABLE, marginTop: 0 }}>
@@ -465,7 +465,7 @@ export function OnOffFigure({ result }) {
  * filled where the fall came after the rise, hollow where it came first; the held re-ratings; the
  * ladders' settled band power. */
 const SIDE_INK = { Left: SIDE.left, Right: SIDE.right };
-const signed = (v, d = 2) => (v == null ? "–" : `${v >= 0 ? "+" : ""}${v.toFixed(d)}`);
+const signed = (v, d = 2) => (v == null ? "not given" : `${v >= 0 ? "+" : ""}${v.toFixed(d)}`);
 const ORDER_WORDS = {
   "one order": "Every fall came after its rise, so carry-over cannot be told apart from pain drifting over the visit.",
 };
@@ -522,8 +522,8 @@ export function CarryOverFigure({ result }) {
         <thead><tr>{["Pain site", "Stimulation", "Rated twice at one setting", "Second minus first (95% range)", "Lower / higher / same"].map((h) => <th key={h} style={HEADC}>{h}</th>)}</tr></thead>
         <tbody>{holds.filter((h) => h.n_pairs).map((h) => (
           <tr key={`${h.item}${h.on}`}><td style={CELL}>{h.words}</td><td style={CELL}>{h.on ? "on" : "off"}</td>
-            <td style={CELL}>{`${h.n_pairs} times, ${h.n_visits} visits, median ${h.minutes_median == null ? "–" : h.minutes_median.toFixed(0)} min apart`}</td>
-            <td style={CELL}>{`${signed(h.mean)} (${h.lo == null ? "–" : `${signed(h.lo)} to ${signed(h.hi)}`})`}</td>
+            <td style={CELL}>{`${h.n_pairs} times, ${h.n_visits} visits, median ${h.minutes_median == null ? "gap not given" : `${h.minutes_median.toFixed(0)} min apart`}`}</td>
+            <td style={CELL}>{`${signed(h.mean)} (${h.lo == null ? "no interval" : `${signed(h.lo)} to ${signed(h.hi)}`})`}</td>
             <td style={CELL}>{`${h.n_lower} / ${h.n_higher} / ${h.n_same}`}</td></tr>))}</tbody>
       </table>
       {ladder.length > 0 && (
@@ -532,7 +532,7 @@ export function CarryOverFigure({ result }) {
           <tbody>{ladder.map((L) => (
             <tr key={`${L.source}${L.pair}`}><td style={CELL}>{L.source}</td><td style={CELL}>{pairName(L.pair)}</td>
               <td style={CELL}>{`${L.n_runs} runs, ${L.n_bands} bands`}</td>
-              <td style={CELL}>{`${L.median_over_bands == null ? "–" : `${signed(100 * L.median_over_bands, 1)}%`} (${L.bands_higher} / ${L.bands_lower})`}</td>
+              <td style={CELL}>{`${L.median_over_bands == null ? "not given" : `${signed(100 * L.median_over_bands, 1)}%`} (${L.bands_higher} / ${L.bands_lower})`}</td>
               <td style={CELL}>{L.verdict === "one order" ? "every fall after its rise" : "both orders"}</td></tr>))}</tbody>
         </table>
       )}
@@ -601,8 +601,8 @@ export function RatingPersistenceFigure({ result }) {
             <tr key={t.name}>
               <td style={CELL}>{t.name}</td>
               <td style={CELL}>{t.independent_days}</td>
-              <td style={CELL}>{targetsAll[i] && targetsAll[i].calendar_days != null ? Math.round(targetsAll[i].calendar_days) : "–"}</td>
-              <td style={CELL}>{targetsZero[i] && targetsZero[i].calendar_days != null ? Math.round(targetsZero[i].calendar_days) : "–"}</td>
+              <td style={CELL}>{targetsAll[i] && targetsAll[i].calendar_days != null ? Math.round(targetsAll[i].calendar_days) : "not given"}</td>
+              <td style={CELL}>{targetsZero[i] && targetsZero[i].calendar_days != null ? Math.round(targetsZero[i].calendar_days) : "not given"}</td>
             </tr>))}</tbody>
         </table>
       )}
@@ -631,7 +631,7 @@ export function SteppedCurrentAllBandsFigure({ result }) {
   const vals = rows.flatMap((b) => [b.relative_slope_per_mA, b.lo, b.hi].filter((v) => v != null));
   const ymax = Math.max(0.05, ...vals.map((v) => Math.abs(v)));
   const current = ratios.find((r) => `${r.route}||${r.pair}` === combo);
-  const pct = (v) => (v != null ? `${(100 * v).toFixed(1)}%` : "–");
+  const pct = (v) => (v != null ? `${(100 * v).toFixed(1)}%` : "not given");
   return (
     <div data-testid="figure-stepped_current_all_bands" style={{ ...BODY, color: T.ink }}>
       {combos.length > 1 && (
@@ -688,7 +688,7 @@ export function SteppedCurrentAllBandsFigure({ result }) {
               <td style={CELL}>{r.route}</td><td style={CELL}>{pairName(r.pair)}</td>
               <td style={CELL}>{`${pct(r.family_median_abs_relative_slope)} (${r.n_family_bands})`}</td>
               <td style={CELL}>{`${pct(r.far_median_abs_relative_slope)} (${r.n_far_bands})`}</td>
-              <td style={CELL}>{r.far_over_family_ratio != null ? r.far_over_family_ratio.toFixed(2) : "–"}</td>
+              <td style={CELL}>{r.far_over_family_ratio != null ? r.far_over_family_ratio.toFixed(2) : "not given"}</td>
             </tr>))}</tbody>
         </table>
       )}

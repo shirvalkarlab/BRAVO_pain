@@ -34,13 +34,13 @@ export function secondsLabel(s) {
 
 function fmtSigned(v, d = 2) {
   const n = Number(v);
-  if (!Number.isFinite(n)) return "—";
+  if (!Number.isFinite(n)) return "not given";
   return `${n < 0 ? "−" : ""}${Math.abs(n).toFixed(d)}`;
 }
 
 function fmtQ(q) {
   const n = Number(q);
-  if (!Number.isFinite(n)) return "—";
+  if (!Number.isFinite(n)) return "not given";
   if (n >= 0.01) return n.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
   return n.toPrecision(2);
 }
@@ -121,7 +121,7 @@ export function stabilityBullet() {
 
 export function fmtP(p) {
   const n = Number(p);
-  if (!Number.isFinite(n)) return "—";
+  if (!Number.isFinite(n)) return "not given";
   if (n >= 0.001) return n.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
   return n.toPrecision(3);
 }
@@ -247,7 +247,7 @@ export function clinicSheetBullets(sw) {
 /** "+0.12" / "\u22120.31" / "0.00": a correlation with its sign always written. */
 function fmtR(v) {
   const n = Number(v);
-  if (v == null || !Number.isFinite(n)) return "\u2014";
+  if (v == null || !Number.isFinite(n)) return "not given";
   const a = Math.abs(n).toFixed(2);
   if (a === "0.00") return a;
   return `${n < 0 ? "\u2212" : "+"}${a}`;

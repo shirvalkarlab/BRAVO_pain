@@ -41,7 +41,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Plotly from "plotly.js-dist";
 
-import { Card, Grid, Select, MenuItem, FormControl, CircularProgress } from "@mui/material";
+import { Card, Grid, Select, MenuItem, FormControl } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -49,9 +49,10 @@ import MDButton from "components/MDButton";
 
 import { SessionController } from "database/session-control";
 import PAL from "views/Reports/ClosedLoopSim/palette";
+import GridSkeleton from "./GridSkeleton";
 
-const num = (v, d = 3) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
-const sec = (v) => (v == null || !Number.isFinite(Number(v)) ? "—" : `${Number(v)} s`);
+const num = (v, d = 3) => (v == null || !Number.isFinite(Number(v)) ? "not given" : Number(v).toFixed(d));
+const sec = (v) => (v == null || !Number.isFinite(Number(v)) ? "not given" : `${Number(v)} s`);
 
 // The three answers the server returns, and the ink each one is drawn in. They are three states and
 // not two: "not settled" is a question that was asked and not answered, "not assessed" is a question
@@ -143,7 +144,7 @@ function BestTable({ rows, kind, nullValue }) {
                     : null}
                 </td>
                 <td style={{ padding: "3px 6px", whiteSpace: "nowrap" }}>
-                  {lo == null || hi == null ? "—" : `${num(lo, 3)} to ${num(hi, 3)}`}
+                  {lo == null || hi == null ? "not given" : `${num(lo, 3)} to ${num(hi, 3)}`}
                   {spans ? (
                     <span style={{ color: PAL.ink3 }}>
                       {isAuc ? " — includes 0.5" : " — includes 0"}
@@ -151,7 +152,7 @@ function BestTable({ rows, kind, nullValue }) {
                   ) : null}
                 </td>
                 <td style={{ padding: "3px 6px" }}>{num(r.shuffled_best_of_windows_p95, 3)}</td>
-                <td style={{ padding: "3px 6px" }}>{r.n_pain_reports == null ? "—" : r.n_pain_reports}</td>
+                <td style={{ padding: "3px 6px" }}>{r.n_pain_reports == null ? "not given" : r.n_pain_reports}</td>
                 <td style={{ padding: "3px 6px", color: ANSWER_INK[ans], fontWeight: 600,
                   whiteSpace: "nowrap" }}>
                   {ANSWER_WORD[ans] || ans}
@@ -266,8 +267,10 @@ function BandTimeSweepPanel({ participantUid, requestParams, availableMetrics, p
               {running ? "Sweeping…" : (result ? "Sweep again" : "Run the sweep")}
             </MDButton>
           </MDBox>
-          {running ? <CircularProgress size={18} /> : null}
         </MDBox>
+        {/* No spinner (taste audit C2, 2026-09-26): the button already says "Sweeping…"; with no
+            table yet, still grey blocks shaped like it stand where it will be drawn. */}
+        {running && !result ? <GridSkeleton words="Sweeping…" shape="table" /> : null}
 
         {!requestParams ? (
           <MDTypography variant="caption" color="dark"
@@ -300,8 +303,7 @@ function BandTimeSweepPanel({ participantUid, requestParams, availableMetrics, p
             from the server, computed in the same pass as the numbers, so the panel cannot show a
             grid without the sentences that say how to read it. */}
         {sw && notes.length ? (
-          <MDBox mt={2} sx={{ border: `2px solid ${PAL.accentBorder}`,
-            borderRadius: 2, p: 1.25, background: PAL.accentFill }}>
+          <MDBox mt={2} sx={{ borderLeft: `1px solid ${PAL.rule}`, pl: 2 }}>
             <MDTypography variant="caption" fontWeight="bold" color="dark"
               sx={{ fontSize: 12, display: "block", mb: 0.5 }}>
               {"How to read the two tables below"}
