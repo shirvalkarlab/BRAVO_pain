@@ -3297,10 +3297,14 @@ class _BootstrapPlan:
         if impose_null:
             keep = [i for i in range(k) if i != self.j]
             if keep:
+                # Each vector is projected directly, Xr @ (pinv(Xr) @ v). The projection MATRIX
+                # Xr @ pinv(Xr) has one row and one column per sample: 15 to 33 GB on the
+                # Closed-Loop band-power cells, and past the container's 42 GB on R 0-3+ (P-12,
+                # section 5 item 3). The same residuals, in memory proportional to the samples.
                 Xr = X[:, keep]
-                Pr = Xr @ np.linalg.pinv(Xr)
-                u0 = y - Pr @ y
-                u1 = X[:, self.j] - Pr @ X[:, self.j]
+                Xr_pinv = np.linalg.pinv(Xr)
+                u0 = y - Xr @ (Xr_pinv @ y)
+                u1 = X[:, self.j] - Xr @ (Xr_pinv @ X[:, self.j])
             else:
                 u0, u1 = y.copy(), X[:, self.j].copy()
             self.centre_at_bhat = False
