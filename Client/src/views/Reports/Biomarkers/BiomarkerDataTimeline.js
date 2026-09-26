@@ -29,7 +29,7 @@ import MDBox from "components/MDBox";
 
 import { routeLabel, modeledLegendName, kFromServed } from "./calibrationLabels";
 import { painScoreLabel } from "views/Reports/painScores";
-import { gutterGeometry, fitRowLabel, F_TICK } from "./timelineGutter";
+import { gutterGeometry, fitRowLabel, F_TICK, eventsRowSubtitle, matchedRowSubtitle } from "./timelineGutter";
 
 // Binarization color identity — MUST match the histogram / binarizationModel (Okabe-Ito).
 // excluded-middle is darkened to #5A6066 (was #7E8794) so "matched but dropped by the cut" is
@@ -748,8 +748,9 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     // 'Streaming' LFP snapshots — those render as per-lane event-PSD ticks (teal) from a SEPARATE
     // payload (av.records), not here, so they don't flood the diamond row. We trust that contract
     // rather than re-deriving the split by string-matching a category literal on the frontend.
+    // The row's subtitle counts only the labeled presses it draws (2026-09-26: with the streaming
+    // count beside it, it ran off the figure).
     const evList = (evWrap.events || []).filter((e) => e && Number.isFinite(e.t));
-    const streamingCount = Number.isFinite(evWrap.streaming_count) ? evWrap.streaming_count : 0;
     if (evList.length) {
       // stable label order (by first appearance) so colors + legend are deterministic
       const labelOrder = [];
@@ -777,8 +778,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         text: "no patient events", showarrow: false, font: { size: 11, color: "#8A5A5A" } });
     }
     annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: eventY,
-      text: `<b>EVENTS</b>${evList.length ? `<br><span style="font-size:13px;color:${SUB_INK}">${evList.length} labeled` +
-        `${streamingCount ? ` · ${streamingCount} streaming` : ""}</span>` : ""}`,
+      text: `<b>EVENTS</b>${evList.length ? `<br><span style="font-size:13px;color:${SUB_INK}">${eventsRowSubtitle(evList.length)}</span>` : ""}`,
       showarrow: false, xanchor: "right", font: { size: 24, color: "#555" } });
 
     // ---- montage snapshots: NeuralActivitySnapshot montage sweeps NOT already shown as a
@@ -885,7 +885,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       const su = (scanModel && scanModel.counts && scanModel.counts.survey_usage) || {};
       if (su.n_pro_total) {
         annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: painBase - 0.30,
-          text: `<span style="font-size:13px;color:${SUB_INK}">${su.n_pro_used || 0} matched · ${su.n_pro_unused || 0} unmatched of ${su.n_pro_total} (${su.pct_pro_used != null ? su.pct_pro_used : 0}%)</span>`,
+          text: `<span style="font-size:13px;color:${SUB_INK}">${matchedRowSubtitle(su.n_pro_used || 0, su.n_pro_total)}</span>`,
           showarrow: false, xanchor: "right" });
       }
     }

@@ -70,3 +70,8 @@ export function fitRowLabel(text, geom, startPx = 14) {
   }
   return { lines, fontPx };
 }
+
+/** Row subtitles that say only what their row shows, short enough for one line at 13 px in the
+ *  contact column (2026-09-26: the longer forms ran off the figure; the PI ruled out the hover). */
+export const eventsRowSubtitle = (nLabeled) => `${nLabeled} labeled`;
+export const matchedRowSubtitle = (used, total) => `${used} of ${total} matched`;
