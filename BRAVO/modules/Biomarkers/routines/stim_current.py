@@ -99,6 +99,32 @@ def settings_stream_for(participant_uid):
     return from_data_start(out, _ds.data_start_s(participant_uid))
 
 
+def contacts_in_force(participant_uid):
+    """The stimulating contacts in force on each lead, from the SAME stored settings stream, or None
+    when nothing has been filed yet.
+
+    Returns ``{"by_side": {"Left": {"rings", "cathode", "newest_row_utc"}, "Right": {...}},
+    "store_key": str or None, "n_rows": int}``: each lead's newest row, since a setting holds until
+    the next is filed (`DecodeCommon.sensing_rule.rings_in_force_by_side`, the device's
+    sensing-pair rule's one home). Read as consumer "biomarkers" from the raw kind, like the current
+    above. A failed read RAISES, so the caller can say why no pair is marked; the grid's caller
+    catches it (`bravo_service.sensing_rule_for_grid`).
+    """
+    try:
+        from modules.CacheStore import store as _cache_store
+        from modules.DecodeCommon import sensing_rule as _sensing_rule
+    except ImportError:                                      # pragma: no cover - host spelling
+        from CacheStore import store as _cache_store
+        from DecodeCommon import sensing_rule as _sensing_rule
+    got = _cache_store.load_newest(THERAPY_SETTINGS_KIND, participant_uid, consumer=CONSUMER)
+    df, stamp = got if isinstance(got, tuple) else (got, None)
+    if df is None or not hasattr(df, "columns") or not len(df):
+        return None
+    return {"by_side": _sensing_rule.rings_in_force_by_side(df),
+            "store_key": (stamp or {}).get("signature_key") if isinstance(stamp, dict) else None,
+            "n_rows": int(len(df))}
+
+
 def from_data_start(stream, start_s):
     """The stream from the implant date on (the PI, 2026-09-24), per side: changes before it go,
     except the last, which is the setting in force at implant and is moved to it. The stored stream

@@ -71,6 +71,9 @@ def _payload():
         "available": True,
         "verdict": "supported (point signs only; 2 of 3 intervals span zero)",
         "verdict_detail": {
+            # The device permits it (a supported verdict): since decision 302 the switching-values
+            # caveat names its numbers only then, as the parameter table shows them only then.
+            "device_eligible": True,
             "provisional": True, "n_edges_unestablished": 2, "n_edges": 3,
             "unestablished_edges": ["E1", "E2"],
             "warnings": ["D26: the two capture currents are 0.5 mA apart, which is less than the "

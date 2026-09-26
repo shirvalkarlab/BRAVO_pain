@@ -353,7 +353,9 @@ def test_every_source_is_non_empty_and_every_number_has_one():
         assert isinstance(src.get(k), str) and src[k].strip(), k
     for k in ("rate_hz", "pulse_width_us", "ceiling_mA"):
         assert p[k] is not None
-    assert any("decision 133" in c and "FIXED measurement current" in c for c in p["conditions"])
+    assert any("FIXED measurement current" in c for c in p["conditions"])
+    # no decision number in the words the page prints (the design review of 2026-09-26)
+    assert not any("decision" in c for c in p["conditions"])
     assert any("streaming on" in c for c in p["conditions"])
     assert any("baseline before" in c for c in p["conditions"])
 

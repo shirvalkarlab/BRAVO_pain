@@ -41,7 +41,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { Card, Grid, CircularProgress, Collapse, IconButton } from "@mui/material";
+import { Card, Grid, CircularProgress, Collapse } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 
 import MDBox from "components/MDBox";
@@ -54,6 +54,8 @@ import { SessionController } from "database/session-control";
 import { useCachedResult } from "database/useCachedResult";
 import { biomarkerHeatmapSlot, prefetchBiomarkerHeatmapMetric } from "views/Reports/moduleCacheKeys";
 import PAL from "views/Reports/ClosedLoopSim/palette";
+import Fold from "views/Reports/ClosedLoopSim/Fold";
+import { CrossGlyph } from "views/Reports/ClosedLoopSim/glyphs";
 import { BIN_HI, BIN_LO, BIN_HI_RGB, BIN_LO_RGB, divergingRgb, diverging } from "./binarizationModel";
 import { contactSortKey } from "./contactOrder";
 import { bestCellReadout, cellNP, fmtP, hoverCustomData, tierBullets, deviceSpectrumBullets, stabilityMark, stabilityBullet, clinicSheetBullets, sourceSplitLine } from "./gridReadouts";
@@ -156,6 +158,135 @@ export const L13_SEARCH_LINES = [
   "Read as a lead for the next titration session (24.5 Hz, 60 s), not a band to program.",
 ];
 
+// ---- THE STATUS AT THE HEAD OF THE HEAT MAPS (decision 304; the review's B3, and the Closed-Loop
+// decision card's pattern of 2026-09-26: one status line, red bullets of five words or fewer for what
+// the device refuses, yellow for evidence not yet evaluated, the details folded, nothing said twice).
+
+/** The side a sweep's contact pair is on, from the response's own fields. */
+function sideOf(ch, sw) {
+  const h = (sw && sw.display_hemisphere) || "";
+  if (/left/i.test(h) || /_LEFT$/.test(ch)) return "Left";
+  if (/right/i.test(h) || /_RIGHT$/.test(ch)) return "Right";
+  return null;
+}
+
+/**
+ * Which pairs the device refuses with today's stimulating contacts, READ from the response's
+ * `sensing_rule` block (decisions 217, 243, 247: the Stim Optimizer's `sensing_rule_block` shape,
+ * `by_side[side].allowed_channel`). Nothing is worked out here: with no block on the response the
+ * answer is null and the page marks nothing. A side with no rule applied (no stimulating contact on
+ * record) refuses nothing; a side whose contacts allow no pair refuses every pair on it.
+ */
+export function refusedPairs(sweeps, rule) {
+  const bySide = rule && rule.by_side;
+  if (!bySide) return null;
+  const names = Object.keys(sweeps || {});
+  const refused = names.filter((ch) => {
+    const side = sideOf(ch, sweeps[ch]);
+    const r = side && bySide[side];
+    return !!(r && r.rule_applied && r.allowed_channel !== ch);
+  });
+  const allowed = ["Left", "Right"].map((side) => bySide[side])
+    .filter((r) => r && r.rule_applied && r.allowed_channel && names.includes(r.allowed_channel))
+    .map((r) => r.allowed_display || r.allowed_channel);
+  return { refused, allowed, total: names.length };
+}
+
+/** How many (pair, band) best cells clear the 22-band correction, split by direction. */
+export function correctionCounts(sweeps) {
+  let rise = 0; let fall = 0; const pairs = [];
+  Object.keys(sweeps || {}).forEach((ch) => {
+    const sw = sweeps[ch];
+    let here = 0;
+    ((sw && sw.best_correlation_rows) || []).forEach((r) => {
+      const q = r.family_wise_q_8_to_30hz == null ? NaN : Number(r.family_wise_q_8_to_30hz);
+      const rr = Number(r.pearson_r);
+      if (!(q < 0.05) || !Number.isFinite(rr) || rr === 0) return;
+      if (rr > 0) rise += 1; else fall += 1;
+      here += 1;
+    });
+    if (here) pairs.push((sw && sw.display_short) || ch);
+  });
+  return { rise, fall, pairs };
+}
+
+/** The status line, from the grid response alone. */
+export function gridStatusLine(result, metricLabel) {
+  const sweeps = (result && result.band_time_sweep) || {};
+  const win = result && result.settings_applied && result.settings_applied.match_tolerance_min;
+  const head = [metricLabel, Number.isFinite(Number(win)) ? `${Number(win)}-min window` : null]
+    .filter(Boolean).join(", ");
+  const { rise, fall, pairs } = correctionCounts(sweeps);
+  const where = pairs.length ? `, on ${pairs.join(", ")}` : "";
+  const band = (n) => (n === 1 ? "band" : "bands");
+  const verb = (n, one, many) => (n === 1 ? one : many);
+  return `${head ? `${head}: ` : ""}past the 22-band correction, ${rise} ${band(rise)} `
+    + `${verb(rise, "rises", "rise")} with pain and ${fall} ${verb(fall, "falls", "fall")} with it${where}.`;
+}
+
+const RED_TEXT = "#9F2F2D";
+const RED_FILL = "#FDEBEC";
+const YELLOW_TEXT = "#956400";
+const YELLOW_FILL = "#FBF3DB";
+
+function Bullet({ tone, children }) {
+  const red = tone === "red";
+  return (
+    <MDBox component="li" data-testid={red ? "red-bullet" : "yellow-bullet"} display="inline-flex"
+      alignItems="center" gap={0.75}
+      sx={{ listStyle: "none", px: 1, py: 0.25, mr: 1, borderRadius: 1,
+        background: red ? RED_FILL : YELLOW_FILL }}>
+      {red ? <CrossGlyph label="refused by the device" size={14} />
+        : <span aria-hidden="true" style={{ color: YELLOW_TEXT, fontSize: 13 }}>{"\u25b2"}</span>}
+      <MDTypography component="span" variant="caption" fontWeight="bold"
+        sx={{ fontSize: 13, color: `${red ? RED_TEXT : YELLOW_TEXT} !important` }}>
+        {children}
+      </MDTypography>
+    </MDBox>
+  );
+}
+
+/** The head of the heat-map card: one status line, then the bullets, then the fold. */
+export function GridStatus({ result, sw, metricLabel }) {
+  const sweeps = (result && result.band_time_sweep) || {};
+  const rule = result && result.sensing_rule;
+  const pairs = refusedPairs(sweeps, rule);
+  const rows = (sw && sw.best_correlation_rows) || [];
+  const stabilityUntested = rows.length > 0 && rows.every((r) => r.cross_setting_stability)
+    && rows.every((r) => (r.cross_setting_stability || {}).answer === "not tested");
+  const reds = pairs && pairs.refused.length ? [`${pairs.refused.length} of ${pairs.total} pairs refused`] : [];
+  const yellows = stabilityUntested ? ["Stability not yet tested"] : [];
+  return (
+    <MDBox data-testid="grid-status" mt={1}>
+      <MDTypography variant="button" color="dark" sx={{ fontSize: 14, display: "block" }}>
+        {pairs && pairs.allowed.length ? `Allowed pairs today: ${pairs.allowed.join(", ")}. ` : ""}
+        {gridStatusLine(result, metricLabel)}
+      </MDTypography>
+      {reds.length || yellows.length ? (
+        <MDBox component="ul" sx={{ m: 0, mt: 0.5, p: 0 }}>
+          {reds.map((b) => <Bullet key={b} tone="red">{b}</Bullet>)}
+          {yellows.map((b) => <Bullet key={b} tone="yellow">{b}</Bullet>)}
+        </MDBox>
+      ) : null}
+      {pairs && pairs.refused.length ? (
+        <Fold show="Why the device refuses these pairs" hide="Hide why">
+          {["Left", "Right"].map((side) => {
+            const r = rule.by_side[side];
+            if (!r || !r.rule_applied) return null;
+            return (
+              <MDTypography key={side} variant="caption" color="dark" display="block" sx={{ fontSize: 13 }}>
+                {`${side} lead: ${r.why}${r.allowed_display ? `, so it senses on ${r.allowed_display} only` : ""}. `
+                  + "A band found on another pair on this lead cannot be programmed without moving the "
+                  + "stimulating contacts (decision 217)."}
+              </MDTypography>
+            );
+          })}
+        </Fold>
+      ) : null}
+    </MDBox>
+  );
+}
+
 export function bulletsFor(sw) {
   // Concise since 2026-09-15 (the PI). The backend's own notes are already short; the three
   // display-only bullets say one thing each; the snapshot bullet is gone from here because the
@@ -165,7 +296,7 @@ export function bulletsFor(sw) {
     ...notes.slice(0, 3),
     "A white circle marks each column's best cell; a heavy ring also clears the 22-band correction "
       + "\u2014 a research finding, not a device-ready setting.",
-    "The left grid ignores the binarization cuts (a continuous score has no split); the right grid "
+    "The left grid ignores the high / low cuts (a continuous score has no split); the right grid "
       + "recomputes and flashes.",
     "Clicking a cell shows its plain, uncorrected Pearson r/p and Mann-Whitney p \u2014 not the grid's corrected numbers.",
     // P-19 (the PI, 2026-09-25): the two sources, named here once in full and TD / PSD everywhere else.
@@ -417,7 +548,7 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
 /** A small strip of thumbnail correlation grids, one per sensing contact pair, all drawn from the
  * one response already held -- clicking a thumbnail is what chooses the contact pair for the two
  * big grids below (Option 2's replacement for a dropdown, task A3). */
-function ContactStrip({ sweeps, channel, setChannel }) {
+function ContactStrip({ sweeps, channel, setChannel, refused }) {
   const names = Object.keys(sweeps || {}).sort((a, b) => {
     const ka = contactSortKey(a, sweeps[a]);
     const kb = contactSortKey(b, sweeps[b]);
@@ -440,16 +571,27 @@ function ContactStrip({ sweeps, channel, setChannel }) {
           ? (sw.display_region ? `${sw.display_short} (${sw.display_region})` : sw.display_short)
           : ch.replace(/_/g, " ");
         return (
-          <MDBox key={ch} onClick={() => setChannel(ch)}
+          <MDBox key={ch} onClick={() => setChannel(ch)} role="button" tabIndex={0}
+            aria-pressed={active} data-testid="pair-thumb" data-channel={ch}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setChannel(ch); } }}
             sx={{
               cursor: "pointer", border: active ? `2.5px solid #1a1a1a` : "1.5px solid #ccc",
               borderRadius: 1.5, p: 0.5, background: "#fff",
               boxShadow: active ? "0 0 0 2px rgba(0,0,0,0.08)" : "none",
             }}>
             <MDTypography variant="caption" fontWeight={active ? "bold" : "medium"} color="dark"
-              sx={{ fontSize: 10.5, display: "block", textAlign: "center" }}>
+              sx={{ fontSize: 11, display: "block", textAlign: "center" }}>
               {label}
             </MDTypography>
+            {refused && refused.includes(ch) ? (
+              <MDBox display="flex" alignItems="center" justifyContent="center" gap={0.5}
+                sx={{ background: "#FDEBEC", borderRadius: 0.75, px: 0.5 }}>
+                <CrossGlyph label="refused by the device" size={12} />
+                <MDTypography variant="caption" fontWeight="bold" sx={{ fontSize: 11, color: "#9F2F2D !important" }}>
+                  {"Refused today"}
+                </MDTypography>
+              </MDBox>
+            ) : null}
             {rows && cols ? (
               <svg width={92} height={46}>
                 {grid.map((row, r) => row.map((v, c) => (
@@ -1040,23 +1182,15 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
           {loading ? <CircularProgress size={20} /> : null}
         </MDBox>
         <MDBox display="flex" flexDirection="row" alignItems="center" flexWrap="wrap" gap={1.5} mt={1}>
-          {/* The pain-score dropdown that used to live here is gone -- one consolidated dropdown
-              now lives at the top of the page (index.js, below the binarization box) and drives
-              this section through the `pageMetric` prop. */}
-          {metricLabel ? (
-            <MDTypography variant="caption" color="dark" sx={{ fontSize: 12 }}>
-              {`Pain score: ${metricLabel}`}
-            </MDTypography>
-          ) : null}
+          {/* The pain score is chosen by the one selector at the top of the page (index.js) and
+              named in the status line below; the direction is plain text, not a box inside the card
+              (decision 304). */}
           {matchDirectionLabel ? (
-            <MDBox sx={{ border: `1.5px solid ${PAL.accentBorder || "#0072B2"}`, borderRadius: 1.5,
-              px: 1, py: 0.4, background: "#0072B208" }}>
-              <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ fontSize: 11 }}>
-                {matchDirectionLabel === "prior"
-                  ? "Matched using recordings from before each rating"
-                  : "Matched using recordings from either time direction"}
-              </MDTypography>
-            </MDBox>
+            <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ fontSize: 12 }}>
+              {matchDirectionLabel === "prior"
+                ? "Matched using recordings from before each rating"
+                : "Matched using recordings from either time direction"}
+            </MDTypography>
           ) : null}
           <MDBox sx={{ ml: "auto" }}>
             <MDButton variant="outlined" color="dark" size="small" disabled={!gridReady}
@@ -1064,7 +1198,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
               {"Open this grid in Closed-Loop →"}
             </MDButton>
             <MDTypography variant="caption" color="dark" fontStyle="italic"
-              sx={{ fontSize: 10, display: "block", mt: 0.25, maxWidth: 240 }}>
+              sx={{ fontSize: 11, display: "block", mt: 0.25, maxWidth: 240 }}>
               {gridReady
                 ? "Closed-Loop Deployment reads this same grid. Opens it there, where any point "
                   + "can be picked as a candidate band."
@@ -1077,6 +1211,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
           <MDTypography variant="caption" sx={{ fontSize: 11.5, display: "block", mt: 1,
             color: PAL.fail || "#D55E00" }}>{`The grid could not be computed: ${err}`}</MDTypography>
         ) : null}
+        {corrResult && corrSw ? <GridStatus result={corrResult} sw={corrSw} metricLabel={metricLabel} /> : null}
         {corrResult && corrResult.message ? (
           <MDTypography variant="caption" color="dark" fontStyle="italic"
             sx={{ fontSize: 11.5, display: "block", mt: 1 }}>{corrResult.message}</MDTypography>
@@ -1093,7 +1228,8 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
                 other rows want top-alignment (a heading beside a same-height plot, etc). */}
             <Grid container spacing={2} alignItems="flex-end">
               <Grid item xs={12} md={7}>
-                <ContactStrip sweeps={corrSweeps} channel={channel} setChannel={setChannel} />
+                <ContactStrip sweeps={corrSweeps} channel={channel} setChannel={setChannel}
+                  refused={(refusedPairs(corrSweeps, corrResult && corrResult.sensing_rule) || {}).refused} />
               </Grid>
               <Grid item xs={12} md={5} />
             </Grid>
@@ -1146,7 +1282,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
               <Grid item xs={12} md={7}>
                 <MDTypography variant="button" fontWeight="bold" color="dark"
                   sx={{ fontSize: 15, display: "block", mb: 0.5 }}>
-                  {"High vs low pain (AUC) — also depends on the binarization cuts above"}
+                  {"High vs low pain (AUC) — also depends on the high / low cuts above"}
                 </MDTypography>
                 <PlotlyHeatmap divId="biomarker-heatmap-auc" sw={aucSw} kind="auc"
                   deviceRanges={deviceRanges}
@@ -1163,37 +1299,23 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
             </Grid>
 
             <MDBox mt={1.5}>
-              <MDBox display="flex" alignItems="center" sx={{ cursor: "pointer" }}
-                onClick={() => setHowToReadOpen((v) => !v)}>
-                <IconButton size="small" sx={{ transform: howToReadOpen ? "rotate(180deg)" : "none" }}>
-                  <ExpandMoreIcon fontSize="small" />
-                </IconButton>
+              <MDBox display="flex" alignItems="center" component="button" type="button"
+                aria-expanded={howToReadOpen} onClick={() => setHowToReadOpen((v) => !v)}
+                sx={{ cursor: "pointer", background: "none", border: 0, p: 0 }}>
+                <ExpandMoreIcon fontSize="small"
+                  sx={{ transform: howToReadOpen ? "rotate(180deg)" : "none", mr: 0.5 }} />
                 <MDTypography variant="caption" fontWeight="bold" color="dark" sx={{ fontSize: 12 }}>
                   {"How to read this"}
                 </MDTypography>
               </MDBox>
               <Collapse in={howToReadOpen}>
-                <MDBox sx={{ border: `1.5px solid ${PAL.accentBorder || "#0072B255"}`, borderRadius: 2,
-                  p: 1.25, background: "#0072B208", mt: 0.5 }}>
-                  {/* `aucSw.notes` is dropped -- both grids come from the same per-channel sweep
-                      response and its `notes` never differs between them, so concatenating the two
-                      only ever rendered every note twice (open item 7, decision 2026-09-09).
-                      Order, reduced from 13 bullets to 8 and reordered by priority: the three
-                      "how to read the statistics" notes the backend already puts first (best-of-ten
-                      selection bias, what 0.5 means, direction/folding) -- the two the PI required
-                      plus the direction note moved up beside them -- then the two remaining
-                      display-only notes that matter most for reading the page at a glance (the
-                      circled-cell correction, why the left grid doesn't redraw), then the
-                      single-cell-statistic caveat, then the sweep's own mechanical bookkeeping
-                      (tile rounding, cell independence, outliers, the shuffled reference, the split
-                      rule) last. The old fourth static bullet ("0.5 means... not 0") is deleted
-                      outright -- it restated the backend's own second note nearly verbatim. */}
-                  {participantUid === L13_SEARCH_UID ? L13_SEARCH_LINES.map((n, i) => (
-                    <MDTypography key={`l13-${i}`} variant="caption" color="dark" data-testid="l13-search-line"
-                      sx={{ fontSize: 17, display: "block", mb: 0.5, lineHeight: 1.4, fontWeight: 700 }}>
-                      {`• ${n}`}
-                    </MDTypography>
-                  )) : null}
+                {/* No box inside the card (decision 304): a rule down the left edge marks the
+                    drawer. `aucSw.notes` is dropped -- both grids come from the same per-channel
+                    sweep response, so its notes never differ (decision of 2026-09-09). Order: the
+                    backend's three "how to read the statistics" notes, the display notes, then the
+                    sweep's own mechanical bookkeeping (`bulletsFor`). */}
+                <MDBox data-testid="reading-notes"
+                  sx={{ borderLeft: `3px solid ${PAL.accentBorder || "#0072B255"}`, pl: 1.25, mt: 0.5 }}>
                   {bulletsFor(corrSw).map((n, i) => (
                     <MDTypography key={i} variant="caption" color="dark"
                       sx={{ fontSize: 17, display: "block", mb: 0.5, lineHeight: 1.4 }}>
@@ -1202,6 +1324,26 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
                   ))}
                 </MDBox>
               </Collapse>
+              {/* THE 2026-09-21 SEARCH ON L 1-3+, FOR RCS08 ONLY, IN ITS OWN FOLD (decision 304; the
+                  PI's ruling of 2026-09-26 on the review's B1, amending 229, 235(c) and 246(d),
+                  which put these lines at the head of "How to read this", in bold). The lines are
+                  unchanged and still bold; they are a finding about one record, not a way to read
+                  the grid, so they no longer sit above the ten reading notes. */}
+              {participantUid === L13_SEARCH_UID ? (
+                <MDBox data-testid="l13-search-fold">
+                  <Fold show={`The 2026-09-21 search on L 1\u207b3\u207a (${L13_SEARCH_LINES.length} lines)`}
+                    hide="Hide the 2026-09-21 search">
+                    <MDBox sx={{ borderLeft: `3px solid ${PAL.accentBorder || "#0072B255"}`, pl: 1.25 }}>
+                      {L13_SEARCH_LINES.map((n, i) => (
+                        <MDTypography key={`l13-${i}`} variant="caption" color="dark" data-testid="l13-search-line"
+                          sx={{ fontSize: 17, display: "block", mb: 0.5, lineHeight: 1.4, fontWeight: 700 }}>
+                          {`• ${n}`}
+                        </MDTypography>
+                      ))}
+                    </MDBox>
+                  </Fold>
+                </MDBox>
+              ) : null}
             </MDBox>
           </>
         ) : (!loading ? (

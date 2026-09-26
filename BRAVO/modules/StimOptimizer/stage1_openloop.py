@@ -1492,8 +1492,9 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
         key = (pwl, pwr)
         if len(sub) < int(min_stratum_epochs):
             skipped[f"pwL{pwl:g}_pwR{pwr:g}"] = (
-                f"{len(sub)} fitted epochs at (Left {pwl:g} us, Right {pwr:g} us), below the "
-                f"{int(min_stratum_epochs)}-epoch floor for a three-dimensional surface")
+                f"{len(sub)} fitted stretches of unchanged settings at (Left {pwl:g} us, Right "
+                f"{pwr:g} us), below the minimum of {int(min_stratum_epochs)} for a "
+                f"three-dimensional surface")
             continue
         try:
             sl = _fit_joint_stratum(pwl, pwr, sub, grid=grid, sgp_left=sgp_by_side["Left"],
@@ -1516,7 +1517,8 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
                 rate_strata[rate] = RateStratum(
                     pw_us_left=float(pwl), pw_us_right=float(pwr), rate_hz=rate,
                     n_epochs=n_r, fitted=False,
-                    reason=f"{n_r} epochs, below the {int(RATE_STRATUM_MIN_EPOCHS)}-epoch floor")
+                    reason=(f"{n_r} stretches of unchanged settings, below the minimum of "
+                            f"{int(RATE_STRATUM_MIN_EPOCHS)}"))
                 continue
             try:
                 rs = _fit_rate_stratum(pwl, pwr, rate, subr, amp_grid=amp_grid,
@@ -1646,8 +1648,8 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
             if n_r < int(RATE_STRATUM_MIN_EPOCHS):
                 rs = RateStratum(pw_us_left=float(inc_pw_left), pw_us_right=float(inc_pw_right),
                                  rate_hz=rate, n_epochs=n_r, fitted=False,
-                                 reason=f"{n_r} epochs over every pulse-width pairing, below the "
-                                        f"{int(RATE_STRATUM_MIN_EPOCHS)}-epoch floor",
+                                 reason=f"{n_r} stretches of unchanged settings over every pulse-width "
+                                        f"pairing, below the minimum of {int(RATE_STRATUM_MIN_EPOCHS)}",
                                  meta=dict(pooled_pulse_widths=True, pairings=[], n_pairings=int(
                                      subr.groupby([subr[pwl_col].astype(float),
                                                    subr[pwr_col].astype(float)]).ngroups)))

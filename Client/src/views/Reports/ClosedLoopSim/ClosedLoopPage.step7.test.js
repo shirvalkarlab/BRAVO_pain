@@ -33,7 +33,7 @@ jest.mock("database/session-control", () => ({ SessionController: { query: jest.
 
 // eslint-disable-next-line import/first
 import DeploySignoffCard from "./DeploySignoffCard";
-import DeploymentDecisionHeader from "./DeploymentDecisionHeader";
+import DecisionCard from "./DecisionCard";
 import WhatWouldChangeThis from "./WhatWouldChangeThis";
 import EvidenceTrianglePanel from "./EvidenceTrianglePanel";
 import payload from "./__fixtures__/rcs08_deployment_payload_2026-09-15.json";
@@ -121,11 +121,13 @@ describe("every number without an uncertainty interval is named on the printed r
     expect(container.textContent).toMatch(/no caveats/i);
   });
 
-  it("counts them in the header so a reader sees them before scrolling", () => {
+  it("counts them on the decision card's Details control, so a reader sees them unopened", () => {
+    // Updated on purpose by decision 302: the sticky header's sentence ("3 numbers or findings on
+    // this page are qualified ...") became the count on the one control that opens the list.
     const { container } = rtlRender(wrap(
-      <DeploymentDecisionHeader bandCandidate={BC} summary={SUMMARY}
+      <DecisionCard bandCandidate={BC} summary={SUMMARY}
         deploymentReport={reportWith({ caveats: CAVEATS })} />));
-    expect(container.textContent).toMatch(/3 numbers or findings/i);
+    expect(container.textContent).toMatch(/Details \(3 caveats, 1 serious\)/);
   });
 });
 

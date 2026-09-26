@@ -122,7 +122,7 @@ def test_the_incumbent_is_the_thin_stratum(incumbent_on_a_thin_stratum):
     res = incumbent_on_a_thin_stratum
     assert res.frozen.incumbent_pw_us == 100.0
     assert "pwL100_pwR150" in res.skipped
-    assert "4 fitted epochs at (Left 100 us, Right 150 us)" in res.skipped["pwL100_pwR150"]
+    assert "4 fitted stretches of unchanged settings at (Left 100 us, Right 150 us)" in res.skipped["pwL100_pwR150"]
     assert {k[0] for k in res.slices} == {60.0, 140.0}
 
 
@@ -153,4 +153,4 @@ def test_a_fittable_pulse_width_pair_in_force_is_the_reference_of_the_contrast()
     s = res.frozen.setting("Left")
     assert res.frozen.incumbent_pw_us == 140.0
     assert not any("no fitted joint stratum of its own" in r for r in s.reasons)
-    assert not any("below the 8-epoch floor" in r for r in s.reasons)
+    assert not any("below the minimum of 8" in r for r in s.reasons)

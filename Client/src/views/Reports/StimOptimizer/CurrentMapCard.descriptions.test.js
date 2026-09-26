@@ -50,19 +50,20 @@ describe("the card's prose folds behind one push-button, except the legend", () 
   // star mean is needed to read the squares at all. Every other description stays folded.
   it("shows the legend on load and no other description, and every description after one click", () => {
     rtlRender(wrap(<CurrentMapCard plan={plan} />));
-    expect(screen.getByText(/Each square below is one stimulation speed/)).toBeInTheDocument();
+    expect(screen.getByText(/Each square below is one stimulation rate/)).toBeInTheDocument(); // PIN CHANGED 2026-09-26 (the design review, the PI's "yes to all six"): "rate", never "speed"
     expect(screen.queryByText(/Pulse-width pairings fitted:/)).toBeNull();
     expect(screen.queryByText(/These scores come from the lab's testing workbooks/)).toBeNull();
     const btn = screen.getByRole("button", { name: /Expand descriptions/ });
     fireEvent.click(btn);
-    expect(screen.getByText(/Each square below is one stimulation speed/)).toBeInTheDocument();
+    expect(screen.getByText(/Each square below is one stimulation rate/)).toBeInTheDocument(); // PIN CHANGED 2026-09-26 (the design review, the PI's "yes to all six"): "rate", never "speed"
     expect(screen.getByText(/Pulse-width pairings fitted: both streams 60\/160 µs/)).toBeInTheDocument();
     expect(screen.getByText(/These scores come from the lab's testing workbooks/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Collapse descriptions/ })).toBeInTheDocument();
   });
   it("keeps the values visible while folded: the per-rate lines and the three checks", () => {
     rtlRender(wrap(<CurrentMapCard plan={plan} />));
-    expect(screen.getAllByText(/epochs · \d+ reports/).length).toBeGreaterThan(0);
+    // PIN CHANGED 2026-09-26 (the design review, the PI's "yes to all six"): "stretches", never "epochs"
+    expect(screen.getAllByText(/stretches · \d+ reports/).length).toBeGreaterThan(0);
     expect(screen.getByText(/Where the two currents have been tried/)).toBeInTheDocument();
   });
 });
@@ -76,7 +77,7 @@ describe("absolute numbers on the squares, colour centred on today (the PI, 2026
     expect(a.zmid).toBe(5.25);
     expect(a.zmin).toBeLessThanOrEqual(3.75);
     expect(a.zmax).toBeGreaterThanOrEqual(7.25);
-    expect(a.zmax - a.zmid).toBeCloseTo(a.zmid - a.zmin, 9);   // symmetric, so yellow IS today's value
+    expect(a.zmax - a.zmid).toBeCloseTo(a.zmid - a.zmin, 9);   // symmetric, so the grey midpoint IS today's value
     expect(a.title).toMatch(/predicted .*rating/);
     expect(a.title).not.toMatch(/score/);
   });
@@ -86,10 +87,12 @@ describe("absolute numbers on the squares, colour centred on today (the PI, 2026
     expect(a.zmid).toBe(0);
     expect(a.title).toBe("score (lower is better)");
   });
-  it("the intro says yellow is today's predicted rating, not that zero is the score", () => {
+  // PIN CHANGED 2026-09-26: the scale is blue - light grey - orange (colour-blind safe), so the
+  // midpoint that means "today" is light grey, not yellow.
+  it("the intro says light grey is today's predicted rating, not that zero is the score", () => {
     rtlRender(wrap(<CurrentMapCard plan={plan} />));
     fireEvent.click(screen.getByRole("button", { name: /Expand descriptions/ }));
-    expect(screen.getAllByText(/yellow/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/light grey is the predicted rating at the setting programmed today/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText(/zero, on the colour scale/)).toBeNull();
   });
 });

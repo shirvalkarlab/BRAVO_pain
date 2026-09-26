@@ -110,6 +110,15 @@ PAL.deferredBorder = "#CC79A755";
 PAL.failFill = "#D55E0012";
 PAL.failBorder = "#D55E0055";
 
+// TEXT INKS FOR THE PASS AND FAIL ROLES (decision 302). The two Okabe-Ito inks above are fills and
+// marks: as small text on white the vermillion measures 3.9:1 and the bluish-green 3.4:1, both
+// under the 4.5:1 body-text minimum. These darkened steps of the same hues measure 6.1:1 and 5.7:1
+// on white (5.4:1 and 5.1:1 on the pale fail fill) and are what any pass- or fail-role WORDS use,
+// as `warnText` already is for amber. Colour is never the only signal: every such word is also a
+// word ("Unmet:", "same", "differs") or carries an icon of its own shape.
+PAL.failText = "#A84300";
+PAL.passText = "#00755A";
+
 // DUTY-STATE RAMP — the three band-power states are ordinally related (below the lower threshold,
 // between the two, above the upper), so they take three shades of ONE hue rather than three hues.
 // Sequential shades encode order; categorical hues would assert that the three states are unrelated

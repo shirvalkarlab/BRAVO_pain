@@ -200,7 +200,7 @@ def test_a_cell_the_screen_refuses_is_refused_by_the_gate_for_the_same_reasons()
     assert side["n_passing"] == 3 and side["n_era_negative_significant"] == 0
     # the SAME sentences, word for word
     assert "; ".join(side["rule_blocking_reasons"]) == screen["blocking_reasons"].iloc[0]
-    assert "no band falls with current once the time confound is removed" in c.detail
+    assert "no band falls with current after removing the differences between clinic visits" in c.detail
 
 
 def test_the_shared_rule_counts_both_halves_of_the_one_band_rule():

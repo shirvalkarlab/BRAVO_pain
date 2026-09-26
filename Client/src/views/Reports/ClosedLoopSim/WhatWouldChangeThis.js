@@ -40,6 +40,12 @@ import { coherenceReading } from "./stateTracks";
  * programmer. The evidence findings come after the device findings, because a device refusal makes
  * the evidence question moot for today whatever its answer.
  */
+/** "E1 −, E2 +, E3 −" from a sign pattern in either of its two serialisations. */
+function signsText(pattern) {
+  const p = parseSignPattern(pattern);
+  return ["E1", "E2", "E3"].map((k) => `${k} ${p[k] == null ? "?" : p[k] > 0 ? "+" : "\u2212"}`).join(", ");
+}
+
 function buildItems(data) {
   if (!data) return [];
   const items = [];
@@ -50,12 +56,13 @@ function buildItems(data) {
     items.push({
       key: `fail-${f.rule_id}`,
       rank: 1,
-      ink: PAL.fail,
+      ink: PAL.failText,
       actor: u.actor,
       title: `${f.rule_id} is violated: ${f.title || "untitled rule"}`,
       page: f.page,
-      clears: "Nothing else on this list can clear this. Until it is resolved the device refuses "
-            + "the configuration and no parameter value is shown.",
+      // Decision 302: "the device refuses ... no parameter value is shown" is the decision card's
+      // status line directly above; this row says only what clears it.
+      clears: "Only a change to the configuration clears this; nothing else on this list does.",
       observed: f.observed,
       why: f.why,
     });
@@ -105,7 +112,7 @@ function buildItems(data) {
     items.push({
       key: "band-stability",
       rank: 4.5,
-      ink: differs ? PAL.fail : PAL.warnText,
+      ink: differs ? PAL.failText : PAL.warnText,
       actor: differs
         ? "band selection — not more measurement"
         : "measurement — more stimulation states",
@@ -155,7 +162,9 @@ function buildItems(data) {
           + "hemisphere, or a control law that runs the other way."
         : "Resolving which of the three edges is unreliable would change this. That is a "
           + "measurement question and the titration session is where it is answered.",
-      observed: `observed ${co.observed_pattern} against required ${co.expected_pattern}`,
+      // The patterns arrive as objects since the payload stopped sending Python reprs, and a
+      // template string printed "[object Object]" (found on the live page, decision 302).
+      observed: `observed ${signsText(co.observed_pattern)} against required ${signsText(co.expected_pattern)}`,
       why: co.note,
     });
   } else if (vd.all_edges_resolved !== true) {
@@ -237,8 +246,8 @@ function buildItems(data) {
       actor: "noted \u2014 does not block",
       title: `${a.rule_id} falls short of a recommendation: ${a.title || "untitled rule"}`,
       page: a.page,
-      clears: "This does not block, so clearing it changes nothing about today's verdict. It is "
-            + "here so that a shortfall against a documented recommendation is not invisible.",
+      // The actor label already says "does not block" (decision 302: one statement, once).
+      clears: "Listed so that a shortfall against a documented recommendation is not invisible.",
       observed: a.observed,
       why: a.why,
     });
@@ -262,7 +271,7 @@ function Item({ item, n }) {
         <MDTypography variant="caption" sx={{ display: "block", fontSize: 12,
           fontWeight: 600, color: "#1A1A1A" }}>
           {item.title}
-          {item.page ? <i style={{ fontWeight: 400, color: "#7A7A7A" }}>{`  (${item.page})`}</i>
+          {item.page ? <i style={{ fontWeight: 400, color: "#5E5E5E" }}>{`  (${item.page})`}</i>
             : null}
         </MDTypography>
         <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#3A3A3A" }}>
@@ -300,8 +309,26 @@ function Item({ item, n }) {
   );
 }
 
-export default function WhatWouldChangeThis({ report }) {
+/**
+ * `bare` (decision 302): drawn inside the decision card's "Details" fold, as its first section,
+ * with no card of its own and nothing at all when there is nothing to change. The red and yellow
+ * bullets above the fold are the short form; this is who can resolve each item and how.
+ */
+export default function WhatWouldChangeThis({ report, bare = false }) {
   const { data, loading, err } = report || { data: null, loading: false, err: null };
+  if (bare) {
+    const rows = data ? buildItems(data) : [];
+    if (!rows.length) return null;
+    return (
+      <MDBox className="cl-what-changes">
+        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, fontWeight: 700,
+          color: "#2A2A2A" }}>
+          What would change this answer, and who can do it
+        </MDTypography>
+        {rows.map((it, i) => <Item key={it.key} item={it} n={i + 1} />)}
+      </MDBox>
+    );
+  }
 
   if (loading) {
     return (

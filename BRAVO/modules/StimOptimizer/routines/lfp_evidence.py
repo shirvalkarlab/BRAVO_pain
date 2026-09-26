@@ -1220,8 +1220,9 @@ def cell_response_verdict(results, *, pain_positive_centers) -> dict:
             "grid carries this contact), so no band can be shown to rise with pain"])
     fails = []
     if not falling:
-        fails.append("no band falls with current once the time confound is removed (no "
-                     "significant negative era-blocked slope)"
+        fails.append("no band falls with current after removing the differences between "
+                     "clinic visits (no significant negative slope of band power on current once "
+                     "those differences are removed)"
                      + (f"; {n_sig} of {n} are significant in the WRONG direction" if n_sig
                         else ""))
     if not pain_here:
@@ -1266,39 +1267,16 @@ def _laterality(channel, hemisphere) -> str:
     return "ipsilateral" if side == str(hemisphere) else "contralateral"
 
 
-_RING_WORDS = {"ZERO": 0, "ONE": 1, "TWO": 2, "THREE": 3}
-
-
-def sensing_pair_rings(channel):
-    """The two ring numbers of a bipolar sensing channel name (``ZERO_TWO_LEFT`` -> (0, 2)), or
-    None when the name does not carry two ring words."""
-    words = [w for w in str(channel or "").upper().split("_") if w in _RING_WORDS]
-    if len(words) != 2:
-        return None
-    a, b = _RING_WORDS[words[0]], _RING_WORDS[words[1]]
-    return (min(a, b), max(a, b))
-
-
-def flanking_pair(stim_rings):
-    """The one sensing pair the device allows for a set of stimulating rings on a lead: the two
-    contacts immediately flanking them -- (1, 3) for contact 2, (0, 2) for contact 1, (0, 3) for
-    contacts 1 and 2 together; None for contact 0 or 3 (nothing flanks them), an empty set, or a
-    non-contiguous set (decision 217; the three configurations per lead of the BrainSense tip
-    card p. 7-8 and the white paper p. 8)."""
-    rings = sorted({int(r) for r in (stim_rings or set())})
-    if not rings or rings != list(range(rings[0], rings[-1] + 1)):
-        return None
-    lo, hi = rings[0] - 1, rings[-1] + 1
-    return (lo, hi) if 0 <= lo and hi <= 3 else None
-
-
-def pair_flanks_stimulation(channel, stim_rings):
-    """Is this sensing pair the one the device allows with these stimulating rings on its lead?
-    None when the pair cannot be read or no stimulating ring is given."""
-    pair = sensing_pair_rings(channel)
-    if pair is None or not stim_rings:
-        return None
-    return pair == flanking_pair(stim_rings)
+# THE DEVICE'S SENSING-PAIR RULE (decision 217) lives in `DecodeCommon.sensing_rule` since
+# 2026-09-26, so the Biomarkers heat maps -- which may not import this package -- state the
+# same rule. These names stay for every existing caller and are the same functions.
+try:
+    from modules.DecodeCommon import sensing_rule as _sensing_rule
+except ImportError:                                   # pragma: no cover - host spelling
+    from DecodeCommon import sensing_rule as _sensing_rule
+sensing_pair_rings = _sensing_rule.sensing_pair_rings
+flanking_pair = _sensing_rule.flanking_pair
+pair_flanks_stimulation = _sensing_rule.pair_flanks_stimulation
 
 
 def screen_cells(evidence, *, response_fn, pain_positive_by_channel=None, amp_ceiling=None,

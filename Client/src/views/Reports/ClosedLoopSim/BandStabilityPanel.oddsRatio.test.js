@@ -76,7 +76,9 @@ describe("the odds ratio in each stimulation state carries its interval", () => 
 });
 
 describe("the band identity card's per-state row", () => {
-  const src = fs.readFileSync(path.join(__dirname, "index.js"), "utf8");
+  // The band identity moved out of the page file into its own, inside the decision card's Details
+  // fold (decision 302); the row is unchanged.
+  const src = fs.readFileSync(path.join(__dirname, "BandCandidateIdentity.js"), "utf8");
   it("prints each state's interval when the band file carries one, and says where they are when not", () => {
     expect(src).toMatch(/Odds ratio per stimulation state \(off, low, high current\)/);
     expect(src).toMatch(/fmtOddsRatioWithInterval\(ev\.or_by_era\[t\]/);

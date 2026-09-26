@@ -143,9 +143,11 @@ def _ordinal(k) -> str:
 
 
 def _n(count, noun):
-    """"1 run" / "4 runs"."""
+    """"1 run" / "4 runs"; "1 stretch" / "2 stretches"."""
     c = int(count)
-    return f"{c} {noun}" if c == 1 else f"{c} {noun}s"
+    if c == 1:
+        return f"{c} {noun}"
+    return f"{c} {noun}es" if noun.endswith(("ch", "sh", "s", "x")) else f"{c} {noun}s"
 
 
 def _bilateral(left_val, right_val) -> str:
@@ -290,7 +292,7 @@ def session_time_estimate(n_steps_total, *, step_minutes=2.0,
             "why": (f"{n} steps at {step_minutes:g} min each is {steps_min:g} min, plus an "
                     f"off-stimulation baseline before and after ({baseline_minutes_each:g} min "
                     f"each) and an impedance test before and after ({impedance_minutes_each:g} "
-                    f"min each, at a fixed measurement current, decision 133): {total_min:g} min "
+                    f"min each, at a fixed measurement current): {total_min:g} min "
                     f"in all")}
 
 
@@ -691,10 +693,10 @@ def side_plan(side, *, rate_in_force_hz, rate_source, pulse_width_us, pulse_widt
     conditions = [
         "each step is two clinic-sheet rows: a ramp row then a test row, 2 min a step "
         f"({timing['total_s']:g} s)",
-        "streaming on for the whole session, so the voltage trace exists for every step",
+        "streaming on for the whole session, so the TD recording (band power from the time-domain signal) exists for every step",
         "an off-stimulation baseline before the first step and after the last",
         ("an impedance test before and after, at a FIXED measurement current, not the device's "
-         "automatic low-current mode, which reads spuriously high (decision 133)"),
+         "automatic low-current mode, which reads spuriously high"),
         (f"the other side is HELD at its own current in force while this side's ladder runs "
          f"({held_src})"),
         "note the wall-clock time of each current change on the clinic sheet",
@@ -789,21 +791,17 @@ HOLD_RATING_EVERY_MIN = 1.0
 #: The first-exposure stop rule (decision 165: a side-effect score of 2 is its own rung, cost 2.0;
 #: decision 164: moderate or severe steps never seed "tolerated").
 FIRST_EXPOSURE_STOP_RULE = ("stop the up leg at the first step with a side-effect score of 2 or "
-                            "more (decision 165); the last step below it is the top current the "
+                            "more; the last step below it is the top current the "
                             "patient tolerated, and the down leg and the holds start from there")
 
 
-def stim_rings_for_sensing_pair(channel):
-    """The stimulating rings a sensing pair REQUIRES: the inverse of the flanking rule
-    (`lfp_evidence.flanking_pair`, decision 217). (0, 3) needs {1, 2}; (0, 2) needs {1}; (1, 3)
-    needs {2}; a pair with nothing between its contacts, or a name that is not a pair, gives None."""
-    from .routines.lfp_evidence import sensing_pair_rings
-    pair = sensing_pair_rings(channel)
-    if pair is None:
-        return None
-    lo, hi = pair
-    inner = set(range(lo + 1, hi))
-    return inner or None
+# The stimulating rings a sensing pair REQUIRES, the flanking rule run backwards (decision
+# 217): in `DecodeCommon.sensing_rule` since 2026-09-26; this name stays for its callers.
+try:
+    from modules.DecodeCommon import sensing_rule as _sensing_rule
+except ImportError:                                   # pragma: no cover - host spelling
+    from DecodeCommon import sensing_rule as _sensing_rule
+stim_rings_for_sensing_pair = _sensing_rule.stim_rings_for_sensing_pair
 
 
 def _rings_label(side, rings) -> str:
@@ -846,7 +844,7 @@ def configuration_exposure(es, side, rings) -> dict:
     out["partial_sentence"] = None
     if partial.any():
         ps = sub.loc[partial]
-        out["partial_sentence"] = (f"{_n(int(partial.sum()), 'epoch')} on part of a ring only ({', '.join(sorted(set(l for l, q in zip(labels, partial) if q)))}) "
+        out["partial_sentence"] = (f"{_n(int(partial.sum()), 'stretch')} of unchanged settings on part of a ring only ({', '.join(sorted(set(l for l, q in zip(labels, partial) if q)))}) "
                                    f"carried up to {np.nanmax(amps[partial]):g} mA for "
                                    f"{float(np.nansum(pd.to_numeric(ps.get('dur_h'), errors='coerce'))):.0f} h with "
                                    f"{int(np.nansum(pd.to_numeric(ps.get('n'), errors='coerce')))} report(s)")
@@ -862,10 +860,10 @@ def configuration_exposure(es, side, rings) -> dict:
     span = f"{out['first']} to {out['last']}" if out["first"] else "undated"
     if out["ever_powered"]:
         out["sentence"] = (f"{label} carried up to {out['amp_max_full_rings_mA']:g} mA over "
-                           f"{_n(out['epochs_full_rings'], 'epoch')}, {out['hours']:.0f} h, {span}, with "
+                           f"{_n(out['epochs_full_rings'], 'stretch')} of unchanged settings, {out['hours']:.0f} h, {span}, with "
                            f"{_n(out['reports'], 'pain report')} inside")
     else:
-        out["sentence"] = (f"{label} was programmed for {_n(out['epochs_full_rings'], 'epoch')}, "
+        out["sentence"] = (f"{label} was programmed for {_n(out['epochs_full_rings'], 'stretch')} of unchanged settings, "
                            f"{span}, at 0.0 mA only: the full rings have never carried current, so nothing in the "
                            f"record says what this configuration does to the band power or to pain")
     if out["partial_sentence"]:
@@ -1025,7 +1023,7 @@ def configuration_plan(side, *, rings, contact, rate_source, pulse_width_us, pul
     sess["why"] = sess["why"] + f"; plus the three holds, {holds['total_minutes']:g} min"
     conditions = [
         f"stimulate on {contacts_short}: the device allows sensing on {c.get('display_short') or c.get('channel')} "
-        f"only while the contacts it flanks stimulate together (decision 217)",
+        f"only while the contacts it flanks stimulate together",
         f"rate {rate['rate_hz']:g} Hz, the rate in force on this side today (the PI, 2026-09-22)"
         + (f"; the bands it watches were found at {rate['cell_rate_hz']:g} Hz on the stored grid"
            if _f(rate.get("cell_rate_hz")) not in (None, rate["rate_hz"]) else "")
@@ -1034,12 +1032,12 @@ def configuration_plan(side, *, rings, contact, rate_source, pulse_width_us, pul
            + (", leaving " + _and_list([f"{v:g}" for v in (bands.get("watch_clear_hz") or [])])
               + " Hz clear" if (bands.get("watch_clear_hz") or []) else ", leaving none of them clear")
            if (bands.get("watch_on_harmonic_hz") or []) else ""),
-        "streaming on for the whole session on the sensing pair, so the voltage trace exists for every step and every hold",
+        "streaming on for the whole session on the sensing pair, so the TD recording (band power from the time-domain signal) exists for every step and every hold",
         FIRST_EXPOSURE_STOP_RULE,
         "each ladder step is two clinic-sheet rows: a ramp row then a test row, 2 min a step; a pain rating at the end of every test row",
         f"then three {holds['minutes_each']:g}-minute holds, off / on / off, a rating every {holds['rating_every_minutes']:g} min, the patient blind to the current",
         f"the {other} side is HELD at its own current in force ({held_src})",
-        "an off-stimulation baseline before the first step and after the last hold; an impedance test before and after at a fixed measurement current (decision 133)",
+        "an off-stimulation baseline before the first step and after the last hold; an impedance test before and after at a fixed measurement current",
         "note the wall-clock time of each change on the clinic sheet",
     ]
     sources = {

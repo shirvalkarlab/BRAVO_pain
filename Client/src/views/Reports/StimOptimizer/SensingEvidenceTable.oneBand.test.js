@@ -72,7 +72,10 @@ describe("SensingEvidenceTable under the one-band rule", () => {
 
   it("marks a qualifying band that sits on the stimulator's own harmonic", () => {
     const { container } = rtlRender(wrap(<SensingEvidenceTable closedLoop={closedLoop} />));
-    expect(container.textContent).toMatch(/on a stimulator harmonic/i);
+    // PIN CHANGED 2026-09-26: the PI's advisory wording (2026-09-06), "carries a folded multiple of
+    // the stimulation rate", in place of "on a stimulator harmonic".
+    expect(container.textContent).toMatch(/carries a folded multiple of the rate/i);
+    expect(container.textContent).not.toMatch(/on a stimulator harmonic/i);
   });
 
   it("says which grid the pain half was read from", () => {

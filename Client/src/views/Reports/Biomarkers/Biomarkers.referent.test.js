@@ -133,9 +133,14 @@ describe("the calibrated heat-map card (BiomarkerHeatmapGrids)", () => {
     expect(bullets.filter((b) => /answered from|FFT snapshots/.test(b))).toEqual([]);
   });
 
-  it("the L 1-3+ search summary heads the drawer in bold for RCS08, with its settings, and for no other participant", async () => {
+  // CHANGED ON PURPOSE, decision 304 (the PI, 2026-09-26: "yes to all six", the review's B1). The
+  // seven lines moved out of "How to read this" into their own fold, closed on load, still bold, for
+  // RCS08 only; the drawer now opens on the backend's own first note. Every line's content below is
+  // the pin decisions 229, 235(c) and 246(d) set, unchanged.
+  it("the L 1-3+ search summary sits in its own fold, in bold, for RCS08, with its settings, and for no other participant", async () => {
     const { container } = await renderGrid();
     fireEvent.click(screen.getByText(/^How to read this$/));
+    fireEvent.click(screen.getByText(/^The 2026-09-21 search on L/));
     const lines = Array.from(container.querySelectorAll('[data-testid="l13-search-line"]')).map((el) => el.textContent);
     expect(lines.length).toBe(7);
     expect(lines[0]).toMatch(/252 settings/);
@@ -167,15 +172,20 @@ describe("the calibrated heat-map card (BiomarkerHeatmapGrids)", () => {
     container.querySelectorAll('[data-testid="l13-search-line"]').forEach((el) => {
       expect(getComputedStyle(el).fontWeight).toBe("700");
     });
-    // the first drawer bullet is the search, before the backend's own notes
-    const all = Array.from(container.querySelectorAll("*"))
+    // the search is its own fold, outside the drawer; the drawer opens on the backend's own first note
+    const fold = container.querySelector('[data-testid="l13-search-fold"]');
+    container.querySelectorAll('[data-testid="l13-search-line"]').forEach((el) => expect(fold.contains(el)).toBe(true));
+    const drawer = container.querySelector('[data-testid="reading-notes"]');
+    expect(drawer.textContent).not.toMatch(/Exploratory search, 2026-09-21/);
+    const all = Array.from(drawer.querySelectorAll("*"))
       .filter((el) => el.children.length === 0 && /^• /.test(el.textContent || "")).map((el) => el.textContent);
-    expect(all[0]).toMatch(/Exploratory search, 2026-09-21/);
+    expect(all[0]).toBe(`• ${sweep.band_time_sweep.ZERO_THREE_RIGHT.notes[0]}`);
     // another participant sees none of it
     container.ownerDocument.body.innerHTML = "";
     const other = await renderGrid({ participantUid: "0000000000000000000000000000dead" });
     fireEvent.click(screen.getByText(/^How to read this$/));
     expect(other.container.querySelectorAll('[data-testid="l13-search-line"]').length).toBe(0);
+    expect(other.container.querySelector('[data-testid="l13-search-fold"]')).toBeNull();
   });
 
   it("item 3, the other half: the orange caption still prints the snapshot count, exactly once on the card", async () => {

@@ -32,6 +32,19 @@
  * filled `.xlsx` file, downloaded directly -- this page's own copy of the setup note
  * (`SHEET_EXPORT_SETUP_NOTE`, kept identical to `google_sheets_client.SETUP_NOTE`) is shown
  * underneath, since the download itself carries no JSON body to read a note from.
+ *
+ * THE DESIGN REVIEW OF 2026-09-26 (the PI: "yes to all six, build them"):
+ *   - the clinic-sheet tables (34 rows on the 2026-09-15 response, 101 on 2026-09-25) fold under
+ *     the export button that already makes the sheet: "Make Google sheet" exports them, and the
+ *     page shows them one click away;
+ *   - each side's explanatory prose (the rate, the ladder, the hold, the sensing contact, the
+ *     harmonic paragraph) moves into that side's own "Why this design" fold; the values stay open;
+ *   - the session conditions both ladders share print once, under both columns;
+ *   - the ceiling is stated once, in the header strip ("ceiling L 4.5 mA · R 4.5 mA");
+ *   - THE HOME SCHEDULE IS INSIDE THIS CARD as its second fold (it was a card of its own, kept
+ *     apart by the PI's ruling of 2026-09-12, which he amended on 2026-09-26): the next visit and
+ *     the weeks after it are one plan;
+ *   - where the protocol and the template come from folds too; no decision number is printed.
  */
 import React, { useState } from "react";
 import { Button, Card, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip } from "@mui/material";
@@ -44,6 +57,7 @@ import { SessionController } from "database/session-control";
 import PAL from "views/Reports/ClosedLoopSim/palette";
 
 import { num, fmtHz, fmtMa, fmtUs, contactLabel } from "./stimFormat";
+import { HomeScheduleSection } from "./CurrentMapScheduleCard";
 import { TYPE, HEAD, SMALL, MONO, NOWRAP, SizedFold as Fold } from "./typeScale";
 
 /** Kept word-for-word identical to `StimOptimizer/google_sheets_client.py`'s `SETUP_NOTE` -- the
@@ -164,8 +178,7 @@ function SessionHeaderStrip({ plan }) {
     ["rate", fmtHz((left || right || {}).rate_hz)],
     ["left pulse width", fmtUs(left && left.pulse_width_us)],
     ["right pulse width", fmtUs(right && right.pulse_width_us)],
-    ["left ceiling", fmtMa(left && left.ceiling_mA)],
-    ["right ceiling", fmtMa(right && right.ceiling_mA)],
+    ["ceiling", `L ${fmtMa(left && left.ceiling_mA)} · R ${fmtMa(right && right.ceiling_mA)}`],
     ["left's ladder holds right at", fmtMa(left && left.held_other_side && left.held_other_side.current_mA)],
     ["right's ladder holds left at", fmtMa(right && right.held_other_side && right.held_other_side.current_mA)],
     ["step timing", stepLine],
@@ -180,11 +193,6 @@ function SessionHeaderStrip({ plan }) {
             sx={{ fontSize: TYPE.num, fontFamily: PAL.mono, whiteSpace: "nowrap" }}>{v}</MDTypography>
         </MDBox>
       ))}
-      {sess.why && (
-        <MDTypography variant="caption" component="div" color="text" sx={{ ...SMALL, width: "100%", mt: 0.3 }}>
-          {sess.why}
-        </MDTypography>
-      )}
     </MDBox>
   );
 }
@@ -234,7 +242,7 @@ function BandStrip({ bands }) {
   );
 }
 
-function SideColumn({ side, plan }) {
+function SideColumn({ side, plan, shared = [], todayShared = false }) {
   if (!plan) {
     return (
       <MDBox>
@@ -262,7 +270,7 @@ function SideColumn({ side, plan }) {
   return (
     <MDBox>
       <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>{side}</MDTypography>
-      <Row label="rate" sub={plan.rate_lifted ? plan.rate_why : null}>
+      <Row label="rate">
         <span style={VALUE}>{fmtHz(plan.rate_hz)}</span>
         {plan.rate_lifted && num(plan.rate_in_force_hz) !== null && (
           <span style={{ ...SMALL, marginLeft: 8, color: PAL.warnText }}>
@@ -270,13 +278,10 @@ function SideColumn({ side, plan }) {
           </span>
         )}
       </Row>
-      <Row label="pulse width" sub={plan.pulse_width_note || null}>
+      <Row label="pulse width">
         <span style={VALUE}>{fmtUs(plan.pulse_width_us)}</span>
       </Row>
-      <Row label="ceiling">
-        <span style={VALUE}>{fmtMa(plan.ceiling_mA)}</span>
-      </Row>
-      <Row label="ladder" sub={lad.why || null}>
+      <Row label="ladder">
         <span style={{ ...VALUE_SMALL, whiteSpace: "normal" }}>{lad.compact || "—"}</span>
         {num(lad.n_steps) !== null && (
           <span style={{ ...SMALL, marginLeft: 8 }}>
@@ -284,7 +289,7 @@ function SideColumn({ side, plan }) {
           </span>
         )}
       </Row>
-      <Row label="hold per step" sub={hold.why || null}>
+      <Row label="hold per step">
         <span style={VALUE}>{num(hold.seconds) === null ? "—" : `${num(hold.seconds)} s`}</span>
         {num(hold.usable_pieces_after_margin) !== null && (
           <span style={{ ...SMALL, marginLeft: 8 }}>
@@ -292,9 +297,7 @@ function SideColumn({ side, plan }) {
           </span>
         )}
       </Row>
-      <Row label="record from" sub={c ? (c.ipsilateral_alternative
-        ? `${c.note}. The best contact on this side itself: ${contactLabel(c.ipsilateral_alternative)}, ${c.ipsilateral_alternative.n_qualifying ?? "—"} of ${c.ipsilateral_alternative.n_bands ?? "—"} bands both fall with current and rise with pain${c.ipsilateral_alternative.deployable ? "" : " (did not pass the screen)"}`
-        : c.note) : plan.sensing_contact_note}>
+      <Row label="record from">
         {c ? (
           <span>
             <span style={{ ...VALUE, color: c.on_other_side ? PAL.warnText : VALUE.color }}>{contactLabel(c)}</span>
@@ -306,22 +309,37 @@ function SideColumn({ side, plan }) {
           </span>
         ) : <span style={{ ...VALUE, color: PAL.neutral }}>—</span>}
       </Row>
-      <Row label="analyse at" sub={harmonicsText ? `the stimulator shows up at ${harmonicsText}; a centre within ±${num((plan.bands || {}).half_width_hz) ?? "—"} Hz of one carries a folded multiple of the stimulation rate and is flagged, not dropped -- every centre above is still analysed (advisory, the PI, 2026-09-06)` : null}>
+      <Row label="analyse at">
         <BandStrip bands={plan.bands} />
       </Row>
-      <MDBox mt={0.6}>
-        <MDTypography variant="caption" sx={LABEL}>during the session</MDTypography>
-        <MDBox component="ul" sx={{ m: 0, mt: 0.3, pl: 2.2 }}>
-          {(plan.conditions || []).map((t, i) => (
-            <li key={i} style={{ fontSize: TYPE.body, lineHeight: 1.35 }}>{t}</li>
-          ))}
+      {(plan.conditions || []).filter((t) => !shared.includes(t)).length > 0 && (
+        <MDBox mt={0.6}>
+          <MDTypography variant="caption" sx={LABEL}>during this ladder</MDTypography>
+          <MDBox component="ul" sx={{ m: 0, mt: 0.3, pl: 2.2 }}>
+            {(plan.conditions || []).filter((t) => !shared.includes(t)).map((t, i) => (
+              <li key={i} style={{ fontSize: TYPE.body, lineHeight: 1.35 }}>{t}</li>
+            ))}
+          </MDBox>
         </MDBox>
-      </MDBox>
-      <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.8 }}>
-        {`today: ${rec.note || "—"}`}
-      </MDTypography>
+      )}
+      {!todayShared && (
+        <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.8 }}>
+          {`today: ${rec.note || "—"}`}
+        </MDTypography>
+      )}
       <Fold show="Why this design" hide="Hide" mt={0.6}>
         <MDBox component="dl" sx={{ m: 0, "& dt": { ...HEAD, mt: 0.6 }, "& dd": { m: 0, fontSize: TYPE.small, lineHeight: 1.35, color: "#3E3E3E" } }}>
+          {plan.pulse_width_note ? <><dt>pulse width</dt><dd>{plan.pulse_width_note}</dd></> : null}
+          {lad.why ? <><dt>ladder, in words</dt><dd>{lad.why}</dd></> : null}
+          {hold.why ? <><dt>hold per step, why</dt><dd>{hold.why}</dd></> : null}
+          <dt>record from, why</dt>
+          <dd>{c ? (c.ipsilateral_alternative
+            ? `${c.note}. The best contact on this side itself: ${contactLabel(c.ipsilateral_alternative)}, ${c.ipsilateral_alternative.n_qualifying ?? "—"} of ${c.ipsilateral_alternative.n_bands ?? "—"} bands both fall with current and rise with pain${c.ipsilateral_alternative.deployable ? "" : " (did not pass the screen)"}`
+            : c.note) : (plan.sensing_contact_note || "—")}</dd>
+          {harmonicsText ? (
+            <><dt>analyse at, the harmonics</dt>
+              <dd>{`the stimulator shows up at ${harmonicsText}; a centre within ±${num((plan.bands || {}).half_width_hz) ?? "—"} Hz of one carries a folded multiple of the stimulation rate and is flagged, not dropped -- every centre above is still analysed (advisory, the PI, 2026-09-06)`}</dd></>
+          ) : null}
           <dt>rate</dt><dd>{plan.rate_why} — {src.rate_hz}</dd>
           <dt>pulse width</dt><dd>{src.pulse_width_us}</dd>
           <dt>ceiling</dt><dd>{src.ceiling_mA}</dd>
@@ -359,7 +377,7 @@ function ProposedColumn({ p }) {
       <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, lineHeight: 1.4, mt: 0.4 }}>
         {p.purpose}
       </MDTypography>
-      <Row label="stimulate on" sub={sp.why ? `${sp.display_short || sp.channel}: ${sp.why}` : null}>
+      <Row label="stimulate on">
         <span style={VALUE}>{st.contacts_short || "—"}</span>
         {st.differs_from_in_force && (
           <span style={{ ...SMALL, marginLeft: 8, color: PAL.warnText }}>
@@ -367,33 +385,30 @@ function ProposedColumn({ p }) {
           </span>
         )}
       </Row>
-      <Row label="record from" sub={num(c.n_qualifying) !== null
-        ? `${c.n_qualifying} of ${num(c.n_bands) ?? "—"} bands rise with pain on this pair at ${fmtHz(c.rate_hz)}; ${num(c.n_responding) ?? 0} fall with current (none can, until this configuration has carried current)`
-        : null}>
+      <Row label="record from">
         <span style={VALUE}>{sp.display_short || sp.channel || "—"}</span>
       </Row>
-      <Row label="rate" sub={src.rate_hz || null}>
+      <Row label="rate">
         <span style={VALUE}>{fmtHz(p.rate_hz)}</span>
         {num(p.rate_in_force_hz) !== null && num(p.rate_in_force_hz) !== num(p.rate_hz) && (
           <span style={{ ...SMALL, marginLeft: 8, color: PAL.warnText }}>{`(in force today: ${fmtHz(p.rate_in_force_hz)})`}</span>
         )}
       </Row>
       <Row label="pulse width"><span style={VALUE}>{fmtUs(p.pulse_width_us)}</span></Row>
-      <Row label="ceiling"><span style={VALUE}>{fmtMa(p.ceiling_mA)}</span></Row>
-      <Row label="watch" sub={bands.watch_why || null}>
+      <Row label="watch">
         <span style={VALUE_SMALL}>{watch ? `${watch} Hz` : "—"}</span>
       </Row>
-      <Row label="the record today" sub={fe.why || null}>
+      <Row label="the record today">
         <span style={{ ...SMALL, color: fe.ever_powered === false ? PAL.warnText : "#1A1A1A" }}>{fe.sentence || "—"}</span>
       </Row>
       <Row label="stop rule"><span style={{ fontSize: TYPE.body }}>{fe.stop_rule || "—"}</span></Row>
-      <Row label="ladder (part A)" sub={lad.why || null}>
+      <Row label="ladder (part A)">
         <span style={{ ...VALUE_SMALL, whiteSpace: "normal" }}>{lad.compact || "—"}</span>
         {num(lad.n_steps) !== null && (
           <span style={{ ...SMALL, marginLeft: 8 }}>{`${lad.n_steps} steps, ${lad.n_distinct_currents} distinct currents`}</span>
         )}
       </Row>
-      <Row label="holds (part B)" sub={holds.why || null}>
+      <Row label="holds (part B)">
         <span style={{ ...VALUE_SMALL, whiteSpace: "normal" }}>
           {(holds.holds || []).length
             ? `${holds.holds.map((h) => h.state).join(" / ")}: ${holds.holds.map((h) => fmtMa(h.current_mA)).join(", ")}, ${num(holds.minutes_each)} min each, a rating every ${num(holds.rating_every_minutes)} min, the patient blind to the current`
@@ -404,18 +419,31 @@ function ProposedColumn({ p }) {
         <span style={{ fontSize: TYPE.body }}>{`${other} side held at ${fmtMa(p.held_other_side && p.held_other_side.current_mA)}`}</span>
       </Row>
       <Row label="time">
-        <span style={{ fontSize: TYPE.body }}>{num((p.session_time || {}).total_minutes) != null ? `~${Math.round(num(p.session_time.total_minutes))} min on its own (${(p.session_time || {}).why || ""})` : "—"}</span>
+        <span style={{ fontSize: TYPE.body }}>{num((p.session_time || {}).total_minutes) != null ? `~${Math.round(num(p.session_time.total_minutes))} min on its own` : "—"}</span>
       </Row>
-      <MDBox mt={0.6}>
-        <MDTypography variant="caption" sx={LABEL}>during the session</MDTypography>
+      {/* Its session conditions and the time's breakdown fold: most of the list repeats the rows
+          above and the ordinary session's conditions (the design review of 2026-09-26). */}
+      <Fold show={`During this ladder: the full list (${(p.conditions || []).length}) and the time, in detail`} hide="Hide" mt={0.6}>
         <MDBox component="ul" sx={{ m: 0, mt: 0.3, pl: 2.2 }}>
           {(p.conditions || []).map((t, i) => (
             <li key={i} style={{ fontSize: TYPE.body, lineHeight: 1.35 }}>{t}</li>
           ))}
         </MDBox>
-      </MDBox>
+        {(p.session_time || {}).why ? (
+          <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.4 }}>{`time: ${p.session_time.why}`}</MDTypography>
+        ) : null}
+      </Fold>
       <Fold show="Why this design" hide="Hide" mt={0.6}>
         <MDBox component="dl" sx={{ m: 0, "& dt": { ...HEAD, mt: 0.6 }, "& dd": { m: 0, fontSize: TYPE.small, lineHeight: 1.35, color: "#3E3E3E" } }}>
+          {sp.why ? <><dt>stimulate on, why</dt><dd>{`${sp.display_short || sp.channel}: ${sp.why}`}</dd></> : null}
+          {num(c.n_qualifying) !== null ? (
+            <><dt>record from, what the pair holds</dt>
+              <dd>{`${c.n_qualifying} of ${num(c.n_bands) ?? "—"} bands rise with pain on this pair at ${fmtHz(c.rate_hz)}; ${num(c.n_responding) ?? 0} fall with current (none can, until this configuration has carried current)`}</dd></>
+          ) : null}
+          {bands.watch_why ? <><dt>watch, why</dt><dd>{bands.watch_why}</dd></> : null}
+          {fe.why ? <><dt>the record today, why</dt><dd>{fe.why}</dd></> : null}
+          {lad.why ? <><dt>ladder, in words</dt><dd>{lad.why}</dd></> : null}
+          {holds.why ? <><dt>holds, why</dt><dd>{holds.why}</dd></> : null}
           {Object.entries(src).map(([k, v]) => (<React.Fragment key={k}><dt>{k.replace(/_/g, " ")}</dt><dd>{v}</dd></React.Fragment>))}
         </MDBox>
       </Fold>
@@ -423,7 +451,7 @@ function ProposedColumn({ p }) {
   );
 }
 
-export default function TitrationSessionCard({ plan, participantUid }) {
+export default function TitrationSessionCard({ plan, participantUid, homeSchedule = null }) {
   const [sessionDate, setSessionDate] = useState(nextWednesdayISO);
   // status: "idle" | "working" | "error" | "xlsx" | "drive"
   const [exportState, setExportState] = useState({ status: "idle" });
@@ -495,6 +523,15 @@ export default function TitrationSessionCard({ plan, participantUid }) {
   const jc = plan.joint_corners || {};
   const proposed = plan.proposed || {};
   const proposedSides = Object.keys(proposed).filter((k) => proposed[k]);
+  // The session conditions both ladders share, printed once under both columns.
+  const lc = (left && Array.isArray(left.conditions)) ? left.conditions : [];
+  const rc = (right && Array.isArray(right.conditions)) ? right.conditions : [];
+  const shared = left && right ? lc.filter((t) => rc.includes(t)) : [];
+  // The record today, and what the session yields: once when both sides read alike.
+  const todayOf = (p) => (((p || {}).yield || {}).record_today || {}).note || null;
+  const todayShared = !!(left && right && todayOf(left) && todayOf(left) === todayOf(right));
+  const yieldOf = (p) => ((p || {}).yield || {}).sentence || null;
+  const yieldShared = !!(left && right && yieldOf(left) && yieldOf(left) === yieldOf(right));
 
   return (
     <Card>
@@ -503,7 +540,7 @@ export default function TitrationSessionCard({ plan, participantUid }) {
           <MDBox display="flex" alignItems="baseline" gap={1} flexWrap="wrap">
             <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>{TITRATION_CARD_TITLE}</MDTypography>
             <MDTypography variant="caption" sx={SMALL}>
-              {`one rate, 0 mA to the ceiling in ${num(plan.step_mA) ?? 0.5} mA steps, up and then down, ${num(plan.hold_s) ?? 60} s a step, streaming on`}
+              {`one rate, from 0 mA upward in ${num(plan.step_mA) ?? 0.5} mA steps and back down, ${num(plan.hold_s) ?? 60} s a step, streaming on`}
             </MDTypography>
           </MDBox>
           <MDBox display="flex" alignItems="center" gap={1}>
@@ -513,7 +550,7 @@ export default function TitrationSessionCard({ plan, participantUid }) {
             {exportState.status === "drive" ? (
               <MDBox display="flex" alignItems="center" gap={1}>
                 <MDTypography component="a" href={exportState.url} target="_blank" rel="noreferrer"
-                  variant="caption" sx={{ fontSize: TYPE.small, color: PAL.pass, whiteSpace: "nowrap" }}>
+                  variant="caption" sx={{ fontSize: TYPE.small, color: PAL.passText || "#00755A", whiteSpace: "nowrap" }}>
                   Open in Google Sheets
                 </MDTypography>
                 <Button variant="text" size="small" onClick={handleExport}
@@ -565,15 +602,30 @@ export default function TitrationSessionCard({ plan, participantUid }) {
             <SessionHeaderStrip plan={plan} />
 
             <MDBox mt={1.5} sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" }, columnGap: "28px", rowGap: "16px" }}>
-              <SideColumn side="Left" plan={left} />
-              <SideColumn side="Right" plan={right} />
+              <SideColumn side="Left" plan={left} shared={shared} todayShared={todayShared} />
+              <SideColumn side="Right" plan={right} shared={shared} todayShared={todayShared} />
             </MDBox>
+            {todayShared && (
+              <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.8 }}>
+                {`both sides today: ${todayOf(left)}`}
+              </MDTypography>
+            )}
+            {shared.length > 0 && (
+              <MDBox mt={1}>
+                <MDTypography variant="caption" sx={LABEL}>during the session, both ladders</MDTypography>
+                <MDBox component="ul" sx={{ m: 0, mt: 0.3, pl: 2.2 }}>
+                  {shared.map((t, i) => (
+                    <li key={i} style={{ fontSize: TYPE.body, lineHeight: 1.35 }}>{t}</li>
+                  ))}
+                </MDBox>
+              </MDBox>
+            )}
 
             {proposedSides.length > 0 && (
               <MDBox mt={1.5} sx={{ border: `2px solid ${PAL.accentBorder}`, borderRadius: 2, p: 1.5 }}>
                 <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>{EXPLORATORY_TITLE}</MDTypography>
                 <MDTypography variant="caption" component="div" sx={{ ...SMALL, mb: 0.5 }}>
-                  {"The readiness screen's best sensing pair on this side needs stimulating contacts other than the ones in force (the device allows a pair only while the contacts it flanks stimulate, decision 217). This ladder runs that configuration: part A for how the band power moves with current, part B for what the current does to pain over minutes. A separate visit, or the end of the ordinary session; its rows are at the end of the sheet."}
+                  {"The screen's best sensing pair on this side needs other stimulating contacts than today's; this ladder runs them. A separate visit, or the end of the ordinary session; its rows are at the end of the sheet."}
                 </MDTypography>
                 <MDBox sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: proposedSides.length > 1 ? "1fr 1fr" : "1fr" }, columnGap: "28px", rowGap: "16px" }}>
                   {proposedSides.map((side) => <ProposedColumn key={side} p={proposed[side]} />)}
@@ -581,10 +633,12 @@ export default function TitrationSessionCard({ plan, participantUid }) {
               </MDBox>
             )}
 
+            {/* The clinic sheet, folded under the button that exports it (the design review of
+                2026-09-26, S1: about 1,200 of the card's words on the 2026-09-15 response). */}
             <MDBox mt={1.5} sx={{ borderTop: `1px solid ${PAL.neutralBorder}`, pt: 1 }}>
-              <MDTypography variant="caption" component="div" fontWeight="medium" sx={{ fontSize: TYPE.num }}>
-                The clinic sheet
-              </MDTypography>
+              <Fold show={`Show the clinic sheet (${sheetRows.length} rows; "Make Google sheet" above exports it)`}
+                hide="Hide the clinic sheet" mt={0}>
+              <MDBox data-testid="clinic-sheet-tables">
               <SheetTable
                 title={`Left ladder${left && left.sensing_contact ? ` — record from ${contactLabel(left.sensing_contact)}` : ""}`}
                 caption={left
@@ -615,29 +669,45 @@ export default function TitrationSessionCard({ plan, participantUid }) {
                     rows={rows} columns={sheetColumns} />
                 );
               })}
-              {plan.sheet_source && (
-                <MDTypography variant="caption" component="div" color="text" sx={{ ...SMALL, mt: 1 }}>
-                  {`sheet template: ${plan.sheet_source}`}
-                </MDTypography>
-              )}
+              </MDBox>
+              </Fold>
             </MDBox>
           </>
         )}
         {plan.available && (
           <MDBox mt={1.2} sx={{ borderTop: `1px solid ${PAL.neutralBorder}`, pt: 0.8 }}>
             <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, lineHeight: 1.4 }}>
-              {[left, right].filter(Boolean).map((p) => (
+              {yieldShared ? (
+                <span style={{ display: "block" }}>
+                  <b style={NOWRAP}>Both sides:</b> {yieldOf(left)}
+                </span>
+              ) : [left, right].filter(Boolean).map((p) => (
                 <span key={p.side} style={{ display: "block" }}>
                   <b style={NOWRAP}>{p.side}:</b> {(p.yield || {}).sentence || "—"}
                 </span>
               ))}
-              <span style={{ display: "block", marginTop: 4, color: margin.available ? PAL.pass : PAL.warnText }}>{marginLine}</span>
+              <span style={{ display: "block", marginTop: 4, color: margin.available ? (PAL.passText || "#00755A") : PAL.warnText }}>{marginLine}</span>
             </MDTypography>
-            <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.5 }}>
-              {`protocol: ${plan.protocol_source || "—"}`}
-            </MDTypography>
+            <Fold show="Where this protocol and the sheet template come from" hide="Hide" mt={0.4}>
+              <MDTypography variant="caption" component="div" sx={{ ...SMALL }}>
+                {`protocol: ${plan.protocol_source || "—"}`}
+              </MDTypography>
+              {plan.sheet_source && (
+                <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.4 }}>
+                  {`sheet template: ${plan.sheet_source}`}
+                </MDTypography>
+              )}
+              {(plan.session_time || {}).why && (
+                <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.4 }}>
+                  {`total session time: ${plan.session_time.why}`}
+                </MDTypography>
+              )}
+            </Fold>
           </MDBox>
         )}
+        {/* The home schedule, inside this card as its second fold (the PI amended his ruling of
+            2026-09-12 on 2026-09-26: the visit and the weeks after it are one plan). */}
+        {homeSchedule && <HomeScheduleSection schedule={homeSchedule} />}
       </MDBox>
     </Card>
   );

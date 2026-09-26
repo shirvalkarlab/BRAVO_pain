@@ -52,6 +52,7 @@ export default function StateTrack({ track, data, showBlurb = true, dense = fals
           const ink = INK[c.role] || PAL.neutral;
           return (
             <MDBox key={c.key} px={dense ? 0.8 : 1.1} py={dense ? 0.25 : 0.5}
+              data-lit={on ? "true" : "false"} aria-current={on ? "true" : undefined}
               sx={{
                 borderRadius: "4px",
                 border: `1.5px solid ${on ? ink : "rgba(0,0,0,0.18)"}`,
@@ -59,7 +60,7 @@ export default function StateTrack({ track, data, showBlurb = true, dense = fals
                 minWidth: dense ? 0 : 64,
               }}>
               <MDTypography variant="caption" sx={{
-                fontSize: dense ? 9.5 : 10.5,
+                fontSize: dense ? 11 : 11.5,
                 fontWeight: on ? 700 : 500,
                 letterSpacing: 0.3,
                 lineHeight: 1.2,

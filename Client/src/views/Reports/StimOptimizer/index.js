@@ -24,6 +24,13 @@
 * What replaces it: Stage 1 now fits ONE joint (rate, amplitude-Left, amplitude-Right) surface per
 * stratum and freezes ONE configuration for both sides at once, shown here as the decision strip,
 * the two-stage plan card, and the titration-session card.
+*
+* THE DESIGN REVIEW OF 2026-09-26 (`artifacts/design_review_2026-09-26_stim_optimizer_and_biomarkers.md`
+* §1; the PI: "yes to all six, build them"): a status line above the readiness card (amends
+* decision 243's order by one line; no card moved); the stored-results line beside the recompute
+* bar folds (this page wraps it; RecomputeBar.js and CacheStatusLine.js are not edited); the home
+* schedule is a section of the next-visit card (amends the two-cards ruling of 2026-09-12); the
+* control analyses fold; the loading message is one line.
 */
 
 import LegibleText from "views/Reports/legibleText";
@@ -62,7 +69,9 @@ import DecisionStrip, { decisionHeadline } from "./DecisionStrip";
 // The sensing evidence behind closed-loop readiness, contacts in Medtronic form, reasons folded
 // (redesign phase 3).
 import SensingEvidenceTable from "./SensingEvidenceTable";
-import { TYPE } from "./typeScale";
+import { TYPE, SizedFold } from "./typeScale";
+// The page's status line: one sentence, red and yellow bullets, the detail folded (2026-09-26).
+import StatusLine from "./StatusLine";
 import PAL from "views/Reports/ClosedLoopSim/palette";
 import { ControlAnalysesSection } from "views/Reports/ControlAnalyses/ControlAnalysesCard";
 
@@ -126,11 +135,9 @@ export default function StimOptimizer() {
     return (
       <DatabaseLayout>
         <MDBox pt={3} display="flex" alignItems="center" justifyContent="center" gap={2}>
+          {/* One line (the design review of 2026-09-26): it was a 55-word paragraph. */}
           <MDTypography variant="body2">
-            Loading this participant&apos;s recordings and the stored settings history, and running the
-            closed-loop readiness screen over every sensing contact and rate; the two-stage plan's
-            own joint fit follows shortly after. About ten seconds in all; the first load after an
-            ingest also rebuilds the settings history from the stored session reports and is slower.
+            Loading the settings history and the readiness screen, about 10 s (longer after an ingest).
           </MDTypography>
         </MDBox>
       </DatabaseLayout>
@@ -144,7 +151,7 @@ export default function StimOptimizer() {
           <MDAlert color="warning" dismissible={false}>
             <MDTypography variant="body2" color="white">
               No parameter surface could be built.{" "}
-              {errorText || data?.reason || "This participant has no exposure epochs carrying pain reports."}
+              {errorText || data?.reason || "This participant has no stretches of unchanged settings carrying pain reports."}
             </MDTypography>
           </MDAlert>
         </MDBox>
@@ -174,8 +181,26 @@ export default function StimOptimizer() {
               // Both slots: the page's own response and the two-stage plan fetched after it.
               onRecompute={() => recomputeSlots(participant_uid, STIM_OPTIMIZER_SLOTS)}
             />
-            <CacheStatusLine status={data ? data.cache_status : null} />
+            {/* When the stored results were built: one click away (the design review of
+                2026-09-26, §4.5, the PI's approval). The line itself is unchanged and shared. */}
+            {data && data.cache_status ? (
+              <MDBox px={1}>
+                <SizedFold show="When the stored results were built" hide="Hide" dense mt={0.2}>
+                  <MDBox data-testid="cache-status-fold-body">
+                    <CacheStatusLine status={data.cache_status} />
+                  </MDBox>
+                </SizedFold>
+              </MDBox>
+            ) : null}
           </MDBox>
+
+          {/* ---------- 0. the status line: the page's answer in one sentence, and why, in red
+              and yellow bullets of five words or fewer; the detail folded (2026-09-26) ---------- */}
+          <Card>
+            <MDBox p={2}>
+              <StatusLine data={data} plan={twoStage.data} planLoading={twoStage.loading} />
+            </MDBox>
+          </Card>
 
           {/* THE ORDER, 2026-09-23 (panel C item 5; report C §5.2 with the panel's two corrections):
               whether closed loop is possible today first, then what the open-loop search prefers,
@@ -216,12 +241,17 @@ export default function StimOptimizer() {
               behind the decision above and behind the plan card's own current (or its absence) */}
           {twoStage.data && <CurrentMapCard plan={twoStage.data} />}
 
-          {/* ---------- 4. the next steps, kept as two cards and placed together: the session to
-              run in clinic (PI, 2026-09-12) and the home schedule that fills the record in ---------- */}
+          {/* ---------- 4. the next steps, ONE card since 2026-09-26: the session to run in clinic,
+              and inside it, as its second fold, the home schedule that fills the record in (the PI
+              amended his two-cards ruling of 2026-09-12 in the design review) ---------- */}
           {data.titration_plan && (
-            <TitrationSessionCard plan={data.titration_plan} participantUid={participant_uid} />
+            <TitrationSessionCard plan={data.titration_plan} participantUid={participant_uid}
+              homeSchedule={data.current_map_schedule || null} />
           )}
-          {data.current_map_schedule && <CurrentMapScheduleCard schedule={data.current_map_schedule} />}
+          {/* No titration plan on the response: the home schedule still shows, as its own card. */}
+          {!data.titration_plan && data.current_map_schedule && (
+            <CurrentMapScheduleCard schedule={data.current_map_schedule} />
+          )}
 
           {/* ---------- 5. the two-stage plan: the joint open-loop search, the four checks that
               decide whether closed loop may start, and closed loop -- the ONLY recommendation this
@@ -242,7 +272,12 @@ export default function StimOptimizer() {
 
           {/* ---------- 7. control analyses: saved, dated checks run offline (the PI, 2026-09-24);
               they feed nothing above ---------- */}
-          <ControlAnalysesSection participantUid={participant_uid} page="stim_optimizer" />
+          {/* Folded by default (the design review of 2026-09-26, S8); still mounted, so it loads. */}
+          <MDBox px={1}>
+            <SizedFold show="Research checks, saved offline (control analyses)" hide="Hide the research checks">
+              <ControlAnalysesSection participantUid={participant_uid} page="stim_optimizer" />
+            </SizedFold>
+          </MDBox>
         </MDBox>
       </MDBox>
       </LegibleText>

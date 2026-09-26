@@ -15,18 +15,22 @@
  * headline, it is computed from both endpoints, and no arrangement of the viewport can produce the
  * old contradiction because there is no second verdict to disagree with.
  *
- * THE SIX BANDS, in reading order:
- *   0. The reconciled verdict, sticky, with the three sub-answers side by side.
- *   1. What would change this answer, ranked, with the actor named per row.
- *   2. The device rule ledger.
- *   3. The evidence triangle.
- *   4. The device parameters to transcribe, with the threshold-mode toggle at its top.
- *   5. The predicted duty cycle.
- * Then the configuration identity, then the analyst panels folded away, then the printable sign-off.
+ * THE PAGE, in reading order since decision 302 (the PI, 2026-09-26: "one simple, streamlined
+ * card"; "the text is overwhelming"):
+ *   0. Choose a band (the grid).
+ *   1. THE DECISION CARD: one status line; red bullets when the device refuses and yellow ones for
+ *      evidence that was not evaluated, five words or less each; the values to enter, only when the
+ *      device allows them; "Sign and print"; one Details fold holding what would change the answer,
+ *      how each value was derived, the sign-off record and the band as committed.
+ *   2. The device rule ledger.   3. The evidence triangle.   4. Band stability.
+ *   5. The analyst panels, folded.   6. Current and band power, three ways.   7. The simulations.
+ * The sticky verdict header, "What would change this answer", "Full parameter recommendation", the
+ * band identity card and the "Deploy-to-Percept review" card are gone as cards: each is inside the
+ * decision card now, and the page states one verdict once.
  *
- * WHAT IS NO LONGER RENDERED HERE, and where it went. `DeploymentVerdictStrip` is superseded by
- * `DeploymentDecisionHeader`, which keeps its sticky behaviour, its jump links and its print class
- * and drops its independently-computed verdict and its threshold cell. `DeploymentEvidencePanel` is
+ * WHAT IS NO LONGER RENDERED HERE, and where it went. `DeploymentVerdictStrip` was superseded by
+ * `DeploymentDecisionHeader` (2026-09-04), and that header by `DecisionCard` (decision 302), which
+ * carries the verdict, the jump links and the print path. `DeploymentEvidencePanel` is
  * superseded by `DeviceRuleLedger` and `EvidenceTrianglePanel` between them. `CalibrationInEffectPanel`
  * (and, until its deletion on 2026-09-21, `PsdLsbPanel`) is not rendered on this route at all: the microvolt-to-least-significant-
  * bit conversion model and the power spectrum are methods artefacts whose reader is the analyst
@@ -37,13 +41,13 @@
  *
  * `DeploymentRocPanel`, `LsbPowerPanel` and `EraRefitPanel` are demoted rather than cut. All three
  * are real evidence about whether the band generalises and where the cut-point sits, and none of
- * them is the first question at a programming visit, so they sit below the prescription behind one
+ * them is the first question at a programming visit, so they sit below the evidence behind one
  * fold.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 
-import { Card, Chip, Grid } from "@mui/material";
+import { Card, Grid } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -62,12 +66,9 @@ import {
 import DeploymentRocPanel from "./DeploymentRocPanel";
 import LsbPowerPanel from "./LsbPowerPanel";
 import EraRefitPanel from "./EraRefitPanel";
-import DeploySignoffCard from "./DeploySignoffCard";
-import DeploymentDecisionHeader from "./DeploymentDecisionHeader";
-import WhatWouldChangeThis from "./WhatWouldChangeThis";
+import DecisionCard from "./DecisionCard";
 import DeviceRuleLedger from "./DeviceRuleLedger";
 import EvidenceTrianglePanel from "./EvidenceTrianglePanel";
-import PrescriptionPanel from "./PrescriptionPanel";
 import ClosedLoopSimulationPanel from "./ClosedLoopSimulationPanel";
 import BandStabilityPanel from "./BandStabilityPanel";
 import BandSweepGridPanel from "./BandSweepGridPanel";
@@ -78,35 +79,12 @@ import useBandSweepGrid from "./useBandSweepGrid";
 import useThreeSourcePooled from "./useThreeSourcePooled";
 import useClosedLoopSimulation from "./useClosedLoopSimulation";
 import PAL from "./palette";
-import Fold from "./Fold";
-import { fmtOddsRatioWithInterval } from "./deployFormat";
 import "./deployPrint.css";
 import LegibleText from "views/Reports/legibleText";
-import { bandPainScore, summaryRequestParams } from "./candidateRequestParams";
+import { bandPainScore, summaryRequestParams, withheldIfOtherBand } from "./candidateRequestParams";
 import PainScoreSelect from "./PainScoreSelect";
 import { PAIN_SCORE_OPTIONS } from "views/Reports/painScores";
 import ClinicSheetsSummaryButton, { loadSummarySheets, saveSummarySheets } from "./ClinicSheetsSummaryButton";
-
-const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "not reported"
-  : Number(v).toFixed(d));
-const fmtP = (p) => (p == null || !Number.isFinite(Number(p)) ? "not reported"
-  : Number(p) < 0.001 ? Number(p).toExponential(1) : Number(p).toFixed(3));
-
-// Verdict badge color for the committed candidate's own discovery-stage verdict, which is a
-// different quantity from anything on the reconciled header and is labelled as such below.
-function verdictColor(verdict) {
-  const v = verdict || "";
-  if (/VALIDATED \(stim-stable\)/.test(v)) return PAL.pass;
-  if (/VALIDATED \(stim-dependent\)/.test(v)) return PAL.warn;
-  if (/failed/.test(v)) return PAL.fail;
-  return PAL.neutral;
-}
-
-// White text on the warn fill measures 2.25:1, which is below every WCAG threshold, so the badge
-// text colour adapts to its fill: near-black on the amber, white on the others.
-function verdictTextColor(verdict) {
-  return verdictColor(verdict) === PAL.warn ? PAL.onWarn : "white";
-}
 
 /**
  * THE PAGE'S OWN DISPLAY STATE, HELD AT MODULE SCOPE FOR THE SAME REASON THE RESULT CACHE IS.
@@ -155,163 +133,6 @@ function useRevealedOnce(show) {
   const [revealed, setRevealed] = useState(!!show);
   useEffect(() => { if (show && !revealed) setRevealed(true); }, [show, revealed]);
   return revealed;
-}
-
-// A labeled key/value row used across the identity block.
-function KV({ label, children }) {
-  return (
-    <MDBox display="flex" flexDirection="row" alignItems="baseline" gap={1} mb={0.4}>
-      <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", minWidth: 150,
-        color: "#555" }}>{label}</MDTypography>
-      <MDTypography variant="caption" sx={{ fontSize: 11.5 }}>{children}</MDTypography>
-    </MDBox>
-  );
-}
-
-/**
- * The committed configuration's identity.
- *
- * The DEVICE IDENTITY column stays visible, because it is genuinely useful as a check that the right
- * contact and the right band are loaded, and getting that wrong invalidates everything above.
- *
- * The MIXED-EFFECTS EVIDENCE column is folded away behind a click. Those statistics — the odds ratio
- * per standard deviation, the mixed-effects p-value, the credible-interval flag, stim stability and
- * the per-era odds ratios — are discovery-stage evidence about whether the band was worth committing
- * at all. That question was settled when the band was committed, and this page's question is a
- * different one; they also duplicate what the receiver-operating-characteristic and per-era panels
- * show further down. Folded rather than deleted, because the audit trail is worth keeping one click
- * away.
- */
-function BandCandidateIdentity({ bc, envelope }) {
-  const ev = bc.evidence || {};
-  const lbl = bc.label || {};
-  const prov = bc.provenance || {};
-  return (
-    <Card sx={{ width: "100%" }}>
-      <MDBox p={2}>
-        <MDBox display="flex" alignItems="center" gap={1.2} mb={1} flexWrap="wrap">
-          <MDBox px={1.4} py={0.4} sx={{ backgroundColor: verdictColor(bc.verdict),
-            color: verdictTextColor(bc.verdict),
-            borderRadius: "10px", fontSize: 11, fontWeight: "bold" }}>
-            {bc.verdict || "no discovery verdict"}
-          </MDBox>
-          <MDTypography variant="h6" sx={{ fontSize: 16 }}>
-            {`${bc.contact_label || bc.contact || "band"} at ${fmt(bc.center_freq_hz, 1)} Hz`}
-          </MDTypography>
-          <Chip size="small" label={lbl.pro_metric_label || lbl.pro_metric || "metric"}
-            sx={{ height: 20, fontSize: 11 }} />
-          {bc.adaptive_valid
-            ? <Chip size="small" label="inside the adaptive band (8–30 Hz)"
-                sx={{ height: 20, fontSize: 11.5, backgroundColor: PAL.pass, color: "white" }} />
-            : <Chip size="small" label="outside the adaptive band"
-                sx={{ height: 20, fontSize: 11.5, backgroundColor: PAL.warn,
-                  color: PAL.onWarn }} />}
-        </MDBox>
-        <Fold show="What the badge means" hide="Hide" mt={0} dense>
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#5E5E5E",
-            mb: 1 }}>
-            The badge above is the discovery-stage verdict this band was committed with. It is a
-            different quantity from the reconciled verdict at the top of the page, which is about
-            whether the device will accept the configuration and whether the evidence supports it.
-          </MDTypography>
-        </Fold>
-
-        <Grid container spacing={3}>
-          <Grid item xs={12} md={6}>
-            <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold",
-              letterSpacing: 0.4, color: "#5E5E5E" }}>DEVICE IDENTITY</MDTypography>
-            <MDBox mt={0.6}>
-              <KV label="Hemisphere">{bc.hemisphere || "not reported"}</KV>
-              <KV label="Contact (sensing)">{bc.contact || "not reported"}</KV>
-              <KV label="Band">{`${fmt(bc.band_lo_hz, 1)} to ${fmt(bc.band_hi_hz, 1)} Hz `
-                + `(${fmt(bc.bandwidth_hz, 1)} Hz wide)`}</KV>
-              <KV label="Centre, and FFT-snapped">
-                {`${fmt(bc.center_freq_hz, 2)} to ${fmt(bc.snapped_center_freq_hz, 2)} Hz`}
-              </KV>
-              <KV label="Polarity">{bc.polarity || "not reported"}</KV>
-              <KV label="Suggested mode">
-                {bc.suggested_mode
-                  || <span style={{ color: PAL.warnText }}>none suggested — see the note</span>}
-              </KV>
-            </MDBox>
-          </Grid>
-          <Grid item xs={12} md={6}>
-            {/* ALWAYS SHOWN. This block used to sit behind a "show the discovery-stage
-                statistics" toggle, collapsed by default. The PI on 2026-09-10: "there's no point
-                in hiding it ever." A number a reader cannot see cannot be checked. */}
-            <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold",
-              letterSpacing: 0.4, color: "#5E5E5E" }}>DISCOVERY-STAGE STATISTICS</MDTypography>
-            {(
-              <MDBox mt={0.6}>
-                <KV label="Odds ratio (per 1 SD)">
-                  {`${fmt(ev.odds_ratio)} `}
-                  {ev.or_lo != null && ev.or_hi != null
-                    ? `(95% CI ${fmt(ev.or_lo)} to ${fmt(ev.or_hi)})` : ""}
-                  {ev.credible_ci === false
-                    ? <span style={{ color: PAL.fail }}> · interval narrower than the
-                        credibility rule allows</span>
-                    : ev.credible_ci === true
-                      ? <span style={{ color: PAL.pass }}> · credible</span> : null}
-                </KV>
-                <KV label="Mixed-effects p">{fmtP(ev.p_glmer)}</KV>
-                {/* "grouped by week" is stated because the ROC panel lower down groups the SAME
-                    data by individual pain rating, and a reader comparing the two counts must
-                    be able to see they are counting different things (open item 15). */}
-                <KV label="Samples, grouped by week">
-                  {`${ev.n_matched_samples ?? "not reported"} samples across `
-                    + `${ev.n_clusters ?? "not reported"} weeks`}
-                </KV>
-                <KV label="Stim stability">
-                  {ev.stim_stable == null ? "not reported"
-                    : ev.stim_stable ? "stim-stable" : "stim-dependent"}
-                  {ev.stim_lrt_p != null
-                    ? ` (likelihood-ratio test p = ${fmtP(ev.stim_lrt_p)})` : ""}
-                </KV>
-                {/* P-03 (June audit item [0]): each state's odds ratio beside its interval. This
-                    row reads the band file; a band chosen on the grid carries none (nothing has
-                    filled it since decision 145), so it says where this band's own are printed. */}
-                <KV label="Odds ratio per stimulation state (off, low, high current)">
-                  {ev.or_by_era
-                    ? ["OFF", "LOW", "HIGH"].map((t) => {
-                      const ci = ev.or_by_era_ci && ev.or_by_era_ci[t];
-                      return `${t}: ${fmtOddsRatioWithInterval(ev.or_by_era[t],
-                        ci ? ci[0] : null, ci ? ci[1] : null)}`;
-                    }).join("  \u00B7  ")
-                    : "not in the band file; this band's own, with intervals, are on the "
-                      + "stability card above"}
-                </KV>
-                <KV label="Label and join">
-                  {`${lbl.pro_metric || "not reported"} \u00B7 `
-                    + `${(lbl.binarization && lbl.binarization.strategy) || "not reported"} \u00B7 `
-                    + `${lbl.join || "not reported"} \u00B7 `
-                    + `${lbl.n_pos_days ?? "not reported"} positive days, `
-                    + `${lbl.n_neg_days ?? "not reported"} negative`}
-                </KV>
-              </MDBox>
-            )}
-          </Grid>
-        </Grid>
-
-        {(!bc.adaptive_valid || bc.suggested_mode == null) && bc.suggested_mode_reason ? (
-          <MDBox mt={1} p={1} sx={{ backgroundColor: PAL.warnFill, borderRadius: "6px" }}>
-            <MDTypography variant="caption" sx={{ fontSize: 11.5, color: PAL.warnText }}>
-              {`Deployment note: ${bc.suggested_mode_reason}.`}
-              {bc.adaptive_valid_reason ? ` ${bc.adaptive_valid_reason}.` : ""}
-            </MDTypography>
-          </MDBox>
-        ) : null}
-
-        <MDBox mt={1}>
-          <MDTypography variant="caption" color="text" sx={{ fontSize: 11.5, fontStyle: "italic" }}>
-            {prov.selection_biased ? "Selection-biased pool \u2014 " : ""}
-            {prov.selection_note || ""}
-            {envelope && envelope.committed_at
-              ? ` \u00B7 committed ${new Date(envelope.committed_at).toLocaleString()}` : ""}
-          </MDTypography>
-        </MDBox>
-      </MDBox>
-    </Card>
-  );
 }
 
 /**
@@ -454,6 +275,14 @@ function ClosedLoopSim() {
     bandCandidate: reportCandidate,
     painScore,
   });
+
+  // ONE BAND ON THE WHOLE PAGE (decision 302). The cache hands back the last result, marked stale,
+  // when the request changes, so right after a new band is chosen the report and the summary in
+  // hand can still be the previous band's. Every card below reads these two, never the raw hooks,
+  // and a result computed for another band reaches them as "not computed for this band" with both
+  // bands named, instead of the old band's verdict under the new band's name.
+  const report = withheldIfOtherBand(deploymentReport, bc);
+  const summaryForBand = withheldIfOtherBand(summary, bc, "summary");
 
   // TRACK D: fetched independently of any committed candidate -- see useBandSweepGrid.js for why
   // gating this on useDeploymentReport's own enabled condition would make it unreachable from the
@@ -627,9 +456,13 @@ function ClosedLoopSim() {
             </Grid>
           ) : (
             <>
-              {/* BAND 0 — one reconciled verdict, computed from both endpoints, sticky. The
-                  Recompute control sits immediately above it, because whether the verdict is
-                  current has to be readable before the verdict itself is read. */}
+              {/* THE DECISION CARD (decision 302; the PI, 2026-09-26): one status line, red bullets
+                  when the device refuses, yellow ones for evidence that was not evaluated, the
+                  values to enter, "Sign and print", and one Details fold. It replaces the sticky
+                  verdict header, "What would change this answer" (now inside its Details), the
+                  "Full parameter recommendation" card and the "Deploy-to-Percept review" sign-off
+                  card. The Recompute control sits immediately above it, because whether the
+                  verdict is current has to be readable before the verdict itself is read. */}
               <Grid item xs={12}>
                 <RecomputeBar
                   title="closed-loop deployment"
@@ -641,25 +474,24 @@ function ClosedLoopSim() {
                   onRecompute={onRecomputePage}
                 />
                 <CacheStatusLine status={deploymentReport.data ? deploymentReport.data.cache_status : null} />
-                <DeploymentDecisionHeader bandCandidate={bc} summary={summary}
-                  deploymentReport={deploymentReport} />
               </Grid>
-
-              {/* BAND 1 — what would change the answer, ranked, actor per row. */}
-              <Grid item xs={12} id="cl-what-changes">
-                <WhatWouldChangeThis report={deploymentReport} />
+              <Grid item xs={12} id="cl-decision">
+                <DecisionCard participantUid={participant_uid} bandCandidate={bc} summary={summaryForBand}
+                  deploymentReport={report} chosenBand={envelope} bandRecord={bandRecord}
+                  cutpoint={cutpoint} mode={thresholdMode} onMode={setThresholdMode}
+                  onRecompute={onRecomputePage} />
               </Grid>
 
               {/* BAND 2 — the device rule ledger. Placed before the evidence because on a device
                   that actuates, whether a configuration is PERMITTED is prior to how well it
                   scores. */}
               <Grid item xs={12} id="cl-rules">
-                <DeviceRuleLedger report={deploymentReport} />
+                <DeviceRuleLedger report={report} />
               </Grid>
 
               {/* BAND 3 — the evidence triangle and the three-valued coherence answer. */}
               <Grid item xs={12} id="cl-evidence">
-                <EvidenceTrianglePanel report={deploymentReport} />
+                <EvidenceTrianglePanel report={report} />
               </Grid>
 
               {/* BAND 3b — does this band mean the same thing about pain at every stimulation
@@ -670,25 +502,9 @@ function ClosedLoopSim() {
                   one whose relationship is simply weak, and the two would otherwise be read as
                   one. The panel handles a null value and renders an honest empty state. */}
               <Grid item xs={12} id="cl-stability">
-                <BandStabilityPanel stability={deploymentReport?.data?.band_stability
-                  || deploymentReport?.band_stability}
-                  cacheStatus={deploymentReport?.data?.cache_status}
-                  painScore={deploymentReport?.data?.pain_score} />
-              </Grid>
-
-              {/* BAND 4 — the transcription surface. Withholds its values while the device verdict
-                  is negative. */}
-              <Grid item xs={12} id="cl-prescription">
-                <PrescriptionPanel report={deploymentReport} mode={thresholdMode}
-                  onMode={setThresholdMode} />
-              </Grid>
-
-              {/* The predicted duty cycle card that stood here until 2026-09-11 is gone: the
-                  "CL-DBS simulations" card at the foot of the page replicates it as model M0 and
-                  adds the loop closed through the fitted response (the PI's instruction). */}
-
-              <Grid item xs={12}>
-                <BandCandidateIdentity bc={bc} envelope={envelope} />
+                <BandStabilityPanel stability={report?.data?.band_stability}
+                  cacheStatus={report?.data?.cache_status}
+                  painScore={report?.data?.pain_score} />
               </Grid>
 
               {/* The analyst panels, demoted behind one fold. Real evidence, and not the first
@@ -701,8 +517,8 @@ function ClosedLoopSim() {
                       <MDTypography variant="h6" sx={{ fontSize: 14 }}>
                         Evidence for the analyst, before the visit
                       </MDTypography>
-                      <MDTypography variant="caption" sx={{ display: "block", fontSize: 11,
-                        color: "#7A7A7A" }}>
+                      <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
+                        color: "#5E5E5E" }}>
                         {"Where the cut-point sits, the band in device units, and whether the "
                           + "discrimination holds month by month."}
                       </MDTypography>
@@ -738,7 +554,7 @@ function ClosedLoopSim() {
                     <Grid item xs={12} md={6} id="cl-lsb">
                       <LsbPowerPanel participantUid={participant_uid} bandCandidate={bc}
                         requestParams={requestParams} cutpoint={cutpoint}
-                        onLsbThreshold={setLsbThreshold} deploymentReport={deploymentReport} />
+                        onLsbThreshold={setLsbThreshold} deploymentReport={report} />
                     </Grid>
                     <Grid item xs={12} id="cl-era">
                       <EraRefitPanel participantUid={participant_uid} bandCandidate={bc}
@@ -763,37 +579,26 @@ function ClosedLoopSim() {
                   Plotly, and the comment on that fold records the reason: a Plotly graph first
                   drawn inside a hidden container measures itself as zero pixels wide and keeps that
                   size when the container is later shown. Moving this panel inside the fold would
-                  reintroduce exactly that bug.
-
-                  The signoff card stays last, because it is the printable record. */}
+                  reintroduce exactly that bug. */}
               <Grid item xs={12} id="cl-three-source">
-                <ThreeSourceResponsePanel report={deploymentReport} pooled={threeSourcePooled}
+                <ThreeSourceResponsePanel report={report} pooled={threeSourcePooled}
                   committed={{ contact: bc.contact, centerHz: bc.center_freq_hz }}
                   contactLabel={contactLabel} />
               </Grid>
 
-              {/* CL-DBS SIMULATIONS, above the sign-off card (the PI, 2026-09-11: "add new card at
-                  bottom after deployment"; moved above the sign-off on his ruling of 2026-09-24).
-                  The controller run over this participant's
+              {/* CL-DBS SIMULATIONS, the last card (the PI, 2026-09-11: "add new card at bottom
+                  after deployment"; the sign-off it sat above is now the decision card's own "Sign
+                  and print", decision 302). The controller run over this participant's
                   own recorded band power three ways: replayed as recorded (M0), with the loop
                   closed through the fitted response (M1, or M2 once a bend is established), and
                   with runs resampled for an interval (M3). Fetched after the report, which is what
                   writes it. Plotly figures, so it stays outside the analyst fold above. */}
               <Grid item xs={12} id="cl-simulation">
                 <ClosedLoopSimulationPanel sim={closedLoopSim}
-                  hemisphere={deploymentReport?.data?.manifest?.hemisphere}
+                  hemisphere={report?.data?.manifest?.hemisphere}
                   contactLabel={contactLabel} bandCandidate={bc} />
               </Grid>
 
-              {/* THE SIGN-OFF CARD, LAST (the PI, 2026-09-24): the printable record a clinician signs
-                  comes after everything it summarises. It keeps the gate checklist and loses its
-                  own headline verdict and threshold cell, so the page cannot contain two answers. */}
-              <Grid item xs={12} id="cl-signoff">
-                <DeploySignoffCard participantUid={participant_uid} bandCandidate={bc}
-                  requestParams={requestParams} cutpoint={cutpoint} summary={summary}
-                  deploymentReport={deploymentReport} chosenBand={envelope}
-                  bandRecord={bandRecord} />
-              </Grid>
             </>
           )}
         </Grid>

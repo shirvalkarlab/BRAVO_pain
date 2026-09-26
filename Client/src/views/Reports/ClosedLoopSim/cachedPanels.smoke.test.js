@@ -70,8 +70,8 @@ const PANELS = [
   ["EraRefitPanel", <EraRefitPanel participantUid={UID} bandCandidate={BC}
     requestParams={REQ} />, /Per-era refit/],
   ["LsbPowerPanel", <LsbPowerPanel participantUid={UID} bandCandidate={BC} requestParams={REQ}
-    cutpoint={{ threshold: 1.5, matchDir: "prior" }} onLsbThreshold={() => {}}
-    deploymentReport={{ data: null }} />, /LSB threshold/],
+    cutpoint={{ threshold: 1.5, matchDir: "prior" }} onLsbThreshold={() => {}} />,
+    /The cut-point in device units/],
   ["CalibrationInEffectPanel", <CalibrationInEffectPanel participantUid={UID} />,
     /Calibration in effect/],
 ];

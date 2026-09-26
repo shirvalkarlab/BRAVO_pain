@@ -123,6 +123,7 @@ describe("the decision strip", () => {
 });
 
 describe("the current map card", () => {
+  // PIN CHANGED 2026-09-26: "at this rate", never "at this speed" (the design review).
   function mapPlan(verdict, { clinicToo = false, resolved = true } = {}) {
     const p = plan({ verdict, recommend: false });
     p.stage1.rate_strata.forEach((r) => { if (r.fitted && r.rate_hz === 55) r.resolved = resolved; });
@@ -138,7 +139,7 @@ describe("the current map card", () => {
     rtlRender(wrap(<CurrentMapCard plan={mapPlan(BLOCK_OF_TIME_VERDICT)} />));
     // a number and its unit are joined by a narrow no-break space when drawn
     expect(document.body.textContent.replace(/\u202f/g, " "))
-      .toContain("a current CAN be recommended at this speed: left 3.5 mA, right 3.5 mA");
+      .toContain("a current CAN be recommended at this rate: left 3.5 mA, right 3.5 mA");
     expect(marks()).toHaveLength(1);
     expect(notes()).toHaveLength(1);
   });

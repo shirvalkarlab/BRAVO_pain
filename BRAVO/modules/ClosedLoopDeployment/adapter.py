@@ -1803,13 +1803,69 @@ def report_to_dict(rep):
 #: Which card on the page each caveat belongs to, so a reader can go and look at the number rather
 #: than take the sentence on trust. These are the page's own card names, in its own words.
 CAVEAT_CARDS = {
-    "verdict": "the verdict header",
+    "verdict": "the decision card",
     "evidence": "the evidence triangle",
     "thresholds": "the parameters to transcribe",
     "timing": "the parameters to transcribe",
     "simulation": "the closed-loop simulations",
     "stability": "does this band mean the same thing at every current",
 }
+
+
+#: The evidence checks the decision card lists in yellow when they should have run and did not
+#: (decision 302; the PI, 2026-09-26: "if the evidence wasn't evaluated but should have been, use
+#: yellow bullet points ... in five words or less"). At most four words each, so "Untested: <label>"
+#: is at most five. One home: the page prints these and adds no words of its own.
+EVIDENCE_CHECK_LABELS = {
+    "E1": "Current changes band power",
+    "E2": "Band power tracks pain",
+    "E3": "Current changes pain",
+    "coherence": "Sign agreement",
+    "stability": "Stable across currents",
+}
+
+_EVIDENCE_CHECK_WHY = {
+    "E1": "no point estimate for how band power changes with current",
+    "E2": "no point estimate for how pain changes with band power",
+    "E3": "no point estimate for how pain changes with current",
+    "coherence": "the test of whether the three signs agree did not return an answer",
+    "stability": "the test of whether the band means the same thing at every current did not run",
+}
+
+
+def evidence_not_evaluated(payload):
+    """The evidence checks that should have been evaluated for this report and were not.
+
+    Returned as [{key, label, card, why}] in the order the evidence card draws them, assembled per
+    request from what the payload already carries and stored nowhere, like the caveats list. Only
+    ABSENCE is listed: an edge with no point estimate, a sign test that returned nothing, a stability
+    test that did not run. An answer that came back unsettled ("cannot tell", an interval spanning
+    zero) is an answer and is read on its own card, never here. A missing edge makes the sign test
+    impossible by construction, so the sign test is listed only when every edge is present -- one
+    absence is one bullet.
+    """
+    if not payload or not isinstance(payload, dict) or payload.get("available") is not True:
+        return []
+    rows = []
+    edges = payload.get("edges") or {}
+    missing_edge = False
+    for k in ("E1", "E2", "E3"):
+        e = edges.get(k) if isinstance(edges, dict) else None
+        if not isinstance(e, dict) or e.get("estimate") is None or e.get("resolved") is False:
+            missing_edge = True
+            rows.append(k)
+    co = payload.get("coherence")
+    if not missing_edge and (not isinstance(co, dict) or co.get("coherent") is None):
+        rows.append("coherence")
+    stab = payload.get("band_stability")
+    if not isinstance(stab, dict) or not stab.get("answer") or stab.get("answer") == "not tested":
+        rows.append("stability")
+    card = {"stability": CAVEAT_CARDS["stability"]}
+    return [{"key": k, "label": EVIDENCE_CHECK_LABELS[k],
+             "card": card.get(k, CAVEAT_CARDS["evidence"]),
+             "why": (((stab or {}).get("reason") if k == "stability" and isinstance(stab, dict)
+                      else None) or _EVIDENCE_CHECK_WHY[k])}
+            for k in rows]
 
 
 def caveats_for_report(payload):
@@ -1894,11 +1950,18 @@ def caveats_for_report(payload):
             except (TypeError, ValueError):
                 return str(v)
             return f"{f:.4f}" if np.isfinite(f) else str(v)
+        # NO VALUE WHILE THE DEVICE REFUSES (decision 302). The parameter table withholds every
+        # value when the device rules refuse the configuration, because a number on screen during a
+        # programming visit gets typed; this caveat printed both thresholds to four places on the
+        # same card regardless. The sentence stays, the numbers go.
+        if vd.get("device_eligible") is True:
+            which = (f"({_as_card(thr.get('lower'))} and {_as_card(thr.get('upper'))} in the "
+                     f"stimulator's own units) ")
+        else:
+            which = "(withheld while the device refuses this configuration) "
         rows.append({
             "severity": "medium",
-            "text": (f"The two switching values the device would use "
-                     f"({_as_card(thr.get('lower'))} and {_as_card(thr.get('upper'))} in the "
-                     f"stimulator's own units) "
+            "text": (f"The two switching values the device would use {which}"
                      f"are a median reading plus or minus a fixed minimum, and carry no interval. "
                      f"How far they would move on a different day is not shown."),
             "card": CAVEAT_CARDS["thresholds"]})
@@ -3161,16 +3224,17 @@ def programmed_settings_from_epochs(eps, hemisphere):
     # THE CONTACTS THIS LEAD STIMULATES ON (the PI, 2026-09-22; device rule D52). The device allows
     # sensing only on the pair immediately flanking the stimulating contacts (decision 217), and this
     # page said "the device permits this configuration" for a pair the contacts in force do not
-    # allow, because nothing here read them. Parsed by the Stim Optimizer's own `stim_rings`, the one
-    # parser the readiness card uses; a row with no cathode gives no contacts, never a guess.
+    # allow, because nothing here read them. Parsed by the rule's one home (`DecodeCommon.sensing_rule
+    # .stim_rings`, the parser the readiness card uses); a row with no cathode gives no contacts,
+    # never a guess.
     cath_col = f"cathode_{hemisphere}"
     cath = row.get(cath_col) if cath_col in row.index else None
     if cath is not None and not pd.isna(cath) and str(cath).strip():
         try:
-            from modules.StimOptimizer import bravo_service as _sosvc
+            from modules.DecodeCommon import sensing_rule as _sensing_rule
         except ImportError:                                  # host suite: BRAVO/modules is the root
-            from StimOptimizer import bravo_service as _sosvc
-        rings = sorted(_sosvc.stim_rings(cath))
+            from DecodeCommon import sensing_rule as _sensing_rule
+        rings = sorted(_sensing_rule.stim_rings(cath))
         if rings:
             out["stim_rings_on_sensing_lead"] = rings
             out["stim_contacts_on_sensing_lead"] = str(cath)
@@ -3960,6 +4024,15 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
         out["caveats"] = [{"severity": "high", "card": "the verdict header",
                            "text": f"The list of caveats could not be assembled: {_exc!r}. Read "
                                    f"that as one missing list, not as a report with no caveats."}]
+
+    # THE EVIDENCE THAT SHOULD HAVE BEEN EVALUATED AND WAS NOT, for the decision card's yellow
+    # bullets (decision 302). Per request, stored nowhere, like the caveats above.
+    try:
+        out["evidence_not_evaluated"] = evidence_not_evaluated(out)
+    except Exception:                                  # noqa: BLE001
+        _log.warning("closed-loop report: the not-evaluated list could not be assembled for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
+        out["evidence_not_evaluated"] = None
 
     out["cache_status"] = _status                              # Track C step 4
     return out

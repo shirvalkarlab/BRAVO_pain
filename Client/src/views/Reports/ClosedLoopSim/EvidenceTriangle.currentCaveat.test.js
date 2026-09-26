@@ -76,16 +76,27 @@ const insideClosedFold = (el) => {
   return false;
 };
 
-describe("the provisional sentence reads without opening a fold", () => {
-  it("prints the 'rests on the point signs alone' half of the coherence note in the open", () => {
+describe("the coherence note is one fold again (decision 302, superseding decision 235's split)", () => {
+  // Decision 235 printed the note's "PROVISIONAL: ... intervals span zero" half in the open. By
+  // 2026-09-26 the same fact was on the page three more times -- each edge row's "INTERVAL SPANS
+  // ZERO" with its numbers, the triangle's "uncertain" labels, and the decision card's status
+  // line -- and the PI ruled that repeated statements go. Updated on purpose: the whole note,
+  // both halves, sits in "How the sign agreement was tested".
+  it("keeps the provisional half, now inside the closed fold", () => {
     const { container } = rtlRender(wrap(
       <EvidenceTrianglePanel report={{ data: withCandidate("ZERO_THREE_LEFT", 24.5) }} />));
-    // the fold's own control is still there for the rest of the note
     expect(container.textContent).toMatch(/How the sign agreement was tested/);
     const node = leafWith(container, /rests on the point signs alone/i);
     expect(node).toBeTruthy();
+    expect(insideClosedFold(node)).toBe(true);
+  });
+
+  it("the edge rows still say, in the open, which intervals span zero", () => {
+    const { container } = rtlRender(wrap(
+      <EvidenceTrianglePanel report={{ data: withCandidate("ZERO_THREE_LEFT", 24.5) }} />));
+    const node = leafWith(container, /INTERVAL SPANS ZERO/);
+    expect(node).toBeTruthy();
     expect(insideClosedFold(node)).toBe(false);
-    expect(node.textContent).toMatch(/intervals span zero/i);
   });
 
   it("leaves the rest of the note where it was, inside the fold", () => {

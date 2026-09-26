@@ -8,7 +8,7 @@
  * surface for, one row per stimulation rate inside it, rates ordered by how many stretches of
  * unchanged settings they rest on (most first). A FITTED rate draws a square heatmap -- x = left
  * current, y = right current, colour = the pain-plus-side-effect objective the search minimises
- * (green low, red high, zero at the setting in force) -- with the three checks decision 158's rule
+ * (blue low, orange high, light grey at the setting in force) -- with the three checks decision 158's rule
  * reads printed beside it, each with its own numbers and a tick or a cross. A rate that never
  * cleared the 8-epoch floor prints one plain line and draws nothing: there is no surface to show.
  *
@@ -32,6 +32,18 @@
  * -- never pooled with it, because the two streams are independent measurements of the same 0-10
  * scale and mixing them would hide whether they agree. `two_stage.stage1.clinic_stream` carries the
  * ingest counts and the list of visits folded underneath.
+ *
+ * THE DESIGN REVIEW OF 2026-09-26 (the PI: "yes to all six, build them"):
+ *   - the colour scale is blue (better than today) through a neutral light grey (today) to orange
+ *     (worse), the platform's Okabe-Ito pair, in place of green-yellow-red, which about 1 man in 12
+ *     cannot read; the legend the PI opened on load in decision 245 says so in words, and the star
+ *     on the best cell is white with a dark edge so it shows on blue;
+ *   - a square prints its verdict only when a current CAN be recommended; the three checks beside
+ *     it already say why not, and the page said "no current can be recommended" five times;
+ *   - each square's closing sentence (the server's own, which restates its three checks) folds;
+ *   - the rates too thin to fit print ONE line per pulse-width pairing ("Not drawn, too few
+ *     stretches (minimum 8): 10 Hz (2), 165 Hz (2)"), not a line per rate;
+ *   - "stretches of unchanged settings", never "epochs"; "rate", never "speed".
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -48,10 +60,15 @@ import PAL from "views/Reports/ClosedLoopSim/palette";
 
 import { num, fmtHz, fmtUs, fmtMa } from "./stimFormat";
 import { BlockOfTimeMark, BlockOfTimeFootnote, blockOfTimeState, notCheckedText } from "./blockOfTime";
-import { TYPE, HEAD, SMALL } from "./typeScale";
+import { TYPE, HEAD, SMALL, SizedFold } from "./typeScale";
 
 const CHECK_MARK = "✓";
 const CROSS_MARK = "✗";
+
+/** The squares' colour scale: blue (lower predicted pain than today) through a neutral light grey
+ *  (today's predicted rating) to orange (higher). The Okabe-Ito blue and vermillion the Biomarkers
+ *  heat maps use (`BIN_LO` / `BIN_HI`), which a red-green colour-blind reader can tell apart. */
+export const CURRENT_MAP_COLORSCALE = [[0, "#0072B2"], [0.5, "#E4E4E4"], [1, "#D55E00"]];
 
 function CheckRow({ label, passes, detail }) {
   const color = passes === true ? "#1B7A3D" : (passes === false ? PAL.warnText : "#5E5E5E");
@@ -72,7 +89,7 @@ function CheckRow({ label, passes, detail }) {
  *  `mu` is the score relative to the setting in force; adding `pain_reference` (the rating at that
  *  setting, from the backend) back gives the predicted rating in the participant's own units,
  *  plus the side-effect cost where one was reported. The colour range is symmetric about that
- *  reference so yellow is always "today's value" and green/red always "better/worse than today";
+ *  reference so light grey is always "today's value" and blue/orange always "better/worse than today";
  *  the fit, the best cell and the three checks are unchanged (a constant per surface). A response
  *  from before the reference existed still draws, as the relative score, and says so. */
 export function absoluteSurface(surface) {
@@ -84,7 +101,7 @@ export function absoluteSurface(surface) {
   const finite = [];
   z.forEach((row) => row.forEach((v) => { if (v != null) finite.push(v); }));
   // Symmetric about the reference, wide enough to cover the surface: a range that merely
-  // covers the surface would put yellow somewhere other than today's value.
+  // covers the surface would put the grey midpoint somewhere other than today's value.
   let half = finite.length ? Math.max(...finite.map((v) => Math.abs(v - offset))) : 1;
   if (half < 0.05) half = 0.05;
   const item = surface && surface.pain_item ? String(surface.pain_item).replace(/_/g, " ").replace(/ vas$/, " VAS") : "pain";
@@ -116,9 +133,10 @@ function CurrentSurfaceHeatmap({ divId, surface, inForceLeft, inForceRight, star
     fig.subplots(1, 1, { sharex: false, sharey: false });
     fig.traces.push({
       type: "heatmap", z: gridZ, x: surface.amps_mA, y: surface.amps_mA,
-      // Explicit stops: "RdYlGn" is a plotly.PY name, not a plotly.JS one, and plotly.js silently
-      // fell back to a red-to-grey scale that painted the BEST score red (watched live, 2026-09-14).
-      colorscale: [[0, "#1A9850"], [0.5, "#FEE08B"], [1, "#D73027"]], zmin, zmax, zmid,
+      // Explicit stops, never a named scale: "RdYlGn" is a plotly.PY name, not a plotly.JS one, and
+      // plotly.js silently fell back to a red-to-grey scale that painted the BEST score red (watched
+      // live, 2026-09-14). Blue-grey-orange since 2026-09-26 (see CURRENT_MAP_COLORSCALE).
+      colorscale: CURRENT_MAP_COLORSCALE, zmin, zmax, zmid,
       // A short title on the side: the long two-line title this first shipped with was placed
       // ABOVE the bar, and Plotly's automatic margin then took 222 of the 340 px for it, leaving
       // the plot 70 px wide (measured live, 2026-09-14). The score's meaning is in the caption.
@@ -134,7 +152,7 @@ function CurrentSurfaceHeatmap({ divId, surface, inForceLeft, inForceRight, star
       x: pts.map((p) => p.amp_left_mA), y: pts.map((p) => p.amp_right_mA),
       marker: { size: pts.map((p) => 6 + 2.2 * Math.sqrt(Math.max(1, p.n_reports || 1))),
         color: "rgba(20,20,20,0.75)", line: { width: 1, color: "#FFFFFF" } },
-      hovertemplate: pts.map((p) => `epoch ${p.epoch}: ${p.n_reports} report(s)<br>`
+      hovertemplate: pts.map((p) => `stretch ${p.epoch}: ${p.n_reports} report(s)<br>`
         + `${p.amp_left_mA.toFixed(2)} / ${p.amp_right_mA.toFixed(2)} mA<extra></extra>`),
     });
     // The setting in force, ×.
@@ -151,7 +169,8 @@ function CurrentSurfaceHeatmap({ divId, surface, inForceLeft, inForceRight, star
       fig.traces.push({
         type: "scatter", mode: "markers", showlegend: false,
         x: [starLeft], y: [starRight],
-        marker: { symbol: "star", size: 20, color: "#0B63C6", line: { width: 1.5, color: "#FFFFFF" } },
+        // White with a dark edge: the best cell is the lowest predicted pain, which is blue.
+        marker: { symbol: "star", size: 20, color: "#FFFFFF", line: { width: 1.5, color: "#1A1A1A" } },
         hovertemplate: `best cell: ${starLeft.toFixed(2)} / ${starRight.toFixed(2)} mA<extra></extra>`,
       });
     }
@@ -179,6 +198,24 @@ function CurrentSurfaceHeatmap({ divId, surface, inForceLeft, inForceRight, star
 }
 
 /** Group `rate_strata` rows by (pw_us_left, pw_us_right), rates ordered by n_epochs descending. */
+/** The minimum number of stretches a rate needs before it is fitted, read from the server's own
+ *  reason ("... below the minimum of 8 ..." or, from an older server, "... 8-epoch floor"). */
+function minStretches(rows) {
+  for (const r of rows) {
+    const m = /minimum of (\d+)/.exec(String(r.reason || "")) || /(\d+)-epoch/.exec(String(r.reason || ""));
+    if (m) return Number(m[1]);
+  }
+  return null;
+}
+
+/** One line for every rate in a group that has too few stretches to fit (the design review of
+ *  2026-09-26: one line per rate was 15 lines on RCS08, 8 in the clinic section alone). */
+function unfittedLine(rows) {
+  const min = minStretches(rows);
+  const list = rows.slice().sort((a, b) => (num(a.rate_hz) || 0) - (num(b.rate_hz) || 0))
+    .map((r) => `${fmtHz(r.rate_hz)} (${num(r.n_epochs) ?? 0})`).join(", ");
+  return `Not drawn, too few stretches of unchanged settings${min ? ` (minimum ${min})` : ""}: ${list}.`;
+}
 /** S5 (review 2026-09-15): one succinct line naming which pulse-width pairings each stream was
  *  FITTED at, so "no current, both streams" is never read as two measurements of one setting.
  *  Only strata with a surface count; the unfitted ones say "not enough data" on their own line. */
@@ -212,13 +249,26 @@ function groupByPulseWidthPair(rateStrata) {
  * not fit a pooled-across-rates surface), in which case the pooled fold is simply not drawn. */
 function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, idPrefix, showDescriptions }) {
   const [poolOpen, setPoolOpen] = useState({});
-  return groups.map((g) => (
+  return groups.map((g) => {
+    const unfitted = g.rows.filter((r) => !r.fitted);
+    const fitted = g.rows.filter((r) => r.fitted);
+    const head = g.pooled
+      ? `pooled over ${g.n_pairings} pulse-width pairing${g.n_pairings === 1 ? "" : "s"}, read at left ${fmtUs(g.pw_us_left)} / right ${fmtUs(g.pw_us_right)}`
+      : `left pulse width ${fmtUs(g.pw_us_left)} · right pulse width ${fmtUs(g.pw_us_right)}`;
+    // A pairing with nothing fitted is one line, heading and all.
+    if (!fitted.length && !g.pooled) {
+      return (
+        <MDTypography key={g.key} variant="caption" component="div" color="text" data-testid="unfitted-rates"
+          sx={{ fontSize: TYPE.body, mt: 1 }}>
+          <span style={{ fontWeight: 600 }}>{head}</span>{` — ${unfittedLine(unfitted)}`}
+        </MDTypography>
+      );
+    }
+    return (
     <MDBox key={g.key} sx={{ mt: 2.5, "&:first-of-type": { mt: 0 } }}>
       <MDTypography variant="caption" fontWeight="medium" component="div"
         sx={{ fontSize: TYPE.num, mb: 0.5 }}>
-        {g.pooled
-          ? `pooled over ${g.n_pairings} pulse-width pairing${g.n_pairings === 1 ? "" : "s"}, read at left ${fmtUs(g.pw_us_left)} / right ${fmtUs(g.pw_us_right)}`
-          : `left pulse width ${fmtUs(g.pw_us_left)} · right pulse width ${fmtUs(g.pw_us_right)}`}
+        {head}
       </MDTypography>
       {g.pooled && (
         <MDTypography variant="caption" component="div" sx={{ ...SMALL, fontSize: TYPE.body, mb: 0.6 }}>
@@ -226,22 +276,13 @@ function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, i
         </MDTypography>
       )}
 
-      {g.rows.map((r) => {
+      {fitted.map((r) => {
         const divId = `${idPrefix}-surface-${g.key}-${r.rate_hz}`;
-        if (!r.fitted) {
-          return (
-            <MDTypography key={divId} variant="caption" component="div" color="text"
-              sx={{ fontSize: TYPE.body, mt: 1, mb: 1 }}>
-              {`${fmtHz(r.rate_hz)} · ${num(r.n_epochs) ?? 0} epoch${num(r.n_epochs) === 1 ? "" : "s"} — `
-                + `not enough data (${r.reason || "below the 8-epoch floor"}); no surface is drawn.`}
-            </MDTypography>
-          );
-        }
         return (
           <MDBox key={divId} sx={{ mt: 1, mb: 2 }}>
             <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, mb: 0.6 }}>
               {`${fmtHz(r.rate_hz)} · left ${fmtUs(g.pw_us_left)} / right ${fmtUs(g.pw_us_right)} · `
-                + `${num(r.n_epochs) ?? 0} epochs · ${Math.round(num(r.n_reports) || 0)} reports`}
+                + `${num(r.n_epochs) ?? 0} stretches · ${Math.round(num(r.n_reports) || 0)} reports`}
             </MDTypography>
             <Grid container spacing={2}>
               <Grid item xs={12} sm="auto">
@@ -251,15 +292,16 @@ function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, i
                   showStar={r.resolved === true} />
               </Grid>
               <Grid item xs={12} sm>
-                <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, mb: 0.6 }}>
-                  {r.resolved ? (
-                    <>
-                      {`a current CAN be recommended at this speed: left ${fmtMa(r.amp_mA_left)}, right ${fmtMa(r.amp_mA_right)}`}
-                      {blockOfTimeState(r) === "moves" && <BlockOfTimeMark />}
-                      {notCheckedText(r) ? ` (${notCheckedText(r)}).` : "."}
-                    </>
-                  ) : "no current can be recommended at this speed yet."}
-                </MDTypography>
+                {/* The verdict is printed only when a current CAN be recommended; otherwise the
+                    three checks below say why not, and the strip at the top says it once for the
+                    page (the design review of 2026-09-26). */}
+                {r.resolved ? (
+                  <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, mb: 0.6 }}>
+                    {`a current CAN be recommended at this rate: left ${fmtMa(r.amp_mA_left)}, right ${fmtMa(r.amp_mA_right)}`}
+                    {blockOfTimeState(r) === "moves" && <BlockOfTimeMark />}
+                    {notCheckedText(r) ? ` (${notCheckedText(r)}).` : "."}
+                  </MDTypography>
+                ) : null}
                 {/* `flat_passes` is the BACKEND's own check that the surface VARIES enough
                     to mean something (it is NOT flat), so a tick here means "not flat,
                     this check passed" -- read in the same "good = passed" direction as the
@@ -283,30 +325,48 @@ function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, i
                     server names the current pairs to repeat or add for this check to pass, the
                     cheapest first, under the safe ceiling. In the open, because it is the one line
                     on the card a clinician can act on at the next visit. */}
+                {/* The cheapest way stays open (decision 251); why, what each pair needs and the
+                    new settings that would also count fold under it (2026-09-26). */}
                 {r.coverage_passes !== true && r.coverage_gap && r.coverage_gap.cheapest_way ? (
-                  <MDTypography variant="caption" component="div"
-                    sx={{ ...SMALL, mt: 0.6, color: PAL.warnText }}>
-                    {`What the next visit must deliver: ${String(r.coverage_gap.cheapest_way).replace(/ -- /g, " — ")}. `}
-                    {r.coverage_gap.why ? `${String(r.coverage_gap.why).replace(/ -- /g, " — ")}. ` : ""}
-                    {r.coverage_gap.what_each_pair_needs
-                      ? `Each pair needs ${r.coverage_gap.what_each_pair_needs}. ` : ""}
-                    {(r.coverage_gap.pairs_to_add || []).length
-                      ? `New settings that would also count: ${r.coverage_gap.pairs_to_add
-                        .map((q) => `L${num(q.amp_mA_Left)}/R${num(q.amp_mA_Right)}`).join(", ")}.`
-                      : ""}
-                  </MDTypography>
+                  <MDBox mt={0.6}>
+                    <MDTypography variant="caption" component="div" sx={{ ...SMALL, color: PAL.warnText }}>
+                      {`What the next visit must deliver: ${String(r.coverage_gap.cheapest_way).replace(/ -- /g, " — ")}. `}
+                    </MDTypography>
+                    {(r.coverage_gap.why || r.coverage_gap.what_each_pair_needs || (r.coverage_gap.pairs_to_add || []).length) ? (
+                      <SizedFold show="Why, and the new settings that would also count" hide="Hide" dense mt={0.2}>
+                        <MDTypography variant="caption" component="div" sx={{ ...SMALL }}>
+                          {r.coverage_gap.why ? `${String(r.coverage_gap.why).replace(/ -- /g, " — ")}. ` : ""}
+                          {r.coverage_gap.what_each_pair_needs
+                            ? `Each pair needs ${r.coverage_gap.what_each_pair_needs}. ` : ""}
+                          {(r.coverage_gap.pairs_to_add || []).length
+                            ? `New settings that would also count: ${r.coverage_gap.pairs_to_add
+                              .map((q) => `L${num(q.amp_mA_Left)}/R${num(q.amp_mA_Right)}`).join(", ")}.`
+                            : ""}
+                        </MDTypography>
+                      </SizedFold>
+                    ) : null}
+                  </MDBox>
                 ) : null}
+                {/* The server's closing sentence restates the three checks above it: folded. */}
                 {r.sentence && (
-                  <MDTypography variant="caption" component="div" color="text"
-                    sx={{ ...SMALL, mt: 0.8 }}>
-                    {String(r.sentence)}
-                  </MDTypography>
+                  <SizedFold show="The three checks, in one sentence" hide="Hide" dense mt={0.6}>
+                    <MDTypography variant="caption" component="div" color="text" sx={{ ...SMALL }}>
+                      {String(r.sentence)}
+                    </MDTypography>
+                  </SizedFold>
                 )}
               </Grid>
             </Grid>
           </MDBox>
         );
       })}
+
+      {unfitted.length > 0 && (
+        <MDTypography variant="caption" component="div" color="text" data-testid="unfitted-rates"
+          sx={{ fontSize: TYPE.body, mt: 1, mb: 1 }}>
+          {unfittedLine(unfitted)}
+        </MDTypography>
+      )}
 
       {/* Note the flat-surface check reads a `flat` PASS as "the surface is NOT flat" --
           CheckRow above negates `flat_passes` so its tick/cross reads the same direction as
@@ -349,7 +409,8 @@ function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, i
         </Fold>
       )}
     </MDBox>
-  ));
+    );
+  });
 }
 
 /** The second, independent stream: rates and reports read from the lab's own clinic and
@@ -403,7 +464,7 @@ function ClinicStreamSection({ groups, inForceLeft, inForceRight, clinicStream, 
       {showDescriptions && cs.reference && cs.reference.sentence && (
         <MDTypography variant="caption" component="div" sx={{ ...SMALL, mb: 1,
           color: cs.reference.source === "last_clinic_step" ? PAL.warnText : undefined }}>
-          {`Yellow on these colour scales is the predicted rating at: ${cs.reference.sentence}.`}
+          {`Light grey on these colour scales is the predicted rating at: ${cs.reference.sentence}.`}
         </MDTypography>
       )}
       {/* THE PI'S RULING 5, IN THE OPEN (decision 233; on the page 2026-09-23): the next session
@@ -483,7 +544,7 @@ function pooledGroup(pooling) {
   }));
   const nPairings = Math.max(0, ...rows.map((r) => num(r.n_pairings_pooled) || 0));
   const pairingsText = byPair.size
-    ? Array.from(byPair.entries()).map(([k, n]) => `${k} (${n} epoch${n === 1 ? "" : "s"})`).join(", ")
+    ? Array.from(byPair.entries()).map(([k, n]) => `${k} (${n} stretch${n === 1 ? "" : "es"})`).join(", ")
     : "none fitted";
   const sorted = rows.slice().sort((a, b) => (num(b.n_epochs) || 0) - (num(a.n_epochs) || 0));
   return { key: "pooled", pooled: true, pw_us_left: inForce.pw_us_left, pw_us_right: inForce.pw_us_right,
@@ -558,15 +619,15 @@ export default function CurrentMapCard({ plan }) {
         </MDTypography>
         <MDTypography variant="caption" component="div" color="text" data-testid="current-map-legend"
           sx={{ fontSize: TYPE.body, mt: 0.5, mb: 1.5 }}>
-          Each square below is one stimulation speed: the left current runs along the bottom, the
+          Each square below is one stimulation rate: the left current runs along the bottom, the
           right current up the side, and the colour is the predicted pain rating at that combination
           (plus a fixed cost where a side effect was reported), which the search is trying to make
-          as small (as green) as possible. Yellow on the colour scale is the predicted rating at the
-          setting programmed today, so green is better than today and red worse; a black × marks
-          that setting; the dots are
-          combinations this participant has actually been rated on, sized by how many ratings back
-          them; a blue star appears only when the record can tell currents apart well enough to
-          trust it, per the three checks printed beside each square.
+          as small as possible. Light grey is the predicted rating at the setting programmed today,
+          so blue is better than today and orange worse, deeper the further from today; a black ×
+          marks that setting; the dots are combinations this participant has actually been rated
+          on, sized by how many ratings back them; a white star appears only when the record can
+          tell currents apart well enough to trust it, per the three checks printed beside each
+          square.
         </MDTypography>
 
         {showDescriptions && pooling && pooling.available === false && (

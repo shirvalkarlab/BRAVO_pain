@@ -80,6 +80,8 @@ test("the triangle and the stability card say which pain score they read", () =>
   const stab = fs.readFileSync(path.join(__dirname, "BandStabilityPanel.js"), "utf8");
   const page = fs.readFileSync(path.join(__dirname, "index.js"), "utf8");
   expect(tri).toMatch(/data\.pain_score\.label/);
-  expect(stab).toMatch(/Pain read as \$\{painScore\.label/);
-  expect(page).toMatch(/painScore=\{deploymentReport\?\.data\?\.pain_score\}/);
+  // Reworded on purpose by decision 302 ("Pain score: NRS (0-10)."), and the page now hands the
+  // stability card the report checked against the chosen band (`report`), not the raw hook's.
+  expect(stab).toMatch(/Pain score: \$\{painScore\.label/);
+  expect(page).toMatch(/painScore=\{report\?\.data\?\.pain_score\}/);
 });

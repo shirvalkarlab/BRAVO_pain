@@ -3,8 +3,10 @@
  *
  * Fetches /api/queryLsbPower with the cut-point lifted from the Phase-B ROC panel and renders three
  * blocks, in descending order of how much weight the clinician should give them:
- *   1) THRESHOLD TO PROGRAM — the percentile-anchored device-LSB threshold (the deployable number),
- *      or an honest "device never sensed this band" notice for off-band candidates.
+ *   1) WHERE THE CUT-POINT SITS IN THE DEVICE'S OWN READINGS -- the percentile of the device
+ *      Timeline's band power the ROC's cut-point falls at, in device units. NOT a value to program
+ *      (decision 302): the values to enter are the decision card's, and the comparison with what
+ *      the device runs today is the "Programmed today" column of its table.
  *   2) Power / sample-size — current power vs AUC=0.5 on the count of independent ratings, and the
  *      ratings needed for 80% power (a clear "enough data yet?" verdict).
  *   3) Empirical µV²/LSB ratio — a confidence-rated FYI cross-check, explicitly NOT the deployable
@@ -38,23 +40,14 @@ const TIER_LABEL = {
   channel_pooled: "from frozen PSD→LSB model (channel-pooled)",
 };
 
-function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint, onLsbThreshold,
-                         deploymentReport }) {
-  // THE DEVICE VERDICT GATES THE HEADLINE NUMBER, added 2026-09-04, the third of three places that
-  // printed a value to program without consulting the device rules. This panel is the most
-  // defensible of the three, because its job is genuinely analytic — it shows where a percentile of
-  // the device's own Timeline band power falls — but it labels that number "THRESHOLD TO PROGRAM"
-  // at twenty-six-point type, which is an instruction rather than an analysis. So the label and the
-  // framing change when the device forbids the configuration, while the measurement itself stays
-  // on the page: an analyst still needs to see where the percentile sits, and hiding a measurement
-  // would remove information rather than remove a hazard.
-  //
-  // That is the distinction against the verdict strip and the sign-off card, where the number was
-  // SUPPRESSED. Those two exist to tell a clinician what to do next, so a number in them gets
-  // typed. This one exists to show where a distribution sits, so it is relabelled instead.
-  const _rep = deploymentReport && deploymentReport.data ? deploymentReport.data : deploymentReport;
-  const _vd = (_rep && _rep.verdict_detail) || {};
-  const deviceBlocks = !(_rep && _rep.available && _vd.device_eligible === true);
+function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint, onLsbThreshold }) {
+  // NOT A VALUE TO PROGRAM, ON ANY ANSWER (decision 302). Until 2026-09-26 this panel headed its
+  // number "THRESHOLD TO PROGRAM" at 26-point type when the device permitted the configuration, and
+  // printed a "recommended vs programmed" box beside it. On RCS08 that number is not the one the
+  // parameter table recommends: the percentile the ROC's cut-point falls at read 141.7 (L 1-3+,
+  // modelled) and 143.0 (R 0-3+, measured) device units, where the table's upper threshold reads
+  // 241.14 and 213.48. Two "recommended" thresholds on one page is one too many; this panel now says
+  // only where the cut-point sits in the device's own readings.
   const pwRef = useRef(null);
   const thrRef = useRef(null);
 
@@ -98,11 +91,10 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
   const tl = data && data.threshold_lsb;
   const pw = data && data.power;
   const lr = data && data.lsb_ratio;
-  const rvp = data && data.recommended_vs_programmed;   // audit C10: recommended-vs-programmed Δ
 
   // Audit [42]: lift the resolved device-LSB threshold + whether it is estimated up to the parent, so
-  // the ROC panel's feature-histogram cut line can be annotated with the SAME LSB the clinician will
-  // program — closing the "oriented log-power ↔ LSB connected only by prose" gap. Fires only when the
+  // the ROC panel's feature-histogram cut line can be annotated with the same device-unit value
+  // (where the cut-point sits, not a value to program; decision 302) — closing the "oriented log-power ↔ LSB connected only by prose" gap. Fires only when the
   // value actually changes (keyed on the primitives, not the rebuilt tl object).
   const tlUpperLsb = tl && tl.available ? tl.upper_lsb : null;
   const tlEstimated = !!(tl && tl.available && tl.estimated);
@@ -323,7 +315,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
     <Card sx={{ width: "100%" }}>
       <MDBox p={2}>
         <MDTypography variant="h6" sx={{ fontSize: 14, mb: 1 }}>
-          LSB threshold + power / sample-size
+          The cut-point in device units (LSB), and power
         </MDTypography>
         <PanelStaleNote stale={cached.stale} staleReasons={cached.staleReasons}
           loading={cached.loading} notKept={cached.notKept}
@@ -351,7 +343,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
             {tl && tl.available && tl.upper_lsb != null ? (
               <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold",
                 color: tl.estimated ? PAL.warnText : PAL.accent }}>
-                {`→ ${tl.estimated ? "≈" : "≥"} ${fmt(tl.upper_lsb, 1)} LSB${tl.estimated ? " (est.)" : ""}`}
+                {`→ ${tl.estimated ? "≈" : "="} ${fmt(tl.upper_lsb, 1)} LSB${tl.estimated ? " (est.)" : ""}`}
               </MDTypography>
             ) : null}
           </MDBox>
@@ -359,8 +351,8 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
 
         {cutThr == null ? (
           <MDTypography variant="caption" color="text" sx={{ fontStyle: "italic", fontSize: 11 }}>
-            Choose a cut-point in the ROC panel — the deployable LSB threshold and power readout
-            anchor to it.
+            Choose a cut-point in the ROC panel: the cut-point in device units and the power
+            readout anchor to it.
           </MDTypography>
         ) : loading ? (
           <MDTypography variant="caption" color="text" sx={{ fontStyle: "italic", fontSize: 11 }}>
@@ -385,47 +377,31 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
               </MDBox>
             ) : null}
 
-            {/* 1) THRESHOLD TO PROGRAM — MEASURED (native device Timeline) */}
+            {/* 1) WHERE THE CUT-POINT SITS -- MEASURED (native device Timeline) */}
             {tl && tl.available && !tl.estimated ? (
-              <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: PAL.accentFill, borderRadius: "6px",
-                border: `1px solid ${PAL.accentBorder}` }}>
-                <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold",
-                  color: deviceBlocks ? PAL.warnText : PAL.accent }}>
-                  {deviceBlocks
-                    ? "WHERE THE PERCENTILE FALLS (device LSB) — NOT A VALUE TO PROGRAM"
-                    : "THRESHOLD TO PROGRAM (device LSB)"}
+              <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: PAL.neutralFill, borderRadius: "6px",
+                border: `1px solid ${PAL.neutralBorder}` }}>
+                <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold", color: "#4A4A4A" }}>
+                  WHERE THE CUT-POINT SITS IN THE DEVICE&apos;S OWN READINGS (not a value to program)
                 </MDTypography>
-                <MDTypography variant="h4" sx={{ fontSize: 26,
-                  color: deviceBlocks ? PAL.neutral : PAL.accent, lineHeight: 1.1 }}>
-                  {`power ${deviceBlocks ? "=" : "≥"} ${fmt(tl.upper_lsb, 1)} LSB`}
+                <MDTypography variant="h4" sx={{ fontSize: 22, color: "#2A2A2A", lineHeight: 1.15 }}>
+                  {`p${fmt(tl.percentile, 0)} = ${fmt(tl.upper_lsb, 1)} LSB`}
                 </MDTypography>
-                {deviceBlocks ? (
-                  <MDTypography variant="caption" display="block"
-                    sx={{ fontSize: 11, color: PAL.warnText, mt: 0.3 }}>
-                    The device does not currently permit this configuration, so this is a
-                    measurement of where the percentile sits and not a setting to enter. The
-                    comparison operator is shown as an equals sign for the same reason: a
-                    greater-than-or-equal sign reads as a rule to apply.
-                  </MDTypography>
-                ) : null}
-                <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 11, mt: 0.3 }}>
-                  {`p${fmt(tl.percentile, 0)} of the device's own Timeline band power · `
-                    + `${tl.n_timeline_samples} in-band samples · device LSB p10/median/p90 `
-                    + `${fmt(tl.device_lsb_p10, 0)} / ${fmt(tl.device_lsb_median, 0)} / ${fmt(tl.device_lsb_p90, 0)}`}
-                </MDTypography>
-                <MDTypography variant="caption" display="block" sx={{ fontSize: 11, color: "#5E5E5E", mt: 0.4 }}>
-                  Percentile-anchored on the device Timeline — no µV²↔LSB conversion needed.
+                <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 11.5, mt: 0.3 }}>
+                  {`of the device's own Timeline band power, ${tl.n_timeline_samples} in-band samples; `
+                    + `p10 / median / p90 ${fmt(tl.device_lsb_p10, 0)} / ${fmt(tl.device_lsb_median, 0)} / `
+                    + `${fmt(tl.device_lsb_p90, 0)}. The values to enter are on the decision card.`}
                 </MDTypography>
               </MDBox>
             ) : tl && tl.available && tl.estimated ? (
-              /* THRESHOLD TO PROGRAM — ESTIMATED (modeled fallback: device never sensed this band).
+              /* WHERE THE CUT-POINT WOULD SIT — ESTIMATED (modeled fallback: device never sensed this band).
                  Amber, not accent-green, with the ±1σ calibration band and the tier, so a clinician
                  never mistakes a modeled estimate for a measured one (audit C8 fail-closed). This is
                  the LSB default the panel now produces instead of "NO DEPLOYABLE LSB THRESHOLD". */
               <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: PAL.warnFill, borderRadius: "6px",
                 border: `1px solid ${PAL.warnBorder}` }}>
                 <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: PAL.warnText }}>
-                  {`ESTIMATED LSB THRESHOLD — ${TIER_LABEL[tl.tier] || "modeled"}${tl.freq_extrapolated ? " · EXTRAPOLATED" : ""}`}
+                  {`ESTIMATED: WHERE THE CUT-POINT WOULD SIT (not a value to program), ${TIER_LABEL[tl.tier] || "modeled"}${tl.freq_extrapolated ? ", EXTRAPOLATED" : ""}`}
                 </MDTypography>
                 <MDTypography variant="h4" sx={{ fontSize: 26, color: PAL.warnText, lineHeight: 1.1 }}>
                   {`power ≈ ${fmt(tl.upper_lsb, 1)} LSB`}
@@ -445,7 +421,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
               <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: PAL.warnFill, borderRadius: "6px",
                 border: `1px solid ${PAL.warnBorder}` }}>
                 <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: PAL.warnText }}>
-                  NO DEPLOYABLE LSB THRESHOLD
+                  NO DEVICE-UNIT VALUE FOR THIS CUT-POINT
                 </MDTypography>
                 <MDTypography variant="caption" display="block" sx={{ fontSize: 11, mt: 0.3 }}>
                   {(tl && tl.reason) || "unavailable"}
@@ -462,41 +438,8 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
               </MDBox>
             ) : null}
 
-            {/* 1b) RECOMMENDED vs CURRENTLY-PROGRAMMED Δ (audit C10). Renders only when a closed-loop
-                program is active on this hemisphere — the recommended number alone forces a programmer
-                context-switch to know whether it is a small nudge or a large change. */}
-            {rvp && rvp.available ? (
-              <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: PAL.neutralFill || "#6C757D12",
-                borderRadius: "6px", border: `1px solid ${PAL.neutralBorder || "#6C757D44"}` }}>
-                <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: PAL.neutral }}>
-                  {`RECOMMENDED vs PROGRAMMED · ${rvp.hemisphere || ""} hemisphere`}
-                </MDTypography>
-                <MDTypography variant="caption" display="block" sx={{ fontSize: 12, mt: 0.3 }}>
-                  {`recommended ${fmt(rvp.recommended_upper_lsb, 1)} LSB  ·  programmed `
-                    + `${fmt(rvp.programmed_upper_lsb, 1)} LSB`}
-                </MDTypography>
-                {rvp.delta_lsb != null ? (
-                  <MDTypography variant="caption" display="block" sx={{ fontSize: 13, fontWeight: "bold", mt: 0.2,
-                    color: rvp.direction === "unchanged" ? PAL.pass : PAL.warnText }}>
-                    {`Δ ${rvp.delta_lsb > 0 ? "+" : ""}${fmt(rvp.delta_lsb, 1)} LSB`
-                      + `${rvp.delta_pct != null ? ` (${rvp.delta_pct > 0 ? "+" : ""}${fmt(rvp.delta_pct, 0)}%)` : ""}`
-                      + ` — ${rvp.direction === "raise" ? "raise the upper threshold (stim engages later)"
-                          : rvp.direction === "lower" ? "lower the upper threshold (stim engages sooner)"
-                          : "no change from the programmed value"}`}
-                  </MDTypography>
-                ) : null}
-                <MDTypography variant="caption" display="block" sx={{ fontSize: 11, color: "#5E5E5E", mt: 0.4 }}>
-                  {`Programmed ${rvp.programmed_status || "adaptive"}${rvp.programmed_date ? ` · ${String(rvp.programmed_date).slice(0, 10)}` : ""} · same device LFP-power units.`}
-                </MDTypography>
-              </MDBox>
-            ) : rvp && rvp.programmed_upper_lsb != null ? (
-              <MDBox p={1.0} mb={1.2} sx={{ backgroundColor: PAL.neutralFill || "#6C757D12", borderRadius: "6px" }}>
-                <MDTypography variant="caption" sx={{ fontSize: 11.5, color: PAL.neutral }}>
-                  {`Device currently programmed at ${fmt(rvp.programmed_upper_lsb, 1)} LSB `
-                    + `(${rvp.hemisphere || ""}); no deployable recommendation to compare yet.`}
-                </MDTypography>
-              </MDBox>
-            ) : null}
+            {/* 1b) The recommended-versus-programmed comparison that stood here moved to the
+                decision card's table, as its "Programmed today" column (decision 302). */}
 
             {/* 2) POWER / SAMPLE-SIZE — a power-vs-N sufficiency curve instead of three numbers. */}
             {pw && pw.available ? (

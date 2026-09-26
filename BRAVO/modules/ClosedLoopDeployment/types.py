@@ -27,6 +27,11 @@ class DeviceConstraint:
     severity: str                     # "blocking" | "advisory" | "unknown"
     human_text: str
     predicate: Any = None             # callable(candidate, participant) -> bool | None
+    #: At most four words naming what the rule requires, printed as a bullet on the Closed-Loop
+    #: decision card ("Unmet: <label>", "Unchecked: <label>"; decision 302, the PI 2026-09-26:
+    #: "in five words or less, why it's blocked"). Held on the rule so the page cannot drift from
+    #: it; a default so a synthetic rule in a test still constructs.
+    short_label: str = ""
 
     def __post_init__(self):
         if self.severity not in ("blocking", "advisory", "unknown"):

@@ -316,7 +316,9 @@ def test_a_cell_whose_slope_dies_under_era_blocking_is_refused():
     screen, best = EV.screen_cells(ev, response_fn=_fn(True, 0.40), amp_ceiling=LIMIT,
                                    pain_positive_by_channel=PAIN)
     assert best is None
-    assert "era-blocked slope" in screen.iloc[0].blocking_reasons
+    # PIN CHANGED 2026-09-26 (the design review): the page-facing words name what is removed,
+    # the differences between clinic visits, not "era-blocked".
+    assert "after removing the differences between clinic visits" in screen.iloc[0].blocking_reasons
 
 
 def test_one_band_falling_with_current_and_rising_with_pain_IS_a_finding():
@@ -386,7 +388,7 @@ def test_a_significant_but_POSITIVE_adjusted_slope_is_refused():
     assert row.n_responding == 18 and row.n_era_significant == 18
     assert row.n_era_negative_significant == 0
     assert not row.deployable and best is None
-    assert "negative era-blocked slope" in row.blocking_reasons
+    assert "no significant negative slope of band power on current" in row.blocking_reasons   # PIN CHANGED 2026-09-26
     assert "18 of 18 are significant in the WRONG direction" in row.blocking_reasons
 
 

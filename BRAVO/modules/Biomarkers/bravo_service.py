@@ -4977,6 +4977,19 @@ def _band_decide_verdict(g, h):
     return "VALIDATED (stim-stable)"
 
 
+#: The deployment summary's seven gates in at most four words each, for the Closed-Loop decision
+#: card's yellow "not evaluated" bullets (decision 302). One home; the page adds no words.
+DEPLOYMENT_GATE_SHORT_LABELS = {
+    "validated": "Band validated",
+    "adaptive_band": "Band inside 8-30 Hz",
+    "deployable_threshold": "Threshold in device units",
+    "credible_ci": "Credible effect size",
+    "stim_stable": "Same across stimulation states",
+    "powered": "Enough pain ratings",
+    "forward_validated": "Holds on later weeks",
+}
+
+
 def _deployment_summary_stim_stable_gate(st):
     """Pure gate-state logic for deployment_summary's "stim_stable" gate (decision 82 fix).
 
@@ -7087,9 +7100,16 @@ def deployment_summary(request_data):
     # prerequisites to program at all (a validated band, an in-range adaptive band, a deployable
     # threshold); SUPPORTIVE gates strengthen the case but do not by themselves block. "Ready to
     # program" requires every NECESSARY gate to pass — not merely a high passed-count.
-    def _gate(key, label, state, detail, necessary=False):
+    # `short_label` (at most four words) and `evaluated` (decision 302, the PI 2026-09-26): the
+    # Closed-Loop decision card lists, in yellow, evidence that should have been evaluated and was
+    # not ("Untested: <short_label>"). `evaluated` is False only when the check did not run at all
+    # -- no forward split, a stability test that did not converge -- never for an answer that came
+    # back unsettled, which is an answer. The labels live in DEPLOYMENT_GATE_SHORT_LABELS, beside
+    # this function's callers, so the page prints them and adds no words of its own.
+    def _gate(key, label, state, detail, necessary=False, evaluated=True):
         return {"key": key, "label": label, "state": state,
-                "pass": state == "pass", "necessary": bool(necessary), "detail": detail}
+                "pass": state == "pass", "necessary": bool(necessary), "detail": detail,
+                "short_label": DEPLOYMENT_GATE_SHORT_LABELS[key], "evaluated": bool(evaluated)}
 
     gates = []
     gates.append(_gate("validated", "Band validated (mixed-effects)",
@@ -7152,7 +7172,8 @@ def deployment_summary(request_data):
     # this one-way rule) -- so the mapping is inlined against the same source field instead. See
     # `_deployment_summary_stim_stable_gate` for the pure logic, pinned by its own test.
     stim_state, stim_detail = _deployment_summary_stim_stable_gate(st)
-    gates.append(_gate("stim_stable", "Stim-stable (band×era equivalence test)", stim_state, stim_detail))
+    gates.append(_gate("stim_stable", "Stim-stable (band×era equivalence test)", stim_state, stim_detail,
+                       evaluated=bool(st.get("available"))))
     # audit C4: the gate passes only when the CONSERVATIVE (CI-lower-bound) power clears target, so a
     # band that looks powered on its optimistic point AUC cannot pass. Detail shows the power band.
     if power.get("available"):
@@ -7230,7 +7251,9 @@ def deployment_summary(request_data):
                           "(point estimate generalizes) but its CI does not yet exclude chance — "
                           "UNDERPOWERED forward; more weeks of ratings needed to confirm.")
     gates.append(_gate("forward_validated", "Forward-validated (held-out AUC clears chance)",
-                       fwd_state, fwd_detail))
+                       fwd_state, fwd_detail,
+                       evaluated=bool(forward.get("available")
+                                      and forward.get("held_out_auc_lo") is not None)))
 
     # ---- CAVEATS (soft warnings) ----
     caveats = []
@@ -7871,6 +7894,74 @@ def _device_timing_ranges():
     return _DR.timing_ranges_for_page()
 
 
+#: Where the heat maps' sensing-rule block reads the contacts from, in words, for the response.
+SENSING_RULE_SOURCE = ("the newest dated setting on each lead in the device's own settings stream "
+                       "(the stored raw kind therapy_settings), read when the grid is requested")
+#: Why the block is never part of the stored grid, in words, for the response.
+SENSING_RULE_NOT_STORED = ("attached after the stored grid is read, never part of its key or payload: "
+                           "the contacts change independently of the recordings and the ratings, so a "
+                           "grid built before a reprogramming is still served, with today's contacts")
+
+
+def sensing_rule_for_grid(participant_uid):
+    """The device's sensing-pair rule with today's contacts (decisions 217, 243, 247), for the heat
+    maps: which pair each lead may sense on while it stimulates, in the Stim Optimizer's block shape
+    (`DecodeCommon.sensing_rule.sensing_rule_block`, the rule's one home; the page's
+    `refusedPairs` reads `by_side[side].rule_applied / allowed_channel / allowed_display / why`).
+
+    The contacts are the newest row per lead of the stored settings stream (`stim_current
+    .contacts_in_force`). No readiness screen runs here, so no per-pair count is given (None, never
+    0). With no stream on record, or a failed read, no rule is applied on either lead and
+    ``available`` is False with the reason: the page then marks nothing. Never raises.
+    """
+    try:
+        from modules.DecodeCommon import sensing_rule as _sensing_rule
+    except ImportError:                                        # pragma: no cover - host spelling
+        from DecodeCommon import sensing_rule as _sensing_rule
+
+    def _label(ch):
+        try:
+            return analytics.format_channel(str(ch), region="")["short"]
+        except Exception:                                      # noqa: BLE001 - no label, not an error
+            return None
+
+    reason = None
+    try:
+        got = stim_current.contacts_in_force(participant_uid)
+    except Exception as exc:                                   # noqa: BLE001 - an adjunct block
+        _log.warning("Biomarkers: the contacts in force could not be read for %s (%r)",
+                     participant_uid, exc)
+        got, reason = None, f"reading the dated stimulation settings raised {exc!r}"
+    if got is None and reason is None:
+        reason = ("no dated stimulation settings have been filed for this participant yet, so the "
+                  "contacts in force are unknown and no pair is marked")
+    by = (got or {}).get("by_side") or {}
+    block = _sensing_rule.sensing_rule_block(
+        {side: (v or {}).get("rings") for side, v in by.items()}, display_of=_label,
+        extra_by_side={side: {"stim_cathode_raw": (v or {}).get("cathode"),
+                              "newest_setting_row_utc": (v or {}).get("newest_row_utc")}
+                       for side, v in by.items()})
+    block.update(available=got is not None, reason=reason, source=SENSING_RULE_SOURCE,
+                 store_key=(got or {}).get("store_key"), not_stored=SENSING_RULE_NOT_STORED)
+    if got is None:
+        block["sentence"] = reason[0].upper() + reason[1:] + "."
+    return block
+
+
+def attach_sensing_rule(resp, participant_uid):
+    """Put `sensing_rule_for_grid` on a grid response, AFTER the stored grid was read or written
+    (see `SENSING_RULE_NOT_STORED`). Returns the response; never raises."""
+    if isinstance(resp, dict):
+        try:
+            resp["sensing_rule"] = sensing_rule_for_grid(participant_uid)
+        except Exception as exc:                               # noqa: BLE001 - never fail the grid
+            _log.warning("Biomarkers: the sensing-rule block failed for %s (%r)", participant_uid, exc)
+            resp["sensing_rule"] = {"available": False, "by_side": {}, "decision": 217,
+                                    "reason": f"the block could not be built ({exc!r})",
+                                    "sentence": "The sensing rule could not be applied to this grid."}
+    return resp
+
+
 def band_time_sweep_for_participant(request_data):
     """The payload for the band-by-length-of-signal section at the bottom of the exploration page.
 
@@ -8003,8 +8094,10 @@ def band_time_sweep_for_participant(request_data):
                 sweep_key=(stored["sweep_key"] or {}).get("signature_key"),
                 done_metric=label_metric)
             # The stability answer for THIS grid, read at request time (decision 185): it lands in
-            # the store after the grid does, so it is never part of the stored response.
-            return attach_stored_stability_answers(stored, participant_uid)
+            # the store after the grid does, so it is never part of the stored response. The
+            # device's sensing rule with TODAY's contacts likewise (2026-09-26).
+            return attach_sensing_rule(attach_stored_stability_answers(stored, participant_uid),
+                                       participant_uid)
 
     # Through the SAME memo the cell drill-down reads, so a grid that actually builds also leaves
     # this worker ready for the first hover on it. Deliberately placed AFTER the stored-response
@@ -8111,7 +8204,8 @@ def band_time_sweep_for_participant(request_data):
         participant_uid, request_data,
         sweep_key=(out["sweep_key"] or {}).get("signature_key"),
         done_metric=label_metric)
-    return attach_stored_stability_answers(out, participant_uid)
+    # after the write above: today's contacts are never part of the stored grid (2026-09-26)
+    return attach_sensing_rule(attach_stored_stability_answers(out, participant_uid), participant_uid)
 
 
 #: The request key that asks for one cell's underlying (band power, pain score) pairs alone,

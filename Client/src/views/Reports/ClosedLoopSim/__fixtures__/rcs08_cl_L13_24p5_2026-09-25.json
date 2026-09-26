@@ -1,0 +1,1943 @@
+{
+"available": true,
+"band_stability": {
+"answer": "cannot tell",
+"answers_possible": [
+"behaves the same",
+"behaves differently",
+"cannot tell",
+"not tested"
+],
+"band_center_hz": 24.5,
+"band_width_hz": 5.0,
+"blocking_status": "not decided - reported for the PI to rule on, blocks nothing today",
+"declared_margin": 0.6931471805599453,
+"difference_interval": [
+-1.356011288256306,
+0.3846875220536086
+],
+"distance_to_nearest_artifact_hz": null,
+"electrode": "ONE_THREE_LEFT",
+"largest_difference": 0.48566188310134867,
+"measurements_per_state": {
+"high current": 279,
+"low current": 105,
+"stimulation off": 98
+},
+"n_measurements": 482,
+"n_reports_split_across_states": 3,
+"n_reports_split_across_weeks": 0,
+"n_states_compared": 3,
+"n_time_blocks": 42,
+"odds_ratio_interval_method": "95% intervals: 1.96 standard errors either side of each state's log odds ratio (a Wald interval), the standard errors clustered on the pain report, so each rating counts once however many samples it was matched to (the CR1 sandwich estimator, with its small-sample factor). The check of whether the band behaves the same in every state reads the same standard errors.",
+"odds_ratio_per_state": {
+"high current": {
+"high": 1.1327138464734494,
+"low": 0.41356226327575235,
+"n": 279,
+"n_reports": 108,
+"odds_ratio": 0.6844323940254017
+},
+"low current": {
+"high": 1.198202194194387,
+"low": 0.2494878465327385,
+"n": 105,
+"n_reports": 39,
+"odds_ratio": 0.5467512095463162
+},
+"stimulation off": {
+"high": 1.7508730754683448,
+"low": 0.45098842186376614,
+"n": 98,
+"n_reports": 43,
+"odds_ratio": 0.8886076103597288
+}
+},
+"p_value": 0.3654373733875462,
+"rate_moved_with_current": null,
+"reason": "not rejected, but the interval is wider than the margin: underpowered rather than shown stable",
+"test_ran": true
+},
+"band_stability_summary": {
+"answers_possible": [
+"behaves the same",
+"behaves differently",
+"cannot tell",
+"not tested"
+],
+"blocking_status": "not decided - reported for the PI to rule on, blocks nothing today",
+"counts_by_answer": {
+"behaves differently": 0,
+"behaves the same": 0,
+"cannot tell": 1,
+"not tested": 0
+},
+"n_assessed": 1,
+"note": "\"cannot tell\" means the data could not settle the question. It is neither a pass nor a failure, and it must not be shown as either."
+},
+"cache_status": {
+"exists": false,
+"kind": "inputs",
+"last_built_utc": null,
+"n_recordings": null,
+"note": "no stored entry under the current key: this page was computed from the recordings for this request, and the result is stored now for the next one",
+"trigger": null,
+"what_it_means": "the date the decoded recordings, the therapy settings and the matched pain reports this report reads were last assembled and stored; a newer upload assembles them again under a new key"
+},
+"candidates": [
+{
+"actuated_hemisphere": "Left",
+"band_width_hz": 5.0,
+"center_hz": 24.5,
+"channel": "ONE_THREE_LEFT",
+"pulse_width_us": null,
+"rate_hz": null,
+"sensing_hemisphere": "Left",
+"threshold_mode": "dual"
+}
+],
+"caveats": [
+{
+"card": "the parameters to transcribe",
+"severity": "high",
+"text": "D26 inverted capture: NOT indicated -- the pooled titration slope is -7.31 device units per mA (power falls as current rises, as the control law needs; interval -47.3 to +32.6, p 0.72). CAVEAT: the interval spans zero (interval -47.3 to +32.6, p 0.72), so this rests on the point estimate alone; the sign is not statistically established."
+},
+{
+"card": "the parameters to transcribe",
+"severity": "high",
+"text": "D26 thresholds too close: NOT indicated -- the pooled titration slope is -7.31 device units per mA (interval -47.3 to +32.6, p 0.72), so on the point estimate the two captures separate. CAVEAT: the interval spans zero (interval -47.3 to +32.6, p 0.72), so the signal's response to current is not statistically established and the device may still raise RECAPTURE THRESHOLDS at the visit; that is a caveat, not the verdict."
+},
+{
+"card": "the evidence triangle",
+"severity": "high",
+"text": "The verdict rests on the point signs alone: the interval spans zero on E1 and E2 (2 of 3). A point sign is a direction, not an established effect."
+},
+{
+"card": "the evidence triangle",
+"severity": "medium",
+"text": "How well this band tells high pain from low pain is reported without the stimulation current taken out of it. Read again with the current in force (amp_mA_Left) removed from the band power, it is 0.553, interval 0.441 to 0.673, against 0.5 for coin flipping."
+},
+{
+"card": "the parameters to transcribe",
+"severity": "medium",
+"text": "The two switching values the device would use (191.1398 and 241.1398 in the stimulator's own units) are a median reading plus or minus a fixed minimum, and carry no interval. How far they would move on a different day is not shown."
+},
+{
+"card": "the parameters to transcribe",
+"severity": "medium",
+"text": "The smallest gap the design rule allows between those two values is a fixed number from a simulation, not a measurement on this patient, and carries no interval."
+},
+{
+"card": "the parameters to transcribe",
+"severity": "medium",
+"text": "The timing values to transcribe (how long the device averages, how long it waits before switching, how long it holds after a switch) carry a word for how confident we are and no interval."
+},
+{
+"card": "does this band mean the same thing at every current",
+"severity": "medium",
+"text": "Whether this band means the same thing about pain at every stimulation current: cannot tell. not rejected, but the interval is wider than the margin: underpowered rather than shown stable"
+}
+],
+"coherence": {
+"coherent": true,
+"expected_pattern": {
+"E1": -1,
+"E2": 1,
+"E3": -1,
+"why": "Dual Threshold ramps amplitude UP when band power rises above the upper threshold (white paper p. 13), because the control law assumes power FALLS as amplitude rises and therefore reads high power as insufficient stimulation. A band whose power instead RISES with amplitude closes a positive-feedback loop: the device ramps up, power rises further, and it ramps up again, bounded only by the amplitude limits."
+},
+"n_boot": 0,
+"note": "Dual Threshold ramps amplitude UP when band power rises above the upper threshold (white paper p. 13), because the control law assumes power FALLS as amplitude rises and therefore reads high power as insufficient stimulation. A band whose power instead RISES with amplitude closes a positive-feedback loop: the device ramps up, power rises further, and it ramps up again, bounded only by the amplitude limits. PROVISIONAL: 2 of 3 intervals span zero -- E1 (interval -47.3 to +32.6, p 0.72); E2 (interval -0.062 to +0.178, p 0.29) -- so the pattern rests on the point signs alone, by the PI's rule of 2026-09-13 (\"established means mean only\"). DOES THIS BAND MEAN THE SAME THING ABOUT PAIN AT EVERY STIMULATION CURRENT? The answer is \"cannot tell\": the data cannot separate a steady band from one that changes. That is not a pass: the sign pattern above has not been shown to hold at every current the loop would visit. What that rests on: not rejected, but the interval is wider than the margin: underpowered rather than shown stable.",
+"observed_pattern": {
+"E1": -1,
+"E2": 1,
+"E3": -1
+},
+"p_coherent": null
+},
+"edges": {
+"E1": {
+"adjusted": null,
+"ci": [
+-47.264454299858,
+32.63669354380205
+],
+"cluster_unit": "run of stepped current (one baseline each)",
+"confounded_by": [
+"curvature",
+"runs disagree"
+],
+"estimate": -7.313880378027975,
+"inference": {
+"estimator": "wild cluster bootstrap-t (Rademacher, imposed null)",
+"switch_clusters": 40,
+"why": "5 clusters is below 40, where the cluster-robust sandwich is anti-conservative: at five clusters it rejects a true null about 29 per cent of the time against a nominal 5 per cent. The interval and the p-value therefore come from the wild cluster bootstrap-t instead. Note that the bootstrap has a discreteness floor \u2014 with G clusters the smallest attainable two-sided p-value is 2/2^G, so at five clusters no test at the 5 per cent level exists at all."
+},
+"n": 33,
+"n_clusters": 5,
+"name": "E1",
+"note": "POOLED ACROSS 5 RUNS OF STEPPED CURRENT (one side stepped up or down, the other held; both legs since decision 213) on this contact, 33 settled points, one baseline per run and one shared slope (decision 55), in the device's own units per mA. This is the same row the three-source panel draws, chosen for the triangle on 2026-09-11 in place of the historical setting-epoch slope, which is kept in the report beside it. CURVATURE: a bend across the tested currents was detected (p = 0.010), with the peak near 2.2 mA, so one straight-line slope is a poor description of this band and the sign below is the average across the bend, not the direction past the peak. PER RUN: 4 of 5 runs fall with current, 1 rise; the runs' own slopes range from -42.8 to +31.5 device units per mA.",
+"p": 0.7225178629485254,
+"resolved": true,
+"scale": "power_linear",
+"sign": -1,
+"source": "pooled_titration",
+"statistically_established": false
+},
+"E2": {
+"adjusted": {
+"adjusted_for": "amp_mA_Left",
+"answer": "not_resolved",
+"auc": 0.5532873689422211,
+"auc_high": 0.6732359336844218,
+"auc_low": 0.4406605943804017,
+"available": true,
+"ci": [
+-0.05933940561959827,
+0.1732359336844218
+],
+"estimate": 0.05328736894222108,
+"flexibility_spent": 1.0,
+"n_pain_reports": 42.0,
+"n_spectral_samples": 26416.0,
+"nearly_the_covariate": false,
+"p_two_sided": 0.372,
+"partial_r": -0.13298149271375953,
+"partial_r_high": 0.05949325076396261,
+"partial_r_low": -0.23075235528317373,
+"r_power_vs_covariate": -0.04182565712459251,
+"resampling_unit": "one pain report",
+"shape": "line",
+"why": "the band power with amp_mA_Left removed from it as a straight line, the pain scores untouched. the value is 0.553 but its 95% interval runs from 0.441 to 0.673, which includes the 0.5 that coin flipping would give. Nothing is established for this band: it may separate high pain from low pain, it may separate them the other way round, or it may not separate them at all. This is not a finding that the band is useless"
+},
+"ci": [
+-0.06200944778672418,
+0.17784490378189233
+],
+"cluster_unit": "report_id",
+"confounded_by": [],
+"estimate": 0.06448967738260913,
+"inference": {
+"estimator": "cluster-robust (CR0)",
+"switch_clusters": 40,
+"why": "43 clusters is at or above 40, where the cluster-robust sandwich estimator is reliable enough to report directly. Its measured rejection rate against a true null in this regime is 0.060 to 0.076 against a nominal 0.05."
+},
+"n": 39953,
+"n_clusters": 43,
+"name": "E2",
+"note": "The number stored on this estimate is 0.064, which is the area under the curve minus 0.5. THE RAW AREA UNDER THE CURVE IS 0.564 and its 95% interval is 0.438 to 0.678; 0.5 is what coin flipping would give, and 0.5 was subtracted so that this module's existing test of whether an interval excludes zero becomes a test of whether it excludes coin flipping. Clustered on the pain report: 43 pain reports behind 39953 TD and PSD band-power samples, and the confidence interval comes from resampling whole pain reports rather than individual samples, because many samples can share one pain report and therefore share its score exactly. How pain was split into high and low: the pain scores were split into thirds, using one score per pain report: a score of 7 or below counts as low pain, 8 or above counts as high pain, and the scores in between were left out of this comparison. What the power values are: power_linear. the value is 0.564 but its 95% interval runs from 0.438 to 0.678, which includes the 0.5 that coin flipping would give. Nothing is established for this band: it may separate high pain from low pain, it may separate them the other way round, or it may not separate them at all. This is not a finding that the band is useless. This answer was computed by the biomarker page's own estimator, called here on this module's table of TD and PSD band-power samples because no exported table was handed in. The exported table is the intended route; this one runs the same estimator on the same rules. READ AGAIN WITH amp_mA_Left TAKEN OUT of the band power and the pain scores left as they came: the area under the curve is 0.553, interval 0.441 to 0.673, over 42 pain reports; the correlation between band power and pain with the same quantity taken out is -0.133. This second reading describes the first one and does not replace it: the plain reading above is what resolves this edge and sets the verdict (the PI, 2026-09-22).",
+"p": 0.288,
+"resolved": true,
+"scale": "how far above or below coin flipping this band's power gets at telling high-pain moments from low-pain ones, as area under the curve minus 0.5",
+"sign": 1,
+"source": null,
+"statistically_established": false
+},
+"E3": {
+"adjusted": null,
+"ci": [
+-0.2699874706813666,
+-0.03943604058368565
+],
+"cluster_unit": "epoch",
+"confounded_by": [
+"time"
+],
+"estimate": -0.15471175563252612,
+"inference": {
+"estimator": "cluster-robust (CR0)",
+"switch_clusters": 40,
+"why": "90 clusters is at or above 40, where the cluster-robust sandwich estimator is reliable enough to report directly. Its measured rejection rate against a true null in this regime is 0.060 to 0.076 against a nominal 0.05."
+},
+"n": 90,
+"n_clusters": 90,
+"name": "E3",
+"note": "unblocked unless the caller supplied an era-restricted matrix; on the historical record an unblocked estimate carries the amplitude-time confound. Inference is CR0 cluster-robust on 90 clusters, at or above the 40-cluster point where that approximation is usually adequate.",
+"p": 0.0085254424707917,
+"resolved": true,
+"scale": "mA",
+"sign": -1,
+"source": null,
+"statistically_established": true
+}
+},
+"eligibility": {
+"advisories": [
+{
+"kind": "advisory_failed",
+"observed": "indication 'chronic_pain', intent 'adaptive'",
+"page": "WP p. 1, WP p. 13, A610 p. 35",
+"rule_id": "D02",
+"severity": "advisory",
+"short_label": "Adaptive labelled for indication",
+"source": "WP + A610",
+"title": "Adaptive Therapy is labelled for the Parkinson's disease indication only",
+"why": "Adaptive Therapy is labelled for the Parkinson's disease indication only: not satisfied. The white paper's cover page and body both restrict BrainSense Adaptive DBS to the Parkinson's disease indication, and the programming guide describes it as a therapy option for that indication in patients with a single Percept neurostimulator. Like D01 this is a labelling statement about the participant rather than a property of a candidate configuration, so it is surfaced on every report. The operative gate is D03, which is what the software actually enforces."
+},
+{
+"kind": "recorded_value",
+"observed": "programming mode recorded as 'parkinsons'",
+"page": "p. 9, p. 13 (workflow steps at A610 pp. 41-42)",
+"rule_id": "D03",
+"severity": "blocking",
+"short_label": "Programmed in Parkinson's mode",
+"source": "WP",
+"title": "On shipping software a participant not programmed in Parkinson's mode cannot finish Adaptive Therapy setup",
+"why": "On shipping software a participant not programmed in Parkinson's mode cannot finish Adaptive Therapy setup: satisfied, and the value is recorded here because the meaning of the rest of this report depends on it."
+},
+{
+"kind": "recorded_value",
+"observed": "n_neurostimulators recorded as 1",
+"page": "pp. 35-36",
+"rule_id": "D04",
+"severity": "unknown",
+"short_label": "Single neurostimulator implanted",
+"source": "A610",
+"title": "A single neurostimulator is required",
+"why": "A single neurostimulator is required: satisfied, and the value is recorded here because the meaning of the rest of this report depends on it."
+},
+{
+"kind": "advisory_not_determinable",
+"observed": "",
+"page": "p. 37",
+"rule_id": "D05",
+"severity": "advisory",
+"short_label": "No general DBS contraindication",
+"source": "WP",
+"title": "General DBS contraindications",
+"why": "General DBS contraindications: could not be determined from the inputs given, so it is reported rather than resolved. DBS Therapy is contraindicated for patients unable to properly operate the neurostimulator. Diathermy, transcranial magnetic stimulation and certain MRI procedures using a full body transmit radio-frequency coil are contraindicated procedures. Only the operability half of this rule is a field on a participant record; the procedures are events, so they are listed here for a clinician to confirm rather than checked in code."
+},
+{
+"kind": "advisory_no_predicate",
+"observed": "",
+"page": "p. 38",
+"rule_id": "D06",
+"severity": "advisory",
+"short_label": "Tissue-damage warning heeded",
+"source": "WP",
+"title": "Tissue-damage warning attached to the parameters this module recommends",
+"why": "Tissue-damage warning attached to the parameters this module recommends: reported for the record; this rule has no machine check. There is a potential risk of brain tissue damage using stimulation parameter settings of high amplitudes and wide pulse widths. This module's output is exactly a pair of amplitudes and a pulse width, so the warning is on its critical path and is reproduced next to every recommended setting. It carries no predicate because the document states no numeric limit for it; the numeric ceilings that do exist are D27, D31 and D41."
+},
+{
+"kind": "advisory_failed",
+"observed": "NO bin in 22.0-27.0 Hz reaches the 1.2 uVp capture gate; the largest is 0.75 uVp across 5 bins. Threshold capture is likely to be unreliable at this centre frequency even though the workflow is not blocked",
+"page": "A610 p. 37, A610 p. 72; discrepant value at WP p. 8",
+"rule_id": "D09",
+"severity": "advisory",
+"short_label": "Signal above 1.2 \u00b5Vp",
+"source": "A610 (gate) and WP (auto-detection floor)",
+"title": "Minimum signal amplitude for threshold capture is 1.2 uVp",
+"why": "Minimum signal amplitude for threshold capture is 1.2 uVp: not satisfied. To capture LFP thresholds and set up Adaptive Therapy the programming guide recommends an electrode configuration whose alpha-beta band LFP amplitude is greater than 1.2 uVp, and it calls a signal below 1.2 uVp below the system minimum for auto-detection. The ADAPT-PD methodology paper calls 1.2 uVp the lowest acceptable power to run adaptive DBS. The white paper gives a different number, 1.1 uVp, as the floor above which the signal test automatically selects the largest peak. The two documents disagree and neither explains the difference, so this module gates on the more conservative 1.2 uVp, records 1.1 uVp as the auto-detection floor, and displays both. Which number governs a manually selected band is unresolved."
+},
+{
+"kind": "advisory_no_predicate",
+"observed": "",
+"page": "p. 12",
+"rule_id": "D14",
+"severity": "advisory",
+"short_label": "Averaging windows non-overlapping",
+"source": "WP",
+"title": "Power averaging is a unique, non-overlapping average",
+"why": "Power averaging is a unique, non-overlapping average: reported for the record; this rule has no machine check. The power averaging duration is not a moving average; each average contains a unique, non-overlapping set of data. Consecutive power samples therefore share no raw data, which is worth stating because it is the assumption an effective-sample-size calculation would use. They remain serially correlated through the underlying physiology, so independence of the raw windows is not independence of the samples."
+},
+{
+"kind": "recorded_value",
+"observed": "impedance 7286.0 ohms on a 'sensight' lead, impedance test performed: True, measured at a fixed measurement current of 0.4 mA, recorded '2026-09-02 20:25 UTC'. The newest impedance test of all, recorded '2026-09-24 20:29 UTC', used the device's automatic low-current mode and read 12109.0 ohms -- ruled a spurious fail at that measurement current by the principal investigator on 2026-09-12, not a real open circuit",
+"page": "WP p. 8, A610 p. 36, A610 p. 47",
+"rule_id": "D16",
+"severity": "blocking",
+"short_label": "Sensing impedance in range",
+"source": "WP + A610",
+"title": "Impedance gates the sensing channel, and the test is a precondition",
+"why": "Impedance gates the sensing channel, and the test is a precondition: satisfied, and the value is recorded here because the meaning of the rest of this report depends on it."
+},
+{
+"kind": "recorded_value",
+"observed": "power-versus-amplitude slope sign -1 (must be negative) -- a point sign that is NOT statistically established: interval -47.3 to 32.6, p 0.723 and power-versus-pain slope sign 1 (must be positive) -- a point sign that is NOT statistically established: interval -0.062 to 0.178, p 0.288",
+"page": "A610 p. 38, WP p. 14",
+"rule_id": "D19",
+"severity": "blocking",
+"short_label": "Signs suit control law",
+"source": "A610 + WP",
+"title": "The control polarity of the two therapy-driving modes is fixed and cannot be inverted",
+"why": "The control polarity of the two therapy-driving modes is fixed and cannot be inverted: satisfied, and the value is recorded here because the meaning of the rest of this report depends on it."
+},
+{
+"kind": "advisory_not_determinable",
+"observed": "",
+"page": "WP p. 14 Table 1 ('Default Settings'), A610 p. 38, p. 42; FDA SSED P960009/S478 Table 2 p. 8; Tip Cards p. 8",
+"rule_id": "D20",
+"severity": "advisory",
+"short_label": "Timing within documented ranges",
+"source": "WP + A610 + FDA",
+"title": "Per-mode timing defaults, and the documented range each may be set within",
+"why": "Per-mode timing defaults, and the documented range each may be set within: could not be determined from the inputs given, so it is reported rather than resolved. The two therapy-driving modes differ throughout in their DEFAULTS: FFT size 256 against 64 points, adaptive update rate 5 Hz against 20 Hz, averaging 1200 ms against 100 ms, onset 1200 ms against 200 ms, detection blanking 2000 ms against 550 ms, and transition durations of 2.5 and 5 minutes against 250 ms in each direction. Every one of those is adjustable, and the selection ranges are: onset 0-30 s in either mode (the clinician tablet, 2026-09-15; the FDA summary prints 0-6 min for Dual), transition up and down 2 s-30 min each (white paper p. 16, confirmed on the tablet; the FDA summary prints 250 ms), averaging 0-30 s (tip card, tablet), detection blanking 0-30 s (tablet). No range is documented for the adaptive startup delay. A declared timing value is judged against the documented range, not against the default; a value with no documented range is reported and not judged. Dual Threshold sets its two thresholds manually while both single modes compute one as 0.75 times the difference between the captures added to the lower capture. The defaults are exposed as THRESHOLD_MODE_TABLE and the ranges as TIMING_RANGE_BY_KEY so that downstream code reads them rather than restating them."
+},
+{
+"kind": "advisory_not_determinable",
+"observed": "",
+"page": "A610 Adaptive Therapy setup screens, read 2026-09-15; FDA SSED P960009/S478 Table 2 p. 8; Stanslaski et al. 2024 for the trial's own settings",
+"rule_id": "D21",
+"severity": "advisory",
+"short_label": "Onset duration 0\u201330 s",
+"source": "Clinician tablet + FDA + ADAPT-PD",
+"title": "Onset duration inside its selection range: 0-30 s (Dual, both timers), 0-30 s (Single)",
+"why": "Onset duration inside its selection range: 0-30 s (Dual, both timers), 0-30 s (Single): could not be determined from the inputs given, so it is reported rather than resolved. The clinician tablet offers the onset duration from 0.00 ms to 30.00 s on both Dual Threshold timers and in Single Threshold mode (read directly by the PI, 2026-09-15). The FDA approval summary prints 0 to 6 min for Dual Threshold; neither Medtronic manual on this machine prints a range, so the tablet's 30 s is the value applied and the FDA figure is recorded as a discrepancy. The ADAPT-PD trial let its clinicians set 1.2 to 2 seconds (Dual) and 200 to 500 milliseconds (Single); until 2026-09-13 this rule treated the trial's setting as the device's range, under which the 30 s onset RCS08's device runs would have read as out of range. A value outside the documented range cannot be entered on the tablet."
+},
+{
+"kind": "advisory_no_predicate",
+"observed": "",
+"page": "Stanslaski et al. 2024, WP p. 13",
+"rule_id": "D22",
+"severity": "advisory",
+"short_label": "Mode amplitude behaviour understood",
+"source": "ADAPT-PD + WP",
+"title": "Adaptive amplitude behaviour differs between the two therapy-driving modes",
+"why": "Adaptive amplitude behaviour differs between the two therapy-driving modes: reported for the record; this rule has no machine check. In single threshold mode the device adjusted amplitude over 250 ms between the upper and lower stimulation limits, producing a trapezoidal pattern that reaches the limits. In dual threshold mode it moved more slowly and each adjustment was incremental rather than ramping fully between the limits, and while the LFP remains between the two thresholds the amplitude is held at whatever value it had when the LFP entered that state. Which mode is chosen therefore changes the dose the participant receives as much as the thresholds do."
+},
+{
+"kind": "advisory_not_determinable",
+"observed": "",
+"page": "p. 39",
+"rule_id": "D23",
+"severity": "advisory",
+"short_label": "One mode per group",
+"source": "A610",
+"title": "One threshold mode per group",
+"why": "One threshold mode per group: could not be determined from the inputs given, so it is reported rather than resolved. The same threshold mode is used for all adaptive programs in a group. This is surfaced rather than enforced because this evaluator is handed a single candidate configuration and cannot see the group's other programs; when the caller declares them in group_threshold_modes the check returns a real verdict."
+},
+{
+"kind": "recorded_value",
+"observed": "candidate rate 55.0 Hz against the rate frozen in the device's newest active sensing group 'GROUP_D': 55.0 Hz; committed for this attempt: True",
+"page": "p. 34 footnote a, p. 44",
+"rule_id": "D30",
+"severity": "blocking",
+"short_label": "Rate and width locked",
+"source": "A610",
+"title": "Pulse width and rate become unadjustable once BrainSense is set up",
+"why": "Pulse width and rate become unadjustable once BrainSense is set up: satisfied, and the value is recorded here because the meaning of the rest of this report depends on it."
+},
+{
+"kind": "recorded_value",
+"observed": "rate 55.0 Hz and pulse width 100.0 us against a BrainSense minimum rate of 55.0 Hz, maximum rate of None Hz and maximum pulse width of None us",
+"page": "p. 34, p. 35; general envelope at A610-MD p. 119",
+"rule_id": "D31",
+"severity": "unknown",
+"short_label": "BrainSense rate floor known",
+"source": "A610",
+"title": "A BrainSense group has a narrower parameter envelope whose values are unpublished",
+"why": "A BrainSense group has a narrower parameter envelope whose values are unpublished: satisfied, and the value is recorded here because the meaning of the rest of this report depends on it."
+},
+{
+"kind": "advisory_no_predicate",
+"observed": "",
+"page": "A610 p. 35, p. 43, WP p. 13",
+"rule_id": "D33",
+"severity": "advisory",
+"short_label": "Patient controls understood",
+"source": "A610 + WP",
+"title": "What the patient can still do under Adaptive Therapy",
+"why": "What the patient can still do under Adaptive Therapy: reported for the record; this rule has no machine check. Under Adaptive Therapy the patient can turn stimulation on and off, pause and resume Adaptive Therapy, and switch groups. The patient cannot directly increase or decrease amplitude, and cannot do so even while Adaptive Therapy is paused; adjusting amplitude requires switching to a group set to Sensing Only or Off. This holds even when only one hemisphere has BrainSense status set to Adaptive. It is recorded because it changes what self-management the participant retains during a closed-loop trial, which is a consent and protocol matter rather than a configuration check."
+},
+{
+"kind": "advisory_no_predicate",
+"observed": "",
+"page": "A610 pp. 35-36, WP p. 13",
+"rule_id": "D35",
+"severity": "advisory",
+"short_label": "Automatic suspensions understood",
+"source": "A610 + WP",
+"title": "Automatic suspensions of BrainSense and Adaptive Therapy",
+"why": "Automatic suspensions of BrainSense and Adaptive Therapy: reported for the record; this rule has no machine check. BrainSense is automatically disabled in MRI mode and during a recharging session, and re-enabled afterwards. No LFP data is recorded during an impedance test and Adaptive Therapy is temporarily disabled during one. Adaptive Therapy is automatically paused during recharging and resumed afterwards, and it is not an eligible stimulation option in MRI mode, so entering MRI mode requires turning stimulation off for the adaptive group or switching to a group with a bipolar configuration. The consequence for the report is that a deployment must state the expected DUTY CYCLE of the loop and not only its configuration: for a rechargeable device the recharge schedule is a scheduled outage of the controller, and the Paused Amplitude is the therapy delivered during it."
+},
+{
+"kind": "advisory_no_predicate",
+"observed": "",
+"page": "p. 19",
+"rule_id": "D36",
+"severity": "advisory",
+"short_label": "Recharge estimate not modelled",
+"source": "WP",
+"title": "The recharge interval calculator cannot model Adaptive Therapy",
+"why": "The recharge interval calculator cannot model Adaptive Therapy: reported for the record; this rule has no machine check. Because Adaptive Therapy cannot be predicted, the recharge interval calculator requires Adaptive Therapy to be paused in order to be used. Any recharge-interval estimate this module displays for an adaptive configuration is therefore an estimate for the PAUSED configuration and has to be labelled that way, or it will be read as an estimate of something nobody computed."
+},
+{
+"kind": "advisory_no_predicate",
+"observed": "",
+"page": "p. 35",
+"rule_id": "D37",
+"severity": "advisory",
+"short_label": "Interference risk understood",
+"source": "A610",
+"title": "Electromagnetic interference can move the stimulation amplitude",
+"why": "Electromagnetic interference can move the stimulation amplitude: reported for the record; this rule has no machine check. Electromagnetic interference may be misinterpreted as LFP signal during sensing and cause an increase or decrease in stimulation amplitude, although the amplitude stays inside the clinician-defined Adaptive Amplitude Limits. The remedies offered are to move away from the source, pause Adaptive Therapy, switch groups, or turn stimulation off. Adaptive Therapy has not been studied in patients with other active implanted devices. This is one more reason the two amplitude limits are a safety decision and not merely a range."
+},
+{
+"kind": "advisory_not_determinable",
+"observed": "",
+"page": "A610 p. 22, SL p. 10",
+"rule_id": "D41",
+"severity": "advisory",
+"short_label": "Charge density within limit",
+"source": "A610 (limit) and SL (lead area)",
+"title": "Charge density above 30 microcoulombs per square centimetre per phase",
+"why": "Charge density above 30 microcoulombs per square centimetre per phase: could not be determined from the inputs given, so it is reported rather than resolved. A survey of the literature on electrical stimulation of neural tissue suggests damage may occur above 30 microcoulombs per square centimetre per phase, and the Medtronic DBS system is capable of producing charge densities in excess of that. A warning appears and can be acknowledged and overridden, and programmed patient limits are counted when charge density is computed, so an upper limit alone can trigger it. The calculation cannot be reproduced here: the lead specification gives the lead-level surface area, 13.55 square centimetres for the 33 cm lead and 17.26 for the 42 cm lead, not the per-electrode area a charge-density calculation needs. So the module displays the device's own charge-density state rather than recomputing it, and this rule checks that the state has been recorded."
+},
+{
+"kind": "advisory_no_predicate",
+"observed": "",
+"page": "p. 22",
+"rule_id": "D42",
+"severity": "advisory",
+"short_label": "No out-of-range delivery",
+"source": "A610",
+"title": "Out-of-range delivery is a silent underdelivery failure mode",
+"why": "Out-of-range delivery is a silent underdelivery failure mode: reported for the record; this rule has no machine check. Certain combinations of amplitude, pulse width and rate are too high for the system to provide in its current state, producing an alert that stimulation is not being provided at the level shown, and on a rechargeable device a low battery can cause this. It matters here because every analysis in this platform assumes the programmed amplitude equals the delivered amplitude, and this is the documented mechanism by which that assumption fails without anyone noticing."
+},
+{
+"kind": "advisory_no_predicate",
+"observed": "",
+"page": "p. 10",
+"rule_id": "D43",
+"severity": "advisory",
+"short_label": "Within lead electrical limits",
+"source": "SL",
+"title": "Lead electrical specifications, including a lead-length amplitude ceiling",
+"why": "Lead electrical specifications, including a lead-length amplitude ceiling: reported for the record; this rule has no machine check. SenSight models B33005 and B33015 have an expected lifetime of 5 years, a maximum conductor resistance of 100 ohms at all lengths, lengths of 33 and 42 cm, surface areas of 13.55 and 17.26 square centimetres, a diameter of 1.36 mm, a straight shape, 8 cylindrical distal electrodes with a 1.0 mm distal tip distance, 8 in-line proximal contacts at 2.2 mm spacing, and polyurethane and platinum iridium construction. The footnote states that electrical resistance is proportional to lead length and that long lengths have higher resistance that may limit the amplitude, which is a per-participant amplitude ceiling depending on which lead length was implanted."
+},
+{
+"kind": "advisory_no_predicate",
+"observed": "",
+"page": "p. 19",
+"rule_id": "D45",
+"severity": "advisory",
+"short_label": "Battery cost acceptable",
+"source": "WP",
+"title": "Battery cost of the two adaptive modes",
+"why": "Battery cost of the two adaptive modes: reported for the record; this rule has no machine check. In the ADAPT-PD study, using Percept PC devices, Dual Threshold patients showed a median longevity improvement against conventional DBS of 5 percent per year while Single Threshold patients showed a median reduction of 4 percent per year. For a rechargeable device a one hour streaming session results in approximately 6 percent battery drain, and long telemetry sessions shorten the recharge interval without affecting overall service life. This is recorded because the choice of threshold mode has a maintenance cost for the participant as well as a control-theoretic one."
+},
+{
+"kind": "advisory_not_determinable",
+"observed": "",
+"page": "p. 11",
+"rule_id": "D46",
+"severity": "advisory",
+"short_label": "Snapshot storage not overwritten",
+"source": "WP",
+"title": "Snapshot and event capacity, with silent overwrite",
+"why": "Snapshot and event capacity, with silent overwrite: could not be determined from the inputs given, so it is reported rather than resolved. Percept RC records up to 200 LFP snapshots, for example 100 per hemisphere if bilateral, and stores up to 800 non-LFP events, and when the maximum is exceeded the older snapshots are overwritten. A snapshot is approximately 30 seconds of 250 Hz time-domain data collected after the patient event is received, converted to the frequency domain, with only the averaged frequency-domain content stored and the time domain discarded. The store is a circular buffer with a hard capacity, so a study that relies on patient-marked events has to schedule downloads against the 100 per hemisphere ceiling or lose data with no error anywhere."
+},
+{
+"kind": "advisory_not_determinable",
+"observed": "",
+"page": "p. 12",
+"rule_id": "D47",
+"severity": "advisory",
+"short_label": "Streaming export limits respected",
+"source": "WP",
+"title": "Streaming export limits and the tablet's screen timeout",
+"why": "Streaming export limits and the tablet's screen timeout: could not be determined from the inputs given, so it is reported rather than resolved. A610 version 5.0 supports exporting files with up to 8 hours of streaming data. There is no maximum streaming duration, but long sessions fill tablet memory, lengthen JSON generation and shorten the recharge interval. The tablet screen must be kept awake; for a Percept RC the clinician application keeps it awake for one additional hour, after which user interaction at least every 10 minutes is required. A session longer than the export ceiling is therefore partly unexportable."
+},
+{
+"kind": "advisory_not_determinable",
+"observed": "",
+"page": "p. 20",
+"rule_id": "D48",
+"severity": "advisory",
+"short_label": "No switching while streaming",
+"source": "WP",
+"title": "Turning stimulation on or off while streaming creates a seven-second hole",
+"why": "Turning stimulation on or off while streaming creates a seven-second hole: could not be determined from the inputs given, so it is reported rather than resolved. With A610 v5.0, turning stimulation on or off while streaming causes a 7 second initialising period during which data is not available in the JSON export. The titration protocol should therefore move between two non-zero amplitudes rather than through zero wherever the science allows it, and any analysis must exclude those 7 seconds after each transition explicitly rather than assuming a wash-in window covers them."
+},
+{
+"kind": "advisory_no_predicate",
+"observed": "",
+"page": "p. 16",
+"rule_id": "D49",
+"severity": "advisory",
+"short_label": "Home streaming cadence followed",
+"source": "PTG",
+"title": "Home streaming cadence as instructed to this participant",
+"why": "Home streaming cadence as instructed to this participant: reported for the record; this rule has no machine check. The patient guide instructs the patient to keep the communicator within three feet, notes that the screen stays on for 60 minutes and must then be touched, states that data cannot be recorded when the screen is off, and asks the patient to try to stream for 30 to 60 minutes once a day. That is the actual sampling cadence available for any home-collected control signal, and it bounds what a between-visit study can observe, so a design that assumes continuous home data is assuming something the instructions do not provide."
+},
+{
+"kind": "advisory_no_predicate",
+"observed": "",
+"page": "p. 45, p. 72",
+"rule_id": "D50",
+"severity": "advisory",
+"short_label": "Manufacturer titration followed",
+"source": "A610",
+"title": "The manufacturer prescribes a specific titration, and it is short",
+"why": "The manufacturer prescribes a specific titration, and it is short: reported for the record; this rule has no machine check. Under the heading for using LFP streaming data to view real-time effects of stimulation, the guide says to pause Adaptive Therapy if configured, set amplitude to 0.0 mA for 45 to 60 seconds to establish a physiologic baseline, start streaming, increase stimulation by 0.1 to 0.5 mA per step with a ramp interval adjustable from 0.5 to 10 seconds, stream for 30 to 45 seconds after each adjustment to determine the effect on LFP power, and then explore the correlation between patient symptoms and LFP reduction. The troubleshooting table recommends the same procedure when no responsive signal is found. This is the measurement the deployability screen approximates from historical data. It takes well under an hour per channel to perform directly and it is free of the amplitude-versus-time confound by construction, so the retrospective estimate should be treated as a way of choosing which channels to titrate rather than as a substitute for titrating them."
+},
+{
+"kind": "advisory_no_predicate",
+"observed": "",
+"page": "pp. 73-74 (Timeline observable at p. 39, p. 56)",
+"rule_id": "D51",
+"severity": "advisory",
+"short_label": "Device failure modes known",
+"source": "A610",
+"title": "The device names its own closed-loop failure modes and their remedies",
+"why": "The device names its own closed-loop failure modes and their remedies: reported for the record; this rule has no machine check. The troubleshooting table enumerates four adaptive failure states and what to change for each. For stimulation chronically too low: raise the maximum amplitude limit if the Timeline shows it stuck at the upper limit, otherwise lower the upper LFP threshold, then the lower LFP threshold, then raise the minimum amplitude limit. For stimulation transiently too low: lengthen Transition Down, shorten Transition Up, decrease Upper Onset and increase Lower Onset, then raise the minimum amplitude limit, then decrease Detection Blanking. The two chronically and transiently too high states are the mirror images. Repeated ramping to the upper limit immediately after reaching the lower limit in Single Threshold mode is fixed by increasing the Detection Blanking Duration, and a transient jump to the upper limit immediately after resuming is fixed by increasing the Adaptive Startup Delay. These are the diagnostic states the deployment panel should predict and, once the loop runs, report against, and the observable that discriminates them is the Timeline percentage of time above, between and below thresholds."
+},
+{
+"kind": "recorded_value",
+"observed": "sensing on 1-3; this lead stimulates on contact 2 (programmed cathode 2a-2b-2c), where the device allows sensing on 1-3 only, which is this pair",
+"page": "A610 p. 36; WP p. 8; Tip Cards pp. 7-8",
+"rule_id": "D52",
+"severity": "blocking",
+"short_label": "Sensing pair flanks stimulation",
+"source": "A610 + WP + BrainSense Tip Cards",
+"title": "The sensing pair must flank the contacts that stimulate",
+"why": "The sensing pair must flank the contacts that stimulate: satisfied, and the value is recorded here because the meaning of the rest of this report depends on it."
+}
+],
+"checked": 52,
+"deferred": [
+{
+"counts_toward_verdict": false,
+"deferral_reason": "Both read `indication`. D01 asks whether the device is approved for this indication at all; D02 asks the narrower question of whether Adaptive Therapy specifically is labelled for it. On an off-label indication both fail from the one fact, and D02's condition is strictly the narrower of the two, so D02 owns the finding whenever the intent is adaptive and D01 defers to it. When the intent is NOT adaptive, D02 passes by construction and D01 stands on its own, which is why deferral is evaluated against the owner's actual verdict rather than applied unconditionally.",
+"deferred_to": "D02",
+"kind": "deferred_duplicate",
+"observed": "indication recorded as 'chronic_pain'",
+"page": "p. 37",
+"rule_id": "D01",
+"severity": "advisory",
+"short_label": "Approved indication for device",
+"source": "WP",
+"title": "Chronic pain is not an approved indication for this device",
+"why": "Chronic pain is not an approved indication for this device: not satisfied. Medtronic DBS Therapy is approved for Parkinson's disease, essential tremor, dystonia, obsessive-compulsive disorder and epilepsy. Chronic pain is not among them, so everything this platform does with this participant is outside the approved labelling. This is advisory rather than blocking because it is the standing condition of the research programme rather than a defect in a candidate configuration, and it belongs on the face of every report rather than in a footnote."
+}
+],
+"eligible": true,
+"failures": [],
+"summary": "eligible (52 rules checked, 30 advisory)",
+"unknowns": []
+},
+"evidence_not_evaluated": [],
+"licensed": true,
+"manifest": {
+"amp_limit_ma": 5.0,
+"hemisphere": "Left",
+"n_epochs": 120,
+"n_psd_rows": 309396,
+"n_table_rows": 5518224,
+"pain_score": "nrs",
+"power_scale": "power_linear",
+"washin_s": 60.0
+},
+"pain_score": {
+"fell_back_to_nrs": true,
+"key": "nrs",
+"label": "NRS (0\u201310)",
+"reason": "no pain score was sent with the request, so NRS was used",
+"requested": null
+},
+"participant": "2e3c75c00d7f4f37b53a048d195f11da",
+"prescription": {
+"couplings": [],
+"duty": {
+"amplitude_duty": null,
+"caveats": [
+"Computed on band power recorded under the participant's ACTUAL programming, not under closed-loop control. It assumes the same power would occur once the loop is closed, which is false precisely when the band responds to amplitude. Treat as a way of comparing configurations, not as a prediction of the device Timeline.",
+"57 of 53511 samples share a timestamp with another sample; the interval was measured between DISTINCT timestamps so that duplicates do not collapse it toward zero",
+"the samples arrive every 3 s, which is LONGER than the 3 s averaging duration, so each sample already represents at least one controller step and no re-averaging was applied. The state fractions below are therefore fractions of the SAMPLES on record rather than of continuous time, and because a chronic record is sampled in bursts they are not a fraction of the day.",
+"COVERAGE 0.427%. The record contains 44.6 hours of signal spread across 10443 hours of elapsed time, so the state fractions below are fractions of the SAMPLES ON RECORD and must not be reported as percentages of the day \u2014 the two differ here by a factor of about 234. A chronic Percept record is sampled in short bursts minutes apart, and the bursts are not a random sample of the day either, since streaming happens when the participant or the clinic initiates it."
+],
+"coverage_frac": 0.004270042590684699,
+"fractions_are_of_observed_samples": true,
+"hours_observed": 10443.10426722222,
+"hours_of_signal": 44.5925,
+"lfp_frac_above": 0.0711442507148063,
+"lfp_frac_below": 0.1751789351722076,
+"lfp_frac_between": 0.7536768141129861,
+"max_time_at_lower_limit_s": 1680.0,
+"max_time_at_upper_limit_s": 603.0,
+"mean_amplitude_mA": null,
+"onset_inoperative": false,
+"onset_windows_lower": 10,
+"onset_windows_upper": 10,
+"stim_frac_at_lower": 0.20116941751165718,
+"stim_frac_at_upper": 0.2819184368292502,
+"stim_frac_mid": 0.5169121456590926,
+"transitions_per_hour": 0.12572889884103852
+},
+"fields": [
+{
+"confidence": null,
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": null,
+"enter_as": null,
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Sensing channel",
+"programmed": null,
+"range": null,
+"range_source": null,
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "contacts",
+"value": "ONE_THREE_LEFT",
+"why": "Chosen by the biomarker screen. Changing it destroys the captured thresholds and requires recapture (D29)."
+},
+{
+"confidence": null,
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": null,
+"enter_as": null,
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Centre frequency",
+"programmed": null,
+"range": [
+8.0,
+30.0
+],
+"range_source": "A610, adaptive band",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "Hz",
+"value": 24.5,
+"why": "The validated band centre. Must lie inside the adaptive sensing band."
+},
+{
+"confidence": null,
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": null,
+"enter_as": null,
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Band width",
+"programmed": null,
+"range": null,
+"range_source": null,
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "Hz",
+"value": 5.0,
+"why": "The width the band was validated at; changing it changes the feature."
+},
+{
+"confidence": null,
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": "dual",
+"enter_as": null,
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Threshold mode",
+"programmed": null,
+"range": null,
+"range_source": null,
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "",
+"value": "dual",
+"why": "Recommended from the biomarker's own timescale, not hardcoded; see percept_adaptive.recommend_threshold_mode."
+},
+{
+"confidence": null,
+"confirm": "enterable",
+"design_rule_note": "Noise-only design rule (fitted on this participant's own recordings, L4 two components): the stored pair is +-25.0 from its midpoint; the rule needs +-25 at the timing shown on this card to keep noise-only threshold crossings at or below one an hour.",
+"device_default": null,
+"enter_as": null,
+"occupancy_note": "At the 3 s averaging duration in force, 39106 averaged readings: 44.0% above the upper threshold, 12.8% between the two, 43.2% below the lower threshold. The device runs this 3 s averaging today, so the answer is the same on the device's own clock.",
+"origin": "participant",
+"parameter": "Upper LFP threshold",
+"programmed": 242.0,
+"range": null,
+"range_source": "documented 0.55-400 uVrms on the programmer's own scale (FDA SSED P960009/S478 (20 Feb 2025), Table 2 'Key aDBS Configurable Parameters', p. 8); the value here is in the device's exported units, so the range is reported and not applied",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "LFP power",
+"value": 241.1398461407831,
+"why": "Placed from the record (decision 180): the participant's own median averaged reading at 3 s (216.14 device units) plus the noise-only design rule's minimum of +-25 at the card's timing. The tablet's own capture would place this at 206.38 (the capture mean at the LOWER amplitude, D24)."
+},
+{
+"confidence": null,
+"confirm": "enterable",
+"design_rule_note": "Noise-only design rule (fitted on this participant's own recordings, L4 two components): the stored pair is +-25.0 from its midpoint; the rule needs +-25 at the timing shown on this card to keep noise-only threshold crossings at or below one an hour.",
+"device_default": null,
+"enter_as": null,
+"occupancy_note": "At the 3 s averaging duration in force, 39106 averaged readings: 44.0% above the upper threshold, 12.8% between the two, 43.2% below the lower threshold. The device runs this 3 s averaging today, so the answer is the same on the device's own clock.",
+"origin": "participant",
+"parameter": "Lower LFP threshold",
+"programmed": 192.0,
+"range": null,
+"range_source": "documented 0.55-400 uVrms on the programmer's own scale (FDA SSED P960009/S478 (20 Feb 2025), Table 2 'Key aDBS Configurable Parameters', p. 8); the value here is in the device's exported units, so the range is reported and not applied",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "LFP power",
+"value": 191.1398461407831,
+"why": "Placed from the record (decision 180): the median minus the same +-25. The tablet's own capture would place this at 158.67 (the capture mean at the UPPER amplitude, D24)."
+},
+{
+"confidence": "High",
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": 1200.0,
+"enter_as": "0 min 30 s",
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Upper onset duration",
+"programmed": 30000.0,
+"range": [
+0.0,
+30000.0
+],
+"range_source": "selection range Clinician tablet (A610), Adaptive Therapy setup screens, read by the PI on 2026-09-15; the FDA summary (FDA SSED P960009/S478 (20 Feb 2025), Table 2 'Key aDBS Configurable Parameters', p. 8) prints 0-6 min for Dual, not applied",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "ms",
+"value": 30000.0,
+"why": "How long the power must stay ABOVE the upper threshold before the amplitude starts to rise. Separately adjustable from the lower onset; the manufacturer's troubleshooting table directs the clinician to decrease this one while increasing the other when stimulation is transiently too low (D51). Ten confirmations of the 3 s averaged reading: the shortest onset that holds noise-only threshold crossings at or below one an hour at the stored separation on this participant's own signal (a fitted slow-level model's noise simulation), and replayed on held-out stretches it switches the current 2.5 times an hour with none undone, against 34-40 an hour with about 49 undone for the 30 s averaging / 30 s onset the device runs today."
+},
+{
+"confidence": "Medium",
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": 1200.0,
+"enter_as": "0 min 30 s",
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Lower onset duration",
+"programmed": 30000.0,
+"range": [
+0.0,
+30000.0
+],
+"range_source": "selection range Clinician tablet (A610), Adaptive Therapy setup screens, read by the PI on 2026-09-15; the FDA summary (FDA SSED P960009/S478 (20 Feb 2025), Table 2 'Key aDBS Configurable Parameters', p. 8) prints 0-6 min for Dual, not applied",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "ms",
+"value": 30000.0,
+"why": "How long the power must stay BELOW the lower threshold before the amplitude starts to fall. Same measurement as the upper onset; the replay applies one onset to both directions, so equal timers are the honest choice, and asymmetry is the manufacturer's first lever if the delivered current turns out transiently too low or too high (D51)."
+},
+{
+"confidence": "High",
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": 1200.0,
+"enter_as": null,
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Averaging duration",
+"programmed": 3000.0,
+"range": [
+0.0,
+30000.0
+],
+"range_source": "documented range Medtronic BrainSense Tip Cards (2020, FIELDPORTAL1594651482409), p. 8",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "ms",
+"value": 3000.0,
+"why": "The validated feature was computed on a 4.1 s window and 3 s is the nearest the device offers. CORRECTED 2026-09-13, in answer to a direct question: once the onset is properly re-tuned at EACH averaging duration (rather than compared at one onset held fixed in seconds, the confound that inflated some of the contest's own switching-rate numbers), the switching rate is nearly flat, about 3-4 an hour, from 3 s all the way to 30 s, on both the calibrated grid's own threshold pair and the device's actual programmed 167/166 pair. What genuinely differs is how long a confirmation takes: at 3 s averaging the shortest onset reaching zero undone switches is about 21-24 s; at 30 s averaging the same stability needs 90-180 s. Short averaging is kept for that reason -- it reaches a confirmed decision in a quarter to a sixth of the time, at an equal switching rate -- not because it switches less."
+},
+{
+"confidence": "Low",
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": 2000.0,
+"enter_as": "0 min 30 s",
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Detection blanking duration",
+"programmed": 30000.0,
+"range": [
+0.0,
+30000.0
+],
+"range_source": "selection range Clinician tablet (A610), Adaptive Therapy setup screens, read by the PI on 2026-09-15; no document prints one",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "ms",
+"value": 30000.0,
+"why": "Undetermined by the record: at a filtering onset every blanking value from 3 to 60 s gives the identical switching rate. Equal to the onset stops a decision being re-classified while the ramp it triggered is still under way, and is what runs today."
+},
+{
+"confidence": "Low",
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": 150000.0,
+"enter_as": "0 min 30 s",
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Transition up duration",
+"programmed": 30000.0,
+"range": [
+2000.0,
+1800000.0
+],
+"range_source": "selection range Medtronic BrainSense Adaptive white paper, p. 16 (Advanced Settings sliders), confirmed on the tablet (2026-09-15); the FDA summary prints 250 ms-30 min",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "ms",
+"value": 30000.0,
+"why": "How long the amplitude takes to rise across the full limit range. In Dual mode the adjustment is incremental rather than a full ramp between the limits (D22), so this sets a RATE, not a dwell time. The record cannot decide this: the band's slow level carries over with a time constant of hours, so every ramp on the device's grid is fast against it, and 4 s to 60 s replay identically at any onset that filters. 30 s finishes before the next decision could arrive (onset plus blanking) and is inside every method's acceptable set."
+},
+{
+"confidence": "Low",
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": 300000.0,
+"enter_as": "0 min 30 s",
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Transition down duration",
+"programmed": 30000.0,
+"range": [
+2000.0,
+1800000.0
+],
+"range_source": "selection range Medtronic BrainSense Adaptive white paper, p. 16 (Advanced Settings sliders), confirmed on the tablet (2026-09-15); the FDA summary prints 250 ms-30 min",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "ms",
+"value": 30000.0,
+"why": "How long the amplitude takes to fall across the full limit range. In Dual mode the adjustment is incremental rather than a full ramp between the limits (D22), so this sets a RATE, not a dwell time. Same evidence as the transition up; nothing in the record distinguishes the two directions."
+},
+{
+"confidence": "Medium",
+"confirm": "check_on_device",
+"design_rule_note": null,
+"device_default": null,
+"enter_as": "0 min 15 s",
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Adaptive startup delay",
+"programmed": 15000.0,
+"range": null,
+"range_source": "range NOT published in any source found (manuals, FDA summary, papers, toolkits); read off Advanced Settings",
+"robustness_note": null,
+"startup_bias_note": "Two ways of measuring the start of a recorded stretch, on this participant's own training recordings (decision 150, T6): Method D (compacts each training stretch to the readings it actually measured; only stretches with more than 20 finite readings count): the first reading sits -0.080 of this participant's own scatter from that stretch's own median (t=-1.99, 90 stretches). Method E (reads the raw device-clock position; every training stretch that reaches it counts, no minimum length): the first reading sits -0.023 of the scatter (z=-1.03, 246 stretches). The two methods disagree because they use different rules for which readings count as \"the first reading\" and which stretches are long enough to include; neither is corrected toward the other.",
+"status": "derived",
+"units": "ms",
+"value": 15000.0,
+"why": "The measured start-of-recording dips (0.10 to 0.41 of the scatter, three independent measurements) are gone by 12 s; one method finds none. 15 s is the shortest value above 12 s the device has been seen to accept; the 60-87 s two model-based methods derived are settling times of their estimators, not of the device."
+},
+{
+"confidence": null,
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": null,
+"enter_as": null,
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Adaptive amplitude limit, lower",
+"programmed": 1.4,
+"range": [
+0.0,
+25.5
+],
+"range_source": "documented range FDA SSED P960009/S478 (20 Feb 2025), Table 2 'Key aDBS Configurable Parameters', p. 8",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "mA",
+"value": 1.4,
+"why": "Inherits the lower capture amplitude (D28), which makes the choice of capture amplitudes a therapeutic decision and not only a measurement one. Must be above zero (D07)."
+},
+{
+"confidence": null,
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": null,
+"enter_as": null,
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Adaptive amplitude limit, upper",
+"programmed": 4.0,
+"range": [
+0.0,
+25.5
+],
+"range_source": "documented range FDA SSED P960009/S478 (20 Feb 2025), Table 2 'Key aDBS Configurable Parameters', p. 8",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "mA",
+"value": 4.8,
+"why": "Inherits the upper capture amplitude (D28)."
+},
+{
+"confidence": null,
+"confirm": "must_choose",
+"design_rule_note": null,
+"device_default": null,
+"enter_as": null,
+"occupancy_note": null,
+"origin": "clinician",
+"parameter": "Paused amplitude",
+"programmed": 3.0,
+"range": [
+0.0,
+25.5
+],
+"range_source": "documented range FDA SSED P960009/S478 (20 Feb 2025), Table 2 'Key aDBS Configurable Parameters', p. 8",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "read_off_programmer",
+"units": "mA",
+"value": null,
+"why": "The amplitude delivered when the patient pauses Adaptive (D34). Not derivable from the record; a clinical choice."
+}
+],
+"mode": "dual",
+"not_applicable": [
+{
+"confirm": "not_applicable",
+"origin": "none",
+"parameter": "Single LFP threshold",
+"status": "not_applicable",
+"units": "LSB",
+"why": "Dual Threshold has two thresholds, both set by hand. The single threshold does not exist here, and in Single Threshold it is not typed in at all \u2014 the device computes it as 0.75 x (Upper - Lower) + Lower from the captured pair (D20)."
+},
+{
+"confirm": "not_applicable",
+"origin": "none",
+"parameter": "Onset duration (single)",
+"status": "not_applicable",
+"units": "ms",
+"why": "Dual Threshold has TWO onset durations, an upper and a lower, listed above and independently adjustable. That asymmetry is the first lever the manufacturer's troubleshooting table reaches for (D51), so collapsing them into one would remove a control rather than simplify the table."
+}
+],
+"note": "Every field carries its status: derived from this participant's data, left at the manufacturer's default, or flagged as needing to be read off the programmer because its adjustable range is unpublished. No field is silently defaulted. Where the device's newest session report carries the value it runs today, that is printed beside the recommendation. There is no published resolution grid for these values, so nothing here is rounded to one.",
+"unknowns": [
+"Adaptive Startup Delay and Detection Blanking adjustable ranges: not documented in any source found (the FDA summary, both manuals, the papers, the open toolkits) -- read off the Advanced Settings screen; on this device the recommendation is derived, not confirmed enterable"
+]
+},
+"prescriptions": {
+"modes": {
+"dual": {
+"couplings": [],
+"duty": {
+"amplitude_duty": null,
+"caveats": [
+"Computed on band power recorded under the participant's ACTUAL programming, not under closed-loop control. It assumes the same power would occur once the loop is closed, which is false precisely when the band responds to amplitude. Treat as a way of comparing configurations, not as a prediction of the device Timeline.",
+"57 of 53511 samples share a timestamp with another sample; the interval was measured between DISTINCT timestamps so that duplicates do not collapse it toward zero",
+"the samples arrive every 3 s, which is LONGER than the 3 s averaging duration, so each sample already represents at least one controller step and no re-averaging was applied. The state fractions below are therefore fractions of the SAMPLES on record rather than of continuous time, and because a chronic record is sampled in bursts they are not a fraction of the day.",
+"COVERAGE 0.427%. The record contains 44.6 hours of signal spread across 10443 hours of elapsed time, so the state fractions below are fractions of the SAMPLES ON RECORD and must not be reported as percentages of the day \u2014 the two differ here by a factor of about 234. A chronic Percept record is sampled in short bursts minutes apart, and the bursts are not a random sample of the day either, since streaming happens when the participant or the clinic initiates it."
+],
+"coverage_frac": 0.004270042590684699,
+"fractions_are_of_observed_samples": true,
+"hours_observed": 10443.10426722222,
+"hours_of_signal": 44.5925,
+"lfp_frac_above": 0.0711442507148063,
+"lfp_frac_below": 0.1751789351722076,
+"lfp_frac_between": 0.7536768141129861,
+"max_time_at_lower_limit_s": 1680.0,
+"max_time_at_upper_limit_s": 603.0,
+"mean_amplitude_mA": null,
+"onset_inoperative": false,
+"onset_windows_lower": 10,
+"onset_windows_upper": 10,
+"stim_frac_at_lower": 0.20116941751165718,
+"stim_frac_at_upper": 0.2819184368292502,
+"stim_frac_mid": 0.5169121456590926,
+"transitions_per_hour": 0.12572889884103852
+},
+"fields": [
+{
+"confidence": null,
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": null,
+"enter_as": null,
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Sensing channel",
+"programmed": null,
+"range": null,
+"range_source": null,
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "contacts",
+"value": "ONE_THREE_LEFT",
+"why": "Chosen by the biomarker screen. Changing it destroys the captured thresholds and requires recapture (D29)."
+},
+{
+"confidence": null,
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": null,
+"enter_as": null,
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Centre frequency",
+"programmed": null,
+"range": [
+8.0,
+30.0
+],
+"range_source": "A610, adaptive band",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "Hz",
+"value": 24.5,
+"why": "The validated band centre. Must lie inside the adaptive sensing band."
+},
+{
+"confidence": null,
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": null,
+"enter_as": null,
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Band width",
+"programmed": null,
+"range": null,
+"range_source": null,
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "Hz",
+"value": 5.0,
+"why": "The width the band was validated at; changing it changes the feature."
+},
+{
+"confidence": null,
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": "dual",
+"enter_as": null,
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Threshold mode",
+"programmed": null,
+"range": null,
+"range_source": null,
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "",
+"value": "dual",
+"why": "Recommended from the biomarker's own timescale, not hardcoded; see percept_adaptive.recommend_threshold_mode."
+},
+{
+"confidence": null,
+"confirm": "enterable",
+"design_rule_note": "Noise-only design rule (fitted on this participant's own recordings, L4 two components): the stored pair is +-25.0 from its midpoint; the rule needs +-25 at the timing shown on this card to keep noise-only threshold crossings at or below one an hour.",
+"device_default": null,
+"enter_as": null,
+"occupancy_note": "At the 3 s averaging duration in force, 39106 averaged readings: 44.0% above the upper threshold, 12.8% between the two, 43.2% below the lower threshold. The device runs this 3 s averaging today, so the answer is the same on the device's own clock.",
+"origin": "participant",
+"parameter": "Upper LFP threshold",
+"programmed": 242.0,
+"range": null,
+"range_source": "documented 0.55-400 uVrms on the programmer's own scale (FDA SSED P960009/S478 (20 Feb 2025), Table 2 'Key aDBS Configurable Parameters', p. 8); the value here is in the device's exported units, so the range is reported and not applied",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "LFP power",
+"value": 241.1398461407831,
+"why": "Placed from the record (decision 180): the participant's own median averaged reading at 3 s (216.14 device units) plus the noise-only design rule's minimum of +-25 at the card's timing. The tablet's own capture would place this at 206.38 (the capture mean at the LOWER amplitude, D24)."
+},
+{
+"confidence": null,
+"confirm": "enterable",
+"design_rule_note": "Noise-only design rule (fitted on this participant's own recordings, L4 two components): the stored pair is +-25.0 from its midpoint; the rule needs +-25 at the timing shown on this card to keep noise-only threshold crossings at or below one an hour.",
+"device_default": null,
+"enter_as": null,
+"occupancy_note": "At the 3 s averaging duration in force, 39106 averaged readings: 44.0% above the upper threshold, 12.8% between the two, 43.2% below the lower threshold. The device runs this 3 s averaging today, so the answer is the same on the device's own clock.",
+"origin": "participant",
+"parameter": "Lower LFP threshold",
+"programmed": 192.0,
+"range": null,
+"range_source": "documented 0.55-400 uVrms on the programmer's own scale (FDA SSED P960009/S478 (20 Feb 2025), Table 2 'Key aDBS Configurable Parameters', p. 8); the value here is in the device's exported units, so the range is reported and not applied",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "LFP power",
+"value": 191.1398461407831,
+"why": "Placed from the record (decision 180): the median minus the same +-25. The tablet's own capture would place this at 158.67 (the capture mean at the UPPER amplitude, D24)."
+},
+{
+"confidence": "High",
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": 1200.0,
+"enter_as": "0 min 30 s",
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Upper onset duration",
+"programmed": 30000.0,
+"range": [
+0.0,
+30000.0
+],
+"range_source": "selection range Clinician tablet (A610), Adaptive Therapy setup screens, read by the PI on 2026-09-15; the FDA summary (FDA SSED P960009/S478 (20 Feb 2025), Table 2 'Key aDBS Configurable Parameters', p. 8) prints 0-6 min for Dual, not applied",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "ms",
+"value": 30000.0,
+"why": "How long the power must stay ABOVE the upper threshold before the amplitude starts to rise. Separately adjustable from the lower onset; the manufacturer's troubleshooting table directs the clinician to decrease this one while increasing the other when stimulation is transiently too low (D51). Ten confirmations of the 3 s averaged reading: the shortest onset that holds noise-only threshold crossings at or below one an hour at the stored separation on this participant's own signal (a fitted slow-level model's noise simulation), and replayed on held-out stretches it switches the current 2.5 times an hour with none undone, against 34-40 an hour with about 49 undone for the 30 s averaging / 30 s onset the device runs today."
+},
+{
+"confidence": "Medium",
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": 1200.0,
+"enter_as": "0 min 30 s",
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Lower onset duration",
+"programmed": 30000.0,
+"range": [
+0.0,
+30000.0
+],
+"range_source": "selection range Clinician tablet (A610), Adaptive Therapy setup screens, read by the PI on 2026-09-15; the FDA summary (FDA SSED P960009/S478 (20 Feb 2025), Table 2 'Key aDBS Configurable Parameters', p. 8) prints 0-6 min for Dual, not applied",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "ms",
+"value": 30000.0,
+"why": "How long the power must stay BELOW the lower threshold before the amplitude starts to fall. Same measurement as the upper onset; the replay applies one onset to both directions, so equal timers are the honest choice, and asymmetry is the manufacturer's first lever if the delivered current turns out transiently too low or too high (D51)."
+},
+{
+"confidence": "High",
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": 1200.0,
+"enter_as": null,
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Averaging duration",
+"programmed": 3000.0,
+"range": [
+0.0,
+30000.0
+],
+"range_source": "documented range Medtronic BrainSense Tip Cards (2020, FIELDPORTAL1594651482409), p. 8",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "ms",
+"value": 3000.0,
+"why": "The validated feature was computed on a 4.1 s window and 3 s is the nearest the device offers. CORRECTED 2026-09-13, in answer to a direct question: once the onset is properly re-tuned at EACH averaging duration (rather than compared at one onset held fixed in seconds, the confound that inflated some of the contest's own switching-rate numbers), the switching rate is nearly flat, about 3-4 an hour, from 3 s all the way to 30 s, on both the calibrated grid's own threshold pair and the device's actual programmed 167/166 pair. What genuinely differs is how long a confirmation takes: at 3 s averaging the shortest onset reaching zero undone switches is about 21-24 s; at 30 s averaging the same stability needs 90-180 s. Short averaging is kept for that reason -- it reaches a confirmed decision in a quarter to a sixth of the time, at an equal switching rate -- not because it switches less."
+},
+{
+"confidence": "Low",
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": 2000.0,
+"enter_as": "0 min 30 s",
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Detection blanking duration",
+"programmed": 30000.0,
+"range": [
+0.0,
+30000.0
+],
+"range_source": "selection range Clinician tablet (A610), Adaptive Therapy setup screens, read by the PI on 2026-09-15; no document prints one",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "ms",
+"value": 30000.0,
+"why": "Undetermined by the record: at a filtering onset every blanking value from 3 to 60 s gives the identical switching rate. Equal to the onset stops a decision being re-classified while the ramp it triggered is still under way, and is what runs today."
+},
+{
+"confidence": "Low",
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": 150000.0,
+"enter_as": "0 min 30 s",
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Transition up duration",
+"programmed": 30000.0,
+"range": [
+2000.0,
+1800000.0
+],
+"range_source": "selection range Medtronic BrainSense Adaptive white paper, p. 16 (Advanced Settings sliders), confirmed on the tablet (2026-09-15); the FDA summary prints 250 ms-30 min",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "ms",
+"value": 30000.0,
+"why": "How long the amplitude takes to rise across the full limit range. In Dual mode the adjustment is incremental rather than a full ramp between the limits (D22), so this sets a RATE, not a dwell time. The record cannot decide this: the band's slow level carries over with a time constant of hours, so every ramp on the device's grid is fast against it, and 4 s to 60 s replay identically at any onset that filters. 30 s finishes before the next decision could arrive (onset plus blanking) and is inside every method's acceptable set."
+},
+{
+"confidence": "Low",
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": 300000.0,
+"enter_as": "0 min 30 s",
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Transition down duration",
+"programmed": 30000.0,
+"range": [
+2000.0,
+1800000.0
+],
+"range_source": "selection range Medtronic BrainSense Adaptive white paper, p. 16 (Advanced Settings sliders), confirmed on the tablet (2026-09-15); the FDA summary prints 250 ms-30 min",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "ms",
+"value": 30000.0,
+"why": "How long the amplitude takes to fall across the full limit range. In Dual mode the adjustment is incremental rather than a full ramp between the limits (D22), so this sets a RATE, not a dwell time. Same evidence as the transition up; nothing in the record distinguishes the two directions."
+},
+{
+"confidence": "Medium",
+"confirm": "check_on_device",
+"design_rule_note": null,
+"device_default": null,
+"enter_as": "0 min 15 s",
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Adaptive startup delay",
+"programmed": 15000.0,
+"range": null,
+"range_source": "range NOT published in any source found (manuals, FDA summary, papers, toolkits); read off Advanced Settings",
+"robustness_note": null,
+"startup_bias_note": "Two ways of measuring the start of a recorded stretch, on this participant's own training recordings (decision 150, T6): Method D (compacts each training stretch to the readings it actually measured; only stretches with more than 20 finite readings count): the first reading sits -0.080 of this participant's own scatter from that stretch's own median (t=-1.99, 90 stretches). Method E (reads the raw device-clock position; every training stretch that reaches it counts, no minimum length): the first reading sits -0.023 of the scatter (z=-1.03, 246 stretches). The two methods disagree because they use different rules for which readings count as \"the first reading\" and which stretches are long enough to include; neither is corrected toward the other.",
+"status": "derived",
+"units": "ms",
+"value": 15000.0,
+"why": "The measured start-of-recording dips (0.10 to 0.41 of the scatter, three independent measurements) are gone by 12 s; one method finds none. 15 s is the shortest value above 12 s the device has been seen to accept; the 60-87 s two model-based methods derived are settling times of their estimators, not of the device."
+},
+{
+"confidence": null,
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": null,
+"enter_as": null,
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Adaptive amplitude limit, lower",
+"programmed": 1.4,
+"range": [
+0.0,
+25.5
+],
+"range_source": "documented range FDA SSED P960009/S478 (20 Feb 2025), Table 2 'Key aDBS Configurable Parameters', p. 8",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "mA",
+"value": 1.4,
+"why": "Inherits the lower capture amplitude (D28), which makes the choice of capture amplitudes a therapeutic decision and not only a measurement one. Must be above zero (D07)."
+},
+{
+"confidence": null,
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": null,
+"enter_as": null,
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Adaptive amplitude limit, upper",
+"programmed": 4.0,
+"range": [
+0.0,
+25.5
+],
+"range_source": "documented range FDA SSED P960009/S478 (20 Feb 2025), Table 2 'Key aDBS Configurable Parameters', p. 8",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "mA",
+"value": 4.8,
+"why": "Inherits the upper capture amplitude (D28)."
+},
+{
+"confidence": null,
+"confirm": "must_choose",
+"design_rule_note": null,
+"device_default": null,
+"enter_as": null,
+"occupancy_note": null,
+"origin": "clinician",
+"parameter": "Paused amplitude",
+"programmed": 3.0,
+"range": [
+0.0,
+25.5
+],
+"range_source": "documented range FDA SSED P960009/S478 (20 Feb 2025), Table 2 'Key aDBS Configurable Parameters', p. 8",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "read_off_programmer",
+"units": "mA",
+"value": null,
+"why": "The amplitude delivered when the patient pauses Adaptive (D34). Not derivable from the record; a clinical choice."
+}
+],
+"mode": "dual",
+"not_applicable": [
+{
+"confirm": "not_applicable",
+"origin": "none",
+"parameter": "Single LFP threshold",
+"status": "not_applicable",
+"units": "LSB",
+"why": "Dual Threshold has two thresholds, both set by hand. The single threshold does not exist here, and in Single Threshold it is not typed in at all \u2014 the device computes it as 0.75 x (Upper - Lower) + Lower from the captured pair (D20)."
+},
+{
+"confirm": "not_applicable",
+"origin": "none",
+"parameter": "Onset duration (single)",
+"status": "not_applicable",
+"units": "ms",
+"why": "Dual Threshold has TWO onset durations, an upper and a lower, listed above and independently adjustable. That asymmetry is the first lever the manufacturer's troubleshooting table reaches for (D51), so collapsing them into one would remove a control rather than simplify the table."
+}
+],
+"note": "Every field carries its status: derived from this participant's data, left at the manufacturer's default, or flagged as needing to be read off the programmer because its adjustable range is unpublished. No field is silently defaulted. Where the device's newest session report carries the value it runs today, that is printed beside the recommendation. There is no published resolution grid for these values, so nothing here is rounded to one.",
+"unknowns": [
+"Adaptive Startup Delay and Detection Blanking adjustable ranges: not documented in any source found (the FDA summary, both manuals, the papers, the open toolkits) -- read off the Advanced Settings screen; on this device the recommendation is derived, not confirmed enterable"
+]
+},
+"single": {
+"couplings": [],
+"duty": {
+"amplitude_duty": null,
+"caveats": [
+"Computed on band power recorded under the participant's ACTUAL programming, not under closed-loop control. It assumes the same power would occur once the loop is closed, which is false precisely when the band responds to amplitude. Treat as a way of comparing configurations, not as a prediction of the device Timeline.",
+"57 of 53511 samples share a timestamp with another sample; the interval was measured between DISTINCT timestamps so that duplicates do not collapse it toward zero",
+"the samples arrive every 3 s, which is LONGER than the 3 s averaging duration, so each sample already represents at least one controller step and no re-averaging was applied. The state fractions below are therefore fractions of the SAMPLES on record rather than of continuous time, and because a chronic record is sampled in bursts they are not a fraction of the day.",
+"COVERAGE 0.427%. The record contains 44.6 hours of signal spread across 10443 hours of elapsed time, so the state fractions below are fractions of the SAMPLES ON RECORD and must not be reported as percentages of the day \u2014 the two differ here by a factor of about 234. A chronic Percept record is sampled in short bursts minutes apart, and the bursts are not a random sample of the day either, since streaming happens when the participant or the clinic initiates it.",
+"Single Threshold mode has one threshold and two states, so there is no 'between' fraction and the amplitude ramps fully between the limits rather than holding (D22)."
+],
+"coverage_frac": 0.004270042590684699,
+"fractions_are_of_observed_samples": true,
+"hours_observed": 10443.10426722222,
+"hours_of_signal": 44.5925,
+"lfp_frac_above": 0.39870307039674086,
+"lfp_frac_below": 0.6011287398852573,
+"lfp_frac_between": null,
+"max_time_at_lower_limit_s": 1680.0,
+"max_time_at_upper_limit_s": 603.0,
+"mean_amplitude_mA": null,
+"onset_inoperative": false,
+"onset_windows_lower": 10,
+"onset_windows_upper": 10,
+"stim_frac_at_lower": 0.20116941751165718,
+"stim_frac_at_upper": 0.2819184368292502,
+"stim_frac_mid": 0.5169121456590926,
+"transitions_per_hour": 0.005936932009249343
+},
+"fields": [
+{
+"confidence": null,
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": null,
+"enter_as": null,
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Sensing channel",
+"programmed": null,
+"range": null,
+"range_source": null,
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "contacts",
+"value": "ONE_THREE_LEFT",
+"why": "Chosen by the biomarker screen. Changing it destroys the captured thresholds and requires recapture (D29)."
+},
+{
+"confidence": null,
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": null,
+"enter_as": null,
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Centre frequency",
+"programmed": null,
+"range": [
+8.0,
+30.0
+],
+"range_source": "A610, adaptive band",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "Hz",
+"value": 24.5,
+"why": "The validated band centre. Must lie inside the adaptive sensing band."
+},
+{
+"confidence": null,
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": null,
+"enter_as": null,
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Band width",
+"programmed": null,
+"range": null,
+"range_source": null,
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "Hz",
+"value": 5.0,
+"why": "The width the band was validated at; changing it changes the feature."
+},
+{
+"confidence": null,
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": "dual",
+"enter_as": null,
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Threshold mode",
+"programmed": null,
+"range": null,
+"range_source": null,
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "",
+"value": "single",
+"why": "Recommended from the biomarker's own timescale, not hardcoded; see percept_adaptive.recommend_threshold_mode."
+},
+{
+"confidence": null,
+"confirm": "verify_only",
+"design_rule_note": null,
+"device_default": null,
+"enter_as": null,
+"occupancy_note": null,
+"origin": "device",
+"parameter": "Single LFP threshold",
+"programmed": null,
+"range": null,
+"range_source": null,
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "device_computed",
+"units": "LFP power",
+"value": 228.6398461407831,
+"why": "NOT typed in. The device computes it as 0.75 x (Upper - Lower) + Lower from the captured pair (D20), so it is shown here for the clinician to verify against the device rather than to enter."
+},
+{
+"confidence": "High",
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": 200.0,
+"enter_as": "0 min 30 s",
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Onset duration",
+"programmed": 30000.0,
+"range": [
+0.0,
+30000.0
+],
+"range_source": "selection range Clinician tablet (A610), Adaptive Therapy setup screens, read by the PI on 2026-09-15; the FDA summary (FDA SSED P960009/S478 (20 Feb 2025), Table 2 'Key aDBS Configurable Parameters', p. 8) prints 0-6 min for Dual, not applied",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "ms",
+"value": 30000.0,
+"why": "Single Threshold has one threshold and so one onset duration. Its selection range is 0-30 s, the same as each Dual timer's on the tablet; the mode is built for a signal that changes within a second. Ten confirmations of the 3 s averaged reading: the shortest onset that holds noise-only threshold crossings at or below one an hour at the stored separation on this participant's own signal (a fitted slow-level model's noise simulation), and replayed on held-out stretches it switches the current 2.5 times an hour with none undone, against 34-40 an hour with about 49 undone for the 30 s averaging / 30 s onset the device runs today."
+},
+{
+"confidence": "High",
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": 100.0,
+"enter_as": null,
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Averaging duration",
+"programmed": 3000.0,
+"range": [
+0.0,
+30000.0
+],
+"range_source": "documented range Medtronic BrainSense Tip Cards (2020, FIELDPORTAL1594651482409), p. 8",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "ms",
+"value": 3000.0,
+"why": "The validated feature was computed on a 4.1 s window and 3 s is the nearest the device offers. CORRECTED 2026-09-13, in answer to a direct question: once the onset is properly re-tuned at EACH averaging duration (rather than compared at one onset held fixed in seconds, the confound that inflated some of the contest's own switching-rate numbers), the switching rate is nearly flat, about 3-4 an hour, from 3 s all the way to 30 s, on both the calibrated grid's own threshold pair and the device's actual programmed 167/166 pair. What genuinely differs is how long a confirmation takes: at 3 s averaging the shortest onset reaching zero undone switches is about 21-24 s; at 30 s averaging the same stability needs 90-180 s. Short averaging is kept for that reason -- it reaches a confirmed decision in a quarter to a sixth of the time, at an equal switching rate -- not because it switches less."
+},
+{
+"confidence": "Low",
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": 550.0,
+"enter_as": "0 min 30 s",
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Detection blanking duration",
+"programmed": 30000.0,
+"range": [
+0.0,
+30000.0
+],
+"range_source": "selection range Clinician tablet (A610), Adaptive Therapy setup screens, read by the PI on 2026-09-15; no document prints one",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "ms",
+"value": 30000.0,
+"why": "Undetermined by the record: at a filtering onset every blanking value from 3 to 60 s gives the identical switching rate. Equal to the onset stops a decision being re-classified while the ramp it triggered is still under way, and is what runs today."
+},
+{
+"confidence": "Low",
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": 250.0,
+"enter_as": "0 min 30 s",
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Transition up duration",
+"programmed": 30000.0,
+"range": [
+2000.0,
+1800000.0
+],
+"range_source": "selection range Medtronic BrainSense Adaptive white paper, p. 16 (Advanced Settings sliders), confirmed on the tablet (2026-09-15); the FDA summary prints 250 ms-30 min",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "ms",
+"value": 30000.0,
+"why": "How long the amplitude takes to rise across the full limit range. In Dual mode the adjustment is incremental rather than a full ramp between the limits (D22), so this sets a RATE, not a dwell time. The record cannot decide this: the band's slow level carries over with a time constant of hours, so every ramp on the device's grid is fast against it, and 4 s to 60 s replay identically at any onset that filters. 30 s finishes before the next decision could arrive (onset plus blanking) and is inside every method's acceptable set."
+},
+{
+"confidence": "Low",
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": 250.0,
+"enter_as": "0 min 30 s",
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Transition down duration",
+"programmed": 30000.0,
+"range": [
+2000.0,
+1800000.0
+],
+"range_source": "selection range Medtronic BrainSense Adaptive white paper, p. 16 (Advanced Settings sliders), confirmed on the tablet (2026-09-15); the FDA summary prints 250 ms-30 min",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "ms",
+"value": 30000.0,
+"why": "How long the amplitude takes to fall across the full limit range. In Dual mode the adjustment is incremental rather than a full ramp between the limits (D22), so this sets a RATE, not a dwell time. Same evidence as the transition up; nothing in the record distinguishes the two directions."
+},
+{
+"confidence": "Medium",
+"confirm": "check_on_device",
+"design_rule_note": null,
+"device_default": null,
+"enter_as": "0 min 15 s",
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Adaptive startup delay",
+"programmed": 15000.0,
+"range": null,
+"range_source": "range NOT published in any source found (manuals, FDA summary, papers, toolkits); read off Advanced Settings",
+"robustness_note": null,
+"startup_bias_note": "Two ways of measuring the start of a recorded stretch, on this participant's own training recordings (decision 150, T6): Method D (compacts each training stretch to the readings it actually measured; only stretches with more than 20 finite readings count): the first reading sits -0.080 of this participant's own scatter from that stretch's own median (t=-1.99, 90 stretches). Method E (reads the raw device-clock position; every training stretch that reaches it counts, no minimum length): the first reading sits -0.023 of the scatter (z=-1.03, 246 stretches). The two methods disagree because they use different rules for which readings count as \"the first reading\" and which stretches are long enough to include; neither is corrected toward the other.",
+"status": "derived",
+"units": "ms",
+"value": 15000.0,
+"why": "The measured start-of-recording dips (0.10 to 0.41 of the scatter, three independent measurements) are gone by 12 s; one method finds none. 15 s is the shortest value above 12 s the device has been seen to accept; the 60-87 s two model-based methods derived are settling times of their estimators, not of the device."
+},
+{
+"confidence": null,
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": null,
+"enter_as": null,
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Adaptive amplitude limit, lower",
+"programmed": 1.4,
+"range": [
+0.0,
+25.5
+],
+"range_source": "documented range FDA SSED P960009/S478 (20 Feb 2025), Table 2 'Key aDBS Configurable Parameters', p. 8",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "mA",
+"value": 1.4,
+"why": "Inherits the lower capture amplitude (D28), which makes the choice of capture amplitudes a therapeutic decision and not only a measurement one. Must be above zero (D07)."
+},
+{
+"confidence": null,
+"confirm": "enterable",
+"design_rule_note": null,
+"device_default": null,
+"enter_as": null,
+"occupancy_note": null,
+"origin": "participant",
+"parameter": "Adaptive amplitude limit, upper",
+"programmed": 4.0,
+"range": [
+0.0,
+25.5
+],
+"range_source": "documented range FDA SSED P960009/S478 (20 Feb 2025), Table 2 'Key aDBS Configurable Parameters', p. 8",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "derived",
+"units": "mA",
+"value": 4.8,
+"why": "Inherits the upper capture amplitude (D28)."
+},
+{
+"confidence": null,
+"confirm": "must_choose",
+"design_rule_note": null,
+"device_default": null,
+"enter_as": null,
+"occupancy_note": null,
+"origin": "clinician",
+"parameter": "Paused amplitude",
+"programmed": 3.0,
+"range": [
+0.0,
+25.5
+],
+"range_source": "documented range FDA SSED P960009/S478 (20 Feb 2025), Table 2 'Key aDBS Configurable Parameters', p. 8",
+"robustness_note": null,
+"startup_bias_note": null,
+"status": "read_off_programmer",
+"units": "mA",
+"value": null,
+"why": "The amplitude delivered when the patient pauses Adaptive (D34). Not derivable from the record; a clinical choice."
+}
+],
+"mode": "single",
+"not_applicable": [
+{
+"confirm": "not_applicable",
+"origin": "none",
+"parameter": "Upper LFP threshold",
+"status": "not_applicable",
+"units": "LSB",
+"why": "Single Threshold has one threshold and the device computes it from the captured amplitudes (D20); there is no upper threshold to enter."
+},
+{
+"confirm": "not_applicable",
+"origin": "none",
+"parameter": "Lower LFP threshold",
+"status": "not_applicable",
+"units": "LSB",
+"why": "Same as the upper threshold: not a field in this mode."
+},
+{
+"confirm": "not_applicable",
+"origin": "none",
+"parameter": "Upper onset duration",
+"status": "not_applicable",
+"units": "ms",
+"why": "Single Threshold has ONE onset duration, listed above. The upper and lower onsets are a Dual Threshold feature."
+},
+{
+"confirm": "not_applicable",
+"origin": "none",
+"parameter": "Lower onset duration",
+"status": "not_applicable",
+"units": "ms",
+"why": "Same as the upper onset: not a field in this mode."
+}
+],
+"note": "Every field carries its status: derived from this participant's data, left at the manufacturer's default, or flagged as needing to be read off the programmer because its adjustable range is unpublished. No field is silently defaulted. Where the device's newest session report carries the value it runs today, that is printed beside the recommendation. There is no published resolution grid for these values, so nothing here is rounded to one.",
+"unknowns": [
+"Adaptive Startup Delay and Detection Blanking adjustable ranges: not documented in any source found (the FDA summary, both manuals, the papers, the open toolkits) -- read off the Advanced Settings screen; on this device the recommendation is derived, not confirmed enterable"
+]
+},
+"single_inverse": {
+"couplings": [],
+"duty": null,
+"fields": [],
+"mode": "single_inverse",
+"not_applicable": [],
+"note": "single_inverse is a Sensing Only configuration and cannot drive therapy (D18), so there is no closed-loop prescription to write. Nothing below would be programmable and the field list is deliberately empty rather than filled with values that cannot be entered.",
+"unknowns": []
+}
+},
+"recommendation": {
+"allowed": true,
+"consequences": {
+"averaging_duration_ms": 1200.0,
+"can_drive_therapy": true,
+"couples_hemispheres": false,
+"detection_blanking_ms": 2000.0,
+"expected_direction": "when stimulation is High the LFP must be suppressed relative to Low (e.g. alpha-beta)",
+"lfp_band_hz": [
+8.0,
+30.0
+],
+"onset_duration_ms": 1200.0,
+"suggested_capture_med_state": "off medication",
+"threshold_algorithm": "manual setting of upper and lower",
+"transition_down_ms": 300000.0,
+"transition_up_ms": 150000.0
+},
+"mode": "dual",
+"problems": [],
+"recommended_because": "chronic pain varies over hours to days, and Dual Threshold's 2.5-minute and 5-minute transitions are matched to that; Single Threshold's sub-second dynamics are not. Dual Threshold is also control-to-range rather than control-to-target, which suits an uncertain physiological target with an asymmetric cost of overshooting. No biomarker timescale has been measured, so this rests on the nature of the outcome rather than on data from this participant",
+"timescale_measured": false,
+"warnings": []
+},
+"recommended": "dual",
+"selected": "dual"
+},
+"threshold": {
+"capture_amp_high": 4.8,
+"capture_amp_low": 1.4,
+"capture_lower": 158.67491620280188,
+"capture_upper": 206.38048181429266,
+"capture_verdicts": {
+"assessed": true,
+"historical": {
+"below_declared_minimum": true,
+"declared_minimum": 0.5,
+"inverted_by_means": false,
+"label": "between-visit comparison decision 124 distrusts: every band-power sample recorded at the lowest therapeutic current on record pooled against every sample at the highest, across every visit and month. Reported beside the verdicts as a number; it is not the verdict.",
+"mean_power_at_high_capture": 158.67491620280188,
+"mean_power_at_low_capture": 206.38048181429266,
+"separation_pooled_sd": -0.3743054404400765
+},
+"inverted": {
+"established": false,
+"sentence": "D26 inverted capture: NOT indicated -- the pooled titration slope is -7.31 device units per mA (power falls as current rises, as the control law needs; interval -47.3 to +32.6, p 0.72). CAVEAT: the interval spans zero (interval -47.3 to +32.6, p 0.72), so this rests on the point estimate alone; the sign is not statistically established.",
+"status": "not indicated"
+},
+"judged_on": "pooled titration slope (E1, decision 124)",
+"pooled_slope_ci": [
+-47.264454299858,
+32.63669354380205
+],
+"pooled_slope_established": false,
+"pooled_slope_p": 0.7225178629485254,
+"pooled_slope_per_mA": -7.313880378027975,
+"too_close": {
+"established": false,
+"sentence": "D26 thresholds too close: NOT indicated -- the pooled titration slope is -7.31 device units per mA (interval -47.3 to +32.6, p 0.72), so on the point estimate the two captures separate. CAVEAT: the interval spans zero (interval -47.3 to +32.6, p 0.72), so the signal's response to current is not statistically established and the device may still raise RECAPTURE THRESHOLDS at the visit; that is a caveat, not the verdict.",
+"status": "not indicated"
+}
+},
+"control_authority": -0.3743054404400765,
+"frac_time_above": 0.43975349051296475,
+"frac_time_below": 0.4321587480182069,
+"frac_time_between": 0.12808776146882828,
+"lower": 191.1398461407831,
+"note": "Thresholds are placed at the two capture means, as the device does. Since 2026-09-12 the two D26 verdicts (inverted capture, thresholds too close) are judged on the pooled titration slope across runs of stepped current (both legs), not on the between-visit comparison of the two capture means, and they warn rather than block. The separation criterion on that comparison is declared by this module, not published by the manufacturer, who describes the alert qualitatively as the signal being minimally responsive.",
+"placement": {
+"available": true,
+"averaging_s": 3.0,
+"capture_lower": 158.67491620280188,
+"capture_upper": 206.38048181429266,
+"centre": 216.1398461407831,
+"design_rule": {
+"model": "L4 two components",
+"reason": null,
+"refused": false,
+"store_key": "closed_loop_design_rule/2e3c75c00d7f4f37b53a048d195f11da/75b140f03e2a51fd8f89c31f6e2853f28ebe0143"
+},
+"half_separation": 25.0,
+"lower": 191.1398461407831,
+"median": {
+"available": true,
+"averaging_s": 3.0,
+"median": 216.1398461407831,
+"n_readings": 39106
+},
+"note": "centred on the median averaged reading at 3 s (216.14 device units), separated by the design rule's minimum of +-25 at the timing shown on this card",
+"onset_s": 30.0,
+"rule": "record",
+"rule_version": "v1_record_pair_median_centre_design_rule_separation",
+"timing_exact": true,
+"upper": 241.1398461407831
+},
+"placement_note": "the pair is placed from the record (decision 180): centred on the median averaged reading at 3 s (216.14 device units), separated by the design rule's minimum of +-25 at the timing shown on this card; the tablet's own capture would place it at 206.38 / 158.67",
+"placement_rule": "record",
+"predicted_recapture_alert": false,
+"problems": [],
+"upper": 241.1398461407831,
+"warnings": [
+"D26 inverted capture: NOT indicated -- the pooled titration slope is -7.31 device units per mA (power falls as current rises, as the control law needs; interval -47.3 to +32.6, p 0.72). CAVEAT: the interval spans zero (interval -47.3 to +32.6, p 0.72), so this rests on the point estimate alone; the sign is not statistically established.",
+"D26 thresholds too close: NOT indicated -- the pooled titration slope is -7.31 device units per mA (interval -47.3 to +32.6, p 0.72), so on the point estimate the two captures separate. CAVEAT: the interval spans zero (interval -47.3 to +32.6, p 0.72), so the signal's response to current is not statistically established and the device may still raise RECAPTURE THRESHOLDS at the visit; that is a caveat, not the verdict."
+]
+},
+"threshold_placement": {
+"available": true,
+"averaging_s": 3.0,
+"capture_lower": 158.67491620280188,
+"capture_upper": 206.38048181429266,
+"centre": 216.1398461407831,
+"design_rule": {
+"model": "L4 two components",
+"reason": null,
+"refused": false,
+"store_key": "closed_loop_design_rule/2e3c75c00d7f4f37b53a048d195f11da/75b140f03e2a51fd8f89c31f6e2853f28ebe0143"
+},
+"half_separation": 25.0,
+"lower": 191.1398461407831,
+"median": {
+"available": true,
+"averaging_s": 3.0,
+"median": 216.1398461407831,
+"n_readings": 39106
+},
+"note": "centred on the median averaged reading at 3 s (216.14 device units), separated by the design rule's minimum of +-25 at the timing shown on this card",
+"onset_s": 30.0,
+"placement_rule": "record",
+"rule": "record",
+"rule_version": "v1_record_pair_median_centre_design_rule_separation",
+"timing_exact": true,
+"upper": 241.1398461407831
+},
+"verdict": "supported (point signs only; 2 of 3 intervals span zero)",
+"verdict_detail": {
+"all_edges_resolved": true,
+"all_edges_statistically_established": false,
+"blockers": [],
+"coherent": true,
+"device_eligible": true,
+"n_edges": 3,
+"n_edges_unestablished": 2,
+"provisional": true,
+"unestablished_edges": [
+"E1",
+"E2"
+],
+"warnings": [
+"D26 inverted capture: NOT indicated -- the pooled titration slope is -7.31 device units per mA (power falls as current rises, as the control law needs; interval -47.3 to +32.6, p 0.72). CAVEAT: the interval spans zero (interval -47.3 to +32.6, p 0.72), so this rests on the point estimate alone; the sign is not statistically established.",
+"D26 thresholds too close: NOT indicated -- the pooled titration slope is -7.31 device units per mA (interval -47.3 to +32.6, p 0.72), so on the point estimate the two captures separate. CAVEAT: the interval spans zero (interval -47.3 to +32.6, p 0.72), so the signal's response to current is not statistically established and the device may still raise RECAPTURE THRESHOLDS at the visit; that is a caveat, not the verdict."
+]
+}
+}

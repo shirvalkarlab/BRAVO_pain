@@ -105,7 +105,7 @@ const SCREENING_DASH = "1.5 3.5";
  */
 function TriangleGraph({ edges }) {
   const W = 330;
-  const H = 210;
+  const H = 232;
   const N = { amp: [46, 168], pow: [165, 34], pain: [284, 168] };
   const nodeR = 5;
 
@@ -123,7 +123,7 @@ function TriangleGraph({ edges }) {
   const EDGES = [
     { k: "E1", a: N.amp, b: N.pow, lx: 74, ly: 96, anchor: "start" },
     { k: "E2", a: N.pow, b: N.pain, lx: 256, ly: 96, anchor: "end" },
-    { k: "E3", a: N.amp, b: N.pain, lx: 165, ly: 192, anchor: "middle" },
+    { k: "E3", a: N.amp, b: N.pain, lx: 165, ly: 196, anchor: "middle" },
   ];
 
   return (
@@ -158,21 +158,25 @@ function TriangleGraph({ edges }) {
                 <rect x={mid[0] - 7} y={mid[1] - 7} width="14" height="14" fill="#FFFFFF"
                   stroke={PAL.neutral} strokeWidth="1.6"
                   transform={`rotate(45 ${mid[0]} ${mid[1]})`} />
-                <text x={mid[0]} y={mid[1] + 3.6} textAnchor="middle" fontSize="9.5"
+                <text x={mid[0]} y={mid[1] + 4} textAnchor="middle" fontSize="11"
                   fontWeight="700" fill={PAL.neutral}>?</text>
               </g>
             ) : null}
-            <text x={E.lx} y={E.ly} textAnchor={E.anchor} fontSize="10.5" fontWeight="700"
-              fill={ink}>{E.k}</text>
-            <text x={E.lx} y={E.ly + 11} textAnchor={E.anchor} fontSize="9" fill="#6A6A6A">
-              {resolved
-                ? `sign ${sign > 0 ? "+" : sign < 0 ? "\u2212" : "?"}`
-                  + `${e && e.statistically_established === false ? " (interval spans zero)" : ""}`
-                : "no point estimate"}
+            {/* Two short lines at 12 and 11 units (decision 302: the PI could not read the 9-unit
+                labels). "interval spans zero" is said once per edge, beside its axis on the right;
+                here one word says it, so the E1 and E2 labels no longer run into each other. */}
+            <text x={E.lx} y={E.ly} textAnchor={E.anchor} fontSize="12" fontWeight="700"
+              fill={ink}>
+              {resolved ? `${E.k} ${sign > 0 ? "+" : sign < 0 ? "\u2212" : "?"}` : E.k}
+            </text>
+            <text x={E.lx} y={E.ly + 13} textAnchor={E.anchor} fontSize="11"
+              fill={resolved && e && e.statistically_established === false ? PAL.warnText : "#5E5E5E"}>
+              {!resolved ? "no estimate"
+                : e && e.statistically_established === false ? "uncertain" : "established"}
             </text>
             {isScreening(e) ? (
-              <text x={E.lx} y={E.ly + 22} textAnchor={E.anchor} fontSize="9" fontWeight="700"
-                fill={PAL.warnText}>screening statistic, not a measurement</text>
+              <text x={E.lx} y={E.ly + 26} textAnchor={E.anchor} fontSize="11" fontWeight="700"
+                fill={PAL.warnText}>screening only</text>
             ) : null}
           </g>
         );
@@ -184,10 +188,10 @@ function TriangleGraph({ edges }) {
         ox, oy]) => (
           <g key={key}>
             <circle cx={N[key][0]} cy={N[key][1]} r={nodeR} fill="#2A2A2A" />
-            <text x={N[key][0] + ox} y={N[key][1] + oy} textAnchor={anchor} fontSize="11"
+            <text x={N[key][0] + ox} y={N[key][1] + oy} textAnchor={anchor} fontSize="12"
               fontWeight="700" fill="#2A2A2A">{label}</text>
-            <text x={N[key][0] + ox} y={N[key][1] + oy + 11} textAnchor={anchor} fontSize="9"
-              fill="#7A7A7A">{unit}</text>
+            <text x={N[key][0] + ox} y={N[key][1] + oy + 13} textAnchor={anchor} fontSize="11"
+              fill="#5E5E5E">{unit}</text>
           </g>
       ))}
     </svg>
@@ -235,25 +239,21 @@ function AdjustedEdgeLine({ adjusted }) {
     return (
       <MDTypography variant="caption" data-testid="e2-adjusted"
         sx={{ display: "block", fontSize: 11.5, mb: 0.8, color: "#8a5a00" }}>
-        {`Read again with ${what} taken out of the band power: that reading could not be made `
-          + `here — ${a.why || "no reason was recorded"}. That is a measurement that is `
-          + "absent, not one that came out at chance."}
+        {`With ${what} taken out of the band power: not made here (${a.why || "no reason was "
+          + "recorded"}). An absent reading, not one at chance.`}
       </MDTypography>
     );
   }
   const span = (n(a.auc_low) && n(a.auc_high)) ? `, interval ${n(a.auc_low)} to ${n(a.auc_high)}` : "";
   const reports = a.n_pain_reports ? `, over ${a.n_pain_reports} pain reports` : "";
   const pr = n(a.partial_r) != null
-    ? ` The correlation between this band's power and pain with the same quantity taken out is `
-      + `${Number(a.partial_r) >= 0 ? "+" : ""}${n(a.partial_r)}.`
+    ? ` Partial correlation ${Number(a.partial_r) >= 0 ? "+" : ""}${n(a.partial_r)}.`
     : "";
   return (
     <MDTypography variant="caption" data-testid="e2-adjusted"
       sx={{ display: "block", fontSize: 11.5, mb: 0.8, color: "#8a5a00" }}>
-      {`Read again with ${what} taken out of the band power and the pain scores left as they came: `
-        + `${n(a.auc)}${span}${reports}, against 0.5 for coin flipping.${pr} `
-        + "This second reading describes the first one and does not replace it: the number above "
-        + "is what resolves this edge and sets the verdict."}
+      {`With ${what} taken out of the band power: ${n(a.auc)}${span}${reports} (0.5 is coin `
+        + `flipping).${pr} It describes the reading above; that one sets the verdict.`}
     </MDTypography>
   );
 }
@@ -338,7 +338,7 @@ function EdgeAxis({ k, e }) {
         <line x1={x0} y1={yAxis} x2={x1} y2={yAxis} stroke="rgba(0,0,0,0.18)" strokeWidth="1" />
         <line x1={zero} y1={yAxis - 15} x2={zero} y2={yAxis + 11} stroke="#2A2A2A"
           strokeWidth="1.2" />
-        <text x={zero} y={yAxis + 22} textAnchor="middle" fontSize="9" fill="#6A6A6A">0</text>
+        <text x={zero} y={yAxis + 22} textAnchor="middle" fontSize="11" fill="#5E5E5E">0</text>
 
         {/* The interval. An unbounded end leaves the axis as an open arrow rather than stopping at
             the frame, so it cannot be read as an interval that happens to end there. */}
@@ -358,17 +358,17 @@ function EdgeAxis({ k, e }) {
 
         {/* The words at the terminal, for an unbounded limit. */}
         {hi.unbounded ? (
-          <text x={x1 - 4} y={yAxis - 8} textAnchor="end" fontSize="9" fill={ink}>
+          <text x={x1 - 4} y={yAxis - 8} textAnchor="end" fontSize="11" fill={ink}>
             upper limit unbounded
           </text>
         ) : null}
         {lo.unbounded ? (
-          <text x={x0 + 4} y={yAxis - 8} textAnchor="start" fontSize="9" fill={ink}>
+          <text x={x0 + 4} y={yAxis - 8} textAnchor="start" fontSize="11" fill={ink}>
             lower limit unbounded
           </text>
         ) : null}
 
-        <text x={x0} y={12} fontSize="9" fill="#7A7A7A">{meta.units}</text>
+        <text x={x0} y={12} fontSize="11" fill="#5E5E5E">{meta.units}</text>
       </svg>
 
       <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
@@ -380,8 +380,7 @@ function EdgeAxis({ k, e }) {
           {/* Since 2026-09-11 E1 is the pooled titration slope (decision 9), whose unit is a run of
               stepped current (up or down) rather than a setting epoch; the sentence follows the unit. */}
           {/^run of (rising|stepped) current/.test(e.cluster_unit || "")
-            ? `${e.n} settled points across ${e.n_clusters} run${e.n_clusters === 1 ? "" : "s"} of `
-              + "stepped current (up or down, the other side held), one baseline each"
+            ? `${e.n} settled points in ${e.n_clusters} run${e.n_clusters === 1 ? "" : "s"} of stepped current`
             : `${e.n} observations in ${e.n_clusters} ${e.cluster_unit}`
               + (e.n_clusters === 1 ? "" : " clusters")}
           {e.sign != null
@@ -500,11 +499,9 @@ function CoherenceReading({ coherence, edges }) {
               + "cannot be checked."
             : r.edgesAgreeInternally
               ? "Yes. Composing the amplitude-to-power and power-to-pain edges reproduces the sign "
-                + "of the amplitude-to-pain edge, so the three measurements tell one "
-                + "self-consistent story about the physiology."
+                + "of the amplitude-to-pain edge."
               : "No. Composing the amplitude-to-power and power-to-pain edges does not reproduce "
-                + "the sign of the amplitude-to-pain edge, so the three measurements are not "
-                + "describing one consistent relationship and at least one of them is unreliable."}
+                + "the sign of the amplitude-to-pain edge: at least one of them is unreliable."}
         </MDTypography>
         <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, mt: 0.6,
           color: "#2A2A2A" }}>
@@ -533,13 +530,16 @@ function CoherenceReading({ coherence, edges }) {
           rests on the point signs alone, because intervals span zero, is the reader's caveat about
           the verdict itself, and it now reads IN THE OPEN (panel D, 2026-09-22); the rest -- the
           control-law citation and the method -- stays folded, as it has since 2026-09-11. */}
-      {provisionalHalf ? (
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11, mt: 0.8,
-          color: "#8a5a00", fontWeight: "bold" }}>
-          {provisionalHalf}
-        </MDTypography>
-      ) : null}
+      {/* The module's note is one fold again (decision 302). Its "PROVISIONAL: ... intervals span
+          zero" half was printed in the open since decision 235, beside the edge rows that already
+          say "INTERVAL SPANS ZERO" with the numbers and under a status line that says
+          "provisional"; its stability half repeats the stability card directly below. */}
       <Fold show="How the sign agreement was tested" hide="Hide" mt={0.8} dense>
+        {provisionalHalf ? (
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, mb: 0.4, color: "#4A4A4A" }}>
+            {provisionalHalf}
+          </MDTypography>
+        ) : null}
         {restOfNote ? (
           <MDTypography variant="caption" sx={{ display: "block", fontSize: 11, color: "#4A4A4A" }}>
             {restOfNote}
@@ -593,17 +593,14 @@ export default function EvidenceTrianglePanel({ report }) {
         <MDTypography variant="h6" sx={{ fontSize: 15 }}>
           The evidence triangle: amplitude, band power and pain
         </MDTypography>
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#4A4A4A" }}>
-          Current to band power, band power to pain, current to pain: three measured links, and
-          whether their signs agree with each other and with the control law.
+        <MDTypography variant="caption" sx={{ display: "block", fontSize: 12, color: "#3A3A3A" }}>
+          {"Three measured links, and whether their signs match what the control law needs."}
+          {data.pain_score && data.pain_score.key ? (
+            <span data-testid="triangle-pain-score">
+              {` Pain score: ${data.pain_score.label || data.pain_score.key}.`}
+            </span>
+          ) : null}
         </MDTypography>
-        {data.pain_score && data.pain_score.key ? (
-          <MDTypography variant="caption" data-testid="triangle-pain-score"
-            sx={{ display: "block", fontSize: 11.5, color: "#1A1A1A" }}>
-            {`Pain is read as ${data.pain_score.label || data.pain_score.key} in both links that `
-              + "involve pain (the pain score chosen at the top of the page)."}
-          </MDTypography>
-        ) : null}
 
         <Grid container spacing={2} mt={0.5}>
           <Grid item xs={12} md={5}>
@@ -632,10 +629,11 @@ export default function EvidenceTrianglePanel({ report }) {
         {/* The two drawing conventions, folded since 2026-09-11. */}
         <Fold show="How to read the picture" hide="Hide" dense>
           <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#5E5E5E" }}>
-            A solid line with an arrowhead is an edge whose direction the data established. A
-            dotted line with a hollow diamond is an edge that was estimated and whose direction
-            the data did not establish; it is drawn at full weight because it is present and
-            undetermined, not absent and not zero. A finely dotted line with an arrowhead, marked
+            Each edge carries its sign beside its name, and under it one word: established (its
+            interval excludes zero), uncertain (its interval spans zero, so the sign rests on the
+            point estimate) or no estimate. A dotted line with a hollow diamond is an edge with no
+            estimate; it is drawn at full weight because it is present and undetermined, not
+            absent and not zero. A finely dotted line with an arrowhead, marked
             "screening statistic", is the current-to-power edge read off the whole historical
             record, where current is confounded with time: it has a sign and it chooses what to
             titrate, and it is not a measurement of what current does to power. It is replaced by
@@ -647,7 +645,9 @@ export default function EvidenceTrianglePanel({ report }) {
 
         <Divider sx={{ my: 1.2 }} />
 
-        <StateTrack track={TRACKS.coherence} data={data} />
+        {/* No blurb (decision 302): the lit cell's sentence said what the two answers under the
+            table say, in other words. */}
+        <StateTrack track={TRACKS.coherence} data={data} showBlurb={false} />
         <CoherenceReading coherence={data.coherence} edges={edges} />
       </MDBox>
     </Card>

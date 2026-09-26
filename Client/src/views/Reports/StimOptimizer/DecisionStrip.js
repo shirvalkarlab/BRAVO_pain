@@ -27,6 +27,15 @@
  * Resized 2026-09-12 after the PI's review ("text running into images"): the three numbers of a
  * setting at 16 px, the sub-lines at 12 px, the gain in a cell of its own that cannot wrap, and
  * the gain bar's axis labels at 11 px.
+ *
+ * THE DESIGN REVIEW OF 2026-09-26 (the PI: "yes to all six, build them"):
+ *   - the definition of "proven better", the exposure line and the stopping rule (decisions
+ *     243(b), 243(d) and 245(b), which printed them in the open) sit in ONE fold under the strip;
+ *   - the stopping rule prints once, "Both sides: ...", when the two sides read alike;
+ *   - "resolved" is "proven better" everywhere, the word the headline already used;
+ *   - "no current can be recommended" is ONE sentence under the rows, not one per side;
+ *   - the columns fit a laptop's card (about 860 px at their minimum, was about 1,330 px): the gain
+ *     bar sits under the gain's number, in the same cell.
  */
 import { CircularProgress, Tooltip } from "@mui/material";
 
@@ -50,27 +59,19 @@ const NW = { whiteSpace: "nowrap" };
 /** A setting as one line of digits with units: "55 Hz · 100 µs · 3.0 mA". `missingAmp` is the
  * decision-158 case -- a rate (and usually a pulse width) WAS chosen, but the three-check honest
  * rule could not clear a current for it, so `amp` arrives as `null` on purpose, not as a gap in
- * the data. Printing a bare "—" there reads as missing data; the sentence says what actually
- * happened instead (never "NaN mA", never "None"). */
+ * the data. Printing a bare "—" there reads as missing data, so the current's place says "no
+ * current" (never "NaN mA", never "None"), and ONE sentence under the rows says why for every side
+ * at once (the design review of 2026-09-26: it used to be a sentence per side). */
 function Setting({ rate, pw, amp, missingPw, missingAmp, ampMoves = false }) {
-  // The no-current sentence is a block of its own UNDER the rate and pulse width, not a third
-  // item inside the no-wrap value span: inside it, the sentence ran on across the "change" and
-  // "gain" columns (watched on the live page, 2026-09-15).
   return (
-    <>
-      <span style={VALUE}>
-        {fmtHz(rate)}<span style={{ color: "#6E6E6E" }}> · </span>
-        {missingPw ? <span style={{ color: "#6E6E6E" }}>— µs</span> : fmtUs(pw)}
-        {!missingAmp && <><span style={{ color: "#6E6E6E" }}> · </span>{fmtMa(amp)}{ampMoves && <BlockOfTimeMark />}</>}
-      </span>
-      {missingAmp && (
-        <MDTypography variant="caption" component="div"
-          sx={{ fontSize: TYPE.body, fontWeight: 600, color: PAL.warnText, whiteSpace: "normal",
-            lineHeight: 1.3, mt: 0.2 }}>
-          no current can be recommended from this record — see the current map
-        </MDTypography>
-      )}
-    </>
+    <span style={VALUE}>
+      {fmtHz(rate)}<span style={{ color: "#6E6E6E" }}> · </span>
+      {missingPw ? <span style={{ color: "#6E6E6E" }}>— µs</span> : fmtUs(pw)}
+      <span style={{ color: "#6E6E6E" }}> · </span>
+      {missingAmp
+        ? <span style={{ fontFamily: "inherit", fontSize: TYPE.body, fontWeight: 600, color: PAL.warnText }}>no current</span>
+        : <>{fmtMa(amp)}{ampMoves && <BlockOfTimeMark />}</>}
+    </span>
   );
 }
 
@@ -107,16 +108,33 @@ function sideRows(arms, plan, inForce) {
  *     (`routines.acquisition.NO_HISTORY_BINDING`). Said as that, never as a "no".
  */
 export function stoppingLine(side, st) {
+  const body = stoppingBody(st);
+  return body === null ? null : `${side}: ${body}`;
+}
+
+/** The answer without its side, so two sides that read alike print it once. */
+function stoppingBody(st) {
   if (!st || st.stop_binding === undefined) return null;
   const n = num(st.queue_size);
   const worth = n === null ? "" : ` ${Math.round(n).toLocaleString("en-US")} untried combination${n === 1 ? "" : "s"} still ${n === 1 ? "looks" : "look"} worth trying`;
   if (st.stop === true) {
-    return `${side}: stop — the best has stopped improving and no untried combination still looks worth trying`;
+    return "stop — the best has stopped improving and no untried combination still looks worth trying";
   }
   if (/not assessable/i.test(String(st.stop_binding || ""))) {
-    return `${side}: not assessable — no batch of suggested settings has been run and rated in turn, so there is no history to tell whether the best has stopped improving;${worth}`;
+    return `not assessable — no batch of suggested settings has been run and rated in turn, so there is no history to tell whether the best has stopped improving;${worth}`;
   }
-  return `${side}: keep searching —${worth}`;
+  return `keep searching —${worth}`;
+}
+
+/** The stopping rule for every side on the strip, ONCE when the sides read alike ("Both sides:
+ * ..."), otherwise per side (the design review of 2026-09-26: the same 45 words printed twice). */
+export function stoppingText(rows) {
+  const per = rows.map((r) => ({ side: r.side, body: stoppingBody(r.stratum) })).filter((x) => x.body !== null);
+  if (!per.length) return null;
+  if (per.length > 1 && per.every((x) => x.body === per[0].body)) {
+    return `${per.length === 2 ? "Both sides" : "Every side"}: ${per[0].body}`;
+  }
+  return per.map((x) => `${x.side}: ${x.body}`).join(". ");
 }
 
 /** A side's three-state verdict, read exactly as the row's glyph reads it. */
@@ -134,10 +152,16 @@ function sideResolved(r) {
  * answer. Three states, never two: a side whose comparison could not be formed is not "not
  * proven", and the title does not say it is.
  */
+/** Each side's three-state verdict (true / false / null), the one the headline, the row's glyph
+ * and the page's status line all read. */
+export function sideVerdicts(plan, inForce) {
+  return sideRows({}, plan, inForce).filter((r) => r.s || r.stratum)
+    .map((r) => ({ side: r.side, res: sideResolved(r) }));
+}
+
 export function decisionHeadline(plan, inForce) {
-  const rows = sideRows({}, plan, inForce).filter((r) => r.s || r.stratum);
-  if (!rows.length) return "What the joint search prefers, per side";
-  const v = rows.map((r) => ({ side: r.side, res: sideResolved(r) }));
+  const v = sideVerdicts(plan, inForce);
+  if (!v.length) return "What the joint search prefers, per side";
   const yes = v.filter((x) => x.res === true).map((x) => x.side);
   const no = v.filter((x) => x.res === false).map((x) => x.side);
   const unformed = v.filter((x) => x.res === null).map((x) => x.side);
@@ -154,10 +178,12 @@ export function decisionHeadline(plan, inForce) {
   return `${yes.join(" and ")} has a setting proven better than today's; ${rest.join("; ")}`;
 }
 
-// The columns: side | programmed now | arrow | search prefers | change | gain bar | gain | verdict.
-// The gain has a cell of its own, wide enough for "+0.00 pts ± 0.85" at 14 px in the tabular
-// font, and the bar sits in its own cell before it, so the value can never wrap beside the bar.
-const COLUMNS = "64px minmax(230px, 1.3fr) 28px minmax(230px, 1.3fr) 130px 224px 160px 168px";
+// The columns: side | programmed now | arrow | search prefers | change | gain (the number, the bar
+// under it) | verdict. The gain's number cannot wrap ("+0.00 pts ± 0.85" at 14 px in the tabular
+// font is about 150 px) and its bar sits UNDER it in the same cell (2026-09-26): side by side,
+// the two fixed cells made the strip about 1,330 px wide and it scrolled sideways on a laptop.
+const COLUMNS = "48px minmax(170px, 1.2fr) 20px minmax(170px, 1.2fr) minmax(80px, 0.6fr) minmax(170px, 1fr) minmax(120px, 0.8fr)";
+const GAIN_BAR_WIDTH = 170;
 
 export default function DecisionStrip({ arms, plan, planLoading, planErr, inForce }) {
   const rows = sideRows(arms, plan, inForce);
@@ -174,26 +200,20 @@ export default function DecisionStrip({ arms, plan, planLoading, planErr, inForc
   const timeNotChecked = (r) => (r.s && num(r.s.amplitude_preferred_mA) !== null
     ? notCheckedText(rateRowForSetting(plan, r.s)) : null);
   const anyMoves = rows.some((r) => timeState(r) === "moves");
+  const noCurrent = rows.filter((r) => r.s && num(r.s.rate_hz) !== null && num(r.s.amplitude_preferred_mA) === null)
+    .map((r) => r.side);
+  const stopping = stoppingText(rows);
   return (
     <MDBox>
-      {/* "Resolved" defined ONCE, where it is first used on the page (panel C item 5; report C
-          §5.3). The same word, with the same meaning, recurs in the verdict glyphs below and in
-          the closed-loop checks; it used to be defined only in this card's footer. */}
-      <MDTypography variant="caption" component="div" sx={{ ...SMALL, mb: 1 }}>
-        Resolved means the predicted gain over the setting in force is larger than 1 standard
-        deviation of that difference; not resolved means it was measured and is smaller; not
-        determinable means the difference could not be formed at all.
-      </MDTypography>
       <MDBox sx={{ overflowX: "auto" }}>
         <MDBox sx={{ display: "grid", gridTemplateColumns: COLUMNS,
           columnGap: "14px", rowGap: "14px", alignItems: "center" }}>
           <span />
           <MDTypography variant="caption" sx={HEAD}>programmed now</MDTypography>
           <span />
-          <MDTypography variant="caption" sx={HEAD}>search prefers (usable in adaptive mode)</MDTypography>
+          <MDTypography variant="caption" sx={HEAD}>search prefers (usable in closed loop)</MDTypography>
           <MDTypography variant="caption" sx={HEAD}>change</MDTypography>
           <MDTypography variant="caption" sx={HEAD}>gain over the setting in force ± 1 SD</MDTypography>
-          <span />
           <MDTypography variant="caption" sx={HEAD}>verdict</MDTypography>
 
           {rows.map((r) => {
@@ -220,7 +240,7 @@ export default function DecisionStrip({ arms, plan, planLoading, planErr, inForc
                     still measured against the newest RATED setting, and the row says so. */}
                 {r.inf && r.inf.has_ratings_yet === false && (
                   <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.2, color: PAL.warnText }}>
-                    {`no pain rating filed under this setting yet · gains below are measured against the newest rated setting${num(r.inf.fitted_incumbent_epoch) !== null ? ` (epoch ${Math.round(num(r.inf.fitted_incumbent_epoch))})` : ""}`}
+                    {`no pain rating filed under this setting yet · gains below are measured against the newest rated setting${num(r.inf.fitted_incumbent_epoch) !== null ? ` (stretch ${Math.round(num(r.inf.fitted_incumbent_epoch))})` : ""}`}
                   </MDTypography>
                 )}
               </MDBox>,
@@ -236,7 +256,7 @@ export default function DecisionStrip({ arms, plan, planLoading, planErr, inForc
                 ) : (s ? (
                   prefRate === null ? (
                     <MDTypography variant="caption" sx={{ fontSize: TYPE.body, color: PAL.warnText, fontWeight: 600 }}>
-                      no rate adaptive mode can use
+                      no rate closed loop can use
                     </MDTypography>
                   ) : <Setting rate={prefRate} pw={prefPw} amp={prefAmp} missingPw={prefPw === null}
                          missingAmp={prefAmp === null} ampMoves={timeState(r) === "moves"} />
@@ -274,37 +294,50 @@ export default function DecisionStrip({ arms, plan, planLoading, planErr, inForc
                 ) : <MDTypography variant="caption" sx={SMALL}>—</MDTypography>}
               </MDBox>,
               <MDBox key={`${r.side}-f`}>
-                <GainBar gain={gain} sd={sd} halfRange={halfRange} />
+                <span style={GAIN}>
+                  {gain === null ? "—" : `${fmtPts(gain)}${sd === null ? "" : ` ± ${sd.toFixed(2)}`}`}
+                </span>
+                <MDBox mt={0.3}><GainBar gain={gain} sd={sd} halfRange={halfRange} width={GAIN_BAR_WIDTH} /></MDBox>
               </MDBox>,
-              <span key={`${r.side}-g`} style={GAIN}>
-                {gain === null ? "—" : `${fmtPts(gain)}${sd === null ? "" : ` ± ${sd.toFixed(2)}`}`}
-              </span>,
               <MDBox key={`${r.side}-h`}><VerdictGlyph resolved={resolved} /></MDBox>,
             ];
           })}
         </MDBox>
       </MDBox>
+      {noCurrent.length > 0 && (
+        <MDTypography variant="caption" component="div" data-testid="no-current-sentence"
+          sx={{ fontSize: TYPE.body, fontWeight: 600, color: PAL.warnText, mt: 1.2 }}>
+          {`No current can be recommended from this record on ${noCurrent.join(" or ")}; the current map shows which of its three checks fail.`}
+        </MDTypography>
+      )}
       <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 1.2 }}>
         Pain objective: lower is better; a positive gain favours the preferred setting.
       </MDTypography>
       <BlockOfTimeFootnote show={anyMoves} />
-      {/* When to stop searching, per side: the search's own stopping rule, shown (the PI,
-          2026-09-23). Absent from a response that predates the fields. */}
-      {rows.some((r) => stoppingLine(r.side, r.stratum)) ? (
-        <MDTypography variant="caption" component="div" data-testid="stopping-rule"
-          sx={{ ...SMALL, mt: 0.6 }}>
-          {`When to stop searching, the search's own rule: ${rows.map((r) => stoppingLine(r.side, r.stratum)).filter(Boolean).join(". ")}.`}
+      {/* ONE fold for three things the PI placed in the open in decisions 243(b), 243(d) and
+          245(b), and moved into a fold on 2026-09-26 ("yes to all six"): what "proven better"
+          means, how many times that comparison ran and what 1 SD exposes across them (the
+          server's own sentence), and the search's own stopping rule. */}
+      <SizedFold show="What “proven better” means, and when to stop searching" hide="Hide">
+        <MDTypography variant="caption" component="div" sx={{ ...SMALL, fontSize: TYPE.body }}>
+          Proven better means the predicted gain over the setting in force is larger than 1 standard
+          deviation of that difference; not proven means it was measured and is smaller; not
+          determinable means the difference could not be formed at all.
         </MDTypography>
-      ) : null}
-      {/* How many times the "proven better" comparison ran, and what one standard deviation
-          exposes across them (panel C item 4). The server's own sentence, printed as it comes;
-          it changes nothing and is absent from a response that predates it. */}
-      {exposure && exposure.sentence ? (
-        <MDTypography variant="caption" component="div" data-testid="resolution-exposure"
-          sx={{ ...SMALL, mt: 0.6 }}>
-          {exposure.sentence}
-        </MDTypography>
-      ) : null}
+        {exposure && exposure.sentence ? (
+          <MDTypography variant="caption" component="div" data-testid="resolution-exposure"
+            sx={{ ...SMALL, fontSize: TYPE.body, mt: 0.6 }}>
+            {exposure.sentence}
+          </MDTypography>
+        ) : null}
+        {/* Absent from a response that predates the fields. */}
+        {stopping ? (
+          <MDTypography variant="caption" component="div" data-testid="stopping-rule"
+            sx={{ ...SMALL, fontSize: TYPE.body, mt: 0.6 }}>
+            {`When to stop searching, the search's own rule: ${stopping}.`}
+          </MDTypography>
+        ) : null}
+      </SizedFold>
       {rows.some((r) => r.s && Array.isArray(r.s.reasons) && r.s.reasons.length) && (
         <SizedFold show={`Why each side reads as it does (${rows.reduce((n, r) => n + ((r.s && r.s.reasons) || []).length, 0)} reasons from the search)`}
           hide="Hide the reasons">

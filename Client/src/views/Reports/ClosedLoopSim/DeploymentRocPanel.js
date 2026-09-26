@@ -323,7 +323,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
       // beside the oriented-log-power cut, so the histogram shows BOTH numbers the deployment
       // connects — not just the feature-scale cut whose LSB the reader had to find in the next panel.
       const lsbTxt = (lsbThreshold && Number.isFinite(Number(lsbThreshold.upperLsb)))
-        ? `<br>${lsbThreshold.estimated ? "≈" : "≥"} ${fmt(lsbThreshold.upperLsb, 1)} LSB${lsbThreshold.estimated ? " (est.)" : ""}`
+        ? `<br>${lsbThreshold.estimated ? "≈" : "="} ${fmt(lsbThreshold.upperLsb, 1)} LSB${lsbThreshold.estimated ? " (est.)" : ""}`
         : "";
       Plotly.relayout(gd, {
         shapes: [{ type: "line", x0: opThr, x1: opThr, yref: "paper", y0: 0, y1: 1,

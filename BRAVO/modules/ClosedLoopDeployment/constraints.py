@@ -1198,17 +1198,13 @@ def _p_d39(candidate, participant):
     return bool(dual and acknowledged)
 
 
-def _flanking_helpers():
-    """Decision 217's rule, from its one home (the Stim Optimizer's `lfp_evidence` helpers that the
-    readiness card uses), imported at call time under both spellings so this table stays importable
-    without the analysis modules loaded."""
-    try:
-        from modules.StimOptimizer.routines import lfp_evidence as _le
-        from modules.StimOptimizer import titration_plan as _tp
-    except ImportError:                                      # host suite: BRAVO/modules is the root
-        from StimOptimizer.routines import lfp_evidence as _le
-        from StimOptimizer import titration_plan as _tp
-    return _le, _tp
+# Decision 217's rule, from its one home (`DecodeCommon.sensing_rule`, since 2026-09-26; it was
+# the Stim Optimizer's `lfp_evidence` helpers, imported at call time). DecodeCommon imports no
+# analysis module, so this table stays importable without them.
+try:
+    from modules.DecodeCommon import sensing_rule as _sensing_rule
+except ImportError:                                   # pragma: no cover - host spelling
+    from DecodeCommon import sensing_rule as _sensing_rule
 
 
 def _channel_side(channel):
@@ -1229,13 +1225,12 @@ def _p_d52(candidate, participant):
     rings = (participant or {}).get("stim_rings_on_sensing_lead") if isinstance(participant, dict) else None
     if not channel or not rings:
         return None
-    le, _tp = _flanking_helpers()
-    if le.sensing_pair_rings(channel) is None:
+    if _sensing_rule.sensing_pair_rings(channel) is None:
         return None
     side, sens = _channel_side(channel), _text(candidate, "sensing_hemisphere")
     if side and sens in ("left", "right") and side != sens:
         return None
-    return bool(le.pair_flanks_stimulation(channel, {int(r) for r in rings}))
+    return bool(_sensing_rule.pair_flanks_stimulation(channel, {int(r) for r in rings}))
 
 
 def _p_d40(candidate, participant):
@@ -1580,8 +1575,7 @@ def _o_d52(c, p):
     """Which pair, which contacts stimulate, the pair they allow, and what the chosen pair needs."""
     channel = c.get("channel")
     rings = sorted(int(r) for r in (p.get("stim_rings_on_sensing_lead") or []))
-    le, tp = _flanking_helpers()
-    pair = le.sensing_pair_rings(channel)
+    pair = _sensing_rule.sensing_pair_rings(channel)
     if pair is None or not rings:
         return (f"sensing channel {channel!r}; stimulating contacts on this lead "
                 f"{p.get('stim_contacts_on_sensing_lead')!r} -- not enough to apply the rule")
@@ -1591,7 +1585,7 @@ def _o_d52(c, p):
         return (f"contact {xs[0]}" if len(xs) == 1
                 else "contacts " + ", ".join(str(x) for x in xs[:-1]) + f" and {xs[-1]}")
 
-    allowed = le.flanking_pair(set(rings))
+    allowed = _sensing_rule.flanking_pair(set(rings))
     allowed_s = f"{allowed[0]}-{allowed[1]}" if allowed else "no pair (an end contact is stimulating)"
     pair_s = f"{pair[0]}-{pair[1]}"
     head = (f"sensing on {pair_s}; this lead stimulates on {contacts(rings)} (programmed cathode "
@@ -1599,7 +1593,7 @@ def _o_d52(c, p):
             f"{allowed_s} only")
     if allowed == pair:
         return head + ", which is this pair"
-    need = tp.stim_rings_for_sensing_pair(channel)
+    need = _sensing_rule.stim_rings_for_sensing_pair(channel)
     tail = (f"; sensing on {pair_s} needs stimulation on {contacts(need)}" if need
             else f"; no stimulating contact lets the device sense on {pair_s}")
     return head + tail
@@ -1642,6 +1636,7 @@ RULES = (
         title="Chronic pain is not an approved indication for this device",
         source="WP", page="p. 37",
         severity="advisory",
+        short_label="Approved indication for device",
         human_text=(
             "Medtronic DBS Therapy is approved for Parkinson's disease, essential tremor, dystonia, "
             "obsessive-compulsive disorder and epilepsy. Chronic pain is not among them, so "
@@ -1657,6 +1652,7 @@ RULES = (
         title="Adaptive Therapy is labelled for the Parkinson's disease indication only",
         source="WP + A610", page="WP p. 1, WP p. 13, A610 p. 35",
         severity="advisory",
+        short_label="Adaptive labelled for indication",
         human_text=(
             "The white paper's cover page and body both restrict BrainSense Adaptive DBS to the "
             "Parkinson's disease indication, and the programming guide describes it as a therapy "
@@ -1673,6 +1669,7 @@ RULES = (
               "Adaptive Therapy setup",
         source="WP", page="p. 9, p. 13 (workflow steps at A610 pp. 41-42)",
         severity="blocking",
+        short_label="Programmed in Parkinson's mode",
         human_text=(
             "Non-Parkinson's patients are defaulted to Dual Threshold mode, cannot choose the "
             "threshold mode, and are not allowed to continue the workflow past the threshold "
@@ -1692,6 +1689,7 @@ RULES = (
         title="A single neurostimulator is required",
         source="A610", page="pp. 35-36",
         severity="unknown",
+        short_label="Single neurostimulator implanted",
         human_text=(
             "Adaptive Therapy has only been studied in patients with a single Percept "
             "neurostimulator and should not be configured in patients who have two, because "
@@ -1709,6 +1707,7 @@ RULES = (
         title="General DBS contraindications",
         source="WP", page="p. 37",
         severity="advisory",
+        short_label="No general DBS contraindication",
         human_text=(
             "DBS Therapy is contraindicated for patients unable to properly operate the "
             "neurostimulator. Diathermy, transcranial magnetic stimulation and certain MRI "
@@ -1724,6 +1723,7 @@ RULES = (
         title="Tissue-damage warning attached to the parameters this module recommends",
         source="WP", page="p. 38",
         severity="advisory",
+        short_label="Tissue-damage warning heeded",
         human_text=(
             "There is a potential risk of brain tissue damage using stimulation parameter settings "
             "of high amplitudes and wide pulse widths. This module's output is exactly a pair of "
@@ -1738,6 +1738,7 @@ RULES = (
         title="Rebound on abrupt cessation constrains the lower adaptive limit",
         source="WP + A610-MD", page="WP p. 38, A610-MD p. 115",
         severity="advisory",
+        short_label="Lower adaptive limit safe",
         human_text=(
             "Abrupt cessation of stimulation should be avoided because symptoms may return with "
             "intensity greater than before implant. The consequence for this module is that the "
@@ -1754,6 +1755,7 @@ RULES = (
         title="Adaptive Therapy is confined to the alpha-beta range, 8 to 30 Hz",
         source="A610 + WP", page="A610 p. 37, WP p. 14",
         severity="blocking",
+        short_label="Band inside 8–30 Hz",
         human_text=(
             "Adaptive Therapy is available only for electrode configurations with a signal of "
             "interest inside the alpha-beta range of 8 to 30 Hz; a sensing-only configuration uses "
@@ -1779,6 +1781,7 @@ RULES = (
         #: than stopping the workflow. It is the one rule in this table that was deliberately
         #: softened, and the reason is recorded here so it is not silently hardened again.
         severity="advisory",
+        short_label="Signal above 1.2 µVp",
         human_text=(
             "To capture LFP thresholds and set up Adaptive Therapy the programming guide recommends "
             "an electrode configuration whose alpha-beta band LFP amplitude is greater than "
@@ -1797,6 +1800,7 @@ RULES = (
         title="The band of interest is approximately 5 Hz wide",
         source="WP", page="p. 8",
         severity="advisory",
+        short_label="Band 5 Hz wide",
         human_text=(
             "The user selects a frequency band of interest approximately 5 Hz wide to track "
             "chronically. The document prints no adjustable range, so a width away from 5 Hz is "
@@ -1811,6 +1815,7 @@ RULES = (
         title="LFP Power is a linear sum of squared magnitude, not a log quantity",
         source="A610 + WP", page="A610 p. 41, WP p. 9",
         severity="blocking",
+        short_label="Power read as linear",
         human_text=(
             "LFP Power is calculated as the sum of the squared LFP magnitude at each frequency in "
             "the selected band, similar to an area under the curve. It is presented in least "
@@ -1829,6 +1834,7 @@ RULES = (
         title="Power values are not comparable across centre frequencies or threshold modes",
         source="WP", page="p. 9",
         severity="blocking",
+        short_label="Power compared like-for-like",
         human_text=(
             "LFP power values from different centre frequencies should not be directly compared, "
             "and because the FFT size differs between Single Threshold and the other two modes, "
@@ -1844,6 +1850,7 @@ RULES = (
         title="Sampling at 250 Hz with a second, user-configurable high-pass at 1 or 10 Hz",
         source="WP", page="p. 19, p. 11",
         severity="blocking",
+        short_label="Sampling and filter settings",
         human_text=(
             "All recorded data is sampled at 250 Hz and passes two low-pass filters at 100 Hz and "
             "two high-pass filters, one fixed at 1 Hz and a second, user-configurable one at either "
@@ -1863,6 +1870,7 @@ RULES = (
         title="Power averaging is a unique, non-overlapping average",
         source="WP", page="p. 12",
         severity="advisory",
+        short_label="Averaging windows non-overlapping",
         human_text=(
             "The power averaging duration is not a moving average; each average contains a unique, "
             "non-overlapping set of data. Consecutive power samples therefore share no raw data, "
@@ -1877,6 +1885,7 @@ RULES = (
         title="Only a BrainSense Setup channel can become a control signal",
         source="WP", page="p. 18, Table 1",
         severity="blocking",
+        short_label="A BrainSense Setup channel",
         human_text=(
             "BrainSense Setup's signal check offers 3 channels per hemisphere on both 1x4 and "
             "SenSight leads, while Electrode Survey offers 6 or 15, Electrode Identifier 4 or 10, "
@@ -1893,6 +1902,7 @@ RULES = (
         title="Impedance gates the sensing channel, and the test is a precondition",
         source="WP + A610", page="WP p. 8, A610 p. 36, A610 p. 47",
         severity="blocking",
+        short_label="Sensing impedance in range",
         human_text=(
             "The device excludes sense channels with potential shorts, below 250 ohms for 1x4 leads "
             "or 350 ohms for SenSight leads, and potential opens above 10 kilohms. An impedance "
@@ -1920,6 +1930,7 @@ RULES = (
         title="Artefact classes the device itself detects",
         source="WP + A610", page="WP pp. 19-20, A610 p. 72",
         severity="blocking",
+        short_label="No device-detected artefact",
         human_text=(
             "The clinician application flags cardiac artefact, which appears as a large-amplitude 1 "
             "to 2 Hz signal, and motion artefact, which appears as large non-periodic amplitude "
@@ -1939,6 +1950,7 @@ RULES = (
         title="Three threshold modes exist and only two can drive therapy",
         source="A610 + WP", page="A610 p. 39, WP p. 13, WP p. 14",
         severity="blocking",
+        short_label="Mode can drive therapy",
         human_text=(
             "Adaptive Therapy can be configured in Dual Threshold or Single Threshold mode. Single "
             "Threshold Inverse is available only in a Sensing Only configuration. Naming Single "
@@ -1952,6 +1964,7 @@ RULES = (
         title="The control polarity of the two therapy-driving modes is fixed and cannot be inverted",
         source="A610 + WP", page="A610 p. 38, WP p. 14",
         severity="blocking",
+        short_label="Signs suit control law",
         human_text=(
             "In both Dual and Single Threshold the amplitude ramps UP when the LFP passes above "
             "threshold, and the white paper states the precondition as a requirement on the signal: "
@@ -1975,6 +1988,7 @@ RULES = (
         title="Per-mode timing defaults, and the documented range each may be set within",
         source="WP + A610 + FDA", page="WP p. 14 Table 1 ('Default Settings'), A610 p. 38, p. 42; FDA SSED P960009/S478 Table 2 p. 8; Tip Cards p. 8",
         severity="advisory",
+        short_label="Timing within documented ranges",
         human_text=(
             "The two therapy-driving modes differ throughout in their DEFAULTS: FFT size 256 "
             "against 64 points, adaptive update rate 5 Hz against 20 Hz, averaging 1200 ms against "
@@ -1998,6 +2012,7 @@ RULES = (
         title="Onset duration inside its selection range: 0-30 s (Dual, both timers), 0-30 s (Single)",
         source="Clinician tablet + FDA + ADAPT-PD", page="A610 Adaptive Therapy setup screens, read 2026-09-15; FDA SSED P960009/S478 Table 2 p. 8; Stanslaski et al. 2024 for the trial's own settings",
         severity="advisory",
+        short_label="Onset duration 0–30 s",
         human_text=(
             "The clinician tablet offers the onset duration from 0.00 ms to 30.00 s on both Dual "
             "Threshold timers and in Single Threshold mode (read directly by the PI, 2026-09-15). "
@@ -2016,6 +2031,7 @@ RULES = (
         title="Adaptive amplitude behaviour differs between the two therapy-driving modes",
         source="ADAPT-PD + WP", page="Stanslaski et al. 2024, WP p. 13",
         severity="advisory",
+        short_label="Mode amplitude behaviour understood",
         human_text=(
             "In single threshold mode the device adjusted amplitude over 250 ms between the upper "
             "and lower stimulation limits, producing a trapezoidal pattern that reaches the limits. "
@@ -2032,6 +2048,7 @@ RULES = (
         title="One threshold mode per group",
         source="A610", page="p. 39",
         severity="advisory",
+        short_label="One mode per group",
         human_text=(
             "The same threshold mode is used for all adaptive programs in a group. This is surfaced "
             "rather than enforced because this evaluator is handed a single candidate configuration "
@@ -2047,6 +2064,7 @@ RULES = (
         title="Dual Threshold capture requires two therapeutic amplitudes in a defined order",
         source="A610 + WP", page="A610 p. 40 Table 5, WP p. 15",
         severity="blocking",
+        short_label="Two capture currents ordered",
         human_text=(
             "Set the amplitude to the lower limit of therapeutic benefit and capture the Upper LFP "
             "Threshold there, then increase to the upper limit of therapeutic benefit and capture "
@@ -2064,6 +2082,7 @@ RULES = (
         title="Single Threshold capture uses one therapeutic amplitude and a forced zero",
         source="A610 + WP", page="A610 p. 40, WP p. 15",
         severity="advisory",
+        short_label="Single-threshold capture valid",
         human_text=(
             "In Single Threshold mode the clinician increases to the upper limit of therapeutic "
             "benefit and captures, and the application then automatically captures a second LFP "
@@ -2081,6 +2100,7 @@ RULES = (
         title="Capture failure modes are named by the device and can be predicted in advance",
         source="WP + A610", page="WP p. 15, A610 p. 73",
         severity="advisory",
+        short_label="Capture failures ruled out",
         human_text=(
             "The thresholds the system gathers can be too close together or inverted, in which case "
             "the application prompts for recapture or manual adjustment, and a RECAPTURE THRESHOLDS "
@@ -2099,6 +2119,7 @@ RULES = (
         title="Stimulation artefact contaminates the capture above 5 mA or 120 us",
         source="A610", page="p. 73",
         severity="blocking",
+        short_label="Stimulation below artefact limits",
         human_text=(
             "If the stimulation level is above 5 mA or 120 microseconds, the artefact of "
             "stimulation may make the LFP appear elevated when the Lower LFP Threshold is captured. "
@@ -2117,6 +2138,7 @@ RULES = (
         title="Adaptive Amplitude Limits inherit the capture amplitudes",
         source="A610 + WP + ADAPT-PD", page="A610 p. 41, WP p. 15, Stanslaski et al. 2024",
         severity="blocking",
+        short_label="Limits match capture currents",
         human_text=(
             "The Adaptive Amplitude Limits default to the stimulation amplitudes used when "
             "capturing the LFP thresholds, and they are adjustable. When BrainSense status changes "
@@ -2135,6 +2157,7 @@ RULES = (
         title="Configuration changes destroy calibration, and aligned segments must match",
         source="A610", page="p. 37, p. 39",
         severity="blocking",
+        short_label="Calibration kept after changes",
         human_text=(
             "Changing the electrode configuration resets amplitude to zero and clears the captured "
             "thresholds and the BrainSense configuration. Later in the workflow, changing it may "
@@ -2154,6 +2177,7 @@ RULES = (
         title="Pulse width and rate become unadjustable once BrainSense is set up",
         source="A610", page="p. 34 footnote a, p. 44",
         severity="blocking",
+        short_label="Rate and width locked",
         human_text=(
             "Pulse width and rate cannot be adjusted once BrainSense has been set up for either "
             "hemisphere. Re-enabling those patient limits requires removing BrainSense from the "
@@ -2179,6 +2203,7 @@ RULES = (
         title="A BrainSense group has a narrower parameter envelope whose values are unpublished",
         source="A610", page="p. 34, p. 35; general envelope at A610-MD p. 119",
         severity="unknown",
+        short_label="BrainSense rate floor known",
         human_text=(
             "For a group configured with BrainSense the maximum pulse width and maximum rate are "
             "lower, and the minimum rate is HIGHER, than for a group without BrainSense, and the "
@@ -2201,6 +2226,7 @@ RULES = (
         title="Feature exclusions for BrainSense and Adaptive groups",
         source="A610", page="p. 34, p. 35",
         severity="blocking",
+        short_label="No excluded features used",
         human_text=(
             "BrainSense cannot be configured in a hemisphere that includes a pocket adaptor. "
             "BrainSense and Multiple Rates cannot be used in a single group simultaneously. "
@@ -2219,6 +2245,7 @@ RULES = (
         title="What the patient can still do under Adaptive Therapy",
         source="A610 + WP", page="A610 p. 35, p. 43, WP p. 13",
         severity="advisory",
+        short_label="Patient controls understood",
         human_text=(
             "Under Adaptive Therapy the patient can turn stimulation on and off, pause and resume "
             "Adaptive Therapy, and switch groups. The patient cannot directly increase or decrease "
@@ -2235,6 +2262,7 @@ RULES = (
         title="The Paused Amplitude is a required safety parameter",
         source="A610", page="p. 35, p. 43",
         severity="blocking",
+        short_label="Paused amplitude set",
         human_text=(
             "Setting the Paused Amplitude is necessary to ensure that patients can pause Adaptive "
             "Therapy because of stimulation-related side effects or a loop that is not performing. "
@@ -2252,6 +2280,7 @@ RULES = (
         title="Automatic suspensions of BrainSense and Adaptive Therapy",
         source="A610 + WP", page="A610 pp. 35-36, WP p. 13",
         severity="advisory",
+        short_label="Automatic suspensions understood",
         human_text=(
             "BrainSense is automatically disabled in MRI mode and during a recharging session, and "
             "re-enabled afterwards. No LFP data is recorded during an impedance test and Adaptive "
@@ -2270,6 +2299,7 @@ RULES = (
         title="The recharge interval calculator cannot model Adaptive Therapy",
         source="WP", page="p. 19",
         severity="advisory",
+        short_label="Recharge estimate not modelled",
         human_text=(
             "Because Adaptive Therapy cannot be predicted, the recharge interval calculator "
             "requires Adaptive Therapy to be paused in order to be used. Any recharge-interval "
@@ -2284,6 +2314,7 @@ RULES = (
         title="Electromagnetic interference can move the stimulation amplitude",
         source="A610", page="p. 35",
         severity="advisory",
+        short_label="Interference risk understood",
         human_text=(
             "Electromagnetic interference may be misinterpreted as LFP signal during sensing and "
             "cause an increase or decrease in stimulation amplitude, although the amplitude stays "
@@ -2302,6 +2333,7 @@ RULES = (
         title="BrainSense and Adaptive Therapy are hemisphere-specific",
         source="A610", page="p. 44",
         severity="blocking",
+        short_label="Sensing on treated side",
         human_text=(
             "Adaptive Therapy is a hemisphere-specific feature, and disabling it for a whole group "
             "means repeating the process for the other hemisphere; the same is true of BrainSense. "
@@ -2316,6 +2348,7 @@ RULES = (
         title="Contralateral sensing is supported, as a documented fallback",
         source="A610", page="p. 37, p. 39",
         severity="blocking",
+        short_label="Opposite-side sensing acknowledged",
         human_text=(
             "For dual lead implants only, when the hemisphere contralateral to the selected one has "
             "been set up for BrainSense it appears on the Signal Test screen as a sensing option, "
@@ -2337,6 +2370,7 @@ RULES = (
         title="Single Threshold mode couples the hemispheres",
         source="A610", page="p. 39",
         severity="blocking",
+        short_label="Hemisphere coupling acknowledged",
         human_text=(
             "If both hemispheres have an Adaptive Therapy program configured in Single Threshold "
             "mode, sensing LFP data from EITHER hemisphere will drive Adaptive Therapy. That "
@@ -2358,6 +2392,7 @@ RULES = (
         title="Charge density above 30 microcoulombs per square centimetre per phase",
         source="A610 (limit) and SL (lead area)", page="A610 p. 22, SL p. 10",
         severity="advisory",
+        short_label="Charge density within limit",
         human_text=(
             "A survey of the literature on electrical stimulation of neural tissue suggests damage "
             "may occur above 30 microcoulombs per square centimetre per phase, and the Medtronic "
@@ -2377,6 +2412,7 @@ RULES = (
         title="Out-of-range delivery is a silent underdelivery failure mode",
         source="A610", page="p. 22",
         severity="advisory",
+        short_label="No out-of-range delivery",
         human_text=(
             "Certain combinations of amplitude, pulse width and rate are too high for the system to "
             "provide in its current state, producing an alert that stimulation is not being "
@@ -2392,6 +2428,7 @@ RULES = (
         title="Lead electrical specifications, including a lead-length amplitude ceiling",
         source="SL", page="p. 10",
         severity="advisory",
+        short_label="Within lead electrical limits",
         human_text=(
             "SenSight models B33005 and B33015 have an expected lifetime of 5 years, a maximum "
             "conductor resistance of 100 ohms at all lengths, lengths of 33 and 42 cm, surface "
@@ -2409,6 +2446,7 @@ RULES = (
         title="Rates below 30 Hz should not be programmed",
         source="A610-MD", page="p. 115",
         severity="advisory",
+        short_label="Rate ≥30 Hz",
         human_text=(
             "The use of rates below 30 Hz may drive tremor, that is, cause it to occur at the same "
             "frequency as the programmed frequency, and for that reason rates should not be "
@@ -2424,6 +2462,7 @@ RULES = (
         title="Battery cost of the two adaptive modes",
         source="WP", page="p. 19",
         severity="advisory",
+        short_label="Battery cost acceptable",
         human_text=(
             "In the ADAPT-PD study, using Percept PC devices, Dual Threshold patients showed a "
             "median longevity improvement against conventional DBS of 5 percent per year while "
@@ -2442,6 +2481,7 @@ RULES = (
         title="Snapshot and event capacity, with silent overwrite",
         source="WP", page="p. 11",
         severity="advisory",
+        short_label="Snapshot storage not overwritten",
         human_text=(
             "Percept RC records up to 200 LFP snapshots, for example 100 per hemisphere if "
             "bilateral, and stores up to 800 non-LFP events, and when the maximum is exceeded the "
@@ -2459,6 +2499,7 @@ RULES = (
         title="Streaming export limits and the tablet's screen timeout",
         source="WP", page="p. 12",
         severity="advisory",
+        short_label="Streaming export limits respected",
         human_text=(
             "A610 version 5.0 supports exporting files with up to 8 hours of streaming data. There "
             "is no maximum streaming duration, but long sessions fill tablet memory, lengthen JSON "
@@ -2474,6 +2515,7 @@ RULES = (
         title="Turning stimulation on or off while streaming creates a seven-second hole",
         source="WP", page="p. 20",
         severity="advisory",
+        short_label="No switching while streaming",
         human_text=(
             "With A610 v5.0, turning stimulation on or off while streaming causes a 7 second "
             "initialising period during which data is not available in the JSON export. The "
@@ -2489,6 +2531,7 @@ RULES = (
         title="Home streaming cadence as instructed to this participant",
         source="PTG", page="p. 16",
         severity="advisory",
+        short_label="Home streaming cadence followed",
         human_text=(
             "The patient guide instructs the patient to keep the communicator within three feet, "
             "notes that the screen stays on for 60 minutes and must then be touched, states that "
@@ -2507,6 +2550,7 @@ RULES = (
         title="The manufacturer prescribes a specific titration, and it is short",
         source="A610", page="p. 45, p. 72",
         severity="advisory",
+        short_label="Manufacturer titration followed",
         human_text=(
             "Under the heading for using LFP streaming data to view real-time effects of "
             "stimulation, the guide says to pause Adaptive Therapy if configured, set amplitude to "
@@ -2528,6 +2572,7 @@ RULES = (
         title="The device names its own closed-loop failure modes and their remedies",
         source="A610", page="pp. 73-74 (Timeline observable at p. 39, p. 56)",
         severity="advisory",
+        short_label="Device failure modes known",
         human_text=(
             "The troubleshooting table enumerates four adaptive failure states and what to change "
             "for each. For stimulation chronically too low: raise the maximum amplitude limit if "
@@ -2551,6 +2596,7 @@ RULES = (
         title="The sensing pair must flank the contacts that stimulate",
         source="A610 + WP + BrainSense Tip Cards", page="A610 p. 36; WP p. 8; Tip Cards pp. 7-8",
         severity="blocking",
+        short_label="Sensing pair flanks stimulation",
         human_text=(
             "While a lead stimulates, BrainSense can sense only on the two contacts immediately "
             "flanking the stimulating contact or contacts: stimulating on contact 1 allows sensing "
@@ -2606,6 +2652,8 @@ def _entry(rule, kind, why, observed):
         "why": why,
         "page": rule.page,
         "title": rule.title,
+        # The rule in at most four words, for the decision card's bullets (decision 302).
+        "short_label": rule.short_label,
         "source": rule.source,
         "kind": kind,
         "observed": observed,

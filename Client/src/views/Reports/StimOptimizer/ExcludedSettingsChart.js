@@ -23,6 +23,10 @@
  * ruled-out and chosen settings are named in a label band above the plot, on separate rows, each
  * joined to its point by a leader line, so the two can never overlap whatever the data. A legend
  * beneath says what each mark means.
+ *
+ * 2026-09-26 (the design review): axis text #5E5E5E (6.4:1; it was #7A7A7A, 4.29:1), and "closed
+ * loop" for what this page also called "adaptive mode", one name for one thing. The chart itself
+ * folds under its one-line summary on the closed-loop card (TwoStagePlanCard.js).
  */
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -35,6 +39,9 @@ import { TYPE, SMALL } from "./typeScale";
 /** The optimiser's rate grid (`StimOptimizer/routines/plots.py`, `FREQ_GRID`), in Hz. */
 const RATE_GRID = [10, 20, 30, 40, 55, 70, 85, 110, 125, 130, 145, 165];
 const lf = (f) => Math.log2(f);
+
+/** Words in the fail role: the text ink (6.1:1 on white), not the fill ink (3.9:1). */
+const FAIL_TEXT = PAL.failText || "#A84300";
 
 const fmtPts = (v) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(2)} pts`;
 const fmtMa = (v) => (v != null ? `${v.toFixed(1)} mA` : "— mA");
@@ -89,7 +96,7 @@ function SidePanel({ side, exclusions, strata, minRate, width }) {
         <>
           <rect x={L} y={T} width={Math.max(0, minX - L)} height={H - T - B} fill={PAL.failFill} />
           <line x1={minX} x2={minX} y1={ROW3 + 4} y2={H - B} stroke={PAL.fail} strokeWidth="1.4" strokeDasharray="4 3" />
-          <text x={minX + 5} y={ROW3} fontSize={TYPE.axis} fill={PAL.fail}>{`adaptive minimum ${minRate} Hz`}</text>
+          <text x={minX + 5} y={ROW3} fontSize={TYPE.axis} fill={FAIL_TEXT}>{`closed-loop minimum ${minRate} Hz`}</text>
         </>
       )}
       {/* the two settings, named above the plot on rows of their own and joined to their points:
@@ -98,7 +105,7 @@ function SidePanel({ side, exclusions, strata, minRate, width }) {
       {ex && (
         <>
           {leader(L + 4, ROW1 + 3, xi(ex.rate), y(ex.y) - 8, PAL.fail)}
-          <text x={L} y={ROW1} fontSize={TYPE.small} fill={PAL.fail} fontWeight="600">
+          <text x={L} y={ROW1} fontSize={TYPE.small} fill={FAIL_TEXT} fontWeight="600">
             {`ruled out: ${ex.rate} Hz · ${fmtMa(ex.amp)} · ${fmtPts(ex.y)}`}
           </text>
         </>
@@ -114,15 +121,15 @@ function SidePanel({ side, exclusions, strata, minRate, width }) {
       {/* zero = the setting in force; the y axis */}
       <line x1={L} x2={W - R} y1={y(0)} y2={y(0)} stroke="#6A6A6A" strokeWidth="1" />
       <line x1={L} x2={L} y1={T} y2={H - B} stroke="#D8D8D8" />
-      <text x={L - 8} y={T + 4} fontSize={TYPE.axis} fill="#7A7A7A" textAnchor="end">{`+${yMax.toFixed(1)}`}</text>
-      <text x={L - 8} y={y(0) + 4} fontSize={TYPE.axis} fill="#7A7A7A" textAnchor="end">0</text>
-      <text x={L - 8} y={H - B} fontSize={TYPE.axis} fill="#7A7A7A" textAnchor="end">{`−${yMax.toFixed(1)}`}</text>
-      <text x={14} y={(T + H - B) / 2} fontSize={TYPE.axis} fill="#7A7A7A" textAnchor="middle"
+      <text x={L - 8} y={T + 4} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="end">{`+${yMax.toFixed(1)}`}</text>
+      <text x={L - 8} y={y(0) + 4} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="end">0</text>
+      <text x={L - 8} y={H - B} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="end">{`−${yMax.toFixed(1)}`}</text>
+      <text x={14} y={(T + H - B) / 2} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="middle"
         transform={`rotate(-90 14 ${(T + H - B) / 2})`}>predicted pain (pts)</text>
       {/* rate axis, one equal slot per grid rate */}
       <line x1={L} x2={W - R} y1={H - B} y2={H - B} stroke="#D8D8D8" />
       {rates.map((f) => (
-        <text key={f} x={xi(f)} y={H - B + 16} fontSize={TYPE.axis} fill="#7A7A7A" textAnchor="middle">{f}</text>
+        <text key={f} x={xi(f)} y={H - B + 16} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="middle">{f}</text>
       ))}
       <text x={(L + W - R) / 2} y={H - 4} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="middle">stimulation rate (Hz)</text>
       {/* each pulse-width group's own best cell, small grey, its pulse width beside it */}
@@ -152,12 +159,24 @@ function Legend() {
   const sw = (children) => <svg width="16" height="14" aria-hidden="true">{children}</svg>;
   return (
     <MDBox display="flex" flexWrap="wrap" columnGap={2.5} rowGap={0.5} mt={0.8} sx={SMALL}>
-      <span style={item}>{sw(<circle cx="8" cy="7" r="5" fill="none" stroke={PAL.fail} strokeWidth="2" />)} ruled out: the unconstrained search&apos;s preference, below the adaptive minimum</span>
-      <span style={item}>{sw(<circle cx="8" cy="7" r="5" fill={PAL.accent} />)} chosen: the best setting adaptive mode can use</span>
+      <span style={item}>{sw(<circle cx="8" cy="7" r="5" fill="none" stroke={PAL.fail} strokeWidth="2" />)} ruled out: the unconstrained search&apos;s preference, below the closed-loop minimum</span>
+      <span style={item}>{sw(<circle cx="8" cy="7" r="5" fill={PAL.accent} />)} chosen: the best setting closed loop can use</span>
       <span style={item}>{sw(<circle cx="8" cy="7" r="3.5" fill="#B8B8B8" />)} each pulse-width group&apos;s own best cell</span>
-      <span style={item}>{sw(<rect x="1" y="1" width="14" height="12" fill={PAL.failFill} stroke={PAL.fail} strokeDasharray="2 2" />)} rates adaptive mode cannot run</span>
+      <span style={item}>{sw(<rect x="1" y="1" width="14" height="12" fill={PAL.failFill} stroke={PAL.fail} strokeDasharray="2 2" />)} rates closed loop cannot run</span>
       <span style={item}>{sw(<line x1="1" x2="15" y1="7" y2="7" stroke="#6A6A6A" />)} 0 = the setting in force; predicted pain in points, lower is better</span>
     </MDBox>
+  );
+}
+
+/** The one-line summary printed in the open above the folded drawing. */
+export function ExcludedSettingsSummary({ envelope }) {
+  const env = envelope || {};
+  const excludedRates = Array.isArray(env.grid_rates_excluded) ? env.grid_rates_excluded : [];
+  return (
+    <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: "#2A2A2A" }}>
+      {`${num(env.n_exclusions) ?? 0} setting${num(env.n_exclusions) === 1 ? "" : "s"} ruled out because closed loop cannot run below ${env.min_rate_hz != null ? `${env.min_rate_hz} Hz` : "its minimum rate"}`}
+      {excludedRates.length ? ` · grid rates ${excludedRates.map((r) => Number(r)).join(", ")} Hz excluded` : ""}
+    </MDTypography>
   );
 }
 
@@ -166,15 +185,10 @@ export default function ExcludedSettingsChart({ envelope, strata }) {
   const ex = env.exclusions || {};
   const sides = ["Left", "Right"].filter((s) => (Array.isArray(ex[s]) && ex[s].length) || (strata || []).some((r) => r && r.hemisphere === s));
   if (!sides.length) return null;
-  const excludedRates = Array.isArray(env.grid_rates_excluded) ? env.grid_rates_excluded : [];
   return (
     <MDBox>
-      <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: "#2A2A2A" }}>
-        {`${num(env.n_exclusions) ?? 0} setting${num(env.n_exclusions) === 1 ? "" : "s"} ruled out because adaptive mode cannot run below ${env.min_rate_hz != null ? `${env.min_rate_hz} Hz` : "its minimum rate"}`}
-        {excludedRates.length ? ` · grid rates ${excludedRates.map((r) => Number(r)).join(", ")} Hz excluded` : ""}
-      </MDTypography>
       {/* 600 px per side: side by side when the card is at least about 1230 px wide, else stacked. */}
-      <MDBox display="flex" columnGap={3} rowGap={2} flexWrap="wrap" mt={1}>
+      <MDBox display="flex" columnGap={3} rowGap={2} flexWrap="wrap">
         {sides.map((s) => (
           <SidePanel key={s} side={s} exclusions={Array.isArray(ex[s]) ? ex[s] : []} strata={strata} minRate={num(env.min_rate_hz)} />
         ))}

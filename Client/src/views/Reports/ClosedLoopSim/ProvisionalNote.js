@@ -80,18 +80,18 @@ export default function ProvisionalNote({ deploymentReport, dense = false, mt = 
       sx={{ backgroundColor: PAL.warnFill || "#FFF7E6", borderRadius: "4px",
         border: `1px solid ${PAL.warnBorder || PAL.warn}` }}>
       {headline && (
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: dense ? 10 : 10.5,
+        <MDTypography variant="caption" sx={{ display: "block", fontSize: dense ? 11 : 11.5,
           fontWeight: "bold", letterSpacing: 0.3, color: PAL.warnText || PAL.warn }}>
           {`PROVISIONAL — POINT SIGNS ONLY; ${c.n} OF ${c.total} INTERVALS SPAN ZERO`}
         </MDTypography>
       )}
       {c.edges.map((e) => (
-        <MDTypography key={e.k} variant="caption" sx={{ display: "block", fontSize: dense ? 10 : 10.5,
+        <MDTypography key={e.k} variant="caption" sx={{ display: "block", fontSize: dense ? 11 : 11.5,
           fontFamily: PAL.mono, color: "#2A2A2A" }}>
           {e.text}
         </MDTypography>
       ))}
-      <MDTypography variant="caption" sx={{ display: "block", fontSize: dense ? 9.5 : 10,
+      <MDTypography variant="caption" sx={{ display: "block", fontSize: 11,
         color: "#4A4A4A", mt: 0.2 }}>
         The verdict rests on the sign of each point estimate (PI rule, 2026-09-13: "established
         means mean only"). An interval that spans zero is a caveat on the page, not a block.

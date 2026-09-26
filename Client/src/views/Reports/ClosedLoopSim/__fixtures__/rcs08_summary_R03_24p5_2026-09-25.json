@@ -1,0 +1,566 @@
+{
+"available": true,
+"caveats": [
+"Per-era fragility: AUC swings 0.15 / cut-point swings 0.5 across OFF/LOW/HIGH \u2014 the threshold may not hold once stim changes.",
+"Underpowered and NOT rescuable by more data: 80% power would require 1,479 independent ratings at the point AUC, beyond the 500 ceiling for a realistic single-participant study. Because required n scales as 1/(AUC-0.5)^2, this is a restatement of 'indistinguishable from chance', not a collection target. Currently 83 ratings.",
+"Selection bias: this band was chosen from a sweep on the same data; the OR/AUC are optimistic. Out-of-sample / prospective confirmation is the honest test.",
+"FORWARD VALIDATION FAILED: held-out AUC 0.4 (95% CI 0.26\u20130.56) collapses to chance, although the in-sample AUC is 0.58 (forward optimism 0.18). Training on the past does not predict the future for this band \u2014 do NOT program it as an adaptive threshold on the in-sample number alone."
+],
+"device_control": {
+"adaptive_valid": true,
+"polarity": "positive",
+"ramp": {
+"available": true,
+"posture": "moderate",
+"ramp_down_hint": "moderate, may be set slightly faster than ramp-up for comfort on stim reduction",
+"ramp_up_hint": "moderate starting rate, titrate up to comfort",
+"reason": "Advisory only \u2014 the deployable ramp rate is patient- and side-effect-bound and must be titrated in clinic. This is a starting posture from the biomarker's polarity, adaptive-range validity, and stim-stability.",
+"transition_note": "Biomarker is stim-stable \u2014 a moderate transition is a reasonable starting posture; titrate to the patient's comfort and side-effect threshold in clinic."
+},
+"suggested_mode": "Dual",
+"suggested_mode_reason": "positive-direction biomarker maps onto Dual/Single adaptive directly (stim ramps up as the biomarker rises)"
+},
+"evidence": {
+"auc": 0.5518997258127696,
+"auc_current_removed": {
+"adjusted_for": "the stimulation current in force (mA)",
+"auc": 0.5255255255255258,
+"auc_high": 0.6699098364530156,
+"auc_low": 0.36278563248766726,
+"auc_more_power_more_pain": 0.4744744744744743,
+"auc_more_power_more_pain_high": 0.6372143675123327,
+"auc_more_power_more_pain_low": 0.33009016354698434,
+"available": true,
+"descriptive_only": "Descriptive only: the plain reading sets every gate and the verdict; this one moves none of them (the PI, 2026-09-22).",
+"flexibility_spent": 1,
+"hemisphere": "Right",
+"interval_method": "the 2.5th and 97.5th percentiles over resamples of whole pain reports; the plain curve's own interval is additionally bias-corrected, so the like-for-like comparison is with the plain reading on the same samples, made this same way",
+"label": "with the stimulation current taken out",
+"n_distinct_currents": 9,
+"n_pain_reports": 83,
+"n_samples_total": 146,
+"n_samples_without_current": 0,
+"n_spectral_samples": 146,
+"nearly_the_current": false,
+"p_two_sided": 0.72,
+"partial_r": -0.038949582448582355,
+"partial_r_high": 0.14507271379183784,
+"partial_r_low": -0.23936440310481594,
+"partial_r_with": "the high-or-low pain label (1 high, 0 low), the middle third left out",
+"plain_direction": "more power goes with less pain",
+"plain_on_same_samples": {
+"auc": 0.5518997258127695,
+"auc_high": 0.6819119105975724,
+"auc_low": 0.4081712423282321,
+"n_pain_reports": 83,
+"n_spectral_samples": 146
+},
+"r_power_vs_current": 0.007092502188778649,
+"settings_store_key": "94d110a243802ba31ae13045138cc5ddd91ab01e",
+"shape": "line",
+"shape_words": "a straight line",
+"why": "The band power with the Right current in force at each sample taken out as a straight line, the pain scores and the high-or-low split untouched, given in the plain reading's own direction (more power goes with less pain); 0.5 is what coin flipping gives, and a value below 0.5 means the direction reversed once the current was out.",
+"why_this_shape": "a straight line, as E2's adjusted reading on this page is made (decision 242), so the two adjusted readings a reader sets side by side are made the same way; decision 241 keeps the straight line for every published adjusted number"
+},
+"auc_hi": 0.6552544705499949,
+"auc_lo": 0.36472802974299356,
+"credible_ci": true,
+"n_clusters": 83,
+"n_matched_samples": 156,
+"odds_ratio": 1.481185274439096,
+"operating_point": {
+"direction": "ge",
+"fpr": 0.25925925925925924,
+"rule": "youden",
+"sensitivity": 0.49230769230769234,
+"specificity": 0.7407407407407407,
+"threshold": -0.05916995792011011,
+"tpr": 0.49230769230769234,
+"youden_j": 0.2330484330484331
+},
+"or_ci_high": 3.0521171424105473,
+"or_ci_low": 0.7188157317849474,
+"p_glmer": 0.28689470725330163
+},
+"forward": {
+"available": true,
+"beats_chance_forward": false,
+"ci_method": "held-out-cluster bootstrap (de-folded; train-fold orientation fixed)",
+"folds": [
+{
+"n_test_clusters": 4,
+"n_train_clusters": 11,
+"sens": 0.0,
+"spec": 1.0,
+"test_auc": 0.33333333333333337,
+"test_week_start": 7,
+"train_auc": 0.5416666666666666
+},
+{
+"n_test_clusters": 5,
+"n_train_clusters": 15,
+"sens": 0.0,
+"spec": 1.0,
+"test_auc": 0.2222222222222222,
+"test_week_start": 9,
+"train_auc": 0.5793650793650793
+},
+{
+"n_test_clusters": 5,
+"n_train_clusters": 20,
+"sens": 0.5,
+"spec": 0.3333333333333333,
+"test_auc": 0.38888888888888895,
+"test_week_start": 11,
+"train_auc": 0.5185185185185185
+},
+{
+"n_test_clusters": 3,
+"n_train_clusters": 25,
+"sens": 0.5,
+"spec": 1.0,
+"test_auc": 1.0,
+"test_week_start": 12,
+"train_auc": 0.5176767676767676
+},
+{
+"n_test_clusters": 2,
+"n_train_clusters": 28,
+"sens": 0.0,
+"spec": 0.5,
+"test_auc": 0.0,
+"test_week_start": 13,
+"train_auc": 0.5836734693877551
+},
+{
+"n_test_clusters": 3,
+"n_train_clusters": 30,
+"sens": 0.0,
+"spec": 1.0,
+"test_auc": 0.16666666666666669,
+"test_week_start": 14,
+"train_auc": 0.5659722222222222
+},
+{
+"n_test_clusters": 6,
+"n_train_clusters": 33,
+"sens": 0.0,
+"spec": 0.6666666666666666,
+"test_auc": 0.0,
+"test_week_start": 15,
+"train_auc": 0.5355263157894736
+},
+{
+"n_test_clusters": 3,
+"n_train_clusters": 39,
+"sens": 0.0,
+"spec": 0.75,
+"test_auc": 0.0,
+"test_week_start": 19,
+"train_auc": 0.5579777365491652
+},
+{
+"n_test_clusters": 7,
+"n_train_clusters": 45,
+"sens": 0.0,
+"spec": 0.75,
+"test_auc": 0.0,
+"test_week_start": 34,
+"train_auc": 0.5739495798319327
+},
+{
+"n_test_clusters": 5,
+"n_train_clusters": 52,
+"sens": 0.0,
+"spec": 1.0,
+"test_auc": 1.0,
+"test_week_start": 37,
+"train_auc": 0.5121336996336996
+},
+{
+"n_test_clusters": 3,
+"n_train_clusters": 57,
+"sens": 0.5,
+"spec": 0.5,
+"test_auc": 0.5,
+"test_week_start": 38,
+"train_auc": 0.561598440545809
+},
+{
+"n_test_clusters": 3,
+"n_train_clusters": 60,
+"sens": 0.0,
+"spec": 1.0,
+"test_auc": 0.25,
+"test_week_start": 41,
+"train_auc": 0.5681572304363505
+},
+{
+"n_test_clusters": 3,
+"n_train_clusters": 63,
+"sens": 0.0,
+"spec": 1.0,
+"test_auc": 1.0,
+"test_week_start": 43,
+"train_auc": 0.5672465707594513
+},
+{
+"n_test_clusters": 3,
+"n_train_clusters": 66,
+"sens": 0.0,
+"spec": 1.0,
+"test_auc": 1.0,
+"test_week_start": 44,
+"train_auc": 0.5603174603174603
+}
+],
+"held_out_auc": 0.4026879044300647,
+"held_out_auc_hi": 0.5649151496188416,
+"held_out_auc_lo": 0.26102605183487537,
+"held_out_sens": 0.10714285714285714,
+"held_out_spec": 0.8214285714285714,
+"in_sample_auc": 0.5824311490978158,
+"n_folds": 14,
+"n_test_clusters": 55,
+"note": "Expanding-window forward-chaining over 14 non-overlapping weekly test folds. Orientation and the Youden threshold are fit on the TRAIN weeks only and applied to the held-out future weeks, so the held-out AUC is genuinely out-of-sample and is NOT re-folded (it can fall below 0.5 when the band does not generalize forward). The held-out-AUC CI is a cluster bootstrap over independent held-out ratings; 'forward-validated' requires its lower bound to clear 0.5. Compare held_out_auc against in_sample_auc to read the forward optimism.",
+"optimism": 0.1797432446677511,
+"reliable": true
+},
+"gates": [
+{
+"detail": "candidate (mixed-effects n.s.)",
+"evaluated": true,
+"key": "validated",
+"label": "Band validated (mixed-effects)",
+"necessary": true,
+"pass": false,
+"short_label": "Band validated",
+"state": "fail"
+},
+{
+"detail": "band 22.0\u201327.0 Hz (center 24.5 Hz) must fit inside 8.0\u201330.0 Hz",
+"evaluated": true,
+"key": "adaptive_band",
+"label": "In Percept adaptive range (8\u201330 Hz)",
+"necessary": true,
+"pass": true,
+"short_label": "Band inside 8-30 Hz",
+"state": "pass"
+},
+{
+"detail": "power \u2265 143.0 LSB (measured on device Timeline)",
+"evaluated": true,
+"key": "deployable_threshold",
+"label": "Deployable LSB threshold available",
+"necessary": true,
+"pass": true,
+"short_label": "Threshold in device units",
+"state": "pass"
+},
+{
+"detail": "OR CI [0.7188157317849474, 3.0521171424105473]",
+"evaluated": true,
+"key": "credible_ci",
+"label": "Credible effect-size CI",
+"necessary": false,
+"pass": true,
+"short_label": "Credible effect size",
+"state": "pass"
+},
+{
+"detail": "band\u00d7era LRT p=0.2165524406975463 did not reject, but the interval on the largest between-era difference is wider than the declared margin -- these data cannot tell a stable band from a materially unstable one (absence of evidence, not evidence of stability).",
+"evaluated": true,
+"key": "stim_stable",
+"label": "Stim-stable (band\u00d7era equivalence test)",
+"necessary": false,
+"pass": false,
+"short_label": "Same across stimulation states",
+"state": "indeterminate"
+},
+{
+"detail": "power 5%\u201310% (conservative\u2013point AUC); target power NOT achievable by collecting more data (AUC indistinguishable from chance)",
+"evaluated": true,
+"key": "powered",
+"label": "Adequately powered (\u226580%)",
+"necessary": false,
+"pass": false,
+"short_label": "Enough pain ratings",
+"state": "fail"
+},
+{
+"detail": "held-out AUC 0.4 (95% CI 0.26\u20130.56) collapses to chance while in-sample is 0.58 (optimism 0.18); band did NOT generalize forward \u2014 do not program on the in-sample number.",
+"evaluated": true,
+"key": "forward_validated",
+"label": "Forward-validated (held-out AUC clears chance)",
+"necessary": false,
+"pass": false,
+"short_label": "Holds on later weeks",
+"state": "fail"
+}
+],
+"identity": {
+"band_hi_hz": 27.0,
+"band_lo_hz": 22.0,
+"bandwidth_hz": 5.0,
+"binarization": "tertile",
+"center_freq_hz": 24.5,
+"clinic_sheet_ratings": {
+"included": false,
+"n_added": 0,
+"n_available": 0,
+"reason": null,
+"scale": null,
+"sheet_column": null
+},
+"contact": "ZERO_THREE_RIGHT",
+"contact_label": "R 0\u207b3\u207a",
+"hemisphere": "Right",
+"participant": "2e3c75c00d7f4f37b53a048d195f11da",
+"pro_metric": "nrs",
+"region": "",
+"snapped_center_freq_hz": 24.4140625
+},
+"match_direction": "prior",
+"n_gates": 7,
+"n_gates_indeterminate": 1,
+"n_gates_passed": 3,
+"n_necessary": 3,
+"n_necessary_passed": 2,
+"portability": {
+"auc_spread": 0.1510185185185185,
+"available": true,
+"cutpoint_spread": 0.5007110360073846,
+"era_counts": {
+"HIGH": 2429,
+"LOW": 2870,
+"OFF": 1482
+},
+"eras": {
+"HIGH": {
+"auc": 0.3392592592592593,
+"available": true
+},
+"LOW": {
+"auc": 0.4564814814814815,
+"available": true
+},
+"OFF": {
+"auc": 0.4902777777777778,
+"available": true
+}
+},
+"n_eras_estimable": 3
+},
+"power": {
+"alpha": 0.05,
+"auc": 0.5518997258127696,
+"auc_lo": 0.4416610935171386,
+"available": true,
+"ci_crosses_chance": true,
+"curve": {
+"n": [
+4,
+16,
+29,
+42,
+55,
+68,
+80,
+93,
+106,
+119,
+132,
+145,
+157,
+170,
+183,
+196,
+209,
+221,
+234,
+247,
+260,
+273,
+286,
+298,
+311,
+324,
+337,
+350,
+362,
+375,
+388,
+401,
+414,
+427,
+439,
+452,
+465,
+478,
+491,
+504
+],
+"power": [
+0.035163571337533645,
+0.046336878361767336,
+0.05767935473743171,
+0.06681955622154255,
+0.07670591818305562,
+0.08614947141427004,
+0.0945718995317606,
+0.10384656601541636,
+0.11304621367954854,
+0.12128219622042985,
+0.1304086275822322,
+0.13950835274305884,
+0.14742424476053234,
+0.15648352539465032,
+0.1655304324189717,
+0.17370333114484043,
+0.1827329552346173,
+0.19088619022254816,
+0.1998961865815823,
+0.2085541325736857,
+0.21752742244037904,
+0.22648349249505723,
+0.23459071215400384,
+0.24267663506943654,
+0.2515777210217144,
+0.26045328751347974,
+0.2693011775434313,
+0.2777438057721983,
+0.28572493919838865,
+0.29367486621590616,
+0.3023986793747694,
+0.31108480099433206,
+0.319731243473712,
+0.3283360741971655,
+0.3357356818283543,
+0.34425649410257847,
+0.3519625635445572,
+0.36039375493316905,
+0.36877497041824353,
+0.3771046398067163
+],
+"prevalence": 0.4457831325301205
+},
+"curve_truncated": true,
+"design_effect": 1.4795237499459963,
+"feasible_n_max": 500,
+"more_data_needed": true,
+"n_neg": 46,
+"n_pos": 37,
+"n_ratings_current": 83,
+"n_ratings_effective": 56.099133253541595,
+"n_ratings_needed": 1479,
+"n_ratings_needed_hi": null,
+"note": "Hanley\u2013McNeil AUC variance on the count of independent ratings (clustered effective n). Power to reject AUC = 0.5. REQUIREMENT NOT FEASIBLE: reaching 80% power would take 1,479 independent ratings, beyond the 500 ceiling for a realistic single-participant study. Because the required n scales as 1/(AUC-0.5)^2, this is a restatement of 'this band is indistinguishable from chance', NOT a data-collection target. Effective n is DISCOUNTED by a design effect of 1.48 (audit [16]/[19]): weekly ratings are serially autocorrelated, so the moving-block bootstrap variance exceeds the i.i.d. cluster bootstrap by this factor. Power and ratings-needed are reported on the discounted effective n; the x-axis is real ratings collected. Power BAND reported across [auc_lo, auc]; the 'powered' gate reads the conservative auc_lo end (audit C4) so it cannot pass on the optimistic point AUC.",
+"power_current": 0.09675727456075867,
+"power_current_lo": 0.05,
+"reason": null,
+"requirement_feasible": false,
+"se_auc": 0.07800469395998418,
+"small_sample": false,
+"small_sample_floor": 10,
+"status": "requirement_infeasible",
+"target_power": 0.8
+},
+"ready_to_program": false,
+"temporal_validity": {
+"forward_held_out_auc": 0.4026879044300647,
+"forward_reliable": true,
+"forward_validation": "failed",
+"note": "forward_validation = expanding-window weekly forward-chaining held-out AUC vs chance (audit C2). stim_state_portability = per-era CI-overlap + LRT (audit C3); this is robustness to stim STATE. threshold_drift = OLS trend test of the weekly Youden cut-point vs week index (audit [18]); 'drift_detected' means the cut-point moves systematically over calendar time and a fixed device threshold needs periodic recalibration.",
+"stim_state_portability": "portable",
+"threshold_drift": "stable",
+"threshold_drift_n_weeks": 6,
+"threshold_drift_p": 0.6034546883831695,
+"threshold_drift_slope_per_week": 0.024350938921189936,
+"threshold_drift_total": 0.7548791065568881
+},
+"threshold": {
+"available": true,
+"cutpoint_feature": -0.05916995792011011,
+"estimate": null,
+"estimated": false,
+"method": "percentile-anchored on device Timeline LSB",
+"mode": {
+"all_modes": {
+"Dual": {
+"adaptive": true,
+"adaptive_band_hz": [
+8.0,
+30.0
+],
+"adaptive_band_ok": true,
+"averaging_ms_adaptive": 1200.0,
+"averaging_ms_sensing": 3000.0,
+"fft_convertible": true,
+"fft_size": 256,
+"fft_update_hz_adaptive": 5.0,
+"label": "Dual Threshold",
+"note": "Timeline-anchored upper threshold 143.0 LSB is a STARTING POINT: it is read off the 10-min Timeline average, while Dual Threshold adapts on a 1200 ms window. Shorter averaging widens the tails, so confirm/raise the threshold live while sensing in Dual Threshold before enabling adaptive.",
+"threshold_usable": true
+},
+"Single": {
+"adaptive": true,
+"adaptive_band_hz": [
+8.0,
+30.0
+],
+"adaptive_band_ok": true,
+"averaging_ms_adaptive": 100.0,
+"averaging_ms_sensing": 1000.0,
+"fft_convertible": false,
+"fft_size": 64,
+"fft_update_hz_adaptive": 20.0,
+"label": "Single Threshold",
+"note": "Single Threshold uses a 64-pt FFT, but the device Timeline LSB (and this calibration) is 256-pt. LFP Power is not comparable across FFT sizes, so the Timeline-anchored threshold does NOT translate to this mode \u2014 recapture the threshold while sensing in Single Threshold before deploying.",
+"threshold_usable": false
+},
+"SingleInverse": {
+"adaptive": false,
+"adaptive_band_hz": [
+1.0,
+96.0
+],
+"adaptive_band_ok": true,
+"averaging_ms_adaptive": 3000.0,
+"averaging_ms_sensing": 3000.0,
+"fft_convertible": true,
+"fft_size": 256,
+"fft_update_hz_adaptive": 2.0,
+"label": "Single Threshold Inverse",
+"note": "Sensing-only mode (no adaptive actuation): the Timeline-anchored upper threshold 143.0 LSB is reviewed against, not acted on. 256-pt FFT, 3000 ms averaging.",
+"threshold_usable": true
+}
+},
+"chosen": {
+"adaptive": true,
+"adaptive_band_hz": [
+8.0,
+30.0
+],
+"adaptive_band_ok": true,
+"averaging_ms_adaptive": 1200.0,
+"averaging_ms_sensing": 3000.0,
+"fft_convertible": true,
+"fft_size": 256,
+"fft_update_hz_adaptive": 5.0,
+"label": "Dual Threshold",
+"note": "Timeline-anchored upper threshold 143.0 LSB is a STARTING POINT: it is read off the 10-min Timeline average, while Dual Threshold adapts on a 1200 ms window. Shorter averaging widens the tails, so confirm/raise the threshold live while sensing in Dual Threshold before enabling adaptive.",
+"threshold_usable": true
+},
+"controller_averaging_ms": 1200.0,
+"note": "Timeline-anchored upper threshold 143.0 LSB is a STARTING POINT: it is read off the 10-min Timeline average, while Dual Threshold adapts on a 1200 ms window. Shorter averaging widens the tails, so confirm/raise the threshold live while sensing in Dual Threshold before enabling adaptive.",
+"requested_mode": "Dual",
+"threshold_usable": true,
+"timeline_averaging_ms": 600000.0
+},
+"n_timeline_samples": 19791,
+"native_modeled_check": null,
+"percentile": 59.8,
+"upper_lsb": 143.0
+},
+"verdict": "candidate (mixed-effects n.s.)"
+}

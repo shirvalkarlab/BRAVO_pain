@@ -14,6 +14,13 @@
  * Laid out again 2026-09-12 after the PI's review: a two-column grid (the check's name at 14 px
  * bold with its folded sentence under it; the evidence at 13-14 px), comfortable row spacing, the
  * per-side symbols labelled at 13 px with a legend line saying what each symbol means.
+ *
+ * The design review of 2026-09-26 (the PI: "yes to all six, build them"): the headline answers the
+ * card's own title ("Closed loop: may it start ...?") with "No: ..." or "Yes: ...", because the
+ * page's status line now carries "closed loop cannot start" and the page said it four times; the
+ * sentence pointing at the readiness table is gone (it pointed and said nothing else); the band
+ * chart folds under its own check; "resolved" is "proven better"; "adaptive" is "closed loop";
+ * "once time is removed" says what is removed, the differences between clinic visits.
  */
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -30,15 +37,15 @@ const NOTE = { ...SMALL, whiteSpace: "nowrap" };
 
 /** Plain-language names for the four conditions (their code names are in the tooltip). */
 export const CHECK_LABELS = {
-  rate_at_or_above_adaptive_minimum: "Rate at or above the adaptive minimum",
-  openloop_choice_resolved: "Rate and pulse width resolved against their own uncertainty",
+  rate_at_or_above_adaptive_minimum: "Rate at or above the closed-loop minimum",
+  openloop_choice_resolved: "Rate and pulse width proven better, beyond their own uncertainty",
   // Plain words first, the mechanism after (panel C item 5; report C §5.3; the house rule: say what
   // it does, then name it). The 8–30 Hz range stays, in brackets, for whoever needs it.
   adaptive_band_passes_lfp_response: "Does a usable recording site's power change with current? (a band inside 8–30 Hz)",
   amplitude_limits_inside_envelope_and_under_ceiling: "Closed-loop current limits inside the delivered range and under the ceiling",
 };
 
-function verdictState(c) {
+export function verdictState(c) {
   const v = String((c && c.verdict) || "").trim().toUpperCase();
   if (v === "PASS" || (c && c.passed === true)) return true;
   if (v === "FAIL" || (c && c.passed === false)) return false;
@@ -54,8 +61,8 @@ function Sub({ ok, text }) {
   // small to call, never the failure ink), unknown = dashed.
   return (
     <MDBox display="inline-flex" alignItems="center" gap={0.6} mr={2}>
-      {ok === true ? <TickGlyph label="resolved" size={14} />
-        : (ok === false ? <AmberGlyph label="not resolved" size={14} /> : <NotTestedGlyph label="not assessed" size={14} />)}
+      {ok === true ? <TickGlyph label="proven better" size={14} />
+        : (ok === false ? <AmberGlyph label="not proven" size={14} /> : <NotTestedGlyph label="not assessed" size={14} />)}
       <span style={{ fontSize: TYPE.body, color: "#1A1A1A", whiteSpace: "nowrap" }}>{text}</span>
     </MDBox>
   );
@@ -65,8 +72,8 @@ function SubLegend() {
   const item = { display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" };
   return (
     <MDBox display="flex" flexWrap="wrap" columnGap={2} rowGap={0.4} mt={0.6} sx={SMALL}>
-      <span style={item}><TickGlyph label="" size={13} /> resolved: the gain exceeds its own uncertainty</span>
-      <span style={item}><AmberGlyph label="" size={13} /> not resolved: measured, too small to call</span>
+      <span style={item}><TickGlyph label="" size={13} /> proven better: the gain exceeds its own uncertainty</span>
+      <span style={item}><AmberGlyph label="" size={13} /> not proven: measured, too small to call</span>
       <span style={item}><NotTestedGlyph label="" size={13} /> not assessed: the comparison could not be formed</span>
     </MDBox>
   );
@@ -76,14 +83,14 @@ function SubLegend() {
 function BandTicks({ verdicts, best }) {
   const keys = Object.keys(verdicts || {}).map(Number).filter((k) => Number.isFinite(k)).sort((a, b) => a - b);
   if (!keys.length) return null;
-  const W = 560, H = 44, PAD = 18;
+  const W = 520, H = 44, PAD = 18;   // 520 px so it fits the evidence column on a laptop
   const lo = 8, hi = 30;
   const x = (c) => PAD + ((c - lo) / (hi - lo)) * (W - 2 * PAD);
   return (
     <svg width={W} height={H} role="img" aria-label="which band centres respond">
       <line x1={x(lo)} x2={x(hi)} y1={H - 18} y2={H - 18} stroke="#D8D8D8" />
       {[8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30].map((t) => (
-        <text key={t} x={x(t)} y={H - 3} fontSize={TYPE.axis} fill="#7A7A7A" textAnchor="middle">{t}</text>
+        <text key={t} x={x(t)} y={H - 3} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="middle">{t}</text>
       ))}
       {keys.map((c) => {
         const responds = String(verdicts[c] || verdicts[String(c)] || "").toUpperCase().startsWith("RESPONDS");
@@ -136,7 +143,8 @@ function Numbers({ c, lfp }) {
       const rows = Array.isArray(ev.verdict_rows) ? ev.verdict_rows : null;
       // PER SIDE (review S3, 2026-09-12): the check is judged on each frozen side's own sensing
       // evidence, by the readiness screen's rule (decision 199: at least one band that falls with
-      // current once time is removed AND rises with pain on the Biomarkers grid). One block per
+      // current after removing differences between clinic visits AND rises with pain on the
+      // Biomarkers grid). One block per
       // side, each with its
       // own count, strip and the contact it was read on; a side with no evidence says so.
       const per = ev.per_hemisphere && typeof ev.per_hemisphere === "object" ? ev.per_hemisphere : null;
@@ -156,7 +164,7 @@ function Numbers({ c, lfp }) {
                     <span style={{ ...MONO, fontWeight: 600 }}>{h[0]}</span>
                     <span style={{ ...MONO, whiteSpace: "nowrap" }}>
                       {b.n_tested
-                        ? `${fmtOf(b.n_era_negative_significant, b.n_tested)} fall with current once time is removed · ${b.n_pain_positive == null ? "rise with pain: not known" : `${fmtOf(b.n_pain_positive, b.n_tested)} rise with pain`} · ${fmtOf(b.n_qualifying, b.n_tested)} do both${Array.isArray(b.qualifying_centers_hz) && b.qualifying_centers_hz.length ? ` (${b.qualifying_centers_hz.map((v) => Number(v)).join(", ")} Hz)` : ""}`
+                        ? `${fmtOf(b.n_era_negative_significant, b.n_tested)} fall with current (clinic-visit differences removed) · ${b.n_pain_positive == null ? "rise with pain: not known" : `${fmtOf(b.n_pain_positive, b.n_tested)} rise with pain`} · ${fmtOf(b.n_qualifying, b.n_tested)} do both${Array.isArray(b.qualifying_centers_hz) && b.qualifying_centers_hz.length ? ` (${b.qualifying_centers_hz.map((v) => Number(v)).join(", ")} Hz)` : ""}`
                         : state}
                     </span>
                     {b.n_tested ? <span style={NOTE}>{state}</span> : null}
@@ -164,10 +172,12 @@ function Numbers({ c, lfp }) {
                       <span style={NOTE}>{`${Math.round(num(b.n_power_unavailable))} not measurable`}</span>
                     )}
                   </MDBox>
+                  {/* The chart folds under its own check (the design review of 2026-09-26, S5):
+                      the counts above say what it shows; the bars say it band by band. */}
                   {Array.isArray(b.verdict_rows) && b.verdict_rows.length > 0 && (
-                    <MDBox mt={0.6}>
+                    <SizedFold show={`Show the ${b.verdict_rows.length} bands, drawn`} hide="Hide the bands" dense mt={0.4}>
                       <BandResponseStrip rows={b.verdict_rows} minSep={ev.min_sep_d} best={b.best_center_hz} />
-                    </MDBox>
+                    </SizedFold>
                   )}
                   <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.4 }}>
                     {sel && sel.selected
@@ -197,11 +207,11 @@ function Numbers({ c, lfp }) {
               <span style={NOTE}>{`${Math.round(num(ev.n_power_unavailable))} not measurable`}</span>
             )}
           </MDBox>
-          <MDBox mt={0.6}>
+          <SizedFold show="Show the bands, drawn" hide="Hide the bands" dense mt={0.4}>
             {rows
               ? <BandResponseStrip rows={rows} minSep={ev.min_sep_d} best={ev.best_center_hz} />
               : <BandTicks verdicts={ev.verdicts} best={null} />}
-          </MDBox>
+          </SizedFold>
           {lfp && (
             <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.4 }}>
               {lfp.selected
@@ -228,7 +238,9 @@ function Numbers({ c, lfp }) {
           <span style={{ ...MONO, whiteSpace: "nowrap" }}>
             {["Left", "Right"].filter((h) => checked[h]).map((h) => `${h[0]} ${fmtMa(checked[h].amp_min_mA)}–${fmtMa(checked[h].amp_max_mA)}`).join(" · ")}
           </span>
-          {ev.ceiling_by_side
+          {/* The ceiling is stated once on the page, in the next-visit card (the design review of
+              2026-09-26); here it is printed only when no history line below already names it. */}
+          {Object.keys(ev.history_above_ceiling || {}).length ? null : ev.ceiling_by_side
             // 2026-09-12: the ceiling is the current the PI stated as not acceptable, per side,
             // with its provenance; an older response carries only the one number.
             ? (<span style={NOTE} title={["Left", "Right"].filter((h) => ev.ceiling_by_side[h]).map((h) => `${h}: ${ev.ceiling_by_side[h].provenance}`).join(" · ")}>
@@ -271,26 +283,24 @@ export default function ClosedLoopChecks({ plan }) {
   const nNot = Array.isArray(gate.not_assessed) ? gate.not_assessed.length : conditions.filter((c) => verdictState(c) === null).length;
   const n = num(gate.n_conditions) ?? conditions.length;
   const passed = gate.passed === true;
-  const color = passed ? PAL.pass : (conditions.length ? PAL.fail : PAL.neutral);
+  // Text inks of the pass and fail roles (4.5:1 or more on white); the fill inks read 3.4 and 3.9:1.
+  const color = passed ? (PAL.passText || PAL.pass) : (conditions.length ? (PAL.failText || PAL.fail) : PAL.neutral);
+  // The card's title asks "Closed loop: may it start on the frozen setting?"; the headline answers
+  // it. The page's status line says "closed loop cannot start" in words; this says why, in counts.
   const headline = !conditions.length
     ? "The check did not run"
     : (passed
-      ? `Closed loop may start: ${n} of ${n} checks pass`
-      : `Closed loop may not start: ${nFail} of ${n} checks block${nNot ? `, ${nNot} not assessed` : ""}`);
+      ? `Yes: ${n} of ${n} checks pass`
+      : `No: ${nFail} of ${n} checks block${nNot ? `, ${nNot} not assessed` : ""}`);
   return (
     <MDBox>
       <MDBox display="flex" alignItems="center" gap={1}>
         {conditions.length ? (passed ? <TickGlyph label="may start" size={20} /> : <CrossGlyph label="may not start" size={20} />) : null}
         <MDTypography variant="h6" sx={{ fontSize: TYPE.section, color }}>{headline}</MDTypography>
       </MDBox>
-      {/* The two readiness cards stay two cards (panel C item 5, the clinician's correction of the
-          report's merge), each pointing at the other: this one decides, the table holds the
-          evidence one of these checks reads. */}
-      <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, mt: 0.4, color: "#4A4A4A" }}>
-        These four checks decide whether closed loop may start on the frozen setting. The
-        per-contact evidence behind the recording-site check is the readiness table at the top of
-        this page.
-      </MDTypography>
+      {/* The two readiness cards stay two cards (panel C item 5). The sentence that pointed from
+          here to the readiness table is gone (the design review of 2026-09-26): it said nothing
+          but where another card is. */}
       {/* Two columns: the check (symbol, name, folded sentence) and its evidence. */}
       <MDBox mt={1.5} sx={{ display: "grid", gridTemplateColumns: "minmax(300px, 1fr) minmax(360px, 1.5fr)",
         columnGap: "28px", rowGap: "22px", alignItems: "start" }}>

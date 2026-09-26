@@ -32,6 +32,12 @@ import MDTypography from "components/MDTypography";
 import { BIN_LO as LO, BIN_HI as HI, BIN_MID as MID, computeCuts as computeCutsShared }
   from "./binarizationModel";
 
+// Text greys at 4.5:1 or more on white (decision 304). The histogram's excluded-middle BARS keep
+// BIN_MID (a fill, 3.6:1, legible as a shape); its words take the darker grey the timeline uses for
+// the same class.
+const SUBTLE = "#5E5E5E";
+const MID_TEXT = "#5A6066";
+
 // Daily-mode (legacy fallback) cuts: the shared, backend-faithful computeCuts for the numeric
 // values, with the same UI percentile/strategy labels matchedCuts (below) attaches to the
 // matched-mode cuts -- one cut-computation implementation for both modes instead of two.
@@ -43,7 +49,7 @@ function computeCuts(vals, strategy, lowPct, highPct) {
       highLabel: `${(strategy === "tertile" ? 66.7 : highPct).toFixed(0)}th pct` };
   }
   if (c.kind === "one-cut") {
-    return { ...c, label: strategy === "median" ? "median (50th pct)" : "KMeans midpoint (1-D preview)" };
+    return { ...c, label: strategy === "median" ? "median (50th pct)" : "Midpoint between two clusters (preview)" };
   }
   return c;
 }
@@ -123,7 +129,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
         lowLabel: `${(strategy === "tertile" ? 33.3 : percentileLow).toFixed(0)}th pct`,
         highLabel: `${(strategy === "tertile" ? 66.7 : percentileHigh).toFixed(0)}th pct` };
     }
-    if (c.kind === "one-cut") return { ...c, label: strategy === "median" ? "median (50th pct)" : "KMeans midpoint" };
+    if (c.kind === "one-cut") return { ...c, label: strategy === "median" ? "median (50th pct)" : "Midpoint between two clusters" };
     return c;
   }, [matchedMode, scanModel, strategy, percentileLow, percentileHigh]);
 
@@ -240,7 +246,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
                     line: { color, width: 2, dash: "dash" } });
       annotations.push({ x, yref: "paper", y: yLevel, xanchor, yanchor: "bottom",
                          text: `${x.toFixed(1)} (${label})`, showarrow: false,
-                         font: { size: 10, color } });
+                         font: { size: 11, color } });
     };
     if (cuts.kind === "two-cut") {
       pushCutLine(cuts.lowCut, cuts.lowLabel, LO, 1.02, "right");
@@ -269,7 +275,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
       xref: "paper", yref: "paper", x: xRel, y: yRel, xanchor: "center", yanchor: "top",
       text: `<b>${label}</b><br>${primary}${secondary ? `<br>${secondary}` : ""}`,
       showarrow: false, align: "center",
-      font: { size: 10.5, color: "#FFFFFF" },
+      font: { size: 11, color: "#FFFFFF" },
       bgcolor: color, bordercolor: color, borderwidth: 1.5, borderpad: 4, opacity: 0.94,
     });
     // Signpost-badge copy. In matched mode the FRAMING follows the match-direction toggle:
@@ -383,10 +389,10 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
       bargap: 0.02,
       xaxis: { automargin: true, title: { text: metricLabel || "Pain score", font: { size: 11 }, standoff: 8 },
                gridcolor: "#EEF1F4", linecolor: "#B0B7BF", ticks: "outside", ticklen: 4,
-               tickfont: { size: 10 }, showline: true },
+               tickfont: { size: 11 }, showline: true },
       yaxis: { automargin: true, title: { text: yTitle, font: { size: 11 }, standoff: 8 },
                gridcolor: "#EEF1F4", linecolor: "#B0B7BF", ticks: "outside", ticklen: 4,
-               tickfont: { size: 10 }, showline: true,
+               tickfont: { size: 11 }, showline: true,
                // Matched mode: extend the range to ~1.6x the tallest bar so the floated per-group
                // detail badges (Low/High at ~0.80 paper, Excluded at ~0.97) clear the bars cleanly.
                ...(matchedMode && cuts.kind === "two-cut" ? { range: [0, yMax * 1.6] } : {}) },
@@ -475,7 +481,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
         `in the middle band excluded from training.`;
     }
     if (cuts.kind === "one-cut") {
-      return `${strategy === "median" ? "Median" : "KMeans"} cut on the daily distribution at ${cuts.cut?.toFixed(1)} — every day is labeled (none excluded).`;
+      return `${strategy === "median" ? "Median" : "Two-cluster"} cut on the daily distribution at ${cuts.cut?.toFixed(1)} — every day is labeled (none excluded).`;
     }
     return "Adjust the strategy to preview the cut.";
   })();
@@ -484,7 +490,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
     <MDBox display="flex" flexDirection="column" sx={{ width: "100%", height: "100%", minHeight: 440 }}>
       <MDBox display="flex" flexDirection="row" justifyContent="space-between" alignItems="baseline" mb={0.25}>
         <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 15 }}>
-          {matchedMode ? "Data available to binarize" : "Binarization preview"}
+          {matchedMode ? "Data available to split into high and low pain" : "Preview of the high / low pain split"}
         </MDTypography>
         <MDTypography variant="caption" color="dark" sx={{ fontSize: 12, fontStyle: "italic" }}>
           {headerCaption}
@@ -520,38 +526,38 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
               {su.n_pro_reused ? `; ${su.n_pro_reused} received >1.` : "."}
             </>
           )}
-          {matchDirty ? <i style={{ color: "#777" }}>{"  (live preview — recompute to score)"}</i> : null}
+          {matchDirty ? <i style={{ color: SUBTLE }}>{"  (live preview — recompute to score)"}</i> : null}
         </MDTypography>
       ) : null}
       {matchedMode ? (
         <MDTypography variant="caption" color="dark" sx={{ fontSize: 12, mb: 0.25, display: "block" }}
                       aria-live="polite">
-          {`Binarized → `}
+          {`Split → `}
           <span style={{ color: HI, fontWeight: 700 }}>{`${(counts.n_high ?? 0).toLocaleString()} high pain`}</span>
           {" / "}
           <span style={{ color: LO, fontWeight: 700 }}>{`${(counts.n_low ?? 0).toLocaleString()} low pain`}</span>
           {counts.n_excluded_middle
-            ? <span style={{ color: MID }}>{` / ${counts.n_excluded_middle.toLocaleString()} mid-range (excluded)`}</span>
+            ? <span style={{ color: MID_TEXT }}>{` / ${counts.n_excluded_middle.toLocaleString()} mid-range (excluded)`}</span>
             : null}
           {(counts.n_matched_td != null && counts.n_matched_td_montage != null && counts.n_matched > 0)
-            ? <span style={{ color: "#777" }}>
+            ? <span style={{ color: SUBTLE }}>
                 {`  · sources: ${counts.n_matched_td.toLocaleString()} TD (${(counts.n_matched_td - counts.n_matched_td_montage).toLocaleString()} streaming, ${counts.n_matched_td_montage.toLocaleString()} montage), ${(counts.n_matched_event || 0).toLocaleString()} PSD (patient event)`}
               </span>
             : null}
           {counts.n_capped_dropped
-            ? <span style={{ color: "#777" }}>{` · ${counts.n_capped_dropped} neural samples over the per-rating cap`}</span>
+            ? <span style={{ color: SUBTLE }}>{` · ${counts.n_capped_dropped} neural samples over the per-rating cap`}</span>
             : null}
         </MDTypography>
       ) : null}
       {matchedMode ? (showDescriptions ? (
         <MDTypography variant="caption" color="text" sx={{ fontSize: 11, fontStyle: "italic", mb: 0.25, display: "block" }}>
           {dir === "pro_first"
-            ? (`Matching is PRO-first: each pain rating claims up to ${(counts.max_per_rating || 3)} closest neural samples per channel within the match window. `
+            ? (`Matching is report-first: each pain rating claims up to ${(counts.max_per_rating || 3)} closest neural samples per channel within the match window. `
                + `A neural sample already claimed by an earlier rating is not re-claimed. This maximizes the number of independent pain ratings that contribute to discovery. `)
             : dir === "nearest"
             ? (`Matching is neural-first (symmetric ±${matchTolerance} min): each neural sample is paired with the closest pain rating in either time direction, then a per-(channel, rating) cap of ${(counts.max_per_rating || 3)} keeps the closest neural samples to each rating. Cross-sectional association, not forecasting. `)
             : (`Matching is neural-first (forecasting): each neural sample is paired with the nearest pain rating RECORDED AFTER it within ±${matchTolerance} min, capped at ${(counts.max_per_rating || 3)} per channel per rating. Causal direction; preferred for closed-loop deployment, conservative for discovery. `)}
-          {"Pooled neural sources: TD (250 Hz, band power estimated over 30 s by Welch's method) from streaming recordings and from montage and survey recordings, and PSD from patient events. "}
+          {"Pooled neural sources: TD (up to 30 s around the rating) from streaming, montage and survey recordings, and PSD from patient events. "}
           {"Band-power LSB appears on the timeline but covers one band, not every frequency, so it is not pooled here."}
         </MDTypography>
       ) : null) : (hasTolControl ? (
@@ -571,7 +577,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
             : (scanModel && scanModel.matchable)
               ? `None of the ${(scanModel.counts && scanModel.counts.n_sessions) || 0} available `
                 + `neural samples fell within \u00b1${matchTolerance} min of a pain rating, so nothing `
-                + "can be binarized at this window. Widen the match window above. The histogram "
+                + "can be split into high and low pain at this window. Widen the match window above. The histogram "
                 + "below has fallen back to the daily pain-report distribution, which is a "
                 + "different quantity: it shows the pain scores themselves, not the neural data "
                 + "they could label."
@@ -581,7 +587,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
                   + "not a finding about the neural data."
                 : "The neural-sample index for this participant has not been loaded, so matching "
                   + "was not attempted and nothing here describes how much neural data could be "
-                  + "binarized. The histogram below is the daily pain-report distribution."}
+                  + "split into high and low pain. The histogram below is the daily pain-report distribution."}
         </MDTypography>
       ) : null)}
 
@@ -596,7 +602,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
             <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: 700, color: LO }}>
               {`low ≤ ${(strategy === "tertile" ? 33 : percentileLow)}th pct`}
             </MDTypography>
-            <MDTypography variant="caption" sx={{ fontSize: 10.5, color: "#8A929B", fontStyle: "italic" }}>
+            <MDTypography variant="caption" sx={{ fontSize: 11, color: SUBTLE, fontStyle: "italic" }}>
               {"drag the two handles to set the cuts"}
             </MDTypography>
             <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: 700, color: HI }}>

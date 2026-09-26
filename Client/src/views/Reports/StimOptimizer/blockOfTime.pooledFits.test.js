@@ -87,9 +87,10 @@ describe("the three readings of one row", () => {
 });
 
 describe("the current map card, pulse widths pooled", () => {
+  // PIN CHANGED 2026-09-26: "at this rate", never "at this speed" (the design review).
   it("marks a current read from a pooled map that moves, with one note", () => {
     showPooled(pooledPlan(BLOCK_OF_TIME_VERDICT));
-    expect(text()).toContain("a current CAN be recommended at this speed: left 3.5 mA, right 3.0 mA");
+    expect(text()).toContain("a current CAN be recommended at this rate: left 3.5 mA, right 3.0 mA");
     expect(marks()).toHaveLength(1);
     expect(notes()).toHaveLength(1);
     expect(text()).not.toContain("not checked for movement between blocks of time");
@@ -97,7 +98,7 @@ describe("the current map card, pulse widths pooled", () => {
 
   it("prints nothing beside a current read from a pooled map that was checked and holds", () => {
     showPooled(pooledPlan("honest but uninformative: thin data"));
-    expect(text()).toContain("a current CAN be recommended at this speed: left 3.5 mA, right 3.0 mA.");
+    expect(text()).toContain("a current CAN be recommended at this rate: left 3.5 mA, right 3.0 mA.");
     expect(marks()).toHaveLength(0);
     expect(notes()).toHaveLength(0);
     expect(text()).not.toContain("not checked for movement between blocks of time");

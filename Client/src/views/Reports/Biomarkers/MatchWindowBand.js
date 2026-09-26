@@ -30,7 +30,7 @@ export default function MatchWindowBand({
   const highPct = strategy === "tertile" ? 66.7 : percentileHigh;
   return (
     <MDBox px={2} pt={1.5} pb={1.25} display="flex" flexDirection="column" gap={1.25}
-           sx={{ borderBottom: "1.5px solid #1A1A1A" }}>
+           sx={{ borderBottom: "1px solid #D5D8DC" }}>
       {/* THE COVERAGE SENTENCE: what the window admits and what it leaves out, following the slider live. */}
       {coverage && coverage.n_reports > 0 ? (
         <MDTypography variant="caption" color="dark" component="div" data-testid="report-coverage"
@@ -105,7 +105,7 @@ export default function MatchWindowBand({
                   ? "Cuts at the two handles above the histogram; samples between them are left out of training."
                   : strategy === "median"
                     ? "Every matched sample is labelled at the median (about half high, half low)."
-                    : "Two-cluster k-means on the matched ratings (kept for older results)."}
+                    : "Split where the matched ratings fall into two clusters (kept for older results)."}
             </MDTypography>
           ) : null}
         </Grid>

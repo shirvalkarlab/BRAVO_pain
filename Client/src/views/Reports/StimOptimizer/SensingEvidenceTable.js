@@ -21,6 +21,17 @@
  * header never breaks inside a word; the "n of N" count sits in a cell of its own to the right of
  * its bar, never on it; the currents are one line; the separation is printed as a number under a
  * header that names its unit; rows are 13 px and tall enough that the bars do not touch.
+ *
+ * CUT TO THE ALLOWED PAIRS, 2026-09-26 (the design review, S3; the PI: "yes to all six"). While
+ * today's contacts stimulate, the device senses on one pair per lead (decision 217), so only the
+ * rows on those pairs (`sensing_rule.by_side[side].allowed_channel`) can ever be usable; they stay
+ * open and every other row folds under "Show the N other combinations". A response without the rule
+ * shows every row, as before. The two count bars went (each repeated the number printed beside it),
+ * "why not" sits under its row instead of in a twelfth column, and the grid has no fixed minimum
+ * width (it was 1,180 px, which scrolled sideways on a laptop). The pointer to the checks card is
+ * gone; the explanatory paragraphs sit in one fold. A band near a harmonic is said in the PI's
+ * advisory words, "carries a folded multiple of the stimulation rate", and the rule is decision
+ * 277's: every whole multiple of the rate, folded by the device's 250 Hz sampling.
  */
 import { Tooltip } from "@mui/material";
 
@@ -33,38 +44,87 @@ import { contactSortKey } from "views/Reports/Biomarkers/contactOrder";
 
 import { num, fmtHz, fmtMa, contactLabel } from "./stimFormat";
 import { TYPE, HEAD, SMALL, SizedFold } from "./typeScale";
-// The checks card this table's evidence feeds, named by its own title constant so the link
-// cannot drift from the card it points to.
-import { TWO_STAGE_CARD_TITLE } from "./TwoStagePlanCard";
 
 const MONO = { fontFamily: PAL.mono, fontSize: TYPE.body, color: "#1A1A1A", whiteSpace: "nowrap" };
 
-/**
- * "n of N" as a filled bar that takes its cell's width; the count is printed by the caller in
- * the next cell, so no text ever sits on the bar. Green from ONE band up: one is what the rule
- * needs (decision 199), so there is no half-way mark any more.
- */
-function CountBar({ n, of }) {
-  const a = num(n), b = num(of);
-  if (a === null || b === null || b <= 0) return <span style={SMALL}>—</span>;
-  const frac = Math.max(0, Math.min(1, a / b));
-  return (
-    <svg width="100%" height={14} viewBox="0 0 100 14" preserveAspectRatio="none" role="img" aria-label={`${a} of ${b}`}>
-      <rect x="0" y="1" width="100" height="12" fill="#EEEEEE" />
-      <rect x="0" y="1" width={frac * 100} height="12" fill={a >= 1 ? PAL.pass : PAL.neutral} />
-    </svg>
-  );
-}
 const hzList = (xs) => (Array.isArray(xs) && xs.length ? `${xs.map((v) => Number(v)).join(", ")} Hz` : "—");
 const countText = (n, of) => {
   const a = num(n), b = num(of);
   return a === null || b === null || b <= 0 ? "" : `${Math.round(a)} of ${Math.round(b)}`;
 };
 
-// contact | side | rate | bar | count | bar | count | both (which bands) | currents | separation | usable | reason
-const COLUMNS = "108px 64px 76px minmax(90px, 1fr) 76px minmax(90px, 1fr) 76px minmax(150px, 1.2fr) 150px 120px 36px minmax(120px, 1.1fr)";
-const HEADERS = ["sensing contact", "stim side", "rate", "falls with current (time removed)", "", "rises with pain (Biomarkers grid)", "",
-  "both: the bands that qualify", "currents tested", "Separation (SD)", "", "why not"];
+// pair | side | rate | falls (count) | rises (count) | both (which bands) | currents | gap | usable;
+// "why not" is a full-width line UNDER its row. About 750 px at the columns' minimums.
+const COLUMNS = "minmax(64px, 0.8fr) 40px 56px minmax(80px, 1fr) minmax(80px, 1fr) minmax(110px, 1.4fr) minmax(90px, 1fr) minmax(64px, 0.8fr) 52px";
+const HEADERS = ["sensing pair", "stim side", "rate", "falls with current (clinic-visit differences removed)",
+  "rises with pain (Biomarkers grid)", "both: the bands that qualify", "currents tested",
+  "power gap (scatter units)", "usable"];
+
+/** The rows of one grid (the allowed pairs, or the folded rest), with its own header row. */
+function ReadinessGrid({ rows, allowed }) {
+  return (
+    <MDBox sx={{ display: "grid", gridTemplateColumns: COLUMNS, columnGap: "14px", rowGap: "8px",
+      alignItems: "center" }}>
+      {HEADERS.map((h) => (
+        <MDTypography key={h} variant="caption" sx={{ ...HEAD, alignSelf: "end" }}>{h}</MDTypography>
+      ))}
+      {rows.map((c, i) => {
+        const usable = c.deployable === true;
+        const reason = c.blocking_reasons ? String(c.blocking_reasons) : "";
+        const painKnown = c.n_pain_positive !== null && c.n_pain_positive !== undefined;
+        const onHarmonic = Array.isArray(c.qualifying_near_stim_harmonic_hz) ? c.qualifying_near_stim_harmonic_hz : [];
+        const harmonicNote = onHarmonic.length
+          ? `${hzList(onHarmonic)} carry a folded multiple of the stimulation rate at ${fmtHz(c.rate_hz)}: ${Object.values(c.stim_harmonic_notes || {}).join("; ")}. Flagged, never refused: the band is analysed either way.`
+          : "";
+        const under = c.harmonic_warning || c.harmonic_note || reason;
+        return (
+          <div key={i} data-testid="readiness-row" data-allowed={allowed === null ? "unknown" : (allowed ? "true" : "false")}
+            style={{ display: "contents" }}>
+            <span style={{ ...MONO, fontWeight: 600 }}>{contactLabel(c)}</span>
+            <span style={MONO}>{c.hemisphere ? String(c.hemisphere)[0] : "—"}</span>
+            <span style={MONO}>{fmtHz(c.rate_hz)}</span>
+            <span style={MONO}>{countText(c.n_era_negative_significant, c.n_bands) || "—"}</span>
+            <span style={MONO}>{painKnown ? (countText(c.n_pain_positive, c.n_bands) || "—") : "not known"}</span>
+            <MDBox sx={{ display: "flex", alignItems: "center", gap: 0.6, flexWrap: "wrap" }}>
+              <span style={{ ...MONO, fontWeight: num(c.n_qualifying) ? 600 : 400, whiteSpace: "normal" }}>{hzList(c.qualifying_centers_hz)}</span>
+              {harmonicNote && (
+                <Tooltip title={harmonicNote}>
+                  <span style={{ ...SMALL, color: PAL.warnText }}>carries a folded multiple of the rate</span>
+                </Tooltip>
+              )}
+            </MDBox>
+            <span style={MONO}>{`${fmtMa(c.amp_low_mA).replace(/\s*mA$/, "")}–${fmtMa(c.amp_high_mA)}`}</span>
+            <span style={MONO}>{num(c.median_separation_d) === null ? "—" : num(c.median_separation_d).toFixed(2)}</span>
+            <MDBox sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}>
+              <Tooltip title={usable ? "usable for closed loop" : "not usable for closed loop"}>
+                <span style={{ display: "inline-flex" }}>{usable ? <TickGlyph label="usable" size={18} /> : <CrossGlyph label="not usable" size={18} />}</span>
+              </Tooltip>
+              {c.harmonic_only === true && (
+                <span style={{ ...SMALL, color: PAL.warnText, fontWeight: 600, whiteSpace: "nowrap" }}>warning</span>
+              )}
+            </MDBox>
+            {/* why not, under its row */}
+            {under ? (
+              <MDBox sx={{ gridColumn: "1 / -1", mt: -0.4, pl: 1 }}>
+                {c.harmonic_warning ? (
+                  <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, maxWidth: "80ch", color: PAL.warnText }}>{c.harmonic_warning}</MDTypography>
+                ) : null}
+                {c.harmonic_note ? (
+                  <MDTypography variant="caption" component="div" sx={{ ...SMALL, fontSize: TYPE.body, maxWidth: "80ch" }}>{c.harmonic_note}</MDTypography>
+                ) : null}
+                {reason ? (
+                  <SizedFold show="Why not usable" hide="Hide" dense mt={0}>
+                    <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body, maxWidth: "80ch" }}>{reason}</MDTypography>
+                  </SizedFold>
+                ) : null}
+              </MDBox>
+            ) : null}
+          </div>
+        );
+      })}
+    </MDBox>
+  );
+}
 
 const signed = (v) => {
   const x = num(v);
@@ -133,6 +193,14 @@ export default function SensingEvidenceTable({ closedLoop }) {
     ? `${nDeploy === null ? "—" : Math.round(nDeploy)} of ${Math.round(nScreened)} contact-and-rate combinations usable for closed loop`
     : "no combinations screened — usability not yet assessed";
   const rule = cl.sensing_rule || null;
+  // The pairs the device allows while today's contacts stimulate, one per lead (decision 217).
+  // With them named, their rows stay open and the rest fold; without them, every row is open.
+  const allowedSides = rule && rule.by_side ? Object.values(rule.by_side).filter((b) => b && b.allowed_channel) : [];
+  const allowed = new Set(allowedSides.map((b) => String(b.allowed_channel)));
+  const allowedNames = allowedSides.map((b) => b.allowed_display || b.allowed_channel);
+  const split = allowed.size > 0;
+  const openRows = split ? rows.filter((c) => allowed.has(String(c.channel))) : rows;
+  const foldedRows = split ? rows.filter((c) => !allowed.has(String(c.channel))) : [];
   const labelFor = (ch) => {
     const v = (pr && pr.by_channel && pr.by_channel[ch]) || null;
     return v ? contactLabel(v, ch) : ch;
@@ -158,16 +226,6 @@ export default function SensingEvidenceTable({ closedLoop }) {
           </MDTypography>
         )}
       </MDBox>
-      {/* The two readiness cards stay two cards (panel C item 5), each pointing at the other. */}
-      <MDTypography variant="caption" component="div" sx={{ ...SMALL, fontSize: TYPE.body, mt: 0.4 }}>
-        {`This table is the evidence. Whether closed loop may start is decided by the four checks in the card "${TWO_STAGE_CARD_TITLE}" at the foot of this page; one of them reads the best row here.`}
-      </MDTypography>
-      <MDTypography variant="caption" component="div" sx={{ ...SMALL, fontSize: TYPE.body, mt: 0.4 }}>
-        {`Adaptive mode can use a band inside ${(cl.adaptive_window_hz || []).map((v) => Number(v)).join("–")} Hz at a rate of at least ${fmtHz(cl.min_adaptive_rate_hz)}; its only lever is current, so a band must move with current, which is a different question from whether it tracks pain. ${
-          cl.safe_ceiling_mA_by_side
-            ? `Safe ceiling, stated by the PI: L ${fmtMa(cl.safe_ceiling_mA_by_side.Left)} / R ${fmtMa(cl.safe_ceiling_mA_by_side.Right)}; evidence above the ${fmtMa(cl.amp_hard_limit_mA)} module cap is excluded.`
-            : `Current limit ${fmtMa(cl.amp_hard_limit_mA)}.`}`}
-      </MDTypography>
 
       {cl.harmonic_warning && cl.harmonic_warning.sentence && (
         <MDTypography variant="caption" component="div" data-testid="harmonic-screen-warning"
@@ -178,72 +236,23 @@ export default function SensingEvidenceTable({ closedLoop }) {
 
       {rows.length > 0 && (
         <MDBox mt={1.5} sx={{ overflowX: "auto" }}>
-          <MDBox sx={{ display: "grid", gridTemplateColumns: COLUMNS, columnGap: "12px", rowGap: "10px",
-            alignItems: "center", minWidth: 1180 }}>
-            {HEADERS.map((h, i) => (
-              <MDTypography key={`h${i}`} variant="caption" sx={{ ...HEAD, alignSelf: "end",
-                textTransform: h === "Separation (SD)" ? "none" : "uppercase" }}>{h}</MDTypography>
-            ))}
-            {rows.map((c, i) => {
-              const usable = c.deployable === true;
-              const reason = c.blocking_reasons ? String(c.blocking_reasons) : "";
-              const painKnown = c.n_pain_positive !== null && c.n_pain_positive !== undefined;
-              const onHarmonic = Array.isArray(c.qualifying_near_stim_harmonic_hz) ? c.qualifying_near_stim_harmonic_hz : [];
-              const harmonicNote = onHarmonic.length
-                ? `${hzList(onHarmonic)} on a stimulator harmonic at ${fmtHz(c.rate_hz)}: ${Object.values(c.stim_harmonic_notes || {}).join("; ")} — a fall there with current may be the stimulator, not the brain`
-                : "";
-              return [
-                <span key={`${i}-a`} style={{ ...MONO, fontWeight: 600 }}>{contactLabel(c)}</span>,
-                <span key={`${i}-b`} style={MONO}>{c.hemisphere ? String(c.hemisphere)[0] : "—"}</span>,
-                <span key={`${i}-c`} style={MONO}>{fmtHz(c.rate_hz)}</span>,
-                <MDBox key={`${i}-d`} sx={{ minHeight: 26, display: "flex", alignItems: "center" }}>
-                  <CountBar n={c.n_era_negative_significant} of={c.n_bands} />
-                </MDBox>,
-                <span key={`${i}-d2`} style={MONO}>{countText(c.n_era_negative_significant, c.n_bands)}</span>,
-                <MDBox key={`${i}-e`} sx={{ minHeight: 26, display: "flex", alignItems: "center" }}>
-                  {painKnown ? <CountBar n={c.n_pain_positive} of={c.n_bands} /> : <span style={SMALL}>not known</span>}
-                </MDBox>,
-                <span key={`${i}-e2`} style={MONO}>{painKnown ? countText(c.n_pain_positive, c.n_bands) : ""}</span>,
-                <MDBox key={`${i}-q`} sx={{ minHeight: 26, display: "flex", alignItems: "center", gap: 0.6, flexWrap: "wrap" }}>
-                  <span style={{ ...MONO, fontWeight: num(c.n_qualifying) ? 600 : 400, whiteSpace: "normal" }}>{hzList(c.qualifying_centers_hz)}</span>
-                  {harmonicNote && (
-                    <Tooltip title={harmonicNote}>
-                      <span style={{ ...SMALL, color: PAL.warnText, whiteSpace: "nowrap" }}>on a stimulator harmonic</span>
-                    </Tooltip>
-                  )}
-                </MDBox>,
-                <span key={`${i}-f`} style={MONO}>{`${fmtMa(c.amp_low_mA).replace(" mA", "")}–${fmtMa(c.amp_high_mA)}`}</span>,
-                <span key={`${i}-g`} style={MONO}>{num(c.median_separation_d) === null ? "—" : num(c.median_separation_d).toFixed(2)}</span>,
-                <MDBox key={`${i}-h`} sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}>
-                  <Tooltip title={usable ? "usable for closed loop" : "not usable for closed loop"}>
-                    <span style={{ display: "inline-flex" }}>{usable ? <TickGlyph label="usable" size={18} /> : <CrossGlyph label="not usable" size={18} />}</span>
-                  </Tooltip>
-                  {c.harmonic_only === true && (
-                    <span style={{ ...SMALL, color: PAL.warnText, fontWeight: 600, whiteSpace: "nowrap" }}>warning</span>
-                  )}
-                </MDBox>,
-                <MDBox key={`${i}-i`}>
-                  {c.harmonic_warning ? (
-                    <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, maxWidth: "70ch", color: PAL.warnText }}>{c.harmonic_warning}</MDTypography>
-                  ) : null}
-                  {c.harmonic_note ? (
-                    <MDTypography variant="caption" component="div" sx={{ ...SMALL, fontSize: TYPE.body, maxWidth: "70ch" }}>{c.harmonic_note}</MDTypography>
-                  ) : null}
-                  {reason ? (
-                    <SizedFold show="Reason" hide="Hide" dense mt={0}>
-                      <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body, maxWidth: "70ch" }}>{reason}</MDTypography>
-                    </SizedFold>
-                  ) : (!c.harmonic_warning && !c.harmonic_note ? <span style={SMALL}>—</span> : null)}
-                </MDBox>,
-              ];
-            })}
-          </MDBox>
+          {openRows.length > 0 ? <ReadinessGrid rows={openRows} allowed={split ? true : null} /> : (
+            <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body }}>
+              {`Nothing was screened on ${allowedNames.join(" or ")}.`}
+            </MDTypography>
+          )}
+          {foldedRows.length > 0 && (
+            <SizedFold show={`Show the ${foldedRows.length} other combination${foldedRows.length === 1 ? "" : "s"}, on pairs the device does not allow with today's contacts`}
+              hide="Hide the other combinations">
+              <ReadinessGrid rows={foldedRows} allowed={false} />
+            </SizedFold>
+          )}
         </MDBox>
       )}
 
       {pr && pr.available && (
         <MDTypography variant="caption" component="div" sx={{ ...SMALL, fontSize: TYPE.body, mt: 0.8 }}>
-          {`Which bands rise with pain is read off the Biomarkers grid for the ${pr.score_label || pr.score || "pain"} score${pr.stored_utc ? `, built ${new Date(pr.stored_utc).toLocaleString()}` : ""}: a band counts when its correlation with pain is positive and its interval lies wholly above zero (supported); the stricter selection-aware bar the grid calls "established" is reported beside it, not required. ${painSummary}`}
+          {`Rises with pain: read off the Biomarkers grid for the ${pr.score_label || pr.score || "pain"} score${pr.stored_utc ? `, built ${new Date(pr.stored_utc).toLocaleString()}` : ""}.`}
         </MDTypography>
       )}
       {pr && pr.available && (
@@ -255,9 +264,28 @@ export default function SensingEvidenceTable({ closedLoop }) {
         </MDTypography>
       )}
 
-      <SizedFold show="What 'usable' requires, and why the current limit is flat" hide="Hide">
+      {/* The explanatory paragraphs, in one fold (the design review of 2026-09-26, S3). */}
+      <SizedFold show="What “usable” requires, and why the current limit is flat" hide="Hide">
         <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body }}>
-          {`A combination is usable when at least ONE band both falls with current once the time confound is removed (a significant negative slope of band power on current, with the clinic-visit blocks removed) and rises with pain on the Biomarkers grid (a positive correlation with the pain score whose interval lies wholly above zero, decision 210), on the one sensing pair the device allows while today's contacts stimulate (the two contacts flanking them, decision 217) — the device's fixed control polarity: more current, less power, less pain — and the currents tested sit at or below the flat ${fmtMa(cl.amp_hard_limit_mA)} limit. One band is enough (the PI's ruling of 2026-09-17, decision 199; until then half the bands had to respond). A qualifying band that sits within 2.5 Hz of the stimulator's own harmonics at that rate (|250 − rate|, half, a quarter and three quarters of the rate) is marked, not refused. The current limit is PI-declared and was established by testing at 165 Hz; it does not vary with rate or pulse width. Separation is the gap between the two measured power levels, in units of their own scatter (standard deviations), reported for information.`}
+          {`A combination is usable when at least one band both falls with current after removing the differences between clinic visits (a significant negative slope of band power on current) and rises with pain on the Biomarkers grid (a positive correlation with the pain score whose interval lies wholly above zero), on the one sensing pair the device allows while today's contacts stimulate (the two contacts flanking them). That is the device's fixed control polarity: more current, less power, less pain. The currents tested must sit at or below the flat ${fmtMa(cl.amp_hard_limit_mA)} limit. One band is enough (the PI's ruling of 2026-09-17; until then half the bands had to respond).`}
+        </MDTypography>
+        {pr && pr.available && (
+          <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body, mt: 0.6 }}>
+            {`The pain half: a band counts when its correlation with pain is positive and its interval lies wholly above zero (supported); the stricter selection-aware bar the grid calls "established" is reported beside it, not required. ${painSummary}`}
+          </MDTypography>
+        )}
+        <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body, mt: 0.6 }}>
+          {`Closed loop can use a band inside ${(cl.adaptive_window_hz || []).map((v) => Number(v)).join("–")} Hz at a rate of at least ${fmtHz(cl.min_adaptive_rate_hz)}. Its only lever is current, so a band must move with current, which is a different question from whether it tracks pain. ${
+            cl.safe_ceiling_mA_by_side
+              ? `Safe ceiling, stated by the PI: L ${fmtMa(cl.safe_ceiling_mA_by_side.Left)} / R ${fmtMa(cl.safe_ceiling_mA_by_side.Right)}; evidence above the ${fmtMa(cl.amp_hard_limit_mA)} module cap is excluded.`
+              : `Current limit ${fmtMa(cl.amp_hard_limit_mA)}.`} The current limit is PI-declared and was established by testing at 165 Hz; it does not vary with rate or pulse width.`}
+        </MDTypography>
+        <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body, mt: 0.6 }}>
+          A qualifying band within 2.5 Hz of where the stimulator shows up
+          carries a folded multiple of the stimulation rate: every whole multiple of the rate, folded back by the device&apos;s
+          250 Hz sampling (half the rate included). Such a band is flagged, never refused, and it is
+          analysed either way. The power gap is the gap between the two measured power levels, in
+          units of their own scatter (standard deviations), reported for information.
         </MDTypography>
       </SizedFold>
     </MDBox>

@@ -41,7 +41,7 @@ export const BLOCK_OF_TIME_NOTE =
   `${BLOCK_OF_TIME_SYMBOL} The pain map this current is read from (its square on the current map card) `
   + `${BLOCK_OF_TIME_VERDICT}: when the record is split into blocks of time and each block is predicted `
   + "from the others, its misses are shared by whole blocks, beyond chance. "
-  + "Where this has been examined further (decision 275), the whole group's readings moved over those "
+  + "Where this has been examined further, the whole group's readings moved over those "
   + "weeks, whether by regression to the mean or a shared calendar effect, which the check cannot tell "
   + "apart; it was not something about one current. A warning only: it changes no recommendation. The "
   + "follow-up check is “Regression to the mean at one setting”, in the control analyses at the "

@@ -26,7 +26,7 @@ import { PlatformContextProvider } from "context";
 import PAL from "./palette";
 import DeviceRuleLedger from "./DeviceRuleLedger";
 import EvidenceTrianglePanel from "./EvidenceTrianglePanel";
-import PrescriptionPanel from "./PrescriptionPanel";
+import ParameterTable, { ParameterDetails } from "./PrescriptionPanel";
 import WhatWouldChangeThis from "./WhatWouldChangeThis";
 import payload from "./__fixtures__/rcs08_deployment_payload.json";
 
@@ -59,6 +59,13 @@ function render(ui) {
 const report = { data: payload, loading: false, err: null };
 const empty = { data: null, loading: false, err: null };
 
+// The table and its details, as the decision card draws them (decision 302: "Full parameter
+// recommendation" is no longer a card of its own). The pins below were updated on purpose to the
+// new words; every safeguard they check is the same one.
+function PrescriptionPanel({ report: r, mode, onMode }) {
+  return (<><ParameterTable report={r} mode={mode} onMode={onMode} /><ParameterDetails report={r} mode={mode} /></>);
+}
+
 describe("the saved payload is the state these panels were built for", () => {
   it("still carries the shape the assertions below depend on", () => {
     expect(payload.available).toBe(true);
@@ -76,7 +83,7 @@ describe("the prescription panel withholds every value while the device refuses"
   it("prints no parameter value and offers a planning view instead", () => {
     render(<PrescriptionPanel report={report} mode={null} onMode={() => {}} />);
 
-    expect(screen.getByText(/16 PARAMETER VALUES WITHHELD/)).toBeInTheDocument();
+    expect(screen.getByText(/16 values withheld/)).toBeInTheDocument();
     // The two transition durations are the largest transcription hazard in the table, so they are
     // the values checked for absence. Neither the raw milliseconds nor the minutes-and-seconds
     // gloss may be on screen while the values are withheld.
@@ -89,10 +96,11 @@ describe("the prescription panel withholds every value while the device refuses"
 
   it("watermarks the planning view and leaves every read-back box disabled", () => {
     render(<PrescriptionPanel report={report} mode={null} onMode={() => {}} />);
-    fireEvent.click(screen.getByText(/Open a read-only planning view/));
+    fireEvent.click(screen.getByText(/Show the values for planning/));
 
-    expect(screen.getByText(/PLANNING ONLY/)).toBeInTheDocument();
-    expect(screen.getByText(/NOT AUTHORISED TO PROGRAM/)).toBeInTheDocument();
+    // The banner and the diagonal watermark both say it.
+    expect(screen.getAllByText(/PLANNING ONLY/).length).toBe(2);
+    expect(screen.getByText(/do not program these/)).toBeInTheDocument();
 
     const boxes = screen.getAllByRole("checkbox");
     expect(boxes).toHaveLength(16);
@@ -101,7 +109,7 @@ describe("the prescription panel withholds every value while the device refuses"
 
   it("renders the minutes-and-seconds gloss beneath the value once the planning view is open", () => {
     render(<PrescriptionPanel report={report} mode={null} onMode={() => {}} />);
-    fireEvent.click(screen.getByText(/Open a read-only planning view/));
+    fireEvent.click(screen.getByText(/Show the values for planning/));
 
     // Both durations arrive as milliseconds and the programmer displays minutes and seconds, so the
     // gloss is the safeguard against a two-order-of-magnitude entry error.
@@ -117,7 +125,7 @@ describe("the prescription panel withholds every value while the device refuses"
 
   it("leaves the Paused amplitude value blank, because that row's value is null on purpose", () => {
     render(<PrescriptionPanel report={report} mode={null} onMode={() => {}} />);
-    fireEvent.click(screen.getByText(/Open a read-only planning view/));
+    fireEvent.click(screen.getByText(/Show the values for planning/));
 
     expect(screen.getByText("Paused amplitude")).toBeInTheDocument();
     expect(screen.getByText("to be chosen")).toBeInTheDocument();
@@ -126,51 +134,54 @@ describe("the prescription panel withholds every value while the device refuses"
     expect(screen.queryByText("2.50")).not.toBeInTheDocument();
   });
 
-  it("carries the coupling banner with both fields, both values and the arithmetic", () => {
+  it("carries the two interacting fields, both values and the arithmetic, once the device allows them", () => {
+    // Since decision 302 the details sit in the decision card's Details fold and, like the table,
+    // withhold what quotes a value while the device refuses: on this refused fixture they print no
+    // coupling, and on the same fixture made permitted they print it whole.
     render(<PrescriptionPanel report={report} mode={null} onMode={() => {}} />);
-    fireEvent.click(screen.getByText(/Open a read-only planning view/));
-
-    expect(screen.getByText(/Upper onset duration = 2000 ms/)).toBeInTheDocument();
-    expect(screen.getByText(/Averaging duration = 4096 ms/)).toBeInTheDocument();
-    expect(screen.getByText(/ceil\(2000 \/ 4096\) = 1 controller step/)).toBeInTheDocument();
-    expect(screen.getByText(/NOT ESTABLISHED BY ANY SUPPLIED DOCUMENT/)).toBeInTheDocument();
+    expect(screen.queryByText(/Upper onset duration = 2000 ms/)).not.toBeInTheDocument();
+    const allowed = JSON.parse(JSON.stringify(payload));
+    allowed.verdict_detail.device_eligible = true;
+    render(<PrescriptionPanel report={{ data: allowed }} mode={null} onMode={() => {}} />);
+    expect(screen.getByText(/Upper onset duration = 2000 ms, Averaging duration = 4096 ms; ceil\(2000 \/ 4096\) = 1 controller step/)).toBeInTheDocument();
+    expect(screen.getByText(/Not established by any supplied document/)).toBeInTheDocument();
   });
 
   it("re-renders a different field set per mode rather than swapping numbers", () => {
     const { rerender } = render(
       <PrescriptionPanel report={report} mode="dual" onMode={() => {}} />,
     );
-    fireEvent.click(screen.getByText(/Open a read-only planning view/));
+    fireEvent.click(screen.getByText(/Show the values for planning/));
     expect(screen.getByText(/Dual Threshold: 16 fields/)).toBeInTheDocument();
     expect(screen.getByText("Upper onset duration")).toBeInTheDocument();
 
     rerender(<PrescriptionPanel report={report} mode="single" onMode={() => {}} />);
     // The planning view closes on a mode change, so its fourteen new values are withheld again
     // until the reader opens it deliberately for this mode.
-    expect(screen.getByText(/14 PARAMETER VALUES WITHHELD/)).toBeInTheDocument();
-    fireEvent.click(screen.getByText(/Open a read-only planning view/));
+    expect(screen.getByText(/14 values withheld/)).toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Show the values for planning/));
     expect(screen.getByText(/Single Threshold: 14 fields/)).toBeInTheDocument();
     // The upper onset is a Dual Threshold field; in Single Threshold it must appear struck through
     // under the not-applicable heading rather than as a live row, and never simply be omitted.
-    expect(screen.getByText(/NOT APPLICABLE IN SINGLE THRESHOLD/)).toBeInTheDocument();
+    expect(screen.getByText(/Not in Single Threshold: /)).toBeInTheDocument();
     expect(screen.getByText("Upper onset duration (ms)")).toBeInTheDocument();
   });
 
   it("presents Single Threshold Inverse as unprogrammable rather than as an empty table", () => {
     render(<PrescriptionPanel report={report} mode="single_inverse" onMode={() => {}} />);
 
-    expect(screen.getByText(/NOTHING TO TRANSCRIBE/)).toBeInTheDocument();
+    expect(screen.getByText(/cannot drive therapy/)).toBeInTheDocument();
     // Matched once and only once: the note is the whole content of this branch, and rendering it
     // again lower down the card would read as two separate findings about the mode.
     expect(screen.getAllByText(/cannot drive therapy \(D18\)/)).toHaveLength(1);
-    expect(screen.queryByText(/PARAMETER VALUES WITHHELD/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/values withheld/)).not.toBeInTheDocument();
     expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
   });
 
   it("keeps the module's recommendation visible while a non-recommended mode is selected", () => {
     render(<PrescriptionPanel report={report} mode="single" onMode={() => {}} />);
 
-    expect(screen.getByText(/THE MODULE RECOMMENDS DUAL THRESHOLD/)).toBeInTheDocument();
+    expect(screen.getByText(/Threshold mode: Dual Threshold recommended/)).toBeInTheDocument();
     expect(screen.getByText(/chronic pain varies over hours to days/)).toBeInTheDocument();
     expect(screen.getByText(/which is not the recommended mode/)).toBeInTheDocument();
   });
@@ -197,8 +208,10 @@ describe("the evidence panel separates the two coherence questions", () => {
     expect(screen.getByText("SIGNS DISAGREE")).toBeInTheDocument();
     expect(screen.getByText("SIGNS AGREE")).toBeInTheDocument();
     expect(screen.getByText("NOT ESTABLISHED")).toBeInTheDocument();
-    expect(screen.getByText(/The three edge signs do not match the pattern the selected control law requires/))
-      .toBeInTheDocument();
+    // The lit cell is marked in the DOM (decision 302 dropped its explanation sentence, which the
+    // two answers under the table already say); the other two are drawn and unlit.
+    expect(screen.getByText("SIGNS DISAGREE").closest("[data-lit]").getAttribute("data-lit")).toBe("true");
+    expect(screen.getByText("SIGNS AGREE").closest("[data-lit]").getAttribute("data-lit")).toBe("false");
     expect(screen.queryByText(/^The three edge signs match the pattern/)).toBeNull();
   });
 

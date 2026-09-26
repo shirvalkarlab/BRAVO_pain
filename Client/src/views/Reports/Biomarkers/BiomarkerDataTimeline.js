@@ -37,6 +37,12 @@ const BIN_COLORS = { high: "#D55E00", low: "#0072B2", excluded: "#5A6066" };
 // clearly-present grey (~2:1 on white) so existing-but-unselected data never reads as ABSENT. The
 // previous #D7DBDF was ~1.39:1 — effectively invisible, making real data look like missing data.
 const DIM_GREY = "#AEB4BB";
+// Text greys at 4.5:1 or more on white (decision 304; the design review of 2026-09-26, B6): the
+// secondary text (tick numbers, "no ... data" notes, the subtitle, the row sub-labels) and the unit
+// labels ("LSB", "mA"). Colour only: no font size in the left gutter changes, so the gutter's
+// column geometry (F_TICK, the contact and region fonts, LBL_GAP, LEFT_CAP) is exactly as before.
+const SUB_INK = "#5E5E5E";
+const UNIT_INK = "#6E6E6E";
 const DIM_GREY_FAINT = "rgba(150,157,165,0.42)";
 
 // ---- platform palette (ported from BiomarkerTimeline.js) --------------------------------------
@@ -60,6 +66,22 @@ function freqColor(hz) {
   if (b == null) return "#BDBDBD";
   if (FREQ_PALETTE[b] != null) return FREQ_PALETTE[b];
   return FREQ_FALLBACK[Math.abs(Math.round(b)) % FREQ_FALLBACK.length];
+}
+// The "X Hz" labels drawn as TEXT on white (design review B5, 2026-09-26): 13 of the 24 line hues
+// read under 4.5:1 as text (the light blue #88CCEE at 1.76:1). Each is mapped to a darker variant of
+// the SAME hue (hue angle within 35 degrees), chosen so every label is 4.5:1 or more and neighbouring
+// frequencies stay further apart than the line colours themselves (worst neighbour distance, OKLab
+// x100: 9.3 against the lines' 5.7; colour-blind simulation 7.2 against 4.6). The lines keep their
+// colours; hues already at 4.5:1 are drawn as they are. Checked in legibility.test.js.
+const FREQ_TEXT = {
+  "#CC6677": "#B95567", "#56B4E9": "#00567C", "#009E73": "#218463", "#94C973": "#316100",
+  "#E69F00": "#986A15", "#F0A860": "#914500", "#B8860B": "#683700", "#A6761D": "#604105",
+  "#44AA99": "#348174", "#88CCEE": "#367A99", "#6699CC": "#235584", "#D55E00": "#A94E13",
+  "#CC79A7": "#782D5A",
+};
+function freqTextColor(hz) {
+  const c = freqColor(hz);
+  return FREQ_TEXT[c] || c;
 }
 function fmtHz(hz) {
   const b = snapFreq(hz);
@@ -658,7 +680,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
             const c = snapFreq(s.center_hz);
             if (c !== lastCen && c != null && (s.t0 - lastLbl) >= MIN_LBL_GAP) {
               annotations.push({ xref: X, yref: Y, x: D(s.t0), y: BP_HI, text: fmtHz(c),
-                showarrow: false, yshift: 8, font: { size: 9, color: freqColor(c) } });
+                showarrow: false, yshift: 8, font: { size: 11, color: freqTextColor(c) } });
               lastLbl = s.t0;
             }
             if (c != null) lastCen = c;
@@ -668,19 +690,19 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         if (committed.has(ch)) {
           reg.tickHiIdx = annotations.length;
           annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_TICK, y: BP_HI, text: `${Math.round(hi)}`,
-            showarrow: false, xanchor: "right", font: { size: F_TICK, color: "#aaa" } });
+            showarrow: false, xanchor: "right", font: { size: F_TICK, color: SUB_INK } });
           reg.tickLoIdx = annotations.length;
           annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_TICK, y: BP_LO, text: `${Math.round(lo)}`,
-            showarrow: false, xanchor: "right", font: { size: F_TICK, color: "#aaa" } });
+            showarrow: false, xanchor: "right", font: { size: F_TICK, color: SUB_INK } });
           annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_TICK, y: (BP_LO + BP_HI) / 2,
-            text: "<span style='font-size:13px;color:#bbb'>LSB</span>", showarrow: false, xanchor: "right" });
+            text: `<span style='font-size:13px;color:${UNIT_INK}'>LSB</span>`, showarrow: false, xanchor: "right" });
         }
         // Register this lane for zoom-adaptive rescale only if it carries scalable LSB geometry.
         if (reg.traces.length) lsbScaleRef.current.push(reg);
       } else {
         annotations.push({ xref: "paper", yref: Y, x: 0.5, y: yb + 0.5 * lh,
           text: "no band power configured · n.d.", showarrow: false,
-          font: { size: 9.5, color: "#9AA0A6" } });
+          font: { size: 11, color: SUB_INK } });
       }
 
       // (c) Top-of-lane ticks: one per montage/survey recording (TD: the page reads each through its
@@ -770,10 +792,10 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       });
     } else {
       annotations.push({ xref: "paper", yref: Y, x: 0.5, y: eventY,
-        text: "no patient events", showarrow: false, font: { size: 9, color: "#C2A0A0" } });
+        text: "no patient events", showarrow: false, font: { size: 11, color: "#8A5A5A" } });
     }
     annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: eventY,
-      text: `<b>EVENTS</b>${evList.length ? `<br><span style="font-size:13px;color:#999">${evList.length} labeled` +
+      text: `<b>EVENTS</b>${evList.length ? `<br><span style="font-size:13px;color:${SUB_INK}">${evList.length} labeled` +
         `${streamingCount ? ` · ${streamingCount} streaming` : ""}</span>` : ""}`,
       showarrow: false, xanchor: "right", font: { size: 24, color: "#555" } });
 
@@ -868,23 +890,23 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       }
     } else {
       annotations.push({ xref: "paper", yref: Y, x: 0.5, y: (painBase + painTop) / 2,
-        text: "no PRO data", showarrow: false, font: { size: 9.5, color: "#9AA0A6" } });
+        text: "no pain ratings", showarrow: false, font: { size: 11, color: SUB_INK } });
     }
     annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: (painBase + painTop) / 2,
-      text: `<b>PAIN</b><br><span style="font-size:14px;color:#999">${pain.metric || ""}</span>`,
+      text: `<b>PAIN</b><br><span style="font-size:14px;color:${SUB_INK}">${pain.metric || ""}</span>`,
       showarrow: false, xanchor: "right", font: { size: 26, color: PAL.pain } });
     // Binarization-mode pain-row subtitle: matched vs unmatched ratings (closed vs open circles).
     if (binMode) {
       const su = (scanModel && scanModel.counts && scanModel.counts.survey_usage) || {};
       if (su.n_pro_total) {
         annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: painBase - 0.30,
-          text: `<span style="font-size:13px;color:#999">${su.n_pro_used || 0} matched · ${su.n_pro_unused || 0} unmatched of ${su.n_pro_total} (${su.pct_pro_used != null ? su.pct_pro_used : 0}%)</span>`,
+          text: `<span style="font-size:13px;color:${SUB_INK}">${su.n_pro_used || 0} matched · ${su.n_pro_unused || 0} unmatched of ${su.n_pro_total} (${su.pct_pro_used != null ? su.pct_pro_used : 0}%)</span>`,
           showarrow: false, xanchor: "right" });
       }
     }
     pTicks.forEach((val) => annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_TICK,
       y: yScale(val, pLo, pHi, painBase, painTop), text: String(val), showarrow: false,
-      xanchor: "right", font: { size: 19, color: "#888" } }));
+      xanchor: "right", font: { size: 19, color: UNIT_INK } }));
 
     // ---- thin separator between pain and stim, then stim step with y-axis --------------------
     shapes.push({ type: "line", xref: "paper", yref: Y, x0: 0, x1: 1,
@@ -900,16 +922,16 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         showlegend: false });
     } else {
       annotations.push({ xref: "paper", yref: Y, x: 0.5, y: (stimBase + stimTop) / 2,
-        text: "no stim data", showarrow: false, font: { size: 9.5, color: "#9AA0A6" } });
+        text: "no stim data", showarrow: false, font: { size: 11, color: SUB_INK } });
     }
     annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: (stimBase + stimTop) / 2,
       text: "<b>STIM</b>", showarrow: false, xanchor: "right",
       font: { size: 26, color: PAL.stim } });
     [0, SMAX].forEach((val) => annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_TICK,
       y: yScale(val, 0, SMAX, stimBase, stimTop), text: String(val), showarrow: false,
-      xanchor: "right", font: { size: 19, color: "#888" } }));
+      xanchor: "right", font: { size: 19, color: UNIT_INK } }));
     annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: stimBase - 0.30,
-      text: "<span style='font-size:14px;color:#999'>mA</span>", showarrow: false, xanchor: "right" });
+      text: `<span style='font-size:14px;color:${UNIT_INK}'>mA</span>`, showarrow: false, xanchor: "right" });
 
     // ---- glyph key (top, near title) via dummy legend traces ---------------------------------
     if (binMode) {
@@ -928,7 +950,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         name: `excluded middle  (dropped from training)${bc.n_excluded_middle != null ? `  ·  ${bc.n_excluded_middle}` : ""}` });
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "circle-open", size: 11, color: DIM_GREY, line: { width: 1.5, color: DIM_GREY } },
-        name: "not in binarized set  (no PRO in window / band-power)" });
+        name: "not in the high / low split  (no pain rating in window / band-power)" });
       // The fourth state gets a key entry only when the view is actually in it, because a
       // permanent entry for a state that cannot occur while matching is running would be noise.
       // When it IS in it, the entry is what tells the reader that the crosses mean an unanswered
@@ -1059,7 +1081,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
                 itemsizing: "constant", tracegroupgap: 2 },
       // Title sits ABOVE the legend boxes (TITLE_Y, top-anchored), inside the computed top margin, so
       // its two lines always clear the legend top and are never cut off at the figure edge.
-      title: { text: `<b>Biomarker Data Timeline</b><br><span style="font-size:13px;color:#777">${sub}</span>`,
+      title: { text: `<b>Biomarker Data Timeline</b><br><span style="font-size:13px;color:${SUB_INK}">${sub}</span>`,
                x: 0.012, xanchor: "left", y: TITLE_Y, yanchor: "top", font: { size: 26, color: "#1a1a1a" } },
       // DYNAMIC time gridlines: no fixed dtick, so Plotly auto-picks the tick interval for the
       // current zoom (year/month -> week -> day -> 6 h -> hour) and REDRAWS on every zoom/pan. The
@@ -1163,7 +1185,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
 
   if (!av || !channels.length) {
     return (
-      <MDBox p={2} sx={{ color: "#8a8a8a", fontStyle: "italic" }}>
+      <MDBox p={2} sx={{ color: SUB_INK, fontStyle: "italic" }}>
         No availability data — the timeline needs decoded Percept recordings for this participant.
       </MDBox>
     );
@@ -1175,7 +1197,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
                gap={1.25} sx={{ px: 1, pb: 0.5 }}>
           {/* Mode caption swaps with the toggle so the metaphor is explicit without reading the
               footer — "what does this color mean right now" is answered in place. */}
-          <span style={{ fontSize: 12, color: "#777", fontStyle: "italic", textAlign: "right" }}>
+          <span style={{ fontSize: 12, color: SUB_INK, fontStyle: "italic", textAlign: "right" }}>
             {colorMode === "binarization"
               ? "Matched samples colored by pain label; everything else dimmed"
               : "Neural lanes colored by sensing frequency"}
@@ -1192,7 +1214,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
           >
             <ToggleButton value="multimodal">{"Multimodal data"}</ToggleButton>
             <ToggleButton value="binarization" disabled={!(scanModel && scanModel.binByKey)}>
-              {"Binarization"}
+              {"High / low split"}
             </ToggleButton>
           </ToggleButtonGroup>
         </MDBox>

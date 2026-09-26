@@ -72,7 +72,8 @@ describe("CurrentMapCard: the clinic stream's next session and its pooled fit", 
     rtlRender(wrap(<CurrentMapCard plan={planWith({ nextSession: NEXT, clinicPooling: true })} />));
     fireEvent.click(screen.getByRole("button", { name: /Pool pulse widths/ }));
     const t = document.body.textContent;
-    expect(t).toContain("60/160\u202f\u00b5s (24 epochs), 100/150\u202f\u00b5s (10 epochs)");
+    // PIN CHANGED 2026-09-26 (the design review, the PI's "yes to all six"): "stretches", never "epochs"
+    expect(t).toContain("60/160\u202f\u00b5s (24 stretches), 100/150\u202f\u00b5s (10 stretches)");
   });
 
   it("where the clinic pooled fit is not available the clinic section stays separate and says so", () => {

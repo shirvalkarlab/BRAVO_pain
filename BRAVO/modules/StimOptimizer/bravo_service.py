@@ -36,6 +36,12 @@ from . import safety_ceiling as SC
 from . import stage1_openloop as S1
 from .routines import plots as PLT
 
+# The device's sensing-pair rule (decision 217): its one home since 2026-09-26.
+try:
+    from modules.DecodeCommon import sensing_rule as _sensing_rule
+except ImportError:                                   # pragma: no cover - host spelling
+    from DecodeCommon import sensing_rule as _sensing_rule
+
 # THE IMPORT ROOT DIFFERS BETWEEN THE TWO TEST RUNNERS, so both spellings are tried (see adapter).
 try:
     from modules.CacheStore import provenance as _provenance
@@ -728,20 +734,10 @@ def stim_contacts_short(cathode, hemisphere) -> str | None:
     return f"{side} C+{''.join(parts)}".strip()
 
 
-def stim_rings(cathode) -> set:
-    """The ring numbers a programmed cathode stimulates on: "2a-2b-2c" -> {2},
-    "1a-1b-1c-2a-2b-2c" -> {1, 2}; empty for none / blank / NaN."""
-    if cathode is None:
-        return set()
-    raw = str(cathode).strip()
-    if not raw or raw.lower() in ("none", "nan", "case"):
-        return set()
-    out = set()
-    for t in raw.replace("+", "-").split("-"):
-        digit = "".join(ch for ch in t if ch.isdigit())
-        if digit:
-            out.add(int(digit))
-    return out
+#: The programmed cathode read as ring numbers ("2a-2b-2c" -> {2}, "1a-1b-1c-2a-2b-2c" ->
+#: {1, 2}): the one parser, in `DecodeCommon.sensing_rule` since 2026-09-26 so the Biomarkers
+#: heat maps read the same rule; this name stays for every existing caller.
+stim_rings = _sensing_rule.stim_rings
 
 
 def stim_rings_by_side(in_force) -> dict:
@@ -753,61 +749,18 @@ def stim_rings_by_side(in_force) -> dict:
     return out
 
 
-_RING_NAMES = ("ZERO", "ONE", "TWO", "THREE")
-
-
 def sensing_rule_block(rings_by_side, *, cells, n_screened, n_usable) -> dict:
     """The device's sensing rule (decision 217) stated ONCE for the whole readiness screen, with
     the count it explains (panel C item 5; report C §5.3).
 
-    Per lead: the rings it stimulates on today, the one sensing pair the device then allows (the
-    two contacts immediately flanking them, `lfp_evidence.flanking_pair`), that pair's channel name
-    and page label, and how many screened rows on that pair are usable. A lead with no setting in
-    force applies no rule and says so; a lead stimulating on an end contact allows no pair.
+    A delegation since 2026-09-26: the rule and the block live in `DecodeCommon.sensing_rule`,
+    which the Closed-Loop page (D52) and the Biomarkers heat maps read too. This passes the
+    screen's rows and counts and the page's contact labels (`sensing_display`); the fields and
+    the sentence are the ones this card has printed since decision 243.
     """
-    from .routines import lfp_evidence as _le
-    by_side, named = {}, []
-    for side in ("Left", "Right"):
-        rings = sorted(int(r) for r in ((rings_by_side or {}).get(side) or set()))
-        row = {"stim_rings": rings, "rule_applied": bool(rings), "allowed_pair": None,
-               "allowed_channel": None, "allowed_display": None, "n_usable_on_allowed_pair": 0,
-               "why": None}
-        if not rings:
-            row["why"] = "no stimulating contact is recorded in force on this lead, so no rule is applied"
-        else:
-            pair = _le.flanking_pair(set(rings))
-            if pair is None:
-                row["why"] = (f"this lead stimulates on contact(s) {', '.join(map(str, rings))}, "
-                              f"which nothing flanks on both sides, so the device allows no "
-                              f"sensing pair on it")
-            else:
-                ch = f"{_RING_NAMES[pair[0]]}_{_RING_NAMES[pair[1]]}_{side.upper()}"
-                row.update(allowed_pair=[int(pair[0]), int(pair[1])], allowed_channel=ch,
-                           allowed_display=sensing_display(ch).get("display_short") or ch)
-                row["n_usable_on_allowed_pair"] = int(sum(
-                    1 for c in (cells or ()) if str(c.get("channel")) == ch
-                    and c.get("deployable") is True))
-                row["why"] = (f"stimulating on contact(s) {', '.join(map(str, rings))}, the device "
-                              f"senses only on the two contacts flanking them")
-                named.append(row)
-        by_side[side] = row
-    n_s = int(n_screened or 0)
-    n_u = int(n_usable or 0)
-    if named:
-        pairs = " and ".join(r["allowed_display"] for r in named)
-        usable_named = [r for r in named if r["n_usable_on_allowed_pair"] > 0]
-        if not usable_named:
-            which = ("neither has a usable band" if len(named) == 2 else "it has no usable band")
-        else:
-            which = " and ".join(f"{r['allowed_display']} has {r['n_usable_on_allowed_pair']} usable"
-                                 for r in usable_named)
-        sentence = (f"While today's contacts are stimulating, the device allows one sensing pair per "
-                    f"lead: {pairs}. {which[0].upper() + which[1:]}, so {n_u} of {n_s} "
-                    f"contact-and-rate combinations are usable for closed loop.")
-    else:
-        sentence = (f"No sensing pair is allowed by today's stimulating contacts on either lead, so "
-                    f"{n_u} of {n_s} combinations are usable for closed loop.")
-    return {"by_side": by_side, "sentence": sentence, "decision": 217}
+    return _sensing_rule.sensing_rule_block(
+        rings_by_side, cells=cells, n_screened=n_screened, n_usable=n_usable,
+        display_of=lambda ch: sensing_display(ch).get("display_short"))
 
 
 def in_force_by_side(es, epochs=None) -> dict:
@@ -830,11 +783,11 @@ def in_force_by_side(es, epochs=None) -> dict:
         return {}
     fitted = es.sort_values("t0").iloc[-1]
     fitted_epoch = float(fitted["epoch"]) if "epoch" in es.columns else None
-    src = "matched table (newest rated epoch)"
+    src = "matched table (newest rated stretch of unchanged settings)"
     row = fitted
     if epochs is not None and len(epochs) and "t_start" in epochs.columns:
         row = epochs.sort_values("t_start").iloc[-1]
-        src = "full epoch table (newest device setting, rated or not)"
+        src = "full settings history (newest device setting, rated or not)"
     rated = set(pd.to_numeric(es["epoch"], errors="coerce").dropna().astype(float)) \
         if "epoch" in es.columns else set()
     out = {}

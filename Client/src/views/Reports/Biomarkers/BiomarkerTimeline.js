@@ -536,7 +536,7 @@ function BiomarkerTimeline({ data, height }) {
         }
         layout.annotations.push({
           xref: "paper", x: 1.007, yref: yk, y: labelY, xanchor: "left", yanchor: "middle",
-          text: rl.label, showarrow: false, font: { size: 9.5, color: rl.color },
+          text: rl.label, showarrow: false, font: { size: 11, color: rl.color },
         });
         lastLabelY = labelY;
       });
@@ -548,7 +548,7 @@ function BiomarkerTimeline({ data, height }) {
           xref: `${xk} domain`, x: 0.013, yref: `${yk} domain`, y: 0.92,
           xanchor: "left", yanchor: "top",
           text: `▲ peak ${fmtVal(peak)} (off scale)`, showarrow: false,
-          font: { size: 9.5, color: "#B06A00" },
+          font: { size: 11, color: "#B06A00" },
         });
       }
 
@@ -559,7 +559,7 @@ function BiomarkerTimeline({ data, height }) {
           xref: `${xk} domain`, x: 0.5, yref: `${yk} domain`, y: 0.5,
           xanchor: "center", yanchor: "middle",
           text: `no analyzable pain-aligned data — ${row.emptyReason}`,
-          showarrow: false, font: { size: 10, color: "#9098A8", style: "italic" },
+          showarrow: false, font: { size: 11, color: "#5E5E5E", style: "italic" },
         });
       }
 
@@ -698,8 +698,8 @@ function BiomarkerTimeline({ data, height }) {
                         transition: "all 0.15s" }}>
           <input type="checkbox" checked={linked} onChange={(e) => setLinked(e.target.checked)}
                  style={{ width: 15, height: 15, accentColor: "#117733", cursor: "pointer" }} />
-          <b>🔗 LINK AXES</b>
-          <span style={{ color: "#7E8794", fontWeight: 400 }}>
+          <b>LINK AXES</b>
+          <span style={{ color: "#5E5E5E", fontWeight: 400 }}>
             {linked ? "— pan / zoom moves all rows together" : "— each row zooms independently"}
           </span>
         </label>

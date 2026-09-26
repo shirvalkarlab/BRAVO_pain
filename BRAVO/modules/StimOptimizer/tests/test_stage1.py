@@ -142,7 +142,7 @@ def test_an_undersampled_pair_is_skipped_with_its_reason_never_pooled(stage1_wit
     res = stage1_with_thin_stratum
     assert (120.0, 130.0) not in res.slices
     assert "pwL120_pwR130" in res.skipped
-    assert "below the 8-epoch floor" in res.skipped["pwL120_pwR130"]
+    assert "below the minimum of 8" in res.skipped["pwL120_pwR130"]
 
 
 def test_the_epoch_counts_are_internally_consistent(stage1_with_thin_stratum):
@@ -679,8 +679,8 @@ def test_a_thinly_sampled_rate_is_reported_not_enough_data_with_no_surface():
     thin = sl.rate_strata[110.0]
     assert thin.fitted is False
     assert thin.n_epochs == 5
-    assert "5 epochs" in thin.reason
-    assert "below the 8-epoch floor" in thin.reason
+    assert "5 stretches of unchanged settings" in thin.reason   # PIN CHANGED 2026-09-26: never "epochs" on the page
+    assert "below the minimum of 8" in thin.reason
     assert thin.resolution == {}
     # the well-sampled rate is unaffected by the thin one sitting alongside it
     rich = sl.rate_strata[55.0]

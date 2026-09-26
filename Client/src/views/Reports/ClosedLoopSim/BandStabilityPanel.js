@@ -54,14 +54,14 @@ import { fmtNum, fmtOddsRatioWithInterval, fmtP } from "./deployFormat";
 const ANSWERS = [
   {
     key: "behaves the same",
-    ink: PAL.pass,
+    ink: PAL.passText,   // white text on the fill: 5.7:1 (PAL.pass gave 3.4:1)
     onInk: "#ffffff",
     gloss: "any remaining change with stimulation is smaller than the change we said in advance " +
            "would matter",
   },
   {
     key: "behaves differently",
-    ink: PAL.fail,
+    ink: PAL.failText,   // white text on the fill: 6.1:1 (PAL.fail gave 3.9:1)
     onInk: "#ffffff",
     gloss: "the band's relationship to pain demonstrably changes with the stimulation",
   },
@@ -122,12 +122,14 @@ function AnswerRow({ answer, lit }) {
           {answer.key}
         </MDTypography>
       </MDBox>
-      <MDTypography
-        variant="caption"
-        sx={{ color: lit ? "#1A1A1A" : PAL.neutral, lineHeight: 1.35 }}
-      >
-        {answer.gloss}
-      </MDTypography>
+      {/* The four answers are always drawn, so a reader sees that "cannot tell" was one of them;
+          only the answer that happened carries its sentence (decision 302: the three unlit
+          sentences were read by nobody and tripled the card's first screen). */}
+      {lit ? (
+        <MDTypography variant="caption" sx={{ color: "#1A1A1A", lineHeight: 1.35 }}>
+          {answer.gloss}
+        </MDTypography>
+      ) : null}
     </MDBox>
   );
 }
@@ -198,8 +200,7 @@ export default function BandStabilityPanel({ stability, cacheStatus, painScore }
       {painScore && painScore.key ? (
         <MDTypography variant="caption" display="block" data-testid="stability-pain-score"
           sx={{ color: "#1A1A1A" }}>
-          {`Pain read as ${painScore.label || painScore.key} (the pain score chosen at the top of `
-            + "the page)."}
+          {`Pain score: ${painScore.label || painScore.key}.`}
         </MDTypography>
       ) : null}
       {builtWhen ? (
@@ -248,9 +249,11 @@ export default function BandStabilityPanel({ stability, cacheStatus, painScore }
             </MDTypography>
           ))}
           {s.odds_ratio_interval_method ? (
-            <MDTypography variant="caption" display="block" sx={{ color: "#4A4A4A", lineHeight: 1.35 }}>
-              {s.odds_ratio_interval_method}
-            </MDTypography>
+            <Fold show="How the intervals were computed" hide="Hide" mt={0.2}>
+              <MDTypography variant="caption" display="block" sx={{ color: "#4A4A4A", lineHeight: 1.35 }}>
+                {s.odds_ratio_interval_method}
+              </MDTypography>
+            </Fold>
           ) : null}
           {splitLine ? (
             <MDTypography variant="caption" display="block" sx={{ color: "#4A4A4A", lineHeight: 1.35 }}>

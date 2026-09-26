@@ -819,10 +819,9 @@ SHEETS_SWITCH = (("off", False), ("on", True))
 def _allowed_pairs(uid):
     """The sensing pair the device allows on each lead with the contacts in force (decision 217),
     and the rate in force there, from the newest row of the settings stream per side. Read with the
-    Stim Optimizer's own two helpers (`stim_rings`, `lfp_evidence.flanking_pair`) -- one home."""
+    rule's one home (`DecodeCommon.sensing_rule`: `stim_rings`, `flanking_pair`)."""
     from modules.CacheStore import store as CS
-    from modules.StimOptimizer.bravo_service import stim_rings
-    from modules.StimOptimizer.routines import lfp_evidence as LE
+    from modules.DecodeCommon import sensing_rule as SR
     names = ("ZERO", "ONE", "TWO", "THREE")
     df, _stamp = CS.load_newest("therapy_settings", uid, consumer="biomarkers")
     out = {}
@@ -832,8 +831,8 @@ def _allowed_pairs(uid):
             out[side] = dict(channel=None, why="no setting on record for this lead")
             continue
         last = d.iloc[-1]
-        rings = stim_rings(last.get("cathode"))
-        pair = LE.flanking_pair(rings)
+        rings = SR.stim_rings(last.get("cathode"))
+        pair = SR.flanking_pair(rings)
         rate = pd.to_numeric(pd.Series([last.get("rate")]), errors="coerce").iloc[0]
         out[side] = dict(channel=(f"{names[pair[0]]}_{names[pair[1]]}_{side.upper()}" if pair else None),
                          stim_contacts=sorted(int(r) for r in rings),

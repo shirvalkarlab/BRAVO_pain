@@ -164,6 +164,25 @@ def test_deployment_summary_adaptive_band_gate_checks_edges_not_centre():
     assert state == "pass" and lo == 8.0 and hi == 30.0
 
 
+
+def test_every_deployment_gate_carries_a_short_label_and_whether_it_ran():
+    """Decision 302 (the PI, 2026-09-26): the Closed-Loop decision card lists evidence that should
+    have been evaluated and was not as "Untested: <label>", five words or less. Every gate the
+    summary builds must have a label of at most four words in the one table, and the two gates that
+    can fail to run at all must say so through `evaluated`, never through their state alone."""
+    import re
+    labels = bs.DEPLOYMENT_GATE_SHORT_LABELS
+    assert all(1 <= len(v.split()) <= 4 for v in labels.values()), labels
+    src = open(bs.__file__).read()
+    built = re.findall(r'gates\.append\(_gate\("([a-z_]+)"', src)
+    assert sorted(built) == sorted(labels), (built, sorted(labels))
+    # The two gates whose test can fail to run pass `evaluated=` explicitly.
+    for key in ("stim_stable", "forward_validated"):
+        call = src[src.index(f'_gate("{key}"'):]
+        call = call[:call.index("))") + 2]
+        assert "evaluated=" in call, key
+
+
 if __name__ == "__main__":
     import traceback
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
@@ -174,3 +193,4 @@ if __name__ == "__main__":
         except Exception as e:
             nfail += 1; print("FAIL", fn.__name__, repr(e)); traceback.print_exc()
     print(f"PASS={npass} FAIL={nfail}")
+

@@ -55,3 +55,56 @@ export function summaryRequestParams(bc, includeClinicSheets, painScore) {
   if (painScore) rp.LabelMetric = painScore;
   return includeClinicSheets ? { ...rp, IncludeClinicSheetRatings: "1" } : rp;
 }
+
+/**
+ * ONE BAND ON THE WHOLE PAGE (decision 302; the live bug of 2026-09-26).
+ *
+ * The page's results survive a change of settings in the result cache and come back marked stale
+ * rather than refetched (the PI's rule; `useCachedResult`). A new band is such a change, so after a
+ * band was chosen on the grid the page drew the NEW band's name over the OLD band's report: the
+ * header said "L 1-3+ at 24.5 Hz" while the rule table under it was L 0-2+ at 23.5 Hz's ("D52 is
+ * violated ... sensing on 0-2"). Stale is fine for a changed cut-point, which leaves the band's
+ * report describing the same band; it is not fine for a changed band, because every sentence on the
+ * page would be about a band the page does not name.
+ *
+ * The chosen band is the page's subject: the server's record when it has one (decision 249), and
+ * this browser's copy until it answers. A report or summary computed for any other band is withheld
+ * from every card, and the page says which band it was for and asks for Recompute.
+ */
+const bandText = (contact, hz, label) => `${label || contact || "a band"} at ${
+  hz == null || !Number.isFinite(Number(hz)) ? "an unspecified" : Number(hz).toFixed(1)} Hz`;
+
+function computedBand(data, kind) {
+  if (!data) return null;
+  if (kind === "summary") {
+    const id = data.identity || {};
+    return id.contact ? { contact: id.contact, hz: id.center_freq_hz } : null;
+  }
+  const c = (data.candidates || [])[0];
+  return c && c.channel ? { contact: c.channel, hz: c.center_hz } : null;
+}
+
+/** True unless the result says it was computed for a band other than `bc`. */
+export function reportIsForBand(data, bc, kind = "report") {
+  const got = computedBand(data, kind);
+  if (!got || !bc || !bc.contact) return true;
+  return String(got.contact) === String(bc.contact)
+    && Math.abs(Number(got.hz) - Number(bc.center_freq_hz)) < 1e-6;
+}
+
+/** The hook's result unchanged when it is about `bc`; otherwise the same result with no data, an
+ *  `err` saying why, and `bandMismatch` naming the chosen band and the band it was computed for. */
+export function withheldIfOtherBand(result, bc, kind = "report") {
+  const data = result && result.data;
+  if (!data || reportIsForBand(data, bc, kind)) return result;
+  const got = computedBand(data, kind);
+  const chosen = bandText(bc.contact, bc.center_freq_hz, bc.contact_label);
+  const computedFor = bandText(got.contact, got.hz);
+  return {
+    ...result,
+    data: null,
+    stale: true,
+    err: `the analysis on screen is for ${computedFor}, not the chosen band; press Recompute`,
+    bandMismatch: { chosen, computedFor },
+  };
+}

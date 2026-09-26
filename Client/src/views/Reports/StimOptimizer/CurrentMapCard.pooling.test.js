@@ -66,9 +66,11 @@ describe("CurrentMapCard: pooling across pulse widths behind a toggle", () => {
     fireEvent.click(screen.getByRole("button", { name: /Pool pulse widths/ }));
     const t = document.body.textContent;
     expect(t).toContain("pooled over 3 pulse-width pairings, read at left 60\u202f\u00b5s / right 160\u202f\u00b5s");
-    expect(t).toContain("60/160\u202f\u00b5s (17 epochs), 100/100\u202f\u00b5s (12 epochs), 140/180\u202f\u00b5s (12 epochs)");
-    expect(t).toContain("41 epochs · 250 reports");
-    expect(t).toContain("165\u202fHz · 4 epochs");        // the unfitted pooled rate still says so
+    // PIN CHANGED 2026-09-26 (the design review, the PI's "yes to all six"): "stretches", never "epochs"
+    expect(t).toContain("60/160\u202f\u00b5s (17 stretches), 100/100\u202f\u00b5s (12 stretches), 140/180\u202f\u00b5s (12 stretches)");
+    expect(t).toContain("41 stretches · 250 reports");   // PIN CHANGED 2026-09-26: "stretches", never "epochs"
+    // PIN CHANGED 2026-09-26 (the design review, the PI's "yes to all six"): one line for the unfitted rates
+    expect(t).toContain("Not drawn, too few stretches of unchanged settings (minimum 8): 165\u202fHz (4).");        // the unfitted pooled rate still says so
     expect(t).toMatch(/assumes the current-to-pain shape is shared across pairings/i);
     expect(t).not.toContain("left pulse width 140\u202f\u00b5s · right pulse width 180\u202f\u00b5s");
     expect(screen.getByRole("button", { name: /Keep pulse widths separate/ })).toBeInTheDocument();

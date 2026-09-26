@@ -69,7 +69,7 @@ function RuleGlyph({ state, size = 13 }) {
       <svg width={s} height={s} viewBox="0 0 16 16" aria-label="cannot be evaluated" role="img">
         <rect x="1.2" y="1.2" width="13.6" height="13.6" rx="1.5" fill="none" stroke={PAL.warnText}
           strokeWidth="1.6" strokeDasharray="3 2" />
-        <text x="8" y="12" textAnchor="middle" fontSize="10" fontWeight="700"
+        <text x="8" y="12" textAnchor="middle" fontSize="11" fontWeight="700"
           fill={PAL.warnText}>?</text>
       </svg>
     );
@@ -111,7 +111,7 @@ function RuleRow({ row, state, ink, copy, actor }) {
           <MDTypography variant="caption" sx={{ fontSize: 11.5, color: "#2A2A2A" }}>
             <b style={{ fontFamily: PAL.mono, color: ink }}>{row.rule_id}</b>
             {"  "}{row.title || "untitled rule"}
-            {row.page ? <i style={{ color: "#7A7A7A" }}>{`  (${row.page}`}
+            {row.page ? <i style={{ color: "#5E5E5E" }}>{`  (${row.page}`}
               {row.source ? `, ${row.source}` : ""}{")"}</i> : null}
           </MDTypography>
           {copy ? (

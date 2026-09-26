@@ -6,11 +6,14 @@
  * deviation of the difference wide on each side, which is the width the resolution rule uses; it
  * is NOT a 95% interval and is not labelled as one. A band that straddles 0 is the visual form of
  * "this has not earned a recommendation". The verdict symbol beside it takes the three states the
- * page has always kept apart: tick = resolved, amber = not resolved (measured, too small to call),
- * open dashed = not determinable (the difference could not be formed).
+ * page has always kept apart: tick = proven better, amber = not proven (measured, too small to call),
+ * open dashed = not determinable (the difference could not be formed). The words are "proven better"
+ * and "not proven" since the design review of 2026-09-26: the page's headline already said "proven
+ * better" for what the strip called "resolved", two names for one thing.
  *
  * Resized 2026-09-12 (PI's review of the page): 220 x 40 px, the axis labels at 11 px in a band
- * of their own under the bar, so no label sits on the bar or the zero line.
+ * of their own under the bar, so no label sits on the bar or the zero line. The axis text is #5E5E5E
+ * (6.4:1 on white) since 2026-09-26; it was #7A7A7A, 4.29:1, under the 4.5:1 minimum.
  */
 import MDBox from "components/MDBox";
 
@@ -32,7 +35,7 @@ export function GainBar({ gain, sd, halfRange, width = 220 }) {
     return (
       <svg width={W} height={H} role="img" aria-label="no gain could be formed">
         <line x1={x(0)} x2={x(0)} y1={3} y2={H - AXIS - 3} stroke="#6E6E6E" strokeWidth="1" />
-        <text x={x(0) + 6} y={mid + 4} fontSize={TYPE.axis} fill="#7A7A7A">no difference formed</text>
+        <text x={x(0) + 6} y={mid + 4} fontSize={TYPE.axis} fill="#5E5E5E">no difference formed</text>
       </svg>
     );
   }
@@ -47,9 +50,9 @@ export function GainBar({ gain, sd, halfRange, width = 220 }) {
           fill={PAL.neutralFill} stroke={PAL.neutralBorder} />
       )}
       <circle cx={x(clamp(g))} cy={mid} r={5} fill={PAL.accent} />
-      <text x={x(-half)} y={H - 2} fontSize={TYPE.axis} fill="#7A7A7A">{`−${half}`}</text>
-      <text x={x(0)} y={H - 2} fontSize={TYPE.axis} fill="#7A7A7A" textAnchor="middle">0</text>
-      <text x={x(half)} y={H - 2} fontSize={TYPE.axis} fill="#7A7A7A" textAnchor="end">{`+${half}`}</text>
+      <text x={x(-half)} y={H - 2} fontSize={TYPE.axis} fill="#5E5E5E">{`−${half}`}</text>
+      <text x={x(0)} y={H - 2} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="middle">0</text>
+      <text x={x(half)} y={H - 2} fontSize={TYPE.axis} fill="#5E5E5E" textAnchor="end">{`+${half}`}</text>
     </svg>
   );
 }
@@ -58,11 +61,11 @@ export function VerdictGlyph({ resolved, size = TYPE.body }) {
   const text = { fontSize: size, fontWeight: 600, whiteSpace: "nowrap" };
   if (resolved === true) return (
     <MDBox display="inline-flex" alignItems="center" gap={0.6}>
-      <TickGlyph label="resolved" size={16} /><span style={{ ...text, color: PAL.pass }}>resolved</span>
+      <TickGlyph label="proven better" size={16} /><span style={{ ...text, color: PAL.passText || PAL.pass }}>proven better</span>
     </MDBox>);
   if (resolved === false) return (
     <MDBox display="inline-flex" alignItems="center" gap={0.6}>
-      <AmberGlyph label="not resolved" size={16} /><span style={{ ...text, color: PAL.warnText }}>not resolved</span>
+      <AmberGlyph label="not proven" size={16} /><span style={{ ...text, color: PAL.warnText }}>not proven</span>
     </MDBox>);
   return (
     <MDBox display="inline-flex" alignItems="center" gap={0.6}>

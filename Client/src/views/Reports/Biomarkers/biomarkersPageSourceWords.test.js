@@ -155,3 +155,36 @@ describe("the Biomarkers page names the two sources TD and PSD only", () => {
     expect(offending("// only a comment about the voltage trace and the FFT snapshots")).toEqual([]);
   });
 });
+
+/**
+ * ONE NAME PER THING, the design review's B5 (2026-09-26, approved by the PI). The page splits the
+ * ratings into high and low pain; it says so rather than "binarize"; the older splitting rule is
+ * named for what it does, not for the algorithm ("KMeans"); the matching sliders say what they count
+ * in plain words ("samples", "TD around each rating") rather than "LSB samples" or "TD signal per
+ * rating". Read from every string and piece of JSX text the page can print, comments stripped.
+ * Three kinds of string are code, never printed, and are allowed: the import paths of the two
+ * files still named for the old word, and the two keys the page's state uses ("binarization" for
+ * the timeline's colour mode, "kmeans" for the splitting rule), which reach no screen.
+ */
+const B5_WORDS = /binari[sz]|\bk-?means\b|\bLSB samples\b|\bsignal per rating\b|\(legacy\)/i;
+const B5_CODE_ONLY = /^["'`](\.\/[A-Za-z]+|binarization|kmeans)["'`]$/;
+function b5Offending(src) {
+  return printable(src).filter((t) => !B5_CODE_ONLY.test(t)).filter((t) => B5_WORDS.test(t));
+}
+
+describe("one name per thing on the Biomarkers page (design review B5)", () => {
+  FILES.forEach((f) => {
+    test(`${f}: no "binarize", "KMeans", "LSB samples" or "signal per rating" in printable text`, () => {
+      expect(b5Offending(read(f))).toEqual([]);
+    });
+  });
+
+  test("the guard catches the old words and lets the code keys through (negative control)", () => {
+    const src = 'import X from "./BinarizationPreview"; const m = "binarization"; const k = "kmeans";\n'
+      + 'const a = { key: "kmeans", label: "KMeans (legacy)" };\n'
+      + "const b = <span>{\"Binarization\"}</span>; const c = `Max LSB samples per pain rating: ${n}`;\n"
+      + 'const d = "TD signal per rating (seconds)"; const e = "Data available to binarize";\n'
+      + "// a comment about binarization is fine";
+    expect(b5Offending(src)).toHaveLength(5);
+  });
+});

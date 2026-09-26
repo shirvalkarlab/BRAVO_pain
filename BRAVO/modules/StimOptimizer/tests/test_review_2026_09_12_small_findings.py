@@ -131,7 +131,7 @@ def test_in_force_names_the_unrated_newest_epoch_and_says_the_fit_uses_the_older
     assert inf["Right"]["fitted_incumbent_epoch"] == 2.0
     assert inf["Right"]["differs_from_fitted_incumbent"] is True
     assert "epoch 3 since" in inf["Right"]["note"] and "against epoch 2" in inf["Right"]["note"]
-    assert inf["Left"]["source"].startswith("full epoch table")
+    assert inf["Left"]["source"].startswith("full settings history")
 
 
 def test_in_force_agrees_when_the_newest_epoch_is_rated():

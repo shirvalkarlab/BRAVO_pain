@@ -60,9 +60,12 @@ describe("Closed loop: may it start? (ClosedLoopChecks)", () => {
     expect(container.textContent).toMatch(/4\.8\s?mA delivered in the past is above today's 4\.5\s?mA ceiling — history, not a proposal/);
   });
 
+  // PIN CHANGED 2026-09-26 (the design review): the headline answers the card's title question,
+  // "No: ...", because the page's status line now says "closed loop cannot start" in words and the
+  // page said it four times. The two counts, kept apart, are what this pin protects.
   it("pin: the headline counts the blocking check and the not-assessed check separately, in the card's own words", () => {
     const { container } = rtlRender(wrap(<ClosedLoopChecks plan={plan} />));
-    expect(container.textContent).toContain("Closed loop may not start: 1 of 4 checks block, 1 not assessed");
+    expect(container.textContent).toContain("No: 1 of 4 checks block, 1 not assessed");
     // The server's code-name verdict must not reach the page (the component's own rule).
     expect(container.textContent).not.toMatch(/MUST NOT START/);
     expect(container.textContent).not.toMatch(/2 of 4 conditions block/);
@@ -81,12 +84,15 @@ describe("Closed loop: may it start on the frozen setting? (TwoStagePlanCard)", 
   // model's "What to test at the next visit" queue from decision 157: 25 untested (rate, left,
   // right) cells whose predicted values are identical to three decimals on this record, so the
   // ranking is noise, and which mixes 55/70/85/110 Hz. One in-clinic plan: the titration session.
-  it("prints no second in-clinic recommendation; it points at the titration session card instead", () => {
+  // PIN CHANGED 2026-09-26 (the design review): the sentence pointing at the titration card went
+  // (it only pointed); the queue is still named, in the folded record, as not a second plan.
+  it("prints no second in-clinic recommendation; the queue is named, folded, as not a second plan", () => {
     expect(Array.isArray(plan.stage1.queue) && plan.stage1.queue.length).toBe(25);
     const { container } = rtlRender(wrap(<TwoStagePlanCard plan={plan} loading={false} err={null} />));
     const text = container.textContent;
     expect(text).not.toMatch(/What to test at the next visit/);
     expect(text).not.toMatch(/ranked by expected improvement/);
-    expect(text).toContain(TITRATION_CARD_TITLE);
+    expect(text).not.toContain(TITRATION_CARD_TITLE);
+    expect(text).toContain("untested cells are on the response and are not a second in-clinic plan");
   });
 });

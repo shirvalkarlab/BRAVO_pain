@@ -134,7 +134,8 @@ def test_a_pass_records_what_it_was_checked_against():
 def test_the_switching_values_caveat_prints_four_decimals_like_the_parameter_card():
     """The parameter card formats these two values with `fmtPower` (four decimals); the caveat said
     "172.2737406083742". One number, printed the same way in both places."""
-    payload = {"available": True,
+    # A permitted configuration: the values are printed only then since decision 302.
+    payload = {"available": True, "verdict_detail": {"device_eligible": True},
                "threshold": {"upper": 182.2737406083742, "lower": 172.2737406083742}}
     rows = [r for r in AD.caveats_for_report(payload) if "switching values" in r["text"]]
     assert rows, "the caveat about the two switching values is present"

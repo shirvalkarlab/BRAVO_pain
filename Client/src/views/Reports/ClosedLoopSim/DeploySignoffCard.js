@@ -1,19 +1,20 @@
 /**
- * Phase E: the read-only Deploy-to-Percept sign-off card.
+ * The printable sign-off record: what the decision card folds under "Details" and prints in full.
  *
- * One authoritative fetch (/api/queryDeploymentSummary) → a clinician-facing review: device identity,
- * the deployable LSB threshold (big), the gate checklist they sign against, evidence with CI,
- * per-era portability, and the deployment caveats. Printable (window.print) and exportable to JSON
- * for the device-programming record. This is a SUMMARY, not a new analysis — every number here is
- * the same one the Phase B–D panels show, gathered in one place.
+ * Until decision 302 this was its own card, "Deploy-to-Percept review", at the foot of the page,
+ * with its own verdict box, a box saying where the values to transcribe were, and the Print and
+ * Export buttons. The PI (2026-09-26): "Combine the full parameter recommendation with the
+ * deployment card to create one simple, streamlined card." The verdict is now the decision card's
+ * status line, the values are the decision card's table, and "Sign and print" is the decision
+ * card's button; this file keeps the record itself (`SignoffRecord`, the default export), the
+ * print-and-export logic (`useSignoffActions`), the stale-inputs notice and the figure pictures.
+ * Every number here is one the page already shows elsewhere, gathered for the signed sheet.
  */
 import { useEffect, useState } from "react";
-import { Card, Grid, Icon } from "@mui/material";
+import { Grid, Icon } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
-import MDButton from "components/MDButton";
 
-import useDeploymentSummary from "./useDeploymentSummary";
 import { captureFigureSnapshots } from "./figureSnapshots";
 import PAL from "./palette";
 import ProvisionalNote from "./ProvisionalNote";
@@ -30,8 +31,8 @@ function GateRow({ gate }) {
   // prerequisite to program at all) is tagged so a clinician sees which failures are blocking.
   const state = gate.state || (gate.pass ? "pass" : "fail");
   const STYLE = {
-    pass: { color: PAL.pass, icon: "check_circle" },
-    fail: { color: PAL.fail, icon: "cancel" },
+    pass: { color: PAL.passText, icon: "check_circle" },
+    fail: { color: PAL.failText, icon: "cancel" },
     indeterminate: { color: PAL.indeterminate, icon: "help" },
   };
   const s = STYLE[state] || STYLE.fail;
@@ -83,7 +84,7 @@ function EvidenceVerdictLine({ rep }) {
  * failed to load. "No caveats were assembled for this report" is a different statement from "this
  * report has nothing to qualify", and saying which is which on a signed sheet is the point.
  */
-const CAVEAT_INK = { high: PAL.fail, medium: PAL.warnText, low: PAL.neutral };
+const CAVEAT_INK = { high: PAL.failText, medium: PAL.warnText, low: "#5E5E5E" };
 
 function ReportCaveats({ caveats }) {
   const rows = Array.isArray(caveats) ? caveats : null;
@@ -247,66 +248,25 @@ function CurrentRemovedAuc({ ev }) {
   );
 }
 
-function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpoint, summary,
-                             deploymentReport, chosenBand, bandRecord }) {
-  // THE DEVICE ANSWER, read from the deployment report rather than from the statistical summary.
-  //
-  // This card used to print `power ≥ N LSB` at twenty-four-point type inside a PRINTABLE sign-off
-  // record, gated only on the statistical threshold being available. It had no reference to the
-  // device rules at all, so a configuration the Percept forbids could be printed, signed and
-  // carried into a programming visit as though it were authorised. That was first fixed by
-  // suppressing the number when the device answer was negative; as of the 2026-09-04 rebuild the
-  // number is not on this card in any state, because the values to transcribe belong on the
-  // prescription panel, which withholds the whole table on the same condition and carries the
-  // read-back checklist that makes a value safe to act on. One number in one place.
-  //
-  // Fail closed: a report that has not loaded, or that carries no device answer, is treated as a
-  // refusal, because an absent verdict is not permission.
-  const _rep = deploymentReport && deploymentReport.data ? deploymentReport.data : deploymentReport;
-  const _vd = (_rep && _rep.verdict_detail) || {};
-  const deviceOk = !!(_rep && _rep.available && _vd.device_eligible === true);
-  const _nFail = ((_rep && _rep.eligibility && _rep.eligibility.failures) || []).length;
-  const _nUnknown = ((_rep && _rep.eligibility && _rep.eligibility.unknowns) || []).length;
+const RULE_LABEL = { youden: "Balanced (Youden J)", f1: "Favor detection (F1)", cost: "Cost-weighted" };
+
+/**
+ * Print and export for the signed record. Pictures of the page's figures are taken in the browser
+ * when Print or Export is pressed (audit item [49]), so the sheet shows the operating point the
+ * reader chose; `printPending` makes capture and print two steps, because window.print() blocks
+ * and the pictures must be in the document before it is called.
+ *
+ * STALENESS REACHES THE RECORD. The summary's key includes the cut-point, so a new operating point
+ * marks the page stale rather than refetching. A printed or exported record outlives the screen and
+ * its amber Recompute bar, so the record says so at its own head and in the exported file.
+ */
+export function useSignoffActions({ participantUid, bandCandidate, summary, cutpoint, chosenBand,
+                                    bandRecord }) {
+  const data = summary && summary.data;
+  const inputsStale = !!(summary && summary.stale);
+  const staleWhy = (summary && summary.staleReasons) || [];
+  const computedAt = (summary && summary.computedAt) || null;
   const bc = bandCandidate || {};
-  const channelRaw = bc.contact;
-  const centerHz = bc.center_freq_hz;
-  const bandWidthHz = bc.bandwidth_hz || 5.0;
-  const cutThr = cutpoint ? cutpoint.threshold : null;
-  const matchDir = cutpoint ? cutpoint.matchDir : "prior";
-
-  // Prefer the SHARED summary fetch lifted to the parent (one /queryDeploymentSummary call feeds both
-  // this card and the top verdict strip — glmer runs through single-threaded embedded R per worker, so
-  // a duplicate concurrent call starved the pool and dropped sibling requests). Fall back to a local
-  // fetch only if the prop isn't supplied (standalone use), so the two can never disagree.
-  const ownSummary = useDeploymentSummary({
-    participantUid, channel: channelRaw, centerHz, bandWidthHz, matchDir, cutThr, requestParams,
-    enabled: !summary,
-  });
-  const { data, loading, err } = summary || ownSummary;
-
-  // STALENESS MUST REACH A PRINTED RECORD, added 2026-09-04 with the result cache.
-  //
-  // The summary's cache key includes the cut-point, so choosing a new operating point in the ROC
-  // panel marks this page stale rather than silently refetching — which is the behaviour the PI
-  // asked for and is right for a screen. It is not sufficient for a sheet. Everything else on this
-  // card is transient: a reader who sees an amber Recompute bar at the top of the page understands
-  // that the numbers below it describe the previous settings. A printed or exported sign-off record
-  // outlives the screen and loses the bar, so it would assert an operating point that had already
-  // been superseded, with a signature under it.
-  //
-  // The record is therefore marked at its own head and in the exported payload, rather than the
-  // cut-point being exempted from the key. Exempting it would have refetched on every drag of the
-  // operating point — the expensive call this cache exists to avoid — and would have broken the
-  // rule the PI set. Marking keeps both properties: the screen stays responsive, and nothing that
-  // leaves the screen can quietly lag.
-  const _eff = summary || ownSummary;
-  const inputsStale = !!(_eff && _eff.stale);
-  const staleWhy = (_eff && _eff.staleReasons) || [];
-  const computedAt = (_eff && _eff.computedAt) || null;
-  // Operating-point provenance for the auditable device-programming record: WHICH rule chose the
-  // cut-point and at what sensitivity/specificity. Without this two clinicians could program the same
-  // patient at different operating points with identical-looking sign-off sheets.
-  const RULE_LABEL = { youden: "Balanced (Youden J)", f1: "Favor detection (F1)", cost: "Cost-weighted" };
   const opProvenance = cutpoint ? {
     rule: cutpoint.rule || null,
     rule_label: RULE_LABEL[cutpoint.rule] || cutpoint.rule || null,
@@ -315,13 +275,6 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
     degenerate: !!cutpoint.degenerate,
   } : null;
 
-  // PICTURES OF THE FIGURES ON THE RECORD (audit item [49]). Taken in the browser at the moment
-  // Print or Export is pressed, from the figures as drawn on this page, so the sheet shows the
-  // operating point the reader chose and not a server's idea of it. `snapshots` holds the last
-  // capture and is drawn inside this card, which is what lets the print stylesheet carry it: that
-  // stylesheet shows `.cl-signoff-card *` and hides everything else. `printPending` is the reason
-  // the capture and the print are two steps -- window.print() blocks, so the pictures must be in
-  // the document BEFORE it is called, and React commits them only after this render returns.
   const [snapshots, setSnapshots] = useState(null);
   const [capturing, setCapturing] = useState(false);
   const [printPending, setPrintPending] = useState(false);
@@ -345,7 +298,6 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
   useEffect(() => {
     if (!printPending || capturing || !snapshots) return;
     setPrintPending(false);
-    // The pictures are in the document now; print on the next frame so their <img> nodes have laid out.
     window.requestAnimationFrame(() => window.print());
   }, [printPending, capturing, snapshots]);
 
@@ -359,21 +311,12 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
     const snap = await takeSnapshots();
     const blob = new Blob([JSON.stringify({ schema_version: "deploy_signoff_v1",
       generated_at: new Date().toISOString(), operating_point: opProvenance, summary: data,
-      // Which band this record signs, as chosen, and where that choice is held (panel D item 8).
       chosen_band: { band_candidate: bandCandidate || null,
         committed_at: (chosenBand && chosenBand.committed_at) || null,
         record: bandRecord || null },
-      // Carried in the FILE, not only on the screen. An export is the most durable form this
-      // record takes and the least likely to be read next to the page that produced it, so a
-      // consumer parsing it must be able to see that the analysis predates the current settings.
-      // `computed_at` is included even when nothing is stale, because a record with no timestamp
-      // cannot be reconciled against anything later.
       inputs_stale: inputsStale,
       inputs_stale_reasons: inputsStale ? staleWhy : [],
       summary_computed_at: computedAt ? new Date(computedAt).toISOString() : null,
-      // The figures as drawn when the file was made, as PNG data URLs, plus the ones that were NOT
-      // on the page at that moment -- a record that is silent about a missing figure reads as if
-      // there had been none.
       figures: snap.figures.map((f) => ({ section_id: f.section_id, title: f.title, index: f.index,
         n_in_section: f.n_in_section, width_px: f.width_px, height_px: f.height_px,
         image_data_url: f.image_data_url })),
@@ -382,364 +325,237 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
       { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `DeploySignoff_${participantUid}_${channelRaw}_${centerHz}Hz.json`;
+    a.download = `DeploySignoff_${participantUid}_${bc.contact}_${bc.center_freq_hz}Hz.json`;
     a.click(); URL.revokeObjectURL(a.href);
   };
 
-  const id = data && data.identity;
-  const dc = data && data.device_control;
-  const ev = data && data.evidence;
-  // The threshold object from the statistical summary is deliberately NOT read here any more. The
-  // deployable value and its provenance live on the prescription panel, which is the only surface
-  // with a read-back step, and duplicating the number onto a printable sheet is what allowed a
-  // signed record to disagree with the device rules.
-  const pw = data && data.power;
-  const fwd = data && data.forward;
-  // The statistical summary's own readiness flag, which keys on the NECESSARY gates alone rather
-  // than on the passed-count. It is read here only so the gate line can be worded correctly; it no
-  // longer drives a headline or the card's frame, because a statistical readiness flag that knows
-  // nothing about the device rules is not a verdict.
-  const summaryReady = data
-    ? (data.ready_to_program != null ? !!data.ready_to_program : data.n_gates_passed === data.n_gates)
-    : false;
-  const nIndet = (data && data.n_gates_indeterminate) || 0;
+  return { hasData: !!data, snapshots, capturing, printWithFigures, exportJson, inputsStale,
+    staleWhy, computedAt };
+}
 
-  // The card's frame keys on the DEVICE answer and not on the statistical one, so the card's own
-  // chrome cannot imply a permission that the rule table has refused.
-  const frameInk = deviceOk ? PAL.pass : PAL.warn;
-
-  // The notice is rendered as part of the card's own content rather than as a floating overlay, so
-  // that it survives the print stylesheet. An overlay or a tooltip would be exactly the thing that
-  // disappears on the paper copy.
-  const staleNotice = inputsStale ? (
+/** At the head of the record, on screen and on paper, when the settings changed since. */
+export function StaleNotice({ inputsStale, computedAt, staleWhy }) {
+  if (!inputsStale) return null;
+  return (
     <MDBox className="cl-signoff-stale" mb={1} p={1}
       sx={{ borderRadius: "4px", backgroundColor: PAL.warnFill, border: `1px solid ${PAL.warnText}` }}>
-      <MDTypography variant="caption" sx={{
-        fontSize: 11, fontWeight: "bold", letterSpacing: 0.3, color: PAL.warnText,
-      }}>
-        THIS RECORD DESCRIBES AN EARLIER ANALYSIS
-      </MDTypography>
-      <MDTypography variant="caption" display="block" sx={{ fontSize: 11, color: PAL.warnText }}>
+      <MDTypography variant="caption" display="block" sx={{ fontSize: 12, fontWeight: 700, color: PAL.warnText }}>
         {computedAt
-          ? `The analysis below was computed at ${new Date(computedAt).toLocaleString()} and the `
-            + "settings on the page have changed since. Press Recompute before signing or "
-            + "exporting this record."
-          : "The settings on the page have changed since the analysis below was computed. Press "
-            + "Recompute before signing or exporting this record."}
+          ? `This record describes the analysis of ${new Date(computedAt).toLocaleString()}; the `
+            + "settings have changed since. Press Recompute before signing."
+          : "The settings have changed since this analysis. Press Recompute before signing."}
       </MDTypography>
-      {staleWhy.length ? (
-        <MDBox component="ul" sx={{ pl: 2, my: 0.3 }}>
-          {staleWhy.map((r) => (
-            <MDTypography key={r} component="li" variant="caption" display="list-item"
-              sx={{ fontSize: 11, color: PAL.warnText }}>
-              {r}
+      {staleWhy.map((r) => (
+        <MDTypography key={r} variant="caption" display="block" sx={{ fontSize: 11.5, color: PAL.warnText }}>
+          {r}
+        </MDTypography>
+      ))}
+    </MDBox>
+  );
+}
+
+/** The pictures taken when Print or Export was pressed, drawn inside the printed card. */
+export function SnapshotFigures({ snapshots }) {
+  if (!snapshots) return null;
+  return (
+    <MDBox className="cl-signoff-figures" mt={2} pt={1.5} sx={{ borderTop: "1px solid #e0e0e0" }}>
+      <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold", color: "#4A4A4A" }}>
+        FIGURES AS DRAWN WHEN THIS RECORD WAS MADE
+        {snapshots.captured_at ? `, ${new Date(snapshots.captured_at).toLocaleString()}` : ""}
+      </MDTypography>
+      {snapshots.error ? (
+        <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5, color: PAL.failText }}>
+          {snapshots.error}
+        </MDTypography>
+      ) : null}
+      {snapshots.figures.map((f) => (
+        <MDBox key={`${f.section_id}-${f.index}`} mt={1} sx={{ pageBreakInside: "avoid" }}>
+          <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5, fontWeight: "bold" }}>
+            {f.n_in_section > 1 ? `${f.title} (${f.index} of ${f.n_in_section})` : f.title}
+          </MDTypography>
+          <img src={f.image_data_url} alt={f.title}
+            style={{ display: "block", width: f.width_px, maxWidth: "100%", height: "auto",
+              border: "1px solid #eee" }} />
+        </MDBox>
+      ))}
+      {snapshots.missing.length ? (
+        <MDBox mt={1}>
+          <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5, fontWeight: "bold", color: PAL.warnText }}>
+            NOT ON THIS RECORD
+          </MDTypography>
+          {snapshots.missing.map((m) => (
+            <MDTypography key={m.section_id + m.reason} variant="caption" display="block"
+              sx={{ fontSize: 11.5, color: PAL.warnText }}>
+              {`${m.title}: ${m.reason}`}
             </MDTypography>
           ))}
         </MDBox>
       ) : null}
     </MDBox>
-  ) : null;
-
-  return (
-    <Card className="cl-signoff-card"
-      sx={{ width: "100%", border: data ? `2px solid ${inputsStale ? PAL.warnText : frameInk}` : undefined }}>
-      <MDBox p={2.5}>
-        {/* Above the title, because a reader who has already started reading the gate lines has
-            passed the point where this would change what they do with the sheet. */}
-        {staleNotice}
-        <MDBox display="flex" justifyContent="space-between" alignItems="center" mb={0.5}>
-          <MDTypography variant="h5" sx={{ fontSize: 18 }}>Deploy-to-Percept review</MDTypography>
-          {data ? (
-            <MDBox className="cl-signoff-actions">
-              <MDButton size="small" variant="outlined" color="dark" onClick={printWithFigures} disabled={capturing} sx={{ mr: 1 }}>
-                {capturing ? "Capturing figures…" : "Print"}
-              </MDButton>
-              <MDButton size="small" variant="gradient" color="info" onClick={exportJson} disabled={capturing}>
-                Export JSON
-              </MDButton>
-            </MDBox>
-          ) : null}
-        </MDBox>
-
-        {/* No off-label / approved-indication line here. One was added 2026-09-17 (C6 of the 2026-09-15
-            review, decision 200) and REMOVED 2026-09-19 on the PI's ruling: this is a research context and
-            approved-indication constraints are not applied on this page. Rules D01/D02 stay in the ledger
-            as deferred advisories (decision 148); nothing rendered restates them. */}
-
-        {loading ? (
-          <MDTypography variant="caption" sx={{ fontStyle: "italic", fontSize: 11 }}>
-            Assembling the deployment review…
-          </MDTypography>
-        ) : err ? (
-          <MDTypography variant="caption" sx={{ fontSize: 11, color: PAL.fail }}>{`Unavailable: ${err}.`}</MDTypography>
-        ) : data ? (
-          <>
-            {/* NO SECOND VERDICT, changed 2026-09-04. This card used to print its own readiness
-                headline computed from the statistical gates alone, which made it the third verdict
-                statement on a page whose two endpoints answer different questions and can disagree.
-                A printed record carrying a permissive sentence that the device rules contradict is
-                worse than a screen doing so, because the sheet outlives the screen and loses
-                whatever context surrounded it.
-
-                What replaces it is a pointer to the one reconciled verdict, plus the device answer
-                restated in a single line. The device answer is restated rather than omitted because
-                a printed sheet that says nothing about permission can be read as granting it. The
-                statistical gate counts stay, labelled as evidence. */}
-            <MDBox p={1} mb={1.5} sx={{ borderRadius: "6px",
-              backgroundColor: deviceOk ? PAL.passFill : PAL.warnFill }}>
-              <MDTypography variant="caption" sx={{ display: "block", fontSize: 11,
-                fontWeight: "bold", letterSpacing: 0.4,
-                color: deviceOk ? PAL.pass : PAL.warnText }}>
-                THE VERDICT FOR THIS RECORD IS THE RECONCILED HEADER AT THE TOP OF THIS SHEET
-              </MDTypography>
-              <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
-                color: "#2A2A2A", mt: 0.2 }}>
-                {deviceOk
-                  ? "The device rules permit this configuration. Read the header for the evidence "
-                    + "answer as well, because both have to clear before anything is programmed."
-                  : !_rep || !_rep.available
-                    ? "The device rules have not been evaluated for this configuration. This sheet "
-                      + "is not a record of an authorised setting."
-                    : "The device rules do NOT permit this configuration"
-                      + `${_nFail ? `: ${_nFail} rule${_nFail === 1 ? "" : "s"} violated` : ""}`
-                      + `${_nUnknown ? `, ${_nUnknown} that could not be evaluated` : ""}. `
-                      + "This sheet is not a record of an authorised setting."}
-              </MDTypography>
-              <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5,
-                color: "#666", mt: 0.3 }}>
-                {`Statistical gates, as evidence rather than as permission: `
-                  + `${data.n_gates_passed} of ${data.n_gates} passed`}
-                {data.n_necessary != null
-                  ? `, of which ${data.n_necessary_passed} of ${data.n_necessary} required` : ""}
-                {nIndet ? `, ${nIndet} not tested` : ""}
-                {/* THE SECOND VERDICT SENTENCE IS GONE (panel D item 1, 2026-09-22). This line used
-                    to end "Summary verdict: <word>", a verdict from the older statistical-gate
-                    endpoint, printed a few lines above the deployment report's own verdict and in
-                    the same words. Two verdicts on one signed sheet, answering two different
-                    questions -- does this band discriminate, and may this configuration be
-                    programmed -- is an invitation to read whichever one is more favourable. The
-                    gate counts and the gate rows stay, as the checklist they are. */}
-                {`. Match direction: ${data.match_direction}.`}
-                {summaryReady
-                  ? " The summary's own required gates all passed, which is a statement about "
-                    + "discrimination and not about whether the device will accept the "
-                    + "configuration."
-                  : " The summary's own required gates did not all pass."}
-              </MDTypography>
-            </MDBox>
-
-            <Grid container spacing={2}>
-              {/* LEFT: identity + threshold + evidence */}
-              <Grid item xs={12} md={6}>
-                <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: "#5E5E5E" }}>
-                  DEVICE TARGET
-                </MDTypography>
-                {id ? (
-                  <>
-                    <KV k="Contact" v={`${id.contact} (${id.hemisphere || "—"})`} />
-                    <KV k="Region" v={id.region || "—"} />
-                    <KV k="Band" v={`${fmt(id.band_lo_hz, 1)}–${fmt(id.band_hi_hz, 1)} Hz`} />
-                    <KV k="Center (FFT-snapped)" v={`${fmt(id.center_freq_hz, 1)} → ${fmt(id.snapped_center_freq_hz, 2)} Hz`} />
-                    <KV k="PRO metric / binarization" v={`${id.pro_metric} / ${id.binarization}`} />
-                    <KV k="Pain ratings used" v={ratingsUsedText(id.clinic_sheet_ratings)} />
-                    <KV k="Pain score used"
-                      v={painScoreUsedText(_rep && _rep.pain_score, id.pro_metric)} />
-                    <KV k="Polarity / suggested mode" v={`${dc.polarity} / ${dc.suggested_mode || "—"}`} />
-                  </>
-                ) : null}
-                <ChosenBandBlock bandCandidate={bandCandidate} chosenBand={chosenBand}
-                  bandRecord={bandRecord} />
-
-                {/* WHERE THE VALUES TO TRANSCRIBE LIVE. This block used to print the threshold
-                    itself at twenty-four-point type. It now points at the prescription panel
-                    instead, for two reasons. The first is that one number belongs in one place: two
-                    renderings of the same threshold on one page can drift, and this card is the one
-                    that gets printed and signed. The second is that a threshold on its own is not
-                    enough to program from — it needs its units, its provenance, the fields it is
-                    coupled to and a read-back step — and all of those are on the prescription
-                    panel, which withholds the whole table on exactly the device condition stated
-                    above. */
-                }
-                <MDBox mt={1.2} p={1.2} sx={{ borderRadius: "6px",
-                  backgroundColor: PAL.neutralFill,
-                  border: `1px solid ${PAL.neutralBorder}` }}>
-                  <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold",
-                    letterSpacing: 0.4, color: PAL.neutral }}>
-                    VALUES TO TRANSCRIBE
-                  </MDTypography>
-                  <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5,
-                    color: "#2A2A2A", mt: 0.2 }}>
-                    {deviceOk
-                      ? "The parameter table on the deployment page carries every value to enter, "
-                        + "with its units in a separate column, the minutes-and-seconds reading for "
-                        + "each duration, and a read-back box per row. Transcribe from that table "
-                        + "and not from this sheet, because this sheet has no read-back step."
-                      : "No value to program is printed on this sheet or on the deployment page, "
-                        + "because the device does not permit this configuration. A number on a "
-                        + "signed sheet gets entered."}
-                  </MDTypography>
-                  {/* The evidence verdict this sheet is signed against, verbatim from the module,
-                      with the provisional caveat when the verdict rests on point signs alone (PI
-                      rule 2026-09-13). On the printed record, not in a fold. Rendered by its own
-                      component: this function already carries so many conditional branches that
-                      one more ternary here overflowed eslint's rules-of-hooks path count and made
-                      it report every hook above as "called conditionally". */}
-                  <EvidenceVerdictLine rep={_rep} />
-                  {/* The verdict line above is this sheet's headline and already carries the
-                      count; the box adds each edge's interval and p (referent audit, 2026-09-15). */}
-                  <ProvisionalNote deploymentReport={_rep} dense mt={0.5} headline={false} />
-                </MDBox>
-
-                {/* Advisory ramp guidance (audit C10): the closed-loop tuning surface is band +
-                    threshold + RAMP. Renders only when the biomarker is deployable as stock adaptive. */}
-                {dc && dc.ramp && dc.ramp.available ? (
-                  <MDBox mt={1.2} p={1.0} sx={{ borderRadius: "6px",
-                    backgroundColor: dc.ramp.posture === "conservative" ? PAL.warnFill : PAL.passFill,
-                    border: `1px solid ${dc.ramp.posture === "conservative" ? PAL.warnBorder : (PAL.passBorder || "#009E7344")}` }}>
-                    <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold",
-                      color: dc.ramp.posture === "conservative" ? PAL.warnText : PAL.pass }}>
-                      {`RAMP GUIDANCE — ${String(dc.ramp.posture).toUpperCase()} (advisory)`}
-                    </MDTypography>
-                    <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 11.5, mt: 0.3 }}>
-                      {dc.ramp.transition_note}
-                    </MDTypography>
-                    <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 11, mt: 0.3 }}>
-                      {`Ramp up: ${dc.ramp.ramp_up_hint}. Ramp down: ${dc.ramp.ramp_down_hint}.`}
-                    </MDTypography>
-                    <MDTypography variant="caption" display="block" sx={{ fontSize: 11, color: "#5E5E5E", mt: 0.3, fontStyle: "italic" }}>
-                      {dc.ramp.reason}
-                    </MDTypography>
-                  </MDBox>
-                ) : null}
-
-                <MDBox mt={1.2}>
-                  <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: "#5E5E5E" }}>
-                    EVIDENCE
-                  </MDTypography>
-                  {ev ? (
-                    <>
-                      <KV k="Deployment AUC — in-sample (95% clustered-bootstrap CI)" v={`${fmt(ev.auc)} (${fmt(ev.auc_lo)}–${fmt(ev.auc_hi)})`} />
-                      <CurrentRemovedAuc ev={ev} />
-                      {/* Audit C2: the held-out (train-past → test-future) AUC shown BESIDE the
-                          in-sample number, so the forward optimism is visible at sign-off. Color the
-                          held-out value by whether its CI clears chance (green) or not (warn). */}
-                      {fwd && fwd.available && fwd.held_out_auc != null ? (
-                        <KV
-                          k={`Deployment AUC — forward held-out (${fwd.n_folds ?? "—"} weekly folds)`}
-                          v={
-                            <span style={{ color: fwd.beats_chance_forward ? PAL.pass : PAL.warnText, fontWeight: 600 }}>
-                              {`${fmt(fwd.held_out_auc)} (${fmt(fwd.held_out_auc_lo)}–${fmt(fwd.held_out_auc_hi)})`}
-                              {fwd.beats_chance_forward ? " ✓ clears chance" : " ✗ not validated forward"}
-                            </span>
-                          }
-                        />
-                      ) : (
-                        <KV k="Deployment AUC — forward held-out" v={
-                          <span style={{ color: PAL.warnText }}>
-                            {fwd && fwd.reason ? `not assessable (${fwd.reason})` : "in-sample only — forward UNCONFIRMED"}
-                          </span>
-                        } />
-                      )}
-                      <KV k="Odds ratio (95% CI)" v={`${fmt(ev.odds_ratio)} (${fmt(ev.or_ci_low)}–${fmt(ev.or_ci_high)})${ev.credible_ci ? " ✓" : ""}`} />
-                      <KV k="Mixed-effects p" v={ev.p_glmer != null ? ev.p_glmer.toExponential(2) : "—"} />
-                      <KV k="Matched samples / ratings" v={`${ev.n_matched_samples ?? "—"} / ${ev.n_clusters ?? "—"}`} />
-                      <BurnInNote ev={ev} />
-                      {pw && pw.available ? (
-                        <KV k="Power (vs AUC 0.5)" v={pw.more_data_needed
-                          ? `${fmt(pw.power_current * 100, 0)}% · need ${pw.n_ratings_needed} ratings`
-                          : `${fmt(pw.power_current * 100, 0)}% · adequately powered`} />
-                      ) : null}
-                    </>
-                  ) : null}
-                </MDBox>
-              </Grid>
-
-              {/* RIGHT: gates + caveats */}
-              <Grid item xs={12} md={6}>
-                <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: "#5E5E5E" }}>
-                  DEPLOYMENT GATES
-                </MDTypography>
-                <MDBox mb={1.2}>
-                  {(data.gates || []).map((g) => <GateRow key={g.key} gate={g} />)}
-                </MDBox>
-
-                <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: PAL.warnText }}>
-                  CAVEATS
-                </MDTypography>
-                {/* THE DEPLOYMENT REPORT'S OWN CAVEATS (panel D item 3, 2026-09-22): every number
-                    this page prints without an uncertainty interval, the warnings that change no
-                    verdict, and the point-sign caveat on the verdict itself -- each with the card
-                    it sits on, so a reader can go and look at the number rather than take the
-                    sentence on trust. They are ranked, worst first, and they are assembled per
-                    request from the payload rather than stored, so they cannot go stale against
-                    the report they describe. The list below them is the older statistical-gate
-                    endpoint's own caveats, kept and labelled as coming from elsewhere. */}
-                <ReportCaveats caveats={_rep && _rep.available ? _rep.caveats : null} />
-                {(data.caveats || []).length > 0 ? (
-                  <MDTypography variant="caption" display="block"
-                    sx={{ fontSize: 11, fontWeight: "bold", color: "#5E5E5E", mt: 0.8 }}>
-                    FROM THE SEPARATE STATISTICAL SUMMARY
-                  </MDTypography>
-                ) : null}
-                <MDBox component="ul" sx={{ pl: 2, mt: 0.5, mb: 0 }}>
-                  {(data.caveats || []).map((c, i) => (
-                    <MDTypography key={i} component="li" variant="caption"
-                      sx={{ fontSize: 11, color: "#555", display: "list-item", mb: 0.3 }}>
-                      {c}
-                    </MDTypography>
-                  ))}
-                </MDBox>
-              </Grid>
-            </Grid>
-
-            {/* THE PICTURES. Present only after Print or Export has taken them, and drawn INSIDE this
-                card so the print stylesheet (which shows only this card and the verdict strip)
-                carries them onto paper. Each figure is captioned with the section it came from, and a
-                section whose figure was not on the page is named as missing rather than left out. */}
-            {snapshots ? (
-              <MDBox className="cl-signoff-figures" mt={2} pt={1.5} sx={{ borderTop: "1px solid #e0e0e0" }}>
-                <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: "#5E5E5E" }}>
-                  FIGURES AS DRAWN WHEN THIS RECORD WAS MADE
-                  {snapshots.captured_at ? ` — ${new Date(snapshots.captured_at).toLocaleString()}` : ""}
-                </MDTypography>
-                {snapshots.error ? (
-                  <MDTypography variant="caption" display="block" sx={{ fontSize: 11, color: PAL.fail }}>
-                    {snapshots.error}
-                  </MDTypography>
-                ) : null}
-                {snapshots.figures.map((f) => (
-                  <MDBox key={`${f.section_id}-${f.index}`} mt={1} sx={{ pageBreakInside: "avoid" }}>
-                    <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5, fontWeight: "bold" }}>
-                      {f.n_in_section > 1 ? `${f.title} (${f.index} of ${f.n_in_section})` : f.title}
-                    </MDTypography>
-                    {/* Shown at the figure's own on-screen size. The PNG carries two pixels per
-                        CSS pixel so it stays crisp on paper; without a width it would display at
-                        its pixel size, twice as large as the figure it copies. */}
-                    <img src={f.image_data_url} alt={f.title}
-                      style={{ display: "block", width: f.width_px, maxWidth: "100%", height: "auto",
-                        border: "1px solid #eee" }} />
-                  </MDBox>
-                ))}
-                {snapshots.missing.length ? (
-                  <MDBox mt={1}>
-                    <MDTypography variant="caption" display="block" sx={{ fontSize: 11, fontWeight: "bold", color: PAL.warnText }}>
-                      NOT ON THIS RECORD
-                    </MDTypography>
-                    {snapshots.missing.map((m) => (
-                      <MDTypography key={m.section_id + m.reason} variant="caption" display="block"
-                        sx={{ fontSize: 11, color: PAL.warnText }}>
-                        {`${m.title}: ${m.reason}`}
-                      </MDTypography>
-                    ))}
-                  </MDBox>
-                ) : null}
-              </MDBox>
-            ) : null}
-          </>
-        ) : null}
-      </MDBox>
-    </Card>
   );
 }
 
-export default DeploySignoffCard;
+/**
+ * The record itself. No verdict box and no pointer to the values (both are the decision card's
+ * own, directly above this fold); the statistical gates stay as the checklist they are, labelled
+ * as evidence and not permission (decision 242: one verdict).
+ */
+function SignoffRecord({ bandCandidate, summary, deploymentReport, chosenBand, bandRecord }) {
+  const _rep = deploymentReport && deploymentReport.data ? deploymentReport.data : deploymentReport;
+  const { data, loading, err } = summary || { data: null, loading: false, err: null };
+  const id = data && data.identity;
+  const dc = data && data.device_control;
+  const ev = data && data.evidence;
+  const pw = data && data.power;
+  const fwd = data && data.forward;
+  const summaryReady = data
+    ? (data.ready_to_program != null ? !!data.ready_to_program : data.n_gates_passed === data.n_gates)
+    : false;
+  const nIndet = (data && data.n_gates_indeterminate) || 0;
+
+  if (loading) {
+    return (
+      <MDTypography variant="caption" sx={{ fontStyle: "italic", fontSize: 11.5 }}>
+        Assembling the deployment review…
+      </MDTypography>
+    );
+  }
+  if (err) {
+    return (
+      <MDTypography variant="caption" sx={{ fontSize: 11.5, color: PAL.failText }}>
+        {`The statistical summary is unavailable: ${err}.`}
+      </MDTypography>
+    );
+  }
+  if (!data) return null;
+  return (
+    <MDBox className="cl-signoff-record">
+      <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5, color: "#3A3A3A", mb: 1 }}>
+        {`Statistical gates, as evidence and not as permission: ${data.n_gates_passed} of ${data.n_gates} passed`}
+        {data.n_necessary != null ? `, of which ${data.n_necessary_passed} of ${data.n_necessary} required` : ""}
+        {nIndet ? `, ${nIndet} not settled` : ""}
+        {`. Match direction: ${data.match_direction}.`}
+        {summaryReady
+          ? " The required gates all passed; that is about discrimination, not about the device."
+          : " The required gates did not all pass."}
+      </MDTypography>
+
+      <Grid container spacing={2}>
+        <Grid item xs={12} md={6}>
+          <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold", color: "#4A4A4A" }}>
+            DEVICE TARGET
+          </MDTypography>
+          {id ? (
+            <>
+              <KV k="Contact" v={`${id.contact} (${id.hemisphere || "—"})`} />
+              <KV k="Region" v={id.region || "—"} />
+              <KV k="Band" v={`${fmt(id.band_lo_hz, 1)}–${fmt(id.band_hi_hz, 1)} Hz`} />
+              <KV k="Center (FFT-snapped)" v={`${fmt(id.center_freq_hz, 1)} → ${fmt(id.snapped_center_freq_hz, 2)} Hz`} />
+              <KV k="PRO metric / binarization" v={`${id.pro_metric} / ${id.binarization}`} />
+              <KV k="Pain ratings used" v={ratingsUsedText(id.clinic_sheet_ratings)} />
+              <KV k="Pain score used" v={painScoreUsedText(_rep && _rep.pain_score, id.pro_metric)} />
+              <KV k="Polarity / suggested mode" v={`${dc.polarity} / ${dc.suggested_mode || "—"}`} />
+            </>
+          ) : null}
+          <ChosenBandBlock bandCandidate={bandCandidate} chosenBand={chosenBand} bandRecord={bandRecord} />
+
+          {/* The evidence verdict this sheet is signed against, verbatim from the module, with each
+              edge's interval and p when it rests on point signs alone (PI rule 2026-09-13). */}
+          <MDBox mt={1.2}>
+            <EvidenceVerdictLine rep={_rep} />
+            <ProvisionalNote deploymentReport={_rep} dense mt={0.5} headline={false} />
+          </MDBox>
+
+          {dc && dc.ramp && dc.ramp.available ? (
+            <MDBox mt={1.2}>
+              <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold",
+                color: dc.ramp.posture === "conservative" ? PAL.warnText : PAL.passText }}>
+                {`RAMP GUIDANCE, ${String(dc.ramp.posture).toUpperCase()} (advisory)`}
+              </MDTypography>
+              <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 11.5, mt: 0.3 }}>
+                {dc.ramp.transition_note}
+              </MDTypography>
+              <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 11.5, mt: 0.3 }}>
+                {`Ramp up: ${dc.ramp.ramp_up_hint}. Ramp down: ${dc.ramp.ramp_down_hint}.`}
+              </MDTypography>
+              <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5, color: "#5E5E5E", mt: 0.3 }}>
+                {dc.ramp.reason}
+              </MDTypography>
+            </MDBox>
+          ) : null}
+
+          <MDBox mt={1.2}>
+            <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold", color: "#4A4A4A" }}>
+              EVIDENCE
+            </MDTypography>
+            {ev ? (
+              <>
+                <KV k="Deployment AUC — in-sample (95% clustered-bootstrap CI)" v={`${fmt(ev.auc)} (${fmt(ev.auc_lo)}–${fmt(ev.auc_hi)})`} />
+                <CurrentRemovedAuc ev={ev} />
+                {fwd && fwd.available && fwd.held_out_auc != null ? (
+                  <KV
+                    k={`Deployment AUC — forward held-out (${fwd.n_folds ?? "—"} weekly folds)`}
+                    v={
+                      <span style={{ color: fwd.beats_chance_forward ? PAL.passText : PAL.warnText, fontWeight: 600 }}>
+                        {`${fmt(fwd.held_out_auc)} (${fmt(fwd.held_out_auc_lo)}–${fmt(fwd.held_out_auc_hi)})`}
+                        {fwd.beats_chance_forward ? " ✓ clears chance" : " ✗ not validated forward"}
+                      </span>
+                    }
+                  />
+                ) : (
+                  <KV k="Deployment AUC — forward held-out" v={
+                    <span style={{ color: PAL.warnText }}>
+                      {fwd && fwd.reason ? `not assessable (${fwd.reason})` : "in-sample only, forward UNCONFIRMED"}
+                    </span>
+                  } />
+                )}
+                <KV k="Odds ratio (95% CI)" v={`${fmt(ev.odds_ratio)} (${fmt(ev.or_ci_low)}–${fmt(ev.or_ci_high)})${ev.credible_ci ? " ✓" : ""}`} />
+                <KV k="Mixed-effects p" v={ev.p_glmer != null ? ev.p_glmer.toExponential(2) : "—"} />
+                <KV k="Matched samples / ratings" v={`${ev.n_matched_samples ?? "—"} / ${ev.n_clusters ?? "—"}`} />
+                <BurnInNote ev={ev} />
+                {pw && pw.available ? (
+                  <KV k="Power (vs AUC 0.5)" v={pw.more_data_needed
+                    ? `${fmt(pw.power_current * 100, 0)}% · need ${pw.n_ratings_needed} ratings`
+                    : `${fmt(pw.power_current * 100, 0)}% · adequately powered`} />
+                ) : null}
+              </>
+            ) : null}
+          </MDBox>
+        </Grid>
+
+        <Grid item xs={12} md={6}>
+          <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold", color: "#4A4A4A" }}>
+            DEPLOYMENT GATES
+          </MDTypography>
+          <MDBox mb={1.2}>
+            {(data.gates || []).map((g) => <GateRow key={g.key} gate={g} />)}
+          </MDBox>
+
+          <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold", color: PAL.warnText }}>
+            CAVEATS
+          </MDTypography>
+          {/* The deployment report's own caveats (panel D item 3), ranked, each naming its card;
+              then the older statistical endpoint's own, labelled as coming from elsewhere. */}
+          <ReportCaveats caveats={_rep && _rep.available ? _rep.caveats : null} />
+          {(data.caveats || []).length > 0 ? (
+            <MDTypography variant="caption" display="block"
+              sx={{ fontSize: 11.5, fontWeight: "bold", color: "#4A4A4A", mt: 0.8 }}>
+              FROM THE SEPARATE STATISTICAL SUMMARY
+            </MDTypography>
+          ) : null}
+          <MDBox component="ul" sx={{ pl: 2, mt: 0.5, mb: 0 }}>
+            {(data.caveats || []).map((c) => (
+              <MDTypography key={c} component="li" variant="caption"
+                sx={{ fontSize: 11.5, color: "#4A4A4A", display: "list-item", mb: 0.3 }}>
+                {c}
+              </MDTypography>
+            ))}
+          </MDBox>
+        </Grid>
+      </Grid>
+    </MDBox>
+  );
+}
+
+export { SignoffRecord };
+export default SignoffRecord;

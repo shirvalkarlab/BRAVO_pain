@@ -57,13 +57,17 @@ describe("the decision card's title states the finding", () => {
       .toBe("No side's preferred setting could be compared with today's");
   });
 
-  it("defines 'resolved' once, at the top of the strip", () => {
+  // PIN CHANGED 2026-09-26 (the design review; the PI moved 243(b) into a fold): the word is
+  // "proven better", the one the headline uses, and its definition sits ONCE in the strip's fold.
+  it("defines 'proven better' once, in the strip's fold", () => {
     const { container } = rtlRender(wrap(
       <DecisionStrip arms={{}} plan={response.two_stage} inForce={response.in_force_by_side} />));
     const text = container.textContent;
-    const hits = text.match(/Resolved means/g) || [];
+    const hits = text.match(/Proven better means/g) || [];
     expect(hits.length).toBe(1);
-    expect(text.indexOf("Resolved means")).toBeLessThan(text.indexOf("programmed now"));
+    expect(text).not.toMatch(/Resolved means/);
+    const def = Array.from(container.querySelectorAll("div")).find((d) => /^Proven better means/.test(d.textContent));
+    expect(def.closest(".MuiCollapse-hidden")).not.toBeNull();
   });
 });
 
@@ -94,9 +98,11 @@ describe("the closed-loop checks", () => {
     expect(container.textContent).not.toMatch(/A sensed band inside 8–30 Hz responds to stimulation current/);
   });
 
-  it("points to the readiness table that holds that check's evidence", () => {
+  // PIN CHANGED 2026-09-26 (the design review): the two cards no longer point at each other; a
+  // sentence that only says where another card is was removed from both.
+  it("no longer carries a sentence that only points at the readiness table", () => {
     const { container } = rtlRender(wrap(<ClosedLoopChecks plan={response.two_stage} />));
-    expect(container.textContent).toMatch(/readiness table at the top of this page/i);
+    expect(container.textContent).not.toMatch(/readiness table at the top of this page/i);
   });
 });
 
@@ -126,10 +132,11 @@ describe("the readiness table", () => {
     expect(text.indexOf(RULE_SENTENCE)).toBeLessThan(headlineAt);
   });
 
-  it("points to the checks card that decides whether closed loop may start", () => {
+  // PIN CHANGED 2026-09-26 (the design review): see the checks card's pin above.
+  it("no longer carries a sentence that only points at the checks card", () => {
     const { container } = rtlRender(wrap(
       <SensingEvidenceTable closedLoop={withStep8({ available: false, by_channel: {}, reason: "no grid" })} />));
-    expect(container.textContent).toMatch(/Closed loop: may it start on the frozen setting\?/);
+    expect(container.textContent).not.toMatch(/Closed loop: may it start on the frozen setting\?/);
   });
 
   it("says for each band that rises with pain whether it still does with the current taken out", () => {
@@ -166,7 +173,8 @@ describe("the decision strip shows the search's stopping rule per side", () => {
       <DecisionStrip arms={{}} plan={response.two_stage} inForce={response.in_force_by_side} />));
     const text = container.textContent;
     expect(text).toMatch(/When to stop searching/);
-    expect(text).toMatch(/Left: not assessable/);
+    // PIN CHANGED 2026-09-26: the two sides read alike, so the rule prints once, "Both sides".
+    expect(text).toMatch(/Both sides: not assessable/);
     expect(text).toMatch(/no batch of suggested settings has been run and rated in turn/);
     expect(text).toMatch(/3,184 untried combinations still look worth trying/);
   });
@@ -176,7 +184,21 @@ describe("the decision strip shows the search's stopping rule per side", () => {
     plan.stage1.strata.forEach((s) => { s.stop = true; s.stop_binding = "plateau and coverage"; s.queue_size = 0; });
     const { container } = rtlRender(wrap(
       <DecisionStrip arms={{}} plan={plan} inForce={response.in_force_by_side} />));
-    expect(container.textContent).toMatch(/Left: stop/);
+    expect(container.textContent).toMatch(/Both sides: stop/);   // PIN CHANGED 2026-09-26, as above
+  });
+
+  it("prints each side on its own when the two sides read differently (2026-09-26)", () => {
+    const plan = clone(response.two_stage);
+    plan.stage1.strata.forEach((s) => {
+      if (s.hemisphere === "Left") { s.stop = true; s.stop_binding = "plateau and coverage"; s.queue_size = 0; }
+      else { s.stop = false; s.stop_binding = "coverage"; s.queue_size = 7; }
+    });
+    const { container } = rtlRender(wrap(
+      <DecisionStrip arms={{}} plan={plan} inForce={response.in_force_by_side} />));
+    const t = container.querySelector('[data-testid="stopping-rule"]').textContent;
+    expect(t).toMatch(/Left: stop/);
+    expect(t).toMatch(/Right: keep searching — 7 untried combinations/);
+    expect(t).not.toMatch(/Both sides/);
   });
 
   it("says keep going when combinations are still worth trying and there is a history", () => {
@@ -184,6 +206,6 @@ describe("the decision strip shows the search's stopping rule per side", () => {
     plan.stage1.strata.forEach((s) => { s.stop = false; s.stop_binding = "coverage"; s.queue_size = 12; });
     const { container } = rtlRender(wrap(
       <DecisionStrip arms={{}} plan={plan} inForce={response.in_force_by_side} />));
-    expect(container.textContent).toMatch(/Left: keep searching — 12 untried combinations still look worth trying/);
+    expect(container.textContent).toMatch(/Both sides: keep searching — 12 untried combinations still look worth trying/);   // PIN CHANGED 2026-09-26, as above
   });
 });

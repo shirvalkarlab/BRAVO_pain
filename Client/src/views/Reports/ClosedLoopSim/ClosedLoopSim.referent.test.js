@@ -23,11 +23,20 @@ import { ThemeProvider } from "@mui/material/styles";
 import theme from "assets/theme";
 import { PlatformContextProvider } from "context";
 
+// The decision card reaches Plotly (to photograph the page's figures for the printed record) and
+// the session controller; both mocked exactly as the other tests on this page do.
+jest.mock("plotly.js-dist", () => ({
+  react: jest.fn(), purge: jest.fn(), restyle: jest.fn(), relayout: jest.fn(), newPlot: jest.fn(),
+  toImage: jest.fn(),
+}));
+jest.mock("database/session-control", () => ({ SessionController: { query: jest.fn() } }));
+
+// eslint-disable-next-line import/first
 import BandSweepGridPanel from "./BandSweepGridPanel";
-import DeploymentDecisionHeader from "./DeploymentDecisionHeader";
+import DecisionCard from "./DecisionCard";
 import WhatWouldChangeThis from "./WhatWouldChangeThis";
 import ProvisionalNote from "./ProvisionalNote";
-import PrescriptionPanel from "./PrescriptionPanel";
+import { ParameterDetails } from "./PrescriptionPanel";
 import payload from "./__fixtures__/rcs08_deployment_payload_2026-09-15.json";
 
 // The Material Dashboard primitives read the MUI theme and the platform controller out of context
@@ -100,26 +109,26 @@ describe("Choose a band (BandSweepGridPanel)", () => {
   });
 });
 
-describe("the sticky verdict header (DeploymentDecisionHeader)", () => {
-  // Item 4, DUP-2. With the provisional verdict, the headline prints "(provisional: 2 of 3
-  // intervals span zero)" AND each of the two ProvisionalNote boxes beneath prints "2 OF 3 INTERVALS
-  // SPAN ZERO" -- the same count three times in one glance. The two boxes are deliberate
-  // (ProvisionalNote.js: under the evidence answer and under the transcription answer, never in a
-  // fold), so the fix is to the headline, and the ceiling here is two, not one.
-  it("item 4: 'of 3 intervals span zero' appears at most twice, and both ProvisionalNote boxes stay", () => {
+describe("the decision card's status line (DecisionCard; the sticky header until decision 302)", () => {
+  // Item 4, DUP-2, as ruled again on 2026-09-26: the provisional count was printed three times in
+  // one glance (the headline and two boxes). The decision card says "provisional" once, in its
+  // status line; the per-edge intervals are on the evidence card and, for the printed record, in
+  // the sign-off record inside the Details fold. Updated on purpose: the two boxes are gone.
+  it("item 4: says 'provisional' once in the open and prints no provisional box there", () => {
     const { container } = render(
-      <DeploymentDecisionHeader deploymentReport={report} summary={{ data: null, loading: false }}
+      <DecisionCard deploymentReport={report} summary={{ data: null, loading: false }}
         bandCandidate={{ contact: "ZERO_TWO_LEFT", contact_label: "L 0⁻2⁺", center_freq_hz: 24.5,
           hemisphere: "Left" }} />,
     );
-    // The deliberate pair, asserted so nobody makes the count assertion pass by removing a box.
-    expect(container.querySelectorAll(".cl-provisional")).toHaveLength(2);
-    // RED today: three.
-    expect(countOf(container.textContent, "of 3 intervals span zero")).toBeLessThanOrEqual(2);
+    const open = container.cloneNode(true);
+    open.querySelectorAll(".MuiCollapse-hidden").forEach((n) => n.remove());
+    expect(countOf(open.textContent, "provisional")).toBe(1);
+    expect(open.querySelectorAll(".cl-provisional")).toHaveLength(0);
+    expect(countOf(open.textContent, "of 3 intervals span zero")).toBe(0);
   });
 });
 
-describe("Full parameter recommendation, threshold rows (PrescriptionPanel)", () => {
+describe("How each value was derived, threshold rows (ParameterDetails, in the decision card's Details)", () => {
   // Item 6, DUP-3. On the Upper/Lower LFP threshold rows the `design_rule_note` says "at this
   // timing (3 s averaging / 30 s onset)" and the `occupancy_note` directly beneath opens with "At
   // the 3 s averaging duration in force" -- the timing twice in two stacked lines under one field.
@@ -128,9 +137,8 @@ describe("Full parameter recommendation, threshold rows (PrescriptionPanel)", ()
   // verifier re-captures `rcs08_deployment_payload_2026-09-15.json` after that fix lands. The
   // occupancy note keeps its number, because its percentages depend on it.
   it("item 6: the design-rule note beside the occupancy note does not restate 's averaging /'", () => {
-    const { container } = render(<PrescriptionPanel report={report} mode="dual" onMode={() => {}} />);
-    // The device permits this configuration in the fixture, so the values and their notes are in
-    // the open without the planning view.
+    const { container } = render(<ParameterDetails report={report} mode="dual" />);
+    // The notes sit in the decision card's Details fold since decision 302, one block per value.
     expect(container.textContent).toMatch(/Upper LFP threshold/);
     const notes = Array.from(container.querySelectorAll("*"))
       .filter((el) => el.children.length === 0 && /^Noise-only design rule/.test(el.textContent || ""))
@@ -178,14 +186,14 @@ describe("Deploy-to-Percept review (the sign-off sheet) and its provisional box"
   });
 });
 
-describe("Full parameter recommendation, the checks under a number (panel D item 7)", () => {
+describe("How each value was derived, the checks under a number (panel D item 7)", () => {
   // The design-rule, occupancy, start-of-stretch and robustness notes were printed one after
   // another with nothing saying they are separate checks, each measured on this participant's own
   // record, rather than one argument in steps. The panel asked for one heading, "Four independent
   // checks on this number"; on the record no row carries four (the threshold rows carry two, the
   // onset and start-up rows one each), so the heading counts the notes on its own row.
   it("heads each row's notes with how many separate checks they are", () => {
-    const { container } = render(<PrescriptionPanel report={report} mode="dual" onMode={() => {}} />);
+    const { container } = render(<ParameterDetails report={report} mode="dual" />);
     const text = container.textContent;
     expect(text.match(/Two separate checks on this number, each measured on this participant's own record/g) || [])
       .toHaveLength(2);

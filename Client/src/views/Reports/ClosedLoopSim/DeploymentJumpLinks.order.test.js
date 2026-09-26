@@ -1,6 +1,6 @@
 /**
- * The jump links at the top right of the Closed-Loop page are a table of contents: the comment
- * above them in DeploymentDecisionHeader.js says their order IS the page's reading order. That
+ * The jump links at the top right of the Closed-Loop page's decision card are a table of contents:
+ * their order IS the page's reading order (they lived on the sticky header until decision 302). That
  * makes the list a second copy of an order the page already carries, and a second copy drifts.
  *
  * It had drifted. The list put "CL-DBS simulations" above "Sign-off", while on the page the
@@ -14,7 +14,12 @@
 import fs from "fs";
 import path from "path";
 
-import { JUMPS } from "./DeploymentDecisionHeader";
+// DecisionCard reaches Plotly (figure pictures for the printed record) and the session controller.
+jest.mock("plotly.js-dist", () => ({ react: jest.fn(), purge: jest.fn(), toImage: jest.fn() }));
+jest.mock("database/session-control", () => ({ SessionController: { query: jest.fn() } }));
+
+// eslint-disable-next-line import/first
+import { JUMPS } from "./DecisionCard";
 
 const pageSource = fs.readFileSync(path.join(__dirname, "index.js"), "utf8");
 
@@ -52,10 +57,15 @@ describe("the Closed-Loop page's jump links are a table of contents", () => {
     labelsWithArrow.forEach((j) => expect(j.id).toBe(last.id));
   });
 
-  it("the sign-off card is the last card on the page, and the last link (the PI, 2026-09-24)", () => {
-    // The thing a clinician signs comes after everything it summarises, the simulations included.
+  it("the decision card, which carries Sign and print, comes straight after the grid (decision 302)", () => {
+    // The PI, 2026-09-26, merged the sign-off card into the one decision card at the top of the
+    // decision area; decision 258(a)'s "sign-off card last" is superseded with it. The record a
+    // clinician signs is printed from that card, and the print opens every fold in it.
     const onPage = idsInPageOrder();
-    expect(onPage[onPage.length - 1]).toBe("cl-signoff");
-    expect(JUMPS[JUMPS.length - 1].id).toBe("cl-signoff");
+    expect(onPage.slice(0, 2)).toEqual(["cl-grid", "cl-decision"]);
+    expect(onPage).not.toContain("cl-signoff");
+    expect(onPage).not.toContain("cl-prescription");
+    expect(onPage).not.toContain("cl-what-changes");
+    expect(JUMPS.map((j) => j.id)).not.toContain("cl-decision");
   });
 });

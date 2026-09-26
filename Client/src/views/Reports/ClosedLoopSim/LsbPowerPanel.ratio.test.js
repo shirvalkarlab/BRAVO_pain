@@ -50,8 +50,10 @@ test("the ratio line names the constant in effect from the payload and not a rul
     threshold_modes: null,
   });
   render(wrap(<LsbPowerPanel participantUid={UID} bandCandidate={BC} requestParams={REQ}
-    cutpoint={{ threshold: 1.5, matchDir: "prior" }} onLsbThreshold={() => {}} deploymentReport={{ data: null }} />));
-  expect(await screen.findByText(/LSB threshold/)).toBeInTheDocument();
+    cutpoint={{ threshold: 1.5, matchDir: "prior" }} onLsbThreshold={() => {}} />));
+  // Title changed on purpose by decision 302: the panel says where the cut-point sits in device
+  // units, never a "threshold" to program.
+  expect(await screen.findByText(/The cut-point in device units/)).toBeInTheDocument();
   const text = document.body.textContent;
   expect(text).toMatch(/1\.08× the constant in effect \(1 µV² = 345\.59 LSB\)/);
   expect(text).toMatch(/independent check of the constant in effect/);
@@ -62,4 +64,13 @@ test("the card source carries no calibration constant", () => {
   const code = fs.readFileSync(path.join(__dirname, "LsbPowerPanel.js"), "utf8")
     .split("\n").filter((l) => !/^\s*(\/\/|\*)/.test(l)).join("\n");
   ["345.59", "352.62", "72.16", "0.01 rule"].forEach((tok) => expect(code).not.toContain(tok));
+});
+
+test("the panel never offers a value to program, and the recommended-vs-programmed box is gone (decision 302)", () => {
+  const code = fs.readFileSync(path.join(__dirname, "LsbPowerPanel.js"), "utf8")
+    .split("\n").filter((l) => !/^\s*(\/\/|\*)/.test(l) && !/\{\/\*/.test(l)).join("\n");
+  expect(code).not.toMatch(/THRESHOLD TO PROGRAM/);
+  expect(code).not.toMatch(/RECOMMENDED vs PROGRAMMED/);
+  expect(code).not.toMatch(/recommended_vs_programmed/);
+  expect(code).toMatch(/not a value to program/);
 });

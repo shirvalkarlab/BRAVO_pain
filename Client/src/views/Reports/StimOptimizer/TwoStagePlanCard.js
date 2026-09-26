@@ -24,6 +24,12 @@
  * Resized 2026-09-12 after the PI's review: the title at 17 px, prose at 13 px, table rows at
  * 13 px under 11 px headers, and the loading line says what the first request really costs
  * (the whole optimiser reruns with the flag, about a minute; a few seconds afterwards).
+ *
+ * The design review of 2026-09-26 (the PI: "yes to all six, build them"): the excluded-settings
+ * chart folds under its one-line summary; "If closed loop could start" is drawn only when closed
+ * loop started (its "Nothing was drawn up: N checks above block" restated the checks); the
+ * override note and the notes from the closed-loop step move into the "How this was arrived at"
+ * fold; the sentence pointing at the titration card is gone.
  */
 import { Card, CircularProgress, Table, TableBody, TableCell, TableHead, TableRow } from "@mui/material";
 
@@ -32,9 +38,8 @@ import MDTypography from "components/MDTypography";
 
 import PAL from "views/Reports/ClosedLoopSim/palette";
 
-import ClosedLoopChecks, { CHECK_LABELS } from "./ClosedLoopChecks";
-import ExcludedSettingsChart from "./ExcludedSettingsChart";
-import { TITRATION_CARD_TITLE } from "./TitrationSessionCard";
+import ClosedLoopChecks from "./ClosedLoopChecks";
+import ExcludedSettingsChart, { ExcludedSettingsSummary } from "./ExcludedSettingsChart";
 import { num } from "./stimFormat";
 import { TYPE, HEAD, SizedFold as Fold } from "./typeScale";
 
@@ -65,7 +70,6 @@ const cell = (v) => {
   if (typeof v === "number") return Number.isInteger(v) ? String(v) : v.toFixed(3);
   return String(v);
 };
-const conditionLabel = (name) => CHECK_LABELS[name] || String(name || "").replace(/_/g, " ");
 
 /** A small table from a list of records, showing only the named columns that are present. */
 function RecordTable({ rows, columns, limit = 12 }) {
@@ -114,7 +118,7 @@ const STRATA_COLUMNS = [
   ["opt_rate_hz", "best rate (Hz)"],
   ["opt_amp_mA_left", "best left current (mA)"], ["opt_amp_mA_right", "best right current (mA)"],
   ["gain", "predicted gain (pts)"], ["sd_of_difference", "1 SD of that gain (pts)"],
-  ["optimum_resolved", "resolved"], ["incumbent_rate_supported", "rate in force was delivered here"],
+  ["optimum_resolved", "proven better"], ["incumbent_rate_supported", "rate in force was delivered here"],
   ["optimum_rate_supported", "best rate was delivered here"],
 ];
 
@@ -151,7 +155,6 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
   const strata = dedupeJointStrata(stage1.strata);
   const skipped = stage1.strata_skipped || {};
   const policies = Array.isArray(stage2.policies) ? stage2.policies : [];
-  const refusals = Array.isArray(stage2.refusal_reasons) ? stage2.refusal_reasons : [];
   const queue = Array.isArray(stage1.queue) ? stage1.queue : [];
 
   return (
@@ -191,61 +194,47 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
               <ClosedLoopChecks plan={plan} />
             </MDBox>
 
-            {/* ---------- what adaptive mode ruled out ---------- */}
+            {/* ---------- what closed loop ruled out: the summary in the open, the drawing folded
+                (the design review of 2026-09-26, S5) ---------- */}
             {(envelope.statement || envelope.n_exclusions != null) && (
               <MDBox mt={3}>
-                <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>What adaptive mode ruled out</MDTypography>
+                <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>What closed loop ruled out</MDTypography>
                 <MDBox mt={0.6}>
-                  <ExcludedSettingsChart envelope={envelope} strata={strata} />
+                  <ExcludedSettingsSummary envelope={envelope} />
                 </MDBox>
-                {envelope.override_ignored && (
-                  <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.small, color: PAL.warnText }}>
-                    {String(envelope.override_ignored)}
+                <Fold show="Show the ruled-out settings, drawn" hide="Hide the drawing" dense mt={0.4}>
+                  <ExcludedSettingsChart envelope={envelope} strata={strata} />
+                  {envelope.override_ignored && (
+                    <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.small, color: PAL.warnText }}>
+                      {String(envelope.override_ignored)}
+                    </MDTypography>
+                  )}
+                </Fold>
+              </MDBox>
+            )}
+
+            {/* ---------- what closed loop would do: drawn only when it started. Until 2026-09-26
+                a refused start printed "Nothing was drawn up: N checks above block (...)", which
+                restated the checks above it. ---------- */}
+            {stage2.started && (
+              <MDBox mt={3}>
+                <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>What closed loop would do</MDTypography>
+                <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body }}>
+                  {`${stage2.n_valid_policies != null ? stage2.n_valid_policies : policies.length} closed-loop `
+                    + `settings could be drawn up`
+                    + (stage2.n_rejected != null ? `; ${stage2.n_rejected} were rejected` : "")
+                    + (stage2.ranking_basis ? `. Ranked by: ${stage2.ranking_basis}` : "")
+                    + (stage2.ranking_assessed === false ? " (ranking not assessed)" : "")
+                    + "."}
+                </MDTypography>
+                <RecordTable rows={policies} columns={POLICY_COLUMNS} limit={10} />
+                {policies.length === 0 && (
+                  <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body }}>
+                    Closed loop started but returned no settings.
                   </MDTypography>
                 )}
               </MDBox>
             )}
-
-            {/* ---------- what closed loop would do ---------- */}
-            <MDBox mt={3}>
-              <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>If closed loop could start</MDTypography>
-              {stage2.started ? (
-                <>
-                  <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body }}>
-                    {`${stage2.n_valid_policies != null ? stage2.n_valid_policies : policies.length} closed-loop `
-                      + `settings could be drawn up`
-                      + (stage2.n_rejected != null ? `; ${stage2.n_rejected} were rejected` : "")
-                      + (stage2.ranking_basis ? `. Ranked by: ${stage2.ranking_basis}` : "")
-                      + (stage2.ranking_assessed === false ? " (ranking not assessed)" : "")
-                      + "."}
-                  </MDTypography>
-                  <RecordTable rows={policies} columns={POLICY_COLUMNS} limit={10} />
-                  {policies.length === 0 && (
-                    <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body }}>
-                      Closed loop started but returned no settings.
-                    </MDTypography>
-                  )}
-                </>
-              ) : (
-                <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body }}>
-                  {refusals.length
-                    ? `Nothing was drawn up: ${refusals.length} check${refusals.length === 1 ? "" : "s"} above block${refusals.length === 1 ? "s" : ""} (${refusals.map((r) => conditionLabel(r.condition)).join("; ")}).`
-                    : "Nothing was drawn up."}
-                </MDTypography>
-              )}
-              {Array.isArray(stage2.notes) && stage2.notes.length > 0 && (
-                <Fold show="Notes" hide="Hide notes" dense>
-                  <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body }}>
-                    {stage2.notes.map((n) => String(n)).join(" ")}
-                  </MDTypography>
-                </Fold>
-              )}
-            </MDBox>
-
-            <MDTypography variant="caption" color="text" component="div" sx={{ mt: 2, fontSize: TYPE.small }}>
-              An override with a stated reason can be sent with the request; there is no control
-              for it here yet.
-            </MDTypography>
 
             {/* ---------- the in-clinic plan lives on ONE card. Until 2026-09-15 this card also
                 printed the joint model's "What to test at the next visit" queue (decision 157: cells
@@ -256,12 +245,6 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
                 163) and this queue. The PI's instruction, 2026-09-15: one. The queue stays on the
                 response (`two_stage.stage1.queue`, stored as the exploration ladder) and is drawn
                 nowhere. ---------- */}
-            {queue.length > 0 && (
-              <MDTypography variant="caption" color="text" component="div" sx={{ mt: 2, fontSize: TYPE.small }}>
-                {`The in-clinic test to run next is the "${TITRATION_CARD_TITLE}" card above; the joint `}
-                {`search's ${queue.length} untested cells are on the response and are not a second plan.`}
-              </MDTypography>
-            )}
 
             {/* ---------- folded: how the answer was arrived at ---------- */}
             <Fold show="How this was arrived at (what each step read, and the fit for each pulse width and side)"
@@ -271,6 +254,20 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
                   {String(provenance[k])}
                 </MDTypography>
               ))}
+              {Array.isArray(stage2.notes) && stage2.notes.length > 0 && (
+                <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body, mb: 0.6 }}>
+                  {`Notes from the closed-loop step: ${stage2.notes.map((n) => String(n)).join(" ")}`}
+                </MDTypography>
+              )}
+              {queue.length > 0 && (
+                <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body, mb: 0.6 }}>
+                  {`The joint search's ${queue.length} untested cells are on the response and are not a second in-clinic plan.`}
+                </MDTypography>
+              )}
+              <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body, mb: 0.6 }}>
+                An override with a stated reason can be sent with the request; there is no control
+                for it here yet.
+              </MDTypography>
               {(plan.backend || plan.seconds != null) && (
                 <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body, mb: 0.6 }}>
                   {plan.backend ? `Fitted with: ${plan.backend}. ` : ""}

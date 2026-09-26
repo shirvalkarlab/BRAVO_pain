@@ -35,6 +35,7 @@ import { useCachedResult } from "database/useCachedResult";
 import { CL, recomputeSlots } from "views/Reports/moduleCacheKeys";
 import PanelStaleNote from "views/Reports/ClosedLoopSim/PanelStaleNote";
 import PAL from "views/Reports/ClosedLoopSim/palette";
+import Fold from "views/Reports/ClosedLoopSim/Fold";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 const isoDate = (yyyymmdd) => (yyyymmdd && yyyymmdd.length === 8
@@ -115,12 +116,12 @@ function CalibrationInEffectPanel({ participantUid }) {
       });
     }
     const layout = {
-      margin: { l: 56, r: 12, t: 8, b: 40 }, height: 260,
-      xaxis: { title: { text: "TD band power (µV²)", font: { size: 10.5 } },
-        rangemode: "tozero", zeroline: false, tickfont: { size: 9.5 } },
-      yaxis: { title: { text: "device band power (LSB)", font: { size: 10.5 } },
-        rangemode: "tozero", zeroline: false, tickfont: { size: 9.5 } },
-      legend: { font: { size: 9 }, orientation: "h", y: -0.22, x: 0 },
+      margin: { l: 60, r: 12, t: 8, b: 44 }, height: 280,
+      xaxis: { title: { text: "TD band power (µV²)", font: { size: 12 } },
+        rangemode: "tozero", zeroline: false, tickfont: { size: 11 } },
+      yaxis: { title: { text: "device band power (LSB)", font: { size: 12 } },
+        rangemode: "tozero", zeroline: false, tickfont: { size: 11 } },
+      legend: { font: { size: 11 }, orientation: "h", y: -0.24, x: 0 },
     };
     Plotly.react(gd, traces, layout, PAL.MODEBAR);
   }, [data]);  // eslint-disable-line react-hooks/exhaustive-deps
@@ -150,11 +151,11 @@ function CalibrationInEffectPanel({ participantUid }) {
       type: "scatter", mode: "lines", name: `in effect: ratio ${fmt(deployed.bridge_ratio, 3)}`,
       line: { color: PAL.neutral, width: 1.5, dash: "dash" }, hoverinfo: "name" });
     const layout = {
-      margin: { l: 56, r: 12, t: 8, b: 40 }, height: 220,
-      xaxis: { title: { text: "band centre (Hz)", font: { size: 10.5 } }, tickfont: { size: 9.5 } },
-      yaxis: { title: { text: "PSD band power ÷ TD band power", font: { size: 10.5 } },
-        rangemode: "tozero", zeroline: false, tickfont: { size: 9.5 } },
-      legend: { font: { size: 9 }, orientation: "h", y: -0.28, x: 0 },
+      margin: { l: 60, r: 12, t: 8, b: 44 }, height: 240,
+      xaxis: { title: { text: "band centre (Hz)", font: { size: 12 } }, tickfont: { size: 11 } },
+      yaxis: { title: { text: "PSD band power ÷ TD band power", font: { size: 12 } },
+        rangemode: "tozero", zeroline: false, tickfont: { size: 11 } },
+      legend: { font: { size: 11 }, orientation: "h", y: -0.3, x: 0 },
     };
     Plotly.react(gd, traces, layout, PAL.MODEBAR);
   }, [data]);  // eslint-disable-line react-hooks/exhaustive-deps
@@ -168,98 +169,109 @@ function CalibrationInEffectPanel({ participantUid }) {
   const nLeftOut = tr && tr.blocks ? tr.blocks.filter((b) => b.status !== "kept").length : 0;
   const june = tr && tr.june_reference;
 
+  // One card, one open status line with the two constants, and one fold for how they were fitted
+  // (decision 304; the design review of 2026-09-26, B2). The page used to add an intro paragraph and
+  // an italic caption around this panel that each said again that the bridge is composed; the
+  // panel now says it once on view ("the bridge constant (composed)") and once, with its
+  // arithmetic, in the fold. No box inside the card: the two sections in the fold are separated by
+  // a thin rule, not bordered and tinted boxes of their own.
+  const SUB = "#4A4A4A";
+  const RULE = "#D5D8DC";
   return (
     <Card sx={{ height: "100%" }}>
       <MDBox p={2}>
-        <MDTypography variant="h6" sx={{ fontSize: 13 }}>
-          Calibration in effect: microvolts squared to device units
-        </MDTypography>
-        <MDTypography variant="caption" color="text" sx={{ fontSize: 10.5 }}>
-          The two fixed numbers every calibrated LSB on the platform is computed with, and the paired
-          recordings they rest on.
+        <MDTypography variant="h5" fontWeight="bold" sx={{ fontSize: 24, lineHeight: 1.3 }}>
+          Calibration in effect: µV² to device units
         </MDTypography>
         <PanelStaleNote stale={cached.stale} staleReasons={cached.staleReasons}
           loading={cached.loading} notKept={cached.notKept}
           onRecompute={() => recomputeSlots(participantUid, [CL.conversionModel])} />
 
         {loading ? (
-          <MDTypography variant="caption" color="text" sx={{ display: "block", mt: 1, fontStyle: "italic", fontSize: 11 }}>
+          <MDTypography variant="caption" color="text" sx={{ display: "block", mt: 1, fontStyle: "italic", fontSize: 12 }}>
             Loading the calibration tables…
           </MDTypography>
         ) : err ? (
-          <MDTypography variant="caption" sx={{ display: "block", mt: 1, fontSize: 11, color: PAL.warnText }}>
+          <MDTypography variant="caption" sx={{ display: "block", mt: 1, fontSize: 12, color: PAL.warnText }}>
             {`No calibration: ${err}.`}
           </MDTypography>
         ) : data ? (
           <>
-            {/* 1) THE TRANSFORM CONSTANT */}
-            <MDBox mt={1.2} p={1.2} sx={{ backgroundColor: PAL.accentFill, borderRadius: "6px",
-              border: `1px solid ${PAL.accentBorder}` }}>
-              <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.accent }}>
-                Time domain (TD) → device units: the transform constant (measured)
+            {/* THE STATUS: the two numbers every calibrated LSB on the platform is computed with. */}
+            <MDBox mt={1} data-testid="calibration-status">
+              <MDTypography variant="button" color="dark" display="block" sx={{ fontSize: 14, fontWeight: 400 }}>
+                <b style={{ color: PAL.accent }}>Time domain (TD) → device units: </b>
+                {`1 µV² = ${fmt(deployed.k, 2)} LSB, the transform constant, measured on ${tr.n} paired blocks.`}
               </MDTypography>
-              <MDTypography variant="h5" sx={{ fontSize: 20, color: PAL.accent, lineHeight: 1.15 }}>
-                {`1 µV² = ${fmt(deployed.k, 2)} LSB`}
+              <MDTypography variant="button" color="dark" display="block" sx={{ fontSize: 14, fontWeight: 400 }}>
+                <b>PSD (the device's 30 s snapshot) → device units: </b>
+                {`1 device-µV² = ${fmt(deployed.bridge_lsb_per_device_uv2, 2)} LSB, the bridge constant (composed).`}
               </MDTypography>
-              {tr.k_interval ? (
-                <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, color: "#333" }}>
-                  {`95% interval ${fmt(tr.k_interval[0], 1)}–${fmt(tr.k_interval[1], 1)} (${tr.k_interval_method}); `
-                    + `1 MAD of the ratio is ${fmt(tr.scatter_mad, 1)} LSB per µV² (${fmt(100 * tr.scatter_mad_frac, 0)}% of the constant), `
-                    + "the dotted lines below. "
-                    + (tr.proportionality ? tr.proportionality.sentence : "")}
-                </MDTypography>
-              ) : null}
-              <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, color: "#555" }}>
-                {`The median ratio over ${tr.n} blocks the device recorded both ways at once `
-                  + `(r = ${fmt(tr.r, 2)}, typical miss ×${fmt(tr.median_fold_error, 2)}); `
-                  + `${nBlocks} paired blocks through ${data.table_date}, ${nLeftOut} left out by the recipe: `
-                  + `a block needs at least 3 s of signal and 6 device readings, and a block whose ratio `
-                  + `falls more than 5 MAD from the rest is dropped (the platform's one outlier rule).`}
-              </MDTypography>
-              {june && june.k != null ? (
-                <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, color: "#555" }}>
-                  {`The June 2026 reference, ${fmt(june.k, 2)} on ${june.n} blocks through ${isoDate(june.last_date)} `
-                    + "with no gate and no rule, comes back from the same table; the constant in effect adds "
-                    + "the blocks recorded since, under the recipe above."}
-                </MDTypography>
-              ) : null}
-            </MDBox>
-            <MDBox mt={1}>
-              <MDTypography variant="caption" sx={{ fontSize: 10.5, fontWeight: "bold", color: "#555" }}>
-                Every paired block, device LSB against TD band power; hollow = left out
-              </MDTypography>
-              <div ref={blocksRef} style={{ width: "100%" }} />
             </MDBox>
 
-            {/* 2) THE BRIDGE */}
-            <MDBox mt={1.2} p={1.2} sx={{ backgroundColor: PAL.neutralFill || "#f4f4f4", borderRadius: "6px",
-              border: `1px solid ${PAL.neutralBorder}` }}>
-              <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: "#555" }}>
-                PSD (the device's 30 s snapshot) → device units: the bridge constant (composed)
-              </MDTypography>
-              <MDTypography variant="h5" sx={{ fontSize: 20, color: "#444", lineHeight: 1.15 }}>
-                {`1 device-µV² = ${fmt(deployed.bridge_lsb_per_device_uv2, 2)} LSB`}
-              </MDTypography>
-              <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, color: "#555" }}>
-                {`Composed, not measured: ${fmt(deployed.k, 2)} ÷ ${fmt(deployed.bridge_ratio, 3)}, the ratio in effect between the `
-                  + `PSD band power and TD band power on the same survey and contact. `
-                  + `Refit on ${br.n_surveys} surveys, ${br.n} of ${br.n_pairs} contact-and-centre pairs after the same 5 MAD rule: `
-                  + `${fmt(br.ratio, 3)}, within 1 percent of the ratio in effect, and flat across centres and contact pairs.`}
-              </MDTypography>
-            </MDBox>
-            <MDBox mt={1}>
-              <MDTypography variant="caption" sx={{ fontSize: 10.5, fontWeight: "bold", color: "#555" }}>
-                The ratio per band centre: small points one contact pair each, large points the median; dashed = in effect
-              </MDTypography>
-              <div ref={bridgeRef} style={{ width: "100%" }} />
-            </MDBox>
+            <Fold show="How the two constants were fitted, and where they are used"
+              hide="Hide how the constants were fitted">
+              {/* 1) THE TRANSFORM CONSTANT */}
+              <MDBox mt={0.5} pt={1} sx={{ borderTop: `1px solid ${RULE}` }}>
+                <MDTypography variant="caption" display="block" sx={{ fontSize: 12.5, fontWeight: "bold", color: PAL.accent }}>
+                  The transform constant
+                </MDTypography>
+                {tr.k_interval ? (
+                  <MDTypography variant="caption" display="block" sx={{ fontSize: 12, color: "#333" }}>
+                    {`95% interval ${fmt(tr.k_interval[0], 1)}–${fmt(tr.k_interval[1], 1)} (${tr.k_interval_method}); `
+                      + `1 MAD of the ratio is ${fmt(tr.scatter_mad, 1)} LSB per µV² (${fmt(100 * tr.scatter_mad_frac, 0)}% of the constant), `
+                      + "the dotted lines below. "
+                      + (tr.proportionality ? tr.proportionality.sentence : "")}
+                  </MDTypography>
+                ) : null}
+                <MDTypography variant="caption" display="block" sx={{ fontSize: 12, color: SUB }}>
+                  {`The median ratio over ${tr.n} blocks the device recorded both ways at once `
+                    + `(r = ${fmt(tr.r, 2)}, typical miss ×${fmt(tr.median_fold_error, 2)}); `
+                    + `${nBlocks} paired blocks through ${data.table_date}, ${nLeftOut} left out by the recipe: `
+                    + `a block needs at least 3 s of signal and 6 device readings, and a block whose ratio `
+                    + `falls more than 5 MAD from the rest is dropped (the platform's one outlier rule).`}
+                </MDTypography>
+                {june && june.k != null ? (
+                  <MDTypography variant="caption" display="block" sx={{ fontSize: 12, color: SUB }}>
+                    {`The June 2026 reference, ${fmt(june.k, 2)} on ${june.n} blocks through ${isoDate(june.last_date)} `
+                      + "with no gate and no rule, comes back from the same table; the constant in effect adds "
+                      + "the blocks recorded since, under the recipe above."}
+                  </MDTypography>
+                ) : null}
+              </MDBox>
+              <MDBox mt={1}>
+                <MDTypography variant="caption" sx={{ fontSize: 12, fontWeight: "bold", color: SUB }}>
+                  Every paired block, device LSB against TD band power; hollow = left out
+                </MDTypography>
+                <div ref={blocksRef} style={{ width: "100%" }} />
+              </MDBox>
 
-            <MDTypography variant="caption" display="block" sx={{ fontSize: 9.5, color: "#666", mt: 0.8 }}>
-              {`Where these are used: the Biomarkers timeline's modeled points (○ TD × ${fmt(deployed.k, 2)}, `
-                + `◇ PSD × ${fmt(deployed.bridge_lsb_per_device_uv2, 2)}); the Closed-Loop page's threshold for a band the device `
-                + "never sensed, and its three-source response panel. The Stim Optimizer reads device-native "
-                + "power and needs neither."}
-            </MDTypography>
+              {/* 2) THE BRIDGE */}
+              <MDBox mt={1.2} pt={1} sx={{ borderTop: `1px solid ${RULE}` }}>
+                <MDTypography variant="caption" display="block" sx={{ fontSize: 12.5, fontWeight: "bold", color: SUB }}>
+                  The bridge constant
+                </MDTypography>
+                <MDTypography variant="caption" display="block" sx={{ fontSize: 12, color: SUB }}>
+                  {`Composed, not measured: ${fmt(deployed.k, 2)} ÷ ${fmt(deployed.bridge_ratio, 3)}, the ratio in effect between the `
+                    + `PSD band power and TD band power on the same survey and contact. `
+                    + `Refit on ${br.n_surveys} surveys, ${br.n} of ${br.n_pairs} contact-and-centre pairs after the same 5 MAD rule: `
+                    + `${fmt(br.ratio, 3)}, within 1 percent of the ratio in effect, and flat across centres and contact pairs.`}
+                </MDTypography>
+              </MDBox>
+              <MDBox mt={1}>
+                <MDTypography variant="caption" sx={{ fontSize: 12, fontWeight: "bold", color: SUB }}>
+                  The ratio per band centre: small points one contact pair each, large points the median; dashed = in effect
+                </MDTypography>
+                <div ref={bridgeRef} style={{ width: "100%" }} />
+              </MDBox>
+
+              <MDTypography variant="caption" display="block" sx={{ fontSize: 12, color: SUB, mt: 0.8 }}>
+                {`Where these are used: the Biomarkers timeline's modeled points (○ TD × ${fmt(deployed.k, 2)}, `
+                  + `◇ PSD × ${fmt(deployed.bridge_lsb_per_device_uv2, 2)}); the Closed-Loop page's threshold for a band the device `
+                  + "never sensed, and its three-source response panel. The Stim Optimizer reads device-native "
+                  + "power and needs neither."}
+              </MDTypography>
+            </Fold>
           </>
         ) : null}
       </MDBox>

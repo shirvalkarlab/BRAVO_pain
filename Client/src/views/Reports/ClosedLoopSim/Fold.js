@@ -31,7 +31,7 @@ export default function Fold({ show, hide, defaultOpen = false, children, mt = 0
     <MDBox mt={mt}>
       <MDTypography variant="caption" component="button" type="button"
         onClick={toggle} aria-expanded={open}
-        sx={{ fontSize: dense ? 10.5 : 11, color: PAL.accent, cursor: "pointer", display: "inline-flex",
+        sx={{ fontSize: 11, color: PAL.accent, cursor: "pointer", display: "inline-flex",
           alignItems: "center", gap: 0.5, background: "none", border: 0, padding: 0,
           fontFamily: "inherit", "&:hover": { textDecoration: "underline" },
           "&:focus-visible": { outline: `2px solid ${PAL.accent}`, outlineOffset: 2,
