@@ -1627,7 +1627,10 @@ def _run_for_participant(request_data: dict) -> dict:
     # THE SAFETY MODEL'S CEILING, stated by the PI per side (`safety_ceiling.py`, 2026-09-12):
     # built once here and handed to Stage 1 (inside `two_stage_block`) and to the gate, so every
     # safe set and the "under the ceiling" check read one source.
-    _ceilings = SC.ceilings_by_hemisphere(uid, hemis)
+    # BOTH sides always (decision 308), whichever sides were requested: a one-side request still
+    # holds, schedules and proposes currents on the other side, and a side missing here fell back
+    # to the 5.0 mA module limit (Stage 1's safety model) or a typed 4.5 (the next-visit list).
+    _ceilings = SC.ceilings_by_hemisphere(uid)
     # THE SENSED SIGNAL AND THE EPOCHS ARE BUILT ONCE FOR BOTH CONSUMERS BELOW (2026-09-12). The
     # closed-loop readiness screen and the two-stage path each asked `adapter.evidence_inputs` for
     # the same pair -- the recordings, the tile cache and the exposure epochs -- and on RCS08 each
@@ -1983,14 +1986,12 @@ def titration_plan_block(participant, *, in_force, screen, ceilings, hemispheres
                     exposure=_tp.configuration_exposure(es, side, need),
                     held_other_side_mA=None, held_other_side_source=None, in_force_rings=have,
                     rate_in_force_hz=kw.get("rate_in_force_hz"))
-                o = "Right" if side == "Left" else "Left"
-                of = dict((in_force or {}).get(o) or {})
-                if of.get("amplitude_mA") is not None:
-                    proposed[side]["held_other_side_mA"] = of["amplitude_mA"]
-                    proposed[side]["held_other_side_source"] = (f"the {o} side's own setting in force today "
-                                                                f"({of.get('source') or 'the settings stream'})")
+        # The held side's current is set in `plan_for_sides`, for every ladder, through one ceiling
+        # check (decision 308); it needs BOTH sides' ceilings even when one side is requested,
+        # because the side held is the one not stepped.
         block = _tp.plan_for_sides(sides, margin=margin, in_force=in_force,
-                                   joint_is_safe=joint_is_safe, proposed=proposed)
+                                   joint_is_safe=joint_is_safe, proposed=proposed,
+                                   ceilings=dict(SC.ceilings_by_hemisphere(uid), **(ceilings or {})))
         block["stored_tables"] = {"pooled": pooled_note, "run_points": runs_note}
         block["joint_corners"]["safety_model_note"] = joint_safety_note
         return _jsonable(block)

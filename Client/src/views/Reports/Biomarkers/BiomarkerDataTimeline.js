@@ -28,6 +28,7 @@ import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import MDBox from "components/MDBox";
 
 import { routeLabel, modeledLegendName, kFromServed } from "./calibrationLabels";
+import { painScoreLabel } from "views/Reports/painScores";
 
 // Binarization color identity — MUST match the histogram / binarizationModel (Okabe-Ito).
 // excluded-middle is darkened to #5A6066 (was #7E8794) so "matched but dropped by the cut" is
@@ -876,7 +877,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
           customdata: pain.y.map((v, i) => [v,
             (!binAssessed ? "match not assessed" : (pm[i] ? "matched" : "no neural match")),
             classifyName(v), fmtHoverDate(pain.t[i]), fmtHoverTime(pain.t[i])]),
-          hovertemplate: `<b>${pain.metric || "pain"} %{customdata[0]}</b><br>`
+          hovertemplate: `<b>${pain.metric ? painScoreLabel(pain.metric) : "pain"} %{customdata[0]}</b><br>`
             + `%{customdata[3]} · %{customdata[4]}<br>`
             + `%{customdata[2]} pain · %{customdata[1]}<extra></extra>`,
           showlegend: false });
@@ -884,7 +885,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         traces.push({ type: "scattergl", mode: "markers", x: pain.t.map(D), y: py,
           marker: { size: 5, color: PAIN_NEUTRAL }, opacity: 0.6,
           customdata: pain.y.map((v, i) => [v, fmtHoverDate(pain.t[i]), fmtHoverTime(pain.t[i])]),
-          hovertemplate: `<b>${pain.metric || "pain"} %{customdata[0]}</b><br>`
+          hovertemplate: `<b>${pain.metric ? painScoreLabel(pain.metric) : "pain"} %{customdata[0]}</b><br>`
             + `%{customdata[1]} · %{customdata[2]}<extra></extra>`,
           showlegend: false });
       }
@@ -893,7 +894,8 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         text: "no pain ratings", showarrow: false, font: { size: 11, color: SUB_INK } });
     }
     annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: (painBase + painTop) / 2,
-      text: `<b>PAIN</b><br><span style="font-size:14px;color:${SUB_INK}">${pain.metric || ""}</span>`,
+      // the score's display label from the one list of pain scores (decision 309), not its key
+      text: `<b>PAIN</b><br><span style="font-size:14px;color:${SUB_INK}">${pain.metric ? painScoreLabel(pain.metric) : ""}</span>`,
       showarrow: false, xanchor: "right", font: { size: 26, color: PAL.pain } });
     // Binarization-mode pain-row subtitle: matched vs unmatched ratings (closed vs open circles).
     if (binMode) {

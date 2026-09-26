@@ -54,6 +54,7 @@ import math
 import numpy as np
 import pandas as pd
 
+from . import safety_ceiling as SC
 from .routines import percept_adaptive as PA
 from .routines import within_visit as WV
 
@@ -629,13 +630,34 @@ def build_sheet_rows(sides, joint_corners_block, *, in_force, timing) -> list:
     return rows
 
 
+def _held_block(held_mA, held_src, detail) -> dict:
+    """The `held_other_side` block: the current the other side is held at and where it came from,
+    plus -- when `detail` (``safety_ceiling.held_at_or_below_ceiling``'s output) is given -- the
+    current in force, the ceiling, whether the current in force was above it and the sentence that
+    says so (decision 308)."""
+    block = {"current_mA": held_mA, "source": held_src}
+    if detail:
+        block.update(in_force_mA=detail.get("in_force_mA"), ceiling_mA=detail.get("ceiling_mA"),
+                     above_ceiling=bool(detail.get("above_ceiling")), note=detail.get("note"))
+    return block
+
+
+def _held_condition(other, held_src, detail) -> str:
+    """The conditions-list line for the held side: at its own current in force, or -- when that
+    is above today's ceiling -- at the ceiling, saying so (decision 308)."""
+    if detail and detail.get("above_ceiling"):
+        return f"the {other} side is HELD at {detail['current_mA']:g} mA, not at its current in force: {detail['note']}"
+    return f"the {other} side is HELD at its own current in force ({held_src})"
+
+
 # ---------------------------------------------------------------------------------------------
 # one side's plan
 # ---------------------------------------------------------------------------------------------
 def side_plan(side, *, rate_in_force_hz, rate_source, pulse_width_us, pulse_width_source,
               ceiling_mA, ceiling_source, contact, contact_source, record_today, margin,
               candidate_center_hz=None, min_rate_hz=PA.MIN_ADAPTIVE_RATE_HZ,
-              held_other_side_mA=None, held_other_side_source=None) -> dict:
+              held_other_side_mA=None, held_other_side_source=None,
+              held_other_side_detail=None) -> dict:
     """The whole plan for one side, every field beside its source.
 
     `contact` is a dict from the readiness screen (`channel`, `display_short`, `n_responding`,
@@ -644,6 +666,8 @@ def side_plan(side, *, rate_in_force_hz, rate_source, pulse_width_us, pulse_widt
     `ClosedLoopDeployment.post_ramp.margin_becomes_available`'s output. `held_other_side_mA` and
     `held_other_side_source` (2026-09-14) are the OTHER side's own current in force and where it
     came from: while this side's ladder runs, the other side is held there, not at 0 mA.
+    `held_other_side_detail` (decision 308) is ``safety_ceiling.held_at_or_below_ceiling``'s output
+    for that side, so a current in force above today's ceiling is held at the ceiling and says so.
     """
     rate = rate_to_hold(rate_in_force_hz, min_rate_hz=min_rate_hz)
     lad = ladder(ceiling_mA)
@@ -658,7 +682,7 @@ def side_plan(side, *, rate_in_force_hz, rate_source, pulse_width_us, pulse_widt
     held_mA = _f(held_other_side_mA)
     held_src = str(held_other_side_source) if held_other_side_source else \
         "no reading for the other side"
-    held_block = {"current_mA": held_mA, "source": held_src}
+    held_block = _held_block(held_mA, held_src, held_other_side_detail)
 
     contact_block = None
     if contact:
@@ -697,8 +721,10 @@ def side_plan(side, *, rate_in_force_hz, rate_source, pulse_width_us, pulse_widt
         "an off-stimulation baseline before the first step and after the last",
         ("an impedance test before and after, at a FIXED measurement current, not the device's "
          "automatic low-current mode, which reads spuriously high"),
-        (f"the other side is HELD at its own current in force while this side's ladder runs "
-         f"({held_src})"),
+        (_held_condition("other", held_src, held_other_side_detail)
+         if (held_other_side_detail or {}).get("above_ceiling") else
+         (f"the other side is HELD at its own current in force while this side's ladder runs "
+          f"({held_src})")),
         "note the wall-clock time of each current change on the clinic sheet",
     ]
     sources = {
@@ -921,7 +947,7 @@ def configuration_plan(side, *, rings, contact, rate_source, pulse_width_us, pul
                        ceiling_mA, ceiling_source, exposure, held_other_side_mA,
                        held_other_side_source, in_force_rings=None, other_side_contacts=None,
                        other_side_pw=None, rate_in_force_hz=None, min_rate_hz=PA.MIN_ADAPTIVE_RATE_HZ,
-                       start_step=1) -> dict:
+                       start_step=1, held_other_side_detail=None) -> dict:
     """The exploratory ladder for one side at a stimulation configuration (`rings`) other than the
     one in force, built for the sensing pair `contact` (a readiness-screen cell: `channel`,
     `rate_hz`, `qualifying_centers_hz`, ...). Every field beside its source, as in `side_plan`."""
@@ -1036,7 +1062,7 @@ def configuration_plan(side, *, rings, contact, rate_source, pulse_width_us, pul
         FIRST_EXPOSURE_STOP_RULE,
         "each ladder step is two clinic-sheet rows: a ramp row then a test row, 2 min a step; a pain rating at the end of every test row",
         f"then three {holds['minutes_each']:g}-minute holds, off / on / off, a rating every {holds['rating_every_minutes']:g} min, the patient blind to the current",
-        f"the {other} side is HELD at its own current in force ({held_src})",
+        _held_condition(other, held_src, held_other_side_detail),
         "an off-stimulation baseline before the first step and after the last hold; an impedance test before and after at a fixed measurement current",
         "note the wall-clock time of each change on the clinic sheet",
     ]
@@ -1074,7 +1100,7 @@ def configuration_plan(side, *, rings, contact, rate_source, pulse_width_us, pul
         # at, so a reader never has to assume they are the same (decision 233, ruling 3)
         "cell_rate_hz": rate.get("cell_rate_hz"), "rate_lifted": rate["lifted"],
         "rate_why": rate["why"], "pulse_width_us": pw, "ceiling_mA": _f(ceiling_mA),
-        "held_other_side": {"current_mA": held_mA, "source": held_src},
+        "held_other_side": _held_block(held_mA, held_src, held_other_side_detail),
         "first_exposure": first, "ladder": lad, "hold": hold, "step_timing": timing, "bands": bands,
         "acute_pain_holds": holds, "conditions": conditions, "sheet_rows": rows,
         "session_time": sess, "sources": sources,
@@ -1085,15 +1111,37 @@ def configuration_plan(side, *, rings, contact, rate_source, pulse_width_us, pul
     }
 
 
-def plan_for_sides(sides_inputs, *, margin, in_force=None, joint_is_safe=None, proposed=None) -> dict:
+def plan_for_sides(sides_inputs, *, margin, in_force=None, joint_is_safe=None, proposed=None,
+                   ceilings=None) -> dict:
     """`{side: side_plan(...)}` for every side in `sides_inputs` (a mapping side -> kwargs for
     :func:`side_plan` minus `side`, `margin`, `held_other_side_mA`, `held_other_side_source`),
     plus the shared margin block, the optional joint-corners block, and the flat `sheet_rows`
     list. `in_force` (`bravo_service.in_force_by_side`'s output) supplies each side's current in
     force -- used to hold the OTHER side steady during a ladder (2026-09-14) and to read each
-    side's programmed contacts and pulse width for the sheet."""
+    side's programmed contacts and pulse width for the sheet.
+
+    `ceilings` (decision 308) is each side's safe ceiling, ``{side: (mA, provenance)}`` or
+    ``{side: mA}``; a side it does not name takes that side's own ``ceiling_mA`` from
+    `sides_inputs`, then the safety module's fallback. The HELD side is held at its current in force
+    only when that is at or below its ceiling; above it, it is held at the ceiling and every block
+    that names the held current says so."""
     in_force = dict(in_force or {})
     other_side = {"Left": "Right", "Right": "Left"}
+    ceil_by = SC.ceiling_mA_by_side(dict(
+        {s: (kw or {}).get("ceiling_mA") for s, kw in (sides_inputs or {}).items()
+         if (kw or {}).get("ceiling_mA") is not None},
+        **{str(k): v for k, v in (ceilings or {}).items() if v is not None}))
+
+    def _held_for(o):
+        """(current to hold, its source sentence, the ceiling detail) for the other side `o`."""
+        if o and isinstance(in_force.get(o), dict) and in_force[o].get("amplitude_mA") is not None:
+            src = (f"the {o} side's own setting in force today "
+                   f"({in_force[o].get('source') or 'the settings stream'})")
+            d = SC.held_at_or_below_ceiling(in_force[o]["amplitude_mA"], ceil_by[o], side=o,
+                                            source=src)
+            return d["current_mA"], src, d
+        return None, "no reading for the other side", None
+
     out = {"available": True, "sides": {}, "margin": dict(margin or {}),
            "protocol_source": PROTOCOL_SOURCE,
            "hold_s": hold_per_step()["seconds"], "step_mA": STEP_MA,
@@ -1102,13 +1150,10 @@ def plan_for_sides(sides_inputs, *, margin, in_force=None, joint_is_safe=None, p
     for side, kw in sides_inputs.items():
         side = str(side)
         o = other_side.get(side)
-        held_mA, held_src = None, "no reading for the other side"
-        if o and isinstance(in_force.get(o), dict) and in_force[o].get("amplitude_mA") is not None:
-            held_mA = in_force[o]["amplitude_mA"]
-            held_src = (f"the {o} side's own setting in force today "
-                        f"({in_force[o].get('source') or 'the settings stream'})")
+        held_mA, held_src, detail = _held_for(o)
         out["sides"][side] = side_plan(side, margin=margin, held_other_side_mA=held_mA,
-                                       held_other_side_source=held_src, **kw)
+                                       held_other_side_source=held_src,
+                                       held_other_side_detail=detail, **kw)
 
     cl = (sides_inputs.get("Left") or {}).get("ceiling_mA")
     cr = (sides_inputs.get("Right") or {}).get("ceiling_mA")
@@ -1134,6 +1179,10 @@ def plan_for_sides(sides_inputs, *, margin, in_force=None, joint_is_safe=None, p
         o = other_side.get(side)
         of = dict(in_force.get(o) or {}) if o else {}
         last_step = max([int(r.get("step") or 0) for r in out["sheet_rows"]] + [0])
+        # the held side read here, through the same ceiling check as the plain ladders, whatever
+        # the caller put in `kw` (decision 308: one place decides what the other side is held at)
+        kw = dict(kw)
+        kw["held_other_side_mA"], kw["held_other_side_source"], kw["held_other_side_detail"] = _held_for(o)
         p = configuration_plan(side, other_side_contacts=of.get("contacts_short"),
                                other_side_pw=of.get("pulse_width_us"), start_step=last_step + 1, **kw)
         out["proposed"][side] = p

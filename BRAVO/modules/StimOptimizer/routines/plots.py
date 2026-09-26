@@ -256,7 +256,11 @@ def build_context(design_csv, *, freq_grid=FREQ_GRID, amp_grid=AMP_GRID,
     sgp = SUR.SafetyGP(grid, random_state=random_state).fit(Xs, sev, sv)
     smu, ssd = sgp.predict(gx)
     sub = smu + float(beta) * ssd
-    safe = sgp.safe_mask(beta=beta)
+    # The stated ceiling is also a HARD bound (decision 308): the model is seeded with severity 3
+    # at it, which bounds the safe set only softly, so every cell above it is taken out of the safe
+    # set, the batches and the queue by construction.
+    within_ceiling = gx[:, 1] <= float(seed_meta["safety_ceiling_mA"]) + 1e-9
+    safe = np.asarray(sgp.safe_mask(beta=beta), bool) & within_ceiling
 
     # Keep the incumbent's OWN posterior SD, not just its mean. Comparing a candidate's k-sigma band
     # against a point estimate of the incumbent understates the uncertainty of the comparison and can
@@ -270,11 +274,13 @@ def build_context(design_csv, *, freq_grid=FREQ_GRID, amp_grid=AMP_GRID,
     pgp, pmu, psd, i_pref, pref_meta = _fit_illustrative_preference(
         grid, fit, margin=pref_margin, length_scale=fixed_length_scale, amp_col=amp_col)
 
-    batches, ceilings = _simulate_forward(gp, grid, sgp, safe, n_reports, incumbent_mu,
+    batches, ceilings, forward_note = _simulate_forward(gp, grid, sgp, safe, n_reports, incumbent_mu,
                                           beta=beta, n_batches=n_batches, q=q,
-                                          incumbent_amp=float(incumbent_xy[1]))
+                                          incumbent_amp=float(incumbent_xy[1]),
+                                          within_ceiling=within_ceiling)
     traj = _trajectory(fit, batches, grid, sgp, beta=beta, amp_col=amp_col)
     queue, qmeta = ACQ.exploration_queue(mu, sd, n_reports, incumbent_mu, kappa=kappa)
+    queue = queue[within_ceiling[queue]] if queue.size else queue
 
     safeS = grid.as_surface(safe.astype(float)).astype(bool)
     contiguous = [int(np.flatnonzero(~row)[0]) if (~row).any() else row.size for row in safeS]
@@ -303,9 +309,14 @@ def build_context(design_csv, *, freq_grid=FREQ_GRID, amp_grid=AMP_GRID,
         n_safe=int(safe.sum()), n_cells=int(len(grid)),
         safe_amps=[float(a) for a in np.unique(gx[safe, 1])],
         safe_contiguous_ceiling=oper_ceiling,
-        safe_global_max_amp=float(sgp.max_safe_amplitude(beta=beta)),
+        # the safety model's own reach, never read above the stated ceiling (decision 308)
+        safe_global_max_amp=float(min(sgp.max_safe_amplitude(beta=beta),
+                                      float(seed_meta["safety_ceiling_mA"]))),
         safe_is_contiguous=bool(all(int(row.sum()) == c for row, c in zip(safeS, contiguous))),
         expansion_ceilings=[float(c) for c in ceilings],
+        # why the forward simulation stopped short of ``n_batches``, or None (decision 308: under a
+        # ceiling below everything tolerated, no untested cell may be left to propose)
+        forward_simulation_note=forward_note,
         i_star=i_star, x_star=[float(v) for v in gx[i_star]],
         mu_star=float(mu[i_star]), sd_star=float(sd[i_star]),
         queue_size=int(queue.size), n_unexplored=int((n_reports < 3).sum()),
@@ -358,32 +369,40 @@ def _fit_illustrative_preference(grid, fit, *, margin, length_scale, amp_col="am
 
 
 def _simulate_forward(gp, grid, sgp, safe, n_reports, incumbent_mu, *, beta, n_batches, q,
-                      incumbent_amp):
+                      incumbent_amp, within_ceiling=None):
     """Forward-simulate ``n_batches`` within-visit batches of size ``q``.
 
     Between batches the surrogate is conditioned on kriging-believer fantasy observations at the
     selected cells — the posterior mean is substituted for the outcome that has not been
     measured. Nothing here is an observation, and the J values shown for these points are
     predictions, not results. The per-batch amplitude ceiling follows the no-side-effect
-    expansion cap of +0.4 mA per batch from the incumbent amplitude.
+    expansion cap of +0.4 mA per batch from the incumbent amplitude, and never above the side's
+    stated ceiling (``within_ceiling``, decision 308).
     """
     model = gp
     nrep = np.asarray(n_reports, float).copy()
     gx = grid.grid_X()
-    batches, ceilings = [], []
+    batches, ceilings, note = [], [], None
     for b in range(int(n_batches)):
         capped = sgp.expansion_capped_mask(worst_severity="none",
                                            prev_max_amp=incumbent_amp + 0.4 * b, beta=beta)
+        if within_ceiling is not None:
+            capped = np.asarray(capped, bool) & np.asarray(within_ceiling, bool)
         edge = float(gx[capped, 1].max()) if capped.any() else float("nan")
-        bm = ACQ.select_batch_within_visit(model, grid, q=q, safe_mask=capped, n_reports=nrep,
-                                           incumbent_mu=incumbent_mu, t=1 + q * b,
-                                           expansion_edge_amp=edge)
+        try:
+            bm = ACQ.select_batch_within_visit(model, grid, q=q, safe_mask=capped, n_reports=nrep,
+                                               incumbent_mu=incumbent_mu, t=1 + q * b,
+                                               expansion_edge_amp=edge)
+        except ValueError as exc:
+            # nothing left to propose under the ceiling: say so and stop, rather than lose the arm
+            note = f"stopped after {b} of {int(n_batches)} batches: {exc}"
+            break
         batches.append(bm)
         ceilings.append(edge)
         idxs = [m.index for m in bm]
         model = model.with_fantasy(gx[idxs], float(np.median(gp.y_var_)))
         nrep[idxs] += 10.0     # fantasy: each prospective setting is assumed to yield 10 reports
-    return batches, ceilings
+    return batches, ceilings, note
 
 
 def _trajectory(fit, batches, grid, sgp, *, beta, amp_col="amp_mA_Left"):

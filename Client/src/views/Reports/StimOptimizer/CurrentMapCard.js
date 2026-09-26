@@ -332,6 +332,13 @@ function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, i
                     <MDTypography variant="caption" component="div" sx={{ ...SMALL, color: PAL.warnText }}>
                       {`What the next visit must deliver: ${String(r.coverage_gap.cheapest_way).replace(/ -- /g, " — ")}. `}
                     </MDTypography>
+                    {/* the side not stepped is held at its ceiling when its current in force is above
+                        it (decision 308), and the pairs above are built at that current */}
+                    {r.coverage_gap.held_side_note ? (
+                      <MDTypography variant="caption" component="div" sx={{ ...SMALL, color: PAL.warnText }}>
+                        {`${String(r.coverage_gap.held_side_note).replace(/ -- /g, " — ")}.`}
+                      </MDTypography>
+                    ) : null}
                     {(r.coverage_gap.why || r.coverage_gap.what_each_pair_needs || (r.coverage_gap.pairs_to_add || []).length) ? (
                       <SizedFold show="Why, and the new settings that would also count" hide="Hide" dense mt={0.2}>
                         <MDTypography variant="caption" component="div" sx={{ ...SMALL }}>

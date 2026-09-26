@@ -283,6 +283,10 @@ def enumerate_candidates(frozen, *, lfp=None, hemispheres=None, modes=DEFAULT_MO
     :class:`ClosedLoopPolicy` objects; ``rejected`` holds ``(policy, problems)`` pairs.
     """
     hemis = tuple(frozen.hemispheres) if hemispheres is None else tuple(hemispheres)
+    # ``ceiling_mA`` is one number or a per-side mapping, read exactly as the gate reads it
+    # (``stage_gate._ceiling_by_side``): each side's window is bounded by ITS OWN ceiling (decision
+    # 308; until then the window used the 5.0 mA module limit while the gate checked 4.5 mA).
+    _ceil_scalar, _ceil_by_side = GATE._ceiling_by_side(ceiling_mA, list(hemis))
     accepted, rejected = [], []
     # Response verdicts are cached per (side, band centre, width) because assess_response fits a
     # regression and the same band is reused across every mode and amplitude window. Per SIDE
@@ -291,7 +295,9 @@ def enumerate_candidates(frozen, *, lfp=None, hemispheres=None, modes=DEFAULT_MO
 
     for hemi in hemis:
         setting = frozen.setting(hemi)
-        windows = _amp_windows(setting, half_widths=amp_window_half_widths, ceiling_mA=ceiling_mA)
+        _ceil_h = (_ceil_by_side[hemi]["ceiling_mA"] if _ceil_by_side and hemi in _ceil_by_side
+                   else _ceil_scalar)
+        windows = _amp_windows(setting, half_widths=amp_window_half_widths, ceiling_mA=_ceil_h)
         lfp_h = GATE.evidence_for_side(lfp, hemi)
         for c in band_centers:
             for w in band_widths:

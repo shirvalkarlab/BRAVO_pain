@@ -184,16 +184,27 @@ function SessionHeaderStrip({ plan }) {
     ["step timing", stepLine],
     ["total session time", num(sess.total_minutes) != null ? `~${Math.round(num(sess.total_minutes))} min` : "—"],
   ];
+  // A held side whose current in force is above its safe ceiling is held AT the ceiling (decision
+  // 308); the server's sentence says so, in the warning colour, under the strip.
+  const heldNotes = [left, right]
+    .map((p) => p && p.held_other_side && p.held_other_side.above_ceiling && p.held_other_side.note)
+    .filter(Boolean).map((t) => String(t).replace(/ -- /g, " — "));
   return (
-    <MDBox mt={1} display="flex" columnGap={3} rowGap={1} flexWrap="wrap">
-      {items.map(([k, v]) => (
-        <MDBox key={k}>
-          <MDTypography variant="caption" component="div" sx={HEAD}>{k}</MDTypography>
-          <MDTypography variant="caption" component="div"
-            sx={{ fontSize: TYPE.num, fontFamily: PAL.mono, whiteSpace: "nowrap" }}>{v}</MDTypography>
-        </MDBox>
+    <>
+      <MDBox mt={1} display="flex" columnGap={3} rowGap={1} flexWrap="wrap">
+        {items.map(([k, v]) => (
+          <MDBox key={k}>
+            <MDTypography variant="caption" component="div" sx={HEAD}>{k}</MDTypography>
+            <MDTypography variant="caption" component="div"
+              sx={{ fontSize: TYPE.num, fontFamily: PAL.mono, whiteSpace: "nowrap" }}>{v}</MDTypography>
+          </MDBox>
+        ))}
+      </MDBox>
+      {heldNotes.map((t) => (
+        <MDTypography key={t} variant="caption" component="div" data-testid="held-above-ceiling"
+          sx={{ ...SMALL, mt: 0.5, color: PAL.warnText }}>{`Held at the ceiling: ${t}.`}</MDTypography>
       ))}
-    </MDBox>
+    </>
   );
 }
 
@@ -415,7 +426,9 @@ function ProposedColumn({ p }) {
             : "—"}
         </span>
       </Row>
-      <Row label="the other side">
+      <Row label="the other side"
+        sub={p.held_other_side && p.held_other_side.above_ceiling && p.held_other_side.note
+          ? <span style={{ color: PAL.warnText }}>{String(p.held_other_side.note).replace(/ -- /g, " — ")}</span> : null}>
         <span style={{ fontSize: TYPE.body }}>{`${other} side held at ${fmtMa(p.held_other_side && p.held_other_side.current_mA)}`}</span>
       </Row>
       <Row label="time">

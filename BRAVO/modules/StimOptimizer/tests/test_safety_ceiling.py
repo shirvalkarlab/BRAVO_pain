@@ -182,11 +182,16 @@ def test_a_seed_with_nothing_tolerated_is_refused_by_the_model_not_silently_empt
 #: 240 / 1.9; under 1.0 mA -- BELOW the 1.0-1.9 mA the design tolerated -- 57 cells and no
 #: contiguous ceiling. A lower stated ceiling must shrink the safe set and pull the reachable
 #: ceiling down; the exact counts pin the seed's arithmetic against a silent change.
+#: DECISION 308 (2026-09-26): the safe set also leaves out every cell above the stated ceiling, as a
+#: hard bound. Under 5.0 and 2.0 mA that removes nothing (the model's own set already stopped at
+#: 5.0 and 1.9 mA); under 1.0 mA it removes 54 of the 57 cells, because the model seeded with
+#: severity 3 at 1.0 mA and severity 0 at the 1.0-1.9 mA the design tolerated still called
+#: currents ABOVE the stated ceiling safe -- the failure this bound exists for. 3 cells remain.
 N_SAFE_LEFT_AT_5 = 612
 N_SAFE_LEFT_AT_2 = 240
 REACH_LEFT_AT_5 = 5.0
 REACH_LEFT_AT_2 = 1.9
-N_SAFE_LEFT_AT_1 = 57
+N_SAFE_LEFT_AT_1 = 3
 
 
 def _run(by_side=None):
@@ -219,6 +224,10 @@ def test_a_ceiling_below_what_was_tolerated_leaves_no_contiguous_ceiling_rather_
     assert m["n_safe"] == N_SAFE_LEFT_AT_1
     assert m["safe_is_contiguous"] is False
     assert np.isnan(m["safe_contiguous_ceiling"])
+    # nothing above the stated ceiling is safe, and the arm is still reported (decision 308): the
+    # forward simulation stops and says why instead of losing the arm to "no eligible candidates"
+    assert max(m["safe_amps"]) <= 1.0 + 1e-9
+    assert m["forward_simulation_note"].startswith("stopped after 1 of 3 batches")
 
 
 def test_without_a_ceiling_argument_every_arm_reads_the_hard_limit_and_says_no_ceiling_was_stated():

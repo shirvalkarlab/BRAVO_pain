@@ -95,6 +95,73 @@ def ceilings_by_hemisphere(participant_uid, hemispheres=("Left", "Right")):
     return {str(h): ceiling_for(participant_uid, h) for h in hemispheres}
 
 
+def ceiling_mA_by_side(ceilings=None, sides=("Left", "Right")) -> dict:
+    """``{side: ceiling_mA}`` from whatever form a caller holds -- ``{side: (mA, provenance)}``
+    (``ceilings_by_hemisphere``'s own output), ``{side: mA}``, or ``None`` -- with every side in
+    ``sides`` present. A side the mapping does not name gets THIS module's own fallback
+    (``ceiling_for(None, side)``, the module hard limit), never a number typed where it is read
+    (decision 308: a typed 4.5 mA fallback in the next-visit list was RCS08's ceiling written into
+    code that serves every participant)."""
+    out = {}
+    src = dict(ceilings or {})
+    for side in sides:
+        v = src.get(str(side))
+        if isinstance(v, (tuple, list)):
+            v = v[0] if len(v) else None
+        try:
+            v = None if v is None else float(v)
+        except (TypeError, ValueError):
+            v = None
+        if v is None or not np.isfinite(v):
+            v = float(ceiling_for(None, side)[0])
+        out[str(side)] = v
+    return out
+
+
+def within_ceiling_mask(amp_left_mA, amp_right_mA, ceilings=None, *, tol_mA=1e-9) -> np.ndarray:
+    """True where a (left current, right current) cell is at or below BOTH sides' ceilings.
+
+    The HARD bound every proposal is clipped to (decision 308). The safety model's safe set is a
+    soft bound -- a Gaussian process seeded at the ceiling -- and on a record where currents above
+    today's ceiling were delivered and tolerated before it was lowered (RCS08: 4.8 mA on the left,
+    ceiling 4.5 mA since 2026-09-14) nothing in the model itself guarantees a safe cell sits at or
+    below the stated current. ``amp_right_mA`` may be ``None`` for a one-side grid (the per-side
+    fit), and ``amp_left_mA`` ``None`` likewise."""
+    c = ceiling_mA_by_side(ceilings)
+    keep = None
+    for side, amps in (("Left", amp_left_mA), ("Right", amp_right_mA)):
+        if amps is None:
+            continue
+        m = np.asarray(amps, dtype=float) <= c[side] + float(tol_mA)
+        keep = m if keep is None else (keep & m)
+    return np.asarray(True if keep is None else keep, dtype=bool)
+
+
+def held_at_or_below_ceiling(current_mA, ceiling_mA, *, side, source=None) -> dict:
+    """The current a side is HELD at while the other side's ladder runs, never above its ceiling.
+
+    The held side's current in force is copied into every ladder row and the clinic sheet; until
+    decision 308 it was copied as it stood. When it is above today's ceiling -- a setting programmed
+    before the ceiling was lowered -- it is held AT the ceiling instead, and the returned ``note``
+    says so in plain words for the card, the sheet caption and the conditions list. Holding at the
+    ceiling rather than refusing the ladder: the ladder measures the OTHER side, which only needs
+    this side held constant, and the ceiling is the nearest current to the one in force that the
+    page may propose. ``current_mA`` None means no reading, returned as such."""
+    cur = None if current_mA is None else float(current_mA)
+    ceil = None if ceiling_mA is None else float(ceiling_mA)
+    out = {"current_mA": cur, "in_force_mA": cur, "ceiling_mA": ceil, "above_ceiling": False,
+           "note": None, "source": source}
+    if cur is None or ceil is None or not np.isfinite(cur) or cur <= ceil + 1e-9:
+        return out
+    out["current_mA"] = ceil
+    out["above_ceiling"] = True
+    out["note"] = (f"the {side} side's current in force, {cur:g} mA, is above today's safe ceiling "
+                   f"for that side, {ceil:g} mA; "
+                   f"it is held at {ceil:g} mA for this ladder, not at the current in force -- set "
+                   f"it to {ceil:g} mA before the first step")
+    return out
+
+
 def ceiling_anchors(ceiling_mA, freq_grid):
     """The severity-3 seed: one ``(rate_hz, ceiling_mA)`` pair per stimulation rate on the grid.
 

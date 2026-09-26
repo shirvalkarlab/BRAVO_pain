@@ -584,7 +584,13 @@ def run_two_stage(design_csv, *, hemispheres=DEFAULT_HEMISPHERES, primary_item="
     if callable(lfp):
         lfp = lfp(frozen)
     gate = GATE.evaluate_gate(frozen, lfp=lfp, amp_limits=amp_limits, **gk)
-    s2 = S2.run_stage2(frozen, gate, lfp=lfp, **(stage2_kwargs or {}))
+    # The ceiling the gate checks the limits against is the ceiling Stage 2's amplitude windows are
+    # bounded by (decision 308): until then only the gate was given the per-side ceiling and the
+    # windows used the 5.0 mA module limit, reaching 4.8 mA on RCS08's left.
+    s2kw = dict(stage2_kwargs or {})
+    if "ceiling_mA" in gk and "ceiling_mA" not in s2kw:
+        s2kw["ceiling_mA"] = gk["ceiling_mA"]
+    s2 = S2.run_stage2(frozen, gate, lfp=lfp, **s2kw)
 
     written = []
     if outdir is not None:

@@ -422,12 +422,9 @@ def test_no_adaptive_capable_setting_reports_nan_rate_on_both_sides():
 # ---------------------------------------------------------------------------------------------
 # The joint safety model: unsafe on EITHER side's own ceiling excludes the cell
 # ---------------------------------------------------------------------------------------------
-def test_the_joint_safe_set_is_exactly_the_and_of_both_sides_own_safety_models():
-    """The joint safe set at a (rate, amp_Left, amp_Right) cell must be EXACTLY "safe on the
-    Left's own (rate, amp_Left) view of it AND safe on the Right's own (rate, amp_Right) view of
-    it" -- reconstructed independently here from the same, unchanged, per-side ``SafetyGP`` and
-    ``safety_ceiling.safety_seed`` this module calls, and compared bit for bit rather than merely
-    checked for a plausible shape."""
+def _joint_safe_fixture():
+    """The fixture, the fitted run, and the two per-side safety models' own AND, reconstructed
+    independently from the same unchanged per-side ``SafetyGP`` and ``safety_ceiling.safety_seed``."""
     from StimOptimizer.routines import surrogate as SUR
     from StimOptimizer import safety_ceiling as SC
 
@@ -443,16 +440,38 @@ def test_the_joint_safe_set_is_exactly_the_and_of_both_sides_own_safety_models()
     D = OBJ.build_objective(d, incumbent_epoch=float(d.sort_values("t0")["epoch"].iloc[-1]),
                             cfg={"primary_item": "left_leg"})
     safety_grid = SUR.ParameterGrid(S1.PLT.FREQ_GRID, S1.JOINT_AMP_GRID)
-    expected = np.ones(len(gx), bool)
+    models_and = np.ones(len(gx), bool)
     for hemi, cols in (("Left", [0, 1]), ("Right", [0, 2])):
         Xs, sev, sv, _meta = SC.safety_seed(D, f"amp_mA_{hemi}", freq_grid=S1.PLT.FREQ_GRID,
                                             ceiling=ceilings[hemi], min_tolerated_h=72.0)
         sgp = SUR.SafetyGP(safety_grid, random_state=0).fit(Xs, sev, sv)
-        expected &= np.asarray(sgp.safe_mask(X=gx[:, cols], beta=S1.PLT.BETA), bool)
+        models_and &= np.asarray(sgp.safe_mask(X=gx[:, cols], beta=S1.PLT.BETA), bool)
+    return sl, gx, models_and
 
-    assert np.array_equal(sl.safe, expected)
+
+def test_the_safety_models_part_of_the_joint_safe_set_is_exactly_the_and_of_both_sides_own_models():
+    """The safety models' part of the joint safe set at a (rate, amp_Left, amp_Right) cell is
+    EXACTLY "safe on the Left's own (rate, amp_Left) view of it AND safe on the Right's own (rate,
+    amp_Right) view of it", compared bit for bit rather than merely checked for a plausible shape.
+    Split on 2026-09-26 (decision 308) from a test that pinned the WHOLE joint safe set to this
+    AND: the set now also carries each side's stated ceiling as a hard bound, tested below."""
+    sl, gx, models_and = _joint_safe_fixture()
+    # every joint-safe cell is safe on both models, and every model-safe cell under both ceilings
+    # is joint-safe: the models' part is untouched
+    under = (gx[:, 1] <= 1.0 + 1e-9) & (gx[:, 2] <= 5.0 + 1e-9)
+    assert np.array_equal(sl.safe, models_and & under)
+    assert not (sl.safe & ~models_and).any()
+
+
+def test_the_joint_safe_set_also_holds_every_cell_above_a_sides_stated_ceiling_out():
+    """Decision 308: the models are seeded with severity 3 AT the ceiling, a soft bound only; the
+    joint safe set additionally leaves out every cell above either side's stated ceiling, and on
+    this fixture that removes cells the models alone would call safe."""
+    sl, gx, models_and = _joint_safe_fixture()
+    above = gx[:, 1] > 1.0 + 1e-9
+    assert not (sl.safe & above).any(), "no cell above the left's 1.0 mA ceiling is safe"
+    assert (models_and & above).any(), "the control: the models alone reach above 1.0 mA here"
     assert sl.safe.any(), "some cell under both ceilings must remain safe in this fixture"
-    assert (~sl.safe).any(), "some cell must be excluded by at least one side's ceiling"
 
 
 # ---------------------------------------------------------------------------------------------

@@ -835,12 +835,18 @@ def coverage_gap(coverage, *, ceiling_mA=None, held_right_mA=None, step_mA=0.5,
     qualifying = [p for p in pairs if p.get("qualifies")]
     need = max(0, int(cov.get("n_pairs_required", 0)) - int(cov.get("n_pairs", 0)))
     span_needed = float(cov.get("span_required_mA", 1.0))
-    ceil = {k: float(v) for k, v in (ceiling_mA or {}).items()}
+    # both sides always, from the safety module (decision 308: a typed RCS08 number served everyone)
+    ceil = SC.ceiling_mA_by_side(ceiling_mA)
     other_side = "Right" if str(stepped_side) == "Left" else "Left"
-    top = float(ceil.get(str(stepped_side), 4.5))
-    top_other = float(ceil.get(other_side, 4.5))
+    top = float(ceil[str(stepped_side)])
+    top_other = float(ceil[other_side])
     held = (float(held_right_mA) if held_right_mA is not None
             else (float(qualifying[0]["amp_mA_Right"]) if qualifying else 0.0))
+    # A held current above the held side's ceiling is held AT the ceiling, as the session plan's
+    # ladders hold it (decision 308), and said so; otherwise every pair on the stepped side would
+    # be dropped for a fact about the other side.
+    _held_d = SC.held_at_or_below_ceiling(held, top_other, side=other_side)
+    held = float(_held_d["current_mA"])
     span_stepped = float(cov.get("span_left_mA", 0.0) if stepped_side == "Left"
                          else cov.get("span_right_mA", 0.0))
     span_other = float(cov.get("span_right_mA", 0.0) if stepped_side == "Left"
@@ -853,6 +859,8 @@ def coverage_gap(coverage, *, ceiling_mA=None, held_right_mA=None, step_mA=0.5,
                                     f"at that setting, on at least "
                                     f"{cov.get('days_per_pair_required', 2):g} different days"),
            "why": ""}
+    if _held_d["above_ceiling"]:
+        out["held_side_note"] = _held_d["note"].replace("for this ladder", "for these pairs")
     if need == 0 and not out["span_short_on"]:
         out["why"] = ("this stratum already has the pairs the rule asks for, spanning enough current "
                       "on both sides; nothing is missing from its coverage")
@@ -875,8 +883,8 @@ def coverage_gap(coverage, *, ceiling_mA=None, held_right_mA=None, step_mA=0.5,
         days = pr.get("n_days")
         need_d = (max(0.0, float(cov.get("days_per_pair_required", 2)) - float(days))
                   if days is not None else None)
-        if (pr.get("amp_mA_Left") > float(ceil.get("Left", 4.5)) + 1e-9
-                or pr.get("amp_mA_Right") > float(ceil.get("Right", 4.5)) + 1e-9):
+        if (pr.get("amp_mA_Left") > float(ceil["Left"]) + 1e-9
+                or pr.get("amp_mA_Right") > float(ceil["Right"]) + 1e-9):
             continue
         top_ups.append({"amp_mA_Left": float(pr["amp_mA_Left"]), "amp_mA_Right": float(pr["amp_mA_Right"]),
                         "n_reports": float(pr.get("n_reports") or 0), "n_days": days,
@@ -914,7 +922,7 @@ def coverage_gap(coverage, *, ceiling_mA=None, held_right_mA=None, step_mA=0.5,
         key = (round(pair[0], 3), round(pair[1], 3))
         if key in seen or key in have:
             continue
-        if key[0] > float(ceil.get("Left", 4.5)) + 1e-9 or key[1] > float(ceil.get("Right", 4.5)) + 1e-9:
+        if key[0] > float(ceil["Left"]) + 1e-9 or key[1] > float(ceil["Right"]) + 1e-9:
             continue
         seen.add(key)
         picked.append(key)
@@ -1052,8 +1060,25 @@ def _observed_inputs(sub, grid):
     return sub[["freq_hz", "amp_mA_Left", "amp_mA_Right"]].to_numpy(float)
 
 
+def _safe_cells(gx, sgp_left, sgp_right, *, beta, ceiling_mA=None) -> np.ndarray:
+    """The joint safe set on a grid whose columns 1 and 2 are the left and right currents: safe on
+    each side's own safety model AND at or below each side's stated ceiling.
+
+    The ceiling term is the hard bound (decision 308). The safety models are seeded with severity 3
+    AT the ceiling, which makes it a soft bound only -- and on RCS08, where 4.8 mA was delivered and
+    tolerated on the left before the ceiling was lowered to 4.5 mA, a tolerated anchor sits above
+    it. Every value read from this set -- the optimum per rate, the best current in the allowed
+    range, the within-visit batch -- is therefore capped by construction. ``ceiling_mA`` is
+    ``{side: (mA, provenance)}`` or ``{side: mA}``; None is the module hard limit, the grid's own
+    top, so it removes nothing."""
+    safe = (np.asarray(sgp_left.safe_mask(X=gx[:, [0, 1]], beta=beta), bool)
+            & np.asarray(sgp_right.safe_mask(X=gx[:, [0, 2]], beta=beta), bool))
+    return safe & SC.within_ceiling_mask(gx[:, 1], gx[:, 2], ceiling_mA)
+
+
 def _fit_rate_stratum(pwl, pwr, rate, sub, *, amp_grid, sgp_left, sgp_right,
-                      fixed_length_scale, beta, calibration_check=True) -> RateStratum:
+                      fixed_length_scale, beta, calibration_check=True,
+                      ceiling_mA=None) -> RateStratum:
     """Fit ONE (amplitude-Left, amplitude-Right) surface at a single rate. ``sub`` is already
     restricted to this (pulse-width pair, rate); the caller has already checked it clears
     ``RATE_STRATUM_MIN_EPOCHS``. ``sgp_left``/``sgp_right`` are the SAME shared, per-side safety
@@ -1065,8 +1090,7 @@ def _fit_rate_stratum(pwl, pwr, rate, sub, *, amp_grid, sgp_left, sgp_right,
         Xobs, sub["J"].to_numpy(float), sub["obs_var"].to_numpy(float))
     mu, sd = gp.predict_grid()
     gx = grid.grid_X()
-    safe = (np.asarray(sgp_left.safe_mask(X=gx[:, [0, 1]], beta=beta), bool)
-            & np.asarray(sgp_right.safe_mask(X=gx[:, [0, 2]], beta=beta), bool))
+    safe = _safe_cells(gx, sgp_left, sgp_right, beta=beta, ceiling_mA=ceiling_mA)
     n_reports = np.zeros(len(grid))
     np.add.at(n_reports, grid.index_of(Xobs), sub["n"].to_numpy(float))
     i_star = int(np.argmin(np.where(safe, mu, np.inf)))
@@ -1107,7 +1131,7 @@ class _PooledIncumbent:
 
 def _fit_pooled_rate_stratum(rate, sub, *, pwl_col, pwr_col, pw_in_force, amp_grid, sgp_left,
                              sgp_right, fixed_length_scale, beta,
-                             calibration_check=True) -> RateStratum:
+                             calibration_check=True, ceiling_mA=None) -> RateStratum:
     """Fit ONE (amplitude-Left, amplitude-Right) surface at a single rate over EVERY pulse-width
     pairing the record delivered at that rate, with the two pulse widths as two more inputs, and
     read it at the pairing in force (decision 189's option A; the PI, 2026-09-21). ``sub`` is
@@ -1137,8 +1161,7 @@ def _fit_pooled_rate_stratum(rate, sub, *, pwl_col, pwr_col, pw_in_force, amp_gr
         Xobs, sub["J"].to_numpy(float), sub["obs_var"].to_numpy(float))
     mu, sd = gp.predict_grid()
     gx = grid.grid_X()
-    safe = (np.asarray(sgp_left.safe_mask(X=gx[:, [0, 1]], beta=beta), bool)
-            & np.asarray(sgp_right.safe_mask(X=gx[:, [0, 2]], beta=beta), bool))
+    safe = _safe_cells(gx, sgp_left, sgp_right, beta=beta, ceiling_mA=ceiling_mA)
     n_reports = np.zeros(len(grid))
     np.add.at(n_reports, grid.index_of(Xobs), sub["n"].to_numpy(float))
     i_star = int(np.argmin(np.where(safe, mu, np.inf)))
@@ -1198,7 +1221,8 @@ def _pooled_slice_at_rate(sl: JointStratum, rate_hz: float) -> dict:
 
 
 def _fit_joint_stratum(pwl, pwr, sub, *, grid, sgp_left, sgp_right, incumbent_xyz,
-                       fixed_length_scale, kappa, q, eta, beta, constraint=None) -> JointStratum:
+                       fixed_length_scale, kappa, q, eta, beta, constraint=None,
+                       ceiling_mA=None) -> JointStratum:
     """Fit the joint 3-D surrogate to one (pulse-width-Left, pulse-width-Right) stratum.
 
     ``sgp_left``/``sgp_right`` are the SHARED, PER-SIDE safety models, each fitted once on the
@@ -1220,9 +1244,7 @@ def _fit_joint_stratum(pwl, pwr, sub, *, grid, sgp_left, sgp_right, incumbent_xy
     incumbent_mu, incumbent_sd = float(inc_mu[0]), float(inc_sd[0])
     gx = grid.grid_X()
 
-    safe_left = sgp_left.safe_mask(X=gx[:, [0, 1]], beta=beta)
-    safe_right = sgp_right.safe_mask(X=gx[:, [0, 2]], beta=beta)
-    safe = np.asarray(safe_left, bool) & np.asarray(safe_right, bool)
+    safe = _safe_cells(gx, sgp_left, sgp_right, beta=beta, ceiling_mA=ceiling_mA)
 
     constrained = bool(constraint is not None and not constraint.lifted)
     if constrained:
@@ -1234,6 +1256,11 @@ def _fit_joint_stratum(pwl, pwr, sub, *, grid, sgp_left, sgp_right, incumbent_xy
     i_star = i_star_unc if envelope_empty else int(np.argmin(np.where(allowed, mu, np.inf)))
 
     queue, qmeta = ACQ.exploration_queue(mu, sd, n_reports, incumbent_mu, kappa=kappa)
+    # WHAT TO TEST NEXT never names a current above either side's safe ceiling (decision 308): the
+    # queue is built from the whole 0-5.0 mA grid and, unlike the batch and the optimum, was never
+    # filtered by anything but the adaptive envelope.
+    if queue.size:
+        queue = queue[SC.within_ceiling_mask(gx[queue, 1], gx[queue, 2], ceiling_mA)]
     if constrained and queue.size:
         queue = queue[allowed[queue]]
     stopping = ACQ.check_stopping([], mu, sd, n_reports, incumbent_mu=incumbent_mu)
@@ -1500,7 +1527,8 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
             sl = _fit_joint_stratum(pwl, pwr, sub, grid=grid, sgp_left=sgp_by_side["Left"],
                                     sgp_right=sgp_by_side["Right"], incumbent_xyz=incumbent_xyz,
                                     fixed_length_scale=fixed_length_scale, kappa=kappa, q=q,
-                                    eta=eta, beta=beta, constraint=constraint)
+                                    eta=eta, beta=beta, constraint=constraint,
+                                    ceiling_mA=safety_ceiling_by_hemisphere)
         except (ValueError, RuntimeError) as exc:
             skipped[f"pwL{pwl:g}_pwR{pwr:g}"] = f"{type(exc).__name__}: {exc}"
             continue
@@ -1524,7 +1552,8 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
                 rs = _fit_rate_stratum(pwl, pwr, rate, subr, amp_grid=amp_grid,
                                        sgp_left=sgp_by_side["Left"], sgp_right=sgp_by_side["Right"],
                                        fixed_length_scale=fixed_length_scale, beta=beta,
-                                       calibration_check=bool(calibration_check))
+                                       calibration_check=bool(calibration_check),
+                                       ceiling_mA=safety_ceiling_by_hemisphere)
             except (ValueError, RuntimeError) as exc:
                 rate_strata[rate] = RateStratum(
                     pw_us_left=float(pwl), pw_us_right=float(pwr), rate_hz=rate,
@@ -1659,7 +1688,8 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
                         rate, subr, pwl_col=pwl_col, pwr_col=pwr_col, pw_in_force=pw_in_force,
                         amp_grid=amp_grid, sgp_left=sgp_by_side["Left"],
                         sgp_right=sgp_by_side["Right"], fixed_length_scale=fixed_length_scale,
-                        beta=beta, calibration_check=bool(calibration_check))
+                        beta=beta, calibration_check=bool(calibration_check),
+                        ceiling_mA=safety_ceiling_by_hemisphere)
                     rs.resolution = _rate_stratum_resolution(
                         rs, _pooled_incumbent(rs, incumbent_xyz, pw_in_force),
                         resolution_k=resolution_k)

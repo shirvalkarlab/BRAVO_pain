@@ -267,7 +267,7 @@ export default function SensingEvidenceTable({ closedLoop }) {
       {/* The explanatory paragraphs, in one fold (the design review of 2026-09-26, S3). */}
       <SizedFold show="What “usable” requires, and why the current limit is flat" hide="Hide">
         <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body }}>
-          {`A combination is usable when at least one band both falls with current after removing the differences between clinic visits (a significant negative slope of band power on current) and rises with pain on the Biomarkers grid (a positive correlation with the pain score whose interval lies wholly above zero), on the one sensing pair the device allows while today's contacts stimulate (the two contacts flanking them). That is the device's fixed control polarity: more current, less power, less pain. The currents tested must sit at or below the flat ${fmtMa(cl.amp_hard_limit_mA)} limit. One band is enough (the PI's ruling of 2026-09-17; until then half the bands had to respond).`}
+          {`A combination is usable when at least one band both falls with current after removing the differences between clinic visits (a significant negative slope of band power on current) and rises with pain on the Biomarkers grid (a positive correlation with the pain score whose interval lies wholly above zero), on the one sensing pair the device allows while today's contacts stimulate (the two contacts flanking them). That is the device's fixed control polarity: more current, less power, less pain. Evidence counts only from currents at or below the module's ${fmtMa(cl.amp_hard_limit_mA)} hard limit, which is not the safe ceiling for programming. One band is enough (the PI's ruling of 2026-09-17; until then half the bands had to respond).`}
         </MDTypography>
         {pr && pr.available && (
           <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body, mt: 0.6 }}>
@@ -278,7 +278,7 @@ export default function SensingEvidenceTable({ closedLoop }) {
           {`Closed loop can use a band inside ${(cl.adaptive_window_hz || []).map((v) => Number(v)).join("–")} Hz at a rate of at least ${fmtHz(cl.min_adaptive_rate_hz)}. Its only lever is current, so a band must move with current, which is a different question from whether it tracks pain. ${
             cl.safe_ceiling_mA_by_side
               ? `Safe ceiling, stated by the PI: L ${fmtMa(cl.safe_ceiling_mA_by_side.Left)} / R ${fmtMa(cl.safe_ceiling_mA_by_side.Right)}; evidence above the ${fmtMa(cl.amp_hard_limit_mA)} module cap is excluded.`
-              : `Current limit ${fmtMa(cl.amp_hard_limit_mA)}.`} The current limit is PI-declared and was established by testing at 165 Hz; it does not vary with rate or pulse width.`}
+              : `Current limit ${fmtMa(cl.amp_hard_limit_mA)}.`} The safe ceiling is stated by the PI for each side; it does not vary with rate or pulse width.`}
         </MDTypography>
         <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body, mt: 0.6 }}>
           A qualifying band within 2.5 Hz of where the stimulator shows up
