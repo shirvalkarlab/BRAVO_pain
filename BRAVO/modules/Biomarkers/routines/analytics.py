@@ -4309,7 +4309,7 @@ def _band_pain_auc_with_covariate_removed(d, *, covariate_column, shape, pain_co
     adj = band_pain_auc(resid, pain, groups, times=times, strategy=strategy, low_pct=low_pct,
                         high_pct=high_pct, pain_cutoff=pain_cutoff, n_boot=n_boot, seed=seed,
                         alpha=alpha,
-                        power_feature=f"{power_column} with {covariate_column} removed from it")
+                        power_feature=f"the band power with {cov_words} removed from it")
     pr = partial_corr(x, pain, cov, shape=shape)
     pr = float(pr) if pr is not None and np.isfinite(pr) else None
     pr_lo, pr_hi = _partial_corr_report_bootstrap(
@@ -4327,7 +4327,7 @@ def _band_pain_auc_with_covariate_removed(d, *, covariate_column, shape, pain_co
         "n_spectral_samples": int(adj.get("n_spectral_samples") or 0),
         "n_pain_reports": int(adj.get("n_pain_reports") or 0),
         "resampling_unit": "one pain report",
-        "why": (f"the band power with {covariate_column} removed from it as a "
+        "why": (f"the band power with {cov_words} removed from it as a "
                 f"{'straight line' if shape == 'line' else shape}, the pain scores untouched. "
                 f"{adj.get('why', '')}"),
     }

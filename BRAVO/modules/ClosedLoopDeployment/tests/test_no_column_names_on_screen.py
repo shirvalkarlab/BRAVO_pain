@@ -64,3 +64,14 @@ def test_the_sign_off_caveat_names_the_current_in_words_even_on_an_older_answer(
         text = " ".join(r["text"] for r in rows)
         assert "amp_mA" not in text, text
         assert "the left stimulation current in force" in text, text
+
+
+def test_a_reading_that_was_made_names_the_current_and_the_power_in_words():
+    # 2026-09-26: the refusals were plain (313, 314), but a reading that WAS made still said
+    # "the band power with amp_mA_Left removed from it", and handed the estimator "power_linear
+    # with amp_mA_Left removed from it" as the name of what it read. No page prints either today.
+    e = E.state_edge(_table(), channel=CH, center_hz=FC, n_boot=100, adjust_for_column=AMP)
+    assert e.adjusted["available"] is True
+    text = " ".join(str(v) for k, v in e.adjusted.items() if k != "adjusted_for")
+    assert "amp_mA" not in text and "power_linear" not in text, text
+    assert "the band power with the left stimulation current removed from it" in e.adjusted["why"]
