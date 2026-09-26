@@ -263,7 +263,15 @@ def circular_block_indices(n, block, rng):
       rotations matched or beat the observed value" and should not be read to three decimal places.
     * **The identity is always among the draws**, so the observed statistic appears in its own null
       and the count of null values at least as extreme is never zero. The ``(ge + 1)/(used + 1)``
-      correction elsewhere is therefore doubly conservative here, which is the safe direction."""
+      correction elsewhere is therefore doubly conservative here, which is the safe direction.
+
+      CORRECTED 2026-09-26 (decision 310): not doubly conservative. Drawing the identity about once
+      in every ``n`` draws is what keeps the observed order exchangeable with its draws, so the
+      Monte Carlo p estimates the exact rotation p (smallest value 1/n); only the ``+ 1`` is extra.
+      Leaving the identity out was proposed and measured: under a true null at n = 40 and 1,000
+      draws, p <= 0.01 went from 0.0000 to 0.030 of records, and the smallest p fell from about 1/n
+      to 1/1,001. So the identity stays (`test_stats_utils.test_the_rotation_null_keeps_the_
+      identity_because_dropping_it_makes_p_too_small`)."""
     block = max(1, int(block))
     shift = int(rng.integers(0, n))
     base = (np.arange(n) + shift) % n

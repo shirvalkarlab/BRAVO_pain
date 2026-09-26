@@ -116,3 +116,49 @@ sample counts (31,195 to 43,913 and 43,241 to 50,106 per cell) and the counts of
 band-to-pain regression here matched each piece's own settings period, so decision 290's join error
 does not touch it. The method comparison on constructed data (section 4.1) reads no recording and
 stands.
+
+## Correction, 2026-09-26 (decision 311): the band-power cells re-measured on the full tiles
+
+The same scripts, unchanged except for their output file names (`_agent_bridge/_P12v2_*`,
+scratch), were run again on 2026-09-26 between 08:42 and 09:01 UTC. They read the saved 3 s tiles
+written at 03:35 UTC that day, the full copy of decision 289 (303,321 TD pieces). The old cell files
+were re-summarised by the same counting script, and that reproduces every number above, so each
+change below comes from the tiles, not from the counting. Sensing pairs: the same five as before;
+R 0-3+ is still missing, for the same reason (§5 item 3).
+
+What moved (old -> new):
+- Groups per cell: 52 to 65 -> 55 to 66. Effective groups in the regressions checked: about 1 to 19
+  -> 1.0 to 21.5.
+- Current-to-power (the historical E1 design): samples per cell 31,195 to 43,913 -> 32,703 to
+  45,496. Effective groups 4.7 to 18.9 (median 11.8) -> 4.9 to 21.5 (median 13.8). Intervals
+  excluding zero: sandwich 25 -> 24, flipping 14 -> 17, drop-one 21 -> 21; all 17 found by
+  flipping are also found by the other two. Flipping's interval 1.10 to 2.56 times the sandwich's
+  (median 1.21) -> 1.11 to 2.08 (median 1.23); rank correlation with the effective count -0.73 ->
+  -0.69. Worst pairs: R 1-3+ sandwich 6, flipping 0 at 4.7 effective groups -> 6 and 3 at 4.9;
+  R 0-2+ 10 against 6 at 4.8 -> 10 against 7 at 5.0.
+- Band power to pain (the 2026-09-04 regression): samples per cell 43,241 to 50,106 -> 44,761 to
+  52,462. Effective groups 1.0 to 9.6 (median 1.6) -> 1.0 to 10.0 (median 1.7). Width ratio 0.88 to
+  250.7 (median 3.04) -> 0.87 to 223.7 (median 2.95); rank correlation with the effective count
+  -0.93 -> -0.93, with the raw count +0.40 -> +0.29.
+- Cells where one group holds 90% or more of the information: 29 of 90 -> 29 of 90. In the other
+  61, intervals excluding zero: flipping 31 -> 32, sandwich 29 -> 28, drop-one 12 -> 13. In the 29:
+  sandwich 0 -> 0, drop-one 0 -> 0, flipping p below 0.05 in 24 -> 23 while its own interval
+  excludes zero in 2 -> 4. Across all 90 cells, p below 0.05 beside an interval containing zero:
+  24 -> 22.
+- The collapse on L 0-3+ at 16.5 to 24.5 Hz: observed statistic 0.96 to 0.98 -> 0.96 to 0.99;
+  95th percentile of the rebuilt statistics 0.90 to 0.95 -> 0.91 to 0.96; p 0.001 to 0.017 ->
+  0.001 to 0.025. Grid points inside a reported interval that its own test rejects: at most 2 of
+  401 -> at most 3 of 401.
+- The dominant stretch is the same one: both sides at 0 mA, 289.7 hours, 11% to 13% of the rows
+  (11.1% to 12.8%). Six of its samples carry 99.6% to 99.8% of its share (unchanged), at 102.5,
+  129.7 and 182.2 times the cell's 99.9th percentile on the three cells checked (103 to 182 before);
+  no sample in any other group exceeds 2.4 times it (unchanged). Its median band power against the
+  other groups': 0.66 to 0.83 -> 0.62 to 0.81 on the dominant cells checked.
+- E3 reads no tile: identical, left p 0.0085 / 0.013 / 0.011 on 90 groups and right 0.023 / 0.031
+  / 0.029 on 91.
+
+What stands: every conclusion in §1 and §6. The information still sits in a handful of groups; the
+sandwich still resolves more current-to-power cells than flipping (24 against 17); the 29 cells with
+one dominant group are the same count and still cannot be judged by any method; the cause is still
+the six values in the one stimulation-off stretch. §4.1 reads no recording and stands. Nothing on
+any page moves.

@@ -157,7 +157,16 @@ def rotations(n, block, n_perm, rng):
     keeps their persistence), leaving out the identity. A rotation by zero IS the observed data;
     counted as a null draw it can only push the p upwards, and on a short record it is not rare --
     60 draws on 120 ratings drew it three times with seed 0 (found writing these tests, where it
-    turned p 0.016 into 0.066 for a band the rotations otherwise never approached)."""
+    turned p 0.016 into 0.066 for a band the rotations otherwise never approached).
+
+    NOTE 2026-09-26 (decision 310), behaviour unchanged, for the PI to rule on: leaving the identity
+    out makes this p too SMALL on average, not only less noisy. The identity drawn about once in
+    every n draws is what keeps the observed order exchangeable with its draws; without it a band
+    that beats the other n - 1 rotations reads 1/(n_perm + 1) where the rotation test can only say
+    1/n. Under a true null at 40 ratings and 1,000 draws, p <= 0.01 happened 0.030 of the time
+    without the identity and 0.0000 with it (`test_stats_utils`). The seed-0 case above was Monte
+    Carlo luck (three identities where 0.5 were expected); enumerating the n rotations once each
+    would remove that noise without the bias."""
     n, n_perm = int(n), int(n_perm)
     if n_perm <= 0 or n < 2:
         return np.zeros((0, max(n, 0)), int)
@@ -194,23 +203,12 @@ def _spearman(a, b, block=None):
     return None if not np.isfinite(v) else float(v)
 
 
-def auc_within_blocks(score, labels, block):
-    """The area under the curve over the (worse, better) pairs that sit in the SAME held-out block,
-    signed and never folded: each block's own area weighted by its number of pairs. Why within a
-    block: see `_spearman` -- each block's probabilities carry its own training rows' base rate,
-    and pooled across blocks that base rate, not the band, decides the ranking."""
-    score, labels, block = np.asarray(score, float), np.asarray(labels, float), np.asarray(block)
-    m = np.isfinite(score) & np.isfinite(labels)
-    num = den = 0.0
-    for b in np.unique(block[m]):
-        k = m & (block == b)
-        npos = int((labels[k] == 1).sum())
-        nneg = int((labels[k] == 0).sum())
-        if npos == 0 or nneg == 0:
-            continue
-        num += CD._auc(score[k], labels[k]) * npos * nneg
-        den += npos * nneg
-    return None if den == 0 else float(num / den)
+#: The area under the curve over the (worse, better) pairs inside one held-out block, signed and
+#: never folded. Its one home is `confound_diagnostic.auc_within_blocks` since decision 310, which
+#: scores the pre-build check the same way; the code moved unchanged. Why within a block: see
+#: `_spearman` -- each block's probabilities carry its own training rows' base rate, and pooled
+#: across blocks that base rate, not the band, decides the ranking.
+auc_within_blocks = CD.auc_within_blocks
 
 
 def _r2(pred, target, base):

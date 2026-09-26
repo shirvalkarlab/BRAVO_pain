@@ -112,6 +112,40 @@ def test_circular_block_perm_matrix_valid():
             assert np.array_equal(np.sort(P, axis=1), np.tile(np.arange(n), (150, 1)))
 
 
+def test_the_rotation_null_keeps_the_identity_because_dropping_it_makes_p_too_small():
+    """Examined 2026-09-26 (decision 310) and NOT changed: the shared rotation null draws the
+    identity (a shift of 0, the observed order) about once in every n draws, and it must.
+
+    The p-value is (draws at least as extreme + 1) / (draws + 1). With the draws uniform over ALL n
+    rotations -- the identity among them -- the observed order is exchangeable with its draws, and
+    the p estimates the exact rotation p, whose smallest value is 1/n. Drop the identity and a band
+    that beats the other n - 1 rotations gets p = 1/(draws + 1): 0.001 at 1,000 draws where the
+    rotation test can only say 1/n. Measured under a true null (3,000 records each): at n = 40
+    ratings and 1,000 draws, p <= 0.01 happened 0.0000 of the time with the identity and 0.030
+    without it; p <= 0.05, 0.046 and 0.069. At n = 72, p <= 0.01: 0.0007 and 0.0133. The band
+    detector's own rotations (decision 297) leave the identity out; that is recorded for the PI,
+    not changed here. Not RED: this pins the behaviour against the change that was proposed."""
+    n, draws, sims = 40, 1000, 1500
+    rng = np.random.default_rng(310)
+    ident = np.arange(n)
+    small_with = small_without = 0
+    for _ in range(sims):
+        x, y = rng.normal(size=n), rng.normal(size=n)
+        P = su.circular_block_perm_matrix(n, 1, draws, rng)
+        keep = ~(P == ident).all(axis=1)
+        yc = y[P] - y[P].mean(axis=1, keepdims=True)
+        xc = x - x.mean()
+        r = np.abs(yc @ xc) / (np.sqrt((yc * yc).sum(axis=1)) * np.sqrt(xc @ xc))
+        r0 = abs(np.corrcoef(x, y)[0, 1])
+        ge = r >= r0 - 1e-12
+        small_with += (ge.sum() + 1) / (draws + 1) <= 0.01
+        small_without += (ge[keep].sum() + 1) / (keep.sum() + 1) <= 0.01
+    assert any((P == ident).all(axis=1)), "the identity is among the draws"
+    assert small_with / sims <= 0.01, small_with / sims
+    assert small_without / sims > 0.015, ("without the identity the null is too generous",
+                                          small_without / sims)
+
+
 def test_block_length_for():
     rng = np.random.default_rng(6)
     iid = rng.normal(size=400)
@@ -166,6 +200,7 @@ if __name__ == "__main__":
     test_balanced_metrics_chance_invariant_across_imbalance()
     test_fisher_z_ci()
     test_circular_block_perm_matrix_valid()
+    test_the_rotation_null_keeps_the_identity_because_dropping_it_makes_p_too_small()
     test_block_length_for()
     test_auc_block_perm_null()
     print("All stats_utils tests passed.")

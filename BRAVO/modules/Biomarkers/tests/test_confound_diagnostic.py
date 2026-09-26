@@ -97,9 +97,16 @@ def test_the_folds_are_the_embargoed_ones_and_the_gap_is_the_label_s_own_timesca
     got = CD.pre_build_diagnostic(X, y, cur, n_perm=20)
     assert got["embargo_rows"] == SU.block_length_for(y, len(y))
     assert got["n_folds"] == 5 and got["held_out_in_blocks_of_time"] is True
-    # and the same fit with the neighbours put back scores HIGHER, which is the reason for the gap
+    # CORRECTED 2026-09-26 (decision 310). This line asserted that the same fit with the
+    # neighbours put back scores HIGHER, "which is the reason for the gap". On this fixture the two
+    # differed by 0.0001 (0.95329 against 0.95316, pooled scoring) and by -0.0014 once scored within
+    # each block: a ridge over eight bands cannot memorise a neighbouring row, so the gap barely
+    # moves it. The reason for the gap is proved where a model CAN memorise its neighbours
+    # (`test_offline_model_guards.test_a_model_that_only_memorises_its_neighbours_loses_its_skill_
+    # when_they_are_gone`); here it is pinned only that putting the neighbours back changes little.
     loose = CD.pre_build_diagnostic(X, y, cur, n_perm=20, embargo=0)
-    assert loose["bands_plain"]["auc"] >= got["bands_plain"]["auc"] - 1e-9
+    assert loose["embargo_rows"] == 0
+    assert abs(loose["bands_plain"]["auc"] - got["bands_plain"]["auc"]) < 0.02
 
 
 def test_an_out_of_sample_score_below_chance_is_reported_as_it_is_and_never_folded():
@@ -155,6 +162,73 @@ def test_too_few_rows_is_a_reason_rather_than_a_number():
     assert got["verdict"] and "cannot" in got["verdict"].lower()
 
 
+# ---- decision 310: the out-of-sample score is taken within each held-out block of time -----------
+
+def _shared_step_between_blocks(seed=0, n=300, n_folds=5, n_bands=4):
+    """Pain and every band share ONE level that changes from one held-out block of time to the next
+    (a calendar effect, an era), and within any block the bands carry nothing about pain."""
+    rng = np.random.default_rng(seed)
+    level = np.zeros(n)
+    for rows, lv in zip(np.array_split(np.arange(n), n_folds),
+                        rng.permutation(np.linspace(-0.8, 0.8, n_folds))):
+        level[rows] = lv
+    pain = level + rng.normal(0, 1, n)            # every block holds both halves of the label
+    X = np.column_stack([level + rng.normal(0, 1, n) for _ in range(n_bands)])
+    y = (pain > np.median(pain)).astype(float)
+    return X, y
+
+
+def test_a_shift_shared_by_pain_and_the_bands_between_blocks_of_time_is_not_credited_to_the_bands():
+    """Pooled across held-out blocks, the ranking compares one block's rows with another's, so a
+    level that moves pain and the bands together between blocks reads as a detector (0.711 pooled on
+    this record; 0.599 to 0.721 over 30 seeds) though the bands carry nothing within any block. Scored within each block it reads near
+    chance (0.515 here; 0.441 to 0.583 over 30 seeds). RED on the pooled scorer."""
+    X, y = _shared_step_between_blocks()
+    folds = SU.purged_time_blocked_folds(len(y), y=y, n_folds=5)
+    got = CD.all_bands_auc(X, y, folds=folds)
+    assert got.get("scored_within_blocks") is True, got
+    assert got["n_blocks_scored"] == 5, got
+    assert 0.3 < got["auc"] < 0.7, f"a shift between blocks is not a band reading pain: {got['auc']:.3f}"
+    print(f"OK a shared shift between blocks reads {got['auc']:.3f} within blocks")
+
+
+def test_a_drifting_pain_score_with_a_band_that_carries_nothing_does_not_read_backwards_here():
+    """The band detector's reason for scoring within blocks (decision 297) is that each block's
+    prediction carries its training rows' average pain. This scorer fits a centred label, so it
+    carries none, and a drift alone did not read backwards even when pooled (0.49 on average over
+    20 seeds, measured 2026-09-26). Pinned so the reason stays the right one; passes pooled too."""
+    rng = np.random.default_rng(21)
+    n = 200
+    pain = np.linspace(8.0, 3.0, n) + rng.normal(0, 0.7, n)
+    X = rng.normal(100, 1, (n, 3))
+    y = (pain > np.median(pain)).astype(float)
+    got = CD.all_bands_auc(X, y, folds=SU.purged_time_blocked_folds(n, y=y, n_folds=5))
+    assert got["auc"] is None or abs(got["auc"] - 0.5) < 0.2, got
+
+
+def test_auc_within_blocks_ignores_every_pair_that_crosses_a_block():
+    # two blocks: within each, the score ranks the label perfectly the WRONG way; across blocks the
+    # score's level follows the label, so a pooled area would read well above 0.5
+    score = np.array([1.0, 0.0, 11.0, 10.0])
+    labels = np.array([0.0, 1.0, 0.0, 1.0])
+    block = np.array([0, 0, 1, 1])
+    labels2 = np.array([0.0, 1.0, 1.0, 0.0])
+    assert CD.auc_within_blocks(score, labels, block) == 0.0
+    assert CD.auc_within_blocks(np.array([0.0, 1.0, 10.0, 11.0]), labels2, block) == 0.5
+    # a block holding one half only contributes no pair; none at all is None, not 0.5
+    assert CD.auc_within_blocks(score, np.array([0.0, 0.0, 1.0, 1.0]), block) is None
+
+
+def test_the_verdict_judges_the_adjusted_reading_against_its_own_null():
+    """Decision 276 gave the adjusted reading its own null; the verdict sentence still set it
+    against the PLAIN reading's 95th. It now names the null it used and prints its 95th."""
+    X, y, cur = _record(kind="bands_carry_pain")
+    got = CD.pre_build_diagnostic(X, y, cur, n_perm=60)
+    p95 = got["null_adjusted"]["p95"]
+    assert p95 is not None
+    assert "its own null" in got["verdict"] and f"{p95:.3f}" in got["verdict"], got["verdict"]
+
+
 if __name__ == "__main__":
     test_a_current_that_drives_both_reads_high_plainly_and_collapses_once_it_is_taken_out()
     test_bands_that_carry_something_of_their_own_survive_the_adjustment()
@@ -164,4 +238,8 @@ if __name__ == "__main__":
     test_the_adjusted_reading_gets_its_own_null_that_refits_the_adjusted_pipeline()
     test_the_adjusted_null_is_none_when_the_adjusted_reading_itself_could_not_be_made()
     test_too_few_rows_is_a_reason_rather_than_a_number()
+    test_a_shift_shared_by_pain_and_the_bands_between_blocks_of_time_is_not_credited_to_the_bands()
+    test_a_drifting_pain_score_with_a_band_that_carries_nothing_does_not_read_backwards_here()
+    test_auc_within_blocks_ignores_every_pair_that_crosses_a_block()
+    test_the_verdict_judges_the_adjusted_reading_against_its_own_null()
     print("All confound-diagnostic tests passed.")

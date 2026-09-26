@@ -268,3 +268,15 @@ def test_both_versions_are_registered_on_the_biomarkers_page():
     for k in ("band_detector_research", "band_detector_device"):
         assert RG.ANALYSES[k]["page"] == "biomarkers"
         assert "clinic-sheet" in RG.ANALYSES[k]["what"]
+
+
+def test_the_within_block_area_has_one_home():
+    """Decision 310 moved the band detector's within-block area into `confound_diagnostic`, which
+    now scores the pre-build check the same way; the detector calls it rather than keep a copy."""
+    try:
+        from modules.Biomarkers.routines import confound_diagnostic as CD
+    except ImportError:                                        # host spelling
+        from Biomarkers.routines import confound_diagnostic as CD
+    assert BD.auc_within_blocks is CD.auc_within_blocks
+    import inspect
+    assert "def auc_within_blocks" not in inspect.getsource(BD)

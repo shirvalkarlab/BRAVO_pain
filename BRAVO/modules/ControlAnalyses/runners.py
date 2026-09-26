@@ -238,6 +238,10 @@ def _zero_ma_reading(rows):
 # 2. what the stimulation current explains
 # ------------------------------------------------------------------------------------------------
 
+def _f3(v):
+    return "n/a" if v is None or not np.isfinite(v) else f"{float(v):.3f}"
+
+
 def run_current_explains(uid, *, lengths=(30.0, 60.0), tol_min=60.0, n_perm=200, save=True):
     from modules.Biomarkers.routines import analytics, stim_current, confound_diagnostic as CD
     BS = _bs()
@@ -287,20 +291,27 @@ def run_current_explains(uid, *, lengths=(30.0, 60.0), tol_min=60.0, n_perm=200,
     for r in rows:
         if r.get("bands") is None:
             continue
-        outside = r["bands_without_current"] is not None and r["null_p95"] is not None and r["bands_without_current"] > r["null_p95"]
-        line = (f"{pair_name(r['pair'])}, {r['seconds']:g} s ({r['n']} ratings): current alone {r['current_alone']:.3f}, "
-               f"every band {r['bands']:.3f}, bands without the current {r['bands_without_current']:.3f} "
-               f"({'outside' if outside else 'inside'} the shuffled-data 95th, {r['null_p95']:.3f})")
-        if r.get("bands_without_current_p") is not None:
-            line += (f"; its own honest reference (a null that rotates the label and refits the SAME "
-                    f"current-removed pipeline) gives p {r['bands_without_current_p']:.3f}")
+        # Each reading against its OWN shuffled-data range (decision 310): every band against the
+        # plain rotations, the bands without the current against the rotations refitted with the
+        # current taken out (decision 276). This line used to set the second against the first's.
+        adj95 = r.get("bands_without_current_null_p95")
+        line = (f"{pair_name(r['pair'])}, {r['seconds']:g} s ({r['n']} ratings): current alone {_f3(r['current_alone'])}, "
+                f"every band {_f3(r['bands'])} (shuffled-data 95th {_f3(r['null_p95'])}, p {_f3(r.get('p'))})")
+        if r.get("bands_without_current") is not None:
+            outside = adj95 is not None and r["bands_without_current"] > adj95
+            line += (f", bands without the current {r['bands_without_current']:.3f} "
+                     f"({'outside' if outside else 'inside'} its own shuffled-data 95th, {_f3(adj95)}; "
+                     f"p {_f3(r.get('bands_without_current_p'))})")
         reading.append(line + ".")
+    reading.append("Every reading is scored within each held-out block of time, so a shift that moves pain and "
+                   "the bands together between blocks is not credited to the bands (decision 310).")
     reading.append("Replaces decision 240's figures, which matched ratings within 60 seconds instead of 60 minutes.")
     reading.append("Corrects decision 262's 'p 0.04' for the reading with the current taken out, which was "
                    "read off the plain reading's null; see settings for the honest reference used here.")
     settings = dict(score=metric, split=f"{strategy} {low:g}/{high:g}", match_window_min=tol_min,
                     lengths_s=list(lengths), shuffles=n_perm,
                     held_out="blocks of time with the neighbouring rows dropped (decision 240)",
+                    scored="within each held-out block, the blocks' areas weighted by their pairs (decision 310)",
                     bands_without_current_p=("a null that rotates the pain label and refits the SAME "
                                              "adjusted (current-taken-out) pipeline on each rotation -- "
                                              "not the plain reading's null decision 262 used"))

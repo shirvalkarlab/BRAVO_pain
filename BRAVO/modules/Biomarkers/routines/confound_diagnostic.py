@@ -21,6 +21,20 @@ HOW IT HOLDS DATA OUT. Blocks of TIME, with the rows either side of each block d
 number anybody chose. Ratings filed minutes apart are nearly the same measurement, and a model
 trained on the rows next to its test block has already seen the answer.
 
+THE SCORE IS TAKEN WITHIN EACH HELD-OUT BLOCK (2026-09-26, decision 310). Each held-out row is
+ranked only against the other rows of its own block of time, and the blocks' areas are averaged,
+weighted by their number of (worse, better) pairs (`auc_within_blocks`, the band detector's own
+scoring since decision 297, one home here). Pooled across blocks, the ranking also compares one
+block's rows with another's, and anything that moves pain and the bands together between blocks of
+time -- a calendar effect, an era of one current -- is then credited to the model: a constructed
+record whose four bands share only a level that changes between blocks with pain, and carry nothing
+within any block, read 0.599 to 0.721 pooled (median 0.669, 30 seeds) and 0.441 to 0.583 within
+blocks (median 0.496); a stronger shift, 0.959 to 0.978 pooled. The band
+detector's other reason for the rule does NOT apply to this scorer, measured: its ridge fits a
+centred pain label, so no block's prediction carries its training rows' average pain, and a pain
+score that simply drifts with a band that carries nothing read 0.49 pooled on average (0.36 to 0.62
+over 20 seeds), not backwards.
+
 THE SCORE IS NOT FOLDED. Elsewhere in this module an undirected single-band screen reports
 max(AUC, 1-AUC), because a band that separates downwards separates. That is wrong for a fitted
 model: an out-of-sample score of 0.30 means the model got the direction wrong on data it had not
@@ -69,6 +83,31 @@ def _auc(score, labels):
     return float((ranks[pos].sum() - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg))
 
 
+def auc_within_blocks(score, labels, block):
+    """The area under the curve over the (worse, better) pairs that sit in the SAME held-out block,
+    signed and never folded: each block's own area weighted by its number of pairs. None where no
+    block holds both halves of the label.
+
+    Why within a block: pooled across blocks, the ranking compares rows of one block of time with
+    rows of another, so whatever shifts pain and the model's score together between blocks -- a
+    calendar effect, a slow drift, an era of one current, or (for a model whose prediction carries
+    its training rows' base rate, like the band detector's) each block's own training mean -- decides
+    the ranking instead of what the model reads within a stretch of time (decisions 297, 310). The
+    one home of this scoring; `ControlAnalyses.band_detector` calls it."""
+    score, labels, block = np.asarray(score, float), np.asarray(labels, float), np.asarray(block)
+    m = np.isfinite(score) & np.isfinite(labels)
+    num = den = 0.0
+    for b in np.unique(block[m]):
+        k = m & (block == b)
+        npos = int((labels[k] == 1).sum())
+        nneg = int((labels[k] == 0).sum())
+        if npos == 0 or nneg == 0:
+            continue
+        num += _auc(score[k], labels[k]) * npos * nneg
+        den += npos * nneg
+    return None if den == 0 else float(num / den)
+
+
 def _standardise(train, apply_to):
     mu, sd = train.mean(axis=0), train.std(axis=0)
     sd = np.where(sd > 0, sd, 1.0)
@@ -95,8 +134,11 @@ def all_bands_auc(X, y, *, folds, covar=None, shape=DEFAULT_SHAPE, label="every 
     ``shape`` is how the covariate is allowed to act (`stats_utils.COVARIATE_SHAPES`): a straight
     line cannot remove an effect that turns over, and a stimulation current can.
 
-    Returns ``{"auc", "n_scored", "n_features", "folded": False, "label", "shape",
-    "covariate_effective_df", "reason"}``.
+    The score is the area under the curve taken WITHIN each held-out block (`auc_within_blocks`;
+    decision 310): the rows of one block of time are ranked only against each other.
+
+    Returns ``{"auc", "n_scored", "n_features", "folded": False, "scored_within_blocks": True,
+    "n_blocks_scored", "label", "shape", "covariate_effective_df", "reason"}``.
     """
     X = np.asarray(X, dtype=float)
     y = np.asarray(y, dtype=float)
@@ -104,7 +146,7 @@ def all_bands_auc(X, y, *, folds, covar=None, shape=DEFAULT_SHAPE, label="every 
         X = X[:, None]
     c = None if covar is None else np.asarray(covar, dtype=float)
     out = {"auc": None, "n_scored": 0, "n_features": int(X.shape[1]), "folded": False,
-           "label": str(label), "reason": None, "shape": None, "covariate_effective_df": None,
+           "scored_within_blocks": True, "n_blocks_scored": 0, "label": str(label), "reason": None, "shape": None, "covariate_effective_df": None,
            "shape_note": None}
     usable = np.isfinite(X).all(axis=1) & np.isfinite(y)
     if c is not None:
@@ -126,8 +168,9 @@ def all_bands_auc(X, y, *, folds, covar=None, shape=DEFAULT_SHAPE, label="every 
         position[np.where(usable)[0]] = np.arange(int(usable.sum()))
         Xu = X[usable]
     score = np.full(len(y), np.nan)
+    held_out_block = np.full(len(y), -1)
     need = max(8, X.shape[1] + 2)
-    for tr, te in folds:
+    for k, (tr, te) in enumerate(folds):
         tr = tr[usable[tr]]
         te = te[usable[te]]
         if tr.size < need or te.size == 0:
@@ -139,6 +182,7 @@ def all_bands_auc(X, y, *, folds, covar=None, shape=DEFAULT_SHAPE, label="every 
             score[te] = _ridge_fit_predict(Xtr, y[tr], Xte)
         except np.linalg.LinAlgError:
             continue
+        held_out_block[te] = k
     scored = np.isfinite(score) & usable
     out["n_scored"] = int(scored.sum())
     if out["n_scored"] < MIN_ROWS // 2:
@@ -154,9 +198,12 @@ def all_bands_auc(X, y, *, folds, covar=None, shape=DEFAULT_SHAPE, label="every 
         else:
             out["reason"] = f"only {out['n_scored']} rows could be scored out of sample"
         return out
-    out["auc"] = _auc(score[scored], y[scored])
+    out["auc"] = auc_within_blocks(score[scored], y[scored], held_out_block[scored])
+    blocks_scored = [b for b in np.unique(held_out_block[scored])
+                     if len(set(y[scored & (held_out_block == b)].tolist())) == 2]
+    out["n_blocks_scored"] = int(len(blocks_scored))
     if out["auc"] is None:
-        out["reason"] = "the held-out rows carry only one class of the label"
+        out["reason"] = "no held-out block of time carries both halves of the pain label"
     return out
 
 
@@ -278,11 +325,18 @@ def _verdict(d):
         return "; ".join(bits)
     bits.append(f"with the current taken out of every band {d.get('covariate_shape_in_words')} it "
                 f"scores {adj['auc']:.3f}")
-    inside_null = null["p95"] is not None and adj["auc"] <= null["p95"]
-    if inside_null:
-        bits.append("which the null covers, so what a decoder would find here does not survive the "
-                    "stimulation current")
+    # The adjusted reading is judged against ITS OWN null (the rotations refitted with the current
+    # taken out, decision 276), never the plain reading's; the plain null only where no adjusted
+    # null could be built (2026-09-26: this line still compared it with the plain null).
+    ref = d.get("null_adjusted") or {}
+    ref_p95 = ref.get("p95") if ref.get("p95") is not None else null["p95"]
+    which = "its own null" if ref.get("p95") is not None else "the plain reading's null"
+    if ref_p95 is None:
+        return "; ".join(bits)
+    if adj["auc"] <= ref_p95:
+        bits.append(f"which {which} covers (95th {ref_p95:.3f}), so what a decoder would find here "
+                    f"does not survive the stimulation current")
     else:
-        bits.append("which the null does not cover, so something in the bands survives the "
-                    "stimulation current")
+        bits.append(f"which {which} does not cover (95th {ref_p95:.3f}), so something in the bands "
+                    f"survives the stimulation current")
     return "; ".join(bits)
