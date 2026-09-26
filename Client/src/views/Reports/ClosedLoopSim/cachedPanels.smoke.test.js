@@ -66,12 +66,12 @@ beforeEach(() => {
 
 const PANELS = [
   ["DeploymentRocPanel", <DeploymentRocPanel participantUid={UID} bandCandidate={BC}
-    requestParams={REQ} onCutpoint={() => {}} lsbThreshold={null} />, /Deployment ROC/],
+    requestParams={REQ} onCutpoint={() => {}} lsbThreshold={null} />, /Where does the switching point sit\?/],
   ["EraRefitPanel", <EraRefitPanel participantUid={UID} bandCandidate={BC}
-    requestParams={REQ} />, /Per-era refit/],
+    requestParams={REQ} />, /Does the switching point hold at every stimulation state\?/],
   ["LsbPowerPanel", <LsbPowerPanel participantUid={UID} bandCandidate={BC} requestParams={REQ}
     cutpoint={{ threshold: 1.5, matchDir: "prior" }} onLsbThreshold={() => {}} />,
-    /The cut-point in device units/],
+    /Where does the switching point sit in the device/],
   ["CalibrationInEffectPanel", <CalibrationInEffectPanel participantUid={UID} />,
     /Calibration in effect/],
 ];
@@ -102,7 +102,8 @@ test("a cached entry whose settings have changed renders the panel and its stale
 
   render(wrap(<EraRefitPanel participantUid={UID} bandCandidate={BC} requestParams={REQ} />));
 
-  expect(await screen.findByText(/Per-era refit/)).toBeInTheDocument();
+  // Titles are questions since the redesign of 2026-09-26 ("Per-era refit" became this).
+  expect(await screen.findByText(/Does the switching point hold at every stimulation state\?/)).toBeInTheDocument();
   expect(screen.getByText(/last completed run for this panel/)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /Recompute this panel/ })).toBeInTheDocument();
 });

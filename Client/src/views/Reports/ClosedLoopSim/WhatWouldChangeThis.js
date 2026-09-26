@@ -26,6 +26,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import PAL from "./palette";
+import { TYPE, CARD } from "assets/theme/base/tokens";
 import { parseSignPattern, unevaluableFor } from "./deployFormat";
 import { coherenceReading } from "./stateTracks";
 
@@ -112,7 +113,7 @@ function buildItems(data) {
     items.push({
       key: "band-stability",
       rank: 4.5,
-      ink: differs ? PAL.failText : PAL.warnText,
+      ink: PAL.warnText,   // evidence, not a device refusal: never red
       actor: differs
         ? "band selection — not more measurement"
         : "measurement — more stimulation states",
@@ -151,16 +152,16 @@ function buildItems(data) {
       ink: PAL.warnText,
       actor: r.edgesAgreeInternally
         ? "band selection \u2014 not more measurement"
-        : "measurement \u2014 the edges are not consistent",
+        : "measurement \u2014 the links are not consistent",
       title: r.edgesAgreeInternally
-        ? "The three edges agree with each other and are anti-aligned with the control law"
-        : "The three edges do not agree with each other",
+        ? "The three links agree with each other and run opposite to what the automatic adjustment assumes"
+        : "The three links do not agree with each other",
       page: null,
       clears: r.edgesAgreeInternally
         ? "Re-measuring this band would not change this, because the measurements are not in "
           + "conflict with each other. What would change it is a different band, a different "
-          + "hemisphere, or a control law that runs the other way."
-        : "Resolving which of the three edges is unreliable would change this. That is a "
+          + "hemisphere, or an automatic adjustment that runs the other way."
+        : "Resolving which of the three links is unreliable would change this. That is a "
           + "measurement question and the titration session is where it is answered.",
       // The patterns arrive as objects since the payload stopped sending Python reprs, and a
       // template string printed "[object Object]" (found on the live page, decision 302).
@@ -171,12 +172,12 @@ function buildItems(data) {
     items.push({
       key: "edges-unresolved",
       rank: 5,
-      ink: PAL.neutral,
+      ink: PAL.ink3,
       actor: "measurement \u2014 the titration session",
-      title: "At least one edge of the amplitude, band power and pain triangle has no point "
+      title: "At least one link between current, band power and pain has no point "
            + "estimate",
       page: null,
-      clears: "An edge with no estimate is not a negative finding; it is an absent one. A "
+      clears: "A link with no estimate is not a negative finding; it is an absent one. A "
             + "titration session sized to estimate it is what changes this, and no reprogramming "
             + "will.",
       observed: null,
@@ -195,11 +196,11 @@ function buildItems(data) {
     items.push({
       key: "edges-provisional",
       rank: 5,
-      ink: PAL.warn,
+      ink: PAL.warnText,
       actor: "measurement \u2014 the titration session",
       title: names
         ? `The interval spans zero on ${names}: a point sign, not yet an established one`
-        : "At least one edge's interval spans zero: a point sign, not yet an established one",
+        : "At least one link's range crosses zero: a point sign, not yet an established one",
       page: null,
       clears: "Nothing here changes the verdict, which rests on the point signs (PI rule, "
             + "2026-09-13). A titration session at one rate, up and down in 0.5 mA steps, is what "
@@ -216,7 +217,7 @@ function buildItems(data) {
     items.push({
       key: "replay-cadence",
       rank: 6,
-      ink: PAL.neutral,
+      ink: PAL.ink3,
       actor: "recording \u2014 a streaming session",
       title: "The time-at-amplitude-limit question cannot be answered from chronic snapshots",
       page: null,
@@ -242,7 +243,7 @@ function buildItems(data) {
     items.push({
       key: `adv-${a.rule_id}`,
       rank: 7,
-      ink: PAL.neutral,
+      ink: PAL.ink3,
       actor: "noted \u2014 does not block",
       title: `${a.rule_id} falls short of a recommendation: ${a.title || "untitled rule"}`,
       page: a.page,
@@ -256,53 +257,53 @@ function buildItems(data) {
   return items.sort((a, b) => a.rank - b.rank);
 }
 
+/** "band selection — not more measurement" -> "Band selection — not more measurement". */
+const sentenceCase = (t) => (t ? String(t).charAt(0).toUpperCase() + String(t).slice(1) : t);
+
 function Item({ item, n }) {
   const [open, setOpen] = useState(false);
   return (
-    <MDBox display="flex" flexDirection="row" alignItems="flex-start" gap={1} py={0.6}
-      sx={{ borderTop: "1px solid rgba(0,0,0,0.08)" }}>
-      <MDBox flex="0 0 22px">
-        <MDTypography variant="caption" sx={{ fontSize: 13, fontFamily: PAL.mono, fontWeight: 700,
-          color: item.ink }}>
+    <MDBox display="flex" flexDirection="row" alignItems="flex-start" gap={1} py={1}
+      sx={{ borderTop: `1px solid ${PAL.rule}` }}>
+      <MDBox flex="0 0 24px">
+        <MDTypography variant="caption" sx={{ ...TYPE.body, fontWeight: 600, color: item.ink }}>
           {n}
         </MDTypography>
       </MDBox>
       <MDBox flex="1 1 auto">
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 12,
-          fontWeight: 600, color: "#1A1A1A" }}>
+        <MDTypography variant="caption" sx={{ ...TYPE.body, display: "block", fontWeight: 600, color: PAL.ink }}>
           {item.title}
-          {item.page ? <i style={{ fontWeight: 400, color: "#5E5E5E" }}>{`  (${item.page})`}</i>
+          {item.page ? <span style={{ fontWeight: 400, color: PAL.ink3 }}>{`  (${item.page})`}</span>
             : null}
         </MDTypography>
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#3A3A3A" }}>
+        <MDTypography variant="caption" sx={{ ...TYPE.body, display: "block", color: PAL.ink2 }}>
           {item.clears}
         </MDTypography>
         {item.observed ? (
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
-            fontFamily: PAL.mono, color: "#5A5A5A", mt: 0.2 }}>
+          <MDTypography variant="caption" sx={{ ...TYPE.body, display: "block", color: PAL.ink3, mt: 0.25 }}>
             {`observed: ${item.observed}`}
           </MDTypography>
         ) : null}
         {item.why ? (
           <>
-            <MDTypography variant="caption" onClick={() => setOpen((o) => !o)}
-              sx={{ fontSize: 11.5, color: PAL.accent, cursor: "pointer", display: "block",
-                "&:hover": { textDecoration: "underline" } }}>
+            <MDTypography variant="caption" component="button" type="button" onClick={() => setOpen((o) => !o)}
+              aria-expanded={open}
+              sx={{ ...TYPE.body, color: PAL.accent, cursor: "pointer", display: "block", background: "none",
+                border: 0, p: 0, fontFamily: "inherit", "&:hover": { textDecoration: "underline" } }}>
               {open ? "Hide the module's own wording" : "Read the module's own wording"}
             </MDTypography>
             {open ? (
-              <MDTypography variant="caption" sx={{ display: "block", fontSize: 11, mt: 0.3, pl: 1,
-                borderLeft: "2px solid rgba(0,0,0,0.12)", color: "#3A3A3A" }}>
+              <MDTypography variant="caption" sx={{ ...TYPE.body, display: "block", mt: 0.5, pl: 1,
+                borderLeft: `2px solid ${PAL.rule}`, color: PAL.ink2 }}>
                 {item.why}
               </MDTypography>
             ) : null}
           </>
         ) : null}
       </MDBox>
-      <MDBox flex="0 0 auto" pl={1} sx={{ maxWidth: 210, textAlign: "right" }}>
-        <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", letterSpacing: 0.3,
-          color: item.ink }}>
-          {item.actor.toUpperCase()}
+      <MDBox flex="0 0 auto" pl={1} sx={{ maxWidth: 220, textAlign: "right" }}>
+        <MDTypography variant="caption" sx={{ ...TYPE.caption, fontWeight: 600, color: PAL.ink2 }}>
+          {sentenceCase(item.actor)}
         </MDTypography>
       </MDBox>
     </MDBox>
@@ -321,8 +322,7 @@ export default function WhatWouldChangeThis({ report, bare = false }) {
     if (!rows.length) return null;
     return (
       <MDBox className="cl-what-changes">
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, fontWeight: 700,
-          color: "#2A2A2A" }}>
+        <MDTypography component="h3" sx={{ ...TYPE.body, display: "block", fontWeight: 600, color: PAL.ink }}>
           What would change this answer, and who can do it
         </MDTypography>
         {rows.map((it, i) => <Item key={it.key} item={it} n={i + 1} />)}
@@ -332,17 +332,16 @@ export default function WhatWouldChangeThis({ report, bare = false }) {
 
   if (loading) {
     return (
-      <Card><MDBox p={2}>
-        <MDTypography variant="button">Working out what would change the answer…</MDTypography>
+      <Card sx={CARD}><MDBox p={3}>
+        <MDTypography sx={{ ...TYPE.body, color: PAL.ink2 }}>Working out what would change the answer…</MDTypography>
       </MDBox></Card>
     );
   }
   if (!data) {
     return (
-      <Card><MDBox p={2}>
-        <MDTypography variant="h6" sx={{ fontSize: 15 }}>What would change this answer</MDTypography>
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
-          color: PAL.neutral }}>
+      <Card sx={CARD}><MDBox p={3}>
+        <MDTypography component="h2" sx={{ ...TYPE.title, color: PAL.ink }}>What would change this answer?</MDTypography>
+        <MDTypography variant="caption" sx={{ ...TYPE.body, display: "block", color: PAL.ink2 }}>
           {`Nothing has been evaluated for this configuration yet${err ? ` (${err})` : ""}, so `}
           there is no answer to change.
         </MDTypography>
@@ -355,10 +354,10 @@ export default function WhatWouldChangeThis({ report, bare = false }) {
   const notAtDevice = items.filter((i) => /analysis|developer/.test(i.actor)).length;
 
   return (
-    <Card sx={{ width: "100%" }}>
-      <MDBox p={2}>
-        <MDTypography variant="h6" sx={{ fontSize: 15 }}>What would change this answer</MDTypography>
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#4A4A4A" }}>
+    <Card sx={{ ...CARD, width: "100%" }}>
+      <MDBox p={3}>
+        <MDTypography component="h2" sx={{ ...TYPE.title, color: PAL.ink }}>What would change this answer?</MDTypography>
+        <MDTypography variant="caption" sx={{ ...TYPE.lead, display: "block", color: PAL.ink, mt: 1 }}>
           {items.length === 0
             ? "Nothing is unresolved: every rule that could be evaluated is satisfied and the "
               + "evidence has answered its question."

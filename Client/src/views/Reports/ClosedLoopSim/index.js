@@ -15,18 +15,19 @@
  * headline, it is computed from both endpoints, and no arrangement of the viewport can produce the
  * old contradiction because there is no second verdict to disagree with.
  *
- * THE PAGE, in reading order since decision 302 (the PI, 2026-09-26: "one simple, streamlined
- * card"; "the text is overwhelming"):
- *   0. Choose a band (the grid).
- *   1. THE DECISION CARD: one status line; red bullets when the device refuses and yellow ones for
- *      evidence that was not evaluated, five words or less each; the values to enter, only when the
- *      device allows them; "Sign and print"; one Details fold holding what would change the answer,
- *      how each value was derived, the sign-off record and the band as committed.
- *   2. The device rule ledger.   3. The evidence triangle.   4. Band stability.
- *   5. The analyst panels, folded.   6. Current and band power, three ways.   7. The simulations.
- * The sticky verdict header, "What would change this answer", "Full parameter recommendation", the
- * band identity card and the "Deploy-to-Percept review" card are gone as cards: each is inside the
- * decision card now, and the page states one verdict once.
+ * THE PAGE, in reading order since the minimalist redesign (SPEC 2026-09-26 section 5.2, which
+ * builds on decision 302's one decision card):
+ *   Head. The page's question as its title, the pain score, where the chosen band is held, the safe
+ *      current ceiling read from the server, then one row of controls (the pain score, the
+ *      clinic-sheet switch, and the ⋯ menu holding "Load a saved band file", "Clear" and the stored
+ *      results), then the contents row of jump links.
+ *   1. THE DECISION CARD: the verdict at 22 px; red ✕ bullets when the device refuses and ▲ ones for
+ *      evidence that was not checked, worded as before; the values to enter, only when the device
+ *      allows them; "Sign and print"; one Details fold.
+ *   2. "Which band?" (the grid).   3. "Does the device allow it?" (the rule table).
+ *   4. "Does the evidence hang together?"   5. "Does the band mean the same at every stimulation
+ *      state?"   6. Background, folded: current and band power three ways, the simulated closed
+ *      loop, and the switching-point panels.
  *
  * WHAT IS NO LONGER RENDERED HERE, and where it went. `DeploymentVerdictStrip` was superseded by
  * `DeploymentDecisionHeader` (2026-09-04), and that header by `DecisionCard` (decision 302), which
@@ -67,7 +68,8 @@ import {
 import DeploymentRocPanel from "./DeploymentRocPanel";
 import LsbPowerPanel from "./LsbPowerPanel";
 import EraRefitPanel from "./EraRefitPanel";
-import DecisionCard from "./DecisionCard";
+import DecisionCard, { ContentsRow } from "./DecisionCard";
+import DeveloperMenu from "./DeveloperMenu";
 import DeviceRuleLedger from "./DeviceRuleLedger";
 import EvidenceTrianglePanel from "./EvidenceTrianglePanel";
 import ClosedLoopSimulationPanel from "./ClosedLoopSimulationPanel";
@@ -80,8 +82,9 @@ import useBandSweepGrid from "./useBandSweepGrid";
 import useThreeSourcePooled from "./useThreeSourcePooled";
 import useClosedLoopSimulation from "./useClosedLoopSimulation";
 import PAL from "./palette";
+import { TYPE, CARD, LAYOUT } from "assets/theme/base/tokens";
+import { contextLine } from "views/Reports/paper/PageHead";
 import "./deployPrint.css";
-import LegibleText from "views/Reports/legibleText";
 import { bandPainScore, summaryRequestParams, withheldIfOtherBand } from "./candidateRequestParams";
 import PainScoreSelect from "./PainScoreSelect";
 import { PAIN_SCORE_OPTIONS } from "views/Reports/painScores";
@@ -145,11 +148,33 @@ function ChosenBandRecordLine({ status, hasBand }) {
   const text = chosenBandRecordText(status, hasBand);
   if (!text) return null;
   return (
-    <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5,
-      color: status.where === "browser" ? PAL.warnText : "#5E5E5E" }}>
+    <MDTypography variant="caption" display="block" sx={{ fontSize: PAL.fs.caption,
+      color: status.where === "browser" ? PAL.warnText : PAL.ink3 }}>
       {text}
     </MDTypography>
   );
+}
+
+/** The page's question, its title (SPEC 2026-09-26 section 5.2). */
+export const PAGE_QUESTION = "Can this setting be programmed, and what do I enter?";
+
+/**
+ * The safe current ceiling line, READ FROM THE SERVER (decision 306 sends the ceiling for the
+ * stimulated side with the report's threshold block) and never typed here. The report carries the
+ * one side it plans for, so the line names that side only; when the report carries no ceiling the
+ * line says so instead of printing a number.
+ */
+export function ceilingLineText(threshold, side) {
+  const v = threshold && threshold.safety_ceiling_mA;
+  if (v == null || !Number.isFinite(Number(v))) {
+    return "Safe current ceiling: not sent with this report.";
+  }
+  const n = Number(v);
+  const who = (threshold.safety_ceiling_provenance && String(threshold.safety_ceiling_provenance).trim())
+    || "set by the PI";
+  const sideWords = side ? ` for the ${String(side).toLowerCase()} side` : "";
+  return `Safe current ceiling${sideWords}: ${Number.isInteger(n) ? n.toFixed(1) : n} mA (${who}). `
+    + "Nothing above it is offered on this page.";
 }
 
 function ClosedLoopSim() {
@@ -370,193 +395,176 @@ function ClosedLoopSim() {
     e.target.value = "";   // allow re-upload of the same file
   };
 
+  const painLabel = (report && report.data && report.data.pain_score && report.data.pain_score.label)
+    || bandDefaultPain.label || null;
+  const threshold = report && report.data && report.data.threshold;
+  const sideOf = report && report.data && report.data.manifest && report.data.manifest.hemisphere;
+
   return (
     <DatabaseLayout>
-      <LegibleText>
-      <MDBox pt={3}>
-        <Grid container spacing={2}>
-          <Grid item xs={12}>
-            <Card sx={{ width: "100%" }}>
-              <MDBox p={2} display="flex" flexDirection="row" justifyContent="space-between"
-                alignItems="center" flexWrap="wrap" gap={1}>
-                <MDBox>
-                  <MDTypography variant="h6" fontSize={22}>Closed-Loop Deployment</MDTypography>
-                  <MDTypography variant="caption" color="text" sx={{ fontSize: 11.5 }}>
-                    {"May this configuration be programmed onto the Percept, and if so what should "
-                      + "be entered?"}
-                  </MDTypography>
-                  <ChosenBandRecordLine status={bandRecord} hasBand={!!bc} />
-                </MDBox>
-                <MDBox display="flex" gap={1} alignItems="center" flexWrap="wrap">
-                  {bc ? (
-                    <PainScoreSelect value={painScore} bandDefault={bandDefaultPain}
-                      options={(bandSweepGrid.grid && bandSweepGrid.grid.available_metrics)
-                        || PAIN_SCORE_OPTIONS}
-                      onChange={setPainScoreChoice} />
-                  ) : null}
-                  <ClinicSheetsSummaryButton on={includeSheets} onToggle={onToggleSheets} />
-                  <input ref={fileRef} type="file" accept="application/json,.json"
-                    style={{ display: "none" }} onChange={onUpload} />
-                  <MDButton size="small" variant="outlined" color="info"
-                    onClick={() => fileRef.current && fileRef.current.click()}>
-                    Load BandCandidate JSON
-                  </MDButton>
-                  {bc ? (
-                    <MDButton size="small" variant="text" color="secondary"
-                      onClick={() => {
-                        recordClearedBand(participant_uid).then(({ status }) => setBandRecord(status));
-                        setEnvelope(null);
-                      }}>
-                      Clear
-                    </MDButton>
-                  ) : null}
-                </MDBox>
-              </MDBox>
-            </Card>
-          </Grid>
+      <MDBox pt={3} pb={8} sx={{ maxWidth: LAYOUT.contentMax, mx: "auto", px: { xs: 2, md: 0 } }}>
+        {/* THE HEAD (SPEC 2026-09-26 section 4 rule 1): the title as a question, one grey line,
+            the ceiling line read from the server, then the controls in one row. The verdict is
+            the decision card's status line, directly below. */}
+        <MDBox component="header" mb={3}>
+          <MDTypography component="h1" sx={{ ...TYPE.title, m: 0, color: PAL.ink }}>
+            {PAGE_QUESTION}
+          </MDTypography>
+          {painLabel ? (
+            <MDTypography sx={{ ...TYPE.caption, color: PAL.ink3, mt: 0.5 }}>
+              {contextLine(null, painLabel)}
+            </MDTypography>
+          ) : null}
+          <ChosenBandRecordLine status={bandRecord} hasBand={!!bc} />
+          {bc ? (
+            <MDTypography data-paper="ceiling-line" sx={{ ...TYPE.body, color: PAL.ink, mt: 1 }}>
+              {ceilingLineText(threshold, sideOf)}
+            </MDTypography>
+          ) : null}
 
-          {/* TRACK D — browse the calibrated grid Biomarkers already built, and pick any point
-              from it. Rendered UNCONDITIONALLY, before the "no band committed" gate below, on
-              purpose: the whole point of this panel is to be the way a first candidate gets
-              chosen, so it must be reachable exactly when no candidate exists yet, not only after
-              one already does. Picking a row here commits a BandCandidate through the same
-              mechanism the file-upload path already uses (bandCandidateStore), so every panel
-              below (once bc exists) recomputes for the newly chosen point exactly as it would for
-              an uploaded candidate — no new selection machinery. */}
-          <Grid item xs={12} id="cl-grid">
-            <BandSweepGridPanel
-              grid={bandSweepGrid.grid}
-              participantUid={participant_uid}
-              committed={bc ? { contact: bc.contact, centerHz: bc.center_freq_hz } : null}
-              onCandidateChosen={() => setEnvelope(loadBandCandidate(participant_uid))}
-              onChoiceRecorded={({ status }) => setBandRecord(status)}
-            />
-          </Grid>
-
-          {!bc ? (
-            <Grid item xs={12}>
-              <Card sx={{ width: "100%" }}>
-                <MDBox p={3} textAlign="center">
-                  <MDTypography variant="h6" sx={{ fontSize: 15, color: "#5E5E5E" }}>
-                    No band has been committed for this participant yet
-                  </MDTypography>
-                  <MDTypography variant="caption" color="text" display="block" mt={1}
-                    sx={{ fontSize: 12 }}>
-                    {"Deployability is evaluated for one channel at one centre frequency rather "
-                      + "than for a participant, so a candidate configuration has to be chosen "
-                      + "before any of this page means anything. Open the Biomarker Exploration "
-                      + "view, choose a validated band and commit it, or load a previously "
-                      + "downloaded BandCandidate file."}
-                  </MDTypography>
-                  <MDBox mt={2}>
-                    <MDButton size="small" color="info" variant="gradient"
-                      onClick={() => navigate(`/reports/biomarkers/${participant_uid}`)}>
-                      Go to Biomarker Exploration
-                    </MDButton>
-                  </MDBox>
-                </MDBox>
-              </Card>
-            </Grid>
-          ) : (
-            <>
-              {/* THE DECISION CARD (decision 302; the PI, 2026-09-26): one status line, red bullets
-                  when the device refuses, yellow ones for evidence that was not evaluated, the
-                  values to enter, "Sign and print", and one Details fold. It replaces the sticky
-                  verdict header, "What would change this answer" (now inside its Details), the
-                  "Full parameter recommendation" card and the "Deploy-to-Percept review" sign-off
-                  card. The Recompute control sits immediately above it, because whether the
-                  verdict is current has to be readable before the verdict itself is read. */}
-              <Grid item xs={12}>
-                <RecomputeBar
-                  title="closed-loop deployment"
-                  stale={!!(deploymentReport.stale || summary.stale)}
-                  staleReasons={staleReasons}
-                  computedAt={pageComputedAt}
-                  loading={!!(deploymentReport.loading || summary.loading)}
-                  notKept={deploymentReport.notKept || summary.notKept}
-                  onRecompute={onRecomputePage}
-                />
-                {/* The stored-results line is for a developer: closed by default, as on the other
-                    two pages (2026-09-26). The line itself is unchanged and shared. */}
-                {deploymentReport.data && deploymentReport.data.cache_status ? (
-                  <MDBox px={1} data-testid="stored-results-fold">
-                    <Fold show="Stored results" hide="Hide stored results" dense mt={0.2}>
-                      <CacheStatusLine status={deploymentReport.data.cache_status} />
-                    </Fold>
+          <MDBox display="flex" gap={3} alignItems="flex-start" flexWrap="wrap" mt={2}>
+            {bc ? (
+              <PainScoreSelect value={painScore} bandDefault={bandDefaultPain}
+                options={(bandSweepGrid.grid && bandSweepGrid.grid.available_metrics)
+                  || PAIN_SCORE_OPTIONS}
+                onChange={setPainScoreChoice} />
+            ) : null}
+            <ClinicSheetsSummaryButton on={includeSheets} onToggle={onToggleSheets} />
+            <MDBox ml="auto">
+              <DeveloperMenu
+                onLoad={() => fileRef.current && fileRef.current.click()}
+                onClear={bc ? () => {
+                  recordClearedBand(participant_uid).then(({ status }) => setBandRecord(status));
+                  setEnvelope(null);
+                } : null}>
+                {/* The stored-results line is for a developer, so it lives in the closed ⋯ menu
+                    (SPEC 2026-09-26 section 4 rule 2). The menu hides it without unmounting it, and
+                    it is not wrapped in a fold of its own: no fold inside a fold (rule 4). */}
+                {bc && deploymentReport.data && deploymentReport.data.cache_status ? (
+                  <MDBox data-testid="stored-results-menu-item">
+                    <MDTypography sx={{ ...TYPE.caption, fontWeight: 600, color: PAL.ink3 }}>
+                      Stored results
+                    </MDTypography>
+                    <CacheStatusLine status={deploymentReport.data.cache_status} />
                   </MDBox>
                 ) : null}
-              </Grid>
-              <Grid item xs={12} id="cl-decision">
-                <DecisionCard participantUid={participant_uid} bandCandidate={bc} summary={summaryForBand}
-                  deploymentReport={report} chosenBand={envelope} bandRecord={bandRecord}
-                  cutpoint={cutpoint} mode={thresholdMode} onMode={setThresholdMode}
-                  onRecompute={onRecomputePage} />
-              </Grid>
+              </DeveloperMenu>
+              <input ref={fileRef} type="file" accept="application/json,.json"
+                style={{ display: "none" }} onChange={onUpload} />
+            </MDBox>
+          </MDBox>
+          {bc ? <ContentsRow /> : null}
+        </MDBox>
 
-              {/* BAND 2 — the device rule ledger. Placed before the evidence because on a device
-                  that actuates, whether a configuration is PERMITTED is prior to how well it
-                  scores. */}
-              <Grid item xs={12} id="cl-rules">
-                <DeviceRuleLedger report={report} />
-              </Grid>
+        {bc ? (
+          <>
+            {/* The Recompute control sits immediately above the decision card, because whether the
+                verdict is current has to be readable before the verdict itself is read. */}
+            <MDBox mb={2}>
+              <RecomputeBar
+                title="closed-loop deployment"
+                stale={!!(deploymentReport.stale || summary.stale)}
+                staleReasons={staleReasons}
+                computedAt={pageComputedAt}
+                loading={!!(deploymentReport.loading || summary.loading)}
+                notKept={deploymentReport.notKept || summary.notKept}
+                onRecompute={onRecomputePage}
+              />
+            </MDBox>
+            {/* THE DECISION CARD (decision 302; SPEC 2026-09-26 section 5.2): the verdict, red and
+                caution bullets worded as the rule table words them, the values to enter only when
+                the device allows them, "Sign and print", and one Details fold. */}
+            <MDBox id="cl-decision" mb={4}>
+              <DecisionCard participantUid={participant_uid} bandCandidate={bc} summary={summaryForBand}
+                deploymentReport={report} chosenBand={envelope} bandRecord={bandRecord}
+                cutpoint={cutpoint} mode={thresholdMode} onMode={setThresholdMode}
+                onRecompute={onRecomputePage} />
+            </MDBox>
+          </>
+        ) : null}
 
-              {/* BAND 3 — the evidence triangle and the three-valued coherence answer. */}
-              <Grid item xs={12} id="cl-evidence">
-                <EvidenceTrianglePanel report={report} />
-              </Grid>
+        {/* SECTION 1, "Which band?" Rendered whether or not a band is chosen: the grid is how a
+            first band gets chosen, so it must be reachable exactly when none exists yet. Picking
+            a row commits a band through the same store the file path uses (bandCandidateStore). */}
+        <MDBox id="cl-grid" mb={4}>
+          <BandSweepGridPanel
+            grid={bandSweepGrid.grid}
+            participantUid={participant_uid}
+            committed={bc ? { contact: bc.contact, centerHz: bc.center_freq_hz } : null}
+            onCandidateChosen={() => setEnvelope(loadBandCandidate(participant_uid))}
+            onChoiceRecorded={({ status }) => setBandRecord(status)}
+          />
+        </MDBox>
 
-              {/* BAND 3b — does this band mean the same thing about pain at every stimulation
-                  setting? Added 2026-09-06 on the PI's instruction, because the biomarkers page
-                  computed this and the deployment page never saw it. It sits directly under the
-                  evidence triangle because it qualifies the same relationship the triangle draws:
-                  a band whose meaning shifts with the current is a different kind of problem from
-                  one whose relationship is simply weak, and the two would otherwise be read as
-                  one. The panel handles a null value and renders an honest empty state. */}
-              <Grid item xs={12} id="cl-stability">
-                <BandStabilityPanel stability={report?.data?.band_stability}
-                  cacheStatus={report?.data?.cache_status}
-                  painScore={report?.data?.pain_score} />
-              </Grid>
+        {!bc ? (
+          <Card sx={{ ...CARD, p: 3 }}>
+            <MDTypography component="h2" sx={{ ...TYPE.title, color: PAL.ink }}>
+              No band has been chosen for this participant yet
+            </MDTypography>
+            <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, mt: 1, maxWidth: "68ch" }}>
+              {"Whether the device allows closed loop is checked for one sensing contact pair at one "
+                + "band, not for a participant, so a band has to be chosen before anything on this "
+                + "page applies. Choose one in the grid above, choose one on the Biomarkers page, or "
+                + "load a saved band file from the ⋯ menu."}
+            </MDTypography>
+            <MDBox mt={2}>
+              <MDButton size="small" variant="outlined" color="dark"
+                onClick={() => navigate(`/reports/biomarkers/${participant_uid}`)}
+                sx={{ textTransform: "none", fontSize: PAL.fs.body }}>
+                Go to the Biomarkers page
+              </MDButton>
+            </MDBox>
+          </Card>
+        ) : (
+          <>
+            {/* SECTION 2, "Does the device allow it?" Before the evidence, because on a device
+                that acts on its own, whether a configuration is PERMITTED comes before how well it
+                scores. */}
+            <MDBox id="cl-rules" mb={4}>
+              <DeviceRuleLedger report={report} />
+            </MDBox>
 
-              {/* The analyst panels, demoted behind one fold. Real evidence, and not the first
-                  question at a programming visit. */}
-              <Grid item xs={12}>
-                <Card sx={{ width: "100%" }}>
-                  <MDBox p={1.5} display="flex" justifyContent="space-between"
-                    alignItems="center" gap={1} flexWrap="wrap">
-                    <MDBox>
-                      <MDTypography variant="h6" sx={{ fontSize: 14 }}>
-                        Evidence for the analyst, before the visit
-                      </MDTypography>
-                      <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
-                        color: "#5E5E5E" }}>
-                        {"Where the cut-point sits, the band in device units, and whether the "
-                          + "discrimination holds month by month."}
-                      </MDTypography>
-                    </MDBox>
-                    <MDButton size="small" variant="outlined" color="info"
-                      onClick={() => setShowAnalyst((s) => !s)}
-                      sx={{ textTransform: "none", fontSize: 11.5 }}>
-                      {showAnalyst ? "Fold these away" : "Show the three analyst panels"}
-                    </MDButton>
-                  </MDBox>
-                </Card>
-              </Grid>
+            {/* SECTION 3, "Does the evidence hang together?" */}
+            <MDBox id="cl-evidence" mb={4}>
+              <EvidenceTrianglePanel report={report} />
+            </MDBox>
 
-              {/* THE THREE ANALYST PANELS, HIDDEN WHEN FOLDED RATHER THAN UNMOUNTED.
-                  Collapsing the fold used to unmount all three, which destroyed their Plotly nodes
-                  along with the zoom, pan and legend state a reader had set, and — before the
-                  results were cached — re-issued all three requests on reopening. They are now kept
-                  mounted and hidden, so reopening the fold shows the figures exactly as they were
-                  left. They are not mounted at all until the fold has been opened once, because a
-                  Plotly graph first drawn inside a hidden container measures itself as zero pixels
-                  wide and keeps that size when the container is shown.
-                  The three sit inside one outer grid item with their own nested container, so that
-                  hiding them is a single style change rather than three, and the two-across layout
-                  of the first two panels is preserved. */}
-              {analystRevealed ? (
-                <Grid item xs={12} sx={{ display: showAnalyst ? "block" : "none" }}>
-                  <Grid container spacing={2}>
+            {/* SECTION 4, "Does the band mean the same at every stimulation state?" It qualifies the
+                relationship section 3 draws: a band whose meaning shifts with the current is a
+                different problem from one whose relationship is simply weak. */}
+            <MDBox id="cl-stability" mb={4}>
+              <BandStabilityPanel stability={report?.data?.band_stability}
+                cacheStatus={report?.data?.cache_status}
+                painScore={report?.data?.pain_score} />
+            </MDBox>
+
+            {/* BACKGROUND, folded (SPEC section 5.2 item 7): how band power moves with current,
+                measured three ways; what the automatic adjustment would have done (simulated);
+                and the switching point, device units and month-by-month check. None of it gates
+                anything. The three-source and simulation panels stay MOUNTED inside the fold (it
+                collapses to zero height without hiding the width, so their Plotly figures measure
+                the right width). The three switching-point panels are mounted on the fold's first
+                opening, as before, because they send their own requests. */}
+            <Card id="cl-background" sx={{ ...CARD, p: 3 }}>
+              <MDTypography component="h2" sx={{ ...TYPE.title, color: PAL.ink }}>Background</MDTypography>
+              <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, mt: 1, maxWidth: "68ch" }}>
+                {"Checks for the analyst before the visit. Nothing here changes the answer above."}
+              </MDTypography>
+              <Fold show="Show the background (current and band power; simulated closed loop; switching point and month-by-month check)"
+                hide="Hide the background" mt={2}
+                onChange={(open) => { if (open) setShowAnalyst(true); }}>
+                <MDBox id="cl-three-source" mt={2}>
+                  <ThreeSourceResponsePanel report={report} pooled={threeSourcePooled}
+                    committed={{ contact: bc.contact, centerHz: bc.center_freq_hz }}
+                    contactLabel={contactLabel} />
+                </MDBox>
+                <MDBox id="cl-simulation" mt={4}>
+                  <ClosedLoopSimulationPanel sim={closedLoopSim}
+                    hemisphere={report?.data?.manifest?.hemisphere}
+                    contactLabel={contactLabel} bandCandidate={bc} />
+                </MDBox>
+                {analystRevealed ? (
+                  <Grid container spacing={3} mt={1}>
                     <Grid item xs={12} md={6} id="cl-roc">
                       <DeploymentRocPanel participantUid={participant_uid} bandCandidate={bc}
                         requestParams={requestParams} onCutpoint={setCutpoint}
@@ -572,49 +580,12 @@ function ClosedLoopSim() {
                         requestParams={requestParams} />
                     </Grid>
                   </Grid>
-                </Grid>
-              ) : null}
-
-              {/* HOW STIMULATION CURRENT MOVED BAND POWER, measured three separate ways and put
-                  side by side: from the raw voltage trace, from the device's own spectrum, and from
-                  the device's own band-power reading.
-
-                  PLACED AT THE BOTTOM on the PI's instruction, 2026-09-06: "This three-source
-                  comparison panel is exactly what needs to go into the closed-loop deployment
-                  module at the bottom." It was first mounted directly under the band-stability
-                  panel; this is lower, and the position is also the right one on the merits, since
-                  the panel is informative only -- it gates nothing, no verdict on this page reads
-                  it, and it carries no badge.
-
-                  IT SITS OUTSIDE THE COLLAPSED ANALYST FOLD ABOVE, DELIBERATELY. Its figures are
-                  Plotly, and the comment on that fold records the reason: a Plotly graph first
-                  drawn inside a hidden container measures itself as zero pixels wide and keeps that
-                  size when the container is later shown. Moving this panel inside the fold would
-                  reintroduce exactly that bug. */}
-              <Grid item xs={12} id="cl-three-source">
-                <ThreeSourceResponsePanel report={report} pooled={threeSourcePooled}
-                  committed={{ contact: bc.contact, centerHz: bc.center_freq_hz }}
-                  contactLabel={contactLabel} />
-              </Grid>
-
-              {/* CL-DBS SIMULATIONS, the last card (the PI, 2026-09-11: "add new card at bottom
-                  after deployment"; the sign-off it sat above is now the decision card's own "Sign
-                  and print", decision 302). The controller run over this participant's
-                  own recorded band power three ways: replayed as recorded (M0), with the loop
-                  closed through the fitted response (M1, or M2 once a bend is established), and
-                  with runs resampled for an interval (M3). Fetched after the report, which is what
-                  writes it. Plotly figures, so it stays outside the analyst fold above. */}
-              <Grid item xs={12} id="cl-simulation">
-                <ClosedLoopSimulationPanel sim={closedLoopSim}
-                  hemisphere={report?.data?.manifest?.hemisphere}
-                  contactLabel={contactLabel} bandCandidate={bc} />
-              </Grid>
-
-            </>
-          )}
-        </Grid>
+                ) : null}
+              </Fold>
+            </Card>
+          </>
+        )}
       </MDBox>
-      </LegibleText>
     </DatabaseLayout>
   );
 }

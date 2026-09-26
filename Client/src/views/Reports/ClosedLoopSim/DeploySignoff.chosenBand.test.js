@@ -53,7 +53,7 @@ const sheet = (props) => rtlRender(wrap(
 describe("the sign-off sheet names the band it signs", () => {
   it("prints the band, who chose it, and that the server holds the record", () => {
     const text = sheet();
-    expect(text).toMatch(/THE BAND SIGNED FOR/);
+    expect(text).toMatch(/The band signed for/);   // sentence case since 2026-09-26
     expect(text).toMatch(/L 1-3\+ at 24\.5 Hz/);
     expect(text).toMatch(/clinician@example\.org/);
     expect(text).toMatch(/recorded on the server/);

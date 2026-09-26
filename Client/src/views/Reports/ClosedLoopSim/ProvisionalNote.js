@@ -24,6 +24,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import PAL from "./palette";
+import { TYPE, STATE } from "assets/theme/base/tokens";
 import { ciBound, fmtNum, fmtP } from "./deployFormat";
 
 /** The edges whose interval spans zero (or has no interval), read off the payload's own flags. */
@@ -76,25 +77,23 @@ export default function ProvisionalNote({ deploymentReport, dense = false, mt = 
   const c = provisionalCaveat(rep);
   if (!c) return null;
   return (
-    <MDBox className="cl-provisional" mt={mt} px={dense ? 0.8 : 1} py={dense ? 0.4 : 0.6}
-      sx={{ backgroundColor: PAL.warnFill || "#FFF7E6", borderRadius: "4px",
-        border: `1px solid ${PAL.warnBorder || PAL.warn}` }}>
+    <MDBox className="cl-provisional" mt={mt} pl={1.5}
+      sx={{ borderLeft: `2px solid ${PAL.warnText}` }} data-dense={dense ? "" : undefined}>
       {headline && (
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: dense ? 11 : 11.5,
-          fontWeight: "bold", letterSpacing: 0.3, color: PAL.warnText || PAL.warn }}>
-          {`PROVISIONAL — POINT SIGNS ONLY; ${c.n} OF ${c.total} INTERVALS SPAN ZERO`}
+        <MDTypography variant="caption" sx={{ ...TYPE.body, display: "block", fontWeight: 600,
+          color: PAL.warnText }}>
+          <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.caution.glyph}</span>
+          {`Provisional: point signs only; the 95% range crosses zero on ${c.n} of ${c.total} links`}
         </MDTypography>
       )}
       {c.edges.map((e) => (
-        <MDTypography key={e.k} variant="caption" sx={{ display: "block", fontSize: dense ? 11 : 11.5,
-          fontFamily: PAL.mono, color: "#2A2A2A" }}>
+        <MDTypography key={e.k} variant="caption" sx={{ ...TYPE.body, display: "block", color: PAL.ink }}>
           {e.text}
         </MDTypography>
       ))}
-      <MDTypography variant="caption" sx={{ display: "block", fontSize: 11,
-        color: "#4A4A4A", mt: 0.2 }}>
+      <MDTypography variant="caption" sx={{ ...TYPE.body, display: "block", color: PAL.ink2, mt: 0.25 }}>
         The verdict rests on the sign of each point estimate (PI rule, 2026-09-13: "established
-        means mean only"). An interval that spans zero is a caveat on the page, not a block.
+        means mean only"). A range that crosses zero is a caveat on the page, not a block.
       </MDTypography>
     </MDBox>
   );

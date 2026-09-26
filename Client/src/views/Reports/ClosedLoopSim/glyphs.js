@@ -20,7 +20,7 @@ export function TickGlyph({ label, size = GLYPH }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" role="img" aria-label={label}>
       <circle cx="8" cy="8" r="7" fill={PAL.pass} />
-      <path d="M4.5 8.3 L7 10.8 L11.5 5.5" stroke="#fff" strokeWidth="1.9" fill="none"
+      <path d="M4.5 8.3 L7 10.8 L11.5 5.5" stroke={PAL.surface} strokeWidth="1.9" fill="none"
         strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
@@ -29,7 +29,7 @@ export function CrossGlyph({ label, size = GLYPH }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" role="img" aria-label={label}>
       <rect width="16" height="16" rx="2" fill={PAL.fail} />
-      <path d="M4.5 4.5 L11.5 11.5 M11.5 4.5 L4.5 11.5" stroke="#fff" strokeWidth="1.9"
+      <path d="M4.5 4.5 L11.5 11.5 M11.5 4.5 L4.5 11.5" stroke={PAL.surface} strokeWidth="1.9"
         strokeLinecap="round" />
     </svg>
   );

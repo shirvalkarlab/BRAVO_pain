@@ -191,9 +191,11 @@ describe("the evidence panel separates the two coherence questions", () => {
   it("says the edges agree with each other AND do not match the control law", () => {
     render(<EvidenceTrianglePanel report={report} />);
 
-    expect(screen.getByText(/Composing the amplitude-to-power and power-to-pain edges reproduces/))
+    // Plain names since the redesign of 2026-09-26 ("E1" is "Current → band power", "E2" is "Band
+    // power → pain", "control law" is what the selected mode needs); the finding is the same.
+    expect(screen.getByText(/Combining current → band power with band power → pain reproduces/))
       .toBeInTheDocument();
-    expect(screen.getByText(/E1 and E2 have the opposite sign to the one the selected control law/))
+    expect(screen.getByText(/Current → band power and Band power → pain have the opposite sign to the one the selected mode needs/))
       .toBeInTheDocument();
     expect(screen.getByText(/they are in conflict with what the device would do with them/))
       .toBeInTheDocument();
@@ -203,15 +205,16 @@ describe("the evidence panel separates the two coherence questions", () => {
   // SIGNS AGREE / SIGNS DISAGREE, `stateTracks.js`), and this test kept the old words and failed
   // from then until 2026-09-23. It also only ever checked that the words were drawn, not which cell
   // was lit; only the lit cell prints its explanation, so that is now checked too.
-  it("lights the SIGNS DISAGREE cell and still draws the other two", () => {
+  // Sentence case since the redesign of 2026-09-26 (SIGNS DISAGREE became "Signs disagree").
+  it("lights the 'Signs disagree' cell and still draws the other two", () => {
     render(<EvidenceTrianglePanel report={report} />);
-    expect(screen.getByText("SIGNS DISAGREE")).toBeInTheDocument();
-    expect(screen.getByText("SIGNS AGREE")).toBeInTheDocument();
-    expect(screen.getByText("NOT ESTABLISHED")).toBeInTheDocument();
+    expect(screen.getByText("Signs disagree")).toBeInTheDocument();
+    expect(screen.getByText("Signs agree")).toBeInTheDocument();
+    expect(screen.getByText("Not established")).toBeInTheDocument();
     // The lit cell is marked in the DOM (decision 302 dropped its explanation sentence, which the
     // two answers under the table already say); the other two are drawn and unlit.
-    expect(screen.getByText("SIGNS DISAGREE").closest("[data-lit]").getAttribute("data-lit")).toBe("true");
-    expect(screen.getByText("SIGNS AGREE").closest("[data-lit]").getAttribute("data-lit")).toBe("false");
+    expect(screen.getByText("Signs disagree").closest("[data-lit]").getAttribute("data-lit")).toBe("true");
+    expect(screen.getByText("Signs agree").closest("[data-lit]").getAttribute("data-lit")).toBe("false");
     expect(screen.queryByText(/^The three edge signs match the pattern/)).toBeNull();
   });
 
@@ -226,15 +229,26 @@ describe("the rule ledger keeps the nine outcome kinds apart", () => {
   it("renders all four advisory kinds and pins the recorded values", () => {
     render(<DeviceRuleLedger report={report} />);
 
-    expect(screen.getByText(/VIOLATED \u00B7 1/)).toBeInTheDocument();
-    expect(screen.getByText(/CANNOT BE EVALUATED \u00B7 4/)).toBeInTheDocument();
-    expect(screen.getByText(/DEFERRED TO ANOTHER RULE \u00B7 1/)).toBeInTheDocument();
-    expect(screen.getByText(/ADVISORY SHORTFALLS \u00B7 2/)).toBeInTheDocument();
+    // The bucket headings are sentence case and plain since the redesign of 2026-09-26
+    // (VIOLATED -> Refuses, CANNOT BE EVALUATED -> Could not check, DEFERRED -> Counted under
+    // another rule, ADVISORY -> Recommended, not required); the counts they state are the same.
+    expect(screen.getByText(/Refuses \u00B7 1/)).toBeInTheDocument();
+    expect(screen.getByText(/Could not check \u00B7 4/)).toBeInTheDocument();
+    expect(screen.getByText(/Counted under another rule \u00B7 1/)).toBeInTheDocument();
+    expect(screen.getByText(/Recommended, not required: not met \u00B7 2/)).toBeInTheDocument();
     // Both pinned values must be visible: the previous filter discarded them, and one of them
     // records the programming mode in force, which is what makes the workflow reachable at all.
-    expect(screen.getByText(/PINNED VALUES \u00B7 2/)).toBeInTheDocument();
-    expect(screen.getByText(/ADVISORY, COULD NOT BE DETERMINED \u00B7 9/)).toBeInTheDocument();
-    expect(screen.getByText(/ADVISORY, NO MACHINE CHECK EXISTS \u00B7 13/)).toBeInTheDocument();
+    expect(screen.getByText(/Allowed, and shown because the value matters \u00B7 2/)).toBeInTheDocument();
+    expect(screen.getByText(/Recommended, not required: could not be checked \u00B7 9/)).toBeInTheDocument();
+    expect(screen.getByText(/Recommended, not required: no automatic check exists \u00B7 13/)).toBeInTheDocument();
+  });
+
+  it("prints the three counts in the open: refuses, could not check, allowed (SPEC 2026-09-26 section 5.2)", () => {
+    render(<DeviceRuleLedger report={report} />);
+    const counts = screen.getByTestId("rule-counts").textContent;
+    expect(counts).toMatch(/Refuses \(1\)/);
+    expect(counts).toMatch(/Could not check \(4\)/);
+    expect(counts).toMatch(/Allowed \(\d+\)/);
   });
 
   it("names a different actor for the clinician's rules and the data-wiring rules", () => {
@@ -242,8 +256,8 @@ describe("the rule ledger keeps the nine outcome kinds apart", () => {
 
     // D31 is the only one of the four a clinician can clear where they are standing; D29, D30 and
     // D32 are unevaluable because their inputs were never routed into the module.
-    expect(screen.getAllByText("CLINICIAN, AT THE A610")).toHaveLength(1);
-    expect(screen.getAllByText("ANALYSIS — THE INPUTS ARE NOT WIRED UP")).toHaveLength(3);
+    expect(screen.getAllByText("Clinician, at the A610")).toHaveLength(1);
+    expect(screen.getAllByText("Analysis — the inputs are not wired up")).toHaveLength(3);
   });
 });
 
@@ -258,8 +272,9 @@ describe("the what-would-change band ranks the outstanding work and names its ow
     expect(container.textContent).toMatch(/3 need a change to the analysis/);
     // The coherence row must name band selection rather than more measurement, because on this
     // payload the three edges agree with each other.
+    // Sentence case since the redesign of 2026-09-26 (it was capitals).
     expect(container.textContent)
-      .toMatch(/BAND SELECTION — NOT MORE MEASUREMENT/);
+      .toMatch(/Band selection — not more measurement/);
   });
 });
 
@@ -280,10 +295,13 @@ describe("every panel survives an absent report rather than throwing", () => {
 
 describe("the palette keeps its semantic roles distinct", () => {
   it("never pairs the pass role against a red fail role by hue alone", () => {
-    // The decision axis is bluish-green against vermillion rather than green against red, which is
-    // what lets a reader with deuteranopia separate a violated rule from a satisfied one.
-    expect(PAL.pass).toBe("#009E73");
-    expect(PAL.fail).toBe("#D55E00");
-    expect(PAL.deferred).toBe("#CC79A7");
+    // The minimalist redesign (SPEC 2026-09-26 section 2.3): a pass is drawn in the near-black ink
+    // with ✓ and a refusal in red with ✕, so the two differ by lightness and by glyph, never by hue
+    // alone; there is no green in page text. A rule counted under another rule is grey, not a third
+    // hue that could be read as a failure.
+    expect(PAL.pass).toBe("#1A1A1A");
+    expect(PAL.fail).toBe("#B42318");
+    expect(PAL.deferred).toBe("#5E5E5E");
+    expect(PAL.pass).not.toBe(PAL.fail);
   });
 });

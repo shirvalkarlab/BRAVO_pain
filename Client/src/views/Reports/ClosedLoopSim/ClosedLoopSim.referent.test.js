@@ -83,8 +83,10 @@ describe("Choose a band (BandSweepGridPanel)", () => {
         committed={{ contact: "ONE_THREE_LEFT", centerHz: 12.5 }} onCandidateChosen={() => {}} />,
     );
     const titles = Array.from(container.querySelectorAll("div[title]")).map((el) => el.getAttribute("title"));
-    const aucTitles = titles.filter((t) => /^AUC = /.test(t));
-    const corrTitles = titles.filter((t) => /^r = /.test(t));
+    // The hover wording is plain since the redesign of 2026-09-26 ("AUC = " became "tells high pain
+    // from low: ", "r = " became "correlation "); the counts it states are the same.
+    const aucTitles = titles.filter((t) => /^tells high pain from low: /.test(t));
+    const corrTitles = titles.filter((t) => /^correlation /.test(t));
     expect(aucTitles.length).toBeGreaterThan(0);
     expect(corrTitles.length).toBeGreaterThan(0);
     // The correlation side already reads the field, so it is the control: 9 on every row.

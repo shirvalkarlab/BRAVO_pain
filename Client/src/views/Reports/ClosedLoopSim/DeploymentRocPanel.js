@@ -25,6 +25,8 @@ import { CL, recomputeSlots } from "views/Reports/moduleCacheKeys";
 import PanelStaleNote from "./PanelStaleNote";
 import PAL from "./palette";
 import RocCurrentRemovedLine from "./RocCurrentRemovedLine";
+import { TYPE, CARD, STATE } from "assets/theme/base/tokens";
+import { plotlyLayout, REF_LINE, directLabel } from "views/Reports/figureStyle";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 
@@ -121,6 +123,9 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
   const [matchDir, setMatchDir] = useState("prior");      // deploy default = causal forecasting
   const [rule, setRule] = useState("youden");
   const [logCost, setLogCost] = useState(0);              // log2(cFP/cFN); 0 => symmetric
+  // The figures carry no title on the canvas (SPEC section 3.2); their readings are printed above them.
+  const [rocCaption, setRocCaption] = useState(null);
+  const [forwardCaption, setForwardCaption] = useState(null);
   const bc = bandCandidate || {};
   const channelRaw = bc.contact;
   const centerHz = bc.center_freq_hz;
@@ -214,24 +219,24 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
       : "";
     const traces = [
       { x: [0, 1], y: [0, 1], type: "scatter", mode: "lines", name: "chance",
-        line: { color: "#bbb", dash: "dot", width: 1 }, hoverinfo: "skip", showlegend: false },
+        line: REF_LINE, hoverinfo: "skip", showlegend: false },
       { x: roc.fpr, y: roc.tpr, type: "scatter", mode: "lines", name: "ROC",
-        line: { color: PAL.accent, width: 2.2 }, showlegend: false,
-        hovertemplate: "FPR %{x:.2f} · TPR %{y:.2f}<extra></extra>" },
+        line: { color: PAL.series, width: 2 }, showlegend: false,
+        hovertemplate: "low-pain moments flagged as high %{x:.0%} · high-pain moments caught %{y:.0%}<extra></extra>" },
       // cut-point marker placeholder at index CUTPOINT_TRACE (=2) — kept fixed so restyle can move it.
       { x: [], y: [], type: "scatter", mode: "markers", name: "cut-point", showlegend: false,
-        marker: { color: PAL.cutpoint, size: 12, line: { color: "#fff", width: 2 } },
+        marker: { color: PAL.cutpoint, size: 12, line: { color: PAL.surface, width: 2 } },
         hovertemplate: "cut-point<extra></extra>" },
     ];
-    const layout = {
-      title: { text: `AUC = ${fmt(roc.auc)}${ciTxt}${bootTxt}${smallTxt}`, font: { size: 13 } },
-      margin: { l: 46, r: 12, t: 32, b: 42 }, height: 320,
-      xaxis: { title: { text: "False positive rate", font: { size: 11 } }, range: [-0.02, 1.02],
-        zeroline: false, tickfont: { size: 11 } },
-      yaxis: { title: { text: "True positive rate", font: { size: 11 } }, range: [-0.02, 1.02],
-        zeroline: false, tickfont: { size: 11 } },
-      annotations: [],
-    };
+    // No title on the canvas (SPEC section 3.2): the reading is printed above the figure instead.
+    setRocCaption(`How well it tells high pain from low: ${fmt(roc.auc)} (0.5 = coin toss, 1 = perfect)`
+      + `${ciTxt}${bootTxt}${smallTxt}`);
+    const layout = plotlyLayout({
+      margin: { l: 56, r: 16, t: 16, b: 48 }, height: 320,
+      xaxis: { title: { text: "low-pain moments flagged as high" }, range: [-0.02, 1.02], tickformat: ".0%" },
+      yaxis: { title: { text: "high-pain moments caught" }, range: [-0.02, 1.02], tickformat: ".0%" },
+      annotations: [directLabel(0.62, 0.6, "coin toss", PAL.ink3)],
+    });
     Plotly.react(ref.current, traces, layout, PAL.MODEBAR);
   }, [roc]);  // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -246,8 +251,8 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
       Plotly.restyle(gd, {
         x: [[op.fpr]], y: [[op.tpr]],
         "marker.color": [mColor],
-        hovertemplate: [`cut-point (${op.rule})<br>power ≥ ${fmt(op.threshold)}<br>`
-          + `sens ${fmt(op.sensitivity)} · spec ${fmt(op.specificity)}<extra></extra>`],
+        hovertemplate: [`switching point (${op.rule})<br>power ≥ ${fmt(op.threshold)}<br>`
+          + `high-pain moments caught ${fmt(op.sensitivity)} · low-pain moments left alone ${fmt(op.specificity)}<extra></extra>`],
       }, [CUTPOINT_TRACE]);
       // Flip the label offset toward the plot interior near the top/right edges so it never clips
       // off-panel (F1 lands near (0.67,0.95); a low cost ratio pushes the point toward (0.94,1.0)).
@@ -257,11 +262,11 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
       const ay = nearTop ? 24 : -26;   // positive ay pushes the box DOWN (interior) when near the top
       // Audit C6: white-on-#E69F00 (the degenerate warn fill) is 2.25:1 — below WCAG. Use near-black
       // text on the orange callout (7.7:1); keep white only on the bluish-green non-degenerate marker.
-      const labelTextColor = op.degenerate ? PAL.onWarn : "#fff";
+      const labelTextColor = PAL.onFill;
       Plotly.relayout(gd, { annotations: [{
         x: op.fpr, y: op.tpr, xref: "x", yref: "y",
         text: `<b>power ≥ ${fmt(op.threshold)}</b>`, showarrow: true, arrowhead: 0,
-        arrowcolor: mColor, ax, ay, font: { size: 11, color: labelTextColor },
+        arrowcolor: mColor, ax, ay, font: { size: PAL.fs.caption, color: labelTextColor },
         bgcolor: mColor, bordercolor: mColor, borderpad: 3,
         xanchor: nearRight ? "right" : "left", yanchor: nearTop ? "top" : "bottom",
       }] });
@@ -289,25 +294,22 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
     // class, drawn once per dataset — the Plotly.react-once discipline is untouched.
     const traces = [
       { x: fh.bin_centers, y: fh.counts_low, type: "bar", name: "pain-low",
-        marker: { color: PAL.painLow, opacity: 0.55 },
+        marker: { color: PAL.painLow, opacity: 0.55 }, showlegend: false,
         hovertemplate: "low pain<br>power %{x:.2f}<br>%{y} samples<extra></extra>" },
       { x: fh.bin_centers, y: fh.counts_high, type: "bar", name: "pain-high",
-        marker: { color: "rgba(0,0,0,0)", line: { color: PAL.painHighOutline, width: 1.6 } },
+        marker: { color: "rgba(0,0,0,0)", line: { color: PAL.painHighOutline, width: 1.6 } }, showlegend: false,
         hovertemplate: "high pain<br>power %{x:.2f}<br>%{y} samples<extra></extra>" },
     ];
     const binW = (fh.bin_centers.length > 1)
       ? (fh.bin_centers[1] - fh.bin_centers[0]) : (fh.x_max - fh.x_min) || 1;
-    const layout = {
+    const layout = plotlyLayout({
       barmode: "overlay", bargap: 0.04,
-      margin: { l: 46, r: 12, t: 8, b: 38 }, height: 168,
-      xaxis: { title: { text: "Oriented band power (standardized, cut-point scale)", font: { size: 11 } },
-        zeroline: false, tickfont: { size: 11 },
+      margin: { l: 56, r: 16, t: 24, b: 48 }, height: 188,
+      xaxis: { title: { text: "band power, standardised (0 = its average; higher goes with more pain)" },
         range: [fh.x_min - binW, fh.x_max + binW] },
-      yaxis: { title: { text: "samples", font: { size: 11 } }, zeroline: false,
-        tickfont: { size: 11 } },
-      legend: { orientation: "h", x: 0, y: 1.16, font: { size: 11 } },
+      yaxis: { title: { text: "band-power readings" } },
       shapes: [], annotations: [],
-    };
+    });
     Plotly.react(gd, traces, layout, PAL.MODEBAR);
   }, [roc]);  // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -331,7 +333,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
           line: { color: lineColor, width: 2, dash: "dash" } }],
         annotations: [{ x: opThr, y: 1, yref: "paper", yanchor: "bottom",
           text: `cut ≥ ${fmt(opThr)}${lsbTxt}`, showarrow: false, align: "center",
-          font: { size: 11, color: lineColor },
+          font: { size: PAL.fs.caption, color: lineColor },
           xanchor: opThr > (fh.x_min + fh.x_max) / 2 ? "right" : "left" }],
       });
     } else {
@@ -351,7 +353,8 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
     const folds = forward.folds;
     const xs = folds.map((f) => f.test_week_start);
     const ys = folds.map((f) => f.test_auc);
-    const cols = folds.map((f) => (f.test_auc >= 0.5 ? PAL.pass : PAL.fail));
+    // Above the coin toss filled, at or below it hollow: shape, not a red-green pair.
+    const symbols = folds.map((f) => (f.test_auc > 0.5 ? "circle" : "circle-open"));
     const xlo = Math.min(...xs) - 0.5;
     const xhi = Math.max(...xs) + 0.5;
     const traces = [
@@ -360,44 +363,42 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
         x: [xlo, xhi, xhi, xlo], y: [forward.held_out_auc_lo, forward.held_out_auc_lo,
           forward.held_out_auc_hi, forward.held_out_auc_hi],
         fill: "toself", type: "scatter", mode: "lines", line: { width: 0 },
-        fillcolor: "rgba(0,158,115,0.10)", hoverinfo: "skip", showlegend: false, name: "held-out 95% CI",
+        fillcolor: PAL.fillMuted, hoverinfo: "skip", showlegend: false, name: "held-out 95% range",
       }] : []),
       { x: [xlo, xhi], y: [0.5, 0.5], type: "scatter", mode: "lines", name: "chance",
-        line: { color: "#bbb", dash: "dot", width: 1 }, hoverinfo: "skip", showlegend: false },
+        line: REF_LINE, hoverinfo: "skip", showlegend: false },
       // in-sample AUC reference (the optimistic number the forward trace is judged against)
       ...(forward.in_sample_auc != null ? [{
         x: [xlo, xhi], y: [forward.in_sample_auc, forward.in_sample_auc], type: "scatter", mode: "lines",
-        name: "in-sample AUC", line: { color: PAL.gray, dash: "dash", width: 1.4 },
-        hovertemplate: `in-sample AUC ${fmt(forward.in_sample_auc)}<extra></extra>`, showlegend: false,
+        name: "on the data it was fitted to", line: { color: PAL.gray, dash: "dash", width: 1.2 },
+        hovertemplate: `measured on the data it was fitted to: ${fmt(forward.in_sample_auc)}<extra></extra>`, showlegend: false,
       }] : []),
       // pooled held-out AUC reference line
       ...(forward.held_out_auc != null ? [{
         x: [xlo, xhi], y: [forward.held_out_auc, forward.held_out_auc], type: "scatter", mode: "lines",
-        name: "pooled held-out", line: { color: PAL.pass, width: 1.2 },
-        hovertemplate: `pooled held-out AUC ${fmt(forward.held_out_auc)}<extra></extra>`, showlegend: false,
+        name: "all later weeks together", line: { color: PAL.ink, width: 1 },
+        hovertemplate: `all later weeks together: ${fmt(forward.held_out_auc)}<extra></extra>`, showlegend: false,
       }] : []),
       // per-fold held-out AUC (the trace itself)
       { x: xs, y: ys, type: "scatter", mode: "lines+markers", name: "per-fold held-out",
-        line: { color: PAL.accent, width: 1.6 },
-        marker: { color: cols, size: 9, line: { color: "#fff", width: 1.4 } },
+        line: { color: PAL.series, width: 1.5 }, showlegend: false,
+        marker: { color: PAL.series, symbol: symbols, size: 9, line: { color: PAL.series, width: 1.5 } },
         customdata: folds.map((f) => [f.n_train_clusters, f.n_test_clusters,
           f.sens == null ? "—" : fmt(f.sens), f.spec == null ? "—" : fmt(f.spec)]),
-        hovertemplate: "week %{x} · held-out AUC %{y:.2f}<br>train %{customdata[0]} / test %{customdata[1]} clusters"
-          + "<br>sens %{customdata[2]} · spec %{customdata[3]}<extra></extra>" },
+        hovertemplate: "week %{x} · on that week, not fitted on it: %{y:.2f}<br>trained on %{customdata[0]} / tested on %{customdata[1]} separate groups of ratings"
+          + "<br>high-pain moments caught %{customdata[2]} · low-pain moments left alone %{customdata[3]}<extra></extra>" },
     ];
-    const layout = {
-      title: {
-        text: `Forward-chained held-out AUC — pooled ${fmt(forward.held_out_auc)}`
-          + (forward.held_out_auc_lo != null ? ` (CI ${fmt(forward.held_out_auc_lo)}–${fmt(forward.held_out_auc_hi)})` : "")
-          + ` vs in-sample ${fmt(forward.in_sample_auc)}`,
-        font: { size: 11.5 },
-      },
-      margin: { l: 46, r: 12, t: 26, b: 36 }, height: 188,
-      xaxis: { title: { text: "Test fold — elapsed week (train = all earlier weeks)", font: { size: 11 } },
-        zeroline: false, tickfont: { size: 11 }, range: [xlo, xhi] },
-      yaxis: { title: { text: "held-out AUC", font: { size: 11 } }, zeroline: false,
-        tickfont: { size: 11 }, range: [-0.02, 1.02] },
-    };
+    setForwardCaption("Tested on each later week after training on the weeks before: "
+      + `${fmt(forward.held_out_auc)}`
+      + (forward.held_out_auc_lo != null ? ` (95% range ${fmt(forward.held_out_auc_lo)} to ${fmt(forward.held_out_auc_hi)})` : "")
+      + `, against ${fmt(forward.in_sample_auc)} measured on the data it was fitted to (0.5 = coin toss).`);
+    const layout = plotlyLayout({
+      margin: { l: 56, r: 72, t: 16, b: 48 }, height: 200,
+      xaxis: { title: { text: "week tested (trained on every earlier week)" }, range: [xlo, xhi] },
+      yaxis: { title: { text: "how well it tells high pain from low" }, range: [-0.02, 1.02] },
+      annotations: [directLabel(xhi, 0.5, "coin toss", PAL.ink3),
+        ...(forward.in_sample_auc != null ? [directLabel(xhi, forward.in_sample_auc, "fitted data", PAL.ink3)] : [])],
+    });
     Plotly.react(gd, traces, layout, PAL.MODEBAR);
   }, [forward]);  // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -408,10 +409,12 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
   }, []);
 
   return (
-    <Card sx={{ width: "100%" }}>
-      <MDBox p={2}>
-        <MDBox display="flex" justifyContent="space-between" alignItems="center" mb={1} flexWrap="wrap" gap={1}>
-          <MDTypography variant="h6" sx={{ fontSize: 14 }}>Deployment ROC + cut-point</MDTypography>
+    <Card sx={{ ...CARD, width: "100%" }}>
+      <MDBox p={3}>
+        <MDBox display="flex" justifyContent="space-between" alignItems="baseline" mb={1} flexWrap="wrap" gap={1}>
+          <MDTypography component="h3" sx={{ ...TYPE.title, color: PAL.ink }}>
+            Where does the switching point sit?
+          </MDTypography>
           {/* Match direction changes which neural samples are paired with which pain rating, so it
               changes the fit rather than the view. It is labelled in clinical terms (not the internal
               'prior'/'pro_first' keys) and the deploy default is marked. Since results are now kept
@@ -420,12 +423,12 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
               when it is asked for. */}
           <ToggleButtonGroup size="small" exclusive value={matchDir}
             onChange={(e, v) => { if (v) setMatchDir(v); }}
-            title="Forecasting predicts the NEXT rating from neural data recorded before it (the causal, deployable question). Concurrent pairs each rating with the same-window recording (exploratory). Switching does not refit on its own — the curve already computed stays on screen and is marked, and Recompute refits it.">
-            <ToggleButton value="prior" sx={{ fontSize: 11, textTransform: "none", py: 0.2 }}>
-              Forecasting (deploy default)
+            title="Each recording picks the next report after it: the question the device faces, and the default. Each report picks its nearest recordings: exploratory. Switching does not refit on its own; the curve already computed stays on screen and is marked, and Recompute refits it.">
+            <ToggleButton value="prior" sx={{ ...TYPE.body, textTransform: "none", py: 0.5 }}>
+              Next report after each recording (default)
             </ToggleButton>
-            <ToggleButton value="pro_first" sx={{ fontSize: 11, textTransform: "none", py: 0.2 }}>
-              Concurrent (exploratory)
+            <ToggleButton value="pro_first" sx={{ ...TYPE.body, textTransform: "none", py: 0.5 }}>
+              Nearest recordings to each report
             </ToggleButton>
           </ToggleButtonGroup>
         </MDBox>
@@ -437,13 +440,17 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
         {/* Status banner sits ABOVE the figure; the graph node below stays mounted across refits so
             its zoom/pan and DOM are preserved (Plotly.react updates it in place). */}
         {loading ? (
-          <MDTypography variant="caption" color="text" sx={{ fontStyle: "italic", fontSize: 11 }}>
-            Computing rating-clustered ROC (bootstrap CI)…
+          <MDTypography sx={{ ...TYPE.body, color: PAL.ink2 }}>
+            Working out how well band power tells high pain from low, with its 95% range…
           </MDTypography>
         ) : err ? (
-          <MDTypography variant="caption" sx={{ fontSize: 11, color: PAL.fail }}>
-            {`ROC unavailable: ${err}.`}
+          <MDTypography sx={{ ...TYPE.body, color: PAL.ink2 }}>
+            <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.notChecked.glyph}</span>
+            {`Not available: ${err}.`}
           </MDTypography>
+        ) : null}
+        {roc && rocCaption ? (
+          <MDTypography sx={{ ...TYPE.body, color: PAL.ink, mb: 1 }}>{rocCaption}</MDTypography>
         ) : null}
 
         {/* Always-mounted figure container. Hidden (not unmounted) when there's no ROC yet, so the
@@ -455,11 +462,20 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
         {/* Feature-distribution histogram beneath the ROC (pain-high vs pain-low), with the cut-point
             threshold line drawn on top. Also always-mounted so it survives refits. Only shown when
             the backend returns feature_hist (older payloads / off-band candidates may omit it). */}
+        {roc && roc.feature_hist ? (
+          <MDTypography sx={{ ...TYPE.caption, color: PAL.ink3, mt: 2 }}>
+            Filled bars: readings matched to low-pain reports. Outlined bars: readings matched to
+            high-pain reports. The dashed line is the switching point.
+          </MDTypography>
+        ) : null}
         <div ref={histRef}
           style={{ width: "100%", display: roc && roc.feature_hist ? "block" : "none" }} />
 
         {/* Forward-chaining held-out AUC trace (audit C2). Always-mounted so it survives refits; shown
             only when the backend returns a usable forward block with at least one fold. */}
+        {forward && forward.available && forwardCaption ? (
+          <MDTypography sx={{ ...TYPE.body, color: PAL.ink, mt: 2 }}>{forwardCaption}</MDTypography>
+        ) : null}
         <div ref={fwdRef}
           style={{ width: "100%",
             display: forward && forward.available && forward.folds && forward.folds.length ? "block" : "none" }} />
@@ -467,18 +483,21 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
         {/* Plain-language read of the forward result: clears chance / collapses forward / underpowered /
             not assessable. This is the out-of-sample number to weight, beside the optimistic in-sample one. */}
         {forward && forward.available && forward.held_out_auc != null ? (
-          <MDTypography variant="caption" display="block" sx={{
-            fontSize: 11.5, mt: 0.3,
-            color: forward.beats_chance_forward ? PAL.pass : PAL.warnText }}>
+          <MDTypography display="block" sx={{ ...TYPE.body, mt: 1,
+            color: forward.beats_chance_forward ? PAL.ink : PAL.warnText }}>
+            <span aria-hidden="true" style={{ marginRight: 6 }}>
+              {forward.beats_chance_forward ? STATE.pass.glyph : STATE.caution.glyph}
+            </span>
             {forward.beats_chance_forward
-              ? `Forward-validated: held-out AUC ${fmt(forward.held_out_auc)} clears chance across ${forward.n_folds} weekly folds (forward optimism ${fmt(forward.optimism)}). This is the out-of-sample number to weight.`
+              ? `Holds on later weeks: ${fmt(forward.held_out_auc)} on weeks it was not fitted on, better than a coin toss across ${forward.n_folds} weeks (it reads ${fmt(forward.optimism)} lower than on the data it was fitted to). This is the number to weigh.`
               : (forward.held_out_auc <= 0.55
-                ? `Forward FAIL: held-out AUC ${fmt(forward.held_out_auc)} collapses to chance though in-sample is ${fmt(forward.in_sample_auc)} (optimism ${fmt(forward.optimism)}). Training on the past does not predict the future for this band.`
-                : `Forward UNDERPOWERED: held-out AUC ${fmt(forward.held_out_auc)} holds near in-sample ${fmt(forward.in_sample_auc)} but its CI does not yet exclude chance — more weeks of ratings needed.`)}
+                ? `Does not hold on later weeks: ${fmt(forward.held_out_auc)} on weeks it was not fitted on, about a coin toss, though it reads ${fmt(forward.in_sample_auc)} on the data it was fitted to (${fmt(forward.optimism)} higher). Training on the past does not predict the future for this band.`
+                : `Not enough weeks yet: ${fmt(forward.held_out_auc)} on weeks it was not fitted on, near the ${fmt(forward.in_sample_auc)} on the data it was fitted to, but its 95% range still includes a coin toss; more weeks of ratings are needed.`)}
           </MDTypography>
         ) : (forward && !forward.available ? (
-          <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5, mt: 0.3, color: PAL.warnText }}>
-            {`Forward validation not assessable (${forward.reason || "insufficient temporal span"}): every AUC above is in-sample.`}
+          <MDTypography display="block" sx={{ ...TYPE.body, mt: 1, color: PAL.ink2 }}>
+            <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.notChecked.glyph}</span>
+            {`Could not test it on later weeks (${forward.reason || "the ratings do not span enough weeks"}): every reading above is on the data it was fitted to.`}
           </MDTypography>
         ) : null)}
 
@@ -486,35 +505,35 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
           <>
             <Grid container spacing={1.5} alignItems="center" mt={0.2}>
               <Grid item xs={12} md={7}>
-                <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: "#5E5E5E" }}>
-                  CUT-POINT RULE
+                <MDTypography variant="caption" sx={{ ...TYPE.caption, fontWeight: 600, color: PAL.ink3 }}>
+                  How the switching point is chosen
                 </MDTypography>
                 {/* 'net benefit' removed: its objective equals prevalence x the cost objective, so it
                     always picked the same point as 'cost'. Each remaining rule carries a plain-language
                     descriptor of what it optimizes clinically. */}
                 <ToggleButtonGroup size="small" exclusive value={rule} sx={{ ml: 1 }}
                   onChange={(e, v) => { if (v) setRule(v); }}>
-                  {[["youden", "Balanced (Youden)", "balances sensitivity and specificity; prevalence-independent"],
-                    ["f1", "Favor detection (F1)", "rewards catching pain; shifts with prevalence, can allow many false triggers"],
-                    ["cost", "Cost-weighted", "tune the miss-vs-false-trigger trade-off with the slider"]].map(([k, lbl, tip]) => (
+                  {[["youden", "Balanced", "weighs catching high pain and leaving low pain alone equally, whatever the share of high-pain reports (Youden's rule)"],
+                    ["f1", "Favour catching pain", "rewards catching high pain; moves with the share of high-pain reports and can switch often when it should not (the F1 rule)"],
+                    ["cost", "Weighted", "set the cost of a needless switch against a missed high-pain moment with the slider"]].map(([k, lbl, tip]) => (
                     <ToggleButton key={k} value={k} title={tip}
-                      sx={{ fontSize: 11, textTransform: "none", py: 0.2, px: 0.8 }}>{lbl}</ToggleButton>
+                      sx={{ ...TYPE.body, textTransform: "none", py: 0.5, px: 1 }}>{lbl}</ToggleButton>
                   ))}
                 </ToggleButtonGroup>
               </Grid>
               {rule === "cost" ? (
                 <Grid item xs={12} md={5}>
-                  <MDTypography variant="caption" sx={{ fontSize: 11, color: "#5E5E5E" }}>
-                    {`FP:FN cost = ${costRatio.toFixed(2)} : 1`}
+                  <MDTypography variant="caption" sx={{ ...TYPE.caption, color: PAL.ink3 }}>
+                    {`cost of a needless switch against a missed high-pain moment = ${costRatio.toFixed(2)} : 1`}
                   </MDTypography>
                   <Slider size="small" min={-3} max={3} step={0.25} value={logCost}
                     onChange={(e, v) => setLogCost(v)} sx={{ mt: -0.5 }}
                     aria-label="false-trigger to missed-pain cost ratio" />
                   <MDBox display="flex" justifyContent="space-between" sx={{ mt: -0.8 }}>
-                    <MDTypography variant="caption" sx={{ fontSize: 11, color: "#5E5E5E" }}>
-                      ← fewer false triggers
+                    <MDTypography variant="caption" sx={{ ...TYPE.caption, color: PAL.ink3 }}>
+                      ← fewer needless switches
                     </MDTypography>
-                    <MDTypography variant="caption" sx={{ fontSize: 11, color: "#5E5E5E" }}>
+                    <MDTypography variant="caption" sx={{ fontSize: PAL.fs.caption, color: PAL.ink3 }}>
                       catch more pain →
                     </MDTypography>
                   </MDBox>
@@ -523,29 +542,28 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
             </Grid>
 
             {op ? (
-              <MDBox mt={1} p={1} sx={{
-                backgroundColor: op.degenerate ? PAL.warnFill : PAL.passFill, borderRadius: "6px",
-                border: op.degenerate ? `1px solid ${PAL.warnBorder}` : "none" }}>
+              <MDBox mt={2} pt={2} sx={{ borderTop: `1px solid ${PAL.rule}` }}>
                 {op.degenerate ? (
-                  <MDTypography variant="caption" display="block" sx={{ fontSize: 11, fontWeight: "bold", color: PAL.warnText, mb: 0.3 }}>
-                    ⚠ Degenerate operating point — this cut alarms almost{op.sensitivity < 0.30 ? " never" : " always"} (sensitivity {fmt(op.sensitivity)} · specificity {fmt(op.specificity)}). Not a deployable threshold; move the cost slider toward balance.
+                  <MDTypography display="block" sx={{ ...TYPE.body, fontWeight: 600, color: PAL.warnText, mb: 0.5 }}>
+                    <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.caution.glyph}</span>
+                    This switching point would switch almost{op.sensitivity < 0.30 ? " never" : " always"} (high-pain moments caught {fmt(op.sensitivity)} · low-pain moments left alone {fmt(op.specificity)}). It could not be used to drive closed-loop stimulation; move the slider toward balance.
                   </MDTypography>
                 ) : null}
-                <MDTypography variant="caption" sx={{ fontSize: 11.5 }}>
-                  <b>Cut-point ({op.rule}):</b>{` power ≥ ${fmt(op.threshold, 3)} `}
-                  <span style={{ color: "#5E5E5E" }}>(oriented, standardized band power units → device LSB in the next panel)</span>
+                <MDTypography sx={{ ...TYPE.body, color: PAL.ink }}>
+                  <b style={{ fontWeight: 600 }}>Switching point ({op.rule}):</b>{` power ≥ ${fmt(op.threshold, 3)} `}
+                  <span style={{ color: PAL.ink3 }}>(oriented, standardized band power units → device LSB in the next panel)</span>
                 </MDTypography>
-                <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5, mt: 0.2 }}>
-                  <b>Sensitivity {fmt(op.sensitivity)}</b> (catches high-pain) · <b>Specificity {fmt(op.specificity)}</b> (avoids false triggers)
+                <MDTypography display="block" sx={{ ...TYPE.body, color: PAL.ink, mt: 0.5 }}>
+                  <b style={{ fontWeight: 600 }}>High-pain moments caught {fmt(op.sensitivity)}</b> · <b style={{ fontWeight: 600 }}>low-pain moments left alone {fmt(op.specificity)}</b>
                 </MDTypography>
-                <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 11, mt: 0.3, fontStyle: "italic" }}>
-                  Operating point chosen on these data — sensitivity/specificity are optimistic; expect lower accuracy on new ratings.
+                <MDTypography display="block" sx={{ ...TYPE.body, color: PAL.ink2, mt: 0.5 }}>
+                  The switching point was chosen on these same data, so both numbers are optimistic; expect lower accuracy on new ratings.
                 </MDTypography>
-                <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 11, mt: 0.3 }}>
-                  {`${roc.n_samples} samples · ${roc.n_clusters} independent PRO clusters in time `
-                    + `occurring >= ${env.refractory_min != null ? fmt(env.refractory_min, 0) : "?"} mins apart · `
-                    + `prevalence ${fmt(roc.prevalence)} · ${roc.n_boot_ok} bootstrap replicates · `
-                    + `match: ${matchDir}`}
+                <MDTypography display="block" sx={{ ...TYPE.caption, color: PAL.ink3, mt: 0.5 }}>
+                  {`${roc.n_samples} band-power readings · ${roc.n_clusters} separate groups of pain reports, `
+                    + `at least ${env.refractory_min != null ? fmt(env.refractory_min, 0) : "?"} minutes apart · `
+                    + `share of high-pain reports ${fmt(roc.prevalence)} · ${roc.n_boot_ok} resamples · `
+                    + `matching: ${matchDir === "prior" ? "next report after each recording" : "nearest recordings to each report"}`}
                 </MDTypography>
               </MDBox>
             ) : null}

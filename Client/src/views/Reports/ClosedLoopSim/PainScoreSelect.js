@@ -12,6 +12,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import { PAIN_SCORE_OPTIONS, painScoreLabel } from "views/Reports/painScores";
+import PAL from "./palette";
 
 export function painScoreSourceText(value, bandDefault, options = PAIN_SCORE_OPTIONS) {
   const d = bandDefault || {};
@@ -28,23 +29,23 @@ export function painScoreSourceText(value, bandDefault, options = PAIN_SCORE_OPT
 export default function PainScoreSelect({ value, bandDefault, options, onChange }) {
   const opts = (options && options.length) ? options : PAIN_SCORE_OPTIONS;
   return (
-    <MDBox display="flex" flexDirection="column" sx={{ minWidth: 230 }}>
+    <MDBox display="flex" flexDirection="column" sx={{ minWidth: 230, maxWidth: 360 }}>
       <MDBox display="flex" alignItems="center" gap={1}>
-        <MDTypography variant="caption" sx={{ fontSize: 13, fontWeight: 600, color: "#1A1A1A" }}>
+        <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.ink }}>
           Pain score
         </MDTypography>
         <FormControl size="small">
           <Select value={value} onChange={(e) => onChange(e.target.value)}
             inputProps={{ "aria-label": "Pain score for every band-to-pain reading on this page" }}
-            sx={{ fontSize: 13, minWidth: 180, "& .MuiSelect-select": { py: 0.5 } }}>
+            sx={{ fontSize: PAL.fs.body, minWidth: 180, borderRadius: "4px", "& .MuiSelect-select": { py: 0.75 } }}>
             {opts.map((m) => (
-              <MenuItem key={m.key} value={m.key} sx={{ fontSize: 13 }}>{m.label}</MenuItem>
+              <MenuItem key={m.key} value={m.key} sx={{ fontSize: PAL.fs.body }}>{m.label}</MenuItem>
             ))}
           </Select>
         </FormControl>
       </MDBox>
-      <MDTypography variant="caption" sx={{ fontSize: 11.5, color: "#5E5E5E", lineHeight: 1.3 }}>
-        {painScoreSourceText(value, bandDefault, opts)}
+      <MDTypography variant="caption" sx={{ fontSize: PAL.fs.caption, lineHeight: "18px", color: PAL.ink3, mt: 0.5 }}>
+        {`Every chart below uses this score. ${painScoreSourceText(value, bandDefault, opts)}`}
       </MDTypography>
     </MDBox>
   );

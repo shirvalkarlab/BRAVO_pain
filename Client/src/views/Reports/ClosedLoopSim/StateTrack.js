@@ -23,13 +23,21 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import PAL from "./palette";
+import { TYPE, STATE } from "assets/theme/base/tokens";
 
-const INK = { pass: PAL.pass, fail: PAL.fail, warn: PAL.warn, neutral: PAL.neutral };
-
-// White text sits at 2.25:1 on the warn amber, which is below every WCAG threshold, so a warn-role
-// cell takes near-black text instead. Keyed on the same role the fill is keyed on so the two can
-// never disagree.
-const ON_INK = (role) => (role === "warn" ? PAL.onWarn : "#FFFFFF");
+/**
+ * Which state each cell role draws in (SPEC 2026-09-26 section 2.3): a pass in the ink with ✓; a
+ * failure in red with ✕ only on a track whose failure means the device refuses (`track.refusal`),
+ * otherwise in the caution ink with ▲; an open question in grey with ○, never as a pass. The lit
+ * cell carries its glyph and a tint; the others are drawn plain, so the shape and the words carry
+ * the meaning without colour.
+ */
+function stateFor(role, refusal) {
+  if (role === "pass") return STATE.pass;
+  if (role === "fail") return refusal ? STATE.refused : STATE.caution;
+  if (role === "warn") return STATE.caution;
+  return STATE.notChecked;
+}
 
 export default function StateTrack({ track, data, showBlurb = true, dense = false }) {
   if (!track) return null;
@@ -40,33 +48,30 @@ export default function StateTrack({ track, data, showBlurb = true, dense = fals
   return (
     <MDBox>
       {track.label ? (
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11,
-          fontWeight: "bold", letterSpacing: 0.4, color: "#5E5E5E", mb: 0.5 }}>
-          {track.label.toUpperCase()}
+        <MDTypography variant="caption" sx={{ ...TYPE.caption, display: "block", fontWeight: 600,
+          color: PAL.ink3, mb: 0.5 }}>
+          {track.label}
         </MDTypography>
       ) : null}
 
-      <MDBox display="flex" flexDirection="row" gap={0.5} flexWrap="wrap" alignItems="stretch">
+      <MDBox display="flex" flexDirection="row" flexWrap="wrap" alignItems="stretch" role="list">
         {cells.map((c, i) => {
           const on = i === litIndex;
-          const ink = INK[c.role] || PAL.neutral;
+          const st = stateFor(c.role, !!track.refusal);
           return (
-            <MDBox key={c.key} px={dense ? 0.8 : 1.1} py={dense ? 0.25 : 0.5}
+            <MDBox key={c.key} role="listitem" px={1.5} py={dense ? 0.5 : 0.75}
               data-lit={on ? "true" : "false"} aria-current={on ? "true" : undefined}
               sx={{
-                borderRadius: "4px",
-                border: `1.5px solid ${on ? ink : "rgba(0,0,0,0.18)"}`,
-                backgroundColor: on ? ink : "transparent",
-                minWidth: dense ? 0 : 64,
+                border: `1px solid ${on ? st.ink : PAL.rule}`,
+                marginLeft: i === 0 ? 0 : "-1px",
+                position: "relative", zIndex: on ? 1 : 0,
+                borderRadius: i === 0 ? "4px 0 0 4px" : (i === cells.length - 1 ? "0 4px 4px 0" : 0),
+                backgroundColor: on ? st.tint : PAL.surface,
               }}>
-              <MDTypography variant="caption" sx={{
-                fontSize: dense ? 11 : 11.5,
-                fontWeight: on ? 700 : 500,
-                letterSpacing: 0.3,
-                lineHeight: 1.2,
-                color: on ? ON_INK(c.role) : "#6E6E6E",
-              }}>
-                {c.label}
+              <MDTypography variant="caption" sx={{ ...TYPE.body, fontWeight: on ? 600 : 400,
+                color: on ? st.ink : PAL.ink3 }}>
+                {on ? <span aria-hidden="true" style={{ marginRight: 6 }}>{st.glyph}</span> : null}
+                <span>{c.label}</span>
               </MDTypography>
             </MDBox>
           );
@@ -74,8 +79,7 @@ export default function StateTrack({ track, data, showBlurb = true, dense = fals
       </MDBox>
 
       {showBlurb && lit && lit.blurb ? (
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11, mt: 0.6,
-          color: "#4A4A4A" }}>
+        <MDTypography variant="caption" sx={{ ...TYPE.body, display: "block", mt: 1, color: PAL.ink2 }}>
           {lit.blurb}
         </MDTypography>
       ) : null}

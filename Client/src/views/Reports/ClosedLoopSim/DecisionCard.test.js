@@ -198,11 +198,12 @@ describe("Sign and print still carries the whole record", () => {
   it("the record is in the card, folded on screen: the band, the pain score, the ratings", () => {
     const { container } = card(LEFT, SUM_L, BC_L);
     const t = container.textContent;
-    expect(t).toMatch(/THE BAND SIGNED FOR/);
+    // Sentence case since the redesign of 2026-09-26; "gates" reads "checks ... (each one can refuse)".
+    expect(t).toMatch(/The band signed for/);
     expect(t).toMatch(/Pain score used/);
     expect(t).toMatch(/Pain ratings used/);
-    expect(t).toMatch(/DEPLOYMENT GATES/);
-    expect(t).toMatch(/CAVEATS/);
+    expect(t).toMatch(/Checks before deployment \(each one can refuse\)/);
+    expect(t).toMatch(/Caveats/);
   });
   it("the print stylesheet opts the card in, opens its folds and still drops the planning view", () => {
     const css = fs.readFileSync(path.join(__dirname, "deployPrint.css"), "utf8");

@@ -53,7 +53,8 @@ test("the ratio line names the constant in effect from the payload and not a rul
     cutpoint={{ threshold: 1.5, matchDir: "prior" }} onLsbThreshold={() => {}} />));
   // Title changed on purpose by decision 302: the panel says where the cut-point sits in device
   // units, never a "threshold" to program.
-  expect(await screen.findByText(/The cut-point in device units/)).toBeInTheDocument();
+  // The title is a question since the redesign of 2026-09-26.
+  expect(await screen.findByText(/Where does the switching point sit in the device/)).toBeInTheDocument();
   const text = document.body.textContent;
   expect(text).toMatch(/1\.08× the constant in effect \(1 µV² = 345\.59 LSB\)/);
   expect(text).toMatch(/independent check of the constant in effect/);

@@ -45,8 +45,9 @@ describe("the band-power-to-pain edge names the current in force as an unadjuste
     // the measurement itself, so the sentence is a finding and not an opinion
     expect(text).toMatch(/\+0\.08/);
     expect(text).toMatch(/\+0\.01/);
-    // and it says plainly that this edge carries no such adjustment yet
-    expect(text).toMatch(/this edge is not adjusted for it/i);
+    // and it says plainly that this link carries no such adjustment yet
+    // PIN CHANGED 2026-09-26 (auditor): "edge" became "link" per SPEC section 6.
+    expect(text).toMatch(/this link is not adjusted for it/i);
   });
 
   it("does not say it on the right lead, where the measurement was not made", () => {
@@ -94,7 +95,9 @@ describe("the coherence note is one fold again (decision 302, superseding decisi
   it("the edge rows still say, in the open, which intervals span zero", () => {
     const { container } = rtlRender(wrap(
       <EvidenceTrianglePanel report={{ data: withCandidate("ZERO_THREE_LEFT", 24.5) }} />));
-    const node = leafWith(container, /INTERVAL SPANS ZERO/);
+    // Plain words since the redesign of 2026-09-26: "SIGN − (INTERVAL SPANS ZERO)" reads "... the
+    // range crosses zero, so not yet certain" (SPEC section 6).
+    const node = leafWith(container, /the range crosses zero, so not yet certain/);
     expect(node).toBeTruthy();
     expect(insideClosedFold(node)).toBe(false);
   });

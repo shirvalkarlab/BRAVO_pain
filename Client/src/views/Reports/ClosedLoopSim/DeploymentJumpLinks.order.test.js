@@ -1,6 +1,7 @@
 /**
- * The jump links at the top right of the Closed-Loop page's decision card are a table of contents:
- * their order IS the page's reading order (they lived on the sticky header until decision 302). That
+ * The jump links in the Closed-Loop page's contents row are a table of contents: their order IS the
+ * page's reading order (they lived on the sticky header until decision 302, then on the decision
+ * card until the redesign of 2026-09-26 moved them to one row under the page head). That
  * makes the list a second copy of an order the page already carries, and a second copy drifts.
  *
  * It had drifted. The list put "CL-DBS simulations" above "Sign-off", while on the page the
@@ -57,12 +58,13 @@ describe("the Closed-Loop page's jump links are a table of contents", () => {
     labelsWithArrow.forEach((j) => expect(j.id).toBe(last.id));
   });
 
-  it("the decision card, which carries Sign and print, comes straight after the grid (decision 302)", () => {
-    // The PI, 2026-09-26, merged the sign-off card into the one decision card at the top of the
-    // decision area; decision 258(a)'s "sign-off card last" is superseded with it. The record a
-    // clinician signs is printed from that card, and the print opens every fold in it.
+  it("the decision card, which carries Sign and print, opens the page, above the band grid (SPEC 2026-09-26 section 5.2)", () => {
+    // The PI, 2026-09-26, merged the sign-off card into the one decision card (decision 302), and
+    // the minimalist redesign of the same day puts that card first: the page opens with its answer,
+    // and "Which band?" is its first section below it. The record a clinician signs is printed from
+    // that card, and the print opens every fold in it.
     const onPage = idsInPageOrder();
-    expect(onPage.slice(0, 2)).toEqual(["cl-grid", "cl-decision"]);
+    expect(onPage.slice(0, 2)).toEqual(["cl-decision", "cl-grid"]);
     expect(onPage).not.toContain("cl-signoff");
     expect(onPage).not.toContain("cl-prescription");
     expect(onPage).not.toContain("cl-what-changes");

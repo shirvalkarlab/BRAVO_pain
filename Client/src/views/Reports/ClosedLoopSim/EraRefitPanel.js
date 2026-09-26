@@ -24,12 +24,16 @@ import { useCachedResult } from "database/useCachedResult";
 import { CL, recomputeSlots } from "views/Reports/moduleCacheKeys";
 import PanelStaleNote from "./PanelStaleNote";
 import PAL from "./palette";
+import { TYPE, CARD, STATE } from "assets/theme/base/tokens";
+import { plotlyLayout, REF_LINE } from "views/Reports/figureStyle";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 
 // Forest-plot row order, top-to-bottom: stim eras low→high, then a separator, then Pooled at the
 // bottom as the reference series the per-era points are judged against.
 const ROW_ORDER = ["OFF", "LOW", "HIGH", "Pooled"];
+// The server's state names in plain words (SPEC section 6: "stim era" -> "stimulation state").
+const STATE_WORDS = { OFF: "off", LOW: "low current", HIGH: "high current", Pooled: "all states" };
 
 function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
   const ref = useRef(null);
@@ -83,29 +87,29 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
     const estimable = data.n_eras_estimable;
     const lrt = data.stim_lrt || {};
     const spreadNote = (aucSpread != null)
-      ? ` (AUC spread ${fmt(aucSpread)}${cutSpread != null ? `, cut-point spread ${fmt(cutSpread, 2)}` : ""}, descriptive)`
+      ? ` (the readings span ${fmt(aucSpread)}${cutSpread != null ? ` and the switching points ${fmt(cutSpread, 2)}` : ""} across states; described, not tested)`
       : "";
     const lrtNote = (lrt.available && lrt.lrt_p != null)
-      ? ` band×era LRT p=${fmt(lrt.lrt_p, 3)}.` : " band×era LRT did not converge.";
+      ? ` Test of whether the link differs between states: p ${fmt(lrt.lrt_p, 3)}.` : " The test of whether the link differs between states did not converge.";
     // An era whose POINT AUC dipped below 0.5 but whose CI still straddles chance is NOT a reversal
     // (consistent with no stim-state effect) — surface it as a soft caveat, never the hard verdict.
     const dipNote = (!data.any_reversed && data.any_below_half)
-      ? " (One era's point AUC fell below 0.5, but its 95% CI still includes chance, so this is noise, not a confirmed reversal.)"
+      ? " (One state's reading fell below 0.5, but its 95% range still includes a coin toss, so this is noise, not a confirmed reversal.)"
       : "";
     if (estimable < 2) {
-      verdict = { color: PAL.neutral, text: "Only one stim era has enough data — per-era portability across stim states can't be assessed." };
+      verdict = { state: "notChecked", text: "Only one stimulation state has enough data, so whether the band holds across states cannot be checked." };
     } else if (data.any_reversed) {
       // The worst closed-loop failure: the band's direction CONFIDENTLY flips under stim — an era's
       // ENTIRE 95% CI sits below chance, not just its point estimate. Hard fragile.
-      verdict = { color: PAL.fail, text: `Direction REVERSES under stim: at least one era's band–pain relationship confidently flips sign — its entire 95% AUC CI sits below 0.5 under the pooled orientation. A controller anchored on the pooled threshold would ramp the WRONG way in that era — do not deploy as a fixed-sign adaptive band.${lrtNote}` };
+      verdict = { state: "caution", text: `The link reverses under stimulation: in at least one state the whole 95% range sits below 0.5, the opposite way to all states together. A device set on the all-states switching point would adjust the WRONG way in that state, so this band should not drive closed-loop stimulation with a fixed direction.${lrtNote}` };
     } else if (lrt.available && lrt.stim_stable === false) {
-      verdict = { color: PAL.fail, text: `Fragile across stim states: the band×era interaction is significant (p=${fmt(lrt.lrt_p, 3)}) — the band's pain-prediction depends on stim state, so the same threshold may not hold once stim changes.${spreadNote}` };
+      verdict = { state: "caution", text: `The link differs between stimulation states (p ${fmt(lrt.lrt_p, 3)}): how well the band predicts pain depends on the state, so the same switching point may not hold once stimulation changes.${spreadNote}` };
     } else if (data.portable_by_ci === false) {
-      verdict = { color: PAL.warnText, text: `Per-era CIs do not all overlap the pooled estimate — portability is uncertain across stim states.${lrtNote}${spreadNote}` };
+      verdict = { state: "caution", text: `The 95% ranges for each state do not all overlap the reading for all states together, so whether the band holds across states is uncertain.${lrtNote}${spreadNote}` };
     } else if (data.portable_by_ci === true) {
-      verdict = { color: PAL.pass, text: `Portable across stim states: no era confidently reverses direction and every era's 95% CI overlaps the pooled estimate — the threshold holds across stim levels.${lrtNote}${dipNote}${spreadNote}` };
+      verdict = { state: "pass", text: `Holds across stimulation states: no state clearly reverses, and every state's 95% range overlaps the reading for all states together.${lrtNote}${dipNote}${spreadNote}` };
     } else {
-      verdict = { color: PAL.neutral, text: `Per-era portability across stim states is indeterminate from the available eras.${lrtNote}${dipNote}${spreadNote}` };
+      verdict = { state: "notChecked", text: `Whether the band holds across stimulation states cannot be told from the states available.${lrtNote}${dipNote}${spreadNote}` };
     }
   }
 
@@ -143,22 +147,24 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
       traces.push({
         x: [pooled.auc_lo, pooled.auc_hi, pooled.auc_hi, pooled.auc_lo],
         y: [yLo, yLo, yHi, yHi],
-        fill: "toself", mode: "none", fillcolor: `${PAL.accent}18`,
+        fill: "toself", mode: "none", fillcolor: PAL.fillMuted,
         hoverinfo: "skip", showlegend: false,
       });
       [pooled.auc_lo, pooled.auc_hi].forEach((xb) => {
         traces.push({ x: [xb, xb], y: [yLo, yHi], type: "scatter", mode: "lines",
-          line: { color: PAL.accent, dash: "dot", width: 1 }, hoverinfo: "skip", showlegend: false });
+          line: { color: PAL.graphic, dash: "dot", width: 1 }, hoverinfo: "skip", showlegend: false });
       });
       annotations.push({ x: pooled.auc_hi, y: yHi, xref: "x", yref: "y", yanchor: "bottom",
-        xanchor: "left", text: "shaded = pooled 95% CI", showarrow: false,
-        font: { size: 11, color: PAL.accent } });
+        xanchor: "left", text: "shaded: 95% range, all states together", showarrow: false,
+        font: { size: PAL.fs.caption, color: PAL.ink3 } });
     }
     // (1) chance line at AUC = 0.5.
     traces.push({
       x: [0.5, 0.5], y: [yLo, yHi], type: "scatter", mode: "lines",
-      line: { color: PAL.neutral, dash: "dot", width: 1 }, hoverinfo: "skip", showlegend: false,
+      line: REF_LINE, hoverinfo: "skip", showlegend: false,
     });
+    annotations.push({ x: 0.5, y: yLo, xref: "x", yref: "y", yanchor: "top", xanchor: "center",
+      text: "coin toss", showarrow: false, font: { size: PAL.fs.caption, color: PAL.ink3 } });
     // (2) per-row CI whiskers + (3) AUC points, colored by era role.
     rows.forEach((r, i) => {
       const y = yOf(i);
@@ -176,65 +182,74 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
         const reversed = !!r.era.reversed;
         traces.push({
           x: [r.era.auc], y: [y], type: "scatter", mode: "markers",
-          marker: { color: reversed ? PAL.fail : color, size: r.tag === "Pooled" ? 13 : 11,
+          marker: { color, size: r.tag === "Pooled" ? 13 : 11,
             symbol: reversed ? "x" : (r.tag === "Pooled" ? "diamond" : "circle"),
-            line: { color: "#fff", width: 1.5 } },
-          hovertemplate: `${r.tag}: AUC %{x:.2f}`
-            + (reversed ? " (direction REVERSED vs pooled)" : "")
-            + (r.era.auc_lo != null ? `<br>95% CI ${fmt(r.era.auc_lo)}–${fmt(r.era.auc_hi)}` : "")
-            + `<br>${r.era.n_clusters ?? "—"} ratings · prev ${fmt(r.era.prevalence)}<extra></extra>`,
+            line: { color: PAL.surface, width: 1.5 } },
+          hovertemplate: `${STATE_WORDS[r.tag] || r.tag}: tells high pain from low %{x:.2f}`
+            + (reversed ? " (REVERSED against all states together)" : "")
+            + (r.era.auc_lo != null ? `<br>95% range ${fmt(r.era.auc_lo)} to ${fmt(r.era.auc_hi)}` : "")
+            + `<br>${r.era.n_clusters ?? "—"} ratings · share of high-pain reports ${fmt(r.era.prevalence)}<extra></extra>`,
           showlegend: false,
         });
         if (reversed) {
           annotations.push({ x: r.era.auc, y, xref: "x", yref: "y", yanchor: "bottom",
             xanchor: "center", text: "reversed", showarrow: false,
-            font: { size: 11, color: PAL.fail }, yshift: 8 });
+            font: { size: PAL.fs.caption, color: PAL.warnText }, yshift: 8 });
         }
       } else {
         // Non-estimable era (audit C7): do NOT place a glyph on the chance line — that reads as
         // "performs at chance". Instead label the row "n/a" at the LEFT axis margin, off the AUC
         // scale, so the row stays visible without encoding absence as a meaningful AUC value.
         annotations.push({ x: xLeft, y, xref: "x", yref: "y", xanchor: "left", yanchor: "middle",
-          text: "n/a (insufficient samples)", showarrow: false,
-          font: { size: 11, color: PAL.neutral, style: "italic" } });
+          text: "not enough readings", showarrow: false,
+          font: { size: PAL.fs.caption, color: PAL.ink3 } });
       }
     });
 
     const tickText = rows.map((r) => {
-      if (r.tag === "Pooled") return "<b>Pooled</b>";
+      if (r.tag === "Pooled") return "all states";
       const n = r.count != null ? ` (${r.count})` : "";
-      return `${r.tag}${n}`;
+      return `${STATE_WORDS[r.tag] || r.tag}${n}`;
     });
-    const layout = {
-      margin: { l: 64, r: 14, t: 10, b: 40 }, height: 220,
-      xaxis: { title: { text: "AUC (95% clustered-bootstrap CI)", font: { size: 11 } },
-        range: [xLeft, 1.02], zeroline: false, tickfont: { size: 11 }, dtick: 0.1 },
+    const layout = plotlyLayout({
+      margin: { l: 96, r: 16, t: 24, b: 48 }, height: 240,
+      xaxis: { title: { text: "how well it tells high pain from low, with its 95% range (0.5 = coin toss)" },
+        range: [xLeft, 1.02], dtick: 0.1 },
       yaxis: { tickmode: "array", tickvals: rows.map((_, i) => yOf(i)), ticktext: tickText,
-        range: [yLo, yHi], tickfont: { size: 11 }, automargin: true },
+        range: [yLo, yHi], showline: false, ticks: "" },
       annotations, showlegend: false,
-    };
+    });
     Plotly.react(ref.current, traces, layout, PAL.MODEBAR);
   }, [data]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Purge on unmount only (keep the node across refits).
   useEffect(() => () => { if (ref.current) Plotly.purge(ref.current); }, []);
 
+  const vs = verdict ? (STATE[verdict.state] || STATE.notChecked) : null;
   return (
-    <Card sx={{ width: "100%" }}>
-      <MDBox p={2}>
-        <MDTypography variant="h6" sx={{ fontSize: 14, mb: 1 }}>
-          Per-era refit (OFF / LOW / HIGH stim)
+    <Card sx={{ ...CARD, width: "100%" }}>
+      <MDBox p={3}>
+        <MDTypography component="h3" sx={{ ...TYPE.title, color: PAL.ink, mb: 1 }}>
+          Does the switching point hold at every stimulation state?
         </MDTypography>
         <PanelStaleNote stale={cached.stale} staleReasons={cached.staleReasons}
           loading={cached.loading} notKept={cached.notKept}
           onRecompute={() => recomputeSlots(participantUid, [CL.era])} />
         {loading ? (
-          <MDTypography variant="caption" color="text" sx={{ fontStyle: "italic", fontSize: 11 }}>
-            Refitting the ROC within each stim era…
+          <MDTypography sx={{ ...TYPE.body, color: PAL.ink2 }}>
+            Working out the reading within each stimulation state…
           </MDTypography>
         ) : err ? (
-          <MDTypography variant="caption" sx={{ fontSize: 11, color: PAL.fail }}>
-            {`Unavailable: ${err}.`}
+          <MDTypography sx={{ ...TYPE.body, color: PAL.ink2 }}>
+            <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.notChecked.glyph}</span>
+            {`Not available: ${err}.`}
+          </MDTypography>
+        ) : null}
+
+        {data && !loading && !err && verdict ? (
+          <MDTypography sx={{ ...TYPE.lead, color: vs.ink === PAL.ink ? PAL.ink : vs.ink, mb: 1, maxWidth: "68ch" }}>
+            <span aria-hidden="true" style={{ marginRight: 6 }}>{vs.glyph}</span>
+            {verdict.text}
           </MDTypography>
         ) : null}
 
@@ -242,20 +257,10 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
         <div ref={ref} style={{ width: "100%", display: data && !loading && !err ? "block" : "none" }} />
 
         {data && !loading && !err ? (
-          <>
-            {verdict ? (
-              <MDBox mt={1.2} p={1} sx={{ borderRadius: "6px", backgroundColor: `${verdict.color}12`,
-                border: `1px solid ${verdict.color}40` }}>
-                <MDTypography variant="caption" sx={{ fontSize: 11, color: verdict.color, fontWeight: "bold" }}>
-                  {verdict.text}
-                </MDTypography>
-              </MDBox>
-            ) : null}
-            <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 11, mt: 0.6 }}>
-              {`Eras: OFF < ${data.thresholds_mA.off_max} mA · LOW ≤ ${data.thresholds_mA.low_max} mA · HIGH above. `
-                + "Same era boundaries as the stim-stability LRT."}
-            </MDTypography>
-          </>
+          <MDTypography display="block" sx={{ ...TYPE.caption, color: PAL.ink3, mt: 1 }}>
+            {`Stimulation states: off below ${data.thresholds_mA.off_max} mA · low current up to ${data.thresholds_mA.low_max} mA · high current above. `
+              + "The same boundaries as the stability section above."}
+          </MDTypography>
         ) : null}
       </MDBox>
     </Card>

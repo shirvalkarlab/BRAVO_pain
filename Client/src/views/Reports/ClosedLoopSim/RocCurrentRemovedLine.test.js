@@ -28,7 +28,8 @@ const LIVE = {
 test("prints the adjusted area beside the plain one, with its interval, and says it is descriptive", () => {
   render(wrap(<RocCurrentRemovedLine plainAuc={0.6173} adjusted={LIVE} />));
   const line = screen.getByTestId("roc-current-removed");
-  expect(line).toHaveTextContent("AUC 0.62 plainly; 0.58 (0.43–0.71) with the stimulation current taken out");
+  // "AUC" reads "How well it tells high pain from low" since the redesign of 2026-09-26.
+  expect(line).toHaveTextContent("How well it tells high pain from low: 0.62 plainly; 0.58 (0.43–0.71) with the stimulation current taken out");
   expect(line).toHaveTextContent("39 pain reports");
   expect(line).toHaveTextContent("5 distinct Left currents");
   expect(line).toHaveTextContent("Descriptive only");

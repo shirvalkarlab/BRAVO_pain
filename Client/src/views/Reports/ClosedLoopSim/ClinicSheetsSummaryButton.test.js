@@ -29,12 +29,25 @@ const UID = "2e3c75c00d7f4f37b53a048d195f11da";
 
 beforeEach(() => window.localStorage.clear());
 
-test("it says plainly which ratings the summary uses, and has a red outline", () => {
+test("it says plainly which ratings the summary uses", () => {
   const { rerender } = rtlRender(wrap(<ClinicSheetsSummaryButton on={false} onToggle={() => {}} />));
-  const btn = screen.getByRole("button", { name: /Clinic-sheet ratings in the summary: off/i });
-  expect(btn).toHaveStyle(`border: 2px solid ${PAL.fail}`);
+  expect(screen.getByRole("button", { name: /Clinic-sheet ratings in the summary: off/i })).toBeInTheDocument();
   rerender(wrap(<ClinicSheetsSummaryButton on onToggle={() => {}} />));
   expect(screen.getByRole("button", { name: /Clinic-sheet ratings in the summary: on/i })).toBeInTheDocument();
+});
+
+test("it is a plain on/off switch in the accent colour, with no red outline (SPEC 2026-09-26 section 5.2)", () => {
+  // Red now means only that the device refuses or a value is above the safe ceiling, so the
+  // switch that chooses which ratings the summary uses is drawn in the accent, not in red.
+  const { rerender } = rtlRender(wrap(<ClinicSheetsSummaryButton on={false} onToggle={() => {}} />));
+  const off = screen.getByRole("button", { name: /summary: off/i });
+  expect(off).toHaveAttribute("aria-pressed", "false");
+  expect(off.outerHTML).not.toMatch(new RegExp(PAL.fail.slice(1), "i"));
+  rerender(wrap(<ClinicSheetsSummaryButton on onToggle={() => {}} />));
+  const on = screen.getByRole("button", { name: /summary: on/i });
+  expect(on).toHaveAttribute("aria-pressed", "true");
+  expect(on.querySelector("span[aria-hidden]")).toHaveStyle(`background-color: ${PAL.accent}`);
+  expect(on.outerHTML).not.toMatch(/rgb\(180, 35, 24\)/);
 });
 
 test("one click asks to flip it", () => {

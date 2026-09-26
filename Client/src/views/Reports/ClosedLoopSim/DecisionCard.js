@@ -31,12 +31,13 @@
  * evidence card, which stays); the three state tracks side by side (the status line says the same
  * in one sentence); the caveat-count sentence (the count is on the Details control).
  */
-import { Card, Icon } from "@mui/material";
+import { Card } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDButton from "components/MDButton";
 
 import PAL from "./palette";
+import { TYPE, STATE, decisionBar } from "assets/theme/base/tokens";
 import Fold from "./Fold";
 import { TRACKS } from "./stateTracks";
 import { provisionalCaveat } from "./ProvisionalNote";
@@ -49,11 +50,11 @@ import BandCandidateIdentity from "./BandCandidateIdentity";
 // Jump targets, set as `id` on the Grid items in index.js, in the order the page draws them.
 // DeploymentJumpLinks.order.test.js holds this list to the page's own order.
 export const JUMPS = [
-  { id: "cl-rules", label: "Device rules" },
-  { id: "cl-evidence", label: "Evidence" },
-  { id: "cl-stability", label: "Stability" },
-  { id: "cl-three-source", label: "Current and band power" },
-  { id: "cl-simulation", label: "CL-DBS simulations" },
+  { id: "cl-grid", label: "Which band?" },
+  { id: "cl-rules", label: "Does the device allow it?" },
+  { id: "cl-evidence", label: "Does the evidence hang together?" },
+  { id: "cl-stability", label: "The same at every stimulation state?" },
+  { id: "cl-background", label: "Background" },
 ];
 
 function jumpTo(id) {
@@ -69,27 +70,27 @@ export function decisionStatus(rep) {
   const device = TRACKS.device.lit(rep);
   const evidence = TRACKS.evidence.lit(rep);
   if (device === 2) {
-    return { key: "unevaluated", ink: "#4A4A4A", icon: "help_outline",
+    return { key: "unevaluated", ink: PAL.ink3, glyph: STATE.notChecked.glyph,
       headline: "Device rules not evaluated", sub: "Nothing here is permission to program." };
   }
   if (device === 1) {
-    return { key: "refused", ink: PAL.failText, icon: "block",
+    return { key: "refused", ink: PAL.failText, glyph: STATE.refused.glyph,
       headline: "Device refuses this configuration",
       sub: "This record authorises nothing." };
   }
   if (evidence === 1) {
-    return { key: "misaligned", ink: PAL.warnText, icon: "report_problem",
-      headline: "Device allows it; evidence contradicts the control law", sub: null };
+    return { key: "misaligned", ink: PAL.warnText, glyph: STATE.caution.glyph,
+      headline: "Device allows it; evidence contradicts what the automatic adjustment assumes", sub: null };
   }
   if (evidence === 2) {
-    return { key: "unestablished", ink: PAL.warnText, icon: "help_outline",
+    return { key: "unestablished", ink: PAL.warnText, glyph: STATE.caution.glyph,
       headline: "Device allows it; evidence not established", sub: null };
   }
   if (provisionalCaveat(rep)) {
-    return { key: "supported_provisional", ink: PAL.warnText, icon: "check_circle",
+    return { key: "supported_provisional", ink: PAL.warnText, glyph: STATE.caution.glyph,
       headline: "Device allows it; evidence supports it (provisional)", sub: null };
   }
-  return { key: "supported", ink: PAL.passText, icon: "check_circle",
+  return { key: "supported", ink: PAL.accent, glyph: STATE.pass.glyph,
     headline: "Device allows it; evidence supports it", sub: null };
 }
 
@@ -126,17 +127,18 @@ export function unevaluatedBullets(rep, summaryData) {
   return [...fromReport, ...fromGates];
 }
 
-function Bullets({ items, cls, ink, icon, label }) {
+function Bullets({ items, cls, ink, glyph, label }) {
   if (!items.length) return null;
   return (
     <MDBox component="ul" className={cls} aria-label={label}
-      sx={{ listStyle: "none", p: 0, m: 0, mt: 0.8 }}>
+      sx={{ listStyle: "none", p: 0, m: 0, mt: 1 }}>
       {items.map((b) => (
-        <MDBox component="li" key={b.key} display="flex" alignItems="center" gap={0.6} py={0.15}
+        <MDBox component="li" key={b.key} display="flex" alignItems="baseline" gap={1} py={0.25}
           title={b.title || b.why || undefined}>
-          <Icon aria-hidden="true" sx={{ fontSize: "18px !important", color: ink }}>{icon}</Icon>
+          <span aria-hidden="true" style={{ color: ink, fontSize: PAL.fs.body, width: "1.2em",
+            display: "inline-block" }}>{glyph}</span>
           <MDTypography variant="caption" component="span" data-bullet=""
-            sx={{ fontSize: 13.5, fontWeight: 600, color: ink, lineHeight: 1.3 }}>
+            sx={{ ...TYPE.body, fontWeight: 600, color: ink }}>
             {b.text}
           </MDTypography>
         </MDBox>
@@ -145,32 +147,54 @@ function Bullets({ items, cls, ink, icon, label }) {
   );
 }
 
-/**
- * One part of the Details fold. `folded` parts (the long reference material: how each value was
- * derived, the full sign-off record, the band file) are their own closed folds even when Details
- * opens by itself, so an open Details shows why the answer is what it is and who can change it,
- * and not three thousand words; the print stylesheet opens every fold.
- */
-function Section({ title, children, folded = false }) {
-  if (!children) return null;
+/** The contents row: the page's jump links, in one slim row under the head, never in a card. */
+export function ContentsRow() {
   return (
-    <MDBox mt={1.2} pt={1} sx={{ borderTop: "1px solid rgba(0,0,0,0.10)" }}>
-      {folded ? (
-        <Fold show={title} hide={`Hide: ${title.toLowerCase()}`} mt={0}>{children}</Fold>
-      ) : (
-        <>
-          {title ? (
-            <MDTypography variant="caption" sx={{ display: "block", fontSize: 12, fontWeight: 700,
-              color: "#1A1A1A", mb: 0.4 }}>
-              {title}
-            </MDTypography>
-          ) : null}
-          {children}
-        </>
-      )}
+    <MDBox component="nav" className="cl-jumps" aria-label="On this page" display="flex"
+      flexWrap="wrap" columnGap={3} rowGap={0.5} mt={2} pt={1.5}
+      sx={{ borderTop: `1px solid ${PAL.rule}` }}>
+      {JUMPS.map((j) => (
+        <MDTypography key={j.id} variant="caption" component="button" type="button"
+          onClick={() => jumpTo(j.id)}
+          sx={{ ...TYPE.body, color: PAL.accent, cursor: "pointer", whiteSpace: "nowrap",
+            background: "none", border: 0, p: 0, fontFamily: "inherit",
+            "&:hover": { textDecoration: "underline" },
+            "&:focus-visible": { outline: `2px solid ${PAL.accent}`, outlineOffset: 2 } }}>
+          {j.label}
+        </MDTypography>
+      ))}
     </MDBox>
   );
 }
+
+/**
+ * One part of the Details fold, under a plain heading. The parts are no longer folds of their own
+ * (SPEC 2026-09-26 section 4 rule 4: no fold inside a fold); the print stylesheet still opens the
+ * one Details fold, so the paper record keeps its full detail.
+ */
+function Section({ title, children }) {
+  if (!children) return null;
+  return (
+    <MDBox mt={3} pt={2} sx={{ borderTop: `1px solid ${PAL.rule}` }}>
+      {title ? (
+        <MDTypography component="h3" sx={{ ...TYPE.body, fontWeight: 600, color: PAL.ink, mb: 1 }}>
+          {title}
+        </MDTypography>
+      ) : null}
+      {children}
+    </MDBox>
+  );
+}
+
+/** The one primary button on the card: accent fill, white text, 600, 36 px tall (SPEC rule 6). */
+const PRIMARY = { textTransform: "none", ...TYPE.body, fontWeight: 600, minHeight: 36, height: 36,
+  px: 2, borderRadius: "4px", boxShadow: "none", backgroundColor: PAL.accent, color: PAL.onFill,
+  "&:hover": { backgroundColor: PAL.accent, boxShadow: "none" },
+  "&.Mui-disabled": { backgroundColor: PAL.fillMuted, color: PAL.ink3 } };
+/** A secondary button: white with a 1 px grey border. */
+const SECONDARY = { textTransform: "none", ...TYPE.body, fontWeight: 400, minHeight: 36, height: 36,
+  px: 2, borderRadius: "4px", boxShadow: "none", backgroundColor: PAL.surface, color: PAL.ink,
+  border: `1px solid ${PAL.ink3}`, "&:hover": { backgroundColor: PAL.fillMuted } };
 
 export default function DecisionCard({ participantUid, bandCandidate, summary, deploymentReport,
                                        chosenBand, bandRecord, cutpoint, mode, onMode, onRecompute }) {
@@ -183,7 +207,7 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
   const reportErr = mismatch ? null : deploymentReport && deploymentReport.err;
   const sm = (summary && summary.data) || null;
   const status = mismatch
-    ? { key: "other_band", ink: PAL.warnText, icon: "sync_problem",
+    ? { key: "other_band", ink: PAL.warnText, glyph: STATE.caution.glyph,
       headline: `Recompute: the analysis shown is for ${mismatch.computedFor}`,
       sub: `The chosen ${mismatch.what || "band"} is ${mismatch.chosen}. Nothing on this page `
         + "describes it until the analysis is recomputed." }
@@ -203,84 +227,73 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
     ? `Details (${caveats.length} caveat${caveats.length === 1 ? "" : "s"}${nHigh ? `, ${nHigh} serious` : ""})`
     : "Details";
 
+  const eyebrow = [bc.contact_label || bc.contact || null,
+    bc.center_freq_hz != null ? `${fmtHz(bc.center_freq_hz)} Hz` : null,
+    bc.hemisphere ? `${String(bc.hemisphere).toLowerCase()} side` : null,
+    pain && pain.label ? `pain score ${pain.label}` : null].filter(Boolean).join(" · ");
+  const refused = status.key === "refused";
+
   return (
-    <Card className="cl-decision-card" sx={{ width: "100%", border: `2px solid ${status.ink}`,
-      boxShadow: "none" }}>
-      <MDBox px={2.2} pt={1.8} pb={1.6}>
+    <Card className="cl-decision-card" sx={{ width: "100%", backgroundColor: PAL.surface,
+      border: `1px solid ${PAL.rule}`, ...decisionBar(refused), borderRadius: "6px", boxShadow: "none" }}>
+      <MDBox p={3}>
         <StaleNotice inputsStale={actions.inputsStale} computedAt={actions.computedAt}
           staleWhy={actions.staleWhy} />
 
-        <MDBox display="flex" flexDirection="row" alignItems="flex-start" gap={1.2}>
-          <Icon aria-hidden="true" sx={{ fontSize: "30px !important", color: status.ink, mt: 0.1 }}>
-            {loading ? "hourglass_empty" : status.icon}
-          </Icon>
-          <MDBox flex="1 1 auto">
-            <MDTypography variant="h5" component="h2" sx={{ fontSize: 19, lineHeight: 1.25, color: status.ink }}>
-              {loading ? "Evaluating the device rules and the evidence…" : status.headline}
-            </MDTypography>
-            {!loading && status.sub ? (
-              <MDTypography variant="caption" sx={{ display: "block", fontSize: 13, color: "#2A2A2A", mt: 0.2 }}>
-                {status.sub}
-              </MDTypography>
-            ) : null}
-            <MDTypography variant="caption" sx={{ display: "block", fontSize: 12.5, color: "#4A4A4A", mt: 0.3 }}>
-              {`${bc.contact_label || bc.contact || "band"} at ${fmtHz(bc.center_freq_hz) || "an unspecified"} Hz`
-                + `${bc.hemisphere ? `, ${bc.hemisphere} side` : ""}`
-                + `${pain && pain.label ? `, pain score ${pain.label}` : ""}`
-                + `${reportErr ? `. The device rule table is unavailable: ${reportErr}` : ""}`}
-            </MDTypography>
-          </MDBox>
-          <MDBox component="nav" className="cl-jumps" aria-label="On this page" display="flex"
-            flexDirection="column" gap={0.2} flex="0 0 auto" alignItems="flex-end">
-            {JUMPS.map((j) => (
-              <MDTypography key={j.id} variant="caption" component="button" type="button"
-                onClick={() => jumpTo(j.id)}
-                sx={{ fontSize: 12, color: PAL.accent, cursor: "pointer", whiteSpace: "nowrap",
-                  background: "none", border: 0, p: 0, fontFamily: "inherit",
-                  "&:hover": { textDecoration: "underline" },
-                  "&:focus-visible": { outline: `2px solid ${PAL.accent}`, outlineOffset: 2 } }}>
-                {j.label}
-              </MDTypography>
-            ))}
-          </MDBox>
-        </MDBox>
+        {eyebrow ? (
+          <MDTypography sx={{ ...TYPE.caption, color: PAL.ink3 }}>{eyebrow}</MDTypography>
+        ) : null}
+        <MDTypography component="h2" sx={{ ...TYPE.answer, color: status.ink, mt: 0.5 }}>
+          {loading ? "Evaluating the device rules and the evidence…" : (
+            <>
+              <span aria-hidden="true" style={{ marginRight: 8 }}>{status.glyph}</span>
+              {status.headline}
+            </>
+          )}
+        </MDTypography>
+        {!loading && status.sub ? (
+          <MDTypography sx={{ ...TYPE.lead, color: PAL.ink, mt: 1 }}>{status.sub}</MDTypography>
+        ) : null}
+        {reportErr ? (
+          <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, mt: 1 }}>
+            {`The device rule table is unavailable: ${reportErr}`}
+          </MDTypography>
+        ) : null}
 
         {mismatch && onRecompute ? (
-          <MDButton size="small" variant="contained" color="info" onClick={onRecompute}
-            sx={{ textTransform: "none", fontSize: 12.5, mt: 1 }}>
+          <MDButton size="small" variant="contained" onClick={onRecompute} sx={{ ...PRIMARY, mt: 2 }}>
             {`Recompute for ${mismatch.chosen}`}
           </MDButton>
         ) : null}
 
         {!loading ? (
           <>
-            <Bullets items={red} cls="cl-bullets-red" ink={PAL.failText} icon="close"
+            <Bullets items={red} cls="cl-bullets-red" ink={PAL.failText} glyph={STATE.refused.glyph}
               label="Why the device refuses" />
-            <Bullets items={yellow} cls="cl-bullets-yellow" ink={PAL.warnText} icon="priority_high"
+            <Bullets items={yellow} cls="cl-bullets-yellow" ink={PAL.warnText} glyph={STATE.caution.glyph}
               label="Evidence that was not evaluated" />
           </>
         ) : null}
 
-        <MDBox mt={1.6} pt={1.2} sx={{ borderTop: "1px solid rgba(0,0,0,0.10)" }}>
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 13, fontWeight: 700,
-            color: "#1A1A1A", mb: 0.6 }}>
+        <MDBox mt={3} pt={2} sx={{ borderTop: `1px solid ${PAL.rule}` }}>
+          <MDTypography component="h3" sx={{ ...TYPE.lead, fontWeight: 600, color: PAL.ink, mb: 1 }}>
             Values to enter on the A610
           </MDTypography>
           <ParameterTable report={mismatch ? { data: null } : deploymentReport} mode={mode} onMode={onMode} />
         </MDBox>
 
-        <MDBox className="cl-signoff-actions" display="flex" gap={1} mt={1.6} flexWrap="wrap">
-          <MDButton size="small" variant="outlined" color="dark" onClick={actions.printWithFigures}
-            disabled={actions.capturing} sx={{ textTransform: "none", fontSize: 12.5 }}>
+        <MDBox className="cl-signoff-actions" display="flex" gap={2} mt={3} flexWrap="wrap">
+          <MDButton size="small" variant="contained" onClick={actions.printWithFigures}
+            disabled={actions.capturing} sx={PRIMARY}>
             {actions.capturing ? "Capturing figures…" : "Sign and print"}
           </MDButton>
-          <MDButton size="small" variant="text" color="info" onClick={actions.exportJson}
-            disabled={actions.capturing || !actions.hasData} sx={{ textTransform: "none", fontSize: 12.5 }}>
+          <MDButton size="small" variant="outlined" onClick={actions.exportJson}
+            disabled={actions.capturing || !actions.hasData} sx={SECONDARY}>
             Export JSON
           </MDButton>
         </MDBox>
 
-        <MDBox className="cl-details" mt={1.2}>
+        <MDBox className="cl-details" mt={3}>
           {/* Keyed on the verdict, so the fold opens by itself when the answer changes to one that
               needs reading, and a reader's own toggle survives every other re-render. */}
           <Fold key={status.key} show={detailsLabel} hide="Hide details" defaultOpen={!allowedAndSupported}>
@@ -291,21 +304,22 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
             {blockers.length ? (
               <Section title="The rule table's own sentences">
                 {blockers.map((b) => (
-                  <MDTypography key={b} variant="caption" sx={{ display: "block", fontSize: 11.5, color: PAL.failText, mt: 0.3 }}>
+                  <MDTypography key={b} sx={{ ...TYPE.body, display: "block", color: PAL.failText, mt: 0.5 }}>
+                    <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.refused.glyph}</span>
                     {b}
                   </MDTypography>
                 ))}
               </Section>
             ) : null}
-            <Section title="How each value was derived and checked" folded>
+            <Section title="How each value was worked out and checked">
               <ParameterDetails report={deploymentReport} mode={mode} />
             </Section>
-            <Section title="The sign-off record: gates, evidence, caveats, the band signed for" folded>
+            <Section title="The sign-off record: checks, evidence, caveats, the band signed for">
               <SignoffRecord bandCandidate={bandCandidate} summary={summary}
                 deploymentReport={deploymentReport} chosenBand={chosenBand} bandRecord={bandRecord} />
             </Section>
             {bc.contact ? (
-              <Section title="The band as committed" folded>
+              <Section title="The band as chosen">
                 <BandCandidateIdentity bc={bc} envelope={chosenBand} />
               </Section>
             ) : null}

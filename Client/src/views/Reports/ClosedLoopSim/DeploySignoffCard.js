@@ -11,12 +11,13 @@
  * Every number here is one the page already shows elsewhere, gathered for the signed sheet.
  */
 import { useEffect, useState } from "react";
-import { Grid, Icon } from "@mui/material";
+import { Grid } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import { captureFigureSnapshots } from "./figureSnapshots";
 import PAL from "./palette";
+import { STATE } from "assets/theme/base/tokens";
 import ProvisionalNote from "./ProvisionalNote";
 import { gridSettingsLine } from "./BandSweepGridPanel";
 import { painScoreLabel } from "views/Reports/painScores";
@@ -30,35 +31,37 @@ function GateRow({ gate }) {
   // not a check — absence of evidence must never look like a pass. A NECESSARY gate (a hard
   // prerequisite to program at all) is tagged so a clinician sees which failures are blocking.
   const state = gate.state || (gate.pass ? "pass" : "fail");
+  // A statistical check that fails is evidence, not a device refusal: caution with ▲, never red.
   const STYLE = {
-    pass: { color: PAL.passText, icon: "check_circle" },
-    fail: { color: PAL.failText, icon: "cancel" },
-    indeterminate: { color: PAL.indeterminate, icon: "help" },
+    pass: { color: PAL.passText, icon: STATE.pass.glyph },
+    fail: { color: PAL.warnText, icon: STATE.caution.glyph },
+    indeterminate: { color: PAL.indeterminate, icon: STATE.notChecked.glyph },
   };
   const s = STYLE[state] || STYLE.fail;
   return (
     <MDBox display="flex" alignItems="flex-start" py={0.4}
-      sx={{ borderBottom: "1px solid #f0f0f0" }}>
-      <Icon sx={{ fontSize: "18px !important", color: s.color, mr: 1, mt: 0.1 }}>
+      sx={{ borderBottom: `1px solid ${PAL.rule}` }}>
+      <span aria-hidden="true" style={{ color: s.color, marginRight: 8, width: "1.2em",
+        display: "inline-block", fontSize: PAL.fs.body }}>
         {s.icon}
-      </Icon>
+      </span>
       <MDBox flex={1}>
-        <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold", color: s.color }}>
+        <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: s.color }}>
           {gate.label}
           {gate.necessary ? (
-            <span style={{ fontSize: 11, fontWeight: "bold", color: PAL.neutral,
-              marginLeft: 6, verticalAlign: "middle", letterSpacing: "0.04em" }}>
-              REQUIRED
+            <span style={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.neutral,
+              marginLeft: 6, verticalAlign: "middle" }}>
+              required
             </span>
           ) : null}
           {state === "indeterminate" ? (
-            <span style={{ fontSize: 11, fontWeight: "bold", color: PAL.indeterminate,
-              marginLeft: 6, verticalAlign: "middle", letterSpacing: "0.04em" }}>
-              NOT TESTED
+            <span style={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.indeterminate,
+              marginLeft: 6, verticalAlign: "middle" }}>
+              not tested
             </span>
           ) : null}
         </MDTypography>
-        <MDTypography variant="caption" display="block" sx={{ fontSize: 11, color: "#5E5E5E" }}>
+        <MDTypography variant="caption" display="block" sx={{ fontSize: PAL.fs.body, color: PAL.ink3 }}>
           {gate.detail}
         </MDTypography>
       </MDBox>
@@ -71,7 +74,7 @@ function EvidenceVerdictLine({ rep }) {
   const verdict = rep && rep.available ? rep.verdict : null;
   if (!verdict) return null;
   return (
-    <MDTypography variant="caption" display="block" sx={{ fontSize: 11, color: "#2A2A2A", mt: 0.5 }}>
+    <MDTypography variant="caption" display="block" sx={{ fontSize: PAL.fs.body, color: PAL.ink, mt: 0.5 }}>
       {`Evidence verdict from the deployment report: ${verdict}.`}
     </MDTypography>
   );
@@ -84,13 +87,13 @@ function EvidenceVerdictLine({ rep }) {
  * failed to load. "No caveats were assembled for this report" is a different statement from "this
  * report has nothing to qualify", and saying which is which on a signed sheet is the point.
  */
-const CAVEAT_INK = { high: PAL.failText, medium: PAL.warnText, low: "#5E5E5E" };
+const CAVEAT_INK = { high: PAL.warnText, medium: PAL.warnText, low: PAL.ink3 };
 
 function ReportCaveats({ caveats }) {
   const rows = Array.isArray(caveats) ? caveats : null;
   if (!rows || rows.length === 0) {
     return (
-      <MDTypography variant="caption" display="block" sx={{ fontSize: 11, color: "#5E5E5E", mt: 0.4 }}>
+      <MDTypography variant="caption" display="block" sx={{ fontSize: PAL.fs.body, color: PAL.ink3, mt: 0.4 }}>
         {rows
           ? "This report lists no caveats of its own. Every number it prints carries an "
             + "uncertainty interval, and no warning is outstanding."
@@ -103,15 +106,14 @@ function ReportCaveats({ caveats }) {
     <MDBox mt={0.5}>
       {rows.map((c, i) => (
         <MDBox key={`cav${i}`} display="flex" alignItems="flex-start" mb={0.45}>
-          <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold",
-            letterSpacing: 0.3, color: CAVEAT_INK[c.severity] || PAL.neutral, mt: 0.15,
+          <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: CAVEAT_INK[c.severity] || PAL.neutral, mt: 0.15,
             minWidth: "44px" }}>
-            {String(c.severity || "").toUpperCase()}
+            {String(c.severity || "").charAt(0).toUpperCase() + String(c.severity || "").slice(1)}
           </MDTypography>
-          <MDTypography variant="caption" sx={{ fontSize: 11, color: "#3A3A3A", flex: "1 1 auto" }}>
+          <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, color: PAL.ink2, flex: "1 1 auto" }}>
             {c.text}
             {c.card ? (
-              <i style={{ color: "#5E5E5E" }}>{`  (${c.card})`}</i>
+              <i style={{ color: PAL.ink3 }}>{`  (${c.card})`}</i>
             ) : null}
           </MDTypography>
         </MDBox>
@@ -123,8 +125,8 @@ function ReportCaveats({ caveats }) {
 function KV({ k, v }) {
   return (
     <MDBox display="flex" justifyContent="space-between" py={0.25}>
-      <MDTypography variant="caption" sx={{ fontSize: 11.5, color: "#5E5E5E" }}>{k}</MDTypography>
-      <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold", textAlign: "right" }}>{v}</MDTypography>
+      <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, color: PAL.ink3 }}>{k}</MDTypography>
+      <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, fontWeight: 600, textAlign: "right" }}>{v}</MDTypography>
     </MDBox>
   );
 }
@@ -172,8 +174,8 @@ export function ChosenBandBlock({ bandCandidate, chosenBand, bandRecord }) {
   const grid = gridSettingsLine(bc.grid_settings);
   return (
     <MDBox mt={1.2}>
-      <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: "#5E5E5E" }}>
-        THE BAND SIGNED FOR
+      <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.ink3 }}>
+        The band signed for
       </MDTypography>
       <KV k="Band" v={name} />
       <KV k="Chosen" v={bandRecord && bandRecord.source === "browser_storage"
@@ -197,7 +199,7 @@ function BurnInNote({ ev }) {
   const weeks = ev.excluded_first_weeks;
   const n = ev.n_excluded_burn_in != null ? ev.n_excluded_burn_in : 0;
   return (
-    <MDTypography variant="caption" display="block" sx={{ fontSize: 11, color: "#5E5E5E", mt: 0.3 }}>
+    <MDTypography variant="caption" display="block" sx={{ fontSize: PAL.fs.body, color: PAL.ink3, mt: 0.3 }}>
       {`The check above leaves out the first ${weeks} week${weeks === 1 ? "" : "s"} of the whole record, `
         + "counted from the first recorded sample (not from each setting change), because the signal is "
         + `still settling after implant (impedance and recovery from surgery) (${n} `
@@ -215,8 +217,8 @@ function BurnInNote({ ev }) {
 function CurrentRemovedAuc({ ev }) {
   const a = ev && ev.auc_current_removed;
   if (!a) return null;
-  const k = "Deployment AUC — with the stimulation current taken out";
-  const note = { fontSize: 11, color: "#5E5E5E", mt: 0.3 };
+  const k = "How well it tells high pain from low, with the stimulation current taken out";
+  const note = { fontSize: PAL.fs.body, color: PAL.ink3, mt: 0.3 };
   if (!a.available || a.auc == null) {
     return (
       <>
@@ -339,14 +341,14 @@ export function StaleNotice({ inputsStale, computedAt, staleWhy }) {
   return (
     <MDBox className="cl-signoff-stale" mb={1} p={1}
       sx={{ borderRadius: "4px", backgroundColor: PAL.warnFill, border: `1px solid ${PAL.warnText}` }}>
-      <MDTypography variant="caption" display="block" sx={{ fontSize: 12, fontWeight: 700, color: PAL.warnText }}>
+      <MDTypography variant="caption" display="block" sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.warnText }}>
         {computedAt
           ? `This record describes the analysis of ${new Date(computedAt).toLocaleString()}; the `
             + "settings have changed since. Press Recompute before signing."
           : "The settings have changed since this analysis. Press Recompute before signing."}
       </MDTypography>
       {staleWhy.map((r) => (
-        <MDTypography key={r} variant="caption" display="block" sx={{ fontSize: 11.5, color: PAL.warnText }}>
+        <MDTypography key={r} variant="caption" display="block" sx={{ fontSize: PAL.fs.body, color: PAL.warnText }}>
           {r}
         </MDTypography>
       ))}
@@ -358,34 +360,34 @@ export function StaleNotice({ inputsStale, computedAt, staleWhy }) {
 export function SnapshotFigures({ snapshots }) {
   if (!snapshots) return null;
   return (
-    <MDBox className="cl-signoff-figures" mt={2} pt={1.5} sx={{ borderTop: "1px solid #e0e0e0" }}>
-      <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold", color: "#4A4A4A" }}>
-        FIGURES AS DRAWN WHEN THIS RECORD WAS MADE
+    <MDBox className="cl-signoff-figures" mt={2} pt={1.5} sx={{ borderTop: `1px solid ${PAL.rule}` }}>
+      <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.ink2 }}>
+        Figures as drawn when this record was made
         {snapshots.captured_at ? `, ${new Date(snapshots.captured_at).toLocaleString()}` : ""}
       </MDTypography>
       {snapshots.error ? (
-        <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5, color: PAL.failText }}>
+        <MDTypography variant="caption" display="block" sx={{ fontSize: PAL.fs.body, color: PAL.ink }}>
           {snapshots.error}
         </MDTypography>
       ) : null}
       {snapshots.figures.map((f) => (
         <MDBox key={`${f.section_id}-${f.index}`} mt={1} sx={{ pageBreakInside: "avoid" }}>
-          <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5, fontWeight: "bold" }}>
+          <MDTypography variant="caption" display="block" sx={{ fontSize: PAL.fs.body, fontWeight: 600 }}>
             {f.n_in_section > 1 ? `${f.title} (${f.index} of ${f.n_in_section})` : f.title}
           </MDTypography>
           <img src={f.image_data_url} alt={f.title}
             style={{ display: "block", width: f.width_px, maxWidth: "100%", height: "auto",
-              border: "1px solid #eee" }} />
+              border: `1px solid ${PAL.rule}` }} />
         </MDBox>
       ))}
       {snapshots.missing.length ? (
         <MDBox mt={1}>
-          <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5, fontWeight: "bold", color: PAL.warnText }}>
-            NOT ON THIS RECORD
+          <MDTypography variant="caption" display="block" sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.warnText }}>
+            Not on this record
           </MDTypography>
           {snapshots.missing.map((m) => (
             <MDTypography key={m.section_id + m.reason} variant="caption" display="block"
-              sx={{ fontSize: 11.5, color: PAL.warnText }}>
+              sx={{ fontSize: PAL.fs.body, color: PAL.warnText }}>
               {`${m.title}: ${m.reason}`}
             </MDTypography>
           ))}
@@ -415,14 +417,14 @@ function SignoffRecord({ bandCandidate, summary, deploymentReport, chosenBand, b
 
   if (loading) {
     return (
-      <MDTypography variant="caption" sx={{ fontStyle: "italic", fontSize: 11.5 }}>
+      <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body }}>
         Assembling the deployment review…
       </MDTypography>
     );
   }
   if (err) {
     return (
-      <MDTypography variant="caption" sx={{ fontSize: 11.5, color: PAL.failText }}>
+      <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, color: PAL.ink }}>
         {`The statistical summary is unavailable: ${err}.`}
       </MDTypography>
     );
@@ -430,28 +432,28 @@ function SignoffRecord({ bandCandidate, summary, deploymentReport, chosenBand, b
   if (!data) return null;
   return (
     <MDBox className="cl-signoff-record">
-      <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5, color: "#3A3A3A", mb: 1 }}>
-        {`Statistical gates, as evidence and not as permission: ${data.n_gates_passed} of ${data.n_gates} passed`}
+      <MDTypography variant="caption" display="block" sx={{ fontSize: PAL.fs.body, color: PAL.ink2, mb: 1 }}>
+        {`Statistical checks, as evidence and not as permission: ${data.n_gates_passed} of ${data.n_gates} passed`}
         {data.n_necessary != null ? `, of which ${data.n_necessary_passed} of ${data.n_necessary} required` : ""}
         {nIndet ? `, ${nIndet} not settled` : ""}
-        {`. Match direction: ${data.match_direction}.`}
+        {`. Matching: ${data.match_direction}.`}
         {summaryReady
-          ? " The required gates all passed; that is about discrimination, not about the device."
-          : " The required gates did not all pass."}
+          ? " The required checks all passed; that is about telling high pain from low, not about the device."
+          : " The required checks did not all pass."}
       </MDTypography>
 
       <Grid container spacing={2}>
         <Grid item xs={12} md={6}>
-          <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold", color: "#4A4A4A" }}>
-            DEVICE TARGET
+          <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.ink2 }}>
+            Device target
           </MDTypography>
           {id ? (
             <>
               <KV k="Contact" v={`${id.contact} (${id.hemisphere || "—"})`} />
               <KV k="Region" v={id.region || "—"} />
               <KV k="Band" v={`${fmt(id.band_lo_hz, 1)}–${fmt(id.band_hi_hz, 1)} Hz`} />
-              <KV k="Center (FFT-snapped)" v={`${fmt(id.center_freq_hz, 1)} → ${fmt(id.snapped_center_freq_hz, 2)} Hz`} />
-              <KV k="PRO metric / binarization" v={`${id.pro_metric} / ${id.binarization}`} />
+              <KV k="Centre (moved to the nearest band the device computes)" v={`${fmt(id.center_freq_hz, 1)} → ${fmt(id.snapped_center_freq_hz, 2)} Hz`} />
+              <KV k="Pain score / high-low split" v={`${id.pro_metric} / ${id.binarization}`} />
               <KV k="Pain ratings used" v={ratingsUsedText(id.clinic_sheet_ratings)} />
               <KV k="Pain score used" v={painScoreUsedText(_rep && _rep.pain_score, id.pro_metric)} />
               <KV k="Polarity / suggested mode" v={`${dc.polarity} / ${dc.suggested_mode || "—"}`} />
@@ -468,55 +470,55 @@ function SignoffRecord({ bandCandidate, summary, deploymentReport, chosenBand, b
 
           {dc && dc.ramp && dc.ramp.available ? (
             <MDBox mt={1.2}>
-              <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold",
+              <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, fontWeight: 600,
                 color: dc.ramp.posture === "conservative" ? PAL.warnText : PAL.passText }}>
-                {`RAMP GUIDANCE, ${String(dc.ramp.posture).toUpperCase()} (advisory)`}
+                {`Ramp guidance, ${String(dc.ramp.posture)} (advisory)`}
               </MDTypography>
-              <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 11.5, mt: 0.3 }}>
+              <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: PAL.fs.body, mt: 0.3 }}>
                 {dc.ramp.transition_note}
               </MDTypography>
-              <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 11.5, mt: 0.3 }}>
+              <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: PAL.fs.body, mt: 0.3 }}>
                 {`Ramp up: ${dc.ramp.ramp_up_hint}. Ramp down: ${dc.ramp.ramp_down_hint}.`}
               </MDTypography>
-              <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5, color: "#5E5E5E", mt: 0.3 }}>
+              <MDTypography variant="caption" display="block" sx={{ fontSize: PAL.fs.body, color: PAL.ink3, mt: 0.3 }}>
                 {dc.ramp.reason}
               </MDTypography>
             </MDBox>
           ) : null}
 
           <MDBox mt={1.2}>
-            <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold", color: "#4A4A4A" }}>
-              EVIDENCE
+            <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.ink2 }}>
+              Evidence
             </MDTypography>
             {ev ? (
               <>
-                <KV k="Deployment AUC — in-sample (95% clustered-bootstrap CI)" v={`${fmt(ev.auc)} (${fmt(ev.auc_lo)}–${fmt(ev.auc_hi)})`} />
+                <KV k="How well it tells high pain from low, on the data it was fitted to (95% range)" v={`${fmt(ev.auc)} (${fmt(ev.auc_lo)}–${fmt(ev.auc_hi)})`} />
                 <CurrentRemovedAuc ev={ev} />
                 {fwd && fwd.available && fwd.held_out_auc != null ? (
                   <KV
-                    k={`Deployment AUC — forward held-out (${fwd.n_folds ?? "—"} weekly folds)`}
+                    k={`The same, tested on each later week after training on the weeks before (${fwd.n_folds ?? "—"} weeks)`}
                     v={
                       <span style={{ color: fwd.beats_chance_forward ? PAL.passText : PAL.warnText, fontWeight: 600 }}>
                         {`${fmt(fwd.held_out_auc)} (${fmt(fwd.held_out_auc_lo)}–${fmt(fwd.held_out_auc_hi)})`}
-                        {fwd.beats_chance_forward ? " ✓ clears chance" : " ✗ not validated forward"}
+                        {fwd.beats_chance_forward ? " ✓ better than a coin toss" : " ▲ does not hold on later weeks"}
                       </span>
                     }
                   />
                 ) : (
-                  <KV k="Deployment AUC — forward held-out" v={
+                  <KV k="The same, tested on each later week" v={
                     <span style={{ color: PAL.warnText }}>
-                      {fwd && fwd.reason ? `not assessable (${fwd.reason})` : "in-sample only, forward UNCONFIRMED"}
+                      {fwd && fwd.reason ? `could not be tested (${fwd.reason})` : "on the fitted data only; not yet tested on later weeks"}
                     </span>
                   } />
                 )}
-                <KV k="Odds ratio (95% CI)" v={`${fmt(ev.odds_ratio)} (${fmt(ev.or_ci_low)}–${fmt(ev.or_ci_high)})${ev.credible_ci ? " ✓" : ""}`} />
-                <KV k="Mixed-effects p" v={ev.p_glmer != null ? ev.p_glmer.toExponential(2) : "—"} />
-                <KV k="Matched samples / ratings" v={`${ev.n_matched_samples ?? "—"} / ${ev.n_clusters ?? "—"}`} />
+                <KV k="Odds ratio (95% range)" v={`${fmt(ev.odds_ratio)} (${fmt(ev.or_ci_low)}–${fmt(ev.or_ci_high)})${ev.credible_ci ? " ✓" : ""}`} />
+                <KV k="p from the mixed-effects model (ratings grouped in time)" v={ev.p_glmer != null ? ev.p_glmer.toExponential(2) : "—"} />
+                <KV k="Matched band-power readings / ratings" v={`${ev.n_matched_samples ?? "—"} / ${ev.n_clusters ?? "—"}`} />
                 <BurnInNote ev={ev} />
                 {pw && pw.available ? (
-                  <KV k="Power (vs AUC 0.5)" v={pw.more_data_needed
+                  <KV k="Chance of detecting a real link with pain" v={pw.more_data_needed
                     ? `${fmt(pw.power_current * 100, 0)}% · need ${pw.n_ratings_needed} ratings`
-                    : `${fmt(pw.power_current * 100, 0)}% · adequately powered`} />
+                    : `${fmt(pw.power_current * 100, 0)}% · enough ratings`} />
                 ) : null}
               </>
             ) : null}
@@ -524,29 +526,29 @@ function SignoffRecord({ bandCandidate, summary, deploymentReport, chosenBand, b
         </Grid>
 
         <Grid item xs={12} md={6}>
-          <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold", color: "#4A4A4A" }}>
-            DEPLOYMENT GATES
+          <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.ink2 }}>
+            Checks before deployment (each one can refuse)
           </MDTypography>
           <MDBox mb={1.2}>
             {(data.gates || []).map((g) => <GateRow key={g.key} gate={g} />)}
           </MDBox>
 
-          <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold", color: PAL.warnText }}>
-            CAVEATS
+          <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.warnText }}>
+            Caveats
           </MDTypography>
           {/* The deployment report's own caveats (panel D item 3), ranked, each naming its card;
               then the older statistical endpoint's own, labelled as coming from elsewhere. */}
           <ReportCaveats caveats={_rep && _rep.available ? _rep.caveats : null} />
           {(data.caveats || []).length > 0 ? (
             <MDTypography variant="caption" display="block"
-              sx={{ fontSize: 11.5, fontWeight: "bold", color: "#4A4A4A", mt: 0.8 }}>
-              FROM THE SEPARATE STATISTICAL SUMMARY
+              sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.ink2, mt: 0.8 }}>
+              From the separate statistical summary
             </MDTypography>
           ) : null}
           <MDBox component="ul" sx={{ pl: 2, mt: 0.5, mb: 0 }}>
             {(data.caveats || []).map((c) => (
               <MDTypography key={c} component="li" variant="caption"
-                sx={{ fontSize: 11.5, color: "#4A4A4A", display: "list-item", mb: 0.3 }}>
+                sx={{ fontSize: PAL.fs.body, color: PAL.ink2, display: "list-item", mb: 0.3 }}>
                 {c}
               </MDTypography>
             ))}

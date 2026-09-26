@@ -52,8 +52,10 @@ describe("the sign-off card's area under the curve with the current taken out (a
       auc_high: 0.684, shape: "line", shape_words: "a straight line", hemisphere: "Left",
       n_spectral_samples: 18992, n_pain_reports: 30, n_samples_without_current: 120,
       plain_on_same_samples: { auc: 0.611, auc_low: 0.452, auc_high: 0.744 } } }));
-    expect(text).toMatch(/Deployment AUC — in-sample \(95% clustered-bootstrap CI\)0\.62 \(0\.46–0\.73\)/);
-    expect(text).toMatch(/Deployment AUC — with the stimulation current taken out0\.55 \(0\.40–0\.68\)/);
+    // Plain labels since the redesign of 2026-09-26 ("Deployment AUC" is "How well it tells high
+    // pain from low"); the numbers are the same.
+    expect(text).toMatch(/How well it tells high pain from low, on the data it was fitted to \(95% range\)0\.62 \(0\.46–0\.73\)/);
+    expect(text).toMatch(/How well it tells high pain from low, with the stimulation current taken out0\.55 \(0\.40–0\.68\)/);
     expect(text).toMatch(/the Left current in force at each sample taken out of the band power as a straight line/);
     expect(text).toMatch(/the plain reading on those same samples is 0\.61 \(0\.45–0\.74\)/);
     expect(text).toMatch(/120 samples recorded before the first dated setting have no current/);
@@ -63,7 +65,7 @@ describe("the sign-off card's area under the curve with the current taken out (a
   it("prints a refusal as a refusal, with its reason, never as a number", () => {
     const text = sheet(summaryWith({ ...PLAIN, auc_current_removed: {
       available: false, auc: null, why: "the current is constant at 2 across every sample" } }));
-    expect(text).toMatch(/Deployment AUC — with the stimulation current taken outnot computed/);
+    expect(text).toMatch(/How well it tells high pain from low, with the stimulation current taken outnot computed/);
     expect(text).toMatch(/the current is constant at 2 across every sample/);
     expect(text).not.toMatch(/taken out—/);
   });

@@ -35,14 +35,17 @@ import {
 import { PAL, OKABE_ITO } from "./palette";
 import { fmtHz, fmtNum, fmtP } from "./deployFormat";
 import Fold from "./Fold";
+import { TYPE, CARD } from "assets/theme/base/tokens";
+import { plotlyLayout } from "views/Reports/figureStyle";
 
 /** One colour per route, matching the static picture in the report exactly. */
-const ROUTE_INK = { time_domain: OKABE_ITO.blue, psd: OKABE_ITO.orange, direct: OKABE_ITO.bluishGreen };
-const ROUTE_TITLE = { time_domain: "Time domain derived LSB", psd: "PSD derived LSB",
-  direct: "Direct LSB recording" };
+// Each route's own mark colour; orange is the right side on every page, so it is not used here.
+const ROUTE_INK = { time_domain: OKABE_ITO.blue, psd: OKABE_ITO.reddishPurple, direct: OKABE_ITO.bluishGreen };
+const ROUTE_TITLE = { time_domain: "From the recording (TD)",
+  psd: "From the device's 30-second snapshot (PSD)", direct: "The device's own band-power reading" };
 const ROUTES = ["time_domain", "psd", "direct"];
 const NEUTRAL_INK = OKABE_ITO.gray;
-const GRID_INK = "#DDDDDD";
+
 /** One marker shape per run, so a visit can be told apart without a legend lookup. */
 const SYMBOLS = ["circle", "square", "diamond", "triangle-up", "cross", "x", "star", "hexagon",
   "triangle-down", "pentagon", "circle-open", "square-open"];
@@ -50,10 +53,11 @@ const SPECTRUM_LO_HZ = 7.5, SPECTRUM_HI_HZ = 30.0;
 
 /** Three side-by-side panels in one figure, laid out by hand: plotly.js has no subplot helper. */
 function threeColumnLayout(headings, xTitle, yTitle) {
+  const base = plotlyLayout();
   const layout = {
-    margin: { l: 62, r: 16, t: 26, b: 46 },
-    height: 270, plot_bgcolor: "white", paper_bgcolor: "white",
-    showlegend: false, font: { size: 11 }, hovermode: "closest",
+    ...base,
+    margin: { l: 62, r: 16, t: 32, b: 48 },
+    height: 280, showlegend: false, hovermode: "closest",
     uirevision: "three-source-pooled", annotations: [],
   };
   const gap = 0.055;
@@ -62,16 +66,16 @@ function threeColumnLayout(headings, xTitle, yTitle) {
     const x0 = k * (w + gap);
     const ax = k === 0 ? "" : String(k + 1);
     layout[`xaxis${ax}`] = {
-      domain: [x0, x0 + w], anchor: `y${ax}`, title: { text: xTitle, font: { size: 11 } },
-      gridcolor: GRID_INK, zeroline: false, tickfont: { size: 11 },
+      ...base.xaxis, domain: [x0, x0 + w], anchor: `y${ax}`,
+      title: { ...base.xaxis.title, text: xTitle },
     };
     layout[`yaxis${ax}`] = {
-      domain: [0, 1], anchor: `x${ax}`, gridcolor: GRID_INK, zeroline: false,
-      tickfont: { size: 11 }, title: k === 0 ? { text: yTitle, font: { size: 11 } } : undefined,
+      ...base.yaxis, domain: [0, 1], anchor: `x${ax}`,
+      title: k === 0 ? { ...base.yaxis.title, text: yTitle } : undefined,
     };
     layout.annotations.push({
-      text: `<b>${h}</b>`, x: x0, y: 1.13, xref: "paper", yref: "paper", showarrow: false,
-      xanchor: "left", font: { size: 11, color: "#1A1A1A" },
+      text: h, x: x0, y: 1.12, xref: "paper", yref: "paper", showarrow: false,
+      xanchor: "left", font: { size: PAL.fs.caption, color: PAL.ink },
     });
   });
   return layout;
@@ -150,8 +154,8 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
     if (!contactObj || centre == null) { Plotly.purge(gd); return; }
     const traces = [];
     const layout = threeColumnLayout(ROUTES.map((r) => ROUTE_TITLE[r]),
-      `Current delivered by the ${String(side).toLowerCase()} stimulator (mA)`,
-      "Settled band power (device units)");
+      `current, ${String(side).toLowerCase()} side (mA)`,
+      "band power, held steady (device units, LSB)");
     const allY = [];
     ROUTES.forEach((route, k) => {
       const ax = k === 0 ? "" : String(k + 1);
@@ -169,7 +173,7 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
           x: col.x, y: col.y, customdata: col.pieces,
           line: { color: ROUTE_INK[route], width: 1, dash: "dot" },
           marker: { color: ROUTE_INK[route], size: 9, symbol: SYMBOLS[i % SYMBOLS.length],
-            line: { color: "white", width: 1 } },
+            line: { color: PAL.surface, width: 1 } },
           hovertemplate: `${run.visit_date} · ${fmtHz(run.stimulation_rate_hz)} Hz stimulation`
             + "<br>%{x} mA · %{y:.1f} device units · %{customdata} pieces<extra></extra>",
         });
@@ -185,7 +189,7 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
             type: "scatter", mode: "lines", xaxis: `x${ax}`, yaxis: `y${ax}`,
             x: [lo, hi], y: [y0 + s * (lo - x0), y0 + s * (hi - x0)],
             line: { color: ROUTE_INK.time_domain, width: 2.2, dash: "dash" },
-            hovertemplate: `pooled slope ${fmtNum(s, 2)} device units per mA`
+            hovertemplate: `change in band power per milliamp, all visits together: ${fmtNum(s, 2)} device units`
               + `<br>${pooledRow.n} points across ${pooledRow.n_visits} visits<extra></extra>`,
           });
         }
@@ -193,9 +197,9 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
       if (!any) {
         const dom = layout[`xaxis${ax}`].domain;
         layout.annotations.push({
-          text: "<i>no settled value from this recording</i>",
+          text: "no steady reading from this source",
           x: dom[0] + 0.5 * (dom[1] - dom[0]), y: 0.55, xref: "paper", yref: "paper",
-          showarrow: false, xanchor: "center", font: { size: 11, color: NEUTRAL_INK },
+          showarrow: false, xanchor: "center", font: { size: PAL.fs.caption, color: PAL.ink3 },
         });
         layout[`xaxis${ax}`].showticklabels = false;
         layout[`yaxis${ax}`].showticklabels = false;
@@ -234,14 +238,14 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
       traces.push({
         type: "scatter", mode: "lines", x: [...xs, ...xs.slice().reverse()],
         y: [...ys.map((y, i) => y + 2 * se[i]), ...ys.map((y, i) => y - 2 * se[i]).reverse()],
-        fill: "toself", fillcolor: "rgba(0,114,178,0.12)", line: { width: 0 }, hoverinfo: "skip",
+        fill: "toself", fillcolor: PAL.accentFill, line: { width: 0 }, hoverinfo: "skip",
       });
       traces.push({
         type: "scatter", mode: "lines+markers", x: xs, y: ys,
         line: { color: ROUTE_INK.time_domain, width: 1.6 },
         marker: { color: ROUTE_INK.time_domain, size: 5 },
         customdata: have.map((r) => [r.n, r.n_visits, r.pooled_slope_p]),
-        hovertemplate: "%{x} Hz band · pooled slope %{y:.2f} device units per mA"
+        hovertemplate: "%{x} Hz band · change in band power per milliamp, all visits together: %{y:.2f} device units"
           + "<br>%{customdata[0]} points across %{customdata[1]} visits · p = %{customdata[2]:.3f}"
           + "<extra></extra>",
       });
@@ -253,20 +257,17 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
         line: { width: 0 } }));
     if (centre != null) {
       shapes.push({ type: "line", xref: "x", yref: "paper", x0: centre, x1: centre, y0: 0, y1: 1,
-        line: { color: "#1A1A1A", width: 1, dash: "dot" } });
+        line: { color: PAL.ink, width: 1, dash: "dot" } });
     }
-    const layout = {
-      margin: { l: 62, r: 16, t: 10, b: 46 }, height: 240, plot_bgcolor: "white",
-      paper_bgcolor: "white", showlegend: false, font: { size: 11 }, hovermode: "closest",
+    const layout = plotlyLayout({
+      margin: { l: 62, r: 16, t: 16, b: 48 }, height: 240, showlegend: false, hovermode: "closest",
       uirevision: "three-source-pooled-slopes", shapes,
-      xaxis: { title: { text: "Band centre (Hz)", font: { size: 11 } }, gridcolor: GRID_INK,
-        range: [SPECTRUM_LO_HZ - 0.6, SPECTRUM_HI_HZ + 0.6], zeroline: false, tickfont: { size: 11 } },
-      yaxis: { title: { text: "Pooled slope (device units per mA)", font: { size: 11 } },
-        gridcolor: GRID_INK, zeroline: true, zerolinecolor: "#5E5E5E", tickfont: { size: 11 } },
-      annotations: xs.length ? [] : [{ text: "<i>no pooled slope is stored for this contact yet</i>",
+      xaxis: { title: { text: "band centre (Hz)" }, range: [SPECTRUM_LO_HZ - 0.6, SPECTRUM_HI_HZ + 0.6] },
+      yaxis: { title: { text: "change per milliamp (device units)" }, zeroline: true, zerolinecolor: PAL.graphic },
+      annotations: xs.length ? [] : [{ text: "no change per milliamp is stored for this contact yet",
         x: 0.5, y: 0.55, xref: "paper", yref: "paper", showarrow: false,
-        font: { size: 11, color: NEUTRAL_INK } }],
-    };
+        font: { size: PAL.fs.caption, color: PAL.ink3 } }],
+    });
     Plotly.react(gd, traces, layout, PAL.MODEBAR);
   }, [contactObj, centre, spectrumRevealed]);
 
@@ -275,7 +276,7 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
     if (specRef.current) Plotly.purge(specRef.current);
   }, []);
 
-  const title = "Stimulation amplitude effects on band power, measured three ways";
+  const title = "How much band power changes per milliamp, measured three ways";
   const reportBlock = report && report.data && report.data.three_source_response;
   const footer = reportBlock && reportBlock.comparisons && reportBlock.comparisons[0]
     ? reportBlock.comparisons[0].footer : null;
@@ -291,10 +292,10 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
         + "tables have not been written yet and the next full report writes them";
     } else reason = "waiting for the report";
     return (
-      <Card><CardContent>
-        <Typography variant="h6" gutterBottom>{title}</Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{reason}</Typography>
-        <Typography variant="caption" color="text.secondary">
+      <Card sx={CARD}><CardContent sx={{ p: 3 }}>
+        <Typography component="h3" sx={{ ...TYPE.title, color: PAL.ink, mb: 1 }}>{title}</Typography>
+        <Typography sx={{ ...TYPE.body, color: PAL.ink2, mb: 1 }}>{reason}</Typography>
+        <Typography sx={{ ...TYPE.caption, color: PAL.ink3 }}>
           This panel is informative only. It does not gate anything, and no verdict on this page
           depends on it.
         </Typography>
@@ -303,9 +304,9 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
   }
   if (!sides.length) {
     return (
-      <Card><CardContent>
-        <Typography variant="h6" gutterBottom>{title}</Typography>
-        <Typography variant="body2" color="text.secondary">
+      <Card sx={CARD}><CardContent sx={{ p: 3 }}>
+        <Typography component="h3" sx={{ ...TYPE.title, color: PAL.ink, mb: 1 }}>{title}</Typography>
+        <Typography sx={{ ...TYPE.body, color: PAL.ink2 }}>
           {view.absent_reason || "no run of stepped current on one side is stored for this participant"}
         </Typography>
       </CardContent></Card>
@@ -317,7 +318,7 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
     ? contactObj.runs.filter((r) => near(r.programmed_centre_hz, centre)).length : 0;
   let tdCaption;
   if (pooledRow && pooledRow.pooled_slope_per_mA != null) {
-    tdCaption = `${pooledRow.n} points across ${pooledRow.n_visits} visits · pooled slope `
+    tdCaption = `${pooledRow.n} points across ${pooledRow.n_visits} visits · change in band power per milliamp, all visits together, `
       + `${fmtNum(pooledRow.pooled_slope_per_mA, 2)} ± ${fmtNum(pooledRow.pooled_slope_stderr, 2)} `
       + `device units per mA (p = ${fmtP(pooledRow.pooled_slope_p)}) · ${pooledRow.pooled_direction}`;
     if (pooledRow.curves) {
@@ -327,7 +328,7 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
       }
     }
   } else if (pooledRow) {
-    tdCaption = `pooled slope ${pooledRow.curvature_note || "not assessed"}`;
+    tdCaption = `change per milliamp, all visits together: ${pooledRow.curvature_note || "not assessed"}`;
   } else {
     tdCaption = "no pooled row is stored for this band yet";
   }
@@ -337,20 +338,20 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
     ? contactObj.runs.map((r) => r.routes.psd.absent_reason).filter(Boolean) : [];
   const anyPsd = !!(contactObj
     && contactObj.runs.some((r) => (r.routes.psd.currents_mA || []).length));
-  const psdCaption = anyPsd ? "the device's own FFT snapshots, where it computed any during a run"
+  const psdCaption = anyPsd ? "the device's own 30-second snapshots, where it took any during a run"
     : (psdReasons[0] || "no settled value in any run");
 
   return (
-    <Card>
-      <CardContent>
-        <Typography variant="h6" gutterBottom>{title}</Typography>
+    <Card sx={CARD}>
+      <CardContent sx={{ p: 3 }}>
+        <Typography component="h3" sx={{ ...TYPE.title, color: PAL.ink, mb: 1 }}>{title}</Typography>
 
         <ToggleButtonGroup size="small" exclusive value={side} sx={{ mb: 1, flexWrap: "wrap" }}
           onChange={(_e, v) => { if (v != null) setSidePick(v); }}>
           {sides.map((s) => (
             <ToggleButton key={s.ramped_side} value={s.ramped_side}
-              sx={{ textTransform: "none", fontSize: 12 }}>
-              {`${s.ramped_side} stimulator turned up · pooled over `
+              sx={{ textTransform: "none", ...TYPE.body }}>
+              {`${s.ramped_side} side turned up · all visits together, `
                 + `${s.contacts.reduce((n, c) => n + c.n_runs, 0)} runs`}
             </ToggleButton>
           ))}
@@ -358,12 +359,12 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
 
         {contacts.length > 1 ? (
           <Stack direction="row" spacing={0.6} sx={{ mb: 1 }} alignItems="center">
-            <Typography variant="caption" color="text.secondary">Sensing contact:</Typography>
+            <Typography sx={{ ...TYPE.caption, color: PAL.ink3 }}>Sensing contact pair:</Typography>
             {contacts.map((c) => (
               <Chip key={c.sensing_contact} size="small"
                 onClick={() => setContactPick({ ...contactPick, [side]: c.sensing_contact })}
                 label={`${label(c.sensing_contact)} · ${c.n_runs} run${c.n_runs === 1 ? "" : "s"}`}
-                sx={{ fontSize: 11.5, fontWeight: c.sensing_contact === contact ? 700 : 400,
+                sx={{ ...TYPE.body, fontWeight: c.sensing_contact === contact ? 600 : 400,
                   backgroundColor: c.sensing_contact === contact ? PAL.accentFill : "transparent",
                   border: `1px solid ${c.sensing_contact === contact ? PAL.accentBorder : PAL.neutralBorder}` }} />
             ))}
@@ -371,9 +372,9 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
         ) : null}
 
         {contactObj ? (
-          <Typography variant="subtitle2" sx={{ fontWeight: 600, lineHeight: 1.45, mb: 0.5 }}>
+          <Typography sx={{ ...TYPE.body, fontWeight: 600, color: PAL.ink, mb: 0.5 }}>
             {`Sensing on ${label(contact)} · drawn at ${fmtHz(centre)} Hz`}
-            {committed && near(centre, committed.centerHz) ? " (the committed band)" : ""}
+            {committed && near(centre, committed.centerHz) ? " (the chosen band)" : ""}
             {` · ${contactObj.n_runs} run${contactObj.n_runs === 1 ? "" : "s"} across `
               + `${contactObj.n_visits} visit${contactObj.n_visits === 1 ? "" : "s"}`}
             {contactObj.stimulation_rates_hz && contactObj.stimulation_rates_hz.length
@@ -381,18 +382,17 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
               : ""}
           </Typography>
         ) : null}
-        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
-          One marker shape per run; each point is the mean of the settled window before the next
-          step up. The dashed line is the pooled slope across every run on this contact, drawn
-          through the mean of the runs&apos; own centres.
+        <Typography sx={{ ...TYPE.caption, color: PAL.ink3, display: "block", mb: 1 }}>
+          One marker shape per run; each point is the average of the steady stretch before the next
+          step. The dashed line is the change per milliamp across every run on this contact, drawn
+          through the average of the runs&apos; own centres.
         </Typography>
 
         <Box ref={topRef} sx={{ width: "100%" }} />
 
         <Stack direction={{ xs: "column", md: "row" }} spacing={1.5} sx={{ mt: 0.5, mb: 1 }}>
           {[tdCaption, psdCaption, directCaption].map((c, i) => (
-            <Typography key={ROUTES[i]} variant="caption" color="text.secondary"
-              sx={{ flex: 1, lineHeight: 1.5 }}>{c}</Typography>
+            <Typography key={ROUTES[i]} sx={{ ...TYPE.caption, color: PAL.ink3, flex: 1 }}>{c}</Typography>
           ))}
         </Stack>
 
@@ -400,22 +400,21 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
 
         {/* Mounted on first reveal and kept mounted: a Plotly figure first drawn inside a hidden
             container measures itself as zero pixels wide and keeps that size. */}
-        <Typography variant="caption" component="button" type="button"
+        <Typography component="button" type="button"
           onClick={() => setShowSpectrum((s) => !s)} aria-expanded={showSpectrum}
-          sx={{ color: PAL.accent, cursor: "pointer", background: "none", border: 0, padding: 0,
-            fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 0.5,
+          sx={{ ...TYPE.body, color: PAL.ink2, cursor: "pointer", background: "none", border: 0, padding: 0,
+            fontFamily: "inherit", display: "inline-flex", alignItems: "baseline", gap: 1,
             "&:hover": { textDecoration: "underline" } }}>
-          <span aria-hidden="true" style={{ fontSize: 11, display: "inline-block",
-            transform: showSpectrum ? "rotate(90deg)" : "none" }}>▶</span>
+          <span aria-hidden="true" style={{ display: "inline-block", width: "1em", color: PAL.ink3,
+            transform: showSpectrum ? "rotate(90deg)" : "none" }}>▸</span>
           {showSpectrum ? "Hide the other bands"
-            : `Show the pooled slope at every band from ${fmtHz(SPECTRUM_LO_HZ)} to ${fmtHz(SPECTRUM_HI_HZ)} Hz`}
+            : `Show the change per milliamp at every band from ${fmtHz(SPECTRUM_LO_HZ)} to ${fmtHz(SPECTRUM_HI_HZ)} Hz`}
         </Typography>
         {spectrumRevealed ? (
           <Box sx={{ display: showSpectrum ? "block" : "none" }}>
-            <Typography variant="caption" color="text.secondary"
-              sx={{ display: "block", mt: 0.5, mb: 0.5 }}>
-              Time domain derived LSB only, which is the one route every run reports at every band.
-              The band is ±2 standard errors; striped bands carry a folded multiple of the
+            <Typography sx={{ ...TYPE.caption, color: PAL.ink3, display: "block", mt: 0.5, mb: 0.5 }}>
+              From the recording (TD) only, the one source every run reports at every band.
+              The shaded band is ±2 standard errors; striped bands carry a folded multiple of the
               stimulation rate; the dotted line marks the band drawn above.
             </Typography>
             <Box ref={specRef} sx={{ width: "100%" }} />
@@ -423,12 +422,12 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
         ) : null}
 
         <Fold show="Why agreement here is not three confirmations" hide="Hide" dense>
-          <Typography variant="caption" sx={{ display: "block", color: NEUTRAL_INK, lineHeight: 1.55 }}>
+          <Typography sx={{ ...TYPE.body, display: "block", color: PAL.ink2 }}>
             {footer || ("The three columns are not independent: the device computes its own band "
               + "power from the voltage trace the first column reads, so agreement checks the "
               + "conversion, not the effect three times.")}
           </Typography>
-          <Typography variant="caption" sx={{ display: "block", mt: 0.5, color: NEUTRAL_INK }}>
+          <Typography sx={{ ...TYPE.body, display: "block", mt: 0.5, color: PAL.ink2 }}>
             This panel is informative only. It does not gate anything, and no verdict on this page
             depends on it.
           </Typography>

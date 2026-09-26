@@ -23,7 +23,8 @@ const STATUS = { last_built_utc: "2026-09-25T20:15:00Z" };
 describe("the stability panel says when its answer was measured", () => {
   it("prints the assembly date when the test ran", () => {
     expect(text(<BandStabilityPanel stability={RAN} cacheStatus={STATUS} />))
-      .toMatch(/Based on the recordings, settings and pain reports assembled .*2026/);
+      // "Based on" became "Measured on" in the redesign of 2026-09-26 (SPEC section 5.2 item 6).
+      .toMatch(/Measured on the recordings, settings and pain reports assembled .*2026/);
   });
 
   it("prints no date when the test did not run", () => {

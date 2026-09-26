@@ -12,7 +12,6 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import PAL from "./palette";
-import Fold from "./Fold";
 import { fmtOddsRatioWithInterval } from "./deployFormat";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "not reported"
@@ -24,25 +23,25 @@ const fmtP = (p) => (p == null || !Number.isFinite(Number(p)) ? "not reported"
 // different quantity from anything on the reconciled header and is labelled as such below.
 function verdictColor(verdict) {
   const v = verdict || "";
-  if (/VALIDATED \(stim-stable\)/.test(v)) return PAL.passText;
+  if (/VALIDATED \(stim-stable\)/.test(v)) return PAL.ink;
   if (/VALIDATED \(stim-dependent\)/.test(v)) return PAL.warn;
-  if (/failed/.test(v)) return PAL.failText;
+  if (/failed/.test(v)) return PAL.warnText;   // evidence, not a device refusal: never red
   return PAL.neutral;
 }
 
 // White text on the warn fill measures 2.25:1, which is below every WCAG threshold, so the badge
 // text colour adapts to its fill: near-black on the amber, white on the others.
 function verdictTextColor(verdict) {
-  return verdictColor(verdict) === PAL.warn ? PAL.onWarn : "white";
+  return PAL.onFill;
 }
 
 // A labeled key/value row used across the identity block.
 function KV({ label, children }) {
   return (
     <MDBox display="flex" flexDirection="row" alignItems="baseline" gap={1} mb={0.4}>
-      <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", minWidth: 150,
-        color: "#4A4A4A" }}>{label}</MDTypography>
-      <MDTypography variant="caption" sx={{ fontSize: 11.5 }}>{children}</MDTypography>
+      <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, fontWeight: 600, minWidth: 150,
+        color: PAL.ink2 }}>{label}</MDTypography>
+      <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, color: PAL.ink }}>{children}</MDTypography>
     </MDBox>
   );
 }
@@ -71,40 +70,37 @@ export default function BandCandidateIdentity({ bc, envelope }) {
         <MDBox display="flex" alignItems="center" gap={1.2} mb={1} flexWrap="wrap">
           <MDBox px={1.4} py={0.4} sx={{ backgroundColor: verdictColor(bc.verdict),
             color: verdictTextColor(bc.verdict),
-            borderRadius: "10px", fontSize: 11, fontWeight: "bold" }}>
+            borderRadius: "4px", fontSize: PAL.fs.caption, fontWeight: 600 }}>
             {bc.verdict || "no discovery verdict"}
           </MDBox>
-          <MDTypography variant="h6" sx={{ fontSize: 16 }}>
+          <MDTypography sx={{ fontSize: PAL.fs.lead, fontWeight: 600, color: PAL.ink }}>
             {`${bc.contact_label || bc.contact || "band"} at ${fmt(bc.center_freq_hz, 1)} Hz`}
           </MDTypography>
           <Chip size="small" label={lbl.pro_metric_label || lbl.pro_metric || "metric"}
-            sx={{ height: 20, fontSize: 11 }} />
+            sx={{ height: 24, fontSize: PAL.fs.caption }} />
           {bc.adaptive_valid
             ? <Chip size="small" label="inside the adaptive band (8–30 Hz)"
-                sx={{ height: 20, fontSize: 11.5, backgroundColor: PAL.passText, color: "white" }} />
+                sx={{ height: 24, fontSize: PAL.fs.caption, backgroundColor: PAL.fillMuted, color: PAL.ink }} />
             : <Chip size="small" label="outside the adaptive band"
-                sx={{ height: 20, fontSize: 11.5, backgroundColor: PAL.warn,
-                  color: PAL.onWarn }} />}
+                sx={{ height: 24, fontSize: PAL.fs.caption, backgroundColor: PAL.warnFill,
+                  color: PAL.warnText }} />}
         </MDBox>
-        <Fold show="What the badge means" hide="Hide" mt={0} dense>
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#5E5E5E",
-            mb: 1 }}>
-            The badge above is the discovery-stage verdict this band was committed with. It is a
-            different quantity from the reconciled verdict at the top of the page, which is about
-            whether the device will accept the configuration and whether the evidence supports it.
-          </MDTypography>
-        </Fold>
+        <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.caption, color: PAL.ink3,
+          mb: 1 }}>
+          The badge is the verdict this band was chosen with, when it was found. It is a different
+          quantity from the verdict at the top of the page, which is about whether the device will
+          accept the configuration and whether the evidence supports it.
+        </MDTypography>
 
         <Grid container spacing={3}>
           <Grid item xs={12} md={6}>
-            <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold",
-              letterSpacing: 0.4, color: "#5E5E5E" }}>DEVICE IDENTITY</MDTypography>
+            <MDTypography variant="caption" sx={{ fontSize: PAL.fs.caption, fontWeight: 600, color: PAL.ink3 }}>Device identity</MDTypography>
             <MDBox mt={0.6}>
               <KV label="Hemisphere">{bc.hemisphere || "not reported"}</KV>
               <KV label="Contact (sensing)">{bc.contact || "not reported"}</KV>
               <KV label="Band">{`${fmt(bc.band_lo_hz, 1)} to ${fmt(bc.band_hi_hz, 1)} Hz `
                 + `(${fmt(bc.bandwidth_hz, 1)} Hz wide)`}</KV>
-              <KV label="Centre, and FFT-snapped">
+              <KV label="Centre, and moved to the nearest band the device computes">
                 {`${fmt(bc.center_freq_hz, 2)} to ${fmt(bc.snapped_center_freq_hz, 2)} Hz`}
               </KV>
               <KV label="Polarity">{bc.polarity || "not reported"}</KV>
@@ -118,21 +114,20 @@ export default function BandCandidateIdentity({ bc, envelope }) {
             {/* ALWAYS SHOWN. This block used to sit behind a "show the discovery-stage
                 statistics" toggle, collapsed by default. The PI on 2026-09-10: "there's no point
                 in hiding it ever." A number a reader cannot see cannot be checked. */}
-            <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold",
-              letterSpacing: 0.4, color: "#5E5E5E" }}>DISCOVERY-STAGE STATISTICS</MDTypography>
+            <MDTypography variant="caption" sx={{ fontSize: PAL.fs.caption, fontWeight: 600, color: PAL.ink3 }}>When the band was found: statistics</MDTypography>
             {(
               <MDBox mt={0.6}>
                 <KV label="Odds ratio (per 1 SD)">
                   {`${fmt(ev.odds_ratio)} `}
                   {ev.or_lo != null && ev.or_hi != null
-                    ? `(95% CI ${fmt(ev.or_lo)} to ${fmt(ev.or_hi)})` : ""}
+                    ? `(95% range ${fmt(ev.or_lo)} to ${fmt(ev.or_hi)})` : ""}
                   {ev.credible_ci === false
-                    ? <span style={{ color: PAL.failText }}> · interval narrower than the
+                    ? <span style={{ color: PAL.warnText }}> · ▲ range narrower than the
                         credibility rule allows</span>
                     : ev.credible_ci === true
-                      ? <span style={{ color: PAL.passText }}> · credible</span> : null}
+                      ? <span style={{ color: PAL.ink }}> · ✓ credible</span> : null}
                 </KV>
-                <KV label="Mixed-effects p">{fmtP(ev.p_glmer)}</KV>
+                <KV label="p from the mixed-effects model">{fmtP(ev.p_glmer)}</KV>
                 {/* "grouped by week" is stated because the ROC panel lower down groups the SAME
                     data by individual pain rating, and a reader comparing the two counts must
                     be able to see they are counting different things (open item 15). */}
@@ -140,7 +135,7 @@ export default function BandCandidateIdentity({ bc, envelope }) {
                   {`${ev.n_matched_samples ?? "not reported"} samples across `
                     + `${ev.n_clusters ?? "not reported"} weeks`}
                 </KV>
-                <KV label="Stim stability">
+                <KV label="Stimulation stability">
                   {ev.stim_stable == null ? "not reported"
                     : ev.stim_stable ? "stim-stable" : "stim-dependent"}
                   {ev.stim_lrt_p != null
@@ -172,8 +167,9 @@ export default function BandCandidateIdentity({ bc, envelope }) {
         </Grid>
 
         {(!bc.adaptive_valid || bc.suggested_mode == null) && bc.suggested_mode_reason ? (
-          <MDBox mt={1} p={1} sx={{ backgroundColor: PAL.warnFill, borderRadius: "6px" }}>
-            <MDTypography variant="caption" sx={{ fontSize: 11.5, color: PAL.warnText }}>
+          <MDBox mt={1}>
+            <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, color: PAL.warnText }}>
+              <span aria-hidden="true" style={{ marginRight: 6 }}>▲</span>
               {`Deployment note: ${bc.suggested_mode_reason}.`}
               {bc.adaptive_valid_reason ? ` ${bc.adaptive_valid_reason}.` : ""}
             </MDTypography>
@@ -181,7 +177,7 @@ export default function BandCandidateIdentity({ bc, envelope }) {
         ) : null}
 
         <MDBox mt={1}>
-          <MDTypography variant="caption" color="text" sx={{ fontSize: 11.5, fontStyle: "italic" }}>
+          <MDTypography variant="caption" sx={{ fontSize: PAL.fs.caption, color: PAL.ink3 }}>
             {prov.selection_biased ? "Selection-biased pool \u2014 " : ""}
             {prov.selection_note || ""}
             {envelope && envelope.committed_at

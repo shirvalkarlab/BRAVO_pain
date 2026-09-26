@@ -58,7 +58,7 @@ export function checksHeading(field) {
  * an instruction to type it. `detail` is the longer sentence, printed under "Details".
  */
 export const ACTION = {
-  enterable: { label: "Enter", ink: "#2A2A2A", detail: null },
+  enterable: { label: "Enter", ink: PAL.ink, detail: null },
   check_on_device: { label: "Enter, check range", ink: PAL.warnText,
     detail: "The adjustable range for this field is not published, so confirm on the Advanced "
           + "Settings screen that the device accepts this value." },
@@ -108,7 +108,7 @@ function Row({ f, index, ticked, onTick, readBackEnabled }) {
   );
   return (
     <MDBox display="flex" flexDirection="row" alignItems="baseline" py={0.45} data-param-row=""
-      sx={{ borderTop: index === 0 ? "none" : "1px solid rgba(0,0,0,0.07)" }}>
+      sx={{ borderTop: index === 0 ? "none" : `1px solid ${PAL.rule}` }}>
       {cell(0, (
         <input type="checkbox" checked={!!ticked} disabled={!readBackEnabled}
           onChange={() => onTick(!ticked)}
@@ -119,44 +119,44 @@ function Row({ f, index, ticked, onTick, readBackEnabled }) {
       ))}
       {cell(1, (
         <>
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 12.5, fontWeight: 600, color: "#1A1A1A" }}>
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.body, fontWeight: 600, color: PAL.ink }}>
             {f.parameter}
           </MDTypography>
           {/* Decision 306: the server lowered this current to the participant's safe ceiling; the
               sentence sits on the row, in the open, so the value is never read without it. */}
           {f.ceiling_note ? (
             <MDTypography variant="caption" data-ceiling-note=""
-              sx={{ display: "block", fontSize: 11.5, fontWeight: 600, color: PAL.warnText, lineHeight: 1.3 }}>
+              sx={{ display: "block", fontSize: PAL.fs.body, fontWeight: 600, color: PAL.warnText, lineHeight: 1.3 }}>
               {f.ceiling_note}
             </MDTypography>
           ) : null}
         </>
       ))}
       {cell(2, mustChoose && value == null ? (
-        <MDTypography variant="caption" sx={{ fontSize: 12, color: PAL.warnText, fontWeight: 600 }}>
+        <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, color: PAL.warnText, fontWeight: 600 }}>
           to be chosen
         </MDTypography>
       ) : (
         <>
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 13, fontFamily: PAL.mono,
-            fontWeight: 700, color: "#111111", lineHeight: 1.2 }}>
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.body,
+            fontWeight: 600, color: PAL.ink, lineHeight: 1.2 }}>
             {value == null ? "not reported" : value}
           </MDTypography>
           {f.enter_as ? (
-            <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
-              fontFamily: PAL.mono, fontWeight: 700, color: PAL.warnText }}>
+            <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.body,
+              fontWeight: 600, color: PAL.warnText }}>
               {`enter as ${f.enter_as}`}
             </MDTypography>
           ) : null}
         </>
       ), { textAlign: "right" })}
       {cell(3, (
-        <MDTypography variant="caption" sx={{ fontSize: 12, color: "#4A4A4A" }}>{f.units || ""}</MDTypography>
+        <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, color: PAL.ink2 }}>{f.units || ""}</MDTypography>
       ))}
       {cell(4, prog == null ? (
-        <MDTypography variant="caption" sx={{ fontSize: 12, color: "#5E5E5E" }}>not read</MDTypography>
+        <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, color: PAL.ink3 }}>not read</MDTypography>
       ) : (
-        <MDTypography variant="caption" sx={{ fontSize: 12.5, fontFamily: PAL.mono, color: "#2A2A2A" }}>
+        <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, color: PAL.ink }}>
           {prog}
           {value == null ? null : (
             <span style={{ fontFamily: "inherit", color: same ? PAL.passText : PAL.warnText, fontWeight: 600 }}>
@@ -166,7 +166,7 @@ function Row({ f, index, ticked, onTick, readBackEnabled }) {
         </MDTypography>
       ), { textAlign: "right" })}
       {cell(5, (
-        <MDTypography variant="caption" sx={{ fontSize: 12, fontWeight: 600, color: action.ink }}>
+        <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: action.ink }}>
           {action.label}
         </MDTypography>
       ))}
@@ -184,14 +184,14 @@ export default function ParameterTable({ report, mode, onMode }) {
   const st = prescriptionState(report, mode);
   if (report && report.loading) {
     return (
-      <MDTypography variant="caption" sx={{ fontSize: 12, color: "#4A4A4A" }}>
+      <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, color: PAL.ink2 }}>
         Building the values to enter…
       </MDTypography>
     );
   }
   if (!st) {
     return (
-      <MDTypography variant="caption" sx={{ display: "block", fontSize: 12, color: "#4A4A4A" }}>
+      <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.body, color: PAL.ink2 }}>
         {`No parameter table has been computed for this configuration${
           report && report.err ? ` (${report.err})` : ""}.`}
       </MDTypography>
@@ -206,15 +206,19 @@ export default function ParameterTable({ report, mode, onMode }) {
   return (
     <MDBox className={deviceOk ? "cl-prescription-authorised" : "cl-prescription-planning"}>
       <MDBox display="flex" flexDirection="row" alignItems="center" gap={0.8} flexWrap="wrap" mb={0.8}>
-        <MDTypography variant="caption" sx={{ fontSize: 12, fontWeight: 600, color: "#2A2A2A", mr: 0.4 }}>
+        <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.ink, mr: 0.4 }}>
           Threshold mode
         </MDTypography>
         {MODE_ORDER.filter((k) => pres.modes[k]).map((k) => {
           const on = k === activeMode;
           return (
             <MDButton key={k} size="small" onClick={() => onMode && onMode(k)}
-              variant={on ? "contained" : "outlined"} color={on ? "info" : "secondary"}
-              aria-pressed={on} sx={{ textTransform: "none", fontSize: 12, py: 0.3 }}>
+              variant="outlined" aria-pressed={on}
+              sx={{ textTransform: "none", fontSize: PAL.fs.body, fontWeight: on ? 600 : 400, py: 0.5,
+                minHeight: 36, borderRadius: "4px", boxShadow: "none",
+                color: `${on ? PAL.accent : PAL.ink} !important`,
+                backgroundColor: on ? PAL.accentFill : PAL.surface,
+                border: `1px solid ${on ? PAL.accent : PAL.rule} !important` }}>
               {`${MODE_LABEL[k] || k}${k === recommended ? " (recommended)" : ""}`}
             </MDButton>
           );
@@ -222,17 +226,18 @@ export default function ParameterTable({ report, mode, onMode }) {
       </MDBox>
 
       {cannotDrive ? (
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 12.5, color: "#2A2A2A" }}>
+        <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.body, color: PAL.ink }}>
           {st.m.note || `${MODE_LABEL[activeMode] || activeMode} cannot drive therapy: nothing to enter.`}
         </MDTypography>
       ) : !showValues ? (
         <MDBox>
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 12.5, fontWeight: 600,
-            color: PAL.failText }}>
+          <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.body, fontWeight: 600,
+            color: unevaluated ? PAL.ink2 : PAL.failText }}>
+            <span aria-hidden="true" style={{ marginRight: 6 }}>{unevaluated ? "○" : "✕"}</span>
             {`${fields.length} values withheld${unevaluated ? " until the device rules are evaluated" : ""}.`}
           </MDTypography>
           <MDButton size="small" variant="text" color="secondary" onClick={() => setPlanningFor(activeMode)}
-            sx={{ textTransform: "none", fontSize: 12, px: 0, mt: 0.2 }}>
+            sx={{ textTransform: "none", fontSize: PAL.fs.body, px: 0, mt: 0.2 }}>
             Show the values for planning (not for programming)
           </MDButton>
         </MDBox>
@@ -242,28 +247,28 @@ export default function ParameterTable({ report, mode, onMode }) {
             <>
               <MDBox display="flex" justifyContent="space-between" alignItems="center" gap={1} mb={0.6}
                 p={0.8} sx={{ border: `2px dashed ${PAL.warnBorder}`, borderRadius: "4px" }}>
-                <MDTypography variant="caption" sx={{ fontSize: 12, fontWeight: 700, color: PAL.warnText }}>
+                <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.warnText }}>
                   {`PLANNING ONLY. ${unevaluated ? "The device rules have not been evaluated"
                     : "The device refuses this configuration"}; do not program these.`}
                 </MDTypography>
                 <MDButton size="small" variant="text" color="secondary" onClick={() => setPlanningFor(null)}
-                  sx={{ textTransform: "none", fontSize: 12 }}>
+                  sx={{ textTransform: "none", fontSize: PAL.fs.body }}>
                   Hide
                 </MDButton>
               </MDBox>
               <MDBox sx={{ position: "absolute", inset: 0, zIndex: 2, pointerEvents: "none",
                 display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
-                <MDTypography sx={{ transform: "rotate(-24deg)", fontSize: 44, fontWeight: 800,
-                  color: "rgba(138,97,0,0.13)", letterSpacing: 3, whiteSpace: "nowrap" }}>
+                <MDTypography sx={{ transform: "rotate(-24deg)", fontSize: PAL.fs.answer, fontWeight: 600,
+                  color: `${PAL.warnText}22`, whiteSpace: "nowrap" }}>
                   PLANNING ONLY
                 </MDTypography>
               </MDBox>
             </>
           ) : null}
-          <MDBox display="flex" flexDirection="row" pb={0.3} sx={{ borderBottom: "1px solid rgba(0,0,0,0.18)" }}>
+          <MDBox display="flex" flexDirection="row" py={0.5} sx={{ backgroundColor: PAL.fillMuted }}>
             {COLS.map(([flex, h], i) => (
               <MDBox key={`h${h || i}`} flex={flex} sx={{ px: 0.5, textAlign: i === 2 || i === 4 ? "right" : "left" }}>
-                <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: 700, color: "#4A4A4A" }}>
+                <MDTypography variant="caption" sx={{ fontSize: PAL.fs.caption, fontWeight: 600, color: PAL.ink3 }}>
                   {h}
                 </MDTypography>
               </MDBox>
@@ -278,7 +283,7 @@ export default function ParameterTable({ report, mode, onMode }) {
             ))}
           </MDBox>
           {readBackEnabled ? (
-            <MDTypography variant="caption" sx={{ display: "block", fontSize: 12, mt: 0.6, fontWeight: 600,
+            <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.body, mt: 0.6, fontWeight: 600,
               color: nTicked === fields.length ? PAL.passText : PAL.warnText }}>
               {`${nTicked} of ${fields.length} read back off the programmer. Tick a box only when the `
                 + "A610 itself displays that value."}
@@ -291,9 +296,9 @@ export default function ParameterTable({ report, mode, onMode }) {
 }
 
 /** One label and its sentence, for the details list. */
-function Note({ children, ink = "#3A3A3A", mt = 0.2 }) {
+function Note({ children, ink = PAL.ink2, mt = 0.2 }) {
   return (
-    <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: ink, mt }}>
+    <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.body, color: ink, mt }}>
       {children}
     </MDTypography>
   );
@@ -301,8 +306,8 @@ function Note({ children, ink = "#3A3A3A", mt = 0.2 }) {
 
 function Heading({ children }) {
   return (
-    <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, fontWeight: 700,
-      color: "#2A2A2A", mt: 1.2 }}>
+    <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.body, fontWeight: 600,
+      color: PAL.ink, mt: 1.2 }}>
       {children}
     </MDTypography>
   );
@@ -336,7 +341,7 @@ export function ParameterDetails({ report, mode }) {
         </Note>
       ) : null}
       {(rec.problems || []).length ? (
-        <Note ink={PAL.failText}>{`Problems with the recommended mode: ${rec.problems.join("; ")}.`}</Note>
+        <Note ink={PAL.warnText}>{`\u25B2 Problems with the recommended mode: ${rec.problems.join("; ")}.`}</Note>
       ) : null}
       {mode && recommended && activeMode !== recommended ? (
         <Note ink={PAL.warnText}>
@@ -362,7 +367,7 @@ export function ParameterDetails({ report, mode }) {
             </Note>
             {c.consequence ? <Note>{c.consequence}</Note> : null}
             {c.resolution ? <Note>{`What can be done: ${c.resolution}`}</Note> : null}
-            {c.not_established ? <Note ink="#5E5E5E">{`Not established by any supplied document: ${c.not_established}`}</Note> : null}
+            {c.not_established ? <Note ink={PAL.ink3}>{`Not established by any supplied document: ${c.not_established}`}</Note> : null}
           </MDBox>
         );
       })}
@@ -374,22 +379,22 @@ export function ParameterDetails({ report, mode }) {
         const action = ACTION[f.confirm] || ACTION.enterable;
         const heading = checksHeading(f);
         return (
-          <MDBox key={`why-${f.parameter}`} mt={0.6} pl={1} sx={{ borderLeft: "2px solid rgba(0,0,0,0.10)" }}>
-            <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, fontWeight: 600, color: "#1A1A1A" }}>
+          <MDBox key={`why-${f.parameter}`} mt={0.6} pl={1} sx={{ borderLeft: `2px solid ${PAL.rule}` }}>
+            <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.body, fontWeight: 600, color: PAL.ink }}>
               {`${f.parameter}: ${ORIGIN_WORDS[f.origin] || "no origin"}`
                 + (f.device_default != null && String(f.device_default) !== String(f.value)
                   ? `; manufacturer default ${f.device_default}` : "")}
             </MDTypography>
             {f.ceiling_note ? <Note ink={PAL.warnText}>{f.ceiling_note}</Note> : null}
-            {f.range_source ? <Note ink={/NOT published/i.test(f.range_source) ? PAL.warnText : "#4A4A4A"}>{f.range_source}</Note> : null}
+            {f.range_source ? <Note ink={/NOT published/i.test(f.range_source) ? PAL.warnText : PAL.ink2}>{f.range_source}</Note> : null}
             {f.range && f.range.length === 2 ? <Note>{`Documented range ${f.range[0]} to ${f.range[1]}.`}</Note> : null}
             {f.confidence ? <Note>{`Confidence ${f.confidence} (measured on this participant's record).`}</Note> : null}
             {action.detail ? <Note>{action.detail}</Note> : null}
-            {heading ? <Note ink="#4A4A4A">{heading}</Note> : null}
+            {heading ? <Note ink={PAL.ink2}>{heading}</Note> : null}
             {CHECK_NOTE_KEYS.filter((k) => f[k]).map((k) => (
               <Note key={k} ink={PAL.warnText}>{f[k]}</Note>
             ))}
-            {f.why ? <Note ink="#3A3A3A">{f.why}</Note> : null}
+            {f.why ? <Note ink={PAL.ink2}>{f.why}</Note> : null}
           </MDBox>
         );
       })}

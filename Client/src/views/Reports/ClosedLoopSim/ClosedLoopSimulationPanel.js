@@ -35,19 +35,24 @@ import { Card } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
-import { PAL, OKABE_ITO } from "./palette";
+import { PAL } from "./palette";
+import { TYPE, CARD } from "assets/theme/base/tokens";
+import { plotlyLayout, directLabel } from "views/Reports/figureStyle";
 import { fmtNum, fmtPct } from "./deployFormat";
 import Fold from "./Fold";
 
 const isNum = (v) => v != null && Number.isFinite(Number(v));
-const INK_M0 = PAL.neutral;
-const INK_ACTIVE = PAL.accent;
-const FILL_M3 = "rgba(0,114,178,0.16)";
-const FILL_WRONG = "rgba(230,159,0,0.25)";
-const FILL_FITTED = "rgba(108,117,125,0.10)";
-const FONT = { family: "Helvetica, Arial, sans-serif", size: 11, color: "#222" };
-const AXIS = { showgrid: false, zeroline: false, showline: true, linecolor: "#444", linewidth: 1,
-  ticks: "outside", ticklen: 3, tickcolor: "#444", tickfont: { size: 11 } };
+// Marks: the replay in the context grey, the closed loop in the series blue; fills from the tokens.
+const INK_M0 = PAL.gray;
+const INK_ACTIVE = PAL.series;
+const FILL_M3 = PAL.accentFill;
+const FILL_WRONG = PAL.warnFill;
+const FILL_FITTED = PAL.fillMuted;
+const AXIS = plotlyLayout().xaxis;
+
+/** The model names in words (SPEC section 6: no M-codes in visible text). */
+const MODEL_WORDS = { M0: "as recorded", M1: "straight-line response", M2: "peaked response",
+  M3: "range over resampled runs" };
 
 /**
  * The words after the controller's limits (decision 306). The simulation runs between the limits
@@ -60,8 +65,8 @@ export function limitsSourceWords(P) {
 }
 
 function modelLabel(name) {
-  return { M0: "M0 · replay, power as recorded", M1: "M1 · loop closed, straight-line response",
-    M2: "M2 · loop closed, peaked response" }[name] || name;
+  return { M0: "replay, power as recorded", M1: "loop closed, straight-line response",
+    M2: "loop closed, peaked response" }[name] || name;
 }
 
 /** The sentence that states what the numbers show, built from them (never hardcoded). */
@@ -108,43 +113,53 @@ function drawTrajectory(gd, sim, hemisphere) {
     traces.push({ x: mins, y: d.m3_amp_band[0], type: "scatter", mode: "lines", line: { width: 0 },
       hoverinfo: "skip", showlegend: false, xaxis: "x", yaxis: "y" });
     traces.push({ x: mins, y: d.m3_amp_band[1], type: "scatter", mode: "lines", line: { width: 0 },
-      fill: "tonexty", fillcolor: FILL_M3, name: "M3 · 2.5–97.5 % of resampled runs",
+      fill: "tonexty", fillcolor: FILL_M3, name: "range over resampled runs (2.5 to 97.5%)",
       hoverinfo: "skip", xaxis: "x", yaxis: "y" });
   }
   traces.push({ x: mins, y: d.a_obs, type: "scatter", mode: "lines", name: "amplitude the device delivered",
-    line: { color: OKABE_ITO.black, width: 0.8, dash: "dot" }, xaxis: "x", yaxis: "y",
+    line: { color: PAL.ink, width: 0.8, dash: "dot" }, xaxis: "x", yaxis: "y",
     hovertemplate: "recorded %{y:.2f} mA<extra></extra>" });
   traces.push({ x: mins, y: d.models.M0.amp, type: "scatter", mode: "lines", name: modelLabel("M0"),
     line: { color: INK_M0, width: 1.4, dash: "dash" }, xaxis: "x", yaxis: "y",
-    hovertemplate: "M0 %{y:.2f} mA<extra></extra>" });
+    hovertemplate: "as recorded %{y:.2f} mA<extra></extra>" });
   traces.push({ x: mins, y: d.models[act].amp, type: "scatter", mode: "lines", name: modelLabel(act),
     line: { color: INK_ACTIVE, width: 1.8 }, xaxis: "x", yaxis: "y",
-    hovertemplate: `${act} %{y:.2f} mA<extra></extra>` });
+    hovertemplate: `loop closed %{y:.2f} mA<extra></extra>` });
   traces.push({ x: mins, y: d.p_obs, type: "scatter", mode: "lines", name: "band power as recorded",
     line: { color: INK_M0, width: 1.0 }, xaxis: "x", yaxis: "y2",
     hovertemplate: "recorded %{y:.1f}<extra></extra>" });
   traces.push({ x: mins, y: d.models[act].p_sim, type: "scatter", mode: "lines",
-    name: `band power the ${act} controller sees`, line: { color: INK_ACTIVE, width: 1.2 },
-    xaxis: "x", yaxis: "y2", hovertemplate: `${act} %{y:.1f}<extra></extra>` });
+    name: "band power the closed loop sees", line: { color: INK_ACTIVE, width: 1.2 },
+    xaxis: "x", yaxis: "y2", hovertemplate: "loop closed %{y:.1f}<extra></extra>" });
   const hline = (y, yref, dash) => ({ type: "line", xref: "paper", x0: 0, x1: 1, yref, y0: y, y1: y,
     line: { color: PAL.thresholdLine, width: 0.8, dash } });
-  const layout = {
-    margin: { l: 58, r: 14, t: 8, b: 40 }, height: 380, font: FONT, hovermode: "x unified",
-    uirevision: "cl-sim-traj", showlegend: true,
-    legend: { orientation: "h", y: 1.02, yanchor: "bottom", x: 0, font: { size: 11 } },
-    xaxis: { ...AXIS, title: { text: "Minutes from the start of the stretch", standoff: 6 }, domain: [0, 1] },
-    yaxis: { ...AXIS, domain: [0.56, 1], title: { text: `${hemisphere || ""} amplitude (mA)`.trim(), standoff: 8 },
+  // Lines are labelled at their right end (SPEC section 3.2), not in a legend box.
+  const lastX = mins.length ? mins[mins.length - 1] : 0;
+  const lastOf = (arr) => (arr && arr.length ? arr[arr.length - 1] : null);
+  const ends = [
+    [lastOf(d.a_obs), "y", "delivered", PAL.ink],
+    [lastOf(d.models.M0.amp), "y", "as recorded", PAL.ink3],
+    [lastOf(d.models[act].amp), "y", "loop closed", INK_ACTIVE],
+    [lastOf(d.p_obs), "y2", "power as recorded", PAL.ink3],
+    [lastOf(d.models[act].p_sim), "y2", "power, loop closed", INK_ACTIVE],
+  ].filter(([y]) => isNum(y)).map(([y, yref, text, color]) => ({ ...directLabel(lastX, y, text, color), yref }));
+  const layout = plotlyLayout({
+    margin: { l: 58, r: 132, t: 16, b: 48 }, height: 380, hovermode: "x unified",
+    uirevision: "cl-sim-traj", showlegend: false,
+    xaxis: { ...AXIS, title: { text: "minutes from the start of the stretch", standoff: 6 }, domain: [0, 1] },
+    yaxis: { ...AXIS, domain: [0.56, 1], title: { text: `${hemisphere || ""} current (mA)`.trim(), standoff: 8 },
       range: [P.amp_low_mA - 0.05 * (P.amp_high_mA - P.amp_low_mA), P.amp_high_mA + 0.05 * (P.amp_high_mA - P.amp_low_mA)] },
-    yaxis2: { ...AXIS, domain: [0, 0.44], title: { text: "Band power (device units)", standoff: 8 } },
+    yaxis2: { ...AXIS, domain: [0, 0.44], title: { text: "band power (device units, LSB)", standoff: 8 } },
     shapes: [hline(P.amp_low_mA, "y", "solid"), hline(P.amp_high_mA, "y", "solid"),
       hline(P.lower, "y2", "dash"), hline(P.upper, "y2", "dash")],
     annotations: [
-      { xref: "paper", x: 1, yref: "y", y: P.amp_high_mA, text: "upper limit", showarrow: false, xanchor: "right", yanchor: "bottom", font: { size: 11, color: "#444" } },
-      { xref: "paper", x: 1, yref: "y", y: P.amp_low_mA, text: "lower limit", showarrow: false, xanchor: "right", yanchor: "top", font: { size: 11, color: "#444" } },
-      { xref: "paper", x: 1, yref: "y2", y: P.upper, text: "upper threshold", showarrow: false, xanchor: "right", yanchor: "bottom", font: { size: 11, color: "#444" } },
-      { xref: "paper", x: 1, yref: "y2", y: P.lower, text: "lower threshold", showarrow: false, xanchor: "right", yanchor: "top", font: { size: 11, color: "#444" } },
+      ...ends,
+      { xref: "paper", x: 1, yref: "y", y: P.amp_high_mA, text: "upper limit", showarrow: false, xanchor: "right", yanchor: "bottom", font: { size: PAL.fs.caption, color: PAL.ink2 } },
+      { xref: "paper", x: 1, yref: "y", y: P.amp_low_mA, text: "lower limit", showarrow: false, xanchor: "right", yanchor: "top", font: { size: PAL.fs.caption, color: PAL.ink2 } },
+      { xref: "paper", x: 1, yref: "y2", y: P.upper, text: "upper threshold", showarrow: false, xanchor: "right", yanchor: "bottom", font: { size: PAL.fs.caption, color: PAL.ink2 } },
+      { xref: "paper", x: 1, yref: "y2", y: P.lower, text: "lower threshold", showarrow: false, xanchor: "right", yanchor: "top", font: { size: PAL.fs.caption, color: PAL.ink2 } },
     ],
-  };
+  });
   Plotly.react(gd, traces, layout, PAL.MODEBAR);
   return true;
 }
@@ -165,10 +180,10 @@ function drawComparison(gd, sim) {
   const traces = [];
   const dot = (xs, ys, name, filled, xaxis, ivs) => ({
     x: xs, y: ys, type: "scatter", mode: "markers", name, xaxis, yaxis: "y", showlegend: false,
-    marker: { size: 9, color: filled ? INK_ACTIVE : "#fff", line: { color: filled ? INK_ACTIVE : INK_M0, width: 1.6 } },
+    marker: { size: 9, color: filled ? INK_ACTIVE : PAL.surface, line: { color: filled ? INK_ACTIVE : INK_M0, width: 1.6 } },
     error_x: ivs ? { type: "data", symmetric: false, array: ivs.map((v, i) => (v ? v[1] - xs[i] : 0)),
       arrayminus: ivs.map((v, i) => (v ? xs[i] - v[0] : 0)), color: INK_ACTIVE, thickness: 1.2, width: 0 } : undefined,
-    hovertemplate: `${name} %{x:.3~f}<extra></extra>`,
+    hovertemplate: `${MODEL_WORDS[name] || "loop closed"} %{x:.3~f}<extra></extra>`,
   });
   const pct = (v) => (isNum(v) ? 100 * v : null);
   traces.push(dot(rows.map((r) => pct(B[r[0]])), labels, "M0", false, "x"));
@@ -180,21 +195,21 @@ function drawComparison(gd, sim) {
   traces.push(dot([B.longest_run_at_upper_s / 60], ["longest stretch at the upper limit"], "M0", false, "x3"));
   traces.push(dot([A.longest_run_at_upper_s / 60], ["longest stretch at the upper limit"], act, true, "x3",
     [iv.longest_run_at_upper_s ? iv.longest_run_at_upper_s.map((v) => v / 60) : null]));
-  const layout = {
-    margin: { l: 210, r: 12, t: 26, b: 36 }, height: 200 + 16 * rows.length, font: FONT,
+  const layout = plotlyLayout({
+    margin: { l: 230, r: 16, t: 32, b: 48 }, height: 210 + 18 * rows.length,
     uirevision: "cl-sim-compare", showlegend: false,
     yaxis: { ...AXIS, showline: false, ticks: "", categoryorder: "array",
       categoryarray: [...labels, "state changes per hour", "longest stretch at the upper limit"].reverse(),
-      tickfont: { size: 11 } },
-    xaxis: { ...AXIS, domain: [0, 0.56], title: { text: "% of controller steps", standoff: 4 }, rangemode: "tozero" },
+      tickfont: { size: PAL.fs.caption } },
+    xaxis: { ...AXIS, domain: [0, 0.56], title: { text: "% of the device's adjustment steps", standoff: 4 }, rangemode: "tozero" },
     xaxis2: { ...AXIS, domain: [0.62, 0.79], title: { text: "per hour", standoff: 4 }, rangemode: "tozero" },
     xaxis3: { ...AXIS, domain: [0.85, 1], title: { text: "minutes", standoff: 4 }, rangemode: "tozero" },
     annotations: [
-      { xref: "paper", yref: "paper", x: 0, y: 1.06, xanchor: "left", showarrow: false, font: { size: 11 },
-        text: `<span style="color:${INK_M0}">○ M0 replay</span>   <span style="color:${INK_ACTIVE}">● ${act} loop closed</span>`
-          + (sim.models.M3 ? `   <span style="color:${INK_ACTIVE}">— M3 interval, ${sim.models.M3.n_replicates} resampled runs</span>` : "") },
+      { xref: "paper", yref: "paper", x: 0, y: 1.06, xanchor: "left", showarrow: false, font: { size: PAL.fs.caption },
+        text: `○ as recorded   ● loop closed (${MODEL_WORDS[act] || act})`
+          + (sim.models.M3 ? `   — range over ${sim.models.M3.n_replicates} resampled runs` : "") },
     ],
-  };
+  });
   Plotly.react(gd, traces, layout, PAL.MODEBAR);
 }
 
@@ -206,9 +221,9 @@ function drawDistributionAndCurve(gd, sim) {
   const norm = (h) => { const s = h.reduce((a, b) => a + b, 0) || 1; return h.map((v) => 100 * v / s); };
   const traces = [
     { x: mids, y: norm(sim.models.M0.amp_hist), type: "scatter", mode: "lines", line: { shape: "hvh", color: INK_M0, width: 1.4, dash: "dash" },
-      name: "M0", xaxis: "x", yaxis: "y", hovertemplate: "M0 %{y:.1f} %<extra></extra>" },
+      name: "as recorded", xaxis: "x", yaxis: "y", hovertemplate: "as recorded %{y:.1f} %<extra></extra>" },
     { x: mids, y: norm(sim.models[act].amp_hist), type: "scatter", mode: "lines", line: { shape: "hvh", color: INK_ACTIVE, width: 1.8 },
-      name: act, xaxis: "x", yaxis: "y", hovertemplate: `${act} %{y:.1f} %<extra></extra>` },
+      name: "loop closed", xaxis: "x", yaxis: "y", hovertemplate: "loop closed %{y:.1f} %<extra></extra>" },
   ];
   const curve = sim.curves && sim.curves[act];
   const shapes = []; const annotations = [];
@@ -246,7 +261,7 @@ function drawDistributionAndCurve(gd, sim) {
       shapes.push({ type: "rect", xref: "x2", yref: "paper", x0: a, x1: b, y0: 0, y1: 1, fillcolor: FILL_WRONG,
         line: { width: 0 }, layer: "below" });
       annotations.push({ xref: "x2", yref: "paper", x: 0.5 * (a + b), y: 0.96, text: "power rises with current: positive feedback",
-        showarrow: false, font: { size: 11, color: PAL.warnText } });
+        showarrow: false, font: { size: PAL.fs.caption, color: PAL.warnText } });
     }
     if (isNum(curve.peak_mA)) {
       shapes.push({ type: "line", xref: "x2", yref: "paper", x0: curve.peak_mA, x1: curve.peak_mA, y0: 0, y1: 1,
@@ -254,28 +269,28 @@ function drawDistributionAndCurve(gd, sim) {
     }
   } else {
     annotations.push({ xref: "x2 domain", yref: "y2 domain", x: 0.5, y: 0.5, showarrow: false,
-      font: { size: 11, color: PAL.neutral }, text: "no response curve stored yet" });
+      font: { size: PAL.fs.caption, color: PAL.ink3 }, text: "no response curve stored yet" });
   }
-  const layout = {
-    margin: { l: 52, r: 12, t: 24, b: 38 }, height: 230, font: FONT, uirevision: "cl-sim-dist", showlegend: false,
-    xaxis: { ...AXIS, domain: [0, 0.44], title: { text: "Commanded amplitude (mA)", standoff: 4 }, range: [P.amp_low_mA, P.amp_high_mA] },
-    yaxis: { ...AXIS, title: { text: "% of controller steps", standoff: 6 }, rangemode: "tozero" },
-    xaxis2: { ...AXIS, domain: [0.56, 1], title: { text: "Amplitude (mA)", standoff: 4 }, range: [P.amp_low_mA, P.amp_high_mA], anchor: "y2" },
-    yaxis2: { ...AXIS, anchor: "x2", title: { text: "Power change from the lower limit", standoff: 6 } },
+  const layout = plotlyLayout({
+    margin: { l: 56, r: 16, t: 32, b: 48 }, height: 250, uirevision: "cl-sim-dist", showlegend: false,
+    xaxis: { ...AXIS, domain: [0, 0.44], title: { text: "current the device would command (mA)", standoff: 4 }, range: [P.amp_low_mA, P.amp_high_mA] },
+    yaxis: { ...AXIS, title: { text: "% of adjustment steps", standoff: 6 }, rangemode: "tozero" },
+    xaxis2: { ...AXIS, domain: [0.56, 1], title: { text: "current (mA)", standoff: 4 }, range: [P.amp_low_mA, P.amp_high_mA], anchor: "y2" },
+    yaxis2: { ...AXIS, anchor: "x2", title: { text: "power change from the lower limit", standoff: 6 } },
     shapes, annotations: [
       ...annotations,
-      { xref: "paper", yref: "paper", x: 0, y: 1.08, xanchor: "left", showarrow: false, font: { size: 11 },
-        text: `<span style="color:${INK_M0}">- - M0</span>  <span style="color:${INK_ACTIVE}">— ${act}</span>  where the amplitude sits` },
-      { xref: "paper", yref: "paper", x: 0.56, y: 1.08, xanchor: "left", showarrow: false, font: { size: 11 },
+      { xref: "paper", yref: "paper", x: 0, y: 1.1, xanchor: "left", showarrow: false, font: { size: PAL.fs.caption },
+        text: "dashed: as recorded · solid: loop closed · where the current sits" },
+      { xref: "paper", yref: "paper", x: 0.56, y: 1.08, xanchor: "left", showarrow: false, font: { size: PAL.fs.caption },
         text: `the response the loop is closed through${curve && curve.kind !== "none" ? " (grey: currents the fit rests on)" : ""}` },
     ],
-  };
+  });
   Plotly.react(gd, traces, layout, PAL.MODEBAR);
 }
 
 function Caption({ children }) {
   return (
-    <MDTypography variant="caption" sx={{ display: "block", fontSize: 11, color: "#4A4A4A", mt: 0.3 }}>
+    <MDTypography variant="caption" sx={{ ...TYPE.body, display: "block", color: PAL.ink2, mt: 0.5, maxWidth: "68ch" }}>
       {children}
     </MDTypography>
   );
@@ -283,7 +298,7 @@ function Caption({ children }) {
 
 function Line({ children }) {
   return (
-    <MDTypography variant="caption" sx={{ display: "block", fontSize: 11, fontFamily: PAL.mono, color: "#2A2A2A", mt: 0.25 }}>
+    <MDTypography variant="caption" sx={{ ...TYPE.body, display: "block", color: PAL.ink, mt: 0.25 }}>
       {children}
     </MDTypography>
   );
@@ -301,25 +316,25 @@ function RunSummaryRow({ label, run, active, onClick }) {
   const params = run && run.timing_params_ms;
   return (
     <MDBox onClick={onClick} sx={{
-      flex: "1 1 260px", minWidth: 240, p: 1, borderRadius: "6px", cursor: onClick ? "pointer" : "default",
-      border: `1.5px solid ${active ? INK_ACTIVE : "rgba(0,0,0,0.16)"}`,
-      backgroundColor: active ? "rgba(0,114,178,0.06)" : "transparent",
+      flex: "1 1 260px", minWidth: 240, p: 1.5, borderRadius: "4px", cursor: onClick ? "pointer" : "default",
+      border: `1px solid ${active ? PAL.accent : PAL.rule}`,
+      backgroundColor: active ? PAL.accentFill : PAL.surface,
     }}>
-      <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, fontWeight: 700, color: active ? INK_ACTIVE : "#333" }}>
+      <MDTypography variant="caption" sx={{ ...TYPE.body, display: "block", fontWeight: 600, color: active ? PAL.accent : PAL.ink2 }}>
         {label}{active ? " (shown below)" : ""}
       </MDTypography>
       {run && run.refused ? (
         <Caption>{run.absent_reason || "could not be replayed at this timing"}</Caption>
       ) : m0 ? (
         <>
-          <Line>{`${fmtNum(m0.transitions_per_hour, 1)} switches/h · ${m0.n_transitions_undone} undone within one onset (${fmtNum(m0.undone_per_hour, 1)}/h)`}</Line>
+          <Line>{`${fmtNum(m0.transitions_per_hour, 1)} switches an hour · ${m0.n_transitions_undone} undone within one wait before switching (${fmtNum(m0.undone_per_hour, 1)} an hour)`}</Line>
           <Line>{`at upper limit ${fmtPct(m0.frac_time_at_upper, 1)} · at lower ${fmtPct(m0.frac_time_at_lower, 1)} · mean ${fmtNum(m0.mean_amplitude_mA, 2)} mA`}</Line>
         </>
       ) : (
         <Caption>no run stored for this timing</Caption>
       )}
       {params ? (
-        <Line>{`averaging ${fmtNum(params.averaging_ms, 0)} ms · onset ${fmtNum(params.onset_ms, 0)} ms · blanking ${fmtNum(params.detection_blanking_ms, 0)} ms · transitions ${fmtNum(params.transition_up_ms, 0)}/${fmtNum(params.transition_down_ms, 0)} ms`}</Line>
+        <Line>{`averaging ${fmtNum(params.averaging_ms, 0)} ms · wait before switching ${fmtNum(params.onset_ms, 0)} ms · pause after it ${fmtNum(params.detection_blanking_ms, 0)} ms · ramps ${fmtNum(params.transition_up_ms, 0)}/${fmtNum(params.transition_down_ms, 0)} ms`}</Line>
       ) : null}
     </MDBox>
   );
@@ -348,13 +363,13 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
     [trajRef, cmpRef, distRef].forEach((r) => { if (r.current) Plotly.purge(r.current); });
   }, []);
 
-  const title = "CL-DBS simulations";
+  const title = "What the automatic adjustment would have done: simulated, not measured, decides nothing";
   const label = contactLabel && bandCandidate && bandCandidate.channel
     ? `${contactLabel(bandCandidate.channel)} · ${fmtNum(bandCandidate.center_freq_hz, 1)} Hz` : null;
 
   if (loading && !data) {
-    return (<Card sx={{ border: "2px dashed rgba(0,0,0,0.28)" }}><MDBox p={2}>
-      <MDTypography variant="h6" sx={{ fontSize: 15 }}>{title}</MDTypography>
+    return (<Card sx={{ ...CARD, border: `1px dashed ${PAL.graphic}` }}><MDBox p={3}>
+      <MDTypography component="h3" sx={{ ...TYPE.title, color: PAL.ink }}>{title}</MDTypography>
       <Caption>Fetching the stored simulation…</Caption>
     </MDBox></Card>);
   }
@@ -369,9 +384,9 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
   );
 
   if (!data || !hasAnyRun) {
-    return (<Card sx={{ border: "2px dashed rgba(0,0,0,0.28)" }}><MDBox p={2}>
-      <MDTypography variant="h6" sx={{ fontSize: 15 }}>{title}</MDTypography>
-      <MDTypography variant="button" sx={{ display: "block", fontSize: 12.5, mt: 0.4 }}>
+    return (<Card sx={{ ...CARD, border: `1px dashed ${PAL.graphic}` }}><MDBox p={3}>
+      <MDTypography component="h3" sx={{ ...TYPE.title, color: PAL.ink }}>{title}</MDTypography>
+      <MDTypography sx={{ ...TYPE.lead, display: "block", color: PAL.ink, mt: 1 }}>
         No simulation is stored for this configuration yet
       </MDTypography>
       <Caption>{(data && data.absent_reason) || err || "The report writes one the next time it runs with thresholds placed for a candidate."}</Caption>
@@ -390,21 +405,20 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
   const stretchDate = d0 && isNum(d0.start_epoch_s) ? new Date(d0.start_epoch_s * 1000).toLocaleString() : null;
 
   return (
-    <Card sx={{ width: "100%", border: "2px dashed rgba(0,0,0,0.28)" }}>
-      <MDBox p={2}>
-        <MDBox display="flex" justifyContent="space-between" alignItems="baseline" flexWrap="wrap" gap={1}>
-          <MDTypography variant="h6" sx={{ fontSize: 15, lineHeight: 1.3 }}>{title}</MDTypography>
-          {label ? <MDTypography variant="caption" sx={{ fontSize: 11, color: "#6A6A6A" }}>{label}</MDTypography> : null}
-        </MDBox>
-        <Caption>Two timing regimes, replayed separately and never silently swapped for each other; click a box to draw its figures below.</Caption>
-        {runSelector}
-        <MDTypography variant="button" sx={{ display: "block", fontSize: 12.5, fontWeight: 600, mt: 0.3, lineHeight: 1.35 }}>
+    <Card sx={{ ...CARD, width: "100%", border: `1px dashed ${PAL.graphic}` }}>
+      <MDBox p={3}>
+        <MDTypography component="h3" sx={{ ...TYPE.title, color: PAL.ink }}>{title}</MDTypography>
+        {label ? <MDTypography sx={{ ...TYPE.caption, color: PAL.ink3 }}>{label}</MDTypography> : null}
+        <MDTypography sx={{ ...TYPE.lead, display: "block", color: PAL.ink, mt: 1, maxWidth: "68ch" }}>
           {headline(run)}
         </MDTypography>
+        <Caption>Two sets of timing settings, replayed separately and never silently swapped for each other; click a box to draw its figures below.</Caption>
+        {runSelector}
         <Caption>{run.timing_source}</Caption>
         {run.wrong_side && run.wrong_side.warning ? (
-          <MDBox mt={0.6} p={0.8} sx={{ backgroundColor: PAL.warnFill, borderRadius: "4px", border: `1px solid ${PAL.warnBorder}` }}>
-            <MDTypography variant="caption" sx={{ display: "block", fontSize: 11, color: PAL.warnText }}>
+          <MDBox mt={1}>
+            <MDTypography variant="caption" sx={{ ...TYPE.body, display: "block", color: PAL.warnText }}>
+              <span aria-hidden="true" style={{ marginRight: 6 }}>▲</span>
               {run.wrong_side.warning}
             </MDTypography>
           </MDBox>
@@ -416,8 +430,8 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
           <Caption>
             {d0
               ? `A · the longest continuous stretch of streaming, ${fmtNum(d0.n_steps * d0.dt_s / 60, 1)} min from ${stretchDate}: `
-                + `the amplitude each controller commands (top; dashed grey M0, blue ${act}, shaded band M3, dotted black what the device delivered) `
-                + "over the band power each one sees (bottom; grey as recorded, blue moved by the commanded amplitude). Solid lines are the amplitude limits, dashed the thresholds."
+                + "the current each version would command (top; dashed grey as recorded, blue with the loop closed, the shaded band its range over resampled runs, dotted black what the device delivered) "
+                + "over the band power each one sees (bottom; grey as recorded, blue moved by the commanded current). Solid lines are the current limits, dashed the switching thresholds."
               : "A · no stretch long enough to draw."}
           </Caption>
         </MDBox>
@@ -426,7 +440,7 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
         <MDBox mt={1.2}>
           <div ref={cmpRef} style={{ width: "100%", minHeight: 260 }} />
           <Caption>
-            {`B · each quantity for the replay (open) and the closed loop (filled), over ${fmtNum(rec.hours_of_signal, 1)} h of streaming in `
+            {`B · each quantity as recorded (open) and with the loop closed (filled), over ${fmtNum(rec.hours_of_signal, 1)} h of streaming in `
               + `${rec.n_segments_used} stretches; `
               + (run.models.M3 ? `the bar is the 2.5–97.5 % range across ${rs.n_fitted || 0} refits on resampled runs. `
                 : `no interval is drawn${rs.reason ? ` (${rs.reason})` : ""}. `)
@@ -439,25 +453,25 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
         <MDBox mt={1.2}>
           <div ref={distRef} style={{ width: "100%", minHeight: 230 }} />
           <Caption>
-            {`C · left, the share of controller steps at each commanded amplitude between the limits ${fmtNum(P.amp_low_mA, 1)}–${fmtNum(P.amp_high_mA, 1)} mA; `
-              + `right, the fitted change in band power against amplitude the loop is closed through`
+            {`C · left, the share of adjustment steps at each commanded current between the limits ${fmtNum(P.amp_low_mA, 1)}–${fmtNum(P.amp_high_mA, 1)} mA; `
+              + `right, the fitted change in band power against current the loop is closed through`
               + (run.models.M3 && run.models.M3.slope_interval_per_mA ? ", with the resampled slope range shaded" : "")
               + (run.curves && run.curves.M2 ? "; the dotted line is the fitted peak." : ".")}
           </Caption>
         </MDBox>
 
-        <Fold show="How this was modelled" hide="Hide the method" mt={1} dense>
-          <Line>{`timing regime drawn above: ${RUN_TAB_LABEL[effective]} · ${run.timing_source || ""}`}</Line>
-          <Line>{`response curve: ${act} ${run.curves && run.curves[act] ? run.curves[act].source : ""} · slope ${fmtNum(run.curves && run.curves[act] && run.curves[act].slope_per_mA, 3)} ± ${fmtNum(run.curves && run.curves[act] && run.curves[act].slope_stderr, 3)} units/mA · fitted on ${run.n_points_in_curve} points, ${run.n_runs_in_curve} runs`}</Line>
-          <Line>{`M2 (peaked): ${run.curves && run.curves.M2 ? "active" : (run.m2_absent_reason || "absent")}`}</Line>
-          <Line>{`settling time τ = ${fmtNum(st.tau_s, 1)} s · ${st.source || ""}`}</Line>
+        <Fold show="How this was worked out (the model, the record, the controller settings)" hide="Hide the method" mt={2} dense>
+          <Line>{`timing settings drawn above: ${RUN_TAB_LABEL[effective]} · ${run.timing_source || ""}`}</Line>
+          <Line>{`response curve: ${MODEL_WORDS[act] || act} ${run.curves && run.curves[act] ? run.curves[act].source : ""} · change in band power per milliamp ${fmtNum(run.curves && run.curves[act] && run.curves[act].slope_per_mA, 3)} ± ${fmtNum(run.curves && run.curves[act] && run.curves[act].slope_stderr, 3)} device units · fitted on ${run.n_points_in_curve} points, ${run.n_runs_in_curve} runs`}</Line>
+          <Line>{`peaked response: ${run.curves && run.curves.M2 ? "in use" : (run.m2_absent_reason || "not in use")}`}</Line>
+          <Line>{`how long power takes to settle: ${fmtNum(st.tau_s, 1)} s · ${st.source || ""}`}</Line>
           <Line>{`series: ${inp.n_pieces} three-second pieces on ${inp.contact} at ${fmtNum(inp.centre_used_hz, 1)} Hz · ${inp.n_unusable_pieces} unusable (held as missing) · ${inp.n_dropped_no_amplitude} dropped for no known amplitude · amplitude from the device's own record for ${inp.n_from_device_current}, from the settings history for ${inp.n_from_epochs}`}</Line>
           <Line>{`record: ${rec.n_segments} stretches, ${rec.n_segments_used} run, ${rec.n_segments_skipped} shorter than 3 steps · ${rec.n_cells_without_a_piece} device-clock cells without a piece (held), ${rec.n_cells_merging_pieces} merging two · ${fmtNum(rec.hours_of_signal, 2)} h of signal across ${fmtNum((rec.span_s || 0) / 86400, 0)} days (coverage ${fmtPct(rec.coverage_frac, 3)})`}</Line>
           <Line>{`controller: thresholds ${fmtNum(P.lower, 1)} / ${fmtNum(P.upper, 1)} device units · limits ${fmtNum(P.amp_low_mA, 2)}–${fmtNum(P.amp_high_mA, 2)} mA (${limitsSourceWords(P)}) · ramp ${fmtNum(P.ramp_up_mA_per_s, 4)} mA/s up, ${fmtNum(P.ramp_down_mA_per_s, 4)} down · step ${fmtNum(P.dt_controller_s, 1)} s · onset ${P.onset_steps} step(s), blanking ${P.blanking_steps}`}</Line>
           {P.amp_limit_note ? <Line>{P.amp_limit_note}</Line> : null}
-          <Line>{`M3: ${rs.n_fitted || 0} of ${rs.n_resample || 0} refits on ${rs.n_runs || 0} runs resampled with replacement${rs.reason ? ` · ${rs.reason}` : ""}`}</Line>
+          <Line>{`range over resampled runs: ${rs.n_fitted || 0} of ${rs.n_resample || 0} refits on ${rs.n_runs || 0} runs resampled with replacement${rs.reason ? ` · ${rs.reason}` : ""}`}</Line>
           <Caption>{run.caveat}</Caption>
-          <Caption>Dashed frame: every number here is modelled, not measured. It gates nothing.</Caption>
+          <Caption>Dashed frame: every number here is modelled, not measured. It decides nothing.</Caption>
         </Fold>
       </MDBox>
     </Card>

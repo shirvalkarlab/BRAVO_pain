@@ -1,6 +1,14 @@
 /**
- * The evidence triangle, drawn as a graph beside three separate signed axes, with the three-valued
- * coherence answer beneath.
+ * "Does the evidence hang together?" -- the three measured links (SPEC 2026-09-26 section 5.2 item 5).
+ *
+ * THE REDESIGN OF 2026-09-26. The triangle drawing and the four-column sign table are gone. In their
+ * place: one answer sentence; three aligned dot-and-interval strips, "Current → band power", "Band
+ * power → pain" and "Current → pain", zero at the same place in each, the value and its 95% range
+ * printed at the dot, a hollow dot where the range crosses zero; one sentence per link saying whether
+ * its sign is the one the device's automatic adjustment assumes; and one fold holding the counts, the
+ * reading with the current taken out (its words unchanged), and how the sign agreement was tested.
+ * The history below explains choices that still hold (three separate scales, zero aligned, an
+ * unbounded end drawn as an open arrow and spelled out, the module's own estimator sentence printed).
  *
  * WHAT THIS REPLACES. The panel this supersedes rendered the three edges as a six-column table whose
  * verdict column had no header, and it carried the topology — that these are three edges of a closed
@@ -52,11 +60,14 @@
  * tooltip would also have been the wrong home for it regardless, because this page prints and a
  * tooltip does not.
  */
-import { Card, Divider, Grid } from "@mui/material";
+import { useEffect, useRef, useState } from "react";
+import { Card } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import PAL from "./palette";
+import { TYPE, CARD, STATE } from "assets/theme/base/tokens";
+import { SVG_TEXT } from "views/Reports/figureStyle";
 import StateTrack from "./StateTrack";
 import Fold from "./Fold";
 import { TRACKS, coherenceReading } from "./stateTracks";
@@ -67,29 +78,32 @@ import { ciBound, fmtNum, fmtP, parseSignPattern } from "./deployFormat";
 // ("power_linear", "mA") and not the units of the slope itself.
 const EDGE_META = {
   E1: {
-    from: "Amplitude", to: "Band power",
+    name: "Current \u2192 band power",
     question: "can the device move the signal?",
-    units: "LFP power per mA",
-    rising: "band power RISES as amplitude rises",
-    falling: "band power FALLS as amplitude rises",
+    units: "band power per mA",
+    rising: "band power rises as the current rises",
+    falling: "band power falls as the current rises",
   },
   E2: {
-    from: "Band power", to: "Pain",
+    name: "Band power \u2192 pain",
     question: "does the signal track the patient?",
-    units: "pain points per unit of LFP power",
-    rising: "pain RISES as band power rises",
-    falling: "pain FALLS as band power rises",
+    units: "pain points per unit of band power",
+    rising: "pain rises as band power rises",
+    falling: "pain falls as band power rises",
   },
   E3: {
-    from: "Amplitude", to: "Pain",
+    name: "Current \u2192 pain",
     question: "does the therapy work?",
     units: "pain points per mA",
-    rising: "pain RISES as amplitude rises",
-    falling: "pain FALLS as amplitude rises",
+    rising: "pain rises as the current rises",
+    falling: "pain falls as the current rises",
   },
 };
+/** The link's plain name, for sentences that used to say "E1". */
+export const linkName = (k) => (EDGE_META[k] ? EDGE_META[k].name : k);
+const joinNames = (ks) => ks.map(linkName).join(" and ");
 
-const edgeInk = (e) => (e && e.resolved ? PAL.accent : PAL.neutral);
+const edgeInk = (e) => (e && e.resolved ? PAL.ink : PAL.ink3);
 // Review 2026-09-15, finding C1: E1 is one of two different quantities and the payload says which
 // (`edges.E1.source`). The screening statistic -- the setting-epoch slope over the whole record,
 // confounded with time, whose own note says it cannot be read as the causal effect of current on
@@ -97,106 +111,6 @@ const edgeInk = (e) => (e && e.resolved ? PAL.accent : PAL.neutral);
 // but not a measurement) and labelled with the word, so a reader never has to open the fold.
 const isScreening = (e) => !!(e && e.source === "screening_historical");
 const SCREENING_DASH = "1.5 3.5";
-
-/**
- * The triangle as a graph. Amplitude sits at the lower left, band power at the apex and pain at the
- * lower right, so E1 and E2 form the two sides that compose and E3 is the base they have to
- * reproduce. That placement is the argument the panel is making, drawn as geometry.
- */
-function TriangleGraph({ edges }) {
-  const W = 330;
-  const H = 232;
-  const N = { amp: [46, 168], pow: [165, 34], pain: [284, 168] };
-  const nodeR = 5;
-
-  // Each edge runs between two node centres, shortened at both ends so the stroke does not run
-  // under the node marker or the label.
-  const seg = (a, b, trim = 16) => {
-    const dx = b[0] - a[0];
-    const dy = b[1] - a[1];
-    const L = Math.sqrt(dx * dx + dy * dy) || 1;
-    const ux = dx / L;
-    const uy = dy / L;
-    return [[a[0] + ux * trim, a[1] + uy * trim], [b[0] - ux * trim, b[1] - uy * trim]];
-  };
-
-  const EDGES = [
-    { k: "E1", a: N.amp, b: N.pow, lx: 74, ly: 96, anchor: "start" },
-    { k: "E2", a: N.pow, b: N.pain, lx: 256, ly: 96, anchor: "end" },
-    { k: "E3", a: N.amp, b: N.pain, lx: 165, ly: 196, anchor: "middle" },
-  ];
-
-  return (
-    <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img"
-      aria-label="The amplitude, band power and pain triangle">
-      <defs>
-        {/* One arrowhead per ink, because a marker cannot inherit the stroke colour of its line in
-            every browser. Only a resolved edge is ever drawn with one. */}
-        <marker id="cle-head-accent" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6"
-          markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill={PAL.accent} />
-        </marker>
-      </defs>
-
-      {EDGES.map((E) => {
-        const e = edges && edges[E.k];
-        const [p0, p1] = seg(E.a, E.b);
-        const mid = [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2];
-        const resolved = !!(e && e.resolved);
-        const ink = edgeInk(e);
-        const sign = e && e.sign != null ? Number(e.sign) : null;
-        return (
-          <g key={E.k}>
-            <line x1={p0[0]} y1={p0[1]} x2={p1[0]} y2={p1[1]} stroke={ink}
-              strokeWidth="2.2" data-edge={E.k}
-              strokeDasharray={resolved ? (isScreening(e) ? SCREENING_DASH : undefined) : "5 3"}
-              markerEnd={resolved ? "url(#cle-head-accent)" : undefined} />
-            {/* An unresolved edge carries a hollow diamond with a question mark at its midpoint:
-                a placeholder for a sign, in the position a sign would occupy. */}
-            {!resolved ? (
-              <g>
-                <rect x={mid[0] - 7} y={mid[1] - 7} width="14" height="14" fill="#FFFFFF"
-                  stroke={PAL.neutral} strokeWidth="1.6"
-                  transform={`rotate(45 ${mid[0]} ${mid[1]})`} />
-                <text x={mid[0]} y={mid[1] + 4} textAnchor="middle" fontSize="11"
-                  fontWeight="700" fill={PAL.neutral}>?</text>
-              </g>
-            ) : null}
-            {/* Two short lines at 12 and 11 units (decision 302: the PI could not read the 9-unit
-                labels). "interval spans zero" is said once per edge, beside its axis on the right;
-                here one word says it, so the E1 and E2 labels no longer run into each other. */}
-            <text x={E.lx} y={E.ly} textAnchor={E.anchor} fontSize="12" fontWeight="700"
-              fill={ink}>
-              {resolved ? `${E.k} ${sign > 0 ? "+" : sign < 0 ? "\u2212" : "?"}` : E.k}
-            </text>
-            <text x={E.lx} y={E.ly + 13} textAnchor={E.anchor} fontSize="11"
-              fill={resolved && e && e.statistically_established === false ? PAL.warnText : "#5E5E5E"}>
-              {!resolved ? "no estimate"
-                : e && e.statistically_established === false ? "uncertain" : "established"}
-            </text>
-            {isScreening(e) ? (
-              <text x={E.lx} y={E.ly + 26} textAnchor={E.anchor} fontSize="11" fontWeight="700"
-                fill={PAL.warnText}>screening only</text>
-            ) : null}
-          </g>
-        );
-      })}
-
-      {[["amp", "Amplitude", "mA", "middle", 0, 22],
-        ["pow", "Band power", "LFP power", "middle", 0, -14],
-        ["pain", "Pain", "0\u201310 rating", "middle", 0, 22]].map(([key, label, unit, anchor,
-        ox, oy]) => (
-          <g key={key}>
-            <circle cx={N[key][0]} cy={N[key][1]} r={nodeR} fill="#2A2A2A" />
-            <text x={N[key][0] + ox} y={N[key][1] + oy} textAnchor={anchor} fontSize="12"
-              fontWeight="700" fill="#2A2A2A">{label}</text>
-            <text x={N[key][0] + ox} y={N[key][1] + oy + 13} textAnchor={anchor} fontSize="11"
-              fill="#5E5E5E">{unit}</text>
-          </g>
-      ))}
-    </svg>
-  );
-}
 
 /**
  * One signed axis for one edge. Zero sits at the same horizontal position in every row, which is
@@ -215,7 +129,7 @@ export const CURRENT_CONFOUND_NOTE =
   + "force at each rating out of both the band power and the pain score shrinks every positive "
   + "reading in this band family \u2014 on L 0\u207b3\u207a, 22.5\u201327.5 Hz, +0.08 to +0.20 "
   + "becomes +0.01 to +0.12 against NRS; on L 1\u207b3\u207a the negative readings strengthen. "
-  + "This edge is not adjusted for it yet, so read its sign as resting partly on the current.";
+  + "This link is not adjusted for it yet, so read its sign as resting partly on the current.";
 
 /**
  * The same edge read again with the stimulation current taken out of the band power.
@@ -240,7 +154,7 @@ function AdjustedEdgeLine({ adjusted }) {
   if (!a.available || n(a.auc) == null) {
     return (
       <MDTypography variant="caption" data-testid="e2-adjusted"
-        sx={{ display: "block", fontSize: 11.5, mb: 0.8, color: "#8a5a00" }}>
+        sx={{ ...TYPE.body, display: "block", mb: 1, color: PAL.ink2 }}>
         {`With ${what} taken out of the band power: not made here (${a.why || "no reason was "
           + "recorded"}). An absent reading, not one at chance.`}
       </MDTypography>
@@ -249,11 +163,11 @@ function AdjustedEdgeLine({ adjusted }) {
   const span = (n(a.auc_low) && n(a.auc_high)) ? `, interval ${n(a.auc_low)} to ${n(a.auc_high)}` : "";
   const reports = a.n_pain_reports ? `, over ${a.n_pain_reports} pain reports` : "";
   const pr = n(a.partial_r) != null
-    ? ` Partial correlation ${Number(a.partial_r) >= 0 ? "+" : ""}${n(a.partial_r)}.`
+    ? ` Correlation after taking the current out ${Number(a.partial_r) >= 0 ? "+" : ""}${n(a.partial_r)}.`
     : "";
   return (
     <MDTypography variant="caption" data-testid="e2-adjusted"
-      sx={{ display: "block", fontSize: 11.5, mb: 0.8, color: "#8a5a00" }}>
+      sx={{ ...TYPE.body, display: "block", mb: 1, color: PAL.ink2 }}>
       {`With ${what} taken out of the band power: ${n(a.auc)}${span}${reports} (0.5 is coin `
         + `flipping).${pr} It describes the reading above; that one sets the verdict.`}
     </MDTypography>
@@ -267,143 +181,155 @@ export function currentConfoundApplies(candidate) {
   return hz >= CURRENT_CONFOUND_HZ[0] && hz <= CURRENT_CONFOUND_HZ[1];
 }
 
-function EdgeAxis({ k, e }) {
-  const W = 340;
-  const H = 58;
-  const x0 = 8;
-  const x1 = W - 8;
+/** The element's real pixel width, so SVG text drawn at 12 px stays 12 px on screen. */
+function useMeasuredWidth(fallback = 480) {
+  const ref = useRef(null);
+  const [w, setW] = useState(fallback);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    const read = () => { if (el.clientWidth > 0) setW(el.clientWidth); };
+    read();
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, w];
+}
+
+/** Whether the 95% range stays on one side of zero: the payload's own flag, else the interval. */
+function isEstablished(e) {
+  if (!e) return false;
+  if (e.statistically_established != null) return !!e.statistically_established;
+  const lo = ciBound(e.ci, 0);
+  const hi = ciBound(e.ci, 1);
+  return !!(!lo.unbounded && !hi.unbounded && lo.value != null && hi.value != null
+    && ((lo.value > 0 && hi.value > 0) || (lo.value < 0 && hi.value < 0)));
+}
+
+/** "falls as the current rises; the range crosses zero, so not yet certain" (SPEC section 6). */
+export function linkReading(k, e) {
+  const meta = EDGE_META[k] || {};
+  if (!e || !e.resolved) return "no estimate";
+  const est = Number(e.estimate);
+  const dir = est > 0 ? meta.rising : meta.falling;
+  const sure = isEstablished(e)
+    ? "the 95% range stays on one side of zero"
+    : "the range crosses zero, so not yet certain";
+  const screening = isScreening(e)
+    ? "; a screening reading, read off the whole history, where current and time move together; "
+      + "not a measured effect of current"
+    : "";
+  return `${dir.charAt(0).toUpperCase()}${dir.slice(1)}; ${sure}${screening}`;
+}
+
+/**
+ * One link as a dot and its 95% range on its own scale. Zero sits at the same horizontal position in
+ * every row, which is the only thing the three rows share: their units differ, so a magnitude
+ * comparison between rows would mean nothing. Hollow dot: the range crosses zero.
+ */
+function LinkStrip({ k, e }) {
+  const [ref, W] = useMeasuredWidth();
+  const H = 44;
+  const pad = 12;
+  const x0 = pad;
+  const x1 = Math.max(W - pad, x0 + 40);
   const zero = (x0 + x1) / 2;
   const meta = EDGE_META[k] || {};
   const lo = ciBound(e && e.ci, 0);
   const hi = ciBound(e && e.ci, 1);
   const est = e && Number.isFinite(Number(e.estimate)) ? Number(e.estimate) : null;
   const resolved = !!(e && e.resolved);
-  // The caveat flag (PI rule 2026-09-13): the interval excludes zero. Read off the payload's own
-  // field, and derived from the interval only when a payload predates the field.
-  const established = e
-    ? (e.statistically_established != null
-        ? !!e.statistically_established
-        : !!(!lo.unbounded && !hi.unbounded && lo.value != null && hi.value != null
-             && ((lo.value > 0 && hi.value > 0) || (lo.value < 0 && hi.value < 0))))
-    : false;
-  const signWord = resolved ? (est > 0 ? "+" : "\u2212") : null;
+  const established = isEstablished(e);
   const ink = edgeInk(e);
 
   // The half-span is set by the largest finite magnitude the row has to show, with headroom so a
-  // point marker never sits on the frame. An unbounded endpoint contributes nothing to the span —
-  // it is drawn as an arrow leaving the axis instead, because no finite scale can contain it.
+  // dot never sits on the frame. An unbounded end contributes nothing: it leaves the axis as an
+  // open arrow instead, because no finite scale can contain it.
   const mags = [est, lo.unbounded ? null : lo.value, hi.unbounded ? null : hi.value]
     .filter((v) => v != null).map(Math.abs);
   const span = (mags.length ? Math.max(...mags) : 1) * 1.35 || 1;
   const px = (v) => zero + (v / span) * ((x1 - x0) / 2);
-
-  const yAxis = 34;
+  const yAxis = 30;
   const loX = lo.unbounded ? x0 : px(lo.value);
   const hiX = hi.unbounded ? x1 : px(hi.value);
-
-  const readout = e == null ? "not estimated"
-    : `${fmtNum(est, 4)}  [${lo.unbounded ? "unbounded" : fmtNum(lo.value, 4)}, `
-      + `${hi.unbounded ? "unbounded" : fmtNum(hi.value, 4)}]  p = ${fmtP(e.p)}`;
+  const atDot = est == null ? null
+    : `${fmtNum(est, 3)} (${lo.unbounded ? "unbounded" : fmtNum(lo.value, 3)} to `
+      + `${hi.unbounded ? "unbounded" : fmtNum(hi.value, 3)})`;
+  const dotX = est != null ? px(est) : zero;
+  const anchor = dotX > x1 - 120 ? "end" : (dotX < x0 + 120 ? "start" : "middle");
 
   return (
-    <MDBox mb={0.6}>
-      <MDBox display="flex" flexDirection="row" alignItems="baseline" gap={0.8} flexWrap="wrap">
-        <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: ink }}>
-          {k}
+    <MDBox py={1.5} sx={{ borderTop: `1px solid ${PAL.rule}` }}>
+      <MDBox display="flex" alignItems="baseline" gap={1.5} flexWrap="wrap">
+        <MDTypography component="h3" sx={{ ...TYPE.body, fontWeight: 600, color: PAL.ink }}>
+          {meta.name}
         </MDTypography>
-        <MDTypography variant="caption" sx={{ fontSize: 11.5, color: "#4A4A4A" }}>
-          {`${meta.from} \u2192 ${meta.to} \u00B7 ${meta.question}`}
-        </MDTypography>
-        {/* Numbers, not adjectives (PI rule 2026-09-13): the sign, then whether the interval
-            excludes zero. "sign − (interval spans zero)" is a direction with a caveat; "no point
-            estimate" is no direction at all. */}
-        <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold",
-          color: resolved ? (established ? PAL.accent : PAL.warnText) : PAL.neutral,
-          letterSpacing: 0.3 }}>
-          {resolved
-            ? `SIGN ${signWord} (${established ? "INTERVAL EXCLUDES ZERO" : "INTERVAL SPANS ZERO"})`
-              + (isScreening(e) ? " · SCREENING STATISTIC, NOT A MEASUREMENT" : "")
-            : "NO POINT ESTIMATE"}
+        <MDTypography sx={{ ...TYPE.caption, color: PAL.ink3 }}>
+          {`${meta.question} · ${meta.units}`}
         </MDTypography>
       </MDBox>
-
-      <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img"
-        aria-label={`${k} estimate and interval, on its own axis with zero aligned`}>
-        <defs>
-          <marker id={`cle-open-${k}`} viewBox="0 0 10 10" refX="2" refY="5" markerWidth="7"
-            markerHeight="7" orient="auto-start-reverse">
-            <path d="M 9 0 L 1 5 L 9 10" fill="none" stroke={ink} strokeWidth="1.6" />
-          </marker>
-        </defs>
-
-        {/* The axis, then the zero reference. Zero is at the same x in all three rows. */}
-        <line x1={x0} y1={yAxis} x2={x1} y2={yAxis} stroke="rgba(0,0,0,0.18)" strokeWidth="1" />
-        <line x1={zero} y1={yAxis - 15} x2={zero} y2={yAxis + 11} stroke="#2A2A2A"
-          strokeWidth="1.2" />
-        <text x={zero} y={yAxis + 22} textAnchor="middle" fontSize="11" fill="#5E5E5E">0</text>
-
-        {/* The interval. An unbounded end leaves the axis as an open arrow rather than stopping at
-            the frame, so it cannot be read as an interval that happens to end there. */}
-        {e ? (
-          <line x1={loX} y1={yAxis} x2={hiX} y2={yAxis} stroke={ink} strokeWidth="3.4"
-            markerStart={lo.unbounded ? `url(#cle-open-${k})` : undefined}
-            markerEnd={hi.unbounded ? `url(#cle-open-${k})` : undefined} />
-        ) : null}
-
-        {/* The point estimate: filled when the interval excludes zero, hollow when it spans zero,
-            so a reader sees at the marker itself which edges the verdict rests on point sign
-            alone for. */}
-        {est != null ? (
-          <circle cx={px(est)} cy={yAxis} r="5"
-            fill={established ? ink : "#FFFFFF"} stroke={ink} strokeWidth="2" />
-        ) : null}
-
-        {/* The words at the terminal, for an unbounded limit. */}
-        {hi.unbounded ? (
-          <text x={x1 - 4} y={yAxis - 8} textAnchor="end" fontSize="11" fill={ink}>
-            upper limit unbounded
-          </text>
-        ) : null}
-        {lo.unbounded ? (
-          <text x={x0 + 4} y={yAxis - 8} textAnchor="start" fontSize="11" fill={ink}>
-            lower limit unbounded
-          </text>
-        ) : null}
-
-        <text x={x0} y={12} fontSize="11" fill="#5E5E5E">{meta.units}</text>
-      </svg>
-
-      <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
-        fontFamily: PAL.mono, color: "#2A2A2A" }}>
-        {readout}
+      <div ref={ref} style={{ width: "100%" }}>
+        <svg width={W} height={H} role="img" style={{ display: "block" }}
+          aria-label={`${meta.name}: ${atDot || "no estimate"}, on its own scale with zero aligned`}>
+          <defs>
+            <marker id={`cle-open-${k}`} viewBox="0 0 10 10" refX="2" refY="5" markerWidth="7"
+              markerHeight="7" orient="auto-start-reverse">
+              <path d="M 9 0 L 1 5 L 9 10" fill="none" stroke={ink} strokeWidth="1.6" />
+            </marker>
+          </defs>
+          <line x1={x0} y1={yAxis} x2={x1} y2={yAxis} stroke={PAL.rule} strokeWidth="1" />
+          <line x1={zero} y1={yAxis - 10} x2={zero} y2={yAxis + 8} stroke={PAL.graphic} strokeWidth="1" />
+          <text x={zero} y={yAxis + 14} textAnchor="middle" dominantBaseline="hanging"
+            style={SVG_TEXT} fill={PAL.ink3} fontSize={PAL.fs.caption}>0</text>
+          {/* The 95% range. A screening E1 is drawn finely dotted: a direction, not a measurement. */}
+          {e && resolved ? (
+            <line x1={loX} y1={yAxis} x2={hiX} y2={yAxis} stroke={ink} strokeWidth="2"
+              data-edge={k} strokeDasharray={isScreening(e) ? SCREENING_DASH : undefined}
+              markerStart={lo.unbounded ? `url(#cle-open-${k})` : undefined}
+              markerEnd={hi.unbounded ? `url(#cle-open-${k})` : undefined} />
+          ) : null}
+          {est != null ? (
+            <circle cx={dotX} cy={yAxis} r="5" fill={established ? ink : PAL.surface}
+              stroke={ink} strokeWidth="1.5" />
+          ) : null}
+          <text x={dotX} y={yAxis - 12} textAnchor={anchor} style={SVG_TEXT} fontSize={PAL.fs.caption}
+            fill={PAL.ink}>{atDot || "no estimate"}</text>
+        </svg>
+      </div>
+      <MDTypography sx={{ ...TYPE.body, color: resolved && !established ? PAL.warnText : PAL.ink2 }}>
+        {resolved && !established ? <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.caution.glyph}</span> : null}
+        <span>{linkReading(k, e)}</span>
+        {e && e.p != null ? <span style={{ color: PAL.ink3 }}>{` · p ${fmtP(e.p)}`}</span> : null}
       </MDTypography>
-      {e ? (
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#4A4A4A" }}>
-          {/* Since 2026-09-11 E1 is the pooled titration slope (decision 9), whose unit is a run of
-              stepped current (up or down) rather than a setting epoch; the sentence follows the unit. */}
-          {/^run of (rising|stepped) current/.test(e.cluster_unit || "")
-            ? `${e.n} settled points in ${e.n_clusters} run${e.n_clusters === 1 ? "" : "s"} of stepped current`
-            : `${e.n} observations in ${e.n_clusters} ${e.cluster_unit}`
-              + (e.n_clusters === 1 ? "" : " clusters")}
-          {e.sign != null
-            ? ` \u00B7 ${Number(e.sign) > 0 ? meta.rising : meta.falling}`
-            : ""}
-        </MDTypography>
-      ) : null}
-      {/* The module's own sentence about how this estimate was made, printed rather than
-          reconstructed. It names the estimator and the cluster count. Folded since 2026-09-11. */}
-      {e && e.note ? (
-        <Fold show="How this edge was estimated" hide="Hide" mt={0.2} dense>
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#6A6A6A" }}>
-            {e.note}
-          </MDTypography>
-        </Fold>
-      ) : null}
       {e && e.confounded_by && e.confounded_by.length > 0 ? (
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
-          color: PAL.warnText }}>
+        <MDTypography sx={{ ...TYPE.body, color: PAL.warnText }}>
+          <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.caution.glyph}</span>
           {`Confounded by: ${e.confounded_by.join(", ")}.`}
         </MDTypography>
+      ) : null}
+    </MDBox>
+  );
+}
+
+/** The counts behind one link, and the module's own sentence about how it was made. */
+function LinkMethod({ k, e }) {
+  if (!e) return null;
+  const meta = EDGE_META[k] || {};
+  return (
+    <MDBox mb={1.5}>
+      <MDTypography sx={{ ...TYPE.body, fontWeight: 600, color: PAL.ink }}>{meta.name}</MDTypography>
+      <MDTypography sx={{ ...TYPE.body, color: PAL.ink2 }}>
+        {/* Since 2026-09-11 E1 is the pooled titration slope (decision 9), whose unit is a run of
+            stepped current (up or down) rather than a setting epoch; the sentence follows the unit. */}
+        {/^run of (rising|stepped) current/.test(e.cluster_unit || "")
+          ? `${e.n} settled points in ${e.n_clusters} run${e.n_clusters === 1 ? "" : "s"} of stepped current.`
+          : `${e.n} readings from ${e.n_clusters} separate ${e.cluster_unit}`
+            + `${e.n_clusters === 1 ? "" : " groups"}.`}
+      </MDTypography>
+      {e.note ? (
+        <MDTypography sx={{ ...TYPE.body, color: PAL.ink2 }}>{e.note}</MDTypography>
       ) : null}
     </MDBox>
   );
@@ -428,229 +354,230 @@ function EdgeAxis({ k, e }) {
  * different hemisphere, or a mode whose control law runs the other way. Those are different people
  * doing different things.
  */
-function CoherenceReading({ coherence, edges }) {
-  if (!coherence) return null;
-  const expected = parseSignPattern(coherence.expected_pattern);
-  const observedRaw = parseSignPattern(coherence.observed_pattern);
+/** The observed and required signs, and the reading computed from them. */
+function readCoherence(coherence, edges) {
+  const expected = parseSignPattern(coherence && coherence.expected_pattern);
+  const observedRaw = parseSignPattern(coherence && coherence.observed_pattern);
   // Prefer the coherence block's own observed pattern, and fall back to the signs on the edges
-  // themselves if it is absent, so the comparison table still renders when only one of the two
-  // sources is present.
+  // themselves if it is absent, so the comparison still renders when only one source is present.
   const observed = {};
   ["E1", "E2", "E3"].forEach((k) => {
     const fromEdge = edges && edges[k] && edges[k].sign != null ? Number(edges[k].sign) : null;
     observed[k] = observedRaw[k] != null ? observedRaw[k] : fromEdge;
   });
-  const r = coherenceReading(observed, expected);
+  return { observed, expected, r: coherenceReading(observed, expected) };
+}
 
-  // Split the module's own note at its own word: everything from "PROVISIONAL:" on is the caveat
-  // about the verdict, and is shown in the open; the rest is method and stays in the fold.
+/** The answer under the title, in one sentence, computed from the signs rather than asserted. */
+export function evidenceAnswer(coherence, edges) {
+  if (!coherence) return "The sign agreement has not been tested for this band.";
+  const { r } = readCoherence(coherence, edges);
+  if (!r.haveAllSigns) {
+    return "Cannot tell yet: at least one link has no estimate, so the three cannot be checked "
+      + "against each other.";
+  }
+  if (r.edgesAgreeInternally && r.matchesControlLaw) {
+    return "Yes: the three links agree with each other and with what the device's automatic "
+      + "adjustment assumes.";
+  }
+  if (r.edgesAgreeInternally) {
+    return "The three links agree with each other, but not with what the device's automatic "
+      + "adjustment assumes.";
+  }
+  return "No: the three links do not agree with each other, so at least one of them is unreliable.";
+}
+
+/**
+ * The two questions the answer has to keep apart, and one sentence per link.
+ *
+ * "The three links disagree with each other" says the measurements are not yet trustworthy and the
+ * remedy is more or better measurement. "The three links agree with each other and are the wrong
+ * way round for the device's automatic adjustment" says the measurements are fine and the remedy is
+ * a different band, a different side, or a mode whose adjustment runs the other way. Those are
+ * different people doing different things, so the two are answered separately.
+ */
+function CoherenceReading({ coherence, edges }) {
+  if (!coherence) return null;
+  const { observed, expected, r } = readCoherence(coherence, edges);
+  const word = (v) => (v == null ? "no sign" : Number(v) > 0 ? "rises (+)" : "falls (\u2212)");
+
+  return (
+    <MDBox mt={2}>
+      <MDBox component="ul" sx={{ listStyle: "none", m: 0, p: 0 }} data-testid="link-sentences">
+        {["E1", "E2", "E3"].map((k) => {
+          const bad = r.mismatchedEdges.indexOf(k) >= 0;
+          const known = observed[k] != null && expected[k] != null;
+          return (
+            <MDBox component="li" key={`cmp-${k}`} sx={{ ...TYPE.body, color: PAL.ink2, py: 0.25 }}>
+              <span aria-hidden="true" style={{ display: "inline-block", width: "1.4em",
+                color: !known ? PAL.ink3 : (bad ? PAL.warnText : PAL.ink) }}>
+                {!known ? STATE.notChecked.glyph : (bad ? STATE.caution.glyph : STATE.pass.glyph)}
+              </span>
+              <b style={{ fontWeight: 600, color: PAL.ink }}>{linkName(k)}</b>
+              {`: measured ${word(observed[k])}; the automatic adjustment assumes ${word(expected[k])}`}
+              {known ? (bad ? ", the opposite." : ", as it needs.") : "."}
+            </MDBox>
+          );
+        })}
+      </MDBox>
+
+      <MDTypography sx={{ ...TYPE.body, color: PAL.ink, mt: 1.5, maxWidth: "68ch" }}>
+        <b style={{ fontWeight: 600 }}>{"Do the three links agree with each other? "}</b>
+        {!r.haveAllSigns
+          ? "Cannot be answered: at least one link has no sign, so the combination cannot be checked."
+          : r.edgesAgreeInternally
+            ? "Yes. Combining current \u2192 band power with band power \u2192 pain reproduces the "
+              + "sign of current \u2192 pain."
+            : "No. Combining current \u2192 band power with band power \u2192 pain does not reproduce "
+              + "the sign of current \u2192 pain: at least one of them is unreliable."}
+      </MDTypography>
+      <MDTypography sx={{ ...TYPE.body, color: PAL.ink, mt: 1, maxWidth: "68ch" }}>
+        <b style={{ fontWeight: 600 }}>{"Are those signs the ones the device's automatic adjustment assumes? "}</b>
+        {!r.haveAllSigns
+          ? "Cannot be answered while a sign is missing."
+          : r.matchesControlLaw
+            ? "Yes. Every link has the sign the selected mode needs."
+            : `No. ${joinNames(r.mismatchedEdges)} `
+              + `${r.mismatchedEdges.length === 1 ? "has" : "have"} the opposite sign to the one `
+              + "the selected mode needs."}
+      </MDTypography>
+      {r.haveAllSigns && r.edgesAgreeInternally && !r.matchesControlLaw ? (
+        <MDTypography sx={{ ...TYPE.body, color: PAL.warnText, mt: 1, maxWidth: "68ch" }}>
+          <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.caution.glyph}</span>
+          {"Read those two answers together. The measurements are not in conflict with each "
+            + "other; they are in conflict with what the device would do with them. The remedy "
+            + "is therefore a different band, a different side, or a mode whose adjustment runs "
+            + "the other way \u2014 not more measurement of this one."}
+        </MDTypography>
+      ) : null}
+    </MDBox>
+  );
+}
+
+/** The module's own note about the sign test, both halves, and the resampling behind it. */
+function SignTestMethod({ coherence }) {
+  if (!coherence) return null;
   const noteText = coherence.note || "";
   const cut = noteText.search(/PROVISIONAL\s*:/i);
   const provisionalHalf = cut >= 0 ? noteText.slice(cut).trim() : null;
   const restOfNote = cut >= 0 ? noteText.slice(0, cut).trim() : (noteText || null);
-
-  const word = (s) => (s == null ? "not reported" : Number(s) > 0 ? "positive (+)" : "negative (\u2212)");
-
   return (
-    <MDBox mt={1}>
-      {/* The per-edge comparison, which is the evidence for the two statements below it. */}
-      <MDBox display="flex" flexDirection="row" py={0.3}>
-        {[["18%", "edge"], ["30%", "sign observed"], ["30%", "sign the control law needs"],
-          ["22%", ""]].map(([w, h]) => (
-            <MDBox key={`h${w}${h}`} width={w}>
-              <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold",
-                letterSpacing: 0.3, color: "#5E5E5E" }}>{h.toUpperCase()}</MDTypography>
-            </MDBox>
-        ))}
-      </MDBox>
-      {["E1", "E2", "E3"].map((k) => {
-        const bad = r.mismatchedEdges.indexOf(k) >= 0;
-        return (
-          <MDBox key={`cmp-${k}`} display="flex" flexDirection="row" py={0.25}
-            sx={{ borderTop: "1px solid rgba(0,0,0,0.07)" }}>
-            <MDBox width="18%">
-              <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold" }}>
-                {k}
-              </MDTypography>
-            </MDBox>
-            <MDBox width="30%">
-              <MDTypography variant="caption" sx={{ fontSize: 11, fontFamily: PAL.mono,
-                color: bad ? PAL.fail : "#2A2A2A" }}>{word(observed[k])}</MDTypography>
-            </MDBox>
-            <MDBox width="30%">
-              <MDTypography variant="caption" sx={{ fontSize: 11, fontFamily: PAL.mono,
-                color: "#2A2A2A" }}>{word(expected[k])}</MDTypography>
-            </MDBox>
-            <MDBox width="22%">
-              <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold",
-                color: bad ? PAL.fail : PAL.pass }}>
-                {observed[k] == null || expected[k] == null ? "" : bad ? "OPPOSITE" : "AS NEEDED"}
-              </MDTypography>
-            </MDBox>
-          </MDBox>
-        );
-      })}
-
-      {/* The two statements, computed from the signs above rather than asserted. */}
-      <MDBox mt={1} p={1} sx={{ borderRadius: "4px", backgroundColor: PAL.neutralFill,
-        border: `1px solid ${PAL.neutralBorder}` }}>
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#2A2A2A" }}>
-          <b>{"Do the three edges agree with each other?  "}</b>
-          {!r.haveAllSigns
-            ? "Cannot be answered: at least one edge has no reported sign, so the composition "
-              + "cannot be checked."
-            : r.edgesAgreeInternally
-              ? "Yes. Composing the amplitude-to-power and power-to-pain edges reproduces the sign "
-                + "of the amplitude-to-pain edge."
-              : "No. Composing the amplitude-to-power and power-to-pain edges does not reproduce "
-                + "the sign of the amplitude-to-pain edge: at least one of them is unreliable."}
-        </MDTypography>
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, mt: 0.6,
-          color: "#2A2A2A" }}>
-          <b>{"Are those signs the ones the device's control law assumes?  "}</b>
-          {!r.haveAllSigns
-            ? "Cannot be answered while a sign is missing."
-            : r.matchesControlLaw
-              ? "Yes. Every edge has the sign the selected control law requires."
-              : `No. ${r.mismatchedEdges.join(" and ")} `
-                + `${r.mismatchedEdges.length === 1 ? "has" : "have"} the opposite sign to the one `
-                + "the selected control law requires."}
-        </MDTypography>
-        {r.haveAllSigns && r.edgesAgreeInternally && !r.matchesControlLaw ? (
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, mt: 0.6,
-            color: PAL.warnText }}>
-            {"Read those two answers together, because the combination is the finding and it is not "
-              + "the same as either one alone. The measurements are not in conflict with each "
-              + "other; they are in conflict with what the device would do with them. The remedy "
-              + "is therefore a different band, a different hemisphere, or a control law that runs "
-              + "the other way \u2014 not more measurement of this one."}
-          </MDTypography>
-        ) : null}
-      </MDBox>
-
-      {/* The module's own note carries two different things. The sentence that says the pattern
-          rests on the point signs alone, because intervals span zero, is the reader's caveat about
-          the verdict itself, and it now reads IN THE OPEN (panel D, 2026-09-22); the rest -- the
-          control-law citation and the method -- stays folded, as it has since 2026-09-11. */}
-      {/* The module's note is one fold again (decision 302). Its "PROVISIONAL: ... intervals span
-          zero" half was printed in the open since decision 235, beside the edge rows that already
-          say "INTERVAL SPANS ZERO" with the numbers and under a status line that says
-          "provisional"; its stability half repeats the stability card directly below. */}
-      <Fold show="How the sign agreement was tested" hide="Hide" mt={0.8} dense>
-        {provisionalHalf ? (
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, mb: 0.4, color: "#4A4A4A" }}>
-            {provisionalHalf}
-          </MDTypography>
-        ) : null}
-        {restOfNote ? (
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11, color: "#4A4A4A" }}>
-            {restOfNote}
-          </MDTypography>
-        ) : null}
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, mt: 0.4,
-          color: "#5E5E5E" }}>
-          {coherence.p_coherent != null
-            ? `Bootstrap probability that the sign pattern holds: ${fmtNum(coherence.p_coherent, 3)}`
-              + `${coherence.n_boot ? `, from ${coherence.n_boot} replications.` : "."}`
-            : "No bootstrap probability is reported for this sign pattern, so the answer above rests "
-              + "on the point signs rather than on a resampled distribution over them."}
-        </MDTypography>
-      </Fold>
+    <MDBox mt={2}>
+      <MDTypography sx={{ ...TYPE.body, fontWeight: 600, color: PAL.ink }}>
+        How the sign agreement was tested
+      </MDTypography>
+      {provisionalHalf ? (
+        <MDTypography sx={{ ...TYPE.body, color: PAL.ink2 }}>{provisionalHalf}</MDTypography>
+      ) : null}
+      {restOfNote ? (
+        <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, mt: 0.5 }}>{restOfNote}</MDTypography>
+      ) : null}
+      <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, mt: 0.5 }}>
+        {coherence.p_coherent != null
+          ? `Chance, over resampled data, that the sign pattern holds: ${fmtNum(coherence.p_coherent, 3)}`
+            + `${coherence.n_boot ? `, from ${coherence.n_boot} resamples.` : "."}`
+          : "No resampled probability is reported for this sign pattern, so the answer above rests "
+            + "on the point signs rather than on a resampled spread of them."}
+      </MDTypography>
     </MDBox>
   );
 }
 
 export default function EvidenceTrianglePanel({ report }) {
   const { data, loading, err } = report || { data: null, loading: false, err: null };
-  // Which band this report is about, for the scope of the caveat below the second edge.
+  // Which band this report is about, for the scope of the caveat under the second link.
   const candidate = ((data || {}).candidates || [])[0] || null;
   const showCurrentConfound = currentConfoundApplies(candidate);
+  const title = (
+    <MDTypography component="h2" sx={{ ...TYPE.title, color: PAL.ink }}>
+      Does the evidence hang together?
+    </MDTypography>
+  );
 
   if (loading) {
     return (
-      <Card><MDBox p={2}>
-        <MDTypography variant="button">Estimating the three edges…</MDTypography>
-      </MDBox></Card>
+      <Card sx={{ ...CARD, p: 3 }}>
+        {title}
+        <MDTypography sx={{ ...TYPE.lead, color: PAL.ink2, mt: 1 }}>Measuring the three links…</MDTypography>
+      </Card>
     );
   }
   if (!data) {
     return (
-      <Card><MDBox p={2}>
-        <MDTypography variant="h6" sx={{ fontSize: 15 }}>
-          The evidence triangle: amplitude, band power and pain
+      <Card sx={{ ...CARD, p: 3 }}>
+        {title}
+        <MDTypography sx={{ ...TYPE.lead, color: PAL.ink2, mt: 1 }}>
+          {`The three links have not been measured for this configuration${err ? ` (${err})` : ""}.`}
         </MDTypography>
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
-          color: PAL.neutral }}>
-          {`The three edges have not been estimated for this configuration${err ? ` (${err})` : ""}.`}
-        </MDTypography>
-      </MDBox></Card>
+      </Card>
     );
   }
 
   const edges = data.edges || {};
 
   return (
-    <Card>
-      <MDBox p={2}>
-        <MDTypography variant="h6" sx={{ fontSize: 15 }}>
-          The evidence triangle: amplitude, band power and pain
-        </MDTypography>
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 12, color: "#3A3A3A" }}>
-          {"Three measured links, and whether their signs match what the control law needs."}
-          {data.pain_score && data.pain_score.key ? (
-            <span data-testid="triangle-pain-score">
-              {` Pain score: ${data.pain_score.label || data.pain_score.key}.`}
-            </span>
-          ) : null}
-        </MDTypography>
+    <Card sx={{ ...CARD, p: 3 }}>
+      {title}
+      <MDTypography data-testid="evidence-answer" sx={{ ...TYPE.lead, color: PAL.ink, mt: 1, maxWidth: "68ch" }}>
+        {evidenceAnswer(data.coherence, edges)}
+      </MDTypography>
+      <MDTypography sx={{ ...TYPE.caption, color: PAL.ink3, mt: 0.5 }}>
+        {"Three measured links, each on its own scale with zero lined up; a hollow dot means its "
+          + "95% range crosses zero."}
+        {data.pain_score && data.pain_score.key ? (
+          <span data-testid="triangle-pain-score">
+            {` Pain score: ${data.pain_score.label || data.pain_score.key}.`}
+          </span>
+        ) : null}
+      </MDTypography>
 
-        <Grid container spacing={2} mt={0.5}>
-          <Grid item xs={12} md={5}>
-            <TriangleGraph edges={edges} />
-          </Grid>
-          <Grid item xs={12} md={7}>
-            {["E1", "E2", "E3"].map((k) => (
-              <MDBox key={k}>
-                <EdgeAxis k={k} e={edges[k]} />
-                {/* The measurement, when the report carries it; the interim sentence only while
-                    it does not, so the page never says "not adjusted for it yet" beside a number
-                    that has been adjusted. */}
-                {k === "E2" && edges.E2 && edges.E2.adjusted ? (
-                  <AdjustedEdgeLine adjusted={edges.E2.adjusted} />
-                ) : null}
-                {k === "E2" && showCurrentConfound && !(edges.E2 && edges.E2.adjusted) ? (
-                  <MDTypography variant="caption" data-testid="e2-current-confound"
-                    sx={{ display: "block", fontSize: 11.5, mb: 0.8, color: "#8a5a00" }}>
-                    {CURRENT_CONFOUND_NOTE}
-                  </MDTypography>
-                ) : null}
-              </MDBox>
-            ))}
-          </Grid>
-        </Grid>
-        {/* The two drawing conventions, folded since 2026-09-11. */}
-        <Fold show="How to read the picture" hide="Hide" dense>
-          <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#5E5E5E" }}>
-            Each edge carries its sign beside its name, and under it one word: established (its
-            interval excludes zero), uncertain (its interval spans zero, so the sign rests on the
-            point estimate) or no estimate. A dotted line with a hollow diamond is an edge with no
-            estimate; it is drawn at full weight because it is present and undetermined, not
-            absent and not zero. A finely dotted line with an arrowhead, marked
-            "screening statistic", is the current-to-power edge read off the whole historical
-            record, where current is confounded with time: it has a sign and it chooses what to
-            titrate, and it is not a measurement of what current does to power. It is replaced by
-            the pooled titration slope once one is stored for the band. Each edge has its own axis and its own units
-            because the three quantities are not comparable in magnitude; only zero is aligned
-            across the three, which is what makes the sign comparison readable.
+      <MDBox mt={2}>
+        <StateTrack track={TRACKS.coherence} data={data} showBlurb={false} dense />
+      </MDBox>
+
+      <MDBox mt={2}>
+        {["E1", "E2", "E3"].map((k) => (
+          <MDBox key={k}>
+            <LinkStrip k={k} e={edges[k]} />
+            {/* The interim sentence only while the report carries no adjusted reading, so the page
+                never says "not adjusted for it yet" beside a number that has been adjusted. */}
+            {k === "E2" && showCurrentConfound && !(edges.E2 && edges.E2.adjusted) ? (
+              <MDTypography variant="caption" data-testid="e2-current-confound"
+                sx={{ ...TYPE.body, display: "block", mb: 1, color: PAL.warnText, maxWidth: "68ch" }}>
+                <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.caution.glyph}</span>
+                {CURRENT_CONFOUND_NOTE}
+              </MDTypography>
+            ) : null}
+          </MDBox>
+        ))}
+      </MDBox>
+
+      <CoherenceReading coherence={data.coherence} edges={edges} />
+
+      <MDBox mt={2}>
+        <Fold show="How this was worked out (counts, the reading with the current taken out, how the sign agreement was tested)"
+          hide="Hide how this was worked out" mt={0}>
+          {["E1", "E2", "E3"].map((k) => <LinkMethod key={k} k={k} e={edges[k]} />)}
+          {edges.E2 && edges.E2.adjusted ? (
+            <MDBox mb={1.5}>
+              <MDTypography sx={{ ...TYPE.body, fontWeight: 600, color: PAL.ink }}>
+                Band power → pain, read again with the current taken out
+              </MDTypography>
+              <AdjustedEdgeLine adjusted={edges.E2.adjusted} />
+            </MDBox>
+          ) : null}
+          <SignTestMethod coherence={data.coherence} />
+          <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, mt: 2, maxWidth: "68ch" }}>
+            How to read the strips: each link has its own scale and its own units, because the three
+            quantities are not comparable in size; only zero is lined up, which is what makes the
+            signs comparable by eye. A filled dot means the 95% range stays on one side of zero; a
+            hollow dot means it crosses zero, so the sign rests on the point value alone. An open
+            arrow at an end means that end of the range is unbounded. A finely dotted range on
+            current → band power marks a screening reading, read off the whole history where
+            current and time move together; it is replaced by the stepped-current measurement once
+            one is stored for the band.
           </MDTypography>
         </Fold>
-
-        <Divider sx={{ my: 1.2 }} />
-
-        {/* No blurb (decision 302): the lit cell's sentence said what the two answers under the
-            table say, in other words. */}
-        <StateTrack track={TRACKS.coherence} data={data} showBlurb={false} />
-        <CoherenceReading coherence={data.coherence} edges={edges} />
       </MDBox>
     </Card>
   );

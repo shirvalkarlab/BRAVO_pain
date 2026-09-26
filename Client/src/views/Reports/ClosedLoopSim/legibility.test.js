@@ -16,8 +16,16 @@ const DIRS = ["ClosedLoopSim", "StimOptimizer", "ControlAnalyses"].map((d) => pa
 const FILES = DIRS.flatMap((d) => fs.readdirSync(d)
   .filter((f) => f.endsWith(".js") && !f.endsWith(".test.js"))
   .map((f) => path.join(d, f)))
-  // the recompute bar both pages show (the PI lifted rule 7 for it on 2026-09-24)
-  .concat([path.join(__dirname, "..", "RecomputeBar.js")]);
+  // the recompute bar both pages show (the PI lifted rule 7 for it on 2026-09-24). Since the
+  // redesign of 2026-09-26 (WP7) the test READS this file and the file itself is not edited: it
+  // keeps literal colours of its own, so it is held to the floors below and not to the redesign's
+  // no-hex rule, which is for files the redesign may change.
+  .concat([path.join(__dirname, "..", "RecomputeBar.js")])
+  // the shared lines and components the three pages render (WP7)
+  .concat(["CacheStatusLine.js", "figureStyle.js"].map((f) => path.join(__dirname, "..", f)))
+  .concat(fs.readdirSync(path.join(__dirname, "..", "paper"))
+    .filter((f) => f.endsWith(".js") && !f.endsWith(".test.js"))
+    .map((f) => path.join(__dirname, "..", "paper", f)));
 // #7A7A7A added 2026-09-26 (the design review of the Stim Optimizer and Biomarkers pages, §1.2(e)):
 // it measures 4.29:1 on white, under the 4.5:1 minimum, and five Stim Optimizer chart files drew
 // their axis text in it while this list, which left it out, passed them.
@@ -107,9 +115,82 @@ test("the contrast arithmetic the chart-text check relies on", () => {
   expect(contrastOnWhite("#FFFFFF")).toBeCloseTo(1, 5);
 });
 
-test("both pages wrap their content in the darker text colour", () => {
-  ["ClosedLoopSim", "StimOptimizer"].forEach((d) => {
-    const src = fs.readFileSync(path.join(__dirname, "..", d, "index.js"), "utf8");
-    expect(src).toMatch(/<LegibleText>/);
+// Replaced 2026-09-26 (WP7 of the redesign), because its name would now be untrue: the test "the
+// Closed-Loop page still wraps its content in the darker text colour" checked for the wrapper
+// `LegibleText`, which gave the theme's text colour (#7b809a, 3.9:1) a darker grey. The theme's own
+// text colour is now that grey (`ink3`, #5E5E5E, 6.48:1), so the wrapper is deleted. What it
+// protected is checked where it now lives: the theme itself.
+test("the app theme's text colour is at least 4.5:1 on white and on the page background", () => {
+  // eslint-disable-next-line global-require
+  const colors = require("assets/theme/base/colors").default;
+  // eslint-disable-next-line global-require
+  const { T, contrastRatio } = require("assets/theme/base/tokens");
+  expect(contrastOnWhite(colors.text.main)).toBeGreaterThanOrEqual(4.5);
+  expect(contrastRatio(colors.text.main, T.page)).toBeGreaterThanOrEqual(4.5);
+  expect(colors.text.main.toUpperCase()).toBe("#5E5E5E");
+});
+
+test("no page file wraps itself in the deleted legibility wrapper", () => {
+  expect(fs.existsSync(path.join(__dirname, "..", "legibleText.js"))).toBe(false);
+  const offenders = FILES.concat(["Biomarkers"].flatMap((d) => fs.readdirSync(path.join(__dirname, "..", d))
+    .filter((f) => f.endsWith(".js") && !f.endsWith(".test.js"))
+    .map((f) => path.join(__dirname, "..", d, f))))
+    .filter((f) => /legibleText|<LegibleText/.test(fs.readFileSync(f, "utf8")));
+  expect(offenders).toEqual([]);
+});
+
+test("every literal text colour in the recompute bar is at least 4.5:1 on white (read, not edited)", () => {
+  // Decisions 258 and 259: the bar's text was enlarged and darkened. It is the PI's file (CLAUDE.md
+  // section 8 rule 7), so it keeps its own literals; this reads each `color: "#..."` and the ink it
+  // assigns, and fails if any falls under the minimum.
+  const src = fs.readFileSync(path.join(__dirname, "..", "RecomputeBar.js"), "utf8");
+  const lits = (src.match(/color: ?"(#[0-9A-Fa-f]{3,6})"/g) || []).map((m) => m.match(/#[0-9A-Fa-f]+/)[0])
+    .concat((src.match(/const ink = [^;]*"(#[0-9A-Fa-f]{3,6})"/g) || []).map((m) => m.match(/#[0-9A-Fa-f]+/)[0]));
+  expect(lits.length).toBeGreaterThan(0);
+  lits.forEach((h) => expect(contrastOnWhite(h)).toBeGreaterThanOrEqual(4.5));
+});
+
+// THE REDESIGN OF 2026-09-26 (SPEC section 7, WP6). The Closed-Loop page takes every colour from
+// the shared tokens through `palette.js`, and the pass, refused and caution FILL roles are never a
+// text colour: text uses the *Text roles or a token ink, each with its glyph.
+const OWN = fs.readdirSync(__dirname)
+  .filter((f) => f.endsWith(".js") && !f.endsWith(".test.js"))
+  .map((f) => [f, fs.readFileSync(path.join(__dirname, f), "utf8")]);
+const stripComments = (src) => src.replace(/\/\*[\s\S]*?\*\//g, "")
+  .replace(/(^|[^:"'\\])\/\/[^\n]*/g, "$1");
+
+test("no Closed-Loop file draws text in the pass, refused or caution fill role", () => {
+  const offenders = [];
+  OWN.forEach(([f, src]) => {
+    const re = /\bcolor: *(?:[^,}\n]*\?[^,}\n]*:)?[^,}\n]*\bPAL\.(fail|pass|warn)\b(?!Text|Fill|Border)/g;
+    let m = re.exec(stripComments(src));
+    while (m) {
+      offenders.push(`${f}: ${m[0]}`);
+      m = re.exec(stripComments(src));
+    }
   });
+  expect(offenders).toEqual([]);
+});
+
+test("no Closed-Loop file other than palette.js writes a hex colour of its own", () => {
+  const offenders = [];
+  OWN.filter(([f]) => f !== "palette.js").forEach(([f, src]) => {
+    const hexes = stripComments(src).match(/["'`]#[0-9A-Fa-f]{3,8}\b/g) || [];
+    hexes.forEach((h) => offenders.push(`${f}: ${h}`));
+  });
+  expect(offenders).toEqual([]);
+});
+
+test("no Closed-Loop file writes a font size as a number of its own", () => {
+  const offenders = [];
+  OWN.forEach(([f, src]) => {
+    const code = stripComments(src);
+    const re = /(?:fontSize: |fontSize=\{?"?|font: \{[^}]*?size: |tickfont: \{[^}]*?size: )(\d+(?:\.\d+)?)/g;
+    let m = re.exec(code);
+    while (m) {
+      offenders.push(`${f}: ${m[0]}`);
+      m = re.exec(code);
+    }
+  });
+  expect(offenders).toEqual([]);
 });

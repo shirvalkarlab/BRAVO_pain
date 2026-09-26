@@ -19,7 +19,7 @@ describe("the deployment ROC panel's cut-point label", () => {
     // The visible label lives in one <span>; assert on that element's text directly so a future
     // rewording of surrounding comments cannot make this pass by accident.
     const labelMatch = src.match(
-      /<span style=\{\{ color: "#5E5E5E" \}\}>\(([^)]*device LSB[^)]*)\)<\/span>/,
+      /<span style=\{\{ color: PAL.ink3 \}\}>\(([^)]*device LSB[^)]*)\)<\/span>/,
     );
     expect(labelMatch).not.toBeNull();
     const label = labelMatch[1];

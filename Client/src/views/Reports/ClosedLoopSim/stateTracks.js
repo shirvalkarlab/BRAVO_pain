@@ -33,13 +33,14 @@ export const TRACKS = {
   /* Does the device permit this configuration to be programmed at all? Read off the encoded
      Percept rule table, which is a question about the device and not about the biomarker. */
   device: {
+    refusal: true,   // its failure cell means the device refuses: red with ✕ (SPEC section 2.3)
     label: "Does the device permit this configuration?",
     cells: [
-      { key: "permitted", label: "PERMITTED", role: "pass",
+      { key: "permitted", label: "Permitted", role: "pass",
         blurb: "Every rule that could be evaluated is satisfied." },
-      { key: "refused", label: "NOT PERMITTED", role: "fail",
+      { key: "refused", label: "Not permitted", role: "fail",
         blurb: "At least one rule is violated, or has a value that could not be evaluated." },
-      { key: "unevaluated", label: "NOT EVALUATED", role: "neutral",
+      { key: "unevaluated", label: "Not evaluated", role: "neutral",
         blurb: "The rule table has not been run for this configuration." },
     ],
     lit: (d) => {
@@ -60,15 +61,15 @@ export const TRACKS = {
       // "Resolved" has meant the POINT SIGN since 2026-09-13 (PI rule: "established means mean
       // only for flexibility"). An interval that spans zero no longer moves the answer to NOT
       // ESTABLISHED; it is printed beneath as a provisional caveat (ProvisionalNote.js).
-      { key: "supported", label: "SUPPORTED", role: "pass",
-        blurb: "All three edges have a point sign and the signs match the pattern the selected "
-             + "control law requires. When any edge's interval spans zero the verdict is "
-             + "provisional and the line beneath names the edge with its interval and p." },
-      { key: "misaligned", label: "NOT ALIGNED WITH THE CONTROL LAW", role: "fail",
-        blurb: "All three edges have a point sign, and the signs do not match the pattern the "
-             + "selected control law requires." },
-      { key: "unestablished", label: "NOT ESTABLISHED", role: "neutral",
-        blurb: "At least one edge has no point estimate, or the sign-agreement test could not be "
+      { key: "supported", label: "Supported", role: "pass",
+        blurb: "All three links have a point sign and the signs match the pattern the device's "
+             + "automatic adjustment assumes. When any link's range crosses zero the verdict is "
+             + "provisional and the line beneath names the link with its range and p." },
+      { key: "misaligned", label: "Not the signs the automatic adjustment assumes", role: "fail",
+        blurb: "All three links have a point sign, and the signs do not match the pattern the "
+             + "device's automatic adjustment assumes." },
+      { key: "unestablished", label: "Not established", role: "neutral",
+        blurb: "At least one link has no point estimate, or the sign-agreement test could not be "
              + "run, so the evidence has not answered the question either way." },
     ],
     lit: (d) => {
@@ -86,16 +87,17 @@ export const TRACKS = {
      both of the above, because it is the one a reader acts on at a programming visit, and because
      it must be able to say WITHHELD rather than showing a number. */
   transcription: {
+    refusal: true,
     label: "Is there anything to transcribe today?",
     cells: [
-      { key: "ready", label: "READY TO TRANSCRIBE", role: "pass",
+      { key: "ready", label: "Ready to enter", role: "pass",
         blurb: "The device permits the configuration, so the parameter table is shown with its "
              + "read-back checklist enabled. When the evidence verdict is provisional the same "
              + "caveat is printed beside the values (PI rule 2026-09-13)." },
-      { key: "withheld", label: "WITHHELD", role: "fail",
+      { key: "withheld", label: "Withheld", role: "fail",
         blurb: "The device does not permit this configuration, so no value to program is shown. A "
              + "read-only planning view is available and is watermarked as such." },
-      { key: "unevaluated", label: "NOT EVALUATED", role: "neutral",
+      { key: "unevaluated", label: "Not evaluated", role: "neutral",
         blurb: "No device answer has been computed, and an absent verdict is not permission." },
     ],
     lit: (d) => {
@@ -115,14 +117,14 @@ export const TRACKS = {
   coherence: {
     label: "Sign agreement",
     cells: [
-      { key: "coherent", label: "SIGNS AGREE", role: "pass",
-        blurb: "The three edge signs match the pattern the selected control law requires." },
-      { key: "incoherent", label: "SIGNS DISAGREE", role: "fail",
-        blurb: "The three edge signs do not match the pattern the selected control law requires. "
-             + "Read the two statements below: the edges can disagree with each other, or agree "
-             + "with each other and disagree with the control law, and those are different "
+      { key: "coherent", label: "Signs agree", role: "pass",
+        blurb: "The three link signs match the pattern the device's automatic adjustment assumes." },
+      { key: "incoherent", label: "Signs disagree", role: "fail",
+        blurb: "The three link signs do not match the pattern the device's automatic adjustment assumes. "
+             + "Read the two statements below: the links can disagree with each other, or agree "
+             + "with each other and disagree with the automatic adjustment, and those are different "
              + "findings." },
-      { key: "not_established", label: "NOT ESTABLISHED", role: "neutral",
+      { key: "not_established", label: "Not established", role: "neutral",
         blurb: "The sign-agreement test did not return an answer, which is not the same as "
              + "returning a negative one." },
     ],

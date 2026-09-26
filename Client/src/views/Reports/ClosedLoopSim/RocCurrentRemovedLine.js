@@ -8,9 +8,10 @@
  */
 import PropTypes from "prop-types";
 import MDTypography from "components/MDTypography";
+import PAL from "./palette";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
-const NOTE = { fontSize: 11.5, color: "#5E5E5E", mt: 0.4, display: "block" };
+const NOTE = { fontSize: PAL.fs.body, color: PAL.ink2, mt: 1, display: "block", maxWidth: "68ch" };
 
 export default function RocCurrentRemovedLine({ plainAuc, adjusted }) {
   const a = adjusted;
@@ -27,7 +28,7 @@ export default function RocCurrentRemovedLine({ plainAuc, adjusted }) {
   const same = a.plain_on_same_samples;
   return (
     <MDTypography variant="caption" data-testid="roc-current-removed" sx={NOTE}>
-      <b>{`AUC ${fmt(plainAuc)} plainly; ${fmt(a.auc)} (${fmt(a.auc_low)}–${fmt(a.auc_high)}) with the stimulation current taken out.`}</b>
+      <b style={{ fontWeight: 600, color: PAL.ink }}>{`How well it tells high pain from low: ${fmt(plainAuc)} plainly; ${fmt(a.auc)} (${fmt(a.auc_low)}–${fmt(a.auc_high)}) with the stimulation current taken out.`}</b>
       {` The same samples and high-or-low split, over ${a.n_pain_reports} pain reports and `
         + `${a.n_distinct_currents} distinct ${a.hemisphere || ""} currents, with the current in force at each `
         + `sample taken out of the band power as ${a.shape_words || "a straight line"}, in the plain number's `
@@ -36,7 +37,7 @@ export default function RocCurrentRemovedLine({ plainAuc, adjusted }) {
           ? `${n0} sample${n0 === 1 ? "" : "s"} before the first dated setting have no current; the plain `
             + `reading on the samples that do is ${fmt(same.auc)}. `
           : "")
-        + "Descriptive only: the plain area sets every gate."}
+        + "Descriptive only: the plain reading sets every check."}
     </MDTypography>
   );
 }

@@ -38,15 +38,16 @@
  * the row shows the dashed "not tested" mark rather than a fabricated answer.
  */
 import { useMemo, useState } from "react";
-import { Card, Chip, Collapse, Tooltip } from "@mui/material";
+import { Card, Tooltip } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
-import MDButton from "components/MDButton";
 
-import { diverging, divergingRgb } from "views/Reports/Biomarkers/binarizationModel";
+import { TYPE, CARD } from "assets/theme/base/tokens";
+import { DIVERGING, RANGE } from "assets/theme/base/dataColors";
+import ColorKey from "views/Reports/paper/ColorKey";
 import { orderContacts } from "views/Reports/Biomarkers/contactOrder";
 import PAL from "./palette";
-import { TickGlyph, CrossGlyph, AmberGlyph, NotTestedGlyph } from "./glyphs";
+import Fold from "./Fold";
 import { fmtHz, fmtNum } from "./deployFormat";
 import { recordChosenBand } from "./bandCandidateStore";
 
@@ -110,34 +111,65 @@ function countWord(n) {
   return Number.isInteger(n) && n >= 0 && n < N_LENGTHS_WORDS.length ? N_LENGTHS_WORDS[n] : String(n);
 }
 
+/**
+ * The cell colour on the shared nine-stop diverging scale (SPEC 2026-09-26 section 3.1), over a
+ * FIXED range: correlation -0.5 to +0.5, the high-versus-low reading 0.25 to 0.75 around the coin
+ * toss. A value beyond the range draws at the end colour; the cell and its hover print the true
+ * value, so saturating the colour hides no number.
+ */
+const hexRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+export function cellRgb(v, lo, hi) {
+  if (v == null || !Number.isFinite(Number(v))) return null;
+  const t = Math.max(0, Math.min(1, (Number(v) - lo) / (hi - lo)));
+  let k = 0;
+  while (k < DIVERGING.length - 2 && t > DIVERGING[k + 1][0]) k += 1;
+  const [s0, c0] = DIVERGING[k];
+  const [s1, c1] = DIVERGING[k + 1];
+  const f = s1 > s0 ? (t - s0) / (s1 - s0) : 0;
+  const a = hexRgb(c0);
+  const b = hexRgb(c1);
+  return a.map((x, i) => Math.round(x + f * (b[i] - x)));
+}
+const cellFill = (v, lo, hi) => {
+  const rgb = cellRgb(v, lo, hi);
+  return rgb ? `rgb(${rgb.join(", ")})` : PAL.fillMuted;
+};
+const [R_LO, R_HI] = RANGE.correlation;
+const [A_LO, A_HI] = RANGE.areaUnderCurve;
+
 /** Near-black on a pale cell, white on a saturated one, so the value reads on every fill. */
-function inkFor(v, center, half) {
-  if (v == null || !Number.isFinite(Number(v))) return "#6E6E6E";   // the placeholder where a cell has no value: text, so legible (2026-09-24)
-  const [r, g, b] = divergingRgb(v, center, half);
-  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-  return luminance > 0.62 ? "#1A1A1A" : "#FFFFFF";
+function inkFor(v, lo, hi) {
+  const rgb = cellRgb(v, lo, hi);
+  if (!rgb) return PAL.ink3;   // the placeholder where a cell has no value: text, so legible (2026-09-24)
+  const luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255;
+  return luminance > 0.55 ? PAL.ink : PAL.onFill;
 }
 
-// ---------------------------------------------------------------------------------------------
-// THE FOUR SYMBOLS live in ./glyphs.js since 2026-09-12, so the Stim Optimizer page draws the same
-// shapes for the same meanings. Nothing about them changed in the move.
-// ---------------------------------------------------------------------------------------------
+/** "p 0.002 after allowing for all 22 bands tested", from the corrected q the server sends. */
+const allowanceWords = (q, n = 22) => (q != null ? `p ${fmtNum(q, 3)} after allowing for all ${n} bands tested` : null);
+
+/** A mark drawn by SHAPE only, in the ink (SPEC section 3.2): no green, no red. */
+function ShapeMark({ glyph, label }) {
+  return (
+    <span role="img" aria-label={label} style={{ ...TYPE.body, color: PAL.ink, fontWeight: 600 }}>{glyph}</span>
+  );
+}
 
 function FamilyWiseMark({ significant, q }) {
-  const qTxt = q != null ? ` (q = ${fmtNum(q, 3)})` : "";
+  const words = allowanceWords(q);
   if (significant == null) {
     return (
-      <Tooltip title="the 22-centre family-wise correction has not been computed for this row">
-        <span><NotTestedGlyph label="correction not assessed" /></span>
+      <Tooltip title="the allowance for testing 22 bands at once has not been computed for this row">
+        <span><ShapeMark glyph="○" label="allowance not assessed" /></span>
       </Tooltip>
     );
   }
   return (
     <Tooltip title={significant
-      ? `clears the Benjamini-Hochberg correction across this contact pair's 22 band centres${qTxt}`
-      : `does not clear the 22-centre correction${qTxt} — still selectable; this is a label, not a gate`}>
-      <span>{significant ? <TickGlyph label="clears correction" />
-        : <CrossGlyph label="does not clear correction" />}</span>
+      ? `still clear after allowing for the 22 bands tested${words ? ` (${words})` : ""}`
+      : `not clear after allowing for the 22 bands tested${words ? ` (${words})` : ""}: still selectable; this is a label, not a check that can refuse`}>
+      <span>{significant ? <ShapeMark glyph="✓" label="still clear after allowing for 22 bands" />
+        : <ShapeMark glyph="–" label="not clear after allowing for 22 bands" />}</span>
     </Tooltip>
   );
 }
@@ -146,39 +178,18 @@ function StabilityMark({ stability }) {
   const answer = (stability && stability.answer) || "not tested";
   const reason = (stability && stability.reason) || "";
   const tip = stability
-    ? `${answer}${reason ? ` — ${reason}` : ""}`
-    : "the cross-setting-stability answer has not been computed for this point yet";
+    ? `${answer}${reason ? `: ${reason}` : ""}`
+    : "whether the band behaves the same at every setting has not been computed for this band yet";
   let glyph;
-  if (answer === "behaves the same") glyph = <TickGlyph label="behaves the same at every setting" />;
-  else if (answer === "behaves differently") glyph = <CrossGlyph label="behaves differently across settings" />;
-  else if (answer === "cannot tell") glyph = <AmberGlyph label="cannot tell" />;
-  else glyph = <NotTestedGlyph label="not tested" />;
+  if (answer === "behaves the same") glyph = <ShapeMark glyph="✓" label="behaves the same at every setting" />;
+  else if (answer === "behaves differently") glyph = <ShapeMark glyph="✕" label="behaves differently across settings" />;
+  else if (answer === "cannot tell") glyph = <ShapeMark glyph="?" label="cannot tell" />;
+  else glyph = <ShapeMark glyph="○" label="not tested" />;
   return <Tooltip title={tip}><span>{glyph}</span></Tooltip>;
 }
 
-/** A thin gradient bar with its three anchor values, for the legend line. */
-function ScaleBar({ center, half, lo, mid, hi }) {
-  const stops = [-1, -0.5, 0, 0.5, 1].map((t) => diverging(center + t * half, center, half));
-  return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-      <span style={{ fontFamily: PAL.mono, fontSize: 11 }}>{lo}</span>
-      <span style={{ display: "inline-block", width: 72, height: 9, borderRadius: 2,
-        background: `linear-gradient(90deg, ${stops.join(", ")})` }} />
-      <span style={{ fontFamily: PAL.mono, fontSize: 11 }}>{hi}</span>
-      <span style={{ color: "#5E5E5E", fontSize: 11 }}>{`(${mid} = no relationship)`}</span>
-    </span>
-  );
-}
-
-/**
- * The settings the served grid was built under, in one fine-print line (the PI, 2026-09-11: "very
- * brief concise stats of what match window was used, if it's PRO-first discovery or not, a median
- * split or what kind of split"). Every value comes from the server's own tag of the stored entry
- * (`grid_settings`), never from this page's state, so a mismatch would be visible rather than
- * silent. Nothing here is a threshold.
- */
-const DIRECTION_TEXT = { pro_first: "PRO-first match", prior: "recording-before-rating match",
-  nearest: "nearest-in-time match" };
+const DIRECTION_TEXT = { pro_first: "each report picks its nearest recordings",
+  prior: "each recording picks the next report after it", nearest: "each recording picks its nearest report" };
 export function gridSettingsLine(gs) {
   if (!gs) return null;
   const parts = [];
@@ -186,12 +197,14 @@ export function gridSettingsLine(gs) {
   parts.push(gs.match_tolerance_min != null ? `\u00b1${fmtNum(gs.match_tolerance_min, 0)} min window`
     : "same-day match");
   parts.push(DIRECTION_TEXT[gs.match_direction] || `${gs.match_direction || "?"} match`);
-  if (gs.allow_window_reuse) parts.push("windows reused");
+  if (gs.allow_window_reuse) parts.push("one stretch of recording may answer more than one report");
   if (gs.include_clinic_sheet_ratings) parts.push("clinic-sheet ratings included");
   const lo = gs.percentile_low != null ? fmtNum(gs.percentile_low, 0) : "?";
   const hi = gs.percentile_high != null ? fmtNum(gs.percentile_high, 0) : "?";
-  const split = { tertile: `tertile split ${lo}/${hi} %`, percentile: `percentile split ${lo}/${hi} %`,
-    median: "median split", kmeans: "k-means split", cutoff: "fixed cut-off split" };
+  const split = { tertile: `lowest and highest thirds of ratings (${lo}/${hi} %), the middle third left out`,
+    percentile: `ratings below ${lo} % and above ${hi} %, the middle left out`,
+    median: "ratings split at the median", kmeans: "ratings split into two clusters (older rule)",
+    cutoff: "ratings split at a fixed cut-off" };
   parts.push(split[gs.label_strategy] || `${gs.label_strategy || "?"} split`);
   return parts.join(" \u00b7 ");
 }
@@ -209,16 +222,36 @@ function SettingsFinePrint({ gs }) {
   if (!line) return null;
   const built = gridBuiltText(gs);
   return (
-    <MDTypography variant="caption" sx={{ fontSize: 11, color: "#5E5E5E", textAlign: "right",
-      lineHeight: 1.35, maxWidth: "62ch" }}>
-      {line}{built ? <><br />{built}</> : null}
+    <MDTypography sx={{ ...TYPE.caption, color: PAL.ink3, maxWidth: "68ch", mt: 1 }}>
+      {`Grid built on: ${line}${built ? `; ${built}` : ""}.`}
     </MDTypography>
   );
 }
 
-const HEAD = { fontSize: 11, fontWeight: 700, letterSpacing: 0.4, color: "#5E5E5E",
-  textTransform: "uppercase", lineHeight: 1.2, textAlign: "center", paddingBottom: 4 };
-const CELL_H = 19;
+/**
+ * Which pairs the device refuses today, READ from the grid response's `sensing_rule` block when the
+ * server sends one (decisions 217, 305: `by_side[side].allowed_channel`). Nothing is worked out
+ * here: with no block, no pair is marked and the tabs keep their usual order.
+ */
+export function refusedByRule(channels, sweeps, rule, sideOf) {
+  const bySide = rule && rule.by_side;
+  const refused = {};
+  if (!bySide) return refused;
+  channels.forEach((ch) => {
+    const r = bySide[sideOf(ch)];
+    if (r && r.rule_applied && r.allowed_channel !== ch) {
+      refused[ch] = `refused today: ${r.why || "the device senses only on the pair flanking the stimulating contact"}`
+        + `${r.allowed_display ? `, so this lead senses on ${r.allowed_display} only` : ""}`;
+    }
+  });
+  return refused;
+}
+
+/** Column headings: 12 px, sentence case, grey, on the muted band (SPEC section 4 rule 5). */
+const HEAD = { ...TYPE.caption, fontWeight: 600, color: PAL.ink3, backgroundColor: PAL.fillMuted,
+  textAlign: "center", padding: "4px 4px", alignSelf: "stretch", display: "flex",
+  alignItems: "flex-end", justifyContent: "center" };
+const CELL_H = 22;
 
 export default function BandSweepGridPanel({ grid, participantUid, committed, onCandidateChosen,
   onChoiceRecorded }) {
@@ -227,7 +260,6 @@ export default function BandSweepGridPanel({ grid, participantUid, committed, on
   const sweeps = useMemo(() => (grid && grid.band_time_sweep) || {}, [grid]);
   const channels = useMemo(() => orderContacts(sweeps), [sweeps]);
   const [activeChannel, setActiveChannel] = useState(null);
-  const [showHelp, setShowHelp] = useState(false);
   // Open on the committed band's contact when there is one, so the tick is visible on arrival.
   const channel = (activeChannel && channels.includes(activeChannel)) ? activeChannel
     : (committed && committed.contact && channels.includes(committed.contact)) ? committed.contact
@@ -235,15 +267,13 @@ export default function BandSweepGridPanel({ grid, participantUid, committed, on
 
   if (!grid || grid.available === false) {
     return (
-      <Card sx={{ p: 2, mb: 2 }}>
-        <MDBox display="flex" alignItems="flex-start" justifyContent="space-between" gap={1}>
-          <MDTypography variant="h6" fontWeight="bold">Choose a band</MDTypography>
-          <SettingsFinePrint gs={grid && grid.grid_settings} />
-        </MDBox>
-        <MDTypography variant="body2" color="text" mt={1}>
+      <Card sx={{ ...CARD, p: 3 }}>
+        <MDTypography component="h2" sx={{ ...TYPE.title, color: PAL.ink }}>Which band?</MDTypography>
+        <MDTypography sx={{ ...TYPE.lead, color: PAL.ink, mt: 1 }}>
           {(grid && grid.reason) || "no calibrated grid is available for this participant yet."}
-          {" "}Visit the Biomarkers exploration page first, then return here.
+          {" "}Open the Biomarkers page first, then return here.
         </MDTypography>
+        <SettingsFinePrint gs={grid && grid.grid_settings} />
       </Card>
     );
   }
@@ -287,93 +317,121 @@ export default function BandSweepGridPanel({ grid, participantUid, committed, on
     }
   };
 
-  // The tabs: left group, a gap, right group -- the same order as the Biomarkers thumbnails.
-  const leftTabs = channels.filter((ch) => sideOf(ch) === "Left");
-  const rightTabs = channels.filter((ch) => sideOf(ch) === "Right");
-  const otherTabs = channels.filter((ch) => sideOf(ch) !== "Left" && sideOf(ch) !== "Right");
-  // Each tab's accessible name is its pair AND its region (decision 307): the region alone, from the
-  // hover title, read "Left GPi" three times and "Right VIM" three times to a screen reader.
-  const regionOf = (ch) => (sw && sweeps[ch] && sweeps[ch].display_region) || null;
-  const tab = (ch) => (
-    <Chip key={ch} label={labelOf(ch)} size="small" onClick={() => setActiveChannel(ch)}
-      title={regionOf(ch) || undefined}
-      aria-label={regionOf(ch) ? `${labelOf(ch)}, ${regionOf(ch)}` : labelOf(ch)}
-      aria-pressed={ch === channel}
-      sx={{
-        fontWeight: ch === channel ? 700 : 400, fontSize: 12,
-        backgroundColor: ch === channel ? PAL.accentFill : "transparent",
-        border: `1px solid ${ch === channel ? PAL.accentBorder : PAL.neutralBorder}`,
-      }} />
-  );
+  // The tabs as one segmented control: the pairs the device allows today first, then the others,
+  // greyed, each saying why it is refused; left before right within each group, the same order as
+  // the Biomarkers thumbnails. Each tab's accessible name is its pair AND its region (decision 307):
+  // the region alone read "Left GPi" three times and "Right VIM" three times to a screen reader.
+  const refused = refusedByRule(channels, sweeps, grid && grid.sensing_rule, sideOf);
+  const bySideOrder = (list) => [...list.filter((ch) => sideOf(ch) === "Left"),
+    ...list.filter((ch) => sideOf(ch) === "Right"),
+    ...list.filter((ch) => sideOf(ch) !== "Left" && sideOf(ch) !== "Right")];
+  const tabOrder = [...bySideOrder(channels.filter((ch) => !refused[ch])),
+    ...bySideOrder(channels.filter((ch) => refused[ch]))];
+  const regionOf = (ch) => (sweeps[ch] && sweeps[ch].display_region) || null;
+  const tab = (ch, i) => {
+    const on = ch === channel;
+    const no = !!refused[ch];
+    return (
+      <button key={ch} type="button" onClick={() => setActiveChannel(ch)}
+        title={[regionOf(ch), refused[ch]].filter(Boolean).join("; ") || undefined}
+        aria-label={regionOf(ch) ? `${labelOf(ch)}, ${regionOf(ch)}` : labelOf(ch)}
+        aria-pressed={on}
+        style={{ ...TYPE.body, fontFamily: "inherit", cursor: "pointer", padding: "6px 12px",
+          minHeight: 36, border: `1px solid ${on ? PAL.accent : PAL.rule}`,
+          marginLeft: i === 0 ? 0 : -1, position: "relative", zIndex: on ? 1 : 0,
+          borderRadius: i === 0 ? "4px 0 0 4px" : (i === tabOrder.length - 1 ? "0 4px 4px 0" : 0),
+          backgroundColor: on ? PAL.accentFill : (no ? PAL.fillMuted : PAL.surface),
+          color: on ? PAL.accent : (no ? PAL.ink3 : PAL.ink), fontWeight: on ? 600 : 400 }}>
+        {no ? <span aria-hidden="true" style={{ marginRight: 4 }}>✕</span> : null}
+        {labelOf(ch)}
+      </button>
+    );
+  };
 
   const corrTip = (row) => (row.pearson_r == null ? "no correlation for this band"
-    : `r = ${fmtNum(row.pearson_r, 3)}`
+    : `correlation ${fmtNum(row.pearson_r, 3)}`
       + (row.pearson_r_low != null && row.pearson_r_high != null
-        ? ` (95% interval ${fmtNum(row.pearson_r_low, 3)} to ${fmtNum(row.pearson_r_high, 3)})` : "")
+        ? ` (95% range ${fmtNum(row.pearson_r_low, 3)} to ${fmtNum(row.pearson_r_high, 3)})` : "")
       + (row.integration_seconds_delivered != null
         ? `, best of ${nLengthsForRow(row, false)} lengths at ${fmtNum(row.integration_seconds_delivered, 0)} s` : "")
       + (row.n_pain_reports != null ? `, ${row.n_pain_reports} pain reports` : ""));
-  const aucTip = (row) => (row.auc == null ? "no AUC for this band"
-    : `AUC = ${fmtNum(row.auc, 3)}`
+  const aucTip = (row) => (row.auc == null ? "no high-versus-low reading for this band"
+    : `tells high pain from low: ${fmtNum(row.auc, 3)} (0.5 = coin toss, 1 = perfect)`
       + (row.auc_low != null && row.auc_high != null
-        ? ` (95% interval ${fmtNum(row.auc_low, 3)} to ${fmtNum(row.auc_high, 3)})` : "")
+        ? `, 95% range ${fmtNum(row.auc_low, 3)} to ${fmtNum(row.auc_high, 3)}` : "")
       + (row.auc_seconds != null ? `, best of ${nLengthsForRow(row, true)} lengths at ${fmtNum(row.auc_seconds, 0)} s` : "")
       + (row.auc_n_pain_reports != null ? `, ${row.auc_n_pain_reports} pain reports` : ""));
 
+  const chosenRow = rows.find((r) => isCommitted(r));
+  const answer = chosenRow
+    ? `Chosen: ${labelOf(channel)} at ${fmtHz(chosenRow.band_center_hz)} Hz. Every section below is about this band.`
+    : (committed && committed.contact
+      ? `The chosen band is on another pair; open its tab to see it, or tick a band here to choose again.`
+      : "No band chosen yet: tick one to check it against the device and the evidence below.");
+
   return (
-    <Card sx={{ p: 2, mb: 2 }}>
-      <MDBox display="flex" alignItems="flex-start" justifyContent="space-between" flexWrap="wrap" gap={1}>
-        <MDBox display="flex" alignItems="center" gap={1} flexWrap="wrap">
-          <MDTypography variant="h6" fontWeight="bold">Choose a band</MDTypography>
-          {!grid.cross_setting_stability_included && (
-            <Chip size="small" label="stability across settings not yet computed for this grid"
-              sx={{ opacity: 0.6 }} />
-          )}
-        </MDBox>
-        {/* Top right, in fine print: the pain score and the matching and split settings this grid
-            was built under, and when -- the same entry the Biomarkers page shows for its controls
-            (decision 131). */}
-        <SettingsFinePrint gs={grid.grid_settings} />
+    <Card sx={{ ...CARD, p: 3 }}>
+      <MDTypography component="h2" sx={{ ...TYPE.title, color: PAL.ink }}>Which band?</MDTypography>
+      <MDTypography sx={{ ...TYPE.lead, color: PAL.ink, mt: 1, maxWidth: "68ch" }}>{answer}</MDTypography>
+      {!grid.cross_setting_stability_included ? (
+        <MDTypography sx={{ ...TYPE.body, color: PAL.warnText, mt: 1 }}>
+          <span aria-hidden="true" style={{ marginRight: 6 }}>▲</span>
+          Whether each band behaves the same at every setting has not been computed for this grid yet.
+        </MDTypography>
+      ) : null}
+      {/* The pain score and the matching and split settings this grid was built under, and when --
+          the same entry the Biomarkers page shows for its controls (decision 131). */}
+      <SettingsFinePrint gs={grid.grid_settings} />
+
+      <MDBox display="flex" flexWrap="wrap" alignItems="center" mt={2} mb={2} role="group"
+        aria-label="Sensing contact pair">
+        {tabOrder.map(tab)}
+      </MDBox>
+      {refused[channel] ? (
+        <MDTypography sx={{ ...TYPE.body, color: PAL.failText, mb: 2 }}>
+          <span aria-hidden="true" style={{ marginRight: 6 }}>✕</span>
+          {`${labelOf(channel)}: ${refused[channel]}.`}
+        </MDTypography>
+      ) : null}
+
+      <MDBox display="flex" gap={4} flexWrap="wrap" mb={2}>
+        <ColorKey scale={DIVERGING} range={RANGE.correlation} title="Correlation with pain"
+          lowLabel="falls with pain" midLabel="0 no relationship" highLabel="rises with pain" width={300} />
+        <ColorKey scale={DIVERGING} range={RANGE.areaUnderCurve} title="Tells high pain from low"
+          lowLabel="pain lower when power high" midLabel="0.5 no relationship"
+          highLabel="pain higher when power high" width={300} />
       </MDBox>
 
-      <MDBox display="flex" gap={0.6} flexWrap="wrap" alignItems="center" mt={1} mb={1.25}>
-        {leftTabs.map(tab)}
-        {leftTabs.length && rightTabs.length ? <span style={{ width: 14 }} /> : null}
-        {rightTabs.map(tab)}
-        {otherTabs.map(tab)}
-      </MDBox>
-
-      {/* The map. r and AUC take the card's width between them (the PI: "make r and AUC bands 2x
-          wider; use right-side whitespace"); the symbol and radio columns are fixed. */}
-      <MDBox sx={{ display: "grid", gridTemplateColumns: "64px minmax(90px,1fr) minmax(90px,1fr) 84px 84px 72px",
-        columnGap: "6px", rowGap: "2px", alignItems: "center", fontSize: 11 }}>
-        <MDTypography variant="caption" sx={{ ...HEAD, textAlign: "right" }}>Band<br />centre</MDTypography>
-        <MDTypography variant="caption" sx={HEAD}>Correlation r</MDTypography>
-        <MDTypography variant="caption" sx={HEAD}>AUC</MDTypography>
-        <MDTypography variant="caption" sx={HEAD}>Clears<br />correction</MDTypography>
-        <MDTypography variant="caption" sx={HEAD}>Stable across<br />settings</MDTypography>
-        <MDTypography variant="caption" sx={HEAD}>Use this<br />band</MDTypography>
+      {/* The map. The two colour columns take the card's width between them; the mark and radio
+          columns are fixed. */}
+      <MDBox sx={{ display: "grid", gridTemplateColumns: "72px minmax(90px,1fr) minmax(90px,1fr) 96px 96px 64px",
+        columnGap: "8px", rowGap: "4px", alignItems: "center", overflowX: "auto" }}>
+        <MDTypography variant="caption" sx={{ ...HEAD, justifyContent: "flex-end" }}>Band centre</MDTypography>
+        <MDTypography variant="caption" sx={HEAD}>Correlation with pain</MDTypography>
+        <MDTypography variant="caption" sx={HEAD}>Tells high pain from low</MDTypography>
+        <MDTypography variant="caption" sx={HEAD}>Clear after allowing for 22 bands</MDTypography>
+        <MDTypography variant="caption" sx={HEAD}>Same at every setting</MDTypography>
+        <MDTypography variant="caption" sx={HEAD}>Use this band</MDTypography>
         {rows.map((row) => {
           const on = isCommitted(row);
           const id = `cl-band-${String(channel)}-${row.band_center_hz}`;
+          const ring = on ? `2px solid ${PAL.accent}` : "none";
           return [
             <MDTypography key={`${id}-lab`} variant="caption" component="label" htmlFor={id}
-              sx={{ textAlign: "right", fontFamily: PAL.mono, fontSize: 11.5, paddingRight: "4px",
-                color: on ? PAL.accent : "#6A6A6A", fontWeight: on ? 700 : 400, cursor: "pointer" }}>
+              sx={{ ...TYPE.caption, textAlign: "right", paddingRight: "4px",
+                color: on ? PAL.accent : PAL.ink2, fontWeight: on ? 600 : 400, cursor: "pointer" }}>
               {`${fmtHz(row.band_center_hz)} Hz`}
             </MDTypography>,
             <div key={`${id}-r`} title={corrTip(row)} style={{ height: CELL_H, borderRadius: 2,
-              background: diverging(row.pearson_r, 0, 1), display: "flex", alignItems: "center",
-              justifyContent: "center", fontFamily: PAL.mono, fontSize: 11.5,
-              color: inkFor(row.pearson_r, 0, 1), outline: on ? `2px solid ${PAL.accent}` : "none",
-              outlineOffset: -1 }}>
+              background: cellFill(row.pearson_r, R_LO, R_HI), display: "flex", alignItems: "center",
+              justifyContent: "center", fontSize: PAL.fs.caption,
+              color: inkFor(row.pearson_r, R_LO, R_HI), outline: ring, outlineOffset: -1 }}>
               {row.pearson_r == null ? "" : fmtNum(row.pearson_r, 2)}
             </div>,
             <div key={`${id}-a`} title={aucTip(row)} style={{ height: CELL_H, borderRadius: 2,
-              background: diverging(row.auc, 0.5, 0.5), display: "flex", alignItems: "center",
-              justifyContent: "center", fontFamily: PAL.mono, fontSize: 11.5,
-              color: inkFor(row.auc, 0.5, 0.5), outline: on ? `2px solid ${PAL.accent}` : "none",
-              outlineOffset: -1 }}>
+              background: cellFill(row.auc, A_LO, A_HI), display: "flex", alignItems: "center",
+              justifyContent: "center", fontSize: PAL.fs.caption,
+              color: inkFor(row.auc, A_LO, A_HI), outline: ring, outlineOffset: -1 }}>
               {row.auc == null ? "" : fmtNum(row.auc, 2)}
             </div>,
             <div key={`${id}-fw`} style={{ textAlign: "center", lineHeight: `${CELL_H}px` }}>
@@ -386,48 +444,30 @@ export default function BandSweepGridPanel({ grid, participantUid, committed, on
             <div key={`${id}-use`} style={{ textAlign: "center" }}>
               <input type="radio" id={id} name={`cl-use-band-${participantUid}`} checked={on}
                 onChange={() => choose(row)} aria-label={`use the ${fmtHz(row.band_center_hz)} Hz band on ${labelOf(channel)}`}
-                style={{ width: 14, height: 14, margin: 0, cursor: "pointer", accentColor: PAL.accent }} />
+                style={{ width: 16, height: 16, margin: 0, cursor: "pointer", accentColor: PAL.accent }} />
             </div>,
           ];
         })}
       </MDBox>
 
-      <MDBox display="flex" gap={2} flexWrap="wrap" alignItems="center" mt={1.25}
-        sx={{ fontSize: 11.5, color: "#6A6A6A" }}>
-        <ScaleBar center={0} half={1} lo="−1" mid="0" hi="+1" />
-        <ScaleBar center={0.5} half={0.5} lo="0" mid="0.5" hi="1" />
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-          <TickGlyph label="tick" /> clears the correction / behaves the same
-        </span>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-          <CrossGlyph label="cross" /> does not clear / behaves differently
-        </span>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-          <AmberGlyph label="amber" /> cannot tell
-        </span>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-          <NotTestedGlyph label="not tested" /> not tested
-        </span>
-      </MDBox>
+      <MDTypography sx={{ ...TYPE.caption, color: PAL.ink3, mt: 2 }}>
+        {"✓ clear after allowing for 22 bands, or the same at every setting · – not clear after "
+          + "that allowance · ✕ behaves differently across settings · ? cannot tell · ○ not tested"}
+      </MDTypography>
 
-      <MDBox mt={1}>
-        <MDButton size="small" variant="text" color="info" onClick={() => setShowHelp((s) => !s)}
-          sx={{ textTransform: "none", fontSize: 11, padding: "2px 6px", minHeight: 0 }}>
-          {showHelp ? "Hide how to read this" : "How to read this, and what it cannot tell you"}
-        </MDButton>
-        <Collapse in={showHelp}>
-          <MDTypography variant="caption" color="text" display="block" mt={0.5}
-            sx={{ fontSize: 11, maxWidth: "80ch" }}>
-            Each colour cell is the strongest of {countWord(nLengthsForChannel(sw, rows))} lengths of signal for that band, so it is
-            optimistic by construction; hover a cell for its interval, the length it came from and
-            the number of pain reports. Every band is selectable, including one that does not clear
-            the 22-centre correction &mdash; the marks are labels, not permissions. The device&apos;s
-            own 51-rule check needs a stimulation current, pulse width, rate and impedance reading,
-            none of which a band alone carries, so no blocked/allowed mark is shown here: that check
-            runs, live, on the band you tick, in the panels below.
-          </MDTypography>
-        </Collapse>
-      </MDBox>
+      <Fold show="How to read this, and what it cannot tell you" hide="Hide how to read this" mt={2}>
+        <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, maxWidth: "68ch" }}>
+          Each colour cell is the strongest of {countWord(nLengthsForChannel(sw, rows))} lengths of signal for that band, so it is
+          optimistic by construction; hover a cell for its 95% range, the length it came from and
+          the number of pain reports. The colours stop at ±0.5 for the correlation and at 0.25 and
+          0.75 for telling high pain from low; a stronger value draws at the end colour and prints
+          its true number. Every band is selectable, including one that is not clear after allowing
+          for the 22 bands tested: the marks are labels, not checks that can refuse. The device&apos;s
+          own rule check needs a stimulation current, pulse width, rate and impedance reading,
+          none of which a band alone carries, so no refused or allowed mark is shown on a band here:
+          that check runs, live, on the band you tick, in the sections below.
+        </MDTypography>
+      </Fold>
     </Card>
   );
 }
