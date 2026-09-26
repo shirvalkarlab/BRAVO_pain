@@ -52,6 +52,19 @@ function navbar(theme, ownerState) {
       letterSpacing: 0,
     },
 
+    // On a phone the crumbs wrap onto more than one line. Their labels are drawn with a line
+    // height of 0 (to sit level with the home icon on a wide screen), so wrapped lines were drawn
+    // on top of each other and over the page title under them (taste audit E1, 2026-09-26). Below
+    // the md breakpoint the crumbs get a real line height and the list may wrap.
+    "& .MuiBreadcrumbs-ol": {
+      flexWrap: "wrap",
+    },
+    "& .MuiBreadcrumbs-root .MuiTypography-root": {
+      [breakpoints.down("md")]: {
+        lineHeight: 1.5,
+      },
+    },
+
     "& .MuiToolbar-root": {
       display: "flex",
       justifyContent: "space-between",
@@ -85,6 +98,12 @@ const navbarRow = ({ breakpoints }, { isMini }) => ({
   alignItems: "center",
   justifyContent: "space-between",
   width: "100%",
+  // The breadcrumb block may shrink below its text's width, so a long page name is cut with an
+  // ellipsis (the heading is drawn `noWrap`) instead of widening the page on a phone.
+  "& > :first-of-type": {
+    minWidth: 0,
+    maxWidth: "100%",
+  },
 
   [breakpoints.up("md")]: {
     justifyContent: isMini ? "space-between" : "stretch",

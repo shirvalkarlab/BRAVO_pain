@@ -84,6 +84,8 @@ import useClosedLoopSimulation from "./useClosedLoopSimulation";
 import PAL from "./palette";
 import { TYPE, CARD, LAYOUT } from "assets/theme/base/tokens";
 import { contextLine } from "views/Reports/paper/PageHead";
+import CeilingLine from "views/Reports/paper/CeilingLine";
+import { useStudyCode } from "views/Reports/paper/studyCode";
 import "./deployPrint.css";
 import { bandPainScore, summaryRequestParams, withheldIfOtherBand } from "./candidateRequestParams";
 import PainScoreSelect from "./PainScoreSelect";
@@ -150,6 +152,8 @@ function ChosenBandRecordLine({ status, hasBand }) {
   return (
     <MDTypography variant="caption" display="block" sx={{ fontSize: PAL.fs.caption,
       color: status.where === "browser" ? PAL.warnText : PAL.ink3 }}>
+      {/* A caution ink always carries its glyph (SPEC 2.3). */}
+      {status.where === "browser" ? <span aria-hidden="true">{"\u25B2 "}</span> : null}
       {text}
     </MDTypography>
   );
@@ -160,26 +164,35 @@ export const PAGE_QUESTION = "Can this setting be programmed, and what do I ente
 
 /**
  * The safe current ceiling line, READ FROM THE SERVER (decision 306 sends the ceiling for the
- * stimulated side with the report's threshold block) and never typed here. The report carries the
- * one side it plans for, so the line names that side only; when the report carries no ceiling the
- * line says so instead of printing a number.
+ * stimulated side with the report's threshold block) and never typed here. It is drawn by the
+ * shared `paper/CeilingLine` in the specification's sentence (SPEC section 4 rule 1). The report
+ * carries the one side it plans for, so that side is printed and the other is said not to have
+ * been sent. Returns null when the report carries no ceiling at all; the page then says so
+ * (`CEILING_NOT_SENT`) instead of printing a number.
  */
-export function ceilingLineText(threshold, side) {
+export const CEILING_NOT_SENT = "Safe current ceiling: not sent with this report.";
+
+export function ceilingLineProps(threshold, side) {
   const v = threshold && threshold.safety_ceiling_mA;
-  if (v == null || !Number.isFinite(Number(v))) {
-    return "Safe current ceiling: not sent with this report.";
-  }
+  if (v == null || !Number.isFinite(Number(v))) return null;
   const n = Number(v);
-  const who = (threshold.safety_ceiling_provenance && String(threshold.safety_ceiling_provenance).trim())
-    || "set by the PI";
-  const sideWords = side ? ` for the ${String(side).toLowerCase()} side` : "";
-  return `Safe current ceiling${sideWords}: ${Number.isInteger(n) ? n.toFixed(1) : n} mA (${who}). `
-    + "Nothing above it is offered on this page.";
+  const prov = (threshold.safety_ceiling_provenance
+    && String(threshold.safety_ceiling_provenance).trim()) || "";
+  // The PI-stated provenance reads "stated by PI, <date> ..."; any other (the module's hard limit
+  // where no ceiling was stated) is printed as the server wrote it, never as "set by the PI".
+  const source = !prov || /^stated by (the )?PI\b/i.test(prov) ? "set by the PI" : prov;
+  const s = String(side || "").toLowerCase();
+  if (s === "left") return { leftMa: n, rightMa: null, source };
+  if (s === "right") return { leftMa: null, rightMa: n, source };
+  return null;
 }
 
 function ClosedLoopSim() {
   const navigate = useNavigate();
   const { participant_uid } = useParams();
+  // The de-identified study code for the line under the title (SPEC section 4 rule 1); null when
+  // the participant record carries none.
+  const participantCode = useStudyCode(participant_uid);
   const fileRef = useRef(null);
 
   // Everything below that describes how the page is ARRANGED is seeded from the retained view
@@ -399,6 +412,7 @@ function ClosedLoopSim() {
     || bandDefaultPain.label || null;
   const threshold = report && report.data && report.data.threshold;
   const sideOf = report && report.data && report.data.manifest && report.data.manifest.hemisphere;
+  const ceilingProps = ceilingLineProps(threshold, sideOf);
 
   return (
     <DatabaseLayout>
@@ -410,16 +424,23 @@ function ClosedLoopSim() {
           <MDTypography component="h1" sx={{ ...TYPE.title, m: 0, color: PAL.ink }}>
             {PAGE_QUESTION}
           </MDTypography>
-          {painLabel ? (
-            <MDTypography sx={{ ...TYPE.caption, color: PAL.ink3, mt: 0.5 }}>
-              {contextLine(null, painLabel)}
+          {participantCode || painLabel ? (
+            <MDTypography data-testid="context-line" sx={{ ...TYPE.caption, color: PAL.ink3, mt: 0.5 }}>
+              {contextLine(participantCode, painLabel)}
             </MDTypography>
           ) : null}
           <ChosenBandRecordLine status={bandRecord} hasBand={!!bc} />
           {bc ? (
-            <MDTypography data-paper="ceiling-line" sx={{ ...TYPE.body, color: PAL.ink, mt: 1 }}>
-              {ceilingLineText(threshold, sideOf)}
-            </MDTypography>
+            <MDBox mt={1}>
+              {ceilingProps ? (
+                <CeilingLine leftMa={ceilingProps.leftMa} rightMa={ceilingProps.rightMa}
+                  source={ceilingProps.source} />
+              ) : (
+                <MDTypography data-paper="ceiling-line" sx={{ ...TYPE.body, color: PAL.ink }}>
+                  {CEILING_NOT_SENT}
+                </MDTypography>
+              )}
+            </MDBox>
           ) : null}
 
           <MDBox display="flex" gap={3} alignItems="flex-start" flexWrap="wrap" mt={2}>

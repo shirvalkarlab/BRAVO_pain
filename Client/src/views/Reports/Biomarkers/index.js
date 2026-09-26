@@ -31,7 +31,7 @@ import Fold from "./Fold";
 // same grid) is superseded on this page by BiomarkerHeatmapGrids below -- kept as a file rather
 // than deleted (CLAUDE.md §2 principle 4 warns against deleting something that still works), but
 // no longer imported here now that the interactive version carries its job plus the drill-down.
-import BiomarkerHeatmapGrids from "./BiomarkerHeatmapGrids";
+import BiomarkerHeatmapGrids, { RefusalReason } from "./BiomarkerHeatmapGrids";
 import { reportCoverage, computeMatchedScanModel } from "./binarizationModel";
 import { saveControls, loadControls } from "./biomarkerStateStore";
 
@@ -45,6 +45,7 @@ import CalibrationInEffectPanel from "./CalibrationInEffectPanel";
 // Colours, type sizes and card style: the shared tokens (the redesign of 2026-09-26).
 import { T, TYPE, CARD, LAYOUT } from "assets/theme/base/tokens";
 import PageHead from "views/Reports/paper/PageHead";
+import { useStudyCode } from "views/Reports/paper/studyCode";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
 
@@ -122,6 +123,11 @@ function Biomarkers() {
   // (time-domain streaming PSD + power-domain band power together). One code path, no tab.
   const source = "both";
   const [metric, setMetric] = useState(P.metric || "nrs");
+  // The status sentence and list the page head prints, read off the heat-map grid (SPEC.md
+  // section 5.1 item 1); null until the grid has arrived.
+  const [gridStatus, setGridStatus] = useState(null);
+  // The de-identified study code for the line under the title; null when the record carries none.
+  const participantCode = useStudyCode(participant_uid);
   const [strategy, setStrategy] = useState(P.strategy || "tertile");   // binarization labeler (default tertile)
   const [percentileLow, setPercentileLow] = useState(P.percentileLow != null ? P.percentileLow : 33.3);   // tertile/percentile low cut
   const [percentileHigh, setPercentileHigh] = useState(P.percentileHigh != null ? P.percentileHigh : 66.7);  // tertile/percentile high cut
@@ -649,8 +655,15 @@ function Biomarkers() {
             {/* ── HOW THE PAGE OPENS (SPEC.md section 4 rule 1): the question, the pain score it
                 is read on; the status sentence is the heat maps' own answer, read off the grid. */}
             <Grid item xs={12}>
-              <PageHead title="Which brain signal tracks pain?"
-                painScore={previewMetricLabel} />
+              <MDBox data-testid="grid-status">
+                <PageHead title="Which brain signal tracks pain?"
+                  participant={participantCode}
+                  painScore={previewMetricLabel}
+                  status={gridStatus ? gridStatus.sentence : null}
+                  items={gridStatus ? gridStatus.items : []}>
+                  {gridStatus ? <RefusalReason pairs={gridStatus.pairs} rule={gridStatus.rule} /> : null}
+                </PageHead>
+              </MDBox>
               {/* ── THE ONE PAIN-SCORE SELECTOR, FIRST (decision 304; the review's B4) ───────────
                   It drives the timeline's pain row, the matching card's preview and both heat maps,
                   so it sits above all of them. A plain outlined select (the red outline is gone,
@@ -735,6 +748,7 @@ function Biomarkers() {
                 requestParams={heatmapRequestParams}
                 availableMetrics={DEFAULT_METRIC_OPTIONS}
                 pageMetric={metric}
+                onStatus={setGridStatus}
                 metricLabel={(DEFAULT_METRIC_OPTIONS.find((m) => m.key === metric) || {}).label}
                 onOpenInClosedLoop={() => {
                   // Take the reader to the grid on the page that can act on it. Nothing is

@@ -32,7 +32,7 @@ import { painScoreLabel } from "views/Reports/painScores";
 import { gutterGeometry, fitRowLabel, F_TICK, eventsRowSubtitle, matchedRowSubtitle } from "./timelineGutter";
 import { T } from "assets/theme/base/tokens";
 import { PAIN, SIDE, CONTEXT, CATEGORICAL, SEQUENTIAL } from "assets/theme/base/dataColors";
-import { MONTH_GRID } from "views/Reports/figureStyle";
+import { MONTH_GRID, FONT_FAMILY } from "views/Reports/figureStyle";
 
 // COLOURS ONLY (the redesign of 2026-09-26, SPEC.md section 5.1 item 4, through the
 // bravo-timeline-layout skill): every colour below comes from the shared tokens and data colours.
@@ -51,6 +51,8 @@ const DIM_GREY = CONTEXT;
 // labels ("LSB", "mA"). Colour only: no font size in the left gutter changes, so the gutter's
 // column geometry (F_TICK, the contact and region fonts, LBL_GAP, LEFT_CAP) is exactly as before.
 const SUB_INK = T.ink3;
+// The left gutter's own face: timelineGutter.js sizes its columns for Arial (bravo-timeline-layout).
+const GUTTER_FONT_FAMILY = "Arial, Helvetica, sans-serif";
 const UNIT_INK = T.ink3;
 const DIM_GREY_FAINT = "rgba(150,157,165,0.42)";
 
@@ -1037,6 +1039,15 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     // the per-lane Hz hover/labels and the lane coloring, and crowded the top band.) The lanes are
     // still frequency-colored via freqColor(); the legend on the right covers the glyph types.
 
+    // THE GUTTER KEEPS ITS OWN FONT (the bravo-timeline-layout skill): the column arithmetic in
+    // timelineGutter.js estimates widths for Arial, so every annotation in the left gutter (pinned at
+    // x 0 with a negative pixel shift) is drawn in Arial whatever the figure's base font is. The rest
+    // of the figure takes the shared face at 12 px (SPEC.md section 3; taste audit E7, 2026-09-26).
+    annotations.forEach((a) => {
+      if (a && a.xref === "paper" && a.x === 0 && Number(a.xshift) < 0) {
+        a.font = { family: GUTTER_FONT_FAMILY, ...(a.font || {}) };
+      }
+    });
     const layout = {
       height: figH,
       // Left margin is COMPUTED from the label-column geometry (MARGIN_L) so it's exactly as wide
@@ -1053,7 +1064,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       // intentionally resets the view; everything else keeps it.
       uirevision: (pain && pain.metric) ? `tl-${pain.metric}` : "tl",
       plot_bgcolor: T.surface, paper_bgcolor: T.surface,
-      font: { family: "Arial, Helvetica, sans-serif", size: 11, color: PAL.ink },
+      font: { family: FONT_FAMILY, size: 12, color: PAL.ink },
       shapes, annotations,
       showlegend: true,
       // Glyph key: VERTICAL stack, solid white fill + black box. BOTTOM-anchored at LEG_BOT_Y
@@ -1171,7 +1182,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
 
   if (!av || !channels.length) {
     return (
-      <MDBox p={2} sx={{ color: SUB_INK, fontStyle: "italic" }}>
+      <MDBox p={2} sx={{ color: SUB_INK, fontSize: 14 }}>
         No availability data — the timeline needs decoded Percept recordings for this participant.
       </MDBox>
     );
@@ -1183,17 +1194,17 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
                gap={1.25} sx={{ px: 1, pb: 0.5 }}>
           {/* Mode caption swaps with the toggle so the metaphor is explicit without reading the
               footer — "what does this color mean right now" is answered in place. */}
-          <span style={{ fontSize: 12, color: SUB_INK, fontStyle: "italic", textAlign: "right" }}>
+          <span style={{ fontSize: 12, color: SUB_INK, textAlign: "right" }}>
             {colorMode === "binarization"
               ? "Matched samples colored by pain label; everything else dimmed"
               : "Neural lanes colored by sensing frequency"}
           </span>
-          <span style={{ fontSize: 13, fontWeight: 600, color: T.ink, whiteSpace: "nowrap" }}>{"Color by"}</span>
+          <span style={{ fontSize: 14, fontWeight: 600, color: T.ink, whiteSpace: "nowrap" }}>{"Color by"}</span>
           <ToggleButtonGroup
             value={colorMode || "multimodal"} exclusive size="small"
             onChange={(e, v) => { if (v) setColorMode(v); }}
             sx={{
-              "& .MuiToggleButton-root": { textTransform: "none", fontSize: 12.5, fontWeight: 600,
+              "& .MuiToggleButton-root": { textTransform: "none", fontSize: 14, fontWeight: 600,
                 px: 1.5, py: 0.4, color: T.ink2, borderColor: T.ink3 },
               "& .Mui-selected": { color: `${T.onFill} !important`, backgroundColor: `${T.accent} !important` },
             }}

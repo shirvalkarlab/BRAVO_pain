@@ -59,6 +59,8 @@ import CacheStatusLine from "views/Reports/CacheStatusLine";
 import { recomputeSlots, STIM_OPTIMIZER_SLOTS } from "views/Reports/moduleCacheKeys";
 import Section from "views/Reports/paper/Section";
 import CeilingLine from "views/Reports/paper/CeilingLine";
+import { contextLine } from "views/Reports/paper/PageHead";
+import { useStudyCode } from "views/Reports/paper/studyCode";
 import { painScoreLabel } from "views/Reports/painScores";
 // The two-stage plan (open loop, then the check that decides whether closed loop may start, then
 // closed loop) is a second request to the same endpoint, fetched after this page's own response
@@ -154,6 +156,9 @@ export default function StimOptimizer() {
     baseRequest: OPTIMIZER_REQUEST,
     afterMain: cached.data,
   });
+  // The de-identified study code for the line under the title (SPEC section 4 rule 1); null when
+  // the participant record carries none.
+  const participantCode = useStudyCode(participant_uid);
 
   // A spinner is shown while a request is in flight AND on the very first paint before the hook's
   // effect has started one. Without that second condition the page would show its "no parameter
@@ -199,9 +204,10 @@ export default function StimOptimizer() {
           <MDTypography variant="h1" sx={{ fontSize: TYPE.section, lineHeight: "25px", fontWeight: WEIGHT.strong, color: T.ink, m: 0 }}>
             {PAGE_QUESTION}
           </MDTypography>
-          {painScore ? (
-            <MDTypography component="p" sx={{ fontSize: TYPE.small, lineHeight: "18px", color: T.ink3, mt: 0.5, mb: 0 }}>
-              {`pain score ${painScore}`}
+          {participantCode || painScore ? (
+            <MDTypography component="p" data-testid="context-line"
+              sx={{ fontSize: TYPE.small, lineHeight: "18px", color: T.ink3, mt: 0.5, mb: 0 }}>
+              {contextLine(participantCode, painScore)}
             </MDTypography>
           ) : null}
           <MDTypography component="p" role="status" data-testid="status-sentence"

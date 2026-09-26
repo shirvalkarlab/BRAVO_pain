@@ -365,7 +365,7 @@ function BiomarkerTimeline({ data, height }) {
       uirevision: "biomarker-timeline",
       hovermode: "x unified",
       showlegend: false,                          // hemisphere color + direct edge labels replace the legend
-      font: { family: FONT_FAMILY, size: 13, color: T.ink },
+      font: { family: FONT_FAMILY, size: 12, color: T.ink },
       annotations: [],
       shapes: [],
     };
@@ -439,9 +439,9 @@ function BiomarkerTimeline({ data, height }) {
         domain: [0, 1], type: "date", anchor: yk,
         showgrid: true, gridcolor: MONTH_GRID, gridwidth: 1,
         showticklabels: di === n - 1,  // dates only on the bottom row; grid carries the time reference
-        ticks: "", showline: false, tickfont: { size: 13 },
+        ticks: "", showline: false, tickfont: { size: 12 },
         ...(haveGlobalX ? { range: [gMin, gMax] } : {}),
-        ...(di === n - 1 ? { title: { text: "Time", font: { size: 13 } } } : {}),
+        ...(di === n - 1 ? { title: { text: "Time", font: { size: 12 } } } : {}),
         ...(axisNum !== 1 && linked ? { matches: "x" } : {}),
       };
 
@@ -459,7 +459,7 @@ function BiomarkerTimeline({ data, height }) {
             line: { color: "white", width: 0.8 }, layer: "above" });
           layout.annotations.push({ xref: xk, yref: "paper", x: new Date((+e.t0 + +e.t1) / 2),
             y: (ribBot + ribTop) / 2, xanchor: "center", yanchor: "middle",
-            text: `<b>${fmtHz(e.hz)} Hz</b>`, showarrow: false, font: { size: 13.5, color: textOn(col) } });
+            text: `<b>${fmtHz(e.hz)} Hz</b>`, showarrow: false, font: { size: 12, color: textOn(col) } });
         });
         layout.annotations.push({ xref: `${xk} domain`, yref: "paper", x: -0.006, y: (ribBot + ribTop) / 2,
           xanchor: "right", yanchor: "middle", text: "<b>freq</b>", showarrow: false,
@@ -555,7 +555,7 @@ function BiomarkerTimeline({ data, height }) {
       layout.annotations.push({
         xref: `${xk} domain`, yref: `${yk} domain`, x: 0.004, y: 0.97,
         xanchor: "left", yanchor: "top", text: `<b>${row.title}</b>`,
-        showarrow: false, font: { size: 19, color: accent },
+        showarrow: false, font: { size: 18, color: accent },
         bgcolor: "rgba(255,255,255,0.80)",
       });
       if (row.srcText) {
@@ -571,8 +571,9 @@ function BiomarkerTimeline({ data, height }) {
         layout.annotations.push({
           xref: `${xk} domain`, yref: "paper", x: 0, y: top + 0.012,
           xanchor: "left", yanchor: "bottom",
-          text: `<b>${hemi.toUpperCase()} HEMISPHERE</b>  ·  ${HEMI[hemi].region}`,
-          showarrow: false, font: { size: 21, color: accent },
+          // Sentence case at the section-title size (SPEC.md section 2.4; taste audit E8).
+          text: `<b>${String(hemi).charAt(0).toUpperCase()}${String(hemi).slice(1).toLowerCase()} hemisphere</b>  ·  ${HEMI[hemi].region}`,
+          showarrow: false, font: { size: 18, color: accent },
         });
       }
       if (hemi) prevHemi = hemi;
@@ -584,7 +585,7 @@ function BiomarkerTimeline({ data, height }) {
       const lx0 = 1.015, sw = 0.02, txtX = lx0 + 0.052, ly0 = 0.84, dh = 0.085;
       layout.annotations.push({ xref: "paper", yref: "paper", x: lx0, y: ly0 + dh * 0.8,
         xanchor: "left", yanchor: "bottom", text: "<b>Sensing center freq</b>", showarrow: false,
-        font: { size: 13, color: T.ink } });
+        font: { size: 12, color: T.ink } });
       usedFreqs.forEach((f, i) => {
         const yy = ly0 - i * dh;
         layout.shapes.push({ type: "rect", xref: "paper", yref: "paper",
@@ -599,18 +600,18 @@ function BiomarkerTimeline({ data, height }) {
       const ky = ly0 - usedFreqs.length * dh - 0.04;
       layout.annotations.push({ xref: "paper", yref: "paper", x: lx0, y: ky + dh * 0.8,
         xanchor: "left", yanchor: "bottom", text: "<b>Source</b>", showarrow: false,
-        font: { size: 13, color: T.ink } });
+        font: { size: 12, color: T.ink } });
       layout.shapes.push({ type: "line", xref: "paper", yref: "paper",
         x0: lx0, x1: lx0 + 2 * sw, y0: ky, y1: ky, line: { color: T.ink3, width: 2 } });
       layout.annotations.push({ xref: "paper", yref: "paper", x: txtX, y: ky,
         xanchor: "left", yanchor: "middle", text: "chronic 24/7", showarrow: false,
-        font: { size: 13, color: T.ink } });
+        font: { size: 12, color: T.ink } });
       layout.annotations.push({ xref: "paper", yref: "paper", x: lx0 + sw, y: ky - dh,
         xanchor: "center", yanchor: "middle", text: "◆", showarrow: false,
         font: { size: 14, color: T.ink3 } });
       layout.annotations.push({ xref: "paper", yref: "paper", x: txtX, y: ky - dh,
         xanchor: "left", yanchor: "middle", text: "streaming", showarrow: false,
-        font: { size: 13, color: T.ink } });
+        font: { size: 12, color: T.ink } });
     }
 
     Plotly.react(ref.current, traces, layout, {

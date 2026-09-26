@@ -31,7 +31,7 @@ const stepLabel = {
       fontWeight: fontWeightRegular,
       fontSize: size.xs,
       color: "#9fc9ff",
-      textTransform: "uppercase",
+      textTransform: "none", // sentence case everywhere (SPEC.md section 2.4)
 
       "&.Mui-active": {
         fontWeight: `${fontWeightRegular} !important`,

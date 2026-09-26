@@ -27,8 +27,8 @@ export function ceilingSentence(leftMa, rightMa, source = "set by the PI") {
   if (!l && !r) {
     return "Safe current ceiling: not received from the server, so no current is offered on this page.";
   }
-  const left = l ? `${l} left` : "left not received";
-  const right = r ? `${r} right` : "right not received";
+  const left = l ? `${l} left` : "left not sent by the server";
+  const right = r ? `${r} right` : "right not sent by the server";
   return `Safe current ceiling: ${left}, ${right} (${source}). Nothing above it is offered on this page.`;
 }
 

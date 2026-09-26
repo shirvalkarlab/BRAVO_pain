@@ -59,7 +59,7 @@ describe("CeilingLine", () => {
 
   test("it never types a current the server did not send", () => {
     expect(ceilingSentence(null, null)).not.toMatch(/\d/);
-    expect(ceilingSentence(4.5, null)).toContain("right not received");
+    expect(ceilingSentence(4.5, null)).toContain("right not sent by the server");
   });
 });
 

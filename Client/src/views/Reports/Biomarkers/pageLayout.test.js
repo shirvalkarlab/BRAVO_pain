@@ -246,8 +246,11 @@ describe("7. the pairs the device refuses with today's contacts", () => {
     const { container } = await renderPage({ ...sweep, sensing_rule: SENSING_RULE });
     const status = container.querySelector("[data-testid='grid-status']");
     expect(status).not.toBeNull();
-    const red = Array.from(status.querySelectorAll("[data-testid='red-bullet']")).map((b) => b.textContent.trim());
+    // The status list is the page head's (SPEC 5.1 item 1): each refused item carries its ✕ glyph.
+    const red = Array.from(status.querySelectorAll("li[data-state='refused']"))
+      .map((b) => b.textContent.replace(/^\u2715/, "").trim());
     expect(red).toEqual(["4 of 6 pairs refused"]);
+    status.querySelectorAll("li[data-state='refused']").forEach((b) => expect(b.textContent).toMatch(/^\u2715/));
     red.forEach((b) => expect(wordCount(b)).toBeLessThanOrEqual(5));
     expect(status.textContent).toMatch(/Allowed pairs today: L 1⁻3⁺, R 0⁻3⁺/);
     const refused = Array.from(container.querySelectorAll("[data-testid='pair-thumb']"))
@@ -255,14 +258,17 @@ describe("7. the pairs the device refuses with today's contacts", () => {
     expect(refused.map((t) => t.getAttribute("data-channel")).sort())
       .toEqual(["ONE_THREE_RIGHT", "ZERO_THREE_LEFT", "ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"]);
     refused.forEach((t) => expect(t.querySelector("svg[role='img']")).not.toBeNull());
-    // the why is one click away, not on view
+    // the rule is said in plain words in the open (a refusal's reason is never folded, SPEC 4 rule 4)
+    // and names no decision number; each lead's own detail is one click away
+    expect(visibleText(status)).toMatch(/two contacts on either side of the stimulating contact/);
+    expect(status.textContent).not.toMatch(/decision \d+/i);
     expect(visibleText(status)).not.toMatch(/flanking/);
     expect(status.textContent).toMatch(/flanking/);
   });
 
   test("without it the page marks nothing and says nothing about allowed pairs (no rule invented here)", async () => {
     const { container } = await renderPage();
-    expect(container.querySelectorAll("[data-testid='red-bullet']")).toHaveLength(0);
+    expect(container.querySelectorAll("li[data-state='refused']")).toHaveLength(0);
     expect(container.textContent).not.toMatch(/Refused today|Allowed pairs today/);
   });
 
@@ -273,6 +279,11 @@ describe("7. the pairs the device refuses with today's contacts", () => {
     expect(status.textContent).toMatch(/60-min window/);
     // RCS08, NRS, 2026-09-15: no band rises with pain past the correction; 30 fall with it
     expect(status.textContent).toMatch(/0 bands rise with pain and 30 fall with it/);
+    // it is the page head's status sentence (SPEC 5.1 item 1), not a line inside the heat-map card
+    const head = container.querySelector("[data-paper='page-head']");
+    expect(status.contains(head)).toBe(true);
+    expect(head.querySelector("[role='status']").textContent)
+      .toMatch(/0 bands rise with pain and 30 fall with it/);
   });
 });
 

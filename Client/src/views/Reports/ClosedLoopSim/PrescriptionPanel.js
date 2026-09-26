@@ -59,13 +59,13 @@ export function checksHeading(field) {
  */
 export const ACTION = {
   enterable: { label: "Enter", ink: PAL.ink, detail: null },
-  check_on_device: { label: "Enter, check range", ink: PAL.warnText,
+  check_on_device: { label: "Enter, check range", ink: PAL.ink,
     detail: "The adjustable range for this field is not published, so confirm on the Advanced "
           + "Settings screen that the device accepts this value." },
-  must_choose: { label: "Your choice", ink: PAL.warnText,
+  must_choose: { label: "Your choice", ink: PAL.ink,
     detail: "No value is suggested on purpose: this is a clinical choice the record cannot make." },
   not_applicable: { label: "Not in this mode", ink: PAL.neutral, detail: null },
-  verify_only: { label: "Device computes; don't type", ink: PAL.warnText,
+  verify_only: { label: "Device computes; don't type", ink: PAL.ink,
     detail: "The device computes this value itself from the captured pair; it is shown only to "
           + "be checked against what the programmer displays." },
 };
@@ -96,6 +96,9 @@ export function prescriptionState(report, mode) {
 
 const COLS = [["0 0 30px", ""], ["1 1 170px", "Parameter"], ["0 0 112px", "Value"],
   ["0 0 62px", "Units"], ["0 0 118px", "Programmed today"], ["1 1 150px", "Action"]];
+
+/** The table's narrowest readable width; below it the table scrolls inside its card. */
+export const TABLE_MIN_WIDTH = 640;
 
 function Row({ f, index, ticked, onTick, readBackEnabled }) {
   const value = fmtFieldValue(f);
@@ -133,7 +136,7 @@ function Row({ f, index, ticked, onTick, readBackEnabled }) {
         </>
       ))}
       {cell(2, mustChoose && value == null ? (
-        <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, color: PAL.warnText, fontWeight: 600 }}>
+        <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, color: PAL.ink, fontWeight: 600 }}>
           to be chosen
         </MDTypography>
       ) : (
@@ -144,7 +147,7 @@ function Row({ f, index, ticked, onTick, readBackEnabled }) {
           </MDTypography>
           {f.enter_as ? (
             <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.body,
-              fontWeight: 600, color: PAL.warnText }}>
+              fontWeight: 600, color: PAL.ink }}>
               {`enter as ${f.enter_as}`}
             </MDTypography>
           ) : null}
@@ -159,7 +162,7 @@ function Row({ f, index, ticked, onTick, readBackEnabled }) {
         <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, color: PAL.ink }}>
           {prog}
           {value == null ? null : (
-            <span style={{ fontFamily: "inherit", color: same ? PAL.passText : PAL.warnText, fontWeight: 600 }}>
+            <span style={{ fontFamily: "inherit", color: PAL.ink, fontWeight: 600 }}>
               {same ? "  same" : "  differs"}
             </span>
           )}
@@ -265,22 +268,28 @@ export default function ParameterTable({ report, mode, onMode }) {
               </MDBox>
             </>
           ) : null}
-          <MDBox display="flex" flexDirection="row" py={0.5} sx={{ backgroundColor: PAL.fillMuted }}>
-            {COLS.map(([flex, h], i) => (
-              <MDBox key={`h${h || i}`} flex={flex} sx={{ px: 0.5, textAlign: i === 2 || i === 4 ? "right" : "left" }}>
-                <MDTypography variant="caption" sx={{ fontSize: PAL.fs.caption, fontWeight: 600, color: PAL.ink3 }}>
-                  {h}
-                </MDTypography>
+          {/* On a phone the six columns are wider than the card: they scroll inside their own
+              wrapper, so the page itself never scrolls sideways (SPEC 2.5). */}
+          <MDBox data-param-table-scroll="" sx={{ overflowX: "auto", maxWidth: "100%" }}>
+            <MDBox sx={{ minWidth: TABLE_MIN_WIDTH }}>
+              <MDBox display="flex" flexDirection="row" py={0.5} sx={{ backgroundColor: PAL.fillMuted }}>
+                {COLS.map(([flex, h], i) => (
+                  <MDBox key={`h${h || i}`} flex={flex} sx={{ px: 0.5, textAlign: i === 2 || i === 4 ? "right" : "left" }}>
+                    <MDTypography variant="caption" sx={{ fontSize: PAL.fs.caption, fontWeight: 600, color: PAL.ink3 }}>
+                      {h}
+                    </MDTypography>
+                  </MDBox>
+                ))}
               </MDBox>
-            ))}
-          </MDBox>
-          <MDBox key={`rows-${activeMode}`}>
-            {fields.map((f, i) => (
-              <Row key={`${activeMode}-${f.parameter}`} f={f} index={i}
-                ticked={!!ticks[`${activeMode}|${f.parameter}`]}
-                onTick={(on) => setTicks((t) => ({ ...t, [`${activeMode}|${f.parameter}`]: on }))}
-                readBackEnabled={readBackEnabled} />
-            ))}
+              <MDBox key={`rows-${activeMode}`}>
+                {fields.map((f, i) => (
+                  <Row key={`${activeMode}-${f.parameter}`} f={f} index={i}
+                    ticked={!!ticks[`${activeMode}|${f.parameter}`]}
+                    onTick={(on) => setTicks((t) => ({ ...t, [`${activeMode}|${f.parameter}`]: on }))}
+                    readBackEnabled={readBackEnabled} />
+                ))}
+              </MDBox>
+            </MDBox>
           </MDBox>
           {readBackEnabled ? (
             <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.body, mt: 0.6, fontWeight: 600,

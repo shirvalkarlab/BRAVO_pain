@@ -52,7 +52,7 @@ import { PlotlyRenderManager } from "graphing-utility/Plotly";
 import { SessionController } from "database/session-control";
 import { useCachedResult } from "database/useCachedResult";
 import { biomarkerHeatmapSlot, prefetchBiomarkerHeatmapMetric } from "views/Reports/moduleCacheKeys";
-import { T, TYPE, STATE, CARD, LAYOUT } from "assets/theme/base/tokens";
+import { T, TYPE, CARD, LAYOUT } from "assets/theme/base/tokens";
 import { DIVERGING, RANGE, textInk } from "assets/theme/base/dataColors";
 import { PLOTLY_LAYOUT, PLOTLY_CONFIG, FONT_FAMILY, FIGURE_TEXT_PX, directLabel, mergeDeep } from "views/Reports/figureStyle";
 import ColorKey from "views/Reports/paper/ColorKey";
@@ -240,61 +240,60 @@ export function gridStatusLine(result, metricLabel) {
     + `${verb(rise, "rises", "rise")} with pain and ${fall} ${verb(fall, "falls", "fall")} with it${where}.`;
 }
 
-// The status list (SPEC.md section 4 rule 1): each item with its glyph, red ✕ for what the device
-// refuses, amber ▲ for evidence not yet evaluated; the state inks come from the shared tokens.
-function Bullet({ tone, children }) {
-  const red = tone === "red";
-  const st = red ? STATE.refused : STATE.caution;
-  return (
-    <MDBox component="li" data-testid={red ? "red-bullet" : "yellow-bullet"} display="inline-flex"
-      alignItems="center" gap={0.75}
-      sx={{ listStyle: "none", mr: 3 }}>
-      {red ? <RefusedCross label="refused by the device" size={14} />
-        : <span aria-hidden="true" style={{ color: st.ink, ...TYPE.body }}>{st.glyph}</span>}
-      <MDTypography component="span" sx={{ ...TYPE.body, fontWeight: 600, color: `${st.ink} !important` }}>
-        {children}
-      </MDTypography>
-    </MDBox>
-  );
-}
-
-/** The head of the heat-map card: one status line, then the bullets, then the fold. */
-export function GridStatus({ result, sw, metricLabel }) {
-  const sweeps = (result && result.band_time_sweep) || {};
-  const rule = result && result.sensing_rule;
+/**
+ * The page head's status, read off the correlation grid (SPEC.md section 5.1 item 1, the taste
+ * audit's E4, 2026-09-26): the status sentence, and the status list -- a red ✕ item for the pairs
+ * the device refuses with today's contacts, an amber ▲ item when no stability answer has reached
+ * the grid. The words are the ones the heat-map card printed before they moved to the page head.
+ * Returns null while there is no grid.
+ */
+export function gridStatusParts(result, sw, metricLabel) {
+  if (!result || !sw) return null;
+  const sweeps = result.band_time_sweep || {};
+  const rule = result.sensing_rule;
   const pairs = refusedPairs(sweeps, rule);
-  const rows = (sw && sw.best_correlation_rows) || [];
+  const rows = sw.best_correlation_rows || [];
   const stabilityUntested = rows.length > 0 && rows.every((r) => r.cross_setting_stability)
     && rows.every((r) => (r.cross_setting_stability || {}).answer === "not tested");
-  const reds = pairs && pairs.refused.length ? [`${pairs.refused.length} of ${pairs.total} pairs refused`] : [];
-  const yellows = stabilityUntested ? ["Stability not yet tested"] : [];
+  const items = [];
+  if (pairs && pairs.refused.length) {
+    items.push({ state: "refused", text: `${pairs.refused.length} of ${pairs.total} pairs refused`, key: "refused" });
+  }
+  if (stabilityUntested) items.push({ state: "caution", text: "Stability not yet tested", key: "stability" });
+  const sentence = `${pairs && pairs.allowed.length ? `Allowed pairs today: ${pairs.allowed.join(", ")}. ` : ""}`
+    + gridStatusLine(result, metricLabel);
+  return { sentence, items, pairs, rule };
+}
+
+/** The device's sensing rule in plain words, printed in the open beside the refused count. */
+export const SENSING_RULE_PLAIN = "The device can sense only on the two contacts on either side of "
+  + "the stimulating contact, so a band on any other pair cannot be programmed with today's contacts.";
+
+/**
+ * Why the device refuses the pairs: one plain sentence in the open, next to the refused count (a
+ * refusal's reason is never folded, SPEC section 4 rule 4), and each lead's own reason one click
+ * away. Nothing when no pair is refused.
+ */
+export function RefusalReason({ pairs, rule }) {
+  if (!pairs || !pairs.refused.length || !rule || !rule.by_side) return null;
   return (
-    <MDBox data-testid="grid-status" mt={1}>
-      <MDTypography component="p" sx={{ ...TYPE.lead, color: T.ink, m: 0, maxWidth: LAYOUT.proseMax }}>
-        {pairs && pairs.allowed.length ? `Allowed pairs today: ${pairs.allowed.join(", ")}. ` : ""}
-        {gridStatusLine(result, metricLabel)}
+    <MDBox data-testid="refusal-reason" mt={1}>
+      <MDTypography component="p" sx={{ ...TYPE.body, color: T.ink, m: 0, maxWidth: LAYOUT.proseMax }}>
+        {SENSING_RULE_PLAIN}
       </MDTypography>
-      {reds.length || yellows.length ? (
-        <MDBox component="ul" sx={{ m: 0, mt: 1, p: 0 }}>
-          {reds.map((b) => <Bullet key={b} tone="red">{b}</Bullet>)}
-          {yellows.map((b) => <Bullet key={b} tone="yellow">{b}</Bullet>)}
-        </MDBox>
-      ) : null}
-      {pairs && pairs.refused.length ? (
-        <Fold show="Why the device refuses these pairs" hide="Hide why">
-          {["Left", "Right"].map((side) => {
-            const r = rule.by_side[side];
-            if (!r || !r.rule_applied) return null;
-            return (
-              <MDTypography key={side} component="span" display="block" sx={{ ...TYPE.body, color: T.ink2 }}>
-                {`${side} lead: ${r.why}${r.allowed_display ? `, so it senses on ${r.allowed_display} only` : ""}. `
-                  + "A band found on another pair on this lead cannot be programmed without moving the "
-                  + "stimulating contacts (decision 217)."}
-              </MDTypography>
-            );
-          })}
-        </Fold>
-      ) : null}
+      <Fold show="Each lead's contacts and the pair it allows" hide="Hide each lead's contacts">
+        {["Left", "Right"].map((side) => {
+          const r = rule.by_side[side];
+          if (!r || !r.rule_applied) return null;
+          return (
+            <MDTypography key={side} component="span" display="block" sx={{ ...TYPE.body, color: T.ink2 }}>
+              {`${side} lead: ${r.why}${r.allowed_display ? `, so it senses on ${r.allowed_display} only` : ""}. `
+                + "A band found on another pair on this lead cannot be programmed without moving the "
+                + "stimulating contacts."}
+            </MDTypography>
+          );
+        })}
+      </Fold>
     </MDBox>
   );
 }
@@ -732,8 +731,10 @@ function CaptionBullets({ items, color }) {
 
 /** Two short bullets (the PI, 2026-09-15: "MUCH more concise, ideally with bullet points"). A
  * contact with no snapshot-served report renders nothing. */
+// A note, not a caution (SPEC 2.3: the caution ink always carries ▲), so it is drawn in the caption
+// grey like the other notes under the maps.
 function DeviceSpectrumCaption({ sw }) {
-  return <CaptionBullets items={deviceSpectrumBullets(sw)} color={T.caution} />;
+  return <CaptionBullets items={deviceSpectrumBullets(sw)} />;
 }
 
 /** Which rows the device can be set to, from the ranges on the response (`device_timing_ranges`,
@@ -746,7 +747,7 @@ function DeviceTierCaption({ ranges, sw }) {
  * answer has reached at least one row -- a legend for symbols that are not drawn is noise. */
 /** What the heat maps pool (decision 186): at-home ratings only, or the sheets' scores too. */
 function ClinicSheetCaption({ sw }) {
-  return <CaptionBullets items={clinicSheetBullets(sw)} color={T.caution} />;
+  return <CaptionBullets items={clinicSheetBullets(sw)} />;
 }
 
 function StabilityCaption({ sw }) {
@@ -1007,7 +1008,7 @@ function settingsSubset(params, keys) {
 }
 
 function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics, pageMetric,
-  metricLabel, onOpenInClosedLoop }) {
+  metricLabel, onOpenInClosedLoop, onStatus }) {
   const options = useMemo(() => (
     (availableMetrics && availableMetrics.length ? availableMetrics : [])
   ), [availableMetrics]);
@@ -1130,6 +1131,11 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   const aucSweeps = (aucResult && aucResult.band_time_sweep) || {};
   const corrSw = channel && corrSweeps[channel];
   const aucSw = channel && aucSweeps[channel];
+  // The page head prints the status sentence and list (SPEC.md section 5.1 item 1); they are read
+  // off this grid, so the grid hands them up whenever what they are read from changes.
+  useEffect(() => {
+    if (onStatus) onStatus(gridStatusParts(corrResult, corrSw || null, metricLabel));
+  }, [onStatus, corrResult, corrSw, metricLabel]);
   // The device's documented timing ranges, carried on the response since rule version v12
   // (review 2026-09-15, B4). Absent on an older response: the rows are then labelled plainly.
   const deviceRanges = (corrResult && corrResult.device_timing_ranges) || null;
@@ -1234,7 +1240,6 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
           <MDTypography component="p" sx={{ ...TYPE.body, display: "block", mt: 1,
             color: T.ink }}>{`The grid could not be computed: ${err}`}</MDTypography>
         ) : null}
-        {corrResult && corrSw ? <GridStatus result={corrResult} sw={corrSw} metricLabel={metricLabel} /> : null}
         {corrResult && corrResult.message ? (
           <MDTypography component="p"
             sx={{ ...TYPE.body, color: T.ink2, display: "block", mt: 1 }}>{corrResult.message}</MDTypography>

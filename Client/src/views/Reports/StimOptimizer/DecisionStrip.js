@@ -169,7 +169,8 @@ export function decisionHeadline(plan, inForce) {
 }
 
 // Two side blocks next to each other on a wide card, one above the other on a narrow one.
-const SIDES_GRID = "repeat(auto-fit, minmax(320px, 1fr))";
+// `min(320px, 100%)`: on a phone the one column is the card's own width, never wider.
+const SIDES_GRID = "repeat(auto-fit, minmax(min(320px, 100%), 1fr))";
 const COMPARE = "minmax(96px, 0.9fr) minmax(80px, 1fr) minmax(96px, 1.1fr) minmax(72px, 0.8fr)";
 const GAIN_BAR_WIDTH = 240;
 
@@ -194,11 +195,11 @@ function SideBlock({ r, plan, planLoading, planErr, halfRange, timeState, timeNo
       </MDBox>) : null;
     if (!s) return row === "rate" ? <span style={SMALL}>{planErr ? `plan unavailable: ${planErr}` : "—"}</span> : null;
     if (prefRate === null) return row === "rate"
-      ? <span style={{ fontSize: TYPE.body, fontWeight: WEIGHT.strong, color: T.caution }}>no rate closed loop can use</span> : null;
+      ? <span style={{ fontSize: TYPE.body, fontWeight: WEIGHT.strong, color: T.caution }}><span aria-hidden="true">▲ </span>no rate closed loop can use</span> : null;
     if (row === "rate") return <span style={VALUE}>{fmtHz(prefRate)}</span>;
     if (row === "pw") return <span style={VALUE}>{prefPw === null ? "— µs" : fmtUs(prefPw)}</span>;
     return prefAmp === null
-      ? <span style={{ fontSize: TYPE.body, fontWeight: WEIGHT.strong, color: T.caution }}>no current</span>
+      ? <span style={{ fontSize: TYPE.body, fontWeight: WEIGHT.strong, color: T.caution }}><span aria-hidden="true">▲ </span>no current</span>
       : <span style={VALUE}>{fmtMa(prefAmp)}{timeState(r) === "moves" && <BlockOfTimeMark />}</span>;
   };
   const difference = (row) => {
@@ -222,24 +223,28 @@ function SideBlock({ r, plan, planLoading, planErr, halfRange, timeState, timeNo
     ["amp", "Current", <span key="t" style={VALUE}>{fmtMa(r.nowAmp)}</span>],
   ];
   return (
-    <MDBox data-testid="decision-side" data-side={r.side}>
+    <MDBox data-testid="decision-side" data-side={r.side} sx={{ minWidth: 0 }}>
       <MDTypography component="div" sx={SUBHEAD}>
         {r.side}
         <span style={{ ...SMALL, fontWeight: WEIGHT.regular, marginLeft: 8 }}>
           {r.contacts ? <>contacts <span style={NW}>{r.contacts}</span></> : "contacts: not in the response"}
         </span>
       </MDTypography>
-      <MDBox mt={1} sx={{ display: "grid", gridTemplateColumns: COMPARE, columnGap: "12px", alignItems: "baseline" }}>
-        <span />
-        <MDTypography variant="caption" sx={{ ...HEAD, pb: 0.5 }}>Today</MDTypography>
-        <MDTypography variant="caption" sx={{ ...HEAD, pb: 0.5 }}>Suggested</MDTypography>
-        <MDTypography variant="caption" sx={{ ...HEAD, pb: 0.5 }}>Difference</MDTypography>
-        {rows.map(([key, label, today]) => [
-          <MDBox key={`${key}-l`} sx={cellLine}><span style={{ fontSize: TYPE.body, color: T.ink2 }}>{label}</span></MDBox>,
-          <MDBox key={`${key}-t`} sx={cellLine}>{today}</MDBox>,
-          <MDBox key={`${key}-s`} sx={cellLine}>{suggested(key)}</MDBox>,
-          <MDBox key={`${key}-d`} sx={cellLine}>{difference(key)}</MDBox>,
-        ])}
+      {/* The Today | Suggested | Difference table scrolls inside its own wrapper when the card is
+          narrower than its columns (a phone), so the page never scrolls sideways (SPEC 2.5). */}
+      <MDBox data-compare-scroll="" sx={{ overflowX: "auto", maxWidth: "100%" }}>
+        <MDBox mt={1} sx={{ display: "grid", gridTemplateColumns: COMPARE, columnGap: "12px", alignItems: "baseline" }}>
+          <span />
+          <MDTypography variant="caption" sx={{ ...HEAD, pb: 0.5 }}>Today</MDTypography>
+          <MDTypography variant="caption" sx={{ ...HEAD, pb: 0.5 }}>Suggested</MDTypography>
+          <MDTypography variant="caption" sx={{ ...HEAD, pb: 0.5 }}>Difference</MDTypography>
+          {rows.map(([key, label, today]) => [
+            <MDBox key={`${key}-l`} sx={cellLine}><span style={{ fontSize: TYPE.body, color: T.ink2 }}>{label}</span></MDBox>,
+            <MDBox key={`${key}-t`} sx={cellLine}>{today}</MDBox>,
+            <MDBox key={`${key}-s`} sx={cellLine}>{suggested(key)}</MDBox>,
+            <MDBox key={`${key}-d`} sx={cellLine}>{difference(key)}</MDBox>,
+          ])}
+        </MDBox>
       </MDBox>
       {r.nowPw === null && (
         <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.5 }}>
