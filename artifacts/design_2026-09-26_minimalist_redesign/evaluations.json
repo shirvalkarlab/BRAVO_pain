@@ -1,0 +1,1055 @@
+[
+ {
+  "key": "biomarkers",
+  "summary": "The Biomarkers page holds careful, honest numbers, but a clinician has to dig for the answer. The heat maps that answer \"which band tracks pain?\" come fourth, below a 28 px title card, a very long timeline and a dense block of eight matching controls. The heat maps themselves have no colour key. Their colour scale runs from -1 to +1 while the real correlations sit around \u00b10.3, so almost every cell is near-white. The white \"best cell\" circles vanish on those near-white cells. The x-axis labels are rounded half a hertz away from the bands they sit under (the 23.5 Hz column is labelled \"24\"). Type runs through about seventeen sizes (11 px to 40 px), and the tucked-away notes are bolder and larger than the headings. The colour meanings clash: red outlines the pain-score picker but also marks what the device refuses, the timeline uses about 25 hues for frequency, and the stability marks pair green with red. The research-check figures can shrink below 11 px on a narrow screen. I recommend a few structural changes: put the answer first, add a directly labelled colour key, one type scale, and red reserved for refusals. Almost all text changes break existing jest pins, and those are flagged per finding.",
+  "findings": [
+   {
+    "file": "Client/src/views/Reports/Biomarkers/BiomarkerHeatmapGrids.js",
+    "area": "figure",
+    "problem": "The two heat maps have no colour key (showscale:false in PlotlyHeatmap). The scale is fixed at -1 to +1 for correlation (halfRange 1), and the midpoint is pure white (divergingRgb in binarizationModel.js). On RCS08 the correlations sit roughly between -0.3 and +0.3, so nearly every cell is washed-out pale blue or pale orange, and a reader cannot tell which colour means 'falls with pain'.",
+    "proposal": "Add a thin, directly labelled key above each map. The ends should read 'falls with pain' (blue) and 'rises with pain' (orange), with 0 in the middle. For the second map, label the middle '0.5 = no better than chance' and the ends 'lower in high pain' and 'higher in high pain'. Set the correlation scale to a symmetric range such as \u00b10.5, or the rounded largest absolute value in the response, and print that range on the key. Keep AUC centred on 0.5. No number changes.",
+    "impact": "high",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/BiomarkerHeatmapGrids.js",
+    "area": "figure",
+    "problem": "The x-axis tick text is built with Number(c).toFixed(0) on band centres 8.5, 11.5, ... 29.5, so the ticks read 9, 12, 15, 18, 21, 24, 27, 30. Each tick sits under a band whose real centre is half a hertz lower. A clinician reading '24' under the 23.5 Hz column, while the status line and decisions talk about 24.5 Hz, can pick the wrong band.",
+    "proposal": "Print the real centres, e.g. toFixed(1) giving '8.5 11.5 14.5 ...', or label every second column at its true value. This is a question of what a number means, not style.",
+    "impact": "high",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/index.js",
+    "area": "layout",
+    "problem": "The answer is buried. Page order: Recompute bar; developer fold; red pain-score box; a card titled 'Pain Biomarker Exploration' (28 px) holding the timeline, a coverage sentence, three settings, a timing histogram and a two-column block of five more controls (minHeight 480) beside the split preview. Only then come the heat maps, which the code itself calls 'the headline'. A clinician must scroll past the plumbing to reach the result.",
+    "proposal": "Reorder to: pain-score selector \u2192 heat-map card (status line, red bullet, pair thumbnails, the two maps) \u2192 a section 'How reports are paired with recordings' \u2192 timeline \u2192 folded sliding correlation, calibration and research checks. Fold the pairing section by default into a one-line summary with a 'Change' button, for example 'Paired within \u00b160 min, report picks its samples, up to 3 per report, REDCap ratings only'. pageLayout.test.js only requires the selector to come before the timeline, the matching card and the heat maps, so that still passes. Drop the 'Pain Biomarker Exploration' title card; the page name is already in the navigation.",
+    "impact": "high",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/index.js",
+    "area": "colour",
+    "problem": "The pain-score selector is outlined in 2.5 px red (#D32F2F) on a red tint. On this page and the Closed-Loop page, red means 'the device refuses this' (RED_TEXT and RED_FILL bullets, the 'Refused today' tag on thumbnails). A control dressed in the refusal colour tells the reader something is wrong. The 18 px bold select also makes it the loudest thing on the page.",
+    "proposal": "Give red one job: device refusals and the safe current ceiling only. Style the selector as the page's first, plain control: 14 px label 'Pain score', a standard outlined select, and one quiet line under it ('Every chart below uses this score'). Space, not colour, can mark its importance.",
+    "impact": "high",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/gridReadouts.js",
+    "area": "colour",
+    "problem": "Stability marks drawn inside the best-cell circles (stabilityMark) are green #2e7d32 versus red #c62828: a red/green pair about 8% of men cannot separate. They sit on top of blue and vermillion cells, so a red x on an orange cell nearly disappears. The caption says 'green tick' but the drawn symbol is a filled circle. The best-cell ring is white (#FFFFFF), which is invisible on the near-white cells where r is close to 0.",
+    "proposal": "Encode stability by shape alone, in dark ink with a white outline so it reads on any cell: a check mark for 'behaves the same', a cross for 'behaves differently', a question mark for 'cannot tell'. Make the best-cell ring dark (#1A1A1A) with a 1 px white outline. Keep a heavier ring for 'clears the 22-band correction'. Change the caption to match what is drawn. gridReadouts.test pins /tick/, /cross/, /amber/ in stabilityBullet, so dropping 'amber' changes a pin.",
+    "impact": "medium",
+    "breaks_jest_pin": true
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/BiomarkerHeatmapGrids.js",
+    "area": "wording",
+    "problem": "The heat-map headings and readouts use statistics shorthand. Headings: 'Correlation with pain \u2014 depends only on matching' and 'High vs low pain (AUC) \u2014 also depends on the high / low cuts above'. Hover: 'r = %{z:.3f}' and '117 ratings, q = 0.0022'. Panel line: 'Pearson r = \u2026, p = \u2026, n = \u2026 (uncorrected)'. Violin line: 'AUC = \u2026, p = \u2026 (Mann-Whitney; high n=\u2026, low n=\u2026)'. A clinician who never opened the code cannot read q, AUC or Mann-Whitney.",
+    "proposal": "Headings: 'Does band power rise or fall with pain?' and 'Does band power tell high-pain reports from low-pain ones?' Hover: 'correlation \u22120.31 \u00b7 117 ratings \u00b7 after checking all 22 bands: p 0.002'. The panel should read 'correlation r = \u2026, p = \u2026 for this square alone (not corrected for testing 22 bands), 96 ratings'. For the second map: 'chance of telling high from low = 0.62 (0.5 is a coin toss)'. Keep Pearson and Mann-Whitney in the 'How to read this' drawer only. gridReadouts.test.js pins '117 ratings, q = 0.0022', '117 ratings (about 98 independent), q = 0.0022' and the full '\u2026 \u00b7 corrected q = 0.0022 \u00b7 established \u2026' readout, so these pins must change.",
+    "impact": "high",
+    "breaks_jest_pin": true
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/BiomarkerHeatmapGrids.js",
+    "area": "typography",
+    "problem": "There is no type scale. Across the page's files: page title 28 px, card titles 24 px, pinned-cell title (PanelTitle) 23 px, pain select 18 px, the drawer and search notes 17 px (the search lines bold), section headings 15 px, and captions at 11, 11.5, 12, 12.5, 13, 14 and 14.5 px. BiomarkerAnalytics has a 40 px title, and the timeline row titles are 24 and 26 px. Folded notes (17 px bold) outrank the headings above them (15 px), which turns the hierarchy upside down.",
+    "proposal": "Adopt five sizes and use no others: 12 px (figure ticks and captions, keeping a margin above the 11 px floor), 14 px (body and control labels), 16 px (section headings), 20 px (card titles), 24 px (the one page title if kept). Two weights only: 400 for text, 600 for headings and key numbers. Drawer and fold text drops to 14 px regular. Referent test line 177 pins fontWeight '700' on the L 1-3+ search lines, so un-bolding them breaks that pin. The timeline's gutter fonts (F_TICK 14, fContact 26, fRegion 18) are governed by the bravo-timeline-layout skill and pinned in timelineGutter tests; change them only through that skill.",
+    "impact": "high",
+    "breaks_jest_pin": true
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/BiomarkerDataTimeline.js",
+    "area": "colour",
+    "problem": "Sensing lanes are coloured by frequency from FREQ_PALETTE, about 25 distinct hues (purple, magenta, teal, olive, several oranges and blues). No reader can tell 22.5 Hz #4477AA from 21.5 Hz #6699CC, or map a hue back to a frequency. On top of this sit the binarization colours, a teal tint for imported events, a lilac square and PAL.pain / PAL.stim row titles. The figure is the busiest on the page and its colour carries almost no readable information.",
+    "proposal": "Frequency is ordered, so encode it with one sequential ramp (e.g. cividis, colour-blind safe) plus a direct text label at each lane's end ('22.5 Hz'), or draw every lane in one neutral ink and let the lane label name the frequency. Keep blue/vermillion only for the high/low pain mode. Colours only: the left-gutter geometry and label fonts are governed by the bravo-timeline-layout skill and pinned (LBL_GAP, LEFT_CAP, F_TICK, fitRowLabel); legibility.test.js checks that each frequency label colour is 4.5:1 and in its line's hue family, which a new ramp must also satisfy.",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/MatchWindowBand.js",
+    "area": "colour",
+    "problem": "Vermillion #D55E00 (BIN_HI) is used as TEXT, at about 3.9:1 on white, below the 4.5:1 minimum: 'High \u2265 67th pct' (bold 14 px) here; BinarizationPreview.js's 'N high pain' count (12 px bold) and 'high \u2265 \u2026th pct' (11 px); and the heat map's error line 'The grid could not be computed' (PAL.fail, 11.5 px) in BiomarkerHeatmapGrids.js. legibility.test.js checks only greys, so it does not catch these.",
+    "proposal": "Keep #D55E00 for marks (bars, points, cells). For text use a darkened vermillion such as #A84300 (the Closed-Loop fail ink since decision 302, about 5.9:1). Extend legibility.test.js to check every text colour, not just greys.",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/index.js",
+    "area": "density",
+    "problem": "The matching block shows eight controls at once, each with a bold 14 px label: match window, split rule, match direction, samples per rating, minimum gap, TD length, window reuse, clinic sheets. There is also a timing histogram and a live preview. The 'Expand descriptions' button has a hard-edged drop-shadow (boxShadow '0 2px 0 #1A1A1A'), and one press reveals up to seven italic paragraphs at once. The direction descriptions run to about 80 words each. Layout is dense and not breathable.",
+    "proposal": "Show the three settings a clinician actually changes (match window, split rule, clinic sheets) and move the other five under 'More pairing options'. Replace the all-or-nothing descriptions button with one plain sentence under each control, no more than 15 words. For example, under Match direction: 'Which comes first when pairing: the report or the recording.' Keep the long explanations in one 'How pairing works' drawer. Remove the button shadow; use 24 px vertical gaps between groups.",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/ControlAnalyses/figures.js",
+    "area": "figure",
+    "problem": "Every figure is an SVG with viewBox width 640 drawn at width='100%'. When its box is narrower than 640 px (a laptop with the side menu open, a tablet, the Stim Optimizer column), the 11 px tick and axis text scales down with it and falls under the 11 px floor. legibility.test.js reads the source numbers, not rendered size, so it cannot catch this. Legends are rows of coloured dots below each chart rather than labels on the data.",
+    "proposal": "Render each SVG at its real pixel width (measure the container, or give it minWidth 640 with horizontal scroll inside the card only), so 11-12 px text stays 11-12 px on screen. Replace the dot legends with direct labels at the end of each series or row ('every band', 'bands without the current', 'current alone'). Draw the 0.5 or 0 chance line as a labelled reference line ('coin toss').",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/ControlAnalyses/figures.js",
+    "area": "wording",
+    "problem": "ZeroMaFigure's 'Pain score' dropdown prints raw keys ({s} gives 'vas', 'nrs', 'left_leg_vas'). Axis and legend text uses technical shorthand: 'out-of-sample score (0.5 is chance)', 'held-out rank correlation of pain with its prediction (0 is chance)', 'Filled: survives correction for the bands tested (q < 0.05)', 'the stimulation current alone'. ControlAnalysesCard.js uses a native <select> while the rest of the page uses MUI selects.",
+    "proposal": "Use painScoreLabel for the options ('Left Leg VAS'). Axis: 'how well it predicts pain in weeks it was not fitted on (0.5 = coin toss)'. Legend: 'filled = still stands after allowing for 22 bands tested'. Rename the card 'Checks against chance and against the current (run offline)'. Use the page's one select style. ControlAnalysesCard.test and BandDetector.test pin some reading strings; check them before renaming.",
+    "impact": "medium",
+    "breaks_jest_pin": true
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/CalibrationInEffectPanel.js",
+    "area": "layout",
+    "problem": "A card that only an analyst reads sits among the clinical content with a 24 px title, 'Calibration in effect: \u00b5V\u00b2 to device units'. Inside its fold, each of the two Plotly charts has a horizontal legend under the axis ('Left, kept (n)', '\u22121 MAD of the ratio (\u2026)', 'median over every survey and contact pair'), a separate caption line and prose using MAD, 'gated or flagged', 'typical miss \u00d71.05', 'device-\u00b5V\u00b2'.",
+    "proposal": "Move it into the bottom group of folded technical sections with the research checks, titled 'How band power is converted to the device's units'. Keep the two constants visible when it is open: pageLayout.test pins '1 \u00b5V\u00b2 = 345.59 LSB', '1 device-\u00b5V\u00b2 = 72.16 LSB' and 'composed' once on view. If it must be open on load, keep it as-is and only restyle. Replace the Plotly legends with direct labels at the line ends ('in use: 345.59', '\u00b11 typical spread'), and replace 'MAD' with 'typical spread (median absolute deviation)' on first use.",
+    "impact": "low",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/BiomarkerHeatmapGrids.js",
+    "area": "density",
+    "problem": "Below the grids there are three layers of notes: four caption bullet groups in three inks (#8a5a00 brown, default, brown again) above the correlation map, a 'How to read this' drawer of about ten 17 px bullets, and the RCS08 search fold of seven bold 17 px paragraphs full of statistics (q, 5,544 rows, '4.1% of cells', 'Neural-first pre-report'). The status line already carries the answer. The rest repeats caveats at high visual weight.",
+    "proposal": "Keep one line of caveat above the maps, in the page's single secondary grey, for example 'Reports read from the device's 30 s snapshot: 358 of 451 (79%)'. Put tier and stability explanations into the colour key and the hover. Open the search fold with one plain takeaway sentence ('Across 252 ways of pairing reports, no band on L 1\u207b3\u207a rose with pain once all 22 bands were allowed for'), then the detail at 14 px regular weight. The referent test pins the seven lines' text and bold weight, and the drawer's first note (from the server) is pinned to mention the circled cell and nine lengths.",
+    "impact": "medium",
+    "breaks_jest_pin": true
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/BiomarkerHeatmapGrids.js",
+    "area": "component",
+    "problem": "The pair thumbnails (ContactStrip) are a good small-multiples idea, but at 92\u00d746 px with no colour key they cannot be compared. The label is 11 px. The thumbnails use a -1 to +1 scale, which makes them near-white. The selected one is marked only by a 2.5 px black border and a faint shadow. A refused pair gets a pink 'Refused today' tag.",
+    "proposal": "Draw the thumbnails on the same scale as the big maps and the new key. Enlarge them to about 120\u00d760 px in one row with the label above in 12 px. Mark the selected one with a 2 px dark underline, and grey out refused pairs (keeping the cross glyph and 'Refused today', which the red-bullet pin covers) so the allowed pairs stand out.",
+    "impact": "low",
+    "breaks_jest_pin": false
+   }
+  ],
+  "jargon": [
+   {
+    "file": "Client/src/views/Reports/Biomarkers/gridReadouts.js",
+    "text": "q = 0.0022 / corrected q",
+    "plain": "p after allowing for having tested all 22 bands"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/BiomarkerHeatmapGrids.js",
+    "text": "AUC",
+    "plain": "how well band power tells high-pain reports from low-pain ones (0.5 = coin toss, 1 = perfect)"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/BiomarkerHeatmapGrids.js",
+    "text": "Pearson r \u2026 (uncorrected)",
+    "plain": "correlation for this one square, not allowing for the 22 bands tested"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/BiomarkerHeatmapGrids.js",
+    "text": "Mann-Whitney; high n=\u2026, low n=\u2026",
+    "plain": "a rank test comparing high-pain and low-pain reports; N high-pain and M low-pain reports"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/BiomarkerHeatmapGrids.js",
+    "text": "Band power (LSB)",
+    "plain": "band power in the device's own units (LSB)"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/BiomarkerHeatmapGrids.js",
+    "text": "22-band correction",
+    "plain": "the adjustment for having tested 22 frequency bands at once"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/gridReadouts.js",
+    "text": "established / supported / not resolved",
+    "plain": "state the rule in words once: 'clearly above zero and better than chance across lengths' / 'interval above zero' / 'cannot tell'"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/gridReadouts.js",
+    "text": "an averaging window \u2026 an onset hold",
+    "plain": "a length the device can average over / a level the device can only hold for up to 30 s before switching"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/MatchWindowBand.js",
+    "text": "Report-first matching / Neural-first matching / Neural-first, pre-report",
+    "plain": "each report picks its nearest recordings / each recording picks its nearest report / each recording picks the next report after it"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/MatchWindowBand.js",
+    "text": "Low \u2264 33\u1d57\u02b0 pct / High \u2265 67\u1d57\u02b0 pct; 'Tertile (low/high, drop middle)'",
+    "plain": "lowest third of ratings / highest third; the middle third is left out"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/index.js",
+    "text": "Window reuse / Allow reuse",
+    "plain": "let one stretch of recording answer more than one report"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/index.js",
+    "text": "TD around each rating: 30 s (the nearest 10 of the 3 s pieces)",
+    "plain": "how many seconds of recording around each report are averaged"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/index.js",
+    "text": "neural sample",
+    "plain": "a stretch of brain recording"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/index.js",
+    "text": "Running the all-band scan on TD and the device's band power",
+    "plain": "checking every frequency band against pain"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/index.js",
+    "text": "Sliding correlation over time, from the all-band scan",
+    "plain": "how the band-to-pain relationship changes over the months"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/BinarizationPreview.js",
+    "text": "montage / patient event / mid-range (excluded)",
+    "plain": "the clinic's contact-survey recordings / snapshots the patient triggered from her remote / middle ratings left out of the high/low comparison"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/CalibrationInEffectPanel.js",
+    "text": "1 MAD of the ratio; ratio outlier (5 MAD); gated or flagged",
+    "plain": "the typical spread of the ratio; left out because its ratio sat far from the rest; left out as too short or as an outlier"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/CalibrationInEffectPanel.js",
+    "text": "transform constant / bridge constant / device-\u00b5V\u00b2",
+    "plain": "the number that turns recorded voltage power into device units / the number (worked out from two others, not measured) that turns the device's own snapshot into device units / power in the snapshot's own units"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/CalibrationInEffectPanel.js",
+    "text": "typical miss \u00d71.05",
+    "plain": "median fold error 1.05 (a typical block is off by a factor of 1.05)"
+   },
+   {
+    "file": "Client/src/views/Reports/ControlAnalyses/figures.js",
+    "text": "out-of-sample score (0.5 is chance)",
+    "plain": "how well it predicts pain in weeks it was not fitted on (0.5 = coin toss)"
+   },
+   {
+    "file": "Client/src/views/Reports/ControlAnalyses/figures.js",
+    "text": "held-out rank correlation \u2026 shuffled-data 95th",
+    "plain": "agreement between predicted and actual pain in unseen weeks; the level reached 1 time in 20 by chance alone"
+   },
+   {
+    "file": "Client/src/views/Reports/ControlAnalyses/figures.js",
+    "text": "stretch",
+    "plain": "a period with the same stimulation setting, named by its dates"
+   },
+   {
+    "file": "Client/src/views/Reports/ControlAnalyses/ControlAnalysesCard.js",
+    "text": "Control analyses",
+    "plain": "checks against chance and against the stimulation current, run offline"
+   }
+  ]
+ },
+ {
+  "key": "closed_loop",
+  "summary": "The Closed-Loop page has one clear idea: a decision card with one status line and short red and yellow bullets. That idea is good, but it is lost in what surrounds it. The page runs through about ten stacked cards. Each has its own heading style (a question, a noun phrase, or an internal code name such as \"CL-DBS simulations\"), its own border (solid 2 px, dashed 2 px or none) and its own greys (#1A1A1A, #2A2A2A, #3A3A3A, #4A4A4A, #5E5E5E, #6A6A6A). No visual hierarchy tells a clinician which card to read first. The evidence cards and the simulation card still talk in the analyst's vocabulary: E1/E2/E3, \"control law\", \"edge\", \"LRT\", \"era\", \"CI\", \"M0 to M3\", \"LSB\", \"capture range\", \"cluster\". Several warnings are all-capital strings. Six places print text in the Okabe-Ito fill inks (#D55E00 at 3.9:1, #009E73 at 3.4:1), which breaks the 4.5:1 rule the page's own palette file says it follows. The legibility test does not catch this because it checks only grey hex codes. The Device-units and ROC analyst panels still carry leftovers from before decisions 202, 204 and 218: \"oriented log-power\" in a comment and \"frozen PSD\u2192LSB model\" as a label that can still appear on screen. The changes that matter most: one type scale and one grey; one card style with no heavy frames; headings written as plain questions; E1/E2/E3 renamed to words; the fill inks kept off text; the simulation made a folded \"what if\" card; and the capitalised warnings rewritten as plain sentences.",
+  "findings": [
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/EvidenceTrianglePanel.js",
+    "area": "colour",
+    "problem": "The sign-comparison table prints \"OPPOSITE\" in PAL.fail (#D55E00, 3.9:1 on white) and \"AS NEEDED\" in PAL.pass (#009E73, 3.4:1), both at 11 px bold. The observed-sign cell also uses PAL.fail. This breaks the 4.5:1 rule, and palette.js itself says these inks are for fills only. The same misuse appears in EraRefitPanel.js (verdict text in PAL.fail/PAL.pass, and figure annotations in PAL.fail), DeploymentRocPanel.js line ~444, LsbPowerPanel.js line ~362 and its Plotly annotation text in PAL.pass. BandStabilityPanel.js, DeploySignoffCard.js line 49 and DeviceRuleLedger.js line 214 use PAL.neutral (#6C757D, about 4.7:1), which passes only just.",
+    "proposal": "Use PAL.failText (#A84300) and PAL.passText (#00755A) for every word, including SVG text and Plotly annotation fonts. Keep #D55E00 and #009E73 for marks and fills only. Extend legibility.test.js to reject `color: PAL.fail`, `color: PAL.pass`, `color: PAL.warn` and `font: {..., color: PAL.fail/pass}`, so the rule is enforced in code and not left to a comment.",
+    "impact": "high",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/index.js",
+    "area": "layout",
+    "problem": "The page is one long column of about ten cards, each with its own frame. DecisionCard has a 2 px solid border in the verdict colour. ClosedLoopSimulationPanel has a 2 px dashed grey border. The others use the default MUI shadow. Headings vary between h6 at 15 px, h6 at the theme size (BandStabilityPanel) and h5 at 19 px, and they mix questions (\"Does this band mean the same thing...?\"), nouns (\"Device rules\") and codes (\"CL-DBS simulations\"). Spacing is dense: p=1.5 to 2 inside cards and spacing=2 between them. Nothing marks the decision as primary and the rest as supporting.",
+    "proposal": "Use one card style: no shadow, a 1 px hairline (#E3E3E3) or no border, and 24 px padding. Keep one accent: a 4 px left rule in the verdict colour on the decision card only. Set a two-level type scale (card title 17 px/600 as a plain question, body 13 px, secondary 12 px) and allow only two text colours, #1A1A1A and #5E5E5E. Limit the content column to about 880 px so lines stay under about 90 characters. Group the page under three quiet section labels: \"Decision\" (the decision card), \"Why\" (device rules, evidence, stability) and \"Background for the analyst\" (current and band power, simulations, the three analyst panels, all folded). Note: the jump-link order test (DeploymentJumpLinks.order.test.js) will need its list updated if the order or labels change.",
+    "impact": "high",
+    "breaks_jest_pin": true
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/EvidenceTrianglePanel.js",
+    "area": "wording",
+    "problem": "The evidence card is built on codes and analyst terms: \"E1 +\", \"edge\", \"control law\", \"SIGN \u2212 (INTERVAL SPANS ZERO)\" in capitals, \"SCREENING STATISTIC, NOT A MEASUREMENT\", \"Partial correlation\", \"Bootstrap probability ... replications\", \"n observations in k clusters\", \"LFP power per mA\". A clinician has to learn E1/E2/E3 before the card makes sense. The coherence table's headings (\"SIGN THE CONTROL LAW NEEDS\") and its two long paragraphs repeat what the table already shows.",
+    "proposal": "Name the three links in words everywhere, both in the SVG labels and the rows: \"Current \u2192 band power\", \"Band power \u2192 pain\", \"Current \u2192 pain\". Replace the capitalised sign strings with sentence case, for example \"Falls as current rises \u00b7 range crosses zero, so not yet certain\". Rename \"control law\" to \"what the device's automatic adjustment assumes\". Show the n and cluster line, the partial correlation and the bootstrap sentence only inside the \"How this was estimated\" fold. Replace the 4-column coherence table and its paragraphs with one sentence per question, each carrying a glyph. Pins affected: DecisionCard/panels.payload tests pin \"SIGNS AGREE\"/\"SIGNS DISAGREE\", /E1 and E2 have the opposite sign to the one the selected control law/, /Composing the amplitude-to-power and power-to-pain edges reproduces/ and /they are in conflict with what the device would do with them/. EvidenceTriangle.*.test.js pin the caveat and adjusted-line text.",
+    "impact": "high",
+    "breaks_jest_pin": true
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/EvidenceTrianglePanel.js",
+    "area": "figure",
+    "problem": "Two figures sit side by side and encode the same thing twice. The triangle SVG shows each link's sign and a certainty word. The three per-link axis strips show the estimate and interval. On narrow screens the triangle takes 5 of 12 columns and says less than the strips. The strip's units label sits at the top left in 11 px grey and the numeric readout below it is monospace, so each link has four text lines around one small plot.",
+    "proposal": "Tufte: keep the dot-and-interval strips as small multiples with zero aligned. Label each strip directly at its left: link name, then its sign in words. Put the value and interval as a direct label at the dot, not in a separate monospace line. Reduce the triangle to a small 120 px key icon, or drop it, since the sentence \"current changes power, power relates to pain, so current should change pain\" says the same in one line. Keep hollow and filled dots for uncertain and certain, and state that once in a one-line key.",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/ClosedLoopSimulationPanel.js",
+    "area": "wording",
+    "problem": "The simulation card is titled \"CL-DBS simulations\" and uses internal model codes throughout: \"M0 \u00b7 replay\", \"M1 \u00b7 loop closed, straight-line response\", \"M2 peaked\", \"M3 interval ... resampled runs\", \"timing regimes\", \"settling time \u03c4\", \"onset n step(s), blanking\", \"device-clock cells without a piece\", \"the capture range\". Captions A, B and C are paragraphs of 50 to 80 words under each figure. The dashed 2 px border is the only sign that everything here is modelled. Since the card gates nothing, it takes too much space for how much it matters.",
+    "proposal": "Retitle it \"What the automatic adjustment would have done, simulated on this patient's recordings\". Rename the models in words: \"As recorded\", \"Simulated, straight-line response\", \"Simulated, peaked response\", \"Range across resampled data\". Put direct labels on the traces instead of listing colours in captions. Cut each caption to one sentence that states the finding (the headline() output already does this). Move everything under \"How this was modelled\" as it is. Replace the dashed frame with one plain \"Simulated, not measured. Decides nothing.\" tag next to the title. Fold the card by default. Pin: a test pins \"Closing the loop moves time at the upper amplitude limit from 26.5% to 23.8%\", so keep that sentence. The jump label \"CL-DBS simulations\" is in JUMPS and the order test.",
+    "impact": "medium",
+    "breaks_jest_pin": true
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/DeviceRuleLedger.js",
+    "area": "density",
+    "problem": "The always-visible counts strip lists seven outcome categories: violated, could not be evaluated, counted under another rule, advisory shortfalls, pinned values, advisory informational, satisfied. Each has its own glyph, and the strip sits above a paragraph-length summary. Inside the fold, bucket headings are capitalised strings with explanations such as \"satisfied, and shown because the recorded value is load-bearing\" and \"derived by subtraction ... not enumerated in the payload\" (the word \"payload\" means nothing to a clinician). Seven categories is too many to read at a glance.",
+    "proposal": "In the open, show three counts: \"Refuses (n)\", \"Could not check (n)\", \"Allowed (n)\". The violated rows stay open as they are now, in PAL.failText. Move deferred, advisory and pinned rows into the fold under one \"Notes, not blocking\" heading. Remove \"payload\", \"load-bearing\", \"predicate\" and \"derived by subtraction\" from visible text. Pins: tests pin /VIOLATED \u00b7 1/, /CANNOT BE EVALUATED \u00b7 4/, /DEFERRED TO ANOTHER RULE \u00b7 1/, /ADVISORY SHORTFALLS \u00b7 2/, /PINNED VALUES \u00b7 2/ and the two ADVISORY headings, so this needs coordinated pin updates. Keep the safety wording of refusals word for word.",
+    "impact": "medium",
+    "breaks_jest_pin": true
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/DecisionCard.js",
+    "area": "component",
+    "problem": "The decision card is the right idea, but three things weaken it. (1) The 2 px border in the verdict colour and the 30 px icon compete with the red bullets. (2) The jump-link nav sits inside the card's headline row, so five blue links sit beside the verdict and read as if they were part of it. (3) The status-line subtitle (\"This record authorises nothing.\") and the band line (\"L_1_3... at 24.5 Hz, left side, pain score NRS\") are grey 12.5 to 13 px lines that are easy to skim past.",
+    "proposal": "Move the jump links out of the card into a slim sticky page-level table of contents: a right rail at \u22651280 px, a horizontal row under the page title at narrower widths. Replace the heavy border with a 4 px left rule. Keep the headline at 20 px/600 in the verdict ink, and put the band identity on its own line above the headline as an eyebrow: \"L 1-3+ \u00b7 24.5 Hz \u00b7 pain score NRS\". Keep red and yellow bullets exactly as worded, since they carry the safety text. Pins: \"Sign and print\" and \"Export JSON\" are pinned and can stay. The \"Unchecked: single neurostimulator implanted\" text is pinned. The JUMPS export is tested for order.",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/LsbPowerPanel.js",
+    "area": "wording",
+    "problem": "The analyst panel still shows labels for things that were deleted or ruled out. TIER_LABEL can print \"from frozen PSD\u2192LSB model (band-specific)\", but that model was deleted in decision 218. The comment next to it still mentions \"oriented log-power\" (log power is ruled out by decision 202). Its headings are capitalised warnings (\"ESTIMATED: WHERE THE CUT-POINT WOULD SIT (not a value to program)\", \"NO DEPLOYABLE LSB THRESHOLD\"). The axis reads \"Device LFP power (LSB)\". EraRefitPanel.js has the same problem, with \"band\u00d7era LRT p=\", \"Per-era CIs\", \"stim era\" and \"Portable across stim states\".",
+    "proposal": "Replace the frozen-model tier labels with what the server now uses, or remove them if the tier cannot occur. Write \"Band power in the device's own units\" instead of \"Device LFP power (LSB)\". Write \"Where the switching point would sit, estimated, not a value to enter\" in sentence case. In EraRefitPanel, replace era with \"time block (calendar month)\" or \"stimulation state (off / low / high)\", whichever the grouping actually is. Replace LRT with \"test of whether the link differs between stimulation states\" and CI with \"95% range\". Keep the \"not a value to program\" meaning, since it is safety-relevant (decision 302).",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/index.js",
+    "area": "navigation",
+    "problem": "The page header carries five controls with equal weight: the pain-score dropdown, a red-outlined clinic-sheets toggle, \"Load BandCandidate JSON\", \"Clear\", and a subtitle. \"Load BandCandidate JSON\" is a developer action placed next to the clinical choice. The red outline on the clinic-sheet toggle uses the page's refusal colour for a harmless setting, which weakens red as a safety signal. The \"Evidence for the analyst\" card is a full card holding only a button, and its label reads \"Show the three analyst panels\".",
+    "proposal": "In the header, keep the title as a plain question (\"Can this setting be programmed, and what do I enter?\") with two controls: pain score, and clinic-sheet ratings as a plain on/off switch in the neutral accent. Keep red only for device refusals. Move \"Load a saved band file\" and \"Clear\" into a small overflow menu. Replace the analyst button card with the page's standard Fold row, labelled \"Background for the analyst: switching point, device units, month-by-month check\". Decision 258(b)'s red outline is a style choice and can change under the brief.",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/palette.js",
+    "area": "colour",
+    "problem": "The palette is sound: Okabe-Ito for colour-blind safety, separate text inks for pass, fail and warn, and one hue in three shades for ordered states. But components ignore it. About 14 raw greys are hard-coded across the folder (#1A1A1A, #2A2A2A, #3A3A3A, #4A4A4A, #5A5A5A, #5E5E5E, #6A6A6A, #6E6E6E, and others), plus one-off hexes (#8a5a00 for the adjusted-reading line, #B17500, #FFF7E6). The simulation panel defines its own FONT family (Helvetica) and fills, which differ from the other Plotly panels.",
+    "proposal": "Add text tokens to PAL (ink #1A1A1A, inkMuted #5E5E5E, rule #E3E3E3, surface #FFFFFF, surfaceMuted #F6F7F8) and replace every raw hex in the folder with a token. Collapse the six body greys to two. Replace #8a5a00 with PAL.warnText. Add one shared PLOTLY_BASE (font family inherited from the page, 11 to 12 px, axis line #5E5E5E, no gridlines, direct labels, no legend box) that every figure spreads, so all figures look like one set. Add a jest pin rejecting raw hex values outside palette.js.",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/BandSweepGridPanel.js",
+    "area": "figure",
+    "problem": "The band-choice grid is the first card on the page and the way a band gets chosen. Its cells use 11 to 11.5 px monospace numbers, and unselected contact names sit in #6A6A6A. The legend is a separate line (\"lo ... hi (mid = no relationship)\"), and a cell's tooltip reads \"AUC = 0.xxx\" or \"no AUC for this band\". A clinician meets \"AUC\" before any explanation of it.",
+    "proposal": "Label the colour scale directly at its ends (\"pain lower when power high\" / \"pain higher when power high\", with 0.5 marked \"no relationship\"). Write the tooltip as \"How well this band separates high-pain from low-pain reports: 0.62 (0.5 = coin flip)\". Put the six sensing-pair tabs in a segmented control, with the two the device allows today visually first and the others greyed with the reason. Keep the diverging scale colour-blind-safe (blue\u2013orange, not red\u2013green).",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/ThreeSourceResponsePanel.js",
+    "area": "wording",
+    "problem": "Source labels read \"Time domain derived LSB\", \"PSD derived LSB\" and \"Direct LSB recording\". The hover reads \"pooled slope %{y:.2f} device units per mA ... p = \". The house rules allow TD and PSD, but LSB and \"slope\" are unexplained for a clinician, and the card title (\"Current and band power\") does not say what it answers.",
+    "proposal": "Title the card as a question: \"How much does band power change per milliamp? Measured three ways\". Label sources \"From the recording (TD)\", \"From the device's 30-second snapshot (PSD)\" and \"The device's own band-power reading\". Use \"change in power per milliamp\" for slope, and give \"device units\" a first-use definition on the card (\"device units, called LSB\").",
+    "impact": "low",
+    "breaks_jest_pin": false
+   }
+  ],
+  "jargon": [
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/EvidenceTrianglePanel.js",
+    "text": "E1 / E2 / E3, edge",
+    "plain": "current \u2192 band power; band power \u2192 pain; current \u2192 pain (a 'link')"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/EvidenceTrianglePanel.js",
+    "text": "control law / the sign the control law needs",
+    "plain": "what the device's automatic adjustment assumes (power falls as current rises)"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/EvidenceTrianglePanel.js",
+    "text": "INTERVAL EXCLUDES ZERO / INTERVAL SPANS ZERO",
+    "plain": "the 95% range is wholly on one side of zero / the range crosses zero, so the direction is not yet certain"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/EvidenceTrianglePanel.js",
+    "text": "SCREENING STATISTIC, NOT A MEASUREMENT",
+    "plain": "read off the whole history, where current and time move together; not a measured effect of current"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/EvidenceTrianglePanel.js",
+    "text": "n observations in k clusters; Bootstrap probability ... replications; Partial correlation",
+    "plain": "n readings from k separate groups (e.g. settings periods); how often the pattern held when the data were resampled; correlation after removing the current"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/EvidenceTrianglePanel.js",
+    "text": "LFP power per mA; pain points per unit of LFP power",
+    "plain": "change in band power per milliamp; change in pain per unit of band power"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/ClosedLoopSimulationPanel.js",
+    "text": "CL-DBS simulations; M0 / M1 / M2 / M3",
+    "plain": "simulated automatic adjustment; as recorded / simulated straight-line response / simulated peaked response / range across resampled data"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/ClosedLoopSimulationPanel.js",
+    "text": "timing regimes; settling time \u03c4; onset steps, blanking; device-clock cells without a piece",
+    "plain": "two sets of timing settings; how long power takes to settle after a current change; the wait before switching and the pause after it; time slots with no recording"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/ClosedLoopSimulationPanel.js",
+    "text": "the capture range",
+    "plain": "the low and high currents at which band power was measured"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/DeviceRuleLedger.js",
+    "text": "payload; load-bearing; predicate; derived by subtraction; Pinned values; Deferred to another rule",
+    "plain": "the server's answer; matters to how the rest reads; a check the device documents state; counted as the remainder; values shown because they matter; the same finding, counted once under another rule"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/LsbPowerPanel.js",
+    "text": "LSB; Device LFP power (LSB); NO DEPLOYABLE LSB THRESHOLD",
+    "plain": "device units; band power in the device's own units; no switching point in device units could be placed"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/LsbPowerPanel.js",
+    "text": "from frozen PSD\u2192LSB model (band-specific / channel/freq / channel-pooled)",
+    "plain": "remove, since the model was deleted in decision 218; otherwise say which calibration was used, in words"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/EraRefitPanel.js",
+    "text": "stim era; band\u00d7era LRT; Per-era CIs; Portable across stim states",
+    "plain": "stimulation state (off / low / high current); a test of whether the band-pain link differs between states; the 95% range for each state; the link holds at every stimulation state"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/DeploymentRocPanel.js",
+    "text": "ROC; in-sample AUC; held-out AUC; cut-point; Oriented band power (standardized, cut-point scale); Forecasting ... causal, deployable",
+    "plain": "how well band power separates high-pain from low-pain reports (0.5 = coin flip); on the same data / on later data it was not fitted to; switching point; band power, rescaled; predicting the next rating from earlier recordings"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/DeploySignoffCard.js",
+    "text": "Deployment AUC \u2014 in-sample (95% clustered-bootstrap CI); gates; PRO metric / binarization; Power (vs AUC 0.5)",
+    "plain": "how well the band separates high and low pain, with a 95% range that allows for repeated reports; checks that can refuse; pain score / how reports were split into high and low; chance of detecting a real effect"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/ThreeSourceResponsePanel.js",
+    "text": "pooled slope; Time domain derived LSB; PSD derived LSB",
+    "plain": "change in band power per milliamp, combined across visits; from the recording (TD), in device units; from the device's 30-second snapshot (PSD), in device units"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/WhatWouldChangeThis.js",
+    "text": "anti-aligned with the control law; titration session; duty-cycle panel",
+    "plain": "runs opposite to what the automatic adjustment assumes; a clinic visit stepping current up and down; the share of time spent at each current"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/index.js",
+    "text": "Load BandCandidate JSON; Deployability ... centre frequency",
+    "plain": "Load a saved band file; whether this can be programmed is judged for one pair of contacts at one frequency"
+   }
+  ]
+ },
+ {
+  "key": "stim_optimizer",
+  "summary": "The Stim Optimizer page gives honest answers, and the 2026-09-26 design review cut a lot, but it still asks too much of the reader. It answers two questions: should today's setting change, and can closed loop start. Those answers are spread over five headlines on five separate cards. The closed-loop question is split between the first card (sensing pairs) and the last (the four checks), with the open-loop decision in between. Most of the reading effort goes on ALL-CAPS 11 px column headers, tables of seven to nine columns, and about a dozen folds. On top of that, the page uses at least five slightly different ambers, reds and greens for three meanings. The status line's yellow key says \"not evaluated\", but it also marks things that were evaluated (a coverage shortfall, a pain map that moves over time). The changes that would matter most are these:\n- merge the page into three sections (today's setting, closed loop, next visit), each opened by one answer;\n- replace the wide tables with short aligned comparisons and plain sentences;\n- draw the current maps as small multiples with one shared key and labels on the plot instead of a 140-word legend;\n- keep the safe current ceiling in view at the top;\n- reduce the colours to one set of tokens with a single meaning each.\nSeveral of these changes touch jest tests that pin page text or card order; each finding says where.",
+  "findings": [
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/index.js",
+    "area": "layout",
+    "problem": "The page answers two questions (change today's setting? can closed loop start?) but spreads them over five headlines that partly repeat each other: the status line ('Keep today's setting on both sides; closed loop cannot start.'), the readiness headline ('0 of 50 contact-and-rate combinations usable for closed loop'), the decision headline ('No side has a setting proven better than today's'), and the checks card ('Closed loop: may it start on the frozen setting?' answered 'No: ...'). The closed-loop question opens the page (SensingEvidenceTable) and closes it (TwoStagePlanCard), with the open-loop decision and current map in between, so the reader switches topic twice.",
+    "proposal": "Group the page into three sections under one summary. (1) 'Today's setting': DecisionStrip, then CurrentMapCard. (2) 'Closed loop': the allowed sensing pairs and the four checks in one section, with the ruled-out settings folded. (3) 'Next visit': TitrationSessionCard with the home schedule. The status line becomes a two-column answer block, 'Change today's setting?' and 'Closed loop?', each with its own bullets underneath. Replace the stack of shadowed MUI Cards with a single white surface, hairline dividers between sections, 32-40 px vertical rhythm and a content max-width of about 1100 px.",
+    "impact": "high",
+    "breaks_jest_pin": true
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/StatusLine.js",
+    "area": "colour",
+    "problem": "The key under the bullets says '\u25cf blocks closed loop' and '\u25b2 not evaluated'. The yellow bullets 'Next visit: 4 pairs short' and 'Pain map moves over time' were evaluated, though: they are findings that call for caution. So the key misdescribes them. The yellow ink #956400 and fill #FBF3DB also differ from the page's other amber, PAL.warnText #8A6100.",
+    "proposal": "Rename the yellow meaning to 'needs more data or caution' (screen-reader word 'caution'). Keep a third, neutral outlined style for anything truly not assessed ('Rate check not assessed'), matching the three-state rule in the figure conventions. Take the red and yellow values from one shared token file (see the colour finding) rather than a local KIND map.",
+    "impact": "high",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/SensingEvidenceTable.js",
+    "area": "layout",
+    "problem": "The readiness grid has 9 columns under long ALL-CAPS 11 px headers: 'FALLS WITH CURRENT (CLINIC-VISIT DIFFERENCES REMOVED)', 'BOTH: THE BANDS THAT QUALIFY', 'POWER GAP (SCATTER UNITS)'. Only 2 rows are open (one allowed pair per lead), so a table is the wrong form for them. The safe ceiling appears only inside the fold 'What \u201cusable\u201d requires, and why the current limit is flat', which also says the module's 5.0 mA hard limit 'is not the safe ceiling for programming'. That is a confusing way to meet a safety number.",
+    "proposal": "Render each allowed pair as one plain sentence block. Example: 'L 1\u207b3\u207a at 55 Hz (left stimulation): 0 of 22 bands fall as current rises and rise with pain, so it cannot drive closed loop. Currents tested 0.0\u20134.8 mA.' Put the tick or cross beside it, and 'Why not' underneath. Keep the 9-column grid only inside the fold for the other 19 combinations, with sentence-case 12 px headers and the long qualifiers moved to a footnote. Print the safe ceiling ('Safe ceiling: 4.5 mA each side, set by the PI') in the open, once, in the page summary (see the next finding).",
+    "impact": "high",
+    "breaks_jest_pin": true
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/index.js",
+    "area": "wording",
+    "problem": "The safe current ceiling, a protected safety fact, appears only in the titration card's header strip ('ceiling L 4.5 mA \u00b7 R 4.5 mA'), in a fold of the readiness card, and in held-side notes. A clinician looking at the decision strip or the current map sees no ceiling beside the currents shown there.",
+    "proposal": "Add one fixed line to the page summary, under the status sentence: 'Safe current ceiling: 4.5 mA left, 4.5 mA right (stated by the PI). No current above it is offered on this page.' Read it from cl.safe_ceiling_mA_by_side or titration_plan.sides[*].ceiling_mA. Draw the ceiling as a thin dashed line on the current-map squares, labelled on the plot ('ceiling 4.5 mA'), so cells above it read as out of bounds.",
+    "impact": "high",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/CurrentMapCard.js",
+    "area": "figure",
+    "problem": "Each fitted rate draws a 400x400 Plotly heat map with its own colour bar. The REDCap and clinic streams stack many of these vertically. Every square centres its colour scale on its own reference (absoluteSurface), so the same blue means different amounts on different squares. The 140-word legend paragraph ('Each square below is one stimulation rate: ...') has to be read before any square can be. The 12 px checks sit to the right, so the number that answers 'can a current be recommended' is small text beside a large picture.",
+    "proposal": "Use small multiples: one row per stream, about 240 px squares in a CSS grid, one shared colour bar for the row, and a shared colour range per stream if the data allow (if not, print the range on each square). Label directly on the plot: an annotation 'today' next to the \u00d7, 'best' next to the star, a dotted ceiling line. Cut the legend to one line: 'Colour: predicted pain; blue lower than today, orange higher. Dots: settings already rated (larger = more ratings).' Put each square's three checks under it as three one-line rows (tick or cross plus a short phrase), so the answer sits under its picture. Keep the phrase 'blue is better than today and orange worse', which the design-review test pins.",
+    "impact": "high",
+    "breaks_jest_pin": true
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/CurrentMapCard.js",
+    "area": "wording",
+    "problem": "CURRENT_PAIN_CAVEAT is an 85-word paragraph in #8a5a00, an amber not in the palette, placed before the figure. It contains 'out of sample', 'area under the curve 0.41 ... against 0.57 for shuffled data' and 'folds separated in time', none of which a clinician would follow.",
+    "proposal": "Make the open part one sentence in the shared caution ink: 'More current and lower pain go together in this record, but that pattern does not hold up out of sample: the current alone predicts pain no better than chance. Read the squares as where currents were tried, not evidence that raising the current lowers this patient's pain.' Fold the numbers underneath: area under the curve 0.41 left, 0.49 both sides, against 0.57 for shuffled data, 611 ratings, with a plain gloss ('0.5 would be a coin toss'). The jest pins need 0.41, 0.57, '611 ratings', 'does not hold up out of sample' and 'not evidence that raising the current lowers this patient' in the rendered text; the numbers can stay in the DOM inside the fold (Fold keeps children mounted), otherwise update the pin.",
+    "impact": "medium",
+    "breaks_jest_pin": true
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/DecisionStrip.js",
+    "area": "layout",
+    "problem": "Seven columns (side | programmed now | \u2192 | search prefers (usable in closed loop) | change | gain \u00b1 1 SD | verdict), with rate, pulse width and current packed into one mono string ('55 Hz \u00b7 100 \u00b5s \u00b7 3.0 mA') and the three differences stacked in the 'change' column. The reader has to line up three stacked items across columns by eye. 'Gain over the setting in force \u00b1 1 SD' and 'pts' are unexplained.",
+    "proposal": "For each side, draw a small comparison with one row per parameter (rate, pulse width, current) and three columns: Today | Suggested | Difference. Put a difference in the accent ink only when it is not zero; a zero reads 'same'. Put the gain as a sentence plus the bar under it: 'Predicted pain change: 0.00 points (uncertainty \u00b1 0.85). Not proven better.' Label the bar's ends 'worse' and 'better' instead of \u22122 and +2 without a unit.",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/GainBar.js",
+    "area": "figure",
+    "problem": "The \u00b11 SD band is filled with PAL.neutralFill #6C757D12 and outlined with #6C757D44. Both are nearly invisible on white, well under the 3:1 contrast that graphics need, yet that band is the whole point of the drawing (whether the interval crosses 0). The axis ticks \u22122 / 0 / +2 carry no unit or direction.",
+    "proposal": "Draw the band as a 2 px line (or a 6 px-tall bar) in a mid grey such as #8C8C8C, which is at least 3:1 on white, and the point in the accent blue. Keep a zero line. Replace the numeric ends with direction words, 'worse \u2190' and '\u2192 better', with the unit 'pain points' once under the axis. Per the figure convention, keep this the only drawing of the gain.",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/typeScale.js",
+    "area": "typography",
+    "problem": "HEAD is 11 px, bold, uppercase, with 0.5 letter-spacing, and it is used for every column header, every titration row label and every folded definition list. All-caps at the minimum size is the slowest text on the page. The body is 13 px 'caption' variant throughout, so headings, labels and prose differ little.",
+    "proposal": "Change HEAD to sentence case, 12 px, weight 600, colour #5E5E5E, no letter-spacing. Raise body to 14 px with 1.5 line-height and cap prose at about 72ch. Keep 17 px for section titles and 19-20 px for the page answer. That leaves four sizes (12 / 14 / 17 / 20), all at or above 11 px. Any test that checks header text with uppercase casing must use case-insensitive matching.",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/typeScale.js",
+    "area": "colour",
+    "problem": "The page's own files use at least 11 hand-written inks for five meanings: #8a5a00 (caveat), PAL.warnText #8A6100, #956400 (status yellow), #9F2F2D (status red), #A84300 (failText), #1B7A3D (check tick and schedule), PAL.passText or #00755A, PAL.pass #009E73, #1A1A1A, #3E3E3E, #5E5E5E, #6E6E6E. The \u2717 in CurrentMapCard CheckRow is drawn in amber, while the status line uses red for a blocking check.",
+    "proposal": "Define one token set in typeScale.js (or a new stimTheme.js) and import it everywhere on this page: ink #1A1A1A; secondary #5E5E5E; refusal/safety #A84300 (vermillion-dark); caution #8A6100; positive #00755A; data accent #0072B2; rules/hairlines #E0E0E0. One meaning per colour: refusal = blocks or device refuses; caution = needs more data; positive = passes. Always add a glyph so colour is never the only signal. Replace #1B7A3D with the positive token, and draw the CheckRow \u2717 in the refusal ink when the check blocks.",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/TitrationSessionCard.js",
+    "area": "density",
+    "problem": "The card has an 8-field ALL-CAPS header strip, two side columns of about 8 label/value rows each, an exploratory ladder in a 2 px blue-bordered box inside the card, and at least seven folds ('Why this design' twice, 'During this ladder: the full list', the clinic sheet, 'Where this protocol ... come from', the home schedule and its own fold). The margin sentence ('No run in the record holds the 8 settled settings the 20 s post-ramp margin needs ...') is written for the analyst.",
+    "proposal": "Lead with what the clinician does at the visit: one line (date, rate, pulse widths, ceiling, about N minutes) and the 'Make Google sheet' button. Then show the two ladders as two compact step diagrams: a small line of current against step number, with the ceiling as a dashed line and the held other side as a label. Drop the box-in-box: show the exploratory ladder as a third section under a hairline divider. Combine the 'Why this design' folds into one per card. Rewrite the margin line as 'After this session we will have enough steady readings to test whether dropping the first 20 s after each change matters.'",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/TitrationSessionCard.js",
+    "area": "figure",
+    "problem": "In BandStrip, flagged centres (near a folded multiple of the stimulation rate) differ from clear ones only in grey shade (#6E6E6E against #1A1A1A). That is a colour-only encoding with little separation, and the reason is only in a native title tooltip.",
+    "proposal": "Draw the 22 centres as ticks on a small 8-30 Hz axis. Mark flagged centres with a hollow ring and a direct label at the folded landing ('rate \u00d74 \u2192 30 Hz'), and keep every number in ink. That keeps 'analysed either way' visible and does not rely on a hover.",
+    "impact": "low",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/CurrentMapCard.js",
+    "area": "component",
+    "problem": "The 'Pool pulse widths' and 'Expand descriptions' buttons use a hard black drop shadow ('0 2px 0 #1A1A1A', borderWidth 1.5) in a style used nowhere else, and they sit at the bottom of a long card. So the reader meets the separate-fits view and its descriptions before finding the controls that change them.",
+    "proposal": "Move both controls into the card header, right-aligned, as a two-option segmented control ('Pulse widths: separate | pooled') and a text-style 'Show explanations' link. Use the same flat outlined button style as 'Make Google sheet' and keep aria-pressed and aria-expanded.",
+    "impact": "low",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/index.js",
+    "area": "density",
+    "problem": "The evidence-base footer is a single run-on sentence in 12 px grey: 'Evidence base: N stretches of unchanged settings \u00b7 M pain reports used \u00b7 date \u2192 date \u00b7 wash-in 1 min \u00b7 left currents delivered ... A stretch is one continuous exposure...'.",
+    "proposal": "Draw it as a quiet key/value row: Record | Pain reports | Dates | Left currents tried | Right currents tried, with the definition of a stretch in a tooltip or one short line under it. The pageOrder test pins the prefix /^Evidence base: \\d+ stretches of unchanged settings \u00b7 \\d+ pain reports used/, so either keep that text as the row's accessible label or update the pin.",
+    "impact": "low",
+    "breaks_jest_pin": true
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/CurrentMapScheduleCard.js",
+    "area": "wording",
+    "problem": "The in-force line joins the server's reason with a literal ' -- ' (`${inForce.why}` preceded by ' -- '), where the rest of the page converts to an em dash. The schedule table's 'target reports' and 'safe' columns carry no unit and no explanation.",
+    "proposal": "Use ' \u2014 ' as the other cards do. Rename the columns 'ratings to collect' and 'under the ceiling?', with tick and cross glyphs in the shared tokens.",
+    "impact": "low",
+    "breaks_jest_pin": false
+   }
+  ],
+  "jargon": [
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/TwoStagePlanCard.js",
+    "text": "Closed loop: may it start on the frozen setting?",
+    "plain": "Can closed loop start, using the rate and pulse width locked in before it begins?"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/DecisionStrip.js",
+    "text": "gain over the setting in force \u00b1 1 SD",
+    "plain": "predicted change in pain compared with today's setting, with its uncertainty"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/stimFormat.js",
+    "text": "pts (e.g. \"+0.32 pts\")",
+    "plain": "pain points on the 0-10 scale"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/DecisionStrip.js",
+    "text": "search prefers (usable in closed loop)",
+    "plain": "suggested setting (one closed loop could use)"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/DecisionStrip.js",
+    "text": "fitted on N stretches of unchanged settings",
+    "plain": "based on N periods when the settings stayed the same"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/DecisionStrip.js",
+    "text": "an extrapolation",
+    "plain": "a guess beyond any current this side has actually received"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/SensingEvidenceTable.js",
+    "text": "falls with current (clinic-visit differences removed)",
+    "plain": "power goes down as current goes up, after allowing for differences between clinic visits"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/SensingEvidenceTable.js",
+    "text": "power gap (scatter units)",
+    "plain": "the gap between the two measured power levels, in units of their own scatter"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/SensingEvidenceTable.js",
+    "text": "significant negative slope of band power on current",
+    "plain": "band power reliably drops for each extra milliamp"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/SensingEvidenceTable.js",
+    "text": "interval lies wholly above zero (supported); ... \"established\"",
+    "plain": "the whole plausible range is positive; 'established' is a stricter test that also corrects for having looked at many bands"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/SensingEvidenceTable.js",
+    "text": "the adjusted point value only, no interval",
+    "plain": "the single best estimate after taking the current out, with no uncertainty range"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/SensingEvidenceTable.js",
+    "text": "carries a folded multiple of the stimulation rate",
+    "plain": "sits where the stimulator's own electrical signal shows up in the recording (PI's advisory wording; pinned by test, so gloss it rather than replace it)"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/CurrentMapCard.js",
+    "text": "out of sample ... area under the curve 0.41 ... 0.57 for shuffled data ... folds separated in time",
+    "plain": "when tested on ratings the model had not seen, the current alone predicted high versus low pain no better than a coin toss (0.5); scrambled data scored 0.57"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/CurrentMapCard.js",
+    "text": "Surface flat? \u2014 varies by 0.004 against a typical uncertainty of 1.1",
+    "plain": "Do the predictions differ across currents by more than their own uncertainty?"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/CurrentMapCard.js",
+    "text": "Pooled across rates \u2014 reference only / pooled over pulse-width pairings",
+    "plain": "one fit that combines every rate (or every pulse-width combination), shown for comparison only"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/CurrentMapCard.js",
+    "text": "pulse-width pairing",
+    "plain": "the combination of left and right pulse widths"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/CurrentMapCard.js",
+    "text": "REDCap",
+    "plain": "the patient's home pain surveys"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/StatusLine.js",
+    "text": "Pain map moves over time (\u2020)",
+    "plain": "The predicted pain at the same setting changed from one period of weeks to the next"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/index.js",
+    "text": "wash-in",
+    "plain": "the first minutes after a setting change, whose ratings are left out"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/TitrationSessionCard.js",
+    "text": "the 20 s post-ramp margin ... settled settings ... run",
+    "plain": "dropping the first 20 seconds after each current change; steps held long enough to read; one continuous recording session"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/TitrationSessionCard.js",
+    "text": "usable 3 s pieces after the margin",
+    "plain": "3-second chunks of recording left after the first seconds are dropped"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/TitrationSessionCard.js",
+    "text": "ladder / ladder (part A) / joint corners",
+    "plain": "the planned sequence of currents stepped up and down; extra points where both sides change together"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/TitrationSessionCard.js",
+    "text": "Exploratory ladder for the pair the screen prefers",
+    "plain": "Extra current steps to test the recording contacts that the check of every candidate band rated best"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/TitrationSessionCard.js",
+    "text": "streaming on",
+    "plain": "with the device recording brain signals continuously"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/DecisionStrip.js",
+    "text": "not assessable \u2014 no batch of suggested settings has been run and rated in turn",
+    "plain": "cannot say yet whether to stop trying new settings: none of the suggested settings have been tried and rated"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/TwoStagePlanCard.js",
+    "text": "stratum / Stage 1 / Stage 2 / envelope (in provenance and table headers)",
+    "plain": "one group of settings fitted together; the open-loop search; closed loop; the range of currents closed loop may use"
+   }
+  ]
+ },
+ {
+  "key": "shell_theme",
+  "summary": "The app shell is the stock Creative Tim \"Material Dashboard 2\" template with almost nothing changed. The branding still reads \"UF BRAVO Platform\". The accent colours are pink and Google blue, there is a dark gradient sidebar that floats with its own shadow, and the navbar is blurred glass. The theme's own body-text grey (#7b809a) falls below the 4.5:1 contrast minimum, and one type size (10.4 px) falls below the 11 px minimum. The three pain pages each patch around this separately: a LegibleText wrapper, and about 80 hard-coded copies of #5E5E5E plus a dozen other greys. The biggest gains come from fixing the design tokens once, in colors.js, typography.js, borders.js and boxShadows.js. That would give one neutral ink scale, one restrained accent, a colour-blind-safe status set and flat hairline cards. After that the navigation should be rebuilt, because the three decision pages the clinicians use are buried under \"Customized Analysis\" with generic wrench icons, next to half a dozen unrelated modules. None of the shell files I read carries a jest pin. Page tests that check literal hex values (legibility.test.js, threePagesNoSpectrumWord.test.js and the page-level legibility checks from decisions 258 and 259) would need their expected colours changed if the per-page greys are moved into theme tokens.",
+  "findings": [
+   {
+    "file": "Client/src/assets/theme/base/colors.js",
+    "area": "colour",
+    "problem": "The theme's main text colour, text.main and secondary.main #7b809a, is about 3.9:1 on white and lower on the #f0f2f5 page background. That is below the 4.5:1 minimum. Every MDTypography color=\"text\" in the app inherits it, which is why Client/src/views/Reports/legibleText.js exists as a per-page workaround. grey[500] #adb5bd and grey[600] #6c757d are also offered as text colours and both fail on #f0f2f5.",
+    "proposal": "Replace the palette with one neutral ink scale checked against the actual background. For example: ink #1F2328 (headings), ink-2 #3D434A (body, about 10:1), ink-3 #5E5E5E (secondary, about 6.4:1, already the pages' own choice), rule #D9DCE0 (hairlines only, never text), surface #FFFFFF, page #FAFAF9. Point text.main, secondary.main and every grey used for text at ink-3 or darker, then delete LegibleText and its wrappers. Keep one accent only: a desaturated blue such as #0B5CAD (Okabe-Ito blue #0072B2 also passes on white). Drop the pink primary #e91e63, the gradients block, socialMediaColors and coloredShadows.",
+    "impact": "high",
+    "breaks_jest_pin": true
+   },
+   {
+    "file": "Client/src/assets/theme/base/colors.js",
+    "area": "colour",
+    "problem": "The status colours fail contrast whenever white text sits on them (buttons, badges, alerts): success #4CAF50 is about 2.8:1, warning #fb8c00 about 2.2:1, error #F44335 about 3.6:1. badgeColors pair #f61200 text with #fcd3d0. The pages have invented their own pass and fail inks instead (#00755A, #A84300, #117733, #D55E00 in ClosedLoopSim and StimOptimizer), so 'refused' looks different on every page. Red against green is also the one pairing colour-blind readers cannot separate.",
+    "proposal": "Define one status set in the theme that pairs with a shape or glyph, never colour alone. Refused or unsafe: #B42318 (red, about 6.5:1). Caution or not yet tested: #A84300 (orange-brown, about 5.9:1). Allowed: #00755A (bluish green, about 5.6:1, told apart from red by hue and also by the glyph). Neutral: ink-3. Expose them as palette.status.{refused,caution,allowed,neutral} and have the pages read them instead of hex literals. The safety wording (device refusals, safe current ceiling) keeps its red plus a glyph.",
+    "impact": "high",
+    "breaks_jest_pin": true
+   },
+   {
+    "file": "Client/src/assets/theme/base/typography.js",
+    "area": "typography",
+    "problem": "fontSizeXXS is 10.4 px, below the 11 px minimum. Body text is set in Roboto at weight 300 (body2, subtitle1/2, caption and even button are fontWeightLight), which renders thin and grey at 12 to 16 px. body1 is 20 px, so the scale runs 10.4 / 12 / 14 / 16 / 18 / 20 / 24 / 30 / 36 / 48 plus six display sizes (40 to 80 px) that a clinical tool never uses. Buttons are uppercase. index.html also loads Lato, which is used in only three upload views, and the leaflet stylesheet, which I found referenced in no source file.",
+    "proposal": "Use a short scale with a 1.2 ratio: 12 (caption, the floor, above 11), 14 (secondary), 16 (body), 19 (card title), 23 (page title). Two weights only, 400 and 600. Line height 1.5 for body and 1.3 for titles. Delete xxs and d1 to d6, and set button textTransform to none. Use one typeface: Inter, or IBM Plex Sans (which has tabular figures, useful for mA and LSB columns), with fontVariantNumeric: 'tabular-nums' on body. Remove the unused Lato, leaflet and extra Material Icons variants from public/index.html.",
+    "impact": "high",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/assets/theme/components/card/index.js",
+    "area": "component",
+    "problem": "Every card combines borderRadius.xl (12 px) with boxShadow md (two stacked drop shadows) on a grey #f0f2f5 page, and borders.js defines radii up to 160 px. Pages nest cards and boxes inside cards (decision 304 had to remove 'a box inside another'), so shadow is stacked on shadow. That is chartjunk at the layout level: the chrome competes with the numbers.",
+    "proposal": "Make cards flat: background #FFFFFF, a 1 px hairline border in the rule colour, radius 6 px, no shadow, 24 px padding (32 px at xl and above). The page background becomes #FAFAF9 or white, with cards separated by 24 to 32 px of space instead of shadow. Set boxShadows to a single subtle value for popovers and menus and zero it everywhere else. Cut borderRadius to {sm: 4, md: 6}.",
+    "impact": "high",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/routes.js",
+    "area": "navigation",
+    "problem": "The three pages the clinicians use for decisions (Biomarker Exploration, Open-Loop Stim Optimizer, Closed-Loop Deployment) sit as items 2 to 4 inside the 'Customized Analysis' group, and that group's title is translated as 'Analysis Builder'. They share generic icons (TimelineIcon, MdBuildCircle) with 'AI Healthcare', 'In-clinic Medication Cycle' and 'Predict Therapy Parameters'. 'Participant Overview' is repeated inside six groups. The Empatica entry loads its icon from an external URL at 30 pt.",
+    "proposal": "Add a first group titled 'Choosing stimulation settings' holding three items in decision order, each with a plain one-line name: 'Which brain signal tracks pain' (Biomarkers), 'Which current to try next' (Stim Optimizer), 'Closed-loop settings to program' (Closed-Loop). Give each a distinct simple line icon, and make the sidebar route names match the page titles. Put Participant Overview once at the top. Move the unrelated modules under a collapsed 'Other tools' group. Replace the remote Empatica image with a local icon.",
+    "impact": "high",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/components/SideMenu/SidenavRoot.js",
+    "area": "layout",
+    "problem": "The sidebar is a dark gradient (#42424a to #191919) that floats 16 px from the window edge with its own 12 px radius and xxl shadow (components/sidenav.js). The active item gets a white-20% fill plus a drop shadow (styles/sidenavCollapse.js). It is the heaviest block of ink on every page and pulls the eye away from the content. Group titles are 12 px bold uppercase.",
+    "proposal": "Use a light, flush sidebar: white or page colour, a 1 px right hairline, no margin, no radius, no shadow, 240 px wide. Items in ink-2 at 14 px weight 400. The active item gets ink-1, weight 600 and a 3 px accent bar on the left; no fill and no shadow. Group titles at 12 px weight 600 in ink-3, sentence case. The existing whiteSidenav branch can be made the default, then the gradient branch removed.",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/components/Navbars/DashboardNavbar/index.js",
+    "area": "navigation",
+    "problem": "The top bar is sticky 'glass' (backdrop blur 30 px, saturate 200%, radius 12, inset shadow; styles.js) 75 px tall. It carries a breadcrumb whose earlier crumbs are dark at 50% opacity (#344767 on #f0f2f5, roughly 2.5:1), a mini-sidebar toggle, and a bare avatar with no name. The page title comes from the URL slug (Breadcrumbs capitalises 'closed-loop' to 'Closed-loop'; the dictionary in assets/translation.js has no entries for biomarkers, stim-optimizer or closed-loop). Nothing names the participant being viewed.",
+    "proposal": "Use a flat 56 px header: white, bottom hairline, no blur. On the left, the page title (the same plain name as in the sidebar) and the participant code (RCS08, never the hash) in ink-3. On the right, the account name as text with a menu. Draw crumbs at full opacity in ink-3 (#5E5E5E, 6.4:1) or drop them, since the sidebar already shows where you are. Add Breadcrumbs dictionary entries for the three pages.",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/public/index.html",
+    "area": "wording",
+    "problem": "The brand says 'UF BRAVO Platform' (title, sidebar brandName in App.js, manifest short_name 'UF Brain Recording and Visualization Online Platform'), inherited from the University of Florida upstream. theme-color is #1A73E8 (Google blue). favicon.png, apple-icon.png and logo.png are the same 1000x1000, 360 KB image, shrunk to 16 px for a favicon and 2 rem for the sidebar.",
+    "proposal": "Rename to what the lab calls it, for example 'BRAVO \u00b7 Pain' or 'BRAVO Pain Lab (UCSF)'; the PI should choose. Use it in index.html <title>, App.js brandName and manifest.json. Make a simple wordmark (the name set in the UI typeface, weight 600, ink-1, with a small accent mark) and export a 32 px and a 180 px icon from it; the current logo cannot be read at favicon size. Set theme-color to the new accent colour.",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/layouts/DatabaseLayout/DashboardLayout.js",
+    "area": "density",
+    "problem": "The content area has 24 px padding (p: 3) and no maximum width, so on a wide monitor paragraphs of explanation run 150 or more characters a line. The pages also invent their own spacing with ad hoc sx values. There is no spacing scale beyond MUI's 8 px unit.",
+    "proposal": "Define a spacing rhythm of 4 / 8 / 16 / 24 / 32 / 48 and use only those values. Give the page a content column of max 1280 px for figures, and limit running text to about 72 characters (maxWidth: '68ch') inside cards. Use 32 px between cards and 16 px between a card title and its content.",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/legibleText.js",
+    "area": "colour",
+    "problem": "Style lives per page instead of in the theme. There are about 81 literal #5E5E5E, 44 #1A1A1A, 37 #4A4A4A, 24 #2A2A2A and a dozen more greys across ClosedLoopSim, StimOptimizer and Biomarkers. The data colours (#0072B2, #E69F00, #D55E00, #009E73, #CC79A7, #56B4E9, the Okabe-Ito set, which is good) are also repeated as literals, alongside Tol colours #117733 and #44AA99. theme-dark exists, but these literals would ignore it.",
+    "proposal": "Once the theme tokens exist, export one palette module for figures, e.g. assets/theme/base/dataColors.js: Okabe-Ito categorical in a fixed order, with left and right hemisphere given two fixed hues used identically on every page, plus one diverging blue-grey-orange for the current map. Replace the literals with tokens in a separate refactor-only commit (a style change, no value changes). The legibility jest tests that assert specific hexes would then assert the token values.",
+    "impact": "medium",
+    "breaks_jest_pin": true
+   },
+   {
+    "file": "Client/src/assets/theme/components/button/contained.js",
+    "area": "component",
+    "problem": "Contained buttons default to white with text.main (#7b809a, failing contrast) and 40 px height. Primary is info blue. Combined with uppercase weight-300 labels, action buttons such as Recompute and 'Sign and print' read faint.",
+    "proposal": "Primary button: accent fill, white text, weight 600, sentence case, radius 6, 36 px height. Secondary: white with a 1 px ink-3 border and ink-1 text. One primary button per card. The recompute bar keeps its own styling, because RecomputeBar.js is the PI's file and is not to be edited.",
+    "impact": "low",
+    "breaks_jest_pin": false
+   }
+  ],
+  "jargon": [
+   {
+    "file": "Client/src/routes.js",
+    "text": "Customized Analysis / Analysis Builder (group holding the three decision pages)",
+    "plain": "Choosing stimulation settings"
+   },
+   {
+    "file": "Client/src/routes.js",
+    "text": "Biomarker Exploration",
+    "plain": "Which brain signal tracks pain"
+   },
+   {
+    "file": "Client/src/routes.js",
+    "text": "Open-Loop Stim Optimizer",
+    "plain": "Which current to try next (fixed stimulation)"
+   },
+   {
+    "file": "Client/src/routes.js",
+    "text": "Closed-Loop Deployment",
+    "plain": "Settings for automatic (closed-loop) stimulation, to program by hand"
+   },
+   {
+    "file": "Client/src/routes.js",
+    "text": "Neural Activity Snapshot (route key misspelt 'nerual-activity-snapshot')",
+    "plain": "Brain signal: the device's 30-second PSD snapshots"
+   },
+   {
+    "file": "Client/src/routes.js",
+    "text": "Time-Series Analysis",
+    "plain": "Brain signal recordings over time"
+   },
+   {
+    "file": "Client/src/routes.js",
+    "text": "Multi-Modality Timeline Report",
+    "plain": "Everything recorded, on one timeline"
+   },
+   {
+    "file": "Client/src/routes.js",
+    "text": "Effects of Changes in Stimulation / DBS Snapshot Analysis (Group Analysis)",
+    "plain": "How brain signals change when stimulation changes, across participants / device snapshots across participants"
+   },
+   {
+    "file": "Client/src/assets/translation.js",
+    "text": "Breadcrumbs 'survey': 'BrainSense\u2122 Surveys'; 'circadian': 'Circadian Threshold'",
+    "plain": "Device sensing recordings; Day-night switching level"
+   }
+  ]
+ },
+ {
+  "key": "figures",
+  "summary": "The figures carry honest numbers and mostly use colours that colour-blind readers can tell apart (blue against orange-red). What makes them hard to use is inconsistency and missing keys, not missing data. The headline heat maps on the Biomarkers page have no colour key. Their correlation colour runs from -1 to +1 while real values sit within about \u00b10.3, so almost every square looks white. Their frequency labels are also rounded (a band centred on 8.5 Hz is labelled \"9\"). The Stim Optimizer's small current maps each use their own colour range, so the same shade means different things in neighbouring squares. The acquisition timeline, the closed-loop simulation and the ROC and histogram panels explain themselves through legend boxes or model codes (M0 to M3, AUC, LSB, \"false positive rate\") rather than plain labels placed next to the lines. Across the three pages the figures use five font families, tick labels from 11 to 17 px, four different gridline greys and three different zoom-toolbar settings. One shared figure style module, plus direct labels on the figures, would fix most of this without touching a number.",
+  "findings": [
+   {
+    "file": "Client/src/views/Reports/Biomarkers/BiomarkerHeatmapGrids.js",
+    "area": "figure",
+    "problem": "The two headline heat maps (the correlation grid and the area-under-the-curve grid) are drawn with showscale:false and no colour key anywhere in the component or gridReadouts.js. A reader cannot tell which colour means pain rises with band power, or how strong a shade is. The correlation scale is also fixed at halfRange 1 (from -1 to +1) while RCS08's cells sit roughly between -0.3 and +0.3, so nearly every cell renders almost white and the grid shows very little.",
+    "proposal": "Add one thin horizontal colour key under each grid with direct end labels, for example 'pain falls as power rises' in blue and 'pain rises as power rises' in orange-red, with 0 (or 0.5 for the area grid) marked 'no relationship'. For the correlation grid, set the range to \u00b10.5 (or a fixed \u00b10.4), use the same range on every pair so the grids can be compared, and let values beyond it saturate. Keep the Okabe-Ito blue and vermillion ends.",
+    "impact": "high",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/BiomarkerHeatmapGrids.js",
+    "area": "figure",
+    "problem": "The x-axis ticks are placed on every third band centre (8.5, 11.5, 14.5 ... Hz) but labelled with Number(c).toFixed(0), so the tick at 8.5 Hz reads '9', the one at 11.5 reads '12', and so on. The printed frequency is half a hertz away from the band it marks, while the hover shows the true centre.",
+    "proposal": "Either print the centre as it is ('8.5', '11.5' ...) or put ticks at round frequencies (10, 15, 20, 25, 30 Hz) on a linear axis. Axis title: 'Band centre (Hz)'.",
+    "impact": "high",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/CurrentMapCard.js",
+    "area": "figure",
+    "problem": "absoluteSurface() computes zmin, zmax and the half-range separately for each rate's square, so the same shade of blue means a different predicted-pain difference in each small map, and every square carries its own colour bar. The squares are also a fixed 400 px (style width: size, not responsive), the axes run to 5.15 mA, and cells above the 4.5 mA safe ceiling are simply blank with nothing on the figure saying why.",
+    "proposal": "Use one shared colour range across all squares on the card (the largest deviation from today's rating over every square), drop the per-square colour bars and draw one key for the whole card. Draw a dashed line at the safe ceiling on both axes, labelled directly '4.5 mA safe ceiling', and shade the region beyond it in light hatching. Make the squares responsive (width 100%, aspectRatio 1/1, maxWidth 400). The colour stops #0072B2/#E4E4E4/#D55E00 stay, which keeps the pin at StimOptimizer.designReview.test.js:336-337.",
+    "impact": "high",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/BiomarkerDataTimeline.js",
+    "area": "figure",
+    "problem": "This is the page's first figure and it is the loudest. It has a 26 px title and 13 px subtitle drawn inside the Plotly canvas, date ticks at 17 px (11 px on every other figure), dark gridlines (rgba 0,0,0,0.18) running through every lane, the modebar always shown, and a legend box with a 1.5 px black border whose entries are sentences with codes: 'chronic LSB \u00b7 24/7 trend (squiggle; lane color = sensing Hz)', 'excluded middle (dropped from training)', 'TD (montage): one tick per montage or survey recording (hover \u2192 which)'.",
+    "proposal": "Move the title into the card header, as on the other cards. Bring ticks down to 12 px, lighten the gridlines to about #EEF1F4 or keep only month gridlines, and remove the legend border. Label each lane directly in the left gutter (the gutter already exists; load the bravo-timeline-layout skill before touching it). Cut the legend to short entries: 'High pain', 'Low pain', 'Middle, not used', 'Device snapshot (PSD)', 'Patient button press', 'Daily device log'. Show the modebar only on hover, as on the Closed-Loop page.",
+    "impact": "high",
+    "breaks_jest_pin": true
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/ClosedLoopSimulationPanel.js",
+    "area": "figure",
+    "problem": "The simulation figure explains itself through a horizontal legend of six entries that use model codes ('M0 \u00b7 replay, power as recorded', 'M2 \u00b7 loop closed, peaked response', 'M3 \u00b7 2.5\u201397.5 % of resampled runs'). The comparison dot plot repeats the codes in an HTML annotation ('\u25cb M0 replay \u25cf M2 loop closed \u2014 M3 interval'). Axis titles say 'Band power (device units)' and '% of controller steps'. A clinician has to decode M0 to M3 before reading any line.",
+    "proposal": "Remove the legend and label each line at its right-hand end in its own ink ('as delivered', 'replay', 'with the loop closed'). Name the shaded band 'range over resampled days' next to it. Drop the M-codes from the page text and keep them only in the hover. Retitle the axes 'Band power (device's own units)' and '% of time'. Use 'upper current limit' and 'lower current limit' for the existing limit annotations.",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/DeploymentRocPanel.js",
+    "area": "wording",
+    "problem": "The ROC and histogram panels use the statistician's axes: 'False positive rate' / 'True positive rate', a title that reads 'AUC = \u2026', 'Oriented band power (standardized, cut-point scale)', 'Forward-chained held-out AUC \u2014 pooled', 'Test fold \u2014 elapsed week (train = all earlier weeks)', 'in-sample AUC', and a legend reading 'pain-low'/'pain-high'. The chance line is #bbb (about 1.9:1 on white).",
+    "proposal": "Axes: 'High-pain ratings missed\u2026' is not what the curve shows, so use 'Low-pain moments flagged as high (%)' and 'High-pain moments caught (%)'. Title: 'How well the band tells high pain from low: 0.62 (0.46 to 0.73); 0.5 is chance'. Histogram x-axis: 'Band power, scaled (0 = the switching point)'. Label the two histograms directly inside the plot ('low pain', 'high pain'). The week-by-week panel: 'Tested on each later week, trained on the weeks before it'. Draw the chance line in #6E6E6E and label it 'chance' directly.",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/BiomarkerHeatmapGrids.js",
+    "area": "figure",
+    "problem": "In the cell drill-down scatter, points are coloured high pain (vermillion), low pain (blue) or excluded (#aaaaaa), and clinic-sheet ratings are drawn hollow. None of this is keyed on the figure (showlegend:false everywhere). The x-axis reads 'Band power (LSB)'.",
+    "proposal": "Add two or three direct text labels in the upper corner of the plot, in their own inks ('high pain', 'low pain', '\u25cb clinic sheet'). Retitle the x-axis 'Band power (device units)'. Draw the fitted line in the text ink at 1 px with 'r = \u2026' at its end instead of in a separate caption line.",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports",
+    "area": "typography",
+    "problem": "There is no shared figure style. Five font stacks are in use: Roboto in BiomarkerAnalytics.js, BinarizationPreview.js and BiomarkerTimeline.js; Arial in BiomarkerDataTimeline.js; Helvetica in ClosedLoopSimulationPanel.js; 'inherit' in the SVGs; the Plotly default elsewhere. Axis-title sizes run 11, 12 and 13 across figures, tick sizes 11 to 17, and there are four gridline greys (#EEF1F4, #E3E7EA, #DDDDDD, #C9CCD6, rgba .18). The modebar is off on the heat maps, hover-only on Closed-Loop (PAL.MODEBAR) and always on in the timeline. Axis-title case also varies ('band centre (Hz)' lowercase in ControlAnalyses/figures.js, CalibrationInEffectPanel.js and BandResponseStrip.js; 'Band centre (Hz)' elsewhere).",
+    "proposal": "Create one module, e.g. Client/src/views/Reports/figureStyle.js, exporting FONT (the app's font, 12 px, ink #1A1A1A), TICK (11 px, #5E5E5E), AXIS_TITLE (12 px, sentence case), GRID (#EEF1F4, y-axis only, or none), AXIS_LINE (#8A8A8A 1 px), CONFIG ({displayModeBar:false, responsive:true}) and the colour roles already in ClosedLoopSim/palette.js. Import it in every Plotly and SVG figure. The legibility tests still hold because nothing goes under 11 px.",
+    "impact": "high",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/BiomarkerAnalytics.js",
+    "area": "colour",
+    "problem": "The sliding-correlation heat map uses Plotly's named 'RdBu' (ColorBrewer red-blue, reversed), a third diverging convention next to the Okabe-Ito blue and vermillion used on the grids and current map, with a colour bar titled just 'R'. The panel title is 'Sliding correlation with \u2026 (R: frequency \u00d7 time) \u2014 ONE_THREE_LEFT'-style channel ids, and the axis title is 'Window start'.",
+    "proposal": "Use divergingColorscale(0, 0.5) from BiomarkerHeatmapGrids (one shared diverging scale). Colour-bar title: 'correlation with pain'. Panel title: 'How each band's link with pain changed over time, L 1-3+' (pairName formatting). X-axis: 'Date (start of each 30-day window)', using the real window length.",
+    "impact": "low",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/ControlAnalyses/figures.js",
+    "area": "figure",
+    "problem": "The SVG figures here are clean in ink, but their keys sit as coloured dots in a line below the plot (the legend pattern) rather than on the marks. The score dropdown prints raw keys ({s}, e.g. 'vas', 'left_leg_vas'). CurrentExplainsFigure's axis reads 'out-of-sample score (0.5 is chance)', and the note says 'Filled: survives correction for the bands tested (q < 0.05)'.",
+    "proposal": "Label the series directly: put the stretch name at the first point of each series in ZeroMaFigure, and in CurrentExplainsFigure write 'current alone', 'every band' and 'bands, current removed' once, above the top row, over their dots. Map score keys through the heat maps' pain-score label list. Axis: 'How well it predicts pain in weeks it has not seen (0.5 = chance)'. Note: 'Filled dot: still clear after correcting for testing 22 bands'. The fill-colour test (ControlAnalysesCard.test.js:125) is unaffected.",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/LsbPowerPanel.js",
+    "area": "wording",
+    "problem": "This panel is on the Closed-Loop page and uses statistics shorthand inside the figure: y-axis 'Detection power for AUC > 0.5 (%)', annotations 'CI-low: \u2026%', 'effective N discounted \u00d7\u2026 (autocorrelation, DEFF \u2026)', 'now: n', 'need: n', box named 'Timeline LSB', and x-axis 'Device LFP power (LSB)'.",
+    "proposal": "Y-axis: 'Chance of detecting a real link with pain (%)'. Annotations: 'ratings so far: n' and 'ratings needed: n'. Replace the DEFF line with 'counted as about m independent ratings, because nearby ratings resemble each other'. X-axis: 'Band power (device units)'.",
+    "impact": "medium",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/CalibrationInEffectPanel.js",
+    "area": "figure",
+    "problem": "Both calibration plots put their legends below the plot area (y -0.24 / -0.3) with entries like '+1 MAD of the ratio (18.6)' and 'median over every survey and contact pair'. The axes mix units without saying which is the device's ('TD band power (\u00b5V\u00b2)', 'device band power (LSB)', 'PSD band power \u00f7 TD band power').",
+    "proposal": "Label the fitted line and the \u00b11 scatter band directly at their right ends ('constant in effect, 345.59'; 'typical scatter, \u00b15%'), and drop the legends. Y-axis: 'Device band power (device units)'. Ratio plot: 'Device snapshot \u00f7 recording, per band'. MAD becomes 'typical scatter'.",
+    "impact": "low",
+    "breaks_jest_pin": false
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/EraRefitPanel.js",
+    "area": "wording",
+    "problem": "The per-time-block forest plot's axis reads 'AUC (95% clustered-bootstrap CI)', and its verdict lines use 'era', 'stim states', 'band\u00d7era interaction', 'Portable across stim states', and 'fixed-sign adaptive band' in capitals ('REVERSES', 'WRONG').",
+    "proposal": "Axis: 'How well the band tells high pain from low (0.5 = chance), with 95% range'. Verdicts in plain words, e.g. 'In at least one stimulation state the band points the other way, so a fixed threshold would push the current the wrong way then.' Name the blocks 'stimulation off / low current / high current' directly on the rows.",
+    "impact": "low",
+    "breaks_jest_pin": false
+   }
+  ],
+  "jargon": [
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/DeploymentRocPanel.js",
+    "text": "False positive rate / True positive rate",
+    "plain": "low-pain moments wrongly flagged as high (%) / high-pain moments caught (%)"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/DeploymentRocPanel.js",
+    "text": "AUC",
+    "plain": "how well the band tells high pain from low (0.5 = chance, 1 = perfect)"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/DeploymentRocPanel.js",
+    "text": "Oriented band power (standardized, cut-point scale)",
+    "plain": "band power, scaled so 0 is the switching point"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/DeploymentRocPanel.js",
+    "text": "Forward-chained held-out AUC; Test fold \u2014 elapsed week (train = all earlier weeks); in-sample AUC",
+    "plain": "tested on each later week after training on the weeks before it; the same score measured on the data it was fitted to"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/ClosedLoopSimulationPanel.js",
+    "text": "M0 / M1 / M2 / M3",
+    "plain": "replay of what happened / loop closed, straight-line response / loop closed, peaked response / range over resampled days"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/ClosedLoopSimulationPanel.js",
+    "text": "% of controller steps; device units",
+    "plain": "% of time; the device's own units of band power"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/LsbPowerPanel.js",
+    "text": "Detection power for AUC > 0.5 (%)",
+    "plain": "chance of detecting a real link with pain (%)"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/LsbPowerPanel.js",
+    "text": "CI-low; effective N discounted (autocorrelation, DEFF)",
+    "plain": "lower end of the 95% range; counted as about n independent ratings, because nearby ratings resemble each other"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/LsbPowerPanel.js",
+    "text": "Device LFP power (LSB); Timeline LSB",
+    "plain": "band power in the device's own units"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/BiomarkerHeatmapGrids.js",
+    "text": "Band power (LSB)",
+    "plain": "band power (device units)"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/BiomarkerDataTimeline.js",
+    "text": "chronic LSB \u00b7 24/7 trend (squiggle; lane color = sensing Hz)",
+    "plain": "the device's own log, one reading every 10 minutes"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/BiomarkerDataTimeline.js",
+    "text": "excluded middle (dropped from training)",
+    "plain": "middle ratings, not used"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/BiomarkerAnalytics.js",
+    "text": "R (colour bar); Sliding correlation (R: frequency \u00d7 time)",
+    "plain": "correlation with pain; how each band's link with pain changed over time"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/CalibrationInEffectPanel.js",
+    "text": "1 MAD of the ratio",
+    "plain": "typical scatter of the ratio"
+   },
+   {
+    "file": "Client/src/views/Reports/Biomarkers/TimingHistogram.js",
+    "text": "neural samples",
+    "plain": "band-power readings"
+   },
+   {
+    "file": "Client/src/views/Reports/ControlAnalyses/figures.js",
+    "text": "out-of-sample score (0.5 is chance)",
+    "plain": "how well it predicts pain in weeks it has not seen (0.5 = chance)"
+   },
+   {
+    "file": "Client/src/views/Reports/ControlAnalyses/figures.js",
+    "text": "q < 0.05",
+    "plain": "still clear after correcting for testing 22 bands"
+   },
+   {
+    "file": "Client/src/views/Reports/ControlAnalyses/figures.js",
+    "text": "vas / left_leg_vas (raw score keys in the dropdown)",
+    "plain": "VAS / Left Leg VAS (the page's pain-score labels)"
+   },
+   {
+    "file": "Client/src/views/Reports/StimOptimizer/BandResponseStrip.js",
+    "text": "gap (scatter units)",
+    "plain": "gap between the two power levels, in units of their own scatter"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/ThreeSourceResponsePanel.js",
+    "text": "Pooled slope (device units per mA)",
+    "plain": "change in band power per milliamp, all visits together"
+   },
+   {
+    "file": "Client/src/views/Reports/ClosedLoopSim/EraRefitPanel.js",
+    "text": "AUC (95% clustered-bootstrap CI); era; band\u00d7era interaction; stim states",
+    "plain": "how well the band tells high pain from low, with its 95% range; stimulation state (off / low / high current); whether the band behaves differently between those states"
+   }
+  ]
+ }
+]
