@@ -17,10 +17,14 @@ import fs from "fs";
 import path from "path";
 
 const PAGE_DIRS = ["Biomarkers", "ClosedLoopSim", "StimOptimizer"];
-// Shared components the three pages render, outside their own folders.
+// Shared components the three pages render, outside their own folders. Updated 2026-09-26 (WP7 of
+// the redesign): `legibleText.js` is deleted (the theme's own text grey is now the 6.48:1 `ink3`),
+// and the shared page components (`paper/`) and figure defaults the pages now draw with are read.
 const SHARED = [
-  "RecomputeBar.js", "CacheStatusLine.js", "legibleText.js",
+  "RecomputeBar.js", "CacheStatusLine.js", "figureStyle.js",
   "ControlAnalyses/ControlAnalysesCard.js", "ControlAnalyses/figures.js",
+  "paper/PageHead.js", "paper/Section.js", "paper/StatusList.js", "paper/CeilingLine.js",
+  "paper/Fold.js", "paper/ColorKey.js",
 ];
 
 // Empty since 2026-09-26: the PI ruled that the older Biomarkers scan's button says "the all-band
@@ -88,6 +92,11 @@ describe("the three analysis pages say PSD or TD, never spectrum", () => {
     const idx = read("Biomarkers/index.js");
     expect(idx).toContain("<strong>Recompute</strong>{\" above to run the all-band scan.\"}");
     expect(idx).not.toContain("above to run the full-spectrum scan.");
+  });
+
+  test("the deleted legibility wrapper is gone and no page file imports it (WP7)", () => {
+    expect(fs.existsSync(path.join(__dirname, "legibleText.js"))).toBe(false);
+    files.forEach((f) => expect(read(f)).not.toMatch(/legibleText|<LegibleText/));
   });
 
   test("every pending entry is still on its page (remove it once the PI rules)", () => {

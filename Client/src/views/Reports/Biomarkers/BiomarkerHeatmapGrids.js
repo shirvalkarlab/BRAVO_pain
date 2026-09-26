@@ -1234,7 +1234,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
 
         {err ? (
           <MDTypography component="p" sx={{ ...TYPE.body, display: "block", mt: 1,
-            color: T.refused }}>{`\u2715 The grid could not be computed: ${err}`}</MDTypography>
+            color: T.ink }}>{`The grid could not be computed: ${err}`}</MDTypography>
         ) : null}
         {corrResult && corrSw ? <GridStatus result={corrResult} sw={corrSw} metricLabel={metricLabel} /> : null}
         {corrResult && corrResult.message ? (
@@ -1312,7 +1312,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
               </MDButton>
               <MDTypography component="span" sx={{ ...TYPE.caption, color: T.ink3, maxWidth: 360 }}>
                 {gridReady
-                  ? "Closed-Loop Deployment reads this same grid; any square can be picked there as a candidate band."
+                  ? "The closed-loop settings page reads this same grid; any square can be picked there as a candidate band."
                   : "Available once the grid has been computed for a sensing contact pair."}
               </MDTypography>
             </MDBox>

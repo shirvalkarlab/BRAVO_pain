@@ -119,7 +119,7 @@ function CalibrationInEffectPanel({ participantUid }) {
     if (tr.scatter_mad != null) {
       [[deployed.k - tr.scatter_mad, "−"], [deployed.k + tr.scatter_mad, "+"]].forEach(([kk, sign]) => {
         traces.push({ x: [0, xmax], y: [0, kk * xmax], type: "scatter", mode: "lines",
-          name: `${sign}1 MAD of the ratio (${fmt(kk, 1)})`, showlegend: sign === "+",
+          name: `${sign}typical spread of the ratio, 1 MAD (${fmt(kk, 1)})`, showlegend: sign === "+",
           line: { color: T.ink3, width: 1, dash: "dot" }, hoverinfo: "name" });
         if (sign === "+") annotations.push(directLabel(xmax, kk * xmax, "typical spread", T.ink3));
       });

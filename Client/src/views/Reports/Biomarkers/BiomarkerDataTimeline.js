@@ -912,7 +912,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     }
     annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: (stimBase + stimTop) / 2,
       text: "<b>STIM</b>", showarrow: false, xanchor: "right",
-      font: { size: 26, color: PAL.stim } });
+      font: { size: 26, color: PAL.ink } }); // text in ink: the stim hue (#CC79A7) is 3.07:1
     [0, SMAX].forEach((val) => annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_TICK,
       y: yScale(val, 0, SMAX, stimBase, stimTop), text: String(val), showarrow: false,
       xanchor: "right", font: { size: 19, color: UNIT_INK } }));

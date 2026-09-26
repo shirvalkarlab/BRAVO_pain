@@ -851,8 +851,8 @@ function Biomarkers() {
 
               {data && data.message ? (
                 <MDBox mt={2}>
-                  <MDTypography component="p" sx={{ ...TYPE.lead, color: T.refused, m: 0 }}>
-                    {`\u2715 ${data.message}`}
+                  <MDTypography component="p" sx={{ ...TYPE.lead, color: T.ink, m: 0 }}>
+                    {data.message}
                   </MDTypography>
                   <MDTypography component="p" sx={{ ...TYPE.body, color: T.ink2, m: 0 }}>
                     {"Upload a Percept session for this participant and configure REDCap (REDCAP_API_URL / REDCAP_API_TOKEN), then reload."}
@@ -923,12 +923,11 @@ function Biomarkers() {
               {/* Control analyses: saved, dated checks run offline (the PI, 2026-09-24); they feed
                   nothing on this page. Folded, still mounted, so it loads. */}
               <MDBox mt={3} pb={2}>
-                {/* The spec's plain title, "Checks against chance and against the current (run
-                    offline)", waits on WP7: `foldedDeveloperLines.source.test.js` (outside this
-                    folder) pins this label word for word. */}
-                <Fold show="Research checks, saved offline (control analyses)"
-                  inside="checks against chance and against the current"
-                  hide="Hide the research checks">
+                {/* The spec's plain title (SPEC 2026-09-26 section 6, "Control analyses"), set by
+                    WP7 with the pin in `foldedDeveloperLines.source.test.js`. */}
+                <Fold show="Checks against chance and against the current (run offline)"
+                  inside="saved research checks; nothing on this page reads them"
+                  hide="Hide the checks against chance and against the current">
                   <ControlAnalysesSection participantUid={participant_uid} page="biomarkers" clinicSheets={includeClinicSheetRatings} />
                 </Fold>
               </MDBox>
