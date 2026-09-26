@@ -138,7 +138,7 @@ describe("the calibrated heat-map card (BiomarkerHeatmapGrids)", () => {
   // RCS08 only; the drawer now opens on the backend's own first note. Every line's content below is
   // the pin decisions 229, 235(c) and 246(d) set; the search's counts were re-run on 2026-09-26
   // under the exact rotation test (decision 315) and the pins moved with them.
-  it("the L 1-3+ search summary sits in its own fold, in bold, for RCS08, with its settings, and for no other participant", async () => {
+  it("the L 1-3+ search summary sits in its own fold, at weight 400, for RCS08, with its settings, and for no other participant", async () => {
     const { container } = await renderGrid();
     fireEvent.click(screen.getByText(/^How to read this$/));
     fireEvent.click(screen.getByText(/^The 2026-09-21 search on L/));
@@ -173,8 +173,10 @@ describe("the calibrated heat-map card (BiomarkerHeatmapGrids)", () => {
     expect(text).toMatch(/current in force/i);
     expect(text).toMatch(/\+0\.08 to \+0\.20 .*\+0\.01 to \+0\.12|\+0\.01 to \+0\.12/);
     expect(text).toMatch(/L 0⁻3⁺|L 0\u207b3\u207a/);
+    // CHANGED ON PURPOSE (the redesign of 2026-09-26, SPEC.md section 5.1): the lines open on one
+    // plain sentence and are set at weight 400, no longer bold.
     container.querySelectorAll('[data-testid="l13-search-line"]').forEach((el) => {
-      expect(getComputedStyle(el).fontWeight).toBe("700");
+      expect(getComputedStyle(el).fontWeight).toBe("400");
     });
     // the search is its own fold, outside the drawer; the drawer opens on the backend's own first note
     const fold = container.querySelector('[data-testid="l13-search-fold"]');

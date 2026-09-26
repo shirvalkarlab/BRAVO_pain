@@ -1,25 +1,21 @@
 /**
- * Legibility floor for the Biomarkers page (decision 304; the design review of 2026-09-26, B6).
+ * Legibility floor for the Biomarkers page (decision 304; rewritten for the redesign of 2026-09-26,
+ * artifacts/design_2026-09-26_minimalist_redesign/SPEC.md sections 2 and 7, WP3).
  *
- * Decision 258 set the floor for the Closed-Loop and Stim Optimizer pages -- no text or figure font
- * under 11 px, no grey text under 4.5:1 on white -- and its test (`ClosedLoopSim/legibility.test.js`)
- * does not read this folder. The review counted 35 text sizes under 11 px across five files here
- * (the calibration panel 20, the binarization preview 5, the acquisition timeline 5, the older
- * timeline 3, the heat maps 2) and timeline text at 2.3 to 2.6:1 (`#aaa` tick numbers, `#9AA0A6`
- * "no ... data" notes, `#bbb` "LSB").
- *
- * This test is stricter than 258's in one respect: it does not list the forbidden greys, it computes
- * the contrast of every grey it finds in a text position (a font object, an `sx` or `style` object,
- * an inline HTML style, an SVG <text> fill), so a new light grey cannot slip past a list. A colour
- * with visible hue (the Okabe-Ito inks, the frequency colours) is not a grey and is not judged by that
- * check. The one place a frequency colour is TEXT -- the acquisition timeline's "X Hz" labels at each
- * change of sensing frequency -- has its own check below (the design review's B5, 2026-09-26): each
- * line hue is drawn as text through a darker variant of the same hue at 4.5:1 or more, and
- * neighbouring frequencies stay at least as far apart as the line colours themselves are.
- *
- * The acquisition timeline's left gutter is sized from its fonts (bravo-timeline-layout: `F_TICK`,
- * the contact and region fonts, `LBL_GAP`, `LEFT_CAP`); this test changes none of those, and the last
- * check pins them so a legibility pass cannot move the gutter by accident.
+ * What it checks now:
+ *   1. every colour comes from the shared tokens (assets/theme/base/tokens.js and dataColors.js): no
+ *      page file writes a hex colour of its own (the older timeline and every panel included);
+ *   2. EVERY text colour it can resolve -- not only the greys -- is 4.5:1 or more on white: a literal,
+ *      a token (`T.ink3`), a data colour (`PAIN.high`) or a named constant that points at one of
+ *      them, in a text position (a font object, an `sx` or `style` object, an inline HTML style, an
+ *      SVG <text> fill);
+ *   3. no text or figure font is set under 12 px (the spec's smallest size), except in the
+ *      acquisition timeline's own two files, whose fonts change only through the
+ *      bravo-timeline-layout skill and keep the 11 px floor of decision 304;
+ *   4. the acquisition timeline's frequency labels are ink beside a small tick in the lane's own
+ *      colour (the spec's replacement for decision 304's "darker variant of the same hue" rule), and
+ *      its lanes are coloured by the ordered (cividis) scale;
+ *   5. the timeline's gutter geometry is untouched (bravo-timeline-layout).
  */
 import fs from "fs";
 import path from "path";
@@ -50,28 +46,41 @@ export function contrastOnWhite(hex) {
   const rgb = rgbOf(hex);
   return rgb ? 1.05 / (luminance(rgb) + 0.05) : null;
 }
-const isGrey = (hex) => { const rgb = rgbOf(hex); return !!rgb && Math.max(...rgb) - Math.min(...rgb) <= 24; };
 
-// Named colours a text position may use: `const X = "#..."` in any file of this folder, and the
-// shared palette's roles (`PAL.x`).
-function namedColours() {
+// The shared tokens and data colours, read from their own files: `T.x`, and the data colours'
+// named exports (`PAIN.high`, `SIDE.left`, `CONTEXT`, `CATEGORICAL[2]`).
+const THEME = path.join(__dirname, "..", "..", "..", "assets", "theme", "base");
+const readTheme = (f) => fs.readFileSync(path.join(THEME, f), "utf8");
+function tokenColours() {
   const out = {};
-  FILES.concat(["../ClosedLoopSim/palette.js", "../legibleText.js"]).forEach((f) => {
+  const tok = stripComments(readTheme("tokens.js"));
+  const tBlock = tok.slice(tok.indexOf("export const T = {"), tok.indexOf("};", tok.indexOf("export const T = {")));
+  tBlock.replace(/^\s+([a-zA-Z0-9]+):\s*"(#[0-9A-Fa-f]{6})"/gm, (_, k, h) => { out[`T.${k}`] = h; });
+  const dc = stripComments(readTheme("dataColors.js"));
+  ["SIDE", "PAIN"].forEach((obj) => {
+    const b = dc.slice(dc.indexOf(`export const ${obj} = {`), dc.indexOf("};", dc.indexOf(`export const ${obj} = {`)));
+    b.replace(/([a-zA-Z]+):\s*"(#[0-9A-Fa-f]{6})"/g, (_, k, h) => { out[`${obj}.${k}`] = h; });
+  });
+  const ctx = dc.match(/export const CONTEXT = "(#[0-9A-Fa-f]{6})"/);
+  if (ctx) out.CONTEXT = ctx[1];
+  const cat = dc.match(/export const CATEGORICAL = \[([^\]]*)\]/);
+  if (cat) (cat[1].match(/#[0-9A-Fa-f]{6}/g) || []).forEach((h, i) => { out[`CATEGORICAL[${i}]`] = h; });
+  return out;
+}
+const TOKENS = tokenColours();
+
+// Named colours a text position may use: `const X = "#..."` or `const X = T.y` (or a data colour)
+// in any file of this folder, and the tokens themselves.
+function namedColours() {
+  const out = { ...TOKENS };
+  FILES.forEach((f) => {
     const src = stripComments(read(f));
     const re = /(?:const|export const)\s+([A-Z_][A-Z0-9_]*)\s*=\s*"(#[0-9A-Fa-f]{3,8})"/g;
     let m = re.exec(src);
     while (m) { out[m[1]] = m[2]; m = re.exec(src); }
-    const pal = /^\s+([a-zA-Z]+):\s*(?:OKABE_ITO\.([a-zA-Z]+)|"(#[0-9A-Fa-f]{3,8})")/gm;
-    if (/palette\.js$/.test(f)) {
-      const oi = {};
-      const oiRe = /^\s+([a-zA-Z]+):\s*"(#[0-9A-Fa-f]{6})"/gm;
-      const oiBlock = src.slice(src.indexOf("OKABE_ITO = {"), src.indexOf("};", src.indexOf("OKABE_ITO = {")));
-      let o = oiRe.exec(oiBlock);
-      while (o) { oi[o[1]] = o[2]; o = oiRe.exec(oiBlock); }
-      const palBlock = src.slice(src.indexOf("export const PAL = {"));
-      let p = pal.exec(palBlock);
-      while (p) { out[`PAL.${p[1]}`] = p[3] || oi[p[2]]; p = pal.exec(palBlock); }
-    }
+    const alias = /(?:const|export const)\s+([A-Z_][A-Z0-9_]*)\s*=\s*((?:T|PAIN|SIDE)\.[a-zA-Z0-9]+|CONTEXT|CATEGORICAL\[\d\])\s*;/g;
+    let a = alias.exec(src);
+    while (a) { if (TOKENS[a[2]]) out[a[1]] = TOKENS[a[2]]; a = alias.exec(src); }
   });
   // `import { BIN_MID as MID } from "./binarizationModel"`: the alias names the same colour.
   FILES.forEach((f) => {
@@ -104,18 +113,19 @@ function enclosingKey(src, idx) {
 const NON_TEXT_TAGS = ["Slider", "LinearProgress", "CircularProgress"];
 const TEXT_KEYS = /^(font|tickfont|titlefont|sx|style|& \.Mui[A-Za-z-]+|&:hover)$/;
 
-/** Every grey in a text position, with its contrast. */
+/** Every resolvable colour in a text position under 4.5:1 on white, with its contrast. Named
+ *  `textGreys` since decision 304; since 2026-09-26 it judges every colour, grey or not. */
 export function textGreys(src, file = "") {
   const code = stripComments(src);
   const out = [];
   const push = (hex, where) => {
     // White (or near-white) text sits on a coloured fill of its own (a badge), never on the page.
-    if (!hex || !isGrey(hex) || luminance(rgbOf(hex)) > 0.9) return;
+    if (!hex || !rgbOf(hex) || luminance(rgbOf(hex)) > 0.9) return;
     const c = contrastOnWhite(hex);
     if (c != null && c < 4.5) out.push(`${file}: ${where} ${hex} (${c.toFixed(2)}:1)`);
   };
-  // (1) object properties: `color: "#hex"`, `color: NAME`, `color: PAL.x`
-  const re = /\bcolor:\s*(?:"(#[0-9A-Fa-f]{3,8})"|'(#[0-9A-Fa-f]{3,8})'|(PAL\.[a-zA-Z]+)|([A-Z_][A-Z0-9_]*)\b)/g;
+  // (1) object properties: `color: "#hex"`, `color: NAME`, `color: T.x`, `color: PAIN.x`
+  const re = /\bcolor:\s*(?:"(#[0-9A-Fa-f]{3,8})"|'(#[0-9A-Fa-f]{3,8})'|((?:T|PAIN|SIDE)\.[a-zA-Z0-9]+|CATEGORICAL\[\d\])|([A-Z_][A-Z0-9_]*)\b)/g;
   let m = re.exec(code);
   while (m) {
     const key = enclosingKey(code, m.index);
@@ -138,8 +148,13 @@ export function textGreys(src, file = "") {
   return out;
 }
 
-/** Every text or figure font size under 11 px. */
-export function smallSizes(src, file = "") {
+/** Every literal hex colour outside a comment. */
+export function literalHexes(src, file = "") {
+  return (stripComments(src).match(/["'`(:\s]#[0-9A-Fa-f]{3,8}\b/g) || []).map((h) => `${file}: ${h.trim()}`);
+}
+
+/** Every text or figure font size under `floor` px (11 by default, the floor of decision 304). */
+export function smallSizes(src, file = "", floor = 11) {
   const code = stripComments(src);
   const out = [];
   const pats = [
@@ -150,28 +165,48 @@ export function smallSizes(src, file = "") {
   ];
   pats.forEach((re) => {
     let m = re.exec(code);
-    while (m) { if (Number(m[1]) < 11) out.push(`${file}: ${m[0].replace(/\s+/g, " ").slice(0, 60)}`); m = re.exec(code); }
+    while (m) { if (Number(m[1]) < floor) out.push(`${file}: ${m[0].replace(/\s+/g, " ").slice(0, 60)}`); m = re.exec(code); }
   });
   const tern = /fontSize:\s*[^,}\n]*?\?\s*(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)/g;
   let m = tern.exec(code);
   while (m) {
-    [m[1], m[2]].forEach((v) => { if (Number(v) < 11) out.push(`${file}: ${m[0]}`); });
+    [m[1], m[2]].forEach((v) => { if (Number(v) < floor) out.push(`${file}: ${m[0]}`); });
     m = tern.exec(code);
   }
   return out;
 }
 
-describe("the Biomarkers page's legibility floor (decision 304)", () => {
-  test("no text or figure font on the page is set below 11 px", () => {
-    expect(FILES.flatMap((f) => smallSizes(read(f), f))).toEqual([]);
+// The acquisition timeline's two files: their fonts change only through bravo-timeline-layout.
+const TIMELINE_FILES = ["BiomarkerDataTimeline.js", "timelineGutter.js"];
+
+describe("the Biomarkers page's legibility floor (decision 304; the redesign of 2026-09-26)", () => {
+  test("no text or figure font is set below 12 px (the timeline's own files: below 11 px)", () => {
+    expect(FILES.flatMap((f) => smallSizes(read(f), f, TIMELINE_FILES.includes(f) ? 11 : 12))).toEqual([]);
   });
 
-  test("no grey text on the page is below 4.5:1 on white", () => {
+  test("no page file writes a hex colour of its own: every colour comes from the shared tokens", () => {
+    expect(FILES.flatMap((f) => literalHexes(read(f), f))).toEqual([]);
+  });
+
+  test("every text colour on the page, grey or not, is 4.5:1 or more on white", () => {
     expect(FILES.flatMap((f) => textGreys(read(f), f))).toEqual([]);
   });
 
-  test("the page wraps its content in the darker text colour, as the other two pages do", () => {
-    expect(read("index.js")).toMatch(/<LegibleText>/);
+  test("the check resolves the shared tokens it judges (so a token cannot slip past it)", () => {
+    expect(NAMED["T.ink3"]).toBe("#5E5E5E");
+    expect(NAMED["PAIN.high"]).toBe("#D55E00");
+    expect(NAMED["SIDE.right"]).toBe("#E69F00");
+    expect(textGreys("const a = <span style={{ color: PAIN.high }}>x</span>;")).toHaveLength(1);
+    expect(textGreys("const a = <span style={{ color: SIDE.right }}>x</span>;")).toHaveLength(1);
+    expect(textGreys("const a = <span style={{ color: T.ink3 }}>x</span>;")).toEqual([]);
+  });
+
+  test("the page takes its text colours from the tokens, with no darker-text wrapper of its own", () => {
+    // CHANGED ON PURPOSE (SPEC.md section 2.2): the theme's text colour is now the token ink, so the
+    // page no longer wraps itself in `LegibleText` (a file WP7 deletes).
+    const idx = read("index.js");
+    expect(idx).not.toMatch(/legibleText|<LegibleText>/);
+    expect(idx).toMatch(/from "assets\/theme\/base\/tokens"/);
   });
 
   test("the timeline's gutter geometry is untouched by this pass (bravo-timeline-layout)", () => {
@@ -184,67 +219,25 @@ describe("the Biomarkers page's legibility floor (decision 304)", () => {
     expect(read("BiomarkerDataTimeline.js")).toMatch(/gutterGeometry\(prettyChans\)/);
   });
 
-  // ---- the frequency-coloured "X Hz" labels on the acquisition timeline (B5, 2026-09-26) --------
-  function hexesIn(block) { return (block.match(/#[0-9A-Fa-f]{6}/g) || []).map((h) => h.toUpperCase()); }
-  function freqTables() {
+  // ---- the "X Hz" labels on the acquisition timeline (the redesign of 2026-09-26) ------------
+  // CHANGED ON PURPOSE (SPEC.md section 5.1 item 4 and section 7, WP3): lanes take the ordered
+  // cividis scale, and a label is ink beside a small tick in its lane's colour, replacing decision
+  // 304's rule that each label be a darker variant of its line's hue.
+  test("the timeline colours its lanes by the ordered (cividis) scale, not a hand-written palette", () => {
     const tl = stripComments(read("BiomarkerDataTimeline.js"));
-    const grab = (name, open, close) => {
-      const i = tl.indexOf(`const ${name} = ${open}`);
-      return i < 0 ? null : tl.slice(i, tl.indexOf(close, i) + 1);
-    };
-    const pal = grab("FREQ_PALETTE", "{", "};");
-    const byHz = {};
-    (pal || "").replace(/(\d+(?:\.\d+)?):\s*"(#[0-9A-Fa-f]{6})"/g, (_, hz, h) => { byHz[Number(hz)] = h.toUpperCase(); });
-    const text = {};
-    (grab("FREQ_TEXT", "{", "};") || "").replace(/"(#[0-9A-Fa-f]{6})":\s*"(#[0-9A-Fa-f]{6})"/g,
-      (_, a, b) => { text[a.toUpperCase()] = b.toUpperCase(); });
-    return { tl, byHz, fallback: hexesIn(grab("FREQ_FALLBACK", "[", "];") || ""), text };
-  }
-  const srgbLin = (c) => { const x = c / 255; return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; };
-  function oklab(hex) {
-    const [r, g, b] = rgbOf(hex).map(srgbLin);
-    const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
-    const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
-    const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
-    return [0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
-      1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
-      0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s];
-  }
-  const deltaE = (a, b) => { const p = oklab(a); const q = oklab(b); return 100 * Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]); };
+    expect(tl).toMatch(/SEQUENTIAL/);
+    expect(tl).not.toMatch(/const FREQ_PALETTE = \{/);
+    expect(tl).not.toMatch(/const FREQ_TEXT = \{/);
+  });
 
-  test("the timeline draws its frequency labels in a text colour, never the raw line colour", () => {
-    const { tl } = freqTables();
+  test("each frequency label is ink text beside a tick in its lane's own colour", () => {
+    const tl = stripComments(read("BiomarkerDataTimeline.js"));
     expect(tl).not.toMatch(/font:\s*\{[^{}]*color:\s*freqColor\(/);
     expect(tl).toMatch(/font:\s*\{[^{}]*color:\s*freqTextColor\(/);
-  });
-
-  test("every frequency label colour is 4.5:1 or more on white, in the same hue family as its line", () => {
-    const { byHz, fallback, text } = freqTables();
-    const lines = Array.from(new Set(Object.values(byHz).concat(fallback)));
-    expect(lines.length).toBeGreaterThanOrEqual(24);
-    const low = lines.map((h) => [h, text[h] || h]).filter(([, t]) => contrastOnWhite(t) < 4.5)
-      .map(([h, t]) => `${h} -> ${t} (${contrastOnWhite(t).toFixed(2)}:1)`);
-    expect(low).toEqual([]);
-    // a darker variant, not a different colour: hue angle within 35 degrees of the line's
-    const hue = (h) => { const [, a, b] = oklab(h); return Math.atan2(b, a) * 180 / Math.PI; };
-    lines.forEach((h) => {
-      const t = text[h] || h;
-      const d = Math.abs(((hue(t) - hue(h)) + 540) % 360 - 180);
-      expect([h, d <= 35]).toEqual([h, true]);
-    });
-  });
-
-  test("neighbouring frequencies' labels stay at least as distinguishable as their lines", () => {
-    const { byHz, text } = freqTables();
-    const hz = Object.keys(byHz).map(Number).sort((a, b) => a - b);
-    const lab = (f) => text[byHz[f]] || byHz[f];
-    let worstLine = Infinity; let worstText = Infinity;
-    for (let i = 1; i < hz.length; i += 1) {
-      worstLine = Math.min(worstLine, deltaE(byHz[hz[i - 1]], byHz[hz[i]]));
-      worstText = Math.min(worstText, deltaE(lab(hz[i - 1]), lab(hz[i])));
-    }
-    expect(worstText).toBeGreaterThanOrEqual(worstLine);
-    expect(worstText).toBeGreaterThanOrEqual(9);
+    expect(tl).toMatch(/function freqTextColor\(\) \{\s*return T\.ink;/);
+    expect(tl).toMatch(/text: freqLabel\(c\)/);
+    expect(tl).toMatch(/function freqLabel\(hz\) \{\s*return `<span style="color:\$\{freqColor\(hz\)\}">/);
+    expect(contrastOnWhite(NAMED["T.ink"])).toBeGreaterThan(4.5);
   });
 
   test("the checks catch what they are for (negative control)", () => {
@@ -255,7 +248,10 @@ describe("the Biomarkers page's legibility floor (decision 304)", () => {
       + 'const e = { tickfont: { size: 17 }, font: { size: 11, color: "#5E5E5E" } };\n'
       + 'const f = <text x="1" fill="#7A7A7A" fontSize="9">3</text>;';
     expect(smallSizes(src)).toHaveLength(3);
+    expect(smallSizes(src, "", 12)).toHaveLength(4);
     expect(textGreys(src)).toHaveLength(4);
+    expect(literalHexes(src)).toHaveLength(6);
+    expect(literalHexes("// only a comment about #D55E00")).toEqual([]);
     expect(contrastOnWhite("#5E5E5E")).toBeGreaterThan(4.5);
     expect(contrastOnWhite("#7A7A7A")).toBeLessThan(4.5);
   });

@@ -17,7 +17,15 @@
  * tablet, read 2026-09-15) it is a level the device can only HOLD past a threshold through its
  * onset, not average; beyond that nothing on the device reaches it. On RCS08 the strongest cells
  * sit at 5 min, which is beyond.
+ *
+ * Wording (the redesign of 2026-09-26, SPEC.md section 6): "q" is said as "p ... after allowing for
+ * 22 bands" (the p-value corrected for having tested all 22 band centres), and a cell's own p as
+ * "for this square alone". The numbers and their rounding are unchanged.
  */
+import { T } from "assets/theme/base/tokens";
+
+/** How the corrected statistic is named everywhere on the heat maps. */
+export const ALLOWANCE = "after allowing for 22 bands";
 
 /** "9s", "1m" -- the delivered length of signal a row holds. */
 export function secondsLabel(s) {
@@ -63,11 +71,11 @@ function ratingsPhrase(row) {
 /** The corrected statistics for one cell, or the sentence that says why there are none. */
 export function bestCellReadout(sw, kind, colIndex, rowIndex, { includeN = true } = {}) {
   const best = bestRowFor(sw, kind, colIndex);
-  if (!best) return { isBest: false, text: "no corrected statistic for this column" };
+  if (!best) return { isBest: false, text: "no allowance for 22 bands is computed for this column" };
   const bestRow = rowIndexOf(sw, best.integration_seconds_delivered);
   if (bestRow !== rowIndex) {
     // The PI's wording, 2026-09-15: point at the circled best cell and stop.
-    return { isBest: false, text: `best cell corrected (${secondsLabel(best.integration_seconds_delivered)} circled)` };
+    return { isBest: false, text: `the allowance for 22 bands is given for the circled square (${secondsLabel(best.integration_seconds_delivered)})` };
   }
   // `includeN`: the hover carries the count (nothing else on a hover does); the panel lines beside
   // the scatter and the violin leave it out, since the plain line above them already has it.
@@ -75,7 +83,7 @@ export function bestCellReadout(sw, kind, colIndex, rowIndex, { includeN = true 
   if (kind !== "auc" && best.pearson_r_low != null && best.pearson_r_high != null) {
     parts.push(`interval ${fmtSigned(best.pearson_r_low)} to ${fmtSigned(best.pearson_r_high)}`);
   }
-  parts.push(`corrected q = ${fmtQ(best.family_wise_q_8_to_30hz)}`);
+  parts.push(`p ${fmtQ(best.family_wise_q_8_to_30hz)} ${ALLOWANCE}`);
   parts.push(String(best.answer || "").replace(/_/g, " ") || "not resolved");
   // B3 (decision 185): the cross-setting stability answer, the same words the Closed-Loop card's
   // "Choose a band" column prints, read off the row the backend attached it to. A row with no
@@ -94,20 +102,21 @@ export function stabilityAnswerWord(stab) {
   return stab.answer;
 }
 
-/** The symbol drawn on a column's best cell for its cross-setting stability answer -- the
- *  Closed-Loop card's own three (tick / cross / amber disc), null for "not tested" so nothing is
- *  drawn where nothing is known. Plotly marker symbols: a filled circle stands in for the tick. */
+/** The symbol drawn on a column's best cell for its cross-setting stability answer, by SHAPE only
+ *  (the redesign of 2026-09-26, SPEC.md section 3.2): ✓ the same, ✕ different, ? cannot tell, in ink
+ *  on a white disc, no green or red; null for "not tested", so nothing is drawn where nothing is
+ *  known. `glyph` is the character drawn; `symbol` names the shape. */
 export function stabilityMark(stab) {
   const answer = stab && stab.answer;
-  if (answer === "behaves the same") return { symbol: "circle", color: "#2e7d32", label: "behaves the same at every setting" };
-  if (answer === "behaves differently") return { symbol: "x", color: "#c62828", label: "behaves differently across settings" };
-  if (answer === "cannot tell") return { symbol: "diamond", color: "#e0a100", label: "cannot tell" };
+  if (answer === "behaves the same") return { symbol: "tick", glyph: "\u2713", color: T.ink, label: "behaves the same at every setting" };
+  if (answer === "behaves differently") return { symbol: "cross", glyph: "\u2715", color: T.ink, label: "behaves differently across settings" };
+  if (answer === "cannot tell") return { symbol: "question", glyph: "?", color: T.ink, label: "cannot tell" };
   return null;
 }
 
 /** One caption bullet for the symbols, under 24 words like the tier bullets. */
 export function stabilityBullet() {
-  return "Inside a circle: green tick, the band tracks pain the same at every stimulation setting; red cross, differently; amber, cannot tell.";
+  return "Inside a circle: \u2713 the band tracks pain the same at every stimulation setting; \u2715 differently; ? cannot tell.";
 }
 
 export function fmtP(p) {
@@ -129,13 +138,13 @@ export function hoverReadout(sw, kind, colIndex, rowIndex) {
     const n = ratingsPhrase(best);
     // `Number(null)` is 0, which would print "q = 0.0" for a q that was never assessed.
     const q = best.family_wise_q_8_to_30hz == null ? NaN : Number(best.family_wise_q_8_to_30hz);
-    if (Number.isFinite(q)) return `${n}, q = ${fmtQ(q)}`;
+    if (Number.isFinite(q)) return `${n} \u00b7 p ${fmtQ(q)} ${ALLOWANCE}`;
     const p = best.p_selection_aware == null ? NaN : Number(best.p_selection_aware);
-    return Number.isFinite(p) ? `${n}, p = ${fmtP(p)}` : n;
+    return Number.isFinite(p) ? `${n} \u00b7 p ${fmtP(p)}, not allowing for the 22 bands` : n;
   }
   const { n, p } = cellNP(sw, kind, colIndex, rowIndex);
   if (!(n > 0)) return "";
-  return p == null ? `${n} ratings` : `${n} ratings, p = ${fmtP(p)}`;
+  return p == null ? `${n} ratings` : `${n} ratings \u00b7 p ${fmtP(p)} for this square alone`;
 }
 
 /** One cell's own count and uncorrected p off the response; `p` null where the response has none. */

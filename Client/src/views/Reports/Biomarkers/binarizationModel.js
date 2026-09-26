@@ -14,35 +14,39 @@
  * Both the binarization-preview histogram (which samples feed binarization, at this window) and the
  * timeline color overlay (highlight the selected samples, dim the rest) consume one model instance.
  *
- * Okabe-Ito, colorblind-safe — MUST match BinarizationPreview / the histogram:
- *   HIGH = #D55E00 (vermillion), LOW = #0072B2 (blue), EXCLUDED middle = #7E8794 (grey).
- *   UNMATCHED / not-selected is rendered VERY light grey by the consumer (not a class here).
+ * Colours come from the shared data colours (assets/theme/base/dataColors.js, the redesign of
+ * 2026-09-26): high pain vermillion, low pain blue, the middle third (left out) light grey. The
+ * unmatched / not-selected samples are drawn lighter still by the consumer (not a class here).
  */
+import { PAIN, DIVERGING } from "assets/theme/base/dataColors";
+import { T } from "assets/theme/base/tokens";
 
-export const BIN_HI = "#D55E00";   // high pain
-export const BIN_LO = "#0072B2";   // low pain
-export const BIN_MID = "#7E8794";  // excluded middle
-// RGB triplets for consumers that interpolate a gradient (e.g. a diverging colormap) rather than
-// setting a flat fill -- same two colors as BIN_HI/BIN_LO, just pre-split for math.
-export const BIN_HI_RGB = [213, 94, 0];
-export const BIN_LO_RGB = [0, 114, 178];
+export const BIN_HI = PAIN.high;    // high pain
+export const BIN_LO = PAIN.low;     // low pain
+export const BIN_MID = PAIN.middle; // the middle third, left out
+const hexRgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+// RGB triplets for consumers that interpolate or build a translucent fill from the same colours.
+export const BIN_HI_RGB = hexRgb(BIN_HI);
+export const BIN_LO_RGB = hexRgb(BIN_LO);
 
-// A diverging scale around the value that means "no relationship" for each quantity -- 0 for a
-// correlation, 0.5 (never 0) for an area under the curve. House rule: an AUC is never read against
-// zero. Moved here from BiomarkerHeatmapGrids on 2026-09-11 so the Closed-Loop page's band heat map
-// and the Biomarkers heat maps read ONE definition of the colour and cannot drift apart.
+// The one diverging scale (blue -> light grey -> vermillion, nine stops, dataColors.DIVERGING)
+// around the value that means "no relationship" for each quantity -- 0 for a correlation, 0.5
+// (never 0) for an area under the curve. House rule: an AUC is never read against zero. Shared
+// with the Closed-Loop page's band heat map (one definition, so the two cannot drift apart).
+// Values beyond +/- halfRange saturate at the end colour; the hover still prints the true value.
+const STOPS = DIVERGING.map(([s, c]) => [s, hexRgb(c)]);
 export function divergingRgb(v, center, halfRange) {
   const t = Math.max(-1, Math.min(1, (Number(v) - center) / halfRange));
-  const neg = BIN_LO_RGB;         // blue
-  const pos = BIN_HI_RGB;         // vermillion
-  const mid = [255, 255, 255];
-  const lerp = (a, b, k) => a + (b - a) * k;
-  return t < 0
-    ? [lerp(neg[0], mid[0], 1 + t), lerp(neg[1], mid[1], 1 + t), lerp(neg[2], mid[2], 1 + t)]
-    : [lerp(mid[0], pos[0], t), lerp(mid[1], pos[1], t), lerp(mid[2], pos[2], t)];
+  const pos = (t + 1) / 2;
+  let i = 1;
+  while (i < STOPS.length - 1 && STOPS[i][0] < pos) i += 1;
+  const [s0, c0] = STOPS[i - 1];
+  const [s1, c1] = STOPS[i];
+  const k = s1 > s0 ? (pos - s0) / (s1 - s0) : 0;
+  return c0.map((a, j) => a + (c1[j] - a) * k);
 }
 export function diverging(v, center, halfRange) {
-  if (v == null || !Number.isFinite(Number(v))) return "#e9e9e9";
+  if (v == null || !Number.isFinite(Number(v))) return T.fillMuted;
   const c = divergingRgb(v, center, halfRange);
   return `rgb(${c.map((x) => Math.round(x)).join(",")})`;
 }

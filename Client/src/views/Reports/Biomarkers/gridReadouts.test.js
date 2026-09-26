@@ -45,30 +45,30 @@ describe("bestCellReadout (B1)", () => {
   test("the column's best cell prints n, the interval and the corrected q", () => {
     const r = bestCellReadout(SW, "corr", 1, 9);   // 12.5 Hz, 300 s
     expect(r.isBest).toBe(true);
-    expect(r.text).toBe("117 ratings · interval −0.66 to −0.40 · corrected q = 0.0022 · established");
+    expect(r.text).toBe("117 ratings · interval −0.66 to −0.40 · p 0.0022 after allowing for 22 bands · established");
   });
   test("a cell that is not its column's best points at the circled best cell, in the PI's own words", () => {
     // The PI, 2026-09-15: replace the sentence with "best cell corrected (1m circled)".
     const r = bestCellReadout(SW, "corr", 1, 2);   // 12.5 Hz, 9 s; the column's best is at 300 s = 5m
     expect(r.isBest).toBe(false);
-    expect(r.text).toBe("best cell corrected (5m circled)");
+    expect(r.text).toBe("the allowance for 22 bands is given for the circled square (5m)");
   });
   test("the panel lines drop the ratings count, which the plain line beside them already carries", () => {
     // The PI, 2026-09-15: "no reason to say '96 ratings' again".
     expect(bestCellReadout(SW, "corr", 1, 9, { includeN: false }).text)
-      .toBe("interval −0.66 to −0.40 · corrected q = 0.0022 · established");
+      .toBe("interval −0.66 to −0.40 · p 0.0022 after allowing for 22 bands · established");
     expect(bestCellReadout(SW, "auc", 2, 3, { includeN: false }).text)
-      .toBe("corrected q = 0.029 · established");
+      .toBe("p 0.029 after allowing for 22 bands · established");
     // the hover keeps the count: nothing else on a hover carries it
     expect(bestCellReadout(SW, "corr", 1, 9).text).toMatch(/^117 ratings/);
   });
   test("the AUC grid reads its own best row", () => {
     const r = bestCellReadout(SW, "auc", 2, 3);    // 13.5 Hz, 15 s
     expect(r.isBest).toBe(true);
-    expect(r.text).toBe("174 ratings · corrected q = 0.029 · established");
+    expect(r.text).toBe("174 ratings · p 0.029 after allowing for 22 bands · established");
   });
   test("a column with no best row says so rather than printing nothing", () => {
-    expect(bestCellReadout(SW, "auc", 0, 0).text).toBe("no corrected statistic for this column");
+    expect(bestCellReadout(SW, "auc", 0, 0).text).toBe("no allowance for 22 bands is computed for this column");
   });
 });
 
@@ -86,14 +86,14 @@ describe("hoverReadout -- the hover's third line (the PI, 2026-09-16)", () => {
     auc_n_low_grid: Array.from({ length: 10 }, () => [20, 30, 25]),
   };
   test("the column's best cell: its ratings count and its corrected q, nothing else", () => {
-    expect(hoverReadout(withN, "corr", 1, 9)).toBe("117 ratings, q = 0.0022");
-    expect(hoverReadout(withN, "auc", 2, 3)).toBe("174 ratings, q = 0.029");
+    expect(hoverReadout(withN, "corr", 1, 9)).toBe("117 ratings · p 0.0022 after allowing for 22 bands");
+    expect(hoverReadout(withN, "auc", 2, 3)).toBe("174 ratings · p 0.029 after allowing for 22 bands");
   });
   test("any other cell: its own count and its own uncorrected p, both read off the response", () => {
     // nothing is computed in the browser: `p_grid` (Pearson) and `auc_p_grid` (Mann-Whitney) come
     // from the backend (decision 188)
-    expect(hoverReadout(withN, "corr", 1, 2)).toBe("96 ratings, p = 0.051");
-    expect(hoverReadout(withN, "auc", 2, 0)).toBe("50 ratings, p = 0.015");
+    expect(hoverReadout(withN, "corr", 1, 2)).toBe("96 ratings · p 0.051 for this square alone");
+    expect(hoverReadout(withN, "auc", 2, 0)).toBe("50 ratings · p 0.015 for this square alone");
   });
   test("a response without the p grids (older stored) prints the count alone", () => {
     const noP = { ...withN, p_grid: undefined, auc_p_grid: undefined };
@@ -101,14 +101,14 @@ describe("hoverReadout -- the hover's third line (the PI, 2026-09-16)", () => {
   });
   test("a best cell whose q was not assessed falls back to its raw p", () => {
     const noQ = { ...withN, best_correlation_rows: withN.best_correlation_rows.map((r) => ({ ...r, family_wise_q_8_to_30hz: null })) };
-    expect(hoverReadout(noQ, "corr", 1, 9)).toBe("117 ratings, p = 0.000999");
+    expect(hoverReadout(noQ, "corr", 1, 9)).toBe("117 ratings · p 0.000999, not allowing for the 22 bands");
   });
   test("a cell with no count prints nothing rather than a dash", () => {
     expect(hoverReadout(SW, "corr", 1, 2)).toBe("");
   });
   test("the cross-setting stability word is not on the hover (it is drawn as a symbol)", () => {
     const stab = { ...withN, best_correlation_rows: withN.best_correlation_rows.map((r) => ({ ...r, cross_setting_stability: { answer: "behaves differently" } })) };
-    expect(hoverReadout(stab, "corr", 1, 9)).toBe("117 ratings, q = 0.0022");
+    expect(hoverReadout(stab, "corr", 1, 9)).toBe("117 ratings · p 0.0022 after allowing for 22 bands");
   });
 });
 
@@ -118,8 +118,8 @@ describe("hoverCustomData (B1)", () => {
     const cd = hoverCustomData(withN, "corr");
     expect(cd.length).toBe(10);
     expect(cd[9].length).toBe(3);
-    expect(cd[9][1]).toBe("117 ratings, q = 0.0022");
-    expect(cd[2][1]).toBe("96 ratings, p = 0.051");
+    expect(cd[9][1]).toBe("117 ratings · p 0.0022 after allowing for 22 bands");
+    expect(cd[2][1]).toBe("96 ratings · p 0.051 for this square alone");
   });
 });
 
@@ -171,27 +171,31 @@ describe("cross-setting stability on the grid (B3, decision 185)", () => {
   });
   test("the best cell's panel line ends with the answer the Closed-Loop card gives", () => {
     const r = bestCellReadout(withStability("behaves differently", "the interaction test rejects"), "corr", 1, 9);
-    expect(r.text).toBe("117 ratings · interval −0.66 to −0.40 · corrected q = 0.0022 · established · across settings: behaves differently");
+    expect(r.text).toBe("117 ratings · interval −0.66 to −0.40 · p 0.0022 after allowing for 22 bands · established · across settings: behaves differently");
   });
   test("an answer not yet computed says so in three words, not 'not tested'", () => {
     const r = bestCellReadout(withStability("not tested", "the cross-setting stability answer has not been computed for this grid yet"), "corr", 1, 9);
     expect(r.text.endsWith("across settings: not yet computed")).toBe(true);
   });
   test("a row carrying no answer at all leaves the panel line as it was", () => {
-    expect(bestCellReadout(SW, "corr", 1, 9).text).toBe("117 ratings · interval −0.66 to −0.40 · corrected q = 0.0022 · established");
+    expect(bestCellReadout(SW, "corr", 1, 9).text).toBe("117 ratings · interval −0.66 to −0.40 · p 0.0022 after allowing for 22 bands · established");
   });
-  test("one symbol per answer, the Closed-Loop card's: tick, cross, amber disc, nothing", () => {
-    expect(stabilityMark({ answer: "behaves the same" })).toEqual({ symbol: "circle", color: "#2e7d32", label: "behaves the same at every setting" });
-    expect(stabilityMark({ answer: "behaves differently" })).toEqual({ symbol: "x", color: "#c62828", label: "behaves differently across settings" });
-    expect(stabilityMark({ answer: "cannot tell" })).toEqual({ symbol: "diamond", color: "#e0a100", label: "cannot tell" });
+  // CHANGED ON PURPOSE (the redesign of 2026-09-26, SPEC.md section 3.2): the stability answer is
+  // drawn by SHAPE in ink, never by green, red or amber, so colour alone carries no meaning.
+  test("one shape per answer, in ink: tick, cross, question mark, nothing", () => {
+    const INK = "#1A1A1A";
+    expect(stabilityMark({ answer: "behaves the same" })).toEqual({ symbol: "tick", glyph: "\u2713", color: INK, label: "behaves the same at every setting" });
+    expect(stabilityMark({ answer: "behaves differently" })).toEqual({ symbol: "cross", glyph: "\u2715", color: INK, label: "behaves differently across settings" });
+    expect(stabilityMark({ answer: "cannot tell" })).toEqual({ symbol: "question", glyph: "?", color: INK, label: "cannot tell" });
     expect(stabilityMark({ answer: "not tested" })).toBeNull();
     expect(stabilityMark(undefined)).toBeNull();
   });
-  test("the caption bullet names the three symbols in under 24 words", () => {
+  test("the caption bullet names the three shapes in under 24 words, and no colour", () => {
     const line = stabilityBullet();
-    expect(line).toMatch(/tick/);
-    expect(line).toMatch(/cross/);
-    expect(line).toMatch(/amber/);
+    expect(line).toMatch(/\u2713/);
+    expect(line).toMatch(/\u2715/);
+    expect(line).toMatch(/\? cannot tell/);
+    expect(line).not.toMatch(/green|red|amber/);
     expect(line.split(" ").length).toBeLessThanOrEqual(24);
   });
 });
@@ -231,14 +235,14 @@ describe("the effective count beside the raw count (panel A item 4, 2026-09-22)"
   withEff.p_grid = Array.from({ length: 10 }, () => [0.4, 0.0507, 0.2]);
 
   test("the hover on the best cell names about how many ratings are independent", () => {
-    expect(hoverReadout(withEff, "corr", 1, 9)).toBe("117 ratings (about 98 independent), q = 0.0022");
+    expect(hoverReadout(withEff, "corr", 1, 9)).toBe("117 ratings (about 98 independent) · p 0.0022 after allowing for 22 bands");
   });
   test("the panel line names it too", () => {
     expect(bestCellReadout(withEff, "corr", 1, 9).text).toMatch(/^117 ratings \(about 98 independent\) · interval/);
   });
   test("a best row without the field, and any other cell, print exactly what they did", () => {
-    expect(hoverReadout(withEff, "auc", 2, 3)).toMatch(/^174 ratings, q = /);
-    expect(hoverReadout(withEff, "corr", 1, 2)).toBe("96 ratings, p = 0.051");
+    expect(hoverReadout(withEff, "auc", 2, 3)).toMatch(/^174 ratings · p .* after allowing for 22 bands$/);
+    expect(hoverReadout(withEff, "corr", 1, 2)).toBe("96 ratings · p 0.051 for this square alone");
     expect(bestCellReadout(SW, "corr", 1, 9).text).toMatch(/^117 ratings · interval/);
   });
 });

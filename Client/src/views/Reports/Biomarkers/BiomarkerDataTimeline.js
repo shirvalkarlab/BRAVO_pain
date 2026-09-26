@@ -30,60 +30,60 @@ import MDBox from "components/MDBox";
 import { routeLabel, modeledLegendName, kFromServed } from "./calibrationLabels";
 import { painScoreLabel } from "views/Reports/painScores";
 import { gutterGeometry, fitRowLabel, F_TICK, eventsRowSubtitle, matchedRowSubtitle } from "./timelineGutter";
+import { T } from "assets/theme/base/tokens";
+import { PAIN, SIDE, CONTEXT, CATEGORICAL, SEQUENTIAL } from "assets/theme/base/dataColors";
+import { MONTH_GRID } from "views/Reports/figureStyle";
 
-// Binarization color identity — MUST match the histogram / binarizationModel (Okabe-Ito).
-// excluded-middle is darkened to #5A6066 (was #7E8794) so "matched but dropped by the cut" is
-// categorically distinct from "never matched" and readable on white (design + eng review).
-const BIN_COLORS = { high: "#D55E00", low: "#0072B2", excluded: "#5A6066" };
+// COLOURS ONLY (the redesign of 2026-09-26, SPEC.md section 5.1 item 4, through the
+// bravo-timeline-layout skill): every colour below comes from the shared tokens and data colours.
+// No font size and no gutter geometry changed here (timelineGutter.js is untouched).
+const hexRgba = (hex, a) => `rgba(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(",")},${a})`;
+
+// The high / low split's colours — the same as the histogram (dataColors.PAIN); the middle third,
+// matched but dropped by the cut, is drawn dark grey so it stays distinct from "never matched".
+const BIN_COLORS = { high: PAIN.high, low: PAIN.low, excluded: T.ink3 };
 // "Not included in the binarized set" (unmatched, or a modality the scan doesn't pool): a dimmed but
 // clearly-present grey (~2:1 on white) so existing-but-unselected data never reads as ABSENT. The
-// previous #D7DBDF was ~1.39:1 — effectively invisible, making real data look like missing data.
-const DIM_GREY = "#AEB4BB";
+// previous light grey was ~1.39:1 — effectively invisible, making real data look like missing data.
+const DIM_GREY = CONTEXT;
 // Text greys at 4.5:1 or more on white (decision 304; the design review of 2026-09-26, B6): the
 // secondary text (tick numbers, "no ... data" notes, the subtitle, the row sub-labels) and the unit
 // labels ("LSB", "mA"). Colour only: no font size in the left gutter changes, so the gutter's
 // column geometry (F_TICK, the contact and region fonts, LBL_GAP, LEFT_CAP) is exactly as before.
-const SUB_INK = "#5E5E5E";
-const UNIT_INK = "#6E6E6E";
+const SUB_INK = T.ink3;
+const UNIT_INK = T.ink3;
 const DIM_GREY_FAINT = "rgba(150,157,165,0.42)";
 
-// ---- platform palette (ported from BiomarkerTimeline.js) --------------------------------------
+// ---- the sensing-frequency colours -------------------------------------------------------------
+// Lanes are coloured by their sensing centre frequency on the SEQUENTIAL (cividis) scale, an
+// ordered quantity drawn with an ordered colour: dark blue at the lowest frequency to olive at the
+// highest the device senses. The palest cividis stops are left out (they vanish on white). The
+// "X Hz" labels are TEXT, so they are drawn in ink beside a small tick in the lane's own colour
+// (SPEC.md section 5.1 item 4), never in the colour itself.
 const FREQ_BIN_HZ = 250 / 256;
-const FREQ_PALETTE = {
-  3.9: "#882255", 4.9: "#AA4499", 5.9: "#CC6677", 6.8: "#993377",
-  7.8: "#332288", 8.8: "#0072B2", 9.8: "#56B4E9", 10.7: "#009E73",
-  11.7: "#94C973", 12.7: "#E69F00", 13.7: "#F0A860", 14.6: "#B8860B",
-  15.6: "#7E6E1F", 16.6: "#A6761D", 17.6: "#666633",
-  18.6: "#44AA99", 19.5: "#117733", 20.5: "#88CCEE", 21.5: "#6699CC",
-  22.5: "#4477AA", 23.4: "#D55E00", 24.4: "#BB5566", 25.4: "#AA3377", 26.4: "#CC79A7",
-};
-const FREQ_FALLBACK = ["#332288", "#0072B2", "#56B4E9", "#009E73", "#94C973",
-                       "#E69F00", "#D55E00", "#CC79A7", "#44AA99", "#882255"];
+const FREQ_LO_HZ = 3.9;
+const FREQ_HI_HZ = 30;
+const FREQ_STOPS = SEQUENTIAL.slice(0, 5).map((h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)));
 function snapFreq(hz) {
   if (hz == null || !Number.isFinite(hz)) return null;
   return Math.round((Math.round(hz / FREQ_BIN_HZ) * FREQ_BIN_HZ) * 10) / 10;
 }
 function freqColor(hz) {
   const b = snapFreq(hz);
-  if (b == null) return "#BDBDBD";
-  if (FREQ_PALETTE[b] != null) return FREQ_PALETTE[b];
-  return FREQ_FALLBACK[Math.abs(Math.round(b)) % FREQ_FALLBACK.length];
+  if (b == null) return CONTEXT;
+  const t = Math.max(0, Math.min(1, (b - FREQ_LO_HZ) / (FREQ_HI_HZ - FREQ_LO_HZ)));
+  const pos = t * (FREQ_STOPS.length - 1);
+  const i = Math.min(FREQ_STOPS.length - 2, Math.floor(pos));
+  const k = pos - i;
+  const c = FREQ_STOPS[i].map((a, j) => Math.round(a + (FREQ_STOPS[i + 1][j] - a) * k));
+  return `rgb(${c.join(",")})`;
 }
-// The "X Hz" labels drawn as TEXT on white (design review B5, 2026-09-26): 13 of the 24 line hues
-// read under 4.5:1 as text (the light blue #88CCEE at 1.76:1). Each is mapped to a darker variant of
-// the SAME hue (hue angle within 35 degrees), chosen so every label is 4.5:1 or more and neighbouring
-// frequencies stay further apart than the line colours themselves (worst neighbour distance, OKLab
-// x100: 9.3 against the lines' 5.7; colour-blind simulation 7.2 against 4.6). The lines keep their
-// colours; hues already at 4.5:1 are drawn as they are. Checked in legibility.test.js.
-const FREQ_TEXT = {
-  "#CC6677": "#B95567", "#56B4E9": "#00567C", "#009E73": "#218463", "#94C973": "#316100",
-  "#E69F00": "#986A15", "#F0A860": "#914500", "#B8860B": "#683700", "#A6761D": "#604105",
-  "#44AA99": "#348174", "#88CCEE": "#367A99", "#6699CC": "#235584", "#D55E00": "#A94E13",
-  "#CC79A7": "#782D5A",
-};
-function freqTextColor(hz) {
-  const c = freqColor(hz);
-  return FREQ_TEXT[c] || c;
+function freqTextColor() {
+  return T.ink;
+}
+/** The "X Hz" label: ink text beside a small tick in the lane's own colour. */
+function freqLabel(hz) {
+  return `<span style="color:${freqColor(hz)}">\u258c</span>${fmtHz(hz)}`;
 }
 function fmtHz(hz) {
   const b = snapFreq(hz);
@@ -188,22 +188,25 @@ function tEpoch(v) {
 // data.region_map), never a static guess: hardcoding LEFT→GPi / RIGHT→VIM mislabels anatomy the
 // moment this view opens on a participant with different targets. We fall back to NO region label
 // rather than a wrong one (FRONTEND_review item 6).
+// The side colours on every page (dataColors.SIDE): left blue, right orange, as a pale coverage
+// tint and a faint band; the region tab's words are ink (text never takes a figure colour).
 const HEMI2 = {
-  LEFT: { col: "#5E3C99", td: "#C9BBDF", band: "rgba(94,60,153,0.05)" },
-  RIGHT: { col: "#117733", td: "#B4D8C2", band: "rgba(17,119,51,0.05)" },
+  LEFT: { col: T.ink, td: hexRgba(SIDE.left, 0.28), band: hexRgba(SIDE.left, 0.04) },
+  RIGHT: { col: T.ink, td: hexRgba(SIDE.right, 0.32), band: hexRgba(SIDE.right, 0.05) },
 };
-const PAL = { pain: "#C44E00", stim: "#7E6BB0", ink: "#1a1a1a", proLsb: "#1F4E79" };
+// Row labels in ink; the stimulation current line in reddish purple (a mark, no other meaning here).
+const PAL = { pain: T.ink, stim: CATEGORICAL[3], ink: T.ink, proLsb: T.ink };
 
 // Categorical colors for PATIENT-EVENT labels (Higher Pain / Tingly-Burning / Feeling Good / …).
 // Pain-type labels lean red/orange; relief/medication lean blue/green; others fall through to a
 // colorblind-aware cycle. Keyed by a normalized (lowercased) label so minor spelling variants pool.
 const EVENT_COLORS = {
-  "higher pain": "#D62728", "high pain": "#B2182B", "lower pain": "#F4A582",
-  "tingly/burning": "#CC79A7", "dyskinesia": "#882255", "feeling off": "#E69F00",
-  "feeling good": "#1B7837", "medication": "#2166AC", "took medication": "#4393C3",
-  "percocet": "#56B4E9",
+  "higher pain": PAIN.high, "high pain": PAIN.high, "lower pain": PAIN.low,
+  "tingly/burning": CATEGORICAL[3], "dyskinesia": CATEGORICAL[3], "feeling off": CATEGORICAL[4],
+  "feeling good": CATEGORICAL[2], "medication": SEQUENTIAL[1], "took medication": SEQUENTIAL[1],
+  "percocet": SEQUENTIAL[1],
 };
-const EVENT_FALLBACK = ["#332288", "#0072B2", "#009E73", "#94C973", "#44AA99", "#999933"];
+const EVENT_FALLBACK = [CATEGORICAL[4], CATEGORICAL[2], CATEGORICAL[3], SEQUENTIAL[2], CONTEXT];
 function eventColor(label, idx) {
   const k = String(label || "").trim().toLowerCase();
   if (EVENT_COLORS[k]) return EVENT_COLORS[k];
@@ -661,7 +664,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
           ov.sessions.forEach((s) => {
             const c = snapFreq(s.center_hz);
             if (c !== lastCen && c != null && (s.t0 - lastLbl) >= MIN_LBL_GAP) {
-              annotations.push({ xref: X, yref: Y, x: D(s.t0), y: BP_HI, text: fmtHz(c),
+              annotations.push({ xref: X, yref: Y, x: D(s.t0), y: BP_HI, text: freqLabel(c),
                 showarrow: false, yshift: 8, font: { size: 11, color: freqTextColor(c) } });
               lastLbl = s.t0;
             }
@@ -701,14 +704,14 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       const psd = binMode ? psdAll.filter(inScan) : psdAll;
       if (psd.length) {
         const tickColor = (r) => {
-          if (!binMode) return "#9AA0A6";
+          if (!binMode) return CONTEXT;
           const b = binOf(ch, tEpoch(r.t_start));
           return (b === "high" || b === "low" || b === "excluded") ? BIN_COLORS[b] : DIM_GREY;
         };
         const isEvent = (r) => r.product === "patient_event";
         // Multimodal mode: tint imported event-marker PSDs a faint teal so the new population is
         // visible against the neutral-grey montage/survey ticks; binarization mode colors both by bin.
-        const colors = psd.map((r) => (!binMode && isEvent(r) ? "#3B8A8F" : tickColor(r)));
+        const colors = psd.map((r) => (!binMode && isEvent(r) ? CATEGORICAL[2] : tickColor(r)));
         const sizes = colors.map((c, i) => (binMode && c !== DIM_GREY ? 11 : (isEvent(psd[i]) ? 6 : 7)));
         // Hover: an imported event-marker snapshot is PSD and shows the marker's own NAME (e.g.
         // "Streaming", "Higher Pain"); a montage/survey recording is TD (montage) and shows which
@@ -775,11 +778,11 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       });
     } else {
       annotations.push({ xref: "paper", yref: Y, x: 0.5, y: eventY,
-        text: "no patient events", showarrow: false, font: { size: 11, color: "#8A5A5A" } });
+        text: "no patient events", showarrow: false, font: { size: 11, color: SUB_INK } });
     }
     annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: eventY,
       text: `<b>EVENTS</b>${evList.length ? `<br><span style="font-size:13px;color:${SUB_INK}">${eventsRowSubtitle(evList.length)}</span>` : ""}`,
-      showarrow: false, xanchor: "right", font: { size: 24, color: "#555" } });
+      showarrow: false, xanchor: "right", font: { size: 24, color: T.ink } });
 
     // ---- montage snapshots: NeuralActivitySnapshot montage sweeps NOT already shown as a
     // montage/survey PSD recording (de-duplicated server-side). Rendered as small grey ticks along
@@ -793,7 +796,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     if (mList.length) {
       traces.push({ type: "scattergl", mode: "markers",
         x: mList.map((e) => D(e.t)), y: mList.map(() => eventBase + 0.06),
-        marker: { symbol: "line-ns-open", size: 7, color: "#9AA0A6", line: { width: 1.2 } },
+        marker: { symbol: "line-ns-open", size: 7, color: CONTEXT, line: { width: 1.2 } },
         customdata: mList.map((e) => [
           e.peak_hz == null ? "n/a" : fmtHz(e.peak_hz),
           e.n_chan == null ? "?" : e.n_chan]),
@@ -806,7 +809,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       ? painOverride : (av.pain || { t: [], y: [], metric: "PRO" });
     const [pLo, pHi, pTicks] = painAxis(pain.metric, pain.y);
     shapes.push({ type: "line", xref: "paper", yref: Y, x0: 0, x1: 1,
-      y0: painTop + 0.16, y1: painTop + 0.16, line: { color: "#e0e0e0", width: 1 } });
+      y0: painTop + 0.16, y1: painTop + 0.16, line: { color: T.rule, width: 1 } });
     if (pain.t && pain.t.length) {
       const py = pain.y.map((v) => yScale(v, pLo, pHi, painBase, painTop));
       // In binarization mode, color each PRO marker by which side of the LIVE cut(s) it falls on
@@ -819,11 +822,9 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
           : (v >= cuts.highCut ? BIN_COLORS.high : BIN_COLORS.excluded);
         return v <= cuts.cut ? BIN_COLORS.low : BIN_COLORS.high;
       };
-      // Multimodal pain color: a neutral dark slate (#3A4A63), NOT PAL.pain #C44E00 — the latter is
-      // within ~1.2:1 of the high-pain vermillion #D55E00, so a clinician glancing at the multimodal
-      // pain row would read every point as "high pain" before any binarization. Reserving vermillion
-      // for the HIGH semantic that only exists in binarization mode removes that cross-toggle clash.
-      const PAIN_NEUTRAL = "#3A4A63";
+      // Multimodal pain colour: the body-text grey, never vermillion, which is reserved for the HIGH
+      // pain group that only exists in the high / low view (so no point reads as "high pain" early).
+      const PAIN_NEUTRAL = T.ink2;
       const lineColor = binMode ? "rgba(120,120,120,0.35)" : PAIN_NEUTRAL;
       traces.push({ type: "scattergl", mode: "lines", x: pain.t.map(D), y: py,
         line: { color: lineColor, width: 2.4 }, opacity: binMode ? 0.5 : 0.45,
@@ -896,7 +897,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     // ---- thin separator between pain and stim, then stim step with y-axis --------------------
     shapes.push({ type: "line", xref: "paper", yref: Y, x0: 0, x1: 1,
       y0: (painBase + stimTop) / 2, y1: (painBase + stimTop) / 2,
-      line: { color: "#cfcfcf", width: 1 } });
+      line: { color: T.rule, width: 1 } });
     const stim = av.stim || { t: [], y: [] };
     const SMAX = stim.y && stim.y.length ? Math.max(3, Math.ceil(Math.max(...stim.y))) : 3;
     if (stim.t && stim.t.length) {
@@ -961,15 +962,15 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       //    page reads each through its time-domain signal; until 2026-09-26 this entry called them PSD)
       //  • teal ticks = patient-triggered EVENT snapshots (incl. the auto 'Streaming' ones): PSD, no TD
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
-        marker: { symbol: "line-ns-open", size: 10, color: "#9AA0A6", line: { width: 1.4 } },
+        marker: { symbol: "line-ns-open", size: 10, color: CONTEXT, line: { width: 1.4 } },
         name: "TD (montage): one tick per montage or survey recording  (hover → which)" });
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
-        marker: { symbol: "line-ns-open", size: 10, color: "#3B8A8F", line: { width: 1.4 } },
+        marker: { symbol: "line-ns-open", size: 10, color: CATEGORICAL[2], line: { width: 1.4 } },
         name: "PSD (the device's 30 s snapshot): patient event  (incl. the automatic 'Streaming' ones; no TD)" });
       // Patient-event diamonds (the EVENTS row) — one filled diamond per LABELED press, colored by
       // label. Add an explicit glyph so the row is documented (the per-label colors stay in the row).
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
-        marker: { symbol: "diamond", size: 10, color: "#888", line: { color: "rgba(0,0,0,0.45)", width: 0.6 } },
+        marker: { symbol: "diamond", size: 10, color: CONTEXT, line: { color: "rgba(0,0,0,0.45)", width: 0.6 } },
         name: "patient event  (labeled press: Pain / Medication / …; color = label)" });
       // Chronic 24/7 and streaming-LSB glyphs: the SHAPE is the identifying channel (dashdot squiggle
       // vs solid block). Their real on-plot COLOR is the sensing center frequency (FREQ_PALETTE,
@@ -989,7 +990,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         marker: { symbol: "circle-open", size: 11, color: "rgba(0,0,0,0)", line: { width: 1.5, color: PAL.proLsb } },
         name: modeledLegendName(allModeledPoints) });
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
-        marker: { symbol: "square", size: 12, color: "#C9BBDF" },
+        marker: { symbol: "square", size: 12, color: HEMI2.LEFT.td },
         name: "raw TD coverage  (streaming + montage/survey sweep; zoom → waveform)" });
     }
 
@@ -1051,7 +1052,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       // react() otherwise). Keyed by metric so a metric change — a genuinely different x/y domain —
       // intentionally resets the view; everything else keeps it.
       uirevision: (pain && pain.metric) ? `tl-${pain.metric}` : "tl",
-      plot_bgcolor: "#ffffff", paper_bgcolor: "#ffffff",
+      plot_bgcolor: T.surface, paper_bgcolor: T.surface,
       font: { family: "Arial, Helvetica, sans-serif", size: 11, color: PAL.ink },
       shapes, annotations,
       showlegend: true,
@@ -1062,12 +1063,12 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       // This makes the old DOM-width measurement + plotly_afterplot resize hook unnecessary.
       legend: { orientation: "v", x: 1.0, xanchor: "right", y: LEG_BOT_Y, yanchor: "bottom",
                 font: { size: 11.5 }, bgcolor: "rgba(255,255,255,0.96)",
-                bordercolor: "#1a1a1a", borderwidth: 1.5,
+                bordercolor: "rgba(0,0,0,0)", borderwidth: 1.5,
                 itemsizing: "constant", tracegroupgap: 2 },
       // Title sits ABOVE the legend boxes (TITLE_Y, top-anchored), inside the computed top margin, so
       // its two lines always clear the legend top and are never cut off at the figure edge.
       title: { text: `<b>Biomarker Data Timeline</b><br><span style="font-size:13px;color:${SUB_INK}">${sub}</span>`,
-               x: 0.012, xanchor: "left", y: TITLE_Y, yanchor: "top", font: { size: 26, color: "#1a1a1a" } },
+               x: 0.012, xanchor: "left", y: TITLE_Y, yanchor: "top", font: { size: 26, color: T.ink } },
       // DYNAMIC time gridlines: no fixed dtick, so Plotly auto-picks the tick interval for the
       // current zoom (year/month -> week -> day -> 6 h -> hour) and REDRAWS on every zoom/pan. The
       // gridlines span the whole single y-axis, so they carry through every neural lane + pain +
@@ -1076,8 +1077,8 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       // glyphs (e.g. the rightmost modeled diamonds) are never clipped at the plot edge. The right
       // buffer is a touch larger than the left. Span is in epoch-seconds; D() makes the axis dates.
       xaxis: { range: [D(t0 - (t1 - t0) * 0.01), D(t1 + (t1 - t0) * 0.03)], type: "date", autorange: false,
-               showgrid: true, gridcolor: "rgba(0,0,0,0.18)", gridwidth: 1,
-               tickfont: { size: 17 }, ticks: "outside", ticklen: 4, tickcolor: "#ccc",
+               showgrid: true, gridcolor: MONTH_GRID, gridwidth: 1,
+               tickfont: { size: 17 }, ticks: "outside", ticklen: 4, tickcolor: T.graphic,
                showspikes: true, spikemode: "across", spikethickness: 1,
                spikecolor: "rgba(0,0,0,0.35)", spikedash: "solid" },
       yaxis: { visible: false, range: [stimBase - 0.5, FULL_TOP], fixedrange: true },
@@ -1187,14 +1188,14 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
               ? "Matched samples colored by pain label; everything else dimmed"
               : "Neural lanes colored by sensing frequency"}
           </span>
-          <span style={{ fontSize: 13, fontWeight: 600, color: "#555", whiteSpace: "nowrap" }}>{"Color by"}</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: T.ink, whiteSpace: "nowrap" }}>{"Color by"}</span>
           <ToggleButtonGroup
             value={colorMode || "multimodal"} exclusive size="small"
             onChange={(e, v) => { if (v) setColorMode(v); }}
             sx={{
               "& .MuiToggleButton-root": { textTransform: "none", fontSize: 12.5, fontWeight: 600,
-                px: 1.5, py: 0.4, color: "#555", borderColor: "#C7CCD1" },
-              "& .Mui-selected": { color: "#fff !important", backgroundColor: "#344767 !important" },
+                px: 1.5, py: 0.4, color: T.ink2, borderColor: T.ink3 },
+              "& .Mui-selected": { color: `${T.onFill} !important`, backgroundColor: `${T.accent} !important` },
             }}
           >
             <ToggleButton value="multimodal">{"Multimodal data"}</ToggleButton>

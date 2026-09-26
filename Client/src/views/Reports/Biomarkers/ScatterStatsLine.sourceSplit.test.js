@@ -42,7 +42,7 @@ test("the line is printed under the cell's own statistics, in the PI's words", (
   expect(line.textContent).toBe(
     "TD values: r \u22120.05 (\u22120.23 to +0.12), 76 reports \u00b7 PSD values: r \u22120.37 (\u22120.56 to \u22120.19), 86 reports");
   const text = container.textContent;
-  expect(text.indexOf("Pearson r = ")).toBeLessThan(text.indexOf("TD values:"));
+  expect(text.indexOf("Correlation for this square alone: r = ")).toBeLessThan(text.indexOf("TD values:"));
 });
 
 test("no line for a stored grid built before the split", () => {

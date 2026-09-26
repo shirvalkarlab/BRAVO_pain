@@ -5,7 +5,7 @@
  * and the pain series the card already holds, so it follows the slider live.
  */
 import "@testing-library/jest-dom";
-import { render as rtlRender, screen } from "@testing-library/react";
+import { render as rtlRender, screen, fireEvent } from "@testing-library/react";
 import { ThemeProvider } from "@mui/material/styles";
 import theme from "assets/theme";
 import { PlatformContextProvider } from "context";
@@ -69,18 +69,24 @@ describe("reportCoverage", () => {
     const el = container.querySelector('[data-testid="report-coverage"]');
     expect(el).not.toBeNull();
     const bold = el.querySelector("b");
-    expect(bold.textContent).toBe("1 of 5 Left Leg VAS reports have a neural sample within ±2 min; 2 within ±10 min; 3 within ±60 min.");
+    // Worded "band-power reading" since the redesign of 2026-09-26 (SPEC.md section 6: "neural sample(s)").
+    expect(bold.textContent).toBe("1 of 5 Left Leg VAS reports have a band-power reading within ±2 min; 2 within ±10 min; 3 within ±60 min.");
     expect(el.textContent.trim()).toBe(bold.textContent);   // the bold clause alone (the PI, 2026-09-21)
     const all = container.textContent;
-    expect(all.indexOf("reports have a neural sample")).toBeLessThan(all.indexOf("Match window"));
+    expect(all.indexOf("reports have a band-power reading")).toBeLessThan(all.indexOf("Match window"));
     expect(all.indexOf("Match window")).toBeLessThan(all.indexOf("Split into high and low pain"));
     expect(all.indexOf("Split into high and low pain")).toBeLessThan(all.indexOf("Match direction"));
-    expect(all).toContain("Low ≤ 33ᵗʰ pct");
-    expect(all).toContain("High ≥ 67ᵗʰ pct");
-    for (const label of ["Report-first matching", "Neural-first matching", "Neural-first, pre-report"]) {
+    // The settings sit in one fold whose row names the settings in force (SPEC.md section 5.1,
+    // 2026-09-26); open it as a reader would.
+    fireEvent.click(screen.getByRole("button", { name: /^Paired within ±2 min/ }));
+    // The cuts and the three directions in plain words (SPEC.md section 6, 2026-09-26).
+    expect(all).toContain("Low: ratings at or below the 33rd percentile");
+    expect(all).toContain("High: at or above the 67th");
+    for (const label of ["Each report picks its nearest recordings", "Each recording picks its nearest report",
+      "Each recording picks the next report after it"]) {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
-    expect(screen.getByRole("button", { name: "Neural-first, pre-report" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Each recording picks the next report after it" })).toHaveAttribute("aria-pressed", "true");
     expect(container.querySelector('[data-testid="timing-histogram"]')).not.toBeNull();
     expect(all).toContain("samples inside ±2 min on the side before the report");
   });

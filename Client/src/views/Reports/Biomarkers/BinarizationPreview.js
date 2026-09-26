@@ -4,7 +4,7 @@
  *
  * PRIMARY (matched) mode — when the parent supplies a `scanModel` (built client-side from
  * availability.psd_scan_index, the PSDs the exploratory scan pools): the histogram plots the pain
- * values of the MATCHED PSD samples — i.e. exactly the neural data that feeds the binarized
+ * values of the MATCHED PSD samples — i.e. exactly the band-power readings that feeds the binarized
  * biomarker at this window — and RECOLORS + RECOUNTS LIVE as the match-window slider moves (no
  * backend recompute). Moving the slider visibly changes how much data feeds binarization. The
  * counts are verified identical to the backend `matched_sample_counts`.
@@ -13,10 +13,10 @@
  * histogramming the daily-mean PRO distribution. Kept so the card degrades gracefully.
  *
  * Sits in the top controls card alongside the strategy selector so the user SEES exactly which
- * neural samples will be labeled high vs low BEFORE clicking "Start exploratory analysis".
+ * band-power readings will be labeled high vs low BEFORE clicking "Start exploratory analysis".
  *
  * Design notes (publication-quality, colorblind-safe):
- *   * Okabe-Ito palette — LO=#0072B2 (blue), HI=#D55E00 (vermillion), MID=#7E8794 (grey).
+ *   * The shared pain colours (dataColors.PAIN): low blue, high vermillion, the middle light grey.
  *   * Histogram is a single trace with per-bin marker colors, so the high/low/excluded classes
  *     are visually contiguous (no gap artifacts from three separate overlaid histograms).
  *   * Cut lines + percentile labels above the plot area; class-count badges as in-plot annotations.
@@ -29,14 +29,20 @@ import Slider from "@mui/material/Slider";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
+import { T, TYPE } from "assets/theme/base/tokens";
+import { textInk } from "assets/theme/base/dataColors";
+import { plotlyLayout, PLOTLY_CONFIG, REF_LINE } from "views/Reports/figureStyle";
+
 import { BIN_LO as LO, BIN_HI as HI, BIN_MID as MID, computeCuts as computeCutsShared }
   from "./binarizationModel";
 
-// Text greys at 4.5:1 or more on white (decision 304). The histogram's excluded-middle BARS keep
-// BIN_MID (a fill, 3.6:1, legible as a shape); its words take the darker grey the timeline uses for
-// the same class.
-const SUBTLE = "#5E5E5E";
-const MID_TEXT = "#5A6066";
+// Text colours (the redesign of 2026-09-26, SPEC.md section 2): the bars keep the pain colours
+// (marks only); any word in a pain colour takes its text-safe variant, and the middle third's words
+// take the lightest allowed grey.
+const SUBTLE = T.ink3;
+const MID_TEXT = T.ink3;
+const HI_TEXT = textInk(HI);
+const LO_TEXT = textInk(LO);
 
 // Daily-mode (legacy fallback) cuts: the shared, backend-faithful computeCuts for the numeric
 // values, with the same UI percentile/strategy labels matchedCuts (below) attaches to the
@@ -75,8 +81,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
                                metricLabel, metricKey, loading, totalReports,
                                matchTolerance, matchDirty,
                                scanModel, matchedLoading,
-                               setPercentileLow, setPercentileHigh, setStrategy,
-                               showDescriptions = false }) {
+                               setPercentileLow, setPercentileHigh, setStrategy }) {
   const ref = useRef(null);
   // The match-window control itself moved to the card's top band (MatchWindowBand, option C); this
   // panel only needs to know whether a window is in force to explain an empty match.
@@ -112,7 +117,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
   const matchedMode = !!(scanModel && scanModel.matchedValues && scanModel.matchedValues.length > 0);
   const counts = scanModel ? scanModel.counts : null;
   // Match-direction-aware framing constants. PRO-first leads with pain ratings as the unit of
-  // independence; PSD-first (nearest/prior) leads with the neural-sample count. `su` is the
+  // independence; PSD-first (nearest/prior) leads with the band-power reading count. `su` is the
   // survey-usage block carried on counts (n_pro_total, n_pro_used, pct_pro_used, depth stats).
   const su = counts && counts.survey_usage;
   const dir = (counts && counts.match_direction) || "pro_first";
@@ -246,7 +251,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
                     line: { color, width: 2, dash: "dash" } });
       annotations.push({ x, yref: "paper", y: yLevel, xanchor, yanchor: "bottom",
                          text: `${x.toFixed(1)} (${label})`, showarrow: false,
-                         font: { size: 11, color } });
+                         font: { size: 12, color: textInk(color) } });
     };
     if (cuts.kind === "two-cut") {
       pushCutLine(cuts.lowCut, cuts.lowLabel, LO, 1.02, "right");
@@ -254,10 +259,10 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
       shapes.push({ type: "rect", xref: "x", yref: "paper", x0: cuts.lowCut, x1: cuts.highCut,
                     y0: 0, y1: 1, fillcolor: MID, opacity: 0.10, line: { width: 0 } });
     } else if (cuts.kind === "one-cut") {
-      pushCutLine(cuts.cut, cuts.label, "#344767", 1.04, "center");
+      pushCutLine(cuts.cut, cuts.label, T.ink, 1.04, "center");
     }
 
-    // Class-count badges. In matched mode the unit is matched NEURAL SAMPLES (the neural data that
+    // Class-count badges. In matched mode the unit is matched NEURAL SAMPLES (the band-power readings that
     // feeds binarization); in daily mode it is calendar days + the raw reports they carry.
     //
     // In matched mode each badge also shows the per-group MODALITY breakdown across the THREE sources
@@ -275,8 +280,10 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
       xref: "paper", yref: "paper", x: xRel, y: yRel, xanchor: "center", yanchor: "top",
       text: `<b>${label}</b><br>${primary}${secondary ? `<br>${secondary}` : ""}`,
       showarrow: false, align: "center",
-      font: { size: 11, color: "#FFFFFF" },
-      bgcolor: color, bordercolor: color, borderwidth: 1.5, borderpad: 4, opacity: 0.94,
+      // Ink on white with a border in the group's colour (white text on vermillion or the light
+      // grey of the middle third fell below 4.5:1).
+      font: { size: 12, color: T.ink },
+      bgcolor: T.surface, bordercolor: color, borderwidth: 1.5, borderpad: 4, opacity: 1,
     });
     // Signpost-badge copy. In matched mode the FRAMING follows the match-direction toggle:
     //   pro_first   -- leads with the PRO count (units of independence), then PSDs as supporting
@@ -296,7 +303,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
         })()
       : { low: 0, high: 0, excluded: 0 };
     const proFirst = matchedMode && dir === "pro_first";
-    const psdLine = (n) => `${(n || 0).toLocaleString()} neural sample${n === 1 ? "" : "s"}`;
+    const psdLine = (n) => `${(n || 0).toLocaleString()} band-power reading${n === 1 ? "" : "s"}`;
     const proLine = (n) => `${(n || 0).toLocaleString()} pain rating${n === 1 ? "" : "s"}`;
     const lowTxt = matchedMode
       ? (proFirst
@@ -318,14 +325,14 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
         // Float Low/High in the headroom band; Excluded sits higher still, above the max line.
         annotations.push(badge(0.12, 0.80, LO, "Low", lowTxt[0], lowTxt[1]));
         annotations.push(badge(0.88, 0.80, HI, "High", highTxt[0], highTxt[1]));
-        annotations.push({ ...badge(0.50, 0.97, MID, "Excluded", midTxt[0], midTxt[1]), opacity: 0.88 });
+        annotations.push(badge(0.50, 0.97, MID, "Left out (middle)", midTxt[0], midTxt[1]));
         // Dotted reference rule at the tallest-bar height — the Excluded badge's border sits above it.
         shapes.push({ type: "line", xref: "paper", yref: "y", x0: 0, x1: 1, y0: yMax, y1: yMax,
-                      line: { color: MID, width: 1, dash: "dot" } });
+                      line: REF_LINE });
       } else {
         annotations.push(badge(0.10, 0.94, LO, "Low", lowTxt[0], lowTxt[1]));
-        annotations.push({ ...badge(0.50, 0.02, MID, "Excluded", midTxt[0], midTxt[1]),
-                           yanchor: "bottom", opacity: 0.78 });
+        annotations.push({ ...badge(0.50, 0.02, MID, "Left out (middle)", midTxt[0], midTxt[1]),
+                           yanchor: "bottom" });
         annotations.push(badge(0.90, 0.94, HI, "High", highTxt[0], highTxt[1]));
       }
     } else if (cuts.kind === "one-cut") {
@@ -333,14 +340,14 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
       annotations.push(badge(0.82, matchedMode ? 0.84 : 0.94, HI, "High", highTxt[0], highTxt[1]));
     }
 
-    const yTitle = matchedMode ? "Matched neural samples" : "Days";
+    const yTitle = matchedMode ? "Matched band-power readings" : "Days";
     const hoverUnit = matchedMode ? "samples" : "days";
     // Hover: in matched mode, lead with the calendar-day count for the bar (the unit the reviewer
     // cares about — how many DAYS contribute), then the time-domain source split (BrainSense /
     // Indefinite / Montage) and the PSD split (Patient-trigger / other). customdata carries
     // the pre-rendered breakdown lines so the hovertemplate stays declarative.
     const className = (c) => (cuts.kind === "two-cut")
-      ? (c <= cuts.lowCut ? "Low pain" : (c >= cuts.highCut ? "High pain" : "Excluded (mid)"))
+      ? (c <= cuts.lowCut ? "Low pain" : (c >= cuts.highCut ? "High pain" : "Left out (middle)"))
       : (cuts.kind === "one-cut" ? (c <= cuts.cut ? "Low pain" : "High pain") : "");
     let traces;
     if (matchedMode && barProv) {
@@ -368,8 +375,8 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
         hovertemplate:
           "<b>%{customdata[0]} days</b> · %{y:,} samples<br>"
           + `${metricLabel || "pain"} ≈ %{x:.1f}  ·  %{customdata[1]}<br>`
-          + "<span style='color:#555'>TD (%{customdata[2]}):</span> %{customdata[3]}<br>"
-          + "<span style='color:#555'>PSD (%{customdata[4]}):</span> %{customdata[5]}"
+          + "TD (%{customdata[2]}): %{customdata[3]}<br>"
+          + "PSD (%{customdata[4]}): %{customdata[5]}"
           + "<extra></extra>",
       }];
     } else {
@@ -379,35 +386,26 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
         hovertemplate: `${metricLabel || "pain"}=%{x:.1f}<br>%{y:,} ${hoverUnit}<extra></extra>`,
       }];
     }
-    const layout = {
+    const layout = plotlyLayout({
       // Preserve any zoom the user applied to the histogram across live recolors; reset only when
       // the metric changes (different value domain).
       uirevision: `hist-${metricKey || "metric"}`,
-      paper_bgcolor: "white", plot_bgcolor: "white",
-      font: { family: "Roboto, Helvetica, Arial, sans-serif", size: 11, color: "#344767" },
-      margin: { l: 48, r: 16, t: 54, b: 40 },
+      margin: { l: 56, r: 16, t: 56, b: 44 },
       bargap: 0.02,
-      xaxis: { automargin: true, title: { text: metricLabel || "Pain score", font: { size: 11 }, standoff: 8 },
-               gridcolor: "#EEF1F4", linecolor: "#B0B7BF", ticks: "outside", ticklen: 4,
-               tickfont: { size: 11 }, showline: true },
-      yaxis: { automargin: true, title: { text: yTitle, font: { size: 11 }, standoff: 8 },
-               gridcolor: "#EEF1F4", linecolor: "#B0B7BF", ticks: "outside", ticklen: 4,
-               tickfont: { size: 11 }, showline: true,
+      xaxis: { title: { text: metricLabel || "Pain score" } },
+      yaxis: { title: { text: yTitle },
                // Matched mode: extend the range to ~1.6x the tallest bar so the floated per-group
                // detail badges (Low/High at ~0.80 paper, Excluded at ~0.97) clear the bars cleanly.
                ...(matchedMode && cuts.kind === "two-cut" ? { range: [0, yMax * 1.6] } : {}) },
-      shapes, annotations, showlegend: false,
-    };
+      shapes, annotations,
+    });
     // The percentile cut points are set by the two-handle RANGE SLIDER rendered ABOVE the histogram
     // (see the JSX below), NOT by dragging inside the plot. Plotly's `edits.shapePosition` is a single
     // boolean with no per-axis constraint — a shape drag moves in x AND y and can resize the line — so
     // in-plot editing is DISABLED here and the cut lines are display-only dashed notches at the current
     // thresholds. This removes the broken vertical-drag/resize behavior and keeps the slider as the one
     // source of truth for percentileLow/High.
-    Plotly.react(ref.current, traces, layout, {
-      responsive: true, displaylogo: false, displayModeBar: false,
-      edits: { shapePosition: false },
-    });
+    Plotly.react(ref.current, traces, layout, { ...PLOTLY_CONFIG, edits: { shapePosition: false } });
     // Defensive: drop any stale relayout drag handler from an earlier render of this component.
     const gd = ref.current;
     if (gd && gd.removeAllListeners) gd.removeAllListeners("plotly_relayout");
@@ -441,8 +439,8 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
     ? ` · ${totalReports.toLocaleString()} reports in the record` : "";
   const headerCaption = matchedMode
     ? (dir === "pro_first" && su
-        ? `${(su.n_pro_used || 0).toLocaleString()} of ${(su.n_pro_total || 0).toLocaleString()} ${scoreName} reports paired with neural data at ±${matchTolerance} min (${su.pct_pro_used}%)${totalTxt}`
-        : `${(counts.n_matched || 0).toLocaleString()} of ${(counts.n_sessions || 0).toLocaleString()} neural samples paired with a ${scoreName} report at ±${matchTolerance} min${totalTxt}`)
+        ? `${(su.n_pro_used || 0).toLocaleString()} of ${(su.n_pro_total || 0).toLocaleString()} ${scoreName} reports paired with band-power readings at ±${matchTolerance} min (${su.pct_pro_used}%)${totalTxt}`
+        : `${(counts.n_matched || 0).toLocaleString()} of ${(counts.n_sessions || 0).toLocaleString()} band-power readings paired with a ${scoreName} report at ±${matchTolerance} min${totalTxt}`)
     : (vals.length
         ? `${dayAgg.reduce((s, d) => s + d.nSamples, 0).toLocaleString()} ${scoreName} reports across ${vals.length.toLocaleString()} days${totalTxt}`
         : ((loading || matchedLoading) ? "loading…" : "no data yet"));
@@ -466,14 +464,14 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
           return `Cut at ${cuts.lowCut?.toFixed(1)} / ${cuts.highCut?.toFixed(1)} — no excluded-middle bin: ` +
             `the matched values are too discrete (e.g. integer NRS) to form a middle tertile, so every matched sample is high or low` + offsetTxt;
         }
-        return `Matched neural samples cut at ${cuts.lowCut?.toFixed(1)} / ${cuts.highCut?.toFixed(1)} — ` +
-          `${(counts.n_excluded_middle || 0).toLocaleString()} middle samples excluded from training` + offsetTxt;
+        return `Matched band-power readings cut at ${cuts.lowCut?.toFixed(1)} / ${cuts.highCut?.toFixed(1)} — ` +
+          `${(counts.n_excluded_middle || 0).toLocaleString()} middle readings left out of training` + offsetTxt;
       }
       if (cuts.kind === "one-cut") {
-        return `Matched neural samples cut at ${cuts.cut?.toFixed(1)} — every matched sample is labeled (none excluded)` +
+        return `Matched band-power readings cut at ${cuts.cut?.toFixed(1)} — every matched sample is labeled (none excluded)` +
           offsetSummary;
       }
-      return "No neural sample matched a pain report at this window — widen the match window.";
+      return "No band-power reading matched a pain report at this window — widen the match window.";
     }
     if (cuts.kind === "two-cut") {
       return `Cuts on the daily distribution at ${cuts.lowCut?.toFixed(1)} / ${cuts.highCut?.toFixed(1)} — ` +
@@ -489,55 +487,55 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
   return (
     <MDBox display="flex" flexDirection="column" sx={{ width: "100%", height: "100%", minHeight: 440 }}>
       <MDBox display="flex" flexDirection="row" justifyContent="space-between" alignItems="baseline" mb={0.25}>
-        <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 15 }}>
-          {matchedMode ? "Data available to split into high and low pain" : "Preview of the high / low pain split"}
+        <MDTypography component="h3" sx={{ ...TYPE.body, fontWeight: 600, color: T.ink, m: 0 }}>
+          {matchedMode ? "Readings available to split into high and low pain" : "Preview of the high / low pain split"}
         </MDTypography>
-        <MDTypography variant="caption" color="dark" sx={{ fontSize: 12, fontStyle: "italic" }}>
+        <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink3 }}>
           {headerCaption}
         </MDTypography>
       </MDBox>
 
-      {/* Matched neural-sample readout — PRO-first leads the headline (units of independence),
+      {/* Matched band-power reading readout — PRO-first leads the headline (units of independence),
           PSD coverage carries the supporting numbers; in PSD-first modes the order flips. The
           pool is mostly TD (streaming and montage recordings), so the count is broken down by source and
-          uses the modality-neutral noun "neural samples". aria-live announces updates to readers. */}
+          uses the modality-neutral noun "band-power readings". aria-live announces updates to readers. */}
       {matchedMode && su ? (
-        <MDTypography variant="caption" color="dark" sx={{ fontSize: 12, mb: 0.25 }}
+        <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink2, mb: 0.25 }}
                       aria-live="polite">
           {dir === "pro_first" ? (
             <>
               <b>{`${(su.n_pro_used || 0).toLocaleString()}`}</b>
               {` of ${(su.n_pro_total || 0).toLocaleString()} pain reports `}
               <b>{`(${su.pct_pro_used}%)`}</b>
-              {` paired with neural data within ±${matchTolerance} min`}
+              {` paired with band-power readings within ±${matchTolerance} min`}
               {Number.isFinite(counts.median_abs_offset_min)
                 ? `, median match offset ${counts.median_abs_offset_min.toFixed(1)} min${rangeTxt}` : ""}
-              {`. Each paired rating carries ${su.psd_per_pro_mean} neural samples on average (median ${su.psd_per_pro_median}, max ${su.psd_per_pro_max}; cap ${(counts.max_per_rating || 3)}/channel).`}
+              {`. Each paired rating carries ${su.psd_per_pro_mean} band-power readings on average (median ${su.psd_per_pro_median}, max ${su.psd_per_pro_max}; cap ${(counts.max_per_rating || 3)}/channel).`}
             </>
           ) : (
             <>
               <b>{`${(counts.n_matched ?? 0).toLocaleString()}`}</b>
-              {` of ${(counts.n_sessions ?? 0).toLocaleString()} neural samples `}
+              {` of ${(counts.n_sessions ?? 0).toLocaleString()} band-power readings `}
               <b>{`(${counts.pct_psd_used != null ? counts.pct_psd_used + "%" : "—"})`}</b>
               {` paired with a pain report within ±${matchTolerance} min`}
               {Number.isFinite(counts.median_abs_offset_min)
                 ? `, median offset ${counts.median_abs_offset_min.toFixed(1)} min` : ""}
-              {`. ${(su.n_pro_used || 0).toLocaleString()} of ${(su.n_pro_total || 0).toLocaleString()} pain reports (${su.pct_pro_used}%) received at least one neural sample`}
+              {`. ${(su.n_pro_used || 0).toLocaleString()} of ${(su.n_pro_total || 0).toLocaleString()} pain reports (${su.pct_pro_used}%) received at least one band-power reading`}
               {su.n_pro_reused ? `; ${su.n_pro_reused} received >1.` : "."}
             </>
           )}
-          {matchDirty ? <i style={{ color: SUBTLE }}>{"  (live preview — recompute to score)"}</i> : null}
+          {matchDirty ? <i style={{ color: SUBTLE, fontStyle: "normal" }}>{"  (live preview — recompute to score)"}</i> : null}
         </MDTypography>
       ) : null}
       {matchedMode ? (
-        <MDTypography variant="caption" color="dark" sx={{ fontSize: 12, mb: 0.25, display: "block" }}
+        <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink2, mb: 0.25, display: "block" }}
                       aria-live="polite">
           {`Split → `}
-          <span style={{ color: HI, fontWeight: 700 }}>{`${(counts.n_high ?? 0).toLocaleString()} high pain`}</span>
+          <span style={{ color: HI_TEXT, fontWeight: 600 }}>{`${(counts.n_high ?? 0).toLocaleString()} high pain`}</span>
           {" / "}
-          <span style={{ color: LO, fontWeight: 700 }}>{`${(counts.n_low ?? 0).toLocaleString()} low pain`}</span>
+          <span style={{ color: LO_TEXT, fontWeight: 600 }}>{`${(counts.n_low ?? 0).toLocaleString()} low pain`}</span>
           {counts.n_excluded_middle
-            ? <span style={{ color: MID_TEXT }}>{` / ${counts.n_excluded_middle.toLocaleString()} mid-range (excluded)`}</span>
+            ? <span style={{ color: MID_TEXT }}>{` / ${counts.n_excluded_middle.toLocaleString()} middle (left out)`}</span>
             : null}
           {(counts.n_matched_td != null && counts.n_matched_td_montage != null && counts.n_matched > 0)
             ? <span style={{ color: SUBTLE }}>
@@ -545,48 +543,42 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
               </span>
             : null}
           {counts.n_capped_dropped
-            ? <span style={{ color: SUBTLE }}>{` · ${counts.n_capped_dropped} neural samples over the per-rating cap`}</span>
+            ? <span style={{ color: SUBTLE }}>{` · ${counts.n_capped_dropped} band-power readings over the per-rating cap`}</span>
             : null}
         </MDTypography>
       ) : null}
-      {matchedMode ? (showDescriptions ? (
-        <MDTypography variant="caption" color="text" sx={{ fontSize: 11, fontStyle: "italic", mb: 0.25, display: "block" }}>
-          {dir === "pro_first"
-            ? (`Matching is report-first: each pain rating claims up to ${(counts.max_per_rating || 3)} closest neural samples per channel within the match window. `
-               + `A neural sample already claimed by an earlier rating is not re-claimed. This maximizes the number of independent pain ratings that contribute to discovery. `)
-            : dir === "nearest"
-            ? (`Matching is neural-first (symmetric ±${matchTolerance} min): each neural sample is paired with the closest pain rating in either time direction, then a per-(channel, rating) cap of ${(counts.max_per_rating || 3)} keeps the closest neural samples to each rating. Cross-sectional association, not forecasting. `)
-            : (`Matching is neural-first (forecasting): each neural sample is paired with the nearest pain rating RECORDED AFTER it within ±${matchTolerance} min, capped at ${(counts.max_per_rating || 3)} per channel per rating. Causal direction; preferred for closed-loop deployment, conservative for discovery. `)}
-          {"Pooled neural sources: TD (up to 30 s around the rating) from streaming, montage and survey recordings, and PSD from patient events. "}
-          {"Band-power LSB appears on the timeline but covers one band, not every frequency, so it is not pooled here."}
+      {matchedMode ? (
+        <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink3, mb: 0.25, display: "block" }}>
+          {"Pooled: TD (up to 30 s around the rating) from streaming, montage and survey recordings, and PSD from patient events. "}
+          {"The device's own band-power readings cover one band, not every frequency, so they are not pooled here."}
         </MDTypography>
-      ) : null) : (hasTolControl ? (
+      ) : (hasTolControl ? (
         // WHY THIS IS THREE MESSAGES AND NOT ONE. The card falls back to the daily pain-report
-        // distribution whenever no neural sample carries a pain label, and it used to explain that
+        // distribution whenever no band-power reading carries a pain label, and it used to explain that
         // fallback with a single sentence — "No PSD scan index available" — regardless of the
         // reason. That sentence is true in only one of the three cases, and in the case that
         // matters most it is actively wrong: when the scan index and the pain series are both
         // present and the match window is simply too narrow for anything to pair, the correct
-        // statement is that ZERO of the available neural samples reached a pain rating at this
+        // statement is that ZERO of the available band-power readings reached a pain rating at this
         // window, which is a measured result the reader can fix by widening the window. Announcing
         // a missing input instead sends them looking for a data problem that does not exist. The
         // scan model now reports which situation it is in, so each gets its own sentence.
-        <MDTypography variant="caption" color="dark" sx={{ fontSize: 11.5, fontStyle: "italic", mb: 0.25 }}>
+        <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink2, mb: 0.25 }}>
           {(loading || matchedLoading)
-            ? "Loading neural-sample availability…"
+            ? "Loading band-power reading availability…"
             : (scanModel && scanModel.matchable)
               ? `None of the ${(scanModel.counts && scanModel.counts.n_sessions) || 0} available `
-                + `neural samples fell within \u00b1${matchTolerance} min of a pain rating, so nothing `
+                + `band-power readings fell within \u00b1${matchTolerance} min of a pain rating, so nothing `
                 + "can be split into high and low pain at this window. Widen the match window above. The histogram "
                 + "below has fallen back to the daily pain-report distribution, which is a "
-                + "different quantity: it shows the pain scores themselves, not the neural data "
+                + "different quantity: it shows the pain scores themselves, not the band-power readings "
                 + "they could label."
               : (scanModel && scanModel.unmatchableReason === "no_pain_series")
-                ? "No pain reports are available for the selected metric, so no neural sample can "
+                ? "No pain reports are available for the selected metric, so no band-power reading can "
                   + "be labelled and matching was not attempted. This is an absence of pain data, "
-                  + "not a finding about the neural data."
-                : "The neural-sample index for this participant has not been loaded, so matching "
-                  + "was not attempted and nothing here describes how much neural data could be "
+                  + "not a finding about the band-power readings."
+                : "The band-power reading index for this participant has not been loaded, so matching "
+                  + "was not attempted and nothing here describes how much band-power readings could be "
                   + "split into high and low pain. The histogram below is the daily pain-report distribution."}
         </MDTypography>
       ) : null)}
@@ -599,14 +591,14 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
       {(cuts.kind === "two-cut" && setPercentileLow && setPercentileHigh) ? (
         <MDBox sx={{ px: 1, pt: 0.5, pb: 0.25 }}>
           <MDBox display="flex" flexDirection="row" justifyContent="space-between" alignItems="baseline">
-            <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: 700, color: LO }}>
-              {`low ≤ ${(strategy === "tertile" ? 33 : percentileLow)}th pct`}
+            <MDTypography variant="caption" sx={{ ...TYPE.caption, fontWeight: 600, color: LO_TEXT }}>
+              {`low: ${(strategy === "tertile" ? 33 : percentileLow)}th percentile and below`}
             </MDTypography>
-            <MDTypography variant="caption" sx={{ fontSize: 11, color: SUBTLE, fontStyle: "italic" }}>
+            <MDTypography variant="caption" sx={{ ...TYPE.caption, color: SUBTLE }}>
               {"drag the two handles to set the cuts"}
             </MDTypography>
-            <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: 700, color: HI }}>
-              {`high ≥ ${(strategy === "tertile" ? 67 : percentileHigh)}th pct`}
+            <MDTypography variant="caption" sx={{ ...TYPE.caption, fontWeight: 600, color: HI_TEXT }}>
+              {`high: ${(strategy === "tertile" ? 67 : percentileHigh)}th and above`}
             </MDTypography>
           </MDBox>
           <Slider
@@ -643,7 +635,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
       ) : null}
 
       <div ref={ref} style={{ flex: 1, width: "100%", minHeight: 340 }} />
-      <MDTypography variant="caption" color="dark" sx={{ fontSize: 12, textAlign: "center" }}>
+      <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink3, textAlign: "center" }}>
         {footerCaption}
       </MDTypography>
     </MDBox>

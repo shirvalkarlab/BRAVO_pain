@@ -34,8 +34,11 @@ import { useCachedResult } from "database/useCachedResult";
 
 import { CL, recomputeSlots } from "views/Reports/moduleCacheKeys";
 import PanelStaleNote from "views/Reports/ClosedLoopSim/PanelStaleNote";
-import PAL from "views/Reports/ClosedLoopSim/palette";
-import Fold from "views/Reports/ClosedLoopSim/Fold";
+import { T, TYPE, CARD } from "assets/theme/base/tokens";
+import { SIDE } from "assets/theme/base/dataColors";
+import { plotlyLayout, PLOTLY_CONFIG, directLabel } from "views/Reports/figureStyle";
+
+import Fold from "./Fold";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 const isoDate = (yyyymmdd) => (yyyymmdd && yyyymmdd.length === 8
@@ -47,9 +50,12 @@ const contactLabel = (ch) => (ch || "")
   .replace("ZERO_ONE", "0–1").replace("ONE_TWO", "1–2").replace("TWO_THREE", "2–3")
   .replace("_RIGHT", " Right").replace("_LEFT", " Left");
 
-// One ink per side, so no reader can take the cloud for a pooled electrode (never pool across
-// electrodes: the hover names the contact pair and centre of every block).
-const SIDE_INK = { Left: PAL.accent, Right: PAL.fail };
+// One ink per side (the shared side colours: left blue, right orange), so no reader can take the
+// cloud for a pooled electrode (never pool across electrodes: the hover names the contact pair and
+// centre of every block).
+const SIDE_INK = { Left: SIDE.left, Right: SIDE.right };
+// A small filled dot in a side's colour, beside the words that name it (a mark, not text colour).
+const DOT = { display: "inline-block", width: 8, height: 8, borderRadius: "50%", marginRight: 4 };
 
 function CalibrationInEffectPanel({ participantUid }) {
   const blocksRef = useRef(null);
@@ -96,7 +102,7 @@ function CalibrationInEffectPanel({ participantUid }) {
       const out = blocks.filter((b) => b.side === side && b.status !== "kept");
       if (out.length) {
         traces.push({ x: out.map((b) => b.uv2), y: out.map((b) => b.lsb), type: "scatter", mode: "markers",
-          name: `${side}, gated or flagged (${out.length})`,
+          name: `${side}, left out as too short or far from the rest (${out.length})`,
           marker: { color: SIDE_INK[side], size: 6, symbol: "circle-open", opacity: 0.8 },
           text: out.map((b) => `${hover(b)}<br>${b.status === "gated" ? "left out: too short" : b.status === "flagged" ? "left out: ratio outlier (5 MAD)" : "no usable pair"}`),
           hovertemplate: "%{text}<extra></extra>" });
@@ -105,25 +111,26 @@ function CalibrationInEffectPanel({ participantUid }) {
     const xmax = Math.max(...blocks.map((b) => b.uv2)) * 1.04;
     traces.push({ x: [0, xmax], y: [0, deployed.k * xmax], type: "scatter", mode: "lines",
       name: `in effect: LSB = ${fmt(deployed.k, 2)} × µV²`,
-      line: { color: "#222", width: 1.5 }, hoverinfo: "name" });
+      line: { color: T.ink, width: 1.5 }, hoverinfo: "name" });
+    // Direct labels at the lines' right ends, instead of a legend box (SPEC.md section 5.1).
+    const annotations = [directLabel(xmax, deployed.k * xmax, `in effect ×${fmt(deployed.k, 2)}`)];
     // The 1-MAD band either side of the line (ruling C1): the same raw scatter the Closed-Loop
     // page draws either side of a modelled threshold (ruling A2).
     if (tr.scatter_mad != null) {
       [[deployed.k - tr.scatter_mad, "−"], [deployed.k + tr.scatter_mad, "+"]].forEach(([kk, sign]) => {
         traces.push({ x: [0, xmax], y: [0, kk * xmax], type: "scatter", mode: "lines",
           name: `${sign}1 MAD of the ratio (${fmt(kk, 1)})`, showlegend: sign === "+",
-          line: { color: "#222", width: 1, dash: "dot" }, hoverinfo: "name" });
+          line: { color: T.ink3, width: 1, dash: "dot" }, hoverinfo: "name" });
+        if (sign === "+") annotations.push(directLabel(xmax, kk * xmax, "typical spread", T.ink3));
       });
     }
-    const layout = {
-      margin: { l: 60, r: 12, t: 8, b: 44 }, height: 280,
-      xaxis: { title: { text: "TD band power (µV²)", font: { size: 12 } },
-        rangemode: "tozero", zeroline: false, tickfont: { size: 11 } },
-      yaxis: { title: { text: "device band power (LSB)", font: { size: 12 } },
-        rangemode: "tozero", zeroline: false, tickfont: { size: 11 } },
-      legend: { font: { size: 11 }, orientation: "h", y: -0.24, x: 0 },
-    };
-    Plotly.react(gd, traces, layout, PAL.MODEBAR);
+    const layout = plotlyLayout({
+      margin: { l: 60, r: 110, t: 8, b: 44 }, height: 280,
+      xaxis: { title: { text: "TD band power (µV²)" }, rangemode: "tozero" },
+      yaxis: { title: { text: "device band power (LSB)" }, rangemode: "tozero" },
+      annotations,
+    });
+    Plotly.react(gd, traces, layout, PLOTLY_CONFIG);
   }, [data]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- (2) the bridge ratio per band centre, the ratio in effect as a line ----
@@ -143,21 +150,21 @@ function CalibrationInEffectPanel({ participantUid }) {
     });
     traces.push({ x: br.per_centre.map((p) => p.center_hz), y: br.per_centre.map((p) => p.ratio),
       type: "scatter", mode: "markers+lines", name: "median over every survey and contact pair",
-      marker: { color: "#222", size: 7 }, line: { color: "#222", width: 1 },
+      marker: { color: T.ink, size: 7 }, line: { color: T.ink, width: 1 },
       customdata: br.per_centre.map((p) => p.n),
       hovertemplate: "%{x:.1f} Hz · ratio %{y:.3f} · n=%{customdata}<extra></extra>" });
     const xs = br.per_centre.map((p) => p.center_hz);
     traces.push({ x: [Math.min(...xs) - 0.5, Math.max(...xs) + 0.5], y: [deployed.bridge_ratio, deployed.bridge_ratio],
       type: "scatter", mode: "lines", name: `in effect: ratio ${fmt(deployed.bridge_ratio, 3)}`,
-      line: { color: PAL.neutral, width: 1.5, dash: "dash" }, hoverinfo: "name" });
-    const layout = {
-      margin: { l: 60, r: 12, t: 8, b: 44 }, height: 240,
-      xaxis: { title: { text: "band centre (Hz)", font: { size: 12 } }, tickfont: { size: 11 } },
-      yaxis: { title: { text: "PSD band power ÷ TD band power", font: { size: 12 } },
-        rangemode: "tozero", zeroline: false, tickfont: { size: 11 } },
-      legend: { font: { size: 11 }, orientation: "h", y: -0.3, x: 0 },
-    };
-    Plotly.react(gd, traces, layout, PAL.MODEBAR);
+      line: { color: T.graphic, width: 1.5, dash: "dash" }, hoverinfo: "name" });
+    const xEnd = Math.max(...xs) + 0.5;
+    const layout = plotlyLayout({
+      margin: { l: 60, r: 110, t: 8, b: 44 }, height: 240,
+      xaxis: { title: { text: "band centre (Hz)" } },
+      yaxis: { title: { text: "PSD band power ÷ TD band power" }, rangemode: "tozero" },
+      annotations: [directLabel(xEnd, deployed.bridge_ratio, `in effect ${fmt(deployed.bridge_ratio, 3)}`, T.ink3)],
+    });
+    Plotly.react(gd, traces, layout, PLOTLY_CONFIG);
   }, [data]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => () => {
@@ -175,12 +182,14 @@ function CalibrationInEffectPanel({ participantUid }) {
   // panel now says it once on view ("the bridge constant (composed)") and once, with its
   // arithmetic, in the fold. No box inside the card: the two sections in the fold are separated by
   // a thin rule, not bordered and tinted boxes of their own.
-  const SUB = "#4A4A4A";
-  const RULE = "#D5D8DC";
+  const SUB = T.ink2;
+  const RULE = T.rule;
+  const LINE = { ...TYPE.body, color: SUB, display: "block" };
+  const HEAD = { ...TYPE.body, fontWeight: 600, color: T.ink, display: "block" };
   return (
-    <Card sx={{ height: "100%" }}>
-      <MDBox p={2}>
-        <MDTypography variant="h5" fontWeight="bold" sx={{ fontSize: 24, lineHeight: 1.3 }}>
+    <Card sx={{ ...CARD, height: "100%" }}>
+      <MDBox p={3}>
+        <MDTypography component="h3" sx={{ ...TYPE.title, color: T.ink, m: 0 }}>
           Calibration in effect: µV² to device units
         </MDTypography>
         <PanelStaleNote stale={cached.stale} staleReasons={cached.staleReasons}
@@ -188,23 +197,23 @@ function CalibrationInEffectPanel({ participantUid }) {
           onRecompute={() => recomputeSlots(participantUid, [CL.conversionModel])} />
 
         {loading ? (
-          <MDTypography variant="caption" color="text" sx={{ display: "block", mt: 1, fontStyle: "italic", fontSize: 12 }}>
+          <MDTypography variant="caption" sx={{ ...TYPE.caption, display: "block", mt: 1, color: T.ink3 }}>
             Loading the calibration tables…
           </MDTypography>
         ) : err ? (
-          <MDTypography variant="caption" sx={{ display: "block", mt: 1, fontSize: 12, color: PAL.warnText }}>
-            {`No calibration: ${err}.`}
+          <MDTypography variant="caption" sx={{ ...TYPE.body, display: "block", mt: 1, color: T.caution }}>
+            {`\u25b2 No calibration: ${err}.`}
           </MDTypography>
         ) : data ? (
           <>
             {/* THE STATUS: the two numbers every calibrated LSB on the platform is computed with. */}
             <MDBox mt={1} data-testid="calibration-status">
-              <MDTypography variant="button" color="dark" display="block" sx={{ fontSize: 14, fontWeight: 400 }}>
-                <b style={{ color: PAL.accent }}>Time domain (TD) → device units: </b>
+              <MDTypography variant="button" display="block" sx={{ ...TYPE.body, color: T.ink2 }}>
+                <b style={{ color: T.ink, fontWeight: 600 }}>Time domain (TD) → device units: </b>
                 {`1 µV² = ${fmt(deployed.k, 2)} LSB, the transform constant, measured on ${tr.n} paired blocks.`}
               </MDTypography>
-              <MDTypography variant="button" color="dark" display="block" sx={{ fontSize: 14, fontWeight: 400 }}>
-                <b>PSD (the device's 30 s snapshot) → device units: </b>
+              <MDTypography variant="button" display="block" sx={{ ...TYPE.body, color: T.ink2 }}>
+                <b style={{ color: T.ink, fontWeight: 600 }}>PSD (the device's 30 s snapshot) → device units: </b>
                 {`1 device-µV² = ${fmt(deployed.bridge_lsb_per_device_uv2, 2)} LSB, the bridge constant (composed).`}
               </MDTypography>
             </MDBox>
@@ -213,26 +222,26 @@ function CalibrationInEffectPanel({ participantUid }) {
               hide="Hide how the constants were fitted">
               {/* 1) THE TRANSFORM CONSTANT */}
               <MDBox mt={0.5} pt={1} sx={{ borderTop: `1px solid ${RULE}` }}>
-                <MDTypography variant="caption" display="block" sx={{ fontSize: 12.5, fontWeight: "bold", color: PAL.accent }}>
+                <MDTypography variant="caption" sx={HEAD}>
                   The transform constant
                 </MDTypography>
                 {tr.k_interval ? (
-                  <MDTypography variant="caption" display="block" sx={{ fontSize: 12, color: "#333" }}>
+                  <MDTypography variant="caption" sx={LINE}>
                     {`95% interval ${fmt(tr.k_interval[0], 1)}–${fmt(tr.k_interval[1], 1)} (${tr.k_interval_method}); `
-                      + `1 MAD of the ratio is ${fmt(tr.scatter_mad, 1)} LSB per µV² (${fmt(100 * tr.scatter_mad_frac, 0)}% of the constant), `
+                      + `the typical spread of the ratio (1 MAD of the ratio) is ${fmt(tr.scatter_mad, 1)} LSB per µV² (${fmt(100 * tr.scatter_mad_frac, 0)}% of the constant), `
                       + "the dotted lines below. "
                       + (tr.proportionality ? tr.proportionality.sentence : "")}
                   </MDTypography>
                 ) : null}
-                <MDTypography variant="caption" display="block" sx={{ fontSize: 12, color: SUB }}>
+                <MDTypography variant="caption" sx={LINE}>
                   {`The median ratio over ${tr.n} blocks the device recorded both ways at once `
-                    + `(r = ${fmt(tr.r, 2)}, typical miss ×${fmt(tr.median_fold_error, 2)}); `
+                    + `(r = ${fmt(tr.r, 2)}, median fold error ${fmt(tr.median_fold_error, 2)}); `
                     + `${nBlocks} paired blocks through ${data.table_date}, ${nLeftOut} left out by the recipe: `
                     + `a block needs at least 3 s of signal and 6 device readings, and a block whose ratio `
                     + `falls more than 5 MAD from the rest is dropped (the platform's one outlier rule).`}
                 </MDTypography>
                 {june && june.k != null ? (
-                  <MDTypography variant="caption" display="block" sx={{ fontSize: 12, color: SUB }}>
+                  <MDTypography variant="caption" sx={LINE}>
                     {`The June 2026 reference, ${fmt(june.k, 2)} on ${june.n} blocks through ${isoDate(june.last_date)} `
                       + "with no gate and no rule, comes back from the same table; the constant in effect adds "
                       + "the blocks recorded since, under the recipe above."}
@@ -240,18 +249,23 @@ function CalibrationInEffectPanel({ participantUid }) {
                 ) : null}
               </MDBox>
               <MDBox mt={1}>
-                <MDTypography variant="caption" sx={{ fontSize: 12, fontWeight: "bold", color: SUB }}>
-                  Every paired block, device LSB against TD band power; hollow = left out
+                <MDTypography variant="caption" sx={HEAD}>
+                  Every paired block, device LSB against TD band power
+                </MDTypography>
+                <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink3, display: "block" }}>
+                  <span aria-hidden="true" style={{ ...DOT, background: SIDE.left }} />{"left lead \u00b7 "}
+                  <span aria-hidden="true" style={{ ...DOT, background: SIDE.right }} />{"right lead \u00b7 "}
+                  {"\u25cb hollow: left out as too short or far from the rest (LSB: the device's own units)"}
                 </MDTypography>
                 <div ref={blocksRef} style={{ width: "100%" }} />
               </MDBox>
 
               {/* 2) THE BRIDGE */}
               <MDBox mt={1.2} pt={1} sx={{ borderTop: `1px solid ${RULE}` }}>
-                <MDTypography variant="caption" display="block" sx={{ fontSize: 12.5, fontWeight: "bold", color: SUB }}>
+                <MDTypography variant="caption" sx={HEAD}>
                   The bridge constant
                 </MDTypography>
-                <MDTypography variant="caption" display="block" sx={{ fontSize: 12, color: SUB }}>
+                <MDTypography variant="caption" sx={LINE}>
                   {`Composed, not measured: ${fmt(deployed.k, 2)} ÷ ${fmt(deployed.bridge_ratio, 3)}, the ratio in effect between the `
                     + `PSD band power and TD band power on the same survey and contact. `
                     + `Refit on ${br.n_surveys} surveys, ${br.n} of ${br.n_pairs} contact-and-centre pairs after the same 5 MAD rule: `
@@ -259,13 +273,13 @@ function CalibrationInEffectPanel({ participantUid }) {
                 </MDTypography>
               </MDBox>
               <MDBox mt={1}>
-                <MDTypography variant="caption" sx={{ fontSize: 12, fontWeight: "bold", color: SUB }}>
-                  The ratio per band centre: small points one contact pair each, large points the median; dashed = in effect
+                <MDTypography variant="caption" sx={HEAD}>
+                  The ratio per band centre: small points one contact pair each (blue left, orange right), large points the median; dashed = in effect
                 </MDTypography>
                 <div ref={bridgeRef} style={{ width: "100%" }} />
               </MDBox>
 
-              <MDTypography variant="caption" display="block" sx={{ fontSize: 12, color: SUB, mt: 0.8 }}>
+              <MDTypography variant="caption" sx={{ ...LINE, mt: 1 }}>
                 {`Where these are used: the Biomarkers timeline's modeled points (○ TD × ${fmt(deployed.k, 2)}, `
                   + `◇ PSD × ${fmt(deployed.bridge_lsb_per_device_uv2, 2)}); the Closed-Loop page's threshold for a band the device `
                   + "never sensed, and its three-source response panel. The Stim Optimizer reads device-native "

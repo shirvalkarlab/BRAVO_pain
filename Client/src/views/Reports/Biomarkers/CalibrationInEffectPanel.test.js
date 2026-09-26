@@ -64,7 +64,7 @@ describe("the calibration-in-effect panel, on the served RCS08 payload", () => {
     expect(text).toMatch(/r = 0\.99/);
     // ruling C1 (the PI, 2026-09-21): the constant's uncertainty in raw units, from the payload
     expect(text).toMatch(/95% interval 339\.4–350\.7/);
-    expect(text).toMatch(/1 MAD of the ratio is 18\.6 LSB per µV² \(5% of the constant\)/);
+    expect(text).toMatch(/the typical spread of the ratio \(1 MAD of the ratio\) is 18\.6 LSB per µV² \(5% of the constant\)/);
     expect(text).toMatch(/does not change with the power level over the 133 kept blocks/);
     expect(text).toMatch(/Spearman's rho -0\.02, p = 0\.78/);
     expect(text).toMatch(/at least 3 s of signal and 6 device readings/);
@@ -102,7 +102,8 @@ describe("the calibration-in-effect panel, on the served RCS08 payload", () => {
       .reduce((s, t) => s + t.x.length, 0);
     expect(nPoints).toBe(170);
     expect(blockTraces.some((t) => /kept/i.test(t.name))).toBe(true);
-    expect(blockTraces.some((t) => /gated|flagged|excluded/i.test(t.name))).toBe(true);
+    // worded plainly since 2026-09-26 (SPEC.md section 6: "gated or flagged")
+    expect(blockTraces.some((t) => /left out as too short or far from the rest/.test(t.name))).toBe(true);
     expect(blockTraces.some((t) => t.mode === "lines")).toBe(true);
     // figure 2: the bridge ratio per centre (21) with the ratio in effect as a line
     const [, bridgeTraces, bridgeLayout] = Plotly.react.mock.calls[1];

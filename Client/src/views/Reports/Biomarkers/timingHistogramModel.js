@@ -16,13 +16,17 @@
  *  defines both. A MONTAGE OR SURVEY SAMPLE IS TD (2026-09-26): the sample index's "Montage" rows
  *  are Welch over the recording's own time-domain signal (`_psd_sample_index` / `_welch_rows_into`
  *  in Biomarkers/bravo_service.py), so it sits in the TD group, beside streaming, as "TD (montage)".
- *  Until then it was drawn as "PSD (montage)". */
+ *  Until then it was drawn as "PSD (montage)". Colours (2026-09-26 redesign): three Okabe-Ito
+ *  marks that carry no other meaning on the page (blue, orange and vermillion are taken by the
+ *  left side, the right side and high pain), from the shared data colours. */
+import { CATEGORICAL, PAIN } from "assets/theme/base/dataColors";
+
 export const SOURCE_SERIES = [
-  { key: "trace", name: "TD (streaming)", color: "#2CA02C" },
-  { key: "td_montage", name: "TD (montage)", color: "#1F77B4" },
-  { key: "event", name: "PSD (patient event)", color: "#FF7F0E" },
+  { key: "trace", name: "TD (streaming)", color: CATEGORICAL[2] },
+  { key: "td_montage", name: "TD (montage)", color: CATEGORICAL[4] },
+  { key: "event", name: "PSD (patient event)", color: CATEGORICAL[3] },
 ];
-export const TAIL_GREY = "#B0B7BC";
+export const TAIL_GREY = PAIN.middle;
 
 /** Which series a sample index entry's `source` belongs to: the same buckets the card's model uses.
  *  The server writes four labels ("BrainSense streaming", "Indefinite stream", "Montage",
