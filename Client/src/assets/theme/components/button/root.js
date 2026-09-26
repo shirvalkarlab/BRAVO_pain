@@ -15,7 +15,11 @@ Coded by www.creative-tim.com
 
 // App shell (SPEC.md section 4 rule 6, 2026-09-26): buttons are 36 px tall, 14 px, weight 600,
 // sentence case with no letter-spacing, 4 px corners and no shadow. Values from the tokens.
-import { TYPE, WEIGHT, FONT_FAMILY, RADIUS, SPACE, SHADOW } from "assets/theme/base/tokens";
+// Keyboard focus (TASTE_AUDIT.md C1, 2026-09-26): a 2 px accent ring 2 px outside the button,
+// on keyboard focus only; a mouse click draws none.
+import {
+  TYPE, WEIGHT, FONT_FAMILY, RADIUS, SPACE, SHADOW, FOCUS_RING,
+} from "assets/theme/base/tokens";
 
 import pxToRem from "assets/theme/functions/pxToRem";
 
@@ -41,6 +45,8 @@ const root = {
   "&:hover, &:focus, &:active": {
     boxShadow: SHADOW.none,
   },
+
+  "&:focus-visible, &.Mui-focusVisible": { ...FOCUS_RING },
 
   "&:disabled": {
     pointerEvent: "none",

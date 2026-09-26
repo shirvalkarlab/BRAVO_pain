@@ -15,6 +15,7 @@ Coded by www.creative-tim.com
 
 // Material Dashboard 2 React Base Styles
 import colors from "assets/theme/base/colors";
+import { FOCUS_RING } from "assets/theme/base/tokens";
 
 const { transparent } = colors;
 
@@ -24,6 +25,8 @@ const iconButton = {
       "&:hover": {
         backgroundColor: transparent.main,
       },
+      // Keyboard focus ring (TASTE_AUDIT.md C1): icon buttons are the easiest to lose.
+      "&:focus-visible, &.Mui-focusVisible": { ...FOCUS_RING },
     },
   },
 };

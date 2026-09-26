@@ -13,6 +13,11 @@
  *   defaultOpen  boolean (default false)
  *   onChange     called with the new open state after each click
  *   children     the folded content
+ *
+ * Keyboard focus shows the 2 px accent ring (TASTE_AUDIT.md C1; the global `:focus-visible`
+ * rule, since nothing here turns the outline off). The arrow's quarter turn is instant for a
+ * reader who asked for less motion (C4; the global reduced-motion rule sets every transition
+ * to 0 s). Nothing clinical moves: only the arrow turns.
  */
 import { useState, useId } from "react";
 import PropTypes from "prop-types";
@@ -33,7 +38,7 @@ export default function Fold({ label, inside, defaultOpen, onChange, children })
         style={{ ...TYPE.body, color: T.ink2, background: "none", border: 0, padding: 0,
           cursor: "pointer", fontFamily: "inherit", textAlign: "left", display: "inline-flex",
           gap: SPACE.xs, alignItems: "baseline" }}>
-        <span aria-hidden="true" style={{ color: T.ink3, display: "inline-block", width: "1em",
+        <span aria-hidden="true" data-paper="fold-arrow" style={{ color: T.ink3, display: "inline-block", width: "1em",
           transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▸</span>
         <span>
           {label}

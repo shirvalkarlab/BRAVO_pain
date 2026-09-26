@@ -59,6 +59,7 @@ import { dictionary } from "assets/translation";
 import { SessionController } from "database/session-control";
 import MDTypography from "components/MDTypography";
 import { T, SPACE, MIN_TEXT_PX } from "assets/theme/base/tokens";
+import SkipToContent from "components/Navbars/DashboardNavbar/SkipToContent";
 
 function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
   const navigate = useNavigate();
@@ -295,10 +296,13 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
       sx={(theme) => navbar(theme, { transparentNavbar, absolute, light, darkMode })}
     >
       {alert}
+      {/* First in the top bar, so it is the first thing a keyboard reaches (TASTE_AUDIT.md C7). */}
+      <SkipToContent />
       <Toolbar sx={(theme) => navbarContainer(theme)}>
         <MDBox color="inherit" mb={{ xs: 1, md: 0 }} sx={(theme) => navbarRow(theme, { isMini })}>
           <Breadcrumbs icon="home" title={route[route.length - 1]} route={route} light={light} />
-          <IconButton sx={{display: {xs: "none", xl: "block"}}} onClick={handleMiniSidenav} size="small" disableRipple>
+          <IconButton sx={{display: {xs: "none", xl: "block"}}} onClick={handleMiniSidenav} size="small" disableRipple
+            aria-label={!miniSidenav ? "Shrink the side menu" : "Widen the side menu"}>
             <Icon fontSize="medium" sx={iconsStyle}>
               {!miniSidenav ? "menu_open" : "menu"}
             </Icon>
@@ -309,6 +313,7 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
             color="inherit"
             sx={navbarMobileMenu}
             onClick={handleHideSidenav}
+            aria-label={!hideSidenav ? "Hide the side menu" : "Show the side menu"}
           >
             <Icon sx={iconsStyle} fontSize="medium">
               {!hideSidenav ? "menu_open" : "menu"}
@@ -326,6 +331,7 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
                 sx={navbarIconButton}
                 aria-controls="notification-menu"
                 aria-haspopup="true"
+                aria-label="Account menu: profile and log out"
                 variant="contained"
                 onClick={(event) => handleOpenMenu(event, "ProfileMenu")}
               >

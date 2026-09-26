@@ -16,13 +16,19 @@
  *   showKey      print the glyph key under the status list
  *   ceiling      { leftMa, rightMa } from the server, or omitted on pages without a ceiling line
  *   children     anything else that belongs in the head (the contents row)
+ *   documentTitle  the browser tab's title; defaults to `title` when it is plain text
+ *                  (TASTE_AUDIT.md C7). Pass "" to leave the tab's title alone.
+ *
+ * The title and the status sentence break lines evenly (`text-wrap: balance`, C5), so a
+ * 22 px sentence never ends on one stranded word.
  */
 import PropTypes from "prop-types";
 
-import { T, TYPE, SPACE } from "assets/theme/base/tokens";
+import { T, TYPE, SPACE, WRAP } from "assets/theme/base/tokens";
 
 import StatusList from "./StatusList";
 import CeilingLine from "./CeilingLine";
+import useDocumentTitle from "./useDocumentTitle";
 
 export function contextLine(participant, painScore) {
   const parts = [];
@@ -32,16 +38,18 @@ export function contextLine(participant, painScore) {
 }
 
 export default function PageHead({ title, participant, painScore, status, items, showKey,
-  ceiling, children }) {
+  ceiling, children, documentTitle }) {
+  useDocumentTitle(documentTitle === null ? title : documentTitle);
   const context = contextLine(participant, painScore);
   return (
     <header data-paper="page-head" style={{ marginBottom: SPACE.lg }}>
-      <h1 style={{ margin: 0, ...TYPE.title, color: T.ink }}>{title}</h1>
+      <h1 style={{ margin: 0, ...TYPE.title, color: T.ink, ...WRAP.balance }}>{title}</h1>
       {context ? (
         <p style={{ margin: `${SPACE.xxs}px 0 0`, ...TYPE.caption, color: T.ink3 }}>{context}</p>
       ) : null}
       {status ? (
-        <p role="status" style={{ margin: `${SPACE.sm}px 0 0`, ...TYPE.answer, color: T.ink }}>
+        <p role="status"
+          style={{ margin: `${SPACE.sm}px 0 0`, ...TYPE.answer, color: T.ink, ...WRAP.balance }}>
           {status}
         </p>
       ) : null}
@@ -74,9 +82,10 @@ PageHead.propTypes = {
     source: PropTypes.string,
   }),
   children: PropTypes.node,
+  documentTitle: PropTypes.string,
 };
 
 PageHead.defaultProps = {
   participant: null, painScore: null, status: null, items: [], showKey: false, ceiling: null,
-  children: null,
+  children: null, documentTitle: null,
 };

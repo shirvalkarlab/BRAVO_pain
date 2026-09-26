@@ -16,10 +16,12 @@ Coded by www.creative-tim.com
 // The sidebar drawer (SPEC.md section 2.5, 2026-09-26): white, one hairline on its right edge,
 // no shadow and no gradient, the full height of the window. The open, mini and hidden states
 // and their transitions are unchanged. Dark mode is not supported on this pass (section 2.6).
+// For a reader who asked their system for less motion the slide and width change are instant
+// (TASTE_AUDIT.md C4, 2026-09-26): the drawer jumps to its new state.
 import Drawer from "@mui/material/Drawer";
 import { styled } from "@mui/material/styles";
 
-import { T, SHADOW } from "assets/theme/base/tokens";
+import { T, SHADOW, REDUCED_MOTION } from "assets/theme/base/tokens";
 import { SIDENAV_WIDTH } from "assets/theme/components/sidenav";
 
 export const SIDENAV_MINI_WIDTH = 96;
@@ -89,6 +91,7 @@ export default styled(Drawer)(({ theme, ownerState }) => {
       boxShadow: SHADOW.none,
       border: "none",
       ...(hideSidenav ? drawerHideStyles() : (miniSidenav && !showSidenav ? drawerCloseStyles() : drawerOpenStyles())),
+      [REDUCED_MOTION]: { transition: "none !important" },
     },
   };
 });

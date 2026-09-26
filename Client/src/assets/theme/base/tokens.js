@@ -10,8 +10,10 @@
  * here that falls below the minimum fails a test rather than a reader.
  *
  * Rules the values carry:
- *  - Red (`refused`) means one thing only: the device refuses, or a value is above the safe
- *    current ceiling. It always comes with the glyph ✕.
+ *  - Red (`refused`) is only for a device refusal or a value above the safe current ceiling,
+ *    and it always comes with the glyph ✕. A statistical or evidence result that blocks closed
+ *    loop ("Setting not proven better", "No usable sensing pair", a "not usable" row) is drawn
+ *    in `ink` with ✕, never in red (the PI's ruling of 2026-09-26).
  *  - The meaning inks are always paired with their glyph (GLYPH below): red and blue are almost
  *    equally light, so colour alone never carries a meaning.
  *  - `rule` and `graphic` are for lines and marks only, never for text.
@@ -34,7 +36,8 @@ export const T = {
   // Meaning inks (text-safe) and their tints (bullet and row fills)
   accent: "#0B5CAD", // the decision answer, the one primary button, the selected tab or cell
   accentTint: "#EEF3FA",
-  refused: "#B42318", // the device refuses; above the safe ceiling; blocks closed loop
+  refused: "#B42318", // a device refusal or a value above the safe ceiling ONLY; statistical
+  // results that block closed loop use `ink` with ✕ (the PI's ruling of 2026-09-26)
   refusedTint: "#FBEFEE",
   caution: "#8A5A00", // needs more data; not yet certain; moves over time
   cautionTint: "#FBF5EA",
@@ -52,14 +55,20 @@ export const T = {
 /** The glyph that must accompany each meaning ink. */
 export const GLYPH = {
   refused: "✕",
+  blocked: "✕", // the same cross as a refusal; the ink, not the glyph, tells them apart
   caution: "▲",
   notChecked: "○",
   pass: "✓",
 };
 
-/** Which ink and tint each state draws in; one table so the pages cannot disagree. */
+/**
+ * Which ink and tint each state draws in; one table so the pages cannot disagree.
+ * `refused` is the device refusing or a value above the safe ceiling; `blocked` is a statistical
+ * or evidence result that stops closed loop, drawn in ink with the same ✕ (the PI, 2026-09-26).
+ */
 export const STATE = {
   refused: { ink: T.refused, tint: T.refusedTint, glyph: GLYPH.refused },
+  blocked: { ink: T.ink, tint: T.fillMuted, glyph: GLYPH.blocked },
   caution: { ink: T.caution, tint: T.cautionTint, glyph: GLYPH.caution },
   notChecked: { ink: T.notChecked, tint: T.fillMuted, glyph: GLYPH.notChecked },
   pass: { ink: T.pass, tint: T.surface, glyph: GLYPH.pass },
@@ -106,6 +115,22 @@ export const RADIUS = { none: 0, sm: 4, md: 6 };
 
 /** Shadows: none on cards, bars and buttons; one soft shadow for menus, popovers and tooltips. */
 export const SHADOW = { none: "none", overlay: "0 4px 16px rgba(0,0,0,.08)" };
+
+/**
+ * The keyboard focus ring: a 2 px accent outline 2 px outside the control, drawn on keyboard
+ * focus only (`:focus-visible`), never on a mouse click. The accent is 6.67:1 on white, well
+ * above the 3:1 a focus indicator needs.
+ */
+export const FOCUS_RING = { outline: `2px solid ${T.accent}`, outlineOffset: "2px" };
+
+/**
+ * Line breaking: headings and the status sentence are balanced (no one-word last line); prose
+ * avoids a lone last word. Browsers without `text-wrap` ignore it and wrap as before.
+ */
+export const WRAP = { balance: { textWrap: "balance" }, pretty: { textWrap: "pretty" } };
+
+/** The media query for readers who asked their system for less motion. */
+export const REDUCED_MOTION = "@media (prefers-reduced-motion: reduce)";
 
 /** A card: white, a 1 px rule border, no shadow. */
 export const CARD = {

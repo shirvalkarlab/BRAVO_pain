@@ -192,17 +192,22 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
       ownerState={{ transparentSidenav, whiteSidenav, miniSidenav, hideSidenav, showSidenav, darkMode }}
     >
       <MDBox pt={3} pb={1} px={4} textAlign="center">
+        {/* A real button with a name (TASTE_AUDIT.md C7): it was a clickable box a keyboard
+            could not reach and a screen reader announced as "close" in icon-font letters. */}
         <MDBox
+          component="button"
+          type="button"
+          aria-label="Close the side menu"
           display={{ xs: "block", xl: "none" }}
           position="absolute"
           top={0}
           right={0}
           p={1.625}
           onClick={closeSidenav}
-          sx={{ cursor: "pointer" }}
+          sx={{ cursor: "pointer", background: "none", border: 0 }}
         >
-          <MDTypography variant="h6" color="secondary">
-            <Icon sx={{ fontWeight: "bold" }}>close</Icon>
+          <MDTypography component="span" variant="h6" color="secondary">
+            <Icon aria-hidden="true">close</Icon>
           </MDTypography>
         </MDBox>
         <MDBox component={NavLink} to="/" display="flex" alignItems="center">
@@ -220,6 +225,8 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
       <Divider
         light={false}
       />
+      {/* The menu is navigation: one <nav> landmark with a name (TASTE_AUDIT.md C7). */}
+      <MDBox component="nav" aria-label="Main menu">
       <List>{allRoutes}</List>
       <Divider
         light={false}
@@ -264,6 +271,7 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
           </NavLink>;
         })}</List>
       ) : null}
+      </MDBox>
     </SidenavRoot>
   );
 }

@@ -230,16 +230,21 @@ function DefaultNavbar({ transparent, light, action }) {
               </MDButton>
             </MDBox>
           ))}
+        {/* An icon-only control: a real button with a name (TASTE_AUDIT.md C7). */}
         <MDBox
+          component="button"
+          type="button"
+          aria-label={mobileNavbar ? "Close the menu" : "Open the menu"}
+          aria-expanded={mobileNavbar ? "true" : "false"}
           display={{ xs: "inline-block", lg: "none" }}
           lineHeight={0}
           py={1.5}
           pl={1.5}
           color="inherit"
-          sx={{ cursor: "pointer" }}
+          sx={{ cursor: "pointer", background: "none", border: 0 }}
           onClick={openMobileNavbar}
         >
-          <Icon fontSize="default">{mobileNavbar ? "close" : "menu"}</Icon>
+          <Icon fontSize="default" aria-hidden="true">{mobileNavbar ? "close" : "menu"}</Icon>
         </MDBox>
       </MDBox>
       {mobileView && <DefaultNavbarMobile open={mobileNavbar} close={closeMobileNavbar} />}

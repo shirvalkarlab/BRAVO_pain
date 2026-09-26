@@ -24,12 +24,17 @@ import PropTypes from "prop-types";
 import MDBox from "components/MDBox";
 
 import { usePlatformContext, setContextState } from "context";
-import { T, LAYOUT, SPACE_FACTOR } from "assets/theme/base/tokens";
+import { T, LAYOUT, SPACE_FACTOR, REDUCED_MOTION } from "assets/theme/base/tokens";
 import pxToRemPlain from "assets/theme/functions/pxToRem";
 import { SIDENAV_WIDTH } from "assets/theme/components/sidenav";
 import { SIDENAV_MINI_WIDTH } from "components/SideMenu/SidenavRoot";
 
-function DashboardLayout({ children }) {
+// The page's main region (TASTE_AUDIT.md C7, 2026-09-26): a <main> landmark with the id the
+// top bar's "Skip to content" link moves focus to. The top bar, when given as `navbar`, is drawn
+// before it and so sits outside it, as a banner should.
+export const MAIN_CONTENT_ID = "main-content";
+
+function DashboardLayout({ children, navbar }) {
   const [controller, dispatch] = usePlatformContext();
   const { miniSidenav, hideSidenav } = controller;
   const { pathname } = useLocation();
@@ -60,11 +65,16 @@ function DashboardLayout({ children }) {
             easing: transitions.easing.easeInOut,
             duration: transitions.duration.standard,
           }),
+          // Instant for a reader who asked for less motion (TASTE_AUDIT.md C4).
+          [REDUCED_MOTION]: { transition: "none" },
         },
       })}
     >
       <MDBox sx={{ maxWidth: pxToRemPlain(LAYOUT.contentMax), mx: "auto", width: "100%" }}>
-        {children}
+        {navbar}
+        <MDBox component="main" id={MAIN_CONTENT_ID} tabIndex={-1}>
+          {children}
+        </MDBox>
       </MDBox>
     </MDBox>
   );
@@ -73,6 +83,11 @@ function DashboardLayout({ children }) {
 // Typechecking props for the DashboardLayout
 DashboardLayout.propTypes = {
   children: PropTypes.node.isRequired,
+  navbar: PropTypes.node,
+};
+
+DashboardLayout.defaultProps = {
+  navbar: null,
 };
 
 export default DashboardLayout;

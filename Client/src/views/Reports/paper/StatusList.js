@@ -3,7 +3,10 @@
  * of its state, so a reader never has to tell a meaning from colour alone.
  *
  * Written 2026-09-26 for the minimalist redesign (SPEC.md section 4, rule 1). States:
- *   "refused"    ✕ red   -- the device refuses; above the safe ceiling; blocks closed loop
+ *   "refused"    ✕ red   -- ONLY the device refuses, or a value is above the safe ceiling
+ *   "blocked"    ✕ ink   -- a statistical or evidence result that stops closed loop ("Setting
+ *                           not proven better", "No usable sensing pair", a "not usable" row);
+ *                           never red (the PI's ruling of 2026-09-26)
  *   "caution"    ▲ amber -- needs more data; not yet certain; moves over time
  *   "notChecked" ○ grey  -- could not be checked (still blocks, but is counted separately)
  *   "pass"       ✓ ink   -- passes (there is no green in page text)
@@ -17,12 +20,14 @@
  */
 import PropTypes from "prop-types";
 
-import { STATE, TYPE, SPACE } from "assets/theme/base/tokens";
+import { STATE, TYPE, SPACE, WEIGHT } from "assets/theme/base/tokens";
 
 export const MAX_STATUS_ITEMS = 5;
 
 export const STATUS_KEY = [
-  { state: "refused", text: "blocks" },
+  // The key's ✕ is drawn in ink: it explains the glyph, and red is only for a device refusal
+  // or a value above the safe ceiling.
+  { state: "blocked", text: "blocks" },
   { state: "caution", text: "needs more data or caution" },
   { state: "notChecked", text: "not checked" },
 ];
@@ -50,7 +55,7 @@ export default function StatusList({ items, showKey, label }) {
             const s = STATE[it.state] || STATE.notChecked;
             return (
               <li key={it.key || i} data-state={it.state}
-                style={{ color: s.ink, fontWeight: it.state === "pass" ? 400 : 600 }}>
+                style={{ color: s.ink, fontWeight: it.state === "pass" ? WEIGHT.regular : WEIGHT.strong }}>
                 <Glyph state={it.state} />
                 {it.text}
               </li>
@@ -75,7 +80,7 @@ export default function StatusList({ items, showKey, label }) {
 
 StatusList.propTypes = {
   items: PropTypes.arrayOf(PropTypes.shape({
-    state: PropTypes.oneOf(["refused", "caution", "notChecked", "pass"]).isRequired,
+    state: PropTypes.oneOf(["refused", "blocked", "caution", "notChecked", "pass"]).isRequired,
     text: PropTypes.node.isRequired,
     key: PropTypes.string,
   })),

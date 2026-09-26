@@ -18,7 +18,9 @@ Coded by www.creative-tim.com
 // Removed as below the 11 px floor or outside the scale: fontSizeXXS (10.4 px), d1-d6 and
 // fontWeightLighter. fontWeightLight is kept as a name because components import it; it now
 // draws at 400, since no light weight is loaded.
-import { T, TYPE, WEIGHT, FONT_FAMILY } from "assets/theme/base/tokens";
+// Line breaking (TASTE_AUDIT.md C5, 2026-09-26): headings h1-h6 balance their lines; body and
+// subtitle prose avoids a lone last word ("pretty").
+import { T, TYPE, WEIGHT, FONT_FAMILY, WRAP } from "assets/theme/base/tokens";
 
 // Material Dashboard 2 React Helper Functions
 import pxToRem from "assets/theme/functions/pxToRem";
@@ -48,6 +50,7 @@ const heading = (role) => ({
   lineHeight: lineHeightOf(role),
   letterSpacing: 0,
   textTransform: "none",
+  ...WRAP.balance,
 });
 
 const text = (role, weight = WEIGHT.regular) => ({
@@ -76,10 +79,10 @@ const typography = {
   // A lead answer
   h6: heading(TYPE.lead),
 
-  subtitle1: text(TYPE.lead),
-  subtitle2: text(TYPE.body),
-  body1: text(TYPE.body),
-  body2: text(TYPE.body),
+  subtitle1: { ...text(TYPE.lead), ...WRAP.pretty },
+  subtitle2: { ...text(TYPE.body), ...WRAP.pretty },
+  body1: { ...text(TYPE.body), ...WRAP.pretty },
+  body2: { ...text(TYPE.body), ...WRAP.pretty },
   button: text(TYPE.body, WEIGHT.strong),
   caption: text(TYPE.caption),
   overline: text(TYPE.caption),

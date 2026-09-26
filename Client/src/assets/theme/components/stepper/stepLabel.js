@@ -19,9 +19,8 @@ import colors from "assets/theme/base/colors";
 
 // Material Dashboard 2 React helper functions
 import pxToRem from "assets/theme/functions/pxToRem";
-import rgba from "assets/theme/functions/rgba";
 
-const { size, fontWeightRegular } = typography;
+const { size, fontWeightRegular, fontWeightBold } = typography;
 const { white } = colors;
 
 const stepLabel = {
@@ -30,17 +29,19 @@ const stepLabel = {
       marginTop: `${pxToRem(8)} !important`,
       fontWeight: fontWeightRegular,
       fontSize: size.xs,
-      color: "#9fc9ff",
+      // White on the accent fill (8.0:1 at least; the pale blue it replaces was 4.0:1, under
+      // the 4.5:1 text minimum). The current and done steps are set in weight 600.
+      color: `${white.main} !important`,
       textTransform: "none", // sentence case everywhere (SPEC.md section 2.4)
 
       "&.Mui-active": {
-        fontWeight: `${fontWeightRegular} !important`,
-        color: `${rgba(white.main, 0.8)} !important`,
+        fontWeight: `${fontWeightBold} !important`,
+        color: `${white.main} !important`,
       },
 
       "&.Mui-completed": {
-        fontWeight: `${fontWeightRegular} !important`,
-        color: `${rgba(white.main, 0.8)} !important`,
+        fontWeight: `${fontWeightBold} !important`,
+        color: `${white.main} !important`,
       },
     },
   },

@@ -36,9 +36,7 @@ export default function DatabaseLayout({children}) {
   }, [pathname, authExpired]);
 
   return <>
-    <DashboardLayout>
-      {alert}
-      <DashboardNavbar fixedNavbar />
+    <DashboardLayout navbar={<>{alert}<DashboardNavbar fixedNavbar /></>}>
       {children}
     </DashboardLayout>
     <Footer />

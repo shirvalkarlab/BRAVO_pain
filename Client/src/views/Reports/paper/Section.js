@@ -5,7 +5,10 @@
  *
  * Written 2026-09-26 for the minimalist redesign (SPEC.md section 4, rule 3). A section is a
  * white card with a 1 px hairline border and no shadow; it is never put inside another card.
- * 8 px from the title to the answer, 16 px from the answer to the figure.
+ * 8 px from the title to the answer, 16 px from the answer to the figure, and 64 px to the next
+ * section (SPEC.md section 2.5, `LAYOUT.betweenSections`; the PI's ruling D13 of 2026-09-26).
+ * The title breaks lines evenly (`text-wrap: balance`) and the answer and reading avoid a lone
+ * last word (`pretty`) (TASTE_AUDIT.md C5).
  *
  * Props:
  *   id        anchor for the contents row's jump links
@@ -19,7 +22,7 @@
  */
 import PropTypes from "prop-types";
 
-import { T, TYPE, LAYOUT, CARD } from "assets/theme/base/tokens";
+import { T, TYPE, LAYOUT, CARD, SPACE, WRAP } from "assets/theme/base/tokens";
 
 import Fold from "./Fold";
 
@@ -28,22 +31,22 @@ export default function Section({ id, question, answer, actions, reading, method
   const headingId = id ? `${id}-title` : undefined;
   return (
     <section id={id} aria-labelledby={headingId} data-paper="section"
-      style={{ ...CARD, padding: LAYOUT.cardPadding, marginBottom: LAYOUT.betweenCards }}>
+      style={{ ...CARD, padding: LAYOUT.cardPadding, marginBottom: LAYOUT.betweenSections }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline",
-        flexWrap: "wrap", gap: 16 }}>
-        <h2 id={headingId} style={{ margin: 0, ...TYPE.title, color: T.ink }}>{question}</h2>
+        flexWrap: "wrap", gap: SPACE.sm }}>
+        <h2 id={headingId} style={{ margin: 0, ...TYPE.title, color: T.ink, ...WRAP.balance }}>{question}</h2>
         {actions ? <div>{actions}</div> : null}
       </div>
       {answer ? (
         <p style={{ margin: `${LAYOUT.titleToAnswer}px 0 0`, ...TYPE.lead, color: T.ink,
-          maxWidth: LAYOUT.proseMax }}>
+          maxWidth: LAYOUT.proseMax, ...WRAP.pretty }}>
           {answer}
         </p>
       ) : null}
       {children ? <div style={{ marginTop: LAYOUT.answerToFigure }}>{children}</div> : null}
       {reading ? (
         <p style={{ margin: `${LAYOUT.answerToFigure}px 0 0`, ...TYPE.body, color: T.ink2,
-          maxWidth: LAYOUT.proseMax }}>
+          maxWidth: LAYOUT.proseMax, ...WRAP.pretty }}>
           {reading}
         </p>
       ) : null}
