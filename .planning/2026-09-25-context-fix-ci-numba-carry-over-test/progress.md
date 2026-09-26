@@ -46,3 +46,4 @@
 - Band detector re-run (04:08:29Z, 04:10:31Z): research version reversed from the short copy (L now p 0.020/0.010, R 0.12/0.10); device version identical. Stepped current (04:08:01Z) reproduces 282 exactly.
 - P-19 re-run: left disagreement shrinks, group pain difference gone; right PSD rises with pain on 12 bands of the 66 shared reports. Correction appended to the document.
 - Rows 289-301 written; corrections dated 2026-09-26 to digest 242/260/268/199/204/282/285, full log 147/175/200/242/260/268/199/204/282/285, five artifacts.
+- 2026-09-26: 310-314 committed (within-block scoring; exact band-detector null; P-12 on full tiles; page cleanups; timeline pre-implant bars; plain wording). Heat-map exact-null measurement saved (artifacts/analysis_2026-09-26_exact_null_on_the_heat_maps.md): correlation-grid 'clears the correction' 32 -> 10 (daily NRS), 34 -> 17 (page settings); one-band rule unchanged 0/50. Switch awaits the PI.

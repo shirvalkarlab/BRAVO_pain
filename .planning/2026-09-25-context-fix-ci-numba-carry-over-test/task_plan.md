@@ -5,7 +5,7 @@ Items 1-3 done (270-272). Now: every pending and ongoing item worked by agents (
 /swarm-execute), RCSchronicpain's open items included, handoff leftovers turned into a to-do list.
 
 ## Next Step
-Wait for the PI: the off-block option (protocol section 6.1); re-measure P-12's band-power cells.
+Finish the no-ruling leftovers (shared-null and pooled-scoring fixes, P-12 re-measure, page cleanups: 310-312); then only Medtronic/clinical-team questions remain.
 
 ## Current Phase
 Phase 7
