@@ -217,3 +217,63 @@ DRAFT DECISION ROW:
 - **No two-group difference survives correction** for 44 comparisons (smallest uncorrected p 0.013).
 - **Recommended to the PI:** show the split descriptively in the heat-map cell's side panel, and the device's own band power beside the chosen band on the Closed-Loop page.
 - `artifacts/analysis_2026-09-25_P19_results_by_recording_source.md`.
+
+## Correction, 2026-09-26 (decision 289): these numbers were measured on a short tile copy
+
+Every number above that comes from the 3 s pieces or the PSDs was measured between 20:22 and 20:58
+UTC on 2026-09-25 (the probe's output files), after the Stim Optimizer had written a short saved copy
+of the tiles at 20:03 UTC: 293,108 TD pieces where the full set is 303,321, and patient-event PSDs
+assigned without the sensing-pair index (decision 289). The counts show it: 162 left and 308 right
+reports at 30 s, against 201 and 465 on the full copy. The probe (`_p19_by_source.py`,
+`_p19_groups.py`, `_p19_mixing.py`, unchanged) was re-run on 2026-09-26 on the full saved copy; the
+harness check again matched the page's own rows with 0 fields differing on both pairs, and the
+short-copy outputs are kept beside the new ones (`_p19_*_shortcopy_20260925.json`, scratch). The
+device's own band power (the chronic log and streaming) reads no tile and is unchanged.
+
+**What changes.**
+- **Counts.** L 1-3+: 201 reports at 30 s, 94 read from TD and 107 from PSD (53%); 176 have a PSD in
+  the window and 69 have both. R 0-3+: 465, 95 from TD and 370 from PSD (80%); 436 have a PSD, 66 both.
+- **Left, 23.5-28.5 Hz: the disagreement shrinks.** The PSD-read reports now read -0.16 to -0.25
+  (107 reports; intervals below zero at 4 of 6 centres, spanning zero at 23.5 and 24.5 Hz), not -0.35
+  to -0.37 with every interval below zero. The TD-read reports read -0.18 to +0.00 (94; 5 of 6
+  intervals span zero). The page's cell reads -0.06 to -0.19. At 24.5 Hz: TD +0.00 (-0.16 to +0.16),
+  PSD -0.17 (-0.34 to +0.02).
+- **Left: the pain difference between the two groups is gone.** Mean NRS 6.93 on the TD-read reports
+  against 7.02 on the PSD-read (difference +0.09, -0.43 to +0.58; rank test p 0.11), where the short
+  copy gave 7.32 against 6.74 (p 0.00016). The two groups share 3 of 151 California days (71 and 83).
+- **Left: mixing the sources no longer weakens the upper bands.** With each source's own average
+  removed, the correlation moves by at most 0.02 at 20.5-29.5 Hz (24.5 Hz: -0.06 pooled, -0.05 within
+  sources), not the 0.08-0.14 reported above. The section "Why the left 22.5-28.5 Hz cell sits near
+  zero" no longer describes the record: the pain half of its explanation is gone. The power half
+  holds: at 24.5 Hz the TD-read reports carry 214 device units against 116 on the PSD-read (26.5 Hz
+  197 against 113; 28.5 Hz 155 against 88), while on the same reports the two conversions agree within
+  0.85-1.00 (rank agreement +0.46 to +0.78).
+- **Left, 8.5-18.5 Hz:** TD -0.34 to -0.57 (94 reports); PSD alone -0.12 to -0.32 (174-175).
+- **Right: the PSD-read reports carry more of the cell.** At 8.5-18.5 Hz TD reads -0.15 to -0.29 (95)
+  and PSD alone -0.06 to +0.06 (434-436); at 19.5-24.5 Hz the PSD-read reports read -0.15 to -0.23
+  (370, every interval below zero) and TD -0.14 to +0.02. Pain does not differ between the groups
+  (7.29 against 6.89, -0.10 to +0.85, p 0.84). Mixing moves the right's correlation by at most 0.055.
+- **Right, the 66 reports with both sources: the PSD readings RISE with pain in 12 bands.** The
+  snapshot correlation's interval lies wholly above zero at 11.5-14.5 and 16.5-23.5 Hz (+0.17 to
+  +0.27), while TD on the same reports reads -0.10 to +0.09; the difference's interval excludes zero
+  at 12.5-16.5 and 18.5-24.5 Hz (12 bands, uncorrected). The short copy found this at 9.5, 10.5 and 12.5 Hz
+  only (+0.22 to +0.25). So the sentence "No source gives a band that rises with pain on either pair"
+  holds for the page's own split (no TD-read or PSD-read reading has an interval wholly above zero on
+  either pair) but not for PSD on the reports that also have TD. A lead about the two measurements on
+  the same occasions, not a band the one-band rule could use: these 66 reports are not the page's
+  cell, and nothing here is corrected for the bands tested.
+- **The two-group test.** The same approximate test (Fisher's transformation) across the 44
+  band-and-pair comparisons now gives its smallest p at left 8.5 Hz, 0.0006 (TD -0.57 against PSD
+  -0.15), and three comparisons survive correction for the 44 (left 8.5, 9.5 and 10.5 Hz, q 0.017, TD
+  more negative than PSD); left 24.5 Hz is p 0.22. The test still treats neighbouring reports as
+  independent, which makes its p-values too small.
+- **Best of the nine lengths ("established").** L 1-3+: the page 17 of 22 centres, TD alone 16, PSD
+  alone 9. R 0-3+: the page 14, TD alone 7, PSD alone 1.
+
+**What stands.** Both sources fall with pain at the lower bands on the left; on the page's own split
+no reading rises with pain on either pair; the two conversions agree on the same reports; the device's
+own band power shows no relationship with pain at its best-covered centres (left chronic 23.44 Hz
++0.00, -0.25 to +0.26, 63 reports; right chronic 26.37 Hz -0.04, -0.22 to +0.14, 117). The heat
+map's split line (decision 298) now prints this split for any cell, on the full tiles. The
+recommendation to show the device's own band power beside the chosen band on the Closed-Loop page is
+unaffected and still for the PI.

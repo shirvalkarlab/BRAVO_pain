@@ -104,3 +104,15 @@ DRAFT DECISION ROW: P-12 explained (read-only, no code changed). The Closed-Loop
 - RCS08, 5 of 6 sensing pairs, all cells 52 to 65 groups. Current-to-power: 4.7 to 18.9 effective groups; the sandwich resolves 25 cells, flipping 14, drop-one 21. Band-to-pain regression as of 09-04: in 29 of 90 cells one stimulation-off stretch holds 90% or more of the information, carried by 6 samples at 103 to 182 times the 99.9th percentile. There, flipping's p-value collapses (p below 0.05 in 24 of the 29 cells while its interval excludes zero in only 2), and the sandwich and drop-one resolve none.
 - The live E3 (one row per group, 90 and 91 groups) agrees across all three methods: p 0.0085 / 0.013 / 0.011 on the left and 0.023 / 0.031 / 0.029 on the right. Nothing on any page moves.
 - Found on the way: the triangle's E1 uses the sandwich on 5 and 9 runs with no switch; the response mislabels the method on E1 and E2; the flipping routine builds a samples-by-samples matrix of 15 to 33 GB, too big for R 0-3+.
+
+## Correction, 2026-09-26 (decision 289)
+
+This analysis was run between 20:44 and 21:13 UTC on 2026-09-25, while the saved 3 s tiles were a
+short copy (293,108 TD pieces where the full set is 303,321; decision 289). Its E3 numbers read no
+tile and reproduce on the full tiles (left p 0.0085 on 90 groups, right 0.023 on 91). Its band-power
+cells (current-to-power and the band-to-pain regression) were read from the short copy, so their
+sample counts (31,195 to 43,913 and 43,241 to 50,106 per cell) and the counts of resolved cells
+(for example 29 of 90 cells with one dominant group) need re-measuring; that has not been done. The
+band-to-pain regression here matched each piece's own settings period, so decision 290's join error
+does not touch it. The method comparison on constructed data (section 4.1) reads no recording and
+stands.

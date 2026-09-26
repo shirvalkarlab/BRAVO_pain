@@ -38,3 +38,11 @@
 | the bridge queued jobs behind the speed-up agent's probes | waited for each outbox file before relying on it |
 | first logging test passed without the fix (pytest logs at WARNING) | set root to DEBUG as the server does; RED, then fix |
 - 2026-09-25 night: built, uncommitted (all commits held until the tile fix lands): P-03 (a, b), P-20 re-save + version test, Q4 dagger + pooled-fit checks, Q10 per-file settings history, band detector 5a-c, TD/PSD heat-map line + page vocabulary, protocol revision, calibration figures moved, 18 June mock-ups staged for removal. Found: short shared tile copy (findings.md).
+
+## Session: 2026-09-26 (records on the full tiles)
+- Saved tiles full since 03:35 UTC: 303,321 TD pieces, 6,075 PSDs, 0 before implant; an uncut build gives the same (the cut is a guard on RCS08). Matched at 60-min NRS: L 1-3+ 201/187, R 0-3+ 459/439.
+- Closed-Loop 24.5 Hz, full tiles, fixed join: L NRS E2 0.564 (0.438-0.678, 43 reports), L LLVAS 0.641 (0.480-0.784, p 0.072); R NRS 0.401, R LLVAS 0.445. Old join, same tiles: 0.562, 0.773 (established), 0.430, 0.516.
+- Summary L 1-3+ LLVAS: 0.617 / 0.580 current out (sheets off); 0.554 / 0.549 (on). Grid TD/PSD line L 24.5 Hz 30 s: TD +0.00 (94), PSD -0.17 (107).
+- Band detector re-run (04:08:29Z, 04:10:31Z): research version reversed from the short copy (L now p 0.020/0.010, R 0.12/0.10); device version identical. Stepped current (04:08:01Z) reproduces 282 exactly.
+- P-19 re-run: left disagreement shrinks, group pain difference gone; right PSD rises with pain on 12 bands of the 66 shared reports. Correction appended to the document.
+- Rows 289-301 written; corrections dated 2026-09-26 to digest 242/260/268/199/204/282/285, full log 147/175/200/242/260/268/199/204/282/285, five artifacts.

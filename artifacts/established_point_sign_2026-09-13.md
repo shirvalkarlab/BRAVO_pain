@@ -162,3 +162,17 @@ compared, 0 differing; prescription fields, 48 compared, 0 differing.**
 
 The page was not watched in a browser this session (no login; typing a credential is a hard
 limit). The chunk check above is the proof the panel reached the served bundle.
+
+## Correction, 2026-09-26 (decision 290)
+
+The E2 rows of the table in section 4 (+0.058, interval -0.083 to +0.197, p 0.46 on L 1-3+; +0.088,
+-0.023 to +0.195, p 0.12 on L 0-2+) were computed on the pain ratings of the settings period BEFORE
+each 3 s piece's own: the Closed-Loop joined table matched the period's position (counted from 0)
+against the ratings' period number (counted from 1), from the module's first build on 2026-09-03 until
+2026-09-25. The before/after comparison in this document stands, because both captures used the same
+join; the E2 values do not. Re-measured on 2026-09-26 on the full saved tiles with the join fixed:
+L 1-3+ at 24.5 Hz under NRS reads an area under the curve of 0.564 (0.438 to 0.678), p 0.29, 43 pain
+reports, that is +0.064 on this table's scale. Its interval still spans 0.5, so the "2 of 3 intervals
+span zero" in this document is unchanged. L 0-2+ was not re-measured: it is not a sensing pair the
+device allows with today's contacts (decision 217). Full numbers: decision 290 in
+`DECISIONS_and_open_items.md` and `docs/decision_log_full_2026-09-19.md`.

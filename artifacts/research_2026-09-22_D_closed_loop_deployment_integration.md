@@ -527,3 +527,13 @@ DBS on this device, so no directly comparable clinical workflow was expected to 
 28. Medtronic. "BrainSense™ Adaptive DBS (aDBS) — ADAPT-PD clinical trial overview." https://www.medtronic.com/content/dam/medtronic-wide/public/western-europe/products/neurological/deep-brain-stimulation/adbs-clinical-trial-overview.pdf (PDF not text-extractable by the fetch tool; title and metadata only).
 29. Medtronic. "Scientific compendium, BrainSense™ Adaptive Deep Brain Stimulation (aDBS)." https://www.medtronic.com/content/dam/medtronic-wide/public/western-europe/products/neurological/deep-brain-stimulation/adbs-scientific-compendium.pdf (not fetched in this pass; listed for completeness).
 30. NeurologyLive. "FDA Approves Medtronic's Adaptive Deep Brain Stimulation for Parkinson Disease" (February 2025 approval, world-first commercial aDBS system). https://www.neurologylive.com/view/fda-approves-medtronic-adaptive-deep-brain-stimulation-parkinson-disease
+
+## Correction, 2026-09-26 (decision 290)
+
+The E2 edge this report describes (band power to pain, `edges.state_edge` on the Closed-Loop joined
+table) read the pain ratings of the settings period BEFORE each 3 s piece's own, from the module's
+first build on 2026-09-03 until 2026-09-25: the join matched the period's position (counted from 0)
+against the ratings' period number (counted from 1). Every E2 value the page printed in that time was
+the wrong period's ratings. The report's description of the page's structure stands. Re-measured on
+2026-09-26 on the full saved tiles with the join fixed, L 1-3+ at 24.5 Hz under NRS reads 0.564
+(0.438 to 0.678), p 0.29, 43 pain reports; R 0-3+ 0.401 (0.288 to 0.509), 59 reports. See decision 290.

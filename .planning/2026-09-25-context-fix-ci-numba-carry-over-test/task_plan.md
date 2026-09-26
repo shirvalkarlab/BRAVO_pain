@@ -5,10 +5,10 @@ Items 1-3 done (270-272). Now: every pending and ongoing item worked by agents (
 /swarm-execute), RCSchronicpain's open items included, handoff leftovers turned into a to-do list.
 
 ## Next Step
-Wait for the PI's answers (revised plan section 5; Lane 0 items 0.1-0.3). Open: P-03 two parts, P-20 pickles, P-07 count.
+Wait for the PI: the off-block option (protocol section 6.1); re-measure P-12's band-power cells.
 
 ## Current Phase
-Phase 5
+Phase 7
 
 ## Phases
 
@@ -46,6 +46,13 @@ Phase 5
 - [x] Stale numbers and stale open items corrected (280)
 - [x] Harmonic one home, speed-ups, sheet parser (277-281)
 - [x] Revised plan run by workflow, verified, committed (282-288)
+- **Status:** complete
+
+### Phase 7: The night's builds recorded on the full tiles (289-301)
+- [x] Saved tiles confirmed full: 303,321 TD pieces, 6,075 PSDs, 0 before implant; 201/187 and 459/439 matched
+- [x] Re-measured on full tiles: Closed-Loop E2/E3/stability both leads and scores, summary, TD/PSD line, titration card
+- [x] Band detector and stepped-current runs re-run; P-19 re-run
+- [x] Rows 289-301 in the digest and the full log; corrections for 290 and 289 dated 2026-09-26
 - **Status:** complete
 
 ## Decisions Made

@@ -59,3 +59,11 @@ Each reviewer gave, for every vote, a probability that the action once built cha
 - `artifacts/research_2026-09-22_C_bayesian_algorithm_stim_optimizer_end_to_end.md` and `..._C_PANEL_...`
 - `artifacts/research_2026-09-22_D_closed_loop_deployment_integration.md` and `..._D_PANEL_...`
 - Decisions 229-231; `DECISIONS_and_open_items.md`; the session's debate boards (scratchpad, not committed).
+
+## Correction, 2026-09-26 (decision 290)
+
+The E2 figure in section D ("E2 AUC 0.559, 0.42-0.70") was computed on the pain ratings of the
+settings period BEFORE each 3 s piece's own (the Closed-Loop joined table's off-by-one join,
+2026-09-03 to 2026-09-25). With the join fixed, on the full saved tiles on 2026-09-26, L 1-3+ at
+24.5 Hz under NRS reads 0.564 (0.438 to 0.678), p 0.29, 43 pain reports; its interval still spans 0.5,
+so the synthesis's reading of D stands. See decision 290.

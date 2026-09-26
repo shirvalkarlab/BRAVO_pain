@@ -40,3 +40,14 @@ Not adopted: the report's proposal to move the reliable-change card (the index w
 - The severity boolean for the prescription notes: dropped by all three as cost without value; heading only.
 - Item 4's method: the engineer withheld consensus until the adjustment was named; named in round 3 and accepted, with his data-source detail (the joined table's current column) folded in.
 - The methodologist lowered item 4's expected payoff after seeing E2's weak raw baseline (an AUC of 0.559 with an interval spanning 0.5): the adjusted version will most likely confirm the existing caveat rather than change the verdict.
+
+## Correction, 2026-09-26 (decision 290)
+
+The E2 baseline this panel quoted -- "an area-under-curve of 0.559 with an interval from 0.42 to 0.70
+(p 0.45, 32,069 samples)" -- was computed on the pain ratings of the settings period BEFORE each
+3 s piece's own (the Closed-Loop joined table's off-by-one join, 2026-09-03 to 2026-09-25). Run on
+2026-09-26 on the full saved tiles, the old join still gives 0.562 on today's record; the fixed join
+gives 0.564 (0.438 to 0.678), p 0.29, 43 pain reports, 39,953 samples, and with the current in force
+taken out 0.553 (0.441 to 0.673). The methodologist's reading stands: the baseline is weak, its
+interval spans 0.5, and the adjusted reading confirms the caveat rather than changing the verdict.
+See decision 290.
