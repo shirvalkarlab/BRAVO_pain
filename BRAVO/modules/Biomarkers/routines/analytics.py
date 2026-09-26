@@ -6305,8 +6305,11 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
     # generator, and on its own generators, so no number above can move.
     by_source = _correlation_by_recording_source(X, pain, from_device_spectrum,
                                                  n_boot=int(n_boot), seed=int(seed))
+    # The count of shuffles the correlation reference really ran: every other slide of the pain
+    # scores once (decision 315), not the number asked for.
+    n_slides = int(corr_null.get("n_used") or 0)
     notes = _sweep_notes(kept_req, delivered, tiles, tile_s, T, C, n_mad, o_scale, n_excluded,
-                         int(n_perm), split_why, crosscheck, outlier_rule=outlier_rule)
+                         n_slides, split_why, crosscheck, outlier_rule=outlier_rule)
     # The snapshot count and share are NOT appended to `notes`. They travel as the
     # `device_spectrum_*` fields and `n_pain_reports_from_device_spectrum` below, and the page's
     # orange caption prints them from those fields (`gridReadouts.deviceSpectrumBullets`); a
@@ -6398,11 +6401,33 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         "chunk_exclusion": (dict(chunk_exclusion) if chunk_exclusion else None),
         "outlier_n_mad": float(n_mad),
         "outlier_scale": o_scale,
-        "n_shuffles": int(n_perm),
+        "n_shuffles": n_slides,
         "n_resamples": int(n_boot),
         "notes": notes,
         "length_rounding": _length_rounding(kept_req, delivered),
     }
+
+
+def _take_the_draws_the_chunk_shuffle_took(y, n_perm, rng):
+    """Advance ``rng`` exactly as the chunk shuffle did before decision 315, and use nothing drawn.
+
+    The rotations use no random numbers, but the grid draws its resampled intervals from the SAME
+    generator after the two chance tests. Without these draws every interval on the heat maps would
+    come from a different random draw than before the switch -- a second, unrelated change in the
+    same commit, moving the "supported" readings (decision 210) by chance alone. With them, the
+    intervals are the same draws, bit for bit, which is what the measurement the PI decided on
+    showed (`artifacts/analysis_2026-09-26_exact_null_on_the_heat_maps.md`, section 1). Removing
+    this is a change to every interval and needs its own before-and-after measurement.
+    The draws were: one shift per shuffle, then (only when the chunk length was above 1) one
+    uniform number per chunk per shuffle to order the chunks."""
+    from .stats_utils import block_length_for
+    n = int(np.size(y))
+    if n < 1 or int(n_perm) <= 0:
+        return
+    rng.integers(0, n, size=int(n_perm))
+    block = max(1, int(block_length_for(np.asarray(y, dtype=np.float64), n)))
+    if block > 1:
+        rng.random((int(n_perm), int(np.ceil(n / block))))
 
 
 def _best_of_windows_null_correlation(X, pain, *, n_perm, rng):
@@ -6414,10 +6439,13 @@ def _best_of_windows_null_correlation(X, pain, *, n_perm, rng):
     single correlation overstates how unusual it is. Here the same best-of-lengths choice is made on
     each shuffle, so the observed best is compared against a distribution of bests.
 
-    The shuffling is a circular block permutation of the pain scores, the same null the rest of this
-    module uses (``stats_utils.circular_block_perm_matrix``), because pain scores on nearby days
-    resemble each other and an independent shuffle would make the reference too easy to beat. The
-    block length is chosen from the measured autocorrelation of the pain scores.
+    The shuffling slides the whole series of pain scores along in time, once by every possible
+    number of reports, wrapping the end round to the start (``stats_utils.rotations``, the exact
+    rotation test, decision 315): pain scores on nearby days resemble each other, and rotating keeps
+    every slow rise and fall of pain while breaking only its alignment with the band power. Before
+    decision 315 the scores were cut into chunks of their lag-1 decorrelation length and the chunks
+    reordered; on RCS08 that was chunks of 2, and an unrelated band read p <= 0.05 in 10.7% of
+    records built on RCS08's own pain series, against 5.9% for the rotations.
 
     Every shuffle's whole grid is TWO matrix products in total -- not two per length of signal --
     so the entire reference costs a handful of matrix operations rather than n_perm * 10 * C
@@ -6427,7 +6455,7 @@ def _best_of_windows_null_correlation(X, pain, *, n_perm, rng):
     that is checked.
     Returns ``{"p95", "p99", "max_abs_by_perm", "block_length", "p_selection_aware" (C,)}``.
     """
-    from .stats_utils import block_length_for, circular_block_perm_matrix, permutation_null_resolution
+    from .stats_utils import rotations, rotation_null_resolution
     T, P, C = X.shape
     y = np.asarray(pain, dtype=np.float64)
     usable = np.isfinite(y)
@@ -6437,8 +6465,8 @@ def _best_of_windows_null_correlation(X, pain, *, n_perm, rng):
     yu = y[usable]
     Xu = X[:, usable, :]
     nP = int(yu.size)
-    block = int(block_length_for(yu, nP))
-    perm = circular_block_perm_matrix(nP, block, int(n_perm), rng)        # (S, nP)
+    _take_the_draws_the_chunk_shuffle_took(yu, int(n_perm), rng)
+    perm = rotations(nP, int(n_perm), rng)                               # (nP-1, nP)
     Yp = yu[perm]                                                        # (S, nP)
     S = Yp.shape[0]
     best = np.zeros((S, C), dtype=np.float64)
@@ -6507,11 +6535,11 @@ def _best_of_windows_null_correlation(X, pain, *, n_perm, rng):
 
     _abs_r_by_length(yu[None, :], _into_observed)
     flat = best[np.isfinite(best)]
-    _, p_floor, _ = permutation_null_resolution(nP, block)
+    _, p_floor, _ = rotation_null_resolution(nP, S)
     return {
         "p95": (float(np.percentile(flat, 95)) if flat.size else None),
         "p99": (float(np.percentile(flat, 99)) if flat.size else None),
-        "block_length": block,
+        "block_length": 1,
         "n_used": int(S),
         "p_resolution": (float(p_floor) if p_floor is not None else None),
         "best_by_shuffle": best,
@@ -6534,7 +6562,7 @@ def _best_of_windows_null_auc(X, y_binary, *, n_perm, rng):
     signal stood side by side, for the reason and with the check described on the correlation
     reference above.
     """
-    from .stats_utils import block_length_for, circular_block_perm_matrix
+    from .stats_utils import rotations
     T, P, C = X.shape
     yb = np.asarray(y_binary, dtype=np.float64)
     labelled = np.isfinite(yb)
@@ -6547,8 +6575,8 @@ def _best_of_windows_null_auc(X, y_binary, *, n_perm, rng):
     if len(np.unique(yl)) < 2:
         return {"p95": None, "p99": None, "block_length": None, "n_used": 0,
                 "best_by_shuffle": None}
-    block = int(block_length_for(yl, nL))
-    perm = circular_block_perm_matrix(nL, block, int(n_perm), rng)
+    _take_the_draws_the_chunk_shuffle_took(yl, int(n_perm), rng)
+    perm = rotations(nL, int(n_perm), rng)                               # (nL-1, nL)
     Yp = yl[perm]                                                        # (S, nL) still 0/1
     S = Yp.shape[0]
     best = np.zeros((S, C), dtype=np.float64)
@@ -6596,7 +6624,7 @@ def _best_of_windows_null_auc(X, y_binary, *, n_perm, rng):
     return {
         "p95": (float(np.percentile(flat, 95)) if flat.size else None),
         "p99": (float(np.percentile(flat, 99)) if flat.size else None),
-        "block_length": block,
+        "block_length": 1,
         "n_used": int(S),
         "best_by_shuffle": best,
         "observed_abs_by_length": observed,
@@ -6714,7 +6742,7 @@ def _sweep_notes(requested, delivered, tiles, tile_s, n_times, n_centers, n_mad,
                      f"absolute deviations on the {o_scale} scale), per band and length.")
     else:
         notes.append("Outlier exclusion was switched off; every measurement is included.")
-    notes.append(f"Shuffled reference: {n_perm} circular block shuffles of the pain scores "
+    notes.append(f"Shuffled reference: the pain scores slid along in time, all {n_perm} ways "
                  f"(day-to-day similarity kept), each making the same best-of-{_N_LENGTHS_WORD} "
                  f"choice in either direction.")
     notes.append(f"High vs low pain: {split_why}.")

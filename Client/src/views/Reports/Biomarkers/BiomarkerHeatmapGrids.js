@@ -118,11 +118,12 @@ function heatmapHeight(rows) {
 // THE L 1-3+ SEARCH (the PI, 2026-09-21): a one-off exploratory search over every setting of the
 // matching knobs on RCS08's L 1-3+ (the one left-side pair the sensing rule allows), Left Leg VAS,
 // the page's own grid routine with its full shuffles and resamples (the table is in the scratch
-// area, `_l13_search_left_leg_vas.csv`). Its headline lines are printed in bold at the top of the
+// area, `_l13_search_left_leg_vas.csv`). Re-run 2026-09-26 when every chance test became the exact
+// rotation test (decision 315; `_ns315/l13_after_left_leg_vas.csv`): the counts below are that run's. Its headline lines are printed in bold at the top of the
 // "How to read this" drawer, for RCS08 only: they are a finding about one record, not a rule.
 export const L13_SEARCH_UID = "2e3c75c00d7f4f37b53a048d195f11da";
 export const L13_SEARCH_LINES = [
-  "Exploratory search, 2026-09-21, L 1\u207b3\u207a on Left Leg VAS: 252 settings \u2014 windows 2, 5, 10, 20, 30, 60, "
+  "Exploratory search, 2026-09-21, counts re-run 2026-09-26, L 1\u207b3\u207a on Left Leg VAS: 252 settings \u2014 windows 2, 5, 10, 20, 30, 60, "
     + "120 min; Report-first, Neural-first and Neural-first pre-report (which end of the pair is chosen first, and "
     + "whether only recording BEFORE the report may answer it); cap 1, 3, 10 per rating (how many stretches of "
     + "recording one report may claim); reuse on/off (whether one stretch of recording may answer more than one "
@@ -134,20 +135,20 @@ export const L13_SEARCH_LINES = [
   // beside the per-setting line above. The full shuffle of the whole 252-setting search is not run
   // (about 33 min per shuffle); it is built only if a cell ever clears the per-setting bar and a
   // calibrated family-wide p is wanted.
-  "Taken as a whole: a positive cell with p < 0.05 turned up in 6 of the 252 settings, where about 106 would "
+  "Taken as a whole: a positive cell with p < 0.05 turned up in none of the 252 settings, where about 106 would "
     + "if the settings were independent tests of 22 bands each (they are not: neighbouring settings share most of "
-    + "their data, so the true expected count is lower, but not near 6). With the sheets off, 4.1% of cells fall "
-    + "under p 0.05 against the 5% chance alone gives; with them on, 61% do, every one on the negative side. The "
+    + "their data, so the true expected count is lower, but not near 0). With the sheets off, 4.1% of cells fall "
+    + "under p 0.05 against the 5% chance alone gives; with them on, 23% do, every one on the negative side. The "
     + "search finds fewer positive cells than chance would. This is a count, not a calibrated p-value for the "
     + "search as a whole.",
-  "Sheets off (REDCap only): the one cell to reach the grid\u2019s \u201cestablished\u201d verdict is 24.5 Hz at 60 s, "
-    + "120-min window, Neural-first pre-report: r 0.33 (0.17 to 0.48), n 59, q 0.23. Those are two different tests and "
-    + "this cell passes only the first: \u201cestablished\u201d is that cell\u2019s own test (its interval clears zero "
-    + "and it beats the shuffled best of nine lengths), while q 0.23 means it does not clear the 22-band correction. "
-    + "21.5\u201325.5 Hz (mostly 23.5) come out \u201csupported\u201d in 1\u20138 settings per window, the same count "
+  "Sheets off (REDCap only): no cell reaches the grid\u2019s \u201cestablished\u201d verdict. The nearest is 24.5 Hz "
+    + "at 60 s, 120-min window, Neural-first pre-report: r 0.32 (0.16 to 0.46), n 61, q 0.25. \u201cEstablished\u201d is "
+    + "that cell\u2019s own test (its interval clears zero and it beats the shuffled best of nine lengths); this cell "
+    + "passes only the first half, and q 0.25 means it does not clear the 22-band correction either. "
+    + "21.5\u201325.5 Hz (mostly 23.5) come out \u201csupported\u201d in 0\u20138 settings per window, the same count "
     + "the negative side reaches by chance.",
-  "Sheets on (+ clinic titration scores): the positive cluster vanishes and 11\u201322 of 22 bands per setting fall "
-    + "with pain, 1,545 rows with q < 0.05 on the negative side, all with the sheets in. The titration scores carry a "
+  "Sheets on (+ clinic titration scores): the positive cluster vanishes and 10\u201322 of 22 bands per setting fall "
+    + "with pain, 72 rows with q < 0.05 on the negative side, all with the sheets in. The titration scores carry a "
     + "strong negative pain\u2013power relationship that the chronic record does not.",
   "The current in force explains much of what is left (2026-09-22). With the stimulation current running at each "
     + "report taken out of both the band power and the score \u2014 the \u201cadjust for the current in force\u201d "

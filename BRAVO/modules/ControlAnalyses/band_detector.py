@@ -156,51 +156,12 @@ def _rotation_p(observed, null_vals):
             float(np.percentile(v, 95)), int(v.size))
 
 
-#: Above this many ratings the null draws ``n_perm`` distinct rotations instead of refitting every
-#: one. No live record comes near it (the largest on RCS08, 2026-09-26, is 740 ratings).
-EXACT_ROTATIONS_MAX = 5000
-
-
-def rotation_null_words(n, n_rows):
-    """How the null of one reading was made, in words, for the saved row."""
-    return ("exact: every other rotation once" if n_rows == int(n) - 1 else
-            f"{n_rows} of the {int(n) - 1} other rotations, drawn without replacement")
-
-
-def rotations(n, n_perm, rng):
-    """The orders the ratings are moved to for the null: every rotation of the whole series in time,
-    each once. Decision 314 (2026-09-26), following decision 310.
-
-    * EXACT. Rotating the ratings keeps their whole persistence and moves only their alignment with
-      the bands; n orders exist, the observed one among them. Every other rotation is returned once
-      (shifts 1 .. n-1, in order; ``rng`` is not used), and `_rotation_p`'s +1 counts the observed
-      order once, so the p is the exact rotation p, smallest value 1/n. Above
-      ``EXACT_ROTATIONS_MAX`` ratings, ``n_perm`` distinct shifts are drawn without replacement
-      instead, which keeps the same p valid.
-    * WHAT IT REPLACES, twice over. (1) The version before drew ``n_perm`` rotations WITH
-      replacement and left the identity out, so a reading that beat all n - 1 others read
-      1/(n_perm + 1) where the rotation test can only say 1/n: under a true null at 40 ratings and
-      1,000 draws p <= 0.01 happened 2.9% of the time (`test_the_rotation_p_is_exact_under_a_true_
-      null`). (2) Where pain was persistent, the shared helper it drew from
-      (`stats_utils.circular_block_perm_matrix`) chose a block length above 1 and SHUFFLED blocks
-      after a shift -- on RCS08 every device-shaped reading (blocks 2-3) and most research readings
-      (blocks 2-10). Shuffling blocks breaks pain's persistence at every block edge, and with a band
-      that is persistent too the shuffled correlations are narrower than the real chance spread:
-      under a true null with both series persistent (200 ratings, lag-1 correlation 0.6-0.85, 3,000
-      records each) p <= 0.05 happened 9.5-10.4% of the time and p <= 0.01 2.6-3.6%, against
-      4.7-5.3% and 0.9-1.4% for every rotation (`test_persistent_pain_and_an_unrelated_persistent_
-      band_read_p_at_its_level`). At 60 very persistent ratings (lag-1 0.9) every rotation still
-      reads p <= 0.05 in 7.1% (the one seam where the series wraps round), the block shuffles 13.1%.
-
-    ``n_perm`` <= 0, or fewer than 2 ratings, gives no null."""
-    n, n_perm = int(n), int(n_perm)
-    if n_perm <= 0 or n < 2:
-        return np.zeros((0, max(n, 0)), int)
-    if n <= EXACT_ROTATIONS_MAX:
-        shifts = np.arange(1, n)
-    else:
-        shifts = np.sort(rng.choice(np.arange(1, n), size=min(n_perm, n - 1), replace=False))
-    return (np.arange(n)[None, :] + shifts[:, None]) % n
+#: The rotations, their limit and their words have ONE home, `stats_utils` (decision 315, when the
+#: heat maps, the full-spectrum search, the power-over-time area test and the check before any
+#: decoder switched to them). Named here too because the saved rows and the tests read them here.
+EXACT_ROTATIONS_MAX = SU.EXACT_ROTATIONS_MAX
+rotation_null_words = SU.rotation_null_words
+rotations = SU.rotations
 
 
 def _rows_and_folds(y, n_folds, embargo):

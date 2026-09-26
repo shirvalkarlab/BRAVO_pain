@@ -50,14 +50,13 @@ def test_maxabs_corr_matches_full_when_no_nan():
 
 def test_vectorized_perm_matches_loop_statistic():
     """The VECTORIZED batched family-max statistic must be FLOATING-POINT IDENTICAL to looping
-    _maxabs_corr over the same circular-block permutations (with feature NaN gaps present)."""
+    _maxabs_corr over the same rotations (with feature NaN gaps present)."""
     rng = np.random.default_rng(3)
     N, K = 200, 80
     X = rng.normal(size=(N, K))
     X[rng.random((N, K)) < 0.25] = np.nan                 # zero->NaN-style gaps
     y = rng.normal(size=N)
-    block = su.block_length_for(y, N)
-    Pm = su.circular_block_perm_matrix(N, block, 250, np.random.default_rng(9))
+    Pm = su.rotations(N, 250, np.random.default_rng(9))
     loop = np.array([pipeline._maxabs_corr(X, y[Pm[i]]) for i in range(Pm.shape[0])])
     # mirror the batched internals on the SAME permutation matrix
     M = np.isfinite(X).astype(float); Xm = np.where(M > 0, X, 0.0)

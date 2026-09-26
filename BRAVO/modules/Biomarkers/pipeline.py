@@ -740,7 +740,7 @@ def _maxabs_corr(X, y, min_n=4):
 
 
 def _rating_level_perm_matrix(y, rating_group, n_perm, rng, block=None):
-    """Circular-block permutation at the RATING level, broadcast back to epochs.
+    """The rotation null at the RATING level, broadcast back to epochs.
 
     THE EXCHANGEABLE UNIT IS THE RATING, NOT THE EPOCH (audit F3). Several epochs are matched to one
     pain report, so permuting the epoch-level label vector is not a valid null: it hands different
@@ -753,9 +753,12 @@ def _rating_level_perm_matrix(y, rating_group, n_perm, rng, block=None):
     epoch-level comparison has NOT been re-measured on the reconciled family; the argument for
     permuting ratings rather than epochs does not depend on the size of that particular gap.
 
-    Construction: take one value per rating in time order, circular-block permute THAT vector (block
-    length from the rating-level autocorrelation, so serial dependence between successive reports is
-    preserved), then broadcast each permuted rating value back to every epoch sharing that report.
+    Construction: take one value per rating in time order, rotate THAT vector in time by every other
+    shift once (`stats_utils.rotations`, decision 315: the exact rotation test, which keeps the whole
+    persistence between successive reports), then broadcast each rotated rating value back to every
+    epoch sharing that report. ``n_perm`` is only an upper bound above
+    ``stats_utils.EXACT_ROTATIONS_MAX`` ratings, and ``block`` is accepted and ignored (it chose the
+    length of the chunk shuffle this replaced).
 
     Returns ``(Yp, info)`` with ``Yp`` of shape ``(n_perm, n_grouped_epochs)`` and ``info`` recording
     the grouped-row mask, the number of ratings and the block length. Callers MUST compute the
@@ -781,11 +784,9 @@ def _rating_level_perm_matrix(y, rating_group, n_perm, rng, block=None):
     # one value per rating. Constant within a rating by construction; mean is a no-op that also
     # tolerates a frame where it is not exactly constant.
     y_rating = np.array([float(np.nanmean(yy[inv == k])) for k in range(G)])
-    if block is None:
-        block = stats_utils.block_length_for(y_rating, G)
-    perm_g = stats_utils.circular_block_perm_matrix(G, int(block), int(n_perm), rng)   # (P, G)
+    perm_g = stats_utils.rotations(G, int(n_perm), rng)                                  # (G-1, G)
     Yp = y_rating[perm_g][:, inv]                                                       # (P, n_rows)
-    return Yp, {"rows": rows, "n_ratings": int(G), "block": int(block),
+    return Yp, {"rows": rows, "n_ratings": int(G), "block": 1,
                 "n_epochs_used": int(rows.sum()), "reason": None}
 
 
@@ -869,8 +870,8 @@ def _selection_statistic(r_abs, n_eff, q_threshold):
 def _block_perm_maxcorr_pvalue(X, y, n_perm=1000, block=None, seed=0, min_n=SELECTION_MIN_PAIRS,
                                return_null=False, rating_group=None, obs_p=None,
                                q_threshold=BIOMARKER_FDR_Q):
-    """FULLY VECTORIZED circular-block permutation p-value for the family max|R| statistic with
-    pairwise-NaN deletion. Replaces the per-permutation Python loop (block_perm_pvalue + _maxabs_corr
+    """FULLY VECTORIZED rotation-null p-value (decision 315) for the family max|R| statistic with
+    pairwise-NaN deletion. Replaces a per-permutation Python loop (the deleted block_perm_pvalue + _maxabs_corr
     x n_perm) with a handful of matrix ops.
 
     `X` (N x K) feature columns, `y` (N,) labels. Subset to label-valid rows UPSTREAM so y is finite;
@@ -879,7 +880,7 @@ def _block_perm_maxcorr_pvalue(X, y, n_perm=1000, block=None, seed=0, min_n=SELE
         Sxy = Yp @ Xm,  Sy = Yp @ M,  Syy = (Yp*Yp) @ M           (each P x K)
     with Xm = mask*X, M the 0/1 column mask, and the per-column sx/sxx/n/vx precomputed once. The
     Pearson r per (permutation, column) then follows in closed form and we take max|r| over columns.
-    Mathematically identical to looping _maxabs_corr over circular_block permutations.
+    Mathematically identical to looping _maxabs_corr over the same rotations.
 
     Returns (empirical_p, n_perm_used); with return_null=True returns (p, used, obs, null_stats) so
     the UI can plot the null distribution of the family max|R| against the observed value."""
@@ -917,10 +918,8 @@ def _block_perm_maxcorr_pvalue(X, y, n_perm=1000, block=None, seed=0, min_n=SELE
     if not np.isfinite(obs) or N < 4:
         return ((np.nan, 0, obs, None, perm_info) if return_null else (np.nan, 0))
     if Yp is None:
-        if block is None:
-            block = stats_utils.block_length_for(y, N)
-        perm = stats_utils.circular_block_perm_matrix(N, block, int(n_perm), rng)   # (P, N)
-        perm_info["block"] = int(block)
+        perm = stats_utils.rotations(N, int(n_perm), rng)                             # (N-1, N)
+        perm_info["block"] = 1
 
     M = np.isfinite(X).astype(float)                  # (N, K) fixed column masks (y is finite)
     Xm = np.where(M > 0, X, 0.0)                      # (N, K)
@@ -1323,21 +1322,19 @@ def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_pe
         "perm_n_ratings": perm_meta.get("n_ratings"),
         "perm_block": perm_meta.get("block"),
         "perm_n_epochs_used": perm_meta.get("n_epochs_used"),
-        # HOW FINELY THIS NULL CAN RESOLVE A p AT ALL (2026-09-02). At block length 1 —
-        # which is what block_length_for returns for both outcome metrics on this record — the
-        # builder returns the n circular ROTATIONS, so only n distinct nulls exist however many
-        # permutations are drawn. p is therefore quantised in steps of about 1/n with a floor near
-        # 1/(n+1), and the effective null sample size is n, not n_perm. Published because that floor
-        # sits close to 0.05 at these rating counts (about 0.0137 at 72 ratings), so a reported p
-        # near 0.05 must not be read to three decimal places or treated as finely separated from
+        # HOW FINELY THIS NULL CAN RESOLVE A p AT ALL (2026-09-02; decision 315). The null is every
+        # other ROTATION of the ratings once, so only n orders exist however many permutations
+        # were asked for: p is quantised in steps of 1/n with a floor of 1/n. Published because that
+        # floor sits close to 0.05 at these rating counts (about 0.014 at 72 ratings), so a reported
+        # p near 0.05 must not be read to three decimal places or treated as finely separated from
         # the threshold.
         **dict(zip(("perm_n_distinct_nulls", "perm_p_floor", "perm_p_step"),
                    (lambda t: (t[0],
                                None if t[1] is None else round(float(t[1]), 5),
                                None if t[2] is None else round(float(t[2]), 5)))(
-                       stats_utils.permutation_null_resolution(
+                       stats_utils.rotation_null_resolution(
                            perm_meta.get("n_ratings") or perm_meta.get("n_epochs_used") or 0,
-                           perm_meta.get("block") or 1)))),
+                           perm_used or None)))),
         # F14: the winner's-curse magnitude, not just the flag. null_max_mean is the |r| that
         # searching this family produces on average when there is NO real effect, so the honest
         # read of the winning |r| is the excess over it.
@@ -1458,8 +1455,9 @@ def run_powerdomain_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=N
     # PERMUTATION NULL for the in-sample AUC (rigor review: the bar plot's 0.5 chance line is the
     # ANALYTIC baseline; this adds an EMPIRICAL null that preserves daily pain autocorrelation, so
     # the reader can tell whether the observed separability beats chance for THIS serially-correlated
-    # series). Block-permute the labels (block = lag-1 decorrelation timescale) and recompute the
-    # undirected max(AUC,1-AUC) each shuffle. Emitted as summary["auc_perm"]; None if degenerate.
+    # series). Rotate the labels in time (decision 315; above stats_utils.EXACT_ROTATIONS_MAX
+    # labels, 1,000 distinct rotations) and recompute the undirected max(AUC,1-AUC) each time.
+    # Emitted as summary["auc_perm"]; None if degenerate.
     try:
         ap = stats_utils.auc_block_perm_null(lfp_s, pl, n_perm=1000, seed=0)
         summary["auc_perm"] = ap if ap.get("observed") is not None else None

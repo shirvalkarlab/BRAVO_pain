@@ -250,14 +250,20 @@ def pre_build_diagnostic(X, y_binary, current, *, band_labels=None, n_folds=5, e
     # (`_agent_bridge/_probe_confound_live.py` never built a second one). The honest reference
     # rotates the label and refits the SAME adjusted pipeline (covariate taken out the same way) on
     # each rotation, reusing the same rotation draws so the extra cost is one more fit per draw.
-    null = {"p50": None, "p95": None, "n_perm": 0, "block": embargo}
-    null_adjusted = {"p50": None, "p95": None, "n_perm": 0, "block": embargo, "reason": None}
+    #
+    # EVERY OTHER ROTATION ONCE (decision 315, 2026-09-26): `stats_utils.rotations`, the exact
+    # rotation test, smallest p 1/n. Before, 200 rotations were drawn with replacement (the shared
+    # helper's chunk length was 1 on all 12 live readings), so the p was a noisy estimate of this
+    # one; ``n_perm`` now bounds the count only above `stats_utils.EXACT_ROTATIONS_MAX` reports.
+    # ``block`` stays on the answer as 1, the rotation.
+    null = {"p50": None, "p95": None, "n_perm": 0, "block": 1}
+    null_adjusted = {"p50": None, "p95": None, "n_perm": 0, "block": 1, "reason": None}
     p_value = None
     adjusted_p_value = None
     if plain["auc"] is not None and int(n_perm) > 0:
         rng = np.random.default_rng(int(seed))
-        block = _su.block_length_for(y, n)
-        idx = _su.circular_block_perm_matrix(n, block, int(n_perm), rng)
+        block = 1
+        idx = _su.rotations(n, int(n_perm), rng)
         want_adjusted_null = adjusted["auc"] is not None
         vals, vals_adj = [], []
         for row in idx:

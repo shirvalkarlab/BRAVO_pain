@@ -341,3 +341,19 @@ def test_the_within_block_area_has_one_home():
     assert BD.auc_within_blocks is CD.auc_within_blocks
     import inspect
     assert "def auc_within_blocks" not in inspect.getsource(BD)
+
+
+def test_the_rotations_have_one_home():
+    """Decision 315 moved every chance test that shuffles the pain ratings onto the band detector's
+    rotations, and moved the rotations to `stats_utils`; the detector names them, it keeps no copy."""
+    try:
+        from modules.Biomarkers.routines import stats_utils as SU
+    except ImportError:                                        # host spelling
+        from Biomarkers.routines import stats_utils as SU
+    assert BD.rotations is SU.rotations
+    assert BD.rotation_null_words is SU.rotation_null_words
+    assert BD.EXACT_ROTATIONS_MAX == SU.EXACT_ROTATIONS_MAX
+    import inspect
+    src = inspect.getsource(BD)
+    assert "def rotations" not in src and "def rotation_null_words" not in src
+    assert not hasattr(SU, "circular_block_perm_matrix")

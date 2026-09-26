@@ -748,7 +748,8 @@ data than it has.
 Taking the maximum over ten correlated integration times inflates the answer. So a row reads
 `established` only when its resampling interval stays off the no-relationship value **and** the
 value beats what the same best-of-ten choice reaches on 1000 circular block shuffles of the pain
-scores. Measured on RCS08:
+scores (since decision 315, 2026-09-26: on every other rotation of the pain scores in time, once
+each; the table below predates it). Measured on RCS08:
 
 | | intervals off the no-relationship value | HELD BACK by the shuffled best-of-ten | `established` |
 |---|---|---|---|

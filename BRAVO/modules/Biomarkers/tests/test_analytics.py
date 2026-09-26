@@ -2620,36 +2620,21 @@ def test_selection_and_permutation_share_one_screen():
     assert perm["min_n"].default == pl.SELECTION_MIN_PAIRS
 
 
-# --- the rotation null's resolution limit (2026-09-02) -----------------------------------------
-def test_block_length_one_gives_circular_rotations_not_an_independent_shuffle():
-    """A docstring in stats_utils used to claim block length 1 meant an i.i.d. shuffle. It does
-    not: the builder returns the n circular rotations, one of which is the identity. That is the
-    rotation test — stricter than a shuffle for a dependent series, not looser — but it caps how
-    finely a p-value can be resolved, so the semantics are pinned here."""
-    import numpy as np
+# --- the rotation null's resolution limit (2026-09-02; decision 315) -----------------------------
+# `test_block_length_one_gives_circular_rotations_not_an_independent_shuffle` pinned what the chunk
+# shuffle did at a chunk length of 1; the chunk shuffle is gone (decision 315) and the rotations are
+# pinned in `test_exact_rotation_null.py`.
+def test_rotation_null_resolution_reports_the_floor_and_step():
     from modules.Biomarkers.routines import stats_utils as su
-    n = 12
-    P = su.circular_block_perm_matrix(n, 1, 4000, np.random.default_rng(0))
-    distinct = {row.tobytes() for row in P}
-    assert len(distinct) == n, f"expected exactly {n} rotations, got {len(distinct)}"
-    # every row must be a rotation: first differences are +1 everywhere except one wrap point
-    for row in P[:50]:
-        wraps = int(np.sum(np.diff(row) != 1))
-        assert wraps <= 1, (row, wraps)
-    # the identity is reachable, so the observed statistic sits inside its own null
-    assert any(np.array_equal(row, np.arange(n)) for row in P)
-
-
-def test_permutation_null_resolution_reports_the_floor_and_step():
-    from modules.Biomarkers.routines import stats_utils as su
-    n_distinct, floor, step = su.permutation_null_resolution(72, 1)
+    n_distinct, floor, step = su.rotation_null_resolution(72)
     assert n_distinct == 72
-    assert abs(floor - 1.0 / 73.0) < 1e-9
-    assert abs(step - 1.0 / 72.0) < 1e-9
+    assert abs(floor - 1.0 / 72.0) < 1e-12                   # every other rotation once, +1: 1/n
+    assert abs(step - 1.0 / 72.0) < 1e-12
     # the floor is uncomfortably close to 0.05 at this rating count, which is why it is published
     assert 0.01 < floor < 0.02
-    # block > 1 shuffles block order, so the count does not bind and is not computed
-    assert su.permutation_null_resolution(72, 10) == (None, None, None)
+    # above the limit only the drawn rotations exist, and the floor is 1/(rows + 1)
+    big = su.EXACT_ROTATIONS_MAX + 1
+    assert su.rotation_null_resolution(big, 1000) == (big, 1.0 / 1001, 1.0 / 1001)
 
 
 def test_block_length_for_returns_one_on_both_real_dependence_regimes():

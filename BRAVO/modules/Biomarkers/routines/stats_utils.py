@@ -10,7 +10,7 @@ small, pure, unit-testable functions used to make the inferential claims honest:
   * partial_corr      — correlation of x,y after regressing out a covariate (e.g. stim amplitude).
   * CovariateShape    — the shape that covariate is allowed to have: line, curve or kernel.
   * partial_corr_columns — the same, for every column of a matrix, each on its own usable rows.
-  * block_perm_pvalue — circular-block permutation p-value (preserves temporal autocorrelation).
+  * rotations         — the chance test for a series in time: every other rotation once (decision 315).
   * balanced_metrics  — balanced accuracy + prevalence/chance baseline for an imbalanced test set.
   * purged_time_blocked_folds — held-out blocks of time with the neighbouring rows embargoed.
   * confound_gate     — one association reported plainly and with a third quantity taken out.
@@ -195,93 +195,39 @@ def balanced_metrics(sens, spec, n_pos, n_neg):
 
 
 def block_length_for(labels, n=None):
-    """Default circular-block length = the lag-1 autocorrelation (decorrelation) timescale of the
-    labels, -1/ln(r1), clipped to [1, n//4]. 1 when there is no positive autocorrelation. Shared by
-    both the scalar and the vectorized permutation paths so they always agree.
+    """The persistence timescale of a series: the lag-1 autocorrelation (decorrelation) timescale,
+    -1/ln(r1), clipped to [1, n//4]; 1 when there is no positive autocorrelation.
 
-    **A returned 1 does NOT mean an independent shuffle.** An earlier version of this docstring said
-    it did, and that was wrong. ``circular_block_indices`` and ``circular_block_perm_matrix`` return
-    a pure CIRCULAR SHIFT when ``block <= 1``, so a block length of 1 selects the rotation test:
-    only ``n`` distinct nulls exist, the label series' entire autocorrelation function is preserved,
-    and only its alignment with the features is destroyed. That is a legitimate and conservative
-    null for a serially dependent label series — it is stricter than an independent shuffle, not
-    looser — but it has a hard resolution limit, documented on those two functions.
+    USED FOR THE RESAMPLED INTERVALS AND THE EMBARGO, NOT FOR ANY CHANCE TEST (decision 315,
+    2026-09-26). It sizes the blocks of the moving-block bootstrap (`block_bootstrap_picks`, the
+    heat maps' intervals, decision 183) and the gap left either side of a held-out block of time
+    (`purged_time_blocked_folds`). Until decision 315 it also chose the chunk length of the shared
+    chance test, which cut the pain series into chunks of this length and reordered them; at 1 that
+    test was already a rotation. The chunk shuffle breaks pain's slow rises and falls at every chunk
+    edge, and on RCS08 the growing record had moved the heat-map grid from rotations (72 NRS ratings,
+    chunk length 1, measured 2026-09-02) to chunks of 2 (777 ratings, lag-1 0.54) without anyone
+    deciding it; an unrelated made-up band then read p <= 0.05 in 10.7% of records. Every chance test
+    now rotates the whole series (`rotations`), whatever this returns.
 
-    MEASURED ON THE REAL DATA (2026-09-02), because the lag-1 estimator's assumption is worth
-    checking rather than trusting. It models the autocorrelation as AR(1), where ACF(k) = r1**k, and
-    reads lag 1 only. For the `nrs` rating-level series (72 ratings) the observed function is
+    MEASURED ON THE REAL DATA (2026-09-02), kept because the estimator's assumption still matters for
+    the intervals. It models the autocorrelation as AR(1), where ACF(k) = r1**k, and reads lag 1 only.
+    For the `nrs` rating-level series (72 ratings then) the observed function was
         +0.357 +0.402 +0.426 +0.374 +0.354 +0.226   (lags 1-6; still +0.35 at lag 12)
-    where an AR(1) at r1 = 0.357 predicts +0.357 +0.128 +0.046 +0.016 +0.006 +0.002. The series does
-    not decay geometrically at all, and Ljung-Box rejects independence at p = 0.0020 (lag 1) and
-    p < 0.0001 (lags 3, 5, 10). So -1/ln(0.357) = 0.97 rounds to 1. For `left_leg_vas` (43 ratings)
-    the same rounding happens for the opposite reason: there is no detectable dependence to preserve
-    (Ljung-Box minimum p = 0.10).
-
-    Both therefore run the rotation test, which is the right answer for `nrs` (its dependence is
-    fully preserved) and harmless for `left_leg_vas` (there is none to preserve). The lag-1
-    estimator arrives there by a route that does not generalise, though: a series with a high
-    lag-1 value would get multi-sample blocks, and those preserve dependence only WITHIN a block.
-
-    **OPEN DESIGN QUESTION, deliberately not resolved here.** Dependence preservation is therefore
-    NON-MONOTONE in the block length: length 1 preserves everything (a shift), intermediate lengths
-    preserve only within-block structure, and length n is a shift again. For a null whose purpose is
-    to preserve the label series' temporal structure, the block machinery is arguably the wrong tool
-    and the rotation test should be selected explicitly rather than reached by rounding. Changing
-    that would move published p-values, so it is recorded rather than done. An integrated
-    autocorrelation time, tau = 1 + 2*sum ACF(k), was implemented and reverted on 2026-09-02 for
-    exactly this reason: it correctly gave 10 for `nrs`, but a block length of 10 preserves LESS of
-    the dependence than the shift the old estimator already selected, so it made the null worse."""
+    where an AR(1) at r1 = 0.357 predicts +0.357 +0.128 +0.046 +0.016 +0.006 +0.002: the series does
+    not decay geometrically, so a block of this length under-states how far pain's dependence reaches.
+    An integrated autocorrelation time, tau = 1 + 2*sum ACF(k), was implemented and reverted on
+    2026-09-02 because it moved the chance test; with the chance test no longer reading this, it is
+    a question for the intervals alone, recorded rather than done."""
     labels = np.asarray(labels, dtype=float)
     n = int(labels.size if n is None else n)
-    # Use the POSITIVE lag-1 autocorrelation only. Circular-block permutation exists to preserve
-    # PERSISTENCE (positive autocorrelation) by keeping nearby samples together; the block length is
-    # the persistence timescale -1/ln(r1). Negative lag-1 autocorrelation is anti-persistence (rapid
-    # alternation), which does NOT call for longer blocks -- taking abs() of it would inflate the
-    # block length, needlessly shrink the effective sample size, and make the permutation test
-    # over-conservative. So r1 <= 0 -> block length 1 (i.i.d. shuffle).
+    # Use the POSITIVE lag-1 autocorrelation only. The block length is the persistence timescale
+    # -1/ln(r1); negative lag-1 autocorrelation is anti-persistence (rapid alternation), which does
+    # NOT call for longer blocks -- taking abs() of it would inflate the block length and needlessly
+    # widen the intervals it sizes. So r1 <= 0 -> block length 1.
     r1 = lag1_autocorr(labels)
     if r1 <= 0:
         return 1
     return int(np.clip(round(1.0 / max(1e-6, -np.log(max(r1, 1e-6)))), 1, max(1, n // 4)))
-
-
-def circular_block_indices(n, block, rng):
-    """One circular-block-permuted index vector of length n (block length `block`). Preserves
-    within-block temporal structure, breaking only the cross-block label-feature alignment.
-
-    **``block <= 1`` returns a pure CIRCULAR SHIFT, not an independent shuffle.** Only ``n`` distinct
-    outcomes exist (the n rotations), one of which is the identity. This is the rotation test: it
-    preserves the series' whole autocorrelation function and destroys only its alignment with the
-    features. Two consequences a caller must not overlook:
-
-    * **The p-value is quantised and floored.** With ``n`` distinct nulls the smallest attainable
-      p is about ``1/(n+1)`` and p moves in steps of about ``1/n``, no matter how many permutations
-      are drawn. Drawing 1000 permutations from ``n`` distinct outcomes does NOT give 1000
-      independent null draws; the effective null sample size is ``n``. At n = 72 the floor is
-      1/73 = 0.0137 and the step is 1/72 = 0.0139 — note the floor is marginally SMALLER than the
-      step, since one is over n+1 and the other over n. So a reported 0.08 means "about 6 of 72
-      rotations matched or beat the observed value" and should not be read to three decimal places.
-    * **The identity is always among the draws**, so the observed statistic appears in its own null
-      and the count of null values at least as extreme is never zero. The ``(ge + 1)/(used + 1)``
-      correction elsewhere is therefore doubly conservative here, which is the safe direction.
-
-      CORRECTED 2026-09-26 (decision 310): not doubly conservative. Drawing the identity about once
-      in every ``n`` draws is what keeps the observed order exchangeable with its draws, so the
-      Monte Carlo p estimates the exact rotation p (smallest value 1/n); only the ``+ 1`` is extra.
-      Leaving the identity out was proposed and measured: under a true null at n = 40 and 1,000
-      draws, p <= 0.01 went from 0.0000 to 0.030 of records, and the smallest p fell from about 1/n
-      to 1/1,001. So the identity stays (`test_stats_utils.test_the_rotation_null_keeps_the_
-      identity_because_dropping_it_makes_p_too_small`)."""
-    block = max(1, int(block))
-    shift = int(rng.integers(0, n))
-    base = (np.arange(n) + shift) % n
-    if block <= 1:
-        return base
-    # rotate by whole blocks
-    nb = int(np.ceil(n / block))
-    blocks = [base[i * block:(i + 1) * block] for i in range(nb)]
-    rng.shuffle(blocks)
-    return np.concatenate(blocks)[:n]
 
 
 def block_bootstrap_picks(n, block, n_boot, rng):
@@ -305,71 +251,99 @@ def block_bootstrap_picks(n, block, n_boot, rng):
     return idx.reshape(B, -1)[:, :n]
 
 
-def permutation_null_resolution(n, block):
-    """How well a permutation null of this shape can resolve a p-value.
-
-    Returns ``(n_distinct, p_floor, p_step)``. At ``block <= 1`` the builders below return the ``n``
-    circular rotations, so only ``n`` distinct nulls exist however many permutations are drawn: the
-    smallest attainable p is ``1/(n+1)`` and p moves in steps of about ``1/n``. Published beside any
-    p-value from this machinery so a reader cannot over-read a quantised number, which is a real
-    hazard when the floor (about 0.015 at n = 72) sits close to a 0.05 threshold.
-
-    At ``block > 1`` the block ORDER is shuffled, so the count of distinct outcomes is the number of
-    block orderings times the ``n`` shifts and is large enough not to bind; it is reported as None
-    rather than computed, because the exact count depends on the ragged final block."""
-    n = int(n); block = max(1, int(block))
-    if block <= 1:
-        return n, 1.0 / (n + 1), 1.0 / n
-    return None, None, None
+#: Above this many values a rotation null draws ``n_perm`` distinct rotations instead of using every
+#: one. The heat-map grid (777-819 ratings on RCS08, 2026-09-26), the full-spectrum search (78) and
+#: the check before any decoder (86-458) are all below it; the power-over-time area test's series of
+#: readings (301,851 on RCS08) is above it, and there 1,000 distinct rotations are drawn,
+#: as measured in `artifacts/analysis_2026-09-26_exact_null_on_the_heat_maps.md`.
+EXACT_ROTATIONS_MAX = 5000
 
 
-def circular_block_perm_matrix(n, block, n_perm, rng):
-    """VECTORIZED generation of `n_perm` circular-block permutations at once -> (n_perm, n) int array,
-    each row a valid permutation of range(n) with the same distribution as circular_block_indices.
+def rotation_shifts(n, n_perm, rng):
+    """The shifts a rotation null moves a series of ``n`` values by: every shift 1 .. n-1 once, in
+    order (``rng`` not used), or above ``EXACT_ROTATIONS_MAX`` values ``n_perm`` distinct shifts drawn
+    without replacement. ``n_perm`` <= 0 or fewer than 2 values gives none."""
+    n, n_perm = int(n), int(n_perm)
+    if n_perm <= 0 or n < 2:
+        return np.zeros(0, int)
+    if n <= EXACT_ROTATIONS_MAX:
+        return np.arange(1, n)
+    return np.sort(rng.choice(np.arange(1, n), size=min(n_perm, n - 1), replace=False))
 
-    Per row: a random circular shift, then the shifted index vector is cut into ceil(n/block)
-    contiguous blocks whose ORDER is randomly permuted (within-block order preserved). Built with
-    array ops only (no Python per-permutation loop), so the whole null is a couple of NumPy calls."""
-    block = max(1, int(block))
-    n = int(n); n_perm = int(n_perm)
-    shifts = rng.integers(0, n, size=n_perm)
-    base = (np.arange(n)[None, :] + shifts[:, None]) % n          # (P, n) circularly shifted
-    if block <= 1:
-        return base
-    nb = int(np.ceil(n / block))
-    pad = nb * block - n
-    if pad:                                                       # pad with sentinel == n (out of range)
-        base = np.concatenate([base, np.full((n_perm, pad), n, dtype=base.dtype)], axis=1)
-    blk = base.reshape(n_perm, nb, block)                         # (P, nb, block) contiguous blocks
-    order = np.argsort(rng.random((n_perm, nb)), axis=1)          # independent block-order permutation per row
-    blk = np.take_along_axis(blk, order[:, :, None], axis=1)
-    flat = blk.reshape(n_perm, nb * block)
-    if not pad:
-        return flat
-    # Drop the sentinels; each row has exactly `pad` of them, so row-major masking reshapes cleanly.
-    return flat[flat < n].reshape(n_perm, n)
+
+def rotations(n, n_perm, rng):
+    """THE CHANCE TEST FOR A SERIES IN TIME: every other rotation of the whole series, each once.
+    ONE HOME since decision 315 (2026-09-26); the band detector's since decision 314.
+
+    Row k of the ``(k, n)`` answer is ``(arange(n) + shift_k) % n``: the series slid along in time by
+    ``shift_k`` values with the end wrapped round to the start. Rotating keeps the series' whole
+    persistence -- every slow rise and fall -- and moves only its alignment with what it is compared
+    against. n orders exist, the observed one among them; every OTHER rotation is returned once and a
+    p of the form (rotations at least as extreme + 1) / (rotations + 1) counts the observed order
+    once, so it IS the exact rotation p, smallest value 1/n. Above ``EXACT_ROTATIONS_MAX`` values
+    ``n_perm`` distinct rotations are drawn without replacement instead, which keeps the same p valid.
+
+    WHAT IT REPLACED. (1) A shuffle that, once pain resembled its neighbours, cut the series into
+    chunks and reordered them (`circular_block_perm_matrix`, deleted): chunk edges break pain's slow
+    drift, and with a band that drifts too the shuffled links are narrower than chance really is. On
+    RCS08's own layout an unrelated made-up band read p <= 0.05 in 10.7% of records (8.7% under the
+    Biomarkers page's settings) where this reads 5.9% (5.8%); with the band as persistent as RCS08's
+    at 60 s of signal, 17.1% against 7.4%. (2) At a chunk length of 1 that shuffle already rotated,
+    but drew rotations with replacement, so the p was a noisy estimate of this one.
+
+    WHAT IT DOES NOT FIX. The one seam where the series wraps round pairs the end of the record with
+    its start, which is never natural; with very persistent series and a pain level that does not
+    hold steady this reads p <= 0.05 somewhat more often than 5% (7.4% and 9.1% in the measurement
+    above, 7.1% at 60 ratings with lag-1 0.9 in decision 314's)."""
+    shifts = rotation_shifts(n, n_perm, rng)
+    n = max(int(n), 0)
+    if shifts.size == 0:
+        return np.zeros((0, n), int)
+    return (np.arange(n)[None, :] + shifts[:, None]) % n
+
+
+def rotation_null_words(n, n_rows):
+    """How a rotation null of ``n_rows`` rows over ``n`` values was made, in words, for a saved row."""
+    return ("exact: every other rotation once" if int(n_rows) == int(n) - 1 else
+            f"{int(n_rows)} of the {int(n) - 1} other rotations, drawn without replacement")
+
+
+def rotation_null_resolution(n, n_rows=None):
+    """How finely a rotation null can resolve a p-value: ``(n_distinct, p_floor, p_step)``.
+
+    With every other rotation once (``n_rows`` None or n - 1) only ``n`` orders exist, so the
+    smallest p is 1/n and p moves in steps of 1/n, however many shuffles were asked for. Published
+    beside the p so a p near 0.05 at a few dozen ratings is not read to three decimal places. With
+    fewer rows drawn (above ``EXACT_ROTATIONS_MAX``) the floor is 1/(rows + 1)."""
+    n = int(n)
+    if n < 2:
+        return None, None, None
+    rows = n - 1 if n_rows is None else int(n_rows)
+    if rows >= n - 1:
+        return n, 1.0 / n, 1.0 / n
+    return n, 1.0 / (rows + 1), 1.0 / (rows + 1)
 
 
 def auc_block_perm_null(score, labels, n_perm=1000, block=None, seed=0):
-    """Circular-block permutation null for the direction-folded ROC AUC of a continuous biomarker
-    against a binary pain label.
+    """Rotation null for the direction-folded ROC AUC of a continuous biomarker against a binary
+    pain label. (The name predates decision 315; the null has rotated since then.)
 
     The observed statistic is the SAME quantity the card reports: max(AUC, 1-AUC) of `score` vs
-    `labels` (undirected separability — an AUC of 0.21 separates as well as 0.79). Under the null,
-    the pain labels carry no information about the biomarker; we break that association by
-    circular-block-permuting the labels (block length = the lag-1 decorrelation timescale of the
-    labels, via block_length_for) so the null PRESERVES the temporal autocorrelation of pain. A
-    plain i.i.d. shuffle would make p anti-conservative for serially-correlated daily pain.
+    `labels` (undirected separability -- an AUC of 0.21 separates as well as 0.79). Under the null the
+    pain labels carry no information about the biomarker; the labels are rotated in time
+    (`rotations`), which keeps pain's persistence whole and moves only its alignment with the
+    biomarker. ``block`` is accepted and ignored (it chose the old chunk shuffle's length).
 
     Returns a dict:
-      observed   — max(AUC, 1-AUC) on the real labels (None if degenerate)
-      p_value    — (#{null >= observed} + 1)/(n_used + 1)  [add-one, never 0]
-      null_q     — {"p50","p95","p99"} percentiles of the null AUC distribution (for a ceiling line)
-      null_sample— up to 200 representative null-AUC values (random subsample of the full null), so the
+      observed   -- max(AUC, 1-AUC) on the real labels (None if degenerate)
+      p_value    -- (#{null >= observed} + 1)/(n_used + 1): the exact rotation p up to
+                    ``EXACT_ROTATIONS_MAX`` labels, never 0
+      null_q     -- {"p50","p95","p99"} percentiles of the null AUC distribution (for a ceiling line)
+      null_sample-- up to 200 representative null-AUC values (random subsample of the full null), so the
                    UI can draw the null distribution as a swarm over the chance bar (None if degenerate)
-      n_perm     — permutations that yielded a finite AUC
-      block      — block length used
-    Pure NumPy + a single sklearn AUC call per permutation via the rank identity; no Django.
+      n_perm     -- rotations that yielded a finite AUC
+      block      -- 1, the rotation (kept for the response's shape)
+    Pure NumPy; no Django.
     """
     out = {"observed": None, "p_value": None, "null_q": None, "null_sample": None, "n_perm": 0, "block": None}
     score = np.asarray(score, dtype=float)
@@ -380,8 +354,8 @@ def auc_block_perm_null(score, labels, n_perm=1000, block=None, seed=0):
     if n < 8 or len(set(labels.tolist())) != 2:
         return out
     # Mann-Whitney/AUC via average ranks: AUC = (R_pos - n_pos*(n_pos+1)/2) / (n_pos*n_neg), where
-    # R_pos is the sum of ranks of the positive class. Ranking ONCE lets every permutation reuse the
-    # same rank vector (permuting labels just re-selects which ranks count as "positive").
+    # R_pos is the sum of ranks of the positive class. Ranking ONCE lets every rotation reuse the
+    # same rank vector (rotating labels just re-selects which ranks count as "positive").
     from scipy.stats import rankdata
     ranks = rankdata(score)                       # average ranks, ties handled
     pos = (labels == 1)
@@ -393,39 +367,31 @@ def auc_block_perm_null(score, labels, n_perm=1000, block=None, seed=0):
         a = (r_pos - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg)
         return max(a, 1.0 - a)
     observed = _auc_from_mask(pos)
-    if block is None:
-        block = block_length_for(labels, n)
     rng = np.random.default_rng(seed)
-    P = int(n_perm)
-    # MEMORY-BOUNDED permutation null. A single (P, n) materialization is O(P*n): for a long
-    # power-domain series (n ~ 3e5) at P=1000 the intermediates — perm_idx (int64), perm_labels
-    # (float64), and ranks[None,:]*perm_pos (float64) — are ~2.4 GB EACH, ~7 GB transiently, which
-    # OOM-kills the worker. The statistic per permutation is just a sum of positive-class ranks, so
-    # we stream the permutations in chunks: peak memory is O(chunk*n) instead of O(P*n), with
-    # identical results (same rng sequence, drawn progressively). The accumulated null is only (P,).
-    # Chunk so each transient (chunk, n) array stays ~64 MB regardless of series length.
+    shifts = rotation_shifts(n, n_perm, rng)
+    # MEMORY-BOUNDED. A single (P, n) materialization is O(P*n): for a long power-domain series
+    # (n ~ 3e5) at P=1000 the intermediates are ~2.4 GB EACH, which OOM-kills the worker. The
+    # statistic per rotation is just a sum of positive-class ranks, so the rotations are taken in
+    # chunks: peak memory is O(chunk*n) instead of O(P*n). The accumulated null is only (P,).
     CHUNK_ELEMS = 8_000_000
-    chunk = max(1, min(P, CHUNK_ELEMS // max(1, n)))
+    chunk = max(1, min(max(1, shifts.size), CHUNK_ELEMS // max(1, n)))
     fixed_ranks = ranks.astype(float)                         # (n,) rank at each FIXED position
     a_parts = []
-    done = 0
-    while done < P:
-        c = min(chunk, P - done)
-        perm_idx = circular_block_perm_matrix(n, block, c, rng)   # (c, n)
-        # Per permuted row i: R_pos = sum_j fixed_ranks[j] * (labels[perm_idx[i,j]] == 1). The RANKS
-        # stay at their fixed positions (column j); only the label assignment is permuted. Identical
-        # to the original (ranks[None,:] * perm_pos).sum(axis=1), just one chunk of rows at a time.
+    for i in range(0, shifts.size, chunk):
+        s = shifts[i:i + chunk]
+        perm_idx = (np.arange(n)[None, :] + s[:, None]) % n      # (c, n) rotated label positions
+        # Per rotated row i: R_pos = sum_j fixed_ranks[j] * (labels[perm_idx[i,j]] == 1). The RANKS
+        # stay at their fixed positions (column j); only the label assignment moves.
         perm_pos = (labels[perm_idx] == 1)                        # (c, n)
         r_pos_perm = (fixed_ranks[None, :] * perm_pos).sum(axis=1)  # (c,)
         a_parts.append((r_pos_perm - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg))
         del perm_idx, perm_pos, r_pos_perm
-        done += c
     a_perm = np.concatenate(a_parts) if a_parts else np.empty(0)
     null_auc = np.maximum(a_perm, 1.0 - a_perm)
     null_auc = null_auc[np.isfinite(null_auc)]
     used = int(null_auc.size)
     if used == 0:
-        out["observed"] = float(observed); out["block"] = int(block)
+        out["observed"] = float(observed); out["block"] = 1
         return out
     ge = int(np.sum(null_auc >= observed))
     # Representative subsample of the null AUCs for a UI swarm over the chance bar. Cap at 200 so the
@@ -442,41 +408,9 @@ def auc_block_perm_null(score, labels, n_perm=1000, block=None, seed=0):
                    "p99": float(np.percentile(null_auc, 99))},
         "null_sample": null_sample,
         "n_perm": used,
-        "block": int(block),
+        "block": 1,
     })
     return out
-
-
-def block_perm_pvalue(observed_stat, feature_matrix, labels, stat_fn, n_perm=1000,
-                      block=None, seed=0):
-    """Empirical p-value for a max-type statistic via circular-block label permutation.
-
-    `feature_matrix` (N x M), `labels` (N,), `stat_fn(feature_matrix, permuted_labels) -> scalar`
-    (e.g. max |R| over all channels x freqs). The block length defaults to the lag-1
-    autocorrelation timescale of the labels so the null preserves temporal dependence (otherwise
-    p is anti-conservative). Returns (empirical_p, n_perm_used).
-
-    NOTE: generic (arbitrary stat_fn), so it loops over permutations. When the statistic is the
-    NaN-aware family max|R|, prefer the fully vectorized pipeline._block_perm_maxcorr_pvalue."""
-    labels = np.asarray(labels, dtype=float)
-    n = labels.size
-    if n < 4 or not np.isfinite(observed_stat):
-        return (np.nan, 0)
-    if block is None:
-        block = block_length_for(labels, n)
-    rng = np.random.default_rng(seed)
-    ge = 0
-    used = 0
-    for _ in range(int(n_perm)):
-        perm = circular_block_indices(n, block, rng)
-        s = stat_fn(feature_matrix, labels[perm])
-        if np.isfinite(s):
-            used += 1
-            if s >= observed_stat:
-                ge += 1
-    if used == 0:
-        return (np.nan, 0)
-    return ((ge + 1) / (used + 1), used)   # +1: never report p=0
 
 
 # =================================================================================================
@@ -797,8 +731,8 @@ def purged_time_blocked_folds(n, *, y=None, n_folds=5, embargo=None):
     training row within ``embargo`` rows of that stretch is dropped.
 
     **The gap is measured, not chosen.** With ``embargo=None`` it is the series' own decorrelation
-    timescale, ``block_length_for(y)`` -- the same estimator the permutation nulls already use, so
-    one number governs both and neither can drift from the other. A fixed gap typed into the code
+    timescale, ``block_length_for(y)`` -- the same estimator that sizes the resampled intervals' blocks
+    (the chance tests stopped reading it in decision 315, when they became rotations). A fixed gap typed into the code
     would be a guess about a quantity the data can state.
 
     ``y`` is the series whose dependence is being guarded against, usually the label. Returns a list

@@ -37,7 +37,7 @@ future React page reads one CSV and single-source is just the degenerate (one-pr
 | `routines/streaming_psd.py` | Time-domain science, extracted from `biomarker_analysis_streaming.ipynb` (transform/correlation funcs **verbatim**; Welch epoching a faithful port — see its PROVENANCE note). |
 | `routines/threshold_biomarker.py` | Chronic-trend science, **byte-for-byte** from `threshold_biomarker.ipynb` cell 13 (`otsu1d`, `_sens_spec`, `_find_best_threshold_for_metric`, `run_sliding_window_dual`) + thin `run_chronic_threshold`. |
 | `routines/analytics.py` | Panel-driving analytics: `roc_analysis`, `sliding_window_analytics` (per-window ROC), `lfp_distribution` (Otsu histogram), `power_pain_scatter` (continuous power-vs-pain correlation), `cluster_scatter`, `pain_binarization`, and the streaming corr-spectrum. |
-| `routines/stats_utils.py` | Statistical rigor primitives: `balanced_metrics`, `bh_fdr`, `fisher_z_ci`, `effective_n` / `partial_corr` (autocorrelation-aware), `block_length_for`, and `auc_block_perm_null` (circular-block permutation null for the AUC). |
+| `routines/stats_utils.py` | Statistical rigor primitives: `balanced_metrics`, `bh_fdr`, `fisher_z_ci`, `effective_n` / `partial_corr` (autocorrelation-aware), `block_length_for` (the resampled intervals' block), `rotations` (every chance test: every other rotation once, decision 315) and `auc_block_perm_null` (the rotation null for the AUC). |
 | `routines/redcap_client.py` | REDCap PRO pull, vendored from `dbs_io/utils.py`. PyCap call unchanged; **token via env vars**. |
 | `adapter.py` | Glue: time-domain reshape, chronic tidy-frame (`bravo_chronic_to_lfp_df`), PRO alignment (`align_pros`), label binarization (`_threshold_pain_level`: tertile/median/cutoff/kmeans), and `merge_timelines`. |
 | `tools/audit_biomarker_payload.py` | **Provenance reviewer.** Runs against a saved `queryBiomarkerAnalysis` response JSON and flags label-vs-data inconsistencies. Exit 1 on any ERROR (CI-gateable). See "Auditing" below. |
@@ -106,12 +106,15 @@ autocorrelation-preserving null:
 - **Direction-folded AUC.** Separability is `max(AUC, 1-AUC)` — an AUC of 0.21 separates as well as
   0.79; band/peak selection everywhere uses `argmax(|corr|)`, so a strong *negative* power↔pain
   relationship is selected on its merits.
-- **Circular-block permutation null** (`auc_block_perm_null`). Daily pain is serially correlated, so
-  an i.i.d. label shuffle makes p anti-conservative. The null circular-block-permutes the labels
-  (block = lag-1 decorrelation timescale via `block_length_for`, positive autocorrelation only) and
-  recomputes the folded AUC. Returns the add-one empirical `p_value`, `null_q` quantiles
-  (p50/p95/p99) for a ceiling line, and a ≤200-value `null_sample` so the card can draw the null
-  **distribution** as a swarm over the chance bar.
+- **Rotation null** (`auc_block_perm_null`, `stats_utils.rotations`; decision 315). Daily pain is
+  serially correlated, so an i.i.d. label shuffle makes p too small. The labels are slid along in
+  time by every possible step once, the end wrapped to the start (above 5,000 labels, 1,000 distinct
+  steps), which keeps pain's whole persistence, and the folded AUC is recomputed each time. Until
+  decision 315 the labels were cut into chunks of their lag-1 decorrelation length and the chunks
+  reordered, which breaks slow drifts at every chunk edge and also made p too small. Returns the
+  add-one empirical `p_value` (the exact rotation p), `null_q` quantiles (p50/p95/p99) for a ceiling
+  line, and a ≤200-value `null_sample` so the card can draw the null **distribution** as a swarm
+  over the chance bar.
 - **Autocorrelation-aware correlations.** `effective_n` (Bartlett) and `partial_corr` deflate the
   effective sample size and residualize confounds before reporting r/p and `fisher_z_ci` intervals;
   spectrum significance markers are `bh_fdr`-corrected across the band search.

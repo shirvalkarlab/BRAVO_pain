@@ -101,49 +101,11 @@ def test_fisher_z_ci():
     assert su.fisher_z_ci(0.5, 3) == (float("nan"), float("nan")) or np.isnan(su.fisher_z_ci(0.5, 3)[0])
 
 
-def test_circular_block_perm_matrix_valid():
-    """The vectorized generator must return (n_perm, n) with EVERY row a valid permutation of
-    range(n), for block==1 and block>1 (including a block that does not divide n)."""
-    rng = np.random.default_rng(5)
-    for n in (7, 50, 113):
-        for block in (1, 2, 7, max(1, n // 4)):
-            P = su.circular_block_perm_matrix(n, block, 150, rng)
-            assert P.shape == (150, n)
-            assert np.array_equal(np.sort(P, axis=1), np.tile(np.arange(n), (150, 1)))
-
-
-def test_the_rotation_null_keeps_the_identity_because_dropping_it_makes_p_too_small():
-    """Examined 2026-09-26 (decision 310) and NOT changed: the shared rotation null draws the
-    identity (a shift of 0, the observed order) about once in every n draws, and it must.
-
-    The p-value is (draws at least as extreme + 1) / (draws + 1). With the draws uniform over ALL n
-    rotations -- the identity among them -- the observed order is exchangeable with its draws, and
-    the p estimates the exact rotation p, whose smallest value is 1/n. Drop the identity and a band
-    that beats the other n - 1 rotations gets p = 1/(draws + 1): 0.001 at 1,000 draws where the
-    rotation test can only say 1/n. Measured under a true null (3,000 records each): at n = 40
-    ratings and 1,000 draws, p <= 0.01 happened 0.0000 of the time with the identity and 0.030
-    without it; p <= 0.05, 0.046 and 0.069. At n = 72, p <= 0.01: 0.0007 and 0.0133. The band
-    detector's own rotations (decision 297) leave the identity out; that is recorded for the PI,
-    not changed here. Not RED: this pins the behaviour against the change that was proposed."""
-    n, draws, sims = 40, 1000, 1500
-    rng = np.random.default_rng(310)
-    ident = np.arange(n)
-    small_with = small_without = 0
-    for _ in range(sims):
-        x, y = rng.normal(size=n), rng.normal(size=n)
-        P = su.circular_block_perm_matrix(n, 1, draws, rng)
-        keep = ~(P == ident).all(axis=1)
-        yc = y[P] - y[P].mean(axis=1, keepdims=True)
-        xc = x - x.mean()
-        r = np.abs(yc @ xc) / (np.sqrt((yc * yc).sum(axis=1)) * np.sqrt(xc @ xc))
-        r0 = abs(np.corrcoef(x, y)[0, 1])
-        ge = r >= r0 - 1e-12
-        small_with += (ge.sum() + 1) / (draws + 1) <= 0.01
-        small_without += (ge[keep].sum() + 1) / (keep.sum() + 1) <= 0.01
-    assert any((P == ident).all(axis=1)), "the identity is among the draws"
-    assert small_with / sims <= 0.01, small_with / sims
-    assert small_without / sims > 0.015, ("without the identity the null is too generous",
-                                          small_without / sims)
+# The chunk shuffle (`circular_block_perm_matrix`) and its two tests -- that every row was a valid
+# permutation, and that its rotation case kept the identity among the draws -- went with it in
+# decision 315 (2026-09-26). The rotations that replaced it are pinned in
+# `test_exact_rotation_null.py`, and the exact rotation p under a true null in the band detector's
+# own tests (`test_the_rotation_p_is_exact_under_a_true_null`).
 
 
 def test_block_length_for():
@@ -179,17 +141,18 @@ def test_auc_block_perm_null():
     from sklearn.metrics import roc_auc_score
     raw = roc_auc_score(labels.astype(int), sig_score)
     assert abs(r_sig["observed"] - max(raw, 1 - raw)) < 1e-9
-    # Autocorrelated labels -> block length > 1 detected (preserves persistence).
+    # Autocorrelated labels are rotated like any others: every other rotation once (decision 315),
+    # which keeps their persistence whole, however many shuffles were asked for.
     ac_labels = np.repeat((rng.random(n // 10) < 0.4).astype(float), 10)[:n]
     r_ac = su.auc_block_perm_null(rng.normal(size=n), ac_labels, n_perm=500, seed=2)
-    assert r_ac["block"] >= 2, r_ac["block"]
+    assert r_ac["block"] == 1 and r_ac["n_perm"] == n - 1, (r_ac["block"], r_ac["n_perm"])
     # add-one estimator: p strictly in (0, 1], never exactly 0.
     assert 0 < r_sig["p_value"] <= 1
     # Degenerate (single class) returns None observed, not a crash.
     deg = su.auc_block_perm_null(null_score, np.ones(n), n_perm=50)
     assert deg["observed"] is None and deg["p_value"] is None
-    print("OK auc_block_perm_null: null p=%.3f signal p=%.4f ac-block=%d"
-          % (r_null["p_value"], r_sig["p_value"], r_ac["block"]))
+    print("OK auc_block_perm_null: null p=%.3f signal p=%.4f rotations=%d"
+          % (r_null["p_value"], r_sig["p_value"], r_ac["n_perm"]))
 
 
 if __name__ == "__main__":
@@ -199,8 +162,6 @@ if __name__ == "__main__":
     test_balanced_metrics()
     test_balanced_metrics_chance_invariant_across_imbalance()
     test_fisher_z_ci()
-    test_circular_block_perm_matrix_valid()
-    test_the_rotation_null_keeps_the_identity_because_dropping_it_makes_p_too_small()
     test_block_length_for()
     test_auc_block_perm_null()
     print("All stats_utils tests passed.")

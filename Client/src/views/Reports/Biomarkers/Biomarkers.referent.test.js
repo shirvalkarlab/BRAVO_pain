@@ -136,7 +136,8 @@ describe("the calibrated heat-map card (BiomarkerHeatmapGrids)", () => {
   // CHANGED ON PURPOSE, decision 304 (the PI, 2026-09-26: "yes to all six", the review's B1). The
   // seven lines moved out of "How to read this" into their own fold, closed on load, still bold, for
   // RCS08 only; the drawer now opens on the backend's own first note. Every line's content below is
-  // the pin decisions 229, 235(c) and 246(d) set, unchanged.
+  // the pin decisions 229, 235(c) and 246(d) set; the search's counts were re-run on 2026-09-26
+  // under the exact rotation test (decision 315) and the pins moved with them.
   it("the L 1-3+ search summary sits in its own fold, in bold, for RCS08, with its settings, and for no other participant", async () => {
     const { container } = await renderGrid();
     fireEvent.click(screen.getByText(/^How to read this$/));
@@ -148,12 +149,15 @@ describe("the calibrated heat-map card (BiomarkerHeatmapGrids)", () => {
     expect(lines[1]).toMatch(/0 positive rows with q < 0\.05 out of 5,544/);
     // Panel A item 2 (2026-09-22): the whole search's answer, as the measured proxy, beside the
     // per-setting one -- and saying what it is not.
-    expect(lines[2]).toMatch(/6 of the 252 settings/);
+    expect(lines[2]).toMatch(/none of the 252 settings/);
     expect(lines[2]).toMatch(/about 106/);
     expect(lines[2]).toMatch(/4\.1% of cells .* against the 5%/);
     expect(lines[2]).toMatch(/not a calibrated p-value for the search as a whole/);
-    expect(lines[3]).toMatch(/24\.5 Hz at 60 s, 120-min window, Neural-first pre-report: r 0\.33 \(0\.17 to 0\.48\), n 59, q 0\.23/);
-    expect(lines[4]).toMatch(/1,545 rows with q < 0\.05 on the negative side/);
+    // Re-run 2026-09-26 under the exact rotation test (decision 315): no positive cell is
+    // "established" any more; the nearest is named with its own numbers.
+    expect(lines[3]).toMatch(/no cell reaches the grid’s “established” verdict/);
+    expect(lines[3]).toMatch(/24\.5 Hz at 60 s, 120-min window, Neural-first pre-report: r 0\.32 \(0\.16 to 0\.46\), n 61, q 0\.25/);
+    expect(lines[4]).toMatch(/72 rows with q < 0\.05 on the negative side/);
     // A-5 (the panel's item 5, the PI's clinician stand-in): the two tests are told apart in
     // adjoining sentences, so the reader never sees "0 rows clear q < 0.05" beside a cell called
     // "established" with a q of 0.23 and has to work out that they are different tests.
