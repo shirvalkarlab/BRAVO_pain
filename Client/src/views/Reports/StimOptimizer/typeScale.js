@@ -18,10 +18,10 @@ import { Collapse } from "@mui/material";
 import MDBox from "components/MDBox";
 
 import {
-  T, TYPE as TOKEN_TYPE, FONT_FAMILY, WEIGHT, STATE, GLYPH, SPACE,
+  T, TYPE as TOKEN_TYPE, FONT_FAMILY, WEIGHT, STATE, GLYPH, SPACE, WRAP, RADIUS,
 } from "assets/theme/base/tokens";
 
-export { T, FONT_FAMILY, WEIGHT, STATE, GLYPH, SPACE };
+export { T, FONT_FAMILY, WEIGHT, STATE, GLYPH, SPACE, WRAP };
 
 /** Sizes in px, by the role each plays on this page. Every value is one of the five token sizes. */
 export const TYPE = {
@@ -51,12 +51,15 @@ export const BODY = { fontSize: TYPE.body, color: T.ink2, lineHeight: 1.57 };
 export const NOWRAP = { whiteSpace: "nowrap" };
 /** A sub-heading inside a section (a section's title is the 18 px question). */
 export const SUBHEAD = { fontSize: TYPE.body, fontWeight: WEIGHT.strong, color: T.ink, lineHeight: 1.5 };
+/** A heading inside a section: the sub-heading type, its lines broken evenly (TASTE_AUDIT.md C5). */
+export const HEADING = { ...SUBHEAD, ...WRAP.balance };
 /** A hairline between two parts of one section (never a box inside a box). */
 export const HAIRLINE = `1px solid ${T.rule}`;
 
 /**
  * A state glyph with its ink, for a reader and a screen reader alike: ✓ passes (ink), ✕ refused
- * or blocks (red), ▲ needs more data or caution (amber), ○ not checked (grey). Colour never
+ * by the device or above the ceiling (red, state "refused"), ✕ blocks on a statistical or evidence
+ * result (ink, state "blocked"; the PI's ruling of 2026-09-26), ▲ needs more data or caution (amber), ○ not checked (grey). Colour never
  * carries the meaning alone; the glyph always does. `label` is what a screen reader hears.
  */
 export function Mark({ state, label, size = TYPE.body }) {
@@ -67,6 +70,19 @@ export function Mark({ state, label, size = TYPE.body }) {
         display: "inline-block", minWidth: "1em", textAlign: "center" }}>
       {s.glyph}
     </span>
+  );
+}
+
+/**
+ * A still grey block standing in for a value that is still being computed (TASTE_AUDIT.md C2):
+ * shaped like what will replace it, never animated, hidden from screen readers (the waiting words
+ * beside it say what is happening).
+ */
+export function Placeholder({ width = 64, height = 14, mt = 0 }) {
+  return (
+    <span aria-hidden="true" data-testid="placeholder-block"
+      style={{ display: "inline-block", width, maxWidth: "100%", height, marginTop: mt,
+        background: T.rule, borderRadius: RADIUS.sm, verticalAlign: "middle" }} />
   );
 }
 

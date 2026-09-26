@@ -109,17 +109,52 @@ describe("1. the status line", () => {
 
   // PIN CHANGED 2026-09-26 (SPEC.md section 2.3): a check that could not run is its own state,
   // grey ○, counted apart from a caution; it is never drawn as a pass.
-  it("lists the refusals and blocking checks in red, the cautions in yellow, the checks not run in grey", () => {
+  // SPLIT 2026-09-26 (the PI's ruling D14, TASTE_AUDIT.md): the test named "lists the refusals and
+  // blocking checks in red" would now be untrue. Red is only a device refusal or a value above the
+  // safe ceiling; the two statistical results on RCS08 ("No usable sensing pair", "Setting not
+  // proven better") are drawn in ink with ✕ (kind "blocked"). The refusals keep red, pinned below
+  // on a constructed response.
+  it("lists the blocking statistical results in ink with ✕, the cautions in yellow, the checks not run in grey", () => {
     const s = statusSummary(newResponse, newResponse.two_stage);
     const of = (k) => s.bullets.filter((b) => b.kind === k).map((b) => b.text);
-    expect(of("red")).toEqual(["No usable sensing pair", "Setting not proven better"]);
+    expect(of("blocked")).toEqual(["No usable sensing pair", "Setting not proven better"]);
+    expect(of("refused")).toEqual([]);
     expect(of("yellow")).toEqual(["Next visit: 4 pairs short", "Pain map moves over time"]);
     expect(of("grey")).toEqual(expect.arrayContaining([
       "Band response not assessed", "Current limits not proposed", "Pulse width not assessed"]));
-    // red, then yellow, then grey
+    // blocked, then yellow, then grey
     const kinds = s.bullets.map((b) => b.kind);
-    expect(kinds.indexOf("yellow")).toBeGreaterThan(kinds.lastIndexOf("red"));
+    expect(kinds.indexOf("yellow")).toBeGreaterThan(kinds.lastIndexOf("blocked"));
     expect(kinds.indexOf("grey")).toBeGreaterThan(kinds.lastIndexOf("yellow"));
+  });
+
+  it("keeps red with ✕ for a device refusal and a value above the ceiling, listed first (D14)", () => {
+    const plan = JSON.parse(JSON.stringify(newResponse.two_stage));
+    plan.gate.passed = false;
+    plan.gate.conditions = [
+      { name: "rate_at_or_above_adaptive_minimum", verdict: "FAIL", detail: "rate below", evidence: { min_rate_hz: 55 } },
+      { name: "openloop_choice_resolved", verdict: "FAIL", detail: "not proven" },
+      { name: "adaptive_band_passes_lfp_response", verdict: "FAIL", detail: "no band" },
+      { name: "amplitude_limits_inside_envelope_and_under_ceiling", verdict: "FAIL", detail: "above ceiling" },
+    ];
+    const data = { ...newResponse, closed_loop: { available: true,
+      sensing_rule: { sentence: "the device allows no pair", by_side: { Left: { rule_applied: true }, Right: { rule_applied: true } } } } };
+    const s = statusSummary(data, plan);
+    const of = (k) => s.bullets.filter((b) => b.kind === k).map((b) => b.text);
+    expect(of("refused").map((t) => t.replace(/\s/g, " "))).toEqual(
+      ["Device allows no sensing pair", "Rate below 55 Hz refused", "Current limits above ceiling"]);
+    expect(of("blocked")).toEqual(["Setting not proven better", "No band moves with current"]);
+    const kinds = s.bullets.map((b) => b.kind);
+    expect(kinds.indexOf("blocked")).toBeGreaterThan(kinds.lastIndexOf("refused"));
+    const { container } = renderPage({ ...data, two_stage: plan });
+    const inkOf = (text) => {
+      const b = Array.from(container.querySelectorAll('[data-testid="status-bullet"]')).find((x) => x.textContent.includes(text));
+      return b.querySelector('[data-testid="status-glyph"]').style.color;
+    };
+    expect(STATUS_GLYPH.refused).toBe("✕");
+    expect(STATUS_GLYPH.blocked).toBe("✕");
+    expect(inkOf("Device allows no sensing pair")).toBe("rgb(180, 35, 24)");   // #B42318
+    expect(inkOf("Setting not proven better")).toBe("rgb(26, 26, 26)");        // #1A1A1A
   });
 
   it("reads the older response without the fields it predates, and invents no bullet", () => {
@@ -137,7 +172,8 @@ describe("1. the status line", () => {
     const { container } = renderPage(newResponse);
     const bullets = container.querySelectorAll('[data-testid="status-bullet"]');
     expect(bullets.length).toBe(5);
-    const WORD = { red: /^blocked: /, yellow: /^caution: /, grey: /^not checked: / };
+    // PIN CHANGED 2026-09-26 (D14): the kinds are "refused" (red) and "blocked" (ink), both ✕.
+    const WORD = { refused: /^refused: /, blocked: /^blocked: /, yellow: /^caution: /, grey: /^not checked: / };
     bullets.forEach((b) => {
       const kind = b.getAttribute("data-kind");
       const glyph = b.querySelector('[data-testid="status-glyph"]');
@@ -149,7 +185,8 @@ describe("1. the status line", () => {
     const counted = Array.from(bullets).find((b) => /checks not run/.test(b.textContent));
     expect(counted.getAttribute("aria-label")).toBe(
       "not checked: 3 checks not run: Band response not assessed, Current limits not proposed, Pulse width not assessed");
-    expect(STATUS_GLYPH.red).toBe("✕");
+    expect(STATUS_GLYPH.refused).toBe("✕");
+    expect(STATUS_GLYPH.blocked).toBe("✕");
     expect(STATUS_GLYPH.yellow).toBe("▲");
     expect(STATUS_GLYPH.grey).toBe("○");
   });

@@ -33,7 +33,7 @@ import MDTypography from "components/MDTypography";
 
 import { SVG_TEXT } from "views/Reports/figureStyle";
 
-import { num } from "./stimFormat";
+import { num, EMPTY } from "./stimFormat";
 import { T, TYPE, SMALL, WEIGHT } from "./typeScale";
 
 /** The optimiser's rate grid (`StimOptimizer/routines/plots.py`, `FREQ_GRID`), in Hz. */
@@ -47,7 +47,7 @@ const FAIL_TEXT = T.refused;
 const CONTEXT_MARK = T.graphic;
 
 const fmtPts = (v) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(2)} pts`;
-const fmtMa = (v) => (v != null ? `${v.toFixed(1)} mA` : "— mA");
+const fmtMa = (v) => (v != null ? `${v.toFixed(1)} mA` : EMPTY);
 
 function SidePanel({ side, exclusions, strata, minRate, width }) {
   // T holds three label rows above the plot (the ruled-out setting, the chosen setting, then the

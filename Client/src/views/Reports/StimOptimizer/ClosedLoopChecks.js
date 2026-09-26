@@ -34,7 +34,7 @@ import { SVG_TEXT } from "views/Reports/figureStyle";
 
 import BandResponseStrip from "./BandResponseStrip";
 import { num, fmtHz, fmtMa, fmtOf, contactLabel } from "./stimFormat";
-import { T, TYPE, SMALL, MONO as MONO_BASE, WEIGHT, Mark, SizedFold } from "./typeScale";
+import { T, TYPE, SMALL, MONO as MONO_BASE, WEIGHT, WRAP, Mark, SizedFold } from "./typeScale";
 
 const MONO = { ...MONO_BASE, whiteSpace: "normal" };
 const NOTE = { ...SMALL, whiteSpace: "nowrap" };
@@ -55,9 +55,22 @@ export function verdictState(c) {
   if (v === "FAIL" || (c && c.passed === false)) return false;
   return null;
 }
-function Glyph({ state }) {
+/**
+ * RED MEANS ONE THING (the PI's ruling of 2026-09-26, TASTE_AUDIT.md D14): of the four checks, a
+ * failing rate check (below the minimum rate the device needs for closed loop) and a failing
+ * current-limits check (limits above the safe ceiling) are the device refusing or the ceiling, red
+ * ✕; a failing "proven better" check or band-response check is a statistical or evidence result,
+ * ink ✕, never red.
+ */
+export const REFUSED_CHECKS = new Set([
+  "rate_at_or_above_adaptive_minimum",
+  "amplitude_limits_inside_envelope_and_under_ceiling",
+]);
+export const failState = (name) => (REFUSED_CHECKS.has(name) ? "refused" : "blocked");
+
+function Glyph({ state, name }) {
   if (state === true) return <Mark state="pass" label="passes" size={TYPE.lead} />;
-  if (state === false) return <Mark state="refused" label="fails" size={TYPE.lead} />;
+  if (state === false) return <Mark state={failState(name)} label="fails" size={TYPE.lead} />;
   return <Mark state="notChecked" label="not assessed" size={TYPE.lead} />;
 }
 function Sub({ ok, text }) {
@@ -287,8 +300,10 @@ export default function ClosedLoopChecks({ plan }) {
   const nNot = Array.isArray(gate.not_assessed) ? gate.not_assessed.length : conditions.filter((c) => verdictState(c) === null).length;
   const n = num(gate.n_conditions) ?? conditions.length;
   const passed = gate.passed === true;
-  // The answer in ink when it passes, in red with ✕ when a check blocks, grey when nothing ran.
-  const color = passed ? T.ink : (conditions.length ? T.refused : T.notChecked);
+  // The answer in ink when it passes; when a check blocks, red with ✕ only if a failing check is
+  // the device refusing or the ceiling, otherwise ink with ✕ (D14); grey when nothing ran.
+  const refusedFail = conditions.some((c) => verdictState(c) === false && REFUSED_CHECKS.has(c.name));
+  const color = passed ? T.ink : (conditions.length ? (refusedFail ? T.refused : T.ink) : T.notChecked);
   // The card's title asks "Closed loop: may it start on the frozen setting?"; the headline answers
   // it. The page's status line says "closed loop cannot start" in words; this says why, in counts.
   const headline = !conditions.length
@@ -299,8 +314,8 @@ export default function ClosedLoopChecks({ plan }) {
   return (
     <MDBox>
       <MDBox display="flex" alignItems="center" gap={1}>
-        {conditions.length ? (passed ? <Mark state="pass" label="may start" size={TYPE.lead} /> : <Mark state="refused" label="may not start" size={TYPE.lead} />) : null}
-        <MDTypography variant="h6" component="p" sx={{ fontSize: TYPE.lead, fontWeight: WEIGHT.strong, color, m: 0 }}>{headline}</MDTypography>
+        {conditions.length ? (passed ? <Mark state="pass" label="may start" size={TYPE.lead} /> : <Mark state={refusedFail ? "refused" : "blocked"} label="may not start" size={TYPE.lead} />) : null}
+        <MDTypography variant="h6" component="p" sx={{ fontSize: TYPE.lead, fontWeight: WEIGHT.strong, color, m: 0, ...WRAP.balance }}>{headline}</MDTypography>
       </MDBox>
       {/* The two readiness cards stay two cards (panel C item 5). The sentence that pointed from
           here to the readiness table is gone (the design review of 2026-09-26): it said nothing
@@ -312,7 +327,7 @@ export default function ClosedLoopChecks({ plan }) {
           const st = verdictState(c);
           return [
             <MDBox key={`${i}-l`} display="flex" alignItems="flex-start" gap={1}>
-              <MDBox pt={0.2} sx={{ flex: "0 0 auto" }}><Glyph state={st} /></MDBox>
+              <MDBox pt={0.2} sx={{ flex: "0 0 auto" }}><Glyph state={st} name={c.name} /></MDBox>
               <MDBox>
                 <MDTypography variant="caption" component="div" title={c.name}
                   sx={{ fontSize: TYPE.body, fontWeight: WEIGHT.strong, color: T.ink, lineHeight: 1.5 }}>

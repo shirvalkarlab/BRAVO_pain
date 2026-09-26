@@ -28,7 +28,8 @@
  * A field the response does not carry produces no bullet: nothing is invented.
  *
  * THE MINIMALIST REDESIGN OF 2026-09-26 (SPEC.md sections 2.3, 4 and 5.3): three states, never two.
- * A check that blocks is red with ✕; a caution (more data needed, a map that moves over time) is
+ * A device refusal or a value above the ceiling is red with ✕; a statistical or evidence result
+ * that blocks is ink with ✕ (the PI's ruling of 2026-09-26, TASTE_AUDIT.md D14); a caution (more data needed, a map that moves over time) is
  * amber with ▲; a check that could not run is grey with ○ -- it still blocks, but it is counted
  * apart and never drawn as a pass. At most five items are shown: every ✕ and ▲ first, then the ○
  * items, and when these would overflow they are counted in one item ("3 checks not run"), each
@@ -39,20 +40,31 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import { num, fmtHz } from "./stimFormat";
-import { T, TYPE, WEIGHT, STATE, SizedFold } from "./typeScale";
+import { T, TYPE, WEIGHT, STATE, WRAP, SizedFold } from "./typeScale";
 import { sideVerdicts } from "./DecisionStrip";
-import { verdictState } from "./ClosedLoopChecks";
+// Which of the four checks, failing, is the device refusing or the ceiling (red): one home.
+import { verdictState, REFUSED_CHECKS } from "./ClosedLoopChecks";
 import {
   BLOCK_OF_TIME_NOTE, BLOCK_OF_TIME_SYMBOL, blockOfTimeState, rateRowForSetting,
 } from "./blockOfTime";
 
-/** The glyph each kind of item carries beside its colour: red blocks, yellow is a caution, grey
- *  could not be checked. */
-export const STATUS_GLYPH = { red: STATE.refused.glyph, yellow: STATE.caution.glyph, grey: STATE.notChecked.glyph };
+/** The glyph each kind of item carries beside its colour: ✕ refused (red) or blocks (ink), ▲ a
+ *  caution, ○ could not be checked. */
+export const STATUS_GLYPH = {
+  refused: STATE.refused.glyph, blocked: STATE.blocked.glyph, yellow: STATE.caution.glyph, grey: STATE.notChecked.glyph,
+};
 
-/** The token state, and the word a screen reader hears, per kind. */
+/**
+ * The token state, and the word a screen reader hears, per kind. RED MEANS ONE THING (the PI's
+ * ruling of 2026-09-26, TASTE_AUDIT.md D14): `refused` -- the device refuses (no sensing pair it
+ * allows, a rate below the closed-loop minimum the device needs) or a value is above the safe
+ * current ceiling -- is red with ✕; `blocked` -- a statistical or evidence result that stops closed
+ * loop ("Setting not proven better", "No usable sensing pair", "No band moves with current") -- is
+ * ink with the same ✕, never red.
+ */
 const KIND = {
-  red: { state: STATE.refused, word: "blocked" },
+  refused: { state: STATE.refused, word: "refused" },
+  blocked: { state: STATE.blocked, word: "blocked" },
   yellow: { state: STATE.caution, word: "caution" },
   grey: { state: STATE.notChecked, word: "not checked" },
 };
@@ -116,19 +128,19 @@ export function statusSummary(data, plan) {
     const sides = rule && rule.by_side ? Object.values(rule.by_side).filter(Boolean) : [];
     const allowed = sides.filter((b) => b.allowed_channel);
     if (sides.some((b) => b.rule_applied) && !allowed.length) {
-      add("red", "Device allows no sensing pair", rule.sentence);
+      add("refused", "Device allows no sensing pair", rule.sentence);
     } else if (allowed.length && allowed.every((b) => !num(b.n_usable_on_allowed_pair))) {
-      add("red", "No usable sensing pair", rule.sentence);
+      add("blocked", "No usable sensing pair", rule.sentence);
     } else if (!rule && cl.ready === false) {
-      add("red", "No usable sensing pair",
+      add("blocked", "No usable sensing pair",
         `${num(cl.n_cells_deployable) ?? 0} of ${num(cl.n_cells_screened) ?? "—"} contact-and-rate combinations are usable.`);
     }
   }
 
-  // Each of the four checks: red when it blocks, yellow when it was not assessed.
+  // Each of the four checks: refused (red) or blocked (ink) when it fails, grey when not assessed.
   conditions.forEach((c) => {
     const st = verdictState(c);
-    if (st === false && RED_NAME[c.name]) add("red", RED_NAME[c.name](c), c.detail);
+    if (st === false && RED_NAME[c.name]) add(REFUSED_CHECKS.has(c.name) ? "refused" : "blocked", RED_NAME[c.name](c), c.detail);
     if (st === null && GREY_NAME[c.name]) add("grey", GREY_NAME[c.name](c), c.detail);
   });
   // A pulse-width choice never put to the data, on every side.
@@ -161,13 +173,13 @@ export function statusSummary(data, plan) {
     add("yellow", "Pain map moves over time", BLOCK_OF_TIME_NOTE, { dagger: true });
   }
 
-  // Red first, then yellow, then grey, each kind in the order found.
-  const ordered = ["red", "yellow", "grey"].flatMap((k) => bullets.filter((b) => b.kind === k));
+  // Refusals first, then what blocks, then yellow, then grey, each kind in the order found.
+  const ordered = ["refused", "blocked", "yellow", "grey"].flatMap((k) => bullets.filter((b) => b.kind === k));
   return { headline, bullets: ordered };
 }
 
 /**
- * The items drawn in the open: every red and yellow one, then the grey ones while there is room;
+ * The items drawn in the open: every refused, blocked and yellow one, then the grey ones while there is room;
  * when the grey ones would overflow, one item counts them ("3 checks not run"). Nothing is
  * dropped: each is named in the fold underneath.
  */
@@ -205,11 +217,11 @@ function Bullet({ b }) {
 function GlyphKey() {
   return (
     <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.small, color: T.ink3, mt: 1 }}>
-      {["red", "yellow", "grey"].map((k, i) => (
+      {["blocked", "yellow", "grey"].map((k, i) => (
         <span key={k}>
           {i > 0 ? " · " : ""}
           <span aria-hidden="true" style={{ color: KIND[k].state.ink }}>{STATUS_GLYPH[k]}</span>
-          {` ${{ red: "blocks", yellow: "needs more data or caution", grey: "not checked" }[k]}`}
+          {` ${{ blocked: "blocks", yellow: "needs more data or caution", grey: "not checked" }[k]}`}
         </span>
       ))}
     </MDTypography>
@@ -231,7 +243,7 @@ export default function StatusLine({ data, plan, planLoading = false, showHeadli
     <MDBox data-testid="status-line">
       {showHeadline && (
         <MDTypography variant="h6" component="p" role="status"
-          sx={{ fontSize: TYPE.headline, lineHeight: "29px", fontWeight: WEIGHT.strong, color: T.ink, m: 0 }}>
+          sx={{ fontSize: TYPE.headline, lineHeight: "29px", fontWeight: WEIGHT.strong, color: T.ink, m: 0, ...WRAP.balance }}>
           {planLoading && !plan ? "Comparing with today's setting; the plan is still being computed." : s.headline}
         </MDTypography>
       )}

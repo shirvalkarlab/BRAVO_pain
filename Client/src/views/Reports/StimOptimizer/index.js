@@ -59,7 +59,9 @@ import CacheStatusLine from "views/Reports/CacheStatusLine";
 import { recomputeSlots, STIM_OPTIMIZER_SLOTS } from "views/Reports/moduleCacheKeys";
 import Section from "views/Reports/paper/Section";
 import CeilingLine from "views/Reports/paper/CeilingLine";
-import { contextLine } from "views/Reports/paper/PageHead";
+import PageHead from "views/Reports/paper/PageHead";
+import { JumpRow } from "views/Reports/paper/links";
+import useDocumentTitle from "views/Reports/paper/useDocumentTitle";
 import { useStudyCode } from "views/Reports/paper/studyCode";
 import { painScoreLabel } from "views/Reports/painScores";
 // The two-stage plan (open loop, then the check that decides whether closed loop may start, then
@@ -78,7 +80,7 @@ import TitrationSessionCard from "./TitrationSessionCard";
 import DecisionStrip, { decisionHeadline } from "./DecisionStrip";
 // The sensing evidence behind closed-loop readiness.
 import SensingEvidenceTable from "./SensingEvidenceTable";
-import { T, TYPE, WEIGHT, SizedFold } from "./typeScale";
+import { T, TYPE, SizedFold } from "./typeScale";
 // The page's status sentence and list: the answer, then why, in ✕ ▲ ○ items of five words or fewer.
 import StatusLine, { StatusSentence } from "./StatusLine";
 import { ceilingFromResponse } from "./ceiling";
@@ -87,8 +89,12 @@ import { ControlAnalysesSection } from "views/Reports/ControlAnalyses/ControlAna
 /** The page's question, its title (SPEC.md section 5.3). */
 export const PAGE_QUESTION = "Should today's setting change, and can closed loop start?";
 
-/** The slim contents row under the status list (SPEC.md section 4, rule 7). */
-const CONTENTS = [
+/** The browser tab's title while this page is shown (TASTE_AUDIT.md C7, the PI's wording). */
+export const TAB_TITLE = "Which current to try next";
+
+/** The slim contents row under the status list (SPEC.md section 4, rule 7). Drawn by the shared
+ *  jump-link row: separated by space only, never "·" (C11), and not underlined (C3). */
+export const CONTENTS = [
   ["decision", "Proven better?"],
   ["current-map", "Currents tried"],
   ["closed-loop", "Closed loop"],
@@ -131,6 +137,9 @@ const OPTIMIZER_REQUEST = {
 
 export default function StimOptimizer() {
   const { participant_uid } = useParams();
+  // The tab's title is the page's question in the PI's words, from the first paint on, the
+  // loading notice included (TASTE_AUDIT.md C7); the page head leaves it alone.
+  useDocumentTitle(TAB_TITLE);
 
   const cached = useCachedResult({
     moduleKey: MODULES.stimOptimizer,
@@ -200,34 +209,20 @@ export default function StimOptimizer() {
         {/* ---------- how the page opens (SPEC.md section 4, rule 1): the question, the pain score,
             the answer, why (at most five items, each with its glyph), the safe ceiling read from
             the response, and the contents row. Nothing in the head is folded. ---------- */}
-        <MDBox component="header" data-testid="page-head" sx={{ mb: 4 }}>
-          <MDTypography variant="h1" sx={{ fontSize: TYPE.section, lineHeight: "25px", fontWeight: WEIGHT.strong, color: T.ink, m: 0 }}>
-            {PAGE_QUESTION}
-          </MDTypography>
-          {participantCode || painScore ? (
-            <MDTypography component="p" data-testid="context-line"
-              sx={{ fontSize: TYPE.small, lineHeight: "18px", color: T.ink3, mt: 0.5, mb: 0 }}>
-              {contextLine(participantCode, painScore)}
-            </MDTypography>
-          ) : null}
-          <MDTypography component="p" role="status" data-testid="status-sentence"
-            sx={{ fontSize: TYPE.headline, lineHeight: "29px", fontWeight: WEIGHT.strong, color: T.ink, mt: 2, mb: 0 }}>
-            <StatusSentence data={data} plan={twoStage.data} planLoading={twoStage.loading} />
-          </MDTypography>
+        <PageHead title={PAGE_QUESTION} participant={participantCode} painScore={painScore}
+          documentTitle=""
+          status={<StatusSentence data={data} plan={twoStage.data} planLoading={twoStage.loading} />}>
+          {/* The status list, its key and its fold (this page's own: its items carry the
+              decision-294 dagger and fold what each rests on), then the ceiling line and the
+              contents row. Built on the shared page head (TASTE_AUDIT.md C6). */}
           <StatusLine data={data} plan={twoStage.data} planLoading={twoStage.loading} showHeadline={false} />
           <MDBox mt={1.5}>
             <CeilingLine leftMa={ceiling.leftMa} rightMa={ceiling.rightMa} />
           </MDBox>
-          <MDBox component="nav" aria-label="Contents" mt={2}
-            sx={{ display: "flex", flexWrap: "wrap", columnGap: "16px", rowGap: "4px", fontSize: TYPE.body }}>
-            {CONTENTS.map(([id, label], i) => (
-              <span key={id}>
-                {i > 0 ? <span aria-hidden="true" style={{ color: T.ink3, marginRight: 16 }}>·</span> : null}
-                <a href={`#${id}`} style={{ color: T.accent, textDecoration: "none" }}>{label}</a>
-              </span>
-            ))}
+          <MDBox mt={2}>
+            <JumpRow label="Contents" items={CONTENTS.map(([id, label]) => ({ href: `#${id}`, label }))} />
           </MDBox>
-        </MDBox>
+        </PageHead>
 
         {/* The Recompute control (the PI's own file, unchanged): every section below is served from
             memory until it is pressed. When the stored results were built: one click away. */}

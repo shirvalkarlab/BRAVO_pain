@@ -45,17 +45,19 @@ import MDTypography from "components/MDTypography";
 
 import { contactSortKey } from "views/Reports/Biomarkers/contactOrder";
 
-import { num, fmtHz, fmtMa, contactLabel } from "./stimFormat";
-import { T, TYPE, HEAD, SMALL, MONO as MONO_BASE, SUBHEAD, WEIGHT, HAIRLINE, Mark, SizedFold } from "./typeScale";
+import { num, fmtHz, fmtMa, contactLabel, EMPTY } from "./stimFormat";
+import { T, TYPE, HEAD, SMALL, MONO as MONO_BASE, SUBHEAD, WEIGHT, WRAP, HAIRLINE, Mark, SizedFold } from "./typeScale";
 
 const MONO = { ...MONO_BASE, fontSize: TYPE.body };
 
-const hzList = (xs) => (Array.isArray(xs) && xs.length ? `${xs.map((v) => Number(v)).join(", ")} Hz` : "—");
+// An empty cell reads as a word, never "—" (TASTE_AUDIT.md C9): an empty list is "none", a value
+// the response does not carry is "not given".
+const hzList = (xs) => (Array.isArray(xs) ? (xs.length ? `${xs.map((v) => Number(v)).join(", ")} Hz` : "none") : EMPTY);
 const countText = (n, of) => {
   const a = num(n), b = num(of);
   return a === null || b === null || b <= 0 ? "" : `${Math.round(a)} of ${Math.round(b)}`;
 };
-const sideWord = (h) => (h === "Left" ? "left" : (h === "Right" ? "right" : String(h || "—")));
+const sideWord = (h) => (h === "Left" ? "left" : (h === "Right" ? "right" : String(h || EMPTY)));
 
 /** A band near a folded multiple of the rate, in the PI's advisory words (never a refusal). */
 function harmonicNoteFor(c) {
@@ -88,12 +90,19 @@ function UnderRow({ c }) {
   );
 }
 
-/** The usable mark: ✓ usable, ✕ not usable, with the word a screen reader hears. */
-function UsableMark({ usable }) {
+/**
+ * The usable mark: ✓ usable, ✕ not usable, with the word a screen reader hears. RED MEANS ONE
+ * THING (the PI's ruling of 2026-09-26, TASTE_AUDIT.md D14): a row on a pair the device does not
+ * allow with today's contacts (`refusedByDevice`) is the device refusing, red ✕; a row the device
+ * allows that is not usable on the evidence (no band both falls with current and rises with pain)
+ * is a statistical result, ink ✕, never red.
+ */
+function UsableMark({ usable, refusedByDevice = false }) {
   return (
     <Tooltip title={usable ? "usable for closed loop" : "not usable for closed loop"}>
       <span style={{ display: "inline-flex" }}>
-        {usable ? <Mark state="pass" label="usable" /> : <Mark state="refused" label="not usable" />}
+        {usable ? <Mark state="pass" label="usable" />
+          : <Mark state={refusedByDevice ? "refused" : "blocked"} label="not usable" />}
       </span>
     </Tooltip>
   );
@@ -109,7 +118,7 @@ function ReadinessBlock({ c, allowed }) {
       sx={{ borderTop: HAIRLINE, py: 1.5 }}>
       <MDBox display="flex" alignItems="baseline" gap={1} flexWrap="wrap">
         <UsableMark usable={usable} />
-        <span style={{ ...SUBHEAD, color: usable ? T.ink : T.refused }}>
+        <span style={{ ...SUBHEAD, color: T.ink }}>
           <span style={{ whiteSpace: "nowrap" }}>{contactLabel(c)}</span>
           {`, ${sideWord(c.hemisphere)} stimulation at ${fmtHz(c.rate_hz)} — ${usable ? "usable" : "not usable"}`}
         </span>
@@ -119,9 +128,9 @@ function ReadinessBlock({ c, allowed }) {
       </MDBox>
       <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2, mt: 0.5, maxWidth: "80ch" }}>
         {"Power falls with current (after allowing for differences between clinic visits): "}
-        <span style={MONO}>{countText(c.n_era_negative_significant, c.n_bands) || "—"}</span>
+        <span style={MONO}>{countText(c.n_era_negative_significant, c.n_bands) || EMPTY}</span>
         {" bands · rises with pain: "}
-        <span style={MONO}>{painKnown ? (countText(c.n_pain_positive, c.n_bands) || "—") : "not known"}</span>
+        <span style={MONO}>{painKnown ? (countText(c.n_pain_positive, c.n_bands) || EMPTY) : "not known"}</span>
         {" · both: "}
         <span style={{ ...MONO, fontWeight: num(c.n_qualifying) ? WEIGHT.strong : WEIGHT.regular, whiteSpace: "normal" }}>{hzList(c.qualifying_centers_hz)}</span>
         {harmonicNote && (
@@ -135,7 +144,7 @@ function ReadinessBlock({ c, allowed }) {
         {"Currents tested "}
         <span style={MONO}>{`${fmtMa(c.amp_low_mA).replace(/\s*mA$/, "")}–${fmtMa(c.amp_high_mA)}`}</span>
         {"; the gap between the two measured power levels, in units of their own scatter: "}
-        <span style={MONO}>{num(c.median_separation_d) === null ? "—" : num(c.median_separation_d).toFixed(2)}</span>
+        <span style={MONO}>{num(c.median_separation_d) === null ? EMPTY : num(c.median_separation_d).toFixed(2)}</span>
         {"."}
       </MDTypography>
       <UnderRow c={c} />
@@ -171,10 +180,10 @@ function ReadinessGrid({ rows, allowed }) {
             <div key={i} data-testid="readiness-row" data-allowed={allowed === null ? "unknown" : (allowed ? "true" : "false")}
               style={{ display: "contents" }}>
               <span style={{ ...MONO, fontWeight: WEIGHT.strong }}>{contactLabel(c)}</span>
-              <span style={MONO}>{c.hemisphere ? String(c.hemisphere)[0] : "—"}</span>
+              <span style={MONO}>{c.hemisphere ? String(c.hemisphere)[0] : EMPTY}</span>
               <span style={MONO}>{fmtHz(c.rate_hz)}</span>
-              <span style={MONO}>{countText(c.n_era_negative_significant, c.n_bands) || "—"}</span>
-              <span style={MONO}>{painKnown ? (countText(c.n_pain_positive, c.n_bands) || "—") : "not known"}</span>
+              <span style={MONO}>{countText(c.n_era_negative_significant, c.n_bands) || EMPTY}</span>
+              <span style={MONO}>{painKnown ? (countText(c.n_pain_positive, c.n_bands) || EMPTY) : "not known"}</span>
               <MDBox sx={{ display: "flex", alignItems: "center", gap: 0.6, flexWrap: "wrap" }}>
                 <span style={{ ...MONO, fontWeight: num(c.n_qualifying) ? WEIGHT.strong : WEIGHT.regular, whiteSpace: "normal" }}>{hzList(c.qualifying_centers_hz)}</span>
                 {harmonicNote && (
@@ -184,9 +193,9 @@ function ReadinessGrid({ rows, allowed }) {
                 )}
               </MDBox>
               <span style={MONO}>{`${fmtMa(c.amp_low_mA).replace(/\s*mA$/, "")}–${fmtMa(c.amp_high_mA)}`}</span>
-              <span style={MONO}>{num(c.median_separation_d) === null ? "—" : num(c.median_separation_d).toFixed(2)}</span>
+              <span style={MONO}>{num(c.median_separation_d) === null ? EMPTY : num(c.median_separation_d).toFixed(2)}</span>
               <MDBox sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}>
-                <UsableMark usable={usable} />
+                <UsableMark usable={usable} refusedByDevice={allowed === false} />
                 {c.harmonic_only === true && (
                   <span style={{ ...SMALL, color: T.caution, fontWeight: WEIGHT.strong, whiteSpace: "nowrap" }}>warning</span>
                 )}
@@ -202,7 +211,7 @@ function ReadinessGrid({ rows, allowed }) {
 
 const signed = (v) => {
   const x = num(v);
-  return x === null ? "—" : `${x >= 0 ? "+" : "−"}${Math.abs(x).toFixed(3)}`;
+  return x === null ? EMPTY : `${x >= 0 ? "+" : "−"}${Math.abs(x).toFixed(3)}`;
 };
 
 /**
@@ -264,7 +273,7 @@ export default function SensingEvidenceTable({ closedLoop }) {
     : "";
   const nScreened = num(cl.n_cells_screened), nDeploy = num(cl.n_cells_deployable);
   const headline = nScreened
-    ? `${nDeploy === null ? "—" : Math.round(nDeploy)} of ${Math.round(nScreened)} contact-and-rate combinations usable for closed loop`
+    ? `${nDeploy === null ? "Not given how many" : Math.round(nDeploy)} of ${Math.round(nScreened)} contact-and-rate combinations usable for closed loop`
     : "no combinations screened — usability not yet assessed";
   const rule = cl.sensing_rule || null;
   // The pairs the device allows while today's contacts stimulate, one per lead (decision 217).
@@ -273,6 +282,10 @@ export default function SensingEvidenceTable({ closedLoop }) {
   const allowed = new Set(allowedSides.map((b) => String(b.allowed_channel)));
   const allowedNames = allowedSides.map((b) => b.allowed_display || b.allowed_channel);
   const split = allowed.size > 0;
+  // Red only when the DEVICE allows no sensing pair at all with today's contacts (D14); "0 of 50
+  // usable" on pairs it does allow is a statistical result, drawn in ink with ✕.
+  const deviceAllowsNone = !!(rule && rule.by_side
+    && Object.values(rule.by_side).some((b) => b && b.rule_applied) && allowed.size === 0);
   const openRows = split ? rows.filter((c) => allowed.has(String(c.channel))) : rows;
   const foldedRows = split ? rows.filter((c) => !allowed.has(String(c.channel))) : [];
   const labelFor = (ch) => {
@@ -292,8 +305,10 @@ export default function SensingEvidenceTable({ closedLoop }) {
         </MDTypography>
       ) : null}
       <MDBox display="flex" alignItems="center" gap={1} flexWrap="wrap">
-        {nScreened ? (cl.ready ? <Mark state="pass" label="a usable combination exists" size={TYPE.lead} /> : <Mark state="refused" label="no usable combination" size={TYPE.lead} />) : null}
-        <MDTypography variant="h6" component="p" sx={{ fontSize: TYPE.lead, fontWeight: WEIGHT.strong, color: nScreened && !cl.ready ? T.refused : T.ink, m: 0 }}>{headline}</MDTypography>
+        {nScreened ? (cl.ready ? <Mark state="pass" label="a usable combination exists" size={TYPE.lead} />
+          : <Mark state={deviceAllowsNone ? "refused" : "blocked"} label="no usable combination" size={TYPE.lead} />) : null}
+        <MDTypography variant="h6" component="p" sx={{ fontSize: TYPE.lead, fontWeight: WEIGHT.strong,
+          color: nScreened && !cl.ready && deviceAllowsNone ? T.refused : T.ink, m: 0, ...WRAP.balance }}>{headline}</MDTypography>
         {sel && (
           <MDTypography variant="caption" sx={{ ...MONO, fontSize: TYPE.num }}>
             {`· best ${contactLabel(sel)} at ${fmtHz(sel.rate_hz)} (${sel.hemisphere} stimulation)`}

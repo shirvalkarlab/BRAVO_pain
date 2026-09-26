@@ -71,9 +71,9 @@ import { plotlyLayout, PLOTLY_CONFIG, CEILING_LINE, FONT_FAMILY, FIGURE_TEXT_PX 
 import Section from "views/Reports/paper/Section";
 import ColorKey from "views/Reports/paper/ColorKey";
 
-import { num, fmtHz, fmtUs, fmtMa } from "./stimFormat";
+import { num, fmtHz, fmtUs, fmtMa, EMPTY } from "./stimFormat";
 import { BlockOfTimeMark, BlockOfTimeFootnote, blockOfTimeState, notCheckedText } from "./blockOfTime";
-import { T, TYPE, HEAD, SMALL, MONO, SUBHEAD, WEIGHT, HAIRLINE, Mark, SizedFold } from "./typeScale";
+import { T, TYPE, HEAD, SMALL, MONO, SUBHEAD, HEADING, WEIGHT, HAIRLINE, Mark, SizedFold } from "./typeScale";
 import { ceilingFromPlan } from "./ceiling";
 
 /** The squares' colour scale: blue (lower predicted pain than today) through a neutral light grey
@@ -458,7 +458,7 @@ function ClinicStreamSection({ groups, inForceLeft, inForceRight, clinicStream, 
   pooledWanted = false, pooledUnavailableReason = null, half, ceiling }) {
   const cs = clinicStream || {};
   const heading = (
-    <MDTypography variant="h6" component="h3" sx={{ ...SUBHEAD, fontSize: TYPE.lead }}>
+    <MDTypography variant="h6" component="h3" sx={{ ...HEADING, fontSize: TYPE.lead }}>
       From the clinic testing sheets (separate from the home pain surveys)
     </MDTypography>
   );
@@ -551,10 +551,10 @@ function ClinicStreamSection({ groups, inForceLeft, inForceRight, clinicStream, 
                     </MDTypography>
                   </TableCell>
                   <TableCell sx={{ py: 0.4 }}>
-                    <MDTypography variant="caption" sx={{ ...MONO, fontSize: TYPE.small }}>{num(v.n_steps) ?? "—"}</MDTypography>
+                    <MDTypography variant="caption" sx={{ ...MONO, fontSize: TYPE.small }}>{num(v.n_steps) ?? EMPTY}</MDTypography>
                   </TableCell>
                   <TableCell sx={{ py: 0.4 }}>
-                    <MDTypography variant="caption" sx={{ ...MONO, fontSize: TYPE.small }}>{num(v.n_with_pain) ?? "—"}</MDTypography>
+                    <MDTypography variant="caption" sx={{ ...MONO, fontSize: TYPE.small }}>{num(v.n_with_pain) ?? EMPTY}</MDTypography>
                   </TableCell>
                 </TableRow>
               ))}
@@ -733,7 +733,7 @@ export default function CurrentMapCard({ plan }) {
           </MDTypography>
         )}
 
-        <MDTypography variant="h6" component="h3" sx={{ ...SUBHEAD, fontSize: TYPE.lead, mt: 3 }}>
+        <MDTypography variant="h6" component="h3" sx={{ ...HEADING, fontSize: TYPE.lead, mt: 3 }}>
           From the home pain surveys
         </MDTypography>
         <RateStrataGroups groups={surveyGroups}

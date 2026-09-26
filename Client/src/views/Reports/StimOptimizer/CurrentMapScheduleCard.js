@@ -24,10 +24,10 @@ import { Table, TableBody, TableCell, TableHead, TableRow } from "@mui/material"
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
-import { num, fmtHz, fmtUs, fmtMa } from "./stimFormat";
+import { num, fmtHz, fmtUs, fmtMa, EMPTY } from "./stimFormat";
 import { CARD } from "assets/theme/base/tokens";
 
-import { T, TYPE, HEAD, SMALL, MONO, SUBHEAD, WEIGHT, HAIRLINE, SizedFold } from "./typeScale";
+import { T, TYPE, HEAD, SMALL, MONO, SUBHEAD, HEADING, WEIGHT, HAIRLINE, SizedFold } from "./typeScale";
 
 const CHECK_MARK = "✓";
 const CROSS_MARK = "✕";
@@ -45,7 +45,7 @@ export function HomeScheduleSection({ schedule }) {
   if (!schedule.available) {
     return (
       <MDBox mt={2} pt={1.5} data-testid="home-schedule" sx={{ borderTop: HAIRLINE }}>
-        <MDTypography variant="h6" component="h3" sx={SUBHEAD}>{HOME_SCHEDULE_TITLE}</MDTypography>
+        <MDTypography variant="h6" component="h3" sx={HEADING}>{HOME_SCHEDULE_TITLE}</MDTypography>
         <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2, mt: 0.6 }}>
           {schedule.reason || "no schedule could be built from this record."}
         </MDTypography>
@@ -65,7 +65,7 @@ export function HomeScheduleSection({ schedule }) {
 
   return (
     <MDBox mt={2} pt={1.5} data-testid="home-schedule" sx={{ borderTop: HAIRLINE }}>
-      <MDTypography variant="h6" component="h3" sx={SUBHEAD}>{HOME_SCHEDULE_TITLE}</MDTypography>
+      <MDTypography variant="h6" component="h3" sx={HEADING}>{HOME_SCHEDULE_TITLE}</MDTypography>
       <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, mt: 0.4 }}>
         <span style={{ ...MONO, whiteSpace: "normal" }}>
           {`${fmtHz(schedule.rate_hz)} · left ${fmtUs(schedule.pulse_width_us_left)} / right ${fmtUs(schedule.pulse_width_us_right)} · ${steps.length} step${steps.length === 1 ? "" : "s"} over ${daysWord(schedule.total_days)}`}
@@ -121,7 +121,7 @@ export function HomeScheduleSection({ schedule }) {
               {inForce && (
                 <TableRow data-testid="home-schedule-in-force-row">
                   <TableCell sx={{ py: 0.5 }}>
-                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, ...MONO, color: HISTORY_INK }}>—</MDTypography>
+                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, ...MONO, color: HISTORY_INK }}>{EMPTY}</MDTypography>
                   </TableCell>
                   <TableCell sx={{ py: 0.5 }}>
                     <MDTypography variant="caption" sx={{ fontSize: TYPE.body, ...MONO, whiteSpace: "nowrap", color: HISTORY_INK }}>{fmtMa(inForce.amp_left_mA)}</MDTypography>
@@ -157,7 +157,7 @@ export function HomeScheduleSection({ schedule }) {
                     <MDTypography variant="caption" sx={{ fontSize: TYPE.body, ...MONO }}>{daysWord(st.planned_days)}</MDTypography>
                   </TableCell>
                   <TableCell sx={{ py: 0.5 }}>
-                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, ...MONO }}>{num(st.target_reports) ?? "—"}</MDTypography>
+                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, ...MONO }}>{num(st.target_reports) ?? EMPTY}</MDTypography>
                   </TableCell>
                   <TableCell sx={{ py: 0.5, maxWidth: 360 }}>
                     <MDTypography variant="caption" sx={{ fontSize: TYPE.small }}>{st.why}</MDTypography>

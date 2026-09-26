@@ -12,7 +12,7 @@
  *     it), else the rate and current from the arm's `incumbent_xy` and the pulse width from the
  *     two-stage block's `incumbent_pulse_width_us`. That pulse width is read from the LEFT column
  *     by Stage 1 (`stage1_openloop.run_stage1`, `pw_col="pw_us_Left"`), so it is shown for the Left
- *     side only; the Right side prints "—" until the response names its own.
+ *     side only; the Right side prints "not given" until the response names its own.
  *   - the setting the search prefers: the two-stage block's frozen setting for that side (rate,
  *     pulse width, preferred current, delivered range, the stretches fitted), because that is the
  *     setting closed loop would freeze and it is held to what adaptive mode can use.
@@ -43,24 +43,25 @@
  * point in the accent blue, "worse" and "better" at its ends, in pain points). Colours and sizes
  * come from the shared tokens; the verdict carries its glyph (✓ ▲ ○) as well as its words.
  */
-import { CircularProgress, Tooltip } from "@mui/material";
+import { Tooltip } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import { GainBar, VerdictGlyph } from "./GainBar";
-import { T, TYPE, HEAD, SMALL, MONO, SUBHEAD, WEIGHT, HAIRLINE, Mark, SizedFold } from "./typeScale";
+import { T, TYPE, HEAD, SMALL, MONO, SUBHEAD, WEIGHT, HAIRLINE, Mark, Placeholder, SizedFold } from "./typeScale";
 
-import { num, fmtMa, fmtHz, fmtUs, fmtPts, fmtDelta, contactLabel } from "./stimFormat";
+import { num, fmtMa, fmtHz, fmtUs, fmtPts, fmtDelta, contactLabel, EMPTY } from "./stimFormat";
 import { BlockOfTimeMark, BlockOfTimeFootnote, blockOfTimeState, notCheckedText, rateRowForSetting } from "./blockOfTime";
 
 const VALUE = { ...MONO, fontSize: TYPE.num };
 const NW = { whiteSpace: "nowrap" };
 
-/** A difference in one unit, "same" when there is none (SPEC.md section 5.3). */
+/** A difference in one unit, "same" when there is none (SPEC.md section 5.3), "not given" when
+ *  either side of it is missing (TASTE_AUDIT.md C9: an empty cell is a word, never "—"). */
 function diffText(v, unit, d) {
   const x = num(v);
-  if (x === null) return "—";
+  if (x === null) return EMPTY;
   if (Math.abs(x) < 1e-9) return "same";
   return fmtDelta(x, unit, d);
 }
@@ -188,27 +189,30 @@ function SideBlock({ r, plan, planLoading, planErr, halfRange, timeState, timeNo
   const nFit = num(s && s.n_epochs_fitted_on_the_chosen_stratum);
   const cellLine = { borderTop: HAIRLINE, py: 0.75 };
   const suggested = (row) => {
+    // Still computing: a still grey block shaped like the value (TASTE_AUDIT.md C2), the waiting
+    // words under the rate's block. No spinner; nothing moves.
     if (planLoading && !s) return row === "rate" ? (
-      <MDBox display="flex" alignItems="center" gap={1}>
-        <CircularProgress size={14} />
-        <span style={SMALL}>computing (about a minute the first time)</span>
-      </MDBox>) : null;
-    if (!s) return row === "rate" ? <span style={SMALL}>{planErr ? `plan unavailable: ${planErr}` : "—"}</span> : null;
+      <MDBox>
+        <Placeholder width={56} />
+        <span style={{ ...SMALL, display: "block" }}>computing (about a minute the first time)</span>
+      </MDBox>) : <Placeholder width={56} />;
+    if (!s) return row === "rate" ? <span style={SMALL}>{planErr ? `plan unavailable: ${planErr}` : EMPTY}</span> : null;
     if (prefRate === null) return row === "rate"
       ? <span style={{ fontSize: TYPE.body, fontWeight: WEIGHT.strong, color: T.caution }}><span aria-hidden="true">▲ </span>no rate closed loop can use</span> : null;
     if (row === "rate") return <span style={VALUE}>{fmtHz(prefRate)}</span>;
-    if (row === "pw") return <span style={VALUE}>{prefPw === null ? "— µs" : fmtUs(prefPw)}</span>;
+    if (row === "pw") return <span style={VALUE}>{prefPw === null ? EMPTY : fmtUs(prefPw)}</span>;
     return prefAmp === null
       ? <span style={{ fontSize: TYPE.body, fontWeight: WEIGHT.strong, color: T.caution }}><span aria-hidden="true">▲ </span>no current</span>
       : <span style={VALUE}>{fmtMa(prefAmp)}{timeState(r) === "moves" && <BlockOfTimeMark />}</span>;
   };
   const difference = (row) => {
-    if (!s || prefRate === null) return <span style={VALUE}>—</span>;
+    if (planLoading && !s) return <Placeholder width={48} />;
+    if (!s || prefRate === null) return <span style={VALUE}>{EMPTY}</span>;
     if (row === "rate") return <span style={VALUE}>{diffText(prefRate - (r.nowRate ?? prefRate), "Hz", 0)}</span>;
-    if (row === "pw") return <span style={VALUE}>{r.nowPw === null || prefPw === null ? "—" : diffText(prefPw - r.nowPw, "µs", 0)}</span>;
+    if (row === "pw") return <span style={VALUE}>{r.nowPw === null || prefPw === null ? EMPTY : diffText(prefPw - r.nowPw, "µs", 0)}</span>;
     return (
       <MDBox display="inline-flex" alignItems="center" gap={0.6}>
-        <span style={VALUE}>{prefAmp === null || r.nowAmp === null ? "—" : diffText(prefAmp - r.nowAmp, "mA", 1)}</span>
+        <span style={VALUE}>{prefAmp === null || r.nowAmp === null ? EMPTY : diffText(prefAmp - r.nowAmp, "mA", 1)}</span>
         {aboveDelivered && (
           <Tooltip title={`the suggested ${fmtMa(prefAmp)} is above the ${fmtMa(dMax)} ever delivered on this side, so it is a guess beyond any current this side has received`}>
             <span><Mark state="caution" label="above the highest current ever delivered on this side" /></span>
@@ -219,7 +223,7 @@ function SideBlock({ r, plan, planLoading, planErr, halfRange, timeState, timeNo
   };
   const rows = [
     ["rate", "Rate", <span key="t" style={VALUE}>{fmtHz(r.nowRate)}</span>],
-    ["pw", "Pulse width", <span key="t" style={VALUE}>{r.nowPw === null ? "— µs" : fmtUs(r.nowPw)}</span>],
+    ["pw", "Pulse width", <span key="t" style={VALUE}>{r.nowPw === null ? EMPTY : fmtUs(r.nowPw)}</span>],
     ["amp", "Current", <span key="t" style={VALUE}>{fmtMa(r.nowAmp)}</span>],
   ];
   return (
@@ -287,6 +291,38 @@ function SideBlock({ r, plan, planLoading, planErr, halfRange, timeState, timeNo
   );
 }
 
+/** The strip's shape, still, while the plan is computed: two sides, three rows, four columns. */
+export function DecisionStripLoading() {
+  const cellLine = { borderTop: HAIRLINE, py: 0.75 };
+  return (
+    <MDBox data-testid="decision-strip-loading" aria-busy="true">
+      <MDBox sx={{ display: "grid", gridTemplateColumns: SIDES_GRID, columnGap: "48px", rowGap: "32px" }}>
+        {["Left", "Right"].map((side) => (
+          <MDBox key={side} sx={{ minWidth: 0 }}>
+            <MDTypography component="div" sx={SUBHEAD}>{side}</MDTypography>
+            <MDBox mt={1} sx={{ display: "grid", gridTemplateColumns: COMPARE, columnGap: "12px", alignItems: "baseline" }}>
+              <span />
+              <MDTypography variant="caption" sx={{ ...HEAD, pb: 0.5 }}>Today</MDTypography>
+              <MDTypography variant="caption" sx={{ ...HEAD, pb: 0.5 }}>Suggested</MDTypography>
+              <MDTypography variant="caption" sx={{ ...HEAD, pb: 0.5 }}>Difference</MDTypography>
+              {["Rate", "Pulse width", "Current"].map((label) => [
+                <MDBox key={`${label}-l`} sx={cellLine}><span style={{ fontSize: TYPE.body, color: T.ink2 }}>{label}</span></MDBox>,
+                <MDBox key={`${label}-t`} sx={cellLine}><Placeholder width={56} /></MDBox>,
+                <MDBox key={`${label}-s`} sx={cellLine}><Placeholder width={56} /></MDBox>,
+                <MDBox key={`${label}-d`} sx={cellLine}><Placeholder width={48} /></MDBox>,
+              ])}
+            </MDBox>
+            <Placeholder width={GAIN_BAR_WIDTH} height={12} mt={12} />
+          </MDBox>
+        ))}
+      </MDBox>
+      <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 1.5 }}>
+        computing (about a minute the first time)
+      </MDTypography>
+    </MDBox>
+  );
+}
+
 export default function DecisionStrip({ arms, plan, planLoading, planErr, inForce }) {
   const rows = sideRows(arms, plan, inForce);
   const halfRange = Math.max(2, ...rows.map((r) => {
@@ -305,6 +341,10 @@ export default function DecisionStrip({ arms, plan, planLoading, planErr, inForc
   const noCurrent = rows.filter((r) => r.s && num(r.s.rate_hz) !== null && num(r.s.amplitude_preferred_mA) === null)
     .map((r) => r.side);
   const stopping = stoppingText(rows);
+  // While the plan is still computing and no side can be drawn yet, the strip is drawn as still
+  // grey blocks in the shape of the Today | Suggested | Difference table it will become, with the
+  // waiting words (TASTE_AUDIT.md C2; no spinner).
+  if (!rows.length && planLoading) return <DecisionStripLoading />;
   return (
     <MDBox>
       <MDBox sx={{ display: "grid", gridTemplateColumns: SIDES_GRID, columnGap: "48px", rowGap: "32px" }}>

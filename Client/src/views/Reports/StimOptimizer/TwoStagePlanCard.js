@@ -36,15 +36,15 @@
  * a hairline, so there is no card inside a card; its heading is the plain question "Can closed loop
  * start on the rate and pulse width locked in beforehand?". Colours and sizes from the shared tokens.
  */
-import { CircularProgress, Table, TableBody, TableCell, TableHead, TableRow } from "@mui/material";
+import { Table, TableBody, TableCell, TableHead, TableRow } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import ClosedLoopChecks from "./ClosedLoopChecks";
 import ExcludedSettingsChart, { ExcludedSettingsSummary } from "./ExcludedSettingsChart";
-import { num } from "./stimFormat";
-import { T, TYPE, HEAD, MONO, SUBHEAD, HAIRLINE, SizedFold as Fold } from "./typeScale";
+import { num, EMPTY } from "./stimFormat";
+import { T, TYPE, HEAD, MONO, SUBHEAD, HEADING, HAIRLINE, Placeholder, SizedFold as Fold } from "./typeScale";
 
 export const TWO_STAGE_CARD_TITLE = "Can closed loop start on the rate and pulse width locked in beforehand?";
 
@@ -66,9 +66,10 @@ export const ACROSS_RATES_NOT_CHECKED =
   + "could not be told apart from a rate the fit had not learnt. The current this page recommends is "
   + "read from each rate's own map, which is checked (the current map card).";
 
-const fmt = (v, d = 1) => (num(v) === null ? "—" : num(v).toFixed(d));
+// An empty cell reads "not given", never "—" (TASTE_AUDIT.md C9).
+const fmt = (v, d = 1) => (num(v) === null ? EMPTY : num(v).toFixed(d));
 const cell = (v) => {
-  if (v === null || v === undefined) return "—";
+  if (v === null || v === undefined) return EMPTY;
   if (typeof v === "boolean") return v ? "yes" : "no";
   if (typeof v === "number") return Number.isInteger(v) ? String(v) : v.toFixed(3);
   return String(v);
@@ -162,14 +163,26 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
 
   return (
     <MDBox data-testid="two-stage-plan" sx={{ borderTop: HAIRLINE, pt: 3 }}>
-        <MDTypography variant="h6" component="h3" sx={{ ...SUBHEAD, fontSize: TYPE.lead }}>{TWO_STAGE_CARD_TITLE}</MDTypography>
+        <MDTypography variant="h6" component="h3" sx={{ ...HEADING, fontSize: TYPE.lead }}>{TWO_STAGE_CARD_TITLE}</MDTypography>
 
+        {/* Still computing: the four checks' grid drawn as still grey blocks, with the waiting
+            words (TASTE_AUDIT.md C2; no spinner, nothing moves). */}
         {loading && (
-          <MDBox mt={1.5} display="flex" alignItems="center" gap={1.5}>
-            <CircularProgress size={18} />
-            <MDTypography variant="caption" sx={{ fontSize: TYPE.body, color: T.ink2 }}>
+          <MDBox mt={1.5} data-testid="two-stage-loading" aria-busy="true">
+            <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2 }}>
               computing the two-stage plan (about a minute the first time; a few seconds afterwards)&hellip;
             </MDTypography>
+            <Placeholder width={220} height={16} mt={16} />
+            <MDBox mt={2} sx={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(300px, 1.5fr)",
+              columnGap: "32px", rowGap: "24px", alignItems: "start" }}>
+              {[0, 1, 2, 3].map((i) => [
+                <MDBox key={`${i}-l`} display="flex" alignItems="flex-start" gap={1}>
+                  <Placeholder width={16} height={16} />
+                  <Placeholder width={200} />
+                </MDBox>,
+                <MDBox key={`${i}-n`}><Placeholder width={240} /></MDBox>,
+              ])}
+            </MDBox>
           </MDBox>
         )}
 
@@ -200,7 +213,7 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
                 (the design review of 2026-09-26, S5) ---------- */}
             {(envelope.statement || envelope.n_exclusions != null) && (
               <MDBox mt={3}>
-                <MDTypography variant="h6" component="h3" sx={SUBHEAD}>What closed loop ruled out</MDTypography>
+                <MDTypography variant="h6" component="h3" sx={HEADING}>What closed loop ruled out</MDTypography>
                 <MDBox mt={0.6}>
                   <ExcludedSettingsSummary envelope={envelope} />
                 </MDBox>
@@ -220,7 +233,7 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
                 restated the checks above it. ---------- */}
             {stage2.started && (
               <MDBox mt={3}>
-                <MDTypography variant="h6" component="h3" sx={SUBHEAD}>What closed loop would do</MDTypography>
+                <MDTypography variant="h6" component="h3" sx={HEADING}>What closed loop would do</MDTypography>
                 <MDTypography variant="caption" component="div" sx={{ color: T.ink2, fontSize: TYPE.body }}>
                   {`${stage2.n_valid_policies != null ? stage2.n_valid_policies : policies.length} closed-loop `
                     + `settings could be drawn up`
