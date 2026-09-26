@@ -162,7 +162,7 @@ def test_gate_returns_NONE_not_FALSE_when_the_difference_cannot_be_formed():
     cell, the second says the fit is broken and no amount of exposure helps until it is repaired.
     Reporting them identically sent a reader to gather data that could not have resolved anything.
 
-    The slice-level `stage1_openloop.SliceResult.resolves_its_optimum` already returned
+    The stratum-level `stage1_openloop.JointStratum.resolves_its_optimum` already returned
     `bool | None` for exactly this reason, and its docstring calls that the single most important
     correction in the module; this arm-level method now matches it.
     """

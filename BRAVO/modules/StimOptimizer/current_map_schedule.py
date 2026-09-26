@@ -116,10 +116,32 @@ def design_points(ceiling_left_mA, ceiling_right_mA, *, levels_mA=DESIGN_LEVELS_
             "effects on pain from each other")
     il, ir = _f(in_force_left_mA), _f(in_force_right_mA)
     anchor_key = None
+    in_force = None
     if il is not None and ir is not None:
-        add(il, ir, "the setting in force today -- the anchor every other point is compared "
-                    "against, and repeated later in the order to check for drift")
-        anchor_key = (round(il, 3), round(ir, 3))
+        # THE SETTING IN FORCE ABOVE TODAY'S CEILING (2026-09-26). `add` refuses any pair above a
+        # side's ceiling, which is right for a target, but it used to refuse the anchor silently
+        # too: the schedule lost its baseline and nothing said why. Such a setting is history, not
+        # a step to hold: it is carried here, labelled, and never becomes a point or the anchor.
+        above = [side for side, v, c in (("Left", il, cl), ("Right", ir, cr))
+                 if c is not None and v > c + 1e-9]
+        in_force = dict(amp_left_mA=round(il, 3), amp_right_mA=round(ir, 3),
+                        above_ceiling=bool(above), sides_above_ceiling=above,
+                        offered_as_target=not above)
+        if above:
+            in_force["label"] = "in force, above today's ceiling"
+            in_force["why"] = (
+                "history: the setting in force today is above the safe ceiling on the "
+                + " and ".join(f"{s} side ({il if s == 'Left' else ir:.1f} mA against "
+                               f"{cl if s == 'Left' else cr:.1f} mA)" for s in above)
+                + ", so it is shown for reference and never offered as a step to hold; the "
+                "schedule has no baseline step to repeat")
+        else:
+            in_force["label"] = "in force"
+            in_force["why"] = ("the setting in force today, the anchor every other point is "
+                               "compared against")
+            add(il, ir, "the setting in force today -- the anchor every other point is compared "
+                        "against, and repeated later in the order to check for drift")
+            anchor_key = (round(il, 3), round(ir, 3))
 
     kept, excluded = [], []
     for p in points:
@@ -130,7 +152,8 @@ def design_points(ceiling_left_mA, ceiling_right_mA, *, levels_mA=DESIGN_LEVELS_
         else:
             kept.append(p)
     return dict(points=kept, excluded=excluded, levels_left_mA=lv_l, levels_right_mA=lv_r,
-               ceiling_left_mA=cl, ceiling_right_mA=cr, anchor_key=anchor_key)
+               ceiling_left_mA=cl, ceiling_right_mA=cr, anchor_key=anchor_key,
+               in_force=in_force)
 
 
 def drop_already_covered(points, existing_epochs, *, min_reports=EXISTING_REPORTS_DROP_THRESHOLD,
@@ -351,6 +374,7 @@ def build_schedule(*, rate_hz, pw_us_left, pw_us_right, ceiling_left_mA, ceiling
                           "as the rest of the record; on RCS08 today that stratum has too few "
                           "epochs to fit a current surface at all, so this session is what gives "
                           "it its first real support"),
+        in_force=dp.get("in_force"),
         design=dp, dropped=dc, reports_per_day=rpd, hold=hold,
         order_seed=ordered["seed"], steps=steps, n_steps=len(steps), total_days=total_days,
         record_today=record_today,

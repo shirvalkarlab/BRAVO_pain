@@ -268,6 +268,48 @@ def test_the_summary_carries_the_adjusted_reading_beside_the_plain_one_and_moves
     assert with_["caveats"] == without["caveats"]
 
 
+def _roc_with(stream):
+    """The Closed-Loop deployment ROC panel's own endpoint (`band_deployment_roc`) on the same
+    constructed record, with the band core and the settings stream stood in for."""
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "BRAVO.settings")
+    import django
+    django.setup()
+    from Biomarkers import bravo_service as bs
+    from Biomarkers.routines import stim_current as sc
+    detail, _ = _record("confounded")
+    core = {"available": True, "participant_uid": "u", "channel": CH, "center_hz": 24.5,
+            "band_width_hz": 5.0, "pooled": detail, "label_metric": "nrs",
+            "label_strategy": "tertile", "low_pct": 33.3333, "high_pct": 66.6667,
+            "match_direction": "prior", "refractory_min": 30.0}
+    saved_core, saved_sc = bs._validate_band_core, sc.settings_stream_for
+    try:
+        bs._validate_band_core = lambda rd: dict(core)
+        sc.settings_stream_for = lambda uid: stream
+        return bs.band_deployment_roc({"ParticipantId": "u", "Channel": CH, "CenterHz": 24.5,
+                                       "NBoot": 200})
+    finally:
+        bs._validate_band_core, sc.settings_stream_for = saved_core, saved_sc
+
+
+def test_the_deployment_roc_panel_carries_the_adjusted_reading_and_moves_nothing_else():
+    """2026-09-26: the Closed-Loop page's deployment ROC panel has its own endpoint and printed the
+    plain area alone; it now carries the same current-removed reading the summary carries (decision
+    293), from the same routine, descriptive only."""
+    if not _django_available():
+        import pytest
+        pytest.skip("the ROC endpoint needs Django (runs in the container)")
+    _, stream = _record("confounded")
+    with_ = _roc_with(stream)
+    without = _roc_with(None)
+    adj = with_["auc_current_removed"]
+    assert adj["available"] is True, adj["why"]
+    assert adj["label"] == "with the stimulation current taken out"
+    assert adj["auc_low"] < 0.5 < adj["auc_high"]
+    assert without["auc_current_removed"]["available"] is False
+    # descriptive only: the plain curve and the forward check are the same either way
+    assert with_["roc"] == without["roc"] and with_["forward"] == without["forward"]
+    assert set(with_) == set(without)
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):

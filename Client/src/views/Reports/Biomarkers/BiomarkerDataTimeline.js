@@ -29,6 +29,7 @@ import MDBox from "components/MDBox";
 
 import { routeLabel, modeledLegendName, kFromServed } from "./calibrationLabels";
 import { painScoreLabel } from "views/Reports/painScores";
+import { gutterGeometry, fitRowLabel, F_TICK } from "./timelineGutter";
 
 // Binarization color identity — MUST match the histogram / binarizationModel (Okabe-Ito).
 // excluded-middle is darkened to #5A6066 (was #7E8794) so "matched but dropped by the cut" is
@@ -385,32 +386,12 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     // resulting per-column right-edge xshifts (negative = left of the plot edge) and the exact
     // left margin are computed once and reused by every left annotation — so nothing can run into
     // anything, the gutter is as tight as the labels allow, and it adapts to any width/label set.
-    const LBL_GAP = 12;                          // uniform px gap between columns
-    const LEFT_CAP = 230;                        // max gutter before we shrink fonts
-    const textW = (s, fs, bold) => (bold ? 0.62 : 0.58) * fs * String(s).length;
+    // The column arithmetic lives in `timelineGutter.js` (pure, tested with RCS08's pairs and
+    // every pain-score label; 2026-09-26) -- the same numbers as before, now also used to fit the
+    // PAIN row's subtitle to the space it has.
     const prettyChans = channels.map((ch) => prettyContact(labelFor(ch)));
-    // tick numbers: widest LSB magnitude shown (committed lanes carry a 4-digit count, ~"1727")
-    const F_TICK = 14;
-    const W_tick = 4.2 * 0.58 * F_TICK;          // budget for a 4-char number
-    let F_CONTACT = 26, F_REGION = 18;           // start sizes (contact was 30 -> 26 baseline)
-    const layoutLeft = () => {
-      const W_contact = Math.max(40, ...prettyChans.map((s) => textW(s, F_CONTACT, true)));
-      const W_region = 2 * 1.25 * F_REGION;      // rotated 2-line block (name / region) height
-      const xTick = -LBL_GAP;
-      const xContact = -(LBL_GAP + W_tick + LBL_GAP);
-      const xRegionCenter = -(LBL_GAP + W_tick + LBL_GAP + W_contact + LBL_GAP + W_region / 2);
-      const marginL = LBL_GAP + W_tick + LBL_GAP + W_contact + LBL_GAP + W_region + LBL_GAP;
-      return { xTick, xContact, xRegionCenter, marginL, W_contact };
-    };
-    let L = layoutLeft();
-    // Auto-shrink (down to a readable floor) until the gutter fits LEFT_CAP.
-    while (L.marginL > LEFT_CAP && F_CONTACT > 16) {
-      F_CONTACT -= 1; F_REGION = Math.max(13, F_REGION - 0.6); L = layoutLeft();
-    }
-    const X_TICK = Math.round(L.xTick);
-    const X_CONTACT = Math.round(L.xContact);
-    const X_REGION = Math.round(L.xRegionCenter);
-    const MARGIN_L = Math.ceil(L.marginL);
+    const GUTTER = gutterGeometry(prettyChans);
+    const { X_TICK, X_CONTACT, X_REGION, MARGIN_L, F_CONTACT, F_REGION } = GUTTER;
 
     // (0) vertical time gridlines are drawn by the x-axis itself (showgrid below), NOT as fixed
     // shapes — so they auto-densify on zoom (month -> week -> day -> hour) and span the whole
@@ -893,9 +874,11 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       annotations.push({ xref: "paper", yref: Y, x: 0.5, y: (painBase + painTop) / 2,
         text: "no pain ratings", showarrow: false, font: { size: 11, color: SUB_INK } });
     }
+    // the score's display label from the one list of pain scores (decision 309), not its key,
+    // wrapped to the gutter's width (2026-09-26: "Composite (MPQ + Left Leg VAS)" ran off the figure)
+    const painSub = fitRowLabel(pain.metric ? painScoreLabel(pain.metric) : "", GUTTER, 14);
     annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: (painBase + painTop) / 2,
-      // the score's display label from the one list of pain scores (decision 309), not its key
-      text: `<b>PAIN</b><br><span style="font-size:14px;color:${SUB_INK}">${pain.metric ? painScoreLabel(pain.metric) : ""}</span>`,
+      text: `<b>PAIN</b><br><span style="font-size:${painSub.fontPx}px;color:${SUB_INK}">${painSub.lines.join("<br>")}</span>`,
       showarrow: false, xanchor: "right", font: { size: 26, color: PAL.pain } });
     // Binarization-mode pain-row subtitle: matched vs unmatched ratings (closed vs open circles).
     if (binMode) {

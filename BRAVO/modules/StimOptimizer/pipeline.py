@@ -124,8 +124,8 @@ class ArmResult:
             # ask opposite things of a reader: the first says collect more exposure at that cell,
             # the second says a posterior is degenerate and no amount of exposure helps until the
             # fit is repaired. Typically it means a stratum that never delivered the incumbent's
-            # rate, so there is no data anywhere near the cell being compared. The slice-level
-            # method `stage1_openloop.SliceResult.resolves_its_optimum` already returns
+            # rate, so there is no data anywhere near the cell being compared. The stratum-level
+            # method `stage1_openloop.JointStratum.resolves_its_optimum` already returns
             # `bool | None` for exactly this reason; this one now matches it.
             return None
         return _RES.is_resolved(gain, m.get("sd_star"), m.get("incumbent_sd"), k=k)

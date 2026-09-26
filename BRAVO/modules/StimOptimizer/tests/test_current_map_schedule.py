@@ -41,6 +41,48 @@ def test_the_anchor_is_included_and_its_key_is_reported():
 
 
 # ---------------------------------------------------------------------------------------------
+# the setting in force above today's ceiling: kept as history, never offered as a target
+# (2026-09-26). Before, `add` refused the pair silently and the schedule lost its anchor with
+# nothing on the page saying why.
+# ---------------------------------------------------------------------------------------------
+def test_an_in_force_setting_above_the_ceiling_is_kept_as_history_not_as_a_target():
+    dp = CMS.design_points(ceiling_left_mA=4.5, ceiling_right_mA=4.5,
+                           in_force_left_mA=4.8, in_force_right_mA=3.0)
+    inf = dp["in_force"]
+    assert inf["amp_left_mA"] == 4.8 and inf["amp_right_mA"] == 3.0
+    assert inf["above_ceiling"] is True
+    assert inf["sides_above_ceiling"] == ["Left"]
+    assert inf["offered_as_target"] is False
+    assert inf["label"] == "in force, above today's ceiling"
+    # never a target: not among the points, and no anchor for the order to repeat
+    assert (4.8, 3.0) not in {(p["amp_left_mA"], p["amp_right_mA"]) for p in dp["points"]}
+    assert dp["anchor_key"] is None
+
+
+def test_an_in_force_setting_under_the_ceiling_is_the_anchor_and_says_so():
+    dp = CMS.design_points(ceiling_left_mA=4.5, ceiling_right_mA=4.5,
+                           in_force_left_mA=3.0, in_force_right_mA=2.5)
+    inf = dp["in_force"]
+    assert inf["above_ceiling"] is False and inf["sides_above_ceiling"] == []
+    assert inf["offered_as_target"] is True
+    assert dp["anchor_key"] == (3.0, 2.5)
+
+
+def test_the_schedule_carries_the_in_force_point_above_the_ceiling_and_no_step_above_it():
+    block = CMS.build_schedule(
+        rate_hz=55.0, pw_us_left=100.0, pw_us_right=150.0,
+        ceiling_left_mA=4.5, ceiling_right_mA=4.5,
+        in_force_left_mA=3.0, in_force_right_mA=4.8,
+        existing_epochs_at_stratum=pd.DataFrame(columns=["amp_mA_Left", "amp_mA_Right", "n", "t0"]),
+        epochs_for_reporting_rate=pd.DataFrame(columns=["t0", "n"]))
+    inf = block["in_force"]
+    assert inf["sides_above_ceiling"] == ["Right"] and inf["offered_as_target"] is False
+    assert "history" in inf["why"]
+    assert all(st["amp_right_mA"] <= 4.5 + 1e-9 for st in block["steps"])
+    assert not any("setting in force" in st["why"] for st in block["steps"])
+
+
+# ---------------------------------------------------------------------------------------------
 # drop_already_covered
 # ---------------------------------------------------------------------------------------------
 def test_a_point_with_at_least_the_target_reports_already_is_dropped():

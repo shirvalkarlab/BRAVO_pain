@@ -175,11 +175,13 @@ describe("the Biomarkers page's legibility floor (decision 304)", () => {
   });
 
   test("the timeline's gutter geometry is untouched by this pass (bravo-timeline-layout)", () => {
-    const tl = read("BiomarkerDataTimeline.js");
+    // the column arithmetic moved into its own file on 2026-09-26 (timelineGutter.js), values unchanged
+    const tl = read("timelineGutter.js");
     expect(tl).toMatch(/const LBL_GAP = 12;/);
     expect(tl).toMatch(/const LEFT_CAP = 230;/);
     expect(tl).toMatch(/const F_TICK = 14;/);
-    expect(tl).toMatch(/let F_CONTACT = 26, F_REGION = 18;/);
+    expect(tl).toMatch(/\{ fContact = 26, fRegion = 18 \}/);
+    expect(read("BiomarkerDataTimeline.js")).toMatch(/gutterGeometry\(prettyChans\)/);
   });
 
   // ---- the frequency-coloured "X Hz" labels on the acquisition timeline (B5, 2026-09-26) --------

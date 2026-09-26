@@ -5501,16 +5501,13 @@ def _stability_batch_worker_serial(point, ctx):
 #: holding the raw stability result for every (sensing contact, band centre) point of the calibrated
 #: grid. A DERIVED kind — it must be written with `writer=` and `provenance=` or the self-derived
 #: refusal cannot fire (CLAUDE.md §10 rule 6).
-STABILITY_GRID_KIND = "biomarker_band_stability_grid"
+#: One home, `routines/sweep_settings.py` (Django-free, so the Closed-Loop reader imports the same
+#: object; 2026-09-26).
+STABILITY_GRID_KIND = sweep_settings.STABILITY_GRID_KIND
 
-#: Bump when anything about how a point's answer is computed changes, so an entry built under the
-#: old rule is never served as if it carried the new one.
-# v2 read decibels off the pooled detail (decision 204); v3 raw power; v4 (2026-09-24) the shared
-# setup honours the clinic-sheet switch, so a sheets-on grid's answers are rebuilt with the sheets;
-# v5 (2026-09-25, P-03) one pain report counted in one stimulation state and one week, and each
-# state's odds ratio carries its interval; v6 (2026-09-25 night) the per-state standard errors,
-# and so the "behaves the same" check, are clustered on the pain report.
-STABILITY_GRID_RULE_VERSION = "v6_se_clustered_on_report"
+#: The rule the answers are computed under; its history and when to bump it are in its one home,
+#: `routines/sweep_settings.py`.
+STABILITY_GRID_RULE_VERSION = sweep_settings.STABILITY_GRID_RULE_VERSION
 
 
 def _stability_grid_sig_tuple(sweep_key, *, band_width_hz, points):
@@ -6473,6 +6470,10 @@ def band_deployment_roc(request_data):
         core["pooled"], core["channel"], core["center_hz"],
         band_width_hz=core["band_width_hz"], strategy=core["label_strategy"],
         low_pct=core["low_pct"], high_pct=core["high_pct"], n_boot=n_boot)
+    # THE SAME AREA WITH THE STIMULATION CURRENT TAKEN OUT (2026-09-26), from the routine the
+    # deployment summary already prints it with (decision 293), on this endpoint's own samples,
+    # split and direction. Descriptive only: read by nothing on this response.
+    auc_current_removed = _summary_auc_current_removed(core, roc, n_boot)
 
     def _ff(x):
         try:
@@ -6497,6 +6498,7 @@ def band_deployment_roc(request_data):
         "refractory_min": _ff(core.get("refractory_min")),
         "roc": roc,
         "forward": forward,
+        "auc_current_removed": auc_current_removed,
     }
 
 

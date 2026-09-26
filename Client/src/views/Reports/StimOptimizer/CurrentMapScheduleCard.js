@@ -52,6 +52,10 @@ export function HomeScheduleSection({ schedule }) {
   const wtb = rt.what_this_buys || {};
   const hold = schedule.hold || {};
   const rpd = schedule.reports_per_day || {};
+  // The setting in force when it is above today's ceiling (2026-09-26): history, drawn and labelled,
+  // never a numbered step (the server keeps it out of `steps` and says so in `why`).
+  const inForce = schedule.in_force && schedule.in_force.above_ceiling === true ? schedule.in_force : null;
+  const HISTORY_INK = "#5E5E5E";
 
   return (
     <MDBox mt={2} pt={1.5} data-testid="home-schedule" sx={{ borderTop: `1px solid ${PAL.neutralBorder}` }}>
@@ -65,6 +69,15 @@ export function HomeScheduleSection({ schedule }) {
             color: wtb.resolution_coverage_would_pass ? "#1B7A3D" : PAL.warnText }}>{wtb.note}</span>
         ) : null}
       </MDTypography>
+      {inForce && (
+        <MDTypography variant="caption" component="div" data-testid="home-schedule-in-force"
+          sx={{ fontSize: TYPE.body, mt: 0.4, color: HISTORY_INK }}>
+          <span style={{ fontWeight: 700, color: PAL.warnText }}>
+            {`In force, above today's ceiling: ${fmtMa(inForce.amp_left_mA)} left / ${fmtMa(inForce.amp_right_mA)} right`}
+          </span>
+          {` -- ${inForce.why || "history, never offered as a step to hold"}.`}
+        </MDTypography>
+      )}
 
       <SizedFold show={`Show the schedule (${steps.length} steps) and why`} hide="Hide the schedule">
         <MDTypography variant="caption" component="div" color="text" sx={{ fontSize: TYPE.body }}>
@@ -98,6 +111,30 @@ export function HomeScheduleSection({ schedule }) {
               </TableRow>
             </TableHead>
             <TableBody>
+              {inForce && (
+                <TableRow data-testid="home-schedule-in-force-row">
+                  <TableCell sx={{ py: 0.5 }}>
+                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, fontFamily: PAL.mono, color: HISTORY_INK }}>—</MDTypography>
+                  </TableCell>
+                  <TableCell sx={{ py: 0.5 }}>
+                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, fontFamily: PAL.mono, whiteSpace: "nowrap", color: HISTORY_INK }}>{fmtMa(inForce.amp_left_mA)}</MDTypography>
+                  </TableCell>
+                  <TableCell sx={{ py: 0.5 }}>
+                    <MDTypography variant="caption" sx={{ fontSize: TYPE.body, fontFamily: PAL.mono, whiteSpace: "nowrap", color: HISTORY_INK }}>{fmtMa(inForce.amp_right_mA)}</MDTypography>
+                  </TableCell>
+                  <TableCell sx={{ py: 0.5 }} colSpan={2}>
+                    <MDTypography variant="caption" sx={{ fontSize: TYPE.small, color: HISTORY_INK }}>not a step</MDTypography>
+                  </TableCell>
+                  <TableCell sx={{ py: 0.5, maxWidth: 360 }}>
+                    <MDTypography variant="caption" sx={{ fontSize: TYPE.small, color: HISTORY_INK }}>
+                      {`${inForce.label || "in force, above today's ceiling"} -- history, never offered as a step to hold`}
+                    </MDTypography>
+                  </TableCell>
+                  <TableCell sx={{ py: 0.5 }}>
+                    <span style={{ color: PAL.warnText, fontWeight: 700 }}>above ceiling</span>
+                  </TableCell>
+                </TableRow>
+              )}
               {steps.map((st, i) => (
                 <TableRow key={i}>
                   <TableCell sx={{ py: 0.5 }}>

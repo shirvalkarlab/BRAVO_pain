@@ -215,29 +215,16 @@ def test_d2b_a_row_with_no_raw_result_at_all_is_left_alone_not_faked(sandbox):
 
 
 def test_the_stability_grid_kind_matches_the_name_biomarkers_actually_writes():
-    """`adapter.STABILITY_GRID_KIND` duplicates the kind name
-    `Biomarkers.bravo_service.STABILITY_GRID_KIND` writes, instead of importing it -- importing
-    `bravo_service` pulls in `Server.models`, which raises `AppRegistryNotReady` in this suite
-    because it does not configure Django, and reading one extra column must not decide whether
-    `band_sweep_grid_for_closed_loop` can run at all.
-
-    A duplicated constant drifts unless something checks it, so this is that check: it reads the
-    name out of the Biomarkers SOURCE rather than importing the module, so it needs no Django.
-    A rename on either side fails here.
-    """
-    import pathlib
-    import re
-
-    here = pathlib.Path(__file__).resolve()
-    bravo_service = here.parents[2] / "Biomarkers" / "bravo_service.py"
-    assert bravo_service.is_file(), f"expected Biomarkers/bravo_service.py beside this module: {bravo_service}"
-
-    found = re.search(r'^STABILITY_GRID_KIND\s*=\s*"([^"]+)"',
-                      bravo_service.read_text(), re.MULTILINE)
-    assert found, "bravo_service no longer defines STABILITY_GRID_KIND at module level"
-    assert found.group(1) == adapter.STABILITY_GRID_KIND, (
-        f"the writer's kind is {found.group(1)!r} but this module reads "
-        f"{adapter.STABILITY_GRID_KIND!r} -- the stored stability grid would never be found")
+    """The kind name the Biomarkers writer files the stability grid under is the one this reader
+    looks for. One home since 2026-09-26 (`Biomarkers/routines/sweep_settings.py`, Django-free);
+    `test_the_stability_rule_version_matches_the_one_biomarkers_writes` pins that both sides take it
+    from there. Kept as its own test so a rename of the kind itself is named when it fails."""
+    try:
+        from Biomarkers.routines import sweep_settings as ss
+    except ImportError:                                          # pragma: no cover
+        from modules.Biomarkers.routines import sweep_settings as ss
+    assert ss.STABILITY_GRID_KIND == "biomarker_band_stability_grid"
+    assert adapter.STABILITY_GRID_KIND is ss.STABILITY_GRID_KIND
 
 
 # --------------------------------------------------------------------------------------------
@@ -326,19 +313,32 @@ _OLD_RULE = "v4_sheet_ratings_in_setup"
 
 
 def test_the_stability_rule_version_matches_the_one_biomarkers_writes():
-    """`adapter.STABILITY_GRID_RULE_VERSION` duplicates `Biomarkers.bravo_service`'s, for the same
-    reason the kind name is duplicated (importing that module needs Django). Read out of the source,
-    so a bump on the Biomarkers side that is not made here fails in this suite rather than leaving
-    the card reading every answer as "not tested", or an older rule's answer as current."""
+    """ONE HOME since 2026-09-26: the rule version (and the kind name) live in the Biomarkers
+    module's Django-free settings file (`Biomarkers/routines/sweep_settings.py`), which the writer
+    (`bravo_service`) and this reader both import, so there is no second copy to drift. Pinned two
+    ways: this module's constant IS that one, and the writer's source takes it from there rather
+    than writing its own string (read out of the source, since importing `bravo_service` needs
+    Django)."""
     import pathlib
     import re
 
-    src = (pathlib.Path(__file__).resolve().parents[2] / "Biomarkers" / "bravo_service.py").read_text()
-    found = re.search(r'^STABILITY_GRID_RULE_VERSION\s*=\s*"([^"]+)"', src, re.MULTILINE)
-    assert found, "bravo_service no longer defines STABILITY_GRID_RULE_VERSION at module level"
-    assert found.group(1) == adapter.STABILITY_GRID_RULE_VERSION, (
-        f"the writer's rule is {found.group(1)!r} but this module expects "
-        f"{adapter.STABILITY_GRID_RULE_VERSION!r}")
+    try:
+        from Biomarkers.routines import sweep_settings as ss
+    except ImportError:                                          # pragma: no cover
+        from modules.Biomarkers.routines import sweep_settings as ss
+    assert adapter.STABILITY_GRID_RULE_VERSION == ss.STABILITY_GRID_RULE_VERSION
+    assert adapter.STABILITY_GRID_KIND == ss.STABILITY_GRID_KIND
+    here = pathlib.Path(__file__).resolve().parents[1]
+    own = (here / "adapter.py").read_text()
+    assert not re.search(r'^STABILITY_GRID_RULE_VERSION\s*=\s*"', own, re.MULTILINE), (
+        "adapter.py writes its own copy of the stability rule version again")
+    assert not re.search(r'^STABILITY_GRID_KIND\s*=\s*"', own, re.MULTILINE), (
+        "adapter.py writes its own copy of the stability grid kind again")
+    src = (here.parent / "Biomarkers" / "bravo_service.py").read_text()
+    assert re.search(r'^STABILITY_GRID_RULE_VERSION\s*=\s*sweep_settings\.STABILITY_GRID_RULE_VERSION',
+                     src, re.MULTILINE), "the writer no longer takes the rule version from its one home"
+    assert re.search(r'^STABILITY_GRID_KIND\s*=\s*sweep_settings\.STABILITY_GRID_KIND',
+                     src, re.MULTILINE), "the writer no longer takes the kind name from its one home"
 
 
 def test_an_answer_computed_under_an_older_stability_rule_reads_not_tested(sandbox):

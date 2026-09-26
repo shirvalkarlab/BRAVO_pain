@@ -615,24 +615,18 @@ def _shared_store(kind, signature, payload, *, participant_uid=None, provenance=
 #: candidate. `ClosedLoopDeployment/tests/test_track_d_grid_stability_translation.py` proves the
 #: two are identical.
 #: The kind name of the stored cross-setting-stability grid, written by
-#: `Biomarkers.bravo_service.compute_and_store_stability_grid`.
-#:
-#: DUPLICATED ON PURPOSE, AND PINNED BY A TEST. Importing the constant would mean importing
-#: `bravo_service`, which imports `Server.models` and therefore needs Django's app registry — it
-#: raises `AppRegistryNotReady` in the host suite, which does not configure Django. Reading one
-#: extra column must never decide whether this whole function can run.
-#: `tests/test_track_d_grid_stability_translation.py` asserts this string still equals
-#: `bravo_service.STABILITY_GRID_KIND`, so a rename on that side fails loudly here.
-STABILITY_GRID_KIND = "biomarker_band_stability_grid"
-
-#: The rule the stored stability answers are computed under, `Biomarkers.bravo_service`'s
-#: `STABILITY_GRID_RULE_VERSION`, duplicated for the same reason as the kind name and pinned by the
-#: same kind of source-reading test (`test_the_stability_rule_version_matches_the_one_biomarkers_
-#: writes`). The card reads an answer only when it was computed under this rule (2026-09-25): the
-#: Biomarkers page keys its answers on the rule, and this card, which matches on the grid alone,
+#: `Biomarkers.bravo_service.compute_and_store_stability_grid`, and the rule its answers are
+#: computed under. The card reads an answer only when it was computed under this rule (2026-09-25):
+#: the Biomarkers page keys its answers on the rule, and this card, which matches on the grid alone,
 #: went on printing the previous rule's answers after P-03 moved it.
-#: v6 (2026-09-25 night): the per-state standard errors are clustered on the pain report.
-STABILITY_GRID_RULE_VERSION = "v6_se_clustered_on_report"
+#:
+#: ONE HOME (2026-09-26): both come from `Biomarkers/routines/sweep_settings.py`, the Django-free
+#: file `bravo_service` itself takes them from (importing `bravo_service` here would need Django's
+#: app registry, which the host suite does not configure). Until then this module carried pinned
+#: copies; `tests/test_track_d_grid_stability_translation.py` now pins that neither side writes its
+#: own string again.
+STABILITY_GRID_KIND = _sweep_settings.STABILITY_GRID_KIND
+STABILITY_GRID_RULE_VERSION = _sweep_settings.STABILITY_GRID_RULE_VERSION
 
 
 #: The request keys that decide WHICH stored grid the Biomarkers page shows: the pain score and
@@ -789,10 +783,8 @@ def band_sweep_grid_for_closed_loop(participant_uid, request_data=None, *, consu
     # `AppRegistryNotReady` in the host test suite, which does not configure Django. An enhancement
     # to one column must not decide whether this function works at all.
     #
-    # The kind name is duplicated here rather than imported for the same reason.
-    # `test_track_d_grid_stability_translation.py` asserts it still equals
-    # `bravo_service.STABILITY_GRID_KIND`, so the two are pinned by a test instead of by an import
-    # this module cannot afford to make.
+    # The kind name comes from its Django-free home, `Biomarkers/routines/sweep_settings.py`, the
+    # same object `bravo_service` writes under (2026-09-26).
     #
     # THE ANSWER FOR THIS GRID, NOT THE NEWEST ONE (2026-09-23). The stability answer depends on the
     # pain score the grid was built for (on RCS08, 3,123 of 5,148 stored values differ between the

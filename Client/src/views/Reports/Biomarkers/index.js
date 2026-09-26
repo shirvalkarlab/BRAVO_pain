@@ -1000,10 +1000,13 @@ function Biomarkers() {
               </MDBox>
             </Grid>
             {/* Control analyses: saved, dated checks run offline (the PI, 2026-09-24); they feed
-                nothing on this page. */}
+                nothing on this page. Folded by default, as on the Stim Optimizer page (2026-09-26);
+                still mounted, so it loads. */}
             <Grid item xs={12}>
               <MDBox px={2} pb={2}>
-                <ControlAnalysesSection participantUid={participant_uid} page="biomarkers" clinicSheets={includeClinicSheetRatings} />
+                <Fold show="Research checks, saved offline (control analyses)" hide="Hide the research checks">
+                  <ControlAnalysesSection participantUid={participant_uid} page="biomarkers" clinicSheets={includeClinicSheetRatings} />
+                </Fold>
               </MDBox>
             </Grid>
           </Grid>

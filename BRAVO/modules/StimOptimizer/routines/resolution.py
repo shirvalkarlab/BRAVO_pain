@@ -8,7 +8,8 @@ when ``gain > k * sd_diff``.
 WHY IT LIVES IN A LEAF MODULE. As of 2026-09-04 this arithmetic appeared in four places and one of
 them was wrong in a way that mattered:
 
-  * ``stage1_openloop.SliceResult.sd_of_difference`` — correct.
+  * ``stage1_openloop.JointStratum.sd_of_difference`` — correct (the per-slice result was named
+    ``SliceResult`` before the search went joint; since 2026-09-25 it delegates here).
   * ``pipeline.ArmResult.surface_can_resolve_its_optimum`` — correct since 2026-08-30.
   * ``bravo_service._arm_comparison`` — correct, and serialised for the interface.
   * ``routines.plots._incumbent_verdict`` — WRONG. It compared the gain against

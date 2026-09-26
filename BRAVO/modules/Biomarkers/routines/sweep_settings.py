@@ -19,6 +19,21 @@ the report table and does not change which KEY the grid is stored under).
 """
 from __future__ import annotations
 
+# THE STORED CROSS-SETTING-STABILITY GRID: its kind name and the rule its answers are computed
+# under. ONE HOME since 2026-09-26: `bravo_service` (the writer) and the Closed-Loop page's reader
+# (`ClosedLoopDeployment/adapter.py`) both import these, and the reader cannot import
+# `bravo_service` (it needs Django), so they live here. Before, the reader carried pinned copies.
+STABILITY_GRID_KIND = "biomarker_band_stability_grid"
+
+# Bump when anything about how a point's answer is computed changes, so an entry built under the
+# old rule is never served as if it carried the new one.
+# v2 read decibels off the pooled detail (decision 204); v3 raw power; v4 (2026-09-24) the shared
+# setup honours the clinic-sheet switch, so a sheets-on grid's answers are rebuilt with the sheets;
+# v5 (2026-09-25, P-03) one pain report counted in one stimulation state and one week, and each
+# state's odds ratio carries its interval; v6 (2026-09-25 night) the per-state standard errors,
+# and so the "behaves the same" check, are clustered on the pain report.
+STABILITY_GRID_RULE_VERSION = "v6_se_clustered_on_report"
+
 # Pain-score choices the page offers. `key` must be a column in the tidy report table (the
 # composite is synthesised at analysis time from its two parts).
 BIOMARKER_METRICS = [

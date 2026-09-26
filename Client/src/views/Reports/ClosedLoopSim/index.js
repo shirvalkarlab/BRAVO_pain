@@ -57,6 +57,7 @@ import DatabaseLayout from "layouts/DatabaseLayout";
 
 import RecomputeBar from "views/Reports/RecomputeBar";
 import CacheStatusLine from "views/Reports/CacheStatusLine";
+import Fold from "./Fold";
 import { recomputeClosedLoop } from "views/Reports/moduleCacheKeys";
 
 import {
@@ -475,7 +476,15 @@ function ClosedLoopSim() {
                   notKept={deploymentReport.notKept || summary.notKept}
                   onRecompute={onRecomputePage}
                 />
-                <CacheStatusLine status={deploymentReport.data ? deploymentReport.data.cache_status : null} />
+                {/* The stored-results line is for a developer: closed by default, as on the other
+                    two pages (2026-09-26). The line itself is unchanged and shared. */}
+                {deploymentReport.data && deploymentReport.data.cache_status ? (
+                  <MDBox px={1} data-testid="stored-results-fold">
+                    <Fold show="Stored results" hide="Hide stored results" dense mt={0.2}>
+                      <CacheStatusLine status={deploymentReport.data.cache_status} />
+                    </Fold>
+                  </MDBox>
+                ) : null}
               </Grid>
               <Grid item xs={12} id="cl-decision">
                 <DecisionCard participantUid={participant_uid} bandCandidate={bc} summary={summaryForBand}

@@ -24,6 +24,7 @@ import { useCachedResult } from "database/useCachedResult";
 import { CL, recomputeSlots } from "views/Reports/moduleCacheKeys";
 import PanelStaleNote from "./PanelStaleNote";
 import PAL from "./palette";
+import RocCurrentRemovedLine from "./RocCurrentRemovedLine";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 
@@ -448,6 +449,8 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
         {/* Always-mounted figure container. Hidden (not unmounted) when there's no ROC yet, so the
             Plotly graph object survives loading/refit cycles instead of being torn down. */}
         <div ref={ref} style={{ width: "100%", display: roc ? "block" : "none" }} />
+        {/* The same area with the stimulation current taken out (2026-09-26), descriptive only. */}
+        <RocCurrentRemovedLine plainAuc={roc ? roc.auc : null} adjusted={envOk ? env.auc_current_removed : null} />
 
         {/* Feature-distribution histogram beneath the ROC (pain-high vs pain-low), with the cut-point
             threshold line drawn on top. Also always-mounted so it survives refits. Only shown when

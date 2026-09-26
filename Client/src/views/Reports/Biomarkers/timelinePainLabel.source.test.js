@@ -15,7 +15,9 @@ const code = fs.readFileSync(path.join(__dirname, "BiomarkerDataTimeline.js"), "
 describe("the timeline's pain row names its score", () => {
   test("the label and both hovers print painScoreLabel(pain.metric), never the bare key", () => {
     expect(code).toMatch(/import \{ painScoreLabel \} from "views\/Reports\/painScores"/);
-    expect(code).toMatch(/<b>PAIN<\/b><br><span[^`]*\$\{pain\.metric \? painScoreLabel\(pain\.metric\) : ""\}/);
+    // wrapped to the gutter's width since 2026-09-26 (timelineGutter.test.js)
+    expect(code).toMatch(/fitRowLabel\(pain\.metric \? painScoreLabel\(pain\.metric\) : "", GUTTER, 14\)/);
+    expect(code).toMatch(/<b>PAIN<\/b><br><span[^`]*\$\{painSub\.lines\.join\("<br>"\)\}/);
     expect(code).not.toMatch(/\$\{pain\.metric \|\| ""\}/);
     expect(code).not.toMatch(/\$\{pain\.metric \|\| "pain"\}/);
     expect((code.match(/painScoreLabel\(pain\.metric\)/g) || []).length).toBe(3);
