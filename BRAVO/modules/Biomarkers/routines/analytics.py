@@ -4200,6 +4200,22 @@ def band_pain_auc_from_table(table, *, channel, center_hz, pain_column="nrs",
     return out
 
 
+#: Plain words, and the unit, for the columns the adjusted estimator is handed (decision 313). Its
+#: refusals are printed on the pages as sentences; "current_mA is constant at 3" put a column name
+#: in front of a clinician. The column itself stays on the answer as `adjusted_for`.
+_COVARIATE_WORDS = {
+    "current_mA": ("the stimulation current", "mA"),
+    "amp_mA_Left": ("the left stimulation current", "mA"),
+    "amp_mA_Right": ("the right stimulation current", "mA"),
+}
+
+
+def _covariate_words(column):
+    """``(words, unit)`` for a covariate column: its plain name and unit where known, otherwise
+    "the quantity taken out (<column>)" and no unit."""
+    return _COVARIATE_WORDS.get(str(column), (f"the quantity taken out ({column})", ""))
+
+
 def _blank_covariate_answer(column, why, **extra):
     """The adjusted answer for a case where the adjustment could not honestly be made.
 
@@ -4234,11 +4250,13 @@ def _band_pain_auc_with_covariate_removed(d, *, covariate_column, shape, pain_co
     therefore share its score exactly; resampling samples would count one day of pain many times.
     """
     from .stats_utils import CovariateShape, NEARLY_THE_COVARIATE_R2, _residualize, partial_corr
+    cov_words, cov_unit = _covariate_words(covariate_column)
     if d is None or covariate_column not in getattr(d, "columns", []):
         return _blank_covariate_answer(
             covariate_column,
-            f"the table has no {covariate_column} column, so there is nothing to take out. This "
-            "says the value was not available, not that the band survives the adjustment")
+            f"the table carries no value for {cov_words} ({covariate_column}), so there is nothing "
+            "to take out. This says the value was not available, not that the band survives the "
+            "adjustment")
     dd = d.dropna(subset=[power_column, pain_column, group_column, covariate_column])
     x = dd[power_column].to_numpy(float)
     cov = dd[covariate_column].to_numpy(float)
@@ -4249,19 +4267,19 @@ def _band_pain_auc_with_covariate_removed(d, *, covariate_column, shape, pain_co
         return _blank_covariate_answer(
             covariate_column,
             f"only {x.size} samples over {n_rep} pain reports carry the band power, the pain score "
-            f"and {covariate_column} together, which is too few to adjust anything",
+            f"and {cov_words} together, which is too few to adjust anything",
             n_spectral_samples=int(x.size), n_pain_reports=n_rep)
     if np.std(cov) == 0:
         return _blank_covariate_answer(
             covariate_column,
-            f"{covariate_column} is constant at {float(cov[0]):g} across every one of these "
-            f"{x.size} samples, so there is nothing to take out",
+            f"{cov_words} is constant at {float(cov[0]):g}{' ' + cov_unit if cov_unit else ''} "
+            f"across every one of these {x.size} samples, so there is nothing to take out",
             n_spectral_samples=int(x.size), n_pain_reports=n_rep)
     r_xc = float(np.corrcoef(x, cov)[0, 1]) if np.std(x) > 0 else np.nan
     if np.isfinite(r_xc) and r_xc ** 2 >= NEARLY_THE_COVARIATE_R2:
         return _blank_covariate_answer(
             covariate_column,
-            f"this band's power moves almost exactly with {covariate_column} on these samples "
+            f"this band's power moves almost exactly with {cov_words} on these samples "
             f"(correlation {r_xc:+.3f}, {100 * r_xc ** 2:.0f}% of its movement), so taking it out "
             f"leaves too little to tell anything apart. Read that as the finding: the band IS the "
             f"current here",
@@ -4275,7 +4293,7 @@ def _band_pain_auc_with_covariate_removed(d, *, covariate_column, shape, pain_co
         if not sh.usable:
             return _blank_covariate_answer(
                 covariate_column,
-                f"the covariate could not be given the shape asked for ({shape}): "
+                f"{cov_words} could not be given the shape asked for ({shape}): "
                 f"{sh.reason or sh.why}",
                 n_spectral_samples=int(x.size), n_pain_reports=n_rep,
                 r_power_vs_covariate=r_xc, shape=shape)
@@ -4284,7 +4302,7 @@ def _band_pain_auc_with_covariate_removed(d, *, covariate_column, shape, pain_co
     if np.std(resid) <= 1e-10 * (np.std(x) + 1e-300):
         return _blank_covariate_answer(
             covariate_column,
-            f"nothing is left of this band's power once {covariate_column} is removed from it",
+            f"nothing is left of this band's power once {cov_words} is removed from it",
             n_spectral_samples=int(x.size), n_pain_reports=n_rep,
             r_power_vs_covariate=r_xc, shape=shape)
     times = (dd[time_column].to_numpy() if (time_column and time_column in dd.columns) else None)

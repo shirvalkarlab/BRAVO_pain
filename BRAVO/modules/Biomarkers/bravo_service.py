@@ -407,7 +407,7 @@ def _trim_chronic_before(loaded, start_s):
         t = np.asarray(d["Time"], dtype=float)
         keep = _data_start.keep_from(t, start_s)
         if keep.all():
-            out.append(d)
+            out.append(_date_from_start(d, start_s))
             continue
         if not keep.any():
             continue
@@ -416,8 +416,23 @@ def _trim_chronic_before(loaded, start_s):
             if isinstance(v, (list, np.ndarray)) and len(v) == n and k != "ChannelNames":
                 arr = np.asarray(v)
                 d[k] = arr[keep] if isinstance(v, np.ndarray) else list(arr[keep])
-        out.append(d)
+        out.append(_date_from_start(d, start_s))
     return out
+
+
+def _date_from_start(d, start_s):
+    """A chronic file that began before the implant date, dated from it (decision 313). The file's
+    own `StartTime` and `Duration` describe it untrimmed (RCS08: 2025-06-18, 29.7 days), and the
+    acquisition timeline dates a chronic record by them, so it drew the two spanning files from June
+    and opened its subtitle there. It is dated from the implant date, as the recordings list dates
+    it (`data_start.listed_date`, decision 263); its end does not move. Idempotent."""
+    st = availability._to_epoch(d.get("StartTime"))
+    if st is not None and st < float(start_s):
+        dur = d.get("Duration")
+        if dur is not None:
+            d["Duration"] = max(0.0, st + float(dur) - float(start_s))
+        d["StartTime"] = float(start_s)
+    return d
 
 
 def _load_recordings(participant_uid, types):
@@ -4181,7 +4196,8 @@ def _rating_centred_scan_index(participant_uid, td_all, psd_all, pain, sensing_i
 #: The acquisition timeline's store kind and rule version (decision 216). A raw kind: a
 #: deterministic decode of the recordings with no other module's choices in it.
 _ACQ_TIMELINE_KIND = "acquisition_timeline"
-_ACQ_TIMELINE_RULE_VERSION = "v1_acquisition_only_no_report"
+# v2 (decision 313): a chronic file spanning the implant date is dated from it, not from 2025-06-18.
+_ACQ_TIMELINE_RULE_VERSION = "v2_spanning_chronic_dated_from_implant"
 
 
 def _acquisition_timeline_key(recording_set):

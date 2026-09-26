@@ -56,3 +56,25 @@ def test_the_current_reader_starts_at_implant_with_the_setting_then_in_force():
     assert SC.current_in_force_at([IMPLANT + DAY], out, hemisphere="Left").tolist() == [2.9]
     assert SC.current_in_force_at([IMPLANT - DAY], out, hemisphere="Left")[0] != SC.current_in_force_at(
         [IMPLANT - DAY], out, hemisphere="Left")[0]          # NaN: before implant is unknown
+
+
+def test_a_chronic_file_spanning_the_implant_is_dated_from_the_implant_not_its_own_start():
+    """Decision 313. The trim cut the samples but left the file's own start and length, so the
+    acquisition timeline (which dates a chronic record by `StartTime` and `Duration`) drew RCS08's
+    two spanning chronic files from 2025-06-18 and opened its subtitle there. A spanning file is
+    dated from the implant date, as the recordings list does (decision 263); its end is unchanged."""
+    start = IMPLANT - 28 * DAY
+    t = IMPLANT + DAY * np.array([-28.0, -1.0, 0.5, 3.0])
+    spanning = {"RecordingType": "MedtronicChronicBrainSense", "Time": t.copy(),
+                "Data": np.arange(8.0).reshape(4, 2), "ChannelNames": ["L", "R"],
+                "StartTime": start, "Duration": 3.0 * DAY + 28 * DAY}
+    after = {"RecordingType": "MedtronicChronicBrainSense", "Time": t[2:].copy(),
+             "Data": np.zeros((2, 2)), "ChannelNames": ["L", "R"],
+             "StartTime": IMPLANT + 0.5 * DAY, "Duration": 2.5 * DAY}
+    out = BS._trim_chronic_before([spanning, after], IMPLANT)
+    assert out[0]["StartTime"] == IMPLANT
+    assert out[0]["StartTime"] + out[0]["Duration"] == start + 31.0 * DAY   # the end is where it was
+    assert out[1]["StartTime"] == IMPLANT + 0.5 * DAY and out[1]["Duration"] == 2.5 * DAY
+    from modules.Biomarkers.routines import availability as AV
+    recs = AV.extract_availability({"MedtronicChronicBrainSense": out})
+    assert recs and min(r["t_start"] for r in recs) >= IMPLANT
