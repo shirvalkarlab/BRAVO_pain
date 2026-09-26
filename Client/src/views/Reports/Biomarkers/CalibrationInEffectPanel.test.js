@@ -64,7 +64,7 @@ describe("the calibration-in-effect panel, on the served RCS08 payload", () => {
     expect(text).toMatch(/r = 0\.99/);
     // ruling C1 (the PI, 2026-09-21): the constant's uncertainty in raw units, from the payload
     expect(text).toMatch(/95% interval 339\.4–350\.7/);
-    expect(text).toMatch(/the typical spread of the ratio \(1 MAD of the ratio\) is 18\.6 LSB per µV² \(5% of the constant\)/);
+    expect(text).toMatch(/the typical spread of the ratio is 18\.6 LSB per µV² \(5% of the constant\)/);
     expect(text).toMatch(/does not change with the power level over the 133 kept blocks/);
     expect(text).toMatch(/Spearman's rho -0\.02, p = 0\.78/);
     expect(text).toMatch(/at least 3 s of signal and 6 device readings/);
@@ -95,7 +95,7 @@ describe("the calibration-in-effect panel, on the served RCS08 payload", () => {
     // figure 1: the 170 blocks, kept blocks separated from gated and flagged ones, and the line
     const [, blockTraces] = Plotly.react.mock.calls[0];
     // the 1-MAD band either side of the line in effect (ruling C1, 2026-09-21)
-    const band = blockTraces.filter((t) => /1 MAD/.test(t.name || ""));
+    const band = blockTraces.filter((t) => /typical spread of the ratio/.test(t.name || ""));
     expect(band.length).toBe(2);
     band.forEach((t) => { expect(t.mode).toBe("lines"); expect(t.line.dash).toBe("dot"); });
     const nPoints = blockTraces.filter((t) => t.mode === "markers")

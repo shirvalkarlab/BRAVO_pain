@@ -65,7 +65,7 @@ describe("CurrentMapCard: pooling across pulse widths behind a toggle", () => {
     rtlRender(wrap(<CurrentMapCard plan={planWithPooling()} />));
     fireEvent.click(screen.getByRole("button", { name: /Pool pulse widths/ }));
     const t = document.body.textContent;
-    expect(t).toContain("pooled over 3 pulse-width pairings, read at left 60\u202f\u00b5s / right 160\u202f\u00b5s");
+    expect(t).toContain("pooled over 3 combinations of left and right pulse widths, read at left 60\u202f\u00b5s / right 160\u202f\u00b5s");
     // PIN CHANGED 2026-09-26 (the design review, the PI's "yes to all six"): "stretches", never "epochs"
     expect(t).toContain("60/160\u202f\u00b5s (17 stretches), 100/100\u202f\u00b5s (12 stretches), 140/180\u202f\u00b5s (12 stretches)");
     expect(t).toContain("41 stretches · 250 reports");   // PIN CHANGED 2026-09-26: "stretches", never "epochs"

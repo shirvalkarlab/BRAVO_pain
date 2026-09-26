@@ -67,7 +67,7 @@ describe("the band detector on the control-analysis card", () => {
     render(<ControlAnalysesCard payload={PAYLOAD} clinicSheets={false} />);
     expect(screen.getByText(/REDCAP-ONLY LINE/)).toBeTruthy();
     expect(screen.queryByText(/SHEETS-MERGED LINE/)).toBeNull();
-    expect(screen.getByText(/REDCap ratings only/)).toBeTruthy();
+    expect(screen.getByText(/the home pain surveys alone;/)).toBeTruthy();
     expect(screen.getByTestId("figure-band_detector_research").textContent).toMatch(/R 0-3/);
   });
 

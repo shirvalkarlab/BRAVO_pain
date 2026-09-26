@@ -231,7 +231,7 @@ export function clinicSheetBullets(sw) {
   const cs = sw && sw.clinic_sheet_ratings;
   if (!cs) return [];
   if (!cs.included) {
-    return ["The heat maps use the chronic REDCap ratings only; the clinic titration sessions' scores are off (a switch on the matching card)."];
+    return ["The heat maps use the home pain surveys only; the clinic titration sessions' scores are off (a switch on the matching card)."];
   }
   if (!cs.n_added) {
     return [cs.reason ? `Sheet scores on, but ${cs.reason}.` : "Sheet scores on, but none carried this score."];

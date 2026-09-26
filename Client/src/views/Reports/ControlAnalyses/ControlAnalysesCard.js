@@ -42,7 +42,7 @@ function linesFor(snap, clinicSheets) {
     lines: bySwitch[pos] || [],
     note: clinicSheets
       ? "Showing the run with the clinic-sheet ratings merged in, because this page's clinic-sheet switch is on."
-      : "Showing the run on the home pain surveys alone (REDCap ratings only); the clinic-sheet ratings enter only when this page's clinic-sheet switch is on.",
+      : "Showing the run on the home pain surveys alone; the clinic-sheet ratings enter only when this page's clinic-sheet switch is on.",
   };
 }
 

@@ -59,7 +59,7 @@ export const TWO_STAGE_CARD_TITLE = "Can closed loop start on the rate and pulse
 //: the other two hold 55 Hz alone; in the clinic stream's 60/60 us fit the three stretches share
 //: one rate between them. So the table says the currents are not checked, and why, and no dagger.
 export const ACROSS_RATES_NOT_CHECKED =
-  "The best currents in this table are read from one fit per pulse-width pairing pooled across every "
+  "The best currents in this table are read from one fit per combination of left and right pulse widths, pooled across every "
   + "stimulation rate, for reference, and are not checked for movement between blocks of time. That "
   + "check holds one stretch of time out and predicts it from the rest; because rates are tried in "
   + "different periods, a stretch held out of this fit is also a set of rates held out, and a miss "

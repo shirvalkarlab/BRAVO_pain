@@ -119,7 +119,7 @@ function CalibrationInEffectPanel({ participantUid }) {
     if (tr.scatter_mad != null) {
       [[deployed.k - tr.scatter_mad, "−"], [deployed.k + tr.scatter_mad, "+"]].forEach(([kk, sign]) => {
         traces.push({ x: [0, xmax], y: [0, kk * xmax], type: "scatter", mode: "lines",
-          name: `${sign}typical spread of the ratio, 1 MAD (${fmt(kk, 1)})`, showlegend: sign === "+",
+          name: `${sign}typical spread of the ratio (${fmt(kk, 1)})`, showlegend: sign === "+",
           line: { color: T.ink3, width: 1, dash: "dot" }, hoverinfo: "name" });
         if (sign === "+") annotations.push(directLabel(xmax, kk * xmax, "typical spread", T.ink3));
       });
@@ -228,7 +228,7 @@ function CalibrationInEffectPanel({ participantUid }) {
                 {tr.k_interval ? (
                   <MDTypography variant="caption" sx={LINE}>
                     {`95% interval ${fmt(tr.k_interval[0], 1)}–${fmt(tr.k_interval[1], 1)} (${tr.k_interval_method}); `
-                      + `the typical spread of the ratio (1 MAD of the ratio) is ${fmt(tr.scatter_mad, 1)} LSB per µV² (${fmt(100 * tr.scatter_mad_frac, 0)}% of the constant), `
+                      + `the typical spread of the ratio is ${fmt(tr.scatter_mad, 1)} LSB per µV² (${fmt(100 * tr.scatter_mad_frac, 0)}% of the constant), `
                       + "the dotted lines below. "
                       + (tr.proportionality ? tr.proportionality.sentence : "")}
                   </MDTypography>

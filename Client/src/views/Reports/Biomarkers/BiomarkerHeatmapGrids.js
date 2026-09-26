@@ -139,13 +139,11 @@ export const L13_SEARCH_LEAD = "In short: across 252 ways of pairing reports wit
   + "rose with Left Leg VAS pain clearly enough to survive the allowance for testing 22 bands at once.";
 export const L13_SEARCH_LINES = [
   "Exploratory search, 2026-09-21, counts re-run 2026-09-26, L 1\u207b3\u207a on Left Leg VAS: 252 settings \u2014 windows 2, 5, 10, 20, 30, 60, "
-    + "120 min; Report-first, Neural-first and Neural-first pre-report (which end of the pair is chosen first, and "
-    + "whether only recording BEFORE the report may answer it); cap 1, 3, 10 per rating (how many stretches of "
+    + "120 min; three ways of pairing (each report picks its nearest recordings; each recording picks its nearest "
+    + "report; each recording picks the next report after it); cap 1, 3, 10 per rating (how many stretches of "
     + "recording one report may claim); reuse on/off (whether one stretch of recording may answer more than one "
-    + "report); clinic sheets on/off. (On the page today Report-first reads \u201ceach report picks its nearest "
-    + "recordings\u201d, Neural-first \u201ceach recording picks its nearest report\u201d and pre-report \u201ceach "
-    + "recording picks the next report after it\u201d.)",
-  "No band on L 1\u207b3\u207a rises with pain past the correction under any of them: 0 positive rows with q < 0.05 "
+    + "report); clinic sheets on/off.",
+  "No band on L 1\u207b3\u207a rises with pain past the allowance for testing 22 bands at once under any of them: 0 positive rows with q < 0.05 "
     + "out of 5,544. Here q is the p-value after correcting for having looked at all 22 bands; a cell with q above "
     + "0.05 has not cleared that correction, whatever its own numbers say.",
   // THE WHOLE SEARCH'S ANSWER (panel A item 2, 2026-09-22): the measured proxy, published once,
@@ -158,10 +156,10 @@ export const L13_SEARCH_LINES = [
     + "under p 0.05 against the 5% chance alone gives; with them on, 23% do, every one on the negative side. The "
     + "search finds fewer positive cells than chance would. This is a count, not a calibrated p-value for the "
     + "search as a whole.",
-  "Sheets off (REDCap only): no cell reaches the grid\u2019s \u201cestablished\u201d verdict. The nearest is 24.5 Hz "
-    + "at 60 s, 120-min window, Neural-first pre-report: r 0.32 (0.16 to 0.46), n 61, q 0.25. \u201cEstablished\u201d is "
+  "Sheets off (home pain surveys only): no cell reaches the grid\u2019s \u201cestablished\u201d verdict. The nearest is 24.5 Hz "
+    + "at 60 s, 120-min window, each recording picking the next report after it: r 0.32 (0.16 to 0.46), n 61, q 0.25. \u201cEstablished\u201d is "
     + "that cell\u2019s own test (its interval clears zero and it beats the shuffled best of nine lengths); this cell "
-    + "passes only the first half, and q 0.25 means it does not clear the 22-band correction either. "
+    + "passes only the first half, and q 0.25 means it does not clear the allowance for testing 22 bands at once either. "
     + "21.5\u201325.5 Hz (mostly 23.5) come out \u201csupported\u201d in 0\u20138 settings per window, the same count "
     + "the negative side reaches by chance.",
   "Sheets on (+ clinic titration scores): the positive cluster vanishes and 10\u201322 of 22 bands per setting fall "
@@ -238,7 +236,7 @@ export function gridStatusLine(result, metricLabel) {
   const where = pairs.length ? `, on ${pairs.join(", ")}` : "";
   const band = (n) => (n === 1 ? "band" : "bands");
   const verb = (n, one, many) => (n === 1 ? one : many);
-  return `${head ? `${head}: ` : ""}past the 22-band correction, ${rise} ${band(rise)} `
+  return `${head ? `${head}: ` : ""}after allowing for the 22 bands tested, ${rise} ${band(rise)} `
     + `${verb(rise, "rises", "rise")} with pain and ${fall} ${verb(fall, "falls", "fall")} with it${where}.`;
 }
 

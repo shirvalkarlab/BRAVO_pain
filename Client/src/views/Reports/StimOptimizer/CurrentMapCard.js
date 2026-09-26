@@ -372,7 +372,7 @@ function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, i
     const unfitted = g.rows.filter((r) => !r.fitted);
     const fitted = g.rows.filter((r) => r.fitted);
     const head = g.pooled
-      ? `pooled over ${g.n_pairings} pulse-width pairing${g.n_pairings === 1 ? "" : "s"}, read at left ${fmtUs(g.pw_us_left)} / right ${fmtUs(g.pw_us_right)}`
+      ? `pooled over ${g.n_pairings} ${g.n_pairings === 1 ? "combination" : "combinations"} of left and right pulse widths, read at left ${fmtUs(g.pw_us_left)} / right ${fmtUs(g.pw_us_right)}`
       : `left pulse width ${fmtUs(g.pw_us_left)} · right pulse width ${fmtUs(g.pw_us_right)}`;
     // A pairing with nothing fitted is one line, heading and all.
     if (!fitted.length && !g.pooled) {

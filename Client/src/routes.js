@@ -394,7 +394,7 @@ const routes = {
       },
       {
         key: "AnalysisBuilder",
-        name: "Analysis Builder",
+        name: "Choosing stimulation settings",
         icon: <MdBuildCircle />,
         route: "/analysis-builder/:participant_uid",
         component: <CustomizedAnalysis />,

@@ -665,7 +665,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
             const c = snapFreq(s.center_hz);
             if (c !== lastCen && c != null && (s.t0 - lastLbl) >= MIN_LBL_GAP) {
               annotations.push({ xref: X, yref: Y, x: D(s.t0), y: BP_HI, text: freqLabel(c),
-                showarrow: false, yshift: 8, font: { size: 11, color: freqTextColor(c) } });
+                showarrow: false, yshift: 8, font: { size: 12, color: freqTextColor(c) } });
               lastLbl = s.t0;
             }
             if (c != null) lastCen = c;
@@ -687,7 +687,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       } else {
         annotations.push({ xref: "paper", yref: Y, x: 0.5, y: yb + 0.5 * lh,
           text: "no band power configured · n.d.", showarrow: false,
-          font: { size: 11, color: SUB_INK } });
+          font: { size: 12, color: SUB_INK } });
       }
 
       // (c) Top-of-lane ticks: one per montage/survey recording (TD: the page reads each through its
@@ -778,7 +778,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       });
     } else {
       annotations.push({ xref: "paper", yref: Y, x: 0.5, y: eventY,
-        text: "no patient events", showarrow: false, font: { size: 11, color: SUB_INK } });
+        text: "no patient events", showarrow: false, font: { size: 12, color: SUB_INK } });
     }
     annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: eventY,
       text: `<b>EVENTS</b>${evList.length ? `<br><span style="font-size:13px;color:${SUB_INK}">${eventsRowSubtitle(evList.length)}</span>` : ""}`,
@@ -873,7 +873,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       }
     } else {
       annotations.push({ xref: "paper", yref: Y, x: 0.5, y: (painBase + painTop) / 2,
-        text: "no pain ratings", showarrow: false, font: { size: 11, color: SUB_INK } });
+        text: "no pain ratings", showarrow: false, font: { size: 12, color: SUB_INK } });
     }
     // the score's display label from the one list of pain scores (decision 309), not its key,
     // wrapped to the gutter's width (2026-09-26: "Composite (MPQ + Left Leg VAS)" ran off the figure)
@@ -908,7 +908,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         showlegend: false });
     } else {
       annotations.push({ xref: "paper", yref: Y, x: 0.5, y: (stimBase + stimTop) / 2,
-        text: "no stim data", showarrow: false, font: { size: 11, color: SUB_INK } });
+        text: "no stim data", showarrow: false, font: { size: 12, color: SUB_INK } });
     }
     annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: (stimBase + stimTop) / 2,
       text: "<b>STIM</b>", showarrow: false, xanchor: "right",
@@ -1062,7 +1062,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       // legend grows leftward and can never overlap the LEFT-anchored title/subtitle at ANY width.
       // This makes the old DOM-width measurement + plotly_afterplot resize hook unnecessary.
       legend: { orientation: "v", x: 1.0, xanchor: "right", y: LEG_BOT_Y, yanchor: "bottom",
-                font: { size: 11.5 }, bgcolor: "rgba(255,255,255,0.96)",
+                font: { size: 12 }, bgcolor: "rgba(255,255,255,0.96)",
                 bordercolor: "rgba(0,0,0,0)", borderwidth: 1.5,
                 itemsizing: "constant", tracegroupgap: 2 },
       // Title sits ABOVE the legend boxes (TITLE_Y, top-anchored), inside the computed top margin, so

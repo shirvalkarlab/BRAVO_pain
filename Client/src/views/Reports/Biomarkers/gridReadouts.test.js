@@ -204,7 +204,7 @@ describe("clinic-sheet ratings on the heat maps (B5, decision 186)", () => {
   test("off: one bullet says the heat maps pool the chronic REDCap ratings only", () => {
     const b = clinicSheetBullets({ ...SW, clinic_sheet_ratings: { included: false, n_added: 0 } });
     expect(b).toHaveLength(1);
-    expect(b[0]).toMatch(/chronic REDCap ratings only/);
+    expect(b[0]).toMatch(/home pain surveys only/);
     expect(b[0]).toMatch(/switch/i);
   });
   test("on: the bullet counts the sheet ratings this contact pair uses and says the scale", () => {

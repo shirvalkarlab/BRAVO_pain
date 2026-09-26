@@ -156,7 +156,7 @@ describe("the calibrated heat-map card (BiomarkerHeatmapGrids)", () => {
     // Re-run 2026-09-26 under the exact rotation test (decision 315): no positive cell is
     // "established" any more; the nearest is named with its own numbers.
     expect(lines[3]).toMatch(/no cell reaches the grid’s “established” verdict/);
-    expect(lines[3]).toMatch(/24\.5 Hz at 60 s, 120-min window, Neural-first pre-report: r 0\.32 \(0\.16 to 0\.46\), n 61, q 0\.25/);
+    expect(lines[3]).toMatch(/24\.5 Hz at 60 s, 120-min window, each recording picking the next report after it: r 0\.32 \(0\.16 to 0\.46\), n 61, q 0\.25/);
     expect(lines[4]).toMatch(/72 rows with q < 0\.05 on the negative side/);
     // A-5 (the panel's item 5, the PI's clinician stand-in): the two tests are told apart in
     // adjoining sentences, so the reader never sees "0 rows clear q < 0.05" beside a cell called
@@ -164,7 +164,7 @@ describe("the calibrated heat-map card (BiomarkerHeatmapGrids)", () => {
     const text = lines.join(" ");
     expect(text).toMatch(/q is the p-value after correcting for having looked at all 22 bands/i);
     expect(text).toMatch(/“established” is that cell’s own test/i);
-    expect(text).toMatch(/does not clear the 22-band correction/i);
+    expect(text).toMatch(/does not clear the allowance for testing 22 bands at once/i);
     // every term the lines use is said in plain words at least once
     expect(text).toMatch(/reuse on\/off \(whether one stretch of recording may answer more than one report\)/i);
     // the pair the whole search covers is named in the line that states the negative result
