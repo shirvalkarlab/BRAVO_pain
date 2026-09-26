@@ -657,7 +657,25 @@ def _sweep_superseded(kind, participant_uid, keep_stem, root=None, keep_newest=N
                     pass
             return best
         others.sort(key=_newest, reverse=True)
-        others = others[limit - 1:]
+        # KEEP GROUPS (2026-09-26). A writer may name a group in the sidecar
+        # (`extra["keep_group"]`); the newest entry of each group is kept and does not count
+        # toward the limit. Why: every grid kept for RCS08 was at the Biomarkers page's settings,
+        # so the daily-default grid the Stim Optimizer reads on every request had aged out and was
+        # rebuilt each time. Only the NEWEST of a group is protected; older ones age out as before.
+        def _group(stem):
+            meta = _read_meta_file(os.path.join(d, stem + ".meta.json")) or {}
+            return (meta.get("extra") or {}).get("keep_group") or None
+        groups_seen = set()
+        just_written = _group(keep)
+        if just_written:
+            groups_seen.add(just_written)
+        protected = set()
+        for stem in others:
+            g = _group(stem)
+            if g and g not in groups_seen:
+                groups_seen.add(g)
+                protected.add(stem)
+        others = [s for s in others if s not in protected][limit - 1:]
 
     for stem in others:
         for name in stems[stem]:

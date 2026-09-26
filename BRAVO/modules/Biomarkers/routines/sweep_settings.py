@@ -195,6 +195,26 @@ def sweep_settings_tag_from_request(request_data):
         include_clinic_sheet_ratings=include_clinic_sheet_ratings_param(rd))
 
 
+def default_settings_keep_group(tag, adjust_for_stim_current=False):
+    """The keep group a grid's sidecar names when it was built at the daily default settings, else
+    None (the PI, 2026-09-26: keep the daily-default grid on disk).
+
+    The store keeps twelve grids per participant, oldest out first, and a reader working at other
+    settings writes grids faster than the daily pass: on RCS08 all twelve kept were at the Biomarkers
+    page's settings, so the default-settings grid the Stim Optimizer reads on every request had aged
+    out and was rebuilt each time (decision 317, 10.4-10.7 s). The store keeps the newest entry of
+    each group whatever else is written (`CacheStore.store._sweep_superseded`). One group per pain
+    score, and the grid with the current taken out apart from the plain one, since each is read on
+    its own. Only the defaults are grouped, or the protection would keep everything.
+    """
+    if not isinstance(tag, dict) or not tag.get("sweep_metric"):
+        return None
+    if tag != sweep_settings_tag_from_request({"SweepMetric": tag["sweep_metric"]}):
+        return None
+    group = f"default_settings:{tag['sweep_metric']}"
+    return group + (":current_adjusted" if adjust_for_stim_current else "")
+
+
 def metric_label(key):
     return next((m["label"] for m in BIOMARKER_METRICS if m["key"] == key), str(key))
 

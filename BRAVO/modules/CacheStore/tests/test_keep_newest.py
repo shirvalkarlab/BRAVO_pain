@@ -197,3 +197,44 @@ def test_the_stability_answer_keeps_one_entry_per_grid_it_answers():
             st.store(kind, UID, sigs[g], {"points": [g]}, writer="biomarkers", provenance=[])
         lost = [g for g in grid_keys if st.load(kind, UID, sigs[g], consumer="biomarkers") is None]
     assert not lost, f"these grids' stability answers were evicted by later runs: {lost}"
+
+
+def test_the_newest_entry_of_a_keep_group_outlives_twelve_later_writes():
+    """Decision 317 found it live on 2026-09-26: all twelve grids kept for RCS08 were built under
+    the Biomarkers page's settings, so the grid under the daily default settings -- the one the Stim
+    Optimizer reads on every request -- had been evicted, and each of those requests rebuilt it
+    (10.4-10.7 s). The limit sweeps by age alone, and a page used at other settings writes grids
+    faster than the daily pass does.
+
+    A writer may name a keep group in the sidecar (`extra["keep_group"]`). The newest entry of each
+    group survives the sweep and does not count toward the limit; older entries of the same group
+    compete by age as before, so the protection cannot make the store grow without bound."""
+    limit = st.KEEP_NEWEST_BY_KIND[KIND]
+    with _Sandbox():
+        old_default = (KIND, "v1", UID, "tiles-key", "reports-OLD", "nrs-defaults")
+        st.store(KIND, UID, old_default, {"which": "old default"}, writer="biomarkers",
+                 provenance=[], extra={"keep_group": "default_settings:nrs"})
+        default = (KIND, "v1", UID, "tiles-key", "reports-key", "nrs-defaults")
+        st.store(KIND, UID, default, {"which": "default"}, writer="biomarkers", provenance=[],
+                 extra={"keep_group": "default_settings:nrs"})
+        page = [_write(KIND, f"page-{i:03d}") for i in range(limit + 3)]
+        assert st.load(KIND, UID, default, consumer="biomarkers") == {"which": "default"}, (
+            "the newest daily-default grid was evicted by grids at other settings")
+        assert st.load(KIND, UID, old_default, consumer="biomarkers") is None, (
+            "an older entry of the same group must still age out")
+        for sig in page[-limit:]:
+            assert st.load(KIND, UID, sig, consumer="biomarkers") is not None, (
+                "the protected entry must not count toward the limit")
+        assert len(_payload_files(KIND)) == limit + 1
+
+
+def test_a_kind_that_keeps_one_ignores_keep_groups():
+    """The protection applies only where a kind already keeps several; a 245 MB tile entry that
+    named a keep group must still be replaced, never joined by a second copy."""
+    with _Sandbox():
+        first = (ONE_ONLY, "v1", UID, "a")
+        st.store(ONE_ONLY, UID, first, {"m": "a"}, writer="biomarkers", provenance=[],
+                 extra={"keep_group": "x"})
+        _write(ONE_ONLY, "b")
+        assert len(_payload_files(ONE_ONLY)) == 1
+        assert st.load(ONE_ONLY, UID, first, consumer="biomarkers") is None

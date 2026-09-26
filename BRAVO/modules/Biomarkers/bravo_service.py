@@ -8508,7 +8508,12 @@ def _store_sweep_results(participant_uid, sig, prov, response, *, n_recordings=N
                          # reader matching on the tag cannot tell the two grids apart without it;
                          # the Stim Optimizer's readiness table finds the adjusted one by this flag
                          # (panel C item 6). Descriptive only: no reader selects a band by it.
-                         "adjust_for_stim_current": bool(sa.get("adjust_for_stim_current", False))})
+                         "adjust_for_stim_current": bool(sa.get("adjust_for_stim_current", False)),
+                         # A grid at the daily default settings names a keep group, so the store
+                         # keeps its newest one however many grids other settings write (the PI,
+                         # 2026-09-26; decision 317 found it evicted and rebuilt on every request).
+                         "keep_group": sweep_settings.default_settings_keep_group(
+                             tag, bool(sa.get("adjust_for_stim_current", False)))})
     try:
         corr = band_results_tables.correlation_table(sweeps, metric_key=metric)
         disc = band_results_tables.discrimination_table(sweeps, metric_key=metric)

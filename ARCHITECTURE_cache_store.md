@@ -71,6 +71,10 @@ delegations of a few lines; their event counters are bound by reference to the s
   of six grids while every write reported success, decision 107), `closed_loop_simulation` and
   `closed_loop_design_rule` keep 6 (one per candidate band), Stim Optimizer keeps its two request
   shapes. Unbounded history was rejected: a store that only grows is not a cache.
+  A writer may name a keep group in the sidecar (`extra["keep_group"]`): the newest entry of each
+  group survives the removal and does not count toward the limit, older ones age out as before. The
+  heat-map grid at the daily default settings names one per pain score, so a reader working at other
+  settings cannot evict the grid the Stim Optimizer reads (decision 318).
 - **The stamp.** Every entry has a `<name>.meta.json` sidecar: when written, trigger, writer,
   recording count, flattened provenance. It is moved into place after the payload and is the commit
   marker, so a reader sees a complete entry or none; pages read the build date from it, never from
