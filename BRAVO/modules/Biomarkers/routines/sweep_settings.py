@@ -32,7 +32,7 @@ STABILITY_GRID_KIND = "biomarker_band_stability_grid"
 # v5 (2026-09-25, P-03) one pain report counted in one stimulation state and one week, and each
 # state's odds ratio carries its interval; v6 (2026-09-25 night) the per-state standard errors,
 # and so the "behaves the same" check, are clustered on the pain report.
-STABILITY_GRID_RULE_VERSION = "v6_se_clustered_on_report_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
+STABILITY_GRID_RULE_VERSION = "v7_grid_own_pain_score"  # 2026-09-26: answers on the grid's own pain score (was NRS for SweepMetric-only requests); tablet clock since v6  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 # THE STORED HEAT-MAP GRID ITSELF: its kind name and the rule it is built under. ONE HOME since
 # decision 317 (2026-09-26), for the same reason as the stability grid's above: the Biomarkers

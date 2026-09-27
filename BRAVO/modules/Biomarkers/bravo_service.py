@@ -5594,6 +5594,10 @@ def compute_and_store_stability_grid(participant_uid, *, request_data=None, work
     t0 = _time.perf_counter()
     req = dict(request_data or {})
     req["ParticipantId"] = participant_uid
+    # The answer is computed on the GRID'S OWN pain score (2026-09-26): the daily precompute asks
+    # with `SweepMetric` only, and the per-point setup reads `LabelMetric`, which fell back to NRS,
+    # so every non-NRS daily grid carried NRS stability answers.
+    req["LabelMetric"] = sweep_settings.sweep_metric_param(req)
     out = {"participant_uid": participant_uid, "stored": False, "reason": None,
            "n_points": 0, "n_available": 0, "wall_seconds": None, "store_key": None,
            "already_current": False}
