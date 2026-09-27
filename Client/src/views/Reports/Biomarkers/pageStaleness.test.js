@@ -66,25 +66,34 @@ const GRID_REQ = {
   MatchToleranceMin: 15, MatchDirection: "nearest", AllowWindowReuse: false,
   IncludeClinicSheetRatings: false, SlidingWindow: false,
 };
-// The all-band scan's request as the page builds it from its defaults (no clinic-sheet switch).
+// The all-band scan's request as the page builds it from its defaults (decision 334: the switch
+// travels with the request now, like every other matching setting).
 const SCAN_REQ = {
   source: "both", LabelMetric: "nrs", LabelStrategy: "tertile", PercentileLow: 25, PercentileHigh: 75,
   MatchToleranceMin: 60, MaxPerRating: 3, RefractoryMin: 2, MatchDirection: "pro_first",
-  MatchExtentSec: 30, AllowWindowReuse: false, SlidingWindow: false,
+  MatchExtentSec: 30, AllowWindowReuse: false, IncludeClinicSheetRatings: false, SlidingWindow: false,
 };
 // A small scan answer: a tertile split whose echoed cuts are the request's 25 / 75, and an
-// analytics block with no sliding correlation (the page always asks for none).
+// analytics block with no sliding correlation (the page always asks for none). `clinic_sheet_ratings`
+// is the same shape the heat-map grid's response carries (decision 334): the switch was off.
 const SCAN = {
   summary: {}, label_metric: "nrs", label_strategy: "tertile", percentile_low: 25, percentile_high: 75,
   available_strategies: [{ key: "tertile", label: "Tertile (low/high, drop middle)" },
     { key: "median", label: "Median split" }, { key: "kmeans", label: "KMeans (legacy)" }],
   analytics: { timedomain: {} },
+  clinic_sheet_ratings: { included: false, n_available: 0, n_added: 0, sheet_column: null, scale: null, reason: null },
+};
+// The same scan answer with the switch on and 12 sheet ratings merged.
+const SCAN_WITH_SHEETS = {
+  ...SCAN,
+  clinic_sheet_ratings: { included: true, n_available: 12, n_added: 12, sheet_column: "overall", scale: 1, reason: null },
 };
 
 const gridCalls = () => SessionController.query.mock.calls
   .filter(([url, body]) => url === "/api/queryBiomarkerAnalysis" && body && body.BandTimeSweep === "1");
 
-async function renderPage({ gridSettings = GRID_REQ, scan = false, controls = null, scanKey = null } = {}) {
+async function renderPage({ gridSettings = GRID_REQ, scan = false, controls = null, scanKey = null,
+  scanResult = SCAN } = {}) {
   invalidateAll("page staleness test");
   window.localStorage.clear();
   SessionController.query.mockReset();
@@ -93,7 +102,7 @@ async function renderPage({ gridSettings = GRID_REQ, scan = false, controls = nu
     { why: "page staleness test" });
   putResult(CL.conversionModel, UID, settingsKey({}), calib, { why: "page staleness test" });
   if (controls) saveControls(UID, controls);
-  if (scan) putResult(MODULES.biomarkers, UID, settingsKey(scanKey || controls.requestParams), SCAN, { why: "page staleness test" });
+  if (scan) putResult(MODULES.biomarkers, UID, settingsKey(scanKey || controls.requestParams), scanResult, { why: "page staleness test" });
   let utils;
   await act(async () => {
     utils = rtlRender(
@@ -157,14 +166,15 @@ describe("4. the clinic-sheet switch and the all-band scan", () => {
     maxPerRating: 3, refractoryMin: 2, matchDirection: "pro_first", matchExtentSec: 30,
     allowWindowReuse: false, includeClinicSheetRatings: false, requestParams: SCAN_REQ,
   };
-  test("turning the switch on does not call the scan out of date", async () => {
+
+  test("turning the switch on DOES call the scan out of date (decision 334: it now has an effect)", async () => {
     await renderPage({ scan: true, controls, gridSettings: { ...GRID_REQ, PercentileLow: 25, PercentileHigh: 75 } });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: /\+ clinic titration sessions/, hidden: true })); });
     expect(document.body.textContent)
-      .not.toMatch(/the controls on this page have been changed since this analysis was computed/);
+      .toMatch(/the controls on this page have been changed since this analysis was computed/);
   });
 
-  test("a scan request saved with the switch in it is not called out of date on return", async () => {
+  test("a saved request whose switch already matches the controls is not called out of date", async () => {
     await renderPage({ scan: true, scanKey: SCAN_REQ,
       controls: { ...controls, requestParams: { ...SCAN_REQ, IncludeClinicSheetRatings: false } },
       gridSettings: { ...GRID_REQ, PercentileLow: 25, PercentileHigh: 75 } });
@@ -172,9 +182,17 @@ describe("4. the clinic-sheet switch and the all-band scan", () => {
       .not.toMatch(/the controls on this page have been changed since this analysis was computed/);
   });
 
-  test("the scan's settings say it uses the home pain surveys only", async () => {
+  test("with the switch off, the scan's settings say the home surveys only", async () => {
     await renderPage({ scan: true, controls, gridSettings: { ...GRID_REQ, PercentileLow: 25, PercentileHigh: 75 } });
-    expect(document.body.textContent).toMatch(/The all-band scan uses the home pain surveys only/);
+    expect(document.body.textContent).toMatch(/Home pain surveys only; the same switch the heat maps use is off/);
+  });
+
+  test("with the switch on, the scan's settings say how many sheet ratings were added", async () => {
+    const onReq = { ...SCAN_REQ, IncludeClinicSheetRatings: true };
+    await renderPage({ scan: true, scanKey: onReq, scanResult: SCAN_WITH_SHEETS,
+      controls: { ...controls, includeClinicSheetRatings: true, requestParams: onReq },
+      gridSettings: { ...GRID_REQ, PercentileLow: 25, PercentileHigh: 75 } });
+    expect(document.body.textContent).toMatch(/Includes 12 clinic and at-home sheet ratings/);
   });
 });
 
