@@ -34,6 +34,7 @@ import Fold from "./Fold";
 import BiomarkerHeatmapGrids, { RefusalReason } from "./BiomarkerHeatmapGrids";
 import { reportCoverage, computeMatchedScanModel } from "./binarizationModel";
 import { saveControls, loadControls } from "./biomarkerStateStore";
+import { MATCHING_DEFAULTS as D } from "./matchingDefaults";
 
 // TWO PANELS RELOCATED FROM THE CLOSED-LOOP DEPLOYMENT PAGE (CLD_REDESIGN_PLAN.md item 11).
 // Both answer questions about the PSD-to-device-LSB calibration, and both are read by the analyst
@@ -128,43 +129,41 @@ function Biomarkers() {
   // Source tabs (time-domain / power-domain / both) removed — the analysis is always unified
   // (time-domain streaming PSD + power-domain band power together). One code path, no tab.
   const source = "both";
-  const [metric, setMetric] = useState(P.metric || "nrs");
+  // Every control's default comes from one block, `matchingDefaults.js`, which carries the server's
+  // own defaults (`sweep_settings.py`) and is pinned to them by a test (decision 331).
+  const [metric, setMetric] = useState(P.metric || D.metric);
   // The status sentence and list the page head prints, read off the heat-map grid (SPEC.md
   // section 5.1 item 1); null until the grid has arrived.
   const [gridStatus, setGridStatus] = useState(null);
   // The de-identified study code for the line under the title; null when the record carries none.
   const participantCode = useStudyCode(participant_uid);
-  const [strategy, setStrategy] = useState(P.strategy || "tertile");   // binarization labeler (default tertile)
-  const [percentileLow, setPercentileLow] = useState(P.percentileLow != null ? P.percentileLow : 33.3);   // tertile/percentile low cut
-  const [percentileHigh, setPercentileHigh] = useState(P.percentileHigh != null ? P.percentileHigh : 66.7);  // tertile/percentile high cut
+  const [strategy, setStrategy] = useState(P.strategy || D.strategy);   // binarization labeler
+  const [percentileLow, setPercentileLow] = useState(P.percentileLow != null ? P.percentileLow : D.percentileLow);   // tertile/percentile low cut
+  const [percentileHigh, setPercentileHigh] = useState(P.percentileHigh != null ? P.percentileHigh : D.percentileHigh);  // tertile/percentile high cut
   // PRO<->PSD match window (minutes): a streaming/PSD session is matched to the nearest pain
   // report whose timestamp falls within ± this many minutes. Drives the matched-neural-sample
   // counts (computed on the PSDs by the backend) and is a compute param, so changing it makes the
   // view dirty (a recompute re-matches). Exploratory — default 15 min.
-  // Match window for PSD<->PRO pairing. Bumped from 15 to 60 min after the matching audit on RCS08:
-  // pain reports anchor neural data on a minutes-to-hours timescale, and the 15-min window dropped
-  // ~80% of the otherwise-usable PSDs. Combined with the new direction='pro_first' default, this
-  // lifts PRO coverage to 290/682 (42.5%) of the matched discovery pool (measured on RCS08, vas,
-  // pro_first, ±60 min — matching the offline validation pool; see FIXHANDOUT_pro_timezone_mismatch).
-  const [matchTolerance, setMatchTolerance] = useState(P.matchTolerance != null ? P.matchTolerance : 60);
+  // The default window is 15 minutes either side since decision 331 (the PI, 2026-09-26, on the
+  // tablet-clock measurement: 60 added almost nothing real and tripled the chance matches); it was
+  // 60 from 2026-06-28. A viewer's saved 5 or 60 from before is moved to 15 once
+  // (`biomarkerStateStore.migrateControls`); after that their own choice is kept.
+  const [matchTolerance, setMatchTolerance] = useState(P.matchTolerance != null ? P.matchTolerance : D.matchTolerance);
   // Debounced copy, declared here because the availability fetch above the scan model reads it.
   const matchToleranceD = useDebounced(matchTolerance);
   // Per-rating CAP for the exploratory scan (replaces the old all-vs-one-per-rating toggle, which
   // it subsumes): how many PSDs a single pain rating may absorb PER CHANNEL, and the refractory gap
   // (minutes) enforced among the kept set so a streaming burst around one survey can't double-count.
   //   maxPerRating = 1  -> one PSD per rating (the old "one per rating": maximally independent)
-  //   maxPerRating > 1  -> up to N nearest-prior PSDs per rating; AUC stays rating-grouped on top.
-  // Matching is PRIOR-only (forecasting): each rating is paired with PSDs recorded BEFORE it.
-  const [maxPerRating, setMaxPerRating] = useState(P.maxPerRating != null ? P.maxPerRating : 3);
-  const [refractoryMin, setRefractoryMin] = useState(P.refractoryMin != null ? P.refractoryMin : 2);
-  // Match direction: "prior" (forecasting — PSD must precede the rating) vs "nearest" (symmetric ±
-  // tolerance; pairs the closest PSD in either time direction). Default "prior".
-  // Match direction: pro_first (default for discovery) walks PROs and claims up to max_per_rating
-  // PSDs per channel each within tolerance, maximizing PRO coverage (each PRO is an independent
-  // observation, so this is the right framing for discovery). 'nearest' is PSD-first symmetric.
-  // 'prior' is PSD-first forecasting (PSD must precede the PRO), kept for the threshold-deployment
-  // view where causal direction is the right semantics.
-  const [matchDirection, setMatchDirection] = useState(P.matchDirection || "pro_first");
+  //   maxPerRating > 1  -> up to N nearest PSDs per rating; AUC stays rating-grouped on top.
+  const [maxPerRating, setMaxPerRating] = useState(P.maxPerRating != null ? P.maxPerRating : D.maxPerRating);
+  const [refractoryMin, setRefractoryMin] = useState(P.refractoryMin != null ? P.refractoryMin : D.refractoryMin);
+  // Match direction: "nearest" (each sample pairs with the closest report, either side), "pro_first"
+  // (each report claims up to max_per_rating samples per channel within the window, either side;
+  // the minimum gap is not applied) or "prior" (a sample must precede its report, the causal
+  // reading the threshold-deployment view uses). Default "nearest" since decision 331 (was "pro_first"): either side of the report, and the one
+  // under which the minimum gap applies, so a report never keeps two overlapping pieces of one press.
+  const [matchDirection, setMatchDirection] = useState(P.matchDirection || D.matchDirection);
   // Cache-based LSB matching is now the ONLY path (PI 2026-06-28; the legacy real-time recompute is
   // retired). The spectral scan's per-rating LSB spectrum is built by matching each pain rating against
   // the pre-computed match-agnostic raw 3 s-tile LSB cache, using TWO windows:
@@ -174,12 +173,12 @@ function Biomarkers() {
   // `useLiveMatching` (previously pinned true with no UI control) is gone: it was a request field
   // the backend read once and only ever echoed back, never branched on — removed rather than wired
   // up, since there was no live behavior to give a knob to.
-  const [matchExtentSec, setMatchExtentSec] = useState(P.matchExtentSec != null ? P.matchExtentSec : 30);
-  const [allowWindowReuse, setAllowWindowReuse] = useState(P.allowWindowReuse != null ? P.allowWindowReuse : false);
+  const [matchExtentSec, setMatchExtentSec] = useState(P.matchExtentSec != null ? P.matchExtentSec : D.matchExtentSec);
+  const [allowWindowReuse, setAllowWindowReuse] = useState(P.allowWindowReuse != null ? P.allowWindowReuse : D.allowWindowReuse);
   // Decision 186: the clinic and at-home testing sheets' scores pooled into the heat maps as extra
   // ratings. OFF by default -- those scores were taken while current was being stepped on purpose.
   const [includeClinicSheetRatings, setIncludeClinicSheetRatings] = useState(
-    P.includeClinicSheetRatings != null ? P.includeClinicSheetRatings : false);
+    P.includeClinicSheetRatings != null ? P.includeClinicSheetRatings : D.includeClinicSheetRatings);
   // Timeline color mode: "multimodal" colors the neural lanes by sensing center frequency (the data
   // view); "binarization" recolors every modality LIVE by its high/low/excluded pain label at the
   // current match window (matched-and-included = vermillion/blue, everything else dimmed light grey),
@@ -252,7 +251,21 @@ function Biomarkers() {
    */
   const [computeRequests, setComputeRequests] = useState(0);
   const servicedComputeRequests = useRef(0);
+  // THE MATCHING SETTINGS OF THE LAST RUN, for the Closed-Loop page to inherit (decision 331): a
+  // press of Recompute records every setting it ran with; a heat-map grid built and shown as current
+  // (the first visit's automatic build, or a new pain score's grid) records the settings it ran
+  // with, keeping the cap, gap and TD length of the last Recompute (or the defaults before one),
+  // which the grid does not read. Saved with the controls; `loadMatchingRun` reads it.
+  const [matchingRun, setMatchingRun] = useState(P.matchingRun || null);
+  const runSettings = () => ({
+    LabelMetric: metric, LabelStrategy: strategy,
+    PercentileLow: percentileLow, PercentileHigh: percentileHigh,
+    MatchToleranceMin: matchTolerance, MatchDirection: matchDirection,
+    AllowWindowReuse: allowWindowReuse, MaxPerRating: maxPerRating, RefractoryMin: refractoryMin,
+    MatchExtentSec: matchExtentSec, IncludeClinicSheetRatings: includeClinicSheetRatings,
+  });
   const compute = () => {
+    setMatchingRun({ settings: runSettings(), ranAt: Date.now() });
     setRequestParams(snapshot());
     setComputeRequests((n) => n + 1);
     // The calibrated heat-map grid (BiomarkerHeatmapGrids) is a SEPARATE cache family from the
@@ -361,11 +374,11 @@ function Biomarkers() {
     saveControls(participant_uid, {
       metric, strategy, percentileLow, percentileHigh, matchTolerance,
       maxPerRating, refractoryMin, matchDirection, timelineColorMode, requestParams,
-      matchExtentSec, allowWindowReuse, includeClinicSheetRatings,
+      matchExtentSec, allowWindowReuse, includeClinicSheetRatings, matchingRun,
     });
   }, [participant_uid, metric, strategy, percentileLow, percentileHigh, matchTolerance,
     maxPerRating, refractoryMin, matchDirection, timelineColorMode, requestParams,
-    matchExtentSec, allowWindowReuse, includeClinicSheetRatings]);
+    matchExtentSec, allowWindowReuse, includeClinicSheetRatings, matchingRun]);
 
   // Fetch raw pain-score reports ONCE per participant (no LFP, just the PRO surveys) so the
   // binarization preview card can show a live histogram with cuts before any heavy compute.
@@ -538,6 +551,29 @@ function Biomarkers() {
   }), [source, metric, strategy, percentileLowD, percentileHighD, matchToleranceD, matchDirection,
       allowWindowReuse, includeClinicSheetRatings]);
 
+  // A heat-map grid built and shown as current is a run of these settings (see `matchingRun`).
+  useEffect(() => {
+    if (!gridStatus || heatmapStale.stale) return;
+    const h = heatmapRequestParams;
+    setMatchingRun((prev) => {
+      const ps = (prev && prev.settings) || {};
+      const rp = requestParams || {};
+      const kept = (key, fallback) => (ps[key] != null ? ps[key]
+        : (rp[key] != null ? rp[key] : fallback));
+      const next = {
+        LabelMetric: h.LabelMetric, LabelStrategy: h.LabelStrategy,
+        PercentileLow: h.PercentileLow, PercentileHigh: h.PercentileHigh,
+        MatchToleranceMin: h.MatchToleranceMin, MatchDirection: h.MatchDirection,
+        AllowWindowReuse: h.AllowWindowReuse, IncludeClinicSheetRatings: h.IncludeClinicSheetRatings,
+        MaxPerRating: kept("MaxPerRating", D.maxPerRating),
+        RefractoryMin: kept("RefractoryMin", D.refractoryMin),
+        MatchExtentSec: kept("MatchExtentSec", D.matchExtentSec),
+      };
+      const same = Object.keys(next).every((k) => String(ps[k]) === String(next[k]));
+      return same ? prev : { settings: next, ranAt: Date.now() };
+    });
+  }, [gridStatus, heatmapStale.stale, heatmapRequestParams]);  // eslint-disable-line react-hooks/exhaustive-deps
+
   // [removed] summaryLine() — the legacy Time-/Power-domain dual-pipeline prose summary — and,
   // on 2026-09-15 (referent audit, item 7), the per-channel high/low/excluded count block that
   // replaced it: that block read a field the backend stopped computing at decision 77, so it had
@@ -590,7 +626,7 @@ function Biomarkers() {
           {maxPerRating > 1
             ? "A rating's value is the median of its closest readings, counted once."
             : "Each rating keeps its one closest reading per contact pair."}
-          {" This applies to the all-band scan and the high / low preview, not the heat maps."}
+          {" This applies to the all-band scan, the high / low preview and, from the last run, the Closed-Loop page's summary and stability card, not the heat maps."}
         </MDTypography>
       </MDBox>
 
@@ -612,7 +648,7 @@ function Biomarkers() {
             : maxPerRating <= 1
             ? "Not used while one reading per rating is kept."
             : "Keeps a burst of readings around one report from dominating its value."}
-          {" This applies to the all-band scan and the high / low preview, not the heat maps."}
+          {" This applies to the all-band scan, the high / low preview and, from the last run, the Closed-Loop page's summary and stability card, not the heat maps."}
         </MDTypography>
       </MDBox>
 

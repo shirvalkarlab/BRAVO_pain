@@ -483,6 +483,49 @@ def test_the_stored_answer_names_its_grid_and_its_rule_in_its_sidecar():
         bs.stability_grid_for_participant = real_grid
         bs._SHARED_CACHE_DIR_OVERRIDE = was_override
 
+def test_the_daily_default_grids_answer_is_kept_however_many_others_are_written():
+    """A grid at the daily defaults is kept on disk through a keep group (decision 318); its
+    stability answer was not. Found rebuilding RCS08 for decision 331: six daily-default grids and
+    twelve at the Biomarkers page's settings were built, the kind keeps twelve answers, and the six
+    daily-default answers, written first, were the ones removed. The answer for a grid at the
+    defaults now names the same keep group as its grid; one at other settings names none."""
+    from CacheStore import store as cs
+    was_override = bs._SHARED_CACHE_DIR_OVERRIDE
+    tmp = tempfile.mkdtemp(prefix="stability_keep_group_")
+    real_sweep = bs.band_time_sweep_for_participant
+    real_grid = bs.stability_grid_for_participant
+    try:
+        bs._SHARED_CACHE_DIR_OVERRIDE = tmp
+        points = [("L", 8.5), ("L", 9.5)]
+        key = {"k": "sweepkeydefault"}
+        bs.band_time_sweep_for_participant = lambda req: {
+            "band_time_sweep": {"L": {"center_freqs_hz": [f for _, f in points]}},
+            "band_width_hz": 5.0, "label_metric": "nrs",
+            "sweep_key": {"signature_key": key["k"], "provenance": []}}
+        bs.stability_grid_for_participant = lambda uid, pts, **kw: {
+            p: {"available": True, "lrt_p": 0.3} for p in points}
+        out = bs.compute_and_store_stability_grid("abc", request_data={"SweepMetric": "nrs"}, force=True)
+        assert out["stored"] is True, out["reason"]
+        default_sig = bs._stability_grid_sig_tuple("sweepkeydefault", band_width_hz=5.0, points=points)
+        meta = cs.stamp_for_key(cs.product_key(bs.STABILITY_GRID_KIND, "abc", default_sig), root=tmp)
+        assert ((meta or {}).get("extra") or {}).get("keep_group") == "default_settings:nrs", meta
+        # thirteen answers at other settings written after it
+        for i in range(13):
+            key["k"] = f"sweepkeyother{i}"
+            o = bs.compute_and_store_stability_grid(
+                "abc", request_data={"SweepMetric": "nrs", "MatchToleranceMin": 30 + i}, force=True)
+            assert o["stored"] is True, o["reason"]
+        assert cs.load(bs.STABILITY_GRID_KIND, "abc", default_sig, consumer="biomarkers",
+                       root=tmp) is not None, "the daily-default grid's answer was removed"
+        other_sig = bs._stability_grid_sig_tuple("sweepkeyother12", band_width_hz=5.0, points=points)
+        om = cs.stamp_for_key(cs.product_key(bs.STABILITY_GRID_KIND, "abc", other_sig), root=tmp)
+        assert not ((om or {}).get("extra") or {}).get("keep_group"), om
+    finally:
+        bs.band_time_sweep_for_participant = real_sweep
+        bs.stability_grid_for_participant = real_grid
+        bs._SHARED_CACHE_DIR_OVERRIDE = was_override
+
+
 if __name__ == "__main__":
     _fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     _passed = _failed = 0

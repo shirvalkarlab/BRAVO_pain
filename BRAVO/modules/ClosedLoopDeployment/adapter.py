@@ -67,11 +67,36 @@ def pain_score_from_request(request_data):
             "requested": requested, "fell_back_to_nrs": True, "reason": reason}
 
 
-def stability_request_body(participant_uid, channel, center_hz, band_width_hz, *, pain_score):
-    """The request the stability card sends the Biomarkers test: the band, and the pain score as
-    that module's own ``LabelMetric``, so the per-state odds ratios are on the chosen score."""
-    return {"ParticipantId": participant_uid, "Channel": channel, "CenterHz": float(center_hz),
+def matching_from_request(request_data):
+    """The matching and split settings the page sent, by their request keys, and nothing else.
+
+    The Closed-Loop page inherits them from the Biomarkers page's most recent run (decision 331):
+    the window, the direction, the cap and gap per report, reuse, the clinic-sheet switch and the
+    split. A key the page did not send is left out, so the Biomarkers parsers apply their one-home
+    defaults (`sweep_settings`)."""
+    rd = request_data or {}
+    return {k: rd[k] for k in _sweep_settings.MATCHING_REQUEST_KEYS
+            if k in rd and rd[k] is not None}
+
+
+def matching_applied(request_data):
+    """What the stability card's matching was computed under, as the Biomarkers test reads it
+    (its own direction parser, `sweep_settings.forecast_match_direction`), echoed on the report so the page can withhold a report computed under
+    other settings than the ones it inherited (decision 331)."""
+    return _sweep_settings.matching_applied(
+        matching_from_request(request_data),
+        direction_reader=_sweep_settings.forecast_match_direction)
+
+
+def stability_request_body(participant_uid, channel, center_hz, band_width_hz, *, pain_score,
+                           matching=None):
+    """The request the stability card sends the Biomarkers test: the band, the pain score as
+    that module's own ``LabelMetric``, so the per-state odds ratios are on the chosen score, and the
+    matching settings the page inherited from the Biomarkers page (decision 331)."""
+    body = {"ParticipantId": participant_uid, "Channel": channel, "CenterHz": float(center_hz),
             "BandWidthHz": float(band_width_hz), "LabelMetric": pain_score}
+    body.update(matching_from_request(matching))
+    return body
 
 
 def design_matrix_with_pain_score(participant, design_matrix, epochs, pain_score):
@@ -3624,6 +3649,9 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                   place_thresholds=_place, pain_score=_pain["key"])
     out = report_to_dict(rep)
     out["pain_score"] = _pain
+    # The matching settings the band-to-pain readings that match reports to recordings (the
+    # stability card) were computed under; E1 to E3 join ratings per settings period and use none.
+    out["matching"] = matching_applied(rd)
     out.update(_pre)                     # the three-source and table payloads built above
     out["device_facts"] = {k: v for k, v in dev.items() if not k.startswith("_")}
     out["device_facts_provenance"] = dev.get("_provenance", {})
@@ -3680,7 +3708,7 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
             _bw = float(_first.get("band_width_hz", 5.0))
             _core = _bsvc._validate_band_core(stability_request_body(
                 getattr(participant, "uid", participant), _ch, float(_fc), _bw,
-                pain_score=_pain["key"]))
+                pain_score=_pain["key"], matching=rd))
             _raw = (_core.get("stim") or {}) if _core.get("available") else {
                 "available": False,
                 "reason": (_core.get("reason") or "the biomarkers path returned nothing usable"),

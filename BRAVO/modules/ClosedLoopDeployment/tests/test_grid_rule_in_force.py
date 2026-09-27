@@ -176,10 +176,11 @@ def _default_key_settings():
     spelled out here from its parts (`bravo_service.band_time_sweep_for_participant`), not taken
     from the function under test."""
     from Biomarkers.routines import analytics as A
-    return {"eligibility_radius_seconds": 3600.0, "allow_window_reuse": False,
+    # the default window and direction since decision 331: 15 minutes (900 s), "nearest"
+    return {"eligibility_radius_seconds": 900.0, "allow_window_reuse": False,
             "label_strategy": "tertile", "percentile_low": 33.3333, "percentile_high": 66.6667,
             "outlier_n_mad": float(A.OUTLIER_N_MAD), "outlier_scale": A.OUTLIER_SCALE,
-            "match_direction": "pro_first", "include_cross_setting_stability": False,
+            "match_direction": "nearest", "include_cross_setting_stability": False,
             "include_clinic_sheet_ratings": False, "adjust_for_stim_current": False}
 
 

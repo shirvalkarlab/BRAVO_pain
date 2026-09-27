@@ -37,11 +37,15 @@ export function reportSide({ bandCandidate, hemisphere }) {
 }
 
 export function deploymentReportBody({ participantUid, bandCandidate, hemisphere, powerScale,
-  painScore }) {
+  painScore, matching }) {
   const bc = bandCandidate || {};
   const side = reportSide({ bandCandidate, hemisphere });
   return {
     ParticipantId: participantUid,
+    // The matching settings inherited from the Biomarkers page's last run (decision 331), for the
+    // stability card; in the body, so they are in the cached answer's key too. Omitted, the
+    // server's one-home defaults apply.
+    ...(matching || {}),
     Hemisphere: side,
     // The pain score every band-to-pain reading on the report is computed on (the PI, 2026-09-25
     // night), from the page's dropdown. In the body, so it is in the cached answer's key too.
@@ -89,11 +93,11 @@ function reportSettings(body) {
 }
 
 export default function useDeploymentReport({ participantUid, bandCandidate, hemisphere,
-  powerScale, painScore, enabled = true }) {
+  powerScale, painScore, matching, enabled = true }) {
   const channel = bandCandidate && bandCandidate.channel;
   const centerHz = bandCandidate && bandCandidate.centerHz;
   const body = deploymentReportBody({ participantUid, bandCandidate, hemisphere, powerScale,
-    painScore });
+    painScore, matching });
 
   const cached = useCachedResult({
     moduleKey: CL.report,

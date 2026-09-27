@@ -37,6 +37,15 @@ def _bs():
     return BS
 
 
+def _default_window_min():
+    """The page's default match window in minutes: one home, `sweep_settings` (decision 331)."""
+    try:
+        from modules.Biomarkers.routines import sweep_settings as SS
+    except ImportError:                                   # host suite: modules/ is the root
+        from Biomarkers.routines import sweep_settings as SS
+    return float(SS.DEFAULT_MATCH_TOLERANCE_MIN)
+
+
 def _stream(uid):
     from modules.Biomarkers.routines import stim_current as SC
     return SC.settings_stream_for(uid)
@@ -156,7 +165,7 @@ def run_zero_ma(uid, *, metrics=("vas", "nrs"), seconds=60.0, same_day_tol_h=12.
                 t, cache, None, tol_s=same_day_tol_h * 3600.0, allow_window_reuse=True,
                 match_direction="nearest", channel=ch, participant_uid=uid, seconds=[seconds])
             page, *_ = BS._band_time_sweep_power_by_seconds(
-                t, cache, None, tol_s=3600.0, allow_window_reuse=False,
+                t, cache, None, tol_s=_default_window_min() * 60.0, allow_window_reuse=False,
                 match_direction="pro_first", channel=ch, participant_uid=uid, seconds=[seconds])
             X = np.asarray(near[seconds], float)
             has = np.isfinite(X).all(axis=1)
@@ -171,7 +180,8 @@ def run_zero_ma(uid, *, metrics=("vas", "nrs"), seconds=60.0, same_day_tol_h=12.
                 m = ix[has[ix]]
                 coverage.append(dict(score=mname, pair=ch, stretch=s["label"], kind=s["kind"],
                                      reports=int(ix.size), days_with_reports=int(len(set(day[ix]))),
-                                     matched_60min=int(has_page[ix].sum()), matched_same_day=int(m.size),
+                                     matched_page_window=int(has_page[ix].sum()),
+                                     page_window_min=_default_window_min(), matched_same_day=int(m.size),
                                      days_matched=int(len(set(day[m])))))
                 if s["kind"] == "both off":
                     both_off_ix.append((s["label"], m))
@@ -205,7 +215,8 @@ def run_zero_ma(uid, *, metrics=("vas", "nrs"), seconds=60.0, same_day_tol_h=12.
     result = dict(stretches=str_all, coverage=coverage, bands=rows, pooled_both_off=pooled)
     settings = dict(scores=list(metrics), seconds_of_signal=seconds,
                     matching=f"nearest recording within {same_day_tol_h:g} h, a recording may serve several ratings",
-                    coverage_also_at="the page's 60-minute window, report first, no reuse",
+                    coverage_also_at=(f"the page's default window, {_default_window_min():g} minutes either "
+                                      "side, report first, no reuse"),
                     interval="95%, resampling whole California days", n_boot=n_boot,
                     correction="Benjamini-Hochberg over the bands of one pair, stretch and score")
     return _finish(uid, "zero_ma_within_stretch", result, settings, reading, save)
@@ -243,9 +254,10 @@ def _f3(v):
     return "n/a" if v is None or not np.isfinite(v) else f"{float(v):.3f}"
 
 
-def run_current_explains(uid, *, lengths=(30.0, 60.0), tol_min=60.0, n_perm=200, save=True):
+def run_current_explains(uid, *, lengths=(30.0, 60.0), tol_min=None, n_perm=200, save=True):
     from modules.Biomarkers.routines import analytics, stim_current, confound_diagnostic as CD
     BS = _bs()
+    tol_min = _default_window_min() if tol_min is None else float(tol_min)
     req = {"ParticipantId": uid}
     P = BS.models.Participant.find(uid=uid)
     pro_df = BS._load_pros(req, P)
@@ -306,7 +318,8 @@ def run_current_explains(uid, *, lengths=(30.0, 60.0), tol_min=60.0, n_perm=200,
         reading.append(line + ".")
     reading.append("Every reading is scored within each held-out block of time, so a shift that moves pain and "
                    "the bands together between blocks is not credited to the bands (decision 310).")
-    reading.append("Replaces decision 240's figures, which matched ratings within 60 seconds instead of 60 minutes.")
+    reading.append(f"Replaces decision 240's figures, which matched ratings within 60 seconds instead of "
+                   f"the page's window ({tol_min:g} minutes either side since decision 331; 60 minutes before).")
     reading.append("Corrects decision 262's 'p 0.04' for the reading with the current taken out, which was "
                    "read off the plain reading's null; see settings for the honest reference used here.")
     settings = dict(score=metric, split=f"{strategy} {low:g}/{high:g}", match_window_min=tol_min,
@@ -884,7 +897,7 @@ def _detector_setup(uid, pairs):
     return raw_by_ch, allowed, pairs
 
 
-def run_band_detector_research(uid, *, lengths=BAND_DETECTOR_LENGTHS_S, tol_min=60.0, n_perm=200,
+def run_band_detector_research(uid, *, lengths=BAND_DETECTOR_LENGTHS_S, tol_min=None, n_perm=200,
                                n_boot=2000, pairs=None, save=True):
     """The research version (ruling 5b: pain kept as a number), on the sensing pairs the device
     allows today unless ``pairs`` names others, at each length, for both positions of the
@@ -892,6 +905,7 @@ def run_band_detector_research(uid, *, lengths=BAND_DETECTOR_LENGTHS_S, tol_min=
     from . import band_detector as BD
     from modules.Biomarkers.routines import stim_current as SC
     BS = _bs()
+    tol_min = _default_window_min() if tol_min is None else float(tol_min)
     pairs_given = pairs
     raw_by_ch, allowed, pairs = _detector_setup(uid, pairs)
     direction = BS._sweep_match_direction({})
@@ -967,7 +981,7 @@ def _device_timing(uid):
     return placed, ranges, TR.RECORD_DERIVED_PROVENANCE
 
 
-def run_band_detector_device(uid, *, tol_min=60.0, n_perm=200, n_boot=2000, pairs=None, save=True):
+def run_band_detector_device(uid, *, tol_min=None, n_perm=200, n_boot=2000, pairs=None, save=True):
     """The device-shaped version (ruling 5b: two pain groups, the area under the curve from a
     logistic regression on band power; ruling 5c: the device's own timing from the start), one band
     at a time on the sensing pairs the device allows today, for both positions of the clinic-sheet
@@ -975,6 +989,7 @@ def run_band_detector_device(uid, *, tol_min=60.0, n_perm=200, n_boot=2000, pair
     from . import band_detector as BD
     from modules.Biomarkers.routines import analytics, availability, stim_current as SC
     BS = _bs()
+    tol_min = _default_window_min() if tol_min is None else float(tol_min)
     placed, ranges, provenance = _device_timing(uid)
     need = ("averaging_ms", "onset_upper_ms", "onset_lower_ms", "adaptive_startup_delay_ms")
     missing = [k for k in need if k not in placed]

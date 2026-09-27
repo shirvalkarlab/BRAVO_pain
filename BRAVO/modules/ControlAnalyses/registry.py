@@ -4,6 +4,14 @@ A page draws the newest saved result of each of its analyses, in `order`. The li
 point at the reports of 2026-09-24 in the repository, which every reader of the page can open.
 """
 
+try:
+    from modules.Biomarkers.routines import sweep_settings as _SS
+except ImportError:                                       # host suite: modules/ is the root
+    from Biomarkers.routines import sweep_settings as _SS
+
+# The page's default match window in words, from its one home (decision 331).
+_WINDOW = f"the page's {_SS.matching_words()} matching, either side of each report"
+
 REPO_BLOB = "https://github.com/shirvalkarlab/BRAVO_pain/blob/PS_closedloop_deployment/artifacts/"
 
 LIT = {
@@ -48,7 +56,7 @@ ANALYSES = {
         title="What the stimulation current explains",
         what=("Pain read out of sample from the current alone, from every band, and from every band "
               "with the current taken out, against shuffled data that keeps pain's own persistence; "
-              "the page's 60-minute matching."),
+              f"{_WINDOW}."),
         literature=_lit("synthesis", "threshold")),
     "time_of_day": dict(
         page="biomarkers", order=3,
@@ -65,7 +73,7 @@ ANALYSES = {
               "never folded), plainly "
               "and with the stimulation current taken out of the bands and the pain as a curve; the "
               "current alone beside it; and every band inside the longest run at one unchanged current. "
-              "The page's 60-minute matching. REDCap ratings only, unless the page's clinic-sheet "
+              f"{_WINDOW[0].upper() + _WINDOW[1:]}. REDCap ratings only, unless the page's clinic-sheet "
               "switch is on, which shows the run with the sheet ratings merged in."),
         literature=_lit("band_detector", "rulings_0925")),
     "band_detector_device": dict(

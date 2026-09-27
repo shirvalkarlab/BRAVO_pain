@@ -116,7 +116,8 @@ describe("the decision card says so and shows nothing computed on the old score"
 describe("the page hands the guard its current pain score and clinic-sheet switch", () => {
   it("both calls in the page file pass them", () => {
     const src = fs.readFileSync(path.join(__dirname, "index.js"), "utf8");
-    expect(src).toMatch(/withheldIfOtherBand\(deploymentReport, bc, "report", \{ painScore \}\)/);
-    expect(src).toMatch(/withheldIfOtherBand\(summary, bc, "summary", \{ painScore, includeSheets \}\)/);
+    // since decision 331 each also hands the matching settings inherited from the Biomarkers page
+    expect(src).toMatch(/withheldIfOtherBand\(deploymentReport, bc, "report",\s*\{ painScore, matching: reportMatching \}\)/);
+    expect(src).toMatch(/withheldIfOtherBand\(summary, bc, "summary", \{ painScore, includeSheets,\s*matching: requestParams/);
   });
 });

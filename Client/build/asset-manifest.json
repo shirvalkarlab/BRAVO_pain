@@ -1,7 +1,7 @@
 {
   "files": {
     "main.css": "/static/css/main.310985b3.css",
-    "main.js": "/static/js/main.0fc11527.js",
+    "main.js": "/static/js/main.21f0457e.js",
     "static/css/125.42c6a393.chunk.css": "/static/css/125.42c6a393.chunk.css",
     "static/js/125.f54812ab.chunk.js": "/static/js/125.f54812ab.chunk.js",
     "static/js/170.c98fc7e5.chunk.js": "/static/js/170.c98fc7e5.chunk.js",
@@ -29,9 +29,9 @@
     "static/js/752.158b227d.chunk.js": "/static/js/752.158b227d.chunk.js",
     "static/js/52.fb6f85c7.chunk.js": "/static/js/52.fb6f85c7.chunk.js",
     "static/js/749.51f638df.chunk.js": "/static/js/749.51f638df.chunk.js",
-    "static/js/422.2d5829da.chunk.js": "/static/js/422.2d5829da.chunk.js",
-    "static/css/553.756b1d46.chunk.css": "/static/css/553.756b1d46.chunk.css",
-    "static/js/553.f7265703.chunk.js": "/static/js/553.f7265703.chunk.js",
+    "static/js/422.918dd752.chunk.js": "/static/js/422.918dd752.chunk.js",
+    "static/css/835.756b1d46.chunk.css": "/static/css/835.756b1d46.chunk.css",
+    "static/js/835.f38a960d.chunk.js": "/static/js/835.f38a960d.chunk.js",
     "static/js/999.6ec570f6.chunk.js": "/static/js/999.6ec570f6.chunk.js",
     "static/js/584.7c7f5030.chunk.js": "/static/js/584.7c7f5030.chunk.js",
     "static/js/618.62132ca5.chunk.js": "/static/js/618.62132ca5.chunk.js",
@@ -44,9 +44,9 @@
     "static/js/61.b14ab6ac.chunk.js": "/static/js/61.b14ab6ac.chunk.js",
     "static/js/45.e9903fd4.chunk.js": "/static/js/45.e9903fd4.chunk.js",
     "static/js/692.07d0ba8b.chunk.js": "/static/js/692.07d0ba8b.chunk.js",
-    "static/js/570.d072aaf4.chunk.js": "/static/js/570.d072aaf4.chunk.js",
+    "static/js/570.d0b078d7.chunk.js": "/static/js/570.d0b078d7.chunk.js",
     "static/js/940.f30ac1ba.chunk.js": "/static/js/940.f30ac1ba.chunk.js",
-    "static/js/423.1e0d89bb.chunk.js": "/static/js/423.1e0d89bb.chunk.js",
+    "static/js/423.70feb27e.chunk.js": "/static/js/423.70feb27e.chunk.js",
     "static/media/fa-solid-900.ttf": "/static/media/fa-solid-900.4a2cd718d7031b732e76.ttf",
     "static/media/logo.png": "/static/media/logo.99ed35db250d7e4f57bc.png",
     "static/media/material-icons-round-latin-400-normal.woff": "/static/media/material-icons-round-latin-400-normal.5d681e2edae8c60630db.woff",
@@ -88,6 +88,6 @@
   },
   "entrypoints": [
     "static/css/main.310985b3.css",
-    "static/js/main.0fc11527.js"
+    "static/js/main.21f0457e.js"
   ]
 }

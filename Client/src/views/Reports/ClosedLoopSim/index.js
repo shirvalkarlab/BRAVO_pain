@@ -90,7 +90,9 @@ import "./deployPrint.css";
 import { bandPainScore, summaryRequestParams, withheldIfOtherBand } from "./candidateRequestParams";
 import PainScoreSelect, { pageHeadPainLabel } from "./PainScoreSelect";
 import { PAIN_SCORE_OPTIONS } from "views/Reports/painScores";
-import ClinicSheetsSummaryButton, { loadSummarySheets, saveSummarySheets } from "./ClinicSheetsSummaryButton";
+import ClinicSheetsSummaryButton from "./ClinicSheetsSummaryButton";
+import { inheritedMatching, inheritedMatchingLine, matchingRequestKeys, MATCHING_KEYS }
+  from "./inheritedMatching";
 
 /**
  * THE PAGE'S OWN DISPLAY STATE, HELD AT MODULE SCOPE FOR THE SAME REASON THE RESULT CACHE IS.
@@ -208,11 +210,18 @@ function ClosedLoopSim() {
   const [envelope, setEnvelope] = useState(null);   // {band_candidate, participant_uid, committed_at}
   // Where the chosen band is held: on the server's record, or in this browser only (with why).
   const [bandRecord, setBandRecord] = useState(null);
-  // The clinic-sheet ratings in the deployment summary, or not (the PI, 2026-09-24): off by default,
-  // remembered per participant in this browser.
-  const [includeSheets, setIncludeSheets] = useState(() => loadSummarySheets(participant_uid));
-  const onToggleSheets = (on) => { setIncludeSheets(on); saveSummarySheets(participant_uid, on); };
-  useEffect(() => { setIncludeSheets(loadSummarySheets(participant_uid)); }, [participant_uid]);
+  // THE MATCHING SETTINGS OF THE BIOMARKERS PAGE'S LAST RUN (decision 331), read once per visit:
+  // the grid, the report's stability card and the deployment summary take them from here, and the
+  // page prints which in one line (`inheritedMatching.js` says what each request takes).
+  const inherited = useMemo(() => inheritedMatching(participant_uid), [participant_uid]);
+  const reportMatching = useMemo(() => matchingRequestKeys(inherited, MATCHING_KEYS), [inherited]);
+  // The clinic-sheet ratings in the deployment summary, or not (the PI, 2026-09-24): since decision
+  // 331 it starts where the Biomarkers page's last run left it; the button changes it for this visit
+  // only (the page's own memory of it, 2026-09-24 to 09-26, is no longer read).
+  const inheritedSheets = !!reportMatching.IncludeClinicSheetRatings;
+  const [includeSheets, setIncludeSheets] = useState(inheritedSheets);
+  const onToggleSheets = (on) => { setIncludeSheets(on); };
+  useEffect(() => { setIncludeSheets(inheritedSheets); }, [participant_uid, inheritedSheets]);
   const [cutpoint, setCutpoint] = useState(retained.cutpoint || null);   // chosen operating point, lifted from the ROC
   // The resolved device-LSB threshold, lifted from the LSB panel so the ROC's feature histogram can
   // annotate its cut line with the same value.
@@ -283,8 +292,8 @@ function ClosedLoopSim() {
   // produced a fresh object identity on every parent re-render, which is listed in every panel's
   // fetch-effect dependencies — so any child state change re-created it and re-fired every panel's
   // fetch, collapsing all figures into their loading state at once.
-  const requestParams = useMemo(() => summaryRequestParams(bc, includeSheets, painScore),
-    [bc, includeSheets, painScore]);
+  const requestParams = useMemo(() => summaryRequestParams(bc, includeSheets, painScore, inherited),
+    [bc, includeSheets, painScore, inherited]);
 
   // ONE deployment-summary fetch for the whole page. Each call runs a mixed-effects fit through
   // rpy2's embedded R, which is single-threaded per worker, so duplicate concurrent calls starve
@@ -319,6 +328,7 @@ function ClosedLoopSim() {
     participantUid: participant_uid,
     bandCandidate: reportCandidate,
     painScore,
+    matching: reportMatching,
   });
 
   // ONE BAND ON THE WHOLE PAGE (decision 302). The cache hands back the last result, marked stale,
@@ -328,8 +338,11 @@ function ClosedLoopSim() {
   // bands named, instead of the old band's verdict under the new band's name.
   // The same for the page's pain score and clinic-sheet switch (decision 307): a result computed on
   // another score, or with the switch the other way, is withheld and named until Recompute.
-  const report = withheldIfOtherBand(deploymentReport, bc, "report", { painScore });
-  const summaryForBand = withheldIfOtherBand(summary, bc, "summary", { painScore, includeSheets });
+  const report = withheldIfOtherBand(deploymentReport, bc, "report",
+    { painScore, matching: reportMatching });
+  const summaryForBand = withheldIfOtherBand(summary, bc, "summary", { painScore, includeSheets,
+    matching: requestParams, matchingKeys: MATCHING_KEYS.filter((k) => k !== "MatchDirection"
+      && k !== "IncludeClinicSheetRatings") });
 
   // TRACK D: fetched independently of any committed candidate -- see useBandSweepGrid.js for why
   // gating this on useDeploymentReport's own enabled condition would make it unreachable from the
@@ -473,6 +486,13 @@ function ClosedLoopSim() {
                 style={{ display: "none" }} onChange={onUpload} />
             </MDBox>
           </MDBox>
+          {/* Which matching settings this page took from the Biomarkers page (decision 331). */}
+          <MDTypography data-testid="inherited-matching" sx={{ ...TYPE.caption, color: PAL.ink, mt: 1 }}>
+            {inheritedMatchingLine(inherited)
+              + (includeSheets !== inheritedSheets
+                ? ` The clinic-sheet button is changed here for the summary: ${includeSheets ? "in" : "out"}.`
+                : "")}
+          </MDTypography>
           {bc ? <ContentsRow /> : null}
         </PageHead>
 

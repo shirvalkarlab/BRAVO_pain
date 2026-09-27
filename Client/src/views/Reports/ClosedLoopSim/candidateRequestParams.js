@@ -1,4 +1,5 @@
 import { DEFAULT_PAIN_SCORE, PAIN_SCORE_OPTIONS, painScoreLabel } from "views/Reports/painScores";
+import { matchingMismatch, matchingRequestKeys, SUMMARY_MATCHING_KEYS } from "./inheritedMatching";
 
 /**
  * The discovery request settings a committed band was chosen under, for the deployment summary and
@@ -46,12 +47,17 @@ export function bandPainScore(bc) {
   return known ? { key, fromBand: true } : { key: DEFAULT_PAIN_SCORE, fromBand: false };
 }
 
-/** The summary's request settings: the band's own, plus the clinic-sheet switch when it is on
- *  (the PI, 2026-09-24). Only "1" is ever sent; off sends nothing, as before the button existed.
- *  `painScore`, the page's dropdown (2026-09-25 night), overrides the band's own pain score, so the
- *  deployment ROC, the mixed model and the other panels sharing this request follow it. */
-export function summaryRequestParams(bc, includeClinicSheets, painScore) {
-  const rp = requestParamsFromCandidate(bc);
+/** The summary's request settings: the band's own, then the matching settings inherited from the
+ *  Biomarkers page's last run (decision 331; every one but the direction, which the ROC's own toggle
+ *  sets -- see `inheritedMatching.js`), which win over the band's, plus the clinic-sheet switch when
+ *  it is on (the PI, 2026-09-24). Only "1" is ever sent; off sends nothing, as before the button
+ *  existed. `painScore`, the page's dropdown (2026-09-25 night), overrides the band's own pain
+ *  score, so the deployment ROC, the mixed model and the other panels sharing this request follow
+ *  it. */
+export function summaryRequestParams(bc, includeClinicSheets, painScore, inherited = null) {
+  const rp = { ...requestParamsFromCandidate(bc),
+    ...matchingRequestKeys(inherited, SUMMARY_MATCHING_KEYS) };
+  delete rp.IncludeClinicSheetRatings;
   if (painScore) rp.LabelMetric = painScore;
   return includeClinicSheets ? { ...rp, IncludeClinicSheetRatings: "1" } : rp;
 }
@@ -153,7 +159,11 @@ export function withheldIfOtherBand(result, bc, kind = "report", want = null) {
       bandMismatch: { what: "band", chosen, computedFor },
     };
   }
-  const mis = settingsMismatch(data, want, kind);
+  // And the matching settings inherited from the Biomarkers page (decision 331): `want.matching` is
+  // what the page sent, `want.matchingKeys` the keys that request takes.
+  const mis = settingsMismatch(data, want, kind)
+    || (want && want.matching
+      ? matchingMismatch(data, want.matching, kind, want.matchingKeys) : null);
   if (!mis) return result;
   return {
     ...result,

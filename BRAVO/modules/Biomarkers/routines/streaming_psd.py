@@ -44,6 +44,9 @@ except ImportError:
 from scipy.signal import welch, butter, filtfilt
 from scipy.stats import t
 
+# The matching defaults have one home (decision 331); the two builders below take theirs from it.
+from . import sweep_settings as _sweep_settings
+
 # Frequency grid the notebook interpolates every PSD onto (cell 8).
 # np.linspace(0.95, 100, int(round((100-0.95)/0.98)))  -> ~101 bins at ~0.98 Hz spacing.
 F_SET = np.linspace(0.95, 100, int(round((100 - 0.95) / 0.98)))
@@ -634,7 +637,8 @@ def _match_to_pro(times_s, pro_times_s, pro_values, tolerance_min, direction="ne
     return lab, dt, pro_idx
 
 
-def build_pooled_psd_detail(psd_rows, pro_times_s, pro_values, *, tolerance_min=15.0,
+def build_pooled_psd_detail(psd_rows, pro_times_s, pro_values, *,
+                            tolerance_min=_sweep_settings.DEFAULT_MATCH_TOLERANCE_MIN,
                             f_set=F_SET, min_per_group=3):
     """Assemble ALL full-spectrum PSDs (time-domain, montage/survey, snapshot, patient events) into
     one scan-ready detail dict, KEYED BY ELECTRODE CHANNEL (DESIGN: channel is the top-level gate),
@@ -719,10 +723,12 @@ def psd_rows_to_matrix(psd_rows, *, f_set=F_SET):
             "dur": np.asarray(durs, dtype=float), "f_set": f_set}
 
 
-def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_min=60.0,
+def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *,
+                                    tolerance_min=_sweep_settings.DEFAULT_MATCH_TOLERANCE_MIN,
                                     min_per_group=3, aggregate="all",
-                                    max_per_rating=3, refractory_min=2.0,
-                                    match_direction="pro_first"):
+                                    max_per_rating=_sweep_settings.DEFAULT_MAX_PER_RATING,
+                                    refractory_min=_sweep_settings.DEFAULT_REFRACTORY_MIN,
+                                    match_direction=_sweep_settings.DEFAULT_MATCH_DIRECTION):
     """Cheap per-compute step: z-score within (channel, source), match each PSD to the nearest
     continuous PRO within the window, and pack into a scan-ready detail dict. Consumes the cached
     matrix from `psd_rows_to_matrix` so the Welch/interp work is never repeated.

@@ -30,7 +30,7 @@ import { biomarkerHeatmapSlot, CL } from "views/Reports/moduleCacheKeys";
 
 import sweep from "./__fixtures__/rcs08_band_sweep.json";
 import calib from "./__fixtures__/rcs08_calibration_in_effect.json";
-import { saveControls } from "./biomarkerStateStore";
+import { saveControls, loadMatchingRun } from "./biomarkerStateStore";
 import { matchingSummary } from "./MatchWindowBand";
 
 jest.mock("plotly.js-dist", () => {
@@ -59,9 +59,11 @@ import Biomarkers from "./index";
 
 const UID = "2e3c75c00d7f4f37b53a048d195f11da";
 // The heat-map request as the page builds it from its defaults.
+// (decision 331: 15 minutes either side, each recording paired with its nearest report, the
+// server's own split cuts)
 const GRID_REQ = {
-  source: "both", LabelMetric: "nrs", LabelStrategy: "tertile", PercentileLow: 33.3, PercentileHigh: 66.7,
-  MatchToleranceMin: 60, MatchDirection: "pro_first", AllowWindowReuse: false,
+  source: "both", LabelMetric: "nrs", LabelStrategy: "tertile", PercentileLow: 33.3333, PercentileHigh: 66.6667,
+  MatchToleranceMin: 15, MatchDirection: "nearest", AllowWindowReuse: false,
   IncludeClinicSheetRatings: false, SlidingWindow: false,
 };
 // The all-band scan's request as the page builds it from its defaults (no clinic-sheet switch).
@@ -138,7 +140,7 @@ describe("2. the page's Recompute control and the heat maps agree", () => {
     await renderPage({ gridSettings: { ...GRID_REQ, MatchToleranceMin: 30 } });
     const line = screen.getByTestId("heatmaps-out-of-date");
     await act(async () => { fireEvent.click(within(line).getByRole("button", { name: "Recompute" })); });
-    await waitFor(() => expect(gridCalls().some(([, b]) => b.SweepMetric === "nrs" && b.MatchToleranceMin === 60)).toBe(true), { timeout: 10000 });
+    await waitFor(() => expect(gridCalls().some(([, b]) => b.SweepMetric === "nrs" && b.MatchToleranceMin === 15)).toBe(true), { timeout: 10000 });
   });
 });
 
@@ -212,5 +214,32 @@ describe("6. the matching summary and the controls the heat maps ignore", () => 
     await renderPage();
     const more = screen.getByTestId("more-matching-options");
     expect((more.textContent.match(/applies to the all-band scan[^.]*, not the heat maps/g) || []).length).toBe(3);
+  });
+});
+
+describe("7. the run the Closed-Loop page inherits (decision 331)", () => {
+  // eslint-disable-next-line global-require
+  const { biomarkerGridSettings } = require("views/Reports/ClosedLoopSim/useBandSweepGrid");
+  test("a heat-map grid shown as current records its settings as the last run", async () => {
+    await renderPage();
+    await waitFor(() => expect(loadMatchingRun(UID).source).toBe("run"), { timeout: 10000 });
+    expect(loadMatchingRun(UID).settings).toMatchObject({ MatchToleranceMin: 15,
+      MatchDirection: "nearest", MaxPerRating: 3, RefractoryMin: 2 });
+  });
+
+  test("changing a setting and pressing Recompute changes what the Closed-Loop page asks for", async () => {
+    const controls = { metric: "nrs", strategy: "tertile", percentileLow: 33.3333,
+      percentileHigh: 66.6667, matchTolerance: 30, maxPerRating: 1, refractoryMin: 2,
+      matchDirection: "nearest", matchExtentSec: 30, allowWindowReuse: false,
+      includeClinicSheetRatings: true };
+    await renderPage({ controls, gridSettings: { ...GRID_REQ, MatchToleranceMin: 15 } });
+    // nothing has run at 30 minutes yet: the grid on screen is the 15-minute one, marked stale
+    expect(biomarkerGridSettings(UID).MatchToleranceMin).not.toBe(30);
+    // the page's own Recompute (the first; the heat maps' out-of-date line draws a second)
+    await act(async () => { fireEvent.click(screen.getAllByRole("button", { name: /^Recompute( anyway)?$/ })[0]); });
+    await waitFor(() => expect(loadMatchingRun(UID).settings.MatchToleranceMin).toBe(30), { timeout: 10000 });
+    expect(loadMatchingRun(UID).settings).toMatchObject({ MaxPerRating: 1, IncludeClinicSheetRatings: true });
+    expect(biomarkerGridSettings(UID)).toMatchObject({ MatchToleranceMin: 30,
+      IncludeClinicSheetRatings: "1", SweepMetric: "nrs" });
   });
 });

@@ -91,8 +91,14 @@ def test_the_requested_score_is_served_not_the_newest(sandbox):
 def test_matching_settings_beyond_the_score(sandbox):
     """Same score, different match window / direction / split: each request gets its own grid,
     and the request's values are normalised the way the writer normalised them."""
-    _write(("a",), 0.1, request={"SweepMetric": "nrs", "MatchToleranceMin": 60,
-                                 "MatchDirection": "pro_first", "LabelStrategy": "tertile"})
+    # grid "a" at the defaults, spelled from their one home (decision 331: 15 minutes, "nearest")
+    _write(("a",), 0.1, request={"SweepMetric": "nrs",
+                                 "MatchToleranceMin": sweep_settings.DEFAULT_MATCH_TOLERANCE_MIN,
+                                 "MatchDirection": sweep_settings.DEFAULT_MATCH_DIRECTION,
+                                 "LabelStrategy": "tertile"})
+    # and one at the defaults before decision 331, which the defaults must no longer find
+    _write(("old",), 0.9, request={"SweepMetric": "nrs", "MatchToleranceMin": 60,
+                                   "MatchDirection": "pro_first", "LabelStrategy": "tertile"})
     _write(("b",), 0.2, request={"SweepMetric": "nrs", "MatchToleranceMin": 15,
                                  "MatchDirection": "prior", "LabelStrategy": "median"})
     got = adapter.band_sweep_grid_for_closed_loop(

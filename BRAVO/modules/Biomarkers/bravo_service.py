@@ -3961,13 +3961,10 @@ def _all_pro_times(pro_df):
     return np.unique(t_ep)   # sorted + de-duped
 
 
-# Default PRO<->PSD match window (minutes) when the request does not specify one. Exploratory:
-# a daily PRO is matched to the nearest streaming/PSD session whose timestamp falls within this
-# many minutes. The frontend slider sends `MatchToleranceMin`; None disables time-matching and
-# falls back to the legacy same-calendar-day aggregation.
-# Was 15: pain reports anchor neural data on a minutes-to-hours timescale, and the narrow window
-# dropped 80% of the otherwise-usable pool on RCS08 (see AUDIT_stream_*); with the pro_first
-# direction the 60-minute window lifts coverage to 290/682 (42.5%) of the matched discovery pool.
+# Default match window (minutes) when the request does not specify one: a pain report is paired
+# with band-power measurements within this many minutes either side. The page sends
+# `MatchToleranceMin`; None disables time-matching and falls back to the legacy same-calendar-day
+# aggregation. One home, `sweep_settings` (decision 331: 15 minutes, measured on the tablet clock).
 DEFAULT_MATCH_TOLERANCE_MIN = sweep_settings.DEFAULT_MATCH_TOLERANCE_MIN
 _match_tolerance_param = sweep_settings.match_tolerance_param
 
@@ -4020,9 +4017,7 @@ def _per_rating_cap_params(request_data):
     samples it keeps (`RefractoryMin`, 0..720, default 2), so a burst of samples around one report
     cannot count several times. Two endpoints used to parse these separately with the same
     defaults written twice (backend review, 2026-09-21)."""
-    max_per_rating = _int_param(request_data, "MaxPerRating", default=3, lo=1, hi=50)
-    refractory_min = _float_param(request_data, "RefractoryMin", default=2.0, lo=0.0, hi=720.0)
-    return max_per_rating, refractory_min
+    return sweep_settings.per_rating_cap_params(request_data)
 
 
 def _window_params_body(request_data, sliding):
@@ -4481,7 +4476,7 @@ def run_for_participant(request_data):
     # confirming it had become a request field with no computational effect anywhere in this
     # function -- read once, only ever echoed back, never branched on.
     match_extent_s = _float_param(request_data, "MatchExtentSec", default=float(
-        analytics.TRANSFORM_CENTERED_EXTENT_SECONDS), lo=3.0, hi=300.0)
+        sweep_settings.DEFAULT_MATCH_EXTENT_SEC), lo=3.0, hi=300.0)
     # When ON, a raw window may match EVERY PRO whose extent covers it (not just its nearest), trading
     # the no-reuse independence guarantee for sample size. Default OFF (strict one-window-one-PRO).
     allow_window_reuse = str(request_data.get("AllowWindowReuse", "")).lower() in ("1", "true", "yes", "on")
@@ -5701,7 +5696,14 @@ def compute_and_store_stability_grid(participant_uid, *, request_data=None, work
                            writer="biomarkers", trigger="stability_grid", provenance=prov,
                            root=_SHARED_CACHE_DIR_OVERRIDE,
                            extra={"sweep_key": str(sweep_key),
-                                  "rule_version": STABILITY_GRID_RULE_VERSION})
+                                  "rule_version": STABILITY_GRID_RULE_VERSION,
+                                  # The keep group of its grid, when that grid is at the daily
+                                  # defaults (decision 318), so the answer is kept as long as the
+                                  # grid is. Found rebuilding for decision 331: six daily-default
+                                  # answers written before twelve others were the ones removed.
+                                  "keep_group": sweep_settings.default_settings_keep_group(
+                                      sweep_settings.sweep_settings_tag_from_request(req),
+                                      sweep_settings.adjust_for_stim_current_param(req))})
         out["stored"] = True
     except Exception as exc:                                     # noqa: BLE001
         # A failed write is reported, never swallowed into a success: a caller that believes the
@@ -7404,6 +7406,10 @@ def deployment_summary(request_data):
             "pro_metric": core["label_metric"], "binarization": core["label_strategy"],
             # whether the clinic-sheet ratings were merged in, and how many (the PI, 2026-09-24)
             "clinic_sheet_ratings": core.get("clinic_sheet_ratings"),
+            # every matching and split setting the summary was computed under, as the parsers read
+            # them, so the Closed-Loop page can withhold a summary computed under other settings
+            # than the ones it inherited from the Biomarkers page (decision 331)
+            "matching": sweep_settings.matching_applied(rd, direction_reader=_forecast_match_direction),
         },
         "device_control": {
             "adaptive_valid": adaptive_valid, "polarity": polarity,
@@ -7905,12 +7911,7 @@ def _forecast_match_direction(request_data):
     view and that one is the discovery sweep; collapsing the two into one helper would silently
     change one of their fallback behaviours.
     """
-    _md = str(request_data.get("MatchDirection", "pro_first")).lower()
-    if _md in ("pro_first", "pro-first", "pro"):
-        return "pro_first"
-    if _md == "nearest":
-        return "nearest"
-    return "prior"
+    return sweep_settings.forecast_match_direction(request_data)
 
 
 def _device_timing_ranges():

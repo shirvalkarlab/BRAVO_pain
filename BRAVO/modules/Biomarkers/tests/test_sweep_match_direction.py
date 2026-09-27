@@ -34,8 +34,9 @@ except Exception:
 from Biomarkers import bravo_service as bs  # noqa: E402
 
 
-def test_default_with_no_match_direction_key_is_pro_first():
-    assert bs._sweep_match_direction({}) == "pro_first"
+def test_default_with_no_match_direction_key_is_nearest():
+    """The default since decision 331 (was "pro_first"), from its one home."""
+    assert bs._sweep_match_direction({}) == "nearest" == bs.sweep_settings.DEFAULT_MATCH_DIRECTION
 
 
 def test_prior_is_recognised():
@@ -61,11 +62,12 @@ def test_an_unrecognised_value_falls_back_to_pro_first_not_prior():
     assert bs._sweep_match_direction({"MatchDirection": "pro_first"}) == "pro_first"
 
 
-def test_forecast_match_direction_default_is_pro_first():
+def test_forecast_match_direction_default_is_nearest():
     """`_forecast_match_direction` is the OLDER, pre-existing MatchDirection parse used by
     `run_for_participant` and the pooled-detail builder -- a review found it duplicated verbatim
-    at both call sites, with neither copy exercised by a request-level test."""
-    assert bs._forecast_match_direction({}) == "pro_first"
+    at both call sites, with neither copy exercised by a request-level test. Its default with no key
+    is the one-home default, "nearest" since decision 331 (was "pro_first")."""
+    assert bs._forecast_match_direction({}) == "nearest"
 
 
 def test_forecast_match_direction_recognises_prior_and_nearest():

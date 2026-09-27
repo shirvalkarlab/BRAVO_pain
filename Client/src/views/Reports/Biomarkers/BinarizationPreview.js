@@ -35,6 +35,7 @@ import { plotlyLayout, PLOTLY_CONFIG, REF_LINE } from "views/Reports/figureStyle
 
 import { BIN_LO as LO, BIN_HI as HI, BIN_MID as MID, computeCuts as computeCutsShared }
   from "./binarizationModel";
+import { MATCHING_DEFAULTS } from "./matchingDefaults";
 
 // Text colours (the redesign of 2026-09-26, SPEC.md section 2): the bars keep the pain colours
 // (marks only); any word in a pain colour takes its text-safe variant, and the middle third's words
@@ -120,7 +121,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
   // independence; PSD-first (nearest/prior) leads with the band-power reading count. `su` is the
   // survey-usage block carried on counts (n_pro_total, n_pro_used, pct_pro_used, depth stats).
   const su = counts && counts.survey_usage;
-  const dir = (counts && counts.match_direction) || "pro_first";
+  const dir = (counts && counts.match_direction) || MATCHING_DEFAULTS.matchDirection;
 
   const dailyVals = useMemo(() => dayAgg.map((d) => d.mean), [dayAgg]);
   const dailyCuts = useMemo(() => computeCuts(dailyVals, strategy, percentileLow, percentileHigh),
@@ -596,13 +597,13 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
         <MDBox sx={{ px: 1, pt: 0.5, pb: 0.25 }}>
           <MDBox display="flex" flexDirection="row" justifyContent="space-between" alignItems="baseline">
             <MDTypography variant="caption" sx={{ ...TYPE.caption, fontWeight: 600, color: LO_TEXT }}>
-              {`low: ${(strategy === "tertile" ? 33 : percentileLow)}th percentile and below`}
+              {`low: ${(strategy === "tertile" ? 33 : Number(Number(percentileLow).toFixed(1)))}th percentile and below`}
             </MDTypography>
             <MDTypography variant="caption" sx={{ ...TYPE.caption, color: SUBTLE }}>
               {"drag the two handles to set the cuts"}
             </MDTypography>
             <MDTypography variant="caption" sx={{ ...TYPE.caption, fontWeight: 600, color: HI_TEXT }}>
-              {`high: ${(strategy === "tertile" ? 67 : percentileHigh)}th and above`}
+              {`high: ${(strategy === "tertile" ? 67 : Number(Number(percentileHigh).toFixed(1)))}th and above`}
             </MDTypography>
           </MDBox>
           <Slider

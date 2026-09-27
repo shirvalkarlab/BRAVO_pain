@@ -76,10 +76,70 @@ BINARIZATION_STRATEGIES = [
 ]
 DEFAULT_BINARIZATION = "tertile"
 
-# A pain report is matched to the nearest recording whose timestamp falls within this many
-# minutes. Was 15: the narrow window dropped 80 % of the otherwise-usable pool on RCS08, and with
-# the pro_first direction the 60-minute window lifts coverage to 290 of 682 reports (42.5 %).
-DEFAULT_MATCH_TOLERANCE_MIN = 60.0
+# THE MATCHING DEFAULTS, ONE HOME (decision 331, the PI's ruling of 2026-09-26). Every page and
+# every offline analysis that means "the default matching" reads these; the Biomarkers page's
+# constants block (`Client/src/views/Reports/Biomarkers/matchingDefaults.js`) carries the same
+# values and a page test (`Client/src/views/Reports/Biomarkers/matchingDefaults.test.js`) fails if
+# the two disagree.
+#
+# The window: how far either side of a pain report a band-power measurement may lie and still be
+# paired with it, in minutes. 15 since decision 331, measured on RCS08 on the tablet clock
+# (`artifacts/analysis_2026-09-26_json_time_fields_and_matching.md`, Part 2): 15 minutes keeps
+# 97-98% of the real PSD matches and 85-88% of the real TD matches; 60 minutes (the default from
+# 2026-06-28 to 2026-09-26) added almost nothing real and about tripled the matches a report moved
+# to a neighbouring day also finds; 5 minutes lost 7-26% of the real PSD matches and nearly 40% of
+# the real TD ones. The clock error left after decision 328 (seconds, at most about 5 minutes) is
+# well inside it.
+DEFAULT_MATCH_TOLERANCE_MIN = 15.0
+# Either side of the report: the remote presses fall before and after a report about equally (242
+# and 234 reports within 5 minutes), so "prior" (the recording must come first) is not the default.
+# Of the two two-sided choices, "nearest" (each recording pairs with the report nearest it, either
+# side) since decision 331, was "pro_first" (each report claims its nearest recordings). In the heat
+# maps the two are the same rule (their matcher treats only "prior" differently). Where they
+# differ -- the all-band scan, the deployment summary and the stability test -- "nearest" is the
+# one that counts one press once: the minimum gap between the samples one report keeps applies
+# under it and not under "pro_first". Measured on RCS08 (NRS, 15 minutes, cap 3, gap 2 min, the
+# pooled matcher behind the summary and the stability test): under "pro_first" 3 reports kept two
+# TD rows less than 30 s apart on one contact pair (5 such pairs), under "nearest" none; and
+# "nearest" pairs as many reports (380 against 377; 712 report-and-pair groups against 706). Neither
+# lets one recording count for two reports.
+DEFAULT_MATCH_DIRECTION = "nearest"
+# One stretch of recording answers one report (no reuse): a PSD snapshot, one press of her remote,
+# and a 3-second TD piece each count for the one report nearest them, never for two.
+DEFAULT_ALLOW_WINDOW_REUSE = False
+# The all-band scan's, the deployment summary's and the stability test's cap per report and minimum
+# gap between the samples one report keeps. NO MEASURED BASIS for either value (decision 331 did not
+# measure them); kept at their values since 2026-06-28. The gap is what keeps two overlapping
+# pieces of one press out of one report under the default direction above ("pro_first" ignores it).
+DEFAULT_MAX_PER_RATING = 3
+DEFAULT_REFRACTORY_MIN = 2.0
+# How much TD signal a report's value is the median of, in seconds (the all-band scan only; the
+# heat maps have it as their own axis). Kept at 30 s, no new measurement.
+DEFAULT_MATCH_EXTENT_SEC = 30.0
+# The clinic and at-home sheets' ratings: out unless asked for (decision 186).
+DEFAULT_INCLUDE_CLINIC_SHEET_RATINGS = False
+# The high / low split's cuts, for "tertile" and "percentile".
+DEFAULT_PERCENTILE_LOW = 33.3333
+DEFAULT_PERCENTILE_HIGH = 66.6667
+
+
+def matching_defaults():
+    """The matching and split defaults as the request keys the pages send, for the page that
+    serves them and for the test that pins the page's copy."""
+    return {"LabelMetric": DEFAULT_BIOMARKER_METRIC, "LabelStrategy": DEFAULT_BINARIZATION,
+            "PercentileLow": DEFAULT_PERCENTILE_LOW, "PercentileHigh": DEFAULT_PERCENTILE_HIGH,
+            "MatchToleranceMin": DEFAULT_MATCH_TOLERANCE_MIN,
+            "MatchDirection": DEFAULT_MATCH_DIRECTION,
+            "AllowWindowReuse": DEFAULT_ALLOW_WINDOW_REUSE,
+            "MaxPerRating": DEFAULT_MAX_PER_RATING, "RefractoryMin": DEFAULT_REFRACTORY_MIN,
+            "MatchExtentSec": DEFAULT_MATCH_EXTENT_SEC,
+            "IncludeClinicSheetRatings": DEFAULT_INCLUDE_CLINIC_SHEET_RATINGS}
+
+
+def matching_words(tol_min=None):
+    """The window in words, for sentences that state it: "15-minute" by default."""
+    v = DEFAULT_MATCH_TOLERANCE_MIN if tol_min is None else float(tol_min)
+    return f"{v:g}-minute"
 
 
 def label_strategy_params(request_data):
@@ -92,12 +152,12 @@ def label_strategy_params(request_data):
     if strat not in valid:
         strat = DEFAULT_BINARIZATION
     try:
-        low = float(request_data.get("PercentileLow", 33.3333))
-        high = float(request_data.get("PercentileHigh", 66.6667))
+        low = float(request_data.get("PercentileLow", DEFAULT_PERCENTILE_LOW))
+        high = float(request_data.get("PercentileHigh", DEFAULT_PERCENTILE_HIGH))
     except (TypeError, ValueError):
-        low, high = 33.3333, 66.6667
+        low, high = DEFAULT_PERCENTILE_LOW, DEFAULT_PERCENTILE_HIGH
     if not (0 <= low < high <= 100):
-        low, high = 33.3333, 66.6667
+        low, high = DEFAULT_PERCENTILE_LOW, DEFAULT_PERCENTILE_HIGH
     return strat, low, high
 
 
@@ -114,14 +174,72 @@ def match_tolerance_param(request_data):
     return v if v > 0 else None
 
 
+def per_rating_cap_params(request_data):
+    """(max_per_rating, refractory_min): how many samples one pain report may keep per contact pair
+    (`MaxPerRating`, 1..50) and the minimum gap in minutes between them (`RefractoryMin`, 0..720);
+    a missing or unreadable value takes the default, an out-of-range one is clamped. One home since
+    decision 331; `bravo_service._per_rating_cap_params` delegates here."""
+    request_data = request_data or {}
+
+    def _num(key, default, lo, hi, cast):
+        if key not in request_data:
+            return default
+        try:
+            v = cast(request_data.get(key))
+        except (TypeError, ValueError):
+            return default
+        return min(hi, max(lo, v))
+
+    return (_num("MaxPerRating", DEFAULT_MAX_PER_RATING, 1, 50, lambda x: int(round(float(x)))),
+            _num("RefractoryMin", DEFAULT_REFRACTORY_MIN, 0.0, 720.0, float))
+
+
+#: The request keys that carry the matching and split settings from the Biomarkers page to every
+#: request that matches pain reports to recordings (decision 331). The pain score is not among them:
+#: each page names it in its own key (`LabelMetric`, `SweepMetric`, the Closed-Loop `PainScore`).
+MATCHING_REQUEST_KEYS = ("MatchToleranceMin", "MatchDirection", "AllowWindowReuse", "MaxPerRating",
+                         "RefractoryMin", "IncludeClinicSheetRatings", "LabelStrategy",
+                         "PercentileLow", "PercentileHigh")
+
+
+def matching_applied(request_data, *, direction_reader=None):
+    """The matching and split settings a request is answered under, through the same parsers the
+    Biomarkers routines use: the echo a page compares with what it asked for (decision 331).
+    `direction_reader` is the caller's own direction parser where it differs from the sweep's."""
+    rd = request_data or {}
+    strategy, low, high = label_strategy_params(rd)
+    cap, gap = per_rating_cap_params(rd)
+    tol = match_tolerance_param(rd)
+    return {"match_tolerance_min": None if tol is None else float(tol),
+            "match_direction": (direction_reader or sweep_match_direction)(rd),
+            "allow_window_reuse": allow_window_reuse_param(rd),
+            "max_per_rating": int(cap), "refractory_min": float(gap),
+            "include_clinic_sheet_ratings": include_clinic_sheet_ratings_param(rd),
+            "label_strategy": strategy, "percentile_low": float(low), "percentile_high": float(high)}
+
+
 def sweep_match_direction(request_data):
     """The discovery sweep's reading of `MatchDirection`: "prior", "nearest", else "pro_first".
     Deliberately NOT `bravo_service._forecast_match_direction`, which falls back to "prior" for the
     threshold-deployment view's causal-forecasting reading; collapsing the two would silently
     change one of their fallbacks."""
     request_data = request_data or {}
-    _md = str(request_data.get("MatchDirection", "pro_first")).lower()
+    _md = str(request_data.get("MatchDirection", DEFAULT_MATCH_DIRECTION)).lower()
     return "prior" if _md == "prior" else ("nearest" if _md == "nearest" else "pro_first")
+
+
+def forecast_match_direction(request_data):
+    """The direction reading of the band-validation endpoints (the deployment summary, its ROC and
+    the stability test): "pro_first" (also "pro-first", "pro"), "nearest", else "prior" -- an
+    unrecognised value falls back to the causal "prior", unlike `sweep_match_direction`. A missing
+    key takes the default. One home since decision 331 (`bravo_service._forecast_match_direction`
+    delegates here), so the Closed-Loop report can echo what the stability card used."""
+    _md = str((request_data or {}).get("MatchDirection", DEFAULT_MATCH_DIRECTION)).lower()
+    if _md in ("pro_first", "pro-first", "pro"):
+        return "pro_first"
+    if _md == "nearest":
+        return "nearest"
+    return "prior"
 
 
 def allow_window_reuse_param(request_data):

@@ -37,19 +37,27 @@ import { SessionController } from "database/session-control";
 import { useCachedResult } from "database/useCachedResult";
 
 import { CL } from "views/Reports/moduleCacheKeys";
-import { loadControls } from "views/Reports/Biomarkers/biomarkerStateStore";
+import { loadMatchingRun } from "views/Reports/Biomarkers/biomarkerStateStore";
 
 /** The request keys that decide which stored grid the Biomarkers page shows; nothing else. */
 export const GRID_SETTING_KEYS = ["LabelMetric", "MatchToleranceMin", "MatchDirection",
   "AllowWindowReuse", "LabelStrategy", "PercentileLow", "PercentileHigh", "IncludeClinicSheetRatings"];
 
-/** The Biomarkers page's persisted score and settings for this participant, as request keys. */
+/**
+ * The score and settings of the Biomarkers page's LAST RUN for this participant, as request keys
+ * (decision 331: one source, `loadMatchingRun`, shared with the report and the summary). Until
+ * decision 331 this read the page's last COMPUTED request, which since 2026-09-26 no longer carries
+ * the clinic-sheet switch, so this card asked for the sheets-off grid whatever the Biomarkers page
+ * showed. Booleans are sent as "1" / "", as the Biomarkers page's own grid request reads them.
+ */
 export function biomarkerGridSettings(participantUid) {
-  const P = (participantUid && loadControls(participantUid)) || {};
-  const rp = P.requestParams || {};
+  const s = loadMatchingRun(participantUid).settings || {};
   const out = {};
-  GRID_SETTING_KEYS.forEach((k) => { if (rp[k] !== undefined && rp[k] !== null) out[k] = rp[k]; });
-  if (P.metric) out.SweepMetric = P.metric;
+  GRID_SETTING_KEYS.forEach((k) => {
+    if (s[k] === undefined || s[k] === null) return;
+    out[k] = typeof s[k] === "boolean" ? (s[k] ? "1" : "") : s[k];
+  });
+  if (s.LabelMetric) out.SweepMetric = s.LabelMetric;
   return out;
 }
 

@@ -190,13 +190,14 @@ export function ZeroMaFigure({ result }) {
         {"Filled dot: still clear after allowing for the bands tested. Lines: 95% range, resampling whole days. Above zero, pain is higher when band power is higher."}
       </div>
       <table data-testid="zero-ma-coverage" style={TABLE}>
-        <thead><tr>{["Stretch", "Ratings", "With a recording within 60 min", "With a recording the same day"].map((h) => (
+        {/* The page's window since decision 331 (15 min), 60 min in runs saved before it. */}
+        <thead><tr>{["Stretch", "Ratings", `With a recording within ${(cov[0] && cov[0].page_window_min) || 60} min`, "With a recording the same day"].map((h) => (
           <th key={h} style={HEADC}>{h}</th>))}</tr></thead>
         <tbody>{cov.map((c) => (
           <tr key={c.stretch}>
             <td style={CELL}>{c.stretch}</td>
             <td style={CELL}>{`${c.reports} on ${c.days_with_reports} days`}</td>
-            <td style={CELL}>{c.matched_60min}</td>
+            <td style={CELL}>{c.matched_page_window != null ? c.matched_page_window : c.matched_60min}</td>
             <td style={CELL}>{`${c.matched_same_day} on ${c.days_matched} days`}</td>
           </tr>))}</tbody>
       </table>

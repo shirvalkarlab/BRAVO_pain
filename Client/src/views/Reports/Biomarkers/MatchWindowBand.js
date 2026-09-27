@@ -6,8 +6,9 @@
  * timing histogram is its figure. Every setting that decides what is paired, the extra options (cap
  * per report, gap, length of signal, reuse) and the high / low split's own controls sit in ONE
  * compact panel behind a large "Adjust matching parameters" button, closed by default, with the
- * settings in force printed beside it ("Paired within ±60 min · each report picks its nearest
- * recordings · high / low split: lowest and highest thirds ...") (the PI, 2026-09-26). Each control
+ * settings in force printed beside it ("Paired within ±15 min · each recording picks its nearest
+ * report · high / low split: lowest and highest thirds ...") (the PI, 2026-09-26; the defaults since
+ * decision 331, from `matchingDefaults.js`). Each control
  * carries one short sentence under it. The coverage sentence, the timing histogram and the high / low
  * preview follow every control at once. The heat maps and the all-band scan do NOT: a moved setting
  * leaves them on screen as computed, the heat maps say which setting changed, and the page's

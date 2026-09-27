@@ -59,7 +59,7 @@ test("the deployment report's request carries the chosen score, so the cached an
 test("the page offers the shared list and sends the chosen score to both requests", () => {
   const src = fs.readFileSync(path.join(__dirname, "index.js"), "utf8");
   expect(src).toMatch(/from "views\/Reports\/painScores"/);
-  expect(src).toMatch(/summaryRequestParams\(bc, includeSheets, painScore\)/);
+  expect(src).toMatch(/summaryRequestParams\(bc, includeSheets, painScore, inherited\)/);
   expect(src).toMatch(/useDeploymentReport\(\{[^}]*painScore/);
   expect(src).toMatch(/<PainScoreSelect/);
 });
