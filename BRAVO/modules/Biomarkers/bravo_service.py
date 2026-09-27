@@ -4452,6 +4452,14 @@ def run_for_participant(request_data):
     chronic = power_list if power_list else None
 
     pro_df, label_metric, kmeans_features = _resolve_biomarker_metric(request_data, pro_df)
+    # THE CLINIC AND AT-HOME SHEETS' SCORES, when the request's switch is on (the PI, 2026-09-27:
+    # the all-band scan follows the same switch the heat maps do, not a separate rule). The switch
+    # used to reach only the heat-map grid; a scan run with it on used to read the home surveys
+    # only, silently.
+    _metric_label = next((m["label"] for m in BIOMARKER_METRICS if m["key"] == label_metric),
+                         str(label_metric))
+    pro_df, _clinic_sheet_block = _merge_clinic_sheet_ratings_into_pro_df(
+        participant_uid, label_metric, _metric_label, pro_df, request_data)
     label_strategy, low_pct, high_pct = _label_strategy_params(request_data)
     match_tol_min = _match_tolerance_param(request_data)
     max_per_rating, refractory_min = _per_rating_cap_params(request_data)
@@ -4652,6 +4660,9 @@ def run_for_participant(request_data):
         f"({', '.join(distinct_regions)}) into one threshold at raw (un-normalized) scale; "
         f"interpret per target rather than as a single combined biomarker."
         if len(distinct_regions) > 1 else None)
+    # The clinic-sheet switch's effect on THIS request, the same field name the heat-map grid uses
+    # (the PI, 2026-09-27), so the page's one caption reads either response.
+    out["clinic_sheet_ratings"] = _clinic_sheet_block
     return out
 
 
@@ -5854,6 +5865,52 @@ def _merge_clinic_sheet_ratings(participant_uid, label_metric, metric_label, pro
         flags = np.asarray(flags, dtype=bool)
         block["n_added"] = int(st.size)
     return pro_times, pain_values, flags, block
+
+
+def _merge_clinic_sheet_ratings_into_pro_df(participant_uid, label_metric, metric_label, pro_df,
+                                            request_data):
+    """The clinic and at-home sheets' scores added as extra rows of `pro_df`, when the request's
+    switch is on -- the same rule and the same rows `_merge_clinic_sheet_ratings` adds for the
+    heat-map grid (decision 186), now reaching the all-band scan too (the PI, 2026-09-27: "if
+    clinic readings were activated by clicking the buttons they should be used ... same as the
+    heat maps"). `pipeline.run_biomarker` takes the tidy DataFrame, not the (times, values) arrays
+    the sweep reads, so this adds ROWS carrying only the chosen score and its UTC time column --
+    every other column stays NaN, exactly as an ordinary REDCap report with that field unset would
+    read. The existing rows are never touched: `sheet_ratings.merge_ratings` is a concatenation, so
+    reusing its counterpart here (`sheet_ratings_for_metric`) cannot drop or reorder a real report.
+
+    Returns `(pro_df, block)`; with the switch off, or nothing to add, `pro_df` comes back
+    unchanged and `block` is the same shape `_merge_clinic_sheet_ratings` returns, for the one
+    response field both routes fill (`clinic_sheet_ratings`)."""
+    include = _include_clinic_sheet_ratings_param(request_data)
+    block = {"included": bool(include), "n_available": 0, "n_added": 0,
+             "sheet_column": None, "scale": None, "reason": None}
+    if not include:
+        return pro_df, block
+    steps, why = load_clinic_sheet_steps(participant_uid)
+    col_scale = sheet_ratings.SHEET_COLUMN_FOR_METRIC.get(str(label_metric))
+    if col_scale is not None:
+        block["sheet_column"], block["scale"] = col_scale
+    if steps is None:
+        block["reason"] = why
+        return pro_df, block
+    if col_scale is None:
+        block["reason"] = f"the sheets carry no column for {metric_label}"
+        return pro_df, block
+    st, sv, _setting = sheet_ratings.sheet_ratings_for_metric(steps, label_metric)
+    block["n_available"] = int(st.size)
+    block["n_added"] = int(st.size)
+    if st.size == 0:
+        return pro_df, block
+    added = pd.DataFrame({
+        _PRO_TIME_UTC_COL: pd.to_datetime(st, unit="s", utc=True).tz_localize(None),
+        str(label_metric): sv,
+        "_from_clinic_sheet": True,
+    })
+    if pro_df is None or len(pro_df) == 0:
+        return added, block
+    merged = pd.concat([pro_df, added], ignore_index=True, sort=False)
+    return merged, block
 
 def load_stored_stability_grid(participant_uid, *, consumer="biomarkers"):
     """The newest stored stability grid for this participant, as

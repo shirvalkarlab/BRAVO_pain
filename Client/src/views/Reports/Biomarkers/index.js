@@ -191,16 +191,7 @@ function Biomarkers() {
   // Restore the last-computed requestParams so a return visit isn't "dirty" and the results show
   // without re-clicking Compute. If the in-memory heavy cache is fresh we already seeded `data`, so
   // the fetch effect short-circuits (cache hit); otherwise this drives the auto-recompute.
-  // A request saved before 2026-09-26 may carry the clinic-sheet switch, which the all-band scan
-  // never read and the snapshot no longer holds; it is dropped so a return visit is not called
-  // out of date for it.
-  const [requestParams, setRequestParams] = useState(() => {
-    const rp = (persisted && persisted.requestParams) || null;
-    if (!rp) return null;
-    const rest = { ...rp };
-    delete rest.IncludeClinicSheetRatings;
-    return rest;
-  });
+  const [requestParams, setRequestParams] = useState(() => (persisted && persisted.requestParams) || null);
   // There is no `computing` state either: whether a request is in flight is the shared cache hook's
   // answer to give, and a local copy could only ever disagree with it.
   const [alert, setAlert] = useState(null);
@@ -230,9 +221,10 @@ function Biomarkers() {
     MatchDirection: matchDirection,
     MatchExtentSec: matchExtentSec,
     AllowWindowReuse: allowWindowReuse,
-    // No clinic-sheet switch: the all-band scan reads the home pain surveys (REDCap) only, so the
-    // switch cannot change it and must not mark it out of date (review of 2026-09-26). The switch
-    // reaches the heat maps through their own request below.
+    // The clinic-sheet switch reaches the all-band scan the same way it reaches the heat maps (the
+    // PI, 2026-09-27): on, the clinic and at-home sheets' ratings for the chosen score are added;
+    // off, home surveys only. Moving the switch now marks this stale, like any other setting.
+    IncludeClinicSheetRatings: includeClinicSheetRatings,
     SlidingWindow: slidingWindow,
   });
   /**
@@ -953,9 +945,19 @@ function Biomarkers() {
                             : ""}
                       </MDTypography>
                     ) : null}
-                    <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink2, display: "block" }}>
-                      {"The all-band scan uses the home pain surveys only; the clinic sheet switch applies to the heat maps."}
-                    </MDTypography>
+                    {data.clinic_sheet_ratings && data.clinic_sheet_ratings.included ? (
+                      <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink2, display: "block" }}>
+                        {data.clinic_sheet_ratings.n_added
+                          ? `Includes ${data.clinic_sheet_ratings.n_added} clinic and at-home sheet ratings, the same switch the heat maps use.`
+                          : (data.clinic_sheet_ratings.reason
+                            ? `Clinic sheet ratings are on, but ${data.clinic_sheet_ratings.reason}.`
+                            : "Clinic sheet ratings are on, but none carried this score.")}
+                      </MDTypography>
+                    ) : (
+                      <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink2, display: "block" }}>
+                        {"Home pain surveys only; the same switch the heat maps use is off."}
+                      </MDTypography>
+                    )}
                     {data.recorded_powers && data.recorded_powers.length ? (
                       <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink2, display: "block", mt: 0.5 }}>
                         {"Recorded power channels: "}
