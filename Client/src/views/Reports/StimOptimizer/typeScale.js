@@ -16,6 +16,7 @@ import { useState } from "react";
 import { Collapse } from "@mui/material";
 
 import MDBox from "components/MDBox";
+import FoldArrow from "../paper/FoldArrow";
 
 import {
   T, TYPE as TOKEN_TYPE, FONT_FAMILY, WEIGHT, STATE, GLYPH, SPACE, WRAP, RADIUS,
@@ -99,9 +100,8 @@ export function SizedFold({ show, hide, defaultOpen = false, children, mt = 1, d
       <button type="button" onClick={toggle} aria-expanded={open}
         style={{ fontSize: TYPE.body, lineHeight: "22px", color: T.ink2, background: "none", border: 0,
           padding: 0, cursor: "pointer", fontFamily: "inherit", textAlign: "left",
-          display: "inline-flex", gap: SPACE.xs, alignItems: "baseline" }}>
-        <span aria-hidden="true" style={{ color: T.ink3, display: "inline-block", width: "1em",
-          transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▸</span>
+          display: "inline-flex", gap: SPACE.xs, alignItems: "center" }}>
+        <FoldArrow open={open} />
         <span>{open ? (hide || "Hide") : show}</span>
       </button>
       <Collapse in={open} unmountOnExit={false}>

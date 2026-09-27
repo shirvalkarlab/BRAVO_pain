@@ -32,6 +32,7 @@ import PropTypes from "prop-types";
 import { T, TYPE, LAYOUT, CARD, SPACE, WRAP } from "assets/theme/base/tokens";
 
 import Fold from "./Fold";
+import FoldArrow from "./FoldArrow";
 
 export default function Section({ id, question, answer, actions, reading, method, methodLabel,
   children, collapsible, defaultOpen, lead }) {
@@ -61,9 +62,8 @@ export default function Section({ id, question, answer, actions, reading, method
       data-paper="section-toggle"
       style={{ font: "inherit", color: "inherit", background: "none", border: 0, padding: 0,
         margin: 0, textAlign: "left", cursor: "pointer", display: "inline-flex",
-        alignItems: "baseline", gap: SPACE.xs }}>
-      <span aria-hidden="true" style={{ display: "inline-block", width: "1em", color: T.ink3,
-        transform: open ? "rotate(90deg)" : "none" }}>{"\u25B8"}</span>
+        alignItems: "center", gap: SPACE.xs }}>
+      <FoldArrow open={open} />
       <span>{question}</span>
       {!open ? <span style={{ ...TYPE.body, color: T.ink3 }}>{"(show)"}</span> : null}
     </button>

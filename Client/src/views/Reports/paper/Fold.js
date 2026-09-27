@@ -23,6 +23,7 @@ import { useState, useId } from "react";
 import PropTypes from "prop-types";
 
 import { T, TYPE, SPACE } from "assets/theme/base/tokens";
+import FoldArrow from "./FoldArrow";
 
 export default function Fold({ label, inside, defaultOpen, onChange, children }) {
   const [open, setOpen] = useState(!!defaultOpen);
@@ -38,8 +39,7 @@ export default function Fold({ label, inside, defaultOpen, onChange, children })
         style={{ ...TYPE.body, color: T.ink2, background: "none", border: 0, padding: 0,
           cursor: "pointer", fontFamily: "inherit", textAlign: "left", display: "inline-flex",
           gap: SPACE.xs, alignItems: "baseline" }}>
-        <span aria-hidden="true" data-paper="fold-arrow" style={{ color: T.ink3, display: "inline-block", width: "1em",
-          transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▸</span>
+        <FoldArrow open={open} />
         <span>
           {label}
           {inside ? <span style={{ color: T.ink3 }}>{` (${inside})`}</span> : null}

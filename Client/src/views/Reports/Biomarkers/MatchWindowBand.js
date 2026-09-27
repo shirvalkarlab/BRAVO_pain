@@ -26,6 +26,7 @@ import { T, TYPE, RADIUS, FOCUS_RING } from "assets/theme/base/tokens";
 import { PAIN } from "assets/theme/base/dataColors";
 
 import TimingHistogram from "./TimingHistogram";
+import FoldArrow from "../paper/FoldArrow";
 
 const LABEL_SX = { ...TYPE.body, fontWeight: 600, color: T.ink, display: "block", mb: 0.5 };
 const NOTE_SX = { ...TYPE.caption, color: T.ink3, display: "block", mt: 0.5 };
@@ -113,8 +114,7 @@ export default function MatchWindowBand({
                  display: "inline-flex", alignItems: "center", gap: 1.25,
                  "&:hover": { background: T.accentTint }, "&:active": { transform: "translateY(1px)" },
                  "&:focus-visible": FOCUS_RING }}>
-          <span aria-hidden="true" style={{ display: "inline-block", width: "1em",
-            transform: open ? "rotate(90deg)" : "none" }}>{"\u25B8"}</span>
+          <FoldArrow open={open} />
           {"Adjust matching parameters"}
         </MDBox>
         <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink2 }} data-testid="matching-summary">

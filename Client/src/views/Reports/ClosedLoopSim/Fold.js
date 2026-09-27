@@ -18,6 +18,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import PAL from "./palette";
+import FoldArrow from "../paper/FoldArrow";
 
 export default function Fold({ show, hide, defaultOpen = false, children, mt = 0.6, dense = false,
   onChange = null }) {
@@ -35,13 +36,12 @@ export default function Fold({ show, hide, defaultOpen = false, children, mt = 0
       <MDTypography variant="caption" component="button" type="button"
         onClick={toggle} aria-expanded={open}
         sx={{ fontSize: PAL.fs.body, lineHeight: "22px", color: PAL.ink2, cursor: "pointer",
-          display: "inline-flex", alignItems: "baseline", gap: 1, background: "none", border: 0,
+          display: "inline-flex", alignItems: "center", gap: 1, background: "none", border: 0,
           padding: 0, fontFamily: "inherit", textAlign: "left",
           "&:hover": { textDecoration: "underline" },
           "&:focus-visible": { outline: `2px solid ${PAL.accent}`, outlineOffset: 2,
             borderRadius: "4px" } }}>
-        <span aria-hidden="true" style={{ display: "inline-block", width: "1em", color: PAL.ink3,
-          transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▸</span>
+        <FoldArrow open={open} />
         {open ? (hide || "Hide") : show}
       </MDTypography>
       <Collapse in={open} unmountOnExit={false}>

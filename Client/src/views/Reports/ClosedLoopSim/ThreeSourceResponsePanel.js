@@ -35,6 +35,7 @@ import {
 import { PAL, OKABE_ITO } from "./palette";
 import { fmtHz, fmtNum, fmtP } from "./deployFormat";
 import Fold from "./Fold";
+import FoldArrow from "../paper/FoldArrow";
 import { TYPE, WRAP, CARD } from "assets/theme/base/tokens";
 import { plotlyLayout } from "views/Reports/figureStyle";
 
@@ -403,10 +404,9 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
         <Typography component="button" type="button"
           onClick={() => setShowSpectrum((s) => !s)} aria-expanded={showSpectrum}
           sx={{ ...TYPE.body, color: PAL.ink2, cursor: "pointer", background: "none", border: 0, padding: 0,
-            fontFamily: "inherit", display: "inline-flex", alignItems: "baseline", gap: 1,
+            fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 1,
             "&:hover": { textDecoration: "underline" } }}>
-          <span aria-hidden="true" style={{ display: "inline-block", width: "1em", color: PAL.ink3,
-            transform: showSpectrum ? "rotate(90deg)" : "none" }}>▸</span>
+          <FoldArrow open={showSpectrum} />
           {showSpectrum ? "Hide the other bands"
             : `Show the change per milliamp at every band from ${fmtHz(SPECTRUM_LO_HZ)} to ${fmtHz(SPECTRUM_HI_HZ)} Hz`}
         </Typography>
