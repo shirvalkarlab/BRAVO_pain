@@ -105,7 +105,7 @@ function useDebounced(value, delay = 250) {
 }
 
 /** The browser tab says the page's question (taste audit C7, 2026-09-26). */
-export const DOCUMENT_TITLE = "Which brain signal tracks pain";
+export const DOCUMENT_TITLE = "Biomarkers exploration";
 
 function Biomarkers() {
   const navigate = useNavigate();
@@ -562,7 +562,8 @@ function Biomarkers() {
   );
 
   const moreOptions = (
-    <MDBox display="flex" flexDirection="column" gap={2} sx={{ maxWidth: 560 }}>
+    <MDBox sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+                 columnGap: 3, rowGap: 2 }}>
       {/* The cap per rating, and the minimum gap between the samples it keeps. */}
       <MDBox>
         <MDTypography component="span" sx={LABEL_SX}>
@@ -768,9 +769,9 @@ function Biomarkers() {
             </Grid>
 
             {/* ── §2 "How are reports paired with recordings?" (SPEC.md section 5.1 item 3): the
-                coverage sentence as the answer, the timing histogram as the figure, the settings in
-                one fold whose row names them, the rest under "More options"; then the preview of the
-                high / low split. No box inside this card (decision 304). */}
+                coverage sentence as the answer, the timing histogram as the figure, then one large
+                "Adjust matching parameters" button (closed by default; the PI, 2026-09-26) opening a
+                compact panel with every matching control, the extra options and the high / low split. */}
             <Grid item xs={12}>
               <Section id="biomarker-pairing" question="How are reports paired with recordings?">
                 <MDBox>
@@ -792,25 +793,25 @@ function Biomarkers() {
                     includeClinicSheetRatings={includeClinicSheetRatings}
                     extraControls={clinicSheetControl}
                     moreOptions={moreOptions}
-                  />
-                </MDBox>
-                <MDBox mt={4} pt={3} sx={{ borderTop: `1px solid ${T.rule}` }}>
-                  <BinarizationPreview
-                    points={previewPoints}
-                    strategy={strategy}
-                    percentileLow={percentileLow}
-                    percentileHigh={percentileHigh}
-                    metricLabel={previewMetricLabel}
-                    metricKey={metric}
-                    totalReports={painScores && Number.isFinite(painScores.n_reports) ? painScores.n_reports : null}
-                    loading={painLoading}
-                    matchTolerance={matchTolerance}
-                    scanModel={scanModel}
-                    matchedLoading={availLoading}
-                    matchDirty={dirty}
-                    setPercentileLow={setPercentileLow}
-                    setPercentileHigh={setPercentileHigh}
-                    setStrategy={setStrategy}
+                    binarization={(
+                      <BinarizationPreview
+                        points={previewPoints}
+                        strategy={strategy}
+                        percentileLow={percentileLow}
+                        percentileHigh={percentileHigh}
+                        metricLabel={previewMetricLabel}
+                        metricKey={metric}
+                        totalReports={painScores && Number.isFinite(painScores.n_reports) ? painScores.n_reports : null}
+                        loading={painLoading}
+                        matchTolerance={matchTolerance}
+                        scanModel={scanModel}
+                        matchedLoading={availLoading}
+                        matchDirty={dirty}
+                        setPercentileLow={setPercentileLow}
+                        setPercentileHigh={setPercentileHigh}
+                        setStrategy={setStrategy}
+                      />
+                    )}
                   />
                 </MDBox>
               </Section>
@@ -858,7 +859,7 @@ function Biomarkers() {
               {!data && !alert ? (
                 <MDBox mt={2}>
                   <MDTypography variant="button" sx={{ ...TYPE.body, color: T.ink2 }}>
-                    {"The timeline, the matching card and the heat maps are already live. Click "}
+                    {"The timeline, the matching settings and the heat maps are already live. Click "}
                     <strong>Recompute</strong>{" above to run the all-band scan."}
                   </MDTypography>
                 </MDBox>

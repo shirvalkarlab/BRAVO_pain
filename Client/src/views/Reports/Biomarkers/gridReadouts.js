@@ -22,7 +22,7 @@
  * different numbers). The value the server sends as `family_wise_q_8_to_30hz` is a
  * Benjamini-Hochberg q, corrected for testing every one of the 22 band centres; it is now printed
  * as "q 0.002 (p corrected for testing 22 bands)", never as "p". A cell's own uncorrected p is
- * still printed as "p ... for this square alone". The numbers and their rounding are unchanged.
+ * printed as "p". Every p and q prints at most two decimals, "< 0.01" below 0.005 (the PI, 2026-09-26).
  */
 import { T } from "assets/theme/base/tokens";
 
@@ -44,11 +44,14 @@ function fmtSigned(v, d = 2) {
   return `${n < 0 ? "−" : ""}${Math.abs(n).toFixed(d)}`;
 }
 
+/** "p < 0.01" or "p = 0.03": the p with its sign, so a small p never reads "p = < 0.01". */
+export function pEquals(p) {
+  const t = fmtP(p);
+  return t.startsWith("<") ? `p ${t}` : `p = ${t}`;
+}
+
 function fmtQ(q) {
-  const n = Number(q);
-  if (!Number.isFinite(n)) return "not given";
-  if (n >= 0.01) return n.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
-  return n.toPrecision(2);
+  return fmtP(q);
 }
 
 function bestRowFor(sw, kind, colIndex) {
@@ -125,11 +128,13 @@ export function stabilityBullet() {
   return "Inside a circle: \u2713 the band tracks pain the same at every stimulation setting; \u2715 differently; ? cannot tell.";
 }
 
+/** A p or q at most two decimals (the PI, 2026-09-26: "max 2 digits after the decimal"): "0.03",
+ *  "< 0.01" below 0.005 so a small value never prints as zero. */
 export function fmtP(p) {
   const n = Number(p);
   if (!Number.isFinite(n)) return "not given";
-  if (n >= 0.001) return n.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
-  return n.toPrecision(3);
+  if (n < 0.005) return "< 0.01";
+  return n.toFixed(2);
 }
 
 /** The hover's third line (the PI, 2026-09-16: "X ratings, q = Y" and nothing else -- the interval,
@@ -150,7 +155,7 @@ export function hoverReadout(sw, kind, colIndex, rowIndex) {
   }
   const { n, p } = cellNP(sw, kind, colIndex, rowIndex);
   if (!(n > 0)) return "";
-  return p == null ? `${n} ratings` : `${n} ratings \u00b7 p ${fmtP(p)} for this square alone`;
+  return p == null ? `${n} ratings` : `${n} ratings \u00b7 p ${fmtP(p)}`;
 }
 
 /** One cell's own count and uncorrected p off the response; `p` null where the response has none. */
@@ -226,7 +231,7 @@ export function deviceSpectrumBullets(sw) {
   return [
     `${n}${ofTot} matched reports${share} had no TD in the match window and were read from PSD: `
       + "a row of N s uses the nearest ceil(N/30) PSDs, or nothing.",
-    "Matching here uses the histogram card's tolerance.",
+    "Matching uses the match window set under Adjust matching parameters.",
   ];
 }
 
@@ -237,7 +242,7 @@ export function clinicSheetBullets(sw) {
   const cs = sw && sw.clinic_sheet_ratings;
   if (!cs) return [];
   if (!cs.included) {
-    return ["The heat maps use the home pain surveys only; the clinic titration sessions' scores are off (a switch on the matching card)."];
+    return ["The heat maps use the home pain surveys only; the clinic titration sessions' scores are off (a switch under Adjust matching parameters)."];
   }
   if (!cs.n_added) {
     return [cs.reason ? `Sheet scores on, but ${cs.reason}.` : "Sheet scores on, but none carried this score."];
@@ -250,7 +255,7 @@ export function clinicSheetBullets(sw) {
 }
 
 
-/** "+0.12" / "\u22120.31" / "0.00": a correlation with its sign always written. */
+/** "+0.12" / "\u22120.31" / "0.00": an R with its sign always written. */
 function fmtR(v) {
   const n = Number(v);
   if (v == null || !Number.isFinite(n)) return "not given";
@@ -280,7 +285,7 @@ export function sourceSplitLine(sw, colIndex, rowIndex) {
     const lo = at(src.r_low_grid);
     const hi = at(src.r_high_grid);
     const iv = (lo != null && hi != null) ? ` (${fmtR(lo)} to ${fmtR(hi)})` : "";
-    return `${name} values: r ${fmtR(r)}${iv}, ${n} reports`;
+    return `${name} values: R ${fmtR(r)}${iv}, ${n} reports`;
   };
   const parts = [part("TD", split.td), part("PSD", split.psd)].filter(Boolean);
   return parts.length ? parts.join(" \u00b7 ") : null;

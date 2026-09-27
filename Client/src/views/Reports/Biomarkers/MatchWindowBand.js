@@ -3,24 +3,25 @@
  * 2026-09-21, option C; laid out again in the redesign of 2026-09-26, SPEC.md section 5.1 item 3).
  *
  * One bold sentence says how many pain reports the match window admits (the section's answer); the
- * timing histogram is its figure; the settings that decide what is paired sit in one fold whose row
- * reads the settings in force ("Paired within ±60 min · each report picks its nearest recordings
- * ..."), and the rest under "More options". Each control carries one short sentence under it, always
- * shown (the "Expand descriptions" button is gone). Everything here changes the card below it
- * without a Recompute press.
+ * timing histogram is its figure. Every setting that decides what is paired, the extra options (cap
+ * per report, gap, length of signal, reuse) and the high / low split's own controls sit in ONE
+ * compact panel behind a large "Adjust matching parameters" button, closed by default, with the
+ * settings in force printed beside it ("Paired within ±60 min · each report picks its nearest
+ * recordings ...") (the PI, 2026-09-26). Each control carries one short sentence under it. Everything
+ * here changes the page without a Recompute press.
  *
- * On screen: Biomarkers page, the matching section, above the high / low split preview.
+ * On screen: Biomarkers page, the matching section, under the heat maps.
  */
+import { useState } from "react";
 import { Grid, Select, MenuItem, FormControl, Slider, TextField, ToggleButton, ToggleButtonGroup } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
-import { T, TYPE } from "assets/theme/base/tokens";
+import { T, TYPE, RADIUS, FOCUS_RING } from "assets/theme/base/tokens";
 import { PAIN } from "assets/theme/base/dataColors";
 
 import TimingHistogram from "./TimingHistogram";
-import Fold from "./Fold";
 
 const LABEL_SX = { ...TYPE.body, fontWeight: 600, color: T.ink, display: "block", mb: 0.5 };
 const NOTE_SX = { ...TYPE.caption, color: T.ink3, display: "block", mt: 0.5 };
@@ -35,7 +36,7 @@ export const DIRECTION_WORDS = {
   prior: "Each recording picks the next report after it",
 };
 
-/** The one-line summary the matching fold's row prints. */
+/** The one-line summary printed beside the "Adjust matching parameters" button. */
 export function matchingSummary({ matchTolerance, matchDirection, maxPerRating, includeClinicSheetRatings }) {
   const parts = [`Paired within \u00b1${matchTolerance} min`];
   if (DIRECTION_WORDS[matchDirection]) parts.push(DIRECTION_WORDS[matchDirection].toLowerCase());
@@ -61,8 +62,12 @@ export default function MatchWindowBand({
   matchDirection, setMatchDirection,
   scanIndex, painSeries,
   maxPerRating = null, includeClinicSheetRatings = null,
-  extraControls = null, moreOptions = null,
+  extraControls = null, moreOptions = null, binarization = null, defaultOpen = false,
 }) {
+  // THE MATCHING PANEL (the PI, 2026-09-26): one large bold button, closed by default, opens a
+  // compact panel with every matching control, the extra options and the high / low split's own
+  // controls. The panel stays MOUNTED while closed (hidden), so tests and search still read it.
+  const [open, setOpen] = useState(!!defaultOpen);
   const score = metricLabel || "pain";
   const twoCut = strategy === "tertile" || strategy === "percentile";
   const lowPct = strategy === "tertile" ? 33.3 : percentileLow;
@@ -80,9 +85,26 @@ export default function MatchWindowBand({
       <TimingHistogram scanIndex={scanIndex} painSeries={painSeries} windowMin={matchTolerance}
                        matchDirection={matchDirection} metricLabel={metricLabel} />
 
-      <Fold show={matchingSummary({ matchTolerance, matchDirection, maxPerRating, includeClinicSheetRatings })}
-            inside="change">
-      <Grid container spacing={3} alignItems="flex-start">
+      <MDBox display="flex" flexDirection="row" flexWrap="wrap" alignItems="center" gap={1.5}>
+        <MDBox component="button" type="button" onClick={() => setOpen(!open)} aria-expanded={open}
+               aria-controls="matching-panel" data-testid="adjust-matching"
+               sx={{ ...TYPE.lead, fontFamily: "inherit", fontWeight: 600, color: T.accent,
+                 background: T.surface, border: `2px solid ${T.accent}`, borderRadius: `${RADIUS.sm}px`,
+                 px: 2.25, py: 1.25, cursor: "pointer", whiteSpace: "nowrap",
+                 display: "inline-flex", alignItems: "center", gap: 1.25,
+                 "&:hover": { background: T.accentTint }, "&:active": { transform: "translateY(1px)" },
+                 "&:focus-visible": FOCUS_RING }}>
+          <span aria-hidden="true" style={{ display: "inline-block", width: "1em",
+            transform: open ? "rotate(90deg)" : "none" }}>{"\u25B8"}</span>
+          {"Adjust matching parameters"}
+        </MDBox>
+        <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink2 }} data-testid="matching-summary">
+          {matchingSummary({ matchTolerance, matchDirection, maxPerRating, includeClinicSheetRatings })}
+        </MDTypography>
+      </MDBox>
+      <MDBox id="matching-panel" hidden={!open} data-testid="matching-panel"
+             sx={{ borderLeft: `2px solid ${T.accent}`, pl: 2, py: 1 }}>
+      <Grid container spacing={2} alignItems="flex-start">
         {/* The match window: how far from a pain report a neural sample may sit and still carry its rating. */}
         <Grid item xs={12} md={5}>
           <MDTypography component="span" sx={LABEL_SX}>
@@ -172,12 +194,17 @@ export default function MatchWindowBand({
         </Grid>
         {extraControls ? <Grid item xs={12} sm={6} md={4}>{extraControls}</Grid> : null}
       </Grid>
-      </Fold>
       {moreOptions ? (
-        <Fold show="More options" inside="the cap per report, the gap, the length of signal, reuse">
+        <MDBox mt={2} pt={2} sx={{ borderTop: `1px solid ${T.rule}` }} data-testid="more-matching-options">
           {moreOptions}
-        </Fold>
+        </MDBox>
       ) : null}
+      {binarization ? (
+        <MDBox mt={2} pt={2} sx={{ borderTop: `1px solid ${T.rule}` }} data-testid="split-controls">
+          {binarization}
+        </MDBox>
+      ) : null}
+      </MDBox>
     </MDBox>
   );
 }

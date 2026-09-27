@@ -181,7 +181,12 @@ const TIMELINE_FILES = ["BiomarkerDataTimeline.js", "timelineGutter.js"];
 
 describe("the Biomarkers page's legibility floor (decision 304; the redesign of 2026-09-26)", () => {
   test("no text or figure font is set below 12 px (the timeline's own files: below 11 px)", () => {
-    expect(FILES.flatMap((f) => smallSizes(read(f), f, TIMELINE_FILES.includes(f) ? 11 : 12))).toEqual([]);
+    // One exception, by name: the heat maps' hover label at 11 px (the PI, 2026-09-26: "heatmap
+    // hover text: reduce font size"), still at decision 304's 11 px floor.
+    const hoverOk = (hit) => /BiomarkerHeatmapGrids\.js: font: \{ \.\.\.PLOTLY_LAYOUT\.hoverlabel\.font, size: 11/.test(hit);
+    expect(FILES.flatMap((f) => smallSizes(read(f), f, TIMELINE_FILES.includes(f) ? 11 : 12))
+      .filter((hit) => !hoverOk(hit))).toEqual([]);
+    expect(FILES.flatMap((f) => smallSizes(read(f), f, 11))).toEqual([]);
   });
 
   test("no page file writes a hex colour of its own: every colour comes from the shared tokens", () => {

@@ -61,9 +61,13 @@ import GridSkeleton from "./GridSkeleton";
 import Section from "views/Reports/paper/Section";
 import { BIN_HI, BIN_LO, BIN_HI_RGB, BIN_LO_RGB, BIN_MID, diverging } from "./binarizationModel";
 import { contactSortKey } from "./contactOrder";
-import { bestCellReadout, cellNP, fmtP, hoverCustomData, tierBullets, deviceSpectrumBullets, stabilityMark, stabilityBullet, clinicSheetBullets, sourceSplitLine } from "./gridReadouts";
+import { bestCellReadout, cellNP, fmtP, pEquals, hoverCustomData, tierBullets, deviceSpectrumBullets, stabilityMark, stabilityBullet, clinicSheetBullets, sourceSplitLine } from "./gridReadouts";
 
-const num = (v, d = 3) => (v == null || !Number.isFinite(Number(v)) ? "not given" : Number(v).toFixed(d));
+// The heat maps' hover text, a size under the figure text (the PI, 2026-09-26: "reduce font size");
+// 11 px is the page's floor (decision 258).
+const HEATMAP_HOVERLABEL = { ...PLOTLY_LAYOUT.hoverlabel,
+  font: { ...PLOTLY_LAYOUT.hoverlabel.font, size: 11 } };
+const num = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "not given" : Number(v).toFixed(d));
 
 // COLOUR (the redesign of 2026-09-26, SPEC.md section 3.1): the one nine-stop diverging scale
 // (dataColors.DIVERGING, blue -> light grey -> vermillion) on FIXED symmetric ranges: a correlation
@@ -311,14 +315,14 @@ export function bulletsFor(sw) {
       + "allowance for testing 22 bands at once \u2014 a research finding, not a device-ready setting.",
     "The left grid ignores the high / low cuts (a continuous score has no split); the right grid "
       + "recomputes and flashes.",
-    "Clicking a square shows its own correlation (Pearson r) and rank-test p (Mann-Whitney), for that "
-      + "square alone, not allowing for the 22 bands tested.",
-    "The colours saturate at \u22120.5 and +0.5 for a correlation and at 0.25 and 0.75 for the area "
+    "Clicking a square shows its own R (Pearson) and rank-test p (Mann-Whitney), not allowing for "
+      + "the 22 bands tested.",
+    "The colours saturate at \u22120.5 and +0.5 for R and at 0.25 and 0.75 for the area "
       + "(0.5 is a coin toss); the hover prints the true value.",
     // P-19 (the PI, 2026-09-25): the two sources, named here once in full and TD / PSD everywhere else.
     "Each rating's band power comes from the time domain (TD) recording, in 3 s pieces, whenever any "
       + "falls in the match window, and otherwise from PSD (the device's 30 s snapshot). The line above "
-      + "the scatter gives the clicked cell's correlation on its TD values alone and on its PSD values "
+      + "the scatter gives the clicked cell's R on its TD values alone and on its PSD values "
       + "alone; it describes the cell and changes no selection or verdict.",
     ...notes.slice(3),
   ];
@@ -392,7 +396,7 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
       zmax: center + halfRange, zmid: center, showscale: false,
       xgap: 1.5, ygap: 1.5,
       customdata,
-      hovertemplate: `${kind === "auc" ? "high pain told from low" : "correlation"} %{z:.3f}<br>%{x} Hz, %{y} of signal<br>%{customdata}<extra></extra>`,
+      hovertemplate: `${kind === "auc" ? "high pain told from low" : "R"} %{z:.2f}<br>%{x} Hz, %{y} of signal<br>%{customdata}<extra></extra>`,
     });
     // THE BEST-CELL RING (SPEC.md section 3.2): a dark ring on every column's best cell, 1.5 px, with
     // a 1 px white outline so it reads on either end of the scale; 2.5 px where that cell also clears
@@ -456,7 +460,8 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
     fig.setLayoutProps({
       height, margin: { l: 56, r: 8, t: 8, b: 44 },
       font: PLOTLY_LAYOUT.font, paper_bgcolor: T.surface, plot_bgcolor: T.surface,
-      hoverlabel: PLOTLY_LAYOUT.hoverlabel,
+      // The heat maps' hover is three lines; set smaller than the figure text (the PI, 2026-09-26).
+      hoverlabel: HEATMAP_HOVERLABEL,
       // No gridlines (the cell borders via xgap/ygap already separate the cells), no axis line,
       // no tick marks (`ticks: ""`) on either axis -- floating labels only. The x-axis also
       // replaces Plotly's own automatic tick choice with an explicit array so it labels a real
@@ -807,7 +812,7 @@ export function ScatterStatsLine({ cell, pinnedCell, sw }) {
   return (
     <MDBox>
       <MDTypography component="p" sx={{ ...TYPE.body, color: T.ink, display: "block", mb: 0.25, mt: 0 }}>
-        {`Correlation for this square alone: r = ${num(r, 3)}, p = ${fmtP(p)}, n = ${n}, not allowing for the 22 bands tested`}
+        {`R = ${num(r, 2)}, ${pEquals(p)}, n = ${n}, not allowing for the 22 bands tested`}
         {(() => {
           // The scatter and the line below are fitted to these same n pairs; the clinic-sheet
           // ratings among them (decision 186) are drawn hollow and counted here.
@@ -947,8 +952,13 @@ function PlotlyScatter({ divId, cell, pinnedCell, side, metricLabel }) {
 
 /** Persistent panel next to the AUC grid: two violins (high/low pain) and the cell's own AUC with
  * its Mann-Whitney p and the two counts, read off the grid response (decision 188). */
-function ViolinPanel({ cell, pinnedCell, channelLabel, height, aucValue, sw }) {
+function ViolinPanel({ cell, pinnedCell, channelLabel, height, aucValue, sw, part = "both" }) {
+  // `part` (2026-09-26): the statistics and the plot are drawn in separate rows of the shared grid,
+  // so the violin starts at the same height as the scatter; "both" keeps the old single block.
+  const showStats = part !== "plot";
+  const showPlot = part !== "stats";
   if (!pinnedCell) {
+    if (!showStats) return null;
     return (
       <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink3 }}>
         {"Click a square to compare band power in high-pain and low-pain reports."}
@@ -956,12 +966,11 @@ function ViolinPanel({ cell, pinnedCell, channelLabel, height, aucValue, sw }) {
     );
   }
   if (!cell || cell.loading || !cell.points || !cell.points.length) {
+    if (!showStats) return <MDBox sx={{ height }} />;
     return (
-      <MDBox sx={{ height }}>
-        <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink3 }}>
-          {cell && cell.loading ? "Loading…" : "No underlying pairs could be loaded for this cell."}
-        </MDTypography>
-      </MDBox>
+      <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink3 }}>
+        {cell && cell.loading ? "Loading…" : "No underlying pairs could be loaded for this cell."}
+      </MDTypography>
     );
   }
   const pts = cell.points;
@@ -969,12 +978,12 @@ function ViolinPanel({ cell, pinnedCell, channelLabel, height, aucValue, sw }) {
   const lowVals = pts.filter((p) => p.label === "low").map((p) => p.power);
   const { p, nHigh, nLow } = cellNP(sw, "auc", pinnedCell.col, pinnedCell.row);
 
-  return (
+  const statsBlock = (
     <MDBox>
       {/* No title here -- it duplicated the scatter panel's own title exactly (both describe the
           same pinned cell); that one copy, above the scatter panel, is now the only one. */}
       <MDTypography component="p" sx={{ ...TYPE.body, color: T.ink, display: "block", mb: 0.5, mt: 0 }}>
-        {`How well it tells high pain from low (0.5 = coin toss, 1 = perfect): ${num(aucValue, 3)}; rank test p = ${fmtP(p)}; ${nHigh} high-pain and ${nLow} low-pain reports`}
+        {`How well it tells high pain from low (0.5 = coin toss, 1 = perfect): ${num(aucValue, 2)}; rank test ${pEquals(p)}; ${nHigh} high-pain and ${nLow} low-pain reports`}
       </MDTypography>
       {/* The grid's own corrected statistic for this cell, the same small line in the same ink as
           beside the scatter (the PI, 2026-09-15); the plot below moves down by its height. */}
@@ -988,10 +997,15 @@ function ViolinPanel({ cell, pinnedCell, channelLabel, height, aucValue, sw }) {
           </MDTypography>
         ) : null;
       })()}
-      <PlotlyViolin divId="biomarker-violin-panel" highVals={highVals} lowVals={lowVals}
-        side={height} />
     </MDBox>
   );
+  const plotBlock = (
+    <PlotlyViolin divId="biomarker-violin-panel" highVals={highVals} lowVals={lowVals}
+      side={height} />
+  );
+  if (!showPlot) return statsBlock;
+  if (!showStats) return plotBlock;
+  return <MDBox>{statsBlock}{plotBlock}</MDBox>;
 }
 
 // SweepMetric (which raw pain score the correlation and AUC are computed against) is grouped with
@@ -1218,14 +1232,16 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   // clicked square's scatter and violin under them, the caption keys, and two folds.
   const corrKey = (
     <ColorKey scale={DIVERGING} range={RANGE.correlation} lowLabel="falls with pain"
-      midLabel="0" highLabel="rises with pain" title="correlation with pain" />
+      midLabel="0" highLabel="rises with pain" title="R with pain" />
   );
   const aucKey = (
     <ColorKey scale={DIVERGING} range={RANGE.areaUnderCurve} lowLabel="lower in high pain"
       midLabel="0.5 coin toss" highLabel="higher in high pain"
       title="how well band power tells high pain from low" />
   );
-  const subhead = { ...TYPE.body, fontWeight: 600, color: T.ink, display: "block", mb: 1, mt: 0 };
+  const subhead = { ...TYPE.body, fontWeight: 600, color: T.ink, display: "block", mb: 0, mt: 0 };
+  const aucCellValue = (pinnedCell && aucSw && aucSw.auc_grid && aucSw.auc_grid[pinnedCell.row])
+    ? aucSw.auc_grid[pinnedCell.row][pinnedCell.col] : null;
 
   // The shared section (taste audit C6, 2026-09-26): the question as its title, the rest as its
   // body. While a grid is being worked out there is no spinner (C2): with a grid already on screen
@@ -1262,53 +1278,70 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
             <ContactStrip sweeps={corrSweeps} channel={channel} setChannel={setChannel}
               refused={(refusedPairs(corrSweeps, corrResult && corrResult.sensing_rule) || {}).refused} />
 
-            <Grid container spacing={3} alignItems="flex-start">
-              <Grid item xs={12} md={6}>
-                <MDTypography component="h3" sx={subhead}>
-                  {"Correlation with pain (depends only on how reports are paired)"}
-                </MDTypography>
-                <MDBox mb={1}>{corrKey}</MDBox>
+            {/* ONE GRID OF SHARED ROWS (the PI, 2026-09-26: the two maps, and the scatter and the
+                violin, sat at different heights because the right title wrapped and the two
+                statistics blocks differ in length). Title, key, map, statistics and plot each take
+                one row across both columns, so the two columns start every row at the same height
+                whatever either holds; on a phone the areas stack column by column. */}
+            <MDBox data-testid="heatmap-rows" sx={{
+              display: "grid", columnGap: 3, rowGap: 1, alignItems: "start",
+              gridTemplateColumns: { xs: "minmax(0, 1fr)", md: "minmax(0, 1fr) minmax(0, 1fr)" },
+              gridTemplateAreas: {
+                xs: `"t1" "k1" "m1" "t2" "k2" "m2" "pt" "s1" "g1" "s2" "g2" "cap"`,
+                md: `"t1 t2" "k1 k2" "m1 m2" "pt pt" "s1 s2" "g1 g2" "cap cap"`,
+              },
+            }}>
+              <MDTypography component="h3" sx={{ ...subhead, gridArea: "t1" }}>
+                {"R with pain"}
+              </MDTypography>
+              <MDBox sx={{ gridArea: "k1" }}>{corrKey}</MDBox>
+              <MDBox sx={{ gridArea: "m1", minWidth: 0 }}>
                 <PlotlyHeatmap divId="biomarker-heatmap-correlation" sw={corrSw} kind="correlation"
                   deviceRanges={deviceRanges}
                   hoveredCell={hoveredCell} pinnedCell={pinnedCell}
                   onHover={handleHover} onClick={(r, c) => handleClick(corrSw, r, c)} />
-              </Grid>
-              <Grid item xs={12} md={6}>
-                <MDTypography component="h3" sx={subhead}>
-                  {"Does band power tell high-pain reports from low-pain ones? (also depends on the high / low split)"}
-                </MDTypography>
-                <MDBox mb={1}>{aucKey}</MDBox>
+              </MDBox>
+              <MDTypography component="h3" sx={{ ...subhead, gridArea: "t2" }}>
+                {"High vs Low Pain Logistic classification"}
+              </MDTypography>
+              <MDBox sx={{ gridArea: "k2" }}>{aucKey}</MDBox>
+              <MDBox sx={{ gridArea: "m2", minWidth: 0 }}>
                 <PlotlyHeatmap divId="biomarker-heatmap-auc" sw={aucSw} kind="auc"
                   deviceRanges={deviceRanges}
                   hoveredCell={hoveredCell} pinnedCell={pinnedCell} flashKey={aucFlashKey}
                   onHover={handleHover} onClick={(r, c) => handleClick(aucSw, r, c)} />
-              </Grid>
+              </MDBox>
 
-              {/* The clicked square: its title, its two statistics lines and the two plots. A click
+              {/* The clicked square: its title, its two statistics blocks and the two plots. A click
                   on EITHER grid fills both and highlights the square on both. */}
-              <Grid item xs={12}>
+              <MDBox sx={{ gridArea: "pt", mt: 2 }}>
                 <PanelTitle pinnedCell={pinnedCell} channelLabel={channelLabel} />
-              </Grid>
-              <Grid item xs={12} md={6}>
+              </MDBox>
+              <MDBox sx={{ gridArea: "s1" }}>
                 <ScatterStatsLine cell={pinnedCellData} pinnedCell={pinnedCell} sw={corrSw} />
+              </MDBox>
+              <MDBox sx={{ gridArea: "g1", minWidth: 0 }}>
                 <PlotlyScatter divId="biomarker-scatter-panel" cell={pinnedCellData}
                   pinnedCell={pinnedCell} side={panelHeight} metricLabel={metricLabel} />
-              </Grid>
-              <Grid item xs={12} md={6}>
-                <ViolinPanel cell={pinnedCellData} pinnedCell={pinnedCell}
+              </MDBox>
+              <MDBox sx={{ gridArea: "s2" }}>
+                <ViolinPanel part="stats" cell={pinnedCellData} pinnedCell={pinnedCell}
                   channelLabel={channelLabel} height={panelHeight} sw={aucSw}
-                  aucValue={(pinnedCell && aucSw && aucSw.auc_grid
-                    && aucSw.auc_grid[pinnedCell.row] && aucSw.auc_grid[pinnedCell.row][pinnedCell.col])}
-                />
-              </Grid>
+                  aucValue={aucCellValue} />
+              </MDBox>
+              <MDBox sx={{ gridArea: "g2", minWidth: 0 }}>
+                <ViolinPanel part="plot" cell={pinnedCellData} pinnedCell={pinnedCell}
+                  channelLabel={channelLabel} height={panelHeight} sw={aucSw}
+                  aucValue={aucCellValue} />
+              </MDBox>
 
-              <Grid item xs={12}>
+              <MDBox sx={{ gridArea: "cap", mt: 2 }}>
                 <DeviceSpectrumCaption sw={corrSw} />
                 <ClinicSheetCaption sw={corrSw} />
                 <DeviceTierCaption ranges={deviceRanges} sw={corrSw} />
                 <StabilityCaption sw={corrSw} />
-              </Grid>
-            </Grid>
+              </MDBox>
+            </MDBox>
 
             <MDBox mt={2} display="flex" flexDirection="row" alignItems="center" flexWrap="wrap" gap={2}>
               <MDButton variant="outlined" color="dark" size="small" disabled={!gridReady}

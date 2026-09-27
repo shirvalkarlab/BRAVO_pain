@@ -882,16 +882,16 @@ export const dictionary = {
     // The three pain pages, named by the question each answers (SPEC.md section 6, 2026-09-26).
     // The breadcrumb for "/reports/<page>/<participant>" reads these instead of the address.
     biomarkers: {
-      en: "Which brain signal tracks pain",
-      zh: "Which brain signal tracks pain"
+      en: "Biomarkers exploration",
+      zh: "Biomarkers exploration"
     },
     "stim-optimizer": {
-      en: "Which current to try next",
-      zh: "Which current to try next"
+      en: "Stim optimizer",
+      zh: "Stim optimizer"
     },
     "closed-loop": {
-      en: "Closed-loop settings to program",
-      zh: "Closed-loop settings to program"
+      en: "Closed-loop deployment",
+      zh: "Closed-loop deployment"
     },
     "analysis-builder": {
       en: "Analysis builder",

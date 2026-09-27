@@ -76,9 +76,12 @@ describe("reportCoverage", () => {
     expect(all.indexOf("reports have a band-power reading")).toBeLessThan(all.indexOf("Match window"));
     expect(all.indexOf("Match window")).toBeLessThan(all.indexOf("Split into high and low pain"));
     expect(all.indexOf("Split into high and low pain")).toBeLessThan(all.indexOf("Match direction"));
-    // The settings sit in one fold whose row names the settings in force (SPEC.md section 5.1,
-    // 2026-09-26); open it as a reader would.
-    fireEvent.click(screen.getByRole("button", { name: /^Paired within ±2 min/ }));
+    // The settings sit behind one large "Adjust matching parameters" button, closed by default,
+    // with the settings in force printed beside it (the PI, 2026-09-26); open it as a reader would.
+    expect(container.querySelector('[data-testid="matching-panel"]').hidden).toBe(true);
+    expect(container.querySelector('[data-testid="matching-summary"]').textContent).toMatch(/^Paired within ±2 min/);
+    fireEvent.click(screen.getByRole("button", { name: /Adjust matching parameters/ }));
+    expect(container.querySelector('[data-testid="matching-panel"]').hidden).toBe(false);
     // The cuts and the three directions in plain words (SPEC.md section 6, 2026-09-26).
     expect(all).toContain("Low: ratings at or below the 33rd percentile");
     expect(all).toContain("High: at or above the 67th");

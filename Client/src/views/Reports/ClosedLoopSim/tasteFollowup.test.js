@@ -4,7 +4,7 @@
  *   C3/C11 the jump-link row opts out of the prose underline and has no "·" between links;
  *   C5  every section heading on the page balances its line breaks;
  *   C6  the head is the shared PageHead, the ceiling the shared CeilingLine;
- *   C7  the browser tab reads "Closed-loop settings to program";
+ *   C7  the browser tab reads "Closed-loop deployment";
  *   C9  an empty value is a word, never "—";
  *   C10 "Programmed today" is printed with the same formatter as "Value";
  *   D4  no page-written text in capitals;
@@ -119,7 +119,7 @@ describe("C6 and C7: the page head", () => {
     expect(PAGE_QUESTION).toBe("Can this setting be programmed, and what do I enter?");
   });
   it("names the browser tab", () => {
-    expect(DOCUMENT_TITLE).toBe("Closed-loop settings to program");
+    expect(DOCUMENT_TITLE).toBe("Closed-loop deployment");
     expect(page).toMatch(/documentTitle=\{DOCUMENT_TITLE\}/);
   });
 });

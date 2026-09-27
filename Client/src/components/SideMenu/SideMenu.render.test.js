@@ -22,7 +22,7 @@ const routes = {
     name: "Choosing stimulation settings",
     children: [
       { key: "CustomizedAnalysis", name: "Choosing stimulation settings", title: true, hide: true },
-      { key: "biomarkers", name: "Which brain signal tracks pain", icon: "timeline", route: "/reports/biomarkers/:participant_uid" },
+      { key: "biomarkers", name: "Biomarkers exploration", icon: "timeline", route: "/reports/biomarkers/:participant_uid" },
     ],
   },
 };
@@ -42,7 +42,7 @@ test("the sidebar draws its heading in sentence case and the product name unchan
   expect(screen.getByText("UF BRAVO Platform")).toBeTruthy();
   const heading = screen.getByText("Choosing stimulation settings");
   expect(window.getComputedStyle(heading).textTransform).not.toBe("uppercase");
-  expect(screen.getByText("Which brain signal tracks pain")).toBeTruthy();
+  expect(screen.getByText("Biomarkers exploration")).toBeTruthy();
 });
 
 test("the page frame renders its children inside the content column", () => {

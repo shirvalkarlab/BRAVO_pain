@@ -7,7 +7,7 @@
  *  C2   still grey blocks shaped like the table, never a spinner, with the waiting words kept.
  *  C5   the page's own headings break their lines evenly (text-wrap: balance).
  *  C6   the page head is the shared PageHead.
- *  C7   the browser tab's title is "Which current to try next".
+ *  C7   the browser tab's title is "Stim optimizer".
  *  C9   an empty cell is a word ("not given", "none", "same"), never "—".
  *  C11  no "·" in the jump-link row; C3 the row is the shared, un-underlined jump row.
  */
@@ -167,10 +167,10 @@ describe("C6, C7, C11, C3, C5: the page head", () => {
     expect(head.querySelector('[data-testid="status-line"]')).not.toBeNull();
   });
 
-  it("sets the tab's title to 'Which current to try next'", () => {
-    expect(TAB_TITLE).toBe("Which current to try next");
+  it("sets the tab's title to 'Stim optimizer'", () => {
+    expect(TAB_TITLE).toBe("Stim optimizer");
     renderPage(newResponse);
-    expect(document.title).toMatch(/^Which current to try next/);
+    expect(document.title).toMatch(/^Stim optimizer/);
   });
 
   it("the contents row has no middle dot and is the shared, un-underlined jump row", () => {

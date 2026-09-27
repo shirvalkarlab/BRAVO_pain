@@ -304,7 +304,7 @@ describe("9. the browser tab and the Background rows (taste audit C7 and C12, 20
   test("the browser tab says the page's question", async () => {
     await renderPage();
     // the shared hook (paper/useDocumentTitle) may append the application's name after the question
-    expect(document.title).toMatch(/^Which brain signal tracks pain( - |$)/);
+    expect(document.title).toMatch(/^Biomarkers exploration( - |$)/);
   });
 
   test("the calibration in effect is a plain row under the Background heading, not a card", async () => {

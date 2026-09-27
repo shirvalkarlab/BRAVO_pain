@@ -19,7 +19,14 @@
  *   method    optional content of the one "How this was worked out" fold
  *   methodLabel  label of that fold (default "How this was worked out")
  *   children  the figure or table
+ *   collapsible  the title row opens and closes the section's body (the PI, 2026-09-26: "make this
+ *             panel collapsible and other crazy long ones too"); the answer stays in view, the body
+ *             stays MOUNTED while closed (hidden), and a jump link to the section opens it
+ *   defaultOpen  whether a collapsible section starts open (default false)
+ *   lead      optional content that stays in view under the answer even while the section is
+ *             closed (a caveat the PI has ruled must never be hidden, e.g. decision 235)
  */
+import { useEffect, useState } from "react";
 import PropTypes from "prop-types";
 
 import { T, TYPE, LAYOUT, CARD, SPACE, WRAP } from "assets/theme/base/tokens";
@@ -27,14 +34,36 @@ import { T, TYPE, LAYOUT, CARD, SPACE, WRAP } from "assets/theme/base/tokens";
 import Fold from "./Fold";
 
 export default function Section({ id, question, answer, actions, reading, method, methodLabel,
-  children }) {
+  children, collapsible, defaultOpen, lead }) {
   const headingId = id ? `${id}-title` : undefined;
+  const bodyId = id ? `${id}-body` : undefined;
+  const [open, setOpen] = useState(!collapsible || !!defaultOpen);
+  // A jump link (or a shared address) to a closed section opens it.
+  useEffect(() => {
+    if (!collapsible || !id || typeof window === "undefined") return undefined;
+    const check = () => { if (window.location.hash === `#${id}`) setOpen(true); };
+    check();
+    window.addEventListener("hashchange", check);
+    return () => window.removeEventListener("hashchange", check);
+  }, [collapsible, id]);
+  const title = collapsible ? (
+    <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} aria-controls={bodyId}
+      data-paper="section-toggle"
+      style={{ font: "inherit", color: "inherit", background: "none", border: 0, padding: 0,
+        margin: 0, textAlign: "left", cursor: "pointer", display: "inline-flex",
+        alignItems: "baseline", gap: SPACE.xs }}>
+      <span aria-hidden="true" style={{ display: "inline-block", width: "1em", color: T.ink3,
+        transform: open ? "rotate(90deg)" : "none" }}>{"\u25B8"}</span>
+      <span>{question}</span>
+      {!open ? <span style={{ ...TYPE.body, color: T.ink3 }}>{"(show)"}</span> : null}
+    </button>
+  ) : question;
   return (
     <section id={id} aria-labelledby={headingId} data-paper="section"
       style={{ ...CARD, padding: LAYOUT.cardPadding, marginBottom: LAYOUT.betweenSections }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline",
         flexWrap: "wrap", gap: SPACE.sm }}>
-        <h2 id={headingId} style={{ margin: 0, ...TYPE.title, color: T.ink, ...WRAP.balance }}>{question}</h2>
+        <h2 id={headingId} style={{ margin: 0, ...TYPE.title, color: T.ink, ...WRAP.balance }}>{title}</h2>
         {actions ? <div>{actions}</div> : null}
       </div>
       {answer ? (
@@ -43,6 +72,8 @@ export default function Section({ id, question, answer, actions, reading, method
           {answer}
         </p>
       ) : null}
+      {lead ? <div style={{ marginTop: LAYOUT.titleToAnswer }}>{lead}</div> : null}
+      <div id={bodyId} hidden={!open} data-paper="section-body">
       {children ? <div style={{ marginTop: LAYOUT.answerToFigure }}>{children}</div> : null}
       {reading ? (
         <p style={{ margin: `${LAYOUT.answerToFigure}px 0 0`, ...TYPE.body, color: T.ink2,
@@ -55,6 +86,7 @@ export default function Section({ id, question, answer, actions, reading, method
           <Fold label={methodLabel}>{method}</Fold>
         </div>
       ) : null}
+      </div>
     </section>
   );
 }
@@ -68,9 +100,13 @@ Section.propTypes = {
   method: PropTypes.node,
   methodLabel: PropTypes.string,
   children: PropTypes.node,
+  collapsible: PropTypes.bool,
+  defaultOpen: PropTypes.bool,
+  lead: PropTypes.node,
 };
 
 Section.defaultProps = {
   id: undefined, answer: null, actions: null, reading: null, method: null,
-  methodLabel: "How this was worked out", children: null,
+  methodLabel: "How this was worked out", children: null, collapsible: false, defaultOpen: false,
+  lead: null,
 };

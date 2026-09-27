@@ -690,11 +690,13 @@ export default function CurrentMapCard({ plan }) {
   );
 
   return (
-    <Section id="current-map" question="Where have currents been tried, and what does the fit predict?"
-      answer={answer} actions={actions}>
-        {/* The card draws pain against the two currents, so it is where a reader could take the
-            pooled association for a dose effect. Measured 2026-09-22: it does not survive being
-            asked to predict. One sentence in the open, its numbers one click away (mounted). */}
+    <Section id="current-map" question="Where have currents been tried, and what does the fit predict?" collapsible
+      answer={answer} actions={actions}
+      // The out-of-sample caveat stays in the open even while the section is closed (decision 235).
+      // The card draws pain against the two currents, so it is where a reader could take the pooled
+      // association for a dose effect. Measured 2026-09-22: it does not survive being asked to
+      // predict. One sentence in the open, its numbers one click away (mounted).
+      lead={(
         <MDBox data-testid="current-pain-caveat">
           <MDTypography variant="caption" component="div"
             sx={{ fontSize: TYPE.body, color: T.caution, maxWidth: "80ch" }}>
@@ -706,6 +708,7 @@ export default function CurrentMapCard({ plan }) {
             </MDTypography>
           </SizedFold>
         </MDBox>
+      )}>
         <MDTypography variant="caption" component="div" data-testid="current-map-legend"
           sx={{ fontSize: TYPE.body, color: T.ink2, mt: 2, mb: 1.5, maxWidth: "80ch" }}>
           Each square below is one stimulation rate: the left current runs along the bottom, the

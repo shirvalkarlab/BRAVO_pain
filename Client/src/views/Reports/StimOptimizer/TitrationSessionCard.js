@@ -109,10 +109,11 @@ function nextWednesdayISO() {
 }
 
 /** A cell of the clinic sheet, formatted by its column name; a blank cell (most "test" rows,
- * every visit-filled column) prints "not given", never "—" (TASTE_AUDIT.md C9). */
+ * every visit-filled column) is left blank, to be filled at the visit (the PI, 2026-09-26: "remove
+ * 'not given' and just leave blank"; supersedes TASTE_AUDIT.md C9 for this table). */
 const SHEET_MONO_COLS = new Set(["Amp (mA)", "Rate (Hz)", "PW (µs)", "Duration (s)"]);
 function fmtSheetCell(col, v) {
-  if (v === null || v === undefined || v === "") return EMPTY;
+  if (v === null || v === undefined || v === "") return "";
   if (col === "Rate (Hz)") return fmtHz(v);
   if (col === "Duration (s)") return `${v} s`;
   return String(v);
@@ -622,7 +623,7 @@ export default function TitrationSessionCard({ plan, participantUid, homeSchedul
   );
 
   return (
-    <Section id="next-visit" question={TITRATION_CARD_TITLE} answer={answer}>
+    <Section id="next-visit" question={TITRATION_CARD_TITLE} answer={answer} collapsible>
         {exportControls}
 
         {exportState.status === "error" && (

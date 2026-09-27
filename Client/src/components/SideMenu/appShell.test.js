@@ -145,9 +145,9 @@ describe("navigation labels (SPEC.md section 6)", () => {
   };
 
   test("the three pain pages are named by the question each answers", () => {
-    expect(entry("biomarkers")).toContain('name: "Which brain signal tracks pain"');
-    expect(entry("stimOptimizer")).toContain('name: "Which current to try next"');
-    expect(entry("closedLoopSim")).toContain('name: "Closed-loop settings to program"');
+    expect(entry("biomarkers")).toContain('name: "Biomarkers exploration"');
+    expect(entry("stimOptimizer")).toContain('name: "Stim optimizer"');
+    expect(entry("closedLoopSim")).toContain('name: "Closed-loop deployment"');
     ["Biomarker Exploration", "Open-Loop Stim Optimizer", "Closed-Loop Deployment"].forEach((old) => {
       expect(src).not.toContain(`name: "${old}"`);
     });
@@ -166,8 +166,8 @@ describe("navigation labels (SPEC.md section 6)", () => {
   });
 
   test("the breadcrumb reads the page's name, not its address", () => {
-    expect(dictionary.Breadcrumbs.biomarkers.en).toBe("Which brain signal tracks pain");
-    expect(dictionary.Breadcrumbs["stim-optimizer"].en).toBe("Which current to try next");
-    expect(dictionary.Breadcrumbs["closed-loop"].en).toBe("Closed-loop settings to program");
+    expect(dictionary.Breadcrumbs.biomarkers.en).toBe("Biomarkers exploration");
+    expect(dictionary.Breadcrumbs["stim-optimizer"].en).toBe("Stim optimizer");
+    expect(dictionary.Breadcrumbs["closed-loop"].en).toBe("Closed-loop deployment");
   });
 });

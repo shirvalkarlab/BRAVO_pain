@@ -90,7 +90,7 @@ import { ControlAnalysesSection } from "views/Reports/ControlAnalyses/ControlAna
 export const PAGE_QUESTION = "Should today's setting change, and can closed loop start?";
 
 /** The browser tab's title while this page is shown (TASTE_AUDIT.md C7, the PI's wording). */
-export const TAB_TITLE = "Which current to try next";
+export const TAB_TITLE = "Stim optimizer";
 
 /** The slim contents row under the status list (SPEC.md section 4, rule 7). Drawn by the shared
  *  jump-link row: separated by space only, never "·" (C11), and not underlined (C3). */
@@ -259,7 +259,7 @@ export default function StimOptimizer() {
 
         {/* ---------- 3. can closed loop start? The allowed sensing pairs as sentence blocks, the
             other combinations folded, then the four checks and what closed loop ruled out. ---------- */}
-        <Section id="closed-loop" question="Can closed loop start?">
+        <Section id="closed-loop" question="Can closed loop start?" collapsible>
           {data.closed_loop && <SensingEvidenceTable closedLoop={data.closed_loop} />}
           <MDBox mt={3}>
             <TwoStagePlanCard plan={twoStage.data} loading={twoStage.loading} err={twoStage.err} />

@@ -166,7 +166,7 @@ export const PAGE_QUESTION = "Can this setting be programmed, and what do I ente
  * The browser tab's title (TASTE_AUDIT.md C7; SPEC section 6's naming table): the page's job in a
  * few words, set by `paper/PageHead` while the page is shown.
  */
-export const DOCUMENT_TITLE = "Closed-loop settings to program";
+export const DOCUMENT_TITLE = "Closed-loop deployment";
 
 /**
  * The safe current ceiling line, READ FROM THE SERVER (decision 306 sends the ceiling for the
