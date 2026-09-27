@@ -95,12 +95,6 @@ def test_balanced_metrics_chance_invariant_across_imbalance():
     assert m0["prevalence"] == 0.0 and m0["majority_accuracy"] == 1.0
 
 
-def test_fisher_z_ci():
-    lo, hi = su.fisher_z_ci(0.5, 50)
-    assert lo < 0.5 < hi and -1 < lo and hi < 1
-    assert su.fisher_z_ci(0.5, 3) == (float("nan"), float("nan")) or np.isnan(su.fisher_z_ci(0.5, 3)[0])
-
-
 # The chunk shuffle (`circular_block_perm_matrix`) and its two tests -- that every row was a valid
 # permutation, and that its rotation case kept the identity among the draws -- went with it in
 # decision 315 (2026-09-26). The rotations that replaced it are pinned in
@@ -161,7 +155,6 @@ if __name__ == "__main__":
     test_effective_n_shrinks_with_autocorrelation()
     test_balanced_metrics()
     test_balanced_metrics_chance_invariant_across_imbalance()
-    test_fisher_z_ci()
     test_block_length_for()
     test_auc_block_perm_null()
     print("All stats_utils tests passed.")

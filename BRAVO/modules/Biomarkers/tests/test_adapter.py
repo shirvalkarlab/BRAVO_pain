@@ -704,13 +704,10 @@ if __name__ == "__main__":
     test_run_powerdomain_branch_per_channel_split()
     test_bravo_powerdomain_to_chronic_like()
     test_run_chronic_threshold_no_sliding()
-    test_sliding_window_analytics_no_sliding()
-    test_sliding_window_skips_one_class_test_folds()
     test_td_sliding_corr_spectrum_matches_scipy()
     test_pearson_corr_psd_label_rejects_mad_outliers()
     test_mad_outlier_mask_behavior()
     test_concat_chronic_mad_is_per_recording_not_global()
-    test_sliding_window_test_fold_expansion_fires_and_categorizes_skips()
     test_decimate_for_plot_thins_only()
     print("All adapter tests passed.")
 
@@ -926,117 +923,6 @@ def test_ungrouped_epochs_are_excluded_from_the_cluster_p():
     assert int(extra["n_clusters"][0, 0]) == 10, extra["n_clusters"][0, 0]
 
 
-# --- F3: the permutation null's exchangeable unit is the RATING (2026-09-02) ---------------------
-def test_rating_level_null_broadcasts_one_value_per_rating():
-    """Every epoch sharing a rating must receive the SAME permuted value. If the permutation can
-    hand two epochs of one report different labels, the null has more freedom than the data and the
-    p-value is not interpretable."""
-    from modules.Biomarkers import pipeline as pl
-    g = np.repeat(np.arange(12), 4)                 # 12 ratings x 4 epochs
-    y = np.repeat(np.linspace(2.0, 9.0, 12), 4)     # constant within rating, by construction
-    rng = np.random.default_rng(0)
-    Yp, info = pl._rating_level_perm_matrix(y, g, 50, rng)
-    assert Yp is not None and info["unit" if "unit" in info else "n_ratings"] is not None
-    assert info["n_ratings"] == 12 and info["n_epochs_used"] == 48
-    for p in range(Yp.shape[0]):
-        for k in range(12):
-            block = Yp[p, g[info["rows"]] == k]
-            assert np.allclose(block, block[0]), (p, k, block)
-
-
-def test_rating_level_null_permutes_ratings_not_epochs():
-    """The multiset of rating values must be preserved: a permutation relabels which rating goes
-    where, it does not invent values."""
-    from modules.Biomarkers import pipeline as pl
-    g = np.repeat(np.arange(10), 3)
-    y = np.repeat(np.arange(10) * 1.0, 3)
-    Yp, info = pl._rating_level_perm_matrix(y, g, 25, np.random.default_rng(1))
-    for p in range(Yp.shape[0]):
-        vals = sorted(set(np.round(Yp[p], 9)))
-        assert vals == sorted(set(np.round(y, 9))), (p, vals)
-
-
-def test_ungrouped_epochs_are_dropped_from_both_null_and_observed():
-    """rating_group == -1 has no rating identity, so it cannot take part in a rating-level null.
-    The rows mask is returned so the CALLER computes the observed statistic on the same subset —
-    an observed value on more rows than its null is the F8 defect."""
-    from modules.Biomarkers import pipeline as pl
-    g = np.concatenate([np.repeat(np.arange(8), 3), np.full(6, -1)])
-    y = np.concatenate([np.repeat(np.arange(8) * 1.0, 3), np.full(6, 5.0)])
-    Yp, info = pl._rating_level_perm_matrix(y, g, 10, np.random.default_rng(2))
-    assert info["n_ratings"] == 8
-    assert info["n_epochs_used"] == 24 and Yp.shape[1] == 24
-    assert info["rows"].sum() == 24 and not info["rows"][-6:].any()
-
-
-def test_too_few_ratings_refuses_rather_than_returning_a_null():
-    from modules.Biomarkers import pipeline as pl
-    g = np.repeat(np.arange(3), 5)
-    y = np.repeat(np.arange(3) * 1.0, 5)
-    Yp, info = pl._rating_level_perm_matrix(y, g, 10, np.random.default_rng(3))
-    assert Yp is None and "at least 4" in (info["reason"] or "")
-
-
-def test_perm_pvalue_reports_which_unit_it_permuted():
-    """Provenance is mandatory: an epoch-level fallback is anti-conservative, so a consumer must be
-    able to tell which null produced the p it is reading."""
-    from modules.Biomarkers import pipeline as pl
-    rng = np.random.default_rng(4)
-    g = np.repeat(np.arange(20), 3)
-    y = np.repeat(rng.normal(5, 2, 20), 3)
-    X = rng.normal(0, 1, (60, 8))
-    _, _, _, _, m_rat = pl._block_perm_maxcorr_pvalue(X, y, n_perm=200, return_null=True,
-                                                      rating_group=g)
-    _, _, _, _, m_ep = pl._block_perm_maxcorr_pvalue(X, y, n_perm=200, return_null=True)
-    assert m_rat["unit"] == "rating" and m_rat["n_ratings"] == 20
-    assert m_ep["unit"] == "epoch" and m_ep["n_ratings"] is None
-
-
-def test_return_shape_is_invariant_including_the_degenerate_path():
-    """The early-return paths used to hand back a 4-tuple while the success path returned 5, so a
-    consumer reading perm_info raised on exactly the inputs where it needed the reason."""
-    from modules.Biomarkers import pipeline as pl
-    rng = np.random.default_rng(5)
-    ok = pl._block_perm_maxcorr_pvalue(rng.normal(0, 1, (30, 4)), rng.normal(0, 1, 30),
-                                       n_perm=50, return_null=True)
-    tiny = pl._block_perm_maxcorr_pvalue(rng.normal(0, 1, (3, 4)), rng.normal(0, 1, 3),
-                                         n_perm=50, return_null=True)
-    assert len(ok) == 5 and len(tiny) == 5
-    assert isinstance(tiny[4], dict)
-
-
-# --- F14: the winner's curse gets a magnitude ---------------------------------------------------
-def test_null_max_summary_is_reported_and_internally_consistent():
-    """The null distribution of the family max was already computed and shipped as a raw array while
-    the plate said only selection_biased=True. These summaries are what turn that flag into a
-    number a reader can act on."""
-    from modules.Biomarkers import pipeline as pl
-    rng = np.random.default_rng(6)
-    X = rng.normal(0, 1, (60, 25))
-    y = rng.normal(0, 1, 60)
-    p, used, obs, null, m = pl._block_perm_maxcorr_pvalue(X, y, n_perm=400, return_null=True)
-    assert m["family_size"] == 25
-    assert np.isclose(m["null_max_mean"], float(np.mean(null)))
-    assert np.isclose(m["null_max_p95"], float(np.quantile(null, 0.95)))
-    assert np.isclose(m["obs_minus_null_mean"], obs - np.mean(null))
-    assert m["obs_exceeds_null_p95"] == bool(obs > np.quantile(null, 0.95))
-    # under pure noise the observed family max should sit INSIDE the null, which is the whole point
-    assert 0.0 < m["null_max_mean"] < 1.0
-
-
-def test_null_max_mean_grows_with_family_size():
-    """E[max|r|] under the null rises with the number of cells searched. That is the winner's curse
-    in one line, and it is why a bare per-cell q is not a selection-corrected statement."""
-    from modules.Biomarkers import pipeline as pl
-    rng = np.random.default_rng(7)
-    y = rng.normal(0, 1, 80)
-    small = pl._block_perm_maxcorr_pvalue(rng.normal(0, 1, (80, 3)), y, n_perm=300,
-                                          return_null=True)[4]["null_max_mean"]
-    big = pl._block_perm_maxcorr_pvalue(rng.normal(0, 1, (80, 120)), y, n_perm=300,
-                                        return_null=True)[4]["null_max_mean"]
-    assert big > small, (small, big)
-
-
 # --- F8 part 2: the outlier rule is ONE rule, but its verdict depends on the estimation base -----
 def test_mad_rule_is_shared_by_adapter_and_streaming_psd():
     """There must be exactly one MAD rule on this plate. `adapter.mad_outlier_mask` and
@@ -1079,21 +965,6 @@ def test_mad_verdict_depends_on_the_estimation_base():
     assert bool(keep_full[5]) is True, "premise broken: 30 is still an outlier in the full base"
     # the first five entries are kept under both bases, so the disagreement is about that one row
     assert keep_subset[:5].all() and keep_full[:5].all()
-
-
-def test_min_pairs_floor_is_the_correlation_routines_own_floor():
-    """`pipeline.SELECTION_MIN_PAIRS` must be the number of surviving pairs at which
-    `pearson_corr_psd_label` starts producing a correlation, because that routine's floor is what
-    decides which cells are members of the selection family. The permutation family previously used
-    a floor of 4, which excluded any 3-pair cell the selection could nevertheless have chosen."""
-    assert pipeline.SELECTION_MIN_PAIRS == 3
-    for n_finite, want_finite in ((3, True), (2, False)):
-        feat = np.full((6, 1, 1), np.nan)
-        feat[:n_finite, 0, 0] = np.arange(n_finite, dtype=float) + 1.0
-        lab = np.arange(6, dtype=float) * 1.5 + 0.5
-        corr, _pval = streaming_psd.pearson_corr_psd_label(feat, lab)
-        got = np.isfinite(corr[0, 0])
-        assert bool(got) is want_finite, (n_finite, corr[0, 0])
 
 
 def test_align_pros_applies_the_pages_per_report_cap_and_reports_the_sharing_left():

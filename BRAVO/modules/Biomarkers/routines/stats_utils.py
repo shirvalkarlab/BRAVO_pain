@@ -5,7 +5,6 @@ Added per the 2026-06 multi-expert rigor review of the DBS pain-biomarker analys
 small, pure, unit-testable functions used to make the inferential claims honest:
 
   * bh_fdr            — Benjamini-Hochberg FDR q-values for the multi-frequency/-channel p-grid.
-  * fisher_z_ci       — confidence interval for a Pearson r (Fisher z-transform).
   * effective_n       — autocorrelation-adjusted effective sample size (serial dependence).
   * partial_corr      — correlation of x,y after regressing out a covariate (e.g. stim amplitude).
   * CovariateShape    — the shape that covariate is allowed to have: line, curve or kernel.
@@ -50,24 +49,6 @@ def bh_fdr(pvals):
     np.clip(adj, 0, 1, out=adj)
     q[order] = adj
     return q.reshape(np.asarray(pvals).shape)
-
-
-def fisher_z_ci(r, n, alpha=0.05):
-    """(lo, hi) confidence interval for a Pearson r via the Fisher z-transform. Returns (nan, nan)
-    when n < 4 or r is not finite. `n` should be the EFFECTIVE sample size for serially-correlated
-    data (see effective_n)."""
-    try:
-        r = float(r)
-        n = float(n)
-    except (TypeError, ValueError):
-        return (np.nan, np.nan)
-    if not np.isfinite(r) or n < 4 or abs(r) >= 1:
-        return (np.nan, np.nan)
-    from scipy.stats import norm
-    z = np.arctanh(r)
-    se = 1.0 / np.sqrt(n - 3.0)
-    zc = norm.ppf(1 - alpha / 2.0)
-    return (float(np.tanh(z - zc * se)), float(np.tanh(z + zc * se)))
 
 
 def lag1_autocorr(x):

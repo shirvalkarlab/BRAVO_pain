@@ -1,8 +1,9 @@
 """Every chance test that shuffles the pain ratings uses the exact rotation test (decision 315).
 
 WHY. To judge whether a band's link with pain is more than chance, the heat-map grid, the older
-full-spectrum search, the power-over-time area test and the check before any decoder all moved the
-pain ratings and recomputed the link many times. They shared one helper, which, once pain resembled
+full-spectrum search (deleted 2026-09-27, open item N-12: nothing read its result), the
+power-over-time area test and the check before any decoder all moved the pain ratings and
+recomputed the link many times. They shared one helper, which, once pain resembled
 its neighbours, cut the rating series into short chunks and reordered the chunks. That keeps each
 chunk together but throws away pain's slower rises and falls, and with a band that also drifts
 slowly the shuffled links come out narrower than chance really is, so p comes out too small: on
@@ -144,17 +145,6 @@ def test_the_area_null_is_the_exact_rotation_test():
     got = SU.auc_block_perm_null(score, labels, n_perm=1000, seed=0)
     assert got["n_perm"] == n - 1 and got["block"] == 1
     assert got["p_value"] == 1.0 / n, got["p_value"]
-
-
-def test_the_full_spectrum_search_rotates_the_ratings():
-    rng = np.random.default_rng(4)
-    g = np.repeat(np.arange(40), 3)                                 # 40 ratings, 3 epochs each
-    y = np.repeat(_ar(rng, 40, 0.8), 3)
-    Yp, info = PL._rating_level_perm_matrix(y, g, 1000, np.random.default_rng(0))
-    assert Yp.shape == (39, 120) and info["block"] == 1
-    per_rating = Yp[:, ::3]
-    for k in range(39):                          # one value per rating is a mean of its 3 epochs
-        assert np.allclose(per_rating[k], np.roll(y[::3], -(k + 1)), rtol=0, atol=1e-12), k
 
 
 def test_the_check_before_any_decoder_uses_every_rotation():

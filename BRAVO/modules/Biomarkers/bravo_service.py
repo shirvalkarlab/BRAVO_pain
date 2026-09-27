@@ -3833,10 +3833,14 @@ def _window_params(request_data):
         (train_days = round(months * 30.44)). None -> callers keep their own default.
       * window_step_months / step_days: `WindowStep` -> how far the window advances each step
         (also the detector's per-window test-fold size). None -> defaults.
-      * sliding: `SlidingWindow` bool (default True). False -> the power-domain detector and the
-        sliding-window analytic run on ALL data at once (no temporal windows).
+      * sliding: `SlidingWindow` bool (default False, since 2026-09-27: the page removed its own
+        switch years ago and has sent an explicit `false` on every request since, decision N-11 --
+        the default now matches what every live request has actually meant). True runs the
+        power-domain detector and the sliding-window analytic over temporal windows instead of on
+        ALL data at once; the notebook-verbatim detector this reaches is kept on purpose (see
+        `threshold_biomarker.py`'s own docstring) for a caller that wants it.
     """
-    sliding = request_data.get("SlidingWindow", True)
+    sliding = request_data.get("SlidingWindow", False)
     if isinstance(sliding, str):
         sliding = sliding.strip().lower() not in ("false", "0", "no", "off", "")
     sliding = bool(sliding)
