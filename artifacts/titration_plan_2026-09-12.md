@@ -80,7 +80,7 @@ Two things a reader should carry:
 
 | Field | Source |
 |---|---|
-| rate | "the setting in force on the {side} side, from the full epoch table (newest device setting, rated or not), since 2026-09-03T20:07:11+00:00"; when lifted, "lifted to the adaptive minimum (55 Hz, percept_adaptive.MIN_ADAPTIVE_RATE_HZ, decision 138)" |
+| rate | "the setting in force on the {side} side, from the full epoch table (newest device setting, rated or not), since 2026-09-03T20:07:11+00:00" [Corrected 2026-09-26, decision 328: the server now prints 2026-09-02T19:15:43+00:00, the tablet-clock start of that setting; the sentence is built from the settings history, not typed]; when lifted, "lifted to the adaptive minimum (55 Hz, percept_adaptive.MIN_ADAPTIVE_RATE_HZ, decision 138)" |
 | pulse width | the same setting in force, each side's own column |
 | ceiling | "stated by PI (2026-09-02 hard limit, objective.AMP_HARD_LIMIT_MA; confirmed as the safety ceiling 2026-09-12)" — `safety_ceiling.ceiling_for` |
 | sensing contact | "the readiness screen's best deployable cell for this side at the session's rate, 55 Hz (lfp_evidence.best_deployable, the gate's own per-side pick)"; falls back to any rate (named), then to the most-responding cell on the side (named as not passed) |

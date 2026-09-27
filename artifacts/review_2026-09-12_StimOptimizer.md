@@ -63,7 +63,7 @@ so the right hemisphere's pulse width is NOT OBSERVED", which stopped being true
 **What is wrong, with the numbers.** On the scratch copy of RCS08's matched table (92 epochs):
 `pw_us_Right` differs from `pw_us_Left` on **67 of 92** epochs; the Right side has run 7 distinct
 pulse widths (60, 80, 100, 140, 150, 160, 180 µs) against the Left's 5; the newest epoch (123,
-2026-09-03) reads Left 100 µs / 3.0 mA, **Right 150 µs / 2.5 mA**. Running `run_stage1` for the Right
+2026-09-03 [Corrected 2026-09-26, decision 328: the setting began 2026-09-02 19:15 UTC on the tablet clock; 2026-09-03 was a later export's re-stamped copy]) reads Left 100 µs / 3.0 mA, **Right 150 µs / 2.5 mA**. Running `run_stage1` for the Right
 side alone on that table, everything else at defaults:
 
 | `pw_col` | Right frozen setting | strata fitted (pw µs: epochs) | pw resolved | incumbent pw reported |
@@ -272,7 +272,7 @@ the newest epoch in `es` is the PREVIOUS setting, so "programmed now" on the dec
 incumbent every arm's gain is measured against, and the two-stage incumbent all name a setting the
 device is no longer on. The Closed-Loop page reads the newest epoch of the settings stream itself
 (decisions 132, 135), so the two pages disagree in that window. On the scratch table today the
-newest rated epoch (123, 2026-09-03 20:07 UTC, 55 Hz) is also the epoch the Closed-Loop page names,
+newest rated epoch (123, 2026-09-03 20:07 UTC [Corrected 2026-09-26, decision 328: 2026-09-02 19:15 UTC on the tablet clock], 55 Hz) is also the epoch the Closed-Loop page names,
 so nothing is wrong on screen now.
 
 **Fix.** Build `in_force_by_side` from the full epoch table the request already holds

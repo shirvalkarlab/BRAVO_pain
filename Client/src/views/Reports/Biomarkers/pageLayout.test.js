@@ -64,8 +64,8 @@ const REQ = {
   AllowWindowReuse: false, IncludeClinicSheetRatings: false, SlidingWindow: false,
 };   // the heat-map request as the page builds it: no cap, gap or TD length (review of 2026-09-26)
 
-// The device's sensing rule for RCS08 with the contacts in force since 2026-09-03 (decisions 217
-// and 247: the left lead stimulates on contact 2, the right on 1 and 2), in the shape the Stim
+// The device's sensing rule for RCS08 with the contacts in force since 2026-09-02 19:15 UTC (decisions
+// 217, 247 and 328: the left lead stimulates on contact 2, the right on 1 and 2), in the shape the Stim
 // Optimizer's response already carries it (`closed_loop.sensing_rule`, decision 243). The heat-map
 // grid's response does not carry it yet; the page marks refused pairs only once it does.
 const SENSING_RULE = {

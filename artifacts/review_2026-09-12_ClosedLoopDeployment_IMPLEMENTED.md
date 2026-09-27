@@ -205,7 +205,7 @@ run-window in `_run_windows_epoch_s` all log a warning with the traceback. The g
 ## C9 (Low) — measured first, then fixed
 
 **Measured on RCS08 before any change**: 123 exposure epochs, one open-ended; last `t_start`
-2026-09-03 20:07 UTC, last `t_end` 2026-09-11 17:30:53 UTC; newest spectrum 2026-09-11 17:30:04
+2026-09-03 20:07 UTC [Corrected 2026-09-26, decision 328: 2026-09-02 19:15 UTC on the tablet clock; the older time was a later export's re-stamped copy], last `t_end` 2026-09-11 17:30:53 UTC; newest spectrum 2026-09-11 17:30:04
 UTC. Of **304,488** spectrum rows, **0** fell in no epoch; of **5,430,456** joined-table rows, **0**
 had `setting_epoch == -1`. So on this record the report and the simulation had discarded nothing;
 the fix is a tidy-up with a 0-difference proof. `_assign_epoch` now extends an `open_ended` epoch to

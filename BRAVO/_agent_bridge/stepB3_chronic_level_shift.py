@@ -148,8 +148,11 @@ def held_transitions(rows, *, hemi="Left", min_hold_days=MIN_HOLD_DAYS):
 
 def chronic_readings(chronic_list, *, hemi="Left"):
     """The side's chronic log as aligned arrays: time, band power, delivered current, and the band
-    centre and sensing contacts in force at each reading (from the recording's own schedules)."""
-    T, Y, A, C, K = [], [], [], [], []
+    centre and sensing contacts in force at each reading. The schedules are the device's one
+    history, so every reading is resolved against the UNION of every record's dated entries (as the
+    Biomarkers pipeline does); a record's own schedule starts only where its export's entries start,
+    which since decision 328 (one record per export) is often after that record's first readings."""
+    recs = []
     for r in chronic_list:
         names = [str(n) for n in (r.get("ChannelNames") or [])]
         if not names or not names[0].startswith(f"{hemi}Hemisphere"):
@@ -158,21 +161,23 @@ def chronic_readings(chronic_list, *, hemi="Left"):
         d = np.asarray(r["Data"], float)
         if d.ndim != 2 or d.shape[0] != len(t):
             continue
-        fs = sorted((float(a), float(b)) for a, b in (r.get("FreqScheduleHz") or []))
-        cs = sorted((float(a), str(b)) for a, b in (r.get("ContactSchedule") or []))
+        recs.append((r, t, d))
+    fs = sorted({(float(a), float(b)) for r, _t, _d in recs for a, b in (r.get("FreqScheduleHz") or [])})
+    cs = sorted({(float(a), str(b)) for r, _t, _d in recs for a, b in (r.get("ContactSchedule") or [])
+                 if str(b)})
+    fs_t = np.asarray([a for a, _b in fs], float)
+    cs_t = np.asarray([a for a, _b in cs], float)
 
-        def _at(sched, tt, default):
-            v = default
-            for ts, val in sched:
-                if ts <= tt:
-                    v = val
-            return v
-        for i, tt in enumerate(t):
-            T.append(tt); Y.append(d[i, 0]); A.append(d[i, 1] if d.shape[1] > 1 else np.nan)
-            C.append(_at(fs, tt, float(r.get("CenterFrequencyHz") or np.nan)))
-            K.append(_at(cs, tt, ""))
-    o = np.argsort(T)
-    return (np.asarray(T)[o], np.asarray(Y)[o], np.asarray(A)[o],
+    def _at(sched, sched_t, tt, default):
+        i = np.searchsorted(sched_t, tt, side="right") - 1        # the newest entry at or before tt
+        return [sched[k][1] if k >= 0 else default for k in i]
+    T, Y, A, C, K = [], [], [], [], []
+    for r, t, d in recs:
+        T.extend(t); Y.extend(d[:, 0]); A.extend(d[:, 1] if d.shape[1] > 1 else np.full(len(t), np.nan))
+        C.extend(_at(fs, fs_t, t, float(r.get("CenterFrequencyHz") or np.nan)))
+        K.extend(_at(cs, cs_t, t, ""))
+    o = np.argsort(np.asarray(T, float), kind="stable")
+    return (np.asarray(T, float)[o], np.asarray(Y, float)[o], np.asarray(A, float)[o],
             np.asarray(C, float)[o], np.asarray(K, object)[o])
 
 
@@ -238,7 +243,20 @@ def _selftest():
     rec2 = dict(rec, FreqScheduleHz=[[t0 - 1, 23.44], [t0 + 20 * 86400, 8.79]])
     moved = shift_at_change(ch[0], chronic_readings([rec2]), n_boot=100)
     assert moved["readable"] is False and "another band" in moved["reason"], moved
-    print("self-test: passed (the planted step found, the absent one not, a moved band refused)")
+    # Since decision 328 the log comes as one record per export, and each export stamps only the
+    # schedule entries it itself carries, so a record's first readings can precede its own first
+    # entry (on RCS08, 2,199 left readings). The band and contacts are the device's, one history:
+    # each reading is resolved against the union of every record's entries, as the Biomarkers
+    # pipeline does (`pipeline._collect_contact_schedule_ms`), never against its own record alone.
+    half = len(t) // 2
+    rec_a = dict(rec, Time=t[:half], Data=rec["Data"][:half])
+    rec_b = dict(rec, Time=t[half:], Data=rec["Data"][half:],
+                 FreqScheduleHz=[[t[half] + 7200.0, 23.44]], ContactSchedule=[[t[half] + 7200.0, "0-2"]])
+    split = chronic_readings([rec_a, rec_b])
+    assert (split[4] == "0-2").all() and np.isclose(split[3], 23.44).all(), \
+        (int((split[4] != "0-2").sum()), "readings left without the contacts in force")
+    print("self-test: passed (the planted step found, the absent one not, a moved band refused, "
+          "a record's early readings resolved against every record's schedule)")
 
 
 def main():

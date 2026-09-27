@@ -49,3 +49,14 @@ def test_an_unknown_analysis_is_refused_by_name():
 def test_every_registered_analysis_names_its_page_title_and_literature():
     for key, a in RG.ANALYSES.items():
         assert a["page"] in RG.PAGES and a["title"] and a["literature"], key
+
+
+def test_no_description_types_a_stretch_date_that_the_record_decides():
+    """A card's fixed description never types the date a stretch starts or ends: the stretches are
+    found from the settings stream, and the tablet-clock correction (decision 328) moved the end
+    of the first 0 mA stretch from 2025-08-22 to 2025-08-21, leaving a typed date wrong on the page
+    while the saved result beside it was right. The result carries its own dates."""
+    import re
+    for key, a in RG.ANALYSES.items():
+        date = r"\b20\d\d-\d\d-\d\d\b|\b(0\d|1[0-2])-(0[1-9]|[12]\d|3[01])\b"    # 2025-08-22 or 08-22
+        assert not re.search(date, a["what"]), (key, a["what"])

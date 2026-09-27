@@ -5,6 +5,8 @@ the publisher, with unverifiable ones listed apart) sit beside this file as
 `research_2026-09-24_{1,2,3,4}_*.md`, and each describes every paper it cites. This file adds what
 the record says and ties the four together. Nothing here changed any code or any stored product.
 
+> [Corrected 2026-09-26, decision 328: every device time in this file was read on the device's own clock, which ran up to 2.1 h ahead of the tablet, and the stored record then held copies of many recordings and events. On the tablet clock the first 0 mA stretch ends 2025-08-21 (not 08-22) and the left-off stretch begins 2025-08-21; the saved control analyses were re-run on 2026-09-27 04:24-04:28 UTC (decision 329): in the first stretch L 1-3+ still rises with the 0-100 pain scale at 21.5 and 22.5 Hz (+0.38 and +0.36, 72 ratings on 24 days, q < 0.05), L 0-2+ at 21.5 Hz no longer clears q < 0.05, and the right-on switch is dated 2025-08-21. The tables below keep their first numbers.]
+
 ## 0. The implant date, and a correction
 
 - The device record (`DBSDevice.implanted_date`, the one of RCS08's four Percept RC rows that carries

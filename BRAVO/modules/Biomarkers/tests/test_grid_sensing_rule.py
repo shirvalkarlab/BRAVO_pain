@@ -27,10 +27,11 @@ try:
 except ImportError:                                                         # pragma: no cover
     from DecodeCommon import sensing_rule as SR
 
-#: RCS08 since 2026-09-03: left C+2-, right C+1-2- (decision 247).
-_TODAY = {"by_side": {"Left": {"rings": {2}, "cathode": "2a-2b-2c", "newest_row_utc": "2026-09-03T18:00:00+00:00"},
+#: RCS08 since 2026-09-02 19:15 UTC on the tablet clock: left C+2-, right C+1-2- (decisions 247, 328;
+#: older records said 2026-09-03, a later export's re-stamped copy of the same settings).
+_TODAY = {"by_side": {"Left": {"rings": {2}, "cathode": "2a-2b-2c", "newest_row_utc": "2026-09-02T19:15:43+00:00"},
                       "Right": {"rings": {1, 2}, "cathode": "1a-1b-1c-2a-2b-2c",
-                                "newest_row_utc": "2026-09-03T18:00:00+00:00"}},
+                                "newest_row_utc": "2026-09-02T19:15:43+00:00"}},
           "store_key": "therapy_settings/u/abc"}
 #: An earlier programming: left C+1-, right C+2-.
 _EARLIER = {"by_side": {"Left": {"rings": {1}, "cathode": "1a-1b-1c", "newest_row_utc": "2026-08-12T17:00:00+00:00"},
@@ -112,7 +113,7 @@ def test_a_failed_read_never_fails_the_grid():
 
 def test_the_contacts_come_from_the_stored_settings_stream_as_the_biomarkers_consumer():
     import pandas as pd
-    df = pd.DataFrame({"t": pd.to_datetime(["2026-08-12 17:00", "2026-09-03 18:00", "2026-09-03 18:00"], utc=True),
+    df = pd.DataFrame({"t": pd.to_datetime(["2026-08-12 17:00", "2026-09-02 19:15", "2026-09-02 19:15"], utc=True),
                        "hemi": ["Left", "Left", "Right"], "amp": [4.5, 3.0, 3.2],
                        "cathode": ["1a-1b-1c", "2a-2b-2c", "1a-1b-1c-2a-2b-2c"]})
     seen = {}

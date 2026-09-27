@@ -106,7 +106,8 @@ def stretches(stream, *, min_days=MIN_STRETCH_DAYS, until_s=None, merge_h=24.0):
         runs.append([cur, start, end])
     # A clinic visit steps the current for minutes to hours: a run shorter than `merge_h` takes the
     # kind of the run before it, so a visit does not split a stretch in two (found on RCS08's
-    # left-off stretch of 2025-08-22 to 10-21, which visits cut into pieces under 3 days).
+    # left-off stretch of 2025-08-22 to 10-21, which visits cut into pieces under 3 days; on the
+    # tablet clock, decision 328, it starts 2025-08-21).
     merged = []
     for k, a, b in runs:
         if merged and (b - a) < merge_h * 3600.0:

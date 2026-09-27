@@ -68,7 +68,7 @@ and the one in force is the one delivering stimulation.
    come before its rises reverses the order. **Visit 1.**
 3. **Do the left bands still rise with pain when no current is running at all, with each rating
    matched to a recording taken within minutes of it?** In the one stretch with both sides at 0 mA
-   (2025-07-16 to 08-22), L 1-3+ at 21.5 and 22.5 Hz rose with the 0-100 pain scale (+0.38 and
+   (2025-07-16 to 08-22; [Corrected 2026-09-26, decision 328: on the tablet clock the stretch ends 2025-08-21 and the re-run reads 72 ratings on 24 days, +0.38 and +0.36, decision 329]), L 1-3+ at 21.5 and 22.5 Hz rose with the 0-100 pain scale (+0.38 and
    +0.34, decision 264(1)), but the ratings and recordings were matched only by day, typically 5.1
    hours apart (report 02). **Visit 2** (§6.1), after the 90-minute wait of report 02: it describes
    minutes 90 to 130 after switching off, not the state after several hours off.
@@ -128,7 +128,7 @@ the left current in force.**
 The safety ceiling is 4.5 mA each side (decisions 145, 160). **The highest current in Visit 1 is the
 ladder's 3.5 mA on the left, 1.0 mA under the ceiling.** The left has had 3.5 mA before: it was held
 there from 2026-08-12 to 2026-09-03, after 4.0 mA and then 4.5 mA from 2026-07-22 to 2026-08-12
-(decision 252), and the 2026-09-16 ladder rated 3.5 mA on both of its legs (decision 272). The home
+(decision 252) [Corrected 2026-09-26, decision 328: on the tablet clock the left was at 4.5 mA from 2026-07-22 18:26 UTC, at 4.0 mA from 2026-08-06 19:20, at 3.5 mA from 2026-08-12 23:03 and at 3.0 mA from 2026-09-02 19:15 UTC, not 2026-09-03; the older date was a later export's re-stamped copy of the same settings (decision 329)], and the 2026-09-16 ladder rated 3.5 mA on both of its legs (decision 272). The home
 sequence's upper hold, 4.0 mA on the left, is 0.5 mA under the ceiling at a current the left has also
 held before. Moving from 55 to 60 Hz delivers 9.1% more pulses a second at the same charge per
 pulse. 60 Hz is inside the rates the device's closed-loop mode accepts (55 Hz and above,

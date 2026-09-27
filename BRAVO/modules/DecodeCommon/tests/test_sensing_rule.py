@@ -109,8 +109,8 @@ def test_extra_fields_per_side_ride_on_the_rows_and_never_replace_the_rules_own(
 
 
 def test_the_contacts_in_force_are_the_newest_row_per_lead_of_the_settings_stream():
-    t = pd.to_datetime(["2026-08-12 17:00", "2026-09-03 18:00", "2026-07-22 17:00",
-                        "2026-09-03 18:00", "2026-01-05 10:00"], utc=True)
+    t = pd.to_datetime(["2026-08-12 17:00", "2026-09-02 19:15", "2026-07-22 17:00",
+                        "2026-09-02 19:15", "2026-01-05 10:00"], utc=True)
     df = pd.DataFrame({"t": t, "hemi": ["Left", "Left", "Right", "Right", "Left"],
                        "cathode": ["1a-1b-1c", "2a-2b-2c", "1a-1b-1c", "1a-1b-1c-2a-2b-2c",
                                    "0a-0b-0c"]})
@@ -118,7 +118,7 @@ def test_the_contacts_in_force_are_the_newest_row_per_lead_of_the_settings_strea
     assert got["Left"]["rings"] == {2}
     assert got["Left"]["cathode"] == "2a-2b-2c"
     assert got["Right"]["rings"] == {1, 2}
-    assert str(got["Left"]["newest_row_utc"]).startswith("2026-09-03")
+    assert str(got["Left"]["newest_row_utc"]).startswith("2026-09-02")
     only_left = SR.rings_in_force_by_side(df[df["hemi"] == "Left"])
     assert only_left["Right"]["rings"] == set() and only_left["Right"]["cathode"] is None
     assert SR.rings_in_force_by_side(None)["Left"]["rings"] == set()

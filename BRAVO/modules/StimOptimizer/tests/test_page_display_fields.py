@@ -27,7 +27,7 @@ def _frame():
              t_start=pd.Timestamp("2026-08-01", tz="UTC")),
         dict(epoch=123.0, freq_hz=55.0, amp_mA_Left=3.0, amp_mA_Right=2.5, pw_us_Left=100.0,
              pw_us_Right=150.0, cathode_Left="2a-2b-2c", cathode_Right="1a-1b-1c-2a-2b-2c",
-             t_start=pd.Timestamp("2026-09-03 20:07:11", tz="UTC")),
+             t_start=pd.Timestamp("2026-09-02 19:15:43", tz="UTC")),   # tablet clock (decision 328)
     ])
     d["t0"] = d["t_start"]
     return d

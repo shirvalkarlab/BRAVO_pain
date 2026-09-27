@@ -113,7 +113,8 @@ ANALYSES = {
         title="Day-to-day correlation of the pain ratings",
         what=("For each pain score: the correlation of daily mean ratings at lags 1 to 7 days, the "
               "effective number of independent days (the same lag-1 correction this project already "
-              "uses for a band-power correlation) for the 0 mA stretch of 2025-07-16 to 08-22 and for "
+              "uses for a band-power correlation) for the first stretch with both sides at 0 mA, from the "
+              "implant date (its dates are in the result), and for "
               "all the data we have, and the next-visit protocol's 52-98 independent-day target "
               "restated as calendar days at that effective rate."),
         literature=_lit("critique", "revised_plan")),
