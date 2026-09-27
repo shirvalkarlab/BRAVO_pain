@@ -124,7 +124,8 @@ BATCH_KIND = "exploration_batch"
 MANIFEST_KIND = "stim_optimizer_manifest"
 AMPLITUDE_KIND = "amplitude_effect_by_band"
 GROUND_TRUTH_KIND = "ground_truth_verdict"
-_RULE_VERSION = "v1_four_outputs"
+# v2 (2026-09-26): the response key names the stored clinic-sheet steps (`_clinic_steps_key`).
+_RULE_VERSION = "v2_clinic_steps_in_response_key"
 
 #: Response fields that describe the run that produced the response, not its results.
 #: Tests point this at a directory of their own; passed through to the one store.
@@ -331,7 +332,9 @@ def ground_truth_block(participant, *, tiles_key_now):
 #: adaptive-envelope override AND its name) and the figure backend. None of these changes the
 #: four tables, which come from the flat fit alone; keyed on them, two requests differing only
 #: in one of these would sweep each other's tables on every write.
-_RESPONSE_ONLY_KEY_TAIL = 10
+#: 11 since 2026-09-26: the stored clinic-sheet steps (`_clinic_steps_key`), read only by the
+#: two-stage block.
+_RESPONSE_ONLY_KEY_TAIL = 11
 
 
 def _band_span_key_element():
@@ -358,8 +361,24 @@ def _explore_outside_key_element(rd) -> str:
     return "1:" + str((rd or {}).get(TWO_STAGE_EXPLORE_OUTSIDE_KEY) or "").strip()
 
 
+def _clinic_steps_key(uid) -> str:
+    """The identity of the stored clinic-sheet steps this request's two-stage block will read: the
+    newest `clinic_pain_steps` entry's own key (the sheets' file names and content hashes and the
+    parser's rule version, `clinic_pain.folder_signature`), read from its sidecar alone. The clinic
+    fit, the ruling-5 coverage, the visits list and the gate's side-effect statistic all read that
+    entry, and a sheet sync changes it without touching the device settings or the REDCap reports
+    (2026-09-26: the response was served stale after a sync). "none" when nothing is stored."""
+    try:
+        stamp = _cache_store.newest_stamp(CLPAIN.CLINIC_PAIN_KIND, uid, root=_SHARED_CACHE_DIR_OVERRIDE)
+    except Exception as exc:                              # noqa: BLE001 -- named, not hidden
+        return f"unreadable:{type(exc).__name__}"
+    if not stamp:
+        return "none"
+    return str(stamp.get("signature_key") or f"unkeyed:{stamp.get('written_utc')}")
+
+
 def _response_signature(uid, matched_key, tiles_key, amp_key, gt_key, request_data, sites, hemis,
-                        washin_min, backend, pain_key=None):
+                        washin_min, backend, pain_key=None, clinic_key=None):
     """The response key: every input and every setting the fitted result depends on, and the
     response-only settings last, so `_products_signature` can drop them. `pain_key` is the
     pain-relationship digest (`_pain_relationship_key`, decision 199): the readiness screen and
@@ -382,6 +401,7 @@ def _response_signature(uid, matched_key, tiles_key, amp_key, gt_key, request_da
             _explore_outside_key_element(rd),
             str(rd.get(TWO_STAGE_EXPLORE_OUTSIDE_BY_KEY) or ""),
             pain_key,
+            clinic_key,
             str(backend))
 
 
@@ -1546,7 +1566,8 @@ def _run_for_participant(request_data: dict) -> dict:
         sig = _response_signature(uid, matched_key, tiles_key, amp_block.get("store_key"),
                                   gt_block.get("store_key"), request_data, sites, hemis,
                                   washin_min, backend,
-                                  pain_key=_pain_relationship_key(_pain_by_channel, _pain_block))
+                                  pain_key=_pain_relationship_key(_pain_by_channel, _pain_block),
+                                  clinic_key=_clinic_steps_key(uid))
         store_block["response_key"] = _cache_store.product_key(RESPONSE_KIND, uid, sig)
         try:
             served = _cache_store.load(RESPONSE_KIND, uid, sig, consumer="stim_optimizer",

@@ -59,7 +59,13 @@ class EligibilityReport:
 
     def summary(self) -> str:
         if self.eligible:
-            return f"eligible ({self.checked} rules checked, {len(self.advisories)} advisory)"
+            # A rule that passed and is listed only so its value can be read (kind "recorded_value")
+            # is not an advisory; the page counts it as "Passed, value shown" (review finding,
+            # 2026-09-26: the summary called every such rule an advisory).
+            n_rec = sum(1 for a in self.advisories
+                        if isinstance(a, dict) and a.get("kind") == "recorded_value")
+            return (f"eligible ({self.checked} rules checked; {n_rec} passed with their value "
+                    f"shown, {len(self.advisories) - n_rec} advisory)")
         # `checked` still counts every rule in the table, and deferred rows are named separately, so
         # a reader can always reconcile the buckets against the size of the table.
         tail = f", {len(self.deferred)} deferred as duplicate" if self.deferred else ""

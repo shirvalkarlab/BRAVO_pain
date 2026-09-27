@@ -174,6 +174,39 @@ function AdjustedEdgeLine({ adjusted }) {
   );
 }
 
+/**
+ * The same comparison in ONE plain sentence, printed in the open under the band-power-to-pain link
+ * (review finding, 2026-09-26). Decisions 235 and 242 put the current-confound caveat in the open;
+ * since decision 302 the reading with the current taken out sat only inside the closed method fold,
+ * and the interim sentence stands down once that reading exists, so the open card said nothing about
+ * the current. Both readings are printed on the area-under-the-curve scale (0.5 is coin flipping):
+ * the plain one is the strip's own number moved by the same offset the adjusted block carries
+ * between its `estimate` and its `auc`, so the two are always on one scale. Descriptive only.
+ */
+export function currentRemovedSentence(e) {
+  const a = e && e.adjusted;
+  if (!a) return null;
+  const words = a.adjusted_for_words || "the stimulation current";
+  const n = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v));
+  const f = (v) => Number(v).toFixed(3);
+  if (!a.available || n(a.auc) == null) {
+    return `This link is read without taking the stimulation current out, and could not be read `
+      + `with ${words} taken out (${a.why || "no reason was recorded"}).`;
+  }
+  const off = n(a.estimate) != null ? n(a.auc) - n(a.estimate) : null;
+  const lo = ciBound(e.ci, 0);
+  const hi = ciBound(e.ci, 1);
+  const plain = off != null && n(e.estimate) != null
+    ? `${f(n(e.estimate) + off)}${!lo.unbounded && !hi.unbounded && lo.value != null && hi.value != null
+      ? ` (${f(lo.value + off)} to ${f(hi.value + off)})` : ""}` : null;
+  const adj = `${f(a.auc)}${n(a.auc_low) != null && n(a.auc_high) != null
+    ? ` (${f(a.auc_low)} to ${f(a.auc_high)})` : ""}`;
+  const reports = a.n_pain_reports ? `, over ${Number(a.n_pain_reports)} pain reports` : "";
+  return `This link is read without taking the stimulation current out${plain ? `: ${plain}` : ""}. `
+    + `With ${words} in force taken out of the band power it reads ${adj}${reports}. 0.5 is coin `
+    + "flipping; the first reading sets the verdict.";
+}
+
 export function currentConfoundApplies(candidate) {
   const ch = String((candidate || {}).channel || "").toUpperCase();
   const hz = Number((candidate || {}).center_hz);
@@ -546,6 +579,13 @@ export default function EvidenceTrianglePanel({ report }) {
                 sx={{ ...TYPE.body, display: "block", mb: 1, color: PAL.warnText, maxWidth: "68ch" }}>
                 <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.caution.glyph}</span>
                 {CURRENT_CONFOUND_NOTE}
+              </MDTypography>
+            ) : null}
+            {k === "E2" && currentRemovedSentence(edges.E2) ? (
+              <MDTypography variant="caption" data-testid="e2-current-open"
+                sx={{ ...TYPE.body, display: "block", mb: 1, color: PAL.ink, maxWidth: "68ch" }}>
+                <span aria-hidden="true" style={{ marginRight: 6, color: PAL.warnText }}>{STATE.caution.glyph}</span>
+                {currentRemovedSentence(edges.E2)}
               </MDTypography>
             ) : null}
           </MDBox>

@@ -85,3 +85,20 @@ test("the triangle and the stability card say which pain score they read", () =>
   expect(stab).toMatch(/Pain score: \$\{painScore\.label/);
   expect(page).toMatch(/painScore=\{report\?\.data\?\.pain_score\}/);
 });
+
+describe("the page head names the dropdown's pain score while no report is on screen", () => {
+  // Review finding, 2026-09-26: the fallback read `bandPainScore(bc).label`, a field that function
+  // never returns, so the head dropped the pain score while the report loaded or was withheld.
+  // eslint-disable-next-line global-require
+  const { pageHeadPainLabel } = require("./PainScoreSelect");
+  it("uses the report's own label when a report is on screen", () => {
+    expect(pageHeadPainLabel({ pain_score: { key: "nrs", label: "NRS (0–10)" } }, "left_leg_vas"))
+      .toBe("NRS (0–10)");
+  });
+  it("falls back to the dropdown's choice, by its label, while the report is loading or withheld", () => {
+    expect(pageHeadPainLabel(null, "left_leg_vas")).toBe("Left Leg VAS");
+  });
+  it("names nothing when no score is chosen", () => {
+    expect(pageHeadPainLabel(null, null)).toBeNull();
+  });
+});

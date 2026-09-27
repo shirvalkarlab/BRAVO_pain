@@ -82,6 +82,17 @@ describe("the calibration-in-effect panel, on the served RCS08 payload", () => {
     expect(text).toMatch(/Closed-Loop/);
   });
 
+  test("the bridge sentence states the refit's distance from the ratio in effect and its spread, computed from the payload", async () => {
+    render(wrap(<CalibrationInEffectPanel participantUid={UID} />));
+    expect(await screen.findByText(/Calibration in effect/)).toBeInTheDocument();
+    const text = document.body.textContent;
+    // review of 2026-09-26: the sentence claimed "within 1 percent ... and flat" as fixed text
+    expect(text).not.toMatch(/within 1 percent/);
+    expect(text).not.toMatch(/flat across/);
+    expect(text).toMatch(/4\.755, 0\.7 percent below the ratio in effect/);
+    expect(text).toMatch(/per band centre runs from 4\.67 to 4\.89 and per contact pair from 4\.64 to 4\.88/);
+  });
+
   test("draws both figures on raw axes, never a logarithmic one, with the restored toolbar", async () => {
     render(wrap(<CalibrationInEffectPanel participantUid={UID} />));
     await screen.findByText(/Calibration in effect/);

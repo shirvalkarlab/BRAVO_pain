@@ -1,5 +1,42 @@
 # BRAVO pain biomarker pipeline — design ledger v2, revision 13
 
+> **Read this first (note added 2026-09-26, at the planning and design clean-up).** Still live:
+> §1 (the device's controller facts), §2 and §8a-bis (what each recording product is), the
+> band-candidate contract in §6 (the Closed-Loop page builds and commits this object in the
+> browser; see the note in §6), §8f (the three-source comparison, as built) and §9. The rest
+> describes the plan of early September 2026 and has been overtaken; where this file and the
+> decision log disagree, the decision log wins. Section by section:
+> - **The italic header's "nothing here is built yet"** is no longer true: the band-candidate
+>   contract, the sweep grid (§8g), the timeline (§8e), the three-source panel (§8f) and the
+>   closed-loop simulation module (decision 128) are all built.
+> - **§4 (converting device units to µV²)** is superseded. A converter exists: the calibration in
+>   effect (decisions 208 and 211, with the cross-check of 214); every constant and whether it was
+>   measured or composed is in `DEVICE_percept_rc.md`.
+> - **§3's weighting rules and §5's stimulation-context handling** were not built as written.
+>   What is built is the check of whether a band means the same at each stimulation state
+>   (decisions 185, 248, 291, 292); time is modelled nowhere (decisions 193-196).
+> - **§8b, §8c and §8d (the Biomarkers page's layout)** describe the page as it was planned on
+>   2026-09-06. The page has been rebuilt since (decisions 62-91, 216, 224, 304 and 320-325); its
+>   current layout is `artifacts/design_2026-09-26_minimalist_redesign/SPEC.md`. One item from
+>   §8b is still unbuilt: removing the sliding-window setting (item N-11 of
+>   `artifacts/pending_items_from_handoffs_2026-09-25.md`, waiting on the PI).
+> - **§8e (the timeline)** is built as the acquisition timeline (decision 216), cut at the implant
+>   date (260, 313). Its colour ruling (a categorical palette, cividis rejected) was replaced by
+>   the redesign (decision 320: cividis with its palest stops left out, SPEC.md §5.1). The
+>   right-hand inspector and the zoom to the raw waveform were never built (item P-18; draft
+>   specification `artifacts/spec_2026-09-25_P18_timeline_detail_panel.md`). Its rename table's
+>   "Spectrum" labels break the house vocabulary: say PSD or TD (decisions 115, 298).
+> - **§8g (the sweep grid)** now runs nine lengths of signal, 1 s to 60 s (decision 170), with the
+>   22-band Benjamini-Hochberg correction (63) on the exact rotation test (315). Its live values
+>   and timings date from 2026-09-06; do not quote them (CLAUDE.md §8 rule 3).
+> - **§10 (open decisions)**: the unticked items are answered by later decisions: the device's
+>   parameter ranges (148, 168, 169); the peaked response to current (55, 56, 124); the titration
+>   session and 55 Hz coverage (213); the harmonic wording (277); emitting the band candidate on
+>   the server (removed 2026-09-12; built in the browser, 122); the simulation module (128); the
+>   stimulation-state question (the band-stability check above). The low/high pain-day balance
+>   check has no decision of its own. The live open items are in `DECISIONS_and_open_items.md`
+>   Part 2, not here.
+
 *Working document. Consolidates the device constraints, the data-stream analysis, the
 cross-references, and the open decisions from the rethink session. Nothing here is built yet —
 this is the spec we build against.*

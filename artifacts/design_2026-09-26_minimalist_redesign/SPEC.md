@@ -1,5 +1,13 @@
 # BRAVO design specification: a quiet clinical instrument
 
+> **Status, 2026-09-26.** This is the one current design specification for the three analysis
+> pages. It was built (decision 320), corrected where the code did not match it (321), extended by
+> the taste follow-up (322), and amended by the PI's later rulings (324, 325). Each rule a later
+> decision changed carries a dated "Amended" note beside it; the text above each note is the rule
+> as first written. The taste audit beside this file (`TASTE_AUDIT.md`) stays: page code cites its
+> item numbers (C1-C12, D1-D14). The two proposals and the five evaluations this was merged from
+> are archived in `docs/archive/2026-09-26/design/design_2026-09-26_minimalist_redesign/`.
+
 **Base: Proposal 1** (one typeface, near-black text on white, one accent colour, red kept for safety only, answer first). **Taken from Proposal 2:**
 - a third visible state, "not checked", so that a check that could not run never looks like a pass (decisions 9 and 176);
 - a caution ink that is always paired with a glyph;
@@ -54,10 +62,15 @@ The following are deleted as text colours: #7b809a (3.9:1), #6C757D, #6E6E6E, #6
 | Token | Hex | Contrast on white / page / its own tint | Glyph | Meaning |
 |---|---|---|---|---|
 | `accent` | #0B5CAD | 6.67 / 6.38 / 5.98 on #EEF3FA; white text on it 6.67 | none | the decision answer, the single primary button, the selected tab or cell, the active navigation item. Not for chart series and not for decoration. |
-| `refused` | #B42318 | 6.57 / 6.29 / 5.85 on #FBEFEE; white on it 6.57 | ✕ | the device refuses; above the safe ceiling; blocks closed loop |
+| `refused` | #B42318 | 6.57 / 6.29 / 5.85 on #FBEFEE; white on it 6.57 | ✕ | the device refuses; above the safe ceiling |
 | `caution` | #8A5A00 | 5.93 / 5.67 / 5.46 on #FBF5EA | ▲ | needs more data; not yet certain; moves over time |
 | `notChecked` | = `ink3` #5E5E5E | 6.48 / 6.20 / 5.88 on fillMuted | ○ | could not be checked (a check that cannot run still blocks, but is counted separately) |
 | pass | = `ink` | 17.40 | ✓ | passes. There is no green in page text. |
+
+> **Amended 2026-09-26 by decision 322** (the PI's ruling on taste audit D14): red is for device
+> refusals and the safe ceiling only. The row above first also said "blocks closed loop"; a
+> statistical result that blocks closed loop (a setting not proven better, no usable sensing pair,
+> a readiness row that is not usable) is drawn in `ink` with ✕, not in red.
 
 Rules:
 - Red (#B42318) and blue (#0B5CAD) are almost equally light (6.57 against 6.67), so the glyph is compulsory. Colour alone never carries a meaning.
@@ -68,6 +81,9 @@ Rules:
 - **One face: IBM Plex Sans**, weights 400 and 600, loaded from Google Fonts in `public/index.html`. Fallback `system-ui, sans-serif`. Set `font-variant-numeric: tabular-nums` on `body` so mA and device-unit columns line up.
 - Remove Roboto 300, Lato, the leaflet stylesheet and the extra Material Icons variants.
 
+> **Amended 2026-09-26 by decision 322** (taste audit C8): the fonts, IBM Plex Sans and the icon
+> font, are served from the application's own build, not loaded from Google Fonts.
+
 | Role | px / line height | Weight |
 |---|---|---|
 | Page answer (status sentence) | 22 / 29 | 600 |
@@ -77,6 +93,9 @@ Rules:
 | Caption, table header, axis title, figure tick | 12 / 18 | 400 |
 
 - Use these five sizes and no others. The smallest is 12, which keeps a margin above the 11 px floor, and it applies to SVG and Plotly text as drawn on screen.
+
+  > **Amended 2026-09-26 by decision 325(d):** one exception, the Biomarkers heat maps' hover
+  > text, is 11 px (the page's 11 px floor, decision 304); the legibility test names it.
 - Sentence case everywhere. No uppercase, no letter-spacing, and buttons included.
 - Delete `fontSizeXXS` (10.4 px, below the floor), `d1`–`d6`, `fontWeightLight` and `fontWeightLighter`.
 - Replace the uppercase 11 px `HEAD` style in `StimOptimizer/typeScale.js` with 12 px, weight 600, `ink3`, sentence case.
@@ -88,6 +107,9 @@ Rules:
   - 32 between cards; 64 between sections.
   - 8 from a title to its answer; 16 from the answer to its figure.
 - **Width:** the content column is at most 1120 px. Prose is at most `68ch`. Only the heat maps and the timeline may use the full column. On a phone, 16 px side gutters and no horizontal scroll on the page.
+  > **Clarified 2026-09-26** (decision 321, and commit e623b998 for the Stim Optimizer page): a
+  > table wider than a phone scrolls sideways inside its own card, capped at the card's width; the
+  > page itself never scrolls sideways.
 - **Radius:** 4 for inputs, buttons and chips; 6 for cards (`borders.js` → `{ none: 0, sm: 4, md: 6 }`).
 - **Shadow:** none on cards, the navigation bar, the sidebar or buttons. Menus, popovers and tooltips only use `0 4px 16px rgba(0,0,0,.08)`. Delete `0 2px 0 #1A1A1A`.
 - **Cards:** white, a 1 px `rule` border, no card inside a card. The decision card alone carries a 4 px left bar in `accent`, or in `refused` when the device refuses.
@@ -135,6 +157,8 @@ export const PLOTLY_LAYOUT = {
 };
 
 export const PLOTLY_CONFIG = { displayModeBar: false, responsive: true, displaylogo: false };
+// Amended 2026-09-26 by decision 324(a): figureStyle also exports PLOTLY_CONFIG_WITH_TOOLBAR,
+// used by every figure that had a toolbar before the redesign (see section 3.2).
 
 // Reference lines: chance, zero, the safe ceiling. Always labelled at the line's end.
 export const REF_LINE      = { color: T.graphic, width: 1, dash: "dash" };
@@ -195,6 +219,15 @@ export const SEQUENTIAL = ["#00204D", "#213D6B", "#555B6C", "#7B7A77", "#A59C74"
 | Frequency ticks | True band centres ("8.5, 11.5 …") or round 10/15/20/25/30 Hz on a linear axis. Never `toFixed(0)`. |
 | Zoom toolbar, gridlines, legend boxes, titles on the canvas | None. The figure's title is its card's question. |
 
+> **Amended 2026-09-26 by decision 324(a):** the figure toolbar (save as picture, zoom, pan) is
+> back on every figure that had one before the redesign, so reviewers can save figures for the
+> deployment record: the Closed-Loop ROC curve, feature histogram, forward-chained area, per-state
+> refit, simulation, three-source and power-curve figures, and the Biomarkers sliding correlation
+> and calibration figures (`PLOTLY_CONFIG_WITH_TOOLBAR`). The timing histogram has its older zoom
+> and pan toolbar, with no picture export. Figures that never had one stay without: the heat maps
+> (decision 88), the device-readings gauge, the current map and the high / low preview. Gridlines,
+> legend boxes and titles on the canvas stay off.
+
 ---
 
 ## 4. Page rules
@@ -205,6 +238,11 @@ export const SEQUENTIAL = ["#00204D", "#213D6B", "#555B6C", "#7B7A77", "#A59C74"
    - the **status sentence** (22 px, from the server where the server already writes it);
    - a **status list** of at most five items, each five words or fewer and each with its glyph: ✕ refused, ▲ caution, ○ not checked;
    - on Stim Optimizer and Closed-Loop, the **ceiling line**, read from the server and never typed in: "Safe current ceiling: 4.5 mA left, 4.5 mA right (set by the PI). Nothing above it is offered on this page."
+
+   > **Amended 2026-09-26 by decision 325(a):** the menu, breadcrumb and browser-tab names are
+   > the old page names again, "Biomarkers exploration", "Stim optimizer" and "Closed-loop
+   > deployment"; each page's own question heading stays as its title. (Taste audit C7 had set the
+   > browser tab to the page's question; 325(a) replaces that.)
 2. **Controls come next, in one row.** The pain-score selector is first: a plain outlined select with the note "Every chart below uses this score." At most three controls are visible; the rest go under "More options". Developer actions (load a saved band file, clear, stored results) go in one ⋯ menu. The recompute bar stays exactly as it is.
 3. **At most four open sections, then "Background" (folded).** Every section has:
    - a question as its title;
@@ -217,6 +255,12 @@ export const SEQUENTIAL = ["#00204D", "#213D6B", "#555B6C", "#7B7A77", "#A59C74"
    - Never fold a device refusal, the ceiling, "not a value to program", or a "held, not refused" note.
    - No fold inside a fold. A fold is one 14 px row, "▸ Label (what is inside)".
    - Folded children stay mounted, so jest tests that read folded text still find it.
+
+   > **Amended 2026-09-26 by decision 325(e), Stim optimizer page only:** its three very long
+   > sections (the current map, "Can closed loop start?" and the next visit) open and close from
+   > their title and start closed, their contents mounted; a jump link to a closed section opens
+   > it. The current map's out-of-sample caveat stays in the open while its section is closed
+   > (decision 235). The page head, with its status list and ceiling line, is never folded.
 5. **Tables with more than five columns** become aligned comparisons (Today | Suggested | Difference) or sentences. Headers are 12 px, sentence case, `ink3`, on `fillMuted`.
 6. **One primary button per card:** accent fill, white text, 600, 36 px tall. Secondary buttons: white with a 1 px `ink3` border.
 7. **Jump links** sit in a slim contents row under the status list, never inside a card.
@@ -240,10 +284,29 @@ export const SEQUENTIAL = ["#00204D", "#213D6B", "#555B6C", "#7B7A77", "#A59C74"
    - Clicking a cell opens the scatter, with direct labels "high pain", "low pain", "○ clinic sheet" and "r = …" at the end of the fitted line.
    - One `ink3` caveat line above the maps.
    - The "How to read this" drawer at 14 px weight 400.
+
+   > **Amended 2026-09-26 by decisions 324(b) and 325(c, d).** The correlation is written "R";
+   > "for this square alone" is gone. The value after the 22-band correction (a Benjamini-Hochberg
+   > q from the server) is printed as "q ... (p corrected for testing 22 bands)" on the hover and
+   > the pinned-cell line, never as "p ... after allowing for 22 bands"; the plain per-square p is
+   > unchanged. Every p and q has at most two decimals ("p < 0.01" below 0.005); R and the area
+   > under the curve have two decimals. The hover text is 11 px (see section 2.4). The left map is
+   > titled "R with pain" and the right "High vs Low Pain Logistic classification" (the PI's
+   > wording; the number it draws is the area under the curve of a rank comparison). Titles, keys,
+   > maps, the clicked square's statistics and its two plots share rows across the two columns, so
+   > both maps start at the same height and the scatter and violin do too.
 3. **§2 "How are reports paired with recordings?"**
    - Folded to one line: "Paired within ±60 min · each report picks its recordings · up to 3 per report · home surveys only · Change".
    - Opened, it shows match window, split rule and clinic sheets. The other five controls sit under "More options".
    - Each control has one sentence of 15 words or fewer under it. The "Expand descriptions" button is removed. The timing histogram is this section's figure.
+
+   > **Amended 2026-09-26 by decision 325(b):** every matching control sits behind one large bold
+   > "Adjust matching parameters" button, closed by default, with the settings in force printed
+   > beside it. It opens ONE compact panel holding the match window, the split, the direction, the
+   > clinic-sheet switch, the cap per report, the gap, the length of signal, reuse and the high /
+   > low split's own controls (the preview with its cut handles). There is no "More options" row
+   > and no separate fold rows here; page text that pointed at "the matching card" or "the
+   > histogram card" names the button.
 4. **§3 "What was recorded, and when?"** The timeline:
    - the title moves to the card header, the legend border goes, ticks are 12 px, month gridlines are #EEEEEC;
    - lanes use `SEQUENTIAL` (cividis), with frequency labels in `ink` beside a coloured tick;
@@ -273,6 +336,12 @@ export const SEQUENTIAL = ["#00204D", "#213D6B", "#555B6C", "#7B7A77", "#A59C74"
    - Pair tabs as a segmented control: the two allowed pairs first; the others greyed, each with its reason.
 4. **§2 "Does the device allow it?"**
    - Three counts in the open: "Refuses (n) · Could not check (n) · Allowed (n)". Refused rows stay open in `refused` with ✕, their wording unchanged.
+
+     > **Amended 2026-09-26 by decision 324(c):** the counts add up. "Allowed" counts only rules
+     > that passed; rules that passed with their value shown and the non-blocking notes get their
+     > own counts in the open, and the line ends with the total, for example "Refuses (1) · Could
+     > not check (0) · Allowed (20) · Passed, value shown (6) · Notes, not blocking (25) of 52
+     > rules checked".
    - Deferred, advisory and pinned rows go under "Notes, not blocking".
 5. **§3 "Does the evidence hang together?"**
    - Three aligned dot-and-interval strips, zero aligned, named "Current → band power", "Band power → pain" and "Current → pain". The value and interval are printed at the dot; hollow means not certain.
@@ -314,6 +383,11 @@ All text in the fill inks moves to `TEXT_VARIANT` or `ink`.
    - The band ticks on an 8–30 Hz axis; flagged centres as hollow rings labelled "rate ×4 → 30 Hz"; the PI's wording "carries a folded multiple of the stimulation rate" kept.
    - The home schedule, including the "In force, above today's ceiling" line.
    - One "Why this design" fold.
+
+   > **Amended 2026-09-26 by decision 325(f):** in the clinic sheet's tables an empty cell is left
+   > blank, not "not given" (this replaces taste audit C9 for that sheet only; elsewhere an empty
+   > cell is still a word, never "—"). Sections 2, 3 and 4 of this page start closed (see section
+   > 4, rule 4).
 6. **Footer:** the evidence base as a quiet key/value row. Its accessible text keeps "Evidence base: N stretches of unchanged settings · M pain reports used".
 
 ---
@@ -324,12 +398,12 @@ Rows marked **S** come from the server and go to the backend package (§4 rule 8
 
 | Current | Plain replacement |
 |---|---|
-| q = 0.0022 / corrected q | p 0.002 after allowing for all 22 bands tested |
+| q = 0.0022 / corrected q | p 0.002 after allowing for all 22 bands tested **(amended below: 324(b))** |
 | AUC | how well it tells high pain from low (0.5 = coin toss, 1 = perfect) |
-| Pearson r … (uncorrected) | correlation for this square alone, not allowing for the 22 bands tested |
+| Pearson r … (uncorrected) | correlation for this square alone, not allowing for the 22 bands tested **(amended below: 325(d))** |
 | Mann-Whitney; high n=…, low n=… | rank test; N high-pain and M low-pain reports (the test's name kept in the drawer only) |
-| Correlation with pain — depends only on matching | Does band power rise or fall with pain? |
-| High vs low pain (AUC) — also depends on the high / low cuts above | Does band power tell high-pain reports from low-pain ones? |
+| Correlation with pain — depends only on matching | Does band power rise or fall with pain? **(map title amended below: 325(c))** |
+| High vs low pain (AUC) — also depends on the high / low cuts above | Does band power tell high-pain reports from low-pain ones? **(map title amended below: 325(c))** |
 | Band power (LSB); Device LFP power (LSB); Timeline LSB | Band power (device units, LSB), with LSB defined once per card |
 | 22-band correction | the allowance for testing 22 bands at once |
 | established / supported / not resolved **S** | kept as words; each defined once in the key ("clearly above zero and past the 22-band allowance" / "range wholly above zero" / "cannot tell") |
@@ -379,8 +453,19 @@ Rows marked **S** come from the server and go to the backend package (§4 rule 8
 | stratum; Stage 1 / Stage 2; envelope | one group of settings fitted together; the open-loop search; closed loop; the range of currents closed loop may use |
 | Pain map moves over time (†) **S** | The predicted pain at the same setting changed from one block of weeks to the next |
 | Customized Analysis / Analysis Builder | Choosing stimulation settings |
-| Biomarker Exploration / Open-Loop Stim Optimizer / Closed-Loop Deployment | Which brain signal tracks pain / Which current to try next / Closed-loop settings to program |
+| Biomarker Exploration / Open-Loop Stim Optimizer / Closed-Loop Deployment | Which brain signal tracks pain / Which current to try next / Closed-loop settings to program **(amended below: 325(a))** |
 | UF BRAVO Platform | the PI chooses (for example "BRAVO Pain · UCSF") |
+
+> **Amended 2026-09-26.** Five rows above were changed by later rulings:
+> - **324(b):** the corrected value is printed as "q 0.002 (p corrected for testing 22 bands)" on
+>   the Biomarkers heat-map hover and pinned-cell line and in the Closed-Loop "Choose a band"
+>   tooltip; a corrected q is never written as "p".
+> - **325(d):** the correlation is "R", and "for this square alone" is removed; p and q are
+>   printed to at most two decimals ("p < 0.01" below 0.005), R and the area under the curve to two.
+> - **325(c):** the two heat maps are titled "R with pain" and "High vs Low Pain Logistic
+>   classification" (the PI's wording).
+> - **325(a):** the menu, breadcrumb and browser-tab names are "Biomarkers exploration", "Stim
+>   optimizer" and "Closed-loop deployment"; the question headings stay on the pages.
 
 **Kept word for word:**
 - "carries a folded multiple of the stimulation rate"
@@ -394,85 +479,28 @@ Rows marked **S** come from the server and go to the backend package (§4 rule 8
 
 ---
 
-## 7. Implementation plan
+## 7. Implementation status
 
-Packages 2–6 run in parallel and touch **disjoint** files. Each one lands as two commits, both made with the inline identity:
-1. a refactor that swaps literal colours for tokens, with no visible change;
-2. the redesign.
+> **Trimmed 2026-09-26.** This section first held the eight work packages (files to touch, jest pins
+> to update, the build order). WP1 to WP7 are built, so that list is kept in git only: read
+> `SPEC.md` at commit 1f12ce80. What stays true of it is below.
 
-**Only one owner runs `npm run build`, serially after each landing**, because the build output `Client/build` is shared (CLAUDE.md §8 rule 2). After each landing, run jest and check that the served code-split chunks contain the new strings.
-
-**WP1: shared tokens and figure defaults** (it lands first; every other package imports from it)
-- Files:
-  - `Client/src/assets/theme/base/{colors,typography,borders,boxShadows,globals}.js`
-  - new `assets/theme/base/tokens.js`
-  - new `assets/theme/base/dataColors.js`
-  - new `Client/src/views/Reports/figureStyle.js`
-  - new `Client/src/views/Reports/paper/{PageHead,Section,StatusList,CeilingLine,Fold,ColorKey}.js`
-  - `Client/public/index.html` (font links only)
-- New tests:
-  - `assets/theme/base/tokens.test.js`: every text token is at least 4.5:1 on `surface`, `page` and its tint, and no size is under 11;
-  - `views/Reports/figureStyle.test.js`: the defaults are 12 px and the toolbar is off.
-- Pins updated: none.
-
-**WP2: app shell**
-- Files:
-  - `Client/src/assets/theme/components/{card/*,button/*,sidenav.js,appBar.js,breadcrumbs.js,tabs/*,tooltip.js}`
-  - `Client/src/components/SideMenu/*`
-  - `Client/src/components/Navbars/DashboardNavbar/*`
-  - `Client/src/layouts/DatabaseLayout/DashboardLayout.js`
-  - `Client/src/routes.js`, `Client/src/App.js`
-  - `Client/public/manifest.json` and the icons
-  - `Client/src/assets/translation.js`
-- Pins updated: none known.
-- The brand name waits on the PI.
-
-**WP3: Biomarkers page**
-- Files: `Client/src/views/Reports/Biomarkers/*` (index, BiomarkerHeatmapGrids, gridReadouts, binarizationModel, MatchWindowBand, BinarizationPreview, TimingHistogram, BiomarkerAnalytics, CalibrationInEffectPanel, BiomarkerDataTimeline, colours only and through the `bravo-timeline-layout` skill).
-- Jest to update:
-  - `Biomarkers/legibility.test.js`: assert tokens; check every text colour, not only greys; lane labels in `ink` with a coloured tick replace the "same hue family" rule;
-  - `Biomarkers/gridReadouts.test.js`: q readouts and /amber/;
-  - `Biomarkers/Biomarkers.referent.test.js`: bold search lines become 400;
-  - `Biomarkers/pageLayout.test.js`: it should still pass; the constants stay visible;
-  - `Biomarkers/timelineGutter.test.js`: must pass unchanged.
-
-**WP4: control-analysis card**
-- Files: `Client/src/views/Reports/ControlAnalyses/*` (figures.js drawn at measured width with direct labels and pain-score labels; ControlAnalysesCard.js with the MUI select and its new title).
-- Jest to update: `ControlAnalysesCard.test.js`, `BandDetector.test.js` and `OwnNullBars.test.js` (the reading strings; the fill-colour assertion is kept).
-
-**WP5: Stim Optimizer page**
-- Files: `Client/src/views/Reports/StimOptimizer/*` (index, StatusLine, DecisionStrip, GainBar, CurrentMapCard, CurrentMapScheduleCard, SensingEvidenceTable, TitrationSessionCard, TwoStagePlanCard, BandResponseStrip, stimFormat, typeScale.js, which re-exports tokens).
-- Load the `bravo-stimoptimizer-figures` skill first.
-- Jest to update:
-  - `StimOptimizer.pageOrder.test.js`: section order; the evidence-base prefix is kept as accessible text;
-  - `StimOptimizer.referent.test.js`: the caveat numbers stay mounted in the fold;
-  - `StimOptimizer.designReview.test.js`: the colour stops and "blue is better" are kept; only the order and legend assertions change;
-  - any test in that folder that pins uppercase header text: switch it to case-insensitive matching.
-
-**WP6: Closed-Loop page**
-- Files: `Client/src/views/Reports/ClosedLoopSim/*` (index, DecisionCard, EvidenceTrianglePanel, DeviceRuleLedger, BandSweepGridPanel, BandStabilityPanel, ClosedLoopSimulationPanel, DeploymentRocPanel, LsbPowerPanel, EraRefitPanel, ThreeSourceResponsePanel, DeploySignoffCard, WhatWouldChangeThis, palette.js, which re-exports tokens; candidateRequestParams.js untouched).
-- Load the `bravo-stimoptimizer-figures` skill first.
-- Jest to update:
-  - `ClosedLoopSim/legibility.test.js`: reject `PAL.fail`, `PAL.pass` and `PAL.warn` as text colours, and any hex outside `palette.js`;
-  - `DeploymentJumpLinks.order.test.js`;
-  - `DecisionCard.test.js` and `panels.payload.test.js` ("SIGNS AGREE/DISAGREE" and the E1/E2 sentences);
-  - `EvidenceTriangle.currentCaveat.test.js`, `.source.test.js` and `.noColumnNames.test.js`;
-  - `ClosedLoopSim.referent.test.js`;
-  - the ledger bucket-heading pins inside those files;
-  - `DecisionCard.ceiling.test.js` and `DecisionCard.painScoreGuard.test.js`: must pass unchanged.
-
-**WP7: cross-page cleanup** (serial, after WP3–WP6)
-- Files:
-  - delete `Client/src/views/Reports/legibleText.js`;
-  - `Client/src/views/Reports/CacheStatusLine.js`;
-  - `Client/src/views/Reports/threePagesNoSpectrumWord.test.js`: expected colours; the spectrum-word rule is kept;
-  - `Client/src/views/Reports/foldedDeveloperLines.source.test.js`: the ⋯ menu;
-  - the legibility source check from decisions 258 and 259, which reads `RecomputeBar.js`: the test reads that file, **the file itself is not edited**.
-
-**WP8: server wording** (backend; separate; after the PI rules)
-- Files: the Python files that produce the §6 rows marked **S** and the device-rule labels.
-- Each change is proved on live RCS08 with a field count and a difference count, and the differences must be sentences only.
-- Rerun both test suites.
+- **Built:** WP1 shared tokens and figure defaults (d5d380eb), WP2 app shell (9591f067), WP3
+  Biomarkers page (7838f3e2), WP4 control-analysis card (ec8b8454), WP5 Stim Optimizer page
+  (01db521d), WP6 Closed-Loop page (fceb8072), WP7 cross-page cleanup (700c3bbd), and the
+  redesign audit (7090388c); all recorded as decision 320, with the fixes of 321 and the taste
+  follow-up of 322.
+- **Not built: WP8, server wording** (left on purpose in decision 320; section 4 rule 8 puts it after the PI rules). The section 6 rows marked **S** and the
+  device-rule labels are written by Python. Changing them is a backend package of its own: each
+  change proved on live RCS08 with a field count and a difference count (the differences must be
+  sentences only), and both test suites rerun.
+- **Still waiting on the PI** (decisions 320 and 322): the product name ("UF BRAVO Platform"), the
+  dark theme (section 2.6), the timeline gutter's Arial, the faint PLANNING ONLY watermark, and the
+  badge component's uppercase.
+- **Standing rules from the plan:** a frontend change is followed by one serial `npm run build`
+  (CLAUDE.md section 8 rule 2), jest, and a check that the served code-split chunks carry the new
+  strings; the timeline goes through the `bravo-timeline-layout` skill, and the Stim Optimizer and
+  Closed-Loop figures through the `bravo-stimoptimizer-figures` skill.
 
 ---
 
@@ -481,7 +509,7 @@ Packages 2–6 run in parallel and touch **disjoint** files. Each one lands as t
 - **The PI's files:** `Client/src/database/resultCache.js`, `Client/src/database/useCachedResult.js` and `Client/src/views/Reports/RecomputeBar.js`. They are not edited and not restyled; other code may only read them.
 - **Every number and its meaning.** No value, interval, count, verdict or rounding that changes meaning. Frequency ticks show true centres. Saturated colour cells still show the exact value on hover.
 - **Safety wording, word for word:** the safe current ceiling and its capped note, the device refusals ("Unmet:", "Unchecked:", the D-rule labels, "This configuration cannot be programmed"), "not a value to program", "held, not refused", and the PI's harmonic wording. Refusals keep red with ✕ and are never folded.
-- **The floors:** no text under 11 px as rendered on screen (this spec uses 12 px or more); every text colour at least 4.5:1 on its actual background; meaningful graphics at least 3:1.
+- **The floors:** no text under 11 px as rendered on screen (this spec uses 12 px or more); every text colour at least 4.5:1 on its actual background; meaningful graphics at least 3:1. (Amended 2026-09-26 by decision 325(d): the heat maps' hover text is the one place at 11 px.)
 - **Plain JavaScript only;** no TypeScript.
 - **The timeline's left-gutter geometry and fonts** change only through the `bravo-timeline-layout` skill.
 - **Three-state checks:** "not checked" is never drawn as a pass.

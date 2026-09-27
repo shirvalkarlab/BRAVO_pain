@@ -2618,6 +2618,33 @@ RULES = (
 RULES_BY_ID = {rule.rule_id: rule for rule in RULES}
 
 
+#: WHAT CLEARS A BLOCKING RULE THAT FAILS, one of four words, carried on every row as
+#: ``resolved_by`` so the page can name who acts on a refusal. The evaluator gives every blocking
+#: rule that fails the same kind ("failed"), and the Closed-Loop page used to map that one kind to
+#: one actor, "measurement, a property of the recording", for every refusal; D52 (the sensing pair
+#: must flank the stimulating contacts) is cleared at the programmer by a change of contacts, not by
+#: measuring anything (review finding, 2026-09-26).
+#:
+#: * ``configuration``: a change of settings at the programmer (contacts, mode, currents, pulse
+#:   width, group features, the capture procedure).
+#: * ``band``: another band or sensing pair; more measurement on this one does not clear it.
+#: * ``recording``: a property of the lead or of the recording (impedance, a device-detected
+#:   artefact); a new measurement that meets the rule clears it.
+#: * ``analysis``: how this platform computed the numbers; nothing at the programmer clears it.
+#:
+#: Rules that cannot be evaluated keep the actor of their own kind (a value not read off the
+#: programmer, an input not supplied, a check that raised), whatever is written here.
+#: ``tests/test_resolved_by.py`` fails if a blocking rule is missing from this table.
+RESOLVED_BY = {
+    "D03": "configuration", "D08": "band", "D11": "analysis", "D12": "analysis",
+    "D13": "configuration", "D15": "band", "D16": "recording", "D17": "recording",
+    "D18": "configuration", "D19": "band", "D24": "configuration", "D27": "configuration",
+    "D28": "configuration", "D29": "configuration", "D30": "configuration", "D32": "configuration",
+    "D34": "configuration", "D38": "configuration", "D39": "configuration", "D40": "configuration",
+    "D52": "configuration",
+}
+
+
 # ------------------------------------------------------------------------------------------------
 # The evaluator.
 # ------------------------------------------------------------------------------------------------
@@ -2654,6 +2681,8 @@ def _entry(rule, kind, why, observed):
         "title": rule.title,
         # The rule in at most four words, for the decision card's bullets (decision 302).
         "short_label": rule.short_label,
+        # What clears a failure of this rule (RESOLVED_BY); "" for a rule that names none.
+        "resolved_by": RESOLVED_BY.get(rule.rule_id, ""),
         "source": rule.source,
         "kind": kind,
         "observed": observed,

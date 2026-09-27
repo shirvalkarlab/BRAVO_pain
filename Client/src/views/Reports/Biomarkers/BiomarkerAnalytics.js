@@ -117,6 +117,15 @@ function Section({ title, subtitle, panels, header = null }) {
   );
 }
 
+/** True when the response carries at least one channel of the sliding correlation this component
+ *  draws; the page folds the section only then (review of 2026-09-26: the page asks for no sliding
+ *  window, so the fold used to open on nothing). */
+export function hasSlidingCorrelation(analytics) {
+  const scs = analytics && analytics.timedomain && analytics.timedomain.sliding_corr_spectrum;
+  return !!(scs && Array.isArray(scs.channels)
+    && scs.channels.some((ch) => Array.isArray(ch.freqs) && ch.freqs.length));
+}
+
 export default function BiomarkerAnalytics({ analytics, metricLabel }) {
   if (!analytics) return null;
   const td = analytics.timedomain || {};

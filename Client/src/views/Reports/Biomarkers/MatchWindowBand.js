@@ -7,8 +7,11 @@
  * per report, gap, length of signal, reuse) and the high / low split's own controls sit in ONE
  * compact panel behind a large "Adjust matching parameters" button, closed by default, with the
  * settings in force printed beside it ("Paired within ±60 min · each report picks its nearest
- * recordings ...") (the PI, 2026-09-26). Each control carries one short sentence under it. Everything
- * here changes the page without a Recompute press.
+ * recordings · high / low split: lowest and highest thirds ...") (the PI, 2026-09-26). Each control
+ * carries one short sentence under it. The coverage sentence, the timing histogram and the high / low
+ * preview follow every control at once. The heat maps and the all-band scan do NOT: a moved setting
+ * leaves them on screen as computed, the heat maps say which setting changed, and the page's
+ * Recompute rebuilds both (review of 2026-09-26).
  *
  * On screen: Biomarkers page, the matching section, under the heat maps.
  */
@@ -36,11 +39,26 @@ export const DIRECTION_WORDS = {
   prior: "Each recording picks the next report after it",
 };
 
-/** The one-line summary printed beside the "Adjust matching parameters" button. */
-export function matchingSummary({ matchTolerance, matchDirection, maxPerRating, includeClinicSheetRatings }) {
+/** The split rule in a few words, for the summary line. A tertile split always cuts at the thirds. */
+function splitWords(strategy, percentileLow, percentileHigh) {
+  if (strategy === "tertile") return "high / low split: lowest and highest thirds";
+  if (strategy === "percentile" && percentileLow != null && percentileHigh != null) {
+    return `high / low split at the ${ordinal(percentileLow)} and ${ordinal(percentileHigh)} percentiles`;
+  }
+  if (strategy === "median") return "median split";
+  if (strategy === "kmeans") return "high / low split: two clusters";
+  return null;
+}
+
+/** The one-line summary printed beside the "Adjust matching parameters" button: the settings that
+ *  decide the heat maps (the window, the direction, the split and the clinic sheets). The cap per
+ *  report is not named here: the heat maps do not read it (review of 2026-09-26). */
+export function matchingSummary({ matchTolerance, matchDirection, includeClinicSheetRatings,
+  strategy, percentileLow, percentileHigh }) {
   const parts = [`Paired within \u00b1${matchTolerance} min`];
   if (DIRECTION_WORDS[matchDirection]) parts.push(DIRECTION_WORDS[matchDirection].toLowerCase());
-  if (maxPerRating != null) parts.push(`up to ${maxPerRating} per report`);
+  const split = splitWords(strategy, percentileLow, percentileHigh);
+  if (split) parts.push(split);
   if (includeClinicSheetRatings != null) {
     parts.push(includeClinicSheetRatings ? "home surveys and clinic sheets" : "home surveys only");
   }
@@ -61,7 +79,7 @@ export default function MatchWindowBand({
   strategy, setStrategy, strategyOptions, percentileLow, percentileHigh,
   matchDirection, setMatchDirection,
   scanIndex, painSeries,
-  maxPerRating = null, includeClinicSheetRatings = null,
+  includeClinicSheetRatings = null,
   extraControls = null, moreOptions = null, binarization = null, defaultOpen = false,
 }) {
   // THE MATCHING PANEL (the PI, 2026-09-26): one large bold button, closed by default, opens a
@@ -99,7 +117,8 @@ export default function MatchWindowBand({
           {"Adjust matching parameters"}
         </MDBox>
         <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink2 }} data-testid="matching-summary">
-          {matchingSummary({ matchTolerance, matchDirection, maxPerRating, includeClinicSheetRatings })}
+          {matchingSummary({ matchTolerance, matchDirection, includeClinicSheetRatings,
+            strategy, percentileLow, percentileHigh })}
         </MDTypography>
       </MDBox>
       <MDBox id="matching-panel" hidden={!open} data-testid="matching-panel"
@@ -180,7 +199,7 @@ export default function MatchWindowBand({
           </MDTypography>
           <ToggleButtonGroup value={matchDirection} exclusive size="small" aria-label="Match direction"
                              onChange={(e, v) => { if (v) setMatchDirection(v); }} sx={TOGGLE_SX}>
-            <ToggleButton value="pro_first" title="Each pain report claims its closest readings on either side, up to the cap per report">{DIRECTION_WORDS.pro_first}</ToggleButton>
+            <ToggleButton value="pro_first" title="Each pain report claims its closest readings on either side (in the all-band scan, up to the cap per report)">{DIRECTION_WORDS.pro_first}</ToggleButton>
             <ToggleButton value="nearest" title="Each reading pairs with the nearest pain report on either side">{DIRECTION_WORDS.nearest}</ToggleButton>
             <ToggleButton value="prior" title="Each reading pairs only with a pain report recorded after it (the closed-loop direction)">{DIRECTION_WORDS.prior}</ToggleButton>
           </ToggleButtonGroup>

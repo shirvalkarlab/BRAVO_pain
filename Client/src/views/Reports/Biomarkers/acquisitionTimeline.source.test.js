@@ -27,6 +27,15 @@ describe("the timeline component draws no per-report matched values", () => {
   });
 });
 
+describe("the timeline reads only fields the acquisition-timeline endpoint sends", () => {
+  // review of 2026-09-26: the endpoint sends {availability, available_metrics, message}; nothing on
+  // the server writes a participant label or a region map to it, so these reads were always empty
+  const code = codeOnly(read("BiomarkerDataTimeline.js"));
+  test.each(["participant_label", "region_map", "av.participant"])("no read of %s", (tok) => {
+    expect(code).not.toContain(tok);
+  });
+});
+
 describe("the page asks the timeline endpoint for no matching window and fetches the sample index on its own", () => {
   const code = codeOnly(read("index.js"));
   test("the timeline fetch carries only the participant", () => {

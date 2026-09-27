@@ -43,7 +43,7 @@ import { num, fmtHz } from "./stimFormat";
 import { T, TYPE, WEIGHT, STATE, WRAP, SizedFold } from "./typeScale";
 import { sideVerdicts } from "./DecisionStrip";
 // Which of the four checks, failing, is the device refusing or the ceiling (red): one home.
-import { verdictState, REFUSED_CHECKS } from "./ClosedLoopChecks";
+import { verdictState, conditionFailState, amplitudeLimitCauses, AMP_LIMIT_CAUSE_NAME } from "./ClosedLoopChecks";
 import {
   BLOCK_OF_TIME_NOTE, BLOCK_OF_TIME_SYMBOL, blockOfTimeState, rateRowForSetting,
 } from "./blockOfTime";
@@ -140,7 +140,13 @@ export function statusSummary(data, plan) {
   // Each of the four checks: refused (red) or blocked (ink) when it fails, grey when not assessed.
   conditions.forEach((c) => {
     const st = verdictState(c);
-    if (st === false && RED_NAME[c.name]) add(REFUSED_CHECKS.has(c.name) ? "refused" : "blocked", RED_NAME[c.name](c), c.detail);
+    if (st === false && c.name === "amplitude_limits_inside_envelope_and_under_ceiling") {
+      // Only a proposed limit above the ceiling is the red ceiling refusal; each other cause
+      // blocks in ink under its own name (2026-09-26).
+      const causes = amplitudeLimitCauses(c);
+      if (!causes.length) add("blocked", "Current limits check fails", c.detail);
+      causes.forEach((k) => add(k === "above_ceiling" ? "refused" : "blocked", AMP_LIMIT_CAUSE_NAME[k], c.detail));
+    } else if (st === false && RED_NAME[c.name]) add(conditionFailState(c), RED_NAME[c.name](c), c.detail);
     if (st === null && GREY_NAME[c.name]) add("grey", GREY_NAME[c.name](c), c.detail);
   });
   // A pulse-width choice never put to the data, on every side.

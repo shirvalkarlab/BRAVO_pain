@@ -27,7 +27,7 @@ import MDTypography from "components/MDTypography";
 
 import PAL from "./palette";
 import { TYPE, WRAP, CARD } from "assets/theme/base/tokens";
-import { parseSignPattern, unevaluableFor } from "./deployFormat";
+import { parseSignPattern, refusalFor, unevaluableFor } from "./deployFormat";
 import { coherenceReading } from "./stateTracks";
 
 /**
@@ -53,7 +53,10 @@ function buildItems(data) {
   const el = data.eligibility || {};
 
   (el.failures || []).forEach((f) => {
-    const u = unevaluableFor(f.kind || "failed");
+    // A refusal's actor and remedy are the rule's own (`resolved_by`); a row of any other kind
+    // keeps its kind's actor.
+    const refusal = !f.kind || f.kind === "failed";
+    const u = refusal ? refusalFor(f) : unevaluableFor(f.kind);
     items.push({
       key: `fail-${f.rule_id}`,
       rank: 1,
@@ -63,7 +66,8 @@ function buildItems(data) {
       page: f.page,
       // Decision 302: "the device refuses ... no parameter value is shown" is the decision card's
       // status line directly above; this row says only what clears it.
-      clears: "Only a change to the configuration clears this; nothing else on this list does.",
+      clears: refusal ? u.clears
+        : "Only a change to the configuration clears this; nothing else on this list does.",
       observed: f.observed,
       why: f.why,
     });

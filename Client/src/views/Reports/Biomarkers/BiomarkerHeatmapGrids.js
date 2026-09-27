@@ -51,6 +51,8 @@ import Plotly from "plotly.js-dist";
 import { PlotlyRenderManager } from "graphing-utility/Plotly";
 import { SessionController } from "database/session-control";
 import { useCachedResult } from "database/useCachedResult";
+// Read only (the PI's file, not edited): the settings the shown grid was computed under.
+import { getResult, settingsKey } from "database/resultCache";
 import { biomarkerHeatmapSlot, prefetchBiomarkerHeatmapMetric } from "views/Reports/moduleCacheKeys";
 import { T, TYPE, LAYOUT } from "assets/theme/base/tokens";
 import { DIVERGING, RANGE, textInk } from "assets/theme/base/dataColors";
@@ -1013,8 +1015,10 @@ function ViolinPanel({ cell, pinnedCell, channelLabel, height, aucValue, sw, par
 // grids, the same as changing the match window or direction, so it must trigger the "replace both"
 // path rather than accidentally falling into the catch-all branch that also happens to replace
 // both -- correct by construction rather than by coincidence of the fallback's own behaviour.
+// The clinic-sheet switch is a matching setting too: it decides which ratings are paired, so it
+// changes the correlation grid as well as the area grid (review of 2026-09-26, finding 2).
 const MATCH_SETTING_KEYS = ["MatchToleranceMin", "MatchDirection", "AllowWindowReuse", "LabelMetric",
-  "SweepMetric"];
+  "SweepMetric", "IncludeClinicSheetRatings"];
 const BIN_SETTING_KEYS = ["LabelStrategy", "PercentileLow", "PercentileHigh"];
 
 function settingsSubset(params, keys) {
@@ -1023,8 +1027,62 @@ function settingsSubset(params, keys) {
   return out;
 }
 
+/** True when a new grid differs from the one on screen ONLY in the high / low split, so the
+ *  correlation grid (which the split cannot change) keeps its frame and only the area grid is
+ *  replaced (PRD section 3). Any matching change, or no earlier grid, replaces both. */
+export function onlyTheAucGridChanges(prev, next) {
+  if (!prev || !next) return false;
+  const differs = (k) => settingsSubset(prev, [k])[k] !== settingsSubset(next, [k])[k];
+  return !MATCH_SETTING_KEYS.some(differs) && BIN_SETTING_KEYS.some(differs);
+}
+
+// The settings a reader can move, in the words the matching panel uses for them. A key listed as
+// ignored cannot differ between the grid on screen and the request (the score has its own slot) or
+// is not a setting at all.
+const SETTING_WORDS = [
+  [["MatchToleranceMin"], "the match window"],
+  [["MatchDirection"], "the match direction"],
+  [["AllowWindowReuse"], "whether one stretch of recording may answer more than one report"],
+  [["LabelStrategy", "PercentileLow", "PercentileHigh"], "the high / low split"],
+  [["IncludeClinicSheetRatings"], "the clinic sheet scores"],
+];
+const SETTINGS_NOT_NAMED = ["source", "SlidingWindow", "SweepMetric", "LabelMetric"];
+
+/** Which settings differ between the grid on screen and the controls, in plain words, each once. */
+export function settingsChangedWords(shown, current) {
+  if (!shown || !current) return [];
+  const norm = (o) => { try { return JSON.parse(settingsKey(o)) || {}; } catch (e) { return {}; } };
+  const a = norm(shown);
+  const b = norm(current);
+  const differs = (k) => JSON.stringify(a[k] === undefined ? null : a[k])
+    !== JSON.stringify(b[k] === undefined ? null : b[k]);
+  const words = SETTING_WORDS.filter(([keys]) => keys.some(differs)).map(([, w]) => w);
+  const named = new Set(SETTINGS_NOT_NAMED.concat(...SETTING_WORDS.map(([keys]) => keys)));
+  if (Object.keys({ ...a, ...b }).some((k) => !named.has(k) && differs(k))) words.push("another setting");
+  return words;
+}
+
+/** "a", "a and b", "a, b and c". */
+function joinWords(words) {
+  if (words.length <= 1) return words.join("");
+  return `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+}
+
+/** The request for one clicked square. It carries the settings the SHOWN grid was computed under,
+ *  so the scatter and violin pair the same reports with the same recordings as the r and q printed
+ *  for that square, even when the controls have moved since (review of 2026-09-26, finding 1). */
+export function heatmapCellRequest({ participantUid, shownSettings, requestParams, metric,
+  channel, center, seconds }) {
+  const base = { ...(shownSettings || requestParams || {}) };
+  delete base.SweepMetric;
+  return {
+    ParticipantId: participantUid, ...base, SweepMetric: metric,
+    BandTimeSweepCell: "1", Channel: channel, BandCenterHz: center, IntegrationSeconds: seconds,
+  };
+}
+
 function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics, pageMetric,
-  metricLabel, onOpenInClosedLoop, onStatus }) {
+  metricLabel, onOpenInClosedLoop, onStatus, onStale, onRecompute }) {
   const options = useMemo(() => (
     (availableMetrics && availableMetrics.length ? availableMetrics : [])
   ), [availableMetrics]);
@@ -1075,6 +1133,36 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   const loading = cachedGrid.loading;
   const err = cachedGrid.err;
 
+  // WHAT THE SHOWN GRID WAS COMPUTED UNDER. The shared cache hands back the grid it holds when a
+  // setting moves, marked stale, and starts no request (the PI's design: the page's Recompute
+  // rebuilds). The entry's own key is the settings it was computed with; it is read here so the
+  // grid can say which settings have moved, and so a clicked square is fetched with the SAME
+  // settings as the grid it was clicked on.
+  const shownKey = (participantUid && cachedGrid.data)
+    ? ((getResult(biomarkerHeatmapSlot(metric), participantUid, null) || {}).key || null) : null;
+  const shownSettings = useMemo(() => {
+    try { return shownKey ? JSON.parse(shownKey) : null; } catch (e) { return null; }
+  }, [shownKey]);
+  // Out of date: a grid is on screen and was computed under other settings (or before a server
+  // restart). Not while its rebuild is running: the waiting words say that instead.
+  const outOfDate = !!cachedGrid.data && cachedGrid.stale && !loading;
+  const changedWords = useMemo(() => (outOfDate ? settingsChangedWords(shownSettings, cur) : []),
+    [outOfDate, shownSettings, cur]);
+  const otherStaleReasons = (cachedGrid.staleReasons || []).filter(
+    (r) => !/settings on this page have changed/.test(r));
+  const staleSentence = !outOfDate ? null
+    : changedWords.length
+      ? `These heat maps were computed before ${joinWords(changedWords)} ${changedWords.length > 1 ? "were" : "was"} changed; they still show the earlier settings.`
+      : `These heat maps may be out of date: ${otherStaleReasons[0] || "they were computed under other settings"}.`;
+  const staleSignature = `${outOfDate}|${staleSentence || ""}`;
+  useEffect(() => {
+    if (onStale) {
+      onStale({ stale: outOfDate, changed: changedWords,
+        reasons: outOfDate ? [`the heat maps: ${staleSentence}`] : [] });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onStale, staleSignature]);
+
   // THE ASYMMETRIC CORRELATION/AUC UPDATE RULE (PRD §3), UNCHANGED, now keyed off the cached
   // bundle's own identity rather than a raw network response -- it fires exactly when the bundle
   // for the CURRENTLY SELECTED metric changes, whether that is a genuine fetch or a switch onto a
@@ -1082,24 +1170,20 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   useEffect(() => {
     const d = cachedGrid.data;
     if (!d) return;
+    // Compared between the settings the previous grid and this one were COMPUTED under (read off
+    // the cache entry), not the controls: with a grid served stale the two can differ.
     const prev = prevSettingsRef.current;
-    const matchChanged = !prev || MATCH_SETTING_KEYS.some(
-      (k) => settingsSubset(prev, [k])[k] !== settingsSubset(cur, [k])[k]);
-    const binChanged = BIN_SETTING_KEYS.some(
-      (k) => prev && settingsSubset(prev, [k])[k] !== settingsSubset(cur, [k])[k]);
-    prevSettingsRef.current = cur;
+    const next = shownSettings || cur;
+    prevSettingsRef.current = next;
 
-    if (matchChanged || !corrResult) {
-      setCorrResult(d);
-      setAucResult(d);
-    } else if (binChanged) {
+    if (corrResult && onlyTheAucGridChanges(prev, next)) {
       // Correlation depends only on matching (PRD §3): keep the previous correlation grid's
       // object identity so its frame does not redraw, and replace the AUC grid with a flash.
       setAucResult(d);
       setAucFlashKey((k) => k + 1);
     } else {
-      // Nothing that changes either grid moved (e.g. only the contact-pair strip was
-      // clicked) -- still take the freshest response so a served-from-store flag is current.
+      // A matching setting moved, there was no grid yet, or nothing that changes either grid
+      // moved (then the freshest response is still taken, so a served-from-store flag is current).
       setCorrResult(d);
       setAucResult(d);
     }
@@ -1121,7 +1205,9 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   // dropdown switches must not pile up an ever-growing queue of superseded background requests.
   const prefetchGenRef = useRef(0);
   useEffect(() => {
-    if (!participantUid || !requestParams || loading) return undefined;
+    // Not while the selected score's own grid is out of date: the other scores would be built under
+    // settings the grid on screen does not show, before the reader has asked for them.
+    if (!participantUid || !requestParams || loading || cachedGrid.stale) return undefined;
     const gen = (prefetchGenRef.current += 1);
     const others = options.filter((o) => o.key !== metric);
     let cancelled = false;
@@ -1141,7 +1227,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
     // `reqKey` is the stable proxy for `requestParams` here, same as the fetch above -- including
     // the object itself would fire on every render (a new reference each time).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [participantUid, reqKey, metric, loading, options]);
+  }, [participantUid, reqKey, metric, loading, options, cachedGrid.stale]);
 
   const corrSweeps = (corrResult && corrResult.band_time_sweep) || {};
   const aucSweeps = (aucResult && aucResult.band_time_sweep) || {};
@@ -1169,10 +1255,8 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   const fetchCell = (ch, center, seconds) => {
     const key = `${ch}|${center}|${seconds}`;
     if (cellCacheRef.current.has(key)) return Promise.resolve(cellCacheRef.current.get(key));
-    const body = {
-      ParticipantId: participantUid, ...requestParams, SweepMetric: metric,
-      BandTimeSweepCell: "1", Channel: ch, BandCenterHz: center, IntegrationSeconds: seconds,
-    };
+    const body = heatmapCellRequest({ participantUid, shownSettings, requestParams, metric,
+      channel: ch, center, seconds });
     return SessionController.query("/api/queryBiomarkerAnalysis", body).then((response) => {
       const d = (response && response.data) || {};
       const cell = d.band_time_sweep_cell || { points: [], message: d.message };
@@ -1254,6 +1338,26 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
           {waitingWords}
         </MDTypography>
       ) : null}>
+
+        {/* THE HEAT MAPS SAY WHEN THEY ARE OUT OF DATE (review of 2026-09-26, finding 1): a changed
+            matching or split setting does not rebuild them; this line names what moved, above the
+            maps, and offers the page's Recompute. */}
+        {staleSentence ? (
+          <MDBox data-testid="heatmaps-out-of-date" role="status" mt={1}
+            display="flex" flexDirection="row" alignItems="center" flexWrap="wrap" gap={1.5}>
+            <MDTypography component="p" sx={{ ...TYPE.body, color: T.ink, m: 0, maxWidth: LAYOUT.proseMax }}>
+              <span aria-hidden="true" style={{ color: T.caution, marginRight: 6 }}>{"\u25b2"}</span>
+              {staleSentence}
+              {onRecompute ? "" : " Press Recompute at the top of the page to rebuild them."}
+            </MDTypography>
+            {onRecompute ? (
+              <MDButton variant="outlined" color="dark" size="small" onClick={onRecompute}
+                sx={{ textTransform: "none", ...TYPE.body, borderColor: T.caution, color: T.ink }}>
+                {"Recompute"}
+              </MDButton>
+            ) : null}
+          </MDBox>
+        ) : null}
 
         {err ? (
           <MDTypography component="p" sx={{ ...TYPE.body, display: "block", mt: 1,

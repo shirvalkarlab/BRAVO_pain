@@ -60,9 +60,9 @@ import Biomarkers from "./index";
 const UID = "2e3c75c00d7f4f37b53a048d195f11da";
 const REQ = {
   source: "both", LabelMetric: "nrs", LabelStrategy: "tertile", PercentileLow: 33.3, PercentileHigh: 66.7,
-  MatchToleranceMin: 60, MaxPerRating: 3, RefractoryMin: 2, MatchDirection: "pro_first",
-  MatchExtentSec: 30, AllowWindowReuse: false, IncludeClinicSheetRatings: false, SlidingWindow: false,
-};
+  MatchToleranceMin: 60, MatchDirection: "pro_first",
+  AllowWindowReuse: false, IncludeClinicSheetRatings: false, SlidingWindow: false,
+};   // the heat-map request as the page builds it: no cap, gap or TD length (review of 2026-09-26)
 
 // The device's sensing rule for RCS08 with the contacts in force since 2026-09-03 (decisions 217
 // and 247: the left lead stimulates on contact 2, the right on 1 and 2), in the shape the Stim

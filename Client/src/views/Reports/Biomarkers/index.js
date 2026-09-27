@@ -23,7 +23,7 @@ import MDTypography from "components/MDTypography";
 import BiomarkerTimeline from "./BiomarkerTimeline";
 import ReportSharingNote from "./ReportSharingNote";
 import BiomarkerDataTimeline from "./BiomarkerDataTimeline";
-import BiomarkerAnalytics from "./BiomarkerAnalytics";
+import BiomarkerAnalytics, { hasSlidingCorrelation } from "./BiomarkerAnalytics";
 import BinarizationPreview from "./BinarizationPreview";
 import MatchWindowBand from "./MatchWindowBand";
 import Fold from "./Fold";
@@ -192,8 +192,16 @@ function Biomarkers() {
   // Restore the last-computed requestParams so a return visit isn't "dirty" and the results show
   // without re-clicking Compute. If the in-memory heavy cache is fresh we already seeded `data`, so
   // the fetch effect short-circuits (cache hit); otherwise this drives the auto-recompute.
-  const [requestParams, setRequestParams] = useState(
-    (persisted && persisted.requestParams) || null);
+  // A request saved before 2026-09-26 may carry the clinic-sheet switch, which the all-band scan
+  // never read and the snapshot no longer holds; it is dropped so a return visit is not called
+  // out of date for it.
+  const [requestParams, setRequestParams] = useState(() => {
+    const rp = (persisted && persisted.requestParams) || null;
+    if (!rp) return null;
+    const rest = { ...rp };
+    delete rest.IncludeClinicSheetRatings;
+    return rest;
+  });
   // There is no `computing` state either: whether a request is in flight is the shared cache hook's
   // answer to give, and a local copy could only ever disagree with it.
   const [alert, setAlert] = useState(null);
@@ -223,7 +231,9 @@ function Biomarkers() {
     MatchDirection: matchDirection,
     MatchExtentSec: matchExtentSec,
     AllowWindowReuse: allowWindowReuse,
-    IncludeClinicSheetRatings: includeClinicSheetRatings,
+    // No clinic-sheet switch: the all-band scan reads the home pain surveys (REDCap) only, so the
+    // switch cannot change it and must not mark it out of date (review of 2026-09-26). The switch
+    // reaches the heat maps through their own request below.
     SlidingWindow: slidingWindow,
   });
   /**
@@ -330,8 +340,13 @@ function Biomarkers() {
    * reasons so that a reader is not left to work out which of two vocabularies they are reading.
    */
   const controlsDrifted = !!(requestParams && dirty);
+  // The heat maps are a second result on this page, rebuilt by the same Recompute. The grid says
+  // when the one on screen was computed under other settings (or before a server restart), so the
+  // control turns for it too, even before any all-band scan has been run (review of 2026-09-26).
+  const [heatmapStale, setHeatmapStale] = useState({ stale: false, reasons: [] });
   const pageStaleReasons = Array.from(new Set([
     ...(cached.staleReasons || []),
+    ...(heatmapStale.stale ? heatmapStale.reasons : []),
     ...(controlsDrifted
       ? ["the controls on this page have been changed since this analysis was computed, so what is "
          + "shown still describes the previous metric, high / low split or matching window"]
@@ -483,10 +498,6 @@ function Biomarkers() {
   const percentileHighD = useDebounced(percentileHigh);
   const maxPerRatingD = useDebounced(maxPerRating);
   const refractoryMinD = useDebounced(refractoryMin);
-  // Added with the native-LSB-tolerance knob: matchExtentSec fed heatmapRequestParams RAW below,
-  // unlike every sibling slider here, so every intermediate value during a drag fired its own
-  // request to the calibrated grid instead of waiting for the drag to settle like the rest.
-  const matchExtentSecD = useDebounced(matchExtentSec);
   const scanModel = useMemo(() => {
     if (!scanIndex || !painSeriesLive) return null;
     return computeMatchedScanModel({
@@ -505,28 +516,27 @@ function Biomarkers() {
 
   // TRACK A, TASK A1: THE CALIBRATED GRID'S OWN REQUEST, BUILT FROM THE LIVE CONTROLS.
   //
-  // `requestParams` above is a SNAPSHOT that only exists once the older routine's "Start
-  // exploratory analysis" button has been pressed -- that is exactly the gating the PRD asked to
-  // remove. The calibrated heat-map section (BiomarkerHeatmapGrids) is instead handed this object,
-  // built straight from the controls as they currently stand, so it has something to compute from
-  // on the very first render and fires without any button press. It uses the same DEBOUNCED slider
-  // copies the live scan model already uses (matchToleranceD, percentileLowD/HighD,
-  // maxPerRatingD, refractoryMinD) so that dragging a slider fires one request when the drag
-  // settles rather than one per pixel -- the same discipline, applied to a real backend call
-  // instead of a client-side recompute.
+  // `requestParams` above is a SNAPSHOT that only exists once Recompute has been pressed. The heat
+  // maps are handed this object instead, built from the controls as they stand, so a first visit
+  // computes a grid with no button press. After that the shared cache does NOT rebuild the grid
+  // when a control moves: it keeps the grid on screen, marked stale, the grid says which settings
+  // moved, and the page's Recompute rebuilds it (review of 2026-09-26). The debounced slider copies
+  // keep a drag from turning the grid stale and back once per pixel.
+  //
+  // ONLY WHAT THE GRID READS. The cap per report, the gap between kept samples and the TD length
+  // are not sent: the heat-map sweep reads none of them (`band_time_sweep_for_participant`), and
+  // sending them only changed the request's key, so moving one marked the grid stale and fetched
+  // every other pain score again for an identical answer (review of 2026-09-26, finding 3).
   const heatmapRequestParams = useMemo(() => ({
     source, LabelMetric: metric, LabelStrategy: strategy,
     PercentileLow: percentileLowD, PercentileHigh: percentileHighD,
     MatchToleranceMin: matchToleranceD,
-    MaxPerRating: maxPerRatingD,
-    RefractoryMin: refractoryMinD,
     MatchDirection: matchDirection,
-    MatchExtentSec: matchExtentSecD,
     AllowWindowReuse: allowWindowReuse,
     IncludeClinicSheetRatings: includeClinicSheetRatings,
     SlidingWindow: slidingWindow,
-  }), [source, metric, strategy, percentileLowD, percentileHighD, matchToleranceD, maxPerRatingD,
-      refractoryMinD, matchDirection, matchExtentSecD, allowWindowReuse, includeClinicSheetRatings]);
+  }), [source, metric, strategy, percentileLowD, percentileHighD, matchToleranceD, matchDirection,
+      allowWindowReuse, includeClinicSheetRatings]);
 
   // [removed] summaryLine() — the legacy Time-/Power-domain dual-pipeline prose summary — and,
   // on 2026-09-15 (referent audit, item 7), the per-channel high/low/excluded count block that
@@ -580,6 +590,7 @@ function Biomarkers() {
           {maxPerRating > 1
             ? "A rating's value is the median of its closest readings, counted once."
             : "Each rating keeps its one closest reading per contact pair."}
+          {" This applies to the all-band scan and the high / low preview, not the heat maps."}
         </MDTypography>
       </MDBox>
 
@@ -601,6 +612,7 @@ function Biomarkers() {
             : maxPerRating <= 1
             ? "Not used while one reading per rating is kept."
             : "Keeps a burst of readings around one report from dominating its value."}
+          {" This applies to the all-band scan and the high / low preview, not the heat maps."}
         </MDTypography>
       </MDBox>
 
@@ -618,7 +630,7 @@ function Biomarkers() {
             onChange={(e, v) => setMatchExtentSec(v)} />
         </MDBox>
         <MDTypography component="span" sx={NOTE_SX} title={liveMatchCaption}>
-          {"How much signal each rating uses, not how far to search."}
+          {"How much signal each rating uses, not how far to search. This applies to the all-band scan, not the heat maps."}
         </MDTypography>
       </MDBox>
 
@@ -703,7 +715,7 @@ function Biomarkers() {
             <Grid item xs={12} sx={{ mb: 8 }}>
               <RecomputeBar
                 title="pain biomarker exploration"
-                stale={!!(cached.stale || controlsDrifted)}
+                stale={!!(cached.stale || controlsDrifted || heatmapStale.stale)}
                 staleReasons={pageStaleReasons}
                 computedAt={cached.computedAt}
                 loading={computing}
@@ -757,6 +769,8 @@ function Biomarkers() {
                 availableMetrics={DEFAULT_METRIC_OPTIONS}
                 pageMetric={metric}
                 onStatus={setGridStatus}
+                onStale={setHeatmapStale}
+                onRecompute={compute}
                 metricLabel={(DEFAULT_METRIC_OPTIONS.find((m) => m.key === metric) || {}).label}
                 onOpenInClosedLoop={() => {
                   // Take the reader to the grid on the page that can act on it. Nothing is
@@ -782,14 +796,13 @@ function Biomarkers() {
                     setMatchTolerance={setMatchTolerance}
                     strategy={strategy}
                     setStrategy={setStrategy}
-                    strategyOptions={(data && data.available_strategies) || DEFAULT_STRATEGY_OPTIONS}
+                    strategyOptions={DEFAULT_STRATEGY_OPTIONS}
                     percentileLow={percentileLow}
                     percentileHigh={percentileHigh}
                     matchDirection={matchDirection}
                     setMatchDirection={setMatchDirection}
                     scanIndex={scanIndex}
                     painSeries={painSeriesLive}
-                    maxPerRating={maxPerRating}
                     includeClinicSheetRatings={includeClinicSheetRatings}
                     extraControls={clinicSheetControl}
                     moreOptions={moreOptions}
@@ -859,7 +872,7 @@ function Biomarkers() {
               {!data && !alert ? (
                 <MDBox mt={2}>
                   <MDTypography variant="button" sx={{ ...TYPE.body, color: T.ink2 }}>
-                    {"The timeline, the matching settings and the heat maps are already live. Click "}
+                    {"The timeline and the matching preview follow the controls at once; the heat maps show the settings they were computed with and say when those have changed. Click "}
                     <strong>Recompute</strong>{" above to run the all-band scan."}
                   </MDTypography>
                 </MDBox>
@@ -893,14 +906,20 @@ function Biomarkers() {
                     {data.label_strategy ? (
                       <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink2, display: "block" }}>
                         {"Split into high and low by: "}
-                        {(((data && data.available_strategies) || DEFAULT_STRATEGY_OPTIONS)
+                        {(DEFAULT_STRATEGY_OPTIONS
                           .find((st) => st.key === data.label_strategy) || {}).label || data.label_strategy}
-                        {(data.label_strategy === "tertile" || data.label_strategy === "percentile")
-                          && data.percentile_low != null
-                          ? ` (at or below the ${Number(data.percentile_low).toFixed(0)}th and at or above the ${Number(data.percentile_high).toFixed(0)}th percentile of daily ratings)`
-                          : ""}
+                        {/* A tertile split always cuts at the thirds, whatever percentiles the request
+                            carried and the server echoed (review of 2026-09-26). */}
+                        {data.label_strategy === "tertile"
+                          ? " (at or below the 33rd and at or above the 67th percentile of daily ratings)"
+                          : data.label_strategy === "percentile" && data.percentile_low != null
+                            ? ` (at or below the ${Number(data.percentile_low).toFixed(0)}th and at or above the ${Number(data.percentile_high).toFixed(0)}th percentile of daily ratings)`
+                            : ""}
                       </MDTypography>
                     ) : null}
+                    <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink2, display: "block" }}>
+                      {"The all-band scan uses the home pain surveys only; the clinic sheet switch applies to the heat maps."}
+                    </MDTypography>
                     {data.recorded_powers && data.recorded_powers.length ? (
                       <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink2, display: "block", mt: 0.5 }}>
                         {"Recorded power channels: "}
@@ -917,7 +936,7 @@ function Biomarkers() {
 
               {/* THE OLDER, UNCALIBRATED ALL-BAND SCAN (decision 61 keeps it separate from the
                   calibrated grids above). Only after a Recompute; folded (decision 304). */}
-              {data && data.analytics ? (
+              {data && hasSlidingCorrelation(data.analytics) ? (
                 <MDBox mt={2}>
                   <Fold show="How each band's link with pain changed over time"
                     inside="from the all-band scan" hide="Hide how each band's link changed over time">

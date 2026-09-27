@@ -115,7 +115,11 @@ describe("D14: red only for a device refusal or a value above the ceiling", () =
     const stat = colourOf([mk("openloop_choice_resolved"), mk("adaptive_band_passes_lfp_response")]);
     expect(stat.out).toEqual([rgb(T.ink), rgb(T.ink)]);
     expect(stat.head).toBe(rgb(T.ink));
-    const dev = colourOf([mk("rate_at_or_above_adaptive_minimum"), mk("amplitude_limits_inside_envelope_and_under_ceiling")]);
+    // PIN CHANGED 2026-09-26: the current-limits check is red only when a proposed limit is above
+    // the ceiling (the other ways it fails block in ink), so this one names that cause.
+    const dev = colourOf([mk("rate_at_or_above_adaptive_minimum"),
+      { ...mk("amplitude_limits_inside_envelope_and_under_ceiling"),
+        detail: "Left: upper limit 4.8 mA exceeds the declared ceiling of 4.5 mA" }]);
     expect(dev.out).toEqual([rgb(T.refused), rgb(T.refused)]);
     expect(dev.head).toBe(rgb(T.refused));
   });

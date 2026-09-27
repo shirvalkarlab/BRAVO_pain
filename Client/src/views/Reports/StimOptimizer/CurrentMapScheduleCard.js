@@ -40,7 +40,29 @@ function daysWord(n) {
 export const HOME_SCHEDULE_TITLE = "Home programming schedule to map the two currents";
 
 /** The schedule as a section: heading and one line open, everything else in one fold. */
-export function HomeScheduleSection({ schedule }) {
+/** The setting in force when it is above today's ceiling, or null (`schedule.in_force`). */
+export function inForceAboveCeiling(schedule) {
+  return schedule && schedule.in_force && schedule.in_force.above_ceiling === true ? schedule.in_force : null;
+}
+
+/** The one line for it, in the open: the next-visit section draws it in its always-visible lead
+ *  (2026-09-26: the section starts closed, and a safe-ceiling line is never folded). */
+export function InForceAboveCeilingLine({ inForce }) {
+  if (!inForce) return null;
+  return (
+    <MDTypography variant="caption" component="div" data-testid="home-schedule-in-force"
+      sx={{ fontSize: TYPE.body, mt: 0.4, color: T.ink3 }}>
+      <span style={{ fontWeight: WEIGHT.strong, color: T.refused }}>
+        {`✕ In force, above today's ceiling: ${fmtMa(inForce.amp_left_mA)} left / ${fmtMa(inForce.amp_right_mA)} right`}
+      </span>
+      {` — ${inForce.why || "history, never offered as a step to hold"}.`}
+    </MDTypography>
+  );
+}
+
+/** `showInForce`: false where the caller already prints the in-force line in the open (the
+ *  next-visit section's lead), so it is printed once. */
+export function HomeScheduleSection({ schedule, showInForce = true }) {
   if (!schedule) return null;
   if (!schedule.available) {
     return (
@@ -60,7 +82,7 @@ export function HomeScheduleSection({ schedule }) {
   const rpd = schedule.reports_per_day || {};
   // The setting in force when it is above today's ceiling (2026-09-26): history, drawn and labelled,
   // never a numbered step (the server keeps it out of `steps` and says so in `why`).
-  const inForce = schedule.in_force && schedule.in_force.above_ceiling === true ? schedule.in_force : null;
+  const inForce = inForceAboveCeiling(schedule);
   const HISTORY_INK = T.ink3;
 
   return (
@@ -76,15 +98,7 @@ export function HomeScheduleSection({ schedule }) {
             {`${wtb.resolution_coverage_would_pass ? "✓" : "▲"} ${wtb.note}`}</span>
         ) : null}
       </MDTypography>
-      {inForce && (
-        <MDTypography variant="caption" component="div" data-testid="home-schedule-in-force"
-          sx={{ fontSize: TYPE.body, mt: 0.4, color: HISTORY_INK }}>
-          <span style={{ fontWeight: WEIGHT.strong, color: T.refused }}>
-            {`✕ In force, above today's ceiling: ${fmtMa(inForce.amp_left_mA)} left / ${fmtMa(inForce.amp_right_mA)} right`}
-          </span>
-          {` — ${inForce.why || "history, never offered as a step to hold"}.`}
-        </MDTypography>
-      )}
+      {showInForce && <InForceAboveCeilingLine inForce={inForce} />}
 
       <SizedFold show={`Show the schedule (${steps.length} steps) and why`} hide="Hide the schedule">
         <MDTypography variant="caption" component="div" sx={{ color: T.ink2, fontSize: TYPE.body }}>

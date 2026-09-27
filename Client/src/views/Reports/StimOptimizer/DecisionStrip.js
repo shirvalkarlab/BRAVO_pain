@@ -16,8 +16,11 @@
  *   - the setting the search prefers: the two-stage block's frozen setting for that side (rate,
  *     pulse width, preferred current, delivered range, the stretches fitted), because that is the
  *     setting closed loop would freeze and it is held to what adaptive mode can use.
- *   - the gain and its uncertainty: the Stage 1 stratum row for that side and pulse width
- *     (`stage1.strata`), the same `gain` / `sd_of_difference` / `optimum_resolved` the verdict used.
+ *   - the gain, its uncertainty and the verdict: the frozen setting's own `gain`,
+ *     `sd_of_difference` and `resolved` (rate and pulse-width pair, the verdict the gate reads),
+ *     and the stopping rule from the stratum row of the JOINT pair that setting was chosen from
+ *     (2026-09-26; before, the stratum row's rate-only `optimum_resolved`, matched on one side's
+ *     pulse width).
  *
  * THREE STATES, as everywhere in this family (decision 122, and this page's own header note): a
  * tick for resolved; an amber disc for "not resolved" (measured and too small to call -- never the
@@ -66,6 +69,62 @@ function diffText(v, unit, d) {
   return fmtDelta(x, unit, d);
 }
 
+/**
+ * The stratum row a side's frozen setting was chosen from. Strata are JOINT (left pulse width, right
+ * pulse width) pairs, one row per side of each; the setting names its pair in
+ * `detail.best_pw_us_left` / `best_pw_us_right`. A response without that pair falls back to this
+ * side's own pulse width, and only when exactly one stratum matches it (2026-09-26: matching on one
+ * side's width picked up another pair's gain and stopping rule).
+ */
+function stratumForSetting(strata, side, s) {
+  const d = (s && s.detail) || {};
+  const bl = num(d.best_pw_us_left), br = num(d.best_pw_us_right);
+  const same = (a, b) => a !== null && b !== null && Math.abs(a - b) < 1e-9;
+  if (bl !== null && br !== null) {
+    return strata.find((r) => r && r.hemisphere === side
+      && same(num(r.pw_us_left), bl) && same(num(r.pw_us_right), br)) || null;
+  }
+  const byOwn = strata.filter((r) => r && r.hemisphere === side && same(num(r.pw_us), num(s && s.pulse_width_us)));
+  return byOwn.length === 1 ? byOwn[0] : null;
+}
+
+/**
+ * A side's three-state verdict, read from the frozen setting the server computed it for
+ * (`HemisphereSetting.resolved`: the rate AND the pulse-width pair resolved; the rate is downgraded
+ * when no current can be recommended). true = proven better; false = measured and not shown (either
+ * comparison measured and not cleared); null = not determinable (the rate comparison could not be
+ * formed, or the rate cleared and the pulse-width pair could not be compared). A response that
+ * predates the two parts reads its `resolved`; with no setting at all, the stratum row's own.
+ */
+function settingVerdict(s, st) {
+  if (s) {
+    if (s.resolved === true) return true;
+    if (s.rate_resolved !== undefined || s.pulse_width_resolved !== undefined) {
+      if (s.rate_resolved === null) return null;
+      if (s.rate_resolved === false || s.pulse_width_resolved === false) return false;
+      return null;
+    }
+    return s.resolved === false ? false : null;
+  }
+  if (st) return st.optimum_resolved === true ? true : (st.optimum_resolved === false ? false : null);
+  return null;
+}
+
+/** The predicted change and its uncertainty a side prints and draws: the frozen setting's own,
+ * else its stratum's; none when the server discarded it (the chosen stratum never delivered the rate
+ * in force, so the difference is an extrapolation: `rate_resolved` null, the reasons say
+ * "discarded rather than reported"). */
+function sideGain(r) {
+  const s = r.s, st = r.stratum;
+  const discarded = (s && s.rate_resolved === null)
+    || (st && st.incumbent_rate_supported === false)
+    || (!s && st && st.optimum_resolved === null);
+  if (discarded) return { gain: null, sd: null };
+  const g = num(s && s.gain) ?? num(st && st.gain);
+  const sd = num(s && s.sd_of_difference) ?? num(st && st.sd_of_difference);
+  return { gain: g, sd: g === null ? null : sd };
+}
+
 function sideRows(arms, plan, inForce) {
   const fc = ((plan && plan.stage1) || {}).frozen_configuration || {};
   const settings = Array.isArray(fc.settings) ? fc.settings : [];
@@ -80,9 +139,7 @@ function sideRows(arms, plan, inForce) {
     const nowRate = num(inf && inf.rate_hz) ?? num(fc.incumbent_rate_hz) ?? num(xy[0]);
     const nowPw = num(inf && inf.pulse_width_us) ?? (side === "Left" ? num(fc.incumbent_pulse_width_us) : null);
     const nowAmp = num(inf && inf.amplitude_mA) ?? num(xy[1]);
-    const stratum = s ? strata.find((r) => r && r.hemisphere === side
-      && num(r.pw_us) !== null && num(s.pulse_width_us) !== null
-      && Math.abs(num(r.pw_us) - num(s.pulse_width_us)) < 1e-9) : null;
+    const stratum = s ? stratumForSetting(strata, side, s) : null;
     sides.push({ side, s, inf, nowRate, nowPw, nowAmp, stratum, contacts: inf ? contactLabel(inf) : null });
   });
   return sides;
@@ -130,10 +187,7 @@ export function stoppingText(rows) {
 
 /** A side's three-state verdict, read exactly as the row's glyph reads it. */
 function sideResolved(r) {
-  const st = r.stratum, s = r.s;
-  if (st) return st.optimum_resolved === true ? true : (st.optimum_resolved === false ? false : null);
-  if (s) return s.resolved === true ? true : (s.resolved === false ? false : null);
-  return null;
+  return settingVerdict(r.s, r.stratum);
 }
 
 /**
@@ -178,14 +232,12 @@ const GAIN_BAR_WIDTH = 240;
 /** One side: the aligned comparison, the lines under it, the gain as a sentence and its bar. */
 function SideBlock({ r, plan, planLoading, planErr, halfRange, timeState, timeNotChecked }) {
   const s = r.s;
-  const st = r.stratum;
   const prefRate = num(s && s.rate_hz), prefPw = num(s && s.pulse_width_us),
     prefAmp = num(s && s.amplitude_preferred_mA);
   const dMax = num(s && s.amplitude_delivered_max_mA), dMin = num(s && s.amplitude_delivered_min_mA);
   const aboveDelivered = prefAmp !== null && dMax !== null && prefAmp > dMax + 1e-9;
-  const gain = num(st && st.gain), sd = num(st && st.sd_of_difference);
-  const resolved = st ? (st.optimum_resolved === true ? true : (st.optimum_resolved === false ? false : null))
-    : (s ? (s.resolved === true ? true : null) : null);
+  const { gain, sd } = sideGain(r);
+  const resolved = sideResolved(r);
   const nFit = num(s && s.n_epochs_fitted_on_the_chosen_stratum);
   const cellLine = { borderTop: HAIRLINE, py: 0.75 };
   const suggested = (row) => {
@@ -326,7 +378,7 @@ export function DecisionStripLoading() {
 export default function DecisionStrip({ arms, plan, planLoading, planErr, inForce }) {
   const rows = sideRows(arms, plan, inForce);
   const halfRange = Math.max(2, ...rows.map((r) => {
-    const g = num(r.stratum && r.stratum.gain), sd = num(r.stratum && r.stratum.sd_of_difference);
+    const { gain: g, sd } = sideGain(r);
     return g === null ? 0 : Math.ceil(Math.abs(g) + (sd || 0));
   }));
   const exposure = (((plan && plan.stage1) || {}).audit || {}).resolution_exposure || null;

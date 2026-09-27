@@ -316,3 +316,36 @@ def test_the_xlsx_export_centres_the_written_cells_and_leaves_the_header_row_alo
     assert ws.cell(row=SE.DATA_START_ROW, column=1).alignment.horizontal == "center"
     assert ws.cell(row=SE.DATA_START_ROW, column=2).alignment.horizontal == "center"
     assert ws.cell(row=SE.DATA_START_ROW - 1, column=1).alignment.horizontal != "center"
+
+
+# ---------------------------------------------------------------------------------------------
+# The sheet is named by a study code only (2026-09-26). A participant ingested without automatic
+# de-identification has the device's patient first and last name as its record name; the sheet
+# lands in the lab's Drive or the reader's downloads under that name. The rule is the page's own
+# (`Client/src/views/Reports/paper/studyCode.js`): letters and digits together, no spaces, at most
+# 16 characters, never the participant's long id; anything else gets a neutral name.
+# ---------------------------------------------------------------------------------------------
+UID32 = "2e3c75c00d7f4f37b53a048d195f11da"
+
+
+def test_a_study_code_names_the_sheet():
+    drive = _FakeDrive()
+    result = SE.export(_plan(), "RCS08", "2026-09-16", drive=drive, participant_uid=UID32)
+    assert result["name"] == "RCS08 Stage 2 - September 2026 In-Clinic Testing 09_16_26"
+
+
+def test_a_persons_name_never_names_the_sheet():
+    drive = _FakeDrive()
+    result = SE.export(_plan(), "Jane Doe", "2026-09-16", drive=drive, participant_uid=UID32)
+    assert "Jane" not in result["name"] and "Doe" not in result["name"]
+    assert result["name"] == "participant 2e3c75c0 Stage 2 - September 2026 In-Clinic Testing 09_16_26"
+    assert all("Jane" not in str(c) for c in drive.calls)
+
+
+def test_the_long_id_or_a_one_word_name_never_names_the_sheet(tmp_path):
+    assert SE.participant_label(UID32, UID32) == "participant 2e3c75c0"
+    assert SE.participant_label("JaneDoe", UID32) == "participant 2e3c75c0"     # no digit: a name
+    assert SE.participant_label("", None) == "participant"
+    assert SE.participant_label("RCS-12", UID32) == "RCS-12"
+    result = SE.export(_plan(), "Doe", "2026-09-16", drive=None, participant_uid=UID32)
+    assert "Doe" not in result.get("name", "")

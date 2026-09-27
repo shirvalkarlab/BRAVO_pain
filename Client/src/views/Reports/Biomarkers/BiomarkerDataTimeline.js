@@ -186,8 +186,8 @@ function tEpoch(v) {
 // hemisphere identity: saturated accent for headers, DESATURATED tint for TD coverage (so the
 // saturated frequency color on the band-power trend is the only loud mark in a lane), faint band.
 // Hemisphere accent/tint only — NO hardcoded brain region. The region label (e.g. GPi / VIM / VPL)
-// must come from the participant's electrode/lead metadata (per-channel `region` on the record, or
-// data.region_map), never a static guess: hardcoding LEFT→GPi / RIGHT→VIM mislabels anatomy the
+// must come from the participant's electrode/lead metadata (per-channel `region` on the record),
+// never a static guess: hardcoding LEFT→GPi / RIGHT→VIM mislabels anatomy the
 // moment this view opens on a participant with different targets. We fall back to NO region label
 // rather than a wrong one (FRONTEND_review item 6).
 // The side colours on every page (dataColors.SIDE): left blue, right orange, as a pale coverage
@@ -414,14 +414,13 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       // Pinned to the left border with a FIXED-PIXEL xshift (not a paper fraction) so it hugs the
       // lanes at any width — paper-fraction x scaled with plot width and drifted off-figure when wide.
       // Region label from metadata only: a per-channel `region` on the record (backend
-      // format_channel) or data.region_map[channel]; fall back to NO region (hemisphere alone)
-      // rather than a hardcoded guess.
+      // format_channel); fall back to NO region (hemisphere alone) rather than a hardcoded guess.
+      // (A `region_map` fallback was read here until 2026-09-26; the endpoint never sends one.)
       const regionOf = (h) => {
-        const rmap = (data && data.region_map) || {};
         const rec = (av.records || []).find((r) =>
           (r.hemisphere || (String(r.channel).toUpperCase().indexOf("LEFT") >= 0 ? "LEFT" : "RIGHT")) === h
-          && (r.region || rmap[r.channel]));
-        const reg = rec ? (rec.region || rmap[rec.channel]) : null;
+          && r.region);
+        const reg = rec ? rec.region : null;
         return (reg && String(reg).trim()) ? String(reg).trim() : "";
       };
       const regionLabel = regionOf(hemi);
@@ -1023,8 +1022,9 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     // ---- provenance subtitle (hoisted here so the title-width estimate below can use sub.length)
     const fmtDate = (e) => new Date(e * 1000).toLocaleDateString("en-US",
       { month: "short", day: "2-digit", year: "numeric", timeZone: "UTC" });
-    const subj = (data && data.participant_label) || (av && av.participant) || "";
-    const sub = `${subj ? subj + " · " : ""}Percept RC · ${fmtDate(t0)} – ${fmtDate(t1)}`;
+    // No participant name: the endpoint sends none (the page head carries the study code), so the
+    // subtitle reads exactly as it always rendered.
+    const sub = `Percept RC · ${fmtDate(t0)} – ${fmtDate(t1)}`;
 
     // ---- legend & Hz-key placement (deterministic, width-independent) -----------------------
     // Per bravo-timeline-layout skill: the glyph legend is pinned to the plot's RIGHT edge

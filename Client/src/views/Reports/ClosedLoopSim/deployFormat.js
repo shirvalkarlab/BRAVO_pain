@@ -194,10 +194,48 @@ export const UNEVALUABLE = {
         + "property of the configuration. It still blocks",
   },
   failed: {
-    actor: "measurement — a property of the recording",
+    actor: "not stated by the rule table: read the rule's own wording",
     copy: "the rule was evaluated against this configuration and the configuration violates it",
   },
 };
+
+/**
+ * Who clears a REFUSAL, from the rule's own `resolved_by` (the server's `constraints.RESOLVED_BY`).
+ * Every blocking rule that fails has the same kind ("failed"), and this page used to name one actor
+ * for all of them, "measurement, a property of the recording", including D52 (the sensing pair must
+ * flank the stimulating contacts), which is cleared at the programmer by a change of contacts
+ * (review finding, 2026-09-26). A row from a response that predates the field names no actor.
+ * `clears` is the sentence "What would change this answer" prints under the row.
+ */
+export const REFUSAL_RESOLVED_BY = {
+  configuration: {
+    actor: "clinician, a change of settings at the programmer",
+    clears: "Only a change to the configuration clears this; nothing else on this list does.",
+  },
+  band: {
+    actor: "band selection: another band or sensing pair",
+    clears: "Only choosing another band or sensing pair clears this; more measurement on this band "
+      + "does not, and no setting at the programmer does.",
+  },
+  recording: {
+    actor: "measurement, a property of the lead or the recording",
+    clears: "Only a new measurement that meets the rule clears this (an impedance test in range, a "
+      + "recording free of the artefact the device flags).",
+  },
+  analysis: {
+    actor: "analysis: how the numbers were computed",
+    clears: "Only a change to how this platform computed the numbers clears this; nothing at the "
+      + "programmer does.",
+  },
+};
+
+export function refusalFor(row) {
+  const base = UNEVALUABLE.failed;
+  const r = REFUSAL_RESOLVED_BY[row && row.resolved_by];
+  if (r) return { ...base, actor: r.actor, clears: r.clears };
+  return { ...base, clears: "Read the rule's own wording for what clears it; the rule table does not "
+    + "say whether a change of settings, another band or a new measurement is needed." };
+}
 
 /** Fall back to naming the kind rather than guessing an actor for a kind we have not seen. */
 export function unevaluableFor(kind) {

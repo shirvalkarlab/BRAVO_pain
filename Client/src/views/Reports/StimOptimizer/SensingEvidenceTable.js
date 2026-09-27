@@ -327,7 +327,9 @@ export default function SensingEvidenceTable({ closedLoop }) {
         <MDBox mt={2} data-scroll-x="" sx={{ overflowX: "auto", maxWidth: "100%" }}>
           {openRows.length > 0 ? openRows.map((c, i) => <ReadinessBlock key={i} c={c} allowed={split ? true : null} />) : (
             <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2 }}>
-              {`Nothing was screened on ${allowedNames.join(" or ")}.`}
+              {/* The list holds only combinations with something on them, at most 30; a pair with
+                  no row was still screened and is counted above (2026-09-26). */}
+              {`No combination on ${allowedNames.join(" or ")} is in this list: it holds only combinations with a band that qualifies, falls with current or responds to a change in current, at most 30 of them.`}
             </MDTypography>
           )}
           {foldedRows.length > 0 && (

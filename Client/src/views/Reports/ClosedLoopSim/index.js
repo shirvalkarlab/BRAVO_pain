@@ -88,7 +88,7 @@ import CeilingLine from "views/Reports/paper/CeilingLine";
 import { useStudyCode } from "views/Reports/paper/studyCode";
 import "./deployPrint.css";
 import { bandPainScore, summaryRequestParams, withheldIfOtherBand } from "./candidateRequestParams";
-import PainScoreSelect from "./PainScoreSelect";
+import PainScoreSelect, { pageHeadPainLabel } from "./PainScoreSelect";
 import { PAIN_SCORE_OPTIONS } from "views/Reports/painScores";
 import ClinicSheetsSummaryButton, { loadSummarySheets, saveSummarySheets } from "./ClinicSheetsSummaryButton";
 
@@ -414,8 +414,8 @@ function ClosedLoopSim() {
     e.target.value = "";   // allow re-upload of the same file
   };
 
-  const painLabel = (report && report.data && report.data.pain_score && report.data.pain_score.label)
-    || bandDefaultPain.label || null;
+  const painLabel = pageHeadPainLabel(report && report.data, painScore,
+    (bandSweepGrid.grid && bandSweepGrid.grid.available_metrics) || PAIN_SCORE_OPTIONS);
   const threshold = report && report.data && report.data.threshold;
   const sideOf = report && report.data && report.data.manifest && report.data.manifest.hemisphere;
   const ceilingProps = ceilingLineProps(threshold, sideOf);
@@ -579,8 +579,12 @@ function ClosedLoopSim() {
                     contactLabel={contactLabel} />
                 </MDBox>
                 <MDBox id="cl-simulation" mt={4}>
-                  <ClosedLoopSimulationPanel sim={closedLoopSim}
+                  {/* Withheld when computed for another band, as the report and summary are; and
+                      the controller's switching values and limits print only when the device
+                      allows the configuration, as on the decision card. */}
+                  <ClosedLoopSimulationPanel sim={withheldIfOtherBand(closedLoopSim, bc, "simulation")}
                     hemisphere={report?.data?.manifest?.hemisphere}
+                    deviceAllows={report?.data?.verdict_detail?.device_eligible === true}
                     contactLabel={contactLabel} bandCandidate={bc} />
                 </MDBox>
                 {analystRevealed ? (

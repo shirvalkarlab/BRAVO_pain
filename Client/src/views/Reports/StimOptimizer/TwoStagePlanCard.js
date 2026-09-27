@@ -218,7 +218,9 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
                   <ExcludedSettingsSummary envelope={envelope} />
                 </MDBox>
                 <Fold show="Show the ruled-out settings, drawn" hide="Hide the drawing" dense mt={0.4}>
-                  <ExcludedSettingsChart envelope={envelope} strata={strata} />
+                  {/* Both sides' rows: each panel draws its own side's best cells (the table
+                      above keeps one row per joint fit; 2026-09-26). */}
+                  <ExcludedSettingsChart envelope={envelope} strata={Array.isArray(stage1.strata) ? stage1.strata : []} />
                   {envelope.override_ignored && (
                     <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.small, color: T.caution }}>
                       <span aria-hidden="true">▲ </span>{String(envelope.override_ignored)}

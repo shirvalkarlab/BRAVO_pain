@@ -21,12 +21,13 @@
  * Wording (the PI, 2026-09-26: printing the corrected q as "p" is a mislabel -- a q and a p are
  * different numbers). The value the server sends as `family_wise_q_8_to_30hz` is a
  * Benjamini-Hochberg q, corrected for testing every one of the 22 band centres; it is now printed
- * as "q 0.002 (p corrected for testing 22 bands)", never as "p". A cell's own uncorrected p is
- * printed as "p". Every p and q prints at most two decimals, "< 0.01" below 0.005 (the PI, 2026-09-26).
+ * as "q 0.03 (p corrected for testing 22 bands)", never as "p". A cell's own uncorrected p is
+ * printed as "p". Every p and q prints at most two decimals, "< 0.01" below 0.005 (the PI, 2026-09-26),
+ * and "< 0.05" from 0.045 up to 0.05, so nothing rounds onto the cut it did not cross.
  */
 import { T } from "assets/theme/base/tokens";
 
-/** "q 0.002 (p corrected for testing 22 bands)" -- never "p" for a corrected q (the PI,
+/** "q 0.03 (p corrected for testing 22 bands)" -- never "p" for a corrected q (the PI,
  *  2026-09-26: a q and a p are different numbers). 22 is the fixed row count the heat maps have
  *  always drawn, the same source `ALLOWANCE` named before this rewording. */
 function qWords(q, n = 22) {
@@ -129,11 +130,14 @@ export function stabilityBullet() {
 }
 
 /** A p or q at most two decimals (the PI, 2026-09-26: "max 2 digits after the decimal"): "0.03",
- *  "< 0.01" below 0.005 so a small value never prints as zero. */
+ *  "< 0.01" below 0.005 so a small value never prints as zero. A value from 0.045 up to (not
+ *  including) 0.05 prints "< 0.05": rounded it would read "0.05", the same as a value just above
+ *  the cut, while the heavy ring and the status line count it as under 0.05 (review of 2026-09-26). */
 export function fmtP(p) {
   const n = Number(p);
   if (!Number.isFinite(n)) return "not given";
   if (n < 0.005) return "< 0.01";
+  if (n >= 0.045 && n < 0.05) return "< 0.05";
   return n.toFixed(2);
 }
 

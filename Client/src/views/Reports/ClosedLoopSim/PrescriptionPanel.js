@@ -16,7 +16,8 @@
  *
  * THE MODE TOGGLE IS THE CLINICIAN'S. The recommendation is marked on its button and never
  * overwrites a selection. The field set differs between modes, so the rows are remounted on a mode
- * change and every read-back tick is cleared with them.
+ * change and every read-back tick is cleared with them; so is every tick when the report or the band
+ * changes, and a tick is keyed on its row's value.
  *
  * THE READ-BACK BOX IS IN THE LEFTMOST COLUMN and attests to what the programmer now DISPLAYS, which
  * catches a field that silently clamped or rounded a value.
@@ -34,7 +35,7 @@
  * showed two different "recommended" thresholds. The comparison now sits beside the value it is
  * about.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDButton from "components/MDButton";
@@ -198,8 +199,22 @@ function Row({ f, index, ticked, onTick, readBackEnabled }) {
  */
 export default function ParameterTable({ report, mode, onMode }) {
   const [planningFor, setPlanningFor] = useState(null);
-  const [ticks, setTicks] = useState({});
   const st = prescriptionState(report, mode);
+  // THE READ-BACK TICKS BELONG TO ONE REPORT AND ONE MODE. They are held with the report object and
+  // the mode they were given for, and read as none once either changes: a recomputed report, a
+  // report withheld and handed back, a mode switched away and back. Each tick is also keyed on its
+  // row's value, so a changed number is never shown ticked. The decision card remounts this table
+  // when the band changes (its `key`). Without this a "16 of 16 read back" given for one band
+  // reappeared beside another band's numbers (review finding, 2026-09-26).
+  const tickData = st ? st.data : null;
+  const tickMode = st ? st.activeMode : null;
+  const [tickState, setTickState] = useState({ data: null, mode: null, ticks: {} });
+  useEffect(() => {
+    setTickState({ data: tickData, mode: tickMode, ticks: {} });
+  }, [tickData, tickMode]);
+  const ticks = tickData && tickState.data === tickData && tickState.mode === tickMode
+    ? tickState.ticks : {};
+  const tickKey = (f) => `${f.parameter}|${f.value == null ? "" : String(f.value)}`;
   if (report && report.loading) {
     return (
       <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, color: PAL.ink2 }}>
@@ -219,7 +234,7 @@ export default function ParameterTable({ report, mode, onMode }) {
   const cannotDrive = fields.length === 0;
   const readBackEnabled = deviceOk && !cannotDrive;
   const showValues = deviceOk || planningFor === activeMode;
-  const nTicked = fields.filter((f) => ticks[`${activeMode}|${f.parameter}`]).length;
+  const nTicked = fields.filter((f) => ticks[tickKey(f)]).length;
 
   return (
     <MDBox className={deviceOk ? "cl-prescription-authorised" : "cl-prescription-planning"}>
@@ -299,8 +314,9 @@ export default function ParameterTable({ report, mode, onMode }) {
               <MDBox key={`rows-${activeMode}`}>
                 {fields.map((f, i) => (
                   <Row key={`${activeMode}-${f.parameter}`} f={f} index={i}
-                    ticked={!!ticks[`${activeMode}|${f.parameter}`]}
-                    onTick={(on) => setTicks((t) => ({ ...t, [`${activeMode}|${f.parameter}`]: on }))}
+                    ticked={!!ticks[tickKey(f)]}
+                    onTick={(on) => setTickState({ data: tickData, mode: tickMode,
+                      ticks: { ...ticks, [tickKey(f)]: on } })}
                     readBackEnabled={readBackEnabled} />
                 ))}
               </MDBox>

@@ -12,7 +12,8 @@ describe("allowanceWords", () => {
   });
 
   it("takes the band count it was given", () => {
-    expect(allowanceWords(0.002, 22)).toMatch(/testing 22 bands/);
+    // 18, not the default 22: with 22 this test also passed when the count was ignored.
+    expect(allowanceWords(0.002, 18)).toBe("q 0.002 (p corrected for testing 18 bands)");
   });
 
   it("is null when no q is given, same as before", () => {

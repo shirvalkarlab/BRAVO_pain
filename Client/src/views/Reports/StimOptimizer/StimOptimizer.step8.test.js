@@ -43,8 +43,12 @@ describe("the decision card's title states the finding", () => {
   });
 
   it("names the side when one side resolves and the other does not", () => {
+    // PIN CHANGED 2026-09-26: the verdict is the frozen setting's (rate AND pulse-width pair, the
+    // one the gate reads), no longer the stratum row's rate-only `optimum_resolved`.
     const plan = clone(response.two_stage);
-    plan.stage1.strata.forEach((s) => { if (s.hemisphere === "Left" && s.pw_us === 60) s.optimum_resolved = true; });
+    plan.stage1.frozen_configuration.settings.forEach((s) => {
+      if (s.hemisphere === "Left") { s.rate_resolved = true; s.pulse_width_resolved = true; s.resolved = true; }
+    });
     expect(decisionHeadline(plan, response.in_force_by_side))
       .toBe("Left has a setting proven better than today's; Right does not");
   });
@@ -52,7 +56,8 @@ describe("the decision card's title states the finding", () => {
   it("says when a comparison could not be formed rather than calling it unresolved", () => {
     const plan = clone(response.two_stage);
     plan.stage1.strata.forEach((s) => { s.optimum_resolved = null; });
-    plan.stage1.frozen_configuration.settings.forEach((s) => { s.resolved = null; });
+    // PIN CHANGED 2026-09-26, as above: the setting's rate comparison is the one not formed.
+    plan.stage1.frozen_configuration.settings.forEach((s) => { s.resolved = false; s.rate_resolved = null; });
     expect(decisionHeadline(plan, response.in_force_by_side))
       .toBe("No side's preferred setting could be compared with today's");
   });

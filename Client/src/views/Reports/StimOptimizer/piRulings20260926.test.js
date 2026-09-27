@@ -34,7 +34,9 @@ test("a plain section is unchanged: no button, always open", () => {
 });
 
 test("the three long sections on this page are collapsible", () => {
-  expect(read("index.js")).toMatch(/<Section id="closed-loop" question="Can closed loop start\?" collapsible>/);
+  // PIN CHANGED 2026-09-26: the section also carries its answer (the checks' count), so the tag
+  // no longer closes right after `collapsible`.
+  expect(read("index.js")).toMatch(/<Section id="closed-loop" question="Can closed loop start\?" collapsible\b/);
   expect(read("CurrentMapCard.js")).toMatch(/<Section id="current-map"[^>]*collapsible/);
   expect(read("TitrationSessionCard.js")).toMatch(/<Section id="next-visit"[^>]*collapsible/);
 });

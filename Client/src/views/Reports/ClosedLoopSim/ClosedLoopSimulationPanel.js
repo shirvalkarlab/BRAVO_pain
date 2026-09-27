@@ -40,6 +40,7 @@ import { TYPE, WRAP, CARD } from "assets/theme/base/tokens";
 import { plotlyLayout, directLabel } from "views/Reports/figureStyle";
 import { fmtNum, fmtPct } from "./deployFormat";
 import Fold from "./Fold";
+import PanelStaleNote from "./PanelStaleNote";
 
 const isNum = (v) => v != null && Number.isFinite(Number(v));
 // Marks: the replay in the context grey, the closed loop in the series blue; fills from the tokens.
@@ -340,8 +341,13 @@ function RunSummaryRow({ label, run, active, onClick }) {
   );
 }
 
-export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabel, bandCandidate }) {
-  const { data, loading, err } = sim || { data: null, loading: false, err: null };
+/** Printed in place of a controller number while the device has not allowed the configuration. */
+export const WITHHELD_WORDS = "withheld: the device has not allowed this configuration";
+
+export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabel, bandCandidate,
+  deviceAllows = false }) {
+  const { data, loading, err, stale, staleReasons, recompute, bandMismatch } = sim
+    || { data: null, loading: false, err: null };
   const runs = (data && data.timing_runs) || {};
   const hasAnyRun = RUN_KEYS.some((k) => runs[k] && !runs[k].refused && runs[k].models && runs[k].models.M0);
   const [selected, setSelected] = useState("recommended");
@@ -364,8 +370,24 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
   }, []);
 
   const title = "What the automatic adjustment would have done: simulated, not measured, decides nothing";
-  const label = contactLabel && bandCandidate && bandCandidate.channel
-    ? `${contactLabel(bandCandidate.channel)} · ${fmtNum(bandCandidate.center_freq_hz, 1)} Hz` : null;
+  // The page hands in the chosen band, which carries `contact`; `channel` is the request's spelling.
+  const bcContact = bandCandidate && (bandCandidate.contact || bandCandidate.channel);
+  const label = bcContact
+    ? `${(contactLabel && contactLabel(bcContact)) || bandCandidate.contact_label || bcContact} · `
+      + `${fmtNum(bandCandidate.center_freq_hz, 1)} Hz` : null;
+
+  // A simulation computed for another band (`withheldIfOtherBand`) is not drawn at all: the page
+  // names both bands and asks for Recompute, as the decision card does for the report.
+  if (bandMismatch) {
+    return (<Card sx={{ ...CARD, border: `1px dashed ${PAL.graphic}` }}><MDBox p={3}>
+      <MDTypography component="h3" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>{title}</MDTypography>
+      <MDTypography sx={{ ...TYPE.lead, display: "block", color: PAL.warnText, mt: 1 }}>
+        <span aria-hidden="true" style={{ marginRight: 6 }}>▲</span>
+        {`The stored simulation is for ${bandMismatch.computedFor}, not the chosen `
+          + `${bandMismatch.what || "band"}, ${bandMismatch.chosen}. It is not drawn; press Recompute.`}
+      </MDTypography>
+    </MDBox></Card>);
+  }
 
   if (loading && !data) {
     return (<Card sx={{ ...CARD, border: `1px dashed ${PAL.graphic}` }}><MDBox p={3}>
@@ -409,6 +431,10 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
       <MDBox p={3}>
         <MDTypography component="h3" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>{title}</MDTypography>
         {label ? <MDTypography sx={{ ...TYPE.caption, color: PAL.ink3 }}>{label}</MDTypography> : null}
+        <MDBox mt={1}>
+          <PanelStaleNote stale={!!stale} staleReasons={staleReasons || []} loading={!!loading}
+            onRecompute={recompute} />
+        </MDBox>
         <MDTypography sx={{ ...TYPE.lead, display: "block", color: PAL.ink, mt: 1, maxWidth: "68ch" }}>
           {headline(run)}
         </MDTypography>
@@ -453,7 +479,8 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
         <MDBox mt={1.2}>
           <div ref={distRef} style={{ width: "100%", minHeight: 230 }} />
           <Caption>
-            {`C · left, the share of adjustment steps at each commanded current between the limits ${fmtNum(P.amp_low_mA, 1)}–${fmtNum(P.amp_high_mA, 1)} mA; `
+            {`C · left, the share of adjustment steps at each commanded current between the limits ${deviceAllows
+              ? `${fmtNum(P.amp_low_mA, 2)}–${fmtNum(P.amp_high_mA, 2)} mA` : `(${WITHHELD_WORDS})`}; `
               + `right, the fitted change in band power against current the loop is closed through`
               + (run.models.M3 && run.models.M3.slope_interval_per_mA ? ", with the resampled slope range shaded" : "")
               + (run.curves && run.curves.M2 ? "; the dotted line is the fitted peak." : ".")}
@@ -467,7 +494,9 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
           <Line>{`how long power takes to settle: ${fmtNum(st.tau_s, 1)} s · ${st.source || ""}`}</Line>
           <Line>{`series: ${inp.n_pieces} three-second pieces on ${inp.contact} at ${fmtNum(inp.centre_used_hz, 1)} Hz · ${inp.n_unusable_pieces} unusable (held as missing) · ${inp.n_dropped_no_amplitude} dropped for no known amplitude · amplitude from the device's own record for ${inp.n_from_device_current}, from the settings history for ${inp.n_from_epochs}`}</Line>
           <Line>{`record: ${rec.n_segments} stretches, ${rec.n_segments_used} run, ${rec.n_segments_skipped} shorter than 3 steps · ${rec.n_cells_without_a_piece} device-clock cells without a piece (held), ${rec.n_cells_merging_pieces} merging two · ${fmtNum(rec.hours_of_signal, 2)} h of signal across ${fmtNum((rec.span_s || 0) / 86400, 0)} days (coverage ${fmtPct(rec.coverage_frac, 3)})`}</Line>
-          <Line>{`controller: thresholds ${fmtNum(P.lower, 1)} / ${fmtNum(P.upper, 1)} device units · limits ${fmtNum(P.amp_low_mA, 2)}–${fmtNum(P.amp_high_mA, 2)} mA (${limitsSourceWords(P)}) · ramp ${fmtNum(P.ramp_up_mA_per_s, 4)} mA/s up, ${fmtNum(P.ramp_down_mA_per_s, 4)} down · step ${fmtNum(P.dt_controller_s, 1)} s · onset ${P.onset_steps} step(s), blanking ${P.blanking_steps}`}</Line>
+          <Line>{`controller: ${deviceAllows
+            ? `thresholds ${fmtNum(P.lower, 1)} / ${fmtNum(P.upper, 1)} device units · limits ${fmtNum(P.amp_low_mA, 2)}–${fmtNum(P.amp_high_mA, 2)} mA (${limitsSourceWords(P)})`
+            : `thresholds and current limits ${WITHHELD_WORDS}`} · ramp ${fmtNum(P.ramp_up_mA_per_s, 4)} mA/s up, ${fmtNum(P.ramp_down_mA_per_s, 4)} down · step ${fmtNum(P.dt_controller_s, 1)} s · onset ${P.onset_steps} step(s), blanking ${P.blanking_steps}`}</Line>
           {P.amp_limit_note ? <Line>{P.amp_limit_note}</Line> : null}
           <Line>{`range over resampled runs: ${rs.n_fitted || 0} of ${rs.n_resample || 0} refits on ${rs.n_runs || 0} runs resampled with replacement${rs.reason ? ` · ${rs.reason}` : ""}`}</Line>
           <Caption>{run.caveat}</Caption>

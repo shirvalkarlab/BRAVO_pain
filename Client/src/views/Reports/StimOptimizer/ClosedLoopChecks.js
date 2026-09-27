@@ -68,9 +68,65 @@ export const REFUSED_CHECKS = new Set([
 ]);
 export const failState = (name) => (REFUSED_CHECKS.has(name) ? "refused" : "blocked");
 
-function Glyph({ state, name }) {
+const AMP_LIMITS = "amplitude_limits_inside_envelope_and_under_ceiling";
+const finiteNum = (v) => (v === null || v === undefined || v === "" ? null
+  : (Number.isFinite(Number(v)) ? Number(v) : null));
+
+/**
+ * Why a failing current-limits check failed, one short name per cause, read from the check's own
+ * evidence (`stage_gate.check_amplitude_limits`: `checked[side]` = the limits and the delivered
+ * envelope, `defaulted`, the ceiling per side). Only a PROPOSED upper limit above its side's ceiling
+ * is the ceiling (a defaulted one above it is history and the check is not assessed); an empty
+ * delivered range, a maximum not above the minimum and a limit beyond the delivered currents each
+ * have their own name (2026-09-26). A response without the evidence falls back to the check's
+ * sentence.
+ */
+export function amplitudeLimitCauses(c) {
+  const ev = (c && c.evidence) || {};
+  const checked = ev.checked || null;
+  const out = [];
+  const push = (x) => { if (!out.includes(x)) out.push(x); };
+  if (!checked) {
+    const d = String((c && c.detail) || "");
+    if (/exceeds the declared ceiling/i.test(d)) push("above_ceiling");
+    if (/not finite/i.test(d)) push("no_range_delivered");
+    if (/max > min/i.test(d)) push("no_range");
+    if (/above the highest amplitude ever delivered|below the lowest amplitude delivered/i.test(d)) push("beyond_delivered");
+    return out;
+  }
+  const defaulted = new Set(Array.isArray(ev.defaulted) ? ev.defaulted : []);
+  Object.entries(checked).forEach(([side, v]) => {
+    const lo = finiteNum(v && v.amp_min_mA), hi = finiteNum(v && v.amp_max_mA);
+    const env = Array.isArray(v && v.envelope) ? v.envelope : [];
+    const eLo = finiteNum(env[0]), eHi = finiteNum(env[1]);
+    const ceil = finiteNum(((ev.ceiling_by_side || {})[side] || {}).ceiling_mA) ?? finiteNum(ev.ceiling_mA);
+    if (lo === null || hi === null) { push("no_range_delivered"); return; }
+    if (!(hi > lo)) push("no_range");
+    if (ceil !== null && hi > ceil + 1e-9 && !defaulted.has(side)) push("above_ceiling");
+    if ((eHi !== null && hi > eHi + 1e-9) || (eLo !== null && lo < eLo - 1e-9)) push("beyond_delivered");
+  });
+  return out;
+}
+
+/** The short name of each cause (five words or fewer). */
+export const AMP_LIMIT_CAUSE_NAME = {
+  above_ceiling: "Current limits above ceiling",
+  no_range_delivered: "No delivered current range",
+  no_range: "Current limits have no range",
+  beyond_delivered: "Limit beyond delivered currents",
+};
+
+/** A failing check's state: red ("refused") for the rate check and for a current limit above the
+ *  ceiling; ink ("blocked") for every other failure. */
+export function conditionFailState(c) {
+  if (!c) return "blocked";
+  if (c.name === AMP_LIMITS) return amplitudeLimitCauses(c).includes("above_ceiling") ? "refused" : "blocked";
+  return failState(c.name);
+}
+
+function Glyph({ state, name, condition }) {
   if (state === true) return <Mark state="pass" label="passes" size={TYPE.lead} />;
-  if (state === false) return <Mark state={failState(name)} label="fails" size={TYPE.lead} />;
+  if (state === false) return <Mark state={condition ? conditionFailState(condition) : failState(name)} label="fails" size={TYPE.lead} />;
   return <Mark state="notChecked" label="not assessed" size={TYPE.lead} />;
 }
 function Sub({ ok, text }) {
@@ -292,25 +348,32 @@ function Numbers({ c, lfp }) {
   }
 }
 
+/** The checks' answer in counts ("No: 2 of 4 checks block, 1 not assessed"), one home: the checks
+ *  card's headline and the closed section's answer on the page (2026-09-26). */
+export function gateHeadline(plan) {
+  const gate = (plan && plan.gate) || {};
+  const conditions = Array.isArray(gate.conditions) ? gate.conditions : [];
+  const nFail = Array.isArray(gate.failed) ? gate.failed.length : conditions.filter((c) => verdictState(c) === false).length;
+  const nNot = Array.isArray(gate.not_assessed) ? gate.not_assessed.length : conditions.filter((c) => verdictState(c) === null).length;
+  const n = num(gate.n_conditions) ?? conditions.length;
+  if (!conditions.length) return "The check did not run";
+  return gate.passed === true
+    ? `Yes: ${n} of ${n} checks pass`
+    : `No: ${nFail} of ${n} checks block${nNot ? `, ${nNot} not assessed` : ""}`;
+}
+
 export default function ClosedLoopChecks({ plan }) {
   const gate = (plan && plan.gate) || {};
   const conditions = Array.isArray(gate.conditions) ? gate.conditions : [];
   const lfp = (plan && plan.lfp_evidence) || {};
-  const nFail = Array.isArray(gate.failed) ? gate.failed.length : conditions.filter((c) => verdictState(c) === false).length;
-  const nNot = Array.isArray(gate.not_assessed) ? gate.not_assessed.length : conditions.filter((c) => verdictState(c) === null).length;
-  const n = num(gate.n_conditions) ?? conditions.length;
   const passed = gate.passed === true;
   // The answer in ink when it passes; when a check blocks, red with ✕ only if a failing check is
   // the device refusing or the ceiling, otherwise ink with ✕ (D14); grey when nothing ran.
-  const refusedFail = conditions.some((c) => verdictState(c) === false && REFUSED_CHECKS.has(c.name));
+  const refusedFail = conditions.some((c) => verdictState(c) === false && conditionFailState(c) === "refused");
   const color = passed ? T.ink : (conditions.length ? (refusedFail ? T.refused : T.ink) : T.notChecked);
   // The card's title asks "Closed loop: may it start on the frozen setting?"; the headline answers
   // it. The page's status line says "closed loop cannot start" in words; this says why, in counts.
-  const headline = !conditions.length
-    ? "The check did not run"
-    : (passed
-      ? `Yes: ${n} of ${n} checks pass`
-      : `No: ${nFail} of ${n} checks block${nNot ? `, ${nNot} not assessed` : ""}`);
+  const headline = gateHeadline(plan);
   return (
     <MDBox>
       <MDBox display="flex" alignItems="center" gap={1}>
@@ -327,7 +390,7 @@ export default function ClosedLoopChecks({ plan }) {
           const st = verdictState(c);
           return [
             <MDBox key={`${i}-l`} display="flex" alignItems="flex-start" gap={1} sx={{ minWidth: 0 }}>
-              <MDBox pt={0.2} sx={{ flex: "0 0 auto" }}><Glyph state={st} name={c.name} /></MDBox>
+              <MDBox pt={0.2} sx={{ flex: "0 0 auto" }}><Glyph state={st} name={c.name} condition={c} /></MDBox>
               <MDBox>
                 <MDTypography variant="caption" component="div" title={c.name}
                   sx={{ fontSize: TYPE.body, fontWeight: WEIGHT.strong, color: T.ink, lineHeight: 1.5 }}>

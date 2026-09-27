@@ -75,6 +75,7 @@ import CurrentMapCard from "./CurrentMapCard";
 import CurrentMapScheduleCard from "./CurrentMapScheduleCard";
 // The titration session to run next, read from `data.titration_plan`.
 import TitrationSessionCard from "./TitrationSessionCard";
+import { OPTIMIZER_REQUEST } from "./optimizerRequest";
 // The decision: the setting programmed now beside the setting the joint search suggests, per side,
 // with the gain drawn against its own uncertainty.
 import DecisionStrip, { decisionHeadline } from "./DecisionStrip";
@@ -83,6 +84,7 @@ import SensingEvidenceTable from "./SensingEvidenceTable";
 import { T, TYPE, SizedFold } from "./typeScale";
 // The page's status sentence and list: the answer, then why, in ✕ ▲ ○ items of five words or fewer.
 import StatusLine, { StatusSentence } from "./StatusLine";
+import { gateHeadline } from "./ClosedLoopChecks";
 import { ceilingFromResponse } from "./ceiling";
 import { ControlAnalysesSection } from "views/Reports/ControlAnalyses/ControlAnalysesCard";
 
@@ -111,29 +113,7 @@ function primaryPainScore(plan) {
   return painScoreLabel(/_vas$/.test(k) || k === "nrs" || k === "vas" ? k : `${k}_vas`);
 }
 
-/**
- * THE REQUEST THIS VIEW SENDS, WRITTEN OUT IN FULL RATHER THAN LEFT TO THE SERVER'S DEFAULTS.
- *
- * The endpoint takes six optional parameters besides the participant — the pain sites, the
- * hemispheres, the wash-in exclusion window, the figure backend, and the depth and width of the
- * forward simulation the two-stage path's own Stage 1 runs. They are documented on
- * `QueryStimOptimizer` in `BRAVO/Server/APIs/DataAnalysis.py` and applied in
- * `modules/StimOptimizer/bravo_service` `run_for_participant`, and the values below are exactly
- * those documented defaults. The request is therefore unchanged in what it asks the server for.
- *
- * What changes is that it is now written down here, which is what allows the result cache to key
- * on it. A cache key has to name everything that changes the answer; a request that relies on the
- * server's defaults names none of it, so a key derived from such a request would be blind to the
- * very parameters this page is about.
- */
-const OPTIMIZER_REQUEST = {
-  Sites: ["left_leg", "back"],
-  Hemispheres: ["Left", "Right"],
-  WashinMin: 1.0,
-  Backend: "none",
-  NBatches: 3,
-  Q: 4,
-};
+// The request this view sends is written out in full in `optimizerRequest.js`.
 
 export default function StimOptimizer() {
   const { participant_uid } = useParams();
@@ -259,7 +239,10 @@ export default function StimOptimizer() {
 
         {/* ---------- 3. can closed loop start? The allowed sensing pairs as sentence blocks, the
             other combinations folded, then the four checks and what closed loop ruled out. ---------- */}
-        <Section id="closed-loop" question="Can closed loop start?" collapsible>
+        {/* The answer stays in view while the section is closed (2026-09-26): the checks' count. */}
+        <Section id="closed-loop" question="Can closed loop start?" collapsible
+          answer={twoStage.data ? `${gateHeadline(twoStage.data)}.`
+            : (twoStage.loading ? "Still being checked: the two-stage plan is computing." : null)}>
           {data.closed_loop && <SensingEvidenceTable closedLoop={data.closed_loop} />}
           <MDBox mt={3}>
             <TwoStagePlanCard plan={twoStage.data} loading={twoStage.loading} err={twoStage.err} />

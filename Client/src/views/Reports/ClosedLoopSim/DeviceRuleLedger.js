@@ -42,7 +42,7 @@ import MDTypography from "components/MDTypography";
 import PAL from "./palette";
 import { TYPE, WRAP, CARD, STATE } from "assets/theme/base/tokens";
 import Fold from "./Fold";
-import { unevaluableFor } from "./deployFormat";
+import { refusalFor, unevaluableFor } from "./deployFormat";
 
 /**
  * The state marks, as the shared glyphs (SPEC 2026-09-26 section 2.3): ✕ refuses (red), ○ could not
@@ -98,6 +98,14 @@ function RuleRow({ row, state, ink, copy, actor }) {
             <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.caption,
               color: PAL.ink2, mt: 0.25 }}>
               {`observed: ${row.observed}`}
+            </MDTypography>
+          ) : null}
+          {/* The server's note on a row it kept although another rule owns the same finding (the
+              owner could not be evaluated, or the two disagreed): why it still counts here. */}
+          {row.deferral_note ? (
+            <MDTypography variant="caption" data-deferral-note="" sx={{ ...TYPE.body, display: "block",
+              color: PAL.ink2, mt: 0.25 }}>
+              {row.deferral_note}
             </MDTypography>
           ) : null}
           {row.why ? (
@@ -204,11 +212,13 @@ export default function DeviceRuleLedger({ report }) {
   const recorded = byKind("recorded_value");
   const advNoPredicate = byKind("advisory_no_predicate");
   const advNotDeterminable = byKind("advisory_not_determinable");
+  // An advisory whose own check raised: a defect in the rule table, named as one.
+  const advError = byKind("predicate_error");
   // Any advisory kind this component has not been taught about. Collecting the remainder rather than
   // assuming four kinds means a new kind added upstream appears on the page as an unclassified row
   // instead of vanishing, which is the failure the previous single-kind filter had.
   const KNOWN = ["advisory_failed", "recorded_value", "advisory_no_predicate",
-    "advisory_not_determinable"];
+    "advisory_not_determinable", "predicate_error"];
   const advOther = advisories.filter((a) => a && KNOWN.indexOf(a.kind) < 0);
 
   // The satisfied rules are not enumerated in the payload; they are the rules that passed without
@@ -238,7 +248,7 @@ export default function DeviceRuleLedger({ report }) {
   const nAllowed = satisfied;
   const nPinned = recorded.length;
   const nNotes = deferred.length + advFailed.length + advNotDeterminable.length
-    + advNoPredicate.length + advOther.length;
+    + advNoPredicate.length + advError.length + advOther.length;
 
   return (
     <Card sx={{ ...CARD, p: 3 }}>
@@ -278,7 +288,7 @@ export default function DeviceRuleLedger({ report }) {
         <MDBox mt={1}>
           <BucketHead state="violated" title="Refuses" count={failures.length} note={null} />
           {failures.map((f) => {
-            const u = unevaluableFor(f.kind);
+            const u = !f.kind || f.kind === "failed" ? refusalFor(f) : unevaluableFor(f.kind);
             return (
               <RuleRow key={`f-${f.rule_id}`} row={f} state="violated" ink={PAL.failText}
                 copy={u.copy} actor={u.actor} />
@@ -372,6 +382,11 @@ export default function DeviceRuleLedger({ report }) {
         <CollapsedGroup rows={advNoPredicate} state="advisory"
           title="Recommended, not required: no automatic check exists"
           note="recorded for the reader; the documents state no number to check against" />
+        {advError.length > 0 ? (
+          <CollapsedGroup rows={advError} state="advisory"
+            title="Recommended, not required: the check raised an error"
+            note="a defect in the rule table, not a property of this configuration; it does not block" />
+        ) : null}
         {advOther.length > 0 ? (
           <CollapsedGroup rows={advOther} state="advisory" title="Recommended, not required: unrecognised kind"
             note="this page does not recognise these kinds; report them" />

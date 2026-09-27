@@ -72,7 +72,7 @@ import Section from "views/Reports/paper/Section";
 import ColorKey from "views/Reports/paper/ColorKey";
 
 import { num, fmtHz, fmtUs, fmtMa, EMPTY } from "./stimFormat";
-import { BlockOfTimeMark, BlockOfTimeFootnote, blockOfTimeState, notCheckedText } from "./blockOfTime";
+import { BlockOfTimeMark, BlockOfTimeFootnote, blockOfTimeState, notCheckedText, BLOCK_OF_TIME_SYMBOL } from "./blockOfTime";
 import { T, TYPE, HEAD, SMALL, MONO, SUBHEAD, HEADING, WEIGHT, HAIRLINE, Mark, SizedFold } from "./typeScale";
 import { ceilingFromPlan } from "./ceiling";
 
@@ -125,6 +125,14 @@ export function absoluteSurface(surface) {
   };
 }
 
+/** A rectangular grid transposed: out[col][row] = grid[row][col]. The server's surface is indexed
+ *  [left][right]; a Plotly heatmap's z is indexed [y][x] = [right][left]. */
+export function transposeGrid(grid) {
+  const g = grid || [];
+  if (!g.length) return [];
+  return g[0].map((_, j) => g.map((row) => row[j]));
+}
+
 /** Half the width of the card's one colour range: the largest |predicted - today's| on any square
  *  the card draws (SPEC.md section 3.1). */
 function sharedHalfRange(surfaces) {
@@ -148,8 +156,12 @@ function CurrentSurfaceHeatmap({ divId, surface, inForceLeft, inForceRight, star
   useEffect(() => {
     if (!surface || !a || !rows || !cols) return undefined;
     const h = half || (a.zmax - a.zmid);
+    // The server's grid is mu[i][j] at LEFT amps_mA[i], RIGHT amps_mA[j]; Plotly draws z[row][col]
+    // at x[col], y[row] with x the left current, so the grid is drawn transposed (it was drawn
+    // mirrored across the diagonal from 2026-09-14 to 2026-09-26).
+    const zDrawn = transposeGrid(a.z);
     const traces = [{
-      type: "heatmap", z: a.z, x: surface.amps_mA, y: surface.amps_mA,
+      type: "heatmap", z: zDrawn, x: surface.amps_mA, y: surface.amps_mA,
       // Explicit stops, never a named scale: "RdYlGn" is a plotly.PY name, not a plotly.JS one, and
       // plotly.js silently fell back to a red-to-grey scale that painted the BEST score red (watched
       // live, 2026-09-14). One range for the whole card, centred on each square's own today.
@@ -467,7 +479,11 @@ function ClinicStreamSection({ groups, inForceLeft, inForceRight, clinicStream, 
       <MDBox sx={{ mt: 4, pt: 3, borderTop: HAIRLINE }}>
         {heading}
         <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2, mt: 0.5 }}>
-          {cs.note || "no clinic or home-testing workbooks could be read for this participant."}
+          {/* The server puts the reason under `reason` when the fit is unavailable; `note` is the
+              success path's own remark and is never offered as the reason (2026-09-26). */}
+          {cs.available
+            ? "The clinic sheets were read, but the fit returned no rate to draw."
+            : (cs.reason || cs.note || "no clinic or home-testing workbooks could be read for this participant.")}
         </MDTypography>
       </MDBox>
     );
@@ -672,11 +688,16 @@ export default function CurrentMapCard({ plan }) {
   const anyMoves = shownRows.some((r) => r && r.fitted && r.resolved === true && blockOfTimeState(r) === "moves");
   const fittedRows = shownRows.filter((r) => r && r.fitted);
   const nRecommend = fittedRows.filter((r) => r.resolved === true).length;
+  // Decision 294's qualifier in the open (2026-09-26): the section starts closed, and its answer is
+  // what a reader sees.
+  const nRecommendMoves = fittedRows.filter((r) => r.resolved === true && blockOfTimeState(r) === "moves").length;
   const answer = !fittedRows.length
     ? "No pain map could be drawn: no rate has enough stretches of unchanged settings."
     : (nRecommend === 0
       ? `None of the ${fittedRows.length} pain maps drawn can tell currents apart well enough to recommend one; the checks under each square say why.`
-      : `${nRecommend} of the ${fittedRows.length} pain maps drawn can recommend a current, marked best ★.`);
+      : `${nRecommend} of the ${fittedRows.length} pain maps drawn can recommend a current, marked best ★${
+        nRecommendMoves ? `; ${nRecommendMoves === nRecommend ? (nRecommend === 1 ? "that map" : "all of them")
+          : `${nRecommendMoves} of them`} ${nRecommendMoves === 1 ? "moves" : "move"} between blocks of time ${BLOCK_OF_TIME_SYMBOL}, so read ${nRecommendMoves === 1 ? "its current" : "their currents"} with that caution` : ""}.`);
 
   const actions = (
     <MDBox display="flex" alignItems="center" columnGap={2} rowGap={1} flexWrap="wrap">

@@ -420,3 +420,41 @@ def test_one_site_asked_for_means_no_parallel_block_at_all(bench, shared_stage1)
     out = BS.run_for_participant(dict(REQ_FLAG, Sites=["left_leg"]))
     assert out["two_stage"]["parallel_sites"] == {}
 
+
+
+# ---------------------------------------------------------------------------------------------
+# The clinic-sheet steps are in the response key (2026-09-26). The clinic fit, the ruling-5
+# coverage, the visits list and the gate's side-effect statistic are all read from the stored
+# clinic steps, which a sheet sync changes without touching the device settings or the REDCap
+# reports; a response keyed without them was served stale after a sync.
+# ---------------------------------------------------------------------------------------------
+def _store_clinic_steps(root, tag):
+    from StimOptimizer import clinic_pain as CLP
+    steps = pd.DataFrame({"file": [f"sheet_{tag}.xlsx"], "t0": pd.to_datetime(["2026-09-01"], utc=True)})
+    st.store(CLP.CLINIC_PAIN_KIND, UID, (CLP.CLINIC_PAIN_KIND, "test", 1, tag),
+             {"steps": steps, "manifest": pd.DataFrame(), "folder": "x"},
+             writer="clinic_sheet_ingest", trigger="test", provenance=[], root=root)
+
+
+def test_a_clinic_sheet_sync_is_not_served_the_response_built_before_it(bench):
+    _store_clinic_steps(bench.root, "before_sync")
+    first = BS.run_for_participant(dict(REQ_FLAG))
+    second = BS.run_for_participant(dict(REQ_FLAG))
+    assert first["store"]["served_from_store"] is False
+    assert second["store"]["served_from_store"] is True
+    _store_clinic_steps(bench.root, "after_sync")
+    third = BS.run_for_participant(dict(REQ_FLAG))
+    assert third["store"]["served_from_store"] is False
+    assert third["store"]["response_key"] != first["store"]["response_key"]
+    fourth = BS.run_for_participant(dict(REQ_FLAG))
+    assert fourth["store"]["served_from_store"] is True
+
+
+def test_the_clinic_steps_change_the_response_key_and_never_the_four_tables_key():
+    args = ("u", "m", "t", "a", "g")
+    tail = (("left_leg",), ("Left",), 1.0, "none")
+    a = BS._response_signature(*args, {"TwoStage": True}, *tail, clinic_key="clinic/u/k1")
+    b = BS._response_signature(*args, {"TwoStage": True}, *tail, clinic_key="clinic/u/k2")
+    none = BS._response_signature(*args, {"TwoStage": True}, *tail, clinic_key=None)
+    assert len({a, b, none}) == 3
+    assert BS._products_signature(a) == BS._products_signature(b) == BS._products_signature(none)

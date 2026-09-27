@@ -221,7 +221,7 @@ Judged against "simple, human-readable, clearly separated ideas in logical order
 - `BRAVO/modules/StimOptimizer/routines/surrogate.py`, `acquisition.py`, `objective.py`, `preference.py`, `resolution.py`, `adaptive_envelope.py`
 - `BRAVO/modules/StimOptimizer/stage1_openloop.py` (partial: `RateStratum`, `current_coverage`, `_rate_stratum_resolution` and surrounding context)
 - `Client/src/views/Reports/StimOptimizer/index.js`, `DecisionStrip.js`, `useTwoStagePlan.js`, `TwoStagePlanCard.js`, `ClosedLoopChecks.js`, `SensingEvidenceTable.js`, `TitrationSessionCard.js`, `CurrentMapCard.js`, `CurrentMapScheduleCard.js`, `ExcludedSettingsChart.js`, `BandResponseStrip.js`, `GainBar.js`, `stimFormat.js`
-- `artifacts/design_2026-09-12_stim_optimizer_page_redesign.md`
+- `docs/archive/2026-09-26/design/design_2026-09-12_stim_optimizer_page_redesign.md` (archived 2026-09-26; was under `artifacts/`)
 - `artifacts/review_2026-09-12_StimOptimizer.md`, `artifacts/review_2026-09-12_StimOptimizer_IMPLEMENTED.md`
 - `DECISIONS_and_open_items.md` (Part 1, Part 3 rows 41, 137–140, 143, 145–146, 157–160, 164–166, 184, 189–199, 202, 210, 213–217, 222, 227–229)
 

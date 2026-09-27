@@ -12,7 +12,8 @@
  * and the "Deploy-to-Percept review" sign-off card. Top to bottom:
  *
  *   1. ONE STATUS LINE, the reconciled verdict (decision 242: one verdict), computed from the device
- *      rule table and the evidence triangle through the same state tracks the header used.
+ *      rule table and the evidence triangle through the same state tracks the header used, and never
+ *      better than the server's own verdict (`licensed`, `verdict_detail.blockers`).
  *   2. RED BULLETS, only when the device refuses: one per blocking rule, "Unmet: <label>" or
  *      "Unchecked: <label>", the label the rule table itself carries (at most four words, so the
  *      bullet is at most five). YELLOW BULLETS for evidence that should have been evaluated and was
@@ -86,6 +87,23 @@ export function decisionStatus(rep) {
   if (evidence === 2) {
     return { key: "unestablished", ink: PAL.warnText, glyph: STATE.caution.glyph,
       headline: "Device allows it; evidence not established", sub: null };
+  }
+  // THE SERVER'S VERDICT BOUNDS THE HEADLINE. The server licenses a report only when the device
+  // allows it, the three signs agree AND the analysis added no reason of its own to stop
+  // (`verdict_detail.blockers`: a step that raised, a capture current above the module limit, a
+  // control authority it could not estimate). Past the two checks above, a report the server did
+  // not license reads "does not support it", never "supports it" (decision 242: one verdict, the
+  // server's). Its reasons are the analysis's, not the device's, so the ink is not red. A response
+  // that predates the `licensed` field is judged by its blocker list alone.
+  const blockers = ((rep && rep.verdict_detail) || {}).blockers || [];
+  if ((rep && rep.licensed === false) || blockers.length) {
+    const n = blockers.length;
+    return { key: "unsupported", ink: STATE.blocked.ink, glyph: STATE.blocked.glyph,
+      headline: "Device allows it; the analysis does not support it",
+      sub: n
+        ? `The analysis stopped for ${n === 1 ? "a reason" : `${n} reasons`} of its own, printed `
+          + "under Details. Nothing here is permission to program."
+        : "The server's verdict is \"unsupported\". Nothing here is permission to program." };
   }
   if (provisionalCaveat(rep)) {
     return { key: "supported_provisional", ink: PAL.warnText, glyph: STATE.caution.glyph,
@@ -284,7 +302,9 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
           <MDTypography component="h3" sx={{ ...TYPE.lead, fontWeight: 600, color: PAL.ink, mb: 1 }}>
             Values to enter on the A610
           </MDTypography>
-          <ParameterTable report={mismatch ? { data: null } : deploymentReport} mode={mode} onMode={onMode} />
+          {/* Keyed on the band, so a read-back tick given for one band never survives a change of band. */}
+          <ParameterTable key={`${bc.contact || ""}|${bc.center_freq_hz ?? ""}|${bc.bandwidth_hz ?? ""}`}
+            report={mismatch ? { data: null } : deploymentReport} mode={mode} onMode={onMode} />
         </MDBox>
 
         <MDBox className="cl-signoff-actions" display="flex" gap={2} mt={3} flexWrap="wrap">
@@ -310,7 +330,7 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
                 checks) are not repeated here: they are the first entries of the caveats list in the
                 sign-off record below, and the D26 row above quotes them too. */}
             {blockers.length ? (
-              <Section title="The rule table's own sentences">
+              <Section title="The analysis's own reasons it could not go on">
                 {blockers.map((b) => (
                   <MDTypography key={b} data-blocker="" sx={{ ...TYPE.body, display: "block", color: STATE.blocked.ink, mt: 0.5 }}>
                     <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.blocked.glyph}</span>

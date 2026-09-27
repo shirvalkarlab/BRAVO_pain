@@ -135,7 +135,10 @@ describe("1. the status line", () => {
       { name: "rate_at_or_above_adaptive_minimum", verdict: "FAIL", detail: "rate below", evidence: { min_rate_hz: 55 } },
       { name: "openloop_choice_resolved", verdict: "FAIL", detail: "not proven" },
       { name: "adaptive_band_passes_lfp_response", verdict: "FAIL", detail: "no band" },
-      { name: "amplitude_limits_inside_envelope_and_under_ceiling", verdict: "FAIL", detail: "above ceiling" },
+      // PIN CHANGED 2026-09-26: only a proposed limit ABOVE the ceiling is the red refusal, read
+      // from the check's own sentence or evidence; this detail names that cause.
+      { name: "amplitude_limits_inside_envelope_and_under_ceiling", verdict: "FAIL",
+        detail: "Left: upper limit 4.8 mA exceeds the declared ceiling of 4.5 mA" },
     ];
     const data = { ...newResponse, closed_loop: { available: true,
       sensing_rule: { sentence: "the device allows no pair", by_side: { Left: { rule_applied: true }, Right: { rule_applied: true } } } } };

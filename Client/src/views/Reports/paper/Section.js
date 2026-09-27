@@ -38,13 +38,23 @@ export default function Section({ id, question, answer, actions, reading, method
   const headingId = id ? `${id}-title` : undefined;
   const bodyId = id ? `${id}-body` : undefined;
   const [open, setOpen] = useState(!collapsible || !!defaultOpen);
-  // A jump link (or a shared address) to a closed section opens it.
+  // A jump link (or a shared address) to a closed section opens it. A click on a link to it opens
+  // it too: a second click on the same link, after the reader closed the section again, changes no
+  // hash and fires no hash change (2026-09-26).
   useEffect(() => {
     if (!collapsible || !id || typeof window === "undefined") return undefined;
     const check = () => { if (window.location.hash === `#${id}`) setOpen(true); };
+    const onClick = (e) => {
+      const a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+      if (a && a.getAttribute("href").endsWith(`#${id}`)) setOpen(true);
+    };
     check();
     window.addEventListener("hashchange", check);
-    return () => window.removeEventListener("hashchange", check);
+    document.addEventListener("click", onClick);
+    return () => {
+      window.removeEventListener("hashchange", check);
+      document.removeEventListener("click", onClick);
+    };
   }, [collapsible, id]);
   const title = collapsible ? (
     <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} aria-controls={bodyId}

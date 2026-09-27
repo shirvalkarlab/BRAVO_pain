@@ -1,5 +1,14 @@
 # Taste audit of the minimalist redesign (2026-09-26)
 
+> **Status, 2026-09-26 (added at the planning and design clean-up).** Every item here is settled:
+> section E was fixed in decision 321; C1-C12 were built in decision 322; D14 was ruled by the PI
+> in 322 (red only for device refusals and the ceiling; a statistical blocker in ink with ✕), and
+> the specification's side of D3-D14 is locked by `Client/src/views/Reports/specConformance.test.js`. Two items were later changed by the PI:
+> C7's browser-tab titles are the old page names again (decision 325(a)), and C9 no longer applies
+> to the clinic sheet, where an empty cell is blank (325(f)). The rules themselves are in `SPEC.md`
+> beside this file, which is the one current specification. This file is kept, not archived,
+> because page code cites its item numbers (C1-C12, D1-D14) by this path.
+
 Read-only audit of the redesign against three third-party design skills the PI chose
 (`Leonxlnx/taste-skill`: `skills/taste-skill` v2 "design-taste-frontend", `skills/minimalist-skill`,
 `skills/redesign-skill`), `SPEC.md` and the house rules. Section C lists proposals not yet built

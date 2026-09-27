@@ -65,7 +65,8 @@ import { SessionController } from "database/session-control";
 import Section from "views/Reports/paper/Section";
 
 import { num, fmtHz, fmtMa, fmtUs, contactLabel, EMPTY } from "./stimFormat";
-import { HomeScheduleSection } from "./CurrentMapScheduleCard";
+import { HomeScheduleSection, InForceAboveCeilingLine, inForceAboveCeiling } from "./CurrentMapScheduleCard";
+import { OPTIMIZER_REQUEST } from "./optimizerRequest";
 import { T, TYPE, HEAD, SMALL, MONO, NOWRAP, SUBHEAD, HEADING, WEIGHT, HAIRLINE, SizedFold as Fold } from "./typeScale";
 import { LadderPlot, BandAxis } from "./LadderFigures";
 
@@ -194,11 +195,6 @@ function SessionHeaderStrip({ plan }) {
     ["Step timing", stepLine],
     ["Total session time", num(sess.total_minutes) != null ? `~${Math.round(num(sess.total_minutes))} min` : EMPTY],
   ];
-  // A held side whose current in force is above its safe ceiling is held AT the ceiling (decision
-  // 308); the server's sentence says so, in the warning colour, under the strip.
-  const heldNotes = [left, right]
-    .map((p) => p && p.held_other_side && p.held_other_side.above_ceiling && p.held_other_side.note)
-    .filter(Boolean).map((t) => String(t).replace(/ -- /g, " — "));
   return (
     <>
       <MDBox mt={2} display="flex" columnGap={3} rowGap={1.5} flexWrap="wrap">
@@ -210,12 +206,19 @@ function SessionHeaderStrip({ plan }) {
           </MDBox>
         ))}
       </MDBox>
-      {heldNotes.map((t) => (
-        <MDTypography key={t} variant="caption" component="div" data-testid="held-above-ceiling"
-          sx={{ fontSize: TYPE.body, mt: 1, color: T.caution }}>{`▲ Held at the ceiling: ${t}.`}</MDTypography>
-      ))}
     </>
   );
+}
+
+/** A held side whose current in force is above its safe ceiling is held AT the ceiling (decision
+ * 308); the server's sentence says so. Printed in the next-visit section's always-visible lead, in
+ * the warning colour: the section starts closed, and this instruction is never folded
+ * (paper/Fold.js; 2026-09-26). */
+export function heldCeilingNotes(plan) {
+  const sides = (plan && plan.sides) || {};
+  return [sides.Left, sides.Right]
+    .map((p) => p && p.held_other_side && p.held_other_side.above_ceiling && p.held_other_side.note)
+    .filter(Boolean).map((t) => String(t).replace(/ -- /g, " — "));
 }
 
 const LABEL = { ...HEAD, alignSelf: "baseline" };
@@ -509,7 +512,9 @@ export default function TitrationSessionCard({ plan, participantUid, homeSchedul
     try {
       const response = await SessionController.query(
         "/api/exportTitrationSheet",
-        { ParticipantId: participantUid, VisitDate: sessionDate },
+        // The page's own request, so the server's rebuild is the stored response the page read
+        // (2026-09-26: the participant and date alone were answered under another key).
+        { ...OPTIMIZER_REQUEST, ParticipantId: participantUid, VisitDate: sessionDate },
         undefined, undefined, "blob");
       const contentType = String((response.headers || {})["content-type"] || "");
       if (contentType.indexOf("json") !== -1) {
@@ -622,8 +627,21 @@ export default function TitrationSessionCard({ plan, participantUid, homeSchedul
     </MDBox>
   );
 
+  // The two safety lines stay in view while the section is closed (2026-09-26).
+  const heldNotes = plan.available ? heldCeilingNotes(plan) : [];
+  const homeInForce = homeSchedule ? inForceAboveCeiling(homeSchedule) : null;
+  const lead = (heldNotes.length || homeInForce) ? (
+    <MDBox data-testid="next-visit-safety-lead">
+      {heldNotes.map((t) => (
+        <MDTypography key={t} variant="caption" component="div" data-testid="held-above-ceiling"
+          sx={{ fontSize: TYPE.body, mt: 0.5, color: T.caution }}>{`▲ Held at the ceiling: ${t}.`}</MDTypography>
+      ))}
+      <InForceAboveCeilingLine inForce={homeInForce} />
+    </MDBox>
+  ) : null;
+
   return (
-    <Section id="next-visit" question={TITRATION_CARD_TITLE} answer={answer} collapsible>
+    <Section id="next-visit" question={TITRATION_CARD_TITLE} answer={answer} lead={lead} collapsible>
         {exportControls}
 
         {exportState.status === "error" && (
@@ -769,7 +787,7 @@ export default function TitrationSessionCard({ plan, participantUid, homeSchedul
         )}
         {/* The home schedule, inside this section below a hairline (the PI amended his ruling of
             2026-09-12 on 2026-09-26: the visit and the weeks after it are one plan). */}
-        {homeSchedule && <HomeScheduleSection schedule={homeSchedule} />}
+        {homeSchedule && <HomeScheduleSection schedule={homeSchedule} showInForce={false} />}
     </Section>
   );
 }

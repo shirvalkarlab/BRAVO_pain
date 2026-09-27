@@ -264,3 +264,72 @@ describe("one band on the whole page (the live bug of 2026-09-26)", () => {
     expect(withheldIfOtherBand({ data: SUM_L }, BC_L, "summary").data).toBe(SUM_L);
   });
 });
+
+describe("the headline never reads better than the server's own verdict (decision 242: one verdict)", () => {
+  // The server's verdict is `licensed` / `verdict`; it is false / "unsupported" whenever the analysis
+  // appended a reason of its own (`verdict_detail.blockers`: a step that raised, a capture current
+  // above the module limit, a control authority that could not be estimated), even when every device
+  // rule passes and the three signs agree. The card read only the device rules and the signs, so such
+  // a report printed "Device allows it; evidence supports it" with the Details fold closed.
+  // eslint-disable-next-line global-require
+  const PAL = require("./palette").default;
+  const blockedForAnotherReason = () => {
+    const rep = clone(LEFT);
+    rep.licensed = false;
+    rep.verdict = "unsupported";
+    rep.verdict_detail.provisional = false;
+    rep.verdict_detail.blockers = ["replay failed: ValueError: no samples in the replay window"];
+    return rep;
+  };
+
+  it("a non-device blocker makes the headline 'not supported', never 'evidence supports it'", () => {
+    const rep = blockedForAnotherReason();
+    const s = decisionStatus(rep);
+    expect(s.key).toBe("unsupported");
+    expect(s.headline).not.toMatch(/supports it/);
+    const { container } = card(rep, SUM_L, BC_L);
+    const t = visibleText(container);
+    expect(t).not.toMatch(/Device allows it; evidence supports it/);
+    expect(t).toMatch(/Device allows it; the analysis does not support it/);
+  });
+
+  it("the blocker's own sentence is in the open and the Details fold opens", () => {
+    const { container } = card(blockedForAnotherReason(), SUM_L, BC_L);
+    expect(detailsOpen(container)).toBe(true);
+    expect(visibleText(container)).toMatch(/replay failed: ValueError: no samples in the replay window/);
+  });
+
+  it("the server saying not licensed is enough, even with no blocker sentence", () => {
+    const rep = clone(LEFT);
+    rep.licensed = false;
+    rep.verdict = "unsupported";
+    expect(decisionStatus(rep).key).toBe("unsupported");
+  });
+
+  it("a blocker sentence alone is enough, for a response that predates the licensed field", () => {
+    const rep = blockedForAnotherReason();
+    delete rep.licensed;
+    delete rep.verdict;
+    expect(decisionStatus(rep).key).toBe("unsupported");
+  });
+
+  it("the non-device blocker is not drawn as a device refusal: no red, no red bar", () => {
+    const s = decisionStatus(blockedForAnotherReason());
+    expect(s.ink).not.toBe(PAL.failText);
+    expect(bulletsOf(card(blockedForAnotherReason(), SUM_L, BC_L).container, "cl-bullets-red")).toEqual([]);
+  });
+
+  it("a device refusal keeps its red ✕ wording whatever else blocks", () => {
+    const rep = clone(RIGHT);
+    rep.verdict_detail.blockers = ["replay failed: ValueError"];
+    const s = decisionStatus(rep);
+    expect(s.key).toBe("refused");
+    expect(s.ink).toBe(PAL.failText);
+    expect(s.glyph).toBe("✕");
+  });
+
+  it("the live left response, which the server licenses, still reads supported (provisional)", () => {
+    expect(LEFT.licensed).toBe(true);
+    expect(decisionStatus(LEFT).key).toBe("supported_provisional");
+  });
+});

@@ -56,6 +56,30 @@ const SIDE_INK = { Left: SIDE.left, Right: SIDE.right };
 // A small filled dot in a side's colour, beside the words that name it (a mark, not text colour).
 const DOT = { display: "inline-block", width: 8, height: 8, borderRadius: "50%", marginRight: 4 };
 
+/** How the refit bridge ratio compares with the one in effect, and how far its medians spread, worked
+ *  out from the payload (review of 2026-09-26: this used to be fixed text, "within 1 percent of the
+ *  ratio in effect, and flat across centres and contact pairs", which a new table could contradict). */
+function bridgeComparison(br, deployed) {
+  const parts = [];
+  const r = Number(br && br.ratio);
+  const d = Number(deployed && deployed.bridge_ratio);
+  if (Number.isFinite(r) && Number.isFinite(d) && d > 0) {
+    const pct = (r / d - 1) * 100;
+    parts.push(Math.abs(pct) < 0.05 ? ", the same as the ratio in effect"
+      : `, ${Math.abs(pct).toFixed(1)} percent ${pct < 0 ? "below" : "above"} the ratio in effect`);
+  }
+  const span = (rows) => {
+    const v = (rows || []).map((x) => Number(x.ratio)).filter(Number.isFinite);
+    return v.length ? [Math.min(...v), Math.max(...v)] : null;
+  };
+  const c = span(br && br.per_centre);
+  const p = span(br && br.per_channel);
+  if (c && p) {
+    parts.push(`; the median per band centre runs from ${c[0].toFixed(2)} to ${c[1].toFixed(2)} and per contact pair from ${p[0].toFixed(2)} to ${p[1].toFixed(2)}`);
+  }
+  return `${parts.join("")}.`;
+}
+
 function CalibrationInEffectPanel({ participantUid }) {
   const blocksRef = useRef(null);
   const bridgeRef = useRef(null);
@@ -271,7 +295,7 @@ function CalibrationInEffectPanel({ participantUid }) {
                   {`Composed, not measured: ${fmt(deployed.k, 2)} ÷ ${fmt(deployed.bridge_ratio, 3)}, the ratio in effect between the `
                     + `PSD band power and TD band power on the same survey and contact. `
                     + `Refit on ${br.n_surveys} surveys, ${br.n} of ${br.n_pairs} contact-and-centre pairs after the same 5 MAD rule: `
-                    + `${fmt(br.ratio, 3)}, within 1 percent of the ratio in effect, and flat across centres and contact pairs.`}
+                    + `${fmt(br.ratio, 3)}${bridgeComparison(br, deployed)}`}
                 </MDTypography>
               </MDBox>
               <MDBox mt={1}>

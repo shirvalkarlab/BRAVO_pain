@@ -74,7 +74,7 @@ side alone on that table, everything else at defaults:
 So today's page recommends a Right pulse width the Right side has been at on exactly 1 of 92 epochs
 (`epochs_per_pw` under its own column: 100 µs → 1), fitted on strata that mix Right pulse widths of
 60 through 180 µs. The design document of this morning
-(`artifacts/design_2026-09-12_stim_optimizer_page_redesign.md` §2) found the symptom ("100 µs on
+(`docs/archive/2026-09-26/design/design_2026-09-12_stim_optimizer_page_redesign.md` §2; archived 2026-09-26) found the symptom ("100 µs on
 the Left and 150 µs on the Right") and marked the −50 µs on the page; this is the cause.
 
 **Where it is visible.** Stim Optimizer page: the decision strip at the top ("search prefers" for

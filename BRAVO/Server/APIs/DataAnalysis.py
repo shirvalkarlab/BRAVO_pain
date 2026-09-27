@@ -1988,13 +1988,17 @@ class ExportTitrationSheet(RestViews.APIView):
             })
 
         participant = models.Participant.find(uid=request.data["ParticipantId"])
-        participant_code = (getattr(participant, "name", None) or "").strip() or "RCS08"
+        # The sheet is named by a study code only; a record whose name is a person's name, or
+        # empty, gets a neutral name from the participant id (`sheet_export.participant_label`,
+        # 2026-09-26). No fallback to another participant's code.
+        participant_code = (getattr(participant, "name", None) or "").strip()
 
         try:
             from modules.StimOptimizer import sheet_export
             from modules.StimOptimizer import google_sheets_client as gsc
             drive = gsc.client_if_available()
-            result = sheet_export.export(plan, participant_code, request.data["VisitDate"], drive=drive)
+            result = sheet_export.export(plan, participant_code, request.data["VisitDate"], drive=drive,
+                                         participant_uid=request.data["ParticipantId"])
         except Exception as e:
             return Response(status=200, data={
                 "available": False,

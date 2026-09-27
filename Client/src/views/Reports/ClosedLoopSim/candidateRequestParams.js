@@ -80,7 +80,9 @@ function computedBand(data, kind) {
     const id = data.identity || {};
     return id.contact ? { contact: id.contact, hz: id.center_freq_hz } : null;
   }
-  const c = (data.candidates || [])[0];
+  // The stored simulation names its band in `candidate` (adapter.write_simulation); the report in
+  // `candidates[0]`.
+  const c = kind === "simulation" ? data.candidate : (data.candidates || [])[0];
   return c && c.channel ? { contact: c.channel, hz: c.center_hz } : null;
 }
 

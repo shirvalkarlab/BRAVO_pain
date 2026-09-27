@@ -1,5 +1,12 @@
 # Design review: the Stim Optimizer and Biomarkers pages (2026-09-26)
 
+> **Status, 2026-09-26 (added at the planning and design clean-up).** Built: the Stim Optimizer
+> layout as decision 303 and the Biomarkers layout as decision 304. The style this review proposed
+> (sizes, greys, colours, card chrome) was then replaced by the minimalist redesign, decisions
+> 320-325, whose one current specification is
+> `artifacts/design_2026-09-26_minimalist_redesign/SPEC.md`. Where the two disagree, SPEC.md and
+> the decision log win. This review is kept here because page code and its tests cite it.
+
 This review is read-only. It changes no code. It applies the PI's ruling for the Closed-Loop page
 of 2026-09-26 to the other two analysis pages:
 

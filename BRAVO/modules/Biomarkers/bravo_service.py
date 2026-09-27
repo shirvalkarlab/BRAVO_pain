@@ -1806,7 +1806,7 @@ def warm_shared_raw_cache(participant_uid, *, centers=_LSB_SPECTRUM_CENTERS):
 def _live_pro_lsb_spectrum(participant_uid, pro_times, channels, td_recordings, event_psd_blocks,
                            *, montage_psd_blocks=None, centers=_LSB_SPECTRUM_CENTERS,
                            tol_s=None, td_quantity_s=None, allow_window_reuse=False,
-                           return_spectra=True):
+                           return_spectra=True, match_direction="nearest"):
     """LIVE per-(channel, PRO) LSB spectrum: build the match-agnostic raw cache once, then match PROs
     against it per channel with availability.live_lsb_spectrum_match. Drop-in for the spectral scan:
     returns { raw_channel: [ per-PRO spectrum dict, ... ] } in the SAME contract it consumes.
@@ -1819,7 +1819,12 @@ def _live_pro_lsb_spectrum(participant_uid, pro_times, channels, td_recordings, 
     `return_spectra=False` (the caller that only needs `stats`, e.g. run_for_participant's live
     matching-controls caption) skips building the per-PRO record list in
     availability.live_lsb_spectrum_match entirely; `spectra` comes back `{}` and every `stats` value
-    is unchanged, since stats never depended on the records in the first place."""
+    is unchanged, since stats never depended on the records in the first place.
+
+    `match_direction` reaches the matcher (review of 2026-09-26): without it the page's "Last
+    computed ..." caption was always counted symmetrically, while the scan under "prior" pairs a
+    recording only with a report after it. Only "prior" changes the matcher's answer; "nearest"
+    (the matcher's own default) and "pro_first" both match symmetrically there."""
     pt = np.asarray([] if pro_times is None else pro_times, dtype=float)
     if pt.size == 0 or not channels:
         return {}, {}
@@ -1834,7 +1839,8 @@ def _live_pro_lsb_spectrum(participant_uid, pro_times, channels, td_recordings, 
         try:
             recs, st = availability.live_lsb_spectrum_match(
                 pt, raw_cache, tol_s=tol_s, td_quantity_s=td_quantity_s,
-                allow_window_reuse=allow_window_reuse, want_records=return_spectra)
+                allow_window_reuse=allow_window_reuse, want_records=return_spectra,
+                match_direction=match_direction)
             if return_spectra:
                 spectra[raw_ch] = recs
             stats[raw_ch] = st
@@ -4556,7 +4562,8 @@ def run_for_participant(request_data):
             list(td or []) + list(_scan_psd_list or []),
             _scan_event_blocks, montage_psd_blocks=_scan_montage_blocks,
             tol_s=_tol_s, td_quantity_s=match_extent_s, allow_window_reuse=allow_window_reuse,
-            return_spectra=False)  # only live_match_stats (the matching-controls caption) is used
+            return_spectra=False,  # only live_match_stats (the matching-controls caption) is used
+            match_direction=match_direction)
 
     out = _serialize_run(run, _compute_analytics(run, chronic, pro_df, label_metric=label_metric,
                                                  kmeans_features=kmeans_features,

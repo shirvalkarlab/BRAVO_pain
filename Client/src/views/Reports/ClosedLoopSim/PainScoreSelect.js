@@ -26,6 +26,17 @@ export function painScoreSourceText(value, bandDefault, options = PAIN_SCORE_OPT
     : `Chosen here; the band was chosen on ${painScoreLabel(d.key, options)}.`;
 }
 
+/**
+ * The pain score the page head names: the report's own label when a report is on screen, else the
+ * dropdown's choice by its label (while the report loads, or is withheld for another band or score).
+ * The old fallback read a `label` that `bandPainScore` never returns, so the head dropped the score.
+ */
+export function pageHeadPainLabel(reportData, painScore, options = PAIN_SCORE_OPTIONS) {
+  const own = reportData && reportData.pain_score && reportData.pain_score.label;
+  if (own) return own;
+  return painScore ? painScoreLabel(painScore, options) : null;
+}
+
 export default function PainScoreSelect({ value, bandDefault, options, onChange }) {
   const opts = (options && options.length) ? options : PAIN_SCORE_OPTIONS;
   return (
