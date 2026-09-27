@@ -3860,10 +3860,11 @@ _PRO_TIME_COL = "date_time_s1_daily"
 # server records local time, so a summer 2pm and a winter 2pm both read "14:00" in the export). The
 # study is entirely in California, so the correct UTC instant is obtained by localizing each naive
 # string to America/Los_Angeles and converting to UTC — this applies +7 h (PDT) or +8 h (PST)
-# automatically from the tz database's real DST transition dates. The DEVICE side needs no such fix:
-# per the Medtronic Percept white paper, all report data (BrainSense PSD/TD, patient events) is
-# already stored in UTC (ISO-8601), and an internal consistency check confirmed the stored epochs
-# match true CA wall-clock to <1 min in every DST era. So ONLY the PRO clock is corrected here.
+# automatically from the tz database's real DST transition dates. The DEVICE side is handled
+# elsewhere: its dates are on the device's own clock, which ran up to 2.1 h ahead on RCS08, and
+# every one is converted to the tablet clock (UTC) when the export is read
+# (`MedtronicPercept/TabletClock.py`, decision 328). After that, REDCap, clinic-sheet and device
+# times agree to a median of 0.3 min (decision 330). So only the PRO clock is corrected here.
 # The zone is DEFINED in `routines/local_time.py` (Django-free, so the adapter and the pipeline
 # can read the same one) and bound here under the name this file always used (review B1).
 _PRO_LOCAL_TZ = local_time.PRO_LOCAL_TZ
