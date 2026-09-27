@@ -803,6 +803,13 @@ def checkMissingPackage(Data):
                 raise Exception("Bad Format in TicksInMs")
             
             TimePerPacket = np.median(ChangesInMs)
+            # THE DEVICE CLOCK IS USED HERE FOR ONE THING ONLY: THE LENGTH OF A GAP INSIDE THIS BLOCK
+            # (the PI, 2026-09-26). A lost packet shows as a tick step longer than the usual one, and
+            # the zero-fill is as long as that step. No time of day is taken from the ticks: the
+            # block starts at its FirstPacketDateTime, converted to the tablet's clock before it
+            # reaches this function (TabletClock.py), and every sample sits at start + index / rate.
+            # The packet sequence numbers cannot do this job: they are one counter shared by every
+            # stream on the link, so within one channel they step by 1, 2, 3 or more.
             MissingPacket = np.where(ChangesInMs > TimePerPacket)[0] + 1
             TDSequences = np.arange(len(Data["StreamingTD"][nStream]["Ticks"]))
             
@@ -830,6 +837,9 @@ def checkMissingPackage(Data):
                 print("TicksInMs Reversed")
                 raise Exception("Bad Format in TicksInMs for Power Channel")
             
+            # THE DEVICE CLOCK GIVES ONLY THE SPACING OF THE READINGS INSIDE THIS BLOCK (`Time`,
+            # counted from 0) and the length of a gap between them (the PI, 2026-09-26); the block's
+            # start is its FirstPacketDateTime on the tablet's clock (TabletClock.py).
             TimePerPacket = np.percentile(ChangesInMs,5)
             MissingPacket = np.where(ChangesInMs > TimePerPacket)[0] + 1
             
@@ -1606,18 +1616,15 @@ def extractTimeDomainStreamingData(JSON, sourceData=dict()):
                     Data["StreamingTD"][nStream]["Missing"] = np.concatenate((Data["StreamingTD"][nStream]["Missing"][:startIndex],np.ones(np.sum(insertionPackets)),Data["StreamingTD"][nStream]["Missing"][startIndex:]))
                 print(f"Warning: Missing sequence occured for Stream #{nStream}, Data insertion complete. Check ['Missing'] field.")
 
-        Data["StreamingTD"][0]["FirstPacketDateTime"] += (Data["StreamingTD"][0]["Ticks"][0] % 1000) / 1000
-        if len(Data["StreamingTD"]) > 1:
-            for nStream in range(1, len(Data["StreamingTD"])):
-                while Data["StreamingTD"][nStream]["Ticks"][0] - Data["StreamingTD"][nStream-1]["Ticks"][0] < 0:
-                    Data["StreamingTD"][nStream]["Ticks"] += 3276800
-
-            for nStream in range(1, len(Data["StreamingTD"])):
-                UpdatedTimestamp = Data["StreamingTD"][0]["FirstPacketDateTime"] + (Data["StreamingTD"][nStream]["Ticks"][0] - Data["StreamingTD"][0]["Ticks"][0]) / 1000
-                if np.abs(UpdatedTimestamp - Data["StreamingTD"][nStream]["FirstPacketDateTime"]) > 10:
-                    print(f"Warning: Stream {nStream} FirstPacketDateTime is not aligned with Stream 0, off by {Data['StreamingTD'][nStream]['FirstPacketDateTime'] - UpdatedTimestamp}")
-                else:
-                    Data["StreamingTD"][nStream]["FirstPacketDateTime"] = UpdatedTimestamp
+        # EVERY BLOCK STARTS AT ITS OWN `FirstPacketDateTime`, NEVER AT A TIME TAKEN FROM THE TICKS
+        # (the PI, 2026-09-26: no time from the device clock). The tick counter (`Ticks`) no longer
+        # adds its fraction of a second to block 0, and no later block is re-timed as block 0 plus
+        # the tick difference (on RCS08 that had moved 182 of 254 stored blocks by a median 0.75 s,
+        # at most 9.8 s). Ticks still place samples INSIDE a block: the zero-fill of missing packets
+        # above reads their jumps, which never moves the block's first sample.
+        # `FirstPacketDateTime` is written by the device on its own clock; by the time it reaches
+        # this function every reader has converted it to the tablet's clock (TabletClock.py,
+        # through DataCurator.loadPerceptJSON; DEVICE_percept_rc.md, parsing trap 2).
                 
     for key in Data.keys():
         sourceData[key] = Data[key]
@@ -1721,18 +1728,9 @@ def extractPowerDomainStreamingData(JSON, sourceData=dict()):
                 Data["StreamingPower"][nStream]["Stimulation"] = processedStimulation
                 Data["StreamingPower"][nStream]["Time"] = newTimestamp
 
-        Data["StreamingPower"][0]["FirstPacketDateTime"] += (Data["StreamingPower"][0]["Ticks"][0] % 1000) / 1000
-        if len(Data["StreamingPower"]) > 1:
-            for nStream in range(1, len(Data["StreamingPower"])):
-                while Data["StreamingPower"][nStream]["Ticks"][0] - Data["StreamingPower"][nStream-1]["Ticks"][0] < 0:
-                    Data["StreamingPower"][nStream]["Ticks"] += 3276800
-                    
-            for nStream in range(1, len(Data["StreamingPower"])):
-                UpdatedTimestamp = Data["StreamingPower"][0]["FirstPacketDateTime"] + (Data["StreamingPower"][nStream]["Ticks"][0] - Data["StreamingPower"][0]["Ticks"][0]) / 1000
-                if np.abs(UpdatedTimestamp - Data["StreamingPower"][nStream]["FirstPacketDateTime"]) > 10:
-                    print(f"Warning: Stream {nStream} FirstPacketDateTime is not aligned with Stream 0, off by {Data['StreamingPower'][nStream]['FirstPacketDateTime'] - UpdatedTimestamp}")
-                else:
-                    Data["StreamingPower"][nStream]["FirstPacketDateTime"] = UpdatedTimestamp
+        # Every power block starts at its own `FirstPacketDateTime`, as the time-domain blocks above
+        # (the PI, 2026-09-26). The ticks give the readings' times WITHIN the block (`Time`, from 0)
+        # and the interpolation over missing readings; they set no block's start.
 
     for key in Data.keys():
         sourceData[key] = Data[key]

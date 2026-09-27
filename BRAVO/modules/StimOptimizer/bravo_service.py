@@ -125,7 +125,7 @@ MANIFEST_KIND = "stim_optimizer_manifest"
 AMPLITUDE_KIND = "amplitude_effect_by_band"
 GROUND_TRUTH_KIND = "ground_truth_verdict"
 # v2 (2026-09-26): the response key names the stored clinic-sheet steps (`_clinic_steps_key`).
-_RULE_VERSION = "v2_clinic_steps_in_response_key"
+_RULE_VERSION = "v2_clinic_steps_in_response_key_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 #: Response fields that describe the run that produced the response, not its results.
 #: Tests point this at a directory of their own; passed through to the one store.

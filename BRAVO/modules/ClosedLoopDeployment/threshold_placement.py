@@ -28,7 +28,7 @@ from typing import Any, Dict, Optional, Sequence
 
 import numpy as np
 
-RULE_VERSION = "v1_record_pair_median_centre_design_rule_separation"   # decision 180, 2026-09-15
+RULE_VERSION = "v1_record_pair_median_centre_design_rule_separation_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py #   # decision 180, 2026-09-15
 
 
 def median_level(t, power, *, averaging_s: float) -> Dict[str, Any]:

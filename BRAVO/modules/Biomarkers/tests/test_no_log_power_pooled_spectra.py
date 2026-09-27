@@ -146,7 +146,8 @@ def test_the_matrix_store_key_names_the_power_scale_so_no_decibel_entry_is_serve
     # never come back is the decibel rule before v3
     assert bs.STABILITY_GRID_RULE_VERSION in ("v3_raw_power_feature", "v4_sheet_ratings_in_setup",
                                             "v5_one_block_per_report",
-                                            "v6_se_clustered_on_report"), \
+                                            "v6_se_clustered_on_report",
+                                            "v6_se_clustered_on_report_tablet_clock"), \
         bs.STABILITY_GRID_RULE_VERSION
 
 

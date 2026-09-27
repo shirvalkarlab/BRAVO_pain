@@ -23,7 +23,7 @@ from . import three_source_response as _3src
 KIND = "ground_truth_verdict"
 from . import post_ramp as _post_ramp
 
-RULE_VERSION = "v5_both_legs_joined_recordings_post_ramp_margin_" + _post_ramp.version_tag()   # v4: decision 197   # v3: the voltage-trace route carries the margin, on or off (2026-09-12)
+RULE_VERSION = "v5_both_legs_joined_recordings_post_ramp_margin_tablet_clock_" + _post_ramp.version_tag()   # v4: decision 197   # v3: the voltage-trace route carries the margin, on or off (2026-09-12)
 
 ROUTE_DEVICE = "device"
 ROUTE_VOLTAGE_TRACE = "voltage_trace_calibrated"

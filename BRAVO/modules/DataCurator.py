@@ -38,6 +38,7 @@ from Server import models
 from modules.DecodeCommon import data_start as _data_start
 from modules.NeuroPace.PersystDecoder import parsePersystRecording
 from modules.MedtronicPercept.Session import decodeMedtronicJSON
+from modules.MedtronicPercept import TabletClock
 from modules.ExternalDevices.DelsysTrigno import decodeMDATData, decodeHPFCSVData
 from modules.ExternalDevices.BRAVOfflineWinUI import decodeMDATv2
 from modules.ExternalDevices.MATLAB import decodeMATLABFile
@@ -56,6 +57,72 @@ def loadCacheFile(source_file):
     rawBytes = Database.loadSourceFile(source_file.pointer, source_file.hashed, bytes=True)
     rawBytes = secureEncoder.decrypt(rawBytes)
     return rawBytes
+
+def clock_anchor_table(device_uid=None, owner=None, extra=()):
+    """The clock anchors of one device's stored Percept exports (`SourceFile.metadata["ClockAnchor"]`,
+    written at ingest), plus `extra`. By device where it is known, since clock blocks are numbered
+    per device; by owner otherwise."""
+    if device_uid:
+        q = models.SourceFile.objects.filter(device=device_uid)
+    elif owner is not None:
+        q = models.SourceFile.objects.filter(owner=owner)
+    else:
+        q = models.SourceFile.objects.none()
+    anchors = [(m or {}).get("ClockAnchor") for m in q.values_list("metadata", flat=True)]
+    return TabletClock.AnchorTable([a for a in anchors if a] + [a for a in extra if a])
+
+
+def clock_anchor_tables(owner):
+    """{device uid: AnchorTable} over an owner's stored exports, for a caller that reads many of
+    them; the key "" holds the exports with no device recorded. One query."""
+    rows = {}
+    for dev, md in models.SourceFile.objects.filter(owner=owner).values_list("device", "metadata"):
+        a = (md or {}).get("ClockAnchor")
+        if a:
+            rows.setdefault(dev or "", []).append(a)
+    return {d: TabletClock.AnchorTable(a) for d, a in rows.items()}
+
+
+def loadPerceptJSON(source_file, table=None, table_from=None):
+    """A stored Percept export with EVERY time on the tablet's clock (the PI, 2026-09-26: no time
+    from the implanted device's clock). THE ONE WAY a Percept export is read: every device-clock
+    field is converted by `TabletClock.convert_export` against the device's anchor table, and the
+    file on disk is never changed. A caller reading many exports of one device builds the table
+    once (`clock_anchor_table`) and passes it; the ingest passes `table_from`, which builds the
+    table from the export itself; otherwise it is read here."""
+    JSON = json.loads(loadCacheFile(source_file))
+    if isinstance(JSON, dict) and "SessionDate" in JSON and "DeviceInformation" in JSON:
+        if table is None and table_from is not None:
+            table = table_from(JSON)
+        if table is None:
+            dev = getattr(source_file, "device", "") or None
+            table = clock_anchor_table(device_uid=dev, owner=None if dev else getattr(source_file, "owner", None))
+        TabletClock.convert_export(JSON, table)
+    return JSON
+
+
+def _ingest_clock_table(JSON, source_file, device=None):
+    """The anchor table for an export being ingested: the stored exports of the same device (by the
+    device passed in, or by the serial number the export names, deidentified as the ingest stores
+    it), plus this export's own anchor."""
+    own = TabletClock.export_anchor(JSON)
+    uids = []
+    if device is not None:
+        uids = [device.uid]
+    else:
+        try:
+            serial = JSON["DeviceInformation"]["Final"]["NeurostimulatorSerialNumber"]
+            if source_file.metadata.get("automatic_deidentification"):
+                serial = hmac.new(HASH_KEY.encode("utf8"), serial.encode("utf-8"), hashlib.sha256).hexdigest()
+            uids = list(models.DBSDevice.objects.filter(serial_number=serial).values_list("uid", flat=True))
+        except Exception:
+            uids = []
+    anchors = []
+    for u in uids:
+        anchors += [(m or {}).get("ClockAnchor") for m in
+                    models.SourceFile.objects.filter(device=u).values_list("metadata", flat=True)]
+    return own, TabletClock.AnchorTable([a for a in anchors if a] + [own])
+
 
 def saveCacheFile(filename, metadata, raw_bytes):
     source_file = models.SourceFile.create(type=metadata["UploadType"], metadata=metadata)
@@ -141,10 +208,20 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
         print(f"[decode-timing] {label}: {now - _last[0]:.3f}s (total {now - _t0:.3f}s)", flush=True)
         _last[0] = now
 
-    rawBytes = loadCacheFile(source_file)
-    _dstage("loadCacheFile (read + decrypt cache)")
-    JSON = json.loads(rawBytes)
-    _dstage("json.loads")
+    # Every device-clock time converted to the tablet's clock before anything reads it (the PI,
+    # 2026-09-26); the table spans the device's stored exports so a re-exported entry converts to
+    # the same time in every export. This export's own anchor is kept on its row for the next one.
+    _own = {}
+    def _table_from(raw):
+        a, t = _ingest_clock_table(raw, source_file, device=device)
+        _own["anchor"] = a
+        return t
+    JSON = loadPerceptJSON(source_file, table_from=_table_from)
+    if _own.get("anchor"):
+        # the anchor, and the entries this export carried first (later exports look them up)
+        source_file.metadata["ClockAnchor"] = dict(
+            _own["anchor"], first_carried=(JSON.get("_TabletClock") or {}).get("first_carried") or {})
+    _dstage("loadPerceptJSON (read + decrypt + tablet clock)")
     if source_file.metadata["automatic_concatenation"]:
         JSON["AutomaticStreamingFix"] = True
     else:

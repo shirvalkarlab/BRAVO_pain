@@ -80,8 +80,7 @@ class Command(BaseCommand):
             # hz_map keyed by hemi_token; the two schedules also keyed by hemi_token (they walk
             # GroupHistory, so they need the whole JSON, not just JSON["Groups"]).
             try:
-                rawBytes = DataCurator.loadCacheFile(source_file)
-                JSON = json.loads(rawBytes)
+                JSON = DataCurator.loadPerceptJSON(source_file)   # tablet clock (2026-09-26)
                 hz_map = _chronic_center_freqs(JSON.get("Groups"))
                 freq_sched = _chronic_freq_schedule(JSON)
                 contact_sched = _chronic_contact_schedule(JSON)

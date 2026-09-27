@@ -68,7 +68,7 @@ def _tail(v):
 #: Bumped when the scanner's output changes shape or meaning. It is part of the stored summary's
 #: key, so a summary built by older scanner code is never served as if this code had built it
 #: (decision 25: the key carries every constant the stored numbers depend on).
-SUMMARY_RULE_VERSION = "v3_session_report_summary_d32_per_hemisphere_and_adaptive_limits"
+SUMMARY_RULE_VERSION = "v3_session_report_summary_d32_per_hemisphere_and_adaptive_limits_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 #: The store kind. Registered as RAW in ``CacheStore.provenance``: it is read straight off the
 #: device export and no module's choice produced it, so it can never close a provenance cycle.
@@ -456,9 +456,12 @@ def _decoded_documents(rows, loader):
         stamp = report_stamp(getattr(sf, "name", "") or "")
         try:
             raw = loader(sf)
-            if isinstance(raw, (bytes, bytearray)):
-                raw = raw.decode("utf-8")
-            d = json.loads(raw)
+            if isinstance(raw, dict):                            # already decoded (and converted)
+                d = raw
+            else:
+                if isinstance(raw, (bytes, bytearray)):
+                    raw = raw.decode("utf-8")
+                d = json.loads(raw)
         except Exception:                                        # noqa: BLE001
             d = None
         yield stamp, d
@@ -486,7 +489,10 @@ def summary_from_ingested(participant, *, rows=None, loader=None):
         rows = session_report_files(participant)
     if loader is None:
         from modules import DataCurator as _DC
-        loader = _DC.loadCacheFile
+        # every time on the tablet's clock (the PI, 2026-09-26), one anchor table per device
+        _tables = _DC.clock_anchor_tables(participant if hasattr(participant, "uid") else
+                                          _DC.models.Participant.find(uid=participant))
+        loader = lambda sf: _DC.loadPerceptJSON(sf, table=_tables.get(getattr(sf, "device", "") or ""))
     sig = file_set_signature(rows)
     summary = scan_documents(_decoded_documents(rows, loader))
     newest = newest_by_stamp(rows)

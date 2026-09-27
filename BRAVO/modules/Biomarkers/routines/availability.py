@@ -15,9 +15,11 @@ The five Percept products collapse onto these three lanes:
     Chronic BrainSense (Timeline) / Power-Domain      -> bandpower
     BrainSense Survey / Baseline+Stim Montages /Event -> psd
 
-Timestamps reuse each recording's `StartTime` (epoch float or ISO) — the saver already stamps it
-from the JSON `FirstPacketDateTime`, so there is NO timestamp bug in the production path (the bug
-was only in the agent's raw-JSON probe, which filtered montage channels by the wrong label).
+Timestamps reuse each recording's `StartTime` (epoch float or ISO): the JSON `FirstPacketDateTime`
+of the recording's first block, which the export writes on the DEVICE's clock and the platform
+converts to the TABLET's clock before decoding (`MedtronicPercept/TabletClock.py`; the PI,
+2026-09-26: no time from the device clock; DEVICE_percept_rc.md, parsing trap 2). A sample's time is
+that start plus its index over the sampling rate.
 """
 import datetime
 import warnings

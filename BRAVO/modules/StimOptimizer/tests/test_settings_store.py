@@ -331,6 +331,9 @@ def test_the_real_parser_counts_an_unreadable_file_and_the_stream_is_then_not_st
             raise OSError("cannot decrypt")
         return _json.dumps(good)
     curator.loadCacheFile = load
+    # the converting loader and its anchor tables (2026-09-26); these fake exports carry no device clock
+    curator.loadPerceptJSON = lambda sf, table=None: _json.loads(load(sf))
+    curator.clock_anchor_tables = lambda owner: {}
     modules_pkg = sys.modules.get("modules") or types.ModuleType("modules")
     modules_pkg.DataCurator = curator
     monkeypatch.setitem(sys.modules, "Server", server)

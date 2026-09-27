@@ -1092,8 +1092,7 @@ def active_sensing_group_facts(participant):
     key = (str(p.uid), str(newest.uid), str(newest.hashed or ""))
 
     def _build():
-        raw = _DC.loadCacheFile(newest)
-        d = _json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
+        d = _DC.loadPerceptJSON(newest)          # times on the tablet's clock (2026-09-26)
         return active_sensing_group_from_report(d)
 
     return _memoised_active_group_facts(key, _build)

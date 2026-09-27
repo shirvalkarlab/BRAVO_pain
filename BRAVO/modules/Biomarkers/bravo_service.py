@@ -1155,7 +1155,7 @@ _RAW_LSB_SHARED_KIND = "raw_lsb_tiles"
 # date -- the implant date is in the key beside this.
 # v3 (2026-09-26): a survey or montage recording's 3 s pieces are labelled "Montage" instead of the
 # fallback "time-domain"; every value is unchanged, the saved copy rebuilds to carry the label.
-_RAW_LSB_RULE_VERSION = "v3_montage_pieces_labelled_montage"
+_RAW_LSB_RULE_VERSION = "v3_montage_pieces_labelled_montage_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 #: ===========================================================================================
 #: THE STORE ITSELF NOW LIVES IN ONE PLACE: `modules/CacheStore/store.py`.
@@ -2944,6 +2944,9 @@ def _psd_matrix_signature_orm(participant_uid, pro_times=None):
     parts.append(f"td_missing:{_TD_MISSING_VERSION}")
     # The power scale of the stored spectra is part of the matrix CONTENT (decision 204).
     parts.append(f"power_scale:{_MATRIX_POWER_SCALE_VERSION}")
+    # Every recording and patient-event time on the tablet's clock (2026-09-26): an event row's
+    # time is in its metadata, which no content hash covers, so the rule is in the key.
+    parts.append("clock:tablet_clock_v1")
     # Rating-centered TD spectra depend on the PRO set, so it is part of the matrix CONTENT: fold the
     # PRO-set signature in (empty when pro_times is None -> the legacy first-window matrix key, fully
     # back-compatible). A PRO add/remove/shift changes this and re-Welch's the TD rows; montage/event
@@ -4203,7 +4206,7 @@ def _rating_centred_scan_index(participant_uid, td_all, psd_all, pain, sensing_i
 #: deterministic decode of the recordings with no other module's choices in it.
 _ACQ_TIMELINE_KIND = "acquisition_timeline"
 # v2 (decision 313): a chronic file spanning the implant date is dated from it, not from 2025-06-18.
-_ACQ_TIMELINE_RULE_VERSION = "v2_spanning_chronic_dated_from_implant"
+_ACQ_TIMELINE_RULE_VERSION = "v2_spanning_chronic_dated_from_implant_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 
 def _acquisition_timeline_key(recording_set):

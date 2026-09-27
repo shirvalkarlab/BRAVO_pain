@@ -102,6 +102,9 @@ def world(monkeypatch):
     server.models = models
     curator = types.ModuleType("modules.DataCurator")
     curator.loadCacheFile = w.load
+    # the converting loader and its anchor tables (2026-09-26); these fake exports carry no device clock
+    curator.loadPerceptJSON = lambda sf, table=None: __import__('json').loads(w.load(sf))
+    curator.clock_anchor_tables = lambda owner: {}
     modules_pkg = types.ModuleType("modules")
     modules_pkg.DataCurator = curator
     monkeypatch.setitem(sys.modules, "Server", server)

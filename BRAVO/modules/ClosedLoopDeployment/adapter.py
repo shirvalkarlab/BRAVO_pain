@@ -991,7 +991,7 @@ def recording_set_signature(participant):
 #: v3 (2026-09-24): the settings stream the entry reads now starts at the implant date.
 #: v4 (2026-09-25): the entry holds the settings stream in place of the design matrix, so no pain
 #: rating is saved under a key that a new report cannot move (CLAUDE.md section 8 rule 5).
-_INPUTS_RULE_VERSION = "v4_inputs_settings_from_implant_date_no_pain_ratings"
+_INPUTS_RULE_VERSION = "v4_inputs_settings_from_implant_date_no_pain_ratings_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 
 def inputs_signature(participant):

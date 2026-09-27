@@ -98,8 +98,8 @@ THERAPY_PAIN_MATCHED_KIND = "therapy_pain_matched"
 #: column and is rebuilt once (about 33 s on RCS08).
 #: v3 (2026-09-24, the PI): the stream starts at the device's implant date (`apply_data_start`);
 #: on RCS08 its first rows had been four January-April 2025 snapshots the patient never received.
-_THERAPY_SETTINGS_RULE_VERSION = "v3_active_groups_from_implant_date"
-_THERAPY_PAIN_MATCHED_RULE_VERSION = "v1_epoch_means"
+_THERAPY_SETTINGS_RULE_VERSION = "v3_active_groups_from_implant_date_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
+_THERAPY_PAIN_MATCHED_RULE_VERSION = "v1_epoch_means_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 #: The frame attribute under which a table carries the key of the store entry it came from, so a
 #: product derived from it can cite it. The same name the Biomarkers module uses for the pain-report
@@ -328,7 +328,7 @@ def _rows_from_session(d) -> list:
 #: ONE ENTRY PER PARTICIPANT (the store's default), replaced whole on each new file set: the donor
 #: is always the previous entry, and an older one could only hold files the newer one also holds.
 THERAPY_SETTINGS_BY_FILE_KIND = "therapy_settings_by_file"
-_THERAPY_SETTINGS_BY_FILE_RULE_VERSION = "v1_rows_per_source_file"
+_THERAPY_SETTINGS_BY_FILE_RULE_VERSION = "v1_rows_per_source_file_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 _PARSE_DIGEST = None
 
@@ -358,9 +358,16 @@ def _settings_parse_digest():
     return _PARSE_DIGEST
 
 
-def _file_identity(sf):
-    """A stored file's identity from its database row: uid and content hash, never its name."""
-    return f"{getattr(sf, 'uid', '')}~{getattr(sf, 'hashed', '')}"
+def _file_identity(sf, clock_tables=None):
+    """A stored file's identity from its database row: uid and content hash, never its name, and
+    the clock anchors its times are converted with (2026-09-26: every time on the tablet's clock),
+    so a file whose converted times would change is parsed again."""
+    ident = f"{getattr(sf, 'uid', '')}~{getattr(sf, 'hashed', '')}"
+    if clock_tables is not None:
+        table = clock_tables.get(getattr(sf, "device", "") or "")
+        anchor = (getattr(sf, "metadata", None) or {}).get("ClockAnchor")
+        ident += "~" + (table.digest_upto(anchor) if table is not None else "no-anchors")
+    return ident
 
 
 def _rows_by_file_signature(participant, source_types, idents, parse_digest):
@@ -401,14 +408,17 @@ def _build_settings_stream(participant, *, source_types=_JSON_SOURCE_TYPES) -> p
     sfs = [sf for sf in models.SourceFile.objects.filter(owner=participant)
            if not (source_types and getattr(sf, "type", None) not in source_types)]
     parse_digest = _settings_parse_digest()
+    # Every export is read with its times on the tablet's clock (the PI, 2026-09-26); the anchor
+    # tables are read once for the whole set.
+    clock_tables = DataCurator.clock_anchor_tables(participant)
     known, donor_key = _rows_by_file_donor(participant, source_types, parse_digest)
     recs, rows_by_file, n_read, n_failed, n_parsed = [], {}, 0, 0, 0
     for sf in sfs:
-        ident = _file_identity(sf)
+        ident = _file_identity(sf, clock_tables)
         rows = known.get(ident)
         if rows is None:
             try:
-                d = json.loads(DataCurator.loadCacheFile(sf))
+                d = DataCurator.loadPerceptJSON(sf, table=clock_tables.get(getattr(sf, "device", "") or ""))
             except Exception as e:                  # encrypted-cache miss, non-JSON, pointer moved
                 n_failed += 1
                 _log.debug("StimOptimizer: could not read SourceFile %s (%s)",

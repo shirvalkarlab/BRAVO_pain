@@ -227,6 +227,45 @@ where streaming writes `ZERO_THREE`.
    array otherwise.
 2. **The tick clock needs a reversal correction**, already implemented in
    `modules/MedtronicPercept/Percept.py`. Reuse that parser rather than writing another.
+   **Which clock each time is on (measured 2026-09-26 on RCS08's 583 exports).** Every dated
+   field in the export -- `FirstPacketDateTime` of every stream, montage, survey and test, the
+   chronic log's, patient events' and event log's `DateTime`, `GroupHistory[].SessionDate`,
+   `RechargeCount[].SessionStartDate`, `EventSummary`'s dates, `Annotations[].Date`,
+   `DeviceDateTime` -- carries `<field>BlockId` and `<field>OffsetInSeconds`, and within one export
+   equals (that export's `DeviceDateTime` minus its `DeviceDateTimeOffsetInSeconds`) plus the
+   entry's own `OffsetInSeconds` (the chronic log 600 s less). **So `FirstPacketDateTime` and
+   every other dated field is the DEVICE's clock.** It ran ahead of the tablet by about +110 s in
+   August 2025, +2,250 s in February 2026 and +7,700 s in September 2026 (547 of 583 exports; the
+   other 36 read within 40 s). **`SessionDate`, the one time with no companions, is the TABLET's
+   clock**: `SessionDate` minus `DeviceDateTimeOffsetInSeconds` holds within 294 s over the whole
+   record. The `OffsetInSeconds` counter is the device's own seconds and is sound. Each export
+   also re-stamps every old entry it carries with its own device reading, so the same entry
+   arrives with a different device time in every export.
+   **Which tablet time pairs with which device reading (measured 2026-09-26, 575 exports of
+   clock block 43).** `SessionEndDate` (the save) pairs with the `Final` reading:
+   `SessionEndDate` - `Final.DeviceDateTimeOffsetInSeconds` moves by a median 1 s between
+   consecutive exports (90th percentile 2 s, at most 7 s). `SessionDate` with the `Initial` reading
+   moves by a median 13 s (at most 266 s). On the device counter Final - Initial exceeds
+   SessionEndDate - SessionDate by a median 34 s: the Initial reading is taken before the tablet
+   stamps SessionDate. Both pairings put all 2,971 stream, montage and test starts inside
+   [SessionDate, SessionEndDate]. 27 exports carry no SessionEndDate and fall back to
+   SessionDate - Initial, which reads a median 34 s (5 to 105 s) later.
+   **How the platform converts (the PI, 2026-09-26: no time from the device clock, for any
+   reason).** One home, `modules/MedtronicPercept/TabletClock.py`: tablet time = the entry's
+   `OffsetInSeconds` + its family's fixed difference (-600 s for the chronic log, 0 otherwise) +
+   (`SessionEndDate` - `Final.DeviceDateTimeOffsetInSeconds`) of the export the entry was derived
+   from, the FIRST export that carries it (a stream, montage or survey: its own export; a chronic
+   reading, event, therapy change or setting snapshot re-sent in later exports: the first one, so
+   every copy converts to one time). Which export carried an entry first is recorded at ingest in
+   `SourceFile.metadata["ClockAnchor"]["first_carried"]` (family, clock block, own offset); the
+   device readings alone cannot say, because an export not fully read carries no logs. Every export
+   is read through `DataCurator.loadPerceptJSON`, which converts every such field before any reader
+   sees it; the raw exports on disk are never changed. An entry in a clock block with no export of
+   its own is left out and counted (on RCS08, 338 event-log and 58 recharge entries).
+   **The device clock gives only lengths inside one block**: the length of a lost packet's gap and
+   the spacing of the power readings (the PI, 2026-09-26). It adds no fraction of a second to a
+   start and re-times no block. The packet sequence numbers cannot do this: they are one counter
+   shared by every stream on the link, so within one channel they step by 1, 2, 3 or more.
 3. **The device writes a sentinel for an invalid power reading.** The unsigned 32-bit maximum,
    4,294,967,295, means "invalid" and is not a measurement. Reject it.
 4. **Montage channel labels differ from streaming labels** — the montage writes
@@ -466,7 +505,9 @@ simultaneous voltage-trace recording.** The PI stated this explicitly.
   spikes but the matched voltage is from a calm moment, the resulting inversions collapse the fit.
 - For alignment **within** a stream, use the shared device tick clock: voltage packets carry
   `TicksInMses` and each power point carries `TicksInMs`. Map sample index to milliseconds and
-  select the power points falling inside the window.
+  select the power points falling inside the window. That is the only use of the ticks: every
+  block's start is its `FirstPacketDateTime` converted to the tablet's clock (parsing trap 2
+  above, since 2026-09-26), never a time taken from the ticks.
 - Gate on stimulation being off **per point**, and reject the invalid sentinel.
 - **The unit of analysis is one record per report, per power stream, per side.** On this record
   that is **131 blocks**. Grouping by the contact instead collapses it to **26**, because a

@@ -75,7 +75,7 @@ except ImportError:                                              # pragma: no co
 
 KIND = "closed_loop_design_rule"
 #: Bumped whenever a change here would change an already-stored table's numbers.
-RULE_VERSION = "v2_onset_grid_capped_at_the_tablets_30s"
+RULE_VERSION = "v2_onset_grid_capped_at_the_tablets_30s_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 LOG2PI = float(np.log(2.0 * np.pi))
 

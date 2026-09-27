@@ -13,7 +13,11 @@ import pytest
 
 from Biomarkers.routines import analytics
 from ClosedLoopDeployment import adapter as AD
-from ClosedLoopDeployment.tests.test_adapter_caching import live_inputs  # noqa: F401  (the cold-build fixture)
+# `_isolate_caches` (autouse) points every store write at the test's own directory; without it
+# the cold build below wrote an entry for the fake participant into the production store root
+# (2026-09-26; decisions 96, 116, 129).
+from ClosedLoopDeployment.tests.test_adapter_caching import (  # noqa: F401  (fixtures)
+    _isolate_caches, live_inputs)
 
 
 def test_the_inputs_key_moves_when_the_transform_constant_moves(monkeypatch):
@@ -78,3 +82,17 @@ def test_the_inputs_entry_rebuilds_once_the_settings_stream_starts_at_implant():
     """The entry holds settings read from the stream, whose rule changed on 2026-09-24 (it starts at
     the implant date) while no recording and no constant did; its own version must move too."""
     assert "implant" in AD._INPUTS_RULE_VERSION
+
+
+def test_this_modules_store_writes_go_to_a_directory_of_the_tests_own(live_inputs, monkeypatch):
+    """The build above writes a real `inputs` entry. On 2026-09-26 it wrote one under the fake
+    participant "PARTICIPANT" into the production store root, because this module took the
+    cold-build fixture without the isolation fixture beside it (the failure of decisions 96, 116
+    and 129). Every write must land under the test's own directory override."""
+    roots = []
+    def spy(kind, participant_uid, signature, payload, **kw):   # records, writes nothing
+        roots.append(kw.get("root"))
+        return False
+    monkeypatch.setattr(AD._cache_store, "store", spy)
+    AD.evidence_inputs_cached("PARTICIPANT", force_refresh=True)
+    assert roots and all(r for r in roots), roots

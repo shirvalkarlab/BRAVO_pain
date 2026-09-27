@@ -34,7 +34,7 @@ import pandas as pd
 KIND = "three_source_run_points"
 from . import post_ramp as _post_ramp
 
-RULE_VERSION = "v5_run_points_both_legs_joined_recordings_post_ramp_margin_" + _post_ramp.version_tag()   # v4: runs with the other side held at any current (decision 197)   # v3: the margin, on or off (2026-09-12)
+RULE_VERSION = "v5_run_points_both_legs_joined_recordings_post_ramp_margin_tablet_clock_" + _post_ramp.version_tag()   # v4: runs with the other side held at any current (decision 197)   # v3: the margin, on or off (2026-09-12)
 
 # The three routes, by the names the comparison uses (three_source_response.SOURCE_*). Spelled here
 # rather than imported so a reader of a stored table can match them without the module.

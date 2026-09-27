@@ -51,7 +51,7 @@ from . import replay as _replay
 KIND = "closed_loop_simulation"
 #: Bumped whenever the numbers a stored entry holds would change: v2 put the pieces on the device
 #: clock before the loop (regrid_stretches), which admitted 114 stretches where v1 ran 16.
-RULE_VERSION = "v7_timing_qualifier"   # v7: each regime names the timing values the record cannot decide (C3, decision 200)
+RULE_VERSION = "v7_timing_qualifier_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py #   # v7: each regime names the timing values the record cannot decide (C3, decision 200)
 # v6_two_timing_runs   # v6: the stored payload carries TWO replays -- "as programmed"
 # and "recommended" timing (T2, 2026-09-13, contest_2026-09-13_SYNTHESIS.md section 4) -- plus a
 # reversal (undone-switch) count on every model; v5: the pooled table's rule version is in the key

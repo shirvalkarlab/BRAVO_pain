@@ -24,7 +24,7 @@ import pandas as pd
 #: changes. The columns themselves are part of the table, so a new column does not need a bump.
 CORRELATION_KIND = "biomarker_band_correlation"
 DISCRIMINATION_KIND = "biomarker_band_discrimination"
-RULE_VERSION = "v1_grid_rows"
+RULE_VERSION = "v1_grid_rows_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 #: Columns copied from the best row for each centre. Anything not in this list stays with the
 #: response (the sentences, the row's own wording), because a table is for numbers.

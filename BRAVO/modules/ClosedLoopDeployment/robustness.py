@@ -116,7 +116,7 @@ except ImportError:                                              # pragma: no co
 
 KIND = "closed_loop_robustness"
 #: Bumped whenever a change here would change an already-stored entry's numbers.
-RULE_VERSION = "v2_onset_grid_capped_at_the_tablets_30s"
+RULE_VERSION = "v2_onset_grid_capped_at_the_tablets_30s_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 #: The grid, carried over from ``s4_bootstrap.py``'s own module-level constants and then CAPPED
 #: at the onset the clinician tablet accepts: 0.00 ms to 30.00 s on both Dual timers, read by the
