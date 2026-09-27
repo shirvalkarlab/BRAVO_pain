@@ -19,19 +19,21 @@
  * sit at 5 min, which is beyond.
  *
  * Wording (the PI, 2026-09-26: printing the corrected q as "p" is a mislabel -- a q and a p are
- * different numbers). The value the server sends as `family_wise_q_8_to_30hz` is a
- * Benjamini-Hochberg q, corrected for testing every one of the 22 band centres; it is now printed
- * as "q 0.03 (p corrected for testing 22 bands)", never as "p". A cell's own uncorrected p is
- * printed as "p". Every p and q prints at most two decimals, "< 0.01" below 0.005 (the PI, 2026-09-26),
- * and "< 0.05" from 0.045 up to 0.05, so nothing rounds onto the cut it did not cross.
+ * different numbers; shortened 2026-09-27 to the "fdr" shorthand). The value the server sends as
+ * `family_wise_q_8_to_30hz` is a Benjamini-Hochberg q, corrected for testing every one of the 22
+ * band centres; it is now printed as "q 0.03 (fdr 22 bands)", never as "p". A cell's own
+ * uncorrected p is printed as "p". Every p and q prints at most two decimals, "< 0.01" below 0.005
+ * (the PI, 2026-09-26), and "< 0.05" from 0.045 up to 0.05, so nothing rounds onto the cut it did
+ * not cross.
  */
 import { T } from "assets/theme/base/tokens";
 
-/** "q 0.03 (p corrected for testing 22 bands)" -- never "p" for a corrected q (the PI,
- *  2026-09-26: a q and a p are different numbers). 22 is the fixed row count the heat maps have
- *  always drawn, the same source `ALLOWANCE` named before this rewording. */
+/** "q 0.03 (fdr 22 bands)" -- never "p" for a corrected q (the PI, 2026-09-26: a q and a p are
+ *  different numbers; 2026-09-27: shortened from "(p corrected for testing 22 bands)" to the
+ *  "fdr" shorthand -- his standing rule now, once context is clear). 22 is the fixed row count the
+ *  heat maps have always drawn, the same source `ALLOWANCE` named before this rewording. */
 function qWords(q, n = 22) {
-  return `q ${fmtQ(q)} (p corrected for testing ${n} bands)`;
+  return `q ${fmtQ(q)} (fdr ${n} bands)`;
 }
 
 /** "9s", "1m" -- the delivered length of signal a row holds. */

@@ -145,10 +145,10 @@ function inkFor(v, lo, hi) {
   return luminance > 0.55 ? PAL.ink : PAL.onFill;
 }
 
-/** "q 0.002 (p corrected for testing 22 bands)": the number the server sends
- *  (`family_wise_q_8_to_30hz`) is a Benjamini-Hochberg q, not a p -- the PI, 2026-09-26: printing
- *  it as "p" is a mislabel. Exported for its own test. */
-export const allowanceWords = (q, n = 22) => (q != null ? `q ${fmtNum(q, 3)} (p corrected for testing ${n} bands)` : null);
+/** "q 0.002 (fdr 22 bands)": the number the server sends (`family_wise_q_8_to_30hz`) is a
+ *  Benjamini-Hochberg q, not a p -- the PI, 2026-09-26: printing it as "p" is a mislabel; 2026-09-27:
+ *  shortened to the "fdr" shorthand. Exported for its own test. */
+export const allowanceWords = (q, n = 22) => (q != null ? `q ${fmtNum(q, 3)} (fdr ${n} bands)` : null);
 
 /** A mark drawn by SHAPE only, in the ink (SPEC section 3.2): no green, no red. */
 function ShapeMark({ glyph, label }) {

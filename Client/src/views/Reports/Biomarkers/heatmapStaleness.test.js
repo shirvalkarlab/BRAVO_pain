@@ -184,6 +184,6 @@ describe("6. nothing reads as crossing 0.05 that did not", () => {
     best.family_wise_q_8_to_30hz = 0.046;
     const col = sw.center_freqs_hz.indexOf(best.band_center_hz);
     const row = sw.integration_seconds_delivered.indexOf(best.integration_seconds_delivered);
-    expect(hoverReadout(sw, "correlation", col, row)).toMatch(/q < 0\.05 \(p corrected for testing 22 bands\)/);
+    expect(hoverReadout(sw, "correlation", col, row)).toMatch(/q < 0\.05 \(fdr 22 bands\)/);
   });
 });
