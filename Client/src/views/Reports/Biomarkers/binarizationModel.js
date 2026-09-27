@@ -120,6 +120,33 @@ export function computeCuts(vals, strategy, lowPct, highPct) {
   return { kind: "one-cut", cut: (c0 + c1) / 2 };
 }
 
+// Warn when the high/low split feeding the discrimination reading (an area-under-the-curve figure,
+// worked out as though from a one-band logistic fit) is too lopsided to trust (the PI, 2026-09-27:
+// look up the literature, flag it if it is outside the range that literature considers usable).
+// Two thresholds, the stricter of the two decides:
+//   * Peduzzi, Concato, Kemper, Holford & Feinstein 1996 (J Clin Epidemiol 49(12):1373-9): a
+//     logistic fit needs at least 10 members in the smaller of its two outcome groups per fitted
+//     term, or the fitted numbers and their spread become unreliable. This page fits one term (the
+//     band's own power), so the floor is 10 in the smaller group.
+//   * A widely used general severity scale for an uneven split (see e.g. MachineLearningMastery's
+//     imbalanced-classification guide, summarising Kotsiantis et al. 2006 and later surveys): once
+//     the larger group reaches 3 times the smaller, the split counts as worth a caution.
+// Returns a plain-English sentence naming both counts, or null when the split is fine.
+export function classBalanceFlag(nLow, nHigh) {
+  const lo = Number(nLow) || 0, hi = Number(nHigh) || 0;
+  const minority = Math.min(lo, hi), majority = Math.max(lo, hi);
+  if (minority === 0 && majority === 0) return null;
+  if (minority < 10) {
+    return `Only ${minority} in the smaller of the two groups (${lo} low, ${hi} high) — fewer `
+      + "than 10 makes this reading unstable; treat it as a lead, not a finding.";
+  }
+  if (majority >= minority * 3) {
+    return `The two groups are uneven: ${lo} low vs ${hi} high (about `
+      + `${(majority / minority).toFixed(1)} to 1) — this can push the reading toward the larger group.`;
+  }
+  return null;
+}
+
 // Classify one matched continuous value into its bin given the cuts.
 function classify(v, cuts) {
   if (cuts.kind === "two-cut") return v <= cuts.lowCut ? "low" : (v >= cuts.highCut ? "high" : "excluded");

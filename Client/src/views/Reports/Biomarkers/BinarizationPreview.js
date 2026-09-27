@@ -29,12 +29,12 @@ import Slider from "@mui/material/Slider";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
-import { T, TYPE } from "assets/theme/base/tokens";
+import { T, TYPE, STATE } from "assets/theme/base/tokens";
 import { textInk } from "assets/theme/base/dataColors";
 import { plotlyLayout, PLOTLY_CONFIG, REF_LINE } from "views/Reports/figureStyle";
 
-import { BIN_LO as LO, BIN_HI as HI, BIN_MID as MID, computeCuts as computeCutsShared }
-  from "./binarizationModel";
+import { BIN_LO as LO, BIN_HI as HI, BIN_MID as MID, computeCuts as computeCutsShared,
+  classBalanceFlag } from "./binarizationModel";
 import { MATCHING_DEFAULTS } from "./matchingDefaults";
 
 // Text colours (the redesign of 2026-09-26, SPEC.md section 2): the bars keep the pain colours
@@ -162,6 +162,12 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
     return acc;
   }, [dayAgg, dailyCuts]);
 
+  // Decision 337 (the PI, 2026-09-27): warn when the high/low split is too small or too lopsided
+  // to trust, in the same units the "Split -> N high / N low" line already shows.
+  const balanceFlag = matchedMode
+    ? classBalanceFlag(counts.n_low, counts.n_high)
+    : classBalanceFlag(dailyStats.nLowDays, dailyStats.nHighDays);
+
   useEffect(() => {
     if (!ref.current) return;
     if (!vals.length) { Plotly.purge(ref.current); return; }
@@ -267,17 +273,13 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
     // Class-count badges. In matched mode the unit is matched NEURAL SAMPLES (the band-power readings that
     // feeds binarization); in daily mode it is calendar days + the raw reports they carry.
     //
-    // In matched mode each badge also shows the per-group MODALITY breakdown across the THREE sources
-    // pooled into the scan, in the page's two groups: TD (streaming and montage/survey recordings,
-    // the montage part named inside it) and PSD (the imported patient-event markers, incl. Streaming). Band-power LSB is NOT pooled into the binarization scan, so it
-    // is intentionally absent here (not a source the scan uses) — see the caption note. The badges are
+    // EACH BADGE CARRIES ONLY ITS ESSENTIAL COUNT (the PI, 2026-09-27: these boxes ran off the
+    // screen). Until this fix each also appended the per-group TD/montage/PSD modality breakdown,
+    // which could run to a second full line; that breakdown stays available on hover (the
+    // hovertemplate below still carries it), so nothing is lost, only shortened here. The badges are
     // floated into y-axis HEADROOM (the matched-mode yaxis range is extended below) so they sit ABOVE
     // the tallest bar and never overlap the histogram.
     const yMax = cnt.length ? Math.max(1, ...cnt) : 1;
-    const bySrc = (matchedMode && counts && counts.by_source) ? counts.by_source : null;
-    const srcLine = (g) => g
-      ? `${(g.td || 0).toLocaleString()} TD (${(g.td_montage || 0).toLocaleString()} montage) · ${(g.event || 0).toLocaleString()} PSD (patient event)`
-      : null;
     const badge = (xRel, yRel, color, label, primary, secondary) => ({
       xref: "paper", yref: "paper", x: xRel, y: yRel, xanchor: "center", yanchor: "top",
       text: `<b>${label}</b><br>${primary}${secondary ? `<br>${secondary}` : ""}`,
@@ -308,19 +310,16 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
     const psdLine = (n) => `${(n || 0).toLocaleString()} band-power reading${n === 1 ? "" : "s"}`;
     const proLine = (n) => `${(n || 0).toLocaleString()} pain rating${n === 1 ? "" : "s"}`;
     const lowTxt = matchedMode
-      ? (proFirst
-          ? [proLine(proIdxByBin.low), `${psdLine(counts.n_low)} · ${srcLine(bySrc && bySrc.low) || "no sources"}`]
-          : [psdLine(counts.n_low), `${proLine(proIdxByBin.low)} · ${srcLine(bySrc && bySrc.low) || "no sources"}`])
+      ? (proFirst ? [proLine(proIdxByBin.low), psdLine(counts.n_low)]
+                  : [psdLine(counts.n_low), proLine(proIdxByBin.low)])
       : [`${dailyStats.nLowDays.toLocaleString()} days`, `${dailyStats.nLowSamp.toLocaleString()} samples`];
     const highTxt = matchedMode
-      ? (proFirst
-          ? [proLine(proIdxByBin.high), `${psdLine(counts.n_high)} · ${srcLine(bySrc && bySrc.high) || "no sources"}`]
-          : [psdLine(counts.n_high), `${proLine(proIdxByBin.high)} · ${srcLine(bySrc && bySrc.high) || "no sources"}`])
+      ? (proFirst ? [proLine(proIdxByBin.high), psdLine(counts.n_high)]
+                  : [psdLine(counts.n_high), proLine(proIdxByBin.high)])
       : [`${dailyStats.nHighDays.toLocaleString()} days`, `${dailyStats.nHighSamp.toLocaleString()} samples`];
     const midTxt = matchedMode
-      ? (proFirst
-          ? [proLine(proIdxByBin.excluded), `${psdLine(counts.n_excluded_middle)} · ${srcLine(bySrc && bySrc.excluded) || "no sources"}`]
-          : [psdLine(counts.n_excluded_middle), `${proLine(proIdxByBin.excluded)} · ${srcLine(bySrc && bySrc.excluded) || "no sources"}`])
+      ? (proFirst ? [proLine(proIdxByBin.excluded), psdLine(counts.n_excluded_middle)]
+                  : [psdLine(counts.n_excluded_middle), proLine(proIdxByBin.excluded)])
       : [`${dailyStats.nMidDays.toLocaleString()} days`, `${dailyStats.nMidSamp.toLocaleString()} samples`];
     if (cuts.kind === "two-cut") {
       if (matchedMode) {
@@ -550,6 +549,13 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
           {counts.n_capped_dropped
             ? <span style={{ color: SUBTLE }}>{` · ${counts.n_capped_dropped} band-power readings over the per-rating cap`}</span>
             : null}
+        </MDTypography>
+      ) : null}
+      {balanceFlag ? (
+        <MDTypography variant="caption" data-testid="class-balance-caution"
+          sx={{ ...TYPE.caption, color: STATE.caution.ink, mb: 0.25, display: "block" }}>
+          <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.caution.glyph}</span>
+          {balanceFlag}
         </MDTypography>
       ) : null}
       {matchedMode ? (

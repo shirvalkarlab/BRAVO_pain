@@ -4,14 +4,14 @@
  * several tabs open, or a screen reader announcing the tab, hears what the page answers:
  *
  *   useDocumentTitle("Which brain signal tracks pain?");
- *   // tab: "Which brain signal tracks pain? - UF BRAVO Platform"
+ *   // tab: "Which brain signal tracks pain? - UF/UCSF BRAVO"
  *
  * `PageHead` calls it with its title when the title is plain text, so a page built on
  * `PageHead` gets this without calling it. An empty title leaves the tab's title alone.
  */
 import { useEffect } from "react";
 
-export const APP_TITLE = "UF BRAVO Platform";
+export const APP_TITLE = "UF/UCSF BRAVO";
 
 export function documentTitleFor(title) {
   const t = typeof title === "string" ? title.trim() : "";

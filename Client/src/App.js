@@ -94,7 +94,7 @@ export default function App() {
         <SideMenu
           color={sidenavColor}
           brand={Logo}
-          brandName="UF BRAVO Platform"
+          brandName="UF/UCSF BRAVO"
           routes={routes}
           onMouseEnter={handleOnMouseEnter}
           onMouseLeave={handleOnMouseLeave}

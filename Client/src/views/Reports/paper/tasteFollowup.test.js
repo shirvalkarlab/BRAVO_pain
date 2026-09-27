@@ -25,7 +25,7 @@ describe("C7: the browser tab's title is the page's question", () => {
   test("the hook sets the title and puts the previous one back", () => {
     document.title = "before";
     const { unmount } = render(<Probe title="Which brain signal tracks pain?" />);
-    expect(document.title).toBe("Which brain signal tracks pain? - UF BRAVO Platform");
+    expect(document.title).toBe("Which brain signal tracks pain? - UF/UCSF BRAVO");
     unmount();
     expect(document.title).toBe("before");
   });
@@ -41,7 +41,7 @@ describe("C7: the browser tab's title is the page's question", () => {
   test("PageHead sets the tab to its title", () => {
     document.title = "before";
     render(<PageHead title="Which current to try next?" />);
-    expect(document.title).toBe("Which current to try next? - UF BRAVO Platform");
+    expect(document.title).toBe("Which current to try next? - UF/UCSF BRAVO");
   });
 });
 

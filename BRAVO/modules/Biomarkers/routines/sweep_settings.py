@@ -145,12 +145,21 @@ def matching_words(tol_min=None):
 def label_strategy_params(request_data):
     """(label_strategy, low_pct, high_pct). `LabelStrategy` selects the labeler (default
     'tertile'); `PercentileLow`/`PercentileHigh` override the cuts. Unknown strategies and
-    unusable cuts fall back to the defaults."""
+    unusable cuts fall back to the defaults.
+
+    "tertile" always returns the fixed 33.3333/66.6667 cuts, never whatever the request happens to
+    carry in `PercentileLow`/`PercentileHigh`: the sliders that set those fields are ignored for a
+    tertile split by the labeler itself (`analytics._binarize_labels`, `_pain_split`), so a page
+    that leaves them at a dragged position after switching the dropdown back to "tertile" must
+    still compute the identical settings tag and cache key as one that never touched them
+    (decision 336, the PI, 2026-09-27: two saves of the one analysis, wasted disk space)."""
     request_data = request_data or {}
     strat = (request_data.get("LabelStrategy") or DEFAULT_BINARIZATION)
     valid = {s["key"] for s in BINARIZATION_STRATEGIES} | {"percentile", "cutoff"}
     if strat not in valid:
         strat = DEFAULT_BINARIZATION
+    if strat == "tertile":
+        return strat, DEFAULT_PERCENTILE_LOW, DEFAULT_PERCENTILE_HIGH
     try:
         low = float(request_data.get("PercentileLow", DEFAULT_PERCENTILE_LOW))
         high = float(request_data.get("PercentileHigh", DEFAULT_PERCENTILE_HIGH))
