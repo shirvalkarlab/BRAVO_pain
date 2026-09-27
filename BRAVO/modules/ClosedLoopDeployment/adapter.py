@@ -1945,6 +1945,25 @@ def caveats_for_report(payload):
                      f"effect."),
             "card": CAVEAT_CARDS["evidence"]})
 
+    # 2b. E1 FELL BACK TO THE WHOLE-RECORD ESTIMATE (found 2026-09-26, an open item since 328).
+    #    The current-to-power edge prefers the pooled titration slope (decision 124); when that
+    #    table is not stored (never built, or the store swept it) `pipeline.run` falls back to the
+    #    setting-epoch slope over the whole clinical record, a different quantity that can even
+    #    carry the opposite sign (measured on RCS08, L 1-3+ at 24.5 Hz: pooled -7.31 per mA against
+    #    the fallback's +1.63). The `source` field already says which one was used (review 2026-09-
+    #    15, C1) but nothing pointed a reader at it, so a request that happened to run while the
+    #    table was absent could read a different sign with nothing on the page marking that. This
+    #    never recomputes or refuses anything; it only says, in the open, which estimate is on screen.
+    e1 = ((payload.get("edges") or {}).get("E1") or {})
+    if e1.get("source") == "screening_historical":
+        rows.append({
+            "severity": "medium",
+            "text": ("The current-to-power reading is the whole-record estimate, not the pooled "
+                     "titration-session estimate this page prefers: the stepped-current sessions' "
+                     "table could not be read for this request. The two can disagree, including "
+                     "in direction."),
+            "card": CAVEAT_CARDS["evidence"]})
+
     # 3. THE BAND-POWER-TO-PAIN READING AND THE CURRENT IN FORCE (panel D item 4). Printed whether
     #    the second reading could be made or not, because "it could not be made" is itself a
     #    caveat on the first one.

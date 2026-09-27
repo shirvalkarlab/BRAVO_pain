@@ -137,3 +137,22 @@ def test_the_adjusted_reading_is_reported_as_a_caveat_on_the_plain_one():
     rows = AD.caveats_for_report(_payload())
     hit = [r for r in rows if "amp_mA_Left" in r["text"] or "current in force" in r["text"]]
     assert hit, [r["text"] for r in rows]
+
+
+# --- E1's fallback to the whole-record estimate (found 2026-09-26) -----------------------------
+def test_e1_from_the_whole_record_carries_a_caveat():
+    payload = _payload()
+    payload["edges"]["E1"] = {"name": "E1", "estimate": 1.63, "ci": [-26.1, 29.4],
+                              "source": "screening_historical"}
+    rows = AD.caveats_for_report(payload)
+    hit = [r for r in rows if "whole-record" in r["text"]]
+    assert hit, [r["text"] for r in rows]
+    assert hit[0]["card"] == AD.CAVEAT_CARDS["evidence"]
+
+
+def test_e1_from_the_pooled_table_carries_no_such_caveat():
+    payload = _payload()
+    payload["edges"]["E1"] = {"name": "E1", "estimate": -7.31, "ci": [-47.3, 32.6],
+                              "source": "pooled_titration"}
+    rows = AD.caveats_for_report(payload)
+    assert not [r for r in rows if "whole-record" in r["text"]]
