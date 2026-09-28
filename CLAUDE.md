@@ -242,6 +242,12 @@ From the PI and from failures already paid for.
 14. **Log power enters no calculation anywhere** (PI, 2026-09-19, decision 202). **Time is modelled
     nowhere**: drift is a current effect (decision 196). **Device thresholds sit on raw power**: never
     log-scale a power plot or statistic, never pool across electrodes (memory: no-log10).
+15. **Search with jevgrep, not grep** (PI, 2026-09-27; skill `jevgrep`, OpenJev via Codiv). For
+    finding, classifying, routing, ranking, retrieving or verifying code by meaning, run
+    `jg "<question>" <narrowest folder>`, never grep. Grep only for the exact-text step jevgrep's
+    own recipes leave to plain matching: a literal string, a count, proving something is absent
+    (rules 3, 11; the bundle check in §7). Every `jg` sends the folder's code to Codiv: never
+    `--no-ignore`, never a folder holding patient data.
 
 ---
 
