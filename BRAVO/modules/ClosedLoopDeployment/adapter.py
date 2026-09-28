@@ -109,7 +109,7 @@ def design_matrix_with_pain_score(participant, design_matrix, epochs, pain_score
     composite that blend is done by the Biomarkers module's own function on the same reports, and
     the per-report values are averaged per setting by the same rule as every other score
     (``StimOptimizer.adapter.attach_pros``, the same wash-in minutes). Built per request and never
-    saved: it is a pain rating (CLAUDE.md section 8 rule 5).
+    saved: it is a pain rating (CLAUDE.md §7 rule 5).
     """
     if design_matrix is None or not len(design_matrix) or pain_score in design_matrix.columns:
         return design_matrix, None
@@ -1015,7 +1015,7 @@ def recording_set_signature(participant):
 #: for a reason no recording and no constant would show.
 #: v3 (2026-09-24): the settings stream the entry reads now starts at the implant date.
 #: v4 (2026-09-25): the entry holds the settings stream in place of the design matrix, so no pain
-#: rating is saved under a key that a new report cannot move (CLAUDE.md section 8 rule 5).
+#: rating is saved under a key that a new report cannot move (CLAUDE.md §7 rule 5).
 _INPUTS_RULE_VERSION = "v4_inputs_settings_from_implant_date_no_pain_ratings_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 
@@ -1045,7 +1045,7 @@ def evidence_inputs_cached(participant, *, force_refresh=False):
     evidence frame, the exposure epochs and the settings stream, under the recording set, the
     constants and a rule version. The design matrix carries the pain ratings (``nrs``, ``vas``, ...),
     so it is NOT saved here: saved under this key, a report filed without a new recording would be
-    served stale with no visible symptom (CLAUDE.md section 8 rule 5; found 2026-09-25, when the
+    served stale with no visible symptom (CLAUDE.md §7 rule 5; found 2026-09-25, when the
     saved and a fresh build still agreed). It is built on each call from the saved stream through
     ``build_design_matrix``, whose own saved table is keyed on the settings AND the pain-report
     snapshot, so an unchanged record costs a store read and a new report rebuilds only the match.

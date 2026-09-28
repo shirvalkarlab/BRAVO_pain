@@ -5537,7 +5537,7 @@ def _stability_batch_worker_serial(point, ctx):
 #: The stored cross-setting-stability grid: one entry per participant per (settings, inputs) key,
 #: holding the raw stability result for every (sensing contact, band centre) point of the calibrated
 #: grid. A DERIVED kind — it must be written with `writer=` and `provenance=` or the self-derived
-#: refusal cannot fire (CLAUDE.md §10 rule 6).
+#: refusal cannot fire (CLAUDE.md §7 rule 6).
 #: One home, `routines/sweep_settings.py` (Django-free, so the Closed-Loop reader imports the same
 #: object; 2026-09-26).
 STABILITY_GRID_KIND = sweep_settings.STABILITY_GRID_KIND
@@ -7898,7 +7898,7 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
 #:      fire and therefore carries no information either.
 #: Forcing either version would be a label that looks like a device-rule verdict and is not one, so
 #: no `device_rules_blocked` field is added. `device_rules_status` instead states this limitation
-#: plainly, matching the project's own rule (CLAUDE.md's principle 2b) that a test or a label
+#: plainly, matching the project's own rule (CLAUDE.md §6) that a test or a label
 #: asserting something untrue is worse than no label at all. See the D2(a) discussion in this
 #: track's report for the concrete PI-level question this leaves open.
 DEVICE_RULES_STATUS_NOTE = (

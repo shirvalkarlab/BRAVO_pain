@@ -136,8 +136,8 @@ loading state on any interaction.
 **Then look at the page, and sign in with the demo account rather than registering a new one.**
 The principal investigator keeps a standing login on this local instance for exactly this —
 **ask him for it; the address is `demo@bravo.local` and the password is deliberately not written
-into this repository**, because this file is committed and pushed and `CLAUDE.md` §2 principle 3
-forbids credentials in the tree. It is also recorded in the agent's own local memory store, which
+into this repository**, because this file is committed and pushed and `CLAUDE.md` §9
+keeps secrets out of the tree. It is also recorded in the agent's own local memory store, which
 is gitignored.
 
 **Registering a fresh account instead has cost three sessions a day's work each, and the reason is

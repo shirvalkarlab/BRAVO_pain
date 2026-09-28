@@ -285,7 +285,7 @@ def table_from_build(build, *, checked_lo_hz, checked_hi_hz, band_half_hz,
 
 #: The pooled within-visit table: ONE row per (sensing contact, band centre), holding the
 #: dose-response direction pooled across every stimulation-current ladder this participant has.
-#: A DERIVED kind — it must be written with `writer=` and `provenance=` (CLAUDE.md §10 rule 6).
+#: A DERIVED kind — it must be written with `writer=` and `provenance=` (CLAUDE.md §7 rule 6).
 #:
 #: WHY IT IS STORED RATHER THAN COMPUTED ON THE PAGE. `pooled_shape_for_band` needs EVERY run, and
 #: `adapter.report_for_participant` builds only the runs the page draws once the amplitude-effect

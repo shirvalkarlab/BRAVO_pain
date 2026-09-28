@@ -5,7 +5,7 @@ The report hard-coded the pain score: the band-to-pain reading (E2) and the curr
 test for its default score, NRS. The page now sends the pain score chosen in a dropdown beside the
 band selection (`PainScore`, one of the Biomarkers heat maps' own choices), and every band-to-pain
 reading on the report follows it. What is saved under the recording set stays free of every pain
-rating (decision 273; CLAUDE.md section 8 rule 5): the ratings are joined per request.
+rating (decision 273; CLAUDE.md §7 rule 5): the ratings are joined per request.
 """
 import ast
 import inspect

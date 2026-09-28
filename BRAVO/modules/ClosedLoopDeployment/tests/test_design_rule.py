@@ -2,7 +2,7 @@
 method contest's `kalman_est` entry (decision 150).
 
 Every test checks a VALUE against either a known-by-construction answer or a closed-form analytic
-answer -- never a shape, never "it returned a dict", per this project's own rule (CLAUDE.md §10
+answer -- never a shape, never "it returned a dict", per this project's own rule (CLAUDE.md §7
 rule 11).
 """
 import numpy as np

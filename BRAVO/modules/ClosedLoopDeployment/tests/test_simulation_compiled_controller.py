@@ -72,7 +72,7 @@ def _curve_bank():
 def _compare(a, b):
     """Field count and difference count, recursively: dicts and lists by key/index, arrays
     element for element (NaN equal to NaN), everything else by equality (project convention:
-    check the values, never the shape -- CLAUDE.md §8 rule 11)."""
+    check the values, never the shape -- CLAUDE.md §7 rule 11)."""
     if isinstance(a, dict):
         compared = differing = 0
         for key in a:

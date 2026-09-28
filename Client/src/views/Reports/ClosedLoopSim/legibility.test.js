@@ -141,7 +141,7 @@ test("no page file wraps itself in the deleted legibility wrapper", () => {
 
 test("every literal text colour in the recompute bar is at least 4.5:1 on white (read, not edited)", () => {
   // Decisions 258 and 259: the bar's text was enlarged and darkened. It is the PI's file (CLAUDE.md
-  // section 8 rule 7), so it keeps its own literals; this reads each `color: "#..."` and the ink it
+  // §7 rule 7), so it keeps its own literals; this reads each `color: "#..."` and the ink it
   // assigns, and fails if any falls under the minimum.
   const src = fs.readFileSync(path.join(__dirname, "..", "RecomputeBar.js"), "utf8");
   const lits = (src.match(/color: ?"(#[0-9A-Fa-f]{3,6})"/g) || []).map((m) => m.match(/#[0-9A-Fa-f]+/)[0])

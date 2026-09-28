@@ -29,7 +29,7 @@ import MatchWindowBand from "./MatchWindowBand";
 import Fold from "./Fold";
 // BandTimeSweepPanel (the older, non-interactive tables-and-server-figures rendering of this
 // same grid) is superseded on this page by BiomarkerHeatmapGrids below -- kept as a file rather
-// than deleted (CLAUDE.md §2 principle 4 warns against deleting something that still works), but
+// than deleted (CLAUDE.md §6 warns against deleting something that still works), but
 // no longer imported here now that the interactive version carries its job plus the drill-down.
 import BiomarkerHeatmapGrids, { RefusalReason } from "./BiomarkerHeatmapGrids";
 import { reportCoverage, computeMatchedScanModel } from "./binarizationModel";

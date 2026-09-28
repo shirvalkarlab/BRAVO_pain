@@ -10,7 +10,7 @@ name: CI
 #     Biomarkers, and Biomarkers is the only thing in this repository that needs rpy2/pymer4/R or a
 #     live MySQL connection, so leaving those out is not a shortcut, it is what the import graph
 #     already is.
-#   - the frontend build (`Client/`), the same command CLAUDE.md's Quick Reference gives.
+#   - the frontend build (`Client/`), the same command CLAUDE.md §1 gives.
 #   - the page tests (`npm test`, Jest), added 2026-09-23 once the last two known-failing page
 #     tests were repaired (decision 250): 226 of 226 across 34 suites at that point.
 #
@@ -94,7 +94,7 @@ jobs:
         run: CI=true npx react-scripts test --watchAll=false
 
       - name: Build
-        # The exact command from CLAUDE.md's Quick Reference: CI=false so react-scripts treats a
+        # The exact command from CLAUDE.md §1: CI=false so react-scripts treats a
         # warning as a warning, not a build-breaking error; no source maps in the committed bundle.
         working-directory: Client
         run: CI=false GENERATE_SOURCEMAP=false npm run build

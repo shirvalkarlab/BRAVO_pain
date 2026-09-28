@@ -8,7 +8,7 @@ computes EXACTLY what a literal re-simulation per replicate (`choose_naive`, whi
 `run_many` -> `run_stretch`, doing real per-reading work) would have computed, including when a
 resample draws the same stretch more than once. Every test checks a VALUE against either a
 known-by-construction answer or the naive path's own answer -- never a shape, never "it returned a
-dict", per this project's own rule (CLAUDE.md §10 rule 11).
+dict", per this project's own rule (CLAUDE.md §7 rule 11).
 """
 import numpy as np
 import pytest

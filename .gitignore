@@ -351,7 +351,7 @@ BRAVO/_agent_bridge/vec_auc_check.py
 # THE RULES ABOVE ONLY REACH THE TOP LEVEL, WHICH IS NOT WHAT CLAUDE.md SAID THEY DID.
 # `BRAVO/_agent_bridge/*.py` matches a file sitting directly in that folder and does NOT reach into
 # a folder below it -- so a stale `_bm_sync/Biomarkers/bravo_service.py`, which is the exact hazard
-# CLAUDE.md §5 warning 1 names, was untracked but NOT ignored: it showed in `git status`, and a
+# CLAUDE.md §4 (the scratch area) names, was untracked but NOT ignored: it showed in `git status`, and a
 # `git add -A` would have committed a second, stale copy of real module source into the repository
 # where a later grep would find it as live code. Every non-.py scratch file leaked the same way, and
 # `cl_docs/` -- scratch copies of files already committed as artifacts elsewhere -- was covered by

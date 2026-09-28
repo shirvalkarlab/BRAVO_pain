@@ -1,5 +1,5 @@
 """A newly filed pain report reaches the Closed-Loop report even when no recording has changed
-(2026-09-25; CLAUDE.md section 8 rule 5: no pain rating in the payload of a recording-derived
+(2026-09-25; CLAUDE.md §7 rule 5: no pain rating in the payload of a recording-derived
 product, because a saved file then serves a stale rating with no visible symptom).
 
 Two places held ratings under a label that did not include them: the saved `inputs` bundle (the

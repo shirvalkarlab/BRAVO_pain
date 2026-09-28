@@ -2,7 +2,7 @@
 ``artifacts/contest_2026-09-13_SYNTHESIS.md`` section 4.
 
 Every test checks a VALUE against a known-by-construction answer -- never a shape, never "it
-returned a dict", per this project's own rule (CLAUDE.md §10 rule 11).
+returned a dict", per this project's own rule (CLAUDE.md §7 rule 11).
 """
 import numpy as np
 import pytest

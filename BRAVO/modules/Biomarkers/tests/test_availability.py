@@ -281,7 +281,7 @@ def test_lsb_series_indexed_path_matches_the_reference_scan():
     """`lsb_series` (indexed, USE_CHANNEL_INDEX default True) must equal `_lsb_series_scan` (the
     reference) field for field on a fixture exercising every branch of the native tiers at once --
     the equality proof this project's own rule requires before a stored/served number's source
-    changes (CLAUDE.md Core Principle 2), done here at the unit level before the live proof on
+    changes (CLAUDE.md §7 rule 4), done here at the unit level before the live proof on
     RCS08. Every list-valued field is compared as a (t, y, center_hz, source) tuple set per
     channel, not by list order, because the two paths pool the SAME samples but the indexed path's
     internal dict-iteration order need not match the scan's."""

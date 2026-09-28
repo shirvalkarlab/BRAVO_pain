@@ -10,7 +10,7 @@ mid-build cannot wedge the participant. A waiter that runs out of patience (`wai
 TO BUILDING rather than failing the page. Redis being unreachable, or the client library absent,
 DEGRADES TO TODAY'S BEHAVIOUR: build, with no error.
 
-Redis 5 here, so every client is constructed with protocol version 2 (`CLAUDE.md` section 3).
+Redis 5 here, so every client is constructed with protocol version 2 (`CLAUDE.md` §2).
 """
 import contextlib
 import logging

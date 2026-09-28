@@ -28,7 +28,7 @@
 >   "Spectrum" labels break the house vocabulary: say PSD or TD (decisions 115, 298).
 > - **§8g (the sweep grid)** now runs nine lengths of signal, 1 s to 60 s (decision 170), with the
 >   22-band Benjamini-Hochberg correction (63) on the exact rotation test (315). Its live values
->   and timings date from 2026-09-06; do not quote them (CLAUDE.md §8 rule 3).
+>   and timings date from 2026-09-06; do not quote them (CLAUDE.md §7 rule 3).
 > - **§10 (open decisions)**: the unticked items are answered by later decisions: the device's
 >   parameter ranges (148, 168, 169); the peaked response to current (55, 56, 124); the titration
 >   session and 55 Hz coverage (213); the harmonic wording (277); emitting the band candidate on

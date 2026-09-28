@@ -2,7 +2,7 @@
 ``artifacts/contest_2026-09-13_SYNTHESIS.md`` section 4, task 7.
 
 Every test checks a VALUE against a value computed independently by direct arithmetic on the
-constructed input -- never the shape, per CLAUDE.md §10 rule 11. The exact reproduction of
+constructed input -- never the shape, per CLAUDE.md §7 rule 11. The exact reproduction of
 contestant D's and contestant E's own reported numbers on the live record --
 
   D (dwell_markov, ONE_THREE_LEFT at 24.5 Hz, reading index 0): bias -0.10404153099836579 of the

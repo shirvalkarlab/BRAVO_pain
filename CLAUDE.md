@@ -54,7 +54,8 @@ cd Client && CI=true npx react-scripts test --watchAll=false src/views/Reports/f
   cache (`Client/src/database/resultCache.js`), served from the committed `Client/build/`.
 - **Shared code:** `modules/DecodeCommon/` (one home for matching, the implant-date cut, device
   ranges, the sensing-pair rule); `modules/CacheStore/` (the one saved-results store, with provenance
-  and a Redis build lock; a second store is a test failure); `modules/ControlAnalyses/` (offline only).
+  and a Redis build lock; a second store is a test failure; Redis here is version 5, so
+  **construct every Redis client with `protocol=2`**); `modules/ControlAnalyses/` (offline only).
 - Detail: `ARCHITECTURE_modules_and_store.md` (file map, timings); `ARCHITECTURE_cache_store.md`.
 
 ## 3. Workflow
@@ -95,17 +96,16 @@ its line about `MEGA_HANDOFF.md`, archived), `jevgrep` (rule 14).
   `LFP_POWER_LSB_TO_UV2` (their comments prevent a units error), struck decision rows,
   `test_one_store.py`'s grandfathered count. Python and plain JavaScript; no TypeScript.
 
-## 7. Project rules that override everything above
-
-From the PI and from failures already paid for.
+## 7. Project rules that override everything above (from the PI and failures already paid for)
 
 1. **`/usr/src/BRAVO` IS a live mount** of `BRAVO/`: write on the host and run. Root files and
    `Client/` are absent from it. Two pushed commit messages say otherwise and are wrong.
 2. **A frontend change without a rebuild is in no served bundle**: it can neither render nor
    report a failure. To prove a panel is served, search the built chunks for a text string it owns.
 3. **Never quote a suite count, timing or line number from a document, this one included.** Re-run.
-4. **A speed claim and its equality proof appear together:** field count and difference count on
-   live data, never a tolerance; timings in alternating rounds.
+4. **Any change to how a value is produced or stored, and any speed claim, comes with its equality
+   proof:** field count and difference count on live data, never a tolerance; timings in
+   alternating rounds (`ARCHITECTURE_cache_store.md` §5).
 5. **The store's key decides whether to write; no pain rating in the key or payload of any
    recording-derived product** (in the payload it serves a stale rating with no visible symptom).
 6. **Every write-back carries its provenance chain and writer**, or Stim Optimizer can confirm its
