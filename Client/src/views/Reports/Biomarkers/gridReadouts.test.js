@@ -234,8 +234,8 @@ describe("the effective count beside the raw count (panel A item 4, 2026-09-22)"
   withEff.n_grid = Array.from({ length: 10 }, () => [40, 96, 50]);
   withEff.p_grid = Array.from({ length: 10 }, () => [0.4, 0.0507, 0.2]);
 
-  test("the hover on the best cell names about how many ratings are independent", () => {
-    expect(hoverReadout(withEff, "corr", 1, 9)).toBe("117 ratings (about 98 independent) · q < 0.01 (fdr 22 bands)");
+  test("the hover on the best cell stays short: no independent-ratings detail (the PI, 2026-09-27: trim the hover)", () => {
+    expect(hoverReadout(withEff, "corr", 1, 9)).toBe("117 ratings · q < 0.01 (fdr 22 bands)");
   });
   test("the panel line names it too", () => {
     expect(bestCellReadout(withEff, "corr", 1, 9).text).toMatch(/^117 ratings \(about 98 independent\) · interval/);

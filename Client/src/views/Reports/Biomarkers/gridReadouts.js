@@ -147,12 +147,16 @@ export function fmtP(p) {
  *  the answer and the stability word are on the panel lines beside the scatter and the violin).
  *  The column's best cell prints its corrected q; every other cell, and a best cell whose q was not
  *  assessed, prints its own uncorrected p, read off the response (`p_grid`: Pearson's; `auc_p_grid`:
- *  the Mann-Whitney rank test's, scipy's own). A cell with no count prints nothing. */
+ *  the Mann-Whitney rank test's, scipy's own). A cell with no count prints nothing.
+ *
+ *  The best cell's rating count stays the plain number here (never `ratingsPhrase`'s "(about N
+ *  independent)" addendum, 2026-09-27, the PI: trim the hover) -- that detail stays on the pinned
+ *  panel line (`bestCellReadout`), which is where a reader who wants it already is. */
 export function hoverReadout(sw, kind, colIndex, rowIndex) {
   const best = bestRowFor(sw, kind, colIndex);
   const isBest = best && rowIndexOf(sw, best.integration_seconds_delivered) === rowIndex;
   if (isBest) {
-    const n = ratingsPhrase(best);
+    const n = `${Number(best.n_pain_reports)} ratings`;
     // `Number(null)` is 0, which would print "q = 0.0" for a q that was never assessed.
     const q = best.family_wise_q_8_to_30hz == null ? NaN : Number(best.family_wise_q_8_to_30hz);
     if (Number.isFinite(q)) return `${n} \u00b7 ${qWords(q)}`;
