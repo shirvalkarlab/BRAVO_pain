@@ -22,3 +22,12 @@ docs/installation.rst:generic-api-key:647
 Client/src/views/Reports/Biomarkers/__fixtures__/rcs08_band_sweep.json:generic-api-key:1
 Client/src/views/Reports/StimOptimizer/__fixtures__/rcs08_stim_optimizer_two_stage.json:generic-api-key:1
 Client/src/views/Reports/ClosedLoopSim/__fixtures__/rcs08_deployment_payload_2026-09-15.json:generic-api-key:1
+
+# Added 2026-09-28: CI has been red on the Secret scan job since these three later fixtures landed
+# (a "settings_store_key" / "store_key" cache-store signature digest each, the same kind of value
+# as the block above -- a 40-hex label a stored answer is filed under, opens nothing). Same reason,
+# same fingerprint style; a real secret anywhere else, including a new line in these same files, is
+# still caught.
+Client/src/views/Reports/ClosedLoopSim/__fixtures__/rcs08_summary_L13_24p5_2026-09-25.json:generic-api-key:60
+Client/src/views/Reports/ClosedLoopSim/__fixtures__/rcs08_summary_R03_24p5_2026-09-25.json:generic-api-key:59
+Client/src/views/Reports/StimOptimizer/__fixtures__/rcs08_stim_optimizer_2026-09-25.json:generic-api-key:1
