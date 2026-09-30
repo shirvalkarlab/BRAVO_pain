@@ -1188,3 +1188,53 @@ def plan_for_sides(sides_inputs, *, margin, in_force=None, joint_is_safe=None, p
         out["proposed"][side] = p
         out["sheet_rows"].extend(p["sheet_rows"])
     return out
+
+
+# ---------------------------------------------------------------------------------------------
+# THE VISIT PLAN THE PI STATES FOR ONE VISIT (2026-09-30). His words: "try LEFT C+1-2- double
+# monopolar stimulation (max amp 2.5mA) and RIGHT C+1-2- (max amp 3mA) ... biomarkers with pain
+# and stim effect on biomarker at 55 hertz stim on both sides ... always record from L0-3 and
+# R0-3." For the titration card ONLY: it replaces each side's contacts in force, its maximum
+# current and its sensing pair when the plan is built, so the existing "Make Google sheet" export
+# writes this visit's rows. The safety model's own ceiling (safety_ceiling.py) is not changed.
+# Remove the participant's entry once the visit is done.
+# ---------------------------------------------------------------------------------------------
+VISIT_PLAN_BY_UID = {
+    "2e3c75c00d7f4f37b53a048d195f11da": {
+        "visit_date": "2026-09-30",
+        "stated": "stated by the PI for the visit of 2026-09-30",
+        "sides": {
+            "Left": {"contacts_raw": "1a-1b-1c-2a-2b-2c", "contacts_short": "L C+1-2-",
+                     "ceiling_mA": 2.5, "sensing_channel": "ZERO_THREE_LEFT"},
+            "Right": {"contacts_raw": "1a-1b-1c-2a-2b-2c", "contacts_short": "R C+1-2-",
+                      "ceiling_mA": 3.0, "sensing_channel": "ZERO_THREE_RIGHT"},
+        },
+        "sheet_note": ("Stream BrainSense on L 0-3 and R 0-3 for the whole session. L C+1-2- and "
+                       "R C+1-2- (double monopolar), 55 Hz; max L 2.5 mA, R 3 mA. Pain rating at "
+                       "the end of every test row. Stop and call Prasad at a side-effect score of 2."),
+    },
+}
+
+
+def apply_visit_plan(visit, in_force, ceilings):
+    """`(in_force, ceilings)` with each side named in `visit["sides"]` given the visit's contacts
+    and maximum current. Copies; the caller's mappings are not changed."""
+    f2 = {k: dict(v or {}) for k, v in (in_force or {}).items()}
+    c2 = dict(ceilings or {})
+    for side, s in ((visit or {}).get("sides") or {}).items():
+        row = f2.setdefault(side, {})
+        row["contacts_raw"] = s["contacts_raw"]
+        row["contacts_short"] = s["contacts_short"]
+        c2[side] = (float(s["ceiling_mA"]), str(visit.get("stated") or "the visit plan"))
+    return f2, c2
+
+
+def with_visit_note(rows, visit):
+    """The rows with the visit's note in the first row's notes column (sensing pair, contacts,
+    maxima), so the clinician sees it at the top of the sheet."""
+    rows = [dict(r) for r in (rows or [])]
+    note = (visit or {}).get("sheet_note")
+    if rows and note:
+        col = "General Notes / Pt Verbal Notes"
+        rows[0][col] = note if not rows[0].get(col) else f"{note} {rows[0][col]}"
+    return rows

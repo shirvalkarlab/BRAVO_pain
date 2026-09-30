@@ -845,3 +845,39 @@ def test_plan_for_sides_carries_the_proposed_ladder_and_its_rows_after_the_other
     # without a proposal nothing changes in the flat rows
     out0 = TP.plan_for_sides({"Left": _side(), "Right": _side()}, margin=margin, in_force=in_force)
     assert out0["proposed"] == {} and not any(r["block"].startswith("exploratory") for r in out0["sheet_rows"])
+
+
+# ---------------------------------------------------------------------------------------------
+# the visit plan the PI states for one visit (2026-09-30): contacts, per-side maximum current and
+# the sensing pair replace what the record would otherwise pick, for the titration card only
+# ---------------------------------------------------------------------------------------------
+def test_the_2026_09_30_visit_plan_sets_both_sides_to_c12_at_their_own_maxima():
+    visit = TP.VISIT_PLAN_BY_UID["2e3c75c00d7f4f37b53a048d195f11da"]
+    assert visit["visit_date"] == "2026-09-30"
+    assert visit["sides"]["Left"]["ceiling_mA"] == 2.5 and visit["sides"]["Right"]["ceiling_mA"] == 3.0
+    assert visit["sides"]["Left"]["sensing_channel"] == "ZERO_THREE_LEFT"
+    assert visit["sides"]["Right"]["sensing_channel"] == "ZERO_THREE_RIGHT"
+    in_force = {"Left": {"contacts_short": "L C+2-", "contacts_raw": "2a-2b-2c", "amplitude_mA": 3.0,
+                         "pulse_width_us": 100.0, "rate_hz": 55.0},
+                "Right": {"contacts_short": "R C+1-2-", "contacts_raw": "1a-1b-1c-2a-2b-2c",
+                          "amplitude_mA": 2.5, "pulse_width_us": 150.0, "rate_hz": 55.0}}
+    ceilings = {"Left": (4.5, "PI"), "Right": (4.5, "PI")}
+    f2, c2 = TP.apply_visit_plan(visit, in_force, ceilings)
+    assert f2["Left"]["contacts_short"] == "L C+1-2-" and f2["Right"]["contacts_short"] == "R C+1-2-"
+    assert f2["Left"]["contacts_raw"] == "1a-1b-1c-2a-2b-2c"
+    assert c2["Left"][0] == 2.5 and c2["Right"][0] == 3.0 and "2026-09-30" in c2["Left"][1]
+    assert in_force["Left"]["contacts_short"] == "L C+2-"         # the caller's copy is untouched
+    margin = PR.margin_becomes_available(None)
+    sides = {s: _side() for s in ("Left", "Right")}
+    for s in sides:
+        sides[s]["ceiling_mA"] = c2[s][0]
+    out = TP.plan_for_sides(sides, margin=margin, in_force=f2, ceilings=c2)
+    rows = TP.with_visit_note(out["sheet_rows"], visit)
+    ramps = [r for r in rows if r["row_kind"] == "ramp"]
+    assert {r["Contacts"] for r in ramps} == {"L C+1-2- / R C+1-2-"}
+    amps = [r["Amp (mA)"] for r in ramps]
+    lefts = [float(a.split(" / ")[0][2:]) for a in amps]
+    rights = [float(a.split(" / ")[1][2:]) for a in amps]
+    assert max(lefts) == 2.5 and max(rights) == 3.0
+    assert "L 0-3" in rows[0]["General Notes / Pt Verbal Notes"]
+    assert "R 0-3" in rows[0]["General Notes / Pt Verbal Notes"]

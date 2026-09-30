@@ -1926,6 +1926,29 @@ def current_map_schedule_block(participant, *, es, in_force, ceilings) -> dict:
         return CMS.unavailable_schedule(f"the schedule could not be built: {exc}")
 
 
+def _contact_for_channel(screen, side, channel, rate_hz, stated):
+    """The readiness screen's row for sensing pair `channel` with stimulation on `side`, at
+    `rate_hz` when there is one; a bare `{channel, display_short}` when the screen has no row."""
+    how = f"the sensing pair {stated}"
+    if screen is not None and len(screen) and {"channel", "hemisphere"} <= set(screen.columns):
+        rows = screen[(screen["channel"].astype(str) == str(channel))
+                      & (screen["hemisphere"].astype(str) == str(side))]
+        if "rate_hz" in rows.columns and rate_hz is not None:
+            at = rows[np.isclose(pd.to_numeric(rows["rate_hz"], errors="coerce"), float(rate_hz))]
+            rows = at if len(at) else rows
+        if len(rows):
+            r = rows.iloc[0]
+            rec = {k: _jsonable(r.get(k)) for k in rows.columns
+                   if k in ("channel", "hemisphere", "rate_hz", "n_bands", "n_responding",
+                            "laterality", "sensing_side", "deployable", "n_pain_positive",
+                            "qualifying_centers_hz", "n_qualifying")}
+            rec.update(sensing_display(channel))
+            return rec, how
+    rec = {"channel": str(channel)}
+    rec.update(sensing_display(channel))
+    return rec, how + "; the readiness screen has no row for it"
+
+
 def titration_plan_block(participant, *, in_force, screen, ceilings, hemispheres, es=None) -> dict:
     """The `titration_plan` response block (`titration_plan.plan_for_sides`), never raising.
 
@@ -1937,6 +1960,12 @@ def titration_plan_block(participant, *, in_force, screen, ceilings, hemispheres
     from . import titration_plan as _tp
     from .routines import percept_adaptive as _pa
     uid = str(getattr(participant, "uid", participant))
+    # THE VISIT PLAN THE PI STATES FOR ONE VISIT (titration_plan.VISIT_PLAN_BY_UID, 2026-09-30):
+    # contacts, maximum current and sensing pair per side, for this card and its sheet only.
+    visit = _tp.VISIT_PLAN_BY_UID.get(uid)
+    if visit:
+        in_force, ceilings = _tp.apply_visit_plan(
+            visit, in_force, dict(SC.ceilings_by_hemisphere(uid), **(ceilings or {})))
     try:
         pooled, pooled_note = _stored_table_as_stim_optimizer(POOLED_KIND, uid)
         runs, runs_note = _stored_table_as_stim_optimizer(RUN_POINTS_KIND, uid)
@@ -1959,6 +1988,11 @@ def titration_plan_block(participant, *, in_force, screen, ceilings, hemispheres
                 ceiling = SC.ceiling_for(uid, side)
             contact, how = _best_contact_for_side(
                 screen, side, rate_hz=_tp.rate_to_hold(f.get("rate_hz"))["rate_hz"])
+            want = (((visit or {}).get("sides") or {}).get(side) or {}).get("sensing_channel")
+            if want:
+                contact, how = _contact_for_channel(
+                    screen, side, want, _tp.rate_to_hold(f.get("rate_hz"))["rate_hz"],
+                    str(visit.get("stated")))
             rec = _tp.record_today_for_contact(pooled, runs, (contact or {}).get("channel"),
                                                lo_hz=lo, hi_hz=hi)
             rec["pooled_table_note"] = pooled_note
@@ -2013,6 +2047,9 @@ def titration_plan_block(participant, *, in_force, screen, ceilings, hemispheres
         block = _tp.plan_for_sides(sides, margin=margin, in_force=in_force,
                                    joint_is_safe=joint_is_safe, proposed=proposed,
                                    ceilings=dict(SC.ceilings_by_hemisphere(uid), **(ceilings or {})))
+        if visit:
+            block["sheet_rows"] = _tp.with_visit_note(block.get("sheet_rows"), visit)
+            block["visit_plan"] = visit
         block["stored_tables"] = {"pooled": pooled_note, "run_points": runs_note}
         block["joint_corners"]["safety_model_note"] = joint_safety_note
         return _jsonable(block)
