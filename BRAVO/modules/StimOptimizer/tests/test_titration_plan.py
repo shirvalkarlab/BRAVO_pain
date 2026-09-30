@@ -851,12 +851,23 @@ def test_plan_for_sides_carries_the_proposed_ladder_and_its_rows_after_the_other
 # the visit plan the PI states for one visit (2026-09-30): contacts, per-side maximum current and
 # the sensing pair replace what the record would otherwise pick, for the titration card only
 # ---------------------------------------------------------------------------------------------
-def test_the_2026_09_30_visit_plan_sets_both_sides_to_c12_at_their_own_maxima():
-    visit = TP.VISIT_PLAN_BY_UID["2e3c75c00d7f4f37b53a048d195f11da"]
-    assert visit["visit_date"] == "2026-09-30"
-    assert visit["sides"]["Left"]["ceiling_mA"] == 2.5 and visit["sides"]["Right"]["ceiling_mA"] == 3.0
-    assert visit["sides"]["Left"]["sensing_channel"] == "ZERO_THREE_LEFT"
-    assert visit["sides"]["Right"]["sensing_channel"] == "ZERO_THREE_RIGHT"
+#: The 2026-09-30 visit's entry, kept here as the constructed input once it left the live table.
+_VISIT_2026_09_30 = {
+    "visit_date": "2026-09-30", "stated": "stated by the PI for the visit of 2026-09-30",
+    "sides": {"Left": {"contacts_raw": "1a-1b-1c-2a-2b-2c", "contacts_short": "L C+1-2-",
+                       "ceiling_mA": 2.5, "sensing_channel": "ZERO_THREE_LEFT"},
+              "Right": {"contacts_raw": "1a-1b-1c-2a-2b-2c", "contacts_short": "R C+1-2-",
+                        "ceiling_mA": 3.0, "sensing_channel": "ZERO_THREE_RIGHT"}},
+    "sheet_note": "Stream BrainSense on L 0-3 and R 0-3 for the whole session."}
+
+
+def test_rcs08_has_no_visit_plan_once_the_2026_09_30_visit_is_over():
+    # the PI, 2026-09-30: remove the entry after the visit, so the card plans from the settings in force
+    assert "2e3c75c00d7f4f37b53a048d195f11da" not in TP.VISIT_PLAN_BY_UID
+
+
+def test_a_visit_plan_sets_both_sides_to_c12_at_their_own_maxima():
+    visit = _VISIT_2026_09_30
     in_force = {"Left": {"contacts_short": "L C+2-", "contacts_raw": "2a-2b-2c", "amplitude_mA": 3.0,
                          "pulse_width_us": 100.0, "rate_hz": 55.0},
                 "Right": {"contacts_short": "R C+1-2-", "contacts_raw": "1a-1b-1c-2a-2b-2c",

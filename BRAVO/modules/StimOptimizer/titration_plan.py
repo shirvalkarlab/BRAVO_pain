@@ -1197,23 +1197,14 @@ def plan_for_sides(sides_inputs, *, margin, in_force=None, joint_is_safe=None, p
 # R0-3." For the titration card ONLY: it replaces each side's contacts in force, its maximum
 # current and its sensing pair when the plan is built, so the existing "Make Google sheet" export
 # writes this visit's rows. The safety model's own ceiling (safety_ceiling.py) is not changed.
-# Remove the participant's entry once the visit is done.
+# Remove the participant's entry once the visit is done. An entry's shape:
+# {"visit_date", "stated", "sides": {side: {"contacts_raw", "contacts_short", "ceiling_mA",
+# "sensing_channel"}}, "sheet_note"}.
 # ---------------------------------------------------------------------------------------------
-VISIT_PLAN_BY_UID = {
-    "2e3c75c00d7f4f37b53a048d195f11da": {
-        "visit_date": "2026-09-30",
-        "stated": "stated by the PI for the visit of 2026-09-30",
-        "sides": {
-            "Left": {"contacts_raw": "1a-1b-1c-2a-2b-2c", "contacts_short": "L C+1-2-",
-                     "ceiling_mA": 2.5, "sensing_channel": "ZERO_THREE_LEFT"},
-            "Right": {"contacts_raw": "1a-1b-1c-2a-2b-2c", "contacts_short": "R C+1-2-",
-                      "ceiling_mA": 3.0, "sensing_channel": "ZERO_THREE_RIGHT"},
-        },
-        "sheet_note": ("Stream BrainSense on L 0-3 and R 0-3 for the whole session. L C+1-2- and "
-                       "R C+1-2- (double monopolar), 55 Hz; max L 2.5 mA, R 3 mA. Pain rating at "
-                       "the end of every test row. Stop and call Prasad at a side-effect score of 2."),
-    },
-}
+#: participant uid -> the visit plan. Empty between visits. The 2026-09-30 entry (L and R C+1-2-,
+#: max L 2.5 / R 3 mA, sense L 0-3 and R 0-3, 55 Hz) was removed after that visit, as the PI asked;
+#: its shape is kept in tests/test_titration_plan.py (_VISIT_2026_09_30) and git history (b60042d8).
+VISIT_PLAN_BY_UID = {}
 
 
 def apply_visit_plan(visit, in_force, ceilings):
