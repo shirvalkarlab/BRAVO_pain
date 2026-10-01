@@ -58,6 +58,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+from . import band_checks as _BC
 from . import lfp_response as LFP
 from . import percept_adaptive as PA
 from . import stage_gate as GATE
@@ -1310,18 +1311,21 @@ def screen_cells(evidence, *, response_fn, pain_positive_by_channel=None, amp_ce
 
     ``response_fn(power, amplitude, era=, cluster=)`` is injected rather than imported, so this
     module does not depend on the response implementation and a caller can screen against an
-    alternative test.
+    alternative test. On a large screen it runs in worker processes (``band_checks``), so it
+    must be a pure function of its arguments that can be pickled; one that cannot be pickled
+    runs here instead.
 
     Returns ``(screen_frame, selected_key)``. Cells are ranked by the number of qualifying bands
     then median separation, but ONLY among survivors — a cell that fails a condition is never
     selected on the strength of a large separation.
     """
     rows = []
-    for (ch, hemi, rate), ev in (evidence or {}).items():
-        band_keys = list(ev.band_power.keys())
-        res = {float(c): response_fn(ev.power_for(c, w), ev.amplitude_mA, era=ev.era,
-                                     cluster=ev.cluster)
-               for (c, w) in band_keys}
+    # Every band of every cell checked first, in worker processes when the screen is large
+    # (`band_checks.check_all`, 2026-10-02); each cell's verdict below reads its own checks.
+    checks = _BC.check_all(evidence, response_fn)
+    for key, ev in (evidence or {}).items():
+        ch, hemi, rate = key
+        res = checks[key]
         n = len(res) or 1
         # SIGNIFICANT *AND* POINTING THE RIGHT WAY. This counted significance alone until
         # 2026-09-02, which inverted the purpose of the era-blocking condition instead of serving
