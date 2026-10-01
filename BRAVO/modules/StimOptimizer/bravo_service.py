@@ -1020,8 +1020,19 @@ def _next_blocks_block(rate_rows, s1c, *, in_force, ceilings, home_left_contacts
     J = pd.to_numeric(J, errors="coerce").dropna()
     prior_sd = float(J.std(ddof=0)) if len(J) > 1 else 1.0
     ceil = {h: (v[0] if isinstance(v, (tuple, list)) else v) for h, v in (ceilings or {}).items()}
+    # Each contact's own clinic stretches, plus the shared Left-0-mA ones, for borrowing across
+    # rates and pulse widths (the PI, 2026-10-01).
+    frames = {}
+    need = ["freq_hz", "amp_mA_Left", "amp_mA_Right", "pw_us_Left", "pw_us_Right", "J", "obs_var"]
+    if D is not None and "cathode_Left" in D.columns and all(c in D.columns for c in need):
+        F = D.loc[D["feasible"].astype(bool)] if "feasible" in D.columns else D
+        F = F.dropna(subset=need)
+        lab = pd.Series([_s1.left_contact_label(c, a) for c, a in zip(F["cathode_Left"], F["amp_mA_Left"])],
+                        index=F.index)
+        for c in used:
+            frames[c] = F.loc[(lab == c) | (lab == _s1.LEFT_OFF), need]
     return _bc.rank_blocks(rate_rows, in_force=in_force, contacts_used=used, rates=sorted(rates),
-                           ceilings=ceil, prior_sd=prior_sd)
+                           ceilings=ceil, prior_sd=prior_sd, contact_frames=frames)
 
 
 def _clinic_stream_stage1_block(participant, *, hemispheres, safety_ceiling_by_hemisphere,

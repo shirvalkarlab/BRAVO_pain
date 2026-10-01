@@ -156,3 +156,80 @@ def test_a_clear_winner_is_offered_with_its_ladder_and_no_tie_note():
     assert out["n_tied_at_top"] == 1
     assert out["next_block"]["left_contact"] == "L C+2-"
     assert out["ranking_note"] is None
+
+
+# ---------------------------------------------------------------------------------------------
+# borrowing across rates AND pulse widths (the PI, 2026-10-01: "extend it to borrow across
+# pulse widths"): a contact with clinic stretches at other rates and pulse widths gets a surface
+# read at the block's rate and the pulse widths in force
+# ---------------------------------------------------------------------------------------------
+import pandas as pd
+
+
+def _contact_frame(better, n=12, pw=(60.0, 160.0), rates=(55.0, 110.0), seed=0):
+    rng = np.random.default_rng(seed)
+    rows = []
+    for k in range(n):
+        aL = 0.5 + 0.5 * (k % 6)
+        rows.append(dict(freq_hz=rates[k % len(rates)], amp_mA_Left=aL, amp_mA_Right=2.5,
+                         pw_us_Left=pw[0], pw_us_Right=pw[1],
+                         J=-better * aL / 3.0 + 0.1 * rng.standard_normal(), obs_var=0.04))
+    return pd.DataFrame(rows)
+
+
+def test_a_contact_tried_only_at_other_pulse_widths_gets_a_borrowed_surface():
+    frames = {"L C+1-": _contact_frame(better=2.0)}
+    out = BC.rank_blocks([], in_force=IN_FORCE, contacts_used=["L C+1-"], rates=[55.0],
+                         ceilings={"Left": 4.5, "Right": 4.5}, prior_sd=1.0, contact_frames=frames)
+    b = _block(out, "L C+1-")
+    assert b["basis"] == BC.BORROWED_BASIS
+    assert b["n_stretches"] == 12
+    assert np.isfinite(b["optimistic_improvement"]) and b["amp_mA_left"] is not None
+
+
+def test_a_contact_with_too_few_stretches_keeps_the_prior_bound():
+    frames = {"L C+1-": _contact_frame(better=2.0, n=5)}
+    out = BC.rank_blocks([], in_force=IN_FORCE, contacts_used=["L C+1-"], rates=[55.0],
+                         ceilings={"Left": 4.5, "Right": 4.5}, prior_sd=1.0, contact_frames=frames)
+    assert _block(out, "L C+1-")["basis"] == BC.PRIOR_BASIS
+
+
+def test_the_borrowed_prediction_separates_a_better_contact_from_a_worse_one():
+    frames = {"L C+1-": _contact_frame(better=3.0, seed=1), "L 1+2-": _contact_frame(better=-1.0, seed=2)}
+    out = BC.rank_blocks([], in_force=IN_FORCE, contacts_used=["L C+1-", "L 1+2-"], rates=[55.0],
+                         ceilings={"Left": 4.5, "Right": 4.5}, prior_sd=1.0, contact_frames=frames)
+    good, bad = _block(out, "L C+1-"), _block(out, "L 1+2-")
+    assert good["predicted_improvement"] > bad["predicted_improvement"] + 0.5
+
+
+def test_a_surface_at_the_pulse_widths_in_force_is_used_before_a_borrowed_one():
+    surf = _surface(mu=lambda i, j: -0.2 * i, sd=lambda i, j: 0.1)
+    frames = {"L C+2-": _contact_frame(better=2.0)}
+    out = BC.rank_blocks([_row("L C+2-", 55.0, fitted=True, surface=surf)], in_force=IN_FORCE,
+                         contacts_used=["L C+2-"], rates=[55.0], ceilings={"Left": 4.5, "Right": 4.5},
+                         prior_sd=1.0, contact_frames=frames)
+    assert _block(out, "L C+2-")["basis"] == BC.FITTED_BASIS
+
+
+def test_the_service_hands_each_contact_its_own_clinic_stretches_for_borrowing():
+    import types
+    from StimOptimizer import bravo_service as BS
+    fr = _contact_frame(better=2.0, n=12)
+    fr["cathode_Left"] = "L C+1-"
+    off = fr.iloc[:2].copy(); off["amp_mA_Left"] = 0.0; off["cathode_Left"] = "L C+2-"
+    D = pd.concat([fr, off], ignore_index=True); D["feasible"] = True
+    s1c = types.SimpleNamespace(D=D, audit={"left_contacts": [{"left_contact": "L C+1-"}]})
+    out = BS._next_blocks_block([], s1c, in_force=IN_FORCE,
+                                ceilings={"Left": (4.5, "PI"), "Right": (4.5, "PI")})
+    b = _block(out, "L C+1-")
+    assert b["basis"] == BC.BORROWED_BASIS and b["n_stretches"] == 12
+    assert _block(out, "L C+1-2-")["basis"] == BC.PRIOR_BASIS
+
+
+def test_a_contact_block_is_scored_only_where_the_left_side_carries_current():
+    # the best cell is Left 0 mA, where the contact makes no difference: it must not be chosen
+    surf = _surface(mu=lambda i, j: 0.3 * i, sd=lambda i, j: 0.1)
+    out = BC.rank_blocks([_row("L C+2-", 55.0, fitted=True, surface=surf)], in_force=IN_FORCE,
+                         contacts_used=["L C+2-"], rates=[55.0], ceilings={"Left": 4.5, "Right": 4.5},
+                         prior_sd=1.0)
+    assert _block(out, "L C+2-")["amp_mA_left"] == 1.0          # the lowest current above 0 on this grid

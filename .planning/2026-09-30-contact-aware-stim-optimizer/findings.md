@@ -71,3 +71,6 @@ HOME all pw: n 66, share 1.000, p 0.0016, MAE pooled 1.005 / separate 0.932 / pa
 HOME 60/160: n 19, share 0.50, p 1.0. CLINIC all pw: n 124, share 0.594, p 0.0031,
 MAE 1.209 / 1.199 / 1.155. Contact effect only when pulse width is ignored; contact and pulse
 width changed together on RCS08. Not wired in.
+
+## Left C+1-2- in the Percept record
+227 Left rows with full rings 1-2, all 0 mA: 2025-07-16..26 (125 Hz/60 us), 2025-09-04..10-02 (110/100), 2025-10-02..10-10 (55/180), 2025-12-03 (145/140). Partial 1a-2a at 1.0 mA on 2025-11-12.
