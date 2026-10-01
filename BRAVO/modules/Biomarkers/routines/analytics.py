@@ -2393,7 +2393,14 @@ def td_transform_band_power_batch(segments_uv, fs, center_hz, *, half_hz=2.5, st
     p2 = mag ** 2
     band = ((freqs[None, :] >= centers[:, None] - half_hz) &
             (freqs[None, :] <= centers[:, None] + half_hz)).astype(float)
-    pw = (p2 @ band.T).reshape(P, W, centers.size)
+    # The band sums ONE SEGMENT AT A TIME too (2026-10-02): on the Jetstream2 BRAVO's x86 chip the
+    # linear-algebra library blocks a (P*W)-row product differently from a W-row one, so one product
+    # over every segment's windows differed from the single call in the last binary digit in 2,241 of
+    # 29,400 values (largest 3.9e-16 of the value; 0 on the Mac). A product the single call's own size
+    # gives the single call's answer on both machines (test_tiles_batched).
+    pw = np.empty((P, W, centers.size), dtype=float)
+    for p in range(P):
+        pw[p] = p2[p * W:(p + 1) * W] @ band.T
     return np.median(pw, axis=1)
 
 
