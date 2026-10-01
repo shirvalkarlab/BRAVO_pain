@@ -28,7 +28,16 @@
 # the same pass took 9.8 s, and every Stage 1 fit that had cost 3-5 s cost 0.5 s. The serial store
 # pass and the container runner keep the default thread count, so the numbers they produce are
 # computed under the same BLAS settings as production.
+# EVERY CORE (2026-10-02, the PI: "run them massively parallel"). The cores are shared out: three
+# quarters to the host pass (pytest-xdist, `--dist worksteal` so an idle worker takes queued tests
+# from a busy one), a quarter to the container runner's shards (one process per group of test
+# files); every process at ONE maths thread, the production setting since decision 353. On the
+# Jetstream2 BRAVO's 64 cores that is 48 + 16 processes; on the Mac's 16, 12 + 4.
 cd /usr/src/BRAVO || exit 1
+NPROC=$(nproc)
+HOST_N=$(( NPROC * 3 / 4 )); [ $HOST_N -lt 2 ] && HOST_N=2
+CONT_N=$(( NPROC - HOST_N )); [ $CONT_N -lt 2 ] && CONT_N=2
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 mkdir -p _agent_bridge/_suite_logs
 LOGS=_agent_bridge/_suite_logs
 HOST_TESTS="ClosedLoopDeployment/tests StimOptimizer/tests CacheStore/tests DecodeCommon/tests ControlAnalyses/tests"
@@ -41,27 +50,27 @@ if [ "${1:-}" = "--live" ]; then
   ( python3 _agent_bridge/run_tests.py --live > $LOGS/container_live.log 2>&1 ) &
   CONT=$!
   wait $HOST; wait $CONT
-  echo "host (live only):      $(grep -E 'passed|failed|error|deselected|no tests ran' $LOGS/host_live.log | grep -v '^R\[' | tail -1)"
-  echo "container (live only): $(grep -E 'PASS=|FAIL=' $LOGS/container_live.log | tail -1)"
+  echo "host (live only):      $(rg 'passed|failed|error|deselected|no tests ran' $LOGS/host_live.log | rg -v '^R\[' | tail -1)"
+  echo "container (live only): $(rg 'PASS=|FAIL=' $LOGS/container_live.log | tail -1)"
   echo "wall: $(( $(date +%s) - T0 )) s"
   exit 0
 fi
 
 (
   cd modules || exit 1
-  # pass 1: everything routine, across 8 cores, 2 BLAS threads each (16 cores)
-  OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2 PYTHONPATH=. \
-    python3 -B -m pytest $HOST_TESTS $HOST_OPTS -n 8 -m "not live and not store" > ../$LOGS/host_parallel.log 2>&1
+  # pass 1: everything routine, across HOST_N processes, one maths thread each
+  PYTHONPATH=. python3 -B -m pytest $HOST_TESTS $HOST_OPTS -n $HOST_N --dist worksteal \
+    -m "not live and not store" > ../$LOGS/host_parallel.log 2>&1
   # pass 2: the store tests, one at a time, default threads
   PYTHONPATH=. python3 -B -m pytest $HOST_TESTS $HOST_OPTS -m "store and not live" > ../$LOGS/host_store.log 2>&1
 ) &
 HOST=$!
-( python3 _agent_bridge/run_tests.py > $LOGS/container.log 2>&1 ) &
+( python3 _agent_bridge/run_tests.py --shards $CONT_N > $LOGS/container.log 2>&1 ) &
 CONT=$!
 wait $HOST; wait $CONT
 
-P1=$(grep -E 'passed|failed|error|deselected|no tests ran' $LOGS/host_parallel.log | grep -v '^R\[' | tail -1)
-P2=$(grep -E 'passed|failed|error|deselected|no tests ran' $LOGS/host_store.log | grep -v '^R\[' | tail -1)
+P1=$(rg 'passed|failed|error|deselected|no tests ran' $LOGS/host_parallel.log | rg -v '^R\[' | tail -1)
+P2=$(rg 'passed|failed|error|deselected|no tests ran' $LOGS/host_store.log | rg -v '^R\[' | tail -1)
 # the arithmetic across the two host passes, so one line carries the whole host count
 TOTAL=$(cat $LOGS/host_parallel.log $LOGS/host_store.log | python3 -c '
 import re, sys
@@ -74,5 +83,6 @@ for line in sys.stdin:
                 n[k] += int(m.group(1))
 print("%d passed, %d skipped, %d failed, %d errors" % (n["passed"], n["skipped"], n["failed"], n["error"]))')
 echo "host:      $TOTAL  [parallel: $P1 | store, serial: $P2]"
-echo "container: $(grep -E 'PASS=|FAIL=' $LOGS/container.log | tail -1)"
+echo "container: $(rg 'PASS=|FAIL=' $LOGS/container.log | tail -1)"
+rg "slowest file" $LOGS/container.log | head -3
 echo "wall: $(( $(date +%s) - T0 )) s   (the live tests are not in this run: sh _agent_bridge/run_both_suites.sh --live)"

@@ -726,9 +726,18 @@ def _import_service():
     # REAL and explicitly (2026-09-12): it needs nothing Django provides, and until now it was
     # stubbed only when no earlier test had imported it, so what `bravo_service` bound to depended
     # on the order the files ran in (`test_redcap_request_scope.py` already keeps the real one).
+    # The REAL module when it can be imported (2026-10-02): a stand-in left in sys.modules was
+    # handed to every later file in the same process, so test_no_aperiodic_fit failed whenever it
+    # ran after this file without a file that imported the real pipeline in between (it read the
+    # stand-in's missing `__file__`). Seen when the container runner first split its files across
+    # 16 processes. The stand-in remains only where the real import fails.
+    import importlib as _il
     for mod in ("modules.Biomarkers.pipeline", "modules.Biomarkers.adapter"):
         if mod not in _sys.modules:
-            _sys.modules[mod] = _mock.MagicMock()
+            try:
+                _il.import_module(mod)
+            except Exception:
+                _sys.modules[mod] = _mock.MagicMock()
     import modules.Biomarkers.routines.redcap_client  # noqa: F401  (the real one, always)
     import modules.Biomarkers.bravo_service as _bs
     return _bs
