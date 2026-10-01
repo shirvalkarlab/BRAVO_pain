@@ -29,6 +29,40 @@ _RING_WORDS = {"ZERO": 0, "ONE": 1, "TWO": 2, "THREE": 3}
 DECISION = 217
 
 
+#: The cathode mark: a plain hyphen, exactly as the lab's own clinic sheets type it (read off the
+#: 2026-09-16 visit sheet, "L C+2- / R C+1-2-") -- never the superscript "⁻" this project used
+#: until that day (the PI: a typo, "all along").
+MINUS = "-"
+
+
+def contacts_short(cathode, hemisphere) -> str | None:
+    """The programmed cathode contacts in the lab's and Medtronic's own form, read off the
+    2026-09-16 visit sheet: "L C+2-" for "2a-2b-2c" on the Left (monopolar: the case C is the
+    anode, contact 2 the cathode), "R C+1-2-" for "1a-1b-1c-2a-2b-2c" on the Right (double
+    monopolar), "L C+1a-1b-" when a ring is only partly used. None when nothing is recorded
+    ("none", empty, NaN)."""
+    if cathode is None:
+        return None
+    raw = str(cathode).strip()
+    if not raw or raw.lower() in ("none", "nan", "case"):
+        return None
+    side = "L" if str(hemisphere) == "Left" else ("R" if str(hemisphere) == "Right" else "")
+    segs = [t for t in raw.replace("+", "-").split("-") if t]
+    by_ring = {}
+    for t in segs:
+        digit = "".join(ch for ch in t if ch.isdigit())
+        letter = "".join(ch for ch in t if ch.isalpha()).lower()
+        by_ring.setdefault(digit, set()).add(letter)
+    parts = []
+    for digit in sorted(by_ring, key=lambda d: (d == "", d)):
+        letters = by_ring[digit]
+        if letters == {"a", "b", "c"} or letters == {""}:
+            parts.append(f"{digit}{MINUS}")
+        else:
+            parts.extend(f"{digit}{l}{MINUS}" for l in sorted(letters))
+    return f"{side} C+{''.join(parts)}".strip()
+
+
 def stim_rings(cathode) -> set:
     """The ring numbers a programmed cathode stimulates on: "2a-2b-2c" -> {2},
     "1a-1b-1c-2a-2b-2c" -> {1, 2}; empty for none / blank / NaN."""
