@@ -4,10 +4,10 @@
 Steps 2-7 of the combined speed-up list (the PI's go-ahead, 2026-10-01): every value unchanged, each fix its own commit with proof, pulled onto the Jetstream2 BRAVO.
 
 ## Next Step
-Phase 2: delete the unused experimental-routes import (routes.js:51), page tests, rebuild, measure the main bundle.
+Phase 3: commit A2 (decision 353) once both suites pass; push; reload local gunicorn; pull + reload on Jetstream2. Then A1 (Jetstream2 workers) and the C3-C5 page commit.
 
 ## Current Phase
-Phase 2
+Phase 3
 
 ## Scope and rules
 - Code lands on the Mac checkout (the local BRAVO runs it live), pushed, then `git pull` on the Jetstream2 BRAVO.
@@ -26,16 +26,16 @@ Phase 2
 ### Phase 2: Step 2, C1 (Plotly out of the main bundle)
 - [x] Delete the unused `experimentalRoutes` import in routes.js; App.js's offline report + survey pages lazy too (decision 352)
 - [x] Jest 1,026/1,026; main 6,581,540 -> 726,653 bytes (1,879 -> 214 KB gz); Plotly chunk 7055 on demand
-- [ ] Commit, push, pull on Jetstream2
-- **Status:** in_progress
+- [x] Commit 526ef6c4, pushed; Jetstream2 pulled, serves main 726,653 bytes, Plotly chunk separate
+- **Status:** complete
 
 ### Phase 3: Step 3, A1/A2 (settings)
-- [ ] One maths thread by default (OPENBLAS/OMP/MKL=1) for both BRAVOs; proof on RCS08 + timings
+- [x] One maths thread by default (OPENBLAS/OMP/MKL=1) for both BRAVOs; proof on RCS08 + timings (decision 353; BRAVO/maths_threads.py so the test needs no Django)
 - [ ] Jetstream2 only: 12-16 web workers after measuring per-worker memory
-- **Status:** pending
+- **Status:** in_progress
 
 ### Phase 4: Step 4, B2 + C2
-- [ ] Find the 3.5 s of sleeping in the Stim Optimizer two-stage request (py-spy / profile); remove it
+- [x] B2 DROPPED: the 3.5 s 'sleep' is the main thread waiting in joblib's _retrieve for the parallel leave-one-out workers (profile callers: threading.wait 1.44 s, selectors 1.16 s, joblib _retrieve) -- the parallel work's own time, not idle polling
 - [ ] Test two simultaneous Stim Optimizer requests are safe with R; then start the TwoStage request with the first
 - **Status:** pending
 

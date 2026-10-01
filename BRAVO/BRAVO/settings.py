@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
+from BRAVO import maths_threads  # noqa: F401  -- FIRST: one maths-library thread by default (A2)
 from pathlib import Path
 import os, sys
 import json
