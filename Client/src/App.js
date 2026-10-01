@@ -22,9 +22,6 @@ import LoadingProgress from "components/LoadingProgress";
 import HomePage from "views/HomePage.js";
 import SignIn from "views/Authentication/SignIn";
 import Register from "views/Authentication/Register";
-import SurveyEditor from "views/Survey/Editor";
-import SurveyViewer from "views/Survey/Viewer";
-import OfflineClinicalReport from "views/Offline_ClinicalReport";
 
 import { usePlatformContext, setContextState } from "context.js";
 import { SessionController } from "database/session-control";
@@ -32,6 +29,13 @@ import Logo from "assets/img/logo.png";
 
 import routes from "routes";
 import Profile from "views/Dashboard/Profile";
+
+// Loaded on demand (they render inside the <Suspense> below): the offline report draws a Plotly
+// figure and the survey pages carry the survey libraries, so importing them eagerly put both in the
+// main bundle every page downloads first.
+const SurveyEditor = lazy(() => import("views/Survey/Editor"));
+const SurveyViewer = lazy(() => import("views/Survey/Viewer"));
+const OfflineClinicalReport = lazy(() => import("views/Offline_ClinicalReport"));
 
 export default function App() {
   const [controller, dispatch] = usePlatformContext();
