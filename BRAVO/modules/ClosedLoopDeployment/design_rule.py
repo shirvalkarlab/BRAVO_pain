@@ -230,15 +230,66 @@ def _filter_1state_numpy(Y: np.ndarray, *, phi: float, m: float, q: float,
 def filter_2comp(Y: np.ndarray, *, phi_s: float, phi_f: float, q_s: float, q_f: float, m: float,
                  r0: float) -> Dict[str, Any]:
     """The two-component filter (see `_filter_2comp_numpy`), run as a compiled loop when numba is
-    installed and as the numpy loop otherwise, with the same answer either way (decision 269)."""
+    installed and as the numpy loop otherwise, with the same answer either way (decision 269). The
+    compiled loop skips each stretch's padding (2026-10-02, see `_prepare_2comp_panel`)."""
     if COMPILED_FILTER:
-        Yc = np.ascontiguousarray(Y, dtype=float)
-        vs = q_s / max(1e-12, 1.0 - phi_s * phi_s)
-        vf = q_f / max(1e-12, 1.0 - phi_f * phi_f)
-        ll, n_used = _filter_2comp_kernel(Yc, np.isfinite(Yc), float(phi_s), float(phi_f), float(q_s),
-                                          float(q_f), float(m), float(r0), float(vs), float(vf), LOG2PI)
-        return {"loglik": float(ll), "n": int(n_used)}
+        return _filter_2comp_prepared(_prepare_2comp_panel(Y), phi_s=phi_s, phi_f=phi_f, q_s=q_s,
+                                      q_f=q_f, m=m, r0=r0)
     return _filter_2comp_numpy(Y, phi_s=phi_s, phi_f=phi_f, q_s=q_s, q_f=q_f, m=m, r0=r0)
+
+
+def _prepare_2comp_panel(Y: np.ndarray) -> Dict[str, Any]:
+    """What the compiled two-component filter needs from the panel that no fitted number changes,
+    worked out once per fit instead of once per likelihood call (2026-10-02).
+
+    The panel holds every stretch of recording as one row, padded with missing readings to the
+    length of the longest: on RCS08, 366 rows x 1,499 steps = 548,634 cells, 42,684 of them
+    readings. After a stretch's last reading its likelihood terms are exact zeros and nothing it
+    carries forward is read again, so the filter can stop visiting it there. This lists, for each
+    step, how many stretches still have a reading at or after it (``n_active``), with the stretches
+    kept in the order they finish (``pos``, longest-running first, ties in panel order), so the
+    stretches still running at step ``t`` are always the first ``n_active[t]``. ``Yp``/``okp`` are
+    the panel and its has-a-reading mask in that order, one step per row. ``n`` is the count of
+    readings after the first column, which is what the filter's count always was.
+    """
+    Yc = np.ascontiguousarray(Y, dtype=float)
+    ok = np.isfinite(Yc)
+    s, l = Yc.shape
+    has = ok[:, 1:]
+    if l > 1:
+        last = np.where(has.any(axis=1), (l - 1) - np.argmax(has[:, ::-1], axis=1), 0)
+    else:
+        last = np.zeros(s, dtype=np.int64)
+    last = np.asarray(last, dtype=np.int64)
+    pos = np.argsort(-last, kind="stable").astype(np.int64)
+    n_active = np.cumsum(np.bincount(last, minlength=l)[::-1])[::-1].astype(np.int64)
+    return {"Yp": np.ascontiguousarray(Yc[pos].T), "okp": np.ascontiguousarray(ok[pos].T),
+            "pos": pos, "n_active": n_active, "n": int(has.sum())}
+
+
+def _filter_2comp_prepared(prep: Dict[str, Any], *, phi_s: float, phi_f: float, q_s: float,
+                           q_f: float, m: float, r0: float) -> Dict[str, Any]:
+    """The compiled two-component filter on a panel `_prepare_2comp_panel` already prepared; the
+    starting variances are worked out exactly as `filter_2comp` always worked them out."""
+    vs = q_s / max(1e-12, 1.0 - phi_s * phi_s)
+    vf = q_f / max(1e-12, 1.0 - phi_f * phi_f)
+    ll = _filter_2comp_active_kernel(prep["Yp"], prep["okp"], prep["pos"], prep["n_active"],
+                                     float(phi_s), float(phi_f), float(q_s), float(q_f), float(m),
+                                     float(r0), float(vs), float(vf), LOG2PI)
+    return {"loglik": float(ll), "n": prep["n"]}
+
+
+def _two_component_runner(Y: np.ndarray):
+    """`filter_2comp` with its panel fixed, for one fit's many likelihood calls: compiled, the panel
+    is prepared once here; without numba, the numpy loop as before. If preparing fails, every call
+    goes through `filter_2comp`, so the fit meets the failure inside its objective as it always did."""
+    if COMPILED_FILTER:
+        try:
+            prep = _prepare_2comp_panel(Y)
+        except Exception:                              # noqa: BLE001
+            return lambda **kw: filter_2comp(Y, **kw)
+        return lambda **kw: _filter_2comp_prepared(prep, **kw)
+    return lambda **kw: filter_2comp(Y, **kw)
 
 
 # SPEED-UP ITEM 3 (the PI, 2026-09-25: "add numba and do option 1"). The numpy loop below does about
@@ -343,6 +394,74 @@ try:
                 p22[i] = p22p - k2 * a2
             ll += _pairwise_sum(term, 0, s)
         return ll, n_used
+
+    # PADDING SKIPPED (2026-10-02, the PI: faster requests on the Jetstream2 BRAVO, every number
+    # unchanged). `_filter_2comp_kernel` above did the arithmetic for every cell of the padded panel,
+    # 548,634 on RCS08 for 42,684 readings, about 1,600 times a fit: 2.6 ms a call on Jetstream2. This
+    # loop does the SAME operations, in the same order, on each stretch up to its last reading and
+    # stops there: after it, the old loop's term for that stretch was always the exact zero it now
+    # leaves in its place, and the state it went on updating was never read again. The step's sum
+    # still runs over the whole row, finished stretches' zeros included, by the same `_pairwise_sum`,
+    # so it adds the same numbers in the same order. The stretches are held in the order they finish
+    # (`_prepare_2comp_panel`), so those still running at a step are a prefix of the arrays; each
+    # term is written at its stretch's place in the panel's own order. On the RCS08 panel: 900
+    # parameter sets the fit visits, 0 differing; 0.8 ms a call. `_filter_2comp_kernel` is kept
+    # as the reference `tests/test_design_rule_active_filter.py` holds this loop to, bit for bit;
+    # nothing else calls it. Splitting stretches across threads was tried (numba prange): no
+    # faster than this at 16 threads, slower at 64, and it would start a thread pool in every
+    # web worker.
+    @_njit(cache=False)
+    def _filter_2comp_active_kernel(Yp, okp, pos, n_active, phi_s, phi_f, q_s, q_f, m, r0, vs, vf,
+                                    log2pi):
+        l, s = Yp.shape
+        xs = np.zeros(s); xf = np.zeros(s)
+        p11 = np.empty(s); p22 = np.empty(s); p12 = np.zeros(s)
+        for j in range(s):
+            p11[j] = vs
+            p22[j] = vf
+        for j in range(s):                               # step 0, unmasked, as the numpy loop
+            f0 = p11[j] + 2.0 * p12[j] + p22[j] + r0
+            v0 = Yp[0, j] - m
+            k1 = (p11[j] + p12[j]) / f0
+            k2 = (p12[j] + p22[j]) / f0
+            xs[j] = xs[j] + k1 * v0
+            xf[j] = xf[j] + k2 * v0
+            a1 = p11[j] + p12[j]
+            a2 = p12[j] + p22[j]
+            p11[j] = p11[j] - k1 * a1
+            p12[j] = p12[j] - k1 * a2
+            p22[j] = p22[j] - k2 * a2
+        ps2 = phi_s * phi_s
+        psf = phi_s * phi_f
+        pf2 = phi_f * phi_f
+        term = np.zeros(s)                               # indexed by place in the panel's order
+        ll = 0.0
+        for t in range(1, l):
+            na = n_active[t]
+            for j in range(na, n_active[t - 1]):         # finished at t - 1: an exact zero from now on
+                term[pos[j]] = 0.0
+            for j in range(na):
+                xsp = phi_s * xs[j]
+                xfp = phi_f * xf[j]
+                p11p = ps2 * p11[j] + q_s
+                p12p = psf * p12[j]
+                p22p = pf2 * p22[j] + q_f
+                xp = m + xsp + xfp
+                f = p11p + 2.0 * p12p + p22p + r0
+                mt = okp[t, j]
+                v = (Yp[t, j] - xp) if mt else 0.0
+                term[pos[j]] = (-0.5 * (log2pi + _math.log(f) + v * v / f)) if mt else 0.0
+                a1 = p11p + p12p
+                a2 = p12p + p22p
+                k1 = (a1 / f) if mt else 0.0
+                k2 = (a2 / f) if mt else 0.0
+                xs[j] = xsp + k1 * v
+                xf[j] = xfp + k2 * v
+                p11[j] = p11p - k1 * a1
+                p12[j] = p12p - k1 * a2
+                p22[j] = p22p - k2 * a2
+            ll += _pairwise_sum(term, 0, s)
+        return ll
 
     @_njit(cache=False)
     def _filter_1state_kernel(Y, ok, phi, m, q, r0, log2pi):
@@ -489,6 +608,7 @@ def fit_two_component(Y: np.ndarray, *, maxfev: int = DEFAULT_MAXFEV_L4,
     measurement wobble ``r0``. The contest's own starting point (`k1_models.py`, ``L4_two_component``)."""
     sc = _scales(Y)
     mbar, var_rob = sc["mbar"], sc["var_rob"]
+    run = _two_component_runner(Y)                     # the panel prepared once for every call below
 
     def unpack(u):
         return (_sig(u[0]), _sig(u[1]), float(np.exp(u[2])), float(np.exp(u[3])),
@@ -503,7 +623,7 @@ def fit_two_component(Y: np.ndarray, *, maxfev: int = DEFAULT_MAXFEV_L4,
         if phi_f >= phi_s:                             # keeps "slow" and "fast" from swapping
             return 1e12
         try:
-            v = -filter_2comp(Y, phi_s=phi_s, phi_f=phi_f, q_s=q_s, q_f=q_f, m=m, r0=r0)["loglik"]
+            v = -run(phi_s=phi_s, phi_f=phi_f, q_s=q_s, q_f=q_f, m=m, r0=r0)["loglik"]
         except Exception:                              # noqa: BLE001
             return 1e12
         return v if np.isfinite(v) else 1e12
