@@ -1374,6 +1374,47 @@ def _parallel_site_block(es, site, *, hemispheres, safety_ceiling_by_hemisphere,
     return out
 
 
+#: ==========================================================================================
+#: INDEPENDENT BLOCKS OF ONE REQUEST RUN SIDE BY SIDE, IN THREADS (2026-10-02, the PI: use the
+#: Jetstream2 BRAVO's cores). The readiness check beside the two-stage block, and inside the
+#: two-stage block the clinic-sheet fit beside each further site's block: none reads what another
+#: writes, and each is a pure function of inputs computed before it starts, so the answers cannot
+#: change; only their computing-time fields can. Threads, not processes, because they share the
+#: request's inputs (the tile cache alone is ~260 MB) instead of copying them, and much of each
+#: block is spent waiting on the held-out-fold worker processes, which releases the interpreter.
+#: Each thread runs in a copy of the request's context (the request memo stays shared) and closes
+#: its own database connection when done. `STIM_OPTIMIZER_CONCURRENT_BLOCKS=0`: one after another.
+#: ==========================================================================================
+CONCURRENT_BLOCKS_ENV = "STIM_OPTIMIZER_CONCURRENT_BLOCKS"
+
+
+def _concurrent_blocks() -> bool:
+    return os.environ.get(CONCURRENT_BLOCKS_ENV, "1").strip() not in ("0", "false", "False", "")
+
+
+def _in_thread(fn):
+    """`fn` wrapped to close the calling thread's database connection when it returns."""
+    def run(*a, **k):
+        try:
+            return fn(*a, **k)
+        finally:
+            try:
+                from django.db import connection as _conn
+                _conn.close()
+            except Exception:                                 # noqa: BLE001 -- no Django here
+                pass
+    return run
+
+
+def _start_block(pool, fn, *a, **k):
+    """Submit `fn(*a, **k)` to `pool` inside a copy of this request's context, or return None
+    when blocks run one after another (the caller then calls `fn` itself)."""
+    if pool is None:
+        return None
+    import contextvars
+    return pool.submit(contextvars.copy_context().run, _in_thread(fn), *a, **k)
+
+
 def two_stage_block(participant, es, *, request_data, stream, washin_min, hemispheres, sites,
                     data_horizon, inputs, in_force=None, evidence_inputs=None,
                     safety_ceiling_by_hemisphere=None, pain_positive_by_channel=None) -> dict:
@@ -1439,6 +1480,17 @@ def two_stage_block(participant, es, *, request_data, stream, washin_min, hemisp
         _redcap_pooled_var = float(rep.stage1.D["pooled_within_var"].iloc[0])
     except Exception:                                  # noqa: BLE001
         _redcap_pooled_var = None
+    # EVERY FURTHER SITE starts now, beside the clinic fit below (each needs only the pooled
+    # variance just read); their answers are collected in site order after the payload is built.
+    site_list = [str(s) for s in (sites or ())]
+    _site_kw = dict(hemispheres=hemispheres, safety_ceiling_by_hemisphere=safety_ceiling_by_hemisphere,
+                    washin_min=washin_min, data_horizon=data_horizon,
+                    primary_site=(site_list[0] if site_list else None), participant=participant,
+                    in_force=in_force, redcap_pooled_var=_redcap_pooled_var)
+    from concurrent.futures import ThreadPoolExecutor as _TPE
+    _pool = _TPE(max_workers=len(site_list) - 1) if (_concurrent_blocks() and len(site_list) > 1) else None
+    _site_futures = {_site: _start_block(_pool, _parallel_site_block, es, _site, **_site_kw)
+                     for _site in site_list[1:]}
     clinic_block = _clinic_stream_stage1_block(
         participant, hemispheres=hemispheres,
         safety_ceiling_by_hemisphere=safety_ceiling_by_hemisphere,
@@ -1452,16 +1504,14 @@ def two_stage_block(participant, es, *, request_data, stream, washin_min, hemisp
     # EVERY SITE THE REQUEST ASKED FOR, not only the first (the PI, 2026-09-22, ruling 4). The first
     # is the primary site and owns the gate and Stage 2; each of the others gets its own open-loop
     # fit here, so a page that asks for two sites is answered for two.
-    site_list = [str(s) for s in (sites or ())]
     payload.setdefault("stage1", {})["primary_item"] = site_list[0] if site_list else None
     payload["parallel_sites"] = {}
     for _site in site_list[1:]:
-        payload["parallel_sites"][_site] = _parallel_site_block(
-            es, _site, hemispheres=hemispheres,
-            safety_ceiling_by_hemisphere=safety_ceiling_by_hemisphere,
-            washin_min=washin_min, data_horizon=data_horizon,
-            primary_site=(site_list[0] if site_list else None), participant=participant,
-            in_force=in_force, redcap_pooled_var=_redcap_pooled_var)
+        _f = _site_futures.get(_site)
+        payload["parallel_sites"][_site] = (_f.result() if _f is not None
+                                            else _parallel_site_block(es, _site, **_site_kw))
+    if _pool is not None:
+        _pool.shutdown(wait=True)
     return payload
 
 
@@ -1711,6 +1761,19 @@ def _run_for_participant(request_data: dict) -> dict:
         _epochs_full = None
     in_force = in_force_by_side(es, epochs=_epochs_full)
     _screen_out = {}
+    # THE TWO-STAGE BLOCK starts now, beside the readiness check below (neither reads what the
+    # other writes); its answer is attached where it always was.
+    from concurrent.futures import ThreadPoolExecutor as _TPE
+    _ts_pool = (_TPE(max_workers=1) if (_concurrent_blocks() and _two_stage_requested(request_data))
+                else None)
+    _ts_kw = dict(request_data=request_data, stream=_stream, washin_min=washin_min,
+                  hemispheres=hemis, sites=sites, data_horizon=horizon,
+                  inputs={"matched_table": matched_key, "tiles": tiles_key,
+                          "settings_stream": stream_key},
+                  in_force=in_force, evidence_inputs=_ev_inputs,
+                  safety_ceiling_by_hemisphere=_ceilings,
+                  pain_positive_by_channel=_pain_by_channel)
+    _ts_future = _start_block(_ts_pool, two_stage_block, participant, es, **_ts_kw)
     out = {
         "available": True,
         "participant": uid,
@@ -1738,14 +1801,10 @@ def _run_for_participant(request_data: dict) -> dict:
     # response carries it; the flag is in the response key, so a request without the flag is
     # never served this copy.
     if _two_stage_requested(request_data):
-        out["two_stage"] = two_stage_block(
-            participant, es, request_data=request_data, stream=_stream, washin_min=washin_min,
-            hemispheres=hemis, sites=sites, data_horizon=horizon,
-            inputs={"matched_table": matched_key, "tiles": tiles_key,
-                    "settings_stream": stream_key},
-            in_force=in_force, evidence_inputs=_ev_inputs,
-            safety_ceiling_by_hemisphere=_ceilings,
-            pain_positive_by_channel=_pain_by_channel)
+        out["two_stage"] = (_ts_future.result() if _ts_future is not None
+                            else two_stage_block(participant, es, **_ts_kw))
+    if _ts_pool is not None:
+        _ts_pool.shutdown(wait=True)
     # THE TITRATION SESSION TO RUN NEXT (2026-09-12 evening, the PI: "make #4 a feature of next
     # stim opt recommendation combined with 30"): designed from this participant's own record,
     # attached before the write-back so the stored response carries it. Never raises.
