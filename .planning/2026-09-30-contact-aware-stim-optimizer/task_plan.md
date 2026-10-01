@@ -4,7 +4,7 @@
 The Stim Optimizer's pain model knows which contacts were stimulating, so it stops pooling different Left contact configurations as if they were one.
 
 ## Next Step
-Phase 6: design and test the block chooser (which Left contact and rate to test next) on the clinic stream's step A surfaces.
+Phase 6: ask the PI how a tie among unmeasured blocks is broken; then put the chooser on the page.
 
 ## Current Phase
 Phase 6
@@ -61,7 +61,8 @@ the lead) only if B finds contacts differ, and it is named to him before it star
 - **Status:** complete
 
 ### Phase 6: Step C, the model picks the next clinic block
-- [ ] Between visits: which (Left contact, rate) block to test, where the model is least certain inside that contact's safe range
+- [x] Between visits: which (Left contact, rate) block to test -- ranked most promising first (PI), server side, decision 348; 47 of 48 tie on RCS08, so no single block is offered
+- [ ] PI: how to break a tie (borrow across rates from each contact's 3-D surface / a stated rule / leave it to the clinician) -- then the page
 - [ ] Within a visit: the fixed 0.5 mA up / 1.0 mA down ladder; block order randomised; feeds the titration card and its sheet
 - **Status:** in_progress
 

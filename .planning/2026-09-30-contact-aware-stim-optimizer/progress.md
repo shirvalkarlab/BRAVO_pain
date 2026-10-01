@@ -21,3 +21,4 @@
 - Server side of step A done: stage1 groups + reference + pooled fit; bravo_service readers; clinic frame keys on Left contact; next-visit check counts only the contact in force + 0 mA (35 tests pass in the two files).
 - Page done for step A (171 page tests). Decisions 344-346 written. Suites + build running.
 - Phase 3 complete. Suites: host 1849 passed / 2 skipped / 0 failed; container PASS=945 FAIL=0. Build compiled (with warnings, not inspected); chunk 999.0bfca705 carries 'Home surveys by Left contact'. Final live diff: 26,919 common, 9,004 differ, 28,891 added, 33,981 removed, all inside two_stage.
+- Step B committed bbe18fc0 (decision 347, offline only). Step C server side: routines/block_chooser.py + bravo_service._next_blocks_block; RCS08: 47 of 48 blocks tie at 2.78; tie said, no single block offered; proof 55,810 common / 3 bookkeeping differ / 444 added / 0 removed; host 1866/2/0, container 945/0.

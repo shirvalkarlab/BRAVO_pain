@@ -995,8 +995,37 @@ def _side_effect_evidence_block(participant):
                     reason=f"could not be computed: {type(exc).__name__}: {exc}", sentence=None)
 
 
+def _next_blocks_block(rate_rows, s1c, *, in_force, ceilings, home_left_contacts=None) -> dict:
+    """Step C (2026-10-01): which (Left contact, rate) block to test at the next clinic visit,
+    ranked most promising first (`routines.block_chooser`). Candidates: the Left contacts that
+    carried current in either stream, the contact in force, and L C+1-2-; rates: those in the clinic
+    rows and the rate in force. The prior bound comes from the clinic stream's own spread of J."""
+    from .routines import block_chooser as _bc
+    from . import stage1_openloop as _s1
+    used = []
+    for t in (list(home_left_contacts or []) + list(((s1c.audit or {}).get("left_contacts")) or [])):
+        c = t.get("left_contact")
+        if c and c not in (_s1.LEFT_OFF, "unrecorded") and c not in used:
+            used.append(c)
+    in_force_contact = _s1.left_contact_label(((in_force or {}).get("Left") or {}).get("contacts_short"), None)
+    if in_force_contact and in_force_contact not in used:
+        used.append(in_force_contact)
+    rates = {float(r["rate_hz"]) for r in (rate_rows or []) if r.get("rate_hz") is not None}
+    r_in = ((in_force or {}).get("Left") or {}).get("rate_hz")
+    if r_in is not None:
+        rates.add(float(r_in))
+    D = getattr(s1c, "D", None)
+    J = (D.loc[D["feasible"].astype(bool), "J"] if D is not None and "feasible" in D.columns
+         else (D["J"] if D is not None else pd.Series(dtype=float)))
+    J = pd.to_numeric(J, errors="coerce").dropna()
+    prior_sd = float(J.std(ddof=0)) if len(J) > 1 else 1.0
+    ceil = {h: (v[0] if isinstance(v, (tuple, list)) else v) for h, v in (ceilings or {}).items()}
+    return _bc.rank_blocks(rate_rows, in_force=in_force, contacts_used=used, rates=sorted(rates),
+                           ceilings=ceil, prior_sd=prior_sd)
+
+
 def _clinic_stream_stage1_block(participant, *, hemispheres, safety_ceiling_by_hemisphere,
-                                redcap_pooled_var, in_force=None) -> dict:
+                                redcap_pooled_var, in_force=None, home_left_contacts=None) -> dict:
     """`{"rate_strata_clinic": [...], "clinic_stream": {...}}`. Never raises: a failure is
     reported under `clinic_stream.reason` with `clinic_stream.available = False`."""
     try:
@@ -1023,6 +1052,13 @@ def _clinic_stream_stage1_block(participant, *, hemispheres, safety_ceiling_by_h
         row["n_clinic"] = fit.get("n_clinic")
         row["n_home"] = fit.get("n_home")
     fit["strata_skipped"] = {str(k): str(v) for k, v in (s1c.skipped or {}).items()}
+    try:
+        fit["next_blocks"] = _two_stage_jsonable(_next_blocks_block(
+            rate_strata_clinic, s1c, in_force=in_force,
+            ceilings=dict(safety_ceiling_by_hemisphere or {}), home_left_contacts=home_left_contacts))
+    except Exception as exc:                                      # noqa: BLE001 -- adjunct block
+        _log.warning("StimOptimizer: the next-block chooser failed", exc_info=True)
+        fit["next_blocks"] = {"available": False, "reason": f"{type(exc).__name__}: {exc}"}
     # The clinic stream's own fit pooled over pulse widths (2026-09-23): the fitting routine has
     # always built it (pooling is on by default there) and nothing carried it, so the page's pooling
     # toggle swapped the REDCap section only.
@@ -1388,7 +1424,8 @@ def two_stage_block(participant, es, *, request_data, stream, washin_min, hemisp
     clinic_block = _clinic_stream_stage1_block(
         participant, hemispheres=hemispheres,
         safety_ceiling_by_hemisphere=safety_ceiling_by_hemisphere,
-        redcap_pooled_var=_redcap_pooled_var, in_force=in_force)
+        redcap_pooled_var=_redcap_pooled_var, in_force=in_force,
+        home_left_contacts=(getattr(rep.stage1, "audit", None) or {}).get("left_contacts"))
     # The same answer the gate was given, beside the clinic stream it was computed from.
     clinic_block.setdefault("clinic_stream", {})["side_effect_vs_current"] = _jsonable(
         side_effect_evidence)
