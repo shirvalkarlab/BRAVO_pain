@@ -7863,10 +7863,7 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
     to turn a raw key like "ZERO_TWO_LEFT" into a display string itself. The raw key stays the
     dict key and the value every request field still sends -- only a label is added.
     """
-    out = {}
-    for raw_ch, raw_cache in (raw_by_channel or {}).items():
-        if not raw_cache:
-            continue
+    def _one(raw_ch, raw_cache):
         t0 = _time.perf_counter()
         try:
             power, stats, centers, _, chunk_excl, from_device = _band_time_sweep_power_by_seconds(
@@ -7927,13 +7924,37 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
             # the grids, BiomarkerHeatmapGrids.js). Deleted on the PI's decision of 2026-09-12
             # (review finding B8) with `_BAND_SWEEP_RULE_VERSION` bumped so no stored entry
             # carrying the old field is served as if it were this shape.
-            out[raw_ch] = sweep
+            return sweep
         except Exception as e:
             _log.warning("Biomarkers: band/length-of-signal sweep failed for %s (%s)",
                          raw_ch, e, exc_info=True)
-            out[raw_ch] = analytics._sweep_blank(
+            return analytics._sweep_blank(
                 f"the sweep could not be completed for contact pair {raw_ch}: {e}")
-    return out
+
+    # EVERY CONTACT PAIR SIDE BY SIDE, in threads (2026-10-02, the Jetstream2 BRAVO): each pair's
+    # grid reads only its own cache and the same pain reports, and the answers are put back in the
+    # pairs' own order, so nothing in the response changes but the computing-time fields. Each
+    # thread runs in a copy of the request's context (the request memo stays shared) and closes its
+    # own database connection. `BIOMARKER_SWEEP_THREADS=1`: one pair after another, as before.
+    todo = [(ch, c) for ch, c in (raw_by_channel or {}).items() if c]
+    try:
+        n_threads = int(os.environ.get("BIOMARKER_SWEEP_THREADS", "") or len(todo) or 1)
+    except ValueError:
+        n_threads = len(todo) or 1
+    if n_threads > 1 and len(todo) > 1:
+        def _in_thread(ch, c):
+            try:
+                return _one(ch, c)
+            finally:
+                try:
+                    from django.db import connection as _conn
+                    _conn.close()
+                except Exception:                              # noqa: BLE001 -- no Django here
+                    pass
+        with ThreadPoolExecutor(max_workers=min(n_threads, len(todo))) as pool:
+            futs = [pool.submit(_contextvars.copy_context().run, _in_thread, ch, c) for ch, c in todo]
+            return {ch: f.result() for (ch, _c), f in zip(todo, futs)}
+    return {ch: _one(ch, c) for ch, c in todo}
 
 
 #: TRACK D, TASK D2(a) -- checked directly against `ClosedLoopDeployment.constraints.RULES`
