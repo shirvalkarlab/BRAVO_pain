@@ -4,7 +4,7 @@
 Steps 2-7 of the combined speed-up list (the PI's go-ahead, 2026-10-01): every value unchanged, each fix its own commit with proof, pulled onto the Jetstream2 BRAVO.
 
 ## Next Step
-Phase 5: B1 -- fit the Stim Optimizer's (pulse width, contact) groups in parallel processes; equality on so/so2, alternating timings.
+Phase 5: keep unpacked recordings in each Jetstream2 web worker, keyed by content hash (Closed-Loop 11 s); then batch the 1,080 band checks; numba cache + pool prestart. Measure warm, side by side, on Jetstream2.
 
 ## Current Phase
 Phase 5
@@ -70,3 +70,9 @@ Phase 5
 ## Errors Encountered
 | Error | Attempt | Resolution |
 |-------|---------|------------|
+
+### Phase 9: Production parallel budget for the Jetstream2 BRAVO (PI, 2026-10-02)
+- [ ] After the sub-agents finish: rerun every proof and both test sets with no process caps (-n auto, all cores)
+- [ ] Measure memory per loky worker process and per web worker; count overlapping requests in real use
+- [ ] Set pool sizes (STIM_OPTIMIZER_LOO_JOBS, CLOSED_LOOP_SEGMENT_JOBS, band-check jobs) and web workers so 16 workers x pools cannot exhaust 245 GB; document in OPERATIONS_runbook.md
+- **Status:** pending

@@ -25,3 +25,4 @@
 - Database: 45 of 46 tables checksum-equal; Server_scalerecord 15 of 720,448 rows differ by one last binary digit in JSON numbers (~1e-15, 2e-12): Jetstream2's x86 MySQL reads the dump text to the neighbouring double. Not fixable by a text dump.
 - A1: Jetstream2 at 16 web workers; page 200, main.83d40060.js.
 - Step 4 (decision 355): plan requested with the page's own; Jetstream2 plan 106.4-106.8 -> 73.5 s, Mac 35.4-37.5 -> 25.9-27.9 s; so 0 / so2 1 (timing) differences. 1,033/1,033 page tests.
+- 2026-10-02: commits 739857f1 (tests on every core; container 95 -> 60 s on Jetstream2), a5430ba1 (decision 356, batched band power identical on Jetstream2), 4b7bbdca (decision 357, Closed-Loop segments in workers, warm 42.4 -> 38.4 s), 442be489 (decision 358, Stim Optimizer blocks in threads, warm 52.4 -> 45.6 s). Dropped: Stim Optimizer groups in workers (slower: 66.6 / 55.2 s vs 52.6). Warm profiles replace cold ones as the basis for ranking work.

@@ -435,6 +435,65 @@ def _date_from_start(d, start_s):
     return d
 
 
+#: ==========================================================================================
+#: UNPACKED RECORDINGS KEPT IN THE WEB WORKER BETWEEN REQUESTS (2026-10-02). On the Jetstream2
+#: BRAVO, unpacking RCS08's recordings (read, verify the HMAC, blosc2 decompress, unpickle) cost
+#: 12.3 s of every Closed-Loop request, warm; a deep copy of the kept content costs 1.5 s. Each
+#: file's unpacked content is kept under (pointer, content hash), so a changed file is read and
+#: verified again; every caller gets a DEEP COPY, because the loaders change what they get in place
+#: (`_trim_chronic_before`, the metadata merge), and nothing one request does can reach another.
+#: The decoded recordings are 4.0 GB per worker on RCS08 (3.8 GB of it the time-domain streams),
+#: so this is OFF unless `BRAVO_RECORDING_CACHE_MB` sets a per-worker budget; the oldest are
+#: dropped beyond it. Only the Jetstream2 BRAVO sets one (245 GB, 16 web workers).
+#: ==========================================================================================
+RECORDING_CACHE_ENV = "BRAVO_RECORDING_CACHE_MB"
+_RECORDING_CACHE = {}                 # (pointer, hash) -> (content, bytes); insertion order = age
+_RECORDING_CACHE_LOCK = threading.Lock()
+
+
+def _recording_cache_budget():
+    try:
+        return float(os.environ.get(RECORDING_CACHE_ENV, "0") or 0) * 1e6
+    except ValueError:
+        return 0.0
+
+
+def _content_bytes(o):
+    if isinstance(o, np.ndarray):
+        return int(o.nbytes)
+    if isinstance(o, dict):
+        return sum(_content_bytes(v) for v in o.values()) + 64 * len(o)
+    if isinstance(o, (list, tuple)):
+        return sum(_content_bytes(v) for v in o) + 8 * len(o)
+    return 64
+
+
+def _load_source_file_kept(pointer, hashed):
+    """`Database.loadSourceFile(pointer, hashed)`, kept in this worker within the budget; always
+    returns a deep copy of the kept content."""
+    import copy as _copy
+    budget = _recording_cache_budget()
+    if budget <= 0:
+        return Database.loadSourceFile(pointer, hashed)
+    key = (pointer, hashed)
+    with _RECORDING_CACHE_LOCK:
+        hit = _RECORDING_CACHE.pop(key, None)
+        if hit is not None:
+            _RECORDING_CACHE[key] = hit                   # now the newest
+    if hit is None:
+        content = Database.loadSourceFile(pointer, hashed)
+        size = _content_bytes(content)
+        if size <= budget:
+            with _RECORDING_CACHE_LOCK:
+                _RECORDING_CACHE[key] = (content, size)
+                total = sum(v[1] for v in _RECORDING_CACHE.values())
+                while total > budget and len(_RECORDING_CACHE) > 1:
+                    _old = next(iter(_RECORDING_CACHE))
+                    total -= _RECORDING_CACHE.pop(_old)[1]
+        hit = (content, size)
+    return _copy.deepcopy(hit[0])
+
+
 def _load_recordings(participant_uid, types):
     """Return a list of loaded recording dicts for a participant, for the given DB types. Decoded
     once per request (`_request_memo`)."""
@@ -458,7 +517,7 @@ def _load_recordings_uncached(participant_uid, types):
     # a worker thread. Each task returns the decoded payload (or None on failure).
     def _decode(rec):
         try:
-            data = Database.loadSourceFile(rec.pointer, rec.hashed)
+            data = _load_source_file_kept(rec.pointer, rec.hashed)
             # Carry the chronic-trend sensing CENTER FREQUENCY forward. It is stored on the
             # Recording.metadata (stamped at decode time from the GROUP-level config) rather than in
             # the .bdat payload, so merge it onto the loaded dict(s) here so the report can label the
