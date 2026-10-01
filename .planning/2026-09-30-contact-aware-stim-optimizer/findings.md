@@ -65,3 +65,9 @@ L C+1- 74, L 1+2- 58, L C+2a- 14, L 0+2- 9, L 1+3- 7, small others; 66 unreadabl
 text, of which 49 have no Left current recorded and 15 carry Left current anyway; plus "c+0",
 "c+2" with no polarity). Unreadable steps form their own "not recorded" group, never merged.
 Home stream (device cathode) cannot tell bipolar from monopolar: it records cathodes only.
+
+## Step B results (2026-10-01, live, pain reports from the saved copy) -- decision 347
+HOME all pw: n 66, share 1.000, p 0.0016, MAE pooled 1.005 / separate 0.932 / partial 0.902.
+HOME 60/160: n 19, share 0.50, p 1.0. CLINIC all pw: n 124, share 0.594, p 0.0031,
+MAE 1.209 / 1.199 / 1.155. Contact effect only when pulse width is ignored; contact and pulse
+width changed together on RCS08. Not wired in.

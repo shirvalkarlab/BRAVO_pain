@@ -4,10 +4,10 @@
 The Stim Optimizer's pain model knows which contacts were stimulating, so it stops pooling different Left contact configurations as if they were one.
 
 ## Next Step
-Phase 4: both suites + build; final live diff; commit step A with decisions 344-346; then step B.
+Phase 6: design and test the block chooser (which Left contact and rate to test next) on the clinic stream's step A surfaces.
 
 ## Current Phase
-Phase 4
+Phase 6
 
 ## Scope and authority
 The PI's answers of 2026-09-30:
@@ -47,12 +47,23 @@ the lead) only if B finds contacts differ, and it is named to him before it star
 - [x] Page: groups/rows/pooled surfaces keyed on contact and named; per-contact sentence (171 page tests pass); rebuild running
 - **Status:** complete
 
-### Phase 4: Proof and record
+### Phase 4: Proof and record (done with step A: live diff, suites, decisions 344-346, commit b4a90d8e)
 - [ ] Equality proof on live RCS08: field count and difference count, before and after; every difference explained
 - [ ] Both suites; page tests and rebuild if the page changes
 - [ ] Decision line in DECISIONS_and_open_items.md Part 3 and a full row in docs/decision_log_full_2026-09-19.md (include the Sarikhani 2022 correction)
 - [ ] Commit and push
 - **Status:** pending
+
+### Phase 5: Step B, partial pooling across Left contacts (offline first)
+- [x] One fit: shared surface over (log2 rate, L current, R current) + a per-Left-contact deviation whose size is estimated (routines/contact_pooling.py, 6 tests)
+- [x] Judge by leave-one-day-out prediction of held-out stretches' pain, against step A (separate surfaces) and the old pooled model; mean absolute error with interval
+- [x] Reported (decision 347): contact effect only with pulse width ignored (confounded); no gain over step A at home -> NOT wired into Stage 1; D waits
+- **Status:** complete
+
+### Phase 6: Step C, the model picks the next clinic block
+- [ ] Between visits: which (Left contact, rate) block to test, where the model is least certain inside that contact's safe range
+- [ ] Within a visit: the fixed 0.5 mA up / 1.0 mA down ladder; block order randomised; feeds the titration card and its sheet
+- **Status:** in_progress
 
 ## Decisions Made
 | Decision | Rationale |
