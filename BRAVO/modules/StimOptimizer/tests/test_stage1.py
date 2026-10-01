@@ -129,8 +129,10 @@ def test_a_joint_fit_needs_both_currents(rcs08_like):
 def test_one_joint_surface_is_fitted_per_adequately_sampled_pulse_width_pair(stage1_both_sides):
     res = stage1_both_sides
     fitted = sorted(res.slices)
-    assert fitted == [(100.0, 150.0), (140.0, 180.0)]
-    assert set(zip(res.summary["pw_us_left"], res.summary["pw_us_right"])) == set(fitted)
+    # (pulse width Left, pulse width Right, Left contact): this record carries no contacts, so the
+    # contact is None and the groups are the pulse-width pairs alone (step A, 2026-10-01)
+    assert fitted == [(100.0, 150.0, None), (140.0, 180.0, None)]
+    assert set(zip(res.summary["pw_us_left"], res.summary["pw_us_right"])) == {k[:2] for k in fitted}
 
 
 def test_an_undersampled_pair_is_skipped_with_its_reason_never_pooled(stage1_with_thin_stratum):
@@ -140,7 +142,7 @@ def test_an_undersampled_pair_is_skipped_with_its_reason_never_pooled(stage1_wit
     scale, which is exactly the borrowing the stratification exists to prevent.
     """
     res = stage1_with_thin_stratum
-    assert (120.0, 130.0) not in res.slices
+    assert (120.0, 130.0, None) not in res.slices
     assert "pwL120_pwR130" in res.skipped
     assert "below the minimum of 8" in res.skipped["pwL120_pwR130"]
 
@@ -201,7 +203,7 @@ def test_asymmetric_dosing_epochs_are_not_excluded_from_the_joint_fit():
     n_asymmetric = int(((d["amp_mA_Left"] == 0) | (d["amp_mA_Right"] == 0)).sum())
     assert n_asymmetric > 0, "fixture must contain asymmetric-dosing rows"
     res = S1.run_stage1(d, data_horizon="test", washin_min=1.0)
-    ((_pwl, _pwr), sl), = res.slices.items()
+    ((_pwl, _pwr, _contact), sl), = res.slices.items()
     assert sl.n_epochs == len(d)
 
 
@@ -433,7 +435,7 @@ def _joint_safe_fixture():
     ceilings = {"Left": (1.0, "test"), "Right": (5.0, "test")}
     res = S1.run_stage1(d, data_horizon="test", washin_min=1.0,
                         safety_ceiling_by_hemisphere=ceilings)
-    ((_pwl, _pwr), sl), = res.slices.items()
+    ((_pwl, _pwr, _contact), sl), = res.slices.items()
     gx = sl.grid.grid_X()
 
     from StimOptimizer.routines import objective as OBJ

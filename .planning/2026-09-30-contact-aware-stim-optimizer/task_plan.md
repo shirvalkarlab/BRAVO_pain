@@ -4,10 +4,10 @@
 The Stim Optimizer's pain model knows which contacts were stimulating, so it stops pooling different Left contact configurations as if they were one.
 
 ## Next Step
-Phase 2: find with jevgrep how Stage 1 groups epochs by pulse width, and search the decision record for rulings on contacts.
+Phase 4: both suites + build; final live diff; commit step A with decisions 344-346; then step B.
 
 ## Current Phase
-Phase 2
+Phase 4
 
 ## Scope and authority
 The PI's answers of 2026-09-30:
@@ -16,8 +16,9 @@ The PI's answers of 2026-09-30:
 3. Go-ahead for step A (Phases 2-4 below).
 4. Remove today's visit plan entry (Phase 1).
 
-Steps B (partial pooling across contacts), C (the model picks the next clinic block) and D (contact
-as a position on the lead) are NOT authorised yet (rule 8): each needs its own go-ahead.
+2026-10-01: the PI, "keep going with tests and steps B C etc": B (partial pooling across contacts)
+and C (the model picks the next clinic block) are authorised, after A. D (contact as a position on
+the lead) only if B finds contacts differ, and it is named to him before it starts.
 
 ## Phases
 
@@ -28,16 +29,23 @@ as a position on the lead) are NOT authorised yet (rule 8): each needs its own g
 - **Status:** complete
 
 ### Phase 2: Discovery for step A
-- [ ] With jevgrep: how Stage 1 splits epochs into pulse-width groups (the minimum count, the key, which group the recommendation and the 55 Hz pain map read)
-- [ ] Search DECISIONS_and_open_items.md for earlier rulings on contacts in the model
-- [ ] Record in findings.md
-- **Status:** in_progress
+- [x] With jevgrep: how Stage 1 splits epochs into pulse-width groups (the minimum count, the key, which group the recommendation and the 55 Hz pain map read)
+- [x] Search DECISIONS_and_open_items.md for earlier rulings on contacts in the model (none)
+- [x] Record in findings.md
+- **Status:** complete
 
 ### Phase 3: Step A, the Left contact as a grouping key
-- [ ] Tests first: a constructed record with two Left contact configurations gives two groups; the pain map at 55 Hz reads only the group for the contacts in question; the page is told the count per contact
-- [ ] Add the Left contact configuration (the active contacts only, so 0 mA carries no contact) to the grouping key beside pulse width
-- [ ] Response field: epochs, reports and days per Left contact configuration
-- **Status:** pending
+- [x] Tests first (tests/test_left_contact_groups.py, 31; watched failing): a constructed record with two Left contact configurations gives two groups; the pain map at 55 Hz reads only the group for the contacts in question; the page is told the count per contact
+- [x] Add the Left contact configuration (the active contacts only, so 0 mA carries no contact) to the grouping key beside pulse width, in run_stage1 (per-pairing and pooled) and the clinic fit
+- [x] The clinic epoch frame (`clinic_pain.epoch_frame_from_steps`) keys stretches on Left contact too
+- [x] PI's call: share Left-0-mA stretches into every Left contact group (yes)
+- [x] Map every reader of the group label (server: stage1_openloop grouping, _freeze_joint, bravo_service line ~951, rate tables, pooled fit; page: ~18 files)
+- [x] Refactor commit first: `contacts_short` moved to DecodeCommon.sensing_rule (c465a11e; host 1817/2/0, container 945/0)
+- [x] Side fix (PI): the menu named 'Choosing stimulation settings' twice; the platform page is 'Analysis builder' again (ed112d74)
+- [x] Baseline: the live RCS08 two-stage response saved before the change, for Phase 4
+- [x] Response field: `audit.left_contacts` and `frozen_configuration.incumbent_left_contact`
+- [x] Page: groups/rows/pooled surfaces keyed on contact and named; per-contact sentence (171 page tests pass); rebuild running
+- **Status:** complete
 
 ### Phase 4: Proof and record
 - [ ] Equality proof on live RCS08: field count and difference count, before and after; every difference explained
@@ -52,10 +60,13 @@ as a position on the lead) are NOT authorised yet (rule 8): each needs its own g
 | Step A before step B | Stop the silent pooling first; B is judged against A's contact-by-contact surfaces |
 | 0 mA epochs carry no contact | 13 Left C+1-2- epochs have Left at 0 mA; the contact label means nothing when no current flows |
 | Right contact stays pooled | 77 of 80 epochs on R C+1-2-; nothing to group |
+| Left-0-mA stretches are shared into every Left contact group (PI, 2026-10-01) | no current, so the contact makes no difference; they are each contact's zero-current point |
+| Contact goes into every group label, not a filter to the contact in force (PI, 2026-10-01) | each (pulse widths, Left contact) gets its own surfaces and the frozen setting can choose between contacts; touches ~44 server lines and ~18 page files |
 
 ## Errors Encountered
 | Error | Attempt | Resolution |
 |-------|---------|------------|
 | jg: Codiv network error, results incomplete | 1 | Re-ran after the PI said Codiv was back; complete |
 | REDCap unreachable from the container | 1 | The saved copy of the pain reports was used; say so beside any count |
-| git commit: "1Password: failed to fill whole buffer" (commit signing) | 2 | Stopped; signing not bypassed; asked the PI to check 1Password |
+| git commit: "1Password: failed to fill whole buffer" (commit signing) | 2 | The PI unlocked 1Password; commit 946d378a went through |
+| Container bridge stalled (heartbeat 2530 s, last poll 00:54) while the suites ran after the contacts_short move | 1 | Runbook §1: an OrbStack container restart, which only the PI can do; asked him |

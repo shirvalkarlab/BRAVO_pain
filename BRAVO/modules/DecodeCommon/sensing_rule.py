@@ -21,6 +21,8 @@ labels ("L 1⁻3⁺") come from the caller too (`display_of`), because the forma
 page's (`analytics.format_channel`) and this package imports no analysis module.
 """
 
+import re
+
 #: Ring number to the word the channel names spell it with.
 RING_NAMES = ("ZERO", "ONE", "TWO", "THREE")
 _RING_WORDS = {"ZERO": 0, "ONE": 1, "TWO": 2, "THREE": 3}
@@ -61,6 +63,49 @@ def contacts_short(cathode, hemisphere) -> str | None:
         else:
             parts.extend(f"{digit}{l}{MINUS}" for l in sorted(letters))
     return f"{side} C+{''.join(parts)}".strip()
+
+
+#: A contact with its polarity in the clinic sheets' own typing: "C+" (the case), "2-", "1+",
+#: "2a-", "9-" -- optional spaces before the sign ("C+ 9-10-").
+_CLINIC_TOKEN = re.compile(r"(c|\d+[a-c]?)\s*([+-])", re.IGNORECASE)
+
+
+def left_contact_from_clinic_text(text) -> str | None:
+    """The LEFT lead's stimulating contacts from a clinic sheet's contact text, in the sheet's own
+    notation, or None when the text names no Left stimulating contact.
+
+    The sheets type it several ways (RCS08's 524 parsed steps, read 2026-10-01): "L C+2- / R
+    C+1-2-" (side-prefixed), "L 2a-2b-2c / R 1a-..." (the device's own form), and the older
+    "C+2-9-10- / LGPi4-RPVG5-", where the Left lead is contacts 0-3, the Right 8-11, and the text
+    after "/" is the sEEG contacts, not the stimulator. "1+2-" is bipolar (anode 1, cathode 2) and
+    is labelled "L 1+2-"; with the case as anode it is "L C+2-"."""
+    if text is None:
+        return None
+    s = str(text).strip()
+    if not s or s.lower() in ("none", "nan"):
+        return None
+    if re.match(r"^[Ll]\s", s):                      # "L C+2- / R C+1-2-", "L 2a-2b-2c / R ..."
+        left = s[1:].split("/")[0].strip()
+        if "+" in left:
+            tokens = _CLINIC_TOKEN.findall(left)
+        else:
+            return contacts_short(left, "Left")
+    else:
+        tokens = _CLINIC_TOKEN.findall(s.split("/")[0])
+
+    def _ring(tok):
+        digits = "".join(ch for ch in tok if ch.isdigit())
+        return int(digits) if digits else None
+
+    cathodes = [t for t, sign in tokens if _ring(t) is not None and _ring(t) <= 3 and sign == "-"]
+    anodes = [t for t, sign in tokens if _ring(t) is not None and _ring(t) <= 3 and sign == "+"]
+    if not cathodes:
+        return None
+    order = lambda t: (_ring(t), t.lower())
+    cath = "".join(f"{t.lower()}{MINUS}" for t in sorted(cathodes, key=order))
+    if anodes:
+        return "L " + "".join(f"{t.lower()}+" for t in sorted(anodes, key=order)) + cath
+    return f"L C+{cath}"
 
 
 def stim_rings(cathode) -> set:

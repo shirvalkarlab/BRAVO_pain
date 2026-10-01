@@ -266,7 +266,8 @@ function unfittedLine(rows) {
  *  Only strata with a surface count. */
 export function pulseWidthPairingSentence(rateStrata, rateStrataClinic) {
   const pairs = (rows) => new Set((rows || []).filter((r) => r && r.fitted)
-    .map((r) => `${Number(r.pw_us_left).toFixed(0)}/${Number(r.pw_us_right).toFixed(0)} µs`));
+    .map((r) => `${Number(r.pw_us_left).toFixed(0)}/${Number(r.pw_us_right).toFixed(0)} µs`
+      + (r.left_contact ? `, Left contact ${r.left_contact}` : "")));
   const a = pairs(rateStrata), b = pairs(rateStrataClinic);
   const both = [...a].filter((k) => b.has(k)), onlyA = [...a].filter((k) => !b.has(k)), onlyB = [...b].filter((k) => !a.has(k));
   const list = (xs) => (xs.length ? xs.join(", ") : "none");
@@ -274,19 +275,41 @@ export function pulseWidthPairingSentence(rateStrata, rateStrataClinic) {
     + `home surveys only ${list(onlyA)}; clinic sheets only ${list(onlyB)}.`;
 }
 
-function groupByPulseWidthPair(rateStrata) {
+/** The home surveys' stretches per Left contact (step A, 2026-10-01), one sentence; empty when
+ *  the response carries no contacts. */
+export function leftContactSentence(table) {
+  const rows = Array.isArray(table) ? table : [];
+  if (!rows.length) return "";
+  const n = (r) => `${num(r.n_epochs) ?? 0} stretches (${Math.round(num(r.n_reports) || 0)} reports)`;
+  const own = rows.filter((r) => !r.shared_into_every_contact).map((r) => `${r.left_contact} ${n(r)}`);
+  const off = rows.filter((r) => r.shared_into_every_contact).map((r) => `Left at 0 mA ${n(r)}, counted with every Left contact`);
+  return `Home surveys by Left contact: ${[...own, ...off].join("; ")}.`;
+}
+
+/** One group per (left pulse width, right pulse width, Left contact): since step A (2026-10-01)
+ *  two groups can share pulse widths and differ only in Left contact. */
+export function groupByPulseWidthPair(rateStrata) {
   const groups = new Map();
   (rateStrata || []).forEach((r) => {
     if (r == null) return;
-    const key = `${r.pw_us_left}_${r.pw_us_right}`;
+    const key = `${r.pw_us_left}_${r.pw_us_right}` + (r.left_contact ? `_${r.left_contact}` : "");
     if (!groups.has(key)) {
-      groups.set(key, { key, pw_us_left: r.pw_us_left, pw_us_right: r.pw_us_right, rows: [] });
+      groups.set(key, { key, pw_us_left: r.pw_us_left, pw_us_right: r.pw_us_right,
+        left_contact: r.left_contact || null, rows: [] });
     }
     groups.get(key).rows.push(r);
   });
   const out = Array.from(groups.values());
   out.forEach((g) => g.rows.sort((a, b) => (num(b.n_epochs) || 0) - (num(a.n_epochs) || 0)));
   return out;
+}
+
+/** A group's heading: its pulse widths, and its Left contact when the response carries one. */
+export function groupHeading(g) {
+  const contact = g.left_contact ? ` · Left contact ${g.left_contact}` : "";
+  return g.pooled
+    ? `pooled over ${g.n_pairings} ${g.n_pairings === 1 ? "combination" : "combinations"} of left and right pulse widths, read at left ${fmtUs(g.pw_us_left)} / right ${fmtUs(g.pw_us_right)}${contact}`
+    : `left pulse width ${fmtUs(g.pw_us_left)} · right pulse width ${fmtUs(g.pw_us_right)}${contact}`;
 }
 
 /** One square with its label above and its three checks under it. */
@@ -297,7 +320,8 @@ function SquareWithChecks({ r, g, idPrefix, inForceLeft, inForceRight, half, cei
       <MDTypography variant="caption" component="div" sx={{ ...SUBHEAD, mb: 0.5 }}>
         {fmtHz(r.rate_hz)}
         <span style={{ ...SMALL, fontWeight: WEIGHT.regular, marginLeft: 8 }}>
-          {`left ${fmtUs(g.pw_us_left)} / right ${fmtUs(g.pw_us_right)} · `
+          {`left ${fmtUs(g.pw_us_left)} / right ${fmtUs(g.pw_us_right)}`
+            + (g.left_contact ? ` · Left contact ${g.left_contact}` : "") + " · "
             + `${num(r.n_epochs) ?? 0} stretches · ${Math.round(num(r.n_reports) || 0)} reports`}
         </span>
       </MDTypography>
@@ -383,9 +407,7 @@ function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, i
   return groups.map((g) => {
     const unfitted = g.rows.filter((r) => !r.fitted);
     const fitted = g.rows.filter((r) => r.fitted);
-    const head = g.pooled
-      ? `pooled over ${g.n_pairings} ${g.n_pairings === 1 ? "combination" : "combinations"} of left and right pulse widths, read at left ${fmtUs(g.pw_us_left)} / right ${fmtUs(g.pw_us_right)}`
-      : `left pulse width ${fmtUs(g.pw_us_left)} · right pulse width ${fmtUs(g.pw_us_right)}`;
+    const head = groupHeading(g);
     // A pairing with nothing fitted is one line, heading and all.
     if (!fitted.length && !g.pooled) {
       return (
@@ -433,7 +455,8 @@ function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, i
           )}
           <MDBox sx={{ display: "flex", flexWrap: "wrap", columnGap: "32px", rowGap: "16px" }}>
           {g.rows.map((r) => {
-            const stratumKey = `${Number(g.pw_us_left).toString()}_${Number(g.pw_us_right).toString()}`;
+            const stratumKey = `${Number(g.pw_us_left).toString()}_${Number(g.pw_us_right).toString()}`
+              + (g.left_contact ? `_${g.left_contact}` : "");
             const rateKey = Number(r.rate_hz).toString();
             const pooled = (pooledSurfaces[stratumKey] || {}).surface_at_rate || {};
             const pooledSurface = pooled[rateKey];
@@ -601,6 +624,8 @@ function pooledGroup(pooling) {
     : "none fitted";
   const sorted = rows.slice().sort((a, b) => (num(b.n_epochs) || 0) - (num(a.n_epochs) || 0));
   return { key: "pooled", pooled: true, pw_us_left: inForce.pw_us_left, pw_us_right: inForce.pw_us_right,
+    // pooled over pulse widths, never over Left contacts (step A, 2026-10-01)
+    left_contact: (rows.find((r) => r && r.left_contact) || {}).left_contact || null,
     n_pairings: nPairings, pairingsText, rows: sorted };
 }
 
@@ -667,8 +692,10 @@ export default function CurrentMapCard({ plan }) {
 
   const groups = useMemo(() => groupByPulseWidthPair(rateStrata), [rateStrata]);
   const clinicGroups = useMemo(() => groupByPulseWidthPair(rateStrataClinic), [rateStrataClinic]);
-  const pairingSentence = useMemo(() => pulseWidthPairingSentence(rateStrata, rateStrataClinic),
-    [rateStrata, rateStrataClinic]);
+  const contactTable = (((plan || {}).stage1 || {}).audit || {}).left_contacts;
+  const pairingSentence = useMemo(() => [pulseWidthPairingSentence(rateStrata, rateStrataClinic),
+    leftContactSentence(contactTable)].filter(Boolean).join(" "),
+  [rateStrata, rateStrataClinic, contactTable]);
   // The PI, 2026-09-17 (S5): every explanation on this card folds behind one control, off on every
   // load; the squares, the per-rate lines and the three checks stay visible either way. AMENDED by
   // him on 2026-09-23 for ONE paragraph: the legend is open on load.

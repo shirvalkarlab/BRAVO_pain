@@ -110,6 +110,7 @@ but is not the same statement as a measured "no".
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+import re
 
 import numpy as np
 import pandas as pd
@@ -125,11 +126,48 @@ from .routines import plots as PLT
 from .routines import surrogate as SUR
 from . import safety_ceiling as SC
 
+try:
+    from modules.DecodeCommon import sensing_rule as _SR
+except ImportError:                                  # the host runner's spelling
+    from DecodeCommon import sensing_rule as _SR
+
 #: Minimum epochs in a JOINT (pulse-width-Left, pulse-width-Right) stratum before a surface is
 #: fitted for it. The same floor the module has always used for a pulse-width stratum, now applied
 #: to a pulse-width PAIR: a stratum is not held to a laxer standard than before, and it is not made
 #: harder to clear either, since the joint stratum pools what used to be split across two arms.
 PW_STRATUM_MIN_EPOCHS = 8
+
+#: THE LEFT CONTACT IS PART OF EVERY GROUP LABEL (step A, 2026-10-01; the PI's rulings that day).
+#: Until then the model never read the contacts, so Left ring 1 and ring 2 were fitted as one
+#: surface. A stretch is labelled by its Left contact in the clinic sheet's own notation
+#: ("L C+2-"); a stretch with Left at 0 mA is LEFT_OFF and joins EVERY Left contact group on its
+#: pulse widths, because with no current the contact makes no difference (his ruling). A record
+#: that carries no contacts is labelled None throughout and grouped by pulse widths alone, as
+#: before. Right contact is not grouped on: RCS08's Right was C+1-2- in 77 of 80 stretches.
+LEFT_OFF = "off (Left 0 mA)"
+
+
+def left_contact_label(cathode, amp_left_mA=None):
+    """The Left contact a stretch was stimulating on, in the clinic sheet's notation ("L C+2-"),
+    from either the device's cathode ("2a-2b-2c") or a clinic row's contact text ("L C+2- / R
+    C+1-2-"); LEFT_OFF when Left was at 0 mA; None when no contact is recorded."""
+    try:
+        a = float(amp_left_mA) if amp_left_mA is not None else None
+    except (TypeError, ValueError):
+        a = None
+    if a is not None and np.isfinite(a) and a <= 0.0:
+        return LEFT_OFF
+    if cathode is None or (isinstance(cathode, float) and not np.isfinite(cathode)):
+        return None
+    text = str(cathode).strip()
+    if not text or text.lower() in ("none", "nan"):
+        return None
+    if text.startswith("L ") and "/" not in text:   # already a label ("L C+2-", "L 1+2-")
+        return text
+    if re.fullmatch(r"[0-3][a-c]?(-[0-3][a-c]?)*-?", text, flags=re.IGNORECASE):
+        return _SR.contacts_short(text, "Left")      # the device's cathode, "2a-2b-2c"
+    return _SR.left_contact_from_clinic_text(text)   # a clinic sheet's own text
+
 
 #: Multiplier on the standard deviation of the difference in the resolution criterion. Unchanged;
 #: re-exported from routines.resolution, the single definition, so existing importers of
@@ -278,6 +316,9 @@ class FrozenConfiguration:
     #: (``pw_us_<side>``), or from the fallback column named in the audit when the side's own is
     #: absent. ``None`` for a side whose pulse width is not recorded on the incumbent epoch.
     incumbent_pw_us_by_side: dict = field(default_factory=dict)
+    #: The Left contact in force (step A, 2026-10-01): the incumbent stretch's programmed Left
+    #: contact, read even when its Left current is 0 mA. None when the record has no contacts.
+    incumbent_left_contact: str | None = None
 
     def setting(self, hemisphere: str) -> HemisphereSetting:
         for s in self.settings:
@@ -418,6 +459,9 @@ class JointStratum:
     #: JOINT" section's sibling, the per-rate honesty check, for why this exists alongside the
     #: 3-input surface rather than instead of it.
     rate_strata: dict = field(default_factory=dict)
+    #: The Left contact this group was fitted on (step A, 2026-10-01); None when the record
+    #: carries no contacts.
+    left_contact: str | None = None
 
     @property
     def optimum_moved_by_envelope(self) -> bool:
@@ -507,6 +551,7 @@ class RateStratum:
     coverage: dict = field(default_factory=dict)
     resolution: dict = field(default_factory=dict)
     meta: dict = field(default_factory=dict)
+    left_contact: str | None = None
 
 
 #: The consequence of the pre-registered calibration check, as the PI ruled it on 2026-09-22
@@ -1308,6 +1353,39 @@ def _fit_joint_stratum(pwl, pwr, sub, *, grid, sgp_left, sgp_right, incumbent_xy
 # ---------------------------------------------------------------------------------------------
 # The stage runner
 # ---------------------------------------------------------------------------------------------
+def _contact_groups(fit, pwl_col, pwr_col):
+    """``[((pw_left, pw_right, left_contact), rows), ...]``: one group per pulse-width pair and
+    Left contact; the pair's LEFT_OFF stretches join every contact group on that pair. A pair
+    with only LEFT_OFF stretches is one group labelled LEFT_OFF; a record without contacts gives
+    one group per pair labelled None, exactly the pre-2026-10-01 grouping."""
+    out = []
+    for (pwl, pwr), sub in fit.groupby([fit[pwl_col].astype(float), fit[pwr_col].astype(float)]):
+        labels = sub["_left_contact"]
+        off = labels == LEFT_OFF
+        active = sorted({c for c in labels[~off]}, key=lambda c: (c is None, str(c)))
+        if not active:
+            out.append(((float(pwl), float(pwr), LEFT_OFF if off.any() else None), sub))
+            continue
+        for c in active:
+            mine = labels.isna() if c is None else (labels == c)
+            out.append(((float(pwl), float(pwr), c), sub[mine | off]))
+    return out
+
+
+def _left_contact_table(fit):
+    """Stretches, reports and rating days per Left contact label, for the page (step A)."""
+    rows = []
+    for label, sub in fit.groupby(fit["_left_contact"].fillna("unrecorded")):
+        rows.append(dict(
+            left_contact=str(label), n_epochs=int(len(sub)),
+            n_reports=float(pd.to_numeric(sub.get("n"), errors="coerce").fillna(0).sum())
+            if "n" in sub.columns else None,
+            n_rating_days=float(pd.to_numeric(sub.get("n_rating_days"), errors="coerce").fillna(0).sum())
+            if "n_rating_days" in sub.columns else None,
+            shared_into_every_contact=bool(label == LEFT_OFF)))
+    return sorted(rows, key=lambda r: -r["n_epochs"])
+
+
 @dataclass
 class Stage1Result:
     """Everything Stage 1 produced, plus the frozen configuration it hands to the gate."""
@@ -1491,6 +1569,18 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
     if pwl_col not in fit.columns or pwr_col not in fit.columns:
         fit = fit.iloc[0:0]
 
+    # --- THE LEFT CONTACT OF EVERY STRETCH (step A, 2026-10-01; see LEFT_OFF) ----------------
+    has_contacts = "cathode_Left" in D.columns
+    if has_contacts:
+        fit["_left_contact"] = [left_contact_label(c, a) for c, a
+                                in zip(fit["cathode_Left"], fit["amp_mA_Left"])]
+        inc_left_contact = left_contact_label(inc_row.get("cathode_Left"), inc_row["amp_mA_Left"])
+        if inc_left_contact == LEFT_OFF:              # off today: the contact still programmed
+            inc_left_contact = left_contact_label(inc_row.get("cathode_Left"), None)
+    else:
+        fit["_left_contact"] = None
+        inc_left_contact = None
+
     h_audit = {}
     for hemi, col in (("Left", pwl_col), ("Right", pwr_col)):
         h_audit[hemi] = dict(
@@ -1507,21 +1597,21 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
     if len(fit):
         audit["design"] = pulse_width_pair_design_audit(fit, pwl_col=pwl_col, pwr_col=pwr_col,
                                                         min_epochs=min_stratum_epochs)
+    audit["incumbent_left_contact"] = inc_left_contact
+    audit["left_contacts"] = _left_contact_table(fit) if has_contacts else []
 
     # --- fit one 3-D surface per adequately-sampled joint pulse-width pair ------------------------
     slices, rows, skipped = {}, [], {}
-    if len(fit):
-        groups = [((float(pwl), float(pwr)), sub) for (pwl, pwr), sub
-                 in fit.groupby([fit[pwl_col].astype(float), fit[pwr_col].astype(float)])]
-    else:
-        groups = []
-    for (pwl, pwr), sub in groups:
-        key = (pwl, pwr)
+    groups = _contact_groups(fit, pwl_col, pwr_col) if len(fit) else []
+    fitted_epochs = set()
+    for (pwl, pwr, contact), sub in groups:
+        key = (pwl, pwr, contact)
+        skip_key = f"pwL{pwl:g}_pwR{pwr:g}" + (f"_{contact}" if contact is not None else "")
+        where = f"(Left {pwl:g} us, Right {pwr:g} us" + (f", Left contact {contact})" if contact is not None else ")")
         if len(sub) < int(min_stratum_epochs):
-            skipped[f"pwL{pwl:g}_pwR{pwr:g}"] = (
-                f"{len(sub)} fitted stretches of unchanged settings at (Left {pwl:g} us, Right "
-                f"{pwr:g} us), below the minimum of {int(min_stratum_epochs)} for a "
-                f"three-dimensional surface")
+            skipped[skip_key] = (
+                f"{len(sub)} fitted stretches of unchanged settings at {where}, below the "
+                f"minimum of {int(min_stratum_epochs)} for a three-dimensional surface")
             continue
         try:
             sl = _fit_joint_stratum(pwl, pwr, sub, grid=grid, sgp_left=sgp_by_side["Left"],
@@ -1530,8 +1620,9 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
                                     eta=eta, beta=beta, constraint=constraint,
                                     ceiling_mA=safety_ceiling_by_hemisphere)
         except (ValueError, RuntimeError) as exc:
-            skipped[f"pwL{pwl:g}_pwR{pwr:g}"] = f"{type(exc).__name__}: {exc}"
+            skipped[skip_key] = f"{type(exc).__name__}: {exc}"
             continue
+        sl.left_contact = contact
         # --- PER-RATE 2-input surfaces (2026-09-14): the honest current-recommendation engine.
         # Every rate this stratum actually delivered gets its own (amp_Left, amp_Right) fit when
         # it clears RATE_STRATUM_MIN_EPOCHS; a thinner rate is recorded as not fitted, never
@@ -1561,11 +1652,14 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
                 continue
             rs.resolution = _rate_stratum_resolution(rs, sl, resolution_k=resolution_k)
             rate_strata[rate] = rs
+        for _rs in rate_strata.values():
+            _rs.left_contact = contact
         sl.rate_strata = rate_strata
+        fitted_epochs.update(float(e) for e in sub["epoch"])
 
         slices[key] = sl
         rows.append(dict(
-            pw_us_left=pwl, pw_us_right=pwr, n_epochs=sl.n_epochs,
+            pw_us_left=pwl, pw_us_right=pwr, left_contact=contact, n_epochs=sl.n_epochs,
             n_reports=sl.meta["n_reports_total"],
             opt_rate_hz=sl.x_star[0], opt_amp_mA_left=sl.x_star[1], opt_amp_mA_right=sl.x_star[2],
             opt_posterior_mean=sl.mu_star, opt_posterior_sd=sl.sd_star,
@@ -1586,11 +1680,13 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
             no_safe_cell_in_envelope=bool(sl.envelope_empty),
             n_allowed=sl.meta["n_allowed"]))
 
-    audit["n_epochs_in_fitted_strata"] = int(sum(s.n_epochs for s in slices.values()))
+    # Distinct stretches: a Left-0-mA stretch fitted into two contact groups counts once.
+    audit["n_epochs_in_fitted_strata"] = int(len(fitted_epochs))
 
     settings, exclusions_by_side = _freeze_joint(
         slices, inc_rate, inc_pw_by_side, h_audit=h_audit, gx=gx, resolution_k=resolution_k,
-        constraint=constraint, min_stratum_epochs=min_stratum_epochs, hemispheres=hemispheres)
+        constraint=constraint, min_stratum_epochs=min_stratum_epochs, hemispheres=hemispheres,
+        inc_left_contact=inc_left_contact)
 
     envelope = dict(
         constrained=not constraint.lifted,
@@ -1617,7 +1713,7 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
         incumbent_epoch=float(incumbent_epoch), incumbent_rate_hz=inc_rate, incumbent_pw_us=inc_pw,
         data_horizon=str(data_horizon), washin_min=float(washin_min),
         n_epochs_total=int(len(D)), audit=audit, adaptive_envelope=envelope,
-        incumbent_pw_us_by_side=dict(inc_pw_by_side))
+        incumbent_pw_us_by_side=dict(inc_pw_by_side), incumbent_left_contact=inc_left_contact)
 
     # --- the strata table: one row per (hemisphere, joint stratum), a per-side VIEW of one joint
     # fit, so every existing reader of the "strata" table (DecisionStrip.js, ExcludedSettingsChart.js)
@@ -1632,7 +1728,8 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
             row["opt_amp_mA"] = row["opt_amp_mA_left"] if hemi == "Left" else row["opt_amp_mA_right"]
             row["opt_amp_mA_unconstrained"] = (row["opt_amp_mA_left_unconstrained"] if hemi == "Left"
                                                else row["opt_amp_mA_right_unconstrained"])
-            row["joint_stratum_key"] = f"{row['pw_us_left']:g}_{row['pw_us_right']:g}"
+            row["joint_stratum_key"] = (f"{row['pw_us_left']:g}_{row['pw_us_right']:g}"
+                                        + (f"_{row['left_contact']}" if row.get("left_contact") is not None else ""))
             summary_rows.append(row)
     summary = pd.DataFrame(summary_rows)
 
@@ -1645,10 +1742,11 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
                      if v and v[0] is not None} or None),
         held_mA={"Left": inc_amp_left, "Right": inc_amp_right})
     rate_rows = []
-    for (pwl, pwr), sl in slices.items():
+    for (pwl, pwr, contact), sl in slices.items():
         for rate, rs in (sl.rate_strata or {}).items():
             pooled = _pooled_slice_at_rate(sl, rate)
-            row = dict(pw_us_left=float(pwl), pw_us_right=float(pwr), rate_hz=float(rate),
+            row = dict(pw_us_left=float(pwl), pw_us_right=float(pwr), left_contact=contact,
+                       rate_hz=float(rate),
                        fitted=bool(rs.fitted), n_epochs=int(rs.n_epochs),
                        pooled_across_rates_mu_range=pooled["mu_range"],
                        pooled_across_rates_delivered_at_this_rate=pooled["delivered_at_this_rate"],
@@ -1671,7 +1769,12 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
     elif not len(fit):
         pooling_audit = dict(computed=False, default="separate", reason="no feasible epochs")
     else:
-        for rate, subr in fit.groupby("freq_hz"):
+        # Pooled over pulse widths, never over Left contacts: the contact in force and the
+        # stretches with Left at 0 mA (step A, 2026-10-01).
+        fit_pool = fit
+        if has_contacts:
+            fit_pool = fit[fit["_left_contact"].isin([inc_left_contact, LEFT_OFF])]
+        for rate, subr in fit_pool.groupby("freq_hz"):
             rate = float(rate)
             n_r = int(len(subr))
             if n_r < int(RATE_STRATUM_MIN_EPOCHS):
@@ -1699,7 +1802,9 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
                                      reason=f"{type(exc).__name__}: {exc}",
                                      meta=dict(pooled_pulse_widths=True, pairings=[], n_pairings=0))
             pooled_rate_strata[rate] = rs
+            rs.left_contact = inc_left_contact
             row = dict(pw_us_left=float(inc_pw_left), pw_us_right=float(inc_pw_right), rate_hz=rate,
+                       left_contact=inc_left_contact,
                        fitted=bool(rs.fitted), n_epochs=int(rs.n_epochs),
                        pooled_pulse_widths=True,
                        n_pairings_pooled=int((rs.meta or {}).get("n_pairings", 0)))
@@ -1805,8 +1910,15 @@ def _rate_row_numbers(rs: RateStratum, *, ceiling_mA=None, held_mA=None) -> dict
                           coverage_gap=None, sentence=None, reason=str(rs.reason))
 
 
+def _configuration_text(s) -> str:
+    """"(Left 60 us, Right 160 us, Left contact L C+1-)" -- the group's own label in words."""
+    c = getattr(s, "left_contact", None)
+    return (f"(Left {s.pw_us_left:g} us, Right {s.pw_us_right:g} us"
+            + (f", Left contact {c})" if c is not None else ")"))
+
+
 def _freeze_joint(slices: dict, inc_rate, inc_pw_by_side: dict, *, h_audit, gx, resolution_k,
-                  constraint, min_stratum_epochs, hemispheres) -> tuple:
+                  constraint, min_stratum_epochs, hemispheres, inc_left_contact=None) -> tuple:
     """Pick ONE joint stratum (rate, pulse-width-Left, pulse-width-Right, amp-Left, amp-Right) and
     state whether it is resolved. Returns ``(settings, exclusions_by_side)``.
 
@@ -1998,9 +2110,17 @@ def _freeze_joint(slices: dict, inc_rate, inc_pw_by_side: dict, *, h_audit, gx, 
     incumbent_stratum = None
     if inc_pwl is not None and inc_pwr is not None:
         for s in usable:
-            if abs(s.pw_us_left - inc_pwl) < 1e-9 and abs(s.pw_us_right - inc_pwr) < 1e-9:
+            if (abs(s.pw_us_left - inc_pwl) < 1e-9 and abs(s.pw_us_right - inc_pwr) < 1e-9
+                    and getattr(s, "left_contact", None) == inc_left_contact):
                 incumbent_stratum = s
                 break
+    # THE LEFT CONTACT, SAID WHEN IT CHANGES (step A, 2026-10-01): the comparison below is
+    # between whole configurations (pulse widths and Left contact), so a move of contact is named.
+    if (inc_left_contact is not None and getattr(best, "left_contact", None) is not None
+            and best.left_contact not in (inc_left_contact, LEFT_OFF)):
+        reasons.append(
+            f"the chosen group is on Left contact {best.left_contact}; the Left contact in force is "
+            f"{inc_left_contact}, so this is a move of Left contact as well as of rate and current")
 
     if len(usable) < 2:
         pw_resolved = False
@@ -2038,9 +2158,8 @@ def _freeze_joint(slices: dict, inc_rate, inc_pw_by_side: dict, *, h_audit, gx, 
                            and pw_gain > float(resolution_k) * pw_sd_diff)
         verdict = "IS" if pw_resolved else "is NOT"
         reasons.append(
-            f"the pulse-width-pair move (Left {incumbent_stratum.pw_us_left:g}, Right "
-            f"{incumbent_stratum.pw_us_right:g}) -> (Left {best.pw_us_left:g}, Right "
-            f"{best.pw_us_right:g}) us {verdict} resolved at the chosen cell "
+            f"the move {_configuration_text(incumbent_stratum)} -> {_configuration_text(best)} "
+            f"{verdict} resolved at the chosen cell "
             f"({best.x_star[0]:g} Hz, {best.x_star[1]:.2f} / {best.x_star[2]:.2f} mA): posterior "
             f"gain {pw_gain:+.4f} NRS points against difference SD {pw_sd_diff:.4f}")
 
@@ -2104,6 +2223,8 @@ def _freeze_joint(slices: dict, inc_rate, inc_pw_by_side: dict, *, h_audit, gx, 
         detail = dict(n_slices=len(usable), best_pw_us_left=float(best.pw_us_left),
                      best_pw_us_right=float(best.pw_us_right),
                      incumbent_pw_us_left=inc_pwl, incumbent_pw_us_right=inc_pwr,
+                     left_contact=getattr(best, "left_contact", None),
+                     incumbent_left_contact=inc_left_contact,
                      adaptive_envelope=dict(env_detail),
                      current_resolution=dict(current_resolution))
         detail["adaptive_envelope"]["brainsense_pair"] = ENV.brainsense_pair_demonstrated(

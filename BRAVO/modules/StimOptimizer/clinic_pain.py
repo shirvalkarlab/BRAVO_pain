@@ -902,11 +902,21 @@ def epoch_frame_from_steps(steps: pd.DataFrame) -> pd.DataFrame:
     key_cols = ["freq_hz", "amp_mA_Left", "amp_mA_Right", "pw_us_Left", "pw_us_Right"]
     for c in key_cols:
         d[f"_k_{c}"] = d[c].round(_SETTING_NDIGITS)
+    # THE LEFT CONTACT IS PART OF A STRETCH (step A, 2026-10-01): two steps at the same currents
+    # on Left ring 1 and ring 2 are two settings, not one. Steps with Left at 0 mA share one label
+    # whatever their contact text; a step whose text names no readable Left contact is labelled
+    # "unrecorded" and kept apart (stage1_openloop.left_contact_label, the sheets' six forms).
+    from . import stage1_openloop as _S1
+    d["_k_left_contact"] = [
+        (_S1.left_contact_label(c, a) or "unrecorded")
+        for c, a in zip(d.get("contacts_raw", pd.Series([None] * len(d), index=d.index)),
+                        d["amp_mA_Left"])]
 
     item_col = ITEM_COL
 
     rows = []
-    for i, (key, sub) in enumerate(d.groupby([f"_k_{c}" for c in key_cols], dropna=False)):
+    for i, (key, sub) in enumerate(d.groupby([f"_k_{c}" for c in key_cols] + ["_k_left_contact"],
+                                             dropna=False)):
         row = dict(epoch=float(i), freq_hz=float(sub["freq_hz"].iloc[0]),
                    amp_mA_Left=float(sub["amp_mA_Left"].iloc[0]),
                    amp_mA_Right=float(sub["amp_mA_Right"].iloc[0]),
@@ -914,6 +924,8 @@ def epoch_frame_from_steps(steps: pd.DataFrame) -> pd.DataFrame:
                               if pd.notna(sub["pw_us_Left"].iloc[0]) else float("nan")),
                    pw_us_Right=(float(sub["pw_us_Right"].iloc[0])
                                if pd.notna(sub["pw_us_Right"].iloc[0]) else float("nan")),
+                   cathode_Left=(None if sub["_k_left_contact"].iloc[0] == "unrecorded"
+                                 else sub["_k_left_contact"].iloc[0]),
                    n=int(len(sub)), t0=sub["t_utc"].min(),
                    dur_h=float((sub["duration_s"].fillna(0).sum()) / 3600.0),
                    setting=("mixed" if sub["setting"].nunique() > 1 else sub["setting"].iloc[0]),
@@ -1143,6 +1155,17 @@ def next_session_coverage(ep, in_force, *, ceiling_mA=None) -> dict:
     at_rate = d[d["freq_hz"].astype(float).round(3) == round(rate, 3)]
     if at_rate.empty:
         return {"available": False, "reason": f"no clinic epoch at the rate in force ({rate:g} Hz)"}
+    # Only the Left contact in force and the Left-0-mA stretches count (step A, 2026-10-01): a
+    # current pair measured on another Left contact is a different setting.
+    from . import stage1_openloop as _S1
+    contact = _S1.left_contact_label((in_force or {}).get("Left", {}).get("contacts_short"), None)
+    if contact is not None and "cathode_Left" in at_rate.columns:
+        labels = [_S1.left_contact_label(c, a) for c, a
+                  in zip(at_rate["cathode_Left"], at_rate["amp_mA_Left"])]
+        at_rate = at_rate[[lab in (contact, _S1.LEFT_OFF) for lab in labels]]
+        if at_rate.empty:
+            return {"available": False, "left_contact": contact,
+                    "reason": f"no clinic epoch at {rate:g} Hz on the Left contact in force ({contact})"}
     pair = list(zip(at_rate["pw_us_Left"].astype(float).round(1), at_rate["pw_us_Right"].astype(float).round(1)))
     counts = pd.Series(pair).value_counts()
     others = [k for k in counts.index if k != (round(pwl, 1), round(pwr, 1))]
@@ -1157,16 +1180,21 @@ def next_session_coverage(ep, in_force, *, ceiling_mA=None) -> dict:
               for a, b in sorted(keep, key=lambda k: (k != (round(pwl, 1), round(pwr, 1)), k))]
     if record:
         sentence = (f"The PI's ruling 5: the next session runs at {rate:g} Hz at the pairing in force "
-                    f"({pwl:g}/{pwr:g} \u00b5s) and its ratings are merged with the clinic record at "
+                    f"({pwl:g}/{pwr:g} \u00b5s)"
+                    + (f" on Left contact {contact}" if contact is not None else "")
+                    + f" and its ratings are merged with the clinic record at "
                     f"{record[0]:g}/{record[1]:g} \u00b5s. Merged, {cov['n_pairs']} of "
                     f"{cov['n_pairs_required']} current pairs qualify"
                     + ("; coverage passes." if cov.get("passes") else "."))
     else:
         sentence = (f"The PI's ruling 5 merges the next session with the clinic record at {rate:g} Hz, "
                     f"but there is no earlier record there at another pairing; the pairing in force "
-                    f"({pwl:g}/{pwr:g} \u00b5s) alone has {cov['n_pairs']} of {cov['n_pairs_required']} "
+                    f"({pwl:g}/{pwr:g} \u00b5s)"
+                    + (f" on Left contact {contact}" if contact is not None else "")
+                    + f" alone has {cov['n_pairs']} of {cov['n_pairs_required']} "
                     f"qualifying current pairs.")
-    return {"available": True, "rate_hz": float(rate), "pairings_merged": merged,
+    return {"available": True, "rate_hz": float(rate), "left_contact": contact,
+            "pairings_merged": merged,
             "n_epochs": int(len(sub)), "coverage": {k: v for k, v in cov.items() if k != "pairs"},
             "gap": gap, "sentence": sentence}
 

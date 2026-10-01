@@ -571,12 +571,13 @@ def _rate_stratum_surface(rs) -> dict | None:
 
 
 def _rate_stratum_lookup(s1) -> dict:
-    """`{(pw_us_left, pw_us_right, rate_hz), rounded: RateStratum}` over every joint stratum Stage
-    1 fitted, so a serialised `rate_strata` row can find its own raw object back."""
+    """`{(pw_us_left, pw_us_right, left_contact, rate_hz), rounded: RateStratum}` over every joint
+    stratum Stage 1 fitted, so a serialised `rate_strata` row can find its own raw object back.
+    The Left contact is part of the label since step A (2026-10-01)."""
     out = {}
-    for (pwl, pwr), sl in (getattr(s1, "slices", None) or {}).items():
+    for (pwl, pwr, contact), sl in (getattr(s1, "slices", None) or {}).items():
         for rate, rs in (getattr(sl, "rate_strata", None) or {}).items():
-            out[(round(float(pwl), 6), round(float(pwr), 6), round(float(rate), 6))] = rs
+            out[(round(float(pwl), 6), round(float(pwr), 6), contact, round(float(rate), 6))] = rs
     return out
 
 
@@ -590,7 +591,7 @@ def _attach_rate_stratum_surfaces(records, s1):
         if not row.get("fitted"):
             continue
         key = (round(float(row["pw_us_left"]), 6), round(float(row["pw_us_right"]), 6),
-              round(float(row["rate_hz"]), 6))
+              row.get("left_contact"), round(float(row["rate_hz"]), 6))
         raw = lut.get(key)
         surf = _rate_stratum_surface(raw)
         if surf is not None:
@@ -669,8 +670,8 @@ def _joint_pooled_surfaces(s1) -> dict:
     honest per-rate surface, not this one, decides a current). Built once per stratum rather than
     once per rate-strata row, since every rate inside one stratum shares the one pooled fit."""
     out = {}
-    for (pwl, pwr), sl in (getattr(s1, "slices", None) or {}).items():
-        key = f"{float(pwl):g}_{float(pwr):g}"
+    for (pwl, pwr, contact), sl in (getattr(s1, "slices", None) or {}).items():
+        key = f"{float(pwl):g}_{float(pwr):g}" + (f"_{contact}" if contact is not None else "")
         rates = {}
         for rate in (getattr(sl, "rate_strata", None) or {}).keys():
             fi = int(np.argmin(np.abs(np.asarray(sl.grid.freqs, float) - float(rate))))
@@ -681,7 +682,8 @@ def _joint_pooled_surfaces(s1) -> dict:
                 amps_mA=[round(float(v), 4) for v in np.asarray(sl.grid.amps_left, float)],
                 mu=_round_grid(mu3), sd=_round_grid(sd3), **_pain_reference(s1),
                 safe=[[bool(v) for v in row] for row in safe3])
-        out[key] = dict(pw_us_left=float(pwl), pw_us_right=float(pwr), surface_at_rate=rates)
+        out[key] = dict(pw_us_left=float(pwl), pw_us_right=float(pwr), left_contact=contact,
+                        surface_at_rate=rates)
     return out
 
 
@@ -921,7 +923,8 @@ def _frozen_joint_stratum(s1, frozen):
     pwr = right.pw_us if right is not None else None
     if pwl is None or pwr is None:
         return None
-    return (s1.slices or {}).get((float(pwl), float(pwr)))
+    contact = (left or right).detail.get("left_contact")
+    return (s1.slices or {}).get((float(pwl), float(pwr), contact))
 
 
 def _joint_queue_frame(s1, frozen, limit=25):
@@ -1093,6 +1096,8 @@ def _two_stage_payload(rep, *, inputs, seconds, in_force=None, clinic_block=None
             # `incumbent_pulse_width_us` above is the LEFT column's value, kept under its name.
             "incumbent_pulse_width_us_by_side": _two_stage_jsonable(
                 dict(getattr(frozen, "incumbent_pw_us_by_side", None) or {})),
+            # The Left contact in force (step A, 2026-10-01); None when the record has none.
+            "incumbent_left_contact": getattr(frozen, "incumbent_left_contact", None),
             "data_horizon": str(frozen.data_horizon),
             "washin_min": _jsonable(frozen.washin_min),
             "n_epochs_total": _jsonable(frozen.n_epochs_total),

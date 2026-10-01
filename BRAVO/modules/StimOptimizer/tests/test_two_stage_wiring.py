@@ -458,3 +458,12 @@ def test_the_clinic_steps_change_the_response_key_and_never_the_four_tables_key(
     none = BS._response_signature(*args, {"TwoStage": True}, *tail, clinic_key=None)
     assert len({a, b, none}) == 3
     assert BS._products_signature(a) == BS._products_signature(b) == BS._products_signature(none)
+
+
+def test_the_frozen_configuration_names_the_left_contact_in_force_and_the_per_contact_table(bench, shared_stage1):
+    """Step A (2026-10-01): the response says which Left contact is in force -- None here, this
+    record carries no contacts -- and carries the per-contact table, empty for the same reason."""
+    two = BS.run_for_participant(dict(REQ_FLAG))["two_stage"]
+    fc = two["stage1"]["frozen_configuration"]
+    assert "incumbent_left_contact" in fc and fc["incumbent_left_contact"] is None
+    assert two["stage1"]["audit"]["left_contacts"] == []

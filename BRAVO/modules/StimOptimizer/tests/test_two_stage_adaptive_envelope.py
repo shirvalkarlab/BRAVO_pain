@@ -225,8 +225,9 @@ def test_with_the_exclusion_the_frozen_rate_is_the_best_in_envelope_cell(constra
     res = constrained_run
     s = res.frozen.setting("Left")
     # The fixture carries no `pw_us_Right` column, so the Right side falls back to the Left
-    # column and the joint stratum key is (pw, pw) -- the joint redesign's key shape.
-    sl = res.slices[(s.pw_us, s.pw_us)]
+    # column and the joint stratum key is (pw, pw, Left contact) -- None here, the fixture
+    # carries no contacts (step A, 2026-10-01).
+    sl = res.slices[(s.pw_us, s.pw_us, s.detail["left_contact"])]
     gx = sl.grid.grid_X()
     allowed = sl.safe & (gx[:, 0] >= MIN_RATE)
     assert allowed.any() and allowed.sum() < sl.safe.sum()

@@ -57,7 +57,7 @@ def test_a_fitted_rows_surface_matches_the_raw_rate_stratum_value_for_value(stag
 
     # The raw object the response was built from.
     key = (round(float(row["pw_us_left"]), 6), round(float(row["pw_us_right"]), 6),
-          round(float(row["rate_hz"]), 6))
+          row.get("left_contact"), round(float(row["rate_hz"]), 6))
     rs = BS._rate_stratum_lookup(stage1_two_rates)[key]
 
     assert len(surface["amps_mA"]) == 21

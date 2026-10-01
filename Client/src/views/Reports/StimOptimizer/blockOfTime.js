@@ -84,8 +84,10 @@ export function rateRowForSetting(plan, setting) {
   const rows = (((plan && plan.stage1) || {}).rate_strata) || [];
   const d = (setting && setting.detail) || {};
   if (!setting) return null;
+  // ...and on the setting's own Left contact (step A, 2026-10-01); absent on both sides before.
   return rows.find((r) => r && r.fitted && same(r.rate_hz, setting.rate_hz)
-    && same(r.pw_us_left, d.best_pw_us_left) && same(r.pw_us_right, d.best_pw_us_right)) || null;
+    && same(r.pw_us_left, d.best_pw_us_left) && same(r.pw_us_right, d.best_pw_us_right)
+    && (r.left_contact ?? null) === (d.left_contact ?? null)) || null;
 }
 
 /** The dagger, beside a recommended current whose map moves. */

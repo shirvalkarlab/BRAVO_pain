@@ -146,7 +146,7 @@ def _stage1():
 def test_stage1_proposes_and_recommends_nothing_above_either_sides_ceiling():
     s1 = _stage1()
     assert s1.slices, "the fixture fits a joint surface"
-    for (pwl, pwr), sl in s1.slices.items():
+    for (pwl, pwr, _contact), sl in s1.slices.items():
         gx = sl.grid.grid_X()
         q = np.asarray(sl.queue, int)
         assert (gx[q, 1] <= 3.0 + TOL).all() and (gx[q, 2] <= 3.0 + TOL).all(), \

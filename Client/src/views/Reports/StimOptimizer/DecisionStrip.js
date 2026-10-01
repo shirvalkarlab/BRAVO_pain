@@ -82,7 +82,8 @@ function stratumForSetting(strata, side, s) {
   const same = (a, b) => a !== null && b !== null && Math.abs(a - b) < 1e-9;
   if (bl !== null && br !== null) {
     return strata.find((r) => r && r.hemisphere === side
-      && same(num(r.pw_us_left), bl) && same(num(r.pw_us_right), br)) || null;
+      && same(num(r.pw_us_left), bl) && same(num(r.pw_us_right), br)
+      && (r.left_contact ?? null) === (d.left_contact ?? null)) || null;
   }
   const byOwn = strata.filter((r) => r && r.hemisphere === side && same(num(r.pw_us), num(s && s.pulse_width_us)));
   return byOwn.length === 1 ? byOwn[0] : null;
