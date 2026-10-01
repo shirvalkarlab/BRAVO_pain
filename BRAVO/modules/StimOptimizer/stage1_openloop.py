@@ -1416,6 +1416,61 @@ class Stage1Result:
         return list(self.slices.values())
 
 
+def _fit_contact_group(pwl, pwr, contact, sub, *, grid, sgp_left, sgp_right, incumbent_xyz,
+                       fixed_length_scale, kappa, q, eta, beta, constraint, ceiling_mA, amp_grid,
+                       calibration_check, resolution_k):
+    """One (Left pulse width, Right pulse width, Left contact) group's fits: its 3-D surface, then
+    one (amp_Left, amp_Right) surface per rate it delivered. Returns ``(JointStratum, None)``, or
+    ``(None, reason)`` when the 3-D surface cannot be fitted (the reason is the exception's own
+    text, recorded by the caller as the group's skip reason).
+
+    A function of its arguments only (speed-up item B1, 2026-10-01), so the groups can be fitted in
+    worker processes; the caller keeps the group-size check, the counts and the summary rows.
+    """
+    try:
+        sl = _fit_joint_stratum(pwl, pwr, sub, grid=grid, sgp_left=sgp_left,
+                                sgp_right=sgp_right, incumbent_xyz=incumbent_xyz,
+                                fixed_length_scale=fixed_length_scale, kappa=kappa, q=q,
+                                eta=eta, beta=beta, constraint=constraint,
+                                ceiling_mA=ceiling_mA)
+    except (ValueError, RuntimeError) as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+    sl.left_contact = contact
+    # --- PER-RATE 2-input surfaces (2026-09-14): the honest current-recommendation engine.
+    # Every rate this stratum actually delivered gets its own (amp_Left, amp_Right) fit when
+    # it clears RATE_STRATUM_MIN_EPOCHS; a thinner rate is recorded as not fitted, never
+    # silently pooled into a neighbour, exactly the discipline the pulse-width strata
+    # themselves already use.
+    rate_strata = {}
+    for rate, subr in sub.groupby("freq_hz"):
+        rate = float(rate)
+        n_r = int(len(subr))
+        if n_r < int(RATE_STRATUM_MIN_EPOCHS):
+            rate_strata[rate] = RateStratum(
+                pw_us_left=float(pwl), pw_us_right=float(pwr), rate_hz=rate,
+                n_epochs=n_r, fitted=False,
+                reason=(f"{n_r} stretches of unchanged settings, below the minimum of "
+                        f"{int(RATE_STRATUM_MIN_EPOCHS)}"))
+            continue
+        try:
+            rs = _fit_rate_stratum(pwl, pwr, rate, subr, amp_grid=amp_grid,
+                                   sgp_left=sgp_left, sgp_right=sgp_right,
+                                   fixed_length_scale=fixed_length_scale, beta=beta,
+                                   calibration_check=bool(calibration_check),
+                                   ceiling_mA=ceiling_mA)
+        except (ValueError, RuntimeError) as exc:
+            rate_strata[rate] = RateStratum(
+                pw_us_left=float(pwl), pw_us_right=float(pwr), rate_hz=rate,
+                n_epochs=n_r, fitted=False, reason=f"{type(exc).__name__}: {exc}")
+            continue
+        rs.resolution = _rate_stratum_resolution(rs, sl, resolution_k=resolution_k)
+        rate_strata[rate] = rs
+    for _rs in rate_strata.values():
+        _rs.left_contact = contact
+    sl.rate_strata = rate_strata
+    return sl, None
+
+
 def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_leg",
               pw_col=None, freq_grid=PLT.FREQ_GRID, amp_grid=JOINT_AMP_GRID,
               fixed_length_scale=JOINT_FIXED_LENGTH_SCALE, beta=PLT.BETA, kappa=PLT.KAPPA,
@@ -1613,48 +1668,15 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
                 f"{len(sub)} fitted stretches of unchanged settings at {where}, below the "
                 f"minimum of {int(min_stratum_epochs)} for a three-dimensional surface")
             continue
-        try:
-            sl = _fit_joint_stratum(pwl, pwr, sub, grid=grid, sgp_left=sgp_by_side["Left"],
-                                    sgp_right=sgp_by_side["Right"], incumbent_xyz=incumbent_xyz,
-                                    fixed_length_scale=fixed_length_scale, kappa=kappa, q=q,
-                                    eta=eta, beta=beta, constraint=constraint,
-                                    ceiling_mA=safety_ceiling_by_hemisphere)
-        except (ValueError, RuntimeError) as exc:
-            skipped[skip_key] = f"{type(exc).__name__}: {exc}"
+        sl, reason = _fit_contact_group(
+            pwl, pwr, contact, sub, grid=grid, sgp_left=sgp_by_side["Left"],
+            sgp_right=sgp_by_side["Right"], incumbent_xyz=incumbent_xyz,
+            fixed_length_scale=fixed_length_scale, kappa=kappa, q=q, eta=eta, beta=beta,
+            constraint=constraint, ceiling_mA=safety_ceiling_by_hemisphere, amp_grid=amp_grid,
+            calibration_check=calibration_check, resolution_k=resolution_k)
+        if sl is None:
+            skipped[skip_key] = reason
             continue
-        sl.left_contact = contact
-        # --- PER-RATE 2-input surfaces (2026-09-14): the honest current-recommendation engine.
-        # Every rate this stratum actually delivered gets its own (amp_Left, amp_Right) fit when
-        # it clears RATE_STRATUM_MIN_EPOCHS; a thinner rate is recorded as not fitted, never
-        # silently pooled into a neighbour, exactly the discipline the pulse-width strata
-        # themselves already use.
-        rate_strata = {}
-        for rate, subr in sub.groupby("freq_hz"):
-            rate = float(rate)
-            n_r = int(len(subr))
-            if n_r < int(RATE_STRATUM_MIN_EPOCHS):
-                rate_strata[rate] = RateStratum(
-                    pw_us_left=float(pwl), pw_us_right=float(pwr), rate_hz=rate,
-                    n_epochs=n_r, fitted=False,
-                    reason=(f"{n_r} stretches of unchanged settings, below the minimum of "
-                            f"{int(RATE_STRATUM_MIN_EPOCHS)}"))
-                continue
-            try:
-                rs = _fit_rate_stratum(pwl, pwr, rate, subr, amp_grid=amp_grid,
-                                       sgp_left=sgp_by_side["Left"], sgp_right=sgp_by_side["Right"],
-                                       fixed_length_scale=fixed_length_scale, beta=beta,
-                                       calibration_check=bool(calibration_check),
-                                       ceiling_mA=safety_ceiling_by_hemisphere)
-            except (ValueError, RuntimeError) as exc:
-                rate_strata[rate] = RateStratum(
-                    pw_us_left=float(pwl), pw_us_right=float(pwr), rate_hz=rate,
-                    n_epochs=n_r, fitted=False, reason=f"{type(exc).__name__}: {exc}")
-                continue
-            rs.resolution = _rate_stratum_resolution(rs, sl, resolution_k=resolution_k)
-            rate_strata[rate] = rs
-        for _rs in rate_strata.values():
-            _rs.left_contact = contact
-        sl.rate_strata = rate_strata
         fitted_epochs.update(float(e) for e in sub["epoch"])
 
         slices[key] = sl
