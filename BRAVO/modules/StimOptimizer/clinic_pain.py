@@ -1031,6 +1031,23 @@ CLINIC_MIN_TOLERATED_H = 0.001
 _SETTING_NDIGITS = 2
 
 
+def _local_days(t_utc) -> pd.Series:
+    """Each instant's California calendar day (decision 142's day rule), one conversion for the
+    whole column; `_days_of` then reads any subset of it. The same element-wise conversion
+    `_rating_days` makes per subset (2026-10-02: per group and pain site it ran 2,432 times per
+    frame on RCS08, about half of each 2.3 s build)."""
+    try:
+        from modules.Biomarkers.routines.local_time import local_calendar_day
+    except ImportError:                                        # pragma: no cover - host spelling
+        from Biomarkers.routines.local_time import local_calendar_day
+    return local_calendar_day(pd.Series(pd.to_datetime(t_utc, utc=True, errors="coerce")))
+
+
+def _days_of(days) -> tuple:
+    """`_rating_days`'s answer from days `_local_days` already converted."""
+    return tuple(sorted({d.isoformat() for d in days if d is not None and not pd.isna(d)}))
+
+
 def _rating_days(t_utc) -> tuple:
     """The distinct California calendar days (ISO strings, sorted) the instants fall on --
     decision 142's day rule, through the Biomarkers helper."""
@@ -1110,6 +1127,7 @@ def epoch_frame_from_steps(steps: pd.DataFrame) -> pd.DataFrame:
                         d["amp_mA_Left"])]
 
     item_col = ITEM_COL
+    d["_day"] = _local_days(d["t_utc"])        # once per frame, read per group below
 
     rows = []
     for i, (key, sub) in enumerate(d.groupby([f"_k_{c}" for c in key_cols] + ["_k_left_contact"],
@@ -1130,7 +1148,7 @@ def epoch_frame_from_steps(steps: pd.DataFrame) -> pd.DataFrame:
                    n_clinic=int((sub["setting"] == "clinic").sum()),
                    n_home=int((sub["setting"] == "home").sum()),
                    # decision 184: the California days this setting's scores were filed on
-                   rating_days=_rating_days(sub["t_utc"]))
+                   rating_days=_days_of(sub["_day"]))
         row["n_rating_days"] = len(row["rating_days"])
         for site, col in item_col.items():
             vals = sub[site].dropna().astype(float)
@@ -1138,7 +1156,7 @@ def epoch_frame_from_steps(steps: pd.DataFrame) -> pd.DataFrame:
             row[f"{col}_sd"] = float(vals.std(ddof=1)) if len(vals) >= 2 else float("nan")
             # per site: how many steps at this setting scored it, and on which days (2026-09-24)
             row[f"n_{col}"] = int(len(vals))
-            row[f"rating_days_{col}"] = _rating_days(sub.loc[sub[site].notna(), "t_utc"])
+            row[f"rating_days_{col}"] = _days_of(sub.loc[sub[site].notna(), "_day"])
         se = sub["side_effect_score"].dropna()
         if len(se):
             worst = int(round(float(se.max())))
