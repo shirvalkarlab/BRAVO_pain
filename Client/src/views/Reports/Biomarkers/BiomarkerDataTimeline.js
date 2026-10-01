@@ -248,6 +248,9 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
   // (matched PSDs at the current window) exists. `binOf(ch, t)` returns "high"|"low"|"excluded"|
   // "unmatched" for a mark at (canonical channel, epoch seconds) — the lookup the scan model built.
   const binMode = colorMode === "binarization" && !!(scanModel && scanModel.binByKey);
+  // The draw effect reads the scan model only inside `binMode` branches, so outside the high/low
+  // split view a new model (every settled slider drag) must not redraw the timeline (2026-10-01).
+  const scanModelForPlot = binMode ? scanModel : null;
   // WHETHER MATCHING WAS ACTUALLY ATTEMPTED, which is a separate question from whether the user
   // asked for binarization colouring. The scan model returns an empty lookup both when it matched
   // nothing (a measured result) and when it could not run at all for want of a neural-sample index
@@ -1175,7 +1178,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     return () => {
       try { gd.removeListener("plotly_relayout", onRelayout); } catch (e) { /* noop */ }
     };
-  }, [av, channels, height, painOverride, data, scanModel, colorMode, binMode]);
+  }, [av, channels, height, painOverride, data, scanModelForPlot, colorMode, binMode]);
 
   // Free the WebGL context only when the component actually unmounts (NOT between redraws).
   useEffect(() => () => { if (ref.current) Plotly.purge(ref.current); }, []);

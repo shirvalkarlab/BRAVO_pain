@@ -10,7 +10,7 @@
  * mA) where the fit predicts 1.01. A deliberately asymmetric surface pins the orientation.
  */
 import "@testing-library/jest-dom";
-import { render as rtlRender } from "@testing-library/react";
+import { render as rtlRender, screen, fireEvent } from "@testing-library/react";
 import { ThemeProvider } from "@mui/material/styles";
 import theme from "assets/theme";
 import { PlatformContextProvider } from "context";
@@ -42,12 +42,17 @@ function asymmetricPlan() {
   return { ...base, stage1: { ...base.stage1, rate_strata: rows } };
 }
 
+// The map's section starts closed and its squares are drawn only once it has been opened (speed-up
+// item C5, 2026-10-01), so each test opens it the way a reader does before reading the drawing.
+const openMap = () => fireEvent.click(screen.getByRole("button", { name: /Where have currents been tried/ }));
+
 describe("CurrentMapCard: the predicted rating is drawn at its own left and right current", () => {
   beforeEach(() => Plotly.react.mockClear());
 
   it("draws the server's mu[left][right] at x = left current, y = right current", () => {
     const plan = asymmetricPlan();
     rtlRender(wrap(<CurrentMapCard plan={plan} />));
+    openMap();
     // the home-survey squares only (div ids "cms-surface-..."); the clinic squares keep their data
     const heatmaps = Plotly.react.mock.calls
       .filter((c) => /^cms-surface-/.test(c[0]))
@@ -68,6 +73,7 @@ describe("CurrentMapCard: the predicted rating is drawn at its own left and righ
   it("puts one off-diagonal cell where its currents say (left 0 mA, right the top current)", () => {
     const plan = asymmetricPlan();
     rtlRender(wrap(<CurrentMapCard plan={plan} />));
+    openMap();
     const t = Plotly.react.mock.calls.filter((c) => /^cms-surface-/.test(c[0]))
       .map((c) => c[1] && c[1][0]).find((x) => x && x.type === "heatmap");
     const n = t.x.length;

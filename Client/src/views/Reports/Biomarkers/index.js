@@ -420,7 +420,9 @@ function Biomarkers() {
   // The composite metric ("composite_mpq_leftleg") is NOT a raw PRO column returned by
   // /queryPainScores; it is synthesized here exactly as the backend does — the per-day average of
   // z(MPQ-sum) and z(left-leg-VAS) across all surveys, keeping a day when either part exists.
-  const previewPoints = (() => {
+  // Memoised (2026-10-01): for the composite this builds a NEW array, and a new array on every
+  // render re-ran `painSeriesLive`, the matched-scan model and the timeline on every slider tick.
+  const previewPoints = useMemo(() => {
     if (!painScores || !Array.isArray(painScores.metrics)) return [];
     if (metric === "composite_mpq_leftleg") {
       const get = (k) => {
@@ -461,7 +463,7 @@ function Biomarkers() {
     }
     const m = painScores.metrics.find((x) => x.key === metric);
     return m ? m.points : [];
-  })();
+  }, [painScores, metric]);
   const previewMetricLabel = (((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
     .find((m) => m.key === metric) || {}).label || metric;
 

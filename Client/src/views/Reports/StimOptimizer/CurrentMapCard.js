@@ -57,7 +57,7 @@
  * | pooled" is a segmented control in the section header, beside a "Show explanations" text link.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useContext, useEffect, useMemo, useState } from "react";
 
 import { Table, TableBody, TableCell, TableHead, TableRow } from "@mui/material";
 
@@ -68,7 +68,7 @@ import Plotly from "plotly.js-dist";
 
 import { DIVERGING } from "assets/theme/base/dataColors";
 import { plotlyLayout, PLOTLY_CONFIG, CEILING_LINE, FONT_FAMILY, FIGURE_TEXT_PX } from "views/Reports/figureStyle";
-import Section from "views/Reports/paper/Section";
+import Section, { SectionRevealedContext } from "views/Reports/paper/Section";
 import ColorKey from "views/Reports/paper/ColorKey";
 
 import { num, fmtHz, fmtUs, fmtMa, EMPTY } from "./stimFormat";
@@ -152,9 +152,13 @@ function CurrentSurfaceHeatmap({ divId, surface, inForceLeft, inForceRight, star
   const a = useMemo(() => (surface ? absoluteSurface(surface) : null), [surface]);
   const rows = surface ? surface.mu.length : 0;
   const cols = rows ? surface.mu[0].length : 0;
+  // Drawn only once the section holding the map has been opened: it starts closed, and drawing every
+  // square for every rate and Left-contact group on page load froze the page for squares nobody could
+  // see (speed-up item C5, 2026-10-01). Once drawn, closing the section keeps the drawing.
+  const revealed = useContext(SectionRevealedContext);
 
   useEffect(() => {
-    if (!surface || !a || !rows || !cols) return undefined;
+    if (!revealed || !surface || !a || !rows || !cols) return undefined;
     const h = half || (a.zmax - a.zmid);
     // The server's grid is mu[i][j] at LEFT amps_mA[i], RIGHT amps_mA[j]; Plotly draws z[row][col]
     // at x[col], y[row] with x the left current, so the grid is drawn transposed (it was drawn
@@ -231,8 +235,8 @@ function CurrentSurfaceHeatmap({ divId, surface, inForceLeft, inForceRight, star
     });
     Plotly.react(divId, traces, layout, { ...PLOTLY_CONFIG, doubleClick: false });
     return undefined;
-  }, [divId, surface, a, rows, cols, inForceLeft, inForceRight, starLeft, starRight, showStar, half,
-    ceiling, size]);
+  }, [revealed, divId, surface, a, rows, cols, inForceLeft, inForceRight, starLeft, starRight, showStar,
+    half, ceiling, size]);
 
   // Purge on unmount only (a cleanup that runs on every redraw would tear the figure down).
   useEffect(() => () => {

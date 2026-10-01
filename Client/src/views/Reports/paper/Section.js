@@ -26,7 +26,7 @@
  *   lead      optional content that stays in view under the answer even while the section is
  *             closed (a caveat the PI has ruled must never be hidden, e.g. decision 235)
  */
-import { useEffect, useState } from "react";
+import { createContext, useEffect, useState } from "react";
 import PropTypes from "prop-types";
 
 import { T, TYPE, LAYOUT, CARD, SPACE, WRAP } from "assets/theme/base/tokens";
@@ -34,11 +34,21 @@ import { T, TYPE, LAYOUT, CARD, SPACE, WRAP } from "assets/theme/base/tokens";
 import Fold from "./Fold";
 import FoldArrow from "./FoldArrow";
 
+/**
+ * Whether the enclosing section has EVER been opened (speed-up item C5, 2026-10-01). A collapsible
+ * section keeps its body mounted while closed, so a figure inside it would otherwise be drawn on
+ * page load for nobody to see; a figure that reads this skips drawing until the first opening and
+ * stays drawn after. Outside any collapsible section it is true, so nothing else changes.
+ */
+export const SectionRevealedContext = createContext(true);
+
 export default function Section({ id, question, answer, actions, reading, method, methodLabel,
   children, collapsible, defaultOpen, lead }) {
   const headingId = id ? `${id}-title` : undefined;
   const bodyId = id ? `${id}-body` : undefined;
   const [open, setOpen] = useState(!collapsible || !!defaultOpen);
+  const [revealed, setRevealed] = useState(!collapsible || !!defaultOpen);
+  useEffect(() => { if (open) setRevealed(true); }, [open]);
   // A jump link (or a shared address) to a closed section opens it. A click on a link to it opens
   // it too: a second click on the same link, after the reader closed the section again, changes no
   // hash and fires no hash change (2026-09-26).
@@ -84,7 +94,11 @@ export default function Section({ id, question, answer, actions, reading, method
       ) : null}
       {lead ? <div style={{ marginTop: LAYOUT.titleToAnswer }}>{lead}</div> : null}
       <div id={bodyId} hidden={!open} data-paper="section-body">
-      {children ? <div style={{ marginTop: LAYOUT.answerToFigure }}>{children}</div> : null}
+      {children ? (
+        <div style={{ marginTop: LAYOUT.answerToFigure }}>
+          <SectionRevealedContext.Provider value={revealed}>{children}</SectionRevealedContext.Provider>
+        </div>
+      ) : null}
       {reading ? (
         <p style={{ margin: `${LAYOUT.answerToFigure}px 0 0`, ...TYPE.body, color: T.ink2,
           maxWidth: LAYOUT.proseMax, ...WRAP.pretty }}>
