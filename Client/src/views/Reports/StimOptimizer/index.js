@@ -138,13 +138,13 @@ export default function StimOptimizer() {
   const loading = cached.loading;
   const errorText = cached.err;
 
-  // THE TWO-STAGE PLAN IS FETCHED ONLY ONCE THE PAGE'S OWN RESPONSE HAS ARRIVED. `afterMain` is
-  // this page's `data`; while it is null the hook issues nothing, so the first paint is unchanged.
-  // Called here, before any early return, because a hook must run on every render.
+  // THE TWO-STAGE PLAN IS FETCHED ALONGSIDE THE PAGE'S OWN RESPONSE (speed-up item C2, 2026-10-01;
+  // it used to wait for it). The server works the two out in separate workers, so the plan no
+  // longer adds its whole computing time to the wait. Called here, before any early return,
+  // because a hook must run on every render.
   const twoStage = useTwoStagePlan({
     participantUid: participant_uid,
     baseRequest: OPTIMIZER_REQUEST,
-    afterMain: cached.data,
   });
   // The de-identified study code for the line under the title (SPEC section 4 rule 1); null when
   // the participant record carries none.

@@ -2,14 +2,17 @@
  * The two-stage plan -- open loop first, then the check that decides whether closed loop may
  * start, then closed loop -- fetched as a SECOND request to the Stim Optimizer endpoint.
  *
- * FETCHED AFTER THE PAGE'S OWN RESPONSE, NOT WITH IT. The page's first paint waits on the
- * open-loop surfaces; the plan is a further ten seconds or so of server work on top of that
- * (`two_stage.seconds` on RCS08, 2026-09-12: 10.3 s inside a 61.5 s request) and it is not what
- * the reader came for first. So this request is enabled only once the page's own `data` has
- * arrived, and it sends the page's request unchanged plus `TwoStage: true`. The server keys its
- * stored response on that flag (`_response_signature` in `StimOptimizer/bravo_service.py`), so a
- * request without the flag is never handed the copy that carries the plan and one with it is
- * never handed the copy without.
+ * FETCHED ALONGSIDE THE PAGE'S OWN REQUEST (speed-up item C2, 2026-10-01). It used to wait for
+ * the page's `data` (`afterMain`), on the reasoning that the plan is a further ten seconds or so of
+ * server work. But the server stores the two answers separately and works them out in separate web
+ * workers: the plan's request recomputes everything the page's request does, plus the plan. So
+ * waiting only added the plan's whole computing time to the page's wait whenever neither answer
+ * was saved yet. Running both at once changes no number (RCS08, 2026-10-01: the page's answer
+ * 10,541 values, 0 differ; the plan's 64,212, 1 differs, its own `two_stage.seconds`). The request
+ * is the page's request unchanged plus `TwoStage: true`. The server keys its stored response on
+ * that flag (`_response_signature` in `StimOptimizer/bravo_service.py`), so a request without the
+ * flag is never handed the copy that carries the plan and one with it is never handed the copy
+ * without.
  *
  * ITS OWN CACHE SLOT (`STIM.twoStage`). The cache keeps one answer per slot per participant and
  * hands a request whose settings differ the held answer marked stale rather than fetching, so if
@@ -25,7 +28,7 @@ import { useCachedResult } from "database/useCachedResult";
 
 import { STIM } from "views/Reports/moduleCacheKeys";
 
-export default function useTwoStagePlan({ participantUid, baseRequest, afterMain, enabled = true }) {
+export default function useTwoStagePlan({ participantUid, baseRequest, enabled = true }) {
   const settings = { ...(baseRequest || {}), TwoStage: true };
   const body = { ParticipantId: participantUid, ...settings };
   const cached = useCachedResult({
@@ -34,8 +37,7 @@ export default function useTwoStagePlan({ participantUid, baseRequest, afterMain
     // The participant is the other half of the slot, so it is left out of the key (the same rule
     // the page's own request follows).
     settings,
-    // `afterMain` is the page's own `data`; null until the surfaces have their answer.
-    enabled: enabled !== false && !!participantUid && !!afterMain,
+    enabled: enabled !== false && !!participantUid,
     fetcher: () => SessionController.query("/api/queryStimOptimizer", body)
       .then((response) => (response && response.data) || null),
   });

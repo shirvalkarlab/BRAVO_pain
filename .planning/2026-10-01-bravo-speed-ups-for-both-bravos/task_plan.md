@@ -4,10 +4,10 @@
 Steps 2-7 of the combined speed-up list (the PI's go-ahead, 2026-10-01): every value unchanged, each fix its own commit with proof, pulled onto the Jetstream2 BRAVO.
 
 ## Next Step
-Phase 3: commit A2 (decision 353) once both suites pass; push; reload local gunicorn; pull + reload on Jetstream2. Then A1 (Jetstream2 workers) and the C3-C5 page commit.
+Phase 5: B1 -- fit the Stim Optimizer's (pulse width, contact) groups in parallel processes; equality on so/so2, alternating timings.
 
 ## Current Phase
-Phase 3
+Phase 5
 
 ## Scope and rules
 - Code lands on the Mac checkout (the local BRAVO runs it live), pushed, then `git pull` on the Jetstream2 BRAVO.
@@ -31,13 +31,13 @@ Phase 3
 
 ### Phase 3: Step 3, A1/A2 (settings)
 - [x] One maths thread by default (OPENBLAS/OMP/MKL=1) for both BRAVOs; proof on RCS08 + timings (decision 353; BRAVO/maths_threads.py so the test needs no Django)
-- [ ] Jetstream2 only: 12-16 web workers after measuring per-worker memory
-- **Status:** in_progress
+- [x] Jetstream2 only: 16 web workers (override `command`, backup in backups/); heaviest request peaks 10.2 GB
+- **Status:** complete
 
 ### Phase 4: Step 4, B2 + C2
 - [x] B2 DROPPED: the 3.5 s 'sleep' is the main thread waiting in joblib's _retrieve for the parallel leave-one-out workers (profile callers: threading.wait 1.44 s, selectors 1.16 s, joblib _retrieve) -- the parallel work's own time, not idle polling
 - [ ] Test two simultaneous Stim Optimizer requests are safe with R; then start the TwoStage request with the first
-- **Status:** pending
+- **Status:** complete
 
 ### Phase 5: Step 5, B1/B3/B4 (parallel processes)
 - [ ] B1 Stim Optimizer GP fits in parallel processes
