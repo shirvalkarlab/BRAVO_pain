@@ -4,7 +4,7 @@
 The Stim Optimizer's pain model knows which contacts were stimulating, so it stops pooling different Left contact configurations as if they were one.
 
 ## Next Step
-Phase 6: the PI's answer on Left C+1-2-'s history; then put the chooser on the page.
+Phase 6: the PI's answer on the sheet/device disagreement for Left C+1-2-; then the within-visit ladder from the top block.
 
 ## Current Phase
 Phase 6
@@ -63,7 +63,8 @@ the lead) only if B finds contacts differ, and it is named to him before it star
 ### Phase 6: Step C, the model picks the next clinic block
 - [x] Between visits: which (Left contact, rate) block to test -- ranked most promising first (PI), server side, decision 348; 47 of 48 tie on RCS08, so no single block is offered
 - [x] PI: borrow across rates AND pulse widths (decision 349); 30 blocks still tie (contacts with < 8 stretches)
-- [ ] PI: whether Left C+1-2- was used before the Percept (RC+S) or the parser misreads it; then the page
+- [x] Sheets checked: Left C+1-2- with current 2025-10-30 to 2026-02-03; device history disagrees (decision 350)
+- [x] Page: two lists (NextBlocksCard), decision 350
 - [ ] Within a visit: the fixed 0.5 mA up / 1.0 mA down ladder; block order randomised; feeds the titration card and its sheet
 - **Status:** in_progress
 

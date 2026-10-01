@@ -74,3 +74,6 @@ width changed together on RCS08. Not wired in.
 
 ## Left C+1-2- in the Percept record
 227 Left rows with full rings 1-2, all 0 mA: 2025-07-16..26 (125 Hz/60 us), 2025-09-04..10-02 (110/100), 2025-10-02..10-10 (55/180), 2025-12-03 (145/140). Partial 1a-2a at 1.0 mA on 2025-11-12.
+
+## Sheets: Left C+1-2- with current (decision 350)
+2025-10-30 clinic rows 28 (0.5), 30 (1.0), 63 (L1.0/R1.2); home group D 1.0 mA 110 Hz (10-30), 1.6 mA 145 Hz (11-19); 2026-02-03 at-home row 23 (1.6/1.2, 165 Hz). Only row 63 has a pain rating. Percept history shows none with current. Local sheets synced 2026-09-17 only.

@@ -75,6 +75,7 @@ import CurrentMapCard from "./CurrentMapCard";
 import CurrentMapScheduleCard from "./CurrentMapScheduleCard";
 // The titration session to run next, read from `data.titration_plan`.
 import TitrationSessionCard from "./TitrationSessionCard";
+import NextBlocksCard from "./NextBlocksCard";
 import { OPTIMIZER_REQUEST } from "./optimizerRequest";
 // The decision: the setting programmed now beside the setting the joint search suggests, per side,
 // with the gain drawn against its own uncertainty.
@@ -255,6 +256,9 @@ export default function StimOptimizer() {
           <TitrationSessionCard plan={data.titration_plan} participantUid={participant_uid}
             homeSchedule={data.current_map_schedule || null} />
         )}
+        {/* Which Left contact and rate to test next (step C; the PI, 2026-10-01: "show both lists
+            on the page"): the tied, untested contacts, then the measured ones ranked. */}
+        <NextBlocksCard nextBlocks={((((twoStage.data || {}).stage1) || {}).clinic_stream || {}).next_blocks || null} />
         {/* No titration plan on the response: the home schedule still shows, as its own section. */}
         {!data.titration_plan && data.current_map_schedule && (
           <Section id="next-visit" question="What must the next visit deliver?">
