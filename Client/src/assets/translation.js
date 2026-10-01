@@ -876,7 +876,7 @@ export const dictionary = {
       zh: "Mobile App Manager"
     },
     analysis: {
-      en: "Choosing stimulation settings",
+      en: "Analysis builder",
       zh: "Analysis Builder"
     },
     // The three pain pages, named by the question each answers (SPEC.md section 6, 2026-09-26).
