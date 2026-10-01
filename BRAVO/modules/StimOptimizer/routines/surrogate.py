@@ -60,16 +60,23 @@ _log = logging.getLogger(__name__)
 #: answer is the same.
 #: ==========================================================================================
 LOO_JOBS_ENV = "STIM_OPTIMIZER_LOO_JOBS"
-LOO_DEFAULT_JOBS = max(1, min(15, (os.cpu_count() or 2) - 1))
+try:
+    from modules.DecodeCommon import parallel as _POOL
+except ImportError:                                   # the host runner's spelling
+    from DecodeCommon import parallel as _POOL
+#: The shared pool size (DecodeCommon.parallel, 2026-10-02): the core count less one, read once at
+#: import. It was min(15, cores - 1), sized for the Mac; on the Jetstream2 BRAVO 48 workers and 15
+#: gave the same request time (35.2 vs 35.8 s), and one size for every pool avoids rebuilding it.
+LOO_DEFAULT_JOBS = _POOL.pool_jobs()
 
 
 def _loo_n_jobs() -> int:
     """How many worker processes the held-out folds are refitted in (1: serially, in-process)."""
     raw = os.environ.get(LOO_JOBS_ENV, "").strip()
     try:
-        n = int(raw) if raw else LOO_DEFAULT_JOBS
+        n = int(raw) if raw else _POOL.pool_jobs()
     except ValueError:
-        n = LOO_DEFAULT_JOBS
+        n = _POOL.pool_jobs()
     return max(1, n)
 
 

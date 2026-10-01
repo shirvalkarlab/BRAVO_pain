@@ -597,11 +597,17 @@ SEGMENT_JOBS_ENV = "CLOSED_LOOP_SEGMENT_JOBS"
 
 
 def _segment_n_jobs() -> int:
+    """CLOSED_LOOP_SEGMENT_JOBS, else the shared pool size (DecodeCommon.parallel), so this pool
+    and the Stim Optimizer's are one pool and a web worker never rebuilds it between them."""
+    try:
+        from modules.DecodeCommon import parallel as _POOL
+    except ImportError:                                 # the host runner's spelling
+        from DecodeCommon import parallel as _POOL
     raw = os.environ.get(SEGMENT_JOBS_ENV, "").strip()
     try:
-        n = int(raw) if raw else (os.cpu_count() or 1)
+        n = int(raw) if raw else _POOL.pool_jobs()
     except ValueError:
-        n = os.cpu_count() or 1
+        n = _POOL.pool_jobs()
     return max(1, n)
 
 
