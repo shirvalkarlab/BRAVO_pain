@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
@@ -47,6 +48,8 @@ from StimOptimizer.routines import within_visit as _wv
 from StimOptimizer.routines.amplitude_response import ResponseCurve, NONE, LINEAR, QUADRATIC
 
 from . import replay as _replay
+
+_log = logging.getLogger(__name__)
 
 KIND = "closed_loop_simulation"
 #: Bumped whenever the numbers a stored entry holds would change: v2 put the pieces on the device
@@ -587,6 +590,48 @@ def regrid_stretches(t, p, a, med, *, gap_factor=_replay.SEGMENT_GAP_FACTOR):
     return regridded, n_cells_empty, n_cells_merged, bounds
 
 
+#: The segments of a gappy record are independent, so they are simulated in joblib's reusable
+#: process pool in chunks and combined in segment order with the same loop as before (every sum
+#: added in the same order). `CLOSED_LOOP_SEGMENT_JOBS` sets the worker count ("1": as before).
+SEGMENT_JOBS_ENV = "CLOSED_LOOP_SEGMENT_JOBS"
+
+
+def _segment_n_jobs() -> int:
+    raw = os.environ.get(SEGMENT_JOBS_ENV, "").strip()
+    try:
+        n = int(raw) if raw else (os.cpu_count() or 1)
+    except ValueError:
+        n = os.cpu_count() or 1
+    return max(1, n)
+
+
+def _simulate_chunk(chunk, plan, curves, tau_s, params):
+    out = []
+    for gt, gp, ga in chunk:
+        try:
+            out.append(simulate_series(gt - gt[0], gp, ga, plan, curves, tau_s=tau_s, params=params))
+        except Exception:                               # noqa: BLE001 -- counted, never fatal
+            out.append(None)
+    return out
+
+
+def _simulate_all(segs, plan, curves, tau_s, params):
+    k = min(_segment_n_jobs(), len(segs))
+    if k > 1:
+        n_chunks = min(len(segs), 4 * k)
+        bounds = np.linspace(0, len(segs), n_chunks + 1).astype(int)
+        chunks = [segs[bounds[i]:bounds[i + 1]] for i in range(n_chunks)]
+        try:
+            import joblib
+            parts = joblib.Parallel(n_jobs=k, backend="loky")(
+                joblib.delayed(_simulate_chunk)(c, plan, curves, tau_s, params) for c in chunks)
+            return [r for part in parts for r in part]
+        except Exception as exc:                        # noqa: BLE001 -- no pool: run them here
+            _log.warning("segments simulated one at a time: the worker processes failed (%s: %s)",
+                         type(exc).__name__, exc)
+    return _simulate_chunk(segs, plan, curves, tau_s, params)
+
+
 def simulate_segments(t_s, power, amp_obs, plan, curves: Sequence[ResponseCurve], *, tau_s,
                       params=None, min_segment_steps=_replay.MIN_SEGMENT_STEPS,
                       gap_factor=_replay.SEGMENT_GAP_FACTOR, keep_longest=1) -> Dict[str, Any]:
@@ -651,13 +696,14 @@ def simulate_segments(t_s, power, amp_obs, plan, curves: Sequence[ResponseCurve]
     hist_edges = None; hist = None
     drawn = []
     seg_params = None
+    sims = iter(_simulate_all([g for g in regridded if g[0].size >= min_segment_steps],
+                              plan, curves, tau_s, params))
     for si, (gt, gp, ga) in enumerate(regridded):
         if gt.size < min_segment_steps:
             skipped += 1
             continue
-        try:
-            r = simulate_series(gt - gt[0], gp, ga, plan, curves, tau_s=tau_s, params=params)
-        except Exception:                               # noqa: BLE001 -- counted, never fatal
+        r = next(sims)
+        if r is None:
             skipped += 1
             continue
         w = float(r["n_steps"])
