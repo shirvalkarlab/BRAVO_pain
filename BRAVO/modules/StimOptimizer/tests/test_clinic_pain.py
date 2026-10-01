@@ -391,8 +391,10 @@ def test_clinic_rate_strata_rows_carry_source_clinic_sheets(monkeypatch):
                                "freq_hz": [55.0, 55.0, 110.0],
                                "amp_mA_Left": [1.0, 2.0, 1.0], "amp_mA_Right": [1.0, 1.0, 2.0],
                                "left_leg": [5.0, 4.0, 6.0], "overall": [np.nan] * 3})
-    monkeypatch.setattr(BS.CLPAIN, "load_clinic_steps",
+    # the fit reads every step (rated or not) since 2026-10-01, then fills gaps from REDCap
+    monkeypatch.setattr(BS.CLPAIN, "load_clinic_exposure",
                         lambda participant, **kw: (stub_steps, {"signature_key": "test"}, None))
+    monkeypatch.setattr(BS.CLPAIN, "redcap_reports_for", lambda participant: None)
     monkeypatch.setattr(BS.CLPAIN, "epoch_frame_from_steps",
                         lambda steps, **kw: _redcap_shaped_epoch_frame(
                             slope_per_mA=1.2, noise_sd=0.3, seed=3))
@@ -608,8 +610,9 @@ def test_the_clinic_fit_asks_stage_one_for_the_site_it_was_given_not_always_the_
         raise RuntimeError("stopped: the call is what this test is about")
 
     monkeypatch.setattr(S1, "run_stage1", _capture)
-    monkeypatch.setattr(CP, "load_clinic_steps",
+    monkeypatch.setattr(CP, "load_clinic_exposure",
                         lambda *a, **k: (steps, {"signature_key": "k"}, None))
+    monkeypatch.setattr(CP, "redcap_reports_for", lambda participant: None)
     got = CP.fit_clinic_rate_strata("uid", primary_item="back")
     assert seen == ["back"], f"the fit must ask Stage 1 for the site it was given, asked for {seen}"
     assert got["available"] is False and "stopped" in (got["reason"] or "")

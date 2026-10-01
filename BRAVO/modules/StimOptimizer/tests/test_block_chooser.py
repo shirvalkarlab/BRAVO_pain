@@ -233,3 +233,15 @@ def test_a_contact_block_is_scored_only_where_the_left_side_carries_current():
                          contacts_used=["L C+2-"], rates=[55.0], ceilings={"Left": 4.5, "Right": 4.5},
                          prior_sd=1.0)
     assert _block(out, "L C+2-")["amp_mA_left"] == 1.0          # the lowest current above 0 on this grid
+
+
+def test_each_contacts_clinic_exposure_rides_with_the_ranking():
+    import types
+    from StimOptimizer import bravo_service as BS
+    s1c = types.SimpleNamespace(D=pd.DataFrame({"J": [0.0, 1.0], "feasible": [True, True]}), audit={})
+    exposure = [{"left_contact": "L C+1-2-", "n_steps": 6, "n_rated": 1, "amp_min_mA": 0.5,
+                 "amp_max_mA": 1.6, "n_visits": 3}]
+    out = BS._next_blocks_block([], s1c, in_force=IN_FORCE,
+                                ceilings={"Left": (4.5, "PI"), "Right": (4.5, "PI")}, exposure=exposure)
+    assert out["exposure"]["L C+1-2-"]["amp_max_mA"] == 1.6
+    assert out["exposure"]["L C+1-2-"]["n_rated"] == 1

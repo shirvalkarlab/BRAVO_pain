@@ -1,0 +1,191 @@
+# Machine-readable record of how the visit sheets are parsed (decision 351). Generated from data;
+# edit the content, keep it valid YAML (yaml.safe_load must read it).
+about: How the RCS08 visit sheets (in-clinic and at-home) are read, and how they combine with the chronic
+  home record. The code is the authority; each rule names it. Re-read the code before relying on a line
+  number.
+version: '2026-10-01'
+decision: 351
+code:
+  reader: BRAVO/modules/StimOptimizer/clinic_pain.py (parse_workbook, rated_steps, fill_from_redcap, exposure_by_contact)
+  contact_text: BRAVO/modules/DecodeCommon/sensing_rule.py (left_contact_from_clinic_text, contacts_short)
+  contact_label: BRAVO/modules/StimOptimizer/stage1_openloop.py (left_contact_label, LEFT_OFF)
+  sync: BRAVO/Server/management/commands/sync_clinic_sheets.py
+  older_traps: BRAVO/modules/ClosedLoopDeployment/clinic_steps.py (five traps; amplitude-only reader)
+  tests:
+  - StimOptimizer/tests/test_clinic_unrated_and_fill.py
+  - StimOptimizer/tests/test_left_contact_groups.py
+  - StimOptimizer/tests/test_clinic_pain.py
+source:
+  drive_folder: Pain Neuromodulation Lab Master Folder > RCS08 > Stage 2 > Clinic Testing
+  local_copy: BRAVO/_pro_dump/clinic_sheets/RCS08/ (gitignored)
+  sync_command: python manage.py sync_clinic_sheets --participant <uid>  (in the container)
+  check_before_use: Compare the newest local file with the newest visit. On 2026-10-01 the copy had stopped
+    at 2026-09-17 although the sync is meant to run daily; a manual sync brought in 09_24_26 and 09_30_26.
+    Never conclude 'not in the sheets' from a stale copy.
+  file_name: RCS08 Stage 2 - <Month> <Year> <In-Clinic|At-home|Clinic> Testing MM_DD_YY.xlsx
+  setting_from_name: '''at-home'' in the name -> home visit, otherwise clinic (clinic_pain._infer_setting)'
+  excluded:
+  - '[Template]...'
+  - OLD - ...
+  - any name without the word Testing (the Stage 1 log)
+  visit_date: MM_DD_YY or MM_DD_YYYY from the file name, California time
+tabs:
+  Stim Testing:
+    role: one row per step; the only tab that defines a SETTING
+    header: the row within rows 1-25 naming at least Amp and Contacts; columns matched by name, typo-tolerant
+      (clinic_pain._canon_header); scribe suffixes like (Donna) stripped
+    columns:
+    - Group
+    - Contacts
+    - sEEG Contacts
+    - Amp (mA)
+    - Rate (Hz)
+    - PW (µs)
+    - Threshold
+    - Duration (s)
+    - Side Effect?
+    - Timestamp
+    - Movement/Change point
+    - General Notes / Pt Verbal Notes
+    - Overall
+    - Head
+    - Back
+    - Left Leg
+    - Left Foot
+    - Right Leg
+    - Right Foot
+    two_row_steps: a ramp row sets the current with no rating; the following row(s) with no current are
+      the test row(s) and carry the rating. One step, never an unrated step plus a rated one.
+    carry_forward: a row with no current, rate, pulse width or contacts inherits the step above it
+  Notes:
+    role: TIMED verbal pain ratings; fills steps the Stim Testing tab left unrated (rating_source notes_tab)
+    header: 'a row within rows 1-5 naming Time and pain columns: ''Current verbal pain score'' (overall),
+      Head, BACK, Left LEG, Left FOOT, Right LEG, Right FOOT'
+    found_2026-10-01: 30 RCS08 steps filled; some sheets' Notes tab is empty
+  REDCap:
+    role: meant to log survey times; empty in every RCS08 sheet checked on 2026-10-01
+  Home Programs (Before) and Home Programs (New):
+    role: what was PROGRAMMED for home use (groups A-D; rows 'L GPi' and 'R MDThal'), not what was tested
+    use: 'context only: never a step, never exposure, never a rating'
+    trap: headings can disagree with contacts, e.g. 'Group C (Left bipolar)' over C+1-2-
+  never_read_as_pain:
+  - Checklist
+  - Candidate Tests
+  - Side Effects
+  - Sensing
+  - Medications
+  - Contact Match
+  - Stage 0 Effect (Reference)
+  - Von Frey Testing
+  july_2025_exception: the 07_30_25 workbook is TRANSPOSED and keeps steps and ratings in Notes (clinic_pain._parse_july_2025_notes;
+    rating_source notes_tab)
+contacts:
+  lead_numbering:
+    left:
+    - 0
+    - 1
+    - 2
+    - 3
+    right:
+    - 8
+    - 9
+    - 10
+    - 11
+    note: 9-10 means Right rings 1 and 2
+  after_slash_in_old_notation: sEEG contacts (LGPi.., RPVG..), NOT the stimulator
+  notations:
+  - text: L C+2- / R C+1-2-
+    left: L C+2-
+  - text: L 2a-2b-2c / R 1a-1b-1c-2a-2b-2c
+    left: L C+2-
+    note: the device's own form
+  - text: C+2-9-10- / LGPi4-RPVG5-
+    left: L C+2-
+  - text: C+1-2-9-10- / SHAM
+    left: L C+1-2-
+  - text: 1+2- / LGPi4+LGPi5-
+    left: L 1+2-
+    note: 'bipolar: anode 1, cathode 2'
+  - text: C+2a- / LGPi5-
+    left: L C+2a-
+    note: one segment
+  - text: c+ 1b-1c- (1.5mA from both b and c)
+    left: L C+1b-1c-
+  - text: C+9-10- / RPVG5-
+    left: null
+    note: Right only
+  - text: LGPi5- RPVG5-
+    left: null
+    note: sEEG only
+  - text: c+0
+    left: null
+    note: 'no polarity: unreadable'
+  device_record_form: cathode '1a-1b-1c-2a-2b-2c'; it cannot tell bipolar from monopolar (cathodes only)
+  zero_current: Left at 0 mA is labelled 'off (Left 0 mA)' whatever the text says, and joins every Left
+    contact group (the PI, 2026-10-01)
+  right_contact: not grouped on (RCS08 Right was C+1-2- in 77 of 80 home stretches)
+currents_and_pulse_widths:
+  bilateral_cell: the value before '/' or '&' is LEFT (PI ruling 2026-09-05); 'L x / R y' is explicit
+  single_value: assigned to the side the contact text or a section heading names
+  pw_typo: a 'PW (ms)' header holds microseconds
+  ceiling_check: a parsed current above the device ceiling is a parse error, not a setting
+pain_values:
+  scale: 0-10 verbal, per site
+  excel_date_trap: 'typing 8/10 into a cell stores 10 August (any year): a date whose day is 10 and month
+    1-10 reads as that month (clinic_pain._parse_pain_value)'
+  text_forms:
+  - 6.5/10
+  - 3.5/10
+  - plain numbers
+  prose: free-text answers are counted (n_unparsed_prose), never guessed into numbers
+matching_ratings_to_steps:
+  code: clinic_pain._fill_by_time
+  rule: 'a timed rating belongs to the step IN FORCE when it was given: the latest step that had started,
+    rated or not; accepted only up to that step''s duration (60 s if unrecorded) plus NOTES_GRACE_S (60
+    s); the last rating in a step wins; a step already rated is never replaced'
+  missing_start: a step with no timestamp starts where the step before it ended (its start + duration);
+    used to match every step, written onto UNRATED steps only (t_inferred True)
+  order_of_sources:
+  - stim_tab
+  - notes_tab
+  - redcap
+redcap_gap_fill:
+  code: clinic_pain.fill_from_redcap (at read time, in fit_clinic_rate_strata)
+  when: after the sheet's own tabs; only steps still unrated
+  rule: the survey belongs to the step in force when it was FILED (UTC), same window as above
+  units:
+    overall: nrs (0-10)
+    left_leg: left_leg_vas / 10
+    back: back_vas / 10
+  found_2026-10-01: 6 RCS08 steps filled
+  caution: one survey can sit inside several back-to-back steps; only the step in force takes it
+exposure:
+  code: clinic_pain.exposure_by_contact
+  definition: every step the patient RECEIVED, rated or not, counted per Left contact
+  planned_is_not_exposure: 'an unrated step with no time at all (not even inferred) was never recorded
+    as given. Found: the 09_24_26 sheet is the titration card''s exported ladder, never filled in (no
+    timestamps, no ratings, empty Notes), Left C+1-2- up to 4.5 mA. Reported as n_planned_only, never
+    as exposure.'
+  pain_model: exposure never enters a pain fit; only rated steps do (rated_steps)
+combining_with_chronic_home_data:
+  streams:
+    clinic_sheets: 'acute: minutes per step, in clinic or at-home visits'
+    redcap_home: 'chronic: days per stretch of unchanged settings'
+  rule: 'never merged into one fit: in-clinic ratings choose the next block, home ratings confirm (the
+    PI, 2026-09-30). Each stream has its own epoch table and its own pain model.'
+  home_record: device settings stream (Percept history + sessions) matched to REDCap surveys (StimOptimizer.adapter.build_design_matrix);
+    every time on the tablet clock
+  disagreements_seen:
+  - Left C+1-2- with current in the sheets (2025-10-30 to 2026-02-03; home group D at 1.0-1.6 mA) but
+    0 mA on all 227 Percept rows; nearest device setting 1a-2a at 1.0 mA on 2025-11-12. Open as of 2026-10-01.
+  identity: sheets and exports are named by study code only (sheet_export.participant_label); the shared-drive
+    device export folder carries real patient names and never enters the repository
+stored_table:
+  kind: clinic_pain_steps (CacheStore), keyed on the folder's file names and hashes plus _RULE_VERSION
+  rule_version: v3b_clinic_pain_2026-10-01
+  readers:
+    pain: load_clinic_steps -> rated steps only (Biomarkers, ControlAnalyses, StimOptimizer)
+    exposure: load_clinic_exposure -> every step, with rating_source
+  proof_2026-10-01: '546 previously stored rated steps found again; 22 fields x 546 = 12,012 cells, 0
+    differ. 958 steps now stored: 539 stim_tab, 30 notes_tab, 389 unrated; 6 more filled from REDCap at
+    read.'

@@ -58,3 +58,14 @@ test("nothing is drawn when the response carries no ranking", () => {
   render(wrap(<NextBlocksCard nextBlocks={null} />));
   expect(screen.queryByTestId("next-blocks-card")).toBeNull();
 });
+
+test("each Left contact's exposure in the clinic sheets is said, planned-only steps apart", () => {
+  const withExposure = { ...nb, exposure: {
+    "L C+1-2-": { left_contact: "L C+1-2-", n_steps: 26, n_rated: 22, amp_min_mA: 0.5, amp_max_mA: 2.5, n_visits: 3, n_planned_only: 14 },
+    "off (Left 0 mA)": { left_contact: "off (Left 0 mA)", n_steps: 100, n_rated: 60, amp_min_mA: null, amp_max_mA: null, n_visits: 20, n_planned_only: 0 },
+  } };
+  render(wrap(<NextBlocksCard nextBlocks={withExposure} />));
+  const ex = screen.getByTestId("next-blocks-exposure");
+  expect(ex).toHaveTextContent("L C+1-2-: 26 steps at 0.5–2.5 mA over 3 visits, 22 rated; 14 more planned but never recorded as given");
+  expect(ex).not.toHaveTextContent("off (Left 0 mA)");
+});

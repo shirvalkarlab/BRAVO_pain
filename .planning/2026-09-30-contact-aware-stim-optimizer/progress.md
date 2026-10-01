@@ -24,3 +24,4 @@
 - Step B committed bbe18fc0 (decision 347, offline only). Step C server side: routines/block_chooser.py + bravo_service._next_blocks_block; RCS08: 47 of 48 blocks tie at 2.78; tie said, no single block offered; proof 55,810 common / 3 bookkeeping differ / 444 added / 0 removed; host 1866/2/0, container 945/0.
 - Decision 349: borrowing across rates and pulse widths + Left-current-only cells; 30 blocks still tie; Left C+1-2- 0 mA on all 227 Percept rows (dates listed in decision log). host 1872/2/0, container 945/0.
 - Decision 350: page shows both lists; sheets show Left C+1-2- with current on 2025-10-30..2026-02-03 (only 1 rated step); 1,020 page tests; chunk 273.2469f9d2.
+- Decision 351: sync (3 sheets), Notes/REDCap fill, exposure, plan-not-exposure rule, CLAUDE.md s.10, docs/clinic_sheets_parsing.yaml; proof 12,012 cells 0 differ; host 1883/2/0, container 945/0, page 1,021.

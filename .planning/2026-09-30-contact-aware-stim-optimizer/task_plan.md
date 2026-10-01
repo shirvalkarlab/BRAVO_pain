@@ -4,10 +4,10 @@
 The Stim Optimizer's pain model knows which contacts were stimulating, so it stops pooling different Left contact configurations as if they were one.
 
 ## Next Step
-Phase 6: the PI's answer on the sheet/device disagreement for Left C+1-2-; then the within-visit ladder from the top block.
+Phase 6: the within-visit ladder from the top block (waits on the tie); PI questions open: group D on C+1-2- or 1a-2a; use Overall when left leg is missing?
 
 ## Current Phase
-Phase 6
+Phase 7
 
 ## Scope and authority
 The PI's answers of 2026-09-30:
@@ -67,6 +67,15 @@ the lead) only if B finds contacts differ, and it is named to him before it star
 - [x] Page: two lists (NextBlocksCard), decision 350
 - [ ] Within a visit: the fixed 0.5 mA up / 1.0 mA down ladder; block order randomised; feeds the titration card and its sheet
 - **Status:** in_progress
+
+### Phase 7: Every visit sheet, every tab, REDCap gaps, exposure, and the parsing record (the PI, 2026-10-01)
+- [x] Sync all sheets from Drive: 3 downloaded (09_24_26, 09_30_26 new; 09_16_26 changed); 32 workbooks, 546 rated steps stored
+- [x] Find pain ratings on other tabs: the Notes tab (32/32 workbooks) holds TIMED verbal ratings (Time, Current verbal pain score, Head, BACK, Left LEG, ...); REDCap tab empty; prototype: 882 step rows, 426 unrated, Notes fills 35, 65 have no time
+- [x] Design: keep unrated step rows (rating_source None); a two-row step's ramp row is not 'unrated' when its test row is rated; Notes fill at parse (rule version bump); REDCap fill at load (survey belongs to the step in force when filed, within start + duration + grace; VAS/10); load_clinic_steps stays rated-only; load_clinic_exposure returns all
+- [x] Then REDCap: 6 steps filled (filing time, step in force, VAS / 10)
+- [x] Unrated steps count as EXPOSURE; untimed unrated = planned only (09_24_26)
+- [x] CLAUDE.md section 10; docs/clinic_sheets_parsing.yaml (generated from data, yaml.safe_load-checked)
+- **Status:** complete
 
 ## Decisions Made
 | Decision | Rationale |

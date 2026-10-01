@@ -146,3 +146,17 @@ Device exports on the shared drive at `…/PNL/RCS008 jsons` carry **real patien
 names: keep that folder out of the repository.** `secrets/` stays untracked. Cached pain reports:
 `BRAVO/_pro_dump/RCS08_chronic_pro_df.csv` (gitignored). Clinic sheets sync daily from the Drive
 folder "Clinic Testing".
+
+## 10. Visit sheets (in-clinic and at-home) and the chronic home record
+
+Full rules, notations and edge cases: `docs/clinic_sheets_parsing.yaml` (machine-readable).
+- **Sync before reading** (`manage.py sync_clinic_sheets`); check the newest local sheet against the
+  newest visit (on 2026-10-01 the copy had stopped at 2026-09-17).
+- **Ratings live in more than the Stim Testing tab**: the Notes tab holds timed verbal scores; a
+  rating belongs to the step in force when given (within its duration + 60 s); then REDCap fills
+  what is left, by filing time (VAS / 10). `rating_source` records which.
+- **Unrated steps are exposure, never pain data**; an unrated step with no time is a plan, not a
+  delivery (the 09_24_26 sheet is an exported ladder never filled in).
+- **Clinic and home streams are never merged**: clinic ratings choose, home ratings confirm.
+- Traps: "8/10" stored by Excel as 10 August; Left lead 0-3 and Right 8-11; text after "/" in old
+  notation is sEEG; bipolar "1+2-"; the device record cannot tell bipolar from monopolar.

@@ -51,7 +51,9 @@ def _frame_the_fit_is_given(monkeypatch, **kw):
         seen.append(frame.copy())
         raise RuntimeError("stopped: the frame is what this test is about")
     monkeypatch.setattr(S1, "run_stage1", _capture)
-    monkeypatch.setattr(CP, "load_clinic_steps", lambda *a, **k: (STEPS, {"signature_key": "k"}, None))
+    # the fit reads every step since 2026-10-01 (load_clinic_exposure), then fills gaps from REDCap
+    monkeypatch.setattr(CP, "load_clinic_exposure", lambda *a, **k: (STEPS, {"signature_key": "k"}, None))
+    monkeypatch.setattr(CP, "redcap_reports_for", lambda participant: None)
     out = CP.fit_clinic_rate_strata("uid", **kw)
     return (seen[0].set_index("amp_mA_Left") if seen else None), out
 

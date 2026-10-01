@@ -995,7 +995,8 @@ def _side_effect_evidence_block(participant):
                     reason=f"could not be computed: {type(exc).__name__}: {exc}", sentence=None)
 
 
-def _next_blocks_block(rate_rows, s1c, *, in_force, ceilings, home_left_contacts=None) -> dict:
+def _next_blocks_block(rate_rows, s1c, *, in_force, ceilings, home_left_contacts=None,
+                       exposure=None) -> dict:
     """Step C (2026-10-01): which (Left contact, rate) block to test at the next clinic visit,
     ranked most promising first (`routines.block_chooser`). Candidates: the Left contacts that
     carried current in either stream, the contact in force, and L C+1-2-; rates: those in the clinic
@@ -1031,8 +1032,13 @@ def _next_blocks_block(rate_rows, s1c, *, in_force, ceilings, home_left_contacts
                         index=F.index)
         for c in used:
             frames[c] = F.loc[(lab == c) | (lab == _s1.LEFT_OFF), need]
-    return _bc.rank_blocks(rate_rows, in_force=in_force, contacts_used=used, rates=sorted(rates),
-                           ceilings=ceil, prior_sd=prior_sd, contact_frames=frames)
+    out = _bc.rank_blocks(rate_rows, in_force=in_force, contacts_used=used, rates=sorted(rates),
+                          ceilings=ceil, prior_sd=prior_sd, contact_frames=frames)
+    # What the clinic sheets show each Left contact received, rated or not (2026-10-01): exposure,
+    # so a contact with no prediction can still say it was tried, at what currents, how often rated.
+    out["exposure"] = {str(r["left_contact"]): dict(r) for r in (exposure or [])
+                       if r.get("left_contact")}
+    return out
 
 
 def _clinic_stream_stage1_block(participant, *, hemispheres, safety_ceiling_by_hemisphere,
@@ -1066,7 +1072,8 @@ def _clinic_stream_stage1_block(participant, *, hemispheres, safety_ceiling_by_h
     try:
         fit["next_blocks"] = _two_stage_jsonable(_next_blocks_block(
             rate_strata_clinic, s1c, in_force=in_force,
-            ceilings=dict(safety_ceiling_by_hemisphere or {}), home_left_contacts=home_left_contacts))
+            ceilings=dict(safety_ceiling_by_hemisphere or {}), home_left_contacts=home_left_contacts,
+            exposure=fit.get("exposure_by_contact")))
     except Exception as exc:                                      # noqa: BLE001 -- adjunct block
         _log.warning("StimOptimizer: the next-block chooser failed", exc_info=True)
         fit["next_blocks"] = {"available": False, "reason": f"{type(exc).__name__}: {exc}"}

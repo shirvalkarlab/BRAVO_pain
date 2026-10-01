@@ -61,6 +61,7 @@ turns a prose pain description ("Left leg: 8->0") into a number -- such text is 
 """
 from __future__ import annotations
 
+import datetime as _dt_mod
 import hashlib
 import logging
 import re
@@ -85,7 +86,10 @@ CLINIC_PAIN_KIND = "clinic_pain_steps"
 #: project follows, e.g. `Biomarkers.bravo_service._BAND_SWEEP_RULE_VERSION`).
 #: v2 (2026-09-25, P-13): a written correction in parentheses ("L 100 (did 110 accidentally) / R
 #: 150") now yields the delivered number instead of silently dropping the whole cell.
-_RULE_VERSION = "v2_clinic_pain_2026-09-25"
+#: v3 (2026-10-01): unrated steps are kept (as exposure, `rating_source` None) and unrated steps
+#: are filled from the visit's own Notes tab by time (`rating_source` "notes_tab"); the stored
+#: table therefore changes shape, so the version moves and every participant re-ingests once.
+_RULE_VERSION = "v3b_clinic_pain_2026-10-01"
 
 #: The seven pain-site fields this module reports, in the order the task and the sheets themselves
 #: use. `overall` also catches the two 2025 workbooks' "Verbal" column and July 2025's "Current
@@ -493,8 +497,16 @@ def _row_is_blank_for(ws, r, cmap, max_col):
     return True
 
 
-def _parse_generic_stim_testing(ws, *, file_title, file_name, sha256, setting, max_col=33):
+def _parse_generic_stim_testing(ws, *, file_title, file_name, sha256, setting, max_col=33,
+                                keep_unrated=False):
+    """`keep_unrated` (2026-10-01): also emit one row per step that carries no pain rating at all
+    -- a row where a current was set and neither it nor any row of the same step (a two-row step's
+    test row) was rated -- with every pain field None and `rating_source` None. Such a row is
+    EXPOSURE (the patient received that setting), never pain data."""
     rows_out = []
+    step_id = 0
+    unrated = {}                     # step_id -> the row dict of a step-start row with no rating
+    rated_steps = set()
     counts = FileCounts(file=file_name, setting=setting)
     header_row = _find_header_row(ws, max_col=max_col)
     if header_row is None:
@@ -547,6 +559,7 @@ def _parse_generic_stim_testing(ws, *, file_title, file_name, sha256, setting, m
             state["contacts"] = contacts_text or state["contacts"]
             have_ever_set_amp = have_ever_set_amp or aL is not None or aR is not None
             counts.n_steps += 1
+            step_id += 1
         if rate_v not in (None, ""):
             state["rate"] = _f(rate_v)
         if pw_v not in (None, ""):
@@ -568,6 +581,16 @@ def _parse_generic_stim_testing(ws, *, file_title, file_name, sha256, setting, m
             counts.n_unparsed_prose += 1
 
         if not pains:
+            if (keep_unrated and amp_v not in (None, "")
+                    and (state["amp_L"] is not None or state["amp_R"] is not None)):
+                unrated[step_id] = dict(
+                    visit_date=file_title, setting=setting, file=file_name, sha256=sha256,
+                    row_index=r, t_local=(ts_v if hasattr(ts_v, "hour") else None),
+                    amp_mA_Left=state["amp_L"], amp_mA_Right=state["amp_R"],
+                    freq_hz=state["rate"], pw_us_Left=state["pw_L"], pw_us_Right=state["pw_R"],
+                    contacts_raw=state["contacts"], duration_s=state["duration"],
+                    side_effect_score=se_score, notes=notes_v, rating_source=None,
+                    **{site: None for site in PAIN_FIELDS})
             continue
 
         if state["amp_L"] is None and state["amp_R"] is None and not have_ever_set_amp:
@@ -575,8 +598,9 @@ def _parse_generic_stim_testing(ws, *, file_title, file_name, sha256, setting, m
             continue
 
         counts.n_with_pain += 1
+        rated_steps.add(step_id)
         t_local = ts_v if hasattr(ts_v, "hour") else None
-        rows_out.append(dict(
+        rows_out.append(dict(rating_source="stim_tab",
             visit_date=file_title, setting=setting, file=file_name, sha256=sha256,
             row_index=r, t_local=t_local,
             amp_mA_Left=state["amp_L"], amp_mA_Right=state["amp_R"], freq_hz=state["rate"],
@@ -587,6 +611,9 @@ def _parse_generic_stim_testing(ws, *, file_title, file_name, sha256, setting, m
             left_leg=pains.get("left_leg"), left_foot=pains.get("left_foot"),
             right_leg=pains.get("right_leg"), right_foot=pains.get("right_foot"),
             notes=notes_v))
+    # A two-row step's ramp row is not an unrated step when its test row carries the rating.
+    rows_out.extend(v for k, v in unrated.items() if k not in rated_steps)
+    rows_out.sort(key=lambda d: d["row_index"])
     return rows_out, counts, None
 
 
@@ -695,6 +722,158 @@ def _parse_july_2025_notes(wb, *, file_title, file_name, sha256, setting):
     return rows_out, counts, None
 
 
+#: How long after a step's own duration a timed rating still belongs to it (s). The sheets ask for
+#: ratings "near the end of the duration"; a minute covers a rating said as the next step began.
+NOTES_GRACE_S = 60.0
+
+
+def _as_time(v):
+    """A time of day from a time or a datetime cell; None otherwise."""
+    if v is None:
+        return None
+    if isinstance(v, _dt_mod.datetime):
+        return v.time()
+    if hasattr(v, "hour") and hasattr(v, "minute") and not hasattr(v, "year"):
+        return v
+    return None
+
+
+def _secs(t):
+    return t.hour * 3600 + t.minute * 60 + t.second + getattr(t, "microsecond", 0) / 1e6
+
+
+def _infer_missing_starts(rows):
+    """A step row with no timestamp starts where the step row before it ended (that row's start
+    plus its duration), in row order. The inferred start is used to MATCH ratings for every row
+    (`_t_match`), but written as `t_local` only on an UNRATED row (`t_inferred` True): a rated row
+    keeps exactly the time it had (the equality proof of 2026-10-01: 19 rated rows had no time)."""
+    prev = None
+    for r in sorted(rows, key=lambda d: d["row_index"]):
+        r.setdefault("t_inferred", False)
+        r["_t_match"] = r.get("t_local")
+        if r["_t_match"] is None and prev is not None and _f(prev.get("duration_s")):
+            s = _secs(prev["_t_match"]) + float(prev["duration_s"])
+            if s < 86400:
+                r["_t_match"] = _dt_mod.time(int(s // 3600), int(s % 3600 // 60), int(s % 60))
+                if r.get("rating_source") is None:
+                    r["t_local"] = r["_t_match"]
+                    r["t_inferred"] = True
+        if r["_t_match"] is not None:
+            prev = r
+
+
+def _notes_tab_ratings(wb):
+    """[(time of day, {site: score})] from the visit's "Notes" tab: header row within the first
+    five rows naming "Time" and at least one pain column ("Current verbal pain score", "BACK",
+    "Left LEG", ...); scores read with `_parse_pain_value` (so "8/10" stored by Excel as 10 August
+    reads 8). Rows with no time or no score are skipped."""
+    name = next((n for n in wb.sheetnames if n.strip().lower() == "notes"), None)
+    if name is None:
+        return []
+    ws = wb[name]
+    for h in range(1, 6):
+        cols = {}
+        tcol = None
+        for c in range(1, min(ws.max_column or 0, 40) + 1):
+            v = ws.cell(h, c).value
+            if v is None:
+                continue
+            if str(v).strip().lower() == "time":
+                tcol = c
+            k = _canon_header(v)
+            if k in PAIN_FIELDS and k not in cols:
+                cols[k] = c
+        if tcol and cols:
+            break
+    else:
+        return []
+    out = []
+    for r in range(h + 1, (ws.max_row or h) + 1):
+        t = _as_time(ws.cell(r, tcol).value)
+        if t is None:
+            continue
+        pains = {k: _parse_pain_value(ws.cell(r, c).value) for k, c in cols.items()}
+        pains = {k: v for k, v in pains.items() if v is not None}
+        if pains:
+            out.append((t, pains))
+    return out
+
+
+def _fill_by_time(rows, ratings, *, source, key, grace_s):
+    """Give each timed rating to the step IN FORCE when it was given -- the latest step (rated or
+    not) that had started -- if it falls within that step's duration (60 s when unrecorded) plus
+    `grace_s`, and fill that step only when it has no rating yet; the last rating wins. `key` is
+    the row field holding the step start ("t_local", a time of day, or "t_utc", a timestamp)."""
+    timed = [r for r in rows if r.get(key) is not None and not (isinstance(r.get(key), float))]
+    if not timed or not ratings:
+        return
+    as_s = (lambda t: _secs(t)) if key in ("t_local", "_t_match") else (lambda t: pd.Timestamp(t).timestamp())
+    timed.sort(key=lambda d: as_s(d[key]))
+    starts = [as_s(d[key]) for d in timed]
+    filled = {}
+    for t, pains in sorted(ratings, key=lambda x: as_s(x[0])):
+        ts = as_s(t)
+        i = int(np.searchsorted(starts, ts, side="right")) - 1
+        if i < 0:
+            continue
+        step = timed[i]
+        dur = _f(step.get("duration_s")) or 60.0
+        if ts > starts[i] + dur + float(grace_s):
+            continue
+        if step.get("rating_source") not in (None, source):
+            continue
+        filled[id(step)] = (step, pains)
+    for step, pains in filled.values():
+        for k, v in pains.items():
+            step[k] = v
+        step["rating_source"] = source
+
+
+def rated_steps(steps):
+    """The steps that carry a pain rating -- what every reader of clinic PAIN gets. A table from
+    before 2026-10-01 has no `rating_source`; every row of it was rated."""
+    if steps is None or len(steps) == 0 or "rating_source" not in steps.columns:
+        return steps
+    return steps[steps["rating_source"].notna()].reset_index(drop=True)
+
+
+#: REDCap's site scores are 0-100 visual-analogue scales; the clinic sheets' are 0-10 verbal.
+REDCAP_TO_SHEET = {"overall": ("nrs", 1.0), "left_leg": ("left_leg_vas", 0.1),
+                   "back": ("back_vas", 0.1)}
+
+
+def fill_from_redcap(steps, reports, *, grace_s=NOTES_GRACE_S):
+    """Fill steps still unrated after the sheet's own tabs from REDCap surveys (the PI,
+    2026-10-01), by the same rule as the Notes tab: a survey belongs to the step in force when it
+    was FILED (t_utc), within that step's duration plus `grace_s`; sheet ratings are never
+    replaced; VAS sites are divided by 10 onto the sheets' 0-10 scale (`REDCAP_TO_SHEET`);
+    `rating_source` "redcap". `reports` has `t_utc` and the REDCap columns."""
+    if steps is None or len(steps) == 0 or reports is None or len(reports) == 0:
+        return steps
+    out = steps.copy()
+    rows = out.to_dict("records")
+    for r in rows:
+        if isinstance(r.get("rating_source"), float) and np.isnan(r["rating_source"]):
+            r["rating_source"] = None
+    ratings = []
+    for _, rep_ in reports.iterrows():
+        t = rep_.get("t_utc")
+        if t is None or pd.isna(t):
+            continue
+        pains = {}
+        for site, (col, k) in REDCAP_TO_SHEET.items():
+            v = _f(rep_.get(col))
+            if v is not None:
+                pains[site] = round(v * k, 3)
+        if pains:
+            ratings.append((pd.Timestamp(t), pains))
+    # One pass over every visit at once: a clinic afternoon in California crosses midnight UTC,
+    # so grouping by UTC date would split a visit; the in-force rule keeps visits apart anyway.
+    _fill_by_time([r for r in rows if r.get("t_utc") is not None and not pd.isna(r.get("t_utc"))],
+                  ratings, source="redcap", key="t_utc", grace_s=grace_s)
+    return pd.DataFrame(rows, columns=out.columns)
+
+
 def _visit_date_from_title(title: str):
     """The visit calendar date, California wall-clock, from the title's own MM_DD_YY (or
     MM_DD_YYYY). Returns ``None`` when the title carries no parseable date -- callers keep the
@@ -711,10 +890,17 @@ def _visit_date_from_title(title: str):
         return None
 
 
-def parse_workbook(path) -> pd.DataFrame:
+def parse_workbook(path, *, keep_unrated=False) -> pd.DataFrame:
     """One workbook -> one DataFrame, one row per step-with-a-pain-score. Columns: see the module
     docstring's task-facing summary; also carries `.attrs["counts"]` (a `FileCounts`) and
-    `.attrs["error"]` (a reason string, or ``None``) for the per-file report."""
+    `.attrs["error"]` (a reason string, or ``None``) for the per-file report.
+
+    `keep_unrated` (2026-10-01, the PI): also keep every step with no rating on the Stim Testing
+    tab, then (1) give a step with no timestamp the start the step before it implies (its start
+    plus its duration; `t_inferred` True) and (2) fill an unrated step from the visit's own Notes
+    tab: a timed verbal rating belongs to the step IN FORCE when it was given (the latest step
+    that had started), and only within that step's duration plus NOTES_GRACE_S; the last such
+    rating wins; a step already rated is never overwritten (`rating_source` "notes_tab")."""
     import openpyxl
 
     path = str(path)
@@ -734,15 +920,26 @@ def parse_workbook(path) -> pd.DataFrame:
         elif stim_tab:
             ws = wb[stim_tab]
             rows_out, counts, err = _parse_generic_stim_testing(
-                ws, file_title=title, file_name=file_name, sha256=sha256, setting=setting)
+                ws, file_title=title, file_name=file_name, sha256=sha256, setting=setting,
+                keep_unrated=keep_unrated)
+            if keep_unrated:
+                _infer_missing_starts(rows_out)
+                _fill_by_time(rows_out, _notes_tab_ratings(wb), source="notes_tab",
+                              key="_t_match", grace_s=NOTES_GRACE_S)
         else:
             rows_out, counts, err = [], FileCounts(file=file_name, setting=setting), "no Stim Testing tab"
     finally:
         wb.close()
+    for r in rows_out:
+        # The July 2025 workbook's ratings come from its Notes tab (`_parse_july_2025_notes`).
+        r.setdefault("rating_source", "notes_tab" if is_july_2025 else "stim_tab")
+        r.setdefault("t_inferred", False)
 
     cols = ["visit_date", "setting", "file", "sha256", "t_local", "t_utc",
            "amp_mA_Left", "amp_mA_Right", "freq_hz", "pw_us_Left", "pw_us_Right",
            "contacts_raw", "duration_s", "side_effect_score", *PAIN_FIELDS, "notes", "row_index"]
+    if keep_unrated:
+        cols += ["rating_source", "t_inferred"]
     df = pd.DataFrame(rows_out, columns=cols) if rows_out else pd.DataFrame(columns=cols)
     vdate = _visit_date_from_title(title)
     if len(df):
@@ -766,7 +963,7 @@ def parse_workbook(path) -> pd.DataFrame:
     return df
 
 
-def parse_folder(folder) -> tuple:
+def parse_folder(folder, *, keep_unrated=False) -> tuple:
     """Every workbook in ``folder`` (the template excluded) -> ``(steps_df, manifest_df)``.
 
     ``manifest_df`` is one row per file with the per-file counts (`n_steps`, `n_with_pain`,
@@ -783,7 +980,7 @@ def parse_folder(folder) -> tuple:
     manifest_rows = []
     for f in files:
         try:
-            df = parse_workbook(f)
+            df = parse_workbook(f, keep_unrated=keep_unrated)
         except Exception as exc:                                   # noqa: BLE001
             _log.warning("clinic_pain: could not parse %s: %r", f, exc)
             manifest_rows.append(dict(file=os.path.basename(f), setting=_infer_setting(f),
@@ -997,7 +1194,8 @@ def ingest_and_store(participant, folder, *, root=None) -> dict:
     sig = folder_signature(folder)
 
     def build():
-        steps, manifest = parse_folder(folder)
+        # Every step, rated or not (2026-10-01): readers of pain get `rated_steps` of it.
+        steps, manifest = parse_folder(folder, keep_unrated=True)
         if len(steps) == 0:
             return None
         return {"steps": steps, "manifest": manifest, "folder": str(folder)}
@@ -1011,7 +1209,7 @@ def ingest_and_store(participant, folder, *, root=None) -> dict:
                    reason="no clinic steps parsed from this folder")
     steps = got["steps"]
     return dict(written=bool(wrote), n_files=int(steps["file"].nunique()) if len(steps) else 0,
-               n_steps=int(len(steps)), n_with_pain=int(len(steps)),
+               n_steps=int(len(steps)), n_with_pain=int(len(rated_steps(steps))),
                store_key=_cache_store.product_key(CLINIC_PAIN_KIND, uid, sig))
 
 
@@ -1036,13 +1234,76 @@ def _manifest_counts(participant, *, root=None) -> dict:
 
 
 def load_clinic_steps(participant, *, consumer=None, root=None):
-    """The newest stored clinic-pain-steps table for this participant, or ``None`` with a reason
-    when nothing has been ingested yet."""
+    """The newest stored clinic-pain-steps table for this participant -- RATED steps only, as every
+    reader of clinic pain has always had (`rated_steps`) -- or ``None`` with a reason when nothing
+    has been ingested yet."""
+    steps, stamp, reason = load_clinic_exposure(participant, consumer=consumer, root=root)
+    return (rated_steps(steps) if steps is not None else None), stamp, reason
+
+
+def load_clinic_exposure(participant, *, consumer=None, root=None):
+    """Every stored clinic step, rated or not (2026-10-01): a step with `rating_source` None is
+    EXPOSURE -- the patient received that setting -- and carries no pain value."""
     uid = _participant_uid(participant)
     got, stamp = _cache_store.load_newest(CLINIC_PAIN_KIND, uid, consumer=consumer, root=root)
     if got is None:
         return None, None, "no clinic sheets have been ingested for this participant yet"
     return got.get("steps"), stamp, None
+
+
+def redcap_reports_for(participant):
+    """The participant's REDCap surveys with their filing time (UTC), through the Biomarkers
+    loader (one definition of a rating's timestamp, decision of the adapter); None on failure."""
+    try:
+        try:
+            from modules.Biomarkers import bravo_service as _bs
+        except ImportError:
+            from Biomarkers import bravo_service as _bs
+        pro = _bs._load_pros({}, participant)
+        t = _bs._pro_times_utc_series(pro)
+        out = pro.copy()
+        out["t_utc"] = pd.to_datetime(t, utc=True).values
+        return out
+    except Exception:                                                 # noqa: BLE001
+        _log.warning("clinic_pain: REDCap reports could not be read for the gap fill", exc_info=True)
+        return None
+
+
+def exposure_by_contact(steps) -> list:
+    """Per Left contact (the clinic sheet's notation), what the clinic sheets show was delivered:
+    steps, how many were rated, the Left current range, visit days. Left-0-mA steps are one
+    'off' row. EXPOSURE, not pain data (the PI, 2026-10-01)."""
+    if steps is None or len(steps) == 0:
+        return []
+    from . import stage1_openloop as _S1
+    d = steps.copy()
+    d["amp_mA_Left"] = pd.to_numeric(d["amp_mA_Left"], errors="coerce")
+    contacts = d["contacts_raw"] if "contacts_raw" in d.columns else pd.Series([None] * len(d), index=d.index)
+    lab = [(_S1.left_contact_label(c, a) or "unrecorded") for c, a in zip(contacts, d["amp_mA_Left"])]
+    d["_lab"] = lab
+    rated = d["rating_source"].notna() if "rating_source" in d.columns else pd.Series(True, index=d.index)
+    # A PLAN IS NOT EXPOSURE (found live 2026-10-01: the 09_24_26 sheet is the titration card's
+    # exported ladder, never filled in). An unrated step with no time -- not its own, not one
+    # inferred from a timed step before it -- was never recorded as delivered.
+    timed = (d["t_local"].notna() if "t_local" in d.columns else pd.Series(True, index=d.index))
+    planned_only = (~rated) & (~timed)
+    out = []
+    for c, g0 in d.groupby("_lab"):
+        g = g0[~planned_only[g0.index]]
+        n_plan = int(planned_only[g0.index].sum())
+        if len(g) == 0:
+            out.append(dict(left_contact=str(c), n_steps=0, n_rated=0, amp_min_mA=None,
+                            amp_max_mA=None, n_visits=0, visits=[], n_planned_only=n_plan))
+            continue
+        on = g["amp_mA_Left"][g["amp_mA_Left"] > 0]
+        out.append(dict(left_contact=str(c), n_steps=int(len(g)), n_rated=int(rated[g.index].sum()),
+                        n_planned_only=n_plan,
+                        amp_min_mA=(float(on.min()) if len(on) else None),
+                        amp_max_mA=(float(on.max()) if len(on) else None),
+                        n_visits=int(g["visit_date"].nunique()) if "visit_date" in g.columns else None,
+                        visits=sorted(str(v) for v in g["visit_date"].dropna().unique())[-6:]
+                        if "visit_date" in g.columns else []))
+    return sorted(out, key=lambda r: -r["n_steps"])
 
 
 # =====================================================================================
@@ -1216,7 +1477,17 @@ def fit_clinic_rate_strata(participant, *, hemispheres=("Left", "Right"),
     from . import stage1_openloop as S1
     from .routines import objective as OBJ
 
-    steps, stamp, reason = load_clinic_steps(participant, consumer="stim_optimizer", root=root)
+    steps_all, stamp, reason = load_clinic_exposure(participant, consumer="stim_optimizer", root=root)
+    # GAPS FILLED FROM REDCAP (the PI, 2026-10-01): a step the sheet's own tabs left unrated takes
+    # the REDCap survey filed while it was in force (`fill_from_redcap`); then rated steps only.
+    redcap_note = None
+    if steps_all is not None and len(steps_all) and "rating_source" in steps_all.columns:
+        reports = redcap_reports_for(participant)
+        if reports is not None:
+            steps_all = fill_from_redcap(steps_all, reports)
+        else:
+            redcap_note = "REDCap surveys could not be read, so no gap was filled from them"
+    steps = rated_steps(steps_all) if steps_all is not None else None
     if steps is None or len(steps) == 0:
         return dict(available=False, reason=reason or "no clinic steps stored", n_files=0,
                    n_steps=0, n_with_pain=0, n_unparsed_prose=0, visit_dates=[], store_key=None)
@@ -1230,7 +1501,11 @@ def fit_clinic_rate_strata(participant, *, hemispheres=("Left", "Right"),
     n_clinic = int((steps["setting"] == "clinic").sum())
     n_home = int((steps["setting"] == "home").sum())
     man = _manifest_counts(participant, root=root)
+    src = (steps_all["rating_source"].fillna("unrated").value_counts().to_dict()
+           if steps_all is not None and "rating_source" in steps_all.columns else {})
     base = dict(available=True, n_files=n_files,
+               rating_sources={str(k): int(v) for k, v in src.items()},
+               exposure_by_contact=exposure_by_contact(steps_all), redcap_note=redcap_note,
                n_steps=int(man.get("n_steps") or len(steps)),
                n_with_pain=int(len(steps)),
                n_unparsed_prose=man.get("n_unparsed_prose"),

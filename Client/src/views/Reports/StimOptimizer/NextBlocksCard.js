@@ -48,10 +48,24 @@ const mA = (v) => (v === null || v === undefined ? "—" : `${Number(v).toFixed(
 
 const cell = { padding: "4px 10px 4px 0", fontSize: TYPE.small, color: T.ink, textAlign: "left", verticalAlign: "top" };
 
+/** "L C+1-2-: 26 steps at 0.5–2.5 mA over 3 visits, 22 rated; 14 more planned but never recorded
+ *  as given" -- what the clinic sheets show a Left contact received (2026-10-01: unrated steps
+ *  count as exposure; an untimed, unrated step is a plan, not a delivery). */
+export function exposureLine(e) {
+  const range = (e.amp_min_mA != null && e.amp_max_mA != null)
+    ? (e.amp_min_mA === e.amp_max_mA ? ` at ${e.amp_min_mA} mA` : ` at ${e.amp_min_mA}–${e.amp_max_mA} mA`) : "";
+  const visits = e.n_visits ? ` over ${e.n_visits} ${e.n_visits === 1 ? "visit" : "visits"}` : "";
+  const plan = e.n_planned_only ? `; ${e.n_planned_only} more planned but never recorded as given` : "";
+  return `${e.left_contact}: ${e.n_steps} ${e.n_steps === 1 ? "step" : "steps"}${range}${visits}, ${e.n_rated} rated${plan}`;
+}
+
 export default function NextBlocksCard({ nextBlocks }) {
   if (!nextBlocks || nextBlocks.available !== true) return null;
   const { tied, measured } = splitBlocks(nextBlocks);
   const pw = nextBlocks.pulse_widths_us || {};
+  // Left-0-mA and unreadable contacts are not a contact anyone could choose.
+  const exposure = Object.values(nextBlocks.exposure || {})
+    .filter((e) => e && e.left_contact && e.left_contact.startsWith("L ") && (e.n_steps > 0 || e.n_planned_only > 0));
   return (
     <MDBox data-testid="next-blocks-card" mt={2}>
       <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink, mb: 1 }}>
@@ -74,6 +88,19 @@ export default function NextBlocksCard({ nextBlocks }) {
           {tied.map((t) => (
             <MDTypography key={t.contact} variant="caption" component="div" sx={{ fontSize: TYPE.small, color: T.ink }}>
               {`${t.contact}: ${hzList(t.rates)}`}
+            </MDTypography>
+          ))}
+        </MDBox>
+      )}
+
+      {exposure.length > 0 && (
+        <MDBox data-testid="next-blocks-exposure" mb={2}>
+          <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, fontWeight: 600, color: T.ink, mb: 0.5 }}>
+            What the clinic sheets show each Left contact received (rated or not)
+          </MDTypography>
+          {exposure.map((e) => (
+            <MDTypography key={e.left_contact} variant="caption" component="div" sx={{ fontSize: TYPE.small, color: T.ink }}>
+              {exposureLine(e)}
             </MDTypography>
           ))}
         </MDBox>
