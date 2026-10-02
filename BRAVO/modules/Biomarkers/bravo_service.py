@@ -5050,6 +5050,8 @@ def _band_decide_verdict(g, h):
         return "failed (separation)"
     if g.get("singular"):
         return "failed (singular random effect)"
+    if g.get("converged") is False:
+        return "failed (did not converge)"
     p = g.get("p")
     if p is None or not isinstance(p, (int, float)) or p >= 0.05:
         return "candidate (mixed-effects n.s.)"
@@ -6431,6 +6433,9 @@ def _suggested_percept_mode(polarity, adaptive_valid):
     if polarity == "positive":
         return "Dual", ("positive-direction biomarker maps onto Dual/Single adaptive directly "
                         "(stim ramps up as the biomarker rises)")
+    if polarity != "negative":
+        return None, ("direction not known (the mixed-effects fit gave no odds ratio), so no "
+                      "adaptive mode can be suggested")
     return None, ("negative-direction biomarker (higher power → lower pain) requires the inverse "
                   "control law; Percept adaptive supports inverse only as sensing-only 'Single "
                   "Threshold Inverse' — deploy via a custom/negated feature, not stock adaptive")

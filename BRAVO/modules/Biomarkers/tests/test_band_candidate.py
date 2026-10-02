@@ -63,6 +63,14 @@ def test_suggested_mode_out_of_band():
     assert mode is None and "adaptive sensing range" in reason
 
 
+def test_suggested_mode_unknown_direction_is_not_called_negative():
+    # 2026-10-02: a mixed-effects fit that did not converge leaves the direction unknown; the
+    # advice must say that, not describe a negative-direction band
+    mode, reason = bs._suggested_percept_mode("unknown", True)
+    assert mode is None
+    assert "negative-direction" not in reason and "not known" in reason
+
+
 def test_decide_verdict_branches():
     # unavailable glmer
     assert bs._band_decide_verdict({"available": False}, {}) == "unavailable"
@@ -70,6 +78,11 @@ def test_decide_verdict_branches():
     assert bs._band_decide_verdict({"available": True, "separation": True}, {}) == "failed (separation)"
     assert bs._band_decide_verdict(
         {"available": True, "separation": False, "singular": True}, {}) == "failed (singular random effect)"
+    # a fit lme4 says did not converge never validates, whatever p it left behind (2026-10-02:
+    # R 0-3+ 24.5 Hz NRS read p 3e-104 on a fit that had stopped short)
+    assert bs._band_decide_verdict(
+        {"available": True, "separation": False, "singular": False, "converged": False, "p": 0.0},
+        {}) == "failed (did not converge)"
     # n.s. p
     assert bs._band_decide_verdict(
         {"available": True, "separation": False, "singular": False, "p": 0.2}, {}

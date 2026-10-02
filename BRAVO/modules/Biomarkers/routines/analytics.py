@@ -1399,6 +1399,15 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
 #: Dropping the exclusion here trades a wide, honest interval for a degenerate one; it is not a
 #: reason to drop it.
 #:
+#: TURNED OFF 2026-10-02 (the PI: "don't drop the first 3 weeks with the ME model"). Re-measured
+#: that day on the same band (L 1-3+, 24.5 Hz, NRS, 60-minute window) under the deployment
+#: summary's default matching (a report matched to recordings before it), the failure ran the
+#: other way: WITH the exclusion lme4 failed to converge (OR 2.39, 95% CI 2.378-2.392, p 0.0,
+#: 86 samples, 25 weekly eras); WITHOUT it the fit converged (OR 2.12, 0.75-5.99, p 0.156, 92
+#: samples, 27 eras). Under nearest-in-time matching both converge (0.86, 0.57-1.31, 261 samples
+#: with it; 0.84, 0.55-1.27, 271 without). The mechanism stays: `exclude_first_weeks` still drops
+#: weeks when a caller asks, and the payload still says how many.
+#:
 #: OPEN DECISION, deliberately not taken here. The window above is IMPLANT-anchored: three weeks
 #: from the first sample of the record. A DATA-anchored window — three weeks from the first sample
 #: the fit can use — would bind, and its cost is measured: n falls 84 -> 63, weekly eras 29 -> 24,
@@ -1415,7 +1424,7 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
 #: whole record, because they answer different questions and the PI asked for the whole record
 #: everywhere else. Anything that widens this scope needs its own decision, not an inference from
 #: this one.
-VALIDATION_EXCLUDE_FIRST_WEEKS = 3
+VALIDATION_EXCLUDE_FIRST_WEEKS = 0
 
 
 def _elapsed_week_cluster(times, n):
@@ -4711,6 +4720,13 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
         p = float(row["P-val"]) if "P-val" in row else (float(row["Pr(>|z|)"]) if "Pr(>|z|)" in row else np.nan)
         z = float(row["Z-stat"]) if "Z-stat" in row else np.nan
         odds = float(row["OR"]) if "OR" in row else float(np.exp(est))
+        # DID THE FIT FINISH (the PI, 2026-10-02). lme4 says so in words that pymer4 keeps in
+        # `.warnings`; a fit that stopped short still hands back numbers, an interval a sliver wide
+        # and a p near zero (R 0-3+ 24.5 Hz NRS: OR 1.025, 1.023-1.028, p 3e-104), which the
+        # sign-off card read as VALIDATED. Such a fit reports no odds ratio, interval or p below.
+        fit_warnings = [str(w) for w in (getattr(mod, "warnings", None) or [])]
+        converged = not any(("failed to converge" in w.lower()) or ("unidentifiable" in w.lower())
+                            for w in fit_warnings)
         # OR confidence interval — pymer4 reports the Wald CI on the linear predictor scale as
         # '2.5_ci' / '97.5_ci'; exponentiate to OR space. Falls back to None if columns missing
         # (older pymer4) so the caller never crashes when the bounds aren't available.
@@ -4757,6 +4773,20 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
                 singular = bool(float(ranef["Var"].iloc[0]) < 1e-6)
         except Exception:
             pass
+        if not converged:
+            return {
+                "available": True, "model": "glmer logistic (lme4 via pymer4)",
+                "formula": formula, "n": int(m.sum()), "n_clusters": n_clusters,
+                "excluded_first_weeks": burn_in,
+                "n_excluded_burn_in": n_dropped_burn_in,
+                "n_weeks_before_exclusion": n_weeks_before,
+                "one_block_per_report": _one_block_summary(weeks=_one_week),
+                "coef": None, "odds_ratio": None, "or_lo": None, "or_hi": None,
+                "z": None, "p": None, "separation": False, "singular": singular,
+                "converged": False, "fit_warnings": fit_warnings,
+                "note": ("The mixed-effects fit did not converge (lme4's words are in "
+                         "fit_warnings), so it gives no odds ratio, interval or p."),
+            }
         return {
             "available": True, "model": "glmer logistic (lme4 via pymer4)",
             "formula": formula, "n": int(m.sum()), "n_clusters": n_clusters,
@@ -4772,6 +4802,7 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
             "or_lo": _f(or_lo) if or_lo is not None else None,
             "or_hi": _f(or_hi) if or_hi is not None else None,
             "z": _f(z), "p": _f(p), "separation": False, "singular": singular,
+            "converged": True, "fit_warnings": fit_warnings,
             "note": "Random intercept per weekly era; band power z-scored. Exploratory inference.",
         }
     except Exception as e:

@@ -2430,20 +2430,94 @@ def test_locf_carries_rate_forward_and_nans_unparseable_times():
     assert np.all(np.isnan(an._locf_values(times, None)))
 
 
-# --- the declared burn-in exclusion on the validation mixed model (2026-09-05) ------------------
-def test_validation_mixed_model_excludes_the_first_three_weeks_and_says_so():
-    """PI decision 2026-09-05: the across-eras validation mixed model excludes the first three
-    weeks for post-implant signal drift, and the whole record is kept everywhere else.
+# --- the burn-in exclusion on the validation mixed model (2026-09-05; off since 2026-10-02) -----
+def _ten_week_detail():
+    import numpy as np
+    rng = np.random.default_rng(0)
+    n, nf = 240, 24
+    f = np.linspace(5.0, 45.0, nf)
+    t0 = np.datetime64("2026-01-01T00:00:00")
+    times = [str(t0 + np.timedelta64(int(i * 7 * 10 * 86400 / n), "s")) for i in range(n)]
+    return {"f_set": f, "psd": rng.normal(0.0, 1.0, size=(n, 1, nf)),
+            "labels": rng.normal(5.0, 2.0, size=n), "chan_order": ["ZERO_TWO_LEFT"], "times": times}
 
-    Asserts the window is actually applied, that the exclusion travels in the payload so an odds
-    ratio cannot be quoted without it, and that the week index is anchored on the first sample of
-    the WHOLE record rather than the first retained one — otherwise the window would walk forward
-    as data accumulated.
+
+def test_validation_mixed_model_fits_the_whole_record_by_default():
+    """PI decision 2026-10-02: the mixed model no longer drops the first three weeks. Re-measured
+    that day on L 1-3+ 24.5 Hz, NRS, 60-minute window, report-before-recording matching: WITH the
+    exclusion lme4 failed to converge (OR 2.39, interval 2.378-2.392, p 0.0, 86 samples); without
+    it the fit converged (OR 2.12, 0.75-5.99, p 0.156, 92 samples)."""
+    from modules.Biomarkers.routines import analytics
+
+    assert analytics.VALIDATION_EXCLUDE_FIRST_WEEKS == 0
+    det = _ten_week_detail()
+    default = analytics.band_mixedmodel_inference(det, "ZERO_TWO_LEFT", 20.0)
+    full = analytics.band_mixedmodel_inference(det, "ZERO_TWO_LEFT", 20.0, exclude_first_weeks=0)
+    if default.get("available") and full.get("available"):
+        assert default["n"] == full["n"]
+        assert default["excluded_first_weeks"] == 0
+        assert default["n_excluded_burn_in"] == 0
+
+
+def _fit_with_stand_in_model(warnings):
+    """band_mixedmodel_inference on the ten-week detail, with pymer4's Lmer replaced by a stand-in
+    that returns a fixed coefficient row and the given lme4 warnings. None when pymer4 is absent."""
+    try:
+        import pandas as pd
+        import pymer4.models as pm
+    except Exception:
+        return None
+    from modules.Biomarkers.routines import analytics
+
+    class StandIn:
+        def __init__(self, formula, data=None, family=None):
+            self.warnings = []
+
+        def fit(self, summarize=False):
+            self.coefs = pd.DataFrame(
+                {"Estimate": [0.0, 0.8], "P-val": [0.5, 1e-100], "Z-stat": [0.1, 21.0],
+                 "OR": [1.0, 2.23], "2.5_ci": [-0.1, 0.799], "97.5_ci": [0.1, 0.801]},
+                index=["(Intercept)", "band_power"])
+            self.ranef_var = pd.DataFrame({"Var": [0.5]})
+            self.warnings = list(warnings)
+
+    real = pm.Lmer
+    pm.Lmer = StandIn
+    try:
+        return analytics.band_mixedmodel_inference(_ten_week_detail(), "ZERO_TWO_LEFT", 20.0)
+    finally:
+        pm.Lmer = real
+
+
+def test_mixed_model_that_did_not_converge_reports_no_odds_ratio_interval_or_p():
+    """2026-10-02: a fit lme4 flags 'failed to converge' left an interval a sliver wide and a p near
+    zero (R 0-3+ 24.5 Hz NRS: OR 1.025, 1.023-1.028, p 3e-104) that the sign-off card read as
+    VALIDATED. Such a fit now carries no odds ratio, interval or p, says it did not converge, and
+    keeps lme4's own words."""
+    g = _fit_with_stand_in_model(["Model failed to converge with max|grad| = 0.0615836 (tol = 0.002)"])
+    if g is None or not g.get("available"):
+        return
+    assert g["converged"] is False
+    assert g["odds_ratio"] is None and g["or_lo"] is None and g["or_hi"] is None and g["p"] is None
+    assert any("failed to converge" in w for w in g["fit_warnings"])
+
+
+def test_mixed_model_that_converged_keeps_its_odds_ratio_and_says_so():
+    g = _fit_with_stand_in_model([])
+    if g is None or not g.get("available"):
+        return
+    assert g["converged"] is True and g["fit_warnings"] == []
+    assert abs(g["odds_ratio"] - 2.23) < 1e-9 and g["p"] == 1e-100
+
+
+def test_validation_mixed_model_still_excludes_first_weeks_when_asked_and_says_so():
+    """The switch stays (decision 2026-09-05's mechanism): asked for three weeks, the window is
+    actually applied, the exclusion travels in the payload so an odds ratio cannot be quoted
+    without it, and the week index is anchored on the first sample of the WHOLE record rather
+    than the first retained one, so the window cannot walk forward as data accumulate.
     """
     import numpy as np
     from modules.Biomarkers.routines import analytics
-
-    assert analytics.VALIDATION_EXCLUDE_FIRST_WEEKS == 3
 
     rng = np.random.default_rng(0)
     n, nf = 240, 24
@@ -2457,7 +2531,7 @@ def test_validation_mixed_model_excludes_the_first_three_weeks_and_says_so():
            "times": times}
 
     full = analytics.band_mixedmodel_inference(det, "ZERO_TWO_LEFT", 20.0, exclude_first_weeks=0)
-    cut = analytics.band_mixedmodel_inference(det, "ZERO_TWO_LEFT", 20.0)
+    cut = analytics.band_mixedmodel_inference(det, "ZERO_TWO_LEFT", 20.0, exclude_first_weeks=3)
 
     # both must at least report; if pymer4/R is missing they degrade identically and the
     # exclusion bookkeeping is still the thing under test
